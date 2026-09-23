@@ -13,6 +13,7 @@ import { PersonnelCategoryDrawer } from './PersonnelCategoryDrawer'
 import type { Personnel } from '@/types/equipment'
 import { usePermission } from '@/hooks/usePermission'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 
 export function PersonnelPage() {
   const { hasPermission } = usePermission()
@@ -135,7 +136,11 @@ export function PersonnelPage() {
   return (
     <div style={{ paddingBottom: 40 }}>
       {/* 页面头部 */}
-      <PageHeading title="人员配置" subtitle="角色权限管理 · 人员分配 · 分类约束 · 飞书同步" />
+      <PageHeading
+        title="人员配置"
+        subtitle="角色权限管理 · 人员分配 · 分类约束 · 飞书同步"
+        actions={<PageGuideButton />}
+      />
 
       {/* Tab 内容包进白色卡片 */}
       <div style={{

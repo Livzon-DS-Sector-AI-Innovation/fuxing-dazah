@@ -16,9 +16,18 @@ export function buildFieldValues(
 /**
  * 动态渲染一组字段定义。numeric 超限 warningOnly 警示不阻断（与后端 is_abnormal 对齐）。
  * enforceRequired=false 时必填只显示「必填 · 可补录」标记不阻断（工序结束阶段，
- * 完整性由批次完成时统一校验）。
+ * 完整性由批次完成时统一校验）；requiredHint 可按场景改写该标记文案
+ * （如「修改数据」场景必填已有值不可清空）。
  */
-export function DynamicFieldFormItems({ defs, enforceRequired = true }: { defs: FieldDef[]; enforceRequired?: boolean }) {
+export function DynamicFieldFormItems({
+  defs,
+  enforceRequired = true,
+  requiredHint = '必填 · 可补录',
+}: {
+  defs: FieldDef[]
+  enforceRequired?: boolean
+  requiredHint?: string
+}) {
   const sorted = [...defs].sort((a, b) => a.sort_order - b.sort_order)
   return (
     <>
@@ -43,7 +52,7 @@ export function DynamicFieldFormItems({ defs, enforceRequired = true }: { defs: 
         }
         const isBoolean = d.data_type === 'boolean'
         const requiredMark = d.required && !enforceRequired
-          ? <span style={{ fontSize: 11, color: '#d48806', fontWeight: 400, marginLeft: 6 }}>必填 · 可补录</span>
+          ? <span style={{ fontSize: 11, color: '#d48806', fontWeight: 400, marginLeft: 6 }}>{requiredHint}</span>
           : null
         return (
           <Form.Item

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Modal, Form, Input, Select, DatePicker, InputNumber, App } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Demand, CreateDemandInput, UpdateDemandInput } from '@/types/production'
@@ -49,6 +49,20 @@ export function DemandFormModal({ open, demand, onClose }: Props) {
       message.error(err.message)
     },
   })
+
+  // 打开时显式管理 form 值：remount 的 initialValues 合并会让 store 里上一个
+  // 需求的残留值优先，且 StrictMode 下 mount 期初值不可靠。
+  // 编辑 → 灌入当前需求；新建 → reset 清掉上次编辑的残留。
+  useEffect(() => {
+    if (demand) {
+      form.setFieldsValue({
+        ...demand,
+        demand_date: demand.demand_date ? dayjs(demand.demand_date) : undefined,
+      })
+    } else if (open) {
+      form.resetFields()
+    }
+  }, [demand, open, form])
 
   const handleProductSelect = (productId: string) => {
     const p = products.find((prod: { id: string; product_name: string; unit: string }) => prod.id === productId)

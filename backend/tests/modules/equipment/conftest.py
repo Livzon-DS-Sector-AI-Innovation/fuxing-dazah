@@ -1,7 +1,8 @@
 """Equipment module test fixtures."""
 
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -71,6 +72,27 @@ def make_access_ctx() -> Callable[[User], EquipmentAccessContext]:
     return _make
 
 
+@pytest.fixture
+def make_scoped_access_ctx() -> Callable[..., EquipmentAccessContext]:
+    """按测试需要构造部门/本人/全量设备数据范围上下文。"""
+
+    def _make(
+        user: User,
+        *,
+        scope: str = "all",
+        departments: Sequence[uuid.UUID] = (),
+        department_user_ids: Sequence[uuid.UUID] = (),
+    ) -> EquipmentAccessContext:
+        return EquipmentAccessContext(
+            user=user,
+            data_scope=scope,
+            visible_department_ids=list(departments),
+            department_user_ids=list(department_user_ids),
+        )
+
+    return _make
+
+
 # 全部 equipment 权限码，用于在 API 测试中绕过 require_permission 的 403。
 _ALL_PERMS: set[str] = {
     "equipment:asset:create",
@@ -78,6 +100,7 @@ _ALL_PERMS: set[str] = {
     "equipment:asset:import",
     "equipment:asset:read",
     "equipment:asset:update",
+    "equipment:reference:manage",
     "equipment:inspection:create",
     "equipment:inspection:delete",
     "equipment:inspection:read",
@@ -101,7 +124,7 @@ _ALL_PERMS: set[str] = {
 
 
 @pytest.fixture(autouse=True)
-def _grant_permissions() -> Iterator[None]:
+def _grant_permissions(request: pytest.FixtureRequest) -> Iterator[None]:
     """给测试用户放行全部 equipment 权限并设为全量数据范围。
 
     autouse，整个 equipment 目录生效。对不走 client 的 service/repo 测试是无害
@@ -111,18 +134,26 @@ def _grant_permissions() -> Iterator[None]:
     async def _all_perms(user_id: str, db: object) -> set[str]:
         return _ALL_PERMS
 
-    with (
-        patch(
-            "app.platform.permission.deps.get_user_permissions",
-            new=_all_perms,
-        ),
-        patch(
-            "app.platform.permission.repository.PermissionRepository"
-            ".get_effective_data_scope",
-            new_callable=AsyncMock,
-            return_value="all",
-        ),
-    ):
+    # 引用授权测试必须验证部门范围与撤销优先级，不能被这里的全量范围
+    # mock 掩盖。其余历史 equipment 测试继续沿用 all 以保持原有隔离语义。
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch(
+                "app.platform.permission.deps.get_user_permissions",
+                new=_all_perms,
+            )
+        )
+        # 任何引用授权相关测试都必须使用真实数据范围；隐藏/扩展测试可能采用
+        # ``test_reference_api.py`` 等文件名，不能只豁免当前这个文件。
+        if "reference" not in request.node.fspath.basename.lower():
+            stack.enter_context(
+                patch(
+                    "app.platform.permission.repository.PermissionRepository"
+                    ".get_effective_data_scope",
+                    new_callable=AsyncMock,
+                    return_value="all",
+                )
+            )
         yield
 
 

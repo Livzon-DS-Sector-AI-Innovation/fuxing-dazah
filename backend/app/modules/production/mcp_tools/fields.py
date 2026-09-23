@@ -61,7 +61,9 @@ async def query_step_fields(
         fvs = await repo.get_field_values_by_executions(db, [execution.id])
         for v in fvs:
             existing_values[v.field_key] = v
-        if execution.status == "completed":
+        # 缺填判定只有 end 口径（start 必填在开工时已强制、且不可补录），
+        # 查 start 阶段时不能拿 end 的缺填结果顶替，否则会误报待补录字段
+        if execution.status == "completed" and phase == "end":
             missing_map = await compute_missing_required_fields(db, [execution])
             missing_list = missing_map.get(execution.id, [])
             missing_fields = [m.field_label for m in missing_list]
@@ -113,5 +115,12 @@ async def query_step_fields(
         if missing_fields:
             lines.append(f"待补录必填字段：{'、'.join(missing_fields)}")
             lines.append("可使用 `backfill_step_fields` 工具补录。")
+
+    if phase == "start":
+        lines.append("")
+        lines.append(
+            "开始阶段字段是开工先决条件，须在开始工序时一并提交；"
+            "开始阶段字段**不支持事后补录**，如需修正请联系有修改权限的人员。"
+        )
 
     return ToolResult(content="\n".join(lines))

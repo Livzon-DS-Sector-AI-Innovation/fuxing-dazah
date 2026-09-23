@@ -151,7 +151,8 @@ export function TopNav() {
       {impersonation?.is_impersonating && impersonation.target_user && (
         <ImpersonateBanner targetUser={impersonation.target_user} />
       )}
-    <header className={`${chromeStyles.chrome} relative z-10 h-16 border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0`}>
+    {/* 下边线横贯整宽，界分侧栏与工作面 */}
+    <header className={`${chromeStyles.chrome} ${chromeStyles.seam} relative z-10 h-16 flex items-center px-5 shrink-0`}>
       {/* 离屏测量容器：渲染全部可见模块用于宽度测量 */}
       <div
         aria-hidden

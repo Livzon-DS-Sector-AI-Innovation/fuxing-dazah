@@ -32,6 +32,7 @@ import {
 import type { ProductionNotificationConfig } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { CARD_STYLE } from '../shared/ProductSidebar'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { UserSelect } from '@/components/shared/UserSelect'
 import { PageHeading } from '@/components/shared/PageHeading'
 
@@ -296,7 +297,11 @@ function NotificationConfigContent() {
 
   return (
     <div>
-      <PageHeading title="通知配置" subtitle="各类飞书通知的触发时机与默认接收人见下方说明，可按需启停；额外通知人员在默认接收人基础上追加，系统自动去重。" />
+      <PageHeading
+        title="通知配置"
+        subtitle="各类飞书通知的触发时机与默认接收人见下方说明，可按需启停；额外通知人员在默认接收人基础上追加，系统自动去重。"
+        actions={<PageGuideButton />}
+      />
       <div style={{ ...CARD_STYLE, overflowX: 'auto' }}>
         <div style={{ minWidth: 760 }}>
           {!rows && isLoading ? (

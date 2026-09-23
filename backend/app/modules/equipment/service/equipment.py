@@ -28,7 +28,6 @@ from app.modules.equipment.schemas.equipment import (
     EquipmentImportResponse,
     ImportRowError,
 )
-from app.modules.equipment.service.data_scope import verify_write_ownership
 from app.modules.equipment.service.status_log import record_status_change
 from app.platform.identity.models import Department, User
 
@@ -302,9 +301,10 @@ async def create_equipment(
 async def get_equipment_by_id(
     db: AsyncSession,
     equipment_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> Equipment:
-    """获取设备"""
-    equipment = await repo.get_equipment_by_id(db, equipment_id)
+    """获取设备；套用设备台账数据范围，范围外一律 404（不泄露 UUID 是否存在）。"""
+    equipment = await repo.get_equipment_by_id(db, equipment_id, ctx)
     if not equipment:
         raise NotFoundException("设备", str(equipment_id))
     return equipment
@@ -342,8 +342,9 @@ async def update_equipment(
     ctx: EquipmentAccessContext,
 ) -> Equipment:
     """更新设备"""
-    equipment = await get_equipment_by_id(db, equipment_id)
-    await verify_write_ownership(ctx, equipment, "department_id", "department_id")
+    # 范围读即完成归属校验：范围外（含无归属部门）的设备一律 404，
+    # 与 GET 详情口径一致，不给 UUID 探测留下 403/404 的差异。
+    equipment = await get_equipment_by_id(db, equipment_id, ctx)
     old_status = equipment.status
     old_running_status = equipment.running_status
 
@@ -387,8 +388,7 @@ async def delete_equipment(
     ctx: EquipmentAccessContext,
 ) -> bool:
     """删除设备"""
-    equipment = await get_equipment_by_id(db, equipment_id)
-    await verify_write_ownership(ctx, equipment, "department_id", "department_id")
+    equipment = await get_equipment_by_id(db, equipment_id, ctx)
     equipment.is_deleted = True
     await db.flush()
     return True

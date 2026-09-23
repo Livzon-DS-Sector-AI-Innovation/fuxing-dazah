@@ -264,6 +264,27 @@ class TestDerive:
                 user=None,
             )
 
+    async def test_derive_rejected_on_archived_route(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """已归档路线不能再产生子批次（与手工建批同口径）。"""
+        parent = await _make_batch(db_session, published_route)
+        await _set_in_progress(db_session, parent)
+        route = await repo.get_route(db_session, published_route["route"].id)
+        assert route is not None
+        route.status = "archived"
+        await db_session.flush()
+        with pytest.raises(AppException, match="仅已发布路线"):
+            await batch_service.derive_batches(
+                db_session,
+                parent.id,
+                DeriveIn(
+                    deviation_reason="x",
+                    children=[ChildBatchIn(batch_no=rand_code("B"))],
+                ),
+                user=None,
+            )
+
 
 class TestBoundaryPermission:
     """批次边界接收权限：to 工段负责人可通过，from 工段负责人拒绝。"""
@@ -394,6 +415,33 @@ class TestMerge:
         assert merged.status == "pending"
         detail = await batch_service.get_batch_detail(db_session, merged.id)
         assert detail.batch_no == merged.batch_no
+
+    async def test_merge_rejected_on_archived_route(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """已归档路线不能再合并出新批次（与手工建批同口径）。"""
+        p1 = await _make_batch(db_session, published_route)
+        p2 = await _make_batch(db_session, published_route)
+        await _set_in_progress(db_session, p1)
+        await _set_in_progress(db_session, p2)
+        route = await repo.get_route(db_session, published_route["route"].id)
+        assert route is not None
+        route.status = "archived"
+        await db_session.flush()
+        with pytest.raises(AppException, match="仅已发布路线"):
+            await batch_service.merge_batches(
+                db_session,
+                MergeIn(
+                    parents=[
+                        MergeParentIn(batch_id=p1.id, allocated_qty=50),
+                        MergeParentIn(batch_id=p2.id, allocated_qty=50),
+                    ],
+                    deviation_reason="测试合并",
+                    batch_no=rand_code("M"),
+                    quantity=100,
+                ),
+                user=None,
+            )
 
 
 class TestLifecycle:

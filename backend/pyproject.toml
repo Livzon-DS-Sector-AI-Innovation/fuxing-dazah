@@ -75,6 +75,11 @@ module = ["mammoth", "weasyprint", "weasyprint.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# PyMuPDF 的 fitz 兼容入口未携带 py.typed，类型需改用 pymupdf 才能获得
+module = ["fitz"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # vendor 引擎（ai_translator 原样拷贝）不按本仓 strict 标准整改
 module = ["app.modules.toolbox.tools.document_translate._engine.*"]
 ignore_errors = true

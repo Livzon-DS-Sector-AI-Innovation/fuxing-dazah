@@ -49,6 +49,7 @@ from app.modules.production.service.planning_service import (
     _find_plan_item_by_batch,
     sync_plan_item_status,
 )
+from app.modules.production.service.route_service import require_published_route
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 from app.platform.permission.deps import get_user_permissions
@@ -94,13 +95,9 @@ async def _get_batch_or_404(db: AsyncSession, batch_id: uuid.UUID) -> Batch:
 async def create_batch(
     db: AsyncSession, payload: BatchCreate, user: User | None
 ) -> Batch:
-    route = await repo.get_route(db, payload.route_id)
-    if not route:
-        raise NotFoundException("工艺路线", str(payload.route_id))
-    if route.status != "published":
-        raise AppException(status_code=400, message="只能在 published 路线上创建批次")
-    if route.product_id != payload.product_id:
-        raise AppException(status_code=400, message="路线不属于该产品")
+    await require_published_route(
+        db, payload.route_id, product_id=payload.product_id,
+    )
     # 批号空间全局唯一：plan_items 预分配号 + batches（与计划项创建/编辑同口径）
     await _check_batch_no_unique(db, payload.batch_no)
     batch = Batch(
@@ -153,6 +150,8 @@ async def derive_batches(
 ) -> list[Batch]:
     """分裂 1→N / 1→1 换号：创建子批次并写谱系。"""
     parent = await _get_batch_or_404(db, parent_id)
+    # 归档/草稿路线禁止再产生子批次：与手工建批同口径
+    await require_published_route(db, parent.route_id)
     entry_node_id, is_deviation = await _validate_boundary(
         db, parent, payload.edge_id, payload.deviation_reason
     )
@@ -228,6 +227,8 @@ async def merge_batches(
     route_ids = {p.route_id for p in parents}
     if len(route_ids) != 1:
         raise AppException(status_code=400, message="合并的父批次必须属于同一条路线")
+    # 归档/草稿路线禁止再产生子批次：与手工建批同口径
+    await require_published_route(db, parents[0].route_id)
     # 工段权限校验
     if user and payload.edge_id and not is_deviation:
         route_id = next(iter(route_ids))

@@ -133,6 +133,33 @@ export async function deleteEquipment(id: string): Promise<ActionResult> {
   return result
 }
 
+// ==================== 跨模块引用授权 ====================
+export async function grantEquipmentReferences(
+  targetModule: string,
+  equipmentIds: string[],
+): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/references/grants`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_module: targetModule, equipment_ids: equipmentIds }),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function revokeEquipmentReferences(
+  targetModule: string,
+  equipmentIds: string[],
+): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/references/grants/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_module: targetModule, equipment_ids: equipmentIds }),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
 // ==================== 故障代码 ====================
 type FailureCodePath = 'symptoms' | 'causes' | 'actions'
 

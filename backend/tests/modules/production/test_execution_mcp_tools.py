@@ -10,7 +10,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.mcp_tools.execution import change_batch_step_status
-from app.modules.production.schemas import BatchCreate, ExecutionStartIn
+from app.modules.production.schemas import (
+    BatchCreate,
+    ExecutionCompleteIn,
+    ExecutionStartIn,
+    FieldValueIn,
+)
 from app.modules.production.service import batch_service, execution_service
 from app.platform.identity.models import User
 from app.platform.mcp.deps import reset_context, set_context
@@ -93,6 +98,87 @@ class TestChangeBatchStepStatus:
             action="pause",
         )
         assert result.is_error is True
+
+
+class TestQueryStepFieldsPhase:
+    """query_step_fields 的 phase 口径。
+
+    缺填判定只有 end 口径（start 必填在开工时已强制、且不可补录），
+    查 start 阶段时不能拿 end 的缺填结果顶替。
+    """
+
+    async def _make_completed_b_without_end_value(
+        self, db: AsyncSession, ctx: dict[str, Any],
+    ) -> Any:
+        """辅助：建批 → 完成起点 A → 开始并结束 B（不填 end 必填 yield_qty）。"""
+        batch = await batch_service.create_batch(
+            db,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=ctx["product"].id,
+                route_id=ctx["route"].id,
+            ),
+            user=None,
+        )
+        ex_a = await execution_service.start_execution(
+            db, batch.id, ExecutionStartIn(node_id=ctx["node_a"].id), user=None,
+        )
+        await execution_service.complete_execution(
+            db, ex_a.id, ExecutionCompleteIn(), user=None,
+        )
+        ex_b = await execution_service.start_execution(
+            db,
+            batch.id,
+            ExecutionStartIn(
+                node_id=ctx["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db, ex_b.id, ExecutionCompleteIn(), user=None,
+        )
+        return batch
+
+    async def test_start_phase_does_not_report_end_missing_fields(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """查 start 阶段：不显示 end 的待补录字段，改为提示开工先决条件不可补录。"""
+        from app.modules.production.mcp_tools.fields import query_step_fields
+
+        batch = await self._make_completed_b_without_end_value(
+            db_session, published_route,
+        )
+        result = await _call(
+            db_session,
+            query_step_fields,
+            batch_no=batch.batch_no,
+            step_name=published_route["node_b"].name,
+            phase="start",
+        )
+        content = "".join(getattr(b, "text", "") for b in result.content)
+        assert "待补录必填字段" not in content
+        assert "不支持事后补录" in content
+
+    async def test_end_phase_reports_missing_fields(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """查 end 阶段：缺填判定照旧生效（yield_qty 待补录）。"""
+        from app.modules.production.mcp_tools.fields import query_step_fields
+
+        batch = await self._make_completed_b_without_end_value(
+            db_session, published_route,
+        )
+        result = await _call(
+            db_session,
+            query_step_fields,
+            batch_no=batch.batch_no,
+            step_name=published_route["node_b"].name,
+            phase="end",
+        )
+        content = "".join(getattr(b, "text", "") for b in result.content)
+        assert "待补录必填字段" in content
+        assert "产出量" in content
 
 
 class TestQueryUserActiveBatchesForOwner:

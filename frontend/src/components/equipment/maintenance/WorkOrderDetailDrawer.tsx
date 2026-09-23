@@ -432,18 +432,19 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
                 }}
               >
                 <Select
-                  showSearch
+                  showSearch={{
+                    filterOption: (input, option) => {
+                      if (!option) return false
+                      const d = option as any
+                      const hay = `${d.code || ''} ${d.name || ''} ${d.spec || ''} ${d.stock || ''}`.toLowerCase()
+                      return hay.includes(input.toLowerCase())
+                    },
+                  }}
                   placeholder="搜索并选择备件"
                   style={{ flex: 1, minWidth: 0 }}
                   value={item.sparePartId || undefined}
                   onChange={(v) => {
                     setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, sparePartId: v } : p))
-                  }}
-                  filterOption={(input, option) => {
-                    if (!option) return false
-                    const d = option as any
-                    const hay = `${d.code || ''} ${d.name || ''} ${d.spec || ''} ${d.stock || ''}`.toLowerCase()
-                    return hay.includes(input.toLowerCase())
                   }}
                   popupMatchSelectWidth={false}
                   popupStyle={{ minWidth: 420 }}

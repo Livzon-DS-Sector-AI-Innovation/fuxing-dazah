@@ -422,7 +422,7 @@ export function InstrumentTable() {
       ),
     },
     {
-      title: '操作', key: 'actions', width: 120, fixed: 'right',
+      title: '操作', key: 'actions', width: 150, fixed: 'right',
       render: (_: unknown, r: InstrumentRecord) => (
         <Space size="small">
           <Tooltip title="报告">

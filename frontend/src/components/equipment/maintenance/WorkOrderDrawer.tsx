@@ -112,8 +112,7 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
         <Form.Item name="equipment_id" label="关联设备" rules={[{ required: true, message: '请选择设备' }]}>
           <Select
             placeholder="选择设备"
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={equipments.map((eq) => ({ label: `${eq.equipment_no} - ${eq.name}`, value: eq.id }))}
             onChange={(eqId: string) => {
               // 新建模式：自动填入设备责任人
@@ -141,8 +140,7 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
         <Form.Item name="responsible_person_id" label="责任人" rules={[{ required: true, message: '请选择责任人' }]}>
           <Select
             placeholder="选择责任人"
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={maintainers.map((m) => ({
               label: `${m.name} (${m.employee_no || '-'})`,
               value: m.user_id,
@@ -158,8 +156,7 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
           <Select
             placeholder="选择故障现象（可选）"
             allowClear
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={symptoms.map((s) => ({ label: `${s.code} - ${s.name}`, value: s.id }))}
           />
         </Form.Item>

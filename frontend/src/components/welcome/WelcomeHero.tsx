@@ -1,16 +1,17 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import Orb from '@/components/Orb'
 import GradientText from '@/components/GradientText'
 import { ModuleIcon } from '@/components/icons'
 import { moduleMenus } from '@/lib/menu-config'
 import { usePermission } from '@/hooks/usePermission'
 import { getCurrentUser } from '@/actions/auth'
 import type { User } from '@/types/user'
+import { WelcomeRippleBackground } from './WelcomeRippleBackground'
 
 export function WelcomeHero() {
+  const heroRef = useRef<HTMLDivElement>(null)
   const { hasPermission, isLoaded } = usePermission()
   const [user, setUser] = useState<User | null>(null)
 
@@ -29,11 +30,8 @@ export function WelcomeHero() {
   const noAccess = isLoaded && visibleMenus.length === 0
 
   return (
-    <div className="relative h-full overflow-hidden">
-      {/* Orb 背景 */}
-      <div className="absolute inset-0 z-0">
-        <Orb hue={288} hoverIntensity={2} backgroundColor="#f6f5f4" />
-      </div>
+    <div ref={heroRef} className="relative -m-4 min-h-full h-[calc(100%+2rem)] overflow-hidden">
+      <WelcomeRippleBackground interactionRef={heroRef} />
 
       {/* 内容层 */}
       <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-10 pointer-events-none">
@@ -71,7 +69,7 @@ export function WelcomeHero() {
                   <Link
                     key={mod.key}
                     href={mod.path}
-                    className="flex items-center gap-2 px-4 h-10 rounded-full bg-white/50 backdrop-blur-md border border-white/60 !text-[#7b3ff2] text-[14px] font-medium shadow-sm transition-all hover:bg-white/70 hover:shadow-md hover:shadow-md"
+                    className="flex items-center gap-2 px-4 h-10 rounded-full bg-white/20 backdrop-blur-md border border-white/35 !text-[#7b3ff2] text-[14px] font-medium shadow-sm transition-[background-color,box-shadow] hover:bg-white/35 hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-primary)]"
                   >
                     <ModuleIcon name={mod.icon} className="w-4 h-4" />
                     {mod.label}

@@ -7,6 +7,7 @@ import { antdTheme } from '@/lib/antd-theme'
 import type { Product } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { ProductSidebar, CARD_STYLE } from '../shared/ProductSidebar'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { StageSummaryTable } from './StageSummaryTable'
 import { FieldTrendChart } from './FieldTrendChart'
 import { PageHeading } from '@/components/shared/PageHeading'
@@ -18,7 +19,11 @@ export function AnalyticsPage() {
     <ProductionQueryProvider>
       <ConfigProvider theme={antdTheme} locale={zhCN}>
         <div>
-          <PageHeading title="数据汇总" subtitle="工段汇总矩阵与批次字段趋势分析" />
+          <PageHeading
+            title="数据汇总"
+            subtitle="工段汇总矩阵与批次字段趋势分析"
+            actions={<PageGuideButton />}
+          />
           <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
             <ProductSidebar
               selectedId={product?.id ?? null}

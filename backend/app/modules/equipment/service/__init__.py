@@ -121,6 +121,18 @@ from app.modules.equipment.service.personnel import (
     update_personnel,
     update_role,
 )
+from app.modules.equipment.service.reference import (
+    EquipmentReference,
+    ensure_equipment_reference,
+    get_equipment_references_by_ids,
+    get_reference_grants,
+    grant_equipment_references,
+    list_equipment_references,
+    list_reference_target_modules,
+    revoke_equipment_references,
+    validate_equipment_references,
+    validate_target_module,
+)
 from app.modules.equipment.service.spare_part import (
     adjust_stock,
     create_spare_part,
@@ -294,4 +306,15 @@ __all__ = [
     "update_categories",
     "update_personnel",
     "update_role",
+    # cross-module equipment references
+    "EquipmentReference",
+    "ensure_equipment_reference",
+    "get_equipment_references_by_ids",
+    "get_reference_grants",
+    "grant_equipment_references",
+    "list_equipment_references",
+    "list_reference_target_modules",
+    "revoke_equipment_references",
+    "validate_equipment_references",
+    "validate_target_module",
 ]

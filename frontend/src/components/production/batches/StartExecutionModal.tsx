@@ -304,7 +304,9 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
   const mergedEquipmentOptions = useMemo(() => {
     const searchOptions = (equipmentData?.items ?? []).map(e => ({
       value: e.id,
-      label: `${e.name}（${e.equipment_no}）`,
+      // 让用户清楚设备来自自己的台账范围还是其他部门主动共享；
+      // source 缺失时兼容旧服务响应，不改变原有标签。
+      label: `${e.name}（${e.equipment_no}）${e.source === 'shared' ? ' · 已共享' : e.source === 'own_scope' ? ' · 我的设备' : ''}`,
     }))
     const inList = new Set(searchOptions.map(o => o.value))
     return [

@@ -1,0 +1,218 @@
+/* 流程画布 — 沿用生产模块统一的立体语汇：
+   inset 顶部高光 + 145deg 渐变底 + 紫调柔和投影 + hover 上浮。
+   画布下沉成"凹槽"，浮起来的节点与控件才有层次。 */
+
+.canvas {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(200, 196, 190, 0.6);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(86, 69, 212, 0.035), transparent 55%),
+    linear-gradient(180deg, #fbfaf9 0%, #ffffff 42%, #fdfcfe 100%);
+  box-shadow:
+    inset 0 2px 6px rgba(55, 53, 47, 0.045),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.canvas :global(.react-flow) {
+  background: transparent;
+}
+
+/* ── 缩放控件：浮起的立体胶囊 ── */
+.canvas :global(.react-flow__controls) {
+  overflow: hidden;
+  margin: 12px;
+  border: 1px solid rgba(200, 196, 190, 0.72);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff, #fafaf9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 2px 4px rgba(15, 15, 15, 0.05),
+    0 10px 22px -14px rgba(40, 33, 91, 0.5);
+}
+
+.canvas :global(.react-flow__controls-button) {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-bottom: 1px solid rgba(237, 233, 228, 0.9);
+  background: transparent;
+  color: #5d5b54;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.canvas :global(.react-flow__controls-button:last-child) {
+  border-bottom: none;
+}
+
+.canvas :global(.react-flow__controls-button:hover) {
+  background: rgba(86, 69, 212, 0.09);
+  color: #5645d4;
+}
+
+.canvas :global(.react-flow__controls-button svg) {
+  max-width: 12px;
+  max-height: 12px;
+  fill: currentColor;
+}
+
+/* ── 连线端点：白环让彩色小圆点从卡片边上"立"起来 ── */
+.canvas :global(.react-flow__handle) {
+  border: 1.5px solid #ffffff;
+}
+
+/* ── 工序节点：宽高由组件内联注入（PROCESS_NODE_W/H），此处只管外观 ── */
+.processNode {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #e5e3df;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #ffffff 0%, #fdfcfb 60%, #f7f6fa 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 1px 2px rgba(15, 15, 15, 0.04),
+    0 10px 20px -16px rgba(40, 33, 91, 0.45);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.processNode:hover {
+  border-color: rgba(86, 69, 212, 0.3);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 4px 8px rgba(15, 15, 15, 0.05),
+    0 16px 26px -18px rgba(40, 33, 91, 0.6);
+}
+
+.processNodeSelected,
+.processNodeSelected:hover {
+  border-color: #5645d4;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 0 0 3px rgba(86, 69, 212, 0.14),
+    0 14px 24px -18px rgba(40, 33, 91, 0.6);
+}
+
+.processAccent {
+  width: 4px;
+  flex: 0 0 4px;
+  background: linear-gradient(
+    180deg,
+    var(--stage-accent),
+    color-mix(in srgb, var(--stage-accent) 55%, #ffffff)
+  );
+}
+
+.processBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.processTitle {
+  overflow: hidden;
+  color: #1a1a1a;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.processMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.processCode {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #f6f5f4;
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -1px 0 rgba(55, 53, 47, 0.04);
+  color: #787671;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+}
+
+.processStage {
+  flex: 0 1 auto;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--stage-tint);
+  color: var(--stage-accent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.processFields {
+  flex: 0 0 auto;
+  color: #a4a097;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+/* ── 物料节点：头部 28 / 行高 20 与 FlowGraph 的布局常量绑定，宽度由组件内联注入 ── */
+.materialNode {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--mat-accent) 62%, #ffffff);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 1px 2px rgba(15, 15, 15, 0.04),
+    0 8px 16px -14px rgba(40, 33, 91, 0.42);
+}
+
+.materialHead {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--mat-accent) 20%, #ffffff);
+  background: linear-gradient(
+    145deg,
+    var(--mat-tint),
+    color-mix(in srgb, var(--mat-tint) 62%, #ffffff)
+  );
+  color: color-mix(in srgb, var(--mat-accent) 88%, #37352f);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.materialDot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: var(--mat-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mat-accent) 18%, transparent);
+}
+
+.materialBody {
+  padding: 4px 8px;
+}
+
+.materialRow {
+  overflow: hidden;
+  color: #37352f;
+  font-size: 11.5px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

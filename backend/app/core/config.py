@@ -119,6 +119,17 @@ class Settings(BaseSettings):
     METER_AI_API_KEY: str = ""
     METER_AI_MODEL: str = "deepseek-v4-flash-vision-exp"
 
+    # QA AI 文档实体分析（OpenAI-compatible；关闭或无 key 时只保留解析/人工流程）
+    QA_AI_ENABLED: bool = False
+    QA_AI_API_KEY: str = ""
+    QA_AI_BASE_URL: str = "https://api.openai.com/v1"
+    QA_AI_MODEL: str = "gpt-4o-mini"
+    QA_AI_TIMEOUT_SECONDS: int = 120
+    QA_AI_MAX_TOKENS: int = 4096
+    QA_AI_MAX_RETRIES: int = 2
+    QA_AI_PROMPT_VERSION: str = "qa-entity-v1"
+    QA_AI_SCHEMA_VERSION: str = "qa-entity-schema-v1"
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

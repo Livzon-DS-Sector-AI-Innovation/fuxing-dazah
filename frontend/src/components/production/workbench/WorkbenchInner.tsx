@@ -14,6 +14,7 @@ import type { WorkbenchItem, Execution, StageNodeInfo, IntermediateOutput, Inter
 
 import styles from './Workbench.module.css'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { ReceiveModal } from './ReceiveModal'
 import { AssigneeConfig } from './AssigneeConfig'
 import { StageSuffixConfig } from './StageSuffixConfig'
@@ -704,7 +705,12 @@ export function WorkbenchInner() {
         paddingBottom: 18, marginBottom: 24,
         borderBottom: '1px solid #ede9e4',
       }}>
-        <PageHeading className={styles.workbenchHeading} title="工作台" subtitle="生产任务执行与工序状态跟踪" />
+        <PageHeading
+          className={styles.workbenchHeading}
+          title="工作台"
+          subtitle="生产任务执行与工序状态跟踪"
+          actions={<PageGuideButton />}
+        />
 
         {/* 角色工牌：页面唯一的深色块，身份焦点 */}
         <div style={{

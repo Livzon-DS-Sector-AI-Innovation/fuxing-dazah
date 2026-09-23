@@ -214,10 +214,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
             mode="multiple"
             placeholder="选择推送接收人"
             options={personnelOptions}
-            showSearch
-            filterOption={(input, option) =>
-              (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+            }}
             style={{ width: '100%' }}
           />
         </Form.Item>
@@ -239,10 +239,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
               allowClear
               placeholder="选择光伏发电设备"
               options={deviceOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
             />
           </Form.Item>
           <Form.Item name="pressure_device_id" label="蒸汽差压发电设备" help="选择蒸汽差压发电对应的数据源设备">
@@ -250,10 +250,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
               allowClear
               placeholder="选择蒸汽差压发电设备"
               options={deviceOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
             />
           </Form.Item>
         </div>
@@ -267,10 +267,10 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
                 allowClear
                 placeholder={`选择${DEVICE_LABELS[fieldKey]}`}
                 options={deviceOptions}
-                showSearch
-                filterOption={(input, option) =>
-                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-                }
+                showSearch={{
+                  filterOption: (input, option) =>
+                    (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+                }}
               />
             </Form.Item>
           ))}

@@ -828,19 +828,7 @@ def _build_timeout_content(
     if execution.deviation_reason:
         lines.append(f"偏离原因：{execution.deviation_reason}")
 
-    # FRONTEND_URL 在本地测试/部分后台环境可能为空；相对路径仍可被
-    # 已登录用户复制到系统中打开，生产环境则生成完整可点击入口。
-    try:
-        from app.core.config import get_settings
-
-        frontend_url = get_settings().FRONTEND_URL.rstrip("/")
-    except Exception:  # noqa: BLE001
-        frontend_url = ""
-    detail_path = (
-        f"/production/batches?product={batch.product_id}&batch={batch.id}"
-    )
-    detail_url = f"{frontend_url}{detail_path}" if frontend_url else detail_path
-    lines.extend(("", f"[打开执行详情]({detail_url})"))
+    # 正文只做超时提示，不带跳转链接：收件人直接回系统查看即可。
     return "\n".join(lines)
 
 

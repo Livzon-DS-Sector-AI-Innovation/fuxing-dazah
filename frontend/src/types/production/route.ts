@@ -123,3 +123,13 @@ export interface CreateRouteInput {
   product_id: string
   route_name: string
 }
+
+export interface CopyRouteInput {
+  route_name: string
+  /** 复制工段/工序负责人分配（默认携带） */
+  copy_assignments?: boolean
+  /** 复制工段批次尾缀（默认携带） */
+  copy_suffixes?: boolean
+  /** 复制路线计算字段（默认携带） */
+  copy_computed_fields?: boolean
+}

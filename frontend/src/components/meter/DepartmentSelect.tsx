@@ -77,11 +77,11 @@ export function DepartmentSelect({ value, onChange, placeholder = '选择部门'
       onChange={onChange}
       placeholder={placeholder}
       allowClear
-      showSearch
+      showSearch={{
+        filterOption: (input, option) =>
+          (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+      }}
       options={departments.map(d => ({ label: d, value: d }))}
-      filterOption={(input, option) =>
-        (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-      }
       popupRender={dropdownRender}
     />
   )

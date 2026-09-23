@@ -82,8 +82,11 @@ async def _update_equipment_status(
     *,
     operator_id: uuid.UUID | None = None,
 ) -> None:
-    """直接更新设备状态（模块内使用）"""
-    equipment = await repo.get_equipment_by_id(db, equipment_id)
+    """直接更新设备状态（模块内使用）
+
+    无范围读取：调用方已在工单层面完成归属校验，这里只是按其结果同步设备状态。
+    """
+    equipment = await repo.get_equipment_unscoped(db, equipment_id)
     if equipment and equipment.status != status:
         old_status = equipment.status
         equipment.status = status
@@ -102,7 +105,7 @@ async def _try_restore_equipment_status(
     """检查设备是否所有故障维修工单已关闭，是则恢复设备为完好"""
     open_count = await repo.count_open_fault_work_orders(db, equipment_id)
     if open_count == 0:
-        equipment = await repo.get_equipment_by_id(db, equipment_id)
+        equipment = await repo.get_equipment_unscoped(db, equipment_id)
         # 覆盖"建单后未开始维修就关单"的场景（设备停在故障待检）
         if equipment and equipment.status in ("故障待检", "维修中"):
             old_status = equipment.status
@@ -119,7 +122,9 @@ async def create_work_order(
     ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """创建维修工单"""
-    equipment = await repo.get_equipment_by_id(db, data.equipment_id)
+    # 范围读：跨部门（或归属部门为空的）设备一律视为不存在，避免凭 UUID
+    # 给别的部门设备报修并顺带改其状态、发通知。
+    equipment = await repo.get_equipment_by_id(db, data.equipment_id, ctx)
     if not equipment:
         raise NotFoundException("设备", str(data.equipment_id))
 

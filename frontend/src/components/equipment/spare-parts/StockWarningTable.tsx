@@ -42,7 +42,7 @@ export function StockWarningTable({ onRefresh }: StockWarningTableProps) {
     <div>
       {stockWarnings.length > 0 && (
         <Alert
-          message={`${stockWarnings.length} 个备件库存低于最低库存，请及时补充`}
+          title={`${stockWarnings.length} 个备件库存低于最低库存，请及时补充`}
           type="warning"
           showIcon
           icon={<WarningOutlined />}

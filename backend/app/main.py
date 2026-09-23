@@ -1,13 +1,14 @@
 import asyncio
 import logging
 import os
+import posixpath
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -34,8 +35,10 @@ setup_logging(
 logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
-import app.modules.production.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+from app.modules.production import (  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+    mcp_tools as _production_mcp_tools,
+)
 from app.modules.toolbox.registry import TOOL_IMAGE_URL_PREFIX  # noqa: E402
 from app.platform.identity import (  # noqa: E402
     mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册
@@ -154,6 +157,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_registry.register_task(BATCH_START_REMINDER_TASK)
     scheduler_registry.register_task(EXECUTION_TIMEOUT_SCAN_TASK)
 
+    # QA 文档正文提取：任务状态持久化在 qa.document_files，服务重启后可继续。
+    from app.modules.qa.scheduler import (
+        AI_GENERATOR as QA_AI_ANALYSIS_GENERATOR,
+    )
+    from app.modules.qa.scheduler import (
+        GENERATOR as QA_TEXT_EXTRACTION_GENERATOR,
+    )
+
+    scheduler_registry.register_generator(QA_TEXT_EXTRACTION_GENERATOR)
+    scheduler_registry.register_generator(QA_AI_ANALYSIS_GENERATOR)
+
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
 
@@ -241,10 +255,22 @@ app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
-# 挂载静态文件目录（图片上传等）
+# 挂载静态文件目录（图片上传等）。QA 本地回退文件虽然仍兼容落在
+# ``UPLOAD_DIR/qa``（开发环境已有文件不能因为本次升级突然不可读），但
+# 质量原件必须始终经过带权限的 QA 代理接口，不能被这个公共静态挂载绕过。
+class _PublicUploads(StaticFiles):
+    async def get_response(self, path: str, scope: dict[str, object]):  # type: ignore[override]
+        # StaticFiles 自身会做 realpath 校验；这里也必须先规范化 ``..``，
+        # 否则 ``/uploads/public/../qa/...`` 可能绕过简单的前缀判断。
+        normalized = posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/").casefold()
+        if normalized == "qa" or normalized.startswith("qa/"):
+            return PlainTextResponse("Not Found", status_code=404)
+        return await super().get_response(path, scope)
+
+
 uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
 os.makedirs(uploads_dir, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+app.mount("/uploads", _PublicUploads(directory=uploads_dir), name="uploads")
 
 # ── 工具箱工具图片（公开静态，<img> 无法携带认证头，目录只放图片）──
 toolbox_images_dir = os.path.abspath(

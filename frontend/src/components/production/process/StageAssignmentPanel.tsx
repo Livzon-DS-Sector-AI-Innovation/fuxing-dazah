@@ -10,7 +10,7 @@ import {
   fetchStageAssignments, createStageAssignment, deleteStageAssignment,
 } from '@/actions/production'
 
-import { stageColor } from '@/components/production/shared/stageColor'
+import { stageColor, stageTint } from '@/components/production/shared/stageColor'
 
 interface Props {
   routeId: string
@@ -123,10 +123,12 @@ function StageRow({ stageName, color, assignees, getUserName, onAdd, onRemove }:
         alignItems: 'center',
         gap: 6,
         padding: '6px 10px',
-        borderRadius: 8,
-        background: '#fafaf8',
-        border: '1px solid #ede9e4',
-        minHeight: 32,
+        borderRadius: 12,
+        background: `linear-gradient(145deg, ${stageTint(stageName, 16)}, ${stageTint(stageName, 8)})`,
+        border: `1px solid ${stageTint(stageName, 34)}`,
+        boxShadow:
+          'inset 0 1px 0 rgba(255,255,255,.86), 0 3px 8px -7px rgba(40,33,91,.55)',
+        minHeight: 34,
         flexWrap: 'wrap',
       }}
     >
@@ -135,9 +137,9 @@ function StageRow({ stageName, color, assignees, getUserName, onAdd, onRemove }:
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 4,
+          gap: 5,
           fontSize: 12,
-          fontWeight: 500,
+          fontWeight: 600,
           color,
           flexShrink: 0,
           marginRight: 2,
@@ -147,8 +149,9 @@ function StageRow({ stageName, color, assignees, getUserName, onAdd, onRemove }:
           style={{
             width: 6,
             height: 6,
-            borderRadius: 2,
+            borderRadius: '50%',
             background: color,
+            boxShadow: `0 0 0 2px ${stageTint(stageName, 22)}`,
             flexShrink: 0,
           }}
         />
@@ -167,6 +170,9 @@ function StageRow({ stageName, color, assignees, getUserName, onAdd, onRemove }:
             borderRadius: 6,
             padding: '0 6px',
             lineHeight: '22px',
+            background: 'rgba(255,255,255,.86)',
+            borderColor: 'rgba(255,255,255,.9)',
+            boxShadow: 'inset 0 1px 0 #fff, 0 1px 2px rgba(55,53,47,.07)',
           }}
         >
           {getUserName(a.user_id)}
@@ -194,21 +200,25 @@ function StageRow({ stageName, color, assignees, getUserName, onAdd, onRemove }:
             justifyContent: 'center',
             width: 22,
             height: 22,
-            borderRadius: 6,
+            borderRadius: 7,
             cursor: 'pointer',
-            color: '#a4a097',
+            color: '#787671',
             fontSize: 12,
-            border: '1px dashed #d9d6d0',
-            transition: 'color 0.15s, border-color 0.15s',
+            background: 'rgba(255,255,255,.7)',
+            boxShadow: 'inset 0 1px 0 #fff, 0 1px 2px rgba(55,53,47,.08)',
+            transition: 'color 0.15s, box-shadow 0.15s, background 0.15s',
             flexShrink: 0,
           }}
           onMouseEnter={e => {
             e.currentTarget.style.color = '#5645d4'
-            e.currentTarget.style.borderColor = '#5645d4'
+            e.currentTarget.style.background = '#ffffff'
+            e.currentTarget.style.boxShadow =
+              'inset 0 1px 0 #fff, 0 0 0 2px rgba(86,69,212,.16), 0 2px 4px rgba(55,53,47,.1)'
           }}
           onMouseLeave={e => {
-            e.currentTarget.style.color = '#a4a097'
-            e.currentTarget.style.borderColor = '#d9d6d0'
+            e.currentTarget.style.color = '#787671'
+            e.currentTarget.style.background = 'rgba(255,255,255,.7)'
+            e.currentTarget.style.boxShadow = 'inset 0 1px 0 #fff, 0 1px 2px rgba(55,53,47,.08)'
           }}
         >
           <PlusOutlined />

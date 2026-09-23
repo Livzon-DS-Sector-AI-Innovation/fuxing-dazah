@@ -59,8 +59,11 @@ function TextFilterDropdown({
         style={{ width: '100%' }}
         placeholder={placeholder}
         allowClear
-        showSearch
-        onSearch={handleSearch}
+        showSearch={{
+          onSearch: handleSearch,
+          filterOption: (input, option) =>
+            (option?.value as string)?.toLowerCase().includes(input.toLowerCase()),
+        }}
         onSelect={(t) => {
           setText(t)
           apply(t)
@@ -70,9 +73,6 @@ function TextFilterDropdown({
           setText(val)
           if (!val) apply(undefined)
         }}
-        filterOption={(input, option) =>
-          (option?.value as string)?.toLowerCase().includes(input.toLowerCase())
-        }
       />
       {text && (
         <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
@@ -152,7 +152,6 @@ function MultiSelectFilterDropdown({
       <Select
         mode="multiple"
         allowClear
-        showSearch
         placeholder={placeholder}
         value={selectedArr}
         onChange={(values) => {
@@ -160,9 +159,10 @@ function MultiSelectFilterDropdown({
           onChange(arr.length > 0 ? arr.join(',') : undefined)
         }}
         options={options.map(v => ({ label: v, value: v }))}
-        filterOption={(input, option) =>
-          (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-        }
+        showSearch={{
+          filterOption: (input, option) =>
+            (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+        }}
         style={{ width: '100%' }}
         maxTagCount="responsive"
       />

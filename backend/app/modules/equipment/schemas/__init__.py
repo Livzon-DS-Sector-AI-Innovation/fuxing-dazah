@@ -94,6 +94,13 @@ from app.modules.equipment.schemas.personnel import (
     RoleResponse,
     RoleUpdate,
 )
+from app.modules.equipment.schemas.reference import (
+    EquipmentReferenceGrantRequest,
+    EquipmentReferenceGrantResponse,
+    EquipmentReferenceResponse,
+    EquipmentReferenceRevokeRequest,
+    EquipmentReferenceTargetModuleResponse,
+)
 from app.modules.equipment.schemas.spare_part import (
     EquipmentConsumptionRecord,
     OutboundTransactionResponse,
@@ -236,4 +243,10 @@ __all__ = [
     "RoleCreate",
     "RoleResponse",
     "RoleUpdate",
+    # cross-module equipment references
+    "EquipmentReferenceGrantRequest",
+    "EquipmentReferenceGrantResponse",
+    "EquipmentReferenceResponse",
+    "EquipmentReferenceRevokeRequest",
+    "EquipmentReferenceTargetModuleResponse",
 ]

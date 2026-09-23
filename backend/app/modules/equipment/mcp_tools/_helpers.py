@@ -21,8 +21,8 @@ from app.modules.equipment.models.inspection_template import (
     InspectionTemplateItem,
 )
 from app.modules.equipment.repository.equipment import (
-    get_equipment_by_id,
     get_equipment_by_no,
+    get_equipment_unscoped,
 )
 from app.modules.equipment.repository.inspection_template import (
     get_inspection_template_by_id,
@@ -181,13 +181,17 @@ async def _get_template_item_map(
 
 
 async def _resolve_equipment(db: AsyncSession, identifier: str) -> Any:
-    """将设备编号或 UUID 解析为 Equipment 对象。"""
+    """将设备编号或 UUID 解析为 Equipment 对象。
+
+    无范围读取：MCP 工具层统一以 data_scope="all" 构建访问上下文（用户身份已由
+    resolve_user 校验），授权决策交给各工具的服务层调用。
+    """
     equipment = await get_equipment_by_no(db, identifier)
     if equipment:
         return equipment
     try:
         eid = uuid.UUID(identifier)
-        equipment = await get_equipment_by_id(db, eid)
+        equipment = await get_equipment_unscoped(db, eid)
         if equipment:
             return equipment
     except ValueError:

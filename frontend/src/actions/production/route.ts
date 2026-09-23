@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { API_BASE, actionFetch, type ActionResult } from './helpers'
-import type { CreateRouteInput, ProcessRoute, RouteGraphIn } from '@/types/production'
+import type { CopyRouteInput, CreateRouteInput, ProcessRoute, RouteGraphIn } from '@/types/production'
 
 export async function createRoute(input: CreateRouteInput): Promise<ActionResult<ProcessRoute>> {
   const result = await actionFetch<ProcessRoute>(`${API_BASE}/production/routes`, {
@@ -46,12 +46,13 @@ export async function archiveRoute(routeId: string): Promise<ActionResult<Proces
 export async function copyRoute(
   routeId: string,
   routeName: string,
+  options: Omit<CopyRouteInput, 'route_name'> = {},
 ): Promise<ActionResult<ProcessRoute>> {
   const result = await actionFetch<ProcessRoute>(
     `${API_BASE}/production/routes/${routeId}/copy`,
     {
       method: 'POST',
-      body: JSON.stringify({ route_name: routeName }),
+      body: JSON.stringify({ route_name: routeName, ...options } satisfies CopyRouteInput),
     },
   )
   if (result.success) revalidatePath('/production/process')

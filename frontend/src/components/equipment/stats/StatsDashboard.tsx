@@ -1,6 +1,7 @@
 'use client'
 
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { useEffect, useRef, useState } from 'react'
 import { ConfigProvider } from 'antd'
 import {
@@ -1062,7 +1063,12 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
         }}
       >
         {/* ========== 页面标题 ========== */}
-        <PageHeading className="stats-page-heading" title="设备管理概览" subtitle="实时数据仪表盘 · 设备部全景视图" />
+        <PageHeading
+          className="stats-page-heading"
+          title="设备管理概览"
+          subtitle="实时数据仪表盘 · 设备部全景视图"
+          actions={<PageGuideButton />}
+        />
 
         {/* ========== 快捷入口行 ========== */}
         <div

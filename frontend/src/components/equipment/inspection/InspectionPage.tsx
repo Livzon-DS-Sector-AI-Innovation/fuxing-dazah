@@ -23,6 +23,7 @@ import { fetchInspectionTemplatesClient } from '@/lib/api/equipment-client'
 import type { InspectionTemplate, EquipmentCategory } from '@/types/equipment'
 import { usePermission } from '@/hooks/usePermission'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 
 interface Props {
   initialTemplates: InspectionTemplate[]
@@ -139,7 +140,11 @@ export function InspectionPage({ initialTemplates, initialEquipments, initialCat
   return (
     <div style={{ paddingBottom: 40 }}>
       {/* 页面头部 */}
-      <PageHeading title="设备巡检" subtitle="巡检线路管理 · 任务执行 · 历史追溯 · 模板管理" />
+      <PageHeading
+        title="设备巡检"
+        subtitle="巡检线路管理 · 任务执行 · 历史追溯 · 模板管理"
+        actions={<PageGuideButton />}
+      />
 
       {/* Tab 内容包进白色卡片，浮在 surface 背景上 */}
       <div style={{

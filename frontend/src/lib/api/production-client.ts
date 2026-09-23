@@ -51,15 +51,19 @@ export async function fetchIntermediateTypesClient(params: {
   )
 }
 
-// ── 设备选项（当前用户可见范围，后端经 equipment.public_api 过滤）──
+// ── 设备选项（当前用户可引用范围，后端经 equipment.public_api 过滤）──
 export interface EquipmentOption {
   id: string
   equipment_no: string
   name: string
+  status?: string | null
+  is_active?: boolean
+  source?: 'own_scope' | 'shared' | string
 }
 
 export async function fetchEquipmentOptionsClient(params: {
   keyword?: string
+  status?: string
   page?: number
   page_size?: number
 } = {}): Promise<{ items: EquipmentOption[]; total: number }> {
@@ -67,6 +71,7 @@ export async function fetchEquipmentOptionsClient(params: {
     page: params.page ?? 1,
     page_size: params.page_size ?? 20,
     keyword: params.keyword ?? null,
+    status: params.status ?? null,
   })
   return apiFetchPaginated<EquipmentOption>(
     `${API_BASE}/api/v1/production/equipment-options?${s}`,

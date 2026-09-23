@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
+    RouteCopy,
     RouteCreate,
     RouteGraphIn,
     RouteOut,
@@ -105,11 +106,19 @@ async def archive_route(
 @router.post("/routes/{route_id}/copy", summary="复制为新产品路线（draft）")
 async def copy_route(
     route_id: uuid.UUID,
-    payload: RouteRename,
+    payload: RouteCopy,
     user: User = Depends(_manage),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    route = await route_service.copy_route(db, route_id, payload.route_name, user)
+    route = await route_service.copy_route(
+        db,
+        route_id,
+        payload.route_name,
+        user,
+        copy_assignments=payload.copy_assignments,
+        copy_suffixes=payload.copy_suffixes,
+        copy_computed_fields=payload.copy_computed_fields,
+    )
     return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
 
 

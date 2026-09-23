@@ -21,12 +21,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, ForbiddenException
 from app.core.time import APP_TZ, now
+from app.modules.equipment.models import Equipment, Location
+from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production import repository as repo
 from app.modules.production.models import (
     Batch,
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
     NodeExecution,
+    NodeFieldDef,
 )
 from app.modules.production.schemas import (
     BatchCreate,
@@ -75,6 +78,79 @@ async def _complete_node_a(
 
 
 class TestStart:
+    async def test_user_equipment_reference_is_validated_with_production_scope(
+        self,
+        db_session: AsyncSession,
+        published_route: dict[str, Any],
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """普通用户开始执行时必须走 production 引用授权，而非无上下文摘要。"""
+        batch = await _make_batch(db_session, published_route)
+        equipment_id = uuid.uuid4()
+        calls: list[tuple[Any, ...]] = []
+
+        async def validate(
+            db: AsyncSession,
+            user: User,
+            target_module: str,
+            ids: list[uuid.UUID],
+            *,
+            auto_publish_owned: bool,
+        ) -> list[EquipmentBrief]:
+            calls.append((user, target_module, ids, auto_publish_owned))
+            return [
+                EquipmentBrief(
+                    id=equipment_id,
+                    equipment_no="EQ-REF",
+                    name="共享设备",
+                    status="完好",
+                )
+            ]
+
+        from app.modules.equipment import public_api
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", validate)
+
+        async def allow_operator(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(execution_service, "_require_operator_permission", allow_operator)
+        execution = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                equipment_ids=[equipment_id],
+            ),
+            user=test_user,
+        )
+
+        assert calls == [(test_user, "production", [equipment_id], True)]
+        snapshots = await repo.get_equipments_by_executions(db_session, [execution.id])
+        assert snapshots[0].equipment_no == "EQ-REF"
+        assert snapshots[0].equipment_name == "共享设备"
+
+    async def test_user_cannot_start_with_revoked_equipment_reference(
+        self,
+        db_session: AsyncSession,
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """设备负责人撤销共享后，普通用户不能通过执行入口继续关联。"""
+        from app.modules.equipment import public_api
+
+        async def reject(*args: Any, **kwargs: Any) -> list[EquipmentBrief]:
+            raise ForbiddenException("设备不可用或无权关联")
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", reject)
+        with pytest.raises(ForbiddenException, match="设备不可用"):
+            await execution_service._get_execution_equipment_references(
+                db_session,
+                [uuid.uuid4()],
+                test_user,
+            )
+
     async def test_first_execution_must_be_start_node(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
@@ -133,6 +209,48 @@ class TestStart:
                 ExecutionStartIn(node_id=published_route["node_b"].id),
                 user=None,
             )
+
+    async def test_required_start_field_empty_string_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """空串等同未填：必填校验与落行必须共用同一判据，不能被 value="" 绕过。
+
+        start 阶段尤其关键——开工后没有任何一线补录通道，而缺填判定只有 end 口径，
+        一旦被绕过不会在任何环节暴露。前端 buildFieldValues 已过滤空串，此处覆盖
+        MCP/直接调 API 的路径。
+        """
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        with pytest.raises(AppException, match="缺少必填字段"):
+            await execution_service.start_execution(
+                db_session,
+                batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value="")],
+                ),
+                user=None,
+            )
+
+    async def test_numeric_zero_is_a_real_value(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """数值 0 是合法取值，空串归一化不能误伤（0 视作已填，仅按范围判异常）。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=0)],
+            ),
+            user=None,
+        )
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "temp")
+        assert row.value_numeric == 0
+        assert row.is_abnormal is True  # 低于 min_value=20
 
     async def test_numeric_out_of_range_marks_abnormal(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -216,18 +334,30 @@ class TestStart:
     ) -> None:
         """指定设备 ID 时开始执行会写入设备快照关联记录。"""
         batch = await _make_batch(db_session, published_route)
-        eq_id = uuid.uuid4()
+        location = Location(name="测试车间", code=rand_code("LOC"))
+        db_session.add(location)
+        await db_session.flush()
+        equipment = Equipment(
+            equipment_no=rand_code("EQ"),
+            name="测试设备",
+            location_id=location.id,
+        )
+        db_session.add(equipment)
+        await db_session.flush()
         ex = await execution_service.start_execution(
             db_session,
             batch.id,
             ExecutionStartIn(
-                node_id=published_route["node_a"].id, equipment_ids=[eq_id],
+                node_id=published_route["node_a"].id,
+                equipment_ids=[equipment.id],
             ),
             user=None,
         )
         snaps = await repo.get_equipments_by_executions(db_session, [ex.id])
         assert len(snaps) == 1
-        assert snaps[0].equipment_id == eq_id
+        assert snaps[0].equipment_id == equipment.id
+        assert snaps[0].equipment_no == equipment.equipment_no
+        assert snaps[0].equipment_name == equipment.name
 
     async def test_derived_batch_starts_at_entry_node(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -437,6 +567,38 @@ class TestCompleteAndRework:
         row = next(v for v in values if v.field_key == "yield_qty")
         assert row.filled_at is not None
         assert row.value_numeric == 80
+
+    async def test_backfill_rejects_start_phase_field(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """start 字段不在补录范围：给出明确指引，而不是"未定义的字段"（易被误读成路线配错）。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session,
+            ex.id,
+            ExecutionCompleteIn(
+                field_values=[FieldValueIn(field_key="yield_qty", value=80)],
+            ),
+            user=None,
+        )
+        with pytest.raises(AppException, match="属于开始阶段") as exc:
+            await execution_service.backfill_execution_fields(
+                db_session,
+                ex.id,
+                [FieldValueIn(field_key="temp", value=26)],
+                user=None,
+            )
+        assert "temp" in str(exc.value)
 
     async def test_rework_increments_seq(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -1297,7 +1459,7 @@ class TestManualTime:
 
 
 class TestAmendExecution:
-    """修改已结束工序填报数据：独立权限、start/end 两阶段 upsert 与清空、
+    """修改已结束工序填报数据：独立权限、start/end 两阶段 upsert 与清空（必填不可清空）、
     时间修改与批次首末时间重算、终态批次可改（与补录互补）。"""
 
     @pytest.fixture(autouse=True)
@@ -1343,6 +1505,26 @@ class TestAmendExecution:
         refreshed = await repo.get_execution(db, ex.id)
         assert refreshed is not None
         return batch, refreshed
+
+    async def _add_optional_end_field(
+        self, db: AsyncSession, ctx: dict[str, Any],
+    ) -> None:
+        """辅助：给 B 节点追加一个非必填 end 字段（验证非必填仍可清空）。
+
+        直接落 NodeFieldDef：amend 只按 DB 定义取字段，无需重发路线图。
+        """
+        db.add(
+            NodeFieldDef(
+                node_id=ctx["node_b"].id,
+                field_key="memo",
+                field_label="纸质记录索引",
+                phase="end",
+                data_type="text",
+                required=False,
+                sort_order=99,
+            )
+        )
+        await db.flush()
 
     async def test_amend_requires_dedicated_permission(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -1430,24 +1612,76 @@ class TestAmendExecution:
         assert row.value_numeric == 28
         assert row.is_abnormal is False
 
-    async def test_amend_clears_field_value(
+    async def test_amend_clears_optional_field_value(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,
     ) -> None:
-        """value=None 清空已有行（数值/异常标记归零，行保留）。"""
+        """非必填字段 value=None 清空已有行（数值/异常标记归零，行保留）。"""
         _batch, ex = await self._make_b_execution(db_session, published_route)
+        await self._add_optional_end_field(db_session, published_route)
         await execution_service.amend_execution(
             db_session, ex.id,
             ExecutionAmendIn(
-                field_values=[FieldValueIn(field_key="temp", value=None)],
+                field_values=[FieldValueIn(field_key="memo", value="见纸质记录")],
+            ),
+            user=test_user,
+        )
+        await execution_service.amend_execution(
+            db_session, ex.id,
+            ExecutionAmendIn(
+                field_values=[FieldValueIn(field_key="memo", value=None)],
             ),
             user=test_user,
         )
         values = await repo.get_field_values_by_executions(db_session, [ex.id])
-        row = next(v for v in values if v.field_key == "temp")
-        assert row.value_numeric is None
+        row = next(v for v in values if v.field_key == "memo")
         assert row.value_text is None
+        assert row.value_numeric is None
         assert row.is_abnormal is False
+
+    async def test_amend_rejects_clearing_required_field(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """必填字段已有值不可清空。
+
+        必填的语义就是"必须有值"，清空会造出一个没有任何环节能查出来的完整性缺口
+        （缺填判定与完工门禁都只有 end 口径，start 阶段更没有一线补录通道）。
+        需要更正时应改为填写正确值。
+        """
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        with pytest.raises(AppException, match="必填字段不可清空"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(
+                    field_values=[FieldValueIn(field_key="temp", value=None)],
+                ),
+                user=test_user,
+            )
+        # 检查在任何写操作之前：拒绝时原值保持不变
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "temp")
+        assert row.value_numeric == 25
+
+    async def test_amend_clearing_empty_required_field_is_noop(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """本来就为空的必填 end 字段（待补录态）传空不算"清空"，按无变更处理。
+
+        否则补录前的正常状态下批量提交会被"必填不可清空"误伤。
+        """
+        _batch, ex = await self._make_b_execution(
+            db_session, published_route, with_end_value=False,
+        )
+        with pytest.raises(AppException, match="没有要修改的内容"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(
+                    field_values=[FieldValueIn(field_key="yield_qty", value=None)],
+                ),
+                user=test_user,
+            )
 
     async def test_amend_inserts_new_field_row(
         self, db_session: AsyncSession, published_route: dict[str, Any],

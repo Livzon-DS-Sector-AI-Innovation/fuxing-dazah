@@ -16,6 +16,8 @@ import {
   updateMeterSettings,
 } from '@/actions/meter'
 import dayjs, { Dayjs } from 'dayjs'
+import { MeterPageHeader } from './MeterPageHeader'
+import styles from './MeterModule.module.css'
 
 export function DepartmentManagement() {
   const { message } = App.useApp()
@@ -273,8 +275,9 @@ export function DepartmentManagement() {
   ]
 
   return (
-    <div style={{ padding: 24 }}>
-      <h2>部门管理</h2>
+    <div>
+      <MeterPageHeader title="部门与提醒规则" description="按台账来源维护责任部门、负责人和自动提醒策略。" eyebrow="ORGANIZATION CONTROL" />
+      <div className={styles.managementFrame}>
 
       <Tabs
         activeKey={source}
@@ -387,6 +390,7 @@ export function DepartmentManagement() {
           )}
         </div>
       </Modal>
+      </div>
     </div>
   )
 }

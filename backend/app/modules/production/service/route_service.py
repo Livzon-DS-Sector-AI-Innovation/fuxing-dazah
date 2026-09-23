@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.production import repository as repo
 from app.modules.production.models import (
+    NodeAssignment,
     NodeFieldDef,
     ProcessRoute,
     Product,
@@ -14,7 +15,10 @@ from app.modules.production.models import (
     RouteEdge,
     RouteNode,
     RouteNodeIntermediate,
+    StageAssignment,
+    StageSuffix,
 )
+from app.modules.production.repository import assignment as assignment_repo
 from app.modules.production.schemas import (
     ComputedFieldOut,
     EdgeOut,
@@ -121,6 +125,35 @@ async def _get_route_or_404(db: AsyncSession, route_id: uuid.UUID) -> ProcessRou
     return route
 
 
+_ROUTE_STATUS_LABELS = {"draft": "草稿", "published": "已发布", "archived": "已归档"}
+
+
+async def require_published_route(
+    db: AsyncSession,
+    route_id: uuid.UUID,
+    *,
+    product_id: uuid.UUID | None = None,
+    purpose: str = "生成批次",
+) -> ProcessRoute:
+    """执行链路统一门禁：只有 published 路线可建批/绑定计划/流转。
+
+    草稿=未定稿、归档=已退役，都不应再产生新批次。手工建批、计划下达/分配/
+    变更新增项、批次分裂/合并等所有建批入口复用本函数，避免各路径口径不一。
+    """
+    route = await repo.get_route(db, route_id)
+    if not route:
+        raise NotFoundException("工艺路线", str(route_id))
+    if route.status != "published":
+        label = _ROUTE_STATUS_LABELS.get(route.status, route.status)
+        raise AppException(
+            status_code=400,
+            message=f"工艺路线「{route.route_name}」当前为{label}状态，仅已发布路线可{purpose}",
+        )
+    if product_id is not None and route.product_id != product_id:
+        raise AppException(status_code=400, message="路线不属于该产品")
+    return route
+
+
 async def save_graph(
     db: AsyncSession, route_id: uuid.UUID, graph: RouteGraphIn, user: User | None
 ) -> None:
@@ -189,7 +222,7 @@ async def save_graph(
 
     # 清理已删除工段的负责人分配（stage_name 字符串关联，节点重建不会自动失效）
     keep_stages = {n.stage_name for n in graph.nodes}
-    await repo.delete_stage_assignments_not_in(db, route_id, keep_stages)
+    await assignment_repo.delete_stage_assignments_not_in(db, route_id, keep_stages)
 
     node_by_code: dict[str, RouteNode] = {}
     for n in graph.nodes:
@@ -214,7 +247,7 @@ async def save_graph(
         for code in node_by_code
         if code in old_nodes_by_code and old_nodes_by_code[code].id != node_by_code[code].id
     }
-    await repo.remap_node_assignments(db, id_map)
+    await assignment_repo.remap_node_assignments(db, id_map)
 
     for n in graph.nodes:
         field_keys = [f.field_key for f in n.fields]
@@ -475,7 +508,8 @@ async def archive_route(
     unfinished = await repo.count_unfinished_batches_by_route(db, route_id)
     if unfinished:
         raise AppException(
-            status_code=400, message=f"存在 {unfinished} 个进行中/待执行批次,无法归档"
+            status_code=400,
+            message=f"存在 {unfinished} 个未完工批次（含待开工的计划批次）,无法归档",
         )
     route.status = "archived"
     route.updated_by = user.id if user else None
@@ -502,11 +536,20 @@ async def rename_route(
 
 
 async def copy_route(
-    db: AsyncSession, route_id: uuid.UUID, route_name: str, user: User | None
+    db: AsyncSession,
+    route_id: uuid.UUID,
+    route_name: str,
+    user: User | None,
+    *,
+    copy_assignments: bool = True,
+    copy_suffixes: bool = True,
+    copy_computed_fields: bool = True,
 ) -> ProcessRoute:
     """复制为同名产品下的新路径（节点/边/字段定义全量克隆，UUID 重新生成）。
 
-    新路径 route_name 需手工输入并在产品内唯一；负责人配置不随复制带走。
+    新路径 route_name 需手工输入并在产品内唯一。默认把工段/工序负责人分配、
+    工段批次尾缀、路线计算字段一并复制到新版本；版本升级场景这些配置几乎都要
+    沿用，逐个重建容易漏。不需要时可显式关闭对应开关。
     """
     source = await _get_route_or_404(db, route_id)
     if await repo.get_route_by_name(db, source.product_id, route_name):
@@ -591,6 +634,58 @@ async def copy_route(
                 created_by=user.id if user else None,
             )
         )
+    if copy_computed_fields:
+        for c in await repo.get_computed_fields_by_route(db, route_id):
+            if c.node_id not in id_map:
+                continue
+            db.add(
+                RouteComputedField(
+                    route_id=new_route.id,
+                    node_id=id_map[c.node_id],
+                    field_key=c.field_key,
+                    field_label=c.field_label,
+                    unit=c.unit,
+                    formula=c.formula,
+                    sort_order=c.sort_order,
+                    created_by=user.id if user else None,
+                )
+            )
+    if copy_assignments:
+        keep_stages = {n.stage_name for n in nodes}
+        for sa in await assignment_repo.list_stage_assignments(db, route_id=route_id):
+            if sa.stage_name not in keep_stages:
+                continue  # 脏数据防护：源图没有的工段不复制
+            db.add(
+                StageAssignment(
+                    user_id=sa.user_id,
+                    stage_name=sa.stage_name,
+                    route_id=new_route.id,
+                    created_by=user.id if user else None,
+                )
+            )
+        for na in await assignment_repo.list_node_assignments(db, route_id=route_id):
+            if na.node_id not in id_map:
+                continue
+            db.add(
+                NodeAssignment(
+                    user_id=na.user_id,
+                    node_id=id_map[na.node_id],
+                    route_id=new_route.id,
+                    assigned_by=na.assigned_by,
+                    created_by=user.id if user else None,
+                )
+            )
+    if copy_suffixes:
+        for sf in await assignment_repo.list_stage_suffixes(db, [route_id]):
+            db.add(
+                StageSuffix(
+                    route_id=new_route.id,
+                    stage_name=sf.stage_name,
+                    suffix=sf.suffix,
+                    created_by=user.id if user else None,
+                    updated_by=user.id if user else None,
+                )
+            )
     await db.flush()
     return new_route
 

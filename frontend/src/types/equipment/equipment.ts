@@ -151,3 +151,25 @@ export interface EquipmentStatistics {
   by_category: Record<string, number>
   by_location: Record<string, number>
 }
+
+// 跨模块引用授权
+export interface EquipmentReferenceTargetModule {
+  code: string
+  name: string
+  path: string
+  db_schema: string
+  owner_hint: string
+  description: string
+}
+
+export interface EquipmentReferenceGrant {
+  id: string
+  equipment_id: string
+  target_module: string
+  source: 'manual' | 'auto_association'
+  granted_by: string | null
+  granted_at: string
+  revoked_by: string | null
+  revoked_at: string | null
+  remark: string | null
+}

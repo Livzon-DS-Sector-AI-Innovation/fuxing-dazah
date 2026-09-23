@@ -1,0 +1,966 @@
+/* QA 工作台版式。颜色/字阶取 DESIGN.md 在 globals.css 里注册的 token，
+   圆角沿用组件层的字面值（与 PageHeading / ToolRunner 一致）。 */
+
+/* ── 类型索引（Tabs 标签内的计数） ─────────────────────────────
+   计数只做字阶与色阶，不加胶囊底色：6 个标签各挂一个灰底药丸会盖过
+   标签本身，而 Notion 体系的表达是克制的字重差。 */
+.tabLabel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* 次要文字统一用 slate(#5d5b54, 对白底约 7:1) 或 steel(#787671, 约 4.7:1)：
+   stone/muted 只有 2.5:1 与 1.9:1，达不到 AA，不能承载正文。
+   层次靠字号与字重拉开，不靠把颜色调淡到读不清。 */
+.tabCount {
+  color: var(--color-slate);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 飞书部门与 5 类主数据不是同一种实体，用竖线在索引里断开。 */
+.tabSep {
+  align-self: center;
+  width: 1px;
+  height: 12px;
+  margin-right: 2px;
+  background: var(--color-hairline-strong);
+}
+
+/* ── 工具行（已从 tabBarExtraContent 移出，改为独立一行） ────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 8px;
+}
+
+/* 搜索是这个页面的主入口（与 QA 首页同一套语言），让它吃掉工具行的剩余宽度，
+   而不是留一段空白再把开关和主按钮甩到最右。 */
+.search {
+  flex: 1 1 320px;
+  max-width: 560px;
+}
+
+.inactiveToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--color-slate);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* 与 .inactiveToggle 同一形态，但不吃掉剩余宽度——右侧还有动作分组。 */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-slate);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 台账页的工具行下面直接是面板，需要比主数据页（下面接 Tabs）多让一点。 */
+.toolbarSpaced {
+  margin-bottom: 16px;
+}
+
+/* 只读类型占位说明：替换工具行，避免整行留白。 */
+.readonlyNote {
+  margin: 0 0 8px;
+  color: var(--color-steel);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.sourceCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 详情抽屉：先立身份，再列属性 ──────────────────────────── */
+.identity {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.identityCode {
+  color: var(--color-ink);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.identityName {
+  margin-top: 4px;
+  color: var(--color-charcoal);
+  font-size: 15px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.identityMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.identityKind {
+  color: var(--color-steel);
+  font-size: 13px;
+}
+
+.aliasRow {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.aliasLabel {
+  flex: none;
+  color: var(--color-steel);
+  font-size: 13px;
+  line-height: 24px;
+}
+
+.aliasValue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sectionTitle {
+  margin: 24px 0 10px;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px 12px;
+  margin: 18px 0 0;
+}
+
+.fieldLabel {
+  color: var(--color-steel);
+  font-size: 13px;
+}
+
+.fieldValue {
+  margin: 0;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.fieldMissing {
+  color: var(--color-slate);
+}
+
+/* ── 外部来源：卡片改紧凑行，UUID 降为次要行 ────────────────── */
+.sourceList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourceRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+}
+
+.sourceMain {
+  min-width: 0;
+}
+
+.sourceName {
+  display: block;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.sourceMeta {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceOk {
+  flex: none;
+  color: var(--color-success);
+  font-size: 12px;
+}
+
+.sourceWarn {
+  flex: none;
+  color: var(--color-warning);
+  font-size: 12px;
+}
+
+/* ── 文件台账：一份文件一行，编号成一条书脊 ─────────────────────
+   一份受控文件不是"一行记录"，而是"一串版本里恰好一个现行"。所以行内
+   保留两行文字：第一行身份（标题 + 状态），第二行版本链与出处；
+   编号固定 132px 居中，让所有行的编号对齐成一条竖线，像台账的书脊。
+
+   面板本身用系统现行的材质：顶部一道内高光（光从上来）、145° 冷紫白渐变、
+   紫调远投影——与生产看板 / 工具箱同一套光照，而不是一圈纯发丝线。 */
+/* 台账面板：一页里唯一的物体，直接浮在页面底色上。
+   材质沿用系统现行的光照——顶部内高光（光从上来）、145° 冷紫白渐变、
+   紫调远投影，与生产看板的列、工具箱的工作卡是同一套。 */
+.ledgerPanel {
+  position: relative;
+  perspective: 1400px;
+  border: 1px solid rgba(200, 196, 190, 0.8);
+  border-radius: 12px;
+  transform-style: preserve-3d;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.94), transparent 38%),
+    linear-gradient(145deg, #f8f7fc 0%, #fbfaf9 52%, #f3f2f7 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 2px 4px rgba(15, 15, 15, 0.04),
+    0 16px 38px -30px rgba(40, 33, 91, 0.45);
+  overflow: hidden;
+}
+
+.ledger {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ledgerEmpty {
+  padding: 44px 16px;
+}
+
+.ledgerRow {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.ledgerRow + .ledgerRow {
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.ledgerRow:hover {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.ledgerSpine {
+  flex: none;
+  width: 132px;
+}
+
+/* 书脊：压在纸面里的一枚印子（内凹），不跟标题抢视线。 */
+.ledgerCode {
+  display: inline-flex;
+  min-height: 22px;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-charcoal);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  word-break: break-all;
+  box-shadow: inset 0 1px 2px rgba(10, 21, 48, 0.05);
+}
+
+.ledgerCodeOff {
+  color: var(--color-steel);
+}
+
+.ledgerMain {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 标题、现行版本、出处、例外都在一行里：台账要比的是行数，不是每行的信息层级。 */
+.ledgerHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledgerStatus {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 8px;
+}
+
+.ledgerMetaItem {
+  white-space: nowrap;
+}
+
+/* 类型、部门、版本数、更新时间是四种不同的东西，用竖线断开而不是靠空格——
+   空格连排会读成一句话（"SOP 质量保证部…"）。 */
+.ledgerMetaItem + .ledgerMetaItem::before {
+  content: '';
+  display: inline-block;
+  width: 1px;
+  height: 11px;
+  margin-right: 8px;
+  vertical-align: -1px;
+  background: var(--color-hairline-strong);
+}
+
+.ledgerTitle {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-charcoal);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  font-family: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.ledgerTitle:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ledgerTitle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 行内动作：静止时是三个安静的字，悬停才变成键帽——一屏 20 行不该挂 60 个按钮框。
+   破坏性动作单独留在红字上，颜色深浅按语义错误色（不是 antd 的亮红）。 */
+.ledgerActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.rowAction {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--color-slate);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 170ms ease, box-shadow 170ms ease, border-color 170ms ease, color 170ms ease, background 170ms ease;
+}
+
+.rowAction:hover {
+  border-color: var(--color-hairline);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfaf9 100%);
+  color: var(--color-ink);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(200, 196, 190, 0.5),
+    0 4px 9px -4px rgba(40, 33, 91, 0.35);
+}
+
+.rowAction:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.rowActionDanger {
+  color: var(--color-error);
+}
+
+.rowActionDanger:hover {
+  border-color: rgba(224, 49, 49, 0.32);
+  color: #b3271f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(224, 49, 49, 0.22),
+    0 4px 9px -4px rgba(179, 39, 31, 0.4);
+}
+
+/* 恢复类动作与破坏类对称：停用是红的，启用是绿的，中性动作留在灰上。
+   三种语义一眼可分，静止时也看得出来。 */
+.rowActionPositive {
+  color: var(--color-success);
+}
+
+.rowActionPositive:hover {
+  border-color: rgba(26, 174, 57, 0.32);
+  color: #14873a;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(26, 174, 57, 0.22),
+    0 4px 9px -4px rgba(20, 135, 58, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowAction,
+  .rowAction:hover {
+    transform: none;
+    transition: none;
+  }
+}
+
+/* 窄窗：132px 的书脊会吃掉三分之一宽度，把编号折到标题上方，各自占满一行。 */
+@media (max-width: 720px) {
+  .ledgerRow {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+  }
+
+  .ledgerSpine {
+    width: auto;
+  }
+
+  .ledgerMain {
+    flex: 1 1 100%;
+  }
+
+  .ledgerActions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  /* 折行后竖线会变成行首孤零零的一根，窄屏改用间距区分。 */
+  .ledgerMetaItem + .ledgerMetaItem::before {
+    display: none;
+  }
+}
+
+/* 版本链：受控文件的形态本身——一串按时间排的版本，一个现行。
+   做成实体键帽：顶上一道内高光、底下一道硬边（厚度）、紫调投影浮起。
+   空心=已登记/历史，实心=现行（DESIGN.md 的 pill-tab-active 令牌），
+   虚线=已停用版本，仍留在链上但不再参与检索。 */
+.chain {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chainMark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 9999px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfaf9 100%);
+  color: var(--color-slate);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(200, 196, 190, 0.55),
+    0 2px 5px -2px rgba(40, 33, 91, 0.22);
+}
+
+.chainMarkCurrent {
+  border-color: #14120f;
+  background: linear-gradient(180deg, #2b2925 0%, var(--color-ink-deep) 62%);
+  color: var(--color-on-dark);
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 0 rgba(10, 21, 48, 0.55),
+    0 3px 8px -3px rgba(40, 33, 91, 0.5);
+}
+
+.chainMarkInactive {
+  border-style: dashed;
+  border-color: var(--color-hairline-strong);
+  color: var(--color-steel);
+  background: none;
+  box-shadow: none;
+}
+
+.chainWarn {
+  flex: none;
+  color: var(--color-warning);
+}
+
+/* ── 详情抽屉：版本链就是选择器 ───────────────────────────────
+   版本多了不再堆叠卡片：链上点哪个版本，下面的档案区就显示哪个。 */
+.versionBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.versionTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 9999px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfaf9 100%);
+  color: var(--color-slate);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(200, 196, 190, 0.55),
+    0 2px 5px -2px rgba(40, 33, 91, 0.22);
+  transition: transform 170ms ease, box-shadow 170ms ease, border-color 170ms ease, color 170ms ease;
+}
+
+.versionTab:hover {
+  border-color: var(--color-hairline-strong);
+  color: var(--color-charcoal);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 2px 0 rgba(200, 196, 190, 0.5),
+    0 6px 12px -6px rgba(40, 33, 91, 0.4);
+}
+
+.versionTab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.versionTabActive,
+.versionTabActive:hover {
+  border-color: #14120f;
+  background: linear-gradient(180deg, #2b2925 0%, var(--color-ink-deep) 62%);
+  color: var(--color-on-dark);
+  font-weight: 600;
+  transform: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 2px 0 rgba(10, 21, 48, 0.55),
+    0 6px 14px -6px rgba(40, 33, 91, 0.55);
+}
+
+.versionTabInactive {
+  border-style: dashed;
+  color: var(--color-steel);
+  background: none;
+  box-shadow: none;
+}
+
+/* 停用是"从链上退下来"的状态，悬停也不该把它抬起来（:hover 规则晚于 .versionTab:hover）。 */
+.versionTabInactive:hover {
+  border-color: var(--color-hairline-strong);
+  color: var(--color-slate);
+  background: none;
+  box-shadow: none;
+}
+
+.versionTabAdd {
+  border-style: dashed;
+  border-color: var(--color-hairline-strong);
+  color: var(--color-steel);
+  background: none;
+  box-shadow: none;
+}
+
+.versionTabAdd:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  box-shadow: 0 6px 14px -8px rgba(86, 69, 212, 0.55);
+}
+
+/* 键帽的抬升是"东西被拿起来"的意思，不喜欢动的用户不该被它晃到。 */
+@media (prefers-reduced-motion: reduce) {
+  .versionTab,
+  .versionTab:hover {
+    transform: none;
+    transition: none;
+  }
+}
+
+.versionPanel {
+  margin-top: 18px;
+}
+
+/* 动作属于"这个版本的档案"，跟字段同一列起排；右对齐会在 720px 抽屉里
+   把按钮甩到离内容很远的地方。 */
+.versionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.relationRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 正文：一行是"这是什么文件"，一行是"怎么核对、怎么打开"。
+   SHA-256 截断显示但整串可复制——它是这份原件与外部批准件的对应凭据。 */
+.versionFile {
+  min-width: 0;
+}
+
+.versionFileHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.versionFileName {
+  min-width: 0;
+  color: var(--color-charcoal);
+  overflow-wrap: anywhere;
+}
+
+.versionFileMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* 解析/分块摘要：正文文件名下面保留一行轻量指标，详细 raw block/chunk
+   只在用户主动打开查看器后分页读取，避免版本链初次展开就加载长文本。 */
+.processingSummaryLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.processingSummaryLabel {
+  color: var(--color-charcoal);
+  font-weight: 600;
+}
+
+.processingLatest {
+  color: var(--color-warning);
+}
+
+.processingDescriptions {
+  margin-bottom: 16px;
+}
+
+.processingLoadingSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 80px;
+  justify-content: center;
+  color: var(--color-steel);
+  font-size: 13px;
+}
+
+.processingItemList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 160px;
+}
+
+.processingItem {
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+}
+
+.processingItem[open] {
+  background: var(--color-surface);
+}
+
+.processingItemSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-height: 42px;
+  padding: 8px 12px;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.processingItemSummary::-webkit-details-marker {
+  display: none;
+}
+
+.processingItemSummary::before {
+  content: '›';
+  display: inline-block;
+  width: 12px;
+  color: var(--color-steel);
+  font-size: 18px;
+  line-height: 1;
+  transition: transform 150ms ease;
+}
+
+.processingItem[open] > .processingItemSummary::before {
+  transform: rotate(90deg);
+}
+
+.processingItemOrder {
+  min-width: 34px;
+  color: var(--color-slate);
+  font-variant-numeric: tabular-nums;
+}
+
+.processingItemLocation {
+  color: var(--color-slate);
+  font-size: 12px;
+}
+
+.processingItemHeading {
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--color-steel);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.processingItemBody {
+  padding: 0 12px 12px 42px;
+}
+
+.processingItemMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--color-steel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.processingContent {
+  max-height: 260px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.processingLocator {
+  margin-top: 7px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.processingPagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.versionHash {
+  color: var(--color-steel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawerFoot {
+  margin: 28px 0 0;
+  color: var(--color-steel);
+  font-size: 12px;
+}
+
+/* 表单里的说明：用静音条代替 antd 的蓝色 Alert（DESIGN.md 无该色）。
+   做成压进面板的凹槽，和键帽的凸起成一对。 */
+.formNote {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: inset 0 1px 2px rgba(10, 21, 48, 0.045);
+  color: var(--color-slate);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lockedCode {
+  display: block;
+  padding-top: 5px;
+  color: var(--color-charcoal);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.formHint {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ── 上传版本弹窗 ───────────────────────────────────────────
+   目标是哪份文件必须写在弹窗里：它是从文件详情抽屉里打开的，
+   标题只写"上传批准文件版本"时，用户没有线索确认自己传对了地方。 */
+.uploadTarget {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.uploadTargetCode {
+  flex: none;
+  color: var(--color-ink);
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.uploadTargetTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-slate);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 拖拽区按系统材质重做：antd 默认是主色虚线大框 + 48px 主色图标，
+   比页面主按钮还抢眼。改成中性发丝虚线，只在悬停时透出主色。
+
+   选择器写法有讲究：styles.uploader 落在 .ant-upload-wrapper 这同一个元素上，
+   所以要用复合选择器 .uploader.ant-upload-wrapper，而不是后代；
+   再叠到 antd 的 `p.ant-upload-drag-icon .anticon` 深度才能盖过它。 */
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag) {
+  border: 1px dashed var(--color-hairline-strong);
+  border-radius: 10px;
+  background: var(--color-surface-soft);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag:hover) {
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag) :global(p.ant-upload-drag-icon) {
+  margin-bottom: 6px;
+}
+
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag) :global(p.ant-upload-drag-icon) :global(.anticon) {
+  color: var(--color-steel);
+  font-size: 26px;
+  transition: color 160ms ease;
+}
+
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag:hover) :global(p.ant-upload-drag-icon) :global(.anticon) {
+  color: var(--color-primary);
+}
+
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag) :global(p.ant-upload-text) {
+  color: var(--color-charcoal);
+  font-size: 14px;
+}
+
+.uploader:global(.ant-upload-wrapper) :global(.ant-upload.ant-upload-drag) :global(p.ant-upload-hint) {
+  padding: 0 16px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.5;
+}

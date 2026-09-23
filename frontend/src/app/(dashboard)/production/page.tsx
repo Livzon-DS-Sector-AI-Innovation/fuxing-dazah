@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons'
 import type { Product } from '@/types/production'
 import { fetchProductsClient } from '@/lib/api/production-client'
-import { StepCyclePanel } from '@/components/production'
+import { PageGuideButton, StepCyclePanel } from '@/components/production'
 import { PageHeading } from '@/components/shared/PageHeading'
 import styles from './ProductionDashboard.module.css'
 
@@ -67,7 +67,11 @@ export default function ProductionDashboard() {
   return (
     <div className={styles.dashboard}>
       {/* ── Header ── */}
-      <PageHeading title="生产管理概览" subtitle="实时监控生产运营状态，快速进入管理视图" />
+      <PageHeading
+        title="生产管理概览"
+        subtitle="实时监控生产运营状态，快速进入管理视图"
+        actions={<PageGuideButton />}
+      />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
