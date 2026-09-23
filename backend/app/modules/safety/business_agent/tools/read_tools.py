@@ -810,6 +810,10 @@ async def query_oh_positions(
 
     示例：查一下哪些岗位接触噪声；合成车间的岗位危害台账。
     """
+    # 维持镜像（批次四-1 盘点结论，spec §0.1）：oh_positions 镜像表双源承重——
+    # 除 Bitable 镜像行外还承载历史迁移手动行（source=manual、无
+    # feishu_record_id、代码无创建路径），直读结构性丢失；直读链路已在
+    # service/oh_direct/ 建成（验证/复评用），工具分支不接防呆。
     from app.modules.safety.service.oh_position import OhPositionService
 
     items, total = await OhPositionService(ctx.deps.db).get_positions(
@@ -850,6 +854,22 @@ async def query_oh_hazard_factors(
 
     示例：氨的防护用品是什么；查一下有 PPE 配置的危害因素清单。
     """
+    # 直读分支（批次四-1）：DIRECT 开启时走危害因素 PPE 表 Bitable 直读，语义
+    # 忠实复刻 legacy 含「先 LIMIT 后 keyword 过滤」quirk（spec D5）；关=逐行
+    # legacy。同批盘点结论：query_oh_positions 因镜像表双源承重维持镜像（不接
+    # 直读分支），本域仅此一工具切换。
+    from app.modules.safety.service.oh_direct import config as od_config
+
+    if od_config.direct_enabled():
+        from app.modules.safety.service.oh_direct import query as od_query
+        from app.modules.safety.service.oh_direct import reader as od_reader
+
+        views = await od_reader.open_reader().fetch_factors()
+        items, total = od_query.oh_hazard_factors(
+            views, keyword=keyword, limit=limit,
+        )
+        return {"items": items, "total": total}
+
     from app.modules.safety.service.oh_hazard_factor import OhHazardFactorService
 
     svc = OhHazardFactorService(ctx.deps.db)
