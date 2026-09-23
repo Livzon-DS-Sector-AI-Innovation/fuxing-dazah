@@ -1,8 +1,11 @@
-"""S1 冒烟测试：WAREHOUSE_TEST_CHAT_ID 配置后真发一条卡片到测试群。
+"""S1 冒烟测试：真发一条卡片到测试群（双门槛，2026-09-23 收紧）。
 
-真实业务群勿配此键；未配置时整文件 skip（live+发送 dry-run 策略的人工补充项）。
-运行：DATABASE_URL=... uv run pytest tests/modules/warehouse/test_live_smoke.py -v
+需同时满足：WAREHOUSE_TEST_CHAT_ID 已配置 + WAREHOUSE_ALLOW_REAL_SEND_TESTS=1
+（显式真发开关——日常全量回归不再向群里发冒烟卡，2026-09-23 用户要求取消）。
+显式真发：WAREHOUSE_ALLOW_REAL_SEND_TESTS=1 pytest tests/modules/warehouse/test_live_smoke.py -v
 """
+
+import os
 
 import pytest
 
@@ -14,7 +17,14 @@ def _target_chat_id() -> str | None:
     return get_settings().WAREHOUSE_TEST_CHAT_ID or None
 
 
-@pytest.mark.skipif(not _target_chat_id(), reason="WAREHOUSE_TEST_CHAT_ID 未配置，跳过真发冒烟")
+def _real_send_allowed() -> bool:
+    return os.getenv("WAREHOUSE_ALLOW_REAL_SEND_TESTS", "") == "1"
+
+
+@pytest.mark.skipif(
+    not _target_chat_id() or not _real_send_allowed(),
+    reason="真发冒烟默认关闭：需 WAREHOUSE_TEST_CHAT_ID 且 WAREHOUSE_ALLOW_REAL_SEND_TESTS=1",
+)
 async def test_send_card_to_test_chat_smoke() -> None:
     card = {
         "schema": "2.0",

@@ -374,9 +374,15 @@ class _ForbiddenClient:
 
 
 def test_add_reaction_live_on_sent_card() -> None:
-    """live：发卡片到测试群并回 OK 表情（需要 WAREHOUSE_TEST_CHAT_ID）。"""
+    """live：发卡片到测试群并回 OK 表情（双门槛，2026-09-23 收紧）。
+
+    需 WAREHOUSE_TEST_CHAT_ID 且 WAREHOUSE_ALLOW_REAL_SEND_TESTS=1——
+    日常全量回归默认跳过，不再向群里发「表情回复验证」卡。
+    """
     import os
 
+    if os.getenv("WAREHOUSE_ALLOW_REAL_SEND_TESTS", "") != "1":
+        pytest.skip("真发验证默认关闭：需 WAREHOUSE_ALLOW_REAL_SEND_TESTS=1")
     chat_id = os.environ.get("WAREHOUSE_TEST_CHAT_ID") or _env_chat_id()
     if not chat_id:
         pytest.skip("WAREHOUSE_TEST_CHAT_ID 未配置")
