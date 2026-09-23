@@ -158,12 +158,22 @@ def _parse_header(text: str, doc: ParsedStandardDoc) -> None:
         doc.version = bare3[-1]
 
 
+# 药典式文字运算符 → 结构化符号（「不得过3.0%」≡ ≤3.0%）
+_TEXT_OP_MAP = {
+    "不得过": "≤", "不得超过": "≤", "不大于": "≤", "不超过": "≤",
+    "不得少于": "≥", "不得低于": "≥", "不小于": "≥", "应不低于": "≥",
+    "不得大于": "<", "不得小于": ">",
+}
+
+
 def _structure_numeric(standard_text: str) -> tuple[str | None, float | None, float | None]:
-    """数值标准结构化：≤3.0% / ≥91.0% / 2.5～4.5 / ＜0.25IU/mg → (op, min, max)。
+    """数值标准结构化：≤3.0% / ≥91.0% / 2.5～4.5 / ＜0.25IU/mg / 不得过3.0%
+    → (op, min, max)。
 
     必须含运算符才结构化——文字标准中的附带数字（如「乙醇（96%）」）不当作限度。
     """
-    if not any(op in standard_text for op in _OPERATORS):
+    text_op = next((sym for phrase, sym in _TEXT_OP_MAP.items() if phrase in standard_text), None)
+    if not (any(op in standard_text for op in _OPERATORS) or text_op):
         return None, None, None
     nums = NUM_RE.findall(standard_text)
     if not nums:
@@ -174,11 +184,11 @@ def _structure_numeric(standard_text: str) -> tuple[str | None, float | None, fl
         if len(values) >= 2:
             return "范围", min(values[:2]), max(values[:2])
         return None, None, None
-    if "≥" in standard_text:
+    if "≥" in standard_text or text_op == "≥":
         return "≥", values[0], None
-    if "＜" in standard_text or "<" in standard_text:
+    if "＜" in standard_text or "<" in standard_text or text_op == "<":
         return "<", None, values[0]
-    if "＞" in standard_text or ">" in standard_text:
+    if "＞" in standard_text or ">" in standard_text or text_op == ">":
         return ">", values[0], None
     # 默认 ≤
     return "≤", None, values[0]
