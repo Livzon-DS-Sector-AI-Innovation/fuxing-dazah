@@ -150,7 +150,13 @@ async def _handle_binary_message(ws, message: bytes) -> None:
                 # 持引用防 GC 回收，异常只记日志
                 _dt = asyncio.create_task(_dispatch(event_type, event))
                 _dispatch_tasks.add(_dt)
-                _dt.add_done_callback(lambda t: (_dispatch_tasks.discard(t), t.exception() if not t.cancelled() else None))
+
+                def _on_dispatch_done(t: asyncio.Task) -> None:
+                    _dispatch_tasks.discard(t)
+                    if not t.cancelled():
+                        t.exception()  # 取一次避免「Task exception was never retrieved」告警
+
+                _dt.add_done_callback(_on_dispatch_done)
                 frame.payload = json.dumps({"code": 200}, ensure_ascii=False).encode("utf-8")
             # 回复 ACK：biz_rt 为本地处理耗时（照 safety 实现，不读入站帧 header）
             end_ms = int(round(time.time() * 1000))
