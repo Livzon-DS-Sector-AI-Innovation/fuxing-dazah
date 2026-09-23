@@ -4,12 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DatePicker, Segmented, Spin, Empty, App, Button } from 'antd'
 import { Line, Bar, Pie } from '@ant-design/charts'
 import { DownloadOutlined } from '@ant-design/icons'
-import dayjs, { type Dayjs } from 'dayjs'
+import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
 import { getEnergyOverview } from '@/actions/energy'
 import { fetchPriceCategoryDistribution } from '@/lib/api/energy'
 import { PricePeriodDrawer } from '@/components/energy/PricePeriodDrawer'
-import type { EnergyOverview, EnergyTypeMeta, PriceCategoryDistribution } from '@/types/energy'
+import { EnergyPageFrame } from '@/components/energy'
+import { PageHeading } from '@/components/shared/PageHeading'
+import analyticsStyles from '@/components/energy/EnergyAnalytics.module.css'
+import type { EnergyOverview, PriceCategoryDistribution } from '@/types/energy'
 
 const { RangePicker } = DatePicker
 
@@ -19,12 +22,13 @@ const RANGE_PRESETS: Record<string, [dayjs.Dayjs, dayjs.Dayjs]> = {
   '30天': [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')],
   '本月': [dayjs().startOf('month'), dayjs().endOf('day')],
 }
+const WORKSHOP_COLORS = ['#5645d4', '#1677ff', '#1aae39', '#dd5b00', '#722ed1', '#2f54eb', '#fa541c', '#faad14']
 
 export default function VisualizationPage() {
   const { message } = App.useApp()
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(RANGE_PRESETS['7天'])
   const [activePreset, setActivePreset] = useState<string>('7天')
-  const [selectedType, setSelectedType] = useState<string>('')
+  const [activeType, setActiveType] = useState<string>('')
   const [selectedWorkshop, setSelectedWorkshop] = useState<string | null>(null)
   const [overview, setOverview] = useState<EnergyOverview | null>(null)
   const [prevOverview, setPrevOverview] = useState<EnergyOverview | null>(null)
@@ -34,6 +38,11 @@ export default function VisualizationPage() {
   const [peakValleyMode, setPeakValleyMode] = useState<'total' | 'workshop'>('total')
 
   const days = range[1].diff(range[0], 'day') + 1
+
+  // 未手动选择时用第一个能源类型作为默认口径。这里用派生值而不是 effect 回写 state：
+  // 首屏的 KPI、部门排名与峰谷面板必须落在同一个能源类型上，否则各区块口径不一致。
+  const metadata = useMemo(() => overview?.type_metadata || [], [overview])
+  const selectedType = activeType || metadata[0]?.type_code || ''
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -73,21 +82,14 @@ export default function VisualizationPage() {
     } finally {
       setLoading(false)
     }
-  }, [range, selectedType, selectedWorkshop, peakValleyMode])
+  }, [message, range, selectedType, selectedWorkshop, peakValleyMode])
 
+  // 该 effect 负责把筛选状态同步到服务端数据；请求完成后才更新 loading/data 状态。
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load() }, [load])
-  useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
 
-  const metadata = overview?.type_metadata || []
   const selectedMeta = metadata.find((m) => m.type_code === selectedType)
   const isElectricity = selectedMeta?.type_code === 'electricity'
-
-  // 首次加载时自动选中第一个能源类型
-  useEffect(() => {
-    if (!selectedType && metadata.length > 0) {
-      setSelectedType(metadata[0].type_code)
-    }
-  }, [metadata, selectedType])
 
   // ── KPI（按当前选中能源类型计算，非全部能源相加）──
   const kpi = useMemo(() => {
@@ -165,8 +167,8 @@ export default function VisualizationPage() {
       items: [
         {
           channel: 'y',
-          valueFormatter: (v: number, d: any) => {
-            const u = unitMap[d?.type] || ''
+          valueFormatter: (v: number, d: Record<string, unknown>) => {
+            const u = unitMap[String(d?.type || '')] || ''
             return `${v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${u}`
           },
         },
@@ -202,13 +204,11 @@ export default function VisualizationPage() {
     return list.slice(0, 15)
   }, [overview, selectedWorkshop])
 
-  const workshopColors = ['#5645d4', '#1677ff', '#1aae39', '#dd5b00', '#722ed1', '#2f54eb', '#fa541c', '#faad14']
-
   const plBarConfig = useMemo(() => {
     // 按部门分配颜色
     const colorMap: Record<string, string> = {}
     const uniqueWorkshops = [...new Set(plBarData.map((d) => d.workshop).filter((w) => w && w !== '未知'))]
-    uniqueWorkshops.forEach((w, i) => { colorMap[w] = workshopColors[i % workshopColors.length] })
+    uniqueWorkshops.forEach((w, i) => { colorMap[w] = WORKSHOP_COLORS[i % WORKSHOP_COLORS.length] })
 
     return {
       data: plBarData.map((d) => ({
@@ -222,7 +222,7 @@ export default function VisualizationPage() {
       color: (d: Record<string, unknown>) => colorMap[d.workshop as string] || '#5645d4',
       label: {
         position: 'right' as const,
-        text: (d: any) => `${(d.value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`,
+        text: (d: { value?: number }) => `${(d.value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`,
         style: { fontSize: 11, fill: '#5d5b54', textAlign: 'start' },
         offset: 6,
       },
@@ -283,7 +283,7 @@ export default function VisualizationPage() {
     const filename = `能源分析_${range[0].format('YYYYMMDD')}-${range[1].format('YYYYMMDD')}.xlsx`
     XLSX.writeFile(wb, filename)
     message.success('导出成功')
-  }, [overview, metadata, range])
+  }, [message, overview, metadata, range])
 
   // ── Date handlers ──
   const handlePreset = (val: string) => {
@@ -295,11 +295,11 @@ export default function VisualizationPage() {
   }
 
   return (
-    <div style={{ padding: '28px 32px', minHeight: '100%', background: '#fafaf9' }}>
-      {/* ── Header ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 500, margin: 0, color: '#1a1a1a' }}>能源分析</h1>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+    <EnergyPageFrame>
+      <PageHeading
+        title="能源总览"
+        subtitle="按时间、能源类型和部门查看能耗趋势，支持导出当前分析结果。"
+        actions={<div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <Button icon={<DownloadOutlined />} onClick={handleExport} disabled={!overview}>
             导出 Excel
           </Button>
@@ -309,14 +309,14 @@ export default function VisualizationPage() {
             onChange={(v) => handlePreset(v as string)}
           />
           <RangePicker value={range} onChange={handleRangeChange} allowClear={false} />
-        </div>
-      </div>
+        </div>}
+      />
 
       <Spin spinning={loading}>
         {overview ? (
           <>
             {/* ── KPI 横幅 ── */}
-            <div style={{
+            <div className={analyticsStyles.metrics} style={{
               display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 20,
             }}>
               {([
@@ -367,7 +367,7 @@ export default function VisualizationPage() {
                 return (
                   <button
                     key={m.type_code}
-                    onClick={() => setSelectedType(m.type_code)}
+                    onClick={() => { setActiveType(m.type_code); setSelectedWorkshop(null); setPeakValleyMode('total') }}
                     style={{
                       padding: '8px 16px', borderRadius: 20, cursor: 'pointer', fontSize: 13,
                       border: active ? `2px solid ${m.color || '#1677ff'}` : '1px solid #e8e3f0',
@@ -402,7 +402,7 @@ export default function VisualizationPage() {
             </div>
 
             {/* ── 部门排名 + 矩形树图 ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+            <div className={analyticsStyles.twoColumns} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
               {/* 部门排名表 */}
               <div style={{
                 background: '#fff', borderRadius: 12, padding: '20px 24px',
@@ -542,7 +542,7 @@ export default function VisualizationPage() {
                     总 {priceCategory.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} {priceCategory.unit}
                   </span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'center' }}>
+                <div className={analyticsStyles.twoColumns} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'center' }}>
                   <Pie
                     data={priceCategory.categories.map((c) => ({
                       type: c.category,
@@ -616,6 +616,6 @@ export default function VisualizationPage() {
         )}
       </Spin>
       <PricePeriodDrawer open={periodDrawerOpen} onClose={() => { setPeriodDrawerOpen(false); load() }} />
-    </div>
+    </EnergyPageFrame>
   )
 }

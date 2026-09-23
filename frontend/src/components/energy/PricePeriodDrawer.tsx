@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Drawer, Button, Select, InputNumber, Space, App, Popconfirm, Tag, Empty, Spin } from 'antd'
+import { Drawer, Button, Select, InputNumber, App, Popconfirm, Tag, Empty, Spin } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
   fetchPricePeriods,
@@ -65,6 +65,8 @@ export function PricePeriodDrawer({ open, onClose }: Props) {
     }
   }
 
+  // 抽屉打开后刷新规则列表。
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
   useEffect(() => { if (open) load() }, [open])
 
   const handleAdd = async () => {

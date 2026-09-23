@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space, Switch, TimePicker } from 'antd'
@@ -177,13 +178,13 @@ export function DailyPushConfigDrawer({ onRefresh }: DailyPushConfigDrawerProps)
   return (
     <Drawer
       title={isEdit ? '编辑能源总耗推送配置' : '新建能源总耗推送配置'}
-      size={520}
+      size={620}
       open={dailyPushConfigDrawerOpen}
       onClose={closeDailyPushConfigDrawer}
       destroyOnHidden
       styles={{
-        header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
-        body: { padding: '24px' },
+        header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px', background: 'linear-gradient(110deg, #fff 0%, #f8f6ff 100%)' },
+        body: { padding: '24px', background: '#fafaf9' },
       }}
       extra={
         <Space>

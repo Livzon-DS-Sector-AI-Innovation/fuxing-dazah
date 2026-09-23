@@ -236,6 +236,21 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     }
   }
 
+  const loadDeviceData = async (id: string) => {
+    try {
+      const device = await getEnergyDeviceById(id)
+      form.setFieldsValue({ ...device })
+      // 编辑时，如果有已关联设备，预加载下拉选项
+      if (device.equipment_ids?.length) {
+        loadEquipmentOptions(device.equipment_ids, device.equipment_names ?? undefined)
+      }
+    } catch {
+      message.error('获取数据源信息失败')
+    }
+  }
+
+  // 打开抽屉时并行加载表单依赖数据。
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (deviceDrawerOpen) {
       loadPlatforms()
@@ -251,20 +266,10 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
         equipmentNameMap.current.clear()
       }
     }
+  // loadDeviceData is defined in this component and only reads the current form helpers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceDrawerOpen, deviceDrawerId, isEdit, form])
-
-  const loadDeviceData = async (id: string) => {
-    try {
-      const device = await getEnergyDeviceById(id)
-      form.setFieldsValue({ ...device })
-      // 编辑时，如果有已关联设备，预加载下拉选项
-      if (device.equipment_ids?.length) {
-        loadEquipmentOptions(device.equipment_ids, device.equipment_names ?? undefined)
-      }
-    } catch {
-      message.error('获取数据源信息失败')
-    }
-  }
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleSubmit = async () => {
     try {
@@ -308,8 +313,9 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
         header: {
           borderBottom: '1px solid #e5e3df',
           padding: '16px 24px',
+          background: 'linear-gradient(110deg, #ffffff 0%, #f8f6ff 100%)',
         },
-        body: { padding: '24px' },
+        body: { padding: '24px', background: '#fafaf9' },
       }}
       extra={
         <Space>

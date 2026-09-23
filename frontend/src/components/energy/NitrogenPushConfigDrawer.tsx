@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import { useCallback, useEffect, useState } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space, Switch, TimePicker, InputNumber } from 'antd'
@@ -154,13 +155,13 @@ export function NitrogenPushConfigDrawer({ onRefresh }: NitrogenPushConfigDrawer
   return (
     <Drawer
       title={isEdit ? '编辑氮气月度推送配置' : '新建氮气月度推送配置'}
-      size={520}
+      size={560}
       open={nitrogenPushConfigDrawerOpen}
       onClose={closeNitrogenPushConfigDrawer}
       destroyOnHidden
       styles={{
-        header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
-        body: { padding: '24px' },
+        header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px', background: 'linear-gradient(110deg, #fff 0%, #f6faff 100%)' },
+        body: { padding: '24px', background: '#fafaf9' },
       }}
       extra={
         <Space>
