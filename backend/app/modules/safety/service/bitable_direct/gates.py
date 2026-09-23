@@ -43,6 +43,7 @@ DOMAIN_EMERGENCY_DRILL = "EMERGENCY_DRILL"
 DOMAIN_KNOWLEDGE = "KNOWLEDGE"
 DOMAIN_MSDS = "MSDS"
 DOMAIN_OH = "OH"
+DOMAIN_HAZARD_ID = "HAZARD_ID"
 
 
 def flag(name: str, default: bool = False) -> bool:

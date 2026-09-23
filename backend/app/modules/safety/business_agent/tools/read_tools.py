@@ -2100,6 +2100,39 @@ async def query_hazard_identifications(
 
     示例：提炼五部有哪些重大风险辨识；残余风险为一般的辨识记录。
     """
+    # 直读分支（批次四-2）：DIRECT 开启时走危险源辨识表 Bitable 直读，语义
+    # 忠实复刻 legacy（spec D5：排序键 created_at→Bitable created_time 受控
+    # 偏差、offset raw/limit cap 分页 quirk、脚本6 人工列缺失 quirk、
+    # feishu_url 恒 None 死值复刻）；部门按提交人 identity 现算（镜像同规则，
+    # spec D6）。关=逐行 legacy。事件链路/AI 流程/API/前端零改动（spec D1）。
+    from app.modules.safety.service.hazard_id_direct import config as hid_config
+
+    if hid_config.direct_enabled():
+        from app.modules.safety.service.hazard_id_direct import (
+            query as hid_query,
+        )
+        from app.modules.safety.service.hazard_id_direct import (
+            reader as hid_reader,
+        )
+
+        views = await hid_reader.open_reader().fetch_all()
+        departments = await hid_query.resolve_departments(
+            ctx.deps.db, {v.submitter_name for v in views},
+        )
+        items, total = hid_query.hazard_identifications(
+            views,
+            departments=departments,
+            department=department,
+            position=position,
+            risk_stage=risk_stage,
+            risk_level=risk_level,
+            overall_status=overall_status,
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+        )
+        return _detail_result(items, page, page_size, total)
+
     from sqlalchemy import func, or_, select
 
     from app.modules.safety.models import HazardIdentification
