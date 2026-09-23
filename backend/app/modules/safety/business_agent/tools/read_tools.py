@@ -345,6 +345,20 @@ async def query_latest_regulations(
     Returns:
         dict: {"items": [{"id": "...", "article_no": "...", "title": "...", ...}], "total": int}
     """
+    # 直读分支（批次二-4）：DIRECT 开启时走两表（安全/环保法规标准）Bitable 直读，
+    # 语义忠实复刻 legacy（.scratch/knowledge-direct/spec.md D4/D5）；关=逐行 legacy。
+    from app.modules.safety.service.knowledge_direct import config as kd_config
+
+    if kd_config.direct_enabled():
+        from app.modules.safety.service.knowledge_direct import query as kd_query
+        from app.modules.safety.service.knowledge_direct import reader as kd_reader
+
+        views = await kd_reader.open_reader().fetch_all()
+        return kd_query.latest_regulations(
+            views, limit=limit, days=days,
+            impact_level=impact_level, business_domain=business_domain,
+        )
+
     from datetime import date, timedelta
 
     from sqlalchemy import select
