@@ -73,6 +73,8 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
   const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
+  // 已通过的复核人数：按复核人去重（后端已禁止同一人重复计，防御性去重）
+  const approvedCount = new Set(reviews.map((r) => r.reviewer_id)).size
   const [attPreview, setAttPreview] = useState<{ filename: string; url: string; type: string } | null>(null)
 
   const loadDetail = useCallback(async () => {
@@ -438,7 +440,7 @@ export default function TaskDetail({ id }: { id: string }) {
         )}
         {detail.status === 'pending_review' && canReview && (
           <>
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleApprove(false)}>复核通过（{Math.min(reviews.length, 2)}/2）</Button>
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleApprove(false)}>复核通过（{approvedCount}/2）</Button>
             {hasPermission('quality:report:generate') && (
               <Button type="primary" icon={<FileTextOutlined />} loading={generatingCoa}
                 onClick={() => handleApprove(true)}>
@@ -511,7 +513,7 @@ export default function TaskDetail({ id }: { id: string }) {
           </Button>
           {detail.status === 'pending_review' && (
             <Text type="warning">
-              复核进度：{Math.min(reviews.length, 2)}/2 人已通过
+              复核进度：{approvedCount}/2 人已通过
               {reviews.length > 0 && `（${reviews.map((r, i) =>
                 `${i + 1}号复核：${r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '-'}${r.comment ? `，备注「${r.comment}」` : ''}`
               ).join('；')}）`}
