@@ -581,6 +581,20 @@ async def query_msds_documents(
 
     示例：查一下异丙醇的 MSDS；搜索 CAS 67-63-0 的化学品信息。
     """
+    # 直读分支（批次二-5）：DIRECT 开启时走 MSDS 收录台账表 Bitable 直读，
+    # 语义忠实复刻 legacy（.scratch/msds-direct/spec.md D3/D5）；关=逐行 legacy。
+    from app.modules.safety.service.msds_direct import config as md_config
+
+    if md_config.direct_enabled():
+        from app.modules.safety.service.msds_direct import query as md_query
+        from app.modules.safety.service.msds_direct import reader as md_reader
+
+        views = await md_reader.open_reader().fetch_all()
+        items, total = md_query.msds_documents(
+            views, name=name, cas_no=cas_no, limit=limit,
+        )
+        return {"items": items, "total": total}
+
     from app.modules.safety.service.msds import MsdsService
 
     items, total = await MsdsService(ctx.deps.db).list_documents(
