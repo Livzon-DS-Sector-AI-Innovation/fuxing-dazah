@@ -46,7 +46,7 @@ export default function QualityPage() {
                 rowKey="name"
                 size="small"
                 pagination={false}
-                dataSource={(result.components || []).map((c: any) => ({ ...c, key: c.name }))}
+                dataSource={(result.components || []).map((c) => ({ ...c, key: c.name }))}
                 columns={[
                   { title: '组分', dataIndex: 'name', key: 'name' },
                   {

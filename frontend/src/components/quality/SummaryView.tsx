@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch, theme } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import { DownloadOutlined } from '@ant-design/icons'
 import type { SummaryMatrix, SummaryMatrixRow, SummaryTrend } from '@/types/quality'
 import { fetchSummaryMatrix, fetchSummaryProducts, fetchItemTrend, exportSummaryMatrix } from '@/actions/quality'
@@ -38,7 +39,7 @@ export default function SummaryView() {
 
   useEffect(() => {
     fetchSummaryProducts().then(setProducts).catch(() => message.warning('产品列表加载失败，请刷新重试'))
-  }, [])
+  }, [message])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -50,23 +51,25 @@ export default function SummaryView() {
         includeInProgress,
       )
       setMatrix(res.data)
-    } catch (err: any) {
-      message.error(err.message || '加载汇总失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '加载汇总失败')
     } finally {
       setLoading(false)
     }
   }, [selectedProduct, dateRange, includeInProgress, message])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { (async () => { await load() })() }, [load])
 
   useEffect(() => {
-    if (!trendItem) { setTrend(null); setTrendError(null); return }
-    setTrendLoading(true)
-    setTrendError(null)
-    fetchItemTrend(trendItem, selectedProduct)
-      .then((res) => setTrend(res.data))
-      .catch((err: any) => setTrendError(err.message || '获取趋势失败'))
-      .finally(() => setTrendLoading(false))
+    (async () => {
+      if (!trendItem) { setTrend(null); setTrendError(null); return }
+      setTrendLoading(true)
+      setTrendError(null)
+      fetchItemTrend(trendItem, selectedProduct)
+        .then((res) => setTrend(res.data))
+        .catch((err: unknown) => setTrendError((err instanceof Error ? err.message : String(err)) || '获取趋势失败'))
+        .finally(() => setTrendLoading(false))
+    })()
   }, [trendItem, selectedProduct, trendReloadKey])
 
   const handleExport = async () => {
@@ -83,8 +86,8 @@ export default function SummaryView() {
       a.download = 'QC汇总表.xlsx'
       a.click()
       URL.revokeObjectURL(url)
-    } catch (err: any) {
-      message.error(err.message || '导出失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '导出失败')
     }
   }
 
@@ -104,7 +107,7 @@ export default function SummaryView() {
     ]
   // 单元格渲染（组件内定义：取主题 token 色值，不合格标红）
   function renderCell(item: string) {
-    return (_: unknown, r: SummaryMatrixRow) => {
+    return function CellRenderer(_: unknown, r: SummaryMatrixRow) {
       const cell = r.cells[item]
       if (!cell) return <Text type="secondary">-</Text>
       return (
@@ -116,8 +119,8 @@ export default function SummaryView() {
   }
 
     const cols = matrix?.columns || []
-    const groups: any[] = []
-    const bySop = new Map<string, any[]>()
+    const groups: ColumnsType<SummaryMatrixRow> = []
+    const bySop = new Map<string, ColumnsType<SummaryMatrixRow>>()
     const order: string[] = []
     for (const c of cols) {
       const key = c.sop_no || ''
@@ -133,7 +136,7 @@ export default function SummaryView() {
       }
     }
     return [...base, ...groups]
-  }, [matrix])
+  }, [matrix, token.colorError])
 
   return (
     <div>

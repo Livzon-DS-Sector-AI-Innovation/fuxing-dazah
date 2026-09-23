@@ -1,13 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Table, Tag, Input, Space, Button, App, Typography, Popconfirm } from 'antd'
+import { Table, Tag, Input, Space, Button, App, Popconfirm } from 'antd'
 import { SearchOutlined, DeleteOutlined, EyeOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import type { InspectionRecordListItem } from '@/types/quality'
 import { fetchInspectionRecords, deleteInspectionRecord } from '@/actions/quality'
-
-const { Text } = Typography
 
 export default function LcHistoryList() {
   const router = useRouter()
@@ -39,7 +37,7 @@ export default function LcHistoryList() {
     }
   }, [productSearch, batchSearch, message])
 
-  useEffect(() => { load(page) }, [page, load])
+  useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
   const handleDelete = async (id: string) => {
     try {
@@ -69,7 +67,7 @@ export default function LcHistoryList() {
     },
     {
       title: '操作', key: 'actions', width: 120,
-      render: (_: any, r: InspectionRecordListItem) => (
+      render: (_: unknown, r: InspectionRecordListItem) => (
         <Space>
           <Button size="small" icon={<EyeOutlined />}
             onClick={() => router.push(`/quality/history/${r.id}`)}>

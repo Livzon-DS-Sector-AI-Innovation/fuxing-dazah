@@ -20,9 +20,16 @@ import type {
   QualityDashboard,
   DailyReportItem,
   MonthlyReportSummary,
+  TemplateNode,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
+
+/** 后端错误响应体（FastAPI 的 detail / 通用 message）。 */
+interface ApiErrorBody {
+  detail?: string
+  message?: string
+}
 
 /**
  * 上传液相计算表 Excel 并获取解析结果。
@@ -43,8 +50,8 @@ export async function uploadLcExcel(formData: FormData): Promise<UploadLcRespons
   })
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || (err as any).message || '上传解析失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || err.message || '上传解析失败')
   }
 
   revalidatePath('/quality')
@@ -125,8 +132,8 @@ export async function generateReport(recordId: string, template: string): Promis
     body: JSON.stringify({ inspection_record_id: recordId, template }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '生成报告单失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '生成报告单失败')
   }
   const buf = Buffer.from(await res.arrayBuffer())
   const cd = res.headers.get('content-disposition') || ''
@@ -270,8 +277,8 @@ export async function importStandardDoc(formData: FormData): Promise<{ message: 
     method: 'POST', headers, body: formData,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '导入失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '导入失败')
   }
   return res.json()
 }
@@ -314,8 +321,8 @@ export async function importStandardDocPreview(formData: FormData): Promise<{ me
     method: 'POST', headers, body: formData,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '解析失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '解析失败')
   }
   return res.json()
 }
@@ -329,8 +336,8 @@ export async function importStandardDocConfirm(
     body: JSON.stringify({ document, items }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '确认导入失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '确认导入失败')
   }
   return res.json()
 }
@@ -338,7 +345,7 @@ export async function importStandardDocConfirm(
 
 // ─── 报告模板管理 ───
 
-export async function fetchTemplates(): Promise<any[]> {
+export async function fetchTemplates(): Promise<TemplateNode[]> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
@@ -354,8 +361,8 @@ export async function uploadTemplate(folder: string, formData: FormData): Promis
     method: 'POST', headers, body: formData,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '上传模板失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '上传模板失败')
   }
   return res.json()
 }
@@ -375,8 +382,8 @@ export async function deleteTemplateFolder(name: string): Promise<{ message: str
     body: JSON.stringify({ name }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '删除文件夹失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '删除文件夹失败')
   }
   return res.json()
 }
@@ -389,8 +396,8 @@ export async function bindTemplate(
     body: JSON.stringify({ template_path, standard_document_id }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '绑定模板失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '绑定模板失败')
   }
   return res.json()
 }
@@ -409,8 +416,8 @@ export async function deleteTemplateFile(path: string): Promise<{ message: strin
     body: JSON.stringify({ path }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '删除模板失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '删除模板失败')
   }
   return res.json()
 }
@@ -435,8 +442,8 @@ export async function createTestTask(data: {
     body: JSON.stringify(data),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '创建检验任务失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '创建检验任务失败')
   }
   revalidatePath('/quality/task')
   return res.json()
@@ -450,8 +457,8 @@ export async function updateTestTaskReportDate(
     body: JSON.stringify({ report_date: reportDate }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '更新出报日期失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '更新出报日期失败')
   }
   revalidatePath('/quality/task')
   return res.json()
@@ -502,8 +509,8 @@ export async function updateTestResults(
     body: JSON.stringify({ results }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '保存结果失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '保存结果失败')
   }
   return res.json()
 }
@@ -517,8 +524,8 @@ export async function addTestResult(
     body: JSON.stringify(data),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '追加项目失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '追加项目失败')
   }
   return res.json()
 }
@@ -538,8 +545,8 @@ export async function generateTaskReports(
     body: JSON.stringify({}),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '生成 COA 失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '生成 COA 失败')
   }
   return res.json()
 }
@@ -569,8 +576,8 @@ export async function parseLcIntoTask(taskId: string, formData: FormData): Promi
     method: 'POST', headers, body: formData,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '解析填入失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '解析填入失败')
   }
   return res.json()
 }
@@ -581,8 +588,8 @@ export async function updateTestTaskStatus(taskId: string, status: TestTaskStatu
     body: JSON.stringify({ status }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '状态更新失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '状态更新失败')
   }
   revalidatePath('/quality/task')
   return res.json()
@@ -628,8 +635,8 @@ export async function uploadTaskAttachment(taskId: string, formData: FormData): 
     method: 'POST', headers: await _authHeaders(), body: formData,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '上传附件失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '上传附件失败')
   }
   return res.json()
 }
@@ -667,8 +674,8 @@ export async function approveTaskReview(taskId: string, comment?: string): Promi
     body: JSON.stringify({ comment }),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '复核失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '复核失败')
   }
   return res.json()
 }
@@ -708,8 +715,8 @@ export async function batchReportDates(formData: FormData): Promise<{ message: s
     method: 'POST', headers: await _authHeaders(), body: formData,
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as any).detail || '批量补录失败')
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '批量补录失败')
   }
   return res.json()
 }

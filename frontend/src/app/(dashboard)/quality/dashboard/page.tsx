@@ -62,15 +62,16 @@ export default function QualityDashboardPage() {
       ])
       setData(res.data)
       setDailyReports(reports.data || [])
-    } catch (err: any) {
+    } catch (err: unknown) {
       // 自动刷新静默失败（此前后端异常时每 30 秒弹一条错误轰炸）
-      if (!silent) message.error(err.message || '加载总览失败')
+      if (!silent) message.error((err instanceof Error ? err.message : String(err)) || '加载总览失败')
     } finally {
       setLoading(false)
     }
   }, [message])
 
-  useEffect(() => { load() }, [load])
+  // 挂载即拉一次（包在 async 内：effect 同步段只发起请求，不直接同步 setState）
+  useEffect(() => { (async () => { await load() })() }, [load])
 
   // 30 秒自动刷新（页面可见时，静默）
   useEffect(() => {

@@ -11,8 +11,6 @@ import { CoaPreviewModal } from '@/components/quality'
 
 const { Title, Paragraph } = Typography
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-
 type ViewMode = 'day' | 'month'
 
 export default function SerialRegistryPage() {
@@ -37,14 +35,14 @@ export default function SerialRegistryPage() {
         const res = await fetchMonthlyReports(month.format('YYYY-MM'))
         setMonthly(res.data)
       }
-    } catch (err: any) {
-      message.error(err.message || '查询失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '查询失败')
     } finally {
       setLoading(false)
     }
   }, [viewMode, date, month, message])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { (async () => { await load() })() }, [load])
 
   const openPreview = (r: DailyReportItem) => {
     setPreviewId(r.report_id)
@@ -60,8 +58,8 @@ export default function SerialRegistryPage() {
       a.download = `COA-${r.batch_number}.docx`
       a.click()
       URL.revokeObjectURL(url)
-    } catch (err: any) {
-      message.error(err.message || '下载失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '下载失败')
     }
   }
 

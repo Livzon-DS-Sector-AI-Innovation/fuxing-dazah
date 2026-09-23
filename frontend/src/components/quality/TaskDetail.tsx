@@ -87,14 +87,14 @@ export default function TaskDetail({ id }: { id: string }) {
       ])
       setAttachments(atts.data || [])
       setReviews(revs.data || [])
-    } catch (err: any) {
-      setLoadError(err.message || '加载失败')
+    } catch (err: unknown) {
+      setLoadError((err instanceof Error ? err.message : String(err)) || '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [id, message])
+  }, [id])
 
-  useEffect(() => { loadDetail() }, [loadDetail])
+  useEffect(() => { (async () => { await loadDetail() })() }, [loadDetail])
 
   // 填报中可填；待复核时专员可改结果（不留痕）
   const { hasPermission } = usePermission()
@@ -148,8 +148,8 @@ export default function TaskDetail({ id }: { id: string }) {
       setDetail(res.data)
       setEdits({})
       message.success('已保存')
-    } catch (err: any) {
-      message.error(err.message || '保存失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
     } finally {
       setSaving(false)
     }
@@ -160,8 +160,8 @@ export default function TaskDetail({ id }: { id: string }) {
       const res = await updateTestTaskStatus(id, status)
       setDetail(res.data)
       message.success(tip)
-    } catch (err: any) {
-      message.error(err.message || '操作失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '操作失败')
     }
   }
 
@@ -174,8 +174,8 @@ export default function TaskDetail({ id }: { id: string }) {
       setAddOpen(false)
       addForm.resetFields()
       loadDetail()
-    } catch (err: any) {
-      message.error(err.message || '追加失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '追加失败')
     } finally {
       setAdding(false)
     }
@@ -196,8 +196,8 @@ export default function TaskDetail({ id }: { id: string }) {
       setDetail(res.data)
       setEdits({})
       message.success(`已批量填入 ${rows.length} 个文字型项目（符合规定）`)
-    } catch (err: any) {
-      message.error(err.message || '操作失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '操作失败')
     } finally {
       setSaving(false)
     }
@@ -208,8 +208,8 @@ export default function TaskDetail({ id }: { id: string }) {
       await deleteTestResult(id, resultId)
       message.success('已删除')
       loadDetail()
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -221,8 +221,8 @@ export default function TaskDetail({ id }: { id: string }) {
       setDetail(res.data)
       setEdits({})
       message.success(res.message || '解析填入完成')
-    } catch (err: any) {
-      message.error(err.message || '解析填入失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '解析填入失败')
     }
     return false
   }
@@ -252,8 +252,8 @@ export default function TaskDetail({ id }: { id: string }) {
       message.success(files.length
         ? `已按标准文件逐份生成 ${files.length} 份 COA：${files.map((f) => f.file_no).join('、')}`
         : 'COA 已生成（见报告单页面）')
-    } catch (err: any) {
-      message.error(err.message || '生成失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '生成失败')
     } finally {
       setGeneratingCoa(false)
     }
@@ -267,8 +267,8 @@ export default function TaskDetail({ id }: { id: string }) {
       await uploadTaskAttachment(id, formData)
       message.success('附件已归档')
       loadDetail()
-    } catch (err: any) {
-      message.error(err.message || '上传失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '上传失败')
     }
     return false
   }
@@ -282,8 +282,8 @@ export default function TaskDetail({ id }: { id: string }) {
       a.download = att.filename
       a.click()
       URL.revokeObjectURL(url)
-    } catch (err: any) {
-      message.error(err.message || '下载失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '下载失败')
     }
   }
 
@@ -295,8 +295,8 @@ export default function TaskDetail({ id }: { id: string }) {
         if (prev) URL.revokeObjectURL(prev.url)
         return { filename: att.filename, url: URL.createObjectURL(blob), type: att.content_type }
       })
-    } catch (err: any) {
-      message.error(err.message || '预览失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '预览失败')
     }
   }
 
@@ -305,8 +305,8 @@ export default function TaskDetail({ id }: { id: string }) {
       await deleteTaskAttachment(id, att.id)
       message.success('已删除')
       loadDetail()
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -324,8 +324,8 @@ export default function TaskDetail({ id }: { id: string }) {
         message.info(`复核已记录（${count}/${required}），等待另一位复核人`)
         await loadDetail()
       }
-    } catch (err: any) {
-      message.error(err.message || '复核失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '复核失败')
     }
   }
 
@@ -388,7 +388,7 @@ export default function TaskDetail({ id }: { id: string }) {
       render: (v: string | null) => v || '-' },
     { title: '方法来源', dataIndex: 'method_source', key: 'method_source', width: 100, render: (v: string | null) => v || '-' },
     { title: '备注', dataIndex: 'remark', key: 'remark', width: 140, ellipsis: true, render: (v: string | null) => v || '-' },
-    { title: '填报', key: 'fill', width: 280, render: (_: any, row: TestResultItem) => renderFillCell(row) },
+    { title: '填报', key: 'fill', width: 280, render: (_: unknown, row: TestResultItem) => renderFillCell(row) },
     {
       title: '已判定', dataIndex: 'is_pass', key: 'is_pass', width: 80,
       render: (v: boolean | null) => v === null
@@ -397,7 +397,7 @@ export default function TaskDetail({ id }: { id: string }) {
     },
     {
       title: '操作', key: 'actions', width: 80,
-      render: (_: any, row: TestResultItem) => editable ? (
+      render: (_: unknown, row: TestResultItem) => editable ? (
         <Popconfirm title="确认删除该行?" onConfirm={() => handleDeleteRow(row.id)}>
           <Button size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>

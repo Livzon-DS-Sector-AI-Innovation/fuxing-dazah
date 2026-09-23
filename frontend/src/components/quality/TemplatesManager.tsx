@@ -8,6 +8,7 @@ import {
   UploadOutlined, FolderAddOutlined, DownloadOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { usePermission } from '@/hooks/usePermission'
+import type { TemplateNode } from '@/types/quality'
 import {
   fetchTemplates, uploadTemplate, createTemplateFolder, deleteTemplateFolder, deleteTemplateFile,
   bindTemplate, unbindTemplate, fetchStandardDocuments, downloadTemplateFile,
@@ -26,14 +27,15 @@ interface FlatTemplate {
   binding: { sop_no: string | null; doc_id: string | null; description: string | null } | null
 }
 
-function flattenTree(items: any[], prefix = ''): FlatTemplate[] {
+function flattenTree(items: TemplateNode[], prefix = ''): FlatTemplate[] {
   const out: FlatTemplate[] = []
   for (const it of items || []) {
     if (it.type === 'template') {
+      const filename = it.filename ?? ''
       out.push({
-        path: prefix ? `${prefix}/${it.filename}` : it.filename,
+        path: prefix ? `${prefix}/${filename}` : filename,
         folder: prefix,
-        filename: it.filename,
+        filename,
         size_kb: it.size_kb ?? 0,
         placeholder_count: it.placeholder_count ?? 0,
         modified: it.modified ?? 0,
@@ -41,7 +43,7 @@ function flattenTree(items: any[], prefix = ''): FlatTemplate[] {
         binding: it.binding ?? null,
       })
     } else if (it.children) {
-      out.push(...flattenTree(it.children, prefix ? `${prefix}/${it.name}` : it.name))
+      out.push(...flattenTree(it.children, prefix ? `${prefix}/${it.name ?? ''}` : (it.name ?? '')))
     }
   }
   return out
@@ -51,7 +53,7 @@ export default function TemplatesManager() {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:template:manage')
-  const [tree, setTree] = useState<any[]>([])
+  const [, setTree] = useState<TemplateNode[]>([])
   const [files, setFiles] = useState<FlatTemplate[]>([])
   const [folders, setFolders] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
@@ -100,8 +102,8 @@ export default function TemplatesManager() {
       message.success('模板已绑定')
       setBindOpen(false)
       load()
-    } catch (err: any) {
-      message.error(err.message || '绑定失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '绑定失败')
     }
   }
 
@@ -110,8 +112,8 @@ export default function TemplatesManager() {
       await unbindTemplate(path)
       message.success('已解绑')
       load()
-    } catch (err: any) {
-      message.error(err.message || '解绑失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '解绑失败')
     }
   }
 
@@ -121,9 +123,9 @@ export default function TemplatesManager() {
       const t = await fetchTemplates()
       setTree(t)
       setFiles(flattenTree(t))
-      setFolders((t || []).filter((x: any) => x.type === 'folder').map((x: any) => x.name))
-    } catch (err: any) {
-      message.error(err.message || '加载模板失败')
+      setFolders((t || []).filter((x) => x.type === 'folder').map((x) => x.name ?? ''))
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '加载模板失败')
     } finally {
       setLoading(false)
     }
@@ -145,8 +147,8 @@ export default function TemplatesManager() {
       }
       setUploadOpen(false)
       load()
-    } catch (err: any) {
-      message.error(err.message || '上传失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '上传失败')
     }
     return false
   }
@@ -158,8 +160,8 @@ export default function TemplatesManager() {
       message.success('文件夹已创建')
       setNewFolderName('')
       load()
-    } catch (err: any) {
-      message.error(err.message || '创建失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '创建失败')
     }
   }
 
@@ -168,8 +170,8 @@ export default function TemplatesManager() {
       await deleteTemplateFolder(name)
       message.success('已删除')
       load()
-    } catch (err: any) {
-      message.error(err.message || '删除失败（文件夹须为空）')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败（文件夹须为空）')
     }
   }
 
@@ -178,8 +180,8 @@ export default function TemplatesManager() {
       await deleteTemplateFile(path)
       message.success('已删除')
       load()
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -193,7 +195,7 @@ export default function TemplatesManager() {
     { title: '模板路径', dataIndex: 'path', key: 'path', ellipsis: true },
     {
       title: '绑定 SOP', dataIndex: 'binding', key: 'binding', width: 180,
-      render: (v: FlatTemplate['binding'], r: FlatTemplate) => v?.sop_no ? (
+      render: (v: FlatTemplate['binding']) => v?.sop_no ? (
         <Tag color="green">{v.sop_no}</Tag>
       ) : (
         <Tag color="orange">⚠ 未绑定SOP</Tag>
@@ -208,7 +210,7 @@ export default function TemplatesManager() {
     },
     {
       title: '操作', key: 'actions', width: 220,
-      render: (_: any, r: FlatTemplate) => (
+      render: (_: unknown, r: FlatTemplate) => (
         <Space>
           {canManage && r.binding?.sop_no ? (
             <Button size="small" onClick={() => openBindModal(r.path)}>换绑</Button>

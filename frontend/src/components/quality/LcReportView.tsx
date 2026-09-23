@@ -1,15 +1,14 @@
 'use client'
 
-import { Card, Descriptions, Table, Tag, Typography, Divider, Collapse, Statistic, Row, Col, Space, theme } from 'antd'
+import { Card, Descriptions, Table, Tag, Typography, Collapse, Statistic, Row, Col, Space, theme } from 'antd'
 import {
   CheckCircleOutlined,
-  WarningOutlined,
   CloseCircleOutlined,
   ExperimentOutlined,
   FileTextOutlined,
   SafetyOutlined,
 } from '@ant-design/icons'
-import type { LcReportData, ImpurityResult, CalculatedResult } from '@/types/quality'
+import type { LcReportData, ImpurityResult, CalculatedResult, QualityStandard } from '@/types/quality'
 
 const { Title, Text } = Typography
 
@@ -49,21 +48,21 @@ export default function LcReportView({ report }: Props) {
       dataIndex: 'first_percent',
       key: 'first',
       width: 100,
-      render: (_: any, r: ImpurityResult) => toPct(r.first_percent, 4),
+      render: (_: unknown, r: ImpurityResult) => toPct(r.first_percent, 4),
     },
     {
       title: '第二份(%)',
       dataIndex: 'second_percent',
       key: 'second',
       width: 100,
-      render: (_: any, r: ImpurityResult) => toPct(r.second_percent, 4),
+      render: (_: unknown, r: ImpurityResult) => toPct(r.second_percent, 4),
     },
     {
       title: '限度(%)',
       dataIndex: 'limit',
       key: 'limit',
       width: 100,
-      render: (_: any, r: ImpurityResult) => toPct(r.limit, 4),
+      render: (_: unknown, r: ImpurityResult) => toPct(r.limit, 4),
     },
     {
       title: '判定',
@@ -83,7 +82,7 @@ export default function LcReportView({ report }: Props) {
       dataIndex: 'limit',
       key: 'limit',
       width: 120,
-      render: (_: any, s: any) => {
+      render: (_: unknown, s: QualityStandard) => {
         const op = s.operator || '≤'
         return s.limit ? `${op} ${toPct(s.limit)}` : '-'
       },

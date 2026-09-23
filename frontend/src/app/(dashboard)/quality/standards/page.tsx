@@ -11,6 +11,7 @@ import {
   FileTextOutlined, LinkOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
+import type { TemplateNode } from '@/types/quality'
 import { usePermission } from '@/hooks/usePermission'
 
 import {
@@ -24,11 +25,15 @@ import ImportConfirmModal, { type ImportDraftDocument } from '@/components/quali
 const { Title, Paragraph, Text } = Typography
 
 /** 展平模板树为路径列表。 */
-function flattenTemplates(items: any[], prefix = ''): string[] {
+function flattenTemplates(items: TemplateNode[], prefix = ''): string[] {
   const out: string[] = []
   for (const it of items || []) {
-    if (it.type === 'template') out.push(prefix ? `${prefix}/${it.filename}` : it.filename)
-    else if (it.children) out.push(...flattenTemplates(it.children, prefix ? `${prefix}/${it.name}` : it.name))
+    if (it.type === 'template') {
+      const filename = it.filename ?? ''
+      out.push(prefix ? `${prefix}/${filename}` : filename)
+    } else if (it.children) {
+      out.push(...flattenTemplates(it.children, prefix ? `${prefix}/${it.name ?? ''}` : (it.name ?? '')))
+    }
   }
   return out
 }
@@ -94,8 +99,8 @@ export default function StandardsPage() {
       const res = await fetchStandardDocuments()
       setDocs(res.data || [])
       return res.data || []
-    } catch (err: any) {
-      message.error(err.message || '加载标准文档失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '加载标准文档失败')
       return []
     } finally {
       setLoading(false)
@@ -106,12 +111,12 @@ export default function StandardsPage() {
     try {
       const res = await fetchStandardItems(docId)
       setItems(res.data || [])
-    } catch (err: any) {
-      message.error(err.message || '加载标准行失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '加载标准行失败')
     }
   }, [message])
 
-  useEffect(() => { loadDocs() }, [loadDocs])
+  useEffect(() => { (async () => { await loadDocs() })() }, [loadDocs])
 
   // 三级结构：产品名称（去重）→ 产品代码（去重，一个代码可有多份文件）→ 文件下拉 + SOP 项目行
   const nameKey = (n: string) => n.replace(/\s+/g, '')
@@ -123,7 +128,10 @@ export default function StandardsPage() {
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, 'zh-CN'))
   }, [docs])
-  const docsOf = (product: string) => docs.filter((d) => nameKey(d.product_name) === nameKey(product))
+  const docsOf = useCallback(
+    (product: string) => docs.filter((d) => nameKey(d.product_name) === nameKey(product)),
+    [docs],
+  )
   const filteredProducts = useMemo(() => {
     const kw = productSearch.trim().toLowerCase()
     if (!kw) return products
@@ -135,7 +143,7 @@ export default function StandardsPage() {
         (d.product_internal_code || '').toLowerCase().includes(kw),
       ),
     )
-  }, [products, productSearch, docs])
+  }, [products, productSearch, docsOf])
 
   // 搜索直达：命中产品代码/内部代码/文件编号时，直接跳到对应文档（产品只有一个时也能看到效果）
   const handleSearch = (v: string) => {
@@ -173,17 +181,20 @@ export default function StandardsPage() {
       }
     }
     return out
-  }, [activeProductName, docs])
+  }, [activeProductName, docsOf])
   const codeDocs = activeProductName && activeCode
     ? docsOf(activeProductName).filter((d) => d.product_code === activeCode)
     : []
   const activeCodeName = activeCode && codes.includes(activeCode) ? activeCode : codes[0]
   const activeDoc = codeDocs.find((d) => d.id === activeDocId) || codeDocs[0]
 
+  const activeDocKey = activeDoc?.id
   useEffect(() => {
-    if (activeDoc) loadItems(activeDoc.id)
-    else setItems([])
-  }, [activeDoc?.id, loadItems])
+    (async () => {
+      if (activeDocKey) await loadItems(activeDocKey)
+      else setItems([])
+    })()
+  }, [activeDocKey, loadItems])
 
   const selectProduct = (p: string) => {
     setActiveProduct(p)
@@ -221,8 +232,8 @@ export default function StandardsPage() {
       }
       setDocModalOpen(false)
       loadDocs()
-    } catch (err: any) {
-      message.error(err.message || '保存失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
     }
   }
 
@@ -232,8 +243,8 @@ export default function StandardsPage() {
       message.success('已删除')
       if (activeDocId === id) setActiveDocId(undefined)
       loadDocs()
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -246,8 +257,8 @@ export default function StandardsPage() {
       setImportDraft(res.data)
       setImportKey((k) => k + 1)
       setImportOpen(true)
-    } catch (err: any) {
-      message.error(err.message || '解析失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '解析失败')
     }
     return false
   }
@@ -263,8 +274,8 @@ export default function StandardsPage() {
       setActiveCode(document.product_code || undefined)
       const fresh = await loadDocs()
       setActiveDocId(fresh.find((d) => d.file_no === document.file_no)?.id)
-    } catch (err: any) {
-      message.error(err.message || '导入失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '导入失败')
     } finally {
       setConfirming(false)
     }
@@ -290,8 +301,8 @@ export default function StandardsPage() {
       }
       setItemModalOpen(false)
       loadItems(activeDoc.id)
-    } catch (err: any) {
-      message.error(err.message || '保存失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
     }
   }
 
@@ -300,8 +311,8 @@ export default function StandardsPage() {
       await deleteStandardItem(id)
       message.success('已删除')
       if (activeDoc) loadItems(activeDoc.id)
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -330,8 +341,8 @@ export default function StandardsPage() {
       message.success('模板绑定已保存')
       setBindOpen(false)
       loadDocs()
-    } catch (err: any) {
-      message.error(err.message || '绑定失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '绑定失败')
     }
   }
 
@@ -342,7 +353,7 @@ export default function StandardsPage() {
     { title: '合格标准', dataIndex: 'standard_text', key: 'standard_text', ellipsis: true },
     {
       title: '限度', key: 'limit', width: 110,
-      render: (_: any, it: StandardItem) => {
+      render: (_: unknown, it: StandardItem) => {
         if (!it.operator) return '-'
         if (it.operator === '范围') return `${it.limit_min ?? ''}～${it.limit_max ?? ''}`
         if (it.operator === '≥' || it.operator === '>') return `${it.operator}${it.limit_min ?? ''}`
@@ -352,7 +363,7 @@ export default function StandardsPage() {
     { title: '来源', dataIndex: 'method_source', key: 'method_source', width: 130, ellipsis: true, render: (v: string | null) => v || '-' },
     { title: '备注', dataIndex: 'remark', key: 'remark', width: 150, ellipsis: true, render: (v: string | null) => v || '-' },
     { title: '操作', key: 'actions', width: 110,
-      render: (_: any, it: StandardItem) => (
+      render: (_: unknown, it: StandardItem) => (
         <Space>
           {canManage && (
             <>

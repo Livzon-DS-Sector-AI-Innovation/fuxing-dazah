@@ -62,14 +62,14 @@ export default function TaskFillIn() {
       const res = await fetchTestTasks(productSearch || undefined, statusFilter, p, reportDateFilter)
       setData(res.data)
       setTotal(res.meta.total)
-    } catch (err: any) {
-      if (!silent) message.error(err.message || '加载失败')
+    } catch (err: unknown) {
+      if (!silent) message.error((err instanceof Error ? err.message : String(err)) || '加载失败')
     } finally {
       setLoading(false)
     }
   }, [productSearch, statusFilter, reportDateFilter, message])
 
-  useEffect(() => { load(page) }, [page, load])
+  useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
   // 30 秒自动刷新：机器人侧填报后网页无需手动刷新（页面不可见时跳过；静默失败不弹错误）
   useEffect(() => {
@@ -165,18 +165,20 @@ export default function TaskFillIn() {
 
   // 识别出代号后：该代号只有一份标准文件时自动默认，多份时让用户勾选
   useEffect(() => {
-    createForm.setFieldValue('sop_ids', undefined)
-    createForm.setFieldValue('specification', undefined)
-    setSopOptions([])
-    if (!matchedCode) {
-      createForm.setFieldValue('standard_document_ids', undefined)
-      return
-    }
-    if (docOptions.length === 1) {
-      createForm.setFieldValue('standard_document_ids', [docOptions[0].value])
-    } else {
-      createForm.setFieldValue('standard_document_ids', undefined)
-    }
+    (async () => {
+      createForm.setFieldValue('sop_ids', undefined)
+      createForm.setFieldValue('specification', undefined)
+      setSopOptions([])
+      if (!matchedCode) {
+        createForm.setFieldValue('standard_document_ids', undefined)
+        return
+      }
+      if (docOptions.length === 1) {
+        createForm.setFieldValue('standard_document_ids', [docOptions[0].value])
+      } else {
+        createForm.setFieldValue('standard_document_ids', undefined)
+      }
+    })()
   }, [matchedCode, docOptions, createForm])
 
   // 代号识别结果变化后重校验批号字段：清除粘贴/输入法一次性输入时遗留的旧校验结果
@@ -188,12 +190,12 @@ export default function TaskFillIn() {
   // 选中标准文件后，加载其全部检验项目合并（默认全选）；规格唯一时自动默认
   useEffect(() => {
     let cancelled = false
-    createForm.setFieldValue('sop_ids', undefined)
-    createForm.setFieldValue('specification', undefined)
-    setSopOptions([])
-    if (!matchedDocIds?.length) return
-    setSopLoading(true)
     ;(async () => {
+      createForm.setFieldValue('sop_ids', undefined)
+      createForm.setFieldValue('specification', undefined)
+      setSopOptions([])
+      if (!matchedDocIds?.length) return
+      setSopLoading(true)
       try {
         const opts: { label: string; value: string }[] = []
         for (const docId of matchedDocIds) {
@@ -238,8 +240,8 @@ export default function TaskFillIn() {
       setCreateOpen(false)
       setPage(1)
       load(1)
-    } catch (err: any) {
-      message.error(err.message || '创建失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '创建失败')
     } finally {
       setCreating(false)
     }
@@ -250,8 +252,8 @@ export default function TaskFillIn() {
       await updateTestTaskStatus(id, status)
       message.success(tip)
       load(page)
-    } catch (err: any) {
-      message.error(err.message || '操作失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '操作失败')
     }
   }
 
@@ -260,8 +262,8 @@ export default function TaskFillIn() {
       await deleteTestTask(id)
       message.success('已删除')
       load(page)
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -271,7 +273,7 @@ export default function TaskFillIn() {
     { title: '生产日期', dataIndex: 'production_date', key: 'production_date', width: 110, render: (v: string | null) => v || '-' },
     {
       title: '出报日期', key: 'report_date', width: 150,
-      render: (_: any, r: TestTaskListItem) => (
+      render: (_: unknown, r: TestTaskListItem) => (
         <DatePicker
           size="small"
           style={{ width: '100%' }}
@@ -283,8 +285,8 @@ export default function TaskFillIn() {
               await updateTestTaskReportDate(r.id, d ? d.format('YYYY-MM-DD') : null)
               message.success(d ? '出报日期已更新' : '出报日期已清空')
               load(page)
-            } catch (err: any) {
-              message.error(err.message || '更新出报日期失败')
+            } catch (err: unknown) {
+              message.error((err instanceof Error ? err.message : String(err)) || '更新出报日期失败')
             }
           }}
         />
@@ -301,7 +303,7 @@ export default function TaskFillIn() {
     },
     {
       title: '进度', key: 'progress', width: 150,
-      render: (_: any, r: TestTaskListItem) => (
+      render: (_: unknown, r: TestTaskListItem) => (
         <Progress
           percent={r.results_total ? Math.round(r.results_filled / r.results_total * 100) : 0}
           size="small"
@@ -315,7 +317,7 @@ export default function TaskFillIn() {
     },
     {
       title: '操作', key: 'actions', width: 200,
-      render: (_: any, r: TestTaskListItem) => (
+      render: (_: unknown, r: TestTaskListItem) => (
         <Space>
           <Button size="small" type={r.status === 'in_progress' ? 'primary' : 'default'} icon={<FormOutlined />}
             onClick={() => router.push(`/quality/task/${r.id}`)}>
@@ -378,8 +380,8 @@ export default function TaskFillIn() {
               a.download = '出报日期补录模板.xlsx'
               a.click()
               URL.revokeObjectURL(url)
-            } catch (err: any) {
-              message.error(err.message || '下载模板失败')
+            } catch (err: unknown) {
+              message.error((err instanceof Error ? err.message : String(err)) || '下载模板失败')
             }
           }}>模板</Button>
         )}
@@ -397,8 +399,8 @@ export default function TaskFillIn() {
                   message.warning(`跳过：${res.data.skipped.slice(0, 5).join('；')}`)
                 }
                 load(page)
-              } catch (err: any) {
-                message.error(err.message || '批量补录失败')
+              } catch (err: unknown) {
+                message.error((err instanceof Error ? err.message : String(err)) || '批量补录失败')
               }
               return false
             }}

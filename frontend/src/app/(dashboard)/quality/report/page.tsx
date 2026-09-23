@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons'
-import type { ReportRecord } from '@/types/quality'
+import type { ReportRecord, TemplateNode } from '@/types/quality'
 import { fetchReportRecords, downloadReportFile, generateReport, fetchTemplates } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 
@@ -52,14 +52,14 @@ function ReportPageInner() {
     finally { setLoading(false) }
   }, [search, message])
 
-  useEffect(() => { load(page) }, [page, load])
+  useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
   const openGenModal = useCallback(async () => {
     setGenOpen(true)
     try {
       const tpls = await fetchTemplates()
       const files: { label: string; value: string }[] = []
-      const walk = (nodes: any[], prefix = '') => {
+      const walk = (nodes: TemplateNode[], prefix = '') => {
         for (const n of nodes || []) {
           if (n.children) walk(n.children, `${prefix}${n.name}/`)
           else files.push({ label: `${prefix}${n.name}`, value: `${prefix}${n.name}` })
@@ -74,7 +74,7 @@ function ReportPageInner() {
   }, [message])
 
   useEffect(() => {
-    if (recordId) openGenModal()
+    (async () => { if (recordId) await openGenModal() })()
   }, [recordId, openGenModal])
 
   const handleGenerate = async () => {
@@ -99,8 +99,8 @@ function ReportPageInner() {
       setGenOpen(false)
       setPage(1)
       load(1)
-    } catch (err: any) {
-      message.error(err.message || '生成报告单失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '生成报告单失败')
     } finally {
       setGenerating(false)
     }
@@ -131,7 +131,7 @@ function ReportPageInner() {
     { title: '生成时间', dataIndex: 'created_at', key: 'created_at', width: 170,
       render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
     { title: '操作', key: 'actions', width: 210,
-      render: (_: any, r: ReportRecord) => (
+      render: (_: unknown, r: ReportRecord) => (
         <Space size={4}>
           <Button size="small" icon={<EyeOutlined />}
             onClick={() => { setPreviewId(r.id); setPreviewTitle(`报告单预览（批号 ${r.batch_number}）`) }}

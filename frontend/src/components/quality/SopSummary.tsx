@@ -33,14 +33,14 @@ export default function SopSummary() {
         }
         return prev
       })
-    } catch (err: any) {
-      message.error(err.message || '加载按 SOP 汇总失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '加载按 SOP 汇总失败')
     } finally {
       setLoading(false)
     }
   }, [productSearch, message])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { (async () => { await load() })() }, [load])
 
   const current = items.find((i) => keyOf(i) === selected)
 
@@ -50,7 +50,7 @@ export default function SopSummary() {
     { title: '效期', dataIndex: 'expiry_date', key: 'expiry_date', width: 110, render: (v: string | null) => v || '-' },
     {
       title: '结果', key: 'result', width: 140,
-      render: (_: any, b: SopSummaryBatch) => b.result_value != null ? b.result_value : (b.result_text || '-'),
+      render: (_: unknown, b: SopSummaryBatch) => b.result_value != null ? b.result_value : (b.result_text || '-'),
     },
     {
       title: '判定', dataIndex: 'is_pass', key: 'is_pass', width: 80,
@@ -62,7 +62,7 @@ export default function SopSummary() {
     },
     {
       title: '操作', key: 'actions', width: 100,
-      render: (_: any, b: SopSummaryBatch) => (
+      render: (_: unknown, b: SopSummaryBatch) => (
         <a onClick={() => router.push(`/quality/task/${b.task_id}`)}><FormOutlined /> 查看任务</a>
       ),
     },

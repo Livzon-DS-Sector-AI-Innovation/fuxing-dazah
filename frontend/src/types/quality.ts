@@ -334,3 +334,42 @@ export interface MonthlyReportSummary {
   total: number
   days: MonthlyReportDay[]
 }
+
+// ─── 报告模板树（GET /api/v1/quality/templates）───
+
+/** 模板未绑定 SOP 时，后端按号码相似度给出的匹配建议。 */
+export interface TemplateMatch {
+  doc_id: string
+  file_no: string
+  product_code: string
+}
+
+/** COA 模板 ↔ 标准文档（SOP）的绑定；未绑定为 null。 */
+export interface TemplateBinding {
+  sop_no: string | null
+  doc_id: string | null
+  description: string | null
+}
+
+/** 模板树节点：type=folder 为目录（含 name/children），type=template 为 .docx 文件（含 filename/path 等）。 */
+export interface TemplateNode {
+  type: 'folder' | 'template'
+  /** 目录名（type=folder）。 */
+  name?: string
+  /** 模板文件名（type=template）。 */
+  filename?: string
+  /** 相对模板根目录的路径，如 妥布霉素/3205.docx（type=template）。 */
+  path?: string
+  /** 子节点（type=folder）。 */
+  children?: TemplateNode[]
+  /** 文件大小 KB（type=template）。 */
+  size_kb?: number
+  /** 文件修改时间（epoch 秒，type=template）。 */
+  modified?: number
+  /** 占位符个数（type=template）。 */
+  placeholder_count?: number
+  /** 已绑定的 SOP；未绑定为 null（type=template）。 */
+  binding?: TemplateBinding | null
+  /** 仅在未绑定时返回的匹配建议；无建议为 null。 */
+  matched?: TemplateMatch | null
+}

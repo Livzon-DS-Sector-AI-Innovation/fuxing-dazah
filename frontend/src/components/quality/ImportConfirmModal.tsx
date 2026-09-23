@@ -77,32 +77,32 @@ export default function ImportConfirmModal({ open, draft, confirming, onCancel, 
   const columns = [
     {
       title: '序号', key: 'seq', width: 70,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <InputNumber size="small" style={{ width: '100%' }} value={it.seq ?? undefined}
           onChange={(v) => setItemField(i, { seq: v ?? null })} />
       ),
     },
     {
       title: '子项目', key: 'item_name', width: 150,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <Input size="small" value={it.item_name} onChange={(e) => setItemField(i, { item_name: e.target.value })} />
       ),
     },
     {
       title: 'SOP号', key: 'sop_no', width: 120,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <Input size="small" value={it.sop_no ?? ''} onChange={(e) => setItemField(i, { sop_no: e.target.value || null })} />
       ),
     },
     {
       title: '合格标准', key: 'standard_text', width: 170,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <Input size="small" value={it.standard_text ?? ''} onChange={(e) => setItemField(i, { standard_text: e.target.value || null })} />
       ),
     },
     {
       title: '运算符', key: 'operator', width: 130,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <Select
           size="small" style={{ width: '100%' }}
           value={it.operator ?? ''}
@@ -113,33 +113,33 @@ export default function ImportConfirmModal({ open, draft, confirming, onCancel, 
     },
     {
       title: '下限', key: 'limit_min', width: 80,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <InputNumber size="small" style={{ width: '100%' }} value={it.limit_min ?? undefined}
           onChange={(v) => setItemField(i, { limit_min: v ?? null })} />
       ),
     },
     {
       title: '上限', key: 'limit_max', width: 80,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <InputNumber size="small" style={{ width: '100%' }} value={it.limit_max ?? undefined}
           onChange={(v) => setItemField(i, { limit_max: v ?? null })} />
       ),
     },
     {
       title: '来源', key: 'method_source', width: 100,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <Input size="small" value={it.method_source ?? ''} onChange={(e) => setItemField(i, { method_source: e.target.value || null })} />
       ),
     },
     {
       title: '备注', key: 'remark', width: 120,
-      render: (_: any, it: ImportDraftItem, i: number) => (
+      render: (_: unknown, it: ImportDraftItem, i: number) => (
         <Input size="small" value={it.remark ?? ''} onChange={(e) => setItemField(i, { remark: e.target.value || null })} />
       ),
     },
     {
       title: '操作', key: 'actions', width: 60, fixed: 'right' as const,
-      render: (_: any, _it: ImportDraftItem, i: number) => (
+      render: (_: unknown, _it: ImportDraftItem, i: number) => (
         <Popconfirm title="删除该行?" onConfirm={() => removeItem(i)}>
           <Button size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>

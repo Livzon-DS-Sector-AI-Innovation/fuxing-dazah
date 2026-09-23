@@ -1,14 +1,12 @@
 'use client'
 
 import { useEffect, useState, use } from 'react'
-import { Typography, Spin, App, Button, Space } from 'antd'
+import { Spin, App, Button, Space } from 'antd'
 import { ArrowLeftOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { LcReportView } from '@/components/quality'
 import type { InspectionRecordDetail } from '@/types/quality'
 import { fetchInspectionRecord } from '@/actions/quality'
-
-const { Title } = Typography
 
 export default function RecordDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
