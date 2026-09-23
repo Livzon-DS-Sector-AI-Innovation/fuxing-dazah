@@ -63,6 +63,10 @@ from app.modules.warehouse.agent.tools.plan import (
     PLAN_TOOL_FUNCS,
     PLAN_TOOLS_SCHEMA,
 )
+from app.modules.warehouse.agent.tools.push import (
+    PUSH_TOOL_FUNCS,
+    PUSH_TOOLS_SCHEMA,
+)
 from app.modules.warehouse.agent.tools.supplier import (
     SUPPLIER_TOOL_FUNCS,
     SUPPLIER_TOOLS_SCHEMA,
@@ -655,6 +659,7 @@ TOOL_FUNCS: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
     **FINISHED_RECEIPT_TOOL_FUNCS,
     **PICKING_TOOL_FUNCS,
     **SUPPLIER_TOOL_FUNCS,
+    **PUSH_TOOL_FUNCS,
     **SKILL_TOOL_FUNCS,
 }
 
@@ -775,6 +780,7 @@ TOOLS: list[dict[str, Any]] = [
     *FINISHED_RECEIPT_TOOLS_SCHEMA,
     *PICKING_TOOLS_SCHEMA,
     *SUPPLIER_TOOLS_SCHEMA,
+    *PUSH_TOOLS_SCHEMA,
     *SKILL_TOOLS_SCHEMA,
 ]
 
