@@ -813,6 +813,48 @@ def _extract_text_query(message: dict[str, Any]) -> str | None:
     return query or None
 
 
+def _extract_post_query(message: dict[str, Any]) -> str | None:
+    """从飞书 post 富文本消息中提取文字查询（2026-09-23 文图混合支持）。
+
+    与 :func:`_extract_text_query` 同语义：返回有效文字或 None（纯图/
+    纯表情 post）。兼容新老两种 content 形态（新格式 title/content 顶层；
+    老格式 zh_cn 等 locale 键内层）；text/a 段拼入文字（段落间换行）；
+    at 段整体跳过（@提及是路由噪音）；img/emotion/media 段忽略——安全
+    助手无图片识别链路，图片内容以引导话术说明。
+    """
+    content_str = message.get("content", "{}")
+    try:
+        content = json.loads(content_str)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(content, dict):
+        return None
+    body = content if isinstance(content.get("content"), list) else None
+    if body is None:
+        for value in content.values():
+            if isinstance(value, dict) and isinstance(value.get("content"), list):
+                body = value
+                break
+    if body is None:
+        return None
+    lines: list[str] = []
+    title = str(body.get("title") or "").strip()
+    if title:
+        lines.append(title)
+    for paragraph in body.get("content") or []:
+        if not isinstance(paragraph, list):
+            continue
+        line = "".join(
+            str(el.get("text") or "")
+            for el in paragraph
+            if isinstance(el, dict) and el.get("tag") in ("text", "a")
+        ).strip()
+        if line:
+            lines.append(line)
+    query = "\n".join(lines).strip()
+    return query or None
+
+
 def _has_at_mention_only(message: dict[str, Any]) -> bool:
     """检查文本消息是否仅包含 @mention 无实质内容。"""
     content_str = message.get("content", "{}")
@@ -1132,6 +1174,21 @@ async def handle_message(event_data: dict[str, Any]) -> None:
                     )
                 return
             # ── OH 归档二次匹配（L3/L4，仅私聊 + 有挂起归档 + 文本像姓名/体检号/序号）──
+            if message.get("chat_type") == "p2p":
+                if await _try_oh_archive_reply(chat_id, query):
+                    return
+        elif message_type == "post":
+            # post 富文本（文图混合等，2026-09-23）：提取文字进对话链路；
+            # 无有效文字（纯图/纯表情）回复引导——此前 post 被类型路由静默丢弃
+            query = _extract_post_query(message)
+            if query is None:
+                await _send_text_to_chat(
+                    chat_id,
+                    "已收到富文本/图片消息。安全助手目前支持文字提问与文件"
+                    "（Excel/CSV/JSON/文档）上传，图片内容暂无法识别，"
+                    "请改用文字描述你的问题。",
+                )
+                return
             if message.get("chat_type") == "p2p":
                 if await _try_oh_archive_reply(chat_id, query):
                     return
