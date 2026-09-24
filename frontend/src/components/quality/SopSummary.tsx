@@ -98,7 +98,7 @@ export default function SopSummary() {
         )}
       </Space>
 
-      <Table
+      <Table scroll={{ x: 900 }}
         rowKey={(r) => `${r.task_id}_${r.batch_number}`}
         size="small"
         loading={loading}

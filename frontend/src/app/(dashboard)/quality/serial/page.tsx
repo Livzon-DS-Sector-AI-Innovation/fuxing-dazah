@@ -204,6 +204,7 @@ export default function SerialRegistryPage() {
         <Card size="small" title={`${date.format('YYYY-MM-DD')} 报告单流水（${data.length} 份）`}>
           <Table
             rowKey="report_id"
+            scroll={{ x: 800 }}
             columns={itemColumns}
             dataSource={data}
             loading={loading}
@@ -224,6 +225,7 @@ export default function SerialRegistryPage() {
               expandedRowRender: (d) => (
                 <Table
                   rowKey="report_id"
+                  scroll={{ x: 800 }}
                   columns={itemColumns}
                   dataSource={d.items}
                   size="small"

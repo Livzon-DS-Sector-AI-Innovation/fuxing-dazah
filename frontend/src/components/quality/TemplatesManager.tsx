@@ -269,7 +269,7 @@ export default function TemplatesManager() {
         ))}
       </Space>
 
-      <Table
+      <Table scroll={{ x: 1080 }}
         rowKey="path"
         size="small"
         columns={columns}

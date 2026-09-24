@@ -102,7 +102,7 @@ export default function LcHistoryList() {
         <Button type="primary" onClick={() => { setProductSearch(productDraft); setBatchSearch(batchDraft); setPage(1) }}>搜索</Button>
       </Space>
 
-      <Table
+      <Table scroll={{ x: 960 }}
         columns={columns}
         dataSource={data.map(r => ({ ...r, key: r.id }))}
         loading={loading}

@@ -168,7 +168,7 @@ function ReportPageInner() {
         <Button type="primary" onClick={() => { setSearch(searchDraft); setPage(1) }}>搜索</Button>
       </Space>
 
-      <Table columns={columns}
+      <Table columns={columns} scroll={{ x: 960 }}
         dataSource={data.map(r => ({ ...r, key: r.id }))}
         loading={loading}
         pagination={{ current: page, pageSize: 20, total, onChange: (p) => setPage(p) }}
