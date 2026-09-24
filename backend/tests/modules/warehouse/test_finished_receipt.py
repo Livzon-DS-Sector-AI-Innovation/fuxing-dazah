@@ -786,7 +786,9 @@ class TestGatewayFinishedRoute:
         )
 
         async def fake_recognize_finished(
-            image_b64: str, content_type: str = "image/jpeg"
+            image_b64: str,
+            content_type: str = "image/jpeg",
+            user_text: str | None = None,
         ) -> RecognizedFinishedReceipt:
             return recognized
 

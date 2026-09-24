@@ -435,10 +435,36 @@ async def detect_rotation(
         return 0
 
 
+def _prompt_with_user_text(prompt: str, user_text: str | None) -> str:
+    """识别提示词追加「用户随图文字」参考段（post 文图混合消息，2026-09-23）。
+
+    用户手打的字段（如产品/物料名称、批号、数量）是明确意图，识别只是
+    转录——冲突时以用户文字为准；确认卡仍是最终核对闸门。
+    """
+    cleaned = (user_text or "").strip()
+    if not cleaned:
+        return prompt
+    return (
+        prompt
+        + "\n\n## 用户随图提供的文字（优先采信）\n"
+        "用户发送图片的同时手打了以下文字（@提及已剔除）。其中明确给出的字段值"
+        "（如产品/物料名称、批号、数量、单位）与图片识别冲突时，以用户文字为准，"
+        "该字段 confidence 取 0.95；文字未提到的字段仍按图片识别。"
+        "数量只取数字——用户写 75.405kg 则 quantity=75.405、unit=kg。\n"
+        f"用户文字：{cleaned[:500]}"
+    )
+
+
 async def recognize_receipt(
-    image_b64: str, content_type: str = "image/jpeg"
+    image_b64: str,
+    content_type: str = "image/jpeg",
+    *,
+    user_text: str | None = None,
 ) -> RecognizedReceipt:
     """识别一张送货单图片（base64），返回结构化识别结果。
+
+    ``user_text``：post 文图混合消息里用户手打的文字，注入提示词作为
+    冲突时优先采信的参考（None/空 = 纯图消息，行为不变）。
 
     输出不合规（JSON 解析失败，或必提 8 字段被模型整批置空）重试识别
     1 次（附原输出并强调只输出 JSON / 必提不可全空）；重试后 JSON 仍
@@ -450,7 +476,7 @@ async def recognize_receipt(
     payload = await _recognize_with_retry(
         image_b64,
         content_type,
-        prompt=RECOGNIZE_PROMPT,
+        prompt=_prompt_with_user_text(RECOGNIZE_PROMPT, user_text),
         required=REQUIRED_FIELDS,
         retry_prompt=_JSON_RETRY_PROMPT,
         missing_reason="必提 8 字段全部为空（图片无文字时才允许）",
@@ -522,18 +548,23 @@ def build_finished_receipt(payload: dict[str, Any]) -> RecognizedFinishedReceipt
 
 
 async def recognize_finished_receipt(
-    image_b64: str, content_type: str = "image/jpeg"
+    image_b64: str,
+    content_type: str = "image/jpeg",
+    *,
+    user_text: str | None = None,
 ) -> RecognizedFinishedReceipt:
     """识别一张成品入库单图片（V3.0 §4.6），返回结构化识别结果。
 
-    框架与 :func:`recognize_receipt` 同款（JSON 容错 → 必提全空/解析失败
-    重试 1 次 → 仍失败抛 WarehouseLLMError / 诚实返回空字段）。
+    ``user_text`` 语义同 :func:`recognize_receipt`（post 文图混合消息的
+    用户手打文字，冲突时优先采信）。框架与 recognize_receipt 同款
+    （JSON 容错 → 必提全空/解析失败重试 1 次 → 仍失败抛
+    WarehouseLLMError / 诚实返回空字段）。
     """
     set_audit_resource("finished_receipt_parse")
     payload = await _recognize_with_retry(
         image_b64,
         content_type,
-        prompt=FINISHED_RECEIPT_PROMPT,
+        prompt=_prompt_with_user_text(FINISHED_RECEIPT_PROMPT, user_text),
         required=FINISHED_REQUIRED_FIELDS,
         retry_prompt=_FINISHED_JSON_RETRY_PROMPT,
         missing_reason="必提 4 字段全部为空（图片无文字时才允许）",

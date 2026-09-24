@@ -378,7 +378,11 @@ async def test_image_recognition_failure_degrades(
     async def fake_download(message_id: str, file_key: str) -> bytes:
         return PNG_BYTES
 
-    async def boom(image_b64: str, content_type: str = "image/jpeg") -> None:
+    async def boom(
+        image_b64: str,
+        content_type: str = "image/jpeg",
+        user_text: str | None = None,
+    ) -> None:
         raise RuntimeError("llm boom")
 
     async def fake_classify(image_b64: str, content_type: str = "image/jpeg") -> str:
