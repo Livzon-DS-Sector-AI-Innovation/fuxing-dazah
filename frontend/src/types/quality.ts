@@ -5,8 +5,6 @@
 export interface QualityStandard {
   name: string
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   operator: string // "≤" | "≥"
 }
 
@@ -25,10 +23,7 @@ export interface ImpurityResult {
   first_percent: number
   second_percent: number
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   is_pass: boolean
-  is_oot: boolean
 }
 
 // ─── 主计算结果（万古霉素B、总杂质等）───
@@ -40,10 +35,7 @@ export interface CalculatedResult {
   rounded_first: number
   rounded_second: number
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   is_pass: boolean
-  is_oot: boolean
 }
 
 // ─── 完整解析结果 ───
@@ -81,7 +73,6 @@ export interface LcReportData {
 
   // 汇总
   all_pass: boolean
-  has_oot: boolean
 }
 
 // ─── 上传响应 ───
@@ -89,4 +80,296 @@ export interface LcReportData {
 export interface UploadLcResponse {
   filename: string
   report: LcReportData
+  record_id: string | null
+  task_link?: {
+    task_id: string
+    filled: string[]
+    unmatched: string[]
+  } | null
+  components?: {
+    name: string
+    first: number | null
+    second: number | null
+    report_value: number | null
+  }[] | null
+}
+
+// ─── 检验记录列表/详情 ───
+
+export interface InspectionRecordListItem {
+  id: string
+  product_name: string
+  batch_number: string
+  form_id: string | null
+  standard_type: string | null
+  all_pass: boolean
+  excel_filename: string | null
+  created_at: string | null
+}
+
+export interface InspectionRecordDetail extends InspectionRecordListItem {
+  impurities: ImpurityResult[]
+  report: LcReportData
+}
+
+// ─── 报告单记录 ───
+
+export interface ReportRecord {
+  id: string
+  inspection_record_id: string | null
+  test_task_id: string | null
+  template_path: string
+  product_name: string
+  batch_number: string
+  serial_no: string | null
+  file_path: string
+  file_size: number | null
+  created_at: string | null
+}
+
+// ─── 汇总统计 ───
+
+export interface ProductSummary {
+  product_name: string
+  total: number
+  pass_count: number
+  fail_count: number
+  in_progress: number
+}
+
+export interface HistorySummary {
+  total: number
+  pass_count: number
+  fail_count: number
+  pass_rate: number
+  in_progress: number
+  products: ProductSummary[]
+}
+
+export interface SummaryMatrixRow {
+  task_id: string
+  product_name: string
+  batch_number: string
+  production_date: string | null
+  report_date: string | null
+  status: string
+  all_pass: boolean
+  cells: Record<string, { value: number | string; is_pass: boolean; unit: string }>
+}
+
+export interface SummaryMatrix {
+  columns: { name: string; sop_no: string | null }[]
+  rows: SummaryMatrixRow[]
+}
+
+export interface SummaryTrendPoint {
+  task_id: string
+  batch_number: string
+  production_date: string | null
+  value: number | null
+  text: string | null
+  is_pass: boolean
+  status: string
+}
+
+export interface SummaryTrend {
+  item_name: string
+  unit: string
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  points: SummaryTrendPoint[]
+}
+
+// ─── 检验任务填报 ───
+
+export type TestTaskStatus = 'in_progress' | 'pending_review' | 'completed' | 'void'
+
+export interface TestResultItem {
+  id: string
+  seq: number | null
+  category: string | null
+  item_name: string
+  sop_no: string | null
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  remark: string | null
+  result_text: string | null
+  result_value: number | null
+  is_pass: boolean | null
+  judge_mode: 'auto' | 'manual'
+  source: 'manual' | 'parse'
+  filled_at: string | null
+}
+
+export interface TestTaskListItem {
+  id: string
+  product_name: string
+  batch_number: string
+  production_date: string | null
+  expiry_date: string | null
+  specification: string | null
+  form_id: string | null
+  report_date: string | null
+  status: TestTaskStatus
+  created_at: string | null
+  results_total: number
+  results_filled: number
+}
+
+export interface TestTaskDetail {
+  id: string
+  product_name: string
+  batch_number: string
+  production_date: string | null
+  expiry_date: string | null
+  specification: string | null
+  form_id: string | null
+  report_date: string | null
+  standard_document_id: string | null
+  status: TestTaskStatus
+  created_at: string | null
+  results: TestResultItem[]
+}
+
+export interface TaskAttachment {
+  id: string
+  filename: string
+  content_type: string
+  size: number
+  source: string
+  remark: string | null
+  uploaded_by: string | null
+  created_at: string | null
+}
+
+export interface TaskReviewRecord {
+  reviewer_id: string
+  comment: string | null
+  created_at: string | null
+}
+
+// ─── 按 SOP 汇总 ───
+
+export interface SopSummaryBatch {
+  task_id: string
+  batch_number: string
+  production_date: string | null
+  expiry_date: string | null
+  result_value: number | null
+  result_text: string | null
+  is_pass: boolean
+  source: 'manual' | 'parse'
+  filled_at: string | null
+}
+
+export interface SopSummaryItem {
+  sop_no: string | null
+  item_name: string
+  category: string | null
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  batches: SopSummaryBatch[]
+}
+
+export interface QualityDashboard {
+  today: {
+    task_id: string
+    product_name: string
+    batch_number: string
+    status: string
+    filled: number
+    total: number
+    report_date: string | null
+  }[]
+  pending_review: {
+    task_id: string
+    product_name: string
+    batch_number: string
+    status: string
+    filled: number
+    total: number
+    report_date: string | null
+  }[]
+  pending_review_count: number
+  in_progress_count: number
+  tomorrow_count: number
+  recent_completed: {
+    task_id: string
+    product_name: string
+    batch_number: string
+    status: string
+    filled: number
+    total: number
+    report_date: string | null
+  }[]
+}
+
+export interface DailyReportItem {
+  serial_no: string
+  product_name: string
+  batch_number: string
+  template_path: string
+  report_id: string
+  created_at: string | null
+}
+
+// ─── 报告单流水月度汇总 ───
+
+export interface MonthlyReportDay {
+  date: string
+  count: number
+  items: DailyReportItem[]
+}
+
+export interface MonthlyReportSummary {
+  month: string
+  total: number
+  days: MonthlyReportDay[]
+}
+
+// ─── 报告模板树（GET /api/v1/quality/templates）───
+
+/** 模板未绑定 SOP 时，后端按号码相似度给出的匹配建议。 */
+export interface TemplateMatch {
+  doc_id: string
+  file_no: string
+  product_code: string
+}
+
+/** COA 模板 ↔ 标准文档（SOP）的绑定；未绑定为 null。 */
+export interface TemplateBinding {
+  sop_no: string | null
+  doc_id: string | null
+  description: string | null
+}
+
+/** 模板树节点：type=folder 为目录（含 name/children），type=template 为 .docx 文件（含 filename/path 等）。 */
+export interface TemplateNode {
+  type: 'folder' | 'template'
+  /** 目录名（type=folder）。 */
+  name?: string
+  /** 模板文件名（type=template）。 */
+  filename?: string
+  /** 相对模板根目录的路径，如 妥布霉素/3205.docx（type=template）。 */
+  path?: string
+  /** 子节点（type=folder）。 */
+  children?: TemplateNode[]
+  /** 文件大小 KB（type=template）。 */
+  size_kb?: number
+  /** 文件修改时间（epoch 秒，type=template）。 */
+  modified?: number
+  /** 占位符个数（type=template）。 */
+  placeholder_count?: number
+  /** 已绑定的 SOP；未绑定为 null（type=template）。 */
+  binding?: TemplateBinding | null
+  /** 仅在未绑定时返回的匹配建议；无建议为 null。 */
+  matched?: TemplateMatch | null
 }

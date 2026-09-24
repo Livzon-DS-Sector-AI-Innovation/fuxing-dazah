@@ -1,15 +1,14 @@
 'use client'
 
-import { Card, Descriptions, Table, Tag, Typography, Divider, Collapse, Statistic, Row, Col, Space } from 'antd'
+import { Card, Descriptions, Table, Tag, Typography, Collapse, Statistic, Row, Col, Space, theme } from 'antd'
 import {
   CheckCircleOutlined,
-  WarningOutlined,
   CloseCircleOutlined,
   ExperimentOutlined,
   FileTextOutlined,
   SafetyOutlined,
 } from '@ant-design/icons'
-import type { LcReportData, ImpurityResult, CalculatedResult } from '@/types/quality'
+import type { LcReportData, ImpurityResult, CalculatedResult, QualityStandard } from '@/types/quality'
 
 const { Title, Text } = Typography
 
@@ -30,16 +29,17 @@ function reportVal(result: CalculatedResult): string {
   if (result.name === '总杂质') {
     return toPct(result.first_percent, 2)
   }
-  // 取第一份和第二份中较大的
-  const r1 = result.rounded_first || result.first_percent
-  const r2 = result.rounded_second || result.second_percent
-  if (r2 && r2 > 0) {
+  // 取第一份和第二份中较大的（0 是合法值，不能用 || 判缺失）
+  const r1 = result.rounded_first ?? result.first_percent
+  const r2 = result.rounded_second ?? result.second_percent
+  if (r2 != null) {
     return `${r1} / ${r2}`
   }
   return String(r1)
 }
 
 export default function LcReportView({ report }: Props) {
+  const { token } = theme.useToken()
   // 整理杂质表格数据
   const impurityColumns = [
     { title: '杂质名称', dataIndex: 'name', key: 'name', width: 130 },
@@ -48,21 +48,21 @@ export default function LcReportView({ report }: Props) {
       dataIndex: 'first_percent',
       key: 'first',
       width: 100,
-      render: (_: any, r: ImpurityResult) => toPct(r.first_percent, 4),
+      render: (_: unknown, r: ImpurityResult) => toPct(r.first_percent, 4),
     },
     {
       title: '第二份(%)',
       dataIndex: 'second_percent',
       key: 'second',
       width: 100,
-      render: (_: any, r: ImpurityResult) => toPct(r.second_percent, 4),
+      render: (_: unknown, r: ImpurityResult) => toPct(r.second_percent, 4),
     },
     {
       title: '限度(%)',
       dataIndex: 'limit',
       key: 'limit',
       width: 100,
-      render: (_: any, r: ImpurityResult) => toPct(r.limit, 4),
+      render: (_: unknown, r: ImpurityResult) => toPct(r.limit, 4),
     },
     {
       title: '判定',
@@ -71,14 +71,6 @@ export default function LcReportView({ report }: Props) {
       width: 70,
       render: (v: boolean) =>
         v ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
-    },
-    {
-      title: 'OOT',
-      dataIndex: 'is_oot',
-      key: 'oot',
-      width: 60,
-      render: (v: boolean) =>
-        v ? <Tag color="warning">OOT</Tag> : null,
     },
   ]
 
@@ -90,24 +82,10 @@ export default function LcReportView({ report }: Props) {
       dataIndex: 'limit',
       key: 'limit',
       width: 120,
-      render: (_: any, s: any) => {
+      render: (_: unknown, s: QualityStandard) => {
         const op = s.operator || '≤'
         return s.limit ? `${op} ${toPct(s.limit)}` : '-'
       },
-    },
-    {
-      title: 'OOT(HAF)',
-      dataIndex: 'oot_haf',
-      key: 'oot_haf',
-      width: 100,
-      render: (v: number | null) => (v ? toPct(v) : '-'),
-    },
-    {
-      title: 'OOT(HAA)',
-      dataIndex: 'oot_haa',
-      key: 'oot_haa',
-      width: 100,
-      render: (v: number | null) => (v ? toPct(v) : '-'),
     },
   ]
 
@@ -132,22 +110,12 @@ export default function LcReportView({ report }: Props) {
             <Statistic
               title="整体判定"
               value={report.all_pass ? '全部合格' : '存在不合格'}
-              valueStyle={{ color: report.all_pass ? '#52c41a' : '#ff4d4f' }}
+              valueStyle={{ color: report.all_pass ? token.colorSuccess : token.colorError }}
               prefix={report.all_pass ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
             />
           </Card>
         </Col>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic
-              title="OOT 状态"
-              value={report.has_oot ? '存在超趋势' : '无超趋势'}
-              valueStyle={{ color: report.has_oot ? '#faad14' : '#52c41a' }}
-              prefix={report.has_oot ? <WarningOutlined /> : <CheckCircleOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col span={8}>
+        <Col span={16}>
           <Card size="small">
             <Statistic
               title="杂质项目"
