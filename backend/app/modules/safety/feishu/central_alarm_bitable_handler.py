@@ -195,7 +195,16 @@ async def ensure_central_alarm_bitable_subscribed() -> bool:
 
     飞书要求先订阅文档，WebSocket 长连接才会推送
     drive.file.bitable_record_changed_v1 变更事件。
+
+    订阅闸门（收尾票第 0 步，2026-09-24）：事件镜像停用（直读模式）时不
+    再订阅——启动/重连/配置变更重跑 ensure 不会把已退订的文档订回来
+    （key_risk_op/chemical/contractor 同口径；退订由收尾票统一执行）。
     """
+    from app.modules.safety.service.central_alarm import config as ca_config
+
+    if not ca_config.legacy_event_sync_active():
+        logger.info("中控报警直读模式：跳过文档事件订阅")
+        return False
     if not central_alarm_app_token():
         logger.info("中控报警 Bitable app_token 未配置，跳过订阅")
         return False

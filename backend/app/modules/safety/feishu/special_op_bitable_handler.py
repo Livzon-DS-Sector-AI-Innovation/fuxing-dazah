@@ -181,7 +181,14 @@ async def ensure_special_op_bitable_subscribed() -> bool:
 
     实时同步前置条件：WebSocket 长连接只会推送「已订阅文档」的变更事件，
     未订阅的文档（app_token）不会推送 drive.file.bitable_record_changed_v1。
+
+    订阅闸门（收尾票第 0 步，2026-09-24）：事件镜像停用（直读模式）时不
+    再订阅——启动/重连/配置变更重跑 ensure 不会把已退订的文档订回来
+    （key_risk_op/chemical/contractor 同口径；退订由收尾票统一执行）。
     """
+    if not direct_config.legacy_event_sync_active():
+        logger.info("特殊作业直读模式：跳过文档事件订阅")
+        return False
     try:
         import httpx
 

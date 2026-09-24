@@ -168,10 +168,20 @@ async def ensure_cert_bitable_subscribed() -> bool:
     app_token 从配置中心 store 读取（``store.get_connection("cert", kind)``），
     启用且非空才订阅，去重后最多 2 次调用。全部成功返回 True。
 
+    订阅闸门（收尾票第 0 步，2026-09-24）：事件镜像停用（直读模式）时不
+    再订阅——启动/重连/配置变更重跑 ensure 不会把已退订的文档订回来
+    （key_risk_op/chemical/contractor 同口径；退订由收尾票统一执行）。
+
     注意：wiki 挂载文档的 drive 订阅必须用底层 Base token——订阅辅助
     （feishu/subscribe.py）会经 bitable 元信息回显自动解析，配置存 wiki token
     或 Base token 均可。
     """
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+
+    if not cert_direct_config.legacy_event_sync_active():
+        logger.info("持证台账直读模式：跳过文档事件订阅")
+        return False
+
     from app.modules.safety.bitable_config.store import store
 
     app_tokens: list[str] = []

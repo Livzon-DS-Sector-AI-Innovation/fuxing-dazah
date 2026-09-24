@@ -1933,9 +1933,20 @@ async def ensure_bitable_subscribed() -> bool:
     飞书要求：在接收 Bitable 事件之前，必须先调用 /drive/v1/files/:file_token/subscribe
     订阅文档事件。此订阅持久存在于飞书侧，只需调用一次，但每次启动时重试无害。
 
+    订阅闸门（收尾票第 0 步，2026-09-24）：隐患事件同步停用
+    （SAFETY_HAZARD_EVENT_SYNC_ENABLED=false，事件入口同款开关）时不再
+    订阅——启动/重连/配置变更重跑 ensure 不会把已退订的文档订回来
+    （key_risk_op/chemical/contractor 同口径；退订由收尾票统一执行）。
+
     注意：使用直接 HTTP 调用（不依赖 lark SDK）以确保在 WS 连接上下文中可靠执行。
     延迟读取 store（非模块级缓存），防止启动时序问题；改表后重订阅天然携带新值。
     """
+    from app.modules.safety.service.hazard_direct.config import event_sync_enabled
+
+    if not event_sync_enabled():
+        logger.info("隐患事件同步已关闭，跳过文档事件订阅（直读形态）")
+        return False
+
     file_token = _hazard_app_token()
     if not file_token:
         logger.warning("Bitable file_token 未配置（store 无 hazard 连接），跳过文档事件订阅")
