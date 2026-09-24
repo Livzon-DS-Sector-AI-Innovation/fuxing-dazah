@@ -7,6 +7,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+from app.core.time import APP_TZ
 from app.core.time import today as _app_today
 from app.modules.quality import storage as quality_storage
 from app.modules.quality.feishu import event_client
@@ -273,6 +274,37 @@ async def handle_fill_command(event: dict) -> None:
             await send_chat_text(
                 chat_id,
                 "📄 今日报告单（流水号｜产品｜批号）：" + ("\n" + "\n".join(lines) if lines else " 暂无"),
+            )
+            return
+
+        # 一句话查询：本月流水（月度汇总，按出报日分组）
+        if "本月流水" in kw or ("流水" in kw and ("月" in kw or "汇总" in kw)):
+            from app.core.database import async_session_factory
+            from app.modules.quality.repository import list_report_records_between
+
+            today_d = _app_today()
+            m_start = datetime(today_d.year, today_d.month, 1, tzinfo=APP_TZ)
+            if today_d.month == 12:
+                m_end = datetime(today_d.year + 1, 1, 1, tzinfo=APP_TZ)
+            else:
+                m_end = datetime(today_d.year, today_d.month + 1, 1, tzinfo=APP_TZ)
+            async with async_session_factory() as rdb:
+                items = await list_report_records_between(rdb, m_start, m_end)
+            if not items:
+                await send_chat_text(chat_id, f"📄 本月（{today_d:%Y-%m}）暂无报告单流水")
+                return
+            by_day: dict[str, list] = {}
+            for it in items:
+                by_day.setdefault(it.created_at.astimezone(APP_TZ).strftime("%m-%d"), []).append(it)
+            lines = []
+            for d, lst in sorted(by_day.items()):
+                serials = sorted(s.serial_no for s in lst if s.serial_no)
+                rng = (f"（{serials[0]}~{serials[-1]}）" if len(serials) > 1
+                       else f"（{serials[0]}）" if serials else "")
+                lines.append(f"- {d}: {len(lst)} 份{rng}")
+            await send_chat_text(
+                chat_id,
+                f"📄 本月流水（{today_d:%Y-%m}）共 {len(items)} 份、{len(by_day)} 个出报日：\n" + "\n".join(lines),
             )
             return
 
