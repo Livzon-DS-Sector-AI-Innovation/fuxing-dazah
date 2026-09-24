@@ -5,14 +5,15 @@
 - 统计行：`·` 项目符号，关键数字 **加粗**
 - 报警明细：**按部门分组**（部门标题 @负责人一次，条目内不重复），每条含
   ① 报警原因(Cause)、② 原因分析(AI)、③ 整改建议，并附多维表格「查看记录」链接
-- 日报/周报均不渲染 AI 汇总分析，无文末整改提醒（用户要求）
+- 日报/月报均不渲染 AI 汇总分析，无文末整改提醒（用户要求）
 
 结构（对接督办通报 hazard_supervision.build_bulletin_content 的分组风格）：
 - 日报：标题 → 生成时间 → 📊 当日报警统计（报警类型/性质合并为「报警类型」、
   涉及部门）→ 部门分组报警明细（每部门分隔线 + @负责人）→ 📨 每日私发推送
   （部门 → 收件人名单，与私发任务同源；开关关闭/无收件人时整块省略）
-- 周报：标题 → 周起止 → 📊 本周报警统计 → 部门分组明细（含重复报警提示/
-  @负责人跟进）
+- 月报（原周报，2026-09-22 改造）：标题 → 月起止 → 📊 上月报警统计 →
+  🔁 重复/集中问题 → 🧠 AI 月度分析（重复问题与原因/原因归纳/整改建议，
+  只围绕这三件事，防跑题）
 
 用户定制（2026-08-18）：
 - 「人工原因」→「报警原因」；「AI 分析」→「原因分析（AI）」；「整改方向」→「整改建议」
@@ -22,6 +23,16 @@
 - 每条记录附「查看记录」原文链接（参考督办通报 _record_link）
 - 统计：报警性质+报警类型合并为「报警类型」，删 AI 维度，部门分布改「涉及部门」
 - 周报重点：同一地点重复报警未采取措施 + @负责人及时跟进
+
+用户定制（2026-09-21）：
+- 周报不再渲染「各部门报警明细与整改要求」板块（明细只在日报）
+- 删除「AI 分析覆盖」统计行
+
+用户定制（2026-09-22）：
+- 周报改月报：每月 1 日 08:30 出上一自然月报告，投安全速递总卡格子 fire_alarm_monthly
+- AI 月度分析只围绕重复问题、原因、整改建议三板块（recurring_issues 带
+  cause/suggestion、cause_summary、rectification_suggestions），
+  删除典型问题/趋势板块（用户要求分析不要偏题）
 """
 
 from __future__ import annotations
@@ -32,7 +43,7 @@ from typing import Any
 
 from app.modules.safety.service.fire_alarm.aggregator import (
     FireAlarmDailyAgg,
-    FireAlarmWeeklyAgg,
+    FireAlarmMonthlyAgg,
 )
 
 DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
@@ -49,7 +60,7 @@ _DIMENSION_CN = {
 _NUM_MARKS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 
 TITLE = "🔥 **消防报警日报**"
-TITLE_WEEKLY = "🔥 **消防报警周报**"
+TITLE_MONTHLY = "🔥 **消防报警月报**"
 
 # 消防报警多维表格（配置中心 store 覆盖；未启用/缺失时回退以下历史硬编码值，
 # 与 bitable_config/registry.py fire_alarm/alarm 默认连接一致）
@@ -70,6 +81,11 @@ def _at(name: str | None, person_open_id: dict[str, str]) -> str:
 def _dimension_tag(dimension: str | None) -> str:
     """AI 维度 → 中文；未分析显示「未分析」。"""
     return _DIMENSION_CN.get(dimension or "", "未分析")
+
+
+def dimension_cn(dimension: str) -> str:
+    """AI 维度英文枚举 → 中文；未识别原样返回（概览统计行用，不做「未分析」兜底）。"""
+    return _DIMENSION_CN.get(dimension, dimension)
 
 
 def _fmt_dist(dist: dict[str, int]) -> str:
@@ -286,40 +302,37 @@ def render_daily_report(
     return "\n".join(parts)
 
 
-def render_weekly_report(
-    agg: FireAlarmWeeklyAgg,
+def render_monthly_report(
+    agg: FireAlarmMonthlyAgg,
     person_open_id: dict[str, str],
     ai_summary: dict[str, Any] | None = None,
 ) -> str:
-    """渲染周报 Markdown。
+    """渲染月报 Markdown（2026-09-22 由周报改造）。
 
-    结构: 标题 → 周起止 → 📊 本周报警统计 → 部门分组明细（含重复报警重点提示）。
+    结构: 标题 → 月起止 → 📊 上月报警统计 → 🔁 重复/集中问题 →
+    🧠 AI 月度分析（只围绕重复问题/原因/整改建议）→ 文末提醒
+    （用户定制 2026-09-21：不渲染部门明细板块与 AI 分析覆盖行；
+    2026-09-22：AI 板块聚焦三件事，删典型问题/趋势）。
 
     Args:
-        agg: 周报聚合结果
+        agg: 月报聚合结果
         person_open_id: 部门负责人姓名 → feishu open_id
-        ai_summary: 保留以兼容调用方签名；周级 AI 汇总已删除
+        ai_summary: 月度 AI 分析（recurring_issues/cause_summary/
+            rectification_suggestions）；None 省略该板块
     """
     parts: list[str] = [
-        f"{TITLE_WEEKLY} · {agg.week_start.isoformat()} ~ {agg.week_end.isoformat()}",
-        "📅 周一~周日",
+        f"{TITLE_MONTHLY} · {agg.month_start.isoformat()} ~ {agg.month_end.isoformat()}",
+        "📅 自然月（1 日~月末）",
         "",
     ]
-    analyzed = sum(1 for r in agg.records if r.ai_analyzed_at is not None)
     stat_rows = [
         f"报警总数：**{agg.total} 起**",
         f"报警类型：{_fmt_dist(agg.type_distribution)}、{_fmt_dist(agg.nature_distribution)}",
         f"涉及部门：{_fmt_dist(agg.department_distribution)}",
     ]
-    if agg.total:
-        unanalyzed = agg.total - analyzed
-        stat_rows.append(
-            f"AI 分析覆盖：{analyzed}/{agg.total} 条已分析（**{unanalyzed} 条未分析**）"
-            if unanalyzed else f"AI 分析覆盖：{analyzed}/{agg.total} 条已分析"
-        )
-    parts.extend(_stat_block("📊 本周报警统计", stat_rows))
+    parts.extend(_stat_block("📊 上月报警统计", stat_rows))
 
-    # 周报重点：同一地点重复报警未措施 + @负责人跟进
+    # 重复/集中问题（数据侧确定性识别，count>=2）+ @负责人跟进
     if agg.recurring_patterns:
         parts.extend([
             DIVIDER,
@@ -343,53 +356,66 @@ def render_weekly_report(
         # 无重复/集中问题：不显示重复块标题，仅提示一行
         parts.extend([
             DIVIDER,
-            "（本周暂无明显重复/集中问题）",
+            "（上月暂无明显重复/集中问题）",
             "",
         ])
 
-    # 周级 AI 分析（ai_summary 非空才渲染：典型问题/系统性建议/趋势）
+    # AI 月度分析（ai_summary 非空才渲染：重复问题与原因/原因归纳/整改建议）
     if ai_summary:
-        parts.extend([
-            DIVIDER,
-            "🧠 **AI 周级分析**",
-            DIVIDER,
-        ])
-        # AI 字段守卫：非 list 或条目非 dict 视为格式异常 → 降级省略该板块
-        malformed = False
-        typical_bad, typical = _ai_items(ai_summary, "typical_issues")
-        malformed |= typical_bad
-        if typical:
-            parts.extend(["", "**🔠 典型问题（高风险）**", ""])
-            for i, issue in enumerate(typical, 1):
-                parts.append(f"{i}. {issue.get('title', '?')}：{issue.get('evidence', '')}")
-            parts.append("")
-        systemic_bad, systemic = _ai_items(ai_summary, "systemic_suggestions")
-        malformed |= systemic_bad
-        if systemic:
-            parts.append("**✅ 系统性整改建议**")
-            for i, sug in enumerate(systemic, 1):
-                parts.append(f"{i}. {sug.get('issue', '?')}：{sug.get('suggestion', '')}")
-            parts.append("")
-        trend = ai_summary.get("trend")
-        if isinstance(trend, dict) and trend:
-            parts.append(f"**📈 趋势**：{trend.get('summary', '')}；趋势：**{trend.get('trend', '')}**")
-            parts.append("")
-        elif trend not in (None, {}, ""):
-            malformed = True
-        if malformed:
-            parts.append("（AI 输出格式异常，该板块已省略）")
-            parts.append("")
-    else:
-        # 无 AI 汇总时不显示该块（需求：周报重点仅当有重复报警才提示）
-        pass
+        parts.extend(_render_monthly_ai_block(ai_summary))
 
-    parts.extend([
-        DIVIDER,
-        "**各部门报警明细与整改要求**",
-    ])
-    grouped = _group_records_by_dept(agg.records)
-    parts.extend(_render_dept_blocks(grouped, person_open_id, agg.dept_leader_names))
-    parts.append("")
-    parts.append(DIVIDER)
-    parts.append("**各部门负责人请及时跟进并落实整改措施。**")
+    parts.extend(["", DIVIDER, "**各部门负责人请及时跟进并落实整改措施。**"])
     return "\n".join(parts)
+
+
+def _render_monthly_ai_block(ai_summary: dict[str, Any]) -> list[str]:
+    """🧠 AI 月度分析板块：重复问题与原因 / 原因归纳 / 整改建议。
+
+    字段守卫：list 字段非 list 视为格式异常（降级省略板块），条目非 dict 跳过；
+    cause_summary 非 str 视为格式异常。全部板块为空时不输出标题。
+    """
+    malformed = False
+    recurring_bad, recurring = _ai_items(ai_summary, "recurring_issues")
+    malformed |= recurring_bad
+    cause_summary = ai_summary.get("cause_summary")
+    if cause_summary is not None and not isinstance(cause_summary, str):
+        malformed = True
+        cause_summary = None
+    suggest_bad, suggestions = _ai_items(ai_summary, "rectification_suggestions")
+    malformed |= suggest_bad
+
+    if not recurring and not cause_summary and not suggestions:
+        return []
+
+    parts = [DIVIDER, "🧠 **AI 月度分析**", DIVIDER]
+    if recurring:
+        parts.extend(["", "**🔁 重复问题与原因**", ""])
+        for i, issue in enumerate(recurring, 1):
+            pattern = issue.get("pattern", "?")
+            count = issue.get("count", "?")
+            line = f"{_seq(i)} {pattern}（**{count} 次**）"
+            cause = issue.get("cause") or ""
+            suggestion = issue.get("suggestion") or ""
+            if cause:
+                line += f"\n　原因：{cause}"
+            if suggestion:
+                line += f"\n　整改：{suggestion}"
+            parts.append(line)
+        parts.append("")
+    if cause_summary:
+        parts.extend(["**📌 原因归纳**", "", cause_summary, ""])
+    if suggestions:
+        parts.append("**✅ 整改建议**")
+        for i, sug in enumerate(suggestions, 1):
+            departments = sug.get("departments")
+            owner = (
+                f"（牵头：{'、'.join(departments)}）"
+                if isinstance(departments, list) and departments
+                else ""
+            )
+            parts.append(f"{i}. {sug.get('issue', '?')}：{sug.get('suggestion', '')}{owner}")
+        parts.append("")
+    if malformed:
+        parts.append("（AI 输出格式异常，异常部分已省略）")
+        parts.append("")
+    return parts

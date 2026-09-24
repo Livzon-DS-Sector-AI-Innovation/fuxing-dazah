@@ -79,7 +79,7 @@ TOOL_OVERRIDE_OH_CONCLUSION = (
 # 消防报警分析
 TOOL_QUERY_FIRE_ALARMS = "query_fire_alarms"
 TOOL_GENERATE_FIRE_ALARM_DAILY_REPORT = "generate_fire_alarm_daily_report"
-TOOL_GENERATE_FIRE_ALARM_WEEKLY_REPORT = "generate_fire_alarm_weekly_report"
+TOOL_GENERATE_FIRE_ALARM_MONTHLY_REPORT = "generate_fire_alarm_monthly_report"
 # 中控报警分析
 TOOL_QUERY_CENTRAL_ALARMS = "query_central_alarms"
 TOOL_GENERATE_CENTRAL_ALARM_DAILY_REPORT = "generate_central_alarm_daily_report"
@@ -197,11 +197,11 @@ _OH_WRITE_TOOLS_DEPT_LEADER: frozenset[str] = frozenset(
     }
 )
 
-# 消防报警分析写工具集合（生成日报/周报：触发 AI 分析并回写记录，需用户确认；仅 admin/leader）
+# 消防报警分析写工具集合（生成日报/月报：触发 AI 分析并回写记录，需用户确认；仅 admin/leader）
 _FIRE_ALARM_WRITE_TOOLS: frozenset[str] = frozenset(
     {
         TOOL_GENERATE_FIRE_ALARM_DAILY_REPORT,
-        TOOL_GENERATE_FIRE_ALARM_WEEKLY_REPORT,
+        TOOL_GENERATE_FIRE_ALARM_MONTHLY_REPORT,
     }
 )
 

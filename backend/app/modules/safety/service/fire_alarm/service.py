@@ -1,10 +1,10 @@
 """消防报警 FireAlarmService — Bitable 全量同步（ticket 02）+ 记录查询/统计（ticket 03）
-+ AI 分析日报（ticket 05）/ 周报（ticket 06）生成与推送。
++ AI 分析日报（ticket 05）/ 月报生成与推送（原 ticket 06 周报，2026-09-22 改月报）。
 
 生成流程（backend-design.md §2.2.7）：
 - 日报：聚合 → 逐条 AI 回写（flush + re-fetch + commit）→ 汇总 AI → 渲染 → 推送
-- 周报：自然周聚合（复用记录上已有的日分析结果，不重复逐条 AI 调用）
-  → 周级汇总 AI → 渲染 → 推送
+- 月报：自然月聚合（复用记录上已有的日分析结果，不重复逐条 AI 调用）
+  → 月级汇总 AI（重复问题/原因/整改建议）→ 渲染 → 推送
 AI 任何环节失败降级，不阻塞报告生成；推送 env 未配置则跳过。
 """
 
@@ -28,14 +28,16 @@ from app.modules.safety.service.fire_alarm import reader as fire_reader
 from app.modules.safety.service.fire_alarm import writeback as fire_writeback
 from app.modules.safety.service.fire_alarm.aggregator import (
     aggregate_daily,
-    aggregate_weekly,
+    aggregate_monthly,
+    get_natural_month_range,
     get_natural_week_range,
 )
 from app.modules.safety.service.fire_alarm.analyst import FireAlarmAnalyst
 from app.modules.safety.service.fire_alarm.bitable_mapper import map_bitable_fields
 from app.modules.safety.service.fire_alarm.renderer import (
+    dimension_cn,
     render_daily_report,
-    render_weekly_report,
+    render_monthly_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -374,6 +376,34 @@ class FireAlarmService:
             ).all()
         )
 
+    async def _get_records_by_month(
+        self, month_start: date, month_end: date,
+    ) -> list[Any]:
+        """按北京时间自然月窗口查询月报警记录（1 日 00:00 ~ 月末 24:00 北京时间）。"""
+        if fire_config.direct_enabled():
+            return await self._direct_reader().get_records_by_month(
+                month_start, month_end
+            )
+        utc_start = (
+            datetime.combine(month_start, time.min, tzinfo=UTC)
+            - timedelta(hours=8)  # 北京时间 1 日 00:00 = UTC 前日 16:00
+        )
+        utc_end = (
+            datetime.combine(month_end + timedelta(days=1), time.min, tzinfo=UTC)
+            - timedelta(hours=8)
+        )
+        return list(
+            (
+                await self.session.scalars(
+                    select(FireAlarmRecord).where(
+                        FireAlarmRecord.is_deleted == False,  # noqa: E712
+                        FireAlarmRecord.alarm_time >= utc_start,
+                        FireAlarmRecord.alarm_time < utc_end,
+                    )
+                )
+            ).all()
+        )
+
     # ── 日报生成与推送 ──
 
     async def generate_daily_report(
@@ -537,55 +567,65 @@ class FireAlarmService:
             records_analyzed=_records_analyzed_ids(list(agg.records)),
         )
 
-    # ── 周报生成与推送 ──
+    # ── 月报生成与推送 ──
 
-    async def generate_weekly_report(
-        self, week_end: date | None = None, *,
+    async def generate_monthly_report(
+        self, month_end: date | None = None, *,
         push: bool = True, channel: str = "web",
+        chat_id: str | None = None,
     ) -> FireAlarmReportResponse:
-        """生成自然周（周一~周日）消防报警分析报告。
+        """生成自然月（1 日~月末）消防报警分析月报。
 
         流程（backend-design.md §2.2.7）:
-          自然周聚合 → 周级汇总 AI（复用记录上已有的日分析结果 ai_dimension/
-          ai_reason_analysis，不重复逐条 AI 调用）→ @提及解析 → 渲染 → 推送。
+          自然月聚合 → 月级汇总 AI（复用记录上已有的日分析结果 ai_dimension/
+          ai_reason_analysis，不重复逐条 AI 调用；分析围绕重复问题/原因/整改建议）
+          → @提及解析 → 渲染 → 推送。
 
         Args:
-            week_end: 周末日期（周日），默认今天（北京时间）所在自然周的周日
+            month_end: 月内任一日期（取其所在自然月）；缺省 = 上一完整自然月
+                （上月）——如 9 月任何一天生成默认都是 8/1~8/31，
+                与「每月 1 日 08:30 分析上月整月」的调度语义一致
             push: 是否推送（False 用于 Agent 直接返回报告）
             channel: 审计渠道（web/feishu/system）
+            chat_id: 独立群卡推送目标（总卡开启时不使用；仅调度器传入）
 
         Returns:
-            FireAlarmReportResponse（report_kind="weekly"；AI 失败退化为纯数据汇总；
+            FireAlarmReportResponse（report_kind="monthly"；AI 失败退化为纯数据汇总；
             推送未配置/失败时 push_results 标记 skipped/error）
         """
-        ref = week_end or _bj_today()
-        week_start, week_end_resolved = get_natural_week_range(ref)
-        records = await self._get_records_by_week(week_start, week_end_resolved)
-        agg = aggregate_weekly(records, week_start, week_end_resolved)
+        ref = month_end or _prev_month_last_day()
+        month_start, month_end_resolved = get_natural_month_range(ref)
+        records = await self._get_records_by_month(month_start, month_end_resolved)
+        agg = aggregate_monthly(records, month_start, month_end_resolved)
 
-        # 周级汇总 AI（失败返回 None，renderer 省略 AI 块；不逐条调用）
-        ai_summary = await self.analyst.analyze_weekly_summary(
+        # 月级汇总 AI（失败返回 None，renderer 省略 AI 块；不逐条调用）
+        ai_summary = await self.analyst.analyze_monthly_summary(
             agg, channel=channel,
         )
 
         # @提及解析（报警部门负责人 → open_id；解析失败退化为纯文本）
         person_open_id = await self._resolve_dept_leader_open_ids(agg.dept_leader_names)
 
-        markdown = render_weekly_report(agg, person_open_id, ai_summary)
+        markdown = render_monthly_report(agg, person_open_id, ai_summary)
 
-        # 推送（push=False 或 env 未配置 → skipped）
-        push_results = await self._maybe_push(
-            title=(
-                f"消防报警周报 - {week_start.strftime('%m/%d')}"
-                f"~{week_end_resolved.strftime('%m/%d')}"
-            ),
-            content=markdown, push=push,
-        )
+        # 推送：总卡开启 → 只投「安全速递」格子（投递到发送日总卡，替代独立群卡）；
+        # 关闭 → 保持旧行为发独立群卡（chat_id 由调度器传入，无则 skipped）
+        from app.modules.safety.feishu.daily_digest import digest_enabled
+
+        if push and digest_enabled():
+            push_results = await self._upsert_monthly_digest_cell(
+                month_start, month_end_resolved, markdown, agg,
+            )
+        else:
+            push_results = await self._maybe_push(
+                title=f"消防报警月报 - {month_start.strftime('%Y-%m')}",
+                content=markdown, push=push, chat_id=chat_id,
+            )
 
         return FireAlarmReportResponse(
-            report_kind="weekly",
-            target_date=week_end_resolved,
-            week_start=week_start,
+            report_kind="monthly",
+            target_date=month_end_resolved,
+            month_start=month_start,
             total=agg.total,
             markdown_report=markdown,
             push_results=push_results,
@@ -616,7 +656,40 @@ class FireAlarmService:
                 title="消防报警日报",
                 stats=f"今日报警 **{agg.total}** 起",
                 zone=" ｜ ".join(
-                    [f"{k} {v}" for k, v in dim_top]
+                    [f"{dimension_cn(k)} {v}" for k, v in dim_top]
+                    + [f"{d} {n} 起" for d, n in dept_top]
+                )[:100],
+                detail=markdown,
+            ),
+        )
+        return [{"chat_id": DIGEST_CHAT_ID, "success": ok}] + (
+            [] if ok else [{"error": "安全速递总卡投递失败"}]
+        )
+
+    async def _upsert_monthly_digest_cell(
+        self, month_start: date, month_end: date, markdown: str, agg: Any,
+    ) -> list[dict[str, Any]]:
+        """把月报概览+明细投递为「安全速递」总卡格子（投到发送日总卡）。"""
+        from collections import Counter
+
+        from app.modules.safety.feishu.daily_digest import (
+            DIGEST_CHAT_ID,
+            DigestCell,
+            upsert_daily_digest,
+        )
+
+        dim_top = sorted(agg.dimension_distribution.items(), key=lambda x: -x[1])[:3]
+        dept_top = Counter(r.department or "?" for r in agg.records).most_common(3)
+        ok = await upsert_daily_digest(
+            _bj_today(),
+            "fire_alarm_monthly",
+            DigestCell(
+                tag_color="red",
+                tag_text="消防报警",
+                title=f"消防报警月报 {month_start.strftime('%Y/%m')}",
+                stats=f"上月报警 **{agg.total}** 起",
+                zone=" ｜ ".join(
+                    [f"{dimension_cn(k)} {v}" for k, v in dim_top]
                     + [f"{d} {n} 起" for d, n in dept_top]
                 )[:100],
                 detail=markdown,
@@ -686,6 +759,12 @@ class FireAlarmService:
 def _bj_today() -> date:
     """北京时间今天（UTC+8）。"""
     return (datetime.now(UTC) + timedelta(hours=8)).date()
+
+
+def _prev_month_last_day(today: date | None = None) -> date:
+    """上月最后一天（月报默认口径：1 号分析上月整月，跨年可用）。"""
+    today = today or _bj_today()
+    return today.replace(day=1) - timedelta(days=1)
 
 
 def _bj(dt: datetime | None) -> str:
@@ -823,24 +902,29 @@ async def run_daily_fire_alarm_dm(
         return await send_daily_alarm_dms(service.session, records=dm_records)
 
 
-async def run_weekly_fire_alarm_analysis(
-    week_end: date | None = None,
+async def run_monthly_fire_alarm_analysis(
+    month_end: date | None = None,
+    *,
+    chat_id: str | None = None,
 ) -> FireAlarmReportResponse | None:
-    """定时任务入口：生成并推送周报到默认群聊（scheduler-ready，本期不注册）。
+    """定时任务入口（每月 1 日 08:30）：生成并推送上一自然月（上月整月）月报。
 
     - 独立 async_session_factory session，channel="system"，push=True
-    - 失败 try/except 不抛，记录日志返回 None（与 run_daily_fire_alarm_analysis 同模式）
+    - month_end 缺省 = 上一完整自然月（上月）最后一天：9 月 1 日触发 →
+      8/1~8/31；月中手动补跑同样默认上月，不会误取当月不完整数据；
+      推送默认投「安全速递」总卡格子，总卡关闭时发独立群卡（chat_id 由调度器传入）
+    - 失败 try/except 不抛，记录日志返回 None；调度器据 None 标 failed 走当日补发重试
     """
     from app.core.database import async_session_factory
 
     try:
         async with async_session_factory() as session:
             service = FireAlarmService(session)
-            result = await service.generate_weekly_report(
-                week_end=week_end, push=True, channel="system",
+            result = await service.generate_monthly_report(
+                month_end=month_end, push=True, channel="system", chat_id=chat_id,
             )
             await session.commit()
             return result
     except Exception:
-        logger.exception("消防报警周报任务失败")
+        logger.exception("消防报警月报任务失败")
         return None

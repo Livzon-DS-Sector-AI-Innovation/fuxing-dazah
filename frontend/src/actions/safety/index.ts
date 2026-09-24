@@ -74,12 +74,12 @@ import type {
   ContractorAdmissionStats,
   // fire alarm（消防报警分析）
   FireAlarmDailyReportRequest,
+  FireAlarmMonthlyReportRequest,
   FireAlarmQueryParams,
   FireAlarmRecord,
   FireAlarmReportResponse,
   FireAlarmStats,
   FireAlarmSyncResult,
-  FireAlarmWeeklyReportRequest,
   // central alarm（中控报警分析）
   CentralAlarmDailyReportRequest,
   CentralAlarmQueryParams,
@@ -1573,9 +1573,9 @@ export async function generateFireAlarmDailyReport(data: FireAlarmDailyReportReq
   return response
 }
 
-/** 生成周报：周级聚合 + 重复/集中问题识别 + 推送；成功后同样刷新页面 */
-export async function generateFireAlarmWeeklyReport(data: FireAlarmWeeklyReportRequest = {}) {
-  const response = await fetchApi<FireAlarmReportResponse>('/safety/fire-alarms/weekly-report/generate', {
+/** 生成月报：月级聚合 + 重复问题/原因/整改建议分析 + 推送；成功后同样刷新页面 */
+export async function generateFireAlarmMonthlyReport(data: FireAlarmMonthlyReportRequest = {}) {
+  const response = await fetchApi<FireAlarmReportResponse>('/safety/fire-alarms/monthly-report/generate', {
     method: 'POST',
     body: JSON.stringify(data),
   })

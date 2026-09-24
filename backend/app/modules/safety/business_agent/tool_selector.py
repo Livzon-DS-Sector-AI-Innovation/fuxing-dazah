@@ -42,7 +42,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     ],
     "fire_alarm": [
         "query_fire_alarms",
-        "generate_fire_alarm_daily_report", "generate_fire_alarm_weekly_report",
+        "generate_fire_alarm_daily_report", "generate_fire_alarm_monthly_report",
     ],
     "central_alarm": [
         "query_central_alarms",

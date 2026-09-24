@@ -15,7 +15,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchFireAlarmRecords, fetchFireAlarmStats } from '@/lib/api/safety/fire-alarm'
 import {
   generateFireAlarmDailyReport,
-  generateFireAlarmWeeklyReport,
+  generateFireAlarmMonthlyReport,
   syncFireAlarmData,
 } from '@/actions/safety'
 import type {
@@ -109,7 +109,7 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
   // ── 操作 ──
   const [syncing, setSyncing] = useState(false)
   const [generatingDaily, setGeneratingDaily] = useState(false)
-  const [generatingWeekly, setGeneratingWeekly] = useState(false)
+  const [generatingMonthly, setGeneratingMonthly] = useState(false)
 
   // ── 弹窗 ──
   const [detailOpen, setDetailOpen] = useState(false)
@@ -175,7 +175,7 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
     }
   }
 
-  // ── 操作：生成日报/周报（同构流程，仅入口与参数不同）──
+  // ── 操作：生成日报/月报（同构流程，仅入口与参数不同）──
   const summarizePush = (results: FireAlarmPushResult[] | undefined): string => {
     if (!results || results.length === 0) return '未配置推送目标，已跳过推送'
     const ok = results.filter((r) => r.success).length
@@ -188,15 +188,15 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
     return '推送失败'
   }
 
-  const handleGenerate = async (kind: 'daily' | 'weekly') => {
-    const setGenerating = kind === 'daily' ? setGeneratingDaily : setGeneratingWeekly
-    const label = kind === 'daily' ? '日报' : '周报'
+  const handleGenerate = async (kind: 'daily' | 'monthly') => {
+    const setGenerating = kind === 'daily' ? setGeneratingDaily : setGeneratingMonthly
+    const label = kind === 'daily' ? '日报' : '月报'
     setGenerating(true)
     message.loading({ content: 'AI 分析中，报警较多时可能需要 1-2 分钟…', key: 'fire-alarm-gen' })
     try {
       const res = kind === 'daily'
         ? await generateFireAlarmDailyReport({})
-        : await generateFireAlarmWeeklyReport({})
+        : await generateFireAlarmMonthlyReport({})
       if (res.code === 200 && res.data) {
         message.destroy('fire-alarm-gen')
         message.success(`${label}已生成 · ${summarizePush(res.data.push_results)}`)
@@ -351,7 +351,7 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
         <div>
           <div style={{ fontSize: 22, fontWeight: 600, color: T.ink }}>消防报警分析</div>
           <div style={{ fontSize: 13, color: T.slate, marginTop: 2 }}>
-            飞书多维表格数据同步 · AI 二次分析 · 日报/周报推送
+            飞书多维表格数据同步 · AI 二次分析 · 日报/月报推送
           </div>
         </div>
         <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
@@ -375,8 +375,8 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
             size="small" style={{ borderRadius: 6 }}>同步飞书</Button>
           <Button type="primary" icon={<SendOutlined />} onClick={() => handleGenerate('daily')} loading={generatingDaily}
             size="small" style={{ borderRadius: 6, fontWeight: 500, background: T.primary }}>生成日报</Button>
-          <Button icon={<FileTextOutlined />} onClick={() => handleGenerate('weekly')} loading={generatingWeekly}
-            size="small" style={{ borderRadius: 6 }}>生成周报</Button>
+          <Button icon={<FileTextOutlined />} onClick={() => handleGenerate('monthly')} loading={generatingMonthly}
+            size="small" style={{ borderRadius: 6 }}>生成月报</Button>
         </div>
       </div>
 
@@ -517,16 +517,16 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
         )}
       </Modal>
 
-      {/* ── 日报/周报 Modal（共用；关闭后数据保留，重复打开不重生成）── */}
-      <Modal title={report?.report_kind === 'weekly' ? '📈 消防报警周报' : '📋 消防报警日报'}
+      {/* ── 日报/月报 Modal（共用；关闭后数据保留，重复打开不重生成）── */}
+      <Modal title={report?.report_kind === 'monthly' ? '📈 消防报警月报' : '📋 消防报警日报'}
         open={reportOpen} onCancel={() => setReportOpen(false)} width={720}
         footer={<Button onClick={() => setReportOpen(false)}>关闭</Button>}>
         {report && (
           <>
             <Space size={12} style={{ marginBottom: 12 }} wrap>
               <span style={{ fontSize: 12, color: T.steel }}>
-                {report.report_kind === 'weekly'
-                  ? `${report.week_start ? dayjs(report.week_start).format('MM/DD') : '—'} ~ ${dayjs(report.target_date).format('MM/DD')}`
+                {report.report_kind === 'monthly'
+                  ? `${report.month_start ? dayjs(report.month_start).format('MM/DD') : '—'} ~ ${dayjs(report.target_date).format('MM/DD')}`
                   : dayjs(report.target_date).format('YYYY-MM-DD')}
               </span>
               <span style={{ fontSize: 12, color: T.steel }}>共 {report.total} 条报警</span>

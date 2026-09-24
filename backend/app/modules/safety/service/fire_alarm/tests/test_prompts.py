@@ -1,7 +1,7 @@
 """消防报警分析 — prompt 构造纯函数单测（MagicMock，无 DB）。
 
 覆盖：前缀缓存规则（system 稳定 / user 动态末尾）、EXPECTED_KEYS 常量、
-build_per_record_messages / build_daily_summary_messages / build_weekly_summary_messages。
+build_per_record_messages / build_daily_summary_messages / build_monthly_summary_messages。
 """
 
 from __future__ import annotations
@@ -11,15 +11,15 @@ from unittest.mock import MagicMock
 
 from app.modules.safety.service.fire_alarm.aggregator import (
     FireAlarmDailyAgg,
-    FireAlarmWeeklyAgg,
+    FireAlarmMonthlyAgg,
 )
 from app.modules.safety.service.fire_alarm.prompts import (
     EXPECTED_KEYS_DAILY_SUMMARY,
+    EXPECTED_KEYS_MONTHLY_SUMMARY,
     EXPECTED_KEYS_PER_RECORD,
-    EXPECTED_KEYS_WEEKLY_SUMMARY,
     build_daily_summary_messages,
+    build_monthly_summary_messages,
     build_per_record_messages,
-    build_weekly_summary_messages,
 )
 
 REF_DATE = date(2026, 3, 12)
@@ -52,10 +52,10 @@ def make_daily_agg() -> FireAlarmDailyAgg:
     )
 
 
-def make_weekly_agg() -> FireAlarmWeeklyAgg:
-    return FireAlarmWeeklyAgg(
-        week_start=REF_DATE.replace(day=9),
-        week_end=REF_DATE.replace(day=15),
+def make_monthly_agg() -> FireAlarmMonthlyAgg:
+    return FireAlarmMonthlyAgg(
+        month_start=REF_DATE.replace(day=1),
+        month_end=REF_DATE.replace(day=31),
         records=[make_record()],
         total=1,
         nature_distribution={"误报": 1},
@@ -75,9 +75,8 @@ class TestExpectedKeys:
         assert EXPECTED_KEYS_DAILY_SUMMARY == [
             "summary", "key_issues", "rectification_suggestions",
         ]
-        assert EXPECTED_KEYS_WEEKLY_SUMMARY == [
-            "summary", "typical_issues", "recurring_issues",
-            "systemic_suggestions", "trend",
+        assert EXPECTED_KEYS_MONTHLY_SUMMARY == [
+            "recurring_issues", "cause_summary", "rectification_suggestions",
         ]
 
 
@@ -123,13 +122,16 @@ class TestBuildDailySummaryMessages:
         assert user.endswith("请输出 JSON（不要输出其他内容）。")
 
 
-class TestBuildWeeklySummaryMessages:
+class TestBuildMonthlySummaryMessages:
     def test_structure_includes_recurring_and_records(self):
-        m = build_weekly_summary_messages(make_weekly_agg())
+        m = build_monthly_summary_messages(make_monthly_agg())
         assert [x["role"] for x in m] == ["system", "user"]
-        assert "周级汇总分析" in m[0]["content"]
+        assert "月度分析" in m[0]["content"]
+        # 防跑题约束：只允许重复问题/原因/整改建议三件事
+        assert "重复问题" in m[0]["content"]
+        assert "整改" in m[0]["content"]
         user = m[1]["content"]
-        assert '"周起止": "2026-03-09 ~ 2026-03-15"' in user
+        assert '"月起止": "2026-03-01 ~ 2026-03-31"' in user
         assert '"重复问题清单"' in user
         assert "1号装置-火灾报警" in user
         assert '"cause_description": "传感器老化误触发"' in user

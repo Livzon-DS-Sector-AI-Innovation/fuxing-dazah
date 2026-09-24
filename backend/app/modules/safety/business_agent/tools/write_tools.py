@@ -705,21 +705,22 @@ async def generate_central_alarm_daily_report(
         return {"success": False, "error": f"日报生成失败: {e}"}
 
 
-async def generate_fire_alarm_weekly_report(
+async def generate_fire_alarm_monthly_report(
     ctx: RunContext[SafetyDeps],
-    week_end: str | None = None,
+    month_end: str | None = None,
 ) -> dict[str, Any]:
-    """生成消防报警周报（自然周周一~周日）并直接在对话中返回完整报告。
+    """生成消防报警月报（自然月 1 日~月末）并直接在对话中返回完整报告。
 
-    聚合本周报警 → 周级 AI 分类与重复问题识别 → Markdown 渲染 → 推送（env 配置时）。
-    复用记录上已有的日 AI 分析结果，不重复逐条调用。
+    聚合本月报警 → 月级 AI 分析（重复问题/原因归纳/整改建议）→ Markdown 渲染
+    → 推送（env 配置时）。复用记录上已有的日 AI 分析结果，不重复逐条调用。
 
     Args:
-        week_end: 周末日期（ISO，如 "2026-08-24"，默认本周日或今天所在自然周）
+        month_end: 月内任一日期（ISO，如 "2026-08-31"，取其所在自然月；
+            默认上一完整自然月）
 
     Returns:
-        {success, week_start, week_end, total, push_ok, markdown_report}
-        - markdown_report: 已格式化的完整周报，必须原样输出
+        {success, month_start, month_end, total, push_ok, markdown_report}
+        - markdown_report: 已格式化的完整月报，必须原样输出
     """
     from datetime import date as _date
 
@@ -727,26 +728,26 @@ async def generate_fire_alarm_weekly_report(
 
     try:
         service = FireAlarmService(ctx.deps.db)
-        result = await service.generate_weekly_report(
-            week_end=_date.fromisoformat(week_end) if week_end else None,
+        result = await service.generate_monthly_report(
+            month_end=_date.fromisoformat(month_end) if month_end else None,
             push=False, channel="feishu",
         )
         await ctx.deps.db.commit()
         return {
             "success": True,
-            "week_start": result.week_start.isoformat() if result.week_start else None,
-            "week_end": result.target_date.isoformat(),
+            "month_start": result.month_start.isoformat() if result.month_start else None,
+            "month_end": result.target_date.isoformat(),
             "total": result.total,
             "push_ok": sum(1 for p in result.push_results if p.get("success")),
             "_output_instruction": (
-                "以下 markdown_report 是已格式化的完整周报，你必须原样输出全部内容，"
+                "以下 markdown_report 是已格式化的完整月报，你必须原样输出全部内容，"
                 "不要改写、精简或重新排版。只需加一句简短引导语后直接贴出。"
             ),
             "markdown_report": result.markdown_report,
         }
     except Exception as e:
-        logger.exception("generate_fire_alarm_weekly_report failed")
-        return {"success": False, "error": f"周报生成失败: {e}"}
+        logger.exception("generate_fire_alarm_monthly_report failed")
+        return {"success": False, "error": f"月报生成失败: {e}"}
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -66,9 +66,9 @@ export interface FireAlarmDailyReportRequest {
   target_date?: string
 }
 
-/** 周报生成请求（week_end 可选，默认本周日） */
-export interface FireAlarmWeeklyReportRequest {
-  week_end?: string
+/** 月报生成请求（month_end 可选：月内任一日期取其所在自然月，默认上一完整自然月） */
+export interface FireAlarmMonthlyReportRequest {
+  month_end?: string
 }
 
 /** 推送结果项 */
@@ -81,11 +81,11 @@ export interface FireAlarmPushResult {
   error?: string
 }
 
-/** 日报/周报生成响应（不落库，前端弹窗展示） */
+/** 日报/月报生成响应（不落库，前端弹窗展示） */
 export interface FireAlarmReportResponse {
-  report_kind: 'daily' | 'weekly'
-  target_date: string // 日报：当日；周报：周末日期
-  week_start?: string | null // 周报：周一（日报为 null）
+  report_kind: 'daily' | 'monthly'
+  target_date: string // 日报：当日；月报：月末日期
+  month_start?: string | null // 月报：1 日（日报为 null）
   total: number // 涉及记录数
   analyzed: number // 成功 AI 分析的记录数（降级时 < total）
   markdown_report: string

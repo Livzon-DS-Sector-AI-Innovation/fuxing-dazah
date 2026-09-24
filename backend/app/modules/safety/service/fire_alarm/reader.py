@@ -140,9 +140,18 @@ def rolling_window(target_date: date) -> tuple[datetime, datetime]:
 
 
 def week_window(week_start: date, week_end: date) -> tuple[datetime, datetime]:
-    """自然周窗口：周一北京时间 00:00 至周日结束（下周一 00:00），左闭右开。"""
-    start = bd_filters.bjt_day_start(week_start)
-    end = bd_filters.bjt_day_start(week_end) + timedelta(days=1)
+    """自然周窗口：周一北京时间 00:00 至周日结束（下周一 00:00），左闭右开。
+
+    语义与 month_window 相同（[起始日 00:00, 结束日次日 00:00)），
+    保留独立命名便于 get_stats 本周 KPI 复用。
+    """
+    return month_window(week_start, week_end)
+
+
+def month_window(month_start: date, month_end: date) -> tuple[datetime, datetime]:
+    """自然月窗口：1 日北京时间 00:00 至月末结束（次月 1 日 00:00），左闭右开。"""
+    start = bd_filters.bjt_day_start(month_start)
+    end = bd_filters.bjt_day_start(month_end) + timedelta(days=1)
     return start, end
 
 
@@ -202,8 +211,15 @@ class FireAlarmBitableReader:
     async def get_records_by_week(
         self, week_start: date, week_end: date
     ) -> list[FireAlarmView]:
-        """自然周窗口取数。"""
+        """自然周窗口取数（get_stats 本周 KPI 用）。"""
         start, end = week_window(week_start, week_end)
+        return await self._fetch_window(start, end)
+
+    async def get_records_by_month(
+        self, month_start: date, month_end: date
+    ) -> list[FireAlarmView]:
+        """自然月窗口取数。"""
+        start, end = month_window(month_start, month_end)
         return await self._fetch_window(start, end)
 
 
@@ -237,6 +253,10 @@ class FireAlarmRecordsReader(Protocol):
         self, week_start: date, week_end: date
     ) -> list[FireAlarmView]: ...
 
+    async def get_records_by_month(
+        self, month_start: date, month_end: date
+    ) -> list[FireAlarmView]: ...
+
 
 __all__ = [
     "FireAlarmView",
@@ -246,6 +266,7 @@ __all__ = [
     "day_window",
     "rolling_window",
     "week_window",
+    "month_window",
     "open_reader",
     "to_view",
 ]

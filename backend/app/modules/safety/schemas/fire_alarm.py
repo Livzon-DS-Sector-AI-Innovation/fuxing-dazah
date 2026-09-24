@@ -58,26 +58,28 @@ class FireAlarmDailyReportRequest(BaseModel):
     target_date: date | None = Field(None, description="目标日期，默认今天（北京时区）")
 
 
-class FireAlarmWeeklyReportRequest(BaseModel):
-    """周报生成请求（ticket 06；API 端点在 ticket 07）。"""
+class FireAlarmMonthlyReportRequest(BaseModel):
+    """月报生成请求（原周报请求，2026-09-22 改月报）。"""
 
-    week_end: date | None = Field(None, description="自然周末尾日期（周日），默认本周日或今天")
+    month_end: date | None = Field(
+        None, description="月内任一日期（取其所在自然月），默认上一完整自然月",
+    )
 
 
 class FireAlarmReportResponse(BaseModel):
-    """日报/周报生成结果（不落库，前端弹窗展示）。
+    """日报/月报生成结果（不落库，前端弹窗展示）。
 
-    report_kind: "daily" / "weekly"
-    target_date: 日报=当日；周报=周末日期
-    week_start: 周报=周一（日报为 None）
+    report_kind: "daily" / "monthly"
+    target_date: 日报=当日；月报=月末日期
+    month_start: 月报=1 日（日报为 None）
     analyzed: 成功 AI 分析的记录数（仅日报）
     push_results: [{"chat_id", "success", "message_id"?, "skipped"?, "reason"?, "error"?}]
     records_analyzed: 已 AI 回写的记录 id（仅日报）
     """
 
-    report_kind: str  # "daily" / "weekly"
-    target_date: date  # 日报：当日；周报：周末日期
-    week_start: date | None = None  # 周报：周一（日报为 None）
+    report_kind: str  # "daily" / "monthly"
+    target_date: date  # 日报：当日；月报：月末日期
+    month_start: date | None = None  # 月报：1 日（日报为 None）
     total: int  # 涉及记录数
     analyzed: int = 0  # 成功 AI 分析的记录数（日报）
     markdown_report: str

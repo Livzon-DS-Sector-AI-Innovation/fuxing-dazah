@@ -1,7 +1,8 @@
-"""消防报警日报/周报 — Markdown 渲染纯函数单测（无 DB / 无环境依赖）。
+"""消防报警日报/月报 — Markdown 渲染纯函数单测（无 DB / 无环境依赖）。
 
 覆盖：日报渲染结构（标题/统计/明细/整改提醒）、AI 汇总块可选、_at @提及与纯文本兜底；
-周报渲染结构（标题/周起止/统计/重复问题/AI 周级分析/整改提醒）、未分析记录显示。
+月报渲染结构（标题/月起止/统计/重复问题/AI 月度分析三板块/整改提醒）、
+AI 字段格式异常降级、用户定制 2026-09-22（AI 板块只围绕重复问题/原因/整改建议）。
 """
 
 from __future__ import annotations
@@ -11,18 +12,18 @@ from unittest.mock import MagicMock
 
 from app.modules.safety.service.fire_alarm.aggregator import (
     FireAlarmDailyAgg,
-    FireAlarmWeeklyAgg,
+    FireAlarmMonthlyAgg,
 )
 from app.modules.safety.service.fire_alarm.renderer import (
     DIVIDER,
     _at,
     render_daily_report,
-    render_weekly_report,
+    render_monthly_report,
 )
 
 TARGET_DATE = date(2026, 3, 12)
-WEEK_START = date(2026, 3, 9)
-WEEK_END = date(2026, 3, 15)
+MONTH_START = date(2026, 3, 1)
+MONTH_END = date(2026, 3, 31)
 
 
 def make_record(**kw) -> MagicMock:
@@ -187,10 +188,10 @@ class TestRenderDailyReport:
         assert dept_head.count('<at id=ou_zhangsan></at>') == 1
 
 
-def make_weekly_agg(records, **kw) -> FireAlarmWeeklyAgg:
-    return FireAlarmWeeklyAgg(
-        week_start=WEEK_START,
-        week_end=WEEK_END,
+def make_monthly_agg(records, **kw) -> FireAlarmMonthlyAgg:
+    return FireAlarmMonthlyAgg(
+        month_start=MONTH_START,
+        month_end=MONTH_END,
         records=records,
         total=len(records),
         nature_distribution=kw.get("nature", {"误报": 2}),
@@ -204,87 +205,119 @@ def make_weekly_agg(records, **kw) -> FireAlarmWeeklyAgg:
     )
 
 
-class TestRenderWeeklyReport:
-    """周报渲染（ticket 06）：标题→周起止→统计→重复问题→AI 周级分析→整改提醒。"""
+class TestRenderMonthlyReport:
+    """月报渲染（2026-09-22 周报改月报）：标题→月起止→统计→重复问题→AI 月度分析→整改提醒。"""
 
-    def _weekly_ai_summary(self) -> dict:
+    def _monthly_ai_summary(self) -> dict:
         return {
-            "summary": "本周报警集中在动力车间设备设施类误报，呈现重复趋势。",
-            "typical_issues": [
-                {"title": "传感器老化误报", "evidence": "1号装置压缩机房本周发生 2 次火灾报警"},
-            ],
             "recurring_issues": [
-                {"pattern": "1号装置/压缩机房-火灾报警", "count": 2, "departments": ["动力车间"]},
+                {
+                    "pattern": "1号装置/压缩机房-火灾报警",
+                    "count": 3,
+                    "cause": "同一批次传感器老化漂移导致连续误触发",
+                    "suggestion": "整批更换该型传感器并建立季度标定台账",
+                },
             ],
-            "systemic_suggestions": [
-                {"issue": "同批次传感器老化", "suggestion": "统一更换并建立周期校验台账"},
+            "cause_summary": "本月误报集中于压缩机房传感器类设备故障，属设备设施维度共性问题。",
+            "rectification_suggestions": [
+                {
+                    "issue": "压缩机房传感器批量老化误报",
+                    "suggestion": "两周内完成整批更换并逐台标定，每季度校验一次",
+                    "departments": ["动力车间"],
+                },
             ],
-            "trend": {"summary": "本周报警总量较上周持平", "trend": "平稳"},
         }
 
     def test_structure_with_ai_summary(self):
-        agg = make_weekly_agg([make_record()])
-        md = render_weekly_report(
+        agg = make_monthly_agg([make_record()])
+        md = render_monthly_report(
             agg,
             {"张三": "ou_zhangsan"},
-            ai_summary=self._weekly_ai_summary(),
+            ai_summary=self._monthly_ai_summary(),
         )
-        assert "🔥 **消防报警周报**" in md
-        assert "🔥 **消防报警周报** · 2026-03-09 ~ 2026-03-15" in md
-        assert "📅 周一~周日" in md
-        assert "**📊 本周报警统计**" in md
+        assert "🔥 **消防报警月报**" in md
+        assert "🔥 **消防报警月报** · 2026-03-01 ~ 2026-03-31" in md
+        assert "📅 自然月（1 日~月末）" in md
+        assert "**📊 上月报警统计**" in md
         assert "报警总数：**1 起**" in md
-        # 重复/集中问题块（count>=2 的模式）
+        # 重复/集中问题块（count>=2 的模式，@负责人跟进）
         assert "**🔁 重复/集中问题**" in md
         assert "· ① 1号装置/压缩机房-火灾报警（**2 次**）涉及：动力车间" in md
-        # 周级 AI 分析（实现已改为 AI 周级分析块：典型问题/系统性建议/趋势）
-        assert "🧠 **AI 周级分析**" in md
-        assert "1. 传感器老化误报：1号装置压缩机房本周发生 2 次火灾报警" in md
-        assert "**✅ 系统性整改建议**" in md
-        assert "1. 同批次传感器老化：统一更换并建立周期校验台账" in md
-        assert "**📈 趋势**：本周报警总量较上周持平；趋势：**平稳**" in md
-        # 明细按部门分组，无文末整改提醒（需求 5/6）
-        assert "**⚠️ 整改提醒**" not in md
         assert '<at id=ou_zhangsan></at>' in md
-        assert DIVIDER in md
-
-    def test_ai_summary_none_omits_weekly_block(self):
-        md = render_weekly_report(make_weekly_agg([make_record()]), {}, ai_summary=None)
+        # AI 月度分析三板块（用户定制 2026-09-22：只围绕重复问题/原因/整改建议）
+        assert "🧠 **AI 月度分析**" in md
+        assert "**🔁 重复问题与原因**" in md
+        assert "① 1号装置/压缩机房-火灾报警（**3 次**）" in md
+        assert "原因：同一批次传感器老化漂移导致连续误触发" in md
+        assert "整改：整批更换该型传感器并建立季度标定台账" in md
+        assert "**📌 原因归纳**" in md
+        assert "本月误报集中于压缩机房传感器类设备故障" in md
+        assert "**✅ 整改建议**" in md
+        assert "1. 压缩机房传感器批量老化误报：两周内完成整批更换并逐台标定，每季度校验一次（牵头：动力车间）" in md
+        # 旧板块已删除（防跑题）
         assert "🧠 **AI 周级分析**" not in md
+        assert "典型问题" not in md
+        assert "📈 趋势" not in md
+        # 无部门明细板块（需求沿用 2026-09-21）
+        assert "**⚠️ 整改提醒**" not in md
+        assert DIVIDER in md
+        assert "**各部门负责人请及时跟进并落实整改措施。**" in md
+        assert "① **报警原因**" not in md
+
+    def test_ai_summary_none_omits_monthly_block(self):
+        md = render_monthly_report(make_monthly_agg([make_record()]), {}, ai_summary=None)
+        assert "🧠 **AI 月度分析**" not in md
         # 其余结构照常
-        assert "**📊 本周报警统计**" in md
+        assert "**📊 上月报警统计**" in md
         assert "**🔁 重复/集中问题**" in md
 
     def test_no_recurring_patterns_message(self):
-        agg = make_weekly_agg([make_record()], recurring=[])
-        md = render_weekly_report(agg, {}, ai_summary=None)
+        agg = make_monthly_agg([make_record()], recurring=[])
+        md = render_monthly_report(agg, {}, ai_summary=None)
         # 无重复报警 → 不显示重复提示块
-        assert "**🔁 重复报警（未采取措施）**" not in md
         assert "**🔁 重复/集中问题**" not in md
+        assert "（上月暂无明显重复/集中问题）" in md
 
-    def test_unanalyzed_records_shown_in_stats(self):
-        """兼容 ai_dimension=None 记录：统计显示未分析条数。"""
+    def test_ai_malformed_fields_degrade(self):
+        summary = self._monthly_ai_summary()
+        summary["recurring_issues"] = "not-a-list"  # 格式异常
+        summary["cause_summary"] = {"bad": "type"}
+        md = render_monthly_report(
+            make_monthly_agg([make_record()]), {}, ai_summary=summary,
+        )
+        assert "🧠 **AI 月度分析**" in md
+        assert "**🔁 重复问题与原因**" not in md  # 异常板块省略
+        assert "**📌 原因归纳**" not in md
+        # 正常板块照常渲染
+        assert "**✅ 整改建议**" in md
+        assert "（AI 输出格式异常，异常部分已省略）" in md
+
+    def test_ai_empty_recurring_no_block_title_when_all_empty(self):
+        summary = {"recurring_issues": [], "cause_summary": "", "rectification_suggestions": []}
+        md = render_monthly_report(
+            make_monthly_agg([make_record()]), {}, ai_summary=summary,
+        )
+        assert "🧠 **AI 月度分析**" not in md
+
+    def test_unanalyzed_records_not_shown(self):
+        """用户定制 2026-09-21 沿用：无「AI 分析覆盖」统计行与「未分析」前缀。"""
         records = [
             make_record(ai_dimension=None, reason=None, direction=None, analyzed_at=None),
             make_record(ai_dimension="equipment"),
         ]
-        agg = make_weekly_agg(records)
-        md = render_weekly_report(agg, {}, ai_summary=None)
-        assert "AI 分析覆盖：1/2 条已分析（**1 条未分析**）" in md
-
-    def test_all_analyzed_no_unanalyzed_suffix(self):
-        md = render_weekly_report(make_weekly_agg([make_record()]), {}, ai_summary=None)
-        assert "AI 分析覆盖：1/1 条已分析" in md
+        agg = make_monthly_agg(records)
+        md = render_monthly_report(agg, {}, ai_summary=None)
+        assert "AI 分析覆盖" not in md
         assert "未分析" not in md
 
-    def test_empty_week(self):
-        md = render_weekly_report(make_weekly_agg([], recurring=[]), {}, ai_summary=None)
+    def test_empty_month(self):
+        md = render_monthly_report(make_monthly_agg([], recurring=[]), {}, ai_summary=None)
         assert "报警总数：**0 起**" in md
-        assert "（本周暂无明显重复/集中问题）" in md
-        assert "AI 分析覆盖" not in md  # 无记录不显示覆盖行
+        assert "（上月暂无明显重复/集中问题）" in md
+        assert "AI 分析覆盖" not in md
 
     def test_at_fallback_plain_text(self):
-        md = render_weekly_report(make_weekly_agg([make_record()]), {}, ai_summary=None)
+        md = render_monthly_report(make_monthly_agg([make_record()]), {}, ai_summary=None)
         assert "动力车间" in md
         assert "张三" in md
         assert "<at" not in md

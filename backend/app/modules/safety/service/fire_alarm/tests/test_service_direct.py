@@ -55,6 +55,12 @@ class FakeReader:
         self.calls.append("week")
         return list(self.records)
 
+    async def get_records_by_month(
+        self, month_start: date, month_end: date
+    ) -> list[FireAlarmView]:
+        self.calls.append("month")
+        return list(self.records)
+
 
 class FakeAnalyst:
     async def analyze_per_records(
@@ -72,7 +78,7 @@ class FakeAnalyst:
     async def analyze_daily_summary(self, agg: Any, summaries: list[str], **kw: Any) -> None:
         return None
 
-    async def analyze_weekly_summary(self, agg: Any, **kw: Any) -> None:
+    async def analyze_monthly_summary(self, agg: Any, **kw: Any) -> None:
         return None
 
 

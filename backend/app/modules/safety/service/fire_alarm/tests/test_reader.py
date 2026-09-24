@@ -12,13 +12,13 @@ from app.modules.safety.models import FireAlarmRecord
 from app.modules.safety.service.fire_alarm import reader, renderer
 from app.modules.safety.service.fire_alarm.aggregator import (
     aggregate_daily,
-    aggregate_weekly,
+    aggregate_monthly,
 )
 from app.modules.safety.service.fire_alarm.daily_dm import build_alarm_card
 
 TARGET_DATE = date(2026, 3, 12)
-WEEK_START = date(2026, 3, 9)
-WEEK_END = date(2026, 3, 15)
+MONTH_START = date(2026, 3, 1)
+MONTH_END = date(2026, 3, 31)
 MS = int(datetime(2026, 3, 12, 2, 0, tzinfo=UTC).timestamp() * 1000)
 
 
@@ -85,6 +85,11 @@ class FakeReader:
         self, week_start: date, week_end: date
     ) -> list[reader.FireAlarmView]:
         return [_make_view("rec-week")]
+
+    async def get_records_by_month(
+        self, month_start: date, month_end: date
+    ) -> list[reader.FireAlarmView]:
+        return [_make_view("rec-month")]
 
 
 def test_to_view_maps_fields_metadata_and_ai_columns() -> None:
@@ -158,13 +163,13 @@ def test_view_is_faithful_substitute_for_aggregation_and_rendering(
 
     agg_orm_daily = aggregate_daily(orm_records, TARGET_DATE)
     agg_view_daily = aggregate_daily(cast(Any, view_records), TARGET_DATE)
-    agg_orm_weekly = aggregate_weekly(orm_records, WEEK_START, WEEK_END)
-    agg_view_weekly = aggregate_weekly(cast(Any, view_records), WEEK_START, WEEK_END)
+    agg_orm_monthly = aggregate_monthly(orm_records, MONTH_START, MONTH_END)
+    agg_view_monthly = aggregate_monthly(cast(Any, view_records), MONTH_START, MONTH_END)
 
     assert renderer.render_daily_report(agg_orm_daily, {}) == renderer.render_daily_report(
         agg_view_daily, {}
     )
-    assert renderer.render_weekly_report(
-        agg_orm_weekly, {}
-    ) == renderer.render_weekly_report(agg_view_weekly, {})
+    assert renderer.render_monthly_report(
+        agg_orm_monthly, {}
+    ) == renderer.render_monthly_report(agg_view_monthly, {})
     assert build_alarm_card(orm_records[0]) == build_alarm_card(view_records[0])

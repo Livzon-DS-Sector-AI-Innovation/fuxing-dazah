@@ -23,6 +23,7 @@ REPORT_TYPE_JOBS: frozenset[str] = frozenset({
     "作业票审核",
     "消防报警日报",
     "中控报警日报",
+    "消防报警月报",
     "危化品库存周报",
     "危化品库存日报",
     "隐患分析报告",
@@ -35,6 +36,7 @@ REPORT_TYPE_JOBS: frozenset[str] = frozenset({
 EFFECTIVE_TARGET_ENV: dict[str, str] = {
     "作业票审核": "SAFETY_WORKTICKET_GROUP_ID",
     "消防报警日报": "SAFETY_FIRE_ALARM_ANALYSIS_CHAT_ID",
+    "消防报警月报": "SAFETY_FIRE_ALARM_ANALYSIS_CHAT_ID",
     "中控报警日报": "SAFETY_CENTRAL_ALARM_ANALYSIS_CHAT_ID",
     "危化品库存周报": "SAFETY_CHEMICAL_INVENTORY_WEEKLY_CHAT_ID",
     "危化品库存日报": "SAFETY_CHEMICAL_INVENTORY_DAILY_CHAT_ID",
@@ -79,12 +81,13 @@ _OVERRIDE_FIELDS = (
     "hour",
     "minute",
     "dow",
+    "dom",
     "target_chat_id",
     "target_chat_name",
     "retry_until_hour",
     "retry_until_minute",
 )
-_SCHEDULE_FIELDS = ("hour", "minute", "dow", "retry_until_hour", "retry_until_minute")
+_SCHEDULE_FIELDS = ("hour", "minute", "dow", "dom", "retry_until_hour", "retry_until_minute")
 
 
 def _jobs_index() -> dict[str, dict[str, Any]]:
@@ -111,6 +114,9 @@ def _merge_job(job: dict[str, Any], row: SchedulerTaskConfig | None) -> dict[str
         "hour": job.get("hour"),
         "minute": job.get("minute"),
         "dow": job.get("dow"),
+        # dom（每月几号）必须从代码默认带过来：DB 行没有 dom 列值时
+        # （NULL=用代码默认），月报类任务的 dom=1 若在此丢失会退化成每天触发
+        "dom": job.get("dom"),
         "enabled": job.get("enabled", True),
         "target_chat_id": None,
         "target_chat_name": None,
@@ -189,6 +195,9 @@ def _validate_data(job_name: str, data: dict[str, Any]) -> None:
     _validate_int("hour", data.get("hour"), 23)
     _validate_int("minute", data.get("minute"), 59)
     _validate_int("dow", data.get("dow"), 6)
+    dom = data.get("dom")
+    if dom is not None and (not isinstance(dom, int) or dom < 1 or dom > 31):
+        raise ValueError("dom 必须在 1-31")
     _validate_int("retry_until_hour", data.get("retry_until_hour"), 23)
     _validate_int("retry_until_minute", data.get("retry_until_minute"), 59)
 

@@ -50,6 +50,9 @@ class SchedulerTaskConfig(BaseModel):
     dow: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="星期 0-6（周一-周日），NULL=每天"
     )
+    dom: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="每月几号 1-31，NULL=不限（月报类任务）"
+    )
     target_chat_id: Mapped[str | None] = mapped_column(
         String(128), nullable=True, comment="飞书群聊 chat_id"
     )

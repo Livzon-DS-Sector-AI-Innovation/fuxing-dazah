@@ -96,7 +96,7 @@ from app.modules.safety.business_agent.tools.write_tools import (
     generate_daily_report,
     generate_drill_plan,
     generate_fire_alarm_daily_report,
-    generate_fire_alarm_weekly_report,
+    generate_fire_alarm_monthly_report,
     generate_supervision_bulletin,
     override_oh_conclusion,
     poll_hazard_ai_analysis,
@@ -196,7 +196,7 @@ TOOL_KIND: dict[str, bool] = {
     "renew_person_certificate": True,
     # 消防报警分析（写入：触发 AI 分析，需用户确认）
     "generate_fire_alarm_daily_report": True,
-    "generate_fire_alarm_weekly_report": True,
+    "generate_fire_alarm_monthly_report": True,
     # 中控报警分析（写入：触发 AI 分析，需用户确认）
     "generate_central_alarm_daily_report": True,
     # 隐患直读多维表格模式（写入：调用 AI 并写回多维表格 / 推群，需用户确认）
@@ -271,7 +271,7 @@ def _all_write_funcs() -> list[Callable[..., Any]]:
         generate_drill_plan,
         generate_central_alarm_daily_report,
         generate_fire_alarm_daily_report,
-        generate_fire_alarm_weekly_report,
+        generate_fire_alarm_monthly_report,
         sync_drill_plan_to_feishu,
         generate_urs_report_pdf,
         create_urs_review,

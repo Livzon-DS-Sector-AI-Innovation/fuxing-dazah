@@ -1,6 +1,6 @@
 """Safety API — fire_alarm endpoints.
 
-消防报警同步（ticket 02）；记录查询/统计（ticket 03）；日报/周报生成（ticket 07）。
+消防报警同步（ticket 02）；记录查询/统计（ticket 03）；日报/月报生成（ticket 07）。
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from app.core.response import ApiResponse
 from app.modules.safety.models import FireAlarmRecord
 from app.modules.safety.schemas.fire_alarm import (
     FireAlarmDailyReportRequest,
+    FireAlarmMonthlyReportRequest,
     FireAlarmStatsOut,
     FireAlarmSyncResponse,
-    FireAlarmWeeklyReportRequest,
 )
 from app.modules.safety.service.fire_alarm import FireAlarmService
 from app.modules.safety.service.fire_alarm import config as direct_config
@@ -140,26 +140,26 @@ async def generate_daily_report(
     return ApiResponse(data=result.model_dump(mode="json"))
 
 
-# ── 周报生成 ──
+# ── 月报生成 ──
 
 
 @fire_alarm_router.post(
-    "/fire-alarms/weekly-report/generate",
+    "/fire-alarms/monthly-report/generate",
     response_model=ApiResponse,
-    summary="生成并推送消防报警周报",
+    summary="生成并推送消防报警月报",
 )
-async def generate_weekly_report(
-    data: FireAlarmWeeklyReportRequest | None = None,
+async def generate_monthly_report(
+    data: FireAlarmMonthlyReportRequest | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """生成自然周（周一~周日）消防报警分析报告（复用记录上的日分析结果）。
+    """生成自然月（1 日~月末）消防报警分析月报（重复问题/原因/整改建议）。
 
-    body {week_end?} 可空，默认今天（北京时间）所在自然周；channel="web"。
+    body {month_end?} 可空，默认上一完整自然月（北京时区）；channel="web"。
     AI/推送失败由 service 降级（不抛 500）。
     """
     service = FireAlarmService(db)
-    result = await service.generate_weekly_report(
-        week_end=data.week_end if data else None,
+    result = await service.generate_monthly_report(
+        month_end=data.month_end if data else None,
         push=True, channel="web",
     )
     return ApiResponse(data=result.model_dump(mode="json"))

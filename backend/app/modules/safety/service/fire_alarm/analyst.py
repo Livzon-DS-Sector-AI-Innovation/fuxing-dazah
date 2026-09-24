@@ -27,15 +27,15 @@ from app.modules.safety.models import FireAlarmRecord
 from app.modules.safety.service.config import create_ai_service
 from app.modules.safety.service.fire_alarm.aggregator import (
     FireAlarmDailyAgg,
-    FireAlarmWeeklyAgg,
+    FireAlarmMonthlyAgg,
 )
 from app.modules.safety.service.fire_alarm.prompts import (
     EXPECTED_KEYS_DAILY_SUMMARY,
+    EXPECTED_KEYS_MONTHLY_SUMMARY,
     EXPECTED_KEYS_PER_RECORD,
-    EXPECTED_KEYS_WEEKLY_SUMMARY,
     build_daily_summary_messages,
+    build_monthly_summary_messages,
     build_per_record_messages,
-    build_weekly_summary_messages,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,26 +178,26 @@ class FireAlarmAnalyst:
             logger.warning("日报汇总 AI 分析失败")
             return None
 
-    async def analyze_weekly_summary(
-        self, agg: FireAlarmWeeklyAgg, *, channel: str = "system",
+    async def analyze_monthly_summary(
+        self, agg: FireAlarmMonthlyAgg, *, channel: str = "system",
     ) -> dict[str, Any] | None:
-        """周报汇总 AI 分析；失败返回 None（ticket 06 使用）。"""
+        """月报汇总 AI 分析（重复问题/原因/整改建议）；失败返回 None（省略 AI 块）。"""
         try:
             ai = await self._get_ai()
-            messages = build_weekly_summary_messages(agg)
+            messages = build_monthly_summary_messages(agg)
             with ai_audit_scope(
                 scenario="fire_alarm_analysis",
-                resource_type="fire_alarm_weekly_report",
+                resource_type="fire_alarm_monthly_report",
                 channel=channel,
             ):
                 result = await ai.chat_parsed(
                     messages=messages,
-                    expected_keys=EXPECTED_KEYS_WEEKLY_SUMMARY,
+                    expected_keys=EXPECTED_KEYS_MONTHLY_SUMMARY,
                     temperature=0.3,
                 )
             return result if isinstance(result, dict) else None
         except Exception:
-            logger.warning("周报汇总 AI 分析失败")
+            logger.warning("月报汇总 AI 分析失败")
             return None
 
 

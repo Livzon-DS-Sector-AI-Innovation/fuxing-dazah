@@ -118,6 +118,7 @@ async def _load_effective_jobs() -> list[dict[str, Any]]:
             "hour": t.get("hour"),
             "minute": t.get("minute"),
             "dow": t.get("dow"),
+            "dom": t.get("dom"),
             "mode": t.get("mode"),
             "description": t.get("description"),
             "retry_until_hour": t.get("retry_until_hour"),
@@ -199,6 +200,14 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "target_type": "person",  # 私发个人（接收人为动态名单：涉及部门负责人+分管安全员）
         "description": "当日报警一卡一条 DM 私发给涉及部门的部门负责人+分管安全员（发送对象为动态名单，开关 SAFETY_FIRE_ALARM_DAILY_DM_ENABLED）",
+    },
+    # ── 消防报警月报（每月 1 日 08:30，补出上一完整自然月）──
+    {
+        "name": "消防报警月报",
+        "hour": 8, "minute": 30, "dom": 1,  # 每月 1 日
+        # 补发窗口：当日 23:30 截止（失败自动重试）
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "description": "上一自然月（1 日~月末）消防报警分析月报（重复问题/原因归纳/整改建议 + @部门负责人），每月 1 日 08:30 生成，投安全速递总卡（总卡关闭时发独立群卡）",
     },
     # ── 中控报警日报（每日 17:00）──
     {
@@ -399,6 +408,21 @@ async def _maybe_send_failure_alert(job_name: str, attempt_count: int) -> None:
         logger.exception("失败告警发送异常: %s", job_name)
 
 
+def _matches_day(job: dict[str, Any], today: date) -> bool:
+    """星期与日期过滤（纯函数，供 _run_scheduled_job 与单测使用）。
+
+    - dow=0周一..6周日，未配置则不限星期
+    - dom=每月几号（1~31），未配置则不限日期；月报类任务靠它保证每月只跑一次
+    """
+    required_dow = job.get("dow")
+    if required_dow is not None and today.weekday() != required_dow:
+        return False
+    required_dom = job.get("dom")
+    if required_dom is not None and today.day != required_dom:
+        return False
+    return True
+
+
 async def _run_scheduled_job(job: dict[str, Any]) -> None:
     """执行一个定时任务，按任务名分发。
 
@@ -409,9 +433,7 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
     today = date.today()
     now = datetime.now(UTC)
 
-    # 星期过滤（dow=0周一, ..., 6周日，未配置则每天触发）
-    required_dow = job.get("dow")
-    if required_dow is not None and today.weekday() != required_dow:
+    if not _matches_day(job, today):
         return
 
     if not await _should_run(job, today):
@@ -446,6 +468,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
             await _run_fire_alarm_daily_report(chat_id=chat_id)
         elif job_name == "消防报警日报私发":
             await _run_fire_alarm_daily_dm()
+        elif job_name == "消防报警月报":
+            await _run_fire_alarm_monthly_report(chat_id=chat_id)
         elif job_name == "中控报警日报":
             await _run_central_alarm_daily_report(chat_id=chat_id)
         elif job_name == "点检PDF归档":
@@ -666,6 +690,29 @@ async def _run_fire_alarm_daily_dm() -> None:
         )
     except Exception:
         logger.exception("消防报警日报私发定时任务执行失败")
+
+
+async def _run_fire_alarm_monthly_report(chat_id: str | None = None) -> None:
+    """消防报警月报定时任务（每月 1 日 08:30）：生成上月整月月报并推送。
+
+    复用 scheduler-ready 入口 run_monthly_fire_alarm_analysis（独立 session、
+    channel=system、push=True）；不传 month_end，入口默认取上一完整自然月
+    （1 日触发 → 上月 1 日~月末，即「9 月 1 日分析 8 月整月」）。
+    总卡开启时投「安全速递」格子（fire_alarm_monthly），关闭时发独立群卡
+    （chat_id）。失败向上抛出，由调度器的补发窗口重试机制接管。
+    """
+    from app.modules.safety.service.fire_alarm.service import (
+        run_monthly_fire_alarm_analysis,
+    )
+
+    result = await run_monthly_fire_alarm_analysis(chat_id=chat_id)
+    if result is None:
+        raise RuntimeError("消防报警月报生成失败（入口返回 None）")
+    pushed = sum(1 for p in result.push_results if p.get("success"))
+    logger.info(
+        "  消防报警月报完成: %s~%s total=%d pushed=%d",
+        result.month_start, result.target_date, result.total, pushed,
+    )
 
 
 async def _run_central_alarm_daily_report(chat_id: str | None = None) -> None:
