@@ -1873,6 +1873,35 @@ async def query_ehs_changes(
 
     示例：生产部有哪些重大变更；最近 AI 预审完成的变更。
     """
+    # 直读分支（批次三）：DIRECT 开启时走 EHS 变更审批/验收两表 Bitable 直读，
+    # 语义忠实复刻 legacy（spec D3：排序键 created_at→Bitable created_time 受控
+    # 偏差、offset raw/limit cap 分页 quirk、actual_* 恒 None 复刻——状态机零
+    # 使用探针坐实）。关=逐行 legacy。事件链路/AI 审核回写/API/状态机/前端零
+    # 改动（spec D1）。
+    from app.modules.safety.service.ehs_change_direct import config as ehs_config
+
+    if ehs_config.direct_enabled():
+        from app.modules.safety.service.ehs_change_direct import (
+            query as ehs_query,
+        )
+        from app.modules.safety.service.ehs_change_direct import (
+            reader as ehs_reader,
+        )
+
+        views = await ehs_reader.open_reader().fetch_all()
+        items, total = ehs_query.ehs_changes(
+            views,
+            department=department,
+            change_type=change_type,
+            change_grade=change_grade,
+            status=status,
+            ai_review_status=ai_review_status,
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+        )
+        return _detail_result(items, page, page_size, total)
+
     from sqlalchemy import func, or_, select
 
     from app.modules.safety.models import EhsChange
