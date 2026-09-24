@@ -117,7 +117,9 @@ def test_render_full_archive_layout() -> None:
         "整改状态", "无需整改", "异常描述", "无异常", "本人确认", "已确认",
     ):
         assert expected in text, expected
-    # 点检项目表：5 行全 符合
+    # 点检项目节：独立标题 + 两列表头，5 行全 符合
+    assert "点检项目" in text
+    assert "点检内容" in text
     for item in fi_models.CHECK_FIELDS:
         assert item in text, item
     assert text.count("符合") == 5

@@ -41,7 +41,6 @@ _FONT = "STSong-Light"
 _TITLE = ParagraphStyle("fi_title", fontName=_FONT, fontSize=18, leading=24, alignment=1, spaceAfter=6)
 _LABEL = ParagraphStyle("fi_label", fontName=_FONT, fontSize=10, leading=14, wordWrap="CJK")
 _VALUE = ParagraphStyle("fi_value", fontName=_FONT, fontSize=10, leading=14, wordWrap="CJK")
-_HEAD = ParagraphStyle("fi_head", fontName=_FONT, fontSize=10, leading=14, alignment=1)
 _NOTE = ParagraphStyle("fi_note", fontName=_FONT, fontSize=8, leading=12, wordWrap="CJK")
 _NOTE_RIGHT = ParagraphStyle("fi_note_right", fontName=_FONT, fontSize=8, leading=12, alignment=2)
 
@@ -119,29 +118,24 @@ def _info_grid(record: InspectionRecord) -> Table:
     )
 
 
-def _check_table(record: InspectionRecord) -> Table:
-    """点检项目表：项目|点检内容|结果，勾选→符合 / 未勾→不符合。"""
+def _check_section(record: InspectionRecord) -> list[Flowable]:
+    """点检项目节：独立标题 + 两列表（点检内容|结果），对照归档样例版式。"""
     data: list[list[Flowable]] = [
-        [_head_cell("点检项目"), _head_cell("点检内容"), _head_cell("结果")]
+        [_label("点检内容"), _label("结果")],
     ]
     for name, checked in record.checks:
-        data.append([_label(name), _value(""), _value("符合" if checked else "不符合")])
-    table = Table(data, colWidths=[92 * mm, 38 * mm, 24 * mm], repeatRows=1)
+        data.append([_value(name), _value("符合" if checked else "不符合")])
+    table = Table(data, colWidths=[152 * mm, 24 * mm], repeatRows=1)
     table.setStyle(
         TableStyle(
             [
                 ("GRID", (0, 0), (-1, -1), 0.8, colors.black),
-                ("BACKGROUND", (0, 0), (-1, 0), _GRAY),
                 *_VALIGN_MIDDLE,
                 *_CELL_PADDING,
             ]
         )
     )
-    return table
-
-
-def _head_cell(text: str) -> Paragraph:
-    return Paragraph(_esc(text), _HEAD)
+    return [Paragraph(_esc("点检项目"), _LABEL), Spacer(1, 2 * mm), table]
 
 
 def _photo_box(label: str, image: Image | None) -> Table:
@@ -263,7 +257,7 @@ def render(record: InspectionRecord, images: dict[str, bytes] | None = None) -> 
         Paragraph(_esc("消防设施点检记录"), _TITLE),
         _info_grid(record),
         Spacer(1, 5 * mm),
-        _check_table(record),
+        *_check_section(record),
         Spacer(1, 5 * mm),
         _photos_section(record, image_map),
         Spacer(1, 4 * mm),
