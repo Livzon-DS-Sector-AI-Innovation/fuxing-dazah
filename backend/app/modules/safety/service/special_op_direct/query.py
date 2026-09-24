@@ -90,7 +90,10 @@ def _stored_risk_level(record: dict[str, Any]) -> str | None:
 
 
 def to_query_view(record: dict[str, Any]) -> SpecialOpView:
-    """Bitable 记录 -> 查询用视图：列有值读列，为空则现场判定（不回写）。"""
+    """Bitable 记录 -> 查询用视图：列有值读列，为空则现场判定（不回写）。
+
+    撤回票排除在最后兜底：存量风险列有值的撤回票不得因列值而算作有效票。
+    """
     view = bitable_repo.to_view(record)
     stored = _stored_risk_level(record)
     if stored:
@@ -101,7 +104,7 @@ def to_query_view(record: dict[str, Any]) -> SpecialOpView:
         view.inferred_operation_types = None
     else:
         bitable_repo.assess_view(view)
-    return view
+    return bitable_repo.mark_withdrawn(view)
 
 
 def _matches(

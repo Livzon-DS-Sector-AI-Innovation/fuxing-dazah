@@ -64,6 +64,12 @@ RecordWriter = BitableRecordWriter
 
 # 多维表格列名（与生产表实际列名一致）
 F_START_TIME = "作业时间_开始时间"
+F_APPLICATION_STATUS = "申请状态"
+
+# 「申请状态」= 已撤回 的旧票不计入日报统计（撤回后通常重新提交了一张新票，
+# 按行数统计会把同一作业算两次；2026-09-22 真机数据 34 条 vs 有效票 31 条）
+WITHDRAWN_APPLICATION_STATUS = "已撤回"
+WITHDRAWN_EXCLUSION_REASON = "申请已撤回"
 
 # 顶层系统字段（需 automatic_fields=True 才返回；单位 ms 时间戳）
 SYSTEM_FIELD_CREATED_TIME = "created_time"
@@ -140,6 +146,8 @@ class SpecialOpView:
     risk_level: str | None = None
     status: str = "approved"
     notes: str | None = None
+    # 申请状态（单据生命周期：审批中 / 已通过 / 已撤回；已撤回票不参与日报统计）
+    application_status: str | None = None
 
     # 引擎派生结果（内存，不落库）
     daily_risk_level: str | None = None
@@ -172,6 +180,7 @@ def to_view(record: dict[str, Any]) -> SpecialOpView:
     for name in _DATETIME_FIELDS:
         mapped[name] = to_utc(mapped.get(name))
     mapped["feishu_record_id"] = record_id or None
+    mapped["application_status"] = bd_fields.text(fields, F_APPLICATION_STATUS)
 
     submitted_at: datetime | None = mapped.get("submitted_at")
     system_created = _ms_to_utc(record.get(SYSTEM_FIELD_CREATED_TIME))
@@ -190,8 +199,9 @@ def to_view(record: dict[str, Any]) -> SpecialOpView:
 def assess_view(view: SpecialOpView) -> SpecialOpView:
     """在视图对象上跑风险判定，并把结果按镜像链路的同一写法写回视图。
 
-    与 ``sync_from_bitable`` / ``_upsert_one_from_fields`` 的赋值口径逐字一致，
-    保证同一份数据两路判定结果相同（等级、命中规则、推断类型、是否排除）。
+    引擎赋值与 ``sync_from_bitable`` / ``_upsert_one_from_fields`` 的写法逐字
+    一致（等级、命中规则、推断类型、是否排除）；其上叠加直读域独有的撤回票
+    排除（``mark_withdrawn``）——镜像链路不感知「申请状态」列。
     """
     result = RiskAssessmentEngine.assess(view)
     view.daily_risk_level = result.risk_level
@@ -203,6 +213,18 @@ def assess_view(view: SpecialOpView) -> SpecialOpView:
     )
     view.is_excluded = result.is_excluded
     view.exclusion_reason = result.exclusion_reason
+    return mark_withdrawn(view)
+
+
+def mark_withdrawn(view: SpecialOpView) -> SpecialOpView:
+    """撤回票排除：「申请状态」= 已撤回 的记录不计入日报统计（幂等，可兜底重复调用）。
+
+    独立于风险判定引擎（引擎规则一行不改），且需在「日报风险等级（AI）」存量列
+    读取之后兜底——撤回票此前被回写过的列值不能让它重新算作有效票。
+    """
+    if (view.application_status or "") == WITHDRAWN_APPLICATION_STATUS:
+        view.is_excluded = True
+        view.exclusion_reason = WITHDRAWN_EXCLUSION_REASON
     return view
 
 
@@ -275,7 +297,8 @@ async def writeback_risk_levels(
 
     - **只回写这一列**：请求体恒为 ``{日报风险等级（AI）: 高风险|中风险|低风险}``，
       绝不触碰人工填写列与公式列
-    - 等级为空/未知，或缺少 record_id -> 跳过（不回写、不报错）
+    - 等级为空/未知、缺少 record_id，或申请已撤回 -> 跳过（不回写、不报错；
+      撤回票此前被回写的列值保留不动）
     - 串行执行，条目之间间隔 ``interval_seconds``（默认 0.5 秒），由底座
       ``bitable_direct.writer.write_serial`` 保证
     - 单条失败只记 warning 并计入 ``failed``，**不抛异常**：回写不阻塞日报推送，
@@ -286,6 +309,7 @@ async def writeback_risk_levels(
         view
         for view in views
         if view.feishu_record_id
+        and (view.application_status or "") != WITHDRAWN_APPLICATION_STATUS
         and contract.option_for_risk_level(view.daily_risk_level) is not None
     ]
     updates = [
