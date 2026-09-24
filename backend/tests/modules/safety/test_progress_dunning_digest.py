@@ -1,7 +1,8 @@
 """未更新进展催办 → 「安全速递」格子的单元测试。
 
-纯内存桩验证，不依赖 Redis / 飞书网络：私发完成后催办简报（含已私发对象）
-应作为 ``progress_dunning`` 格子投进当日总卡。
+纯内存桩验证，不依赖 Redis / 飞书网络：催办结果应作为 ``progress_dunning``
+格子投进当日总卡——有命中投催办简报（含已私发对象），0 命中投
+「今日无需催办」简报（有无均报，口径对齐消防报警日报）。
 """
 
 from __future__ import annotations
@@ -120,8 +121,8 @@ async def test_send_dynamic_upserts_digest_cell(
         (v2, "责任人", _person("李四")),
     ]
 
-    async def fake_find() -> list[HazardView]:
-        return [v1, v2]
+    async def fake_overview() -> tuple[list[HazardView], int]:
+        return [v1, v2], 42
 
     async def fake_resolve(views: list[HazardView]) -> list[Any]:
         return plan
@@ -143,7 +144,7 @@ async def test_send_dynamic_upserts_digest_cell(
         captured.append((report_date, key, cell))
         return True
 
-    monkeypatch.setattr(progress_dunning, "find_dunning_hazards", fake_find)
+    monkeypatch.setattr(progress_dunning, "find_dunning_overview", fake_overview)
     monkeypatch.setattr(progress_dunning, "resolve_dunning_recipients", fake_resolve)
     monkeypatch.setattr(mention, "resolve_open_ids", fake_mention)
     monkeypatch.setattr(progress_card, "build_progress_card", fake_card)
@@ -163,23 +164,57 @@ async def test_send_dynamic_upserts_digest_cell(
     assert "张三" in cell.detail and "李四" in cell.detail
 
 
-async def test_send_dynamic_no_hazards_skips_digest(
+async def test_send_dynamic_no_hazards_still_upserts_digest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_find() -> list[HazardView]:
-        return []
+    """0 命中不发卡，但仍投「今日无需催办」速递格子（有无均报）。"""
+    async def fake_overview() -> tuple[list[HazardView], int]:
+        return [], 44
 
-    called: list[bool] = []
+    captured: list[tuple[Any, str, DigestCell]] = []
 
-    async def fake_upsert(*a: Any, **kw: Any) -> bool:
-        called.append(True)
+    async def fake_upsert(
+        report_date: Any, key: str, cell: DigestCell, **kw: Any,
+    ) -> bool:
+        captured.append((report_date, key, cell))
         return True
 
-    monkeypatch.setattr(progress_dunning, "find_dunning_hazards", fake_find)
+    monkeypatch.setattr(progress_dunning, "find_dunning_overview", fake_overview)
     monkeypatch.setattr(daily_digest, "upsert_daily_digest", fake_upsert)
 
     stats = await progress_dunning.send_progress_dunning_dynamic()
 
     assert stats["total"] == 0
-    assert "digest_upserted" not in stats
-    assert called == []
+    assert stats["candidates"] == 44
+    assert stats["digest_upserted"] is True
+    assert len(captured) == 1
+    report_date, key, cell = captured[0]
+    assert key == "progress_dunning"
+    bj_today = (datetime.now(UTC) + timedelta(hours=8)).date()
+    assert report_date == bj_today
+    assert cell.tag_color == "orange"
+    assert cell.tag_text == "进展催办"
+    assert "督办中隐患 **44** 条" in cell.stats
+    assert "未更新进展 **0** 项" in cell.stats
+    assert "无需催办" in cell.zone
+    assert "已私发对象" not in cell.detail
+    assert "催办明细" not in cell.detail
+
+
+def test_build_cell_zero_hits_with_candidates() -> None:
+    cell = progress_dunning._build_dunning_cell(
+        [], [], [], [], _stats(total=0, marked=0, candidates=44),
+    )
+    assert cell.tag_text == "进展催办"
+    assert cell.stats == "督办中隐患 **44** 条 ｜ 未更新进展 **0** 项"
+    assert cell.zone == "各督办隐患整改进展均正常更新，今日无需催办"
+    assert "未发现「未更新进展」隐患" in cell.detail
+
+
+def test_build_cell_zero_hits_without_candidates() -> None:
+    cell = progress_dunning._build_dunning_cell(
+        [], [], [], [], _stats(total=0, marked=0, candidates=0),
+    )
+    assert cell.stats == "督办中隐患 **0** 条 ｜ 未更新进展 **0** 项"
+    assert "无督办中隐患" in cell.zone
+    assert "无督办中（红色/一般预警且未关闭）隐患" in cell.detail

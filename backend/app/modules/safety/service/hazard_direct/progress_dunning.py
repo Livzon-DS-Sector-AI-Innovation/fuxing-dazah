@@ -7,7 +7,8 @@
 发送对象分类型：``ou_``（个人）= 一卡一隐患 DM 私发；``oc_``（群聊）= 群卡片。
 
 私发完成后，向当日「安全速递」总卡投递一个 ``progress_dunning`` 格子
-（发到安全AI创新交流群），简报中注明已私发的对象与催办隐患明细。
+（发到安全AI创新交流群），简报中注明已私发的对象与催办明细；
+**0 命中时同样投递「今日无需催办」简报**（有无均报，口径对齐消防报警日报）。
 """
 
 from __future__ import annotations
@@ -50,12 +51,18 @@ async def _fetch_dunning_targets(client: Any) -> list[bitable_repo.HazardView]:
 
 async def find_dunning_hazards() -> list[bitable_repo.HazardView]:
     """返回当前应催办的隐患（已标记「未更新进展」）。"""
+    views, _ = await find_dunning_overview()
+    return views
+
+
+async def find_dunning_overview() -> tuple[list[bitable_repo.HazardView], int]:
+    """返回 (应催办隐患, 参与评估的督办候选数)，供速递报告引用。"""
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 
     client = SafetyBitableClient()
     views = await _fetch_dunning_targets(client)
     if not views:
-        return []
+        return [], 0
     marks = await progress_track.compute_marks(views)
     out: list[bitable_repo.HazardView] = []
     for view in views:
@@ -65,7 +72,7 @@ async def find_dunning_hazards() -> list[bitable_repo.HazardView]:
             out.append(view)
     # 最旧的排前面（与旧实现一致）
     out.sort(key=lambda v: v.discovered_at or datetime.max.replace(tzinfo=UTC))
-    return out
+    return out, len(views)
 
 
 async def _resolve_officers(resolver: Any, department: str) -> list[Any]:
@@ -165,17 +172,30 @@ async def resolve_dunning_recipients(
 
 
 async def send_progress_dunning_dynamic() -> dict[str, Any]:
-    """一卡一隐患，私发给每条隐患的「责任人 + 分管安全员」。"""
+    """一卡一隐患，私发给每条隐患的「责任人 + 分管安全员」。
+
+    0 命中时不发卡，但仍向「安全速递」总卡投递「今日无需催办」简报
+    （有无均报，口径对齐消防报警日报）。
+    """
     from app.modules.safety.feishu.notification import send_user_card
     from app.modules.safety.feishu.progress_card import build_progress_card
 
-    views = await find_dunning_hazards()
+    views, candidates = await find_dunning_overview()
     stats: dict[str, Any] = {
-        "total": len(views), "sent": 0, "skipped": 0, "errors": 0,
+        "total": len(views), "candidates": candidates,
+        "sent": 0, "skipped": 0, "errors": 0,
         "marked": len(views), "recipients": 0,
     }
     if not views:
-        logger.info("⑤ 当前无「未更新进展」隐患，不发卡")
+        logger.info("⑤ 当前无「未更新进展」隐患，不发卡（督办候选 %d 条）", candidates)
+        # 0 命中也投速递格子（报告口径对齐消防报警日报：有无均报）
+        try:
+            stats["digest_upserted"] = await _upsert_dunning_digest(
+                views, [], [], [], stats,
+            )
+        except Exception:
+            stats["digest_upserted"] = False
+            logger.exception("⑤ 催办简报投递安全速递异常（不影响私发结果）")
         return stats
 
     plan = await resolve_dunning_recipients(views)
@@ -266,8 +286,28 @@ def _build_dunning_cell(
     failed_plan: list[tuple[bitable_repo.HazardView, str, Any]],
     stats: dict[str, Any],
 ) -> Any:
-    """催办简报格子：概览统计 + 已私发对象分组 + 催办明细 + 未送达提示。"""
+    """催办简报格子：概览统计 + 已私发对象分组 + 催办明细 + 未送达提示。
+
+    0 命中时渲染「今日无需催办」简报（有无均报，样式对齐消防报警日报格子）。
+    """
     from app.modules.safety.feishu.daily_digest import DigestCell
+
+    if not views:
+        candidates = int(stats.get("candidates") or 0)
+        if candidates:
+            zone_text = "各督办隐患整改进展均正常更新，今日无需催办"
+            detail_text = "督办范围内未发现「未更新进展」隐患，今日未私发催办卡片。"
+        else:
+            zone_text = "今日无督办中隐患，无需催办"
+            detail_text = "当前无督办中（红色/一般预警且未关闭）隐患，今日未私发催办卡片。"
+        return DigestCell(
+            tag_color="orange",
+            tag_text="进展催办",
+            title="未更新进展催办",
+            stats=f"督办中隐患 **{candidates}** 条 ｜ 未更新进展 **0** 项",
+            zone=zone_text,
+            detail=detail_text,
+        )
 
     # 已成功私发的人 → 角色去重、催办隐患编号列表（按发送顺序）
     people: dict[str, dict[str, Any]] = {}
