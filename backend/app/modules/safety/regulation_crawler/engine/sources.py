@@ -154,12 +154,7 @@ DEFAULT_SOURCES: list[RegulationSource] = [
         name="国家标准全文公开系统",
         base_url="https://openstd.samr.gov.cn/bzgk/gb/std_list",
         source_type="samr",
-        strategy="playwright",
-        list_selector="tr:has(td:first-child)",
-        title_selector="td:nth-child(5)",
-        date_selector="td:nth-child(7)",
-        detail_link_selector="td:last-child a",
-        attachment_selector="",
+        strategy="openstd_http",  # 2026-09-22 改纯 HTTP（服务端渲染 + URL 参数分页，无需浏览器）
         title_blacklist=[
             "煤矿", "民航", "食品", "教育", "金融", "证券", "保险",
             "邮政", "铁路", "水利", "农业", "体育", "广电", "养老",
@@ -264,15 +259,12 @@ DEFAULT_SOURCES: list[RegulationSource] = [
         name="安全生产行业标准（hbba）",
         base_url="https://hbba.sacinfo.org.cn/stdList?key=&trade=%E5%AE%89%E5%85%A8%E7%94%9F%E4%BA%A7",
         source_type="samr_hbba",
-        strategy="samr_list",
+        strategy="hbba_http",  # 2026-09-22 改纯 HTTP（数据来自 POST /stdQueryList，含官方 PDF 直链）
         title_blacklist=[
             "煤矿", "矿山", "烟花爆竹", "民用爆炸物品",
             *_NON_INDUSTRIAL_KW,
         ],
-        list_selector="",
-        detail_link_selector="",
-        attachment_selector="",
-        max_pages=8,  # 每页100条（脚本切换），8页覆盖~800条（约2年发布窗口）
+        max_pages=8,  # 每页 100 条（服务端上限），8 页覆盖 495 条全量
         rate_limit_seconds=1.5,
     ),
     # ── 全国标准信息公共服务平台 — 强制性国家标准列表 ──
@@ -280,15 +272,12 @@ DEFAULT_SOURCES: list[RegulationSource] = [
         name="强制性国家标准（openstd）",
         base_url="https://openstd.samr.gov.cn/bzgk/std/std_list_type?p.p1=1&p.p90=circulation_date&p.p91=desc",
         source_type="samr_openstd",
-        strategy="samr_list",
+        strategy="openstd_http",  # 2026-09-22 改纯 HTTP（原 samr_list 走 Playwright，异常被吞会静默返回 0 条）
         title_blacklist=[
             "煤矿", "矿山", "食品", "航空", "船舶",
             "核安全", "放射性",
             *_NON_INDUSTRIAL_KW,
         ],
-        list_selector="",
-        detail_link_selector="",
-        attachment_selector="",
         max_pages=8,
         rate_limit_seconds=1.5,
     ),

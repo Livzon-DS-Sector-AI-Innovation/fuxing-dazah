@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
+import random
 import re as _re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
+from urllib.parse import parse_qsl, urlencode
 
 from bs4 import BeautifulSoup
 
@@ -1028,6 +1031,345 @@ class SamrListCrawler(BaseCrawler):
 
 
 # ═══════════════════════════════════════════════════════════════
+
+
+class OpenStdListCrawler(BaseCrawler):
+    """全国标准信息公共服务平台（openstd.samr.gov.cn）纯 HTTP 列表爬虫。
+
+    2026-09-22 实测：openstd 列表页是服务端渲染，数据行直接在 HTML 的
+    tbody 里，翻页/搜索全是 URL 参数，不需要 Playwright。原 samr_list
+    策略用浏览器客户端翻页属过度实现，且在起不了 Chromium 的环境会
+    静默返回 0 条（异常被吞，errors 里也看不到）。
+
+    页面 jumpPage() 暴露的真实参数：
+      - 翻页：page=<n>&pageSize=<m>（pageSize 实测可用 50）
+      - 搜索：p.p2=<关键词>（页面 search() 把搜索框值写入 p2）
+      - 排序：p.p90=circulation_date&p.p91=desc（发布时间倒序）
+      - 类别：p.p1=0 全部 / p.p1=1 仅强制性国标
+
+    两类页面共用同一套参数（表格列数略有差异，本类按内容判定列位）：
+      - /bzgk/gb/std_list       国家标准全文公开（支持关键词搜索）
+      - /bzgk/std/std_list_type 强制性国家标准列表
+    """
+
+    # 每页条数（实测服务端接受 pageSize=50）
+    _PAGE_SIZE = 50
+    # 标准号格式：GB 1234-2025 / GB/T 1234 / GB/Z 1234
+    _STD_NO_RE = _re.compile(r"^[A-Z]{2,}(\s*/\s*[A-Z0-9]+)?\s*\d")
+    # 纯日期单元格
+    _DATE_ONLY_RE = _re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$")
+    _STATUS_WORDS = ("即将实施", "现行有效", "现行", "废止", "作废")
+    _CATEGORY_WORDS = ("强标", "推标", "指导性技术文件")
+    _IGNORE_CELLS = {"查看详细", "查看", "详情", "采", ""}
+    # 详情按钮：onclick="showInfo('182F9CA581492D438A5B732B267477C2')"
+    _HCNO_RE = _re.compile(r"showInfo\('([0-9A-Fa-f]+)'\)")
+
+    async def crawl(self) -> list[CrawledRegulation]:
+        logger.info("OpenStdListCrawler 开始爬取: %s", self.source.name)
+        items: list[CrawledRegulation] = []
+        seen: set[str] = set()
+        keywords = [
+            k for k in _re.split(r"[\s,，、;；]+", self.source.search_keywords or "") if k
+        ]
+
+        try:
+            if keywords:
+                for kw in keywords:
+                    got = await self._crawl_pages(kw, seen)
+                    if got:
+                        items.extend(got)
+                        logger.info(
+                            "关键词 %s -> %d 条（累计 %d）", kw, len(got), len(items),
+                        )
+                    await asyncio.sleep(self.source.rate_limit_seconds)
+            else:
+                items = await self._crawl_pages("", seen)
+        except Exception:
+            logger.exception("OpenStdListCrawler 爬取异常: %s", self.source.name)
+
+        logger.info(
+            "OpenStdListCrawler 完成: %s, %d 条 (去重后)", self.source.name, len(items),
+        )
+        return items
+
+    async def _crawl_pages(
+        self, keyword: str, seen: set[str],
+    ) -> list[CrawledRegulation]:
+        """按 URL 参数翻页；整页无近期新条目即停（列表按发布时间倒序）。"""
+        out: list[CrawledRegulation] = []
+        for page in range(1, max(1, self.source.max_pages) + 1):
+            url = self._build_page_url(page, keyword)
+            html = await self.fetch_page(url)
+            raw_count, page_items = self._parse_html(html, url)
+            fresh: list[CrawledRegulation] = []
+            for it in page_items:
+                key = (it.document_number or it.title).strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                fresh.append(it)
+            out.extend(fresh)
+            logger.debug(
+                "  page=%d 原始行=%d 近期=%d 新增=%d",
+                page, raw_count, len(page_items), len(fresh),
+            )
+            if raw_count < self._PAGE_SIZE:
+                break  # 末页
+            if not fresh:
+                break  # 整页无近期新条目（时间倒序，后续页只会更旧）
+            await asyncio.sleep(self.source.rate_limit_seconds)
+        return out
+
+    def _build_page_url(self, page: int, keyword: str = "") -> str:
+        """在 source.base_url 已有参数基础上补齐分页/搜索参数。"""
+        base, _, query = self.source.base_url.partition("?")
+        params = dict(parse_qsl(query, keep_blank_values=True))
+        params["r"] = f"{random.random():.10f}"  # 站点 jumpPage 自带随机数防缓存
+        params["page"] = str(page)
+        params["pageSize"] = str(self._PAGE_SIZE)
+        params.setdefault("p.p1", "0")
+        params.setdefault("p.p90", "circulation_date")
+        params.setdefault("p.p91", "desc")
+        if keyword:
+            params["p.p2"] = keyword
+        return f"{base}?{urlencode(params)}"
+
+    def _parse_html(
+        self, html: str, page_url: str,
+    ) -> tuple[int, list[CrawledRegulation]]:
+        """解析列表页 -> (原始数据行数, 近期条目列表)。
+
+        返回原始行数供调用方判断末页（近期条目会被 recency 过滤掉，
+        不能用 len(items) 当页大小）。
+        """
+        soup = BeautifulSoup(html, "lxml")
+        items: list[CrawledRegulation] = []
+        raw_count = 0
+
+        for tr in soup.select("tbody tr"):
+            tds = tr.find_all("td")
+            if len(tds) < 6:
+                continue
+            cells = [td.get_text(" ", strip=True) for td in tds]
+            std_no = cells[1].strip()
+            if not self._STD_NO_RE.match(std_no):
+                continue
+            raw_count += 1
+
+            dates = [c for c in cells if self._DATE_ONLY_RE.match(c)]
+            status = next((c for c in cells if c in self._STATUS_WORDS), None)
+            category = next((c for c in cells if c in self._CATEGORY_WORDS), None)
+
+            ignore: set[str] = set(self._IGNORE_CELLS) | {std_no, *dates}
+            if status:
+                ignore.add(status)
+            if category:
+                ignore.add(category)
+            candidates = [c for c in cells[2:] if c not in ignore]
+            title = max(candidates, key=len).strip() if candidates else ""
+            if not title or self._should_skip(title):
+                continue
+
+            pub_date = dates[0] if dates else ""
+            impl_date = dates[1] if len(dates) > 1 else ""
+            if not _is_recent_standard(pub_date, impl_date):
+                logger.debug(
+                    "跳过老标准 (pub=%s impl=%s): %s", pub_date, impl_date, title[:40],
+                )
+                continue
+
+            detail_url = self.source.base_url
+            m = self._HCNO_RE.search(str(tr))
+            if m:
+                module = "gb" if "/gb/" in page_url else "std"
+                detail_url = (
+                    f"https://openstd.samr.gov.cn/bzgk/{module}/newGbInfo?hcno={m.group(1)}"
+                )
+
+            items.append(CrawledRegulation(
+                title=title,
+                document_number=std_no or None,
+                publish_date=pub_date or None,
+                implementation_date=impl_date or None,
+                status=status,
+                issuing_authority="国家标准化管理委员会",
+                source_url=detail_url,
+                source_type=self.source.source_type,
+                raw_text=(
+                    f"标准号: {std_no}\n标准名: {title}\n"
+                    f"状态: {status or ''}\n类别: {category or ''}\n"
+                    f"发布: {pub_date}\n实施: {impl_date}"
+                ),
+            ))
+
+        return raw_count, items
+
+
+
+
+class HbbaListCrawler(BaseCrawler):
+    """全国标准信息公共服务平台（hbba.sacinfo.org.cn）行业标准列表纯 HTTP 爬虫。
+
+    2026-09-22 实测：列表页 #hbtable 是 bootstrap-table + sidePagination=server，
+    数据来自 POST /stdQueryList（表单编码），不需要浏览器。原 samr_list 策略用
+    Playwright 客户端翻页属过度实现，且在起不了 Chromium 的环境会静默返回 0 条。
+
+    接口：
+        POST /stdQueryList
+        body: current=<页码,1 起>&size=<每页,最大 100>&key=&industry=<行业>
+              &ministry=&pubdate=&date=&status=
+        resp: {current, pages, records, searchCount, size, total}
+        record: chName(名称) code(标准号) chargeDept(归口) issueDate(批准,ms)
+                actDate(实施,ms) status pk(=hash) recordNo
+
+    原件：GET {base}/portal/download/{pk} 直出官方 PDF（实测 5/5，1.7~6.8MB）
+    详情：GET {base}/stdDetail/{pk}
+    """
+
+    _API_PATH = "/stdQueryList"
+    _DETAIL_PATH = "/stdDetail/{pk}"
+    _DOWNLOAD_PATH = "/portal/download/{pk}"
+    # 服务端 size 上限 100（传 200 仍返回 100）
+    _PAGE_SIZE = 100
+    _STD_NO_RE = _re.compile(r"^[A-Z]{2,}(\s*/\s*[A-Z0-9]+)?\s*\d")
+
+    async def crawl(self) -> list[CrawledRegulation]:
+        logger.info("HbbaListCrawler 开始爬取: %s", self.source.name)
+        items: list[CrawledRegulation] = []
+        seen: set[str] = set()
+        industry = self._industry()
+
+        try:
+            for page in range(1, max(1, self.source.max_pages) + 1):
+                data = await self._query_page(page, industry)
+                records = data.get("records") or []
+                if not records:
+                    break
+                fresh = 0
+                for rec in records:
+                    item = self._parse_record(rec, industry)
+                    if item is None:
+                        continue
+                    key = (item.document_number or item.title).strip()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(item)
+                    fresh += 1
+                logger.debug("  page=%d 返回=%d 新增=%d", page, len(records), fresh)
+                if len(records) < self._PAGE_SIZE:
+                    break  # 末页
+                await asyncio.sleep(self.source.rate_limit_seconds)
+        except Exception:
+            logger.exception("HbbaListCrawler 爬取异常: %s", self.source.name)
+
+        logger.info(
+            "HbbaListCrawler 完成: %s, %d 条 (去重后)", self.source.name, len(items),
+        )
+        return items
+
+    def _base(self) -> str:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(self.source.base_url)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    def _industry(self) -> str:
+        """从 base_url 的 trade 参数取行业（如 安全生产）。"""
+        from urllib.parse import parse_qsl
+
+        query = self.source.base_url.partition("?")[2]
+        return dict(parse_qsl(query, keep_blank_values=True)).get("trade") or "安全生产"
+
+    async def _query_page(self, page: int, industry: str) -> dict[str, Any]:
+        import httpx as _httpx
+
+        url = self._base() + self._API_PATH
+        headers = {
+            **self._headers,
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": self.source.base_url,
+        }
+        payload = {
+            "current": str(page),
+            "size": str(self._PAGE_SIZE),
+            "key": "",
+            "industry": industry,
+            "ministry": "",
+            "pubdate": "",
+            "date": "",
+            "status": "",
+        }
+        async with _httpx.AsyncClient(timeout=45.0, follow_redirects=True) as http:
+            for attempt in range(3):
+                try:
+                    resp = await http.post(url, data=payload, headers=headers)
+                    resp.raise_for_status()
+                    return resp.json()
+                except Exception:
+                    logger.warning(
+                        "hbba /stdQueryList 请求失败 (尝试 %d/3): page=%d", attempt + 1, page,
+                    )
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(2.0 * (attempt + 1))
+        return {}
+
+    def _parse_record(
+        self, rec: dict[str, Any], industry: str,
+    ) -> CrawledRegulation | None:
+        code = str(rec.get("code") or "").strip()
+        name = str(rec.get("chName") or "").strip()
+        if not code or not name or not self._STD_NO_RE.match(code):
+            return None
+        if self._should_skip(name):
+            return None
+
+        pub_date = self._ms_to_date(rec.get("issueDate"))
+        impl_date = self._ms_to_date(rec.get("actDate"))
+        if not _is_recent_standard(pub_date, impl_date):
+            return None
+
+        pk = str(rec.get("pk") or "").strip()
+        base = self._base()
+        safe_name = _re.sub(r'[\\/*?:"<>|]', "", name)[:60]
+        status = str(rec.get("status") or "").strip()
+
+        return CrawledRegulation(
+            title=name,
+            document_number=code,
+            publish_date=pub_date or None,
+            implementation_date=impl_date or None,
+            status=status or None,
+            issuing_authority=(
+                str(rec.get("chargeDept") or "").strip() or "国家标准化管理委员会"
+            ),
+            source_url=(base + self._DETAIL_PATH.format(pk=pk)) if pk else self.source.base_url,
+            source_type=self.source.source_type,
+            attachment_url=(base + self._DOWNLOAD_PATH.format(pk=pk)) if pk else None,
+            attachment_name=f"{safe_name}.pdf" if pk else None,
+            raw_text=(
+                f"标准号: {code}\n标准名: {name}\n行业: {industry}\n"
+                f"状态: {status}\n归口: {rec.get('chargeDept') or ''}\n"
+                f"批准: {pub_date}\n实施: {impl_date}"
+            ),
+        )
+
+    @staticmethod
+    def _ms_to_date(value: Any) -> str:
+        """毫秒时间戳 -> YYYY-MM-DD（站点时间为 UTC 零点，取 UTC 日期）。"""
+        try:
+            ts = int(value)
+        except (TypeError, ValueError):
+            return ""
+        if ts <= 0:
+            return ""
+        try:
+            return datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            return ""
+
+
 # 工厂函数
 # ═══════════════════════════════════════════════════════════════
 
@@ -1039,6 +1381,8 @@ def crawler_factory(source: RegulationSource) -> BaseCrawler:
         "http_parse": HttpParseCrawler,
         "playwright": PlaywrightCrawler,
         "samr_list": SamrListCrawler,
+        "openstd_http": OpenStdListCrawler,
+        "hbba_http": HbbaListCrawler,
     }
     cls = strategy_map.get(source.strategy, HttpParseCrawler)
     return cls(source)

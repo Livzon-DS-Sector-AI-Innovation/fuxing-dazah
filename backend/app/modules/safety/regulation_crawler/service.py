@@ -975,7 +975,10 @@ class RegulationCrawlerService:
 
         # 3.4 openstd 官方 PDF 直下：网页「下载标准」= showGb 中间页 → viewGb 文件流，
         #     会话 cookie 三步可拿到免费官方原文，先于「原文待补」检测尝试
-        if (not item.attachment_path and source.source_type == "samr_openstd"
+        # samr（国家标准全文公开）与 samr_openstd 同属 openstd 平台，hcno 链路一致，
+        # 2026-09-22 实测 gb 模块的 hcno 同样能取到官方 PDF，故一并纳入。
+        if (not item.attachment_path
+                and source.source_type in ("samr_openstd", "samr")
                 and item.source_url):
             await self._try_openstd_download(item)
 
@@ -1281,8 +1284,11 @@ class RegulationCrawlerService:
         # openstd/hbba 是 JS 在线预览壳（标准全文公开系统），标准全文只能在线预览，
         # 渲染 PDF / 保存正文 TXT 都不是法规原件。即使详情页正文为空也一律标记待补，
         # 否则会落入 _save_body_text 的 TXT 存根（正文只是元数据页文字，非标准原文）。
-        if source.source_type in ("samr_openstd", "samr_hbba"):
-            return "原文待补：标准全文需通过国家标准全文公开系统(openstd)在线预览，暂无免费官方下载链接"
+        # 这三个源的标准全文只能从官方下载通道取（openstd: showGb->viewGb；
+        # hbba: /portal/download/{pk}）。通道未取到（限速/该标准未提供下载）才标记待补，
+        # 避免把元数据页或预览壳渲染成"伪原文"。
+        if source.source_type in ("samr_openstd", "samr_hbba", "samr"):
+            return "原文待补：官方下载通道未取到标准全文（可能被限速或该标准未提供下载），需人工补录"
 
         if not detail_text:
             return None
@@ -1528,32 +1534,55 @@ class RegulationCrawlerService:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": detail_url,
         }
-        try:
-            import httpx as _httpx
+        import httpx as _httpx
 
-            async with _httpx.AsyncClient(timeout=60.0, follow_redirects=True) as http:
-                # 1. 详情页：建立 JSESSIONID 会话
-                await http.get(detail_url, headers=headers)
-                # 2. showGb 中间页：校验下载资格并刷新会话（viewGb 校验依赖其 cookie）
-                resp2 = await http.get(showgb_url, headers=headers)
-                if "viewGb" not in (resp2.text or ""):
-                    logger.info(
-                        "[附件 3.4/3] openstd showGb 未放行（可能需验证码）: %s",
-                        item.title[:50],
-                    )
-                    return False
-                # 3. viewGb 文件流（Referer 必须为 showGb 中间页）
-                h3 = dict(headers)
-                h3["Referer"] = showgb_url
-                resp3 = await http.get(view_url, headers=h3)
-                data = resp3.content or b""
-
-            if not data.startswith(b"%PDF") or len(data) < 10240:
-                logger.info(
-                    "[附件 3.4/3] openstd 下载内容非有效 PDF (%d bytes): %s",
-                    len(data), item.title[:50],
+        # 2026-09-22 实测：连续请求会被服务端限速，viewGb 返回 200 + 0 字节
+        # （Content-Type: application/octet-stream）。原实现一次不成功就放弃，
+        # 会被 3.5 的「原文待补」检测误判成"无官方下载"。故加指数退避重试。
+        max_attempts = 3
+        last_reason = ""
+        data = b""
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with _httpx.AsyncClient(timeout=90.0, follow_redirects=True) as http:
+                    # 1. 详情页：建立 JSESSIONID 会话
+                    await http.get(detail_url, headers=headers)
+                    # 2. showGb 中间页：校验下载资格并刷新会话（viewGb 校验依赖其 cookie）
+                    resp2 = await http.get(showgb_url, headers=headers)
+                    if "viewGb" not in (resp2.text or ""):
+                        last_reason = "showGb 未放行（该标准未提供下载）"
+                        break
+                    # 3. viewGb 文件流（Referer 必须为 showGb 中间页）
+                    h3 = dict(headers)
+                    h3["Referer"] = showgb_url
+                    resp3 = await http.get(view_url, headers=h3)
+                    data = resp3.content or b""
+                if data.startswith(b"%PDF") and len(data) >= 10240:
+                    break
+                last_reason = f"响应非有效 PDF（{len(data)} bytes，疑似限速）"
+            except Exception:
+                last_reason = "请求异常"
+                logger.warning(
+                    "[附件 3.4/3] openstd 下载异常 (attempt %d/%d): %s",
+                    attempt, max_attempts, item.title[:60], exc_info=True,
                 )
-                return False
+            if attempt < max_attempts:
+                # 实测 5s/10s 退避仍会被限速打回（8 连发失败 2 条），放宽到 8s/16s
+                backoff = 8.0 * attempt
+                logger.info(
+                    "[附件 3.4/3] openstd 下载失败，%.0fs 后重试 (%d/%d): %s",
+                    backoff, attempt, max_attempts, item.title[:50],
+                )
+                await asyncio.sleep(backoff)
+
+        if not (data.startswith(b"%PDF") and len(data) >= 10240):
+            logger.info(
+                "[附件 3.4/3] openstd 官方 PDF 未取到: %s（原因=%s）",
+                item.title[:50], last_reason,
+            )
+            return False
+
+        try:
             safe_title = _re.sub(r'[\\/*?:"<>|]', "", item.title or "regulation")[:80]
             item.attachment_path = store_bytes(
                 "regulation",
@@ -1562,16 +1591,17 @@ class RegulationCrawlerService:
                 content_type="application/pdf",
             )
             item.attachment_name = f"{safe_title}.pdf"
-            logger.info(
-                "[附件 3.4/3] openstd 官方 PDF 下载成功: %s (%d KB) → %s",
-                item.title[:50], len(data) // 1024, item.attachment_path,
-            )
-            return True
         except Exception:
             logger.warning(
-                "[附件 3.4/3] openstd 下载异常: %s", item.title[:60], exc_info=True,
+                "[附件 3.4/3] openstd PDF 落盘失败: %s", item.title[:60], exc_info=True,
             )
             return False
+
+        logger.info(
+            "[附件 3.4/3] openstd 官方 PDF 下载成功: %s (%d KB) -> %s",
+            item.title[:50], len(data) // 1024, item.attachment_path,
+        )
+        return True
 
     async def _download_attachment_file(
         self,
