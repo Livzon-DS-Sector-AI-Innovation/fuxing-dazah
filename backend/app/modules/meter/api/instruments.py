@@ -14,7 +14,8 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.meter import repository as repo
 from app.modules.meter import service
-from app.modules.meter.api._helpers import _build_report_items
+from app.modules.meter.api import _deps
+from app.modules.meter.api._helpers import _build_report_items, _sanitize_row
 from app.modules.meter.api._router import router
 from app.modules.meter.schemas import (
     BatchCreateRequest,
@@ -36,7 +37,7 @@ from app.modules.meter.schemas import (
 logger = logging.getLogger(__name__)
 
 
-@router.get("/overview", summary="仪表总览统计")
+@router.get("/overview", summary="仪表总览统计", dependencies=[Depends(_deps.read_any)])
 async def get_meter_overview(
     source: str = Query(default="instrument", pattern="^(instrument|gas_detector)$", description="数据源"),
     db: AsyncSession = Depends(get_db),
@@ -51,7 +52,7 @@ async def get_meter_overview(
 # ═══════════════════════════════════════════
 
 
-@router.get("/instruments", summary="标准计量器具列表")
+@router.get("/instruments", summary="标准计量器具列表", dependencies=[Depends(_deps.instrument_read)])
 async def list_instruments(
     filters: InstrumentFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -99,7 +100,7 @@ async def list_instruments(
 
 
 
-@router.get("/instruments/filter-options", summary="获取标准计量器具筛选选项")
+@router.get("/instruments/filter-options", summary="获取标准计量器具筛选选项", dependencies=[Depends(_deps.instrument_read)])
 async def get_instrument_filter_options(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
@@ -109,7 +110,7 @@ async def get_instrument_filter_options(
     return success_response(InstrumentFilterOptions(**options).model_dump(mode="json"))
 
 
-@router.get("/instruments/filter-options/search", summary="按字段搜索标准计量器具筛选项（typeahead）")
+@router.get("/instruments/filter-options/search", summary="按字段搜索标准计量器具筛选项（typeahead）", dependencies=[Depends(_deps.instrument_read)])
 async def search_instrument_filter_options(
     field: str = Query(..., description="字段名（白名单）"),
     q: str | None = Query(default=None, max_length=200, description="搜索关键字，空则返回前 limit 个"),
@@ -123,7 +124,7 @@ async def search_instrument_filter_options(
     return success_response(data)
 
 
-@router.get("/instruments/date-stats", summary="标准计量器具日期聚合统计")
+@router.get("/instruments/date-stats", summary="标准计量器具日期聚合统计", dependencies=[Depends(_deps.instrument_read)])
 async def get_instrument_date_stats(
     field: str = Query(default="calibration_date", pattern="^(calibration_date|next_calibration_date)$", description="统计的日期字段"),
     filters: InstrumentFilter = Depends(),
@@ -134,7 +135,7 @@ async def get_instrument_date_stats(
 
 
 
-@router.get("/instruments/export", summary="导出标准计量器具为 CSV")
+@router.get("/instruments/export", summary="导出标准计量器具为 CSV", dependencies=[Depends(_deps.instrument_read)])
 async def export_instruments(
     filters: InstrumentFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -154,7 +155,7 @@ async def export_instruments(
         "检定日期", "检定单位", "检定结论", "下次检定日期", "部门",
     ])
     for r in records:
-        writer.writerow([
+        writer.writerow(_sanitize_row([
             r.asset_number, r.instrument_name, r.model_spec, r.measurement_range,
             r.accuracy_grade, r.serial_number, r.calibration_cycle_months,
             r.location, r.manufacturer, service.compute_status(r.status, r.next_calibration_date),
@@ -162,7 +163,7 @@ async def export_instruments(
             r.calibration_unit, r.calibration_result,
             r.next_calibration_date.isoformat() if r.next_calibration_date else "",
             _normalize_department(r.department),
-        ])
+        ]))
 
     output.seek(0)
     return StreamingResponse(
@@ -173,7 +174,7 @@ async def export_instruments(
 
 
 
-@router.get("/instruments/export-excel", summary="导出标准计量器具为 Excel")
+@router.get("/instruments/export-excel", summary="导出标准计量器具为 Excel", dependencies=[Depends(_deps.instrument_read)])
 async def export_instruments_excel(
     filters: InstrumentFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -212,7 +213,7 @@ async def export_instruments_excel(
         cell.alignment = header_align
 
     for row_idx, r in enumerate(records, 2):
-        values = [
+        values = _sanitize_row([
             r.asset_number, r.instrument_name, r.model_spec, r.measurement_range,
             r.accuracy_grade, r.serial_number, r.calibration_cycle_months,
             r.location, r.manufacturer, service.compute_status(r.status, r.next_calibration_date),
@@ -220,7 +221,7 @@ async def export_instruments_excel(
             r.calibration_unit, r.calibration_result,
             r.next_calibration_date.isoformat() if r.next_calibration_date else "",
             _normalize_department(r.department),
-        ]
+        ])
         for col_idx, v in enumerate(values, 1):
             ws.cell(row=row_idx, column=col_idx, value=v)
 
@@ -244,7 +245,7 @@ async def export_instruments_excel(
 
 
 
-@router.get("/instruments/ids", summary="获取筛选条件下所有标准计量器具 ID（用于跨页全选）")
+@router.get("/instruments/ids", summary="获取筛选条件下所有标准计量器具 ID（用于跨页全选）", dependencies=[Depends(_deps.instrument_read)])
 async def get_instrument_ids(
     filters: InstrumentFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -254,7 +255,7 @@ async def get_instrument_ids(
 
 
 
-@router.get("/instruments/{instrument_id}", summary="标准计量器具详情")
+@router.get("/instruments/{instrument_id}", summary="标准计量器具详情", dependencies=[Depends(_deps.instrument_read)])
 async def get_instrument(
     instrument_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -291,7 +292,7 @@ async def get_instrument(
 
 
 
-@router.post("/instruments", summary="新增标准计量器具")
+@router.post("/instruments", summary="新增标准计量器具", dependencies=[Depends(_deps.instrument_create)])
 async def create_instrument(
     data: InstrumentCreate,
     db: AsyncSession = Depends(get_db),
@@ -328,7 +329,7 @@ async def create_instrument(
 
 
 
-@router.post("/instruments/batch", summary="批量新增标准计量器具（单次最多 200 条）")
+@router.post("/instruments/batch", summary="批量新增标准计量器具（单次最多 200 条）", dependencies=[Depends(_deps.instrument_create)])
 async def batch_create_instruments(
     body: dict[str, Any],
     db: AsyncSession = Depends(get_db),
@@ -349,7 +350,7 @@ async def batch_create_instruments(
 # ═══════════════════════════════════════════
 
 
-@router.post("/instruments/import-ledger", summary="导入标准计量器具台账Excel（按资产编号更新）")
+@router.post("/instruments/import-ledger", summary="导入标准计量器具台账Excel（按资产编号更新）", dependencies=[Depends(_deps.instrument_update)])
 async def import_instrument_ledger(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -409,7 +410,7 @@ async def import_instrument_ledger(
 
 
 
-@router.put("/instruments/{instrument_id}", summary="更新标准计量器具")
+@router.put("/instruments/{instrument_id}", summary="更新标准计量器具", dependencies=[Depends(_deps.instrument_update)])
 async def update_instrument(
     instrument_id: UUID,
     data: InstrumentUpdate,
@@ -447,7 +448,7 @@ async def update_instrument(
 
 
 
-@router.delete("/instruments/{instrument_id}", summary="删除标准计量器具（软删除）")
+@router.delete("/instruments/{instrument_id}", summary="删除标准计量器具（软删除）", dependencies=[Depends(_deps.instrument_delete)])
 async def delete_instrument(
     instrument_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -457,7 +458,7 @@ async def delete_instrument(
 
 
 
-@router.post("/instruments/batch-delete", summary="批量删除标准计量器具（软删除）")
+@router.post("/instruments/batch-delete", summary="批量删除标准计量器具（软删除）", dependencies=[Depends(_deps.instrument_delete)])
 async def batch_delete_instruments(
     body: BatchDeleteRequest,
     db: AsyncSession = Depends(get_db),
@@ -468,7 +469,7 @@ async def batch_delete_instruments(
 
 
 
-@router.post("/instruments/export-reports", summary="批量导出标准计量器具最新报告 ZIP（单次最多 200 份）")
+@router.post("/instruments/export-reports", summary="批量导出标准计量器具最新报告 ZIP（单次最多 200 份）", dependencies=[Depends(_deps.instrument_read)])
 async def export_instrument_reports(
     body: ExportReportRequest,
     db: AsyncSession = Depends(get_db),
@@ -486,7 +487,7 @@ async def export_instrument_reports(
 
 
 
-@router.get("/departments/instruments", summary="获取标准计量器具部门列表")
+@router.get("/departments/instruments", summary="获取标准计量器具部门列表", dependencies=[Depends(_deps.instrument_read)])
 async def list_instrument_departments(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:

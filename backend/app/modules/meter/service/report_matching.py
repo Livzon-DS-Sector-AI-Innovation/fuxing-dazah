@@ -19,7 +19,7 @@ from app.modules.meter import repository as repo
 from app.modules.meter.models import (
     InstrumentRecord,
 )
-from app.modules.meter.service.common import MODULE_CODE
+from app.modules.meter.service.common import MODULE_CODE, normalize_report_content_type
 from app.modules.meter.service.reports import _build_report_path
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,7 @@ async def batch_upload_reports(
                         "file_name": fn,
                         "file_path": object_path,
                         "file_size": len(file_data),
-                        "content_type": content_type,
+                        "content_type": normalize_report_content_type(content_type),
                         "certificate_no": certificate_no,
                         "report_date": report_date_val,
                         "remark": remark,

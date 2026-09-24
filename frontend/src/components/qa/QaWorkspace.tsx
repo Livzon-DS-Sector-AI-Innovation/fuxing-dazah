@@ -1241,7 +1241,7 @@ function QaProposalApproveModal({ proposal, onClose, onApproved, onServerStateCh
 // ─────────────────────────────────────────────────────────────
 
 function QaDocuments({ initialDocumentId }: { initialDocumentId?: string }) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const { hasPermission } = usePermission()
   const canCreate = hasPermission('qa:document:create')
   const canUpdate = hasPermission('qa:document:update')
@@ -1291,12 +1291,22 @@ function QaDocuments({ initialDocumentId }: { initialDocumentId?: string }) {
     }).catch(() => { /* 表格仍可使用 */ })
   }, [])
 
-  const toggleActive = async (record: QaDocument) => {
-    const active = isDocumentActive(record)
-    const result = await setQaDocumentActive(record.id, !active)
+  // 停用会让整份文件从默认检索与 AI 分析中消失，误触代价高，先二次确认；启用只是恢复可见，直接执行。
+  const doToggleActive = async (record: QaDocument, active: boolean) => {
+    const result = await setQaDocumentActive(record.id, active)
     if (!result.success) { message.error(actionError(result)); return }
-    message.success(active ? '文件已停用' : '文件已启用')
+    message.success(active ? '文件已启用' : '文件已停用')
     setRefreshKey((value) => value + 1)
+  }
+
+  const toggleActive = (record: QaDocument) => {
+    if (!isDocumentActive(record)) { void doToggleActive(record, true); return }
+    modal.confirm({
+      title: '停用文件',
+      content: `停用后「${record.title}」不再出现在默认检索与 AI 分析中，历史记录仍会保留。确认停用吗？`,
+      okText: '停用', cancelText: '取消', okButtonProps: { danger: true },
+      onOk: () => doToggleActive(record, false),
+    })
   }
 
   const openDetail = (id: string) => setDetailId(id)
@@ -1385,7 +1395,7 @@ function QaDocuments({ initialDocumentId }: { initialDocumentId?: string }) {
                       <button
                         type="button"
                         className={`${styles.rowAction} ${active ? styles.rowActionDanger : styles.rowActionPositive}`}
-                        onClick={() => { void toggleActive(row) }}
+                        onClick={() => toggleActive(row)}
                       >
                         {active ? '停用' : '启用'}
                       </button>
