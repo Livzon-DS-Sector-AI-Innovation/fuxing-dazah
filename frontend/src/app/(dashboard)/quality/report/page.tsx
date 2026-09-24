@@ -31,6 +31,8 @@ function ReportPageInner() {
   // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
+  const [batchDraft, setBatchDraft] = useState('')
+  const [batchSearch, setBatchSearch] = useState('')
 
   // 从检验历史详情跳转：?recordId= 打开生成报告单弹窗（此前为死链）
   const [genOpen, setGenOpen] = useState(false)
@@ -45,12 +47,12 @@ function ReportPageInner() {
   const load = useCallback(async (p: number) => {
     setLoading(true)
     try {
-      const res = await fetchReportRecords(search || undefined, undefined, p)
+      const res = await fetchReportRecords(search || undefined, batchSearch || undefined, p)
       setData(res.data)
       setTotal(res.meta.total)
     } catch { message.error('加载失败') }
     finally { setLoading(false) }
-  }, [search, message])
+  }, [search, batchSearch, message])
 
   useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
@@ -165,7 +167,11 @@ function ReportPageInner() {
           onChange={e => setSearchDraft(e.target.value)}
           onPressEnter={() => { setSearch(searchDraft); setPage(1) }}
           style={{ width: 200 }} prefix={<SearchOutlined />} />
-        <Button type="primary" onClick={() => { setSearch(searchDraft); setPage(1) }}>搜索</Button>
+        <Input placeholder="批号" allowClear value={batchDraft}
+          onChange={e => setBatchDraft(e.target.value)}
+          onPressEnter={() => { setBatchSearch(batchDraft); setPage(1) }}
+          style={{ width: 160 }} />
+        <Button type="primary" onClick={() => { setSearch(searchDraft); setBatchSearch(batchDraft); setPage(1) }}>搜索</Button>
       </Space>
 
       <Table columns={columns} scroll={{ x: 960 }}

@@ -749,8 +749,11 @@ export async function downloadReportDateTemplate(): Promise<Blob> {
   return res.blob()
 }
 
-export async function fetchDailyReports(date?: string): Promise<{ data: DailyReportItem[] }> {
-  const qs = date ? `?date=${date}` : ''
+export async function fetchDailyReports(date?: string, productName?: string): Promise<{ data: DailyReportItem[] }> {
+  const qp = new URLSearchParams()
+  if (date) qp.set('date', date)
+  if (productName) qp.set('product_name', productName)
+  const qs = qp.toString() ? `?${qp}` : ''
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/daily-reports${qs}`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
@@ -759,8 +762,11 @@ export async function fetchDailyReports(date?: string): Promise<{ data: DailyRep
 }
 
 /** 按月汇总报告单流水（月末归档对账）。 */
-export async function fetchMonthlyReports(month?: string): Promise<{ data: MonthlyReportSummary }> {
-  const qs = month ? `?month=${month}` : ''
+export async function fetchMonthlyReports(month?: string, productName?: string): Promise<{ data: MonthlyReportSummary }> {
+  const qp = new URLSearchParams()
+  if (month) qp.set('month', month)
+  if (productName) qp.set('product_name', productName)
+  const qs = qp.toString() ? `?${qp}` : ''
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/monthly-reports${qs}`, {
     headers: await _authHeaders(), cache: 'no-store',
   })

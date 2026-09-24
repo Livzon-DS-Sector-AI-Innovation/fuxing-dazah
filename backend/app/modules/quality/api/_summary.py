@@ -88,10 +88,11 @@ async def history_summary(
 @router.get("/summary/daily-reports", summary="每日报告单汇总（流水号+产品+批号）")
 async def daily_reports(
     date: str | None = Query(default=None, description="日期 YYYY-MM-DD，默认今天"),
+    product_name: str | None = Query(default=None, description="产品名称（模糊筛选）"),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     day = date or today().isoformat()
-    items = await list_report_records_by_date(db, day)
+    items = await list_report_records_by_date(db, day, product_name=product_name)
     return success_response(data=[
         {
             "serial_no": it.serial_no or "-",
@@ -108,13 +109,14 @@ async def daily_reports(
 @router.get("/summary/monthly-reports", summary="按月汇总报告单流水（月末归档对账）")
 async def monthly_reports(
     month: str | None = Query(default=None, description="月份 YYYY-MM，默认当月"),
+    product_name: str | None = Query(default=None, description="产品名称（模糊筛选）"),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     m = month or today().strftime("%Y-%m")
     start = datetime.fromisoformat(f"{m}-01").replace(tzinfo=APP_TZ)
     end = (start.replace(month=start.month + 1) if start.month < 12
            else start.replace(year=start.year + 1, month=1))
-    items = await list_report_records_between(db, start, end)
+    items = await list_report_records_between(db, start, end, product_name=product_name)
     by_day: dict[str, list] = {}
     for it in items:
         d = it.created_at.astimezone(APP_TZ).strftime("%Y-%m-%d")

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Typography, Card, Table, DatePicker, Space, Button, App, Segmented } from 'antd'
+import { Typography, Card, Table, DatePicker, Space, Button, App, Segmented, Input } from 'antd'
 import { PrinterOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined, EyeOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
@@ -24,15 +24,18 @@ export default function SerialRegistryPage() {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<DailyReportItem[]>([])
   const [monthly, setMonthly] = useState<MonthlyReportSummary | null>(null)
+  // 产品筛选（草稿/提交两态：点搜索才生效）
+  const [productDraft, setProductDraft] = useState('')
+  const [productSearch, setProductSearch] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       if (viewMode === 'day') {
-        const res = await fetchDailyReports(date.format('YYYY-MM-DD'))
+        const res = await fetchDailyReports(date.format('YYYY-MM-DD'), productSearch || undefined)
         setData(res.data || [])
       } else {
-        const res = await fetchMonthlyReports(month.format('YYYY-MM'))
+        const res = await fetchMonthlyReports(month.format('YYYY-MM'), productSearch || undefined)
         setMonthly(res.data)
       }
     } catch (err: unknown) {
@@ -40,7 +43,7 @@ export default function SerialRegistryPage() {
     } finally {
       setLoading(false)
     }
-  }, [viewMode, date, month, message])
+  }, [viewMode, date, month, productSearch, message])
 
   useEffect(() => { (async () => { await load() })() }, [load])
 
@@ -166,7 +169,15 @@ export default function SerialRegistryPage() {
             allowClear={false}
           />
         )}
-        <Button type="primary" icon={<SearchOutlined />} onClick={load}>查询</Button>
+        <Input
+          placeholder="产品名称筛选（可选）"
+          allowClear
+          value={productDraft}
+          onChange={(e) => setProductDraft(e.target.value)}
+          onPressEnter={() => setProductSearch(productDraft)}
+          style={{ width: 180 }}
+        />
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => { setProductSearch(productDraft); load() }}>查询</Button>
         {viewMode === 'day' ? (
           <>
             <Button icon={<FileExcelOutlined />} onClick={handleExport}>导出 Excel</Button>

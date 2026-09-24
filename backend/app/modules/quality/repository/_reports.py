@@ -49,15 +49,17 @@ async def create_report_record(
 
 
 async def list_report_records_between(
-    db: AsyncSession, start: datetime, end: datetime
+    db: AsyncSession, start: datetime, end: datetime, product_name: str | None = None
 ) -> list[ReportRecord]:
-    """时间段内的报告单（月度汇总用），按创建时间升序。"""
+    """时间段内的报告单（月度汇总用），按创建时间升序；可按产品名模糊过滤。"""
     stmt = select(ReportRecord).where(
         ReportRecord.created_at >= start,
         ReportRecord.created_at < end,
         ReportRecord.is_deleted == False,  # noqa: E712
-    ).order_by(ReportRecord.created_at)
-    return list((await db.execute(stmt)).scalars())
+    )
+    if product_name:
+        stmt = stmt.where(ReportRecord.product_name.ilike(f"%{product_name}%"))
+    return list((await db.execute(stmt.order_by(ReportRecord.created_at))).scalars())
 
 
 async def count_report_records_since(
@@ -72,17 +74,19 @@ async def count_report_records_since(
 
 
 async def list_report_records_by_date(
-    db: AsyncSession, day: str
+    db: AsyncSession, day: str, product_name: str | None = None
 ) -> list[ReportRecord]:
-    """某日生成的报告单（流水号汇总：流水号+产品+批号，按北京时间计日）。"""
+    """某日生成的报告单（流水号汇总：流水号+产品+批号，按北京时间计日）；可按产品名模糊过滤。"""
     start = datetime.fromisoformat(day).replace(tzinfo=APP_TZ)
     end = start + timedelta(days=1)
     stmt = select(ReportRecord).where(
         ReportRecord.created_at >= start,
         ReportRecord.created_at < end,
         ReportRecord.is_deleted == False,  # noqa: E712
-    ).order_by(ReportRecord.created_at)
-    return list((await db.execute(stmt)).scalars())
+    )
+    if product_name:
+        stmt = stmt.where(ReportRecord.product_name.ilike(f"%{product_name}%"))
+    return list((await db.execute(stmt.order_by(ReportRecord.created_at))).scalars())
 
 
 async def get_latest_report_record_by_task(

@@ -8,7 +8,7 @@ import {
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
   PlusOutlined, DeleteOutlined, RedoOutlined, UploadOutlined, FileTextOutlined,
-  HistoryOutlined, DownloadOutlined,
+  HistoryOutlined, DownloadOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
@@ -20,6 +20,7 @@ import {
   fetchTaskAttachments, uploadTaskAttachment, downloadTaskAttachment, deleteTaskAttachment,
   fetchTaskReviews, approveTaskReview,
 } from '@/actions/quality'
+import { CoaPreviewModal } from '@/components/quality'
 
 const { Text } = Typography
 
@@ -70,6 +71,7 @@ export default function TaskDetail({ id }: { id: string }) {
   const [generatingCoa, setGeneratingCoa] = useState(false)
   // 多份 COA 生成后的逐份下载弹窗（连续自动下载会被浏览器拦截）
   const [coaFiles, setCoaFiles] = useState<{ report_id: string; filename: string; file_no: string }[]>([])
+  const [coaPreviewId, setCoaPreviewId] = useState<string | null>(null)
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
   const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
@@ -633,6 +635,13 @@ export default function TaskDetail({ id }: { id: string }) {
               </Typography.Text>
               <Button
                 size="small"
+                icon={<EyeOutlined />}
+                onClick={() => setCoaPreviewId(f.report_id)}
+              >
+                预览
+              </Button>
+              <Button
+                size="small"
                 icon={<DownloadOutlined />}
                 onClick={() => downloadCoaOne(f)}
               >
@@ -642,6 +651,13 @@ export default function TaskDetail({ id }: { id: string }) {
           ))}
         </Space>
       </Modal>
+
+      <CoaPreviewModal
+        open={!!coaPreviewId}
+        reportId={coaPreviewId}
+        title="报告单预览"
+        onClose={() => setCoaPreviewId(null)}
+      />
 
     </div>
   )
