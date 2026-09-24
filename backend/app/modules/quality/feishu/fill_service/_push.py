@@ -13,7 +13,7 @@ from app.modules.quality.feishu.fill_service._common import (
     _unfilled_groups,
 )
 from app.modules.quality.feishu.message import send_chat_text
-from app.modules.quality.models import QualityTestTask
+from app.modules.quality.models import QualityTestResult, QualityTestTask
 from app.modules.quality.repository import (
     list_test_results,
 )
@@ -21,7 +21,7 @@ from app.modules.quality.repository import (
 logger = logging.getLogger(__name__)
 
 
-async def push_task_reminder(task: QualityTestTask, rows: list) -> None:
+async def push_task_reminder(task: QualityTestTask, rows: list[QualityTestResult]) -> None:
     """向配置的群推送单个任务的提醒文本 + 分组填报卡片（无待填项时仅文本）。"""
     from app.modules.quality.feishu.client import (
         feishu_configured,
@@ -54,7 +54,7 @@ async def notify_unqualified(
     item_name: str,
     value_text: str,
     limit_text: str,
-    origin_chat_id: str = "",
+    origin_chat_id: str | None = "",
 ) -> None:
     """不合格飞书提醒（@ 负责人；未配置提醒人时纯 post 文本群通知）。"""
     from app.modules.quality.feishu.client import (

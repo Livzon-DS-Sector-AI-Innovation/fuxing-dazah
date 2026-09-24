@@ -59,8 +59,8 @@ class _TaskReports(_TaskCore):
 
         doc_ids = await list_task_standard_document_ids(db, task_id)
         docs: dict[uuid.UUID, QualityStandardDocument] = {}
-        for did in doc_ids:
-            d = await get_standard_document(db, did)
+        for doc_id in doc_ids:
+            d = await get_standard_document(db, doc_id)
             if d:
                 docs[d.id] = d
         if not docs:
@@ -131,7 +131,7 @@ class _TaskReports(_TaskCore):
         all_tasks = today_tasks + review_items + completed_items
         rows_by_task = await list_test_results_for_tasks(db, [t.id for t in all_tasks])
 
-        def _row(t) -> dict[str, Any]:
+        def _row(t: QualityTestTask) -> dict[str, Any]:
             rows = rows_by_task.get(t.id, [])
             return {
                 "task_id": str(t.id),

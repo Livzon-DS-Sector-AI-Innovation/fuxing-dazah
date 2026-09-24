@@ -140,8 +140,8 @@ async def confirm_standard_doc(
     # 引用不断裂（此前整批软删+重建，旧任务逐份 COA 归属静默错乱）
     reused_items: dict[tuple[str, str], QualityStandardItem] = {}
     if overwritten:
-        for it in await list_standard_items(db, doc.id):
-            reused_items[(it.sop_no or "", it.item_name)] = it
+        for item in await list_standard_items(db, doc.id):
+            reused_items[(item.sop_no or "", item.item_name)] = item
     created = 0
     reused = 0
     skipped = 0
@@ -173,9 +173,9 @@ async def confirm_standard_doc(
             skipped += 1
     if overwritten:
         # 新版中已删除的项目行软删（保留 ID 不复用，历史快照仍可追溯）
-        for key, it in reused_items.items():
+        for key, prev_item in reused_items.items():
             if key not in seen:
-                it.is_deleted = True
+                prev_item.is_deleted = True
         await db.flush()
     verb = "覆盖更新完成" if overwritten else "确认导入完成"
     msg = f"{verb}：新增 {created} 条、复用 {reused} 条" + (f"，{skipped} 条重复或异常跳过" if skipped else "")

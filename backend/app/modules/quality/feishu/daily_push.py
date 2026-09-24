@@ -51,7 +51,7 @@ async def _push_today_tasks() -> None:
         feishu_configured,
     )
     from app.modules.quality.feishu.message import send_chat_text
-    from app.modules.quality.models import QualityTestTask
+    from app.modules.quality.models import QualityTestResult, QualityTestTask
     from app.modules.quality.repository import (
         list_test_results,
         list_test_tasks,
@@ -72,7 +72,7 @@ async def _push_today_tasks() -> None:
     async with async_session_factory() as db:
         tasks = await list_test_tasks_by_report_date(db, today)
         lines: list[str] = []
-        pending: list[tuple[QualityTestTask, list]] = []
+        pending: list[tuple[QualityTestTask, list[QualityTestResult]]] = []
         for t in tasks:
             rows = await list_test_results(db, t.id)
             filled = sum(1 for r in rows if r.is_pass is not None)

@@ -1,6 +1,7 @@
 """Quality 模块请求/响应 Schema。"""
 
 import uuid
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -64,5 +65,5 @@ class UploadLcResponse(BaseModel):
     filename: str
     report: LcReportOut
     record_id: uuid.UUID | None = None  # 持久化后的记录 ID
-    task_link: dict | None = None  # 自动关联的检验任务信息：{task_id, filled, unmatched}
-    components: list[dict] | None = None  # 模板配置通用解析的组分结果（旧解析器为 None）
+    task_link: dict[str, Any] | None = None  # 自动关联的检验任务信息：{task_id, filled, unmatched}
+    components: list[dict[str, Any]] | None = None  # 模板配置通用解析的组分结果（旧解析器为 None）

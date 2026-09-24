@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Any, cast
 
 from app.modules.quality.feishu.client import build_client
 
@@ -51,7 +52,7 @@ async def send_chat_text(chat_id: str, text: str) -> None:
         logger.error("质量飞书发消息失败: %s", resp.msg)
 
 
-async def send_interactive_card(chat_id: str, card: dict) -> None:
+async def send_interactive_card(chat_id: str, card: dict[str, Any]) -> None:
     """向群发送交互式卡片（机器人身份）。card 为飞书卡片 JSON。"""
     await _throttle()
     client = build_client()
@@ -88,7 +89,7 @@ async def send_alert_post(
         CreateMessageRequestBody,
     )
 
-    content_blocks: list[list[dict]] = []
+    content_blocks: list[list[dict[str, Any]]] = []
     if at_open_ids:
         content_blocks.append([{"tag": "at", "user_id": uid} for uid in at_open_ids])
     content_blocks.append([{"tag": "text", "text": "\n".join(lines)}])
@@ -110,7 +111,7 @@ async def send_alert_post(
         logger.error("质量飞书发提醒失败: %s", resp.msg)
 
 
-async def send_user_interactive_card(open_id: str, card: dict) -> None:
+async def send_user_interactive_card(open_id: str, card: dict[str, Any]) -> None:
     """向指定用户单聊发送交互式卡片（机器人身份）。"""
     await _throttle()
     client = build_client()
@@ -144,19 +145,21 @@ async def get_chat_id_of_message(message_id: str) -> str | None:
     req = GetMessageRequest.builder().message_id(message_id).build()
     resp = await client.im.v1.message.aget(req)
     if resp.success() and resp.data and resp.data.items:
-        return resp.data.items[0].chat_id
+        # 局部标注：lark_oapi 响应字段为 Any；不产生运行时校验或转换
+        chat_id: str = resp.data.items[0].chat_id
+        return chat_id
     return None
 
 
 # 最近发送的填报卡片：按 (chat_id, batch) 索引——同批号发多个群时互不覆盖
-_LAST_FILL_CARD: dict[tuple[str, str], dict] = {}
+_LAST_FILL_CARD: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def build_fill_card(
     batch: str,
-    groups: list[tuple[str, list[dict], bool, str | None]],
+    groups: list[tuple[str, list[dict[str, Any]], bool, str | None]],
     progress: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """构建分组填报表单卡片。
 
     groups: [(组名, [{label, map_value}], 是否已提交, 已提交摘要文本)]。
@@ -164,7 +167,7 @@ def build_fill_card(
     progress 为「已填 N/M」进度文案（卡片标题展示）。
     已提交的组用确认文本行替代表单区（提交后卡片原地更新，落库状态一眼可辨）。
     """
-    body_elements: list[dict] = [
+    body_elements: list[dict[str, Any]] = [
         {"tag": "markdown", "content": "填写各项目数值后点提交，系统按标准限度自动判定；相同 SOP 号合并为一项，填一次自动匹配全部。"},
     ]
     name_map: dict[str, str] = {}
@@ -207,13 +210,16 @@ def build_fill_card(
     }
 
 
-def get_last_fill_card(chat_id: str, batch: str) -> dict | None:
+def get_last_fill_card(chat_id: str, batch: str) -> dict[str, Any] | None:
     """取最近一次发送的填报卡片（用于提交后原地更新；按群+批号隔离）。"""
     return _LAST_FILL_CARD.get((chat_id, batch))
 
 
 async def send_fill_card(
-    chat_id: str, batch: str, groups: list[tuple[str, list[dict]]], progress: str | None = None,
+    chat_id: str,
+    batch: str,
+    groups: list[tuple[str, list[dict[str, Any]]]],
+    progress: str | None = None,
 ) -> None:
     """发送填报表单卡片（每组一个 form 容器）。groups: [(组名, [{label, map_value}])]。"""
     built = build_fill_card(batch, [(t, r, False, None) for t, r in groups], progress)
@@ -224,7 +230,9 @@ async def send_fill_card(
     await send_interactive_card(chat_id, built)
 
 
-async def send_create_task_card(chat_id: str, batch: str, docs: list[dict]) -> None:
+async def send_create_task_card(
+    chat_id: str, batch: str, docs: list[dict[str, Any]]
+) -> None:
     """建任务表单卡片：批号已自动识别产品代号并选定标准文件（可多份，一个批号可开多份报告单），
     只需补生产日期/规格/出报日期，提交后创建任务并自动推填报卡片。"""
     doc_lines = "\n".join(f"- {d.get('file_no') or ''}" for d in docs)
@@ -261,8 +269,8 @@ async def send_create_task_card(chat_id: str, batch: str, docs: list[dict]) -> N
 
 
 def build_pick_doc_card(
-    batch: str, docs: list[dict], selected_ids: set[str], notice: str = ""
-) -> dict:
+    batch: str, docs: list[dict[str, Any]], selected_ids: set[str], notice: str = ""
+) -> dict[str, Any]:
     """多选标准文件卡片：输入编号查询累加选择（支持模糊，可反复搜索），文件少时也可点按钮勾选。
 
     selected_ids 为已选 doc_id 集合；notice 为查询未匹配等提示文本。
@@ -271,7 +279,7 @@ def build_pick_doc_card(
         f"批号 {batch} 识别到产品代号 **{docs[0].get('product_code') or '-'}**，"
         f"该代号下共 {len(docs)} 份标准文件。"
     )
-    elements: list[dict] = []
+    elements: list[dict[str, Any]] = []
     if notice:
         elements.append({"tag": "markdown", "content": notice})
     elements.append({"tag": "markdown", "content": intro + "输入编号查询并累加选择（可模糊，如 3205；多个用顿号/逗号/空格分隔，可多次搜索）："})
@@ -289,7 +297,12 @@ def build_pick_doc_card(
         ],
     })
     if selected_ids:
-        selected_file_nos = [d.get("file_no") for d in docs if (d.get("id") or "") in selected_ids]
+        # cast：docs 为 JSON 字典，取值类型 Any | None；'、'.join 需要 str 元素。
+        # cast 为纯静态断言，不改变原列表推导的任何运行时行为
+        selected_file_nos = cast(
+            "list[str]",
+            [d.get("file_no") for d in docs if (d.get("id") or "") in selected_ids],
+        )
         elements.append({"tag": "markdown", "content": f"已选 **{len(selected_ids)}** 份：{'、'.join(selected_file_nos)}"})
         elements.append({
             "tag": "button",
@@ -322,7 +335,9 @@ def build_pick_doc_card(
     }
 
 
-def build_task_created_card(batch: str, file_nos: list[str], note: str) -> dict:
+def build_task_created_card(
+    batch: str, file_nos: list[str], note: str
+) -> dict[str, Any]:
     """建任务成功后替换原表单卡片的确认卡片（表单已移除，不可再次提交）。"""
     lines = "\n".join(f"- {f}" for f in file_nos)
     return {
@@ -335,7 +350,11 @@ def build_task_created_card(batch: str, file_nos: list[str], note: str) -> dict:
 
 
 async def send_pick_doc_card(
-    chat_id: str, batch: str, docs: list[dict], selected_ids: set[str], notice: str = ""
+    chat_id: str,
+    batch: str,
+    docs: list[dict[str, Any]],
+    selected_ids: set[str],
+    notice: str = "",
 ) -> None:
     """批号代号对应多份标准文件时，发多选点选卡片。"""
     await send_interactive_card(chat_id, build_pick_doc_card(batch, docs, selected_ids, notice))
@@ -377,7 +396,7 @@ async def send_menu_card(chat_id: str) -> None:
     await send_interactive_card(chat_id, card)
 
 
-def build_batch_form_card(next_action: str) -> dict:
+def build_batch_form_card(next_action: str) -> dict[str, Any]:
     """批号输入卡片（进入建任务/填报流程前的统一入口）。"""
     titles = {"create_task": "新建检验任务", "fill": "检验填报", "progress": "查询进度"}
     return {

@@ -6,6 +6,9 @@ import re
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import APP_TZ
 from app.core.time import today as _app_today
@@ -38,7 +41,7 @@ from app.modules.quality.feishu.fill_service._common import (
     _unfilled_groups,
 )
 from app.modules.quality.feishu.message import send_chat_text
-from app.modules.quality.models import QualityTestTask
+from app.modules.quality.models import QualityTestTask, ReportRecord
 from app.modules.quality.repository import (
     list_test_results,
     update_test_results_fill,
@@ -152,7 +155,9 @@ async def _reply_pending_review(chat_id: str) -> None:
     )
 
 
-async def _build_progress_text(db, batch: str, task: QualityTestTask) -> str:
+async def _build_progress_text(
+    db: AsyncSession, batch: str, task: QualityTestTask
+) -> str:
     """进度查询文本：填报中（列已填/待填项目）/ 待分配（未到出报日）/ 已出报（出报时间）/ 已作废。"""
     from app.modules.quality.repository import get_latest_report_record_by_task
 
@@ -201,7 +206,7 @@ async def _build_progress_text(db, batch: str, task: QualityTestTask) -> str:
 
 
 @event_client.on_event("im.message.receive_v1")
-async def handle_fill_command(event: dict) -> None:
+async def handle_fill_command(event: dict[str, Any]) -> None:
     """对话式填报入口。"""
     chat_id, sender, text, chat_type = _extract_command(event)
     logger.info("质量飞书消息: chat=%s chat_type=%s sender=%s text=%r", chat_id, chat_type, sender, text)
@@ -293,7 +298,7 @@ async def handle_fill_command(event: dict) -> None:
             if not items:
                 await send_chat_text(chat_id, f"📄 本月（{today_d:%Y-%m}）暂无报告单流水")
                 return
-            by_day: dict[str, list] = {}
+            by_day: dict[str, list[ReportRecord]] = {}
             for it in items:
                 by_day.setdefault(it.created_at.astimezone(APP_TZ).strftime("%m-%d"), []).append(it)
             lines = []
@@ -355,12 +360,12 @@ async def handle_fill_command(event: dict) -> None:
                 async with async_session_factory() as fdb:
                     hits = await list_test_tasks_by_batch_fuzzy(fdb, frag.group(1))
                 if hits:
-                    lines = "\n".join(
+                    hit_lines = "\n".join(
                         f"- {t.product_name} 批号 {t.batch_number}（{t.status}）" for t in hits
                     )
                     await send_chat_text(
                         chat_id,
-                        f"🔎 批号「{frag.group(1)}」匹配：\n{lines}\n请用完整批号继续",
+                        f"🔎 批号「{frag.group(1)}」匹配：\n{hit_lines}\n请用完整批号继续",
                     )
                 else:
                     await send_chat_text(chat_id, f"🔎 未找到包含「{frag.group(1)}」的批号")
@@ -474,7 +479,7 @@ async def handle_fill_command(event: dict) -> None:
                     return
                 rows = await list_test_results(db, task.id)
                 norm_rows = {TestTaskService._norm_name(r.item_name): r for r in rows}
-                updates = []
+                fix_updates = []
                 done: list[str] = []
                 for name, value_str in pairs:
                     value = float(value_str)
@@ -498,14 +503,14 @@ async def handle_fill_command(event: dict) -> None:
                         ))
                         done.append(f"{row.item_name}={value}{unit}（🚨不合格，未落库）")
                         continue
-                    updates.append({
+                    fix_updates.append({
                         "result_id": row.id, "result_text": str(value), "result_value": value,
                         "is_pass": True, "source": "manual", "inspection_record_id": None,
                         "filled_by": None, "filled_at": datetime.now(UTC),
                     })
                     done.append(f"{row.item_name}={value}{unit}（合格，已修正）")
-                if updates:
-                    await update_test_results_fill(db, updates)
+                if fix_updates:
+                    await update_test_results_fill(db, fix_updates)
                 await db.commit()
             _LAST_BATCH[chat_id] = batch
             await send_chat_text(chat_id, f"✅ 批号 {batch} 修正：\n" + ("\n".join(done) if done else "未识别到可修正的项目"))
@@ -549,16 +554,16 @@ async def handle_fill_command(event: dict) -> None:
                     f"✅ 批号 {batch} 的数值型项目已全部填写，或剩余项目均由液相计算表解析覆盖（请上传计算表自动填入）",
                 )
                 return
-            filled = sum(1 for r in rows if r.is_pass is not None)
+            filled_count = sum(1 for r in rows if r.is_pass is not None)
             await send_fill_card(
                 chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)],
-                progress=f"已填 {filled}/{len(rows)}",
+                progress=f"已填 {filled_count}/{len(rows)}",
             )
             return
 
         rows = await list_test_results(db, task.id)
         norm_rows = {TestTaskService._norm_name(r.item_name): r for r in rows}
-        updates: list[dict] = []
+        updates: list[dict[str, Any]] = []
         filled: list[str] = []
         problems: list[str] = []
         unmatched_names: list[str] = []

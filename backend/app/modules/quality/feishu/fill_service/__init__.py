@@ -47,3 +47,36 @@ from app.modules.quality.feishu.fill_service._push import (  # noqa: F401
     notify_unqualified,
     push_task_reminder,
 )
+
+# 显式声明对外符号：分包拆分后各符号在本包 re-export，
+# 使 `from ...fill_service import X` 的类型检查与运行时行为一致（strict 模式要求）
+__all__ = [
+    "_ARCHIVE_MODE",
+    "_BATCH_RE",
+    "_LAST_BATCH",
+    "_LAST_IMAGE",
+    "_PAIR_RE",
+    "_PENDING_DOC_SELECT",
+    "_allowed",
+    "_allowed_create",
+    "_cards",
+    "_commands",
+    "_doc_to_card_dict",
+    "_extract_command",
+    "_frontend_task_link",
+    "_norm_sop",
+    "_prune_stale_state",
+    "_push",
+    "_resolve_docs_by_batch",
+    "_resolve_task_by_batch",
+    "_task_doc_file_nos",
+    "_today_str",
+    "_unfilled_groups",
+    "handle_bot_menu_event",
+    "handle_card_action",
+    "handle_fill_command",
+    "notify_pending_review",
+    "notify_task_created",
+    "notify_unqualified",
+    "push_task_reminder",
+]

@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,8 +115,8 @@ class LcReportService:
             await db.flush()
             # 软删除旧杂质 + 写入新杂质
             old_impurities = await get_impurities_by_record(db, existing.id)
-            for imp in old_impurities:
-                imp.is_deleted = True
+            for old_imp in old_impurities:
+                old_imp.is_deleted = True
             await db.flush()
             record_id = existing.id
             # 保存新杂质明细（用已判定的 report.impurity_results，含 is_pass）
@@ -185,7 +186,7 @@ class LcReportService:
             for p in raw.impurity_peaks
         ]
 
-        def judge(val, op, limit):
+        def judge(val: float, op: str, limit: float | None) -> bool:
             ok = True
             if limit and limit > 0:
                 ok = val >= limit if op == "≥" else val <= limit
@@ -262,12 +263,12 @@ class LcReportService:
         )
 
     @staticmethod
-    def build_report_data(report: LcReportOut) -> dict:
+    def build_report_data(report: LcReportOut) -> dict[str, Any]:
         """将 LcReportOut 转为模板填充所需的字段字典。
 
         字段名与模板占位符对应，数值转换为显示格式（百分比等）。
         """
-        data: dict = {
+        data: dict[str, Any] = {
             "产品名称": report.product_name,
             "批号": report.batch_number,
             "标准类型": report.standard_type,

@@ -3,7 +3,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -293,7 +293,16 @@ class _TaskLifecycle(_TaskCore):
             await update_test_task(db, task_id, status="completed")
             advanced = True
         fresh = await get_test_task(db, task_id)
-        return _TaskLifecycle._to_detail(fresh, await list_test_results(db, task_id)), approved, advanced
+        # cast 理由：任务存在性已在本方法开头校验（else 分支已抛 404），此处 None 仅
+        # 可能是并发删除，原实现会直接 AttributeError 崩溃——cast 为纯静态断言，
+        # 不新增分支、不改变任何运行时行为
+        return (
+            _TaskLifecycle._to_detail(
+                cast("QualityTestTask", fresh), await list_test_results(db, task_id)
+            ),
+            approved,
+            advanced,
+        )
 
     # ── P1 液相解析映射 ──
 

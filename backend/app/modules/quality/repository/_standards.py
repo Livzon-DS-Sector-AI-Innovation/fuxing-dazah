@@ -2,6 +2,7 @@
 
 import re
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +59,7 @@ async def get_standard_document(
 
 
 async def create_standard_document(
-    db: AsyncSession, data: dict
+    db: AsyncSession, data: dict[str, Any]
 ) -> QualityStandardDocument:
     doc = QualityStandardDocument(**data)
     db.add(doc)
@@ -67,7 +68,7 @@ async def create_standard_document(
 
 
 async def update_standard_document(
-    db: AsyncSession, doc_id: uuid.UUID, **kwargs
+    db: AsyncSession, doc_id: uuid.UUID, **kwargs: Any
 ) -> QualityStandardDocument | None:
     doc = await get_standard_document(db, doc_id)
     if not doc:
@@ -104,7 +105,7 @@ async def list_standard_items(
 
 
 async def create_standard_item(
-    db: AsyncSession, doc_id: uuid.UUID, data: dict
+    db: AsyncSession, doc_id: uuid.UUID, data: dict[str, Any]
 ) -> QualityStandardItem:
     item = QualityStandardItem(document_id=doc_id, **data)
     db.add(item)
@@ -113,7 +114,7 @@ async def create_standard_item(
 
 
 async def update_standard_item(
-    db: AsyncSession, item_id: uuid.UUID, **kwargs
+    db: AsyncSession, item_id: uuid.UUID, **kwargs: Any
 ) -> QualityStandardItem | None:
     stmt = select(QualityStandardItem).where(
         QualityStandardItem.id == item_id,

@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
+from docx.table import _Cell
+from docx.text.paragraph import Paragraph
 
 # ─── 占位符解析 ───
 
@@ -223,14 +225,14 @@ class ReportFiller:
                     parts.append(cell.text or "")
         return "\n".join(parts)
 
-    def _replace_in_cell(self, cell, data: dict[str, Any]) -> set[str]:
+    def _replace_in_cell(self, cell: _Cell, data: dict[str, Any]) -> set[str]:
         """在表格单元格中替换占位符。"""
         filled = set()
         for para in cell.paragraphs:
             filled.update(self._replace_in_paragraph(para, data))
         return filled
 
-    def _replace_in_paragraph(self, para, data: dict[str, Any]) -> set[str]:
+    def _replace_in_paragraph(self, para: Paragraph, data: dict[str, Any]) -> set[str]:
         """在段落中替换占位符。处理跨 run 的情况。"""
         # 收集段落完整文本
         full_text = para.text
@@ -256,7 +258,7 @@ class ReportFiller:
 
         return filled
 
-    def _set_paragraph_text(self, para, text: str) -> None:
+    def _set_paragraph_text(self, para: Paragraph, text: str) -> None:
         """设置段落文本，保留第一个 run 的格式。"""
         if para.runs:
             # 保留第一个 run 的格式

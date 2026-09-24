@@ -10,6 +10,7 @@ from io import BytesIO
 from typing import Any
 
 import openpyxl
+from openpyxl.worksheet.worksheet import Worksheet
 
 # ─── 解析结果数据结构 ───
 
@@ -131,7 +132,7 @@ class LcExcelParser:
 class _UsrVancomycinParser:
     """盐酸万古霉素 USP 标准计算表解析器（EX-HA-5246-001）。"""
 
-    def _do_parse(self, ws, filename: str) -> LcReportData:
+    def _do_parse(self, ws: Worksheet, filename: str) -> LcReportData:
         data = LcReportData()
         data.raw_rows = ws.max_row
         data.raw_cols = ws.max_column
@@ -203,7 +204,7 @@ class _UsrVancomycinParser:
                 return f
         return 0.0
 
-    def _parse_standards(self, ws, data: LcReportData) -> None:
+    def _parse_standards(self, ws: Worksheet, data: LcReportData) -> None:
         """解析质量标准区域（O列及之后）。"""
         standards_map: dict[str, QualityStandard] = {}
 
@@ -223,7 +224,7 @@ class _UsrVancomycinParser:
 
         data.standards = list(standards_map.values())
 
-    def _parse_peak_areas(self, ws, data: LcReportData) -> None:
+    def _parse_peak_areas(self, ws: Worksheet, data: LcReportData) -> None:
         """解析供试液A 各峰面积（R4-R19）。"""
         # C列=项目名，F列=第一份值，J列=第二份值
         col_name = 2  # B列
@@ -262,7 +263,7 @@ class _UsrVancomycinParser:
             return label[: label.index("（")].strip()
         return label.strip()
 
-    def _parse_results(self, ws, data: LcReportData) -> None:
+    def _parse_results(self, ws: Worksheet, data: LcReportData) -> None:
         """解析万古霉素B和总杂质的计算结果。
 
         列映射（从实际 .xlsx 调试确认）：
@@ -304,7 +305,7 @@ class _UsrVancomycinParser:
             limit=ts.limit if ts else None,
         )
 
-    def _parse_impurity_details(self, ws, data: LcReportData) -> None:
+    def _parse_impurity_details(self, ws: Worksheet, data: LcReportData) -> None:
         """解析各杂质百分比计算结果（R25-R76）。
 
         实际格式（从 .xlsx 调试确认）：

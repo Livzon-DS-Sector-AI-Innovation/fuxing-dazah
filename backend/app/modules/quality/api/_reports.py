@@ -5,12 +5,14 @@ import uuid
 from datetime import datetime, time
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     Body,
     Depends,
     HTTPException,
     Query,
+    Response,
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import IntegrityError
@@ -50,13 +52,13 @@ async def generate_report(
     payload: GenerateReportRequest = Body(...),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:report:generate")),
-):
+) -> StreamingResponse:
     tp = REPORT_TEMPLATE_DIR / payload.template
     if not quality_storage.ensure_template_local(payload.template).is_file():
         raise HTTPException(status_code=404, detail=f"模板不存在：{payload.template}")
 
     # 获取填充数据
-    fill_data: dict = {}
+    fill_data: dict[str, Any] = {}
     product_name = ""
     batch_number = ""
     record_id: uuid.UUID | None = None
@@ -116,7 +118,7 @@ async def generate_task_report(
     payload: TaskReportGenerateRequest | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:report:generate")),
-):
+) -> JSONResponse:
     # 逐份生成：每个标准文件各出一份 COA（行归属其标准文件；模板按该文件 COA 绑定取）。
     # 并发撞号时（唯一索引冲突）整体重算流水号重试，最多 3 次。
     for attempt in range(3):
@@ -149,7 +151,9 @@ async def generate_task_report(
                     "template_path": template,
                 })
             msg = f"已按标准文件逐份生成 {len(generated)} 份 COA"
-            skipped = next((s["skipped_file_nos"] for s in splits if s.get("skipped_file_nos")), [])
+            skipped: list[str] = next(
+                (s["skipped_file_nos"] for s in splits if s.get("skipped_file_nos")), []
+            )
             if skipped:
                 msg += f"；跳过无结果行的标准文件：{'、'.join(skipped)}"
             return success_response(data=generated, message=msg)
@@ -203,7 +207,7 @@ async def download_report(
     report_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:report:read")),
-):
+) -> Response:
     report = await get_report_record(db, report_id)
     if not report or not report.file_path:
         raise HTTPException(status_code=404, detail="报告文件不存在")

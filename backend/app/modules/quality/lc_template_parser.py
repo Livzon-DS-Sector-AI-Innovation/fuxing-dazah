@@ -10,11 +10,29 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from io import BytesIO
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from openpyxl import Workbook
+    from openpyxl.worksheet.worksheet import Worksheet
 
 EX_RE = re.compile(r"EX-[A-Z]+-\d+-\d+")
 PCT_TEXT_RE = re.compile(r"^\(?([\d.]+)\)?\s*%$")
+
+# 取值闭包签名：get(行, 列) → 单元格值（xlsx 走 openpyxl，xls 走 xlrd，返回值动态）
+CellGetter = Callable[[int, int], Any]
+
+
+def active_sheet(wb: Workbook) -> Worksheet:
+    """工作簿的活动工作表。
+
+    openpyxl 将 Workbook.active 标注为可空（工作表为空时才可能为 None；xlsx 至少一张表），
+    cast 为纯静态断言、不产生任何运行时检查或转换。
+    """
+    return cast("Worksheet", wb.active)
 
 
 @dataclass
@@ -53,7 +71,7 @@ def _cell_coord(cell: str) -> tuple[int, int]:
     return int(m.group(2)), col
 
 
-def _parse_value(v) -> float | None:
+def _parse_value(v: Any) -> float | None:
     if v is None:
         return None
     if isinstance(v, (int, float)):
@@ -70,25 +88,29 @@ def _parse_value(v) -> float | None:
         return None
 
 
-def open_sheet(file_bytes: bytes, filename: str):
+def open_sheet(
+    file_bytes: bytes, filename: str
+) -> tuple[CellGetter, int, int]:
     """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。"""
     if filename.lower().endswith(".xls"):
-        import xlrd
+        # xlrd 未提供 py.typed 且无第三方 stubs；mypy overrides 不可改
+        # （配置在 pyproject.toml，属本次任务禁改范围）
+        import xlrd  # type: ignore[import-untyped]
 
         book = xlrd.open_workbook(file_contents=file_bytes)
         sh = book.sheet_by_index(0)
 
-        def get(r: int, c: int):
+        def get_xls(r: int, c: int) -> Any:
             if r < 1 or c < 1 or r > sh.nrows or c > sh.ncols:
                 return None
             return sh.cell_value(r - 1, c - 1)
 
-        return get, sh.nrows, sh.ncols
+        return get_xls, sh.nrows, sh.ncols
 
     from openpyxl import load_workbook
 
     wb = load_workbook(BytesIO(file_bytes), data_only=True)
-    ws = wb.active
+    ws = active_sheet(wb)
     # 合并单元格映射：非锚点格读锚点值（报告值常一格跨多行，如 M22:M25）
     merge_anchor: dict[tuple[int, int], tuple[int, int]] = {}
     for mr in ws.merged_cells.ranges:
@@ -97,16 +119,16 @@ def open_sheet(file_bytes: bytes, filename: str):
             for cc in range(mr.min_col, mr.max_col + 1):
                 merge_anchor[(rr, cc)] = anchor
 
-    def get(r: int, c: int):
+    def get_xlsx(r: int, c: int) -> Any:
         if r < 1 or c < 1 or r > ws.max_row or c > ws.max_column:
             return None
         ar, ac = merge_anchor.get((r, c), (r, c))
         return ws.cell(ar, ac).value
 
-    return get, ws.max_row, ws.max_column
+    return get_xlsx, ws.max_row, ws.max_column
 
 
-def detect_table_no(get, max_row: int, max_col: int) -> str | None:
+def detect_table_no(get: CellGetter, max_row: int, max_col: int) -> str | None:
     """标题单元格（前 5 行）中提取表号 EX-xx-xxxx-vvv。"""
     for r in range(1, min(6, max_row + 1)):
         for c in range(1, min(12, max_col + 1)):
@@ -118,7 +140,7 @@ def detect_table_no(get, max_row: int, max_col: int) -> str | None:
     return None
 
 
-def find_batch(get, max_row: int, max_col: int, label: str = "批号") -> str:
+def find_batch(get: CellGetter, max_row: int, max_col: int, label: str = "批号") -> str:
     """定位「批号」标签：值在同格冒号后，或标签右侧一格。"""
     for r in range(1, min(15, max_row + 1)):
         for c in range(1, min(8, max_col + 1)):
@@ -134,7 +156,7 @@ def find_batch(get, max_row: int, max_col: int, label: str = "批号") -> str:
 
 
 def _apply_merges(
-    components: list[ParsedComponent], merge_rules: list[dict]
+    components: list[ParsedComponent], merge_rules: list[dict[str, Any]]
 ) -> list[ParsedComponent]:
     """组分合并规则：如 杂质B = 杂质B1 + 杂质B2（取二者之和）。
 
@@ -166,7 +188,7 @@ def _apply_merges(
 
 
 def parse_with_config(
-    file_bytes: bytes, filename: str, config: dict, form_id: str
+    file_bytes: bytes, filename: str, config: dict[str, Any], form_id: str
 ) -> GenericLcParse:
     get, max_row, max_col = open_sheet(file_bytes, filename)
     result = GenericLcParse(
@@ -224,8 +246,8 @@ def parse_with_config(
 
 
 def _apply_limits(
-    get, max_row: int, max_col: int,
-    components: list[ParsedComponent], limits_cfg: dict | None,
+    get: CellGetter, max_row: int, max_col: int,
+    components: list[ParsedComponent], limits_cfg: dict[str, Any] | None,
 ) -> None:
     """计算表自带限度列（如 O 列组分名 + P 列限度，小数形式 ×100 → 百分数）。
 

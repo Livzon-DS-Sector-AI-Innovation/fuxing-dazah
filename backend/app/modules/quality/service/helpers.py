@@ -2,21 +2,23 @@
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # fire-and-forget 后台任务集合：持引用防 GC 回收（CPython 官方警告场景），
 # 完成后自动移除；异常只记日志不向调用方冒泡
-_BG_TASKS: set[asyncio.Task] = set()
+_BG_TASKS: set[asyncio.Task[Any]] = set()
 
 
-def spawn_background(coro) -> None:
+def spawn_background(coro: Coroutine[Any, Any, Any]) -> None:
     """以 fire-and-forget 方式调度后台任务（飞书推送等不阻塞主流程的场景）。"""
     task = asyncio.create_task(coro)
     _BG_TASKS.add(task)
 
-    def _done(t: asyncio.Task) -> None:
+    def _done(t: asyncio.Task[Any]) -> None:
         _BG_TASKS.discard(t)
         if not t.cancelled():
             exc = t.exception()  # 必须取一次，避免「Task exception was never retrieved」告警

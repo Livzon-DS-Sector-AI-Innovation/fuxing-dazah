@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -15,7 +16,7 @@ class GenerateReportRequest(BaseModel):
         default=None, description="关联的检验记录 ID（从数据库加载数据自动填充）"
     )
     template: str = Field(default="万古霉素/3205.docx", description="模板路径")
-    data: dict | None = Field(
+    data: dict[str, Any] | None = Field(
         default=None, description="手动填写的数据字典（inspection_record_id 为空时使用）"
     )
 

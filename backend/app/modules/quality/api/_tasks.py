@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
+from app.modules.quality import lc_template_parser
 from app.modules.quality import storage as quality_storage
 from app.modules.quality.api._common import (
     _safe_filename,
@@ -219,7 +220,7 @@ async def list_task_attachments_endpoint(
 @router.get("/tasks/{task_id}/attachments/{attachment_id}/download", summary="下载任务附件")
 async def download_task_attachment_endpoint(
     task_id: uuid.UUID, attachment_id: uuid.UUID, db: AsyncSession = Depends(get_db),
-):
+) -> StreamingResponse:
     att = await get_task_attachment(db, attachment_id)
     if not att or att.task_id != task_id:
         raise HTTPException(status_code=404, detail="附件不存在")
@@ -321,7 +322,7 @@ async def batch_report_date_endpoint(
         raise HTTPException(status_code=400, detail="文件为空")
     try:
         wb = openpyxl.load_workbook(_io.BytesIO(content))
-        ws = wb.active
+        ws = lc_template_parser.active_sheet(wb)
         raw_rows = list(ws.iter_rows(min_row=2, values_only=True))
     except Exception:
         raise HTTPException(status_code=400, detail="Excel 解析失败") from None
@@ -334,7 +335,8 @@ async def batch_report_date_endpoint(
         batch = str(row[0]).strip()
         date_cell = row[1] if len(row) > 1 else None
         if isinstance(date_cell, (datetime, date)):
-            report_date = date_cell.strftime("%Y-%m-%d")
+            # 标注 str | None：elif 分支的 _norm_date_str 可能解析失败返回 None
+            report_date: str | None = date_cell.strftime("%Y-%m-%d")
         elif date_cell:
             report_date = _norm_date_str(str(date_cell).strip())
         else:

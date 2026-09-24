@@ -8,6 +8,9 @@ import json
 import logging
 import re
 import time
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as _app_today
 from app.modules.quality.feishu.client import (
@@ -15,7 +18,11 @@ from app.modules.quality.feishu.client import (
     QUALITY_FEISHU_CREATE_USER_IDS,
     QUALITY_FEISHU_USER_IDS,
 )
-from app.modules.quality.models import QualityStandardDocument, QualityTestTask
+from app.modules.quality.models import (
+    QualityStandardDocument,
+    QualityTestResult,
+    QualityTestTask,
+)
 from app.modules.quality.repository import (
     get_test_task_by_batch,
     get_test_task_by_batch_number,
@@ -34,7 +41,9 @@ _BIO_PATTERNS = ["需氧菌", "效价", "含量"]
 _LC_SHEET_PATTERNS = ["杂质", "万古霉素", "总杂质", "任何未知杂质", "rs"]
 
 
-def _extract_command(event: dict) -> tuple[str | None, str | None, str | None, str | None]:
+def _extract_command(
+    event: dict[str, Any],
+) -> tuple[str | None, str | None, str | None, str | None]:
     """从 im.message.receive_v1 事件提取 (chat_id, sender_open_id, 消息文本, chat_type)。"""
     try:
         ev = event.get("event", {})
@@ -66,20 +75,20 @@ def _allowed_create(sender: str) -> bool:
 _CREATE_DENY_TEXT = "⛔ 你没有新建任务的权限，请联系质量管理员"
 
 
-async def _known_codes(db) -> list[str]:
+async def _known_codes(db: AsyncSession) -> list[str]:
     """标准库已配置的全部产品代号（错误提示用）。"""
     docs = await list_standard_documents(db)
     return sorted({(d.product_code or "").strip() for d in docs if (d.product_code or "").strip()})
 
 
-async def _resolve_docs_by_batch(db, batch: str) -> list[QualityStandardDocument]:
+async def _resolve_docs_by_batch(db: AsyncSession, batch: str) -> list[QualityStandardDocument]:
     """批号必然含产品代号：按批号开头收敛到该代号的标准文件（标准文档）。"""
     docs = await list_standard_documents(db)
     _, matched = TestTaskService._match_docs_by_batch_code(docs, batch)
     return matched
 
 
-def _doc_to_card_dict(doc: QualityStandardDocument) -> dict:
+def _doc_to_card_dict(doc: QualityStandardDocument) -> dict[str, Any]:
     return {
         "id": str(doc.id),
         "file_no": doc.file_no,
@@ -88,7 +97,7 @@ def _doc_to_card_dict(doc: QualityStandardDocument) -> dict:
     }
 
 
-async def _resolve_task_by_batch(db, batch: str) -> QualityTestTask | None:
+async def _resolve_task_by_batch(db: AsyncSession, batch: str) -> QualityTestTask | None:
     """按批号查任务；同批号跨产品时用批号代号收敛到对应产品。"""
     task = await get_test_task_by_batch_number(db, batch)
     if not task:
@@ -147,12 +156,15 @@ async def _download_image(message_id: str, file_key: str) -> bytes | None:
         )
         resp = await build_client().im.v1.message_resource.get(req)
         if resp.success() and resp.file:
-            return resp.file.read()
+            # 显式标注：lark_oapi 的 file.read() 无类型信息（Any）；
+            # 局部标注不产生任何运行时校验或转换
+            data: bytes = resp.file.read()
+            return data
     except Exception:
         logger.exception("飞书图片下载失败")
     return None
 
-async def _task_doc_file_nos(db, task: QualityTestTask) -> list[str]:
+async def _task_doc_file_nos(db: AsyncSession, task: QualityTestTask) -> list[str]:
     """任务对应的标准文件编号列表（出报清单展示用）。"""
     from app.modules.quality.repository import (
         get_standard_document,
@@ -170,7 +182,7 @@ async def _task_doc_file_nos(db, task: QualityTestTask) -> list[str]:
 
 
 
-def _limit_text(row, unit: str) -> str:
+def _limit_text(row: QualityTestResult, unit: str) -> str:
     """限度摘要（如 ≤ 3.0%）。"""
     return (
         f"{row.operator or ''} {row.limit_min if row.limit_min is not None else ''}"
@@ -187,7 +199,9 @@ def _norm_sop(s: str | None) -> str:
     return re.sub(r"\s+", "", s or "").upper()
 
 
-def _unfilled_groups(rows: list) -> tuple[list[dict], list[dict]]:
+def _unfilled_groups(
+    rows: list[QualityTestResult],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """未填报的数值型项目按 生物组/理化组 分组。
 
     相同 SOP 号合并为一个输入（填写一次、提交时按组内每行限度分别判定自动匹配）；
@@ -200,7 +214,7 @@ def _unfilled_groups(rows: list) -> tuple[list[dict], list[dict]]:
         and not any(pat in TestTaskService._norm_name(r.item_name) for pat in _LC_SHEET_PATTERNS)
         and TestTaskService._norm_name(r.item_name) not in TestTaskService._DEFAULT_FILL_RULES
     ]
-    groups: dict[str, list] = {}
+    groups: dict[str, list[QualityTestResult]] = {}
     order: list[str] = []
     for r in candidates:
         sop = _norm_sop(r.sop_no)
@@ -210,7 +224,7 @@ def _unfilled_groups(rows: list) -> tuple[list[dict], list[dict]]:
             order.append(key)
         groups[key].append(r)
 
-    def _build(rs: list) -> dict:
+    def _build(rs: list[QualityTestResult]) -> dict[str, Any]:
         names: list[str] = []
         limits: list[str] = []
         for r in rs:

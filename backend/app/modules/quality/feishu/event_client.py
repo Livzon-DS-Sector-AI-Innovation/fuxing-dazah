@@ -8,11 +8,13 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import websockets
+from websockets.asyncio.client import ClientConnection
 
 from app.modules.quality.feishu.client import (
     QUALITY_FEISHU_APP_ID,
@@ -22,20 +24,25 @@ from app.modules.quality.feishu.client import (
 
 logger = logging.getLogger(__name__)
 
-_handlers: dict[str, list] = {}
-_stop: asyncio.Event | None = None
-_ws_task: asyncio.Task | None = None
-_dispatch_tasks: set[asyncio.Task] = set()
+# 事件处理器签名：接收事件体，返回卡片回调响应（无响应返回 None）
+EventHandler = Callable[[dict[str, Any]], Awaitable[Any]]
+
+_handlers: dict[str, list[EventHandler]] = {}
+# cast：初值 None 仅为占位，start_ws() 先赋值再启动 _run_ws，读取时必已就绪；
+# 声明为非空类型可让读取点免去无意义判空（cast 为纯静态断言，运行时仍是 None）
+_stop: asyncio.Event = cast("asyncio.Event", None)
+_ws_task: asyncio.Task[None] | None = None
+_dispatch_tasks: set[asyncio.Task[Any]] = set()
 
 FEISHU_DOMAIN = "https://open.feishu.cn"
 WS_ENDPOINT_URL = f"{FEISHU_DOMAIN}/callback/ws/endpoint"
 _ping_interval: int = 120
 
 
-def on_event(event_type: str):
+def on_event(event_type: str) -> Callable[[EventHandler], EventHandler]:
     """装饰器：注册质量模块飞书事件处理器。"""
 
-    def decorator(func):
+    def decorator(func: EventHandler) -> EventHandler:
         _handlers.setdefault(event_type, []).append(func)
         logger.info("注册质量飞书事件: type=%s handler=%s", event_type, func.__name__)
         return func
@@ -93,10 +100,11 @@ def _build_ping_frame(service_id: int) -> bytes:
     frame.method = FrameType.CONTROL.value
     frame.SeqID = 0
     frame.LogID = 0
-    return frame.SerializeToString()
+    data: bytes = frame.SerializeToString()
+    return data
 
 
-async def _ping_loop(ws, service_id: int) -> None:
+async def _ping_loop(ws: ClientConnection, service_id: int) -> None:
     while not _stop.is_set():
         try:
             await ws.send(_build_ping_frame(service_id))
@@ -110,7 +118,7 @@ async def _ping_loop(ws, service_id: int) -> None:
             pass
 
 
-async def _handle_binary_message(ws, message: bytes) -> None:
+async def _handle_binary_message(ws: ClientConnection, message: bytes) -> None:
     from lark_oapi.ws.client import _get_by_key
     from lark_oapi.ws.const import HEADER_BIZ_RT, HEADER_TYPE
     from lark_oapi.ws.enum import FrameType, MessageType
@@ -151,7 +159,7 @@ async def _handle_binary_message(ws, message: bytes) -> None:
                 _dt = asyncio.create_task(_dispatch(event_type, event))
                 _dispatch_tasks.add(_dt)
 
-                def _on_dispatch_done(t: asyncio.Task) -> None:
+                def _on_dispatch_done(t: asyncio.Task[Any]) -> None:
                     _dispatch_tasks.discard(t)
                     if not t.cancelled():
                         t.exception()  # 取一次避免「Task exception was never retrieved」告警

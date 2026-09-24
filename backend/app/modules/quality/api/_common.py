@@ -4,9 +4,11 @@ import re
 import uuid
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from docx import Document
+from docx.text.paragraph import Paragraph
 from fastapi import (
     APIRouter,
 )
@@ -28,8 +30,8 @@ REPORT_TEMPLATE_DIR = quality_storage.REPORT_TEMPLATE_DIR
 PLACEHOLDER_RE = re.compile(r"\{\{(.+?)\}\}")
 
 # ─── 模板管理 helpers ───
-def _scan_templates(root: Path, prefix: str = "") -> list[dict]:
-    items = []
+def _scan_templates(root: Path, prefix: str = "") -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     for p in sorted(root.iterdir()):
         if p.is_dir() and p.name == "_generated":
             continue  # 生成输出目录，不参与模板扫描
@@ -118,7 +120,7 @@ def _match_template_to_doc(
     return scored[0][0]
 
 
-def _doc_match_info(d: QualityStandardDocument | None) -> dict | None:
+def _doc_match_info(d: QualityStandardDocument | None) -> dict[str, Any] | None:
     if not d:
         return None
     return {"doc_id": str(d.id), "file_no": d.file_no, "product_code": d.product_code or ""}
@@ -128,7 +130,7 @@ def _doc_match_info(d: QualityStandardDocument | None) -> dict | None:
 PRODUCTS_FILE = REPORT_TEMPLATE_DIR.parent / "products.json"
 
 # ─── 产品代码 helpers ───
-def _load_products() -> list[dict]:
+def _load_products() -> list[dict[str, Any]]:
     import json
 
     # MinIO 兜底：本地丢失时从对象恢复
@@ -138,20 +140,22 @@ def _load_products() -> list[dict]:
             PRODUCTS_FILE.write_bytes(data)
     if PRODUCTS_FILE.exists():
         try:
-            return json.loads(PRODUCTS_FILE.read_text())
+            # json.loads 返回 Any；局部标注不产生运行时校验
+            parsed: list[dict[str, Any]] = json.loads(PRODUCTS_FILE.read_text())
+            return parsed
         except Exception:
             pass
     return []
 
 
-def _save_products(data: list[dict]):
+def _save_products(data: list[dict[str, Any]]) -> None:
     import json
 
     PRODUCTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
     quality_storage.upload_products(PRODUCTS_FILE.read_bytes())
 
 # ─── 报告渲染 helpers ───
-def _replace_placeholders(para, data: dict):
+def _replace_placeholders(para: Paragraph, data: dict[str, Any]) -> None:
     full = para.text
     matches = list(PLACEHOLDER_RE.finditer(full))
     if not matches:
@@ -170,7 +174,7 @@ def _replace_placeholders(para, data: dict):
 
 
 def _render_cao_file(
-    tp: Path, fill_data: dict, product_name: str, batch_number: str, suffix: str = ""
+    tp: Path, fill_data: dict[str, Any], product_name: str, batch_number: str, suffix: str = ""
 ) -> tuple[Path, str, bytes]:
     """填充模板并落盘到 _generated 目录，返回 (输出路径, 文件名, 文件内容)。
 

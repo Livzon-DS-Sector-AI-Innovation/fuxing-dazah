@@ -1,6 +1,7 @@
 """Quality 模块数据读写。只负责查询与持久化，不做业务判断。"""
 
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +31,7 @@ async def create_inspection_record(
     main_peak_area_b_first: float | None,
     main_peak_area_b_second: float | None,
     all_pass: bool,
-    raw_data: dict | None = None,
+    raw_data: dict[str, Any] | None = None,
     excel_filename: str | None = None,
 ) -> InspectionRecord:
     """创建检验记录。INSERT 后 flush 返回（RETURNING 自动回填 id 等）。"""
@@ -135,7 +136,7 @@ async def delete_inspection_record(
 async def create_impurities(
     db: AsyncSession,
     inspection_record_id: uuid.UUID,
-    impurities: list[dict],
+    impurities: list[dict[str, Any]],
 ) -> list[InspectionImpurity]:
     """批量创建杂质明细。INSERT 后 flush 返回。"""
     items = []

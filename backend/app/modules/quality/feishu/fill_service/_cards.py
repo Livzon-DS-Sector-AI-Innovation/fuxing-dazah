@@ -5,6 +5,7 @@ import logging
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from app.modules.quality.feishu import event_client
 from app.modules.quality.feishu.client import (
@@ -36,7 +37,7 @@ from app.modules.quality.service import spawn_background
 logger = logging.getLogger(__name__)
 
 @event_client.on_event("application.bot.menu_v6")
-async def handle_bot_menu_event(event: dict) -> None:
+async def handle_bot_menu_event(event: dict[str, Any]) -> None:
     """机器人自定义菜单点击事件（响应动作=推送事件）：event_key → 对应批号输入卡片。"""
     ev = event.get("event", {})
     key = str(ev.get("event_key") or ev.get("eventKey") or "").strip()
@@ -59,7 +60,10 @@ async def handle_bot_menu_event(event: dict) -> None:
     # 优先单聊：菜单事件无群上下文，按操作人 open_id 发单聊卡片
     # 事件结构：event.operator.operator_id.open_id（实测嵌套两层）
     operator = ev.get("operator") if isinstance(ev.get("operator"), dict) else {}
-    operator_id_obj = operator.get("operator_id") if isinstance(operator.get("operator_id"), dict) else {}
+    # 标注 Any：事件 JSON 取值本为动态类型，是否 dict 已由 isinstance 就地校验
+    operator_id_obj: Any = (
+        operator.get("operator_id") if isinstance(operator.get("operator_id"), dict) else {}
+    )
     operator_open_id = (
         operator_id_obj.get("open_id")
         or operator.get("open_id")
@@ -75,7 +79,7 @@ async def handle_bot_menu_event(event: dict) -> None:
 
 
 @event_client.on_event("card.action.trigger")
-async def handle_card_action(event: dict) -> None:
+async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
     """卡片回调入口：表单提交 → 解析 form_value → 写入任务 → 群内回执。"""
     ev = event.get("event", {})
     action_value = (ev.get("action") or {}).get("value") or {}
@@ -324,7 +328,7 @@ async def handle_card_action(event: dict) -> None:
     if action_value.get("action") != "fill_form":
         if chat_id:
             await send_chat_text(chat_id, f"✅ 卡片回调收到，按钮值: {json.dumps(action_value, ensure_ascii=False)}")
-        return
+        return None
 
     # 表单提交：field_key 经 map 还原成结果行 ID 列表（相同 SOP 合并组）或项目名 → 校验判定 → 写库
     from app.core.database import async_session_factory
@@ -340,10 +344,10 @@ async def handle_card_action(event: dict) -> None:
                     "void": "已作废",
                 }.get(task.status if task else "", "不存在")
                 await send_chat_text(chat_id, f"⚠️ 批号 {batch} 任务{hint}，不可填报")
-            return
+            return None
         rows = await list_test_results(db, task.id)
         rows_by_id = {str(r.id): r for r in rows}
-        updates: list[dict] = []
+        updates: list[dict[str, Any]] = []
         results: list[str] = []
         alerts: list[str] = []  # 不合格明细（不落库，仅发提醒）
         for key, value_str in form_value.items():
@@ -416,9 +420,9 @@ async def handle_card_action(event: dict) -> None:
         # 卡片原地更新：已提交组的表单区替换为确认文本
         from app.modules.quality.feishu import message as feishu_msg
 
-        card = feishu_msg.get_last_fill_card(chat_id, batch)
-        if card:
-            submitted_group = action_value.get("group")
+        last_card = feishu_msg.get_last_fill_card(chat_id, batch)
+        if last_card:
+            submitted_group: int | None = action_value.get("group")
 
             async with async_session_factory() as db2:
                 task2 = await _resolve_task_by_batch(db2, batch)
@@ -437,7 +441,7 @@ async def handle_card_action(event: dict) -> None:
                     parts.extend(f"- {a}" for a in alerts)
                 return "\n".join(parts)
 
-            groups = [
+            groups: list[tuple[str, list[dict[str, Any]], bool, str | None]] = [
                 ("生物组", bio_left, submitted_group == 0, _group_text(0)),
                 ("理化组", chem_left, submitted_group == 1, _group_text(1)),
             ]

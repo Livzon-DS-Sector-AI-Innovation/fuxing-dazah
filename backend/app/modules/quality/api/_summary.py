@@ -16,9 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.core.time import APP_TZ, today
+from app.modules.quality import lc_template_parser
 from app.modules.quality.api._common import (
     router,
 )
+from app.modules.quality.models import ReportRecord
 from app.modules.quality.repository import (
     get_product_names,
     get_summary_by_product,
@@ -117,7 +119,7 @@ async def monthly_reports(
     end = (start.replace(month=start.month + 1) if start.month < 12
            else start.replace(year=start.year + 1, month=1))
     items = await list_report_records_between(db, start, end, product_name=product_name)
-    by_day: dict[str, list] = {}
+    by_day: dict[str, list[ReportRecord]] = {}
     for it in items:
         d = it.created_at.astimezone(APP_TZ).strftime("%Y-%m-%d")
         by_day.setdefault(d, []).append(it)
@@ -154,13 +156,13 @@ async def quality_dashboard(
 
 
 @router.get("/tasks/report-date-template", summary="下载出报日期批量补录 Excel 模板")
-async def report_date_template_endpoint():
+async def report_date_template_endpoint() -> StreamingResponse:
     import io as _io
 
     import openpyxl
 
     wb = openpyxl.Workbook()
-    ws = wb.active
+    ws = lc_template_parser.active_sheet(wb)
     ws.title = "出报日期补录"
     ws.append(["批号", "出报日期"])
     ws.append(["HAF2608001B", "2026-09-18"])
@@ -196,7 +198,7 @@ async def summary_matrix_export(
     date_to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
     include_in_progress: bool = Query(default=False, description="包含填报中的批次"),
     db: AsyncSession = Depends(get_db),
-):
+) -> StreamingResponse:
     import io as _io
 
     import openpyxl
@@ -206,7 +208,7 @@ async def summary_matrix_export(
         include_in_progress=include_in_progress,
     )
     wb = openpyxl.Workbook()
-    ws = wb.active
+    ws = lc_template_parser.active_sheet(wb)
     ws.title = "QC汇总表"
     headers = ["产品名称", "批号", "生产日期", "状态", "判定"] + [c["name"] for c in data["columns"]]
     ws.append(headers)

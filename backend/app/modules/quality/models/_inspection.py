@@ -1,6 +1,7 @@
 """Quality ORM 模型 —— 检验记录、杂质明细、报告单。"""
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Boolean, Float, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -76,7 +77,7 @@ class InspectionRecord(BaseModel):
     )
 
     # 原始数据与文件
-    raw_data: Mapped[dict | None] = mapped_column(
+    raw_data: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True, comment="完整原始解析数据备份"
     )
     excel_filename: Mapped[str | None] = mapped_column(

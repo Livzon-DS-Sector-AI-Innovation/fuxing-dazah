@@ -42,7 +42,7 @@ async def upload_lc_excel(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:lc:upload")),
-):
+) -> UploadLcResponse:
     filename = file.filename or "unknown.xlsx"
     if not filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls")

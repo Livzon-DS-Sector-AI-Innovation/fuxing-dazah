@@ -1,6 +1,7 @@
 """Quality 模块数据读写。只负责查询与持久化，不做业务判断。"""
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,7 @@ async def get_summary_by_product(
     product_name: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """按产品/时间段聚合汇总统计。
 
     批次口径：按 (产品, 批号) 去重合并两个数据源——
@@ -100,7 +101,9 @@ async def get_summary_by_product(
         prog_stmt = prog_stmt.where(QualityTestTask.created_at >= date_from)
     if date_to:
         prog_stmt = prog_stmt.where(QualityTestTask.created_at <= date_to)
-    in_progress_batches: set[tuple[str, str]] = set((await db.execute(prog_stmt)).all())
+    # set[Any]：SQLAlchemy 的 Row 是 Sequence 而非 tuple 子类，无法标注为
+    # set[tuple[str, str]]（运行时行为与 set[tuple[str, str]] 完全一致）
+    in_progress_batches: set[Any] = set((await db.execute(prog_stmt)).all())
 
     total = len(batches)
     pass_count = sum(1 for v in batches.values() if v)
@@ -112,7 +115,7 @@ async def get_summary_by_product(
         }
 
     # 按产品分组（完成批次 + 在途批次合并键）
-    by_product: dict[str, dict] = {}
+    by_product: dict[str, dict[str, Any]] = {}
     all_keys = set(batches.keys()) | in_progress_batches
     for (p, _b) in all_keys:
         if p not in by_product:

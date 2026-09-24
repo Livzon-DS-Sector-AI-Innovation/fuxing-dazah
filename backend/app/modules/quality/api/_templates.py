@@ -2,6 +2,7 @@
 
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     Body,
@@ -38,7 +39,7 @@ from app.platform.permission.deps import require_permission
 
 
 @router.get("/templates", summary="列出模板（含 SOP 绑定状态）")
-async def list_templates(db: AsyncSession = Depends(get_db)):
+async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
     quality_storage.sync_templates_from_minio()
     items = _scan_templates(REPORT_TEMPLATE_DIR) if REPORT_TEMPLATE_DIR.exists() else []
     # 一次性加载全部标准文档的号码 token（未绑定模板的匹配建议）
@@ -46,7 +47,7 @@ async def list_templates(db: AsyncSession = Depends(get_db)):
     doc_tokens = {d.id: _extract_number_tokens(d.file_no or "", d.product_internal_code or "", d.product_code or "", d.version or "") for d in docs}
     bindings = {b.template_path: b for b in await list_coa_bindings(db)}
 
-    def annotate(nodes: list[dict]) -> None:
+    def annotate(nodes: list[dict[str, Any]]) -> None:
         for it in nodes:
             if it["type"] == "folder":
                 annotate(it.get("children", []))
@@ -65,10 +66,10 @@ async def list_templates(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/templates/all-placeholders", summary="获取所有模板的所有占位符名称")
-async def all_placeholders():
+async def all_placeholders() -> list[str]:
     names: set[str] = set()
 
-    def walk(items: list[dict]):
+    def walk(items: list[dict[str, Any]]) -> None:
         for item in items:
             if item["type"] == "folder":
                 walk(item.get("children", []))
@@ -86,7 +87,7 @@ async def all_placeholders():
 async def create_folder(
     name: str = Body(..., embed=True),
     _user: User = Depends(require_permission("quality:template:manage")),
-):
+) -> dict[str, Any]:
     p = quality_storage.safe_join(REPORT_TEMPLATE_DIR, name)
     if p is None:
         raise HTTPException(status_code=400, detail="非法文件夹名")
@@ -98,7 +99,7 @@ async def create_folder(
 async def delete_folder(
     name: str = Body(..., embed=True),
     _user: User = Depends(require_permission("quality:template:manage")),
-):
+) -> dict[str, Any]:
     p = quality_storage.safe_join(REPORT_TEMPLATE_DIR, name)
     if p is None or not p.is_dir():
         raise HTTPException(status_code=404, detail="不存在")
@@ -113,7 +114,7 @@ async def delete_folder(
 async def delete_template_file(
     path: str = Body(..., embed=True),
     _user: User = Depends(require_permission("quality:template:manage")),
-):
+) -> dict[str, Any]:
     base = REPORT_TEMPLATE_DIR.resolve()
     p = (REPORT_TEMPLATE_DIR / path).resolve()
     if not str(p).startswith(str(base)) or not p.is_file():
@@ -167,7 +168,7 @@ async def upload_template(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:template:manage")),
-):
+) -> dict[str, Any]:
     if not file.filename or not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="仅支持 .docx")
     # 文件名只取最后一段（去掉客户端路径成分，防 .. 穿越）
@@ -209,7 +210,7 @@ async def upload_template(
 async def download_template(
     path: str,
     _user: User = Depends(require_permission("quality:report:read")),
-):
+) -> FileResponse:
     full = quality_storage.ensure_template_local(path)
     if not full.is_file():
         raise HTTPException(status_code=404, detail="不存在")
@@ -224,7 +225,7 @@ async def download_template(
 async def delete_template(
     path: str,
     _user: User = Depends(require_permission("quality:template:manage")),
-):
+) -> dict[str, Any]:
     full = quality_storage.safe_join(REPORT_TEMPLATE_DIR, path)
     if full is None or not full.is_file():
         raise HTTPException(status_code=404, detail="不存在")

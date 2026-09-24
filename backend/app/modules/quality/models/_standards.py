@@ -1,6 +1,7 @@
 """Quality ORM 模型 —— 检验记录、杂质明细、报告单。"""
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Float, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -156,6 +157,6 @@ class LcTemplateConfig(BaseModel):
     description: Mapped[str | None] = mapped_column(
         String(200), nullable=True, comment="模板描述，如 万古霉素冻干粉-赞比亚"
     )
-    config: Mapped[dict] = mapped_column(
+    config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, comment="取值配置 JSON：批号标签、组分区块（名称列/结果列/行距/平均规则/值格式）"
     )

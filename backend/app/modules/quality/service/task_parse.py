@@ -142,7 +142,7 @@ class _TaskParse(_TaskCore):
         file_bytes: bytes,
         filename: str,
         filled_by: uuid.UUID | None = None,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """通用解析：表号识别 → 模板配置取值 → 持久化检验记录 → 自动关联任务。
 
         无匹配模板配置返回 None（由旧解析器接管）。返回 {parse, record_id, task_link}。
@@ -267,7 +267,9 @@ class _TaskParse(_TaskCore):
             }
         # 判定结论回写 InspectionRecord.all_pass（此前恒 True，超限批次也被统计为合格）：
         # 任务行判定结果 ∪ 组分自带限度判定；两者皆无判定时不改写（保留默认 True）
-        verdicts: list[bool] = []
+        # 元素含 None：_judge_value 签名为 bool | None（此处 op/limit 均已判非空，
+        # 实际必为 bool；标注按被调方签名放宽，与 all() 的运行时语义一致）
+        verdicts: list[bool | None] = []
         if task:
             for r in await list_test_results(db, task.id):
                 if r.is_pass is not None:
