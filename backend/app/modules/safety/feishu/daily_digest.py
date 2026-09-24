@@ -55,7 +55,10 @@ _MAX_CARD_BYTES = 140_000
 
 # 格子固定展示顺序（当天缺席的报告跳过）
 CELL_ORDER: list[str] = [
-    "special_op", "workticket", "fire_alarm", "central_alarm",
+    "special_op",
+    # 特殊作业新规则重算版（追加格子，不覆盖原格子；当天写入才展示）
+    "special_op_v36",
+    "workticket", "fire_alarm", "central_alarm",
     "chemical_daily", "chemical_weekly", "progress_dunning", "hazard_bulletin",
 ]
 

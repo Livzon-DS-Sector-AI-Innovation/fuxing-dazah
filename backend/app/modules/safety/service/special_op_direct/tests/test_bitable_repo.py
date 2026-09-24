@@ -86,7 +86,8 @@ def test_missing_both_times_is_flagged_and_not_counted_as_new() -> None:
 
     assert view.created_at == bitable_repo.UNKNOWN_CREATED_AT
     assert view.created_at_known is False
-    assert "今日新增计划外作业: 0 项" in markdown
+    # 窗口恒空时新增段整段隐藏（哨兵时间必然落在 08:00 窗口之外，不计入新增）
+    assert "今日新增" not in markdown
 
 
 # 批量取数

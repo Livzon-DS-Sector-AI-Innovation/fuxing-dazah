@@ -29,6 +29,8 @@ class SpecialOpRecord(Protocol):
     planned_start_time: datetime | None
     planned_end_time: datetime | None
     submitted_at: datetime | None
+    # 报备类型（"planned"=计划内 / "unplanned"=计划外）；真机核查填充率 100%
+    report_type: str | None
 
     risk_level: str | None
     daily_risk_level: str | None

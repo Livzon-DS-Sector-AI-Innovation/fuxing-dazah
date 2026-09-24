@@ -2,10 +2,12 @@
 
 把 ReportBuilder 的长文日报改造成速递式布局（对齐飞书社区「专属速递」卡风格）：
 
-- 蓝色横幅头部：标题 + 统计副标题（午后推送加「午后更新」标签）
+- 蓝色横幅头部：标题 + 统计副标题（晨报含计划内外拆分；晚报为「晚报」标签 +
+  完成/进行/待作业/夜间进度）
 - 问候语 + 类型分布一行
-- 高风险逐条「标签 + 标题 + 时间地点 + 内容」纯文字条目卡（灰底，不带图片）
-- 中/低风险聚合条目 + 新增计划外 + 安全提示
+- 高风险逐条「标签 + 标题 + 时间地点 + 内容」纯文字条目卡（灰底，不带图片；
+  晚报只放未完成高风险，另加 ✅ 已完成 / 🌙 夜间作业聚合条目）
+- 中/低风险聚合条目 + 今日新增 + 安全提示
 - 完整长文收纳进底部折叠面板（默认收起，信息零丢失）
 
 数据口径与 ``ReportBuilder.build`` 完全一致（同一份 records/stats/ai_analysis）。
@@ -73,17 +75,18 @@ async def build_special_op_digest(
     stats: dict[str, int],
     ai_analysis: AIDailyAnalysisResult | None,
     full_markdown: str,
+    now: datetime | None = None,
 ) -> DigestCard | None:
     """构建速递卡；仅 today / afternoon 模式生效。
 
-    构建异常或卡片超限时返回 None，调用方回退推送旧长卡
+    构建异常或卡片超限时返回 None，由调用方回退推送旧长卡
     （ReportBuilder.build 的产物 full_markdown）。
     """
     if not ReportBuilder._is_today_family(mode):
         return None
     try:
         return await _build(
-            report_date, mode, reports, stats, ai_analysis, full_markdown,
+            report_date, mode, reports, stats, ai_analysis, full_markdown, now=now,
         )
     except Exception:
         logger.warning("速递卡构建失败，回退旧长卡", exc_info=True)
@@ -97,7 +100,9 @@ async def _build(
     stats: dict[str, int],
     ai_analysis: AIDailyAnalysisResult | None,
     full_markdown: str,
+    now: datetime | None = None,
 ) -> DigestCard | None:
+    now_eff = now or datetime.now(UTC)
     high = sorted(
         [r for r in reports if r.daily_risk_level == "high"],
         key=ReportBuilder._sort_key,
@@ -105,51 +110,124 @@ async def _build(
     medium = [r for r in reports if r.daily_risk_level == "medium"]
     low = [r for r in reports if r.daily_risk_level == "low"]
 
-    title = f"📋 特殊作业速递 | {report_date.strftime('%Y-%m-%d')}"
-    subtitle = (
-        f"今日计划 {stats.get('effective_total', len(reports))} 项"
-        f" ｜ 高 {len(high)} · 中 {len(medium)} · 低 {len(low)}"
-    )
-    header_tags: list[dict[str, Any]] | None = None
-    if mode == "afternoon":
-        header_tags = [{
+    is_afternoon = mode == "afternoon"
+    if is_afternoon:
+        # 晚报布局：已完成/进行中/待作业 + 夜间作业；高风险条目只放未完成项
+        completed = [r for r in reports if ReportBuilder.is_completed(r, now_eff)]
+        ongoing = [
+            r for r in reports
+            if not ReportBuilder.is_completed(r, now_eff)
+            and ReportBuilder.is_ongoing(r, now_eff)
+        ]
+        night = ReportBuilder.select_night_ops(report_date, reports)
+        focus_high = [r for r in high if not ReportBuilder.is_completed(r, now_eff)]
+        title = f"📋 特殊作业速递·晚报 | {report_date.strftime('%Y-%m-%d')}"
+        subtitle = (
+            f"今日 {stats.get('effective_total', len(reports))} 项 ｜"
+            f" 完成 {len(completed)} · 进行 {len(ongoing)}"
+            f" · 待作业 {len(reports) - len(completed) - len(ongoing)} ｜ 夜间 {len(night)}"
+        )
+        header_tags: list[dict[str, Any]] | None = [{
             "tag": "text_tag",
-            "text": {"tag": "plain_text", "content": "午后更新"},
+            "text": {"tag": "plain_text", "content": "晚报"},
             "color": "orange",
         }]
+        greeting = _afternoon_greeting(now_eff, reports, completed, ongoing)
+    else:
+        completed = []
+        ongoing = []
+        night = []
+        focus_high = high
+        planned_n = sum(1 for r in reports if r.report_type == "planned")
+        unplanned_n = sum(1 for r in reports if r.report_type == "unplanned")
+        title = f"📋 特殊作业速递 | {report_date.strftime('%Y-%m-%d')}"
+        subtitle = (
+            f"今日计划 {stats.get('effective_total', len(reports))} 项"
+            f" ｜ 高 {len(high)} · 中 {len(medium)} · 低 {len(low)}"
+        )
+        if planned_n or unplanned_n:
+            subtitle += f" ｜ 计划内 {planned_n} · 计划外 {unplanned_n}"
+        header_tags = None
+        greeting = _greeting(mode, reports, high)
 
     elements: list[dict[str, Any]] = []
 
-    # 高风险逐条条目卡（纯文字）
-    for r in high[:_MAX_HIGH_ITEMS]:
-        elements.append(_high_item_card(r))
-    if len(high) > _MAX_HIGH_ITEMS:
+    if is_afternoon and completed:
+        completed_high = [r for r in completed if r.daily_risk_level == "high"]
         elements.append({
             "tag": "markdown",
             "content": (
-                f"<font color='grey'>其余 {len(high) - _MAX_HIGH_ITEMS} 项高风险"
-                "见「完整明细」</font>"
+                f"✅ <text_tag color='green'>已完成</text_tag>"
+                f" **{len(completed)} 项**（含高风险 {len(completed_high)}）："
+                f"{_agg_summary(completed)}"
             ),
         })
 
-    # 新增计划外作业（与旧报告同口径：当天 BJT 08:00 后新提交）
-    new_ops = _new_unplanned(report_date, reports, mode)
+    # 今日新增（与长文同口径：当天 BJT 08:00 后新提交；空窗口不渲染）
+    new_ops = ReportBuilder.select_new_ops(report_date, reports, mode, now=now_eff)
     if new_ops:
+        unplanned_new = sum(1 for r in new_ops if r.report_type == "unplanned")
+        mark = f"（计划外 {unplanned_new}）" if unplanned_new else ""
         elements.append({
             "tag": "markdown",
             "content": (
-                f"🆕 <text_tag color='yellow'>新增计划外</text_tag>"
-                f" **{len(new_ops)} 项**：{_agg_summary(new_ops)}"
+                f"🆕 <text_tag color='yellow'>今日新增</text_tag>"
+                f" **{len(new_ops)} 项**{mark}：{_agg_summary(new_ops)}"
+            ),
+        })
+
+    if is_afternoon and night:
+        night_lines = [
+            f"🌙 <text_tag color='indigo'>夜间作业</text_tag> **{len(night)} 项**（18:00 后）"
+        ]
+        night_sorted = sorted(
+            night,
+            key=lambda r: (
+                r.planned_start_time or datetime.min.replace(tzinfo=UTC),
+                r.feishu_record_id or "",
+            ),
+        )
+        for r in night_sorted:
+            cn = ReportBuilder._cn_label(r.operation_type)
+            level = {"high": "高风险", "medium": "中风险", "low": "低风险"}.get(
+                r.daily_risk_level or "", "中风险"
+            )
+            line = f"• {cn}｜{(r.department or '?').strip()}"
+            span = ReportBuilder._hm_span(r)
+            if span:
+                line += f" {span}"
+            line += (
+                f" <font color='grey'>{level}"
+                f" · {ReportBuilder.progress_label(r, now_eff)}</font>"
+            )
+            night_lines.append(line)
+        elements.append({"tag": "markdown", "content": "\n".join(night_lines)})
+
+    # 高风险逐条条目卡（纯文字；晚报只放未完成项）
+    for r in focus_high[:_MAX_HIGH_ITEMS]:
+        elements.append(_high_item_card(r))
+    if len(focus_high) > _MAX_HIGH_ITEMS:
+        elements.append({
+            "tag": "markdown",
+            "content": (
+                f"<font color='grey'>其余 {len(focus_high) - _MAX_HIGH_ITEMS} 项高风险"
+                "见「完整明细」</font>"
             ),
         })
 
     # 中/低风险聚合条目
     if medium:
+        med_mark = ""
+        if is_afternoon:
+            medium_unfinished = sum(
+                1 for r in medium if not ReportBuilder.is_completed(r, now_eff)
+            )
+            med_mark = f"（未完成 {medium_unfinished}）"
         elements.append({
             "tag": "markdown",
             "content": (
                 f"<text_tag color='orange'>常规作业</text_tag>"
-                f" **{len(medium)} 项**：{_agg_summary(medium)}"
+                f" **{len(medium)} 项**{med_mark}：{_agg_summary(medium)}"
             ),
         })
     if low:
@@ -173,7 +251,6 @@ async def _build(
     elements.append(_detail_panel(full_markdown))
 
     # 超限保护：飞书消息 content 上限 30KB，超限回退旧长卡
-    greeting = _greeting(mode, reports, high)
     card = build_card_dict(
         title,
         greeting,
@@ -194,6 +271,26 @@ async def _build(
         subtitle=subtitle,
         header_tags=header_tags,
     )
+
+
+def _afternoon_greeting(
+    now: datetime,
+    reports: Sequence[SpecialOpRecord],
+    completed: Sequence[SpecialOpRecord],
+    ongoing: Sequence[SpecialOpRecord],
+) -> str:
+    """晚报首元素：截至今时的进度一行 + 类型分布。"""
+    bj_hm = (now + timedelta(hours=8)).strftime("%H:%M")
+    pending_n = len(reports) - len(completed) - len(ongoing)
+    prefix = (
+        f"Hi，截至今日 {bj_hm}，特殊作业 **{len(reports)}** 项："
+        f"已完成 **{len(completed)}** ｜ 进行中 **{len(ongoing)}** ｜ 待作业 **{pending_n}**："
+    )
+    lines = [prefix]
+    chips = _type_chips(reports)
+    if chips:
+        lines.append(f"<font color='grey'>{chips}</font>")
+    return "\n".join(lines)
 
 
 def _greeting(
@@ -303,25 +400,6 @@ def _agg_summary(items: Sequence[SpecialOpRecord]) -> str:
             f"{t} ×{len(its)}（{'、'.join(depts[:5])}{'…' if len(depts) > 5 else ''}）"
         )
     return "、".join(parts)
-
-
-def _new_unplanned(
-    report_date: date,
-    reports: Sequence[SpecialOpRecord],
-    mode: str,
-) -> list[SpecialOpRecord]:
-    """当天 BJT 08:00 后新提交的计划外作业（窗口与 _new_ops_section 一致）。"""
-    start = datetime.combine(report_date, datetime.min.time(), tzinfo=UTC)
-    end = start + timedelta(hours=9) if mode == "afternoon" else datetime.now(UTC)
-
-    def _ts(r: SpecialOpRecord) -> datetime:
-        if r.submitted_at:
-            return r.submitted_at
-        if r.created_at:
-            return r.created_at
-        return datetime.min.replace(tzinfo=UTC)
-
-    return [r for r in reports if start <= _ts(r) < end]
 
 
 def _tips(

@@ -62,6 +62,27 @@ TYPE_INFERENCE_RULES: dict[str, list[str]] = {
 
 HIGH_RISK_ZONE_KEYWORDS = ["罐区", "洁净区"]
 
+# V3.6 动火高风险区域：动火作业凡涉及下列区域之一，直接判高风险。
+# 匹配文本 = 作业地点 + 作业内容（拉丁字母关键词统一大写比对，大小写不敏感）
+HOT_WORK_HIGH_RISK_ZONE_KEYWORDS: list[str] = [
+    "RTO", "酸化池", "SBR", "CASS", "事故池", "水热矿化",
+    "氨水储罐", "氨分罐", "氨水管道",
+    "提二苯结晶", "带滤罐",
+    "储罐区", "溶媒回收",
+    "乙醇配制",
+    "危险化学品仓库", "危化品仓库",
+]
+
+# V3.6 腐蚀性介质管道：作业涉及下列腐蚀性介质的管道/管线，不限作业类型判高风险
+CORROSIVE_SUBSTANCES: tuple[str, ...] = (
+    "硫酸", "碱液", "盐酸", "硝酸", "液碱", "烧碱", "氢氧化钠",
+)
+CORROSIVE_LINE_KEYWORDS: tuple[str, ...] = ("管道", "管线")
+
+# 17 点晚报的夜间作业阈值（北京时间整点）：计划开始 ≥ 18 点、或计划结束 > 18 点
+# （白天开始延入夜间）视为夜间作业；与发报时刻解耦，仅由此常量决定。
+NIGHT_CUTOFF_HOUR_BJT = 18
+
 
 # ═══════════════════════════════════════════════════════════
 # RiskAssessmentEngine — V2 纯规则判定
@@ -71,12 +92,13 @@ class RiskAssessmentEngine:
     """特殊作业日报风险判定引擎（V3.5）。
 
     判定优先级（一旦匹配即返回）:
-    1. 高风险（14 条规则）
+    1. 高风险（16 条规则）
     2. 中风险（19 条规则）
     3. 低风险（14 条规则）
     4. 兜底规则
 
     V3.5 新增维度: 动火方式风险分级、登高方式×高度联动、吊装质量分级、罐号分级
+    V3.6 新增维度: 动火高风险区域、腐蚀性介质管道
     新字段取值优先级: 表单字段 → 文本推断 → 兜底默认中风险
     """
 
@@ -262,7 +284,7 @@ class RiskAssessmentEngine:
                 return True
         return False
 
-    # ════════════════ V3.5 高风险（14 条）════════════════
+    # ════════════════ V3.5/V3.6 高风险（16 条）════════════════
 
     @classmethod
     def _assess_high(cls, all_types, report, description, location,
@@ -302,6 +324,17 @@ class RiskAssessmentEngine:
         # 14 发酵工程部罐号3开头 → 高风险
         if tank_grade == "high":
             m.append("发酵工程部受限空间+3开头罐号（高风险罐号）")
+        # 15 动火作业涉及高风险区域（V3.6：RTO/酸化池/SBR/CASS/事故池/水热矿化/
+        #    氨水系统/提二苯结晶（含室外带滤罐）/储罐区/溶媒回收/乙醇配制罐区/危化品仓库）
+        zone_text = f"{location or ''} {description or ''}".upper()
+        zone_hits = [kw for kw in HOT_WORK_HIGH_RISK_ZONE_KEYWORDS if kw in zone_text]
+        if "动火作业" in all_types and zone_hits:
+            m.append(f"动火作业涉及高风险区域（{'、'.join(zone_hits)}）")
+        # 16 涉及腐蚀性介质管道/管线（V3.6：硫酸、碱液等，不限作业类型）
+        has_corrosive_line = any(ln in zone_text for ln in CORROSIVE_LINE_KEYWORDS)
+        corrosive_hits = [s for s in CORROSIVE_SUBSTANCES if s in zone_text]
+        if has_corrosive_line and corrosive_hits:
+            m.append(f"作业涉及腐蚀性管道（{'、'.join(corrosive_hits)}）")
         return m if m else None
 
     # ════════════════ V3.5 中风险（19 条）════════════════
@@ -681,7 +714,11 @@ class AIAnalyst:
         stats: dict,
     ) -> str:
         """构建汇总分析 prompt。"""
-        mode_label = "特殊作业日报" if ReportBuilder._is_today_family(mode) else "特殊作业次日预警"
+        mode_label = (
+            "特殊作业日报·晚报"
+            if mode == "afternoon"
+            else ("特殊作业日报" if ReportBuilder._is_today_family(mode) else "特殊作业次日预警")
+        )
         # 按部门分组统计高风险（与逐条 AI 分析上限 high[:15] 对齐）
         dept_groups: dict[str, list] = {}
         for r in high[:15]:
@@ -708,6 +745,8 @@ class AIAnalyst:
         dept_header = "## 高风险按部门分布"
         if len(high) > 15:
             dept_header += "（仅显示前 15 条）"
+        if mode == "afternoon":
+            dept_header += "（晚报口径：仅未完成高风险，已按计划收工的不在本清单）"
         lines = [
             "## 汇总任务",
             f"{mode_label} - {report_date.strftime('%Y年%m月%d日')}",
@@ -720,6 +759,26 @@ class AIAnalyst:
         lines.append("## 各高风险作业分析摘要")
         for s in per_summaries:
             lines.append(f"- {s}")
+        if mode == "afternoon":
+            lines.append("")
+            lines.append("## 进度与夜间")
+            lines.append(
+                f"进度: 已完成 {stats.get('completed', 0)} · 进行中 {stats.get('ongoing', 0)}"
+                f" · 待作业 {stats.get('pending', 0)}"
+                f"（今晚 18:00 后作业 {stats.get('night', 0)} 项）"
+            )
+        lines.append("")
+        lines.append("## 模式要求")
+        if mode == "afternoon":
+            lines.append(
+                "- enhanced_tips 导向收工确认与夜间管控（动火点收工检查、夜间照明与监护、"
+                "跨夜作业交接班），不得出现开工准备类提示"
+            )
+        else:
+            lines.append(
+                "- enhanced_tips 导向开工前检查（作业票与人员资质确认、气体检测、监护到位），"
+                "不得出现收工/夜间类提示"
+            )
         return "\n".join(lines)
 
 
@@ -781,79 +840,240 @@ class ReportBuilder:
             r.planned_start_time or datetime.min, r.feishu_record_id or "",
         )
 
+    # ── 进度 / 夜间 / 新增 三组口径助手（17 点晚报与白天查询共用）──
+
+    @staticmethod
+    def _bjt_hour(report_date: date, hour_bjt: int) -> datetime:
+        """北京时间某整点对应的 UTC 瞬时（BJT = UTC+8）。"""
+        return (
+            datetime.combine(report_date, datetime.min.time(), tzinfo=UTC)
+            + timedelta(hours=hour_bjt - 8)
+        )
+
     @classmethod
-    def _new_ops_section(cls, report_date: date, reports: Sequence[SpecialOpRecord], mode: str) -> list[str]:
-        """构建「今日新增计划外作业」段落。
+    def is_completed(cls, r: SpecialOpRecord, now: datetime) -> bool:
+        """收工判定：按计划结束时间推算。
 
-        计划外 = 当天北京时间 08:00 之后新提交（发起）的特殊作业，
-        不依赖多维表「报备类型」字段：
-        - afternoon（17点日报）: 窗口为 08:00 ~ 17:00
-        - today（机器人随时查询）: 窗口为 08:00 ~ 当前查询时刻
-        提交时间取 submitted_at（发起时间），缺失时回退 created_at。
+        真机核查（2026-09-24，5 天 176 条）：Bitable「完成时间」列是审批流完成
+        时间（64 条无值恰好对应 64 条「审批中」，另有 23 条早于作业开始时间），
+        不能当作业完成信号，故不参与本判定。
         """
-        start = datetime.combine(report_date, datetime.min.time(), tzinfo=UTC)  # BJT 08:00
-        if mode == "afternoon":
-            end = start + timedelta(hours=9)  # BJT 17:00
-        else:
-            end = datetime.now(UTC)
+        return r.planned_end_time is not None and r.planned_end_time <= now
 
-        def _new_ts(r) -> datetime:
+    @classmethod
+    def is_ongoing(cls, r: SpecialOpRecord, now: datetime) -> bool:
+        if cls.is_completed(r, now):
+            return False
+        return r.planned_start_time is None or r.planned_start_time <= now
+
+    @classmethod
+    def progress_label(cls, r: SpecialOpRecord, now: datetime) -> str:
+        if cls.is_completed(r, now):
+            return "已完成"
+        if cls.is_ongoing(r, now):
+            return "进行中"
+        return "待作业"
+
+    @classmethod
+    def select_night_ops(
+        cls, report_date: date, reports: Sequence[SpecialOpRecord],
+    ) -> list[SpecialOpRecord]:
+        """今晚夜间作业：计划开始 ≥ 18 点（BJT），或计划结束 > 18 点（白天开始延入夜间）。"""
+        cutoff = cls._bjt_hour(report_date, NIGHT_CUTOFF_HOUR_BJT)
+
+        def _is_night(r: SpecialOpRecord) -> bool:
+            if r.planned_start_time is not None and r.planned_start_time >= cutoff:
+                return True
+            return r.planned_end_time is not None and r.planned_end_time > cutoff
+
+        return [r for r in reports if _is_night(r)]
+
+    @classmethod
+    def select_new_ops(
+        cls,
+        report_date: date,
+        reports: Sequence[SpecialOpRecord],
+        mode: str,
+        now: datetime | None = None,
+    ) -> list[SpecialOpRecord]:
+        """当天 BJT 08:00 后新提交的作业（窗口 [08:00, 发报/查询时刻]）。
+
+        提交时间取 submitted_at（发起时间），缺失回退 created_at；
+        「报备类型」不参与窗口筛选，仅用于条目上的计划外标记。
+        """
+        if mode == "tomorrow":
+            return []
+        now_eff = now or datetime.now(UTC)
+        start = cls._bjt_hour(report_date, 8)
+
+        def _ts(r: SpecialOpRecord) -> datetime:
             if r.submitted_at:
                 return r.submitted_at
             if r.created_at:
                 return r.created_at
             return datetime.min.replace(tzinfo=UTC)
 
-        new = [r for r in reports if start <= _new_ts(r) < end]
-        lines = ["", "🔔 今日新增计划外作业", "━━━━━━━━━━━━━━━━━━━━"]
+        return [r for r in reports if start <= _ts(r) < now_eff]
+
+    @classmethod
+    def _new_ops_section(
+        cls,
+        report_date: date,
+        reports: Sequence[SpecialOpRecord],
+        mode: str,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """「今日新增作业」段落（08:00 以来新提交，含计划外标记与当前进度）。
+
+        - afternoon（晚报）/ today（机器人随时查询）: 窗口为 08:00 ~ 发报/查询时刻
+        - 08:00 晨报定时推送窗口恒空 → 整段隐藏（不再输出「0 项」占位行）
+        计划外标记读「报备类型」（report_type），窗口筛选不依赖该字段。
+        """
+        new = cls.select_new_ops(report_date, reports, mode, now=now)
         if not new:
-            lines.append("• 今日新增计划外作业: 0 项")
-            return lines
-        lines.append(f"• 今日新增计划外作业: {len(new)} 项")
-        # 类型分布 + 涉及部门
-        type_counts: dict[str, int] = {}
-        dept_set: set[str] = set()
-        for r in new:
-            cn = cls._cn_label(r.operation_type)
-            type_counts[cn] = type_counts.get(cn, 0) + 1
-            if r.department:
-                dept_set.add(r.department)
-        type_counts = dict(sorted(type_counts.items(), key=lambda x: (-x[1], x[0])))
-        type_parts = [f"{t} {c}项" for t, c in type_counts.items()]
-        if type_parts:
-            lines.append(f"  {'  '.join(type_parts)}")
-        if dept_set:
-            lines.append(f"  涉及部门: {'、'.join(sorted(dept_set))}")
-        # 逐条明细(按发起时间升序)
+            return []
+
+        def _new_ts(r: SpecialOpRecord) -> datetime:
+            if r.submitted_at:
+                return r.submitted_at
+            if r.created_at:
+                return r.created_at
+            return datetime.min.replace(tzinfo=UTC)
+
+        now_eff = now or datetime.now(UTC)
+        lines = ["", f"🆕 今日新增作业（08:00 以来 {len(new)} 项）", "━━━━━━━━━━━━━━━━━━━━"]
         ordered = sorted(new, key=lambda r: (_new_ts(r), r.feishu_record_id or ""))
         for i, r in enumerate(ordered, 1):
             cn = cls._cn_label(r.operation_type)
-            lines.append(f"{i}. 【{cn}】{r.department or '?'}")
+            tag = "｜计划外" if r.report_type == "unplanned" else ""
+            lines.append(f"{i}. 【{cn}{tag}】{r.department or '?'}")
             if r.location:
                 lines.append(f"   📍 地点: {r.location}")
             if r.work_description:
                 lines.append(f"   📝 内容: {r.work_description[:60]}")
-            time_parts = []
+            parts = []
             if r.planned_start_time:
                 start = cls._bj_time(r.planned_start_time)
                 if r.planned_end_time:
                     end = cls._bj_time(r.planned_end_time)[-5:]
                     dur = f"（{r.work_duration_hours}h）" if r.work_duration_hours else ""
-                    time_parts.append(f"⏱ 计划: {start} — {end}{dur}")
+                    parts.append(f"⏱ 计划: {start} — {end}{dur}")
                 else:
                     dur = f"（{r.work_duration_hours}h）" if r.work_duration_hours else ""
-                    time_parts.append(f"⏱ 计划: {start}{dur}")
-            if time_parts:
-                lines.append(f"   {''.join(time_parts)}")
-            level = {"high": "高", "medium": "中", "low": "低"}.get(r.daily_risk_level or '', "中")
-            lines.append(f"   ⚠️ 风险: {level}")
+                    parts.append(f"⏱ 计划: {start}{dur}")
+            level = {"high": "高", "medium": "中", "low": "低"}.get(r.daily_risk_level or "", "中")
+            parts.append(f"⚠️ 风险: {level}")
+            parts.append(f"▸ {cls.progress_label(r, now_eff)}")
+            lines.append(f"   {'    '.join(parts)}")
+        return lines
+
+    @classmethod
+    def _type_parts(cls, reports: Sequence[SpecialOpRecord]) -> list[str]:
+        """作业概况的类型分布行（模板顺序 + 关联作业计数）。"""
+        type_counts: dict[str, int] = {}
+        associated = 0
+        for r in reports:
+            cn = cls._cn_label(r.operation_type)
+            type_counts[cn] = type_counts.get(cn, 0) + 1
+            # 关联作业（涉及 ≥2 种特殊作业类型）
+            all_types: set[str] = {cn}
+            other = r.other_operation_types or []
+            if isinstance(other, list):
+                for t in other:
+                    all_types.add(cls._cn_label(t) if isinstance(t, str) else str(t))
+            inferred = r.inferred_operation_types or []
+            if isinstance(inferred, list):
+                for t in inferred:
+                    all_types.add(str(t))
+            if len(all_types) >= 2:
+                associated += 1
+        _type_order = ["动火作业", "受限空间", "高处作业", "吊装作业", "临时用电", "动土作业", "断路作业", "盲板抽堵"]
+        parts = []
+        for t in _type_order:
+            cnt = type_counts.get(t, 0)
+            if cnt > 0:
+                parts.append(f"{t} {cnt}项")
+        if associated > 0:
+            parts.append(f"关联作业 {associated}项")
+        return parts
+
+    @classmethod
+    def _agg_line(cls, items: Sequence[SpecialOpRecord]) -> str:
+        """「类型 ×N、类型 ×N」单行聚合（低风险段 / 已完成段共用）。"""
+        by_type: dict[str, int] = {}
+        for r in items:
+            cn = cls._cn_label(r.operation_type)
+            by_type[cn] = by_type.get(cn, 0) + 1
+        return "、".join(
+            f"{t} ×{c}"
+            for t, c in sorted(by_type.items(), key=lambda x: (-x[1], x[0]))
+        )
+
+    @classmethod
+    def _hm_span(cls, r: SpecialOpRecord) -> str:
+        """「HH:MM—HH:MM」短时段（已完成 / 夜间条目的单行展示用）。"""
+        if r.planned_start_time is None:
+            return ""
+        start = cls._bj_time(r.planned_start_time)[-5:]
+        if r.planned_end_time is None:
+            return start
+        return f"{start}—{cls._bj_time(r.planned_end_time)[-5:]}"
+
+    @classmethod
+    def _high_entry_lines(
+        cls,
+        idx: int,
+        r: SpecialOpRecord,
+        enhanced_map: dict[str, str],
+        control_map: dict[str, str],
+        progress: str | None = None,
+    ) -> list[str]:
+        """单条高风险条目（晨报与晚报 🔴 段共用；晚报附 ▸ 进度标记）。"""
+        cn_type = cls._cn_label(r.operation_type)
+        lines = [f"{idx}. 【{cn_type}】{r.department or '?'}"]
+        lines.append(f"   📍 地点: {r.location or '未知'}")
+        if r.work_description:
+            lines.append(f"   📝 内容: {r.work_description[:60]}")
+        # 时间 + 单位行
+        time_parts = []
+        if r.planned_start_time:
+            start = cls._bj_time(r.planned_start_time)
+            if r.planned_end_time:
+                end = cls._bj_time(r.planned_end_time)[-5:]
+                dur = f"（{r.work_duration_hours}h）" if r.work_duration_hours else ""
+                time_parts.append(f"⏱ {start} — {end}{dur}")
+            else:
+                dur = f"（{r.work_duration_hours}h）" if r.work_duration_hours else ""
+                time_parts.append(f"⏱ {start}{dur}")
+        unit = r.contractor_name or r.personnel_type or ""
+        if unit:
+            time_parts.append(f"  单位: {unit}")
+        if progress:
+            time_parts.append(f"  ▸ {progress}")
+        if time_parts:
+            lines.append(f"   {''.join(time_parts)}")
+        # AI 重写的风险描述优先，回退规则引擎结果
+        ai_reason = enhanced_map.get(str(idx), "")
+        reason = ai_reason if ai_reason else (r.daily_risk_reason or "高风险作业")
+        lines.append(f"   ⚠️ 风险: {reason}")
+        # AI 管控措施优先，回退规则引擎
+        ai_ctrl = control_map.get(str(idx), "")
+        ctrl = ai_ctrl if ai_ctrl else cls._control_measure(r)
+        if ctrl:
+            lines.append(f"   📝 管控: {ctrl}")
         return lines
 
     @classmethod
     def build(cls, report_date: date, mode: str, reports: Sequence[SpecialOpRecord],
               stats: dict[str, int],
-              ai_analysis: AIDailyAnalysisResult | None = None) -> str:
-        is_today_mode = cls._is_today_family(mode)  # 17点日报沿用当日标题/标签
+              ai_analysis: AIDailyAnalysisResult | None = None,
+              now: datetime | None = None) -> str:
+        """渲染日报 Markdown：today=晨报（计划+风险交底）；afternoon=晚报（见 ``_build_afternoon``）。"""
+        if mode == "afternoon":
+            return cls._build_afternoon(
+                report_date, reports, stats, ai_analysis=ai_analysis, now=now,
+            )
+        is_today_mode = cls._is_today_family(mode)
         title = "📋 【特殊作业日报】" if is_today_mode else "🔮 【特殊作业次日预警】"
         date_str = report_date.strftime("%Y年%m月%d日")
 
@@ -868,40 +1088,23 @@ class ReportBuilder:
 
         # ── 作业概况统计 ──
         mode_label = "今日" if is_today_mode else "次日"
-        # 按作业类型计数
-        type_counts: dict[str, int] = {}
-        # 关联作业（涉及 ≥2 种特殊作业类型）
-        associated = 0
-        for r in reports:
-            cn = cls._cn_label(r.operation_type)
-            type_counts[cn] = type_counts.get(cn, 0) + 1
-            # 统计关联作业
-            all_types: set[str] = {cn}
-            other = r.other_operation_types or []
-            if isinstance(other, list):
-                for t in other:
-                    all_types.add(cls._cn_label(t) if isinstance(t, str) else str(t))
-            inferred = r.inferred_operation_types or []
-            if isinstance(inferred, list):
-                for t in inferred:
-                    all_types.add(str(t))
-            if len(all_types) >= 2:
-                associated += 1
-        # 按模板顺序排列类型
-        _type_order = ["动火作业", "受限空间", "高处作业", "吊装作业", "临时用电", "动土作业", "断路作业", "盲板抽堵"]
-        type_parts = []
-        for t in _type_order:
-            cnt = type_counts.get(t, 0)
-            if cnt > 0:
-                type_parts.append(f"{t} {cnt}项")
-        if associated > 0:
-            type_parts.append(f"关联作业 {associated}项")
+        type_parts = cls._type_parts(reports)
+        # 计划内/外拆分（「报备类型」；真机核查 5 天 176 条填充率 100%）
+        planned_n = sum(1 for r in reports if r.report_type == "planned")
+        unplanned_n = sum(1 for r in reports if r.report_type == "unplanned")
+        unclassified_n = len(reports) - planned_n - unplanned_n
+        report_type_parts = [f"计划内 {planned_n}", f"计划外 {unplanned_n}"]
+        if unclassified_n:
+            report_type_parts.append(f"未分类 {unclassified_n}")
+        report_type_note = (
+            f"（{' · '.join(report_type_parts)}）" if (planned_n or unplanned_n) else ""
+        )
 
         # 风险集中区域叙事：高风险逐条点名（部门+作业类型—作业内容），中风险按部门+类型×N汇总
         summary = cls._build_zone_summary(high, medium, mode_label)
 
         lines = [f"{title} {date_str}", "", "📊 作业概况", "━━━━━━━━━━━━━━━━━━━━"]
-        lines.append(f"• {mode_label}计划作业: {len(reports)} 项")
+        lines.append(f"• {mode_label}计划作业: {len(reports)} 项{report_type_note}")
         if type_parts:
             lines.append(f"  {'  '.join(type_parts)}")
         lines.append(f"• 涉及部门: {'、'.join(dept_set[:8])}{'…' if len(dept_set) > 8 else ''}")
@@ -909,45 +1112,16 @@ class ReportBuilder:
         if summary:
             lines.append(f"  {summary}")
 
-        # 今日新增计划外作业对比总结段：17点日报(固定08:00~17:00窗口)与机器人随时查询(08:00~当前时刻)均渲染
+        # 今日新增作业段：窗口恒空（08:00 晨报定时推送）时整段隐藏，白天查询/晚报正常渲染
         if mode != "tomorrow":
-            lines.extend(cls._new_ops_section(report_date, reports, mode))
+            lines.extend(cls._new_ops_section(report_date, reports, mode, now=now))
 
         if high:
             lines.append("")
             lines.append(f"🔴 重点关注（高风险 {len(high)} 项）")
             lines.append("━━━━━━━━━━━━━━━━━━━━")
             for idx, r in enumerate(high[:15], 1):
-                cn_type = cls._cn_label(r.operation_type)
-                lines.append(f"{idx}. 【{cn_type}】{r.department or '?'}")
-                lines.append(f"   📍 地点: {r.location or '未知'}")
-                if r.work_description:
-                    lines.append(f"   📝 内容: {r.work_description[:60]}")
-                # 时间 + 单位行
-                time_parts = []
-                if r.planned_start_time:
-                    start = cls._bj_time(r.planned_start_time)
-                    if r.planned_end_time:
-                        end = cls._bj_time(r.planned_end_time)[-5:]
-                        dur = f"（{r.work_duration_hours}h）" if r.work_duration_hours else ""
-                        time_parts.append(f"⏱ {start} — {end}{dur}")
-                    else:
-                        dur = f"（{r.work_duration_hours}h）" if r.work_duration_hours else ""
-                        time_parts.append(f"⏱ {start}{dur}")
-                unit = r.contractor_name or r.personnel_type or ""
-                if unit:
-                    time_parts.append(f"  单位: {unit}")
-                if time_parts:
-                    lines.append(f"   {''.join(time_parts)}")
-                # AI 重写的风险描述优先，回退规则引擎结果
-                ai_reason = enhanced_map.get(str(idx), "")
-                reason = ai_reason if ai_reason else (r.daily_risk_reason or "高风险作业")
-                lines.append(f"   ⚠️ 风险: {reason}")
-                # AI 管控措施优先，回退规则引擎
-                ai_ctrl = control_map.get(str(idx), "")
-                ctrl = ai_ctrl if ai_ctrl else cls._control_measure(r)
-                if ctrl:
-                    lines.append(f"   📝 管控: {ctrl}")
+                lines.extend(cls._high_entry_lines(idx, r, enhanced_map, control_map))
             if len(high) > 15:
                 lines.append(f"   …共 {len(high)} 项高风险作业")
 
@@ -965,17 +1139,7 @@ class ReportBuilder:
 
         if low:
             lines.append("")
-            lines.append(f"🟢 低风险作业（{len(low)} 项）")
-            lines.append("━━━━━━━━━━━━━━━━━━━━")
-            by_type_low: dict[str, list] = {}
-            for r in low:
-                cn_label = cls._cn_label(r.operation_type)
-                by_type_low.setdefault(cn_label, []).append(r)
-            for t, items in sorted(
-                by_type_low.items(), key=lambda x: (-len(x[1]), x[0])
-            ):
-                depts = sorted({r.department or "?" for r in items})
-                lines.append(f"• {t} ×{len(items)} （{'、'.join(depts[:5])}{'…' if len(depts) > 5 else ''}）")
+            lines.append(f"🟢 低风险作业（{len(low)} 项）: {cls._agg_line(low)}")
 
         if stats.get("excluded", 0) > 0:
             lines.append("")
@@ -997,6 +1161,199 @@ class ReportBuilder:
                 lines.append(f"{i}. {tip}")
 
         return "\n".join(lines)
+
+    @classmethod
+    def _build_afternoon(
+        cls,
+        report_date: date,
+        reports: Sequence[SpecialOpRecord],
+        stats: dict[str, int],
+        *,
+        ai_analysis: AIDailyAnalysisResult | None = None,
+        now: datetime | None = None,
+    ) -> str:
+        """17 点晚报：收工复盘（已完成 / 新增）+ 夜间预警（18 点后作业与未完成高风险）。
+
+        已完成口径：按计划结束时间推算（见 ``is_completed``），段落内固定标注口径；
+        高风险只保留未完成项（已收工的高风险移入「已完成」段点名），避免与晨报重复。
+        """
+        now_eff = now or datetime.now(UTC)
+        date_str = report_date.strftime("%Y年%m月%d日")
+
+        high = sorted([r for r in reports if r.daily_risk_level == "high"], key=cls._sort_key)
+        medium = [r for r in reports if r.daily_risk_level == "medium"]
+        low = [r for r in reports if r.daily_risk_level == "low"]
+        dept_set = sorted({(r.department or "?") for r in reports})
+
+        completed: list[SpecialOpRecord] = []
+        ongoing: list[SpecialOpRecord] = []
+        pending: list[SpecialOpRecord] = []
+        for r in reports:
+            if cls.is_completed(r, now_eff):
+                completed.append(r)
+            elif cls.is_ongoing(r, now_eff):
+                ongoing.append(r)
+            else:
+                pending.append(r)
+        night = cls.select_night_ops(report_date, reports)
+        completed_high = [r for r in high if cls.is_completed(r, now_eff)]
+        unfinished_high = [r for r in high if not cls.is_completed(r, now_eff)]
+
+        # AI 增强索引以「未完成高风险」为序（daily.py 按同一子集调用 AIAnalyst）
+        enhanced_map = ai_analysis.enhanced_reasons if ai_analysis else {}
+        control_map = ai_analysis.control_measures if ai_analysis else {}
+
+        lines = [f"📋 【特殊作业日报·晚报】 {date_str}", "", "📊 作业概况", "━━━━━━━━━━━━━━━━━━━━"]
+        lines.append(
+            f"• 今日作业: {len(reports)} 项 ｜ 已完成 {len(completed)} · 进行中 {len(ongoing)}"
+            f" · 待作业 {len(pending)}（今晚 18:00 后作业 {len(night)} 项）"
+        )
+        type_parts = cls._type_parts(reports)
+        if type_parts:
+            lines.append(f"  {'  '.join(type_parts)}")
+        lines.append(f"• 涉及部门: {'、'.join(dept_set[:8])}{'…' if len(dept_set) > 8 else ''}")
+        lines.append(f"• 高风险: {len(high)} 项 | 中风险: {len(medium)} 项 | 低风险: {len(low)} 项")
+        focus = cls._night_focus_summary(night)
+        if focus:
+            lines.append(f"  {focus}")
+
+        # ── 已完成 ──
+        lines.append("")
+        lines.append(f"✅ 已完成作业（{len(completed)} 项，其中高风险 {len(completed_high)} 项）")
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        if not completed:
+            lines.append("• 暂无已完成作业")
+        else:
+            lines.append(f"• {cls._agg_line(completed)}")
+            c_depts = sorted({(r.department or "?") for r in completed})
+            lines.append(f"  （{'、'.join(c_depts[:8])}{'…' if len(c_depts) > 8 else ''}）")
+            if completed_high:
+                lines.append("已收工高风险点名:")
+                for i, r in enumerate(sorted(completed_high, key=cls._sort_key), 1):
+                    cn = cls._cn_label(r.operation_type)
+                    content = (r.work_description or "").strip()[:20]
+                    item = f"{i}. 【{cn}】{r.department or '?'}"
+                    if content:
+                        item += f" {content}"
+                    span = cls._hm_span(r)
+                    if span:
+                        item += f"  {span}"
+                    lines.append(f"{item}  ✔ 已按计划收工")
+            lines.append("（口径：按计划结束时间推算收工，非现场实际确认）")
+
+        # ── 今日新增 ──
+        lines.extend(cls._new_ops_section(report_date, reports, "afternoon", now=now_eff))
+
+        # ── 夜间作业 ──
+        if night:
+            lines.append("")
+            lines.append(f"🌙 夜间作业（18:00 后 {len(night)} 项）")
+            lines.append("━━━━━━━━━━━━━━━━━━━━")
+            night_sorted = sorted(
+                night,
+                key=lambda r: (
+                    r.planned_start_time or datetime.min.replace(tzinfo=UTC),
+                    r.planned_end_time or datetime.min.replace(tzinfo=UTC),
+                    r.feishu_record_id or "",
+                ),
+            )
+            for i, r in enumerate(night_sorted, 1):
+                cn = cls._cn_label(r.operation_type)
+                level = {"high": "高风险", "medium": "中风险", "low": "低风险"}.get(
+                    r.daily_risk_level or "", "中风险"
+                )
+                lines.append(f"{i}. 【{cn}】{r.department or '?'}")
+                meta = f"   ⏱ {cls._hm_span(r)}"
+                if r.work_duration_hours:
+                    meta += f"（{r.work_duration_hours}h）"
+                meta += f"    ⚠️ {level}    ▸ {cls.progress_label(r, now_eff)}"
+                lines.append(meta)
+                if r.location:
+                    lines.append(f"   📍 地点: {r.location}")
+                if r.work_description:
+                    lines.append(f"   📝 内容: {r.work_description[:40]}")
+                ctrl = cls._control_measure(r)
+                if ctrl:
+                    lines.append(f"   📝 管控: {ctrl}")
+
+        # ── 未完成高风险 ──
+        if unfinished_high:
+            lines.append("")
+            lines.append(f"🔴 重点关注（未完成高风险 {len(unfinished_high)} 项）")
+            lines.append("━━━━━━━━━━━━━━━━━━━━")
+            for idx, r in enumerate(unfinished_high[:15], 1):
+                lines.extend(cls._high_entry_lines(
+                    idx, r, enhanced_map, control_map,
+                    progress=cls.progress_label(r, now_eff),
+                ))
+            if len(unfinished_high) > 15:
+                lines.append(f"   …共 {len(unfinished_high)} 项未完成高风险作业")
+
+        # ── 中风险 ──
+        if medium:
+            medium_unfinished = sum(1 for r in medium if not cls.is_completed(r, now_eff))
+            lines.append("")
+            lines.append(
+                f"🟡 常规作业（中风险 {len(medium)} 项，其中未完成 {medium_unfinished} 项）"
+            )
+            lines.append("━━━━━━━━━━━━━━━━━━━━")
+            by_type: dict[str, list] = {}
+            for r in medium:
+                cn_label = cls._cn_label(r.operation_type)
+                by_type.setdefault(cn_label, []).append(r)
+            for t, items in sorted(by_type.items(), key=lambda x: (-len(x[1]), x[0])):
+                depts = sorted({r.department or "?" for r in items})
+                lines.append(f"• {t} ×{len(items)} （{'、'.join(depts[:5])}{'…' if len(depts) > 5 else ''}）")
+
+        # ── 低风险 ──
+        if low:
+            lines.append("")
+            lines.append(f"🟢 低风险作业（{len(low)} 项）: {cls._agg_line(low)}")
+
+        if stats.get("excluded", 0) > 0:
+            lines.append("")
+            lines.append(f"ℹ️ 排除: {stats['excluded']} 条（发酵工程部受限空间等）")
+
+        lines.append("")
+        lines.append("📌 安全提示")
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        # AI 生成的安全提示优先，回退规则引擎（晚报回退时追加夜间管控提示）
+        if ai_analysis and ai_analysis.enhanced_tips:
+            import re
+            for i, tip in enumerate(ai_analysis.enhanced_tips[:3], 1):
+                tip = re.sub(r'^\d+[\.\、\)]\s*', '', tip).strip()
+                lines.append(f"{i}. {tip}")
+        else:
+            tips = cls._tips(list(unfinished_high), medium)
+            if night:
+                tips.append("夜间作业确保照明充足，监护人全程旁站，严禁单人作业")
+            for i, tip in enumerate(tips[:6], 1):
+                lines.append(f"{i}. {tip}")
+
+        return "\n".join(lines)
+
+    @classmethod
+    def _night_focus_summary(cls, night: Sequence[SpecialOpRecord]) -> str | None:
+        """概况行的「今晚盯防重点」叙事（规则生成，高/中风险夜作业点名）。"""
+        focus = [r for r in night if r.daily_risk_level in ("high", "medium")]
+        if not focus:
+            return None
+
+        def _desc(r: SpecialOpRecord) -> str:
+            cn = cls._cn_label(r.operation_type)
+            cn = cn if cn.endswith("作业") else cn + "作业"
+            content = (r.work_description or "").strip()[:20]
+            span = cls._hm_span(r)
+            text = f"{r.department or '?'}{cn}"
+            if content:
+                text += f"—{content}"
+            if span:
+                text += f"（{span}）"
+            return text
+
+        parts = [_desc(r) for r in focus if r.daily_risk_level == "high"][:4]
+        parts += [_desc(r) for r in focus if r.daily_risk_level == "medium"][:2]
+        return f"今晚盯防重点：{'，'.join(parts)}，须落实夜间监护与交接班。"
 
     @classmethod
     def _build_zone_summary(cls, high: list, medium: list, mode_label: str) -> str | None:
@@ -1083,6 +1440,12 @@ class ReportBuilder:
         # 夜间/周末动火
         if "夜间/周末" in reason and "动火" in reason:
             return "升级管理审批，确保现场照明充足，增派监护人，视频监控全覆盖"
+        # V3.6 动火涉及高风险区域（须先于罐区判断：储罐区理由文本含"罐区"子串）
+        if "动火作业涉及高风险区域" in reason:
+            return "动火前对周边设备管线吹扫置换并做可燃气体检测，清理可燃物，专人监护并备齐消防器材"
+        # V3.6 腐蚀性介质管道
+        if "腐蚀性管道" in reason:
+            return "作业前对腐蚀性管道泄压、排净、置换、清洗合格，穿戴防酸碱防护用品，现场设应急冲洗水源"
         # 罐区动火
         if "罐区" in reason and "动火" in reason:
             return "罐区动火前可燃气体检测合格，作业点15m内无可燃物，消防车现场待命"

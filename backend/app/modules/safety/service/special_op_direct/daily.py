@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
 from app.modules.safety.feishu.notification import send_group_card
@@ -155,28 +155,55 @@ async def run(
         "low": len(low),
         "excluded": excluded_count,
     }
+    # 计划内/外拆分（晨报概况行 / 速递卡副标题 / AI 汇总 prompt 共用）
+    stats["planned"] = sum(1 for v in effective if v.report_type == "planned")
+    stats["unplanned"] = sum(1 for v in effective if v.report_type == "unplanned")
+    # 晚报进度/夜间统计（「已完成」按计划结束时间推算，口径见 ReportBuilder.is_completed）
+    now = datetime.now(UTC)
+    night_views: list[Any] = []
+    if mode == "afternoon":
+        completed_n = sum(1 for v in effective if ReportBuilder.is_completed(v, now))
+        ongoing_n = sum(
+            1 for v in effective
+            if not ReportBuilder.is_completed(v, now)
+            and ReportBuilder.is_ongoing(v, now)
+        )
+        stats["completed"] = completed_n
+        stats["ongoing"] = ongoing_n
+        stats["pending"] = len(effective) - completed_n - ongoing_n
+        night_views = ReportBuilder.select_night_ops(target_date, effective)
+        stats["night"] = len(night_views)
 
-    # AI 增强分析（与改造前同口径）：只有存在高风险时才调用，失败回退纯规则报告
+    # AI 增强分析（与改造前同口径）：只有存在高风险时才调用，失败回退纯规则报告。
+    # 晚报只分析未完成记录（已收工的高风险移入「已完成」段点名，不再逐条 AI 分析），
+    # 渲染端 _build_afternoon 的 🔴 索引与该子集按同一排序对齐。
+    ai_reports: Sequence[Any] = effective
+    if mode == "afternoon":
+        ai_reports = [v for v in effective if not ReportBuilder.is_completed(v, now)]
     ai_analysis = None
-    if high:
+    if any(v.daily_risk_level == "high" for v in ai_reports):
         try:
             ai_analysis = await (analyst or _default_analyst()).analyze(
                 report_date=target_date,
                 mode=mode,
-                reports=effective,
+                reports=ai_reports,
                 stats=stats,
             )
         except Exception:
             logger.warning("AI 分析失败，回退纯规则报告", exc_info=True)
 
     markdown = ReportBuilder.build(
-        target_date, mode, effective, stats, ai_analysis=ai_analysis
+        target_date, mode, effective, stats, ai_analysis=ai_analysis, now=now
     )
 
     mode_label = (
-        "特殊作业日报"
-        if ReportBuilder._is_today_family(mode)
-        else "特殊作业次日预警"
+        "特殊作业日报·晚报"
+        if mode == "afternoon"
+        else (
+            "特殊作业日报"
+            if ReportBuilder._is_today_family(mode)
+            else "特殊作业次日预警"
+        )
     )
 
     # 速递卡（默认开启，today/afternoon 生效）：长文日报改速递式布局，
@@ -189,7 +216,7 @@ async def run(
     push_header_tags: list[dict[str, Any]] | None = None
     if ReportBuilder._is_today_family(mode) and config.digest_card_enabled():
         built = await build_special_op_digest(
-            target_date, mode, effective, stats, ai_analysis, markdown
+            target_date, mode, effective, stats, ai_analysis, markdown, now=now
         )
         if built is not None:
             push_title = built.title
@@ -214,11 +241,6 @@ async def run(
                 writeback_result.failed[:10],
             )
 
-    mode_label = (
-        "特殊作业日报"
-        if ReportBuilder._is_today_family(mode)
-        else "特殊作业次日预警"
-    )
     target_list = target_chats if target_chats is not None else [DAILY_REPORT_CHAT_ID]
     push_results: list[dict[str, Any]] = []
     if push:
@@ -260,20 +282,33 @@ async def run(
                 )
 
                 zone = (
-                    ReportBuilder._build_zone_summary(high, medium, mode_label) or ""
-                )[:80]
+                    ReportBuilder._night_focus_summary(night_views or [])
+                    if mode == "afternoon"
+                    else ReportBuilder._build_zone_summary(high, medium, mode_label)
+                ) or ""
+                zone = zone[:80]
+                if mode == "afternoon":
+                    cell_stats = (
+                        f"今日 **{len(effective)}** 项 ｜"
+                        f" 完成 {stats['completed']} · 进行 {stats['ongoing']}"
+                        f" ｜ 🔴 高 **{len(high)}** · 🌙 夜间 {stats['night']}"
+                    )
+                    cell_title = "特殊作业日报·晚报"
+                else:
+                    cell_stats = (
+                        f"今日计划 **{len(effective)}** 项 ｜ "
+                        f"🔴 高风险 **{len(high)}** · 🟡 中 {len(medium)}"
+                        f" · 🟢 低 {len(low)}"
+                    )
+                    cell_title = "特殊作业日报"
                 await upsert_daily_digest(
                     target_date,
                     "special_op",
                     DigestCell(
                         tag_color="blue",
                         tag_text="特殊作业",
-                        title="特殊作业日报",
-                        stats=(
-                            f"今日计划 **{len(effective)}** 项 ｜ "
-                            f"🔴 高风险 **{len(high)}** · 🟡 中 {len(medium)}"
-                            f" · 🟢 低 {len(low)}"
-                        ),
+                        title=cell_title,
+                        stats=cell_stats,
                         zone=zone,
                         detail=markdown,
                     ),
