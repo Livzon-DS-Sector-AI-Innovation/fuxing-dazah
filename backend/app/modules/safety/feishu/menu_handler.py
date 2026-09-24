@@ -27,14 +27,15 @@ _MSDS_COLLECTION_URL = (
 
 _URS_GUIDE_TEXT = (
     "**使用方式**：直接把 URS 文档（.docx/.pdf）发送到本对话，"
-    "即可自动建单并评估。\n\n"
-    "**评估流程（全自动）**\n"
+    "AI 自动完成评估并回传结论卡片与 PDF 审核报告。\n\n"
+    "> 💡 Word 文档（.docx）直接发送即可；**PDF 请在点击本菜单后 30 分钟内发送**"
+    "（PDF 也用于职业健康归档，靠菜单点击区分用途）。\n\n"
+    "**评估内容（全自动）**\n"
     "1. 解析文档 → 生成 URS 编号与条款\n"
     "2. AI 五维风险画像（机械/电气/数据/环境/化学）+ 置信度\n"
     "3. 可靠性评估：适配清单（强制/建议/不适用）+ 否决项\n"
-    "4. 出结论：评分 + 等级 + 整改要求\n\n"
-    "- 置信度 < 80% 时自动转人工复核，可确认/修正画像\n"
-    "- 对结论有异议可提交申诉（新旧画像对比)\n"
+    "4. 出结论：评分 + 等级 + 整改要求 → PDF 审核报告\n\n"
+    "- 审核结论为 AI 辅助判断，仅供参考\n"
     "- 结果只通知申请人本人，可在对话中查看详情"
 )
 
@@ -70,6 +71,10 @@ async def _on_menu_click(event: dict[str, Any]) -> None:
         return
 
     if event_key == "urs_review":
+        # 记录 URS 上传意图（30 分钟窗口内该用户私聊发来的 PDF 按优先 URS 路由）
+        from app.modules.safety.feishu.urs_upload_context import set_urs_upload_context
+
+        set_urs_upload_context(open_id)
         ok = await send_user_card(
             open_id,
             "📑 URS 智能审核",

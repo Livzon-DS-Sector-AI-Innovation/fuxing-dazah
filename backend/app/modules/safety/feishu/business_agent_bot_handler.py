@@ -53,6 +53,7 @@ from app.modules.safety.feishu.notification import (
 from app.modules.safety.feishu.notification import (
     update_card as _update_feishu_card,
 )
+from app.modules.safety.feishu.urs_upload_context import consume_urs_upload_context
 from app.modules.safety.service.oh_archive import (
     OH_UPLOAD_MAX_SIZE,
     ZIP_MAX_TOTAL_SIZE,
@@ -612,6 +613,18 @@ async def _resolve_sender(db: Any, event_data: dict[str, Any]) -> tuple[str | No
     return feishu_user_id, deps
 
 
+def _sender_open_id(event_data: dict[str, Any]) -> str:
+    """从事件中取发送者 open_id（URS 建单申请人与菜单上传上下文键）。"""
+    sender = event_data.get("sender") or {}
+    return str((sender.get("sender_id") or {}).get("open_id") or "")
+
+
+def _sender_user_id(event_data: dict[str, Any]) -> str:
+    """从事件中取发送者 user_id（身份解析优先键；open_id 按应用隔离，跨应用不匹配）。"""
+    sender = event_data.get("sender") or {}
+    return str((sender.get("sender_id") or {}).get("user_id") or "")
+
+
 # ── 事件处理 ──
 
 
@@ -622,6 +635,13 @@ _OH_ARCHIVE_EXTS: frozenset[str] = frozenset({".pdf", ".jpg", ".jpeg", ".png", "
 
 # OH 归档下载临时文件目录（service 处理完成后清理）
 _OH_BOT_TMP_DIR = "uploads/safety/oh_bot"
+
+# URS 审核文档扩展名（与 URSService.parse_urs_attachment 对齐）。
+# .pdf 与 OH 归档重叠，不在此列 —— 靠「URS 智能审核」菜单点击上下文路由（urs_upload_context）。
+_URS_FILE_EXTS: frozenset[str] = frozenset({".docx", ".doc", ".txt", ".md", ".xlsx", ".xls"})
+
+# URS 文档大小上限（对齐平台上传上限 50MB）
+_URS_FILE_MAX_SIZE = 50 * 1024 * 1024
 
 
 async def _download_message_file(message_id: str, file_key: str) -> bytes:
@@ -747,10 +767,139 @@ async def _try_oh_archive_reply(chat_id: str, text: str) -> bool:
     return True
 
 
-async def _handle_file_message(message: dict[str, Any], chat_id: str) -> Any:
-    """处理飞书文件消息：仅支持职业健康归档文件（L3 单文件 / L4 压缩包），其余类型提示不支持。
+class _BytesUploadFile:
+    """把飞书下载的文件字节包装成 parse_urs_attachment 需要的 UploadFile 形状。"""
 
-    只处理 OH 归档；不返回合成查询文本，非归档文件直接回复用户。
+    def __init__(
+        self, data: bytes, filename: str,
+        content_type: str = "application/octet-stream",
+    ) -> None:
+        self.filename = filename
+        self.content_type = content_type
+        self._data = data
+
+    async def read(self) -> bytes:
+        return self._data
+
+
+async def _resolve_applicant_name(db: Any, sender_user_id: str, open_id: str) -> str | None:
+    """URS 建单时解析申请人姓名（user_id 优先——open_id 按应用隔离，与身份表不互通；
+    身份未登记/解析失败返回 None，不阻塞建单）。"""
+    key = sender_user_id or open_id
+    if not key:
+        return None
+    try:
+        person = await IdentityResolver(db).resolve_by_user_id(key)
+        return person.name if person else None
+    except Exception:
+        logger.warning("URS 申请人身份解析失败: key=%s", key[:16], exc_info=True)
+        return None
+
+
+async def _handle_urs_file(
+    message: dict[str, Any], chat_id: str, sender_open_id: str,
+    sender_user_id: str = "",
+) -> None:
+    """URS 审核文档对话上传：下载 → 解析建单 → 提交 → 后台全链路评估 → 回执。
+
+    对话链路兑现 menu_handler 指南承诺的「发送文档即自动建单并评估」：
+    parse_urs_attachment 复用 Web 上传的附件存储/原文提取/AI 字段解析，
+    trigger_full_review_background 跑 Step1→（置信度达标自动确认）Step2-4，
+    各阶段结果卡由 URSService._notify 推送给申请人本人。
+    """
+    content_str = message.get("content", "{}")
+    try:
+        content = json.loads(content_str)
+    except json.JSONDecodeError:
+        await _send_text_to_chat(chat_id, "抱歉，无法解析文件消息格式。")
+        return
+
+    file_key = content.get("file_key", "")
+    file_name = content.get("file_name", "unknown.file")
+    message_id = message.get("message_id", "")
+    if not file_key or not message_id:
+        await _send_text_to_chat(chat_id, "抱歉，无法获取文件信息，请重试。")
+        return
+
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext not in _URS_FILE_EXTS and ext != ".pdf":
+        await _send_text_to_chat(
+            chat_id,
+            f"📎 收到文件「{file_name}」，该类型不是 URS 审核支持的文档格式"
+            f"（支持 .docx/.pdf/.doc/.txt/.xlsx/.xls/.md）。",
+        )
+        return
+
+    try:
+        file_bytes = await _download_message_file(message_id, file_key)
+    except Exception as e:
+        logger.warning("URS 文档下载失败: chat_id=%s file=%s err=%s", chat_id, file_name, e)
+        await _send_text_to_chat(chat_id, "❌ 文件下载失败，请确认文件仍可访问后重试。")
+        return
+
+    if len(file_bytes) > _URS_FILE_MAX_SIZE:
+        await _send_text_to_chat(
+            chat_id, f"❌ 文件过大（超过 {_URS_FILE_MAX_SIZE // (1024 * 1024)}MB），请精简后重试。",
+        )
+        return
+
+    from app.modules.safety.service.ehs_change.urs import URSService
+
+    try:
+        async with async_session_factory() as db:
+            svc = URSService(db)
+            fields = await svc.parse_urs_attachment(_BytesUploadFile(file_bytes, file_name))
+            applicant_name = await _resolve_applicant_name(db, sender_user_id, sender_open_id)
+            report = await svc.create_report(
+                {
+                    key: fields.get(key)
+                    for key in (
+                        "equipment_name", "equipment_category", "department",
+                        "procurement_purpose", "urs_content", "attachment_path",
+                    )
+                } | {"applicant_name": applicant_name},
+                applicant_open_id=sender_open_id or None,
+                source_chat_id=chat_id,
+            )
+            await db.commit()
+            submitted = await svc.submit_report(report.id)
+            await db.commit()
+            svc.trigger_full_review_background(report.id)
+    except ValueError as e:
+        await _send_text_to_chat(
+            chat_id,
+            f"❌ 文档解析失败：{e}\n\n请确认发送的是 URS（用户需求标准）文档原文件。",
+        )
+        return
+    except Exception:
+        logger.exception("URS 对话建单失败: chat_id=%s file=%s", chat_id, file_name)
+        await _send_text_to_chat(chat_id, "❌ URS 建单失败，请稍后重试或联系管理员。")
+        return
+
+    urs_no = submitted.urs_no if submitted else report.urs_no
+    equipment = (submitted or report).equipment_name
+    await _send_text_to_chat(
+        chat_id,
+        f"📑 URS 文档已受理\n\n"
+        f"文件：{file_name}\n"
+        f"URS 编号：{urs_no}\n"
+        f"设备：{equipment}\n\n"
+        f"AI 辅助评估进行中（风险画像 → 标准适配 → 审核结论），"
+        f"完成后将自动推送结论卡片与 PDF 审核报告。",
+    )
+
+
+async def _handle_file_message(
+    message: dict[str, Any], chat_id: str, sender_open_id: str,
+    sender_user_id: str = "",
+) -> Any:
+    """处理飞书文件消息（私聊）：URS 审核文档 / OH 归档 / 其余类型提示不支持。
+
+    路由规则（仅私聊进 URS/OH，菜单与指南均为单聊场景）：
+    - .docx 等 URS 专属扩展名 → URS 审核对话上传（与 OH 归档无交集）
+    - .pdf → 30 分钟内点击过「📑 URS 智能审核」菜单则按 URS 处理
+      （消费型上下文，一次命中即失效），否则维持 OH 归档（体检报告单）
+    - OH 归档扩展名之外 → 回复支持类型清单
     """
     content_str = message.get("content", "{}")
     try:
@@ -769,17 +918,37 @@ async def _handle_file_message(message: dict[str, Any], chat_id: str) -> Any:
 
     # 检查文件类型
     ext = file_name[file_name.rfind("."):].lower() if "." in file_name else ""
+
+    is_p2p = message.get("chat_type") == "p2p"
+
+    # ── URS 审核文档（对话上传）──
+    if is_p2p and ext in _URS_FILE_EXTS:
+        logger.info("安全助手: chat_id=%s URS 文档 %s (对话上传)", chat_id, file_name)
+        await _handle_urs_file(message, chat_id, sender_open_id, sender_user_id)
+        return None
+    if (
+        is_p2p
+        and ext == ".pdf"
+        and sender_open_id
+        and consume_urs_upload_context(sender_open_id)
+    ):
+        logger.info(
+            "安全助手: chat_id=%s URS 菜单上下文命中 PDF %s (对话上传)", chat_id, file_name,
+        )
+        await _handle_urs_file(message, chat_id, sender_open_id, sender_user_id)
+        return None
+
     if ext not in _OH_ARCHIVE_EXTS:
         await _send_text_to_chat(
             chat_id,
-            f"📎 收到文件「{file_name}」，但我目前只支持职业健康归档相关的 "
-            f"PDF / 图片（.pdf/.jpg/.jpeg/.png）或压缩包（.zip）文件。\n\n"
-            f"如需上传其他文件，请在 Web 平台操作。",
+            f"📎 收到文件「{file_name}」。支持的文件：\n"
+            f"- URS 审核文档：.docx 直接发送；PDF 请先点击菜单「📑 URS 智能审核」\n"
+            f"- 职业健康归档：PDF / 图片（.jpg/.jpeg/.png）/ .zip 压缩包",
         )
         return None
 
     # OH 归档（L3 单文件 / L4 压缩包）：仅私聊响应；群聊落到下方「不支持」原提示
-    if message.get("chat_type") == "p2p":
+    if is_p2p:
         logger.info("安全助手: chat_id=%s OH 归档文件 %s (L3/L4)", chat_id, file_name)
         await _handle_oh_archive_file(message, chat_id)
         return None
@@ -1157,9 +1326,12 @@ async def handle_message(event_data: dict[str, Any]) -> None:
             )
             return
 
-        # ── 文件消息：仅 OH 归档（L3/L4）处理，其余类型直接回复；不走 Agent ──
+        # ── 文件消息：URS 审核文档（对话上传）/ OH 归档（L3/L4），其余类型直接回复；不走 Agent ──
         if message_type == "file":
-            await _handle_file_message(message, chat_id)
+            await _handle_file_message(
+                message, chat_id,
+                _sender_open_id(event_data), _sender_user_id(event_data),
+            )
             return
         elif message_type == "text":
             query = _extract_text_query(message)

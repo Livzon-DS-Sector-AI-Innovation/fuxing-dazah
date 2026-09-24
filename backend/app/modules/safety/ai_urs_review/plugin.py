@@ -10,6 +10,7 @@
 业务入口由调用方（URSService）包 ai_audit_scope(scenario="urs_review")。
 """
 
+import json
 import logging
 from typing import Any
 
@@ -56,25 +57,161 @@ class URSPluginError(Exception):
     pass
 
 
+# ── 畸形/截断 JSON 修复 ──
+# 实测故障（URS-20260918-003）：deepseek-flash thinking 模式下输出在
+# reasoning 字符串中途被 max_tokens 截断（未闭合的字符串 + 未闭合的 `{`），
+# json.loads 直接失败 → 整单评估 failed。此处做逐字符状态机扫描后补齐
+# 截断尾部；另兜底剥 markdown 围栏与 `)` 误闭合数组两种畸形。
+
+
+def _scan_json_state(text: str) -> tuple[bool, list[str]]:
+    """逐字符扫描 JSON 状态，返回 (是否停在未闭合字符串内, 括号栈)。"""
+    in_str = False
+    escaped = False
+    stack: list[str] = []
+    for ch in text:
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+    return in_str, stack
+
+
+def _repair_truncated_json(text: str) -> str:
+    """补齐被截断的 JSON 尾部：闭合未闭合字符串 + 按栈逆序补闭合符。"""
+    in_str, stack = _scan_json_state(text)
+    out = text
+    if in_str:
+        out += '"'
+    for opener in reversed(stack):
+        out += "]" if opener == "[" else "}"
+    return out
+
+
+def _strip_json_fences(text: str) -> str:
+    """剥离 markdown 代码围栏（```json ... ```）。"""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        for i, line in enumerate(lines):
+            if not line.strip().startswith("```"):
+                cleaned = "\n".join(lines[i:])
+                break
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3]
+    return cleaned.strip()
+
+
+def _repair_bracket_mismatch(text: str) -> str:
+    """修复 AI 输出中 `)` 误闭合 `[` 数组的括号错配。
+
+    逐字符扫描，遇到 `)` 时若栈顶为 `[`（数组），按数组语义改写为
+    `]`；栈顶为 `(` 的 `)` 是普通文本括号（多出现在中文指标描述里），不动。
+    """
+    stack: list[str] = []
+    out: list[str] = []
+    in_str = False
+    escaped = False
+    for ch in text:
+        if in_str:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch in "[{":
+            stack.append(ch)
+            out.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+            out.append(ch)
+        elif ch == ")":
+            # 栈顶是数组/对象 → 该 `)` 实为误写的闭合符；否则保留为文本
+            if stack and stack[-1] in "[{":
+                out.append("]" if stack[-1] == "[" else "}")
+                stack.pop()
+            else:
+                out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _repair_json_text(raw: str) -> dict | None:
+    """尝试把 AI 原始输出修复为可解析 JSON，成功返回解析后的 dict。"""
+    base = _strip_json_fences(raw)
+    candidates = [raw, base, _repair_truncated_json(base)]
+    repaired = _repair_bracket_mismatch(base)
+    if repaired != base:
+        candidates.append(repaired)
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
 async def _chat_parsed(
     ai_service: Any,
     system_prompt: str,
     user_prompt: str,
     expected_keys: list[str],
 ) -> dict:
-    """统一 AI 调用入口。"""
+    """统一 AI 调用入口。
+
+    底层解析失败时先做本地修复（截断补齐/剥围栏/修括号），修复后仍缺
+    键则重试一次 AI 调用（低温度下重试通常可得合法 JSON）。
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
     try:
         return await ai_service.chat_parsed(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             expected_keys=expected_keys,
             temperature=_AI_TEMPERATURE,
         )
-    except Exception as e:
-        logger.exception("URS AI 调用失败")
-        raise URSPluginError(f"AI 调用失败: {e}") from e
+    except Exception as first_err:
+        # 本地修复：AIOutputError 携带 raw_response（截断/畸形输出原文）
+        raw = getattr(first_err, "raw_response", None)
+        obj = _repair_json_text(raw) if isinstance(raw, str) else None
+        if obj is not None:
+            missing = [k for k in expected_keys if k not in obj]
+            if not missing:
+                logger.warning("URS AI 输出畸形/截断 JSON 已本地修复（不重试调用）")
+                return obj
+        logger.warning("URS AI 调用失败，重试一次: %s", str(first_err)[:300])
+        try:
+            return await ai_service.chat_parsed(
+                messages=messages,
+                expected_keys=expected_keys,
+                temperature=_AI_TEMPERATURE,
+            )
+        except Exception as e:
+            logger.exception("URS AI 调用重试仍失败")
+            raise URSPluginError(f"AI 调用失败: {e}") from e
 
 
 # ════════════════════════════════════════════════════════════════

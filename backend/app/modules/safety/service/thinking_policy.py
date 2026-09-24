@@ -46,6 +46,8 @@ FORCE_OFF_SCENARIOS: set[str] = {
     "regulation_crawl",          # 法规筛选: document classification
     "agent_chat",                # 助手对话: tool-calling → summarization
     "sop_generation",            # 操规AI补全: structured JSON extraction
+    "urs_review",                # URS 审核: 四步结构化 JSON 抽取（thinking 会吃满
+                                 # max_tokens 导致可见输出中途截断，实测 2026-09-18）
 }
 
 # Scenarios that ALWAYS enable thinking (genuinely needs reasoning)

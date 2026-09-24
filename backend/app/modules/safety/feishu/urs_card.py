@@ -92,13 +92,10 @@ def build_assessment_card(report: Any) -> dict:
     if report.review_status == "human_review":
         lines.append("⚠️ 置信度不足，需人工复核风险画像。")
 
-    elements = [_action_row(
-        _btn({"scope": "urs", "action": "urs_view", "urs_id": str(report.id)}, "查看详情", "primary"),
-    )]
+    elements: list = []
     if report.review_status == "human_review":
         elements.append(_action_row(
             _btn({"scope": "urs", "action": "urs_confirm", "urs_id": str(report.id)}, "✅ 确认画像", "primary"),
-            _btn({"scope": "urs", "action": "urs_appeal", "urs_id": str(report.id)}, "✏️ 修正画像"),
         ))
     return build_card_dict(
         f"{emoji} URS 审核结果：{report.equipment_name}",
@@ -108,42 +105,79 @@ def build_assessment_card(report: Any) -> dict:
     )
 
 
-def build_conclusion_card(report: Any) -> dict:
-    """结论卡（评分/等级/结论/整改要求）。"""
+def build_conclusion_card(report: Any, items: list[Any] | None = None) -> dict:
+    """结论卡（全文直出，无按钮）：基本信息 + 评分结论 + 五维画像（含依据与
+    AI 摘要）+ 逐条审核统计与不通过条目 + 整改要求 + AI 总结。
+
+    2026-09-18 产品简化：原「查看详情」按钮展开详情卡的交互取消，
+    全部内容直接进结论卡（items 为空时跳过逐条审核段）。
+    """
     grade = report.grade or "—"
     conclusion = report.conclusion or "—"
     cn = "✅ 通过" if conclusion == "approved" else "❌ 不通过"
+    risk = report.overall_risk_level or "low"
+    profile = report.risk_profile or {}
+
     lines = [
+        f"URS 编号：{report.urs_no}",
         f"设备：{report.equipment_name}｜类别：{report.equipment_category or '—'}",
+        f"申请部门：{report.department or '—'}｜申请人：{report.applicant_name or '—'}",
         "———",
-        f"**评分：{report.score if report.score is not None else '—'} 分（{grade} 级）**",
-        f"**结论：{cn}**",
+        f"**评分：{report.score if report.score is not None else '—'} 分（{grade} 级）｜结论：{cn}**",
+        "———",
+        f"**五维风险画像**（综合 {_RISK_EMOJI.get(risk, '⚪')} {risk}"
+        f"｜置信度 {int((report.ai_confidence or 0) * 100)}%）",
     ]
+    for key, label in _DIM_LABELS.items():
+        dim = profile.get(key) or {}
+        level = dim.get("level", "low")
+        indicators = "、".join(dim.get("indicators") or []) or "无"
+        lines.append(f"{_RISK_EMOJI.get(level, '⚪')} {label}={level}（{indicators}）")
+        evidence = str(dim.get("evidence") or "").strip()
+        if evidence:
+            lines.append(f"　依据：{evidence[:80]}")
+    reasoning = str(report.risk_profile_reasoning or "").strip()
+    if reasoning:
+        lines.append(f"AI 评估摘要：{reasoning[:200]}")
+
+    # 逐条审核（items 未传/为空 → 跳过该段）
+    applicable = [
+        it for it in (items or [])
+        if getattr(it, "applicability", None) in ("mandatory", "recommended")
+    ]
+    if applicable:
+        passed = sum(1 for it in applicable if it.review_status == "passed")
+        failed = sum(1 for it in applicable if it.review_status == "failed")
+        veto_hit = sum(1 for it in applicable if it.is_veto and it.review_status == "failed")
+        lines.append("———")
+        lines.append(
+            f"**逐条审核**：适用 {len(applicable)} 项｜✅ 通过 {passed}｜❌ 不通过 {failed}"
+            + (f"｜⚠️ 否决项命中 {veto_hit}" if veto_hit else "")
+        )
+        for it in [x for x in applicable if x.review_status == "failed"][:8]:
+            tag = "否决" if it.is_veto else "强制"
+            lines.append(f"- {it.item_no} [{tag}] {it.standard_title}：{(it.review_comment or '—')[:60]}")
+
     reqs = report.rectification_requirements or []
     if reqs:
         lines.append("———")
         lines.append(f"**整改要求（{len(reqs)} 项）**")
-        for i, req in enumerate(reqs[:5], 1):
+        for i, req in enumerate(reqs[:10], 1):
             lines.append(f"{i}. {req.get('requirement') or req.get('item_no')}")
-        if len(reqs) > 5:
-            lines.append(f"… 等共 {len(reqs)} 项，详见报告")
+        if len(reqs) > 10:
+            lines.append(f"… 等共 {len(reqs)} 项")
+
     summary = report.review_result.get("summary") if report.review_result else None
     if summary:
         lines.append("———")
-        lines.append(summary)
+        lines.append(str(summary))
+    lines.append("———")
+    lines.append("ℹ️ 本结论为 AI 辅助判断，仅供参考。")
 
-    elements = [_action_row(
-        _btn({"scope": "urs", "action": "urs_view", "urs_id": str(report.id)}, "查看详情", "primary"),
-    )]
-    if conclusion == "rejected":
-        elements.append(_action_row(
-            _btn({"scope": "urs", "action": "urs_appeal", "urs_id": str(report.id)}, "提交申诉"),
-        ))
     return build_card_dict(
         f"URS 审核结论：{report.equipment_name}",
         "\n".join(lines),
         header_template="orange" if conclusion == "rejected" else "green",
-        elements=elements,
     )
 
 
@@ -171,6 +205,80 @@ def build_appeal_result_card(report: Any) -> dict:
     )
 
 
+def build_detail_card(report: Any, items: list[Any]) -> dict[str, Any]:
+    """详情卡：画像依据 + 逐条审核结果 + 整改要求（结论卡/评估卡「查看详情」的展开）。
+
+    与结论卡/评估卡的差异：补充每维风险依据、AI 推理摘要、逐条审核统计与
+    不通过条目、全量整改要求——这些在摘要卡上放不下。
+    """
+    risk = report.overall_risk_level or "low"
+    profile = report.risk_profile or {}
+    lines = [
+        f"URS 编号：{report.urs_no}",
+        f"设备：{report.equipment_name}｜类别：{report.equipment_category or '—'}",
+        f"申请部门：{report.department or '—'}｜申请人：{report.applicant_name or '—'}",
+        f"当前状态：{report.review_status}",
+        "———",
+        f"**五维风险画像**（综合 {_RISK_EMOJI.get(risk, '⚪')} {risk}｜置信度 {int((report.ai_confidence or 0) * 100)}%）",
+    ]
+    for key, label in _DIM_LABELS.items():
+        dim = profile.get(key) or {}
+        level = dim.get("level", "low")
+        indicators = "、".join(dim.get("indicators") or []) or "无"
+        lines.append(f"{_RISK_EMOJI.get(level, '⚪')} {label}={level}（{indicators}）")
+        evidence = str(dim.get("evidence") or "").strip()
+        if evidence:
+            lines.append(f"　依据：{evidence[:80]}")
+    reasoning = str(report.risk_profile_reasoning or "").strip()
+    if reasoning:
+        lines.append(f"AI 评估摘要：{reasoning[:200]}")
+
+    # 逐条审核（适配完成前 items 的 applicability 为空 → 跳过该段）
+    applicable = [
+        it for it in items
+        if getattr(it, "applicability", None) in ("mandatory", "recommended")
+    ]
+    if applicable:
+        passed = sum(1 for it in applicable if it.review_status == "passed")
+        failed = sum(1 for it in applicable if it.review_status == "failed")
+        veto_hit = sum(1 for it in applicable if it.is_veto and it.review_status == "failed")
+        lines.append("———")
+        lines.append(
+            f"**逐条审核**：适用 {len(applicable)} 项｜✅ 通过 {passed}｜❌ 不通过 {failed}"
+            + (f"｜⚠️ 否决项命中 {veto_hit}" if veto_hit else "")
+        )
+        failed_items = [it for it in applicable if it.review_status == "failed"]
+        for it in failed_items[:8]:
+            tag = "否决" if it.is_veto else "强制"
+            lines.append(f"- {it.item_no} [{tag}] {it.standard_title}：{(it.review_comment or '—')[:60]}")
+        if len(failed_items) > 8:
+            lines.append(f"… 等共 {len(failed_items)} 项不通过")
+
+    reqs = report.rectification_requirements or []
+    if reqs:
+        lines.append("———")
+        lines.append(f"**整改要求（{len(reqs)} 项）**")
+        for i, req in enumerate(reqs[:10], 1):
+            lines.append(f"{i}. {req.get('requirement') or req.get('item_no')}")
+        if len(reqs) > 10:
+            lines.append(f"… 等共 {len(reqs)} 项")
+
+    summary = report.review_result.get("summary") if report.review_result else None
+    if summary:
+        lines.append("———")
+        lines.append(str(summary))
+
+    buttons = [
+        _btn({"scope": "urs", "action": "urs_back", "urs_id": str(report.id)}, "◀ 返回", "default"),
+    ]
+    return build_card_dict(
+        f"🔍 URS 审核详情：{report.equipment_name}",
+        "\n".join(lines),
+        header_template="blue",
+        elements=[_action_row(*buttons)],
+    )
+
+
 # ════════════════════════════════════════════════════════════════
 # 主动通知（URSService 调用，仅申请人）
 # ════════════════════════════════════════════════════════════════
@@ -189,10 +297,10 @@ async def notify_assessment_result(report: Any) -> bool:
     )
 
 
-async def notify_conclusion(report: Any) -> bool:
+async def notify_conclusion(report: Any, items: list[Any] | None = None) -> bool:
     if not report.applicant_open_id:
         return False
-    card = build_conclusion_card(report)
+    card = build_conclusion_card(report, items)
     body = card["body"]["elements"]
     return await send_user_card(
         open_id=report.applicant_open_id,
@@ -221,7 +329,11 @@ async def notify_appeal_result(report: Any) -> bool:
 
 
 async def handle_urs_card_action(payload: dict, event_data: dict) -> dict | None:
-    """处理 URS 卡片按钮回调：执行动作后 PATCH 原卡，返回纯 ACK（None）。"""
+    """处理 URS 卡片按钮回调：执行动作后 PATCH 原卡，返回纯 ACK（None）。
+
+    辅助判断模式仅保留信息浏览类动作（查看详情/返回/确认画像——最后者为
+    Web 提交路径的中间卡所有，飞书直传链路不再产生需确认的中间卡）。
+    """
     action = payload.get("action")
     urs_id_raw = payload.get("urs_id")
     if not action or not urs_id_raw:
@@ -233,22 +345,10 @@ async def handle_urs_card_action(payload: dict, event_data: dict) -> dict | None
 
     if action == "urs_view":
         return await _show_detail(report_id, event_data)
+    if action == "urs_back":
+        return await _show_summary_card(report_id, event_data)
     if action == "urs_confirm":
         return await _confirm_assessment(report_id, event_data)
-    if action == "urs_appeal":
-        return _show_appeal_input(report_id, event_data)
-    if action == "urs_appeal_confirm":
-        reason = payload.get("reason") or ""
-        asyncio.create_task(_run_appeal_background(report_id, reason))
-        await _patch_card(
-            event_data,
-            build_card_dict(
-                "URS 申诉处理中",
-                "正在重新评估风险画像与标准适配，完成后将推送结果。",
-                header_template="purple",
-            ),
-        )
-        return {"toast": {"type": "success", "content": "申诉已受理，正在重新评估..."}}
     return None
 
 
@@ -261,11 +361,40 @@ async def _fetch_report(report_id: uuid.UUID):
         return await URSService(db).get_report(report_id)
 
 
-async def _show_detail(report_id: uuid.UUID, event_data: dict) -> dict | None:
-    report = await _fetch_report(report_id)
+async def _fetch_report_and_items(report_id: uuid.UUID) -> tuple[Any, list[Any]]:
+    from app.core.database import async_session_factory
+
+    async with async_session_factory() as db:
+        from app.modules.safety.service.ehs_change.urs import URSService
+
+        svc = URSService(db)
+        report = await svc.get_report(report_id)
+        items = await svc.get_items(report_id) if report else []
+        return report, items
+
+
+async def _show_detail(report_id: uuid.UUID, event_data: dict[str, Any]) -> dict[str, Any] | None:
+    """查看详情：PATCH 为详情卡（画像依据 + 逐条审核 + 整改要求）。
+
+    此前对已出结论的报告重发同一张结论卡，用户看不到任何变化。
+    """
+    report, items = await _fetch_report_and_items(report_id)
     if report is None:
         return {"toast": {"type": "error", "content": "记录不存在"}}
-    card = build_conclusion_card(report) if report.conclusion else build_assessment_card(report)
+    await _patch_card(event_data, build_detail_card(report, items))
+    return None
+
+
+async def _show_summary_card(report_id: uuid.UUID, event_data: dict[str, Any]) -> dict[str, Any] | None:
+    """详情卡「返回」：PATCH 回结论卡/评估卡摘要视图（旧卡兼容；结论卡现为全文直出）。"""
+    report, items = await _fetch_report_and_items(report_id)
+    if report is None:
+        return {"toast": {"type": "error", "content": "记录不存在"}}
+    card = (
+        build_conclusion_card(report, items)
+        if report.conclusion
+        else build_assessment_card(report)
+    )
     await _patch_card(event_data, card)
     return None
 
@@ -282,45 +411,82 @@ async def _confirm_assessment(report_id: uuid.UUID, event_data: dict) -> dict | 
         if report is None:
             return {"toast": {"type": "error", "content": "记录不存在"}}
         await _patch_card(event_data, build_assessment_card(report))
+        # 确认后自动续跑适配+结论（对话上传链路的「全自动」承诺；
+        # 无 corrections 时 confirm 不触发适配，此处补链）
+        if report.review_status == "assessment_confirmed":
+            asyncio.create_task(_run_confirmed_chain_background(report_id))
         return None
     except ValueError as e:
         return {"toast": {"type": "error", "content": str(e)}}
 
 
-def _show_appeal_input(report_id: uuid.UUID, event_data: dict) -> dict | None:
-    """展示带输入框的申诉卡（输入理由 → 确认申诉），PATCH 替换原卡。"""
-    card = build_card_dict(
-        "提交申诉",
-        "请填写申诉理由（如设备实际不涉及某项风险）：",
-        header_template="purple",
-        elements=[
-            {
-                "tag": "input",
-                "name": "reason",
-                "label": {"tag": "plain_text", "content": "申诉理由"},
-                "placeholder": {"tag": "plain_text", "content": "请输入申诉理由"},
-            },
-            _action_row(
-                _btn({"scope": "urs", "action": "urs_appeal_confirm", "urs_id": str(report_id)}, "✅ 确认申诉", "primary"),
-            ),
-        ],
-    )
-    # input 值经 form 提交才随回调返回；此处仅展示，申诉理由由
-    # urs_appeal_confirm 的 value.reason（前端回填）或后续表单提交携带
-    asyncio.create_task(_patch_card(event_data, card))
-    return {"toast": {"type": "success", "content": "请填写理由"}}
-
-
-async def _run_appeal_background(report_id: uuid.UUID, reason: str) -> None:
-    """后台执行申诉重评（Step1+2），完成后自动推送申诉结果卡。"""
+async def _run_confirmed_chain_background(report_id: uuid.UUID) -> None:
+    """画像人工确认后，后台自动完成标准适配 + 审核结论（失败告警不打扰用户）。"""
     from app.core.database import async_session_factory
 
     try:
         async with async_session_factory() as db:
             from app.modules.safety.service.ehs_change.urs import URSService
 
-            await URSService(db).submit_appeal(report_id, reason)
+            report = await URSService(db).run_adaptation_and_conclusion(report_id)
             await db.commit()
-        logger.info("URS 申诉重评完成: report_id=%s", report_id)
+        logger.info(
+            "URS 确认后链路完成: report_id=%s status=%s",
+            report_id, report.review_status if report else None,
+        )
     except Exception:
-        logger.exception("URS 申诉重评失败: report_id=%s", report_id)
+        logger.exception("URS 确认后链路失败: report_id=%s", report_id)
+
+
+async def send_urs_review_pdf(report_id: uuid.UUID) -> bool:
+    """结论完成后把 PDF 审核报告发回来源会话（辅助判断：文件进、文件出）。"""
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.ehs_change.urs import URSService
+
+    chat_id: str | None = None
+    urs_no = ""
+    pdf_bytes = b""
+    async with async_session_factory() as db:
+        svc = URSService(db)
+        report = await svc.get_report(report_id)
+        if report is None or not report.source_chat_id:
+            logger.warning("URS PDF 发送跳过（无来源会话）: report_id=%s", report_id)
+            return False
+        chat_id = report.source_chat_id
+        urs_no = report.urs_no
+        try:
+            pdf_bytes = await svc.export_pdf(report_id)
+        except Exception:
+            logger.exception("URS PDF 导出失败: report_id=%s", report_id)
+            return False
+    if not pdf_bytes:
+        return False
+
+    from datetime import datetime
+
+    from app.modules.safety.feishu.chat_sender import send_file_to_chat
+
+    filename = f"{urs_no}_URS审核报告_{datetime.now().strftime('%Y%m%d')}.pdf"
+    sent = await send_file_to_chat(chat_id, pdf_bytes, filename)
+    if sent:
+        logger.info("URS PDF 审核报告已发送: report_id=%s file=%s", report_id, filename)
+    return sent
+
+
+async def notify_review_failed(
+    report_id: uuid.UUID, error_message: str | None, applicant_open_id: str | None,
+) -> bool:
+    """全链路评估失败时通知申请人（失败不静默）。"""
+    if not applicant_open_id:
+        return False
+    reason = (error_message or "").strip() or "未知原因"
+    return await send_user_card(
+        open_id=applicant_open_id,
+        title="❌ URS 审核评估失败",
+        content=(
+            f"很抱歉，本次 URS 文档的 AI 评估未能完成。\n\n"
+            f"失败原因：{reason[:300]}\n\n"
+            f"请稍后重试或联系管理员。"
+        ),
+        header_template="red",
+    )

@@ -419,6 +419,68 @@ class URSService:
         task = asyncio.create_task(self._run_assessment_background(report_id))
         _track_background_task(task)
 
+    def trigger_full_review_background(self, report_id: uuid.UUID) -> None:
+        """spawn 后台全链路任务：评估 →（自动确认）适配+预填+结论+PDF（需在 session 提交后调用）。
+
+        飞书对话上传链路使用（辅助判断模式：文件进、AI 判断出）：
+        低置信度不再暂停人工确认，自动确认续跑；结论后把 PDF 审核报告发回来源会话。
+        """
+        task = asyncio.create_task(self._run_full_review_background(report_id))
+        _track_background_task(task)
+
+    async def _run_full_review_background(self, report_id: uuid.UUID) -> None:
+        """独立 session 后台执行全链路（Step1 → 自动确认 → Step2-4 → PDF/失败推送）。"""
+        from app.core.database import async_session_factory
+
+        try:
+            # 属性在 session 内取好，避免 commit 过期后再触懒加载
+            conclusion: str | None = None
+            failed_status = False
+            failed_msg: str | None = None
+            applicant_open_id: str | None = None
+            async with async_session_factory() as bg_session:
+                svc = URSService(bg_session)
+                report = await svc.run_assessment(report_id, notify=False)
+                # 辅助判断模式：置信度不足不暂停，自动确认续跑（置信度在卡片中展示）
+                if report and report.review_status == self.STATUS_HUMAN_REVIEW:
+                    report = await svc.confirm_assessment(report_id)
+                if report and report.review_status == self.STATUS_ASSESSMENT_CONFIRMED:
+                    report = await svc.run_adaptation_and_conclusion(report_id)
+                await bg_session.commit()
+                if report:
+                    conclusion = report.conclusion
+                    failed_status = report.review_status == self.STATUS_FAILED
+                    failed_msg = report.ai_error_message
+                    applicant_open_id = report.applicant_open_id
+
+            from app.modules.safety.feishu.urs_card import (
+                notify_review_failed,
+                send_urs_review_pdf,
+            )
+
+            if conclusion:
+                # 结论卡已由 generate_conclusion 推送，这里补发 PDF 审核报告文件
+                await send_urs_review_pdf(report_id)
+            elif failed_status:
+                await notify_review_failed(report_id, failed_msg, applicant_open_id)
+            logger.info(
+                "URS 全链路完成: report_id=%s conclusion=%s", report_id, conclusion,
+            )
+        except Exception:
+            logger.exception("URS 后台全链路审核失败: report_id=%s", report_id)
+
+    async def run_adaptation_and_conclusion(self, report_id: uuid.UUID) -> URSReport | None:
+        """Step2+3 适配预填 → Step4 结论（飞书全自动链路：画像确认后调用）。
+
+        适配失败置 failed 并返回，结论不执行；两步各自推送通知卡。
+        """
+        report = await self.run_adaptation(report_id)
+        if not report:
+            return None
+        if report.review_status != self.STATUS_ITEM_REVIEW:
+            return report
+        return await self.generate_conclusion(report_id)
+
     async def _run_assessment_background(self, report_id: uuid.UUID) -> None:
         """独立 session 后台执行 Step1（请求 session 可能已关闭）。"""
         from app.core.database import async_session_factory
@@ -434,8 +496,14 @@ class URSService:
         except Exception:
             logger.exception("URS 后台评估失败: report_id=%s", report_id)
 
-    async def run_assessment(self, report_id: uuid.UUID) -> URSReport | None:
-        """执行 Step1（五维风险画像）。同步方法，供后台任务与测试直接调用。"""
+    async def run_assessment(
+        self, report_id: uuid.UUID, *, notify: bool = True,
+    ) -> URSReport | None:
+        """执行 Step1（五维风险画像）。同步方法，供后台任务与测试直接调用。
+
+        notify=False 供飞书全链路管道使用：中间评估卡不推送，
+        最终只输出结论卡 + PDF 报告（辅助判断：文件进、AI 判断出）。
+        """
         report = await self.get_report(report_id)
         if not report:
             return None
@@ -505,8 +573,9 @@ class URSService:
             logger.exception("URS 评估失败: id=%s", report.id)
             return report
 
-        # 通知申请人
-        await self._notify("assessment", report)
+        # 通知申请人（Web 提交路径；飞书全链路路径 notify=False 跳过中间卡）
+        if notify:
+            await self._notify("assessment", report)
         return report
 
     async def confirm_assessment(
@@ -837,8 +906,8 @@ class URSService:
             report.id, output.score, output.grade, output.conclusion.value,
         )
 
-        # 通知申请人
-        await self._notify("conclusion", report)
+        # 通知申请人（items 同 session 传入：事务未提交，另开 session 读不到）
+        await self._notify("conclusion", report, items=items)
         return report
 
     # ══════════════════════════════════════════════════════════
@@ -923,7 +992,9 @@ class URSService:
         v = await self.session.scalar(q)
         return (v or 0) + 1
 
-    async def _notify(self, kind: str, report: URSReport) -> None:
+    async def _notify(
+        self, kind: str, report: URSReport, items: list[URSStandardItem] | None = None,
+    ) -> None:
         """飞书通知申请人（失败不阻塞，D8 仅申请人）。"""
         if not report.applicant_open_id:
             return
@@ -935,7 +1006,7 @@ class URSService:
             elif kind == "conclusion":
                 from app.modules.safety.feishu.urs_card import notify_conclusion
 
-                await notify_conclusion(report)
+                await notify_conclusion(report, items)
             elif kind == "appeal":
                 from app.modules.safety.feishu.urs_card import notify_appeal_result
 
