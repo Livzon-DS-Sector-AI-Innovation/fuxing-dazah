@@ -65,9 +65,12 @@ async def list_report_records_between(
 async def count_report_records_since(
     db: AsyncSession, since: datetime
 ) -> int:
-    """统计某时间点之后生成的报告单数（流水号用）。"""
+    """统计某时间点之后生成的报告单数（流水号用）。
+
+    注意：**含软删行**——GMP 要求流水号作废不复用；若只数未删行，
+    将来一旦有报告单被软删，当日序号会重算回已用过的号并撞唯一索引。
+    """
     stmt = select(func.count()).where(
-        ReportRecord.is_deleted == False,  # noqa: E712
         ReportRecord.created_at >= since,
     )
     return int((await db.execute(stmt)).scalar_one())

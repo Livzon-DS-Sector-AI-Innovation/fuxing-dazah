@@ -249,3 +249,30 @@ async def test_item_update_keeps_doc_mapping_for_history_tasks(db_session):
     item_ids = {r.standard_item_id for r in task_rows if r.standard_item_id}
     mapping = await get_standard_item_doc_map(db_session, item_ids)
     assert mapping == {item.id: doc.id}
+
+
+async def test_default_rule_only_applies_to_manual_rows(db_session):
+    """口径：细菌内毒素/EDTA 恒为文字项——默认规则只对 manual 行套用；
+    若标准写成数值限度（auto），必须走数值判定，不能被默认规则绕过判合格。"""
+    from app.modules.quality.repository import get_test_task
+
+    doc = await _make_doc(db_session, "HAF")
+    # 细菌内毒素带数值限度 → auto 行
+    await create_standard_item(db_session, doc.id, {
+        "seq": 1, "item_name": "细菌内毒素", "sop_no": "SOP.03.9001",
+        "standard_text": "不得过0.25EU/mg", "operator": "≤", "limit_max": 0.25,
+    })
+    task = await TestTaskService.create_task(db_session, TestTaskCreate(
+        product_name=doc.product_name,
+        batch_number=_rand_batch("HAF"),
+        standard_document_id=doc.id,
+    ))
+    rows = await list_test_results(db_session, task.id)
+    assert len(rows) == 1
+    # auto 行不被默认规则填「符合规定」——保持未填，走正常数值判定
+    assert rows[0].judge_mode == "auto"
+    assert rows[0].is_pass is None
+    assert rows[0].result_text is None
+    # 任务也未因此自动进待复核
+    fresh = await get_test_task(db_session, task.id)
+    assert fresh.status == "in_progress"

@@ -219,7 +219,10 @@ async def list_task_attachments_endpoint(
 
 @router.get("/tasks/{task_id}/attachments/{attachment_id}/download", summary="下载任务附件")
 async def download_task_attachment_endpoint(
-    task_id: uuid.UUID, attachment_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    task_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> StreamingResponse:
     att = await get_task_attachment(db, attachment_id)
     if not att or att.task_id != task_id:

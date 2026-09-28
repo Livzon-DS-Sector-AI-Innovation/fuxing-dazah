@@ -296,9 +296,12 @@ export default function TaskFillIn() {
     { title: 'COA表格编号', dataIndex: 'form_id', key: 'form_id', width: 150, render: (v: string | null) => v || '-' },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
-      render: (v: TestTaskStatus) => {
-        const meta = STATUS_META[v] ?? { color: 'default', label: v }
-        return <Tag color={meta.color}>{meta.label}</Tag>
+      render: (v: TestTaskStatus, r: TestTaskListItem) => {
+        // 「待分配」派生口径与机器人一致：填报中且出报日期在未来
+        const derived = v === 'in_progress' && r.report_date && r.report_date > dayjs().format('YYYY-MM-DD')
+          ? { color: 'cyan', label: '待分配' }
+          : (STATUS_META[v] ?? { color: 'default', label: v })
+        return <Tag color={derived.color}>{derived.label}</Tag>
       },
     },
     {
@@ -324,10 +327,16 @@ export default function TaskFillIn() {
             {r.status === 'in_progress' ? '填报' : '查看'}
           </Button>
           {canReview && r.status !== 'void' && (
-            <Button size="small" icon={<StopOutlined />}
-              onClick={() => handleStatus(r.id, 'void', '任务已作废')}>
-              作废
-            </Button>
+            <Popconfirm
+              title={`确认作废任务 ${r.batch_number}？`}
+              description="作废后不可恢复，该任务全部填报数据将不可再修改"
+              okText="确认作废"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleStatus(r.id, 'void', '任务已作废')}
+            >
+              <Button size="small" icon={<StopOutlined />}>作废</Button>
+            </Popconfirm>
           )}
           {canReview && (
             <Popconfirm

@@ -18,6 +18,7 @@ from app.modules.quality.feishu.fill_service._commands import (
 from app.modules.quality.feishu.fill_service._common import (
     _CREATE_DENY_TEXT,
     _PENDING_DOC_SELECT,
+    _allowed,
     _allowed_create,
     _doc_to_card_dict,
     _known_codes,
@@ -93,6 +94,11 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         operator_id_obj = operator_ev.get("operator_id")
         if isinstance(operator_id_obj, dict):
             sender = operator_id_obj.get("open_id") or ""
+
+    # 群白名单校验：卡片被转发到非白名单群/被非白名单用户点击时拦截写库动作
+    # （chat_id 缺失时无法判定，保持原行为；建任务类动作另有 _allowed_create 收紧）
+    if chat_id and not _allowed(chat_id, sender):
+        return {"type": "toast", "toast": {"type": "warning", "content": "⛔ 该群/用户不在白名单内，操作已忽略"}}
 
     # 建任务卡片提交
     # 菜单导航按钮 → 批号输入卡片
@@ -414,7 +420,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
             chat_id,
             f"✅ 批号 {batch} 表单提交已落库 {len(updates)} 项：\n" +
             ("，".join(results) if results else "无有效数值") +
-            ("\n🚨 不合格未落库（已记录台账）：" + "\n".join(f"- {a}" for a in alerts) + "\n请人工处理" if alerts else "") +
+            ("\n🚨 不合格未落库（仅提醒、不入台账）：" + "\n".join(f"- {a}" for a in alerts) + "\n请人工处理" if alerts else "") +
             ("\n🔍 已全部填报完成，进入待复核，请专员审核" if advanced else ""),
         )
         # 卡片原地更新：已提交组的表单区替换为确认文本

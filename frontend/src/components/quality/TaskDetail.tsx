@@ -11,6 +11,7 @@ import {
   HistoryOutlined, DownloadOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
+import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import type { TestResultItem, TestTaskDetail, TaskAttachment, TaskReviewRecord } from '@/types/quality'
 import {
@@ -118,6 +119,11 @@ export default function TaskDetail({ id }: { id: string }) {
     }
     return <Skeleton active paragraph={{ rows: 6 }} />
   }
+
+  // 「待分配」派生口径与机器人一致：填报中且出报日期在未来
+  const displayStatus = detail.status === 'in_progress' && detail.report_date && detail.report_date > dayjs().format('YYYY-MM-DD')
+    ? { color: 'cyan', label: '待分配' }
+    : (STATUS_META[detail.status] ?? { color: 'default', label: detail.status })
 
   const editable =
     (detail.status === 'in_progress' && canFill) ||
@@ -480,9 +486,7 @@ export default function TaskDetail({ id }: { id: string }) {
           <Descriptions.Item label="效期">{detail.expiry_date || '-'}</Descriptions.Item>
           <Descriptions.Item label="COA表格编号">{detail.form_id || '-'}</Descriptions.Item>
           <Descriptions.Item label="状态">
-            <Tag color={(STATUS_META[detail.status] ?? { color: 'default', label: detail.status }).color}>
-              {(STATUS_META[detail.status] ?? { color: 'default', label: detail.status }).label}
-            </Tag>
+            <Tag color={displayStatus.color}>{displayStatus.label}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="进度">
             {detail.results.filter((r) => r.is_pass !== null).length}/{detail.results.length} 项已判定

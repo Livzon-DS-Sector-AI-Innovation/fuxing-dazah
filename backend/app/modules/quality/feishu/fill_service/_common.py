@@ -65,6 +65,13 @@ def _allowed(chat_id: str, sender: str) -> bool:
     return True
 
 
+def _allowed_user(sender: str) -> bool:
+    """仅校验用户白名单（p2p 单聊场景：群白名单不适用）。"""
+    if QUALITY_FEISHU_USER_IDS and sender not in QUALITY_FEISHU_USER_IDS:
+        return False
+    return True
+
+
 def _allowed_create(sender: str) -> bool:
     """新建任务权限：配置了 QUALITY_FEISHU_CREATE_USER_IDS 时仅白名单用户可建；空 = 不限制。"""
     if not QUALITY_FEISHU_CREATE_USER_IDS:

@@ -144,12 +144,14 @@ class _TaskLifecycle(_TaskCore):
                 "source": "manual",
             })
         rows = await create_test_results(db, task.id, snapshot)
-        # 默认判定规则：文字呈现项目（细菌内毒素→符合规定）与默认未检出（EDTA→未检出）自动填好
+        # 默认判定规则：文字呈现项目（细菌内毒素→符合规定）与默认未检出（EDTA→未检出）自动填好。
+        # 仅对文字项（manual）套用：若某产品标准把这两项写成数值限度（auto），
+        # 必须走正常数值判定，不能被默认规则绕过直接判合格。
         for r in rows:
             default_text = _TaskLifecycle._DEFAULT_FILL_RULES.get(
                 _TaskLifecycle._norm_name(r.item_name)
             )
-            if default_text and r.is_pass is None:
+            if default_text and r.is_pass is None and r.judge_mode == "manual":
                 r.result_text = default_text
                 r.is_pass = True
                 r.source = "manual"
@@ -234,13 +236,14 @@ class _TaskLifecycle(_TaskCore):
         if not task or task.status != "in_progress":
             return False
         rows = await list_test_results(db, task_id)
-        # 默认判定规则先自动补填（细菌内毒素→符合规定、EDTA→未检出）
+        # 默认判定规则先自动补填（细菌内毒素→符合规定、EDTA→未检出）；
+        # 仅对文字项（manual）套用（口径：这两项恒为文字呈现项目）
         changed = False
         for r in rows:
             default_text = _TaskLifecycle._DEFAULT_FILL_RULES.get(
                 _TaskLifecycle._norm_name(r.item_name)
             )
-            if default_text and r.is_pass is None:
+            if default_text and r.is_pass is None and r.judge_mode == "manual":
                 r.result_text = default_text
                 r.is_pass = True
                 r.source = "manual"

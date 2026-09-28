@@ -26,6 +26,7 @@ from app.modules.quality.feishu.fill_service._common import (
     _PENDING_DOC_SELECT,
     _allowed,
     _allowed_create,
+    _allowed_user,
     _doc_to_card_dict,
     _download_image,
     _extract_command,
@@ -251,7 +252,11 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
         return
     if not chat_id or not text:
         return
-    if chat_type != "p2p" and not _allowed(chat_id, sender or ""):
+    if chat_type == "p2p":
+        # p2p 单聊：群白名单不适用，按用户白名单校验（空=不限制）
+        if not _allowed_user(sender or ""):
+            return
+    elif not _allowed(chat_id, sender or ""):
         return
     batch_m = _BATCH_RE.search(text)
     # 省略批号沿用上次（帮助文案宣传的能力）：填报/进度/附件类指令自动套用本会话最近批号
