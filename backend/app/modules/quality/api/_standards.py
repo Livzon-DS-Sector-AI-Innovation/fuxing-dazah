@@ -25,6 +25,7 @@ from app.modules.quality.repository import (
     create_standard_item,
     delete_standard_document,
     list_standard_documents,
+    list_standard_documents_by_product,
     list_standard_items,
     update_standard_document,
     update_standard_item,
@@ -36,6 +37,7 @@ from app.modules.quality.schemas import (
     StandardItemCreate,
     StandardItemUpdate,
 )
+from app.modules.quality.service import TestTaskService
 from app.modules.quality.standard_doc_parser import (
     extract_text_async,
     parse_standard_doc,
@@ -390,3 +392,30 @@ async def update_standard_doc_item(
     if not it:
         raise HTTPException(status_code=404, detail="标准行不存在")
     return success_response(message="已更新")
+
+
+@router.get("/standards/resolve", summary="批号 → 产品代号与标准文件解析（建任务三端统一收敛点）")
+async def resolve_batch_standard(
+    product_name: str = Query(..., description="产品名称"),
+    batch_number: str = Query(..., description="批号（开头必然含产品代号）"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    """按批号开头解析产品代号与该代号下的标准文件。
+
+    与机器人/建任务服务共用同一套 _match_docs_by_batch_code 收敛逻辑，
+    供网页端建任务弹窗调用，避免三端各自实现匹配漂移。
+    """
+    product_docs = await list_standard_documents_by_product(db, product_name)
+    if not product_docs:
+        raise HTTPException(status_code=400, detail=f"未找到产品「{product_name}」的质量标准文档")
+    code, docs = TestTaskService._match_docs_by_batch_code(product_docs, batch_number)
+    known = sorted({(d.product_code or "").strip() for d in product_docs if (d.product_code or "").strip()})
+    return success_response(data={
+        "product_code": code,
+        "known_codes": known,
+        "documents": [
+            {"id": str(d.id), "file_no": d.file_no, "product_code": d.product_code}
+            for d in docs
+        ],
+    })
