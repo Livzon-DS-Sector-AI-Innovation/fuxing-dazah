@@ -69,6 +69,7 @@ async def list_test_task_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     items, total = await test_task_service.list_tasks(
         db, product_name, status, page, page_size, report_date=report_date,
@@ -83,6 +84,7 @@ async def list_test_task_endpoint(
 async def task_summary_by_sop_endpoint(
     product_name: str | None = Query(default=None, description="产品名称（模糊搜索）"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     data = await test_task_service.summary_by_sop(db, product_name)
     return success_response(data=data)
@@ -91,6 +93,7 @@ async def task_summary_by_sop_endpoint(
 @router.get("/tasks/{task_id}", summary="检验任务详情（含结果行）")
 async def get_test_task_endpoint(
     task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     detail = await test_task_service.get_task_detail(db, task_id)
     if not detail:
@@ -169,6 +172,7 @@ async def upload_task_attachment_endpoint(
     remark: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:task:fill")),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     task = await get_test_task(db, task_id)
     if not task:
@@ -273,6 +277,7 @@ async def review_task_endpoint(
 @router.get("/tasks/{task_id}/reviews", summary="任务复核记录")
 async def list_task_reviews_endpoint(
     task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     reviews = await list_task_reviews(db, task_id)
     return success_response(data=[

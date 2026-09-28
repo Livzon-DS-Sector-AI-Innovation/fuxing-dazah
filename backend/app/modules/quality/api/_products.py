@@ -18,7 +18,9 @@ from app.platform.permission.deps import require_permission
 
 
 @router.get("/products", summary="列出产品代码映射")
-async def list_products() -> list[dict[str, Any]]:
+async def list_products(
+    _user: User = Depends(require_permission("quality:inspection:read")),
+) -> list[dict[str, Any]]:
     return _load_products()
 
 

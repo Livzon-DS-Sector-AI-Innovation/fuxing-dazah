@@ -39,7 +39,10 @@ from app.platform.permission.deps import require_permission
 
 
 @router.get("/templates", summary="列出模板（含 SOP 绑定状态）")
-async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict[str, Any]]:
+async def list_templates(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> list[dict[str, Any]]:
     quality_storage.sync_templates_from_minio()
     items = _scan_templates(REPORT_TEMPLATE_DIR) if REPORT_TEMPLATE_DIR.exists() else []
     # 一次性加载全部标准文档的号码 token（未绑定模板的匹配建议）
@@ -66,7 +69,9 @@ async def list_templates(db: AsyncSession = Depends(get_db)) -> list[dict[str, A
 
 
 @router.get("/templates/all-placeholders", summary="获取所有模板的所有占位符名称")
-async def all_placeholders() -> list[str]:
+async def all_placeholders(
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> list[str]:
     names: set[str] = set()
 
     def walk(items: list[dict[str, Any]]) -> None:

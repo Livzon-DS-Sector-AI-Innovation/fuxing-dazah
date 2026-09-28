@@ -31,6 +31,8 @@ from app.modules.quality.service import (
     lc_report_service,
     test_task_service,
 )
+from app.platform.identity.models import User
+from app.platform.permission.deps import require_permission
 
 # ─── 汇总表 ───
 
@@ -39,6 +41,7 @@ from app.modules.quality.service import (
 async def batch_summary(
     record_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     detail = await lc_report_service.get_record_detail(db, record_id)
     if not detail:
@@ -77,6 +80,7 @@ async def history_summary(
     date_from: str | None = Query(default=None, description="起始日期 ISO 格式"),
     date_to: str | None = Query(default=None, description="结束日期 ISO 格式"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     dt_from = datetime.fromisoformat(date_from) if date_from else None
     dt_to = datetime.fromisoformat(date_to) if date_to else None
@@ -92,6 +96,7 @@ async def daily_reports(
     date: str | None = Query(default=None, description="日期 YYYY-MM-DD，默认今天"),
     product_name: str | None = Query(default=None, description="产品名称（模糊筛选）"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     day = date or today().isoformat()
     items = await list_report_records_by_date(db, day, product_name=product_name)
@@ -113,6 +118,7 @@ async def monthly_reports(
     month: str | None = Query(default=None, description="月份 YYYY-MM，默认当月"),
     product_name: str | None = Query(default=None, description="产品名称（模糊筛选）"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     m = month or today().strftime("%Y-%m")
     start = datetime.fromisoformat(f"{m}-01").replace(tzinfo=APP_TZ)
@@ -150,6 +156,7 @@ async def monthly_reports(
 @router.get("/dashboard/summary", summary="质量总览看板数据")
 async def quality_dashboard(
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     data = await test_task_service.build_dashboard(db)
     return success_response(data=data)
@@ -183,6 +190,7 @@ async def summary_matrix(
     date_to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
     include_in_progress: bool = Query(default=False, description="包含填报中的批次"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     data = await test_task_service.build_summary_matrix(
         db, product_name=product_name, date_from=date_from, date_to=date_to,
@@ -198,6 +206,7 @@ async def summary_matrix_export(
     date_to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
     include_in_progress: bool = Query(default=False, description="包含填报中的批次"),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> StreamingResponse:
     import io as _io
 
@@ -238,6 +247,7 @@ async def summary_trend(
     product_name: str | None = Query(default=None, description="产品名称"),
     limit: int = Query(default=50, ge=2, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     data = await test_task_service.build_item_trend(
         db, item_name, product_name=product_name, limit=limit,
@@ -248,6 +258,7 @@ async def summary_trend(
 @router.get("/summary/products", summary="已检验产品列表")
 async def list_summary_products(
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     names = await get_product_names(db)
     return success_response(data=names)

@@ -107,6 +107,7 @@ async def list_lc_records(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:lc:read")),
 ) -> JSONResponse:
     items, total = await list_inspection_records(
         db, product_name=product_name, batch_number=batch_number,
@@ -136,6 +137,7 @@ async def list_lc_records(
 async def get_lc_record(
     record_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:lc:read")),
 ) -> JSONResponse:
     detail = await lc_report_service.get_record_detail(db, record_id)
     if not detail:

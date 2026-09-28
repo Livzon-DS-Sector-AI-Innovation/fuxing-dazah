@@ -50,6 +50,7 @@ from app.platform.permission.deps import require_permission
 async def preview_standard_doc(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     """解析 .doc/.docx 返回草稿：文档头 + 项目行；前端人工校正后调用 confirm 落库。"""
     filename = file.filename or "standard.doc"
@@ -286,6 +287,7 @@ async def import_standard_doc(
 async def list_standard_docs(
     product_name: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:inspection:read")),
 ) -> JSONResponse:
     docs = await list_standard_documents(db, product_name=product_name)
     return success_response(data=[
@@ -344,6 +346,7 @@ async def delete_standard_doc(
 @router.get("/standards/documents/{doc_id}/items", summary="标准项目行列表")
 async def list_standard_doc_items(
     doc_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:inspection:read")),
 ) -> JSONResponse:
     items = await list_standard_items(db, doc_id)
     return success_response(data=[

@@ -175,6 +175,7 @@ async def list_reports(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
 ) -> JSONResponse:
     items, total = await list_report_records(
         db, product_name=product_name, batch_number=batch_number,
