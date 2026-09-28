@@ -106,7 +106,6 @@ def ensure_template_local(rel_path: str) -> Path:
     return local
 
 
-PRODUCTS_KEY = "config/products.json"
 
 ATTACH_PREFIX = "attachments/"
 ATTACH_LOCAL_DIR = BASE_DIR / "质量附件"
@@ -143,24 +142,6 @@ def delete_attachment(object_key: str) -> None:
             logger.exception("附件 MinIO 删除失败: %s", object_key)
     local = ATTACH_LOCAL_DIR / object_key
     local.unlink(missing_ok=True)
-
-
-def upload_products(data: bytes) -> None:
-    """产品代码映射配置同步到 MinIO（未启用则跳过）。"""
-    if not s3.is_enabled():
-        return
-    try:
-        s3.upload_object("quality", PRODUCTS_KEY, data, len(data), content_type="application/json")
-    except Exception:
-        logger.exception("products.json 同步 MinIO 失败")
-
-
-def read_products_from_minio() -> bytes | None:
-    """从 MinIO 读产品代码映射配置；不存在或未启用返回 None。"""
-    if not s3.is_enabled():
-        return None
-    result = s3.get_object("quality", PRODUCTS_KEY)
-    return result[0] if result else None
 
 
 def sync_templates_from_minio() -> None:

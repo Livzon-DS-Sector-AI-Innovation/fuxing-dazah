@@ -828,3 +828,26 @@ export async function deleteLcTemplateConfig(id: string): Promise<{ message: str
   if (!res.ok) throw new Error('删除模板配置失败')
   return res.json()
 }
+
+
+/** 批号 → 产品代号与标准文件解析（建任务三端统一收敛点）。 */
+export async function resolveBatchStandard(
+  productName: string,
+  batchNumber: string,
+): Promise<{
+  data: {
+    product_code: string | null
+    known_codes: string[]
+    documents: { id: string; file_no: string; product_code: string | null; specification: string | null; valid_years: string | null }[]
+  }
+}> {
+  const qp = new URLSearchParams({ product_name: productName, batch_number: batchNumber })
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/resolve?${qp}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '批号解析失败')
+  }
+  return res.json()
+}

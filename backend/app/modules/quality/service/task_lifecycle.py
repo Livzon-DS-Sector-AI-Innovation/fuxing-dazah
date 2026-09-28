@@ -127,6 +127,7 @@ class _TaskLifecycle(_TaskCore):
             form_id=payload.form_id,
             standard_document_id=primary.id,
             report_date=report_date,
+            standard_document_ids=[str(d.id) for d in docs],
         )
         # 按 (sop_no, item_name) 去重（多个子项目可共用同一 SOP 号；防跨文档重复）
         seen_keys: set[tuple[str, str]] = set()

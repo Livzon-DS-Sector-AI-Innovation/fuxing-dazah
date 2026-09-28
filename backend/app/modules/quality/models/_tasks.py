@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -17,6 +18,14 @@ class QualityTestTask(BaseModel):
         Index(
             "uq_quality_test_task_product_batch",
             "product_name",
+            "batch_number",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        # 归一化唯一索引：产品名忽略空白差异（应用层查重同口径，防并发绕过）
+        Index(
+            "uq_quality_test_task_norm_product_batch",
+            text("regexp_replace(product_name, '\\s', '', 'g')"),
             "batch_number",
             unique=True,
             postgresql_where=text("is_deleted = false"),
@@ -47,6 +56,10 @@ class QualityTestTask(BaseModel):
     standard_document_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True,
         comment="快照来源标准文档，逻辑引用 quality.quality_standard_documents.id（多文档时为主文档）",
+    )
+    standard_document_ids: Mapped[list[str] | None] = mapped_column(
+        JSONB, nullable=True,
+        comment="任务快照的标准文件 ID 列表（多选建任务时冗余存储，COA 逐份生成/跳过提示用）",
     )
     status: Mapped[str] = mapped_column(
         String(20), default="in_progress", server_default="in_progress",

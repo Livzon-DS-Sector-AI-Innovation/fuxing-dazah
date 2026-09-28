@@ -415,7 +415,13 @@ async def resolve_batch_standard(
         "product_code": code,
         "known_codes": known,
         "documents": [
-            {"id": str(d.id), "file_no": d.file_no, "product_code": d.product_code}
+            {
+                "id": str(d.id),
+                "file_no": d.file_no,
+                "product_code": d.product_code,
+                "specification": d.specification,
+                "valid_years": d.valid_years,
+            }
             for d in docs
         ],
     })

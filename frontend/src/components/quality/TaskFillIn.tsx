@@ -15,6 +15,7 @@ import {
   fetchTestTasks, createTestTask, updateTestTaskStatus, deleteTestTask,
   updateTestTaskReportDate, batchReportDates, downloadReportDateTemplate,
   fetchStandardDocuments, fetchStandardItems,
+  resolveBatchStandard,
   type StandardDocument,
 } from '@/actions/quality'
 
@@ -54,6 +55,14 @@ export default function TaskFillIn() {
   const [productDocs, setProductDocs] = useState<StandardDocument[]>([])
   const [sopLoading, setSopLoading] = useState(false)
   const [sopOptions, setSopOptions] = useState<{ label: string; value: string }[]>([])
+  // 批号解析结果（后端统一收敛点，替代本地 productCodes 前缀匹配）
+  const [resolved, setResolved] = useState<{
+    key: string
+    product_code: string | null
+    known_codes: string[]
+    documents: { id: string; file_no: string; product_code: string | null; specification: string | null; valid_years: string | null }[]
+  } | null>(null)
+  const [resolving, setResolving] = useState(false)
   const [createForm] = Form.useForm()
 
   const load = useCallback(async (p: number, silent = false) => {
@@ -110,42 +119,55 @@ export default function TaskFillIn() {
   const productDocsRef = useRef<StandardDocument[]>(productDocs)
   useEffect(() => { productDocsRef.current = productDocs }, [productDocs])
 
-  // 该产品在标准库中的全部代号（按长度降序，保证 HAF 优先于 HA 类短代号）
-  const productCodes = useMemo(() => {
-    const codes = new Set<string>()
-    for (const d of productDocs) {
-      if (nameKey(d.product_name) === nameKey(watchedProduct || '') && d.product_code?.trim()) {
-        codes.add(d.product_code.trim().toUpperCase())
-      }
+  // 批号解析：走后端统一收敛点（与机器人/建任务服务同一套 _match_docs_by_batch_code）。
+  // 防抖 400ms，避免每敲一键打一次接口
+  useEffect(() => {
+    const product = watchedProduct?.trim()
+    const batch = watchedBatch?.trim()
+    if (!product || !batch) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      ;(async () => {
+        setResolving(true)
+        try {
+          const res = await resolveBatchStandard(product, batch)
+          if (!cancelled) setResolved({ key: `${product}|${batch}`, ...res.data })
+        } catch (err: unknown) {
+          if (!cancelled) {
+            setResolved(null)
+            message.warning((err instanceof Error ? err.message : String(err)) || '批号解析失败')
+          }
+        } finally {
+          if (!cancelled) setResolving(false)
+        }
+      })()
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
     }
-    return Array.from(codes).sort((a, b) => b.length - a.length)
-  }, [productDocs, watchedProduct])
+  }, [watchedProduct, watchedBatch, message])
 
-  // 从批号开头识别出的产品代号（识别不到为 null）
-  const matchedCode = useMemo(() => {
-    if (!watchedBatch) return null
-    const b = watchedBatch.trim().toUpperCase()
-    return productCodes.find((c) => b.startsWith(c)) ?? null
-  }, [watchedBatch, productCodes])
+  // 后端解析出的产品代号（识别不到为 null）
+  // 仅当前产品+批号组合的解析结果生效（派生，防旧结果串用）
+  const resolvedKey = `${watchedProduct?.trim() || ''}|${watchedBatch?.trim() || ''}`
+  const effectiveResolved = resolved?.key === resolvedKey ? resolved : null
+  const matchedCode = effectiveResolved?.product_code ?? null
 
-  // 标准文件 = 批号代号下的标准文档（file_no 如 SOP.02.3205.010）；一个批号可开多份报告单 → 可多选
+  // 标准文件 = 后端解析出的该代号标准文件（file_no 如 SOP.02.3205.010）；一个批号可开多份报告单 → 可多选
   const matchedDocIds: string[] | undefined = Form.useWatch('standard_document_ids', createForm)
 
-  // 该代号下的标准文件选项
-  const docOptions = useMemo(() => {
-    if (!watchedProduct || !matchedCode) return []
-    return productDocs
-      .filter(
-        (d) => nameKey(d.product_name) === nameKey(watchedProduct) && (d.product_code || '').toUpperCase() === matchedCode,
-      )
-      .map((d) => ({ label: d.file_no, value: d.id }))
-  }, [productDocs, watchedProduct, matchedCode])
+  // 该代号下的标准文件选项（以后端解析结果为准）
+  const docOptions = useMemo(
+    () => (matchedCode ? (effectiveResolved?.documents || []).map((d) => ({ label: d.file_no, value: d.id })) : []),
+    [effectiveResolved, matchedCode],
+  )
 
-  // 规格可选项：从所选全部标准文件的 specification 合并解析（唯一规格自动默认）
+  // 规格可选项：从后端解析出的标准文件 specification 合并解析（唯一规格自动默认）
   const specOptions = useMemo(() => {
     if (!matchedDocIds?.length) return []
     const parts = new Set<string>()
-    for (const d of productDocs) {
+    for (const d of effectiveResolved?.documents || []) {
       if (!matchedDocIds.includes(d.id)) continue
       for (const s of (d.specification || '').split(/[、，,；;]/)) {
         const t = s.replace(/[。.]$/, '').trim()
@@ -153,7 +175,7 @@ export default function TaskFillIn() {
       }
     }
     return Array.from(parts)
-  }, [productDocs, matchedDocIds])
+  }, [effectiveResolved, matchedDocIds])
 
   const handleProductChange = () => {
     createForm.setFieldValue('batch_number', undefined)
@@ -459,10 +481,14 @@ export default function TaskFillIn() {
                   if (!value) return Promise.resolve()
                   const product = createForm.getFieldValue('product_name') as string | undefined
                   if (!product) return Promise.resolve()
-                  const codes = productDocsRef.current
+                  // 优先用后端解析返回的已知代号（三端收敛），本地计算兜底
+                  const serverCodes = (effectiveResolved?.known_codes || []).map((c) => c.toUpperCase())
+                  const localCodes = productDocsRef.current
                     .filter((d) => nameKey(d.product_name) === nameKey(product) && d.product_code?.trim())
                     .map((d) => d.product_code!.trim().toUpperCase())
-                    .sort((a, b) => b.length - a.length)
+                  const codes = serverCodes.length
+                    ? serverCodes
+                    : localCodes.sort((a, b) => b.length - a.length)
                   if (!codes.length) {
                     return Promise.reject(new Error('该产品标准未配置产品代号，请先在产品标准中补充'))
                   }
@@ -484,6 +510,7 @@ export default function TaskFillIn() {
               mode="multiple"
               showSearch
               optionFilterProp="label"
+              loading={resolving}
               placeholder={matchedCode ? '勾选本批要开具报告单的标准文件（如 SOP.02.3205.010）' : '请先填写批号（自动识别产品代号）'}
               options={docOptions}
               disabled={!matchedCode}

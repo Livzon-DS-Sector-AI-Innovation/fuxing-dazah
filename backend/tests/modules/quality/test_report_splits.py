@@ -10,7 +10,9 @@ from app.modules.quality.repository import (
     create_standard_item,
     create_test_results,
     create_test_task,
+    list_test_results,
 )
+from app.modules.quality.schemas import TestTaskCreate
 from app.modules.quality.service import TestTaskService
 
 
@@ -196,3 +198,42 @@ async def test_splits_all_docs_empty_rejected(db_session):
         await TestTaskService.build_task_report_splits(db_session, task.id)
     assert exc_info.value.status_code == 400
     assert "无结果行" in exc_info.value.detail
+
+
+async def test_splits_snapshot_doc_with_all_rows_deduped_still_skipped_listed(db_session):
+    """建任务快照文档全集冗余存储：文档 B 的项目行全部被 (sop_no,item_name)
+    去重吞掉时，仍应在 skipped 提示中可见，而不是静默消失。"""
+    from app.modules.quality.repository import get_test_task
+
+    doc_a = await _make_doc(db_session, "HAF", "tpl-a.docx")
+    doc_b = await _make_doc(db_session, "HAF", "tpl-b.docx")
+    # 同一产品下两份标准文件（_make_doc 随机产品名，手动对齐）
+    doc_b.product_name = doc_a.product_name
+    await db_session.flush()
+    # 两个文档有完全相同的 (sop_no, item_name) 项目行 → doc_b 的行会被去重吞掉
+    for d in (doc_a, doc_b):
+        await create_standard_item(db_session, d.id, {
+            "seq": 1, "item_name": "水分", "sop_no": "SOP.03.1111",
+            "standard_text": "≤3.0%", "operator": "≤", "limit_max": 3.0,
+        })
+    task = await TestTaskService.create_task(db_session, TestTaskCreate(
+        product_name=doc_a.product_name,
+        batch_number=_rand_batch(),
+        standard_document_ids=[doc_a.id, doc_b.id],
+    ))
+    # 确认任务存了快照文档列表
+    db_task = await get_test_task(db_session, task.id)
+    assert db_task.standard_document_ids is not None
+    assert len(db_task.standard_document_ids) == 2
+    # 全部判定完成
+    rows = await list_test_results(db_session, task.id)
+    for r in rows:
+        r.is_pass = True
+        r.result_value = 1.0
+    db_task.status = "completed"
+    await db_session.flush()
+
+    splits = await TestTaskService.build_task_report_splits(db_session, task.id)
+    assert len(splits) == 1  # 只有有行的文档生成
+    skipped = splits[0].get("skipped_file_nos") or []
+    assert len(skipped) == 1  # 被吞掉的文档在 skipped 中可见

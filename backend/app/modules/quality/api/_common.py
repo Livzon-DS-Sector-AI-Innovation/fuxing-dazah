@@ -125,36 +125,8 @@ def _doc_match_info(d: QualityStandardDocument | None) -> dict[str, Any] | None:
         return None
     return {"doc_id": str(d.id), "file_no": d.file_no, "product_code": d.product_code or ""}
 
-# ─── 产品代码管理 ───
-
-PRODUCTS_FILE = REPORT_TEMPLATE_DIR.parent / "products.json"
 
 # ─── 产品代码 helpers ───
-def _load_products() -> list[dict[str, Any]]:
-    import json
-
-    # MinIO 兜底：本地丢失时从对象恢复
-    if not PRODUCTS_FILE.exists():
-        data = quality_storage.read_products_from_minio()
-        if data:
-            PRODUCTS_FILE.write_bytes(data)
-    if PRODUCTS_FILE.exists():
-        try:
-            # json.loads 返回 Any；局部标注不产生运行时校验
-            parsed: list[dict[str, Any]] = json.loads(PRODUCTS_FILE.read_text())
-            return parsed
-        except Exception:
-            pass
-    return []
-
-
-def _save_products(data: list[dict[str, Any]]) -> None:
-    import json
-
-    PRODUCTS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    quality_storage.upload_products(PRODUCTS_FILE.read_bytes())
-
-# ─── 报告渲染 helpers ───
 def _replace_placeholders(para: Paragraph, data: dict[str, Any]) -> None:
     full = para.text
     matches = list(PLACEHOLDER_RE.finditer(full))

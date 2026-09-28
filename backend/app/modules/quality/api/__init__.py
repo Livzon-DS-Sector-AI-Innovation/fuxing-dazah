@@ -8,7 +8,6 @@
 from app.modules.quality.api import (  # noqa: F401
     _lc,
     _module_info,
-    _products,
     _reports,
     _standards,
     _summary,

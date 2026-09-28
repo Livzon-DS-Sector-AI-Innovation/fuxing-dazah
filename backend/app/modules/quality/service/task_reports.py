@@ -58,6 +58,11 @@ class _TaskReports(_TaskCore):
             raise AppException(status_code=400, detail="存在未判定项目，无法生成 COA")
 
         doc_ids = await list_task_standard_document_ids(db, task_id)
+        # 建任务快照的完整标准文件集合：结果行反推会漏掉「项目行全部被
+        # (sop_no,item_name) 去重吞掉」的文档——用快照冗余字段补齐，
+        # 保证无行文档进入 skipped 提示而非静默消失
+        snapshot_ids = [uuid.UUID(s) if isinstance(s, str) else s for s in (task.standard_document_ids or [])]
+        doc_ids = list(dict.fromkeys([*snapshot_ids, *doc_ids]))
         docs: dict[uuid.UUID, QualityStandardDocument] = {}
         for doc_id in doc_ids:
             d = await get_standard_document(db, doc_id)
