@@ -11,6 +11,9 @@ from app.modules.quality.schemas._lc import (  # noqa: F401
     ImpurityPeakAreaOut,
     ImpurityResultOut,
     LcReportOut,
+    LcTemplateConfigCreate,
+    LcTemplateConfigOut,
+    LcTemplateConfigUpdate,
     QualityStandardOut,
     UploadLcResponse,
 )

@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import (
+    Body,
     Depends,
     File,
     HTTPException,
@@ -18,13 +19,20 @@ from app.modules.quality.api._common import (
     router,
 )
 from app.modules.quality.repository import (
+    create_lc_template_config,
     delete_inspection_record,
+    delete_lc_template_config,
+    get_lc_template_by_table_no,
     get_test_task_by_batch,
     list_inspection_records,
+    list_lc_template_configs,
+    update_lc_template_config,
 )
 from app.modules.quality.schemas import (
     InspectionRecordListItem,
     LcReportOut,
+    LcTemplateConfigCreate,
+    LcTemplateConfigUpdate,
     UploadLcResponse,
 )
 from app.modules.quality.service import (
@@ -145,3 +153,68 @@ async def delete_lc_record(
     if not result:
         raise HTTPException(status_code=404, detail="检验记录不存在")
     return success_response(message="已删除")
+
+
+# ─── 液相计算表模板配置维护（表号 → 取值配置）───
+
+
+@router.get("/lc/templates", summary="液相计算表模板配置列表")
+async def list_lc_template_configs_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    cfgs = await list_lc_template_configs(db)
+    return success_response(data=[
+        {
+            "id": str(c.id),
+            "table_no": c.table_no,
+            "product_name": c.product_name,
+            "sop_no": c.sop_no,
+            "description": c.description,
+            "config": c.config,
+        }
+        for c in cfgs
+    ])
+
+
+@router.post("/lc/templates", summary="新增液相计算表模板配置")
+async def create_lc_template_config_endpoint(
+    payload: LcTemplateConfigCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    existing = await get_lc_template_by_table_no(db, payload.table_no)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"表号 {payload.table_no} 已存在配置")
+    cfg = await create_lc_template_config(
+        db, table_no=payload.table_no, product_name=payload.product_name,
+        sop_no=payload.sop_no, description=payload.description, config=payload.config,
+    )
+    return success_response(
+        data={"id": str(cfg.id), "table_no": cfg.table_no}, message="模板配置已创建", status_code=201,
+    )
+
+
+@router.put("/lc/templates/{cfg_id}", summary="更新液相计算表模板配置")
+async def update_lc_template_config_endpoint(
+    cfg_id: uuid.UUID,
+    payload: LcTemplateConfigUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    cfg = await update_lc_template_config(db, cfg_id, **payload.model_dump())
+    if not cfg:
+        raise HTTPException(status_code=404, detail="模板配置不存在")
+    return success_response(data={"id": str(cfg.id)}, message="模板配置已更新")
+
+
+@router.delete("/lc/templates/{cfg_id}", summary="删除液相计算表模板配置（软删除）")
+async def delete_lc_template_config_endpoint(
+    cfg_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    ok = await delete_lc_template_config(db, cfg_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="模板配置不存在")
+    return success_response(message="模板配置已删除")

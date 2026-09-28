@@ -21,6 +21,7 @@ import type {
   DailyReportItem,
   MonthlyReportSummary,
   TemplateNode,
+  LcTemplateConfig,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -771,5 +772,59 @@ export async function fetchMonthlyReports(month?: string, productName?: string):
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取月度汇总失败')
+  return res.json()
+}
+
+
+// ─── 液相计算表模板配置维护 ───
+
+export async function fetchLcTemplateConfigs(): Promise<{ data: LcTemplateConfig[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取液相模板配置失败')
+  return res.json()
+}
+
+export async function createLcTemplateConfig(data: {
+  table_no: string
+  product_name: string
+  sop_no?: string
+  description?: string
+  config: Record<string, unknown>
+}): Promise<{ data: { id: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates`, {
+    method: 'POST',
+    headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '新增模板配置失败')
+  }
+  return res.json()
+}
+
+export async function updateLcTemplateConfig(
+  id: string,
+  data: Partial<Omit<LcTemplateConfig, 'id' | 'table_no'>>,
+): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates/${id}`, {
+    method: 'PUT',
+    headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '更新模板配置失败')
+  }
+  return res.json()
+}
+
+export async function deleteLcTemplateConfig(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除模板配置失败')
   return res.json()
 }

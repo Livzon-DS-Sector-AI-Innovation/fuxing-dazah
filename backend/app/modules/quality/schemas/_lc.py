@@ -67,3 +67,36 @@ class UploadLcResponse(BaseModel):
     record_id: uuid.UUID | None = None  # 持久化后的记录 ID
     task_link: dict[str, Any] | None = None  # 自动关联的检验任务信息：{task_id, filled, unmatched}
     components: list[dict[str, Any]] | None = None  # 模板配置通用解析的组分结果（旧解析器为 None）
+
+
+# ─── 液相计算表模板配置维护 ───
+
+
+class LcTemplateConfigOut(BaseModel):
+    """液相模板配置（表号→取值配置）。"""
+
+    id: uuid.UUID
+    table_no: str
+    product_name: str
+    sop_no: str | None = None
+    description: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class LcTemplateConfigCreate(BaseModel):
+    """新增液相模板配置。"""
+
+    table_no: str = Field(max_length=50, description="计算表表号，如 EX-HA-8329-002")
+    product_name: str = Field(max_length=200)
+    sop_no: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, max_length=200)
+    config: dict[str, Any] = Field(default_factory=dict, description="取值配置 JSON")
+
+
+class LcTemplateConfigUpdate(BaseModel):
+    """更新液相模板配置（仅提供的字段生效）。"""
+
+    product_name: str | None = Field(default=None, max_length=200)
+    sop_no: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, max_length=200)
+    config: dict[str, Any] | None = None

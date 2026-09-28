@@ -10,8 +10,11 @@ from app.modules.quality.repository._inspection import (  # noqa: F401
     list_inspection_records,
 )
 from app.modules.quality.repository._lc_templates import (  # noqa: F401
+    create_lc_template_config,
+    delete_lc_template_config,
     get_lc_template_by_table_no,
     list_lc_template_configs,
+    update_lc_template_config,
 )
 from app.modules.quality.repository._reports import (  # noqa: F401
     count_report_records_since,

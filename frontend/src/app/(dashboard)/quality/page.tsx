@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Typography, Divider, Empty, Button, Space, Table, Tag } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
-import { LcUploader, LcReportView } from '@/components/quality'
+import { LcUploader, LcReportView, LcTemplateConfigs } from '@/components/quality'
 import type { UploadLcResponse } from '@/types/quality'
 
 const { Title, Paragraph } = Typography
@@ -67,6 +67,10 @@ export default function QualityPage() {
           <Empty description="请上传液相计算表 Excel 文件开始解析" />
         </div>
       )}
+
+      <div style={{ marginTop: 24 }}>
+        <LcTemplateConfigs />
+      </div>
     </div>
   )
 }

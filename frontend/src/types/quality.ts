@@ -373,3 +373,15 @@ export interface TemplateNode {
   /** 仅在未绑定时返回的匹配建议；无建议为 null。 */
   matched?: TemplateMatch | null
 }
+
+
+// ─── 液相计算表模板配置（表号 → 取值配置）───
+
+export interface LcTemplateConfig {
+  id: string
+  table_no: string
+  product_name: string
+  sop_no: string | null
+  description: string | null
+  config: Record<string, unknown>
+}
