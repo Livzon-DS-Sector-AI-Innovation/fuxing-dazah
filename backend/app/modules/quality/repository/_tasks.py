@@ -366,3 +366,27 @@ async def delete_test_result(
     await db.flush()
     stmt = select(QualityTestResult).where(QualityTestResult.id == result_id)
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_task_reviews_with_names(db: AsyncSession, task_id: uuid.UUID) -> list[dict[str, Any]]:
+    """任务复核记录（含复核人姓名，联查 identity.users）。"""
+    from app.platform.identity.models import User as IdentityUser
+
+    stmt = (
+        select(QualityTaskReview, IdentityUser.name)
+        .join(IdentityUser, IdentityUser.id == QualityTaskReview.reviewer_id, isouter=True)
+        .where(
+            QualityTaskReview.task_id == task_id,
+            QualityTaskReview.is_deleted == False,  # noqa: E712
+        )
+        .order_by(QualityTaskReview.created_at)
+    )
+    out: list[dict[str, Any]] = []
+    for r, reviewer_name in (await db.execute(stmt)).all():
+        out.append({
+            "reviewer_id": str(r.reviewer_id),
+            "reviewer_name": reviewer_name,
+            "comment": r.comment,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return out

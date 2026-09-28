@@ -344,7 +344,9 @@ export default function TaskDetail({ id }: { id: string }) {
     if (row.judge_mode === 'auto') {
       const value = draft?.result_value != null ? draft.result_value : row.result_value
       const preview = previewPass(row.operator, row.limit_min, row.limit_max, value)
-      const limitText = `${row.operator || ''} ${row.limit_min ?? ''}${row.limit_max ?? ''}`.trim()
+      const limitText = row.operator === '范围' && row.limit_min != null && row.limit_max != null
+    ? `${row.limit_min}~${row.limit_max}`
+    : `${row.operator || ''} ${row.limit_min ?? ''}${row.limit_max ?? ''}`.trim()
       return (
         <Space size={8} direction="vertical" style={{ width: '100%' }}>
           <Space size={8}>
@@ -521,7 +523,7 @@ export default function TaskDetail({ id }: { id: string }) {
             <Text type="warning">
               复核进度：{approvedCount}/2 人已通过
               {reviews.length > 0 && `（${reviews.map((r, i) =>
-                `${i + 1}号复核：${r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '-'}${r.comment ? `，备注「${r.comment}」` : ''}`
+                `${i + 1}号复核${r.reviewer_name ? `（${r.reviewer_name}）` : ''}：${r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '-'}${r.comment ? `，备注「${r.comment}」` : ''}`
               ).join('；')}）`}
             </Text>
           )}

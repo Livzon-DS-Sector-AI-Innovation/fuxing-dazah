@@ -300,6 +300,3 @@ class LcReportService:
 
 
 lc_report_service = LcReportService()
-
-
-lc_report_service = LcReportService()

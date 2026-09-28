@@ -259,6 +259,13 @@ class _TaskParse(_TaskCore):
                 appended.append(name)
                 appended_orig.add(c.name)
             remaining = [u for u in unmatched if u not in appended_orig]
+            # 「未检出」组分（report_value=None）既不在 filled 也不在 unmatched，
+            # 此前完全不可见——追加到 unmatched 保证响应中可追溯
+            undetected = [
+                f"{c.name}（未检出）" for c in parsed.components
+                if c.report_value is None and c.name
+            ]
+            remaining.extend(undetected)
             task_link = {
                 "task_id": str(task.id),
                 "filled": filled,

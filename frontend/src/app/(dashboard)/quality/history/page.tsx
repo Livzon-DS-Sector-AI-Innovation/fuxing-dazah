@@ -1,6 +1,7 @@
 'use client'
 
-import { Typography } from 'antd'
+import { Suspense } from 'react'
+import { Typography, Skeleton } from 'antd'
 import { HistoryOutlined } from '@ant-design/icons'
 import { LcHistoryList } from '@/components/quality'
 
@@ -15,7 +16,9 @@ export default function HistoryPage() {
       <Paragraph type="secondary" style={{ marginBottom: 24 }}>
         查看所有液相解析的历史记录，支持按产品和批号筛选。
       </Paragraph>
-      <LcHistoryList />
+      <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
+        <LcHistoryList />
+      </Suspense>
     </div>
   )
 }

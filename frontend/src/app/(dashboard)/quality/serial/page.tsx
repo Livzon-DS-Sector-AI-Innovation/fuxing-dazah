@@ -8,12 +8,15 @@ import * as XLSX from 'xlsx'
 import type { DailyReportItem, MonthlyReportSummary } from '@/types/quality'
 import { fetchDailyReports, fetchMonthlyReports, downloadReportFile } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
+import { usePermission } from '@/hooks/usePermission'
 
 const { Title, Paragraph } = Typography
 
 type ViewMode = 'day' | 'month'
 
 export default function SerialRegistryPage() {
+  const { hasPermission } = usePermission()
+  const canView = hasPermission('quality:report:read')
   const { message } = App.useApp()
   const [viewMode, setViewMode] = useState<ViewMode>('day')
   const [date, setDate] = useState(dayjs())
@@ -134,6 +137,10 @@ export default function SerialRegistryPage() {
     },
   ]
 
+  if (!canView) {
+    return <Typography.Paragraph type="secondary">没有查看报告单流水的权限</Typography.Paragraph>
+  }
+
   return (
     <div className="space-y-4">
       <style>{`
@@ -177,7 +184,7 @@ export default function SerialRegistryPage() {
           onPressEnter={() => setProductSearch(productDraft)}
           style={{ width: 180 }}
         />
-        <Button type="primary" icon={<SearchOutlined />} onClick={() => { setProductSearch(productDraft); load() }}>查询</Button>
+        <Button type="primary" icon={<SearchOutlined />} onClick={() => setProductSearch(productDraft)}>查询</Button>
         {viewMode === 'day' ? (
           <>
             <Button icon={<FileExcelOutlined />} onClick={handleExport}>导出 Excel</Button>

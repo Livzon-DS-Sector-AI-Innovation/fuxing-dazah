@@ -64,6 +64,7 @@ from app.modules.quality.repository._tasks import (  # noqa: F401
     get_test_task_by_batch_number,
     list_task_attachments,
     list_task_reviews,
+    list_task_reviews_with_names,
     list_task_standard_document_ids,
     list_test_results,
     list_test_results_for_tasks,

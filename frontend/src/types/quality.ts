@@ -249,6 +249,7 @@ export interface TaskAttachment {
 
 export interface TaskReviewRecord {
   reviewer_id: string
+  reviewer_name: string | null
   comment: string | null
   created_at: string | null
 }

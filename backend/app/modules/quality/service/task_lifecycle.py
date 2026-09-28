@@ -102,12 +102,20 @@ class _TaskLifecycle(_TaskCore):
             if not std_items:
                 raise AppException(status_code=400, detail="未选中任何检验项目")
 
+        # 主文档 = 选中项目所属的文档（仅传 standard_item_ids 时，docs[0] 可能
+        # 是用户未选中的标准文件——效期/规格必须取实际选中文档的值）
+        if payload.standard_item_ids:
+            item_doc_ids = {it.document_id for it in std_items}
+            primary = next((d for d in docs if d.id in item_doc_ids), docs[0])
+        else:
+            primary = docs[0]
+
         # 日期分隔符归一化：支持 2026.01.01 / 2026/01/01 等写法
         production_date = _norm_date_str(payload.production_date)
         report_date = _norm_date_str(payload.report_date)
         # 效期：未显式指定时按主标准文档有效期自动计算（生产日期+x年-1天）
         expiry_date = _norm_date_str(payload.expiry_date) or _TaskLifecycle._calc_expiry(
-            production_date, docs[0].valid_years
+            production_date, primary.valid_years
         )
         task = await create_test_task(
             db,
@@ -117,7 +125,7 @@ class _TaskLifecycle(_TaskCore):
             expiry_date=expiry_date,
             specification=payload.specification,
             form_id=payload.form_id,
-            standard_document_id=docs[0].id,
+            standard_document_id=primary.id,
             report_date=report_date,
         )
         # 按 (sop_no, item_name) 去重（多个子项目可共用同一 SOP 号；防跨文档重复）
@@ -285,6 +293,9 @@ class _TaskLifecycle(_TaskCore):
             raise AppException(status_code=404, detail="检验任务不存在")
         if task.status != "pending_review":
             raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可复核")
+        rows = await list_test_results(db, task_id)
+        if any(r.is_pass is None for r in rows):
+            raise AppException(status_code=400, detail="存在未判定项目，不可复核")
         reviews = await list_task_reviews(db, task_id)
         if any(r.reviewer_id == reviewer_id for r in reviews):
             raise AppException(status_code=400, detail="你已复核过该任务，请等待另一位复核人复核")

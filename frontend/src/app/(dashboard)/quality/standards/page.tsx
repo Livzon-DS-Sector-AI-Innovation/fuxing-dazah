@@ -20,7 +20,8 @@ import {
   importStandardDocPreview, importStandardDocConfirm, fetchTemplates, bindTemplate,
   type StandardDocument, type StandardItem, type StandardImportDraft, type StandardImportDraftItem,
 } from '@/actions/quality'
-import ImportConfirmModal, { type ImportDraftDocument } from '@/components/quality/ImportConfirmModal'
+import { ImportConfirmModal } from '@/components/quality'
+import type { ImportDraftDocument } from '@/components/quality/ImportConfirmModal'
 
 const { Title, Paragraph, Text } = Typography
 

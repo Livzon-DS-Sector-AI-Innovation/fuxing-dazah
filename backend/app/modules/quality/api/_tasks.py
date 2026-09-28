@@ -32,7 +32,7 @@ from app.modules.quality.repository import (
     get_test_task,
     get_test_task_by_batch_number,
     list_task_attachments,
-    list_task_reviews,
+    list_task_reviews_with_names,
     update_test_task_report_date,
 )
 from app.modules.quality.schemas import (
@@ -156,6 +156,7 @@ async def parse_lc_into_task_endpoint(
         "size": len(content),
         "source": "parse",
         "remark": "液相计算表（上传解析自动归档）",
+        "uploaded_by": _user.id,
     })
     msg = f"解析映射完成：已填入 {len(filled)} 项"
     if filled:
@@ -172,7 +173,6 @@ async def upload_task_attachment_endpoint(
     remark: str = Form(""),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:task:fill")),
-    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     task = await get_test_task(db, task_id)
     if not task:
@@ -279,15 +279,8 @@ async def list_task_reviews_endpoint(
     task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
-    reviews = await list_task_reviews(db, task_id)
-    return success_response(data=[
-        {
-            "reviewer_id": str(r.reviewer_id),
-            "comment": r.comment,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in reviews
-    ])
+    reviews = await list_task_reviews_with_names(db, task_id)
+    return success_response(data=reviews)
 
 
 @router.put("/tasks/{task_id}/status", summary="任务状态流转（重开/作废）")

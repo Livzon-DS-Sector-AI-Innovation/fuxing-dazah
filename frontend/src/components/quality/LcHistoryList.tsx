@@ -3,13 +3,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Table, Tag, Input, Space, Button, App, Popconfirm } from 'antd'
 import { SearchOutlined, DeleteOutlined, EyeOutlined, ExperimentOutlined } from '@ant-design/icons'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { usePermission } from '@/hooks/usePermission'
 import type { InspectionRecordListItem } from '@/types/quality'
 import { fetchInspectionRecords, deleteInspectionRecord } from '@/actions/quality'
 
 export default function LcHistoryList() {
   const router = useRouter()
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canDelete = hasPermission('quality:lc:upload')
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<InspectionRecordListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -18,7 +21,11 @@ export default function LcHistoryList() {
   const [productDraft, setProductDraft] = useState('')
   const [batchDraft, setBatchDraft] = useState('')
   const [productSearch, setProductSearch] = useState('')
-  const [batchSearch, setBatchSearch] = useState('')
+  // 深链 ?batch_number=（任务详情「检验记录」跳转带批号）首帧读入
+  const searchParams = useSearchParams()
+  const [batchSearch, setBatchSearch] = useState(
+    () => searchParams.get('batch_number') || ''
+  )
 
   const load = useCallback(async (p: number) => {
     setLoading(true)
@@ -73,6 +80,7 @@ export default function LcHistoryList() {
             onClick={() => router.push(`/quality/history/${r.id}`)}>
             详情
           </Button>
+          {canDelete && (
           <Popconfirm
             title={`确认删除检验记录 ${r.batch_number}？`}
             description="删除后不可恢复"
@@ -83,6 +91,7 @@ export default function LcHistoryList() {
           >
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
+          )}
         </Space>
       ),
     },
