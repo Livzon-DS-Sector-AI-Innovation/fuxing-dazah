@@ -341,6 +341,14 @@ async def update_draft(
             draft = located
             aligned = dict(draft.aligned or {})
             aligned.update(mapped)
+            # 成品入库（2026-09-28 A 项）：改过的字段清掉对应识别警示
+            # （用户已核对/修正，卡片与网页不再对该字段展示 ⚠）
+            if draft.scene == draft_flow.FINISHED_RECEIPT_SCENE:
+                warnings = aligned.get("warnings")
+                if isinstance(warnings, dict) and warnings:
+                    for key in mapped:
+                        warnings.pop(key, None)
+                    aligned["warnings"] = warnings
             draft.aligned = aligned  # JSONB 重新赋值才触发 UPDATE
             await db.flush()
             # 领料场景：物料/数量/指定批号变化后重算 FIFO 建议（失败转 error，

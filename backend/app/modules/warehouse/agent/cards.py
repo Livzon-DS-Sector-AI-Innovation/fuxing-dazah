@@ -968,6 +968,29 @@ def _finished_receipt_quality_line(aligned: dict[str, Any], recognized: dict[str
     return f"**质量状态**：{status}（{scope}，QC 判定后在台账改判）"
 
 
+def _finished_alignment_lines(aligned: dict[str, Any]) -> list[str]:
+    """成品名录对齐/警示行（2026-09-28 识别完善 A 项）。
+
+    - 命中名录：**产品对齐**：标准名（匹配方式）；近似/前缀方向的细节
+      警示由 warnings 承担（aligner 只在需人工核对时写警示键）；
+    - warnings 逐条 ⚠ 行（产品名未匹配/近似、单位不在历史单位集、批号
+      前缀不符）。对话收集路径 aligned 无元数据键 → 返回空（零回归）。
+    """
+    lines: list[str] = []
+    match = str(aligned.get("match_confidence") or "")
+    if match in ("exact", "prefix", "fuzzy"):
+        match_cn = {"exact": "精确", "prefix": "前缀", "fuzzy": "近似"}[match]
+        name = _clean(aligned.get("product_name"), 60)
+        lines.append(f"**产品对齐**：{name}（名录{match_cn}匹配）")
+    warnings = aligned.get("warnings")
+    if isinstance(warnings, dict):
+        for key in ("product_name", "unit", "product_batch_no"):
+            message = warnings.get(key)
+            if message:
+                lines.append(f"⚠ {_clean(message, 120)}")
+    return lines
+
+
 def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     """成品入库登记确认卡片（scene=finished_receipt 分支，V3.0 §4.6）。
 
@@ -1005,6 +1028,9 @@ def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
                 f"　批 **{row.get('product_batch_no') or '-'}**："
                 f"{row.get('quantity', '-')} {row.get('unit', '')}"
             )
+        align_lines = _finished_alignment_lines(aligned)
+        if align_lines:
+            lines.extend(["", *align_lines])
         lines.extend(["", "**补充信息（以第一行为主）**"])
         for index, (label, key) in enumerate(FINISHED_RECEIPT_OPTIONAL_FIELDS, 1):
             lines.append(
@@ -1038,6 +1064,9 @@ def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         lines.append(
             _field_line(index, label, key, recognized, aligned, warn_on_missing=True)
         )
+    align_lines = _finished_alignment_lines(aligned)
+    if align_lines:
+        lines.extend(["", *align_lines])
     lines.extend(["", "**补充信息（选填）**"])
     for index, (label, key) in enumerate(FINISHED_RECEIPT_OPTIONAL_FIELDS, 1):
         lines.append(

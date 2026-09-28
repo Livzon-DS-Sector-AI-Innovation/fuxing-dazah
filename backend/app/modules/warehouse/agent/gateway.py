@@ -41,10 +41,11 @@ from app.modules.warehouse.agent import repository as agent_repository
 from app.modules.warehouse.agent.cards import build_card, render_reply_card
 from app.modules.warehouse.agent.pipeline import (
     FINISHED_RECEIPT_SCENE,
+    align_finished_receipt,
     align_receipt,
     create_receipt_draft,
     mark_aligned,
-    mark_direct_aligned,
+    mark_finished_aligned,
     recognize_finished_receipt,
     recognize_receipt,
     send_confirm_card,
@@ -840,9 +841,11 @@ async def _process_receipt_image_inner(
                         chat_id=chat_id,
                         scene=FINISHED_RECEIPT_SCENE,
                     )
-                    # 成品无物料主数据对齐（对齐器是原辅料语义）：直接
-                    # created → aligned（aligned 空，确认卡展示识别值+置信度）
-                    await mark_direct_aligned(db, draft)
+                    # 成品名录对齐+字段校验（2026-09-28 A 项，替代裸
+                    # mark_direct_aligned）：标准名/对名行集/警示落 aligned；
+                    # 对齐器拉取失败内部降级 no-op，链路不阻断
+                    aligned_finished = await align_finished_receipt(recognized_finished)
+                    await mark_finished_aligned(db, draft, aligned_finished)
                     await send_confirm_card(
                         db,
                         draft,

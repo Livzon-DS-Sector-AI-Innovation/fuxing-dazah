@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.warehouse.agent import confirm, repository
 from app.modules.warehouse.agent.pipeline.aligner import AlignedReceipt
+from app.modules.warehouse.agent.pipeline.finished_aligner import FinishedAlignedReceipt
 from app.modules.warehouse.agent.pipeline.recognizer import (
     REQUIRED_FIELDS,
     RecognizedFinishedReceipt,
@@ -358,6 +359,40 @@ async def mark_direct_aligned(db: AsyncSession, draft: WarehouseAgentDraft) -> N
         to_status="aligned",
         started=started,
         extra={"direct": True},
+    )
+
+
+async def mark_finished_aligned(
+    db: AsyncSession, draft: WarehouseAgentDraft, aligned: FinishedAlignedReceipt
+) -> None:
+    """created → aligned（成品名录对齐落库，2026-09-28 识别完善 A 项）。
+
+    替代识别路径的 mark_direct_aligned：成品入库识别结果经
+    finished_aligner.align_finished_receipt 做名录对齐+字段校验后落库，
+    aligned JSONB = 对齐字段（标准名/对名行集）+ match_confidence +
+    match_detail + warnings（卡片/网页渲染警示与 submit 取值的输入）。
+    对齐器拉取失败返回 no-op 结果——落库形态不变（元数据键为空），行为
+    与 mark_direct_aligned 等价。
+    """
+    _ensure_transition(draft, "aligned")
+    started = time.monotonic()
+    from_status = draft.status
+    draft.aligned = {
+        **aligned.aligned,
+        "match_confidence": aligned.match_confidence,
+        "match_detail": aligned.match_detail,
+        "warnings": aligned.warnings,
+    }
+    draft.status = "aligned"
+    await db.flush()
+    await _audit_transition(
+        db,
+        draft,
+        action="mark_aligned",
+        from_status=from_status,
+        to_status="aligned",
+        started=started,
+        extra={"finished": True, "match": aligned.match_confidence},
     )
 
 

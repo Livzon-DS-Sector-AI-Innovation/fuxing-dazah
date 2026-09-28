@@ -1413,7 +1413,15 @@ def normalize_finished_receipt_rows(
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
 
     rows: list[dict[str, Any]] = []
-    raw_rows = recognized.get("rows")
+    # aligned["rows"]（成品名录对名行集/网页行编辑，2026-09-28）优先于
+    # recognized.rows——对名后的标准产品名是提交口径；识别原始行留
+    # recognized 审计回溯。行集存在时 scalar quantity 覆盖语义不变。
+    aligned_rows = aligned.get("rows")
+    raw_rows: Any = (
+        aligned_rows
+        if isinstance(aligned_rows, list) and aligned_rows
+        else recognized.get("rows")
+    )
     if isinstance(raw_rows, list):
         for item in raw_rows:
             if not isinstance(item, dict):

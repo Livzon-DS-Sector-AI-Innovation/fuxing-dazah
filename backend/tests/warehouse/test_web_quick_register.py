@@ -1,8 +1,13 @@
-"""快速登记后端测试（分期B Ticket 07）：上传、识别建稿（Web 来源）、确认流转。"""
+"""快速登记后端测试（分期B Ticket 07）：上传、识别建稿（Web 来源）、确认流转。
+
+2026-09-28 识别完善 B 项补充：成品入库识别分支（classify 路由）与
+PATCH /agent/drafts/{id}/fields 表单直改端点。
+"""
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.warehouse import web_quick_register
 from app.modules.warehouse.agent import repository as agent_repository
 from app.modules.warehouse.agent.confirm import ConfirmOutcome
-from app.modules.warehouse.agent.pipeline import RecognizedReceipt
+from app.modules.warehouse.agent.pipeline import (
+    FinishedAlignedReceipt,
+    RecognizedField,
+    RecognizedFinishedReceipt,
+    RecognizedReceipt,
+)
 from app.modules.warehouse.models import WarehouseAgentDraft
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
@@ -169,6 +179,255 @@ async def test_confirm_other_users_draft_not_found(
     monkeypatch.setattr(permission_deps, "get_user_permissions", _limited_perms)
     try:
         resp = await auth_client.get(f"/api/v1/warehouse/agent/drafts/{draft_id}")
+        assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.pop(require_user, None)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 2026-09-28 B 项：成品识别分支 + PATCH 表单直改
+# ═══════════════════════════════════════════════════════════════
+
+
+def _make_finished_recognized() -> RecognizedFinishedReceipt:
+    return RecognizedFinishedReceipt(
+        product_name=RecognizedField(value="达托霉", confidence=0.6),
+        product_batch_no=RecognizedField(value="DA2609001", confidence=0.9),
+        quantity=RecognizedField(value="100", confidence=0.85),
+        unit=RecognizedField(value="pl", confidence=0.4),
+        rows=[
+            {
+                "product_name": "达托霉",
+                "product_batch_no": "DA2609001",
+                "quantity": "100",
+                "unit": "pl",
+            }
+        ],
+    )
+
+
+def _patch_finished_pipeline(monkeypatch) -> None:
+    """成品分支桩：分类=成品 → 识别假件 → 名录对齐假件（近似匹配+警示）。"""
+    recognized = _make_finished_recognized()
+
+    async def fake_classify(image_b64: str, content_type: str = "image/jpeg") -> str:
+        return "finished_receipt"
+
+    async def fake_recognize_finished(
+        image_b64: str,
+        content_type: str = "image/jpeg",
+        user_text: str | None = None,
+    ) -> RecognizedFinishedReceipt:
+        return recognized
+
+    async def fake_align(recognized: RecognizedFinishedReceipt) -> FinishedAlignedReceipt:
+        return FinishedAlignedReceipt(
+            aligned={
+                "product_name": "达托霉素",
+                "rows": [dict(row, product_name="达托霉素") for row in recognized.rows],
+            },
+            match_confidence="fuzzy",
+            match_detail={"key": "达托霉", "matched_by": "fuzzy"},
+            warnings={"product_name": "产品名称按近似匹配「达托霉」→「达托霉素」，请核对"},
+        )
+
+    async def fake_mark_finished(db, draft, aligned) -> None:
+        draft.aligned = {
+            **aligned.aligned,
+            "match_confidence": aligned.match_confidence,
+            "match_detail": aligned.match_detail,
+            "warnings": aligned.warnings,
+        }
+        draft.status = "aligned"
+
+    monkeypatch.setattr(web_quick_register, "classify_document", fake_classify)
+    monkeypatch.setattr(
+        web_quick_register, "recognize_finished_receipt", fake_recognize_finished
+    )
+    monkeypatch.setattr(web_quick_register, "align_finished_receipt", fake_align)
+    monkeypatch.setattr(web_quick_register, "mark_finished_aligned", fake_mark_finished)
+
+
+async def test_finished_recognition_creates_finished_draft(
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_finished_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+
+    resp = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()["data"]
+    assert data["scene"] == "finished_receipt"
+    assert data["aligned"]["product_name"] == "达托霉素"
+    assert data["aligned"]["warnings"]
+
+    draft = (
+        await db_session.execute(
+            select(WarehouseAgentDraft).where(WarehouseAgentDraft.draft_no == data["draft_no"])
+        )
+    ).scalar_one()
+    assert draft.scene == "finished_receipt"
+    assert draft.status == "aligned"
+
+
+async def test_patch_fields_updates_aligned(
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+    created = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    draft_id = created.json()["data"]["draft_id"]
+
+    resp = await auth_client.patch(
+        f"/api/v1/warehouse/agent/drafts/{draft_id}/fields",
+        json={"fields": {"quantity": "55"}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["aligned"]["quantity"] == 55
+
+    draft = await agent_repository.get_agent_draft(db_session, uuid.UUID(draft_id))
+    assert draft is not None and draft.aligned["quantity"] == 55  # aligned working set
+
+
+async def test_patch_rows_replaces_and_syncs_quantity(
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_finished_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+    created = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    draft_id = created.json()["data"]["draft_id"]
+
+    resp = await auth_client.patch(
+        f"/api/v1/warehouse/agent/drafts/{draft_id}/fields",
+        json={
+            "rows": [
+                {
+                    "product_name": "达托霉素",
+                    "product_batch_no": "DA2609001",
+                    "quantity": "60",
+                    "unit": "kg",
+                },
+                {
+                    "product_name": "达托霉素",
+                    "product_batch_no": "DA2609001",
+                    "quantity": "40",
+                    "unit": "kg",
+                },
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    aligned = resp.json()["data"]["aligned"]
+    assert len(aligned["rows"]) == 2
+    assert aligned["quantity"] == 100  # 首组合计同步 scalar quantity
+    # 行编辑不碰的警示元数据保留
+    assert aligned["warnings"]
+
+
+async def test_patch_rejects_unknown_field(
+    auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+    created = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    draft_id = created.json()["data"]["draft_id"]
+
+    resp = await auth_client.patch(
+        f"/api/v1/warehouse/agent/drafts/{draft_id}/fields",
+        json={"fields": {"不存在字段XYZ": "1"}},
+    )
+    assert resp.status_code == 422
+    assert "不支持的字段" in resp.json()["message"]
+
+
+async def test_patch_rejects_invalid_row(
+    auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_finished_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+    created = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    draft_id = created.json()["data"]["draft_id"]
+
+    resp = await auth_client.patch(
+        f"/api/v1/warehouse/agent/drafts/{draft_id}/fields",
+        json={
+            "rows": [
+                {
+                    "product_name": "达托霉素",
+                    "product_batch_no": "DA2609001",
+                    "quantity": "60",
+                    # 缺 unit
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 422
+    assert "行缺少必填字段" in resp.json()["message"]
+
+
+async def test_patch_empty_payload_rejected(
+    auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+    created = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    draft_id = created.json()["data"]["draft_id"]
+
+    resp = await auth_client.patch(
+        f"/api/v1/warehouse/agent/drafts/{draft_id}/fields",
+        json={},
+    )
+    assert resp.status_code == 422
+
+
+async def test_patch_other_users_draft_not_found(
+    auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pipeline(monkeypatch)
+    upload_id = await _upload(auth_client)
+    created = await auth_client.post(
+        "/api/v1/warehouse/agent/recognition",
+        json={"upload_id": upload_id},
+    )
+    draft_id = created.json()["data"]["draft_id"]
+
+    from app.main import app
+    from app.platform.permission import deps as permission_deps
+    from app.platform.permission.deps import require_user
+
+    async def _fake_user() -> object:
+        return object.__new__(
+            type("FakeUser", (), {"id": uuid.uuid4(), "name": "别人"}),
+        )
+
+    async def _limited_perms(user_id: str, db: AsyncSession) -> set[str]:
+        return {"warehouse:movement:create"}
+
+    app.dependency_overrides[require_user] = _fake_user
+    monkeypatch.setattr(permission_deps, "get_user_permissions", _limited_perms)
+    try:
+        resp = await auth_client.patch(
+            f"/api/v1/warehouse/agent/drafts/{draft_id}/fields",
+            json={"fields": {"quantity": "55"}},
+        )
         assert resp.status_code == 404
     finally:
         app.dependency_overrides.pop(require_user, None)

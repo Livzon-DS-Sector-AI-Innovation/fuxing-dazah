@@ -76,6 +76,15 @@ export async function apiPut<T>(url: string, body?: unknown, options?: RequestIn
   return (json as any).data ?? json
 }
 
+export async function apiPatch<T>(url: string, body?: unknown, options?: RequestInit): Promise<T> {
+  const json = await request<T>(url, {
+    ...options,
+    method: 'PATCH',
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  return (json as any).data ?? json
+}
+
 export async function apiDelete<T>(url: string, options?: RequestInit): Promise<T> {
   const json = await request<T>(url, { ...options, method: 'DELETE' })
   return (json as any).data ?? json

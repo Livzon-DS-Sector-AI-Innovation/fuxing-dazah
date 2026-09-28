@@ -785,6 +785,19 @@ class TestGatewayFinishedRoute:
             workshop=RecognizedField(value="提炼工程一部", confidence=0.7),
         )
 
+        from app.modules.warehouse.agent.pipeline import FinishedAlignedReceipt
+
+        async def fake_align_finished(
+            recognized: RecognizedFinishedReceipt,
+        ) -> FinishedAlignedReceipt:
+            # 识别完善 A 项：gateway 成品分支接成品名录对齐（此处桩固定结果）
+            return FinishedAlignedReceipt(
+                aligned={"product_name": "达托霉素"},
+                match_confidence="exact",
+                match_detail={"key": "达托霉素", "matched_by": "exact"},
+                warnings={},
+            )
+
         async def fake_recognize_finished(
             image_b64: str,
             content_type: str = "image/jpeg",
@@ -800,6 +813,7 @@ class TestGatewayFinishedRoute:
         monkeypatch.setattr(
             gateway, "recognize_finished_receipt", fake_recognize_finished
         )
+        monkeypatch.setattr(gateway, "align_finished_receipt", fake_align_finished)
 
         chat_id = f"oc_fr_{uuid.uuid4().hex[:8]}"
         open_id = f"ou_fr_{uuid.uuid4().hex[:6]}"
@@ -816,14 +830,16 @@ class TestGatewayFinishedRoute:
         buttons = _confirm_buttons(confirm_card)
         assert buttons and buttons[0]["value"]["scene"] == FINISHED_RECEIPT_SCENE
 
-        # 草稿 scene/status/recognized 落库；直接对齐（aligned 空）
+        # 草稿 scene/status/recognized 落库；成品名录对齐结果落 aligned
         draft_id = buttons[0]["value"]["draft_id"]
         draft = await agent_db.get(WarehouseAgentDraft, uuid.UUID(draft_id))
         assert draft is not None and draft.scene == FINISHED_RECEIPT_SCENE
         assert draft.status == "pending_confirm"
         rec = draft.recognized if isinstance(draft.recognized, dict) else {}
         assert (rec.get("product_batch_no") or {}).get("value") == "DA2609001"
-        assert draft.aligned == {}
+        assert draft.aligned.get("product_name") == "达托霉素"
+        assert draft.aligned.get("match_confidence") == "exact"
+        assert draft.aligned.get("warnings") == {}
 
         # 模拟点确认（确认置 confirmed → 后台 submit 走 FakeAdapter）
         adapter = FakeAdapter()
