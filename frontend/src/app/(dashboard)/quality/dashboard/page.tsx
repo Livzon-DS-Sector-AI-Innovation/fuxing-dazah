@@ -7,17 +7,11 @@ import {
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
-import type { QualityDashboard, DailyReportItem } from '@/types/quality'
+import { TASK_STATUS_META } from '@/types/quality'
+import type { TestTaskStatus, QualityDashboard, DailyReportItem } from '@/types/quality'
 import { fetchQualityDashboard, fetchDailyReports } from '@/actions/quality'
 
 const { Title, Paragraph, Text } = Typography
-
-const STATUS_LABEL: Record<string, { label: string; color: string }> = {
-  in_progress: { label: '填报中', color: 'processing' },
-  pending_review: { label: '待复核', color: 'warning' },
-  completed: { label: '已完成', color: 'success' },
-  void: { label: '已作废', color: 'default' },
-}
 
 type DashRow = QualityDashboard['today'][number]
 
@@ -33,7 +27,7 @@ function TaskItem({ t }: { t: DashRow }) {
           {t.status === 'completed' && <CheckCircleOutlined style={{ color: token.colorSuccess }} />}
           <Text strong>{t.product_name}</Text>
           <Text type="secondary">批号 {t.batch_number}</Text>
-          <Tag color={STATUS_LABEL[t.status]?.color}>{STATUS_LABEL[t.status]?.label ?? t.status}</Tag>
+          <Tag color={TASK_STATUS_META[t.status as TestTaskStatus]?.color}>{TASK_STATUS_META[t.status as TestTaskStatus]?.label ?? t.status}</Tag>
           {t.report_date && <Text type="secondary">出报 {t.report_date}</Text>}
         </Space>
         <Progress percent={pct} size="small" format={() => `${t.filled}/${t.total}`}

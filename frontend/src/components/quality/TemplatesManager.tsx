@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Table, Button, Space, App, Modal, Select, Upload, Input, Popconfirm, Tag, Typography,
+  Table, Button, Space, App, Modal, Select, Upload, Input, Popconfirm, Tag, Typography, Tabs,
 } from 'antd'
 import {
   UploadOutlined, FolderAddOutlined, DownloadOutlined, DeleteOutlined,
@@ -13,6 +13,7 @@ import {
   fetchTemplates, uploadTemplate, createTemplateFolder, deleteTemplateFolder, deleteTemplateFile,
   bindTemplate, unbindTemplate, fetchStandardDocuments, downloadTemplateFile,
 } from '@/actions/quality'
+import LcTemplateConfigs from './LcTemplateConfigs'
 
 const { Text } = Typography
 
@@ -237,6 +238,13 @@ export default function TemplatesManager() {
   ]
 
   return (
+    <Tabs
+      defaultActiveKey="coa"
+      items={[
+        {
+          key: 'coa',
+          label: 'COA 模板',
+          children: (
     <div className="space-y-3">
       <Space wrap>
         <Input.Search
@@ -324,5 +332,14 @@ export default function TemplatesManager() {
         </div>
       </Modal>
     </div>
+          ),
+        },
+        {
+          key: 'lc',
+          label: '计算表取值配置',
+          children: <LcTemplateConfigs />,
+        },
+      ]}
+    />
   )
 }

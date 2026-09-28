@@ -186,6 +186,14 @@ export interface SummaryTrend {
 
 export type TestTaskStatus = 'in_progress' | 'pending_review' | 'completed' | 'void'
 
+/** 任务状态展示元数据（全模块唯一来源；此前 4 个文件各有一份副本，且 SummaryView 缺 void）。 */
+export const TASK_STATUS_META: Record<TestTaskStatus, { color: string; label: string }> = {
+  in_progress: { color: 'processing', label: '填报中' },
+  pending_review: { color: 'warning', label: '待复核' },
+  completed: { color: 'success', label: '已完成' },
+  void: { color: 'default', label: '已作废' },
+}
+
 export interface TestResultItem {
   id: string
   seq: number | null
@@ -385,4 +393,14 @@ export interface LcTemplateConfig {
   sop_no: string | null
   description: string | null
   config: Record<string, unknown>
+}
+
+
+// ─── 任务报告单 ───
+
+export interface TaskReportItem {
+  report_id: string
+  serial_no: string
+  template_path: string
+  created_at: string | null
 }

@@ -10,6 +10,7 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
+import { TASK_STATUS_META } from '@/types/quality'
 import type { TestTaskListItem, TestTaskStatus } from '@/types/quality'
 import {
   fetchTestTasks, createTestTask, updateTestTaskStatus, deleteTestTask,
@@ -18,13 +19,6 @@ import {
   resolveBatchStandard,
   type StandardDocument,
 } from '@/actions/quality'
-
-const STATUS_META: Record<TestTaskStatus, { color: string; label: string }> = {
-  in_progress: { color: 'processing', label: '填报中' },
-  pending_review: { color: 'warning', label: '待复核' },
-  completed: { color: 'success', label: '已完成' },
-  void: { color: 'default', label: '已作废' },
-}
 
 export default function TaskFillIn() {
   const router = useRouter()
@@ -322,7 +316,7 @@ export default function TaskFillIn() {
         // 「待分配」派生口径与机器人一致：填报中且出报日期在未来
         const derived = v === 'in_progress' && r.report_date && r.report_date > dayjs().format('YYYY-MM-DD')
           ? { color: 'cyan', label: '待分配' }
-          : (STATUS_META[v] ?? { color: 'default', label: v })
+          : (TASK_STATUS_META[v] ?? { color: 'default', label: v })
         return <Tag color={derived.color}>{derived.label}</Tag>
       },
     },
@@ -389,7 +383,7 @@ export default function TaskFillIn() {
           style={{ width: 140 }}
           value={statusFilter}
           onChange={(v) => { setStatusFilter(v); setPage(1) }}
-          options={(Object.keys(STATUS_META) as TestTaskStatus[]).map((s) => ({ label: STATUS_META[s].label, value: s }))}
+          options={(Object.keys(TASK_STATUS_META) as TestTaskStatus[]).map((s) => ({ label: TASK_STATUS_META[s].label, value: s }))}
         />
         <DatePicker
           placeholder="出报日期筛选"

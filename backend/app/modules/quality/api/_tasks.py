@@ -31,6 +31,7 @@ from app.modules.quality.repository import (
     get_task_attachment,
     get_test_task,
     get_test_task_by_batch_number,
+    list_report_records_by_task,
     list_task_attachments,
     list_task_reviews_with_names,
     update_test_task_report_date,
@@ -376,3 +377,21 @@ async def delete_test_task_endpoint(
     if not task:
         raise HTTPException(status_code=404, detail="检验任务不存在")
     return success_response(message="已删除")
+
+
+@router.get("/tasks/{task_id}/reports", summary="任务已生成的报告单列表")
+async def list_task_reports_endpoint(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    reports = await list_report_records_by_task(db, task_id)
+    return success_response(data=[
+        {
+            "report_id": str(r.id),
+            "serial_no": r.serial_no or "-",
+            "template_path": r.template_path,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in reports
+    ])

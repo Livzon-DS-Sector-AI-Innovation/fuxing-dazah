@@ -13,24 +13,20 @@ import {
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
-import type { TestResultItem, TestTaskDetail, TaskAttachment, TaskReviewRecord } from '@/types/quality'
+import { TASK_STATUS_META } from '@/types/quality'
+import type { TestResultItem, TestTaskDetail, TaskAttachment,
+  TaskReportItem, TaskReviewRecord } from '@/types/quality'
 import {
   fetchTestTaskDetail, updateTestResults, addTestResult,
   updateTestTaskStatus, deleteTestResult, parseLcIntoTask,
   generateTaskReports, downloadReportFile,
   fetchTaskAttachments, uploadTaskAttachment, downloadTaskAttachment, deleteTaskAttachment,
   fetchTaskReviews, approveTaskReview,
+  fetchTaskReports,
 } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 
 const { Text } = Typography
-
-const STATUS_META: Record<string, { color: string; label: string }> = {
-  in_progress: { color: 'processing', label: '填报中' },
-  pending_review: { color: 'warning', label: '待复核' },
-  completed: { color: 'success', label: '已完成' },
-  void: { color: 'default', label: '已作废' },
-}
 
 /** 前端判定预览（与后端 _judge_value 同规则，后端判定为最终权威）。 */
 function previewPass(
@@ -76,6 +72,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
   const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
+  const [taskReports, setTaskReports] = useState<TaskReportItem[]>([])
   // 已通过的复核人数：按复核人去重（后端已禁止同一人重复计，防御性去重）
   const approvedCount = new Set(reviews.map((r) => r.reviewer_id)).size
   const [attPreview, setAttPreview] = useState<{ filename: string; url: string; type: string } | null>(null)
@@ -86,12 +83,14 @@ export default function TaskDetail({ id }: { id: string }) {
     try {
       const d = await fetchTestTaskDetail(id)
       setDetail(d)
-      const [atts, revs] = await Promise.all([
+      const [atts, revs, reps] = await Promise.all([
         fetchTaskAttachments(id),
         fetchTaskReviews(id),
+        fetchTaskReports(id),
       ])
       setAttachments(atts.data || [])
       setReviews(revs.data || [])
+      setTaskReports(reps.data || [])
     } catch (err: unknown) {
       setLoadError((err instanceof Error ? err.message : String(err)) || '加载失败')
     } finally {
@@ -123,7 +122,7 @@ export default function TaskDetail({ id }: { id: string }) {
   // 「待分配」派生口径与机器人一致：填报中且出报日期在未来
   const displayStatus = detail.status === 'in_progress' && detail.report_date && detail.report_date > dayjs().format('YYYY-MM-DD')
     ? { color: 'cyan', label: '待分配' }
-    : (STATUS_META[detail.status] ?? { color: 'default', label: detail.status })
+    : (TASK_STATUS_META[detail.status] ?? { color: 'default', label: detail.status })
 
   const editable =
     (detail.status === 'in_progress' && canFill) ||
@@ -262,6 +261,9 @@ export default function TaskDetail({ id }: { id: string }) {
       message.success(files.length
         ? `已按标准文件逐份生成 ${files.length} 份 COA：${files.map((f) => f.file_no).join('、')}`
         : 'COA 已生成（见报告单页面）')
+      // 刷新本任务报告单列表（主链路闭环：生成即见）
+      const reps = await fetchTaskReports(id)
+      setTaskReports(reps.data || [])
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '生成失败')
     } finally {
@@ -495,6 +497,38 @@ export default function TaskDetail({ id }: { id: string }) {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      {taskReports.length > 0 && (
+        <Card size="small" title={`📄 本任务报告单（${taskReports.length} 份）`}>
+          <Table
+            rowKey="report_id"
+            size="small"
+            pagination={false}
+            dataSource={taskReports}
+            columns={[
+              { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 120 },
+              { title: '模板', dataIndex: 'template_path', key: 'template_path', ellipsis: true },
+              {
+                title: '生成时间', dataIndex: 'created_at', key: 'created_at', width: 170,
+                render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN') : '-',
+              },
+              {
+                title: '操作', key: 'actions', width: 150,
+                render: (_: unknown, r: TaskReportItem) => (
+                  <Space size={4}>
+                    <Button size="small" icon={<EyeOutlined />}
+                      onClick={() => setCoaPreviewId(r.report_id)}>预览</Button>
+                    <Button size="small" icon={<DownloadOutlined />}
+                      onClick={() => downloadCoaOne({ report_id: r.report_id, filename: `COA-${detail.batch_number}.docx` })}>
+                      下载
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       <Card size="small" title="检阅清单（按 SOP 匹配的内容填报）">
         <Table

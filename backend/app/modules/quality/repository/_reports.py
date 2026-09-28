@@ -140,3 +140,12 @@ async def list_report_records(
     )
     items = list((await db.execute(stmt)).scalars())
     return items, total
+
+
+async def list_report_records_by_task(db: AsyncSession, task_id: uuid.UUID) -> list[ReportRecord]:
+    """某任务已生成的报告单（按创建时间升序）。"""
+    stmt = select(ReportRecord).where(
+        ReportRecord.test_task_id == task_id,
+        ReportRecord.is_deleted == False,  # noqa: E712
+    ).order_by(ReportRecord.created_at)
+    return list((await db.execute(stmt)).scalars())

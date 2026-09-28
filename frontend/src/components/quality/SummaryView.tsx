@@ -5,18 +5,13 @@ import { useRouter } from 'next/navigation'
 import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch, theme } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DownloadOutlined } from '@ant-design/icons'
-import type { SummaryMatrix, SummaryMatrixRow, SummaryTrend } from '@/types/quality'
+import { TASK_STATUS_META } from '@/types/quality'
+import type { TestTaskStatus, SummaryMatrix, SummaryMatrixRow, SummaryTrend } from '@/types/quality'
 import { fetchSummaryMatrix, fetchSummaryProducts, fetchItemTrend, exportSummaryMatrix } from '@/actions/quality'
 import TrendChart from './TrendChart'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
-
-const STATUS_LABEL: Record<string, { label: string; color: string }> = {
-  completed: { label: '已完成', color: 'success' },
-  pending_review: { label: '待复核', color: 'warning' },
-  in_progress: { label: '填报中', color: 'processing' },
-}
 
 
 export default function SummaryView() {
@@ -99,7 +94,7 @@ export default function SummaryView() {
       { title: '生产日期', dataIndex: 'production_date', key: 'production_date', width: 110, render: (v: string | null) => v || '-' },
       { title: '状态', dataIndex: 'status', key: 'status', width: 90,
         render: (v: string) => {
-          const meta = STATUS_LABEL[v]
+          const meta = TASK_STATUS_META[v as TestTaskStatus]
           return meta ? <Tag color={meta.color}>{meta.label}</Tag> : v
         } },
       { title: '判定', dataIndex: 'all_pass', key: 'all_pass', width: 80,

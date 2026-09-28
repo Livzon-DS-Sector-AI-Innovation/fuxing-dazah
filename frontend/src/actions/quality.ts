@@ -22,6 +22,7 @@ import type {
   MonthlyReportSummary,
   TemplateNode,
   LcTemplateConfig,
+  TaskReportItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -849,5 +850,15 @@ export async function resolveBatchStandard(
     const err: ApiErrorBody = await res.json().catch(() => ({}))
     throw new Error(err.detail || '批号解析失败')
   }
+  return res.json()
+}
+
+
+/** 任务已生成的报告单列表。 */
+export async function fetchTaskReports(taskId: string): Promise<{ data: TaskReportItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/reports`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取任务报告单失败')
   return res.json()
 }
