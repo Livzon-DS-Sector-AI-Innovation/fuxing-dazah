@@ -73,8 +73,8 @@ export default function LcTemplateConfigs() {
       if (editing) {
         await updateLcTemplateConfig(editing.id, {
           product_name: values.product_name,
-          sop_no: values.sop_no || undefined,
-          description: values.description || undefined,
+          sop_no: values.sop_no || null,
+          description: values.description || null,
           config,
         })
         message.success('配置已更新')

@@ -301,7 +301,7 @@ async def update_test_task_report_date_endpoint(
     task_id: uuid.UUID,
     payload: TestTaskReportDateUpdate = Body(...),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:fill")),
+    _user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
     detail = await test_task_service.update_report_date(db, task_id, payload)
     return success_response(
@@ -314,7 +314,7 @@ async def update_test_task_report_date_endpoint(
 async def batch_report_date_endpoint(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:fill")),
+    _user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
     import io as _io
 
@@ -395,6 +395,7 @@ async def list_task_reports_endpoint(
             "report_id": str(r.id),
             "serial_no": r.serial_no or "-",
             "template_path": r.template_path,
+            "filename": r.file_path.rsplit("/", 1)[-1] if r.file_path else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }
         for r in reports

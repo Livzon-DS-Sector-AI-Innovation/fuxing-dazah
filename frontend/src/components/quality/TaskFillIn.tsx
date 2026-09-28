@@ -320,7 +320,7 @@ export default function TaskFillIn() {
           size="small"
           style={{ width: '100%' }}
           value={r.report_date ? dayjs(r.report_date) : null}
-          disabled={r.status === 'void' || !canFill}
+          disabled={r.status === 'void' || !canCreate}
           placeholder="补录"
           onChange={async (d) => {
             try {
@@ -421,7 +421,7 @@ export default function TaskFillIn() {
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
         )}
-        {canFill && (
+        {canCreate && (
           <Button size="small" type="link" icon={<DownloadOutlined />} onClick={async () => {
             try {
               const blob = await downloadReportDateTemplate()
@@ -436,7 +436,7 @@ export default function TaskFillIn() {
             }
           }}>模板</Button>
         )}
-        {canFill && (
+        {canCreate && (
           <Upload
             accept=".xlsx,.xls"
             showUploadList={false}

@@ -402,5 +402,6 @@ export interface TaskReportItem {
   report_id: string
   serial_no: string
   template_path: string
+  filename: string | null
   created_at: string | null
 }

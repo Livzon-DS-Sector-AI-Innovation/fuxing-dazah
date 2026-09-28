@@ -521,7 +521,7 @@ export default function TaskDetail({ id }: { id: string }) {
                     <Button size="small" icon={<EyeOutlined />}
                       onClick={() => setCoaPreviewId(r.report_id)}>预览</Button>
                     <Button size="small" icon={<DownloadOutlined />}
-                      onClick={() => downloadCoaOne({ report_id: r.report_id, filename: `COA-${detail.batch_number}.docx` })}>
+                      onClick={() => downloadCoaOne({ report_id: r.report_id, filename: r.filename || `COA-${detail.batch_number}.docx` })}>
                       下载
                     </Button>
                   </Space>

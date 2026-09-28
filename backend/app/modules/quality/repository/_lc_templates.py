@@ -57,7 +57,8 @@ async def update_lc_template_config(
     if not cfg:
         return None
     for key, val in kwargs.items():
-        if hasattr(cfg, key) and val is not None:
+        # 允许 None：清空可选字段（SOP/描述）是合法编辑
+        if hasattr(cfg, key):
             setattr(cfg, key, val)
     await db.flush()
     return cfg

@@ -163,7 +163,9 @@ async def quality_dashboard(
 
 
 @router.get("/tasks/report-date-template", summary="下载出报日期批量补录 Excel 模板")
-async def report_date_template_endpoint() -> StreamingResponse:
+async def report_date_template_endpoint(
+    _user: User = Depends(require_permission("quality:task:create")),
+) -> StreamingResponse:
     import io as _io
 
     import openpyxl

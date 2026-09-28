@@ -204,7 +204,7 @@ async def update_lc_template_config_endpoint(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
-    cfg = await update_lc_template_config(db, cfg_id, **payload.model_dump())
+    cfg = await update_lc_template_config(db, cfg_id, **payload.model_dump(exclude_unset=True))
     if not cfg:
         raise HTTPException(status_code=404, detail="模板配置不存在")
     return success_response(data={"id": str(cfg.id)}, message="模板配置已更新")
