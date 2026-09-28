@@ -243,3 +243,14 @@ async def list_coa_bindings_by_docs(
         CoaTemplateBinding.is_deleted == False,  # noqa: E712
     ).order_by(CoaTemplateBinding.created_at)
     return list((await db.execute(stmt)).scalars())
+
+
+async def delete_coa_binding_by_doc(db: AsyncSession, doc_id: uuid.UUID) -> bool:
+    """按标准文档解绑 COA 模板（标准文件详情为唯一绑定维护入口）。"""
+    bindings = await list_coa_bindings_by_docs(db, [doc_id])
+    if not bindings:
+        return False
+    for b in bindings:
+        b.is_deleted = True
+    await db.flush()
+    return True

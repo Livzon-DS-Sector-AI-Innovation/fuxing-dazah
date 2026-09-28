@@ -862,3 +862,24 @@ export async function fetchTaskReports(taskId: string): Promise<{ data: TaskRepo
   if (!res.ok) throw new Error('获取任务报告单失败')
   return res.json()
 }
+
+
+/** 标准文件当前绑定的 COA 模板（标准文件详情为绑定唯一维护入口）。 */
+export async function fetchDocCoaBinding(docId: string): Promise<{
+  data: { template_path: string; description: string | null } | null
+}> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents/${docId}/coa-binding`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取模板绑定失败')
+  return res.json()
+}
+
+/** 解绑标准文件的 COA 模板。 */
+export async function unbindDocCoaBinding(docId: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents/${docId}/coa-binding`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('解绑失败')
+  return res.json()
+}

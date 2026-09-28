@@ -19,6 +19,7 @@ import {
   fetchStandardItems, createStandardItem, updateStandardItem, deleteStandardItem,
   importStandardDocPreview, importStandardDocConfirm, fetchTemplates, bindTemplate,
   type StandardDocument, type StandardItem, type StandardImportDraft, type StandardImportDraftItem,
+  fetchDocCoaBinding, unbindDocCoaBinding,
 } from '@/actions/quality'
 import { ImportConfirmModal } from '@/components/quality'
 import type { ImportDraftDocument } from '@/components/quality/ImportConfirmModal'
@@ -319,8 +320,13 @@ export default function StandardsPage() {
 
   const openBindModal = async (doc: StandardDocument) => {
     setBindDoc(doc)
-    setBindValue(doc.template_path || undefined)
     setBindOpen(true)
+    try {
+      const binding = await fetchDocCoaBinding(doc.id)
+      setBindValue(binding.data?.template_path || undefined)
+    } catch {
+      setBindValue(undefined)
+    }
     try {
       const tree = await fetchTemplates()
       const paths = flattenTemplates(tree)
@@ -335,15 +341,21 @@ export default function StandardsPage() {
   }
 
   const handleBindSave = async () => {
-    if (!bindDoc || !bindValue) return
+    if (!bindDoc) return
     try {
-      // COA 侧绑定：模板路径 → 标准文档（一份 COA 唯一绑定一份 SOP）
-      await bindTemplate(bindValue, bindDoc.id)
-      message.success('模板绑定已保存')
+      // COA 侧绑定：模板路径 → 标准文档（一份 COA 唯一绑定一份 SOP）；
+      // 选择「（不绑定模板）」即解绑
+      if (bindValue) {
+        await bindTemplate(bindValue, bindDoc.id)
+        message.success('模板绑定已保存')
+      } else {
+        await unbindDocCoaBinding(bindDoc.id)
+        message.success('已解绑')
+      }
       setBindOpen(false)
       loadDocs()
     } catch (err: unknown) {
-      message.error((err instanceof Error ? err.message : String(err)) || '绑定失败')
+      message.error((err instanceof Error ? err.message : String(err)) || '绑定保存失败')
     }
   }
 

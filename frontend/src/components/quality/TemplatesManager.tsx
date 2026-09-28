@@ -11,7 +11,7 @@ import { usePermission } from '@/hooks/usePermission'
 import type { TemplateNode } from '@/types/quality'
 import {
   fetchTemplates, uploadTemplate, createTemplateFolder, deleteTemplateFolder, deleteTemplateFile,
-  bindTemplate, unbindTemplate, fetchStandardDocuments, downloadTemplateFile,
+  downloadTemplateFile,
 } from '@/actions/quality'
 import LcTemplateConfigs from './LcTemplateConfigs'
 
@@ -64,10 +64,6 @@ export default function TemplatesManager() {
   const [uploadFolder, setUploadFolder] = useState('')
   const [newFolderName, setNewFolderName] = useState('')
 
-  const [bindOpen, setBindOpen] = useState(false)
-  const [bindPath, setBindPath] = useState('')
-  const [bindDocId, setBindDocId] = useState<string | undefined>()
-  const [docOptions, setDocOptions] = useState<{ label: string; value: string }[]>([])
 
   const handleDownload = async (path: string, filename: string) => {
     try {
@@ -80,41 +76,6 @@ export default function TemplatesManager() {
       URL.revokeObjectURL(url)
     } catch {
       message.error('下载失败')
-    }
-  }
-
-  const openBindModal = async (path: string) => {
-    setBindPath(path)
-    setBindDocId(undefined)
-    setBindOpen(true)
-    try {
-      const res = await fetchStandardDocuments()
-      setDocOptions((res.data || []).map((d) => ({ label: `${d.product_code || '-'} ${d.file_no}（${d.product_name.slice(0, 12)}）`, value: d.id })))
-    } catch { message.warning('标准文档选项加载失败') }
-  }
-
-  const handleBind = async () => {
-    if (!bindDocId) {
-      message.warning('请选择要绑定的标准文档（SOP）')
-      return
-    }
-    try {
-      await bindTemplate(bindPath, bindDocId)
-      message.success('模板已绑定')
-      setBindOpen(false)
-      load()
-    } catch (err: unknown) {
-      message.error((err instanceof Error ? err.message : String(err)) || '绑定失败')
-    }
-  }
-
-  const handleUnbind = async (path: string) => {
-    try {
-      await unbindTemplate(path)
-      message.success('已解绑')
-      load()
-    } catch (err: unknown) {
-      message.error((err instanceof Error ? err.message : String(err)) || '解绑失败')
     }
   }
 
@@ -132,7 +93,7 @@ export default function TemplatesManager() {
     }
   }, [message])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { (async () => { await load() })() }, [load])
 
   const handleUpload = async (file: File) => {
     const fd = new FormData()
@@ -195,7 +156,7 @@ export default function TemplatesManager() {
   const columns = [
     { title: '模板路径', dataIndex: 'path', key: 'path', ellipsis: true },
     {
-      title: '绑定 SOP', dataIndex: 'binding', key: 'binding', width: 180,
+      title: '绑定 SOP（在标准文件详情维护）', dataIndex: 'binding', key: 'binding', width: 220,
       render: (v: FlatTemplate['binding']) => v?.sop_no ? (
         <Tag color="green">{v.sop_no}</Tag>
       ) : (
@@ -213,15 +174,10 @@ export default function TemplatesManager() {
       title: '操作', key: 'actions', width: 220,
       render: (_: unknown, r: FlatTemplate) => (
         <Space>
-          {canManage && r.binding?.sop_no ? (
-            <Button size="small" onClick={() => openBindModal(r.path)}>换绑</Button>
-          ) : canManage ? (
-            <Button size="small" type="primary" onClick={() => openBindModal(r.path)}>绑定SOP</Button>
-          ) : null}
-          {canManage && r.binding?.sop_no && (
-            <Popconfirm title="确认解绑?" onConfirm={() => handleUnbind(r.path)}>
-              <Button size="small">解绑</Button>
-            </Popconfirm>
+          {r.binding?.sop_no && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              绑定请在标准文件详情维护
+            </Typography.Text>
           )}
           <Button size="small" icon={<DownloadOutlined />}
             onClick={() => handleDownload(r.path, r.filename)}>
@@ -285,28 +241,6 @@ export default function TemplatesManager() {
         loading={loading}
         pagination={false}
       />
-
-      <Modal
-        title={`绑定 SOP —— ${bindPath}`}
-        open={bindOpen}
-        onCancel={() => setBindOpen(false)}
-        onOk={handleBind}
-        okText="绑定"
-        width={520}
-      >
-        <div className="mt-4 space-y-2">
-          <Text type="secondary">一份 COA 模板唯一绑定一份 SOP；一份 SOP 可绑定多份 COA 模板。</Text>
-          <Select
-            showSearch
-            optionFilterProp="label"
-            style={{ width: '100%' }}
-            placeholder="选择标准文档（SOP）"
-            value={bindDocId}
-            onChange={setBindDocId}
-            options={docOptions}
-          />
-        </div>
-      </Modal>
 
       <Modal
         title="上传报告模板（.docx）"

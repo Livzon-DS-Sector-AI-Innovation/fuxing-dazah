@@ -23,7 +23,9 @@ from app.modules.quality.models import QualityStandardDocument, QualityStandardI
 from app.modules.quality.repository import (
     create_standard_document,
     create_standard_item,
+    delete_coa_binding_by_doc,
     delete_standard_document,
+    list_coa_bindings_by_docs,
     list_standard_documents,
     list_standard_documents_by_product,
     list_standard_items,
@@ -425,3 +427,31 @@ async def resolve_batch_standard(
             for d in docs
         ],
     })
+
+
+@router.get("/standards/documents/{doc_id}/coa-binding", summary="标准文件当前绑定的 COA 模板")
+async def get_doc_coa_binding_endpoint(
+    doc_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:inspection:read")),
+) -> JSONResponse:
+    bindings = await list_coa_bindings_by_docs(db, [doc_id])
+    if not bindings:
+        return success_response(data=None)
+    b = bindings[0]
+    return success_response(data={
+        "template_path": b.template_path,
+        "description": b.description,
+    })
+
+
+@router.delete("/standards/documents/{doc_id}/coa-binding", summary="解绑标准文件的 COA 模板")
+async def delete_doc_coa_binding_endpoint(
+    doc_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:template:manage")),
+) -> JSONResponse:
+    ok = await delete_coa_binding_by_doc(db, doc_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="该标准文件无绑定")
+    return success_response(message="已解绑")
