@@ -25,6 +25,7 @@ from app.modules.quality.repository import (
     create_standard_item,
     delete_coa_binding_by_doc,
     delete_standard_document,
+    delete_standard_item,
     list_coa_bindings_by_docs,
     list_standard_documents,
     list_standard_documents_by_product,
@@ -291,9 +292,12 @@ async def import_standard_doc(
 async def list_standard_docs(
     product_name: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:inspection:read")),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     docs = await list_standard_documents(db, product_name=product_name)
+    # 批量查绑定（一次查询），列表直接展示真实 COA 绑定（与绑定表同源）
+    bindings = await list_coa_bindings_by_docs(db, [d.id for d in docs])
+    binding_by_doc = {b.standard_document_id: b for b in bindings if b.standard_document_id}
     return success_response(data=[
         {
             "id": str(d.id),
@@ -306,6 +310,13 @@ async def list_standard_docs(
             "effective_date": d.effective_date,
             "version": d.version,
             "template_path": d.template_path,
+            "coa_binding": (
+                {
+                    "template_path": b.template_path,
+                    "description": b.description,
+                }
+                if (b := binding_by_doc.get(d.id)) else None
+            ),
             "created_at": d.created_at.isoformat() if d.created_at else None,
         }
         for d in docs
@@ -350,7 +361,7 @@ async def delete_standard_doc(
 @router.get("/standards/documents/{doc_id}/items", summary="标准项目行列表")
 async def list_standard_doc_items(
     doc_id: uuid.UUID, db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:inspection:read")),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     items = await list_standard_items(db, doc_id)
     return success_response(data=[
@@ -380,6 +391,18 @@ async def create_standard_doc_item(
 ) -> JSONResponse:
     it = await create_standard_item(db, doc_id, payload.model_dump())
     return success_response(data={"id": str(it.id)}, message="已添加", status_code=201)
+
+
+@router.delete("/standards/items/{item_id}", summary="删除标准项目行（软删除）")
+async def delete_standard_item_endpoint(
+    item_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    item = await delete_standard_item(db, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="标准项目行不存在")
+    return success_response(message="已删除")
 
 
 @router.put("/standards/items/{item_id}", summary="更新标准项目行")
@@ -433,7 +456,7 @@ async def resolve_batch_standard(
 async def get_doc_coa_binding_endpoint(
     doc_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:inspection:read")),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     bindings = await list_coa_bindings_by_docs(db, [doc_id])
     if not bindings:
@@ -451,7 +474,5 @@ async def delete_doc_coa_binding_endpoint(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:template:manage")),
 ) -> JSONResponse:
-    ok = await delete_coa_binding_by_doc(db, doc_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="该标准文件无绑定")
+    await delete_coa_binding_by_doc(db, doc_id)
     return success_response(message="已解绑")

@@ -64,7 +64,8 @@ function ReportPageInner() {
       const walk = (nodes: TemplateNode[], prefix = '') => {
         for (const n of nodes || []) {
           if (n.children) walk(n.children, `${prefix}${n.name}/`)
-          else files.push({ label: `${prefix}${n.name}`, value: `${prefix}${n.name}` })
+          // 文件节点字段是 filename（name 仅文件夹有）——此前取 n.name 恒为 undefined
+          else files.push({ label: `${prefix}${n.filename ?? ''}`, value: `${prefix}${n.filename ?? ''}` })
         }
       }
       walk(tpls)

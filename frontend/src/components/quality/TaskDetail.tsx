@@ -261,9 +261,11 @@ export default function TaskDetail({ id }: { id: string }) {
       message.success(files.length
         ? `已按标准文件逐份生成 ${files.length} 份 COA：${files.map((f) => f.file_no).join('、')}`
         : 'COA 已生成（见报告单页面）')
-      // 刷新本任务报告单列表（主链路闭环：生成即见）
-      const reps = await fetchTaskReports(id)
-      setTaskReports(reps.data || [])
+      // 刷新本任务报告单列表（主链路闭环：生成即见）；刷新失败不影响成功提示
+      try {
+        const reps = await fetchTaskReports(id)
+        setTaskReports(reps.data || [])
+      } catch { /* 忽略刷新失败 */ }
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '生成失败')
     } finally {
@@ -544,7 +546,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
       <Card size="small" title="🔎 原始证据（计算表 / 电子图谱，持久化归档随时调取）">
         <Space style={{ marginBottom: 12 }} wrap>
-          {(canFill || canReview) && (
+          {canFill && (
             <Upload showUploadList={false} beforeUpload={handleAttUpload}>
               <Button icon={<UploadOutlined />}>上传原始证据</Button>
             </Upload>

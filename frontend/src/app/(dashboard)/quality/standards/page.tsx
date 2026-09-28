@@ -319,14 +319,18 @@ export default function StandardsPage() {
   }
 
   const openBindModal = async (doc: StandardDocument) => {
-    setBindDoc(doc)
-    setBindOpen(true)
+    // 先取当前绑定再开窗：避免弹窗首帧串用上一份文档的值
+    let current: string | undefined
     try {
       const binding = await fetchDocCoaBinding(doc.id)
-      setBindValue(binding.data?.template_path || undefined)
+      current = binding.data?.template_path || undefined
     } catch {
-      setBindValue(undefined)
+      message.error('获取当前绑定失败，请重试')
+      return
     }
+    setBindDoc(doc)
+    setBindValue(current)
+    setBindOpen(true)
     try {
       const tree = await fetchTemplates()
       const paths = flattenTemplates(tree)
@@ -346,7 +350,7 @@ export default function StandardsPage() {
       // COA 侧绑定：模板路径 → 标准文档（一份 COA 唯一绑定一份 SOP）；
       // 选择「（不绑定模板）」即解绑
       if (bindValue) {
-        await bindTemplate(bindValue, bindDoc.id)
+        await bindTemplate(bindValue, bindDoc.id, true)
         message.success('模板绑定已保存')
       } else {
         await unbindDocCoaBinding(bindDoc.id)
@@ -500,7 +504,7 @@ export default function StandardsPage() {
                     { label: '有效期', children: activeDoc.valid_years || '-' },
                     {
                       label: '绑定模板',
-                      children: activeDoc.template_path ? <Tag color="green">{activeDoc.template_path}</Tag> : <Tag color="orange">未绑定</Tag>,
+                      children: activeDoc.coa_binding?.template_path ?? activeDoc.template_path ? <Tag color="green">{activeDoc.coa_binding?.template_path ?? activeDoc.template_path}</Tag> : <Tag color="orange">未绑定</Tag>,
                     },
                   ]}
                 />

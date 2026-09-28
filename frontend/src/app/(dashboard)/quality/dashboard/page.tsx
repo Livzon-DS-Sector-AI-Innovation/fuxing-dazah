@@ -27,7 +27,11 @@ function TaskItem({ t }: { t: DashRow }) {
           {t.status === 'completed' && <CheckCircleOutlined style={{ color: token.colorSuccess }} />}
           <Text strong>{t.product_name}</Text>
           <Text type="secondary">批号 {t.batch_number}</Text>
-          <Tag color={TASK_STATUS_META[t.status as TestTaskStatus]?.color}>{TASK_STATUS_META[t.status as TestTaskStatus]?.label ?? t.status}</Tag>
+          {t.status === 'in_progress' && t.report_date && t.report_date > dayjs().format('YYYY-MM-DD') ? (
+            <Tag color="cyan">待分配</Tag>
+          ) : (
+            <Tag color={TASK_STATUS_META[t.status as TestTaskStatus]?.color}>{TASK_STATUS_META[t.status as TestTaskStatus]?.label ?? t.status}</Tag>
+          )}
           {t.report_date && <Text type="secondary">出报 {t.report_date}</Text>}
         </Space>
         <Progress percent={pct} size="small" format={() => `${t.filled}/${t.total}`}

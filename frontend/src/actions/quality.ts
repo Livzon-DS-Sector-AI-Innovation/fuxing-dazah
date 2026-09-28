@@ -188,6 +188,7 @@ export interface StandardDocument {
   effective_date: string | null
   version: string | null
   template_path: string | null
+  coa_binding: { template_path: string; description: string | null } | null
 }
 
 export interface StandardItem {
@@ -391,11 +392,11 @@ export async function deleteTemplateFolder(name: string): Promise<{ message: str
 }
 
 export async function bindTemplate(
-  template_path: string, standard_document_id: string,
+  template_path: string, standard_document_id: string, replaceExisting = false,
 ): Promise<{ message: string; data: { template_path: string; sop_no: string | null; standard_document_id: string | null } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/bindings`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ template_path, standard_document_id }),
+    body: JSON.stringify({ template_path, standard_document_id, replace_existing: replaceExisting }),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))

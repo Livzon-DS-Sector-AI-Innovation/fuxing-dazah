@@ -29,6 +29,7 @@ from app.modules.quality.api._common import (
 )
 from app.modules.quality.repository import (
     delete_coa_binding,
+    delete_coa_binding_by_doc,
     get_standard_document,
     list_coa_bindings,
     list_standard_documents,
@@ -135,6 +136,7 @@ async def upsert_template_binding(
     standard_document_id: uuid.UUID | None = Body(default=None, embed=True),
     sop_no: str | None = Body(default=None, embed=True),
     description: str | None = Body(default=None, embed=True),
+    replace_existing: bool = Body(default=False, embed=True, description="按文档换绑：先删除该文档已有绑定再新建"),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:template:manage")),
 ) -> JSONResponse:
@@ -145,6 +147,10 @@ async def upsert_template_binding(
         if not doc:
             raise HTTPException(status_code=404, detail="标准文档不存在")
         sop_no = doc.file_no
+        if replace_existing:
+            # 标准文件详情弹窗是单选语义：先清该文档旧绑定再建新绑定
+            # （此前只新增不删旧，生成 COA 取最早绑定 → 换绑不生效）
+            await delete_coa_binding_by_doc(db, standard_document_id)
     binding = await upsert_coa_binding(
         db, template_path=template_path,
         standard_document_id=standard_document_id, sop_no=sop_no, description=description,

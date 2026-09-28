@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { usePermission } from '@/hooks/usePermission'
 import { Card, Table, Button, Space, App, Modal, Form, Input, Popconfirm, Tag, Typography } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import type { LcTemplateConfig } from '@/types/quality'
@@ -16,6 +17,8 @@ const { Text } = Typography
 /** 液相计算表模板配置维护：表号（EX-xx-xxxx-vvv）→ 取值配置 JSON。 */
 export default function LcTemplateConfigs() {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('quality:standard:manage')
   const [items, setItems] = useState<LcTemplateConfig[]>([])
   const [loading, setLoading] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
@@ -116,7 +119,10 @@ export default function LcTemplateConfigs() {
       title: '操作', key: 'actions', width: 120,
       render: (_: unknown, r: LcTemplateConfig) => (
         <Space size={4}>
+          {canManage && (
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+          )}
+          {canManage && (
           <Popconfirm
             title={`确认删除配置 ${r.table_no}？`}
             description="删除后该表号的计算表将回落到旧解析器"
@@ -127,6 +133,7 @@ export default function LcTemplateConfigs() {
           >
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -136,7 +143,7 @@ export default function LcTemplateConfigs() {
     <Card
       size="small"
       title="液相计算表模板配置（表号 → 取值位置）"
-      extra={<Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新增配置</Button>}
+      extra={canManage ? <Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新增配置</Button> : null}
     >
       <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
         表号来自计算表标题（如 EX-HA-5246-001）；新增产品线时在此登记表号与取值区块。

@@ -1,15 +1,18 @@
 'use client'
 
 import { useState } from 'react'
+import { usePermission } from '@/hooks/usePermission'
 import { Typography, Divider, Empty, Button, Space, Table, Tag } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
-import { LcUploader, LcReportView, LcTemplateConfigs } from '@/components/quality'
+import { LcUploader, LcReportView } from '@/components/quality'
 import type { UploadLcResponse } from '@/types/quality'
 
 const { Title, Paragraph } = Typography
 
 export default function QualityPage() {
+  const { hasPermission } = usePermission()
+  const canUpload = hasPermission('quality:lc:upload')
   const [result, setResult] = useState<UploadLcResponse | null>(null)
 
   return (
@@ -21,7 +24,11 @@ export default function QualityPage() {
         上传液相计算表 Excel，自动解析峰面积、计算结果和质量标准，执行合格/超趋势判定。
       </Paragraph>
 
-      <LcUploader onResult={setResult} />
+      {canUpload ? (
+        <LcUploader onResult={setResult} />
+      ) : (
+        <Paragraph type="secondary">没有上传液相计算表的权限</Paragraph>
+      )}
 
       {result && result.record_id && (
         <Space style={{ marginTop: 12 }}>
@@ -68,9 +75,6 @@ export default function QualityPage() {
         </div>
       )}
 
-      <div style={{ marginTop: 24 }}>
-        <LcTemplateConfigs />
-      </div>
     </div>
   )
 }

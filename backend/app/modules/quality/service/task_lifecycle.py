@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
@@ -117,18 +118,27 @@ class _TaskLifecycle(_TaskCore):
         expiry_date = _norm_date_str(payload.expiry_date) or _TaskLifecycle._calc_expiry(
             production_date, primary.valid_years
         )
-        task = await create_test_task(
-            db,
-            product_name=payload.product_name,
-            batch_number=payload.batch_number,
-            production_date=production_date,
-            expiry_date=expiry_date,
-            specification=payload.specification,
-            form_id=payload.form_id,
-            standard_document_id=primary.id,
-            report_date=report_date,
-            standard_document_ids=[str(d.id) for d in docs],
-        )
+        try:
+            task = await create_test_task(
+                db,
+                product_name=payload.product_name,
+                batch_number=payload.batch_number,
+                production_date=production_date,
+                expiry_date=expiry_date,
+                specification=payload.specification,
+                form_id=payload.form_id,
+                standard_document_id=primary.id,
+                report_date=report_date,
+                standard_document_ids=[str(d.id) for d in docs],
+            )
+        except IntegrityError as exc:
+            # 并发建任务撞唯一索引：应用层查重非原子，DB 兜底转 409
+            if "uq_quality_test_task" in str(exc.orig):
+                raise AppException(
+                    status_code=409,
+                    detail="该产品+批号已存在检验任务，请直接进入该任务继续填报",
+                ) from exc
+            raise
         # 按 (sop_no, item_name) 去重（多个子项目可共用同一 SOP 号；防跨文档重复）
         seen_keys: set[tuple[str, str]] = set()
         snapshot = []

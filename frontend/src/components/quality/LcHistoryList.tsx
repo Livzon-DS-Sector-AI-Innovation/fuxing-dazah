@@ -17,12 +17,12 @@ export default function LcHistoryList() {
   const [data, setData] = useState<InspectionRecordListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
-  const [productDraft, setProductDraft] = useState('')
-  const [batchDraft, setBatchDraft] = useState('')
-  const [productSearch, setProductSearch] = useState('')
   // 深链 ?batch_number=（任务详情「检验记录」跳转带批号）首帧读入
   const searchParams = useSearchParams()
+  // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
+  const [productDraft, setProductDraft] = useState('')
+  const [batchDraft, setBatchDraft] = useState(() => searchParams.get('batch_number') || '')
+  const [productSearch, setProductSearch] = useState('')
   const [batchSearch, setBatchSearch] = useState(
     () => searchParams.get('batch_number') || ''
   )

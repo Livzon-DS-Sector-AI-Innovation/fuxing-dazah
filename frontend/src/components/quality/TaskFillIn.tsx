@@ -128,8 +128,34 @@ export default function TaskFillIn() {
           if (!cancelled) setResolved({ key: `${product}|${batch}`, ...res.data })
         } catch (err: unknown) {
           if (!cancelled) {
-            setResolved(null)
-            message.warning((err instanceof Error ? err.message : String(err)) || '批号解析失败')
+            // 本地兜底：后端解析不可用（网络/权限/后端异常）时，
+            // 用已加载的标准文档做同样的前缀匹配，避免弹窗死锁无法建任务
+            const docs = productDocsRef.current.filter(
+              (d) => nameKey(d.product_name) === nameKey(product) && d.product_code?.trim(),
+            )
+            const codes = [...new Set(docs.map((d) => d.product_code!.trim().toUpperCase()))]
+              .sort((a, b) => b.length - a.length)
+            const b = batch.toUpperCase()
+            const code = codes.find((c) => b.startsWith(c)) ?? null
+            setResolved({
+              key: `${product}|${batch}`,
+              product_code: code,
+              known_codes: codes,
+              documents: code
+                ? docs
+                    .filter((d) => d.product_code!.trim().toUpperCase() === code)
+                    .map((d) => ({
+                      id: d.id,
+                      file_no: d.file_no,
+                      product_code: d.product_code,
+                      specification: d.specification,
+                      valid_years: d.valid_years,
+                    }))
+                : [],
+            })
+            message.warning(
+              (err instanceof Error ? err.message : String(err)) || '批号解析失败',
+            )
           }
         } finally {
           if (!cancelled) setResolving(false)

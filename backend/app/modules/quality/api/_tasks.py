@@ -34,7 +34,6 @@ from app.modules.quality.repository import (
     list_report_records_by_task,
     list_task_attachments,
     list_task_reviews_with_names,
-    update_test_task_report_date,
 )
 from app.modules.quality.schemas import (
     TestResultCreate,
@@ -204,7 +203,9 @@ async def upload_task_attachment_endpoint(
 
 @router.get("/tasks/{task_id}/attachments", summary="任务原始证据附件列表")
 async def list_task_attachments_endpoint(
-    task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     items = await list_task_attachments(db, task_id)
     return success_response(data=[
@@ -349,7 +350,10 @@ async def batch_report_date_endpoint(
         if not task:
             skipped.append(f"{batch}:未找到任务")
             continue
-        await update_test_task_report_date(db, task.id, report_date)
+        # 走 service 单条路径：出报日期=今天时触发飞书推送（与单条补录口径一致）
+        await test_task_service.update_report_date(
+            db, task.id, TestTaskReportDateUpdate(report_date=report_date)
+        )
         updated += 1
     return success_response(
         data={"updated": updated, "skipped": skipped},
