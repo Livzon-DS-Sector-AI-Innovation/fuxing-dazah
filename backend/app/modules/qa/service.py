@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.exceptions import (
     AppException,
     DuplicateException,
@@ -30,6 +32,7 @@ from app.modules.qa.models import (
     Document,
     DocumentChunkBlock,
     DocumentChunkRun,
+    DocumentExtractionArtifact,
     DocumentExtractionRun,
     DocumentFile,
     DocumentMasterLink,
@@ -100,6 +103,45 @@ def normalize_code(value: str) -> str:
 
 def normalize_text(value: str) -> str:
     return " ".join(value.strip().upper().split())
+
+
+def _retrieval_fields(value: Any, raw_content: str) -> tuple[str, str, int, int]:
+    """返回解析器派生的检索文本与哈希，并兼容旧解析契约。
+
+    ``content`` 是 raw 证据，不能为了清洗 HTML 而覆盖。新解析器在
+    ``RawBlock``/``DocumentChunk`` 上提供只读 ``retrieval_text`` 和
+    ``retrieval_text_hash``；native/legacy 调用方没有这些属性时回退到
+    原文，使 service 在迁移期间仍可保存旧格式结果。一次调用同时计算
+    字符数和 token 估算，避免大型 HTML 表格被重复解析。
+    """
+
+    retrieval_text = getattr(value, "retrieval_text", None)
+    if retrieval_text is None:
+        retrieval_text = raw_content
+    retrieval_text = str(retrieval_text)
+    # 不再读取 dataclass 的 ``retrieval_text_hash`` property：它会再次执行
+    # HTMLParser。相同文本的哈希在这里直接计算一次即可。
+    retrieval_hash = hashlib.sha256(retrieval_text.encode("utf-8")).hexdigest()
+    return (
+        retrieval_text,
+        str(retrieval_hash),
+        len(retrieval_text),
+        _retrieval_token_count(retrieval_text),
+    )
+
+
+def _retrieval_token_count(value: str) -> int:
+    """与文档分块层一致的稳定 token 估算，避免绑定具体 embedding 模型。"""
+
+    if not value:
+        return 0
+    return max(
+        1,
+        int(
+            len(re.findall(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\w\s]", value))
+            * 1.05
+        ),
+    )
 
 
 def _require_text(value: Any, label: str) -> str:
@@ -1365,6 +1407,7 @@ async def process_file(
         CHUNK_VERSION,
         PARSER_VERSION,
     )
+    from app.modules.qa.markdown_processing import RETRIEVAL_TEXT_VERSION
 
     # 调度器在网络/进程边界可能发生至少一次投递；同一个 lease token
     # 已经有 processing run 时直接复用，避免重复追加 raw block/chunk。
@@ -1383,6 +1426,7 @@ async def process_file(
         return file_row
 
     parser_mode = (file_row.parser_mode or "native_text").strip() or "native_text"
+    configured_provider = get_settings().QA_MD_EXTRACT_PROVIDER.strip().casefold() or "mineru"
     input_hash = hashlib.sha256(
         # 解析输入哈希只描述原文件和解析器；分块版本单独进入 chunk
         # 运行哈希，便于未来只升级分块算法时复用 raw block。
@@ -1394,6 +1438,7 @@ async def process_file(
         input_hash=input_hash,
         parser_mode=parser_mode,
         parser_version=PARSER_VERSION,
+        provider=configured_provider,
         status=ExtractionRunStatus.PROCESSING.value,
         started_at=datetime.now(UTC),
         worker_token=lease_token,
@@ -1412,6 +1457,7 @@ async def process_file(
     extraction_run_id = extraction_run.id
     # claim/run 元数据先提交；对象读取和解析期间不持有 document_files 行锁。
     await db.commit()
+    artifact_rows: list[dict[str, Any]] = []
     try:
         stored = await asyncio.to_thread(
             file_service.read_file,
@@ -1420,12 +1466,92 @@ async def process_file(
         if stored is None:
             raise FileNotFoundError("私有存储对象不存在")
         data, _ = stored
-        parsed = await asyncio.to_thread(
-            file_service.extract_document,
-            file_row.extension.lower(),
-            data,
-            mode=parser_mode,
-        )
+        provider = configured_provider
+        mineru_result = None
+        if provider == "mineru":
+            # MinerU 接口拆成申请、上传、轮询、下载四步；每次轮询后
+            # 将远端状态写入当前解析运行，进程重启或租约回收时不会丢失
+            # 批次标识。完整结果下载后统一交给 Markdown/JSON 解析器。
+            from app.modules.qa import mineru
+
+            upload_session = await mineru.request_upload(
+                data, file_row.original_filename
+            )
+            extraction_run.provider = "mineru"
+            extraction_run.provider_task_id = upload_session.batch_id
+            extraction_run.provider_state = "upload_pending"
+            extraction_run.provider_context = {
+                "batch_id": upload_session.batch_id,
+                "file_name": upload_session.file_name,
+                "data_id": upload_session.data_id,
+            }
+            await db.commit()
+            await mineru.upload_bytes(upload_session, data)
+            extraction_run.provider_state = "pending"
+            await db.commit()
+            poll_result = None
+            # 轮询预算按时间算，不按次数。退避之后每次间隔不同，用次数表达
+            # 一定会和真实时长漂移（30 分钟租约按次数推是 900 次，退避到 10s
+            # 之后那是两个半小时）。超过租约时长就干净地判失败——外层 wait_for
+            # 要租约 + 300s 才取消，那时已经是硬取消，报不出原因。
+            poll_deadline = datetime.now(UTC) + timedelta(
+                minutes=EXTRACTION_LEASE_MINUTES
+            )
+            poll_number = 0
+            while datetime.now(UTC) < poll_deadline:
+                poll_result = await mineru.poll_result(
+                    upload_session.batch_id, upload_session.file_name
+                )
+                poll_number += 1
+                extraction_run.provider_state = poll_result.state
+                extraction_run.provider_context = {
+                    **(extraction_run.provider_context or {}),
+                    "progress": poll_result.progress,
+                    "poll_count": poll_number,
+                    "task_id": poll_result.task_id,
+                }
+                extraction_run.provider_task_id = (
+                    poll_result.task_id or upload_session.batch_id
+                )
+                extraction_run.next_poll_at = (
+                    datetime.now(UTC)
+                    + timedelta(seconds=mineru.poll_interval(poll_number))
+                    if poll_result.state not in {"done", "failed", "canceled", "cancelled"}
+                    else None
+                )
+                # 轮询期间必须续租。租约只在认领时写一次的话，超过
+                # EXTRACTION_LEASE_MINUTES 的任务会被调度器当超时回收，第二个
+                # worker 重复上传同一份字节建一个竞争 run，第一个 worker 的
+                # 产物随后在 claim 失配时被删（见下面的 token 校验分支），
+                # 三次重试用尽——本来能成功的文件被永久判死。文件行和运行行
+                # 都要写，调度器两张表都在扫。
+                renewed_lease = datetime.now(UTC) + timedelta(
+                    minutes=EXTRACTION_LEASE_MINUTES
+                )
+                extraction_run.lease_until = renewed_lease
+                file_row.extraction_lease_until = renewed_lease
+                await db.commit()
+                if poll_result.state in {"done", "failed", "canceled", "cancelled"}:
+                    break
+                await asyncio.sleep(mineru.poll_interval(poll_number))
+            if poll_result is None or poll_result.state != "done":
+                error = (poll_result.error if poll_result else None) or "MinerU 解析未完成"
+                raise RuntimeError(error)
+            mineru_result = await mineru.download_result(poll_result)
+            parsed = mineru_result.document
+            artifact_rows = await mineru.persist_artifacts(
+                mineru_result, file_id, extraction_run_id, artifact_rows
+            )
+        elif provider == "native":
+            # 仅保留历史/离线兼容；新环境默认 provider=mineru。
+            parsed = await asyncio.to_thread(
+                file_service.extract_document,
+                file_row.extension.lower(),
+                data,
+                mode=parser_mode,
+            )
+        else:
+            raise RuntimeError(f"不支持的 QA_MD_EXTRACT_PROVIDER: {provider}")
         # 这里不做 refresh 预检租约：紧随其后的 select ... with_for_update 已经
         # 用同一个 worker_token 原子确认归属，重复预检既违反 async 禁 refresh
         # 规则，也会在文件行被并发软删时抛 InvalidRequestError 覆盖掉下面的
@@ -1444,6 +1570,8 @@ async def process_file(
         claimed_file = claim_result.scalar_one_or_none()
         if claimed_file is None:
             await db.rollback()
+            for artifact in artifact_rows:
+                await asyncio.to_thread(file_service.delete_file, artifact["storage_key"])
             stale_run = await db.get(DocumentExtractionRun, extraction_run_id)
             if stale_run is not None:
                 stale_run.status = ExtractionRunStatus.STALE.value
@@ -1455,13 +1583,35 @@ async def process_file(
             return await get_file(db, file_id) or file_row
         file_row = claimed_file
         extraction_run.status = parsed.status
+        extraction_run.parser_version = parsed.parser_version
+        extraction_run.provider_state = (
+            "done" if extraction_run.provider == "mineru" and parsed.status == ExtractionRunStatus.READY.value
+            else extraction_run.provider_state
+        )
+        extraction_run.next_poll_at = None
         extraction_run.block_count = len(parsed.blocks)
         extraction_run.char_count = sum(len(block.content) for block in parsed.blocks)
-        extraction_run.statistics = parsed.statistics
+        extraction_run.statistics = {
+            **(parsed.statistics or {}),
+            "retrieval_text_version": RETRIEVAL_TEXT_VERSION,
+        }
         extraction_run.error = parsed.error
         extraction_run.finished_at = datetime.now(UTC)
         extraction_run.lease_until = None
         extraction_run.worker_token = None
+
+        # 远程结果包即使最终归一化失败也要保留引用，便于排查解析器版本
+        # 或 MinerU 输出差异；对象已经写入 QA 私有存储，不能留下无主对象。
+        for artifact in artifact_rows:
+            db.add(
+                DocumentExtractionArtifact(
+                    **artifact,
+                    created_by=file_row.updated_by,
+                    updated_by=file_row.updated_by,
+                )
+            )
+        if artifact_rows:
+            await db.flush()
 
         if parsed.status != ExtractionRunStatus.FAILED.value:
             # raw block 是事实/证据层：按 extraction run 追加保存，不因重解析
@@ -1469,6 +1619,9 @@ async def process_file(
             # 指针选择，历史分析运行仍可稳定引用原始 segment ID。
             block_rows: dict[int, DocumentTextSegment] = {}
             for block in parsed.blocks:
+                retrieval_text, retrieval_text_hash, _, _ = _retrieval_fields(
+                    block, block.content
+                )
                 row = DocumentTextSegment(
                     file_id=file_id,
                     extraction_run_id=extraction_run.id,
@@ -1485,6 +1638,8 @@ async def process_file(
                     source_metadata=block.source_metadata,
                     content=block.content,
                     text_hash=block.text_hash,
+                    retrieval_text=retrieval_text,
+                    retrieval_text_hash=retrieval_text_hash,
                     created_by=file_row.updated_by,
                     updated_by=file_row.updated_by,
                 )
@@ -1503,6 +1658,13 @@ async def process_file(
             chunk_lease_until = datetime.now(UTC) + timedelta(
                 minutes=EXTRACTION_LEASE_MINUTES
             )
+            retrieval_chunks = [
+                (
+                    chunk,
+                    *_retrieval_fields(chunk, chunk.content),
+                )
+                for chunk in parsed.chunks
+            ]
             chunk_run = DocumentChunkRun(
                 file_id=file_id,
                 extraction_run_id=extraction_run.id,
@@ -1511,7 +1673,13 @@ async def process_file(
                 status=parsed.status,
                 chunk_count=len(parsed.chunks),
                 char_count=sum(chunk.char_count for chunk in parsed.chunks),
-                statistics={"parser_version": PARSER_VERSION},
+                statistics={
+                    "parser_version": parsed.parser_version,
+                    "provider": extraction_run.provider,
+                    "retrieval_text_version": RETRIEVAL_TEXT_VERSION,
+                    "retrieval_char_count": sum(item[3] for item in retrieval_chunks),
+                    "retrieval_token_count": sum(item[4] for item in retrieval_chunks),
+                },
                 started_at=extraction_run.started_at,
                 finished_at=datetime.now(UTC),
                 worker_token=lease_token,
@@ -1521,13 +1689,23 @@ async def process_file(
             )
             db.add(chunk_run)
             await db.flush()
-            for chunk in parsed.chunks:
+            for (
+                chunk,
+                retrieval_text,
+                retrieval_text_hash,
+                retrieval_char_count,
+                retrieval_token_count,
+            ) in retrieval_chunks:
                 chunk_row = DocumentTextChunk(
                     file_id=file_id,
                     chunk_run_id=chunk_run.id,
                     chunk_order=chunk.chunk_order,
                     content=chunk.content,
                     content_hash=chunk.content_hash,
+                    retrieval_text=retrieval_text,
+                    retrieval_text_hash=retrieval_text_hash,
+                    retrieval_char_count=retrieval_char_count,
+                    retrieval_token_count=retrieval_token_count,
                     char_count=chunk.char_count,
                     token_count=chunk.token_count,
                     heading_path=list(chunk.heading_path),
@@ -1535,7 +1713,10 @@ async def process_file(
                     page_end=chunk.page_end,
                     source_start=chunk.source_start,
                     source_end=chunk.source_end,
-                    chunk_metadata=chunk.metadata,
+                    chunk_metadata={
+                        **(chunk.metadata or {}),
+                        "retrieval_text_version": RETRIEVAL_TEXT_VERSION,
+                    },
                     created_by=file_row.updated_by,
                     updated_by=file_row.updated_by,
                 )
@@ -1587,7 +1768,7 @@ async def process_file(
             chunk_run.worker_token = None
             file_row.current_extraction_run_id = extraction_run.id
             file_row.current_chunk_run_id = chunk_run.id
-            file_row.parser_version = PARSER_VERSION
+            file_row.parser_version = parsed.parser_version
         file_row.extraction_status = parsed.status
         file_row.extraction_error = parsed.error
         file_row.extraction_worker_token = None
@@ -1615,7 +1796,8 @@ async def process_file(
             },
             extra={
                 "sha256": file_row.sha256,
-                "parser_version": PARSER_VERSION,
+                "parser_version": parsed.parser_version,
+                "provider": extraction_run.provider,
                 "run_id": str(extraction_run.id),
             },
         )
@@ -1625,6 +1807,11 @@ async def process_file(
         # 已提交的租约 token；由下一轮扫描按 lease_until 回收，避免
         # 旧协程把新 worker 的租约误清掉。
         await db.rollback()
+        # 产物不在数据库事务里，回滚带不走它们。键里带本次运行 id，删自己
+        # 的对象不可能撞上新 worker 的；不在这里删就成了永久孤儿——没有
+        # DB 记录，也就没有任何回收路径。
+        for artifact in artifact_rows:
+            await asyncio.to_thread(file_service.delete_file, artifact["storage_key"])
         raise
     except Exception as exc:
         # 解析期间租约可能已经被回收并交给新 worker。不能直接修改
@@ -1635,6 +1822,10 @@ async def process_file(
         error_text = str(exc)[:2000]
         try:
             await db.rollback()
+            # 对象存储不参与数据库事务；本次运行尚未成功提交时，清掉
+            # 已写入的远程产物，避免失败/租约回收产生无主对象。
+            for artifact in artifact_rows:
+                await asyncio.to_thread(file_service.delete_file, artifact["storage_key"])
             claim_result = await db.execute(
                 select(DocumentFile)
                 .where(
@@ -2047,6 +2238,8 @@ def _extraction_run_summary(
         "is_current": current_id is not None and row.id == current_id,
         "parser_mode": row.parser_mode,
         "parser_version": row.parser_version,
+        "provider": getattr(row, "provider", None),
+        "provider_state": getattr(row, "provider_state", None),
         "block_count": int(row.block_count or 0),
         "char_count": int(row.char_count or 0),
         "statistics": row.statistics,
@@ -2180,11 +2373,17 @@ async def document_processing_results(
         )
         locations = await list_chunk_block_locations(db, [row["id"] for row in rows])
         for row in rows:
-            preview, _, truncated = _bounded_preview(
-                row.get("content_preview"),
-                content_limit=content_limit,
-                content_length=row.get("char_count"),
-            )
+            retrieval_preview = row.get("retrieval_text_preview")
+            retrieval_char_count = row.get("retrieval_char_count")
+            if retrieval_preview is None:
+                preview = None
+                truncated = False
+            else:
+                preview, _, truncated = _bounded_preview(
+                    retrieval_preview,
+                    content_limit=content_limit,
+                    content_length=retrieval_char_count,
+                )
             chunks.append(
                 {
                     "id": row["id"],
@@ -2196,8 +2395,10 @@ async def document_processing_results(
                     "page_end": row.get("page_end"),
                     "source_start": row.get("source_start"),
                     "source_end": row.get("source_end"),
-                    "content_preview": preview,
-                    "content_truncated": truncated,
+                    "retrieval_text_preview": preview,
+                    "retrieval_char_count": retrieval_char_count,
+                    "retrieval_text_truncated": truncated,
+                    "retrieval_text_hash": row.get("retrieval_text_hash"),
                     "content_hash": row["content_hash"],
                     "metadata": _safe_chunk_metadata(row.get("chunk_metadata")),
                     "source_blocks": locations.get(row["id"], []),
@@ -2580,7 +2781,14 @@ async def search(
                 continue
             segments = segments_by_file.get(file_row.id, [])
             for segment in segments:
-                content = segment.content
+                # 检索使用去除 MinerU HTML/版式噪声的派生文本；只有
+                # ``None`` 的 legacy 行回退 raw。空字符串是空锚点的有意结果，
+                # 不能再次把 ``<a id=...>`` 当作正文检索，snippet 也返回可读文本。
+                content = (
+                    segment.retrieval_text
+                    if segment.retrieval_text is not None
+                    else segment.content
+                )
                 if q_lower in content.lower() or (
                     compact_q and compact_q in _compact(content)
                 ):

@@ -10,12 +10,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.exceptions import AppException, NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.qa import ai_analysis, file_service, service
+from app.modules.qa.models import DocumentExtractionArtifact
 from app.modules.qa.repository import (
     get_ai_run,
     get_document,
@@ -649,6 +651,15 @@ async def reject_master_object_proposal(
     return success_response({"id": str(proposal_id), "status": "rejected"})
 
 
+@router.post("/master-object-proposals/reject-all", response_model=ApiResponse, summary="一键拒绝全部待审核 QA 主数据 AI 提案")
+async def reject_all_master_object_proposals(
+    user: User = Depends(_proposal_publish),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    rejected, skipped = await ai_analysis.reject_all_proposals(db, user)
+    return success_response({"rejected": rejected, "skipped": skipped})
+
+
 @router.post("/documents/{document_id}/versions/{version_id}/copy-relations", summary="显式复制上一当前版本关联")
 async def post_copy_relations(
     document_id: uuid.UUID,
@@ -745,6 +756,120 @@ async def get_file_processing_results(
     )
     return success_response(
         DocumentProcessingResultOut.model_validate(data).model_dump(mode="json")
+    )
+
+
+@router.get("/document-files/{file_id}/artifacts", summary="查看文件提取产物")
+async def list_file_artifacts(
+    file_id: uuid.UUID,
+    user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    file_row = await get_file(db, file_id)
+    if file_row is None:
+        raise NotFoundException("文件", str(file_id))
+    query = (
+        select(DocumentExtractionArtifact)
+        .where(
+            DocumentExtractionArtifact.file_id == file_id,
+            DocumentExtractionArtifact.is_deleted.is_(False),
+        )
+        .order_by(DocumentExtractionArtifact.created_at.desc(), DocumentExtractionArtifact.source_name)
+    )
+    # 重解析期间 current 指针仍然可能指向上一版成功运行；此时不应把
+    # 旧产物返回给前端，否则前端会误以为当前批次已经完成。产物列表
+    # 始终只绑定一个明确的运行，且 queued/processing 运行暂不展示产物。
+    latest_run = await service.get_latest_extraction_run_any_status(db, file_id)
+    if file_row.extraction_status in {"queued", "processing"} or (
+        latest_run is not None and latest_run.status in {"queued", "processing"}
+    ):
+        return success_response({"items": [], "total": 0})
+    artifact_run_id = file_row.current_extraction_run_id
+    if artifact_run_id is None and latest_run is not None:
+        artifact_run_id = latest_run.id
+    if artifact_run_id is not None:
+        query = query.where(
+            DocumentExtractionArtifact.extraction_run_id
+            == artifact_run_id
+        )
+    else:
+        return success_response({"items": [], "total": 0})
+    result = await db.execute(query)
+    items = [
+        {
+            "id": item.id,
+            "file_id": item.file_id,
+            "extraction_run_id": item.extraction_run_id,
+            "artifact_type": item.artifact_type,
+            "source_name": item.source_name,
+            "mime_type": item.mime_type,
+            "size_bytes": item.size_bytes,
+            "sha256": item.sha256,
+            "created_at": item.created_at,
+        }
+        for item in result.scalars()
+    ]
+    return success_response({"items": items, "total": len(items)})
+
+
+@router.get(
+    "/document-files/{file_id}/artifacts/{artifact_id}/content",
+    summary="预览或下载文件提取产物",
+)
+async def get_file_artifact_content(
+    file_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+    download: bool = False,
+) -> StreamingResponse:
+    # 和列表端点、原件端点同一道软删闸门：产物行自己带 is_deleted，但文件
+    # 被软删之后它的提取产物也得跟着不可达，否则文件 404 了产物还能整包拖走。
+    file_row = await get_file(db, file_id)
+    if file_row is None:
+        raise NotFoundException("文件", str(file_id))
+    result = await db.execute(
+        select(DocumentExtractionArtifact).where(
+            DocumentExtractionArtifact.id == artifact_id,
+            DocumentExtractionArtifact.file_id == file_id,
+            DocumentExtractionArtifact.is_deleted.is_(False),
+        )
+    )
+    artifact = result.scalar_one_or_none()
+    if artifact is None:
+        raise NotFoundException("文件提取产物", str(artifact_id))
+    content = await asyncio.to_thread(file_service.read_object, artifact.storage_key)
+    if content is None:
+        raise NotFoundException("文件提取产物内容", str(artifact_id))
+    data, stored_mime = content
+    mime = artifact.mime_type or stored_mime
+    await service._audit(
+        db,
+        action="download" if download else "preview",
+        user=user,
+        resource_type="document_extraction_artifact",
+        resource_id=artifact.id,
+        extra={"file_id": str(file_id), "artifact_type": artifact.artifact_type},
+    )
+    # 产物的 MIME 来自远端 ZIP 成员名，不能凭它决定是否 inline 渲染。
+    inline_type = None if download else file_service.inline_media_type(mime)
+    if inline_type:
+        disposition, media_type = "inline", inline_type
+    else:
+        # 不内联就必须是附件；下载时保留真实类型方便系统关联，预览但类型
+        # 不安全时连类型一起降级，不给浏览器任何可执行的口径。
+        disposition = "attachment"
+        media_type = (mime if download else None) or "application/octet-stream"
+    return StreamingResponse(
+        iter([data]),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": file_service.content_disposition(
+                disposition, artifact.source_name
+            ),
+            "X-Content-SHA256": artifact.sha256,
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

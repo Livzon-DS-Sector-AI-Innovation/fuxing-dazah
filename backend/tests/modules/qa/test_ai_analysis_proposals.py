@@ -241,3 +241,62 @@ async def test_approve_proposal_advances_run_catalog_fingerprint(
     db = _db_for(approve_context["proposal"], run)
     await ai_analysis.approve_proposal(db, approve_context["proposal"].id, None, None)
     assert run.catalog_fingerprint == approve_context["catalog_after"]
+
+
+class _FakeUser:
+    id = uuid.uuid4()
+
+
+def _pending_proposal(proposal_type: str) -> Any:
+    proposal = _proposal(analysis_run_id=uuid.uuid4())
+    proposal.proposal_type = proposal_type
+    return proposal
+
+
+@pytest.mark.asyncio
+async def test_reject_all_proposals_rejects_pending_and_skips_unauthorized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全部拒绝只清待审核提案；无对应权限的类型跳过而非整单失败。"""
+
+    creatable = _pending_proposal("create")
+    updatable = _pending_proposal("update")
+    other_creatable = _pending_proposal("create")
+    db = _FakeDb([_Result(rows=[creatable, updatable, other_creatable])])
+
+    async def _fake_permissions(*_args: Any, **_kwargs: Any) -> set[str]:
+        return {"qa:master:create"}
+
+    monkeypatch.setattr(ai_analysis, "get_user_permissions", _fake_permissions)
+
+    rejected, skipped = await ai_analysis.reject_all_proposals(db, _FakeUser())
+    assert (rejected, skipped) == (2, 1)
+    assert creatable.status == "rejected" and creatable.is_deleted is True
+    assert other_creatable.status == "rejected" and other_creatable.is_deleted is True
+    assert updatable.status == "pending" and not hasattr(updatable, "is_deleted")
+    assert creatable.reviewed_by == _FakeUser.id
+    assert creatable.reviewed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_reject_all_proposals_without_pending_is_noop() -> None:
+    db = _FakeDb([_Result(rows=[])])
+    rejected, skipped = await ai_analysis.reject_all_proposals(db, None)
+    assert (rejected, skipped) == (0, 0)
+
+
+def test_bbox_numbers_drops_unusable_coordinates_instead_of_raising() -> None:
+    """坐标是外部解析器给的证据摘要，坏值丢弃即可，不能让整轮分析失败。
+
+    这份元数据已经落库，重试会原样再失败一次。
+    """
+
+    assert ai_analysis._bbox_numbers([1, 2, 3, 4]) == [1.0, 2.0, 3.0, 4.0]
+    assert ai_analysis._bbox_numbers(["1.5", 2, 3, 4]) == [1.5, 2.0, 3.0, 4.0]
+
+    assert ai_analysis._bbox_numbers(None) is None
+    assert ai_analysis._bbox_numbers("1,2,3,4") is None
+    assert ai_analysis._bbox_numbers([1, 2, 3]) is None
+    assert ai_analysis._bbox_numbers([["a", "b"], "c", "d", "e"]) is None
+    assert ai_analysis._bbox_numbers([1, 2, 3, None]) is None
+    assert ai_analysis._bbox_numbers([True, 2, 3, 4]) is None

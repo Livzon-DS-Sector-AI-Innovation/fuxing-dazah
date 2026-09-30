@@ -118,12 +118,40 @@ def _quote(content: str, mention: str, max_chars: int = 600) -> str:
     return content[start:end]
 
 
+def _analysis_text(chunk: DocumentTextChunk) -> str:
+    """返回 AI 消费的可读文本，保留 legacy chunk 的兼容回退。"""
+
+    value = getattr(chunk, "retrieval_text", None)
+    return value if value is not None else chunk.content
+
+
 def _safe_entity_type(value: Any) -> str | None:
     normalized = str(value or "").strip().upper()
     mapped = _MODEL_ENTITY_TO_MASTER.get(normalized)
     if mapped:
         return mapped
     return normalized if normalized in ENTITY_TYPES else None
+
+
+def _bbox_numbers(value: Any, *, size: int = 4) -> list[float] | None:
+    """把解析器给的坐标转成普通 JSON 数字，转不动就返回 None。
+
+    bbox 来自外部解析器输出，可能缺项、是嵌套列表、null 或字符串。这里是
+    证据定位的附属摘要，不是判定依据：为了一个坏坐标让整轮 AI 分析失败不值
+    当，而且这份元数据已经落库，重试会原样再失败一次。
+    """
+
+    if not isinstance(value, (list, tuple)) or len(value) < size:
+        return None
+    numbers: list[float] = []
+    for item in value[:size]:
+        if isinstance(item, bool):
+            return None
+        try:
+            numbers.append(float(item))
+        except (TypeError, ValueError):
+            return None
+    return numbers
 
 
 def _evidence_location_metadata(source: DocumentTextSegment | None) -> dict[str, Any]:
@@ -141,7 +169,19 @@ def _evidence_location_metadata(source: DocumentTextSegment | None) -> dict[str,
         "block_type": source.block_type,
         "heading_path": list(source.heading_path or []),
     }
-    if source.block_type == "pdf_block":
+    # MinerU 会把 PDF 的标题/表格识别为语义块，不再统一使用旧的
+    # ``pdf_block`` 类型；只要存在 PDF 版面元数据，就保留坐标证据。
+    if source.block_type == "pdf_block" or any(
+        key in raw
+        for key in (
+            "bbox",
+            "page_width",
+            "page_height",
+            "page_index",
+            "line_bboxes",
+            "spans",
+        )
+    ):
         pdf: dict[str, Any] = {}
         for key in (
             "bbox",
@@ -157,7 +197,9 @@ def _evidence_location_metadata(source: DocumentTextSegment | None) -> dict[str,
                 # 字段只接受标量，避免把未知解析器对象带进 JSON 列。
                 if key in {"bbox", "page_width", "page_height"}:
                     if isinstance(value, (list, tuple)):
-                        pdf[key] = [float(item) for item in value[:4]]
+                        numbers = _bbox_numbers(value)
+                        if numbers is not None:
+                            pdf[key] = numbers
                     elif isinstance(value, (int, float)):
                         pdf[key] = float(value)
                 elif isinstance(value, (str, int, float, bool)):
@@ -169,20 +211,18 @@ def _evidence_location_metadata(source: DocumentTextSegment | None) -> dict[str,
             for line in lines:
                 if not isinstance(line, dict):
                     continue
-                line_bbox = line.get("bbox")
-                if isinstance(line_bbox, (list, tuple)) and len(line_bbox) >= 4:
-                    line_boxes.append([float(item) for item in line_bbox[:4]])
+                line_bbox = _bbox_numbers(line.get("bbox"))
+                if line_bbox is not None:
+                    line_boxes.append(line_bbox)
                 spans = line.get("spans")
                 if isinstance(spans, list):
                     for span in spans:
                         if not isinstance(span, dict):
                             continue
-                        bbox = span.get("bbox")
-                        if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+                        bbox = _bbox_numbers(span.get("bbox"))
+                        if bbox is None:
                             continue
-                        item: dict[str, Any] = {
-                            "bbox": [float(value) for value in bbox[:4]],
-                        }
+                        item: dict[str, Any] = {"bbox": bbox}
                         for key in ("font", "size"):
                             if isinstance(span.get(key), (str, int, float)):
                                 item[key] = span[key]
@@ -475,13 +515,14 @@ async def _model_entities(chunk: DocumentTextChunk) -> list[dict[str, Any]]:
     settings = get_settings()
     if not settings.QA_AI_ENABLED or not settings.QA_AI_API_KEY:
         return []
+    analysis_text = _analysis_text(chunk)
     prompt = (
         "你是质量文件实体抽取器。只从给定文本中抽取明确出现、与质量主数据有关的实体。"
         "不要猜测，不要生成主数据 ID，不要返回文本中不存在的证据。"
         '返回 JSON：{"entities":[{"mention_text":"原文",'
         '"entity_type":"PRODUCT|MATERIAL|EQUIPMENT|SUPPLIER|REGION",'
         '"quote":"包含原文的短证据","normalization_hint":"可选规范化名称"}]}。\n\n'
-        f"文本：\n{chunk.content[:12000]}"
+        f"文本：\n{analysis_text[:12000]}"
     )
     last_error: Exception | None = None
     for attempt in range(max(1, int(settings.QA_AI_MAX_RETRIES) + 1)):
@@ -512,19 +553,19 @@ async def _model_entities(chunk: DocumentTextChunk) -> list[dict[str, Any]]:
                     continue
                 mention = str(item.get("mention_text") or "").strip()[:500]
                 quote = str(item.get("quote") or "").strip()[:600]
-                if not mention or mention.casefold() not in chunk.content.casefold():
+                if not mention or mention.casefold() not in analysis_text.casefold():
                     continue
                 entity_type = _safe_entity_type(item.get("entity_type"))
                 if entity_type is None:
                     # 模型返回未知类型时保留不了可靠的主数据目录边界，
                     # 不把它武断归为 MATERIAL，也不生成正式提案。
                     continue
-                if quote and quote.casefold() not in chunk.content.casefold():
-                    quote = _quote(chunk.content, mention)
+                if quote and quote.casefold() not in analysis_text.casefold():
+                    quote = _quote(analysis_text, mention)
                 entities.append(
                     {
                         "mention_text": mention,
-                        "quote": quote or _quote(chunk.content, mention),
+                        "quote": quote or _quote(analysis_text, mention),
                         "entity_type": entity_type,
                         "normalization_hint": str(
                             item.get("normalization_hint") or ""
@@ -783,7 +824,8 @@ async def process_analysis_run(
             await db.flush()
             await db.commit()
             run = renewed_run
-            deterministic = _deterministic_matches(chunk.content, masters, aliases)
+            analysis_text = _analysis_text(chunk)
+            deterministic = _deterministic_matches(analysis_text, masters, aliases)
             entities: list[dict[str, Any]] = []
             deterministic_groups: dict[tuple[str, str], dict[str, Any]] = {}
             term_master_ids: dict[str, set[uuid.UUID]] = {}
@@ -796,7 +838,7 @@ async def process_analysis_run(
                         "mention_text": term,
                         "normalized_text": normalized_term,
                         "entity_type": master.object_type,
-                        "quote": _quote(chunk.content, term),
+                        "quote": _quote(analysis_text, term),
                         "method": method,
                         "confidence": confidence,
                         "candidates": [],
@@ -834,7 +876,7 @@ async def process_analysis_run(
             needs_model = (
                 not deterministic
                 or has_ambiguity
-                or len(chunk.content) > max(80, matched_chars * 4)
+                or len(analysis_text) > max(80, matched_chars * 4)
             )
             if needs_model and settings.QA_AI_ENABLED and settings.QA_AI_API_KEY:
                 try:
@@ -924,7 +966,12 @@ async def process_analysis_run(
                     (
                         row
                         for row in source_rows
-                        if normalized_mention in normalize_text(row.content)
+                        if normalized_mention
+                        in normalize_text(
+                            row.retrieval_text
+                            if row.retrieval_text is not None
+                            else row.content
+                        )
                     ),
                     source_rows[0] if source_rows else None,
                 )
@@ -2115,3 +2162,46 @@ async def reject_proposal(
     proposal.is_deleted = True
     await db.flush()
     return proposal
+
+
+async def reject_all_proposals(
+    db: AsyncSession, user: User | None = None
+) -> tuple[int, int]:
+    """一键拒绝全部待审核提案，返回 (拒绝数, 权限跳过数)。
+
+    与单条拒绝同一语义：状态置 rejected 并软删除，不写审计。权限按
+    提案类型逐一校验（create → qa:master:create，update →
+    qa:master:update），无权限的类型跳过而不是整单失败——提案箱入口
+    只要求任一权限，混合权限用户应只清掉自己能处理的提案。
+    """
+    result = await db.execute(
+        select(MasterObjectProposal)
+        .where(
+            MasterObjectProposal.status == AIProposalStatus.PENDING.value,
+            MasterObjectProposal.is_deleted.is_(False),
+        )
+        .with_for_update()
+    )
+    proposals = list(result.scalars())
+    permissions: set[str] | None = None
+    if user is not None:
+        permissions = await get_user_permissions(str(user.id), db)
+    reviewer = _actor_id(user)
+    reviewed_at = datetime.now(UTC)
+    rejected = 0
+    for proposal in proposals:
+        if permissions is not None:
+            required_permission = (
+                "qa:master:create"
+                if proposal.proposal_type == "create"
+                else "qa:master:update"
+            )
+            if required_permission not in permissions:
+                continue
+        proposal.status = AIProposalStatus.REJECTED.value
+        proposal.reviewed_by = reviewer
+        proposal.reviewed_at = reviewed_at
+        proposal.is_deleted = True
+        rejected += 1
+    await db.flush()
+    return rejected, len(proposals) - rejected

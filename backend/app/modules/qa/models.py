@@ -600,7 +600,14 @@ class DocumentTextSegment(BaseModel):
             postgresql_using="gin",
             postgresql_ops={"content": "gin_trgm_ops"},
         ),
+        Index(
+            "ix_qa_document_text_segments_retrieval_trgm",
+            "retrieval_text",
+            postgresql_using="gin",
+            postgresql_ops={"retrieval_text": "gin_trgm_ops"},
+        ),
         Index("ix_qa_document_text_segments_hash", "text_hash"),
+        Index("ix_qa_document_text_segments_retrieval_hash", "retrieval_text_hash"),
         Index("ix_qa_document_text_segments_run_order", "extraction_run_id", "source_order"),
         Index(
             "ix_qa_document_text_segments_pdf_position",
@@ -651,6 +658,14 @@ class DocumentTextSegment(BaseModel):
     text_hash: Mapped[str] = mapped_column(
         String(64), nullable=False, comment="正文片段 SHA-256"
     )
+    retrieval_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="去除版式标记后的检索文本；legacy 数据为空时回退 content",
+    )
+    retrieval_text_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="检索文本 SHA-256（规范化版本）"
+    )
 
 
 class DocumentExtractionRun(BaseModel):
@@ -669,6 +684,22 @@ class DocumentExtractionRun(BaseModel):
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     parser_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="native_text")
     parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="native", server_default="native",
+        comment="正文提取后端（native/mineru）",
+    )
+    provider_task_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="远程提取后端任务 ID",
+    )
+    provider_state: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="远程提取后端状态快照",
+    )
+    next_poll_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="下一次远程状态轮询时间",
+    )
+    provider_context: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, comment="远程任务续跑上下文（不含 token）",
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=ExtractionRunStatus.QUEUED.value)
     block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -679,6 +710,45 @@ class DocumentExtractionRun(BaseModel):
     worker_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+
+
+class DocumentExtractionArtifact(BaseModel):
+    """MinerU 等远程解析器产生的原始产物。
+
+    产物与 ``file_id``、``extraction_run_id`` 同时关联，重解析只会追加新
+    运行的产物，不会覆盖历史证据。对象本身保存在 QA 私有 MinIO bucket。
+    """
+
+    __tablename__ = "document_extraction_artifacts"
+    __table_args__ = (
+        Index("ix_qa_document_extraction_artifacts_file", "file_id", "created_at"),
+        Index("ix_qa_document_extraction_artifacts_run", "extraction_run_id", "artifact_type"),
+        Index(
+            "uq_qa_document_extraction_artifacts_key",
+            "storage_key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "qa"},
+    )
+
+    file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    extraction_run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    artifact_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="markdown/zip/structure/asset",
+    )
+    source_name: Mapped[str] = mapped_column(
+        String(512), nullable=False, comment="产物在 MinerU ZIP 中的原始路径",
+    )
+    storage_key: Mapped[str] = mapped_column(String(768), nullable=False)
+    mime_type: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="application/octet-stream",
+    )
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSON, nullable=True,
+    )
 
 
 class DocumentChunkRun(BaseModel):
@@ -715,7 +785,14 @@ class DocumentTextChunk(BaseModel):
         Index("uq_qa_document_text_chunks_order", "chunk_run_id", "chunk_order", unique=True),
         Index("ix_qa_document_text_chunks_file", "file_id", "chunk_order"),
         Index("ix_qa_document_text_chunks_hash", "content_hash"),
+        Index("ix_qa_document_text_chunks_retrieval_hash", "retrieval_text_hash"),
         Index("ix_qa_document_text_chunks_content_trgm", "content", postgresql_using="gin", postgresql_ops={"content": "gin_trgm_ops"}),
+        Index(
+            "ix_qa_document_text_chunks_retrieval_trgm",
+            "retrieval_text",
+            postgresql_using="gin",
+            postgresql_ops={"retrieval_text": "gin_trgm_ops"},
+        ),
         {"schema": "qa"},
     )
 
@@ -724,6 +801,20 @@ class DocumentTextChunk(BaseModel):
     chunk_order: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    retrieval_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="去除版式标记后的检索文本；legacy 数据为空时回退 content",
+    )
+    retrieval_text_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="检索文本 SHA-256（规范化版本）"
+    )
+    retrieval_char_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="检索文本字符数；legacy 数据为空"
+    )
+    retrieval_token_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="检索文本 token 估算；legacy 数据为空"
+    )
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
     heading_path: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)

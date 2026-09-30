@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 from docx import Document
 
@@ -174,3 +175,97 @@ def test_pdf_two_columns_keep_column_reading_order_and_coordinates() -> None:
     ]
     assert all(len(block.source_metadata["bbox"]) == 4 for block in parsed.blocks)
     assert all(block.source_metadata["reading_order"] == block.source_order for block in parsed.blocks)
+
+
+def test_mineru_markdown_uses_one_atomic_chunk_for_a_table() -> None:
+    markdown = """# 物料清单
+
+说明段落。
+
+| 编码 | 名称 | 用量 |
+| --- | --- | ---: |
+| M-01 | 原料一 | 10 |
+| M-02 | 原料二 | 20 |
+
+结尾。"""
+
+    parsed = parse_document("md", markdown.encode("utf-8"), mode="mineru")
+
+    assert parsed.status == "ready"
+    assert [block.block_type for block in parsed.blocks] == [
+        "heading",
+        "paragraph",
+        "table",
+        "paragraph",
+    ]
+    table = parsed.blocks[2]
+    assert table.source_metadata["table_atomic"] is True
+    assert table.source_metadata["line_start"] == 5
+    assert table.source_metadata["line_end"] == 8
+    table_chunks = [chunk for chunk in parsed.chunks if chunk.metadata["contains_table"]]
+    assert len(table_chunks) == 1
+    assert table_chunks[0].content.count("M-01") == 1
+    assert table_chunks[0].metadata["table_atomic"] is True
+    assert table_chunks[0].heading_path == ("物料清单",)
+
+
+def test_mineru_markdown_keeps_code_and_list_boundaries() -> None:
+    markdown = """# 操作步骤
+
+1. 检查设备
+2. 确认参数
+
+```python
+print('ok')
+```
+"""
+
+    parsed = parse_document("markdown", markdown.encode("utf-8"), mode="mineru")
+
+    assert [block.block_type for block in parsed.blocks] == [
+        "heading",
+        "list_item",
+        "list_item",
+        "code",
+    ]
+    assert parsed.blocks[1].heading_path == ("操作步骤",)
+    assert parsed.blocks[3].source_metadata["language"] == "python"
+    assert "print('ok')" in parsed.chunks[-1].content
+
+
+def test_mineru_structured_json_keeps_table_and_page_metadata() -> None:
+    payload = {
+        "pdf_info": [
+            {
+                "page_idx": 0,
+                "para_blocks": [
+                    {"type": "text", "text": "第一段"},
+                    {
+                        "type": "table",
+                        "table_body": "<table><tr><td>字段</td><td>值</td></tr></table>",
+                        "bbox": [1, 2, 3, 4],
+                    },
+                ],
+            }
+        ]
+    }
+
+    parsed = parse_document("json", json.dumps(payload).encode("utf-8"), mode="mineru")
+
+    assert parsed.status == "ready"
+    assert [block.block_type for block in parsed.blocks] == ["paragraph", "table"]
+    assert parsed.blocks[1].page_number == 1
+    assert parsed.blocks[1].source_metadata["bbox"] == [1, 2, 3, 4]
+    assert parsed.chunks[-1].metadata["table_atomic"] is True
+
+
+def test_mineru_oversized_markdown_table_remains_one_chunk() -> None:
+    rows = "\n".join(f"| {i} | {'值' * 1000} |" for i in range(8))
+    markdown = f"| 编号 | 说明 |\n| --- | --- |\n{rows}"
+
+    parsed = parse_document("md", markdown.encode("utf-8"), mode="mineru")
+
+    assert len(parsed.blocks) == 1
+    assert len(parsed.chunks) == 1
+    assert parsed.chunks[0].metadata["table_atomic"] is True
+    assert parsed.chunks[0].metadata["table_oversized"] is True

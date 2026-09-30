@@ -249,8 +249,19 @@ async def list_documents(
                                 DocumentTextSegment.file_id == DocumentFile.id,
                             )
                             .where(
-                                DocumentTextSegment.content.ilike(
-                                    term, escape="\\"
+                                or_(
+                                    DocumentTextSegment.retrieval_text.ilike(
+                                        term, escape="\\"
+                                    ),
+                                    # 只有没有派生文本的 legacy 行才回退
+                                    # raw；新行的空 retrieval_text 可能是
+                                    # 空锚点，不能再次把 HTML 属性当正文检索。
+                                    and_(
+                                        DocumentTextSegment.retrieval_text.is_(None),
+                                        DocumentTextSegment.content.ilike(
+                                            term, escape="\\"
+                                        ),
+                                    ),
                                 ),
                                 DocumentTextSegment.is_deleted.is_(False),
                                 DocumentFile.is_deleted.is_(False),
@@ -500,7 +511,7 @@ async def list_current_chunk_previews(
     page_size: int,
     content_limit: int,
 ) -> tuple[list[dict[str, Any]], int]:
-    """分页读取当前 chunk；没有 current 指针时绝不回退到历史运行。"""
+    """分页读取当前 chunk 的检索文本预览；不向查看器返回原始正文。"""
 
     if file.current_chunk_run_id is None:
         return [], 0
@@ -527,9 +538,21 @@ async def list_current_chunk_previews(
             DocumentTextChunk.page_end,
             DocumentTextChunk.source_start,
             DocumentTextChunk.source_end,
-            func.substr(DocumentTextChunk.content, 1, content_limit + 1).label(
-                "content_preview"
-            ),
+            # retrieval_text 是新增的可空列且没有回填，迁移前的 chunk 全是
+            # NULL；直接 substr 会让整个存量语料在查看器里显示"尚无检索文本"，
+            # 而正文其实取得到。按 models 里写明的规则回退 content——重新解析
+            # 之后自然回到检索文本，不必为了看一眼正文去动 MinerU。
+            func.substr(
+                func.coalesce(
+                    DocumentTextChunk.retrieval_text, DocumentTextChunk.content
+                ),
+                1,
+                content_limit + 1,
+            ).label("retrieval_text_preview"),
+            func.coalesce(
+                DocumentTextChunk.retrieval_char_count, DocumentTextChunk.char_count
+            ).label("retrieval_char_count"),
+            DocumentTextChunk.retrieval_text_hash,
             DocumentTextChunk.content_hash,
             DocumentTextChunk.chunk_metadata,
         )

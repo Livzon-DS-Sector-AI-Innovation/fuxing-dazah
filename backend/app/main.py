@@ -56,6 +56,19 @@ platform_mcp_asgi = get_mcp_app(get_module_mcp("platform"), path="/", middleware
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
 
+    # QA 正文解析的自检：QA_MD_EXTRACT_PROVIDER 默认 mineru，而 token 默认
+    # 为空（config.py 和 .env.example 都是）。两者不一致时，每一次上传都会在
+    # 后台解析时抛 MineruError，只留一条藏在文件详情里的失败状态，没人会逐条
+    # 去翻。开机就把话说清楚，别让运维从失败文档里反推配置。
+    if (
+        settings.QA_MD_EXTRACT_PROVIDER.strip().casefold() or "mineru"
+    ) == "mineru" and not settings.QA_MD_EXTRACT_API_TOKEN.strip():
+        raise RuntimeError(
+            "QA_MD_EXTRACT_PROVIDER=mineru 但 QA_MD_EXTRACT_API_TOKEN 未配置，"
+            "所有 QA 正文解析都会失败。请配置 token，"
+            "或显式设置 QA_MD_EXTRACT_PROVIDER=native。"
+        )
+
     from app.modules.equipment.scheduler import (
         maintenance_plan_loop,
         stop_maintenance_plan_flag,

@@ -158,7 +158,10 @@ async def test_processing_results_chunk_preview_includes_only_current_mapping(
                         "page_end": 2,
                         "source_start": 1,
                         "source_end": 2,
-                        "content_preview": "X" * 101,
+                        "retrieval_text_preview": "X" * 101,
+                        "retrieval_char_count": 1001,
+                        "retrieval_text_hash": "c" * 64,
+                        "content_preview": "<p>原始 HTML 不应返回</p>",
                         "content_hash": "b" * 64,
                         "chunk_metadata": {"raw_block_count": 2},
                     }
@@ -196,10 +199,74 @@ async def test_processing_results_chunk_preview_includes_only_current_mapping(
     )
 
     item = result["chunks"][0]
-    assert item["content_preview"] == "X" * 100
-    assert item["content_truncated"] is True
+    assert item["retrieval_text_preview"] == "X" * 100
+    assert item["retrieval_char_count"] == 1001
+    assert item["retrieval_text_truncated"] is True
+    assert item["retrieval_text_hash"] == "c" * 64
+    assert "content_preview" not in item
     assert item["source_blocks"][0]["segment_id"] == segment_id
     assert result["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_processing_results_legacy_chunk_does_not_display_raw_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_id = uuid4()
+    extraction_id = uuid4()
+    chunk_id = uuid4()
+    file_row = _file(file_id=file_id, extraction_id=extraction_id, chunk_id=chunk_id)
+    current = _extraction(extraction_id)
+    current_chunk = _chunk_run(chunk_id, extraction_id)
+
+    monkeypatch.setattr(service, "get_file", AsyncMock(return_value=file_row))
+    monkeypatch.setattr(service, "get_extraction_run", AsyncMock(return_value=current))
+    monkeypatch.setattr(service, "get_latest_extraction_run_any_status", AsyncMock(return_value=current))
+    monkeypatch.setattr(service, "get_chunk_run", AsyncMock(return_value=current_chunk))
+    monkeypatch.setattr(service, "get_latest_chunk_run_any_status", AsyncMock(return_value=current_chunk))
+    monkeypatch.setattr(
+        service,
+        "list_current_chunk_previews",
+        AsyncMock(
+            return_value=(
+                [
+                    {
+                        "id": chunk_id,
+                        "chunk_order": 0,
+                        "char_count": 20,
+                        "token_count": 10,
+                        "heading_path": [],
+                        "page_start": 1,
+                        "page_end": 1,
+                        "source_start": 1,
+                        "source_end": 1,
+                        "retrieval_text_preview": None,
+                        "retrieval_char_count": None,
+                        "retrieval_text_hash": None,
+                        "content_preview": "<p>原始 HTML</p>",
+                        "content_hash": "b" * 64,
+                        "chunk_metadata": {},
+                    }
+                ],
+                1,
+            )
+        ),
+    )
+    monkeypatch.setattr(service, "list_chunk_block_locations", AsyncMock(return_value={}))
+
+    result = await service.document_processing_results(
+        db=None,  # type: ignore[arg-type]
+        file_id=file_id,
+        view="chunks",
+        page=1,
+        page_size=20,
+        content_limit=100,
+    )
+
+    item = result["chunks"][0]
+    assert item["retrieval_text_preview"] is None
+    assert item["retrieval_text_truncated"] is False
+    assert "content_preview" not in item
 
 
 @pytest.mark.asyncio

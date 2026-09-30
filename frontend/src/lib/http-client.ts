@@ -19,6 +19,47 @@ const _resolveAuth = cache(async () => {
   return _tokenGetter()
 })
 
+function formatApiErrorMessage(body: unknown, status: number): string {
+  const payload = body && typeof body === 'object'
+    ? body as { message?: unknown; detail?: unknown; request_id?: unknown }
+    : {}
+  const detail = typeof payload.detail === 'string'
+    ? payload.detail
+    : Array.isArray(payload.detail)
+      ? payload.detail
+        .map((item) => {
+          if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg?: unknown }).msg || '')
+          return String(item || '')
+        })
+        .filter(Boolean)
+        .join('；')
+      : payload.detail != null
+        ? String(payload.detail)
+        : ''
+  const message = typeof payload.message === 'string' && payload.message
+    ? payload.message
+    : detail || `请求失败: ${status}`
+  const withDetail = detail && detail !== message ? `${message}：${detail}` : message
+  const requestId = typeof payload.request_id === 'string' ? payload.request_id : ''
+  return requestId && !withDetail.includes(requestId)
+    ? `${withDetail}（错误编号：${requestId}）`
+    : withDetail
+}
+
+type ApiDataEnvelope<T> = { data?: T | null }
+type ApiPageEnvelope<T> = {
+  data?: T[]
+  meta?: { total?: number; page?: number; page_size?: number }
+}
+
+function unwrapApiData<T>(value: T | ApiDataEnvelope<T>): T {
+  if (value && typeof value === 'object' && 'data' in value) {
+    const data = (value as ApiDataEnvelope<T>).data
+    if (data !== undefined && data !== null) return data
+  }
+  return value as T
+}
+
 // ── 基础请求 ──
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -39,8 +80,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       throw new Error('登录已过期，正在跳转...')
     }
     const body = await res.text().catch(() => '')
-    let msg = `请求失败: ${res.status}`
-    try { msg = JSON.parse(body).message || msg } catch { /* not JSON */ }
+    let parsed: unknown = null
+    try { parsed = JSON.parse(body) } catch { /* 非 JSON 响应使用状态码 */ }
+    const msg = formatApiErrorMessage(parsed, res.status)
     // 携带 status 便于调用方区分 403（无权限）与 5xx/网络错误
     const err = new Error(msg) as Error & { status: number }
     err.status = res.status
@@ -50,31 +92,31 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export async function apiGet<T>(url: string, options?: RequestInit): Promise<T> {
-  const json = await request<T>(url, { ...options, method: 'GET' })
-  return (json as any).data ?? json
+  const json = await request<T | ApiDataEnvelope<T>>(url, { ...options, method: 'GET' })
+  return unwrapApiData(json)
 }
 
 export async function apiPost<T>(url: string, body?: unknown, options?: RequestInit): Promise<T> {
-  const json = await request<T>(url, {
+  const json = await request<T | ApiDataEnvelope<T>>(url, {
     ...options,
     method: 'POST',
     body: body ? JSON.stringify(body) : undefined,
   })
-  return (json as any).data ?? json
+  return unwrapApiData(json)
 }
 
 export async function apiPut<T>(url: string, body?: unknown, options?: RequestInit): Promise<T> {
-  const json = await request<T>(url, {
+  const json = await request<T | ApiDataEnvelope<T>>(url, {
     ...options,
     method: 'PUT',
     body: body ? JSON.stringify(body) : undefined,
   })
-  return (json as any).data ?? json
+  return unwrapApiData(json)
 }
 
 export async function apiDelete<T>(url: string, options?: RequestInit): Promise<T> {
-  const json = await request<T>(url, { ...options, method: 'DELETE' })
-  return (json as any).data ?? json
+  const json = await request<T | ApiDataEnvelope<T>>(url, { ...options, method: 'DELETE' })
+  return unwrapApiData(json)
 }
 
 // ── 分页请求（兼容后端 { data, meta } 格式） ──
@@ -83,11 +125,12 @@ export async function apiFetchPaginated<T>(
   url: string,
   options?: RequestInit,
 ): Promise<{ items: T[]; total: number; page: number; page_size: number }> {
-  const result = await request<any>(url, options)
+  const result = await request<ApiPageEnvelope<T> | T[]>(url, options)
+  const page = Array.isArray(result) ? { data: result } : result
   return {
-    items: result.data || [],
-    total: result.meta?.total || 0,
-    page: result.meta?.page || 1,
-    page_size: result.meta?.page_size || 20,
+    items: page.data || [],
+    total: page.meta?.total || 0,
+    page: page.meta?.page || 1,
+    page_size: page.meta?.page_size || 20,
   }
 }

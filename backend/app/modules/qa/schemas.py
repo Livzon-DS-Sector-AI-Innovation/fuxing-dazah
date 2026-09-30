@@ -386,6 +386,8 @@ class DocumentExtractionRunSummary(BaseModel):
     is_current: bool = False
     parser_mode: str
     parser_version: str
+    provider: str | None = None
+    provider_state: str | None = None
     block_count: int = 0
     char_count: int = 0
     statistics: dict[str, Any] | None = None
@@ -451,8 +453,10 @@ class DocumentChunkPreviewOut(BaseModel):
     page_end: int | None = None
     source_start: int | None = None
     source_end: int | None = None
-    content_preview: str
-    content_truncated: bool
+    retrieval_text_preview: str | None = None
+    retrieval_char_count: int | None = None
+    retrieval_text_truncated: bool = False
+    retrieval_text_hash: str | None = None
     content_hash: str
     metadata: dict[str, Any] | None = None
     source_blocks: list[DocumentChunkSourceBlockOut] = Field(default_factory=list)
@@ -579,5 +583,4 @@ class MasterObjectProposalApproveRequest(BaseModel):
     """允许审核人修正提案字段；sources 明确不接受 AI 自动来源。"""
 
     payload: dict[str, Any] | None = None
-
 

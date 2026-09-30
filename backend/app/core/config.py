@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     QA_AI_PROMPT_VERSION: str = "qa-entity-v1"
     QA_AI_SCHEMA_VERSION: str = "qa-entity-schema-v1"
 
+    # QA 新上传/重提取统一使用 MinerU v4 异步 API；旧运行记录仍可保留
+    # native provider 值用于历史兼容。API token 只从部署环境注入。
+    QA_MD_EXTRACT_PROVIDER: str = "mineru"
+    QA_MD_EXTRACT_API_TOKEN: str = ""
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

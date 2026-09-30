@@ -85,6 +85,28 @@ def content_disposition(disposition: str, filename: str) -> str:
     )
 
 
+# 允许内联渲染的类型。提取产物的 MIME 是从远端 ZIP 成员名推出来的
+# （mineru._unzip_artifacts 里的 mimetypes.guess_type），成员名叫什么就
+# 是什么；text/html、image/svg+xml 一旦 inline 就是 API 域下的存储型 XSS
+# ——next.config.ts 把 /api 重写到后端，与 auth_token 同源。图片要放行是
+# 因为 Markdown 预览用 <img src> 直接取产物；SVG 可以带脚本，不放。
+_INLINE_MEDIA_TYPES = frozenset({
+    "application/pdf",
+    "image/bmp",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+})
+
+
+def inline_media_type(mime_type: str | None) -> str | None:
+    """可以安全内联渲染时返回该类型，否则返回 None。"""
+
+    normalized = (mime_type or "").split(";", 1)[0].strip().casefold()
+    return normalized if normalized in _INLINE_MEDIA_TYPES else None
+
+
 def _detect_magic(extension: str, data: bytes) -> bool:
     if extension == ".pdf":
         return data.startswith(b"%PDF-")
@@ -177,6 +199,35 @@ def read_file(key: str) -> tuple[bytes, str] | None:
     if not path.is_file() or not path.resolve().is_relative_to(_local_root().resolve()):
         return None
     return path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
+def store_object(
+    key: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+) -> str:
+    """保存 QA 受保护对象，供原文件之外的解析产物复用同一存储策略。
+
+    MinIO 开启时统一调用 ``app.core.storage``；本地开发沿用 QA 私有目录，
+    这样切换提取后端不会引入第二套对象存储配置。
+    """
+    if not _is_safe_key(key):
+        raise FileValidationError("对象存储键不安全")
+    if object_storage.is_enabled():
+        return object_storage.upload_object("qa", key, data, len(data), content_type)
+    path = _local_root() / key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return key
+
+
+def read_object(key: str) -> tuple[bytes, str] | None:
+    """读取解析产物等任意 QA 私有对象。"""
+    return read_file(key)
 
 
 def delete_file(key: str) -> None:

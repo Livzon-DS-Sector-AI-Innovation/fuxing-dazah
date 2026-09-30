@@ -4,20 +4,22 @@
 AI、向量化或业务关联。raw block 保留原始证据；chunk 可以在解析版本
 不变时被确定性重建，供后续 AI、embedding、检索和知识图谱消费者使用。
 
-本期仅实现 ``native_text``。扫描 PDF/图片以后可以实现同一个解析器接口
-并使用 ``ocr`` 模式，而不用改动下游数据契约。
+新文件统一消费 MinerU 产出的 Markdown/JSON。原生解析接口仅供旧调用
+兼容，分块重建仍共用确定性的 RawBlock/DocumentChunk 契约。
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 PARSER_VERSION = "qa-native-text-v2"
-CHUNK_VERSION = "qa-context-v1"
+CHUNK_VERSION = "qa-markdown-context-v2"
+MARKDOWN_PARSER_VERSION = "qa-mineru-markdown-v1"
 TARGET_CHARS = 3000
 MAX_CHARS = 4000
 MAX_TOKENS = 4096
@@ -53,6 +55,32 @@ class RawBlock:
     def text_hash(self) -> str:
         return hashlib.sha256(self.content.encode("utf-8")).hexdigest()
 
+    @property
+    def retrieval_text(self) -> str:
+        """返回用于检索/embedding 的派生文本，不改变 raw 证据。"""
+
+        # 延迟导入避免 markdown_processing -> document_processing 的循环
+        # 导入；属性只有在解析完成后才会被下游检索/持久化层访问。
+        from app.modules.qa.markdown_processing import normalize_retrieval_text
+
+        return normalize_retrieval_text(
+            self.content,
+            block_type=self.block_type,
+            source_metadata=self.source_metadata,
+        )
+
+    @property
+    def retrieval_text_hash(self) -> str:
+        return hashlib.sha256(self.retrieval_text.encode("utf-8")).hexdigest()
+
+    @property
+    def retrieval_char_count(self) -> int:
+        return len(self.retrieval_text)
+
+    @property
+    def retrieval_token_count(self) -> int:
+        return _token_count(self.retrieval_text)
+
 
 @dataclass(slots=True, frozen=True)
 class DocumentChunk:
@@ -73,6 +101,38 @@ class DocumentChunk:
     # 仅用于证据映射而未进入正文的 block 会得到零宽区间。
     block_offsets: tuple[tuple[int, int, int], ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def retrieval_text(self) -> str:
+        """返回 chunk 的可读检索文本；``content`` 仍保留原始证据格式。"""
+
+        from app.modules.qa.markdown_processing import normalize_retrieval_text
+
+        return normalize_retrieval_text(
+            self.content,
+            block_type=(
+                "table"
+                if self.metadata.get("contains_table")
+                else "code"
+                if self.metadata.get("contains_code")
+                else "formula"
+                if self.metadata.get("contains_formula")
+                else "paragraph"
+            ),
+            source_metadata=self.metadata,
+        )
+
+    @property
+    def retrieval_text_hash(self) -> str:
+        return hashlib.sha256(self.retrieval_text.encode("utf-8")).hexdigest()
+
+    @property
+    def retrieval_char_count(self) -> int:
+        return len(self.retrieval_text)
+
+    @property
+    def retrieval_token_count(self) -> int:
+        return _token_count(self.retrieval_text)
 
 
 @dataclass(slots=True, frozen=True)
@@ -104,6 +164,14 @@ def _token_count(value: str) -> int:
     if not value:
         return 0
     return max(1, int(len(re.findall(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\w\s]", value)) * 1.05))
+
+
+def _retrieval_text_version() -> str:
+    """延迟读取归一化规则版本，避免模块互相导入。"""
+
+    from app.modules.qa.markdown_processing import RETRIEVAL_TEXT_VERSION
+
+    return RETRIEVAL_TEXT_VERSION
 
 
 def _split_long_text(
@@ -167,6 +235,17 @@ def _heading_path_for(style_name: str, text: str, current: list[str]) -> tuple[s
     if not match:
         return tuple(current)
     level = max(1, int(match.group(1)))
+    del current[level - 1 :]
+    current.append(text)
+    return tuple(current)
+
+
+def _heading_path_for_level(
+    level: int, text: str, current: list[str]
+) -> tuple[str, ...]:
+    """根据 Markdown/结构化结果中的标题级别更新标题路径。"""
+
+    level = max(1, min(6, level))
     del current[level - 1 :]
     current.append(text)
     return tuple(current)
@@ -579,8 +658,10 @@ def _make_chunk(
     derived_metadata: dict[str, Any] = {
         "raw_block_count": len(blocks),
         "contains_table": any(
-            block.block_type in {"table_header", "table_row"} for block in blocks
+            block.block_type in {"table", "table_header", "table_row"} for block in blocks
         ),
+        "contains_code": any(block.block_type == "code" for block in blocks),
+        "contains_formula": any(block.block_type == "formula" for block in blocks),
         "boilerplate_candidate": any(
             bool(block.source_metadata.get("boilerplate_candidate")) for block in blocks
         ),
@@ -588,6 +669,11 @@ def _make_chunk(
             bool(block.source_metadata.get("boilerplate_candidate")) for block in blocks
         ),
     }
+    # 将派生文本规则版本随 chunk 一起持久化，规则升级时可以只重建
+    # retrieval/embedding 索引，不必重新调用 MinerU。
+    from app.modules.qa.markdown_processing import RETRIEVAL_TEXT_VERSION
+
+    derived_metadata["retrieval_text_version"] = RETRIEVAL_TEXT_VERSION
     if omitted:
         derived_metadata["omitted_raw_block_orders"] = sorted(omitted)
     if metadata:
@@ -609,8 +695,18 @@ def _make_chunk(
     )
 
 
-def build_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
+def _build_native_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
     """按标题/段落/表格边界确定性构建上下文块。"""
+
+    # MinerU 常在目录、页眉等位置输出 ``<a id="_Toc..."></a>``。它们
+    # 必须保留在 raw 证据中以便审计，但没有可检索正文，不应单独占用一
+    # 个 chunk 或进入 embedding。其余有意义的结构块即使归一化为空，也
+    # 不会静默丢弃，避免改变 native PDF/DOCX 的历史契约。
+    blocks = [
+        block
+        for block in blocks
+        if block.retrieval_text or block.block_type not in {"paragraph", "image"}
+    ]
 
     chunks: list[DocumentChunk] = []
     current_blocks: list[RawBlock] = []
@@ -650,6 +746,29 @@ def build_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
         table_header_truncated = False
 
     for block in blocks:
+        # MinerU Markdown/JSON 中的完整表格是一个原子语义单元。即使表格
+        # 超过通用正文上限，也保留为单个 chunk；否则列标题与数据行分离后
+        # 会让后续 RAG 难以恢复列含义。旧 DOCX/PDF 的 row block 仍使用
+        # 下方兼容逻辑，可在历史数据重建时保持原行为。
+        if block.block_type == "table":
+            flush()
+            chunks.append(
+                _make_chunk(
+                    len(chunks),
+                    [block],
+                    block.content,
+                    metadata={
+                        "table_atomic": True,
+                        "table_oversized": bool(
+                            len(block.content) > MAX_CHARS
+                            or _token_count(block.content) > MAX_TOKENS
+                        ),
+                    },
+                    block_fragments=[(block.source_order, block.content)],
+                )
+            )
+            continue
+
         is_table = block.block_type in {"table_header", "table_row"}
         # 标题是稳定的语义边界；标题本身与后续内容放在同一块。
         if block.block_type == "heading" and current_parts:
@@ -714,6 +833,65 @@ def build_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
     return chunks
 
 
+def build_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
+    """统一 RawBlock 分块入口。
+
+    Markdown/JSON 产物已经在归一化阶段识别了原子表格；旧 native block
+    继续走兼容分支，以便历史解析运行可以确定性重建。
+    """
+
+    return _build_native_chunks(blocks)
+
+
+def parse_extracted_document(
+    markdown: str,
+    structured: dict[str, Any] | list[Any] | None = None,
+) -> ExtractionDocument:
+    """解析 MinerU 的 Markdown 与可选结构化 JSON，并共用统一分块算法。
+
+    JSON 只有在能覆盖 Markdown 的正文且节点类型全部已知时才作为主来源；
+    否则保留完整 Markdown，附加能可靠匹配的页码/坐标，避免解析器因
+    MinerU 版本差异静默丢失正文。
+    """
+
+    try:
+        from app.modules.qa.markdown_processing import select_blocks
+
+        blocks, source_stats = select_blocks(markdown, structured)
+    except Exception as exc:
+        return ExtractionDocument(
+            "failed", (), (), parser_version=MARKDOWN_PARSER_VERSION,
+            chunk_version=CHUNK_VERSION, mode="mineru", error=str(exc)[:2000],
+        )
+    if not blocks:
+        return ExtractionDocument(
+            "text_not_available", (), (), parser_version=MARKDOWN_PARSER_VERSION,
+            chunk_version=CHUNK_VERSION, mode="mineru", statistics=source_stats,
+        )
+    chunks = build_chunks(blocks)
+    statistics = {
+        **source_stats,
+        "extension": "md",
+        "block_count": len(blocks),
+        "chunk_count": len(chunks),
+        "char_count": sum(len(block.content) for block in blocks),
+        "retrieval_char_count": sum(block.retrieval_char_count for block in blocks),
+        "retrieval_text_version": _retrieval_text_version(),
+        "retrieval_empty_block_count": sum(
+            not block.retrieval_text for block in blocks
+        ),
+        "table_block_count": sum(block.block_type == "table" for block in blocks),
+        "page_count": len({block.page_number for block in blocks if block.page_number is not None}),
+    }
+    return ExtractionDocument(
+        "ready", tuple(blocks), tuple(chunks),
+        parser_version=MARKDOWN_PARSER_VERSION,
+        chunk_version=CHUNK_VERSION,
+        mode="mineru",
+        statistics=statistics,
+    )
+
+
 def parse_document(
     extension: str,
     data: bytes,
@@ -727,15 +905,23 @@ def parse_document(
     """
 
     ext = extension.lower().lstrip(".")
-    if mode not in {"native_text", "ocr"}:
+    if mode not in {"native_text", "ocr", "mineru"}:
         return ExtractionDocument("unsupported", (), (), mode=mode, error="不支持的解析模式")
     if mode == "ocr":
         return ExtractionDocument("text_not_available", (), (), mode=mode, statistics={"ocr_reserved": True})
+    if ext in {"md", "markdown"}:
+        return parse_extracted_document(data.decode("utf-8-sig"))
+    if ext in {"json", "content_list", "middle"}:
+        try:
+            structured = json.loads(data.decode("utf-8-sig"))
+        except (ValueError, UnicodeError):
+            return ExtractionDocument("failed", (), (), mode="mineru", error="结构化 JSON 无效")
+        return parse_extracted_document("", structured)
     if ext not in {"pdf", "docx"}:
         return ExtractionDocument("unsupported", (), (), statistics={"extension": ext})
     try:
-        blocks = _pdf_blocks(data) if ext == "pdf" else _docx_blocks(data) if ext == "docx" else []
-    except Exception as exc:  # 由 service 持久化错误，不把原文/响应写日志
+        blocks = _pdf_blocks(data) if ext == "pdf" else _docx_blocks(data)
+    except Exception as exc:
         return ExtractionDocument("failed", (), (), error=str(exc)[:2000])
     if not blocks:
         return ExtractionDocument(
@@ -747,10 +933,24 @@ def parse_document(
     chunks = build_chunks(blocks)
     statistics = {
         "extension": ext,
+        "source_format": "structured_json" if ext in {"json", "content_list", "middle"} else "markdown" if ext in {"md", "markdown"} else "native",
         "block_count": len(blocks),
         "chunk_count": len(chunks),
         "char_count": sum(len(block.content) for block in blocks),
+        "retrieval_char_count": sum(block.retrieval_char_count for block in blocks),
+        "retrieval_text_version": _retrieval_text_version(),
+        "retrieval_empty_block_count": sum(
+            not block.retrieval_text for block in blocks
+        ),
         "table_block_count": sum(block.block_type.startswith("table") for block in blocks),
         "pdf_block_count": sum(block.block_type == "pdf_block" for block in blocks),
     }
-    return ExtractionDocument("ready", tuple(blocks), tuple(chunks), statistics=statistics)
+    parser_version = MARKDOWN_PARSER_VERSION if ext in {"md", "markdown", "json", "content_list", "middle"} else PARSER_VERSION
+    return ExtractionDocument(
+        "ready",
+        tuple(blocks),
+        tuple(chunks),
+        parser_version=parser_version,
+        mode=mode,
+        statistics=statistics,
+    )

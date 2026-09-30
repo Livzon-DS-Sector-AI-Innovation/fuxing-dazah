@@ -97,3 +97,16 @@ def test_extract_pdf_marks_scan_without_text() -> None:
 
     assert status == "text_not_available"
     assert segments == []
+
+
+def test_inline_media_type_only_admits_non_scriptable_types() -> None:
+    """产物 MIME 来自远端 ZIP 成员名，不能凭它把 HTML/SVG 内联渲染出去。"""
+
+    assert file_service.inline_media_type("application/pdf") == "application/pdf"
+    assert file_service.inline_media_type("image/png; charset=binary") == "image/png"
+    assert file_service.inline_media_type("IMAGE/JPEG") == "image/jpeg"
+
+    assert file_service.inline_media_type("text/html") is None
+    assert file_service.inline_media_type("image/svg+xml") is None
+    assert file_service.inline_media_type("application/zip") is None
+    assert file_service.inline_media_type(None) is None

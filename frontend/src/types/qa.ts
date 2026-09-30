@@ -218,6 +218,9 @@ export interface QaDocumentExtractionRunSummary {
   is_current: boolean
   parser_mode: string
   parser_version: string
+  /** 提取服务提供方及其最近状态；旧后端可能不返回。 */
+  provider?: string | null
+  provider_state?: string | null
   block_count: number
   char_count: number
   statistics?: Record<string, unknown> | null
@@ -225,6 +228,23 @@ export interface QaDocumentExtractionRunSummary {
   started_at?: string | null
   finished_at?: string | null
   created_at?: string | null
+}
+
+export interface QaDocumentArtifact {
+  id: string
+  file_id: string
+  extraction_run_id: string
+  artifact_type: string
+  source_name: string
+  mime_type: string
+  size_bytes: number
+  sha256: string
+  created_at?: string | null
+}
+
+export interface QaDocumentArtifactsResult {
+  items: QaDocumentArtifact[]
+  total: number
 }
 
 /** 由 raw block 确定性派生的一次分块运行摘要。 */
@@ -273,6 +293,7 @@ export interface QaDocumentChunkSourceBlock {
 export interface QaDocumentTextChunk {
   id: string
   chunk_order: number
+  /** 原始 chunk 的长度，仅供证据定位；查看器不展示原始正文。 */
   char_count: number
   /** 后端为后续模型限长保留；文件详情查看器不展示 token 统计。 */
   token_count: number
@@ -281,9 +302,12 @@ export interface QaDocumentTextChunk {
   page_end?: number | null
   source_start?: number | null
   source_end?: number | null
-  content_preview: string
-  content_truncated: boolean
   content_hash: string
+  /** 清洗后的检索文本；旧解析结果可能尚未生成，因此不回退展示原始 HTML。 */
+  retrieval_text_preview: string | null
+  retrieval_char_count: number | null
+  retrieval_text_truncated: boolean
+  retrieval_text_hash: string | null
   metadata?: Record<string, unknown> | null
   source_blocks: QaDocumentChunkSourceBlock[]
 }

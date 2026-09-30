@@ -38,9 +38,11 @@ import type { UploadFile } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   CheckCircleOutlined,
+  CloseCircleOutlined,
   DatabaseOutlined,
   EditOutlined,
-  FilePdfOutlined,
+  DownloadOutlined,
+  FileMarkdownOutlined,
   FileSearchOutlined,
   FileTextOutlined,
   LinkOutlined,
@@ -52,6 +54,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { QaMarkdownPreview } from './QaMarkdownPreview'
 import { usePermission } from '@/hooks/usePermission'
 import {
   fetchQaAuditLogs,
@@ -59,12 +62,15 @@ import {
   fetchQaMasterObjectProposals,
   fetchQaDepartments,
   fetchQaDocument,
+  fetchQaDocumentArtifactContent,
+  fetchQaDocumentArtifacts,
   fetchQaDocumentProcessingResults,
   fetchQaDocumentTypes,
   fetchQaDocuments,
   fetchQaMasterObjects,
   fetchQaSearch,
   fetchQaSources,
+  qaDocumentArtifactContentUrl,
   qaFileContentUrl,
   qaMasterKindLabel,
 } from '@/lib/api/qa'
@@ -79,6 +85,7 @@ import {
   triggerQaAiAnalysis,
   approveQaMasterObjectProposal,
   rejectQaMasterObjectProposal,
+  rejectAllQaMasterObjectProposals,
   setQaDocumentActive,
   setQaDocumentTypeActive,
   setQaMasterObjectActive,
@@ -96,6 +103,8 @@ import type {
   QaAiRelationSuggestion,
   QaDepartmentReference,
   QaDocument,
+  QaDocumentArtifact,
+  QaDocumentArtifactsResult,
   QaDocumentChunkRunSummary,
   QaDocumentExtractionRunSummary,
   QaDocumentFile,
@@ -140,6 +149,23 @@ const STATUS_LABEL: Record<string, string> = {
   text_not_available: '无正文',
   unsupported: '不支持解析',
   failed: '解析失败',
+}
+
+const PROVIDER_STATE_LABEL: Record<string, string> = {
+  queued: '排队中',
+  'waiting-file': '等待文件',
+  uploading: '上传中',
+  upload_pending: '等待上传',
+  pending: '等待识别',
+  submitted: '已提交',
+  processing: '识别中',
+  converting: '转换中',
+  done: '已完成',
+  completed: '已完成',
+  ready: '已完成',
+  canceled: '已取消',
+  cancelled: '已取消',
+  failed: '调用失败',
 }
 
 function displayMasterCode(item: QaMasterObject): string {
@@ -297,6 +323,30 @@ function formatBytes(value?: number | null): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
+function isExtractionPending(status?: string | null): boolean {
+  return status === 'queued' || status === 'processing'
+}
+
+function artifactTypeLabel(value: string): string {
+  const normalized = value.toLowerCase()
+  if (normalized === 'md' || normalized === 'markdown') return 'Markdown'
+  if (normalized === 'json' || normalized === 'structure') return '结构化 JSON'
+  if (normalized === 'zip' || normalized.includes('bundle') || normalized.includes('package')) return '结果包'
+  if (normalized.startsWith('image') || normalized === 'png' || normalized === 'jpg' || normalized === 'jpeg') return '图片'
+  if (normalized === 'asset') return '附件'
+  return value || '提取产物'
+}
+
+function isMarkdownArtifact(item: QaDocumentArtifact): boolean {
+  const type = item.artifact_type.toLowerCase()
+  return type === 'md' || type === 'markdown' || item.source_name.toLowerCase().endsWith('.md')
+}
+
+function isResultPackageArtifact(item: QaDocumentArtifact): boolean {
+  const type = item.artifact_type.toLowerCase()
+  return type === 'zip' || type.includes('bundle') || type.includes('package') || item.source_name.toLowerCase().endsWith('.zip')
+}
+
 const pad2 = (value: number) => String(value).padStart(2, '0')
 
 /** 表格列用的日期：主数据扫读只需要到天。 */
@@ -366,13 +416,13 @@ export default function QaWorkspace({ view = 'home', documentId }: { view?: QaVi
 // ─────────────────────────────────────────────────────────────
 
 function QaHome() {
-  const { message } = App.useApp()
   const router = useRouter()
   const [keyword, setKeyword] = useState('')
   const [submittedKeyword, setSubmittedKeyword] = useState('')
   const [includeHistory, setIncludeHistory] = useState(false)
   const [includeInactive, setIncludeInactive] = useState(false)
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [results, setResults] = useState<QaSearchResult[]>([])
   const [stats, setStats] = useState({ documents: 0, masters: 0, currentVersions: 0, departments: 0 })
   const [statsLoading, setStatsLoading] = useState(true)
@@ -402,16 +452,20 @@ function QaHome() {
     const q = keyword.trim()
     if (!q) {
       setSubmittedKeyword('')
+      setSearchError(null)
       setResults([])
       return
     }
     setSearching(true)
+    setSearchError(null)
     try {
       const page = await fetchQaSearch({ q, include_history: includeHistory, include_inactive: includeInactive, page_size: 50 })
       setResults(page.items)
       setSubmittedKeyword(q)
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '搜索失败')
+      setResults([])
+      setSubmittedKeyword(q)
+      setSearchError(error instanceof Error ? error.message : '搜索失败')
     } finally {
       setSearching(false)
     }
@@ -469,6 +523,17 @@ function QaHome() {
         <Col xs={24} sm={12} lg={6}><Card><Statistic title="已设当前版本" value={stats.currentVersions} loading={statsLoading} prefix={<CheckCircleOutlined />} /></Card></Col>
         <Col xs={24} sm={12} lg={6}><Card><Statistic title="飞书部门" value={stats.departments} loading={statsLoading} prefix={<TeamOutlined />} /></Card></Col>
       </Row>
+
+      {searchError && (
+        <Alert
+          type="error"
+          showIcon
+          title="检索失败"
+          description={searchError}
+          action={<Button size="small" onClick={() => { void runSearch() }}>重试</Button>}
+          style={{ marginBottom: 18 }}
+        />
+      )}
 
       {results.length > 0 ? (
         <Card title={<span><SearchOutlined /> 搜索结果</span>} extra={<Button icon={<ReloadOutlined />} onClick={() => { void runSearch() }}>刷新</Button>}>
@@ -1012,19 +1077,39 @@ function QaMasterProposalInbox({ open, onClose, canCreate, canUpdate }: {
     })
   }
 
+  // 全部拒绝作用于整个待审核队列（含当前过滤视图之外、未加载的提案），确认文案不绑定当前列表。
+  const rejectAll = () => {
+    modal.confirm({
+      title: '拒绝全部待审核提案',
+      content: '将拒绝提案箱内所有待审核的 AI 提案（包括当前列表未加载的），拒绝后将从提案箱移除。',
+      okText: '全部拒绝', cancelText: '取消', okButtonProps: { danger: true },
+      onOk: async () => {
+        const result = await rejectAllQaMasterObjectProposals()
+        if (!result.success) { message.error(actionError(result)); return }
+        const { rejected = 0, skipped = 0 } = result.data ?? {}
+        if (rejected <= 0) { message.info('没有可拒绝的待审核提案') }
+        else if (skipped > 0) { message.warning(`已拒绝 ${rejected} 条提案，另有 ${skipped} 条因无对应权限跳过`) }
+        else { message.success(`已拒绝 ${rejected} 条待审核提案`) }
+        setRefreshKey((value) => value + 1)
+      },
+    })
+  }
+
   return (
-    <Drawer title="AI 主数据提案箱" open={open} onClose={() => { setEditing(null); onClose() }} size={720} extra={<Button icon={<ReloadOutlined />} onClick={() => setRefreshKey((value) => value + 1)}>刷新</Button>}>
+      <Drawer title="AI 主数据提案箱" open={open} onClose={() => { setEditing(null); onClose() }} size={720} extra={<Button icon={<ReloadOutlined />} onClick={() => setRefreshKey((value) => value + 1)}>刷新</Button>}>
       <Alert type="info" showIcon title="AI 只提出建议" description="审批前可在此核对字段和证据；AI 不会自动写入正式主数据或跨模块来源。" style={{ marginBottom: 16 }} />
-      <Segmented
-        value={statusFilter}
-        options={[
-          { value: 'pending', label: '待审核' },
-          { value: 'conflict', label: '冲突' },
-          { value: 'all', label: '全部' },
-        ]}
-        onChange={(value) => setStatusFilter(value as 'pending' | 'conflict' | 'all')}
-        style={{ marginBottom: 16 }}
-      />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Segmented
+          value={statusFilter}
+          options={[
+            { value: 'pending', label: '待审核' },
+            { value: 'conflict', label: '冲突' },
+            { value: 'all', label: '全部' },
+          ]}
+          onChange={(value) => setStatusFilter(value as 'pending' | 'conflict' | 'all')}
+        />
+        {statusFilter === 'pending' && (canCreate || canUpdate) && <Button danger icon={<CloseCircleOutlined />} onClick={rejectAll}>全部拒绝</Button>}
+      </div>
       <Table<QaMasterObjectProposal>
         rowKey="id" loading={loading} dataSource={rows} pagination={false} scroll={{ x: 760 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={statusFilter === 'pending' ? '暂无待审核提案' : statusFilter === 'conflict' ? '暂无冲突提案' : '暂无 AI 提案'} /> }}
@@ -1825,29 +1910,38 @@ function QaDocumentDetailDrawer({
   return (
     <Drawer title="文件详情" open={!!documentId} size={720} onClose={onClose}>
       {loading && !document ? <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div> : document ? <>
-        {/* 先立身份：编号是这份文件在台账里的名字，标题是它是什么 */}
+        {/* 先立身份：编号是这份文件在台账里的名字，标题是它是什么；
+            台账状态（启用/停用）跟编号同一行两端，是这份记录还算不算数的答案。 */}
         <div className={styles.identity}>
-          <Text className={styles.identityCode} copyable={{ text: document.document_no }}>{document.document_no}</Text>
-          <div className={styles.identityName}>{document.title}</div>
-          <div className={styles.identityMeta}>
+          <div className={styles.identityTop}>
+            <Text className={styles.identityCode} copyable={{ text: document.document_no }}>{document.document_no}</Text>
             {statusTag(document.status, isDocumentActive(document))}
-            <span className={styles.identityKind}>
-              {[documentTypeLabelOf(document), document.responsible_department_name || document.responsible_department_name_snapshot || document.department_name].filter(Boolean).join(' · ')}
-            </span>
+          </div>
+          <div className={styles.identityName}>{document.title}</div>
+          <div className={styles.identityKind}>
+            {[documentTypeLabelOf(document), document.responsible_department_name || document.responsible_department_name_snapshot || document.department_name].filter(Boolean).join(' · ')}
           </div>
         </div>
 
-        {/* 版本链既是这份文件的形态，也是选择器：点哪个版本，下面就是哪个版本的档案。 */}
+        {/* 版本链既是这份文件的形态，也是选择器：点哪个版本，下面就是哪个版本的档案。
+            实心黑只给"现行"（记录状态），外圈给"正在查看"（光标），虚线给"已停用"——
+            三个信号各占一条通道，点开旧版本不会看起来像把旧版本设成了现行。 */}
         <div className={styles.versionBar}>
           {versions.map((version) => {
             const versionActive = isVersionActive(version)
             const isCurrent = version.id === document.current_version_id
+            const isViewing = selected?.id === version.id
             return (
               <button
                 key={version.id}
                 type="button"
-                className={`${styles.versionTab} ${selected?.id === version.id ? styles.versionTabActive : ''} ${versionActive ? '' : styles.versionTabInactive}`}
-                aria-pressed={selected?.id === version.id}
+                className={[
+                  styles.versionTab,
+                  isCurrent ? styles.versionTabInForce : '',
+                  isViewing ? styles.versionTabViewing : '',
+                  versionActive ? '' : styles.versionTabInactive,
+                ].filter(Boolean).join(' ')}
+                aria-pressed={isViewing}
                 onClick={() => setPicked({ documentId: document.id, versionId: version.id })}
               >
                 {version.version_label}
@@ -1861,8 +1955,12 @@ function QaDocumentDetailDrawer({
               <PlusOutlined />上传新版本
             </button>
           )}
-          {!versions.length && <span className={styles.fieldMissing}>尚未上传版本</span>}
         </div>
+        {!versions.length && (
+          <p className={styles.versionEmpty}>
+            {canVersion ? '尚未上传版本，正文解析会在上传后自动开始。' : '尚未上传版本。'}
+          </p>
+        )}
 
         {selected && (
           <VersionPanel
@@ -1944,6 +2042,8 @@ function VersionPanel({
   const { message, modal } = App.useApp()
   const [retrying, setRetrying] = useState(false)
   const [processingOpen, setProcessingOpen] = useState(false)
+  const [artifactsOpen, setArtifactsOpen] = useState(false)
+  const [artifactPreviewMode, setArtifactPreviewMode] = useState(false)
   const [processingSummary, setProcessingSummary] = useState<QaDocumentProcessingResult | null>(null)
   const [processingSummaryLoading, setProcessingSummaryLoading] = useState(false)
   const file = displayFile(version)
@@ -1954,6 +2054,12 @@ function VersionPanel({
   const relations = version.relations || []
   const currentExtractionRunId = file?.current_extraction_run_id || ''
   const currentChunkRunId = file?.current_chunk_run_id || ''
+  const retryAvailable = Boolean(
+    file
+    && canRetry
+    && !isExtractionPending(file.extraction_status)
+    && ['ready', 'text_not_available', 'unsupported', 'failed'].includes(file.extraction_status || ''),
+  )
 
   // 只为当前选中的版本读取一次轻量摘要；raw/chunk 明细在用户打开查看器后再分页读取。
   // queued/processing 也要读取 latest run，用户可以在正文处理期间打开查看器看进度。
@@ -1995,7 +2101,7 @@ function VersionPanel({
         : ''
 
   const retry = async () => {
-    if (!file?.id || retrying) return
+    if (!file?.id || retrying || isExtractionPending(file.extraction_status)) return
     setRetrying(true)
     try {
       const result = await retryQaExtraction(file.id)
@@ -2005,83 +2111,96 @@ function VersionPanel({
     } finally { setRetrying(false) }
   }
 
-  const fields: Array<{ label: string; value: React.ReactNode }> = [
-    { label: '版本标签', value: <>{version.version_label}{isCurrent && <span className={styles.fieldMissing}> · 现行版本</span>}</> },
-    { label: '登记时间', value: formatDate(version.created_at) },
-    { label: '锁定时间', value: formatDate(version.locked_at || version.first_locked_at) },
-    { label: '批准声明', value: version.approved_declared ? '已确认外部批准' : <span className={styles.fieldMissing}>未确认</span> },
-    {
-      label: '正文',
-      value: file ? (
-        <>
-          <div className={styles.versionFile}>
-            <div className={styles.versionFileHead}>
-              {statusTag(file.extraction_status, true)}
-              {file.legacy && <Tag color="gold">旧解析</Tag>}
-              <span className={styles.versionFileName}>{file.original_filename || file.filename || '文件'}</span>
-              <span className={styles.fieldMissing}>{formatBytes(file.size_bytes ?? file.file_size)}</span>
-            </div>
-            <div className={styles.versionFileMeta}>
-              {file.sha256 && <Text className={styles.versionHash} copyable={{ text: file.sha256 }}>SHA-256 {file.sha256.slice(0, 16)}…</Text>}
-              <Button type="link" size="small" icon={<FilePdfOutlined />} href={qaFileContentUrl(file.id)} target="_blank">预览 / 下载</Button>
-              <Button
-                type="link"
-                size="small"
-                icon={<FileSearchOutlined />}
-                onClick={() => setProcessingOpen(true)}
-              >
-                查看解析/分块
-              </Button>
-              {canRetry && file.extraction_status === 'failed' && <Button type="link" size="small" loading={retrying} onClick={() => { void retry() }}>重试解析</Button>}
-            </div>
+  const openArtifacts = (previewMarkdown: boolean) => {
+    setArtifactPreviewMode(previewMarkdown)
+    setArtifactsOpen(true)
+  }
+
+  const lockedAt = version.locked_at || version.first_locked_at
+
+  return (
+    <div className={styles.versionPanel}>
+      {/* 这一版的三条事实。版本号已由上面的版本链承担，这里不再重复；
+          批准声明是 AI 分析的闸门，未确认时要显眼；没锁定说明这一版还能改。 */}
+      <div className={styles.versionFacts}>
+        <span className={styles.fact}><span className={styles.factLabel}>登记</span>{formatDate(version.created_at)}</span>
+        <span className={styles.fact}>
+          <span className={styles.factLabel}>锁定</span>
+          {lockedAt ? formatDate(lockedAt) : <span className={styles.factMissing}>未锁定</span>}
+        </span>
+        <span className={styles.fact}>
+          <span className={styles.factLabel}>批准声明</span>
+          {version.approved_declared ? '已确认外部批准' : <span className={styles.factWarn}>未确认外部批准</span>}
+        </span>
+      </div>
+
+      {file ? (
+        /* 一块底座装两件事：原件是封存的凭据，系统解析是从它派生出来的索引。
+           后者可以重建、可以失败，前者不动——分开讲，用户才知道"重新提取"动的不是原件。 */
+        <section className={styles.artifactPanel}>
+          <div className={styles.blockLabel}>原件</div>
+          <div className={styles.artifactName}>{file.original_filename || file.filename || '文件'}</div>
+          <div className={styles.artifactMeta}>
+            <span>{formatBytes(file.size_bytes ?? file.file_size)}</span>
+            {file.sha256 && <Text className={styles.versionHash} copyable={{ text: file.sha256 }}>SHA-256 {file.sha256.slice(0, 16)}…</Text>}
+          </div>
+          <div className={styles.panelActions}>
+            <Button type="link" size="small" icon={<FileMarkdownOutlined />} onClick={() => openArtifacts(true)}>预览 Markdown</Button>
+            <Button type="link" size="small" icon={<FileTextOutlined />} href={qaFileContentUrl(file.id, true)} target="_blank">下载原文件</Button>
+          </div>
+
+          <div className={styles.parseZone}>
             <ProcessingSummaryLine
               file={file}
               result={processingSummary}
               loading={processingSummaryLoading}
+              onOpen={() => setProcessingOpen(true)}
+              onArtifacts={() => openArtifacts(false)}
+              onRetry={() => { void retry() }}
+              /* 旧解析的重建动作由下面那条告警承担，同一件事不放两个入口。 */
+              retryAvailable={retryAvailable && !file.legacy}
+              retrying={retrying}
             />
           </div>
-          {file.legacy && (
-            <Alert
-              type="warning"
-              showIcon
-              title="旧解析数据需要重建解析与分块"
-              description={canRetry
-                ? '该版本仍可预览并人工维护关联；运行 AI 分析前，请先生成可追溯的 raw block 和 chunk，也可以上传新版本走新解析链路。重建不会修改原文件或现有正式关联。'
-                : '该版本仍可预览并人工维护关联；AI 分析前需由具备版本维护权限的用户重建解析与分块，或上传新版本走新解析链路。'}
-              action={canRetry ? <Button size="small" loading={retrying} onClick={() => { void retry() }}>重建解析/分块</Button> : undefined}
-              style={{ marginTop: 10 }}
-            />
-          )}
-        </>
-      ) : <span className={styles.fieldMissing}>该版本没有上传原件</span>,
-    },
-    {
-      label: '适用/关联',
-      value: relations.length
-        ? <span className={styles.relationRow}>{relations.map((link) => <Tag key={link.id || link.master_object_id}>{link.master_object_code || link.code_snapshot || ''}{link.master_object_name || link.name_snapshot ? ` · ${link.master_object_name || link.name_snapshot}` : ''}</Tag>)}</span>
-        : <span className={styles.fieldMissing}>未关联主数据</span>,
-    },
-  ]
+        </section>
+      ) : <p className={styles.artifactEmpty}>该版本没有上传原件</p>}
 
-  return (
-    <div className={styles.versionPanel}>
-      <dl className={styles.fields}>
-        {fields.map((field) => (
-          <Fragment key={field.label}>
-            <dt className={styles.fieldLabel}>{field.label}</dt>
-            <dd className={styles.fieldValue}>{field.value}</dd>
-          </Fragment>
-        ))}
-      </dl>
+      {file?.legacy && (
+        <Alert
+          type="warning"
+          showIcon
+          title="旧解析数据需要重建解析与分块"
+          description={canRetry
+            ? '该版本仍可预览并人工维护关联；运行 AI 分析前，请先生成可追溯的 raw block 和 chunk，也可以上传新版本走新解析链路。重建不会修改原文件或现有正式关联。'
+            : '该版本仍可预览并人工维护关联；AI 分析前需由具备版本维护权限的用户重建解析与分块，或上传新版本走新解析链路。'}
+          action={retryAvailable ? <Button size="small" loading={retrying} onClick={() => { void retry() }}>重建解析/分块</Button> : undefined}
+          style={{ marginTop: 12 }}
+        />
+      )}
 
+      {/* 关联决定这份文件在检索和 AI 分析里能命中什么，维护动作就贴在这一段上。 */}
+      <div className={styles.blockHead}>
+        <span className={styles.blockLabel}>适用/关联</span>
+        <span className={styles.blockActions}>
+          {canRelation && relationsEditable && <Button size="small" onClick={onRelations}>维护关联</Button>}
+          {canRelation && relationsEditable && hasCurrent && !isCurrent && <Button size="small" onClick={onCopyRelations}>复制当前关联</Button>}
+        </span>
+      </div>
+      {relations.length
+        ? <div className={styles.relationRow}>{relations.map((link) => {
+          const code = link.master_object_code || link.code_snapshot || ''
+          const name = link.master_object_name || link.name_snapshot || ''
+          return <Tag key={link.id || link.master_object_id}>{code && code !== name ? `${code} · ${name}` : name || code}</Tag>
+        })}</div>
+        : <p className={styles.relationEmpty}>未关联主数据</p>}
+
+      {/* 版本级动作：先跑分析，再改动这一版在链上的位置。 */}
       <div className={styles.versionActions}>
         {canAi && file && versionActive && (
           <Tooltip title={aiUnavailableReason || undefined}>
             <span><Button icon={<DatabaseOutlined />} disabled={Boolean(aiUnavailableReason)} onClick={onAiAnalysis}>AI 分析文档</Button></span>
           </Tooltip>
         )}
-        {canRelation && relationsEditable && <Button onClick={onRelations}>维护关联</Button>}
-        {canRelation && relationsEditable && hasCurrent && !isCurrent && <Button onClick={onCopyRelations}>复制当前关联</Button>}
         {canDisableVersion && !versionActive && <Button onClick={() => onSetActive(true)}>启用版本</Button>}
         {canCurrent && !isCurrent && versionActive && <Button type="primary" onClick={onMakeCurrent}>设为当前</Button>}
         {canDisableVersion && !isCurrent && versionActive && <Button danger onClick={() => { modal.confirm({ title: '停用版本', content: '停用后该版本不再参与默认检索，历史记录仍会保留。确认继续吗？', okText: '停用', cancelText: '取消', onOk: () => onSetActive(false) }) }}>停用版本</Button>}
@@ -2093,6 +2212,16 @@ function VersionPanel({
           versionLabel={version.version_label}
           initialResult={processingSummary}
           onClose={() => setProcessingOpen(false)}
+        />
+      )}
+      {file && artifactsOpen && (
+        <QaDocumentArtifactsModal
+          key={`${file.id}:${file.current_extraction_run_id || ''}`}
+          open={artifactsOpen}
+          file={file}
+          versionLabel={version.version_label}
+          autoPreviewMarkdown={artifactPreviewMode}
+          onClose={() => { setArtifactsOpen(false); setArtifactPreviewMode(false) }}
         />
       )}
     </div>
@@ -2126,14 +2255,31 @@ function processingCount(value?: number | null): string {
   return value == null ? '—' : new Intl.NumberFormat('zh-CN').format(value)
 }
 
+function processingRetrievalCharCount(chunkRun?: QaDocumentChunkRunSummary | null): number | null {
+  const value = chunkRun?.statistics?.retrieval_char_count
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** 原件底下的派生区：系统把原件解析成 raw block、再分块成 chunk 的过程与结果。
+ *  这里只讲"系统拿到了什么"，run 级别的排查在「解析与分块」查看器里做。 */
 function ProcessingSummaryLine({
   file,
   result,
   loading,
+  onOpen,
+  onArtifacts,
+  onRetry,
+  retryAvailable,
+  retrying,
 }: {
   file: QaDocumentFile
   result: QaDocumentProcessingResult | null
   loading: boolean
+  onOpen: () => void
+  onArtifacts: () => void
+  onRetry: () => void
+  retryAvailable: boolean
+  retrying: boolean
 }) {
   const extractionRun = result?.current_extraction_run
   const chunkRun = result?.current_chunk_run
@@ -2142,17 +2288,40 @@ function ProcessingSummaryLine({
   const countExtractionRun = extractionRun || latestExtraction
   const countChunkRun = chunkRun || latestChunk
   const latestIsDifferent = Boolean(latestExtraction && extractionRun && latestExtraction.id !== extractionRun.id)
+  const providerRun = extractionRun || latestExtraction
+  const parserVersion = result?.parser_version || countExtractionRun?.parser_version || file.parser_version
+  // "已完成"跟着状态标签一起出现时是废话；只有服务本身卡住或失败才值得单独说。
+  const providerState = providerRun?.provider_state
+  const providerStateNotable = Boolean(providerState && !['done', 'completed', 'ready'].includes(providerState))
+
   return (
-    <div className={styles.processingSummaryLine}>
-      <span className={styles.processingSummaryLabel}>解析/分块</span>
-      {statusTag(result?.extraction_status || file.extraction_status, true)}
-      <span>解析器 {result?.parser_version || countExtractionRun?.parser_version || file.parser_version || '—'}</span>
-      {loading ? <Spin size="small" /> : result ? <>
-        <span>raw block {processingCount(result.total ?? countExtractionRun?.block_count)}</span>
-        <span>chunk {processingCount(countChunkRun?.chunk_count)}</span>
-      </> : <span className={styles.fieldMissing}>运行摘要尚未建立</span>}
-      {latestExtraction && (!extractionRun || latestIsDifferent) && <span className={styles.processingLatest}>最近任务：{STATUS_LABEL[latestExtraction.status] || latestExtraction.status}</span>}
-    </div>
+    <>
+      <div className={styles.parseHead}>
+        <span className={styles.blockLabel}>系统解析</span>
+        {statusTag(result?.extraction_status || file.extraction_status, true)}
+        {file.legacy && <Tag color="gold">旧解析</Tag>}
+      </div>
+      <div className={styles.parseMeta}>
+        {providerRun?.provider && <span>{providerRun.provider}</span>}
+        {providerStateNotable && <span>{PROVIDER_STATE_LABEL[providerState!] || providerState}</span>}
+        {parserVersion && <span>{parserVersion}</span>}
+      </div>
+      <div className={styles.parseCounts}>
+        {loading ? <Spin size="small" /> : result ? <>
+          <span>raw block <b>{processingCount(result.total ?? countExtractionRun?.block_count)}</b></span>
+          <span>chunk <b>{processingCount(countChunkRun?.chunk_count)}</b></span>
+        </> : <span className={styles.fieldMissing}>运行摘要尚未建立</span>}
+      </div>
+      {/* 重新解析期间上面的数字来自上一次完成的运行，这个前提必须写出来。 */}
+      {latestExtraction && (!extractionRun || latestIsDifferent) && (
+        <p className={styles.parseNote}>最近一次任务：{STATUS_LABEL[latestExtraction.status] || latestExtraction.status}。以上数字来自上一次完成的运行。</p>
+      )}
+      <div className={styles.panelActions}>
+        <Button type="link" size="small" icon={<FileSearchOutlined />} onClick={onOpen}>解析与分块</Button>
+        <Button type="link" size="small" icon={<FileMarkdownOutlined />} onClick={onArtifacts}>提取产物</Button>
+        {retryAvailable && <Button type="link" size="small" loading={retrying} onClick={onRetry}>{file.extraction_status === 'failed' ? '重试解析' : '重新提取'}</Button>}
+      </div>
+    </>
   )
 }
 
@@ -2169,12 +2338,14 @@ function ProcessingRunDescription({
     <Descriptions size="small" column={2} className={styles.processingDescriptions}>
       <Descriptions.Item label="文件解析状态">{statusTag(result.extraction_status, true)}</Descriptions.Item>
       <Descriptions.Item label="解析模式">{result.parser_mode || '—'}</Descriptions.Item>
+      <Descriptions.Item label="提取来源">{extractionRun?.provider || result.latest_extraction_run?.provider || '—'}</Descriptions.Item>
+      <Descriptions.Item label="服务状态">{PROVIDER_STATE_LABEL[extractionRun?.provider_state || result.latest_extraction_run?.provider_state || ''] || extractionRun?.provider_state || result.latest_extraction_run?.provider_state || '—'}</Descriptions.Item>
       <Descriptions.Item label="解析器版本">{result.parser_version || extractionRun?.parser_version || '—'}</Descriptions.Item>
       <Descriptions.Item label="raw block 数">{processingCount(extractionRun?.block_count ?? result.total)}</Descriptions.Item>
       <Descriptions.Item label="正文字符数">{processingCount(extractionRun?.char_count)}</Descriptions.Item>
       <Descriptions.Item label="分块版本">{chunkRun?.chunk_version || '—'}</Descriptions.Item>
       <Descriptions.Item label="chunk 数">{processingCount(chunkRun?.chunk_count)}</Descriptions.Item>
-      <Descriptions.Item label="chunk 字符数">{processingCount(chunkRun?.char_count)}</Descriptions.Item>
+      <Descriptions.Item label="检索文本字符数">{processingCount(processingRetrievalCharCount(chunkRun))}</Descriptions.Item>
       <Descriptions.Item label="解析完成时间">{formatDate(extractionRun?.finished_at || extractionRun?.created_at)}</Descriptions.Item>
       <Descriptions.Item label="分块完成时间">{formatDate(chunkRun?.finished_at || chunkRun?.created_at)}</Descriptions.Item>
     </Descriptions>
@@ -2269,7 +2440,7 @@ function QaDocumentProcessingModal({
       width={920}
       destroyOnHidden
     >
-      {error && <Alert type="error" showIcon message="解析结果加载失败" description={error} style={{ marginBottom: 14 }} />}
+      {error && <Alert type="error" showIcon title="解析结果加载失败" description={error} style={{ marginBottom: 14 }} />}
       {result ? (
         <>
           <ProcessingRunDescription extractionRun={currentExtractionRun} chunkRun={currentChunkRun} result={result} />
@@ -2277,22 +2448,22 @@ function QaDocumentProcessingModal({
             <Alert
               type="info"
               showIcon
-              message={`最近解析任务：${STATUS_LABEL[result.latest_extraction_run.status] || result.latest_extraction_run.status}`}
+              title={`最近解析任务：${STATUS_LABEL[result.latest_extraction_run.status] || result.latest_extraction_run.status}`}
               description="下面的 raw block/chunk 明细仍然只来自当前有效运行；最近任务完成后会自动刷新。"
               style={{ marginBottom: 14 }}
             />
           )}
-          {result.extraction_error && <Alert type="warning" showIcon message="最近一次解析任务有提示" description={result.extraction_error} style={{ marginBottom: 14 }} />}
+          {result.extraction_error && <Alert type="warning" showIcon title="最近一次解析任务有提示" description={result.extraction_error} style={{ marginBottom: 14 }} />}
           {!currentExtractionRun && result.legacy ? (
             <Alert
               type="warning"
               showIcon
-              message="这是历史 legacy 解析数据"
+              title="这是历史 legacy 解析数据"
               description="当前可兼容查看已保存的 raw block；该历史数据没有新的分块运行。重建解析后，才会生成带版本和映射关系的 chunk。"
               style={{ marginBottom: 14 }}
             />
           ) : !currentExtractionRun ? (
-            <Alert type="info" showIcon message="当前没有可用的解析运行" description="文件仍在排队或解析失败；解析完成后会自动刷新当前有效的 raw block 和 chunk。" style={{ marginBottom: 14 }} />
+            <Alert type="info" showIcon title="当前没有可用的解析运行" description="文件仍在排队或解析失败；解析完成后会自动刷新当前有效的 raw block 和 chunk。" style={{ marginBottom: 14 }} />
           ) : null}
         </>
       ) : (
@@ -2341,11 +2512,11 @@ function QaDocumentProcessingModal({
                   </summary>
                   <div className={styles.processingItemBody}>
                     <div className={styles.processingItemMeta}>
-                      {processingCount(item.char_count)} 字符
-                      {item.content_truncated && <Tag color="gold">预览已截断</Tag>}
-                      <Text type="secondary" copyable={{ text: item.content_hash }}>hash {item.content_hash.slice(0, 12)}…</Text>
+                      {item.retrieval_char_count == null ? '检索文本未生成' : `检索文本 ${processingCount(item.retrieval_char_count)} 字符`}
+                      {item.retrieval_text_truncated && <Tag color="gold">预览已截断</Tag>}
+                      {item.retrieval_text_hash && <Text type="secondary" copyable={{ text: item.retrieval_text_hash }}>hash {item.retrieval_text_hash.slice(0, 12)}…</Text>}
                     </div>
-                    <div className={styles.processingContent}>{item.content_preview || '（空上下文块）'}</div>
+                    <div className={styles.processingContent}>{item.retrieval_text_preview == null ? '尚无检索文本，请重新解析文件。' : item.retrieval_text_preview || '（空检索文本）'}</div>
                   </div>
                 </details>
               ))}
@@ -2358,6 +2529,151 @@ function QaDocumentProcessingModal({
         <div className={styles.processingPagination}>
           <Pagination current={result.page} pageSize={result.page_size} total={total} showSizeChanger={false} onChange={setPage} showTotal={(value) => `共 ${value} 条`} />
         </div>
+      )}
+    </Modal>
+  )
+}
+
+function QaDocumentArtifactsModal({
+  open,
+  file,
+  versionLabel,
+  autoPreviewMarkdown = false,
+  onClose,
+}: {
+  open: boolean
+  file: QaDocumentFile
+  versionLabel: string
+  autoPreviewMarkdown?: boolean
+  onClose: () => void
+}) {
+  const [result, setResult] = useState<QaDocumentArtifactsResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [previewArtifact, setPreviewArtifact] = useState<QaDocumentArtifact | null>(null)
+  const [previewContent, setPreviewContent] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [pollTick, setPollTick] = useState(0)
+  const previewRequest = useRef(0)
+  const autoPreviewHandled = useRef(false)
+  const pending = isExtractionPending(file.extraction_status)
+
+  const loadMarkdown = useCallback(async (artifact: QaDocumentArtifact) => {
+    if (!isMarkdownArtifact(artifact)) return
+    const request = ++previewRequest.current
+    setPreviewArtifact(artifact)
+    setPreviewContent(null)
+    setPreviewError(null)
+    setPreviewLoading(true)
+    try {
+      const content = await fetchQaDocumentArtifactContent(file.id, artifact.id)
+      if (previewRequest.current === request) setPreviewContent(content)
+    } catch (cause) {
+      if (previewRequest.current === request) setPreviewError(cause instanceof Error ? cause.message : '加载 Markdown 内容失败')
+    } finally {
+      if (previewRequest.current === request) setPreviewLoading(false)
+    }
+  }, [file.id])
+
+  useEffect(() => () => { previewRequest.current += 1 }, [])
+
+  useEffect(() => {
+    if (!open || !pending || (result?.items.length ?? 0) > 0) return
+    const timer = window.setInterval(() => setPollTick((value) => value + 1), 5000)
+    return () => window.clearInterval(timer)
+  }, [open, pending, result?.items.length])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setError(null)
+    setLoading(true)
+    void fetchQaDocumentArtifacts(file.id).then((next) => {
+      if (!cancelled) setResult(next)
+    }).catch((cause) => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : '加载提取产物失败')
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [file.id, open, pollTick])
+
+  useEffect(() => {
+    if (!open || !autoPreviewMarkdown || autoPreviewHandled.current || !result) return
+    const markdown = result.items.find(isMarkdownArtifact)
+    if (markdown) {
+      autoPreviewHandled.current = true
+      void loadMarkdown(markdown)
+    }
+  }, [autoPreviewMarkdown, loadMarkdown, open, result])
+
+  const returnToArtifacts = () => {
+    previewRequest.current += 1
+    autoPreviewHandled.current = true
+    setPreviewArtifact(null)
+    setPreviewContent(null)
+    setPreviewError(null)
+    setPreviewLoading(false)
+  }
+
+  const close = () => {
+    previewRequest.current += 1
+    onClose()
+  }
+
+  const items = result?.items || []
+
+  return (
+    <Modal
+      title={`提取产物 · 版本 ${versionLabel}`}
+      open={open}
+      onCancel={close}
+      footer={<Button onClick={close}>关闭</Button>}
+      width={840}
+      destroyOnHidden
+    >
+      {previewArtifact ? (
+        <>
+          <Button type="link" onClick={returnToArtifacts}>返回产物列表</Button>
+          <div style={{ marginTop: 8, marginBottom: 10 }}>
+            <Text strong>{previewArtifact.source_name}</Text>
+            <Text type="secondary" style={{ marginLeft: 10 }}>{formatBytes(previewArtifact.size_bytes)}</Text>
+          </div>
+          {previewError && <Alert type="error" showIcon title="Markdown 预览失败" description={previewError} />}
+          {previewLoading ? <div style={{ textAlign: 'center', padding: 36 }}><Spin /></div> : previewContent != null ? (
+            <div style={{ maxHeight: 540, overflow: 'auto', padding: 16, background: 'var(--color-surface-soft)', border: '1px solid var(--color-border)', borderRadius: 8 }}>
+              <QaMarkdownPreview content={previewContent} fileId={file.id} artifact={previewArtifact} artifacts={items} />
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {error && <Alert type="error" showIcon title="提取产物加载失败" description={error} style={{ marginBottom: 14 }} />}
+          {pending && <Alert type="info" showIcon title="提取任务仍在处理中" description="Markdown 和结果包会在当前提取批次完成后显示。" style={{ marginBottom: 14 }} />}
+          {!pending && !loading && !error && !items.length && <Alert type="warning" showIcon title="当前没有可用提取产物" description="如果这是旧文件，可以使用“重新提取”生成 MinerU Markdown 和结果包。" />}
+          <Spin spinning={loading}>
+            {items.length ? (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {items.map((item) => {
+                  const markdown = isMarkdownArtifact(item)
+                  const packageArtifact = isResultPackageArtifact(item)
+                  return (
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', border: '1px solid var(--color-border)', borderRadius: 8 }}>
+                      <Tag color={markdown ? 'blue' : packageArtifact ? 'purple' : 'default'}>{artifactTypeLabel(item.artifact_type)}</Tag>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.source_name}</div>
+                        <Text type="secondary" style={{ fontSize: 12 }}>{formatBytes(item.size_bytes)} · {formatDate(item.created_at)}</Text>
+                      </div>
+                      {markdown && <Button type="link" size="small" icon={<FileMarkdownOutlined />} onClick={() => { void loadMarkdown(item) }}>查看 Markdown</Button>}
+                      {(markdown || packageArtifact) && <Button type="link" size="small" icon={<DownloadOutlined />} href={qaDocumentArtifactContentUrl(file.id, item.id, true)} target="_blank">下载{markdown ? ' MD' : '结果包'}</Button>}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null}
+          </Spin>
+        </>
       )}
     </Modal>
   )
@@ -2434,7 +2750,7 @@ function QaUploadVersionModal({ open, documentId, documentNo, documentTitle, cur
             setFileList([{ uid: file.uid, name: file.name, status: 'done', size: file.size, type: file.type }])
             return false
           }} onRemove={() => { setFileList([]); setSelectedFile(null); return true }}>
-            <p className="ant-upload-drag-icon"><UploadOutlined /></p><p className="ant-upload-text">点击或拖拽文件到此处</p><p className="ant-upload-hint">PDF / DOCX 可提取正文，DOC 仅归档 · 单个文件最大 50 MB</p>
+            <p className="ant-upload-drag-icon"><UploadOutlined /></p><p className="ant-upload-text">点击或拖拽文件到此处</p><p className="ant-upload-hint">PDF / DOCX / DOC 均会在后台提取正文并生成 Markdown · 单个文件最大 50 MB</p>
           </Dragger>
         </Form.Item>
       </Form>
