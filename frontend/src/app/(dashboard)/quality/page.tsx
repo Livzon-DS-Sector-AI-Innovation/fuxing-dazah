@@ -1,14 +1,18 @@
 'use client'
 
 import { useState } from 'react'
-import { Typography, Divider, Empty } from 'antd'
-import { ExperimentOutlined } from '@ant-design/icons'
+import { usePermission } from '@/hooks/usePermission'
+import { Typography, Divider, Empty, Button, Space, Table, Tag } from 'antd'
+import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
+import Link from 'next/link'
 import { LcUploader, LcReportView } from '@/components/quality'
 import type { UploadLcResponse } from '@/types/quality'
 
 const { Title, Paragraph } = Typography
 
 export default function QualityPage() {
+  const { hasPermission } = usePermission()
+  const canUpload = hasPermission('quality:lc:upload')
   const [result, setResult] = useState<UploadLcResponse | null>(null)
 
   return (
@@ -20,12 +24,48 @@ export default function QualityPage() {
         上传液相计算表 Excel，自动解析峰面积、计算结果和质量标准，执行合格/超趋势判定。
       </Paragraph>
 
-      <LcUploader onResult={setResult} />
+      {canUpload ? (
+        <LcUploader onResult={setResult} />
+      ) : (
+        <Paragraph type="secondary">没有上传液相计算表的权限</Paragraph>
+      )}
+
+      {result && result.record_id && (
+        <Space style={{ marginTop: 12 }}>
+          <Link href={`/quality/history/${result.record_id}`}>
+            <Button type="primary" icon={<FileTextOutlined />}>
+              生成报告单
+            </Button>
+          </Link>
+          <Link href="/quality/history">
+            <Button icon={<HistoryOutlined />}>历史记录</Button>
+          </Link>
+        </Space>
+      )}
 
       {result && (
         <>
           <Divider />
-          <LcReportView report={result.report} />
+          {result.components ? (
+            <div>
+              <Paragraph strong>解析组分结果（模板配置驱动）</Paragraph>
+              <Table
+                rowKey="name"
+                size="small"
+                pagination={false}
+                dataSource={(result.components || []).map((c) => ({ ...c, key: c.name }))}
+                columns={[
+                  { title: '组分', dataIndex: 'name', key: 'name' },
+                  {
+                    title: '报告值', dataIndex: 'report_value', key: 'report_value',
+                    render: (v: number | null) => v != null ? `${v}%` : <Tag color="orange">未检出/未填</Tag>,
+                  },
+                ]}
+              />
+            </div>
+          ) : (
+            <LcReportView report={result.report} />
+          )}
         </>
       )}
 
@@ -34,6 +74,7 @@ export default function QualityPage() {
           <Empty description="请上传液相计算表 Excel 文件开始解析" />
         </div>
       )}
+
     </div>
   )
 }

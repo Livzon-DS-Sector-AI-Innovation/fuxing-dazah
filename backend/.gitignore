@@ -39,3 +39,6 @@ uploads/
 # 飞书授权二维码（临时凭证，勿入库）
 lark-auth-qrcode.png
 temp/
+
+# 质量报告模板与生成文件（本地运行时目录，同 uploads）
+报告模板/
