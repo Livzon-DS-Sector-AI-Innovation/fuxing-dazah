@@ -63,7 +63,12 @@ export default function LcTemplateConfigs() {
     const values = await form.validateFields()
     let config: Record<string, unknown>
     try {
-      config = JSON.parse(values.config || '{}')
+      const parsed: unknown = JSON.parse(values.config || '{}')
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        message.error('配置 JSON 必须是对象（如 {"batch_label": "批号", "blocks": []}）')
+        return
+      }
+      config = parsed as Record<string, unknown>
     } catch {
       message.error('配置 JSON 格式错误')
       return

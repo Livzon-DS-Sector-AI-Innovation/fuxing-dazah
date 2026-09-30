@@ -57,7 +57,10 @@ async def update_lc_template_config(
     if not cfg:
         return None
     for key, val in kwargs.items():
-        # 允许 None：清空可选字段（SOP/描述）是合法编辑
+        # 允许 None：清空可选字段（SOP/描述）是合法编辑；
+        # NOT NULL 列（product_name/config）显式 null 跳过，防 500
+        if val is None and key in ("product_name", "config"):
+            continue
         if hasattr(cfg, key):
             setattr(cfg, key, val)
     await db.flush()

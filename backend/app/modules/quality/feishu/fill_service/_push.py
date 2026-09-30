@@ -87,10 +87,11 @@ async def notify_pending_review(task_id: str) -> None:
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
     task = None
-    for _ in range(20):
+    # 等到事务提交后的真实状态（旧行读到 in_progress 会误放弃提醒）
+    for _ in range(40):
         async with async_session_factory() as db:
             task = await get_test_task(db, uuid.UUID(task_id))
-        if task:
+        if task and task.status == "pending_review":
             break
         await asyncio.sleep(0.5)
     if not task or task.status != "pending_review":
@@ -122,12 +123,14 @@ async def notify_task_created(task_id: str) -> None:
     from app.core.database import async_session_factory
     from app.modules.quality.repository import get_test_task
 
-    # 重试等待：调用方事务可能尚未提交，稍等片刻再查任务
+    # 重试等待：调用方事务可能尚未提交——新会话在 READ COMMITTED 下会读到
+    # 旧行（report_date 仍为 NULL），必须等到「任务存在且 report_date 已写入」
+    # 才视为就绪，否则通知会在提交前读到旧值直接放弃，推送从未真正触发。
     task: QualityTestTask | None = None
-    for _ in range(20):
+    for _ in range(40):
         async with async_session_factory() as db:
             task = await get_test_task(db, uuid.UUID(task_id))
-        if task:
+        if task and task.report_date:
             break
         await asyncio.sleep(0.5)
     if not task or not task.report_date:

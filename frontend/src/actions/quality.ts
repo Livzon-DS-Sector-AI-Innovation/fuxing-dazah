@@ -392,11 +392,11 @@ export async function deleteTemplateFolder(name: string): Promise<{ message: str
 }
 
 export async function bindTemplate(
-  template_path: string, standard_document_id: string, replaceExisting = false,
+  template_path: string, standard_document_id: string, replaceExisting = false, description?: string,
 ): Promise<{ message: string; data: { template_path: string; sop_no: string | null; standard_document_id: string | null } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/bindings`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ template_path, standard_document_id, replace_existing: replaceExisting }),
+    body: JSON.stringify({ template_path, standard_document_id, replace_existing: replaceExisting, description }),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
@@ -882,5 +882,15 @@ export async function unbindDocCoaBinding(docId: string): Promise<{ message: str
     method: 'DELETE', headers: await _authHeaders(),
   })
   if (!res.ok) throw new Error('解绑失败')
+  return res.json()
+}
+
+
+/** 模板路径列表（绑定弹窗用；template:manage 门禁，含各模板当前绑定的 SOP）。 */
+export async function fetchTemplatePaths(): Promise<{ data: { path: string; bound_sop_no: string | null }[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/paths`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取模板列表失败')
   return res.json()
 }

@@ -30,10 +30,10 @@ from app.modules.quality.repository import (
     delete_task_attachment,
     get_task_attachment,
     get_test_task,
-    get_test_task_by_batch_number,
     list_report_records_by_task,
     list_task_attachments,
     list_task_reviews_with_names,
+    update_test_task_report_date,
 )
 from app.modules.quality.schemas import (
     TestResultCreate,
@@ -330,7 +330,8 @@ async def batch_report_date_endpoint(
     except Exception:
         raise HTTPException(status_code=400, detail="Excel 解析失败") from None
 
-    updated = 0
+    # 先收集批号并一次批量查任务（此前逐行走 service 每行 +2 查询 + 1 个后台任务）
+    rows_to_apply: list[tuple[str, str]] = []
     skipped: list[str] = []
     for row in raw_rows:
         if not row or not row[0]:
@@ -338,7 +339,6 @@ async def batch_report_date_endpoint(
         batch = str(row[0]).strip()
         date_cell = row[1] if len(row) > 1 else None
         if isinstance(date_cell, (datetime, date)):
-            # 标注 str | None：elif 分支的 _norm_date_str 可能解析失败返回 None
             report_date: str | None = date_cell.strftime("%Y-%m-%d")
         elif date_cell:
             report_date = _norm_date_str(str(date_cell).strip())
@@ -346,15 +346,49 @@ async def batch_report_date_endpoint(
             # 空单元格跳过：此前 report_date=None 会静默清空已有出报日期
             skipped.append(f"{batch}:日期为空，未修改")
             continue
-        task = await get_test_task_by_batch_number(db, batch)
-        if not task:
-            skipped.append(f"{batch}:未找到任务")
-            continue
-        # 走 service 单条路径：出报日期=今天时触发飞书推送（与单条补录口径一致）
-        await test_task_service.update_report_date(
-            db, task.id, TestTaskReportDateUpdate(report_date=report_date)
-        )
-        updated += 1
+        if report_date:
+            rows_to_apply.append((batch, report_date))
+
+    from sqlalchemy import select as sa_select
+
+    from app.modules.quality.models import QualityTestTask
+
+    if rows_to_apply:
+        batches = [b for b, _ in rows_to_apply]
+        found = (await db.execute(
+            sa_select(QualityTestTask).where(
+                QualityTestTask.batch_number.in_(batches),
+                QualityTestTask.is_deleted == False,  # noqa: E712
+            )
+        )).scalars().all()
+        by_batch = {t.batch_number: t for t in found}
+
+        updated = 0
+        from app.core.time import today as _today
+
+        today_str = _today().isoformat()
+        today_task_ids: list[uuid.UUID] = []
+        for batch, report_date in rows_to_apply:
+            task = by_batch.get(batch)
+            if not task:
+                skipped.append(f"{batch}:未找到任务")
+                continue
+            await update_test_task_report_date(db, task.id, report_date)
+            updated += 1
+            if report_date == today_str:
+                today_task_ids.append(task.id)
+        await db.flush()
+        # 出报日期=今天的任务统一触发推送（与单条补录口径一致）；
+        # notify 轮询会等待本请求提交后再读新值
+        from app.modules.quality.service import spawn_background
+
+        for tid in today_task_ids:
+            from app.modules.quality.feishu.fill_service import notify_task_created
+
+            spawn_background(notify_task_created(str(tid)))
+    else:
+        updated = 0
+
     return success_response(
         data={"updated": updated, "skipped": skipped},
         message=f"已更新 {updated} 个任务的出报日期" + (f"，跳过 {len(skipped)} 条" if skipped else ""),

@@ -93,6 +93,9 @@ def feishu_env(db_session, monkeypatch):
     # service 自动流转也会 spawn 通知（真后台任务会撞回滚式 session）
     monkeypatch.setattr("app.modules.quality.service.task_lifecycle.spawn_background", fake_spawn)
     monkeypatch.setattr(cmds, "_download_image", AsyncMock(return_value=b"fake-image-bytes"))
+    # 存储层 mock：测试关注路由语义，不向 质量附件/ 与 MinIO 写真实文件
+    monkeypatch.setattr("app.modules.quality.storage.upload_attachment", AsyncMock())
+    monkeypatch.setattr("app.modules.quality.storage.delete_attachment", AsyncMock())
     for name in ["send_batch_form_card", "send_fill_card", "send_create_task_card",
                  "send_pick_doc_card", "send_help_card", "send_menu_card", "send_alert_post"]:
         monkeypatch.setattr(f"app.modules.quality.feishu.message.{name}", fake_send_any)
@@ -102,10 +105,15 @@ def feishu_env(db_session, monkeypatch):
         yield db_session
 
     monkeypatch.setattr("app.core.database.async_session_factory", _fake_factory)
-    # 回滚式 fixture：会话 commit 改为 no-op，防止测试数据落库
-    monkeypatch.setattr(db_session, "commit", AsyncMock())
+    # 回滚式 fixture：会话 commit 改为 no-op 防落库，但记录调用次数——
+    # 写库路径必须显式 commit（若实现丢了 commit，断言会失败而非假绿）
+    commit_mock = AsyncMock()
+    monkeypatch.setattr(db_session, "commit", commit_mock)
 
-    return {"sent_texts": sent_texts, "sent_cards": sent_cards, "spawned": spawned, "db": db_session}
+    return {
+        "sent_texts": sent_texts, "sent_cards": sent_cards, "spawned": spawned,
+        "db": db_session, "commit_mock": commit_mock,
+    }
 
 
 async def _make_doc(db) -> QualityStandardDocument:
@@ -158,6 +166,7 @@ async def test_fill_command_writes_judged_result(feishu_env):
     assert saved[0].is_pass is True  # 1.5 ≤ 3.0 合格落库
     assert saved[0].result_value == 1.5
     assert any("批号" in t and batch in t for _, t in feishu_env["sent_texts"])
+    assert feishu_env["commit_mock"].await_count >= 1  # 写库必须显式提交
 
 
 async def test_fill_unqualified_not_saved_and_notifies(feishu_env):
@@ -251,3 +260,4 @@ async def test_image_archive_flow(feishu_env):
     assert atts[0].remark == "机器人图片消息自动归档"
     assert "图片已归档" in feishu_env["sent_texts"][-1][1]
     assert _LAST_IMAGE.get("oc_test") is None  # 归档成功后清理暂存
+    assert feishu_env["commit_mock"].await_count >= 1  # 归档必须显式提交

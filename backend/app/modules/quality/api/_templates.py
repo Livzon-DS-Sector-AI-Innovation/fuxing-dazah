@@ -69,6 +69,26 @@ async def list_templates(
     return items
 
 
+@router.get("/templates/paths", summary="模板路径列表（绑定弹窗用，轻量）")
+async def list_template_paths(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:template:manage")),
+) -> JSONResponse:
+    """返回模板相对路径列表 + 各自当前绑定的标准文件（绑定弹窗标注所属）。"""
+    quality_storage.sync_templates_from_minio()
+    items = _scan_templates(REPORT_TEMPLATE_DIR) if REPORT_TEMPLATE_DIR.exists() else []
+    paths = [
+        it["path"] for it in items
+        if it.get("type") == "template" and it.get("path")
+    ]
+    bindings = await list_coa_bindings(db)
+    owner = {b.template_path: b.sop_no for b in bindings}
+    return success_response(data=[
+        {"path": path, "bound_sop_no": owner.get(path)}
+        for path in paths
+    ])
+
+
 @router.get("/templates/all-placeholders", summary="获取所有模板的所有占位符名称")
 async def all_placeholders(
     _user: User = Depends(require_permission("quality:report:read")),
@@ -151,10 +171,13 @@ async def upsert_template_binding(
             # 标准文件详情弹窗是单选语义：先清该文档旧绑定再建新绑定
             # （此前只新增不删旧，生成 COA 取最早绑定 → 换绑不生效）
             await delete_coa_binding_by_doc(db, standard_document_id)
-    binding = await upsert_coa_binding(
-        db, template_path=template_path,
-        standard_document_id=standard_document_id, sop_no=sop_no, description=description,
-    )
+    try:
+        binding = await upsert_coa_binding(
+            db, template_path=template_path,
+            standard_document_id=standard_document_id, sop_no=sop_no, description=description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return success_response(
         data={"template_path": binding.template_path, "sop_no": binding.sop_no,
               "standard_document_id": str(binding.standard_document_id) if binding.standard_document_id else None},
@@ -203,11 +226,15 @@ async def upload_template(
     matched = _match_template_to_doc(_template_number_tokens(saved), docs, doc_tokens)
     bound = False
     if matched:
-        await upsert_coa_binding(
-            db, template_path=rel_path,
-            standard_document_id=matched.id, sop_no=matched.file_no,
-        )
-        bound = True
+        try:
+            await upsert_coa_binding(
+                db, template_path=rel_path,
+                standard_document_id=matched.id, sop_no=matched.file_no,
+            )
+            bound = True
+        except ValueError:
+            # 同名模板已绑其他文档：保留原绑定，仅提示（上传不因自动匹配失败而中断）
+            bound = False
     return {
         "filename": filename,
         "folder": folder,

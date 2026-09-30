@@ -99,9 +99,10 @@ class _TaskReports(_TaskCore):
         base_seq = await count_report_records_since(db, today_start)
         splits: list[dict[str, Any]] = []
         for i, d in enumerate(docs_with_rows):
-            template = next(
-                (b.template_path for b in bindings if b.standard_document_id == d.id), None
-            ) or d.template_path or ""
+            # 同一文档多条绑定时「最新一条生效」（与列表/详情读侧口径一致）；
+            # legacy template_path 列已退役，不再回退（否则解绑后仍按旧模板出单）
+            doc_bindings = [b for b in bindings if b.standard_document_id == d.id]
+            template = doc_bindings[-1].template_path if doc_bindings else ""
             if not template:
                 raise AppException(
                     status_code=400,

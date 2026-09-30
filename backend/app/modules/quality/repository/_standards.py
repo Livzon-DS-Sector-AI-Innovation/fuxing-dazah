@@ -92,6 +92,10 @@ async def delete_standard_document(
         it.is_deleted = True
     await db.flush()
     return doc
+    # 级联软删 COA 绑定：否则模板页显示幽灵 SOP 标签且行成不可达残留
+    for b in await list_coa_bindings_by_docs(db, [doc.id]):
+        b.is_deleted = True
+    await db.flush()
 
 
 async def list_standard_items(
@@ -200,9 +204,21 @@ async def upsert_coa_binding(
     sop_no: str | None = None,
     description: str | None = None,
 ) -> CoaTemplateBinding:
-    """按模板路径 upsert（COA 唯一性）；返回 UPDATE 后 re-fetch 对象。"""
+    """按模板路径 upsert（COA 唯一性）；返回 UPDATE 后 re-fetch 对象。
+
+    模板已被其他文档占用且未走「按文档换绑」流程时抛 ValueError——
+    防止静默重指导致原文档失去模板（「抢模板」）。
+    """
     binding = await get_coa_binding_by_template(db, template_path)
     if binding:
+        if (
+            binding.standard_document_id
+            and standard_document_id
+            and binding.standard_document_id != standard_document_id
+        ):
+            raise ValueError(
+                f"该模板已绑定标准文件 {binding.sop_no or binding.standard_document_id}，请先解绑后再绑定"
+            )
         binding.standard_document_id = standard_document_id or binding.standard_document_id
         binding.sop_no = sop_no or binding.sop_no
         if description is not None:

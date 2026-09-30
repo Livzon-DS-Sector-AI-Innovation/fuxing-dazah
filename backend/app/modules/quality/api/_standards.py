@@ -461,7 +461,7 @@ async def get_doc_coa_binding_endpoint(
     bindings = await list_coa_bindings_by_docs(db, [doc_id])
     if not bindings:
         return success_response(data=None)
-    b = bindings[0]
+    b = bindings[-1]  # 最新绑定生效（与列表/生成口径一致）
     return success_response(data={
         "template_path": b.template_path,
         "description": b.description,

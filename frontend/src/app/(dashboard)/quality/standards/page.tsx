@@ -17,9 +17,10 @@ import { usePermission } from '@/hooks/usePermission'
 import {
   fetchStandardDocuments, createStandardDocument, updateStandardDocument, deleteStandardDocument,
   fetchStandardItems, createStandardItem, updateStandardItem, deleteStandardItem,
-  importStandardDocPreview, importStandardDocConfirm, fetchTemplates, bindTemplate,
+  importStandardDocPreview, importStandardDocConfirm, bindTemplate,
   type StandardDocument, type StandardItem, type StandardImportDraft, type StandardImportDraftItem,
-  fetchDocCoaBinding, unbindDocCoaBinding,
+  unbindDocCoaBinding,
+  fetchTemplatePaths,
 } from '@/actions/quality'
 import { ImportConfirmModal } from '@/components/quality'
 import type { ImportDraftDocument } from '@/components/quality/ImportConfirmModal'
@@ -27,19 +28,6 @@ import type { ImportDraftDocument } from '@/components/quality/ImportConfirmModa
 const { Title, Paragraph, Text } = Typography
 
 /** 展平模板树为路径列表。 */
-function flattenTemplates(items: TemplateNode[], prefix = ''): string[] {
-  const out: string[] = []
-  for (const it of items || []) {
-    if (it.type === 'template') {
-      const filename = it.filename ?? ''
-      out.push(prefix ? `${prefix}/${filename}` : filename)
-    } else if (it.children) {
-      out.push(...flattenTemplates(it.children, prefix ? `${prefix}/${it.name ?? ''}` : (it.name ?? '')))
-    }
-  }
-  return out
-}
-
 /** 提取文本中的数字串（号码片段）。 */
 function numberTokens(...texts: (string | null | undefined)[]): string[] {
   const tokens: string[] = []
@@ -319,38 +307,40 @@ export default function StandardsPage() {
   }
 
   const openBindModal = async (doc: StandardDocument) => {
-    // 先取当前绑定再开窗：避免弹窗首帧串用上一份文档的值
-    let current: string | undefined
-    try {
-      const binding = await fetchDocCoaBinding(doc.id)
-      current = binding.data?.template_path || undefined
-    } catch {
-      message.error('获取当前绑定失败，请重试')
-      return
-    }
+    // 当前绑定直接取列表数据（doc.coa_binding，无冗余请求）；
+    // 模板列表并行获取，失败不阻塞弹窗（选项为空也能完成解绑/保留）
     setBindDoc(doc)
-    setBindValue(current)
+    setBindValue(doc.coa_binding?.template_path ?? undefined)
     setBindOpen(true)
     try {
-      const tree = await fetchTemplates()
-      const paths = flattenTemplates(tree)
-      const sorted = paths
-        .map((p) => ({ p, s: similarityScore(doc, p) }))
+      const res = await fetchTemplatePaths()
+      const sorted = res.data
+        .map((x) => ({ p: x.path, s: similarityScore(doc, x.path), owner: x.bound_sop_no }))
         .sort((a, b) => b.s - a.s)
-        .map((x) => ({ label: `${x.p}${x.s > 0 ? '（号码相近）' : ''}`, value: x.p }))
+        .map((x) => ({
+          label: `${x.p}${x.owner && x.owner !== doc.file_no ? `（已绑定：${x.owner}）` : ''}${x.s > 0 ? '（号码相近）' : ''}`,
+          value: x.p,
+        }))
       setBindOptions([{ label: '（不绑定模板）', value: '' }, ...sorted])
     } catch {
-      message.error('加载模板列表失败')
+      // 保留上一份选项可能导致误操作：失败时清空并提示
+      setBindOptions([{ label: '（不绑定模板）', value: '' }])
+      message.warning('模板列表加载失败，仅可执行解绑')
     }
   }
 
   const handleBindSave = async () => {
     if (!bindDoc) return
+    // 无变化直接关闭：此前「不改直接保存」会删除该文档全部绑定只重建一条
+    if (bindValue === (bindDoc.coa_binding?.template_path ?? undefined)) {
+      setBindOpen(false)
+      return
+    }
     try {
       // COA 侧绑定：模板路径 → 标准文档（一份 COA 唯一绑定一份 SOP）；
       // 选择「（不绑定模板）」即解绑
       if (bindValue) {
-        await bindTemplate(bindValue, bindDoc.id, true)
+        await bindTemplate(bindValue, bindDoc.id, true, bindDoc.coa_binding?.description ?? undefined)
         message.success('模板绑定已保存')
       } else {
         await unbindDocCoaBinding(bindDoc.id)
@@ -504,7 +494,7 @@ export default function StandardsPage() {
                     { label: '有效期', children: activeDoc.valid_years || '-' },
                     {
                       label: '绑定模板',
-                      children: activeDoc.coa_binding?.template_path ?? activeDoc.template_path ? <Tag color="green">{activeDoc.coa_binding?.template_path ?? activeDoc.template_path}</Tag> : <Tag color="orange">未绑定</Tag>,
+                      children: activeDoc.coa_binding?.template_path ? <Tag color="green">{activeDoc.coa_binding.template_path}</Tag> : <Tag color="orange">未绑定</Tag>,
                     },
                   ]}
                 />

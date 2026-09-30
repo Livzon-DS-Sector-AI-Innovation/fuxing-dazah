@@ -83,14 +83,16 @@ export default function TaskDetail({ id }: { id: string }) {
     try {
       const d = await fetchTestTaskDetail(id)
       setDetail(d)
+      // 附属数据逐个容错：任一失败不拖垮其余区块（此前 Promise.all 原子失败
+      // 会导致附件/复核/报告单三块全空且无任何提示）
       const [atts, revs, reps] = await Promise.all([
-        fetchTaskAttachments(id),
-        fetchTaskReviews(id),
-        fetchTaskReports(id),
+        fetchTaskAttachments(id).catch(() => null),
+        fetchTaskReviews(id).catch(() => null),
+        fetchTaskReports(id).catch(() => null),
       ])
-      setAttachments(atts.data || [])
-      setReviews(revs.data || [])
-      setTaskReports(reps.data || [])
+      setAttachments(atts?.data || [])
+      setReviews(revs?.data || [])
+      setTaskReports(reps?.data || [])
     } catch (err: unknown) {
       setLoadError((err instanceof Error ? err.message : String(err)) || '加载失败')
     } finally {
@@ -103,6 +105,7 @@ export default function TaskDetail({ id }: { id: string }) {
   // 填报中可填；待复核时专员可改结果（不留痕）
   const { hasPermission } = usePermission()
   const canFill = hasPermission('quality:task:fill')
+  const canViewReport = hasPermission('quality:report:read')
   const canReview = hasPermission('quality:task:review')
 
   if (!detail) {
@@ -516,7 +519,7 @@ export default function TaskDetail({ id }: { id: string }) {
               },
               {
                 title: '操作', key: 'actions', width: 150,
-                render: (_: unknown, r: TaskReportItem) => (
+                render: (_: unknown, r: TaskReportItem) => canViewReport ? (
                   <Space size={4}>
                     <Button size="small" icon={<EyeOutlined />}
                       onClick={() => setCoaPreviewId(r.report_id)}>预览</Button>
@@ -525,6 +528,10 @@ export default function TaskDetail({ id }: { id: string }) {
                       下载
                     </Button>
                   </Space>
+                ) : (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    预览/下载需报告单查看权限
+                  </Typography.Text>
                 ),
               },
             ]}

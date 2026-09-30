@@ -10,6 +10,8 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("quality:report:read", "查看报告单", "quality", "report", "read"),
     PermissionDef("quality:report:generate", "生成报告单", "quality", "report", "generate"),
     # ── 质量检验 ──
+    # 预留：当前无端点使用（标准库读已改 task:read），为偏差/CAPA/变更等
+    # 规划中模块的检验数据查看预留；角色勿单独授此码
     PermissionDef("quality:inspection:read", "查看质量检验", "quality", "inspection", "read"),
     PermissionDef("quality:inspection:create", "新增检验记录", "quality", "inspection", "create"),
     PermissionDef("quality:inspection:update", "编辑检验记录", "quality", "inspection", "update"),

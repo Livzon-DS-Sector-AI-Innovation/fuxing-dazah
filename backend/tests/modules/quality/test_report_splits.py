@@ -25,6 +25,9 @@ def _rand_batch() -> str:
 
 
 async def _make_doc(db, code: str, template: str) -> QualityStandardDocument:
+    """建文档并按新式绑定表绑模板（legacy template_path 列已退役，不再兜底）。"""
+    from app.modules.quality.models import CoaTemplateBinding
+
     doc = QualityStandardDocument(
         file_no=_rand_file_no(),
         product_name=f"测试产品{uuid.uuid4().hex[:6]}",
@@ -33,6 +36,11 @@ async def _make_doc(db, code: str, template: str) -> QualityStandardDocument:
     )
     db.add(doc)
     await db.flush()
+    if template:
+        db.add(CoaTemplateBinding(
+            template_path=template, standard_document_id=doc.id, sop_no=doc.file_no,
+        ))
+        await db.flush()
     return doc
 
 
