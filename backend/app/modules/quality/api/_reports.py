@@ -33,9 +33,12 @@ from app.modules.quality.models import QualityTestTask
 from app.modules.quality.repository import (
     count_report_records_since,
     create_report_record,
+    get_inspection_record,
     get_report_record,
+    get_standard_item_by_id,
     is_serial_unique_violation,
     list_report_records,
+    list_test_results,
     update_report_audit,
 )
 from app.modules.quality.schemas import (
@@ -270,4 +273,80 @@ async def audit_report_endpoint(
         "audit_status": report.audit_status,
         "audited_at": report.audited_at.isoformat() if report.audited_at else None,
     }, message="审核已通过" if payload.action == "approve" else "报告单已退回")
+
+@router.get("/report/records/{report_id}/consistency", summary="报告单一致性校验（解析值 vs 填报值、快照 vs 现行标准）")
+async def report_consistency_endpoint(
+    report_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:audit")),
+) -> JSONResponse:
+    """确定性机审：审核弹窗展示的两类一致性检查（仅提示，不阻断）。
+
+    A. 解析值 vs 填报值：任务行（source=parse）当前填值与解析原始值不一致。
+    B. 快照 vs 现行标准：任务快照与现行标准库的标准文本/限度不一致。
+    """
+    report = await get_report_record(db, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="报告单不存在")
+    if not report.test_task_id:
+        return success_response(data={"parsed_mismatches": [], "standard_drifts": []})
+
+    rows = await list_test_results(db, report.test_task_id)
+    parsed_mismatches: list[dict[str, Any]] = []
+    standard_drifts: list[dict[str, Any]] = []
+
+    for r in rows:
+        if r.standard_item_id:
+            item = await get_standard_item_by_id(db, r.standard_item_id, include_deleted=True)
+            if item is not None and (
+                item.standard_text != r.standard_text
+                or item.operator != r.operator
+                or item.limit_min != r.limit_min
+                or item.limit_max != r.limit_max
+            ):
+                standard_drifts.append({
+                    "item_name": r.item_name,
+                    "snapshot_text": r.standard_text,
+                    "current_text": item.standard_text,
+                })
+        if r.inspection_record_id and r.result_value is not None:
+            rec = await get_inspection_record(db, r.inspection_record_id)
+            if rec and rec.raw_data:
+                parsed = _find_parsed_value(rec.raw_data, r.item_name)
+                if parsed is not None and abs(parsed - r.result_value) > 1e-9:
+                    parsed_mismatches.append({
+                        "item_name": r.item_name,
+                        "report_value": r.result_value,
+                        "parsed_value": parsed,
+                    })
+
+    return success_response(data={
+        "parsed_mismatches": parsed_mismatches,
+        "standard_drifts": standard_drifts,
+    })
+
+
+def _find_parsed_value(raw_data: dict[str, Any], item_name: str) -> float | None:
+    """从解析原始数据按项目名找数值（兼容通用解析 components 与旧解析器结构）。"""
+    import re as _re
+
+    def norm(s: str) -> str:
+        return _re.sub(r"[\s.％%]", "", s).lower()
+
+    target = norm(item_name)
+    for c in raw_data.get("components") or []:
+        if isinstance(c, dict) and norm(str(c.get("name", ""))) == target:
+            v = c.get("report_value")
+            return float(v) if v is not None else None
+    report = raw_data.get("report") or raw_data
+    for field in ("vancomycin_b", "total_impurities"):
+        v = report.get(field)
+        if isinstance(v, dict) and norm(str(v.get("name", ""))) == target:
+            rv = v.get("rounded_first")
+            return float(rv) if rv is not None else None
+    for imp in report.get("impurity_results") or []:
+        if isinstance(imp, dict) and norm(str(imp.get("name", ""))) == target:
+            rv = imp.get("second_percent") or imp.get("first_percent")
+            return float(rv) if rv is not None else None
+    return None
 
