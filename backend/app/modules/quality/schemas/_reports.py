@@ -32,3 +32,10 @@ class ReportRecordOut(BaseModel):
     file_path: str | None = None
     file_size: int | None = None
     created_at: datetime | None = None
+
+
+class ReportAuditRequest(BaseModel):
+    """报告单审核：通过 / 退回（含备注）。"""
+
+    action: str = Field(description="approve 通过 / reject 退回")
+    comment: str | None = Field(default=None, max_length=500, description="审核备注/退回原因")

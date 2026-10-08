@@ -160,7 +160,11 @@ async def confirm_standard_doc(
         seen.add(key)
         data = it.model_dump()
         if not data.get("standard_text"):
+            # 文字标准无文本时视为「无限度」：同步清空判定结构，防旧限度残留
             data["standard_text"] = ""
+            data["operator"] = None
+            data["limit_min"] = None
+            data["limit_max"] = None
         old = reused_items.get(key)
         if old is not None:
             try:

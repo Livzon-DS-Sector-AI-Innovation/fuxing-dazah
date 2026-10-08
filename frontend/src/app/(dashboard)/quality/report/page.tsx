@@ -2,13 +2,17 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton } from 'antd'
+import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton, Tag } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons'
 import type { ReportRecord, TemplateNode } from '@/types/quality'
 import { fetchReportRecords, downloadReportFile, generateReport, fetchTemplates } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
+import { usePermission } from '@/hooks/usePermission'
+import { REPORT_AUDIT_META } from '@/types/quality'
+import type { ReportAuditStatus } from '@/types/quality'
+import { auditReport } from '@/actions/quality'
 
-const { Title, Paragraph } = Typography
+const { Title, Paragraph, Text } = Typography
 
 export default function ReportPage() {
   // useSearchParams 需 Suspense 边界，否则预渲染报错
@@ -24,6 +28,11 @@ function ReportPageInner() {
   const searchParams = useSearchParams()
   const recordId = searchParams.get('recordId')
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canAudit = hasPermission('quality:report:audit')
+  const [auditTarget, setAuditTarget] = useState<ReportRecord | null>(null)
+  const [auditComment, setAuditComment] = useState('')
+  const [auditing, setAuditing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<ReportRecord[]>([])
   const [total, setTotal] = useState(0)
@@ -80,6 +89,22 @@ function ReportPageInner() {
     (async () => { if (recordId) await openGenModal() })()
   }, [recordId, openGenModal])
 
+  const handleAudit = async (action: 'approve' | 'reject') => {
+    if (!auditTarget) return
+    setAuditing(true)
+    try {
+      await auditReport(auditTarget.id, action, auditComment || undefined)
+      message.success(action === 'approve' ? '审核已通过' : '报告单已退回')
+      setAuditTarget(null)
+      setAuditComment('')
+      load(page)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '审核提交失败')
+    } finally {
+      setAuditing(false)
+    }
+  }
+
   const handleGenerate = async () => {
     if (!recordId || !genTemplate) {
       message.warning('请选择模板')
@@ -126,6 +151,11 @@ function ReportPageInner() {
   const columns = [
     { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 110,
       render: (v: string | null) => v || '-' },
+    { title: '审核', dataIndex: 'audit_status', key: 'audit_status', width: 90,
+      render: (v: ReportAuditStatus) => {
+        const meta = REPORT_AUDIT_META[v] ?? { color: 'default', label: v }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      } },
     { title: '产品', dataIndex: 'product_name', key: 'product_name', width: 150 },
     { title: '批号', dataIndex: 'batch_number', key: 'batch_number', width: 120 },
     { title: '模板', dataIndex: 'template_path', key: 'template_path', ellipsis: true },
@@ -136,6 +166,9 @@ function ReportPageInner() {
     { title: '操作', key: 'actions', width: 210,
       render: (_: unknown, r: ReportRecord) => (
         <Space size={4}>
+          {canAudit && r.task_status !== null && (
+            <Button size="small" onClick={() => { setAuditTarget(r); setAuditComment('') }}>审核</Button>
+          )}
           <Button size="small" icon={<EyeOutlined />}
             onClick={() => { setPreviewId(r.id); setPreviewTitle(`报告单预览（批号 ${r.batch_number}）`) }}
             disabled={!r.file_path}>
@@ -199,6 +232,42 @@ function ReportPageInner() {
           showSearch
           optionFilterProp="label"
         />
+      </Modal>
+
+      <Modal
+        title={`报告单审核（${auditTarget?.serial_no ?? ''}｜批号 ${auditTarget?.batch_number ?? ''}）`}
+        open={!!auditTarget}
+        onCancel={() => setAuditTarget(null)}
+        footer={[
+          <Button key="cancel" onClick={() => setAuditTarget(null)}>取消</Button>,
+          <Button key="reject" danger loading={auditing}
+            onClick={() => handleAudit('reject')}>退回</Button>,
+          <Button key="approve" type="primary" loading={auditing}
+            onClick={() => handleAudit('approve')}>通过</Button>,
+        ]}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Text type="secondary">
+            审核前请先在任务详情比对原始证据（计算表/图谱）；可先点「预览」查看报告单内容。
+          </Text>
+          <Space>
+            <Button size="small" icon={<EyeOutlined />}
+              onClick={() => auditTarget && setPreviewId(auditTarget.id)}>
+              预览报告单
+            </Button>
+            {auditTarget?.test_task_id && (
+              <Button size="small" onClick={() => router.push(`/quality/task/${auditTarget.test_task_id}`)}>
+                打开任务原始证据
+              </Button>
+            )}
+          </Space>
+          <Input.TextArea
+            rows={3}
+            placeholder="审核备注（退回时请填写原因）"
+            value={auditComment}
+            onChange={(e) => setAuditComment(e.target.value)}
+          />
+        </Space>
       </Modal>
 
       <CoaPreviewModal

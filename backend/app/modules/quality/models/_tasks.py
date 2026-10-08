@@ -20,7 +20,7 @@ class QualityTestTask(BaseModel):
             "product_name",
             "batch_number",
             unique=True,
-            postgresql_where=text("is_deleted = false"),
+            postgresql_where=text("is_deleted = false AND status <> 'void'"),
         ),
         # 归一化唯一索引：产品名忽略空白差异（应用层查重同口径，防并发绕过）
         Index(
@@ -28,7 +28,7 @@ class QualityTestTask(BaseModel):
             text("regexp_replace(product_name, '\\s', '', 'g')"),
             "batch_number",
             unique=True,
-            postgresql_where=text("is_deleted = false"),
+            postgresql_where=text("is_deleted = false AND status <> 'void'"),
         ),
         Index("ix_quality_test_task_product", "product_name"),
         Index("ix_quality_test_task_status", "status"),

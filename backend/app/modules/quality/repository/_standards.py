@@ -90,12 +90,11 @@ async def delete_standard_document(
     items = await list_standard_items(db, doc_id)
     for it in items:
         it.is_deleted = True
-    await db.flush()
-    return doc
     # 级联软删 COA 绑定：否则模板页显示幽灵 SOP 标签且行成不可达残留
     for b in await list_coa_bindings_by_docs(db, [doc.id]):
         b.is_deleted = True
     await db.flush()
+    return doc
 
 
 async def list_standard_items(
@@ -127,8 +126,10 @@ async def update_standard_item(
     item = (await db.execute(stmt)).scalar_one_or_none()
     if not item:
         return None
+    # 整行覆盖语义：None 也写入——「数值限度改为文字标准」时必须清掉
+    # operator/limit_min/limit_max，否则旧限度残留会让新任务按废止限度判定
     for key, val in kwargs.items():
-        if hasattr(item, key) and val is not None:
+        if hasattr(item, key):
             setattr(item, key, val)
     await db.flush()
     return item

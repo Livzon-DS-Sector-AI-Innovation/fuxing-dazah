@@ -13,8 +13,8 @@ import {
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
-import { TASK_STATUS_META } from '@/types/quality'
-import type { TestResultItem, TestTaskDetail, TaskAttachment,
+import { REPORT_AUDIT_META, TASK_STATUS_META } from '@/types/quality'
+import type { ReportAuditStatus, TestResultItem, TestTaskDetail, TaskAttachment,
   TaskReportItem, TaskReviewRecord } from '@/types/quality'
 import {
   fetchTestTaskDetail, updateTestResults, addTestResult,
@@ -511,7 +511,12 @@ export default function TaskDetail({ id }: { id: string }) {
             pagination={false}
             dataSource={taskReports}
             columns={[
-              { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 120 },
+              { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 110 },
+              { title: '审核', dataIndex: 'audit_status', key: 'audit_status', width: 80,
+                render: (v: ReportAuditStatus) => {
+                  const meta = REPORT_AUDIT_META[v] ?? { color: 'default', label: v }
+                  return <Tag color={meta.color}>{meta.label}</Tag>
+                } },
               { title: '模板', dataIndex: 'template_path', key: 'template_path', ellipsis: true },
               {
                 title: '生成时间', dataIndex: 'created_at', key: 'created_at', width: 170,

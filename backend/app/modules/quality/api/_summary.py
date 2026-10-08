@@ -143,6 +143,7 @@ async def monthly_reports(
                         "batch_number": it.batch_number,
                         "template_path": it.template_path,
                         "report_id": str(it.id),
+                        "audit_status": it.audit_status,
                         "created_at": it.created_at.astimezone(APP_TZ).strftime("%H:%M") if it.created_at else None,
                     }
                     for it in lst

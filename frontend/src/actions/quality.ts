@@ -894,3 +894,20 @@ export async function fetchTemplatePaths(): Promise<{ data: { path: string; boun
   if (!res.ok) throw new Error('获取模板列表失败')
   return res.json()
 }
+
+
+/** 报告单审核：approve 通过 / reject 退回（含备注）。 */
+export async function auditReport(
+  reportId: string, action: 'approve' | 'reject', comment?: string,
+): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/report/records/${reportId}/audit`, {
+    method: 'POST',
+    headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, comment }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '审核提交失败')
+  }
+  return res.json()
+}

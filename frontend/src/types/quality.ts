@@ -124,7 +124,20 @@ export interface ReportRecord {
   serial_no: string | null
   file_path: string
   file_size: number | null
+  task_status: string | null
+  audit_status: ReportAuditStatus
+  audit_comment: string | null
+  audited_at: string | null
   created_at: string | null
+}
+
+export type ReportAuditStatus = 'pending' | 'approved' | 'rejected'
+
+/** 报告单审核状态展示元数据。 */
+export const REPORT_AUDIT_META: Record<ReportAuditStatus, { color: string; label: string }> = {
+  pending: { color: 'processing', label: '待初审' },
+  approved: { color: 'success', label: '已通过' },
+  rejected: { color: 'error', label: '已退回' },
 }
 
 // ─── 汇总统计 ───
@@ -327,6 +340,7 @@ export interface DailyReportItem {
   batch_number: string
   template_path: string
   report_id: string
+  audit_status: ReportAuditStatus
   created_at: string | null
 }
 
@@ -403,5 +417,6 @@ export interface TaskReportItem {
   serial_no: string
   template_path: string
   filename: string | null
+  audit_status: ReportAuditStatus
   created_at: string | null
 }

@@ -15,6 +15,7 @@ from fastapi import (
     Response,
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,15 +29,18 @@ from app.modules.quality.api._common import (
     _render_cao_file,
     router,
 )
+from app.modules.quality.models import QualityTestTask
 from app.modules.quality.repository import (
     count_report_records_since,
     create_report_record,
     get_report_record,
     is_serial_unique_violation,
     list_report_records,
+    update_report_audit,
 )
 from app.modules.quality.schemas import (
     GenerateReportRequest,
+    ReportAuditRequest,
     TaskReportGenerateRequest,
 )
 from app.modules.quality.service import (
@@ -46,6 +50,16 @@ from app.modules.quality.service import (
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
+
+async def _task_status_map(db: AsyncSession, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, str | None]:
+    """报告单关联任务的当前状态（含 void=已作废、缺失=任务已删除），一次查询。"""
+    if not task_ids:
+        return {}
+    stmt = select(QualityTestTask.id, QualityTestTask.status).where(
+        QualityTestTask.id.in_(task_ids),
+        QualityTestTask.is_deleted == False,  # noqa: E712
+    )
+    return {tid: status for tid, status in (await db.execute(stmt)).all()}
 
 @router.post("/report/generate", summary="生成报告单")
 async def generate_report(
@@ -181,6 +195,7 @@ async def list_reports(
         db, product_name=product_name, batch_number=batch_number,
         page=page, page_size=page_size,
     )
+    status_map = await _task_status_map(db, [it.test_task_id for it in items if it.test_task_id])
     return paginated_response(
         data=[
             {
@@ -191,6 +206,10 @@ async def list_reports(
                 "product_name": it.product_name,
                 "batch_number": it.batch_number,
                 "serial_no": it.serial_no,
+                "task_status": status_map.get(it.test_task_id) if it.test_task_id else None,
+                "audit_status": it.audit_status,
+                "audit_comment": it.audit_comment,
+                "audited_at": it.audited_at.isoformat() if it.audited_at else None,
                 "file_path": it.file_path,
                 "file_size": it.file_size,
                 "created_at": it.created_at.isoformat() if it.created_at else None,
@@ -228,3 +247,26 @@ async def download_report(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=fp.name,
     )
+
+@router.post("/report/records/{report_id}/audit", summary="报告单审核（比对原始证据后通过/退回）")
+async def audit_report_endpoint(
+    report_id: uuid.UUID,
+    payload: ReportAuditRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:report:audit")),
+) -> JSONResponse:
+    if payload.action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action 必须为 approve 或 reject")
+    report = await update_report_audit(
+        db, report_id,
+        audit_status="approved" if payload.action == "approve" else "rejected",
+        audited_by=user.id, comment=payload.comment,
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="报告单不存在")
+    return success_response(data={
+        "report_id": str(report.id),
+        "audit_status": report.audit_status,
+        "audited_at": report.audited_at.isoformat() if report.audited_at else None,
+    }, message="审核已通过" if payload.action == "approve" else "报告单已退回")
+

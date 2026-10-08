@@ -6,9 +6,10 @@ PERMISSIONS: list[PermissionDef] = [
     # ── 液相计算表解析 ──
     PermissionDef("quality:lc:read", "查看液相解析", "quality", "lc", "read"),
     PermissionDef("quality:lc:upload", "上传液相计算表", "quality", "lc", "upload"),
-    # ── 报告生成 ──
+    # ── 报告生成与审核 ──
     PermissionDef("quality:report:read", "查看报告单", "quality", "report", "read"),
     PermissionDef("quality:report:generate", "生成报告单", "quality", "report", "generate"),
+    PermissionDef("quality:report:audit", "审核报告单（比对原始证据后通过/退回）", "quality", "report", "audit"),
     # ── 质量检验 ──
     # 预留：当前无端点使用（标准库读已改 task:read），为偏差/CAPA/变更等
     # 规划中模块的检验数据查看预留；角色勿单独授此码

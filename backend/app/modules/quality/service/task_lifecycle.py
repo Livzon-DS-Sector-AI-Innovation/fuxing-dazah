@@ -198,7 +198,8 @@ class _TaskLifecycle(_TaskCore):
         task = await get_test_task(db, task_id)
         if not task:
             raise AppException(status_code=404, detail="检验任务不存在")
-        if task.status != "in_progress":
+        if task.status not in ("in_progress", "pending_review"):
+            # 方案 A：待复核时专员可直接改结果（不留痕），改后清空已通过复核
             raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可填报")
 
         rows = await list_test_results(db, task_id)
@@ -242,8 +243,12 @@ class _TaskLifecycle(_TaskCore):
                     "filled_at": now,
                 })
         await update_test_results_fill(db, updates)
-        # 全部判定完成后自动进入待复核
-        await _TaskLifecycle.auto_advance_pending_review(db, task_id)
+        if task.status == "pending_review":
+            # 待复核期间修改结果（方案 A）：已通过的复核对新值不再成立——清空重新计数
+            await soft_delete_task_reviews(db, task_id)
+        else:
+            # 全部判定完成后自动进入待复核
+            await _TaskLifecycle.auto_advance_pending_review(db, task_id)
         return _TaskLifecycle._to_detail(task, await list_test_results(db, task_id))
 
     # ── 待复核自动流转 ──

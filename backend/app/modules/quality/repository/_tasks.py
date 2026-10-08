@@ -104,6 +104,7 @@ async def get_test_task_by_batch(
             func.regexp_replace(QualityTestTask.product_name, r"\s", "", "g") == norm,
             QualityTestTask.batch_number == batch_number,
             QualityTestTask.is_deleted == False,  # noqa: E712
+            QualityTestTask.status != "void",  # 作废任务不占批号，允许重建
         )
         .order_by(QualityTestTask.created_at.desc())
         .limit(1)
@@ -314,9 +315,10 @@ async def get_standard_item_doc_map(
     """标准项目行 ID → 所属标准文档 ID 映射（逐份 COA 行归属）。"""
     if not item_ids:
         return {}
+    # 不过滤软删：历史任务快照引用的行被覆盖导入删除后，归属映射必须
+    # 仍可解析（否则逐份 COA 行归属静默漂移）
     stmt = select(QualityStandardItem.id, QualityStandardItem.document_id).where(
         QualityStandardItem.id.in_(item_ids),
-        QualityStandardItem.is_deleted == False,  # noqa: E712
     )
     return {item_id: doc_id for item_id, doc_id in (await db.execute(stmt)).all()}
 

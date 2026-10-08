@@ -1,8 +1,9 @@
 """Quality ORM 模型 —— 检验记录、杂质明细、报告单。"""
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Index, Integer, String, text
+from sqlalchemy import DateTime, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -45,4 +46,18 @@ class ReportRecord(BaseModel):
     )
     file_size: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="文件大小（字节）"
+    )
+    # 报告单审核环节：生成后待初审，审核员比对原始证据后通过/退回
+    audit_status: Mapped[str] = mapped_column(
+        String(20), default="pending", server_default="pending",
+        comment="报告单审核状态：pending 待初审 / approved 已通过 / rejected 已退回",
+    )
+    audited_by: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="审核人，逻辑引用 identity.users.id"
+    )
+    audited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="审核时间"
+    )
+    audit_comment: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, comment="审核备注/退回原因"
     )

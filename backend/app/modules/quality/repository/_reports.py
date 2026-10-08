@@ -149,3 +149,27 @@ async def list_report_records_by_task(db: AsyncSession, task_id: uuid.UUID) -> l
         ReportRecord.is_deleted == False,  # noqa: E712
     ).order_by(ReportRecord.created_at)
     return list((await db.execute(stmt)).scalars())
+
+
+async def update_report_audit(
+    db: AsyncSession,
+    report_id: uuid.UUID,
+    audit_status: str,
+    audited_by: uuid.UUID,
+    comment: str | None = None,
+) -> ReportRecord | None:
+    """报告单审核：pending → approved / rejected（审核人+时间+备注）。"""
+    stmt = select(ReportRecord).where(
+        ReportRecord.id == report_id,
+        ReportRecord.is_deleted == False,  # noqa: E712
+    )
+    report = (await db.execute(stmt)).scalar_one_or_none()
+    if not report:
+        return None
+    report.audit_status = audit_status
+    report.audited_by = audited_by
+    report.audited_at = datetime.now(APP_TZ)
+    report.audit_comment = comment
+    await db.flush()
+    stmt = select(ReportRecord).where(ReportRecord.id == report_id)
+    return (await db.execute(stmt)).scalar_one()

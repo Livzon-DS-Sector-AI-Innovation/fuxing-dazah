@@ -75,9 +75,17 @@ class _TaskReports(_TaskCore):
         item_doc = await get_standard_item_doc_map(db, item_ids)
         main_id = task.standard_document_id if task.standard_document_id in docs else None
         rows_by_doc: dict[uuid.UUID, list[QualityTestResult]] = {did: [] for did in docs}
+        orphan_rows: list[str] = []
         for r in results:
-            did = item_doc.get(r.standard_item_id) if r.standard_item_id else None
-            if did not in docs:
+            if r.standard_item_id:
+                did = item_doc.get(r.standard_item_id)
+                if did not in docs:
+                    # 该行所属标准文件已被删除：不静默落主文档（会产生内容错位的 COA），
+                    # 收集后明确报错，提示重新导入标准文件
+                    orphan_rows.append(r.item_name)
+                    continue
+            else:
+                # 无归属行（液相解析追加）→ 归主文档
                 did = main_id
             if did is None:
                 raise AppException(
@@ -85,6 +93,12 @@ class _TaskReports(_TaskCore):
                     detail=f"结果行「{r.item_name}」无法归属任何标准文件，无法生成 COA",
                 )
             rows_by_doc[did].append(r)
+        if orphan_rows:
+            raise AppException(
+                status_code=400,
+                detail=f"结果行 {len(orphan_rows)} 项（{'、'.join(orphan_rows[:5])}）所属标准文件已删除，"
+                f"请重新导入对应标准文件后再生成 COA",
+            )
 
         # 模板按标准文件解析：COA 绑定（该文档）→ 文档 template_path 兜底
         bindings = await list_coa_bindings_by_docs(db, list(docs.keys()))

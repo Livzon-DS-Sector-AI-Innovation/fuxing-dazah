@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Typography, Card, Table, DatePicker, Space, Button, App, Segmented, Input } from 'antd'
+import { Typography, Card, Table, DatePicker, Space, Button, App, Segmented, Input, Tag } from 'antd'
 import { PrinterOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined, EyeOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
-import type { DailyReportItem, MonthlyReportSummary } from '@/types/quality'
+import { REPORT_AUDIT_META } from '@/types/quality'
+import type { DailyReportItem, MonthlyReportSummary, ReportAuditStatus } from '@/types/quality'
 import { fetchDailyReports, fetchMonthlyReports, downloadReportFile } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 import { usePermission } from '@/hooks/usePermission'
@@ -107,7 +108,12 @@ export default function SerialRegistryPage() {
   }
 
   const itemColumns = [
-    { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 120 },
+    { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 110 },
+    { title: '审核', dataIndex: 'audit_status', key: 'audit_status', width: 80,
+      render: (v: ReportAuditStatus) => {
+        const meta = REPORT_AUDIT_META[v] ?? { color: 'default', label: v }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      } },
     { title: '产品名称', dataIndex: 'product_name', key: 'product_name', ellipsis: true },
     { title: '批号', dataIndex: 'batch_number', key: 'batch_number', width: 140 },
     { title: '模板', dataIndex: 'template_path', key: 'template_path', width: 140, ellipsis: true },
