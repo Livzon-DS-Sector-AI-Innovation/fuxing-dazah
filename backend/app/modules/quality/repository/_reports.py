@@ -120,6 +120,7 @@ async def list_report_records(
     batch_number: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    audit_status: str | None = None,
 ) -> tuple[list[ReportRecord], int]:
     """分页查询报告单列表。"""
     stmt = select(ReportRecord).where(
@@ -129,6 +130,8 @@ async def list_report_records(
         stmt = stmt.where(ReportRecord.product_name.ilike(f"%{product_name}%"))
     if batch_number:
         stmt = stmt.where(ReportRecord.batch_number.ilike(f"%{batch_number}%"))
+    if audit_status:
+        stmt = stmt.where(ReportRecord.audit_status == audit_status)
 
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
@@ -165,6 +168,9 @@ async def update_report_audit(
     )
     report = (await db.execute(stmt)).scalar_one_or_none()
     if not report:
+        return None
+    if report.audit_status != "pending":
+        # 状态机单向：已通过/已退回的报告单不可再审核（退回后由统计员重新出报新报告单）
         return None
     report.audit_status = audit_status
     report.audited_by = audited_by

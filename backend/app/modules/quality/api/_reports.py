@@ -186,6 +186,7 @@ async def generate_task_report(
 async def list_reports(
     product_name: str | None = Query(default=None),
     batch_number: str | None = Query(default=None),
+    audit_status: str | None = Query(default=None, description="审核状态筛选：pending/approved/rejected"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -193,7 +194,7 @@ async def list_reports(
 ) -> JSONResponse:
     items, total = await list_report_records(
         db, product_name=product_name, batch_number=batch_number,
-        page=page, page_size=page_size,
+        page=page, page_size=page_size, audit_status=audit_status,
     )
     status_map = await _task_status_map(db, [it.test_task_id for it in items if it.test_task_id])
     return paginated_response(

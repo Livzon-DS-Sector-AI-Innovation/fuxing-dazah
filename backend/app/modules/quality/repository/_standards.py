@@ -271,3 +271,13 @@ async def delete_coa_binding_by_doc(db: AsyncSession, doc_id: uuid.UUID) -> bool
         b.is_deleted = True
     await db.flush()
     return True
+
+
+async def get_standard_item_by_id(
+    db: AsyncSession, item_id: uuid.UUID, include_deleted: bool = False
+) -> QualityStandardItem | None:
+    """按 ID 查标准项目行；include_deleted=True 时不过滤软删（历史快照对比用）。"""
+    stmt = select(QualityStandardItem).where(QualityStandardItem.id == item_id)
+    if not include_deleted:
+        stmt = stmt.where(QualityStandardItem.is_deleted == False)  # noqa: E712
+    return (await db.execute(stmt)).scalar_one_or_none()

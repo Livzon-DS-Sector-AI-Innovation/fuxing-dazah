@@ -112,10 +112,12 @@ export async function fetchReportRecords(
   product_name?: string,
   batch_number?: string,
   page = 1,
+  auditStatus?: string,
 ): Promise<{ data: ReportRecord[]; meta: { total: number } }> {
   const qs = new URLSearchParams()
   if (product_name) qs.set('product_name', product_name)
   if (batch_number) qs.set('batch_number', batch_number)
+  if (auditStatus) qs.set('audit_status', auditStatus)
   qs.set('page', String(page))
   qs.set('page_size', '20')
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/report/records?${qs}`, {
@@ -909,5 +911,17 @@ export async function auditReport(
     const err: ApiErrorBody = await res.json().catch(() => ({}))
     throw new Error(err.detail || '审核提交失败')
   }
+  return res.json()
+}
+
+
+/** 报告单一致性校验（解析值 vs 填报值、快照 vs 现行标准）。 */
+export async function fetchReportConsistency(reportId: string): Promise<{
+  data: { parsed_mismatches: { item_name: string; report_value: number; parsed_value: number }[]; standard_drifts: { item_name: string; snapshot_text: string | null; current_text: string | null }[] }
+}> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/report/records/${reportId}/consistency`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取一致性校验失败')
   return res.json()
 }

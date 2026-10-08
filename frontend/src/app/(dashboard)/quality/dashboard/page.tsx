@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { TASK_STATUS_META } from '@/types/quality'
 import type { TestTaskStatus, QualityDashboard, DailyReportItem } from '@/types/quality'
-import { fetchQualityDashboard, fetchDailyReports } from '@/actions/quality'
+import { fetchQualityDashboard, fetchDailyReports, fetchReportRecords } from '@/actions/quality'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -48,18 +48,21 @@ export default function QualityDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<QualityDashboard | null>(null)
   const [dailyReports, setDailyReports] = useState<DailyReportItem[]>([])
+  const [pendingAuditCount, setPendingAuditCount] = useState(0)
 
   const today = dayjs().format('YYYY-MM-DD')
   const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD')
 
   const load = useCallback(async (silent = false) => {
     try {
-      const [res, reports] = await Promise.all([
+      const [res, reports, pendingAudit] = await Promise.all([
         fetchQualityDashboard(),
         fetchDailyReports(),
+        fetchReportRecords(undefined, undefined, 1, 'pending').catch(() => null),
       ])
       setData(res.data)
       setDailyReports(reports.data || [])
+      setPendingAuditCount(pendingAudit?.meta.total ?? 0)
     } catch (err: unknown) {
       // 自动刷新静默失败（此前后端异常时每 30 秒弹一条错误轰炸）
       if (!silent) message.error((err instanceof Error ? err.message : String(err)) || '加载总览失败')
@@ -89,6 +92,14 @@ export default function QualityDashboardPage() {
       </div>
 
       <Row gutter={16}>
+        <Col xs={12} sm={12} md={6}>
+          <Card size="small" hoverable loading={loading}
+            onClick={() => router.push('/quality/report?audit_status=pending')}>
+            <Statistic title="待初审报告单" value={pendingAuditCount}
+              valueStyle={{ color: pendingAuditCount > 0 ? token.colorWarning : undefined }}
+              suffix="份" />
+          </Card>
+        </Col>
         <Col xs={12} sm={12} md={6}>
           <Card size="small" hoverable loading={loading}
             onClick={() => router.push(`/quality/task?report_date=${today}`)}>

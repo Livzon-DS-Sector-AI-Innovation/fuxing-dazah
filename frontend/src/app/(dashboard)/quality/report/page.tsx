@@ -10,7 +10,7 @@ import { CoaPreviewModal } from '@/components/quality'
 import { usePermission } from '@/hooks/usePermission'
 import { REPORT_AUDIT_META } from '@/types/quality'
 import type { ReportAuditStatus } from '@/types/quality'
-import { auditReport } from '@/actions/quality'
+import { auditReport, fetchReportConsistency } from '@/actions/quality'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -42,6 +42,10 @@ function ReportPageInner() {
   const [search, setSearch] = useState('')
   const [batchDraft, setBatchDraft] = useState('')
   const [batchSearch, setBatchSearch] = useState('')
+  const [auditFilter, setAuditFilter] = useState<string | undefined>(
+    () => searchParams.get('audit_status') || undefined
+  )
+  const [consistency, setConsistency] = useState<{ parsed_mismatches: { item_name: string; report_value: number; parsed_value: number }[]; standard_drifts: { item_name: string; snapshot_text: string | null; current_text: string | null }[] } | null>(null)
 
   // 从检验历史详情跳转：?recordId= 打开生成报告单弹窗（此前为死链）
   const [genOpen, setGenOpen] = useState(false)
@@ -56,12 +60,12 @@ function ReportPageInner() {
   const load = useCallback(async (p: number) => {
     setLoading(true)
     try {
-      const res = await fetchReportRecords(search || undefined, batchSearch || undefined, p)
+      const res = await fetchReportRecords(search || undefined, batchSearch || undefined, p, auditFilter)
       setData(res.data)
       setTotal(res.meta.total)
     } catch { message.error('加载失败') }
     finally { setLoading(false) }
-  }, [search, batchSearch, message])
+  }, [search, batchSearch, auditFilter, message])
 
   useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
@@ -166,8 +170,18 @@ function ReportPageInner() {
     { title: '操作', key: 'actions', width: 210,
       render: (_: unknown, r: ReportRecord) => (
         <Space size={4}>
-          {canAudit && r.task_status !== null && (
-            <Button size="small" onClick={() => { setAuditTarget(r); setAuditComment('') }}>审核</Button>
+          {canAudit && r.task_status !== null && r.audit_status === 'pending' && (
+            <Button size="small" type="primary" ghost
+              onClick={async () => {
+                setAuditTarget(r)
+                setAuditComment('')
+                try {
+                  const res = await fetchReportConsistency(r.id)
+                  setConsistency(res.data)
+                } catch {
+                  setConsistency(null)
+                }
+              }}>审核</Button>
           )}
           <Button size="small" icon={<EyeOutlined />}
             onClick={() => { setPreviewId(r.id); setPreviewTitle(`报告单预览（批号 ${r.batch_number}）`) }}
@@ -201,6 +215,18 @@ function ReportPageInner() {
           onChange={e => setSearchDraft(e.target.value)}
           onPressEnter={() => { setSearch(searchDraft); setPage(1) }}
           style={{ width: 200 }} prefix={<SearchOutlined />} />
+        <Select
+          placeholder="审核状态"
+          allowClear
+          style={{ width: 120 }}
+          value={auditFilter}
+          onChange={(v) => { setAuditFilter(v); setPage(1) }}
+          options={[
+            { label: '待初审', value: 'pending' },
+            { label: '已通过', value: 'approved' },
+            { label: '已退回', value: 'rejected' },
+          ]}
+        />
         <Input placeholder="批号" allowClear value={batchDraft}
           onChange={e => setBatchDraft(e.target.value)}
           onPressEnter={() => { setBatchSearch(batchDraft); setPage(1) }}
@@ -261,6 +287,28 @@ function ReportPageInner() {
               </Button>
             )}
           </Space>
+          {consistency && (
+            <div style={{ border: '1px solid #faad14', borderRadius: 4, padding: 8 }}>
+              {consistency.parsed_mismatches.length === 0 && consistency.standard_drifts.length === 0 ? (
+                <Text type="success" style={{ display: 'block' }}>✅ 一致性校验通过</Text>
+              ) : (
+                <>
+                  {consistency.parsed_mismatches.length > 0 && (
+                    <Text type="warning" style={{ display: 'block' }}>
+                      ⚠️ 填报值与解析记录不一致 {consistency.parsed_mismatches.length} 项：
+                      {consistency.parsed_mismatches.map((m) => `${m.item_name}（填报 ${m.report_value} / 解析 ${m.parsed_value}）`).join('；')}
+                    </Text>
+                  )}
+                  {consistency.standard_drifts.length > 0 && (
+                    <Text type="warning" style={{ display: 'block' }}>
+                      ⚠️ 任务快照与现行标准不一致 {consistency.standard_drifts.length} 项：
+                      {consistency.standard_drifts.map((d) => `${d.item_name}（快照 ${d.snapshot_text} / 现行 ${d.current_text}）`).join('；')}
+                    </Text>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           <Input.TextArea
             rows={3}
             placeholder="审核备注（退回时请填写原因）"
