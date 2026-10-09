@@ -171,7 +171,7 @@ function ReportPageInner() {
       render: (_: unknown, r: ReportRecord) => (
         <Space size={4}>
           {canAudit && r.task_status !== null && r.audit_status === 'pending' && (
-            <Button size="small" type="primary" ghost
+            <Button size="small" type="primary"
               onClick={async () => {
                 setAuditTarget(r)
                 setAuditComment('')

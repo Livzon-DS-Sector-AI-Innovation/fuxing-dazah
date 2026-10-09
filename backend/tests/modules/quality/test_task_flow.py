@@ -276,3 +276,55 @@ async def test_default_rule_only_applies_to_manual_rows(db_session):
     # 任务也未因此自动进待复核
     fresh = await get_test_task(db_session, task.id)
     assert fresh.status == "in_progress"
+
+
+async def test_pending_review_edit_allowed_and_clears_reviews(db_session):
+    """方案 A：待复核时专员可改结果，改后已通过复核清空重新计数。"""
+    from app.modules.quality.repository import (
+        create_task_review,
+        list_task_reviews,
+    )
+
+    doc = await _make_doc(db_session, "HAF")
+    task, rows = await _make_task_with_rows(db_session, doc)
+    # 全判定 → 自动待复核
+    await TestTaskService.update_results(db_session, task.id, TestResultsUpdate(results=[
+        TestResultFill(result_id=rows[0].id, result_value=1.5),
+        TestResultFill(result_id=rows[1].id, is_pass=True, result_text="白色粉末"),
+    ]))
+    await create_task_review(db_session, task.id, uuid.uuid4(), "先通过")
+    assert len(await list_task_reviews(db_session, task.id)) == 1
+
+    # 待复核下修改结果：应成功且复核清空
+    payload = TestResultsUpdate(results=[
+        TestResultFill(result_id=rows[0].id, result_value=2.0),
+    ])
+    await TestTaskService.update_results(db_session, task.id, payload)
+    fresh = await get_test_task(db_session, task.id)
+    assert fresh.status == "pending_review"  # 仍待复核（重新计数）
+    assert len(await list_task_reviews(db_session, task.id)) == 0  # 复核已清空
+
+
+async def test_void_task_can_be_rebuilt(db_session):
+    """作废任务不占批号：同批号可重建新任务。"""
+    doc = await _make_doc(db_session, "HAF")
+    await create_standard_item(db_session, doc.id, {
+        "seq": 1, "item_name": "水分", "sop_no": "SOP.03.1111",
+        "standard_text": "≤3.0%", "operator": "≤", "limit_max": 3.0,
+    })
+    batch = _rand_batch("HAF")
+    first = await TestTaskService.create_task(db_session, TestTaskCreate(
+        product_name=doc.product_name, batch_number=batch,
+        standard_document_id=doc.id,
+    ))
+    # 作废第一个
+    first_task = await get_test_task(db_session, first.id)
+    first_task.status = "void"
+    await db_session.flush()
+
+    # 同批号重建应成功（此前被唯一索引挡死）
+    second = await TestTaskService.create_task(db_session, TestTaskCreate(
+        product_name=doc.product_name, batch_number=batch,
+        standard_document_id=doc.id,
+    ))
+    assert second.id != first.id
