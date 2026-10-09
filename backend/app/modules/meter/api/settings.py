@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.meter import service
+from app.modules.meter.api import _deps
 from app.modules.meter.api._router import router
 from app.modules.meter.schemas import MeterSettingsResponse, MeterSettingsUpdate
 
@@ -17,7 +18,7 @@ from app.modules.meter.schemas import MeterSettingsResponse, MeterSettingsUpdate
 # ═══════════════════════════════════════════
 
 
-@router.get("/settings", summary="获取全局设置（提醒时间）")
+@router.get("/settings", summary="获取全局设置（提醒时间）", dependencies=[Depends(_deps.read_any)])
 async def get_settings(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
@@ -26,7 +27,7 @@ async def get_settings(
 
 
 
-@router.put("/settings", summary="更新全局设置（提醒时间）")
+@router.put("/settings", summary="更新全局设置（提醒时间）", dependencies=[Depends(_deps.config_manage)])
 async def update_settings(
     data: MeterSettingsUpdate,
     db: AsyncSession = Depends(get_db),

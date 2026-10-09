@@ -154,7 +154,7 @@ async def _fetch_meter_data(
     """分页获取指定水表数据，按小时分组求 AANALOGFLOW 和。
 
     target_hour 为 None 时返回 {hour(0-23): value} 字典（日汇总模式）；
-    否则仅返回匹配 target_hour 的小时的值（键为 target_hour.hour）。
+    否则仅返回「日期与小时都与 target_hour 相同」的记录值（键为 target_hour.hour）。
     单页请求失败时记录 warning 并继续下一页。
     """
     hour_values: dict[int, float] = {h: 0.0 for h in range(24)} if target_hour is None else {}
@@ -183,17 +183,22 @@ async def _fetch_meter_data(
 
             for record in records:
                 try:
-                    record_hour = _record_hour(record)
-                    if record_hour is None:
-                        continue
-                    if target_hour is None or record_hour == target_hour.hour:
-                        raw_flow = record.get("AANALOGFLOW")
-                        flow_value = float(raw_flow) if raw_flow is not None else 0.0
-                        if target_hour is None:
-                            hour_values[record_hour] += flow_value
-                        else:
-                            hour_values[record_hour] = hour_values.get(record_hour, 0.0) + flow_value
-                        matched_count += 1
+                    raw_flow = record.get("AANALOGFLOW")
+                    flow_value = float(raw_flow) if raw_flow is not None else 0.0
+                    if target_hour is None:
+                        record_hour = _record_hour(record)
+                        if record_hour is None:
+                            continue
+                        hour_values[record_hour] += flow_value
+                    else:
+                        # 小时模式拉的是 3 天窗口，必须按「日期 + 小时」匹配：
+                        # 只比小时会把三天的同一小时累加，使每小时读数约 3 倍虚高。
+                        if not _record_matches_hour(record, target_hour):
+                            continue
+                        hour_values[target_hour.hour] = (
+                            hour_values.get(target_hour.hour, 0.0) + flow_value
+                        )
+                    matched_count += 1
                 except (ValueError, TypeError) as e:
                     logger.warning(
                         "水表 %s AANALOGFLOW 解析异常: %s, record=%s",

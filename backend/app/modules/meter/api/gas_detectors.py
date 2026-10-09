@@ -14,7 +14,8 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.meter import repository as repo
 from app.modules.meter import service
-from app.modules.meter.api._helpers import _build_report_items
+from app.modules.meter.api import _deps
+from app.modules.meter.api._helpers import _build_report_items, _sanitize_row
 from app.modules.meter.api._router import router
 from app.modules.meter.schemas import (
     BatchCreateResult,
@@ -35,7 +36,7 @@ from app.modules.meter.schemas import (
 logger = logging.getLogger(__name__)
 
 
-@router.post("/gas-detectors/batch", summary="批量新增有毒有害可燃探测器（单次最多 200 条）")
+@router.post("/gas-detectors/batch", summary="批量新增有毒有害可燃探测器（单次最多 200 条）", dependencies=[Depends(_deps.gas_detector_create)])
 async def batch_create_gas_detectors(
     body: dict[str, Any],
     db: AsyncSession = Depends(get_db),
@@ -51,7 +52,7 @@ async def batch_create_gas_detectors(
 
 
 
-@router.post("/gas-detectors/import-ledger", summary="导入有毒有害探测器台账Excel（按产品编号更新）")
+@router.post("/gas-detectors/import-ledger", summary="导入有毒有害探测器台账Excel（按产品编号更新）", dependencies=[Depends(_deps.gas_detector_update)])
 async def import_gas_detector_ledger(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -114,7 +115,7 @@ async def import_gas_detector_ledger(
 # ═══════════════════════════════════════════
 
 
-@router.get("/gas-detectors", summary="有毒有害可燃探测器列表")
+@router.get("/gas-detectors", summary="有毒有害可燃探测器列表", dependencies=[Depends(_deps.gas_detector_read)])
 async def list_gas_detectors(
     filters: GasDetectorFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -162,7 +163,7 @@ async def list_gas_detectors(
 
 
 
-@router.get("/gas-detectors/filter-options", summary="获取有毒有害可燃探测器筛选选项")
+@router.get("/gas-detectors/filter-options", summary="获取有毒有害可燃探测器筛选选项", dependencies=[Depends(_deps.gas_detector_read)])
 async def get_gas_detector_filter_options(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
@@ -172,7 +173,7 @@ async def get_gas_detector_filter_options(
     return success_response(GasDetectorFilterOptions(**options).model_dump(mode="json"))
 
 
-@router.get("/gas-detectors/filter-options/search", summary="按字段搜索探测器筛选项（typeahead）")
+@router.get("/gas-detectors/filter-options/search", summary="按字段搜索探测器筛选项（typeahead）", dependencies=[Depends(_deps.gas_detector_read)])
 async def search_gas_detector_filter_options(
     field: str = Query(..., description="字段名（白名单）"),
     q: str | None = Query(default=None, max_length=200, description="搜索关键字，空则返回前 limit 个"),
@@ -186,7 +187,7 @@ async def search_gas_detector_filter_options(
     return success_response(data)
 
 
-@router.get("/gas-detectors/date-stats", summary="有毒有害可燃探测器日期聚合统计")
+@router.get("/gas-detectors/date-stats", summary="有毒有害可燃探测器日期聚合统计", dependencies=[Depends(_deps.gas_detector_read)])
 async def get_gas_detector_date_stats(
     field: str = Query(default="calibration_date", pattern="^(calibration_date|next_calibration_date)$", description="统计的日期字段"),
     filters: GasDetectorFilter = Depends(),
@@ -197,7 +198,7 @@ async def get_gas_detector_date_stats(
 
 
 
-@router.get("/gas-detectors/export-excel", summary="导出有毒有害可燃探测器为 Excel")
+@router.get("/gas-detectors/export-excel", summary="导出有毒有害可燃探测器为 Excel", dependencies=[Depends(_deps.gas_detector_read)])
 async def export_gas_detectors_excel(
     filters: GasDetectorFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -232,14 +233,14 @@ async def export_gas_detectors_excel(
         cell.alignment = header_align
 
     for row_idx, r in enumerate(records, 2):
-        values = [
+        values = _sanitize_row([
             _normalize_department(r.department), r.instrument_name, r.detection_model,
             r.measurement_range, r.product_number, r.installation_type,
             r.installation_location, r.medium, r.calibration_factor,
             r.manufacturer_supplier, r.calibration_date.isoformat() if r.calibration_date else "",
             r.detection_unit, r.next_calibration_date.isoformat() if r.next_calibration_date else "",
             r.calibration_result, r.manufacturer,
-        ]
+        ])
         for col_idx, v in enumerate(values, 1):
             ws.cell(row=row_idx, column=col_idx, value=v)
 
@@ -263,7 +264,7 @@ async def export_gas_detectors_excel(
 
 
 
-@router.get("/gas-detectors/ids", summary="获取筛选条件下所有探测器 ID（用于跨页全选）")
+@router.get("/gas-detectors/ids", summary="获取筛选条件下所有探测器 ID（用于跨页全选）", dependencies=[Depends(_deps.gas_detector_read)])
 async def get_gas_detector_ids(
     filters: GasDetectorFilter = Depends(),
     db: AsyncSession = Depends(get_db),
@@ -273,7 +274,7 @@ async def get_gas_detector_ids(
 
 
 
-@router.get("/gas-detectors/{detector_id}", summary="有毒有害可燃探测器详情")
+@router.get("/gas-detectors/{detector_id}", summary="有毒有害可燃探测器详情", dependencies=[Depends(_deps.gas_detector_read)])
 async def get_gas_detector(
     detector_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -310,7 +311,7 @@ async def get_gas_detector(
 
 
 
-@router.post("/gas-detectors", summary="新增有毒有害可燃探测器")
+@router.post("/gas-detectors", summary="新增有毒有害可燃探测器", dependencies=[Depends(_deps.gas_detector_create)])
 async def create_gas_detector(
     data: GasDetectorCreate,
     db: AsyncSession = Depends(get_db),
@@ -347,7 +348,7 @@ async def create_gas_detector(
 
 
 
-@router.put("/gas-detectors/{detector_id}", summary="更新有毒有害可燃探测器")
+@router.put("/gas-detectors/{detector_id}", summary="更新有毒有害可燃探测器", dependencies=[Depends(_deps.gas_detector_update)])
 async def update_gas_detector(
     detector_id: UUID,
     data: GasDetectorUpdate,
@@ -385,7 +386,7 @@ async def update_gas_detector(
 
 
 
-@router.delete("/gas-detectors/{detector_id}", summary="删除有毒有害可燃探测器（软删除）")
+@router.delete("/gas-detectors/{detector_id}", summary="删除有毒有害可燃探测器（软删除）", dependencies=[Depends(_deps.gas_detector_delete)])
 async def delete_gas_detector(
     detector_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -395,7 +396,7 @@ async def delete_gas_detector(
 
 
 
-@router.post("/gas-detectors/batch-delete", summary="批量删除有毒有害可燃探测器（软删除）")
+@router.post("/gas-detectors/batch-delete", summary="批量删除有毒有害可燃探测器（软删除）", dependencies=[Depends(_deps.gas_detector_delete)])
 async def batch_delete_gas_detectors(
     body: BatchDeleteRequest,
     db: AsyncSession = Depends(get_db),
@@ -406,7 +407,7 @@ async def batch_delete_gas_detectors(
 
 
 
-@router.post("/gas-detectors/export-reports", summary="批量导出探测器最新报告 ZIP（单次最多 200 份）")
+@router.post("/gas-detectors/export-reports", summary="批量导出探测器最新报告 ZIP（单次最多 200 份）", dependencies=[Depends(_deps.gas_detector_read)])
 async def export_gas_detector_reports(
     body: ExportReportRequest,
     db: AsyncSession = Depends(get_db),
@@ -424,7 +425,7 @@ async def export_gas_detector_reports(
 
 
 
-@router.get("/departments/gas-detectors", summary="获取有毒有害可燃探测器部门列表")
+@router.get("/departments/gas-detectors", summary="获取有毒有害可燃探测器部门列表", dependencies=[Depends(_deps.gas_detector_read)])
 async def list_gas_detector_departments(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:

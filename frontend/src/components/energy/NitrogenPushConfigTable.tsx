@@ -120,6 +120,7 @@ export function NitrogenPushConfigTable({
       title: '操作',
       key: 'action',
       width: 120,
+      fixed: 'right',
       render: (_, record) => (
         <Space>
           {hasPermission('energy:nitrogen_report:update') && (

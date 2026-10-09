@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.meter import service
+from app.modules.meter.api import _deps
+from app.modules.meter.api._helpers import _sanitize_row
 from app.modules.meter.api._router import router
 
 # ═══════════════════════════════════════════
@@ -16,7 +18,7 @@ from app.modules.meter.api._router import router
 # ═══════════════════════════════════════════
 
 
-@router.get("/calibration/alerts", summary="检定到期提醒")
+@router.get("/calibration/alerts", summary="检定到期提醒", dependencies=[Depends(_deps.read_any)])
 async def calibration_alerts(
     days_before: int = Query(default=30, ge=0, le=365, description="0=截止今天(含超期), >0=未来N天内到期"),
     department: str | None = Query(default=None, description="部门筛选"),
@@ -28,7 +30,7 @@ async def calibration_alerts(
 
 
 
-@router.get("/calibration/alerts/export-excel", summary="导出检定到期提醒为 Excel")
+@router.get("/calibration/alerts/export-excel", summary="导出检定到期提醒为 Excel", dependencies=[Depends(_deps.read_any)])
 async def export_calibration_alerts_excel(
     days_before: int = Query(default=30, ge=0, le=365, description="0=截止今天(含超期), >0=未来N天内到期"),
     department: str | None = Query(default=None, description="部门筛选"),
@@ -69,7 +71,7 @@ async def export_calibration_alerts_excel(
                 days_text = "今天到期"
             else:
                 days_text = f"{d} 天"
-        values = [
+        values = _sanitize_row([
             source_label,
             a.get("serial_number", ""),
             a.get("instrument_name", ""),
@@ -77,7 +79,7 @@ async def export_calibration_alerts_excel(
             a.get("department", ""),
             a["next_calibration_date"].isoformat() if a.get("next_calibration_date") else "",
             days_text,
-        ]
+        ])
         for col_idx, v in enumerate(values, 1):
             ws.cell(row=row_idx, column=col_idx, value=v)
 

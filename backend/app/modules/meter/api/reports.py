@@ -13,19 +13,21 @@ from app.core.database import get_db
 from app.core.exceptions import NotFoundException
 from app.core.response import success_response
 from app.modules.meter import service
+from app.modules.meter.api import _deps
 from app.modules.meter.api._helpers import _build_report_items
 from app.modules.meter.api._router import router
 from app.modules.meter.schemas import (
     ReportResponse,
     UpdateReportRequest,
 )
+from app.modules.meter.service.common import normalize_report_content_type
 
 # ═══════════════════════════════════════════
 # 检测报告
 # ═══════════════════════════════════════════
 
 
-@router.post("/reports", summary="上传检测报告")
+@router.post("/reports", summary="上传检测报告", dependencies=[Depends(_deps.report_upload)])
 async def upload_report(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -91,7 +93,7 @@ async def upload_report(
 
 
 
-@router.get("/reports/match-one", summary="按名称+编号匹配台账（供人工修正后重新关联）")
+@router.get("/reports/match-one", summary="按名称+编号匹配台账（供人工修正后重新关联）", dependencies=[Depends(_deps.read_any)])
 async def match_one(
     instrument_name: str | None = Query(default=None, description="器具名称"),
     serial_number: str | None = Query(default=None, description="出厂编号/产品编号"),
@@ -104,7 +106,7 @@ async def match_one(
 
 
 
-@router.get("/reports/{report_id}", summary="获取检测报告元数据")
+@router.get("/reports/{report_id}", summary="获取检测报告元数据", dependencies=[Depends(_deps.read_any)])
 async def get_report(
     report_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -127,7 +129,7 @@ async def get_report(
 
 
 
-@router.get("/reports/{report_id}/download", summary="下载检测报告文件")
+@router.get("/reports/{report_id}/download", summary="下载检测报告文件", dependencies=[Depends(_deps.read_any)])
 async def download_report(
     report_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -144,16 +146,18 @@ async def download_report(
     ) or "report"
     return StreamingResponse(
         iter([data]),
-        media_type=content_type,
+        media_type=normalize_report_content_type(content_type),
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(len(data)),
+            # 存量数据里可能有历史遗留的可执行类型；nosniff 防浏览器嗅探渲染
+            "X-Content-Type-Options": "nosniff",
         },
     )
 
 
 
-@router.get("/reports/{report_id}/preview", summary="在线预览检测报告文件")
+@router.get("/reports/{report_id}/preview", summary="在线预览检测报告文件", dependencies=[Depends(_deps.read_any)])
 async def preview_report(
     report_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -170,16 +174,19 @@ async def preview_report(
     ) or "report"
     return StreamingResponse(
         iter([data]),
-        media_type=content_type,
+        # inline 只放行 PDF/图片；其余类型（含历史遗留的 text/html）一律
+        # 降级为 octet-stream 触发下载，杜绝 API 域下的存储型 XSS
+        media_type=normalize_report_content_type(content_type),
         headers={
             "Content-Disposition": f'inline; filename="{filename}"',
             "Content-Length": str(len(data)),
+            "X-Content-Type-Options": "nosniff",
         },
     )
 
 
 
-@router.delete("/reports/{report_id}", summary="删除检测报告（软删除）")
+@router.delete("/reports/{report_id}", summary="删除检测报告（软删除）", dependencies=[Depends(_deps.report_delete)])
 async def delete_report(
     report_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -189,7 +196,7 @@ async def delete_report(
 
 
 
-@router.get("/instruments/{instrument_id}/reports", summary="获取标准计量器具的报告列表")
+@router.get("/instruments/{instrument_id}/reports", summary="获取标准计量器具的报告列表", dependencies=[Depends(_deps.instrument_read)])
 async def list_instrument_reports(
     instrument_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -200,7 +207,7 @@ async def list_instrument_reports(
 
 
 
-@router.get("/gas-detectors/{detector_id}/reports", summary="获取探测器的报告列表")
+@router.get("/gas-detectors/{detector_id}/reports", summary="获取探测器的报告列表", dependencies=[Depends(_deps.gas_detector_read)])
 async def list_gas_detector_reports(
     detector_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -211,7 +218,7 @@ async def list_gas_detector_reports(
 
 
 
-@router.put("/reports/{report_id}", summary="手动修改检测报告证书编号")
+@router.put("/reports/{report_id}", summary="手动修改检测报告证书编号", dependencies=[Depends(_deps.report_upload)])
 async def update_report(
     report_id: UUID,
     body: UpdateReportRequest,

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback } from 'react'
-import { App, Table, Button } from 'antd'
+import { App, Table, Button, Popconfirm, Tooltip } from 'antd'
 import { EditOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { EnergyDeviceConfig, EnergyTypeMeta } from '@/types/energy'
@@ -163,8 +163,8 @@ export function DeviceTable({
         await updateEnergyDevice(record.id, { is_enabled: !record.is_enabled })
         message.success(record.is_enabled ? '已禁用' : '已启用')
         onRefresh()
-      } catch (error: any) {
-        message.error(error?.message || '操作失败')
+      } catch (error: unknown) {
+        message.error(error instanceof Error ? error.message : '操作失败')
       }
     },
     [message, onRefresh],
@@ -176,8 +176,8 @@ export function DeviceTable({
         await deleteEnergyDevice(record.id)
         message.success('删除成功')
         onRefresh()
-      } catch (error: any) {
-        message.error(error?.message || '删除失败')
+      } catch (error: unknown) {
+        message.error(error instanceof Error ? error.message : '删除失败')
       }
     },
     [message, onRefresh],
@@ -299,36 +299,28 @@ export function DeviceTable({
       render: (_: unknown, record: EnergyDeviceConfig) => (
         <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
           <PermissionGuard permission="energy:device:update">
-            <Button
-              type="text"
-              size="small"
-              icon={record.is_enabled ? <StopOutlined /> : <CheckCircleOutlined />}
-              onClick={() => handleToggle(record)}
-              style={{ color: record.is_enabled ? '#dd5b00' : '#1aae39' }}
-              aria-label={record.is_enabled ? '禁用' : '启用'}
-            >
-              {record.is_enabled ? '禁用' : '启用'}
-            </Button>
+            <Tooltip title={record.is_enabled ? '停用数据源' : '启用数据源'}>
+              <Button
+                type="text"
+                size="small"
+                icon={record.is_enabled ? <StopOutlined /> : <CheckCircleOutlined />}
+                onClick={() => handleToggle(record)}
+                style={{ color: record.is_enabled ? '#dd5b00' : '#1aae39' }}
+                aria-label={record.is_enabled ? '禁用' : '启用'}
+              />
+            </Tooltip>
           </PermissionGuard>
           <PermissionGuard permission="energy:device:update">
-            <Button
-              type="text"
-              size="small"
-              icon={<EditOutlined />}
-              onClick={() => openDeviceDrawer('edit', record.id)}
-              style={{ color: '#5645d4' }}
-              aria-label="编辑"
-            />
+            <Tooltip title="编辑">
+              <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openDeviceDrawer('edit', record.id)} style={{ color: '#5645d4' }} aria-label="编辑" />
+            </Tooltip>
           </PermissionGuard>
           <PermissionGuard permission="energy:device:delete">
-            <Button
-              type="text"
-              size="small"
-              icon={<DeleteOutlined />}
-              onClick={() => handleDelete(record)}
-              style={{ color: '#e03131' }}
-              aria-label="删除"
-            />
+            <Popconfirm title="删除数据源？" description="删除后将无法恢复，请确认该数据源已不再使用。" okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => handleDelete(record)}>
+              <Tooltip title="删除">
+                <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#e03131' }} aria-label="删除" />
+              </Tooltip>
+            </Popconfirm>
           </PermissionGuard>
         </div>
       ),

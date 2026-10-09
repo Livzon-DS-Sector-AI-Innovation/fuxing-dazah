@@ -111,6 +111,14 @@
   border-bottom: 1px solid var(--color-hairline-soft);
 }
 
+/* 编号与台账状态两端对齐：一个答"这是哪份"，一个答"还算不算数"。 */
+.identityTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .identityCode {
   color: var(--color-ink);
   font-size: 22px;
@@ -554,106 +562,236 @@
 }
 
 /* ── 详情抽屉：版本链就是选择器 ───────────────────────────────
-   版本多了不再堆叠卡片：链上点哪个版本，下面的档案区就显示哪个。 */
+   版本多了不再堆叠卡片：链上点哪个版本，下面的档案区就显示哪个。
+   三个信号分三条通道，互不冒充：
+     实心黑 = 现行（这一版在生效）／外圈 = 正在查看（光标）／虚线 = 已停用（退出链）。
+   早先把"选中"涂成实心黑，点开 0.1 就像把 0.1 设成了现行——在文件台账里这是要出事的。 */
 .versionBar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--color-hairline-soft);
+  gap: 12px;
+  padding: 14px 0 0;
 }
 
 .versionTab {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--color-hairline);
+  gap: 6px;
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--color-hairline-strong);
   border-radius: 9999px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfaf9 100%);
+  background: var(--color-canvas);
   color: var(--color-slate);
   font-size: 13px;
   font-weight: 500;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    0 1px 0 rgba(200, 196, 190, 0.55),
-    0 2px 5px -2px rgba(40, 33, 91, 0.22);
-  transition: transform 170ms ease, box-shadow 170ms ease, border-color 170ms ease, color 170ms ease;
+  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
 }
 
 .versionTab:hover {
-  border-color: var(--color-hairline-strong);
-  color: var(--color-charcoal);
-  transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    0 2px 0 rgba(200, 196, 190, 0.5),
-    0 6px 12px -6px rgba(40, 33, 91, 0.4);
+  border-color: var(--color-ink);
+  color: var(--color-ink);
 }
 
-.versionTab:focus-visible {
-  outline: 2px solid var(--color-primary);
+/* 外圈而不是填色：填色已经许给"现行"了，两者可以同时出现在一个胶囊上。
+   黑底胶囊上这圈是"黑底 + 底色空隙 + 黑圈"，白底胶囊上就是一圈黑——同一个信号。 */
+.versionTabViewing {
+  outline: 2px solid var(--color-ink);
   outline-offset: 2px;
 }
 
-.versionTabActive,
-.versionTabActive:hover {
-  border-color: #14120f;
-  background: linear-gradient(180deg, #2b2925 0%, var(--color-ink-deep) 62%);
+.versionTabInForce {
+  border-color: var(--color-ink-deep);
+  background: var(--color-ink-deep);
   color: var(--color-on-dark);
   font-weight: 600;
-  transform: none;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    0 2px 0 rgba(10, 21, 48, 0.55),
-    0 6px 14px -6px rgba(40, 33, 91, 0.55);
 }
 
-.versionTabInactive {
+.versionTabInForce:hover {
+  border-color: var(--color-ink-deep);
+  color: var(--color-on-dark);
+}
+
+/* 已停用是"从链上退下来"，虚线只留给它——上传新版本用实线，别混进这个语义。 */
+.versionTabInactive,
+.versionTabInactive:hover {
   border-style: dashed;
   color: var(--color-steel);
   background: none;
-  box-shadow: none;
-}
-
-/* 停用是"从链上退下来"的状态，悬停也不该把它抬起来（:hover 规则晚于 .versionTab:hover）。 */
-.versionTabInactive:hover {
-  border-color: var(--color-hairline-strong);
-  color: var(--color-slate);
-  background: none;
-  box-shadow: none;
 }
 
 .versionTabAdd {
-  border-style: dashed;
-  border-color: var(--color-hairline-strong);
   color: var(--color-steel);
-  background: none;
-  box-shadow: none;
 }
 
 .versionTabAdd:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
-  box-shadow: 0 6px 14px -8px rgba(86, 69, 212, 0.55);
 }
 
-/* 键帽的抬升是"东西被拿起来"的意思，不喜欢动的用户不该被它晃到。 */
-@media (prefers-reduced-motion: reduce) {
-  .versionTab,
-  .versionTab:hover {
-    transform: none;
-    transition: none;
-  }
+/* 焦点比什么都急，放在最后压住上面所有 outline。 */
+.versionTab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.versionEmpty {
+  margin: 10px 0 0;
+  color: var(--color-slate);
+  font-size: 13px;
 }
 
 .versionPanel {
-  margin-top: 18px;
+  margin-top: 16px;
+}
+
+/* 选中版本的三条事实。版本号由上面的版本链承担，这里不重复；
+   一行放完，不占 4 行标签列——它们全是同一层级的时间与闸门状态。 */
+.versionFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.factLabel {
+  color: var(--color-steel);
+  font-size: 12px;
+}
+
+.factMissing {
+  color: var(--color-steel);
+}
+
+/* 未确认外部批准会挡住 AI 分析，所以它不该像"未锁定"那样安静。 */
+.factWarn {
+  color: var(--color-warning);
+}
+
+.blockLabel {
+  color: var(--color-steel);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── 原件底座：封存的凭据在上，系统派生的索引在下 ───────────── */
+.artifactPanel {
+  margin-top: 14px;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: var(--color-surface-soft);
+}
+
+.artifactName {
+  margin-top: 6px;
+  color: var(--color-charcoal);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.artifactMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+  color: var(--color-steel);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.artifactEmpty {
+  margin: 14px 0 0;
+  color: var(--color-slate);
+  font-size: 13px;
+}
+
+/* 动作属于它上面那个对象，负外边距抵消 link 按钮的内边距，让图标与文字左缘对齐。 */
+.panelActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 8px 0 0 -7px;
+}
+
+.parseZone {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.parseHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.parseMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 6px;
+  color: var(--color-steel);
+  font-size: 12px;
+}
+
+.parseCounts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 5px;
+  color: var(--color-slate);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.parseCounts b {
+  color: var(--color-charcoal);
+  font-weight: 600;
+}
+
+.parseNote {
+  margin: 6px 0 0;
+  color: var(--color-warning);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 关联段的标题行：维护动作紧跟在标题后面，不甩到抽屉另一边。
+   动作贴在它作用的那个对象上，这条也管着它不要跑出视线。 */
+.blockHead {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  margin-top: 20px;
+  min-height: 24px;
+}
+
+.blockActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* 动作属于"这个版本的档案"，跟字段同一列起排；右对齐会在 720px 抽屉里
@@ -661,8 +799,11 @@
 .versionActions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-hairline-soft);
 }
 
 .relationRow {
@@ -670,56 +811,13 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-}
-
-/* 正文：一行是"这是什么文件"，一行是"怎么核对、怎么打开"。
-   SHA-256 截断显示但整串可复制——它是这份原件与外部批准件的对应凭据。 */
-.versionFile {
-  min-width: 0;
-}
-
-.versionFileHead {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.versionFileName {
-  min-width: 0;
-  color: var(--color-charcoal);
-  overflow-wrap: anywhere;
-}
-
-.versionFileMeta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 6px;
-}
-
-/* 解析/分块摘要：正文文件名下面保留一行轻量指标，详细 raw block/chunk
-   只在用户主动打开查看器后分页读取，避免版本链初次展开就加载长文本。 */
-.processingSummaryLine {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 10px;
   margin-top: 8px;
-  color: var(--color-steel);
-  font-size: 12px;
-  line-height: 1.5;
-  font-variant-numeric: tabular-nums;
 }
 
-.processingSummaryLabel {
-  color: var(--color-charcoal);
-  font-weight: 600;
-}
-
-.processingLatest {
-  color: var(--color-warning);
+.relationEmpty {
+  margin: 8px 0 0;
+  color: var(--color-slate);
+  font-size: 13px;
 }
 
 .processingDescriptions {

@@ -118,6 +118,7 @@ async def list_platforms(
 @router.get("/departments", summary="获取部门列表（供数据源配置所属部门下拉使用）")
 async def list_departments(
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:device:read")),
 ) -> JSONResponse:
     data = await service.list_departments(db)
     return success_response(data)
@@ -1063,14 +1064,19 @@ async def report_client_error(data: ClientErrorLogRequest) -> JSONResponse:
     无需登录校验：错误上报本身应在鉴权异常时也能正常工作。
     请求来源 IP 由 _log_energy_request 统一记录。
     """
+    # 逐字段转义换行后单行输出：message/stack 里内嵌的换行能伪造出额外的日志行，
+    # 让日志看起来像来自别处（污染排查与取证）。本端点无鉴权，尤其不能给这种口子。
+    def _one_line(text: str | None) -> str:
+        return (text or "-").replace("\r", "").replace("\n", "\\n")
+
     logger.error(
-        "energy 前端报错: page=%s | api=%s status=%s | component=%s | %s%s",
-        data.page_url or "-",
-        data.api_url or "-",
+        "energy 前端报错: page=%s | api=%s status=%s | component=%s | message=%s | stack=%s",
+        _one_line(data.page_url),
+        _one_line(data.api_url),
         data.status if data.status is not None else "-",
-        data.component or "-",
-        data.message,
-        f"\n{data.stack}" if data.stack else "",
+        _one_line(data.component),
+        _one_line(data.message),
+        _one_line(data.stack),
     )
     return success_response(None, message="已记录")
 

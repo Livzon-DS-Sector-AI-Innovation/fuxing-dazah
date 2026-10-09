@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -54,6 +54,17 @@ from app.modules.energy.schemas import (
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
+
+
+def _cst_date(value: datetime) -> date:
+    """把 timestamptz 列读回来的时间换算成 CST 日期。
+
+    asyncpg 对 timestamptz 返回 UTC aware 值，直接取 .date() 会与 datetime.now(CST).date()
+    在 00:00-08:00 CST 之间相差一天，使「今天是否已发送」的守卫失效、推送重复触发。
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(CST).date()
 
 
 async def _get_unit_by_energy_type(db: AsyncSession, energy_type: str) -> str:
@@ -437,12 +448,15 @@ async def update_energy_data(
     db: AsyncSession, data_id: UUID, value: float,
 ) -> EnergyData:
     """修改单条能耗数据的值。"""
-    result = await repo.update_energy_data_value(db, data_id, value)
-    if result is None:
+    # 仓储函数返回的是 bool（rowcount > 0），不是对象：判 None 永远不成立，
+    # 找不到的行会走到 assert 变成 500（`python -O` 下 assert 被剥离，还会静默返回成功）。
+    found = await repo.update_energy_data_value(db, data_id, value)
+    if not found:
         raise NotFoundException("能耗数据", str(data_id))
     # UPDATE 后 re-fetch 避免 MissingGreenlet
     updated = await repo.get_energy_data_by_id(db, data_id)
-    assert updated is not None
+    if updated is None:
+        raise NotFoundException("能耗数据", str(data_id))
     return updated
 
 
@@ -1123,7 +1137,9 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
                         yesterday_consumption = await repo.get_workshop_daily_consumption(
                             db, config.workshop, rule_energy_type, yesterday
                         )
-                        if yesterday_consumption is None or yesterday_consumption == 0:
+                        # 只把「无数据」当作跳过；零消耗要照常比较，
+                        # 否则「昨日用量 < 阈值」这类规则在停产/表计卡死的零值日永远不告警。
+                        if yesterday_consumption is None:
                             checked += 1
                         else:
                             # 使用规则中的阈值类型和阈值进行判断
@@ -1191,9 +1207,16 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
         else:
             # ── 系统规则分支（原有逻辑） ──
 
-            # 确保系统规则存在
+            # 确保系统规则存在。必须包在 try 内：它一旦抛出（插入失败，或重复规则触发
+            # MultipleResultsFound），异常会逃出整个评估函数、调用方的 commit 落空，
+            # 本次已创建的预警记录被回滚后，下一个 tick 会把同一条预警重新推送一遍。
             energy_types = [c["energy_type"] for c in workshop_combos]
-            await repo.ensure_system_rules(db, config.workshop, energy_types, unit_map)
+            try:
+                await repo.ensure_system_rules(db, config.workshop, energy_types, unit_map)
+            except Exception:
+                logger.exception("系统规则初始化失败: workshop=%s", config.workshop)
+                errors += 1
+                continue
 
             for combo in workshop_combos:
                 energy_type = combo["energy_type"]
@@ -1331,7 +1354,8 @@ async def get_daily_push_config(
         "rto1_elec_device_id", "rto2_elec_device_id",
     ):
         did = getattr(obj, attr)
-        setattr(obj, f"{attr}_name", device_name_map.get(did) if did else None)
+        # 响应字段名去掉 _id：solar_device_id → solar_device_name（写成 *_id_name 会与 schema 对不上，恒为 null）
+        setattr(obj, f"{attr.removesuffix('_id')}_name", device_name_map.get(did) if did else None)
     return obj
 
 
@@ -1364,7 +1388,7 @@ async def list_daily_push_configs(
             "rto1_elec_device_id", "rto2_elec_device_id",
         ):
             did = getattr(c, attr)
-            setattr(c, f"{attr}_name", device_name_map.get(did) if did else None)
+            setattr(c, f"{attr.removesuffix('_id')}_name", device_name_map.get(did) if did else None)
     return items, total
 
 
@@ -1608,9 +1632,9 @@ async def evaluate_daily_push(db: AsyncSession) -> dict[str, Any]:
         except (ValueError, AttributeError):
             continue
 
-        # 防重复：今天已发送则跳过
+        # 防重复：今天已发送则跳过（last_sent_at 需先换算成 CST 日期，见 _cst_date）
         if config.last_sent_at is not None:
-            if config.last_sent_at.date() == now.date():
+            if _cst_date(config.last_sent_at) == now.date():
                 continue
 
         try:
@@ -1747,27 +1771,32 @@ async def send_nitrogen_monthly_report(
             results = await adapter.fetch_energy_data(
                 [device.platform_device_code], target_date, device.api_endpoint, is_daily=True,
             )
-            for cr in results:
-                if cr.device_code == device.platform_device_code:
-                    value = float(cr.value)
-                    # 先物理删除当天已有的逐小时数据，避免日汇总与小时数据被 SUM 重复累加
-                    # （(device_config_id, timestamp) 有唯一约束，不能仅依赖 upsert 覆盖）
-                    await repo.delete_hourly_data_for_device_on_date(
-                        db, device.id, target_date
-                    )
-                    await repo.upsert_energy_data(
-                        db,
-                        device_config_id=device.id,
-                        timestamp=cr.timestamp,
-                        value=value,
-                        unit=unit,
-                        platform_raw_data={"daily_sum": True, "source": "nitrogen_push"},
-                    )
-                    logger.info(
-                        "氮气推送: 拉取日汇总 device=%s day=%s value=%.2f",
-                        device.device_name, target_date.strftime("%Y-%m-%d"), value,
-                    )
-                    break
+            # 适配器（如智恒）在 is_daily=True 下按小时返回 24 条记录，必须全部求和后
+            # 写一条日汇总；只取第一条会把整天替换成 0 点，月度累计少算约 24 倍。
+            matched = [
+                cr for cr in results
+                if cr.device_code == device.platform_device_code
+            ]
+            if not matched:
+                continue
+            value = sum(float(cr.value) for cr in matched)
+            # 先物理删除当天已有的逐小时数据，避免日汇总与小时数据被 SUM 重复累加
+            # （(device_config_id, timestamp) 有唯一约束，不能仅依赖 upsert 覆盖）
+            await repo.delete_hourly_data_for_device_on_date(
+                db, device.id, target_date
+            )
+            await repo.upsert_energy_data(
+                db,
+                device_config_id=device.id,
+                timestamp=target_date,
+                value=value,
+                unit=unit,
+                platform_raw_data={"daily_sum": True, "source": "nitrogen_push", "records": len(matched)},
+            )
+            logger.info(
+                "氮气推送: 拉取日汇总 device=%s day=%s value=%.2f (records=%d)",
+                device.device_name, target_date.strftime("%Y-%m-%d"), value, len(matched),
+            )
         except NotImplementedError:
             logger.debug("平台 %s 不支持 is_daily=True，跳过日汇总拉取", device.platform_code)
         except Exception:
@@ -1864,7 +1893,7 @@ async def evaluate_nitrogen_push(db: AsyncSession) -> dict[str, Any]:
 
         # 防重复：今天已发送则跳过
         if config.last_sent_at is not None:
-            if config.last_sent_at.date() == now.date():
+            if _cst_date(config.last_sent_at) == now.date():
                 continue
 
         try:

@@ -13,7 +13,6 @@ interface AlertRuleTableProps {
   page: number
   pageSize: number
   onPageChange: (page: number, pageSize: number) => void
-  onRefresh: () => void
   onEdit: (record: AlertRule) => void
   onDelete: (id: string) => void
   typeMetadata: EnergyTypeMeta[]
@@ -33,7 +32,6 @@ export function AlertRuleTable({
   page,
   pageSize,
   onPageChange,
-  onRefresh,
   onEdit,
   onDelete,
   typeMetadata,
@@ -123,6 +121,7 @@ export function AlertRuleTable({
       title: '操作',
       key: 'action',
       width: 120,
+      fixed: 'right',
       render: (_, record) => (
         <Space>
           {hasPermission('energy:alert:update') && (
@@ -157,6 +156,7 @@ export function AlertRuleTable({
       dataSource={data}
       loading={loading}
       rowKey="id"
+      scroll={{ x: 1120 }}
       pagination={{
         current: page,
         pageSize,

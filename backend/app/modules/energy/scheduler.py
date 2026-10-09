@@ -7,8 +7,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Date, func, select
-from sqlalchemy import cast as sa_cast
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
@@ -19,7 +18,7 @@ from app.modules.energy.collect_settings import (
     get_auto_collect_enabled,
     get_default_daily_collect_time,
 )
-from app.modules.energy.models import EnergyData, EnergyDeviceConfig, EnergyTypeConfig
+from app.modules.energy.models import EnergyDeviceConfig, EnergyTypeConfig
 from app.modules.energy.service import _get_unit_by_energy_type
 from app.platform.scheduler import (
     ScheduleConfig,
@@ -63,14 +62,15 @@ async def _collect_device_hours(
     adapter: object,
     *,
     use_daily_mode: bool = False,
-) -> int:
+) -> tuple[int, float]:
     """对单台设备拉取指定天 0-23 小时的每小时数据。
 
     日汇总设备（use_daily_mode=True）优先使用 is_daily=True 一次拿全天，
     适配器不支持时回退到逐小时并发调用。
     小时设备直接走逐小时并发调用。
 
-    返回成功写入的记录数。
+    返回 (成功写入的记录数, 本次写入的值合计)。合计值供日汇总直接使用，
+    避免再去数据库 SUM（那里既有旧数据也有刚写入的小时数据）。
     所有 adapter.fetch_energy_data 调用受平台级 Semaphore 管控。
     """
     sem = _get_platform_semaphore(device.platform_code)
@@ -82,6 +82,7 @@ async def _collect_device_hours(
                     [device.platform_device_code], target_day, device.api_endpoint, is_daily=True
                 )
             success_count = 0
+            total_value = 0.0
             for cr in results:
                 if cr.device_code == device.platform_device_code:
                     await repo.upsert_energy_data(
@@ -89,12 +90,13 @@ async def _collect_device_hours(
                         value=cr.value, unit=unit, platform_raw_data=cr.raw_data,
                     )
                     success_count += 1
-            return success_count
+                    total_value += float(cr.value)
+            return success_count, total_value
         except NotImplementedError:
             pass  # 回退到逐小时调用
         except Exception:
             logger.exception("每日采集异常(日模式): device=%s", device.device_name)
-            return 0
+            return 0, 0.0
 
     # ── 逐小时并发采集 ──
     logger.debug("平台 %s 逐小时并发采集: device=%s", device.platform_code, device.device_name)
@@ -121,6 +123,7 @@ async def _collect_device_hours(
     all_results = await asyncio.gather(*tasks)
 
     success_count = 0
+    total_value = 0.0
     for results in all_results:
         for cr in results:
             await repo.upsert_energy_data(
@@ -128,8 +131,9 @@ async def _collect_device_hours(
                 value=cr.value, unit=unit, platform_raw_data=cr.raw_data,
             )
             success_count += 1
+            total_value += float(cr.value)
 
-    return success_count
+    return success_count, total_value
 
 
 async def _collect_platform_devices(
@@ -175,34 +179,29 @@ async def _collect_platform_devices(
         for row in type_configs_result.all():
             granularity_map[row.type_code] = row.collect_granularity
 
-    # ── 阶段 ①：预清理日汇总设备旧数据 ──
-    async with async_session_factory() as db:
-        for device in devices:
-            if device.stat_role == "excluded":
-                continue
-            if granularity_map.get(device.energy_type, "hourly") == "daily":
-                await repo.delete_hourly_data_for_device_on_date(
-                    db, device.id, yesterday
-                )
-        await db.commit()
+    # ── 阶段 ①：所有设备并发采集（各用独立 session）──
+    # 日汇总设备的旧数据不在这里预删除：先删后采会让一次失败的采集把当天已有数据
+    # 清空且无法回滚（该平台其他设备还会把回填起点推过这一天，导致永不重采）。
+    # 改为采集到数据后由阶段②删旧写新。
+    failures: list[str] = []
 
-    # ── 阶段 ②：所有设备并发采集（各用独立 session）──
     async def _collect_one(device: EnergyDeviceConfig, unit: str):
         async with async_session_factory() as db:
             try:
                 is_daily = granularity_map.get(device.energy_type, "hourly") == "daily"
-                count = await _collect_device_hours(
+                count, total_value = await _collect_device_hours(
                     db, device, yesterday, unit, adapter, use_daily_mode=is_daily
                 )
                 await db.commit()
-                return device, unit, count
-            except Exception:
+                return device, unit, count, total_value
+            except Exception as exc:
                 logger.exception(
                     "采集异常: device=%s, day=%s",
                     device.device_name,
                     yesterday.strftime("%Y-%m-%d"),
                 )
-                return device, unit, 0
+                failures.append(f"{device.device_name}: {exc}")
+                return device, unit, 0, 0.0
 
     active = [
         (d, unit_map.get(d.energy_type, ""))
@@ -213,38 +212,25 @@ async def _collect_platform_devices(
         *[_collect_one(d, u) for d, u in active]
     )
 
-    # ── 阶段 ③：日汇总聚合 + 写采集日志 ──
+    # ── 阶段 ②：日汇总聚合 + 写采集日志 ──
     async with async_session_factory() as db:
         platform_expected = 0
         platform_success = 0
-        daily_devices: list[tuple[EnergyDeviceConfig, str, int]] = []
+        daily_devices: list[tuple[EnergyDeviceConfig, str, int, float]] = []
 
-        for device, unit, count in device_results:
+        for device, unit, count, total_value in device_results:
             coll_gran = granularity_map.get(device.energy_type, "hourly")
             if coll_gran == "daily":
-                daily_devices.append((device, unit, count))
+                daily_devices.append((device, unit, count, total_value))
                 platform_expected += 1
             else:
                 platform_success += count
                 platform_expected += 24
 
-        for device, unit, count in daily_devices:
+        for device, unit, count, total_val in daily_devices:
             try:
-                cst_date = func.date(
-                    func.timezone("Asia/Shanghai", EnergyData.timestamp)
-                )
-                sum_result = await db.execute(
-                    select(
-                        func.coalesce(func.sum(EnergyData.value), 0.0)
-                    ).where(
-                        EnergyData.device_config_id == device.id,
-                        EnergyData.is_deleted == False,  # noqa: E712
-                        cst_date == sa_cast(yesterday.date(), Date),
-                    )
-                )
-                total_val = float(sum_result.scalar() or 0.0)
-                # 采集到数据即写日汇总并计成功（真实值可能为 0）；
-                # 未采集到数据（count=0）时 SUM 也会是 0，不能用 >=0 误判成功。
+                # 采集到数据才覆盖旧值：count=0（平台不可达或全失败）时保留当天已有数据。
+                # 合计值直接取自本次写入，不再回查数据库求和——那里既含旧数据也含刚写入的小时数据。
                 if count > 0:
                     await repo.delete_hourly_data_for_device_on_date(
                         db, device.id, yesterday
@@ -273,6 +259,8 @@ async def _collect_platform_devices(
             else "failed"
         )
 
+        # 先提交采集数据，再单独写日志：日志插入失败不能把同日已聚合的数据一起回滚。
+        await db.commit()
         if platform_expected > 0:
             try:
                 await repo.create_collect_log(
@@ -284,10 +272,13 @@ async def _collect_platform_devices(
                         "device_count": len(devices),
                         "success_count": platform_success,
                         "expected_count": platform_expected,
+                        # 失败原因要落库，否则运维在采集日志页只看到「失败」，原因只在服务端日志里
+                        "error_message": "\n".join(failures)[:2000] or None,
                     },
                 )
                 await db.commit()
             except Exception:
+                await db.rollback()
                 logger.exception("采集日志写入失败: platform=%s", platform_code)
 
     return {
@@ -414,7 +405,6 @@ async def energy_daily_collect_coro() -> None:
         return
 
     now = datetime.now(CST)
-    current_time = now.strftime("%H:%M")
     today = now.date()
 
     async with async_session_factory() as db:
@@ -423,8 +413,16 @@ async def energy_daily_collect_coro() -> None:
             db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME
         ) or get_default_daily_collect_time()
 
-        # 仅在预设触发时间（同一分钟）采集；未到或已过均跳过
-        if current_time != trigger_time:
+        # 到达预设时间后触发，而不是要求 tick 恰好落在那一分钟：tick 相位一旦滑过
+        # 边界，精确相等会让当天完全不采集、不写日志也不报警。当天只跑一次由下面的
+        # 进程内闩锁和跨进程的采集日志双重保证。
+        try:
+            target_hour, target_minute = trigger_time.split(":")
+            target_minutes = int(target_hour) * 60 + int(target_minute)
+        except (ValueError, AttributeError):
+            logger.warning("每日采集时间格式异常，跳过本次触发: %s", trigger_time)
+            return
+        if now.hour * 60 + now.minute < target_minutes:
             return
 
         # 本进程内已触发过（防长采集期间本进程重复触发）
@@ -453,6 +451,8 @@ ENERGY_DAILY_COLLECT_TASK = TaskDefinition(
     coro=energy_daily_collect_coro,
     settings_toggle_key="ENERGY_AUTO_COLLECT_ENABLED",
     module="energy",
+    # 默认 300s 会在多日回填（逐日逐小时拉取）中被中途取消，且该日不会重试
+    timeout_seconds=1800,
 )
 
 
@@ -487,6 +487,7 @@ ENERGY_WORKSHOP_ALERT_TASK = TaskDefinition(
     coro=energy_workshop_alert_coro,
     settings_toggle_key="ENERGY_WORKSHOP_ALERT_ENABLED",
     module="energy",
+    timeout_seconds=600,
 )
 
 
@@ -521,6 +522,7 @@ ENERGY_DAILY_PUSH_TASK = TaskDefinition(
     coro=energy_daily_push_coro,
     settings_toggle_key="ENERGY_DAILY_PUSH_ENABLED",
     module="energy",
+    timeout_seconds=600,
 )
 
 

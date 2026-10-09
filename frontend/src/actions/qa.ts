@@ -216,6 +216,14 @@ export async function rejectQaMasterObjectProposal(id: string): Promise<ActionRe
   return result
 }
 
+export async function rejectAllQaMasterObjectProposals(): Promise<ActionResult<{ rejected: number; skipped: number }>> {
+  const result = await actionFetch<{ rejected: number; skipped: number }>(`${BASE}/master-object-proposals/reject-all`, {
+    method: 'POST',
+  })
+  if (result.success) revalidatePath('/qa/master-data')
+  return result
+}
+
 export async function createQaDocumentType(input: Record<string, unknown>): Promise<ActionResult<QaDocumentType>> {
   const result = await actionFetch<QaDocumentType>(`${BASE}/document-types`, {
     method: 'POST',

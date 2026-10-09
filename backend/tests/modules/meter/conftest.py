@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import io
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import date, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -28,7 +28,56 @@ from app.modules.meter.models import (
     GasDetectorRecord,
     InstrumentRecord,
 )
+from app.platform.identity.deps import get_current_user
+from app.platform.identity.models import User
 from tests.conftest import _test_session_factory
+
+# 全量 meter 权限：API 测试默认放行（鉴权行为见 test_api_authz.py）
+_ALL_METER_PERMS = {
+    "meter:*:read",
+    "meter:instrument:read",
+    "meter:instrument:create",
+    "meter:instrument:update",
+    "meter:instrument:delete",
+    "meter:gas-detector:read",
+    "meter:gas-detector:create",
+    "meter:gas-detector:update",
+    "meter:gas-detector:delete",
+    "meter:report:upload",
+    "meter:report:delete",
+    "meter:config:manage",
+}
+
+
+@pytest.fixture(autouse=True)
+def _grant_meter_permissions() -> Iterator[None]:
+    """放行全部 meter 权限，绕过 API 测试的 require_permission 403。
+
+    autouse，整个 meter 目录生效；对不走 HTTP 的 service/repo 测试是无害空 patch。
+    """
+
+    async def _all_perms(user_id: str, db: object) -> set[str]:
+        return _ALL_METER_PERMS
+
+    with patch(
+        "app.platform.permission.deps.get_user_permissions",
+        new=_all_perms,
+    ):
+        yield
+
+
+async def _ensure_test_user(session: Any) -> User:
+    """取已有用户或现场造一个，供 get_current_user 覆盖使用。"""
+    from sqlalchemy import select
+
+    stmt = select(User).where(User.is_deleted == False).limit(1)  # noqa: E712
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing:
+        return existing
+    user = User(name="meter测试用户", employee_no="METER-TEST-001")
+    session.add(user)
+    await session.flush()
+    return user
 
 # ── 数据工厂 ──
 
@@ -199,11 +248,16 @@ async def client_with_noop_commit() -> AsyncIterator[AsyncClient]:
     """
     async with _test_session_factory() as session:
         session.commit = AsyncMock()  # type: ignore[method-assign]
+        test_user = await _ensure_test_user(session)
 
         async def _override_get_db() -> AsyncIterator[Any]:
             yield session
 
+        async def _override_get_current_user() -> Any:
+            return test_user
+
         fastapi_app.dependency_overrides[get_db] = _override_get_db
+        fastapi_app.dependency_overrides[get_current_user] = _override_get_current_user
         transport = ASGITransport(app=fastapi_app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
@@ -218,10 +272,16 @@ async def api_context() -> AsyncIterator[tuple[AsyncClient, Any]]:
     替代顶层 client fixture（其内部 session 不可见，预置数据无法被端点查询到）。
     """
     async with _test_session_factory() as session:
+        test_user = await _ensure_test_user(session)
+
         async def _override_get_db() -> AsyncIterator[Any]:
             yield session
 
+        async def _override_get_current_user() -> Any:
+            return test_user
+
         fastapi_app.dependency_overrides[get_db] = _override_get_db
+        fastapi_app.dependency_overrides[get_current_user] = _override_get_current_user
         transport = ASGITransport(app=fastapi_app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac, session

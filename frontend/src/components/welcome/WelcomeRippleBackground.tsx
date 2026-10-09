@@ -3,9 +3,9 @@
 import { useEffect, useRef, type RefObject } from 'react'
 import styles from './WelcomeRippleBackground.module.css'
 
+/** 素描底图与彩色图需为同构图；展示尺寸取图片自然尺寸，换图无需改代码。 */
+const SKETCH_IMAGE_SRC = '/images/welcome/apsaras-lavender.png'
 const COLOR_IMAGE_SRC = '/images/welcome/apsaras-color.png'
-const COLOR_IMAGE_WIDTH = 1954
-const COLOR_IMAGE_HEIGHT = 805
 const INITIAL_RADIUS = 8
 const MAX_RADIUS = 132
 const RADIUS_VARIATION = 0.45
@@ -58,6 +58,8 @@ export function WelcomeRippleBackground({
     let height = 0
     let dpr = 1
     let colorImageReady = false
+    let colorImageWidth = 0
+    let colorImageHeight = 0
     let lastX: number | null = null
     let lastY: number | null = null
     let animationFrame = 0
@@ -85,11 +87,18 @@ export function WelcomeRippleBackground({
       height = rect.height
       dpr = Math.min(window.devicePixelRatio || 1, 2)
 
-      const scale = Math.min(width / COLOR_IMAGE_WIDTH, height / COLOR_IMAGE_HEIGHT)
-      imageRect.width = COLOR_IMAGE_WIDTH * scale
-      imageRect.height = COLOR_IMAGE_HEIGHT * scale
-      imageRect.x = (width - imageRect.width) / 2
-      imageRect.y = (height - imageRect.height) / 2
+      if (colorImageWidth > 0 && colorImageHeight > 0) {
+        const scale = Math.min(width / colorImageWidth, height / colorImageHeight)
+        imageRect.width = colorImageWidth * scale
+        imageRect.height = colorImageHeight * scale
+        imageRect.x = (width - imageRect.width) / 2
+        imageRect.y = (height - imageRect.height) / 2
+      } else {
+        imageRect.width = 0
+        imageRect.height = 0
+        imageRect.x = 0
+        imageRect.y = 0
+      }
 
       canvas.width = Math.round(width * dpr)
       canvas.height = Math.round(height * dpr)
@@ -214,6 +223,9 @@ export function WelcomeRippleBackground({
       lastY = null
     }
     const handleImageLoad = () => {
+      colorImageWidth = colorImage.naturalWidth
+      colorImageHeight = colorImage.naturalHeight
+      resize()
       colorImageReady = true
       start()
     }
@@ -245,7 +257,8 @@ export function WelcomeRippleBackground({
 
   return (
     <div ref={rootRef} className={styles.root} aria-hidden="true">
-      <div className={styles.image} />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img className={styles.image} src={SKETCH_IMAGE_SRC} alt="" draggable={false} />
       <canvas ref={canvasRef} className={styles.mask} />
     </div>
   )

@@ -13,13 +13,10 @@
   top: 50%;
   left: 50%;
   width: 100%;
+  height: auto;
   max-height: 100%;
-  aspect-ratio: 1956 / 804;
+  object-fit: contain;
   transform: translate(-50%, -50%);
-  background-image: url('/images/welcome/apsaras-lavender.png');
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
   z-index: 1;
 }
 

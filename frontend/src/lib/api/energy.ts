@@ -384,11 +384,31 @@ export async function fetchTypeConfigs(
   )
 }
 
+/** 兼容不同网关/后端版本返回的能源类型配置包裹结构。 */
+export function normalizeEnergyTypeConfigs(value: unknown): EnergyTypeConfig[] {
+  let current = value
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (Array.isArray(current)) return current as EnergyTypeConfig[]
+    if (!current || typeof current !== 'object') return []
+    const record = current as Record<string, unknown>
+    const nested = record.data ?? record.items ?? record.results
+    if (nested !== undefined) {
+      current = nested
+      continue
+    }
+    const values = Object.values(record).filter((item): item is Record<string, unknown> => (
+      Boolean(item) && typeof item === 'object' && typeof (item as Record<string, unknown>).type_code === 'string'
+    ))
+    return values as unknown as EnergyTypeConfig[]
+  }
+  return []
+}
+
 export async function fetchEnabledTypeConfigsClient(): Promise<EnergyTypeConfig[]> {
-  const res = await apiGet<{ data: EnergyTypeConfig[] }>(
+  const res = await apiGet<unknown>(
     `${CLIENT_API_BASE}/api/v1/energy/type-configs/enabled`
   )
-  return (res as any).data ?? (res as any)
+  return normalizeEnergyTypeConfigs(res)
 }
 
 export async function createTypeConfig(

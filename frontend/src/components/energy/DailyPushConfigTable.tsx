@@ -129,6 +129,7 @@ export function DailyPushConfigTable({
       title: '操作',
       key: 'action',
       width: 120,
+      fixed: 'right',
       render: (_, record) => (
         <Space>
           {hasPermission('energy:daily_report:update') && (

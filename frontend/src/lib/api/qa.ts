@@ -6,6 +6,7 @@ import type {
   QaAiAnalysisRun,
   QaDepartmentReference,
   QaDocument,
+  QaDocumentArtifactsResult,
   QaDocumentProcessingResult,
   QaDocumentProcessingView,
   QaDocumentSort,
@@ -171,6 +172,39 @@ export async function fetchQaDocumentProcessingResults(
     content_limit: params.content_limit ?? 800,
   })
   return apiGet<QaDocumentProcessingResult>(`${QA_BASE}/document-files/${fileId}/processing-results?${query}`)
+}
+
+export async function fetchQaDocumentArtifacts(fileId: string): Promise<QaDocumentArtifactsResult> {
+  const result = await apiGet<QaDocumentArtifactsResult>(`${QA_BASE}/document-files/${fileId}/artifacts`)
+  return {
+    items: Array.isArray(result?.items) ? result.items : [],
+    total: Number(result?.total ?? result?.items?.length ?? 0),
+  }
+}
+
+export function qaDocumentArtifactContentUrl(fileId: string, artifactId: string, download = false): string {
+  const query = download ? '?download=true' : ''
+  return `${QA_BASE}/document-files/${fileId}/artifacts/${artifactId}/content${query}`
+}
+
+/** 获取文本产物内容用于安全的 Markdown 预览；渲染器会先清理原始 HTML。 */
+export async function fetchQaDocumentArtifactContent(fileId: string, artifactId: string): Promise<string> {
+  const response = await fetch(qaDocumentArtifactContentUrl(fileId, artifactId), { credentials: 'include' })
+  if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') {
+      window.location.href = '/login'
+    }
+    const body = await response.text().catch(() => '')
+    let message = `请求失败: ${response.status}`
+    try {
+      const parsed = JSON.parse(body) as { message?: string; detail?: string }
+      message = parsed.message || parsed.detail || message
+    } catch {
+      // 二进制/纯文本错误响应不参与展示。
+    }
+    throw new Error(message)
+  }
+  return response.text()
 }
 
 export async function fetchQaAiAnalysis(versionId: string): Promise<QaAiAnalysisRun> {

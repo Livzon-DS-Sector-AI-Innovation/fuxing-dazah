@@ -14,6 +14,7 @@ from app.core.exceptions import NotFoundException
 from app.core.response import success_response
 from app.modules.meter import repository as repo
 from app.modules.meter import service
+from app.modules.meter.api import _deps
 from app.modules.meter.api._router import router
 from app.modules.meter.schemas import (
     DepartmentCreate,
@@ -27,7 +28,7 @@ from app.modules.meter.schemas import (
 # ═══════════════════════════════════════════
 
 
-@router.get("/departments", summary="部门列表")
+@router.get("/departments", summary="部门列表", dependencies=[Depends(_deps.read_any)])
 async def list_departments(
     source: str | None = Query(default=None, pattern="^(instrument|gas_detector)$", description="来源筛选"),
     db: AsyncSession = Depends(get_db),
@@ -39,7 +40,7 @@ async def list_departments(
 
 
 
-@router.post("/departments", summary="新增部门")
+@router.post("/departments", summary="新增部门", dependencies=[Depends(_deps.config_manage)])
 async def create_department(
     data: DepartmentCreate,
     db: AsyncSession = Depends(get_db),
@@ -60,7 +61,7 @@ async def create_department(
 
 
 
-@router.put("/departments/{dept_id}", summary="更新部门（联动更新表中记录）")
+@router.put("/departments/{dept_id}", summary="更新部门（联动更新表中记录）", dependencies=[Depends(_deps.config_manage)])
 async def update_department(
     dept_id: UUID,
     data: DepartmentUpdate,
@@ -81,7 +82,7 @@ async def update_department(
 
 
 
-@router.put("/departments/{dept_id}/auto-notify", summary="切换部门自动提醒开关")
+@router.put("/departments/{dept_id}/auto-notify", summary="切换部门自动提醒开关", dependencies=[Depends(_deps.config_manage)])
 async def toggle_department_auto_notify(
     dept_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -108,7 +109,7 @@ async def toggle_department_auto_notify(
 
 
 
-@router.get("/departments/personnel-candidates", summary="获取可选负责人列表（从 identity.users 查询）")
+@router.get("/departments/personnel-candidates", summary="获取可选负责人列表（从 identity.users 查询）", dependencies=[Depends(_deps.read_any)])
 async def get_personnel_candidates(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
@@ -120,7 +121,7 @@ async def get_personnel_candidates(
 
 
 
-@router.delete("/departments/{dept_id}", summary="删除部门")
+@router.delete("/departments/{dept_id}", summary="删除部门", dependencies=[Depends(_deps.config_manage)])
 async def delete_department(
     dept_id: UUID,
     db: AsyncSession = Depends(get_db),
