@@ -13,11 +13,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as _app_today
-from app.modules.quality.feishu.client import (
-    QUALITY_FEISHU_CHAT_IDS,
-    QUALITY_FEISHU_CREATE_USER_IDS,
-    QUALITY_FEISHU_USER_IDS,
-)
 from app.modules.quality.models import (
     QualityStandardDocument,
     QualityTestResult,
@@ -55,31 +50,6 @@ def _extract_command(
         return chat_id, sender, text, msg.get("chat_type", "group")
     except Exception:
         return None, None, None, None
-
-
-def _allowed(chat_id: str, sender: str) -> bool:
-    if QUALITY_FEISHU_CHAT_IDS and chat_id not in QUALITY_FEISHU_CHAT_IDS:
-        return False
-    if QUALITY_FEISHU_USER_IDS and sender not in QUALITY_FEISHU_USER_IDS:
-        return False
-    return True
-
-
-def _allowed_user(sender: str) -> bool:
-    """仅校验用户白名单（p2p 单聊场景：群白名单不适用）。"""
-    if QUALITY_FEISHU_USER_IDS and sender not in QUALITY_FEISHU_USER_IDS:
-        return False
-    return True
-
-
-def _allowed_create(sender: str) -> bool:
-    """新建任务权限：配置了 QUALITY_FEISHU_CREATE_USER_IDS 时仅白名单用户可建；空 = 不限制。"""
-    if not QUALITY_FEISHU_CREATE_USER_IDS:
-        return True
-    return bool(sender) and sender in QUALITY_FEISHU_CREATE_USER_IDS
-
-
-_CREATE_DENY_TEXT = "⛔ 你没有新建任务的权限，请联系质量管理员"
 
 
 async def _known_codes(db: AsyncSession) -> list[str]:

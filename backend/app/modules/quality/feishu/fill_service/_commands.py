@@ -18,15 +18,11 @@ from app.modules.quality.feishu.fill_service._common import (
     _ARCHIVE_MODE,
     _ARCHIVE_MODE_TS,
     _BATCH_RE,
-    _CREATE_DENY_TEXT,
     _LAST_BATCH,
     _LAST_IMAGE,
     _LAST_IMAGE_TS,
     _PAIR_RE,
     _PENDING_DOC_SELECT,
-    _allowed,
-    _allowed_create,
-    _allowed_user,
     _doc_to_card_dict,
     _download_image,
     _extract_command,
@@ -252,12 +248,6 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
         return
     if not chat_id or not text:
         return
-    if chat_type == "p2p":
-        # p2p 单聊：群白名单不适用，按用户白名单校验（空=不限制）
-        if not _allowed_user(sender or ""):
-            return
-    elif not _allowed(chat_id, sender or ""):
-        return
     batch_m = _BATCH_RE.search(text)
     # 省略批号沿用上次（帮助文案宣传的能力）：填报/进度/附件类指令自动套用本会话最近批号
     if not batch_m:
@@ -448,9 +438,6 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 send_pick_doc_card,
             )
 
-            if not _allowed_create(sender or ""):
-                await send_chat_text(chat_id, _CREATE_DENY_TEXT)
-                return
             # 已存在任务：不允许重复创建/编辑，回执状态并下发填报卡片
             existing = await _resolve_task_by_batch(db, batch)
             if existing:

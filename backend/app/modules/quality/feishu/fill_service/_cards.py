@@ -16,10 +16,7 @@ from app.modules.quality.feishu.fill_service._commands import (
     _reply_existing_task,
 )
 from app.modules.quality.feishu.fill_service._common import (
-    _CREATE_DENY_TEXT,
     _PENDING_DOC_SELECT,
-    _allowed,
-    _allowed_create,
     _doc_to_card_dict,
     _known_codes,
     _limit_text,
@@ -74,7 +71,7 @@ async def handle_bot_menu_event(event: dict[str, Any]) -> None:
     if operator_open_id:
         await send_user_interactive_card(operator_open_id, build_batch_form_card(nxt))
         return
-    # 取不到操作人时回落到配置的全部白名单群
+    # 取不到操作人时回落到配置的全部推送目标群
     for cid in QUALITY_FEISHU_CHAT_IDS:
         await send_batch_form_card(cid, nxt)
 
@@ -87,18 +84,6 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
     form_value = (ev.get("action") or {}).get("form_value") or {}
     ctx = ev.get("context") or {}
     chat_id = ctx.get("open_chat_id") or ctx.get("chat_id")
-    # 卡片操作人（用于建任务权限校验）
-    operator_ev = ev.get("operator") if isinstance(ev.get("operator"), dict) else {}
-    sender = operator_ev.get("open_id") or ""
-    if not sender:
-        operator_id_obj = operator_ev.get("operator_id")
-        if isinstance(operator_id_obj, dict):
-            sender = operator_id_obj.get("open_id") or ""
-
-    # 群白名单校验：卡片被转发到非白名单群/被非白名单用户点击时拦截写库动作
-    # （chat_id 缺失时无法判定，保持原行为；建任务类动作另有 _allowed_create 收紧）
-    if chat_id and not _allowed(chat_id, sender):
-        return {"type": "toast", "toast": {"type": "warning", "content": "⛔ 该群/用户不在白名单内，操作已忽略"}}
 
     # 建任务卡片提交
     # 菜单导航按钮 → 批号输入卡片
@@ -124,8 +109,6 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         if not batch2:
             return {"type": "toast", "toast": {"type": "info", "content": "请输入批号"}}
         if nxt == "create_task":
-            if not _allowed_create(sender):
-                return {"type": "toast", "toast": {"type": "warning", "content": _CREATE_DENY_TEXT}}
             if chat_id:
                 async with async_session_factory() as db3:
                     # 已存在任务：不允许重复创建/编辑
@@ -180,8 +163,6 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         from app.core.database import async_session_factory
         from app.modules.quality.feishu.message import build_pick_doc_card
 
-        if not _allowed_create(sender):
-            return {"type": "toast", "toast": {"type": "warning", "content": _CREATE_DENY_TEXT}}
         batch = action_value.get("batch", "")
         query = (form_value.get("doc_query") or "").strip()
         async with async_session_factory() as db:
@@ -251,8 +232,6 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         from app.modules.quality.feishu.message import send_create_task_card
         from app.modules.quality.repository import get_standard_document
 
-        if not _allowed_create(sender):
-            return {"type": "toast", "toast": {"type": "warning", "content": _CREATE_DENY_TEXT}}
         batch = action_value.get("batch", "")
         selected = _PENDING_DOC_SELECT.get(batch, set())
         if not selected:
@@ -275,8 +254,6 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         from app.modules.quality.schemas import TestTaskCreate
         from app.modules.quality.service import TestTaskService
 
-        if not _allowed_create(sender):
-            return {"type": "toast", "toast": {"type": "warning", "content": _CREATE_DENY_TEXT}}
         batch = action_value.get("batch", "")
         doc_ids = action_value.get("doc_ids") or []
         prod_date = (form_value.get("prod_date") or "").strip()

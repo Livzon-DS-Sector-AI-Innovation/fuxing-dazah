@@ -17,16 +17,9 @@ if _env_path.exists():
 
 QUALITY_FEISHU_APP_ID = os.getenv("QUALITY_FEISHU_APP_ID", "")
 QUALITY_FEISHU_APP_SECRET = os.getenv("QUALITY_FEISHU_APP_SECRET", "")
-# 白名单群/用户（逗号分隔），空 = 不限制
+# 推送目标群（逗号分隔）：任务提醒/不合格告警/每日早报发送到这些群
 QUALITY_FEISHU_CHAT_IDS = [
     c.strip() for c in os.getenv("QUALITY_FEISHU_CHAT_IDS", "").split(",") if c.strip()
-]
-QUALITY_FEISHU_USER_IDS = [
-    u.strip() for u in os.getenv("QUALITY_FEISHU_USER_IDS", "").split(",") if u.strip()
-]
-# 允许新建任务的用户 open_id 白名单（逗号分隔），空 = 不限制建任务权限
-QUALITY_FEISHU_CREATE_USER_IDS = [
-    u.strip() for u in os.getenv("QUALITY_FEISHU_CREATE_USER_IDS", "").split(",") if u.strip()
 ]
 # 不合格提醒 @ 的负责人 open_id 列表（逗号分隔），空 = 不发 @ 仅普通群消息
 QUALITY_FEISHU_ALERT_USER_IDS = [

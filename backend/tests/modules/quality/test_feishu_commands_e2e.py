@@ -85,9 +85,6 @@ def feishu_env(db_session, monkeypatch):
         spawned.append(coro)
 
     # _commands 模块级绑定与函数内导入两处都 patch
-    # 清空白名单（env 里配了测试群，测试用独立 chat_id/sender）
-    for name in ["QUALITY_FEISHU_CHAT_IDS", "QUALITY_FEISHU_USER_IDS", "QUALITY_FEISHU_CREATE_USER_IDS"]:
-        monkeypatch.setattr(f"app.modules.quality.feishu.fill_service._common.{name}", [])
     monkeypatch.setattr(cmds, "send_chat_text", fake_send_text)
     monkeypatch.setattr(cmds, "spawn_background", fake_spawn)
     # service 自动流转也会 spawn 通知（真后台任务会撞回滚式 session）
@@ -217,28 +214,6 @@ async def test_create_task_command_sends_card(feishu_env):
 
     # 发送了建任务相关卡片（create_task 卡片或点选卡片）
     assert len(feishu_env["sent_cards"]) >= 1
-
-
-# ── 白名单拦截 ──
-
-
-async def test_p2p_user_whitelist_blocks_unknown_user(feishu_env, monkeypatch):
-    monkeypatch.setattr(
-        "app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_USER_IDS",
-        ["ou_allowed"],
-    )
-    doc = await _make_doc(feishu_env["db"])
-    task, _rows = await _make_task_with_rows(feishu_env["db"], doc)
-    batch = task.batch_number
-    before = len(feishu_env["sent_texts"])
-
-    await cmds.handle_fill_command(
-        _text_event(f"批号 {batch} 水分 1.5", chat_type="p2p", sender="ou_stranger")
-    )
-
-    saved = await list_test_results(feishu_env["db"], task.id)
-    assert saved[0].is_pass is None  # 未写库
-    assert len(feishu_env["sent_texts"]) == before  # 未回复
 
 
 # ── 图片归档 ──

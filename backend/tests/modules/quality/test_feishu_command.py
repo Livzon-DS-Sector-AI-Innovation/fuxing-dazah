@@ -5,8 +5,6 @@ from app.modules.quality.feishu.fill_service import (
     _ARCHIVE_MODE,
     _BATCH_RE,
     _PAIR_RE,
-    _allowed,
-    _allowed_create,
     _extract_command,
 )
 
@@ -41,39 +39,6 @@ def test_extract_command_parses_fields():
 def test_extract_command_malformed_returns_defaults():
     assert _extract_command({}) == (None, None, "", "group")
     assert _extract_command({"event": {"message": {}}}) == (None, None, "", "group")
-
-
-# ── 白名单 ──
-
-
-def test_allowed_no_restriction(monkeypatch):
-    # 未配置白名单时不限制（名字在 import 时已绑定，patch 打在 _common 模块上）
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_CHAT_IDS", [])
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_USER_IDS", [])
-    assert _allowed("oc_any", "ou_any") is True
-
-
-def test_allowed_chat_whitelist(monkeypatch):
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_CHAT_IDS", ["oc_ok"])
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_USER_IDS", [])
-    assert _allowed("oc_ok", "ou_x") is True
-    assert _allowed("oc_no", "ou_x") is False
-
-
-def test_allowed_user_whitelist(monkeypatch):
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_CHAT_IDS", [])
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_USER_IDS", ["ou_ok"])
-    assert _allowed("oc_x", "ou_ok") is True
-    assert _allowed("oc_x", "ou_no") is False
-
-
-def test_allowed_create_whitelist(monkeypatch):
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_CREATE_USER_IDS", [])
-    assert _allowed_create("ou_any") is True
-    monkeypatch.setattr("app.modules.quality.feishu.fill_service._common.QUALITY_FEISHU_CREATE_USER_IDS", ["ou_ok"])
-    assert _allowed_create("ou_ok") is True
-    assert _allowed_create("ou_no") is False
-    assert _allowed_create("") is False
 
 
 # ── 指令正则 ──

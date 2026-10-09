@@ -1,6 +1,6 @@
 """飞书对话式填报服务包（fill_service.py 1350 行拆分）。
 
-- _common：指令解析/白名单/批号解析/临时状态（TTL）/卡片与文本辅助
+- _common：指令解析/批号解析/临时状态（TTL）/卡片与文本辅助
 - _commands：对话式指令处理（建任务/填报/修正/进度/图片归档）
 - _cards：菜单事件与卡片回调（表单提交/标准文件多选）
 - _push：任务提醒/不合格告警/待复核与建任务通知
@@ -28,8 +28,6 @@ from app.modules.quality.feishu.fill_service._common import (  # noqa: F401
     _LAST_IMAGE,
     _PAIR_RE,
     _PENDING_DOC_SELECT,
-    _allowed,
-    _allowed_create,
     _doc_to_card_dict,
     _extract_command,
     _frontend_task_link,
@@ -57,8 +55,6 @@ __all__ = [
     "_LAST_IMAGE",
     "_PAIR_RE",
     "_PENDING_DOC_SELECT",
-    "_allowed",
-    "_allowed_create",
     "_cards",
     "_commands",
     "_doc_to_card_dict",
