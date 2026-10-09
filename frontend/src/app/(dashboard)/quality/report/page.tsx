@@ -192,11 +192,14 @@ function ReportPageInner() {
             onClick={() => handleDownload(r)} disabled={!r.file_path}>
             下载
           </Button>
-          {r.test_task_id && (
+          {r.test_task_id && r.task_status !== null && (
             <Button size="small" type="link"
               onClick={() => router.push(`/quality/task/${r.test_task_id}`)}>
               查看任务
             </Button>
+          )}
+          {r.test_task_id && r.task_status === null && (
+            <Text type="secondary" style={{ fontSize: 12 }}>任务已删除</Text>
           )}
         </Space>
       ),

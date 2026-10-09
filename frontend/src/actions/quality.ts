@@ -500,7 +500,7 @@ export async function fetchTestTaskDetail(id: string): Promise<TestTaskDetail> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${id}`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
-  if (!res.ok) throw new Error('获取检验任务详情失败')
+  if (!res.ok) throw new Error(res.status === 404 ? '任务不存在或已删除' : '获取检验任务详情失败')
   const body = await res.json()
   return body.data as TestTaskDetail
 }
