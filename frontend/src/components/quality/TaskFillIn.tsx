@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress, Upload, Popconfirm,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress, Popconfirm,
 } from 'antd'
 import {
-  SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined,
+  SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined,
 } from '@ant-design/icons'
 import { useRouter, useSearchParams } from 'next/navigation'
 import dayjs from 'dayjs'
@@ -14,7 +14,7 @@ import { TASK_STATUS_META } from '@/types/quality'
 import type { TestTaskListItem, TestTaskStatus } from '@/types/quality'
 import {
   fetchTestTasks, createTestTask, updateTestTaskStatus, deleteTestTask,
-  updateTestTaskReportDate, batchReportDates, downloadReportDateTemplate,
+  updateTestTaskReportDate,
   fetchStandardDocuments, fetchStandardItems,
   resolveBatchStandard,
   type StandardDocument,
@@ -420,44 +420,6 @@ export default function TaskFillIn() {
         <Button type="primary" onClick={() => { setProductSearch(productDraft); setPage(1) }}>搜索</Button>
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
-        )}
-        {canCreate && (
-          <Button size="small" type="link" icon={<DownloadOutlined />} onClick={async () => {
-            try {
-              const blob = await downloadReportDateTemplate()
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = '出报日期补录模板.xlsx'
-              a.click()
-              URL.revokeObjectURL(url)
-            } catch (err: unknown) {
-              message.error((err instanceof Error ? err.message : String(err)) || '下载模板失败')
-            }
-          }}>模板</Button>
-        )}
-        {canCreate && (
-          <Upload
-            accept=".xlsx,.xls"
-            showUploadList={false}
-            beforeUpload={async (file) => {
-              const formData = new FormData()
-              formData.append('file', file)
-              try {
-                const res = await batchReportDates(formData)
-                message.success(res.message || '批量补录完成')
-                if (res.data?.skipped?.length) {
-                  message.warning(`跳过：${res.data.skipped.slice(0, 5).join('；')}`)
-                }
-                load(page)
-              } catch (err: unknown) {
-                message.error((err instanceof Error ? err.message : String(err)) || '批量补录失败')
-              }
-              return false
-            }}
-          >
-            <Button icon={<UploadOutlined />}>批量补录出报日期</Button>
-          </Upload>
         )}
       </Space>
 

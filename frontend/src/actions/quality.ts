@@ -715,17 +715,6 @@ export async function exportSummaryMatrix(
   return res.blob()
 }
 
-export async function batchReportDates(formData: FormData): Promise<{ message: string; data: { updated: number; skipped: string[] } }> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/report-date-batch`, {
-    method: 'POST', headers: await _authHeaders(), body: formData,
-  })
-  if (!res.ok) {
-    const err: ApiErrorBody = await res.json().catch(() => ({}))
-    throw new Error(err.detail || '批量补录失败')
-  }
-  return res.json()
-}
-
 export async function fetchItemTrend(
   itemName: string, product_name?: string, limit = 50,
 ): Promise<{ data: SummaryTrend }> {
@@ -744,14 +733,6 @@ export async function fetchQualityDashboard(): Promise<{ data: QualityDashboard 
   })
   if (!res.ok) throw new Error('获取总览失败')
   return res.json()
-}
-
-export async function downloadReportDateTemplate(): Promise<Blob> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/report-date-template`, {
-    headers: await _authHeaders(),
-  })
-  if (!res.ok) throw new Error('下载模板失败')
-  return res.blob()
 }
 
 export async function fetchDailyReports(date?: string, productName?: string): Promise<{ data: DailyReportItem[] }> {

@@ -1,7 +1,6 @@
 """tasks API 路由（api.py 拆分）。"""
 
 import uuid
-from datetime import date, datetime
 from io import BytesIO
 from urllib.parse import quote
 
@@ -19,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
-from app.modules.quality import lc_template_parser
 from app.modules.quality import storage as quality_storage
 from app.modules.quality.api._common import (
     _safe_filename,
@@ -33,7 +31,6 @@ from app.modules.quality.repository import (
     list_report_records_by_task,
     list_task_attachments,
     list_task_reviews_with_names,
-    update_test_task_report_date,
 )
 from app.modules.quality.schemas import (
     TestResultCreate,
@@ -44,7 +41,6 @@ from app.modules.quality.schemas import (
     TestTaskStatusUpdate,
 )
 from app.modules.quality.service import (
-    _norm_date_str,
     test_task_service,
 )
 from app.platform.identity.models import User
@@ -307,91 +303,6 @@ async def update_test_task_report_date_endpoint(
     return success_response(
         data=detail.model_dump(mode="json"),
         message="出报日期已更新" if payload.report_date else "出报日期已清空",
-    )
-
-
-@router.post("/tasks/report-date-batch", summary="批量补录出报日期（Excel：批号列+出报日期列）")
-async def batch_report_date_endpoint(
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:create")),
-) -> JSONResponse:
-    import io as _io
-
-    import openpyxl
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="文件为空")
-    try:
-        wb = openpyxl.load_workbook(_io.BytesIO(content))
-        ws = lc_template_parser.active_sheet(wb)
-        raw_rows = list(ws.iter_rows(min_row=2, values_only=True))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Excel 解析失败") from None
-
-    # 先收集批号并一次批量查任务（此前逐行走 service 每行 +2 查询 + 1 个后台任务）
-    rows_to_apply: list[tuple[str, str]] = []
-    skipped: list[str] = []
-    for row in raw_rows:
-        if not row or not row[0]:
-            continue
-        batch = str(row[0]).strip()
-        date_cell = row[1] if len(row) > 1 else None
-        if isinstance(date_cell, (datetime, date)):
-            report_date: str | None = date_cell.strftime("%Y-%m-%d")
-        elif date_cell:
-            report_date = _norm_date_str(str(date_cell).strip())
-        else:
-            # 空单元格跳过：此前 report_date=None 会静默清空已有出报日期
-            skipped.append(f"{batch}:日期为空，未修改")
-            continue
-        if report_date:
-            rows_to_apply.append((batch, report_date))
-
-    from sqlalchemy import select as sa_select
-
-    from app.modules.quality.models import QualityTestTask
-
-    if rows_to_apply:
-        batches = [b for b, _ in rows_to_apply]
-        found = (await db.execute(
-            sa_select(QualityTestTask).where(
-                QualityTestTask.batch_number.in_(batches),
-                QualityTestTask.is_deleted == False,  # noqa: E712
-            )
-        )).scalars().all()
-        by_batch = {t.batch_number: t for t in found}
-
-        updated = 0
-        from app.core.time import today as _today
-
-        today_str = _today().isoformat()
-        today_task_ids: list[uuid.UUID] = []
-        for batch, report_date in rows_to_apply:
-            task = by_batch.get(batch)
-            if not task:
-                skipped.append(f"{batch}:未找到任务")
-                continue
-            await update_test_task_report_date(db, task.id, report_date)
-            updated += 1
-            if report_date == today_str:
-                today_task_ids.append(task.id)
-        await db.flush()
-        # 出报日期=今天的任务统一触发推送（与单条补录口径一致）；
-        # notify 轮询会等待本请求提交后再读新值
-        from app.modules.quality.service import spawn_background
-
-        for tid in today_task_ids:
-            from app.modules.quality.feishu.fill_service import notify_task_created
-
-            spawn_background(notify_task_created(str(tid)))
-    else:
-        updated = 0
-
-    return success_response(
-        data={"updated": updated, "skipped": skipped},
-        message=f"已更新 {updated} 个任务的出报日期" + (f"，跳过 {len(skipped)} 条" if skipped else ""),
     )
 
 

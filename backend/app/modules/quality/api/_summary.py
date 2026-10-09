@@ -163,29 +163,6 @@ async def quality_dashboard(
     return success_response(data=data)
 
 
-@router.get("/tasks/report-date-template", summary="下载出报日期批量补录 Excel 模板")
-async def report_date_template_endpoint(
-    _user: User = Depends(require_permission("quality:task:create")),
-) -> StreamingResponse:
-    import io as _io
-
-    import openpyxl
-
-    wb = openpyxl.Workbook()
-    ws = lc_template_parser.active_sheet(wb)
-    ws.title = "出报日期补录"
-    ws.append(["批号", "出报日期"])
-    ws.append(["HAF2608001B", "2026-09-18"])
-    buf = _io.BytesIO()
-    wb.save(buf)
-    encoded = quote("出报日期补录模板.xlsx")
-    return StreamingResponse(
-        BytesIO(buf.getvalue()),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="template.xlsx"; filename*=UTF-8\'\'{encoded}'},
-    )
-
-
 @router.get("/summary/matrix", summary="QC 汇总表矩阵：行=批次，列=全部检验项目横向列出")
 async def summary_matrix(
     product_name: str | None = Query(default=None, description="产品名称"),
