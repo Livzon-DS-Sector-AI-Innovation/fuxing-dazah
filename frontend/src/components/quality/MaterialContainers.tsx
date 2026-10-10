@@ -10,8 +10,9 @@ import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
 import type { MaterialContainerItem, MaterialContainerStatus } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
-  updateMaterialContainerStatus, downloadContainerLabels,
+  updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
 } from '@/actions/quality'
+import dayjs from 'dayjs'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
 
@@ -99,6 +100,21 @@ export default function MaterialContainers() {
     }
   }
 
+  const onBatchMove = async (op: 'in' | 'out') => {
+    try {
+      const res = await batchMoveMaterialContainers(selectedKeys, op)
+      message.success(res.message)
+      if (res.data?.failed) {
+        const details = res.data.results.filter((r) => !r.ok).slice(0, 3)
+        message.warning(`失败 ${res.data.failed} 个：${details.map((d) => `${d.container_no}（${d.detail}）`).join('；')}`)
+      }
+      setSelectedKeys([])
+      load(page, statusFilter, batchFilter)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '批量操作失败')
+    }
+  }
+
   const onDownloadSelected = async () => {
     if (!selectedKeys.length) {
       message.warning('请先勾选容器')
@@ -125,7 +141,14 @@ export default function MaterialContainers() {
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name' },
     { title: '物料代码', dataIndex: 'material_code', key: 'material_code', width: 110 },
     { title: '进厂批号', dataIndex: 'inbound_batch_no', key: 'inbound_batch_no', width: 160 },
-    { title: '复验期', dataIndex: 'expiry_date', key: 'expiry_date', width: 110, render: (v: string | null) => v || '-' },
+    { title: '复验期', dataIndex: 'expiry_date', key: 'expiry_date', width: 140, render: (v: string | null) => {
+      if (!v) return '-'
+      const exp = dayjs(v)
+      const days = exp.diff(dayjs(), 'day')
+      if (days < 0) return <><Typography.Text>{v}</Typography.Text> <Tag color="red">已过期</Tag></>
+      if (days <= 90) return <><Typography.Text>{v}</Typography.Text> <Tag color="orange">临效期 {days} 天</Tag></>
+      return v
+    } },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 100,
       render: (v: MaterialContainerStatus) => {
@@ -183,6 +206,16 @@ export default function MaterialContainers() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setGenerateOpen(true)}>批量赋码</Button>
         )}
         <Button icon={<DownloadOutlined />} loading={labelLoading} onClick={onDownloadSelected}>下载标签</Button>
+        {canManage && (
+          <Popconfirm title={`确认批量入库登记（${selectedKeys.length} 个容器）？`} onConfirm={() => onBatchMove('in')}>
+            <Button disabled={!selectedKeys.length}>批量入库</Button>
+          </Popconfirm>
+        )}
+        {canManage && (
+          <Popconfirm title={`确认批量领料出库（${selectedKeys.length} 个容器）？`} onConfirm={() => onBatchMove('out')}>
+            <Button danger disabled={!selectedKeys.length}>批量出库</Button>
+          </Popconfirm>
+        )}
       </Space>
 
       <Table

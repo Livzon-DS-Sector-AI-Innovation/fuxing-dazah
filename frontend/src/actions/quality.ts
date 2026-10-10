@@ -978,3 +978,17 @@ export async function downloadContainerLabels(containerNos: string[]): Promise<B
   if (!res.ok) throw new Error('标签生成失败')
   return res.blob()
 }
+
+export async function batchMoveMaterialContainers(
+  containerNos: string[], opType: 'in' | 'out',
+): Promise<{ message: string; data: { results: { container_no: string; ok: boolean; detail?: string }[]; updated: number; failed: number } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/batch-move`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ container_nos: containerNos, op_type: opType }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '批量操作失败')
+  }
+  return res.json()
+}

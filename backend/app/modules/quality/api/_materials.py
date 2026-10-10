@@ -16,6 +16,7 @@ from app.modules.quality.repository import (
     list_material_containers,
 )
 from app.modules.quality.schemas import (
+    ContainerBatchMoveRequest,
     ContainerLabelRequest,
     ContainerMovementOut,
     ContainerMoveRequest,
@@ -57,6 +58,21 @@ async def list_containers_endpoint(
     )
     items = [MaterialContainerListItem.model_validate(r).model_dump(mode="json") for r in rows]
     return paginated_response(data=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/material/containers/batch-move", summary="批量进出库（逐容器独立校验，返回逐条结果）")
+async def batch_move_endpoint(
+    payload: ContainerBatchMoveRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    results = await material_container_service.batch_move(db, payload, operator=user.id)
+    ok_count = sum(1 for r in results if r.get("ok"))
+    fail_count = len(results) - ok_count
+    return success_response(
+        data={"results": results, "updated": ok_count, "failed": fail_count},
+        message=f"已处理 {ok_count} 个容器" + (f"，失败 {fail_count} 个（详见结果）" if fail_count else ""),
+    )
 
 
 @router.get("/material/containers/{container_no}", summary="按容器号查询（扫码入口共用）")

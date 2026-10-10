@@ -14,6 +14,7 @@ from reportlab.pdfgen import canvas
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.core.time import today as _today
 from app.modules.quality.models import (
     QualityMaterialContainer,
 )
@@ -26,6 +27,7 @@ from app.modules.quality.repository import (
     update_container_status,
 )
 from app.modules.quality.schemas import (
+    ContainerBatchMoveRequest,
     ContainerMoveRequest,
     MaterialContainerGenerateRequest,
 )
@@ -99,7 +101,7 @@ class MaterialContainerService:
         payload: ContainerMoveRequest,
         operator: uuid.UUID | None = None,
     ) -> QualityMaterialContainer:
-        """进出库：in 入库登记 / out 领料出库。非法流转 400。"""
+        """进出库：in 入库登记 / out 领料出库。非法流转或过期出库 400。"""
         container = await get_material_container_by_no(db, container_no)
         if container is None:
             raise AppException(status_code=404, detail=f"容器 {container_no} 不存在")
@@ -108,6 +110,11 @@ class MaterialContainerService:
             raise AppException(
                 status_code=400,
                 detail=f"容器状态为 {container.status}，不可执行{('入库' if payload.op_type == 'in' else '出库')}操作",
+            )
+        if payload.op_type == "out" and container.expiry_date and container.expiry_date < _today().isoformat():
+            raise AppException(
+                status_code=400,
+                detail=f"容器 {container_no} 已过复验期（{container.expiry_date}），禁止出库",
             )
         from_status = container.status
         updated = await update_container_status(db, container.id, to_status)
@@ -123,6 +130,31 @@ class MaterialContainerService:
             remark=payload.remark,
         )
         return updated  # type: ignore[return-value]
+
+    @staticmethod
+    async def batch_move(
+        db: AsyncSession,
+        payload: ContainerBatchMoveRequest,
+        operator: uuid.UUID | None = None,
+    ) -> list[dict[str, object]]:
+        """批量进出库：逐容器独立校验，单个失败不影响其余，结果逐条返回。"""
+        results: list[dict[str, object]] = []
+        for no in payload.container_nos:
+            try:
+                updated = await MaterialContainerService.move_container(
+                    db,
+                    no,
+                    ContainerMoveRequest(
+                        op_type=payload.op_type,
+                        related_doc=payload.related_doc,
+                        remark=payload.remark,
+                    ),
+                    operator=operator,
+                )
+                results.append({"container_no": no, "ok": True, "status": updated.status})
+            except AppException as exc:
+                results.append({"container_no": no, "ok": False, "detail": exc.detail})
+        return results
 
     @staticmethod
     async def update_status(

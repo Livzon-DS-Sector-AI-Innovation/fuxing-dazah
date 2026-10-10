@@ -145,3 +145,64 @@ async def test_get_by_no_returns_container(db_session):
     containers = await material_container_service.generate_containers(db_session, req)
     found = await get_material_container_by_no(db_session, containers[0].container_no)
     assert found is not None and found.material_code == req.material_code
+
+
+async def test_batch_move_mixed_results(db_session):
+    containers = await material_container_service.generate_containers(db_session, _gen_req(3))
+    # 第 1 瓶先入库，其余保持 labeled；批量入库时第 1 瓶应失败、其余成功
+    await material_container_service.move_container(
+        db_session, containers[0].container_no, ContainerMoveRequest(op_type="in")
+    )
+    from app.modules.quality.schemas import ContainerBatchMoveRequest
+
+    results = await material_container_service.batch_move(
+        db_session,
+        ContainerBatchMoveRequest(
+            container_nos=[c.container_no for c in containers], op_type="in"
+        ),
+    )
+    assert sum(1 for r in results if r["ok"]) == 2
+    fails = [r for r in results if not r["ok"]]
+    assert len(fails) == 1 and fails[0]["container_no"] == containers[0].container_no
+
+
+async def test_expired_container_cannot_out(db_session):
+    req = MaterialContainerGenerateRequest(
+        material_code=_rand_code(),
+        material_name="过期物料",
+        inbound_batch_no="IN-EXPIRED",
+        expiry_date="2020-01-01",
+        count=1,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    no = containers[0].container_no
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.update_status(db_session, no, "qualified")
+    with pytest.raises(AppException) as exc:
+        await material_container_service.move_container(
+            db_session, no, ContainerMoveRequest(op_type="out"), operator=None
+        )
+    assert exc.value.status_code == 400
+    assert "复验期" in exc.value.detail
+
+
+async def test_near_expiry_not_blocked(db_session):
+    """未过期（未来日期）不受拦截。"""
+    import datetime as _dt
+
+    future = (_dt.datetime.now() + _dt.timedelta(days=30)).strftime("%Y-%m-%d")
+    req = MaterialContainerGenerateRequest(
+        material_code=_rand_code(),
+        material_name="正常物料",
+        inbound_batch_no="IN-OK",
+        expiry_date=future,
+        count=1,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    no = containers[0].container_no
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.update_status(db_session, no, "qualified")
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="out"), operator=None
+    )
+    assert updated.status == "issued"
