@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.modules.safety.knowledge.knowledge_card import (
+    KNOWLEDGE_DOCUMENTS,
     KnowledgeCard,
     KnowledgeDocumentMeta,
-    KNOWLEDGE_DOCUMENTS,
     get_documents_by_priority,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # KnowledgeCard — data model
@@ -358,8 +358,9 @@ class TestKnowledgeInjector:
     @pytest.mark.asyncio
     async def test_build_context_with_categories(self) -> None:
         """build_context filters by category correctly."""
-        from app.modules.safety.knowledge.injector import KnowledgeInjector
         from unittest.mock import AsyncMock
+
+        from app.modules.safety.knowledge.injector import KnowledgeInjector
 
         # Mock session
         mock_session = AsyncMock()
@@ -391,12 +392,12 @@ class TestKnowledgeModuleIntegration:
     def test_init_exports(self) -> None:
         """All public symbols should be importable from the package."""
         from app.modules.safety.knowledge import (
-            KnowledgeCard,
-            KnowledgeDocumentMeta,
             KNOWLEDGE_DOCUMENTS,
             DocumentLoader,
-            KnowledgeInjector,
+            KnowledgeCard,
             KnowledgeCardSelector,
+            KnowledgeDocumentMeta,
+            KnowledgeInjector,
         )
         assert KnowledgeCard is not None
         assert KnowledgeDocumentMeta is not None

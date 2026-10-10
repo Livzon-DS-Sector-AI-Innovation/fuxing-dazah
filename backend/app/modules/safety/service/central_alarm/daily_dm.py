@@ -25,16 +25,21 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import date
 from typing import Any
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.notification import send_user_card
 
 logger = logging.getLogger(__name__)
 
-# 私发开关（默认关；确认后再置 true，17:00 随日报自动私发）
-DM_ENABLED = os.getenv("SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED", "false").lower() == "true"
+
+def dm_enabled() -> bool:
+    """私发开关（默认关；确认后再置 true，17:00 随日报自动私发）。
+
+    读取链：env > DB 活行（app_config，30s TTL）> 默认 false。
+    """
+    return _app_config_store.get_bool("SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED", False)
 
 # 卡片 header 标题颜色（日报卡：蓝头信息卡，区别于消防一卡一条的 red 告警卡）
 HEADER_TEMPLATE = "blue"
@@ -185,7 +190,7 @@ async def send_daily_central_alarm_dms(
         dept_empty=因窗口内无报警而未发卡的收件人次数
         （开关关闭时返回 {"disabled": 1, ...全 0}）
     """
-    if not DM_ENABLED:
+    if not dm_enabled():
         logger.info("中控报警日报私发已关闭 (SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED=false)")
         return {"disabled": 1, "sent": 0, "skipped": 0, "errors": 0,
                 "unresolved": 0, "dept_empty": 0}

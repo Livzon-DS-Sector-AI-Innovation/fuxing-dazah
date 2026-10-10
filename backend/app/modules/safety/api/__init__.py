@@ -7,6 +7,7 @@ from fastapi import APIRouter
 
 from app.modules.safety.api.accidents import accidents_router
 from app.modules.safety.api.ai_audits import ai_audits_router
+from app.modules.safety.api.app_config import app_config_router
 from app.modules.safety.api.bitable_config import bitable_config_router
 from app.modules.safety.api.business_agent import business_agent_router
 from app.modules.safety.api.central_alarm import central_alarm_router
@@ -60,6 +61,7 @@ router.include_router(checks_router)
 router.include_router(daily_risk_reports_router)
 router.include_router(oh_hazard_monitors_router)
 router.include_router(bitable_config_router)
+router.include_router(app_config_router)
 router.include_router(cert_warnings_router)
 router.include_router(chemical_inventory_router)
 router.include_router(business_agent_router)

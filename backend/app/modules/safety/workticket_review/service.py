@@ -17,16 +17,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import date as date_cls
 from datetime import datetime
-from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import (
     WorkTicketReview,
@@ -49,20 +47,19 @@ from app.modules.safety.workticket_review.rule_engine import (
 
 logger = logging.getLogger(__name__)
 
-# ── 环境变量加载（与 client.py 保持一致） ──
-_env_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-_app_env = os.getenv("APP_ENV", "development")
-_env_path = _env_dir / f".env.{_app_env}"
-if _env_path.exists():
-    load_dotenv(_env_path, override=True)
-
 TZ = ZoneInfo("Asia/Shanghai")
 
-# 特殊作业自动分配群；可用环境变量 SAFETY_WORKTICKET_GROUP_ID 覆盖。
-REPORT_GROUP_CHAT_ID = os.getenv(
-    "SAFETY_WORKTICKET_GROUP_ID",
-    "oc_d102e1a11eaaa9a1de3b41859de9d0c1",
-)
+
+def report_group_chat_id() -> str:
+    """报告推送群默认值（特殊作业自动分配群）。
+
+    发送目标唯一来源是调用方传入（调度器 DB 播种/覆写）；本函数仅为
+    scheduler_config 播种/展示链提供 env > DB 活行 > 代码默认 的解析。
+    """
+    return _app_config_store.get_str(
+        "SAFETY_WORKTICKET_GROUP_ID",
+        "oc_d102e1a11eaaa9a1de3b41859de9d0c1",
+    )
 
 # 数据不足伪违规编号（报告模板仅遍历 RuleNo 的真实规则，不影响展示）。
 _DATA_INSUFFICIENT_RULE_NO = "DATA_INSUFFICIENT"
@@ -606,6 +603,6 @@ class WorkTicketReviewService:
 
 
 __all__ = [
-    "REPORT_GROUP_CHAT_ID",
     "WorkTicketReviewService",
+    "report_group_chat_id",
 ]

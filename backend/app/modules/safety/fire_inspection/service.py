@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -31,8 +30,13 @@ _TRUE = {"1", "true", "yes", "on", "y"}
 
 
 def backfill_enabled() -> bool:
-    """归档总开关（默认关闭；SAFETY_FIRE_INSPECTION_PDF_ENABLED 置真启用）。"""
-    raw = (os.getenv("SAFETY_FIRE_INSPECTION_PDF_ENABLED") or "").strip().lower()
+    """归档总开关（默认关闭；SAFETY_FIRE_INSPECTION_PDF_ENABLED 置真启用）。
+
+    读取链 env > DB 活行（app_config，30s TTL）> 默认关闭。
+    """
+    from app.modules.safety.app_config.store import store as _app_config_store
+
+    raw = (_app_config_store.get_raw("SAFETY_FIRE_INSPECTION_PDF_ENABLED") or "").strip().lower()
     return raw in _TRUE
 
 
@@ -102,7 +106,7 @@ class BitableRepo:
             self._app_token,
             self._table_id,
             record_id,
-            bitable.FIELD_REPORT_ID,
+            bitable.fire_inspection_report_field_id(),
             file_tokens,
             http=self._http,
         )
@@ -112,7 +116,9 @@ class BitableRepo:
 
 
 def default_repo() -> BitableRepo:
-    return BitableRepo(bitable.FIRE_INSPECTION_APP_TOKEN, bitable.FIRE_INSPECTION_TABLE_ID)
+    return BitableRepo(
+        bitable.fire_inspection_app_token(), bitable.fire_inspection_table_id()
+    )
 
 
 def _max_archive_seq(records: list[InspectionRecord]) -> int:

@@ -16,7 +16,6 @@ HTTP 调用加 span 产生噪声；只在 AI 调用边界手动开 span。
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 
@@ -37,7 +36,9 @@ def setup_tracing() -> bool:
         return _enabled
     _initialized = True
 
-    endpoint = (os.getenv("SAFETY_PHOENIX_ENDPOINT") or "").strip().rstrip("/")
+    from app.modules.safety.app_config.store import store as _app_config_store
+
+    endpoint = (_app_config_store.get_str("SAFETY_PHOENIX_ENDPOINT", "") or "").strip().rstrip("/")
     if not endpoint:
         logger.debug("SAFETY_PHOENIX_ENDPOINT 未配置，tracing 保持关闭")
         return False

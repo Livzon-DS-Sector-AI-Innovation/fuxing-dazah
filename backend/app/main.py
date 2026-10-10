@@ -109,6 +109,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             name="title-review-ws",
         )
 
+    # ── 安全模块应用配置中心：播种（env→DB 迁移基线，only-missing 幂等）+ 预热 ──
+    # 须在安全 WS / 调度器启动前完成：轮询旗标等 restart_required 键只在启动读取。
+    from app.modules.safety.app_config.store import store as safety_app_config_store
+
+    try:
+        await safety_app_config_store.seed_from_env()
+    except Exception:  # noqa: BLE001 — 播种失败不阻塞启动（读路径回退 env/默认）
+        logger.warning("安全模块应用配置播种失败，读路径将以 env/默认兜底")
+    try:
+        await safety_app_config_store.warmup()
+    except Exception:  # noqa: BLE001
+        logger.warning("安全模块应用配置预热失败，读路径将以 env/默认兜底")
+
     # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
     from app.modules.safety.feishu.event_client import start_ws, stop_ws
 

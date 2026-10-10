@@ -207,10 +207,10 @@ async def test_scheduler_switches_between_direct_and_legacy(
     # 目标群 = 主目标 + 附加投递群（特殊作业报备及日报表群，2026-09-30 需求；
     # compose_report_targets 组装，见 test_special_op_extra_targets.py）
     from app.modules.safety.service.special_operation_daily_report import (
-        EXTRA_REPORT_CHAT_ID,
+        extra_report_chat_id,
     )
 
-    expected_targets = [CHAT, EXTRA_REPORT_CHAT_ID]
+    expected_targets = [CHAT, extra_report_chat_id()]
     calls.clear()
     monkeypatch.setenv(DIRECT, "true")
     await _run_special_op_daily_report({"mode": "today"}, DAY, chat_id=CHAT)

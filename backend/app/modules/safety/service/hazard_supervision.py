@@ -24,6 +24,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.feishu.notification import send_group_card, send_user_card
 from app.modules.safety.models import HazardReport
@@ -40,9 +41,15 @@ NOTIFY_OPEN_ID = "ou_495039d6335d347b07ff92ad982b3b4e"
 # 每日督办通报群聊 — 安全AI创新交流群
 BULLETIN_CHAT_ID = "oc_f05532603bd7682fc520929c01aca88d"
 
-# 通知开关
-NOTIFICATION_ENABLED = os.getenv("SAFETY_SUPERVISION_NOTIFICATION_ENABLED", "false").lower() == "true"
-TEST_MODE = os.getenv("SAFETY_SUPERVISION_TEST_MODE", "true").lower() == "true"
+
+def notification_enabled() -> bool:
+    """督办通知开关（env > DB 活行（app_config）> 默认 false）。"""
+    return _app_config_store.get_bool("SAFETY_SUPERVISION_NOTIFICATION_ENABLED", False)
+
+
+def test_mode() -> bool:
+    """督办测试模式：true = 不实际推送仅记录（env > DB 活行 > 默认 true）。"""
+    return _app_config_store.get_bool("SAFETY_SUPERVISION_TEST_MODE", True)
 
 # 等级中文标签映射
 LEVEL_LABELS = {
@@ -347,7 +354,6 @@ class HazardSupervisionService:
             return 0
 
         import asyncio
-        import os
 
         import httpx
 
@@ -927,7 +933,7 @@ class HazardSupervisionService:
         Returns:
             dict with keys: urgent_sent, warning_sent, skipped, errors
         """
-        if not NOTIFICATION_ENABLED:
+        if not notification_enabled():
             logger.info("督办通知已关闭 (SAFETY_SUPERVISION_NOTIFICATION_ENABLED=false)")
             return {"红色预警_sent": 0, "一般预警_sent": 0, "skipped": 0, "errors": 0, "disabled": 1}
 
@@ -943,7 +949,7 @@ class HazardSupervisionService:
                     stats["skipped"] += 1
                     continue
 
-                if TEST_MODE:
+                if test_mode():
                     await self._send_test_notification(hazard, level)
                 else:
                     await self._send_production_notification(hazard, level)

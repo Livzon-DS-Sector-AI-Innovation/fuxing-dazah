@@ -10,6 +10,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.feishu.notification import send_group_card, send_user_card
 from app.modules.safety.regulation_crawler.schemas import (
@@ -30,10 +31,15 @@ class PushNotifier:
     """法规更新推送通知器（V1.1 分级卡片）。"""
 
     def __init__(self) -> None:
-        self.chat_id = os.getenv("SAFETY_REGULATION_CRAWLER_NOTIFY_CHAT_ID", "")
+        # 读取链：env > DB 活行（app_config）> 空（不推送）；构造时取一次
+        self.chat_id = _app_config_store.get_str(
+            "SAFETY_REGULATION_CRAWLER_NOTIFY_CHAT_ID", ""
+        )
         self.user_ids: list[str] = [
             uid.strip()
-            for uid in os.getenv("SAFETY_REGULATION_CRAWLER_NOTIFY_USERS", "").split(",")
+            for uid in _app_config_store.get_str(
+                "SAFETY_REGULATION_CRAWLER_NOTIFY_USERS", ""
+            ).split(",")
             if uid.strip()
         ]
 

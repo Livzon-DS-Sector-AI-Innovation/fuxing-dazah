@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from sqlalchemy import select
@@ -63,12 +62,18 @@ def _resolve_target_type(job_name: str, target_id: str | None) -> str:
 def _resolve_effective_target(
     job_name: str, override_id: str | None
 ) -> tuple[str | None, str | None]:
-    """返回 (生效 chat_id, 来源)。来源: db / env / code / None。"""
+    """返回 (生效 chat_id, 来源)。来源: db / env / code / None。
+
+    env 层经应用配置中心读取（env 非空 > DB 活行，app_config store）：
+    清空 .env 后 DB 行成为有效来源，调度器播种/展示链随之切换。
+    """
+    from app.modules.safety.app_config.store import store as _app_config_store
+
     if override_id:
         return override_id, "db"
     env_key = EFFECTIVE_TARGET_ENV.get(job_name)
     if env_key:
-        env_val = (os.getenv(env_key) or "").strip()
+        env_val = (_app_config_store.get_raw(env_key) or "").strip()
         if env_val:
             return env_val, "env"
     code_val = EFFECTIVE_TARGET_CODE.get(job_name)

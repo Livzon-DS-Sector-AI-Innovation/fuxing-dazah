@@ -27,6 +27,7 @@ from typing import Any
 import httpx
 
 from app.core.database import async_session_factory
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.business_agent.executor import resume, run_turn
 from app.modules.safety.business_agent.schemas import SafetyDeps
 from app.modules.safety.business_agent.session_store import (
@@ -1096,10 +1097,14 @@ def _has_at_all_mention(message: dict[str, Any]) -> bool:
 # ── 群聊：仅直接 @ 机器人才回复 ──
 
 # 安全助手机器人自身的飞书 open_id（群成员里名称「安全管理机器人」）。
-# 机器人重建后会变化，故允许用环境变量覆盖；默认值取自当前租户。
-_SAFETY_BOT_OPEN_ID = os.getenv(
-    "SAFETY_FEISHU_BOT_OPEN_ID", "ou_33d2fe6a5714c4e808248c05cf66205a"
-)
+# 机器人重建后会变化，故允许覆盖（env > DB 活行 > 代码默认，app_config）；
+# 默认值取自当前租户。
+def _safety_bot_open_id() -> str:
+    return _app_config_store.get_str(
+        "SAFETY_FEISHU_BOT_OPEN_ID", "ou_33d2fe6a5714c4e808248c05cf66205a"
+    )
+
+
 # content 文本里 @ 机器人的几种显示名（含旧叫法），作为 mentions 缺失时的兜底
 _SAFETY_BOT_NAMES: tuple[str, ...] = ("安全助手", "安全管理机器人", "安全机器人", "安全员助手")
 
@@ -1113,13 +1118,14 @@ def _is_bot_directly_mentioned(message: dict[str, Any]) -> bool:
     1. ``mentions`` 数组里包含机器人自身 open_id / user_id
     2. ``content.text`` 里 @ 机器人名（兜底）
     """
+    bot_open_id = _safety_bot_open_id()
     # ── mentions 数组（结构化提及）──
     for m in message.get("mentions") or []:
         if not isinstance(m, dict):
             continue
         mid = m.get("id")
         ids = [str(v) for v in mid.values()] if isinstance(mid, dict) else ([str(mid)] if mid else [])
-        if _SAFETY_BOT_OPEN_ID in ids:
+        if bot_open_id in ids:
             return True
 
     # ── content 文本兜底：@机器人名 ──

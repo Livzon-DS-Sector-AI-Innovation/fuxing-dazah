@@ -5,15 +5,15 @@
 """
 
 from app.modules.safety.workticket_review.client import (
-    AUTH_BASIC,
-    BASE_URL,
-    ORG_CODE,
-    PASSWORD_MD5,
     STANDARD_TICKET_TYPES,
-    TENANT_ID,
     TICKET_TYPE_KEYS,
-    USERNAME,
     WorkTicketPlatformClient,
+    platform_auth_basic,
+    platform_base_url,
+    platform_org_code,
+    platform_password_md5,
+    platform_tenant_id,
+    platform_username,
 )
 from app.modules.safety.workticket_review.parser import (
     FIELD_MAP,
@@ -44,17 +44,17 @@ from app.modules.safety.workticket_review.rule_engine import (
     WorkTicketRuleEngine,
 )
 from app.modules.safety.workticket_review.service import (
-    REPORT_GROUP_CHAT_ID,
     WorkTicketReviewService,
+    report_group_chat_id,
 )
 
 __all__ = [
-    "BASE_URL",
-    "USERNAME",
-    "PASSWORD_MD5",
-    "TENANT_ID",
-    "ORG_CODE",
-    "AUTH_BASIC",
+    "platform_base_url",
+    "platform_username",
+    "platform_password_md5",
+    "platform_tenant_id",
+    "platform_org_code",
+    "platform_auth_basic",
     "TICKET_TYPE_KEYS",
     "STANDARD_TICKET_TYPES",
     "FIELD_MAP",
@@ -80,6 +80,6 @@ __all__ = [
     "DEFAULT_DONGHUO_HOURS",
     "GAS_BEARING_TYPES",
     "RULE_NAME_MAP",
-    "REPORT_GROUP_CHAT_ID",
     "WorkTicketReviewService",
+    "report_group_chat_id",
 ]

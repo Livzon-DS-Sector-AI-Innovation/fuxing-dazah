@@ -11,19 +11,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
 
 from app.modules.safety.bitable_config.store import store
+from app.modules.safety.env_loader import load_safety_env
 from app.modules.safety.feishu.client import get_safety_tenant_token
 
 logger = logging.getLogger(__name__)
 
-# 安全模块独立读取 .env 中的 Bitable 配置（不经过全局 config.py）
-_env_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-_app_env = os.getenv("APP_ENV", "development")
-_env_path = _env_dir / f".env.{_app_env}"
-if _env_path.exists():
-    load_dotenv(_env_path, override=True)
+# 加载 .env.{APP_ENV}（全模块统一入口，幂等；详见 env_loader.py）
+load_safety_env()
 
 BITABLE_BASE = "https://open.feishu.cn/open-apis/bitable/v1"
 

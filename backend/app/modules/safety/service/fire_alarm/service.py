@@ -11,7 +11,6 @@ AI 任何环节失败降级，不阻塞报告生成；推送 env 未配置则跳
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -69,8 +68,8 @@ def _fire_alarm_table_id() -> str:
     return conn.table_id if conn and conn.enabled else ""
 
 
-# 日报/周报推送目标群（未配置 → 跳过推送，联调期安全）
-FIRE_ALARM_CHAT_ID = os.getenv("SAFETY_FIRE_ALARM_ANALYSIS_CHAT_ID", "")
+# 日报/周报推送目标群经调度器 DB 覆写传入；播种/展示回退链在
+# service/scheduler_config.py（env > DB 活行 > 代码默认），本模块不再持有常量。
 
 # 全量同步分页配置（参照 special_op：page_size=200、上限 10 页防死循环）
 MAX_PAGES = 10
@@ -523,11 +522,11 @@ class FireAlarmService:
         dm_recipients: dict[str, dict[str, str]] | None = None
         try:
             from app.modules.safety.service.fire_alarm.daily_dm import (
-                DM_ENABLED,
                 dept_recipients,
+                dm_enabled,
             )
 
-            if DM_ENABLED and agg.records:
+            if dm_enabled() and agg.records:
                 dm_recipients = {}
                 for r in agg.records:
                     dept = r.department or "部门待确认"
@@ -640,8 +639,8 @@ class FireAlarmService:
         from collections import Counter
 
         from app.modules.safety.feishu.daily_digest import (
-            DIGEST_CHAT_ID,
             DigestCell,
+            digest_chat_id,
             upsert_daily_digest,
         )
 
@@ -662,7 +661,7 @@ class FireAlarmService:
                 detail=markdown,
             ),
         )
-        return [{"chat_id": DIGEST_CHAT_ID, "success": ok}] + (
+        return [{"chat_id": digest_chat_id(), "success": ok}] + (
             [] if ok else [{"error": "安全速递总卡投递失败"}]
         )
 
@@ -673,8 +672,8 @@ class FireAlarmService:
         from collections import Counter
 
         from app.modules.safety.feishu.daily_digest import (
-            DIGEST_CHAT_ID,
             DigestCell,
+            digest_chat_id,
             upsert_daily_digest,
         )
 
@@ -695,7 +694,7 @@ class FireAlarmService:
                 detail=markdown,
             ),
         )
-        return [{"chat_id": DIGEST_CHAT_ID, "success": ok}] + (
+        return [{"chat_id": digest_chat_id(), "success": ok}] + (
             [] if ok else [{"error": "安全速递总卡投递失败"}]
         )
 
@@ -866,11 +865,11 @@ async def run_daily_fire_alarm_dm(
     """
     from app.core.database import async_session_factory
     from app.modules.safety.service.fire_alarm.daily_dm import (
-        DM_ENABLED,
+        dm_enabled,
         send_daily_alarm_dms,
     )
 
-    if not DM_ENABLED:
+    if not dm_enabled():
         logger.info("消防报警日报私发已关闭 (SAFETY_FIRE_ALARM_DAILY_DM_ENABLED=false)")
         return None
 

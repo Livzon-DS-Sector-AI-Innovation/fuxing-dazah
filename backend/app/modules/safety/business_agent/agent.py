@@ -3,30 +3,26 @@
 每个请求通过 ``deps=SafetyDeps(db=..., person=..., role=..., session_id=...)`` 注入当前
 用户身份、数据库连接和会话上下文；工具函数通过 ``ctx.deps`` 获取并传给各业务 service。
 
-模型配置：复用 ``service/config.py`` 的 ``SAFETY_AI_TEXT_*`` 环境变量。
+模型配置：走 ai_config 配置中心（DB 活行 → env（SAFETY_AI_TEXT_*）→ registry 默认，
+字段级回退）；不再硬性要求 env 必填。
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-from dotenv import load_dotenv
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 
 from app.modules.safety.ai_audit.tracing import setup_tracing
+from app.modules.safety.ai_config.store import store as _ai_config_store
 from app.modules.safety.business_agent.loader import load_instructions
 from app.modules.safety.business_agent.schemas import SafetyDeps
+from app.modules.safety.env_loader import load_safety_env
 
-# ── 模型层（从环境变量读取，与 service/config.py 一致） ──────────
-# ⚠️ 强制从 .env.development 重新加载，覆盖系统环境变量中可能过期的 API key。
-# agent.py → business_agent/ → safety/ → modules/ → app/ → dazah-backend/
-_project_root = Path(__file__).resolve().parents[4]
-_env_file = _project_root / f".env.{os.getenv('APP_ENV', 'development')}"
-if _env_file.exists():
-    load_dotenv(str(_env_file), override=True)
+# ── 模型层（ai_config 配置中心：DB → env → registry 默认） ──────────
+# ⚠️ 强制从 .env.{APP_ENV} 重新加载，覆盖系统环境变量中可能过期的 API key
+# （ai_config 的 env 兜底层依赖此刻的 os.environ；全模块统一入口 env_loader）。
+load_safety_env()
 
 # ── Tracing（幂等；SAFETY_PHOENIX_ENDPOINT 未配置时 no-op）──────
 # ⚠️ 必须在上方 load_dotenv 之后调用，否则读不到 SAFETY_PHOENIX_ENDPOINT。
@@ -40,12 +36,14 @@ if _TRACING_ENABLED:
 
     _CAPABILITIES.append(Instrumentation())
 
+_text_config = _ai_config_store.get_profile_config("text")
+
 _PROVIDER = DeepSeekProvider(
-    api_key=os.environ["SAFETY_AI_TEXT_API_KEY"],
+    api_key=_text_config.get("api_key") or "",
 )
 
 _MODEL = OpenAIChatModel(
-    os.environ.get("SAFETY_AI_TEXT_MODEL", "deepseek-flash"),
+    _text_config.get("model") or "deepseek-flash",
     provider=_PROVIDER,
 )
 

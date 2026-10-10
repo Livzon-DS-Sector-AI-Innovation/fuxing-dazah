@@ -142,7 +142,7 @@ def _resolver(names):
 class TestSendDailyCentralAlarmDms:
     def test_disabled_by_switch(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", False,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: False,
         )
         stats = asyncio.run(send_daily_central_alarm_dms(
             D, {"提炼工程四部": "md"}, resolver=_resolver([]), sender=AsyncMock(),
@@ -153,7 +153,7 @@ class TestSendDailyCentralAlarmDms:
     def test_dept_filtered_one_card_per_person(self, monkeypatch):
         """同部门同内容、跨部门不同内容；无报警部门不私发。"""
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: True,
         )
         sender = AsyncMock(return_value=True)
         dept_markdowns = {
@@ -181,7 +181,7 @@ class TestSendDailyCentralAlarmDms:
 
     def test_empty_markdown_dept_counts_empty(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: True,
         )
         sender = AsyncMock(return_value=True)
         stats = asyncio.run(send_daily_central_alarm_dms(
@@ -194,7 +194,7 @@ class TestSendDailyCentralAlarmDms:
 
     def test_unresolved_open_id_counts(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: True,
         )
 
         async def partial(names_arg):
@@ -210,7 +210,7 @@ class TestSendDailyCentralAlarmDms:
 
     def test_send_failure_and_exception_counts(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: True,
         )
         stats = asyncio.run(send_daily_central_alarm_dms(
             D, {"提炼工程五部": "md"}, resolver=_resolver(None),
@@ -226,7 +226,7 @@ class TestSendDailyCentralAlarmDms:
 
     def test_resolver_failure_all_unresolved(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: True,
         )
 
         async def broken(names_arg):
@@ -376,13 +376,13 @@ class _AsyncSessionCtx:
 class TestRunDailyCentralAlarmDm:
     def test_disabled_returns_none(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", False,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: False,
         )
         assert asyncio.run(run_daily_central_alarm_dm()) is None
 
     def test_enabled_full_flow(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.central_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.central_alarm.daily_dm.dm_enabled", lambda: True,
         )
         stats = {"sent": 3, "skipped": 0, "errors": 0, "unresolved": 0,
                  "dept_empty": 1}

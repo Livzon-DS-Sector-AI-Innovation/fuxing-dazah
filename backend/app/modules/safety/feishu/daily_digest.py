@@ -17,12 +17,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from app.core.redis import get_redis
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.notification import (
     build_card_dict,
     send_group_card,
@@ -35,15 +35,20 @@ _TRUE = {"1", "true", "yes", "on"}
 
 
 def digest_enabled() -> bool:
-    """总卡开关（默认开启；置 false 各报告只发自己的卡片，不汇总）。"""
-    raw = (os.getenv("SAFETY_DAILY_DIGEST_ENABLED") or "").strip().lower()
+    """总卡开关（默认开启；置 false 各报告只发自己的卡片，不汇总）。
+
+    读取链：env > DB 活行（app_config，30s TTL）> 默认开启；空值视为未设置。
+    """
+    raw = (_app_config_store.get_raw("SAFETY_DAILY_DIGEST_ENABLED") or "").strip().lower()
     return not raw or raw in _TRUE
 
 
-# 发送目标：安全AI创新交流群（可用环境变量覆盖）
-DIGEST_CHAT_ID = os.getenv(
-    "SAFETY_DAILY_DIGEST_CHAT_ID", "oc_f05532603bd7682fc520929c01aca88d",
-)
+def digest_chat_id() -> str:
+    """总卡目标群（默认安全AI创新交流群；env > DB 活行 > 代码默认）。"""
+    return _app_config_store.get_str(
+        "SAFETY_DAILY_DIGEST_CHAT_ID",
+        "oc_f05532603bd7682fc520929c01aca88d",
+    )
 
 _KEY = "safety:daily_digest:{date}"
 _MSG_KEY = "safety:daily_digest:card:{date}"
@@ -107,7 +112,7 @@ async def send_digest_cell_card(
     Returns:
         成功返回 message_id；失败/未配置 chat_id 返回 None（只告警不抛）
     """
-    chat = chat_id or DIGEST_CHAT_ID
+    chat = chat_id or digest_chat_id()
     if not chat:
         return None
     sender = sender if sender is not None else send_group_card
@@ -157,7 +162,7 @@ async def upsert_daily_digest(
     store = store if store is not None else await get_redis()
     sender = sender if sender is not None else send_group_card
     updater = updater if updater is not None else update_card
-    chat = chat_id or DIGEST_CHAT_ID
+    chat = chat_id or digest_chat_id()
     try:
         payload = asdict(cell)
         async with _lock:

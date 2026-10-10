@@ -20,21 +20,26 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.dept_config import DEPARTMENT_CONFIG
 from app.modules.safety.feishu.notification import send_user_card
 from app.modules.safety.service.hazard_supervision import DEPT_NORMALIZE
 
 logger = logging.getLogger(__name__)
 
-# 私发开关（默认关；确认后再置 true，17:00 随日报自动私发）
-DM_ENABLED = os.getenv("SAFETY_FIRE_ALARM_DAILY_DM_ENABLED", "false").lower() == "true"
+
+def dm_enabled() -> bool:
+    """私发开关（默认关；确认后再置 true，17:00 随日报自动私发）。
+
+    读取链：env > DB 活行（app_config，30s TTL）> 默认 false。
+    """
+    return _app_config_store.get_bool("SAFETY_FIRE_ALARM_DAILY_DM_ENABLED", False)
 
 # 卡片 header 标题颜色（参照「未更新进展」卡：red）
 HEADER_TEMPLATE = "red"
@@ -234,7 +239,7 @@ async def send_daily_alarm_dms(
         errors=异常条数；unresolved=收件人未解析到 union_id 条数
         （开关关闭时返回 {"disabled": 1, ...全 0}）
     """
-    if not DM_ENABLED:
+    if not dm_enabled():
         logger.info("消防报警日报私发已关闭 (SAFETY_FIRE_ALARM_DAILY_DM_ENABLED=false)")
         return {"disabled": 1, "sent": 0, "skipped": 0, "errors": 0, "unresolved": 0}
     if not records:

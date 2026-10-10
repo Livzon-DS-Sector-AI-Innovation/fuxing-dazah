@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -35,10 +34,15 @@ SUMMARY_TOP_N = 15
 
 
 def get_surge_thresholds() -> tuple[Decimal, Decimal]:
-    """返回 (变化比例阈值, 绝对变化量阈值(T))，读取环境变量，非法值回退默认。"""
-    def _parse(env: str, default: str) -> Decimal:
+    """返回 (变化比例阈值, 绝对变化量阈值(T))。
+
+    读取链 env > DB 活行（app_config）> 代码默认；非法值回退默认。
+    """
+    from app.modules.safety.app_config.store import store as _app_config_store
+
+    def _parse(key: str, default: str) -> Decimal:
         try:
-            return Decimal(str(os.getenv(env, default))).quantize(
+            return Decimal(str(_app_config_store.get_str(key, default))).quantize(
                 Decimal("0.0001"), rounding=ROUND_HALF_UP
             )
         except Exception:  # noqa: BLE001

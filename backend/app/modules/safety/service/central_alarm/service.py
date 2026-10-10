@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
@@ -50,8 +49,8 @@ def central_alarm_table_ids() -> list[str]:
     return [t for t in [conn.table_id, *conn.extra_table_ids] if t]
 
 
-# 日报推送目标群（未配置 → 跳过推送，联调期安全）
-CENTRAL_ALARM_CHAT_ID = os.getenv("SAFETY_CENTRAL_ALARM_ANALYSIS_CHAT_ID", "")
+# 日报推送目标群经调度器 DB 覆写传入；播种/展示回退链在
+# service/scheduler_config.py（env > DB 活行 > 代码默认），本模块不再持有常量。
 
 # 全量同步分页配置（参照 fire_alarm / special_op；但中央报警表较大，需更高上限防截断）
 MAX_PAGES = 50
@@ -606,8 +605,8 @@ class CentralAlarmService:
     ) -> list[dict[str, Any]]:
         """把日报概览+明细投递为「安全速递」总卡格子（总卡模式下替代独立群卡）。"""
         from app.modules.safety.feishu.daily_digest import (
-            DIGEST_CHAT_ID,
             DigestCell,
+            digest_chat_id,
             upsert_daily_digest,
         )
 
@@ -630,7 +629,7 @@ class CentralAlarmService:
                 detail=markdown,
             ),
         )
-        return [{"chat_id": DIGEST_CHAT_ID, "success": ok}] + (
+        return [{"chat_id": digest_chat_id(), "success": ok}] + (
             [] if ok else [{"error": "安全速递总卡投递失败"}]
         )
 
@@ -831,11 +830,11 @@ async def run_daily_central_alarm_dm(
     """
     from app.core.database import async_session_factory
     from app.modules.safety.service.central_alarm.daily_dm import (
-        DM_ENABLED,
+        dm_enabled,
         send_daily_central_alarm_dms,
     )
 
-    if not DM_ENABLED:
+    if not dm_enabled():
         logger.info("中控报警日报私发已关闭 (SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED=false)")
         return None
 

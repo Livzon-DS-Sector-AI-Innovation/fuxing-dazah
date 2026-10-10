@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -17,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import SpecialOperationReport
 from app.modules.safety.schemas.special_op_daily import (
@@ -36,11 +36,13 @@ logger = logging.getLogger(__name__)
 DAILY_REPORT_CHAT_ID = "oc_d102e1a11eaaa9a1de3b41859de9d0c1"
 
 # 附加投递群（2026-09-30 需求）— 特殊作业报备及日报表群：晨报/晚报同款速递卡
-# 在主目标之后加投该群；env 置 off/空停用
-EXTRA_REPORT_CHAT_ID = os.getenv(
-    "SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID",
-    "oc_4ab4a89f7bbb2450f5e0e341bf0f5f10",
-)
+# 在主目标之后加投该群；置 off/空停用。
+# 读取链：env > DB 活行（app_config，30s TTL）> 代码默认。
+def extra_report_chat_id() -> str:
+    return _app_config_store.get_str(
+        "SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID",
+        "oc_4ab4a89f7bbb2450f5e0e341bf0f5f10",
+    )
 
 
 def compose_report_targets(chat_id: str | None) -> list[str]:
@@ -52,7 +54,7 @@ def compose_report_targets(chat_id: str | None) -> list[str]:
     if not chat_id:
         return []
     targets = [chat_id]
-    extra = (EXTRA_REPORT_CHAT_ID or "").strip()
+    extra = (extra_report_chat_id() or "").strip()
     if extra and extra.lower() not in ("off", "false", "none") and extra not in targets:
         targets.append(extra)
     return targets

@@ -20,6 +20,7 @@ import httpx
 from sqlalchemy import select
 
 from app.core.database import async_session_factory
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.chemical_inventory.daily_report import (
     compute_daily_analysis,
     render_daily_report,
@@ -46,18 +47,21 @@ logger = logging.getLogger(__name__)
 
 DANGEROUS_GOODS_DAILY_CHAT_ID = "oc_ae9c3a305430cb196e42130f69b052bc"   # 危险品日报（数据源）
 INVENTORY_BITABLE_URL = "https://j0eukrlohu.feishu.cn/base/QoUXbLVcQaYAO7sod1CcUH3JnVd?table=tbl78IlFOo3f1fj1"  # 危化品库存总表
-SAFETY_AI_CHAT_ID = os.getenv("SAFETY_CHEMICAL_INVENTORY_DAILY_CHAT_ID", "oc_f05532603bd7682fc520929c01aca88d")  # 安全AI创新交流群
-
-# 附加投递群（2026-09-30 需求）：每日分析日报以「安全速递」单格版式同发危险品日报群；
-# env 可改目标或置 off/空停用
-CHEMICAL_DAILY_EXTRA_CHAT_ID = os.getenv(
-    "SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID", DANGEROUS_GOODS_DAILY_CHAT_ID,
-)
+# 主推送目标经调度器 DB 配置传入（send_daily_summary(chat_id=...)）；
+# env SAFETY_CHEMICAL_INVENTORY_DAILY_CHAT_ID 仅作调度器播种/展示回退
+# （service/scheduler_config.py 解析，env > DB 活行 > 代码默认）。
 
 
 def _extra_chat_enabled() -> str | None:
-    """附加投递群生效 chat_id；off/空停用返回 None。"""
-    extra = (CHEMICAL_DAILY_EXTRA_CHAT_ID or "").strip()
+    """附加投递群生效 chat_id；off/空停用返回 None。
+
+    env 可改目标或置 off/空停用（2026-09-30 需求）；
+    读取链：env > DB 活行（app_config，30s TTL）> 代码默认危险品日报群。
+    """
+    raw = _app_config_store.get_str(
+        "SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID", DANGEROUS_GOODS_DAILY_CHAT_ID,
+    )
+    extra = (raw or "").strip()
     if not extra or extra.lower() in ("off", "false", "none"):
         return None
     return extra

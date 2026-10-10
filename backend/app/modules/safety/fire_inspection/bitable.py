@@ -8,29 +8,38 @@ build_append_body 为纯函数可单测，IO 函数保持薄。
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.client import get_safety_tenant_token
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://open.feishu.cn"
 
-# 目标表：灭火器点检「数据表」，可用环境变量覆盖（本地/演练指向别表时用）
-FIRE_INSPECTION_APP_TOKEN = os.getenv(
-    "SAFETY_FIRE_INSPECTION_APP_TOKEN", "BlktbbYg1abyIesUQ17cYFqrn4e"
-)
-FIRE_INSPECTION_TABLE_ID = os.getenv(
-    "SAFETY_FIRE_INSPECTION_TABLE_ID", "tblUB2sT3b3GBerU"
-)
 
-# 「巡检记录」附件字段 ID（回填目标），随表覆盖
-FIELD_REPORT_ID = os.getenv("SAFETY_FIRE_INSPECTION_REPORT_FIELD_ID", "fldpZSHrTd")
+# 目标表：灭火器点检「数据表」；读取链 env > DB 活行（app_config）> 代码默认
+# （本地/演练指向别表时覆盖）。「巡检记录」附件字段 ID（回填目标）随表覆盖。
+def fire_inspection_app_token() -> str:
+    return _app_config_store.get_str(
+        "SAFETY_FIRE_INSPECTION_APP_TOKEN", "BlktbbYg1abyIesUQ17cYFqrn4e"
+    )
+
+
+def fire_inspection_table_id() -> str:
+    return _app_config_store.get_str(
+        "SAFETY_FIRE_INSPECTION_TABLE_ID", "tblUB2sT3b3GBerU"
+    )
+
+
+def fire_inspection_report_field_id() -> str:
+    return _app_config_store.get_str(
+        "SAFETY_FIRE_INSPECTION_REPORT_FIELD_ID", "fldpZSHrTd"
+    )
 
 _PAGE_SIZE = 500
 # base v3 新端点用字符串码，v1 用整数 0；缺 code 视为成功

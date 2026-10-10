@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from app.core.database import async_session_factory
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.chemical_inventory.daily_update import apply_daily_workbook
 from app.modules.safety.feishu.business_agent_bot_handler import _download_message_file
@@ -17,8 +18,16 @@ from app.modules.safety.service.chemical_inventory import ChemicalInventoryServi
 logger = logging.getLogger(__name__)
 
 DANGEROUS_GOODS_DAILY_CHAT_ID = "oc_ae9c3a305430cb196e42130f69b052bc"
-# 实时驱动已关闭：改为每天 19:30 定时拉取（见 scheduler 危化品库存日报）。默认关闭。
-DAILY_REALTIME_ENABLED = os.getenv("SAFETY_CHEMICAL_INVENTORY_DAILY_REALTIME_ENABLED", "") == "1"
+
+
+def _realtime_enabled() -> bool:
+    """实时驱动开关：已关闭，改为每天 19:30 定时拉取（见 scheduler 危化品库存日报）。
+
+    读取链：env > DB 活行（app_config）> 默认关闭；历史真值语义 = 字面量 1。
+    """
+    raw = (_app_config_store.get_raw("SAFETY_CHEMICAL_INVENTORY_DAILY_REALTIME_ENABLED") or "").strip()
+    return raw == "1"
+
 
 _TMP_DIR = "/tmp/chemical_inventory_daily"
 
@@ -29,7 +38,7 @@ async def handle_daily_excel_message(event_data: dict[str, Any]) -> None:
 
     自 2026-08-26 起改为每天 19:30 定时拉取（scheduler 危化品库存日报），实时驱动默认关闭。
     """
-    if not DAILY_REALTIME_ENABLED:
+    if not _realtime_enabled():
         return
     message = event_data.get("message", {})
     if message.get("chat_id", "") != DANGEROUS_GOODS_DAILY_CHAT_ID:

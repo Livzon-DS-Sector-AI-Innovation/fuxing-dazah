@@ -47,26 +47,16 @@ _DEFAULT_RERANK_TIMEOUT = 30  # seconds
 
 
 def _ensure_env_loaded() -> None:
-    """Load .env.development if not already loaded.
+    """SAFETY_EMBEDDING_API_KEY 缺失时加载 .env（统一走 env_loader，幂等）。
 
-    SAFETY_EMBEDDING_API_KEY / SAFETY_EMBEDDING_BASE_URL may not be in
-    os.environ when the knowledge module is imported before other modules
-    that call load_dotenv (e.g. business_agent, feishu client).
+    knowledge 包可能早于 feishu/business_agent 等模块导入，届时 os.environ
+    尚无 embedding 配置；本守卫在 RerankAPIClient 构造前兜底加载。
     """
     import os as _os2
     if _os2.getenv("SAFETY_EMBEDDING_API_KEY"):
         return  # already loaded
-    _env_path = _os2.path.join(
-        _os2.path.dirname(__file__), "..", "..", "..", "..", ".env.development",
-    )
-    _env_path = _os2.path.normpath(_env_path)
-    if _os2.path.exists(_env_path):
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(_env_path, override=True)
-            logger.debug("Loaded env from %s", _env_path)
-        except Exception:
-            pass  # dotenv not installed or IO error — env vars must be set by caller
+    from app.modules.safety.env_loader import load_safety_env
+    load_safety_env()
 
 
 RERANK_PROMPT = """你是一个安全生产法规检索专家。请评估以下法规条款与查询的相关性。

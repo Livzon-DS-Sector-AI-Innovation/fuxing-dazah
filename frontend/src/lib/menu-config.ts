@@ -117,6 +117,7 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "ai-config", label: "AI 配置中心", path: "/safety/system/ai-config" },
           { key: "bitable-config", label: "多维表格配置", path: "/safety/system/bitable-config" },
+          { key: "app-config", label: "应用配置", path: "/safety/system/app-config" },
           { key: "scheduled-tasks", label: "定时任务", path: "/safety/system/scheduled-tasks" },
           { key: "ai-audit", label: "AI 调用审计", path: "/safety/ai-audit" },
           { key: "agent-chat", label: "AI 助手对话", path: "/safety/agent-chat" },

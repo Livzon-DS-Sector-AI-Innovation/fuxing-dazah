@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 // 注意：以下 revalidatePath 调用指向的页面路径部分仍在开发中，待对应页面创建后将自动生效
 import { getAuthHeaders } from '@/lib/auth'
 import { fetchApi, uploadPhoto } from './_helpers'
-import { API_BASE, buildQueryString, SAFETY_BITABLE_CONFIG, SAFETY_SCHEDULER_CONFIG } from './_utils'
+import { API_BASE, buildQueryString, SAFETY_BITABLE_CONFIG, SAFETY_SCHEDULER_CONFIG, SAFETY_APP_CONFIG } from './_utils'
 import type {
   AiAuditQueryParams,
   AiAuditStats,
@@ -158,6 +158,11 @@ import type {
   BitableResubscribeResult,
   BitableTestResult,
   UpdateBitableConnectionInput,
+  // app-config（应用配置中心，env→DB 迁移）
+  AppConfigAuditItem,
+  AppConfigItem,
+  AppConfigListData,
+  UpdateAppConfigInput,
   // accident / check / daily risk report / oh hazard monitor（迁移补齐）
   Accident,
   AccidentFormData,
@@ -2597,6 +2602,31 @@ export async function resubscribeBitable(domain: string) {
   revalidatePath('/safety/system/bitable-config')
   return response
 }
+
+// ============ app-config Actions（应用配置中心，env→DB 迁移） ============
+
+/** 全部注册项生效视图（值/来源 env>db>default/冲突标记；secret 已脱敏） */
+export async function fetchAppConfig() {
+  return fetchApi<AppConfigListData>(SAFETY_APP_CONFIG)
+}
+
+/** 更新单键（写 DB + 审计 + 缓存失效；未知键 404 / 值非法 422） */
+export async function updateAppConfig(key: string, input: UpdateAppConfigInput) {
+  const response = await fetchApi<AppConfigItem>(
+    `${SAFETY_APP_CONFIG}/${encodeURIComponent(key)}`,
+    { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
+  )
+  revalidatePath('/safety/system/app-config')
+  return response
+}
+
+/** 变更审计列表（key 可选过滤） */
+export async function fetchAppConfigAudits(key?: string, limit = 50) {
+  return fetchApi<AppConfigAuditItem[]>(
+    `${SAFETY_APP_CONFIG}/audits${buildQueryString({ key, limit })}`,
+  )
+}
+
 
 // ============ Info Query (RAG Chat) Actions ============
 // 后端 POST /safety/knowledge/chat 存在，但安全侧 actions 里缺失此函数（合并时丢失），此处恢复。

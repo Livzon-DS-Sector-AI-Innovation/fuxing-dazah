@@ -56,6 +56,17 @@ app/modules/{module}/
 
 当 `service.py`、`models.py`、`schemas.py` 单文件超过约 300 行时，拆成同名目录，并在目录级 `__init__.py` re-export 公开对象，保持外部 import 路径稳定。`api.py` 和 `repository.py` 只有确实过大时再按同样规则拆分。
 
+## 安全模块配置中心（app_config，2026-10-10 env→DB 迁移）
+
+安全模块除飞书应用凭证（`SAFETY_FEISHU_APP_ID/SECRET`）与 AI API Key 外，全部配置走 DB 应用配置中心：
+
+- **唯一事实源**：`app/modules/safety/app_config/registry.py`（key=原 env 变量名，含类型/默认/描述/restart_required/secret 标记）。新增配置先注册 registry，再经 store 读取；**禁止**在 `.env` 新增 `SAFETY_*` 键或写 `os.getenv("SAFETY_...", ...)` 直读。
+- **读取链**：`app_config.store.get_raw/get_bool/get_int/get_str` —— 进程 env（非空）> DB 活行（enabled 且 value 非空）> registry 默认。env 优先是刻意的：测试 `monkeypatch.setenv` 隔离语义零回归（误发事故教训），且 env 保留为运维应急通道。`gates.flag/int_env` 已内接此链。
+- **生效时效**：DB 改动经 store TTL 30s 生效；标 `restart_required` 的键（隐患轮询旗标/interval、PHOENIX 等）只在启动读取，改后需重启。
+- **写路径**：PUT `/safety/app-config/{key}`（前端 安全→系统→应用配置）或 store.set_value：未知键 404、值非法 422，secret 键审计脱敏 `****后4位`，写后 invalidate。
+- **播种**：启动 `seed_from_env()`（lifespan，only-missing 幂等）把 .env 现值固化进 DB；切换动作 = 清空 .env 中迁移键。
+- **测试**：`tests/conftest.py` 与 `app/modules/safety/conftest.py` 均有 autouse fixture 把 store DB 层 stub 为空——未显式 setenv 的键恒走 env/代码默认，不被本地库行污染；需要 DB 层行为的测试自行覆写 `_fetch_rows`。
+
 ## API 规范
 
 路由统一挂在 `/api/v1` 下，常用形式：

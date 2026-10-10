@@ -6,6 +6,10 @@ from app.modules.safety.models.ai_config import (  # noqa: F401
     AiScenarioConfig,
     AiScenarioConfigAudit,
 )
+from app.modules.safety.models.app_config import (  # noqa: F401
+    AppConfigAudit,
+    AppConfigEntry,
+)
 from app.modules.safety.models.bitable_config import (  # noqa: F401
     BitableConfigAudit,
     BitableConnection,
@@ -143,6 +147,8 @@ __all__ = [
     'AiModelProfile',
     'AiScenarioConfig',
     'AiScenarioConfigAudit',
+    'AppConfigAudit',
+    'AppConfigEntry',
     'ApprovalDecision',
     'BitableConfigAudit',
     'BitableConnection',

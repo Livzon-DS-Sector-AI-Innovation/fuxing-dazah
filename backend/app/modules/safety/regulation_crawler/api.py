@@ -6,14 +6,13 @@
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.regulation_crawler.schemas import (
     ChangeDetectionWebhookRequest,
     ManualCrawlRequest,
@@ -22,12 +21,11 @@ from app.modules.safety.regulation_crawler.service import RegulationCrawlerServi
 
 regulation_crawler_router = APIRouter()
 
-_WEBHOOK_SECRET = os.getenv("SAFETY_REGULATION_CRAWLER_WEBHOOK_SECRET", "")
-
 
 def _verify_webhook_secret(x_webhook_secret: str | None = Header(None)) -> None:
-    """校验 Webhook shared secret（仅当环境变量已配置时生效）。"""
-    if _WEBHOOK_SECRET and x_webhook_secret != _WEBHOOK_SECRET:
+    """校验 Webhook shared secret（仅当已配置时生效；env > DB 活行，app_config）。"""
+    secret = _app_config_store.get_str("SAFETY_REGULATION_CRAWLER_WEBHOOK_SECRET", "")
+    if secret and x_webhook_secret != secret:
         raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
 

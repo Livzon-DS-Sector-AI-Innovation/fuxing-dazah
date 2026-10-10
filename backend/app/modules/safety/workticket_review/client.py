@@ -14,71 +14,88 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import os
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
-from dotenv import load_dotenv
+
+from app.modules.safety.app_config.store import store as _app_config_store
+from app.modules.safety.env_loader import load_safety_env
 
 logger = logging.getLogger(__name__)
 
-# ── 环境变量加载（与 app/modules/safety/feishu/client.py 完全一致） ──
-_env_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-_app_env = os.getenv("APP_ENV", "development")
-_env_path = _env_dir / f".env.{_app_env}"
-if _env_path.exists():
-    load_dotenv(_env_path, override=True)
+# 加载 .env.{APP_ENV}（全模块统一入口，幂等；详见 env_loader.py）
+load_safety_env()
 
-# ── 平台配置：全部从环境变量读取，禁止在代码中硬编码真实凭据 ──
-# 敏感项（USERNAME / PASSWORD_MD5 / AUTH_BASIC）缺失时启动即失败（fail-fast），
-# 避免把真实账号/密码/认证头当作默认值写死。
-# 非敏感项：BASE_URL 可回退到本机开发地址（不含任何 secret）；TENANT_ID / ORG_CODE 不设回退。
-BASE_URL = os.getenv("SAFETY_PLATFORM_BASE_URL", "").rstrip("/")
-if not BASE_URL:
-    BASE_URL = "http://192.168.5.7:9550"
-    logger.warning(
-        "SAFETY_PLATFORM_BASE_URL 未设置，使用本机开发地址 %s（仅地址，不含凭据）",
-        BASE_URL,
-    )
+# ── 平台配置：经应用配置中心读取（env > DB 活行 > 代码默认；app_config）──
+# 敏感项（USERNAME / PASSWORD_MD5 / AUTH_BASIC）缺失时客户端构造即失败
+# （fail-fast，_require_platform_credentials），避免把真实账号/密码/认证头
+# 当作默认值写死。非敏感项：BASE_URL 可回退到本机开发地址（不含任何
+# secret）；TENANT_ID / ORG_CODE 不设回退。改值后新请求即生效（无需重启）。
+_warned_default_base = False
 
-USERNAME = os.getenv("SAFETY_PLATFORM_USERNAME", "")
-PASSWORD_MD5 = os.getenv("SAFETY_PLATFORM_PASSWORD_MD5", "")
-AUTH_BASIC = os.getenv("SAFETY_PLATFORM_AUTH_BASIC", "")
 
-TENANT_ID = os.getenv("SAFETY_PLATFORM_TENANT_ID", "")
-ORG_CODE = os.getenv("SAFETY_PLATFORM_ORG_CODE", "")
+def platform_base_url() -> str:
+    global _warned_default_base
+    url = _app_config_store.get_str(
+        "SAFETY_PLATFORM_BASE_URL", "http://192.168.5.7:9550",
+    ).rstrip("/")
+    if not url:
+        url = "http://192.168.5.7:9550"
+        if not _warned_default_base:
+            _warned_default_base = True
+            logger.warning(
+                "SAFETY_PLATFORM_BASE_URL 未设置，使用本机开发地址 %s（仅地址，不含凭据）",
+                url,
+            )
+    return url
+
+
+def platform_username() -> str:
+    return _app_config_store.get_str("SAFETY_PLATFORM_USERNAME", "")
+
+
+def platform_password_md5() -> str:
+    return _app_config_store.get_str("SAFETY_PLATFORM_PASSWORD_MD5", "")
+
+
+def platform_auth_basic() -> str:
+    """Basic 认证头；若配置为原始 username:secret（而非 base64）自动编码。"""
+    raw = _app_config_store.get_str("SAFETY_PLATFORM_AUTH_BASIC", "")
+    if raw and ":" in raw:
+        return base64.b64encode(raw.encode("utf-8")).decode("ascii")
+    return raw
+
+
+def platform_tenant_id() -> str:
+    return _app_config_store.get_str("SAFETY_PLATFORM_TENANT_ID", "")
+
+
+def platform_org_code() -> str:
+    return _app_config_store.get_str("SAFETY_PLATFORM_ORG_CODE", "")
+
 
 def _require_platform_credentials() -> None:
     """敏感凭据缺失时 fail-fast，并给出清晰配置提示。"""
     missing = [
         name
         for name, val in (
-            ("SAFETY_PLATFORM_USERNAME", USERNAME),
-            ("SAFETY_PLATFORM_PASSWORD_MD5", PASSWORD_MD5),
-            ("SAFETY_PLATFORM_AUTH_BASIC", AUTH_BASIC),
+            ("SAFETY_PLATFORM_USERNAME", platform_username()),
+            ("SAFETY_PLATFORM_PASSWORD_MD5", platform_password_md5()),
+            ("SAFETY_PLATFORM_AUTH_BASIC", platform_auth_basic()),
         )
         if not val
     ]
     if missing:
         raise RuntimeError(
-            "作业票审核平台敏感凭据未配置，请在环境变量中设置以下一项或多项："
+            "作业票审核平台敏感凭据未配置，请在环境变量或应用配置中心（安全→系统→应用配置）"
+            "设置以下一项或多项："
             + "、".join(missing)
             + "。示例：SAFETY_PLATFORM_USERNAME=<用户名>、"
             "SAFETY_PLATFORM_PASSWORD_MD5=<密码MD5>、"
             "SAFETY_PLATFORM_AUTH_BASIC=<Basic认证头（Base64(用户名:密钥)）>。"
         )
-
-# 若 AUTH_BASIC 配置为原始 username:secret（而非 base64），则自动编码
-if AUTH_BASIC and ":" in AUTH_BASIC:
-    AUTH_BASIC = base64.b64encode(AUTH_BASIC.encode("utf-8")).decode("ascii")
-
-if not TENANT_ID:
-    logger.debug("SAFETY_PLATFORM_TENANT_ID 未设置（非敏感项，允许留空）")
-if not ORG_CODE:
-    logger.debug("SAFETY_PLATFORM_ORG_CODE 未设置（非敏感项，允许留空）")
 
 # ── 8 类标准作业票：ticket_type -> processDefinitionKey（来自 作业票字段映射.md） ──
 TICKET_TYPE_KEYS: dict[str, str] = {
@@ -310,22 +327,24 @@ class WorkTicketPlatformClient:
 
     async def get_platform_token(self) -> str:
         """密码登录获取平台 access_token。"""
-        url = f"{BASE_URL}/api/tiji-auth/oauth/token"
+        tenant_id = platform_tenant_id()
+        url = f"{platform_base_url()}/api/tiji-auth/oauth/token"
         headers = {
-            "Tenant-Id": TENANT_ID,
-            "Authorization": f"Basic {AUTH_BASIC}",
+            "Tenant-Id": tenant_id,
+            "Authorization": f"Basic {platform_auth_basic()}",
         }
         form = {
-            "tenantId": TENANT_ID,
-            "username": USERNAME,
-            "password": PASSWORD_MD5,
+            "tenantId": tenant_id,
+            "username": platform_username(),
+            "password": platform_password_md5(),
             "grant_type": "password",
             "scope": "all",
             "type": "account",
             "hideErrorMsg": "true",
         }
-        if ORG_CODE:
-            form["org_code"] = ORG_CODE
+        org_code = platform_org_code()
+        if org_code:
+            form["org_code"] = org_code
         body = await self._request_json("POST", url, headers=headers, data=form)
         token = _extract_access_token(body)
         logger.info("平台 access_token 获取成功（len=%d）", len(token))
@@ -333,12 +352,12 @@ class WorkTicketPlatformClient:
 
     async def get_lcp_token(self, platform_token: str) -> str:
         """用平台 access_token 换取 LCP token（工作流引擎 token）。"""
-        url = f"{BASE_URL}/api/tiji-system/wf-api/get-token"
+        url = f"{platform_base_url()}/api/tiji-system/wf-api/get-token"
         headers = {
             "Authorization": f"bearer {platform_token}",
             "Blade-Auth": f"bearer {platform_token}",
             "X-Token": f"bearer {platform_token}",
-            "Tenant-Id": TENANT_ID,
+            "Tenant-Id": platform_tenant_id(),
         }
         body = await self._request_json("GET", url, headers=headers)
         data = body.get("data") if isinstance(body, dict) else None
@@ -367,13 +386,13 @@ class WorkTicketPlatformClient:
             "Blade-Auth": f"bearer {lcp_token}",
             "Authorization": f"X-Token {platform_token}",
             "X-Token": platform_token,
-            "Tenant-Id": TENANT_ID,
+            "Tenant-Id": platform_tenant_id(),
         }
 
     async def detail(self, process_instance_id: str) -> Any:
         """拉取单个流程实例详情（containForm=true）。返回平台 data 字段。"""
         pt, lcp = await self._ensure_tokens()
-        url = f"{BASE_URL}/api/tiji-workflow/process-inst-ext/detail"
+        url = f"{platform_base_url()}/api/tiji-workflow/process-inst-ext/detail"
         headers = self._workflow_headers(pt, lcp)
         params = {"processInstanceId": process_instance_id, "containForm": "true"}
         body = await self._request_json("GET", url, headers=headers, params=params)
@@ -471,7 +490,7 @@ class WorkTicketPlatformClient:
 
         results: list[dict[str, Any]] = []
         for ticket_type, process_key in STANDARD_TICKET_TYPES:
-            url = f"{BASE_URL}/api/tiji-workflow/process-inst-ext/all-list"
+            url = f"{platform_base_url()}/api/tiji-workflow/process-inst-ext/all-list"
             params = {
                 "processDefinitionKey": process_key,
                 "current": 1,
@@ -563,7 +582,7 @@ class WorkTicketPlatformClient:
         results: list[dict[str, Any]] = []
         seen_pids: set[str] = set()
         for ticket_type, process_key in STANDARD_TICKET_TYPES:
-            url = f"{BASE_URL}/api/tiji-workflow/process-inst-ext/all-list"
+            url = f"{platform_base_url()}/api/tiji-workflow/process-inst-ext/all-list"
             params = {
                 "processDefinitionKey": process_key,
                 "current": 1,
@@ -646,7 +665,7 @@ class WorkTicketPlatformClient:
         pt, _ = await self._ensure_tokens()
         headers = {
             "Blade-Auth": f"bearer {pt}",
-            "Tenant-Id": TENANT_ID,
+            "Tenant-Id": platform_tenant_id(),
         }
 
         records: list[dict[str, Any]] = []
@@ -655,7 +674,7 @@ class WorkTicketPlatformClient:
             body: dict[str, Any] = {"current": current, "size": page_size}
             if name:
                 body["name"] = name
-            url = f"{BASE_URL}{self.CONTRACTOR_USER_ALL_PAGE_URL}"
+            url = f"{platform_base_url()}{self.CONTRACTOR_USER_ALL_PAGE_URL}"
             resp = await self._request_json("POST", url, headers=headers, json_body=body)
             if resp.get("code") not in (0, 200):
                 raise RuntimeError(
@@ -695,13 +714,13 @@ class WorkTicketPlatformClient:
 
 
 __all__ = [
-    "BASE_URL",
-    "USERNAME",
-    "PASSWORD_MD5",
-    "TENANT_ID",
-    "ORG_CODE",
-    "AUTH_BASIC",
     "TICKET_TYPE_KEYS",
     "STANDARD_TICKET_TYPES",
     "WorkTicketPlatformClient",
+    "platform_auth_basic",
+    "platform_base_url",
+    "platform_org_code",
+    "platform_password_md5",
+    "platform_tenant_id",
+    "platform_username",
 ]

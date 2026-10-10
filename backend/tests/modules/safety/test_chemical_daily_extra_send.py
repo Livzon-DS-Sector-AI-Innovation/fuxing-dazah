@@ -3,11 +3,13 @@
 覆盖（2026-09-30 需求）：
 - 总卡开启：投「安全速递」格子后，同款单格速递版式追加投递危险品日报群
 - 无 Excel（缺席格）同样追加投递
-- env SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID=off 停用追加
+- SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID=off 停用追加
 - 总卡关闭（旧独立群卡分支）：主群照发 + 追加投递仍执行
 - 主 chat_id 未配置：整体跳过（既有契约不变）
 
-全部发送/存储桩注入，不打真实飞书接口。
+全部发送/存储桩注入，不打真实飞书接口。2026-10-10 env→DB 迁移：附加群
+读取链 env > DB 活行（app_config store）> 代码默认，monkeypatch.setenv
+置 env 层即最高优先级；DB 层统一 stub 为空防本地库行渗入。
 """
 
 from __future__ import annotations
@@ -19,10 +21,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.chemical_inventory import daily_job
 
 D = date(2026, 9, 30)
 EXTRA_CHAT = "oc_ae9c3a305430cb196e42130f69b052bc"  # 危险品日报群（默认加投目标）
+
+
+def _stub_extra(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setattr(_app_config_store, "_fetch_rows", lambda: {})
+    _app_config_store.invalidate()
+    monkeypatch.setenv("SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID", value)
 
 
 def _analysis(**kw: Any) -> SimpleNamespace:
@@ -66,7 +75,7 @@ def _stubs(monkeypatch: pytest.MonkeyPatch, *, digest_on: bool = True) -> tuple[
 async def test_digest_mode_sends_extra_group_after_cell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(daily_job, "CHEMICAL_DAILY_EXTRA_CHAT_ID", EXTRA_CHAT)
+    _stub_extra(monkeypatch, EXTRA_CHAT)
     upsert, extra_send, group_send = _stubs(monkeypatch, digest_on=True)
 
     result = {"analysis": _analysis(over_limit_count=1)}
@@ -87,7 +96,7 @@ async def test_absence_cell_also_sent_to_extra_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """今日无 Excel：缺席格投总卡后同样追加投递危险品日报群。"""
-    monkeypatch.setattr(daily_job, "CHEMICAL_DAILY_EXTRA_CHAT_ID", EXTRA_CHAT)
+    _stub_extra(monkeypatch, EXTRA_CHAT)
     upsert, extra_send, _ = _stubs(monkeypatch, digest_on=True)
 
     result = {"skipped": True, "reason": "no_files_today", "analysis": None}
@@ -100,7 +109,7 @@ async def test_absence_cell_also_sent_to_extra_group(
 
 
 async def test_extra_disabled_by_env_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(daily_job, "CHEMICAL_DAILY_EXTRA_CHAT_ID", "off")
+    _stub_extra(monkeypatch, "off")
     upsert, extra_send, _ = _stubs(monkeypatch, digest_on=True)
 
     ret = await daily_job.send_daily_summary(
@@ -115,7 +124,7 @@ async def test_non_digest_mode_still_sends_extra_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """总卡关闭：主群发独立群卡（旧行为不变），追加投递照常执行。"""
-    monkeypatch.setattr(daily_job, "CHEMICAL_DAILY_EXTRA_CHAT_ID", EXTRA_CHAT)
+    _stub_extra(monkeypatch, EXTRA_CHAT)
     _, extra_send, group_send = _stubs(monkeypatch, digest_on=False)
 
     ret = await daily_job.send_daily_summary(
@@ -132,7 +141,7 @@ async def test_unconfigured_chat_skips_everything(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """主 chat_id 未配置：主推送与追加投递整体跳过（既有契约）。"""
-    monkeypatch.setattr(daily_job, "CHEMICAL_DAILY_EXTRA_CHAT_ID", EXTRA_CHAT)
+    _stub_extra(monkeypatch, EXTRA_CHAT)
     upsert, extra_send, group_send = _stubs(monkeypatch, digest_on=True)
 
     ret = await daily_job.send_daily_summary({"analysis": _analysis()}, chat_id=None)
@@ -146,7 +155,7 @@ async def test_extra_failure_does_not_break_digest_return(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """追加投递失败（返回 None）只告警，不影响返回值 digest=True。"""
-    monkeypatch.setattr(daily_job, "CHEMICAL_DAILY_EXTRA_CHAT_ID", EXTRA_CHAT)
+    _stub_extra(monkeypatch, EXTRA_CHAT)
     upsert, extra_send, _ = _stubs(monkeypatch, digest_on=True)
     extra_send.return_value = None
 

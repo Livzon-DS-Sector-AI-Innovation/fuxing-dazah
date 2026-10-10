@@ -5,6 +5,12 @@
 special_op_direct 同样如此），不由底座引入、也不在本次收敛范围内。
 本测试保证的是**底座自身源码**的 import 图是干净的：
 只允许标准库、自身、以及显式列出的少数基础设施模块。
+
+2026-10-10 env→DB 迁移：gates 的 flag/int_env 经 app_config.store 读取
+（进程 env > DB 活行 > 默认）。store 读路径是同步内存缓存（TTL 30s 惰性
+重建，DB 会话在 store 内部自建），底座调用方仍零 IO、不 import ORM；
+故将 app_config 列入白名单，且 test_gates_module_only_uses_stdlib
+相应放宽为「stdlib + app_config.store」。
 """
 
 from __future__ import annotations
@@ -22,7 +28,11 @@ ALLOWED_PREFIXES = (
     "app.modules.safety.service.bitable_direct",  # 自身
     "app.modules.safety.bitable_config",          # 连接配置中心（reader 使用）
     "app.modules.safety.feishu.bitable_client",   # Bitable 客户端（reader / writer 使用）
+    "app.modules.safety.app_config",              # 应用配置中心（gates 读取链，见模块 docstring）
 )
+
+# gates.py 允许的非标准库依赖（精确到模块；理由见文件头）
+GATES_NONSTDL_ALLOWED = ("app.modules.safety.app_config.store",)
 
 # 明令禁止（出现即失败）
 BANNED_PREFIXES = (
@@ -93,6 +103,8 @@ def test_module_imports_are_allowed(path: Path) -> None:
 def test_gates_module_only_uses_stdlib() -> None:
     gates = next(p for p in _base_modules() if p.name == "gates.py")
     for module in _absolute_imports(gates):
+        if module.startswith(GATES_NONSTDL_ALLOWED):
+            continue
         assert _is_stdlib(module), f"gates.py 不应引入非标准库依赖: {module}"
 
 

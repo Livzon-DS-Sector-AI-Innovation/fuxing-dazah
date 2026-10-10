@@ -7,19 +7,15 @@
 import json as _json
 import logging
 import os
-from pathlib import Path
 
 import lark_oapi as lark
-from dotenv import load_dotenv
+
+from app.modules.safety.env_loader import load_safety_env
 
 logger = logging.getLogger(__name__)
 
-# 加载对应的 .env 文件（安全模块独立读取，不依赖全局 Settings）
-_env_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
-_app_env = os.getenv("APP_ENV", "development")
-_env_path = _env_dir / f".env.{_app_env}"
-if _env_path.exists():
-    load_dotenv(_env_path, override=True)
+# 加载 .env.{APP_ENV}（全模块统一入口，幂等；详见 env_loader.py）
+load_safety_env()
 
 # 安全模块独立的应用凭证（从环境变量读取，不经过全局 config）
 SAFETY_FEISHU_APP_ID = os.getenv("SAFETY_FEISHU_APP_ID", "")

@@ -15,6 +15,9 @@ export const SAFETY_SCHEDULER_CONFIG = '/safety/scheduler-config'
 /** bitable-config（多维表格配置中心）API 路径前缀 */
 export const SAFETY_BITABLE_CONFIG = '/safety/bitable-config'
 
+/** app-config（应用配置中心，env→DB 迁移）API 路径前缀 */
+export const SAFETY_APP_CONFIG = '/safety/app-config'
+
 /**
  * Build a URL query string from a plain params object.
  * Filters out undefined, null, and empty string values.

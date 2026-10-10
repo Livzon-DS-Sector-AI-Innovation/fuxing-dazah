@@ -12,8 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.models import (
     Accident,
-    DailyRiskReport,
-    OhHazardMonitor,
     SafetyCheck,
 )
 from app.modules.safety.repository import SafetyRepository

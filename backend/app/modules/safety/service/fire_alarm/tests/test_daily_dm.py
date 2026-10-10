@@ -193,21 +193,21 @@ class TestSendDailyAlarmDms:
     def test_disabled_by_switch(self, monkeypatch):
         import app.modules.safety.service.fire_alarm.daily_dm as daily_dm
 
-        monkeypatch.setattr(daily_dm, "DM_ENABLED", False)
+        monkeypatch.setattr(daily_dm, "dm_enabled", lambda: False)
         stats = _run([make_record()], {}, {})
         assert stats == {"disabled": 1, "sent": 0, "skipped": 0, "errors": 0, "unresolved": 0}
 
     def test_empty_records(self, monkeypatch):
         import app.modules.safety.service.fire_alarm.daily_dm as daily_dm
 
-        monkeypatch.setattr(daily_dm, "DM_ENABLED", True)
+        monkeypatch.setattr(daily_dm, "dm_enabled", lambda: True)
         stats = _run([], {}, {})
         assert stats == {"sent": 0, "skipped": 0, "errors": 0, "unresolved": 0}
 
     def test_send_to_leader_and_officer(self, monkeypatch):
         import app.modules.safety.service.fire_alarm.daily_dm as daily_dm
 
-        monkeypatch.setattr(daily_dm, "DM_ENABLED", True)
+        monkeypatch.setattr(daily_dm, "dm_enabled", lambda: True)
         stats = _run(
             [make_record(department="提炼工程二部")],
             {"蔡万进": "caiwanjin@livzon.cn", "李伟豪": "liweihao@livzon.cn"},
@@ -219,7 +219,7 @@ class TestSendDailyAlarmDms:
         # 提炼工程一部：3 人 3 卡（林礼枫/郑雅杰/吴志华），卡片内容完全一致
         import app.modules.safety.service.fire_alarm.daily_dm as daily_dm
 
-        monkeypatch.setattr(daily_dm, "DM_ENABLED", True)
+        monkeypatch.setattr(daily_dm, "dm_enabled", lambda: True)
         emails = {
             "林礼枫": "linlifeng@livzon.cn",
             "郑雅杰": "zhengyajie01@livzon.cn",
@@ -245,7 +245,7 @@ class TestSendDailyAlarmDms:
     def test_unresolved_union_id_counts(self, monkeypatch):
         import app.modules.safety.service.fire_alarm.daily_dm as daily_dm
 
-        monkeypatch.setattr(daily_dm, "DM_ENABLED", True)
+        monkeypatch.setattr(daily_dm, "dm_enabled", lambda: True)
         stats = _run(
             [make_record(department="提炼工程二部")],
             {"蔡万进": "caiwanjin@livzon.cn", "李伟豪": "liweihao@livzon.cn"},
@@ -256,7 +256,7 @@ class TestSendDailyAlarmDms:
     def test_send_failure_counts_skipped(self, monkeypatch):
         import app.modules.safety.service.fire_alarm.daily_dm as daily_dm
 
-        monkeypatch.setattr(daily_dm, "DM_ENABLED", True)
+        monkeypatch.setattr(daily_dm, "dm_enabled", lambda: True)
         stats = _run(
             [make_record(department="提炼工程二部")],
             {"蔡万进": "caiwanjin@livzon.cn", "李伟豪": "liweihao@livzon.cn"},
@@ -287,13 +287,13 @@ class _AsyncSessionCtx:
 class TestRunDailyFireAlarmDm:
     def test_disabled_returns_none(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.fire_alarm.daily_dm.DM_ENABLED", False,
+            "app.modules.safety.service.fire_alarm.daily_dm.dm_enabled", lambda: False,
         )
         assert asyncio_run(run_daily_fire_alarm_dm()) is None
 
     def test_enabled_full_flow(self, monkeypatch):
         monkeypatch.setattr(
-            "app.modules.safety.service.fire_alarm.daily_dm.DM_ENABLED", True,
+            "app.modules.safety.service.fire_alarm.daily_dm.dm_enabled", lambda: True,
         )
         stats = {"sent": 2, "skipped": 0, "errors": 0, "unresolved": 0}
         session = AsyncMock()

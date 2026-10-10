@@ -19,12 +19,16 @@
    单项开关独立读取，不受任何总开关影响。直接用 ``event_sync_enabled``
    或 ``flag(domain_env(...))``。
 
-本模块只读环境变量，不做任何 IO，不 import 任何业务域。
+读取链（2026-10-10 env→DB 迁移）：``flag`` / ``int_env`` 经
+``app_config.store.get_raw``（进程 env 非空 > DB 活行 > None）取原始值，
+再按本模块真值集解析——env 优先保证测试 monkeypatch.setenv 隔离语义
+零回归；DB 改动经 store TTL（30s）生效。本模块仍不做任何 IO
+（store 读路径为同步内存缓存，DB miss 惰性重建），不 import 任何业务域。
 """
 
 from __future__ import annotations
 
-import os
+from app.modules.safety.app_config.store import store as _app_config_store
 
 # 既有实现（hazard_direct / special_op_direct）使用的真值集合，保持一致
 _TRUE = {"1", "true", "yes", "on"}
@@ -48,22 +52,23 @@ DOMAIN_EHS_CHANGE = "EHS_CHANGE"
 
 
 def flag(name: str, default: bool = False) -> bool:
-    """读取布尔环境开关。
+    """读取布尔环境开关（env > DB 活行 > None，经 app_config store）。
 
     空值或未设置返回 ``default``；无法识别的值也返回 ``default``
     （宁可回退到安全默认值，也不把拼错的值当成 true）。
     """
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
+    raw = _app_config_store.get_raw(name)
+    if raw is None:
         return default
-    return raw in _TRUE
+    return raw.strip().lower() in _TRUE
 
 
 def int_env(name: str, default: int, *, minimum: int = 1) -> int:
-    """读取整数环境参数；未设置或无法解析时回退 ``default``，并按 ``minimum`` 兜底。"""
-    raw = (os.getenv(name) or "").strip()
+    """读取整数环境参数（env > DB 活行 > None）；未设置或无法解析时回退
+    ``default``，并按 ``minimum`` 兜底。"""
+    raw = _app_config_store.get_raw(name)
     try:
-        value = int(raw) if raw else default
+        value = int(raw.strip()) if raw else default
     except ValueError:
         value = default
     return max(minimum, value)
