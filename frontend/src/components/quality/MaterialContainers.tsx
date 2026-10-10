@@ -66,8 +66,15 @@ export default function MaterialContainers() {
   const scanInputRef = useRef<InputRef>(null)
 
   const handleScan = async (raw: string) => {
-    const no = raw.trim()
+    // 兼容富文本二维码：从扫描内容中提取容器号（首行 MC-xxx）
+    const matched = raw.match(/MC-[A-Za-z0-9-]+/)
+    const no = matched ? matched[0] : raw.trim()
     if (!no) return
+    if (no !== raw.trim() && !matched) {
+      message.warning('未识别到容器号（MC-物料代码-日期-流水）')
+      setScanValue('')
+      return
+    }
     setScanBusy(true)
     try {
       const res = await moveMaterialContainer(no, scanMode)

@@ -47,6 +47,16 @@ _STATUS_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def _qr_content(container: QualityMaterialContainer) -> str:
+    """二维码富文本内容：容器号首行（机器可解析），后续行供手机扫码直接阅读。"""
+    lines = [container.container_no, container.material_name]
+    if container.inbound_batch_no:
+        lines.append(f"批号:{container.inbound_batch_no}")
+    if container.expiry_date:
+        lines.append(f"复验期:{container.expiry_date}")
+    return "\n".join(lines)
+
+
 class MaterialContainerService:
     """物料容器：赋码/进出库/标签。"""
 
@@ -239,7 +249,7 @@ class MaterialContainerService:
 
         def draw_label(pdf_cv: canvas.Canvas, c: QualityMaterialContainer, x: float, y: float) -> None:
             qr_img = io.BytesIO()
-            segno.make(c.container_no, error="m").save(qr_img, kind="png", scale=6, border=1)
+            segno.make(_qr_content(c), error="m").save(qr_img, kind="png", scale=6, border=1)
             qr_img.seek(0)
             qr_size = min(cell_h * 0.52, cell_w * 0.4)
             pdf_cv.drawImage(

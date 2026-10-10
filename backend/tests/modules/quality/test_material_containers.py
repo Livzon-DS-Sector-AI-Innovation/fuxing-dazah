@@ -363,3 +363,24 @@ async def test_purchase_suggestions(db_session):
     assert item["gap"] == 3
     # 未设阈值的物料不进建议
     assert all(s["material_code"] != "VAN" for s in suggestions if False) or True
+
+
+async def test_qr_content_rich_text(db_session):
+    from app.modules.quality.service.material_containers import _qr_content
+
+    req = _gen_req(1)
+    containers = await material_container_service.generate_containers(db_session, req)
+    content = _qr_content(containers[0])
+    lines = content.split("\n")
+    assert lines[0] == containers[0].container_no  # 首行机器可解析
+    assert "盐酸万古霉素原料" in content
+    assert f"批号:{req.inbound_batch_no}" in content
+    assert f"复验期:{req.expiry_date}" in content
+    # 富文本可被 segno 编码（不抛异常即通过）
+    import io as _io
+
+    import segno
+
+    buf = _io.BytesIO()
+    segno.make(content, error="m").save(buf, kind="png", scale=4, border=1)
+    assert buf.getvalue()[:8] == b"\x89PNG\r\n\x1a\n"
