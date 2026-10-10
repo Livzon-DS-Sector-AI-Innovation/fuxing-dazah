@@ -87,7 +87,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "special_op": ["query_special_op_records"],
     "key_risk_op": ["query_key_risk_ops"],
     "ehs_change": ["query_ehs_changes"],
-    "work_ticket": ["query_work_ticket_reviews"],
+    "work_ticket": ["query_work_ticket_reviews", "screen_work_ticket_personnel"],
     "hazard_id": ["query_hazard_identifications"],
 }
 
@@ -134,7 +134,10 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     ],
     "key_risk_op": ["关键风险作业", "关键作业"],
     "ehs_change": ["EHS变更", "EHS 变更", "变更管理", "变更台账"],
-    "work_ticket": ["作业票审核", "作业票违规", "作业票", "票审核", "违规"],
+    "work_ticket": [
+        "作业票审核", "作业票违规", "作业票", "票审核", "违规",
+        "外包人员", "承包商人员", "人员筛查", "实名",
+    ],
     "hazard_id": ["危险源辨识", "辨识记录", "LEC", "JHA"],
 }
 

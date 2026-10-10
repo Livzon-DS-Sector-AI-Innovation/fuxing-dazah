@@ -2221,3 +2221,47 @@ async def query_hazard_identifications(
     except Exception as e:
         logger.exception("query_hazard_identifications failed")
         return {"success": False, "error": f"查询失败: {e}"}
+
+
+async def screen_work_ticket_personnel(
+    ctx: RunContext[SafetyDeps],
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    """作业票外包人员直读筛查（票面人员 x 平台承包商台账，只读、不落库）。
+
+    实时从作业票平台拉取窗口内作业票的票面人员（动火/高处/吊装有人员
+    子表），与平台承包商人员台账（约 350 人）比对：选择器人员按 ID 精确
+    匹配（并区分内部员工），动火票文本行按姓名匹配。身份证号/手机号
+    输出前打码。
+
+    Args:
+        date_from: 起始日期（ISO，如 "2026-09-28"，默认今天）
+        date_to: 结束日期（ISO，可选，默认同 date_from；窗口最长 31 天）
+
+    Returns:
+        {success, date_from, date_to, registry_total, tickets_scanned,
+         tickets_with_personnel, person_rows, stats, abnormal, per_ticket}
+        - stats: id_matched / name_matched / not_registered（未命中台账，
+          可能为内部人员或未录入实名台账）/ ambiguous（同名多条）/
+          internal_user（内部员工，不比对）各计数
+        - abnormal: 需人工跟进条目（票号/票种/人员/状态/同名候选）
+
+    示例：今天作业票上的外包人员核查；9月有哪些票面人员不在承包商台账里。
+    """
+    from datetime import date as _date
+
+    from app.modules.safety.workticket_review.personnel_screening import (
+        ContractorPersonnelScreeningService,
+    )
+
+    try:
+        base = _date.fromisoformat(date_from) if date_from else _date.today()
+        end = _date.fromisoformat(date_to) if date_to else base
+        service = ContractorPersonnelScreeningService()
+        return await service.screen(base, end)
+    except ValueError as e:
+        return {"success": False, "error": f"参数无效: {e}"}
+    except RuntimeError as e:
+        logger.exception("screen_work_ticket_personnel failed")
+        return {"success": False, "error": f"平台拉取失败: {e}"}

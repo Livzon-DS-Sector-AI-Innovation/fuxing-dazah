@@ -552,8 +552,8 @@ class WorkTicketPlatformClient:
         if end_date < start_date:
             logger.info(
                 "日期范围无效（end < start），返回空列表：%s ~ %s",
-                start_date,
-                end_date,
+                start_date.isoformat(),
+                end_date.isoformat(),
             )
             return []
 
@@ -608,6 +608,90 @@ class WorkTicketPlatformClient:
             len(results),
         )
         return results
+
+    # ── 主数据（tiji-master-data）承包商人员台账：直读筛查专用 ──────────
+    #
+    # 2026-09-28 实测（前端 JS 挖出的路由 + 真机验证）：
+    # - POST /api/tiji-master-data/client/contractor-user/all-page，body 携带
+    #   current/size，可选 name 按姓名过滤（contractorName 过滤无效，按单位
+    #   过滤需 contractorId）；
+    # - 鉴权用**平台 token**（Blade-Auth bearer），不走 LCP；响应 data.total /
+    #   data.records，records 行含 name/contractorName/workTypeName/cardNo/
+    #   telphone 等字段（cardNo 为身份证号，属敏感信息，消费方输出前须打码）；
+    # - 台账量级 ~350 人，size=100 时数页即止；_CONTRACTOR_USER_MAX_PAGES 为
+    #   防御性上限，防 total 异常导致的分页死循环。
+    CONTRACTOR_USER_ALL_PAGE_URL = (
+        "/api/tiji-master-data/client/contractor-user/all-page"
+    )
+
+    async def list_contractor_users(
+        self,
+        *,
+        name: str | None = None,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        """分页拉取承包商人员台账（只读直读，不落库、不写任何平台数据）。
+
+        Args:
+            name: 可选，按姓名精确过滤（用于单人回查；全量筛查不传）。
+            page_size: 分页大小（默认 100，平台实测支持）。
+
+        Returns:
+            台账全量记录 list[dict]（字段同平台返回：id/name/contractorId/
+            contractorName/workTypeId/workTypeName/cardNo/telphone/…）。
+
+        Raises:
+            RuntimeError: 平台接口返回非成功 code 或分页超出防御上限。
+        """
+        pt, _ = await self._ensure_tokens()
+        headers = {
+            "Blade-Auth": f"bearer {pt}",
+            "Tenant-Id": TENANT_ID,
+        }
+
+        records: list[dict[str, Any]] = []
+        current = 1
+        while True:
+            body: dict[str, Any] = {"current": current, "size": page_size}
+            if name:
+                body["name"] = name
+            url = f"{BASE_URL}{self.CONTRACTOR_USER_ALL_PAGE_URL}"
+            resp = await self._request_json("POST", url, headers=headers, json_body=body)
+            if resp.get("code") not in (0, 200):
+                raise RuntimeError(
+                    f"承包商人员台账接口返回失败 code={resp.get('code')}: "
+                    f"{str(resp.get('msg'))[:200]}"
+                )
+            data = resp.get("data")
+            if not isinstance(data, dict):
+                raise RuntimeError(f"承包商人员台账响应缺少 data: {resp!r}")
+            page_records = data.get("records")
+            if not isinstance(page_records, list):
+                page_records = []
+            records.extend(item for item in page_records if isinstance(item, dict))
+            total = data.get("total")
+            try:
+                total_int = int(total) if total is not None else len(records)
+            except (TypeError, ValueError):
+                total_int = len(records)
+            if len(records) >= total_int or not page_records:
+                break
+            if current >= self._CONTRACTOR_USER_MAX_PAGES:
+                raise RuntimeError(
+                    f"承包商人员台账分页超出防御上限（{self._CONTRACTOR_USER_MAX_PAGES} 页，"
+                    f"已取 {len(records)}/{total_int}），疑似平台 total 异常"
+                )
+            current += 1
+
+        logger.info(
+            "承包商人员台账拉取完成：%d 人%s",
+            len(records),
+            f"（按姓名 {name!r} 过滤）" if name else "",
+        )
+        return records
+
+    # 分页防御上限（同上注释；类属性便于测试覆写）
+    _CONTRACTOR_USER_MAX_PAGES = 50
 
 
 __all__ = [

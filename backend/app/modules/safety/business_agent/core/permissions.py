@@ -34,6 +34,7 @@ TOOL_QUERY_SPECIAL_OP_RECORDS = "query_special_op_records"  # 特殊作业判定
 TOOL_QUERY_KEY_RISK_OPS = "query_key_risk_ops"  # 关键风险作业明细（本地同步库）
 TOOL_QUERY_EHS_CHANGES = "query_ehs_changes"  # EHS 变更明细（本地同步库）
 TOOL_QUERY_WORK_TICKET_REVIEWS = "query_work_ticket_reviews"  # 作业票审核记录与违规明细
+TOOL_SCREEN_WORK_TICKET_PERSONNEL = "screen_work_ticket_personnel"  # 作业票外包人员直读筛查（平台直读，敏感字段打码）
 TOOL_QUERY_HAZARD_IDENTIFICATIONS = "query_hazard_identifications"  # 危险源辨识明细
 TOOL_QUERY_DRILL_PLANS = "query_drill_plans"
 TOOL_QUERY_DRILL_RECORDS = "query_drill_records"
@@ -170,6 +171,7 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_QUERY_KEY_RISK_OPS,
         TOOL_QUERY_EHS_CHANGES,
         TOOL_QUERY_WORK_TICKET_REVIEWS,
+        TOOL_SCREEN_WORK_TICKET_PERSONNEL,
         TOOL_QUERY_HAZARD_IDENTIFICATIONS,
     }
 )

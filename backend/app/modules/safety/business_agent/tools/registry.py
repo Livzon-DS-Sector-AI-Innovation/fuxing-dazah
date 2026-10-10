@@ -65,6 +65,7 @@ from app.modules.safety.business_agent.tools.read_tools import (
     query_scheduler_tasks,
     query_special_op_records,
     query_work_ticket_reviews,
+    screen_work_ticket_personnel,
     web_search,
 )
 
@@ -168,6 +169,8 @@ TOOL_KIND: dict[str, bool] = {
     "query_ehs_changes": False,
     "query_work_ticket_reviews": False,
     "query_hazard_identifications": False,
+    # 作业票外包人员直读筛查（只读：平台直读 + 内存比对，零落库）
+    "screen_work_ticket_personnel": False,
     # 写入
     "generate_drill_plan": True,
     "sync_drill_plan_to_feishu": True,
@@ -253,12 +256,13 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
         query_cert_warnings,
         query_chemical_inventory,
         analyze_chemical_risk,
-        query_special_op_records,
-        query_key_risk_ops,
-        query_ehs_changes,
-        query_work_ticket_reviews,
-        query_hazard_identifications,
-        generate_daily_report,
+    query_special_op_records,
+    query_key_risk_ops,
+    query_ehs_changes,
+    query_work_ticket_reviews,
+    query_hazard_identifications,
+    screen_work_ticket_personnel,
+    generate_daily_report,
         generate_supervision_bulletin,
         query_urs_records,
         query_urs_review_detail,
