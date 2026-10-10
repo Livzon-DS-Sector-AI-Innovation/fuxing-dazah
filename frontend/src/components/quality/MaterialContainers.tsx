@@ -1,14 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col, Segmented,
 } from 'antd'
 import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
 import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, PurchaseSuggestion } from '@/types/quality'
+import type { InputRef } from 'antd'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
@@ -57,6 +58,39 @@ export default function MaterialContainers() {
   // 采购清单弹窗
   const [purOpen, setPurOpen] = useState(false)
   const [purData, setPurData] = useState<PurchaseSuggestion[]>([])
+  // 扫码操作台（USB 扫码枪=键盘输入+回车，也支持手工输号）
+  const [scanMode, setScanMode] = useState<'in' | 'out'>('in')
+  const [scanValue, setScanValue] = useState('')
+  const [scanBusy, setScanBusy] = useState(false)
+  const [scanResults, setScanResults] = useState<{ no: string; ok: boolean; detail: string; at: string }[]>([])
+  const scanInputRef = useRef<InputRef>(null)
+
+  const handleScan = async (raw: string) => {
+    const no = raw.trim()
+    if (!no) return
+    setScanBusy(true)
+    try {
+      const res = await moveMaterialContainer(no, scanMode)
+      setScanResults((prev) => [{
+        no,
+        ok: true,
+        detail: `已${scanMode === 'in' ? '入库登记' : '领料出库'}（${res.data.material_name}）`,
+        at: dayjs().format('HH:mm:ss'),
+      }, ...prev].slice(0, 20))
+      message.success(`✅ ${no} ${scanMode === 'in' ? '入库' : '出库'}成功`)
+      load(page, statusFilter, batchFilter, materialFilter)
+      loadSummary()
+    } catch (err: unknown) {
+      const detail = (err instanceof Error ? err.message : String(err)) || '操作失败'
+      setScanResults((prev) => [{ no, ok: false, detail, at: dayjs().format('HH:mm:ss') }, ...prev].slice(0, 20))
+      message.error(`❌ ${no}：${detail}`)
+    } finally {
+      setScanBusy(false)
+      setScanValue('')
+      // 连续扫码：保持焦点
+      scanInputRef.current?.focus()
+    }
+  }
 
   const load = useCallback(async (p: number, status?: string, batch?: string, materialCode?: string) => {
     setLoading(true)
@@ -332,6 +366,44 @@ export default function MaterialContainers() {
 
   return (
     <>
+      {/* 扫码操作台：USB 扫码枪（或手工输号）连续处理入库/出库 */}
+      {canManage && (
+        <Card size="small" title="🔫 扫码操作台" style={{ maxWidth: 720 }}>
+          <Space wrap>
+            <Segmented
+              value={scanMode}
+              onChange={(v) => { setScanMode(v as 'in' | 'out'); setScanResults([]) }}
+              options={[
+                { label: '入库登记', value: 'in' },
+                { label: '领料出库', value: 'out' },
+              ]}
+            />
+            <Input
+              ref={scanInputRef}
+              placeholder="扫码枪扫描容器二维码，或手工输入容器号回车"
+              style={{ width: 360 }}
+              value={scanValue}
+              disabled={scanBusy}
+              prefix={<ScanOutlined />}
+              onChange={(e) => setScanValue(e.target.value)}
+              onPressEnter={() => handleScan(scanValue)}
+              allowClear
+            />
+          </Space>
+          {scanResults.length > 0 && (
+            <div style={{ marginTop: 8, maxHeight: 200, overflowY: 'auto' }}>
+              {scanResults.map((r, i) => (
+                <div key={`${r.no}-${r.at}-${i}`} style={{ paddingBlock: 2 }}>
+                  <Tag color={r.ok ? 'green' : 'red'}>{r.ok ? '成功' : '失败'}</Tag>
+                  <Typography.Text code>{r.no}</Typography.Text>
+                  <Typography.Text type="secondary"> {r.detail}（{r.at}）</Typography.Text>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* 库存概览统计卡 */}
       {summary.length > 0 && (
         <Row gutter={[12, 12]}>
