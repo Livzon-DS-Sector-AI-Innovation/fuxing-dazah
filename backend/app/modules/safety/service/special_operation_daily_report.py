@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -33,6 +34,28 @@ logger = logging.getLogger(__name__)
 
 # 日报推送目标 — 特殊作业自动分配群
 DAILY_REPORT_CHAT_ID = "oc_d102e1a11eaaa9a1de3b41859de9d0c1"
+
+# 附加投递群（2026-09-30 需求）— 特殊作业报备及日报表群：晨报/晚报同款速递卡
+# 在主目标之后加投该群；env 置 off/空停用
+EXTRA_REPORT_CHAT_ID = os.getenv(
+    "SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID",
+    "oc_4ab4a89f7bbb2450f5e0e341bf0f5f10",
+)
+
+
+def compose_report_targets(chat_id: str | None) -> list[str]:
+    """调度器推送目标组装：主目标 + 附加投递群（去重保序）。
+
+    主目标未配置（None/空）时返回空列表——保持「无目标不推送」的既有契约
+    （发送目标唯一来源：调度器 DB 配置），附加群不单独触发推送。
+    """
+    if not chat_id:
+        return []
+    targets = [chat_id]
+    extra = (EXTRA_REPORT_CHAT_ID or "").strip()
+    if extra and extra.lower() not in ("off", "false", "none") and extra not in targets:
+        targets.append(extra)
+    return targets
 
 # 中文 → 英文枚举映射（Bitable「作业类型/作业分级」选项 → 模型枚举值）
 OP_TYPE_CN2EN = {

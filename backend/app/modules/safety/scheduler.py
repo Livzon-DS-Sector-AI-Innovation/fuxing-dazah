@@ -8,6 +8,7 @@
 - 督办通报 (周四 14:00, 安全速递总卡格子, 已启用)
 - 特殊作业日报 (每日 08:00, 已启用)
 - 特殊作业日报17点 (每日 17:00, 已启用)
+- 中控报警日报私发 (每日 17:00, 开关默认关): 日报按车间归属过滤后私发提炼四/五/六部指定人员
 - Agent 手动触发: generate_supervision_bulletin 工具
 
 失败重试/补发机制:
@@ -52,6 +53,9 @@ _task_locks: dict[str, asyncio.Lock] = {}
 
 # 消防报警日报「群聊→私发」串行信号：当日一把，群任务成功置位
 _fire_group_done_events: dict[date, asyncio.Event] = {}
+
+# 中控报警日报「群聊→私发」串行信号：当日一把，群任务成功置位
+_central_group_done_events: dict[date, asyncio.Event] = {}
 
 
 def _fire_group_event(today: date) -> asyncio.Event:
@@ -98,6 +102,45 @@ def _get_task_lock(job_name: str) -> asyncio.Lock:
     if job_name not in _task_locks:
         _task_locks[job_name] = asyncio.Lock()
     return _task_locks[job_name]
+
+
+def _central_group_event(today: date) -> asyncio.Event:
+    """返回当日中控报警日报群推送完成信号（无则新建）。"""
+    ev = _central_group_done_events.get(today)
+    if ev is None:
+        ev = asyncio.Event()
+        _central_group_done_events[today] = ev
+    return ev
+
+
+async def _central_group_report_done_today(today: date | None = None) -> bool:
+    """检查中控群日报任务当天是否已成功落库（重启后内存信号丢失时兜底）。
+
+    scheduler_job_runs 中「中控报警日报」status=success 且 fired_date=今天 → True。
+    DB 不可用/查不到 → False（仍走内存信号等待，行为与消防私发同）。
+    """
+    today = today or date.today()
+    try:
+        from sqlalchemy import select
+
+        from app.core.database import async_session_factory
+        from app.modules.safety.models import SchedulerJobRun
+
+        async with async_session_factory() as session:
+            row = await session.scalar(
+                select(SchedulerJobRun).where(
+                    SchedulerJobRun.job_name == "中控报警日报",
+                    SchedulerJobRun.is_deleted == False,  # noqa: E712
+                )
+            )
+            return bool(
+                row is not None
+                and row.fired_date == today
+                and row.status == "success"
+            )
+    except Exception:
+        logger.debug("检查中控群日报落库状态失败", exc_info=True)
+        return False
 
 
 async def _load_effective_jobs() -> list[dict[str, Any]]:
@@ -166,7 +209,8 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "mode": "today",
         # 补发窗口：16:30 截止（17 点日报会覆盖当天信息，避免重复轰炸群聊）
         "retry_until_hour": 16, "retry_until_minute": 30,
-        "description": "当日特殊作业分析+推送（失败自动重试，补发窗口至 16:30）",
+        "description": "当日特殊作业分析+推送（失败自动重试，补发窗口至 16:30）；"
+                       "晨报速递卡在主目标群之外加投「特殊作业报备及日报表群」",
     },
     {
         "name": "特殊作业日报17点",
@@ -174,7 +218,8 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "mode": "afternoon",
         # 补发窗口：23:30 截止
         "retry_until_hour": 23, "retry_until_minute": 30,
-        "description": "17点特殊作业日报(含新增计划外作业对比总结)+推送（失败自动重试，补发窗口至 23:30）",
+        "description": "17点特殊作业日报(含新增计划外作业对比总结)+推送（失败自动重试，补发窗口至 23:30）；"
+                       "晚报速递卡在主目标群之外加投「特殊作业报备及日报表群」",
     },
     # ── 作业票审核（每日 17:00）──
     {
@@ -216,6 +261,17 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "description": "当日中控报警分析日报（车间/岗位/报警类型/异常模式统计 + AI 汇总分析），推送安全AI创新交流群",
     },
+    # ── 中控报警日报私发（每日 17:00，开关默认关）──
+    {
+        "name": "中控报警日报私发",
+        "hour": 17, "minute": 0,
+        # 补发窗口：当日 23:30 截止（失败自动重试）
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "target_type": "person",  # 私发个人（提炼四部杨昆/林锴彬、五部蔡嘉旺、六部陈美丽）
+        "description": "当日中控报警日报按车间/产线归属映射过滤后私发：提炼四部（杨昆、林锴彬）、"
+                       "提炼五部（蔡嘉旺）、提炼六部（陈美丽），一人一卡只含本部门所属车间报警，"
+                       "当日无报警的部门不私发（开关 SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED，默认关闭）",
+    },
     # ── 点检PDF归档（每日 17:00，开关默认关）──
     {
         "name": "点检PDF归档",
@@ -249,7 +305,8 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "name": "危化品库存日报",
         "hour": 19, "minute": 30,
         "retry_until_hour": 23, "retry_until_minute": 30,
-        "description": "拉取危险品日报群当日 Excel → 更新多维表 → 重算风险 → 推送安全AI创新交流群（超量+昨日环比分析日报）",
+        "description": "拉取危险品日报群当日 Excel → 更新多维表 → 重算风险 → 推送安全AI创新交流群（超量+昨日环比分析日报）；"
+                       "同款速递版式加投「危险品日报」群（SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID=off 停用）",
     },
 ]
 
@@ -472,6 +529,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
             await _run_fire_alarm_monthly_report(chat_id=chat_id)
         elif job_name == "中控报警日报":
             await _run_central_alarm_daily_report(chat_id=chat_id)
+        elif job_name == "中控报警日报私发":
+            await _run_central_alarm_daily_dm()
         elif job_name == "点检PDF归档":
             await _run_fire_inspection_pdf_backfill()
         elif job_name == "持证到期预警":
@@ -549,10 +608,13 @@ async def _run_special_op_daily_report(
     from app.modules.safety.service.special_op_direct import config as direct_config
     from app.modules.safety.service.special_operation_daily_report import (
         SpecialOperationDailyReportService,
+        compose_report_targets,
     )
 
     mode = job["mode"]
-    target_chats = [chat_id] if chat_id else []  # 无目标  不推送（统一来源：DB 配置）
+    # 主目标（DB 配置）+ 附加投递群（特殊作业报备及日报表群，2026-09-30 需求；
+    # compose 内保持「无主目标不推送」契约），晨报/晚报共用
+    target_chats = compose_report_targets(chat_id)
 
     if direct_config.legacy_sync_job_active():
         async with async_session_factory() as session:
@@ -720,6 +782,7 @@ async def _run_central_alarm_daily_report(chat_id: str | None = None) -> None:
 
     复用 scheduler-ready 入口 run_daily_central_alarm_analysis（独立 session、
     channel=system、push=True），失败自动由调度器的补发窗口重试机制接管。
+    成功后置位当日信号，供「中控报警日报私发」等待（先群后私）。
     """
     from app.modules.safety.service.central_alarm.service import (
         run_daily_central_alarm_analysis,
@@ -732,8 +795,48 @@ async def _run_central_alarm_daily_report(chat_id: str | None = None) -> None:
             return
         pushed = sum(1 for p in result.push_results if p.get("success"))
         logger.info("  中控报警日报完成: total=%d pushed=%d", result.total, pushed)
+        _central_group_event(date.today()).set()
     except Exception:
         logger.exception("中控报警日报定时任务执行失败")
+
+
+async def _run_central_alarm_daily_dm() -> None:
+    """中控报警日报私发定时任务（每日 17:00）：部门过滤版日报 → 一人一卡 DM。
+
+    复用 scheduler-ready 入口 run_daily_central_alarm_dm（独立 session、channel=system），
+    开关 SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED 关闭时入口直接跳过；
+    按车间/产线归属映射渲染各部门过滤版日报，私发给固定名单
+    （提炼四部杨昆/林锴彬、五部蔡嘉旺、六部陈美丽），当日无报警的部门不私发。
+    失败自动由调度器的补发窗口重试机制接管。
+    """
+    from app.modules.safety.service.central_alarm.service import (
+        run_daily_central_alarm_dm,
+    )
+
+    # 先等群日报推送完成（当日一把信号，30 分钟上限，与消防私发同），
+    # 镜像模式下群任务已把逐条 AI 分析落库，私发生成直接复用、不重复调用 AI
+    group_ok = await _central_group_report_done_today()
+    if not group_ok:
+        try:
+            await asyncio.wait_for(
+                _central_group_event(date.today()).wait(), timeout=30 * 60,
+            )
+            group_ok = True
+        except TimeoutError:
+            logger.warning("中控报警日报群推送未在 30 分钟内完成，私发任务直接继续")
+
+    try:
+        stats = await run_daily_central_alarm_dm()
+        if stats is None:
+            logger.info("中控报警日报私发跳过（开关未启用或失败）")
+            return
+        logger.info(
+            "  中控报警日报私发完成: sent=%d skipped=%d errors=%d unresolved=%d",
+            stats.get("sent", 0), stats.get("skipped", 0),
+            stats.get("errors", 0), stats.get("unresolved", 0),
+        )
+    except Exception:
+        logger.exception("中控报警日报私发定时任务执行失败")
 
 
 async def _run_cert_warning_notification() -> None:

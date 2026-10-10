@@ -41,13 +41,21 @@ def _file_type_for_name(file_name: str) -> str:
     }.get(ext, "stream")
 
 
-async def send_file_to_chat(chat_id: str, file_bytes: bytes, file_name: str) -> bool:
+async def send_file_to_chat(
+    chat_id: str,
+    file_bytes: bytes,
+    file_name: str,
+    *,
+    receive_id_type: str = "chat_id",
+) -> bool:
     """上传文件到飞书并发送到会话（发送原语，供 bot handler / 工具层复用）。
 
     Args:
-        chat_id: 飞书 chat_id
+        chat_id: 接收方 ID（默认 chat_id；跨应用私发传 union_id 并置
+            receive_id_type="union_id"，见 fire_alarm/daily_dm 的身份链路）
         file_bytes: 文件二进制内容
         file_name: 文件名（含扩展名）
+        receive_id_type: receive_id 类型（chat_id/open_id/union_id/user_id/email）
 
     Returns:
         True 表示发送成功
@@ -86,7 +94,7 @@ async def send_file_to_chat(chat_id: str, file_bytes: bytes, file_name: str) -> 
 
         send_req = (
             CreateMessageRequest.builder()
-            .receive_id_type("chat_id")
+            .receive_id_type(receive_id_type)
             .request_body(
                 CreateMessageRequestBody.builder()
                 .receive_id(chat_id)
@@ -99,10 +107,16 @@ async def send_file_to_chat(chat_id: str, file_bytes: bytes, file_name: str) -> 
         send_req.headers["Authorization"] = f"Bearer {token}"
         send_resp = await client.im.v1.message.acreate(send_req)
         if not send_resp.success():
-            logger.error("发送文件消息失败: code=%s msg=%s", send_resp.code, send_resp.msg)
+            logger.error(
+                "发送文件消息失败: code=%s msg=%s receive_id_type=%s receive_id=%s",
+                send_resp.code, send_resp.msg, receive_id_type, chat_id,
+            )
             return False
 
-        logger.info("文件消息已发送: file_key=%s chat_id=%s", file_key, chat_id)
+        logger.info(
+            "文件消息已发送: file_key=%s %s=%s",
+            file_key, receive_id_type, chat_id,
+        )
         return True
 
     except Exception:

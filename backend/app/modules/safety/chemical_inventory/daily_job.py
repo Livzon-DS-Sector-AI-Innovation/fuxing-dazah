@@ -13,8 +13,8 @@ import json
 import logging
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, date, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from sqlalchemy import select
@@ -39,11 +39,28 @@ from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import ChemicalInventoryRecord
 from app.modules.safety.service.chemical_inventory import ChemicalInventoryService
 
+if TYPE_CHECKING:
+    from app.modules.safety.feishu.daily_digest import DigestCell
+
 logger = logging.getLogger(__name__)
 
 DANGEROUS_GOODS_DAILY_CHAT_ID = "oc_ae9c3a305430cb196e42130f69b052bc"   # 危险品日报（数据源）
 INVENTORY_BITABLE_URL = "https://j0eukrlohu.feishu.cn/base/QoUXbLVcQaYAO7sod1CcUH3JnVd?table=tbl78IlFOo3f1fj1"  # 危化品库存总表
 SAFETY_AI_CHAT_ID = os.getenv("SAFETY_CHEMICAL_INVENTORY_DAILY_CHAT_ID", "oc_f05532603bd7682fc520929c01aca88d")  # 安全AI创新交流群
+
+# 附加投递群（2026-09-30 需求）：每日分析日报以「安全速递」单格版式同发危险品日报群；
+# env 可改目标或置 off/空停用
+CHEMICAL_DAILY_EXTRA_CHAT_ID = os.getenv(
+    "SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID", DANGEROUS_GOODS_DAILY_CHAT_ID,
+)
+
+
+def _extra_chat_enabled() -> str | None:
+    """附加投递群生效 chat_id；off/空停用返回 None。"""
+    extra = (CHEMICAL_DAILY_EXTRA_CHAT_ID or "").strip()
+    if not extra or extra.lower() in ("off", "false", "none"):
+        return None
+    return extra
 
 _TMP_DIR = "/tmp/chemical_inventory_scheduled"
 
@@ -280,10 +297,48 @@ def build_daily_summary(result: dict[str, Any]) -> str:
     return render_daily_report(analysis)
 
 
+def _build_daily_cell(result: dict[str, Any], content: str) -> tuple[date, DigestCell]:
+    """由任务结果构建「安全速递」格子（有分析/无 Excel 两形态）。
+
+    Returns:
+        (报告日期, 格子)：有分析取 analysis.report_date；无分析用北京时间今天。
+    """
+    from app.modules.safety.feishu.daily_digest import DigestCell
+
+    analysis = result.get("analysis")
+    if analysis is not None:
+        top_over = ""
+        if analysis.over_limit_items:
+            first = analysis.over_limit_items[0]
+            material = getattr(first, "material", "")
+            top_over = f"{material} 超量" if material else ""
+        return analysis.report_date, DigestCell(
+            tag_color="orange" if analysis.over_limit_count else "green",
+            tag_text="危化品库存",
+            title="危化品库存日报",
+            stats=(
+                f"⚠️ 超量 **{analysis.over_limit_count}** · "
+                f"急升 {analysis.surge_count} · 急降 {analysis.decline_count}"
+            ),
+            zone=top_over or ("库存平稳" if not analysis.has_risk() else ""),
+            detail=content,
+        )
+    return (datetime.now(UTC) + timedelta(hours=8)).date(), DigestCell(
+        tag_color="grey",
+        tag_text="危化品库存",
+        title="危化品库存日报",
+        stats="今日未收到日报 Excel，无库存分析",
+        zone=result.get("reason") or "",
+        detail=content,
+    )
+
+
 async def send_daily_summary(result: dict[str, Any], chat_id: str | None = None) -> str | None:
     """把每日分析日报推送到配置群聊（发送目标唯一来源：调度器配置，不再回退 env）。
 
     总卡开启时只投「安全速递」格子（安全AI创新交流群不再单独发日报卡）。
+    两种模式下均以同款速递版式追加投递「危险品日报」群（2026-09-30 需求，
+    失败只告警不影响主推送；env SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID=off 停用）。
     """
     effective_chat_id = chat_id
     if not effective_chat_id or effective_chat_id.startswith("#"):
@@ -293,56 +348,38 @@ async def send_daily_summary(result: dict[str, Any], chat_id: str | None = None)
     analysis = result.get("analysis")
 
     from app.modules.safety.feishu.daily_digest import (
-        DigestCell,
         digest_enabled,
+        send_digest_cell_card,
         upsert_daily_digest,
     )
 
-    if digest_enabled():
-        if analysis is not None:
-            top_over = ""
-            if analysis.over_limit_items:
-                first = analysis.over_limit_items[0]
-                material = getattr(first, "material", "")
-                top_over = f"{material} 超量" if material else ""
-            ok = await upsert_daily_digest(
-                analysis.report_date,
-                "chemical_daily",
-                DigestCell(
-                    tag_color="orange" if analysis.over_limit_count else "green",
-                    tag_text="危化品库存",
-                    title="危化品库存日报",
-                    stats=(
-                        f"⚠️ 超量 **{analysis.over_limit_count}** · "
-                        f"急升 {analysis.surge_count} · 急降 {analysis.decline_count}"
-                    ),
-                    zone=top_over or ("库存平稳" if not analysis.has_risk() else ""),
-                    detail=content,
-                ),
-            )
-            return "digest" if ok else None
-        # 今日无分析结果（未收到 Excel 等）：投一个缺席说明格，保留当日信息
-        ok = await upsert_daily_digest(
-            (datetime.now(UTC) + timedelta(hours=8)).date(),
-            "chemical_daily",
-            DigestCell(
-                tag_color="grey",
-                tag_text="危化品库存",
-                title="危化品库存日报",
-                stats="今日未收到日报 Excel，无库存分析",
-                zone=result.get("reason") or "",
-                detail=content,
-            ),
+    async def _send_extra_group(cell_date: date, cell: Any) -> None:
+        """危险品日报群追加投递（单格速递版式，失败仅告警）。"""
+        extra = _extra_chat_enabled()
+        if not extra:
+            return
+        msg_id = await send_digest_cell_card(
+            cell, chat_id=extra, title=f"📌 危化品库存日报 | {cell_date.isoformat()}",
         )
+        if not msg_id:
+            logger.warning("危化品库存日报追加投递危险品日报群失败: chat=%s", extra)
+
+    if digest_enabled():
+        cell_date, cell = _build_daily_cell(result, content)
+        ok = await upsert_daily_digest(cell_date, "chemical_daily", cell)
+        await _send_extra_group(cell_date, cell)
         return "digest" if ok else None
 
     if analysis is not None and analysis.has_risk():
         header_template = "red" if analysis.over_limit_count else "orange"
     else:
         header_template = "green"
-    return await send_group_card(
+    msg_id = await send_group_card(
         chat_id=effective_chat_id,
         title="危化品库存每日分析日报",
         content=content,
         header_template=header_template,
     )
+    cell_date, cell = _build_daily_cell(result, content)
+    await _send_extra_group(cell_date, cell)
+    return msg_id

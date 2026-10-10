@@ -514,6 +514,91 @@ class CentralAlarmService:
             records_analyzed=[str(r.id) for r in agg.records if r.ai_analyzed_at],
         )
 
+    # ── 部门过滤版日报（私发用；群总卡仍走全量 generate_daily_report）──
+
+    async def build_dept_daily_reports(
+        self, target_date: date,
+    ) -> dict[str, str]:
+        """构建各部门的过滤版日报 markdown（2026-10-08 业务确认的表级归属映射）。
+
+        流程：滚动窗口取数（与群日报同窗口）→ 三类「高高」筛选 → 逐条 AI 分析
+        （镜像模式复用群任务已落库的分析、并回写本轮新分析；直读模式内存分析）→
+        按 (车间, 产线) → 部门映射分组 → 每部门独立聚合 + 部门级汇总 AI + 渲染。
+        聚合发生在分析之后，分布统计天然基于已分析字段，无需重算。
+
+        Returns:
+            {部门: markdown}——窗口内无报警的部门不在返回值中（调用方不私发）；
+            未命中映射的记录（历史脏行）不计入任何部门，只记 warning。
+        """
+        from app.modules.safety.service.central_alarm.daily_dm import (
+            group_records_by_dept,
+        )
+
+        from .aggregator import aggregate_daily
+
+        direct = ca_config.direct_enabled()
+        if direct:
+            reader = self._direct_reader()
+            records, window_start_utc, window_end_utc = (
+                await reader.get_records_by_rolling_window(target_date, strict=True)
+            )
+            from app.modules.safety.service.central_alarm.analyst import HistoryIndex
+
+            self.analyst.history_index = HistoryIndex(
+                await self._direct_history_records(reader, target_date),
+            )
+        else:
+            self.analyst.history_index = None
+            records, window_start_utc, window_end_utc = (
+                await self._get_records_by_rolling_window(target_date)
+            )
+        records = _filter_high_high_alarms(records)
+
+        if records:
+            try:
+                await self.analyst.analyze_per_records(records, channel="system")
+            except Exception:
+                logger.warning("逐条 AI 分析失败，跳过（部门日报按已有分析渲染）")
+            if not direct:
+                # UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
+                await self.session.flush()
+                record_ids = [r.id for r in records]
+                records = list(
+                    (
+                        await self.session.scalars(
+                            select(CentralAlarmRecord).where(
+                                CentralAlarmRecord.id.in_(record_ids)
+                            )
+                        )
+                    ).all()
+                )
+                await self.session.commit()
+
+        by_dept, unmapped = group_records_by_dept(records)
+        if unmapped:
+            logger.warning(
+                "中控日报部门过滤：%d 条记录未命中车间归属映射，未计入任何部门私发",
+                unmapped,
+            )
+
+        out: dict[str, str] = {}
+        for dept, dept_records in by_dept.items():
+            agg = aggregate_daily(dept_records, target_date)
+            per_summaries = [
+                f"报警{_bj(r.alarm_date)} {r.workshop or '?'} {r.post or '?'}"
+                f" - {r.ai_reason_analysis[:60]}"
+                for r in dept_records if r.ai_reason_analysis
+            ]
+            ai_summary = await self.analyst.analyze_daily_summary(
+                agg, per_summaries, channel="system",
+            )
+            out[dept] = render_daily_report(
+                agg, ai_summary,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+            )
+        return out
+
     # ── 推送辅助 ──
 
     async def _upsert_digest_cell(
@@ -725,3 +810,37 @@ async def run_daily_central_alarm_analysis(
         if failed_pushes:
             raise RuntimeError(f"中控报警日报推送失败: {failed_pushes}")
         return result
+
+
+async def run_daily_central_alarm_dm(
+    target_date: date | None = None,
+) -> dict[str, int] | None:
+    """定时任务入口：中控报警日报私发（按部门过滤，一人一卡 DM）。
+
+    参考消防报警日报私发（run_daily_fire_alarm_dm）的编排：
+
+    1. 开关 ``SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED`` 未启用 → 跳过（返回 None）
+    2. build_dept_daily_reports：滚动窗口取数（与群日报同窗口）→ 逐条 AI 分析
+       （镜像模式复用群任务已落库的分析；直读模式内存重跑）→ 按车间/产线
+       归属映射分组渲染各部门过滤版日报（2026-10-08 业务确认映射）
+    3. send_daily_central_alarm_dms 按名单私发
+       （提炼工程四部：杨昆、林锴彬；五部：蔡嘉旺；六部：陈美丽）；
+       当日无报警的部门不私发（与消防私发「无报警不发」同口径）
+
+    异常向上抛：调度器捕获后标 failed，补发窗口内自动重试。
+    """
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.central_alarm.daily_dm import (
+        DM_ENABLED,
+        send_daily_central_alarm_dms,
+    )
+
+    if not DM_ENABLED:
+        logger.info("中控报警日报私发已关闭 (SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED=false)")
+        return None
+
+    target_date = target_date or _bj_today()
+    async with async_session_factory() as session:
+        service = CentralAlarmService(session)
+        dept_markdowns = await service.build_dept_daily_reports(target_date)
+        return await send_daily_central_alarm_dms(target_date, dept_markdowns)

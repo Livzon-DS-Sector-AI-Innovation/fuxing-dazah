@@ -58,6 +58,8 @@ CELL_ORDER: list[str] = [
     "special_op",
     # 特殊作业新规则重算版（追加格子，不覆盖原格子；当天写入才展示）
     "special_op_v36",
+    # 特殊作业晚报（17 点追加独立格子，不覆盖晨报格子）
+    "special_op_pm",
     "workticket", "fire_alarm", "fire_alarm_monthly", "central_alarm",
     "chemical_daily", "chemical_weekly", "progress_dunning", "hazard_bulletin",
 ]
@@ -86,6 +88,46 @@ def _bj_today() -> date:
 
 def _digest_key(d: date) -> str:
     return _KEY.format(date=d.isoformat())
+
+
+async def send_digest_cell_card(
+    cell: DigestCell,
+    *,
+    chat_id: str | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+    sender: Any = None,
+) -> str | None:
+    """把单个「安全速递」格子以同款版式渲染成独立卡片发送到指定群。
+
+    需求（2026-09-30）：部分日报除总卡格子外，需把同款速递版式
+    （彩色标签 + 标题 + 概览统计 + 灰字重点 + 折叠明细）单独投递到
+    自己的业务群。与总卡格子完全同款，收件群每天收到该日报一张卡。
+
+    Returns:
+        成功返回 message_id；失败/未配置 chat_id 返回 None（只告警不抛）
+    """
+    chat = chat_id or DIGEST_CHAT_ID
+    if not chat:
+        return None
+    sender = sender if sender is not None else send_group_card
+    try:
+        card_title = title or f"📌 {cell.title} | {_bj_today().isoformat()}"
+        greeting = f"Hi，{cell.title}速递，点「查看详情」展开明细："
+        element = await _cell_element(asdict(cell), None)
+        msg_id: str | None = await sender(
+            chat_id=chat,
+            title=card_title,
+            content=greeting,
+            elements=[element],
+            header_template="blue",
+            subtitle=subtitle,
+        )
+        return msg_id
+    except Exception:
+        logger.warning("安全速递单格卡片发送失败: chat=%s cell=%s", chat, cell.title,
+                       exc_info=True)
+        return None
 
 
 async def upsert_daily_digest(

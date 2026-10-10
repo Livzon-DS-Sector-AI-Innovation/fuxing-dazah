@@ -203,17 +203,26 @@ async def test_scheduler_switches_between_direct_and_legacy(
         "service_init", "inc", "service_init", ("legacy_push", "afternoon"),
     ]
 
-    # 打开直读总开关：直读日报，旧镜像与两个同步任务都停
+    # 打开直读总开关：直读日报，旧镜像与两个同步任务都停。
+    # 目标群 = 主目标 + 附加投递群（特殊作业报备及日报表群，2026-09-30 需求；
+    # compose_report_targets 组装，见 test_special_op_extra_targets.py）
+    from app.modules.safety.service.special_operation_daily_report import (
+        EXTRA_REPORT_CHAT_ID,
+    )
+
+    expected_targets = [CHAT, EXTRA_REPORT_CHAT_ID]
     calls.clear()
     monkeypatch.setenv(DIRECT, "true")
     await _run_special_op_daily_report({"mode": "today"}, DAY, chat_id=CHAT)
-    assert calls == [("direct_run", DAY, "today", [CHAT])]
+    assert calls == [("direct_run", DAY, "today", expected_targets)]
 
     # 直读 + 显式打开旧同步：对账保留（双跑），日报仍走直读
     calls.clear()
     monkeypatch.setenv(SYNC_JOB, "true")
     await _run_special_op_daily_report({"mode": "afternoon"}, DAY, chat_id=CHAT)
-    assert calls == ["service_init", "inc", ("direct_run", DAY, "afternoon", [CHAT])]
+    assert calls == [
+        "service_init", "inc", ("direct_run", DAY, "afternoon", expected_targets),
+    ]
 
     # 一键回滚：关掉直读 -> 旧路径恢复
     calls.clear()

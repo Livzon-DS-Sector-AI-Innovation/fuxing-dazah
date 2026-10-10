@@ -239,3 +239,62 @@ async def test_sender_failure_returns_false(monkeypatch: pytest.MonkeyPatch) -> 
         D, "special_op", _cell(), store=store, sender=sender, updater=_ok_updater,
     )
     assert ok is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# send_digest_cell_card — 单格速递卡片独立投递（2026-09-30 需求）
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def test_send_digest_cell_card_uses_cell_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """独立投递的卡片与总卡格子同款版式：灰底列 + 折叠详情面板。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    sent: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return "om_cell_1"
+
+    msg_id = await daily_digest.send_digest_cell_card(
+        _cell(), chat_id="oc_extra", title="📌 危化品库存日报 | 2026-09-30",
+        sender=sender,
+    )
+    assert msg_id == "om_cell_1"
+    assert sent[0]["chat_id"] == "oc_extra"
+    assert sent[0]["header_template"] == "blue"
+
+    card = build_card_dict(
+        sent[0]["title"], sent[0]["content"], "blue", sent[0]["elements"],
+    )
+    cell = _first_cell_dict(card)
+    assert cell["tag"] == "column_set"
+    assert cell["background_style"] == "grey"
+    text_md = cell["columns"][0]["elements"][0]["content"]
+    assert "<text_tag color='blue'>特殊作业</text_tag>" in text_md
+    assert "**特殊作业日报**" in text_md
+    panel = cell["columns"][0]["elements"][1]
+    assert panel["tag"] == "collapsible_panel"
+    assert panel["expanded"] is False
+
+
+async def test_send_digest_cell_card_failure_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """发送失败/异常只返回 None，不向上抛（不影响报告主链路）。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+
+    async def sender(**kw: Any) -> str | None:
+        return None
+
+    assert await daily_digest.send_digest_cell_card(
+        _cell(), chat_id="oc_extra", sender=sender,
+    ) is None
+
+    async def boom(**kw: Any) -> str | None:
+        raise RuntimeError("network down")
+
+    assert await daily_digest.send_digest_cell_card(
+        _cell(), chat_id="oc_extra", sender=boom,
+    ) is None
