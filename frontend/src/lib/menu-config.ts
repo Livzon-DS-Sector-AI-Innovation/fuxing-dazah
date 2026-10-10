@@ -258,6 +258,7 @@ export const moduleMenus: ModuleMenu[] = [
         permissions: ["quality:material:read"],
         children: [
           { key: "quality-material-containers", label: "📦 物料赋码", path: "/quality/materials", permissions: ["quality:material:read"] },
+          { key: "quality-material-scan", label: "📡 扫码操作台", path: "/quality/materials/scan", permissions: ["quality:material:manage"] },
         ],
       },
       {
