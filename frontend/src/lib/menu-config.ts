@@ -257,6 +257,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "lc-history", label: "📜 检验历史", path: "/quality/history", permissions: ["quality:lc:read"] },
       { key: "quality-summary", label: "📈 汇总统计", path: "/quality/summary", permissions: ["quality:report:read"] },
       { key: "quality-standards", label: "🎯 产品标准", path: "/quality/standards", permissions: ["quality:task:read"] },
+      { key: "quality-materials", label: "📦 物料容器", path: "/quality/materials", permissions: ["quality:material:read"] },
       { key: "quality-templates", label: "📑 报告模板", path: "/quality/templates", permissions: ["quality:report:read"] },
       { key: "quality-report", label: "📄 报告单", path: "/quality/report", permissions: ["quality:report:read"] },
       { key: "quality-serial", label: "📇 报告单流水", path: "/quality/serial", permissions: ["quality:report:read"] },

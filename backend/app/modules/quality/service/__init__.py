@@ -10,6 +10,10 @@ from app.modules.quality.service.helpers import (
     spawn_background,
 )
 from app.modules.quality.service.lc_service import LcReportService, lc_report_service
+from app.modules.quality.service.material_containers import (
+    MaterialContainerService,
+    material_container_service,
+)
 from app.modules.quality.service.task_lifecycle import _TaskLifecycle
 from app.modules.quality.service.task_parse import _TaskParse
 from app.modules.quality.service.task_reports import _TaskReports
@@ -27,11 +31,13 @@ test_task_service = TestTaskService()
 
 __all__ = [
     "LcReportService",
+    "MaterialContainerService",
     "PARSER_REGISTRY",
     "ParserEntry",
     "TestTaskService",
     "_norm_date_str",
     "lc_report_service",
+    "material_container_service",
     "spawn_background",
     "test_task_service",
 ]

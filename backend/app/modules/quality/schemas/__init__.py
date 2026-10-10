@@ -17,6 +17,15 @@ from app.modules.quality.schemas._lc import (  # noqa: F401
     QualityStandardOut,
     UploadLcResponse,
 )
+from app.modules.quality.schemas._materials import (  # noqa: F401
+    ContainerLabelRequest,
+    ContainerMovementOut,
+    ContainerMoveRequest,
+    ContainerStatusUpdate,
+    MaterialContainerGenerateRequest,
+    MaterialContainerListItem,
+    MaterialContainerOut,
+)
 from app.modules.quality.schemas._reports import (  # noqa: F401
     GenerateReportRequest,
     ReportAuditRequest,
@@ -50,4 +59,4 @@ from app.modules.quality.schemas._tasks import (  # noqa: F401
     TestTaskStatusUpdate,
 )
 
-__all__ = ['ReportAuditRequest', 'LcTemplateConfigUpdate', 'LcTemplateConfigOut', 'LcTemplateConfigCreate', 'QualityStandardOut', 'ImpurityPeakAreaOut', 'ImpurityResultOut', 'CalculatedResultOut', 'LcReportOut', 'UploadLcResponse', 'InspectionQueryParams', 'InspectionRecordListItem', 'InspectionRecordDetail', 'ImpurityDetailOut', 'GenerateReportRequest', 'ReportRecordOut', 'BatchSummaryOut', 'ProductSummaryOut', 'HistorySummaryOut', 'StandardDocumentCreate', 'StandardDocumentUpdate', 'StandardItemCreate', 'StandardItemUpdate', 'StandardImportDocument', 'StandardImportItem', 'StandardImportConfirm', 'TestTaskCreate', 'TestTaskStatusUpdate', 'TestTaskReviewRequest', 'TestTaskReportDateUpdate', 'TestResultFill', 'TestResultsUpdate', 'TestResultCreate', 'TestResultOut', 'TestTaskListItem', 'TestTaskDetail', 'TaskReportGenerateRequest']
+__all__ = ['ReportAuditRequest', 'LcTemplateConfigUpdate', 'LcTemplateConfigOut', 'LcTemplateConfigCreate', 'QualityStandardOut', 'ImpurityPeakAreaOut', 'ImpurityResultOut', 'CalculatedResultOut', 'LcReportOut', 'UploadLcResponse', 'InspectionQueryParams', 'InspectionRecordListItem', 'InspectionRecordDetail', 'ImpurityDetailOut', 'GenerateReportRequest', 'ReportRecordOut', 'BatchSummaryOut', 'ProductSummaryOut', 'HistorySummaryOut', 'StandardDocumentCreate', 'StandardDocumentUpdate', 'StandardItemCreate', 'StandardItemUpdate', 'StandardImportDocument', 'StandardImportItem', 'StandardImportConfirm', 'TestTaskCreate', 'TestTaskStatusUpdate', 'TestTaskReviewRequest', 'TestTaskReportDateUpdate', 'TestResultFill', 'TestResultsUpdate', 'TestResultCreate', 'TestResultOut', 'TestTaskListItem', 'TestTaskDetail', 'TaskReportGenerateRequest', 'MaterialContainerGenerateRequest', 'MaterialContainerListItem', 'MaterialContainerOut', 'ContainerMoveRequest', 'ContainerStatusUpdate', 'ContainerMovementOut', 'ContainerLabelRequest']

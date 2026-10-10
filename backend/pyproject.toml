@@ -23,6 +23,7 @@ dependencies = [
     "openai>=2.41.0",
     "openpyxl>=3.1.5",
     "python-docx>=1.2.0",
+    "segno>=1.6.0",
     "fpdf2>=2.8.0",
     "weasyprint>=63.0",
     "reportlab>=4.0.0",
@@ -72,7 +73,7 @@ module = "lark_oapi.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["mammoth", "weasyprint", "weasyprint.*"]
+module = ["mammoth", "weasyprint", "weasyprint.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

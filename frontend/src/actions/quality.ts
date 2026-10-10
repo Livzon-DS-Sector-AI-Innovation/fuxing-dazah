@@ -23,6 +23,7 @@ import type {
   TemplateNode,
   LcTemplateConfig,
   TaskReportItem,
+  MaterialContainerItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -905,4 +906,75 @@ export async function fetchReportConsistency(reportId: string): Promise<{
   })
   if (!res.ok) throw new Error('获取一致性校验失败')
   return res.json()
+}
+
+
+// ─── 物料容器赋码 ───
+
+export async function generateMaterialContainers(input: {
+  material_code: string
+  material_name: string
+  vendor_code?: string
+  inbound_batch_no: string
+  expiry_date?: string
+  count: number
+}): Promise<{ message: string; data: MaterialContainerItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/generate`, {
+    method: 'POST', headers: await _authHeaders(), body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '赋码失败')
+  }
+  return res.json()
+}
+
+export async function fetchMaterialContainers(
+  page = 1, status?: string, batchNo?: string, materialCode?: string,
+): Promise<{ data: MaterialContainerItem[]; meta: { total: number } }> {
+  const params = new URLSearchParams({ page: String(page), page_size: '20' })
+  if (status) params.set('status', status)
+  if (batchNo) params.set('batch_no', batchNo)
+  if (materialCode) params.set('material_code', materialCode)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers?${params.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取物料容器失败')
+  return res.json()
+}
+
+export async function moveMaterialContainer(
+  containerNo: string, opType: 'in' | 'out', relatedDoc?: string, remark?: string,
+): Promise<{ message: string; data: MaterialContainerItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/move`, {
+    method: 'POST', headers: await _authHeaders(),
+    body: JSON.stringify({ op_type: opType, related_doc: relatedDoc, remark }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '操作失败')
+  }
+  return res.json()
+}
+
+export async function updateMaterialContainerStatus(
+  containerNo: string, status: 'in_warehouse' | 'qualified' | 'void',
+): Promise<{ message: string; data: MaterialContainerItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/status`, {
+    method: 'PUT', headers: await _authHeaders(), body: JSON.stringify({ status }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '状态变更失败')
+  }
+  return res.json()
+}
+
+export async function downloadContainerLabels(containerNos: string[]): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/label`, {
+    method: 'POST', headers: await _authHeaders(),
+    body: JSON.stringify({ container_nos: containerNos }),
+  })
+  if (!res.ok) throw new Error('标签生成失败')
+  return res.blob()
 }

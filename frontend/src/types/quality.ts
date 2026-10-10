@@ -420,3 +420,40 @@ export interface TaskReportItem {
   audit_status: ReportAuditStatus
   created_at: string | null
 }
+
+
+// ─── 物料容器赋码 ───
+
+export type MaterialContainerStatus = 'labeled' | 'in_warehouse' | 'qualified' | 'issued' | 'returned' | 'void'
+
+export const MATERIAL_CONTAINER_STATUS_META: Record<MaterialContainerStatus, { label: string; color: string }> = {
+  labeled: { label: '已赋码', color: 'default' },
+  in_warehouse: { label: '在库待验', color: 'gold' },
+  qualified: { label: '合格', color: 'green' },
+  issued: { label: '已领出', color: 'blue' },
+  returned: { label: '已退库', color: 'purple' },
+  void: { label: '已作废', color: 'red' },
+}
+
+export interface MaterialContainerItem {
+  id: string
+  container_no: string
+  material_code: string
+  material_name: string
+  inbound_batch_no: string
+  expiry_date: string | null
+  seq: number
+  status: MaterialContainerStatus
+  created_at: string
+}
+
+export interface ContainerMovement {
+  id: string
+  container_no: string
+  op_type: string
+  from_status: string
+  to_status: string
+  related_doc: string | null
+  remark: string | null
+  op_at: string
+}
