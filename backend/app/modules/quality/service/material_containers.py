@@ -215,7 +215,6 @@ class MaterialContainerService:
                 width=qr_size, height=qr_size,
             )
             text_x = x + qr_size + 8 * mm
-            pdf_cv.setFont("STSong-Light", 9)
             top = y + cell_h - 8 * mm
             lines = [
                 c.material_name,
@@ -225,7 +224,10 @@ class MaterialContainerService:
                 f"复验期:{c.expiry_date or '-'}",
             ]
             for k, line in enumerate(lines):
-                pdf_cv.drawString(text_x, top - k * 5.5 * mm, line[:20])
+                # 编号等长行自动缩字号防溢出（此前截断 20 字符导致末段编号被切掉）
+                size = 9 if len(line) <= 20 else 8
+                pdf_cv.setFont("STSong-Light", size)
+                pdf_cv.drawString(text_x, top - k * 5.5 * mm, line)
             # 分隔线
             pdf_cv.setStrokeGray(0.7)
             pdf_cv.rect(x + 1.5 * mm, y + 1.5 * mm, cell_w - 3 * mm, cell_h - 3 * mm)
