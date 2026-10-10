@@ -920,7 +920,7 @@ export async function generateMaterialContainers(input: {
   count: number
 }): Promise<{ message: string; data: MaterialContainerItem[] }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/generate`, {
-    method: 'POST', headers: await _authHeaders(), body: JSON.stringify(input),
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
@@ -947,7 +947,7 @@ export async function moveMaterialContainer(
   containerNo: string, opType: 'in' | 'out', relatedDoc?: string, remark?: string,
 ): Promise<{ message: string; data: MaterialContainerItem }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/move`, {
-    method: 'POST', headers: await _authHeaders(),
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify({ op_type: opType, related_doc: relatedDoc, remark }),
   })
   if (!res.ok) {
@@ -961,7 +961,7 @@ export async function updateMaterialContainerStatus(
   containerNo: string, status: 'in_warehouse' | 'qualified' | 'void',
 ): Promise<{ message: string; data: MaterialContainerItem }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/status`, {
-    method: 'PUT', headers: await _authHeaders(), body: JSON.stringify({ status }),
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
@@ -972,7 +972,7 @@ export async function updateMaterialContainerStatus(
 
 export async function downloadContainerLabels(containerNos: string[]): Promise<Blob> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/label`, {
-    method: 'POST', headers: await _authHeaders(),
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify({ container_nos: containerNos }),
   })
   if (!res.ok) throw new Error('标签生成失败')
