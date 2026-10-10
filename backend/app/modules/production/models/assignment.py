@@ -61,6 +61,7 @@ class NodeAssignment(BaseModel):
     __table_args__ = (
         Index(
             "uq_production_node_assignments",
+            "assigned_by",
             "user_id",
             "node_id",
             unique=True,

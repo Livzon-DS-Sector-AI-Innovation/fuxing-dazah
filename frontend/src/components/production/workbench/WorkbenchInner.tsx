@@ -1,10 +1,10 @@
 'use client'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Select, Segmented, Modal, Descriptions, Empty, Spin, App } from 'antd'
+import { Button, Select, Segmented, Modal, Descriptions, Empty, Spin, App, Input } from 'antd'
 import {
   ClockCircleOutlined, PlayCircleOutlined, CheckCircleOutlined,
-  InboxOutlined, MergeCellsOutlined, SettingOutlined, ReloadOutlined,
+  InboxOutlined, MergeCellsOutlined, SettingOutlined, ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import { useState, useMemo } from 'react'
 import { fetchWorkbench, completeBatch, fetchBatchOutputs, fetchBatchConsumptions } from '@/actions/production'
@@ -527,6 +527,9 @@ export function WorkbenchInner() {
   const [filterProduct, setFilterProduct] = useState<string | undefined>(undefined)
   const [filterRoute, setFilterRoute] = useState<string | undefined>(undefined)
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
+  const [filterBatchNo, setFilterBatchNo] = useState('')
+  // 批次号关键字：忽略首尾空白与大小写（待创建批次无批次号，过滤时不参与匹配）
+  const filterBatchNoKeyword = filterBatchNo.trim().toLowerCase()
 
   // 视图模式：mine=只看自己的批次；all=查看全部（他人批次仅读）
   const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine')
@@ -579,11 +582,12 @@ export function WorkbenchInner() {
   const filteredItems = useMemo(() => {
     if (!data?.items) return []
     let items = data.items
+    if (filterBatchNoKeyword) items = items.filter(i => i.batch_no?.toLowerCase().includes(filterBatchNoKeyword))
     if (filterProduct) items = items.filter(i => i.product_name === filterProduct)
     if (filterRoute) items = items.filter(i => i.route_id === filterRoute)
     if (filterStatus) items = items.filter(i => i.type === filterStatus)
     return items
-  }, [data, filterProduct, filterRoute, filterStatus])
+  }, [data, filterProduct, filterRoute, filterStatus, filterBatchNoKeyword])
 
   // 可建批路线（第一工段负责人）与可建批工段名集合
   const creatableRoutes = useMemo(() => data?.creatable_routes ?? [], [data])
@@ -641,8 +645,8 @@ export function WorkbenchInner() {
     }
 
     // 追加可建批但暂无待办的工段（路线下一个批次都没有时仍可手动新建）
-    // status 筛选时不追加：空工段没有可匹配的状态项
-    if (!filterStatus) {
+    // status / 批次号筛选时不追加：空工段没有可匹配的状态项与批次号
+    if (!filterStatus && !filterBatchNoKeyword) {
       for (const stage of creatableFirstStages) {
         if (byStage[stage]) continue
         const routes = creatableRoutes.filter(r => r.first_stage_name === stage)
@@ -667,7 +671,7 @@ export function WorkbenchInner() {
           .sort((a, b) => a.order - b.order),
       }))
       .sort((a, b) => a.stage.localeCompare(b.stage))
-  }, [filteredItems, creatableFirstStages, creatableRoutes, filterProduct, filterRoute, filterStatus])
+  }, [filteredItems, creatableFirstStages, creatableRoutes, filterProduct, filterRoute, filterStatus, filterBatchNoKeyword])
 
   const openCompleteModal = async (item: WorkbenchItem, onSuccess?: () => void) => {
     if (!item.batch_id || !item.execution_id) return
@@ -809,6 +813,15 @@ export function WorkbenchInner() {
                   共 {stageGroups.length} 个工段 · {totalCount} 项待办
                 </span>
                 <div style={{ flex: 1, height: 1, background: '#ede9e4', minWidth: 20 }} />
+                <Input
+                  allowClear
+                  size="small"
+                  placeholder="批次号"
+                  prefix={<SearchOutlined style={{ fontSize: 12, color: '#a4a097' }} />}
+                  style={{ width: 160 }}
+                  value={filterBatchNo}
+                  onChange={e => setFilterBatchNo(e.target.value)}
+                />
                 <Select
                   allowClear
                   placeholder="产品"
@@ -841,7 +854,7 @@ export function WorkbenchInner() {
                 />
               </div>
 
-              {stageGroups.length === 0 && (filterProduct || filterRoute || filterStatus) ? (
+              {stageGroups.length === 0 && (filterBatchNoKeyword || filterProduct || filterRoute || filterStatus) ? (
                 <div style={{ padding: '60px 20px', textAlign: 'center' }}>
                   <Empty description="无匹配结果，请调整筛选条件" />
                 </div>

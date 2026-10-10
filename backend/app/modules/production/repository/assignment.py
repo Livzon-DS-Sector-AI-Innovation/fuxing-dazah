@@ -111,6 +111,8 @@ async def list_node_assignments(
         stmt = stmt.where(NodeAssignment.node_id == node_id)
     if assigned_by:
         stmt = stmt.where(NodeAssignment.assigned_by == assigned_by)
+    # 行序稳定：开始工序弹窗取 [0] 作默认负责人，无 ORDER BY 时归 DB 决定
+    stmt = stmt.order_by(NodeAssignment.created_at, NodeAssignment.id)
     return list((await db.execute(stmt)).scalars())
 
 

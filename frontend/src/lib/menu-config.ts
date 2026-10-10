@@ -264,7 +264,8 @@ export const moduleMenus: ModuleMenu[] = [
     label: "QA",
     icon: "document",
     path: "/qa",
-    // 所有登录用户可读；写操作在页面内按 QA 权限码显示。
+    // 与 meter 一致：显式授权读取（授 qa:*:read），写操作在页面内按 QA 权限码显示。
+    permissions: ["qa:*:read"],
     children: [
       { key: "overview", label: "概览", path: "/qa" },
       { key: "master-data", label: "质量主数据", path: "/qa/master-data" },

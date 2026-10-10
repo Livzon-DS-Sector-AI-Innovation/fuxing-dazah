@@ -49,13 +49,15 @@ from app.modules.qa.schemas import (
     SourceLinkIn,
 )
 from app.platform.identity.models import User
-from app.platform.permission.deps import RequireUser, require_permission
+from app.platform.permission.deps import require_permission
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import ApiResponse
 
 router = APIRouter()
 _module = MODULES_BY_CODE["qa"]
 
+# 读取统一走模块通配读码（与 meter 的 _deps 语义一致）
+_read = require_permission("qa:*:read")
 _master_create = require_permission("qa:master:create")
 _master_update = require_permission("qa:master:update")
 _master_deactivate = require_permission("qa:master:deactivate")
@@ -101,8 +103,8 @@ def _master_input_compat(payload: MasterObjectCreate) -> MasterObjectCreate:
 
 
 @router.get("/", summary="QA 模块信息")
-async def read_module(user: RequireUser) -> dict[str, str]:
-    """返回模块元数据；即使是只读信息也要求登录。"""
+async def read_module(user: User = Depends(_read)) -> dict[str, str]:
+    """返回模块元信息；需持有 QA 读取权限。"""
     return _module.as_dict()
 
 
@@ -111,7 +113,7 @@ async def read_module(user: RequireUser) -> dict[str, str]:
 
 @router.get("/master-objects", summary="QA主数据列表")
 async def list_master_objects(
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     kind: str | None = Query(default=None),
     object_type: str | None = None,
@@ -153,7 +155,7 @@ async def create_master_object(
 @router.get("/master-objects/{object_id}", summary="QA主数据详情")
 async def get_master_object(
     object_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await get_master(db, object_id)
@@ -265,7 +267,7 @@ async def add_master_source_links(
 
 @router.get("/references/departments", summary="QA责任部门引用")
 async def reference_departments(
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = None,
     include_inactive: bool = False,
@@ -291,7 +293,7 @@ async def reference_departments(
 @router.get("/references/sources/{kind}", summary="QA外部来源引用")
 async def reference_sources(
     kind: str,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = None,
     page: int = Query(1, ge=1),
@@ -364,7 +366,7 @@ async def reference_sources(
 
 @router.get("/document-types", summary="文件类型列表")
 async def get_document_types(
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     include_inactive: bool = False,
 ) -> Any:
@@ -415,7 +417,7 @@ async def deactivate_document_type(
 
 @router.get("/documents", summary="质量文件台账列表")
 async def get_documents(
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = None,
     document_type_id: uuid.UUID | None = None,
@@ -464,7 +466,7 @@ async def post_document(
 @router.get("/documents/{document_id}", summary="质量文件详情")
 async def get_document_detail(
     document_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await get_document(db, document_id)
@@ -536,7 +538,7 @@ async def post_document_version(
 @router.get("/documents/{document_id}/versions", summary="质量文件版本列表")
 async def get_document_versions(
     document_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await get_document(db, document_id)
@@ -722,7 +724,7 @@ async def retry_file_extraction(
 )
 async def get_file_processing_results(
     file_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     view: ProcessingResultView = Query("raw_blocks"),
     page: int = Query(1, ge=1),
@@ -762,7 +764,7 @@ async def get_file_processing_results(
 @router.get("/document-files/{file_id}/artifacts", summary="查看文件提取产物")
 async def list_file_artifacts(
     file_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     file_row = await get_file(db, file_id)
@@ -819,7 +821,7 @@ async def list_file_artifacts(
 async def get_file_artifact_content(
     file_id: uuid.UUID,
     artifact_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     download: bool = False,
 ) -> StreamingResponse:
@@ -876,7 +878,7 @@ async def get_file_artifact_content(
 @router.get("/document-files/{file_id}/content", summary="预览或下载质量文件")
 async def get_file_content(
     file_id: uuid.UUID,
-    user: RequireUser,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
     download: bool = False,
 ) -> StreamingResponse:
@@ -919,7 +921,7 @@ async def get_file_content(
 
 @router.get("/search", summary="QA全局检索")
 async def search_qa(
-    user: RequireUser,
+    user: User = Depends(_read),
     q: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     include_history: bool = False,

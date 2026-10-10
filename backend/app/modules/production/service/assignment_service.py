@@ -137,8 +137,13 @@ async def create_node_assignment(
     db: AsyncSession, *, user_id: uuid.UUID, node_id: uuid.UUID,
     route_id: uuid.UUID, assigned_by: uuid.UUID,
 ) -> NodeAssignmentOut:
-    # 检查是否存在同名活跃记录，避免触发数据库唯一索引异常
-    existing = await repo.list_node_assignments(db, node_id=node_id)
+    # 检查是否存在同名活跃记录，避免触发数据库唯一索引异常。
+    # 唯一索引是 (assigned_by, user_id, node_id)，去重必须同口径：
+    # 默认执行人按配置人各存一份，只按 (user_id, node_id) 去重会让
+    # 第二个配置人永远配不上同一个人
+    existing = await repo.list_node_assignments(
+        db, node_id=node_id, assigned_by=assigned_by,
+    )
     for na in existing:
         if na.user_id == user_id:
             raise DuplicateException("工序分配", "用户+节点")

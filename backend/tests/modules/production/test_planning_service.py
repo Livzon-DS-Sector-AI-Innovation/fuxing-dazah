@@ -481,6 +481,10 @@ class TestPlanOrder:
 
         # 重新走一单：工段负责人就位 + 计划项完成 → 触发提醒
         order2 = await _make_order(db_session, published_route, test_user)
+        # 接收人只取「已配置计划时长」工段的负责人（与下达提醒同口径），
+        # 未配时长的单子不发完成提醒，故此处必须配置工段时长
+        order2.stage_config = [{"stage_name": "发酵", "duration_hours": 4.0}]
+        await db_session.flush()
         item2 = await _make_item(db_session, order2, published_route, test_user)
         await _schedule_item(db_session, item2, test_user)
         await planning_service.confirm_plan_order(db_session, order2.id, test_user)

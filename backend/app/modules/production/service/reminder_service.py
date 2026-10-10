@@ -76,8 +76,9 @@ NOTIFICATION_TYPES: dict[str, NotificationTypeDef] = {
         NotificationTypeDef(
             "plan_completed", "计划单完成提醒",
             "计划单关闭且全部计划项非进行中/已分配时，"
-            "通知所涉工艺路径全部工段负责人，附执行统计"
-            "（计划项数、完成数、变更情况、各工序平均耗时）。",
+            "通知所涉工艺路径中已配置计划时长工段的负责人，"
+            "附执行统计（计划项数、完成数、变更情况、"
+            "已配置工段内各工序平均耗时）。",
         ),
         NotificationTypeDef(
             "execution_timeout", "工序超时提醒",
@@ -250,13 +251,16 @@ def _fmt_dt(dt: datetime) -> str:
 def _build_plan_released_content(
     order_no: str, title: str, items: list[PlanItemReminder],
 ) -> str:
-    """计划单下达提醒正文：每个计划项一行 + 各工段计划开始时间。"""
+    """计划单下达提醒正文：每个计划项一行 + 各工段计划开始时间。
+
+    飞书卡片 markdown 不支持 "- " 列表语法，工段时间逐行呈现。
+    """
     lines = [f"**计划单 {order_no}（{title}）已下达**，各计划项工段安排如下：", ""]
     for item in items:
         lines.append(
             f"计划项 {item.item_no}：{item.product_name}（批次 {item.batch_no}）"
         )
-        lines.extend(f"- {stage}：{_fmt_dt(ts)}" for stage, ts in item.stage_times)
+        lines.extend(f"{stage}：{_fmt_dt(ts)}" for stage, ts in item.stage_times)
         lines.append("")
     return "\n".join(lines)
 
@@ -298,12 +302,16 @@ def _build_step_completed_content(
 def _build_pending_batches_content(entries: list[tuple[str, str]]) -> str:
     """待开工批次清单正文：每行 批次号（产品名）。"""
     lines = ["**您有以下待开工批次**，请及时安排：", ""]
-    lines.extend(f"- {batch_no}（{product_name}）" for batch_no, product_name in entries)
+    lines.extend(f"{batch_no}（{product_name}）" for batch_no, product_name in entries)
     return "\n".join(lines)
 
 
 def _build_plan_closed_content(payload: PlanClosedReminder) -> str:
-    """计划单完成提醒正文：执行统计（计划项/完成/变更/工序耗时）。"""
+    """计划单完成提醒正文：执行统计（计划项/完成/变更/工序耗时）。
+
+    飞书卡片（JSON 1.0）的 markdown 不支持 "- " 无序列表语法，
+    多值行用「标签 N：值」编号呈现。
+    """
     lines = [
         f"**计划单 {payload.order_no}（{payload.title}）已顺利执行完成**",
         "",
@@ -312,13 +320,16 @@ def _build_plan_closed_content(payload: PlanClosedReminder) -> str:
     ]
     if payload.change_reasons:
         lines.append(f"变更情况：共 {len(payload.change_reasons)} 次变更")
-        lines.extend(f"- {reason}" for reason in payload.change_reasons)
+        lines.extend(
+            f"变更 {idx}：{reason}"
+            for idx, reason in enumerate(payload.change_reasons, start=1)
+        )
     else:
         lines.append("变更情况：无变更")
     for route in payload.routes:
         lines.append(f"工序平均耗时（{route.route_name}）：")
         lines.extend(
-            f"- {n.node_name}：{n.avg_hours:.1f} 小时（{n.count} 次）"
+            f"{n.node_name}：{n.avg_hours:.1f} 小时（{n.count} 次）"
             for n in route.nodes
         )
     if not payload.routes:
@@ -350,39 +361,77 @@ async def _stage_leaders(
     return [r.user_id for r in rows if r.stage_name == stage_name]
 
 
+def _item_durations(
+    item: PlanItem, order_durations: dict[str, float] | None,
+) -> dict[str, float]:
+    """计划项生效的计划时长：显式 stage_durations 优先，否则继承计划单 stage_config。
+
+    下达提醒的工段时间、完成提醒的接收人与耗时统计统一走此口径，只此一处。
+    """
+    return _durations_dict(item.stage_durations) or order_durations or {}
+
+
+def _configured_stages_by_route(
+    items: list[PlanItem], order_durations: dict[str, float] | None,
+) -> dict[uuid.UUID, set[str]]:
+    """各路线「已配置计划时长」的工段集合（按计划项口径合并）。"""
+    result: dict[uuid.UUID, set[str]] = {}
+    for i in items:
+        if not i.route_id:
+            continue
+        stages = set(_item_durations(i, order_durations))
+        if stages:
+            result.setdefault(i.route_id, set()).update(stages)
+    return result
+
+
+async def _configured_stage_leaders(
+    db: AsyncSession, stages_by_route: dict[uuid.UUID, set[str]],
+) -> set[uuid.UUID]:
+    """上述工段的负责人（按 user 去重）。下达与完成提醒共用的接收人口径。"""
+    user_ids: set[uuid.UUID] = set()
+    for rid, stages in stages_by_route.items():
+        user_ids.update(
+            r.user_id
+            for r in await list_stage_assignments(db, route_id=rid)
+            if r.stage_name in stages
+        )
+    return user_ids
+
+
 async def _collect_plan_released_reminders(
     db: AsyncSession,
     order: PlanOrder,
     items: list[PlanItem],
     item_batch_nos: dict[uuid.UUID, str],
 ) -> PlanReleasedReminder | None:
-    """计划单下达提醒数据：路线全部工段负责人（按 user 去重）+ 每计划项工段时间。
+    """计划单下达提醒数据：已配置计划时长工段的负责人（按 user 去重）+ 每计划项工段时间。
 
-    工段顺序与开始时间按缺口即停规则计算；无负责人或无路线时返回 None。
+    工段顺序与开始时间按缺口即停规则计算；接收人口径与完成提醒一致，
+    仅通知已配置计划时长的工段负责人；无负责人或无路线时返回 None。
     """
     route_ids = {i.route_id for i in items if i.route_id}
     if not route_ids:
         return None
-    user_ids: set[uuid.UUID] = set()
-    for rid in route_ids:
-        user_ids.update(r.user_id for r in await list_stage_assignments(db, route_id=rid))
+    order_durations = _durations_dict(order.stage_config)
+    user_ids = await _configured_stage_leaders(
+        db, _configured_stages_by_route(items, order_durations),
+    )
     if not user_ids:
         return None
 
     nodes_by_route: dict[uuid.UUID, list[RouteNode]] = {
         rid: await repo.get_route_nodes(db, rid) for rid in route_ids
     }
-    order_durations = _durations_dict(order.stage_config)
     item_reminders: list[PlanItemReminder] = []
     for item in items:
         if not item.route_id:
             continue
         nodes = nodes_by_route.get(item.route_id, [])
         stage_order = build_stage_order(nodes)
-        # 计划项显式配置优先，否则继承计划单 stage_config
-        durations = _durations_dict(item.stage_durations) or order_durations
         times = _plan_stage_start_times(
-            _to_local(item.planned_start), stage_order, durations,
+            _to_local(item.planned_start), stage_order,
+            _item_durations(item, order_durations),
         )
         if not times:
             continue
@@ -410,38 +459,59 @@ _PLAN_CLOSED_BLOCKING_STATUSES = ("in_progress", "allocated")
 
 
 async def _route_node_duration_stats(
-    db: AsyncSession, route_id: uuid.UUID, batch_ids: list[uuid.UUID],
+    db: AsyncSession, route_id: uuid.UUID,
+    groups: list[tuple[list[uuid.UUID], set[str]]],
 ) -> list[NodeDurationStat]:
-    """指定路线关联批次的各工序平均耗时（小时，含回流重做）。"""
-    if not batch_ids:
-        return []
+    """指定路线各工序平均耗时（小时，含回流重做）。
+
+    groups 为若干 (批次集合, 工段集合) 分组，对应同一路线下的各个计划项。
+    分组统计后按节点合并：直接并池会让 A 计划项配置的工段把 B 计划项的
+    批次执行算进来。空批次或空工段的分组跳过。
+    """
     duration_sec = func.extract(
         "epoch", NodeExecution.finished_at - NodeExecution.started_at,
     )
-    stmt = (
-        select(
-            RouteNode.name,
-            func.count(),
-            func.avg(duration_sec) / 3600.0,
+    # node_id → (name, sort_order, count, 总小时数)
+    merged: dict[uuid.UUID, tuple[str, int, int, float]] = {}
+    for batch_ids, stage_names in groups:
+        if not batch_ids or not stage_names:
+            continue
+        stmt = (
+            select(
+                RouteNode.id,
+                RouteNode.name,
+                RouteNode.sort_order,
+                func.count(),
+                func.sum(duration_sec) / 3600.0,
+            )
+            .select_from(NodeExecution)
+            .join(RouteNode, RouteNode.id == NodeExecution.node_id)
+            .where(
+                NodeExecution.batch_id.in_(batch_ids),
+                NodeExecution.status == "completed",
+                NodeExecution.finished_at.is_not(None),
+                NodeExecution.started_at.is_not(None),
+                NodeExecution.is_deleted == False,  # noqa: E712
+                RouteNode.is_deleted == False,  # noqa: E712
+                RouteNode.route_id == route_id,
+                RouteNode.stage_name.in_(stage_names),
+            )
+            .group_by(RouteNode.id, RouteNode.name, RouteNode.sort_order)
         )
-        .select_from(NodeExecution)
-        .join(RouteNode, RouteNode.id == NodeExecution.node_id)
-        .where(
-            NodeExecution.batch_id.in_(batch_ids),
-            NodeExecution.status == "completed",
-            NodeExecution.finished_at.is_not(None),
-            NodeExecution.started_at.is_not(None),
-            NodeExecution.is_deleted == False,  # noqa: E712
-            RouteNode.is_deleted == False,  # noqa: E712
-            RouteNode.route_id == route_id,
-        )
-        .group_by(RouteNode.id, RouteNode.name, RouteNode.sort_order)
-        .order_by(RouteNode.sort_order)
-    )
-    rows = (await db.execute(stmt)).all()
+        for node_id, name, sort_order, count, hours in (await db.execute(stmt)).all():
+            prev = merged.get(node_id)
+            merged[node_id] = (
+                name, sort_order,
+                count + (prev[2] if prev else 0),
+                (hours or 0.0) + (prev[3] if prev else 0.0),
+            )
     return [
-        NodeDurationStat(node_name=name, avg_hours=avg or 0.0, count=count)
-        for name, count, avg in rows
+        NodeDurationStat(
+            node_name=v[0],
+            avg_hours=(v[3] / v[2] if v[2] else 0.0),
+            count=v[2],
+        )
+        for v in sorted(merged.values(), key=lambda v: v[1])
     ]
 
 
@@ -452,22 +522,19 @@ async def _collect_plan_closed_reminders(
 ) -> PlanClosedReminder | None:
     """计划单完成提醒数据：全部计划项非进行中/已分配时才收集。
 
-    统计：计划项总数/已完成数、变更日志（各次原因）、各路线工序
-    平均耗时（该单关联批次全部已完成执行，含回流重做）。
-    接收人：所涉路线全部工段负责人去重。无可接收人时返回 None。
+    统计：计划项总数/已完成数、变更日志（各次原因）、已配置计划
+    时长工段内各工序平均耗时（该单关联批次全部已完成执行，含回流重做）。
+    接收人：所涉路线中已配置计划时长工段的负责人去重。无可接收人时返回 None。
     """
     if not items:
         return None
     if any(i.status in _PLAN_CLOSED_BLOCKING_STATUSES for i in items):
         return None
-    route_ids = {i.route_id for i in items if i.route_id}
-    if not route_ids:
+    order_durations = _durations_dict(order.stage_config)
+    configured_stages = _configured_stages_by_route(items, order_durations)
+    if not configured_stages:
         return None
-    user_ids: set[uuid.UUID] = set()
-    for rid in route_ids:
-        user_ids.update(
-            r.user_id for r in await list_stage_assignments(db, route_id=rid)
-        )
+    user_ids = await _configured_stage_leaders(db, configured_stages)
     if not user_ids:
         return None
 
@@ -481,19 +548,30 @@ async def _collect_plan_closed_reminders(
     )
     change_reasons = [row[0] for row in log_rows.all()]
 
-    # 关联批次按路线分组，逐路线聚合工序耗时
-    batches_by_item = await repo.get_batches_by_plan_items(
+    # 关联批次按计划项分组，逐路线聚合工序耗时。
+    # 须沿谱系链收集：跨批次边界后的工序执行挂在子批次上，子批次不在
+    # PlanAllocation 里，只取直连根批次会漏掉首个边界之后全部工段。
+    # 分组必须停在计划项一级：同路线不同计划项的工段配置与谱系批次不同，
+    # 按路线并池会让只配置在 A 项的工段把 B 项的批次执行算进平均耗时
+    batches_by_item = await repo.get_chain_batches_by_plan_items(
         db, [i.id for i in items],
     )
-    batch_ids_by_route: dict[uuid.UUID, list[uuid.UUID]] = {}
-    for batch in batches_by_item.values():
-        if batch.route_id in route_ids:
-            batch_ids_by_route.setdefault(batch.route_id, []).append(batch.id)
-    routes = await repo.get_routes_by_ids(db, sorted(route_ids, key=str))
+    groups_by_route: dict[uuid.UUID, list[tuple[list[uuid.UUID], set[str]]]] = {}
+    for i in items:
+        if not i.route_id:
+            continue
+        stages = set(_item_durations(i, order_durations))
+        if not stages:
+            continue
+        batch_ids = [
+            b.id for b in batches_by_item.get(i.id, []) if b.route_id == i.route_id
+        ]
+        groups_by_route.setdefault(i.route_id, []).append((batch_ids, stages))
+    routes = await repo.get_routes_by_ids(db, sorted(groups_by_route, key=str))
     route_stats: list[RouteDurationStats] = []
     for route in sorted(routes, key=lambda r: r.route_name):
         nodes = await _route_node_duration_stats(
-            db, route.id, batch_ids_by_route.get(route.id, []),
+            db, route.id, groups_by_route.get(route.id, []),
         )
         if nodes:
             route_stats.append(

@@ -14,6 +14,7 @@ import { BatchUploadDialog } from './BatchUploadDialog'
 import { BatchCreateModal } from './BatchCreateModal'
 import { LedgerImportModal } from './LedgerImportModal'
 import { InstrumentDateFilterModal } from './InstrumentDateFilterModal'
+import { usePermission } from '@/hooks/usePermission'
 import dayjs from 'dayjs'
 
 /** 筛选字段名 → InstrumentFilter 参数 key 的映射。
@@ -47,6 +48,11 @@ const fetchInstrumentStatusOptions = async () =>
 
 export function InstrumentTable() {
   const { message, modal } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canCreate = hasPermission('meter:instrument:create')
+  const canUpdate = hasPermission('meter:instrument:update')
+  const canDelete = hasPermission('meter:instrument:delete')
+  const canUploadReport = hasPermission('meter:report:upload')
   const [data, setData] = useState<InstrumentRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -428,12 +434,16 @@ export function InstrumentTable() {
           <Tooltip title="报告">
             <Button size="small" icon={<FileTextOutlined />} onClick={() => { setReportRecord(r); setReportDialogOpen(true) }} />
           </Tooltip>
-          <Tooltip title="编辑">
-            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)} />
-          </Tooltip>
-          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {canUpdate && (
+            <Tooltip title="编辑">
+              <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)} />
+            </Tooltip>
+          )}
+          {canDelete && (
+            <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -492,22 +502,24 @@ export function InstrumentTable() {
           )}
         </Space>
         <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增器具</Button>
-          <Button icon={<PlusOutlined />} onClick={() => setBatchCreateOpen(true)}>批量新增</Button>
-          <Button icon={<UploadOutlined />} onClick={() => setBatchUploadOpen(true)}>批量上传报告</Button>
+          {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增器具</Button>}
+          {canCreate && <Button icon={<PlusOutlined />} onClick={() => setBatchCreateOpen(true)}>批量新增</Button>}
+          {canUploadReport && <Button icon={<UploadOutlined />} onClick={() => setBatchUploadOpen(true)}>批量上传报告</Button>}
           <Popconfirm title={`确定导出选中的 ${selectedRowKeys.length} 份报告？`} onConfirm={handleExportReports}>
             <Button icon={<DownloadOutlined />} loading={exporting} disabled={selectedRowKeys.length === 0}>
               批量导出报告{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
             </Button>
           </Popconfirm>
-          <Button
-            danger
-            icon={<DeleteOutlined />}
-            disabled={selectedRowKeys.length === 0}
-            onClick={handleBatchDelete}
-          >
-            批量删除{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
-          </Button>
+          {canDelete && (
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={handleBatchDelete}
+            >
+              批量删除{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
+            </Button>
+          )}
           {selectedRowKeys.length > 0 && total > pageSize && (
             <Button loading={fetchingAllIds} onClick={handleSelectAllAcrossPages}>
               {selectAllAcrossPages ? `取消全选 (${selectedRowKeys.length})` : `全选所有 ${total} 条`}
@@ -516,8 +528,8 @@ export function InstrumentTable() {
           <Popconfirm title="确定导出当前筛选结果？" onConfirm={handleExportExcel}>
             <Button icon={<FileExcelOutlined />} loading={exportingExcel}>导出Excel</Button>
           </Popconfirm>
-          <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>
-          <BatchCreateModal open={batchCreateOpen} onClose={() => setBatchCreateOpen(false)} source="instrument" />
+          {canUpdate && <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>}
+          {canCreate && <BatchCreateModal open={batchCreateOpen} onClose={() => setBatchCreateOpen(false)} source="instrument" />}
         </Space>
       </div>
 

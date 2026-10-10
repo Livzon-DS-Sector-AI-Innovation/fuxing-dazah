@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.models import (
     Batch,
+    BatchLink,
     NotificationConfig,
     PlanItem,
     PlanOrder,
@@ -153,6 +154,7 @@ class TestCardContent:
         assert "计划项 1" in content and "产品A" in content and "PO001-1" in content
         assert "发酵：08-28 08:00" in content
         assert "提炼：08-28 13:00" in content
+        assert "- " not in content
 
     def test_plan_released_content_multiple_items(self) -> None:
         items = [
@@ -419,10 +421,10 @@ class TestCollectPlanReleasedReminders:
     async def test_dedup_leaders_and_compute_stage_times(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
-        """按 user 去重工段负责人；工段时间按缺口即停规则计算。"""
+        """按 user 去重已配置工段的负责人；工段时间按缺口即停规则计算。"""
         route = published_route["route"]
         user1, user2 = uuid.uuid4(), uuid.uuid4()
-        # user1 负责两个工段（去重验证），user2 负责一个
+        # user1 负责发酵+提炼（均已配置时长，去重验证）；user2 负责精制（未配置时长）
         await assignment_service.create_stage_assignment(
             db_session, user_id=user1, stage_name="发酵", route_id=route.id, created_by=user1,
         )
@@ -455,9 +457,11 @@ class TestCollectPlanReleasedReminders:
             db_session, order, [item], {item.id: "PO-1"},
         )
         assert result is not None
-        assert set(result.user_ids) == {user1, user2}
+        # 精制未配置时长 → 其负责人 user2 不在接收人内
+        assert set(result.user_ids) == {user1}
         assert len(result.items) == 1
         times = result.items[0].stage_times
+        # 工段时间仍按缺口即停：精制无时长，列出后停止
         assert [s for s, _ in times] == ["发酵", "提炼", "精制"]
         assert times[0][1] == start
         assert times[1][1] == datetime(2026, 8, 28, 13, 0)
@@ -668,6 +672,7 @@ class TestPendingBatchesContent:
         assert "待开工批次" in content
         assert "B-1（产品A）" in content
         assert "B-2（产品B）" in content
+        assert "- " not in content
 
 
 class TestPendingBatchesQuery:
@@ -740,10 +745,12 @@ class TestPlanClosedContent:
         assert "计划项总数：3" in content
         assert "已完成：2" in content
         assert "共 2 次变更" in content
-        assert "客户减量" in content and "补排" in content
+        assert "变更 1：客户减量" in content and "变更 2：补排" in content
         assert "工序平均耗时（工艺V1）" in content
         assert "发酵：4.5 小时（2 次）" in content
         assert "提炼一：6.0 小时（1 次）" in content
+        # 飞书卡片 markdown 不支持 "- " 无序列表语法，正文不得出现
+        assert "- " not in content
 
     def test_content_without_changes_or_durations(self) -> None:
         payload = PlanClosedReminder(
@@ -758,11 +765,16 @@ class TestPlanClosedContent:
 
 async def _make_plan_closed_order(
     db: AsyncSession, route: Any,
+    stage_config: list[dict[str, Any]] | None = None,
 ) -> tuple[PlanOrder, PlanItem, PlanItem]:
-    """已发布计划单 + 两个计划项（已完成 / 已取消）。"""
+    """已发布计划单 + 两个计划项（已完成 / 已取消）。
+
+    stage_config 默认不配置工段时长（None）。
+    """
     order = PlanOrder(
         order_no=f"PO-{uuid.uuid4().hex[:8]}", title="测试计划单",
         status="released", product_id=route.product_id, route_id=route.id,
+        stage_config=stage_config,
     )
     db.add(order)
     await db.flush()
@@ -803,7 +815,10 @@ class TestCollectPlanClosedReminders:
             db_session, user_id=leader, stage_name="发酵",
             route_id=route.id, created_by=leader,
         )
-        order, item_done, item_cancelled = await _make_plan_closed_order(db_session, route)
+        order, item_done, item_cancelled = await _make_plan_closed_order(
+            db_session, route,
+            stage_config=[{"stage_name": "发酵", "duration_hours": 4.0}],
+        )
 
         for blocking in ("in_progress", "allocated"):
             item_cancelled.status = blocking
@@ -822,7 +837,10 @@ class TestCollectPlanClosedReminders:
             db_session, user_id=leader, stage_name="发酵",
             route_id=route.id, created_by=leader,
         )
-        order, item_done, item_other = await _make_plan_closed_order(db_session, route)
+        order, item_done, item_other = await _make_plan_closed_order(
+            db_session, route,
+            stage_config=[{"stage_name": "发酵", "duration_hours": 4.0}],
+        )
         item_other.status = "scheduled"
         await db_session.flush()
 
@@ -836,10 +854,10 @@ class TestCollectPlanClosedReminders:
     async def test_collects_stats_and_recipients(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
-        """统计：计划项数/完成数、变更原因、各工序平均耗时（含回流重做）。"""
+        """仅已配置计划时长工段：负责人过滤 + 工序统计过滤（含计划项级覆盖）。"""
         route = published_route["route"]
         user1, user2 = uuid.uuid4(), uuid.uuid4()
-        # user1 负责两个工段（去重验证），user2 负责一个
+        # user1 负责发酵+提炼（去重验证），user2 负责精制（未配置时长，应被排除）
         await assignment_service.create_stage_assignment(
             db_session, user_id=user1, stage_name="发酵",
             route_id=route.id, created_by=user1,
@@ -852,7 +870,16 @@ class TestCollectPlanClosedReminders:
             db_session, user_id=user2, stage_name="精制",
             route_id=route.id, created_by=user2,
         )
-        order, item_done, item_cancelled = await _make_plan_closed_order(db_session, route)
+        # 计划单只配置发酵；item_done 计划项级覆盖提炼
+        # → 已配置工段 = {发酵（item_cancelled 继承）, 提炼（item_done 显式）}
+        order, item_done, item_cancelled = await _make_plan_closed_order(
+            db_session, route,
+            stage_config=[{"stage_name": "发酵", "duration_hours": 4.0}],
+        )
+        item_done.stage_durations = [
+            {"stage_name": "提炼", "duration_hours": 6.0},
+        ]
+        await db_session.flush()
 
         db_session.add(PlanChangeLog(
             plan_order_id=order.id, plan_version=2, change_reason="客户减量",
@@ -861,18 +888,41 @@ class TestCollectPlanClosedReminders:
             plan_order_id=order.id, plan_version=3, change_reason="补排一项",
         ))
 
-        # 计划项 → 批次关联 + 工序执行记录（发酵 4h/8h、提炼一 6h）
+        # 计划项 → 根批次关联；跨边界后的工序挂在谱系子批次上
+        # （子批次不在 PlanAllocation 里，靠 BatchLink 链收集）
         batch = await _make_batch(
             db_session, route, f"B-CL-{uuid.uuid4().hex[:6]}",
+        )
+        child = await _make_batch(
+            db_session, route, f"{batch.batch_no}-1",
         )
         db_session.add(PlanAllocation(
             plan_item_id=item_done.id, batch_id=batch.id, allocated_quantity=50,
         ))
+        db_session.add(BatchLink(
+            parent_batch_id=batch.id, child_batch_id=child.id,
+        ))
+        # item_cancelled 继承计划单的 {发酵} 且有自己的批次：统计必须按计划项
+        # 分组，否则 item_cancelled 配置的发酵会把 item_done 的批次算进来
+        batch_cancelled = await _make_batch(
+            db_session, route, f"B-CL-{uuid.uuid4().hex[:6]}",
+        )
+        db_session.add(PlanAllocation(
+            plan_item_id=item_cancelled.id, batch_id=batch_cancelled.id,
+            allocated_quantity=50,
+        ))
         base = datetime(2026, 8, 28, 8, 0, tzinfo=UTC)
+        # item_done 的根批次：发酵 4h/8h（该计划项只配了提炼 → 不入统计）
         _make_execution(db_session, batch.id, published_route["node_a"].id, base, 4)
-        _make_execution(db_session, batch.id, published_route["node_b"].id, base, 6)
         _make_execution(
             db_session, batch.id, published_route["node_a"].id, base, 8, seq=2,
+        )
+        # item_done 子批次：提炼一 6h（已配置工段，链上应计入）、精制 5h（未配置，应排除）
+        _make_execution(db_session, child.id, published_route["node_b"].id, base, 6)
+        _make_execution(db_session, child.id, published_route["node_c"].id, base, 5)
+        # item_cancelled 自己的批次：发酵 2h
+        _make_execution(
+            db_session, batch_cancelled.id, published_route["node_a"].id, base, 2,
         )
         await db_session.flush()
 
@@ -880,24 +930,53 @@ class TestCollectPlanClosedReminders:
             db_session, order, [item_done, item_cancelled],
         )
         assert result is not None
-        assert set(result.user_ids) == {user1, user2}
+        # 精制负责人 user2 不在接收人内
+        assert set(result.user_ids) == {user1}
         assert result.total_items == 2
         assert result.completed_items == 1
         assert result.change_reasons == ["客户减量", "补排一项"]
         assert len(result.routes) == 1
         stats = result.routes[0]
         assert stats.route_name == "工艺V1"
-        # 工序按 sort_order 排序；发酵平均 (4+8)/2=6h，提炼一 6h
+        # 统计按计划项各自的口径分组，再按节点合并：
+        #  - 发酵只有 item_cancelled 配置，只算它自己批次的 2h；item_done 的
+        #    4h/8h 属于「未配置发酵」的计划项，不得并池混入
+        #  - 提炼一只在 item_done 配置，挂谱系子批次上仍被统计（跨边界链不漏）
+        #  - 精制任何计划项都没配，排除
         assert [(n.node_name, n.avg_hours, n.count) for n in stats.nodes] == [
-            ("发酵", 6.0, 2), ("提炼一", 6.0, 1),
+            ("发酵", 2.0, 1), ("提炼一", 6.0, 1),
         ]
+
+    async def test_no_stage_config_returns_none(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """无任何已配置计划时长的工段：无接收人，不提醒。"""
+        route = published_route["route"]
+        leader = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=leader, stage_name="发酵",
+            route_id=route.id, created_by=leader,
+        )
+        order, item_done, _ = await _make_plan_closed_order(db_session, route)
+        assert await _collect_plan_closed_reminders(
+            db_session, order, [item_done],
+        ) is None
 
     async def test_no_assignments_returns_none(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
-        """路线上没有任何工段负责人时不发送。"""
+        """已配置时长工段上没有负责人时不发送；未配置工段的负责人不算接收人。"""
         route = published_route["route"]
-        order, item_done, _ = await _make_plan_closed_order(db_session, route)
+        # 只给未配置时长的「精制」配负责人：接收人过滤若失效，这里会发出提醒
+        bystander = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=bystander, stage_name="精制",
+            route_id=route.id, created_by=bystander,
+        )
+        order, item_done, _ = await _make_plan_closed_order(
+            db_session, route,
+            stage_config=[{"stage_name": "发酵", "duration_hours": 4.0}],
+        )
         assert await _collect_plan_closed_reminders(
             db_session, order, [item_done],
         ) is None

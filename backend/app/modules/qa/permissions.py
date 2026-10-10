@@ -1,11 +1,13 @@
 """QA 模块权限声明。
 
-读取权限按需求对所有已登录用户开放，因此这里只注册写入和审计权限。
+读取需显式授权（与 meter 一致：授 ``qa:*:read`` 模块通配读码即可访问
+台账/检索/文件预览），写入和审计权限各自独立。
 """
 
 from app.platform.permission.registry import PermissionDef
 
 PERMISSIONS: list[PermissionDef] = [
+    PermissionDef("qa:*:read", "读取 QA 模块数据", "qa", "*", "read"),
     PermissionDef("qa:master:create", "创建 QA 主数据", "qa", "master", "create"),
     PermissionDef("qa:master:update", "更新 QA 主数据", "qa", "master", "update"),
     PermissionDef("qa:master:deactivate", "停用/启用 QA 主数据", "qa", "master", "deactivate"),
