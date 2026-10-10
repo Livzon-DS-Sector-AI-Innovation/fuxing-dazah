@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 CONTAINER_STATUSES = Literal["labeled", "in_warehouse", "qualified", "issued", "returned", "void"]
 
@@ -21,6 +21,8 @@ class MaterialContainerGenerateRequest(BaseModel):
 
 
 class MaterialContainerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     container_no: str
     material_code: str
@@ -34,6 +36,8 @@ class MaterialContainerOut(BaseModel):
 
 
 class MaterialContainerListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     container_no: str
     material_code: str
@@ -60,6 +64,8 @@ class ContainerStatusUpdate(BaseModel):
 
 
 class ContainerMovementOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     container_no: str
     op_type: str
