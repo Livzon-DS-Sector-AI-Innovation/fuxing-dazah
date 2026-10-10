@@ -8,7 +8,7 @@
 - 日报/月报均不渲染 AI 汇总分析，无文末整改提醒（用户要求）
 
 结构（对接督办通报 hazard_supervision.build_bulletin_content 的分组风格）：
-- 日报：标题 → 生成时间 → 📊 当日报警统计（报警类型/性质合并为「报警类型」、
+- 日报：标题 → 生成时间 → 📊 当日报警统计（报警类型/报警性质各一行、
   涉及部门）→ 部门分组报警明细（每部门分隔线 + @负责人）→ 📨 每日私发推送
   （部门 → 收件人名单，与私发任务同源；开关关闭/无收件人时整块省略）
 - 月报（原周报，2026-09-22 改造）：标题 → 月起止 → 📊 上月报警统计 →
@@ -33,6 +33,10 @@
 - AI 月度分析只围绕重复问题、原因、整改建议三板块（recurring_issues 带
   cause/suggestion、cause_summary、rectification_suggestions），
   删除典型问题/趋势板块（用户要求分析不要偏题）
+
+用户定制（2026-09-30）：
+- 统计区报警类型/报警性质拆成独立两行（撤销 2026-08-18 的合并显示）：两个维度
+  对同批记录各统计一遍，合并成一行会让数字加起来 ≈ 2×总数，无法与总数对账
 """
 
 from __future__ import annotations
@@ -258,7 +262,7 @@ def render_daily_report(
 ) -> str:
     """渲染日报 Markdown。
 
-    结构: 标题 → 生成时间 → 📊 当日报警统计（报警类型合并、涉及部门）
+    结构: 标题 → 生成时间 → 📊 当日报警统计（报警类型/报警性质各一行、涉及部门）
     → 部门分组报警明细（参照督办通报：部门标题 @负责人，条目内含原因/分析/建议/链接）
     → 📨 每日私发推送（dm_recipients 非空时）。
 
@@ -284,10 +288,11 @@ def render_daily_report(
         f"🕒 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "",
     ]
-    # 统计：报警类型合并（性质+类型）、涉及部门（不显示 AI 维度）
+    # 统计：报警类型/报警性质各一行（独立维度各自计数）、涉及部门（不显示 AI 维度）
     parts.extend(_stat_block("📊 当日报警统计", [
         f"报警总数：**{agg.total} 起**",
-        f"报警类型：{_fmt_dist(agg.type_distribution)}、{_fmt_dist(agg.nature_distribution)}",
+        f"报警类型：{_fmt_dist(agg.type_distribution)}",
+        f"报警性质：{_fmt_dist(agg.nature_distribution)}",
         f"涉及部门：{_fmt_dist(agg.department_distribution)}",
     ]))
 
@@ -327,7 +332,8 @@ def render_monthly_report(
     ]
     stat_rows = [
         f"报警总数：**{agg.total} 起**",
-        f"报警类型：{_fmt_dist(agg.type_distribution)}、{_fmt_dist(agg.nature_distribution)}",
+        f"报警类型：{_fmt_dist(agg.type_distribution)}",
+        f"报警性质：{_fmt_dist(agg.nature_distribution)}",
         f"涉及部门：{_fmt_dist(agg.department_distribution)}",
     ]
     parts.extend(_stat_block("📊 上月报警统计", stat_rows))
