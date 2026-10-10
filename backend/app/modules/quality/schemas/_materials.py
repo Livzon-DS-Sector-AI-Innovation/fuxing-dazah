@@ -29,6 +29,7 @@ class MaterialContainerOut(BaseModel):
     material_name: str
     vendor_code: str | None
     inbound_batch_no: str
+    inbound_date: str | None
     expiry_date: str | None
     seq: int
     status: str
@@ -43,6 +44,7 @@ class MaterialContainerListItem(BaseModel):
     material_code: str
     material_name: str
     inbound_batch_no: str
+    inbound_date: str | None
     expiry_date: str | None
     seq: int
     status: str

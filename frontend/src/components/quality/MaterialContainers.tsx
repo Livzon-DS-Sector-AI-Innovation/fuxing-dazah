@@ -255,7 +255,8 @@ export default function MaterialContainers() {
     { title: '容器号', dataIndex: 'container_no', key: 'container_no', width: 210, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name' },
     { title: '物料代码', dataIndex: 'material_code', key: 'material_code', width: 100 },
-    { title: '进厂批号', dataIndex: 'inbound_batch_no', key: 'inbound_batch_no', width: 150 },
+    { title: '进厂批号', dataIndex: 'inbound_batch_no', key: 'inbound_batch_no', width: 140 },
+    { title: '入库日期', dataIndex: 'inbound_date', key: 'inbound_date', width: 105, render: (v: string | null) => v || '-' },
     { title: '复验期', dataIndex: 'expiry_date', key: 'expiry_date', width: 140, render: (v: string | null) => {
       if (!v) return '-'
       const exp = dayjs(v)

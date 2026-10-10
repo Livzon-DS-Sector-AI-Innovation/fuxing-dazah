@@ -117,6 +117,8 @@ class MaterialContainerService:
                 detail=f"容器 {container_no} 已过复验期（{container.expiry_date}），禁止出库",
             )
         from_status = container.status
+        if payload.op_type == "in" and not container.inbound_date:
+            container.inbound_date = _today().isoformat()
         updated = await update_container_status(db, container.id, to_status)
         await create_container_movement(
             db,

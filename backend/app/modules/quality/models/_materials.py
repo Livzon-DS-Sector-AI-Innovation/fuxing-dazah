@@ -68,6 +68,9 @@ class QualityMaterialContainer(BaseModel):
         String(100), nullable=True, comment="供应商代码"
     )
     inbound_batch_no: Mapped[str] = mapped_column(String(100), comment="进厂批号")
+    inbound_date: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="入库登记日期 YYYY-MM-DD（入库动作自动记录）"
+    )
     expiry_date: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="复验期 YYYY-MM-DD（过期拦截用，阶段3）"
     )

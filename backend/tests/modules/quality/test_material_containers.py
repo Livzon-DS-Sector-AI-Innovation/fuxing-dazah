@@ -290,3 +290,15 @@ async def test_movements_ledger_join(db_session):
     # 按其他物料过滤为空
     rows2, _t2 = await list_material_movements(db_session, material_q="不存在的物料")
     assert len(rows2) == 0
+
+
+async def test_inbound_date_recorded_on_in_move(db_session):
+    from app.core.time import today as _today
+
+    containers = await material_container_service.generate_containers(db_session, _gen_req(1))
+    no = containers[0].container_no
+    assert containers[0].inbound_date is None  # 赋码时未入库
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="in")
+    )
+    assert updated.inbound_date == _today().isoformat()

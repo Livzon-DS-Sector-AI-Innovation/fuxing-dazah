@@ -441,6 +441,7 @@ export interface MaterialContainerItem {
   material_code: string
   material_name: string
   inbound_batch_no: string
+  inbound_date: string | null
   expiry_date: string | null
   seq: number
   status: MaterialContainerStatus
