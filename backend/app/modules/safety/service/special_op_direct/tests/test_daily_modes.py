@@ -354,3 +354,111 @@ async def test_run_afternoon_filters_finished_for_ai_and_labels(
     # 已收工高风险移入已完成段点名，🔴 只列未完成
     assert "✅ 已完成作业（2 项，其中高风险 1 项）" in result.markdown_report
     assert "🔴 重点关注（未完成高风险 1 项）" in result.markdown_report
+
+
+# ── 安全速递总卡：晚报追加独立格子，不覆盖晨报格子 ──
+
+
+class _FakeStore:
+    """dict 版 Redis 接缝（hset/hgetall/expire/get/set）。"""
+
+    def __init__(self) -> None:
+        self.hash: dict[str, dict[str, str]] = {}
+        self.kv: dict[str, str] = {}
+
+    async def hset(self, key: str, field: str, value: str) -> None:
+        self.hash.setdefault(key, {})[field] = value
+
+    async def expire(self, key: str, ttl: int) -> None:
+        assert ttl > 0
+
+    async def hgetall(self, key: str) -> dict[str, str]:
+        return dict(self.hash.get(key, {}))
+
+    async def get(self, key: str) -> str | None:
+        return self.kv.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.kv[key] = value
+
+
+async def _fake_sender(**kwargs: Any) -> str:
+    return "om_digest"
+
+
+async def _fake_updater(message_id: str, card: dict[str, Any]) -> bool:
+    return True
+
+
+async def test_digest_card_keeps_morning_and_evening_cells_separate() -> None:
+    """晚报投 special_op_pm 独立格子：晨报格子不被覆盖，两格子按序渲染。"""
+    from app.modules.safety.feishu import daily_digest
+
+    store = _FakeStore()
+
+    async def _capture_sender(**kwargs: Any) -> str:
+        store.last_elements = kwargs.get("elements") or []
+        return await _fake_sender()
+
+    morning = daily_digest.DigestCell(
+        tag_color="blue", tag_text="特殊作业", title="特殊作业日报",
+        stats="今日计划 8 项", zone="", detail="晨报明细",
+    )
+    evening = daily_digest.DigestCell(
+        tag_color="orange", tag_text="特殊作业·晚报", title="特殊作业日报·晚报",
+        stats="完成 4 · 夜间 3", zone="", detail="晚报明细",
+    )
+    ok1 = await daily_digest.upsert_daily_digest(
+        DAY, "special_op", morning,
+        store=store, sender=_capture_sender, updater=_fake_updater,
+    )
+    ok2 = await daily_digest.upsert_daily_digest(
+        DAY, "special_op_pm", evening,
+        store=store, sender=_capture_sender, updater=_fake_updater,
+    )
+    assert ok1 and ok2
+
+    fields = store.hash[f"safety:daily_digest:{DAY.isoformat()}"]
+    assert set(fields) == {"special_op", "special_op_pm"}
+
+    # 渲染顺序：晨报在前、晚报在后（CELL_ORDER 注册生效，否则 _load_cells 会丢弃）
+    cells = await daily_digest._load_cells(store, DAY)
+    elements = await daily_digest._build_elements(cells, {})
+    texts = [json.dumps(e, ensure_ascii=False) for e in elements]
+    assert any("特殊作业日报**" in t and "晨报明细" in t for t in texts)
+    assert any("特殊作业日报·晚报**" in t and "晚报明细" in t for t in texts)
+    assert texts.index(next(t for t in texts if "晨报明细" in t)) < texts.index(
+        next(t for t in texts if "晚报明细" in t)
+    )
+
+
+async def test_run_upserts_evening_to_separate_cell_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """daily.run 晨/晚两次运行分别投 special_op / special_op_pm 格子。"""
+    import app.modules.safety.feishu.daily_digest as daily_digest_module
+
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_DIGEST_CARD_ENABLED", "false")
+    # 总卡开关保持开启（不设 env 即默认开）；upsert 打桩只记录调用
+    calls: list[dict[str, Any]] = []
+
+    async def _spy(report_date: date, key: str, cell: Any) -> bool:
+        calls.append({"key": key, "title": cell.title, "color": cell.tag_color})
+        return True
+
+    monkeypatch.setattr(daily_digest_module, "upsert_daily_digest", _spy)
+
+    items = [record("r1", **LOW_FIELDS, 报备类型="计划内作业", 发起时间=_OLD_SUBMITTED)]
+    await daily.run(
+        DAY, "today", reader=FakeReader(records=items),
+        pusher=FakePusher(), analyst=FakeAnalyst(), writeback=False,
+    )
+    await daily.run(
+        DAY, "afternoon", reader=FakeReader(records=items),
+        pusher=FakePusher(), analyst=FakeAnalyst(), writeback=False,
+    )
+
+    assert [c["key"] for c in calls] == ["special_op", "special_op_pm"]
+    assert calls[0]["title"] == "特殊作业日报" and calls[0]["color"] == "blue"
+    assert calls[1]["title"] == "特殊作业日报·晚报" and calls[1]["color"] == "orange"
+

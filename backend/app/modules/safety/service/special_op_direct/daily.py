@@ -288,6 +288,10 @@ async def run(
                 ) or ""
                 zone = zone[:80]
                 if mode == "afternoon":
+                    # 晚报投独立格子（special_op_pm），不覆盖晨报的 special_op 格子
+                    cell_key = "special_op_pm"
+                    cell_color = "orange"
+                    cell_tag_text = "特殊作业·晚报"
                     cell_stats = (
                         f"今日 **{len(effective)}** 项 ｜"
                         f" 完成 {stats['completed']} · 进行 {stats['ongoing']}"
@@ -295,6 +299,9 @@ async def run(
                     )
                     cell_title = "特殊作业日报·晚报"
                 else:
+                    cell_key = "special_op"
+                    cell_color = "blue"
+                    cell_tag_text = "特殊作业"
                     cell_stats = (
                         f"今日计划 **{len(effective)}** 项 ｜ "
                         f"🔴 高风险 **{len(high)}** · 🟡 中 {len(medium)}"
@@ -303,10 +310,10 @@ async def run(
                     cell_title = "特殊作业日报"
                 await upsert_daily_digest(
                     target_date,
-                    "special_op",
+                    cell_key,
                     DigestCell(
-                        tag_color="blue",
-                        tag_text="特殊作业",
+                        tag_color=cell_color,
+                        tag_text=cell_tag_text,
                         title=cell_title,
                         stats=cell_stats,
                         zone=zone,
