@@ -113,7 +113,7 @@ async def move_container_endpoint(
     container = await material_container_service.move_container(db, container_no, payload, operator=user.id)
     return success_response(
         data=MaterialContainerOut.model_validate(container).model_dump(mode="json"),
-        message="已入库登记" if payload.op_type == "in" else "已领料出库",
+        message="已入库登记" if container.status == "in_warehouse" else "已领料出库",
     )
 
 

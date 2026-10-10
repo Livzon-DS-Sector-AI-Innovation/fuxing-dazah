@@ -948,7 +948,7 @@ export async function fetchMaterialContainers(
 }
 
 export async function moveMaterialContainer(
-  containerNo: string, opType: 'in' | 'out', relatedDoc?: string, remark?: string,
+  containerNo: string, opType: 'in' | 'out' | 'auto', relatedDoc?: string, remark?: string,
 ): Promise<{ message: string; data: MaterialContainerItem }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/move`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },

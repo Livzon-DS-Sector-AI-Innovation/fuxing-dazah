@@ -14,7 +14,7 @@ export default function ScanStation() {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:material:manage')
-  const [scanMode, setScanMode] = useState<'in' | 'out'>('in')
+  const [scanMode, setScanMode] = useState<'auto' | 'in' | 'out'>('auto')
   const [scanValue, setScanValue] = useState('')
   const [scanBusy, setScanBusy] = useState(false)
   const [results, setResults] = useState<ScanResult[]>([])
@@ -39,10 +39,10 @@ export default function ScanStation() {
       setResults((prev) => [{
         no,
         ok: true,
-        detail: `已${scanMode === 'in' ? '入库登记' : '领料出库'}（${res.data.material_name}）`,
+        detail: `已${res.message}`,
         at: dayjs().format('HH:mm:ss'),
       }, ...prev].slice(0, 50))
-      message.success(`✅ ${no} ${scanMode === 'in' ? '入库' : '出库'}成功`)
+      message.success(`✅ ${no} ${res.message}`)
     } catch (err: unknown) {
       const detail = (err instanceof Error ? err.message : String(err)) || '操作失败'
       setFailCount((n) => n + 1)
@@ -67,14 +67,19 @@ export default function ScanStation() {
           <Space wrap>
             <Segmented
               value={scanMode}
-              onChange={(v) => { setScanMode(v as 'in' | 'out'); setResults([]) }}
+              onChange={(v) => { setScanMode(v as 'auto' | 'in' | 'out'); setResults([]) }}
               options={[
+                { label: '🔁 自动判定', value: 'auto' },
                 { label: '📥 入库登记', value: 'in' },
                 { label: '📤 领料出库', value: 'out' },
               ]}
             />
             <Typography.Text type="secondary">
-              当前模式：{scanMode === 'in' ? '入库登记（已赋码 → 在库待验）' : '领料出库（在库/合格 → 已领出，过期拦截）'}
+              {scanMode === 'auto'
+                ? '自动：已赋码→入库；在库/合格→出库；已领出/已作废→报错'
+                : scanMode === 'in'
+                  ? '强制入库登记（已赋码 → 在库待验）'
+                  : '强制领料出库（在库/合格 → 已领出，过期拦截）'}
             </Typography.Text>
           </Space>
           <Input

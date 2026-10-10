@@ -111,10 +111,20 @@ class MaterialContainerService:
         payload: ContainerMoveRequest,
         operator: uuid.UUID | None = None,
     ) -> QualityMaterialContainer:
-        """进出库：in 入库登记 / out 领料出库。非法流转或过期出库 400。"""
+        """进出库：in 入库登记 / out 领料出库 / auto 按状态自动判定。非法流转或过期出库 400。"""
         container = await get_material_container_by_no(db, container_no)
         if container is None:
             raise AppException(status_code=404, detail=f"容器 {container_no} 不存在")
+        if payload.op_type == "auto":
+            resolved = {"labeled": "in", "in_warehouse": "out", "qualified": "out"}.get(container.status)
+            if resolved is None:
+                raise AppException(
+                    status_code=400,
+                    detail=f"容器状态为 {container.status}，无法自动判定操作（已领出/已退库/已作废需人工处理）",
+                )
+            payload = ContainerMoveRequest(
+                op_type=resolved, related_doc=payload.related_doc, remark=payload.remark,
+            )
         to_status = _MOVE_TRANSITIONS[payload.op_type].get(container.status)
         if to_status is None:
             raise AppException(

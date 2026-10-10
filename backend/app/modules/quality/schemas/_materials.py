@@ -52,9 +52,10 @@ class MaterialContainerListItem(BaseModel):
 
 
 class ContainerMoveRequest(BaseModel):
-    """进出库操作。in：入库登记（labeled → in_warehouse）；out：领料出库（in_warehouse/qualified → issued）。"""
+    """进出库操作。in：入库登记（labeled → in_warehouse）；out：领料出库（in_warehouse/qualified → issued）；
+    auto：按当前状态自动判定（labeled→入库；in_warehouse/qualified→出库；其余状态报错）。"""
 
-    op_type: Literal["in", "out"]
+    op_type: Literal["in", "out", "auto"]
     related_doc: str | None = Field(default=None, max_length=100, description="关联单据号（领料单等）")
     remark: str | None = Field(default=None, max_length=500)
 
@@ -63,7 +64,7 @@ class ContainerBatchMoveRequest(BaseModel):
     """批量进出库：逐容器校验流转，单个失败不影响整体，结果逐条返回。"""
 
     container_nos: list[str] = Field(min_length=1, max_length=200)
-    op_type: Literal["in", "out"]
+    op_type: Literal["in", "out", "auto"]
     related_doc: str | None = Field(default=None, max_length=100, description="关联单据号（领料单等）")
     remark: str | None = Field(default=None, max_length=500)
 

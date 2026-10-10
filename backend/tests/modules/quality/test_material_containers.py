@@ -384,3 +384,37 @@ async def test_qr_content_rich_text(db_session):
     buf = _io.BytesIO()
     segno.make(content, error="m").save(buf, kind="png", scale=4, border=1)
     assert buf.getvalue()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+async def test_move_auto_by_status(db_session):
+    """auto 模式：已赋码→入库；在库→出库；已领出→报错。"""
+    containers = await material_container_service.generate_containers(db_session, _gen_req(1))
+    no = containers[0].container_no
+    # labeled → 自动入库
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="auto")
+    )
+    assert updated.status == "in_warehouse"
+    # in_warehouse → 自动出库
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="auto")
+    )
+    assert updated.status == "issued"
+    # issued → 无法自动判定
+    with pytest.raises(AppException) as exc:
+        await material_container_service.move_container(
+            db_session, no, ContainerMoveRequest(op_type="auto")
+        )
+    assert exc.value.status_code == 400
+    assert "自动判定" in exc.value.detail
+
+
+async def test_move_auto_qualified_goes_out(db_session):
+    containers = await material_container_service.generate_containers(db_session, _gen_req(1))
+    no = containers[0].container_no
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.update_status(db_session, no, "qualified")
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="auto")
+    )
+    assert updated.status == "issued"
