@@ -189,6 +189,36 @@ class MaterialContainerService:
         return updated  # type: ignore[return-value]
 
     @staticmethod
+    async def purchase_suggestions(db: AsyncSession) -> list[dict[str, object]]:
+        """采购建议：字典里设了安全库存阈值且可用库存低于阈值的物料。
+
+        可用库存 = 在库待验 + 合格；字典有阈值但从未赋码的物料可用按 0 计。
+        """
+        from app.modules.quality.repository import (
+            list_materials,
+            material_stock_summary,
+        )
+
+        materials, _total = await list_materials(db, page_size=500)
+        summary = {s["material_code"]: s for s in await material_stock_summary(db)}
+        result: list[dict[str, object]] = []
+        for material in materials:
+            if material.min_stock is None:
+                continue
+            available = summary.get(material.code, {}).get("available", 0)
+            if int(available) < int(material.min_stock):
+                result.append({
+                    "material_code": material.code,
+                    "material_name": material.name,
+                    "vendor_name": material.vendor_name,
+                    "pack_spec": material.pack_spec,
+                    "available": int(available),
+                    "min_stock": int(material.min_stock),
+                    "gap": int(material.min_stock) - int(available),
+                })
+        return result
+
+    @staticmethod
     async def build_label_pdf(
         db: AsyncSession, container_nos: list[str]
     ) -> bytes:

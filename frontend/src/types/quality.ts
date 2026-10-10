@@ -502,3 +502,16 @@ export interface MaterialMovementItem {
   remark: string | null
   op_at: string
 }
+
+
+// ─── 采购建议 ───
+
+export interface PurchaseSuggestion {
+  material_code: string
+  material_name: string
+  vendor_name: string | null
+  pack_spec: string | null
+  available: number
+  min_stock: number
+  gap: number
+}

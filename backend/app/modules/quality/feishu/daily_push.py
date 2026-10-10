@@ -181,3 +181,53 @@ async def _push_afternoon_reminder() -> None:
             logger.exception("飞书催办发送失败: %s", chat_id)
 
 
+
+
+async def _push_material_alerts() -> None:
+    """物料效期预警 + 采购建议推送（每日 08:15，独立幂等标记）。"""
+    from app.core.database import async_session_factory
+    from app.modules.quality.feishu.client import (
+        QUALITY_FEISHU_CHAT_IDS,
+        feishu_configured,
+    )
+    from app.modules.quality.feishu.message import send_chat_text
+    from app.modules.quality.repository import material_expiry_alerts
+    from app.modules.quality.service.material_containers import MaterialContainerService
+
+    if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
+        return
+    today = _app_today().isoformat()
+    if not await _mark_pushed(f"material-alerts:{today}"):
+        logger.info("物料提醒今日已推送，跳过（幂等标记）")
+        return
+    async with async_session_factory() as db:
+        alerts = await material_expiry_alerts(db)
+        suggestions = await MaterialContainerService.purchase_suggestions(db)
+    blocks: list[str] = []
+    if alerts:
+        lines = []
+        for a in alerts:
+            parts = []
+            if a["expired"]:
+                parts.append(f"🚨 已过期 {a['expired']} 瓶")
+            if a["near"]:
+                parts.append(f"临效期 {a['near']} 瓶（最早 {a['earliest']}）")
+            lines.append(f"- {a['material_name']}（{a['material_code']}）：{'，'.join(parts)}")
+        blocks.append("⚠️ 物料效期提醒（在库/待验/已赋码）：\n" + "\n".join(lines))
+    if suggestions:
+        lines = [
+            f"- {s['material_name']}（{s['material_code']}）：可用 {s['available']}，"
+            f"安全库存 {s['min_stock']}，建议采购 {s['gap']} 瓶" + (
+                f"｜供应商 {s['vendor_name']}" if s["vendor_name"] else ""
+            )
+            for s in suggestions
+        ]
+        blocks.append("🛒 采购建议（低于安全库存）：\n" + "\n".join(lines))
+    if not blocks:
+        return
+    text = "\n\n".join(blocks)
+    for chat_id in QUALITY_FEISHU_CHAT_IDS:
+        try:
+            await send_chat_text(chat_id, text)
+        except Exception:
+            logger.exception("物料提醒发送失败: %s", chat_id)

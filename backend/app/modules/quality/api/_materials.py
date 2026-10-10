@@ -297,3 +297,46 @@ async def export_movements_endpoint(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="movements.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )
+
+
+# ─── 采购建议 ───
+
+
+@router.get("/material/purchase-suggestions", summary="采购建议（可用库存低于安全库存阈值的物料）")
+async def purchase_suggestions_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    suggestions = await material_container_service.purchase_suggestions(db)
+    return success_response(data=suggestions)
+
+
+@router.get("/material/purchase-suggestions/export", summary="采购建议导出 Excel")
+async def purchase_suggestions_export_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    suggestions = await material_container_service.purchase_suggestions(db)
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    ws.title = "采购建议"
+    ws.append(["物料代码", "物料名称", "供应商", "包装规格", "可用库存", "安全库存阈值", "建议采购量"])
+    for s in suggestions:
+        ws.append([
+            s["material_code"], s["material_name"], s["vendor_name"] or "",
+            s["pack_spec"] or "", s["available"], s["min_stock"], s["gap"],
+        ])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote("采购建议清单.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="purchase.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )

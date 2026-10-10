@@ -27,6 +27,7 @@ import type {
   MaterialDictItem,
   MaterialSummaryItem,
   MaterialMovementItem,
+  PurchaseSuggestion,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -1072,5 +1073,24 @@ export async function exportMaterialMovements(materialQ?: string): Promise<Blob>
     headers: await _authHeaders(),
   })
   if (!res.ok) throw new Error('台账导出失败')
+  return res.blob()
+}
+
+
+// ─── 采购建议 ───
+
+export async function fetchPurchaseSuggestions(): Promise<{ data: PurchaseSuggestion[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/purchase-suggestions`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取采购建议失败')
+  return res.json()
+}
+
+export async function exportPurchaseSuggestions(): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/purchase-suggestions/export`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('采购建议导出失败')
   return res.blob()
 }

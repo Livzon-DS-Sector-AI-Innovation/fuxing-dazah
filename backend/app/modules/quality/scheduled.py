@@ -9,6 +9,7 @@ import os
 from app.modules.quality.feishu.daily_push import (
     _parse_hhmm,
     _push_afternoon_reminder,
+    _push_material_alerts,
     _push_today_tasks,
 )
 from app.platform.scheduler import (
@@ -42,5 +43,16 @@ AFTERNOON_REMIND_TASK = TaskDefinition(
         timezone="Asia/Shanghai",
     ),
     coro=_push_afternoon_reminder,
+    module="quality",
+)
+
+MATERIAL_ALERT_TASK = TaskDefinition(
+    name="quality.material_alert",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.CRON,
+        expression=_cron_expr("QUALITY_PUSH_MATERIAL", (8, 15)),
+        timezone="Asia/Shanghai",
+    ),
+    coro=_push_material_alerts,
     module="quality",
 )

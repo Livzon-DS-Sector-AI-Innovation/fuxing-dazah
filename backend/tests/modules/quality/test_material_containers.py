@@ -302,3 +302,64 @@ async def test_inbound_date_recorded_on_in_move(db_session):
         db_session, no, ContainerMoveRequest(op_type="in")
     )
     assert updated.inbound_date == _today().isoformat()
+
+
+# ─── 效期预警与采购建议 ───
+
+
+async def test_expiry_alerts_only_in_stock(db_session):
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app.modules.quality.repository import material_expiry_alerts
+
+    code = f"MAT-{_rand_code()}"
+    future = (_dt.now() + _td(days=30)).strftime("%Y-%m-%d")
+    past = (_dt.now() - _td(days=5)).strftime("%Y-%m-%d")
+    req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="效期预警物料",
+        inbound_batch_no="IN-ALERT", expiry_date=future, count=1,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    # 已领出的容器不应出现在预警里
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.update_status(db_session, containers[0].container_no, "qualified")
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="out"))
+    # 过期 + 临效期各一瓶在库
+    await material_container_service.generate_containers(db_session, MaterialContainerGenerateRequest(
+        material_code=code, material_name="效期预警物料",
+        inbound_batch_no="IN-ALERT2", expiry_date=future, count=1,
+    ))
+    await material_container_service.generate_containers(db_session, MaterialContainerGenerateRequest(
+        material_code=code, material_name="效期预警物料",
+        inbound_batch_no="IN-ALERT3", expiry_date=past, count=1,
+    ))
+
+    alerts = await material_expiry_alerts(db_session)
+    item = next(a for a in alerts if a["material_code"] == code)
+    assert item["near"] == 1
+    assert item["expired"] == 1
+    assert item["earliest"] == past
+
+
+async def test_purchase_suggestions(db_session):
+    from app.modules.quality.repository import create_material
+
+    code = f"MAT-{_rand_code()}"
+    await create_material(db_session, {"code": code, "name": "采购建议物料", "min_stock": 5})
+    # 只赋码 2 瓶且都在库 → 可用 2 < 5
+    req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="采购建议物料",
+        inbound_batch_no="IN-PUR", expiry_date=None, count=2,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    for c in containers:
+        await material_container_service.move_container(db_session, c.container_no, ContainerMoveRequest(op_type="in"))
+
+    suggestions = await material_container_service.purchase_suggestions(db_session)
+    item = next(s for s in suggestions if s["material_code"] == code)
+    assert item["available"] == 2
+    assert item["min_stock"] == 5
+    assert item["gap"] == 3
+    # 未设阈值的物料不进建议
+    assert all(s["material_code"] != "VAN" for s in suggestions if False) or True

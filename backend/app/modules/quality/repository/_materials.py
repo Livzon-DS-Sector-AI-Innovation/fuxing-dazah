@@ -315,3 +315,50 @@ async def material_stock_summary(db: AsyncSession) -> list[dict[str, Any]]:
         item["min_stock"] = min_stock
         item["below_stock"] = min_stock is not None and item["available"] < min_stock
     return result
+
+
+# ─── 效期预警与采购建议 ───
+
+
+async def material_expiry_alerts(db: AsyncSession) -> list[dict[str, Any]]:
+    """临效期(≤90天)与已过期容器按物料聚合（在库相关状态才提醒，已领出不计）。
+
+    返回 [{material_code, material_name, near, expired, earliest}]。
+    """
+    from app.core.time import today as _today
+
+    today_str = _today().isoformat()
+    deadline = func.to_char(func.now() + text("interval '90 days'"), "YYYY-MM-DD")
+    rows = await db.execute(
+        select(
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+            func.count().filter(QualityMaterialContainer.expiry_date < today_str).label("expired"),
+            func.count().filter(
+                QualityMaterialContainer.expiry_date >= today_str,
+                QualityMaterialContainer.expiry_date <= deadline,
+            ).label("near"),
+            func.min(QualityMaterialContainer.expiry_date).label("earliest"),
+        )
+        .where(
+            QualityMaterialContainer.is_deleted == False,  # noqa: E712
+            QualityMaterialContainer.status.in_(["labeled", "in_warehouse", "qualified"]),
+            QualityMaterialContainer.expiry_date.is_not(None),
+            QualityMaterialContainer.expiry_date <= deadline,
+        )
+        .group_by(
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+        )
+        .order_by(QualityMaterialContainer.material_name)
+    )
+    return [
+        {
+            "material_code": r.material_code,
+            "material_name": r.material_name,
+            "near": int(r.near or 0),
+            "expired": int(r.expired or 0),
+            "earliest": r.earliest,
+        }
+        for r in rows
+    ]

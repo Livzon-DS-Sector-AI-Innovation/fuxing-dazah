@@ -4,16 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col,
 } from 'antd'
-import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
-import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem } from '@/types/quality'
+import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, PurchaseSuggestion } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
   fetchMaterialDict, createMaterialDict, updateMaterialDict, deleteMaterialDict,
   fetchMaterialSummary, fetchMaterialMovements, exportMaterialMovements,
+  fetchPurchaseSuggestions, exportPurchaseSuggestions,
 } from '@/actions/quality'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
@@ -53,6 +54,9 @@ export default function MaterialContainers() {
   const [mvTotal, setMvTotal] = useState(0)
   const [mvPage, setMvPage] = useState(1)
   const [mvQ, setMvQ] = useState<string | undefined>()
+  // 采购清单弹窗
+  const [purOpen, setPurOpen] = useState(false)
+  const [purData, setPurData] = useState<PurchaseSuggestion[]>([])
 
   const load = useCallback(async (p: number, status?: string, batch?: string, materialCode?: string) => {
     setLoading(true)
@@ -251,6 +255,31 @@ export default function MaterialContainers() {
     }
   }
 
+  // ── 采购清单 ──
+  const openPurchase = async () => {
+    setPurOpen(true)
+    try {
+      const res = await fetchPurchaseSuggestions()
+      setPurData(res.data)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取采购建议失败')
+    }
+  }
+
+  const onExportPurchase = async () => {
+    try {
+      const blob = await exportPurchaseSuggestions()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = '采购建议清单.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '采购建议导出失败')
+    }
+  }
+
   const columns = [
     { title: '容器号', dataIndex: 'container_no', key: 'container_no', width: 210, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name' },
@@ -374,6 +403,7 @@ export default function MaterialContainers() {
           <Button icon={<BookOutlined />} onClick={() => { setEditingDict(null); dictForm.resetFields(); setDictOpen(true) }}>物料字典</Button>
         )}
         <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
+        <Button icon={<ShoppingCartOutlined />} onClick={openPurchase}>采购清单</Button>
       </Space>
 
       <Table
@@ -517,6 +547,34 @@ export default function MaterialContainers() {
             { title: '操作', dataIndex: 'op_type', width: 90, render: (v: string) => <Tag color={OP_TYPE_META[v]?.color}>{OP_TYPE_META[v]?.label ?? v}</Tag> },
             { title: '状态变化', key: 'status', width: 160, render: (_: unknown, r: MaterialMovementItem) => `${r.from_status} → ${r.to_status}` },
             { title: '关联单据', dataIndex: 'related_doc', width: 110, render: (v: string | null) => v || '-' },
+          ]}
+        />
+      </Modal>
+      {/* 采购清单弹窗 */}
+      <Modal
+        title="采购建议清单（可用库存低于安全库存阈值）"
+        open={purOpen}
+        onCancel={() => setPurOpen(false)}
+        footer={null}
+        width={760}
+      >
+        <Space style={{ marginBottom: 12 }}>
+          <Button icon={<DownloadOutlined />} onClick={onExportPurchase}>导出 Excel</Button>
+        </Space>
+        <Table
+          rowKey="material_code"
+          size="small"
+          dataSource={purData}
+          pagination={false}
+          locale={{ emptyText: '暂无采购建议（各物料库存充足或未设置安全库存阈值）' }}
+          columns={[
+            { title: '物料代码', dataIndex: 'material_code', width: 110 },
+            { title: '物料名称', dataIndex: 'material_name' },
+            { title: '供应商', dataIndex: 'vendor_name', width: 120, render: (v: string | null) => v || '-' },
+            { title: '包装规格', dataIndex: 'pack_spec', width: 100, render: (v: string | null) => v || '-' },
+            { title: '可用库存', dataIndex: 'available', width: 90, render: (v: number) => <Typography.Text type="danger">{v}</Typography.Text> },
+            { title: '安全库存', dataIndex: 'min_stock', width: 90 },
+            { title: '建议采购量', dataIndex: 'gap', width: 100, render: (v: number) => <Typography.Text strong type="warning">{v}</Typography.Text> },
           ]}
         />
       </Modal>
