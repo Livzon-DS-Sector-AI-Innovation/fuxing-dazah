@@ -35,6 +35,7 @@ from app.modules.safety.service.subsidy_plan import (
     SubsidyPlan,
     SubsidyPlanBuilder,
     build_certificate_map,
+    build_guardian_department_map,
 )
 from app.modules.safety.workticket_review.client import WorkTicketPlatformClient
 from app.modules.safety.workticket_review.parser import WorkTicket, WorkTicketParser
@@ -43,6 +44,10 @@ logger = logging.getLogger(__name__)
 
 # B 证补贴系数（与既有 export_excel 默认值一致；费率调整属制度变更，不在本 ticket 范围）
 _B_CERT_RATE = 0.5
+
+# 无证监护人默认级别（2026-10 制度调整：证书台账未匹配者暂按 A 证计入，
+# 待各部门核对台账修正后自动回归真实级别；None 恢复旧「不计入」口径）
+_UNCERTIFIED_LEVEL = "A证"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -119,9 +124,22 @@ async def _fetch_and_parse(year: int, month: int) -> tuple[list[WorkTicket] | No
 async def _build_plan(
     db: Any, tickets: list[WorkTicket], dept_keyword: str, year: int, month: int
 ) -> SubsidyPlan:
-    """证书映射查询 + 纯函数整理（is_void/缺时间/部门/监护人/证书/类型规则全在 builder）。"""
+    """证书 + 监护人部门映射查询，纯函数整理（is_void/缺时间/部门/监护人/证书/类型规则全在 builder）。
+
+    部门归集按**监护人所在部门**（identity 库飞书同步数据上溯到统计部门层级），
+    查无此人回退申请单位；无证监护人按 ``_UNCERTIFIED_LEVEL``（A证）暂计。
+    """
     cert_map = await build_certificate_map(db)
-    return SubsidyPlanBuilder.build(tickets, cert_map, dept_keyword, year, month)
+    guardian_depts = await build_guardian_department_map(db)
+    return SubsidyPlanBuilder.build(
+        tickets,
+        cert_map,
+        dept_keyword,
+        year,
+        month,
+        guardian_departments=guardian_depts,
+        uncertified_level=_UNCERTIFIED_LEVEL,
+    )
 
 
 def _confirm_suggestion(
@@ -134,8 +152,9 @@ def _confirm_suggestion(
     text = (
         f"以上为「{dept_keyword}」{year}年{month}月监护补贴预览："
         f"窗口拉取 {plan.total_tickets} 张作业票，{plan.matched_tickets} 张计入补贴"
-        f"（监护人 {len(levels)} 名：A证 {a_cert} 名、B证 {b_cert} 名），"
-        f"待核对 {plan.unmatched_tickets} 张（{len(plan.unmatched)} 人未匹配证书），"
+        f"（监护人 {len(levels)} 名：A证 {a_cert} 名、B证 {b_cert} 名；"
+        f"按监护人所在部门归集），"
+        f"待核对 {plan.unmatched_tickets} 张（{len(plan.unmatched)} 人未匹配证书，已暂按A证计入），"
         f"跳过 {plan.skipped_tickets} 张（目标域内）。"
     )
     if need_selection:
@@ -162,8 +181,13 @@ async def preview_guardian_subsidy(
     监护人补贴"）时，先调用本工具预览，**不要**直接生成 Excel。工具返回
     ``confirm_suggestion`` 含「确认计算」话术，可直接引导用户确认。
 
+    归集口径（2026-10 制度调整）：按**监护人所在部门**统计（飞书通讯录部门，
+    补贴在监护人部门申报，与申请单位无关）；无证监护人暂按 A 证计入金额，
+    同时进 ``unmatched`` 待核对名单。
+
     Args:
-        dept_keyword: 部门关键词（**包含匹配**，如"环保"可命中"环保部"；无需全称）
+        dept_keyword: 部门关键词（**包含匹配**，如"环保"可命中"环保工程中心"；
+            匹配的是监护人所在部门）
         year: 统计年份（如 2026）
         month: 统计月份（1-12，如 8；按作业**开始时间**归集）
 
@@ -174,8 +198,10 @@ async def preview_guardian_subsidy(
             - matched_records / matched_tickets: 计入补贴的票数
             - guardian_names: 去重后的监护人名单
             - guardians: [{name, level, ticket_count}] 监护人 + A/B 证级别 + 票数
+              （无证者 level 显示 A证，另见 unmatched）
             - a_cert_count / b_cert_count: A 证 / B 证监护人数
-            - unmatched: [{name, ticket_count, operation_types}] 证书未匹配（不计金额）
+            - unmatched: [{name, ticket_count, operation_types}] 证书未匹配
+              （已暂按A证计入金额，请核对证书台账）
             - skipped: [{ticket_no, ticket_type, reason}] 跳过票（**目标域内**：
               目标部门+目标月的作废/缺时间/无监护人/未知类型，非目标域票不在其中）
             - departments: 窗口内出现过的作业申请单位（部门匹配不到时作候选清单）
@@ -277,15 +303,16 @@ async def generate_guardian_subsidy(
     """监护补贴生成：重拉平台作业票 → 重算 → 生成 Excel → 回传当前飞书会话（**写入，需确认**）。
 
     用户对预览明确确认（如回复「确认计算」）后调用。本工具以相同入参**幂等重拉重算**
-    （与 preview 同窗口），Excel 主表 + 「待核对/跳过说明」第二页：
+    （与 preview 同窗口），按监护人所在部门归集、无证人员暂按 A 证计入，
+    Excel 主表 + 「待核对/跳过说明」第二页：
     - 主表：按监护人+作业类型拆分补贴，公司模板原样复现；
-    - 第二页：证书未匹配监护人（不计入补贴）+ 跳过票（票号+原因）。
+    - 第二页：证书未匹配监护人（已暂按A证计入，请核对）+ 跳过票（票号+原因）。
 
     文件通过 ``ctx.deps.chat_id`` 回传当前会话；web 渠道（chat_id=None）返回降级提示
     并附 ``file_content_base64`` 兜底（不发送）。
 
     Args:
-        dept_keyword: 部门关键词（包含匹配，如"环保"→"环保部"）
+        dept_keyword: 部门关键词（包含匹配，如"环保"→"环保工程中心"；匹配监护人所在部门）
         year: 统计年份（如 2026）
         month: 统计月份（1-12；按作业开始时间归集）
         filename: 可选，文件名（建议 .xlsx 结尾；缺省按「部门 年月 监护补贴统计.xlsx」生成）
@@ -333,7 +360,7 @@ async def generate_guardian_subsidy(
             extra["hint"] = "该部门在目标月份没有可计入补贴的记录（全部被跳过或待核对），请先用 preview_guardian_subsidy 查看明细。"
         return {"error": "没有可计入补贴的作业票，未生成 Excel。", "error_type": "no_matched_records", **extra}
 
-    # ── 标题/部门名：从命中的申请单位取（确定性：排序后取第一个），回退关键词 ──
+    # ── 标题/部门名：从命中的归集部门取（确定性：排序后取第一个），回退关键词 ──
     department = matched_depts[0] if matched_depts else dept_keyword
     title = f"{department} {year}年{month}月 监护补贴统计"
     file_name = (filename or "").strip() or f"{title}.xlsx"
@@ -348,7 +375,11 @@ async def generate_guardian_subsidy(
         title=title,
         department=department,
         b_cert_rate=_B_CERT_RATE,
-        review_notes=ReviewNotes(unmatched=plan.unmatched, skipped=plan.skipped),
+        review_notes=ReviewNotes(
+            unmatched=plan.unmatched,
+            skipped=plan.skipped,
+            unmatched_counted=_UNCERTIFIED_LEVEL is not None,
+        ),
     )
 
     # P-1：摘要金额 = B 证按 0.5 系数折算后实发合计（与 Excel K 列口径一致，
@@ -386,7 +417,8 @@ async def generate_guardian_subsidy(
         f"已生成《{title}》并发送到当前会话。"
         f"统计：{plan.matched_tickets} 张票、{summary['guardian_count']} 名监护人、"
         f"补贴总额 {summary['total_amount']:.2f} 元"
-        f"（B证按{_B_CERT_RATE}系数折算后实发合计，Excel K 列口径）；"
+        f"（B证按{_B_CERT_RATE}系数折算后实发合计，Excel K 列口径；"
+        f"按监护人所在部门归集，无证人员暂按A证计入）；"
         f"待核对 {summary['unmatched_count']} 张、跳过 {summary['skipped_count']} 张"
         f"（目标域内，详见 Excel 第二页「待核对-跳过说明」）。"
     )

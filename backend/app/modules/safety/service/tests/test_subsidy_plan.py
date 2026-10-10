@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections import namedtuple
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -577,3 +578,122 @@ def test_ferment_confined_space_not_deduped() -> None:
     ]
     plan2 = SubsidyPlanBuilder.build(tickets2, {"张三": "A证"}, "环保", 2026, 8)
     assert plan2.matched_tickets == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 2026-10 制度调整：按监护人所在部门归集 + 无证默认按 A 证
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_guardian_department_overrides_apply_unit() -> None:
+    """A 部门申请、监护人属 B 部门 → 按 B 部门归集与匹配（申请单位不参与）。"""
+    tickets = [
+        _ticket(ticket_no="G-001", apply_unit="发酵工程部", guardian="张三"),  # 张三属环保部
+        _ticket(ticket_no="G-002", apply_unit="环保部", guardian="李四"),      # 李四属发酵工程部
+    ]
+    plan = SubsidyPlanBuilder.build(
+        tickets,
+        CERT_MAP,
+        "环保部",
+        2026, 8,
+        guardian_departments={"张三": "环保部", "李四": "发酵工程部"},
+    )
+    assert plan.matched_tickets == 1
+    assert plan.records[0].ticket_no == "G-001"
+    assert plan.records[0].department == "环保部"
+    assert "环保部" in plan.departments
+    # 域内口径：G-002 的监护人属发酵工程部 → 不属于目标域，不进 skipped
+    assert plan.skipped == []
+
+
+def test_guardian_department_fallback_to_apply_unit() -> None:
+    """映射查无此人 → 回退申请单位匹配，且姓名计入 department_fallbacks。"""
+    tickets = [_ticket(ticket_no="G-003", apply_unit="发酵工程部", guardian="赵六")]
+    cert_map = {**CERT_MAP, "赵六": "A证"}
+    plan = SubsidyPlanBuilder.build(
+        tickets, cert_map, "发酵", 2026, 8, guardian_departments={"张三": "环保部"}
+    )
+    assert plan.matched_tickets == 1
+    assert plan.records[0].department == "发酵工程部"
+    assert plan.department_fallbacks == ["赵六"]
+
+
+def test_uncertified_level_counts_as_default() -> None:
+    """无证 + uncertified_level='A证' → 计入 records（A证）且保留待核对名单；不传则维持不计入。"""
+    tickets = [_ticket(ticket_no="G-004", guardian="路人甲")]
+    counted = SubsidyPlanBuilder.build(
+        tickets, CERT_MAP, "环保部", 2026, 8, uncertified_level="A证"
+    )
+    assert counted.matched_tickets == 1
+    assert counted.records[0].guardian_level == "A证"
+    assert counted.unmatched_tickets == 1
+    assert [u.name for u in counted.unmatched] == ["路人甲"]
+
+    legacy = SubsidyPlanBuilder.build(tickets, CERT_MAP, "环保部", 2026, 8)
+    assert legacy.matched_tickets == 0
+    assert legacy.unmatched_tickets == 1
+    assert legacy.records == []
+
+
+def test_ferment_confined_space_follows_guardian_department() -> None:
+    """发酵受限空间按张计费特判跟随归集部门（监护人部门），而非申请单位。"""
+    tickets = [
+        _ticket(ticket_no="G-F-1", ticket_type="confined_space", apply_unit="环保部",
+                start_time=_dt(2026, 8, 1, 8), end_time=_dt(2026, 8, 1, 10)),
+        _ticket(ticket_no="G-F-2", ticket_type="confined_space", apply_unit="环保部",
+                start_time=_dt(2026, 8, 1, 9), end_time=_dt(2026, 8, 1, 12)),
+    ]
+    # 监护人张三属发酵工程部（申请单位环保部）→ 归集发酵工程部，受限空间按张计费不去重
+    plan = SubsidyPlanBuilder.build(
+        tickets, {"张三": "A证"}, "发酵工程部", 2026, 8,
+        guardian_departments={"张三": "发酵工程部"},
+    )
+    assert plan.matched_tickets == 2
+    assert all(r.department == "发酵工程部" for r in plan.records)
+
+
+@pytest.mark.asyncio
+async def test_build_guardian_department_map_ascends_and_alias() -> None:
+    """子部门上溯到统计层级 + 别名归一 + 脏数据容忍（空/坏 JSON 不进映射）。"""
+    from app.modules.safety.service.subsidy_plan import build_guardian_department_map
+
+    dept_rows = _ns_rows(
+        "name feishu_department_id parent_feishu_department_id",
+        [
+            ("设备工程部", "od-1", None),
+            ("机修车间", "od-2", "od-1"),
+            ("质量保证部", "od-3", None),
+        ],
+    )
+    user_rows = _ns_rows(
+        "name feishu_department_ids",
+        [
+            ("张三", '["od-2"]'),   # 机修车间 → 上溯设备工程部
+            ("李 四", '["od-3"]'),  # 姓名去空格 + 质量保证部 → 别名（QA部）
+            ("王五", None),         # 空部门 → 不进映射
+            ("赵六", "bad-json"),   # 坏 JSON → 不进映射
+            ("张三", '["od-3"]'),   # 同名后到 → 已存在不覆盖
+        ],
+    )
+
+    class _Result:
+        def __init__(self, rows: list) -> None:
+            self._rows = rows
+
+        def all(self) -> list:
+            return self._rows
+
+    class _DB:
+        async def execute(self, statement: Any) -> _Result:
+            stmt = str(statement)
+            if "feishu_department_ids" in stmt:
+                return _Result(user_rows)
+            return _Result(dept_rows)
+
+    mapping = await build_guardian_department_map(_DB())  # type: ignore[arg-type]
+    assert mapping == {"张三": "设备工程部", "李四": "质量保证部（QA部）"}
+
+
+def _ns_rows(fields: str, rows: list[tuple]) -> list:
+    row_type = namedtuple("_Row", fields)
+    return [row_type(*r) for r in rows]

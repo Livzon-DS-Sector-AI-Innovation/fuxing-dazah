@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+from collections import namedtuple
 from typing import Any
 
 import pytest
@@ -124,27 +125,54 @@ def _set_client(
     return fake
 
 
-# ── 夹具：Fake DB session（build_certificate_map.execute(...).all()）─────
+# ── 夹具：Fake DB session（build_certificate_map / build_guardian_department_map 查询）──
 
 
 class _FakeResult:
-    def __init__(self, rows: list[tuple[str, str]]) -> None:
+    def __init__(self, rows: list) -> None:
         self._rows = rows
 
-    def all(self) -> list[tuple[str, str]]:
+    def all(self) -> list:
         return self._rows
 
 
+def _ns_rows(fields: str, rows: list[tuple]) -> list:
+    """把元组行包装成支持属性访问的 namedtuple（模拟 ORM Row）。"""
+    row_type = namedtuple("_Row", fields)  # type: ignore[misc]
+    return [row_type(*r) for r in rows]
+
+
 class _FakeSession:
-    def __init__(self, rows: list[tuple[str, str]] | None = None) -> None:
-        self._rows = rows or [
+    """按语句列名区分三类查询：证书 / 部门树 / 用户（feishu_department_ids 复数）。"""
+
+    def __init__(
+        self,
+        cert_rows: list[tuple[str, str]] | None = None,
+        dept_rows: list[tuple[str, str, str | None]] | None = None,
+        user_rows: list[tuple[str, str | None]] | None = None,
+    ) -> None:
+        self._cert_rows = cert_rows or [
             ("张三", "guardian_a"),
             ("李四", "guardian_b"),
             ("王五", "guardian_b"),
         ]
+        # 默认部门树：环保部（三人默认归集到环保部，与旧行为等价）
+        self._dept_rows = dept_rows or [("环保部", "od-hb", None)]
+        self._user_rows = user_rows or [
+            ("张三", '["od-hb"]'),
+            ("李四", '["od-hb"]'),
+            ("王五", '["od-hb"]'),
+        ]
 
     async def execute(self, statement: Any) -> _FakeResult:
-        return _FakeResult(self._rows)
+        stmt = str(statement)
+        if "feishu_department_ids" in stmt:  # 用户查询（复数列名）
+            return _FakeResult(_ns_rows("name feishu_department_ids", self._user_rows))
+        if "feishu_department_id" in stmt:  # 部门树查询（单数列名）
+            return _FakeResult(
+                _ns_rows("name feishu_department_id parent_feishu_department_id", self._dept_rows)
+            )
+        return _FakeResult(_ns_rows("person_name cert_category", self._cert_rows))
 
 
 def _ctx(db: Any, *, chat_id: str | None = "oc_test") -> RunContext[SafetyDeps]:
@@ -215,13 +243,20 @@ async def test_preview_window_crosses_year_boundary(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_preview_no_dept_match_returns_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """部门关键词不命中 → matched=0 + 候选部门清单 + need_department_selection。"""
+    """部门关键词不命中 → matched=0 + 候选部门清单 + need_department_selection。
+
+    新口径：部门匹配按监护人归集部门——张三归集「发酵工程部」，故 keyword=环保 不命中。
+    """
     records = [
         _raw_record("hot_work", ticket_no="DH-0901", guardian="张三", apply_unit="发酵工程部"),
     ]
     _set_client(monkeypatch, records=records)
+    session = _FakeSession(
+        dept_rows=[("发酵工程部", "od-fj", None)],
+        user_rows=[("张三", '["od-fj"]')],
+    )
 
-    result = await preview_guardian_subsidy(_ctx(_FakeSession()), "环保", 2026, 8)
+    result = await preview_guardian_subsidy(_ctx(session), "环保", 2026, 8)
 
     assert result["matched_records"] == 0
     assert result["need_department_selection"] is True

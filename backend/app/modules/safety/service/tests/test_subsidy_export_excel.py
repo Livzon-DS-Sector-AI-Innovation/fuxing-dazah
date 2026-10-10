@@ -136,6 +136,31 @@ def test_export_excel_review_sheet_sections() -> None:
     assert all(row[3] == 0 for row in skipped_rows)
 
 
+# ── 2026-10 制度调整: unmatched_counted=True → 第二页文案切换为「已暂按A证计入」 ──
+
+def test_export_excel_review_sheet_counted_wording() -> None:
+    """无证已暂按 A 证计入 → 分区标题与行说明均为「已暂按A证计入，请核对后修正」。"""
+    notes = ReviewNotes(
+        unmatched=[
+            UnmatchedGuardian(name="路人甲", ticket_count=2, operation_types=["动火作业"]),
+        ],
+        skipped=[],
+        unmatched_counted=True,
+    )
+    ws = load_workbook(io.BytesIO(_export(notes)))["待核对-跳过说明"]
+
+    texts = [str(c) for row in ws.iter_rows(values_only=True) for c in row if c is not None]
+    assert any("已暂按A证计入补贴" in t for t in texts)
+    assert not any("不计入补贴" in t for t in texts)
+    # 旧口径（unmatched_counted=False 默认）文案仍为「不计入补贴」
+    legacy_ws = load_workbook(io.BytesIO(_export(ReviewNotes(
+        unmatched=[UnmatchedGuardian(name="路人甲", ticket_count=2, operation_types=["动火作业"])],
+    ))))["待核对-跳过说明"]
+    legacy_texts = [str(c) for row in legacy_ws.iter_rows(values_only=True) for c in row if c is not None]
+    assert any("不计入补贴" in t for t in legacy_texts)
+    assert not any("已暂按A证计入" in t for t in legacy_texts)
+
+
 # ── P-1 回归: B 证详情不被就地修改 / 不重复打折 ──
 
 def test_export_excel_b_cert_no_double_discount() -> None:

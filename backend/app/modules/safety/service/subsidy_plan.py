@@ -7,8 +7,11 @@
 
 模块内两类职责：
 
-- ``build_certificate_map``：**DB 依赖**（person_certificates 查询），仅供
-  Agent 工具 / Service 层调用；匹配规则本身在纯函数内完成。
+- ``build_certificate_map`` / ``build_guardian_department_map``：**DB 依赖**（证书台账 /
+  飞书同步 identity 库查询），仅供 Agent 工具 / Service 层调用；匹配规则本身在纯函数内完成。
+- ``SubsidyPlanBuilder.build`` 部门归集支持两种口径：默认申请单位（旧）；
+  传 ``guardian_departments`` 后按**监护人所在部门**（2026-10 制度调整：补贴在
+  监护人部门申报），``uncertified_level`` 可让无证监护人按默认级别（A证）暂计。
 
 补贴标准见 ``service/subsidy.py`` 的 ``SUBSIDY_RATES``：中文标签须与其键值
 完全一致（本文件下方 ``_OP_TYPE_LABEL`` 即按现有常量对齐）。
@@ -16,16 +19,20 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.safety.feishu.dept_config import DEPARTMENT_CONFIG
 from app.modules.safety.models import PersonCertificate
 from app.modules.safety.schemas.subsidy import SubsidyRecordInput
 from app.modules.safety.service.subsidy import PER_OCCURRENCE_TYPES
 from app.modules.safety.workticket_review.parser import WorkTicket
+from app.platform.identity.models import Department as IdentityDepartment
+from app.platform.identity.models import User as IdentityUser
 
 # ── 证书级别标签（与 subsidy 汇总口径一致） ──
 _LEVEL_A = "A证"
@@ -177,6 +184,89 @@ async def build_certificate_map(db: AsyncSession) -> dict[str, str]:
     return cert_map
 
 
+# ── 监护人部门归集（2026-10 制度调整：补贴按监护人所在部门申报，非申请单位） ──
+
+# identity.departments 部门名 → DEPARTMENT_CONFIG 键的别名（CONFIG 键为全角括号全称）
+_DEPT_NAME_ALIAS: dict[str, str] = {
+    "质量保证部": "质量保证部（QA部）",
+    "质量控制部": "质量控制部（QC部）",
+    "法规注册部": "法规注册部（RA部）",
+}
+
+
+def _config_department(dept_name: str) -> str | None:
+    """部门名归一到 DEPARTMENT_CONFIG 键；未命中返回 None。"""
+    if dept_name in DEPARTMENT_CONFIG:
+        return dept_name
+    return _DEPT_NAME_ALIAS.get(dept_name)
+
+
+def _ascend_to_config_department(
+    dept_by_id: dict[str, tuple[str, str | None]], dept_ids: list[str]
+) -> str | None:
+    """从直属部门沿父链上溯，找 DEPARTMENT_CONFIG 层级的归集部门。
+
+    例：挂在「机修车间」的人上溯到「设备工程部」；挂多部门时任一命中即返回。
+    """
+    for did in dept_ids:
+        cur: str | None = did
+        seen: set[str] = set()
+        while cur and cur in dept_by_id and cur not in seen:
+            seen.add(cur)
+            name, parent = dept_by_id[cur]
+            hit = _config_department(name)
+            if hit:
+                return hit
+            cur = parent
+    return None
+
+
+async def build_guardian_department_map(db: AsyncSession) -> dict[str, str]:
+    """从飞书同步的 identity 库提取「监护人姓名 → 归集部门」映射。
+
+    - 数据源：``identity.users.feishu_department_ids`` + ``identity.departments``
+      父子树（``users.department`` 列是单字简称，不可用）；
+    - 直属部门沿父链上溯到 DEPARTMENT_CONFIG 层级（27 个统计部门）；
+    - 同名取首个命中的活行；查不到的姓名**不在** map 中，build 时回退申请单位。
+    """
+    dept_rows = (
+        await db.execute(
+            select(
+                IdentityDepartment.name,
+                IdentityDepartment.feishu_department_id,
+                IdentityDepartment.parent_feishu_department_id,
+            )
+        )
+    ).all()
+    dept_by_id = {
+        row.feishu_department_id: (row.name, row.parent_feishu_department_id)
+        for row in dept_rows
+    }
+
+    user_rows = (
+        await db.execute(
+            select(IdentityUser.name, IdentityUser.feishu_department_ids).where(
+                IdentityUser.is_deleted.is_(False)  # noqa: E712
+            )
+        )
+    ).all()
+    mapping: dict[str, str] = {}
+    for user in user_rows:
+        key = _normalize_name(user.name or "")
+        if not key or key in mapping:
+            continue
+        try:
+            dept_ids = json.loads(user.feishu_department_ids or "[]")
+        except (TypeError, ValueError):
+            dept_ids = []
+        if not isinstance(dept_ids, list):
+            dept_ids = []
+        hit = _ascend_to_config_department(dept_by_id, dept_ids)
+        if hit:
+            mapping[key] = hit
+    return mapping
+
+
 @dataclass
 class UnmatchedGuardian:
     """证书未匹配的监护人（不计入补贴，进待核对页展示）。"""
@@ -202,10 +292,13 @@ class ReviewNotes:
     复用 :class:`UnmatchedGuardian` / :class:`SkippedTicket`（ticket 03 类型），
     由 generate 工具从 ``SubsidyPlan`` 组装，经 ``SubsidyService.export_excel``
     渲染到主表之后的第二页；两个列表均为空等价于不传（单页向后兼容）。
+    ``unmatched_counted=True`` 表示待核对人已按默认级别（A证）暂计金额，
+    第二页文案据此切换为「已暂按A证计入，请核对后修正」。
     """
 
     unmatched: list[UnmatchedGuardian] = field(default_factory=list)
     skipped: list[SkippedTicket] = field(default_factory=list)
+    unmatched_counted: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -226,6 +319,8 @@ class SubsidyPlan:
     matched_tickets: int
     unmatched_tickets: int
     skipped_tickets: int
+    # 监护人部门映射中查无此人、回退按申请单位归集的姓名（透明可查）
+    department_fallbacks: list[str] = field(default_factory=list)
 
     @property
     def guardian_count(self) -> int:
@@ -243,12 +338,21 @@ class SubsidyPlanBuilder:
         dept_keyword: str,
         year: int,
         month: int,
+        *,
+        guardian_departments: dict[str, str] | None = None,
+        uncertified_level: str | None = None,
     ) -> SubsidyPlan:
         """按设计 3.2 顺序执行：部门 → 月份 → 作废 → 结束时间 → 无监护人 → 证书 → 类型 → 记录。
 
-        关键语义（P-2/P-3 审查修复）：
+        关键语义（P-2/P-3 审查修复 + 2026-10 制度调整）：
+        - **部门归集维度**（``guardian_departments`` 非 None 时）：按**监护人所在部门**
+          匹配关键词并归集（补贴在监护人部门申报）；映射查无此人回退申请单位
+          （计入 ``department_fallbacks``）。传 None 维持旧的申请单位口径。
         - **skipped 域内口径**：仅在「目标部门」域内判定跳过；非目标部门/
           非目标月票直接忽略，不进入 skipped / unmatched / 预览统计。
+        - **无证默认级别**（``uncertified_level``，如 "A证"）：证书未匹配的监护人
+          **计入** records（按该级别算金额），同时仍进 ``unmatched`` 待核对名单
+          （透明展示）；传 None 维持旧的不计入口径。
         - **按次/块/罐票种缺 end_time 不跳过**：``PER_OCCURRENCE_TYPES``
           （临时用电、抽堵盲板）end_time 为 None 时以 ``start_time`` 兜底
           （按次计费，时长不影响金额）；仍缺 start_time 则跳过（无时间基线）。
@@ -263,15 +367,24 @@ class SubsidyPlanBuilder:
         unmatched_by_name: dict[str, UnmatchedGuardian] = {}
         unmatched_tickets = 0
         domain_tickets = 0
+        department_fallbacks: list[str] = []
         keyword = dept_keyword.lower()
 
         for ticket in tickets:
-            if ticket.apply_unit:
-                departments.add(ticket.apply_unit.strip())
+            # ── 部门归集：监护人所在部门优先；查无此人回退申请单位 ──
+            guardian_key = _normalize_name(ticket.guardian or "")
+            if guardian_departments is not None:
+                guardian_dept = guardian_departments.get(guardian_key) if guardian_key else None
+                if guardian_key and guardian_dept is None and guardian_key not in department_fallbacks:
+                    department_fallbacks.append(guardian_key)
+                dept_for_match = guardian_dept or (ticket.apply_unit or "")
+            else:
+                dept_for_match = ticket.apply_unit or ""
+            if dept_for_match:
+                departments.add(dept_for_match.strip())
 
-            # 1. 部门包含匹配（大小写不敏感，中文不受影响）；空 apply_unit → 不命中
-            apply_unit = ticket.apply_unit or ""
-            if keyword not in apply_unit.lower():
+            # 1. 部门包含匹配（大小写不敏感，中文不受影响）；空部门 → 不命中
+            if keyword not in dept_for_match.lower():
                 continue
 
             # 2. 月份过滤（按开始时间）；缺 start_time → 跳过（已属目标部门域，月不明）
@@ -301,29 +414,26 @@ class SubsidyPlanBuilder:
                     continue
 
             # 6. 无监护人跳过
-            if not ticket.guardian or not ticket.guardian.strip():
+            if not guardian_key:
                 skipped.append(SkippedTicket(ticket.ticket_no, ticket.ticket_type, _REASON_NO_GUARDIAN))
                 continue
 
-            guardian_name = _normalize_name(ticket.guardian)
-            if not guardian_name:
-                skipped.append(SkippedTicket(ticket.ticket_no, ticket.ticket_type, _REASON_NO_GUARDIAN))
-                continue
-
-            # 7. 证书匹配（未匹配 → 待核对，不计金额）
-            level = certificate_map.get(guardian_name)
+            # 7. 证书匹配（未匹配 → 待核对；给了 uncertified_level 则按默认级别计入）
+            level = certificate_map.get(guardian_key)
             if level is None:
                 unmatched_tickets += 1
                 op_label = operation_type or ticket.ticket_type
-                entry = unmatched_by_name.get(guardian_name)
+                entry = unmatched_by_name.get(guardian_key)
                 if entry is None:
-                    entry = UnmatchedGuardian(name=guardian_name, ticket_count=0)
-                    unmatched_by_name[guardian_name] = entry
+                    entry = UnmatchedGuardian(name=guardian_key, ticket_count=0)
+                    unmatched_by_name[guardian_key] = entry
                     unmatched.append(entry)
                 entry.ticket_count += 1
                 if op_label not in entry.operation_types:
                     entry.operation_types.append(op_label)
-                continue
+                if not uncertified_level:
+                    continue  # 旧口径：未匹配不计金额
+                level = uncertified_level
 
             # 8. 作业类型中文标签（未知名跳过）
             if operation_type is None:
@@ -334,10 +444,10 @@ class SubsidyPlanBuilder:
             location_content = f"{ticket.work_site or ''} {ticket.work_content or ''}".strip()
             records.append(
                 SubsidyRecordInput(
-                    guardian_name=guardian_name,
+                    guardian_name=guardian_key,
                     guardian_level=level,
                     ticket_no=ticket.ticket_no or None,
-                    department=ticket.apply_unit or None,
+                    department=dept_for_match or None,
                     operation_type=operation_type,
                     operation_level=ticket.level or "",
                     location_content=location_content,
@@ -363,6 +473,7 @@ class SubsidyPlanBuilder:
             matched_tickets=len(records),
             unmatched_tickets=unmatched_tickets,
             skipped_tickets=len(skipped),
+            department_fallbacks=department_fallbacks,
         )
 
 
@@ -373,5 +484,6 @@ __all__ = [
     "SkippedTicket",
     "ReviewNotes",
     "build_certificate_map",
+    "build_guardian_department_map",
     "_OP_TYPE_LABEL",
 ]

@@ -736,9 +736,10 @@ def _cell_display_len(value) -> int:
     return sum(2 if ord(ch) > 0x2E80 else 1 for ch in text)
 
 
-def _unmatched_note(name: str, ticket_count: int, operation_types: list[str]) -> str:
-    """未匹配监护人行的说明文案：涉及票数 + 不计入补贴提示 + 作业类型。"""
-    note = f"{name}：涉及 {ticket_count} 张票；未匹配到A/B证，不计入补贴"
+def _unmatched_note(name: str, ticket_count: int, operation_types: list[str], counted: bool = False) -> str:
+    """未匹配监护人行的说明文案：涉及票数 + 计入口径提示 + 作业类型。"""
+    hint = "已暂按A证计入补贴，请核对证书台账后修正" if counted else "不计入补贴"
+    note = f"{name}：涉及 {ticket_count} 张票；未匹配到A/B证，{hint}"
     if operation_types:
         note += f"（作业类型：{'、'.join(operation_types)}）"
     return note
@@ -779,11 +780,22 @@ def _write_review_sheet(
     ws.row_dimensions[2].height = 30
 
     # ── 分区与数据行 ──
+    counted = review_notes.unmatched_counted
+    unmatched_section = (
+        "证书未匹配监护人（未匹配到A/B证，已暂按A证计入补贴，请核对证书台账后修正）"
+        if counted
+        else "证书未匹配监护人（未匹配到A/B证，不计入补贴，金额占位为0）"
+    )
     sections = [
         (
-            "证书未匹配监护人（未匹配到A/B证，不计入补贴，金额占位为0）",
+            unmatched_section,
             [
-                ("未匹配", u.name, _unmatched_note(u.name, u.ticket_count, u.operation_types), 0)
+                (
+                    "未匹配",
+                    u.name,
+                    _unmatched_note(u.name, u.ticket_count, u.operation_types, counted=counted),
+                    0,
+                )
                 for u in review_notes.unmatched
             ],
         ),
