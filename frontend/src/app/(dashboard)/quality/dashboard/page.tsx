@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Typography, Card, Row, Col, Statistic, List, Tag, Button, App, Space, Progress, theme } from 'antd'
+import { Typography, Card, Row, Col, Statistic, Listy, Tag, Button, App, Space, Progress, theme } from 'antd'
 import {
   CalendarOutlined, SearchOutlined, LoadingOutlined, CheckCircleOutlined, SunOutlined,
 } from '@ant-design/icons'
@@ -20,7 +20,7 @@ function TaskItem({ t }: { t: DashRow }) {
   const { token } = theme.useToken()
   const pct = t.total ? Math.round((t.filled / t.total) * 100) : 0
   return (
-    <List.Item style={{ cursor: 'pointer', paddingBlock: 6 }}
+    <div style={{ cursor: 'pointer', paddingBlock: 6 }}
       onClick={() => router.push(`/quality/task/${t.task_id}`)}>
       <div style={{ width: '100%' }}>
         <Space wrap size={6}>
@@ -37,7 +37,7 @@ function TaskItem({ t }: { t: DashRow }) {
         <Progress percent={pct} size="small" format={() => `${t.filled}/${t.total}`}
           style={{ marginTop: 2, marginBottom: 0 }} />
       </div>
-    </List.Item>
+    </div>
   )
 }
 
@@ -132,43 +132,47 @@ export default function QualityDashboardPage() {
         <Col xs={24} md={8}>
           <Card size="small" title="📅 今日出报任务"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task')}>全部</Button>}>
-            <List size="small" dataSource={data?.today || []} locale={{ emptyText: '今日无出报任务' }}
-              renderItem={(t) => <TaskItem t={t} />} />
+            {data?.today?.length
+              ? <Listy items={data.today} rowKey={(t) => t.task_id} itemRender={(t) => <TaskItem t={t} />} />
+              : <Text type="secondary">今日无出报任务</Text>}
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small" title="🔍 待复核（需两名复核人通过）"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task?status=pending_review')}>全部</Button>}>
-            <List size="small" dataSource={data?.pending_review || []} locale={{ emptyText: '暂无待复核任务' }}
-              renderItem={(t) => <TaskItem t={t} />} />
+            {data?.pending_review?.length
+              ? <Listy items={data.pending_review} rowKey={(t) => t.task_id} itemRender={(t) => <TaskItem t={t} />} />
+              : <Text type="secondary">暂无待复核任务</Text>}
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small" title="✅ 最近完成任务"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task')}>全部</Button>}>
-            <List size="small" dataSource={data?.recent_completed || []} locale={{ emptyText: '暂无完成任务' }}
-              renderItem={(t) => <TaskItem t={t} />} />
+            {data?.recent_completed?.length
+              ? <Listy items={data.recent_completed} rowKey={(t) => t.task_id} itemRender={(t) => <TaskItem t={t} />} />
+              : <Text type="secondary">暂无完成任务</Text>}
           </Card>
         </Col>
       </Row>
 
       <Card size="small" title="📄 今日报告单（流水号+产品+批号）"
         extra={<Button size="small" type="link" onClick={() => router.push('/quality/report')}>报告单页</Button>}>
-        <List
-          size="small"
-          dataSource={dailyReports}
-          locale={{ emptyText: '今日暂无生成报告单' }}
-          renderItem={(r) => (
-            <List.Item>
-              <Space wrap size={8}>
-                <Text strong>{r.serial_no}</Text>
-                <Text>{r.product_name}</Text>
-                <Text type="secondary">批号 {r.batch_number}</Text>
-                <Text type="secondary">{r.created_at}</Text>
-              </Space>
-            </List.Item>
-          )}
-        />
+        {dailyReports.length
+          ? (
+              <Listy
+                items={dailyReports}
+                rowKey={(r) => `${r.serial_no}-${r.batch_number}`}
+                itemRender={(r) => (
+                  <Space wrap size={8} style={{ paddingBlock: 4 }}>
+                    <Text strong>{r.serial_no}</Text>
+                    <Text>{r.product_name}</Text>
+                    <Text type="secondary">批号 {r.batch_number}</Text>
+                    <Text type="secondary">{r.created_at}</Text>
+                  </Space>
+                )}
+              />
+            )
+          : <Text type="secondary">今日暂无生成报告单</Text>}
       </Card>
 
       <Space wrap>
