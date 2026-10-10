@@ -3,11 +3,12 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import (
     QualityContainerMovement,
+    QualityMaterial,
     QualityMaterialContainer,
 )
 
@@ -147,3 +148,170 @@ async def list_container_movements(
         .limit(50)
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+# ─── 物料字典 ───
+
+
+async def create_material(db: AsyncSession, data: dict[str, Any]) -> QualityMaterial:
+    material = QualityMaterial(**data)
+    db.add(material)
+    await db.flush()
+    return material
+
+
+async def get_material_by_code(db: AsyncSession, code: str) -> QualityMaterial | None:
+    stmt = (
+        select(QualityMaterial)
+        .where(QualityMaterial.code == code, QualityMaterial.is_deleted == False)  # noqa: E712
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_material(db: AsyncSession, mid: uuid.UUID) -> QualityMaterial | None:
+    stmt = select(QualityMaterial).where(
+        QualityMaterial.id == mid, QualityMaterial.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_materials(
+    db: AsyncSession, q: str | None = None, page: int = 1, page_size: int = 50
+) -> tuple[list[QualityMaterial], int]:
+    conds = [QualityMaterial.is_deleted == False]  # noqa: E712
+    if q:
+        like = f"%{q}%"
+        conds.append(
+            (QualityMaterial.code.ilike(like)) | (QualityMaterial.name.ilike(like))
+        )
+    total = await db.scalar(select(func.count()).select_from(QualityMaterial).where(*conds))
+    stmt = (
+        select(QualityMaterial)
+        .where(*conds)
+        .order_by(QualityMaterial.code)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+    return rows, int(total or 0)
+
+
+async def update_material(
+    db: AsyncSession, mid: uuid.UUID, data: dict[str, Any]
+) -> QualityMaterial | None:
+    material = await get_material(db, mid)
+    if material is None:
+        return None
+    for key, value in data.items():
+        setattr(material, key, value)
+    await db.flush()
+    stmt = select(QualityMaterial).where(QualityMaterial.id == mid)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_material(db: AsyncSession, mid: uuid.UUID) -> bool:
+    material = await get_material(db, mid)
+    if material is None:
+        return False
+    material.is_deleted = True
+    await db.flush()
+    return True
+
+
+# ─── 台账流水（联容器取物料信息） ───
+
+
+async def list_material_movements(
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 50,
+    material_q: str | None = None,
+    op_type: str | None = None,
+) -> tuple[list[Any], int]:
+    conds = [
+        QualityContainerMovement.is_deleted == False,  # noqa: E712
+    ]
+    if material_q:
+        like = f"%{material_q}%"
+        conds.append(
+            (QualityMaterialContainer.material_code.ilike(like))
+            | (QualityMaterialContainer.material_name.ilike(like))
+        )
+    if op_type:
+        conds.append(QualityContainerMovement.op_type == op_type)
+    base = (
+        select(QualityContainerMovement, QualityMaterialContainer.material_code, QualityMaterialContainer.material_name)
+        .join(
+            QualityMaterialContainer,
+            QualityMaterialContainer.id == QualityContainerMovement.container_id,
+        )
+        .where(*conds)
+    )
+    total = await db.scalar(select(func.count()).select_from(base.subquery()))
+    rows = list(
+        (await db.execute(base.order_by(QualityContainerMovement.op_at.desc())
+            .offset((page - 1) * page_size).limit(page_size)))
+        .all()
+    )
+    return rows, int(total or 0)
+
+
+async def material_stock_summary(db: AsyncSession) -> list[dict[str, Any]]:
+    """按物料聚合容器状态与临效期/过期统计。"""
+    from app.core.time import today as _today
+
+    today_str = _today().isoformat()
+    rows = await db.execute(
+        select(
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+            func.count().label("total"),
+            func.count().filter(QualityMaterialContainer.status == "labeled").label("labeled"),
+            func.count().filter(QualityMaterialContainer.status == "in_warehouse").label("in_warehouse"),
+            func.count().filter(QualityMaterialContainer.status == "qualified").label("qualified"),
+            func.count().filter(QualityMaterialContainer.status == "issued").label("issued"),
+            func.count().filter(QualityMaterialContainer.status == "returned").label("returned"),
+            func.count().filter(
+                QualityMaterialContainer.expiry_date < today_str
+            ).label("expired"),
+            func.count().filter(
+                QualityMaterialContainer.expiry_date >= today_str,
+                QualityMaterialContainer.expiry_date
+                <= func.to_char(
+                    func.now() + text("interval '90 days'"), "YYYY-MM-DD"
+                ),
+            ).label("near_expiry"),
+        )
+        .where(QualityMaterialContainer.is_deleted == False)  # noqa: E712
+        .group_by(
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+        )
+        .order_by(QualityMaterialContainer.material_name)
+    )
+    result = []
+    for r in rows:
+        available = int(r.in_warehouse or 0) + int(r.qualified or 0)
+        result.append({
+            "material_code": r.material_code,
+            "material_name": r.material_name,
+            "labeled": int(r.labeled or 0),
+            "in_warehouse": int(r.in_warehouse or 0),
+            "qualified": int(r.qualified or 0),
+            "issued": int(r.issued or 0),
+            "returned": int(r.returned or 0),
+            "total": int(r.total or 0),
+            "available": available,
+            "near_expiry": int(r.near_expiry or 0),
+            "expired": int(r.expired or 0),
+        })
+    # 附带字典阈值
+    dicts = await list_materials(db, page_size=500)
+    by_code = {d.code: d for d in dicts[0]}
+    for item in result:
+        material = by_code.get(item["material_code"])
+        min_stock = material.min_stock if material else None
+        item["min_stock"] = min_stock
+        item["below_stock"] = min_stock is not None and item["available"] < min_stock
+    return result

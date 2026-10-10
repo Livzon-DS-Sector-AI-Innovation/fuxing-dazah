@@ -206,3 +206,87 @@ async def test_near_expiry_not_blocked(db_session):
         db_session, no, ContainerMoveRequest(op_type="out"), operator=None
     )
     assert updated.status == "issued"
+
+
+# ─── 物料字典 / 库存概览 / 台账 ───
+
+
+async def test_material_dict_crud(db_session):
+    from app.modules.quality.repository import (
+        create_material,
+        delete_material,
+        get_material_by_code,
+        list_materials,
+        update_material,
+    )
+
+    code = f"MAT-{_rand_code()}"
+    material = await create_material(db_session, {
+        "code": code, "name": "测试物料", "category": "原料",
+        "vendor_name": "测试供应商", "min_stock": 10,
+    })
+    assert await get_material_by_code(db_session, code) is not None
+    # 搜索命中（代码模糊）
+    rows, _total = await list_materials(db_session, q=code[:6])
+    assert any(r.code == code for r in rows)
+    updated = await update_material(db_session, material.id, {"min_stock": 20})
+    assert updated is not None and updated.min_stock == 20
+    assert await delete_material(db_session, material.id) is True
+    assert await get_material_by_code(db_session, code) is None
+
+
+async def test_stock_summary_aggregation(db_session):
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app.modules.quality.repository import create_material, material_stock_summary
+
+    code = f"MAT-{_rand_code()}"
+    await create_material(db_session, {"code": code, "name": "汇总测试物料", "min_stock": 5})
+    future = (_dt.now() + _td(days=30)).strftime("%Y-%m-%d")
+    past = (_dt.now() - _td(days=10)).strftime("%Y-%m-%d")
+    req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="汇总测试物料",
+        inbound_batch_no="IN-SUM", expiry_date=future, count=4,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    # 2 瓶入库+合格，1 瓶已领出，1 瓶保持已赋码
+    for c in containers[:2]:
+        await material_container_service.move_container(db_session, c.container_no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.update_status(db_session, containers[0].container_no, "qualified")
+    await material_container_service.move_container(db_session, containers[1].container_no, ContainerMoveRequest(op_type="out"))
+    # 过期容器
+    expired_req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="汇总测试物料",
+        inbound_batch_no="IN-EXP", expiry_date=past, count=1,
+    )
+    await material_container_service.generate_containers(db_session, expired_req)
+
+    summary = await material_stock_summary(db_session)
+    item = next(s for s in summary if s["material_code"] == code)
+    assert item["qualified"] == 1
+    assert item["in_warehouse"] == 0  # 第 2 瓶入库后已领出
+    assert item["issued"] == 1
+    assert item["labeled"] == 3  # 2 瓶未流转 + 1 瓶过期未流转
+    assert item["expired"] == 1
+    assert item["near_expiry"] == 4  # future 30 天内的 4 瓶
+    assert item["available"] == 1
+    assert item["min_stock"] == 5
+    assert item["below_stock"] is True
+
+
+async def test_movements_ledger_join(db_session):
+    from app.modules.quality.repository import list_material_movements
+
+    req = _gen_req(1)
+    containers = await material_container_service.generate_containers(db_session, req)
+    no = containers[0].container_no
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
+    rows, _total = await list_material_movements(db_session, material_q=req.material_code)
+    assert len(rows) == 1
+    _movement, material_code, material_name = rows[0]
+    assert material_code == req.material_code
+    assert material_name == "盐酸万古霉素原料"
+    # 按其他物料过滤为空
+    rows2, _t2 = await list_material_movements(db_session, material_q="不存在的物料")
+    assert len(rows2) == 0

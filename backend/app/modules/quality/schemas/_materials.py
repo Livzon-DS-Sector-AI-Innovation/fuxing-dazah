@@ -89,3 +89,73 @@ class ContainerLabelRequest(BaseModel):
     """按容器号批量出标签 PDF。"""
 
     container_nos: list[str] = Field(min_length=1, max_length=200)
+
+
+class MaterialCreate(BaseModel):
+    """物料字典新增。"""
+
+    code: str = Field(max_length=100, description="物料代码（容器号中段，不能含空格/斜杠）")
+    name: str = Field(max_length=200)
+    category: str | None = Field(default=None, max_length=32, description="原料/辅料/包材/溶剂")
+    vendor_name: str | None = Field(default=None, max_length=100, description="默认供应商名称")
+    pack_spec: str | None = Field(default=None, max_length=50, description="包装规格，如 5kg/听")
+    min_stock: int | None = Field(default=None, ge=0, description="安全库存阈值（瓶/桶数）")
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class MaterialUpdate(BaseModel):
+    """物料字典更新（全部可选）。"""
+
+    name: str | None = Field(default=None, max_length=200)
+    category: str | None = Field(default=None, max_length=32)
+    vendor_name: str | None = Field(default=None, max_length=100)
+    pack_spec: str | None = Field(default=None, max_length=50)
+    min_stock: int | None = Field(default=None, ge=0)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class MaterialOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    code: str
+    name: str
+    category: str | None
+    vendor_name: str | None
+    pack_spec: str | None
+    min_stock: int | None
+    remark: str | None
+    created_at: datetime
+
+
+class MaterialSummaryItem(BaseModel):
+    """按物料聚合的库存概览（看板/采购建议共用）。"""
+
+    material_code: str
+    material_name: str
+    labeled: int
+    in_warehouse: int
+    qualified: int
+    issued: int
+    returned: int
+    total: int
+    available: int
+    near_expiry: int
+    expired: int
+    min_stock: int | None
+    below_stock: bool
+
+
+class MaterialMovementOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    container_no: str
+    material_code: str | None
+    material_name: str | None
+    op_type: str
+    from_status: str
+    to_status: str
+    related_doc: str | None
+    remark: str | None
+    op_at: datetime

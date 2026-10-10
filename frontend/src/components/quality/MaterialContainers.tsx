@@ -1,20 +1,28 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col,
 } from 'antd'
-import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
-import type { MaterialContainerItem, MaterialContainerStatus } from '@/types/quality'
+import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
+  fetchMaterialDict, createMaterialDict, updateMaterialDict, deleteMaterialDict,
+  fetchMaterialSummary, fetchMaterialMovements, exportMaterialMovements,
 } from '@/actions/quality'
-import dayjs from 'dayjs'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
+
+const OP_TYPE_META: Record<string, { label: string; color: string }> = {
+  in: { label: '入库登记', color: 'green' },
+  out: { label: '领料出库', color: 'blue' },
+  status: { label: '状态流转', color: 'default' },
+}
 
 export default function MaterialContainers() {
   const { message } = App.useApp()
@@ -27,16 +35,29 @@ export default function MaterialContainers() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [batchDraft, setBatchDraft] = useState('')
   const [batchFilter, setBatchFilter] = useState<string | undefined>()
+  const [materialFilter, setMaterialFilter] = useState<string | undefined>()
   const [generateOpen, setGenerateOpen] = useState(false)
   const [genForm] = Form.useForm()
   const [genLoading, setGenLoading] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [labelLoading, setLabelLoading] = useState(false)
+  // 字典与概览
+  const [dict, setDict] = useState<MaterialDictItem[]>([])
+  const [dictOpen, setDictOpen] = useState(false)
+  const [dictForm] = Form.useForm()
+  const [editingDict, setEditingDict] = useState<MaterialDictItem | null>(null)
+  const [summary, setSummary] = useState<MaterialSummaryItem[]>([])
+  // 台账弹窗
+  const [mvOpen, setMvOpen] = useState(false)
+  const [mvData, setMvData] = useState<MaterialMovementItem[]>([])
+  const [mvTotal, setMvTotal] = useState(0)
+  const [mvPage, setMvPage] = useState(1)
+  const [mvQ, setMvQ] = useState<string | undefined>()
 
-  const load = useCallback(async (p: number, status?: string, batch?: string) => {
+  const load = useCallback(async (p: number, status?: string, batch?: string, materialCode?: string) => {
     setLoading(true)
     try {
-      const res = await fetchMaterialContainers(p, status, batch)
+      const res = await fetchMaterialContainers(p, status, batch, materialCode)
       setData(res.data)
       setTotal(res.meta.total)
     } catch (err: unknown) {
@@ -46,7 +67,41 @@ export default function MaterialContainers() {
     }
   }, [message])
 
-  useEffect(() => { (async () => { await load(1, statusFilter, batchFilter) })() }, [statusFilter, batchFilter, load])
+  const loadSummary = useCallback(async () => {
+    try {
+      const res = await fetchMaterialSummary()
+      setSummary(res.data)
+    } catch {
+      // 概览失败静默（列表仍可用）
+    }
+  }, [])
+
+  const loadDict = useCallback(async (q?: string) => {
+    try {
+      const res = await fetchMaterialDict(q, 1)
+      setDict(res.data)
+    } catch {
+      // 字典失败静默
+    }
+  }, [])
+
+  useEffect(() => { (async () => { await load(1, statusFilter, batchFilter, materialFilter) })() }, [statusFilter, batchFilter, materialFilter, load])
+  useEffect(() => { (async () => { await loadSummary() })() }, [loadSummary])
+  useEffect(() => { (async () => { await loadDict() })() }, [loadDict])
+
+  const dictOptions = useMemo(() => dict.map((d) => ({
+    value: d.code,
+    label: `${d.code} · ${d.name}`,
+    name: d.name,
+    vendor: d.vendor_name,
+  })), [dict])
+
+  const onDictSelect = (code: string) => {
+    const hit = dictOptions.find((o) => o.value === code)
+    if (hit) {
+      genForm.setFieldsValue({ material_name: hit.name, vendor_code: hit.vendor ?? undefined })
+    }
+  }
 
   const onGenerate = async () => {
     const values = await genForm.validateFields()
@@ -61,7 +116,6 @@ export default function MaterialContainers() {
         count: values.count,
       })
       const nos = res.data.map((c) => c.container_no)
-      // 生成后直接拉标签 PDF
       const blob = await downloadContainerLabels(nos)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -72,7 +126,8 @@ export default function MaterialContainers() {
       message.success(`${res.message}，标签已开始下载`)
       setGenerateOpen(false)
       genForm.resetFields()
-      load(page, statusFilter, batchFilter)
+      load(page, statusFilter, batchFilter, materialFilter)
+      loadSummary()
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '赋码失败')
     } finally {
@@ -84,7 +139,8 @@ export default function MaterialContainers() {
     try {
       const res = await moveMaterialContainer(row.container_no, op)
       message.success(res.message)
-      load(page, statusFilter, batchFilter)
+      load(page, statusFilter, batchFilter, materialFilter)
+      loadSummary()
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '操作失败')
     }
@@ -94,7 +150,8 @@ export default function MaterialContainers() {
     try {
       const res = await updateMaterialContainerStatus(row.container_no, status)
       message.success(res.message)
-      load(page, statusFilter, batchFilter)
+      load(page, statusFilter, batchFilter, materialFilter)
+      loadSummary()
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '状态变更失败')
     }
@@ -109,7 +166,8 @@ export default function MaterialContainers() {
         message.warning(`失败 ${res.data.failed} 个：${details.map((d) => `${d.container_no}（${d.detail}）`).join('；')}`)
       }
       setSelectedKeys([])
-      load(page, statusFilter, batchFilter)
+      load(page, statusFilter, batchFilter, materialFilter)
+      loadSummary()
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '批量操作失败')
     }
@@ -136,11 +194,68 @@ export default function MaterialContainers() {
     }
   }
 
+  // ── 字典管理 ──
+  const onSaveDict = async () => {
+    const values = await dictForm.validateFields()
+    try {
+      if (editingDict) {
+        await updateMaterialDict(editingDict.id, values)
+        message.success('物料已更新')
+      } else {
+        await createMaterialDict(values)
+        message.success('物料已新增')
+      }
+      dictForm.resetFields()
+      setEditingDict(null)
+      loadDict()
+      loadSummary()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
+    }
+  }
+
+  const onDeleteDict = async (item: MaterialDictItem) => {
+    try {
+      await deleteMaterialDict(item.id)
+      message.success('已删除')
+      loadDict()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
+    }
+  }
+
+  // ── 台账 ──
+  const loadMovements = useCallback(async (p: number, q?: string) => {
+    try {
+      const res = await fetchMaterialMovements(p, q)
+      setMvData(res.data)
+      setMvTotal(res.meta.total)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取台账失败')
+    }
+  }, [message])
+
+  useEffect(() => { if (mvOpen) { (async () => { await loadMovements(1, mvQ) })() } }, [mvOpen, mvQ, loadMovements])
+
+  const onExportMovements = async () => {
+    try {
+      const blob = await exportMaterialMovements(mvQ)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = '物料出入库台账.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '台账导出失败')
+    }
+  }
+
   const columns = [
-    { title: '容器号', dataIndex: 'container_no', key: 'container_no', width: 220, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+    { title: '容器号', dataIndex: 'container_no', key: 'container_no', width: 210, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name' },
-    { title: '物料代码', dataIndex: 'material_code', key: 'material_code', width: 110 },
-    { title: '进厂批号', dataIndex: 'inbound_batch_no', key: 'inbound_batch_no', width: 160 },
+    { title: '物料代码', dataIndex: 'material_code', key: 'material_code', width: 100 },
+    { title: '进厂批号', dataIndex: 'inbound_batch_no', key: 'inbound_batch_no', width: 150 },
     { title: '复验期', dataIndex: 'expiry_date', key: 'expiry_date', width: 140, render: (v: string | null) => {
       if (!v) return '-'
       const exp = dayjs(v)
@@ -150,14 +265,14 @@ export default function MaterialContainers() {
       return v
     } },
     {
-      title: '状态', dataIndex: 'status', key: 'status', width: 100,
+      title: '状态', dataIndex: 'status', key: 'status', width: 95,
       render: (v: MaterialContainerStatus) => {
         const meta = MATERIAL_CONTAINER_STATUS_META[v]
         return <Tag color={meta.color}>{meta.label}</Tag>
       },
     },
     {
-      title: '操作', key: 'actions', width: 260,
+      title: '操作', key: 'actions', width: 240,
       render: (_: unknown, row: MaterialContainerItem) => (
         <Space size="small">
           {canManage && row.status === 'labeled' && (
@@ -187,16 +302,54 @@ export default function MaterialContainers() {
 
   return (
     <>
+      {/* 库存概览统计卡 */}
+      {summary.length > 0 && (
+        <Row gutter={[12, 12]}>
+          {summary.map((s) => (
+            <Col key={s.material_code} xs={24} sm={12} md={8} lg={6}>
+              <Card
+                size="small"
+                title={`${s.material_name}（${s.material_code}）`}
+                extra={
+                  <Space size={4}>
+                    {s.below_stock && <Tag color="red">库存不足</Tag>}
+                    {s.expired > 0 && <Tag color="red">过期 {s.expired}</Tag>}
+                    {s.near_expiry > 0 && <Tag color="orange">临效 {s.near_expiry}</Tag>}
+                  </Space>
+                }
+                onClick={() => { setMaterialFilter(s.material_code); setPage(1) }}
+                hoverable
+              >
+                <Space size={8} wrap>
+                  <Typography.Text>可用 <Typography.Text strong>{s.available}</Typography.Text></Typography.Text>
+                  <Typography.Text type="secondary">在库待验 {s.in_warehouse}</Typography.Text>
+                  <Typography.Text type="secondary">合格 {s.qualified}</Typography.Text>
+                  <Typography.Text type="secondary">已领出 {s.issued}</Typography.Text>
+                  {s.min_stock != null && (
+                    <Typography.Text type="secondary">阈值 {s.min_stock}</Typography.Text>
+                  )}
+                </Space>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
+
       <Space wrap>
         <Input
-          placeholder="进厂批号搜索" allowClear style={{ width: 180 }}
+          placeholder="进厂批号搜索" allowClear style={{ width: 160 }}
           prefix={<SearchOutlined />}
           value={batchDraft}
           onChange={(e) => setBatchDraft(e.target.value)}
           onPressEnter={() => { setBatchFilter(batchDraft || undefined); setPage(1) }}
         />
+        {materialFilter && (
+          <Tag closable color="blue" onClose={() => { setMaterialFilter(undefined); setPage(1) }}>
+            物料: {materialFilter}
+          </Tag>
+        )}
         <Select
-          placeholder="状态筛选" allowClear style={{ width: 140 }}
+          placeholder="状态筛选" allowClear style={{ width: 130 }}
           value={statusFilter}
           onChange={(v) => { setStatusFilter(v); setPage(1) }}
           options={STATUS_ORDER.map((s) => ({ label: MATERIAL_CONTAINER_STATUS_META[s].label, value: s }))}
@@ -216,6 +369,10 @@ export default function MaterialContainers() {
             <Button danger disabled={!selectedKeys.length}>批量出库</Button>
           </Popconfirm>
         )}
+        {canManage && (
+          <Button icon={<BookOutlined />} onClick={() => { setEditingDict(null); dictForm.resetFields(); setDictOpen(true) }}>物料字典</Button>
+        )}
+        <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
       </Space>
 
       <Table
@@ -228,6 +385,7 @@ export default function MaterialContainers() {
         rowSelection={{ selectedRowKeys: selectedKeys, onChange: (keys) => setSelectedKeys(keys as string[]) }}
       />
 
+      {/* 批量赋码弹窗 */}
       <Modal
         title="批量赋码（生成唯一容器号 + 标签）"
         open={generateOpen}
@@ -237,13 +395,20 @@ export default function MaterialContainers() {
         okText="赋码并下载标签"
       >
         <Form form={genForm} layout="vertical" initialValues={{ count: 1 }}>
-          <Form.Item name="material_code" label="物料代码（容器号中段，如 VAN）" rules={[{ required: true, message: '请输入物料代码' }]}>
-            <Input placeholder="VAN" />
+          <Form.Item name="material_code" label="物料代码（字典选择或输入新代码）" rules={[{ required: true, message: '请选择或输入物料代码' }]}>
+            <Select
+              showSearch
+              placeholder="搜索或输入新物料代码"
+              options={dictOptions}
+              onSelect={(v) => onDictSelect(v)}
+              filterOption={(input, option) =>
+                (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="material_name" label="物料名称" rules={[{ required: true, message: '请输入物料名称' }]}>
             <Input placeholder="盐酸万古霉素原料" />
           </Form.Item>
-          <Form.Item name="vendor_code" label="供应商代码（可选）">
+          <Form.Item name="vendor_code" label="供应商（可选）">
             <Input placeholder="SUP-001" />
           </Form.Item>
           <Form.Item name="inbound_batch_no" label="进厂批号" rules={[{ required: true, message: '请输入进厂批号' }]}>
@@ -256,6 +421,103 @@ export default function MaterialContainers() {
             <Input type="number" min={1} max={500} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 物料字典管理弹窗 */}
+      <Modal
+        title="物料字典"
+        open={dictOpen}
+        onCancel={() => setDictOpen(false)}
+        footer={null}
+        width={720}
+      >
+        <Form form={dictForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }} onFinish={onSaveDict}>
+          <Form.Item name="code" label="代码" rules={[{ required: !editingDict, message: '必填' }]}>
+            <Input disabled={!!editingDict} style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '必填' }]}>
+            <Input style={{ width: 150 }} />
+          </Form.Item>
+          <Form.Item name="category" label="类别">
+            <Select
+              style={{ width: 100 }} allowClear
+              options={['原料', '辅料', '包材', '溶剂'].map((c) => ({ value: c, label: c }))}
+            />
+          </Form.Item>
+          <Form.Item name="vendor_name" label="供应商">
+            <Input style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item name="min_stock" label="安全库存">
+            <Input type="number" min={0} style={{ width: 80 }} />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit">{editingDict ? '保存' : '新增'}</Button>
+              {editingDict && <Button onClick={() => { setEditingDict(null); dictForm.resetFields() }}>取消</Button>}
+            </Space>
+          </Form.Item>
+        </Form>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={dict}
+          pagination={false}
+          columns={[
+            { title: '代码', dataIndex: 'code', width: 110 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '类别', dataIndex: 'category', width: 70, render: (v: string | null) => v || '-' },
+            { title: '供应商', dataIndex: 'vendor_name', width: 110, render: (v: string | null) => v || '-' },
+            { title: '安全库存', dataIndex: 'min_stock', width: 80, render: (v: number | null) => v ?? '-' },
+            {
+              title: '操作', key: 'actions', width: 120,
+              render: (_: unknown, item: MaterialDictItem) => (
+                <Space size="small">
+                  <Button size="small" type="link" onClick={() => {
+                    setEditingDict(item)
+                    dictForm.setFieldsValue({
+                      code: item.code, name: item.name, category: item.category ?? undefined,
+                      vendor_name: item.vendor_name ?? undefined, min_stock: item.min_stock ?? undefined,
+                    })
+                  }}>编辑</Button>
+                  <Popconfirm title="确认删除该物料？" onConfirm={() => onDeleteDict(item)}>
+                    <Button size="small" type="link" danger>删除</Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      {/* 出入库台账弹窗 */}
+      <Modal
+        title="出入库台账"
+        open={mvOpen}
+        onCancel={() => setMvOpen(false)}
+        footer={null}
+        width={860}
+      >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Input.Search
+            placeholder="物料代码/名称搜索" allowClear style={{ width: 200 }}
+            onSearch={(v) => { setMvQ(v || undefined); setMvPage(1) }}
+          />
+          <Button icon={<DownloadOutlined />} onClick={onExportMovements}>导出 Excel</Button>
+        </Space>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={mvData}
+          pagination={{ current: mvPage, pageSize: 50, total: mvTotal, onChange: (p) => { setMvPage(p); loadMovements(p, mvQ) } }}
+          columns={[
+            { title: '时间', dataIndex: 'op_at', width: 150, render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+            { title: '容器号', dataIndex: 'container_no', width: 200, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+            { title: '物料', dataIndex: 'material_name', width: 140, render: (v: string | null) => v || '-' },
+            { title: '操作', dataIndex: 'op_type', width: 90, render: (v: string) => <Tag color={OP_TYPE_META[v]?.color}>{OP_TYPE_META[v]?.label ?? v}</Tag> },
+            { title: '状态变化', key: 'status', width: 160, render: (_: unknown, r: MaterialMovementItem) => `${r.from_status} → ${r.to_status}` },
+            { title: '关联单据', dataIndex: 'related_doc', width: 110, render: (v: string | null) => v || '-' },
+          ]}
+        />
       </Modal>
     </>
   )

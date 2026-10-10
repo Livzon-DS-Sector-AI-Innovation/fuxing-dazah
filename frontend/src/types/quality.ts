@@ -457,3 +457,47 @@ export interface ContainerMovement {
   remark: string | null
   op_at: string
 }
+
+
+// ─── 物料字典 / 库存概览 / 台账 ───
+
+export interface MaterialDictItem {
+  id: string
+  code: string
+  name: string
+  category: string | null
+  vendor_name: string | null
+  pack_spec: string | null
+  min_stock: number | null
+  remark: string | null
+  created_at: string
+}
+
+export interface MaterialSummaryItem {
+  material_code: string
+  material_name: string
+  labeled: number
+  in_warehouse: number
+  qualified: number
+  issued: number
+  returned: number
+  total: number
+  available: number
+  near_expiry: number
+  expired: number
+  min_stock: number | null
+  below_stock: boolean
+}
+
+export interface MaterialMovementItem {
+  id: string
+  container_no: string
+  material_code: string | null
+  material_name: string | null
+  op_type: string
+  from_status: string
+  to_status: string
+  related_doc: string | null
+  remark: string | null
+  op_at: string
+}

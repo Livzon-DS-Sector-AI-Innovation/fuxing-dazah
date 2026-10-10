@@ -24,6 +24,9 @@ import type {
   LcTemplateConfig,
   TaskReportItem,
   MaterialContainerItem,
+  MaterialDictItem,
+  MaterialSummaryItem,
+  MaterialMovementItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -991,4 +994,83 @@ export async function batchMoveMaterialContainers(
     throw new Error(err.detail || '批量操作失败')
   }
   return res.json()
+}
+
+
+// ─── 物料字典 / 库存概览 / 台账 ───
+
+export async function fetchMaterialDict(q?: string, page = 1): Promise<{ data: MaterialDictItem[]; meta: { total: number } }> {
+  const params = new URLSearchParams({ page: String(page), page_size: '50' })
+  if (q) params.set('q', q)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/dict?${params.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取物料字典失败')
+  return res.json()
+}
+
+export async function createMaterialDict(input: {
+  code: string; name: string; category?: string; vendor_name?: string; pack_spec?: string; min_stock?: number; remark?: string
+}): Promise<{ message: string; data: MaterialDictItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/dict`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '新增物料失败')
+  }
+  return res.json()
+}
+
+export async function updateMaterialDict(id: string, input: Partial<{
+  name: string; category: string; vendor_name: string; pack_spec: string; min_stock: number; remark: string
+}>): Promise<{ message: string; data: MaterialDictItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/dict/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '更新物料失败')
+  }
+  return res.json()
+}
+
+export async function deleteMaterialDict(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/dict/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除物料失败')
+  return res.json()
+}
+
+export async function fetchMaterialSummary(): Promise<{ data: MaterialSummaryItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/summary`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取库存概览失败')
+  return res.json()
+}
+
+export async function fetchMaterialMovements(
+  page = 1, materialQ?: string, opType?: string,
+): Promise<{ data: MaterialMovementItem[]; meta: { total: number } }> {
+  const params = new URLSearchParams({ page: String(page), page_size: '50' })
+  if (materialQ) params.set('material_q', materialQ)
+  if (opType) params.set('op_type', opType)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/movements?${params.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取台账失败')
+  return res.json()
+}
+
+export async function exportMaterialMovements(materialQ?: string): Promise<Blob> {
+  const qs = materialQ ? `?material_q=${encodeURIComponent(materialQ)}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/movements/export${qs}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('台账导出失败')
+  return res.blob()
 }
