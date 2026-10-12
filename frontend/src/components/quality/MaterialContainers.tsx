@@ -456,7 +456,7 @@ export default function MaterialContainers() {
         <Space size="small">
           {canManage && row.status === 'labeled' && (
             <Popconfirm title="确认入库登记？" onConfirm={() => onMove(row, 'in')}>
-              <Button size="small" icon={<ScanOutlined />}>入库</Button>
+              <Button size="small" type="primary" icon={<ScanOutlined />}>入库</Button>
             </Popconfirm>
           )}
           {canManage && row.status === 'in_warehouse' && (
@@ -549,7 +549,7 @@ export default function MaterialContainers() {
         <Button icon={<DownloadOutlined />} loading={labelLoading} onClick={onDownloadSelected}>下载标签</Button>
         {canManage && (
           <Popconfirm title={`确认批量入库登记（${selectedKeys.length} 个容器）？`} onConfirm={() => onBatchMove('in')}>
-            <Button disabled={!selectedKeys.length}>批量入库</Button>
+            <Button type="primary" disabled={!selectedKeys.length}>批量入库</Button>
           </Popconfirm>
         )}
         {canManage && (
