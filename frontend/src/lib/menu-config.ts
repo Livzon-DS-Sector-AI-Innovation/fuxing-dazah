@@ -99,7 +99,9 @@ export const moduleMenus: ModuleMenu[] = [
   },
 
   // ═══════════════════════════════════════════════════════
-  // 安全管理模块 — 按化工安全生产管理体系分级
+  // 安全管理模块 — 按 GB/T 33000-2025 体系要素分组（3.0 只读监控口径）
+  // 分组平铺（group 字段，同仓储模式）；标签纯文字，不带体系编号；
+  // 未开展模块 → 占位页（ModulePlaceholder）；全流程监督三期新建 → disabled。
   // ═══════════════════════════════════════════════════════
   {
     key: "safety",
@@ -109,131 +111,40 @@ export const moduleMenus: ModuleMenu[] = [
     permissions: ["safety:*:read"],
     clickableTitle: true,
     children: [
-            // ── 系统配置 ──
-      {
-        key: "system-config",
-        label: "系统配置",
-        path: "",
-        children: [
-          { key: "ai-config", label: "AI 配置中心", path: "/safety/system/ai-config" },
-          { key: "bitable-config", label: "多维表格配置", path: "/safety/system/bitable-config" },
-          { key: "app-config", label: "应用配置", path: "/safety/system/app-config" },
-          { key: "scheduled-tasks", label: "定时任务", path: "/safety/system/scheduled-tasks" },
-          { key: "ai-audit", label: "AI 调用审计", path: "/safety/ai-audit" },
-          { key: "agent-chat", label: "AI 助手对话", path: "/safety/agent-chat" },
-        ],
-      },
-      // ── 作业安全 ──
-      {
-        key: "ops-safety",
-        label: "作业安全",
-        path: "",
-        children: [
-          { key: "special-ops-mgmt", label: "特殊作业管理", path: "/safety/special-ops" },
-          { key: "daily-risk-report", label: "关键风险作业报备", path: "/safety/risk-reporting" },
-          { key: "daily-risk-report-flow", label: "每日风险作业报备", path: "/safety/daily-risk-report" },
-        ],
-      },
-      // ── 风险与隐患 ──
-      {
-        key: "risk-hazard",
-        label: "风险与隐患",
-        path: "",
-        children: [
-          {
-            key: "risk-grading",
-            label: "风险分级管控",
-            path: "",
-            children: [
-              { key: "hazard-identification", label: "危险源辨识工作流", path: "/safety/hazard-identification" },
-              { key: "hazard-ledger", label: "危险源辨识台账", path: "/safety/hazard-identification/ledger" },
-            ],
-          },
-                    {
-            key: "hazard-inspection",
-            label: "隐患排查治理",
-            path: "",
-            children: [
-              { key: "hazard-inspection-ledger", label: "隐患台账", path: "/safety/hazard-ledger" },
-              { key: "safety-check", label: "安全检查", path: "/safety/check" },
-            ],
-          },
-          {
-            key: "regulation",
-            label: "安全操规管理",
-            path: "",
-            children: [
-              { key: "regulation-list", label: "安全操规台账", path: "/safety/regulation" },
-              { key: "regulation-generator", label: "标准化生成", path: "/safety/regulation/generator" },
-            ],
-          },
-          {
-            key: "ehs-change",
-            label: "EHS变更管理",
-            path: "",
-            children: [
-              { key: "ehs-change-apply", label: "EHS变更申请", path: "/safety/ehs-change" },
-              { key: "ehs-change-accept", label: "EHS变更验收", path: "/safety/ehs-change/acceptance" },
-              { key: "ehs-change-urs", label: "URS 智能审核", path: "/safety/ehs-change/urs" },
-            ],
-          },
-
-        ],
-      },
-
-      // ── 应急与事故 ──
-      {
-        key: "emergency-accident",
-        label: "应急与事故",
-        path: "",
-        children: [
-          { key: "emergency-plan", label: "应急预案管理", path: "", disabled: true },
-          { key: "emergency-drill", label: "应急演练管理", path: "/safety/emergency-drill" },
-          { key: "fire-alarms", label: "消防报警分析", path: "/safety/fire-alarms" },
-          { key: "central-alarms", label: "中控报警分析", path: "/safety/central-alarms" },
-          { key: "accident", label: "事故管理", path: "/safety/accident" },
-        ],
-      },
-
-      // ── 人员资质与培训 ──
-      {
-        key: "personnel-training",
-        label: "人员资质与培训",
-        path: "",
-        children: [
-          { key: "training", label: "安全培训管理", path: "/safety/training" },
-          { key: "personnel-qual", label: "厂内人员资质", path: "/safety/special-ops/personnel" },
-          { key: "contractor", label: "承包商管理", path: "/safety/contractor" },
-          { key: "contractor-admission", label: "相关方准入审核", path: "/safety/contractor-admission" },
-          { key: "cert-warnings", label: "持证到期预警", path: "/safety/cert-warnings" },
-        ],
-      },
-
-      // ── 职业健康与环境 ──
-      {
-        key: "oh-env",
-        label: "职业健康与环境",
-        path: "",
-        children: [
-          { key: "oh-monitor", label: "职业危害因素监测", path: "/safety/occupational-health" },
-          { key: "oh-exam", label: "职业健康体检", path: "/safety/occupational-health" },
-          { key: "chemical-inventory", label: "危化品库存", path: "/safety/chemical-inventory" },
-          { key: "msds", label: "MSDS 管理", path: "/safety/msds" },
-          { key: "ppe", label: "劳动防护用品管理", path: "", disabled: true },
-        ],
-      },
-
-      // ── 法规与安全信息 ──
-      {
-        key: "regulation-info",
-        label: "法规与安全信息",
-        path: "",
-        children: [
-          { key: "knowledge-base", label: "安全知识库", path: "/safety/knowledge-base" },
-          { key: "info-query", label: "信息查询", path: "/safety/info-query" },
-          { key: "compliance-eval", label: "合规性评价记录", path: "", disabled: true },
-        ],
-      },
+      // ── 工作台 ──
+      { key: "overview", label: "总览驾驶舱", path: "/safety", group: "工作台" },
+      // ── 体系治理 ──
+      { key: "goals", label: "目标责任与绩效", path: "/safety/goals", group: "体系治理" },
+      { key: "knowledge-base", label: "法规标准与规程", path: "/safety/knowledge-base", group: "体系治理" },
+      // ── 风险管控 ──
+      { key: "risk-grading", label: "风险分级管控", path: "/safety/hazard-identification/ledger", group: "风险管控" },
+      // ── 隐患治理 ──
+      { key: "hazard-ledger", label: "隐患排查与治理", path: "/safety/hazard-ledger", group: "隐患治理" },
+      // ── 人员管理 ──
+      { key: "cert-warnings", label: "人员准入与资质", path: "/safety/cert-warnings", group: "人员管理" },
+      { key: "training-behavior", label: "教育培训与行为管控", path: "/safety/training-behavior", group: "人员管理" },
+      // ── 现场管理 ──
+      { key: "occupational-health", label: "职业健康管理", path: "/safety/occupational-health", group: "现场管理" },
+      { key: "facilities", label: "设备设施管理", path: "/safety/facilities", group: "现场管理" },
+      { key: "chemicals", label: "危化品与 MSDS 管理", path: "/safety/chemicals", group: "现场管理" },
+      { key: "special-ops", label: "特殊作业管理", path: "/safety/special-ops", group: "现场管理" },
+      { key: "risk-reporting", label: "风险作业报备", path: "/safety/risk-reporting", group: "现场管理" },
+      { key: "alarms", label: "监测报警与预警", path: "/safety/alarms", group: "现场管理" },
+      { key: "ehs-change", label: "EHS 变更管理", path: "/safety/ehs-change", group: "现场管理" },
+      { key: "contractor-admission", label: "相关方管理", path: "/safety/contractor-admission", group: "现场管理" },
+      // ── 应急处置 ──
+      { key: "emergency-drill", label: "应急管理", path: "/safety/emergency-drill", group: "应急处置" },
+      // ── 检查监督 ──
+      { key: "supervision", label: "全流程监督", path: "", group: "检查监督", disabled: true },
+      // ── 持续改进 ──
+      { key: "incidents", label: "事故事件管理", path: "/safety/incidents", group: "持续改进" },
+      // ── 系统（三期合并为 /safety/system 单页，现阶段保留原入口） ──
+      { key: "ai-config", label: "AI 配置中心", path: "/safety/system/ai-config", group: "系统" },
+      { key: "bitable-config", label: "多维表格配置", path: "/safety/system/bitable-config", group: "系统" },
+      { key: "app-config", label: "应用配置", path: "/safety/system/app-config", group: "系统" },
+      { key: "scheduled-tasks", label: "定时任务", path: "/safety/system/scheduled-tasks", group: "系统" },
+      { key: "ai-audit", label: "AI 调用审计", path: "/safety/ai-audit", group: "系统" },
+      { key: "agent-chat", label: "AI 助手对话", path: "/safety/agent-chat", group: "系统" },
     ],
   },
 
