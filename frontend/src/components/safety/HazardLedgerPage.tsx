@@ -1,49 +1,25 @@
 'use client'
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
-import Link from 'next/link'
+import { useState, useMemo, useCallback, useRef } from 'react'
 import {
   Table,
   Button,
   Input,
-  Select,
-  message,
-  Typography,
-  Modal,
-  Descriptions,
-  Alert,
-  App,
   Space,
-  Checkbox,
   Popover,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  PlusOutlined,
   SearchOutlined,
-  PlayCircleOutlined,
-  CheckCircleOutlined,
-  SafetyCertificateOutlined,
-  RobotOutlined,
-  AuditOutlined,
   CloseCircleOutlined,
-  EditOutlined,
-  DeleteOutlined,
   FilterOutlined,
-  ReloadOutlined,
   CaretUpFilled,
   CaretDownFilled,
 } from '@ant-design/icons'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { fetchHazards, fetchHazardStats } from '@/lib/api/safety/hazard'
-import {
-  runHazardAI,
-  deleteHazards,
-  startRectification,
-} from '@/actions/safety'
 import type {
   HazardReport,
-  HazardLevel,
 } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
@@ -54,13 +30,9 @@ import {
   SUPERVISION_PROGRESS_NOT_UPDATED,
   VERIFY_LEVEL_STATUS_OPTIONS,
 } from '@/types/safety'
-import HazardRectificationReplyModal from '@/components/safety/HazardRectificationReplyModal'
-import HazardVerifyModal from '@/components/safety/HazardVerifyModal'
-import HazardRegistrationDrawer from '@/components/safety/HazardRegistrationDrawer'
 import dayjs from 'dayjs'
-import { statusPill, actionLink } from '@/components/safety/shared-styles'
+import { statusPill } from '@/components/safety/shared-styles'
 
-const { Text } = Typography
 
 // ── 整改状态语义色配置 ──
 const RECTIFICATION_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -139,23 +111,11 @@ const FILTER_FIELDS: FilterFieldConfig[] = [
   },
 ]
 
-// ── AI 输出字段标签 ──
-const AI_FIELD_LABELS: Record<string, string> = {
-  hazard_type: '隐患分类',
-  hazard_level: '隐患等级',
-  hazard_category: '隐患类别',
-  description: '隐患描述',
-  key_defect: '重点缺陷',
-  major_hazard_basis: '判定依据',
-  corrective_preventive_measures: '纠正预防措施',
-}
-
 // ── 隐患类别标签映射 ──
 const HAZARD_CATEGORY_LABEL_MAP: Record<string, string> = {}
 HAZARD_CATEGORY_OPTIONS.forEach((o) => { HAZARD_CATEGORY_LABEL_MAP[o.value] = o.label })
 
 export default function HazardLedgerPage() {
-  const { message: msgApi } = App.useApp()
   const [searchText, setSearchText] = useState('')
   const [searchApplied, setSearchApplied] = useState(false)
   const [submittedKeyword, setSubmittedKeyword] = useState('')
@@ -174,35 +134,11 @@ export default function HazardLedgerPage() {
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false)
   const [pendingFilterField, setPendingFilterField] = useState<string | null>(null)
 
-  const [rerunLoading, setRerunLoading] = useState(false)
-
-  // ── 整改回复 & 三级复核 ──
-  const [replyModalVisible, setReplyModalVisible] = useState(false)
-  const [replyMode, setReplyMode] = useState<'reply' | 'rework'>('reply')
-  const [replyRecord, setReplyRecord] = useState<HazardReport | null>(null)
-  const [verifyModalVisible, setVerifyModalVisible] = useState(false)
-  const [verifyRecord, setVerifyRecord] = useState<HazardReport | null>(null)
-
-  // ── 隐患登记抽屉 ──
-  const [registrationDrawerOpen, setRegistrationDrawerOpen] = useState(false)
-
-  // ── 批量选择 & 删除 ──
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
-  const [deleting, setDeleting] = useState(false)
-  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null)
-
   // ── 筛选栏滚动容器 ref ──
   const filterScrollRef = useRef<HTMLDivElement>(null)
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-
-  const queryClient = useQueryClient()
-
-  const refreshLedger = () => {
-    queryClient.invalidateQueries({ queryKey: ['hazards'] })
-    queryClient.invalidateQueries({ queryKey: ['hazard-stats'] })
-  }
 
   // 全局统计 query
   const statsQuery = useQuery({
@@ -315,12 +251,6 @@ export default function HazardLedgerPage() {
     setFilterPopoverOpen(false)
   }
 
-  // 分页/筛选变化时清空批量选择
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelectedRowKeys([])
-  }, [page, pageSize, statusFilter, typeFilter, levelFilter, categoryFilter, inspectionCategoryFilter, deptFilter])
-
   const handleSearch = () => {
     setSubmittedKeyword(searchText)
     setSearchApplied(true)
@@ -345,100 +275,6 @@ export default function HazardLedgerPage() {
       setSortField(undefined)
       setSortOrder(undefined)
     }
-  }
-
-  // ── 开始整改 ──
-  const handleStartRectification = async (record: HazardReport) => {
-    try {
-      const response = await startRectification(record.id)
-      if (response.code === 200) {
-        message.success('已开始整改')
-        refreshLedger()
-      } else {
-        message.error(response.message || '开始整改失败')
-      }
-    } catch {
-      message.error('开始整改失败，请检查网络')
-    }
-  }
-
-  // ── 整改回复 ──
-  const handleReply = (record: HazardReport) => {
-    setReplyMode(record.rectification_status === 'rejected' ? 'rework' : 'reply')
-    setReplyRecord(record)
-    setReplyModalVisible(true)
-  }
-
-  // ── 三级复核 ──
-  const handleVerifyLevel = (record: HazardReport) => {
-    setVerifyRecord(record)
-    setVerifyModalVisible(true)
-  }
-
-  // ── Modal 成功回调 ──
-  const handleReplySuccess = () => {
-    refreshLedger()
-  }
-
-  const handleVerifySuccess = () => {
-    refreshLedger()
-  }
-
-  // ── 批量删除 ──
-  const handleBatchDelete = () => {
-    if (selectedRowKeys.length === 0) return
-    Modal.confirm({
-      title: '确认删除',
-      content: `确定要删除选中的 ${selectedRowKeys.length} 条隐患记录吗？此操作不可撤销。`,
-      okText: '确认删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        setDeleting(true)
-        try {
-          const ids = selectedRowKeys as string[]
-          const result = await deleteHazards(ids)
-          if (result.failed === 0) {
-            msgApi.success(`成功删除 ${result.succeeded} 条记录`)
-          } else {
-            msgApi.warning(`删除完成：${result.succeeded} 条成功，${result.failed} 条失败`)
-          }
-          setSelectedRowKeys([])
-          refreshLedger()
-        } catch {
-          msgApi.error('批量删除失败')
-        } finally {
-          setDeleting(false)
-        }
-      },
-    })
-  }
-
-  const handleRerunAI = async (record: HazardReport) => {
-    setRerunLoading(true)
-    try {
-      const r1 = await runHazardAI(record.id, 1)
-      if (r1.code !== 200) {
-        msgApi.error('重新执行 AI 识别失败: ' + (r1.message || ''))
-        return
-      }
-      const r2 = await runHazardAI(record.id, 2)
-      if (r2.code === 200) {
-        msgApi.success('AI 已重新执行完成')
-        refreshLedger()
-      } else {
-        msgApi.warning('AI 识别已完成，整改建议生成失败: ' + (r2.message || ''))
-      }
-    } catch {
-      msgApi.error('重新执行 AI 失败')
-    } finally {
-      setRerunLoading(false)
-    }
-  }
-
-  const getLevelColor = (level: string) => {
-    const option = HAZARD_LEVEL_OPTIONS.find((o) => o.value === normalizeHazardLevel(level))
-    return option?.color || 'default'
   }
 
   const getLevelLabel = (level: string) => {
@@ -490,172 +326,16 @@ export default function HazardLedgerPage() {
     )
   }
 
-  // ── 单操作按钮渲染（按状态优先级）──
-  const renderAction = (record: HazardReport) => {
-    // 1. AI 已生成 — 可重新执行 AI
-    if (record.ai_generated) {
-      return (
-        <span
-          role="button"
-          onClick={() => handleRerunAI(record)}
-          style={actionLink('#0075de')}
-        >
-          <ReloadOutlined />重新执行AI
-        </span>
-      )
-    }
-    // 2. AI 错误 → 重试
-    if (record.ai_error_message) {
-      return (
-        <span
-          role="button"
-          onClick={() => handleRerunAI(record)}
-          style={actionLink('#0075de')}
-        >
-          重跑AI
-        </span>
-      )
-    }
-    // 3. 整改状态机
-    if (record.rectification_status === 'pending') {
-      if (record.status !== 'open') return <Text type="secondary">-</Text>
-      return (
-        <span
-          role="button"
-          onClick={() => handleStartRectification(record)}
-          style={actionLink('#0075de')}
-        >
-          <PlayCircleOutlined />开始整改
-        </span>
-      )
-    }
-    if (record.rectification_status === 'in_progress') {
-      if (record.status !== 'open') return <Text type="secondary">-</Text>
-      return (
-        <span
-          role="button"
-          onClick={() => handleReply(record)}
-          style={actionLink('#0075de')}
-        >
-          <CheckCircleOutlined />整改回复
-        </span>
-      )
-    }
-    // 复核操作已迁移到多维表格，平台仅展示状态
-    if (record.rectification_status === 'replied') {
-      return <Text type="secondary">待复核</Text>
-    }
-    if (record.rectification_status === 'no_rectification_needed') {
-      if (record.verify_level_3_status === 'pending') {
-        return <Text type="secondary">待闭环确认</Text>
-      }
-      return <Text type="secondary">-</Text>
-    }
-    if (record.rectification_status === 'level1_approved') {
-      return <Text type="secondary">待复核</Text>
-    }
-    if (record.rectification_status === 'level2_approved') {
-      return <Text type="secondary">待复核</Text>
-    }
-    if (record.rectification_status === 'rejected') {
-      return (
-        <span
-          role="button"
-          onClick={() => handleReply(record)}
-          style={actionLink('#e03131')}
-        >
-          <EditOutlined />重新整改
-        </span>
-      )
-    }
-    return <Text type="secondary">-</Text>
-  }
-
   // ── 表格列定义 ──
   const columns: ColumnsType<HazardReport> = [
-    // ── 隐藏式复选框列：行号 → hover 显示 checkbox ──
-    {
-      title: '',
-      key: '__row_select__',
-      width: 48,
-      fixed: 'start',
-      align: 'center',
-      render: (_: unknown, record: HazardReport, index: number) => {
-        const isSelected = selectedRowKeys.includes(record.id)
-        const isHovered = hoveredRowId === record.id
-        const rowNum = ((page || 1) - 1) * (pageSize || 20) + index + 1
-
-        const handleToggle = () => {
-          setSelectedRowKeys((prev) =>
-            prev.includes(record.id)
-              ? prev.filter((k) => k !== record.id)
-              : [...prev, record.id]
-          )
-        }
-
-        if (isSelected) {
-          return (
-            <Checkbox
-              checked
-              onChange={handleToggle}
-              style={{ zIndex: 2 }}
-            />
-          )
-        }
-
-        return (
-          <span
-            style={{
-              position: 'relative',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 24,
-              height: 24,
-              cursor: 'pointer',
-            }}
-            onClick={handleToggle}
-          >
-            {/* 行号（hover 时透明） */}
-            <span
-              style={{
-                fontSize: 12,
-                color: '#a4a097',
-                fontWeight: 400,
-                transition: 'opacity 0.12s ease',
-                opacity: isHovered ? 0 : 1,
-                position: 'absolute',
-              }}
-            >
-              {rowNum}
-            </span>
-            {/* 复选框（hover 时出现） */}
-            <span
-              style={{
-                transition: 'opacity 0.12s ease',
-                opacity: isHovered ? 1 : 0,
-                position: 'absolute',
-              }}
-            >
-              <Checkbox checked={false} />
-            </span>
-          </span>
-        )
-      },
-    },
     {
       title: '隐患编号',
       dataIndex: 'hazard_no',
       key: 'hazard_no',
       width: 140,
       sorter: false,
-      render: (text: string, record: HazardReport) => (
-        <Link
-          href={`/safety/hazard/${record.id}`}
-          style={{ color: '#0075de', fontWeight: 600, fontSize: 13 }}
-        >
-          {text}
-        </Link>
+      render: (text: string) => (
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{text}</span>
       ),
     },
     {
@@ -878,14 +558,6 @@ export default function HazardLedgerPage() {
         )
       },
     },
-    {
-      title: '操作',
-      key: 'action',
-      width: 100,
-      fixed: 'right',
-      align: 'center',
-      render: (_, record) => renderAction(record),
-    },
   ]
 
   // ── 筛选弹出内容 ──
@@ -996,7 +668,7 @@ export default function HazardLedgerPage() {
           隐患台账
         </h2>
         <p style={{ fontSize: 14, color: '#787671', margin: 0, lineHeight: 1.5 }}>
-          AI识别 · 整改追踪 · 三级复核 · 闭环管理
+          AI识别 · 整改追踪 · 三级复核 · 台账只读监控（业务操作在飞书多维表格与机器人）
         </p>
       </div>
 
@@ -1244,15 +916,6 @@ export default function HazardLedgerPage() {
           )}
         </div>
 
-        {/* 隐患登记按钮（固定在右侧） */}
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setRegistrationDrawerOpen(true)}
-          style={{ flexShrink: 0 }}
-        >
-          隐患登记
-        </Button>
       </div>
 
       {/* ── 内容卡片 ── */}
@@ -1267,36 +930,6 @@ export default function HazardLedgerPage() {
           overflow: 'hidden',
         }}
       >
-        {/* ── 批量删除栏 ── */}
-        {selectedRowKeys.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '8px 16px',
-              marginBottom: 12,
-              borderRadius: 8,
-              background: '#fff1f0',
-              border: '1px solid #ffccc7',
-              flexShrink: 0,
-            }}
-          >
-            <span style={{ fontSize: 13, color: '#e03131', fontWeight: 500 }}>
-              已选择 {selectedRowKeys.length} 条记录
-            </span>
-            <Button
-              danger
-              icon={<DeleteOutlined />}
-              loading={deleting}
-              onClick={handleBatchDelete}
-              size="small"
-            >
-              删除
-            </Button>
-          </div>
-        )}
-
         {/* ── 全局样式：行悬停效果 + 隐藏式复选框 ── */}
         <style>{`
           .hazard-ledger-table .ant-table-row {
@@ -1321,10 +954,6 @@ export default function HazardLedgerPage() {
           size="small"
           loading={isLoading}
           scroll={{ x: 'max-content' }}
-          onRow={(record) => ({
-            onMouseEnter: () => setHoveredRowId(record.id),
-            onMouseLeave: () => setHoveredRowId((prev) => (prev === record.id ? null : prev)),
-          })}
           pagination={{
             current: page,
             pageSize,
@@ -1340,32 +969,6 @@ export default function HazardLedgerPage() {
         />
       </div>
 
-      {/* ── 整改回复 Modal ── */}
-      <HazardRectificationReplyModal
-        open={replyModalVisible}
-        record={replyRecord}
-        mode={replyMode}
-        onClose={() => setReplyModalVisible(false)}
-        onSuccess={handleReplySuccess}
-      />
-
-      {/* ── 三级复核 Modal ── */}
-      <HazardVerifyModal
-        open={verifyModalVisible}
-        record={verifyRecord}
-        onClose={() => setVerifyModalVisible(false)}
-        onSuccess={handleVerifySuccess}
-      />
-
-      {/* ── 隐患登记抽屉 ── */}
-      <HazardRegistrationDrawer
-        open={registrationDrawerOpen}
-        onClose={() => setRegistrationDrawerOpen(false)}
-        onDone={() => {
-          setRegistrationDrawerOpen(false)
-          refreshLedger()
-        }}
-      />
     </div>
   )
 }

@@ -1,21 +1,4 @@
 // EHS 变更管理组件
-// URS 智能审核
-export { URSPanel } from './URSPanel'
-export { URSRegisterDrawer } from './URSRegisterDrawer'
-export { URSDetailDrawer } from './URSDetailDrawer'
-export { URSRiskAssessmentDrawer } from './URSRiskAssessmentDrawer'
-export { URSItemReviewDrawer } from './URSItemReviewDrawer'
-export { URSConclusionModal } from './URSConclusionModal'
-export { URSAppealModal } from './URSAppealModal'
-export {
-  URS_STATUS_UI,
-  URS_STATUS_FILTER,
-  RISK_LEVEL_UI,
-  APPLICABILITY_UI,
-  ITEM_VERDICT_UI,
-  RISK_DIMENSION_LABELS,
-  RISK_DIMENSION_KEYS,
-} from './ursConstants'
 export {
   CARD_STYLE,
   KpiCard,

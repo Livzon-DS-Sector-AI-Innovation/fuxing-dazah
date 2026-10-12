@@ -3,31 +3,5 @@
 
 'use client'
 
-// ============================================================
-// Per-domain stores (NEW — prefer these for new code)
-// ============================================================
-export { useHazardStore } from './hazardStore'
-export { useTrainingStore } from './trainingStore'
-export { useRegulationStore } from './regulationStore'
-export { useRevisionStore } from './revisionStore'
-export { useSpecialOpsPersonnelStore } from './specialOpsPersonnelStore'
-export { useSpecialOpsPermitStore } from './specialOpsPermitStore'
-export { useKnowledgeStore } from './knowledgeStore'
-export { useSpecialOpReportStore } from './specialOpReportStore'
-export { useHazardIdentificationStore } from './hazardIdentificationStore'
-export { useEhsChangeStore } from './ehsChangeStore'
-export { useContractorStore } from './contractorStore'
-
-// ============================================================
-// Legacy monolithic store (backward compatibility)
-// ============================================================
-export { useSafetyStore } from './deprecatedStore'
-export type { SafetyState } from './types'
-
-// ============================================================
-// 每日风险作业报备 / 职业危害因素监测
-// ============================================================
-export { useDailyRiskReportStore } from './dailyRiskReportStore'
-export { useOhHazardMonitorStore } from './ohHazardMonitorStore'
-export { useAccidentStore } from './accidentStore'
-export { useSafetyCheckStore } from './safetyCheckStore'
+// 保留域的 zustand store（多数页面已迁 react-query，此处仅存仍被引用的）
+export { useKnowledgeGraphStore } from './knowledgeGraphStore'

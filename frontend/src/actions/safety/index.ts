@@ -12,25 +12,19 @@ import type {
   AiCallAuditListItem,
   Contractor,
   ContractorFormData,
-  ContractorQueryParams,
   ContractorWorkRecord,
   ContractorWorkRecordFormData,
   HazardReport,
-  HazardReportFormData,
   HazardReportQueryParams,
   HazardStats,
   OperationRegulation,
   OperationRegulationFormData,
-  OperationRegulationQueryParams,
   RegulationRevision,
-  RegulationRevisionFormData,
-  RegulationRevisionQueryParams,
   SafetyKnowledgeArticle,
   SafetyKnowledgeArticleFormData,
   SafetyKnowledgeArticleQueryParams,
   KnowledgeCategoryCounts,
   ParseDocumentResponse,
-  ParseUrsDocumentResponse,
   DuplicateCheckRequest,
   DuplicateCheckResponse,
   NewVersionResponse,
@@ -38,13 +32,10 @@ import type {
   SemanticSearchResult,
   SafetyTraining,
   SafetyTrainingFormData,
-  SafetyTrainingQueryParams,
   SpecialOperationPermit,
   SpecialOperationPermitFormData,
-  SpecialOperationPermitQueryParams,
   SpecialOperationPersonnel,
   SpecialOperationPersonnelFormData,
-  SpecialOperationPersonnelQueryParams,
   SpecialOperationReport,
   SpecialOperationReportFormData,
   SpecialOperationReportQueryParams,
@@ -58,15 +49,8 @@ import type {
   DailyReportGenerateRequest,
   DailyReportResponse,
   DailyReportStats,
-  RectificationReplyRequest,
-  VerifyLevelRequest,
   TrainingRecord,
-  TrainingRecordFormData,
   ApiResponse,
-  EhsChange,
-  EhsChangeFormData,
-  EhsChangeQueryParams,
-  EhsChangeStats,
   // contractor admission（相关方准入）
   ContractorAdmission,
   ContractorAdmissionListItem,
@@ -164,20 +148,11 @@ import type {
   AppConfigListData,
   UpdateAppConfigInput,
   // accident / check / daily risk report / oh hazard monitor（迁移补齐）
-  Accident,
-  AccidentFormData,
-  AccidentQueryParams,
   SafetyCheck,
   SafetyCheckFormData,
-  SafetyCheckQueryParams,
-  DailyRiskReport,
-  DailyRiskReportFormData,
-  DailyRiskReportQueryParams,
   OhHazardMonitor,
   OhHazardMonitorFormData,
   OhHazardMonitorQueryParams,
-  HazardRiskOption,
-  ConfirmCheckRequest,
 } from '@/types/safety'
 
 // ============ HazardReport Actions ============
@@ -190,205 +165,13 @@ export async function getHazards(params: HazardReportQueryParams = {}) {
   return fetchApi<HazardReport[]>(`/safety/hazards${buildQueryString(params)}`)
 }
 
-export async function getHazard(id: string) {
-  return fetchApi<HazardReport>(`/safety/hazards/${id}`)
-}
-
-/** 根据部门名称查询部门负责人 */
-export async function getDepartmentLeader(departmentName: string) {
-  return fetchApi<{ department: string; leader_name: string | null; leader_id: string | null }>(
-    `/safety/hazards/department-leader?department_name=${encodeURIComponent(departmentName)}`
-  )
-}
-
-/** 根据部门名称查询分管安全员 */
-export async function getDepartmentSafetyOfficer(departmentName: string) {
-  return fetchApi<{ department: string; safety_officer_name: string | null; safety_officer_id: string | null }>(
-    `/safety/hazards/department-safety-officer?department_name=${encodeURIComponent(departmentName)}`
-  )
-}
-
-export async function createHazard(data: HazardReportFormData) {
-  const response = await fetchApi<HazardReport>('/safety/hazards', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function updateHazard(id: string, data: Partial<HazardReportFormData>) {
-  const response = await fetchApi<HazardReport>(`/safety/hazards/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function startRectification(id: string) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/rectification/start`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-
-export async function replyRectification(id: string, data: RectificationReplyRequest) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/rectification/reply`,
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function verifyLevel(id: string, data: VerifyLevelRequest) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/rectification/verify-level`,
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function notifyReviewer(id: string) {
-  const response = await fetchApi<{ level: number; level_label: string }>(
-    `/safety/hazards/${id}/rectification/notify-reviewer`,
-    { method: 'POST' }
-  )
-  return response
-}
-
-export async function notifyRectification(id: string) {
-  const response = await fetchApi<{ target: string }>(
-    `/safety/hazards/${id}/rectification/notify-rectification`,
-    { method: 'POST' }
-  )
-  return response
-}
-
-export async function triggerRectificationReview(id: string) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/rectification/review`,
-    { method: 'POST' }
-  )
-  return response
-}
-
-export async function reworkRectification(id: string, data: RectificationReplyRequest) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/rectification/rework`,
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function deleteHazard(id: string) {
-  const response = await fetchApi<null>(`/safety/hazards/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function deleteHazards(ids: string[]) {
-  const results = await Promise.allSettled(
-    ids.map((id) =>
-      fetchApi<null>(`/safety/hazards/${id}`, { method: 'DELETE' })
-    )
-  )
-  revalidatePath('/safety/hazard')
-  const succeeded = results.filter((r) => r.status === 'fulfilled').length
-  const failed = results.filter((r) => r.status === 'rejected').length
-  return { succeeded, failed, total: ids.length }
-}
-
-export async function uploadHazardPhoto(id: string, file: File) {
-  return uploadPhoto(`/safety/hazards/${id}/upload-photo`, file)
-}
-
-export async function uploadRectificationPhoto(id: string, file: File) {
-  return uploadPhoto(`/safety/hazards/${id}/upload-rectification-photo`, file)
-}
-
-export async function runHazardAI(hazardId: string, scriptNumber: number) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${hazardId}/ai/run/${scriptNumber}`,
-    { method: 'POST', body: '{}' }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
 // ============ Contractor Actions ============
-
-export async function getContractors(params: ContractorQueryParams = {}) {
-  return fetchApi<Contractor[]>(`/safety/contractors${buildQueryString(params)}`)
-}
-
-export async function getContractor(id: string) {
-  return fetchApi<Contractor>(`/safety/contractors/${id}`)
-}
-
-export async function createContractor(data: ContractorFormData) {
-  const response = await fetchApi<Contractor>('/safety/contractors', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/contractor')
-  return response
-}
 
 export async function updateContractor(id: string, data: Partial<ContractorFormData>) {
   const response = await fetchApi<Contractor>(`/safety/contractors/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   })
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function deleteContractor(id: string) {
-  const response = await fetchApi<null>(`/safety/contractors/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function blacklistContractor(id: string) {
-  const response = await fetchApi<Contractor>(`/safety/contractors/${id}/blacklist`, { method: 'POST' })
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function activateContractor(id: string) {
-  const response = await fetchApi<Contractor>(`/safety/contractors/${id}/activate`, { method: 'POST' })
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function updateContractorTraining(id: string, trainingStatus: string) {
-  const params = new URLSearchParams({ training_status: trainingStatus })
-  const response = await fetchApi<Contractor>(
-    `/safety/contractors/${id}/update-training?${params.toString()}`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function getWorkRecords(contractorId: string) {
-  return fetchApi<ContractorWorkRecord[]>(`/safety/contractors/${contractorId}/work-records`)
-}
-
-export async function createWorkRecord(contractorId: string, data: ContractorWorkRecordFormData) {
-  const response = await fetchApi<ContractorWorkRecord>(
-    `/safety/contractors/${contractorId}/work-records`,
-    { method: 'POST', body: JSON.stringify(data) }
-  )
   revalidatePath('/safety/contractor')
   return response
 }
@@ -404,53 +187,7 @@ export async function updateWorkRecord(
   return response
 }
 
-export async function deleteWorkRecord(contractorId: string, recordId: string) {
-  const response = await fetchApi<null>(
-    `/safety/contractors/${contractorId}/work-records/${recordId}`,
-    { method: 'DELETE' }
-  )
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function evaluateWorkRecord(
-  contractorId: string, recordId: string, score: number, comments?: string, evaluator?: string
-) {
-  const response = await fetchApi<ContractorWorkRecord>(
-    `/safety/contractors/${contractorId}/work-records/${recordId}/evaluate`,
-    { method: 'POST', body: JSON.stringify({ score, comments, evaluator }) }
-  )
-  revalidatePath('/safety/contractor')
-  return response
-}
-
 // ============ SafetyTraining Actions ============
-
-export async function getTrainings(params: SafetyTrainingQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.training_type) searchParams.set('training_type', params.training_type)
-  if (params.department) searchParams.set('department', params.department)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/trainings${queryString ? `?${queryString}` : ''}`
-  return fetchApi<SafetyTraining[]>(endpoint)
-}
-
-export async function getTraining(id: string) {
-  return fetchApi<SafetyTraining>(`/safety/trainings/${id}`)
-}
-
-export async function createTraining(data: SafetyTrainingFormData) {
-  const response = await fetchApi<SafetyTraining>('/safety/trainings', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/training')
-  return response
-}
 
 export async function updateTraining(id: string, data: Partial<SafetyTrainingFormData>) {
   const response = await fetchApi<SafetyTraining>(`/safety/trainings/${id}`, {
@@ -461,85 +198,9 @@ export async function updateTraining(id: string, data: Partial<SafetyTrainingFor
   return response
 }
 
-export async function startTraining(id: string) {
-  const response = await fetchApi<SafetyTraining>(
-    `/safety/trainings/${id}/start`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/training')
-  return response
-}
-
-export async function completeTraining(id: string) {
-  const response = await fetchApi<SafetyTraining>(
-    `/safety/trainings/${id}/complete`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/training')
-  return response
-}
-
-export async function deleteTraining(id: string) {
-  const response = await fetchApi<null>(`/safety/trainings/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/training')
-  return response
-}
-
 // ============ TrainingRecord Actions ============
 
-export async function getTrainingRecords(trainingId: string) {
-  return fetchApi<TrainingRecord[]>(`/safety/trainings/${trainingId}/records`)
-}
-
-export async function createTrainingRecord(trainingId: string, data: TrainingRecordFormData) {
-  const response = await fetchApi<TrainingRecord>(
-    `/safety/trainings/${trainingId}/records`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ ...data, training_id: trainingId }),
-    }
-  )
-  revalidatePath(`/safety/training`)
-  return response
-}
-
-export async function updateTrainingRecord(recordId: string, data: Partial<TrainingRecordFormData>) {
-  const response = await fetchApi<TrainingRecord>(
-    `/safety/training-records/${recordId}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }
-  )
-  revalidatePath('/safety/training')
-  return response
-}
-
-export async function deleteTrainingRecord(recordId: string) {
-  const response = await fetchApi<null>(
-    `/safety/training-records/${recordId}`,
-    { method: 'DELETE' }
-  )
-  revalidatePath('/safety/training')
-  return response
-}
-
 // ============ Training Certificate Actions ============
-
-export async function getTrainingCertificates(
-  params: { page?: number; page_size?: number; certificate_status?: string; keyword?: string } = {}
-) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.certificate_status) searchParams.set('certificate_status', params.certificate_status)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-  const qs = searchParams.toString()
-  const endpoint = `/safety/training-certificates${qs ? `?${qs}` : ''}`
-  return fetchApi<TrainingRecord[]>(endpoint)
-}
 
 export async function getExpiringCertificates() {
   return fetchApi<TrainingRecord[]>('/safety/training-certificates/expiring')
@@ -569,12 +230,6 @@ export async function getHazardIdentifications(
   return fetchApi<import('@/types/safety').HazardIdentification[]>(endpoint)
 }
 
-export async function getHIStats() {
-  return fetchApi<import('@/types/safety').HazardIdentificationStats>(
-    '/safety/hazard-identifications/stats'
-  )
-}
-
 export async function getHILedgerStats(
   params: {
     department?: string
@@ -596,42 +251,6 @@ export async function getHILedgerStats(
   )
 }
 
-export async function getHazardIdentification(id: string) {
-  return fetchApi<import('@/types/safety').HazardIdentification>(
-    `/safety/hazard-identifications/${id}`
-  )
-}
-
-export async function createHazardIdentification(
-  data: import('@/types/safety').HazardIdentificationFormData
-) {
-  const response = await fetchApi<import('@/types/safety').HazardIdentification>(
-    '/safety/hazard-identifications',
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
-}
-
-// ── 批量辨识 ──
-
-export async function getRegulationStages(regulationId: string) {
-  return fetchApi<import('@/types/safety').RegulationStagesResponse>(
-    `/safety/regulations/${regulationId}/stages`
-  )
-}
-
-export async function createHazardIdentificationBatch(
-  data: import('@/types/safety').HazardIdentificationBatchCreateInput
-) {
-  const response = await fetchApi<import('@/types/safety').HazardIdentificationBatchResponse>(
-    '/safety/hazard-identifications/batch',
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
-}
-
 export async function updateHazardIdentification(
   id: string,
   data: Partial<import('@/types/safety').HazardIdentification>
@@ -644,50 +263,6 @@ export async function updateHazardIdentification(
   return response
 }
 
-export async function submitHazardIdentification(id: string) {
-  const response = await fetchApi<import('@/types/safety').HazardIdentification>(
-    `/safety/hazard-identifications/${id}/submit`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
-}
-
-export async function runHazardScript(
-  id: string,
-  scriptNumber: number,
-  aiOutput?: Record<string, unknown>
-) {
-  const body: Record<string, unknown> = { script_number: scriptNumber }
-  if (aiOutput) {
-    body.ai_output = aiOutput
-  }
-  const response = await fetchApi<import('@/types/safety').HazardIdentification>(
-    `/safety/hazard-identifications/${id}/run-script`,
-    { method: 'POST', body: JSON.stringify(body) }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
-}
-
-export async function reviewHazardScript(
-  id: string,
-  scriptNumber: number,
-  action: 'approved' | 'rejected'
-) {
-  const response = await fetchApi<import('@/types/safety').HazardIdentification>(
-    `/safety/hazard-identifications/${id}/review`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ script_number: scriptNumber, action }),
-    }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
-}
-
-// ── 手动触发（事件丢失兜底）──
-
 export interface ManualTriggerResult {
   status: 'advanced' | 'noop'
   reason?: 'completed' | 'precondition' | 'empty_record' | 'dedup' | 'busy'
@@ -699,15 +274,6 @@ export interface ManualTriggerResult {
 export interface ManualTriggerResponse {
   result: ManualTriggerResult
   record?: import('@/types/safety').HazardIdentification
-}
-
-export async function manualTriggerHazardIdentification(id: string) {
-  const response = await fetchApi<ManualTriggerResponse>(
-    `/safety/hazard-identifications/${id}/manual-trigger`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
 }
 
 export async function uploadHazardAttachment(id: string, file: File) {
@@ -733,16 +299,6 @@ export async function deleteHazardIdentification(id: string) {
 }
 
 // ============ Hazard Identification AI Export ============
-
-export async function parseHazardExportQuery(naturalQuery: string) {
-  return fetchApi<import('@/types/safety').HazardLedgerExportParsedFilters>(
-    '/safety/hazard-identifications/parse-query',
-    {
-      method: 'POST',
-      body: JSON.stringify({ natural_query: naturalQuery }),
-    }
-  )
-}
 
 export async function exportHazardLedgerPdf(
   params: import('@/types/safety').HazardLedgerExportRequest
@@ -792,32 +348,6 @@ export async function getSafetyEnums() {
 
 // ============ OperationRegulation Actions ============
 
-export async function getRegulations(params: OperationRegulationQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.position) searchParams.set('position', params.position)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-  if (params.status) searchParams.set('status', params.status)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/regulations${queryString ? `?${queryString}` : ''}`
-  return fetchApi<OperationRegulation[]>(endpoint)
-}
-
-export async function getRegulation(id: string) {
-  return fetchApi<OperationRegulation>(`/safety/regulations/${id}`)
-}
-
-export async function createRegulation(data: OperationRegulationFormData) {
-  const response = await fetchApi<OperationRegulation>('/safety/regulations', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/regulation')
-  return response
-}
-
 export async function updateRegulation(id: string, data: Partial<OperationRegulationFormData>) {
   const response = await fetchApi<OperationRegulation>(`/safety/regulations/${id}`, {
     method: 'PUT',
@@ -827,76 +357,7 @@ export async function updateRegulation(id: string, data: Partial<OperationRegula
   return response
 }
 
-export async function deleteRegulation(id: string) {
-  const response = await fetchApi<null>(`/safety/regulations/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/regulation')
-  return response
-}
-
-export async function uploadRegulationDocument(id: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/regulations/${id}/upload`,
-    { method: 'POST', headers: uploadHeaders, body: formData }
-  )
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`上传失败: ${response.status} ${text}`)
-  }
-  revalidatePath('/safety/regulation')
-  return response.json()
-}
-
 // ============ SOP Generator Actions ============
-
-export async function generateSop(file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/regulations/generate`,
-    { method: 'POST', headers: uploadHeaders, body: formData }
-  )
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`生成失败 (${response.status}): ${text}`)
-  }
-  revalidatePath('/safety/regulation')
-  return response.json()
-}
-
-export async function updateSopContent(regulationId: string, content: string, status?: string) {
-  const response = await fetchApi<OperationRegulation>(
-    `/safety/regulations/${regulationId}/content`,
-    { method: 'PUT', body: JSON.stringify({ content, status }) }
-  )
-  revalidatePath('/safety/regulation')
-  return response
-}
-
-export async function exportSopPdf(
-  regulationId: string,
-  format: 'pdf' | 'docx' = 'pdf',
-): Promise<ApiResponse<Blob>> {
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...headers } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/regulations/${regulationId}/export?format=${format}`,
-    { method: 'POST', headers }
-  )
-  if (!response.ok) {
-    const text = await response.text()
-    return { code: response.status, message: `导出 ${format === 'docx' ? 'WORD' : 'PDF'} 失败: ${text}` } as ApiResponse<Blob>
-  }
-  const blob = await response.blob()
-  return { code: 0, message: 'ok', data: blob }
-}
 
 export async function retryAiReview(regulationId: string) {
   const response = await fetchApi<{ regulation_id: string; ai_review_status: string }>(
@@ -907,58 +368,7 @@ export async function retryAiReview(regulationId: string) {
   return response
 }
 
-export async function reviseRegulation(
-  regulationId: string,
-  content: string,
-  revisionOpinion?: string,
-  reviserName?: string,
-) {
-  const response = await fetchApi<{
-    regulation_id: string
-    revision_id: string
-    revision_no: string
-    regulation_name: string
-    status: string
-  }>(`/safety/regulations/${regulationId}/revise`, {
-    method: 'POST',
-    body: JSON.stringify({
-      content,
-      revision_opinion: revisionOpinion || null,
-      reviser_name: reviserName || null,
-    }),
-  })
-  revalidatePath('/safety/regulation')
-  return response
-}
-
 // ============ RegulationRevision Actions ============
-
-export async function getRevisions(params: RegulationRevisionQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.regulation_id) searchParams.set('regulation_id', params.regulation_id)
-  if (params.revision_type) searchParams.set('revision_type', params.revision_type)
-  if (params.review_opinion) searchParams.set('review_opinion', params.review_opinion)
-  if (params.revision_scope) searchParams.set('revision_scope', params.revision_scope)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/revisions${queryString ? `?${queryString}` : ''}`
-  return fetchApi<RegulationRevision[]>(endpoint)
-}
-
-export async function getRevision(id: string) {
-  return fetchApi<RegulationRevision>(`/safety/revisions/${id}`)
-}
-
-export async function createRevision(data: RegulationRevisionFormData) {
-  const response = await fetchApi<RegulationRevision>('/safety/revisions', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/regulation-revision')
-  return response
-}
 
 export async function updateRevision(id: string, data: Partial<RegulationRevision>) {
   const response = await fetchApi<RegulationRevision>(`/safety/revisions/${id}`, {
@@ -969,88 +379,7 @@ export async function updateRevision(id: string, data: Partial<RegulationRevisio
   return response
 }
 
-export async function deleteRevision(id: string) {
-  const response = await fetchApi<null>(`/safety/revisions/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/regulation-revision')
-  return response
-}
-
-export async function manualRevisionComplete(revisionId: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/revisions/${revisionId}/manual-complete`,
-    { method: 'POST', headers: uploadHeaders, body: formData }
-  )
-  revalidatePath('/safety/regulation-revision')
-  return response.json()
-}
-
-export async function aiRevisionGenerate(revisionId: string) {
-  const response = await fetchApi<{ generated_content: string }>(
-    `/safety/revisions/${revisionId}/ai-generate`,
-    { method: 'POST' }
-  )
-  return response
-}
-
-export async function aiRevisionConfirm(
-  revisionId: string,
-  generatedContent: string,
-  documentName?: string
-) {
-  const params = new URLSearchParams({ generated_content: generatedContent })
-  if (documentName) params.set('document_name', documentName)
-
-  const response = await fetchApi<RegulationRevision>(
-    `/safety/revisions/${revisionId}/ai-confirm?${params.toString()}`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/regulation-revision')
-  return response
-}
-
-export async function identifyRevisionScope(revisionId: string) {
-  const response = await fetchApi<RegulationRevision>(
-    `/safety/revisions/${revisionId}/identify-scope`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/regulation-revision')
-  return response
-}
-
 // ============ SpecialOperationPersonnel Actions ============
-
-export async function getPersonnelList(params: SpecialOperationPersonnelQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.certificate_type) searchParams.set('certificate_type', params.certificate_type)
-  if (params.department) searchParams.set('department', params.department)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/special-operation-personnel${queryString ? `?${queryString}` : ''}`
-  return fetchApi<SpecialOperationPersonnel[]>(endpoint)
-}
-
-export async function getPersonnel(id: string) {
-  return fetchApi<SpecialOperationPersonnel>(`/safety/special-operation-personnel/${id}`)
-}
-
-export async function createPersonnel(data: SpecialOperationPersonnelFormData) {
-  const response = await fetchApi<SpecialOperationPersonnel>(
-    '/safety/special-operation-personnel',
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/special-ops-personnel')
-  return response
-}
 
 export async function updatePersonnel(id: string, data: Partial<SpecialOperationPersonnelFormData>) {
   const response = await fetchApi<SpecialOperationPersonnel>(
@@ -1071,99 +400,10 @@ export async function deletePersonnel(id: string) {
 
 // ============ SpecialOperationPermit Actions ============
 
-export async function getPermitList(params: SpecialOperationPermitQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.operation_type) searchParams.set('operation_type', params.operation_type)
-  if (params.operation_level) searchParams.set('operation_level', params.operation_level)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/special-operation-permits${queryString ? `?${queryString}` : ''}`
-  return fetchApi<SpecialOperationPermit[]>(endpoint)
-}
-
-export async function getPermit(id: string) {
-  return fetchApi<SpecialOperationPermit>(`/safety/special-operation-permits/${id}`)
-}
-
-export async function createPermit(data: SpecialOperationPermitFormData) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    '/safety/special-operation-permits',
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
 export async function updatePermit(id: string, data: Partial<SpecialOperationPermitFormData>) {
   const response = await fetchApi<SpecialOperationPermit>(
     `/safety/special-operation-permits/${id}`,
     { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function deletePermit(id: string) {
-  const response = await fetchApi<null>(`/safety/special-operation-permits/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function submitPermit(id: string) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}/submit`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function approvePermit(id: string) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}/approve`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function rejectPermit(id: string, reason: string) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}/reject?reason=${encodeURIComponent(reason)}`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function startPermit(id: string) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}/start`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function completePermit(id: string, method: string) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}/complete?method=${encodeURIComponent(method)}`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
-
-export async function archivePermit(id: string) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}/archive`,
-    { method: 'POST' }
   )
   revalidatePath('/safety/special-ops-permits')
   return response
@@ -1622,167 +862,6 @@ export async function generateCentralAlarmDailyReport(data: CentralAlarmDailyRep
 // ============ EHS变更管理 (MOC) ============
 
 // CRUD
-export async function getEhsChanges(params: EhsChangeQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.change_type) searchParams.set('change_type', params.change_type)
-  if (params.change_grade) searchParams.set('change_grade', params.change_grade)
-  if (params.change_duration) searchParams.set('change_duration', params.change_duration)
-  if (params.department) searchParams.set('department', params.department)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-  if (params.source) searchParams.set('source', params.source)
-  if (params.feishu_table_id) searchParams.set('feishu_table_id', params.feishu_table_id)
-  if (params.sort_by) searchParams.set('sort_by', params.sort_by)
-  if (params.sort_order) searchParams.set('sort_order', params.sort_order)
-  const qs = searchParams.toString()
-  return fetchApi<EhsChange[]>(`/safety/ehs-changes${qs ? `?${qs}` : ''}`)
-}
-
-export async function getEhsChange(id: string) {
-  return fetchApi<EhsChange>(`/safety/ehs-changes/${id}`)
-}
-
-export async function getEhsChangeStats(feishuTableId: string, source?: string) {
-  const qs = new URLSearchParams()
-  if (feishuTableId) qs.set('feishu_table_id', feishuTableId)
-  if (source) qs.set('source', source)
-  return fetchApi<EhsChangeStats>(`/safety/ehs-changes/stats${qs.toString() ? `?${qs.toString()}` : ''}`)
-}
-
-export async function runEhsAiReview(id: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/ai/audit`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function createEhsChange(data: EhsChangeFormData) {
-  const response = await fetchApi<EhsChange>('/safety/ehs-changes', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function updateEhsChange(id: string, data: Partial<EhsChangeFormData>) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function deleteEhsChange(id: string) {
-  const response = await fetchApi<null>(`/safety/ehs-changes/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-// Workflow
-export async function submitEhsChange(id: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/submit`, { method: 'POST' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function approveEhsChange(id: string, decision: string, comments?: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({ decision, comments }),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function rejectEhsChange(id: string, comments?: string) {
-  const params = comments ? `?comments=${encodeURIComponent(comments)}` : ''
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/reject${params}`, { method: 'POST' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function startImplementationEhsChange(id: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/start-implementation`, { method: 'POST' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function commissionEhsChange(id: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/commission`, { method: 'POST' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function closeEhsChange(id: string, closedBy?: string, tempExpiryDate?: string, restoredDate?: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/close`, {
-    method: 'POST',
-    body: JSON.stringify({ closed_by: closedBy, temp_expiry_date: tempExpiryDate, restored_date: restoredDate }),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function cancelEhsChange(id: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/cancel`, { method: 'POST' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-// JSON sub-record operations
-export async function addRiskAssessment(id: string, data: Record<string, unknown>) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/risk-assessments`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function updateActionItem(id: string, index: number, status: string) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/action-items/${index}?status=${encodeURIComponent(status)}`, { method: 'PUT' })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function updatePSSRChecklist(id: string, data: Record<string, unknown>[] | object[]) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/pssr-checklist`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-export async function submitVerification(id: string, data: Record<string, unknown>) {
-  const response = await fetchApi<EhsChange>(`/safety/ehs-changes/${id}/verification`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/apply')
-  revalidatePath('/safety/ehs-change/acceptance')
-  return response
-}
-
-
 // ==================== 职业健康管理 Actions（design §八；监测废弃已删除） ====================
 
 // ── 人员台账 oh/persons ──
@@ -2132,172 +1211,7 @@ export async function getCollectionStats() {
   return fetchApi<CollectionStats>('/safety/emergency-drills/collection-stats')
 }
 
-// ==================== URS 智能审核 Actions ====================
-
-export async function getURsReports(params: import('@/types/safety').URSQueryParams = {}) {
-  return fetchApi<import('@/types/safety').URSReport[]>(
-    `/safety/urs-reports${buildQueryString(params)}`,
-  )
-}
-
-export async function getURsStats() {
-  return fetchApi<import('@/types/safety').URSStats>('/safety/urs-reports/stats')
-}
-
-export async function createURS(data: Partial<import('@/types/safety').URSReport>) {
-  const response = await fetchApi<import('@/types/safety').URSReport>('/safety/urs-reports', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function parseUrsDocument(documentText: string) {
-  return fetchApi<Record<string, string>>('/safety/urs-reports/parse-document', {
-    method: 'POST',
-    body: JSON.stringify({ document_text: documentText }),
-  })
-}
-
-export async function uploadUrsDocument(file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const headers = await getAuthHeaders()
-  // Remove Content-Type so browser sets multipart boundary
-  delete (headers as Record<string, string>)['Content-Type']
-  const res = await fetch(`${API_BASE}/safety/urs-reports/parse-upload`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
-  return res.json() as Promise<ApiResponse<ParseUrsDocumentResponse>>
-}
-
-export async function getURsReport(id: string) {
-  return fetchApi<import('@/types/safety').URSReport>(`/safety/urs-reports/${id}`)
-}
-
-export async function updateURS(id: string, data: Partial<import('@/types/safety').URSReport>) {
-  const response = await fetchApi<import('@/types/safety').URSReport>(`/safety/urs-reports/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function deleteURS(id: string) {
-  const response = await fetchApi(`/safety/urs-reports/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function submitURS(id: string) {
-  const response = await fetchApi<import('@/types/safety').URSReport>(`/safety/urs-reports/${id}/submit`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function confirmURsAssessment(id: string, data: { comment?: string; corrections?: Record<string, string> }) {
-  const response = await fetchApi<import('@/types/safety').URSReport>(
-    `/safety/urs-reports/${id}/assessment/confirm`,
-    { method: 'POST', body: JSON.stringify(data) },
-  )
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function runURsAdaptation(id: string) {
-  const response = await fetchApi<import('@/types/safety').URSReport>(`/safety/urs-reports/${id}/adaptation/run`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function getURsItems(id: string) {
-  return fetchApi<import('@/types/safety').URSStandardItem[]>(`/safety/urs-reports/${id}/items`)
-}
-
-export async function reviewURsItemsBatch(
-  id: string,
-  items: Array<{ item_id: string; verdict: string; comment?: string; rectification_required?: boolean }>,
-) {
-  const response = await fetchApi<import('@/types/safety').URSStandardItem[]>(
-    `/safety/urs-reports/${id}/items/batch`,
-    { method: 'PUT', body: JSON.stringify({ items }) },
-  )
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function generateURsConclusion(id: string) {
-  const response = await fetchApi<import('@/types/safety').URSReport>(
-    `/safety/urs-reports/${id}/conclusion/generate`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function exportURsReviewPdf(reportId: string): Promise<ApiResponse<string>> {
-  const authHeaders = await getAuthHeaders()
-  const response = await fetch(`${API_BASE}/safety/urs-reports/${reportId}/export-pdf`, {
-    method: 'POST',
-    headers: { ...authHeaders },
-  })
-
-  // 后端业务错误以 HTTP 200 + application/json（ApiResponse 约定）返回，
-  // 不能只靠 response.ok 判断失败；仅当响应体为 application/pdf 才算成功。
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!response.ok || !contentType.includes('application/pdf')) {
-    const errorText = await response.text()
-    try {
-      const json = JSON.parse(errorText)
-      const code = typeof json.code === 'number' ? json.code : response.status
-      return { code, message: json.message || `导出失败: ${errorText}`, data: '' } as ApiResponse<string>
-    } catch {
-      return { code: response.status, message: `导出失败: ${errorText}`, data: '' } as ApiResponse<string>
-    }
-  }
-
-  // Server Action 中不能使用浏览器 API，返回 base64 给客户端触发下载
-  const arrayBuffer = await response.arrayBuffer()
-  const base64 = Buffer.from(arrayBuffer).toString('base64')
-  return { code: 0, message: 'ok', data: base64 }
-}
-
-export async function submitURsAppeal(id: string, reason: string) {
-  const response = await fetchApi<import('@/types/safety').URSReport>(`/safety/urs-reports/${id}/appeal`, {
-    method: 'POST',
-    body: JSON.stringify({ reason }),
-  })
-  revalidatePath('/safety/ehs-change/urs')
-  return response
-}
-
-export async function getURsDocuments(id: string) {
-  return fetchApi<Array<{ id: string; doc_type: string; title: string; content_json: unknown; version: number; created_at?: string }>>(
-    `/safety/urs-reports/${id}/documents`,
-  )
-}
-
-export async function getURsEnums() {
-  return fetchApi<{
-    equipment_categories: Array<{ value: string; label: string }>
-    procurement_purposes: Array<{ value: string; label: string }>
-    risk_levels: Array<{ value: string; label: string }>
-    status_options: Array<{ value: string; label: string }>
-    risk_dimension_keys: string[]
-  }>('/safety/urs-reports/enums')
-}
-
-// ═══════════════════════════════════════════════════════════════
-// MSDS 智能提取入库
-// ═══════════════════════════════════════════════════════════════
+// ==================== MSDS Actions ====================
 
 type MsdsCollectionRecordT = import('@/types/safety').MsdsCollectionRecord
 type MsdsDocumentT = import('@/types/safety').MsdsDocument
@@ -2697,23 +1611,6 @@ export async function exportKeyRiskOpsReports(filters: Record<string, unknown>):
 
 // ============ SafetyCheck Actions（安全检查） ============
 
-export async function getChecks(params: SafetyCheckQueryParams = {}) {
-  return fetchApi<SafetyCheck[]>(`/safety/checks${buildQueryString(params)}`)
-}
-
-export async function getCheck(id: string) {
-  return fetchApi<SafetyCheck>(`/safety/checks/${id}`)
-}
-
-export async function createCheck(data: SafetyCheckFormData) {
-  const response = await fetchApi<SafetyCheck>('/safety/checks', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/check')
-  return response
-}
-
 export async function updateCheck(id: string, data: Partial<SafetyCheckFormData>) {
   const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}`, {
     method: 'PUT',
@@ -2731,205 +1628,9 @@ export async function submitCheck(id: string) {
   return response
 }
 
-export async function reviewCheck(id: string, result: string) {
-  const response = await fetchApi<SafetyCheck>(
-    `/safety/checks/${id}/review?result=${result}`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/check')
-  return response
-}
-
-export async function confirmCheck(id: string, data: ConfirmCheckRequest) {
-  const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}/confirm`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/check')
-  return response
-}
-
-export async function deleteCheck(id: string) {
-  const response = await fetchApi<null>(`/safety/checks/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/check')
-  return response
-}
-
 // ============ Accident Actions（事故管理） ============
 
-export async function getAccidents(params: AccidentQueryParams = {}) {
-  return fetchApi<Accident[]>(`/safety/accidents${buildQueryString(params)}`)
-}
-
-export async function getAccident(id: string) {
-  return fetchApi<Accident>(`/safety/accidents/${id}`)
-}
-
-export async function createAccident(data: AccidentFormData) {
-  const response = await fetchApi<Accident>('/safety/accidents', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function updateAccident(id: string, data: Partial<AccidentFormData>) {
-  const response = await fetchApi<Accident>(`/safety/accidents/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function investigateAccident(id: string) {
-  const response = await fetchApi<Accident>(
-    `/safety/accidents/${id}/investigate`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function resolveAccident(
-  id: string,
-  directCause: string,
-  rootCause: string,
-  handlingMeasures: string,
-  correctiveActions?: string,
-  investigationFindings?: string,
-  investigationMethod?: string,
-) {
-  const params = new URLSearchParams({
-    direct_cause: directCause,
-    root_cause: rootCause,
-    handling_measures: handlingMeasures,
-  })
-  if (correctiveActions) params.set('corrective_actions', correctiveActions)
-  if (investigationFindings) params.set('investigation_findings', investigationFindings)
-  if (investigationMethod) params.set('investigation_method', investigationMethod)
-
-  const response = await fetchApi<Accident>(
-    `/safety/accidents/${id}/resolve?${params.toString()}`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function startCapa(id: string, deadline: string, responsible: string) {
-  const params = new URLSearchParams({
-    corrective_action_deadline: deadline,
-    corrective_action_responsible: responsible,
-  })
-  const response = await fetchApi<Accident>(
-    `/safety/accidents/${id}/start-capa?${params.toString()}`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function verifyCapa(id: string) {
-  const response = await fetchApi<Accident>(
-    `/safety/accidents/${id}/verify-capa`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function closeAccident(id: string) {
-  const response = await fetchApi<Accident>(`/safety/accidents/${id}/close`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/accident')
-  return response
-}
-
-export async function deleteAccident(id: string) {
-  const response = await fetchApi<null>(`/safety/accidents/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/accident')
-  return response
-}
-
 // ============ DailyRiskReport Actions（每日风险作业报备） ============
-
-export async function getDailyRiskReports(params?: DailyRiskReportQueryParams) {
-  return fetchApi<DailyRiskReport[]>(`/safety/daily-risk-reports${buildQueryString(params ?? {})}`)
-}
-
-export async function getDailyRiskReport(id: string) {
-  return fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}`)
-}
-
-export async function createDailyRiskReport(data: DailyRiskReportFormData) {
-  const response = await fetchApi<DailyRiskReport>('/safety/daily-risk-reports', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/daily-risk-report')
-  return response
-}
-
-export async function updateDailyRiskReport(id: string, data: Partial<DailyRiskReportFormData>) {
-  const response = await fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/daily-risk-report')
-  return response
-}
-
-export async function deleteDailyRiskReport(id: string) {
-  const response = await fetchApi<null>(`/safety/daily-risk-reports/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/daily-risk-report')
-  return response
-}
-
-export async function submitDailyRiskReport(id: string) {
-  const response = await fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}/submit`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/daily-risk-report')
-  return response
-}
-
-export async function approveDailyRiskReport(id: string) {
-  const response = await fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}/approve`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/daily-risk-report')
-  return response
-}
-
-export async function rejectDailyRiskReport(id: string, reason: string) {
-  const response = await fetchApi<DailyRiskReport>(
-    `/safety/daily-risk-reports/${id}/reject?reason=${encodeURIComponent(reason)}`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/daily-risk-report')
-  return response
-}
-
-/** 危险源风险选项（常规作业报备关联危险源） */
-export async function getHazardRiskOptions(params?: {
-  department?: string
-  keyword?: string
-  page?: number
-  page_size?: number
-}) {
-  return fetchApi<HazardRiskOption[]>(
-    `/safety/hazard-identifications/risk-options${buildQueryString(params ?? {})}`,
-  )
-}
 
 // ============ OhHazardMonitor Actions（职业危害因素监测） ============
 
