@@ -44,3 +44,14 @@ def legacy_event_sync_active() -> bool:
 RECEIPT_DIRECT_DISABLED_MESSAGE = (
     "直读模式下手工补录不可用，请在飞书表格或当日 Excel 日报中更新库存信息"
 )
+
+
+def cache_ttl_seconds() -> int:
+    """直读视图进程内 TTL 缓存秒数（默认 60；0=关）。
+
+    库存快照表全量拉取无时间窗口概念，overview 驾驶舱聚合 stats+超储明细
+    两路都走 fetch_all——仿 key_risk_op 范式兜住窗口内重复请求。
+    """
+    return gates.int_env(
+        "SAFETY_CHEMICAL_INVENTORY_DIRECT_CACHE_TTL_SECONDS", 60, minimum=0,
+    )

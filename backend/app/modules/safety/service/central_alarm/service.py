@@ -389,6 +389,12 @@ class CentralAlarmService:
             ).all()
         )
 
+    async def get_week_records(
+        self, week_start: date, week_end: date,
+    ) -> list[CentralAlarmRecord]:
+        """自然周窗口记录（公开只读入口，/safety/overview 报警分析镜像分支复用）。"""
+        return await self._get_records_by_week(week_start, week_end)
+
 
     # ── 日报生成与推送 ──
 

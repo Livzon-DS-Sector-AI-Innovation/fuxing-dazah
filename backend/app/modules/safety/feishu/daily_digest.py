@@ -52,6 +52,9 @@ def digest_chat_id() -> str:
 
 _KEY = "safety:daily_digest:{date}"
 _MSG_KEY = "safety:daily_digest:card:{date}"
+# 各格子最近一次推送时间（field=报告 key，与格子主 hash 同 TTL）——
+# 驾驶舱「今日安全速递」回放需要推送时间，历史格子（补记上线前写入）无此字段
+_SENT_AT_KEY = "safety:daily_digest:sent_at:{date}"
 _TTL_SECONDS = 7 * 86400
 # 整卡大小预算（字节）。实测飞书 interactive 消息 content 上限约 150KB
 # （123KB 实测通过、154KB 报 230025），留 ~10KB 余量；正常日报总量远达不到，
@@ -170,6 +173,11 @@ async def upsert_daily_digest(
                 _digest_key(report_date), key, json.dumps(payload, ensure_ascii=False),
             )
             await store.expire(_digest_key(report_date), _TTL_SECONDS)
+            sent_at_key = _SENT_AT_KEY.format(date=report_date.isoformat())
+            await store.hset(
+                sent_at_key, key, datetime.now(UTC).isoformat(),
+            )
+            await store.expire(sent_at_key, _TTL_SECONDS)
             cells = await _load_cells(store, report_date)
             card, title, subtitle, greeting = await _build_card(report_date, cells)
             msg_id_key = _MSG_KEY.format(date=report_date.isoformat())
@@ -210,6 +218,31 @@ async def _load_cells(store: Any, report_date: date) -> dict[str, dict[str, Any]
         except (TypeError, ValueError):
             logger.warning("安全速递格子数据损坏，跳过: %s", key)
     return cells
+
+
+async def load_daily_digest_cells(
+    report_date: date,
+    *,
+    store: Any = None,
+) -> list[dict[str, Any]]:
+    """读取当日已推送的速递格子（只读回放，供 /safety/overview 驾驶舱）。
+
+    按 CELL_ORDER 固定顺序返回 [{key, tag_color, tag_text, title, stats, zone,
+    detail, sent_at}]；sent_at 为最近一次推送时间（补记上线前的历史格子为 None）。
+    与推送写入链路解耦：本函数只读，不建卡不发消息。
+    """
+    store = store if store is not None else await get_redis()
+    cells = await _load_cells(store, report_date)
+    sent_at_raw = await store.hgetall(
+        _SENT_AT_KEY.format(date=report_date.isoformat())
+    )
+    out: list[dict[str, Any]] = []
+    for key in CELL_ORDER:
+        cell = cells.get(key)
+        if not cell:
+            continue
+        out.append({"key": key, **cell, "sent_at": sent_at_raw.get(key)})
+    return out
 
 
 async def _build_card(

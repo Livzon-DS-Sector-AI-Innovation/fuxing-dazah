@@ -217,20 +217,33 @@ class CertBitableReader:
         return sort_like_mirror(views)
 
 
+_shared_reader: CertRecordsReader | None = None
+
+
 def open_reader(
     *,
     page_size: int = bd_reader.DEFAULT_PAGE_SIZE,
     concurrency: int = 3,
-) -> CertBitableReader:
-    """真实组装：按配置中心解析 3 kind 客户端（未配置/停用抛 BitableConfigError）。
+) -> CertRecordsReader:
+    """真实组装（进程内单例）：配置中心解析 3 kind 客户端 + TTL 缓存层。
 
-    registry 域 key 为小写 "cert"（gates 的 DOMAIN_CERT 仅用于环境变量名）。
+    单例使 TTL 缓存跨调用方生效（API 查询/驾驶舱/Agent 共享同一缓存窗口；
+    预警编排的 strict 拉取恒绕过）。registry 域 key 为小写 "cert"
+    （gates 的 DOMAIN_CERT 仅用于环境变量名）。未配置/停用抛
+    BitableConfigError；page_size/TTL 仅首次创建生效（当前调用方全用默认值）。
     """
-    from app.modules.safety.feishu.cert_bitable import cert_tables
+    global _shared_reader
+    if _shared_reader is None:
+        from app.modules.safety.feishu.cert_bitable import cert_tables
 
-    clients = {
-        kind: bd_reader.resolve_client("cert", kind)
-        for kind in _KINDS
-        if kind in cert_tables()
-    }
-    return CertBitableReader(clients, page_size=page_size, concurrency=concurrency)
+        clients = {
+            kind: bd_reader.resolve_client("cert", kind)
+            for kind in _KINDS
+            if kind in cert_tables()
+        }
+        inner = CertBitableReader(clients, page_size=page_size, concurrency=concurrency)
+        from app.modules.safety.service.cert_direct.cache import CachedCertReader
+        from app.modules.safety.service.cert_direct.config import cache_ttl_seconds
+
+        _shared_reader = CachedCertReader(inner, ttl_seconds=cache_ttl_seconds())
+    return _shared_reader

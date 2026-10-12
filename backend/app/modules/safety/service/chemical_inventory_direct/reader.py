@@ -73,14 +73,29 @@ class InventoryBitableReader:
         return sort_like_inventory(views)
 
 
+_shared_reader: InventoryRecordsReader | None = None
+
+
 def open_reader(
     *,
     page_size: int = bd_reader.DEFAULT_PAGE_SIZE,
-) -> InventoryBitableReader:
-    """真实组装：配置中心解析 chemical_inventory/inventory 连接（未配置抛 BitableConfigError）。
+) -> InventoryRecordsReader:
+    """真实组装（进程内单例）：配置中心解析连接 + TTL 缓存层。
 
-    registry 域 key 为小写 "chemical_inventory"（gates 的 DOMAIN_CHEMICAL_INVENTORY
-    仅用于环境变量名）。
+    单例使 TTL 缓存跨调用方生效（查询/统计/驾驶舱共享同一缓存窗口；
+    日报编排的 strict 拉取恒绕过）。registry 域 key 为小写
+    "chemical_inventory"。未配置/停用抛 BitableConfigError。
     """
-    client = bd_reader.resolve_client("chemical_inventory", "inventory")
-    return InventoryBitableReader(client, page_size=page_size)
+    global _shared_reader
+    if _shared_reader is None:
+        client = bd_reader.resolve_client("chemical_inventory", "inventory")
+        inner = InventoryBitableReader(client, page_size=page_size)
+        from app.modules.safety.service.chemical_inventory_direct.cache import (
+            CachedInventoryReader,
+        )
+        from app.modules.safety.service.chemical_inventory_direct.config import (
+            cache_ttl_seconds,
+        )
+
+        _shared_reader = CachedInventoryReader(inner, ttl_seconds=cache_ttl_seconds())
+    return _shared_reader

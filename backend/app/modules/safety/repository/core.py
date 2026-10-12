@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, Integer, func, or_, select, update
+from sqlalchemy import CursorResult, Integer, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -205,6 +205,58 @@ class SafetyRepository:
             "overdue": row.overdue or 0,
             "empty_description": row.empty_description or 0,
         }
+
+    async def get_hazard_created_times(
+        self, start: datetime, end: datetime,
+    ) -> list[datetime]:
+        """窗口内新增隐患的发现时间列表（驾驶舱按日趋势用，只取所需列）。
+
+        新增口径 = discovered_at（检查日期，Bitable 业务时间）落入 [start, end)。
+        """
+        result = await self.session.execute(
+            select(HazardReport.discovered_at).where(
+                HazardReport.is_deleted.is_(False),
+                HazardReport.discovered_at >= start,
+                HazardReport.discovered_at < end,
+            )
+        )
+        return [r for r in result.scalars().all() if r is not None]
+
+    async def get_hazard_closed_times(
+        self, start: datetime, end: datetime,
+    ) -> list[datetime]:
+        """窗口内闭环隐患的完成时间列表（rectification_status=closed 且有完成时间）。"""
+        result = await self.session.execute(
+            select(HazardReport.actual_completion_date).where(
+                HazardReport.is_deleted.is_(False),
+                HazardReport.rectification_status == "closed",
+                HazardReport.actual_completion_date.is_not(None),
+                HazardReport.actual_completion_date >= start,
+                HazardReport.actual_completion_date < end,
+            )
+        )
+        return [r for r in result.scalars().all() if r is not None]
+
+    async def count_hazards_unclosed_asof(self, asof: datetime) -> int:
+        """历史时点 t 的未闭环数（较昨日 delta 用，无需快照存储）。
+
+        口径：发现于 t 之前 且 未在 t 前闭环——闭环时间取
+        actual_completion_date（缺失时回退 updated_at，容忍老数据无完成时间）。
+        """
+        closed_before = and_(
+            HazardReport.rectification_status == "closed",
+            func.coalesce(
+                HazardReport.actual_completion_date, HazardReport.updated_at,
+            ) < asof,
+        )
+        count = await self.session.scalar(
+            select(func.count(HazardReport.id)).where(
+                HazardReport.is_deleted.is_(False),
+                HazardReport.discovered_at < asof,
+                ~closed_before,
+            )
+        )
+        return int(count or 0)
 
     async def get_hazard_by_id(self, hazard_id: uuid.UUID) -> HazardReport | None:
         """获取隐患详情"""

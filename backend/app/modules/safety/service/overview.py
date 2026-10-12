@@ -1,0 +1,432 @@
+"""安全总览驾驶舱聚合服务（GET /safety/overview，二期 3.0 门面）。
+
+一个端点喂饱驾驶舱：按域采集器 asyncio.gather 并行，单域失败降级
+（该域置 None + errors 标注），绝不拖垮整页。采集全部复用各域既有
+service/repo（含直读/镜像双模式 gate），禁止 HTTP 自调。
+
+口径与一致性（验收抽样对账依据，详见 .scratch/safety-web-p2/）：
+- 隐患 KPI：未闭环 = hazards stats 的 total − closed（与 GET /hazards/stats
+  同源同库）；delta = 未闭环 − 昨日零点时点未闭环（时点值由
+  discovered_at/闭环时间推算，无需快照存储）
+- 特殊作业：SpecialOperationDailyReportService.get_stats（与
+  GET /special-operation-daily-report/stats 同源）
+- 报警：滚动近 7 天窗口（today-6..today）记录应用侧分桶；今日计数与
+  fire/central stats 的 today_total 同日窗口可对账；真报 = 消防 nature
+  含「真实」的今日计数（中控无性质字段，真报为消防口径）
+- 证书 / 危化品 / 关键风险 / EHS：各域 stats service 同源（cert 与危化品
+  直读为全量拉取，已加 60s TTL 缓存兜住重复请求）
+- 速递：Redis 速递格子只读回放（daily_digest.load_daily_digest_cells）
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections import Counter
+from collections.abc import Awaitable, Callable
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.safety.feishu.daily_digest import load_daily_digest_cells
+from app.modules.safety.repository import SafetyRepository
+from app.modules.safety.service import (
+    CertWarningService,
+    ChemicalInventoryService,
+    EhsChangeService,
+    HazardService,
+    KeyRiskOperationReportService,
+    SpecialOperationDailyReportService,
+)
+
+logger = logging.getLogger(__name__)
+
+_TREND_DAYS = 30
+_DRILLDOWN_LIMIT = 20
+
+# 健康度模块 key（与前端 menu-config safety 子项 key 一一对应；名称/路径/
+# 分组由前端从菜单解析，后端只下发状态与指标文案）
+_INACTIVE_MODULES = ("goals", "training-behavior", "facilities", "incidents")
+_RUNNING_MODULES = (
+    "knowledge-base",
+    "risk-grading",
+    "occupational-health",
+    "contractor-admission",
+    "emergency-drill",
+)
+
+
+def _bj_today() -> date:
+    """北京时间今天（与 daily_digest/scheduler 同口径）。"""
+    return (datetime.now(UTC) + timedelta(hours=8)).date()
+
+
+def _bj_day_start_utc(d: date) -> datetime:
+    """北京日零点对应的 UTC 时点（窗口比较统一走 UTC aware）。"""
+    return datetime.combine(d, time.min, tzinfo=UTC) - timedelta(hours=8)
+
+
+def _as_utc(ts: datetime) -> datetime:
+    """DB/视图时间统一转 UTC aware（naive 视作 UTC）。"""
+    return ts.astimezone(UTC) if ts.tzinfo else ts.replace(tzinfo=UTC)
+
+
+def _bj_date(ts: datetime) -> date:
+    return (_as_utc(ts) + timedelta(hours=8)).date()
+
+
+async def collect_hazards(db: AsyncSession) -> dict[str, Any]:
+    """隐患：未闭环 KPI + 较昨日 delta + 近 30 天新增/闭环按日序列。"""
+    stats = await HazardService(db).get_hazard_stats()
+    unclosed = stats["total"] - stats["closed"]
+
+    repo = SafetyRepository(db)
+    today = _bj_today()
+    window_start = _bj_day_start_utc(today - timedelta(days=_TREND_DAYS - 1))
+    window_end = _bj_day_start_utc(today + timedelta(days=1))
+    created, closed, unclosed_yesterday = await asyncio.gather(
+        repo.get_hazard_created_times(window_start, window_end),
+        repo.get_hazard_closed_times(window_start, window_end),
+        repo.count_hazards_unclosed_asof(_bj_day_start_utc(today)),
+    )
+
+    dates = [today - timedelta(days=i) for i in range(_TREND_DAYS - 1, -1, -1)]
+    created_bucket: Counter[date] = Counter(_bj_date(t) for t in created)
+    closed_bucket: Counter[date] = Counter(_bj_date(t) for t in closed)
+    return {
+        "unclosed": unclosed,
+        "delta": unclosed - unclosed_yesterday,
+        "overdue": stats["overdue"],
+        "trend": {
+            "dates": [d.isoformat() for d in dates],
+            "created": [created_bucket.get(d, 0) for d in dates],
+            "closed": [closed_bucket.get(d, 0) for d in dates],
+        },
+    }
+
+
+async def collect_special_ops(db: AsyncSession) -> dict[str, Any]:
+    """特殊作业：今日作业数与高风险数（日报 stats 同源）。"""
+    stats = await SpecialOperationDailyReportService(db).get_stats(_bj_today())
+    return {"today_total": stats["total"], "high": stats["high"]}
+
+
+async def collect_alarms(db: AsyncSession) -> dict[str, Any]:
+    """报警：今日消防+中控计数与真报数 + 近 7 日按日序列 + Top 消防类型。
+
+    滚动 7 天窗（today-6..today）——自然周在周一只剩 1 天，序列太短。
+    """
+    from app.modules.safety.service.central_alarm import config as ca_config
+    from app.modules.safety.service.fire_alarm.service import FireAlarmService
+
+    today = _bj_today()
+    window_start = today - timedelta(days=6)
+    fire_records = await FireAlarmService(db).get_week_records(
+        window_start,
+        today,
+    )
+
+    # 直读分支返回视图对象、镜像分支返回 ORM 记录（duck typing 同字段名）
+    central_records: list[Any]
+    if ca_config.direct_enabled():
+        from app.modules.safety.service.central_alarm.reader import open_reader
+
+        central_records = list(
+            await open_reader().fetch_window_records(
+                start_utc=_bj_day_start_utc(window_start),
+                end_utc=_bj_day_start_utc(today + timedelta(days=1)),
+            )
+        )
+    else:
+        from app.modules.safety.service.central_alarm.service import (
+            CentralAlarmService,
+        )
+
+        central_records = await CentralAlarmService(db).get_week_records(
+            window_start,
+            today,
+        )
+
+    today_start = _bj_day_start_utc(today)
+    today_end = _bj_day_start_utc(today + timedelta(days=1))
+
+    def _in_today(ts: datetime | None) -> bool:
+        return ts is not None and today_start <= _as_utc(ts) < today_end
+
+    fire_today = sum(1 for r in fire_records if _in_today(r.alarm_time))
+    central_today = sum(1 for r in central_records if _in_today(r.alarm_date))
+    fire_real_today = sum(
+        1
+        for r in fire_records
+        if _in_today(r.alarm_time) and "真实" in (r.alarm_nature or "")
+    )
+
+    # 序列画满 7 天（滚动窗），缺数日为 0
+    dates = [window_start + timedelta(days=i) for i in range(7)]
+    fire_bucket: Counter[date] = Counter(
+        _bj_date(r.alarm_time) for r in fire_records if r.alarm_time
+    )
+    central_bucket: Counter[date] = Counter(
+        _bj_date(r.alarm_date) for r in central_records if r.alarm_date
+    )
+    top_types = Counter(r.alarm_type for r in fire_records if r.alarm_type).most_common(
+        5
+    )
+    return {
+        "today_total": fire_today + central_today,
+        "fire_today": fire_today,
+        "central_today": central_today,
+        "fire_real_today": fire_real_today,
+        "analysis": {
+            "dates": [d.isoformat() for d in dates],
+            "fire_daily": [fire_bucket.get(d, 0) for d in dates],
+            "central_daily": [central_bucket.get(d, 0) for d in dates],
+            "top_fire_types": [
+                {"name": name, "count": count} for name, count in top_types
+            ],
+        },
+    }
+
+
+async def collect_certs(db: AsyncSession) -> dict[str, Any]:
+    """证书：30 天内到期数 + 8 天内/已逾期计数 + 到期明细（升序取前 20）。"""
+    from app.modules.safety.service.cert_direct import config as cert_config
+
+    if cert_config.direct_enabled():
+        from app.modules.safety.service.cert_direct.query import (
+            get_summary_direct,
+            get_warnings_direct,
+        )
+        from app.modules.safety.service.cert_direct.reader import open_reader
+
+        reader = open_reader()
+        summary = await get_summary_direct(reader)
+        items, _total = await get_warnings_direct(
+            reader,
+            limit=_DRILLDOWN_LIMIT,
+            days_within=30,
+        )
+    else:
+        service = CertWarningService(db)
+        summary = await service.get_summary()
+        items, _total = await service.get_warnings(
+            skip=0,
+            limit=_DRILLDOWN_LIMIT,
+            days_within=30,
+        )
+
+    within_30d = (
+        summary.key_warning_count + summary.urgent_count + summary.overdue_count
+    )
+    urgent_or_overdue = summary.urgent_count + summary.overdue_count
+    ordered = sorted(
+        items,
+        key=lambda x: x.remaining_days if x.remaining_days is not None else 1 << 30,
+    )
+    return {
+        "within_30d": within_30d,
+        "urgent_or_overdue": urgent_or_overdue,
+        "items": [
+            {
+                "person_name": it.person_name,
+                "department": it.department,
+                "cert_category": it.cert_category,
+                "deadline": it.deadline,
+                "remaining_days": it.remaining_days,
+            }
+            for it in ordered
+        ],
+    }
+
+
+async def collect_chemicals(db: AsyncSession) -> dict[str, Any]:
+    """危化品：超储项数 + 超储物料明细。"""
+    service = ChemicalInventoryService(db)
+    stats = await service.get_stats()
+    materials = await service.get_over_limit_materials(limit=_DRILLDOWN_LIMIT)
+    return {"over_limit": stats["over_limit"], "materials": materials}
+
+
+async def collect_key_risk_ops(db: AsyncSession) -> dict[str, Any]:
+    """关键风险作业：今日通过/审批中计数 + 今日清单。"""
+    service = KeyRiskOperationReportService(db)
+    stats = await service.get_stats()
+    today = _bj_today()
+    items, _total = await service.get_reports(
+        0,
+        _DRILLDOWN_LIMIT,
+        date_from=today,
+        date_to=today,
+    )
+    return {
+        "today_approved": stats.get("today_approved", 0),
+        "in_progress": stats.get("in_progress", 0),
+        "items": [
+            {
+                "start_time": getattr(it, "start_time", None),
+                "department": getattr(it, "department", None),
+                "operation_content": getattr(it, "operation_content", None),
+                "apply_status": getattr(it, "apply_status", None),
+            }
+            for it in items
+        ],
+    }
+
+
+async def collect_ehs(db: AsyncSession) -> dict[str, Any]:
+    """EHS 变更：进行中（审核中+实施中）计数。"""
+    stats = await EhsChangeService(db).get_ehs_change_stats()
+    status: dict[str, int] = stats.get("status", {})
+    return {
+        "in_progress": status.get("under_review", 0) + status.get("in_progress", 0),
+    }
+
+
+async def collect_digest(digest_store: Any = None) -> dict[str, Any]:
+    """今日安全速递回放（Redis 只读；store 为测试接缝）。"""
+    cells = await load_daily_digest_cells(_bj_today(), store=digest_store)
+    return {"count": len(cells), "cells": cells}
+
+
+def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
+    """17 模块健康度（key 对齐前端菜单；缺数域指标降为 None，不炸墙）。"""
+    hazards = parts.get("hazards")
+    special_ops = parts.get("special_ops")
+    alarms = parts.get("alarms")
+    certs = parts.get("certs")
+    chemicals = parts.get("chemicals")
+    key_risk_ops = parts.get("key_risk_ops")
+    ehs = parts.get("ehs")
+
+    cards: list[dict[str, Any]] = [
+        {"key": "knowledge-base", "status": "ok", "metric": "运行中"},
+        {"key": "risk-grading", "status": "ok", "metric": "运行中"},
+        {
+            "key": "hazard-ledger",
+            "status": "warn" if hazards and hazards["overdue"] > 0 else "ok",
+            "metric": (
+                f"未闭环 {hazards['unclosed']} · 逾期 {hazards['overdue']}"
+                if hazards
+                else None
+            ),
+        },
+        {
+            "key": "cert-warnings",
+            "status": "warn" if certs and certs["urgent_or_overdue"] > 0 else "ok",
+            "metric": f"30 天内到期 {certs['within_30d']}" if certs else None,
+        },
+        {"key": "occupational-health", "status": "ok", "metric": "运行中"},
+        {
+            "key": "chemicals",
+            "status": "warn" if chemicals and chemicals["over_limit"] > 0 else "ok",
+            "metric": f"超储 {chemicals['over_limit']} 项" if chemicals else None,
+        },
+        {
+            "key": "special-ops",
+            "status": "warn" if special_ops and special_ops["high"] > 0 else "ok",
+            "metric": (
+                f"今日 {special_ops['today_total']} 项 · 高险 {special_ops['high']}"
+                if special_ops
+                else None
+            ),
+        },
+        {
+            "key": "risk-reporting",
+            "status": "ok",
+            "metric": (
+                f"今日通过 {key_risk_ops['today_approved']} / "
+                f"审批中 {key_risk_ops['in_progress']}"
+                if key_risk_ops
+                else None
+            ),
+        },
+        {
+            "key": "alarms",
+            "status": "warn" if alarms and alarms["fire_real_today"] > 0 else "ok",
+            "metric": (
+                f"今日 {alarms['today_total']} 起 · 真报 {alarms['fire_real_today']}"
+                if alarms
+                else None
+            ),
+        },
+        {
+            "key": "ehs-change",
+            "status": "ok",
+            "metric": f"进行中 {ehs['in_progress']} 项" if ehs else None,
+        },
+        {"key": "contractor-admission", "status": "ok", "metric": "运行中"},
+        {"key": "emergency-drill", "status": "ok", "metric": "运行中"},
+    ]
+    cards.extend(
+        {"key": key, "status": "inactive", "metric": "未开展"}
+        for key in _INACTIVE_MODULES
+    )
+    cards.append({"key": "supervision", "status": "upcoming", "metric": "未上线"})
+    return cards
+
+
+def _db_collector(
+    fn: Callable[[AsyncSession], Awaitable[Any]],
+) -> Callable[[], Awaitable[Any]]:
+    """DB 采集器包装：每个采集器独立开 session。
+
+    SQLAlchemy AsyncSession 禁止并发操作——并行 gather 下共享同一 session
+    会直接 InvalidRequestError；各开各的短命 session（池 10）互不干扰，
+    事务边界即采集器边界（纯只读，无跨域事务需求）。
+    """
+
+    async def wrapped() -> Any:
+        from app.core.database import async_session_factory
+
+        async with async_session_factory() as session:
+            return await fn(session)
+
+    return wrapped
+
+
+async def build_overview(
+    *,
+    digest_store: Any = None,
+    collectors: dict[str, Callable[[], Awaitable[Any]]] | None = None,
+) -> dict[str, Any]:
+    """聚合入口：并行采集 + 单域降级。collectors 可整体注入（测试接缝）。"""
+    default_collectors: dict[str, Callable[[], Awaitable[Any]]] = {
+        "hazards": _db_collector(collect_hazards),
+        "special_ops": _db_collector(collect_special_ops),
+        "alarms": _db_collector(collect_alarms),
+        "certs": _db_collector(collect_certs),
+        "chemicals": _db_collector(collect_chemicals),
+        "key_risk_ops": _db_collector(collect_key_risk_ops),
+        "ehs": _db_collector(collect_ehs),
+        "digest": lambda: collect_digest(digest_store),
+    }
+    merged = {**default_collectors, **(collectors or {})}
+
+    async def _run(
+        name: str, fn: Callable[[], Awaitable[Any]]
+    ) -> tuple[str, Any, None] | tuple[str, None, str]:
+        try:
+            return name, await fn(), None
+        except Exception as exc:  # noqa: BLE001 —— 单域失败只降级不炸整页
+            logger.warning("overview 采集降级 domain=%s: %r", name, exc)
+            return name, None, f"{name}: {type(exc).__name__}"
+
+    results = await asyncio.gather(*(_run(n, f) for n, f in merged.items()))
+    parts = {name: value for name, value, _err in results}
+    errors = [err for _n, _v, err in results if err]
+
+    return {
+        "date": _bj_today().isoformat(),
+        "generated_at": datetime.now(UTC),
+        "hazards": parts["hazards"],
+        "special_ops": parts["special_ops"],
+        "alarms": parts["alarms"],
+        "certs": parts["certs"],
+        "chemicals": parts["chemicals"],
+        "key_risk_ops": parts["key_risk_ops"],
+        "ehs": parts["ehs"],
+        "digest": parts["digest"],
+        "module_health": _build_module_health(parts),
+        "errors": errors,
+    }

@@ -196,6 +196,44 @@ class ChemicalInventoryService:
             "by_flag": by_flag,
         }
 
+    async def get_over_limit_materials(self, limit: int = 20) -> list[dict[str, Any]]:
+        """超储物料清单（/safety/overview 下钻列；判定谓词与 get_stats 的 over_limit 一致）。"""
+        from app.modules.safety.service.chemical_inventory_direct import config
+
+        rows: list[Any]
+        if config.direct_enabled():
+            from app.modules.safety.service.chemical_inventory_direct.reader import (
+                open_reader,
+            )
+
+            rows = list(await open_reader().fetch_all())
+        else:
+            rows = list(await self.repo.list_all_inventory_records())
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            if (
+                r.total_quantity_t is None
+                or r.max_limit is None
+                or r.max_limit <= 0
+                or r.total_quantity_t <= r.max_limit
+            ):
+                continue
+            out.append(
+                {
+                    "material_name": r.material_name,
+                    "department": r.department or None,
+                    "storage_location": r.storage_location,
+                    "total_quantity_t": float(r.total_quantity_t),
+                    "max_limit": float(r.max_limit),
+                    "unit": getattr(r, "unit", None),
+                }
+            )
+        out.sort(
+            key=lambda x: x["total_quantity_t"] - x["max_limit"], reverse=True,
+        )
+        return out[:limit]
+
     # ══════════════════════════ Bitable 同步 ══════════════════════════
 
     async def sync_from_bitable(self) -> dict[str, Any]:

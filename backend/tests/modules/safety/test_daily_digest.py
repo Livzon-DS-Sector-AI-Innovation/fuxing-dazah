@@ -12,7 +12,11 @@ from typing import Any, cast
 import pytest
 
 from app.modules.safety.feishu import daily_digest
-from app.modules.safety.feishu.daily_digest import DigestCell, upsert_daily_digest
+from app.modules.safety.feishu.daily_digest import (
+    DigestCell,
+    load_daily_digest_cells,
+    upsert_daily_digest,
+)
 from app.modules.safety.feishu.notification import build_card_dict
 
 D = date(2026, 9, 15)
@@ -239,6 +243,52 @@ async def test_sender_failure_returns_false(monkeypatch: pytest.MonkeyPatch) -> 
         D, "special_op", _cell(), store=store, sender=sender, updater=_ok_updater,
     )
     assert ok is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# load_daily_digest_cells — 只读回放（驾驶舱「今日安全速递」数据源）
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def test_load_cells_ordered_with_sent_at(monkeypatch: pytest.MonkeyPatch) -> None:
+    """按 CELL_ORDER 顺序返回格子，带推送时间与全文；只读不改卡片链路。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+
+    async def sender(**kw: Any) -> str | None:
+        return "om_1"
+
+    # 先推消防（CELL_ORDER 靠后）再推特殊作业（靠前）——回放顺序仍按 CELL_ORDER
+    await upsert_daily_digest(
+        D, "fire_alarm", _cell(), store=store, sender=sender, updater=_ok_updater,
+    )
+    await upsert_daily_digest(
+        D, "special_op", _cell(detail="作业明细全文"), store=store, sender=sender,
+        updater=_ok_updater,
+    )
+
+    cells = await load_daily_digest_cells(D, store=store)
+    assert [c["key"] for c in cells] == ["special_op", "fire_alarm"]
+    assert cells[0]["title"] == "特殊作业日报"
+    assert cells[0]["detail"] == "作业明细全文"
+    assert cells[0]["sent_at"] is not None and "T" in cells[0]["sent_at"]
+    # 未推送当日成立即空列表（非 None），前端显示空态
+    assert await load_daily_digest_cells(date(2026, 1, 1), store=store) == []
+
+
+async def test_load_cells_legacy_without_sent_at() -> None:
+    """补记上线前的历史格子：主 hash 有内容但无 sent_at → 该字段为 None。"""
+    store = _FakeStore()
+    store.hashes.setdefault("safety:daily_digest:2026-09-01", {})["special_op"] = json.dumps(
+        {
+            "tag_color": "blue", "tag_text": "特殊作业", "title": "特殊作业日报",
+            "stats": "今日计划 1 项", "zone": "", "detail": "历史明细",
+        },
+        ensure_ascii=False,
+    )
+    cells = await load_daily_digest_cells(date(2026, 9, 1), store=store)
+    assert len(cells) == 1
+    assert cells[0]["sent_at"] is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

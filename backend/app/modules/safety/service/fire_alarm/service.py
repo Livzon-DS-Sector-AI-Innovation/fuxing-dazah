@@ -375,6 +375,13 @@ class FireAlarmService:
             ).all()
         )
 
+    async def get_week_records(self, week_start: date, week_end: date) -> list[Any]:
+        """自然周窗口记录（公开只读入口，/safety/overview 报警分析复用）。
+
+        与 get_stats 的 week 口径同一窗口同一双模式分派，KPI 可对账。
+        """
+        return await self._get_records_by_week(week_start, week_end)
+
     async def _get_records_by_month(
         self, month_start: date, month_end: date,
     ) -> list[Any]:
