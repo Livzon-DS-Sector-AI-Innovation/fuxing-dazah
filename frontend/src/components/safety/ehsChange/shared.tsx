@@ -6,17 +6,13 @@
  * 详情页：隐患式纵轴阶段布局（StageDot → StageCard → StageHeader → FieldLabel/FieldTile），
  *         按流程阶段顺序展开，字段口径与《EHS变更多维表格字段清单》一致。
  */
-import { useState } from 'react'
 import {
-  Button,
-  Card,
   Col,
   Row,
   Tag,
   Typography,
 } from 'antd'
-import { FileTextOutlined, RobotOutlined, RocketOutlined, UnorderedListOutlined } from '@ant-design/icons'
-import { runEhsAiReview } from '@/actions/safety'
+import { FileTextOutlined, RobotOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import type { EhsChange, EhsChangeTableId } from '@/types/safety'
 import { T } from '../shared-styles'
 import {
@@ -27,7 +23,7 @@ import {
   getAiConclusion,
 } from './ehsChangeConstants'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 // 卡片样式（DESIGN：12px 圆角 + hairline 描边）
 export const CARD_STYLE: React.CSSProperties = {
@@ -208,11 +204,9 @@ function fmtDate(v?: string): string {
 
 export function EhsChangeDetail({
   change,
-  onRefresh,
   table,
 }: {
   change: EhsChange
-  onRefresh: () => void
   table: EhsChangeTableId
 }) {
   const isApproval = table === 'approval'
@@ -335,7 +329,7 @@ export function EhsChangeDetail({
           <div style={{ flex: 1, minWidth: 0 }}>
             <StageCard accent={T.primary}>
               <StageHeader icon={<RobotOutlined />} title="AI 审核" />
-              <AiReviewTab change={change} onRefresh={onRefresh} />
+              <AiReviewTab change={change} />
             </StageCard>
           </div>
         </div>
@@ -391,29 +385,14 @@ export function EhsChangeDetail({
 
 type AiReviewDimKey = 'reason' | 'plan' | 'effect' | 'risk'
 
-export function AiReviewTab({ change, onRefresh }: { change: EhsChange; onRefresh: () => void }) {
+export function AiReviewTab({ change }: { change: EhsChange }) {
   const r = change.ai_review_result
-  const [reviewing, setReviewing] = useState(false)
   const dims: { key: AiReviewDimKey; label: string }[] = [
     { key: 'reason', label: '申请变更原因' },
     { key: 'plan', label: '变更计划内容' },
     { key: 'effect', label: '预计效果' },
     { key: 'risk', label: '变更风险评估及建议措施' },
   ]
-
-  const canReview = change.source === 'bitable' && change.feishu_table_id === 'approval' && change.ai_review_status !== 'completed'
-
-  const handleReview = async () => {
-    setReviewing(true)
-    try {
-      const res = await runEhsAiReview(change.id)
-      if (res.code === 200) {
-        onRefresh()
-      }
-    } finally {
-      setReviewing(false)
-    }
-  }
 
   const hasResult = r && dims.some((d) => r[d.key]?.conclusion || r[d.key]?.report)
 
@@ -422,7 +401,7 @@ export function AiReviewTab({ change, onRefresh }: { change: EhsChange; onRefres
       <div>
         {change.ai_review_status === 'failed' ? (
           <>
-            <Text style={{ color: T.error }}>AI 审核失败，可点击重新审核。</Text>
+            <Text style={{ color: T.error }}>AI 审核失败，等待系统自动重试或由机器人重新触发。</Text>
             {change.ai_error_message && (
               <div style={{ marginTop: 10 }}>
                 <FieldLabel>失败原因</FieldLabel>
@@ -432,15 +411,8 @@ export function AiReviewTab({ change, onRefresh }: { change: EhsChange; onRefres
           </>
         ) : (
           <Text style={{ color: T.steel }}>
-            暂无 AI 审核结果。由平台调用 AI 生成 4 维度审核结论并回填飞书多维表格。
+            暂无 AI 审核结果。系统在变更进入审批表后自动生成 4 维度审核结论并回填飞书多维表格。
           </Text>
-        )}
-        {canReview && (
-          <div style={{ marginTop: 12 }}>
-            <Button type="primary" icon={<RocketOutlined />} loading={reviewing} onClick={handleReview}>
-              触发AI审核
-            </Button>
-          </div>
         )}
       </div>
     )
@@ -448,13 +420,6 @@ export function AiReviewTab({ change, onRefresh }: { change: EhsChange; onRefres
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {canReview && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <Button type="primary" ghost icon={<RocketOutlined />} loading={reviewing} onClick={handleReview}>
-            重新审核
-          </Button>
-        </div>
-      )}
       {dims.map((d) => {
         const dim = r[d.key]
         if (!dim || (!dim.conclusion && !dim.report)) return null

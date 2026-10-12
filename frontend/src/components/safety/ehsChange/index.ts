@@ -1,6 +1,4 @@
 // EHS 变更管理组件
-export { EhsChangeApplyPage } from './EhsChangeApplyPage'
-export { EhsChangeAcceptPage } from './EhsChangeAcceptPage'
 // URS 智能审核
 export { URSPanel } from './URSPanel'
 export { URSRegisterDrawer } from './URSRegisterDrawer'
