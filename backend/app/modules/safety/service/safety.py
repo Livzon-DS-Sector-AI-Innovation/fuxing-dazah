@@ -15,8 +15,6 @@ from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.models import (
     Contractor,
     ContractorWorkRecord,
-    SafetyTraining,
-    TrainingRecord,
 )
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.schemas import (
@@ -24,10 +22,6 @@ from app.modules.safety.schemas import (
     ContractorUpdate,
     ContractorWorkRecordCreate,
     ContractorWorkRecordUpdate,
-    SafetyTrainingCreate,
-    SafetyTrainingUpdate,
-    TrainingRecordCreate,
-    TrainingRecordUpdate,
 )
 from app.modules.safety.service._helpers import audit_log
 from app.platform.integrations.ai.client import AIService
@@ -433,123 +427,6 @@ class SafetyService:
     async def delete_work_record(self, record_id: uuid.UUID) -> bool:
         """删除施工记录"""
         return await self.repo.delete_work_record(record_id)
-
-    # ==================== SafetyTraining Operations ====================
-
-    async def get_trainings(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        training_type: str | None = None,
-        department: str | None = None,
-    ) -> tuple[list[SafetyTraining], int]:
-        """获取安全培训列表"""
-        return await self.repo.get_trainings(skip, limit, status, training_type, department)
-
-    async def get_training(self, training_id: uuid.UUID) -> SafetyTraining | None:
-        """获取安全培训详情"""
-        return await self.repo.get_training_by_id(training_id)
-
-    async def create_training(self, data: SafetyTrainingCreate) -> SafetyTraining:
-        """创建安全培训"""
-        training_data = data.model_dump()
-        item = await self.repo.create_training(training_data)
-        await self._audit("create", "safety_training", resource_id=item.id)
-        return item
-
-    async def update_training(
-        self, training_id: uuid.UUID, data: SafetyTrainingUpdate
-    ) -> SafetyTraining | None:
-        """更新安全培训"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        item = await self.repo.update_training(training_id, update_data)
-        if item:
-            await self._audit("update", "safety_training", resource_id=training_id)
-        return item
-
-    async def start_training(self, training_id: uuid.UUID) -> SafetyTraining | None:
-        """开始培训（草稿→进行中）"""
-        training = await self.repo.get_training_by_id(training_id)
-        if not training or training.status != "draft":
-            return None
-        return await self.repo.update_training(training_id, {"status": "in_progress"})
-
-    async def complete_training(self, training_id: uuid.UUID) -> SafetyTraining | None:
-        """完成培训"""
-        training = await self.repo.get_training_by_id(training_id)
-        if not training or training.status != "in_progress":
-            return None
-        return await self.repo.update_training(training_id, {"status": "completed"})
-
-    async def archive_training(self, training_id: uuid.UUID) -> SafetyTraining | None:
-        """归档培训"""
-        training = await self.repo.get_training_by_id(training_id)
-        if not training or training.status != "completed":
-            return None
-        return await self.repo.update_training(training_id, {"status": "archived"})
-
-    async def delete_training(self, training_id: uuid.UUID) -> bool:
-        """删除安全培训"""
-        training = await self.repo.get_training_by_id(training_id)
-        result = await self.repo.delete_training(training_id)
-        if result:
-            if training:
-                self._cleanup_file(training.course_material_path)
-            await self._audit("delete", "safety_training", resource_id=training_id)
-        return result
-
-    # ==================== TrainingRecord Operations ====================
-
-    async def get_training_records(self, training_id: uuid.UUID) -> list[TrainingRecord]:
-        """获取培训记录列表"""
-        return await self.repo.get_records_by_training(training_id)
-
-    async def create_training_record(self, data: TrainingRecordCreate) -> TrainingRecord:
-        """创建培训记录"""
-        record_data = data.model_dump()
-        return await self.repo.create_training_record(record_data)
-
-    async def update_training_record(
-        self, record_id: uuid.UUID, data: TrainingRecordUpdate
-    ) -> TrainingRecord | None:
-        """更新培训记录"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        return await self.repo.update_training_record(record_id, update_data)
-
-    async def batch_create_records(
-        self, training_id: uuid.UUID, records: list[TrainingRecordCreate]
-    ) -> list[TrainingRecord]:
-        """批量创建培训签到记录"""
-        result = []
-        for record in records:
-            record_data = record.model_dump()
-            record_data["training_id"] = training_id
-            item = await self.repo.create_training_record(record_data)
-            result.append(item)
-        return result
-
-    async def delete_training_record(self, record_id: uuid.UUID) -> bool:
-        """删除培训记录"""
-        return await self.repo.delete_training_record(record_id)
-
-    # ── 培训证书 ──
-
-    async def get_training_certificates(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        certificate_status: str | None = None,
-        keyword: str | None = None,
-    ) -> tuple[list[TrainingRecord], int]:
-        """获取培训证书列表"""
-        return await self.repo.get_training_certificates(
-            skip, limit, certificate_status, keyword,
-        )
-
-    async def get_expiring_certificates(self) -> list[TrainingRecord]:
-        """获取即将过期的证书（30天内）"""
-        return await self.repo.get_expiring_certificates()
 
     # ==================== HazardIdentification Operations ====================
 
