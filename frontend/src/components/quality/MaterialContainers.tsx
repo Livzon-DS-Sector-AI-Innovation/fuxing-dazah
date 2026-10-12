@@ -7,13 +7,12 @@ import {
 import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
-import MaterialDictDrawer from './MaterialDictDrawer'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
 import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, PurchaseSuggestion } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
-  fetchMaterialDict,
+  fetchMaterialDict, createMaterialDict, updateMaterialDict, deleteMaterialDict,
   fetchMaterialSummary, fetchMaterialMovements, exportMaterialMovements,
   fetchPurchaseSuggestions, exportPurchaseSuggestions,
 } from '@/actions/quality'
@@ -46,6 +45,8 @@ export default function MaterialContainers() {
   // 字典与概览
   const [dict, setDict] = useState<MaterialDictItem[]>([])
   const [dictOpen, setDictOpen] = useState(false)
+  const [dictForm] = Form.useForm()
+  const [editingDict, setEditingDict] = useState<MaterialDictItem | null>(null)
   const [summary, setSummary] = useState<MaterialSummaryItem[]>([])
   // 台账弹窗
   const [mvOpen, setMvOpen] = useState(false)
@@ -197,6 +198,36 @@ export default function MaterialContainers() {
     }
   }
 
+  // ── 字典管理 ──
+  const onSaveDict = async () => {
+    const values = await dictForm.validateFields()
+    try {
+      if (editingDict) {
+        await updateMaterialDict(editingDict.id, values)
+        message.success('物料已更新')
+      } else {
+        await createMaterialDict(values)
+        message.success('物料已新增')
+      }
+      dictForm.resetFields()
+      setEditingDict(null)
+      loadDict()
+      loadSummary()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
+    }
+  }
+
+  const onDeleteDict = async (item: MaterialDictItem) => {
+    try {
+      await deleteMaterialDict(item.id)
+      message.success('已删除')
+      loadDict()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
+    }
+  }
+
   // ── 台账 ──
   const loadMovements = useCallback(async (p: number, q?: string) => {
     try {
@@ -301,13 +332,6 @@ export default function MaterialContainers() {
 
   return (
     <>
-      {/* 物料字典抽屉（集成在物料赋码页） */}
-      <MaterialDictDrawer
-        open={dictOpen}
-        onClose={() => setDictOpen(false)}
-        onChanged={() => { loadDict(); loadSummary() }}
-      />
-
       {/* 库存概览统计卡 */}
       {summary.length > 0 && (
         <Row gutter={[12, 12]}>
@@ -375,10 +399,10 @@ export default function MaterialContainers() {
             <Button danger disabled={!selectedKeys.length}>批量出库</Button>
           </Popconfirm>
         )}
-        <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
         {canManage && (
-          <Button icon={<BookOutlined />} onClick={() => setDictOpen(true)}>物料字典</Button>
+          <Button icon={<BookOutlined />} onClick={() => { setEditingDict(null); dictForm.resetFields(); setDictOpen(true) }}>物料字典</Button>
         )}
+        <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
         <Button icon={<ShoppingCartOutlined />} onClick={openPurchase}>采购清单</Button>
       </Space>
 
@@ -428,6 +452,72 @@ export default function MaterialContainers() {
             <Input type="number" min={1} max={500} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 物料字典管理弹窗 */}
+      <Modal
+        title="物料字典"
+        open={dictOpen}
+        onCancel={() => setDictOpen(false)}
+        footer={null}
+        width={720}
+      >
+        <Form form={dictForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }} onFinish={onSaveDict}>
+          <Form.Item name="code" label="代码" rules={[{ required: !editingDict, message: '必填' }]}>
+            <Input disabled={!!editingDict} style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '必填' }]}>
+            <Input style={{ width: 150 }} />
+          </Form.Item>
+          <Form.Item name="category" label="类别">
+            <Select
+              style={{ width: 100 }} allowClear
+              options={['原料', '辅料', '包材', '溶剂'].map((c) => ({ value: c, label: c }))}
+            />
+          </Form.Item>
+          <Form.Item name="vendor_name" label="供应商">
+            <Input style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item name="min_stock" label="安全库存">
+            <Input type="number" min={0} style={{ width: 80 }} />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit">{editingDict ? '保存' : '新增'}</Button>
+              {editingDict && <Button onClick={() => { setEditingDict(null); dictForm.resetFields() }}>取消</Button>}
+            </Space>
+          </Form.Item>
+        </Form>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={dict}
+          pagination={false}
+          columns={[
+            { title: '代码', dataIndex: 'code', width: 110 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '类别', dataIndex: 'category', width: 70, render: (v: string | null) => v || '-' },
+            { title: '供应商', dataIndex: 'vendor_name', width: 110, render: (v: string | null) => v || '-' },
+            { title: '安全库存', dataIndex: 'min_stock', width: 80, render: (v: number | null) => v ?? '-' },
+            {
+              title: '操作', key: 'actions', width: 120,
+              render: (_: unknown, item: MaterialDictItem) => (
+                <Space size="small">
+                  <Button size="small" type="link" onClick={() => {
+                    setEditingDict(item)
+                    dictForm.setFieldsValue({
+                      code: item.code, name: item.name, category: item.category ?? undefined,
+                      vendor_name: item.vendor_name ?? undefined, min_stock: item.min_stock ?? undefined,
+                    })
+                  }}>编辑</Button>
+                  <Popconfirm title="确认删除该物料？" onConfirm={() => onDeleteDict(item)}>
+                    <Button size="small" type="link" danger>删除</Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
       {/* 出入库台账弹窗 */}
