@@ -30,7 +30,6 @@ class SafetyService:
         svc = SafetyService(session)
         svc.hazard.get_hazards(...)       # → HazardService
         svc.ehs.get_ehs_changes(...)      # → EhsChangeService
-        svc.special_op.get_personnel(...)  # → SpecialOperationService
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -40,8 +39,6 @@ class SafetyService:
         # Per-domain sub-services (lazy init to avoid circular imports)
         self._hazard = None
         self._ehs = None
-        self._regulation = None
-        self._special_op = None
         self._special_op_report = None
         self._oh_exam = None
         self._knowledge = None
@@ -62,15 +59,6 @@ class SafetyService:
             from app.modules.safety.service.ehs_change import EhsChangeService
             self._ehs = EhsChangeService(self.session)
         return self._ehs
-
-    @property
-    def special_op(self) -> Any:
-        if self._special_op is None:
-            from app.modules.safety.service.special_operation import (
-                SpecialOperationService,
-            )
-            self._special_op = SpecialOperationService(self.session)
-        return self._special_op
 
     @property
     def special_op_report(self) -> Any:
