@@ -521,7 +521,7 @@ async def scan_stocktake_endpoint(
     )
     return success_response(
         data=StocktakeItemOut.model_validate(item).model_dump(mode="json"),
-        message={"matched": "已记录（在库匹配）", "out_of_scope": "已记录（系统有但不在库，计入盘盈）", "not_found": "已记录（系统不存在，计入盘盈）"}.get(item.result, "已记录"),
+        message={"matched": "已记录（在库匹配）", "out_of_scope": "已记录（系统有但不在库，计入盘盈）", "not_found": "已记录（系统不存在，标记异常）"}.get(item.result, "已记录"),
     )
 
 
@@ -584,12 +584,12 @@ async def stocktake_export_endpoint(
     ws = lc_template_parser.active_sheet(wb)
     ws.title = "盘点差异"
     ws.append(["盘点单号", sheet.sheet_no, "状态", sheet.status])
-    ws.append(["系统在库", sheet.expected_count, "实扫", sheet.scanned_count, "盘亏", sheet.missing_count, "盘盈", sheet.extra_count])
+    ws.append(["系统在库", sheet.expected_count, "实扫", sheet.scanned_count, "盘亏", sheet.missing_count, "盘盈", sheet.extra_count, "异常", sheet.anomaly_count])
     ws.append([])
     ws.append(["容器号", "物料名称", "物料代码", "分类", "扫描时状态"])
     for i in items:
         ws.append([i.container_no, i.material_name or "-", i.material_code or "-",
-                   {"matched": "在库匹配", "out_of_scope": "盘盈(系统不在库)", "not_found": "盘盈(系统不存在)"}.get(i.result, i.result),
+                   {"matched": "在库匹配", "out_of_scope": "盘盈(系统不在库)", "not_found": "异常(系统不存在)"}.get(i.result, i.result),
                    i.status_snapshot or "-"])
     ws.append([])
     ws.append(["盘亏清单（系统在库未扫到）"])

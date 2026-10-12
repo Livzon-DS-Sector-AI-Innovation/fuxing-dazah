@@ -330,7 +330,8 @@ class MaterialContainerService:
         scanned = {i.container_no for i in items}
         sheet.expected_count = len(expected)
         sheet.missing_count = len(expected - scanned)
-        sheet.extra_count = sum(1 for i in items if i.result in ("not_found", "out_of_scope"))
+        sheet.extra_count = sum(1 for i in items if i.result == "out_of_scope")
+        sheet.anomaly_count = sum(1 for i in items if i.result == "not_found")
         sheet.status = "completed"
         await db.flush()
         stmt = select(QualityStocktakeSheet).where(QualityStocktakeSheet.id == sheet_id)

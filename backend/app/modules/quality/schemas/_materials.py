@@ -229,6 +229,7 @@ class StocktakeSheetOut(BaseModel):
     scanned_count: int
     missing_count: int
     extra_count: int
+    anomaly_count: int
     created_at: datetime
 
 

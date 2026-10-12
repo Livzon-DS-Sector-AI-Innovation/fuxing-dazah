@@ -980,6 +980,7 @@ export default function MaterialContainers() {
             { title: '实扫', dataIndex: 'scanned_count', width: 80 },
             { title: '盘亏', dataIndex: 'missing_count', width: 80, render: (v: number) => <Typography.Text type={v > 0 ? 'danger' : undefined}>{v}</Typography.Text> },
             { title: '盘盈', dataIndex: 'extra_count', width: 80, render: (v: number) => <Typography.Text type={v > 0 ? 'warning' : undefined}>{v}</Typography.Text> },
+            { title: '异常', dataIndex: 'anomaly_count', width: 80, render: (v: number) => <Typography.Text type={v > 0 ? 'danger' : undefined}>{v}</Typography.Text> },
             {
               title: '状态', dataIndex: 'status', width: 90,
               render: (v: string) => ({ in_progress: <Tag color="processing">进行中</Tag>, completed: <Tag color="success">已完成</Tag>, void: <Tag>已作废</Tag> } as Record<string, React.ReactNode>)[v] ?? v,
@@ -1032,6 +1033,7 @@ export default function MaterialContainers() {
               <Typography.Text>实扫 <strong>{stDetail.sheet.scanned_count}</strong></Typography.Text>
               <Typography.Text type="danger">盘亏 <strong>{stDetail.sheet.missing_count}</strong></Typography.Text>
               <Typography.Text type="warning">盘盈 <strong>{stDetail.sheet.extra_count}</strong></Typography.Text>
+              <Typography.Text type="danger">异常 <strong>{stDetail.sheet.anomaly_count}</strong></Typography.Text>
             </Space>
             {stDetail.missing.length > 0 && (
               <>
@@ -1051,8 +1053,8 @@ export default function MaterialContainers() {
             <div style={{ maxHeight: 220, overflowY: 'auto' }}>
               {stDetail.items.map((i) => (
                 <div key={i.id} style={{ paddingBlock: 2 }}>
-                  <Tag color={i.result === 'matched' ? 'green' : 'orange'}>
-                    {{ matched: '在库匹配', out_of_scope: '盘盈', not_found: '盘盈' }[i.result] ?? i.result}
+                  <Tag color={i.result === 'matched' ? 'green' : i.result === 'not_found' ? 'red' : 'orange'}>
+                    {{ matched: '在库匹配', out_of_scope: '盘盈', not_found: '异常' }[i.result] ?? i.result}
                   </Tag>
                   <Typography.Text code>{i.container_no}</Typography.Text>
                   <Typography.Text type="secondary"> {i.material_name ?? '-'}（{dayjs(i.created_at).format('HH:mm')}）</Typography.Text>

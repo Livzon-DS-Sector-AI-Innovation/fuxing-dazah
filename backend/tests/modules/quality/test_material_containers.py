@@ -552,7 +552,8 @@ async def test_stocktake_full_flow(db_session):
     finished = await material_container_service.finish_stocktake(db_session, sheet.id)
     assert finished.status == "completed"
     assert finished.scanned_count == 3
-    assert finished.extra_count == 2
+    assert finished.extra_count == 1  # 仅 out_of_scope（已领出实物在架）计盘盈
+    assert finished.anomaly_count == 1  # not_found（系统不存在）计异常
     assert finished.missing_count == 0  # 唯一在库瓶已扫到
     items = await list_stocktake_items(db_session, sheet.id)
     assert len(items) == 3

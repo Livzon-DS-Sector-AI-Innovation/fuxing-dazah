@@ -35,7 +35,8 @@ class QualityStocktakeSheet(BaseModel):
     expected_count: Mapped[int] = mapped_column(Integer, default=0, comment="系统在库容器数")
     scanned_count: Mapped[int] = mapped_column(Integer, default=0, comment="实扫容器数")
     missing_count: Mapped[int] = mapped_column(Integer, default=0, comment="盘亏（系统在库未扫到）")
-    extra_count: Mapped[int] = mapped_column(Integer, default=0, comment="盘盈（扫到但系统不在库/不存在）")
+    extra_count: Mapped[int] = mapped_column(Integer, default=0, comment="盘盈（系统有但不在库，实物多出）")
+    anomaly_count: Mapped[int] = mapped_column(Integer, default=0, comment="异常（扫到系统不存在的容器号，疑似贴错/外购未赋码）")
 
 
 class QualityStocktakeItem(BaseModel):

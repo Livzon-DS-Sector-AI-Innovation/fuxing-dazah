@@ -545,6 +545,7 @@ export interface StocktakeSheet {
   scanned_count: number
   missing_count: number
   extra_count: number
+  anomaly_count: number
   created_at: string
 }
 
