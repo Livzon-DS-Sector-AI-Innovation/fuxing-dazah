@@ -13,7 +13,6 @@ from app.modules.safety.api.central_alarm import central_alarm_router
 from app.modules.safety.api.cert_warnings import cert_warnings_router
 from app.modules.safety.api.chemical_inventory import chemical_inventory_router
 from app.modules.safety.api.contractor_admission import contractor_admission_router
-from app.modules.safety.api.contractors import contractors_router
 from app.modules.safety.api.daily_risk_reports import daily_risk_reports_router
 from app.modules.safety.api.ehs_changes import ehs_changes_router
 from app.modules.safety.api.emergency_drills import emergency_drills_router
@@ -61,7 +60,6 @@ router.include_router(cert_warnings_router)
 router.include_router(chemical_inventory_router)
 router.include_router(business_agent_router)
 router.include_router(central_alarm_router)
-router.include_router(contractors_router)
 router.include_router(contractor_admission_router)
 router.include_router(ehs_changes_router)
 router.include_router(emergency_drills_router)
