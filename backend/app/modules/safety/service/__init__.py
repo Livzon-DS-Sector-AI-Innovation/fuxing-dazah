@@ -25,7 +25,6 @@ from app.modules.safety.service.oh_health_exam import OhHealthExamService
 from app.modules.safety.service.oh_person import OhPersonService
 from app.modules.safety.service.oh_position import OhPositionService
 from app.modules.safety.service.oh_transfer import OhTransferService
-from app.modules.safety.service.regulation import RegulationService
 from app.modules.safety.service.safety import SafetyService
 from app.modules.safety.service.sop_generator import SopGeneratorService
 from app.modules.safety.service.special_operation import SpecialOperationService
@@ -38,7 +37,7 @@ from app.modules.safety.service.special_operation_report import (
     SpecialOperationReportService,
 )
 
-__all__ = ['SafetyService', 'HazardService', 'RegulationService', 'SopGeneratorService', 'create_ai_service', 'SpecialOperationService', 'KnowledgeService', 'SpecialOperationReportService', 'KeyRiskOperationReportService', 'RiskAssessmentEngine', 'ReportBuilder', 'SpecialOperationDailyReportService', 'EhsChangeService', 'URSService', 'EmergencyDrillService', 'OhHealthExamService', 'OhPersonService', 'OhPositionService', 'OhTransferService', 'OhHazardFactorService', 'OhFollowupService', 'MsdsService', 'OhArchiveService', 'ContractorAdmissionService', 'CertWarningService', 'CertWarningEngine', 'ChemicalInventoryService']
+__all__ = ['SafetyService', 'HazardService', 'SopGeneratorService', 'create_ai_service', 'SpecialOperationService', 'KnowledgeService', 'SpecialOperationReportService', 'KeyRiskOperationReportService', 'RiskAssessmentEngine', 'ReportBuilder', 'SpecialOperationDailyReportService', 'EhsChangeService', 'URSService', 'EmergencyDrillService', 'OhHealthExamService', 'OhPersonService', 'OhPositionService', 'OhTransferService', 'OhHazardFactorService', 'OhFollowupService', 'MsdsService', 'OhArchiveService', 'ContractorAdmissionService', 'CertWarningService', 'CertWarningEngine', 'ChemicalInventoryService']
 from app.modules.safety.service.daily_risk_report import DailyRiskReportService
 from app.modules.safety.service.oh_hazard_monitor import OhHazardMonitorService
 

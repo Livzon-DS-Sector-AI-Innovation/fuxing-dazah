@@ -64,13 +64,6 @@ class SafetyService:
         return self._ehs
 
     @property
-    def regulation(self) -> Any:
-        if self._regulation is None:
-            from app.modules.safety.service.regulation import RegulationService
-            self._regulation = RegulationService(self.session)
-        return self._regulation
-
-    @property
     def special_op(self) -> Any:
         if self._special_op is None:
             from app.modules.safety.service.special_operation import (
