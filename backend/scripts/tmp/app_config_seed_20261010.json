@@ -1,0 +1,195 @@
+{
+  "exported_at": "2026-10-10",
+  "rows": [
+    {
+      "key": "SAFETY_CENTRAL_ALARM_ANALYSIS_CHAT_ID",
+      "value": "oc_f05532603bd7682fc520929c01aca88d",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_CHEMICAL_INVENTORY_DAILY_REALTIME_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_ALARM_ANALYSIS_CHAT_ID",
+      "value": "oc_f05532603bd7682fc520929c01aca88d",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_ALARM_DAILY_DM_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_ALARM_DIRECT_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_ALARM_EVENT_SYNC_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_ALARM_SYNC_JOB_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_ALARM_WRITEBACK_AI_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_FIRE_INSPECTION_PDF_ENABLED",
+      "value": "1",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_AI_POLL_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_ALERT_AFTER_ROUNDS",
+      "value": "3",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_ALERT_MIN_FAILURES",
+      "value": "10",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_CATCHUP_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_DIRECT_POLL_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_EVENT_SYNC_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_NOTIFICATIONS_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_POLL_BATCH_LIMIT",
+      "value": "200",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_POLL_CONCURRENCY",
+      "value": "3",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_POLL_INTERVAL_SECONDS",
+      "value": "300",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_POLL_LOCK_TTL",
+      "value": "600",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_POLL_STAGGER_SECONDS",
+      "value": "150",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_REVIEW_POLL_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_SUPERVISION_POLL_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_HAZARD_SUPERVISION_STAGGER_SECONDS",
+      "value": "75",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PHOENIX_ENDPOINT",
+      "value": "http://localhost:6006",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PLATFORM_AUTH_BASIC",
+      "value": "saber:saber_secret",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PLATFORM_BASE_URL",
+      "value": "http://192.168.5.7:9550",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PLATFORM_ORG_CODE",
+      "value": "000",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PLATFORM_PASSWORD_MD5",
+      "value": "598548c6de63bf1b44bee1aa16a6e13e",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PLATFORM_TENANT_ID",
+      "value": "100001",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_PLATFORM_USERNAME",
+      "value": "111002470",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_REGULATION_CRAWLER_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_REGULATION_CRAWLER_INTERVAL_HOURS",
+      "value": "0",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_REGULATION_CRAWLER_NOTIFY_USERS",
+      "value": "ou_495039d6335d347b07ff92ad982b3b4e",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_SPECIAL_OP_DIRECT_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_SPECIAL_OP_EVENT_SYNC_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_SPECIAL_OP_SYNC_JOB_ENABLED",
+      "value": "false",
+      "note": "启动播种自 env（迁移基线）"
+    },
+    {
+      "key": "SAFETY_SPECIAL_OP_WRITEBACK_RISK_ENABLED",
+      "value": "true",
+      "note": "启动播种自 env（迁移基线）"
+    }
+  ]
+}
