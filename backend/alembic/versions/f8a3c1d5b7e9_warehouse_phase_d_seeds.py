@@ -97,12 +97,12 @@ def upgrade() -> None:
         sa.column('targets', sa.String(512)),
         schema='warehouse',
     )
-    op.bulk_insert(task_rows, [
+    op.execute(postgresql.insert(task_rows).values([
         {"id": uuid4(), "task_name": info.task_name, "enabled": True,
          "schedule": info.default_schedule, "targets": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in push_registry.iter_tasks() if info.task_name in PHASE_D_PUSH_TASKS
-    ])
+    ]).on_conflict_do_nothing())
 
     # ③ 分期D 新表连接行（既有机制，测试版坐标=快照默认）
     connection_rows = sa.table(
@@ -114,13 +114,13 @@ def upgrade() -> None:
         sa.column('enabled', sa.Boolean()),
         schema='warehouse',
     )
-    op.bulk_insert(connection_rows, [
+    op.execute(postgresql.insert(connection_rows).values([
         {"id": uuid4(), "table_key": info.table_key, "base_token": None,
          "table_id": info.default_table_id, "enabled": True,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in bitable_config.registry.iter_connections()
         if info.table_key in PHASE_D_TABLES
-    ])
+    ]).on_conflict_do_nothing())
 
     # ④ test 组环境行（全部注册表；与既有连接行等价语义）
     env_rows = sa.table(
@@ -133,12 +133,12 @@ def upgrade() -> None:
         sa.column('enabled', sa.Boolean()),
         schema='warehouse',
     )
-    op.bulk_insert(env_rows, [
+    op.execute(postgresql.insert(env_rows).values([
         {"id": uuid4(), "table_key": info.table_key, "env": "test",
          "base_token": None, "table_id": None, "enabled": True,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in bitable_config.registry.iter_connections()
-    ])
+    ]).on_conflict_do_nothing())
 
     # ⑤ 运行参数：环境模式（默认 test）
     runtime_rows = sa.table(
@@ -148,10 +148,10 @@ def upgrade() -> None:
         sa.column('value', postgresql.JSONB()),
         schema='warehouse',
     )
-    op.bulk_insert(runtime_rows, [
+    op.execute(postgresql.insert(runtime_rows).values([
         {"id": uuid4(), "key": "bitable_env_mode", "value": "test",
          "is_deleted": False, "created_at": now, "updated_at": now}
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:

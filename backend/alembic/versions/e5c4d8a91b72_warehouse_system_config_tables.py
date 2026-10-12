@@ -220,11 +220,13 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(profile_rows, [
+    # registry 会持续增长：全新库上本组全量播种会提前带入后续分期的行，
+    # 后续分期迁移再补种时靠 DO NOTHING 幂等跳过（终态=各 registry 全集）
+    op.execute(postgresql.insert(profile_rows).values([
         {"id": uuid4(), "profile": info.profile, "config": dict(info.default_config),
          "enabled": True, "is_deleted": False, "created_at": now, "updated_at": now}
         for info in ai_registry.iter_profiles()
-    ])
+    ]).on_conflict_do_nothing())
 
     scenario_rows = sa.table(
         'ai_scenario_configs',
@@ -235,11 +237,11 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(scenario_rows, [
+    op.execute(postgresql.insert(scenario_rows).values([
         {"id": uuid4(), "scenario": info.scenario, "enabled": True,
          "model_profile": None, "is_deleted": False, "created_at": now, "updated_at": now}
         for info in ai_scenario_registry.iter_scenarios()
-    ])
+    ]).on_conflict_do_nothing())
 
     runtime_rows = sa.table(
         'runtime_configs',
@@ -250,11 +252,11 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(runtime_rows, [
+    op.execute(postgresql.insert(runtime_rows).values([
         {"id": uuid4(), "key": info.key, "value": info.default,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in runtime_registry.iter_runtime_keys()
-    ])
+    ]).on_conflict_do_nothing())
 
     connection_rows = sa.table(
         'bitable_connections',
@@ -266,12 +268,12 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(connection_rows, [
+    op.execute(postgresql.insert(connection_rows).values([
         {"id": uuid4(), "table_key": info.table_key, "base_token": None,
          "table_id": info.default_table_id, "enabled": True,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in bitable_registry.iter_connections()
-    ])
+    ]).on_conflict_do_nothing())
 
     task_rows = sa.table(
         'scheduler_task_configs',
@@ -283,12 +285,12 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(task_rows, [
+    op.execute(postgresql.insert(task_rows).values([
         {"id": uuid4(), "job_name": info.job_name, "enabled": True,
          "schedule": info.default_schedule, "target_chat_id": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in scheduler_registry.iter_tasks()
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:

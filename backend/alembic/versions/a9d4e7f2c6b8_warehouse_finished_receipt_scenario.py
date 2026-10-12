@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 from app.modules.warehouse.ai_config import scenario_registry
@@ -37,12 +38,13 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(scenario_rows, [
+    # e5c4d8a91b72 全量播种已提前带入该场景，DO NOTHING 幂等跳过（全新库终态一致）
+    op.execute(postgresql.insert(scenario_rows).values([
         {"id": uuid4(), "scenario": info.scenario, "enabled": True,
          "model_profile": None, "is_deleted": False, "created_at": now, "updated_at": now}
         for info in scenario_registry.iter_scenarios()
         if info.scenario == PHASE_SCENARIO
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:

@@ -47,12 +47,12 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(task_rows, [
+    op.execute(postgresql.insert(task_rows).values([
         {"id": uuid4(), "task_name": info.task_name, "enabled": True,
          "schedule": info.default_schedule, "targets": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in push_registry.iter_tasks() if info.task_name in PHASE_C_PUSH_TASKS
-    ])
+    ]).on_conflict_do_nothing())
 
     connection_rows = sa.table(
         'bitable_connections',
@@ -64,13 +64,13 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(connection_rows, [
+    op.execute(postgresql.insert(connection_rows).values([
         {"id": uuid4(), "table_key": info.table_key, "base_token": None,
          "table_id": info.default_table_id, "enabled": True,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in bitable_config.registry.iter_connections()
         if info.table_key in PHASE_C_TABLES
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:

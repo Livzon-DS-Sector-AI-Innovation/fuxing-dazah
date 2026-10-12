@@ -92,12 +92,13 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(task_rows, [
+    # a7c3e9f5b2d8 全量播种会提前带入 B 期任务，DO NOTHING 幂等跳过（全新库终态一致）
+    op.execute(postgresql.insert(task_rows).values([
         {"id": uuid4(), "task_name": info.task_name, "enabled": True,
          "schedule": info.default_schedule, "targets": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in push_registry.iter_tasks() if info.task_name in QC_PUSH_TASKS
-    ])
+    ]).on_conflict_do_nothing())
 
     # ── 播种：QC 超期规则全局默认（智能中心预警配置可改）──
     rule_rows = sa.table(
@@ -109,11 +110,11 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(rule_rows, [
+    op.execute(postgresql.insert(rule_rows).values([
         {"id": uuid4(), "rule_key": key, "name": name, "threshold": threshold,
          "enabled": True, "is_deleted": False, "created_at": now, "updated_at": now}
         for key, name, threshold in QC_ALERT_RULES
-    ])
+    ]).on_conflict_do_nothing())
 
     # ── 播种：运行参数行（registry 默认值；含分期A 欠账 bitable_writeback_enabled）──
     runtime_rows = sa.table(
@@ -125,11 +126,11 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(runtime_rows, [
+    op.execute(postgresql.insert(runtime_rows).values([
         {"id": uuid4(), "key": info.key, "value": info.default, "note": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in runtime_registry.iter_runtime_keys() if info.key in QC_RUNTIME_KEYS
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:

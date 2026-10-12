@@ -59,12 +59,13 @@ def upgrade() -> None:
         sa.column('targets', sa.String(512)),
         schema='warehouse',
     )
-    op.bulk_insert(task_rows, [
+    # a7c3e9f5b2d8 全量播种已提前带入本任务，DO NOTHING 幂等跳过（全新库终态一致）
+    op.execute(postgresql.insert(task_rows).values([
         {"id": uuid4(), "task_name": info.task_name, "enabled": True,
          "schedule": info.default_schedule, "targets": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in push_registry.iter_tasks() if info.task_name in P1_PUSH_TASKS
-    ])
+    ]).on_conflict_do_nothing())
 
     runtime_rows = sa.table(
         'runtime_configs',
@@ -73,12 +74,12 @@ def upgrade() -> None:
         sa.column('value', postgresql.JSONB()),
         schema='warehouse',
     )
-    op.bulk_insert(runtime_rows, [
+    op.execute(postgresql.insert(runtime_rows).values([
         {"id": uuid4(), "key": info.key, "value": info.default,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in runtime_registry.iter_runtime_keys()
         if info.key in P1_RUNTIME_KEYS
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:

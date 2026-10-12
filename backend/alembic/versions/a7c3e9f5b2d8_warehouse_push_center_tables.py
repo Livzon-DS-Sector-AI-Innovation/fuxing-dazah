@@ -103,12 +103,14 @@ def upgrade() -> None:
         sa.column('updated_at', sa.DateTime(timezone=True)),
         schema='warehouse',
     )
-    op.bulk_insert(task_rows, [
+    # registry 会持续增长：全新库上本迁移会带入后续分期的任务行，
+    # 后续分期迁移再播种同名任务时靠 DO NOTHING 幂等跳过（终态=registry 全集）
+    op.execute(postgresql.insert(task_rows).values([
         {"id": uuid4(), "task_name": info.task_name, "enabled": True,
          "schedule": info.default_schedule, "targets": None,
          "is_deleted": False, "created_at": now, "updated_at": now}
         for info in push_registry.iter_tasks()
-    ])
+    ]).on_conflict_do_nothing())
 
 
 def downgrade() -> None:
