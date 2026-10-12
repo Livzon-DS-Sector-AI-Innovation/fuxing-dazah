@@ -457,3 +457,17 @@ async def test_today_stats(db_session):
     after = await material_today_stats(db_session)
     assert after["today_in"] == before["today_in"] + 2
     assert after["today_out"] == before["today_out"] + 1
+
+
+async def test_consumption_trend_shape(db_session):
+    from app.modules.quality.repository import material_consumption_trend
+
+    req = _gen_req(1)
+    containers = await material_container_service.generate_containers(db_session, req)
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="out"))
+    trend = await material_consumption_trend(db_session, req.material_code, months=3)
+    assert len(trend) == 3
+    assert trend[-1]["month"] >= trend[0]["month"]  # 升序补全空月
+    current = trend[-1]
+    assert current["out"] >= 1  # 当月有出库

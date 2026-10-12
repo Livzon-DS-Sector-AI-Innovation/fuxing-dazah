@@ -15,7 +15,7 @@ import {
   fetchMaterialDict, createMaterialDict, updateMaterialDict, deleteMaterialDict,
   fetchMaterialSummary, fetchMaterialMovements, exportMaterialMovements,
   fetchPurchaseSuggestions, exportPurchaseSuggestions,
-  fetchMaterialTodayStats, fetchContainerDetail,
+  fetchMaterialTodayStats, fetchContainerDetail, fetchMaterialTrend,
 } from '@/actions/quality'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
@@ -70,6 +70,11 @@ export default function MaterialContainers() {
   const [voidRemark, setVoidRemark] = useState('')
   // 台账操作类型筛选
   const [mvOpType, setMvOpType] = useState<string | undefined>()
+  // 领用趋势弹窗
+  const [trendOpen, setTrendOpen] = useState(false)
+  const [trendCode, setTrendCode] = useState<string | undefined>()
+  const [trendData, setTrendData] = useState<{ trend: { month: string; in: number; out: number }[]; monthly_avg_out: number; suggested_min_stock: number | null } | null>(null)
+  const [trendLoading, setTrendLoading] = useState(false)
 
   const load = useCallback(async (p: number, status?: string, batch?: string, materialCode?: string) => {
     setLoading(true)
@@ -288,6 +293,38 @@ export default function MaterialContainers() {
     }
   }
 
+  const loadTrend = async (code?: string) => {
+    if (!code) { setTrendData(null); return }
+    setTrendLoading(true)
+    try {
+      const res = await fetchMaterialTrend(code, 6)
+      setTrendData(res.data)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取领用趋势失败')
+    } finally {
+      setTrendLoading(false)
+    }
+  }
+
+  const openTrend = () => {
+    setTrendOpen(true)
+    if (trendCode) { void loadTrend(trendCode) }
+  }
+
+  const applySuggestedStock = async () => {
+    if (!trendCode || trendData?.suggested_min_stock == null) return
+    const hit = dict.find((d) => d.code === trendCode)
+    if (!hit) { message.warning('该物料不在字典中，无法应用阈值'); return }
+    try {
+      await updateMaterialDict(hit.id, { min_stock: trendData.suggested_min_stock })
+      message.success(`已将 ${hit.name} 安全库存阈值更新为 ${trendData.suggested_min_stock} 瓶`)
+      loadDict()
+      loadSummary()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '应用阈值失败')
+    }
+  }
+
   // ── 台账 ──
   const loadMovements = useCallback(async (p: number, q?: string, opType?: string) => {
     try {
@@ -475,6 +512,7 @@ export default function MaterialContainers() {
         )}
         <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
         <Button icon={<ShoppingCartOutlined />} onClick={openPurchase}>采购清单</Button>
+        <Button onClick={openTrend}>📈 领用趋势</Button>
       </Space>
 
       <Table
@@ -694,6 +732,62 @@ export default function MaterialContainers() {
           作废后该容器不可再流转，操作留痕。请填写原因：
         </Typography.Paragraph>
         <Input.TextArea rows={2} maxLength={200} value={voidRemark} onChange={(e) => setVoidRemark(e.target.value)} placeholder="如：标签污损/数量不符/重复赋码" />
+      </Modal>
+
+      {/* 领用趋势弹窗 */}
+      <Modal
+        title="📈 领用趋势（近 6 个月出入库）"
+        open={trendOpen}
+        onCancel={() => setTrendOpen(false)}
+        footer={null}
+        width={560}
+      >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            placeholder="选择物料" style={{ width: 240 }}
+            showSearch
+            value={trendCode}
+            onChange={(v) => { setTrendCode(v); void loadTrend(v) }}
+            options={summary.map((s) => ({ value: s.material_code, label: `${s.material_name}（${s.material_code}）` }))}
+          />
+        </Space>
+        {trendLoading && <Typography.Text type="secondary">加载中…</Typography.Text>}
+        {trendData && (
+          <>
+            {trendData.trend.map((t) => {
+              const maxOut = Math.max(...trendData.trend.map((x) => x.out), 1)
+              return (
+                <div key={t.month} style={{ display: 'flex', alignItems: 'center', marginBlock: 3 }}>
+                  <Typography.Text type="secondary" style={{ width: 70 }}>{t.month}</Typography.Text>
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ width: `${(t.out / maxOut) * 100}%`, minWidth: t.out > 0 ? 18 : 0, height: 16, background: '#1677ff', borderRadius: 3, textAlign: 'center', color: '#fff', fontSize: 11, lineHeight: '16px', transition: 'width .2s' }}>
+                      {t.out > 0 ? t.out : ''}
+                    </div>
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>出库 {t.out}</Typography.Text>
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ marginTop: 12, padding: 10, background: '#f5f5f5', borderRadius: 6 }}>
+              <Typography.Text>
+                月均领用 <Typography.Text strong>{trendData.monthly_avg_out}</Typography.Text> 瓶
+                {trendData.suggested_min_stock != null && (
+                  <>
+                    ｜建议安全库存阈值 <Typography.Text strong type="warning">{trendData.suggested_min_stock}</Typography.Text> 瓶（月均×2）
+                  </>
+                )}
+              </Typography.Text>
+              {trendData.suggested_min_stock != null && canManage && (
+                <Button size="small" type="primary" ghost style={{ marginLeft: 12 }} onClick={applySuggestedStock}>
+                  应用到字典
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+        {!trendLoading && !trendData && (
+          <Typography.Text type="secondary">选择物料后展示近 6 个月领用趋势与阈值建议</Typography.Text>
+        )}
       </Modal>
 
       {/* 采购清单弹窗 */}

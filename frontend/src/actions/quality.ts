@@ -1114,3 +1114,14 @@ export async function fetchMaterialTodayStats(): Promise<{ data: { today_in: num
   if (!res.ok) throw new Error('获取今日统计失败')
   return res.json()
 }
+
+export async function fetchMaterialTrend(materialCode: string, months = 6): Promise<{
+  data: { trend: { month: string; in: number; out: number }[]; monthly_avg_out: number; suggested_min_stock: number | null }
+}> {
+  const params = new URLSearchParams({ material_code: materialCode, months: String(months) })
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/trend?${params.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取领用趋势失败')
+  return res.json()
+}

@@ -391,3 +391,40 @@ async def material_today_stats(db: AsyncSession) -> dict[str, int]:
         elif op_type == "out":
             stats["today_out"] = int(count)
     return stats
+
+
+async def material_consumption_trend(
+    db: AsyncSession, material_code: str, months: int = 6
+) -> list[dict[str, Any]]:
+    """物料近 N 个月出入库笔数（北京时区按月聚合），供领用趋势与阈值建议。"""
+    rows = await db.execute(
+        select(
+            func.to_char(func.timezone("Asia/Shanghai", QualityContainerMovement.op_at), "YYYY-MM").label("month"),
+            func.count().filter(QualityContainerMovement.op_type == "in").label("in_count"),
+            func.count().filter(QualityContainerMovement.op_type == "out").label("out_count"),
+        )
+        .join(
+            QualityMaterialContainer,
+            QualityMaterialContainer.id == QualityContainerMovement.container_id,
+        )
+        .where(
+            QualityContainerMovement.is_deleted == False,  # noqa: E712
+            QualityContainerMovement.op_type.in_(["in", "out"]),
+            QualityMaterialContainer.material_code == material_code,
+        )
+        .group_by("month")
+        .order_by("month")
+    )
+    counts = {r.month: {"in": int(r.in_count or 0), "out": int(r.out_count or 0)} for r in rows}
+    # 补齐近 N 个月（含空月），纯算术避免额外依赖
+    from app.core.time import today as _today
+
+    now = _today().replace(day=1)
+    result = []
+    for i in range(months - 1, -1, -1):
+        total = now.year * 12 + (now.month - 1) - i
+        year, month_idx = divmod(total, 12)
+        month = f"{year}-{month_idx + 1:02d}"
+        entry = counts.get(month, {"in": 0, "out": 0})
+        result.append({"month": month, "in": entry["in"], "out": entry["out"]})
+    return result

@@ -22,6 +22,7 @@ from app.modules.quality.repository import (
     list_material_containers,
     list_material_movements,
     list_materials,
+    material_consumption_trend,
     material_stock_summary,
     material_today_stats,
     update_material,
@@ -240,6 +241,24 @@ async def delete_material_endpoint(
 
 
 # ─── 库存概览与台账 ───
+
+
+@router.get("/material/trend", summary="物料领用趋势（近 N 个月出入库笔数，北京时区）")
+async def material_trend_endpoint(
+    material_code: str = Query(..., description="物料代码"),
+    months: int = Query(default=6, ge=1, le=24),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    trend = await material_consumption_trend(db, material_code, months)
+    out_values = [t["out"] for t in trend]
+    active_months = [t for t in trend if t["out"] > 0]
+    monthly_avg = round(sum(out_values) / len(active_months), 1) if active_months else 0
+    return success_response(data={
+        "trend": trend,
+        "monthly_avg_out": monthly_avg,
+        "suggested_min_stock": int(monthly_avg * 2) if monthly_avg else None,
+    })
 
 
 @router.get("/material/today-stats", summary="今日出入库笔数（看板卡片）")

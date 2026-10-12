@@ -209,9 +209,9 @@ async def _push_material_alerts() -> None:
         for a in alerts:
             parts = []
             if a["expired"]:
-                parts.append(f"🚨 已过期 {a['expired']} 瓶")
+                parts.append(f"🚨 已过期 {a['expired']} 瓶（建议：隔离并申请复验/报废处置）")
             if a["near"]:
-                parts.append(f"临效期 {a['near']} 瓶（最早 {a['earliest']}）")
+                parts.append(f"临效期 {a['near']} 瓶（最早 {a['earliest']}，建议：优先领用或申请复验）")
             lines.append(f"- {a['material_name']}（{a['material_code']}）：{'，'.join(parts)}")
         blocks.append("⚠️ 物料效期提醒（在库/待验/已赋码）：\n" + "\n".join(lines))
     if suggestions:
