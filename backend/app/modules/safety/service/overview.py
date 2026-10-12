@@ -249,7 +249,7 @@ async def collect_chemicals(db: AsyncSession) -> dict[str, Any]:
 
 
 async def collect_key_risk_ops(db: AsyncSession) -> dict[str, Any]:
-    """关键风险作业：今日通过/审批中计数 + 今日清单。"""
+    """关键风险作业：今日通过/审批中计数 + 当日已通过清单（spec 下钻三列口径）。"""
     service = KeyRiskOperationReportService(db)
     stats = await service.get_stats()
     today = _bj_today()
@@ -258,6 +258,7 @@ async def collect_key_risk_ops(db: AsyncSession) -> dict[str, Any]:
         _DRILLDOWN_LIMIT,
         date_from=today,
         date_to=today,
+        apply_status="已通过",
     )
     return {
         "today_approved": stats.get("today_approved", 0),

@@ -119,7 +119,7 @@ vi.mock('@/lib/api/safety/overview', async importOriginal => {
   } satisfies import('@/lib/api/safety/overview').SafetyOverview
   return {
     ...actual,
-    fetchSafetyOverviewClient: vi.fn().mockResolvedValue(OVERVIEW),
+    fetchSafetyOverview: vi.fn().mockResolvedValue(OVERVIEW),
   }
 })
 
@@ -159,6 +159,13 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
 
     await screen.findByText('体系模块健康度')
     expect(screen.getAllByTestId('module-card')).toHaveLength(17)
+    // 分组与一期菜单一致（8 个体系要素分组标题全渲染）
+    for (const g of [
+      '体系治理', '风险管控', '隐患治理', '人员管理',
+      '现场管理', '应急处置', '检查监督', '持续改进',
+    ]) {
+      expect(screen.getByText(g)).toBeInTheDocument()
+    }
     // 与一期菜单同名（纯文字短名）
     for (const label of [
       '目标责任与绩效', '法规标准与规程', '风险分级管控', '隐患排查与治理',

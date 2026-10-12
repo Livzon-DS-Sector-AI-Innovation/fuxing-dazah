@@ -31,7 +31,7 @@ import {
 import { MarkdownView } from '@/components/toolbox/MarkdownView'
 import { moduleMenus } from '@/lib/menu-config'
 import {
-  fetchSafetyOverviewClient,
+  fetchSafetyOverview,
   type OverviewDigestCell,
   type OverviewKeyRiskOps,
   type OverviewCerts,
@@ -482,7 +482,7 @@ function OverLimitTable({ data }: { data: OverviewChemicals | null }) {
 function useOverviewData() {
   return useQuery({
     queryKey: ['safety', 'overview'],
-    queryFn: fetchSafetyOverviewClient,
+    queryFn: fetchSafetyOverview,
   })
 }
 

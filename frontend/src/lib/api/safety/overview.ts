@@ -101,6 +101,6 @@ export interface SafetyOverview {
   errors: string[]
 }
 
-export async function fetchSafetyOverviewClient(): Promise<SafetyOverview> {
+export async function fetchSafetyOverview(): Promise<SafetyOverview> {
   return apiGet(`${API_BASE_URL}/api/v1/safety/overview`)
 }
