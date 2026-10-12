@@ -13,7 +13,6 @@ from app.modules.safety.api.central_alarm import central_alarm_router
 from app.modules.safety.api.cert_warnings import cert_warnings_router
 from app.modules.safety.api.chemical_inventory import chemical_inventory_router
 from app.modules.safety.api.contractor_admission import contractor_admission_router
-from app.modules.safety.api.daily_risk_reports import daily_risk_reports_router
 from app.modules.safety.api.ehs_changes import ehs_changes_router
 from app.modules.safety.api.emergency_drills import emergency_drills_router
 from app.modules.safety.api.enums import enums_router
@@ -52,7 +51,6 @@ from app.modules.safety.knowledge.graph_api import graph_router
 router = APIRouter()
 
 router.include_router(ai_audits_router)
-router.include_router(daily_risk_reports_router)
 router.include_router(oh_hazard_monitors_router)
 router.include_router(bitable_config_router)
 router.include_router(app_config_router)

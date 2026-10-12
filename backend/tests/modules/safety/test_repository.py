@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,30 +34,6 @@ async def _create_check(db: AsyncSession, **overrides) -> SafetyCheck:
     )
     await db.flush()
     return item
-
-
-class TestDailyRiskReportRepository:
-    async def test_report_date_filter(self, db_session: AsyncSession) -> None:
-        repo = SafetyRepository(db_session)
-        report = await repo.create_daily_risk_report(
-            {
-                "report_no": _uid("DRR"),
-                "report_date": datetime.now(),
-                "department": "EHS部",
-                "operation_description": "受限空间作业测试",
-                "status": "submitted",
-            }
-        )
-        await db_session.flush()
-
-        items, total = await repo.get_daily_risk_reports(report_date=report.report_date)
-        assert total >= 1
-        assert any(i.id == report.id for i in items)
-
-        _, empty_total = await repo.get_daily_risk_reports(
-            report_date=datetime.now() - timedelta(days=3650)
-        )
-        assert empty_total == 0
 
 
 class TestOhHazardMonitorRepository:

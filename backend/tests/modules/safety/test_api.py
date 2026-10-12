@@ -7,21 +7,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from httpx import AsyncClient
-
-
-def _report_payload(**overrides) -> dict:
-    payload = {
-        "report_no": f"DRR-TEST-{uuid.uuid4().hex[:8]}",
-        "report_date": datetime.now().isoformat(),
-        "report_type": "regular",
-        "department": "生产部",
-        "operation_description": "罐区动火作业",
-    }
-    payload.update(overrides)
-    return payload
 
 
 def _monitor_payload(**overrides) -> dict:
@@ -32,48 +19,6 @@ def _monitor_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
-
-
-class TestDailyRiskReportApi:
-    async def test_crud_and_workflow(self, client: AsyncClient) -> None:
-        """创建 → 提交 → 审批；驳回分支；删除。"""
-        payload = _report_payload()
-        resp = await client.post("/api/v1/safety/daily-risk-reports", json=payload)
-        assert resp.status_code == 200, resp.text
-        created = resp.json()["data"]
-        assert created["status"] == "draft"
-        assert created["report_type"] == "regular"
-        report_id = created["id"]
-
-        resp = await client.get(
-            "/api/v1/safety/daily-risk-reports",
-            params={"department": "生产部"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["meta"]["total"] >= 1
-
-        resp = await client.post(f"/api/v1/safety/daily-risk-reports/{report_id}/submit")
-        assert resp.json()["data"]["status"] == "submitted"
-
-        resp = await client.post(f"/api/v1/safety/daily-risk-reports/{report_id}/approve")
-        data = resp.json()["data"]
-        assert data["status"] == "approved"
-        assert data["approved_at"] is not None
-
-        resp = await client.delete(f"/api/v1/safety/daily-risk-reports/{report_id}")
-        assert resp.status_code == 200
-
-    async def test_reject_flow(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/safety/daily-risk-reports", json=_report_payload())
-        report_id = resp.json()["data"]["id"]
-        await client.post(f"/api/v1/safety/daily-risk-reports/{report_id}/submit")
-        resp = await client.post(
-            f"/api/v1/safety/daily-risk-reports/{report_id}/reject",
-            params={"reason": "措施不足"},
-        )
-        data = resp.json()["data"]
-        assert data["status"] == "rejected"
-        assert data["rejection_reason"] == "措施不足"
 
 
 class TestOhHazardMonitorApi:

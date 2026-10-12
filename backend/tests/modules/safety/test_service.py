@@ -6,68 +6,19 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.schemas import (
-    DailyRiskReportCreate,
     OhHazardMonitorCreate,
 )
 from app.modules.safety.service import (
-    DailyRiskReportService,
     OhHazardMonitorService,
 )
 
 
 def _uid(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
-
-
-class TestDailyRiskReportService:
-    async def test_submit_approve_reject_workflow(self, db_session: AsyncSession) -> None:
-        svc = DailyRiskReportService(db_session)
-        item = await svc.create_report(
-            DailyRiskReportCreate(
-                report_no=_uid("DRR"),
-                report_date=datetime.now(),
-                operation_description="高处作业报备测试",
-            )
-        )
-        assert item.status == "draft"
-
-        submitted = await svc.submit_report(item.id)
-        assert submitted is not None and submitted.status == "submitted"
-
-        approved = await svc.approve_report(item.id)
-        assert approved is not None and approved.status == "approved"
-        assert approved.approved_at is not None
-
-    async def test_reject_sets_reason(self, db_session: AsyncSession) -> None:
-        svc = DailyRiskReportService(db_session)
-        item = await svc.create_report(
-            DailyRiskReportCreate(
-                report_no=_uid("DRR"),
-                report_date=datetime.now(),
-                operation_description="动火作业报备测试",
-            )
-        )
-        await svc.submit_report(item.id)
-        rejected = await svc.reject_report(item.id, "措施不完整")
-        assert rejected is not None and rejected.status == "rejected"
-        assert rejected.rejection_reason == "措施不完整"
-
-    async def test_workflow_guard(self, db_session: AsyncSession) -> None:
-        svc = DailyRiskReportService(db_session)
-        item = await svc.create_report(
-            DailyRiskReportCreate(
-                report_no=_uid("DRR"),
-                report_date=datetime.now(),
-                operation_description="draft 态不允许审批",
-            )
-        )
-        assert await svc.approve_report(item.id) is None
-        assert await svc.reject_report(item.id, "reason") is None
 
 
 class TestOhHazardMonitorService:
