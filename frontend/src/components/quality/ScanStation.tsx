@@ -24,10 +24,12 @@ export default function ScanStation() {
 
   const handleScan = async (raw: string) => {
     // 兼容富文本二维码：从扫描内容中提取容器号（首行 MC-xxx）
-    const matched = raw.match(/MC-[A-Za-z0-9-]+/)
+    // 兼容富文本二维码：从扫描内容中提取容器号（首行 MC-xxx）；
+    // 物料代码可为中文（如 万古），用「非空白/分隔符」匹配而非仅 ASCII
+    const matched = raw.match(/MC-[^\s,，;；]+/)
     const no = matched ? matched[0] : raw.trim()
     if (!no) return
-    if (!matched && !/^MC-[A-Za-z0-9-]+$/.test(no)) {
+    if (!matched && !/^MC-[^\s,，;；]+$/.test(no)) {
       message.warning('未识别到容器号（MC-物料代码-日期-流水）')
       setScanValue('')
       return
