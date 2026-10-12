@@ -52,10 +52,10 @@ class MaterialContainerListItem(BaseModel):
 
 
 class ContainerMoveRequest(BaseModel):
-    """进出库操作。in：入库登记（labeled → in_warehouse）；out：领料出库（in_warehouse/qualified → issued）；
-    auto：按当前状态自动判定（labeled→入库；in_warehouse/qualified→出库；其余状态报错）。"""
+    """进出库操作。in：入库登记（labeled/returned → in_warehouse）；out：领料出库（in_warehouse/qualified → issued）；
+    return：退库（issued → returned）；auto：按当前状态自动判定（labeled→入库；in_warehouse/qualified→出库；其余状态报错）。"""
 
-    op_type: Literal["in", "out", "auto"]
+    op_type: Literal["in", "out", "auto", "return"]
     related_doc: str | None = Field(default=None, max_length=100, description="关联单据号（领料单等）")
     remark: str | None = Field(default=None, max_length=500)
 
@@ -64,7 +64,7 @@ class ContainerBatchMoveRequest(BaseModel):
     """批量进出库：逐容器校验流转，单个失败不影响整体，结果逐条返回。"""
 
     container_nos: list[str] = Field(min_length=1, max_length=200)
-    op_type: Literal["in", "out", "auto"]
+    op_type: Literal["in", "out", "auto", "return"]
     related_doc: str | None = Field(default=None, max_length=100, description="关联单据号（领料单等）")
     remark: str | None = Field(default=None, max_length=500)
 
@@ -73,6 +73,7 @@ class ContainerStatusUpdate(BaseModel):
     """阶段1人工状态流转（后续接入请验/放行链路后由系统自动联动）。"""
 
     status: Literal["in_warehouse", "qualified", "void"]
+    remark: str | None = Field(default=None, max_length=200, description="流转原因（作废时建议填写）")
 
 
 class ContainerMovementOut(BaseModel):
@@ -89,9 +90,10 @@ class ContainerMovementOut(BaseModel):
 
 
 class ContainerLabelRequest(BaseModel):
-    """按容器号批量出标签 PDF。"""
+    """按容器号批量出标签 PDF。reprint=True 时记为补印流水（防重复贴标留痕）。"""
 
     container_nos: list[str] = Field(min_length=1, max_length=200)
+    reprint: bool = Field(default=False)
 
 
 class MaterialCreate(BaseModel):
@@ -103,6 +105,7 @@ class MaterialCreate(BaseModel):
     vendor_name: str | None = Field(default=None, max_length=100, description="默认供应商名称")
     pack_spec: str | None = Field(default=None, max_length=50, description="包装规格，如 5kg/听")
     min_stock: int | None = Field(default=None, ge=0, description="安全库存阈值（瓶/桶数）")
+    valid_months: int | None = Field(default=None, ge=1, le=120, description="效期月数（赋码时自动计算复验期）")
     remark: str | None = Field(default=None, max_length=200)
 
 
@@ -114,6 +117,7 @@ class MaterialUpdate(BaseModel):
     vendor_name: str | None = Field(default=None, max_length=100)
     pack_spec: str | None = Field(default=None, max_length=50)
     min_stock: int | None = Field(default=None, ge=0)
+    valid_months: int | None = Field(default=None, ge=1, le=120)
     remark: str | None = Field(default=None, max_length=200)
 
 
@@ -127,6 +131,7 @@ class MaterialOut(BaseModel):
     vendor_name: str | None
     pack_spec: str | None
     min_stock: int | None
+    valid_months: int | None
     remark: str | None
     created_at: datetime
 

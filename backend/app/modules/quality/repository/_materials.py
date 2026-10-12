@@ -362,3 +362,32 @@ async def material_expiry_alerts(db: AsyncSession) -> list[dict[str, Any]]:
         }
         for r in rows
     ]
+
+
+async def material_today_stats(db: AsyncSession) -> dict[str, int]:
+    """今日出入库笔数（北京时间口径，含 status 流转之外的 in/out 操作）。"""
+    from app.core.time import today as _today
+
+    today_str = _today().isoformat()
+    rows = await db.execute(
+        select(
+            QualityContainerMovement.op_type,
+            func.count(),
+        )
+        .where(
+            QualityContainerMovement.is_deleted == False,  # noqa: E712
+            QualityContainerMovement.op_type.in_(["in", "out"]),
+            func.to_char(
+                func.timezone("Asia/Shanghai", QualityContainerMovement.op_at),
+                "YYYY-MM-DD",
+            ) == today_str,
+        )
+        .group_by(QualityContainerMovement.op_type)
+    )
+    stats = {"today_in": 0, "today_out": 0}
+    for op_type, count in rows:
+        if op_type == "in":
+            stats["today_in"] = int(count)
+        elif op_type == "out":
+            stats["today_out"] = int(count)
+    return stats

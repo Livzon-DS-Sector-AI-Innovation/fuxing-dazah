@@ -418,3 +418,42 @@ async def test_move_auto_qualified_goes_out(db_session):
         db_session, no, ContainerMoveRequest(op_type="auto")
     )
     assert updated.status == "issued"
+
+
+async def test_move_return_flow(db_session):
+    containers = await material_container_service.generate_containers(db_session, _gen_req(1))
+    no = containers[0].container_no
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="out"))
+    # 退库
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="return", remark="车间退回")
+    )
+    assert updated.status == "returned"
+    # 退库后可重新入库
+    updated = await material_container_service.move_container(
+        db_session, no, ContainerMoveRequest(op_type="in")
+    )
+    assert updated.status == "in_warehouse"
+
+
+async def test_status_update_with_remark(db_session):
+    containers = await material_container_service.generate_containers(db_session, _gen_req(1))
+    no = containers[0].container_no
+    await material_container_service.update_status(db_session, no, "void", remark="标签贴错作废")
+    movements = await list_container_movements(db_session, containers[0].id)
+    assert movements[0].remark == "标签贴错作废"
+
+
+async def test_today_stats(db_session):
+    from app.modules.quality.repository import material_today_stats
+
+    # 开发库共享：用增量断言而非绝对值（当天可能有真实操作数据）
+    before = await material_today_stats(db_session)
+    containers = await material_container_service.generate_containers(db_session, _gen_req(2))
+    for c in containers:
+        await material_container_service.move_container(db_session, c.container_no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="out"))
+    after = await material_today_stats(db_session)
+    assert after["today_in"] == before["today_in"] + 2
+    assert after["today_out"] == before["today_out"] + 1

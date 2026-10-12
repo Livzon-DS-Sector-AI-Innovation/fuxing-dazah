@@ -37,6 +37,9 @@ class QualityMaterial(BaseModel):
     min_stock: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="安全库存阈值（瓶/桶数），采购建议依据"
     )
+    valid_months: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="效期月数（赋码时自动计算复验期=入库日期+N月，可手改）"
+    )
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
 

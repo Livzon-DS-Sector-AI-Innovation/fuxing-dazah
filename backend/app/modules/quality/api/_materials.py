@@ -12,15 +12,18 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.quality.api._common import router
 from app.modules.quality.repository import (
+    create_container_movement,
     create_material,
     delete_material,
     get_material_by_code,
     get_material_container_by_no,
     list_container_movements,
+    list_containers_by_nos,
     list_material_containers,
     list_material_movements,
     list_materials,
     material_stock_summary,
+    material_today_stats,
     update_material,
 )
 from app.modules.quality.schemas import (
@@ -111,9 +114,13 @@ async def move_container_endpoint(
     user: User = Depends(require_permission("quality:material:manage")),
 ) -> JSONResponse:
     container = await material_container_service.move_container(db, container_no, payload, operator=user.id)
+    message = {
+        "in_warehouse": "已入库登记",
+        "returned": "已退库",
+    }.get(container.status, "已领料出库")
     return success_response(
         data=MaterialContainerOut.model_validate(container).model_dump(mode="json"),
-        message="已入库登记" if container.status == "in_warehouse" else "已领料出库",
+        message=message,
     )
 
 
@@ -124,7 +131,9 @@ async def update_container_status_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:material:manage")),
 ) -> JSONResponse:
-    container = await material_container_service.update_status(db, container_no, payload.status, operator=user.id)
+    container = await material_container_service.update_status(
+        db, container_no, payload.status, operator=user.id, remark=payload.remark,
+    )
     return success_response(
         data=MaterialContainerOut.model_validate(container).model_dump(mode="json"),
         message=f"状态已变更为 {payload.status}",
@@ -135,9 +144,23 @@ async def update_container_status_endpoint(
 async def container_label_endpoint(
     payload: ContainerLabelRequest = Body(...),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:material:read")),
+    user: User = Depends(require_permission("quality:material:read")),
 ) -> StreamingResponse:
     pdf_bytes = await material_container_service.build_label_pdf(db, payload.container_nos)
+    # 补印留痕：reprint=True 时为每个容器记一条补印流水（防重复贴标审计）
+    if payload.reprint:
+        containers = await list_containers_by_nos(db, payload.container_nos)
+        for c in containers:
+            await create_container_movement(
+                db,
+                container_id=c.id,
+                container_no=c.container_no,
+                op_type="reprint",
+                from_status=c.status,
+                to_status=c.status,
+                operator=user.id,
+                remark="标签补印",
+            )
     encoded = quote(f"物料标签-{len(payload.container_nos)}张.pdf")
     return StreamingResponse(
         BytesIO(pdf_bytes),
@@ -180,6 +203,7 @@ async def create_material_endpoint(
         "vendor_name": payload.vendor_name,
         "pack_spec": payload.pack_spec,
         "min_stock": payload.min_stock,
+        "valid_months": payload.valid_months,
         "remark": payload.remark,
     })
     return success_response(
@@ -216,6 +240,15 @@ async def delete_material_endpoint(
 
 
 # ─── 库存概览与台账 ───
+
+
+@router.get("/material/today-stats", summary="今日出入库笔数（看板卡片）")
+async def material_today_stats_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    stats = await material_today_stats(db)
+    return success_response(data=stats)
 
 
 @router.get("/material/summary", summary="按物料聚合的库存概览（含临效期/过期/低于安全库存）")

@@ -948,7 +948,7 @@ export async function fetchMaterialContainers(
 }
 
 export async function moveMaterialContainer(
-  containerNo: string, opType: 'in' | 'out' | 'auto', relatedDoc?: string, remark?: string,
+  containerNo: string, opType: 'in' | 'out' | 'auto' | 'return', relatedDoc?: string, remark?: string,
 ): Promise<{ message: string; data: MaterialContainerItem }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/move`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
@@ -962,10 +962,10 @@ export async function moveMaterialContainer(
 }
 
 export async function updateMaterialContainerStatus(
-  containerNo: string, status: 'in_warehouse' | 'qualified' | 'void',
+  containerNo: string, status: 'in_warehouse' | 'qualified' | 'void', remark?: string,
 ): Promise<{ message: string; data: MaterialContainerItem }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/status`, {
-    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify({ status, remark }),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
@@ -974,10 +974,10 @@ export async function updateMaterialContainerStatus(
   return res.json()
 }
 
-export async function downloadContainerLabels(containerNos: string[]): Promise<Blob> {
+export async function downloadContainerLabels(containerNos: string[], reprint = false): Promise<Blob> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/label`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ container_nos: containerNos }),
+    body: JSON.stringify({ container_nos: containerNos, reprint }),
   })
   if (!res.ok) throw new Error('标签生成失败')
   return res.blob()
@@ -1011,7 +1011,7 @@ export async function fetchMaterialDict(q?: string, page = 1): Promise<{ data: M
 }
 
 export async function createMaterialDict(input: {
-  code: string; name: string; category?: string; vendor_name?: string; pack_spec?: string; min_stock?: number; remark?: string
+  code: string; name: string; category?: string; vendor_name?: string; pack_spec?: string; min_stock?: number; valid_months?: number; remark?: string
 }): Promise<{ message: string; data: MaterialDictItem }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/dict`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
@@ -1067,8 +1067,11 @@ export async function fetchMaterialMovements(
   return res.json()
 }
 
-export async function exportMaterialMovements(materialQ?: string): Promise<Blob> {
-  const qs = materialQ ? `?material_q=${encodeURIComponent(materialQ)}` : ''
+export async function exportMaterialMovements(materialQ?: string, opType?: string): Promise<Blob> {
+  const params = new URLSearchParams()
+  if (materialQ) params.set('material_q', materialQ)
+  if (opType) params.set('op_type', opType)
+  const qs = params.toString() ? `?${params}` : ''
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/movements/export${qs}`, {
     headers: await _authHeaders(),
   })
@@ -1093,4 +1096,21 @@ export async function exportPurchaseSuggestions(): Promise<Blob> {
   })
   if (!res.ok) throw new Error('采购建议导出失败')
   return res.blob()
+}
+
+
+export async function fetchContainerDetail(containerNo: string): Promise<{ data: { container: MaterialContainerItem; movements: MaterialMovementItem[] } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${encodeURIComponent(containerNo)}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取容器详情失败')
+  return res.json()
+}
+
+export async function fetchMaterialTodayStats(): Promise<{ data: { today_in: number; today_out: number } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/today-stats`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取今日统计失败')
+  return res.json()
 }

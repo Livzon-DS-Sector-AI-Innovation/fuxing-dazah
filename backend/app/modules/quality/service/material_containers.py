@@ -37,8 +37,9 @@ pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 # 状态流转白名单（阶段1人工操作；后续接入请验/放行后自动联动）
 _MOVE_TRANSITIONS: dict[str, dict[str, str]] = {
     # op_type -> {from_status: to_status}
-    "in": {"labeled": "in_warehouse"},
+    "in": {"labeled": "in_warehouse", "returned": "in_warehouse"},
     "out": {"in_warehouse": "issued", "qualified": "issued"},
+    "return": {"issued": "returned"},
 }
 _STATUS_TRANSITIONS: dict[str, set[str]] = {
     "in_warehouse": {"labeled"},
@@ -184,6 +185,7 @@ class MaterialContainerService:
         container_no: str,
         new_status: str,
         operator: uuid.UUID | None = None,
+        remark: str | None = None,
     ) -> QualityMaterialContainer:
         """人工状态流转（阶段1：手动合格/作废；后续由请验/放行联动取代）。"""
         container = await get_material_container_by_no(db, container_no)
@@ -204,7 +206,7 @@ class MaterialContainerService:
             from_status=container.status,
             to_status=new_status,
             operator=operator,
-            remark="阶段1人工流转",
+            remark=remark or "阶段1人工流转",
         )
         return updated  # type: ignore[return-value]
 

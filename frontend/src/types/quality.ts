@@ -470,6 +470,7 @@ export interface MaterialDictItem {
   vendor_name: string | null
   pack_spec: string | null
   min_stock: number | null
+  valid_months: number | null
   remark: string | null
   created_at: string
 }
