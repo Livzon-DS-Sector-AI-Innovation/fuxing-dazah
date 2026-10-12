@@ -10,6 +10,8 @@ from app.modules.quality.models import (
     QualityContainerMovement,
     QualityMaterial,
     QualityMaterialContainer,
+    QualityStocktakeItem,
+    QualityStocktakeSheet,
     QualitySupplier,
 )
 
@@ -515,6 +517,132 @@ async def supplier_qual_alerts(db: AsyncSession) -> list[dict[str, Any]]:
             "name": r.name,
             "qual_expiry_date": r.qual_expiry_date,
             "expired": bool(r.qual_expiry_date and r.qual_expiry_date < today_str),
+        }
+        for r in rows
+    ]
+
+
+# ─── 盘点与月度报表 ───
+
+
+async def create_stocktake_sheet(db: AsyncSession, data: dict[str, Any]) -> QualityStocktakeSheet:
+    sheet = QualityStocktakeSheet(**data)
+    db.add(sheet)
+    await db.flush()
+    return sheet
+
+
+async def get_stocktake_sheet(db: AsyncSession, sid: uuid.UUID) -> QualityStocktakeSheet | None:
+    stmt = select(QualityStocktakeSheet).where(
+        QualityStocktakeSheet.id == sid, QualityStocktakeSheet.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_stocktake_sheets(
+    db: AsyncSession, status: str | None = None
+) -> list[QualityStocktakeSheet]:
+    conds = [QualityStocktakeSheet.is_deleted == False]  # noqa: E712
+    if status:
+        conds.append(QualityStocktakeSheet.status == status)
+    stmt = select(QualityStocktakeSheet).where(*conds).order_by(QualityStocktakeSheet.created_at.desc())
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def max_stocktake_seq(db: AsyncSession, prefix: str) -> int:
+    val = await db.scalar(
+        select(func.max(QualityStocktakeSheet.sheet_no)).where(
+            QualityStocktakeSheet.sheet_no.like(f"{prefix}%"),
+            QualityStocktakeSheet.is_deleted == False,  # noqa: E712
+        )
+    )
+    text_val = str(val or "")
+    try:
+        return int(text_val.rsplit("-", 1)[-1])
+    except ValueError:
+        return 0
+
+
+async def create_stocktake_item(db: AsyncSession, data: dict[str, Any]) -> QualityStocktakeItem:
+    item = QualityStocktakeItem(**data)
+    db.add(item)
+    await db.flush()
+    return item
+
+
+async def get_stocktake_item(db: AsyncSession, sheet_id: uuid.UUID, container_no: str) -> QualityStocktakeItem | None:
+    stmt = (
+        select(QualityStocktakeItem)
+        .where(
+            QualityStocktakeItem.sheet_id == sheet_id,
+            QualityStocktakeItem.container_no == container_no,
+            QualityStocktakeItem.is_deleted == False,  # noqa: E712
+        )
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_stocktake_items(db: AsyncSession, sheet_id: uuid.UUID) -> list[QualityStocktakeItem]:
+    stmt = (
+        select(QualityStocktakeItem)
+        .where(QualityStocktakeItem.sheet_id == sheet_id, QualityStocktakeItem.is_deleted == False)  # noqa: E712
+        .order_by(QualityStocktakeItem.created_at)
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_in_stock_containers(
+    db: AsyncSession, material_code: str | None = None
+) -> list[QualityMaterialContainer]:
+    """盘点口径的在库容器：in_warehouse + qualified。"""
+    conds = [
+        QualityMaterialContainer.is_deleted == False,  # noqa: E712
+        QualityMaterialContainer.status.in_(["in_warehouse", "qualified"]),
+    ]
+    if material_code:
+        conds.append(QualityMaterialContainer.material_code == material_code)
+    stmt = select(QualityMaterialContainer).where(*conds).order_by(QualityMaterialContainer.container_no)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def material_monthly_report(db: AsyncSession, month: str) -> list[dict[str, Any]]:
+    """指定月（YYYY-MM）按物料的出入库/退库/状态流转笔数 + 当前可用。"""
+    rows = await db.execute(
+        select(
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+            func.count().filter(QualityContainerMovement.op_type == "in").label("in_count"),
+            func.count().filter(QualityContainerMovement.op_type == "out").label("out_count"),
+            func.count().filter(QualityContainerMovement.op_type == "return").label("return_count"),
+            func.count().filter(QualityContainerMovement.op_type == "status").label("status_count"),
+        )
+        .join(
+            QualityContainerMovement,
+            QualityContainerMovement.container_id == QualityMaterialContainer.id,
+        )
+        .where(
+            QualityContainerMovement.is_deleted == False,  # noqa: E712
+            func.to_char(func.timezone("Asia/Shanghai", QualityContainerMovement.op_at), "YYYY-MM") == month,
+        )
+        .group_by(
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+        )
+        .order_by(QualityMaterialContainer.material_name)
+    )
+    # 当前可用（在库+合格）
+    stock = await material_stock_summary(db)
+    available_map = {s["material_code"]: s["available"] for s in stock}
+    return [
+        {
+            "material_code": r.material_code,
+            "material_name": r.material_name,
+            "in_count": int(r.in_count or 0),
+            "out_count": int(r.out_count or 0),
+            "return_count": int(r.return_count or 0),
+            "status_count": int(r.status_count or 0),
+            "available": available_map.get(r.material_code, 0),
         }
         for r in rows
     ]

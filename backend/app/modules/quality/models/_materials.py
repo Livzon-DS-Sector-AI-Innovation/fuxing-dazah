@@ -9,6 +9,62 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.base_model import BaseModel
 
 
+class QualityStocktakeSheet(BaseModel):
+    """库存盘点单：扫码盘点在库容器，结束自动对比系统库存出差异清单。"""
+
+    __tablename__ = "quality_stocktake_sheets"
+    __table_args__ = (
+        Index(
+            "uq_quality_stocktake_sheet_no",
+            "sheet_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_quality_stocktake_sheet_status", "status"),
+        {"schema": "quality"},
+    )
+
+    sheet_no: Mapped[str] = mapped_column(String(100), comment="盘点单号 ST+YYMMDD+序号")
+    scope_material_code: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="盘点范围物料代码，空=全部物料"
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), default="in_progress", comment="in_progress/completed/void"
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+    expected_count: Mapped[int] = mapped_column(Integer, default=0, comment="系统在库容器数")
+    scanned_count: Mapped[int] = mapped_column(Integer, default=0, comment="实扫容器数")
+    missing_count: Mapped[int] = mapped_column(Integer, default=0, comment="盘亏（系统在库未扫到）")
+    extra_count: Mapped[int] = mapped_column(Integer, default=0, comment="盘盈（扫到但系统不在库/不存在）")
+
+
+class QualityStocktakeItem(BaseModel):
+    """盘点扫码明细（按容器号去重）。"""
+
+    __tablename__ = "quality_stocktake_items"
+    __table_args__ = (
+        Index("ix_quality_stocktake_item_sheet", "sheet_id"),
+        Index(
+            "uq_quality_stocktake_item_container",
+            "sheet_id",
+            "container_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    sheet_id: Mapped[uuid.UUID] = mapped_column(comment="逻辑引用 quality_stocktake_sheets.id（无 FK）")
+    container_no: Mapped[str] = mapped_column(String(100), comment="扫到的容器号")
+    result: Mapped[str] = mapped_column(
+        String(32), comment="matched 在库匹配 / out_of_scope 系统有但不在库 / not_found 系统不存在"
+    )
+    status_snapshot: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="扫描时容器状态快照")
+    material_code: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="物料代码快照（系统有容器时）")
+    material_name: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="物料名称快照")
+    scanned_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="扫码人")
+
+
 class QualitySupplier(BaseModel):
     """供应商主数据：资质效期到期提醒与赋码/采购建议的供应商维度。"""
 

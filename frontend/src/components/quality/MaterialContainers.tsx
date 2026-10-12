@@ -8,7 +8,7 @@ import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutli
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
-import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, PurchaseSuggestion, SupplierItem } from '@/types/quality'
+import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, StocktakeSheet, SupplierItem } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
@@ -17,6 +17,8 @@ import {
   fetchPurchaseSuggestions, exportPurchaseSuggestions,
   fetchMaterialTodayStats, fetchContainerDetail, fetchMaterialTrend,
   fetchSuppliers, createSupplier, updateSupplier, deleteSupplier,
+  fetchStocktakes, createStocktake, fetchStocktakeDetail, exportStocktake,
+  fetchMonthlyReport, exportMonthlyReport,
 } from '@/actions/quality'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
@@ -76,6 +78,20 @@ export default function MaterialContainers() {
   const [supData, setSupData] = useState<SupplierItem[]>([])
   const [supForm] = Form.useForm()
   const [editingSup, setEditingSup] = useState<SupplierItem | null>(null)
+  // 盘点弹窗
+  const [stOpen, setStOpen] = useState(false)
+  const [stSheets, setStSheets] = useState<StocktakeSheet[]>([])
+  const [stCreateOpen, setStCreateOpen] = useState(false)
+  const [stScope, setStScope] = useState<string | undefined>()
+  const [stDetail, setStDetail] = useState<{
+    sheet: StocktakeSheet
+    items: { id: string; container_no: string; result: string; material_name: string | null; created_at: string }[]
+    missing: { container_no: string; material_name: string }[]
+  } | null>(null)
+  // 月度报表弹窗
+  const [mrOpen, setMrOpen] = useState(false)
+  const [mrMonth, setMrMonth] = useState(dayjs().format('YYYY-MM'))
+  const [mrData, setMrData] = useState<MonthlyReportItem[]>([])
   // 领用趋势弹窗
   const [trendOpen, setTrendOpen] = useState(false)
   const [trendCode, setTrendCode] = useState<string | undefined>()
@@ -356,6 +372,83 @@ export default function MaterialContainers() {
     }
   }
 
+  const loadStocktakes = useCallback(async () => {
+    try {
+      const res = await fetchStocktakes()
+      setStSheets(res.data)
+    } catch {
+      // 静默
+    }
+  }, [])
+
+  const openStocktakes = () => {
+    setStOpen(true)
+    void loadStocktakes()
+  }
+
+  const onCreateStocktake = async () => {
+    try {
+      const res = await createStocktake({ scope_material_code: stScope, remark: '扫码盘点' })
+      message.success(res.message)
+      setStCreateOpen(false)
+      setStScope(undefined)
+      loadStocktakes()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '创建盘点单失败')
+    }
+  }
+
+  const openStDetail = async (sheet: StocktakeSheet) => {
+    try {
+      const res = await fetchStocktakeDetail(sheet.id)
+      setStDetail(res.data as never)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取盘点详情失败')
+    }
+  }
+
+  const onExportStocktake = async (sheet: StocktakeSheet) => {
+    try {
+      const blob = await exportStocktake(sheet.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `盘点差异-${sheet.sheet_no}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '盘点导出失败')
+    }
+  }
+
+  const loadMonthlyReport = async (month: string) => {
+    try {
+      const res = await fetchMonthlyReport(month)
+      setMrData(res.data)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取月度报表失败')
+    }
+  }
+
+  const openMonthly = () => {
+    setMrOpen(true)
+    void loadMonthlyReport(mrMonth)
+  }
+
+  const onExportMonthly = async () => {
+    try {
+      const blob = await exportMonthlyReport(mrMonth)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `物料月度汇总-${mrMonth}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '月度报表导出失败')
+    }
+  }
+
   const openTrend = () => {
     setTrendOpen(true)
     if (trendCode) { void loadTrend(trendCode) }
@@ -563,6 +656,8 @@ export default function MaterialContainers() {
         <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
         <Button icon={<ShoppingCartOutlined />} onClick={openPurchase}>采购清单</Button>
         <Button onClick={openTrend}>📈 领用趋势</Button>
+        <Button onClick={openStocktakes}>📋 盘点</Button>
+        <Button onClick={openMonthly}>📊 月度报表</Button>
         {canManage && (
           <Button onClick={openSuppliers}>🏭 供应商</Button>
         )}
@@ -857,6 +952,148 @@ export default function MaterialContainers() {
                 </Space>
               ),
             },
+          ]}
+        />
+      </Modal>
+
+      {/* 盘点管理弹窗 */}
+      <Modal
+        title="📋 库存盘点"
+        open={stOpen}
+        onCancel={() => setStOpen(false)}
+        footer={null}
+        width={820}
+      >
+        <Space style={{ marginBottom: 12 }}>
+          <Button type="primary" onClick={() => setStCreateOpen(true)}>新建盘点单</Button>
+          <Typography.Text type="secondary">扫码请到「扫码操作台」选盘点模式</Typography.Text>
+        </Space>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={stSheets}
+          pagination={false}
+          columns={[
+            { title: '盘点单号', dataIndex: 'sheet_no', width: 170, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+            { title: '范围', dataIndex: 'scope_material_code', width: 120, render: (v: string | null) => v || '全部物料' },
+            { title: '系统在库', dataIndex: 'expected_count', width: 90 },
+            { title: '实扫', dataIndex: 'scanned_count', width: 80 },
+            { title: '盘亏', dataIndex: 'missing_count', width: 80, render: (v: number) => <Typography.Text type={v > 0 ? 'danger' : undefined}>{v}</Typography.Text> },
+            { title: '盘盈', dataIndex: 'extra_count', width: 80, render: (v: number) => <Typography.Text type={v > 0 ? 'warning' : undefined}>{v}</Typography.Text> },
+            {
+              title: '状态', dataIndex: 'status', width: 90,
+              render: (v: string) => ({ in_progress: <Tag color="processing">进行中</Tag>, completed: <Tag color="success">已完成</Tag>, void: <Tag>已作废</Tag> } as Record<string, React.ReactNode>)[v] ?? v,
+            },
+            {
+              title: '操作', key: 'actions', width: 140,
+              render: (_: unknown, item: StocktakeSheet) => (
+                <Space size="small">
+                  <Button size="small" type="link" onClick={() => openStDetail(item)}>详情</Button>
+                  <Button size="small" type="link" onClick={() => onExportStocktake(item)}>导出</Button>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      {/* 新建盘点单 */}
+      <Modal
+        title="新建盘点单"
+        open={stCreateOpen}
+        onCancel={() => setStCreateOpen(false)}
+        onOk={onCreateStocktake}
+        okText="创建"
+        width={420}
+      >
+        <Typography.Paragraph type="secondary">
+          盘点口径：在库待验 + 合格（实物在库）。不选范围 = 全部物料。
+        </Typography.Paragraph>
+        <Select
+          placeholder="盘点范围物料（可选）" allowClear style={{ width: '100%' }}
+          value={stScope}
+          onChange={(v) => setStScope(v)}
+          options={summary.map((sm) => ({ value: sm.material_code, label: `${sm.material_name}（${sm.material_code}）` }))}
+        />
+      </Modal>
+
+      {/* 盘点详情 */}
+      <Modal
+        title={`盘点详情 ${stDetail?.sheet.sheet_no ?? ''}`}
+        open={!!stDetail}
+        onCancel={() => setStDetail(null)}
+        footer={null}
+        width={720}
+      >
+        {stDetail && (
+          <>
+            <Space size={16} style={{ marginBottom: 12 }}>
+              <Typography.Text>系统在库 <strong>{stDetail.sheet.expected_count}</strong></Typography.Text>
+              <Typography.Text>实扫 <strong>{stDetail.sheet.scanned_count}</strong></Typography.Text>
+              <Typography.Text type="danger">盘亏 <strong>{stDetail.sheet.missing_count}</strong></Typography.Text>
+              <Typography.Text type="warning">盘盈 <strong>{stDetail.sheet.extra_count}</strong></Typography.Text>
+            </Space>
+            {stDetail.missing.length > 0 && (
+              <>
+                <Typography.Text type="danger" strong>盘亏清单（系统在库但未扫到）：</Typography.Text>
+                <div style={{ maxHeight: 160, overflowY: 'auto', marginBlock: 6 }}>
+                  {stDetail.missing.map((m) => (
+                    <div key={m.container_no} style={{ paddingBlock: 2 }}>
+                      <Tag color="red">盘亏</Tag>
+                      <Typography.Text code>{m.container_no}</Typography.Text>
+                      <Typography.Text type="secondary"> {m.material_name}</Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <Typography.Text type="secondary">扫码明细：</Typography.Text>
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              {stDetail.items.map((i) => (
+                <div key={i.id} style={{ paddingBlock: 2 }}>
+                  <Tag color={i.result === 'matched' ? 'green' : 'orange'}>
+                    {{ matched: '在库匹配', out_of_scope: '盘盈', not_found: '盘盈' }[i.result] ?? i.result}
+                  </Tag>
+                  <Typography.Text code>{i.container_no}</Typography.Text>
+                  <Typography.Text type="secondary"> {i.material_name ?? '-'}（{dayjs(i.created_at).format('HH:mm')}）</Typography.Text>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </Modal>
+
+      {/* 月度报表弹窗 */}
+      <Modal
+        title="📊 物料月度汇总"
+        open={mrOpen}
+        onCancel={() => setMrOpen(false)}
+        footer={null}
+        width={820}
+      >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <DatePicker
+            picker="month"
+            value={dayjs(mrMonth)}
+            allowClear={false}
+            onChange={(d) => { const m = d ? d.format('YYYY-MM') : dayjs().format('YYYY-MM'); setMrMonth(m); void loadMonthlyReport(m) }}
+          />
+          <Button icon={<DownloadOutlined />} onClick={onExportMonthly}>导出 Excel</Button>
+        </Space>
+        <Table
+          rowKey="material_code"
+          size="small"
+          dataSource={mrData}
+          pagination={false}
+          locale={{ emptyText: '该月暂无出入库记录' }}
+          columns={[
+            { title: '物料代码', dataIndex: 'material_code', width: 120 },
+            { title: '物料名称', dataIndex: 'material_name' },
+            { title: '入库', dataIndex: 'in_count', width: 80 },
+            { title: '出库', dataIndex: 'out_count', width: 80 },
+            { title: '退库', dataIndex: 'return_count', width: 80 },
+            { title: '状态流转', dataIndex: 'status_count', width: 90 },
+            { title: '当前可用', dataIndex: 'available', width: 90, render: (v: number) => <Typography.Text strong>{v}</Typography.Text> },
           ]}
         />
       </Modal>

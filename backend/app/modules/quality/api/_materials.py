@@ -19,14 +19,19 @@ from app.modules.quality.repository import (
     delete_supplier,
     get_material_by_code,
     get_material_container_by_no,
+    get_stocktake_sheet,
     get_supplier_by_code,
     list_container_movements,
     list_containers_by_nos,
+    list_in_stock_containers,
     list_material_containers,
     list_material_movements,
     list_materials,
+    list_stocktake_items,
+    list_stocktake_sheets,
     list_suppliers,
     material_consumption_trend,
+    material_monthly_report,
     material_stock_summary,
     material_today_stats,
     update_material,
@@ -45,6 +50,11 @@ from app.modules.quality.schemas import (
     MaterialOut,
     MaterialSummaryItem,
     MaterialUpdate,
+    MonthlyReportItem,
+    StocktakeCreate,
+    StocktakeItemOut,
+    StocktakeScanRequest,
+    StocktakeSheetOut,
     SupplierCreate,
     SupplierOut,
     SupplierUpdate,
@@ -467,3 +477,174 @@ async def delete_supplier_endpoint(
     if not await delete_supplier(db, supplier_id):
         raise HTTPException(status_code=404, detail="供应商不存在")
     return success_response(message="已删除")
+
+
+# ─── 库存盘点 ───
+
+
+@router.post("/material/stocktakes", summary="创建盘点单（范围可选物料，空=全部在库）", status_code=201)
+async def create_stocktake_endpoint(
+    payload: StocktakeCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    sheet = await material_container_service.create_stocktake(
+        db, payload.scope_material_code, payload.remark
+    )
+    return success_response(
+        data=StocktakeSheetOut.model_validate(sheet).model_dump(mode="json"),
+        message=f"盘点单 {sheet.sheet_no} 已创建（系统在库 {sheet.expected_count} 个容器）",
+        status_code=201,
+    )
+
+
+@router.get("/material/stocktakes", summary="盘点单列表")
+async def list_stocktakes_endpoint(
+    status: str | None = Query(default=None, description="in_progress/completed/void"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    sheets = await list_stocktake_sheets(db, status=status)
+    items = [StocktakeSheetOut.model_validate(s).model_dump(mode="json") for s in sheets]
+    return success_response(data=items)
+
+
+@router.post("/material/stocktakes/{sheet_id}/scan", summary="盘点扫码（按容器号去重分类）")
+async def scan_stocktake_endpoint(
+    sheet_id: uuid.UUID,
+    payload: StocktakeScanRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    item = await material_container_service.scan_stocktake(
+        db, sheet_id, payload.container_no.strip(), operator=user.id
+    )
+    return success_response(
+        data=StocktakeItemOut.model_validate(item).model_dump(mode="json"),
+        message={"matched": "已记录（在库匹配）", "out_of_scope": "已记录（系统有但不在库，计入盘盈）", "not_found": "已记录（系统不存在，计入盘盈）"}.get(item.result, "已记录"),
+    )
+
+
+@router.post("/material/stocktakes/{sheet_id}/finish", summary="结束盘点（计算盘亏/盘盈差异）")
+async def finish_stocktake_endpoint(
+    sheet_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    sheet = await material_container_service.finish_stocktake(db, sheet_id)
+    return success_response(
+        data=StocktakeSheetOut.model_validate(sheet).model_dump(mode="json"),
+        message=f"盘点完成：系统在库 {sheet.expected_count}，实扫 {sheet.scanned_count}，盘亏 {sheet.missing_count}，盘盈 {sheet.extra_count}",
+    )
+
+
+@router.get("/material/stocktakes/{sheet_id}", summary="盘点详情（含扫码明细）")
+async def stocktake_detail_endpoint(
+    sheet_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    sheet = await get_stocktake_sheet(db, sheet_id)
+    if sheet is None:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+    items = await list_stocktake_items(db, sheet_id)
+    # 盘亏明细 = 在库但未扫到
+    in_stock = {c.container_no: c for c in await list_in_stock_containers(db, sheet.scope_material_code)}
+    scanned = {i.container_no for i in items}
+    missing = [
+        {"container_no": no, "material_name": c.material_name, "material_code": c.material_code, "status": c.status}
+        for no, c in in_stock.items() if no not in scanned
+    ]
+    return success_response(data={
+        "sheet": StocktakeSheetOut.model_validate(sheet).model_dump(mode="json"),
+        "items": [StocktakeItemOut.model_validate(i).model_dump(mode="json") for i in items],
+        "missing": missing,
+    })
+
+
+@router.get("/material/stocktakes/{sheet_id}/export", summary="盘点差异清单导出 Excel")
+async def stocktake_export_endpoint(
+    sheet_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    sheet = await get_stocktake_sheet(db, sheet_id)
+    if sheet is None:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+    items = await list_stocktake_items(db, sheet_id)
+    in_stock = {c.container_no: c for c in await list_in_stock_containers(db, sheet.scope_material_code)}
+    scanned = {i.container_no for i in items}
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    ws.title = "盘点差异"
+    ws.append(["盘点单号", sheet.sheet_no, "状态", sheet.status])
+    ws.append(["系统在库", sheet.expected_count, "实扫", sheet.scanned_count, "盘亏", sheet.missing_count, "盘盈", sheet.extra_count])
+    ws.append([])
+    ws.append(["容器号", "物料名称", "物料代码", "分类", "扫描时状态"])
+    for i in items:
+        ws.append([i.container_no, i.material_name or "-", i.material_code or "-",
+                   {"matched": "在库匹配", "out_of_scope": "盘盈(系统不在库)", "not_found": "盘盈(系统不存在)"}.get(i.result, i.result),
+                   i.status_snapshot or "-"])
+    ws.append([])
+    ws.append(["盘亏清单（系统在库未扫到）"])
+    for no, c in in_stock.items():
+        if no not in scanned:
+            ws.append([no, c.material_name, c.material_code, "盘亏", c.status])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote(f"盘点差异-{sheet.sheet_no}.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="stocktake.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+# ─── 月度汇总报表 ───
+
+
+@router.get("/material/monthly-report", summary="月度汇总报表（按物料的当月出入库笔数与当前可用）")
+async def monthly_report_endpoint(
+    month: str = Query(..., description="YYYY-MM"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await material_monthly_report(db, month)
+    items = [MonthlyReportItem.model_validate(r).model_dump(mode="json") for r in rows]
+    return success_response(data=items)
+
+
+@router.get("/material/monthly-report/export", summary="月度汇总报表导出 Excel")
+async def monthly_report_export_endpoint(
+    month: str = Query(..., description="YYYY-MM"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    rows = await material_monthly_report(db, month)
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    ws.title = f"{month} 物料汇总"
+    ws.append(["物料代码", "物料名称", "入库", "出库", "退库", "状态流转", "当前可用"])
+    for r in rows:
+        ws.append([r["material_code"], r["material_name"], r["in_count"], r["out_count"],
+                   r["return_count"], r["status_count"], r["available"]])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote(f"物料月度汇总-{month}.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="monthly.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )

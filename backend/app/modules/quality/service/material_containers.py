@@ -11,12 +11,15 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
 from app.core.time import today as _today
 from app.modules.quality.models import (
     QualityMaterialContainer,
+    QualityStocktakeItem,
+    QualityStocktakeSheet,
 )
 from app.modules.quality.repository import (
     create_container_movement,
@@ -240,6 +243,98 @@ class MaterialContainerService:
                 })
         return result
 
+    @staticmethod
+    async def create_stocktake(
+        db: AsyncSession,
+        scope_material_code: str | None,
+        remark: str | None,
+    ) -> QualityStocktakeSheet:
+        """创建盘点单：盘点口径=在库待验+合格（实物在库）。"""
+        from app.modules.quality.repository import (
+            create_stocktake_sheet,
+            list_in_stock_containers,
+            max_stocktake_seq,
+        )
+
+        date_str = datetime.now().strftime("%Y%m%d")
+        prefix = f"ST-{date_str}-"
+        seq = await max_stocktake_seq(db, prefix)
+        expected = await list_in_stock_containers(db, scope_material_code)
+        sheet = await create_stocktake_sheet(db, {
+            "sheet_no": f"{prefix}{seq + 1:04d}",
+            "scope_material_code": scope_material_code,
+            "status": "in_progress",
+            "remark": remark,
+            "expected_count": len(expected),
+        })
+        return sheet
+
+    @staticmethod
+    async def scan_stocktake(
+        db: AsyncSession,
+        sheet_id: uuid.UUID,
+        container_no: str,
+        operator: uuid.UUID | None = None,
+    ) -> QualityStocktakeItem:
+        """盘点扫码：分类记录（在库匹配/系统有但不在库/系统不存在），重复扫描 409。"""
+        from app.modules.quality.repository import (
+            create_stocktake_item,
+            get_material_container_by_no,
+            get_stocktake_item,
+            get_stocktake_sheet,
+        )
+
+        sheet = await get_stocktake_sheet(db, sheet_id)
+        if sheet is None:
+            raise AppException(status_code=404, detail="盘点单不存在")
+        if sheet.status != "in_progress":
+            raise AppException(status_code=400, detail=f"盘点单状态为 {sheet.status}，不可扫码")
+        if await get_stocktake_item(db, sheet_id, container_no):
+            raise AppException(status_code=409, detail=f"容器 {container_no} 已盘点过")
+        container = await get_material_container_by_no(db, container_no)
+        if container is None:
+            result, snapshot, mcode, mname = "not_found", None, None, None
+        elif container.status in ("in_warehouse", "qualified"):
+            result, snapshot, mcode, mname = "matched", container.status, container.material_code, container.material_name
+        else:
+            result, snapshot, mcode, mname = "out_of_scope", container.status, container.material_code, container.material_name
+        item = await create_stocktake_item(db, {
+            "sheet_id": sheet_id,
+            "container_no": container_no,
+            "result": result,
+            "status_snapshot": snapshot,
+            "material_code": mcode,
+            "material_name": mname,
+            "scanned_by": operator,
+        })
+        sheet.scanned_count += 1
+        await db.flush()
+        return item
+
+    @staticmethod
+    async def finish_stocktake(db: AsyncSession, sheet_id: uuid.UUID) -> QualityStocktakeSheet:
+        """结束盘点：计算盘亏（在库未扫到）与盘盈（扫到但不在库/不存在）。"""
+        from app.modules.quality.repository import (
+            get_stocktake_sheet,
+            list_in_stock_containers,
+            list_stocktake_items,
+        )
+
+        sheet = await get_stocktake_sheet(db, sheet_id)
+        if sheet is None:
+            raise AppException(status_code=404, detail="盘点单不存在")
+        if sheet.status != "in_progress":
+            raise AppException(status_code=400, detail=f"盘点单状态为 {sheet.status}，不可结束")
+        expected = {c.container_no for c in await list_in_stock_containers(db, sheet.scope_material_code)}
+        items = await list_stocktake_items(db, sheet_id)
+        scanned = {i.container_no for i in items}
+        sheet.expected_count = len(expected)
+        sheet.missing_count = len(expected - scanned)
+        sheet.extra_count = sum(1 for i in items if i.result in ("not_found", "out_of_scope"))
+        sheet.status = "completed"
+        await db.flush()
+        stmt = select(QualityStocktakeSheet).where(QualityStocktakeSheet.id == sheet_id)
+        return (await db.execute(stmt)).scalar_one()
     @staticmethod
     async def build_label_pdf(
         db: AsyncSession, container_nos: list[str]

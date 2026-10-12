@@ -516,3 +516,82 @@ async def test_supplier_expired_alert(db_session):
     })
     alerts = await supplier_qual_alerts(db_session)
     assert any(a["code"] == code and a["expired"] for a in alerts)
+
+
+async def test_stocktake_full_flow(db_session):
+    from app.modules.quality.repository import (
+        list_stocktake_items,
+    )
+
+    code = f"MAT-{_rand_code()}"
+    req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="盘点测试物料",
+        inbound_batch_no="IN-ST", expiry_date=None, count=3,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    # 1 瓶入库（在库），1 瓶入库后领出（不在库），1 瓶保持已赋码（不在库）
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.move_container(db_session, containers[1].container_no, ContainerMoveRequest(op_type="in"))
+    await material_container_service.move_container(db_session, containers[1].container_no, ContainerMoveRequest(op_type="out"))
+
+    sheet = await material_container_service.create_stocktake(db_session, code, "月末盘点")  # 限定范围防共享库真实数据干扰
+    assert sheet.expected_count == 1  # 仅 1 瓶在库
+
+    # 扫到在库瓶 → matched
+    await material_container_service.scan_stocktake(db_session, sheet.id, containers[0].container_no)
+    # 扫到已领出瓶 → out_of_scope（盘盈）
+    await material_container_service.scan_stocktake(db_session, sheet.id, containers[1].container_no)
+    # 扫到不存在 → not_found（盘盈）
+    await material_container_service.scan_stocktake(db_session, sheet.id, f"MC-{_rand_code()}-20261010-0001")
+    # 重复扫描 → 409
+    from app.core.exceptions import AppException
+    with pytest.raises(AppException) as exc:
+        await material_container_service.scan_stocktake(db_session, sheet.id, containers[0].container_no)
+    assert exc.value.status_code == 409
+
+    finished = await material_container_service.finish_stocktake(db_session, sheet.id)
+    assert finished.status == "completed"
+    assert finished.scanned_count == 3
+    assert finished.extra_count == 2
+    assert finished.missing_count == 0  # 唯一在库瓶已扫到
+    items = await list_stocktake_items(db_session, sheet.id)
+    assert len(items) == 3
+
+
+async def test_stocktake_missing_detection(db_session):
+    code = f"MAT-{_rand_code()}"
+    req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="盘亏测试物料",
+        inbound_batch_no="IN-MISS", expiry_date=None, count=2,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    for c in containers:
+        await material_container_service.move_container(db_session, c.container_no, ContainerMoveRequest(op_type="in"))
+    sheet = await material_container_service.create_stocktake(db_session, code, "抽查")
+    assert sheet.expected_count == 2
+    # 只扫到 1 瓶
+    await material_container_service.scan_stocktake(db_session, sheet.id, containers[0].container_no)
+    finished = await material_container_service.finish_stocktake(db_session, sheet.id)
+    assert finished.missing_count == 1
+
+
+async def test_monthly_report(db_session):
+    from app.core.time import today as _today
+    from app.modules.quality.repository import material_monthly_report
+
+    month = _today().strftime("%Y-%m")
+    code = f"MAT-{_rand_code()}"
+    req = MaterialContainerGenerateRequest(
+        material_code=code, material_name="月度报表物料",
+        inbound_batch_no="IN-MR", expiry_date=None, count=1,
+    )
+    containers = await material_container_service.generate_containers(db_session, req)
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="in"))
+    before = await material_monthly_report(db_session, month)
+    before_in = next((r["in_count"] for r in before if r["material_code"] == code), 0)
+    before_out = next((r["out_count"] for r in before if r["material_code"] == code), 0)
+    await material_container_service.move_container(db_session, containers[0].container_no, ContainerMoveRequest(op_type="out"))
+    after = await material_monthly_report(db_session, month)
+    item = next(r for r in after if r["material_code"] == code)
+    assert item["in_count"] == before_in  # 入库发生在 before 之前
+    assert item["out_count"] == before_out + 1

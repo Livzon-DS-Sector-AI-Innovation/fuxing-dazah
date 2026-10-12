@@ -1,12 +1,13 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { Input, Space, Button, App, Segmented, Tag, Typography, Card, Statistic } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { Input, Space, Button, App, Segmented, Tag, Typography, Card, Statistic, Select } from 'antd'
 import { ScanOutlined, ClearOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
-import { moveMaterialContainer } from '@/actions/quality'
+import { moveMaterialContainer, fetchStocktakes, scanStocktake, finishStocktake } from '@/actions/quality'
 import type { InputRef } from 'antd'
+import type { StocktakeSheet } from '@/types/quality'
 
 type ScanResult = { no: string; ok: boolean; detail: string; at: string }
 
@@ -14,13 +15,27 @@ export default function ScanStation() {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:material:manage')
-  const [scanMode, setScanMode] = useState<'auto' | 'in' | 'out'>('auto')
+  const [scanMode, setScanMode] = useState<'auto' | 'in' | 'out' | 'stocktake'>('auto')
   const [scanValue, setScanValue] = useState('')
   const [scanBusy, setScanBusy] = useState(false)
   const [results, setResults] = useState<ScanResult[]>([])
   const [okCount, setOkCount] = useState(0)
   const [failCount, setFailCount] = useState(0)
   const scanInputRef = useRef<InputRef>(null)
+  const [stSheets, setStSheets] = useState<StocktakeSheet[]>([])
+  const [stActive, setStActive] = useState<string | undefined>()
+  const [stStats, setStStats] = useState<{ scanned: number; extra: number }>({ scanned: 0, extra: 0 })
+
+  const loadStocktakes = async () => {
+    try {
+      const res = await fetchStocktakes('in_progress')
+      setStSheets(res.data)
+    } catch {
+      // 静默
+    }
+  }
+
+  useEffect(() => { if (scanMode === 'stocktake') { (async () => { await loadStocktakes() })() } }, [scanMode])
 
   const handleScan = async (raw: string) => {
     // 兼容富文本二维码：从扫描内容中提取容器号（首行 MC-xxx）
@@ -35,6 +50,31 @@ export default function ScanStation() {
       return
     }
     setScanBusy(true)
+    if (scanMode === 'stocktake') {
+      if (!stActive) {
+        message.warning('请先选择进行中的盘点单')
+        setScanBusy(false)
+        setScanValue('')
+        scanInputRef.current?.focus()
+        return
+      }
+      try {
+        const res = await scanStocktake(stActive, no)
+        setStStats((p) => ({ scanned: p.scanned + 1, extra: p.extra + (res.data.result !== 'matched' ? 1 : 0) }))
+        setResults((prev) => [{ no, ok: true, detail: res.message, at: dayjs().format('HH:mm:ss') }, ...prev].slice(0, 50))
+        message.success(`✅ ${no} ${res.message}`)
+      } catch (err: unknown) {
+        const detail = (err instanceof Error ? err.message : String(err)) || '盘点扫码失败'
+        setFailCount((n) => n + 1)
+        setResults((prev) => [{ no, ok: false, detail, at: dayjs().format('HH:mm:ss') }, ...prev].slice(0, 50))
+        message.error(`❌ ${no}：${detail}`)
+      } finally {
+        setScanBusy(false)
+        setScanValue('')
+        scanInputRef.current?.focus()
+      }
+      return
+    }
     try {
       const res = await moveMaterialContainer(no, scanMode)
       setOkCount((n) => n + 1)
@@ -58,6 +98,18 @@ export default function ScanStation() {
     }
   }
 
+  const onFinishStocktake = async () => {
+    if (!stActive) return
+    try {
+      const res = await finishStocktake(stActive)
+      message.success(res.message)
+      setStStats({ scanned: 0, extra: 0 })
+      loadStocktakes()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '结束盘点失败')
+    }
+  }
+
   if (!canManage) {
     return <Typography.Text type="secondary">无操作权限（需 quality:material:manage）</Typography.Text>
   }
@@ -74,8 +126,22 @@ export default function ScanStation() {
                 { label: '🔁 自动判定', value: 'auto' },
                 { label: '📥 入库登记', value: 'in' },
                 { label: '📤 领料出库', value: 'out' },
+                { label: '📋 盘点', value: 'stocktake' },
               ]}
             />
+            {scanMode === 'stocktake' && (
+              <Space wrap>
+                <Select
+                  placeholder="选择进行中的盘点单"
+                  style={{ width: 240 }}
+                  value={stActive}
+                  onChange={(v) => { setStActive(v); setStStats({ scanned: 0, extra: 0 }); setResults([]) }}
+                  options={stSheets.map((sh) => ({ value: sh.id, label: `${sh.sheet_no}（在库 ${sh.expected_count}）` }))}
+                />
+                <Button danger onClick={onFinishStocktake} disabled={!stActive}>结束盘点</Button>
+                <Typography.Text type="secondary">已扫 {stStats.scanned}（其中异常 {stStats.extra}）</Typography.Text>
+              </Space>
+            )}
             <Typography.Text type="secondary">
               {scanMode === 'auto'
                 ? '自动：已赋码→入库；在库/合格→出库；已领出/已作废→报错'

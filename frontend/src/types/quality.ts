@@ -531,3 +531,39 @@ export interface SupplierItem {
   remark: string | null
   created_at: string
 }
+
+
+// ─── 盘点与月度报表 ───
+
+export interface StocktakeSheet {
+  id: string
+  sheet_no: string
+  scope_material_code: string | null
+  status: string
+  remark: string | null
+  expected_count: number
+  scanned_count: number
+  missing_count: number
+  extra_count: number
+  created_at: string
+}
+
+export interface StocktakeItem {
+  id: string
+  container_no: string
+  result: string
+  status_snapshot: string | null
+  material_code: string | null
+  material_name: string | null
+  created_at: string
+}
+
+export interface MonthlyReportItem {
+  material_code: string
+  material_name: string
+  in_count: number
+  out_count: number
+  return_count: number
+  status_count: number
+  available: number
+}

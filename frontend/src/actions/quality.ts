@@ -29,6 +29,9 @@ import type {
   MaterialMovementItem,
   PurchaseSuggestion,
   SupplierItem,
+  StocktakeSheet,
+  StocktakeItem,
+  MonthlyReportItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -1175,4 +1178,87 @@ export async function deleteSupplier(id: string): Promise<{ message: string }> {
   })
   if (!res.ok) throw new Error('删除供应商失败')
   return res.json()
+}
+
+
+// ─── 盘点与月度报表 ───
+
+export async function createStocktake(input: { scope_material_code?: string; remark?: string }): Promise<{ message: string; data: StocktakeSheet }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/stocktakes`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '创建盘点单失败')
+  }
+  return res.json()
+}
+
+export async function fetchStocktakes(status?: string): Promise<{ data: StocktakeSheet[] }> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/stocktakes${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取盘点单失败')
+  return res.json()
+}
+
+export async function scanStocktake(sheetId: string, containerNo: string): Promise<{ message: string; data: StocktakeItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/stocktakes/${sheetId}/scan`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ container_no: containerNo }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '盘点扫码失败')
+  }
+  return res.json()
+}
+
+export async function finishStocktake(sheetId: string): Promise<{ message: string; data: StocktakeSheet }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/stocktakes/${sheetId}/finish`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '结束盘点失败')
+  }
+  return res.json()
+}
+
+export async function fetchStocktakeDetail(sheetId: string): Promise<{
+  data: { sheet: StocktakeSheet; items: StocktakeItem[]; missing: { container_no: string; material_name: string; material_code: string; status: string }[] }
+}> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/stocktakes/${sheetId}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取盘点详情失败')
+  return res.json()
+}
+
+export async function exportStocktake(sheetId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/stocktakes/${sheetId}/export`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('盘点导出失败')
+  return res.blob()
+}
+
+export async function fetchMonthlyReport(month: string): Promise<{ data: MonthlyReportItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/monthly-report?month=${encodeURIComponent(month)}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取月度报表失败')
+  return res.json()
+}
+
+export async function exportMonthlyReport(month: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/monthly-report/export?month=${encodeURIComponent(month)}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('月度报表导出失败')
+  return res.blob()
 }

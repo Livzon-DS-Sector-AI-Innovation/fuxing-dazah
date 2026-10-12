@@ -204,3 +204,53 @@ class SupplierOut(BaseModel):
     qual_expiry_date: str | None
     remark: str | None
     created_at: datetime
+
+
+class StocktakeCreate(BaseModel):
+    """创建盘点单：可选限定物料范围（空=全部物料在库容器）。"""
+
+    scope_material_code: str | None = Field(default=None, max_length=100)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class StocktakeScanRequest(BaseModel):
+    container_no: str = Field(max_length=100)
+
+
+class StocktakeSheetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    sheet_no: str
+    scope_material_code: str | None
+    status: str
+    remark: str | None
+    expected_count: int
+    scanned_count: int
+    missing_count: int
+    extra_count: int
+    created_at: datetime
+
+
+class StocktakeItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    container_no: str
+    result: str
+    status_snapshot: str | None
+    material_code: str | None
+    material_name: str | None
+    created_at: datetime
+
+
+class MonthlyReportItem(BaseModel):
+    """月度汇总：按物料的当月出入库/退库/状态流转笔数与当前可用。"""
+
+    material_code: str
+    material_name: str
+    in_count: int
+    out_count: int
+    return_count: int
+    status_count: int
+    available: int
