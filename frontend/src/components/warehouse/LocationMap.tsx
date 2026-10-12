@@ -4,10 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Drawer, Segmented, Spin, Table } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { PageHeader } from './PageHeader'
-import { SectionCard } from './ui/SectionCard'
-import { StatusTag } from './ui/StatusTag'
-import type { Tone } from './ui/tokens'
+import { PageHeader, SectionCard, StatusTag, type Tone } from '@/components/ui-kit'
 
 const BASE = '/api/v1/warehouse'
 

@@ -37,7 +37,7 @@ import {
 import { changeStockStatus } from '@/actions/warehouse'
 import { expiryTone } from '@/lib/warehouse-expiry'
 import { QueryFilter } from './QueryFilter'
-import { StatusTag } from './ui/StatusTag'
+import { StatusTag } from '@/components/ui-kit'
 
 const DIRECTION_COLOR: Record<string, string> = {
   inbound: 'green',

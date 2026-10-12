@@ -7,8 +7,11 @@ describe('charts 空数据态', () => {
     render(
       <TrendAreaChart
         dates={['09-01', '09-02']}
-        inbound={[0, 0]}
-        outbound={[0, 0]}
+        seriesA={[0, 0]}
+        seriesB={[0, 0]}
+        labelA="入库"
+        labelB="出库"
+        emptyText="近期暂无出入库"
       />,
     )
     expect(screen.getByText('近期暂无出入库')).toBeInTheDocument()

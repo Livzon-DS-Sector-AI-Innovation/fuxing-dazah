@@ -6,11 +6,7 @@ import { App, Button, DatePicker, Input, Modal, Select, Space, Table, Typography
 import type { TableColumnsType } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import { Download, Sparkles } from 'lucide-react'
-import { PageHeader } from '../PageHeader'
-import { SectionCard } from '../ui/SectionCard'
-import { StatCard } from '../ui/StatCard'
-import { RankBarChart } from '../ui/charts'
-import { TONE_HEX } from '../ui/tokens'
+import { PageHeader, RankBarChart, SectionCard, StatCard, TONE_HEX } from '@/components/ui-kit'
 
 const BASE = '/api/v1/warehouse/reports'
 

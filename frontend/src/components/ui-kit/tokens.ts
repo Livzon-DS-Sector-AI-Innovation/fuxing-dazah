@@ -1,5 +1,5 @@
 /**
- * 仓储模块 UI 语义 tone（V2.0 改版底座）。
+ * 仓库级 UI 语义 tone（ui-kit，源自仓储 V2.0 改版底座）。
  * 颜色与 globals.css 的 --wh-* token 一一对应：组件里用 TS 常量取色，
  * 需要工具类时用 text-wh-danger / bg-wh-danger-bg 等 Tailwind 映射。
  */

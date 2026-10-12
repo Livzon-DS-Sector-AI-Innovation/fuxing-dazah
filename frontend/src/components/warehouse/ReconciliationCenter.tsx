@@ -6,11 +6,7 @@ import { App as AntdApp, Button, Drawer, Input, Space, Table, Typography } from 
 import type { TableColumnsType } from 'antd'
 import { PlayCircle } from 'lucide-react'
 import dayjs from 'dayjs'
-import { PageHeader } from './PageHeader'
-import { EmptyGuide } from './ui/EmptyGuide'
-import { StatCard } from './ui/StatCard'
-import { StatusTag } from './ui/StatusTag'
-import type { Tone } from './ui/tokens'
+import { EmptyGuide, PageHeader, StatCard, StatusTag, type Tone } from '@/components/ui-kit'
 
 const BASE = '/api/v1/warehouse/reconciliation'
 

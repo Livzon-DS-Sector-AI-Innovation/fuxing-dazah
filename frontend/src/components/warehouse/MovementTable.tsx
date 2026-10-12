@@ -34,9 +34,7 @@ import {
   fetchMovementsClient,
 } from '@/lib/api/warehouse'
 import { createMovement, deleteMovement } from '@/actions/warehouse'
-import { PageHeader } from './PageHeader'
-import { StatusTag } from './ui/StatusTag'
-import type { Tone } from './ui/tokens'
+import { PageHeader, StatusTag, type Tone } from '@/components/ui-kit'
 
 const DIRECTION_TONE: Record<MovementDirection, Tone> = {
   inbound: 'ok',

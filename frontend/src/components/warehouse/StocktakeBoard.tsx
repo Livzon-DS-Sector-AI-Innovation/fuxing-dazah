@@ -33,9 +33,7 @@ import {
   updateStocktake,
 } from '@/actions/warehouse'
 import type { LocationRecord } from '@/types/warehouse'
-import { PageHeader } from './PageHeader'
-import { EmptyGuide } from './ui/EmptyGuide'
-import { StatusTag } from './ui/StatusTag'
+import { EmptyGuide, PageHeader, StatusTag } from '@/components/ui-kit'
 
 export function StocktakeBoard() {
   const { message } = App.useApp()

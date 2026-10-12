@@ -25,11 +25,7 @@ import type {
   ReplenishmentSuggestionItem,
 } from '@/types/warehouse'
 import { DataTable } from '../DataTable'
-import { PageHeader } from '../PageHeader'
-import { EmptyGuide } from '../ui/EmptyGuide'
-import { StatCard } from '../ui/StatCard'
-import { StatusTag } from '../ui/StatusTag'
-import type { Tone } from '../ui/tokens'
+import { EmptyGuide, PageHeader, StatCard, StatusTag, type Tone } from '@/components/ui-kit'
 
 const RULE_LABEL: Record<string, string> = {
   low_stock: '低库存',

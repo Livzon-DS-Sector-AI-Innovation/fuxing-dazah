@@ -35,10 +35,7 @@ import {
   generatePlanMovementAction,
   startMovementPlan,
 } from '@/actions/warehouse'
-import { PageHeader } from './PageHeader'
-import { EmptyGuide } from './ui/EmptyGuide'
-import { StatusTag } from './ui/StatusTag'
-import type { Tone } from './ui/tokens'
+import { EmptyGuide, PageHeader, StatusTag, type Tone } from '@/components/ui-kit'
 
 const STATUS_META: Record<PlanStatus, { label: string; tone: Tone }> = {
   planned: { label: '待执行', tone: 'warn' },

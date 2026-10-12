@@ -5,8 +5,7 @@ import { Spin } from 'antd'
 import { AlertTriangle, Boxes, Inbox, MapPin, Package, Send } from 'lucide-react'
 import type { WarehouseOverview } from '@/types/warehouse'
 import { getWarehouseOverview } from '@/actions/warehouse'
-import { StatCard } from './ui/StatCard'
-import { StatusTag } from './ui/StatusTag'
+import { StatCard, StatusTag } from '@/components/ui-kit'
 
 /** 库存管理概览：StatCard 行 + 低库存警示条（异常先行） */
 export function WarehouseOverviewCards() {

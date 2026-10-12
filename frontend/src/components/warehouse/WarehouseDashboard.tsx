@@ -28,13 +28,21 @@ import {
   type MovementTrendPoint,
   type StockDistribution,
 } from '@/types/warehouse'
-import { PageHeader } from './PageHeader'
-import { SectionCard } from './ui/SectionCard'
-import { StatCard, StatDelta } from './ui/StatCard'
-import { StatusTag } from './ui/StatusTag'
-import { TONE_HEX, type Tone } from './ui/tokens'
 import { Button } from 'antd'
-import { DonutChart, RankBarChart, TrendAreaChart } from './ui/charts'
+import {
+  DonutChart,
+  FeedGroup,
+  FeedRow,
+  PageHeader,
+  RankBarChart,
+  SectionCard,
+  StatCard,
+  StatDelta,
+  StatusTag,
+  TONE_HEX,
+  TrendAreaChart,
+  type Tone,
+} from '@/components/ui-kit'
 
 const LOCATION_TYPE_LABEL: Record<string, string> = {
   normal: '常温',
@@ -166,45 +174,6 @@ function KpiRow({ summary, loading }: { summary: DashboardSummary | undefined; l
         />
       </Col>
     </Row>
-  )
-}
-
-/** 右栏可点击行项（名称+右侧数据，hover 强调）；tagLabel 缺省时按 入/出/调 映射 */
-function FeedRow({
-  title,
-  right,
-  tag,
-  tagLabel,
-  onClick,
-}: {
-  title: string
-  right: string
-  tag?: Tone
-  tagLabel?: string
-  onClick?: () => void
-}) {
-  const label = tagLabel ?? (tag === 'ok' ? '入' : tag === 'danger' ? '出' : '调')
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex w-full cursor-pointer items-center gap-2 rounded-lg border-0 bg-transparent px-2 py-2 text-left transition-colors hover:bg-[var(--color-surface)]"
-    >
-      {tag && <StatusTag tone={tag} label={label} />}
-      <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-charcoal)]">{title}</span>
-      <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-steel)]">{right}</span>
-    </button>
-  )
-}
-
-function FeedGroup({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1 px-2 text-[12px] font-medium uppercase tracking-wide text-[var(--color-stone)]">
-        {title}
-      </div>
-      <div className="-mx-1 flex flex-col">{children}</div>
-    </div>
   )
 }
 
@@ -345,9 +314,14 @@ export function WarehouseDashboard() {
             {trend ? (
               <TrendAreaChart
                 dates={trend.map(p => p.date.slice(5))}
-                inbound={trend.map(p => p.inbound)}
-                outbound={trend.map(p => p.outbound)}
+                seriesA={trend.map(p => p.inbound)}
+                seriesB={trend.map(p => p.outbound)}
+                labelA="入库"
+                labelB="出库"
+                toneA="ok"
+                toneB="danger"
                 height="100%"
+                emptyText="近期暂无出入库"
               />
             ) : (
               <Spin className="block w-full text-center" />

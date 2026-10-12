@@ -6,13 +6,16 @@ import type { CSSProperties } from 'react'
 import { EmptyGuide } from './EmptyGuide'
 
 /**
- * 仓储统一 echarts 主题与图表封装（UI 底座）。
- * 主题一次注册，全部仓储图表走 'warehouse' 主题：配色对齐全局 token、
+ * 仓库级统一 echarts 主题与图表封装（ui-kit）。
+ * 主题一次注册，全部套件图表走 'warehouse' 主题（历史主题名）：配色对齐全局 token、
  * 弱化网格、渐变面积、空数据渲染引导空态而非裸坐标轴。
  */
 
 // canvas 无法读 CSS 变量，具体色值取 tokens.ts 的 TONE_HEX（与 globals.css --wh-* 同源）
 import { TONE_HEX } from './tokens'
+
+/** 双序列图可用色 tone（TONE_HEX 的键） */
+export type ChartTone = keyof typeof TONE_HEX
 
 const WH = {
   primary: TONE_HEX.primary,
@@ -77,23 +80,40 @@ function ChartEmpty({ height, text }: { height: number | string; text: string })
   )
 }
 
-/** 出入库趋势双系列面积图；全零数据时显示空态引导而非 0-1 裸轴 */
+/** #rrggbb → rgba(...)（渐变面积透明度用，canvas 场景无法读 CSS 变量） */
+function hexRgba(hex: string, alpha: number): string {
+  const n = Number.parseInt(hex.slice(1), 16)
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+/** 双序列趋势面积图（A/B 各配标签与语义色）；全零数据时显示空态引导而非 0-1 裸轴 */
 export function TrendAreaChart({
   dates,
-  inbound,
-  outbound,
+  seriesA,
+  seriesB,
+  labelA,
+  labelB,
+  toneA = 'ok',
+  toneB = 'danger',
   height = 260,
-  emptyText = '近期暂无出入库',
+  emptyText = '近期暂无数据',
 }: {
   dates: string[]
-  inbound: number[]
-  outbound: number[]
+  seriesA: number[]
+  seriesB: number[]
+  labelA: string
+  labelB: string
+  toneA?: ChartTone
+  toneB?: ChartTone
   /** 像素高度，或 '100%' 让图表随容器（flex-1 卡片体）自适应 */
   height?: number | string
   emptyText?: string
 }) {
   ensureWarehouseTheme()
-  if (!hasData([inbound, outbound])) return <ChartEmpty height={height} text={emptyText} />
+  if (!hasData([seriesA, seriesB])) return <ChartEmpty height={height} text={emptyText} />
   const areaStyle = (from: string, to: string) => ({
     opacity: 0.9,
     color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -101,28 +121,30 @@ export function TrendAreaChart({
       { offset: 1, color: to },
     ]),
   })
+  const colorA = TONE_HEX[toneA]
+  const colorB = TONE_HEX[toneB]
   const option = {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['入库', '出库'], right: 8, top: 0 },
+    legend: { data: [labelA, labelB], right: 8, top: 0 },
     grid: { left: 44, right: 16, top: 32, bottom: 28 },
     xAxis: { type: 'category', boundaryGap: false, data: dates },
     yAxis: { type: 'value' },
     series: [
       {
-        name: '入库',
+        name: labelA,
         type: 'line',
-        data: inbound,
-        lineStyle: { color: WH.ok },
-        itemStyle: { color: WH.ok },
-        areaStyle: areaStyle('rgba(26,174,57,0.22)', 'rgba(26,174,57,0.02)'),
+        data: seriesA,
+        lineStyle: { color: colorA },
+        itemStyle: { color: colorA },
+        areaStyle: areaStyle(hexRgba(colorA, 0.22), hexRgba(colorA, 0.02)),
       },
       {
-        name: '出库',
+        name: labelB,
         type: 'line',
-        data: outbound,
-        lineStyle: { color: WH.danger },
-        itemStyle: { color: WH.danger },
-        areaStyle: areaStyle('rgba(224,49,49,0.18)', 'rgba(224,49,49,0.02)'),
+        data: seriesB,
+        lineStyle: { color: colorB },
+        itemStyle: { color: colorB },
+        areaStyle: areaStyle(hexRgba(colorB, 0.18), hexRgba(colorB, 0.02)),
       },
     ],
   }

@@ -23,7 +23,7 @@ import {
   type WebRecognizeResult,
 } from '@/lib/api/warehouse-quick-register-actions'
 import { uploadReceiptImage } from '@/lib/api/warehouse-quick-register'
-import { PageHeader } from './PageHeader'
+import { PageHeader } from '@/components/ui-kit'
 
 type FieldValue = { value?: string | number | null; confidence?: number | null }
 type RowItem = Record<string, string> & { key?: string }
