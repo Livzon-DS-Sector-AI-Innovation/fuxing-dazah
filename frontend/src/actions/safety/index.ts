@@ -167,36 +167,7 @@ export async function getHazards(params: HazardReportQueryParams = {}) {
 
 // ============ Contractor Actions ============
 
-export async function updateContractor(id: string, data: Partial<ContractorFormData>) {
-  const response = await fetchApi<Contractor>(`/safety/contractors/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/contractor')
-  return response
-}
-
-export async function updateWorkRecord(
-  contractorId: string, recordId: string, data: Partial<ContractorWorkRecordFormData>
-) {
-  const response = await fetchApi<ContractorWorkRecord>(
-    `/safety/contractors/${contractorId}/work-records/${recordId}`,
-    { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/contractor')
-  return response
-}
-
 // ============ SafetyTraining Actions ============
-
-export async function updateTraining(id: string, data: Partial<SafetyTrainingFormData>) {
-  const response = await fetchApi<SafetyTraining>(`/safety/trainings/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/training')
-  return response
-}
 
 // ============ TrainingRecord Actions ============
 
@@ -348,47 +319,11 @@ export async function getSafetyEnums() {
 
 // ============ OperationRegulation Actions ============
 
-export async function updateRegulation(id: string, data: Partial<OperationRegulationFormData>) {
-  const response = await fetchApi<OperationRegulation>(`/safety/regulations/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/regulation')
-  return response
-}
-
 // ============ SOP Generator Actions ============
-
-export async function retryAiReview(regulationId: string) {
-  const response = await fetchApi<{ regulation_id: string; ai_review_status: string }>(
-    `/safety/regulations/${regulationId}/ai-review`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/regulation')
-  return response
-}
 
 // ============ RegulationRevision Actions ============
 
-export async function updateRevision(id: string, data: Partial<RegulationRevision>) {
-  const response = await fetchApi<RegulationRevision>(`/safety/revisions/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/regulation-revision')
-  return response
-}
-
 // ============ SpecialOperationPersonnel Actions ============
-
-export async function updatePersonnel(id: string, data: Partial<SpecialOperationPersonnelFormData>) {
-  const response = await fetchApi<SpecialOperationPersonnel>(
-    `/safety/special-operation-personnel/${id}`,
-    { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/special-ops-personnel')
-  return response
-}
 
 export async function deletePersonnel(id: string) {
   const response = await fetchApi<null>(`/safety/special-operation-personnel/${id}`, {
@@ -399,15 +334,6 @@ export async function deletePersonnel(id: string) {
 }
 
 // ============ SpecialOperationPermit Actions ============
-
-export async function updatePermit(id: string, data: Partial<SpecialOperationPermitFormData>) {
-  const response = await fetchApi<SpecialOperationPermit>(
-    `/safety/special-operation-permits/${id}`,
-    { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/special-ops-permits')
-  return response
-}
 
 // ============ Safety Knowledge Article Actions ============
 
@@ -1610,15 +1536,6 @@ export async function exportKeyRiskOpsReports(filters: Record<string, unknown>):
 
 
 // ============ SafetyCheck Actions（安全检查） ============
-
-export async function updateCheck(id: string, data: Partial<SafetyCheckFormData>) {
-  const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/check')
-  return response
-}
 
 export async function submitCheck(id: string) {
   const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}/submit`, {

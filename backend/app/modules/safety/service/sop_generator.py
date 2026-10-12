@@ -257,7 +257,7 @@ class SopGeneratorService:
         elif isinstance(meta, dict):
             meta = dict(meta)
 
-        # 6.5. 自动 AI 审核：由 API handler 在 db.commit() 之后触发（详见 api/regulations.py）。
+        # 6.5. 自动 AI 审核：由调用方（bot 工具/生成流程）在 db.commit() 之后触发（Web API 已退役）。
         #      原因：此处事务尚未提交，后台独立 session 按 READ COMMITTED 读不到未提交行，
         #      若在此 create_task 会导致新记录卡 pending 永不审核。
         if draft_is_tmp:

@@ -8,7 +8,7 @@ from app.modules.safety.models import (
 )
 
 
-class DailyRiskReportService:
+class HazardRiskOptionService:
     """危险源风险选项查询服务"""
 
     def __init__(self, session: AsyncSession):

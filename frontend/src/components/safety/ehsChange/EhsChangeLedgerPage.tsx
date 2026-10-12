@@ -26,7 +26,7 @@ import { CARD_STYLE, EhsChangeDetail, GradePill, KpiCard, StatusPill, AiConclusi
 
 const { Title, Text } = Typography
 
-const EMPTY_APPLY_STATS = { total: 0, status: {}, ai: { 审核通过: 0, 需补充完善: 0, 审核不通过: 0 } } as { total: number; status: Record<string, number>; ai: Record<string, number> }
+const LEDGER_STATS = { total: 0, status: {}, ai: { 审核通过: 0, 需补充完善: 0, 审核不通过: 0 } } as { total: number; status: Record<string, number>; ai: Record<string, number> }
 
 export function EhsChangeLedgerPage() {
   const routerSearch = useSearchParams()
@@ -36,7 +36,7 @@ export function EhsChangeLedgerPage() {
     change_type: undefined as string | undefined,
     change_grade: undefined as string | undefined,
     change_duration: undefined as string | undefined,
-    keyword: (routerSearch.get('keyword') as string | undefined) ?? undefined,
+    keyword: routerSearch.get('keyword') ?? undefined,
     ai_review_conclusion: undefined as string | undefined,
   })
   const [pagination, setPagination] = useState({ page: 1, page_size: 20 })
@@ -59,7 +59,7 @@ export function EhsChangeLedgerPage() {
     queryKey: ['ehs-change-stats', 'approval'],
     queryFn: () => fetchEhsChangeStats('approval'),
   })
-  const stats = statsQuery.data ?? EMPTY_APPLY_STATS
+  const stats = statsQuery.data ?? LEDGER_STATS
 
   // 列表 query（服务端筛选）
   const { data: listData, isLoading } = useQuery({
@@ -261,7 +261,7 @@ export function EhsChangeLedgerPage() {
         width={820}
       >
         {selectedChange && (
-          <EhsChangeDetail change={selectedChange} table="approval" />
+          <EhsChangeDetail change={selectedChange} />
         )}
       </Drawer>
     </div>

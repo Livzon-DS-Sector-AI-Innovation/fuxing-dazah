@@ -23,7 +23,7 @@ from app.modules.safety.schemas import (
     HazardRiskOption,
 )
 from app.modules.safety.service import (
-    DailyRiskReportService,
+    HazardRiskOptionService,
     SafetyService,
 )
 
@@ -115,7 +115,7 @@ async def get_hazard_risk_options(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """返回风险等级为 level_1/level_2 且 overall_status=completed 的危险源辨识项"""
-    service = DailyRiskReportService(db)
+    service = HazardRiskOptionService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_hazard_risk_options(department, keyword, skip, page_size)
     return ApiResponse(

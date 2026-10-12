@@ -1,10 +1,10 @@
 'use client'
 
 /**
- * EHS 变更管理 共享组件（申请/验收两页复用）
+ * EHS 变更管理 共享组件（只读台账页复用）
  * 视觉统一使用 DESIGN tokens（shared-styles T / statusPill）。
- * 详情页：隐患式纵轴阶段布局（StageDot → StageCard → StageHeader → FieldLabel/FieldTile），
- *         按流程阶段顺序展开，字段口径与《EHS变更多维表格字段清单》一致。
+ * 详情：纵轴阶段布局（StageDot → StageCard → StageHeader → FieldLabel/FieldTile），
+ *       字段口径与《EHS变更多维表格字段清单》一致。
  */
 import {
   Col,
@@ -13,7 +13,7 @@ import {
   Typography,
 } from 'antd'
 import { FileTextOutlined, RobotOutlined, UnorderedListOutlined } from '@ant-design/icons'
-import type { EhsChange, EhsChangeTableId } from '@/types/safety'
+import type { EhsChange } from '@/types/safety'
 import { T } from '../shared-styles'
 import {
   AI_CONCLUSION_UI,
@@ -35,10 +35,6 @@ export const CARD_STYLE: React.CSSProperties = {
 // ═══════════════════════════════════════════════════════════════
 // 迷你标签
 // ═══════════════════════════════════════════════════════════════
-
-export function SourcePill({ source }: { source?: string }) {
-  return <span style={{ color: source === 'bitable' ? '#0075de' : T.slate, fontWeight: 600 }}>{source === 'bitable' ? '飞书' : '平台'}</span>
-}
 
 export function StatusPill({ status }: { status: string }) {
   const color: Record<string, [string, string]> = {
@@ -118,7 +114,7 @@ export function KpiCard({
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 详情页：纵轴阶段布局（参考隐患详情 hazard/[id]/page.tsx）
+// 详情页：纵轴阶段布局
 // ═══════════════════════════════════════════════════════════════
 
 function StageDot({ num, active }: { num: number; active?: boolean }) {
@@ -199,66 +195,40 @@ function fmtDate(v?: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 详情主组件（按 table 渲染审批/验收阶段）
+// 详情主组件（审批台账，只读）
 // ═══════════════════════════════════════════════════════════════
 
-export function EhsChangeDetail({
-  change,
-  table,
-}: {
-  change: EhsChange
-  table: EhsChangeTableId
-}) {
-  const isApproval = table === 'approval'
+export function EhsChangeDetail({ change }: { change: EhsChange }) {
   const extra = change.bt_extra
 
   // ── ① 基础信息字段 ──
-  const basicFields = isApproval
-    ? [
-        { label: '申请编号', value: change.change_no },
-        { label: '变更名称', value: change.title },
-        { label: '变更申请编号', value: change.bt_change_no },
-        { label: 'GMP变更编号', value: extra?.gmp_change_no },
-        { label: '变更发起人', value: change.applicant_name },
-        { label: '变更申请部门', value: change.department },
-        { label: '变更分类', value: change.change_type ? CHANGE_TYPE_LABEL[change.change_type] || change.change_type : '' },
-        { label: '变更级别', node: <GradePill grade={change.change_grade} /> },
-        { label: '变更时效', value: change.change_duration ? CHANGE_DURATION_LABEL[change.change_duration] || change.change_duration : '' },
-        { label: '预计实施日期', value: fmtDate(change.expected_start) },
-      ]
-    : [
-        { label: '申请编号', value: change.change_no },
-        { label: '变更编号', value: change.bt_change_no },
-        { label: '变更名称', value: change.title },
-        { label: '发起人', value: change.applicant_name },
-        { label: '发起人部门', value: change.department },
-        { label: '变更级别', node: <GradePill grade={change.change_grade} /> },
-      ]
+  const basicFields = [
+    { label: '申请编号', value: change.change_no },
+    { label: '变更名称', value: change.title },
+    { label: '变更申请编号', value: change.bt_change_no },
+    { label: 'GMP变更编号', value: extra?.gmp_change_no },
+    { label: '变更发起人', value: change.applicant_name },
+    { label: '变更申请部门', value: change.department },
+    { label: '变更分类', value: change.change_type ? CHANGE_TYPE_LABEL[change.change_type] || change.change_type : '' },
+    { label: '变更级别', node: <GradePill grade={change.change_grade} /> },
+    { label: '变更时效', value: change.change_duration ? CHANGE_DURATION_LABEL[change.change_duration] || change.change_duration : '' },
+    { label: '预计实施日期', value: fmtDate(change.expected_start) },
+  ]
 
-  // ── ② 内容字段（长文本） ──
-  const contentFields = isApproval
-    ? [
-        { label: '申请变更原因', value: change.description },
-        { label: '变更计划内容', value: change.bt_plan_content },
-        { label: '预计效果', value: change.expected_effect },
-        { label: '需更新的文件资料', value: change.documents_to_update?.length ? change.documents_to_update.map((d) => d.name).join('；') : '' },
-        { label: '变更风险评估及建议措施', value: change.bt_risk_measures },
-      ]
-    : [
-        { label: '验收日期', node: <span>{fmtDate(extra?.acceptance_date)}</span> },
-        { label: '验收意见', value: change.bt_acceptance_comment },
-      ]
+  // ── ② 内容字段（长文本）──
+  const contentFields = [
+    { label: '申请变更原因', value: change.description },
+    { label: '变更计划内容', value: change.bt_plan_content },
+    { label: '预计效果', value: change.expected_effect },
+    { label: '需更新的文件资料', value: change.documents_to_update?.length ? change.documents_to_update.map((d) => d.name).join('；') : '' },
+    { label: '变更风险评估及建议措施', value: change.bt_risk_measures },
+  ]
 
   // ── 审批状态 ──
-  const statusFields = isApproval
-    ? [
-        { label: '申请状态', node: <StatusPill status={change.status} /> },
-        { label: '变更状态', value: change.bt_change_status },
-      ]
-    : [
-        { label: '申请状态', node: <StatusPill status={change.status} /> },
-        { label: '审批流程', value: extra?.approval_flow },
-      ]
+  const statusFields = [
+    { label: '申请状态', node: <StatusPill status={change.status} /> },
+    { label: '变更状态', value: change.bt_change_status },
+  ]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -278,7 +248,7 @@ export function EhsChangeDetail({
           <StageConnector />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <StageCard accent={isApproval ? T.primary : T.primary}>
+          <StageCard accent={T.primary}>
             <StageHeader icon={<FileTextOutlined />} title="基础信息" />
             <Row gutter={[16, 12]}>
               {basicFields.map((f) => (
@@ -300,87 +270,56 @@ export function EhsChangeDetail({
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <StageCard accent={T.slate}>
-            <StageHeader icon={<UnorderedListOutlined />} title={isApproval ? '变更内容' : '验收内容'} />
+            <StageHeader icon={<UnorderedListOutlined />} title="变更内容" />
             {contentFields.map((f) => (
               <div key={f.label} style={{ marginBottom: 14 }}>
                 <FieldLabel>{f.label}</FieldLabel>
-                {f.node ? <FieldTile>{f.node}</FieldTile> : <TextBlock>{f.value}</TextBlock>}
+                <TextBlock>{f.value}</TextBlock>
               </div>
             ))}
-            {!isApproval && (
-              <div>
-                <FieldLabel>关联审批</FieldLabel>
-                <FieldTile>
-                  {extra?.related_approval ? extra.related_approval : null}
-                </FieldTile>
-              </div>
-            )}
           </StageCard>
         </div>
       </div>
 
-      {/* ── ③ AI 审核（审批） / ③ 审批状态（验收） ── */}
-      {isApproval ? (
-        <div style={{ display: 'flex', gap: 14 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <StageDot num={3} />
-            <StageConnector />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <StageCard accent={T.primary}>
-              <StageHeader icon={<RobotOutlined />} title="AI 审核" />
-              <AiReviewTab change={change} />
-            </StageCard>
-          </div>
+      {/* ── ③ AI 审核 ── */}
+      <div style={{ display: 'flex', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <StageDot num={3} />
+          <StageConnector />
         </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 14 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <StageDot num={2} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <StageCard accent={T.slate}>
-              <StageHeader icon={<UnorderedListOutlined />} title="审批状态" />
-              <Row gutter={[16, 12]}>
-                {statusFields.map((f) => (
-                  <Col span={8} key={f.label}>
-                    <FieldLabel>{f.label}</FieldLabel>
-                    <FieldTile>{f.node ?? f.value}</FieldTile>
-                  </Col>
-                ))}
-              </Row>
-            </StageCard>
-          </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <StageCard accent={T.primary}>
+            <StageHeader icon={<RobotOutlined />} title="AI 审核" />
+            <AiReviewTab change={change} />
+          </StageCard>
         </div>
-      )}
+      </div>
 
-      {/* ── ④ 审批状态（审批表） ── */}
-      {isApproval && (
-        <div style={{ display: 'flex', gap: 14 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <StageDot num={4} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <StageCard accent={T.slate}>
-              <StageHeader icon={<UnorderedListOutlined />} title="审批状态" />
-              <Row gutter={[16, 12]}>
-                {statusFields.map((f) => (
-                  <Col span={8} key={f.label}>
-                    <FieldLabel>{f.label}</FieldLabel>
-                    <FieldTile>{f.node ?? f.value}</FieldTile>
-                  </Col>
-                ))}
-              </Row>
-            </StageCard>
-          </div>
+      {/* ── ④ 审批状态 ── */}
+      <div style={{ display: 'flex', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <StageDot num={4} />
         </div>
-      )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <StageCard accent={T.slate}>
+            <StageHeader icon={<UnorderedListOutlined />} title="审批状态" />
+            <Row gutter={[16, 12]}>
+              {statusFields.map((f) => (
+                <Col span={8} key={f.label}>
+                  <FieldLabel>{f.label}</FieldLabel>
+                  <FieldTile>{f.node ?? f.value}</FieldTile>
+                </Col>
+              ))}
+            </Row>
+          </StageCard>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AI 审核区块（审批阶段 ③）
+// AI 审核区块（只读展示，审核由系统自动触发）
 // ═══════════════════════════════════════════════════════════════
 
 type AiReviewDimKey = 'reason' | 'plan' | 'effect' | 'risk'

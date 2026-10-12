@@ -2,7 +2,6 @@
 export {
   CARD_STYLE,
   KpiCard,
-  SourcePill,
   StatusPill,
   AiConclusionPill,
   GradePill,
