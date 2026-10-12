@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col,
 } from 'antd'
-import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined, CheckOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
@@ -310,14 +310,14 @@ export default function MaterialContainers() {
               <Button size="small" icon={<ScanOutlined />}>入库</Button>
             </Popconfirm>
           )}
+          {canManage && row.status === 'in_warehouse' && (
+            <Popconfirm title="确认标记合格？（阶段1人工操作，后续放行联动）" onConfirm={() => onStatus(row, 'qualified')}>
+              <Button size="small" type="primary" icon={<CheckOutlined />}>合格</Button>
+            </Popconfirm>
+          )}
           {canManage && (row.status === 'in_warehouse' || row.status === 'qualified') && (
             <Popconfirm title="确认领料出库？" onConfirm={() => onMove(row, 'out')}>
               <Button size="small" danger>出库</Button>
-            </Popconfirm>
-          )}
-          {canManage && row.status === 'in_warehouse' && (
-            <Popconfirm title="确认标记合格？（阶段1人工操作，后续放行联动）" onConfirm={() => onStatus(row, 'qualified')}>
-              <Button size="small" type="primary" ghost>合格</Button>
             </Popconfirm>
           )}
           {canManage && row.status === 'labeled' && (
