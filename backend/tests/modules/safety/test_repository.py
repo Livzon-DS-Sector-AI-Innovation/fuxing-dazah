@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.models import (
-    Accident,
     SafetyCheck,
 )
 from app.modules.safety.repository import SafetyRepository
@@ -30,24 +29,6 @@ async def _create_check(db: AsyncSession, **overrides) -> SafetyCheck:
             "check_date": datetime.now(),
             "department": overrides.pop("department", "EHS部"),
             "status": overrides.pop("status", "draft"),
-            **overrides,
-        }
-    )
-    await db.flush()
-    return item
-
-
-async def _create_accident(db: AsyncSession, **overrides) -> Accident:
-    repo = SafetyRepository(db)
-    item = await repo.create_accident(
-        {
-            "accident_no": _uid("ACC"),
-            "accident_type": "fire",
-            "accident_level": "serious",
-            "happened_at": datetime.now(),
-            "department": overrides.pop("department", "生产部"),
-            "description": "仓库火灾测试",
-            "reported_at": datetime.now(),
             **overrides,
         }
     )
@@ -86,31 +67,6 @@ class TestSafetyCheckRepository:
         assert updated is not None
         assert updated.result == "qualified"
         assert updated.status == "reviewed"
-
-
-class TestAccidentRepository:
-    async def test_filters_and_keyword(self, db_session: AsyncSession) -> None:
-        await _create_accident(db_session, status="reported")
-        target = await _create_accident(db_session, department="仓储部", status="closed")
-
-        repo = SafetyRepository(db_session)
-        items, total = await repo.get_accidents(status="closed")
-        assert total >= 1
-        assert any(i.id == target.id for i in items)
-
-        items, total = await repo.get_accidents(keyword="仓库火灾")
-        assert total >= 1
-
-        date_from = datetime.now() - timedelta(days=1)
-        items, total = await repo.get_accidents(date_from=date_from)
-        assert total >= 1
-
-    async def test_update_two_step_refresh(self, db_session: AsyncSession) -> None:
-        item = await _create_accident(db_session)
-        repo = SafetyRepository(db_session)
-        updated = await repo.update_accident(item.id, {"status": "investigating"})
-        assert updated is not None
-        assert updated.status == "investigating"
 
 
 class TestDailyRiskReportRepository:

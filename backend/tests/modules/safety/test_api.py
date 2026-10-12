@@ -7,24 +7,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from httpx import AsyncClient
-
-
-def _accident_payload(**overrides) -> dict:
-    payload = {
-        "accident_no": f"ACC-TEST-{uuid.uuid4().hex[:8]}",
-        "accident_type": "injury",
-        "accident_level": "general",
-        "happened_at": datetime.now().isoformat(),
-        "location": "车间二",
-        "department": "生产部",
-        "description": "测试事故描述",
-        "reported_at": datetime.now().isoformat(),
-    }
-    payload.update(overrides)
-    return payload
 
 
 def _check_payload(**overrides) -> dict:
@@ -59,91 +44,6 @@ def _monitor_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
-
-
-class TestAccidentApi:
-    async def test_crud_lifecycle(self, client: AsyncClient) -> None:
-        """创建 → 查询列表 → 详情 → 更新 → 删除。"""
-        payload = _accident_payload()
-        resp = await client.post("/api/v1/safety/accidents", json=payload)
-        assert resp.status_code == 200, resp.text
-        created = resp.json()["data"]
-        assert created["accident_no"] == payload["accident_no"]
-        assert created["status"] == "reported"
-        accident_id = created["id"]
-
-        resp = await client.get(
-            "/api/v1/safety/accidents", params={"keyword": payload["accident_no"]}
-        )
-        assert resp.status_code == 200
-        meta = resp.json()["meta"]
-        assert meta["total"] >= 1
-
-        resp = await client.get(f"/api/v1/safety/accidents/{accident_id}")
-        assert resp.status_code == 200
-        assert resp.json()["data"]["id"] == accident_id
-
-        resp = await client.put(
-            f"/api/v1/safety/accidents/{accident_id}",
-            json={"description": "更新后的描述"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["data"]["description"] == "更新后的描述"
-
-        resp = await client.delete(f"/api/v1/safety/accidents/{accident_id}")
-        assert resp.status_code == 200
-        resp = await client.get(f"/api/v1/safety/accidents/{accident_id}")
-        assert resp.json()["code"] == 404
-
-    async def test_state_machine_reported_to_closed(
-        self, client: AsyncClient
-    ) -> None:
-        """reported → investigating → investigated → capa_in_progress → closed。"""
-        resp = await client.post("/api/v1/safety/accidents", json=_accident_payload())
-        accident_id = resp.json()["data"]["id"]
-
-        resp = await client.post(
-            f"/api/v1/safety/accidents/{accident_id}/investigate"
-        )
-        assert resp.json()["data"]["status"] == "investigating"
-
-        resp = await client.post(
-            f"/api/v1/safety/accidents/{accident_id}/resolve",
-            params={
-                "direct_cause": "违规操作",
-                "root_cause": "培训不足",
-                "handling_measures": "现场整改",
-            },
-        )
-        assert resp.json()["data"]["status"] == "investigated"
-
-        deadline = (datetime.now() + timedelta(days=7)).isoformat()
-        resp = await client.post(
-            f"/api/v1/safety/accidents/{accident_id}/start-capa",
-            params={
-                "corrective_action_deadline": deadline,
-                "corrective_action_responsible": "张三",
-            },
-        )
-        data = resp.json()["data"]
-        assert data["status"] == "capa_in_progress"
-        assert data["corrective_action_status"] == "in_progress"
-
-        resp = await client.post(f"/api/v1/safety/accidents/{accident_id}/verify-capa")
-        data = resp.json()["data"]
-        assert data["status"] == "closed"
-        assert data["corrective_action_status"] == "verified"
-
-    async def test_invalid_transition_rejected(self, client: AsyncClient) -> None:
-        """reported 状态不能直接关闭（无CAPA路径要求 investigated）。"""
-        resp = await client.post("/api/v1/safety/accidents", json=_accident_payload())
-        accident_id = resp.json()["data"]["id"]
-        resp = await client.post(f"/api/v1/safety/accidents/{accident_id}/close")
-        assert resp.json()["code"] == 400
-
-    async def test_get_missing_returns_404(self, client: AsyncClient) -> None:
-        resp = await client.get(f"/api/v1/safety/accidents/{uuid.uuid4()}")
-        assert resp.json()["code"] == 404
 
 
 class TestSafetyCheckApi:

@@ -6,12 +6,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.schemas import (
-    AccidentCreate,
     DailyRiskReportCreate,
     OhHazardMonitorCreate,
     SafetyCheckCreate,
@@ -58,59 +57,6 @@ class TestSafetyCheckService:
         assert (await svc.confirm_check(item.id, "inspector")).inspector_confirmed is True
         assert (await svc.confirm_check(item.id, "safety_officer")).safety_officer_confirmed is True
         assert await svc.confirm_check(item.id, "unknown_role") is None
-
-
-class TestAccidentService:
-    async def test_full_capa_lifecycle(self, db_session: AsyncSession) -> None:
-        svc = SafetyService(db_session)
-        item = await svc.create_accident(
-            AccidentCreate(
-                accident_no=_uid("ACC"),
-                accident_type="injury",
-                happened_at=datetime.now(),
-                description="中毒窒息事故测试",
-                reported_at=datetime.now(),
-            )
-        )
-        assert item.status == "reported"
-
-        investigating = await svc.investigate_accident(item.id, None, "王五")
-        assert investigating is not None and investigating.status == "investigating"
-
-        investigated = await svc.resolve_accident(
-            item.id,
-            direct_cause="未佩戴呼吸器",
-            root_cause="风险评估缺失",
-            handling_measures="通风后进入",
-            corrective_actions="修订作业规程",
-        )
-        assert investigated is not None and investigated.status == "investigated"
-
-        capa = await svc.start_capa(
-            item.id,
-            datetime.now() + timedelta(days=14),
-            "赵六",
-        )
-        assert capa is not None and capa.status == "capa_in_progress"
-
-        closed = await svc.verify_capa(item.id, None, "审核人")
-        assert closed is not None and closed.status == "closed"
-        assert closed.corrective_action_status == "verified"
-
-    async def test_state_transition_guard(self, db_session: AsyncSession) -> None:
-        svc = SafetyService(db_session)
-        item = await svc.create_accident(
-            AccidentCreate(
-                accident_no=_uid("ACC"),
-                accident_type="near_miss",
-                happened_at=datetime.now(),
-                description="未遂事件测试",
-                reported_at=datetime.now(),
-            )
-        )
-        # reported 状态不允许直接 resolve / close
-        assert await svc.resolve_accident(item.id, "a", "b", "c") is None
-        assert await svc.close_accident(item.id) is None
 
 
 class TestDailyRiskReportService:

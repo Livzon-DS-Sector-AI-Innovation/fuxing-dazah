@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.models import (
-    Accident,
     Contractor,
     ContractorWorkRecord,
     SafetyCheck,
@@ -22,8 +21,6 @@ from app.modules.safety.models import (
 )
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.schemas import (
-    AccidentCreate,
-    AccidentUpdate,
     ContractorCreate,
     ContractorUpdate,
     ContractorWorkRecordCreate,
@@ -1835,152 +1832,6 @@ class SafetyService:
         result = await self.repo.delete_check(check_id)
         if result:
             await self._audit("delete", "safety_check", resource_id=check_id)
-        return result
-
-    # ==================== Accident Operations ====================
-
-    async def get_accidents(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        accident_type: str | None = None,
-        accident_level: str | None = None,
-        department: str | None = None,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
-        keyword: str | None = None,
-    ) -> tuple[list[Accident], int]:
-        """获取事故列表"""
-        return await self.repo.get_accidents(
-            skip, limit, status, accident_type, accident_level,
-            department, date_from, date_to, keyword,
-        )
-
-    async def get_accident(self, accident_id: uuid.UUID) -> Accident | None:
-        """获取事故详情"""
-        return await self.repo.get_accident_by_id(accident_id)
-
-    async def create_accident(self, data: AccidentCreate) -> Accident:
-        """创建事故"""
-        accident_data = data.model_dump()
-        item = await self.repo.create_accident(accident_data)
-        await self._audit("create", "accident", resource_id=item.id)
-        return item
-
-    async def update_accident(
-        self, accident_id: uuid.UUID, data: AccidentUpdate
-    ) -> Accident | None:
-        """更新事故"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        item = await self.repo.update_accident(accident_id, update_data)
-        if item:
-            await self._audit("update", "accident", resource_id=accident_id)
-        return item
-
-    async def investigate_accident(
-        self,
-        accident_id: uuid.UUID,
-        investigator: uuid.UUID | None,
-        investigator_name: str | None,
-    ) -> Accident | None:
-        """开始调查事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "reported":
-            return None
-        return await self.repo.update_accident(
-            accident_id,
-            {
-                "status": "investigating",
-                "investigator": investigator,
-                "investigator_name": investigator_name,
-            },
-        )
-
-    async def resolve_accident(
-        self,
-        accident_id: uuid.UUID,
-        direct_cause: str,
-        root_cause: str,
-        handling_measures: str,
-        corrective_actions: str | None = None,
-        investigation_findings: str | None = None,
-        investigation_method: str | None = None,
-        investigation_team: list | None = None,
-    ) -> Accident | None:
-        """完成调查事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "investigating":
-            return None
-        update_data: dict[str, Any] = {
-            "status": "investigated",
-            "direct_cause": direct_cause,
-            "root_cause": root_cause,
-            "handling_measures": handling_measures,
-            "corrective_actions": corrective_actions,
-            "investigation_findings": investigation_findings,
-            "investigation_method": investigation_method,
-        }
-        if investigation_team is not None:
-            update_data["investigation_team"] = investigation_team
-        return await self.repo.update_accident(accident_id, update_data)
-
-    async def start_capa(
-        self,
-        accident_id: uuid.UUID,
-        corrective_action_deadline: datetime,
-        corrective_action_responsible: str,
-    ) -> Accident | None:
-        """启动 CAPA"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "investigated":
-            return None
-        return await self.repo.update_accident(
-            accident_id,
-            {
-                "status": "capa_in_progress",
-                "corrective_action_deadline": corrective_action_deadline,
-                "corrective_action_responsible": corrective_action_responsible,
-                "corrective_action_status": "in_progress",
-            },
-        )
-
-    async def verify_capa(
-        self,
-        accident_id: uuid.UUID,
-        verified_by: uuid.UUID | None,
-        verified_by_name: str | None,
-    ) -> Accident | None:
-        """验证 CAPA 并关闭事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "capa_in_progress":
-            return None
-        return await self.repo.update_accident(
-            accident_id,
-            {
-                "status": "closed",
-                "corrective_action_status": "verified",
-                "verified_by": verified_by,
-                "verified_by_name": verified_by_name,
-                "verified_at": datetime.now(),
-            },
-        )
-
-    async def close_accident(self, accident_id: uuid.UUID) -> Accident | None:
-        """直接关闭事故（无CAPA时）"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "investigated":
-            return None
-        return await self.repo.update_accident(accident_id, {"status": "closed"})
-
-    async def delete_accident(self, accident_id: uuid.UUID) -> bool:
-        """删除事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        result = await self.repo.delete_accident(accident_id)
-        if result:
-            if accident:
-                SafetyService._cleanup_file(accident.investigation_report_path)
-            await self._audit("delete", "accident", resource_id=accident_id)
         return result
 
 # ==================== 操规修订 Service ====================
