@@ -101,6 +101,12 @@ class KeyRiskOpsOut(BaseModel):
     items: list[KeyRiskOpItemOut] = Field(default_factory=list)
 
 
+class EhsOut(BaseModel):
+    """EHS 变更：进行中 = 审核中 + 实施中。"""
+
+    in_progress: int = 0
+
+
 # ── 速递回放 / 健康度 / 顶层 ──
 
 
@@ -141,6 +147,7 @@ class OverviewOut(BaseModel):
     certs: CertsOut | None = None
     chemicals: ChemicalsOut | None = None
     key_risk_ops: KeyRiskOpsOut | None = None
+    ehs: EhsOut | None = None
     digest: DigestOut | None = None
     module_health: list[ModuleHealthOut] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list, description="降级域标注")

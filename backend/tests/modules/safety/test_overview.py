@@ -313,6 +313,7 @@ class TestOverviewEndpoint:
             "certs",
             "chemicals",
             "key_risk_ops",
+            "ehs",
             "digest",
             "module_health",
             "errors",

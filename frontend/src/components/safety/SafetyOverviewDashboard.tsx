@@ -112,6 +112,11 @@ function DegradedSection({ domain }: { domain: string }) {
   )
 }
 
+/** 只读短列表注入稳定行键（明细无唯一 id 字段；antd rowKey 的 index 参数已废弃） */
+function withRowKeys<T extends object>(items: T[]): (T & { _key: number })[] {
+  return items.map((it, idx) => ({ ...it, _key: idx }))
+}
+
 function KpiSection({
   data,
   loading,
@@ -329,7 +334,7 @@ function HealthWall({ health }: { health: OverviewModuleHealth[] | null }) {
 }
 
 function KeyRiskOpsTable({ data }: { data: OverviewKeyRiskOps | null }) {
-  const columns: TableColumnsType<OverviewKeyRiskOps['items'][number]> = [
+  const columns: TableColumnsType<OverviewKeyRiskOps['items'][number] & { _key: number }> = [
     {
       title: '开始时间',
       dataIndex: 'start_time',
@@ -357,10 +362,10 @@ function KeyRiskOpsTable({ data }: { data: OverviewKeyRiskOps | null }) {
     >
       {data ? (
         <Table
-          rowKey={(r, i) => `${r.start_time ?? ''}-${i}`}
+          rowKey={r => r._key}
           size="small"
           columns={columns}
-          dataSource={data.items}
+          dataSource={withRowKeys(data.items)}
           pagination={false}
           locale={{ emptyText: '今日暂无关键风险作业报备' }}
         />
@@ -372,7 +377,7 @@ function KeyRiskOpsTable({ data }: { data: OverviewKeyRiskOps | null }) {
 }
 
 function ExpiringCertsTable({ data }: { data: OverviewCerts | null }) {
-  const columns: TableColumnsType<OverviewCerts['items'][number]> = [
+  const columns: TableColumnsType<OverviewCerts['items'][number] & { _key: number }> = [
     { title: '姓名', dataIndex: 'person_name', width: 80 },
     {
       title: '部门',
@@ -407,10 +412,10 @@ function ExpiringCertsTable({ data }: { data: OverviewCerts | null }) {
     >
       {data ? (
         <Table
-          rowKey={(r, i) => `${r.person_name}-${i}`}
+          rowKey={r => r._key}
           size="small"
           columns={columns}
-          dataSource={data.items}
+          dataSource={withRowKeys(data.items)}
           pagination={false}
           locale={{ emptyText: '30 天内无到期证书' }}
         />
@@ -422,7 +427,7 @@ function ExpiringCertsTable({ data }: { data: OverviewCerts | null }) {
 }
 
 function OverLimitTable({ data }: { data: OverviewChemicals | null }) {
-  const columns: TableColumnsType<OverviewChemicals['materials'][number]> = [
+  const columns: TableColumnsType<OverviewChemicals['materials'][number] & { _key: number }> = [
     { title: '品名', dataIndex: 'material_name', ellipsis: true },
     {
       title: '部门',
@@ -460,10 +465,10 @@ function OverLimitTable({ data }: { data: OverviewChemicals | null }) {
     >
       {data ? (
         <Table
-          rowKey={(r, i) => `${r.material_name}-${i}`}
+          rowKey={r => r._key}
           size="small"
           columns={columns}
-          dataSource={data.materials}
+          dataSource={withRowKeys(data.materials)}
           pagination={false}
           locale={{ emptyText: '无超储物料' }}
         />
