@@ -11,12 +11,3 @@ export interface ApiResponse<T = unknown> {
   }
 }
 
-export interface SafetyDashboardStats {
-  total_checks: number
-  pending_checks: number
-  open_hazards: number
-  overdue_hazards: number
-  recent_accidents: number
-  upcoming_trainings: number
-}
-

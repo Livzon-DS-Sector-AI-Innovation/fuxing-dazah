@@ -161,10 +161,6 @@ export async function fetchHazardStats() {
   return fetchApi<HazardStats>('/safety/hazards/stats')
 }
 
-export async function getHazards(params: HazardReportQueryParams = {}) {
-  return fetchApi<HazardReport[]>(`/safety/hazards${buildQueryString(params)}`)
-}
-
 // ============ Contractor Actions ============
 
 // ============ SafetyTraining Actions ============
@@ -172,10 +168,7 @@ export async function getHazards(params: HazardReportQueryParams = {}) {
 // ============ TrainingRecord Actions ============
 
 // ============ Training Certificate Actions ============
-
-export async function getExpiringCertificates() {
-  return fetchApi<TrainingRecord[]>('/safety/training-certificates/expiring')
-}
+// （旧 /safety/training-certificates/expiring 已随一期退役；证书预警走 lib/api/safety/cert-warning）
 
 // ============ HazardIdentification Actions ============
 
@@ -646,23 +639,7 @@ export async function getSpecialOperationLedgerStats() {
 }
 
 // ==================== 关键风险作业报备 Actions（Bitable 只读） ====================
-
-export async function getKeyRiskOperationReports(params?: KeyRiskOperationQueryParams) {
-  const query = new URLSearchParams()
-  if (params) {
-    if (params.page) query.set('page', String(params.page))
-    if (params.page_size) query.set('page_size', String(params.page_size))
-    if (params.department) query.set('department', params.department)
-    if (params.area) query.set('area', params.area)
-    if (params.operation_content) query.set('operation_content', params.operation_content)
-    if (params.apply_status) query.set('apply_status', params.apply_status)
-    if (params.date_from) query.set('date_from', params.date_from)
-    if (params.date_to) query.set('date_to', params.date_to)
-    if (params.keyword) query.set('keyword', params.keyword)
-  }
-  const qs = query.toString()
-  return fetchApi<KeyRiskOperationReport[]>(`/safety/key-risk-operation-reports${qs ? `?${qs}` : ''}`)
-}
+// （列表查询已迁 lib/api/safety/key-risk-operation（react-query）；此处保留详情/统计/同步）
 
 export async function getKeyRiskOperationReport(id: string) {
   return fetchApi<KeyRiskOperationReport>(`/safety/key-risk-operation-reports/${id}`)
