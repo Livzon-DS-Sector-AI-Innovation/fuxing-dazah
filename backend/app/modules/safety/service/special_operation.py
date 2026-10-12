@@ -12,14 +12,11 @@ from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.models import (
     SpecialOperationPermit,
-    SpecialOperationPersonnel,
 )
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.schemas import (
     SpecialOperationPermitCreate,
     SpecialOperationPermitUpdate,
-    SpecialOperationPersonnelCreate,
-    SpecialOperationPersonnelUpdate,
 )
 from app.modules.safety.service._helpers import audit_log
 
@@ -76,59 +73,6 @@ class SpecialOperationService:
                     os.remove(abs_path)
         except OSError:
             pass
-
-    # ==================== 人员资质 CRUD ====================
-
-    async def get_personnel(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        certificate_type: str | None = None,
-        department: str | None = None,
-        keyword: str | None = None,
-    ) -> tuple[list[SpecialOperationPersonnel], int]:
-        """获取特殊作业人员资质列表"""
-        return await self.repo.get_special_operation_personnel(
-            skip, limit, status, certificate_type, department, keyword
-        )
-
-    async def get_personnel_by_id(
-        self, personnel_id: uuid.UUID
-    ) -> SpecialOperationPersonnel | None:
-        """获取人员资质详情"""
-        return await self.repo.get_special_operation_personnel_by_id(personnel_id)
-
-    async def create_personnel(
-        self, data: SpecialOperationPersonnelCreate
-    ) -> SpecialOperationPersonnel:
-        """创建人员资质"""
-        create_data = data.model_dump()
-        item = await self.repo.create_special_operation_personnel(create_data)
-        await self._audit("create", "special_operation_personnel", resource_id=item.id)
-        return item
-
-    async def update_personnel(
-        self, personnel_id: uuid.UUID, data: SpecialOperationPersonnelUpdate
-    ) -> SpecialOperationPersonnel | None:
-        """更新人员资质"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        item = await self.repo.update_special_operation_personnel(
-            personnel_id, update_data
-        )
-        if item:
-            await self._audit("update", "special_operation_personnel", resource_id=personnel_id)
-        return item
-
-    async def delete_personnel(self, personnel_id: uuid.UUID) -> bool:
-        """删除人员资质"""
-        personnel = await self.repo.get_special_operation_personnel_by_id(personnel_id)
-        result = await self.repo.delete_special_operation_personnel(personnel_id)
-        if result:
-            if personnel:
-                self._cleanup_file(personnel.certificate_file_path)
-            await self._audit("delete", "special_operation_personnel", resource_id=personnel_id)
-        return result
 
     # ==================== 作业票 CRUD ====================
 

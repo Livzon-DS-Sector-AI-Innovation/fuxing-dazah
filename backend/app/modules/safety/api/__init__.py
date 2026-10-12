@@ -43,7 +43,6 @@ from app.modules.safety.api.special_operation_reports import (
     special_operation_reports_router,
 )
 from app.modules.safety.api.special_ops_permits import special_ops_permits_router
-from app.modules.safety.api.special_ops_personnel import special_ops_personnel_router
 from app.modules.safety.api.urs import urs_router
 from app.modules.safety.api.workticket_review import workticket_review_router
 from app.modules.safety.knowledge.graph_api import graph_router
@@ -83,6 +82,5 @@ router.include_router(scheduler_config_router)
 router.include_router(special_operation_daily_report_router)
 router.include_router(special_operation_reports_router)
 router.include_router(special_ops_permits_router)
-router.include_router(special_ops_personnel_router)
 router.include_router(urs_router)
 router.include_router(workticket_review_router)
