@@ -172,55 +172,6 @@ class EhsChangeResponse(EhsChangeBase):
         from_attributes = True
 
 
-# ── 工作流请求 Schema ──
-
-
-class ApproveEhsChangeRequest(BaseModel):
-    """审批EHS变更请求"""
-
-    decision: str = Field(..., description="审批决定: approved/rejected")
-    comments: str | None = Field(None, description="审批意见")
-
-
-class CloseEhsChangeRequest(BaseModel):
-    """关闭EHS变更请求"""
-
-    closed_by: str | None = Field(None, max_length=100, description="关闭人")
-    temp_expiry_date: str | None = Field(None, description="临时变更到期日期")
-    restored_date: str | None = Field(None, description="恢复原状日期")
-
-
-class AddRiskAssessmentRequest(BaseModel):
-    """添加风险评估请求"""
-
-    method: str | None = Field(None, description="评估方法")
-    severity: str | None = Field(None, description="严重性")
-    likelihood: str | None = Field(None, description="可能性")
-    risk_level: str | None = Field(None, description="风险等级")
-    description: str | None = Field(None, description="风险描述")
-    control_measures: str | None = Field(None, description="控制措施")
-    assessed_by: str | None = Field(None, max_length=100, description="评估人")
-    assessed_date: str | None = Field(None, description="评估日期")
-    participants: str | None = Field(None, description="参与人员")
-
-
-class UpdateActionItemRequest(BaseModel):
-    """更新行动项请求"""
-
-    index: int = Field(..., ge=0, description="行动项索引")
-    status: str = Field(..., description="状态: pending/in_progress/completed")
-
-
-class SubmitVerificationRequest(BaseModel):
-    """提交验证数据请求"""
-
-    expected_effect_achieved: bool | None = Field(None, description="预期效果是否达成")
-    comments: str | None = Field(None, description="验证意见")
-    psi_updated: bool | None = Field(None, description="工艺安全信息是否已更新")
-    documents_updated: bool | None = Field(None, description="相关文件是否已更新")
-    accepted_by: str | None = Field(None, max_length=100, description="验收人")
-
-
 # ==================== JSON 子记录 Schema ====================
 
 

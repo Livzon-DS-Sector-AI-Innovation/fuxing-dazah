@@ -28,24 +28,6 @@ def _normalize_hazard_level_manual(v: str | None) -> str | None:
     return v
 
 
-class RectificationReplyRequest(BaseModel):
-    """整改回复请求（合并了原 complete_rectification 步骤）"""
-
-    reply_content: str = Field(..., description="整改回复内容")
-    rectification_photos: str | None = Field(None, description="整改后图片JSON数组")
-    corrective_preventive_measures: str | None = Field(None, description="AI整改建议（兼容旧字段）")
-    rectification_reply: str | None = Field(None, description="整改回复内容（新字段）")
-    actual_completion_date: datetime | None = Field(None, description="整改完成时间（默认当前时间）")
-
-
-class VerifyLevelRequest(BaseModel):
-    """三级复核请求"""
-
-    level: int = Field(..., ge=1, le=3, description="复核级别: 1/2/3")
-    action: str = Field(..., description="approved | rejected")
-    opinion: str | None = Field(None, description="复核意见")
-
-
 class HazardStatsResponse(BaseModel):
     """隐患统计（全局，不受分页/筛选影响）"""
 
@@ -185,27 +167,4 @@ class HazardReportResponse(HazardReportBase):
 
     class Config:
         from_attributes = True
-
-
-class HazardReportRunAIRequest(BaseModel):
-    """执行隐患AI工作流请求（AI从已有数据读取上下文）"""
-
-    pass
-
-
-class DepartmentLeaderResponse(BaseModel):
-    """部门负责人查询响应"""
-
-    department: str = Field(..., description="部门名称")
-    leader_name: str | None = Field(None, description="负责人姓名")
-    leader_id: str | None = Field(None, description="负责人 UUID")
-
-
-class DepartmentSafetyOfficerResponse(BaseModel):
-    """部门分管安全员查询响应"""
-
-    department: str = Field(..., description="部门名称")
-    safety_officer_name: str | None = Field(None, description="安全员姓名")
-    safety_officer_id: str | None = Field(None, description="安全员 UUID")
-
 
