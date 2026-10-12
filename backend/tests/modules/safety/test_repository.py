@@ -36,39 +36,6 @@ async def _create_check(db: AsyncSession, **overrides) -> SafetyCheck:
     return item
 
 
-class TestSafetyCheckRepository:
-    async def test_get_checks_with_filters(self, db_session: AsyncSession) -> None:
-        await _create_check(db_session, status="draft")
-        await _create_check(db_session, status="submitted")
-        await _create_check(db_session, department="特殊部门")
-
-        repo = SafetyRepository(db_session)
-        items, total = await repo.get_checks(status="submitted")
-        assert total >= 1
-        assert all(i.status == "submitted" for i in items)
-
-        items, total = await repo.get_checks(department="特殊部门")
-        assert total == 1
-
-    async def test_soft_delete(self, db_session: AsyncSession) -> None:
-        item = await _create_check(db_session)
-        repo = SafetyRepository(db_session)
-
-        assert await repo.delete_check(item.id) is True
-        assert await repo.get_check_by_id(item.id) is None
-        # 软删除后同编号可重建（部分唯一索引只约束未删除行）
-        rebuilt = await repo.create_check({"check_no": item.check_no, "check_type": "daily", "check_date": datetime.now()})
-        assert rebuilt.id != item.id
-
-    async def test_update_check(self, db_session: AsyncSession) -> None:
-        item = await _create_check(db_session)
-        repo = SafetyRepository(db_session)
-        updated = await repo.update_check(item.id, {"result": "qualified", "status": "reviewed"})
-        assert updated is not None
-        assert updated.result == "qualified"
-        assert updated.status == "reviewed"
-
-
 class TestDailyRiskReportRepository:
     async def test_report_date_filter(self, db_session: AsyncSession) -> None:
         repo = SafetyRepository(db_session)

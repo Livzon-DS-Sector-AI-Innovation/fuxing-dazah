@@ -13,50 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.safety.schemas import (
     DailyRiskReportCreate,
     OhHazardMonitorCreate,
-    SafetyCheckCreate,
 )
 from app.modules.safety.service import (
     DailyRiskReportService,
     OhHazardMonitorService,
-    SafetyService,
 )
 
 
 def _uid(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
-
-
-class TestSafetyCheckService:
-    async def test_create_and_workflow(self, db_session: AsyncSession) -> None:
-        svc = SafetyService(db_session)
-        item = await svc.create_check(
-            SafetyCheckCreate(
-                check_no=_uid("CHK"),
-                check_date=datetime.now(),
-            )
-        )
-        assert item.status == "draft"
-
-        submitted = await svc.submit_check(item.id)
-        assert submitted is not None and submitted.status == "submitted"
-
-        # 已提交状态不能重复提交
-        assert await svc.submit_check(item.id) is None
-
-        reviewed = await svc.review_check(item.id, "qualified")
-        assert reviewed is not None and reviewed.status == "reviewed"
-
-        closed = await svc.close_check(item.id)
-        assert closed is not None and closed.status == "closed"
-
-    async def test_confirm_roles(self, db_session: AsyncSession) -> None:
-        svc = SafetyService(db_session)
-        item = await svc.create_check(
-            SafetyCheckCreate(check_no=_uid("CHK"), check_date=datetime.now())
-        )
-        assert (await svc.confirm_check(item.id, "inspector")).inspector_confirmed is True
-        assert (await svc.confirm_check(item.id, "safety_officer")).safety_officer_confirmed is True
-        assert await svc.confirm_check(item.id, "unknown_role") is None
 
 
 class TestDailyRiskReportService:

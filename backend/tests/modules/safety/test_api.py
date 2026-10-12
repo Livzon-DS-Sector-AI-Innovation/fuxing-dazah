@@ -12,18 +12,6 @@ from datetime import datetime
 from httpx import AsyncClient
 
 
-def _check_payload(**overrides) -> dict:
-    payload = {
-        "check_no": f"CHK-TEST-{uuid.uuid4().hex[:8]}",
-        "check_type": "daily",
-        "check_date": datetime.now().isoformat(),
-        "department": "生产部",
-        "location": "车间三",
-    }
-    payload.update(overrides)
-    return payload
-
-
 def _report_payload(**overrides) -> dict:
     payload = {
         "report_no": f"DRR-TEST-{uuid.uuid4().hex[:8]}",
@@ -44,52 +32,6 @@ def _monitor_payload(**overrides) -> dict:
     }
     payload.update(overrides)
     return payload
-
-
-class TestSafetyCheckApi:
-    async def test_crud_and_workflow(self, client: AsyncClient) -> None:
-        """创建 → 提交 → 审核 → 删除。"""
-        payload = _check_payload()
-        resp = await client.post("/api/v1/safety/checks", json=payload)
-        assert resp.status_code == 200, resp.text
-        created = resp.json()["data"]
-        assert created["status"] == "draft"
-        assert created["inspector_confirmed"] is False
-        check_id = created["id"]
-
-        resp = await client.get(
-            "/api/v1/safety/checks", params={"check_type": "daily"}
-        )
-        assert resp.status_code == 200
-        assert resp.json()["meta"]["total"] >= 1
-
-        resp = await client.post(f"/api/v1/safety/checks/{check_id}/submit")
-        assert resp.json()["data"]["status"] == "submitted"
-
-        resp = await client.post(
-            f"/api/v1/safety/checks/{check_id}/review",
-            params={"result": "qualified"},
-        )
-        assert resp.json()["data"]["status"] == "reviewed"
-
-        resp = await client.delete(f"/api/v1/safety/checks/{check_id}")
-        assert resp.status_code == 200
-
-    async def test_confirm_endpoints(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/v1/safety/checks", json=_check_payload())
-        check_id = resp.json()["data"]["id"]
-
-        resp = await client.post(
-            f"/api/v1/safety/checks/{check_id}/confirm",
-            json={"role": "inspector"},
-        )
-        assert resp.json()["data"]["inspector_confirmed"] is True
-
-        resp = await client.post(
-            f"/api/v1/safety/checks/{check_id}/confirm",
-            json={"role": "safety_officer"},
-        )
-        assert resp.json()["data"]["safety_officer_confirmed"] is True
 
 
 class TestDailyRiskReportApi:

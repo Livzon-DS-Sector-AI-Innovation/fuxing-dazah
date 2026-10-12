@@ -15,7 +15,6 @@ from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.models import (
     Contractor,
     ContractorWorkRecord,
-    SafetyCheck,
     SafetyTraining,
     TrainingRecord,
 )
@@ -25,8 +24,6 @@ from app.modules.safety.schemas import (
     ContractorUpdate,
     ContractorWorkRecordCreate,
     ContractorWorkRecordUpdate,
-    SafetyCheckCreate,
-    SafetyCheckUpdate,
     SafetyTrainingCreate,
     SafetyTrainingUpdate,
     TrainingRecordCreate,
@@ -1744,95 +1741,6 @@ class SafetyService:
         doc.build(elements, onFirstPage=add_page_number, onLaterPages=add_page_number)
         buf.seek(0)
         return buf.getvalue()
-
-    # ==================== SafetyCheck Operations ====================
-
-    async def get_checks(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        check_type: str | None = None,
-        department: str | None = None,
-    ) -> tuple[list[SafetyCheck], int]:
-        """获取安全检查列表"""
-        return await self.repo.get_checks(skip, limit, status, check_type, department)
-
-    async def get_check(self, check_id: uuid.UUID) -> SafetyCheck | None:
-        """获取安全检查详情"""
-        return await self.repo.get_check_by_id(check_id)
-
-    async def create_check(self, data: SafetyCheckCreate) -> SafetyCheck:
-        """创建安全检查"""
-        check_data = data.model_dump()
-        item = await self.repo.create_check(check_data)
-        await self._audit("create", "safety_check", resource_id=item.id)
-        return item
-
-    async def update_check(
-        self, check_id: uuid.UUID, data: SafetyCheckUpdate
-    ) -> SafetyCheck | None:
-        """更新安全检查"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        item = await self.repo.update_check(check_id, update_data)
-        if item:
-            await self._audit("update", "safety_check", resource_id=check_id)
-        return item
-
-    async def submit_check(self, check_id: uuid.UUID) -> SafetyCheck | None:
-        """提交安全检查（草稿→已提交）"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check or check.status != "draft":
-            return None
-        item = await self.repo.update_check(check_id, {"status": "submitted"})
-        if item:
-            await self._audit("submit", "safety_check", resource_id=check_id)
-        return item
-
-    async def review_check(
-        self, check_id: uuid.UUID, result: str
-    ) -> SafetyCheck | None:
-        """审核安全检查"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check or check.status not in ("submitted",):
-            return None
-        return await self.repo.update_check(
-            check_id, {"status": "reviewed", "result": result}
-        )
-
-    async def close_check(self, check_id: uuid.UUID) -> SafetyCheck | None:
-        """关闭安全检查"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check or check.status not in ("reviewed",):
-            return None
-        item = await self.repo.update_check(check_id, {"status": "closed"})
-        if item:
-            await self._audit("close", "safety_check", resource_id=check_id)
-        return item
-
-    async def confirm_check(
-        self, check_id: uuid.UUID, role: str
-    ) -> SafetyCheck | None:
-        """确认安全检查（检查人员 / 安全办）"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check:
-            return None
-        if role == "inspector":
-            return await self.repo.update_check(
-                check_id, {"inspector_confirmed": True}
-            )
-        elif role == "safety_officer":
-            return await self.repo.update_check(
-                check_id, {"safety_officer_confirmed": True}
-            )
-        return None
-
-    async def delete_check(self, check_id: uuid.UUID) -> bool:
-        """删除安全检查"""
-        result = await self.repo.delete_check(check_id)
-        if result:
-            await self._audit("delete", "safety_check", resource_id=check_id)
-        return result
 
 # ==================== 操规修订 Service ====================
 

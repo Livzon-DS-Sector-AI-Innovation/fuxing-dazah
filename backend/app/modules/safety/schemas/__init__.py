@@ -12,12 +12,6 @@ from app.modules.safety.schemas.cert_warnings import (
     RenewRequest,
     WarningLevel,
 )
-from app.modules.safety.schemas.checks import (
-    SafetyCheckBase,
-    SafetyCheckCreate,
-    SafetyCheckResponse,
-    SafetyCheckUpdate,
-)
 from app.modules.safety.schemas.chemical_inventory import (
     CHEMICAL_DEPARTMENT_OPTIONS,
     CHEMICAL_UNIT_OPTIONS,
@@ -184,7 +178,6 @@ from app.modules.safety.schemas.hazard_identifications import (
     get_risk_level,
 )
 from app.modules.safety.schemas.hazards import (
-    ConfirmCheckRequest,
     DepartmentLeaderResponse,
     DepartmentSafetyOfficerResponse,
     HazardReportBase,
@@ -397,11 +390,6 @@ __all__ += [
     'ACCIDENT_STATUS_OPTIONS',
     'ACCIDENT_TYPE_OPTIONS',
     'CHECK_TYPE_OPTIONS',
-    'SafetyCheckBase',
-    'SafetyCheckCreate',
-    'SafetyCheckResponse',
-    'SafetyCheckUpdate',
-    'ConfirmCheckRequest',
     'OhHazardMonitorBase',
     'OhHazardMonitorCreate',
     'OhHazardMonitorResponse',

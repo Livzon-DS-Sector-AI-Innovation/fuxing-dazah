@@ -46,12 +46,6 @@ class VerifyLevelRequest(BaseModel):
     opinion: str | None = Field(None, description="复核意见")
 
 
-class ConfirmCheckRequest(BaseModel):
-    """确认检查请求"""
-
-    role: str = Field(..., description="确认角色: inspector / safety_officer")
-
-
 class HazardStatsResponse(BaseModel):
     """隐患统计（全局，不受分页/筛选影响）"""
 

@@ -11,7 +11,6 @@ from app.modules.safety.api.bitable_config import bitable_config_router
 from app.modules.safety.api.business_agent import business_agent_router
 from app.modules.safety.api.central_alarm import central_alarm_router
 from app.modules.safety.api.cert_warnings import cert_warnings_router
-from app.modules.safety.api.checks import checks_router
 from app.modules.safety.api.chemical_inventory import chemical_inventory_router
 from app.modules.safety.api.contractor_admission import contractor_admission_router
 from app.modules.safety.api.contractors import contractors_router
@@ -55,7 +54,6 @@ from app.modules.safety.knowledge.graph_api import graph_router
 router = APIRouter()
 
 router.include_router(ai_audits_router)
-router.include_router(checks_router)
 router.include_router(daily_risk_reports_router)
 router.include_router(oh_hazard_monitors_router)
 router.include_router(bitable_config_router)
