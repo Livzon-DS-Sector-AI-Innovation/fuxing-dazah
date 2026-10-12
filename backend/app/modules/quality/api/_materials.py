@@ -14,18 +14,23 @@ from app.modules.quality.api._common import router
 from app.modules.quality.repository import (
     create_container_movement,
     create_material,
+    create_supplier,
     delete_material,
+    delete_supplier,
     get_material_by_code,
     get_material_container_by_no,
+    get_supplier_by_code,
     list_container_movements,
     list_containers_by_nos,
     list_material_containers,
     list_material_movements,
     list_materials,
+    list_suppliers,
     material_consumption_trend,
     material_stock_summary,
     material_today_stats,
     update_material,
+    update_supplier,
 )
 from app.modules.quality.schemas import (
     ContainerBatchMoveRequest,
@@ -40,6 +45,9 @@ from app.modules.quality.schemas import (
     MaterialOut,
     MaterialSummaryItem,
     MaterialUpdate,
+    SupplierCreate,
+    SupplierOut,
+    SupplierUpdate,
 )
 from app.modules.quality.service import material_container_service
 from app.platform.identity.models import User
@@ -202,6 +210,7 @@ async def create_material_endpoint(
         "name": payload.name,
         "category": payload.category,
         "vendor_name": payload.vendor_name,
+        "vendor_code": payload.vendor_code,
         "pack_spec": payload.pack_spec,
         "min_stock": payload.min_stock,
         "valid_months": payload.valid_months,
@@ -392,3 +401,69 @@ async def purchase_suggestions_export_endpoint(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="purchase.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )
+
+
+# ─── 供应商主数据 ───
+
+
+@router.get("/material/suppliers", summary="供应商主数据（搜索：代码/名称模糊）")
+async def list_suppliers_endpoint(
+    q: str | None = Query(default=None, description="代码/名称模糊搜索"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await list_suppliers(db, q=q)
+    items = [SupplierOut.model_validate(r).model_dump(mode="json") for r in rows]
+    return success_response(data=items)
+
+
+@router.post("/material/suppliers", summary="新增供应商", status_code=201)
+async def create_supplier_endpoint(
+    payload: SupplierCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    code = payload.code.strip()
+    if not code or "/" in code or " " in code:
+        raise HTTPException(status_code=400, detail="供应商代码不能为空且不能含空格/斜杠")
+    if await get_supplier_by_code(db, code):
+        raise HTTPException(status_code=409, detail=f"供应商代码 {code} 已存在")
+    supplier = await create_supplier(db, {
+        "code": code,
+        "name": payload.name,
+        "contact": payload.contact,
+        "phone": payload.phone,
+        "qual_expiry_date": payload.qual_expiry_date,
+        "remark": payload.remark,
+    })
+    return success_response(
+        data=SupplierOut.model_validate(supplier).model_dump(mode="json"),
+        message="供应商已新增", status_code=201,
+    )
+
+
+@router.put("/material/suppliers/{supplier_id}", summary="更新供应商")
+async def update_supplier_endpoint(
+    supplier_id: uuid.UUID,
+    payload: SupplierUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    supplier = await update_supplier(db, supplier_id, payload.model_dump(exclude_none=True))
+    if supplier is None:
+        raise HTTPException(status_code=404, detail="供应商不存在")
+    return success_response(
+        data=SupplierOut.model_validate(supplier).model_dump(mode="json"),
+        message="供应商已更新",
+    )
+
+
+@router.delete("/material/suppliers/{supplier_id}", summary="删除供应商（软删除）")
+async def delete_supplier_endpoint(
+    supplier_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    if not await delete_supplier(db, supplier_id):
+        raise HTTPException(status_code=404, detail="供应商不存在")
+    return success_response(message="已删除")

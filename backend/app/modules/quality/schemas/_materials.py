@@ -103,6 +103,7 @@ class MaterialCreate(BaseModel):
     name: str = Field(max_length=200)
     category: str | None = Field(default=None, max_length=32, description="原料/辅料/包材/溶剂")
     vendor_name: str | None = Field(default=None, max_length=100, description="默认供应商名称")
+    vendor_code: str | None = Field(default=None, max_length=100, description="供应商代码（供应商字典）")
     pack_spec: str | None = Field(default=None, max_length=50, description="包装规格，如 5kg/听")
     min_stock: int | None = Field(default=None, ge=0, description="安全库存阈值（瓶/桶数）")
     valid_months: int | None = Field(default=None, ge=1, le=120, description="效期月数（赋码时自动计算复验期）")
@@ -115,6 +116,7 @@ class MaterialUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     category: str | None = Field(default=None, max_length=32)
     vendor_name: str | None = Field(default=None, max_length=100)
+    vendor_code: str | None = Field(default=None, max_length=100)
     pack_spec: str | None = Field(default=None, max_length=50)
     min_stock: int | None = Field(default=None, ge=0)
     valid_months: int | None = Field(default=None, ge=1, le=120)
@@ -129,6 +131,7 @@ class MaterialOut(BaseModel):
     name: str
     category: str | None
     vendor_name: str | None
+    vendor_code: str | None
     pack_spec: str | None
     min_stock: int | None
     valid_months: int | None
@@ -167,3 +170,37 @@ class MaterialMovementOut(BaseModel):
     related_doc: str | None
     remark: str | None
     op_at: datetime
+
+
+class SupplierCreate(BaseModel):
+    """供应商主数据新增。"""
+
+    code: str = Field(max_length=100, description="供应商代码（不能含空格/斜杠）")
+    name: str = Field(max_length=200)
+    contact: str | None = Field(default=None, max_length=100)
+    phone: str | None = Field(default=None, max_length=50)
+    qual_expiry_date: str | None = Field(default=None, max_length=32, description="资质效期 YYYY-MM-DD")
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class SupplierUpdate(BaseModel):
+    """供应商主数据更新（全部可选）。"""
+
+    name: str | None = Field(default=None, max_length=200)
+    contact: str | None = Field(default=None, max_length=100)
+    phone: str | None = Field(default=None, max_length=50)
+    qual_expiry_date: str | None = Field(default=None, max_length=32)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class SupplierOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    code: str
+    name: str
+    contact: str | None
+    phone: str | None
+    qual_expiry_date: str | None
+    remark: str | None
+    created_at: datetime

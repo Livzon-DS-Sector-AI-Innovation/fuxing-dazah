@@ -10,6 +10,7 @@ from app.modules.quality.models import (
     QualityContainerMovement,
     QualityMaterial,
     QualityMaterialContainer,
+    QualitySupplier,
 )
 
 # ─── 容器台账 ───
@@ -428,3 +429,92 @@ async def material_consumption_trend(
         entry = counts.get(month, {"in": 0, "out": 0})
         result.append({"month": month, "in": entry["in"], "out": entry["out"]})
     return result
+
+
+# ─── 供应商主数据 ───
+
+
+async def create_supplier(db: AsyncSession, data: dict[str, Any]) -> QualitySupplier:
+    supplier = QualitySupplier(**data)
+    db.add(supplier)
+    await db.flush()
+    return supplier
+
+
+async def get_supplier_by_code(db: AsyncSession, code: str) -> QualitySupplier | None:
+    stmt = (
+        select(QualitySupplier)
+        .where(QualitySupplier.code == code, QualitySupplier.is_deleted == False)  # noqa: E712
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_supplier(db: AsyncSession, sid: uuid.UUID) -> QualitySupplier | None:
+    stmt = select(QualitySupplier).where(
+        QualitySupplier.id == sid, QualitySupplier.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_suppliers(
+    db: AsyncSession, q: str | None = None
+) -> list[QualitySupplier]:
+    conds = [QualitySupplier.is_deleted == False]  # noqa: E712
+    if q:
+        like = f"%{q}%"
+        conds.append((QualitySupplier.code.ilike(like)) | (QualitySupplier.name.ilike(like)))
+    stmt = select(QualitySupplier).where(*conds).order_by(QualitySupplier.code)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def update_supplier(
+    db: AsyncSession, sid: uuid.UUID, data: dict[str, Any]
+) -> QualitySupplier | None:
+    supplier = await get_supplier(db, sid)
+    if supplier is None:
+        return None
+    for key, value in data.items():
+        setattr(supplier, key, value)
+    await db.flush()
+    stmt = select(QualitySupplier).where(QualitySupplier.id == sid)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_supplier(db: AsyncSession, sid: uuid.UUID) -> bool:
+    supplier = await get_supplier(db, sid)
+    if supplier is None:
+        return False
+    supplier.is_deleted = True
+    await db.flush()
+    return True
+
+
+async def supplier_qual_alerts(db: AsyncSession) -> list[dict[str, Any]]:
+    """供应商资质临期（≤90天）/已过期提醒。"""
+    from app.core.time import today as _today
+
+    today_str = _today().isoformat()
+    deadline = func.to_char(func.now() + text("interval '90 days'"), "YYYY-MM-DD")
+    rows = await db.execute(
+        select(
+            QualitySupplier.code,
+            QualitySupplier.name,
+            QualitySupplier.qual_expiry_date,
+        )
+        .where(
+            QualitySupplier.is_deleted == False,  # noqa: E712
+            QualitySupplier.qual_expiry_date.is_not(None),
+            QualitySupplier.qual_expiry_date <= deadline,
+        )
+        .order_by(QualitySupplier.qual_expiry_date)
+    )
+    return [
+        {
+            "code": r.code,
+            "name": r.name,
+            "qual_expiry_date": r.qual_expiry_date,
+            "expired": bool(r.qual_expiry_date and r.qual_expiry_date < today_str),
+        }
+        for r in rows
+    ]

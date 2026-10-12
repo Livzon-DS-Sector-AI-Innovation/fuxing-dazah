@@ -471,3 +471,48 @@ async def test_consumption_trend_shape(db_session):
     assert trend[-1]["month"] >= trend[0]["month"]  # 升序补全空月
     current = trend[-1]
     assert current["out"] >= 1  # 当月有出库
+
+
+async def test_supplier_crud_and_alerts(db_session):
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app.modules.quality.repository import (
+        create_supplier,
+        delete_supplier,
+        get_supplier_by_code,
+        list_suppliers,
+        supplier_qual_alerts,
+        update_supplier,
+    )
+
+    code = f"SUP-{_rand_code()}"
+    supplier = await create_supplier(db_session, {
+        "code": code, "name": "测试供应商", "contact": "张三",
+        "qual_expiry_date": (_dt.now() + _td(days=30)).strftime("%Y-%m-%d"),
+    })
+    assert await get_supplier_by_code(db_session, code) is not None
+    rows = await list_suppliers(db_session, q=code[:6])
+    assert any(s.code == code for s in rows)
+    updated = await update_supplier(db_session, supplier.id, {"contact": "李四"})
+    assert updated is not None and updated.contact == "李四"
+    # 资质临期提醒（30 天内在 90 天窗口内）
+    alerts = await supplier_qual_alerts(db_session)
+    assert any(a["code"] == code and not a["expired"] for a in alerts)
+    assert await delete_supplier(db_session, supplier.id) is True
+    assert await get_supplier_by_code(db_session, code) is None
+
+
+async def test_supplier_expired_alert(db_session):
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app.modules.quality.repository import create_supplier, supplier_qual_alerts
+
+    code = f"SUP-{_rand_code()}"
+    await create_supplier(db_session, {
+        "code": code, "name": "过期供应商",
+        "qual_expiry_date": (_dt.now() - _td(days=10)).strftime("%Y-%m-%d"),
+    })
+    alerts = await supplier_qual_alerts(db_session)
+    assert any(a["code"] == code and a["expired"] for a in alerts)

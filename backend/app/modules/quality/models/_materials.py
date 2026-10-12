@@ -9,6 +9,31 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.base_model import BaseModel
 
 
+class QualitySupplier(BaseModel):
+    """供应商主数据：资质效期到期提醒与赋码/采购建议的供应商维度。"""
+
+    __tablename__ = "quality_suppliers"
+    __table_args__ = (
+        Index(
+            "uq_quality_supplier_code",
+            "code",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_quality_supplier_name", "name"),
+        {"schema": "quality"},
+    )
+
+    code: Mapped[str] = mapped_column(String(100), comment="供应商代码")
+    name: Mapped[str] = mapped_column(String(200), comment="供应商名称")
+    contact: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="联系人")
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="联系电话")
+    qual_expiry_date: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="资质效期 YYYY-MM-DD（到期提醒）"
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
 class QualityMaterial(BaseModel):
     """物料主数据字典（轻量版）：赋码下拉与采购清单的基础。
 
@@ -33,6 +58,9 @@ class QualityMaterial(BaseModel):
         String(32), nullable=True, comment="类别：原料/辅料/包材/溶剂"
     )
     vendor_name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="默认供应商名称")
+    vendor_code: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="供应商代码（逻辑引用 quality.quality_suppliers.code）"
+    )
     pack_spec: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="包装规格，如 5kg/听")
     min_stock: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="安全库存阈值（瓶/桶数），采购建议依据"

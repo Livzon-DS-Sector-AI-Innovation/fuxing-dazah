@@ -468,6 +468,7 @@ export interface MaterialDictItem {
   name: string
   category: string | null
   vendor_name: string | null
+  vendor_code: string | null
   pack_spec: string | null
   min_stock: number | null
   valid_months: number | null
@@ -515,4 +516,18 @@ export interface PurchaseSuggestion {
   available: number
   min_stock: number
   gap: number
+}
+
+
+// ─── 供应商主数据 ───
+
+export interface SupplierItem {
+  id: string
+  code: string
+  name: string
+  contact: string | null
+  phone: string | null
+  qual_expiry_date: string | null
+  remark: string | null
+  created_at: string
 }

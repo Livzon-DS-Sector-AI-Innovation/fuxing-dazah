@@ -191,7 +191,10 @@ async def _push_material_alerts() -> None:
         feishu_configured,
     )
     from app.modules.quality.feishu.message import send_chat_text
-    from app.modules.quality.repository import material_expiry_alerts
+    from app.modules.quality.repository import (
+        material_expiry_alerts,
+        supplier_qual_alerts,
+    )
     from app.modules.quality.service.material_containers import MaterialContainerService
 
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
@@ -203,7 +206,15 @@ async def _push_material_alerts() -> None:
     async with async_session_factory() as db:
         alerts = await material_expiry_alerts(db)
         suggestions = await MaterialContainerService.purchase_suggestions(db)
+        supplier_alerts = await supplier_qual_alerts(db)
     blocks: list[str] = []
+    if supplier_alerts:
+        lines = [
+            f"- {s['name']}（{s['code']}）：资质效期 {s['qual_expiry_date']}"
+            + ("（🚨 已过期，建议暂停采购并重新审计）" if s["expired"] else "（临期，建议联系供应商更新资质）")
+            for s in supplier_alerts
+        ]
+        blocks.append("📋 供应商资质提醒：\n" + "\n".join(lines))
     if alerts:
         lines = []
         for a in alerts:

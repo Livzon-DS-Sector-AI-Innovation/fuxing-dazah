@@ -28,6 +28,7 @@ import type {
   MaterialSummaryItem,
   MaterialMovementItem,
   PurchaseSuggestion,
+  SupplierItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -1123,5 +1124,55 @@ export async function fetchMaterialTrend(materialCode: string, months = 6): Prom
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取领用趋势失败')
+  return res.json()
+}
+
+
+// ─── 供应商主数据 ───
+
+export async function fetchSuppliers(q?: string): Promise<{ data: SupplierItem[] }> {
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/suppliers${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取供应商失败')
+  return res.json()
+}
+
+export async function createSupplier(input: {
+  code: string; name: string; contact?: string; phone?: string; qual_expiry_date?: string; remark?: string
+}): Promise<{ message: string; data: SupplierItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/suppliers`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '新增供应商失败')
+  }
+  return res.json()
+}
+
+export async function updateSupplier(id: string, input: Partial<{
+  name: string; contact: string; phone: string; qual_expiry_date: string; remark: string
+}>): Promise<{ message: string; data: SupplierItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/suppliers/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '更新供应商失败')
+  }
+  return res.json()
+}
+
+export async function deleteSupplier(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/suppliers/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除供应商失败')
   return res.json()
 }

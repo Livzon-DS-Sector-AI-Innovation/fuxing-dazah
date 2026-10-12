@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col, AutoComplete,
 } from 'antd'
 import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined, CheckOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
-import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, PurchaseSuggestion } from '@/types/quality'
+import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, PurchaseSuggestion, SupplierItem } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
@@ -16,6 +16,7 @@ import {
   fetchMaterialSummary, fetchMaterialMovements, exportMaterialMovements,
   fetchPurchaseSuggestions, exportPurchaseSuggestions,
   fetchMaterialTodayStats, fetchContainerDetail, fetchMaterialTrend,
+  fetchSuppliers, createSupplier, updateSupplier, deleteSupplier,
 } from '@/actions/quality'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
@@ -70,6 +71,11 @@ export default function MaterialContainers() {
   const [voidRemark, setVoidRemark] = useState('')
   // 台账操作类型筛选
   const [mvOpType, setMvOpType] = useState<string | undefined>()
+  // 供应商弹窗
+  const [supOpen, setSupOpen] = useState(false)
+  const [supData, setSupData] = useState<SupplierItem[]>([])
+  const [supForm] = Form.useForm()
+  const [editingSup, setEditingSup] = useState<SupplierItem | null>(null)
   // 领用趋势弹窗
   const [trendOpen, setTrendOpen] = useState(false)
   const [trendCode, setTrendCode] = useState<string | undefined>()
@@ -107,6 +113,15 @@ export default function MaterialContainers() {
     }
   }, [])
 
+  const loadSuppliers = useCallback(async (q?: string) => {
+    try {
+      const res = await fetchSuppliers(q)
+      setSupData(res.data)
+    } catch {
+      // 供应商失败静默
+    }
+  }, [])
+
   const loadTodayStats = useCallback(async () => {
     try {
       const res = await fetchMaterialTodayStats()
@@ -120,6 +135,7 @@ export default function MaterialContainers() {
   useEffect(() => { (async () => { await loadSummary() })() }, [loadSummary])
   useEffect(() => { (async () => { await loadTodayStats() })() }, [loadTodayStats])
   useEffect(() => { (async () => { await loadDict() })() }, [loadDict])
+  useEffect(() => { (async () => { await loadSuppliers() })() }, [loadSuppliers])
 
   const dictOptions = useMemo(() => dict.map((d) => ({
     value: d.code,
@@ -303,6 +319,40 @@ export default function MaterialContainers() {
       message.error((err instanceof Error ? err.message : String(err)) || '获取领用趋势失败')
     } finally {
       setTrendLoading(false)
+    }
+  }
+
+  const openSuppliers = () => {
+    setEditingSup(null)
+    supForm.resetFields()
+    setSupOpen(true)
+  }
+
+  const onSaveSupplier = async () => {
+    const values = await supForm.validateFields()
+    try {
+      if (editingSup) {
+        await updateSupplier(editingSup.id, values)
+        message.success('供应商已更新')
+      } else {
+        await createSupplier(values)
+        message.success('供应商已新增')
+      }
+      supForm.resetFields()
+      setEditingSup(null)
+      loadSuppliers()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
+    }
+  }
+
+  const onDeleteSupplier = async (item: SupplierItem) => {
+    try {
+      await deleteSupplier(item.id)
+      message.success('已删除')
+      loadSuppliers()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '删除失败')
     }
   }
 
@@ -513,6 +563,9 @@ export default function MaterialContainers() {
         <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
         <Button icon={<ShoppingCartOutlined />} onClick={openPurchase}>采购清单</Button>
         <Button onClick={openTrend}>📈 领用趋势</Button>
+        {canManage && (
+          <Button onClick={openSuppliers}>🏭 供应商</Button>
+        )}
       </Space>
 
       <Table
@@ -548,8 +601,12 @@ export default function MaterialContainers() {
           <Form.Item name="material_name" label="物料名称" rules={[{ required: true, message: '请输入物料名称' }]}>
             <Input placeholder="盐酸万古霉素原料" />
           </Form.Item>
-          <Form.Item name="vendor_code" label="供应商（可选）">
-            <Input placeholder="SUP-001" />
+          <Form.Item name="vendor_code" label="供应商（可选，字典选择或输入）">
+            <AutoComplete
+              placeholder="选择或输入供应商代码"
+              options={supData.map((sp) => ({ value: sp.code, label: `${sp.code} · ${sp.name}` }))}
+              filterOption={(input, option) => (option?.label as string).toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="inbound_batch_no" label="进厂批号" rules={[{ required: true, message: '请输入进厂批号' }]}>
             <Input placeholder="IN-20261010-01" />
@@ -732,6 +789,76 @@ export default function MaterialContainers() {
           作废后该容器不可再流转，操作留痕。请填写原因：
         </Typography.Paragraph>
         <Input.TextArea rows={2} maxLength={200} value={voidRemark} onChange={(e) => setVoidRemark(e.target.value)} placeholder="如：标签污损/数量不符/重复赋码" />
+      </Modal>
+
+      {/* 供应商主数据弹窗 */}
+      <Modal
+        title="🏭 供应商主数据"
+        open={supOpen}
+        onCancel={() => setSupOpen(false)}
+        footer={null}
+        width={760}
+      >
+        <Form form={supForm} layout="inline" style={{ marginBottom: 12, rowGap: 8 }} onFinish={onSaveSupplier}>
+          <Form.Item name="code" label="代码" rules={[{ required: !editingSup, message: '必填' }]}>
+            <Input disabled={!!editingSup} style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '必填' }]}>
+            <Input style={{ width: 150 }} />
+          </Form.Item>
+          <Form.Item name="contact" label="联系人">
+            <Input style={{ width: 100 }} />
+          </Form.Item>
+          <Form.Item name="phone" label="电话">
+            <Input style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item name="qual_expiry_date" label="资质效期">
+            <DatePicker style={{ width: 130 }} />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit">{editingSup ? '保存' : '新增'}</Button>
+              {editingSup && <Button onClick={() => { setEditingSup(null); supForm.resetFields() }}>取消</Button>}
+            </Space>
+          </Form.Item>
+        </Form>
+        <Table
+          rowKey="id"
+          size="small"
+          dataSource={supData}
+          pagination={false}
+          columns={[
+            { title: '代码', dataIndex: 'code', width: 110 },
+            { title: '名称', dataIndex: 'name' },
+            { title: '联系人', dataIndex: 'contact', width: 90, render: (v: string | null) => v || '-' },
+            { title: '电话', dataIndex: 'phone', width: 130, render: (v: string | null) => v || '-' },
+            { title: '资质效期', dataIndex: 'qual_expiry_date', width: 130, render: (v: string | null) => {
+              if (!v) return '-'
+              const days = dayjs(v).diff(dayjs(), 'day')
+              if (days < 0) return <><Typography.Text>{v}</Typography.Text> <Tag color="red">已过期</Tag></>
+              if (days <= 90) return <><Typography.Text>{v}</Typography.Text> <Tag color="orange">临期 {days} 天</Tag></>
+              return v
+            } },
+            {
+              title: '操作', key: 'actions', width: 120,
+              render: (_: unknown, item: SupplierItem) => (
+                <Space size="small">
+                  <Button size="small" type="link" onClick={() => {
+                    setEditingSup(item)
+                    supForm.setFieldsValue({
+                      code: item.code, name: item.name, contact: item.contact ?? undefined,
+                      phone: item.phone ?? undefined,
+                      qual_expiry_date: item.qual_expiry_date ? dayjs(item.qual_expiry_date) : undefined,
+                    })
+                  }}>编辑</Button>
+                  <Popconfirm title={`确认删除供应商 ${item.code}？`} onConfirm={() => onDeleteSupplier(item)}>
+                    <Button size="small" type="link" danger>删除</Button>
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
       {/* 领用趋势弹窗 */}
