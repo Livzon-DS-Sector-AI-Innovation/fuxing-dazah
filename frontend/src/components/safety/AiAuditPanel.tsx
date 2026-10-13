@@ -21,6 +21,7 @@ import dayjs, { type Dayjs } from 'dayjs'
 import { getAiAuditStats, getAiCallAudit, listAiCallAudits } from '@/actions/safety'
 import type { AiAuditStats, AiCallAuditDetail, AiCallAuditListItem } from '@/types/safety'
 import AiAuditDetailDrawer from './AiAuditDetailDrawer'
+import AiConfigChangeAuditSection from './aiConfig/AiConfigChangeAuditSection'
 import {
   CHANNEL_UI,
   ChannelTag,
@@ -132,7 +133,10 @@ function KpiCard({
 export default function AiAuditPanel() {
   const { message } = App.useApp()
 
-  // ── 时间窗（全页联动：KPI + 趋势图 + 表格） ──
+  // ── 顶层审计视图（三期：调用审计 / 配置变更审计——后者从 AiConfigPanel 审计 Tab 并入） ──
+  const [auditView, setAuditView] = useState<'calls' | 'config'>('calls')
+
+  // ── 时间窗（全页联动：KPI + 趋势图 + 表格；仅调用审计视图） ──
   const [rangeKey, setRangeKey] = useState<RangeKey>('7')
   const [customRange, setCustomRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
 
@@ -483,22 +487,35 @@ export default function AiAuditPanel() {
         <div>
           <div style={{ fontSize: 22, fontWeight: 600, color: UI.ink }}>AI 调用审计</div>
           <div style={{ fontSize: 13, color: UI.slate, marginTop: 2 }}>
-            AI 系统的调用留痕与合规审计
+            AI 调用流水与配置变更留痕审计
           </div>
-        </div>
-        <Space>
           <Segmented
-            options={RANGE_OPTIONS}
-            value={rangeKey}
-            onChange={(v) => setRangeKey(v as RangeKey)}
+            options={[
+              { label: '调用审计', value: 'calls' },
+              { label: '配置变更审计', value: 'config' },
+            ]}
+            value={auditView}
+            onChange={(v) => setAuditView(v as 'calls' | 'config')}
+            style={{ marginTop: 8 }}
           />
-          {rangeKey === 'custom' && (
-            <DatePicker.RangePicker value={customRange} onChange={(v) => setCustomRange(v)} />
-          )}
-          <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
-        </Space>
+        </div>
+        {auditView === 'calls' && (
+          <Space>
+            <Segmented
+              options={RANGE_OPTIONS}
+              value={rangeKey}
+              onChange={(v) => setRangeKey(v as RangeKey)}
+            />
+            {rangeKey === 'custom' && (
+              <DatePicker.RangePicker value={customRange} onChange={(v) => setCustomRange(v)} />
+            )}
+            <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
+          </Space>
+        )}
       </div>
 
+      {auditView === 'calls' ? (
+        <>
       {/* ── B KPI 指标带 ── */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
         <KpiCard
@@ -665,6 +682,10 @@ export default function AiAuditPanel() {
           }}
         />
       </div>
+        </>
+      ) : (
+        <AiConfigChangeAuditSection />
+      )}
 
       {/* ── F 详情抽屉 ── */}
       <AiAuditDetailDrawer
