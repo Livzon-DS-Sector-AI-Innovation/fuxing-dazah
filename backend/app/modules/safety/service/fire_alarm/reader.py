@@ -222,6 +222,19 @@ class FireAlarmBitableReader:
         start, end = month_window(month_start, month_end)
         return await self._fetch_window(start, end)
 
+    async def get_records_by_range(
+        self, start: datetime, end: datetime
+    ) -> list[FireAlarmView]:
+        """任意 UTC 瞬时区间取数（页面台账查询用；含端点毫秒裁剪）。"""
+        return await self._fetch_window(start, end)
+
+    async def count_all(self) -> int:
+        """全表精确计数（search page_size=1 只取 total，不拉数据）。"""
+        result = await self._client.search_records(
+            table_id=self._table_id, page_size=1, strict=True
+        )
+        return int(result.get("total") or 0)
+
 
 def open_reader(
     *,
@@ -256,6 +269,12 @@ class FireAlarmRecordsReader(Protocol):
     async def get_records_by_month(
         self, month_start: date, month_end: date
     ) -> list[FireAlarmView]: ...
+
+    async def get_records_by_range(
+        self, start: datetime, end: datetime
+    ) -> list[FireAlarmView]: ...
+
+    async def count_all(self) -> int: ...
 
 
 __all__ = [

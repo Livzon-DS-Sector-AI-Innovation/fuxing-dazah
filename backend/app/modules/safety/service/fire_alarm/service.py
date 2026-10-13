@@ -211,12 +211,46 @@ class FireAlarmService:
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> tuple[list[FireAlarmRecord], int]:
+    ) -> tuple[list[Any], int]:
         """分页查询报警记录（多条件筛选，默认过滤软删）。
+
+        直读模式：日期窗口拉取 + 内存过滤/分页（过滤口径与镜像一致；不带
+        日期时默认近 90 天窗口——报警表持续增长，全表拉取不现实，页面可
+        显式选更早区间查询）。
 
         Returns:
             (records, total)：按 alarm_time 倒序（最新在前）。
         """
+        if fire_config.direct_enabled():
+            start_day = date_from or (date_to or _bj_today()) - timedelta(days=90)
+            end_day = date_to or _bj_today()
+            start_utc = _bj_day_start(start_day)
+            end_utc = _bj_day_start(end_day + timedelta(days=1))
+            views = await self._direct_reader().get_records_by_range(
+                start_utc, end_utc
+            )
+            if department:
+                views = [v for v in views if v.department == department]
+            if alarm_type:
+                views = [v for v in views if v.alarm_type == alarm_type]
+            if alarm_nature:
+                views = [v for v in views if v.alarm_nature == alarm_nature]
+            if ai_dimension:
+                views = [v for v in views if v.ai_dimension == ai_dimension]
+            if keyword:
+                kw = keyword.lower()
+                views = [
+                    v for v in views
+                    if kw in (v.location or "").lower()
+                    or kw in (v.cause_description or "").lower()
+                ]
+            views.sort(
+                key=lambda v: v.alarm_time or datetime.min.replace(tzinfo=UTC),
+                reverse=True,
+            )
+            total = len(views)
+            offset = (page - 1) * page_size
+            return views[offset : offset + page_size], total
         conds = [FireAlarmRecord.is_deleted == False]  # noqa: E712
         if date_from is not None:
             conds.append(
@@ -275,13 +309,16 @@ class FireAlarmService:
         today_records = await self._get_records_by_date(target_date)
         week_start, week_end = get_natural_week_range(target_date)
         week_records = await self._get_records_by_week(week_start, week_end)
-        total_count = (
-            await self.session.scalar(
-                select(func.count(FireAlarmRecord.id)).where(
-                    FireAlarmRecord.is_deleted == False  # noqa: E712
+        if fire_config.direct_enabled():
+            total_count = await self._direct_reader().count_all()
+        else:
+            total_count = (
+                await self.session.scalar(
+                    select(func.count(FireAlarmRecord.id)).where(
+                        FireAlarmRecord.is_deleted == False  # noqa: E712
+                    )
                 )
-            )
-        ) or 0
+            ) or 0
         return {
             "date": target_date.isoformat(),
             "today_total": len(today_records),
@@ -765,6 +802,11 @@ class FireAlarmService:
 def _bj_today() -> date:
     """北京时间今天（UTC+8）。"""
     return (datetime.now(UTC) + timedelta(hours=8)).date()
+
+
+def _bj_day_start(d: date) -> datetime:
+    """北京时间 d 日 00:00 对应的 UTC 瞬时。"""
+    return datetime(d.year, d.month, d.day, tzinfo=UTC) - timedelta(hours=8)
 
 
 def _prev_month_last_day(today: date | None = None) -> date:

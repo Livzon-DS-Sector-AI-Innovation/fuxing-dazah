@@ -84,6 +84,10 @@ async def get_records(
     db: AsyncSession = Depends(get_db),
 ):
     """分页查询报警记录（默认过滤软删；按报警时间倒序）。"""
+    import time
+
+    direct = direct_config.direct_enabled()
+    t0 = time.perf_counter()
     service = FireAlarmService(db)
     items, total = await service.get_records(
         date_from=date_from, date_to=date_to, department=department,
@@ -91,9 +95,13 @@ async def get_records(
         ai_dimension=ai_dimension, keyword=keyword,
         page=page, page_size=page_size,
     )
+    meta: dict[str, object] = {"page": page, "page_size": page_size, "total": total}
+    if direct:
+        meta["mode"] = "direct"
+        meta["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
     return ApiResponse(
         data=[_serialize(r) for r in items],
-        meta={"page": page, "page_size": page_size, "total": total},
+        meta=meta,
     )
 
 
