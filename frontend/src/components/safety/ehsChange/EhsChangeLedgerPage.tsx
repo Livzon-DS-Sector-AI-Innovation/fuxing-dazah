@@ -8,12 +8,14 @@
  */
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { Button, Drawer, Input, Select, Space, Table, Tooltip, Typography } from 'antd'
+import { Button, Drawer, Input, Select, Space, Table, Tooltip } from 'antd'
 import { EyeOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchEhsChanges, fetchEhsChangeStats } from '@/lib/api/safety/ehs-change'
 import { CHANGE_DURATION_OPTIONS, CHANGE_TYPE_OPTIONS } from '@/types/safety'
 import type { EhsChange } from '@/types/safety'
+import { EmptyGuide, PageHeader, SectionCard, StatCard } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import { T, monoFont } from '../shared-styles'
 import {
   AI_CONCLUSION_FILTER,
@@ -22,9 +24,7 @@ import {
   STATUS_FILTER,
   getAiConclusion,
 } from './ehsChangeConstants'
-import { CARD_STYLE, EhsChangeDetail, GradePill, KpiCard, StatusPill, AiConclusionPill } from './shared'
-
-const { Title, Text } = Typography
+import { EhsChangeDetail, GradePill, StatusPill, AiConclusionPill } from './shared'
 
 const LEDGER_STATS = { total: 0, status: {}, ai: { 审核通过: 0, 需补充完善: 0, 审核不通过: 0 } } as { total: number; status: Record<string, number>; ai: Record<string, number> }
 
@@ -95,47 +95,50 @@ export function EhsChangeLedgerPage() {
     setFilters((f) => ({ ...f, ...patch }))
   }
 
-  // ── KPI 卡带（点击联动筛选）──
-  const kpiCards = useMemo(
+  // ── 统计卡带（ui-kit StatCard，点击联动筛选；选中卡片高亮为 primary）──
+  const kpiCards = useMemo<
+    { label: string; value: number; tone: Tone; active: boolean; onClick: () => void }[]
+  >(
     () => [
       {
         label: '全部变更',
         value: stats.total,
+        tone: 'default',
         active: !filters.status && !filters.ai_review_conclusion,
         onClick: () => setFilter({ status: undefined, ai_review_conclusion: undefined }),
       },
       {
         label: '审批中',
         value: stats.status.under_review ?? 0,
-        color: T.warning,
+        tone: 'info',
         active: filters.status === 'under_review',
         onClick: () => setFilter({ status: 'under_review', ai_review_conclusion: undefined }),
       },
       {
         label: '已通过',
         value: stats.status.approved ?? 0,
-        color: T.success,
+        tone: 'ok',
         active: filters.status === 'approved',
         onClick: () => setFilter({ status: 'approved', ai_review_conclusion: undefined }),
       },
       {
         label: '需补充完善',
         value: stats.ai['需补充完善'] ?? 0,
-        color: T.warning,
+        tone: 'warn',
         active: filters.ai_review_conclusion === '需补充完善',
         onClick: () => setFilter({ status: undefined, ai_review_conclusion: '需补充完善' }),
       },
       {
         label: '审核不通过',
         value: stats.ai['审核不通过'] ?? 0,
-        color: T.error,
+        tone: 'danger',
         active: filters.ai_review_conclusion === '审核不通过',
         onClick: () => setFilter({ status: undefined, ai_review_conclusion: '审核不通过' }),
       },
       {
         label: '已拒绝',
         value: stats.status.rejected ?? 0,
-        color: T.error,
+        tone: 'danger',
         active: filters.status === 'rejected',
         onClick: () => setFilter({ status: 'rejected', ai_review_conclusion: undefined }),
       },
@@ -195,30 +198,28 @@ export function EhsChangeLedgerPage() {
   ]
 
   return (
-    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* 页头 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <Title level={3} style={{ margin: 0, fontSize: 22, fontWeight: 600, color: T.ink }}>
-            EHS变更管理
-          </Title>
-          <Text style={{ fontSize: 13, color: T.slate }}>
-            基于 T/CCSAS 007-2020 · 审批与验收台账只读监控，业务操作在飞书多维表格与机器人
-          </Text>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-      </div>
+      <PageHeader
+        breadcrumb={['安全管理', 'EHS 变更管理']}
+        title="EHS 变更管理"
+        description="EHS 变更申请（URS）与验收台账"
+        actions={<Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>}
+      />
 
-      {/* KPI 卡带 */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      {/* 统计卡带（点击联动筛选） */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         {kpiCards.map((k) => (
-          <KpiCard key={k.label} label={k.label} value={k.value} active={k.active} color={k.color} onClick={k.onClick} />
+          <StatCard key={k.label} label={k.label} value={k.value} tone={k.active ? 'primary' : k.tone} onClick={k.onClick} />
         ))}
       </div>
 
-      {/* 表格卡（筛选栏并入卡头） */}
-      <div style={{ ...CARD_STYLE, padding: '4px 16px 12px' }}>
-        <div style={{ margin: '0 -16px', padding: '8px 16px 12px', borderBottom: `1px solid ${T.hairlineSoft}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+      {/* 变更台账（筛选栏并入卡内） */}
+      <SectionCard
+        title="变更台账"
+        description={`URS 申请与验收记录（共 ${total} 条）· 业务操作在飞书多维表格与机器人`}
+      >
+        <div style={{ marginBottom: 12 }}>
           <Space wrap>
             <Select placeholder="全部分类" allowClear size="small" style={{ width: 140 }} options={CHANGE_TYPE_OPTIONS} value={filters.change_type}
               onChange={(v) => setFilter({ change_type: v })} />
@@ -232,7 +233,6 @@ export function EhsChangeLedgerPage() {
               defaultValue={filters.keyword}
               onSearch={(v) => setKeywordFilter(v)} />
           </Space>
-          <span style={{ fontSize: 12, color: T.steel }}>共 {total} 条</span>
         </div>
         <Table
           columns={columns}
@@ -240,8 +240,10 @@ export function EhsChangeLedgerPage() {
           rowKey="id"
           loading={isLoading}
           size="small"
-          style={{ marginTop: 8 }}
           scroll={{ x: 'max-content' }}
+          locale={{ emptyText: (
+            <EmptyGuide compact title="暂无变更记录" description="调整筛选条件，或等待飞书多维表格同步后刷新" />
+          ) }}
           pagination={{
             current: pagination.page,
             pageSize: pagination.page_size,
@@ -251,7 +253,7 @@ export function EhsChangeLedgerPage() {
             onChange: (page, pageSize) => setPagination((p) => ({ ...p, page, page_size: pageSize })),
           }}
         />
-      </div>
+      </SectionCard>
 
       {/* 详情 Drawer（只读） */}
       <Drawer

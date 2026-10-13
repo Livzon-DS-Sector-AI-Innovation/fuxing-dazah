@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import {
-  App, Button, DatePicker, Drawer, Empty, Input, Modal, Select, Space, Table, Tag,
+  App, Button, DatePicker, Drawer, Input, Modal, Select, Space, Table, Tag,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -22,27 +22,17 @@ import type {
   CentralAlarmStats,
 } from '@/types/safety'
 
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import { T } from './shared-styles'
 import { AI_DIMENSION_CONFIG, AI_PATTERN_CONFIG, dynamicTagStyle, PUSH_RESULT } from './centralAlarmConstants'
 
-const CARD_STYLE: React.CSSProperties = {
-  background: T.canvas,
-  border: `1px solid ${T.hairline}`,
-  borderRadius: 12,
-}
+// ── 推送结果 → ui-kit 语义 tone（成功 ok / 跳过 default / 失败 danger）──
 
-function KpiCard({ label, value, caption, color }: {
-  label: string; value: React.ReactNode; caption?: React.ReactNode; color?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: T.muted }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: color ?? T.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: T.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+const PUSH_RESULT_TONE: Record<'success' | 'skipped' | 'failed', Tone> = {
+  success: 'ok',
+  skipped: 'default',
+  failed: 'danger',
 }
 
 function PatternTag({ pattern }: { pattern?: string | null }) {
@@ -210,49 +200,58 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
   const patternOptions = Object.keys(AI_PATTERN_CONFIG).map((k) => ({ value: k, label: AI_PATTERN_CONFIG[k].label }))
 
   return (
-    <div style={{ padding: 20, background: T.canvas }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: T.ink }}>中控报警分析</h2>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => void refresh()}>刷新</Button>
-          <Button icon={<SyncOutlined />} loading={syncing} onClick={onSync}>同步飞书</Button>
-          <Button type="primary" icon={<FileTextOutlined />} loading={generating} onClick={onGenerate}>生成日报</Button>
-        </Space>
+    <div style={{ padding: '0 0 32px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* ── 统计行（Tab 内） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="今日报警" value={stats?.today_total ?? 0} tone="danger" sub="北京时区今日" />
+        <StatCard label="本周报警" value={stats?.week_total ?? 0} sub="自然周 周一~周日" />
+        <StatCard label="累计报警" value={stats?.total_count ?? 0} sub="全量非软删" />
+        <StatCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? 0} tone="ok" sub="已回写 AI 字段" />
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-        <KpiCard label="今日报警" value={stats?.today_total ?? 0} caption="北京时区今日" color={T.error} />
-        <KpiCard label="本周报警" value={stats?.week_total ?? 0} caption="自然周 周一~周日" />
-        <KpiCard label="累计报警" value={stats?.total_count ?? 0} caption="全量非软删" />
-        <KpiCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? 0} caption="已回写 AI 字段" />
-      </div>
+      {/* ── 记录台账（筛选 + 表；同步/日报为既有业务入口） ── */}
+      <SectionCard
+        title="报警记录"
+        description={`飞书多维表格同步台账（共 ${total} 条）`}
+        action={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={() => void refresh()}>刷新</Button>
+            <Button icon={<SyncOutlined />} loading={syncing} onClick={onSync}>同步飞书</Button>
+            <Button type="primary" icon={<FileTextOutlined />} loading={generating} onClick={onGenerate}>生成日报</Button>
+          </Space>
+        }
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Space wrap>
+            <DatePicker.RangePicker value={range} onChange={(v) => setRange(v as [Dayjs | null, Dayjs | null])} allowClear />
+            <Select allowClear placeholder="车间" style={{ width: 130 }} value={workshop} onChange={setWorkshop} options={workshopOptions} />
+            <Select allowClear placeholder="岗位" style={{ width: 130 }} value={post} onChange={setPost} options={postOptions} />
+            <Select allowClear placeholder="报警类型" style={{ width: 130 }} value={aiAlarmType} onChange={setAiAlarmType} options={typeOptions} />
+            <Select allowClear placeholder="异常模式" style={{ width: 130 }} value={aiPattern} onChange={setAiPattern} options={patternOptions} />
+            <Input.Search placeholder="报警说明/特殊说明关键词" style={{ width: 220 }} allowClear value={keyword}
+              onChange={(e) => setKeyword(e.target.value)} onSearch={onFilter} />
+            <Button type="primary" onClick={onFilter}>查询</Button>
+            <Button onClick={onReset}>重置</Button>
+          </Space>
+        </div>
 
-      <div style={{ ...CARD_STYLE, padding: 16, marginBottom: 16 }}>
-        <Space wrap>
-          <DatePicker.RangePicker value={range} onChange={(v) => setRange(v as [Dayjs | null, Dayjs | null])} allowClear />
-          <Select allowClear placeholder="车间" style={{ width: 130 }} value={workshop} onChange={setWorkshop} options={workshopOptions} />
-          <Select allowClear placeholder="岗位" style={{ width: 130 }} value={post} onChange={setPost} options={postOptions} />
-          <Select allowClear placeholder="报警类型" style={{ width: 130 }} value={aiAlarmType} onChange={setAiAlarmType} options={typeOptions} />
-          <Select allowClear placeholder="异常模式" style={{ width: 130 }} value={aiPattern} onChange={setAiPattern} options={patternOptions} />
-          <Input.Search placeholder="报警说明/特殊说明关键词" style={{ width: 220 }} allowClear value={keyword}
-            onChange={(e) => setKeyword(e.target.value)} onSearch={onFilter} />
-          <Button type="primary" onClick={onFilter}>查询</Button>
-          <Button onClick={onReset}>重置</Button>
-        </Space>
+        <Table<CentralAlarmRecord>
+          rowKey="id"
+          columns={columns}
+          dataSource={records}
+          loading={isLoading}
+          scroll={{ x: 1100 }}
+          locale={{ emptyText: (
+            <EmptyGuide compact title="暂无中控报警记录" description="可点击「同步飞书」拉取数据，或调整筛选后查询" />
+          ) }}
+          pagination={{
+            current: page, pageSize, total, showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
+            onChange: (p, ps) => { setPage(p); setPageSize(ps) },
+          }}
+        />
+      </SectionCard>
       </div>
-
-      <Table<CentralAlarmRecord>
-        rowKey="id"
-        columns={columns}
-        dataSource={records}
-        loading={isLoading}
-        scroll={{ x: 1100 }}
-        locale={{ emptyText: <Empty description="暂无中控报警记录" /> }}
-        pagination={{
-          current: page, pageSize, total, showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, ps) => { setPage(p); setPageSize(ps) },
-        }}
-      />
 
       {reportModal && (
         <Modal
@@ -264,11 +263,14 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
         >
           <div style={{ fontSize: 12, color: T.steel, marginBottom: 8 }}>
             涉及 {reportModal.total} 条 · AI 分析 {reportModal.analyzed} 条 ·
-            {reportModal.push_results?.map((p, i) => (
-              <Tag key={i} color={PUSH_RESULT[p.success ? 'success' : p.skipped ? 'skipped' : 'failed'].color} style={{ marginLeft: 6 }}>
-                {PUSH_RESULT[p.success ? 'success' : p.skipped ? 'skipped' : 'failed'].label}
-              </Tag>
-            ))}
+            {reportModal.push_results?.map((p, i) => {
+              const key = p.success ? 'success' : p.skipped ? 'skipped' : 'failed'
+              return (
+                <span key={i} style={{ marginLeft: 6 }}>
+                  <StatusTag tone={PUSH_RESULT_TONE[key]} label={PUSH_RESULT[key].label} />
+                </span>
+              )
+            })}
           </div>
           <pre style={{ whiteSpace: 'pre-wrap', background: T.canvas, padding: 16, borderRadius: 8, fontSize: 13, lineHeight: 1.7, maxHeight: 480, overflow: 'auto' }}>
             {reportModal.markdown_report}

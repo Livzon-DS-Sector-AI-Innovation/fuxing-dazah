@@ -16,7 +16,6 @@ import {
   Space,
   Table,
   Tabs,
-  Tag,
   Tooltip,
   Typography,
 } from 'antd'
@@ -39,8 +38,9 @@ import type {
   ContractorAdmissionListItem,
   ContractorAdmissionStats,
 } from '@/types/safety'
+import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import { T } from '../shared-styles'
-import { CARD_STYLE, KpiCard } from '../ehsChange/shared'
 import { fileProxyUrl } from '../file-url'
 import {
   ADMISSION_CONCLUSION_UI,
@@ -54,20 +54,29 @@ import {
   TRAINING_STATUS_UI,
 } from './contractorAdmissionConstants'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 function fmtDate(v?: string | null): string {
   if (!v) return ''
   return new Date(v).toLocaleDateString('zh-CN')
 }
 
-function Pill({ ui, value }: { ui?: { label: string; pill: React.CSSProperties }; value?: string | null }) {
+// ── 状态 pill → ui-kit 语义 tone（label 仍取 constants，视觉统一 StatusTag）──
+
+const SUBMIT_STATUS_TONE: Record<string, Tone> = { 已完成: 'ok', 进行中: 'info', 未开始: 'danger' }
+const TRAINING_STATUS_TONE: Record<string, Tone> = { 已完结: 'ok', 已培训待补材: 'warn', 未培训: 'danger' }
+const AI_REVIEW_STATUS_TONE: Record<string, Tone> = { none: 'default', processing: 'info', completed: 'ok', failed: 'danger' }
+const CONCLUSION_TONE: Record<string, Tone> = { 审核通过: 'ok', 需补充完善: 'warn', 审核不通过: 'danger' }
+
+function Pill({ ui, value, tone }: { ui?: { label: string; pill: React.CSSProperties }; value?: string | null; tone?: Tone }) {
   if (!value || !ui) return <span style={{ fontSize: 12, color: T.muted }}>—</span>
+  if (tone) return <StatusTag tone={tone} label={ui.label} />
   return <span style={ui.pill}>{ui.label}</span>
 }
 
-function PillInline({ ui, value }: { ui?: React.CSSProperties; value?: string | null }) {
+function PillInline({ ui, value, tone }: { ui?: React.CSSProperties; value?: string | null; tone?: Tone }) {
   if (!value || !ui) return <span style={{ fontSize: 12, color: T.muted }}>—</span>
+  if (tone) return <StatusTag tone={tone} label={value} />
   return <span style={ui}>{value}</span>
 }
 
@@ -161,33 +170,41 @@ export function ContractorAdmissionPage() {
     setFilters((f) => ({ ...f, ...patch }))
   }
 
-  // ── KPI 卡带（AI 审核状态维度，点击联动筛选）──
-  const kpiCards = useMemo(
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['contractor-admissions'] })
+    queryClient.invalidateQueries({ queryKey: ['contractor-admission-stats'] })
+  }
+
+  // ── 统计卡带（ui-kit StatCard，AI 审核状态维度，点击联动筛选；选中卡片高亮 primary）──
+  const kpiCards = useMemo<
+    { label: string; value: number; tone: Tone; active: boolean; onClick: () => void }[]
+  >(
     () => [
       {
         label: '总数',
         value: stats.total,
+        tone: 'default',
         active: !filters.ai_review_status,
         onClick: () => setFilter({ ai_review_status: undefined }),
       },
       {
         label: '待审核',
         value: stats.by_ai_review_status['none'] ?? 0,
-        color: T.warning,
+        tone: 'warn',
         active: filters.ai_review_status === 'none',
         onClick: () => setFilter({ ai_review_status: 'none' }),
       },
       {
         label: '通过',
         value: stats.by_ai_review_status['completed'] ?? 0,
-        color: T.success,
+        tone: 'ok',
         active: filters.ai_review_status === 'completed',
         onClick: () => setFilter({ ai_review_status: 'completed' }),
       },
       {
         label: '不通过',
         value: stats.by_ai_review_status['failed'] ?? 0,
-        color: T.error,
+        tone: 'danger',
         active: filters.ai_review_status === 'failed',
         onClick: () => setFilter({ ai_review_status: 'failed' }),
       },
@@ -284,25 +301,25 @@ export function ContractorAdmissionPage() {
       title: '提交状态',
       dataIndex: 'submit_status',
       width: 96,
-      render: (v: string | null) => <Pill ui={SUBMIT_STATUS_UI[v ?? '']} value={v} />,
+      render: (v: string | null) => <Pill ui={SUBMIT_STATUS_UI[v ?? '']} value={v} tone={SUBMIT_STATUS_TONE[v ?? '']} />,
     },
     {
       title: '培训状态',
       dataIndex: 'training_status',
       width: 110,
-      render: (v: string | null) => <Pill ui={TRAINING_STATUS_UI[v ?? '']} value={v} />,
+      render: (v: string | null) => <Pill ui={TRAINING_STATUS_UI[v ?? '']} value={v} tone={TRAINING_STATUS_TONE[v ?? '']} />,
     },
     {
       title: 'AI审核状态',
       dataIndex: 'ai_review_status',
       width: 96,
-      render: (v: string | undefined) => <Pill ui={AI_REVIEW_STATUS_UI[v ?? '']} value={v} />,
+      render: (v: string | undefined) => <Pill ui={AI_REVIEW_STATUS_UI[v ?? '']} value={v} tone={AI_REVIEW_STATUS_TONE[v ?? '']} />,
     },
     {
       title: 'AI审核结论',
       dataIndex: 'ai_overall_conclusion',
       width: 120,
-      render: (v: string | null) => <PillInline ui={ADMISSION_CONCLUSION_UI[v ?? '']} value={v} />,
+      render: (v: string | null) => <PillInline ui={ADMISSION_CONCLUSION_UI[v ?? '']} value={v} tone={CONCLUSION_TONE[v ?? '']} />,
     },
     {
       title: '创建时间',
@@ -347,8 +364,8 @@ export function ContractorAdmissionPage() {
     { label: '材料失效日期', value: fmtDate(a.material_expiry_date) },
     { label: '实际提交日期', value: fmtDate(a.actual_submit_date) },
     { label: '实际完成日期', value: fmtDate(a.actual_complete_date) },
-    { label: '提交状态', node: <Pill ui={SUBMIT_STATUS_UI[a.submit_status ?? '']} value={a.submit_status} /> },
-    { label: '培训状态', node: <Pill ui={TRAINING_STATUS_UI[a.training_status ?? '']} value={a.training_status} /> },
+    { label: '提交状态', node: <Pill ui={SUBMIT_STATUS_UI[a.submit_status ?? '']} value={a.submit_status} tone={SUBMIT_STATUS_TONE[a.submit_status ?? '']} /> },
+    { label: '培训状态', node: <Pill ui={TRAINING_STATUS_UI[a.training_status ?? '']} value={a.training_status} tone={TRAINING_STATUS_TONE[a.training_status ?? '']} /> },
   ]
 
   const renderAttachments = (a: ContractorAdmission) => (
@@ -431,8 +448,8 @@ export function ContractorAdmissionPage() {
           <FieldLabel>总体结论</FieldLabel>
           <div style={{ marginBottom: 8 }}>
             {r?.overall_conclusion
-              ? <span style={ADMISSION_CONCLUSION_UI[r.overall_conclusion]}>{r.overall_conclusion}</span>
-              : <Tag>未审核</Tag>}
+              ? <StatusTag tone={CONCLUSION_TONE[r.overall_conclusion] ?? 'default'} label={r.overall_conclusion} />
+              : <StatusTag tone="default" label="未审核" />}
           </div>
           {r?.overall_report && <TextBlock>{r.overall_report}</TextBlock>}
         </div>
@@ -445,8 +462,8 @@ export function ContractorAdmissionPage() {
               <FieldLabel>{d.label}</FieldLabel>
               <div style={{ marginBottom: 8 }}>
                 {dim.conclusion
-                  ? <span style={ADMISSION_CONCLUSION_UI[dim.conclusion]}>{dim.conclusion}</span>
-                  : <Tag>未审核</Tag>}
+                  ? <StatusTag tone={CONCLUSION_TONE[dim.conclusion] ?? 'default'} label={dim.conclusion} />
+                  : <StatusTag tone="default" label="未审核" />}
               </div>
               {dim.report && <TextBlock>{dim.report}</TextBlock>}
               {dim.defects && dim.defects.length > 0 && (
@@ -495,33 +512,28 @@ export function ContractorAdmissionPage() {
   }
 
   return (
-    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* 页头 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <Title level={3} style={{ margin: 0, fontSize: 22, fontWeight: 600, color: T.ink }}>
-            相关方准入审核
-          </Title>
-          <Text style={{ fontSize: 13, color: T.slate }}>
-            飞书多维表格同步 · AI 审核（安全管理协议，营业执照/保险凭证维度待开发）
-          </Text>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={() => {
-          queryClient.invalidateQueries({ queryKey: ['contractor-admissions'] })
-          queryClient.invalidateQueries({ queryKey: ['contractor-admission-stats'] })
-        }}>刷新</Button>
-      </div>
+      <PageHeader
+        breadcrumb={['安全管理', '相关方管理']}
+        title="相关方管理"
+        description="相关方准入台账与状态查询"
+        actions={<Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>}
+      />
 
-      {/* KPI 卡带 */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      {/* 统计卡带（点击联动筛选） */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {kpiCards.map((k) => (
-          <KpiCard key={k.label} label={k.label} value={k.value} active={k.active} color={k.color} onClick={k.onClick} />
+          <StatCard key={k.label} label={k.label} value={k.value} tone={k.active ? 'primary' : k.tone} onClick={k.onClick} />
         ))}
       </div>
 
-      {/* 表格卡（筛选栏并入卡头） */}
-      <div style={{ ...CARD_STYLE, padding: '4px 16px 12px' }}>
-        <div style={{ margin: '0 -16px', padding: '8px 16px 12px', borderBottom: `1px solid ${T.hairlineSoft}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+      {/* 准入台账（筛选栏并入卡内） */}
+      <SectionCard
+        title="准入台账"
+        description={`飞书多维表格同步（共 ${total} 条）· AI 审核安全管理协议，营业执照/保险凭证维度待开发`}
+      >
+        <div style={{ marginBottom: 12 }}>
           <Space wrap>
             <Select placeholder="全部类型" allowClear size="small" style={{ width: 140 }} options={RELATED_PARTY_TYPE_FILTER} value={filters.related_party_type}
               onChange={(v) => setFilter({ related_party_type: v })} />
@@ -533,7 +545,6 @@ export function ContractorAdmissionPage() {
               defaultValue={filters.keyword}
               onSearch={(v) => setFilter({ keyword: v || undefined })} />
           </Space>
-          <span style={{ fontSize: 12, color: T.steel }}>共 {total} 条</span>
         </div>
         <Table
           columns={columns}
@@ -541,8 +552,10 @@ export function ContractorAdmissionPage() {
           rowKey="id"
           loading={isLoading}
           size="small"
-          style={{ marginTop: 8 }}
           scroll={{ x: 'max-content' }}
+          locale={{ emptyText: (
+            <EmptyGuide compact title="暂无相关方准入记录" description="调整筛选条件，或等待飞书多维表格同步后刷新" />
+          ) }}
           pagination={{
             current: pagination.page,
             pageSize: pagination.page_size,
@@ -552,7 +565,7 @@ export function ContractorAdmissionPage() {
             onChange: (page, pageSize) => setPagination((p) => ({ ...p, page, page_size: pageSize })),
           }}
         />
-      </div>
+      </SectionCard>
 
       {/* 详情 Drawer */}
       <Drawer
@@ -570,7 +583,7 @@ export function ContractorAdmissionPage() {
               <span style={{ fontSize: 12, color: T.steel }}>
                 来源：{selected.source === 'bitable' ? '飞书' : '平台'}
               </span>
-              <Pill ui={AI_REVIEW_STATUS_UI[selected.ai_review_status ?? '']} value={selected.ai_review_status} />
+              <Pill ui={AI_REVIEW_STATUS_UI[selected.ai_review_status ?? '']} value={selected.ai_review_status} tone={AI_REVIEW_STATUS_TONE[selected.ai_review_status ?? '']} />
               {selected.feishu_url && (
                 <a href={selected.feishu_url} target="_blank" rel="noreferrer" style={{ color: '#0075de', fontSize: 13 }}>
                   查看飞书原文 ↗

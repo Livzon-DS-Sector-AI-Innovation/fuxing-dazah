@@ -1,7 +1,6 @@
 // EHS 变更管理组件
 export {
   CARD_STYLE,
-  KpiCard,
   StatusPill,
   AiConclusionPill,
   GradePill,

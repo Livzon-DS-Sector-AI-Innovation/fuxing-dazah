@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import {
-  App, Button, DatePicker, Empty, Input, Modal, Select, Space, Table, Tag, Tooltip,
+  App, Button, DatePicker, Input, Modal, Select, Space, Table, Tooltip,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -25,6 +25,8 @@ import type {
   FireAlarmStats,
 } from '@/types/safety'
 
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import { T } from './shared-styles'
 import { AI_DIMENSION_CONFIG, dynamicTagStyle, PUSH_RESULT } from './fireAlarmConstants'
 
@@ -38,20 +40,12 @@ const CARD_STYLE: React.CSSProperties = {
 
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace'
 
-// ── KPI 卡（对齐 SpecialOpsManagement 内联 KpiCard）──
+// ── 推送结果 → ui-kit 语义 tone（成功 ok / 跳过 default / 失败 danger）──
 
-function KpiCard({ label, value, caption, color, bg }: {
-  label: string; value: React.ReactNode; caption?: React.ReactNode; color?: string; bg?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? T.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: T.muted }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: color ?? T.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: T.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+const PUSH_RESULT_TONE: Record<'success' | 'skipped' | 'failed', Tone> = {
+  success: 'ok',
+  skipped: 'default',
+  failed: 'danger',
 }
 
 // ── AI 维度 Tag（英文枚举 → 中文；未识别/空 → 灰「—」）──
@@ -344,25 +338,22 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
   ]
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: '0 0 32px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-      {/* ── 页头 ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 600, color: T.ink }}>消防报警分析</div>
-          <div style={{ fontSize: 13, color: T.slate, marginTop: 2 }}>
-            飞书多维表格数据同步 · AI 二次分析 · 日报/月报推送
-          </div>
+      {/* ── 统计行（Tab 内）+ 操作卡（同步/日报/月报既有业务入口） ── */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        <div className="grid min-w-0 flex-1 grid-cols-2 gap-3 md:grid-cols-4">
+          <StatCard
+            label="今日报警"
+            value={statsQuery.isLoading && !stats ? '—' : (stats?.today_total ?? '—')}
+            sub="北京时间当日"
+            loading={statsQuery.isLoading && !stats}
+          />
+          <StatCard label="本周报警" value={stats?.week_total ?? '—'} tone="primary" sub="自然周 周一~周日" />
+          <StatCard label="累计记录" value={stats?.total_count ?? '—'} sub="平台台账全量" />
+          <StatCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? '—'} tone="ok" sub="生成日报后自动回写" />
         </div>
-        <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
-      </div>
-
-      {/* ── KPI 指标带 + 操作卡 ── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'stretch' }}>
-        <KpiCard label="今日报警" value={statsQuery.isLoading && !stats ? '—' : (stats?.today_total ?? '—')} caption="北京时间当日" />
-        <KpiCard label="本周报警" value={stats?.week_total ?? '—'} color={T.primary} caption="自然周 周一~周日" />
-        <KpiCard label="累计记录" value={stats?.total_count ?? '—'} caption="平台台账全量" />
-        <KpiCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? '—'} color={T.success} caption="生成日报后自动回写" />
         <div style={{
           ...CARD_STYLE,
           flex: '0 0 auto', minWidth: 150,
@@ -380,10 +371,12 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
         </div>
       </div>
 
-      {/* ── 性质分布带（本周 Top 4 + 其他，点击过滤）── */}
+      {/* ── 性质分布（本周 Top 4 + 其他，点击过滤）── */}
       {natureDistItems.length > 0 && (
-        <div style={{ ...CARD_STYLE, padding: '14px 16px', marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: T.muted, marginBottom: 10 }}>报警性质分布（本周）</div>
+        <SectionCard
+          title="报警性质分布"
+          description="本周 Top 4 与其他聚合；点击卡片切换表格性质筛选（「其他」仅展示）"
+        >
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {natureDistItems.map((item) => {
               const active = alarmNature === item.name
@@ -407,19 +400,23 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
               )
             })}
           </div>
-        </div>
+        </SectionCard>
       )}
 
-      {/* ── 趋势图卡（按日 × 报警性质堆叠）── */}
-      <div style={{ ...CARD_STYLE, padding: '16px 20px', marginBottom: 16 }}>
+      {/* ── 趋势图（按日 × 报警性质堆叠）── */}
+      <SectionCard title="报警趋势" description="按日 × 报警性质堆叠（基于当前筛选结果聚合）">
         {chartConfig ? <Column {...chartConfig} height={200} /> : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="时间窗内暂无记录" style={{ padding: '24px 0' }} />
+          <EmptyGuide compact title="时间窗内暂无记录" description="调整筛选条件或同步飞书后再查看趋势" />
         )}
-      </div>
+      </SectionCard>
 
-      {/* ── 记录卡（筛选栏并入卡头）── */}
-      <div style={{ ...CARD_STYLE, padding: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+      {/* ── 记录台账（筛选栏并入卡内）── */}
+      <SectionCard
+        title="报警记录"
+        description={`飞书多维表格同步台账（共 ${total} 条）`}
+        action={<Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />}
+      >
+        <div style={{ marginBottom: 12 }}>
           <Space wrap>
             <DatePicker.RangePicker
               value={dateRange}
@@ -436,7 +433,6 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
             <Input.Search placeholder="搜索原因/部位" style={{ width: 220 }} value={keywordInput}
               onChange={(e) => setKeywordInput(e.target.value)} onSearch={() => { setKeyword(keywordInput); setPage(1) }} allowClear />
           </Space>
-          <span style={{ fontSize: 12, color: T.steel }}>共 {total} 条</span>
         </div>
 
         <Table<FireAlarmRecord>
@@ -446,13 +442,16 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
           columns={columns}
           dataSource={rows}
           scroll={{ x: 1300 }}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无消防报警记录，可点击「同步飞书」拉取数据" /> }}
+          locale={{ emptyText: (
+            <EmptyGuide compact title="暂无消防报警记录" description="可点击「同步飞书」拉取数据" />
+          ) }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
             onChange: (p, ps) => { setPage(p); setPageSize(ps) },
           }}
         />
+      </SectionCard>
       </div>
 
       {/* ── 详情 Modal（平台侧只读：数据以飞书多维表格为源）── */}
@@ -532,10 +531,11 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
               <span style={{ fontSize: 12, color: T.steel }}>共 {report.total} 条报警</span>
               <span style={{ fontSize: 12, color: T.steel }}>AI 分析 {report.analyzed}/{report.total} 条</span>
               {report.push_results.map((r, i) => {
-                const cfg = r.success ? PUSH_RESULT.success : r.skipped ? PUSH_RESULT.skipped : PUSH_RESULT.failed
+                const key = r.success ? 'success' : r.skipped ? 'skipped' : 'failed'
+                const cfg = PUSH_RESULT[key]
                 return (
                   <Tooltip key={i} title={r.error || r.reason || undefined}>
-                    <Tag color={cfg.color}>{cfg.label}</Tag>
+                    <StatusTag tone={PUSH_RESULT_TONE[key]} label={cfg.label} />
                   </Tooltip>
                 )
               })}

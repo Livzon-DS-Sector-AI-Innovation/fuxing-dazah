@@ -1,19 +1,20 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Empty, Select, Table, Tag } from 'antd'
+import { App, Select, Table, Tag } from 'antd'
 import dayjs from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 import { getCollectionRecords, getCollectionStats } from '@/actions/safety'
 import type { CollectionRecord, CollectionStats } from '@/types/safety'
-import { CARD_STYLE, T, UI } from './emergencyDrillConstants'
+import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 
-// ── 解析状态映射 ──
+// ── 解析状态映射（ui-kit 语义 tone：待解析 info / 已解析 ok / 失败 danger） ──
 
-const PARSE_STATUS_UI: Record<string, { label: string; color: string; bg: string }> = {
-  pending: { label: '待解析', color: '#0075de', bg: T.sky },
-  parsed: { label: '已解析', color: '#1aae39', bg: T.mint },
-  failed: { label: '解析失败', color: T.warning, bg: T.peach },
+const PARSE_STATUS_UI: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: '待解析', tone: 'info' },
+  parsed: { label: '已解析', tone: 'ok' },
+  failed: { label: '解析失败', tone: 'danger' },
 }
 
 const PARSE_STATUS_FILTER = [
@@ -22,19 +23,6 @@ const PARSE_STATUS_FILTER = [
   { value: 'parsed', label: '已解析' },
   { value: 'failed', label: '解析失败' },
 ]
-
-// ── KPI ──
-
-function KpiCard({ label, value, bg, valueColor }: { label: string; value: string; bg?: string; valueColor?: string }) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '12px 14px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 600, lineHeight: 1.3, marginTop: 2, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-    </div>
-  )
-}
 
 // ── 主组件 ──
 
@@ -94,12 +82,12 @@ export default function DrillCollectionPanel() {
       render: (s: string) => {
         const ui = PARSE_STATUS_UI[s]
         if (!ui) return s || '-'
-        return <Tag style={{ color: ui.color, background: ui.bg, border: 'none', fontWeight: 600 }}>{ui.label}</Tag>
+        return <StatusTag tone={ui.tone} label={ui.label} />
       },
     },
     {
       title: '统计记录', dataIndex: 'stats_record_id', key: 'stats_record_id', width: 120,
-      render: (id: string) => id ? <Tag color="green">已创建</Tag> : '-',
+      render: (id: string) => id ? <StatusTag tone="ok" label="已创建" /> : '-',
     },
     { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 150,
       render: (d: string) => d ? dayjs(d).format('YYYY-MM-DD HH:mm') : '-',
@@ -108,36 +96,44 @@ export default function DrillCollectionPanel() {
 
   return (
     <div style={{ padding: '0 0 32px' }}>
-      {/* KPI 卡片 */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="收录总数" value={String(stats?.total ?? '-')} bg={T.lavender} valueColor={T.primary} />
-        <KpiCard label="已解析" value={String(stats?.parsed ?? '-')} bg={T.mint} valueColor={T.success} />
-        <KpiCard label="待解析" value={String(stats?.pending ?? '-')} bg={T.sky} valueColor="#005bab" />
-        <KpiCard label="解析失败" value={String(stats?.failed ?? '-')} bg={T.peach} valueColor={T.warning} />
-      </div>
-
-      {/* 筛选 + 表格 */}
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
-        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-          <span style={{ fontSize: 13, color: UI.steel, lineHeight: '32px' }}>上传演练计划附件到飞书「演练计划收录」表，平台自动解析并创建统计记录</span>
+      <PageHeader
+        breadcrumb={['安全管理', '应急管理']}
+        title="应急管理"
+        description="应急演练计划、执行记录与归档台账"
+      />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* ── 统计行（Tab 内） ── */}
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatCard label="收录总数" value={stats?.total ?? '—'} sub="演练计划附件收录" />
+          <StatCard label="已解析" value={stats?.parsed ?? '—'} tone="ok" />
+          <StatCard label="待解析" value={stats?.pending ?? '—'} tone="info" />
+          <StatCard label="解析失败" value={stats?.failed ?? '—'} tone="danger" />
         </div>
 
-        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-          <Select value={parseStatus} onChange={(v) => { setParseStatus(v); setPage(1); loadList(1, pageSize) }}
-            options={PARSE_STATUS_FILTER} style={{ width: 140 }} placeholder="解析状态" allowClear />
-        </div>
+        {/* ── 收录记录台账 ── */}
+        <SectionCard
+          title="收录记录"
+          description="上传演练计划附件到飞书「演练计划收录」表，平台自动解析并创建统计记录"
+        >
+          <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+            <Select value={parseStatus} onChange={(v) => { setParseStatus(v); setPage(1); loadList(1, pageSize) }}
+              options={PARSE_STATUS_FILTER} style={{ width: 140 }} placeholder="解析状态" allowClear />
+          </div>
 
-        <Table<CollectionRecord>
-          columns={columns} dataSource={rows} rowKey="id"
-          loading={loading} scroll={{ x: 900 }}
-          locale={{ emptyText: <Empty description="暂无收录记录，请在飞书「演练计划收录」表中上传附件" /> }}
-          pagination={{
-            current: page, pageSize, total, showSizeChanger: true,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: (p, ps) => { setPage(p); setPageSize(ps); loadList(p, ps) },
-          }}
-          size="middle"
-        />
+          <Table<CollectionRecord>
+            columns={columns} dataSource={rows} rowKey="id"
+            loading={loading} scroll={{ x: 900 }}
+            locale={{ emptyText: (
+              <EmptyGuide compact title="暂无收录记录" description="请在飞书「演练计划收录」表中上传附件" />
+            ) }}
+            pagination={{
+              current: page, pageSize, total, showSizeChanger: true,
+              showTotal: (t) => `共 ${t} 条`,
+              onChange: (p, ps) => { setPage(p); setPageSize(ps); loadList(p, ps) },
+            }}
+            size="middle"
+          />
+        </SectionCard>
       </div>
     </div>
   )

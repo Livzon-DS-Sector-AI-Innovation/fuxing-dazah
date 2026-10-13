@@ -9,14 +9,14 @@
 import {
   Col,
   Row,
-  Tag,
   Typography,
 } from 'antd'
 import { FileTextOutlined, RobotOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import type { EhsChange } from '@/types/safety'
+import { StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import { T } from '../shared-styles'
 import {
-  AI_CONCLUSION_UI,
   CHANGE_DURATION_LABEL,
   CHANGE_GRADE_UI,
   CHANGE_TYPE_LABEL,
@@ -33,84 +33,52 @@ export const CARD_STYLE: React.CSSProperties = {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 迷你标签
+// 迷你标签（统一走 ui-kit StatusTag 语义 tone）
 // ═══════════════════════════════════════════════════════════════
 
+/** 申请状态 → label / ui-kit 语义 tone（审批中·实施中 info、通过 ok、拒绝 danger、终止 expired） */
+const STATUS_UI_KIT: Record<string, { label: string; tone: Tone }> = {
+  draft: { label: '草稿', tone: 'default' },
+  under_review: { label: '审批中', tone: 'info' },
+  approved: { label: '已通过', tone: 'ok' },
+  rejected: { label: '已拒绝', tone: 'danger' },
+  withdrawn: { label: '已撤回', tone: 'default' },
+  cancelled: { label: '已取消', tone: 'default' },
+  terminated: { label: '已终止', tone: 'expired' },
+  in_progress: { label: '实施中', tone: 'info' },
+  commissioned: { label: '已投用', tone: 'ok' },
+  closed: { label: '已关闭', tone: 'default' },
+}
+
 export function StatusPill({ status }: { status: string }) {
-  const color: Record<string, [string, string]> = {
-    draft: ['#787671', '#f0eeec'],
-    under_review: ['#dd5b00', '#ffe8d4'],
-    approved: ['#1aae39', '#d9f3e1'],
-    rejected: ['#e03131', '#fde0ec'],
-    withdrawn: ['#787671', '#f0eeec'],
-    cancelled: ['#a4a097', '#f0eeec'],
-    terminated: ['#787671', '#f0eeec'],
-    in_progress: ['#0075de', '#dcecfa'],
-    commissioned: ['#5645d4', '#e6e0f5'],
-    closed: ['#787671', '#f0eeec'],
-  }
-  const label: Record<string, string> = {
-    draft: '草稿', under_review: '审批中', approved: '已通过', rejected: '已拒绝',
-    withdrawn: '已撤回', cancelled: '已取消', terminated: '已终止',
-    in_progress: '实施中', commissioned: '已投用', closed: '已关闭',
-  }
-  const [c, bg] = color[status] ?? color.closed
-  return <span style={{ display: 'inline-flex', padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600, color: c, background: bg }}>{label[status] ?? status}</span>
+  const ui = STATUS_UI_KIT[status]
+  if (!ui) return <Text style={{ color: T.steel, fontSize: 12 }}>{status || '—'}</Text>
+  return <StatusTag tone={ui.tone} label={ui.label} />
+}
+
+/** AI 审核结论 → ui-kit 语义 tone（通过 ok / 需补充 warn / 不通过 danger） */
+const AI_CONCLUSION_TONE: Record<string, Tone> = {
+  审核通过: 'ok',
+  需补充完善: 'warn',
+  审核不通过: 'danger',
 }
 
 export function AiConclusionPill({ change }: { change: EhsChange }) {
   const c = getAiConclusion(change)
   if (!c) return <Text style={{ color: T.steel, fontSize: 12 }}>—</Text>
-  return <span style={AI_CONCLUSION_UI[c]}>{c}</span>
+  return <StatusTag tone={AI_CONCLUSION_TONE[c] ?? 'default'} label={c} />
+}
+
+/** 变更等级 → ui-kit 语义 tone（重大 danger / 一般 info） */
+const CHANGE_GRADE_TONE: Record<string, Tone> = {
+  major: 'danger',
+  general: 'info',
 }
 
 export function GradePill({ grade }: { grade?: string }) {
   const ui = CHANGE_GRADE_UI[grade ?? '']
   if (!ui) return <Text style={{ color: T.steel, fontSize: 12 }}>—</Text>
-  return <span style={{ display: 'inline-flex', padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600, color: ui.pill.color as string, background: ui.pill.background as string }}>{ui.label}</span>
-}
-
-// ═══════════════════════════════════════════════════════════════
-// KPI 统计卡（自绘，对齐 AI 审计 KpiCard 风格）
-// ═══════════════════════════════════════════════════════════════
-
-export function KpiCard({
-  label,
-  value,
-  caption,
-  active,
-  color,
-  bg,
-  onClick,
-}: {
-  label: string
-  value: number | string
-  caption?: string
-  active?: boolean
-  color?: string
-  bg?: string
-  onClick?: () => void
-}) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        ...CARD_STYLE,
-        flex: 1,
-        minWidth: 0,
-        padding: '14px 16px',
-        background: bg ?? (active ? T.gray : T.canvas),
-        cursor: onClick ? 'pointer' : undefined,
-        transition: 'background .15s',
-      }}
-    >
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: T.muted }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: color ?? T.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: T.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+  return <StatusTag tone={CHANGE_GRADE_TONE[grade ?? ''] ?? 'default'} label={ui.label} />
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -367,8 +335,8 @@ export function AiReviewTab({ change }: { change: EhsChange }) {
             <FieldLabel>{d.label}</FieldLabel>
             <div style={{ marginBottom: 8 }}>
               {dim.conclusion
-                ? <span style={AI_CONCLUSION_UI[dim.conclusion]}>{dim.conclusion}</span>
-                : <Tag>未审核</Tag>}
+                ? <StatusTag tone={AI_CONCLUSION_TONE[dim.conclusion] ?? 'default'} label={dim.conclusion} />
+                : <StatusTag tone="default" label="未审核" />}
             </div>
             {dim.report && (
               <TextBlock>{dim.report}</TextBlock>
