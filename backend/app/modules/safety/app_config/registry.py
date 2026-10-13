@@ -412,6 +412,35 @@ _ITEMS: tuple[ConfigItem, ...] = (
     ),
 
     # ══════════════════════════════════════════════════════════
+    # ragplus-x 知识层（一期壳换芯：检索外接 + 入库短路同一总闸）
+    # ══════════════════════════════════════════════════════════
+    _flag(
+        "SAFETY_RAGPLUS_SEARCH_ENABLED", False,
+        "法规/MSDS 检索走 ragplus-x 知识层总开关（开=三壳内核走 RagplusClient、"
+        "本地切片向量化短路；关=旧三层管线，回退路径）",
+    ),
+    ConfigItem(
+        "SAFETY_RAGPLUS_BASE_URL", "misc", "str",
+        "http://localhost:8085",
+        "ragplus-x 知识层地址（尾斜杠自动去除）",
+    ),
+    ConfigItem(
+        "SAFETY_RAGPLUS_API_TOKEN", "credential", "str", "",
+        "ragplus-x 检索服务 token（ragflow- 前缀，retrieval 作用域；"
+        "入库脚本 bootstrap 自动创建写入，不进代码/git）",
+        secret=True,
+    ),
+    ConfigItem(
+        "SAFETY_RAGPLUS_TIMEOUT_SECONDS", "misc", "int", 10,
+        "ragplus-x 检索超时秒数",
+    ),
+    ConfigItem(
+        "SAFETY_RAGPLUS_DATASET_NAMES", "misc", "str",
+        "安全法规标准,MSDS",
+        "ragplus-x 检索库名单（逗号分隔；已废止归档库不在名单内即被排除）",
+    ),
+
+    # ══════════════════════════════════════════════════════════
     # 杂项（misc）
     # ══════════════════════════════════════════════════════════
     ConfigItem(
