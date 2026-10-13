@@ -30,6 +30,7 @@ class MaterialContainerOut(BaseModel):
     vendor_code: str | None
     inbound_batch_no: str
     inbound_date: str | None
+    location: str | None
     expiry_date: str | None
     seq: int
     status: str
@@ -45,6 +46,7 @@ class MaterialContainerListItem(BaseModel):
     material_name: str
     inbound_batch_no: str
     inbound_date: str | None
+    location: str | None
     expiry_date: str | None
     seq: int
     status: str
@@ -67,6 +69,12 @@ class ContainerBatchMoveRequest(BaseModel):
     op_type: Literal["in", "out", "auto", "return"]
     related_doc: str | None = Field(default=None, max_length=100, description="关联单据号（领料单等）")
     remark: str | None = Field(default=None, max_length=500)
+
+
+class ContainerLocationUpdate(BaseModel):
+    """库位维护（货架编号）。"""
+
+    location: str = Field(max_length=50)
 
 
 class ContainerStatusUpdate(BaseModel):

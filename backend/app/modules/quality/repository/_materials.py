@@ -1,6 +1,7 @@
 """物料容器数据读写。只负责查询与持久化，不做业务判断。"""
 
 import uuid
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -646,3 +647,58 @@ async def material_monthly_report(db: AsyncSession, month: str) -> list[dict[str
         }
         for r in rows
     ]
+
+
+async def update_container_location(
+    db: AsyncSession, container_id: uuid.UUID, location: str
+) -> QualityMaterialContainer | None:
+    container = await get_material_container(db, container_id)
+    if container is None:
+        return None
+    container.location = location
+    await db.flush()
+    stmt = select(QualityMaterialContainer).where(QualityMaterialContainer.id == container_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_slow_moving_containers(
+    db: AsyncSession, min_age_days: int = 30
+) -> list[dict[str, Any]]:
+    """呆滞库存：在库（待验/合格）且入库已超过 N 天的容器（账龄=今天-入库日期）。"""
+    from datetime import timedelta as _td
+
+    from app.core.time import today as _today
+
+    today = _today()
+    cutoff = (today - _td(days=min_age_days)).isoformat()
+    rows = await db.execute(
+        select(
+            QualityMaterialContainer.container_no,
+            QualityMaterialContainer.material_code,
+            QualityMaterialContainer.material_name,
+            QualityMaterialContainer.inbound_batch_no,
+            QualityMaterialContainer.inbound_date,
+            QualityMaterialContainer.created_at,
+            QualityMaterialContainer.location,
+        )
+        .where(
+            QualityMaterialContainer.is_deleted == False,  # noqa: E712
+            QualityMaterialContainer.status.in_(["in_warehouse", "qualified"]),
+            QualityMaterialContainer.inbound_date.is_not(None),
+            QualityMaterialContainer.inbound_date <= cutoff,
+        )
+        .order_by(QualityMaterialContainer.inbound_date)
+    )
+    result = []
+    for r in rows:
+        age = (today - date.fromisoformat(r.inbound_date)).days
+        result.append({
+            "container_no": r.container_no,
+            "material_code": r.material_code,
+            "material_name": r.material_name,
+            "inbound_batch_no": r.inbound_batch_no,
+            "inbound_date": r.inbound_date,
+            "location": r.location,
+            "age_days": age,
+        })
+    return result

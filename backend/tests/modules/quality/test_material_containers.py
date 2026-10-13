@@ -596,3 +596,73 @@ async def test_monthly_report(db_session):
     item = next(r for r in after if r["material_code"] == code)
     assert item["in_count"] == before_in  # 入库发生在 before 之前
     assert item["out_count"] == before_out + 1
+
+
+async def test_import_dict_rows(db_session):
+    from app.modules.quality.repository import get_material_by_code
+
+    code = f"MAT-{_rand_code()}"
+    import io as _io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["code", "name", "category", "vendor_name", "pack_spec", "min_stock", "valid_months", "remark"])
+    ws.append([code, "导入物料A", "原料", "供应商甲", "5kg/听", 3, 24, "测试"])
+    ws.append([code, "导入物料A重复", "", "", "", "", "", ""])  # 重复 → 跳过
+    ws.append(["", "缺代码", "", "", "", "", "", ""])  # 缺代码 → 跳过
+    buf = _io.BytesIO()
+    wb.save(buf)
+    result = await material_container_service.import_dict_rows(db_session, buf.getvalue())
+    assert len(result["created"]) == 1 and result["created"][0] == code
+    assert len(result["skipped"]) == 2
+    assert await get_material_by_code(db_session, code) is not None
+
+
+async def test_import_container_rows(db_session):
+    import io as _io
+
+    import openpyxl
+
+    no = f"MC-IMP-20261010-{str(_rand_code())[:4]}"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["container_no", "material_code", "material_name", "vendor_code", "inbound_batch_no", "inbound_date", "expiry_date", "location", "status"])
+    ws.append([no, "IMP", "导入容器物料", "SUP-X", "IN-IMP", "2026-10-01", "2028-09-30", "A-01-03", "in_warehouse"])
+    ws.append([no, "IMP", "重复", "", "", "", "", "", "labeled"])  # 重复 → 跳过
+    ws.append(["MC-IMP-20261010-9999", "IMP", "状态非法", "", "", "", "", "", "不存在的状态"])  # 非法状态 → 跳过
+    buf = _io.BytesIO()
+    wb.save(buf)
+    result = await material_container_service.import_container_rows(db_session, buf.getvalue())
+    assert len(result["created"]) == 1
+    assert len(result["skipped"]) == 2
+    from app.modules.quality.repository import get_material_container_by_no
+
+    imported = await get_material_container_by_no(db_session, no)
+    assert imported is not None
+    assert imported.location == "A-01-03" and imported.status == "in_warehouse"
+
+
+async def test_slow_moving_and_location(db_session):
+    from app.modules.quality.repository import (
+        list_slow_moving_containers,
+        update_container_location,
+    )
+
+    req = _gen_req(1)
+    containers = await material_container_service.generate_containers(db_session, req)
+    no = containers[0].container_no
+    # 设置一个 60 天前的入库日期
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    old_date = (_dt.now() - _td(days=60)).strftime("%Y-%m-%d")
+    await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
+    await update_container_location(db_session, containers[0].id, "B-02-05")
+    containers[0].inbound_date = old_date
+    await db_session.flush()
+    rows = await list_slow_moving_containers(db_session, min_age_days=30)
+    hit = next((r for r in rows if r["container_no"] == no), None)
+    assert hit is not None and hit["age_days"] >= 59
+    assert hit["location"] == "B-02-05"

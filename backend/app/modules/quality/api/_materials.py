@@ -4,7 +4,7 @@ import uuid
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import Body, Depends, HTTPException, Query
+from fastapi import Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +27,7 @@ from app.modules.quality.repository import (
     list_material_containers,
     list_material_movements,
     list_materials,
+    list_slow_moving_containers,
     list_stocktake_items,
     list_stocktake_sheets,
     list_suppliers,
@@ -34,12 +35,14 @@ from app.modules.quality.repository import (
     material_monthly_report,
     material_stock_summary,
     material_today_stats,
+    update_container_location,
     update_material,
     update_supplier,
 )
 from app.modules.quality.schemas import (
     ContainerBatchMoveRequest,
     ContainerLabelRequest,
+    ContainerLocationUpdate,
     ContainerMovementOut,
     ContainerMoveRequest,
     ContainerStatusUpdate,
@@ -648,3 +651,81 @@ async def monthly_report_export_endpoint(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="monthly.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )
+
+
+# ─── Excel 导入 / 库位 / 呆滞 ───
+
+
+@router.get("/material/import-template", summary="导入模板下载（dict=物料字典 / containers=容器）")
+async def import_template_endpoint(
+    kind: str = Query(..., description="dict / containers"),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> StreamingResponse:
+    if kind not in ("dict", "containers"):
+        raise HTTPException(status_code=400, detail="kind 仅支持 dict / containers")
+    xlsx = material_container_service.build_import_template(kind)
+    encoded = quote(f"导入模板-{kind}.xlsx")
+    return StreamingResponse(
+        BytesIO(xlsx),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="template.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+@router.post("/material/dict/import", summary="批量导入物料字典（Excel，逐行校验跳过重复）")
+async def import_dict_endpoint(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    result = await material_container_service.import_dict_rows(db, content)
+    return success_response(
+        data=result,
+        message=f"已导入 {len(result['created'])} 个物料" + (f"，跳过 {len(result['skipped'])} 条" if result["skipped"] else ""),
+    )
+
+
+@router.post("/material/containers/import", summary="批量导入存量容器（Excel，逐行校验跳过重复）")
+async def import_containers_endpoint(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    result = await material_container_service.import_container_rows(db, content)
+    return success_response(
+        data=result,
+        message=f"已导入 {len(result['created'])} 个容器" + (f"，跳过 {len(result['skipped'])} 条" if result["skipped"] else ""),
+    )
+
+
+@router.put("/material/containers/{container_no}/location", summary="维护容器库位")
+async def update_location_endpoint(
+    container_no: str,
+    payload: ContainerLocationUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    container = await get_material_container_by_no(db, container_no)
+    if container is None:
+        raise HTTPException(status_code=404, detail=f"容器 {container_no} 不存在")
+    updated = await update_container_location(db, container.id, payload.location.strip())
+    return success_response(
+        data=MaterialContainerOut.model_validate(updated).model_dump(mode="json"),
+        message="库位已更新",
+    )
+
+
+@router.get("/material/slow-moving", summary="呆滞库存（在库且入库超 N 天，账龄=今天-入库日期）")
+async def slow_moving_endpoint(
+    min_age: int = Query(default=30, ge=1, description="最小账龄天数"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await list_slow_moving_containers(db, min_age)
+    return success_response(data={"items": rows, "total": len(rows)})

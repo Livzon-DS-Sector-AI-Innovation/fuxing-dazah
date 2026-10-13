@@ -442,6 +442,7 @@ export interface MaterialContainerItem {
   material_name: string
   inbound_batch_no: string
   inbound_date: string | null
+  location: string | null
   expiry_date: string | null
   seq: number
   status: MaterialContainerStatus
@@ -567,4 +568,15 @@ export interface MonthlyReportItem {
   return_count: number
   status_count: number
   available: number
+}
+
+
+export interface SlowMovingItem {
+  container_no: string
+  material_code: string
+  material_name: string
+  inbound_batch_no: string
+  inbound_date: string
+  location: string | null
+  age_days: number
 }

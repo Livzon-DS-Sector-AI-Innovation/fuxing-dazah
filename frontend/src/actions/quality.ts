@@ -32,6 +32,7 @@ import type {
   StocktakeSheet,
   StocktakeItem,
   MonthlyReportItem,
+  SlowMovingItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -1261,4 +1262,61 @@ export async function exportMonthlyReport(month: string): Promise<Blob> {
   })
   if (!res.ok) throw new Error('月度报表导出失败')
   return res.blob()
+}
+
+
+// ─── 导入 / 库位 / 呆滞 ───
+
+export async function downloadImportTemplate(kind: 'dict' | 'containers'): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/import-template?kind=${kind}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('模板下载失败')
+  return res.blob()
+}
+
+export async function importMaterialDict(file: File): Promise<{ message: string; data: { created: string[]; skipped: string[] } }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/dict/import`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '物料字典导入失败')
+  }
+  return res.json()
+}
+
+export async function importMaterialContainers(file: File): Promise<{ message: string; data: { created: string[]; skipped: string[] } }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/import`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '容器导入失败')
+  }
+  return res.json()
+}
+
+export async function fetchSlowMoving(minAge = 30): Promise<{ data: { items: SlowMovingItem[]; total: number } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/slow-moving?min_age=${minAge}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取呆滞库存失败')
+  return res.json()
+}
+
+export async function updateContainerLocation(containerNo: string, location: string): Promise<{ message: string; data: MaterialContainerItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/${containerNo}/location`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '库位更新失败')
+  }
+  return res.json()
 }

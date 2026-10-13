@@ -159,6 +159,9 @@ class QualityMaterialContainer(BaseModel):
     inbound_date: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="入库登记日期 YYYY-MM-DD（入库动作自动记录）"
     )
+    location: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, comment="库位（货架编号，如 A-01-03）"
+    )
     expiry_date: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="复验期 YYYY-MM-DD（过期拦截用，阶段3）"
     )

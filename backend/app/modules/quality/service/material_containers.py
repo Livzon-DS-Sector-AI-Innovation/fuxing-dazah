@@ -3,6 +3,7 @@
 import io
 import uuid
 from datetime import datetime
+from typing import Any
 
 import segno
 from reportlab.lib.pagesizes import A4
@@ -336,6 +337,151 @@ class MaterialContainerService:
         await db.flush()
         stmt = select(QualityStocktakeSheet).where(QualityStocktakeSheet.id == sheet_id)
         return (await db.execute(stmt)).scalar_one()
+    # ── Excel 批量导入 ──
+
+    _DICT_COLUMNS = ["code", "name", "category", "vendor_name", "pack_spec", "min_stock", "valid_months", "remark"]
+    _CONTAINER_COLUMNS = ["container_no", "material_code", "material_name", "vendor_code", "inbound_batch_no", "inbound_date", "expiry_date", "location", "status"]
+    _VALID_STATUSES = {"labeled", "in_warehouse", "qualified", "issued", "returned", "void"}
+
+    @staticmethod
+    def _read_import_rows(content: bytes) -> list[dict[str, Any]]:
+        """读取导入 Excel：首行表头，逐行转 dict（空行跳过）。"""
+        import io as _io
+
+        import openpyxl
+
+        from app.modules.quality import lc_template_parser
+
+        wb = openpyxl.load_workbook(_io.BytesIO(content))
+        ws = lc_template_parser.active_sheet(wb)
+        rows_iter = ws.iter_rows(values_only=True)
+        header = next(rows_iter, None)
+        if not header:
+            raise AppException(status_code=400, detail="Excel 为空或缺少表头")
+        columns = [str(h).strip() if h is not None else "" for h in header]
+        data = []
+        for raw in rows_iter:
+            if not raw or all(v is None or str(v).strip() == "" for v in raw):
+                continue
+            row: dict[str, Any] = {}
+            for idx, col in enumerate(columns):
+                if not col or idx >= len(raw):
+                    continue
+                value = raw[idx]
+                if value is None:
+                    continue
+                if isinstance(value, float) and value.is_integer() and col in ("min_stock", "valid_months"):
+                    value = int(value)
+                elif col in ("inbound_date", "expiry_date", "qual_expiry_date") and hasattr(value, "strftime"):
+                    value = value.strftime("%Y-%m-%d")
+                row[col] = str(value).strip() if not isinstance(value, int) else value
+            data.append(row)
+        return data
+
+    @staticmethod
+    async def import_dict_rows(db: AsyncSession, content: bytes) -> dict[str, Any]:
+        """导入物料字典：逐行校验，代码已存在则跳过（保存点隔离，失败不影响其余）。"""
+        from app.modules.quality.repository import create_material, get_material_by_code
+
+        created: list[str] = []
+        skipped: list[str] = []
+        for row in MaterialContainerService._read_import_rows(content):
+            code = str(row.get("code") or "").strip()
+            name = str(row.get("name") or "").strip()
+            if not code or not name:
+                skipped.append(f"{code or '(空代码)'}:代码/名称缺失")
+                continue
+            if "/" in code or " " in code:
+                skipped.append(f"{code}:代码含空格/斜杠")
+                continue
+            if await get_material_by_code(db, code):
+                skipped.append(f"{code}:已存在")
+                continue
+            try:
+                async with db.begin_nested():
+                    await create_material(db, {
+                        "code": code,
+                        "name": name,
+                        "category": (row.get("category") or None),
+                        "vendor_name": (row.get("vendor_name") or None),
+                        "pack_spec": (row.get("pack_spec") or None),
+                        "min_stock": row.get("min_stock"),
+                        "valid_months": row.get("valid_months"),
+                        "remark": (row.get("remark") or None),
+                    })
+                created.append(code)
+            except Exception:
+                skipped.append(f"{code}:入库失败")
+        return {"created": created, "skipped": skipped}
+
+    @staticmethod
+    async def import_container_rows(db: AsyncSession, content: bytes) -> dict[str, Any]:
+        """导入存量容器：容器号重复跳过、状态非法跳过（保存点隔离）。"""
+        from app.modules.quality.repository import (
+            create_material_containers,
+            get_material_container_by_no,
+        )
+
+        created: list[str] = []
+        skipped: list[str] = []
+        for row in MaterialContainerService._read_import_rows(content):
+            no = str(row.get("container_no") or "").strip()
+            status = str(row.get("status") or "labeled").strip() or "labeled"
+            if not no:
+                skipped.append("(空容器号):缺失")
+                continue
+            if not no.startswith("MC-"):
+                skipped.append(f"{no}:容器号须以 MC- 开头")
+                continue
+            if status not in MaterialContainerService._VALID_STATUSES:
+                skipped.append(f"{no}:状态非法({status})")
+                continue
+            if await get_material_container_by_no(db, no):
+                skipped.append(f"{no}:已存在")
+                continue
+            try:
+                seq_text = no.rsplit("-", 1)[-1]
+                seq = int(seq_text) if seq_text.isdigit() else 0
+                async with db.begin_nested():
+                    rows = await create_material_containers(db, [{
+                        "container_no": no,
+                        "material_code": str(row.get("material_code") or "").strip() or "IMPORT",
+                        "material_name": str(row.get("material_name") or "").strip() or "导入物料",
+                        "vendor_code": (row.get("vendor_code") or None),
+                        "inbound_batch_no": str(row.get("inbound_batch_no") or "").strip() or "-",
+                        "inbound_date": (row.get("inbound_date") or None),
+                        "expiry_date": (row.get("expiry_date") or None),
+                        "location": (row.get("location") or None),
+                        "seq": seq,
+                        "status": status,
+                    }])
+                    rows[0].id  # 确保 RETURNING 生效
+                created.append(no)
+            except Exception:
+                skipped.append(f"{no}:入库失败")
+        return {"created": created, "skipped": skipped}
+
+    @staticmethod
+    def build_import_template(kind: str) -> bytes:
+        """下载导入模板：dict / containers 两种表头 + 示例行。"""
+        import io as _io
+
+        import openpyxl
+
+        from app.modules.quality import lc_template_parser
+
+        wb = openpyxl.Workbook()
+        ws = lc_template_parser.active_sheet(wb)
+        if kind == "dict":
+            ws.append(MaterialContainerService._DICT_COLUMNS)
+            ws.append(["VAN", "盐酸万古霉素原料", "原料", "示例供应商", "5kg/听", 3, 24, "示例"])
+        else:
+            ws.append(MaterialContainerService._CONTAINER_COLUMNS)
+            ws.append(["MC-VAN-20261010-0001", "VAN", "盐酸万古霉素原料", "SUP-001", "IN-20261010-01", "2026-10-10", "2028-10-09", "A-01-03", "in_warehouse"])
+        buf = _io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
     @staticmethod
     async def build_label_pdf(
         db: AsyncSession, container_nos: list[str]

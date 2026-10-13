@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col, AutoComplete,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Typography, Card, Row, Col, AutoComplete, Tabs, Upload,
 } from 'antd'
-import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined, CheckOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined, CheckOutlined, ImportOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
-import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, StocktakeSheet, SupplierItem } from '@/types/quality'
+import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, SlowMovingItem, StocktakeSheet, SupplierItem } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
@@ -19,6 +19,8 @@ import {
   fetchSuppliers, createSupplier, updateSupplier, deleteSupplier,
   fetchStocktakes, createStocktake, fetchStocktakeDetail, exportStocktake,
   fetchMonthlyReport, exportMonthlyReport,
+  downloadImportTemplate, importMaterialDict, importMaterialContainers,
+  fetchSlowMoving, updateContainerLocation,
 } from '@/actions/quality'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
@@ -92,6 +94,14 @@ export default function MaterialContainers() {
   const [mrOpen, setMrOpen] = useState(false)
   const [mrMonth, setMrMonth] = useState(dayjs().format('YYYY-MM'))
   const [mrData, setMrData] = useState<MonthlyReportItem[]>([])
+  // 导入弹窗
+  const [impOpen, setImpOpen] = useState(false)
+  // 呆滞弹窗
+  const [slowOpen, setSlowOpen] = useState(false)
+  const [slowData, setSlowData] = useState<SlowMovingItem[]>([])
+  // 库位编辑
+  const [locEditing, setLocEditing] = useState<string | null>(null)
+  const [locValue, setLocValue] = useState('')
   // 领用趋势弹窗
   const [trendOpen, setTrendOpen] = useState(false)
   const [trendCode, setTrendCode] = useState<string | undefined>()
@@ -449,6 +459,71 @@ export default function MaterialContainers() {
     }
   }
 
+  const onDownloadImportTemplate = async (kind: 'dict' | 'containers') => {
+    try {
+      const blob = await downloadImportTemplate(kind)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `导入模板-${kind === 'dict' ? '物料字典' : '容器'}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '模板下载失败')
+    }
+  }
+
+  const onImportDict = async (file: File) => {
+    try {
+      const res = await importMaterialDict(file)
+      message.success(res.message)
+      if (res.data.skipped.length) {
+        message.warning(`跳过 ${res.data.skipped.length} 条：${res.data.skipped.slice(0, 3).join('；')}${res.data.skipped.length > 3 ? '…' : ''}`)
+      }
+      loadDict()
+      loadSummary()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '物料字典导入失败')
+    }
+    return false
+  }
+
+  const onImportContainers = async (file: File) => {
+    try {
+      const res = await importMaterialContainers(file)
+      message.success(res.message)
+      if (res.data.skipped.length) {
+        message.warning(`跳过 ${res.data.skipped.length} 条：${res.data.skipped.slice(0, 3).join('；')}${res.data.skipped.length > 3 ? '…' : ''}`)
+      }
+      load(page, statusFilter, batchFilter, materialFilter)
+      loadSummary()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '容器导入失败')
+    }
+    return false
+  }
+
+  const openSlowMoving = async () => {
+    setSlowOpen(true)
+    try {
+      const res = await fetchSlowMoving(30)
+      setSlowData(res.data.items)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取呆滞库存失败')
+    }
+  }
+
+  const onSaveLocation = async (no: string) => {
+    try {
+      await updateContainerLocation(no, locValue.trim())
+      message.success('库位已更新')
+      setLocEditing(null)
+      load(page, statusFilter, batchFilter, materialFilter)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '库位更新失败')
+    }
+  }
+
   const openTrend = () => {
     setTrendOpen(true)
     if (trendCode) { void loadTrend(trendCode) }
@@ -528,6 +603,7 @@ export default function MaterialContainers() {
     { title: '物料代码', dataIndex: 'material_code', key: 'material_code', width: 100 },
     { title: '进厂批号', dataIndex: 'inbound_batch_no', key: 'inbound_batch_no', width: 140 },
     { title: '入库日期', dataIndex: 'inbound_date', key: 'inbound_date', width: 105, render: (v: string | null) => v || '-' },
+    { title: '库位', dataIndex: 'location', key: 'location', width: 100, render: (v: string | null) => v || '-' },
     { title: '复验期', dataIndex: 'expiry_date', key: 'expiry_date', width: 140, render: (v: string | null) => {
       if (!v) return '-'
       const exp = dayjs(v)
@@ -658,6 +734,8 @@ export default function MaterialContainers() {
         <Button onClick={openTrend}>📈 领用趋势</Button>
         <Button onClick={openStocktakes}>📋 盘点</Button>
         <Button onClick={openMonthly}>📊 月度报表</Button>
+        {canManage && <Button icon={<ImportOutlined />} onClick={() => setImpOpen(true)}>导入</Button>}
+        <Button onClick={openSlowMoving}>🐌 呆滞分析</Button>
         {canManage && (
           <Button onClick={openSuppliers}>🏭 供应商</Button>
         )}
@@ -842,12 +920,34 @@ export default function MaterialContainers() {
               <Typography.Text type="secondary">代码 {detailData.container.material_code}</Typography.Text>
               <Typography.Text type="secondary">进厂批号 {detailData.container.inbound_batch_no}</Typography.Text>
               <Typography.Text type="secondary">入库日期 {detailData.container.inbound_date ?? '-'}</Typography.Text>
+              <Typography.Text type="secondary">库位 {detailData.container.location ?? '-'}</Typography.Text>
               <Typography.Text type="secondary">复验期 {detailData.container.expiry_date ?? '-'}</Typography.Text>
               <Tag color={MATERIAL_CONTAINER_STATUS_META[detailData.container.status]?.color}>
                 {MATERIAL_CONTAINER_STATUS_META[detailData.container.status]?.label}
               </Tag>
             </Space>
-            <Typography.Text type="secondary">生命周期流水：</Typography.Text>
+            <Space size={8} style={{ marginBottom: 8 }}>
+            {locEditing === detailData.container.container_no ? (
+              <>
+                <Input
+                  size="small"
+                  style={{ width: 140 }}
+                  placeholder="库位（如 A-01-03）"
+                  value={locValue}
+                  onChange={(e) => setLocValue(e.target.value)}
+                />
+                <Button size="small" type="primary" onClick={() => onSaveLocation(detailData.container.container_no)}>保存</Button>
+                <Button size="small" onClick={() => setLocEditing(null)}>取消</Button>
+              </>
+            ) : (
+              canManage && (
+                <Button size="small" onClick={() => { setLocEditing(detailData.container.container_no); setLocValue(detailData.container.location ?? '') }}>
+                  修改库位
+                </Button>
+              )
+            )}
+          </Space>
+          <Typography.Text type="secondary">生命周期流水：</Typography.Text>
             <div style={{ marginTop: 8, maxHeight: 320, overflowY: 'auto' }}>
               {detailData.movements.length === 0
                 ? <Typography.Text type="secondary">暂无流转记录</Typography.Text>
@@ -1096,6 +1196,83 @@ export default function MaterialContainers() {
             { title: '退库', dataIndex: 'return_count', width: 80 },
             { title: '状态流转', dataIndex: 'status_count', width: 90 },
             { title: '当前可用', dataIndex: 'available', width: 90, render: (v: number) => <Typography.Text strong>{v}</Typography.Text> },
+          ]}
+        />
+      </Modal>
+
+      {/* 导入弹窗 */}
+      <Modal
+        title="📥 Excel 批量导入"
+        open={impOpen}
+        onCancel={() => setImpOpen(false)}
+        footer={null}
+        width={640}
+      >
+        <Tabs
+          items={[
+            {
+              key: 'dict',
+              label: '物料字典',
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">列：代码/名称/类别/供应商/包装规格/安全库存/效期月数/备注；代码重复自动跳过</Typography.Text>
+                  <Space>
+                    <Button size="small" onClick={() => onDownloadImportTemplate('dict')}>下载模板</Button>
+                    <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={onImportDict}>
+                      <Button size="small" type="primary">选择文件导入</Button>
+                    </Upload>
+                  </Space>
+                </Space>
+              ),
+            },
+            {
+              key: 'containers',
+              label: '存量容器',
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">列：容器号(MC-开头)/物料代码/物料名称/供应商代码/进厂批号/入库日期/复验期/库位/状态；重复与非法状态自动跳过</Typography.Text>
+                  <Space>
+                    <Button size="small" onClick={() => onDownloadImportTemplate('containers')}>下载模板</Button>
+                    <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={onImportContainers}>
+                      <Button size="small" type="primary">选择文件导入</Button>
+                    </Upload>
+                  </Space>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      {/* 呆滞分析弹窗 */}
+      <Modal
+        title="🐌 呆滞库存（在库且入库超 30 天）"
+        open={slowOpen}
+        onCancel={() => setSlowOpen(false)}
+        footer={null}
+        width={760}
+      >
+        <Space size={16} style={{ marginBottom: 12 }}>
+          <Typography.Text>呆滞总数 <strong>{slowData.length}</strong></Typography.Text>
+          <Typography.Text type="warning">超 60 天 <strong>{slowData.filter((x) => x.age_days >= 60 && x.age_days < 90).length}</strong></Typography.Text>
+          <Typography.Text type="danger">超 90 天 <strong>{slowData.filter((x) => x.age_days >= 90).length}</strong></Typography.Text>
+        </Space>
+        <Table
+          rowKey="container_no"
+          size="small"
+          dataSource={slowData}
+          pagination={{ pageSize: 20 }}
+          locale={{ emptyText: '暂无呆滞库存' }}
+          columns={[
+            { title: '容器号', dataIndex: 'container_no', width: 200, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
+            { title: '物料', dataIndex: 'material_name', width: 150 },
+            { title: '进厂批号', dataIndex: 'inbound_batch_no', width: 140 },
+            { title: '入库日期', dataIndex: 'inbound_date', width: 110 },
+            { title: '库位', dataIndex: 'location', width: 90, render: (v: string | null) => v || '-' },
+            {
+              title: '账龄', dataIndex: 'age_days', width: 100,
+              render: (v: number) => <Tag color={v >= 90 ? 'red' : v >= 60 ? 'orange' : 'default'}>{v} 天</Tag>,
+            },
           ]}
         />
       </Modal>
