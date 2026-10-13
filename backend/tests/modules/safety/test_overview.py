@@ -16,13 +16,14 @@ from typing import Any
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.safety.models import HazardReport
+from app.modules.safety.models import HazardReport, WorkTicketReview
 from app.modules.safety.service.overview import (
     _bj_day_start_utc,
     _bj_today,
     build_overview,
     collect_alarms,
     collect_hazards,
+    collect_supervision,
 )
 
 # ── 采集器桩（返回值形状与真实采集器一致，只覆盖健康度用到的字段）──
@@ -118,6 +119,9 @@ def _stub_collectors() -> dict[str, Any]:
             ],
         }
 
+    async def supervision() -> dict[str, Any]:
+        return {"latest": {"date": "2026-10-12", "violation_count": 2}}
+
     return {
         "hazards": hazards,
         "special_ops": special_ops,
@@ -127,6 +131,7 @@ def _stub_collectors() -> dict[str, Any]:
         "key_risk_ops": key_risk_ops,
         "ehs": ehs,
         "digest": digest,
+        "supervision": supervision,
     }
 
 
@@ -154,12 +159,45 @@ class TestBuildOverview:
         # 运行中绿卡与灰卡
         assert wall["knowledge-base"]["metric"] == "运行中"
         assert wall["goals"]["status"] == "inactive"
+        # 监督卡（三期起步）：最近一次审核真实指标，违规>0 → 黄
+        assert wall["supervision"] == {
+            "key": "supervision",
+            "status": "warn",
+            "metric": "最近审核 2026-10-12 · 违规 2",
+        }
+        assert wall["risk-reporting"]["metric"] == "今日通过 3 / 审批中 1"
+
+    async def test_supervision_card_pending_and_degraded_states(self) -> None:
+        # 无审核记录 → 灰「待首跑」
+        stubs = _stub_collectors()
+
+        async def empty() -> dict[str, Any]:
+            return {"latest": None}
+
+        stubs["supervision"] = empty
+        data = await build_overview(collectors=stubs)
+        wall = {c["key"]: c for c in data["module_health"]}
         assert wall["supervision"] == {
             "key": "supervision",
             "status": "upcoming",
-            "metric": "未上线",
+            "metric": "待首跑",
         }
-        assert wall["risk-reporting"]["metric"] == "今日通过 3 / 审批中 1"
+
+        # 采集异常（单域降级）→ 灰卡无指标
+        stubs = _stub_collectors()
+
+        async def boom() -> dict[str, Any]:
+            raise RuntimeError("wt down")
+
+        stubs["supervision"] = boom
+        data = await build_overview(collectors=stubs)
+        wall = {c["key"]: c for c in data["module_health"]}
+        assert wall["supervision"] == {
+            "key": "supervision",
+            "status": "upcoming",
+            "metric": None,
+        }
+        assert data["errors"] == ["supervision: RuntimeError"]
 
     async def test_single_domain_failure_degrades_not_fatal(self) -> None:
         stubs = _stub_collectors()
@@ -176,6 +214,25 @@ class TestBuildOverview:
         wall = {c["key"]: c for c in data["module_health"]}
         assert len(wall) == 17
         assert wall["cert-warnings"]["metric"] is None
+
+
+class TestCollectSupervision:
+    async def test_latest_review_by_date(self, db_session: AsyncSession) -> None:
+        # 种两条未来日期审核（超出本地库任何真实数据，使「最近」判定确定）→ 取更近日期
+        db_session.add(
+            WorkTicketReview(date=_bj_today() + timedelta(days=100), violation_count=1)
+        )
+        db_session.add(
+            WorkTicketReview(date=_bj_today() + timedelta(days=101), violation_count=3)
+        )
+        await db_session.flush()
+        latest = await collect_supervision(db_session)
+        assert latest == {
+            "latest": {
+                "date": (_bj_today() + timedelta(days=101)).isoformat(),
+                "violation_count": 3,
+            }
+        }
 
 
 class TestCollectHazards:

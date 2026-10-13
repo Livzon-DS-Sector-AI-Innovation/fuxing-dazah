@@ -56,6 +56,17 @@ class WorkTicketReviewRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_latest(self) -> WorkTicketReview | None:
+        """最近一次审核记录（驾驶舱监督卡指标用；按日期取最新，未软删）。"""
+        stmt = (
+            select(WorkTicketReview)
+            .where(WorkTicketReview.is_deleted.is_(False))
+            .order_by(WorkTicketReview.date.desc(), WorkTicketReview.id.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_violations(
         self,
         review_id: Any,

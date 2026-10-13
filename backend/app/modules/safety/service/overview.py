@@ -290,6 +290,26 @@ async def collect_digest(digest_store: Any = None) -> dict[str, Any]:
     return {"count": len(cells), "cells": cells}
 
 
+async def collect_supervision(db: AsyncSession) -> dict[str, Any]:
+    """监督（三期起步）：最近一次作业票审核摘要（健康度墙指标）。
+
+    无记录 → latest=None（前端卡片显示「待首跑」灰态）。
+    """
+    from app.modules.safety.workticket_review.repository import (
+        WorkTicketReviewRepository,
+    )
+
+    review = await WorkTicketReviewRepository(db).get_latest()
+    if review is None:
+        return {"latest": None}
+    return {
+        "latest": {
+            "date": review.date.isoformat(),
+            "violation_count": review.violation_count,
+        }
+    }
+
+
 def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
     """17 模块健康度（key 对齐前端菜单；缺数域指标降为 None，不炸墙）。"""
     hazards = parts.get("hazards")
@@ -363,7 +383,30 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
         {"key": key, "status": "inactive", "metric": "未开展"}
         for key in _INACTIVE_MODULES
     )
-    cards.append({"key": "supervision", "status": "upcoming", "metric": "未上线"})
+    # 监督卡（三期起步）：最近一次审核真实指标（违规>0 → 黄）；无记录「待首跑」灰；
+    # 采集降级（parts=None）沿单域降级惯例 → 灰卡无指标
+    supervision_latest = (parts.get("supervision") or {}).get("latest")
+    if supervision_latest:
+        cards.append(
+            {
+                "key": "supervision",
+                "status": (
+                    "warn" if supervision_latest["violation_count"] > 0 else "ok"
+                ),
+                "metric": (
+                    f"最近审核 {supervision_latest['date']} · "
+                    f"违规 {supervision_latest['violation_count']}"
+                ),
+            }
+        )
+    else:
+        cards.append(
+            {
+                "key": "supervision",
+                "status": "upcoming",
+                "metric": "待首跑" if parts.get("supervision") else None,
+            }
+        )
     return cards
 
 
@@ -400,6 +443,7 @@ async def build_overview(
         "chemicals": _db_collector(collect_chemicals),
         "key_risk_ops": _db_collector(collect_key_risk_ops),
         "ehs": _db_collector(collect_ehs),
+        "supervision": _db_collector(collect_supervision),
         "digest": lambda: collect_digest(digest_store),
     }
     merged = {**default_collectors, **(collectors or {})}
