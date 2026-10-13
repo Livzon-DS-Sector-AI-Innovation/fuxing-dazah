@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -105,5 +106,62 @@ class RegulationChunk(BaseModel):
     cites_chunk_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True, comment="引用的其他 chunk ID")
     cited_by_chunk_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True, comment="被其他 chunk 引用")
     entity_ids: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True, comment="关联实体 ID 列表")
+
+
+class RagplusDocMap(BaseModel):
+    """ragplus-x 文档映射（外接知识层入库幂等底座）。
+
+    (domain, biz_key) 唯一（软删除外）：法规 biz_key=feishu_record_id、
+    MSDS=biz_key=collection_record_id（PDF 粒度）。一行随文档生命周期更新：
+    active（在主检索库）→ archived（移入已废止归档库）/ failed（上传解析
+    失败，last_error 记因）/ deleted（ragplus 侧已删）。修订/替代由
+    「删旧（归档）+ 写新（新行）」天然实现版本对齐。
+    """
+
+    __tablename__ = "ragplus_doc_map"
+    __table_args__ = (
+        Index(
+            "uq_ragplus_doc_map_domain_biz",
+            "domain",
+            "biz_key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_ragplus_doc_map_status", "status"),
+        {"schema": "safety"},
+    )
+
+    domain: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="业务域: regulation | msds",
+    )
+    biz_key: Mapped[str] = mapped_column(
+        String(128), nullable=False,
+        comment="幂等键：法规=feishu_record_id / MSDS=collection_record_id",
+    )
+    dataset_name: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="ragplus 库名（安全法规标准/MSDS/已废止）",
+    )
+    kb_doc_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="ragplus KBDocument id（管理端删除用）",
+    )
+    engine_doc_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="引擎文档 id（retrieval 命中 document_id）",
+    )
+    dataset_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="引擎 dataset id",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1", comment="入库版本号",
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active",
+        comment="状态: active | archived | failed | deleted",
+    )
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="对账用标题")
+    file_name: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="上传文件名")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="最近失败原因")
+    synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="最近同步成功时间",
+    )
 
 

@@ -93,6 +93,7 @@ from app.modules.safety.models.hazard_reports import (  # noqa: F401
     HazardReport,
 )
 from app.modules.safety.models.knowledge import (  # noqa: F401
+    RagplusDocMap,
     RegulationChunk,
     SafetyKnowledgeArticle,
 )
@@ -209,6 +210,7 @@ __all__ = [
     'PersonnelStatus',
     'QualificationLevel',
     'QualificationType',
+    'RagplusDocMap',
     'RegulationChunk',
     'RegulationRevision',
     'RegulationStatus',
