@@ -1,7 +1,7 @@
 'use client'
 
-// 转岗离岗申请 Panel（OhApplicationsPanel）— 对标 MsdsPanel
-// KPI（总数/审批中/已通过/需体检，取 getOhApplicationStats）→ 筛选 → Table
+// 转岗离岗申请 Panel（OhApplicationsPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（总数/审批中/已通过/需体检，取 getOhApplicationStats）→ SectionCard 台账（筛选 + Table）
 // 注：后端 list 仅支持 status/transfer_type/keyword；「是否需体检」Select 无后端参数
 //     → 在当前页行内客户端过滤（已记录待后端增强）。
 
@@ -9,7 +9,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   App,
   Button,
-  Empty,
   Input,
   Select,
   Table,
@@ -20,48 +19,57 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { getOhApplicationStats, getOhApplications } from '@/actions/safety'
 import type { OhApplicationStats, OhExamApplication } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import {
-  CARD_STYLE,
   OH_APPLICATION_STATUS_FILTER,
   OH_APPLICATION_STATUS_UI,
   OH_NEEDS_EXAM_UI,
   OH_TRANSFER_TYPE_FILTER,
   OH_TRANSFER_TYPE_UI,
-  T,
   UI,
 } from './ohConstants'
 import { linkPrimary, monoFont } from './shared-styles'
 import OhApplicationDrawer from './OhApplicationDrawer'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 申请状态 → ui-kit 语义 tone */
+const APPLY_STATUS_TONE: Record<string, Tone> = {
+  '已通过': 'ok',
+  '审批中': 'info',
+  '已拒绝': 'danger',
+  '已取消': 'default',
+  '已终止': 'default',
+  '已撤回': 'default',
+  '已删除': 'default',
 }
 
-function Pill({ status, map }: { status?: string; map: Record<string, { label: string; color: string; bg: string }> }) {
+/** 转岗/离岗类型 → ui-kit 语义 tone */
+const TRANSFER_TYPE_TONE: Record<string, Tone> = {
+  transfer: 'warn',
+  post_employment: 'default',
+}
+
+/** 是否需体检 → ui-kit 语义 tone */
+const NEEDS_EXAM_TONE: Record<string, Tone> = {
+  true: 'warn',
+  false: 'ok',
+  unknown: 'default',
+}
+
+function Pill({ status, map, toneMap }: {
+  status?: string
+  map: Record<string, { label: string; color: string; bg: string }>
+  toneMap: Record<string, Tone>
+}) {
   if (!status) return <span style={{ color: UI.muted }}>-</span>
   const ui = map[status]
   if (!ui) return <span>{status}</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={toneMap[status] ?? 'default'} label={ui.label} />
 }
 
 function NeedsExamPill({ needsExam }: { needsExam?: boolean | null }) {
-  if (needsExam === undefined || needsExam === null) {
-    const ui = OH_NEEDS_EXAM_UI.unknown
-    return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
-  }
-  const key = needsExam ? 'true' : 'false'
-  const ui = OH_NEEDS_EXAM_UI[key]
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  const key = needsExam === undefined || needsExam === null ? 'unknown' : needsExam ? 'true' : 'false'
+  return <StatusTag tone={NEEDS_EXAM_TONE[key]} label={OH_NEEDS_EXAM_UI[key].label} />
 }
 
 export default function OhApplicationsPanel() {
@@ -155,7 +163,7 @@ export default function OhApplicationsPanel() {
     },
     {
       title: '状态', dataIndex: 'apply_status', key: 'apply_status', width: 90,
-      render: (v: string) => <Pill status={v} map={OH_APPLICATION_STATUS_UI} />,
+      render: (v: string) => <Pill status={v} map={OH_APPLICATION_STATUS_UI} toneMap={APPLY_STATUS_TONE} />,
     },
     {
       title: '是否需体检', dataIndex: 'needs_exam', key: 'needs_exam', width: 100,
@@ -163,20 +171,24 @@ export default function OhApplicationsPanel() {
     },
     {
       title: '类型', dataIndex: 'transfer_type', key: 'transfer_type', width: 90,
-      render: (v: string) => <Pill status={v} map={OH_TRANSFER_TYPE_UI} />,
+      render: (v: string) => <Pill status={v} map={OH_TRANSFER_TYPE_UI} toneMap={TRANSFER_TYPE_TONE} />,
     },
   ], []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="申请总数" value={String(stats?.total ?? '-')} bg={T.lavender} valueColor={T.primary} caption="转岗/离岗体检申请" />
-        <KpiCard label="审批中" value={String(stats?.by_status?.['审批中'] ?? 0)} bg={T.sky} valueColor="#005bab" caption="by_status 审批中" />
-        <KpiCard label="已通过" value={String(stats?.by_status?.['已通过'] ?? 0)} bg={T.mint} valueColor={T.success} caption="by_status 已通过" />
-        <KpiCard label="需体检" value={String(stats?.needs_exam ?? '-')} bg={T.peach} valueColor={T.warning} caption="差异分析判定需体检" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（server action stats） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="申请总数" value={stats?.total ?? '-'} sub="转岗/离岗体检申请" />
+        <StatCard label="审批中" value={stats?.by_status?.['审批中'] ?? 0} sub="by_status 审批中" />
+        <StatCard label="已通过" value={stats?.by_status?.['已通过'] ?? 0} sub="by_status 已通过" />
+        <StatCard label="需体检" value={stats?.needs_exam ?? '-'} sub="差异分析判定需体检" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="转岗离岗申请"
+        description={`转岗/离岗体检申请台账（共 ${total} 条）`}
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input allowClear placeholder="申请编号/姓名" value={keyword}
             onChange={(e) => setKeyword(e.target.value)} onPressEnter={handleSearch}
@@ -213,14 +225,14 @@ export default function OhApplicationsPanel() {
           loading={loading}
           size="middle"
           scroll={{ x: 1220 }}
-          locale={{ emptyText: <Empty description="暂无转岗离岗申请" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无转岗离岗申请" description="调整筛选条件后点击右侧刷新按钮应用" /> }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
             onChange: (p, ps) => { setPage(p); setPageSize(ps); loadList(p, ps) },
           }}
         />
-      </div>
+      </SectionCard>
 
       <OhApplicationDrawer
         open={detailOpen}

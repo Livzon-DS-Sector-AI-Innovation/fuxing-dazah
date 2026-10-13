@@ -1,7 +1,7 @@
 'use client'
 
-// 体检记录 Panel（OhExamsPanel）— 对标 MsdsPanel
-// KPI（4 卡）→ 筛选（类型/结论/解析状态/部门/keyword）→ Table
+// 体检记录 Panel（OhExamsPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（4 卡）→ SectionCard 体检记录（筛选 + Table）
 // 高危结论行底色 OH_HIGH_RISK_ROW_BG（OH_HIGH_RISK_CONCLUSIONS 判定，旧交互语义保留项）；
 // failed 解析状态行内附「重试」；报告附件下载复用 /api/v1/safety/files/{path}。
 // 跨 Tab 联动：接收 initialKeyword（人员台账跳转预筛），消费后回调 onConsumedKeyword。
@@ -10,7 +10,6 @@ import { useState } from 'react'
 import {
   App,
   Button,
-  Empty,
   Input,
   Popconfirm,
   Select,
@@ -24,8 +23,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchOhExams, fetchOhExamStats } from '@/lib/api/safety/occupational-health'
 import { parseOhExam } from '@/actions/safety'
 import type { OhHealthExam } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import {
-  CARD_STYLE,
   OH_AI_CONCLUSION_FILTER,
   OH_AI_CONCLUSION_UI,
   OH_EXAM_TYPE_FILTER,
@@ -40,25 +40,42 @@ import {
 import { linkPrimary } from './shared-styles'
 import OhExamDrawer from './OhExamDrawer'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 体检类型 → ui-kit 语义 tone */
+const EXAM_TYPE_TONE: Record<string, Tone> = {
+  pre_employment: 'info',
+  periodic: 'primary',
+  post_employment: 'default',
+  transfer: 'warn',
+  emergency: 'danger',
 }
 
-function Pill({ status, map }: { status?: string; map: Record<string, { label: string; color: string; bg: string }> }) {
+/** 体检结论 → ui-kit 语义 tone */
+const AI_CONCLUSION_TONE: Record<string, Tone> = {
+  normal: 'ok',
+  abnormal_other: 'warn',
+  contraindicated: 'danger',
+  suspected_od: 'danger',
+  od_diagnosed: 'danger',
+  re_examination: 'info',
+}
+
+/** 解析状态 → ui-kit 语义 tone */
+const PARSE_STATUS_TONE: Record<string, Tone> = {
+  pending: 'default',
+  parsing: 'info',
+  parsed: 'ok',
+  failed: 'danger',
+}
+
+function Pill({ status, map, toneMap }: {
+  status?: string
+  map: Record<string, { label: string; color: string; bg: string }>
+  toneMap: Record<string, Tone>
+}) {
   if (!status) return <span style={{ color: UI.muted }}>-</span>
   const ui = map[status]
   if (!ui) return <span>{status}</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={toneMap[status] ?? 'default'} label={ui.label} />
 }
 
 function getEffectiveConclusion(exam: OhHealthExam): string | undefined {
@@ -163,7 +180,7 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
     },
     { title: '姓名', dataIndex: 'employee_name', key: 'employee_name', width: 100, render: (v: string) => v || '-' },
     { title: '部门', dataIndex: 'department', key: 'department', width: 130, ellipsis: true, render: (v: string) => v || '-' },
-    { title: '体检类型', dataIndex: 'exam_type', key: 'exam_type', width: 100, render: (v: string) => <Pill status={v} map={OH_EXAM_TYPE_UI} /> },
+    { title: '体检类型', dataIndex: 'exam_type', key: 'exam_type', width: 100, render: (v: string) => <Pill status={v} map={OH_EXAM_TYPE_UI} toneMap={EXAM_TYPE_TONE} /> },
     { title: '体检日期', dataIndex: 'exam_date', key: 'exam_date', width: 110, render: (v: string) => (v ? dayjs(v).format('YYYY-MM-DD') : '-') },
     {
       title: '接害工龄', dataIndex: 'hazard_exposure_years', key: 'hazard_exposure_years', width: 90,
@@ -175,13 +192,13 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
     },
     {
       title: 'AI 结论', key: 'conclusion', width: 100,
-      render: (_: unknown, record: OhHealthExam) => <Pill status={getEffectiveConclusion(record)} map={OH_AI_CONCLUSION_UI} />,
+      render: (_: unknown, record: OhHealthExam) => <Pill status={getEffectiveConclusion(record)} map={OH_AI_CONCLUSION_UI} toneMap={AI_CONCLUSION_TONE} />,
     },
     {
       title: '解析状态', dataIndex: 'ai_parse_status', key: 'parse_status', width: 110,
       render: (v: string, record: OhHealthExam) => (
         <span>
-          <Pill status={v} map={OH_PARSE_STATUS_UI} />
+          <Pill status={v} map={OH_PARSE_STATUS_UI} toneMap={PARSE_STATUS_TONE} />
           {v === 'failed' && (
             <Popconfirm
               title="重新解析"
@@ -210,15 +227,19 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
   ]
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="体检总数" value={String(stats?.total ?? '-')} bg={T.lavender} valueColor={T.primary} caption="全部体检记录" />
-        <KpiCard label="异常指标人数" value={String(stats?.abnormal ?? '-')} bg={T.peach} valueColor={T.warning} caption="结论为异常/疑似职业病等" />
-        <KpiCard label="职业禁忌证" value={String(stats?.contraindicated ?? '-')} bg={T.rose} valueColor={T.error} caption="禁忌证结论记录" />
-        <KpiCard label="待 AI 解析" value={String(stats?.pending_parse ?? '-')} bg={T.sky} valueColor="#005bab" caption="pending 状态" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（stats 端点） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="体检总数" value={stats?.total ?? '-'} sub="全部体检记录" />
+        <StatCard label="异常指标人数" value={stats?.abnormal ?? '-'} sub="结论为异常/疑似职业病等" />
+        <StatCard label="职业禁忌证" value={stats?.contraindicated ?? '-'} sub="禁忌证结论记录" />
+        <StatCard label="待 AI 解析" value={stats?.pending_parse ?? '-'} sub="pending 状态" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="体检记录"
+        description={`全部体检记录（共 ${total} 条）；高危结论行高亮`}
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input allowClear placeholder="体检号/姓名" value={keyword}
             onChange={(e) => setKeyword(e.target.value)} onPressEnter={handleSearch}
@@ -254,7 +275,7 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
           loading={isLoading}
           size="middle"
           scroll={{ x: 1280 }}
-          locale={{ emptyText: <Empty description="暂无体检记录" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无体检记录" description="调整筛选条件后点击右侧刷新按钮应用" /> }}
           onRow={(record) => {
             const conclusion = getEffectiveConclusion(record)
             if (conclusion && OH_HIGH_RISK_CONCLUSIONS.includes(conclusion)) {
@@ -268,7 +289,7 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
             onChange: (p, ps) => { setPage(p); setPageSize(ps) },
           }}
         />
-      </div>
+      </SectionCard>
 
       <OhExamDrawer
         open={detailOpen}

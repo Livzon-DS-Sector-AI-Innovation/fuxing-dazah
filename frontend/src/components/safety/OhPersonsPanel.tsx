@@ -1,14 +1,13 @@
 'use client'
 
-// 人员台账 Panel（OhPersonsPanel）— 对标 MsdsPanel
-// KPI（4 卡）→ 筛选（部门/岗位/接触危害/最后结论/keyword）→ Table（体检记录 link → onViewExams）
+// 人员台账 Panel（OhPersonsPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（4 卡）→ SectionCard 人员台账（筛选 + Table，体检记录 link → onViewExams）
 // 注：后端 /oh/persons 仅支持 hazard_exposure=yes 布尔接害筛选（未支持按具体因素过滤），
 //     接触危害 Select 选中任意因素即按「接害人员」筛选。
 
 import { useMemo, useState } from 'react'
 import {
   Button,
-  Empty,
   Input,
   Select,
   Table,
@@ -20,8 +19,9 @@ import dayjs from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchOhPersons, fetchOhPersonStats } from '@/lib/api/safety/occupational-health'
 import type { OhPerson } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import {
-  CARD_STYLE,
   HAZARD_FACTOR_SELECT_OPTIONS,
   OH_AI_CONCLUSION_FILTER,
   OH_AI_CONCLUSION_UI,
@@ -31,25 +31,25 @@ import {
 import { linkMuted, linkPrimary } from './shared-styles'
 import OhPersonDrawer from './OhPersonDrawer'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 体检结论 → ui-kit 语义 tone */
+const AI_CONCLUSION_TONE: Record<string, Tone> = {
+  normal: 'ok',
+  abnormal_other: 'warn',
+  contraindicated: 'danger',
+  suspected_od: 'danger',
+  od_diagnosed: 'danger',
+  re_examination: 'info',
 }
 
-function Pill({ status, map }: { status?: string; map: Record<string, { label: string; color: string; bg: string }> }) {
+function Pill({ status, map, toneMap }: {
+  status?: string
+  map: Record<string, { label: string; color: string; bg: string }>
+  toneMap: Record<string, Tone>
+}) {
   if (!status) return <span style={{ color: UI.muted }}>-</span>
   const ui = map[status]
   if (!ui) return <span>{status}</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={toneMap[status] ?? 'default'} label={ui.label} />
 }
 
 function fmtYears(v?: number): string {
@@ -193,20 +193,24 @@ export default function OhPersonsPanel({ onViewExams }: OhPersonsPanelProps) {
     },
     {
       title: '最后结论', dataIndex: 'last_exam_conclusion', key: 'last_exam_conclusion', width: 100,
-      render: (v: string) => <Pill status={v} map={OH_AI_CONCLUSION_UI} />,
+      render: (v: string) => <Pill status={v} map={OH_AI_CONCLUSION_UI} toneMap={AI_CONCLUSION_TONE} />,
     },
   ], []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="总人数" value={String(stats?.total ?? '-')} bg={T.lavender} valueColor={T.primary} caption="人员汇总台账" />
-        <KpiCard label="接害人数" value={String(stats?.hazard_exposed ?? '-')} bg={T.peach} valueColor={T.warning} caption="接触危害因素人员" />
-        <KpiCard label="近30天已体检" value={recent30d === null ? '-' : String(recent30d)} bg={T.mint} valueColor={T.success} caption="最近一次体检在 30 天内" />
-        <KpiCard label="最后体检异常" value={abnormalLastExam === null ? '-' : String(abnormalLastExam)} bg={T.rose} valueColor={T.error} caption="最后结论非未见异常" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（stats 端点 + 近30天派生） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="总人数" value={stats?.total ?? '-'} sub="人员汇总台账" />
+        <StatCard label="接害人数" value={stats?.hazard_exposed ?? '-'} sub="接触危害因素人员" />
+        <StatCard label="近30天已体检" value={recent30d} sub="最近一次体检在 30 天内" />
+        <StatCard label="最后体检异常" value={abnormalLastExam ?? '-'} sub="最后结论非未见异常" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="人员台账"
+        description={`职业健康人员档案（共 ${total} 条）`}
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input allowClear placeholder="姓名/工号/身份证" value={keyword}
             onChange={(e) => setKeyword(e.target.value)} onPressEnter={handleSearch}
@@ -243,14 +247,14 @@ export default function OhPersonsPanel({ onViewExams }: OhPersonsPanelProps) {
           loading={isLoading}
           size="middle"
           scroll={{ x: 1180 }}
-          locale={{ emptyText: <Empty description="暂无人员台账" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无人员台账" description="调整筛选条件后点击右侧刷新按钮应用" /> }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
             onChange: (p, ps) => { setPage(p); setPageSize(ps) },
           }}
         />
-      </div>
+      </SectionCard>
 
       <OhPersonDrawer
         open={detailOpen}

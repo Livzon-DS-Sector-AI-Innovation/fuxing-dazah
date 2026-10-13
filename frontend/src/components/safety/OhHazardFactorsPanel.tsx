@@ -1,7 +1,7 @@
 'use client'
 
 // 危害因素 PPE 映射字典 Panel（OhHazardFactorsPanel）— 只读台账，无 Drawer
-// KPI（字典条数/已覆盖标准名/未覆盖标准名/已维护 PPE）→ keyword 客户端过滤（后端无筛选参数）
+// StatCard 统计行（字典条数/已覆盖标准名/未覆盖标准名/已维护 PPE）→ keyword 客户端过滤（后端无筛选参数）
 // 顶部 Alert info：本表为人工维护映射字典，AI 差异分析从此取值。
 // 数据量小（42 项字典）：page_size=200 全量拉取 + 客户端过滤/分页。
 
@@ -9,7 +9,6 @@ import { useMemo, useState } from 'react'
 import {
   Alert,
   Button,
-  Empty,
   Input,
   Table,
   Tag,
@@ -21,26 +20,11 @@ import dayjs from 'dayjs'
 import { useQuery } from '@tanstack/react-query'
 import { fetchOhHazardFactors } from '@/lib/api/safety/occupational-health'
 import type { OhHazardFactor } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard } from '@/components/ui-kit'
 import {
-  CARD_STYLE,
   HAZARD_FACTOR_OPTIONS,
-  T,
   UI,
 } from './ohConstants'
-
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
-}
 
 const MAX_FETCH = 200
 
@@ -95,15 +79,19 @@ export default function OhHazardFactorsPanel() {
   ], [])
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="字典条数" value={String(kpi.total ?? '-')} bg={T.lavender} valueColor={T.primary} caption="PPE 映射字典" />
-        <KpiCard label="已覆盖标准名" value={String(kpi.covered)} bg={T.mint} valueColor={T.success} caption="与 42 项标准字典匹配" />
-        <KpiCard label="未覆盖标准名" value={String(kpi.uncovered)} bg={T.peach} valueColor={T.warning} caption={`42 项标准缺口 ${kpi.uncovered} 项`} />
-        <KpiCard label="已维护 PPE" value={String(kpi.withPpe)} bg={T.sky} valueColor="#005bab" caption="呼吸防护用品非空" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（字典全量派生） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="字典条数" value={kpi.total ?? '-'} sub="PPE 映射字典" />
+        <StatCard label="已覆盖标准名" value={kpi.covered} sub="与 42 项标准字典匹配" />
+        <StatCard label="未覆盖标准名" value={kpi.uncovered} sub={`42 项标准缺口 ${kpi.uncovered} 项`} />
+        <StatCard label="已维护 PPE" value={kpi.withPpe} sub="呼吸防护用品非空" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="危害因素 PPE 字典"
+        description={`人工维护映射字典（共 ${total} 条），AI 差异分析从此取值`}
+      >
         <Alert
           type="info"
           showIcon
@@ -124,14 +112,14 @@ export default function OhHazardFactorsPanel() {
           loading={isLoading}
           size="middle"
           scroll={{ x: 760 }}
-          locale={{ emptyText: <Empty description="暂无危害因素 PPE 字典" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无危害因素 PPE 字典" description="字典由 Bitable 同步维护，稍后刷新查看" /> }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
           }}
         />
-      </div>
+      </SectionCard>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 
-// 异常随访 Panel（OhFollowupsPanel）— 对标 MsdsPanel
-// KPI（总数/open/followed/逾期，由列表派生——后端无 stats 端点；逾期 = expired 或 open 且 followup_date < today）
+// 异常随访 Panel（OhFollowupsPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（总数/open/followed/逾期，由列表派生——后端无 stats 端点；逾期 = expired 或 open 且 followup_date < today）
 // 筛选：状态/类别（服务端）+ 随访类型/keyword（后端 list 无对应参数 → 当前页行内客户端过滤）
 // 默认按 followup_date 升序（due_order=true，到期优先）。
 // 操作：处置（OhFollowupModal）/ 关闭（Popconfirm + action_taken 必填）。
@@ -10,7 +10,6 @@ import { useMemo, useState } from 'react'
 import {
   App,
   Button,
-  Empty,
   Input,
   Popconfirm,
   Select,
@@ -24,8 +23,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchOhFollowups } from '@/lib/api/safety/occupational-health'
 import { closeOhFollowup } from '@/actions/safety'
 import type { OhFollowup } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import {
-  CARD_STYLE,
   OH_FOLLOWUP_STATUS_FILTER,
   OH_FOLLOWUP_STATUS_UI,
   OH_FOLLOWUP_TYPE_FILTER,
@@ -38,25 +38,40 @@ import {
 import { linkDanger, linkPrimary } from './shared-styles'
 import OhFollowupModal from './OhFollowupModal'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 随访状态 → ui-kit 语义 tone */
+const FOLLOWUP_STATUS_TONE: Record<string, Tone> = {
+  open: 'warn',
+  followed: 'info',
+  closed: 'ok',
+  expired: 'expired',
 }
 
-function Pill({ status, map }: { status?: string; map: Record<string, { label: string; color: string; bg: string }> }) {
+/** 随访类型 → ui-kit 语义 tone */
+const FOLLOWUP_TYPE_TONE: Record<string, Tone> = {
+  re_examination: 'info',
+  specialist_referral: 'danger',
+  transfer_post: 'warn',
+  health_monitor: 'ok',
+}
+
+/** 异常指标类别 → ui-kit 语义 tone */
+const INDICATOR_CATEGORY_TONE: Record<string, Tone> = {
+  lab: 'info',
+  vision: 'primary',
+  hearing: 'warn',
+  physique: 'ok',
+  other: 'default',
+}
+
+function Pill({ status, map, toneMap }: {
+  status?: string
+  map: Record<string, { label: string; color: string; bg: string }>
+  toneMap: Record<string, Tone>
+}) {
   if (!status) return <span style={{ color: UI.muted }}>-</span>
   const ui = map[status]
   if (!ui) return <span>{status}</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={toneMap[status] ?? 'default'} label={ui.label} />
 }
 
 const MAX_FETCH = 200
@@ -161,8 +176,8 @@ export default function OhFollowupsPanel() {
         </span>
       ),
     },
-    { title: '类别', dataIndex: 'category', key: 'category', width: 80, render: (v: string) => <Pill status={v} map={OH_INDICATOR_CATEGORY_UI} /> },
-    { title: '随访类型', dataIndex: 'followup_type', key: 'followup_type', width: 100, render: (v: string) => <Pill status={v} map={OH_FOLLOWUP_TYPE_UI} /> },
+    { title: '类别', dataIndex: 'category', key: 'category', width: 80, render: (v: string) => <Pill status={v} map={OH_INDICATOR_CATEGORY_UI} toneMap={INDICATOR_CATEGORY_TONE} /> },
+    { title: '随访类型', dataIndex: 'followup_type', key: 'followup_type', width: 100, render: (v: string) => <Pill status={v} map={OH_FOLLOWUP_TYPE_UI} toneMap={FOLLOWUP_TYPE_TONE} /> },
     {
       title: '建议复查日期', dataIndex: 'followup_date', key: 'followup_date', width: 120,
       render: (v: string, r: OhFollowup) => {
@@ -173,14 +188,10 @@ export default function OhFollowupsPanel() {
       },
     },
     { title: '责任人', dataIndex: 'responsible', key: 'responsible', width: 90, render: (v: string) => v || '-' },
-    { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (v: string) => <Pill status={v} map={OH_FOLLOWUP_STATUS_UI} /> },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (v: string) => <Pill status={v} map={OH_FOLLOWUP_STATUS_UI} toneMap={FOLLOWUP_STATUS_TONE} /> },
     {
       title: '来源', dataIndex: 'source', key: 'source', width: 100,
-      render: (v: string) => (
-        v === 'ai'
-          ? <span style={{ fontSize: 12, padding: '1px 8px', borderRadius: 4, color: T.primary, background: T.lavender, fontWeight: 600 }}>AI 自动</span>
-          : <span style={{ fontSize: 12, padding: '1px 8px', borderRadius: 4, color: T.steel, background: T.gray, fontWeight: 600 }}>人工补录</span>
-      ),
+      render: (v: string) => <StatusTag tone={v === 'ai' ? 'info' : 'default'} label={v === 'ai' ? 'AI 自动' : '人工补录'} />,
     },
     {
       title: '操作', key: 'actions', width: 110, fixed: 'right',
@@ -207,15 +218,19 @@ export default function OhFollowupsPanel() {
   ], [closeText]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="随访总数" value={String(kpi.total ?? '-')} bg={T.lavender} valueColor={T.primary} caption="异常随访闭环" />
-        <KpiCard label="待随访" value={String(kpi.open)} bg={T.peach} valueColor={T.warning} caption="open 待处置" />
-        <KpiCard label="已随访" value={String(kpi.followed)} bg={T.sky} valueColor="#005bab" caption="已处置待闭环" />
-        <KpiCard label="已逾期" value={String(kpi.overdue)} bg={T.rose} valueColor={T.error} caption="超期未关闭" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（列表派生） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="随访总数" value={kpi.total ?? '-'} sub="异常随访闭环" />
+        <StatCard label="待随访" value={kpi.open} sub="open 待处置" />
+        <StatCard label="已随访" value={kpi.followed} sub="已处置待闭环" />
+        <StatCard label="已逾期" value={kpi.overdue} sub="超期未关闭" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="异常随访"
+        description={`异常指标随访台账（共 ${total} 条），按建议复查日期到期优先`}
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input allowClear placeholder="人员/指标名" value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -251,14 +266,14 @@ export default function OhFollowupsPanel() {
           loading={isLoading}
           size="middle"
           scroll={{ x: 1240 }}
-          locale={{ emptyText: <Empty description="暂无异常随访" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无异常随访" description="体检异常指标将自动生成随访，也可人工补录" /> }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
             onChange: (p, ps) => { setPage(p); setPageSize(ps) },
           }}
         />
-      </div>
+      </SectionCard>
 
       <OhFollowupModal
         open={disposeOpen}

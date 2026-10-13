@@ -1,9 +1,11 @@
 'use client'
 
+// MSDS 台账 Panel（MsdsPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（stats 端点）→ SectionCard MSDS 台账（筛选 + Table + 附件下载）。
+
 import { useMemo, useState } from 'react'
 import {
   Button,
-  Empty,
   Input,
   Select,
   Table,
@@ -15,33 +17,37 @@ import dayjs from 'dayjs'
 import { useQuery } from '@tanstack/react-query'
 import { fetchMsdsDocuments, fetchMsdsStats } from '@/lib/api/safety/msds'
 import type { MsdsDocument } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import MsdsDetailDrawer from './MsdsDetailDrawer'
 import {
   ARCHIVE_STATUS_UI,
-  CARD_STYLE,
   REVIEW_STATUS_UI,
   T,
   UI,
 } from './msdsConstants'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 复核状态 → ui-kit 语义 tone */
+const REVIEW_STATUS_TONE: Record<string, Tone> = {
+  pending: 'default',
+  approved: 'ok',
+  rejected: 'danger',
 }
 
-function Pill({ status, map }: { status: string; map: Record<string, { label: string; color: string; bg: string }> }) {
+/** 归档状态 → ui-kit 语义 tone */
+const ARCHIVE_STATUS_TONE: Record<string, Tone> = {
+  pending: 'default',
+  archived: 'info',
+}
+
+function Pill({ status, map, toneMap }: {
+  status: string
+  map: Record<string, { label: string; color: string; bg: string }>
+  toneMap: Record<string, Tone>
+}) {
   const ui = map[status]
   if (!ui) return <span>-</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={toneMap[status] ?? 'default'} label={ui.label} />
 }
 
 export default function MsdsPanel() {
@@ -97,11 +103,11 @@ export default function MsdsPanel() {
     { title: 'UN编号', dataIndex: 'un_no', key: 'un_no', width: 100 },
     {
       title: '复核', dataIndex: 'review_status', key: 'review_status', width: 90,
-      render: (s: string) => <Pill status={s} map={REVIEW_STATUS_UI} />,
+      render: (s: string) => <Pill status={s} map={REVIEW_STATUS_UI} toneMap={REVIEW_STATUS_TONE} />,
     },
     {
       title: '归档', dataIndex: 'archive_status', key: 'archive_status', width: 90,
-      render: (s: string) => <Pill status={s} map={ARCHIVE_STATUS_UI} />,
+      render: (s: string) => <Pill status={s} map={ARCHIVE_STATUS_UI} toneMap={ARCHIVE_STATUS_TONE} />,
     },
     {
       title: '日期', dataIndex: 'source_date', key: 'source_date', width: 110,
@@ -130,15 +136,19 @@ export default function MsdsPanel() {
   ], [])
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="台账总数" value={String(stats?.total_documents ?? '-')} bg={T.lavender} valueColor={T.primary} caption="全部化学品 MSDS" />
-        <KpiCard label="已复核" value={String(stats?.by_review_status?.approved ?? 0)} bg={T.mint} valueColor={T.success} caption="复核通过" />
-        <KpiCard label="已归档" value={String(stats?.archived_documents ?? 0)} bg={T.sky} valueColor="#005bab" caption="档案归档" />
-        <KpiCard label="采集记录" value={String(stats?.total_collections ?? '-')} bg={T.peach} valueColor={T.warning} caption={`失败 ${stats?.failed_collections ?? 0}`} />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（stats 端点） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="台账总数" value={stats?.total_documents ?? '-'} sub="全部化学品 MSDS" />
+        <StatCard label="已复核" value={stats?.by_review_status?.approved ?? 0} sub="复核通过" />
+        <StatCard label="已归档" value={stats?.archived_documents ?? 0} sub="档案归档" />
+        <StatCard label="采集记录" value={stats?.total_collections ?? '-'} sub={`失败 ${stats?.failed_collections ?? 0}`} />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="MSDS 台账"
+        description={`化学品安全数据说明书台账（共 ${total} 条）`}
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input allowClear placeholder="物质名称" value={name}
             onChange={(e) => setName(e.target.value)} onPressEnter={handleSearch}
@@ -159,7 +169,7 @@ export default function MsdsPanel() {
         <Table<MsdsDocument>
           columns={columns} dataSource={rows} rowKey="id"
           loading={isLoading} scroll={{ x: 980 }}
-          locale={{ emptyText: <Empty description="暂无 MSDS 台账" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无 MSDS 台账" description="供应商资料解析入库后自动生成台账" /> }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
@@ -167,7 +177,7 @@ export default function MsdsPanel() {
           }}
           size="middle"
         />
-      </div>
+      </SectionCard>
 
       <MsdsDetailDrawer
         open={detailOpen}

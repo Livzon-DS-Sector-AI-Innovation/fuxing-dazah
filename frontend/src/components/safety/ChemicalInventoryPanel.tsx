@@ -1,7 +1,7 @@
 'use client'
 
-// 危化品库存管理 Panel（ChemicalInventoryPanel）— 对标 CertWarningPanel
-// 顶部 KPI（stats）+ 筛选（部门/物料名称）+ 表格 + 分页 + 手动全量扫描
+// 危化品库存管理 Panel（ChemicalInventoryPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（stats 端点）+ SectionCard 台账（筛选 + 表格 + 分页 + 手动全量扫描）
 
 import { useState } from 'react'
 import { App, Button, Input, Select, Table, Tag, Tooltip } from 'antd'
@@ -11,6 +11,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchChemicalInventoryRecords, fetchChemicalInventoryStats } from '@/lib/api/safety/chemical-inventory'
 import { runChemicalInventoryScan } from '@/actions/safety'
 import type { ChemicalInventoryRecord } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import {
   CHEMICAL_DEPARTMENT_FILTER,
   CHEMICAL_DEPARTMENT_LABELS,
@@ -19,34 +21,45 @@ import {
   HAZARD_CLASS_LABELS,
   RISK_FLAG_UI,
   RISK_NOTE_UI,
-  CARD_STYLE,
   UI,
 } from './chemicalInventoryConstants'
-import { monoFont, tableCard } from './shared-styles'
+import { monoFont } from './shared-styles'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string
-  value: number | string
-  caption?: string
-  bg?: string
-  valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE as React.CSSProperties, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** KPI 字段 → ui-kit 语义 tone */
+const KPI_TONE: Record<string, Tone> = {
+  total_records: 'default',
+  warn_count: 'warn',
+  over_limit: 'danger',
+  normal_count: 'ok',
 }
 
-function Pill({ value, map }: { value?: string; map: Record<string, { label: string; color: string; bg: string }> }) {
+/** 风险标记 → ui-kit 语义 tone */
+const RISK_FLAG_TONE: Record<string, Tone> = {
+  normal: 'ok',
+  warn: 'warn',
+}
+
+/** 风险说明 → ui-kit 语义 tone */
+const RISK_NOTE_TONE: Record<string, Tone> = {
+  normal: 'ok',
+  over_limit: 'danger',
+  near_limit: 'warn',
+  high_ratio: 'warn',
+  incompatible_storage: 'danger',
+  unclassified: 'warn',
+  unit_anomaly: 'warn',
+  special_storage: 'warn',
+}
+
+function Pill({ value, map, toneMap }: {
+  value?: string
+  map: Record<string, { label: string; color: string; bg: string }>
+  toneMap: Record<string, Tone>
+}) {
   if (!value) return <span style={{ color: UI.muted }}>-</span>
   const ui = map[value]
   if (!ui) return <span>{value}</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={toneMap[value] ?? 'default'} label={ui.label} />
 }
 
 export default function ChemicalInventoryPanel() {
@@ -128,14 +141,14 @@ export default function ChemicalInventoryPanel() {
     { title: '库存数量', dataIndex: 'quantity', key: 'quantity', width: 110, align: 'right', render: (v?: number | null, r?: ChemicalInventoryRecord) => v == null ? '-' : `${v} ${CHEMICAL_UNIT_LABELS[r?.unit ?? ''] ?? r?.unit ?? ''}` },
     { title: '现场物料总量(T)', dataIndex: 'total_quantity_t', key: 'total_quantity_t', width: 140, align: 'right', render: (v?: number | null) => v == null ? '-' : <span style={monoFont}>{v}</span> },
     { title: '库存上限', dataIndex: 'max_limit', key: 'max_limit', width: 110, align: 'right', render: (v?: number | null, r?: ChemicalInventoryRecord) => v == null ? '-' : `${v} ${CHEMICAL_UNIT_LABELS[r?.max_limit_unit ?? ''] ?? r?.max_limit_unit ?? ''}` },
-    { title: '风险标记', dataIndex: 'risk_flag', key: 'risk_flag', width: 100, render: (v: string) => <Pill value={v} map={RISK_FLAG_UI} /> },
+    { title: '风险标记', dataIndex: 'risk_flag', key: 'risk_flag', width: 100, render: (v: string) => <Pill value={v} map={RISK_FLAG_UI} toneMap={RISK_FLAG_TONE} /> },
     {
       title: '风险说明', dataIndex: 'risk_note', key: 'risk_note', width: 220,
       render: (v?: string[] | null) => {
-        if (!v || v.length === 0) return <Pill value="normal" map={RISK_NOTE_UI} />
+        if (!v || v.length === 0) return <Pill value="normal" map={RISK_NOTE_UI} toneMap={RISK_NOTE_TONE} />
         return (
           <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-            {v.map((n) => <Pill key={n} value={n} map={RISK_NOTE_UI} />)}
+            {v.map((n) => <Pill key={n} value={n} map={RISK_NOTE_UI} toneMap={RISK_NOTE_TONE} />)}
           </span>
         )
       },
@@ -144,55 +157,57 @@ export default function ChemicalInventoryPanel() {
   ]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* KPI 卡片 */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（stats 端点） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {CHEMICAL_KPI_ITEMS.map((item) => (
-          <KpiCard
+          <StatCard
             key={item.field}
             label={item.label}
             value={kpi[item.field] ?? 0}
-            caption={item.caption}
-            bg={item.bg}
-            valueColor={item.valueColor}
+            sub={item.caption}
+            tone={KPI_TONE[item.field] ?? 'default'}
           />
         ))}
       </div>
 
-      {/* 筛选 + 操作 */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Select
-          allowClear
-          placeholder="全部部门"
-          style={{ width: 180 }}
-          options={CHEMICAL_DEPARTMENT_FILTER}
-          value={department}
-          onChange={(v) => setDepartment(v || undefined)}
-        />
-        <Input
-          allowClear
-          placeholder="物料名称（模糊）"
-          prefix={<SearchOutlined />}
-          style={{ width: 240 }}
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          onPressEnter={handleSearch}
-        />
-        <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
-        <Tooltip title="对当前台账全量重跑规则，回填风险标记/风险说明">
-          <Button icon={<ScanOutlined />} loading={scanning} onClick={handleScan}>手动扫描</Button>
-        </Tooltip>
-        <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-      </div>
+      <SectionCard
+        title="危化品库存台账"
+        description={`各部门危化品库存与风险标记（共 ${total} 条）`}
+      >
+        {/* 筛选 + 操作 */}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
+          <Select
+            allowClear
+            placeholder="全部部门"
+            style={{ width: 180 }}
+            options={CHEMICAL_DEPARTMENT_FILTER}
+            value={department}
+            onChange={(v) => setDepartment(v || undefined)}
+          />
+          <Input
+            allowClear
+            placeholder="物料名称（模糊）"
+            prefix={<SearchOutlined />}
+            style={{ width: 240 }}
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            onPressEnter={handleSearch}
+          />
+          <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
+          <Tooltip title="对当前台账全量重跑规则，回填风险标记/风险说明">
+            <Button icon={<ScanOutlined />} loading={scanning} onClick={handleScan}>手动扫描</Button>
+          </Tooltip>
+          <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
+        </div>
 
-      {/* 表格 */}
-      <div style={tableCard}>
         <Table<ChemicalInventoryRecord>
           rowKey="id"
           columns={columns}
           dataSource={rows}
           loading={isLoading}
           scroll={{ x: 1400 }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无危化品台账记录" description="调整筛选条件后点击查询按钮应用" /> }}
           pagination={{
             current: page,
             pageSize,
@@ -205,7 +220,7 @@ export default function ChemicalInventoryPanel() {
             },
           }}
         />
-      </div>
+      </SectionCard>
     </div>
   )
 }

@@ -1,8 +1,11 @@
 'use client'
 
+// 风险作业报备 — ui-kit 视觉（PageHeader / StatCard / SectionCard / StatusTag / EmptyGuide）
+// 状态标签统一 ui-kit StatusTag（本地 ApplyStatusTag 已删）；取数与筛选行为不变。
+
 import { useState } from 'react'
 import {
-  App, Button, Card, DatePicker, Empty, Input, Select, Space, Table, Typography,
+  App, Button, DatePicker, Input, Select, Space, Table, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -16,6 +19,8 @@ import { fetchKeyRiskOperationReports, fetchKeyRiskOperationStats } from '@/lib/
 import { syncKeyRiskOperations } from '@/actions/safety'
 import type { KeyRiskOperationReport } from '@/types/safety'
 import { KEY_RISK_APPLY_STATUS_CONFIG, KEY_RISK_APPLY_STATUS_OPTIONS } from '@/types/safety'
+import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import KeyRiskOpsDetail from './KeyRiskOpsDetail'
 
 const { Text } = Typography
@@ -28,44 +33,23 @@ const UI = {
   slate: '#5d5b54',
   steel: '#787671',
   stone: '#a4a097',
-  canvas: '#ffffff',
-  hairline: '#e5e3df',
-  primary: '#5645d4',
 } as const
-
-const CARD_STYLE: React.CSSProperties = {
-  background: UI.canvas,
-  border: `1px solid ${UI.hairline}`,
-  borderRadius: 12,
-}
 
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace'
 
-function KpiCard({ label, value, caption, color }: {
-  label: string; value: React.ReactNode; caption?: string; color?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px' }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: color ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 申请状态 → ui-kit 语义 tone */
+const APPLY_STATUS_TONE: Record<string, Tone> = {
+  '已通过': 'ok',
+  '审批中': 'info',
+  '已拒绝': 'danger',
+  '已取消': 'default',
+  '已终止': 'expired',
+  '已撤回': 'default',
 }
 
 function ApplyStatusTag({ status }: { status?: string }) {
   if (!status) return <Text style={{ color: UI.stone }}>—</Text>
-  const cfg = KEY_RISK_APPLY_STATUS_CONFIG[status] || { label: status, color: UI.steel, bg: '#f0eeec' }
-  return (
-    <span style={{
-      display: 'inline-block', fontSize: 12, fontWeight: 600, padding: '2px 10px', borderRadius: 9999,
-      background: cfg.bg, color: cfg.color,
-    }}>
-      {cfg.label}
-    </span>
-  )
+  return <StatusTag tone={APPLY_STATUS_TONE[status] ?? 'default'} label={KEY_RISK_APPLY_STATUS_CONFIG[status]?.label ?? status} />
 }
 
 export default function KeyRiskOpsManagement() {
@@ -202,63 +186,64 @@ export default function KeyRiskOpsManagement() {
   ]
 
   return (
-    <div style={{ padding: 24 }}>
+    <div className="flex flex-col gap-4">
       {/* ── 页头 ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 600, color: UI.ink }}>关键风险作业管理</div>
-          <div style={{ fontSize: 13, color: UI.slate, marginTop: 2 }}>
-            飞书多维表格数据同步 · 审批在飞书完成 · 平台只读展示
-          </div>
+      <PageHeader
+        breadcrumb={['安全管理', '风险作业报备']}
+        title="风险作业报备"
+        description="关键风险作业报备记录与审批结果查询（审批在飞书完成 · 平台只读展示）"
+        actions={
+          <>
+            <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
+            <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSync}>同步</Button>
+            <Button icon={<ExportOutlined />} loading={exporting} onClick={handleExport}>导出</Button>
+          </>
+        }
+      />
+
+      {/* ── 统计行（stats 端点） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="今日已通过" value={stats?.today_approved ?? 0} sub="作业开始时间落在今天且已通过" />
+        <StatCard label="审批中" value={stats?.in_progress ?? 0} sub="飞书审批流尚未结束" />
+        <StatCard label="本月已通过" value={stats?.month_approved ?? 0} sub="本月已通过的关键风险作业" />
+        <StatCard label="累计记录" value={stats?.total ?? 0} sub="平台累计同步记录" />
+      </div>
+
+      {/* ── 报备台账（筛选 + 表格） ── */}
+      <SectionCard
+        title="报备台账"
+        description={`关键风险作业报备记录（共 ${total} 条）`}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <Space wrap size="middle">
+            <Select
+              placeholder="申请状态" allowClear style={{ width: 120, borderRadius: 8 }}
+              value={statusFilter || undefined}
+              onChange={v => setStatusFilter(v || '')}
+              options={KEY_RISK_APPLY_STATUS_OPTIONS}
+            />
+            <Select
+              placeholder="部门" allowClear showSearch style={{ width: 150, borderRadius: 8 }}
+              value={dept} onChange={setDept} options={deptOptions}
+            />
+            <RangePicker
+              style={{ borderRadius: 8 }}
+              value={dateRange}
+              onChange={(v) => setDateRange(v as [dayjs.Dayjs, dayjs.Dayjs] | null)}
+            />
+            <Input
+              placeholder="搜索编号/内容/区域/部门"
+              prefix={<SearchOutlined style={{ color: UI.stone }} />}
+              style={{ width: 200, borderRadius: 8 }}
+              value={keyword}
+              onChange={e => setKeyword(e.target.value)}
+              onPressEnter={() => { setSubmittedKeyword(keyword); setPage(1) }}
+              allowClear
+            />
+            <Button icon={<SearchOutlined />} style={{ borderRadius: 8 }} onClick={() => { setSubmittedKeyword(keyword); setPage(1) }}>查询</Button>
+          </Space>
         </div>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
-          <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSync}>同步</Button>
-          <Button icon={<ExportOutlined />} loading={exporting} onClick={handleExport}>导出</Button>
-        </Space>
-      </div>
 
-      {/* ── KPI 指标带 ── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <KpiCard label="今日已通过" value={stats?.today_approved ?? 0} caption="作业开始时间落在今天且已通过" color="#1aae39" />
-        <KpiCard label="审批中" value={stats?.in_progress ?? 0} caption="飞书审批流尚未结束" color="#dd5b00" />
-        <KpiCard label="本月已通过" value={stats?.month_approved ?? 0} caption="本月已通过的关键风险作业" color="#5645d4" />
-        <KpiCard label="累计记录" value={stats?.total ?? 0} caption="平台累计同步记录" />
-      </div>
-
-      {/* ── 筛选栏 ── */}
-      <Card variant="borderless" style={CARD_STYLE} styles={{ body: { padding: '12px 16px' } }}>
-        <Space wrap size="middle">
-          <Select
-            placeholder="申请状态" allowClear style={{ width: 120, borderRadius: 8 }}
-            value={statusFilter || undefined}
-            onChange={v => setStatusFilter(v || '')}
-            options={KEY_RISK_APPLY_STATUS_OPTIONS}
-          />
-          <Select
-            placeholder="部门" allowClear showSearch style={{ width: 150, borderRadius: 8 }}
-            value={dept} onChange={setDept} options={deptOptions}
-          />
-          <RangePicker
-            style={{ borderRadius: 8 }}
-            value={dateRange}
-            onChange={(v) => setDateRange(v as [dayjs.Dayjs, dayjs.Dayjs] | null)}
-          />
-          <Input
-            placeholder="搜索编号/内容/区域/部门"
-            prefix={<SearchOutlined style={{ color: UI.stone }} />}
-            style={{ width: 200, borderRadius: 8 }}
-            value={keyword}
-            onChange={e => setKeyword(e.target.value)}
-            onPressEnter={() => { setSubmittedKeyword(keyword); setPage(1) }}
-            allowClear
-          />
-          <Button icon={<SearchOutlined />} style={{ borderRadius: 8 }} onClick={() => { setSubmittedKeyword(keyword); setPage(1) }}>查询</Button>
-        </Space>
-      </Card>
-
-      {/* ── 表格 ── */}
-      <Card variant="borderless" style={CARD_STYLE} styles={{ body: { padding: 0 } }}>
         <Table<KeyRiskOperationReport>
           columns={columns}
           dataSource={rows}
@@ -266,7 +251,7 @@ export default function KeyRiskOpsManagement() {
           loading={isLoading}
           scroll={{ x: 1000 }}
           size="middle"
-          locale={{ emptyText: <Empty description="暂无关键风险作业记录" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无关键风险作业记录" description="调整筛选条件后点击查询按钮应用" /> }}
           pagination={{
             current: page,
             pageSize,
@@ -276,7 +261,7 @@ export default function KeyRiskOpsManagement() {
             onChange: (p, ps) => { setPage(p); setPageSize(ps) },
           }}
         />
-      </Card>
+      </SectionCard>
 
       {/* ── 详情 ── */}
       <KeyRiskOpsDetail open={detailOpen} item={detailItem} onClose={() => { setDetailOpen(false); setDetailItem(null) }} />

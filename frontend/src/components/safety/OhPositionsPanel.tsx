@@ -1,14 +1,13 @@
 'use client'
 
 // 岗位危害 Panel（OhPositionsPanel）— 只读台账
-// KPI（岗位总数/已填充/未填充/涉及危害因素种数，由全量拉取派生——后端无 stats 端点）
+// StatCard 统计行（岗位总数/已填充/未填充/涉及危害因素种数，由全量拉取派生——后端无 stats 端点）
 // 筛选：部门（服务端）+ 填充状态（服务端）+ keyword（岗位/职务，后端 list 无 keyword 参数 → 客户端过滤）
 // 数据量小：一次性 page_size=200 全量拉取，客户端过滤 + 客户端分页。
 
 import { useMemo, useState } from 'react'
 import {
   Button,
-  Empty,
   Input,
   Select,
   Table,
@@ -19,8 +18,9 @@ import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { fetchOhHazardFactors, fetchOhPositions } from '@/lib/api/safety/occupational-health'
 import type { OhPosition } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import {
-  CARD_STYLE,
   OH_POSITION_FILL_STATUS_FILTER,
   OH_POSITION_FILL_STATUS_UI,
   T,
@@ -28,25 +28,18 @@ import {
 } from './ohConstants'
 import OhPositionDrawer from './OhPositionDrawer'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 填充状态 → ui-kit 语义 tone */
+const FILL_STATUS_TONE: Record<string, Tone> = {
+  filled: 'ok',
+  empty: 'warn',
+  inferred: 'primary',
 }
 
 function Pill({ status }: { status?: string }) {
   if (!status) return <span style={{ color: UI.muted }}>-</span>
   const ui = OH_POSITION_FILL_STATUS_UI[status]
   if (!ui) return <span>{status}</span>
-  return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+  return <StatusTag tone={FILL_STATUS_TONE[status] ?? 'default'} label={ui.label} />
 }
 
 const MAX_FETCH = 200
@@ -145,15 +138,19 @@ export default function OhPositionsPanel() {
   ], [])
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="岗位总数" value={String(kpi.total ?? '-')} bg={T.lavender} valueColor={T.primary} caption="岗位危害台账" />
-        <KpiCard label="已填充危害" value={String(kpi.filled)} bg={T.mint} valueColor={T.success} caption={`填充率 ${kpi.fillRate}%`} />
-        <KpiCard label="未填充" value={String(kpi.empty)} bg={T.peach} valueColor={T.warning} caption="待人工维护（Bitable）" />
-        <KpiCard label="涉及危害因素种数" value={String(kpi.factorCount)} bg={T.sky} valueColor="#005bab" caption="全岗位去重统计" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（全量数据派生） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="岗位总数" value={kpi.total ?? '-'} sub="岗位危害台账" />
+        <StatCard label="已填充危害" value={kpi.filled} sub={`填充率 ${kpi.fillRate}%`} />
+        <StatCard label="未填充" value={kpi.empty} sub="待人工维护（Bitable）" />
+        <StatCard label="涉及危害因素种数" value={kpi.factorCount} sub="全岗位去重统计" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="岗位危害台账"
+        description={`岗位危害因素台账（共 ${total} 条）`}
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input allowClear placeholder="岗位/职务" value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -177,14 +174,14 @@ export default function OhPositionsPanel() {
           loading={isLoading}
           size="middle"
           scroll={{ x: 880 }}
-          locale={{ emptyText: <Empty description="暂无岗位危害台账" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无岗位危害台账" description="调整筛选条件后点击右侧刷新按钮应用" /> }}
           pagination={{
             pageSize: 20,
             showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
           }}
         />
-      </div>
+      </SectionCard>
 
       <OhPositionDrawer
         open={detailOpen}

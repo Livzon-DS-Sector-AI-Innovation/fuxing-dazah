@@ -1,7 +1,10 @@
 'use client'
 
+// MSDS 供应商资料采集 Panel（MsdsCollectionPanel）— 对标 CertWarningPanel 形态
+// StatCard 统计行（与台账共享 msds-stats 端点）→ SectionCard 采集台账（筛选 + Table + 手动触发解析）。
+
 import { useCallback, useMemo, useState } from 'react'
-import { App, Button, Empty, Select, Space, Table, Tooltip } from 'antd'
+import { App, Button, Select, Space, Table, Tooltip } from 'antd'
 import { EyeOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -9,27 +12,21 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchMsdsCollections, fetchMsdsStats } from '@/lib/api/safety/msds'
 import { retryMsdsParse } from '@/actions/safety'
 import type { MsdsCollectionRecord } from '@/types/safety'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 import MsdsDetailDrawer from './MsdsDetailDrawer'
 import {
-  CARD_STYLE,
   PARSE_STATUS_FILTER,
   PARSE_STATUS_UI,
   T,
   UI,
 } from './msdsConstants'
 
-function KpiCard({ label, value, caption, bg, valueColor }: {
-  label: string; value: string; caption?: string; bg?: string; valueColor?: string
-}) {
-  return (
-    <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas }}>
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: valueColor ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
+/** 解析状态 → ui-kit 语义 tone */
+const PARSE_STATUS_TONE: Record<string, Tone> = {
+  pending: 'default',
+  parsed: 'ok',
+  failed: 'danger',
 }
 
 export default function MsdsCollectionPanel() {
@@ -97,7 +94,7 @@ export default function MsdsCollectionPanel() {
       render: (s: string) => {
         const ui = PARSE_STATUS_UI[s]
         if (!ui) return s || '-'
-        return <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, color: ui.color, background: ui.bg, fontWeight: 600 }}>{ui.label}</span>
+        return <StatusTag tone={PARSE_STATUS_TONE[s] ?? 'default'} label={ui.label} />
       },
     },
     {
@@ -134,26 +131,29 @@ export default function MsdsCollectionPanel() {
   ], [parsingId, handleRetry])
 
   return (
-    <div style={{ padding: '0 0 32px' }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-        <KpiCard label="采集总数" value={String(stats?.total_collections ?? '-')} bg={T.lavender} valueColor={T.primary} caption="供应商资料上传" />
-        <KpiCard label="已解析" value={String(stats?.parsed_collections ?? 0)} bg={T.mint} valueColor={T.success} caption="AI 提取完成" />
-        <KpiCard label="解析失败" value={String(stats?.failed_collections ?? 0)} bg={T.rose} valueColor={T.error} caption="可手动重试" />
-        <KpiCard label="台账收录" value={String(stats?.total_documents ?? '-')} bg={T.sky} valueColor="#005bab" caption="MSDS 表记录" />
+    <div className="flex flex-col gap-4 pb-8">
+      {/* ── 统计行（与台账共享 msds-stats 端点） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="采集总数" value={stats?.total_collections ?? '-'} sub="供应商资料上传" />
+        <StatCard label="已解析" value={stats?.parsed_collections ?? 0} sub="AI 提取完成" />
+        <StatCard label="解析失败" value={stats?.failed_collections ?? 0} sub="可手动重试" />
+        <StatCard label="台账收录" value={stats?.total_documents ?? '-'} sub="MSDS 表记录" />
       </div>
 
-      <div style={{ ...CARD_STYLE, padding: '16px 20px 20px' }}>
+      <SectionCard
+        title="供应商资料采集"
+        description="供应商在飞书「供应商资料」表上传原始 MSDS，平台自动解析并写回「MSDS」表"
+      >
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
           <Select value={parseStatus} onChange={(v) => setParseStatus(v)}
             options={PARSE_STATUS_FILTER} style={{ width: 130 }} placeholder="解析状态" allowClear />
           <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => setApplied({ parseStatus })} size="small" /></Tooltip>
-          <span style={{ fontSize: 12, color: UI.steel }}>供应商在飞书「供应商资料」表上传原始 MSDS，平台自动解析并写回「MSDS」表</span>
         </div>
 
         <Table<MsdsCollectionRecord>
           columns={columns} dataSource={rows} rowKey="id"
           loading={isLoading} scroll={{ x: 900 }}
-          locale={{ emptyText: <Empty description="暂无供应商资料采集" /> }}
+          locale={{ emptyText: <EmptyGuide compact title="暂无供应商资料采集" description="供应商在飞书上传原始 MSDS 后自动同步" /> }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true,
             showTotal: (t) => `共 ${t} 条`,
@@ -161,7 +161,7 @@ export default function MsdsCollectionPanel() {
           }}
           size="middle"
         />
-      </div>
+      </SectionCard>
 
       <MsdsDetailDrawer
         open={detailOpen}

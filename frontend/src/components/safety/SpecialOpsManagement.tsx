@@ -1,9 +1,12 @@
 'use client'
 
+// 特殊作业管理 — ui-kit 视觉（PageHeader / StatCard / SectionCard / StatusTag / EmptyGuide）
+// 数据流保持不变（本地 state + server actions，不迁 react-query）。
+
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  App, Button, Empty, Input, InputNumber, Modal,
-  Select, Space, Table, Tag,
+  App, Button, Input, InputNumber, Modal,
+  Select, Space, Table,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -28,6 +31,8 @@ import type {
   SpecialOperationLedgerStats,
   SpecialOperationReport,
 } from '@/types/safety'
+import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 
 import { OP_LEVEL_LABELS, OP_TYPE_CONFIG, OP_TYPE_KEYS } from './specialOpsConstants'
 
@@ -58,8 +63,8 @@ const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", mo
 
 // ── 日报风险色 ──
 
-const RISK_COLORS: Record<string, string> = { high: '#e03131', medium: '#dd5b00', low: '#1aae39' }
 const RISK_LABELS: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' }
+const RISK_TONE: Record<string, Tone> = { high: 'danger', medium: 'warn', low: 'ok' }
 
 // ── V3.5 字段选项 ──
 const FIRE_METHOD_OPTIONS = [
@@ -75,38 +80,11 @@ const HEIGHT_METHOD_OPTIONS = [
   { value: '便携式钢直梯', label: '便携式钢直梯' }, { value: '其他', label: '其他' },
 ]
 
-// ── KPI 卡（对齐 AiAuditPanel）──
-
-function KpiCard({ label, value, caption, color, bg, onClick }: {
-  label: string; value: React.ReactNode; caption?: React.ReactNode; color?: string; bg?: string; onClick?: () => void
-}) {
-  return (
-    <div
-      style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: '14px 16px', background: bg ?? UI.canvas, cursor: onClick ? 'pointer' : undefined }}
-      onClick={onClick}
-    >
-      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, lineHeight: 1.3, marginTop: 4, color: color ?? UI.ink, fontVariantNumeric: 'tabular-nums' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 12, color: UI.steel, marginTop: 2, minHeight: 18 }}>{caption ?? ''}</div>
-    </div>
-  )
-}
-
-// ── 场景 Tag ──
+// ── 状态标签（ui-kit StatusTag 包装，语义 tone 映射）──
 
 function RiskTag({ level }: { level?: string | null }) {
   if (!level) return <span style={{ color: UI.stone }}>—</span>
-  return (
-    <span style={{
-      display: 'inline-block', fontSize: 12, fontWeight: 600, padding: '2px 10px', borderRadius: 9999,
-      background: level === 'high' ? '#fef2f2' : level === 'medium' ? '#fff7ed' : '#f0fdf4',
-      color: RISK_COLORS[level] ?? UI.steel,
-    }}>
-      {RISK_LABELS[level] ?? level}
-    </span>
-  )
+  return <StatusTag tone={RISK_TONE[level] ?? 'default'} label={RISK_LABELS[level] ?? level} />
 }
 
 function TypeTag({ type }: { type: string }) {
@@ -360,69 +338,61 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   } : null
 
   return (
-    <div style={{ padding: 24 }}>
+    <div className="flex flex-col gap-4">
 
       {/* ── 页头 ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 600, color: UI.ink }}>特殊作业管理</div>
-          <div style={{ fontSize: 13, color: UI.slate, marginTop: 2 }}>
-            飞书多维表格数据同步 · 风险分析 · 日报推送
-          </div>
-        </div>
-        <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
-      </div>
+      <PageHeader
+        breadcrumb={['安全管理', '特殊作业管理']}
+        title="特殊作业管理"
+        description="八类特殊作业票台账与当日作业态势"
+        actions={<Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />}
+      />
 
-      {/* ── KPI 指标带 ── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+      {/* ── 八类作业票统计（点击卡片筛选台账） ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {OP_TYPE_KEYS.map((key) => {
           const cfg = OP_TYPE_CONFIG[key]
           const st = statsMap[key] || { count: 0, critical: 0 }
           return (
-            <KpiCard
+            <StatCard
               key={key}
               label={cfg.label}
               value={st.count}
-              color={cfg.color}
-              caption={st.critical > 0 ? `${st.critical} 项关键` : undefined}
+              sub={st.critical > 0 ? `${st.critical} 项关键` : undefined}
+              icon={cfg.icon}
               onClick={() => setOpType(opType === key ? undefined : key)}
             />
           )
         })}
       </div>
 
-      {/* ── 日报摘要 + 操作按钮 ── */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'stretch' }}>
-        <KpiCard
+      {/* ── 当日作业态势 + 操作 ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <StatCard
           label="今日作业"
           value={dailyStats?.total ?? '—'}
-          color={UI.ink}
-          caption="已同步并完成风险判定"
+          sub="已同步并完成风险判定"
         />
-        <KpiCard
+        <StatCard
           label="高风险"
           value={dailyStats?.high ?? '—'}
-          color={RISK_COLORS.high}
-          bg={dailyStats && dailyStats.high > 0 ? '#fef2f2' : undefined}
-          caption={dailyStats && dailyStats.high > 0 ? '需重点关注' : '暂无高风险作业'}
+          tone={dailyStats && dailyStats.high > 0 ? 'danger' : 'default'}
+          sub={dailyStats && dailyStats.high > 0 ? '需重点关注' : '暂无高风险作业'}
           onClick={() => setOpType(undefined)}
         />
-        <KpiCard
+        <StatCard
           label="中风险"
           value={dailyStats?.medium ?? '—'}
-          color={RISK_COLORS.medium}
-          bg={dailyStats && dailyStats.medium > 0 ? '#fff7ed' : undefined}
-          caption={dailyStats && dailyStats.medium > 0 ? '正常监护' : '暂无中风险作业'}
+          tone={dailyStats && dailyStats.medium > 0 ? 'warn' : 'default'}
+          sub={dailyStats && dailyStats.medium > 0 ? '正常监护' : '暂无中风险作业'}
         />
-        <KpiCard
+        <StatCard
           label="低风险"
           value={dailyStats?.low ?? '—'}
-          color={RISK_COLORS.low}
-          bg={dailyStats && dailyStats.low > 0 ? '#f0fdf4' : undefined}
+          tone={dailyStats && dailyStats.low > 0 ? 'ok' : 'default'}
         />
         <div style={{
           ...CARD_STYLE,
-          flex: '0 0 auto', minWidth: 140,
           display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8,
           padding: '14px 16px',
           background: '#fafaf8',
@@ -436,19 +406,16 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
       </div>
 
       {/* ── 趋势图 ── */}
-      {chartConfig && (
-        <div style={{ ...CARD_STYLE, padding: '16px 20px', marginBottom: 16 }}>
+      <SectionCard title="作业类型趋势" description="当前列表数据按计划开始日期逐日堆叠">
+        {chartConfig ? (
           <Column {...chartConfig} height={200} />
-        </div>
-      )}
-      {!chartConfig && (
-        <div style={{ ...CARD_STYLE, padding: '48px 20px', marginBottom: 16, textAlign: 'center' }}>
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="时间窗内暂无记录" />
-        </div>
-      )}
+        ) : (
+          <EmptyGuide compact title="时间窗内暂无记录" description="调整筛选条件或同步飞书后再试" />
+        )}
+      </SectionCard>
 
-      {/* ── 记录卡（筛选栏并入卡头）── */}
-      <div style={{ ...CARD_STYLE, padding: 16 }}>
+      {/* ── 作业台账（筛选栏并入卡头）── */}
+      <SectionCard title="作业台账" description={`八类特殊作业记录（共 ${total} 条）`}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
           <Space wrap>
             <Select allowClear placeholder="作业类型" style={{ width: 130 }} value={opType} onChange={setOpType}
@@ -474,7 +441,7 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
             onChange: (p, ps) => { setPage(p); setPageSize(ps); void loadList(p, ps) },
           }}
         />
-      </div>
+      </SectionCard>
 
       {/* ── 详情 Modal ── */}
       <Modal title="作业详情" open={detailOpen} onCancel={() => { setDetailOpen(false); setEditV35(false) }} width={640}
@@ -602,9 +569,9 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
         {dailyReport && (
           <>
             <Space style={{ marginBottom: 12 }}>
-              <Tag color="red">{dailyReport.high_risk} 高风险</Tag>
-              <Tag color="gold">{dailyReport.medium_risk} 中风险</Tag>
-              <Tag color="green">{dailyReport.low_risk} 低风险</Tag>
+              <StatusTag tone="danger" label={`${dailyReport.high_risk} 高风险`} />
+              <StatusTag tone="warn" label={`${dailyReport.medium_risk} 中风险`} />
+              <StatusTag tone="ok" label={`${dailyReport.low_risk} 低风险`} />
               <span style={{ fontSize: 12, color: UI.steel }}>共 {dailyReport.total} 条 · 排除 {dailyReport.excluded} 条</span>
             </Space>
             <pre style={{ whiteSpace: 'pre-wrap', fontFamily: MONO_FONT, fontSize: 13, lineHeight: 1.8, margin: 0,
