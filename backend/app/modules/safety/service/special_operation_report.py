@@ -145,6 +145,21 @@ NATURAL_QUERY_PARSE_PROMPT = """## 用户输入
 logger = logging.getLogger(__name__)
 
 
+def _adapt_ledger_view(view: Any) -> Any:
+    """直读 SpecialOpView → 响应 schema 兼容适配（原地补齐缺省属性）。
+
+    - ``id``/``feishu_record_id`` 统一为 recXXX（行 key 稳定）；
+    - ``status``：申请状态 审批中→submitted、其余→approved（镜像枚举口径）；
+    - ``is_critical``：直读无平台标记，以日报风险等级=high 近似（关键作业≈高风险）。
+    """
+    view.id = view.record_id
+    view.status = "submitted" if (view.application_status or "") == "审批中" else "approved"
+    high = view.daily_risk_level == "high"
+    view.is_critical = high
+    view.is_critical_reason = view.daily_risk_reason if high else None
+    return view
+
+
 class SpecialOperationReportService:
     """八大特殊作业报备业务服务"""
 
@@ -399,8 +414,32 @@ class SpecialOperationReportService:
         date_to: str | None = None,
         keyword: str | None = None,
         is_critical: bool | None = None,
-    ) -> tuple[list[SpecialOperationReport], int]:
-        """获取特殊作业台账列表"""
+    ) -> tuple[list[Any], int]:
+        """获取特殊作业台账列表（直读模式：全量缓存 + 内存过滤，见 ledger.py）。"""
+        from app.modules.safety.service.special_op_direct import config
+
+        if config.direct_enabled():
+            from datetime import date as _date
+
+            from app.modules.safety.service.special_op_direct.ledger import (
+                list_ledger,
+                open_reader,
+            )
+
+            parsed_from = _date.fromisoformat(date_from) if date_from else None
+            parsed_to = _date.fromisoformat(date_to) if date_to else None
+            views = await open_reader().fetch_all()
+            items, total = list_ledger(
+                views,
+                skip=skip, limit=limit,
+                operation_type=operation_type,
+                operation_level=operation_level,
+                risk_level=risk_level,
+                department=department,
+                date_from=parsed_from, date_to=parsed_to,
+                keyword=keyword, is_critical=is_critical,
+            )
+            return [_adapt_ledger_view(v) for v in items], total
         return await self.repo.get_special_operation_ledger(
             skip=skip,
             limit=limit,
@@ -418,7 +457,16 @@ class SpecialOperationReportService:
     async def get_ledger_stats(
         self, status_list: list[str] | None = None
     ) -> list[dict]:
-        """获取台账统计"""
+        """获取台账统计（直读模式：内存统计，critical_count 为高风险近似）。"""
+        from app.modules.safety.service.special_op_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.special_op_direct.ledger import (
+                ledger_stats,
+                open_reader,
+            )
+
+            return ledger_stats(await open_reader().fetch_all())
         return await self.repo.get_special_operation_ledger_stats(status_list)
 
     # ── AI 导出 ──

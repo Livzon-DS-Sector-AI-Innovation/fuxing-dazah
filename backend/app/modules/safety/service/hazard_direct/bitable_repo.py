@@ -28,8 +28,11 @@ from typing import Any, cast
 from app.core.redis import redis_client
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.bitable_handler import (
+    HAZARD_CATEGORY_MAP,
     HAZARD_CATEGORY_REVERSE,
+    HAZARD_LEVEL_MAP,
     HAZARD_LEVEL_REVERSE,
+    HAZARD_TYPE_MAP,
     HAZARD_TYPE_REVERSE,
 )
 from app.modules.safety.service.bitable_direct import attachments as bd_attachments
@@ -208,6 +211,14 @@ class HazardView:
     major_hazard_basis: str = ""
     # 多维表格无 notes 字段（外审判定依赖它，直读模式下恒为空）
     notes: str = ""
+    # ── 台账页面字段（直读看板批次 1 新增，2026-10-13）──
+    hazard_type: str | None = None
+    hazard_category: str | None = None
+    discovered_by_name: str | None = None
+    inspector_department: str | None = None
+    key_defect: str | None = None
+    corrective_preventive_measures: str | None = None
+    actual_completion_date: datetime | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -236,7 +247,9 @@ def to_view(record: dict[str, Any]) -> HazardView:
         rectification_responsible_person_name=f_person(fields, F_RESPONSIBLE) or None,
         inspection_category=f_select(fields, F_INSPECTION_CATEGORY) or None,
         hazard_level_manual=f_select(fields, F_LEVEL_MANUAL) or None,
-        hazard_level=f_select(fields, F_LEVEL_AI) or None,
+        # EN 枚举码（与镜像 hazard_reports.hazard_level 同口径；督办/通报的
+        # _level_label 对 EN/CN 均收敛，见 bulletin._level_label）
+        hazard_level=HAZARD_LEVEL_MAP.get(f_select(fields, F_LEVEL_AI)) or None,
         discovered_at=f_datetime(fields, F_DATE),
         rectification_status=rect_status,
         status="closed" if rect_status == "closed" else "open",
@@ -246,6 +259,13 @@ def to_view(record: dict[str, Any]) -> HazardView:
         supervision_level=f_select(fields, F_SUPERVISION),
         progress_note=f_text(fields, F_PROGRESS),
         major_hazard_basis=f_text(fields, F_BASIS_AI),
+        hazard_type=HAZARD_TYPE_MAP.get(f_select(fields, F_TYPE_AI)) or None,
+        hazard_category=HAZARD_CATEGORY_MAP.get(f_select(fields, F_CATEGORY_AI)) or None,
+        discovered_by_name=f_person(fields, F_INSPECTOR) or None,
+        inspector_department=f_select(fields, F_INSPECTOR_DEPT) or None,
+        key_defect=f_text(fields, F_DESC_AI) or None,
+        corrective_preventive_measures=f_text(fields, F_ADVICE_AI) or None,
+        actual_completion_date=f_datetime(fields, F_RECTIFY_DONE_AT),
         raw=fields,
     )
 

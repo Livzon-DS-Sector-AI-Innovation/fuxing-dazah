@@ -47,7 +47,8 @@ class HazardReportBase(BaseModel):
 
     hazard_no: str = Field(..., max_length=64, description="隐患编号")
     inspection_category: str | None = Field(None, max_length=64, description="检查类别（日常检查/专项检查…）")
-    hazard_type: HazardType = Field(..., description="隐患分类（人/物/环/管）")
+    # 直读模式 AI 分类列可能为空（待轮询回写），响应允许 None；镜像恒有值
+    hazard_type: HazardType | None = Field(None, description="隐患分类（人/物/环/管）")
     hazard_level: HazardLevel = Field(HazardLevel.GENERAL, description="隐患等级（AI）")
     hazard_level_manual: str | None = Field(None, description="隐患等级（人工，督办判定以此为准；写入时中文自动归一为英文枚举）")
     hazard_category: HazardCategory | None = Field(None, description="隐患类别（设备设施/危化储存…）")
@@ -55,7 +56,7 @@ class HazardReportBase(BaseModel):
     discovered_by: uuid.UUID | None = Field(None, description="发现人")
     discovered_by_name: str | None = Field(None, max_length=100, description="检查人员姓名")
     inspector_department: str | None = Field(None, max_length=500, description="检查人员部门（Bitable 多选，逗号分隔）")
-    discovered_at: datetime = Field(..., description="检查日期")
+    discovered_at: datetime | None = Field(None, description="检查日期")
     department: str | None = Field(None, max_length=100, description="责任部门")
     major_hazard_basis: str | None = Field(None, description="隐患判定依据（AI）")
     key_defect: str | None = Field(None, description="隐患描述（AI）")
@@ -131,7 +132,9 @@ class HazardReportUpdate(BaseModel):
 class HazardReportResponse(HazardReportBase):
     """隐患报告响应"""
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX）；created_at/updated_at 恒 None
+    # （Bitable 无平台创建/更新时间）。镜像模式为正常 UUID/时间戳。
+    id: uuid.UUID | str
     rectification_status: str
     status: str
     # ── 三级复核（仅状态，审核人/时间由系统自动记录）──
@@ -149,8 +152,8 @@ class HazardReportResponse(HazardReportBase):
     ai_review_status: str = "pending"
     ai_review_completed_at: datetime | None = None
     ai_generated: bool = False
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     # ── 飞书通知追踪 ──
     rectification_notified_at: datetime | None = None
     rectification_notify_status: str | None = None

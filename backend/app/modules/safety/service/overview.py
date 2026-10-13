@@ -79,22 +79,42 @@ def _bj_date(ts: datetime) -> date:
 
 async def collect_hazards(db: AsyncSession) -> dict[str, Any]:
     """隐患：未闭环 KPI + 较昨日 delta + 近 30 天新增/闭环按日序列。"""
-    stats = await HazardService(db).get_hazard_stats()
-    unclosed = stats["total"] - stats["closed"]
+    from app.modules.safety.service.hazard_direct import config as hazard_config
 
-    repo = SafetyRepository(db)
     today = _bj_today()
-    window_start = _bj_day_start_utc(today - timedelta(days=_TREND_DAYS - 1))
-    window_end = _bj_day_start_utc(today + timedelta(days=1))
-    created, closed, unclosed_yesterday = await asyncio.gather(
-        repo.get_hazard_created_times(window_start, window_end),
-        repo.get_hazard_closed_times(window_start, window_end),
-        repo.count_hazards_unclosed_asof(_bj_day_start_utc(today)),
-    )
-
     dates = [today - timedelta(days=i) for i in range(_TREND_DAYS - 1, -1, -1)]
-    created_bucket: Counter[date] = Counter(_bj_date(t) for t in created)
-    closed_bucket: Counter[date] = Counter(_bj_date(t) for t in closed)
+
+    if hazard_config.query_direct_enabled():
+        # 直读：全量缓存视图内存统计（趋势分桶/as-of 口径见 page_query 模块头）
+        from app.modules.safety.service.hazard_direct.page_query import (
+            count_unclosed_asof,
+            ledger_stats,
+            trend_buckets,
+        )
+        from app.modules.safety.service.hazard_direct.reader import open_reader
+
+        views = await open_reader().fetch_all()
+        stats = ledger_stats(views)
+        unclosed = stats["total"] - stats["closed"]
+        created, closed = trend_buckets(views)
+        created_bucket: Counter[date] = Counter(_bj_date(t) for t in created)
+        closed_bucket: Counter[date] = Counter(_bj_date(t) for t in closed)
+        unclosed_yesterday = count_unclosed_asof(views, _bj_day_start_utc(today))
+    else:
+        stats = await HazardService(db).get_hazard_stats()
+        unclosed = stats["total"] - stats["closed"]
+
+        repo = SafetyRepository(db)
+        window_start = _bj_day_start_utc(today - timedelta(days=_TREND_DAYS - 1))
+        window_end = _bj_day_start_utc(today + timedelta(days=1))
+        created, closed, unclosed_yesterday = await asyncio.gather(
+            repo.get_hazard_created_times(window_start, window_end),
+            repo.get_hazard_closed_times(window_start, window_end),
+            repo.count_hazards_unclosed_asof(_bj_day_start_utc(today)),
+        )
+
+        created_bucket = Counter(_bj_date(t) for t in created)
+        closed_bucket = Counter(_bj_date(t) for t in closed)
     return {
         "unclosed": unclosed,
         "delta": unclosed - unclosed_yesterday,
@@ -109,6 +129,21 @@ async def collect_hazards(db: AsyncSession) -> dict[str, Any]:
 
 async def collect_special_ops(db: AsyncSession) -> dict[str, Any]:
     """特殊作业：今日作业数与高风险数（日报 stats 同源）。"""
+    from app.modules.safety.service.special_op_direct import config as so_config
+
+    if so_config.direct_enabled():
+        # 直读：当日全量视图（风险列存量优先/缺失现场判定），排除项不计入
+        from app.modules.safety.service.special_op_direct.bitable_repo import (
+            fetch_day_views,
+        )
+
+        views = await fetch_day_views(_bj_today())
+        effective = [v for v in views if not v.is_excluded]
+        return {
+            "today_total": len(effective),
+            "high": sum(1 for v in effective if v.daily_risk_level == "high"),
+        }
+
     stats = await SpecialOperationDailyReportService(db).get_stats(_bj_today())
     return {"today_total": stats["total"], "high": stats["high"]}
 

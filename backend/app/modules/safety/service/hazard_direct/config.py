@@ -61,6 +61,20 @@ def event_sync_enabled() -> bool:
     return gates.event_sync_enabled(_DOMAIN)
 
 
+def query_direct_enabled() -> bool:
+    """查询面直读开关（直读看板，2026-10-13）。
+
+    开启后页面/看板/统计读多维表格（``hazard_direct.reader`` TTL 缓存），
+    不再读 ``hazard_reports`` 镜像；关闭回退镜像路径（灰度回滚网）。
+    """
+    return gates.direct_enabled(_DOMAIN)
+
+
+def cache_ttl_seconds() -> int:
+    """查询面全量缓存 TTL（秒，默认 60；0=关闭缓存每次现拉）。"""
+    return _int(gates.domain_env(_DOMAIN, "DIRECT_CACHE_TTL_SECONDS"), 60, minimum=0)
+
+
 def catch_up_enabled() -> bool:
     """旧路径：启动时 Bitable 漏单恢复（写平台库）。默认关闭。"""
     return _flag(gates.domain_env(_DOMAIN, "CATCHUP_ENABLED"), False)

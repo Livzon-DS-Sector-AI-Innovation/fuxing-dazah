@@ -197,6 +197,12 @@ async def get_special_operation_ledger(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取特殊作业台账列表（审批中 + 已审批的报备记录）"""
+    import time
+
+    from app.modules.safety.service.special_op_direct import config as direct_config
+
+    direct = direct_config.direct_enabled()
+    t0 = time.perf_counter()
     service = SpecialOperationReportService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_ledger(
@@ -211,9 +217,13 @@ async def get_special_operation_ledger(
         keyword=keyword,
         is_critical=is_critical,
     )
+    meta: dict[str, object] = {"page": page, "page_size": page_size, "total": total}
+    if direct:
+        meta["mode"] = "direct"
+        meta["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
     return ApiResponse(
         data=[SpecialOperationReportResponse.model_validate(i) for i in items],
-        meta={"page": page, "page_size": page_size, "total": total},
+        meta=meta,
     )
 
 
@@ -227,10 +237,20 @@ async def get_special_operation_ledger_stats(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """按作业类型统计台账数量和关键作业数量"""
+    import time
+
+    from app.modules.safety.service.special_op_direct import config as direct_config
+
+    direct = direct_config.direct_enabled()
+    t0 = time.perf_counter()
     service = SpecialOperationReportService(db)
     stats = await service.get_ledger_stats()
+    meta: dict[str, object] | None = None
+    if direct:
+        meta = {"mode": "direct", "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
     return ApiResponse(
-        data=[SpecialOperationLedgerStats(**s) for s in stats]
+        data=[SpecialOperationLedgerStats(**s) for s in stats],
+        meta=meta,
     )
 
 

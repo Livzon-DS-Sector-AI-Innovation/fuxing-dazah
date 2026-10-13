@@ -103,15 +103,17 @@ class SpecialOperationReportUpdate(BaseModel):
 class SpecialOperationReportResponse(SpecialOperationReportBase):
     """特殊作业报备响应"""
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX），created_at 为系统创建时间兜底链
+    # （创建时间/发起时间，缺失为哨兵值），updated_at 恒 None（Bitable 无该字段）
+    id: uuid.UUID | str
     approved_at: datetime | None = None
     rejection_reason: str | None = None
     status: str
     is_critical: bool = False
     is_critical_reason: str | None = None
     is_critical_updated_by: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     # ── Bitable 同步 + 日报分析字段 ──
     source: str | None = None

@@ -41,15 +41,25 @@ async def get_hazards(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取隐患列表"""
+    import time
+
+    from app.modules.safety.service.hazard_direct import config as direct_config
+
+    direct = direct_config.query_direct_enabled()
+    t0 = time.perf_counter()
     service = HazardService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_hazards(
         skip, page_size, status, rectification_status, hazard_type, hazard_level,
         hazard_category, inspection_category, department, keyword,
     )
+    meta: dict[str, object] = {"page": page, "page_size": page_size, "total": total}
+    if direct:
+        meta["mode"] = "direct"
+        meta["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
     return ApiResponse(
         data=[HazardReportResponse.model_validate(h) for h in items],
-        meta={"page": page, "page_size": page_size, "total": total},
+        meta=meta,
     )
 
 
@@ -58,9 +68,18 @@ async def get_hazard_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """获取隐患全局统计数据（不受分页/筛选影响，用于统计药丸展示）。"""
+    import time
+
+    from app.modules.safety.service.hazard_direct import config as direct_config
+
+    direct = direct_config.query_direct_enabled()
+    t0 = time.perf_counter()
     service = HazardService(db)
     stats = await service.get_hazard_stats()
-    return ApiResponse(data=HazardStatsResponse(**stats))
+    meta: dict[str, object] | None = None
+    if direct:
+        meta = {"mode": "direct", "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
+    return ApiResponse(data=HazardStatsResponse(**stats), meta=meta)
 
 
 @hazards_router.get("/hazards/{hazard_id}", response_model=ApiResponse, summary="获取隐患详情")

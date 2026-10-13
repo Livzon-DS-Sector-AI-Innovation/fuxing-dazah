@@ -233,8 +233,25 @@ class HazardService:
         keyword: str | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
-    ) -> tuple[list[HazardReport], int]:
-        """获取隐患列表"""
+    ) -> tuple[list[Any], int]:
+        """获取隐患列表（直读模式：全量缓存 + 内存过滤，口径见 page_query）。"""
+        from app.modules.safety.service.hazard_direct import config as direct_config
+
+        if direct_config.query_direct_enabled():
+            from app.modules.safety.service.hazard_direct.page_query import list_ledger
+            from app.modules.safety.service.hazard_direct.reader import open_reader
+
+            views = await open_reader().fetch_all()
+            return list_ledger(
+                views,
+                skip=skip, limit=limit,
+                status=status, rectification_status=rectification_status,
+                hazard_type=hazard_type, hazard_level=hazard_level,
+                hazard_category=hazard_category,
+                inspection_category=inspection_category,
+                department=department, keyword=keyword,
+                date_from=date_from, date_to=date_to,
+            )
         return await self.repo.get_hazards(
             skip, limit, status, rectification_status, hazard_type, hazard_level,
             hazard_category, inspection_category, department, keyword,
@@ -242,7 +259,14 @@ class HazardService:
         )
 
     async def get_hazard_stats(self) -> dict[str, int]:
-        """获取隐患全局统计数据"""
+        """获取隐患全局统计数据（直读模式：内存统计，键与镜像一致）。"""
+        from app.modules.safety.service.hazard_direct import config as direct_config
+
+        if direct_config.query_direct_enabled():
+            from app.modules.safety.service.hazard_direct.page_query import ledger_stats
+            from app.modules.safety.service.hazard_direct.reader import open_reader
+
+            return ledger_stats(await open_reader().fetch_all())
         return await self.repo.get_hazard_stats()
 
     async def get_hazard_stats_filtered(

@@ -5,6 +5,7 @@
 | 开关 | 默认 | 作用 |
 |---|---|---|
 | SAFETY_SPECIAL_OP_DIRECT_ENABLED | false | 直读总开关：日报走直读还是旧镜像链路 |
+| SAFETY_SPECIAL_OP_DIRECT_CACHE_TTL_SECONDS | 60 | 台账直读全量缓存 TTL（0=关） |
 | SAFETY_SPECIAL_OP_EVENT_SYNC_ENABLED | false | 旧路径：Bitable 事件 -> 平台库镜像行 |
 | SAFETY_SPECIAL_OP_SYNC_JOB_ENABLED | false | 旧路径：08:00 全量对账与 17:00 增量同步 |
 | SAFETY_SPECIAL_OP_WRITEBACK_RISK_ENABLED | false | 回写「日报风险等级（AI）」列 |
@@ -26,6 +27,13 @@ _DOMAIN = gates.DOMAIN_SPECIAL_OP
 def direct_enabled() -> bool:
     """直读总开关。关闭时日报编排仍走旧镜像链路（真双路径切换）。"""
     return gates.direct_enabled(_DOMAIN)
+
+
+def cache_ttl_seconds() -> int:
+    """台账直读全量缓存 TTL（秒，默认 60；0=关闭缓存每次现拉）。"""
+    return gates.int_env(
+        gates.domain_env(_DOMAIN, "DIRECT_CACHE_TTL_SECONDS"), 60, minimum=0
+    )
 
 
 def event_sync_enabled() -> bool:

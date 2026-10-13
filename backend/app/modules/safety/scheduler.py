@@ -19,6 +19,7 @@
 """
 
 import asyncio
+import contextlib
 import logging
 from datetime import UTC, date, datetime
 from typing import Any
@@ -1096,6 +1097,28 @@ async def _run_scheduled_job_guarded(job: dict[str, Any]) -> None:
             logger.exception("定时任务执行异常: %s", job_name)
 
 
+async def _warm_direct_query_caches() -> None:
+    """预热直读看板的全量缓存（按各自开关启用才拉，消除首访 ~10s 冷启动）。
+
+    失败仅记日志：缓存未命中时首次访问会现拉，不影响正确性。
+    """
+    with contextlib.suppress(Exception):
+        from app.modules.safety.service.hazard_direct import config as hazard_config
+        from app.modules.safety.service.hazard_direct.reader import open_reader
+
+        if hazard_config.query_direct_enabled():
+            await open_reader().fetch_all()
+            logger.info("直读缓存预热完成: hazard")
+
+    with contextlib.suppress(Exception):
+        from app.modules.safety.service.special_op_direct import config as so_config
+        from app.modules.safety.service.special_op_direct.ledger import open_reader
+
+        if so_config.direct_enabled():
+            await open_reader().fetch_all()
+            logger.info("直读缓存预热完成: special_op")
+
+
 async def scheduled_task_loop() -> None:
     """安全模块定时任务主循环。
 
@@ -1113,6 +1136,9 @@ async def scheduled_task_loop() -> None:
         await seed_default_task_targets()
     except Exception:
         logger.exception("默认任务配置播种失败（忽略，继续启动）")
+
+    # 直读看板缓存预热（后台执行不阻塞启动；失败仅记日志，首次访问会现拉）
+    asyncio.create_task(_warm_direct_query_caches())
 
     jobs = await _load_effective_jobs()
     logger.info(
