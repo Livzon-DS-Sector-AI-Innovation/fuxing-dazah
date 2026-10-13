@@ -132,6 +132,23 @@ async def sync_msds_document_to_knowledge(
     Returns:
         dict: {document_id, title, article_id, action, chunks_created, error}
     """
+    from app.modules.safety.knowledge.ragplus_client import ragplus_search_enabled
+
+    if ragplus_search_enabled():
+        # ragplus 通路：MSDS 知识检索走 ragplus「MSDS」库（供应商资料 PDF
+        # 由 msds_collection_handler/批量脚本上传），本地索引停用（二期删）。
+        logger.info(
+            "ragplus 通路：msds_indexer 本地索引停用: document_id=%s", document_id,
+        )
+        return {
+            "document_id": str(document_id),
+            "title": "",
+            "article_id": None,
+            "action": "skipped_ragplus",
+            "chunks_created": 0,
+            "error": None,
+        }
+
     stats: dict = {
         "document_id": str(document_id),
         "title": "",

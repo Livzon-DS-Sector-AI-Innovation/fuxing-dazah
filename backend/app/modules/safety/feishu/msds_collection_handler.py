@@ -192,6 +192,57 @@ def _schedule_parse(pg_collection_id) -> None:
         logger.warning("无运行中的事件循环，解析任务不调度: collection=%s", pg_collection_id)
 
 
+def _schedule_ragplus_upload(
+    pg_collection_id: uuid.UUID, attachments: list[dict[str, Any]] | None,
+) -> asyncio.Task | None:  # type: ignore[type-arg]
+    """调度 ragplus 增量上传（开关开）：供应商资料 PDF → MSDS 库。
+
+    增量补偿：msds_indexer 本地索引停用后，新增 MSDS 由此入 ragplus；
+    附件换版由 upload 的 replace 语义处理（幂等键=采集记录 id）。
+    返回创建的后台任务（测试可等待），未调度返回 None。
+    """
+    from app.modules.safety.knowledge.ragplus_client import ragplus_search_enabled
+    from app.modules.safety.knowledge.ragplus_sync import KB_MSDS
+
+    if not ragplus_search_enabled():
+        return None
+    first = attachments[0] if attachments and isinstance(attachments[0], dict) else {}
+    file_token = str(first.get("file_token") or "")
+    if not file_token:
+        return None
+
+    app_token = _get_collection_app_token()
+    table_id = _get_collection_table_id()
+    file_name = str(first.get("name") or f"{pg_collection_id}.pdf")
+
+    async def _task() -> None:
+        try:
+            from app.modules.safety.knowledge.ragplus_sync import (
+                upload_document_to_ragplus,
+            )
+
+            client = SafetyBitableClient(app_token=app_token, table_id=table_id)
+            blob = await client.download_attachment(file_token)
+            if not blob:
+                logger.error("MSDS ragplus 上传附件下载为空: collection=%s", pg_collection_id)
+                return
+            await upload_document_to_ragplus(
+                domain="msds", biz_key=str(pg_collection_id),
+                title=f"MSDS-{file_name}", file_name=file_name, blob=blob,
+                content_type=first.get("type") or "application/pdf", kb_name=KB_MSDS,
+            )
+        except Exception:
+            logger.exception("MSDS ragplus 增量上传异常: collection=%s", pg_collection_id)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("无运行中的事件循环，MSDS ragplus 上传不调度: %s", pg_collection_id)
+        return None
+    task = loop.create_task(_task())
+    return task
+
+
 # ── 事件处理 ──
 
 
@@ -231,6 +282,7 @@ async def _handle_record(event_data: dict) -> None:
         )
         if has_attachment:
             _schedule_parse(pg_id)
+            _schedule_ragplus_upload(pg_id, attachments or [])
         else:
             logger.info("MSDS 采集无附件, 保持 pending: %s", feishu_record_id)
     except Exception:

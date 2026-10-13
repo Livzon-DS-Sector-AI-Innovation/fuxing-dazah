@@ -802,19 +802,31 @@ class RegulationCrawlerService:
                 bitable, record_id, bitable_fields,
             )
             if article is not None:
-                # 异步触发 chunk 重建（不阻塞主流程，但保留任务引用，
-                # 供 wait_background_tasks 在手动脚本退出前等待完成）
-                task = asyncio.create_task(
-                    rebuild_article_chunks(article.id)
+                from app.modules.safety.knowledge.ragplus_client import (
+                    ragplus_search_enabled,
                 )
-                self._background_tasks.add(task)
-                task.add_done_callback(self._background_tasks.discard)
-                # 触发图谱增量重建
-                await _schedule_graph_rebuild()
-                logger.info(
-                    "知识库同步已触发: article_id=%s title=%s",
-                    article.id, item.title,
-                )
+
+                if ragplus_search_enabled():
+                    # ragplus 通路：附件上传/映射登记已在 _create_knowledge_from_bitable
+                    # 内调度；本地 chunk 重建与图谱重建短路（代码留待二期删）。
+                    logger.info(
+                        "知识库同步已走 ragplus: article_id=%s title=%s",
+                        article.id, item.title,
+                    )
+                else:
+                    # 异步触发 chunk 重建（不阻塞主流程，但保留任务引用，
+                    # 供 wait_background_tasks 在手动脚本退出前等待完成）
+                    task = asyncio.create_task(
+                        rebuild_article_chunks(article.id)
+                    )
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+                    # 触发图谱增量重建
+                    await _schedule_graph_rebuild()
+                    logger.info(
+                        "知识库同步已触发: article_id=%s title=%s",
+                        article.id, item.title,
+                    )
             else:
                 logger.debug(
                     "知识库同步跳过（已存在或锁冲突）: title=%s", item.title,

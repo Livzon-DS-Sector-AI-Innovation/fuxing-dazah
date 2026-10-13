@@ -21,6 +21,11 @@ from app.modules.safety.attachment_store import store_bytes
 from app.modules.safety.bitable_config.store import ConnectionView, store
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.event_client import on_event
+from app.modules.safety.knowledge.ragplus_client import ragplus_search_enabled
+from app.modules.safety.knowledge.ragplus_sync import (
+    schedule_archive_from_attachment,
+    schedule_upload_from_attachment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -530,6 +535,11 @@ async def _create_knowledge_from_bitable(
                     record_id, article_no,
                 )
 
+        # ragplus 增量入库（开关开；后台任务，镜像写入不受上传成败影响）
+        _schedule_ragplus_upload(
+            record_id, mapped.get("title") or "", file_path, file_name,
+        )
+
         return article
 
     except Exception:
@@ -538,6 +548,30 @@ async def _create_knowledge_from_bitable(
         return None
     finally:
         await session.close()
+
+
+def _schedule_ragplus_upload(
+    record_id: str, title: str, stored_path: str | None, file_name: str | None,
+) -> None:
+    """ragplus 增量上传（开关开；后台任务，镜像写入不受上传成败影响）。"""
+    if not ragplus_search_enabled():
+        return
+    schedule_upload_from_attachment(
+        domain="regulation", biz_key=record_id, title=title,
+        stored_path=stored_path, file_name=file_name,
+    )
+
+
+def _schedule_ragplus_archive(
+    record_id: str, title: str, stored_path: str | None, file_name: str | None,
+) -> None:
+    """ragplus 归档（开关开；主库删 + 移入已废止库，统一归档口径）。"""
+    if not ragplus_search_enabled():
+        return
+    schedule_archive_from_attachment(
+        domain="regulation", biz_key=record_id, title=title,
+        stored_path=stored_path, file_name=file_name,
+    )
 
 
 async def _update_knowledge_from_bitable(
@@ -593,6 +627,10 @@ async def _update_knowledge_from_bitable(
             update_data["attachment_path"] = new_path
             update_data["attachment_original_name"] = new_name
             logger.info("附件已更新: record_id=%s old=%s new=%s", record_id, old_attachment, new_path)
+            # ragplus 换版上传（开关开；删旧文档+传新文档，检索无旧版残留）
+            _schedule_ragplus_upload(
+                record_id, existing.title or mapped.get("title") or "", new_path, new_name,
+            )
 
         if not update_data:
             logger.info("字段无变化，跳过更新: record_id=%s article_id=%s", record_id, existing.id)
@@ -659,6 +697,12 @@ async def _delete_knowledge_from_bitable(record_id: str) -> None:
         logger.info("知识库文章已软删除: id=%s article_no=%s record_id=%s",
                     existing.id, existing.article_no, record_id)
 
+        # ragplus 归档（开关开；主库删文档 + 移入已废止库，溯源可回放）
+        _schedule_ragplus_archive(
+            record_id, existing.title or "",
+            existing.attachment_path, existing.attachment_original_name,
+        )
+
     except Exception:
         logger.exception("删除知识库文章失败: record_id=%s", record_id)
         await session.rollback()
@@ -685,7 +729,14 @@ async def _schedule_graph_rebuild() -> None:
 
     降级策略：Redis 不可用时（本地上限爬取/离线环境），回退到进程内
     时间戳防抖，确保图谱重建不被 Redis 故障阻断。
+
+    ragplus 通路（开关开）：图谱是旧三层检索的 Layer1 产物，重建短路；
+    代码保留待二期随检索层一并退役。
     """
+    if ragplus_search_enabled():
+        logger.debug("ragplus 通路：图谱重建短路")
+        return
+
     import asyncio
     import time
 
