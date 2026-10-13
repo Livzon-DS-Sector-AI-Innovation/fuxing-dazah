@@ -466,7 +466,7 @@ export default function AiAuditPanel() {
   ]
 
   return (
-    <div style={{ padding: 24 }}>
+    <div>
       {/* 失败行左侧红描边 + 行手型 */}
       <style>{`
         .ai-audit-table .ant-table-tbody > tr > td { cursor: pointer; }

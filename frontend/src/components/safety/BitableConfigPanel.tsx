@@ -202,7 +202,7 @@ export default function BitableConfigPanel() {
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1280 }}>
+    <div>
       {/* ── 页头 ── */}
       <div
         style={{

@@ -82,7 +82,6 @@ export { default as ChemicalInventoryPanel } from './ChemicalInventoryPanel'
 export { default as ModulePlaceholder } from './ModulePlaceholder'
 
 // ── AI 配置 + 定时任务（scheduler-config）──
-export { default as AiConfigPanel } from './AiConfigPanel'
 export { default as AiConfigModelCard } from './AiConfigModelCard'
 export { default as AiConfigAuditTable } from './AiConfigAuditTable'
 export { default as ScheduledTasksPanel } from './ScheduledTasksPanel'

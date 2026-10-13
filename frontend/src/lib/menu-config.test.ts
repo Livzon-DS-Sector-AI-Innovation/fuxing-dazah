@@ -83,6 +83,12 @@ describe('safety 菜单结构（体系要素分组，3.0）', () => {
     expect(disabled[0].path).toBe('')
   })
 
+  it('系统组收口为 2 项：系统配置单页 + AI 助手对话（三期）', () => {
+    const systemGroup = safetyItems().filter((i) => i.group === '系统')
+    expect(systemGroup.map((i) => i.label)).toEqual(['系统配置', 'AI 助手对话'])
+    expect(systemGroup[0].path).toBe('/safety/system')
+  })
+
   it('启用项路由与页面一一对应（快照）', () => {
     const enabled = safetyItems().filter((i) => !i.disabled)
     expect(enabled.map((i) => i.path)).toEqual([
@@ -103,11 +109,7 @@ describe('safety 菜单结构（体系要素分组，3.0）', () => {
       '/safety/contractor-admission',
       '/safety/emergency-drill',
       '/safety/incidents',
-      '/safety/system/ai-config',
-      '/safety/system/bitable-config',
-      '/safety/system/app-config',
-      '/safety/system/scheduled-tasks',
-      '/safety/ai-audit',
+      '/safety/system',
       '/safety/agent-chat',
     ])
   })

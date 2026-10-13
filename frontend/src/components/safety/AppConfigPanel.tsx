@@ -308,7 +308,7 @@ export default function AppConfigPanel() {
   ]
 
   return (
-    <div style={{ padding: 24 }}>
+    <div>
       <div
         style={{
           ...CARD_STYLE,

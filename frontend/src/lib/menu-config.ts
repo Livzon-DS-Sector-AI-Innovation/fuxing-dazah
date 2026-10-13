@@ -138,12 +138,8 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "supervision", label: "全流程监督", path: "", group: "检查监督", disabled: true },
       // ── 持续改进 ──
       { key: "incidents", label: "事故事件管理", path: "/safety/incidents", group: "持续改进" },
-      // ── 系统（三期合并为 /safety/system 单页，现阶段保留原入口） ──
-      { key: "ai-config", label: "AI 配置中心", path: "/safety/system/ai-config", group: "系统" },
-      { key: "bitable-config", label: "多维表格配置", path: "/safety/system/bitable-config", group: "系统" },
-      { key: "app-config", label: "应用配置", path: "/safety/system/app-config", group: "系统" },
-      { key: "scheduled-tasks", label: "定时任务", path: "/safety/system/scheduled-tasks", group: "系统" },
-      { key: "ai-audit", label: "AI 调用审计", path: "/safety/ai-audit", group: "系统" },
+      // ── 系统（三期合并为 /safety/system 六 Tab 单页，旧 5 入口 301；agent-chat 保留独立入口） ──
+      { key: "system", label: "系统配置", path: "/safety/system", group: "系统" },
       { key: "agent-chat", label: "AI 助手对话", path: "/safety/agent-chat", group: "系统" },
     ],
   },

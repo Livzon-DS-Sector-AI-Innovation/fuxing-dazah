@@ -30,6 +30,19 @@ const nextConfig: NextConfig = {
     },
   },
 
+  // 三期：旧 5 个配置页 301 到 /safety/system 单页并带 ?tab= 直达对应 Tab
+  // （redirects 先于文件系统路由，旧路径已删除壳页；statusCode=301 字面永久跳转，
+  //   Next 的 permanent:true 是 308，任务书口径为 301 故显式指定）
+  async redirects() {
+    return [
+      { source: '/safety/system/ai-config', destination: '/safety/system?tab=ai-models', statusCode: 301 },
+      { source: '/safety/system/bitable-config', destination: '/safety/system?tab=bitable', statusCode: 301 },
+      { source: '/safety/system/app-config', destination: '/safety/system?tab=app', statusCode: 301 },
+      { source: '/safety/system/scheduled-tasks', destination: '/safety/system?tab=scheduler', statusCode: 301 },
+      { source: '/safety/ai-audit', destination: '/safety/system?tab=ai-audits', statusCode: 301 },
+    ]
+  },
+
   // 开发环境代理 API 请求到后端，避免跨端口 cookie 问题
   async rewrites() {
     return [
