@@ -35,8 +35,14 @@ class OhHazardFactorService:
 
     async def get_factors(
         self, *, skip: int = 0, limit: int = 50
-    ) -> tuple[list[OhHazardFactor], int]:
-        """危害因素 PPE 台账列表（分页）"""
+    ) -> tuple[list[Any], int]:
+        """危害因素 PPE 台账列表（分页；直读模式走 PPE 表全量视图）。"""
+        from app.modules.safety.service.oh_direct import config as od_config
+
+        if od_config.direct_enabled():
+            from app.modules.safety.service.oh_direct import ledger
+
+            return await ledger.list_hazard_factors(skip=skip, limit=limit)
         return await self.repo.get_oh_hazard_factors(skip, limit)
 
     async def get_factor(self, factor_id: uuid.UUID) -> OhHazardFactor | None:

@@ -49,7 +49,9 @@ class HazardReportBase(BaseModel):
     inspection_category: str | None = Field(None, max_length=64, description="检查类别（日常检查/专项检查…）")
     # 直读模式 AI 分类列可能为空（待轮询回写），响应允许 None；镜像恒有值
     hazard_type: HazardType | None = Field(None, description="隐患分类（人/物/环/管）")
-    hazard_level: HazardLevel = Field(HazardLevel.GENERAL, description="隐患等级（AI）")
+    hazard_level: HazardLevel | None = Field(
+        None, description="隐患等级（AI）；直读模式 AI 列未回写时为空，展示以人工等级优先"
+    )
     hazard_level_manual: str | None = Field(None, description="隐患等级（人工，督办判定以此为准；写入时中文自动归一为英文枚举）")
     hazard_category: HazardCategory | None = Field(None, description="隐患类别（设备设施/危化储存…）")
     description: str = Field(..., description="隐患描述")

@@ -101,8 +101,21 @@ class OhHealthExamService:
         ai_conclusion: str | None = None,
         ai_parse_status: str | None = None,
         keyword: str | None = None,
-    ) -> tuple[list[OhHealthExam], int]:
-        """获取体检列表（筛选 + keyword + 分页）"""
+    ) -> tuple[list[Any], int]:
+        """获取体检列表（筛选 + keyword + 分页；直读模式见 oh_direct.ledger）。"""
+        from app.modules.safety.service.oh_direct import config as od_config
+
+        if od_config.direct_enabled():
+            from app.modules.safety.service.oh_direct import ledger
+
+            exams = await ledger.fetch_exams()
+            return ledger.list_exams(
+                exams,
+                skip=skip, limit=limit,
+                status=status, exam_type=exam_type, department=department,
+                ai_conclusion=ai_conclusion, ai_parse_status=ai_parse_status,
+                keyword=keyword,
+            )
         return await self.repo.get_health_exams(
             skip,
             limit,

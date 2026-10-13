@@ -41,8 +41,9 @@ class OhHazardFactorUpdate(BaseModel):
 class OhHazardFactorResponse(OhHazardFactorBase):
     """危害因素字典项响应"""
 
-    id: uuid.UUID
-    created_at: datetime
-    updated_at: datetime
+    # 直读模式 id 为飞书记录 ID（recXXX），created_at/updated_at 恒 None
+    id: uuid.UUID | str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)

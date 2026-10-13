@@ -77,8 +77,22 @@ class OhPersonService:
         hazard_exposure: str | None = None,
         last_exam_conclusion: str | None = None,
         keyword: str | None = None,
-    ) -> tuple[list[OhPerson], int]:
-        """台账列表（筛选 + keyword + 分页）"""
+    ) -> tuple[list[Any], int]:
+        """台账列表（筛选 + keyword + 分页；直读模式见 oh_direct.ledger）。"""
+        from app.modules.safety.service.oh_direct import config as od_config
+
+        if od_config.direct_enabled():
+            from app.modules.safety.service.oh_direct import ledger
+
+            persons = await ledger.fetch_persons()
+            return ledger.list_persons(
+                persons,
+                skip=skip, limit=limit,
+                department=department, position=position,
+                hazard_exposure=hazard_exposure,
+                last_exam_conclusion=last_exam_conclusion,
+                keyword=keyword,
+            )
         return await self.repo.get_oh_persons(
             skip,
             limit,
@@ -102,7 +116,14 @@ class OhPersonService:
         return await self.repo.get_oh_followups_by_person(person_id)
 
     async def get_stats(self) -> dict[str, Any]:
-        """台账统计：按部门/岗位/在岗状态/最后体检结论/接害分布"""
+        """台账统计：按部门/岗位/在岗状态/最后体检结论/接害分布。"""
+        from app.modules.safety.service.oh_direct import config as od_config
+
+        if od_config.direct_enabled():
+            from app.modules.safety.service.oh_direct import ledger
+
+            return ledger.person_stats(await ledger.fetch_persons())
+
         base = select(OhPerson).where(OhPerson.is_deleted == False)  # noqa: E712
         total = await self.session.scalar(select(func.count()).select_from(base.subquery()))
         hazard_exposed = await self.session.scalar(
