@@ -7,7 +7,6 @@ import {
   Input,
   Button,
   Space,
-  Tag,
   App,
   Typography,
   Modal,
@@ -29,6 +28,7 @@ import {
   FilePdfOutlined,
   FileExcelOutlined,
 } from '@ant-design/icons'
+import { ListChecks, TriangleAlert } from 'lucide-react'
 import {
   getHazardIdentifications,
   getHILedgerStats,
@@ -39,35 +39,43 @@ import {
 import type { HazardIdentification, HazardLedgerStats } from '@/types/safety'
 import { RISK_LEVEL_OPTIONS } from '@/types/safety'
 import dayjs from 'dayjs'
-import { statusPill } from '@/components/safety/shared-styles'
+import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
 
-// ── 风险等级语义色（表格内 pills）──
-const LEVEL_CONFIG: Record<string, { color: string; bg: string }> = {
-  level_1: { color: '#e03131', bg: '#fde0ec' },
-  level_2: { color: '#dd5b00', bg: '#ffe8d4' },
-  level_3: { color: '#0075de', bg: '#dcecfa' },
-  level_4: { color: '#1aae39', bg: '#d9f3e1' },
+// ── 风险等级语义 tone（表格内 StatusTag；红/橙/蓝/绿 对齐原四色）──
+const RISK_TONE: Record<string, Tone> = {
+  level_1: 'danger',
+  level_2: 'warn',
+  level_3: 'info',
+  level_4: 'ok',
 }
 
-// ── 福建固有风险等级语义色（脚本3.5，中文等级名 → pill 色；低=蓝/一般=黄/较大=橙/重大=红）──
-const FJ_LEVEL_CONFIG: Record<string, { color: string; bg: string }> = {
-  低风险: { color: '#0075de', bg: '#dcecfa' },
-  一般风险: { color: '#d4b106', bg: '#fffbe6' },
-  较大风险: { color: '#dd5b00', bg: '#ffe8d4' },
-  重大风险: { color: '#e03131', bg: '#fde0ec' },
+// ── 福建固有风险等级语义 tone（脚本3.5，中文等级名；低=蓝/一般、较大=警示/重大=红）──
+const FJ_LEVEL_TONE: Record<string, Tone> = {
+  低风险: 'info',
+  一般风险: 'warn',
+  较大风险: 'warn',
+  重大风险: 'danger',
 }
 
-// ── 统计药丸配置 ──
-const STATS_PILLS = [
-  { key: '',        label: '全部',     dotColor: '#1a1a1a' },
-  { key: 'level_1', label: '重大风险', dotColor: '#e03131' },
-  { key: 'level_2', label: '较大风险', dotColor: '#dd5b00' },
-  { key: 'level_3', label: '一般风险', dotColor: '#0075de' },
-  { key: 'level_4', label: '低风险',   dotColor: '#1aae39' },
+// ── 统计卡配置（点击卡片 = 按等级快捷筛选，沿用统计药丸交互） ──
+const STATS_CARDS: Array<{ key: string; label: string; tone: Tone }> = [
+  { key: '',        label: '全部',     tone: 'default' },
+  { key: 'level_1', label: '重大风险', tone: 'danger' },
+  { key: 'level_2', label: '较大风险', tone: 'warn' },
+  { key: 'level_3', label: '一般风险', tone: 'info' },
+  { key: 'level_4', label: '低风险',   tone: 'ok' },
 ]
+
+// ── 管控层级语义 tone（公司级红/部门级橙/班组级蓝）──
+const CONTROL_LEVEL_TONE: Record<string, Tone> = {
+  '公司级': 'danger',
+  '部门级': 'warn',
+  '班组级': 'info',
+}
 
 // ── 可筛选字段配置 ──
 interface FilterFieldConfig {
@@ -462,7 +470,7 @@ export default function HazardLedgerPanel() {
     }
   }
 
-  const handlePillClick = (pill: typeof STATS_PILLS[number]) => {
+  const handlePillClick = (pill: { key: string }) => {
     if (pill.key === '') {
       setRiskLevel(undefined)
     } else {
@@ -472,34 +480,26 @@ export default function HazardLedgerPanel() {
   }
 
   const getRiskTag = (level?: string, label?: string) => {
-    if (!level) return '-'
+    if (!level) return <span style={{ color: '#a4a097' }}>-</span>
     const opt = RISK_LEVEL_OPTIONS.find((o) => o.value === level)
-    return <Tag color={opt?.color}>{label || level}</Tag>
+    return <StatusTag tone={RISK_TONE[level] ?? 'default'} label={label || opt?.label || level} />
   }
 
   const getRiskPill = (level?: string, label?: string) => {
     if (!level) return <span style={{ color: '#a4a097' }}>-</span>
-    const cfg = LEVEL_CONFIG[level]
-    if (!cfg) return <Tag>{label || level}</Tag>
-    return <span style={statusPill(cfg.color, cfg.bg)}>{label || level}</span>
+    const opt = RISK_LEVEL_OPTIONS.find((o) => o.value === level)
+    return <StatusTag tone={RISK_TONE[level] ?? 'default'} label={label || opt?.label || level} />
   }
 
-  // ── 福建固有风险等级 pill（脚本3.5：中文名四色映射，独立于 LEVEL_CONFIG）──
+  // ── 福建固有风险等级标签（脚本3.5：中文名语义映射，独立于 RISK_TONE）──
   const getFjRiskPill = (level?: string) => {
     if (!level) return <span style={{ color: '#a4a097' }}>-</span>
-    const cfg = FJ_LEVEL_CONFIG[level]
-    if (!cfg) return <Tag>{level}</Tag>
-    return <span style={statusPill(cfg.color, cfg.bg)}>{level}</span>
+    return <StatusTag tone={FJ_LEVEL_TONE[level] ?? 'default'} label={level} />
   }
 
   const getControlLevelTag = (level?: string) => {
     if (!level) return <span style={{ color: '#a4a097' }}>-</span>
-    const colorMap: Record<string, string> = {
-      '公司级': 'red',
-      '部门级': 'orange',
-      '班组级': 'blue',
-    }
-    return <Tag color={colorMap[level] || 'default'}>{level}</Tag>
+    return <StatusTag tone={CONTROL_LEVEL_TONE[level] ?? 'default'} label={level} />
   }
 
   // ── 表格列定义 ──
@@ -773,7 +773,7 @@ export default function HazardLedgerPanel() {
               )}
               {record.recommendation_priority && (
                 <Descriptions.Item label="优先级">
-                  <Tag>{record.recommendation_priority}</Tag>
+                  <StatusTag label={record.recommendation_priority} />
                 </Descriptions.Item>
               )}
               <Descriptions.Item label="内容" span={2}>{record.recommendation_content}</Descriptions.Item>
@@ -891,66 +891,48 @@ export default function HazardLedgerPanel() {
   )
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* ── 页面头部 ── */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-        marginBottom: 24,
-      }}>
-        <div>
-          <h2 style={{ fontSize: 22, fontWeight: 600, color: '#1a1a1a', margin: 0, marginBottom: 4, lineHeight: 1.3 }}>
-            危险源辨识台账
-          </h2>
-          <p style={{ fontSize: 14, color: '#787671', margin: 0, lineHeight: 1.5 }}>
-            已完成危险源辨识记录的查询、统计与导出
-          </p>
-        </div>
-      </div>
+    <div>
+      {/* ── 页头 ── */}
+      <PageHeader
+        breadcrumb={['安全管理', '风险分级管控']}
+        title="风险分级管控"
+        description="风险辨识与分级管控台账：风险点全量、分级分布"
+        actions={
+          <Button type="primary" icon={<ExportOutlined />} onClick={openExportDrawer}>
+            导出台账
+          </Button>
+        }
+      />
 
-      {/* ── 统计药丸 ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        {STATS_PILLS.map((pill) => {
-          const pillKey = pill.key || 'all'
-          const isActive = pill.key === ''
-            ? riskLevel === undefined
-            : riskLevel === pill.key
-          const count = getPillCount(pill.key)
+      {/* ── 分级统计行（点击卡片 = 按等级快捷筛选，沿用统计药丸交互） ── */}
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+        {STATS_CARDS.map((card) => {
+          const isActive = card.key === '' ? riskLevel === undefined : riskLevel === card.key
+          const count = getPillCount(card.key)
           return (
-            <button
-              key={pillKey}
-              type="button"
-              onClick={() => handlePillClick(pill)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                cursor: 'pointer',
-                background: isActive ? '#f0eeec' : 'transparent',
-                border: isActive ? '1px solid #c8c4be' : '1px solid transparent',
-                borderRadius: 20,
-                padding: '4px 12px',
-                fontSize: 13,
-                fontWeight: isActive ? 600 : 400,
-                color: isActive ? '#1a1a1a' : '#5d5b54',
-                transition: 'all 0.15s ease',
-                fontFamily: 'inherit',
-                lineHeight: '20px',
-              }}
-            >
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  backgroundColor: pill.dotColor,
-                  flexShrink: 0,
-                }}
-              />
-              {pill.label}
-              <span style={{ fontWeight: 600, color: pill.dotColor, marginLeft: 2 }}>
-                {count}
-              </span>
-            </button>
+            <StatCard
+              key={card.key || 'all'}
+              label={card.label}
+              value={count}
+              tone={card.key === '' || count > 0 ? card.tone : 'default'}
+              sub={
+                card.key === ''
+                  ? riskLevel === undefined
+                    ? '当前展示全部等级'
+                    : '点击清除等级筛选'
+                  : isActive
+                    ? '筛选中 · 点击取消'
+                    : '点击按等级筛选'
+              }
+              icon={
+                card.key === ''
+                  ? <ListChecks size={16} />
+                  : card.key === 'level_1'
+                    ? <TriangleAlert size={16} />
+                    : undefined
+              }
+              onClick={() => handlePillClick(card)}
+            />
           )
         })}
       </div>
@@ -1163,29 +1145,12 @@ export default function HazardLedgerPanel() {
             </button>
           )}
         </div>
-
-        {/* 导出按钮（筛选栏最右侧，与筛选按钮同区域） */}
-        <Button
-          type="primary"
-          icon={<ExportOutlined />}
-          onClick={openExportDrawer}
-          style={{ flexShrink: 0 }}
-        >
-          导出
-        </Button>
       </div>
 
-      {/* ── 内容卡片 ── */}
-      <div
-        style={{
-          background: '#ffffff',
-          borderRadius: 12,
-          border: '1px solid #e5e3df',
-          padding: '16px 20px',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
+      {/* ── 台账明细 ── */}
+      <SectionCard
+        title="风险点台账"
+        description={`已完成危险源辨识记录（共 ${total} 条）· 点编号看详情，展开行看评价与措施`}
       >
         {/* ── 批量删除栏 ── */}
         {selectedRowKeys.length > 0 && (
@@ -1241,6 +1206,15 @@ export default function HazardLedgerPanel() {
           loading={loading}
           scroll={{ x: 'max-content' }}
           size="small"
+          locale={{
+            emptyText: (
+              <EmptyGuide
+                compact
+                title="暂无符合条件的风险点"
+                description="调整搜索、日期或筛选条件后重试"
+              />
+            ),
+          }}
           onRow={(record) => ({
             onMouseEnter: () => setHoveredRowId(record.id),
             onMouseLeave: () => setHoveredRowId((prev) => (prev === record.id ? null : prev)),
@@ -1261,7 +1235,7 @@ export default function HazardLedgerPanel() {
             onChange: (page, pageSize) => setQueryParams({ page, page_size: pageSize }),
           }}
         />
-      </div>
+      </SectionCard>
 
       {/* ── 导出 Drawer（勾选多行，翻页保持）── */}
       <Drawer

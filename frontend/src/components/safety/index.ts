@@ -43,7 +43,7 @@ export type {
   KnowledgeMenuItem,
 } from './knowledgeConstants'
 export { KB } from './knowledgeTokens'
-export { StatItem, CategoryChip, MetaItem } from './knowledgeUI'
+export { CategoryChip, MetaItem } from './knowledgeUI'
 export { KnowledgeQueryProvider } from './KnowledgeQueryProvider'
 export { default as AiAuditPanel } from './AiAuditPanel'
 export { default as EmergencyDrillPanel } from './EmergencyDrillPanel'

@@ -18,8 +18,9 @@ import DocumentCardGrid from '@/components/safety/DocumentCardGrid'
 import KnowledgeSidebar from '@/components/safety/KnowledgeSidebar'
 import KnowledgeDetailDrawer from '@/components/safety/KnowledgeDetailDrawer'
 import KnowledgeFormModal from '@/components/safety/KnowledgeFormModal'
-import { StatItem } from '@/components/safety/knowledgeUI'
 import { filterByMenuKey, mapCategoryCountsToMenu } from '@/components/safety/knowledgeConstants'
+import { PageHeader, StatCard } from '@/components/ui-kit'
+import { Archive, BookOpen, CircleCheck, FileText, Layers, Paperclip } from 'lucide-react'
 import {
   fetchKnowledgeArticles,
   fetchKnowledgeSemanticSearch,
@@ -260,23 +261,35 @@ function KnowledgeBaseContent() {
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 24, minWidth: 0 }}>
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', marginBottom: 20 }}>
-          <div>
-            <h2 style={{ fontSize: 24, fontWeight: 650, color: 'var(--color-ink, #1a1a1a)', margin: 0, letterSpacing: '-0.02em', lineHeight: 1.2 }}>
-              文档处理中枢
-            </h2>
-            <p style={{ fontSize: 13, color: 'var(--color-steel, #787671)', margin: '5px 0 0', lineHeight: 1.5 }}>
-              法规标准 · 知识卡片 · Agent 注入 · 智能检索
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: 22, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <StatItem value={stats.total} label='全部文档' />
-            <StatItem value={stats.published} label='已发布' color='#1aae39' />
-            <StatItem value={stats.draft} label='草稿' color='#5d5b54' />
-            <StatItem value={stats.archived} label='已归档' color='#a4a097' />
-            <StatItem value={stats.withCard} label='知识卡片' color='var(--color-primary, #5645d4)' />
-            <StatItem value={stats.withAttachment} label='含附件' color='#1aae39' />
-          </div>
+        <PageHeader
+          breadcrumb={['安全管理', '法规标准与规程']}
+          title="法规标准与规程"
+          description="法规、标准与规程知识库：法规清单、知识卡片与全文检索"
+        />
+
+        {/* ── 统计行（全库口径，优先 knowledge-stats 接口，缺省回退列表推导） ── */}
+        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard label="全部文档" value={stats.total} sub="法规/标准/规程全库" icon={<BookOpen size={16} />} />
+          <StatCard
+            label="已发布"
+            value={stats.published}
+            tone={stats.published > 0 ? 'ok' : 'default'}
+            icon={<CircleCheck size={16} />}
+          />
+          <StatCard label="草稿" value={stats.draft} icon={<FileText size={16} />} />
+          <StatCard label="已归档" value={stats.archived} icon={<Archive size={16} />} />
+          <StatCard
+            label="知识卡片"
+            value={stats.withCard}
+            tone={stats.withCard > 0 ? 'primary' : 'default'}
+            icon={<Layers size={16} />}
+          />
+          <StatCard
+            label="含附件"
+            value={stats.withAttachment}
+            tone={stats.withAttachment > 0 ? 'ok' : 'default'}
+            icon={<Paperclip size={16} />}
+          />
         </div>
 
         {/* 错误诊断 */}

@@ -31,36 +31,45 @@ import {
   VERIFY_LEVEL_STATUS_OPTIONS,
 } from '@/types/safety'
 import dayjs from 'dayjs'
-import { statusPill } from '@/components/safety/shared-styles'
+import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import type { Tone } from '@/components/ui-kit'
+import { CircleCheck, FileWarning, TimerOff, Wrench } from 'lucide-react'
 
 
-// ── 整改状态语义色配置 ──
-const RECTIFICATION_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  pending:          { label: '待整改', color: '#dd5b00', bg: '#ffe8d4' },
-  in_progress:      { label: '整改中', color: '#0075de', bg: '#dcecfa' },
-  replied:          { label: '待复核', color: '#dd5b00', bg: '#ffe8d4' },
-  level1_approved:  { label: '复核中', color: '#0075de', bg: '#dcecfa' },
-  level2_approved:  { label: '复核中', color: '#0075de', bg: '#dcecfa' },
-  rejected:         { label: '已驳回', color: '#e03131', bg: '#fde0ec' },
-  closed:           { label: '已关闭', color: '#1aae39', bg: '#d9f3e1' },
+// ── 整改状态语义 tone（StatusTag）──
+const RECTIFICATION_STATUS_CONFIG: Record<string, { label: string; tone: Tone }> = {
+  pending:          { label: '待整改', tone: 'warn' },
+  in_progress:      { label: '整改中', tone: 'info' },
+  replied:          { label: '待复核', tone: 'warn' },
+  level1_approved:  { label: '复核中', tone: 'info' },
+  level2_approved:  { label: '复核中', tone: 'info' },
+  rejected:         { label: '已驳回', tone: 'danger' },
+  closed:           { label: '已关闭', tone: 'ok' },
 }
 
-// ── 隐患等级语义色 ──
-const LEVEL_CONFIG: Record<string, { color: string; bg: string }> = {
-  general: { color: '#0075de', bg: '#dcecfa' },
-  serious: { color: '#dd5b00', bg: '#ffe8d4' },
-  major:   { color: '#e03131', bg: '#fde0ec' },
+// ── 隐患等级语义 tone（一般=蓝/较大=橙/重大=红）──
+const LEVEL_TONE: Record<string, Tone> = {
+  general: 'info',
+  serious: 'warn',
+  major:   'danger',
 }
 
-// ── 统计药丸配置 ──
-const STATS_PILLS = [
-  { key: '',               label: '全部',      dotColor: '#1a1a1a', filterable: true  },
-  { key: 'pending',        label: '待整改',    dotColor: '#dd5b00', filterable: true  },
-  { key: 'in_progress',    label: '整改中',    dotColor: '#0075de', filterable: true  },
-  { key: 'replied',        label: '待复核',    dotColor: '#dd5b00', filterable: true  },
-  { key: 'rejected',       label: '已驳回',    dotColor: '#e03131', filterable: true  },
-  { key: 'closed',         label: '已关闭',    dotColor: '#1aae39', filterable: true  },
-  { key: 'overdue',        label: '逾期',      dotColor: '#e03131', filterable: false },
+// ── 督办等级语义 tone（红色预警=红/一般预警=橙/已关闭=绿）──
+const SUPERVISION_TONE: Record<string, Tone> = {
+  '红色预警': 'danger',
+  '一般预警': 'warn',
+  'closed': 'ok',
+}
+
+// ── 统计卡配置（点击卡片 = 按整改状态快捷筛选，沿用统计药丸交互；逾期仅展示） ──
+const STATS_CARDS: Array<{ key: string; label: string; tone: Tone; filterable: boolean }> = [
+  { key: '',            label: '全部',   tone: 'default', filterable: true  },
+  { key: 'pending',     label: '待整改', tone: 'warn',    filterable: true  },
+  { key: 'in_progress', label: '整改中', tone: 'info',    filterable: true  },
+  { key: 'replied',     label: '待复核', tone: 'warn',    filterable: true  },
+  { key: 'rejected',    label: '已驳回', tone: 'danger',  filterable: true  },
+  { key: 'closed',      label: '已关闭', tone: 'ok',      filterable: true  },
+  { key: 'overdue',     label: '逾期',   tone: 'expired', filterable: false },
 ]
 
 // ── 可筛选字段配置（用于多维筛选弹出菜单）──
@@ -299,7 +308,7 @@ export default function HazardLedgerPage() {
     }
   }
 
-  const handlePillClick = (pill: typeof STATS_PILLS[number]) => {
+  const handlePillClick = (pill: { key: string; filterable: boolean }) => {
     if (!pill.filterable) return
     if (pill.key === '') {
       setStatusFilter(undefined)
@@ -367,9 +376,7 @@ export default function HazardLedgerPage() {
         // 督办判定以人工等级为准，台账展示优先显示人工等级，缺失时回退 AI 等级
         // 归一化兼容 DB 中英文混存（一般隐患/general）
         const level = normalizeHazardLevel(record.hazard_level_manual || record.hazard_level)
-        const cfg = LEVEL_CONFIG[level]
-        if (!cfg) return <span style={statusPill('#5d5b54', '#f0eeec')}>{level}</span>
-        return <span style={statusPill(cfg.color, cfg.bg)}>{getLevelLabel(level)}</span>
+        return <StatusTag tone={LEVEL_TONE[level] ?? 'default'} label={getLevelLabel(level)} />
       },
     },
     {
@@ -379,8 +386,8 @@ export default function HazardLedgerPage() {
       width: 95,
       render: (level: string) => {
         const opt = SUPERVISION_LEVEL_OPTIONS.find((o) => o.value === level)
-        if (!opt) return <span style={statusPill('#5d5b54', '#f0eeec')}>{level || '-'}</span>
-        return <span style={statusPill(opt.color, opt.color + '1a')}>{opt.label}</span>
+        if (!opt) return <StatusTag label={level || '-'} />
+        return <StatusTag tone={SUPERVISION_TONE[level] ?? 'default'} label={opt.label} />
       },
     },
     {
@@ -390,9 +397,9 @@ export default function HazardLedgerPage() {
       width: 100,
       render: (_: unknown, record: HazardReport) => {
         if (record.supervision_progress_status === SUPERVISION_PROGRESS_NOT_UPDATED) {
-          return <span style={statusPill('#e03131', '#fde0ec')}>{SUPERVISION_PROGRESS_NOT_UPDATED}</span>
+          return <StatusTag tone="danger" label={SUPERVISION_PROGRESS_NOT_UPDATED} />
         }
-        return <span style={statusPill('#c8c4be', '#f5f3f0')}>-</span>
+        return <span style={{ color: '#a4a097' }}>-</span>
       },
     },
     {
@@ -410,7 +417,7 @@ export default function HazardLedgerPage() {
       sorter: false,
       render: (category: string) => {
         const option = HAZARD_CATEGORY_OPTIONS.find((o) => o.value === category)
-        return <span style={statusPill('#5d5b54', '#f0eeec')}>{option?.label || category || '-'}</span>
+        return <StatusTag label={option?.label || category || '-'} />
       },
     },
     {
@@ -428,7 +435,7 @@ export default function HazardLedgerPage() {
       sorter: false,
       render: (type: string) => {
         const option = HAZARD_TYPE_OPTIONS.find((o) => o.value === type)
-        return <span style={statusPill('#5d5b54', '#f0eeec')}>{option?.label || type}</span>
+        return <StatusTag label={option?.label || type} />
       },
     },
     {
@@ -485,8 +492,8 @@ export default function HazardLedgerPage() {
       width: 80,
       render: (status: string) => {
         const cfg = RECTIFICATION_STATUS_CONFIG[status]
-        if (!cfg) return <span style={statusPill('#5d5b54', '#f0eeec')}>{status}</span>
-        return <span style={statusPill(cfg.color, cfg.bg)}>{cfg.label}</span>
+        if (!cfg) return <StatusTag label={status} />
+        return <StatusTag tone={cfg.tone} label={cfg.label} />
       },
     },
     {
@@ -661,62 +668,48 @@ export default function HazardLedgerPage() {
   )
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* ── 页面头部 ── */}
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 600, color: '#1a1a1a', margin: 0, marginBottom: 4, lineHeight: 1.3 }}>
-          隐患台账
-        </h2>
-        <p style={{ fontSize: 14, color: '#787671', margin: 0, lineHeight: 1.5 }}>
-          AI识别 · 整改追踪 · 三级复核 · 台账只读监控（业务操作在飞书多维表格与机器人）
-        </p>
-      </div>
+    <div>
+      {/* ── 页头 ── */}
+      <PageHeader
+        breadcrumb={['安全管理', '隐患排查与治理']}
+        title="隐患排查与治理"
+        description="隐患全生命周期台账：排查、整改、复核进展与趋势"
+      />
 
-      {/* ── 统计药丸 ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        {STATS_PILLS.map((pill) => {
-          const pillKey = pill.key || 'all'
-          const isActive = pill.key === ''
+      {/* ── 全生命周期统计行（全局口径，点击卡片 = 按整改状态快捷筛选） ── */}
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
+        {STATS_CARDS.map((card) => {
+          const isActive = card.key === ''
             ? statusFilter === undefined
-            : pill.filterable && statusFilter === pill.key
-          const count = getPillCount(pill.key)
+            : card.filterable && statusFilter === card.key
+          const count = getPillCount(card.key)
           return (
-            <button
-              key={pillKey}
-              type="button"
-              onClick={() => handlePillClick(pill)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                cursor: pill.filterable ? 'pointer' : 'default',
-                background: isActive ? '#f0eeec' : 'transparent',
-                border: isActive ? '1px solid #c8c4be' : '1px solid transparent',
-                borderRadius: 20,
-                padding: '4px 12px',
-                fontSize: 13,
-                fontWeight: isActive ? 600 : 400,
-                color: isActive ? '#1a1a1a' : pill.filterable ? '#5d5b54' : '#a4a097',
-                transition: 'all 0.15s ease',
-                fontFamily: 'inherit',
-                lineHeight: '20px',
-              }}
-            >
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  backgroundColor: pill.dotColor,
-                  flexShrink: 0,
-                  opacity: pill.filterable ? 1 : 0.5,
-                }}
-              />
-              {pill.label}
-              <span style={{ fontWeight: 600, color: pill.filterable ? pill.dotColor : '#a4a097', marginLeft: 2 }}>
-                {count}
-              </span>
-            </button>
+            <StatCard
+              key={card.key || 'all'}
+              label={card.label}
+              value={count}
+              tone={card.key === '' || count > 0 ? card.tone : 'default'}
+              loading={statsQuery.isLoading}
+              sub={
+                !card.filterable
+                  ? '超期未关闭'
+                  : isActive
+                    ? '筛选中 · 点击取消'
+                    : '点击按状态筛选'
+              }
+              icon={
+                card.key === ''
+                  ? <FileWarning size={16} />
+                  : card.key === 'pending'
+                    ? <Wrench size={16} />
+                    : card.key === 'closed'
+                      ? <CircleCheck size={16} />
+                      : card.key === 'overdue'
+                        ? <TimerOff size={16} />
+                        : undefined
+              }
+              onClick={card.filterable ? () => handlePillClick(card) : undefined}
+            />
           )
         })}
       </div>
@@ -918,17 +911,10 @@ export default function HazardLedgerPage() {
 
       </div>
 
-      {/* ── 内容卡片 ── */}
-      <div
-        style={{
-          background: '#ffffff',
-          borderRadius: 12,
-          border: '1px solid #e5e3df',
-          padding: '16px 20px',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
+      {/* ── 台账明细 ── */}
+      <SectionCard
+        title="隐患台账"
+        description={`台账只读监控 · 业务操作在飞书多维表格与机器人（当前筛选共 ${hazardTotal} 条）`}
       >
         {/* ── 全局样式：行悬停效果 + 隐藏式复选框 ── */}
         <style>{`
@@ -954,6 +940,15 @@ export default function HazardLedgerPage() {
           size="small"
           loading={isLoading}
           scroll={{ x: 'max-content' }}
+          locale={{
+            emptyText: (
+              <EmptyGuide
+                compact
+                title="暂无符合条件的隐患记录"
+                description="调整搜索或筛选条件后重试"
+              />
+            ),
+          }}
           pagination={{
             current: page,
             pageSize,
@@ -967,7 +962,7 @@ export default function HazardLedgerPage() {
             },
           }}
         />
-      </div>
+      </SectionCard>
 
     </div>
   )
