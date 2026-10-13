@@ -39,6 +39,7 @@ from app.modules.safety.service import (
     KeyRiskOperationReportService,
     SpecialOperationDailyReportService,
 )
+from app.modules.safety.workticket_review.repository import WorkTicketReviewRepository
 
 logger = logging.getLogger(__name__)
 
@@ -295,10 +296,6 @@ async def collect_supervision(db: AsyncSession) -> dict[str, Any]:
 
     无记录 → latest=None（前端卡片显示「待首跑」灰态）。
     """
-    from app.modules.safety.workticket_review.repository import (
-        WorkTicketReviewRepository,
-    )
-
     review = await WorkTicketReviewRepository(db).get_latest()
     if review is None:
         return {"latest": None}

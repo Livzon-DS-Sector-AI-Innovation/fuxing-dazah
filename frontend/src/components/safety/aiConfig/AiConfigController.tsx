@@ -176,18 +176,23 @@ export function AiConfigProvider({ children }: { children: ReactNode }) {
     [load, message],
   )
 
-  /** 开关切换：乐观更新 → PUT {enabled} → 成功回填 + audit 顶刷；失败整行回滚 */
-  const handleToggleScenario = useCallback(
-    async (f: AiFunctionItem, v: boolean) => {
+  /** 行内保存共用骨架：乐观补丁 → PUT → 成功回填+audit 顶刷 / 失败整行回滚（行级锁互斥） */
+  const runScenarioSave = useCallback(
+    async (
+      f: AiFunctionItem,
+      optimisticPatch: Partial<AiFunctionItem>,
+      body: { enabled?: boolean; model_profile?: AiModelProfile | null },
+      successMessage: string,
+    ) => {
       if (savingScenarios.has(f.id)) return
       const snapshot = { ...f }
-      applyScenarioPatch(f.id, { enabled: v, source: 'db' })
+      applyScenarioPatch(f.id, optimisticPatch)
       setSavingScenarios((s) => new Set(s).add(f.id))
       try {
-        const res = await updateAiScenario(f.id, { enabled: v })
+        const res = await updateAiScenario(f.id, body)
         if (res.code >= 200 && res.code < 300 && res.data) {
           applyScenarioPatch(f.id, mergeScenarioConfig(res.data))
-          message.success(v ? '已启用，实时生效' : '已停用，AI 调用将被拦截')
+          message.success(successMessage)
           setAuditRefreshKey((k) => k + 1)
         } else {
           applyScenarioPatch(f.id, snapshot)
@@ -205,44 +210,40 @@ export function AiConfigProvider({ children }: { children: ReactNode }) {
       }
     },
     [applyScenarioPatch, message, reportScenarioError, savingScenarios],
+  )
+
+  /** 开关切换：乐观更新 → PUT {enabled} → 成功回填 + audit 顶刷；失败整行回滚 */
+  const handleToggleScenario = useCallback(
+    async (f: AiFunctionItem, v: boolean) => {
+      await runScenarioSave(
+        f,
+        { enabled: v, source: 'db' },
+        { enabled: v },
+        v ? '已启用，实时生效' : '已停用，AI 调用将被拦截',
+      )
+    },
+    [runScenarioSave],
   )
 
   /** 绑定变更：即时 PUT {model_profile}；__default__ → null（按场景类型默认）；失败整行回滚 */
   const handleChangeBinding = useCallback(
     async (f: AiFunctionItem, value: string) => {
-      if (savingScenarios.has(f.id)) return
-      const snapshot = { ...f }
       const profile = value === DEFAULT_BINDING ? null : (value as AiModelProfile)
-      applyScenarioPatch(f.id, {
-        model_profile: profile,
-        effective_profile: profile ?? f.effective_profile,
-        source: 'db',
-      })
-      setSavingScenarios((s) => new Set(s).add(f.id))
-      try {
-        const res = await updateAiScenario(f.id, { model_profile: profile })
-        if (res.code >= 200 && res.code < 300 && res.data) {
-          applyScenarioPatch(f.id, mergeScenarioConfig(res.data))
-          message.success('模型绑定已更新，实时生效')
-          setAuditRefreshKey((k) => k + 1)
-        } else {
-          applyScenarioPatch(f.id, snapshot)
-          reportScenarioError(res.code, res.message)
-        }
-      } catch (e) {
-        applyScenarioPatch(f.id, snapshot)
-        message.error(e instanceof Error ? e.message : '保存失败')
-      } finally {
-        setSavingScenarios((s) => {
-          const next = new Set(s)
-          next.delete(f.id)
-          return next
-        })
-      }
+      await runScenarioSave(
+        f,
+        {
+          model_profile: profile,
+          effective_profile: profile ?? f.effective_profile,
+          source: 'db',
+        },
+        { model_profile: profile },
+        '模型绑定已更新，实时生效',
+      )
     },
-    [applyScenarioPatch, message, reportScenarioError, savingScenarios],
+    [runScenarioSave],
   )
 
+  /** 绑定变更：即时 PUT {model_profile}；__default__ → null（按场景类型默认）；失败整行回滚 */
   const scenarioLabels = useMemo(() => {
     const map: Record<string, string> = {}
     for (const f of data?.functions ?? []) map[f.id] = f.label

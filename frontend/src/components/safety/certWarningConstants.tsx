@@ -43,20 +43,3 @@ export const CERT_CATEGORY_FILTER = [
   { value: 'guardian_a', label: '监护人A证' },
   { value: 'guardian_b', label: '监护人B证' },
 ]
-
-// ── 顶部 KPI 卡片定义（label → summary 字段）──
-
-export const WARNING_KPI_ITEMS: Array<{
-  label: string
-  field: keyof import('@/types/safety').CertWarningSummary
-  bg: string
-  valueColor: string
-  caption: string
-}> = [
-  { label: '已逾期', field: 'overdue_count', bg: T.rose, valueColor: T.error, caption: '<0 天' },
-  { label: '紧急预警', field: 'urgent_count', bg: T.rose, valueColor: T.error, caption: '0-7 天' },
-  { label: '重点预警', field: 'key_warning_count', bg: T.peach, valueColor: T.warning, caption: '8-30 天' },
-  { label: '待安排', field: 'to_schedule_count', bg: T.yellow, valueColor: '#793400', caption: '31-60 天' },
-  { label: '提前关注', field: 'early_notice_count', bg: T.sky, valueColor: '#005bab', caption: '61-90 天' },
-  { label: '总数', field: 'total', bg: T.lavender, valueColor: T.primary, caption: '全部持证' },
-]
