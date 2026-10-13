@@ -26,6 +26,10 @@ from app.modules.safety.service.config import create_ai_service
 
 logger = logging.getLogger(__name__)
 
+# ragplus 知识层不可用的用户可见报错话术（与 retriever 的
+# degradation=ragplus_unavailable 对应；不静默成「未找到相关法规」）
+RAGPLUS_UNAVAILABLE_ANSWER = "抱歉，知识检索服务（ragplus-x）暂时不可用，请稍后重试或联系管理员。"
+
 # ── Feishu Bitable link config（凭证延迟读 store：改表 ID 后链接立即用新值）──
 
 _FEISHU_BASE_URL = os.getenv("FEISHU_BASE_URL", "https://livzon.feishu.cn")
@@ -391,6 +395,10 @@ async def run_knowledge_chat(
                 description=query,
                 target_chunks=6,
             )
+
+            # ragplus 不可用：显式报错话术——不静默「未找到」、不调 AI、不联网
+            if context.degradation == "ragplus_unavailable":
+                return RAGPLUS_UNAVAILABLE_ANSWER, []
 
             # 2. Deduplicate chunks by document
             doc_groups = _group_chunks_by_document(context.chunks)

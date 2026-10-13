@@ -411,9 +411,10 @@ async def set_chat_cache(
 def _rag_cache_key(
     query: str, categories: list[str] | None,
     target_chunks: int, max_hops: int, epoch: int,
+    engine: str = "local",
 ) -> str:
     cats = ",".join(sorted(categories)) if categories else "_all"
-    payload = f"{query}|{cats}|{target_chunks}|{max_hops}|{epoch}"
+    payload = f"{engine}|{query}|{cats}|{target_chunks}|{max_hops}|{epoch}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     return f"{RAG_CACHE_PREFIX}{digest}"
 
@@ -423,10 +424,11 @@ async def get_rag_cache(
     categories: list[str] | None = None,
     target_chunks: int = 8,
     max_hops: int = 2,
+    engine: str = "local",
 ) -> dict | None:
     try:
         epoch = await _get_epoch()
-        key = _rag_cache_key(query, categories, target_chunks, max_hops, epoch)
+        key = _rag_cache_key(query, categories, target_chunks, max_hops, epoch, engine)
         raw = await _kv_get(key)
         if raw:
             logger.debug("RAG cache HIT: %s", key)
@@ -442,10 +444,11 @@ async def set_rag_cache(
     categories: list[str] | None = None,
     target_chunks: int = 8,
     max_hops: int = 2,
+    engine: str = "local",
 ) -> None:
     try:
         epoch = await _get_epoch()
-        key = _rag_cache_key(query, categories, target_chunks, max_hops, epoch)
+        key = _rag_cache_key(query, categories, target_chunks, max_hops, epoch, engine)
         await _kv_set(key, json.dumps(context_dict, ensure_ascii=False), ex=RAG_CACHE_TTL)
         logger.debug("RAG cache SET: %s", key)
     except Exception:

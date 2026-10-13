@@ -43,6 +43,12 @@ from app.modules.safety.knowledge.embedding_service import (
     cosine_similarity,
     get_shared_embedder,
 )
+from app.modules.safety.knowledge.ragplus_client import (
+    RagplusHit,
+    RagplusUnavailableError,
+    get_ragplus_client,
+    ragplus_search_enabled,
+)
 from app.modules.safety.knowledge.reranker import Reranker
 from app.modules.safety.knowledge.vector_store import VectorStore, get_vector_store
 from app.modules.safety.models import RegulationChunk, SafetyKnowledgeArticle
@@ -170,6 +176,9 @@ class HybridRetriever:
         boost_article_ids: list[UUID] | None = None,
     ) -> RetrievalReport:
         """Main retrieval entry point（全局并发闸门 + 委托内部实现）。"""
+        if ragplus_search_enabled():
+            # ragplus 通路不占本地检索信号量（引擎侧自带容量与限流）
+            return await self._retrieve_via_ragplus(description, target_chunks)
         async with _RETRIEVE_SEM:
             return await self._retrieve_locked(
                 description=description,
@@ -180,6 +189,24 @@ class HybridRetriever:
                 filter_article_ids=filter_article_ids,
                 boost_article_ids=boost_article_ids,
             )
+
+    async def _retrieve_via_ragplus(
+        self, description: str, target_chunks: int,
+    ) -> RetrievalReport:
+        """ragplus-x 知识层检索（开关开，sop_ai 等直用方）。
+
+        不可用直接抛 RagplusUnavailableError——消费方（sop_ai）现有 except
+        会转成 warnings 显式标注，与「检索无结果」区分。
+        """
+        hits = await get_ragplus_client().search(description, top_k=target_chunks)
+        results = [_ragplus_hit_to_result(h) for h in hits]
+        return RetrievalReport(
+            results=results,
+            total_candidates=len(results),
+            vector_hits=len(results),
+            text_hits=0,
+            degradation_level="ragplus",
+        )
 
     async def _retrieve_locked(
         self,
@@ -933,11 +960,14 @@ class SafetyKnowledgeRetriever:
             set_rag_cache,
         )
 
+        # 引擎标记进缓存键：开关切换后不读到旧引擎的结果
+        engine = "ragplus" if ragplus_search_enabled() else "local"
         cached = await get_rag_cache(
             query=description,
             categories=categories,
             target_chunks=target_chunks,
             max_hops=max_hops,
+            engine=engine,
         )
         if cached is not None:
             ctx = context_from_dict(cached)
@@ -945,6 +975,20 @@ class SafetyKnowledgeRetriever:
                 "SafetyKnowledgeRetriever: cache HIT for query=%r", description[:60],
             )
             return ctx
+
+        if engine == "ragplus":
+            context = await self._retrieve_via_ragplus(description, target_chunks)
+            # 故障态不缓存：ragplus 恢复后同查询必须立即可用（而非等 TTL 过期）
+            if context.degradation != "ragplus_unavailable":
+                await set_rag_cache(
+                    query=description,
+                    context_dict=context_to_dict(context),
+                    categories=categories,
+                    target_chunks=target_chunks,
+                    max_hops=max_hops,
+                    engine=engine,
+                )
+            return context
 
         graph_path: str | None = None
         article_ids: list[UUID] = []
@@ -1041,9 +1085,53 @@ class SafetyKnowledgeRetriever:
             categories=categories,
             target_chunks=target_chunks,
             max_hops=max_hops,
+            engine=engine,
         )
 
         return context
+
+    async def _retrieve_via_ragplus(
+        self, description: str, target_chunks: int,
+    ) -> KnowledgeContext:
+        """ragplus-x 检索（开关开）：跳过本地图谱层，直接引擎检索。
+
+        不可用时不抛错——返回显式标注的空上下文（degradation=
+        ragplus_unavailable）。六处以上 AI 管线零改动即得「产出标注
+        不中止」：注入 prompt 的 markdown 自带不可用声明，与「无相关
+        法规」语义区分；query_service 另对该 degradation 返回报错话术。
+        """
+        from app.modules.safety.ai_audit.context import fill_retrieval_info
+
+        try:
+            hits = await get_ragplus_client().search(description, top_k=target_chunks)
+        except RagplusUnavailableError as e:
+            logger.error(
+                "ragplus 检索不可用（degradation=ragplus_unavailable）：%s", e,
+            )
+            fill_retrieval_info(degradation_level="ragplus_unavailable", cited_sources=[])
+            return KnowledgeContext(
+                chunks=[],
+                graph_path=None,
+                article_ids=[],
+                markdown=RAGPLUS_UNAVAILABLE_MARKDOWN.format(error=e),
+                degradation="ragplus_unavailable",
+            )
+
+        chunks = [_ragplus_hit_to_result(h) for h in hits]
+        fill_retrieval_info(
+            degradation_level="ragplus",
+            cited_sources=[
+                {"doc_title": c.source_doc, "article_ref": c.source_article}
+                for c in chunks
+            ],
+        )
+        return KnowledgeContext(
+            chunks=chunks,
+            graph_path=None,
+            article_ids=[],
+            markdown=self._build_markdown(chunks, None),
+            degradation="ragplus",
+        )
 
     async def _keyword_extract_entities(self, text: str) -> list[str]:
         """Fallback: extract entity names by matching graph entity names against text.
@@ -1160,6 +1248,56 @@ class SafetyKnowledgeRetriever:
 # ═══════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════
+
+# ragplus 检索不可用时的显式标注（AI 管线注入 prompt 用；query_service
+# 对 degradation=ragplus_unavailable 另返回用户可见报错话术）
+RAGPLUS_UNAVAILABLE_MARKDOWN = (
+    "（知识检索服务（ragplus）不可用：{error}。本次分析无法提供法规依据。）"
+)
+
+
+def _ragplus_hit_to_result(hit: RagplusHit) -> RetrievalResult:
+    """ragplus 命中 → 统一检索结果。
+
+    score 保留引擎原始相似度（排序/审计）；vector_score 归一到 0~1 供
+    query_service 联网三模式沿 0.55 阈值判断：引擎 rerank 输出为 0~10
+    量纲（bge-reranker 交叉编码分），/10 后与旧管线 cosine 阈值语义
+    对齐（rerank ≥5.5 ≈ 强命中 kb_only，弱命中触发联网补充）。
+    """
+    return RetrievalResult(
+        chunk_id=hit.chunk_id,
+        chunk_text=hit.content,
+        source_doc=_clean_ragplus_doc_name(hit.doc_name),
+        source_article=_ragplus_hit_ref(hit),
+        doc_category="",
+        priority="P2",
+        score=hit.similarity,
+        vector_score=min(hit.similarity / 10.0, 1.0) if hit.similarity > 1 else hit.similarity,
+        text_score=0.0,
+        retrieval_path="ragplus",
+        article_id="",
+    )
+
+
+def _clean_ragplus_doc_name(name: str) -> str:
+    """引用字段只要法规名：去掉 ragplus 文档名的常见文件后缀。"""
+    import re
+
+    return re.sub(r"\.(pdf|docx?|xlsx?)$", "", name.strip(), flags=re.IGNORECASE)
+
+
+def _ragplus_hit_ref(hit: RagplusHit) -> str:
+    """条款定位：优先片段内条款号（如「第三条」「第6.2条」），兜底页码。"""
+    import re
+
+    m = re.search(
+        r"第[0-9一二三四五六七八九十百千零]+(?:\.[0-9]+)*条", hit.content[:120],
+    )
+    if m:
+        return m.group(0)
+    if hit.page:
+        return f"第{hit.page}页"
+    return ""
 
 
 def re_split_description(text: str) -> list[str]:
