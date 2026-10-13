@@ -409,16 +409,17 @@ function KnowledgeBaseContent() {
         )}
       </div>
 
+      {/* onClose 只关不清：弹层关闭动画中卸载内容会让遮罩卡在全屏状态挡死页面；数据在下次打开时经 effect 重取/重置 */}
       <KnowledgeFormModal
         open={formOpen}
         editingRecord={editingRecord}
-        onClose={() => { setFormOpen(false); setEditingRecord(null) }}
+        onClose={() => setFormOpen(false)}
         onSuccess={handleFormSuccess}
       />
       <KnowledgeDetailDrawer
         articleId={detailId}
         open={detailOpen}
-        onClose={() => { setDetailOpen(false); setDetailId(null) }}
+        onClose={() => setDetailOpen(false)}
         onNewVersion={handleNewVersion}
       />
     </div>

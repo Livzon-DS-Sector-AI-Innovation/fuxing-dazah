@@ -5,9 +5,16 @@
  * Constants, sync helpers, and pure utilities live here instead.
  */
 
-export const API_BASE = process.env.API_BASE_URL
-  ? `${process.env.API_BASE_URL}/api/v1`
-  : (() => { throw new Error('环境变量 API_BASE_URL 未配置，无法连接后端服务') })()
+// 本模块会被客户端 chunk 求值（client 组件经 actions barrel 依赖到它），
+// 浏览器端只有 NEXT_PUBLIC_* 会被内联，因此不能在模块顶层抛错：
+// 服务端走 API_BASE_URL；浏览器端回退 NEXT_PUBLIC_API_BASE_URL（构建期内联）；
+// 两者皆缺时退化为同源相对路径（dev 下经 next.config 的 /api rewrite 仍可达后端）。
+export const API_BASE = `${process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? ''}/api/v1`
+
+if (!process.env.API_BASE_URL && !process.env.NEXT_PUBLIC_API_BASE_URL) {
+  // eslint-disable-next-line no-console
+  console.error('环境变量 API_BASE_URL / NEXT_PUBLIC_API_BASE_URL 均未配置，后端请求将退化为同源相对路径')
+}
 
 /** scheduler-config（AI 配置 + 定时任务）API 路径前缀 */
 export const SAFETY_SCHEDULER_CONFIG = '/safety/scheduler-config'

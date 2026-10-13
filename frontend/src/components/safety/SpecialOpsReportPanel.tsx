@@ -479,12 +479,14 @@ export default function SpecialOpsReportPanel() {
         placement="right"
         size="large"
         open={reportDrawerOpen}
-        onClose={() => { setReportDrawerOpen(false); setEditingReport(null) }}
+        onClose={() => setReportDrawerOpen(false)}
+        // 关闭动画结束后再清数据：立即置空会在离场动画中途卸载内容，遮罩卡在全屏状态挡死页面
+        afterOpenChange={(open) => { if (!open) setEditingReport(null) }}
         extra={
           editingReport?.status !== 'approved' ? (
             <Space>
               <Button
-                onClick={() => { setReportDrawerOpen(false); setEditingReport(null) }}
+                onClick={() => setReportDrawerOpen(false)}
                 style={{ borderRadius: 8 }}
               >
                 取消
@@ -501,7 +503,7 @@ export default function SpecialOpsReportPanel() {
             </Space>
           ) : (
             <Button
-              onClick={() => { setReportDrawerOpen(false); setEditingReport(null) }}
+              onClick={() => setReportDrawerOpen(false)}
               style={{ borderRadius: 8 }}
             >
               关闭

@@ -259,7 +259,9 @@ export function EhsChangeLedgerPage() {
       <Drawer
         title={selectedChange ? `变更详情 - ${selectedChange.bt_change_no || selectedChange.change_no}` : '变更详情'}
         open={drawerOpen}
-        onClose={() => { setDrawerOpen(false); setSelectedChange(null) }}
+        onClose={() => setDrawerOpen(false)}
+        // 关闭动画结束后再清数据：立即置空会在离场动画中途卸载内容，遮罩卡在全屏状态挡死页面
+        afterOpenChange={(open) => { if (!open) setSelectedChange(null) }}
         width={820}
       >
         {selectedChange && (

@@ -93,6 +93,8 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
   // 弹窗
   const [reportModal, setReportModal] = useState<CentralAlarmReportResponse | null>(null)
   const [detail, setDetail] = useState<CentralAlarmRecord | null>(null)
+  // 关闭动画期间保留 detail：open 与内容同帧消失会让遮罩卡在全屏状态挡死页面
+  const [detailOpen, setDetailOpen] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -190,7 +192,7 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
     { title: '异常模式', dataIndex: 'ai_pattern', width: 100, render: (v: string) => <PatternTag pattern={v} /> },
     { title: 'AI 维度', dataIndex: 'ai_dimension', width: 110, render: (v: string) => <DimensionTag dimension={v} /> },
     { title: '操作', width: 70, fixed: 'right', render: (_: unknown, r) => (
-      <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetail(r)}>详情</Button>
+      <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => { setDetail(r); setDetailOpen(true) }}>详情</Button>
     )},
   ]
 
@@ -278,7 +280,7 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
         </Modal>
       )}
 
-      <Drawer open={!!detail} onClose={() => setDetail(null)} title="中控报警详情" width={480}>
+      <Drawer open={detailOpen} onClose={() => setDetailOpen(false)} afterOpenChange={(open) => { if (!open) setDetail(null) }} title="中控报警详情" width={480}>
         {detail && (
           <div style={{ fontSize: 13 }}>
             <DetailRow label="日期" value={detail.alarm_date ? dayjs(detail.alarm_date).format('YYYY-MM-DD HH:mm') : '—'} />

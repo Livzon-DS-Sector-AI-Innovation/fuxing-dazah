@@ -264,7 +264,8 @@ export default function KeyRiskOpsManagement() {
       </SectionCard>
 
       {/* ── 详情 ── */}
-      <KeyRiskOpsDetail open={detailOpen} item={detailItem} onClose={() => { setDetailOpen(false); setDetailItem(null) }} />
+      {/* item 不在 onClose 里清：KeyRiskOpsDetail 首行 if(!item) return null，关闭瞬间卸载 Modal 会打断离场动画；打开时已整体替换 item */}
+      <KeyRiskOpsDetail open={detailOpen} item={detailItem} onClose={() => setDetailOpen(false)} />
     </div>
   )
 }

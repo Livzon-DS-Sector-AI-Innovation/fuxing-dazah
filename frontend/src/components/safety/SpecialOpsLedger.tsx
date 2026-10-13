@@ -408,7 +408,9 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
         placement="right"
         size="large"
         open={drawerOpen}
-        onClose={() => { setDrawerOpen(false); setDetailItem(null) }}
+        onClose={() => setDrawerOpen(false)}
+        // 关闭动画结束后再清数据：立即置空会在离场动画中途卸载内容，遮罩卡在全屏状态挡死页面
+        afterOpenChange={(open) => { if (!open) setDetailItem(null) }}
       >
         {detailItem && (
           <Descriptions column={2} size="small" bordered labelStyle={{ fontWeight: 600, color: T.slate }}>

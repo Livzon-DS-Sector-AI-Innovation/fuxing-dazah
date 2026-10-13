@@ -455,9 +455,11 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
       </div>
 
       {/* ── 详情 Modal（平台侧只读：数据以飞书多维表格为源）── */}
+      {/* 关闭动画期间保留 detailItem：立即置空会在离场动画中途卸载内容，遮罩卡在全屏状态挡死页面 */}
       <Modal title="报警详情" open={detailOpen}
-        onCancel={() => { setDetailOpen(false); setDetailItem(null) }} width={640}
-        footer={<Button onClick={() => { setDetailOpen(false); setDetailItem(null) }}>关闭</Button>}>
+        onCancel={() => setDetailOpen(false)} width={640}
+        afterOpenChange={(open) => { if (!open) setDetailItem(null) }}
+        footer={<Button onClick={() => setDetailOpen(false)}>关闭</Button>}>
         {detailItem && (
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 12px', fontSize: 13 }}>
             <span style={{ color: T.muted }}>报警时间</span>

@@ -571,7 +571,9 @@ export function ContractorAdmissionPage() {
       <Drawer
         title={selected ? `准入详情 - ${selected.company_name || selected.admission_no || '未命名'}` : '准入详情'}
         open={drawerOpen}
-        onClose={() => { setDrawerOpen(false); setSelected(null) }}
+        onClose={() => setDrawerOpen(false)}
+        // 关闭动画结束后再清数据：立即置空会在离场动画中途卸载内容，遮罩卡在全屏状态挡死页面
+        afterOpenChange={(open) => { if (!open) setSelected(null) }}
         width={820}
         loading={detailLoading}
       >
