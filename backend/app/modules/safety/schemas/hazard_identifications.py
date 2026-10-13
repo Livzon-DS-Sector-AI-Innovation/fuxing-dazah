@@ -136,7 +136,9 @@ class HazardIdentificationRunScript(BaseModel):
 class HazardIdentificationResponse(HazardIdentificationBase):
     """危险源辨识完整响应"""
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX），created_at/updated_at 恒 None
+    # （created_at 排序/日期筛选用 Bitable 系统创建时间，见 hazard_id_direct）
+    id: uuid.UUID | str
     # ── 覆盖基类必填字段：兼容 Bitable 镜像中「部门/岗位」为空的记录，
     #    否则列表接口对任一空部门记录 model_validate 抛错 → 整页 500 → 前端看不到记录 ──
     department: str | None = None
@@ -184,16 +186,16 @@ class HazardIdentificationResponse(HazardIdentificationBase):
     post_risk_label: str | None = None
     control_level: str | None = None
     responsible_person: str | None = None
-    ai_node_progress: str
+    ai_node_progress: str = "pending"
     ai_error_message: str | None = None
-    overall_status: str
-    script1_review_status: str
-    script2_review_status: str
-    script3_review_status: str
-    script4_review_status: str
-    script5_review_status: str
-    script6_review_status: str
-    script7_review_status: str
+    overall_status: str = "draft"
+    script1_review_status: str = "pending"
+    script2_review_status: str = "pending"
+    script3_review_status: str = "pending"
+    script4_review_status: str = "pending"
+    script5_review_status: str = "pending"
+    script6_review_status: str = "pending"
+    script7_review_status: str = "pending"
     # ── Bitable 镜像元信息 ──
     feishu_record_id: str | None = None
     feishu_url: str | None = None
@@ -215,8 +217,8 @@ class HazardIdentificationResponse(HazardIdentificationBase):
     bitable_snapshot: dict | None = None
     created_by: uuid.UUID | None = None
     updated_by: uuid.UUID | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True

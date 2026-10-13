@@ -66,10 +66,15 @@ def _iso(v: Any) -> str | None:
 def _item(v: EhsChangeView) -> dict[str, Any]:
     """视图 → legacy 逐字同款输出 dict。"""
     return {
+        "id": v.record_id,
+        "feishu_record_id": v.record_id,
+        "source": "bitable",
+        "kind": v.kind,
         "change_no": v.change_no,
         "title": v.title,
         "change_type": v.change_type,
         "change_grade": v.change_grade,
+        "change_duration": v.change_duration,
         "department": v.department,
         "location_unit": v.location_unit,
         "status": v.status,
@@ -91,10 +96,22 @@ def ehs_changes(
     status: str | None = None,
     ai_review_status: str | None = None,
     keyword: str | None = None,
+    change_duration: str | None = None,
+    source: str | None = None,
+    feishu_table_id: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str = "desc",
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict[str, Any]], int]:
-    """EHS 变更台账（legacy query_ehs_changes 等价内存实现，两表并集）。"""
+    """EHS 变更台账（legacy query_ehs_changes 等价内存实现，两表并集）。
+
+    change_duration/source/feishu_table_id/sort_* 为 Web 台账页面参数
+    （批次 4 接线时补齐，默认值不影响 Agent 工具既有调用）：
+    - source：直读行全部来自 bitable——manual 筛选直接空集；
+    - feishu_table_id：approval/acceptance 对应视图 kind；
+    - sort_by：change_no/expected_start/created_time（页面默认 change_no 升序）。
+    """
     grade_norm = _norm_choice(change_grade)
     status_norm = status.strip().lower() if status else None
     ai_norm = ai_review_status.strip().lower() if ai_review_status else None
@@ -110,6 +127,12 @@ def ehs_changes(
             return False
         if ai_norm and (v.ai_review_status or "") != ai_norm:
             return False
+        if change_duration and (v.change_duration or "") != change_duration.strip():
+            return False
+        if feishu_table_id and v.kind != feishu_table_id.strip():
+            return False
+        if source and source.strip() != "bitable":
+            return False
         if keyword and not (
             _contains(keyword, v.title) or _contains(keyword, v.description)
         ):
@@ -117,11 +140,21 @@ def ehs_changes(
         return True
 
     filtered = [v for v in views if _match(v)]
-    ordered = sorted(
-        filtered,
-        key=lambda v: v.created_time_ms if v.created_time_ms is not None else 0,
-        reverse=True,
-    )
+    reverse = sort_order.strip().lower() != "asc"
+    if sort_by == "change_no":
+        ordered = sorted(filtered, key=lambda v: v.change_no or "", reverse=reverse)
+    elif sort_by == "expected_start":
+        ordered = sorted(
+            filtered,
+            key=lambda v: v.expected_start.timestamp() if v.expected_start else 0,
+            reverse=reverse,
+        )
+    else:
+        ordered = sorted(
+            filtered,
+            key=lambda v: v.created_time_ms if v.created_time_ms is not None else 0,
+            reverse=reverse,
+        )
     # legacy 分页 quirk：offset 步进用 raw page_size，cap 只作用 limit
     skip = (max(page, 1) - 1) * page_size
     limit = min(page_size, 100)

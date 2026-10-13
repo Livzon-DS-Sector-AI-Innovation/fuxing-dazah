@@ -77,8 +77,30 @@ class EhsChangeService:
         feishu_table_id: str | None = None,
         sort_by: str | None = None,
         sort_order: str = "desc",
-    ) -> tuple[list[EhsChange], int]:
-        """获取EHS变更列表"""
+    ) -> tuple[list[Any], int]:
+        """获取EHS变更列表（直读模式：两表并集内存查询，见 ehs_change_direct.query）。"""
+        from app.modules.safety.service.ehs_change_direct import config as ehs_config
+
+        if ehs_config.direct_enabled():
+            from app.modules.safety.service.ehs_change_direct import query as eq
+            from app.modules.safety.service.ehs_change_direct.reader import open_reader
+
+            views = await open_reader().fetch_all()
+            return eq.ehs_changes(
+                views,
+                department=department,
+                change_type=change_type,
+                change_grade=change_grade,
+                status=status,
+                keyword=keyword,
+                change_duration=change_duration,
+                source=source,
+                feishu_table_id=feishu_table_id,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                page=max(1, skip // max(1, limit) + 1),
+                page_size=limit,
+            )
         return await self.repo.get_ehs_changes(
             skip, limit, status, change_type, change_grade, change_duration,
             department, keyword, source, feishu_table_id, sort_by, sort_order,
@@ -93,7 +115,27 @@ class EhsChangeService:
         feishu_table_id: str | None = None,
         source: str | None = None,
     ) -> dict[str, Any]:
-        """EHS 变更统计（KPI 卡）：按状态 + AI 总体结论分组计数。"""
+        """EHS 变更统计（KPI 卡）：按状态 + AI 总体结论分组计数。
+
+        直读模式：状态分组走全量视图；AI 总体结论分组为平台 AI 审核产物
+        （ai_review_result 随镜像走），直读侧恒零。
+        """
+        from app.modules.safety.service.ehs_change_direct import config as ehs_config
+
+        if ehs_config.direct_enabled():
+            from app.modules.safety.service.ehs_change_direct.reader import open_reader
+
+            views = await open_reader().fetch_all()
+            if feishu_table_id:
+                views = [v for v in views if v.kind == feishu_table_id.strip()]
+            status_counts: dict[str, int] = {}
+            for v in views:
+                status_counts[v.status] = status_counts.get(v.status, 0) + 1
+            return {
+                "total": len(views),
+                "status": status_counts,
+                "ai": {"审核通过": 0, "需补充完善": 0, "审核不通过": 0},
+            }
         items = await self.repo.get_ehs_changes_for_stats(feishu_table_id, source)
         status: dict[str, int] = {}
         ai: dict[str, int] = {"审核通过": 0, "需补充完善": 0, "审核不通过": 0}

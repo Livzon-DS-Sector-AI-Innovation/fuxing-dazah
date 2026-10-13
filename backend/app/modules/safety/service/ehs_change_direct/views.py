@@ -54,6 +54,7 @@ class EhsChangeView:
     location_unit: str | None = None
     status: str = "draft"
     description: str | None = None
+    change_duration: str | None = None
     expected_start: datetime | None = None
     expected_completion: datetime | None = None
     actual_start: datetime | None = None
@@ -86,6 +87,7 @@ def view_from_record(
         location_unit=mapped.get("location_unit"),
         status=mapped.get("status") or "draft",
         description=mapped.get("description"),
+        change_duration=mapped.get("change_duration"),
         expected_start=mapped.get("expected_start"),
         expected_completion=mapped.get("expected_completion"),
         actual_start=mapped.get("actual_start"),

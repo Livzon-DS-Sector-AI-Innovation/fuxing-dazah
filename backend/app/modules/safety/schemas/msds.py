@@ -117,7 +117,8 @@ class MsdsCollectionResponse(BaseModel):
 class MsdsDocumentResponse(BaseModel):
     """MSDS 标准化台账响应（镜像 MSDS 表 29 字段）。"""
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX）
+    id: uuid.UUID | str
     feishu_record_id: str | None = None
     collection_record_id: uuid.UUID | None = None
     source_date: date | None = None

@@ -292,7 +292,20 @@ class SafetyService:
         review_status: str | None = None,
         ids: list[uuid.UUID] | None = None,
     ) -> tuple[list[Any], int]:
-        """获取危险源辨识列表"""
+        """获取危险源辨识列表（直读模式见 hazard_id_ledger，AI 工作流仍走镜像事件）。"""
+        from app.modules.safety.service import hazard_id_ledger
+
+        if hazard_id_ledger.direct_enabled():
+            views = await hazard_id_ledger.fetch_all(self.session)
+            return hazard_id_ledger.list_identifications(
+                views,
+                skip=skip, limit=limit,
+                department=department, overall_status=overall_status,
+                ai_node_progress=ai_node_progress, keyword=keyword,
+                position=position, risk_level=risk_level,
+                date_from=date_from, date_to=date_to,
+                review_status=review_status,
+            )
         return await self.repo.get_hazard_identifications(
             skip, limit, department, overall_status, ai_node_progress, keyword,
             position, risk_level, date_from, date_to, batch_id, review_status, ids,
@@ -300,6 +313,11 @@ class SafetyService:
 
     async def get_hazard_identification_stats(self) -> dict[str, int]:
         """获取危险源辨识工作流统计"""
+        from app.modules.safety.service import hazard_id_ledger
+
+        if hazard_id_ledger.direct_enabled():
+            views = await hazard_id_ledger.fetch_all(self.session)
+            return hazard_id_ledger.workflow_stats(views)
         return await self.repo.get_hazard_identification_stats()
 
     async def get_hazard_identification_ledger_stats(
@@ -311,6 +329,15 @@ class SafetyService:
         date_to: str | None = None,
     ) -> dict[str, int]:
         """获取危险源辨识台账统计"""
+        from app.modules.safety.service import hazard_id_ledger
+
+        if hazard_id_ledger.direct_enabled():
+            views = await hazard_id_ledger.fetch_all(self.session)
+            return hazard_id_ledger.ledger_stats(
+                views,
+                department=department, position=position, risk_level=risk_level,
+                date_from=date_from, date_to=date_to,
+            )
         return await self.repo.get_hazard_identification_ledger_stats(
             department, position, risk_level, date_from, date_to,
         )

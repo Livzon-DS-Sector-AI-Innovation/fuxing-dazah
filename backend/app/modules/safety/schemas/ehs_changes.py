@@ -146,11 +146,12 @@ class EhsChangeUpdate(BaseModel):
 class EhsChangeResponse(EhsChangeBase):
     """EHS变更响应"""
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX），created_at/updated_at 恒 None
+    id: uuid.UUID | str
     applicant_id: uuid.UUID | None = None
     status: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     # Bitable 同步记录（验收表）可能缺失变更分类/时效
     change_type: str | None = None
     change_duration: str | None = None

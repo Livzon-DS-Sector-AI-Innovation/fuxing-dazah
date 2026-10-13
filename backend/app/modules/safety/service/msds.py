@@ -14,6 +14,7 @@ import mimetypes
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -509,8 +510,22 @@ class MsdsService:
         cas_no: str | None = None,
         review_status: str | None = None,
         archive_status: str | None = None,
-    ) -> tuple[list[MsdsDocument], int]:
-        """MSDS 台账列表（分页 + 筛选）。"""
+    ) -> tuple[list[Any], int]:
+        """MSDS 台账列表（分页 + 筛选；直读模式复用 msds_direct 既有 kit）。"""
+        from app.modules.safety.service.msds_direct import config as md_config
+
+        if md_config.direct_enabled():
+            from app.modules.safety.service.msds_direct import query as md_query
+            from app.modules.safety.service.msds_direct.reader import open_reader
+
+            views = await open_reader().fetch_all()
+            if review_status:
+                views = [v for v in views if v.review_status == review_status]
+            if archive_status:
+                views = [v for v in views if v.archive_status == archive_status]
+            return md_query.msds_documents(
+                views, name=name, cas_no=cas_no, limit=limit, skip=skip,
+            )
         filters = [MsdsDocument.is_deleted == False]  # noqa: E712
         if name:
             filters.append(MsdsDocument.name.ilike(f"%{name}%"))
@@ -568,14 +583,29 @@ class MsdsService:
         by_parse_status = {status: count for status, count in parse_rows}
 
         # 按复核状态分组
-        review_rows = (
-            await self.db.execute(
-                select(MsdsDocument.review_status, func.count())
-                .where(MsdsDocument.is_deleted == False)  # noqa: E712
-                .group_by(MsdsDocument.review_status)
-            )
-        ).all()
-        by_review_status = {status: count for status, count in review_rows}
+        from app.modules.safety.service.msds_direct import config as md_config
+
+        if md_config.direct_enabled():
+            # 直读：台账文档计数/分组走全量视图；征集记录仍查平台库（征集为平台工作流）
+            from app.modules.safety.service.msds_direct.reader import open_reader
+
+            views = await open_reader().fetch_all()
+            docs_total = len(views)
+            docs_archived = sum(1 for v in views if v.archive_status == "archived")
+            by_review_status: dict[Any, int] = {}
+            for v in views:
+                by_review_status[v.review_status] = (
+                    by_review_status.get(v.review_status, 0) + 1
+                )
+        else:
+            review_rows = (
+                await self.db.execute(
+                    select(MsdsDocument.review_status, func.count())
+                    .where(MsdsDocument.is_deleted == False)  # noqa: E712
+                    .group_by(MsdsDocument.review_status)
+                )
+            ).all()
+            by_review_status = {status: count for status, count in review_rows}
 
         return {
             "total_collections": int(collections_total or 0),
