@@ -112,7 +112,7 @@ vi.mock('@/lib/api/safety/overview', async importOriginal => {
       { key: 'ehs-change', status: 'ok', metric: '进行中 4 项' },
       { key: 'contractor-admission', status: 'ok', metric: '运行中' },
       { key: 'emergency-drill', status: 'ok', metric: '运行中' },
-      { key: 'supervision', status: 'upcoming', metric: '未上线' },
+      { key: 'supervision', status: 'ok', metric: '最近审核 2026-10-12 · 违规 2' },
       { key: 'incidents', status: 'inactive', metric: '未开展' },
     ],
     errors: [],
@@ -153,7 +153,7 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
     expect(await screen.findByText('作业明细全文内容')).toBeInTheDocument()
   })
 
-  it('健康度墙 17 个模块全展示且与菜单对齐；灰卡可点占位页、监督卡不可点', async () => {
+  it('健康度墙 17 个模块全展示且与菜单对齐；灰卡可点占位页、监督卡可点监督页', async () => {
     const user = userEvent.setup()
     renderWithQuery(<SafetyOverviewDashboard />)
 
@@ -179,9 +179,9 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
     await user.click(screen.getByText('教育培训与行为管控'))
     expect(pushMock).toHaveBeenCalledWith('/safety/training-behavior')
     pushMock.mockClear()
-    // 全流程监督（未上线）灰卡不可点
+    // 全流程监督（三期已上线）卡片可点直达监督页
     await user.click(screen.getByText('全流程监督'))
-    expect(pushMock).not.toHaveBeenCalled()
+    expect(pushMock).toHaveBeenCalledWith('/safety/supervision')
   })
 
   it('页面无业务操作按钮（只读态势；刷新/导航/弹层除外）', async () => {

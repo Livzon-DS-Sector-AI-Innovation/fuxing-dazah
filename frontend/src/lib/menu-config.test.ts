@@ -77,10 +77,11 @@ describe('safety 菜单结构（体系要素分组，3.0）', () => {
     }
   })
 
-  it('disabled 仅限「全流程监督」（三期新建），且无路径', () => {
+  it('无 disabled 菜单项（三期全流程监督已启用）', () => {
     const disabled = safetyItems().filter((i) => i.disabled)
-    expect(disabled.map((i) => i.label)).toEqual(['全流程监督'])
-    expect(disabled[0].path).toBe('')
+    expect(disabled).toEqual([])
+    const supervision = safetyItems().find((i) => i.key === 'supervision')
+    expect(supervision?.path).toBe('/safety/supervision')
   })
 
   it('系统组收口为 2 项：系统配置单页 + AI 助手对话（三期）', () => {
@@ -108,6 +109,7 @@ describe('safety 菜单结构（体系要素分组，3.0）', () => {
       '/safety/ehs-change',
       '/safety/contractor-admission',
       '/safety/emergency-drill',
+      '/safety/supervision',
       '/safety/incidents',
       '/safety/system',
       '/safety/agent-chat',
