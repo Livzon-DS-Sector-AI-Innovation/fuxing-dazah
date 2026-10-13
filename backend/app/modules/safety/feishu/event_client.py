@@ -544,11 +544,20 @@ async def start_ws() -> None:
 
                 subscribed = await ensure_bitable_subscribed()
                 if not subscribed:
-                    _subscription_ok = False
-                    logger.error(
-                        "⚠️ Bitable 事件订阅失败！WebSocket 已连接但不会收到任何 Bitable 事件。"
-                        "请在【系统功能 → 多维表格配置】检查该域连接配置和飞书应用权限。"
+                    from app.modules.safety.service.hazard_direct.config import (
+                        event_sync_enabled as _hz_event_sync,
                     )
+
+                    if not _hz_event_sync():
+                        # 直读形态下事件镜像停用，不订阅为预期行为（handler 侧同判）
+                        _subscription_ok = True
+                        logger.info("隐患直读形态：事件镜像已停用，未订阅文档事件（预期行为）")
+                    else:
+                        _subscription_ok = False
+                        logger.error(
+                            "⚠️ Bitable 事件订阅失败！WebSocket 已连接但不会收到任何 Bitable 事件。"
+                            "请在【系统功能 → 多维表格配置】检查该域连接配置和飞书应用权限。"
+                        )
                 else:
                     _subscription_ok = True
                     logger.info("✅ Bitable 事件订阅就绪，WebSocket 将接收实时事件推送")
@@ -573,21 +582,42 @@ async def start_ws() -> None:
                 if special_op_subscribed:
                     logger.info("✅ 特殊作业日报 Bitable 文档事件订阅就绪")
                 else:
-                    logger.error("⚠️ 特殊作业日报 Bitable 文档事件订阅失败，实时同步将失效")
+                    from app.modules.safety.service.special_op_direct import (
+                        config as _so_cfg,
+                    )
+
+                    if not _so_cfg.legacy_event_sync_active():
+                        logger.info("特殊作业直读模式：事件镜像已停用，未订阅文档事件（预期行为）")
+                    else:
+                        logger.error("⚠️ 特殊作业日报 Bitable 文档事件订阅失败，实时同步将失效")
 
                 # 相关方准入 Bitable — 必须显式订阅文档事件（drive.file.bitable_record_changed_v1）
                 admission_subscribed = await ensure_contractor_admission_bitable_subscribed()
                 if admission_subscribed:
                     logger.info("✅ 相关方准入 Bitable 文档事件订阅就绪")
                 else:
-                    logger.error("⚠️ 相关方准入 Bitable 文档事件订阅失败，实时同步将失效")
+                    from app.modules.safety.service.contractor_admission_direct import (
+                        config as _ca_cfg,
+                    )
+
+                    if not _ca_cfg.legacy_event_sync_active():
+                        logger.info("相关方准入直读模式：事件镜像已停用，未订阅文档事件（预期行为）")
+                    else:
+                        logger.error("⚠️ 相关方准入 Bitable 文档事件订阅失败，实时同步将失效")
 
                 # 关键风险作业 Bitable — 必须显式订阅文档事件，WS 才会推送变更
                 key_risk_op_subscribed = await ensure_key_risk_op_bitable_subscribed()
                 if key_risk_op_subscribed:
                     logger.info("✅ 关键风险作业 Bitable 文档事件订阅就绪")
                 else:
-                    logger.error("⚠️ 关键风险作业 Bitable 文档事件订阅失败，实时同步将失效")
+                    from app.modules.safety.service.key_risk_op_direct import (
+                        config as _kro_cfg,
+                    )
+
+                    if not _kro_cfg.legacy_event_sync_active():
+                        logger.info("关键风险作业直读模式：事件镜像已停用，未订阅文档事件（预期行为）")
+                    else:
+                        logger.error("⚠️ 关键风险作业 Bitable 文档事件订阅失败，实时同步将失效")
 
                 # 职业健康 OH Bitable — 单文档 5 表镜像（人员汇总/体检记录/岗位/危害因素PPE/申请）
                 oh_subscribed = await ensure_oh_bitable_subscribed()
@@ -646,7 +676,14 @@ async def start_ws() -> None:
                 if cert_subscribed:
                     logger.info("✅ 持证台账 Bitable 事件订阅就绪")
                 else:
-                    logger.error("⚠️ 持证台账 Bitable 事件订阅失败，实时同步将失效")
+                    from app.modules.safety.service.cert_direct import (
+                        config as _cert_cfg,
+                    )
+
+                    if not _cert_cfg.legacy_event_sync_active():
+                        logger.info("持证台账直读模式：事件镜像已停用，未订阅文档事件（预期行为）")
+                    else:
+                        logger.error("⚠️ 持证台账 Bitable 事件订阅失败，实时同步将失效")
 
                 # 4. 启动 protobuf PING 心跳循环
                 ping_task = asyncio.create_task(_ping_loop(ws, service_id))
