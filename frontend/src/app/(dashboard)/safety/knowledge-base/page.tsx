@@ -19,17 +19,14 @@ import {
   syncKnowledgeArticles,
 } from '@/actions/safety'
 import { KnowledgeQueryProvider } from '@/components/safety/KnowledgeQueryProvider'
-import KnowledgeSidebar from '@/components/safety/KnowledgeSidebar'
 import KnowledgeDetailDrawer from '@/components/safety/KnowledgeDetailDrawer'
 import KnowledgeFormModal from '@/components/safety/KnowledgeFormModal'
 import RagplusEngineBar from '@/components/safety/knowledge/RagplusEngineBar'
 import SemanticResultList from '@/components/safety/knowledge/SemanticResultList'
 import ArticleTable from '@/components/safety/knowledge/ArticleTable'
-import { filterByMenuKey, mapCategoryCountsToMenu } from '@/components/safety/knowledgeConstants'
 import { PageHeader, SectionCard } from '@/components/ui-kit'
 import {
   fetchKnowledgeArticles,
-  fetchKnowledgeCategoryCounts,
   fetchKnowledgeRagplusDocMap,
   fetchKnowledgeSemanticSearch,
 } from '@/lib/api/knowledge'
@@ -48,7 +45,6 @@ function KnowledgeBaseContent() {
   const q = searchParams.get('q') || ''
   const statusFilter = searchParams.get('status') || undefined
   const cardFilter = searchParams.get('card') || undefined
-  const menuKey = searchParams.get('menu') || null
   const searchMode = searchParams.get('mode') === 'kw' ? 'kw' : 'semantic'
   const page = Math.max(1, Number(searchParams.get('page') || '1'))
 
@@ -84,10 +80,6 @@ function KnowledgeBaseContent() {
     queryFn: () => fetchKnowledgeSemanticSearch(q, 1, 100),
     enabled: searching,
   })
-  const statsQuery = useQuery({
-    queryKey: ['knowledge-stats'],
-    queryFn: fetchKnowledgeCategoryCounts,
-  })
   const docMapQuery = useQuery({
     queryKey: ['knowledge-ragplus-doc-map'],
     queryFn: () => fetchKnowledgeRagplusDocMap('regulation'),
@@ -95,15 +87,9 @@ function KnowledgeBaseContent() {
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['knowledge-articles'] })
-    queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] })
     queryClient.invalidateQueries({ queryKey: ['knowledge-semantic'] })
     queryClient.invalidateQueries({ queryKey: ['knowledge-ragplus-doc-map'] })
   }
-
-  const menuCounts = useMemo(
-    () => (statsQuery.data ? mapCategoryCountsToMenu(statsQuery.data.by_category) : new Map<string, number>()),
-    [statsQuery.data],
-  )
 
   const rawItems = useMemo(() => {
     return searching ? [] : (allQuery.data?.items ?? [])
@@ -112,12 +98,11 @@ function KnowledgeBaseContent() {
   // ── 客户端筛选（非检索模式，基于全量数据） ──
   const filtered = useMemo(() => {
     let arr = rawItems
-    if (menuKey) arr = filterByMenuKey(arr, menuKey)
     if (statusFilter) arr = arr.filter((a) => a.status === statusFilter)
     if (cardFilter === 'has_card') arr = arr.filter((a) => a.knowledge_card != null)
     else if (cardFilter === 'no_card') arr = arr.filter((a) => !a.knowledge_card)
     return arr
-  }, [rawItems, menuKey, statusFilter, cardFilter])
+  }, [rawItems, statusFilter, cardFilter])
 
   const pageItems = useMemo(
     () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
@@ -131,7 +116,6 @@ function KnowledgeBaseContent() {
   const handleSearch = () => {
     patchUrl({ q: searchText.trim() || null, page: '1' })
   }
-  const handleMenuSelect = (key: string) => patchUrl({ menu: key || null, page: '1' })
   const handleStatusChange = (v?: string) => patchUrl({ status: v || null, page: '1' })
   const handleCardChange = (v?: string) => patchUrl({ card: v || null, page: '1' })
   const handleModeToggle = () => patchUrl({ mode: searchMode === 'semantic' ? 'kw' : null, page: '1' })
@@ -244,21 +228,13 @@ function KnowledgeBaseContent() {
 
   // ── Render ──
   return (
-    <div style={{ display: 'flex', margin: -24, height: 'calc(100vh - 64px)' }}>
-      <KnowledgeSidebar
-        selectedKey={menuKey}
-        onSelect={handleMenuSelect}
-        counts={menuCounts}
-        loading={isLoading}
+    <div style={{ margin: -24, height: 'calc(100vh - 64px)', overflowY: 'auto', padding: 24 }}>
+      {/* Header */}
+      <PageHeader
+        breadcrumb={['安全管理', '法规标准与规程']}
+        title="法规标准与规程"
+        description="法规、标准与规程知识库：条款级语义检索（ragplus-x 引擎）+ 台账清单"
       />
-
-      <div style={{ flex: 1, overflowY: 'auto', padding: 24, minWidth: 0 }}>
-        {/* Header */}
-        <PageHeader
-          breadcrumb={['安全管理', '法规标准与规程']}
-          title="法规标准与规程"
-          description="法规、标准与规程知识库：条款级语义检索（ragplus-x 引擎）+ 台账清单"
-        />
 
         {/* 引擎状态条（ragplus 库实时总量 + 映射聚合，30s 自动刷新） */}
         <RagplusEngineBar />
@@ -399,7 +375,6 @@ function KnowledgeBaseContent() {
             )}
           </SectionCard>
         </div>
-      </div>
 
       {/* onClose 只关不清：弹层关闭动画中卸载内容会让遮罩卡在全屏状态挡死页面；数据在下次打开时经 effect 重取/重置 */}
       <KnowledgeFormModal

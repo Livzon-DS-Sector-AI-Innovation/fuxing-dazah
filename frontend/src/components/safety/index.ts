@@ -14,7 +14,6 @@ export { default as KnowledgeCardEditor } from './KnowledgeCardEditor'
 export { default as InjectionPreviewModal } from './InjectionPreviewModal'
 export { default as AgentUsageStats } from './AgentUsageStats'
 export { default as PptGeneratorPanel } from './PptGeneratorPanel'
-export { default as KnowledgeSidebar } from './KnowledgeSidebar'
 export { default as KnowledgeGraphTree } from './KnowledgeGraphTree'
 export { default as KnowledgeGraphTreeNode } from './KnowledgeGraphTreeNode'
 export {
