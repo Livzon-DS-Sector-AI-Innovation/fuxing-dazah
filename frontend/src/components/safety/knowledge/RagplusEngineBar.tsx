@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { Alert } from 'antd'
-import { Boxes, Database, FileSearch, Layers } from 'lucide-react'
+import { Archive, Boxes, Database, FileSearch, Layers, Loader } from 'lucide-react'
 import { StatCard } from '@/components/ui-kit'
 import { fetchKnowledgeRagplusOverview } from '@/lib/api/knowledge'
 
@@ -47,12 +47,13 @@ export default function RagplusEngineBar() {
   const msds = byName.get('MSDS')
   const mapCounts = data.map_counts || {}
   const active = mapCounts['active'] || 0
+  const parsing = mapCounts['parsing'] || 0
   const failed = mapCounts['failed'] || 0
   const archived = mapCounts['archived'] || 0
 
   return (
     <div>
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard
           label="引擎·法规标准库"
           value={law ? `${law.doc_count} 篇` : '—'}
@@ -69,9 +70,16 @@ export default function RagplusEngineBar() {
         <StatCard
           label="已入引擎"
           value={active}
-          sub={archived > 0 ? `另归档 ${archived} 篇` : '检索就绪'}
+          sub="解析完成，检索就绪"
           tone={active > 0 ? 'ok' : 'default'}
           icon={<FileSearch size={16} />}
+        />
+        <StatCard
+          label="引擎解析中"
+          value={parsing}
+          sub={parsing > 0 ? '排队/解析滚动完成' : '队列为空'}
+          tone={parsing > 0 ? 'primary' : 'default'}
+          icon={<Loader size={16} />}
         />
         <StatCard
           label="入库失败"
@@ -79,6 +87,12 @@ export default function RagplusEngineBar() {
           sub={failed > 0 ? '重跑入库脚本可补齐' : '无失败'}
           tone={failed > 0 ? 'warn' : 'default'}
           icon={<Layers size={16} />}
+        />
+        <StatCard
+          label="已归档"
+          value={archived}
+          sub="已废止/被替代留档"
+          icon={<Archive size={16} />}
         />
       </div>
     </div>

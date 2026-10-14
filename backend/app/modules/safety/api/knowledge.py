@@ -125,12 +125,23 @@ async def get_ragplus_overview(
 
     rows = (
         await db.execute(
-            select(RagplusDocMap.status, func.count(RagplusDocMap.id))
+            select(
+                RagplusDocMap.status,
+                RagplusDocMap.last_error,
+                func.count(RagplusDocMap.id),
+            )
             .where(RagplusDocMap.is_deleted.is_(False))
-            .group_by(RagplusDocMap.status)
+            .group_by(RagplusDocMap.status, RagplusDocMap.last_error)
         )
     ).all()
-    map_counts = {status: int(count) for status, count in rows}
+    map_counts: dict[str, int] = {}
+    for status, last_error, count in rows:
+        # 对账把引擎非终态行留在 failed 并以 last_error 注明「非失败」——
+        # 统计拆成 parsing 单独展示，failed 只计真失败
+        if status == "failed" and last_error and "非失败" in last_error:
+            map_counts["parsing"] = map_counts.get("parsing", 0) + int(count)
+        else:
+            map_counts[status] = map_counts.get(status, 0) + int(count)
 
     return ApiResponse(
         data={
