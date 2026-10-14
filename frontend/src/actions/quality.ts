@@ -33,6 +33,9 @@ import type {
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
+  MaterialRequestItem,
+  MaterialStandardItemRow,
+  MaterialStandardRow,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -1317,6 +1320,102 @@ export async function updateContainerLocation(containerNo: string, location: str
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
     throw new Error(err.detail || '库位更新失败')
+  }
+  return res.json()
+}
+
+
+// ─── 物料请验与放行 ───
+
+export async function createMaterialRequest(input: {
+  material_code: string; vendor_code?: string; inbound_batch_no: string; inbound_qty: number; inbound_date?: string
+}): Promise<{ message: string; data: MaterialRequestItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/requests`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '创建请验单失败')
+  }
+  return res.json()
+}
+
+export async function fetchMaterialRequests(status?: string, batchNo?: string): Promise<{ data: MaterialRequestItem[] }> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  if (batchNo) params.set('batch_no', batchNo)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/requests${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取请验单失败')
+  return res.json()
+}
+
+export async function sampleMaterialRequest(id: string, input: { sampled_qty?: number; sampled_at?: string }): Promise<{ message: string; data: MaterialRequestItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/requests/${id}/sample`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '取样登记失败')
+  }
+  return res.json()
+}
+
+export async function createMaterialInspectionTask(id: string): Promise<{ message: string; data: { task_id: string; batch_number: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/requests/${id}/task`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '建检验任务失败')
+  }
+  return res.json()
+}
+
+export async function releaseMaterialRequest(id: string, verdict: 'release' | 'reject' | 'concede', remark?: string): Promise<{ message: string; data: MaterialRequestItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/requests/${id}/release`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verdict, remark }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '放行操作失败')
+  }
+  return res.json()
+}
+
+export async function createMaterialStandard(input: { material_code: string; vendor_code?: string; version?: string }): Promise<{ message: string; data: MaterialStandardRow }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/standards`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '创建物料标准失败')
+  }
+  return res.json()
+}
+
+export async function fetchMaterialStandardItems(standardId: string): Promise<{ data: MaterialStandardItemRow[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/standards/${standardId}/items`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取标准项目失败')
+  return res.json()
+}
+
+export async function createMaterialStandardItem(standardId: string, input: Partial<MaterialStandardItemRow>): Promise<{ message: string; data: MaterialStandardItemRow }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/standards/${standardId}/items`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, standard_id: standardId }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '添加项目行失败')
   }
   return res.json()
 }

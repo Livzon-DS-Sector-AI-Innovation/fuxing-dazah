@@ -580,3 +580,62 @@ export interface SlowMovingItem {
   location: string | null
   age_days: number
 }
+
+
+// ─── 物料请验与放行 ───
+
+export type MaterialRequestStatus = 'pending_sample' | 'sampled' | 'in_test' | 'released' | 'rejected' | 'conceded' | 'void'
+
+export const REQUEST_STATUS_META: Record<MaterialRequestStatus, { label: string; color: string }> = {
+  pending_sample: { label: '待取样', color: 'gold' },
+  sampled: { label: '已取样', color: 'blue' },
+  in_test: { label: '检验中', color: 'processing' },
+  released: { label: '已放行', color: 'green' },
+  rejected: { label: '已拒收', color: 'red' },
+  conceded: { label: '让步接收', color: 'orange' },
+  void: { label: '已作废', color: 'default' },
+}
+
+export interface MaterialRequestItem {
+  id: string
+  request_no: string
+  material_code: string
+  material_name: string
+  vendor_code: string | null
+  vendor_name: string | null
+  inbound_batch_no: string
+  inbound_qty: number
+  inbound_date: string | null
+  status: MaterialRequestStatus
+  sampled_at: string | null
+  sampled_qty: number | null
+  verdict: string | null
+  verdict_remark: string | null
+  task_id: string | null
+  created_at: string
+}
+
+export interface MaterialStandardItemRow {
+  id: string
+  standard_id: string
+  seq: number | null
+  category: string | null
+  item_name: string
+  sop_no: string | null
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  remark: string | null
+}
+
+export interface MaterialStandardRow {
+  id: string
+  material_code: string
+  material_name: string
+  vendor_code: string | null
+  version: string | null
+  remark: string | null
+  created_at: string
+}
