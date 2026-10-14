@@ -18,7 +18,7 @@ import {
 import { DownloadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { fetchOhExams, fetchOhExamStats } from '@/lib/api/safety/occupational-health'
 import type { OhHealthExam } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
@@ -86,8 +86,6 @@ interface OhExamsPanelProps {
 }
 
 export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhExamsPanelProps) {
-  const { message } = App.useApp()
-
   // 跨 Tab 联动预筛：父组件用 key={keyword} 重建本组件（见 page-client.tsx），
   // 挂载时一次性消费 initialKeyword，之后不再监听 —— 避免 useEffect 同步 setState 反模式。
   const [keyword, setKeyword] = useState(initialKeyword ?? '')
@@ -107,8 +105,6 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
 
   // 挂载即消费联动 keyword（父组件重建本组件时触发一次）
   if (initialKeyword) onConsumedKeyword?.()
-
-  const queryClient = useQueryClient()
 
   // 统计 query
   const statsQuery = useQuery({
@@ -271,7 +267,6 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         exam={detailExam}
-        onRefresh={() => queryClient.invalidateQueries({ queryKey: ['oh-exams'] })}
       />
     </div>
   )

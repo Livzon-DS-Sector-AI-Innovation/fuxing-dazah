@@ -1,9 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import {
-  App, Button, DatePicker, Input, Modal, Select, Space, Table, Tooltip,
-} from 'antd'
+import { Button, DatePicker, Input, Modal, Select, Space, Table, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   EyeOutlined, ReloadOutlined,
@@ -18,17 +16,12 @@ import type {
   FireAlarmStats,
 } from '@/types/safety'
 
-import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
-import type { Tone } from '@/components/ui-kit'
+import { EmptyGuide, SectionCard, StatCard } from '@/components/ui-kit'
 import { T } from './shared-styles'
 import { AI_DIMENSION_CONFIG, dynamicTagStyle } from './fireAlarmConstants'
 
-// ── DESIGN tokens：统一从 shared-styles 的 T 导入（唯一来源），本地不重复定义色板 ──
-
-const CARD_STYLE: React.CSSProperties = {
-  background: T.canvas,
-  border: `1px solid ${T.hairline}`,
-  borderRadius: 12,
+interface FireAlarmManagementProps {
+  initialStats?: FireAlarmStats | null
 }
 
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace'
@@ -66,13 +59,7 @@ function DynamicTag({ name }: { name: string }) {
 
 // ═══════════════════════════════════════════════════════════
 
-interface FireAlarmManagementProps {
-  initialStats?: FireAlarmStats | null
-}
-
 export default function FireAlarmManagement({ initialStats }: FireAlarmManagementProps) {
-  const { message } = App.useApp()
-
   // ── 列表 ──
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)

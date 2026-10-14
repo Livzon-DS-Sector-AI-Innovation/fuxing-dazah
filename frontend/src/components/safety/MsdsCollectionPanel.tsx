@@ -5,11 +5,11 @@
 // 解析触发已退役前端入口：新资料由飞书事件自动解析（msds_collection_handler）。
 
 import { useMemo, useState } from 'react'
-import { App, Button, Select, Space, Table, Tooltip } from 'antd'
+import { Button, Select, Space, Table, Tooltip } from 'antd'
 import { EyeOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { fetchMsdsCollections, fetchMsdsStats } from '@/lib/api/safety/msds'
 import type { MsdsCollectionRecord } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
@@ -18,7 +18,6 @@ import MsdsDetailDrawer from './MsdsDetailDrawer'
 import {
   PARSE_STATUS_FILTER,
   PARSE_STATUS_UI,
-  T,
   UI,
 } from './msdsConstants'
 
@@ -30,16 +29,12 @@ const PARSE_STATUS_TONE: Record<string, Tone> = {
 }
 
 export default function MsdsCollectionPanel() {
-  const { message } = App.useApp()
-
   const [parseStatus, setParseStatus] = useState('')
   const [applied, setApplied] = useState<{ parseStatus: string }>({ parseStatus: '' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [detailRec, setDetailRec] = useState<MsdsCollectionRecord | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
-
-  const queryClient = useQueryClient()
 
   // 统计 query（与 MsdsPanel 共享 msds-stats 缓存）
   const statsQuery = useQuery({

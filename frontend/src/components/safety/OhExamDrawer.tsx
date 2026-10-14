@@ -59,10 +59,9 @@ interface OhExamDrawerProps {
   open: boolean
   onClose: () => void
   exam: OhHealthExam | null
-  onRefresh: () => void
 }
 
-export default function OhExamDrawer({ open, onClose, exam, onRefresh }: OhExamDrawerProps) {
+export default function OhExamDrawer({ open, onClose, exam }: OhExamDrawerProps) {
   const { message } = App.useApp()
   const [detail, setDetail] = useState<OhHealthExam | null>(exam)
   const [loading, setLoading] = useState(false)

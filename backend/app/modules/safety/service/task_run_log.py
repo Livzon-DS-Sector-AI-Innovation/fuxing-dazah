@@ -22,12 +22,17 @@ logger = logging.getLogger(__name__)
 _ERROR_MAX_CHARS = 500
 
 
+def _truncate(text: str) -> str:
+    """截断到上限，超长尾注省略号（单一截断点，防双重截断削掉省略号）。"""
+    return text if len(text) <= _ERROR_MAX_CHARS else text[:_ERROR_MAX_CHARS] + "…"
+
+
 def error_summary(exc: BaseException | None = None, text: str | None = None) -> str | None:
     """异常 → 「类型: 消息」摘要（截断，尾注省略号）。"""
     raw = f"{type(exc).__name__}: {exc}".strip() if exc is not None else (text or "")
     if not raw:
         return None
-    return raw if len(raw) <= _ERROR_MAX_CHARS else raw[:_ERROR_MAX_CHARS] + "…"
+    return _truncate(raw)
 
 
 def _row_out(row: SchedulerTaskRunLog) -> dict[str, Any]:
@@ -57,7 +62,7 @@ async def record_task_run(
         finished_at=finished_at,
         status=status,
         duration_ms=int((finished_at - started_at).total_seconds() * 1000),
-        error=error[:_ERROR_MAX_CHARS] if error else None,
+        error=_truncate(error) if error else None,
     )
     db.add(log)
     await db.flush()

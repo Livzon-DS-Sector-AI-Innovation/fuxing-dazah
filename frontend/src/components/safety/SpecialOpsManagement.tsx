@@ -50,12 +50,6 @@ const UI = {
   brandPurple: '#7b3ff2',
 } as const
 
-const CARD_STYLE: React.CSSProperties = {
-  background: UI.canvas,
-  border: `1px solid ${UI.hairline}`,
-  borderRadius: 12,
-}
-
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace'
 
 // ── 日报风险色 ──

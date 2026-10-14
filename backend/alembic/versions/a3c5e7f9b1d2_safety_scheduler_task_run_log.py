@@ -70,7 +70,7 @@ def upgrade() -> None:
             "finished_at",
             sa.DateTime(timezone=True),
             nullable=True,
-            comment="本次尝试结束时间（UTC；超时取消时为空）",
+            comment="本次尝试结束时间（UTC）",
         ),
         sa.Column(
             "status",

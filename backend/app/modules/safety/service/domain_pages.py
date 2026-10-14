@@ -333,7 +333,8 @@ def _analyze_goals(
         else None,
         "resp_expired": expired if resp is not None else 0,
         "invest_rows_present": invest is not None,
-        "invested_total": invested,
+        # 健康度文案与统计卡共用：万元换算在此一次完成
+        "investment_wan": round(invested / 10000, 1) if invested is not None else None,
     }
 
 
@@ -366,7 +367,9 @@ def _analyze_training(
                 and _enum(r, "状态") in ("未开始", "进行中")
             ):
                 overdue_unplanned += 1
-    exam_rows = [r for r in cur if _enum(r, "考核方式") == "考试"] if trainings else []
+    exam_rows = (
+        [r for r in cur if _enum(r, "考核方式") == "考试"] if trainings is not None else []
+    )
     actual_sum = sum(_num(r, "实到人数") for r in exam_rows)
     passed_sum = sum(_num(r, "考核合格人数") for r in exam_rows)
     return {
@@ -378,9 +381,8 @@ def _analyze_training(
         "retraining_due_30d": retraining_due if trainings is not None else None,
         "overdue_unplanned": overdue_unplanned,
         "violation_rows_present": violations is not None,
-        "violation_total": _count(
-            [r for r in (violations or []) if _in_year(r, "违章日期", today)],
-            lambda _r: True,
+        "violation_total": len(
+            [r for r in (violations or []) if _in_year(r, "违章日期", today)]
         )
         if violations is not None
         else None,
@@ -481,11 +483,11 @@ def _analyze_incidents(
 
 def _goals_metric(a: dict[str, Any]) -> str:
     rate = a["agreement_rate"]
-    wan = a["invested_total"]
+    wan = a["investment_wan"]
     return (
         f"目标达成 {a['goal_achieved']}/{a['goal_total']} · "
         f"责任书签订率 {rate if rate is not None else '—'}% · "
-        f"年投入 {(round(wan / 10000, 1) if wan is not None else '—')}万"
+        f"年投入 {wan if wan is not None else '—'}万"
     )
 
 
@@ -577,11 +579,8 @@ SPECS: dict[str, DomainPageSpec] = {s.url_key: s for s in _SPECS}
 
 
 def _stats_from(spec: DomainPageSpec, analysis: dict[str, Any]) -> dict[str, Any]:
-    """analyze 结果 → 蓝本统计卡字段（投资额换算万元）。"""
-    stats = {key: analysis.get(key) for key in spec.stat_keys}
-    if spec.url_key == "goals" and analysis.get("invested_total") is not None:
-        stats["investment_wan"] = round(analysis["invested_total"] / 10000, 1)
-    return stats
+    """analyze 结果 → 蓝本统计卡字段（analyze 已产出全部最终口径值）。"""
+    return {key: analysis.get(key) for key in spec.stat_keys}
 
 
 def _envelope(

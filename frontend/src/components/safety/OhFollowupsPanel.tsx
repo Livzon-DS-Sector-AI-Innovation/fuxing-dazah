@@ -162,7 +162,7 @@ export default function OhFollowupsPanel() {
       title: '来源', dataIndex: 'source', key: 'source', width: 100,
       render: (v: string) => <StatusTag tone={v === 'ai' ? 'info' : 'default'} label={v === 'ai' ? 'AI 自动' : '人工补录'} />,
     },
-  ], []) // eslint-disable-line react-hooks/exhaustive-deps
+  ], [])
 
   return (
     <div className="flex flex-col gap-4 pb-8">

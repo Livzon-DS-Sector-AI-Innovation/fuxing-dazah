@@ -17,8 +17,7 @@ import type {
   CentralAlarmStats,
 } from '@/types/safety'
 
-import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
-import type { Tone } from '@/components/ui-kit'
+import { EmptyGuide, SectionCard, StatCard } from '@/components/ui-kit'
 import { T } from './shared-styles'
 import { AI_DIMENSION_CONFIG, AI_PATTERN_CONFIG, dynamicTagStyle } from './centralAlarmConstants'
 
@@ -51,8 +50,6 @@ function DimensionTag({ dimension }: { dimension?: string | null }) {
 }
 
 export default function CentralAlarmManagement({ initialStats }: { initialStats: CentralAlarmStats | null }) {
-  const { message } = App.useApp()
-
   // 筛选（输入态）
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null]>([null, null])
   const [workshop, setWorkshop] = useState<string | undefined>()

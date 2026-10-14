@@ -46,8 +46,6 @@ import type {
   KeyRiskOperationQueryParams,
   KeyRiskOperationLedgerStats,
   DailyReportRecord,
-  DailyReportGenerateRequest,
-  DailyReportResponse,
   DailyReportStats,
   TrainingRecord,
   ApiResponse,
@@ -57,22 +55,14 @@ import type {
   ContractorAdmissionQueryParams,
   ContractorAdmissionStats,
   // fire alarm（消防报警分析）
-  FireAlarmDailyReportRequest,
-  FireAlarmMonthlyReportRequest,
   FireAlarmQueryParams,
   FireAlarmRecord,
-  FireAlarmReportResponse,
   FireAlarmStats,
-  FireAlarmSyncResult,
   // central alarm（中控报警分析）
-  CentralAlarmDailyReportRequest,
   CentralAlarmQueryParams,
   CentralAlarmRecord,
-  CentralAlarmReportResponse,
   CentralAlarmStats,
-  CentralAlarmSyncResult,
   // occupational health（design §八：新 OH 函数统一 code===200，写操作后 revalidatePath）
-  OhAiConclusion,
   OhPerson,
   OhPersonQueryParams,
   OhPersonStats,
@@ -89,8 +79,6 @@ import type {
   OhApplicationStats,
   OhFollowup,
   OhFollowupQueryParams,
-  OhFollowupFormData,
-  OhOverrideConclusionRequest,
   // knowledge
   GenerateCardResponse,
   AgentUsageStats,
@@ -99,7 +87,6 @@ import type {
   GeneratePptResponse,
   GenerateSummaryResponse,
   PptHistoryResponse,
-  SyncKnowledgeResponse,
   // emergency drill
   DrillRecord,
   DrillRecordQueryParams,
@@ -1031,7 +1018,6 @@ export async function getContractorAdmissionDetail(id: string) {
   return fetchApi<ContractorAdmission>(`/safety/contractor-admissions/${id}`)
 }
 
-/** 手动触发单条相关方准入 AI 审核（三维度报告 + 回填 Bitable） */
 // ============ 持证到期预警 Actions（cert-warning） ============
 
 /** 获取持证到期预警明细（列表 + 筛选 status_level/department/cert_category/days_within + 分页） */

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from httpx import AsyncClient
@@ -48,8 +48,12 @@ class TestRecordAndQuery:
         assert bad.status == "failed"
         assert bad.error == "ValueError: 演示失败"
 
+        # 本地 dev 库共享给真实调度器（可能并发写入其他任务行），
+        # 断言只圈定本测试种的行
         rows = (
-            await db_session.execute(select(SchedulerTaskRunLog))
+            await db_session.execute(
+                select(SchedulerTaskRunLog).where(SchedulerTaskRunLog.job_name == "测试任务")
+            )
         ).scalars().all()
         assert len(rows) == 2
 
@@ -67,32 +71,33 @@ class TestRecordAndQuery:
     ) -> None:
         base = datetime.now(UTC) - timedelta(hours=2)
         await record_task_run(
-            db_session, job_name="持证到期预警", started_at=base, status="success"
+            db_session, job_name="测试任务A", started_at=base, status="success"
         )
         await record_task_run(  # 更晚的一次（failed）
             db_session,
-            job_name="持证到期预警",
+            job_name="测试任务A",
             started_at=base + timedelta(minutes=30),
             status="failed",
             error="RuntimeError: boom",
         )
         await record_task_run(
             db_session,
-            job_name="消防报警日报",
+            job_name="测试任务B",
             started_at=base + timedelta(minutes=50),
             status="success",
         )
 
-        overview = await load_run_overview(db_session, recent_limit=2)
+        overview = await load_run_overview(db_session, recent_limit=100)
         latest = overview["latest_by_job"]
-        assert set(latest) == {"持证到期预警", "消防报警日报"}
-        # 每任务取最近一次：持证到期预警取 30 分钟后那次（failed）
-        assert latest["持证到期预警"]["status"] == "failed"
-        assert latest["持证到期预警"]["error"] == "RuntimeError: boom"
-        assert latest["消防报警日报"]["status"] == "success"
-        # 全局最近历史：时间倒序 + limit 生效
-        assert len(overview["recent"]) == 2
-        assert overview["recent"][0]["job_name"] == "消防报警日报"
+        # 每任务取最近一次（断言只圈定本测试种的任务，库中可能有真实调度器行）
+        assert latest["测试任务A"]["status"] == "failed"
+        assert latest["测试任务A"]["error"] == "RuntimeError: boom"
+        assert latest["测试任务B"]["status"] == "success"
+        # 全局最近历史：时间倒序 + limit 截断
+        started_list = [r["started_at"] for r in overview["recent"]]
+        assert started_list == sorted(started_list, reverse=True)
+        limited = await load_run_overview(db_session, recent_limit=2)
+        assert len(limited["recent"]) == 2
 
 
 class TestJobRunsEndpoint:
@@ -155,3 +160,31 @@ class TestFailOpen:
             started_at=datetime.now(UTC),
             status="success",
         )
+
+
+class TestGuardedHookSkipsIdleTicks:
+    """空跑（非匹配日/未到触发条件）不计入运行日志（回归：月报假成功行）。"""
+
+    async def test_day_mismatch_records_nothing(self, monkeypatch: Any) -> None:
+        from app.modules.safety import scheduler as sched
+        from app.modules.safety.service import task_run_log
+
+        calls: list[dict[str, Any]] = []
+
+        async def _spy(**kwargs: Any) -> None:
+            calls.append(kwargs)
+
+        monkeypatch.setattr(task_run_log, "record_task_run_fail_open", _spy)
+        # 月报任务 dom 动态取「非今天」的日期，保证 _matches_day 空跑
+        dom = 2 if date.today().day == 1 else 1
+        job = {"name": "测试月报", "hour": 0, "minute": 0, "dom": dom}
+        assert await sched._run_scheduled_job(job) is False
+        await sched._run_scheduled_job_guarded(job)
+        assert calls == []
+
+    async def test_should_run_gate_returns_false(self) -> None:
+        """未到计划时间的空跑同样返回 False（不执行、不落状态）。"""
+        from app.modules.safety import scheduler as sched
+
+        job = {"name": "测试夜任务", "hour": 25, "minute": 59}  # 恒未到点
+        assert await sched._run_scheduled_job(job) is False

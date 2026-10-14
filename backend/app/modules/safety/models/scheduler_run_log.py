@@ -36,7 +36,7 @@ class SchedulerTaskRunLog(BaseModel):
         DateTime(timezone=True), nullable=False, comment="本次尝试开始时间（UTC）"
     )
     finished_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="本次尝试结束时间（UTC；超时取消时为空）"
+        DateTime(timezone=True), nullable=True, comment="本次尝试结束时间（UTC）"
     )
     status: Mapped[str] = mapped_column(
         String(16),

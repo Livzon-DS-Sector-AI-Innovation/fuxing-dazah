@@ -492,21 +492,24 @@ def _matches_day(job: dict[str, Any], today: date) -> bool:
     return True
 
 
-async def _run_scheduled_job(job: dict[str, Any]) -> None:
-    """执行一个定时任务，按任务名分发。
+async def _run_scheduled_job(job: dict[str, Any]) -> bool:
+    """执行一个定时任务，按任务名分发。返回是否真正执行（留痕依据）。
 
     时序：先记录 failed 状态（防 30s tick 内重复启动）→ 执行 → 成功改 success；
     失败保留 failed，由后续 tick 在补发窗口内自动重试，达阈值发告警给管理员。
+
+    非匹配日（dow/dom 不符）或未到触发条件的调用是**空跑**（不执行、不落
+    状态，主循环每 tick 仍会派发）——返回 False，调用方不得计入运行日志。
     """
     job_name = job["name"]
     today = date.today()
     now = datetime.now(UTC)
 
     if not _matches_day(job, today):
-        return
+        return False
 
     if not await _should_run(job, today):
-        return
+        return False
 
     # 先标记 failed，防止 30s tick 内重复启动；成功后再改 success
     state = await _load_state(job_name)
@@ -566,10 +569,12 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
             "alerted": False,
         })
         logger.info("定时任务完成: %s", job_name)
+        return True
     except Exception:
         logger.exception("定时任务执行失败: %s", job_name)
         if attempt_count >= ALERT_AFTER_FAILURES:
             await _maybe_send_failure_alert(job_name, attempt_count)
+        raise
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:
@@ -1125,7 +1130,7 @@ async def _run_scheduled_job_guarded(job: dict[str, Any]) -> None:
     async with lock:
         started_at = datetime.now(UTC)
         try:
-            await asyncio.wait_for(_run_scheduled_job(job), timeout=TASK_TIMEOUT)
+            executed = await asyncio.wait_for(_run_scheduled_job(job), timeout=TASK_TIMEOUT)
         except TimeoutError:
             logger.error(
                 "定时任务超时(%d秒)，已取消并标记失败待重试: %s", TASK_TIMEOUT, job_name
@@ -1145,9 +1150,11 @@ async def _run_scheduled_job_guarded(job: dict[str, Any]) -> None:
                 error=error_summary(exc=exc),
             )
         else:
-            await record_task_run_fail_open(
-                job_name=job_name, started_at=started_at, status="success"
-            )
+            # 空跑（非匹配日/未到触发条件）不计入运行日志
+            if executed:
+                await record_task_run_fail_open(
+                    job_name=job_name, started_at=started_at, status="success"
+                )
 
 
 async def _warm_direct_query_caches() -> None:
