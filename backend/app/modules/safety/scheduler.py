@@ -1109,21 +1109,45 @@ async def _run_scheduled_job_guarded(job: dict[str, Any]) -> None:
     - 锁：任务执行中再次到点 → 跳过本次触发（防重复推送）
     - 超时：任务超过 TASK_TIMEOUT 强制取消，状态保持执行前标记的 failed，
       由失败重试机制在补发窗口内自动接管
+    - 留痕：每次尝试（成功/失败/超时）写一行 scheduler_task_run_log
+      （监督页任务运行中心数据源，fail-open 不影响任务本体）
     """
     job_name = job["name"]
     lock = _get_task_lock(job_name)
     if lock.locked():
         logger.warning("定时任务仍在执行中，跳过本次触发: %s", job_name)
         return
+    from app.modules.safety.service.task_run_log import (
+        error_summary,
+        record_task_run_fail_open,
+    )
+
     async with lock:
+        started_at = datetime.now(UTC)
         try:
             await asyncio.wait_for(_run_scheduled_job(job), timeout=TASK_TIMEOUT)
         except TimeoutError:
             logger.error(
                 "定时任务超时(%d秒)，已取消并标记失败待重试: %s", TASK_TIMEOUT, job_name
             )
-        except Exception:
+            await record_task_run_fail_open(
+                job_name=job_name,
+                started_at=started_at,
+                status="failed",
+                error=error_summary(text=f"任务超时({TASK_TIMEOUT}秒)被取消"),
+            )
+        except Exception as exc:
             logger.exception("定时任务执行异常: %s", job_name)
+            await record_task_run_fail_open(
+                job_name=job_name,
+                started_at=started_at,
+                status="failed",
+                error=error_summary(exc=exc),
+            )
+        else:
+            await record_task_run_fail_open(
+                job_name=job_name, started_at=started_at, status="success"
+            )
 
 
 async def _warm_direct_query_caches() -> None:

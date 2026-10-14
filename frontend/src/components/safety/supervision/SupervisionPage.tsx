@@ -1,18 +1,24 @@
 'use client'
 
-// 全流程监督页 v1（三期起步）：作业票审核记录查询
-// 按日期查当日 8 类特殊作业票审核摘要（StatCard 5 指标）+ 违规明细表 + 审核速递原文。
-// 只读口径：无手动触发按钮（触发走每日 17:00 定时任务与 bot）；无记录日期 → EmptyGuide。
+// 全流程监督页（三期起步 + 四期 1-D 扩展）：
+// ① 作业票审核记录查询——按日期查当日 8 类特殊作业票审核摘要（StatCard 5 指标）
+//   + 违规明细表 + 审核速递原文；只读口径：无手动触发按钮（触发走定时任务与 bot）。
+// ② Agent 定时任务运行中心——15 个定时任务的最近运行时间/成败/耗时/错误摘要
+//   （scheduler_task_run_log append-only 留痕），零按钮只读。
 // 布局为后续核验清单引擎留位（本期不做）。
 
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Button, DatePicker, Skeleton, Table, Tag, Tooltip } from 'antd'
-import { RefreshCw, TicketCheck, TriangleAlert } from 'lucide-react'
+import { CalendarClock, RefreshCw, TicketCheck, TriangleAlert } from 'lucide-react'
 import dayjs, { type Dayjs } from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 
 import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import { MarkdownView } from '@/components/toolbox/MarkdownView'
+import {
+  fetchSchedulerJobRuns,
+  type JobRunItem,
+} from '@/lib/api/safety/job-runs'
 import {
   fetchWorkTicketReview,
   type WorkTicketReviewData,
@@ -55,6 +61,25 @@ export default function SupervisionPage() {
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // ── Agent 任务运行中心（与日期查询解耦，常驻展示）──
+  const [jobRuns, setJobRuns] = useState<JobRunItem[] | null>(null)
+  const [jobRunsLoading, setJobRunsLoading] = useState(true)
+  const [jobRunsError, setJobRunsError] = useState<string | null>(null)
+
+  const loadJobRuns = useCallback(async () => {
+    setJobRunsLoading(true)
+    setJobRunsError(null)
+    try {
+      const res = await fetchSchedulerJobRuns()
+      setJobRuns(res.jobs)
+    } catch (e) {
+      setJobRunsError(e instanceof Error ? e.message : '查询任务运行状态失败')
+      setJobRuns(null)
+    } finally {
+      setJobRunsLoading(false)
+    }
+  }, [])
+
   const load = useCallback(async (d: Dayjs) => {
     setLoading(true)
     setNotFound(false)
@@ -79,6 +104,10 @@ export default function SupervisionPage() {
   useEffect(() => {
     void load(dayjs())
   }, [load])
+
+  useEffect(() => {
+    void loadJobRuns()
+  }, [loadJobRuns])
 
   const violationColumns: ColumnsType<WorkTicketViolation> = [
     {
@@ -135,6 +164,86 @@ export default function SupervisionPage() {
         ) : (
           <Tooltip title={text}>
             <span className="block truncate text-[12px] text-[var(--color-steel)]">{text}</span>
+          </Tooltip>
+        )
+      },
+    },
+  ]
+
+  /** 任务耗时毫秒 → 可读文本 */
+  function fmtDuration(ms: number | null): string {
+    if (ms === null || ms === undefined) return '—'
+    const seconds = ms / 1000
+    if (seconds < 60) return `${seconds.toFixed(1)}s`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}分${String(Math.round(seconds % 60)).padStart(2, '0')}秒`
+    return `${Math.floor(minutes / 60)}时${minutes % 60}分`
+  }
+
+  const jobRunColumns: ColumnsType<JobRunItem> = [
+    {
+      title: '任务',
+      dataIndex: 'job_name',
+      width: 170,
+      render: (v: string, r) => (
+        <Tooltip title={r.description || undefined} placement="topLeft">
+          <span className="text-[13px]">{v}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: '计划时间',
+      dataIndex: 'schedule_text',
+      width: 110,
+      render: (v: string) => (
+        <span className="whitespace-nowrap text-[12px] text-[var(--color-steel)]">{v}</span>
+      ),
+    },
+    {
+      title: '最近运行',
+      key: 'last_run_at',
+      width: 140,
+      render: (_, r) => (
+        <span className="whitespace-nowrap text-[12px]">
+          {r.last_run ? fmtDateTime(r.last_run.started_at) : '—'}
+        </span>
+      ),
+    },
+    {
+      title: '结果',
+      key: 'last_run_status',
+      width: 84,
+      render: (_, r) => {
+        if (!r.last_run) return <StatusTag tone="default" label="未运行" />
+        return r.last_run.status === 'success' ? (
+          <StatusTag tone="ok" label="成功" />
+        ) : (
+          <StatusTag tone="danger" label="失败" />
+        )
+      },
+    },
+    {
+      title: '耗时',
+      key: 'duration',
+      width: 90,
+      render: (_, r) => (
+        <span className="text-[12px] text-[var(--color-steel)]">
+          {fmtDuration(r.last_run?.duration_ms ?? null)}
+        </span>
+      ),
+    },
+    {
+      title: '错误摘要',
+      key: 'error',
+      ellipsis: true,
+      render: (_, r) => {
+        const err = r.last_run?.error
+        if (!err) return <span className="text-[var(--color-stone)]">—</span>
+        return (
+          <Tooltip title={err}>
+            <span className="block truncate text-[12px] text-[var(--color-danger, #c2410c)]">
+              {err}
+            </span>
           </Tooltip>
         )
       },
@@ -262,6 +371,50 @@ export default function SupervisionPage() {
           </SectionCard>
         </div>
       ) : null}
+
+      {/* ── Agent 定时任务运行中心（常驻，与上方日期查询解耦；零按钮只读） ── */}
+      <div className="mt-4">
+        <SectionCard
+          title="Agent 定时任务运行中心"
+          description="安全模块全部定时任务的运行留痕（每次尝试一行：成功/失败/超时 · 耗时 · 错误摘要）"
+          action={
+            jobRunsError ? (
+              <StatusTag tone="warn" label="加载失败" />
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[12px] text-[var(--color-stone)]">
+                <CalendarClock size={13} />
+                {jobRunsLoading ? '加载中…' : `${jobRuns?.length ?? 0} 个任务`}
+              </span>
+            )
+          }
+        >
+          {jobRunsError ? (
+            <EmptyGuide
+              compact
+              icon={<TriangleAlert size={24} />}
+              title="任务运行状态加载失败"
+              description={jobRunsError}
+            />
+          ) : (
+            <Table<JobRunItem>
+              rowKey="job_name"
+              size="small"
+              columns={jobRunColumns}
+              dataSource={jobRuns ?? []}
+              loading={jobRunsLoading}
+              scroll={{ x: 800 }}
+              locale={{
+                emptyText: <EmptyGuide compact title="暂无任务运行数据" description="调度器运行后将自动留痕" />,
+              }}
+              pagination={
+                (jobRuns?.length ?? 0) > 10
+                  ? { pageSize: 10, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }
+                  : false
+              }
+            />
+          )}
+        </SectionCard>
+      </div>
     </div>
   )
 }

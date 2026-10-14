@@ -10,6 +10,52 @@ vi.mock('@/lib/api/safety/workticket-review', () => ({
   fetchWorkTicketReview: fetchMock,
 }))
 
+const jobRunsMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/api/safety/job-runs', () => ({
+  fetchSchedulerJobRuns: jobRunsMock,
+}))
+
+const JOB_RUNS_DATA = {
+  jobs: [
+    {
+      job_name: '持证到期预警',
+      description: '扫描证件到期并推送',
+      schedule_text: '每日 08:00',
+      enabled: true,
+      last_run: {
+        job_name: '持证到期预警',
+        started_at: '2026-10-14T00:00:30+00:00',
+        finished_at: '2026-10-14T00:00:41+00:00',
+        status: 'success',
+        duration_ms: 11000,
+        error: null,
+      },
+    },
+    {
+      job_name: '外来人员保险预警',
+      description: '周三保险到期预警',
+      schedule_text: '每周三 08:30',
+      enabled: true,
+      last_run: {
+        job_name: '外来人员保险预警',
+        started_at: '2026-10-14T00:30:00+00:00',
+        finished_at: '2026-10-14T00:30:20+00:00',
+        status: 'failed',
+        duration_ms: 20000,
+        error: 'RuntimeError: 令牌过期',
+      },
+    },
+    {
+      job_name: '消防报警月报',
+      description: '月报',
+      schedule_text: '每月1日 08:30',
+      enabled: true,
+      last_run: null,
+    },
+  ],
+  recent: [],
+}
+
 const REVIEW_DATA = {
   date: '2026-10-12',
   total: 14,
@@ -51,6 +97,8 @@ const REVIEW_DATA = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // 默认空运行数据（个别用例自行覆写）
+  jobRunsMock.mockResolvedValue({ jobs: [], recent: [] })
 })
 
 describe('SupervisionPage（全流程监督 v1）', () => {
@@ -123,5 +171,37 @@ describe('SupervisionPage（全流程监督 v1）', () => {
         /登记|整改|复核|同步|生成|提交|新增|删除|审核通过|触发/.test(btn.textContent ?? ''),
       )
     expect(businessButtons).toHaveLength(0)
+  })
+
+  it('Agent 任务运行中心：任务全集、最近运行成败与错误摘要，零按钮', async () => {
+    fetchMock.mockResolvedValue(REVIEW_DATA)
+    jobRunsMock.mockResolvedValue(JOB_RUNS_DATA)
+    renderWithQuery(<SupervisionPage />)
+
+    expect(await screen.findByText('Agent 定时任务运行中心')).toBeInTheDocument()
+    // 任务行：计划时间 + 成败标签 + 从未运行
+    expect(screen.getByText('每日 08:00')).toBeInTheDocument()
+    expect(screen.getByText('每周三 08:30')).toBeInTheDocument()
+    expect(screen.getAllByText('成功').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('失败').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('未运行')).toBeInTheDocument()
+    // 错误摘要可见
+    expect(screen.getByText('RuntimeError: 令牌过期')).toBeInTheDocument()
+    // 运行中心区块零按钮（只读）
+    const businessButtons = screen
+      .queryAllByRole('button')
+      .filter((btn) =>
+        /登记|整改|复核|同步|生成|提交|新增|删除|审核通过|触发/.test(btn.textContent ?? ''),
+      )
+    expect(businessButtons).toHaveLength(0)
+  })
+
+  it('任务运行状态加载失败：降级提示而非崩溃', async () => {
+    fetchMock.mockResolvedValue(null)
+    jobRunsMock.mockRejectedValue(new Error('网络异常'))
+    renderWithQuery(<SupervisionPage />)
+
+    expect(await screen.findByText('任务运行状态加载失败')).toBeInTheDocument()
+    expect(screen.getByText('网络异常')).toBeInTheDocument()
   })
 })

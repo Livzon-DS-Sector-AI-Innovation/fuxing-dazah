@@ -122,6 +122,9 @@ from app.modules.safety.models.scheduler import (  # noqa: F401
     SchedulerConfigAudit,
     SchedulerTaskConfig,
 )
+from app.modules.safety.models.scheduler_run_log import (  # noqa: F401
+    SchedulerTaskRunLog,
+)
 from app.modules.safety.models.special_operations import (  # noqa: F401
     KeyRiskOperationReport,
     SpecialOperationPermit,
@@ -227,6 +230,7 @@ __all__ = [
     'SchedulerConfigAudit',
     'SchedulerJobRun',
     'SchedulerTaskConfig',
+    'SchedulerTaskRunLog',
     'SpecialOperationPermit',
     'SpecialOperationPersonnel',
     'SpecialOperationReport',

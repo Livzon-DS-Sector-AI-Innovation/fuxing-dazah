@@ -9,6 +9,7 @@ PUT /scheduler-config/ai-scenarios/{scenario}  → 单场景更新（未知 404�
 GET /scheduler-config/ai-scenarios/audits      → 场景配置审计列表（scenario 可选过滤）
 GET /scheduler-config/tasks                    → 代码默认 + DB 覆写 + 今日运行状态
 PUT /scheduler-config/tasks/{job_name}         → 覆写配置（写安全模块审计表）
+GET /scheduler-config/job-runs                 → 任务运行历史（Agent 任务运行中心，只读）
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ from app.modules.safety.service.scheduler_config import (
     upsert_task_config,
 )
 from app.modules.safety.service.scheduler_preview import preview_task_report
+from app.modules.safety.service.task_run_log import load_run_overview
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +370,52 @@ async def list_scheduler_tasks(
     to_return = list(tasks)
     await _attach_target_names(to_return, db)
     return success_response(data=to_return)
+
+
+_WEEKDAY_NAMES = "一二三四五六日"
+
+
+def _schedule_text(task: dict[str, Any]) -> str:
+    """任务计划时间的人类可读文案（dom=每月几号 / dow=周几 / 缺省=每日）。"""
+    hour, minute = task.get("hour"), task.get("minute")
+    if hour is None or minute is None:
+        return "—"
+    hm = f"{hour:02d}:{minute:02d}"
+    if task.get("dom") is not None:
+        return f"每月{task['dom']}日 {hm}"
+    if task.get("dow") is not None:
+        return f"每周{_WEEKDAY_NAMES[task['dow']]} {hm}"
+    return f"每日 {hm}"
+
+
+@scheduler_config_router.get(
+    "/scheduler-config/job-runs",
+    summary="定时任务运行历史（Agent 任务运行中心，只读）",
+)
+async def list_scheduler_job_runs(
+    recent_limit: int = Query(100, ge=1, le=500, description="全局最近历史条数上限"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> Any:
+    """每任务最近一次运行（任务全集，含从未运行）+ 全局最近 N 条运行历史。
+
+    运行记录来自 safety.scheduler_task_run_log（append-only，调度器每次
+    尝试落一行：成功/失败/超时 + 耗时 + 错误摘要）。
+    """
+    tasks = await load_scheduled_jobs_with_overrides(db)
+    overview = await load_run_overview(db, recent_limit=recent_limit)
+    latest = overview["latest_by_job"]
+    jobs = [
+        {
+            "job_name": t["job_name"],
+            "description": t.get("description"),
+            "schedule_text": _schedule_text(t),
+            "enabled": t.get("enabled", True),
+            "last_run": latest.get(t["job_name"]),
+        }
+        for t in tasks
+    ]
+    return success_response(data={"jobs": jobs, "recent": overview["recent"]})
 
 
 @scheduler_config_router.put("/scheduler-config/tasks/{job_name}", summary="更新定时任务配置")
