@@ -41,3 +41,15 @@ def legacy_event_sync_active() -> bool:
 def legacy_sync_job_active() -> bool:
     """全量同步实际生效状态：总开关关闭时旧链路照常。"""
     return gates.legacy_sync_job_active(_DOMAIN)
+
+
+def cache_ttl_seconds() -> int:
+    """窗口拉取进程内 TTL 缓存秒数（默认 300；0=关）。
+
+    中控是 14 张同构表逐表窗口取数，总览驾驶舱每次刷新都实打 Bitable
+    实测 ~4.7s——看板口径 5 分钟内复用同一窗口结果；日报编排 strict=True
+    路径绕过缓存现拉。仅 open_reader() 单例创建时读取一次。
+    """
+    return gates.int_env(
+        gates.domain_env(_DOMAIN, "DIRECT_CACHE_TTL_SECONDS"), 300, minimum=0,
+    )

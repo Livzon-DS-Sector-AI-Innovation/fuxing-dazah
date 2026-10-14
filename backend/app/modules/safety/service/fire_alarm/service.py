@@ -333,10 +333,17 @@ class FireAlarmService:
             "department_distribution": _count_by(week_records, "department"),
         }
 
-    async def _get_records_by_date(self, target_date: date) -> list[Any]:
-        """按北京时间自然日窗口查询当日报警记录（非软删）。"""
+    async def _get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[Any]:
+        """按北京时间自然日窗口查询当日报警记录（非软删）。
+
+        strict=True：生成路径现拉直读、绕过查询面缓存（镜像分支本就现查）。
+        """
         if fire_config.direct_enabled():
-            return await self._direct_reader().get_records_by_date(target_date)
+            return await self._direct_reader().get_records_by_date(
+                target_date, strict=strict,
+            )
         utc_start = (
             datetime.combine(target_date, time.min, tzinfo=UTC)
             - timedelta(hours=8)  # 北京时间 00:00 = UTC 前一日 16:00
@@ -354,20 +361,21 @@ class FireAlarmService:
         )
 
     async def _get_records_by_rolling_window(
-        self, target_date: date,
+        self, target_date: date, *, strict: bool = False,
     ) -> tuple[list[Any], datetime, datetime]:
         """按滚动 24h 窗口查询报警记录：前日 17:00 ~ 当日 17:00（北京时间）。
 
         17:00 日报反映的是「上个日报周期（昨日17点至今日17点）」内发生的报警，
         与自然日窗口（00:00~24:00）不同。API 手动触发的日报（无 rolling 标志）
         仍用自然日窗口，调度入口（17:00 触发）用滚动窗口。
+        strict=True：生成路径现拉直读、绕过查询面缓存（镜像分支本就现查）。
 
         Returns:
             (records, utc_start, utc_end)：utc_start/end 供 renderer 显示区间。
         """
         if fire_config.direct_enabled():
             return await self._direct_reader().get_records_by_rolling_window(
-                target_date
+                target_date, strict=strict,
             )
         # 北京时间 target_date 17:00 = UTC target_date 09:00
         utc_end = datetime.combine(target_date, time(9, 0), tzinfo=UTC)
@@ -385,12 +393,12 @@ class FireAlarmService:
         ), utc_start, utc_end
 
     async def _get_records_by_week(
-        self, week_start: date, week_end: date,
+        self, week_start: date, week_end: date, *, strict: bool = False,
     ) -> list[Any]:
         """按北京时间自然周窗口查询周报警记录（周一 00:00 ~ 周日 24:00 北京时间）。"""
         if fire_config.direct_enabled():
             return await self._direct_reader().get_records_by_week(
-                week_start, week_end
+                week_start, week_end, strict=strict,
             )
         utc_start = (
             datetime.combine(week_start, time.min, tzinfo=UTC)
@@ -420,12 +428,12 @@ class FireAlarmService:
         return await self._get_records_by_week(week_start, week_end)
 
     async def _get_records_by_month(
-        self, month_start: date, month_end: date,
+        self, month_start: date, month_end: date, *, strict: bool = False,
     ) -> list[Any]:
         """按北京时间自然月窗口查询月报警记录（1 日 00:00 ~ 月末 24:00 北京时间）。"""
         if fire_config.direct_enabled():
             return await self._direct_reader().get_records_by_month(
-                month_start, month_end
+                month_start, month_end, strict=strict,
             )
         utc_start = (
             datetime.combine(month_start, time.min, tzinfo=UTC)
@@ -473,10 +481,10 @@ class FireAlarmService:
         window_end_utc: datetime | None = None
         if rolling:
             records, window_start_utc, window_end_utc = (
-                await self._get_records_by_rolling_window(target_date)
+                await self._get_records_by_rolling_window(target_date, strict=True)
             )
         else:
-            records = await self._get_records_by_date(target_date)
+            records = await self._get_records_by_date(target_date, strict=True)
         agg = aggregate_daily(records, target_date)
         direct_mode = fire_config.direct_enabled()
 
@@ -638,7 +646,9 @@ class FireAlarmService:
         """
         ref = month_end or _prev_month_last_day()
         month_start, month_end_resolved = get_natural_month_range(ref)
-        records = await self._get_records_by_month(month_start, month_end_resolved)
+        records = await self._get_records_by_month(
+            month_start, month_end_resolved, strict=True,
+        )
         agg = aggregate_monthly(records, month_start, month_end_resolved)
 
         # 月级汇总 AI（失败返回 None，renderer 省略 AI 块；不逐条调用）
@@ -945,7 +955,7 @@ async def run_daily_fire_alarm_dm(
         await session.commit()
 
         dm_records, _ws, _we = await service._get_records_by_rolling_window(
-            target_date or _bj_today()
+            target_date or _bj_today(), strict=True,
         )
         return await send_daily_alarm_dms(service.session, records=dm_records)
 

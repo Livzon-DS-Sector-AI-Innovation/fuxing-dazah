@@ -47,11 +47,12 @@ RECEIPT_DIRECT_DISABLED_MESSAGE = (
 
 
 def cache_ttl_seconds() -> int:
-    """直读视图进程内 TTL 缓存秒数（默认 60；0=关）。
+    """直读视图进程内 TTL 缓存秒数（默认 300；0=关）。
 
     库存快照表全量拉取无时间窗口概念，overview 驾驶舱聚合 stats+超储明细
     两路都走 fetch_all——仿 key_risk_op 范式兜住窗口内重复请求。
+    2026-10-14 由 60 上调：看板口径 5 分钟内新鲜度足够。
     """
     return gates.int_env(
-        "SAFETY_CHEMICAL_INVENTORY_DIRECT_CACHE_TTL_SECONDS", 60, minimum=0,
+        "SAFETY_CHEMICAL_INVENTORY_DIRECT_CACHE_TTL_SECONDS", 300, minimum=0,
     )

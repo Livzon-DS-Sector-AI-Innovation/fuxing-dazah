@@ -39,27 +39,38 @@ class FakeReader:
         self.calls: list[str] = []
         self.records = [_view("rec001"), _view("rec002")]
 
-    async def get_records_by_date(self, target_date: date) -> list[FireAlarmView]:
+    async def get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
         self.calls.append("date")
         return list(self.records)
 
     async def get_records_by_rolling_window(
-        self, target_date: date
+        self, target_date: date, *, strict: bool = False,
     ) -> tuple[list[FireAlarmView], datetime, datetime]:
         self.calls.append("rolling")
         return list(self.records), START, START.replace(hour=9)
 
     async def get_records_by_week(
-        self, week_start: date, week_end: date
+        self, week_start: date, week_end: date, *, strict: bool = False,
     ) -> list[FireAlarmView]:
         self.calls.append("week")
         return list(self.records)
 
     async def get_records_by_month(
-        self, month_start: date, month_end: date
+        self, month_start: date, month_end: date, *, strict: bool = False,
     ) -> list[FireAlarmView]:
         self.calls.append("month")
         return list(self.records)
+
+    async def get_records_by_range(
+        self, start: datetime, end: datetime, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
+        self.calls.append("range")
+        return list(self.records)
+
+    async def count_all(self) -> int:
+        return len(self.records)
 
 
 class FakeAnalyst:

@@ -18,7 +18,8 @@ from app.modules.safety.service.bitable_direct import gates
 
 _DOMAIN = gates.DOMAIN_EHS_CHANGE
 
-DEFAULT_CACHE_TTL_SECONDS = 60
+# 2026-10-14 由 60 上调：看板口径 5 分钟内新鲜度足够（驾驶舱刷新慢修复）
+DEFAULT_CACHE_TTL_SECONDS = 300
 
 
 def direct_enabled() -> bool:
@@ -28,7 +29,7 @@ def direct_enabled() -> bool:
 
 
 def cache_ttl_seconds() -> int:
-    """直读视图进程内 TTL 缓存窗口（秒，默认 60；最小 1）。"""
+    """直读视图进程内 TTL 缓存窗口（秒，默认 300；最小 1）。"""
     return gates.int_env(
         "SAFETY_EHS_CHANGE_DIRECT_CACHE_TTL_SECONDS",
         DEFAULT_CACHE_TTL_SECONDS,

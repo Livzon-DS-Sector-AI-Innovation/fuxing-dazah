@@ -22,7 +22,7 @@ class TestDefaults:
         assert config.direct_enabled() is False
         assert config.event_sync_enabled() is False
         assert config.legacy_event_sync_active() is True  # 全关 = 改造前行为
-        assert config.cache_ttl_seconds() == 60
+        assert config.cache_ttl_seconds() == 300  # 2026-10-14 看板 TTL 60→300
 
     def test_direct_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SAFETY_KEY_RISK_OP_DIRECT_ENABLED", "true")

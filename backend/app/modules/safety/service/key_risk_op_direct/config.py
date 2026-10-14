@@ -34,9 +34,10 @@ def legacy_event_sync_active() -> bool:
 
 
 def cache_ttl_seconds() -> int:
-    """直读视图进程内 TTL 缓存秒数（默认 60；0=关）。
+    """直读视图进程内 TTL 缓存秒数（默认 300；0=关）。
 
     性能例外落档（spec §4.2）：全量拉取 1585 行 4 页串行 ~4.9s 超 <2s 验收线，
     page_token 链式无法并行——按总计划风险表预案以短 TTL 缓存兜住窗口内重复请求。
+    2026-10-14 由 60 上调：看板口径 5 分钟内新鲜度足够。
     """
-    return gates.int_env("SAFETY_KEY_RISK_OP_DIRECT_CACHE_TTL_SECONDS", 60, minimum=0)
+    return gates.int_env("SAFETY_KEY_RISK_OP_DIRECT_CACHE_TTL_SECONDS", 300, minimum=0)

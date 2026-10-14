@@ -32,8 +32,8 @@ class TestDirectEnabled:
 
 
 class TestCacheTtl:
-    def test_default_60(self) -> None:
-        assert config.cache_ttl_seconds() == 60
+    def test_default_300(self) -> None:
+        assert config.cache_ttl_seconds() == 300  # 2026-10-14 看板 TTL 60→300
 
     def test_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TTL, "30")
@@ -41,7 +41,7 @@ class TestCacheTtl:
 
     def test_invalid_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TTL, "abc")
-        assert config.cache_ttl_seconds() == 60
+        assert config.cache_ttl_seconds() == 300
 
     def test_minimum_floor(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TTL, "0")

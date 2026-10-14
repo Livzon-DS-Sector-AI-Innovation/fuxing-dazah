@@ -71,25 +71,35 @@ class _FixedDatetime:
 class FakeReader:
     """读取器替身：证明协议可注入。"""
 
-    async def get_records_by_date(self, target_date: date) -> list[reader.FireAlarmView]:
+    async def get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[reader.FireAlarmView]:
         return [_make_view("rec-day")]
 
     async def get_records_by_rolling_window(
-        self, target_date: date
+        self, target_date: date, *, strict: bool = False,
     ) -> tuple[list[reader.FireAlarmView], datetime, datetime]:
         start = datetime(2026, 3, 11, 9, 0, tzinfo=UTC)
         end = datetime(2026, 3, 12, 9, 0, tzinfo=UTC)
         return [_make_view("rec-rolling")], start, end
 
     async def get_records_by_week(
-        self, week_start: date, week_end: date
+        self, week_start: date, week_end: date, *, strict: bool = False,
     ) -> list[reader.FireAlarmView]:
         return [_make_view("rec-week")]
 
     async def get_records_by_month(
-        self, month_start: date, month_end: date
+        self, month_start: date, month_end: date, *, strict: bool = False,
     ) -> list[reader.FireAlarmView]:
         return [_make_view("rec-month")]
+
+    async def get_records_by_range(
+        self, start: datetime, end: datetime, *, strict: bool = False,
+    ) -> list[reader.FireAlarmView]:
+        return [_make_view("rec-range")]
+
+    async def count_all(self) -> int:
+        return 1
 
 
 def test_to_view_maps_fields_metadata_and_ai_columns() -> None:

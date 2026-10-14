@@ -63,8 +63,8 @@ def _gate(key: str, default: bool, desc: str, **kw: object) -> ConfigItem:
     return ConfigItem(key, "direct_gate", "bool", default, desc, **kw)  # type: ignore[arg-type]
 
 
-def _ttl(key: str, desc: str) -> ConfigItem:
-    return ConfigItem(key, "direct_gate", "int", 60, desc, minimum=0)
+def _ttl(key: str, desc: str, default: int = 60) -> ConfigItem:
+    return ConfigItem(key, "direct_gate", "int", default, desc, minimum=0)
 
 
 _ITEMS: tuple[ConfigItem, ...] = (
@@ -306,6 +306,7 @@ _ITEMS: tuple[ConfigItem, ...] = (
     _ttl(
         "SAFETY_KEY_RISK_OP_DIRECT_CACHE_TTL_SECONDS",
         "关键风险作业直读视图进程内 TTL 缓存秒数（0 = 关）",
+        300,
     ),
     _ttl(
         "SAFETY_KNOWLEDGE_DIRECT_CACHE_TTL_SECONDS",
@@ -326,6 +327,17 @@ _ITEMS: tuple[ConfigItem, ...] = (
     _ttl(
         "SAFETY_EHS_CHANGE_DIRECT_CACHE_TTL_SECONDS",
         "EHS 变更直读视图 TTL 缓存秒数（0 = 关）",
+        300,
+    ),
+    _ttl(
+        "SAFETY_FIRE_ALARM_DIRECT_CACHE_TTL_SECONDS",
+        "消防报警窗口拉取 TTL 缓存秒数（0 = 关；日报/月报 strict 现拉；单例创建时读取，改后需重启）",
+        300,
+    ),
+    _ttl(
+        "SAFETY_CENTRAL_ALARM_DIRECT_CACHE_TTL_SECONDS",
+        "中控报警窗口拉取 TTL 缓存秒数（0 = 关；日报 strict 现拉；单例创建时读取，改后需重启）",
+        300,
     ),
 
     # ══════════════════════════════════════════════════════════

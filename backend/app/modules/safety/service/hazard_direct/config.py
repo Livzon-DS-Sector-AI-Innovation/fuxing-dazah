@@ -71,8 +71,12 @@ def query_direct_enabled() -> bool:
 
 
 def cache_ttl_seconds() -> int:
-    """查询面全量缓存 TTL（秒，默认 60；0=关闭缓存每次现拉）。"""
-    return _int(gates.domain_env(_DOMAIN, "DIRECT_CACHE_TTL_SECONDS"), 60, minimum=0)
+    """查询面全量缓存 TTL（秒，默认 300；0=关闭缓存每次现拉）。
+
+    2026-10-14 由 60 上调：全量拉取是驾驶舱刷新慢的主因之一，看板口径
+    5 分钟内新鲜度足够；导出/对账场景走 strict=True 绕过缓存。
+    """
+    return _int(gates.domain_env(_DOMAIN, "DIRECT_CACHE_TTL_SECONDS"), 300, minimum=0)
 
 
 def catch_up_enabled() -> bool:

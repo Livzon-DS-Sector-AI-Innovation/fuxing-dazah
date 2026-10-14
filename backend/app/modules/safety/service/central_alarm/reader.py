@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
@@ -29,11 +30,26 @@ from app.modules.safety.service.bitable_direct import reader as bd_reader
 
 _TIME_FIELD = "日期"
 
+_DEFAULT_CONCURRENCY = 10
+
+# 窗口缓存条目上限：窗口键随台账查询范围增长（自然日/周/滚动键全天稳定，
+# 台账页任意范围键低频），超限淘汰最旧，防长驻进程缓慢膨胀
+_CACHE_MAX_ENTRIES = 32
+
+
+@dataclass
+class _CacheEntry:
+    """窗口缓存条目（ehs cache.py 同款形状：时间戳 + 视图列表）。"""
+
+    at: float
+    views: list[CentralAlarmView]
+
 __all__ = [
     "CentralAlarmView",
     "CentralAlarmRecordLike",
     "CentralAlarmRecordsReader",
     "CentralAlarmBitableReader",
+    "CachedCentralAlarmReader",
     "open_reader",
     "day_window",
     "rolling_window",
@@ -332,16 +348,111 @@ class CentralAlarmBitableReader:
         return out
 
 
+class CachedCentralAlarmReader:
+    """中控报警窗口拉取的 TTL 缓存包装（open_reader 单例持有）。
+
+    窗口键 = (start_iso, end_iso)：自然日/周/滚动键全天稳定，总览驾驶舱
+    与台账页 5 分钟内复用同一窗口结果（14 表 × 翻页的 Bitable 往返实测
+    ~4.7s/次，是驾驶舱刷新慢的主因）。strict=True（日报编排）绕过缓存也
+    不回填——生成路径必须现拉，宁可多打也不静默缺数。
+
+    TTL 在单例首次创建时读取一次（cert CachedCertReader 同口径）；
+    构造本类直接注入的测试不受影响（裸 reader 无缓存）。
+    """
+
+    def __init__(self, inner: Any, *, ttl_seconds: int) -> None:
+        self._inner = inner
+        self._ttl = int(ttl_seconds)
+        self._entries: dict[tuple[str, str], _CacheEntry] = {}
+
+    async def fetch_window_records(
+        self,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        strict: bool = False,
+    ) -> list[CentralAlarmView]:
+        key = (start_utc.isoformat(), end_utc.isoformat())
+        now = time.monotonic()
+        if not strict and self._ttl > 0:
+            entry = self._entries.get(key)
+            if entry is not None and now - entry.at < self._ttl:
+                return entry.views
+        views: list[CentralAlarmView] = await self._inner.fetch_window_records(
+            start_utc=start_utc, end_utc=end_utc, strict=strict,
+        )
+        if not strict and self._ttl > 0:
+            self._entries[key] = _CacheEntry(at=now, views=views)
+            self._evict()
+        return views
+
+    def _evict(self) -> None:
+        """超上限淘汰最旧条目（含已过期项），维持缓存占用有界。"""
+        if len(self._entries) <= _CACHE_MAX_ENTRIES:
+            return
+        oldest = sorted(self._entries, key=lambda k: self._entries[k].at)
+        for k in oldest[: len(self._entries) - _CACHE_MAX_ENTRIES]:
+            self._entries.pop(k, None)
+
+    async def get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[CentralAlarmView]:
+        start, end = day_window(target_date)
+        return await self.fetch_window_records(
+            start_utc=start, end_utc=end, strict=strict,
+        )
+
+    async def get_records_by_rolling_window(
+        self, target_date: date, *, strict: bool = False,
+    ) -> tuple[list[CentralAlarmView], datetime, datetime]:
+        start, end = rolling_window(target_date)
+        views = await self.fetch_window_records(
+            start_utc=start, end_utc=end, strict=strict,
+        )
+        return views, start.astimezone(UTC), end.astimezone(UTC)
+
+    async def get_records_by_week(
+        self, week_start: date, week_end: date, *, strict: bool = False,
+    ) -> list[CentralAlarmView]:
+        start, end = week_window(week_start, week_end)
+        return await self.fetch_window_records(
+            start_utc=start, end_utc=end, strict=strict,
+        )
+
+    async def count_total(self) -> int:
+        total: int = await self._inner.count_total()
+        return total
+
+
 def open_reader(
     *,
-    page_size: int = 500,
-    concurrency: int = 10,
-) -> CentralAlarmBitableReader:
-    """默认真实实现：配置中心解析 central_alarm/alarm 连接（Base 级 client）。"""
-    client = bd_reader.resolve_client("central_alarm", "alarm")
-    return CentralAlarmBitableReader(
-        client, page_size=page_size, concurrency=concurrency,
-    )
+    page_size: int = bd_reader.DEFAULT_PAGE_SIZE,
+    concurrency: int = _DEFAULT_CONCURRENCY,
+) -> CentralAlarmRecordsReader:
+    """共享单例：配置中心解析 central_alarm/alarm 连接（Base 级 client）。
+
+    全默认参数返回 TTL 缓存包装单例（总览/台账/统计共用同一缓存窗口）；
+    任一参数非默认（测试/特殊表）返回裸 reader 现拉（单例仅首次创建，
+    非默认参数会被静默忽略，故不与其共享）。
+    """
+    if page_size != bd_reader.DEFAULT_PAGE_SIZE or concurrency != _DEFAULT_CONCURRENCY:
+        client = bd_reader.resolve_client("central_alarm", "alarm")
+        return CentralAlarmBitableReader(
+            client, page_size=page_size, concurrency=concurrency,
+        )
+    global _SHARED_READER
+    if _SHARED_READER is None:
+        from app.modules.safety.service.central_alarm import config
+
+        client = bd_reader.resolve_client("central_alarm", "alarm")
+        _SHARED_READER = CachedCentralAlarmReader(
+            CentralAlarmBitableReader(client),
+            ttl_seconds=config.cache_ttl_seconds(),
+        )
+    return _SHARED_READER
+
+
+_SHARED_READER: CachedCentralAlarmReader | None = None
 
 
 @runtime_checkable

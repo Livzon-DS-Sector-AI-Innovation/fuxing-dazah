@@ -38,9 +38,10 @@ RENEW_DIRECT_DISABLED_MESSAGE = "直读模式下回填不可用，请在飞书�
 
 
 def cache_ttl_seconds() -> int:
-    """直读视图进程内 TTL 缓存秒数（默认 60；0=关）。
+    """直读视图进程内 TTL 缓存秒数（默认 300；0=关）。
 
     overview 驾驶舱聚合对 cert 域 summary+明细两路派生且 3 kind 全量拉取
     无窗口下推——仿 key_risk_op 范式兜住窗口内重复请求。
+    2026-10-14 由 60 上调：看板口径 5 分钟内新鲜度足够。
     """
-    return gates.int_env("SAFETY_CERT_DIRECT_CACHE_TTL_SECONDS", 60, minimum=0)
+    return gates.int_env("SAFETY_CERT_DIRECT_CACHE_TTL_SECONDS", 300, minimum=0)

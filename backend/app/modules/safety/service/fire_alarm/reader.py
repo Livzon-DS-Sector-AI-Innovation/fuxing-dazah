@@ -11,6 +11,7 @@ Ticket 01 只交付两件东西：
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
@@ -22,6 +23,17 @@ from app.modules.safety.service.fire_alarm import contract
 from app.modules.safety.service.fire_alarm.bitable_mapper import map_bitable_fields
 
 F_ALARM_TIME = "报警时间"
+
+# 窗口缓存条目上限（中控同款）：台账页任意范围键低频增长，超限淘汰最旧
+_CACHE_MAX_ENTRIES = 32
+
+
+@dataclass
+class _CacheEntry:
+    """窗口缓存条目（ehs cache.py 同款形状：时间戳 + 视图列表）。"""
+
+    at: float
+    views: list[FireAlarmView]
 
 
 @dataclass
@@ -195,13 +207,15 @@ class FireAlarmBitableReader:
             end=end,
         )
 
-    async def get_records_by_date(self, target_date: date) -> list[FireAlarmView]:
-        """自然日窗口取数。"""
+    async def get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
+        """自然日窗口取数（strict 仅供协议同形：裸实现无缓存，恒现拉）。"""
         start, end = day_window(target_date)
         return await self._fetch_window(start, end)
 
     async def get_records_by_rolling_window(
-        self, target_date: date
+        self, target_date: date, *, strict: bool = False,
     ) -> tuple[list[FireAlarmView], datetime, datetime]:
         """滚动 24 小时窗口取数，额外返回 UTC 起止时间供渲染显示。"""
         start, end = rolling_window(target_date)
@@ -209,21 +223,21 @@ class FireAlarmBitableReader:
         return views, start.astimezone(UTC), end.astimezone(UTC)
 
     async def get_records_by_week(
-        self, week_start: date, week_end: date
+        self, week_start: date, week_end: date, *, strict: bool = False,
     ) -> list[FireAlarmView]:
         """自然周窗口取数（get_stats 本周 KPI 用）。"""
         start, end = week_window(week_start, week_end)
         return await self._fetch_window(start, end)
 
     async def get_records_by_month(
-        self, month_start: date, month_end: date
+        self, month_start: date, month_end: date, *, strict: bool = False,
     ) -> list[FireAlarmView]:
         """自然月窗口取数。"""
         start, end = month_window(month_start, month_end)
         return await self._fetch_window(start, end)
 
     async def get_records_by_range(
-        self, start: datetime, end: datetime
+        self, start: datetime, end: datetime, *, strict: bool = False,
     ) -> list[FireAlarmView]:
         """任意 UTC 瞬时区间取数（页面台账查询用；含端点毫秒裁剪）。"""
         return await self._fetch_window(start, end)
@@ -236,42 +250,139 @@ class FireAlarmBitableReader:
         return int(result.get("total") or 0)
 
 
+class CachedFireAlarmReader:
+    """消防报警窗口拉取的 TTL 缓存包装（open_reader 单例持有）。
+
+    窗口键 = (start_iso, end_iso)：自然日/周/月/滚动键全天稳定，总览驾驶舱
+    与台账页 5 分钟内复用同一窗口结果（无缓存时每次刷新实打 Bitable 实测
+    ~5s）。strict=True（日报/月报生成路径）绕过缓存也不回填——生成路径必须
+    现拉，宁可多打也不静默缺数。
+
+    TTL 在单例首次创建时读取一次（cert CachedCertReader 同口径）；
+    构造本类直接注入的测试不受影响（裸 reader 无缓存）。
+    """
+
+    def __init__(self, inner: Any, *, ttl_seconds: int) -> None:
+        self._inner = inner
+        self._ttl = int(ttl_seconds)
+        self._entries: dict[tuple[str, str], _CacheEntry] = {}
+
+    async def _cached_window(
+        self, start: datetime, end: datetime, *, strict: bool
+    ) -> list[FireAlarmView]:
+        key = (start.isoformat(), end.isoformat())
+        now = time.monotonic()
+        if not strict and self._ttl > 0:
+            entry = self._entries.get(key)
+            if entry is not None and now - entry.at < self._ttl:
+                return entry.views
+        views: list[FireAlarmView] = await self._inner.get_records_by_range(start, end)
+        if not strict and self._ttl > 0:
+            self._entries[key] = _CacheEntry(at=now, views=views)
+            self._evict()
+        return views
+
+    def _evict(self) -> None:
+        """超上限淘汰最旧条目（含已过期项），维持缓存占用有界。"""
+        if len(self._entries) <= _CACHE_MAX_ENTRIES:
+            return
+        oldest = sorted(self._entries, key=lambda k: self._entries[k].at)
+        for k in oldest[: len(self._entries) - _CACHE_MAX_ENTRIES]:
+            self._entries.pop(k, None)
+
+    async def get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
+        start, end = day_window(target_date)
+        return await self._cached_window(start, end, strict=strict)
+
+    async def get_records_by_rolling_window(
+        self, target_date: date, *, strict: bool = False,
+    ) -> tuple[list[FireAlarmView], datetime, datetime]:
+        start, end = rolling_window(target_date)
+        views = await self._cached_window(start, end, strict=strict)
+        return views, start.astimezone(UTC), end.astimezone(UTC)
+
+    async def get_records_by_week(
+        self, week_start: date, week_end: date, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
+        start, end = week_window(week_start, week_end)
+        return await self._cached_window(start, end, strict=strict)
+
+    async def get_records_by_month(
+        self, month_start: date, month_end: date, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
+        start, end = month_window(month_start, month_end)
+        return await self._cached_window(start, end, strict=strict)
+
+    async def get_records_by_range(
+        self, start: datetime, end: datetime, *, strict: bool = False,
+    ) -> list[FireAlarmView]:
+        return await self._cached_window(start, end, strict=strict)
+
+    async def count_all(self) -> int:
+        total: int = await self._inner.count_all()
+        return total
+
+
 def open_reader(
     *,
     table_id: str | None = None,
-    page_size: int = 500,
-) -> FireAlarmBitableReader:
-    """默认真实实现：从配置中心解析 fire_alarm/alarm 连接。"""
-    client = bd_reader.resolve_client("fire_alarm", "alarm", table_id=table_id)
-    return FireAlarmBitableReader(
-        client, table_id=table_id, page_size=page_size
-    )
+    page_size: int = bd_reader.DEFAULT_PAGE_SIZE,
+) -> FireAlarmRecordsReader:
+    """共享单例：从配置中心解析 fire_alarm/alarm 连接。
+
+    全默认参数返回 TTL 缓存包装单例（总览/台账/统计共用同一缓存窗口）；
+    任一参数非默认（测试/特殊表）返回裸 reader 现拉，与中控同语义
+    （单例仅首次创建，非默认参数会被静默忽略，故不与其共享）。
+    """
+    if table_id is not None or page_size != bd_reader.DEFAULT_PAGE_SIZE:
+        client = bd_reader.resolve_client("fire_alarm", "alarm", table_id=table_id)
+        return FireAlarmBitableReader(
+            client, table_id=table_id, page_size=page_size,
+        )
+    global _SHARED_READER
+    if _SHARED_READER is None:
+        from app.modules.safety.service.fire_alarm import config
+
+        client = bd_reader.resolve_client("fire_alarm", "alarm")
+        _SHARED_READER = CachedFireAlarmReader(
+            FireAlarmBitableReader(client),
+            ttl_seconds=config.cache_ttl_seconds(),
+        )
+    return _SHARED_READER
+
+
+_SHARED_READER: CachedFireAlarmReader | None = None
 
 
 @runtime_checkable
 class FireAlarmRecordsReader(Protocol):
-    """消防报警读取器协议（默认真实实现留待票据 03）。
+    """消防报警读取器协议（open_reader 返回缓存包装，测试用替身）。
 
     三个方法分别对应改造前 service.py 的三个取数窗口；返回视图对象。
     滚动窗口额外返回 UTC 起止时间，供渲染层显示「前日 17:00 至当日 17:00」。
+    strict=True：生成路径（日报/月报编排）绕过查询面缓存现拉，保证新鲜。
     """
 
-    async def get_records_by_date(self, target_date: date) -> list[FireAlarmView]: ...
+    async def get_records_by_date(
+        self, target_date: date, *, strict: bool = False,
+    ) -> list[FireAlarmView]: ...
 
     async def get_records_by_rolling_window(
-        self, target_date: date
+        self, target_date: date, *, strict: bool = False,
     ) -> tuple[list[FireAlarmView], datetime, datetime]: ...
 
     async def get_records_by_week(
-        self, week_start: date, week_end: date
+        self, week_start: date, week_end: date, *, strict: bool = False,
     ) -> list[FireAlarmView]: ...
 
     async def get_records_by_month(
-        self, month_start: date, month_end: date
+        self, month_start: date, month_end: date, *, strict: bool = False,
     ) -> list[FireAlarmView]: ...
 
     async def get_records_by_range(
-        self, start: datetime, end: datetime
+        self, start: datetime, end: datetime, *, strict: bool = False,
     ) -> list[FireAlarmView]: ...
 
     async def count_all(self) -> int: ...
@@ -281,6 +392,7 @@ __all__ = [
     "FireAlarmView",
     "FireAlarmRecordsReader",
     "FireAlarmBitableReader",
+    "CachedFireAlarmReader",
     "REQUEST_FIELD_NAMES",
     "day_window",
     "rolling_window",
