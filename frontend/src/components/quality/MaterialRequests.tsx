@@ -253,7 +253,7 @@ export default function MaterialRequests() {
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => { reqForm.resetFields(); setCreateOpen(true) }}>新建请验单</Button>
                   )}
                 </Space>
-                <Table rowKey="id" size="small" dataSource={data} pagination={{ pageSize: 20 }} columns={requestColumns} />
+                <Table rowKey="id" size="small" scroll={{ x: 1150 }} dataSource={data} pagination={{ pageSize: 20 }} columns={requestColumns} />
               </>
             ),
           },
@@ -267,14 +267,14 @@ export default function MaterialRequests() {
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => { stdForm.resetFields(); setStdCreateOpen(true) }}>新建物料标准</Button>
                   )}
                 </Space>
-                <Table rowKey="id" size="small" dataSource={stdRows} pagination={false} columns={stdColumns} />
+                <Table rowKey="id" size="small" scroll={{ x: 700 }} dataSource={stdRows} pagination={false} columns={stdColumns} />
                 {activeStdId && (
                   <>
                     <Typography.Title level={5} style={{ marginTop: 16 }}>
                       检验项目行
                       {canManage && <Button size="small" type="link" icon={<PlusOutlined />} onClick={() => { stdItemForm.resetFields(); setStdItemOpen(true) }}>添加项目行</Button>}
                     </Typography.Title>
-                    <Table rowKey="id" size="small" dataSource={stdItems} pagination={false} columns={stdItemColumns} />
+                    <Table rowKey="id" size="small" scroll={{ x: 750 }} dataSource={stdItems} pagination={false} columns={stdItemColumns} />
                   </>
                 )}
               </>

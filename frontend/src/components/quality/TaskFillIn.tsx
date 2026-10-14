@@ -27,7 +27,24 @@ export default function TaskFillIn() {
   const canCreate = hasPermission('quality:task:create')
   const canFill = hasPermission('quality:task:fill')
   const canReview = hasPermission('quality:task:review')
+
+  const onBatchVoid = async () => {
+    setVoiding(true)
+    let ok = 0
+    for (const id of selectedKeys) {
+      try {
+        await updateTestTaskStatus(id, 'void')
+        ok += 1
+      } catch { /* 单条失败继续 */ }
+    }
+    setVoiding(false)
+    message.success(`已作废 ${ok} 个任务` + (ok < selectedKeys.length ? `（${selectedKeys.length - ok} 个失败）` : ''))
+    setSelectedKeys([])
+    load(page)
+  }
   const [loading, setLoading] = useState(false)
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  const [voiding, setVoiding] = useState(false)
   const [data, setData] = useState<TestTaskListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -421,6 +438,11 @@ export default function TaskFillIn() {
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
         )}
+        {canReview && (
+          <Popconfirm title={`确认批量作废 ${selectedKeys.length} 个任务？`} onConfirm={onBatchVoid}>
+            <Button danger loading={voiding} disabled={!selectedKeys.length}>批量作废</Button>
+          </Popconfirm>
+        )}
       </Space>
 
       <Table
@@ -428,6 +450,7 @@ export default function TaskFillIn() {
         columns={columns}
         dataSource={data}
         loading={loading}
+        rowSelection={{ selectedRowKeys: selectedKeys, onChange: (keys) => setSelectedKeys(keys as string[]) }}
         pagination={{ current: page, pageSize: 20, total, onChange: (p) => setPage(p) }}
         size="small"
         scroll={{ x: 1100 }}

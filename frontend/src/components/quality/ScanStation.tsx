@@ -6,6 +6,7 @@ import { ScanOutlined, ClearOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { moveMaterialContainer, fetchStocktakes, scanStocktake, finishStocktake } from '@/actions/quality'
+import { broadcastSignal } from './useCrossTabSignal'
 import type { InputRef } from 'antd'
 import type { StocktakeSheet } from '@/types/quality'
 
@@ -103,6 +104,7 @@ export default function ScanStation() {
     try {
       const res = await finishStocktake(stActive)
       message.success(res.message)
+      broadcastSignal('material-changed')
       setStStats({ scanned: 0, extra: 0 })
       loadStocktakes()
     } catch (err: unknown) {

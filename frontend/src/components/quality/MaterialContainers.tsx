@@ -7,6 +7,7 @@ import {
 import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined, CheckOutlined, ImportOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
+import { useCrossTabSignal } from './useCrossTabSignal'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
 import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, SlowMovingItem, StocktakeSheet, SupplierItem } from '@/types/quality'
 import {
@@ -158,6 +159,12 @@ export default function MaterialContainers() {
   }, [])
 
   useEffect(() => { (async () => { await load(1, statusFilter, batchFilter, materialFilter) })() }, [statusFilter, batchFilter, materialFilter, load])
+  // 扫码台/其他标签页操作后自动刷新（跨页面状态同步）
+  useCrossTabSignal('material-changed', () => {
+    void load(page, statusFilter, batchFilter, materialFilter)
+    void loadSummary()
+    void loadTodayStats()
+  })
   useEffect(() => { (async () => { await loadSummary() })() }, [loadSummary])
   useEffect(() => { (async () => { await loadTodayStats() })() }, [loadTodayStats])
   useEffect(() => { (async () => { await loadDict() })() }, [loadDict])
@@ -692,6 +699,19 @@ export default function MaterialContainers() {
         </Row>
       )}
 
+      {/* 状态流转图例 */}
+      <Space wrap size={4} style={{ marginBottom: 8 }}>
+        <Typography.Text type="secondary">状态流转：</Typography.Text>
+        {STATUS_ORDER.map((st) => (
+          <Tag key={st} color={MATERIAL_CONTAINER_STATUS_META[st].color}>
+            {MATERIAL_CONTAINER_STATUS_META[st].label}
+          </Tag>
+        ))}
+        <Typography.Text type="secondary">
+          （已赋码→入库→合格→领出；领出可退库；自动判定扫码台按此流转）
+        </Typography.Text>
+      </Space>
+
       <Space wrap>
         <Input
           placeholder="进厂批号搜索" allowClear style={{ width: 160 }}
@@ -743,6 +763,7 @@ export default function MaterialContainers() {
 
       <Table
         rowKey="container_no"
+        scroll={{ x: 1250 }}
         columns={columns}
         dataSource={data}
         loading={loading}
@@ -833,6 +854,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="id"
           size="small"
+          scroll={{ x: 800 }}
           dataSource={dict}
           pagination={false}
           columns={[
@@ -893,6 +915,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="id"
           size="small"
+          scroll={{ x: 900 }}
           dataSource={mvData}
           pagination={{ current: mvPage, pageSize: 50, total: mvTotal, onChange: (p) => { setMvPage(p); loadMovements(p, mvQ) } }}
           columns={[
@@ -1020,6 +1043,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="id"
           size="small"
+          scroll={{ x: 800 }}
           dataSource={supData}
           pagination={false}
           columns={[
@@ -1071,6 +1095,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="id"
           size="small"
+          scroll={{ x: 950 }}
           dataSource={stSheets}
           pagination={false}
           columns={[
@@ -1185,6 +1210,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="material_code"
           size="small"
+          scroll={{ x: 800 }}
           dataSource={mrData}
           pagination={false}
           locale={{ emptyText: '该月暂无出入库记录' }}
@@ -1260,6 +1286,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="container_no"
           size="small"
+          scroll={{ x: 850 }}
           dataSource={slowData}
           pagination={{ pageSize: 20 }}
           locale={{ emptyText: '暂无呆滞库存' }}
@@ -1347,6 +1374,7 @@ export default function MaterialContainers() {
         <Table
           rowKey="material_code"
           size="small"
+          scroll={{ x: 750 }}
           dataSource={purData}
           pagination={false}
           locale={{ emptyText: '暂无采购建议（各物料库存充足或未设置安全库存阈值）' }}
