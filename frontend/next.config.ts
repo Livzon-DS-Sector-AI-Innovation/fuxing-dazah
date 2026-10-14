@@ -9,7 +9,11 @@ const nextConfig: NextConfig = {
   // open 状态在数秒后自动回退（真机验收缺陷，2026-09-16；单元测试无编译器时复现不了），
   // 修复前保持关闭
   reactCompiler: false,
-  allowedDevOrigins: ['*', '127.0.0.1'],
+  // 局域网设备访问 dev 服务的白名单（只写 hostname，不带端口/scheme；裸 '*' 在
+  // Next 16.2 的 matchWildcardDomain 里被显式判死，无效条目）。改动后必须完整
+  // 重启 next dev——router-server 父进程持有启动时的 config 快照，Turbopack 热
+  // 重启子进程不会重读（2026-10-14 实测踩坑）。IP 变了要同步改。
+  allowedDevOrigins: ['localhost', '127.0.0.1', '192.168.100.7'],
 
   // 内部部署阶段：默认启用 sourcemap 方便定位错误；用 ENABLE_SOURCEMAPS=false 可关闭以加速构建/减小镜像
   productionBrowserSourceMaps: process.env.ENABLE_SOURCEMAPS !== 'false',
