@@ -101,7 +101,8 @@ export const moduleMenus: ModuleMenu[] = [
   // ═══════════════════════════════════════════════════════
   // 安全管理模块 — 按 GB/T 33000-2025 体系要素分组（3.0 只读监控口径）
   // 分组平铺（group 字段，同仓储模式）；标签纯文字，不带体系编号；
-  // 未开展模块 → 占位页（ModulePlaceholder）；全流程监督三期已上线（/safety/supervision）。
+  // 四期起四新域（goals/training-behavior/facilities/incidents）为真实页面
+  // （统计+台账+健康度卡，未接入态即设计）；全流程监督三期已上线（/safety/supervision）。
   // ═══════════════════════════════════════════════════════
   {
     key: "safety",

@@ -75,9 +75,6 @@ export { default as CertRenewDrawer } from './CertRenewDrawer'
 // ── 危化品库存管理（Chemical Inventory）──
 export { default as ChemicalInventoryPanel } from './ChemicalInventoryPanel'
 
-// ── 体系要素占位页（Module Placeholder）──
-export { default as ModulePlaceholder } from './ModulePlaceholder'
-
 // ── AI 配置 + 定时任务（scheduler-config）──
 export { default as AiConfigModelCard } from './AiConfigModelCard'
 export { default as AiConfigAuditTable } from './AiConfigAuditTable'

@@ -52,7 +52,7 @@ const FEISHU_TAG_TONE: Record<string, Tone> = {
 const HEALTH_STATUS_LABEL: Record<string, string> = {
   ok: '正常',
   warn: '预警',
-  inactive: '未开展',
+  inactive: '未接入', // 四期起四新域为真实页面，「未接入」=建表接入前常态
   upcoming: '未上线',
 }
 
