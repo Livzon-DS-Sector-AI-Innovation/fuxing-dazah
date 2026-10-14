@@ -49,7 +49,6 @@ export { default as MsdsPanel } from './MsdsPanel'
 export { default as MsdsCollectionPanel } from './MsdsCollectionPanel'
 export { default as MsdsDetailDrawer } from './MsdsDetailDrawer'
 export { default as DrillDetailDrawer } from './DrillDetailDrawer'
-export { default as DrillDocumentModal } from './DrillDocumentModal'
 export { default as FireAlarmManagement } from './FireAlarmManagement'
 export { default as CentralAlarmManagement } from './CentralAlarmManagement'
 
@@ -66,7 +65,6 @@ export { default as OhApplicationsPanel } from './OhApplicationsPanel'
 export { default as OhApplicationDrawer } from './OhApplicationDrawer'
 export { default as OhTransferDiffCard } from './OhTransferDiffCard'
 export { default as OhFollowupsPanel } from './OhFollowupsPanel'
-export { default as OhFollowupModal } from './OhFollowupModal'
 
 // ── 持证到期预警（Cert Warning）──
 export { default as CertWarningPanel } from './CertWarningPanel'

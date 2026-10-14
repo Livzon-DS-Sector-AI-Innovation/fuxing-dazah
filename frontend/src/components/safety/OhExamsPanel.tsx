@@ -11,7 +11,6 @@ import {
   App,
   Button,
   Input,
-  Popconfirm,
   Select,
   Table,
   Tooltip,
@@ -21,7 +20,6 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchOhExams, fetchOhExamStats } from '@/lib/api/safety/occupational-health'
-import { parseOhExam } from '@/actions/safety'
 import type { OhHealthExam } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
@@ -140,16 +138,6 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
     setPage(1)
   }
 
-  const handleRetryParse = async (exam: OhHealthExam) => {
-    const res = await parseOhExam(exam.id)
-    if (res.code === 200) {
-      message.success('已触发重新解析')
-      queryClient.invalidateQueries({ queryKey: ['oh-exams'] })
-    } else {
-      message.error(res.message || '解析失败')
-    }
-  }
-
   const renderHazardTags = (factors: string[] | undefined) => {
     if (!factors || factors.length === 0) return <span style={{ color: UI.muted }}>-</span>
     const shown = factors.slice(0, 2)
@@ -196,20 +184,8 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
     },
     {
       title: '解析状态', dataIndex: 'ai_parse_status', key: 'parse_status', width: 110,
-      render: (v: string, record: OhHealthExam) => (
-        <span>
-          <Pill status={v} map={OH_PARSE_STATUS_UI} toneMap={PARSE_STATUS_TONE} />
-          {v === 'failed' && (
-            <Popconfirm
-              title="重新解析"
-              description="重新调用 AI 解析该体检报告"
-              okText="重新解析" cancelText="取消"
-              onConfirm={() => handleRetryParse(record)}
-            >
-              <span style={{ ...linkPrimary, cursor: 'pointer', marginLeft: 6, fontSize: 12 }}>重试</span>
-            </Popconfirm>
-          )}
-        </span>
+      render: (v: string, _record: OhHealthExam) => (
+        <Pill status={v} map={OH_PARSE_STATUS_UI} toneMap={PARSE_STATUS_TONE} />
       ),
     },
     {

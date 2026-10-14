@@ -12,7 +12,6 @@ import {
 } from 'antd'
 import {
   ReloadOutlined,
-  ThunderboltOutlined,
   FileTextOutlined,
   AlertOutlined,
 } from '@ant-design/icons'
@@ -21,14 +20,12 @@ import dayjs from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchDrillRecords, fetchDrillStats } from '@/lib/api/safety/emergency-drill'
 import {
-  generateDrillPlan,
   createHazardsFromIssues,
 } from '@/actions/safety'
 import type { DrillRecord } from '@/types/safety'
 import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
 import DrillDetailDrawer from './DrillDetailDrawer'
-import DrillDocumentModal from './DrillDocumentModal'
 import {
   DRILL_TYPE_FILTER,
   DRILL_TYPE_UI,
@@ -65,10 +62,6 @@ export default function EmergencyDrillPanel() {
   const [detailRecord, setDetailRecord] = useState<DrillRecord | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
-  const [docModalOpen, setDocModalOpen] = useState(false)
-  const [docRecordId, setDocRecordId] = useState('')
-  const [docGenerating, setDocGenerating] = useState<string | null>(null)  // 正在生成方案的记录 ID
-
   const queryClient = useQueryClient()
 
   // 统计 query
@@ -98,21 +91,6 @@ export default function EmergencyDrillPanel() {
     setApplied({ stage, drillType, department, status, keyword })
     setPage(1)
   }
-
-  const handleGeneratePlan = useCallback(async (recordId: string) => {
-    setDocGenerating(recordId)
-    try {
-      const res = await generateDrillPlan(recordId)
-      if (res.code === 200 && res.data) {
-        message.success('演练方案生成成功')
-        setDocRecordId(recordId)
-        setDocModalOpen(true)
-      } else {
-        message.error(res.message || '生成失败')
-      }
-    } catch { message.error('AI 方案生成失败') }
-    finally { setDocGenerating(null) }
-  }, [message])
 
   const handleCreateHazards = useCallback(async (recordId: string) => {
     try {
@@ -167,16 +145,9 @@ export default function EmergencyDrillPanel() {
     },
     { title: '组织人', dataIndex: 'organizer', key: 'organizer', width: 100, ellipsis: true },
     {
-      title: '操作', key: 'actions', width: 180, fixed: 'right',
+      title: '操作', key: 'actions', width: 120, fixed: 'right',
       render: (_: unknown, record: DrillRecord) => (
         <Space size={4}>
-          <Tooltip title="AI 生成演练方案">
-            <Button type="primary" size="small" icon={<ThunderboltOutlined />}
-              loading={docGenerating === record.id} onClick={() => handleGeneratePlan(record.id)}
-              style={{ background: T.primary, borderColor: T.primary, fontSize: 12 }}>
-              AI方案
-            </Button>
-          </Tooltip>
           {record.issues && !record.status && (
             <Tooltip title="问题 → 隐患记录">
               <Button size="small" icon={<AlertOutlined />}
@@ -191,7 +162,7 @@ export default function EmergencyDrillPanel() {
         </Space>
       ),
     },
-  ], [docGenerating, handleGeneratePlan, handleCreateHazards])
+  ], [handleCreateHazards])
 
   return (
     <div style={{ padding: '0 0 32px' }}>
@@ -249,9 +220,6 @@ export default function EmergencyDrillPanel() {
       <DrillDetailDrawer open={detailOpen} record={detailRecord}
         onClose={() => setDetailOpen(false)}
         onRefresh={() => queryClient.invalidateQueries({ queryKey: ['drills'] })} />
-
-      <DrillDocumentModal open={docModalOpen} recordId={docRecordId}
-        onClose={() => setDocModalOpen(false)} />
     </div>
   )
 }

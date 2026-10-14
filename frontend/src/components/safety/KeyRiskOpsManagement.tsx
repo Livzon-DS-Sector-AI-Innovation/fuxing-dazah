@@ -9,14 +9,13 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  ExportOutlined, EyeOutlined, ReloadOutlined, SearchOutlined, SyncOutlined,
+  ExportOutlined, EyeOutlined, ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { exportKeyRiskOpsReports } from '@/actions/safety'
 import { downloadBase64Excel } from '@/actions/safety/_utils'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchKeyRiskOperationReports, fetchKeyRiskOperationStats } from '@/lib/api/safety/key-risk-operation'
-import { syncKeyRiskOperations } from '@/actions/safety'
 import type { KeyRiskOperationReport } from '@/types/safety'
 import { KEY_RISK_APPLY_STATUS_CONFIG, KEY_RISK_APPLY_STATUS_OPTIONS } from '@/types/safety'
 import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
@@ -67,7 +66,6 @@ export default function KeyRiskOpsManagement() {
   const [submittedKeyword, setSubmittedKeyword] = useState('')
 
   // ── 操作 ──
-  const [syncing, setSyncing] = useState(false)
   const [exporting, setExporting] = useState(false)
 
   // ── 详情 ──
@@ -109,24 +107,6 @@ export default function KeyRiskOpsManagement() {
 
   const rows = listData?.items ?? []
   const total = listData?.total ?? 0
-
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncKeyRiskOperations()
-      if (res.code === 200) {
-        const s = res.data || {}
-        message.success(`同步完成：创建 ${s.created || 0} · 更新 ${s.updated || 0} · 删除 ${s.deleted || 0}`)
-        refresh()
-      } else {
-        message.error(res.message || '同步失败')
-      }
-    } catch {
-      message.error('同步失败')
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -195,7 +175,6 @@ export default function KeyRiskOpsManagement() {
         actions={
           <>
             <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />
-            <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSync}>同步</Button>
             <Button icon={<ExportOutlined />} loading={exporting} onClick={handleExport}>导出</Button>
           </>
         }

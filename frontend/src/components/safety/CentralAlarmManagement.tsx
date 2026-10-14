@@ -2,38 +2,25 @@
 
 import { useState } from 'react'
 import {
-  App, Button, DatePicker, Drawer, Input, Modal, Select, Space, Table, Tag,
+  App, Button, DatePicker, Drawer, Input, Select, Space, Table, Tag,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  EyeOutlined, FileTextOutlined, ReloadOutlined, SyncOutlined,
+  EyeOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchCentralAlarmRecords, fetchCentralAlarmStats } from '@/lib/api/safety/central-alarm'
-import {
-  generateCentralAlarmDailyReport,
-  syncCentralAlarmData,
-} from '@/actions/safety'
 import type {
   CentralAlarmRecord,
-  CentralAlarmReportResponse,
   CentralAlarmStats,
 } from '@/types/safety'
 
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
 import { T } from './shared-styles'
-import { AI_DIMENSION_CONFIG, AI_PATTERN_CONFIG, dynamicTagStyle, PUSH_RESULT } from './centralAlarmConstants'
-
-// ── 推送结果 → ui-kit 语义 tone（成功 ok / 跳过 default / 失败 danger）──
-
-const PUSH_RESULT_TONE: Record<'success' | 'skipped' | 'failed', Tone> = {
-  success: 'ok',
-  skipped: 'default',
-  failed: 'danger',
-}
+import { AI_DIMENSION_CONFIG, AI_PATTERN_CONFIG, dynamicTagStyle } from './centralAlarmConstants'
 
 function PatternTag({ pattern }: { pattern?: string | null }) {
   const cfg = pattern ? AI_PATTERN_CONFIG[pattern] : undefined
@@ -87,11 +74,8 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
   // 数据
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [syncing, setSyncing] = useState(false)
-  const [generating, setGenerating] = useState(false)
 
   // 弹窗
-  const [reportModal, setReportModal] = useState<CentralAlarmReportResponse | null>(null)
   const [detail, setDetail] = useState<CentralAlarmRecord | null>(null)
   // 关闭动画期间保留 detail：open 与内容同帧消失会让遮罩卡在全屏状态挡死页面
   const [detailOpen, setDetailOpen] = useState(false)
@@ -145,40 +129,6 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
     setPage(1)
   }
 
-  const onSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncCentralAlarmData()
-      if (res.code === 200) {
-        message.success(res.message || '同步完成')
-        refresh()
-      } else {
-        message.error(res.message || '同步失败')
-      }
-    } catch {
-      message.error('同步失败')
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  const onGenerate = async () => {
-    setGenerating(true)
-    try {
-      const res = await generateCentralAlarmDailyReport()
-      if (res.code === 200) {
-        setReportModal(res.data ?? null)
-        refresh()
-      } else {
-        message.error(res.message || '日报生成失败')
-      }
-    } catch {
-      message.error('日报生成失败')
-    } finally {
-      setGenerating(false)
-    }
-  }
-
   const columns: ColumnsType<CentralAlarmRecord> = [
     { title: '日期', dataIndex: 'alarm_date', width: 130, render: (v: string) => v ? dayjs(v).format('MM-DD HH:mm') : '—' },
     { title: '车间', dataIndex: 'workshop', width: 90, render: (v: string) => v ? <Tag color="blue">{v}</Tag> : '—' },
@@ -212,15 +162,13 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
         <StatCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? 0} tone="ok" sub="已回写 AI 字段" />
       </div>
 
-      {/* ── 记录台账（筛选 + 表；同步/日报为既有业务入口） ── */}
+      {/* ── 记录台账（筛选 + 表；数据经飞书事件自动同步，日报由每日 17:00 定时任务生成） ── */}
       <SectionCard
         title="报警记录"
         description={`飞书多维表格同步台账（共 ${total} 条）`}
         action={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => void refresh()}>刷新</Button>
-            <Button icon={<SyncOutlined />} loading={syncing} onClick={onSync}>同步飞书</Button>
-            <Button type="primary" icon={<FileTextOutlined />} loading={generating} onClick={onGenerate}>生成日报</Button>
           </Space>
         }
       >
@@ -245,7 +193,7 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
           loading={isLoading}
           scroll={{ x: 1100 }}
           locale={{ emptyText: (
-            <EmptyGuide compact title="暂无中控报警记录" description="可点击「同步飞书」拉取数据，或调整筛选后查询" />
+            <EmptyGuide compact title="暂无中控报警记录" description="数据经飞书事件自动同步，可调整筛选后查询" />
           ) }}
           pagination={{
             current: page, pageSize, total, showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
@@ -254,31 +202,6 @@ export default function CentralAlarmManagement({ initialStats }: { initialStats:
         />
       </SectionCard>
       </div>
-
-      {reportModal && (
-        <Modal
-          title={`中控报警日报 · ${reportModal.target_date}`}
-          open={!!reportModal}
-          onCancel={() => setReportModal(null)}
-          footer={null}
-          width={720}
-        >
-          <div style={{ fontSize: 12, color: T.steel, marginBottom: 8 }}>
-            涉及 {reportModal.total} 条 · AI 分析 {reportModal.analyzed} 条 ·
-            {reportModal.push_results?.map((p, i) => {
-              const key = p.success ? 'success' : p.skipped ? 'skipped' : 'failed'
-              return (
-                <span key={i} style={{ marginLeft: 6 }}>
-                  <StatusTag tone={PUSH_RESULT_TONE[key]} label={PUSH_RESULT[key].label} />
-                </span>
-              )
-            })}
-          </div>
-          <pre style={{ whiteSpace: 'pre-wrap', background: T.canvas, padding: 16, borderRadius: 8, fontSize: 13, lineHeight: 1.7, maxHeight: 480, overflow: 'auto' }}>
-            {reportModal.markdown_report}
-          </pre>
-        </Modal>
-      )}
 
       <Drawer open={detailOpen} onClose={() => setDetailOpen(false)} afterOpenChange={(open) => { if (!open) setDetail(null) }} title="中控报警详情" width={480}>
         {detail && (

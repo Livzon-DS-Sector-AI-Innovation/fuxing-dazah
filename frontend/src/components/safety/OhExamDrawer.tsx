@@ -8,7 +8,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   App,
-  Button,
   Collapse,
   Descriptions,
   Drawer,
@@ -17,7 +16,6 @@ import {
   Table,
   Typography,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { getOhExam } from '@/actions/safety'
@@ -34,7 +32,6 @@ import {
 } from './ohConstants'
 import { monoFont } from './shared-styles'
 import OhExamParseCard from './OhExamParseCard'
-import OhFollowupModal from './OhFollowupModal'
 
 const { Paragraph } = Typography
 
@@ -69,7 +66,6 @@ export default function OhExamDrawer({ open, onClose, exam, onRefresh }: OhExamD
   const { message } = App.useApp()
   const [detail, setDetail] = useState<OhHealthExam | null>(exam)
   const [loading, setLoading] = useState(false)
-  const [followupOpen, setFollowupOpen] = useState(false)
 
   const loadDetail = useCallback(async (id: string) => {
     setLoading(true)
@@ -132,7 +128,7 @@ export default function OhExamDrawer({ open, onClose, exam, onRefresh }: OhExamD
       ) : (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           {/* ① AI 解读卡片 */}
-          <OhExamParseCard exam={detail} onRefresh={() => loadDetail(detail.id)} />
+          <OhExamParseCard exam={detail} />
 
           {/* ② 异常指标 */}
           <SectionCard title="异常指标">
@@ -189,11 +185,6 @@ export default function OhExamDrawer({ open, onClose, exam, onRefresh }: OhExamD
 
           {/* ⑤ 关联随访 */}
           <SectionCard title="关联随访">
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-              <Button size="small" type="primary" ghost icon={<PlusOutlined />} onClick={() => setFollowupOpen(true)}>
-                新建随访
-              </Button>
-            </div>
             {followups.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无关联随访" />
             ) : (
@@ -208,20 +199,6 @@ export default function OhExamDrawer({ open, onClose, exam, onRefresh }: OhExamD
           </SectionCard>
         </Space>
       )}
-
-      <OhFollowupModal
-        open={followupOpen}
-        onClose={() => setFollowupOpen(false)}
-        followup={null}
-        preset={{
-          person_name: detail?.employee_name,
-          exam_id: detail?.id,
-        }}
-        onSaved={() => {
-          setFollowupOpen(false)
-          if (detail) loadDetail(detail.id)
-        }}
-      />
     </Drawer>
   )
 }

@@ -1,29 +1,23 @@
 'use client'
 
-// AI 解读卡片（OhExamParseCard）— 对齐存量「AI智能解读」五段格式
-// 状态分支：pending/parsing（等待 AI 解析 + 可手动触发）｜failed（error + 错误信息 + 重新解析）
-// ｜parsed（完整五段卡片 + 三按钮）｜存量降级（仅 ai_interpretation 原文 pre-wrap + 「存量解读」Tag，
-//   不展示结构化区块、不改写存量；保留重新解析入口）。
+// AI 解读卡片（OhExamParseCard）— 纯只读展示（3.0 四期 1-E）
+// 状态分支：pending/parsing（等待自动解析）｜failed（error + 失败信息）｜
+// parsed（完整五段卡片）｜存量降级（仅 ai_interpretation 原文）。
+// 解析触发与人工覆盖结论已退役前端入口：新记录由飞书事件自动解析
+// （oh_bitable_handler），人工覆盖走 Agent 工具 override_oh_conclusion。
 
 import { useState } from 'react'
 import {
-  App,
   Button,
-  Input,
-  Modal,
-  Popconfirm,
-  Select,
   Space,
   Tag,
   Tooltip,
   Typography,
 } from 'antd'
-import { RobotOutlined, RocketOutlined, FileTextOutlined, FormOutlined } from '@ant-design/icons'
+import { RobotOutlined, FileTextOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { overrideOhExamConclusion, parseOhExam } from '@/actions/safety'
 import type { OhHealthExam } from '@/types/safety'
 import {
-  OH_AI_CONCLUSION_FILTER,
   OH_AI_CONCLUSION_UI,
   OH_FITNESS_UI,
   OH_INDICATOR_CATEGORY_UI,
@@ -35,70 +29,18 @@ import {
 } from './ohConstants'
 
 const { Text, Paragraph } = Typography
-const { TextArea } = Input
 
 interface OhExamParseCardProps {
   exam: OhHealthExam
-  onRefresh: () => void
 }
 
-export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProps) {
-  const { message } = App.useApp()
-  const [parsing, setParsing] = useState(false)
+export default function OhExamParseCard({ exam }: OhExamParseCardProps) {
   const [showRaw, setShowRaw] = useState(false)
-  const [overrideOpen, setOverrideOpen] = useState(false)
-  const [overrideConclusion, setOverrideConclusion] = useState<string>('')
-  const [overrideNotes, setOverrideNotes] = useState('')
-  const [overriding, setOverriding] = useState(false)
 
   const result = exam.ai_parse_result
   const status = exam.ai_parse_status
   const isLegacy = !result && !!exam.ai_interpretation
   const conclusion = exam.override_conclusion ?? exam.ai_conclusion
-
-  const handleParse = async () => {
-    setParsing(true)
-    try {
-      const res = await parseOhExam(exam.id)
-      if (res.code === 200) {
-        message.success('已触发重新解析')
-        onRefresh()
-      } else {
-        message.error(res.message || '解析失败')
-      }
-    } finally {
-      setParsing(false)
-    }
-  }
-
-  const handleOverride = async () => {
-    if (!overrideConclusion) {
-      message.warning('请选择覆盖结论')
-      return
-    }
-    if (!overrideNotes.trim()) {
-      message.warning('请填写覆盖理由')
-      return
-    }
-    setOverriding(true)
-    try {
-      const res = await overrideOhExamConclusion(exam.id, {
-        conclusion: overrideConclusion,
-        notes: overrideNotes.trim(),
-      })
-      if (res.code === 200) {
-        message.success('已覆盖结论')
-        setOverrideOpen(false)
-        setOverrideConclusion('')
-        setOverrideNotes('')
-        onRefresh()
-      } else {
-        message.error(res.message || '覆盖失败')
-      }
-    } finally {
-      setOverriding(false)
-    }
-  }
 
   const rawSections = [
     { label: '体检结果', text: exam.exam_result },
@@ -126,12 +68,7 @@ export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProp
             </Space>
             {statusPill}
           </div>
-          <Text style={{ color: T.steel }}>等待 AI 解析{status === 'parsing' ? '中' : ''}，解析完成后自动展示五段解读结果。</Text>
-          <div style={{ marginTop: 12 }}>
-            <Button icon={<RocketOutlined />} loading={parsing} onClick={handleParse}>
-              {status === 'parsing' ? '重新解析' : '开始解析'}
-            </Button>
-          </div>
+          <Text style={{ color: T.steel }}>等待 AI 解析{status === 'parsing' ? '中' : ''}，新记录入库后由飞书事件自动触发，解析完成后展示五段解读结果。</Text>
         </div>
       </div>
     )
@@ -150,7 +87,7 @@ export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProp
             </Space>
             {statusPill}
           </div>
-          <Text style={{ color: T.error }}>AI 解析失败，可点击重新解析重试。</Text>
+          <Text style={{ color: T.error }}>AI 解析失败，记录下次变更时将自动重试（也可经机器人触发解析）。</Text>
           {exam.ai_parse_error && (
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: T.slate, marginBottom: 6 }}>失败原因</div>
@@ -159,9 +96,6 @@ export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProp
               </div>
             </div>
           )}
-          <div style={{ marginTop: 12 }}>
-            <Button type="primary" icon={<RocketOutlined />} loading={parsing} onClick={handleParse}>重新解析</Button>
-          </div>
         </div>
       </div>
     )
@@ -187,11 +121,6 @@ export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProp
           </div>
           <div style={{ background: T.surface, border: `1px solid ${T.hairline}`, borderRadius: 8, padding: '12px 14px', fontSize: 13, lineHeight: 1.7, color: T.charcoal, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {exam.ai_interpretation}
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <Popconfirm title="重新解析" description="将重新调用 AI 结构化解析该体检报告（存量解读文本不改写）" okText="重新解析" cancelText="取消" onConfirm={handleParse}>
-              <Button icon={<RocketOutlined />} loading={parsing}>重新解析</Button>
-            </Popconfirm>
           </div>
         </div>
       </div>
@@ -279,15 +208,11 @@ export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProp
           ))}
         </Space>
 
-        {/* 操作行 */}
+        {/* 操作行（只读：原始文本展开） */}
         <div style={{ borderTop: `1px solid ${T.hairline}`, paddingTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <Button size="small" icon={<FileTextOutlined />} onClick={() => setShowRaw((s) => !s)}>
             查看原始文本
           </Button>
-          <Popconfirm title="重新解析" description="将重新调用 AI 解析该体检报告" okText="重新解析" cancelText="取消" onConfirm={handleParse}>
-            <Button size="small" icon={<RocketOutlined />} loading={parsing}>重新解析</Button>
-          </Popconfirm>
-          <Button size="small" icon={<FormOutlined />} onClick={() => setOverrideOpen(true)}>人工覆盖结论</Button>
         </div>
 
         {showRaw && (
@@ -310,38 +235,6 @@ export default function OhExamParseCard({ exam, onRefresh }: OhExamParseCardProp
           </div>
         )}
       </div>
-
-      {/* 人工覆盖结论 Modal */}
-      <Modal
-        title="人工覆盖 AI 结论"
-        open={overrideOpen}
-        onCancel={() => setOverrideOpen(false)}
-        onOk={handleOverride}
-        confirmLoading={overriding}
-        okText="确认覆盖"
-        cancelText="取消"
-        width={520}
-        destroyOnHidden
-      >
-        <div style={{ marginBottom: 12, fontSize: 13, color: T.steel }}>
-          覆盖后该体检记录以人工结论为准，并留痕覆盖备注（联动人员台账最后体检结论）。
-        </div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: T.slate, marginBottom: 6 }}>结论分类</div>
-        <Select
-          value={overrideConclusion || undefined}
-          onChange={setOverrideConclusion}
-          options={OH_AI_CONCLUSION_FILTER.filter((o) => o.value !== '')}
-          placeholder="选择覆盖结论"
-          style={{ width: '100%', marginBottom: 12 }}
-        />
-        <div style={{ fontSize: 13, fontWeight: 600, color: T.slate, marginBottom: 6 }}>覆盖理由（留痕）</div>
-        <TextArea
-          rows={3}
-          value={overrideNotes}
-          onChange={(e) => setOverrideNotes(e.target.value)}
-          placeholder="请填写覆盖理由"
-        />
-      </Modal>
     </div>
   )
 }

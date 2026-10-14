@@ -498,17 +498,6 @@ export async function generateSummary(articleId: string) {
   return response
 }
 
-// ── Bitable 同步 ──
-
-export async function syncKnowledgeArticles() {
-  const response = await fetchApi<SyncKnowledgeResponse>(
-    '/safety/knowledge-articles/sync',
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
 // ==================== 八大特殊作业报备 Actions ====================
 
 export async function getSpecialOperationReports(params?: SpecialOperationReportQueryParams) {
@@ -649,13 +638,6 @@ export async function getKeyRiskOperationStats() {
   return fetchApi<KeyRiskOperationLedgerStats>('/safety/key-risk-operation-reports/stats')
 }
 
-export async function syncKeyRiskOperations() {
-  return fetchApi<{ created: number; updated: number; deleted: number; skipped_deleted: number }>(
-    '/safety/key-risk-operation-reports/sync',
-    { method: 'POST' },
-  )
-}
-
 // ============ SpecialOperationDailyReport Actions ============
 
 export async function getDailyRecords(params?: {
@@ -671,19 +653,6 @@ export async function getDailyRecords(params?: {
   if (params?.page_size) queryParts.push(`page_size=${params.page_size}`)
   const qs = queryParts.length > 0 ? `?${queryParts.join('&')}` : ''
   return fetchApi<DailyReportRecord[]>(`/safety/special-operation-daily-report/records${qs}`)
-}
-
-export async function generateDailyReport(data: DailyReportGenerateRequest) {
-  return fetchApi<DailyReportResponse>('/safety/special-operation-daily-report/generate', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-}
-
-export async function syncDailyReportData() {
-  return fetchApi<{ synced_count: number }>('/safety/special-operation-daily-report/sync', {
-    method: 'POST',
-  })
 }
 
 export async function getDailyReportStats(target_date?: string) {
@@ -702,35 +671,6 @@ export async function getFireAlarmStats() {
   return fetchApi<FireAlarmStats>('/safety/fire-alarms/stats')
 }
 
-/** 手动触发 Bitable 全量同步（upsert + 软删除），成功后刷新页面 SSR 预取 */
-export async function syncFireAlarmData() {
-  const response = await fetchApi<FireAlarmSyncResult>('/safety/fire-alarms/sync', {
-    method: 'POST',
-  })
-  revalidatePath('/safety/fire-alarms')
-  return response
-}
-
-/** 生成日报：AI 逐条分析并回写记录 + 汇总 Markdown + 推送；成功后 AI 字段变化需刷新页面 */
-export async function generateFireAlarmDailyReport(data: FireAlarmDailyReportRequest = {}) {
-  const response = await fetchApi<FireAlarmReportResponse>('/safety/fire-alarms/daily-report/generate', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/fire-alarms')
-  return response
-}
-
-/** 生成月报：月级聚合 + 重复问题/原因/整改建议分析 + 推送；成功后同样刷新页面 */
-export async function generateFireAlarmMonthlyReport(data: FireAlarmMonthlyReportRequest = {}) {
-  const response = await fetchApi<FireAlarmReportResponse>('/safety/fire-alarms/monthly-report/generate', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/fire-alarms')
-  return response
-}
-
 
 // ============ CentralAlarm Actions（中控报警分析） ============
 
@@ -740,25 +680,6 @@ export async function getCentralAlarmRecords(params: CentralAlarmQueryParams = {
 
 export async function getCentralAlarmStats() {
   return fetchApi<CentralAlarmStats>('/safety/central-alarms/stats')
-}
-
-/** 手动触发 Bitable 多表全量同步（upsert + 软删除），成功后刷新页面 */
-export async function syncCentralAlarmData() {
-  const response = await fetchApi<CentralAlarmSyncResult>('/safety/central-alarms/sync', {
-    method: 'POST',
-  })
-  revalidatePath('/safety/central-alarms')
-  return response
-}
-
-/** 生成日报：AI 逐条分析并回写记录 + 汇总 Markdown + 推送；成功后刷新页面 */
-export async function generateCentralAlarmDailyReport(data: CentralAlarmDailyReportRequest = {}) {
-  const response = await fetchApi<CentralAlarmReportResponse>('/safety/central-alarms/daily-report/generate', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/central-alarms')
-  return response
 }
 
 
@@ -840,31 +761,6 @@ export async function deleteOhExam(id: string) {
   return res
 }
 
-/** 手动触发/重试 AI 解析 */
-export async function parseOhExam(id: string) {
-  const res = await fetchApi<OhHealthExam>(`/safety/oh-health-exams/${id}/parse`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
-/** 人工覆盖 AI 结论（后端请求体字段为 override_conclusion，前端入参按 design §八 为 conclusion） */
-export async function overrideOhExamConclusion(
-  id: string,
-  data: { conclusion: OhAiConclusion | string; notes?: string }
-) {
-  const res = await fetchApi<OhHealthExam>(`/safety/oh-health-exams/${id}/override-conclusion`, {
-    method: 'POST',
-    body: JSON.stringify({
-      override_conclusion: data.conclusion,
-      notes: data.notes,
-    } satisfies OhOverrideConclusionRequest),
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
 export async function getOhExamStats() {
   return fetchApi<OhExamStats>('/safety/oh-health-exams/stats')
 }
@@ -926,36 +822,6 @@ export async function getOhApplicationStats() {
 
 export async function getOhFollowups(params: OhFollowupQueryParams = {}) {
   return fetchApi<OhFollowup[]>(`/safety/oh/followups${buildQueryString(params)}`)
-}
-
-/** 手动补录（exam_id 或 person_id 必填其一） */
-export async function createOhFollowup(data: OhFollowupFormData) {
-  const res = await fetchApi<OhFollowup>('/safety/oh/followups', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
-/** 更新随访处置（action_taken → open 自动流转 followed） */
-export async function updateOhFollowup(id: string, data: Partial<OhFollowupFormData>) {
-  const res = await fetchApi<OhFollowup>(`/safety/oh/followups/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
-/** 关闭随访闭环（followed → closed） */
-export async function closeOhFollowup(id: string, actionTaken: string) {
-  const res = await fetchApi<OhFollowup>(`/safety/oh/followups/${id}/close`, {
-    method: 'POST',
-    body: JSON.stringify({ action_taken: actionTaken }),
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
 }
 
 // ============ Business Agent (业务 Agent 对话) ============
@@ -1057,17 +923,6 @@ export async function getDrillRecords(params: DrillRecordQueryParams = {}) {
   )
 }
 
-// ── AI 方案生成 ──
-
-export async function generateDrillPlan(recordId: string) {
-  const response = await fetchApi<DrillDocument>(
-    `/safety/emergency-drills/${recordId}/generate-plan`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/emergency-drill')
-  return response
-}
-
 // ── AI 评估表生成 ──
 
 export async function generateDrillEval(recordId: string) {
@@ -1136,15 +991,6 @@ export async function getMsdsCollection(id: string) {
   return fetchApi<MsdsCollectionRecordT>(`/safety/msds/collection/${id}`)
 }
 
-export async function retryMsdsParse(collectionId: string) {
-  const response = await fetchApi<MsdsCollectionRecordT>(
-    `/safety/msds/collection/${collectionId}/parse`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/msds')
-  return response
-}
-
 export async function getMsdsDocuments(
   params: import('@/types/safety').MsdsDocumentQueryParams = {},
 ) {
@@ -1186,15 +1032,6 @@ export async function getContractorAdmissionDetail(id: string) {
 }
 
 /** 手动触发单条相关方准入 AI 审核（三维度报告 + 回填 Bitable） */
-export async function runAdmissionReview(id: string) {
-  const response = await fetchApi<ContractorAdmission>(
-    `/safety/contractor-admissions/${id}/ai/audit`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/contractor-admission')
-  return response
-}
-
 // ============ 持证到期预警 Actions（cert-warning） ============
 
 /** 获取持证到期预警明细（列表 + 筛选 status_level/department/cert_category/days_within + 分页） */

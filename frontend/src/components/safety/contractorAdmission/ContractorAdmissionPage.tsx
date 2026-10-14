@@ -11,7 +11,6 @@ import {
   Button,
   Drawer,
   Input,
-  Popconfirm,
   Select,
   Space,
   Table,
@@ -24,14 +23,12 @@ import {
   FileTextOutlined,
   LinkOutlined,
   ReloadOutlined,
-  RocketOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchContractorAdmissions, fetchContractorAdmissionStats } from '@/lib/api/safety/contractor-admission'
 import {
   getContractorAdmissionDetail,
-  runAdmissionReview,
 } from '@/actions/safety'
 import type {
   ContractorAdmission,
@@ -140,7 +137,6 @@ export function ContractorAdmissionPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [selected, setSelected] = useState<ContractorAdmission | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [reviewing, setReviewing] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -212,13 +208,6 @@ export function ContractorAdmissionPage() {
     [stats, filters],
   )
 
-  // ── 操作 ──
-  const afterAction = (id: string, data?: ContractorAdmission | null) => {
-    queryClient.invalidateQueries({ queryKey: ['contractor-admissions'] })
-    queryClient.invalidateQueries({ queryKey: ['contractor-admission-stats'] })
-    if (selected?.id === id && data) setSelected(data)
-  }
-
   const openDetail = async (record: ContractorAdmissionListItem) => {
     setDrawerOpen(true)
     setSelected(null)
@@ -235,27 +224,6 @@ export function ContractorAdmissionPage() {
       message.error('加载详情失败')
     } finally {
       setDetailLoading(false)
-    }
-  }
-
-  const handleReview = async (id: string) => {
-    setReviewing(true)
-    try {
-      const res = await runAdmissionReview(id)
-      if (res.code === 200 && res.data) {
-        if (res.data.ai_review_status === 'failed') {
-          message.warning(`AI 审核失败：${res.data.ai_error_message || '未知原因'}`)
-        } else if (res.data.ai_review_status === 'processing') {
-          message.info('AI 审核已触发，正在后台执行')
-        } else {
-          message.success('AI 审核完成')
-        }
-        afterAction(id, res.data)
-      } else {
-        message.error(res.message || 'AI 审核触发失败')
-      }
-    } finally {
-      setReviewing(false)
     }
   }
 
@@ -337,16 +305,6 @@ export function ContractorAdmissionPage() {
           <Tooltip title="查看详情">
             <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDetail(record)}>详情</Button>
           </Tooltip>
-          {record.ai_review_status !== 'completed' && record.ai_review_status !== 'processing' && (
-            <Tooltip title="手动触发 AI 审核（安全管理协议）">
-              <Popconfirm
-                title="确认对此条准入记录执行 AI 审核？"
-                onConfirm={() => handleReview(record.id)}
-              >
-                <Button type="link" size="small" icon={<RocketOutlined />} loading={reviewing}>AI审核</Button>
-              </Popconfirm>
-            </Tooltip>
-          )}
         </Space>
       ),
     },
@@ -402,7 +360,6 @@ export function ContractorAdmissionPage() {
 
   const renderAiReview = (a: ContractorAdmission) => {
     const r = a.ai_review_result
-    const canReview = a.source === 'bitable' && a.ai_review_status !== 'completed' && a.ai_review_status !== 'processing'
     const hasResult = !!r && (r.overall_conclusion || r.overall_report || REVIEW_DIMENSIONS.some((d) => r[d.key]?.conclusion || r[d.key]?.report))
 
     if (!hasResult) {
@@ -410,7 +367,7 @@ export function ContractorAdmissionPage() {
         <div>
           {a.ai_review_status === 'failed' ? (
             <>
-              <Text style={{ color: T.error }}>AI 审核失败，可点击重新审核。</Text>
+              <Text style={{ color: T.error }}>AI 审核失败，由飞书事件在下次记录变更时自动重试。</Text>
               {a.ai_error_message && (
                 <div style={{ marginTop: 10 }}>
                   <FieldLabel>失败原因</FieldLabel>
@@ -420,15 +377,8 @@ export function ContractorAdmissionPage() {
             </>
           ) : (
             <Text style={{ color: T.steel }}>
-              暂无 AI 审核结果。由平台调用 AI 审核安全管理协议（营业执照/保险凭证维度待开发）并回填飞书多维表格。
+              暂无 AI 审核结果。记录提交且安全管理协议齐备时由飞书事件自动触发审核（营业执照/保险凭证维度待开发）并回填飞书多维表格。
             </Text>
-          )}
-          {canReview && (
-            <div style={{ marginTop: 12 }}>
-              <Button type="primary" icon={<RocketOutlined />} loading={reviewing} onClick={() => handleReview(a.id)}>
-                触发AI审核
-              </Button>
-            </div>
           )}
         </div>
       )
@@ -436,13 +386,6 @@ export function ContractorAdmissionPage() {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {canReview && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button type="primary" ghost icon={<RocketOutlined />} loading={reviewing} onClick={() => handleReview(a.id)}>
-              重新审核
-            </Button>
-          </div>
-        )}
         {/* 总体结论 */}
         <div>
           <FieldLabel>总体结论</FieldLabel>

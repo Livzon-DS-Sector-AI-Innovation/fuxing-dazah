@@ -4,14 +4,12 @@
 // StatCard 统计行（总数/open/followed/逾期，由列表派生——后端无 stats 端点；逾期 = expired 或 open 且 followup_date < today）
 // 筛选：状态/类别（服务端）+ 随访类型/keyword（后端 list 无对应参数 → 当前页行内客户端过滤）
 // 默认按 followup_date 升序（due_order=true，到期优先）。
-// 操作：处置（OhFollowupModal）/ 关闭（Popconfirm + action_taken 必填）。
+// 处置/补录/关闭走 Agent 工具（create_oh_followup / close_oh_followup，3.0 四期 1-E）。
 
 import { useMemo, useState } from 'react'
 import {
-  App,
   Button,
   Input,
-  Popconfirm,
   Select,
   Table,
   Tooltip,
@@ -21,7 +19,6 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchOhFollowups } from '@/lib/api/safety/occupational-health'
-import { closeOhFollowup } from '@/actions/safety'
 import type { OhFollowup } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
@@ -35,8 +32,6 @@ import {
   T,
   UI,
 } from './ohConstants'
-import { linkDanger, linkPrimary } from './shared-styles'
-import OhFollowupModal from './OhFollowupModal'
 
 /** 随访状态 → ui-kit 语义 tone */
 const FOLLOWUP_STATUS_TONE: Record<string, Tone> = {
@@ -77,8 +72,6 @@ function Pill({ status, map, toneMap }: {
 const MAX_FETCH = 200
 
 export default function OhFollowupsPanel() {
-  const { message } = App.useApp()
-
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<string | undefined>()
   const [category, setCategory] = useState<string | undefined>()
@@ -86,10 +79,6 @@ export default function OhFollowupsPanel() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-
-  const [disposeTarget, setDisposeTarget] = useState<OhFollowup | null>(null)
-  const [disposeOpen, setDisposeOpen] = useState(false)
-  const [closeText, setCloseText] = useState('')
 
   const queryClient = useQueryClient()
 
@@ -145,26 +134,6 @@ export default function OhFollowupsPanel() {
     f.status === 'expired' ||
     (f.status === 'open' && !!f.followup_date && dayjs(f.followup_date).isBefore(dayjs().startOf('day')))
 
-  const handleClose = async (f: OhFollowup) => {
-    if (!closeText.trim()) {
-      message.warning('关闭随访需填写处置措施（action_taken）')
-      return
-    }
-    try {
-      const res = await closeOhFollowup(f.id, closeText.trim())
-      if (res.code === 200) {
-        message.success('随访已关闭')
-        setCloseText('')
-        queryClient.invalidateQueries({ queryKey: ['oh-followups'] })
-        queryClient.invalidateQueries({ queryKey: ['oh-followups-kpi'] })
-      } else {
-        message.error(res.message || '关闭失败')
-      }
-    } finally {
-      /* noop */
-    }
-  }
-
   const columns: ColumnsType<OhFollowup> = useMemo(() => [
     { title: '人员姓名', dataIndex: 'person_name', key: 'person_name', width: 110, render: (v: string) => v || '-' },
     {
@@ -193,29 +162,7 @@ export default function OhFollowupsPanel() {
       title: '来源', dataIndex: 'source', key: 'source', width: 100,
       render: (v: string) => <StatusTag tone={v === 'ai' ? 'info' : 'default'} label={v === 'ai' ? 'AI 自动' : '人工补录'} />,
     },
-    {
-      title: '操作', key: 'actions', width: 110, fixed: 'right',
-      render: (_: unknown, r: OhFollowup) => (
-        <span style={{ display: 'inline-flex', gap: 10 }}>
-          <span role="button" style={{ ...linkPrimary, cursor: 'pointer' }}
-            onClick={() => { setDisposeTarget(r); setDisposeOpen(true) }}>
-            处置
-          </span>
-          {r.status !== 'closed' && (
-            <Popconfirm
-              title="关闭随访"
-              description={<Input.TextArea rows={2} placeholder="处置措施（必填）" value={closeText} onChange={(e) => setCloseText(e.target.value)} />}
-              okText="确认关闭" cancelText="取消" okButtonProps={{ danger: true }}
-              onConfirm={() => handleClose(r)}
-              onOpenChange={(open) => { if (open) setCloseText('') }}
-            >
-              <span role="button" style={{ ...linkDanger, cursor: 'pointer' }}>关闭</span>
-            </Popconfirm>
-          )}
-        </span>
-      ),
-    },
-  ], [closeText]) // eslint-disable-line react-hooks/exhaustive-deps
+  ], []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex flex-col gap-4 pb-8">
@@ -274,17 +221,6 @@ export default function OhFollowupsPanel() {
           }}
         />
       </SectionCard>
-
-      <OhFollowupModal
-        open={disposeOpen}
-        onClose={() => setDisposeOpen(false)}
-        followup={disposeTarget}
-        onSaved={() => {
-          setDisposeOpen(false)
-          queryClient.invalidateQueries({ queryKey: ['oh-followups'] })
-          queryClient.invalidateQueries({ queryKey: ['oh-followups-kpi'] })
-        }}
-      />
     </div>
   )
 }

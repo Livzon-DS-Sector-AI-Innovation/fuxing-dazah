@@ -1,16 +1,16 @@
 'use client'
 
 // MSDS 供应商资料采集 Panel（MsdsCollectionPanel）— 对标 CertWarningPanel 形态
-// StatCard 统计行（与台账共享 msds-stats 端点）→ SectionCard 采集台账（筛选 + Table + 手动触发解析）。
+// StatCard 统计行（与台账共享 msds-stats 端点）→ SectionCard 采集台账（筛选 + Table）。
+// 解析触发已退役前端入口：新资料由飞书事件自动解析（msds_collection_handler）。
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { App, Button, Select, Space, Table, Tooltip } from 'antd'
-import { EyeOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { EyeOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchMsdsCollections, fetchMsdsStats } from '@/lib/api/safety/msds'
-import { retryMsdsParse } from '@/actions/safety'
 import type { MsdsCollectionRecord } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
@@ -36,7 +36,6 @@ export default function MsdsCollectionPanel() {
   const [applied, setApplied] = useState<{ parseStatus: string }>({ parseStatus: '' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [parsingId, setParsingId] = useState<string | null>(null)
   const [detailRec, setDetailRec] = useState<MsdsCollectionRecord | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
@@ -60,21 +59,6 @@ export default function MsdsCollectionPanel() {
 
   const rows = listData?.items ?? []
   const total = listData?.total ?? 0
-
-  const handleRetry = useCallback(async (rec: MsdsCollectionRecord) => {
-    setParsingId(rec.id)
-    try {
-      const res = await retryMsdsParse(rec.id)
-      if (res.code === 200) {
-        message.success('解析已触发，稍后刷新查看结果')
-        queryClient.invalidateQueries({ queryKey: ['msds-collections'] })
-        queryClient.invalidateQueries({ queryKey: ['msds-stats'] })
-      } else {
-        message.error(res.message || '解析触发失败')
-      }
-    } catch { message.error('解析触发失败') }
-    finally { setParsingId(null) }
-  }, [message, queryClient])
 
   const columns: ColumnsType<MsdsCollectionRecord> = useMemo(() => [
     {
@@ -112,23 +96,15 @@ export default function MsdsCollectionPanel() {
       render: (d: string) => (d ? dayjs(d).format('YYYY-MM-DD') : '-'),
     },
     {
-      title: '操作', key: 'actions', width: 130, fixed: 'right',
+      title: '操作', key: 'actions', width: 60, fixed: 'right',
       render: (_: unknown, record: MsdsCollectionRecord) => (
         <Space size={4}>
-          <Tooltip title="触发/重试 AI 解析（自动写回 MSDS 表）">
-            <Button size="small" type="primary" icon={<ThunderboltOutlined />}
-              loading={parsingId === record.id}
-              onClick={() => handleRetry(record)}
-              style={{ background: T.primary, borderColor: T.primary, fontSize: 12 }}>
-              解析
-            </Button>
-          </Tooltip>
           <Button size="small" type="text" icon={<EyeOutlined />}
             onClick={() => { setDetailRec(record); setDetailOpen(true) }} />
         </Space>
       ),
     },
-  ], [parsingId, handleRetry])
+  ], [])
 
   return (
     <div className="flex flex-col gap-4 pb-8">
@@ -136,7 +112,7 @@ export default function MsdsCollectionPanel() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="采集总数" value={stats?.total_collections ?? '-'} sub="供应商资料上传" />
         <StatCard label="已解析" value={stats?.parsed_collections ?? 0} sub="AI 提取完成" />
-        <StatCard label="解析失败" value={stats?.failed_collections ?? 0} sub="可手动重试" />
+        <StatCard label="解析失败" value={stats?.failed_collections ?? 0} sub="记录变更时自动重试" />
         <StatCard label="台账收录" value={stats?.total_documents ?? '-'} sub="MSDS 表记录" />
       </div>
 

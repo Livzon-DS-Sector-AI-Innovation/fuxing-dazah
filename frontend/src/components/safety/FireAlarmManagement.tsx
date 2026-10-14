@@ -6,29 +6,22 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  EyeOutlined, FileTextOutlined, ReloadOutlined, SendOutlined, SyncOutlined,
+  EyeOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { Column } from '@ant-design/charts'
 import dayjs, { type Dayjs } from 'dayjs'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchFireAlarmRecords, fetchFireAlarmStats } from '@/lib/api/safety/fire-alarm'
-import {
-  generateFireAlarmDailyReport,
-  generateFireAlarmMonthlyReport,
-  syncFireAlarmData,
-} from '@/actions/safety'
 import type {
-  FireAlarmPushResult,
   FireAlarmRecord,
-  FireAlarmReportResponse,
   FireAlarmStats,
 } from '@/types/safety'
 
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
 import { T } from './shared-styles'
-import { AI_DIMENSION_CONFIG, dynamicTagStyle, PUSH_RESULT } from './fireAlarmConstants'
+import { AI_DIMENSION_CONFIG, dynamicTagStyle } from './fireAlarmConstants'
 
 // ── DESIGN tokens：统一从 shared-styles 的 T 导入（唯一来源），本地不重复定义色板 ──
 
@@ -39,14 +32,6 @@ const CARD_STYLE: React.CSSProperties = {
 }
 
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace'
-
-// ── 推送结果 → ui-kit 语义 tone（成功 ok / 跳过 default / 失败 danger）──
-
-const PUSH_RESULT_TONE: Record<'success' | 'skipped' | 'failed', Tone> = {
-  success: 'ok',
-  skipped: 'default',
-  failed: 'danger',
-}
 
 // ── AI 维度 Tag（英文枚举 → 中文；未识别/空 → 灰「—」）──
 
@@ -100,16 +85,9 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
   const [keywordInput, setKeywordInput] = useState('')
   const [keyword, setKeyword] = useState('')
 
-  // ── 操作 ──
-  const [syncing, setSyncing] = useState(false)
-  const [generatingDaily, setGeneratingDaily] = useState(false)
-  const [generatingMonthly, setGeneratingMonthly] = useState(false)
-
   // ── 弹窗 ──
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailItem, setDetailItem] = useState<FireAlarmRecord | null>(null)
-  const [reportOpen, setReportOpen] = useState(false)
-  const [report, setReport] = useState<FireAlarmReportResponse | null>(null)
 
   const queryClient = useQueryClient()
 
@@ -147,68 +125,6 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
 
   const rows = useMemo(() => listData?.items ?? [], [listData?.items])
   const total = listData?.total ?? 0
-
-  // ── 操作：同步飞书 ──
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncFireAlarmData()
-      if (res.code === 200) {
-        const d = res.data
-        message.success(
-          `同步完成：更新 ${d?.synced_count ?? 0} 条${d?.soft_deleted_count ? `，软删除 ${d.soft_deleted_count} 条` : ''}`
-        )
-        refresh()
-      } else {
-        message.error(res.message || '同步失败')
-      }
-    } catch {
-      message.error('同步失败')
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  // ── 操作：生成日报/月报（同构流程，仅入口与参数不同）──
-  const summarizePush = (results: FireAlarmPushResult[] | undefined): string => {
-    if (!results || results.length === 0) return '未配置推送目标，已跳过推送'
-    const ok = results.filter((r) => r.success).length
-    const skipped = results.filter((r) => r.skipped).length
-    if (ok > 0) {
-      const failed = results.length - ok
-      return `推送成功 ${ok} 群${failed > 0 ? `，${failed} 群失败` : ''}`
-    }
-    if (skipped === results.length) return '未配置推送目标，已跳过推送'
-    return '推送失败'
-  }
-
-  const handleGenerate = async (kind: 'daily' | 'monthly') => {
-    const setGenerating = kind === 'daily' ? setGeneratingDaily : setGeneratingMonthly
-    const label = kind === 'daily' ? '日报' : '月报'
-    setGenerating(true)
-    message.loading({ content: 'AI 分析中，报警较多时可能需要 1-2 分钟…', key: 'fire-alarm-gen' })
-    try {
-      const res = kind === 'daily'
-        ? await generateFireAlarmDailyReport({})
-        : await generateFireAlarmMonthlyReport({})
-      if (res.code === 200 && res.data) {
-        message.destroy('fire-alarm-gen')
-        message.success(`${label}已生成 · ${summarizePush(res.data.push_results)}`)
-        setReport(res.data)
-        setReportOpen(true)
-        // 必须重拉列表：日报生成会回写每条记录的 AI 分析字段，「本周已AI分析」也随之变化
-        refresh()
-      } else {
-        message.destroy('fire-alarm-gen')
-        message.error(res.message || '生成失败')
-      }
-    } catch {
-      message.destroy('fire-alarm-gen')
-      message.error('生成失败')
-    } finally {
-      setGenerating(false)
-    }
-  }
 
   // ── 筛选器选项：stats 分布 + 已加载行内值取并集兜底（避免本周无数据的部门不可选）──
   const optionList = (dist: Record<string, number> | undefined, rowValues: (string | null | undefined)[]) => {
@@ -352,22 +268,7 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
           />
           <StatCard label="本周报警" value={stats?.week_total ?? '—'} tone="primary" sub="自然周 周一~周日" />
           <StatCard label="累计记录" value={stats?.total_count ?? '—'} sub="平台台账全量" />
-          <StatCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? '—'} tone="ok" sub="生成日报后自动回写" />
-        </div>
-        <div style={{
-          ...CARD_STYLE,
-          flex: '0 0 auto', minWidth: 150,
-          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8,
-          padding: '14px 16px',
-          background: '#fafaf8',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: T.muted, marginBottom: 4 }}>操作</div>
-          <Button icon={<SyncOutlined spin={syncing} />} onClick={handleSync} loading={syncing}
-            size="small" style={{ borderRadius: 6 }}>同步飞书</Button>
-          <Button type="primary" icon={<SendOutlined />} onClick={() => handleGenerate('daily')} loading={generatingDaily}
-            size="small" style={{ borderRadius: 6, fontWeight: 500, background: T.primary }}>生成日报</Button>
-          <Button icon={<FileTextOutlined />} onClick={() => handleGenerate('monthly')} loading={generatingMonthly}
-            size="small" style={{ borderRadius: 6 }}>生成月报</Button>
+          <StatCard label="本周已AI分析" value={stats?.week_ai_analyzed_count ?? '—'} tone="ok" sub="每日 17:00 日报任务自动回写" />
         </div>
       </div>
 
@@ -515,38 +416,6 @@ export default function FireAlarmManagement({ initialStats }: FireAlarmManagemen
             <span style={{ color: T.muted }}>同步时间</span>
             <span style={{ fontSize: 12, color: T.steel }}>{detailItem.synced_at ? dayjs(detailItem.synced_at).format('YYYY-MM-DD HH:mm') : '—'}</span>
           </div>
-        )}
-      </Modal>
-
-      {/* ── 日报/月报 Modal（共用；关闭后数据保留，重复打开不重生成）── */}
-      <Modal title={report?.report_kind === 'monthly' ? '📈 消防报警月报' : '📋 消防报警日报'}
-        open={reportOpen} onCancel={() => setReportOpen(false)} width={720}
-        footer={<Button onClick={() => setReportOpen(false)}>关闭</Button>}>
-        {report && (
-          <>
-            <Space size={12} style={{ marginBottom: 12 }} wrap>
-              <span style={{ fontSize: 12, color: T.steel }}>
-                {report.report_kind === 'monthly'
-                  ? `${report.month_start ? dayjs(report.month_start).format('MM/DD') : '—'} ~ ${dayjs(report.target_date).format('MM/DD')}`
-                  : dayjs(report.target_date).format('YYYY-MM-DD')}
-              </span>
-              <span style={{ fontSize: 12, color: T.steel }}>共 {report.total} 条报警</span>
-              <span style={{ fontSize: 12, color: T.steel }}>AI 分析 {report.analyzed}/{report.total} 条</span>
-              {report.push_results.map((r, i) => {
-                const key = r.success ? 'success' : r.skipped ? 'skipped' : 'failed'
-                const cfg = PUSH_RESULT[key]
-                return (
-                  <Tooltip key={i} title={r.error || r.reason || undefined}>
-                    <StatusTag tone={PUSH_RESULT_TONE[key]} label={cfg.label} />
-                  </Tooltip>
-                )
-              })}
-            </Space>
-            <pre style={{ whiteSpace: 'pre-wrap', fontFamily: MONO_FONT, fontSize: 13, lineHeight: 1.8, margin: 0,
-              background: '#fafafa', padding: 16, borderRadius: 8, maxHeight: '60vh', overflow: 'auto' }}>
-              {report.markdown_report}
-            </pre>
-          </>
         )}
       </Modal>
     </div>

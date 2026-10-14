@@ -11,22 +11,19 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import {
   EditOutlined, EyeOutlined, ReloadOutlined,
-  SaveOutlined, SearchOutlined, SendOutlined, SyncOutlined,
+  SaveOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import { Column } from '@ant-design/charts'
 import dayjs, { type Dayjs } from 'dayjs'
 
 import {
   deleteSpecialOperationReport,
-  generateDailyReport,
   getDailyReportStats,
   getSpecialOperationLedgerStats,
   getSpecialOperationReports,
-  syncDailyReportData,
   updateSpecialOperationReportV35,
 } from '@/actions/safety'
 import type {
-  DailyReportResponse,
   DailyReportStats,
   SpecialOperationLedgerStats,
   SpecialOperationReport,
@@ -123,14 +120,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   const [opLevel, setOpLevel] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
 
-  // ── 操作 ──
-  const [syncing, setSyncing] = useState(false)
-  const [generating, setGenerating] = useState(false)
-
-  // ── 弹窗 ──
-  const [reportOpen, setReportOpen] = useState(false)
-  const [dailyReport, setDailyReport] = useState<DailyReportResponse | null>(null)
-
   // ── 详情抽屉（简单 Modal 替代 Drawer，对齐 AI 审计风格）──
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailItem, setDetailItem] = useState<SpecialOperationReport | null>(null)
@@ -182,27 +171,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   }, [opType, opLevel])
 
   const refresh = () => { void loadList(page, pageSize); void loadStats() }
-
-  // ── 操作 ──
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncDailyReportData()
-      if (res.code === 200) { message.success(`同步完成：${res.data?.synced_count || 0} 条`); refresh() }
-      else { message.error(res.message || '同步失败') }
-    } catch { message.error('同步失败') }
-    finally { setSyncing(false) }
-  }
-
-  const handleGenerate = async () => {
-    setGenerating(true)
-    try {
-      const res = await generateDailyReport({ mode: 'today' })
-      if (res.code === 200) { setDailyReport(res.data); setReportOpen(true); loadStats() }
-      else { message.error(res.message || '生成失败') }
-    } catch { message.error('生成失败') }
-    finally { setGenerating(false) }
-  }
 
   // ── V3.5 字段编辑 ──
   useEffect(() => {
@@ -366,8 +334,8 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
         })}
       </div>
 
-      {/* ── 当日作业态势 + 操作 ── */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      {/* ── 当日作业态势 ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard
           label="今日作业"
           value={dailyStats?.total ?? '—'}
@@ -391,18 +359,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
           value={dailyStats?.low ?? '—'}
           tone={dailyStats && dailyStats.low > 0 ? 'ok' : 'default'}
         />
-        <div style={{
-          ...CARD_STYLE,
-          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8,
-          padding: '14px 16px',
-          background: '#fafaf8',
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 1, color: UI.stone, marginBottom: 4 }}>操作</div>
-          <Button icon={<SyncOutlined spin={syncing} />} onClick={handleSync} loading={syncing}
-            size="small" style={{ borderRadius: 6 }}>同步飞书</Button>
-          <Button type="primary" icon={<SendOutlined />} onClick={handleGenerate} loading={generating}
-            size="small" style={{ borderRadius: 6, fontWeight: 500, background: UI.brandPurple }}>生成日报</Button>
-        </div>
       </div>
 
       {/* ── 趋势图 ── */}
@@ -410,7 +366,7 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
         {chartConfig ? (
           <Column {...chartConfig} height={200} />
         ) : (
-          <EmptyGuide compact title="时间窗内暂无记录" description="调整筛选条件或同步飞书后再试" />
+          <EmptyGuide compact title="时间窗内暂无记录" description="调整筛选条件或稍后再试" />
         )}
       </SectionCard>
 
@@ -560,25 +516,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
               </>
             )}
           </div>
-        )}
-      </Modal>
-
-      {/* ── 日报弹窗 ── */}
-      <Modal title="📋 特殊作业日报" open={reportOpen} onCancel={() => setReportOpen(false)} width={700}
-        footer={<Button onClick={() => setReportOpen(false)}>关闭</Button>}>
-        {dailyReport && (
-          <>
-            <Space style={{ marginBottom: 12 }}>
-              <StatusTag tone="danger" label={`${dailyReport.high_risk} 高风险`} />
-              <StatusTag tone="warn" label={`${dailyReport.medium_risk} 中风险`} />
-              <StatusTag tone="ok" label={`${dailyReport.low_risk} 低风险`} />
-              <span style={{ fontSize: 12, color: UI.steel }}>共 {dailyReport.total} 条 · 排除 {dailyReport.excluded} 条</span>
-            </Space>
-            <pre style={{ whiteSpace: 'pre-wrap', fontFamily: MONO_FONT, fontSize: 13, lineHeight: 1.8, margin: 0,
-              background: '#fafafa', padding: 16, borderRadius: 8, maxHeight: '60vh', overflow: 'auto' }}>
-              {dailyReport.markdown_report}
-            </pre>
-          </>
         )}
       </Modal>
     </div>

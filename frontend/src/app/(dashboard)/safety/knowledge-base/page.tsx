@@ -7,7 +7,6 @@ import {
   ApartmentOutlined,
   FileSearchOutlined,
   RobotOutlined,
-  SyncOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -16,7 +15,6 @@ import {
   generateKnowledgeCard,
   generatePpt,
   generateSummary,
-  syncKnowledgeArticles,
 } from '@/actions/safety'
 import { KnowledgeQueryProvider } from '@/components/safety/KnowledgeQueryProvider'
 import KnowledgeDetailDrawer from '@/components/safety/KnowledgeDetailDrawer'
@@ -50,7 +48,6 @@ function KnowledgeBaseContent() {
 
   // ── 本地状态 ──
   const [searchText, setSearchText] = useState(q)
-  const [syncing, setSyncing] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
   const [formOpen, setFormOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState<SafetyKnowledgeArticle | null>(null)
@@ -136,23 +133,6 @@ function KnowledgeBaseContent() {
   const handleOpenDetailById = (id: string) => {
     setDetailId(id)
     setDetailOpen(true)
-  }
-
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncKnowledgeArticles()
-      if (res.code === 200 && res.data) {
-        message.success('同步完成：创建 ' + res.data.created + '，更新 ' + res.data.updated + '，删除 ' + res.data.deleted)
-        refresh()
-      } else {
-        message.error(res.message || '同步失败')
-      }
-    } catch {
-      message.error('同步请求失败')
-    } finally {
-      setSyncing(false)
-    }
   }
 
   const handleNewVersion = async (article: SafetyKnowledgeArticle) => {
@@ -303,9 +283,6 @@ function KnowledgeBaseContent() {
                 )}
                 <Button size="small" icon={<ApartmentOutlined />} onClick={() => router.push('/safety/knowledge-base/graph')}>
                   知识图谱
-                </Button>
-                <Button size="small" icon={<SyncOutlined spin={syncing} />} onClick={handleSync} loading={syncing}>
-                  同步
                 </Button>
               </div>
             }
