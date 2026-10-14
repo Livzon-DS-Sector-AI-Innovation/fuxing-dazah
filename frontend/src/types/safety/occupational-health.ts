@@ -435,37 +435,6 @@ export interface OhFollowupQueryParams {
 
 // ── FormData ──
 
-/** 创建体检记录（后端 OhHealthExamCreate；exam_type/employee_name 必填） */
-export interface OhHealthExamFormData {
-  exam_no?: string
-  person_id?: string
-  employee_name: string
-  id_card_no?: string
-  employee_no?: string
-  department?: string
-  position?: string
-  gender?: string
-  age?: number
-  marital_status?: string
-  phone?: string
-  exam_type: OhExamType | string
-  exam_agency?: string
-  scheduled_date?: string
-  exam_date?: string
-  report_date?: string
-  hazard_factors?: string[]
-  protection_measures?: string
-  total_work_years?: number
-  hazard_exposure_years?: number
-  exam_result?: string
-  exam_conclusion?: string
-  treatment_advice_raw?: string
-  paper_report_kept?: string
-  synced_to_summary?: boolean
-  source?: string
-  notes?: string
-}
-
 /** 手动补录随访（后端 OhFollowupCreate；exam_id 或 person_id 必填其一） */
 export interface OhFollowupFormData {
   exam_id?: string
@@ -531,21 +500,6 @@ export interface OhHazardMonitor {
   notes?: string
   created_at: string
   updated_at: string
-}
-
-export interface OhHazardMonitorFormData {
-  monitor_no: string
-  workplace: string
-  location?: string
-  equipment_info?: string
-  detection_type: string
-  detection_date?: string
-  detection_agency?: string
-  inspector_name?: string
-  detection_results?: DetectionResultItem[]
-  abnormality_records?: AbnormalityRecord[]
-  attachments?: { name: string; path: string }[]
-  notes?: string
 }
 
 export interface OhHazardMonitorQueryParams {

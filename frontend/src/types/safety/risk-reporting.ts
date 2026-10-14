@@ -91,30 +91,6 @@ export interface SpecialOperationReport {
   updated_at: string
 }
 
-export interface SpecialOperationReportFormData {
-  report_no: string
-  permit_id?: string
-  operation_type: string
-  operation_level: string
-  department?: string
-  location?: string
-  equipment_tag?: string
-  work_description?: string
-  planned_start_time?: string
-  planned_end_time?: string
-  work_leader_name?: string
-  operator_names?: string
-  guardian_name?: string
-  risk_level?: string
-  safety_measures?: string
-  emergency_equipment?: string
-  gas_analysis?: string
-  risk_assessment?: string
-  applicant_name?: string
-  approver_name?: string
-  notes?: string
-}
-
 export interface SpecialOperationReportQueryParams {
   page?: number
   page_size?: number
@@ -127,15 +103,6 @@ export interface SpecialOperationReportQueryParams {
   date_to?: string
   keyword?: string
   is_critical?: boolean
-}
-
-/** V3.5 风险判定字段（平台直输/同步，PUT 更新用） */
-export interface SpecialOperationReportV35Fields {
-  fire_work_method?: string | null
-  height_work_method?: string | null
-  work_height?: number | null
-  lifting_weight?: number | null
-  contractor_name?: string | null
 }
 
 // ── 特殊作业台账 ──

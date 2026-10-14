@@ -1,15 +1,15 @@
 'use client'
 
 // 危化品库存管理 Panel（ChemicalInventoryPanel）— 对标 CertWarningPanel 形态
-// StatCard 统计行（stats 端点）+ SectionCard 台账（筛选 + 表格 + 分页 + 手动全量扫描）
+// StatCard 统计行（stats 端点）+ SectionCard 台账（筛选 + 表格 + 分页）
+// 风险标记/说明由每日快照任务与 WS 同步链路自动回填（手动扫描入口已按 3.0 只读口径退役）。
 
 import { useState } from 'react'
-import { App, Button, Input, Select, Table, Tag, Tooltip } from 'antd'
-import { ReloadOutlined, SearchOutlined, ScanOutlined } from '@ant-design/icons'
+import { Button, Input, Select, Table, Tag, Tooltip } from 'antd'
+import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchChemicalInventoryRecords, fetchChemicalInventoryStats } from '@/lib/api/safety/chemical-inventory'
-import { runChemicalInventoryScan } from '@/actions/safety'
 import type { ChemicalInventoryRecord } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
@@ -63,8 +63,6 @@ function Pill({ value, map, toneMap }: {
 }
 
 export default function ChemicalInventoryPanel() {
-  const { message } = App.useApp()
-
   const [department, setDepartment] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
 
@@ -73,7 +71,6 @@ export default function ChemicalInventoryPanel() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [scanning, setScanning] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -105,22 +102,6 @@ export default function ChemicalInventoryPanel() {
   const handleSearch = () => {
     setApplied({ department, keyword })
     setPage(1)
-  }
-
-  const handleScan = async () => {
-    setScanning(true)
-    try {
-      const res = await runChemicalInventoryScan()
-      if (res.code === 200 && res.data) {
-        const d = res.data as { changed?: number; warn_count?: number; normal_count?: number }
-        message.success(`扫描完成：${d.changed ?? 0} 条有变化 · 预警 ${d.warn_count ?? 0} · 正常 ${d.normal_count ?? 0}`)
-        refresh()
-      } else {
-        message.error(res.message || '扫描失败')
-      }
-    } finally {
-      setScanning(false)
-    }
   }
 
   const columns: ColumnsType<ChemicalInventoryRecord> = [
@@ -195,9 +176,6 @@ export default function ChemicalInventoryPanel() {
             onPressEnter={handleSearch}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
-          <Tooltip title="对当前台账全量重跑规则，回填风险标记/风险说明">
-            <Button icon={<ScanOutlined />} loading={scanning} onClick={handleScan}>手动扫描</Button>
-          </Tooltip>
           <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
         </div>
 

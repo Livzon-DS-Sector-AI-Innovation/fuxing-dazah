@@ -38,13 +38,6 @@ export interface KnowledgeCardContent {
   legal_basis_clauses?: string | null
 }
 
-/** AI 生成知识卡片响应 */
-export interface GenerateCardResponse {
-  knowledge_card: KnowledgeCardContent
-  card_version: number
-  message: string
-}
-
 /** Agent 注入使用统计 */
 export interface AgentUsageStats {
   article_id: string
@@ -54,111 +47,12 @@ export interface AgentUsageStats {
   last_injected_at: string | null
 }
 
-/** 批量生成请求 */
-export interface BatchGenerateCardsRequest {
-  article_ids: string[]
-}
-
-/** 批量生成响应 */
-export interface BatchGenerateCardsResponse {
-  success_count: number
-  failed_count: number
-  results: { id: string; success: boolean; message: string }[]
-}
-
-// ── AI PPT 生成 ──
-
-/** PPT 生成请求 */
-export interface GeneratePptRequest {
-  template: 'training' | 'briefing' | 'audit'
-  style: 'professional' | 'modern' | 'minimal'
-}
-
-/** PPT 生成响应 */
-export interface GeneratePptResponse {
-  download_url: string
-  file_name: string
-  page_count: number
-  message: string
-}
-
-/** PPT 生成历史记录 */
-export interface PptGenerationRecord {
-  id: string
-  file_name: string
-  template: string
-  style: string
-  page_count: number
-  download_url: string
-  created_at: string
-}
-
-/** PPT 生成历史列表 */
-export interface PptHistoryResponse {
-  records: PptGenerationRecord[]
-}
-
-// ── AI 摘要生成 ──
-
-/** 摘要生成响应 */
-export interface GenerateSummaryResponse {
-  summary: string
-  message: string
-}
-
-export interface SafetyKnowledgeArticleFormData {
-  article_no?: string
-  title: string
-  category: KnowledgeCategory
-  summary?: string
-  content?: string
-  tags?: string
-  source?: string
-  author?: string
-  publish_date?: string
-  notes?: string
-}
-
 export interface SafetyKnowledgeArticleQueryParams {
   page?: number
   page_size?: number
   category?: string
   status?: string
   keyword?: string
-}
-
-// ── AI 智能解析 ──
-
-export interface ParseDocumentResponse {
-  title: string
-  category: string
-  summary: string
-  tags: string
-  source: string
-  author: string
-  publish_date: string | null
-  content_preview: string
-  full_content: string
-}
-
-// ── 重复检测 ──
-
-export interface DuplicateCheckRequest {
-  title: string
-  content?: string
-}
-
-export interface DuplicateArticleItem {
-  id: string
-  article_no: string | null
-  title: string
-  category: string
-  similarity_reason: string | null
-}
-
-export interface DuplicateCheckResponse {
-  has_duplicates: boolean
-  duplicates: DuplicateArticleItem[]
 }
 
 // ── 版本管理 ──
@@ -171,11 +65,6 @@ export interface VersionChainItem {
   status: string
   is_current: boolean
   created_at: string
-}
-
-export interface NewVersionResponse {
-  new_article: SafetyKnowledgeArticle
-  version_chain: VersionChainItem[]
 }
 
 // ── 语义搜索 ──

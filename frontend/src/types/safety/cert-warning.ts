@@ -64,14 +64,6 @@ export interface CertWarningSummary {
   by_event?: Record<string, number>
 }
 
-// ── 回填请求（`post /{id}/renew`）──
-
-export interface RenewRequest {
-  renewed_date?: string | null
-  next_review_date?: string | null
-  notes?: string
-}
-
 // ── 查询参数 ──
 
 export interface CertWarningQueryParams {

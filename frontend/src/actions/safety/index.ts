@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 // 注意：以下 revalidatePath 调用指向的页面路径部分仍在开发中，待对应页面创建后将自动生效
 import { getAuthHeaders } from '@/lib/auth'
-import { fetchApi, uploadPhoto } from './_helpers'
+import { fetchApi } from './_helpers'
 import { API_BASE, buildQueryString, SAFETY_BITABLE_CONFIG, SAFETY_SCHEDULER_CONFIG, SAFETY_APP_CONFIG } from './_utils'
 import type {
   AiAuditQueryParams,
@@ -21,13 +21,8 @@ import type {
   OperationRegulationFormData,
   RegulationRevision,
   SafetyKnowledgeArticle,
-  SafetyKnowledgeArticleFormData,
   SafetyKnowledgeArticleQueryParams,
   KnowledgeCategoryCounts,
-  ParseDocumentResponse,
-  DuplicateCheckRequest,
-  DuplicateCheckResponse,
-  NewVersionResponse,
   VersionChainItem,
   SemanticSearchResult,
   SafetyTraining,
@@ -37,9 +32,7 @@ import type {
   SpecialOperationPersonnel,
   SpecialOperationPersonnelFormData,
   SpecialOperationReport,
-  SpecialOperationReportFormData,
   SpecialOperationReportQueryParams,
-  SpecialOperationReportV35Fields,
   SpecialOperationLedgerQueryParams,
   SpecialOperationLedgerStats,
   KeyRiskOperationReport,
@@ -68,7 +61,6 @@ import type {
   OhPersonStats,
   OhHealthExam,
   OhHealthExamQueryParams,
-  OhHealthExamFormData,
   OhExamStats,
   OhPosition,
   OhPositionQueryParams,
@@ -80,13 +72,7 @@ import type {
   OhFollowup,
   OhFollowupQueryParams,
   // knowledge
-  GenerateCardResponse,
   AgentUsageStats,
-  BatchGenerateCardsResponse,
-  GeneratePptRequest,
-  GeneratePptResponse,
-  GenerateSummaryResponse,
-  PptHistoryResponse,
   // emergency drill
   DrillRecord,
   DrillRecordQueryParams,
@@ -98,12 +84,10 @@ import type {
   CertWarningDetail,
   CertWarningSummary,
   CertWarningQueryParams,
-  RenewRequest,
   // chemical inventory（危化品库存）
   ChemicalInventoryRecord,
   ChemicalInventoryQueryParams,
   ChemicalInventoryStats,
-  ChemicalInventoryScanResult,
   // scheduler-config（AI 配置 + 定时任务）
   AiConfigAuditItem,
   AiConfigData,
@@ -114,8 +98,6 @@ import type {
   AiScenarioConfig,
   FeishuGroupsData,
   FeishuPerson,
-  SchedulerPreviewData,
-  SchedulerRunResult,
   ScheduledTask,
   UpdateAiConfigInput,
   UpdateAiScenarioInput,
@@ -136,9 +118,7 @@ import type {
   UpdateAppConfigInput,
   // accident / check / daily risk report / oh hazard monitor（迁移补齐）
   SafetyCheck,
-  SafetyCheckFormData,
   OhHazardMonitor,
-  OhHazardMonitorFormData,
   OhHazardMonitorQueryParams,
 } from '@/types/safety'
 
@@ -202,18 +182,6 @@ export async function getHILedgerStats(
   )
 }
 
-export async function updateHazardIdentification(
-  id: string,
-  data: Partial<import('@/types/safety').HazardIdentification>
-) {
-  const response = await fetchApi<import('@/types/safety').HazardIdentification>(
-    `/safety/hazard-identifications/${id}`,
-    { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
-}
-
 export interface ManualTriggerResult {
   status: 'advanced' | 'noop'
   reason?: 'completed' | 'precondition' | 'empty_record' | 'dedup' | 'busy'
@@ -225,28 +193,6 @@ export interface ManualTriggerResult {
 export interface ManualTriggerResponse {
   result: ManualTriggerResult
   record?: import('@/types/safety').HazardIdentification
-}
-
-export async function uploadHazardAttachment(id: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/hazard-identifications/${id}/upload`,
-    { method: 'POST', headers: uploadHeaders, body: formData }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response.json()
-}
-
-export async function deleteHazardIdentification(id: string) {
-  const response = await fetchApi<null>(
-    `/safety/hazard-identifications/${id}`,
-    { method: 'DELETE' }
-  )
-  revalidatePath('/safety/hazard-identification')
-  return response
 }
 
 // ============ Hazard Identification AI Export ============
@@ -333,93 +279,10 @@ export async function getKnowledgeArticle(id: string) {
   return fetchApi<SafetyKnowledgeArticle>(`/safety/knowledge-articles/${id}`)
 }
 
-export async function createKnowledgeArticle(data: SafetyKnowledgeArticleFormData) {
-  const response = await fetchApi<SafetyKnowledgeArticle>('/safety/knowledge-articles', {
-    method: 'POST', body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-export async function updateKnowledgeArticle(id: string, data: Partial<SafetyKnowledgeArticleFormData>) {
-  const response = await fetchApi<SafetyKnowledgeArticle>(`/safety/knowledge-articles/${id}`, {
-    method: 'PUT', body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-export async function deleteKnowledgeArticle(id: string) {
-  const response = await fetchApi<null>(`/safety/knowledge-articles/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-export async function publishKnowledgeArticle(id: string) {
-  const response = await fetchApi<SafetyKnowledgeArticle>(`/safety/knowledge-articles/${id}/publish`, { method: 'POST' })
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-export async function archiveKnowledgeArticle(id: string) {
-  const response = await fetchApi<SafetyKnowledgeArticle>(`/safety/knowledge-articles/${id}/archive`, { method: 'POST' })
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-// ── AI 智能解析 ──
-
-export async function parseKnowledgeDocument(file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const headers = await getAuthHeaders()
-  // Remove Content-Type so browser sets multipart boundary
-  delete (headers as Record<string, string>)['Content-Type']
-  const res = await fetch(`${API_BASE}/safety/knowledge-articles/parse`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
-  return res.json() as Promise<ApiResponse<ParseDocumentResponse>>
-}
-
-export async function batchParseKnowledgeDocuments(files: File[]) {
-  const formData = new FormData()
-  files.forEach((file) => formData.append('files', file))
-  const headers = await getAuthHeaders()
-  delete (headers as Record<string, string>)['Content-Type']
-  const res = await fetch(`${API_BASE}/safety/knowledge-articles/batch-parse`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
-  return res.json() as Promise<ApiResponse<ParseDocumentResponse[]>>
-}
-
-// ── 附件上传 ──
-
-export async function uploadKnowledgeAttachment(articleId: string, file: File) {
-  return uploadPhoto(`/safety/knowledge-articles/${articleId}/upload`, file)
-}
-
-// ── 重复检测 ──
-
-export async function checkDuplicateArticle(data: DuplicateCheckRequest) {
-  return fetchApi<DuplicateCheckResponse>('/safety/knowledge-articles/check-duplicate', {
-    method: 'POST', body: JSON.stringify(data),
-  })
-}
-
 // ── 版本管理 ──
 
 export async function getArticleVersions(id: string) {
   return fetchApi<VersionChainItem[]>(`/safety/knowledge-articles/${id}/versions`)
-}
-
-export async function createNewArticleVersion(id: string) {
-  const response = await fetchApi<NewVersionResponse>(`/safety/knowledge-articles/${id}/new-version`, { method: 'POST' })
-  revalidatePath('/safety/knowledge-base')
-  return response
 }
 
 // ── 语义搜索 ──
@@ -435,54 +298,10 @@ export async function getKnowledgeCategoryCounts() {
   return fetchApi<KnowledgeCategoryCounts>('/safety/knowledge-articles/category-counts')
 }
 
-// ── 知识卡片管理 ──
-
-export async function generateKnowledgeCard(articleId: string) {
-  const response = await fetchApi<GenerateCardResponse>(
-    `/safety/knowledge-articles/${articleId}/generate-card`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
+// ── Agent 统计 ──
 
 export async function getAgentUsageStats(articleId: string) {
   return fetchApi<AgentUsageStats>(`/safety/knowledge-articles/${articleId}/agent-stats`)
-}
-
-export async function batchGenerateKnowledgeCards(articleIds: string[]) {
-  const response = await fetchApi<BatchGenerateCardsResponse>(
-    '/safety/knowledge-articles/batch/generate-cards',
-    { method: 'POST', body: JSON.stringify({ article_ids: articleIds }) }
-  )
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-// ── AI PPT 生成 ──
-
-export async function generatePpt(articleId: string, data: GeneratePptRequest) {
-  const response = await fetchApi<GeneratePptResponse>(
-    `/safety/knowledge-articles/${articleId}/generate-ppt`,
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/knowledge-base')
-  return response
-}
-
-export async function getPptHistory(articleId: string) {
-  return fetchApi<PptHistoryResponse>(`/safety/knowledge-articles/${articleId}/ppt-history`)
-}
-
-// ── AI 摘要生成 ──
-
-export async function generateSummary(articleId: string) {
-  const response = await fetchApi<GenerateSummaryResponse>(
-    `/safety/knowledge-articles/${articleId}/generate-summary`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/knowledge-base')
-  return response
 }
 
 // ==================== 八大特殊作业报备 Actions ====================
@@ -509,82 +328,6 @@ export async function getSpecialOperationReports(params?: SpecialOperationReport
 
 export async function getSpecialOperationReport(id: string) {
   const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}`)
-  return response
-}
-
-export async function createSpecialOperationReport(data: SpecialOperationReportFormData) {
-  const response = await fetchApi<SpecialOperationReport>('/safety/special-operation-reports', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops')
-
-  return response
-}
-
-export async function updateSpecialOperationReport(id: string, data: Partial<SpecialOperationReportFormData>) {
-  const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops')
-
-  return response
-}
-
-export async function updateSpecialOperationReportV35(
-  id: string,
-  data: SpecialOperationReportV35Fields,
-) {
-  const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops')
-  return response
-}
-
-export async function deleteSpecialOperationReport(id: string) {
-  const response = await fetchApi<null>(`/safety/special-operation-reports/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/risk-reporting')
-
-  return response
-}
-
-export async function submitSpecialOperationReport(id: string) {
-  const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/submit`, { method: 'POST' })
-  revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops')
-
-  return response
-}
-
-export async function approveSpecialOperationReport(id: string) {
-  const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/approve`, { method: 'POST' })
-  revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops')
-
-  return response
-}
-
-export async function rejectSpecialOperationReport(id: string, reason: string) {
-  const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/reject?reason=${encodeURIComponent(reason)}`, { method: 'POST' })
-  revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops')
-
-  return response
-}
-
-export async function setSpecialOperationReportCritical(id: string, is_critical: boolean, reason?: string) {
-  const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/critical`, {
-    method: 'PUT',
-    body: JSON.stringify({ is_critical, reason }),
-  })
-  revalidatePath('/safety/special-ops')
-
   return response
 }
 
@@ -694,15 +437,6 @@ export async function getOhPersonStats() {
   return fetchApi<OhPersonStats>('/safety/oh/persons/stats')
 }
 
-/** 手动触发总表回填（取最近一次体检 → last_exam_* + exam_record_ids + Bitable 回写） */
-export async function syncOhPerson(id: string) {
-  const res = await fetchApi<OhPerson>(`/safety/oh/persons/${id}/sync`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
 // ── 体检记录 oh-health-exams（前缀兼容保留） ──
 
 export async function getOhExams(params: OhHealthExamQueryParams = {}) {
@@ -720,32 +454,6 @@ export async function getOhExamEnums() {
     ai_conclusion: Array<{ value: string; label: string }>
     ai_parse_status: Array<{ value: string; label: string }>
   }>('/safety/oh-health-exams/enums')
-}
-
-export async function createOhExam(data: OhHealthExamFormData) {
-  const res = await fetchApi<OhHealthExam>('/safety/oh-health-exams', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
-export async function updateOhExam(id: string, data: Partial<OhHealthExamFormData>) {
-  const res = await fetchApi<OhHealthExam>(`/safety/oh-health-exams/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
-}
-
-export async function deleteOhExam(id: string) {
-  const res = await fetchApi<null>(`/safety/oh-health-exams/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
 }
 
 export async function getOhExamStats() {
@@ -790,15 +498,6 @@ export async function getOhApplications(params: OhExamApplicationQueryParams = {
 
 export async function getOhApplication(id: string) {
   return fetchApi<OhExamApplication>(`/safety/oh/applications/${id}`)
-}
-
-/** 手动触发差异分析 */
-export async function analyzeOhApplication(id: string) {
-  const res = await fetchApi<OhExamApplication>(`/safety/oh/applications/${id}/analyze`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/occupational-health')
-  return res
 }
 
 export async function getOhApplicationStats() {
@@ -910,32 +609,12 @@ export async function getDrillRecords(params: DrillRecordQueryParams = {}) {
   )
 }
 
-// ── AI 评估表生成 ──
-
-export async function generateDrillEval(recordId: string) {
-  const response = await fetchApi<DrillDocument>(
-    `/safety/emergency-drills/${recordId}/generate-eval`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/emergency-drill')
-  return response
-}
+// ── 附件文档 ──
 
 export async function getDrillDocuments(recordId: string) {
   return fetchApi<DrillDocument[]>(
     `/safety/emergency-drills/${recordId}/documents`,
   )
-}
-
-// ── 隐患追踪 ──
-
-export async function createHazardsFromIssues(recordId: string) {
-  const response = await fetchApi<{ hazard_id: string; description: string }[]>(
-    `/safety/emergency-drills/${recordId}/create-hazards`,
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/emergency-drill')
-  return response
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1032,19 +711,6 @@ export async function fetchCertWarningSummary(
   return fetchApi<CertWarningSummary>(`/safety/cert-warnings/summary${buildQueryString(params)}`)
 }
 
-/** 回填持证复审/换证结果（闭环 → 进入下一证件周期） */
-export async function renewCertificate(id: string, body: RenewRequest) {
-  const response = await fetchApi<CertWarningDetail>(
-    `/safety/cert-warnings/${id}/renew`,
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-    },
-  )
-  revalidatePath('/safety/cert-warnings')
-  return response
-}
-
 // ============ 危化品库存 Actions（chemical-inventory） ============
 
 /** 获取危化品库存台账（当前固定行，分页 + 部门/物料名称筛选） */
@@ -1055,16 +721,6 @@ export async function fetchChemicalInventoryRecords(params: ChemicalInventoryQue
 /** 获取当前库存风险统计 */
 export async function fetchChemicalInventoryStats() {
   return fetchApi<ChemicalInventoryStats>('/safety/chemical-inventory/stats')
-}
-
-/** 手动全量风险扫描（回填风险标记/风险说明） */
-export async function runChemicalInventoryScan() {
-  const response = await fetchApi<ChemicalInventoryScanResult>(
-    '/safety/chemical-inventory/scan',
-    { method: 'POST' },
-  )
-  revalidatePath('/safety/chemical-inventory')
-  return response
 }
 
 // ============ scheduler-config Actions（AI 配置 + 定时任务） ============
@@ -1146,23 +802,6 @@ export async function updateScheduledTask(jobName: string, data: UpdateScheduled
   )
   revalidatePath('/safety/system/scheduled-tasks')
   return response
-}
-
-/** 预览任务报告（只读生成，不推送） */
-export async function previewScheduledTask(jobName: string, date?: string) {
-  return fetchApi<SchedulerPreviewData>(
-    `${SAFETY_SCHEDULER_CONFIG}/tasks/${encodeURIComponent(jobName)}/preview`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date }) },
-  )
-}
-
-/** 手动触发任务一次（真实执行并推送目标群） */
-export async function runScheduledTask(jobName: string) {
-  return fetchApi<SchedulerRunResult>(
-    `${SAFETY_SCHEDULER_CONFIG}/tasks/${encodeURIComponent(jobName)}/run`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
-  )
-  revalidatePath('/safety/system/scheduled-tasks')
 }
 
 // ============ bitable-config Actions（多维表格配置中心） ============
@@ -1357,100 +996,4 @@ export async function getOhHazardMonitors(params: OhHazardMonitorQueryParams = {
 
 export async function getOhHazardMonitor(id: string) {
   return fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}`)
-}
-
-export async function createOhHazardMonitor(data: OhHazardMonitorFormData) {
-  const response = await fetchApi<OhHazardMonitor>('/safety/oh-hazard-monitors', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function updateOhHazardMonitor(id: string, data: Partial<OhHazardMonitorFormData>) {
-  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function deleteOhHazardMonitor(id: string) {
-  const response = await fetchApi<null>(`/safety/oh-hazard-monitors/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-// 监测工作流
-export async function startMonitor(id: string) {
-  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}/start`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function completeMonitor(id: string) {
-  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}/complete`, {
-    method: 'POST',
-  })
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function verifyMonitor(id: string, data: { verified_by?: string; comments?: string }) {
-  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}/verify`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-// 监测 JSON 子记录
-export async function addDetectionResult(id: string, data: Record<string, unknown>) {
-  const response = await fetchApi<OhHazardMonitor>(
-    `/safety/oh-hazard-monitors/${id}/detection-results`,
-    { method: 'POST', body: JSON.stringify(data) },
-  )
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function updateDetectionResult(id: string, index: number, data: Record<string, unknown>) {
-  const response = await fetchApi<OhHazardMonitor>(
-    `/safety/oh-hazard-monitors/${id}/detection-results/${index}`,
-    { method: 'PUT', body: JSON.stringify(data) },
-  )
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function removeDetectionResult(id: string, index: number) {
-  const response = await fetchApi<OhHazardMonitor>(
-    `/safety/oh-hazard-monitors/${id}/detection-results/${index}`,
-    { method: 'DELETE' },
-  )
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function addAbnormalityRecord(id: string, data: Record<string, unknown>) {
-  const response = await fetchApi<OhHazardMonitor>(
-    `/safety/oh-hazard-monitors/${id}/abnormality-records`,
-    { method: 'POST', body: JSON.stringify(data) },
-  )
-  revalidatePath('/safety/occupational-health')
-  return response
-}
-
-export async function updateAbnormalityRecordStatus(id: string, index: number, status: string) {
-  const response = await fetchApi<OhHazardMonitor>(
-    `/safety/oh-hazard-monitors/${id}/abnormality-records/${index}?status=${encodeURIComponent(status)}`,
-    { method: 'PUT' },
-  )
-  revalidatePath('/safety/occupational-health')
-  return response
 }

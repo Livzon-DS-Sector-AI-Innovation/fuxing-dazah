@@ -1,6 +1,5 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
 import { getAuthHeaders } from '@/lib/auth'
 import { API_BASE } from './_utils'
 
@@ -45,26 +44,4 @@ export async function fetchApi<T>(
     const text = await response.text().catch(() => '无法读取响应')
     return { code: -1, message: `响应解析失败: ${text.substring(0, 200)}`, data: null as unknown as T }
   }
-}
-
-export async function uploadPhoto(endpoint: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    method: 'POST',
-    headers: uploadHeaders,
-    body: formData,
-  })
-  if (!response.ok) {
-    let detail = ''
-    try {
-      const err = await response.json()
-      detail = err.detail || err.message || ''
-    } catch { /* ignore */ }
-    throw new Error(`HTTP ${response.status}${detail ? ': ' + detail : ''}`)
-  }
-  revalidatePath('/safety/hazard')
-  return response.json()
 }

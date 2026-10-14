@@ -52,12 +52,6 @@ export interface ChemicalInventoryStats {
   by_flag?: Record<string, number>
 }
 
-export interface ChemicalInventoryScanResult {
-  changed: number
-  warn_count: number
-  normal_count: number
-}
-
 // ── 查询参数 ──
 
 export interface ChemicalInventoryQueryParams {

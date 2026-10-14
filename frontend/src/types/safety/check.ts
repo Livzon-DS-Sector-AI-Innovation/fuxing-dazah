@@ -24,21 +24,6 @@ export interface SafetyCheck {
   updated_at: string
 }
 
-export interface SafetyCheckFormData {
-  check_no: string
-  check_type: CheckType
-  check_date: string
-  department?: string
-  inspector?: string
-  inspector_name?: string
-  location?: string
-  findings?: string
-  result?: string
-  rectification_required?: boolean
-  rectification_deadline?: string
-  notes?: string
-}
-
 export interface SafetyCheckQueryParams {
   page?: number
   page_size?: number
