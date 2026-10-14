@@ -62,7 +62,7 @@ async def _reply_existing_task(chat_id: str, batch: str, task: QualityTestTask) 
     }.get(task.status, task.status)
     await send_chat_text(
         chat_id,
-        f"⚠️ 批号 {batch} 已存在检验任务（{status_label}，"
+        f"批号 {batch} 已存在检验任务（{status_label}，"
         f"已判定 {sum(1 for r in rows if r.is_pass is not None)}/{len(rows)} 项），不允许重复创建",
     )
     if task.status == "in_progress":
@@ -102,9 +102,9 @@ async def _reply_today_report(chat_id: str) -> None:
             lines.append(
                 f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}{sop_suffix}"
             )
-    text = f"📅 今日出报任务（{today}）：\n" + ("\n".join(lines) if lines else "无")
+    text = f"今日出报任务（{today}）：\n" + ("\n".join(lines) if lines else "无")
     if review_items:
-        text += f"\n\n🔍 待复核：{len(review_items)} 项（可发「待复核」查看清单）"
+        text += f"\n\n待复核：{len(review_items)} 项（可发「待复核」查看清单）"
     await send_chat_text(chat_id, text)
 
 
@@ -123,11 +123,11 @@ async def _reply_reported_tasks(chat_id: str, date_str: str) -> None:
             sop_suffix = f"｜标准文件：{'、'.join(file_nos)}" if file_nos else ""
             lines.append(
                 f"- {t.product_name} 批号 {t.batch_number}（{t.specification or '-'}）{sop_suffix}\n"
-                f"  🔗 {_frontend_task_link(str(t.id))}"
+                f"  {_frontend_task_link(str(t.id))}"
             )
     await send_chat_text(
         chat_id,
-        f"📤 {date_str} 已出报任务：" + ("\n" + "\n".join(lines) if lines else " 无"),
+        f"{date_str} 已出报任务：" + ("\n" + "\n".join(lines) if lines else " 无"),
     )
 
 
@@ -148,7 +148,7 @@ async def _reply_pending_review(chat_id: str) -> None:
         ]
     await send_chat_text(
         chat_id,
-        "🔍 待复核任务：" + ("\n" + "\n".join(lines) if lines else " 无"),
+        "待复核任务：" + ("\n" + "\n".join(lines) if lines else " 无"),
     )
 
 
@@ -165,7 +165,7 @@ async def _build_progress_text(
         for r in filled_rows
     ]
     filled_show = "、".join(filled_names)
-    lines = [f"📊 批号 {batch}：{task.product_name}"]
+    lines = [f"批号 {batch}：{task.product_name}"]
     if task.status == "void":
         lines.append("状态：已作废")
         return "\n".join(lines)
@@ -175,24 +175,24 @@ async def _build_progress_text(
             report_time = latest.created_at.strftime("%Y-%m-%d %H:%M")
         else:
             report_time = task.report_date or "-"
-        lines.append(f"状态：✅ 已出报（出报时间：{report_time}）")
+        lines.append(f"状态：已出报（出报时间：{report_time}）")
         lines.append(f"进度：已判定 {len(filled_rows)}/{len(rows)} 项")
         if filled_rows:
             lines.append(f"项目结果：{filled_show}")
         return "\n".join(lines)
     if task.status == "pending_review":
-        lines.append("状态：🔍 待复核（已全部填报，等待专员审核）")
+        lines.append("状态：待复核（已全部填报，等待专员审核）")
         lines.append(f"进度：已判定 {len(filled_rows)}/{len(rows)} 项")
         if filled_rows:
             lines.append(f"项目结果：{filled_show}")
         return "\n".join(lines)
     # in_progress
     if task.report_date and task.report_date > _today_str():
-        lines.append(f"状态：⏳ 待分配（出报日期 {task.report_date}，还没到出报日期）")
+        lines.append(f"状态：待分配（出报日期 {task.report_date}，还没到出报日期）")
     elif task.report_date:
-        lines.append(f"状态：📝 填报中（出报日期 {task.report_date}）")
+        lines.append(f"状态：填报中（出报日期 {task.report_date}）")
     else:
-        lines.append("状态：📝 填报中（未填出报日期）")
+        lines.append("状态：填报中（未填出报日期）")
     lines.append(f"进度：已判定 {len(filled_rows)}/{len(rows)} 项")
     if filled_rows:
         lines.append(f"已填项目：{filled_show}")
@@ -222,7 +222,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
         if task_id:
             image_data = await _download_image(msg_raw.get("message_id", ""), image_key)
             if image_data is None:
-                await send_chat_text(chat_id, "⚠️ 图片下载失败，请重发")
+                await send_chat_text(chat_id, "图片下载失败，请重发")
                 return
             from app.core.database import async_session_factory
             from app.modules.quality.repository import create_task_attachment
@@ -237,13 +237,13 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                     "source": "manual", "remark": "归档模式连拍自动归档",
                 })
                 await db.commit()
-            await send_chat_text(chat_id, "📷 已归档（归档模式中，继续发图；发「结束」退出）")
+            await send_chat_text(chat_id, "已归档（归档模式中，继续发图；发「结束」退出）")
         else:
             _LAST_IMAGE[chat_id] = {"message_id": msg_raw.get("message_id", ""), "file_key": image_key}
             _LAST_IMAGE_TS[chat_id] = time.monotonic()
             await send_chat_text(
                 chat_id,
-                "📷 已收到图片。请回复「附件 批号 XXX」归档；连拍多张可先发「归档模式 批号 XXX」",
+                "已收到图片。请回复「附件 批号 XXX」归档；连拍多张可先发「归档模式 批号 XXX」",
             )
         return
     if not chat_id or not text:
@@ -273,7 +273,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             lines = [f"- {it.serial_no or '-'}｜{it.product_name}｜批号 {it.batch_number}" for it in items]
             await send_chat_text(
                 chat_id,
-                "📄 今日报告单（流水号｜产品｜批号）：" + ("\n" + "\n".join(lines) if lines else " 暂无"),
+                "今日报告单（流水号｜产品｜批号）：" + ("\n" + "\n".join(lines) if lines else " 暂无"),
             )
             return
 
@@ -291,7 +291,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             async with async_session_factory() as rdb:
                 items = await list_report_records_between(rdb, m_start, m_end)
             if not items:
-                await send_chat_text(chat_id, f"📄 本月（{today_d:%Y-%m}）暂无报告单流水")
+                await send_chat_text(chat_id, f"本月（{today_d:%Y-%m}）暂无报告单流水")
                 return
             by_day: dict[str, list[ReportRecord]] = {}
             for it in items:
@@ -304,7 +304,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 lines.append(f"- {d}: {len(lst)} 份{rng}")
             await send_chat_text(
                 chat_id,
-                f"📄 本月流水（{today_d:%Y-%m}）共 {len(items)} 份、{len(by_day)} 个出报日：\n" + "\n".join(lines),
+                f"本月流水（{today_d:%Y-%m}）共 {len(items)} 份、{len(by_day)} 个出报日：\n" + "\n".join(lines),
             )
             return
 
@@ -327,7 +327,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             await _reply_pending_review(chat_id)
             return
 
-        # 机器人自定义菜单指令：无批号裸关键词 → 对应批号输入卡片
+        # 机器人自定义菜单指令：无批号裸关键词 对应批号输入卡片
         if "建任务" in kw or kw == "新建任务":
             await send_batch_form_card(chat_id, "create_task")
             return
@@ -340,7 +340,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
         if kw in ("结束", "结束归档"):
             _ARCHIVE_MODE.pop(chat_id, None)
             _ARCHIVE_MODE_TS.pop(chat_id, None)
-            await send_chat_text(chat_id, "✅ 归档模式已退出")
+            await send_chat_text(chat_id, "归档模式已退出")
             return
 
         # 批号片段模糊查询：报候选批号
@@ -360,10 +360,10 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                     )
                     await send_chat_text(
                         chat_id,
-                        f"🔎 批号「{frag.group(1)}」匹配：\n{hit_lines}\n请用完整批号继续",
+                        f"批号「{frag.group(1)}」匹配：\n{hit_lines}\n请用完整批号继续",
                     )
                 else:
-                    await send_chat_text(chat_id, f"🔎 未找到包含「{frag.group(1)}」的批号")
+                    await send_chat_text(chat_id, f"未找到包含「{frag.group(1)}」的批号")
                 return
 
         if "帮助" in kw or kw in ("指令", "命令"):
@@ -375,7 +375,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
         if chat_type == "p2p":
             await send_menu_card(chat_id)
             return
-        await send_chat_text(chat_id, "⚠️ 未识别批号。格式：批号 XXX 项目 数值 …（如：批号 HAF2608001B 水分 4.5），或直接发「填报 批号 XXX」打开表单")
+        await send_chat_text(chat_id, "未识别批号。格式：批号 XXX 项目 数值 …（如：批号 HAF2608001B 水分 4.5），或直接发「填报 批号 XXX」打开表单")
         return
     batch = batch_m.group(1)
     pairs = _PAIR_RE.findall(text)
@@ -388,14 +388,14 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             async with async_session_factory() as db:
                 task = await _resolve_task_by_batch(db, batch)
                 if not task:
-                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务")
+                    await send_chat_text(chat_id, f"批号 {batch} 未找到任务")
                     return
                 _ARCHIVE_MODE[chat_id] = str(task.id)
                 _ARCHIVE_MODE_TS[chat_id] = time.monotonic()
             _LAST_BATCH[chat_id] = batch
             await send_chat_text(
                 chat_id,
-                f"📸 归档模式已开启（批号 {batch}）。连发图片将自动归档为原始证据，发「结束」退出",
+                f"归档模式已开启（批号 {batch}）。连发图片将自动归档为原始证据，发「结束」退出",
             )
             return
 
@@ -404,16 +404,16 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             _prune_stale_state()
             info = _LAST_IMAGE.get(chat_id)
             if not info:
-                await send_chat_text(chat_id, "⚠️ 尚未收到图片，请先发送图片，再回复「附件 批号 XXX」")
+                await send_chat_text(chat_id, "尚未收到图片，请先发送图片，再回复「附件 批号 XXX」")
                 return
             async with async_session_factory() as db:
                 task = await _resolve_task_by_batch(db, batch)
                 if not task:
-                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务，无法归档")
+                    await send_chat_text(chat_id, f"批号 {batch} 未找到任务，无法归档")
                     return
                 image_data = await _download_image(info["message_id"], info["file_key"])
                 if image_data is None:
-                    await send_chat_text(chat_id, "⚠️ 图片下载失败，请重发图片")
+                    await send_chat_text(chat_id, "图片下载失败，请重发图片")
                     return
                 filename = f"机器人上传_{info['file_key'][:12]}.jpg"
                 object_key = f"{task.id}/{uuid.uuid4().hex[:12]}_{filename}"
@@ -428,10 +428,10 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 await db.commit()
             _LAST_IMAGE.pop(chat_id, None)
             _LAST_IMAGE_TS.pop(chat_id, None)
-            await send_chat_text(chat_id, f"✅ 图片已归档为批号 {batch} 的原始证据附件，可在任务详情中查看")
+            await send_chat_text(chat_id, f"图片已归档为批号 {batch} 的原始证据附件，可在任务详情中查看")
             return
 
-        # 「建任务 批号 XXX」：批号自动识别代号 → 标准文件（可多选）→ 建任务卡片
+        # 「建任务 批号 XXX」：批号自动识别代号 标准文件（可多选）建任务卡片
         if not pairs and "建任务" in text:
             from app.modules.quality.feishu.message import (
                 send_create_task_card,
@@ -448,7 +448,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 known = await _known_codes(db)
                 await send_chat_text(
                     chat_id,
-                    f"⚠️ 批号 {batch} 开头未匹配产品代号（标准库代号：{'、'.join(known) or '未配置'}），无法建任务",
+                    f"批号 {batch} 开头未匹配产品代号（标准库代号：{'、'.join(known) or '未配置'}），无法建任务",
                 )
                 return
             doc_dicts = [_doc_to_card_dict(d) for d in matched]
@@ -464,10 +464,10 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             async with async_session_factory() as db:
                 task = await _resolve_task_by_batch(db, batch)
                 if not task:
-                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务")
+                    await send_chat_text(chat_id, f"批号 {batch} 未找到任务")
                     return
                 if task.status not in ("in_progress", "pending_review"):
-                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 状态为 {task.status}，不可修正")
+                    await send_chat_text(chat_id, f"批号 {batch} 状态为 {task.status}，不可修正")
                     return
                 rows = await list_test_results(db, task.id)
                 norm_rows = {TestTaskService._norm_name(r.item_name): r for r in rows}
@@ -493,7 +493,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                             task.product_name, task.batch_number, row.item_name,
                             f"{value}{unit}", _limit_text(row, unit), origin_chat_id=chat_id,
                         ))
-                        done.append(f"{row.item_name}={value}{unit}（🚨不合格，未落库）")
+                        done.append(f"{row.item_name}={value}{unit}（不合格，未落库）")
                         continue
                     fix_updates.append({
                         "result_id": row.id, "result_text": str(value), "result_value": value,
@@ -505,7 +505,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                     await update_test_results_fill(db, fix_updates)
                 await db.commit()
             _LAST_BATCH[chat_id] = batch
-            await send_chat_text(chat_id, f"✅ 批号 {batch} 修正：\n" + ("\n".join(done) if done else "未识别到可修正的项目"))
+            await send_chat_text(chat_id, f"批号 {batch} 修正：\n" + ("\n".join(done) if done else "未识别到可修正的项目"))
             return
 
         # 「进度 批号 XXX」/「批号 X 还差什么」：进度查询（五态：未创建/待分配/填报中/待复核/已出报）
@@ -514,7 +514,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             if not t:
                 await send_chat_text(
                     chat_id,
-                    f"⚠️ 批号 {batch} 未创建任务（可发送「建任务 批号 {batch}」创建）",
+                    f"批号 {batch} 未创建任务（可发送「建任务 批号 {batch}」创建）",
                 )
                 return
             _LAST_BATCH[chat_id] = batch
@@ -523,7 +523,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
 
         task = await _resolve_task_by_batch(db, batch)
         if not task:
-            await send_chat_text(chat_id, f"⚠️ 未找到批号 {batch} 的检验任务，请先在系统建任务")
+            await send_chat_text(chat_id, f"未找到批号 {batch} 的检验任务，请先在系统建任务")
             return
         if task.status != "in_progress":
             hint = {
@@ -531,10 +531,10 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 "completed": "已完成（已出报）",
                 "void": "已作废",
             }.get(task.status, task.status)
-            await send_chat_text(chat_id, f"⚠️ 批号 {batch} 的任务状态为 {hint}，不可填报")
+            await send_chat_text(chat_id, f"批号 {batch} 的任务状态为 {hint}，不可填报")
             return
 
-        # 只发「填报 批号 XXX」无数值 → 发表单卡片
+        # 只发「填报 批号 XXX」无数值 发表单卡片
         if not pairs and ("填报" in text or "填写" in text):
             from app.modules.quality.feishu.message import send_fill_card
 
@@ -543,7 +543,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             if not bio_rows and not chem_rows:
                 await send_chat_text(
                     chat_id,
-                    f"✅ 批号 {batch} 的数值型项目已全部填写，或剩余项目均由液相计算表解析覆盖（请上传计算表自动填入）",
+                    f"批号 {batch} 的数值型项目已全部填写，或剩余项目均由液相计算表解析覆盖（请上传计算表自动填入）",
                 )
                 return
             filled_count = sum(1 for r in rows if r.is_pass is not None)
@@ -614,17 +614,17 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
         advanced = await TestTaskService.auto_advance_pending_review(db, task.id)
         await db.commit()
 
-    lines = [f"✅ 批号 {batch} 已落库 {len(filled)} 项："]
+    lines = [f"批号 {batch} 已落库 {len(filled)} 项："]
     if filled:
         lines.append("，".join(filled))
     if advanced:
-        lines.append("🔍 已全部填报完成，进入待复核，请专员审核")
+        lines.append("已全部填报完成，进入待复核，请专员审核")
     if unmatched_names:
-        lines.append("⚠️ 未匹配项目：" + "、".join(unmatched_names) + "（请核对标准库项目名）")
+        lines.append("未匹配项目：" + "、".join(unmatched_names) + "（请核对标准库项目名）")
     if problems:
-        lines.append("⚠️ " + "；".join(problems))
+        lines.append("" + "；".join(problems))
     if alerts:
-        lines.append("🚨 不合格未落库：")
+        lines.append("不合格未落库：")
         lines.extend(f"- {a}" for a in alerts)
         lines.append("请人工处理")
     await send_chat_text(chat_id, "\n".join(lines))

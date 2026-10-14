@@ -174,7 +174,7 @@ export default function TaskFillIn() {
   const effectiveResolved = resolved?.key === resolvedKey ? resolved : null
   const matchedCode = effectiveResolved?.product_code ?? null
 
-  // 标准文件 = 后端解析出的该代号标准文件（file_no 如 SOP.02.3205.010）；一个批号可开多份报告单 → 可多选
+  // 标准文件 = 后端解析出的该代号标准文件（file_no 如 SOP.02.3205.010）；一个批号可开多份报告单 可多选
   const matchedDocIds: string[] | undefined = Form.useWatch('standard_document_ids', createForm)
 
   // 该代号下的标准文件选项（以后端解析结果为准）
@@ -434,7 +434,7 @@ export default function TaskFillIn() {
       />
 
       <Modal
-        title="新建检验任务（产品 → 批号 → 标准文件 → 检验项目）"
+        title="新建检验任务（产品 批号 标准文件 检验项目）"
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         onOk={handleCreate}

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 @event_client.on_event("application.bot.menu_v6")
 async def handle_bot_menu_event(event: dict[str, Any]) -> None:
-    """机器人自定义菜单点击事件（响应动作=推送事件）：event_key → 对应批号输入卡片。"""
+    """机器人自定义菜单点击事件（响应动作=推送事件）：event_key 对应批号输入卡片。"""
     ev = event.get("event", {})
     key = str(ev.get("event_key") or ev.get("eventKey") or "").strip()
     key_lower = key.lower()
@@ -78,7 +78,7 @@ async def handle_bot_menu_event(event: dict[str, Any]) -> None:
 
 @event_client.on_event("card.action.trigger")
 async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
-    """卡片回调入口：表单提交 → 解析 form_value → 写入任务 → 群内回执。"""
+    """卡片回调入口：表单提交 解析 form_value 写入任务 群内回执。"""
     ev = event.get("event", {})
     action_value = (ev.get("action") or {}).get("value") or {}
     form_value = (ev.get("action") or {}).get("form_value") or {}
@@ -86,7 +86,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
     chat_id = ctx.get("open_chat_id") or ctx.get("chat_id")
 
     # 建任务卡片提交
-    # 菜单导航按钮 → 批号输入卡片
+    # 菜单导航按钮 批号输入卡片
     if action_value.get("action") == "menu":
         from app.modules.quality.feishu.message import send_batch_form_card
 
@@ -94,7 +94,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
             await send_batch_form_card(chat_id, action_value.get("next", "fill"))
         return None
 
-    # 批号输入提交 → 路由到建任务/填报/进度
+    # 批号输入提交 路由到建任务/填报/进度
     if action_value.get("action") == "batch_input":
         from app.core.database import async_session_factory
         from app.modules.quality.feishu.message import (
@@ -121,7 +121,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
                         known = await _known_codes(db3)
                         await send_chat_text(
                             chat_id,
-                            f"⚠️ 批号 {batch2} 开头未匹配产品代号（标准库代号：{'、'.join(known) or '未配置'}），无法建任务",
+                            f"批号 {batch2} 开头未匹配产品代号（标准库代号：{'、'.join(known) or '未配置'}），无法建任务",
                         )
                         return None
                     doc_dicts = [_doc_to_card_dict(d) for d in matched]
@@ -136,17 +136,17 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
                 t2 = await _resolve_task_by_batch(db2, batch2)
                 if not t2:
                     if chat_id:
-                        await send_chat_text(chat_id, f"⚠️ 批号 {batch2} 未创建任务")
+                        await send_chat_text(chat_id, f"批号 {batch2} 未创建任务")
                     return None
                 if chat_id:
                     await send_chat_text(chat_id, await _build_progress_text(db2, batch2, t2))
             return None
-        # nxt == fill → 直接发填报卡片
+        # nxt == fill 直接发填报卡片
         async with async_session_factory() as db2:
             t2 = await _resolve_task_by_batch(db2, batch2)
             if not t2:
                 if chat_id:
-                    await send_chat_text(chat_id, f"⚠️ 未找到批号 {batch2} 的任务，请先建任务")
+                    await send_chat_text(chat_id, f"未找到批号 {batch2} 的任务，请先建任务")
                 return None
             r2 = await list_test_results(db2, t2.id)
             bio2, chem2 = _unfilled_groups(r2)
@@ -159,7 +159,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     if action_value.get("action") == "doc_query_submit":
-        # 输入标准文件编号查询 → 累加进已选清单，卡片原地更新（可反复搜索多选）
+        # 输入标准文件编号查询 累加进已选清单，卡片原地更新（可反复搜索多选）
         from app.core.database import async_session_factory
         from app.modules.quality.feishu.message import build_pick_doc_card
 
@@ -189,7 +189,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
             selected = _PENDING_DOC_SELECT.setdefault(batch, set())
             for d in picks:
                 selected.add(str(d.id))
-        notice = f"⚠️ 未匹配：{'、'.join(unmatched)}（未加入选择）" if unmatched else ""
+        notice = f"未匹配：{'、'.join(unmatched)}（未加入选择）" if unmatched else ""
         card = build_pick_doc_card(batch, [_doc_to_card_dict(d) for d in matched], selected, notice)
         return {"type": "card_updated", "card": {"type": "raw", "data": card}}
 
@@ -227,7 +227,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         return {"type": "card_updated", "card": {"type": "raw", "data": card}}
 
     if action_value.get("action") == "doc_confirm":
-        # 确认所选标准文件 → 发建任务卡片
+        # 确认所选标准文件 发建任务卡片
         from app.core.database import async_session_factory
         from app.modules.quality.feishu.message import send_create_task_card
         from app.modules.quality.repository import get_standard_document
@@ -270,7 +270,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
                     docs.append(doc)
             if not docs:
                 if chat_id:
-                    await send_chat_text(chat_id, "⚠️ 未找到所选标准文件，请重新发起建任务")
+                    await send_chat_text(chat_id, "未找到所选标准文件，请重新发起建任务")
                 return None
             try:
                 # 后端 create_task 会再校验批号代号与所选标准文件归属一致
@@ -285,7 +285,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
                 await db.commit()
             except Exception as e:
                 if chat_id:
-                    await send_chat_text(chat_id, f"⚠️ 建任务失败：{e}")
+                    await send_chat_text(chat_id, f"建任务失败：{e}")
                 return None
         _PENDING_DOC_SELECT.pop(batch, None)
         if report_date and report_date == _today_str():
@@ -298,7 +298,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
         if chat_id:
             await send_chat_text(
                 chat_id,
-                f"✅ 批号 {batch} 任务已创建（标准文件 {len(docs)} 份：{'、'.join(file_nos)}），{note}",
+                f"批号 {batch} 任务已创建（标准文件 {len(docs)} 份：{'、'.join(file_nos)}），{note}",
             )
         # 原地替换建任务表单为确认卡片：表单已移除，不可再次提交/编辑
         from app.modules.quality.feishu.message import build_task_created_card
@@ -310,10 +310,10 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
 
     if action_value.get("action") != "fill_form":
         if chat_id:
-            await send_chat_text(chat_id, f"✅ 卡片回调收到，按钮值: {json.dumps(action_value, ensure_ascii=False)}")
+            await send_chat_text(chat_id, f"卡片回调收到，按钮值: {json.dumps(action_value, ensure_ascii=False)}")
         return None
 
-    # 表单提交：field_key 经 map 还原成结果行 ID 列表（相同 SOP 合并组）或项目名 → 校验判定 → 写库
+    # 表单提交：field_key 经 map 还原成结果行 ID 列表（相同 SOP 合并组）或项目名 校验判定 写库
     from app.core.database import async_session_factory
     batch = action_value.get("batch", "")
     name_map = action_value.get("map") or {}
@@ -326,7 +326,7 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
                     "completed": "已完成（已出报）",
                     "void": "已作废",
                 }.get(task.status if task else "", "不存在")
-                await send_chat_text(chat_id, f"⚠️ 批号 {batch} 任务{hint}，不可填报")
+                await send_chat_text(chat_id, f"批号 {batch} 任务{hint}，不可填报")
             return None
         rows = await list_test_results(db, task.id)
         rows_by_id = {str(r.id): r for r in rows}
@@ -395,10 +395,10 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
     if chat_id:
         await send_chat_text(
             chat_id,
-            f"✅ 批号 {batch} 表单提交已落库 {len(updates)} 项：\n" +
+            f"批号 {batch} 表单提交已落库 {len(updates)} 项：\n" +
             ("，".join(results) if results else "无有效数值") +
-            ("\n🚨 不合格未落库（仅提醒、不入台账）：" + "\n".join(f"- {a}" for a in alerts) + "\n请人工处理" if alerts else "") +
-            ("\n🔍 已全部填报完成，进入待复核，请专员审核" if advanced else ""),
+            ("\n不合格未落库（仅提醒、不入台账）：" + "\n".join(f"- {a}" for a in alerts) + "\n请人工处理" if alerts else "") +
+            ("\n已全部填报完成，进入待复核，请专员审核" if advanced else ""),
         )
         # 卡片原地更新：已提交组的表单区替换为确认文本
         from app.modules.quality.feishu import message as feishu_msg
@@ -415,12 +415,12 @@ async def handle_card_action(event: dict[str, Any]) -> dict[str, Any] | None:
 
             def _group_text(group_idx: int) -> str:
                 if group_idx != submitted_group:
-                    return "✅ 已提交"
-                parts = ["✅ 已提交："]
+                    return "已提交"
+                parts = ["已提交："]
                 if results:
                     parts.append("\n".join(results))
                 if alerts:
-                    parts.append("🚨 不合格未落库：")
+                    parts.append("不合格未落库：")
                     parts.extend(f"- {a}" for a in alerts)
                 return "\n".join(parts)
 

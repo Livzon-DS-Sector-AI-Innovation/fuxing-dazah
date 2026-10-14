@@ -9,7 +9,7 @@ export default function MaterialsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <Title level={3}>📦 物料赋码</Title>
+        <Title level={3}>物料赋码</Title>
         <Paragraph type="secondary">
           每瓶（桶）物料唯一二维码赋码管理：批量生成容器号（MC-物料代码-日期-流水）与不干胶标签，入库登记、领料出库全流程扫码留痕。
         </Paragraph>

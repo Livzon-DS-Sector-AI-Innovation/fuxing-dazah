@@ -14,7 +14,7 @@ import {
 
 const { Text } = Typography
 
-/** 液相计算表模板配置维护：表号（EX-xx-xxxx-vvv）→ 取值配置 JSON。 */
+/** 液相计算表模板配置维护：表号（EX-xx-xxxx-vvv）取值配置 JSON。 */
 export default function LcTemplateConfigs() {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
@@ -147,7 +147,7 @@ export default function LcTemplateConfigs() {
   return (
     <Card
       size="small"
-      title="液相计算表模板配置（表号 → 取值位置）"
+      title="液相计算表模板配置（表号 取值位置）"
       extra={canManage ? <Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新增配置</Button> : null}
     >
       <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>

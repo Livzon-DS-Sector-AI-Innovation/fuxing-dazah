@@ -137,7 +137,7 @@ async def _handle_binary_message(ws: ClientConnection, message: bytes) -> None:
                 return
             event = json.loads(frame.payload.decode("utf-8"))
             event_type = event.get("header", {}).get("event_type", "")
-            logger.info("📨 质量飞书收到事件: %s", event_type)
+            logger.info("质量飞书收到事件: %s", event_type)
             start_ms = int(round(time.time() * 1000))
             if event_type == "card.action.trigger":
                 # 卡片回调必须 3 秒内同步返回响应（可带 base64 卡片更新，无更新返回 {"code": 200}）

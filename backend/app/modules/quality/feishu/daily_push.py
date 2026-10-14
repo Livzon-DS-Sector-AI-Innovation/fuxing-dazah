@@ -11,7 +11,7 @@ from app.core.time import today as _app_today
 
 logger = logging.getLogger(__name__)
 
-# Redis 不可用时的进程内降级标记：key → 当天日期（重启可能重复推，可接受）
+# Redis 不可用时的进程内降级标记：key 当天日期（重启可能重复推，可接受）
 _PUSHED_IN_PROCESS: dict[str, str] = {}
 
 
@@ -86,7 +86,7 @@ async def _push_today_tasks() -> None:
             lines.append(
                 f"- {t.product_name} 批号 {t.batch_number}（{t.specification or '-'}）"
                 f"｜{status_label} {filled}/{len(rows)}{sop_suffix}\n"
-                f"  🔗 {_frontend_task_link(str(t.id))}"
+                f"  {_frontend_task_link(str(t.id))}"
             )
             if t.status == "in_progress":
                 pending.append((t, rows))
@@ -98,7 +98,7 @@ async def _push_today_tasks() -> None:
             f"- {t.product_name} 批号 {t.batch_number}" + (
                 f"（出报日期 {t.report_date}）" if t.report_date else ""
             )
-            + f"\n  🔗 {_frontend_task_link(str(t.id))}"
+            + f"\n  {_frontend_task_link(str(t.id))}"
             for t in review_items
         ]
         # 明日出报预告
@@ -114,11 +114,11 @@ async def _push_today_tasks() -> None:
         return
     blocks: list[str] = []
     if lines:
-        blocks.append(f"📅 今日出报任务（{today}）：\n" + "\n".join(lines))
+        blocks.append(f"今日出报任务（{today}）：\n" + "\n".join(lines))
     if review_lines:
-        blocks.append(f"🔍 待复核任务（{len(review_lines)} 项，请专员进系统审核）：\n" + "\n".join(review_lines))
+        blocks.append(f"待复核任务（{len(review_lines)} 项，请专员进系统审核）：\n" + "\n".join(review_lines))
     if tomorrow_lines:
-        blocks.append(f"⏰ 明日出报预告（{tomorrow}）：\n" + "\n".join(tomorrow_lines))
+        blocks.append(f"明日出报预告（{tomorrow}）：\n" + "\n".join(tomorrow_lines))
     text = "\n\n".join(blocks)
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
         try:
@@ -169,11 +169,11 @@ async def _push_afternoon_reminder() -> None:
             sop_suffix = f"｜标准文件：{'、'.join(file_nos)}" if file_nos else ""
             lines.append(
                 f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}{sop_suffix}\n"
-                f"  🔗 {_frontend_task_link(str(t.id))}"
+                f"  {_frontend_task_link(str(t.id))}"
             )
     if not lines:
         return
-    text = f"⏰ 出报催办（{today}）：以下任务尚未完成，请抓紧处理\n" + "\n".join(lines)
+    text = f"出报催办（{today}）：以下任务尚未完成，请抓紧处理\n" + "\n".join(lines)
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
         try:
             await send_chat_text(chat_id, text)
@@ -211,20 +211,20 @@ async def _push_material_alerts() -> None:
     if supplier_alerts:
         lines = [
             f"- {s['name']}（{s['code']}）：资质效期 {s['qual_expiry_date']}"
-            + ("（🚨 已过期，建议暂停采购并重新审计）" if s["expired"] else "（临期，建议联系供应商更新资质）")
+            + ("（已过期，建议暂停采购并重新审计）" if s["expired"] else "（临期，建议联系供应商更新资质）")
             for s in supplier_alerts
         ]
-        blocks.append("📋 供应商资质提醒：\n" + "\n".join(lines))
+        blocks.append("供应商资质提醒：\n" + "\n".join(lines))
     if alerts:
         lines = []
         for a in alerts:
             parts = []
             if a["expired"]:
-                parts.append(f"🚨 已过期 {a['expired']} 瓶（建议：隔离并申请复验/报废处置）")
+                parts.append(f"已过期 {a['expired']} 瓶（建议：隔离并申请复验/报废处置）")
             if a["near"]:
                 parts.append(f"临效期 {a['near']} 瓶（最早 {a['earliest']}，建议：优先领用或申请复验）")
             lines.append(f"- {a['material_name']}（{a['material_code']}）：{'，'.join(parts)}")
-        blocks.append("⚠️ 物料效期提醒（在库/待验/已赋码）：\n" + "\n".join(lines))
+        blocks.append("物料效期提醒（在库/待验/已赋码）：\n" + "\n".join(lines))
     if suggestions:
         lines = [
             f"- {s['material_name']}（{s['material_code']}）：可用 {s['available']}，"
@@ -233,7 +233,7 @@ async def _push_material_alerts() -> None:
             )
             for s in suggestions
         ]
-        blocks.append("🛒 采购建议（低于安全库存）：\n" + "\n".join(lines))
+        blocks.append("采购建议（低于安全库存）：\n" + "\n".join(lines))
     if not blocks:
         return
     text = "\n\n".join(blocks)

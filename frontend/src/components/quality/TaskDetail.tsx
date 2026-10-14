@@ -239,7 +239,7 @@ export default function TaskDetail({ id }: { id: string }) {
     return false
   }
 
-  // 生成 COA：按标准文件逐份生成（一个批号多份标准 → 多份报告单）。
+  // 生成 COA：按标准文件逐份生成（一个批号多份标准 多份报告单）。
   // 单份直接下载；多份弹窗列出逐份下载（连续 a.click 会被浏览器拦截）
   const downloadCoaOne = async (f: { report_id: string; filename: string }) => {
     const blob = await downloadReportFile(f.report_id)
@@ -504,7 +504,7 @@ export default function TaskDetail({ id }: { id: string }) {
       </Card>
 
       {taskReports.length > 0 && (
-        <Card size="small" title={`📄 本任务报告单（${taskReports.length} 份）`}>
+        <Card size="small" title={`本任务报告单（${taskReports.length} 份）`}>
           <Table
             rowKey="report_id"
             size="small"
@@ -556,7 +556,7 @@ export default function TaskDetail({ id }: { id: string }) {
         />
       </Card>
 
-      <Card size="small" title="🔎 原始证据（计算表 / 电子图谱，持久化归档随时调取）">
+      <Card size="small" title="原始证据（计算表 / 电子图谱，持久化归档随时调取）">
         <Space style={{ marginBottom: 12 }} wrap>
           {canFill && (
             <Upload showUploadList={false} beforeUpload={handleAttUpload}>

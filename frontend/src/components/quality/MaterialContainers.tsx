@@ -655,8 +655,8 @@ export default function MaterialContainers() {
     <>
       {/* 今日出入库统计 */}
       <Space size={16} style={{ marginBottom: 4 }}>
-        <Typography.Text type="secondary">📥 今日入库 <Typography.Text strong>{todayStats.today_in}</Typography.Text> 笔</Typography.Text>
-        <Typography.Text type="secondary">📤 今日出库 <Typography.Text strong>{todayStats.today_out}</Typography.Text> 笔</Typography.Text>
+        <Typography.Text type="secondary">今日入库 <Typography.Text strong>{todayStats.today_in}</Typography.Text> 笔</Typography.Text>
+        <Typography.Text type="secondary">今日出库 <Typography.Text strong>{todayStats.today_out}</Typography.Text> 笔</Typography.Text>
       </Space>
 
       {/* 库存概览统计卡 */}
@@ -731,13 +731,13 @@ export default function MaterialContainers() {
         )}
         <Button icon={<HistoryOutlined />} onClick={() => { setMvPage(1); setMvQ(undefined); setMvOpen(true) }}>出入库台账</Button>
         <Button icon={<ShoppingCartOutlined />} onClick={openPurchase}>采购清单</Button>
-        <Button onClick={openTrend}>📈 领用趋势</Button>
-        <Button onClick={openStocktakes}>📋 盘点</Button>
-        <Button onClick={openMonthly}>📊 月度报表</Button>
+        <Button onClick={openTrend}>领用趋势</Button>
+        <Button onClick={openStocktakes}>盘点</Button>
+        <Button onClick={openMonthly}>月度报表</Button>
         {canManage && <Button icon={<ImportOutlined />} onClick={() => setImpOpen(true)}>导入</Button>}
-        <Button onClick={openSlowMoving}>🐌 呆滞分析</Button>
+        <Button onClick={openSlowMoving}>呆滞分析</Button>
         {canManage && (
-          <Button onClick={openSuppliers}>🏭 供应商</Button>
+          <Button onClick={openSuppliers}>供应商</Button>
         )}
       </Space>
 
@@ -900,7 +900,7 @@ export default function MaterialContainers() {
             { title: '容器号', dataIndex: 'container_no', width: 200, render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
             { title: '物料', dataIndex: 'material_name', width: 140, render: (v: string | null) => v || '-' },
             { title: '操作', dataIndex: 'op_type', width: 90, render: (v: string) => <Tag color={OP_TYPE_META[v]?.color}>{OP_TYPE_META[v]?.label ?? v}</Tag> },
-            { title: '状态变化', key: 'status', width: 160, render: (_: unknown, r: MaterialMovementItem) => `${r.from_status} → ${r.to_status}` },
+            { title: '状态变化', key: 'status', width: 160, render: (_: unknown, r: MaterialMovementItem) => `${r.from_status} ${r.to_status}` },
             { title: '关联单据', dataIndex: 'related_doc', width: 110, render: (v: string | null) => v || '-' },
           ]}
         />
@@ -957,7 +957,7 @@ export default function MaterialContainers() {
                       <Tag color={OP_TYPE_META[m.op_type]?.color} style={{ marginLeft: 8 }}>
                         {OP_TYPE_META[m.op_type]?.label ?? m.op_type}
                       </Tag>
-                      <Typography.Text type="secondary">{m.from_status} → {m.to_status}</Typography.Text>
+                      <Typography.Text type="secondary">{m.from_status} {m.to_status}</Typography.Text>
                       {m.remark && <Typography.Text type="secondary">｜{m.remark}</Typography.Text>}
                     </div>
                   ))}
@@ -988,7 +988,7 @@ export default function MaterialContainers() {
 
       {/* 供应商主数据弹窗 */}
       <Modal
-        title="🏭 供应商主数据"
+        title="供应商主数据"
         open={supOpen}
         onCancel={() => setSupOpen(false)}
         footer={null}
@@ -1058,7 +1058,7 @@ export default function MaterialContainers() {
 
       {/* 盘点管理弹窗 */}
       <Modal
-        title="📋 库存盘点"
+        title="库存盘点"
         open={stOpen}
         onCancel={() => setStOpen(false)}
         footer={null}
@@ -1167,7 +1167,7 @@ export default function MaterialContainers() {
 
       {/* 月度报表弹窗 */}
       <Modal
-        title="📊 物料月度汇总"
+        title="物料月度汇总"
         open={mrOpen}
         onCancel={() => setMrOpen(false)}
         footer={null}
@@ -1202,7 +1202,7 @@ export default function MaterialContainers() {
 
       {/* 导入弹窗 */}
       <Modal
-        title="📥 Excel 批量导入"
+        title="Excel 批量导入"
         open={impOpen}
         onCancel={() => setImpOpen(false)}
         footer={null}
@@ -1246,7 +1246,7 @@ export default function MaterialContainers() {
 
       {/* 呆滞分析弹窗 */}
       <Modal
-        title="🐌 呆滞库存（在库且入库超 30 天）"
+        title="呆滞库存（在库且入库超 30 天）"
         open={slowOpen}
         onCancel={() => setSlowOpen(false)}
         footer={null}
@@ -1279,7 +1279,7 @@ export default function MaterialContainers() {
 
       {/* 领用趋势弹窗 */}
       <Modal
-        title="📈 领用趋势（近 6 个月出入库）"
+        title="领用趋势（近 6 个月出入库）"
         open={trendOpen}
         onCancel={() => setTrendOpen(false)}
         footer={null}

@@ -10,7 +10,7 @@ export default function TaskDetailPage({ params }: { params: Promise<{ id: strin
   const { id } = use(params)
   return (
     <div className="space-y-4">
-      <Title level={3}>📝 检验填报</Title>
+      <Title level={3}>检验填报</Title>
       <TaskDetail id={id} />
     </div>
   )

@@ -160,7 +160,7 @@ export default function SerialRegistryPage() {
       `}</style>
 
       <div>
-        <Title level={3} style={{ marginBottom: 4 }}>📇 报告单流水</Title>
+        <Title level={3} style={{ marginBottom: 4 }}>报告单流水</Title>
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
           按日或按月查询报告单流水号（流水号｜产品｜批号），支持打印存档与 Excel 导出。打印模板接入后可按正式版式出单。
         </Paragraph>

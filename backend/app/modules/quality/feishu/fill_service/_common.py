@@ -1,4 +1,4 @@
-"""对话式填报：@机器人发指令 → 解析 → 按标准库限度判定 → 写入检验任务 → 群内回执。
+"""对话式填报：@机器人发指令 解析 按标准库限度判定 写入检验任务 群内回执。
 
 指令格式示例：
     @消息推送机器人 批号 HAF2608001B 水分 4.5 炽灼残渣 0.10 残留溶剂(乙醇) 30
@@ -94,11 +94,11 @@ async def _resolve_task_by_batch(db: AsyncSession, batch: str) -> QualityTestTas
 # 标准文件多选点选卡片的进行中勾选状态（按批号隔离，任务创建成功后清除）
 _PENDING_DOC_SELECT: dict[str, set[str]] = {}
 
-# 图片消息暂存（先发图 → 回复「附件 批号 X」两步归档原始证据）；30 分钟过期自动清理
+# 图片消息暂存（先发图 回复「附件 批号 X」两步归档原始证据）；30 分钟过期自动清理
 _LAST_IMAGE: dict[str, dict[str, str]] = {}
 _LAST_IMAGE_TS: dict[str, float] = {}
 
-# 归档模式：chat_id → task_id（连拍多张自动归档，发「结束」退出）；30 分钟过期自动清理
+# 归档模式：chat_id task_id（连拍多张自动归档，发「结束」退出）；30 分钟过期自动清理
 _ARCHIVE_MODE: dict[str, str] = {}
 _ARCHIVE_MODE_TS: dict[str, float] = {}
 
@@ -113,7 +113,7 @@ def _prune_stale_state() -> None:
             state_map.pop(key, None)
             ts_map.pop(key, None)
 
-# 当前批号上下文：chat_id → batch（省略批号的指令沿用）
+# 当前批号上下文：chat_id batch（省略批号的指令沿用）
 _LAST_BATCH: dict[str, str] = {}
 
 

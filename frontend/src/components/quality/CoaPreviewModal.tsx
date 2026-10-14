@@ -19,7 +19,7 @@ const PREVIEW_STYLE = `
   h1, h2, h3 { font-size: 16px; text-align: center; margin: 8px 0; }
 `
 
-/** 报告单在线预览：下载 docx → mammoth 转 HTML → iframe 渲染（下载端点已鉴权，走 Server Action）。 */
+/** 报告单在线预览：下载 docx mammoth 转 HTML iframe 渲染（下载端点已鉴权，走 Server Action）。 */
 export default function CoaPreviewModal({ open, reportId, title, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')

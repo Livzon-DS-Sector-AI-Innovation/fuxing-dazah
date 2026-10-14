@@ -25,7 +25,7 @@ export default function SummaryView() {
   const [dateRange, setDateRange] = useState<[string, string] | null>(null)
   const [includeInProgress, setIncludeInProgress] = useState(false)
 
-  // 趋势分析：选项目 → 跨批次数值序列
+  // 趋势分析：选项目 跨批次数值序列
   const [trendItem, setTrendItem] = useState<string | undefined>()
   const [trend, setTrend] = useState<SummaryTrend | null>(null)
   const [trendLoading, setTrendLoading] = useState(false)

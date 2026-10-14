@@ -176,11 +176,11 @@ def build_fill_card(
         if submitted:
             body_elements.append({
                 "tag": "markdown",
-                "content": submitted_text or f"✅ {title}已提交",
+                "content": submitted_text or f"{title}已提交",
             })
             continue
         if not rows:
-            body_elements.append({"tag": "markdown", "content": "✅ 无待填项目"})
+            body_elements.append({"tag": "markdown", "content": "无待填项目"})
             continue
         inputs = []
         for i, r in enumerate(rows):
@@ -224,7 +224,7 @@ async def send_fill_card(
     """发送填报表单卡片（每组一个 form 容器）。groups: [(组名, [{label, map_value}])]。"""
     built = build_fill_card(batch, [(t, r, False, None) for t, r in groups], progress)
     if not any(g[1] for g in groups):
-        await send_chat_text(chat_id, f"✅ 批号 {batch} 的数值型项目已全部填写，无待填项")
+        await send_chat_text(chat_id, f"批号 {batch} 的数值型项目已全部填写，无待填项")
         return
     _LAST_FILL_CARD[(chat_id, batch)] = built
     await send_interactive_card(chat_id, built)
@@ -322,7 +322,7 @@ def build_pick_doc_card(
             checked = doc_id in selected_ids
             elements.append({
                 "tag": "button",
-                "text": {"tag": "lark_md", "content": f"{'☑' if checked else '☐'} **{d.get('file_no') or ''}**"},
+                "text": {"tag": "lark_md", "content": f"{'' if checked else ''} **{d.get('file_no') or ''}**"},
                 "type": "primary" if checked else "default",
                 "value": {"action": "doc_toggle", "batch": batch, "doc_id": doc_id},
             })
@@ -342,7 +342,7 @@ def build_task_created_card(
     lines = "\n".join(f"- {f}" for f in file_nos)
     return {
         "schema": "2.0",
-        "header": {"title": {"tag": "plain_text", "content": f"✅ 任务已创建 {batch}"}, "template": "green"},
+        "header": {"title": {"tag": "plain_text", "content": f"任务已创建 {batch}"}, "template": "green"},
         "body": {"elements": [
             {"tag": "markdown", "content": f"标准文件（{len(file_nos)} 份）：\n{lines}\n\n{note}"},
         ]},
@@ -367,7 +367,7 @@ async def send_help_card(chat_id: str) -> None:
         "header": {"title": {"tag": "plain_text", "content": "质量机器人指令帮助"}, "template": "blue"},
         "body": {
             "elements": [
-                {"tag": "markdown", "content": "**建任务**\n建任务 批号 X\n\n**填报**\n批号 X 项目 数值 …（可省略批号沿用上次）\n填报 批号 X（表单卡片）\n修正 批号 X 项目 数值（改错覆盖）\n\n**查询**\n进度 批号 X ｜ 批号 X 还差什么\n今天出报 ｜ 待复核 ｜ X.XX 已出报任务\n进度 片段（批号模糊）\n\n**原始证据**\n发图片 → 附件 批号 X\n归档模式 批号 X（连拍多张）→ 结束\n\n**其他**\n菜单 ｜ 帮助"},
+                {"tag": "markdown", "content": "**建任务**\n建任务 批号 X\n\n**填报**\n批号 X 项目 数值 …（可省略批号沿用上次）\n填报 批号 X（表单卡片）\n修正 批号 X 项目 数值（改错覆盖）\n\n**查询**\n进度 批号 X ｜ 批号 X 还差什么\n今天出报 ｜ 待复核 ｜ X.XX 已出报任务\n进度 片段（批号模糊）\n\n**原始证据**\n发图片 附件 批号 X\n归档模式 批号 X（连拍多张）结束\n\n**其他**\n菜单 ｜ 帮助"},
             ]
         },
     }
@@ -382,11 +382,11 @@ async def send_menu_card(chat_id: str) -> None:
         "body": {
             "elements": [
                 {"tag": "markdown", "content": "选择要进行的操作："},
-                {"tag": "button", "text": {"tag": "lark_md", "content": "📝 建任务"}, "type": "primary",
+                {"tag": "button", "text": {"tag": "lark_md", "content": "建任务"}, "type": "primary",
                  "value": {"action": "menu", "next": "create_task"}},
-                {"tag": "button", "text": {"tag": "lark_md", "content": "🧪 填报"}, "type": "primary",
+                {"tag": "button", "text": {"tag": "lark_md", "content": "填报"}, "type": "primary",
                  "value": {"action": "menu", "next": "fill"}},
-                {"tag": "button", "text": {"tag": "lark_md", "content": "📊 查进度"}, "type": "default",
+                {"tag": "button", "text": {"tag": "lark_md", "content": "查进度"}, "type": "default",
                  "value": {"action": "menu", "next": "progress"}},
                 {"tag": "hr"},
                 {"tag": "markdown", "content": "也可直接发指令：建任务 批号 XXX / 填报 批号 XXX / 进度 批号 XXX"},

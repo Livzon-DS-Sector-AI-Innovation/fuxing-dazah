@@ -108,7 +108,7 @@ export default function StandardsPage() {
 
   useEffect(() => { (async () => { await loadDocs() })() }, [loadDocs])
 
-  // 三级结构：产品名称（去重）→ 产品代码（去重，一个代码可有多份文件）→ 文件下拉 + SOP 项目行
+  // 三级结构：产品名称（去重）产品代码（去重，一个代码可有多份文件）文件下拉 + SOP 项目行
   const nameKey = (n: string) => n.replace(/\s+/g, '')
   const products = useMemo(() => {
     const seen = new Map<string, string>()
@@ -337,7 +337,7 @@ export default function StandardsPage() {
       return
     }
     try {
-      // COA 侧绑定：模板路径 → 标准文档（一份 COA 唯一绑定一份 SOP）；
+      // COA 侧绑定：模板路径 标准文档（一份 COA 唯一绑定一份 SOP）；
       // 选择「（不绑定模板）」即解绑
       if (bindValue) {
         await bindTemplate(bindValue, bindDoc.id, true, bindDoc.coa_binding?.description ?? undefined)
@@ -391,7 +391,7 @@ export default function StandardsPage() {
         <div>
           <Title level={3} style={{ marginBottom: 4 }}><FileTextOutlined /> 质量标准库</Title>
           <Paragraph type="secondary">
-            产品名称 → 产品代码 → 文件 → SOP 项目行；支持按产品名/产品代码/文件编号搜索（回车直达）。
+            产品名称 产品代码 文件 SOP 项目行；支持按产品名/产品代码/文件编号搜索（回车直达）。
           </Paragraph>
         </div>
         {canManage && (
@@ -596,7 +596,7 @@ export default function StandardsPage() {
       >
         <div className="mt-4 space-y-3">
           <Text type="secondary">
-            模板号码与 SOP 号码相近的自动排在前面；请先在「📑 报告模板」页上传模板，再回到这里绑定。
+            模板号码与 SOP 号码相近的自动排在前面；请先在「报告模板」页上传模板，再回到这里绑定。
           </Text>
           <Select
             showSearch

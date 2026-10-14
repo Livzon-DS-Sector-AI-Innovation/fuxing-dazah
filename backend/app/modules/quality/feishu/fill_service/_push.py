@@ -36,7 +36,7 @@ async def push_task_reminder(task: QualityTestTask, rows: list[QualityTestResult
         try:
             await send_chat_text(
                 chat_id,
-                f"📋 检验任务：{task.product_name} 批号 {task.batch_number}（{task.specification or '-'}）{report_note}\n请在下方卡片填报；液相类项目上传计算表自动填入。",
+                f"检验任务：{task.product_name} 批号 {task.batch_number}（{task.specification or '-'}）{report_note}\n请在下方卡片填报；液相类项目上传计算表自动填入。",
             )
             if bio_rows or chem_rows:
                 filled = sum(1 for r in rows if r.is_pass is not None)
@@ -65,7 +65,7 @@ async def notify_unqualified(
 
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
-    title = "🚨 检验不合格提醒"
+    title = "检验不合格提醒"
     lines = [
         f"批号 {batch}（{product_name}）",
         f"项目 {item_name}：实测 {value_text}（限度 {limit_text}）",
@@ -100,7 +100,7 @@ async def notify_pending_review(task_id: str) -> None:
 
     card = {
         "schema": "2.0",
-        "header": {"title": {"tag": "plain_text", "content": f"🔍 待复核 {task.batch_number}"}, "template": "orange"},
+        "header": {"title": {"tag": "plain_text", "content": f"待复核 {task.batch_number}"}, "template": "orange"},
         "body": {"elements": [
             {"tag": "markdown", "content": f"**{task.product_name}** 批号 **{task.batch_number}** 已全部填报完成，待复核（需两名不同复核人通过）。\n进入任务详情：对照原始证据核对结果、必要时修改，点「复核通过」。"},
             {"tag": "button", "text": {"tag": "plain_text", "content": "打开任务复核"},

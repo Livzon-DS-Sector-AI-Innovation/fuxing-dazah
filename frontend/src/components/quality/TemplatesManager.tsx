@@ -160,7 +160,7 @@ export default function TemplatesManager() {
       render: (v: FlatTemplate['binding']) => v?.sop_no ? (
         <Tag color="green">{v.sop_no}</Tag>
       ) : (
-        <Tag color="orange">⚠ 未绑定SOP</Tag>
+        <Tag color="orange">未绑定SOP</Tag>
       ),
     },
     { title: '文件夹', dataIndex: 'folder', key: 'folder', width: 160, render: (v: string) => v ? <Tag color="blue">{v}</Tag> : '-' },

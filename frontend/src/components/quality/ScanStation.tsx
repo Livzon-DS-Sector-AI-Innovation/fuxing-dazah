@@ -62,12 +62,12 @@ export default function ScanStation() {
         const res = await scanStocktake(stActive, no)
         setStStats((p) => ({ scanned: p.scanned + 1, extra: p.extra + (res.data.result !== 'matched' ? 1 : 0) }))
         setResults((prev) => [{ no, ok: true, detail: res.message, at: dayjs().format('HH:mm:ss') }, ...prev].slice(0, 50))
-        message.success(`✅ ${no} ${res.message}`)
+        message.success(`${no} ${res.message}`)
       } catch (err: unknown) {
         const detail = (err instanceof Error ? err.message : String(err)) || '盘点扫码失败'
         setFailCount((n) => n + 1)
         setResults((prev) => [{ no, ok: false, detail, at: dayjs().format('HH:mm:ss') }, ...prev].slice(0, 50))
-        message.error(`❌ ${no}：${detail}`)
+        message.error(`${no}：${detail}`)
       } finally {
         setScanBusy(false)
         setScanValue('')
@@ -84,12 +84,12 @@ export default function ScanStation() {
         detail: `已${res.message}`,
         at: dayjs().format('HH:mm:ss'),
       }, ...prev].slice(0, 50))
-      message.success(`✅ ${no} ${res.message}`)
+      message.success(`${no} ${res.message}`)
     } catch (err: unknown) {
       const detail = (err instanceof Error ? err.message : String(err)) || '操作失败'
       setFailCount((n) => n + 1)
       setResults((prev) => [{ no, ok: false, detail, at: dayjs().format('HH:mm:ss') }, ...prev].slice(0, 50))
-      message.error(`❌ ${no}：${detail}`)
+      message.error(`${no}：${detail}`)
     } finally {
       setScanBusy(false)
       setScanValue('')
@@ -123,10 +123,10 @@ export default function ScanStation() {
               value={scanMode}
               onChange={(v) => { setScanMode(v as 'auto' | 'in' | 'out'); setResults([]) }}
               options={[
-                { label: '🔁 自动判定', value: 'auto' },
-                { label: '📥 入库登记', value: 'in' },
-                { label: '📤 领料出库', value: 'out' },
-                { label: '📋 盘点', value: 'stocktake' },
+                { label: '自动判定', value: 'auto' },
+                { label: '入库登记', value: 'in' },
+                { label: '领料出库', value: 'out' },
+                { label: '盘点', value: 'stocktake' },
               ]}
             />
             {scanMode === 'stocktake' && (
@@ -144,10 +144,10 @@ export default function ScanStation() {
             )}
             <Typography.Text type="secondary">
               {scanMode === 'auto'
-                ? '自动：已赋码→入库；在库/合格→出库；已领出/已作废→报错'
+                ? '自动：已赋码入库；在库/合格出库；已领出/已作废报错'
                 : scanMode === 'in'
-                  ? '强制入库登记（已赋码 → 在库待验）'
-                  : '强制领料出库（在库/合格 → 已领出，过期拦截）'}
+                  ? '强制入库登记（已赋码 在库待验）'
+                  : '强制领料出库（在库/合格 已领出，过期拦截）'}
             </Typography.Text>
           </Space>
           <Input

@@ -293,18 +293,18 @@ function ReportPageInner() {
           {consistency && (
             <div style={{ border: '1px solid #faad14', borderRadius: 4, padding: 8 }}>
               {consistency.parsed_mismatches.length === 0 && consistency.standard_drifts.length === 0 ? (
-                <Text type="success" style={{ display: 'block' }}>✅ 一致性校验通过</Text>
+                <Text type="success" style={{ display: 'block' }}>一致性校验通过</Text>
               ) : (
                 <>
                   {consistency.parsed_mismatches.length > 0 && (
                     <Text type="warning" style={{ display: 'block' }}>
-                      ⚠️ 填报值与解析记录不一致 {consistency.parsed_mismatches.length} 项：
+                      填报值与解析记录不一致 {consistency.parsed_mismatches.length} 项：
                       {consistency.parsed_mismatches.map((m) => `${m.item_name}（填报 ${m.report_value} / 解析 ${m.parsed_value}）`).join('；')}
                     </Text>
                   )}
                   {consistency.standard_drifts.length > 0 && (
                     <Text type="warning" style={{ display: 'block' }}>
-                      ⚠️ 任务快照与现行标准不一致 {consistency.standard_drifts.length} 项：
+                      任务快照与现行标准不一致 {consistency.standard_drifts.length} 项：
                       {consistency.standard_drifts.map((d) => `${d.item_name}（快照 ${d.snapshot_text} / 现行 ${d.current_text}）`).join('；')}
                     </Text>
                   )}

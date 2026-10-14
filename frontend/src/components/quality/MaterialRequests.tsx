@@ -233,7 +233,7 @@ export default function MaterialRequests() {
         items={[
           {
             key: 'requests',
-            label: '🧪 物料请验',
+            label: '物料请验',
             children: (
               <>
                 <Space wrap style={{ marginBottom: 12 }}>
@@ -259,7 +259,7 @@ export default function MaterialRequests() {
           },
           {
             key: 'standards',
-            label: '📚 物料标准库',
+            label: '物料标准库',
             children: (
               <>
                 <Space wrap style={{ marginBottom: 12 }}>
@@ -332,9 +332,9 @@ export default function MaterialRequests() {
             value={releaseVerdict}
             onChange={(v) => setReleaseVerdict(v)}
             options={[
-              { label: '✅ 放行（该批容器全部转合格）', value: 'release' },
-              { label: '⚠️ 让步接收（视同合格，需原因）', value: 'concede' },
-              { label: '🚫 拒收（该批容器全部作废冻结，需原因）', value: 'reject' },
+              { label: '放行（该批容器全部转合格）', value: 'release' },
+              { label: '让步接收（视同合格，需原因）', value: 'concede' },
+              { label: '拒收（该批容器全部作废冻结，需原因）', value: 'reject' },
             ]}
           />
           {releaseVerdict !== 'release' && (

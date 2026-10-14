@@ -85,7 +85,7 @@ export default function QualityDashboardPage() {
   return (
     <div className="space-y-4">
       <div>
-        <Title level={3} style={{ marginBottom: 4 }}>📊 质量总览</Title>
+        <Title level={3} style={{ marginBottom: 4 }}>质量总览</Title>
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
           今日出报、待复核、在途批次一屏总览；点条目直达任务详情，页面每 30 秒自动刷新。
         </Paragraph>
@@ -130,7 +130,7 @@ export default function QualityDashboardPage() {
 
       <Row gutter={16}>
         <Col xs={24} md={8}>
-          <Card size="small" title="📅 今日出报任务"
+          <Card size="small" title="今日出报任务"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task')}>全部</Button>}>
             {data?.today?.length
               ? <Listy items={data.today} rowKey={(t) => t.task_id} itemRender={(t) => <TaskItem t={t} />} />
@@ -138,7 +138,7 @@ export default function QualityDashboardPage() {
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card size="small" title="🔍 待复核（需两名复核人通过）"
+          <Card size="small" title="待复核（需两名复核人通过）"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task?status=pending_review')}>全部</Button>}>
             {data?.pending_review?.length
               ? <Listy items={data.pending_review} rowKey={(t) => t.task_id} itemRender={(t) => <TaskItem t={t} />} />
@@ -146,7 +146,7 @@ export default function QualityDashboardPage() {
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card size="small" title="✅ 最近完成任务"
+          <Card size="small" title="最近完成任务"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task')}>全部</Button>}>
             {data?.recent_completed?.length
               ? <Listy items={data.recent_completed} rowKey={(t) => t.task_id} itemRender={(t) => <TaskItem t={t} />} />
@@ -155,7 +155,7 @@ export default function QualityDashboardPage() {
         </Col>
       </Row>
 
-      <Card size="small" title="📄 今日报告单（流水号+产品+批号）"
+      <Card size="small" title="今日报告单（流水号+产品+批号）"
         extra={<Button size="small" type="link" onClick={() => router.push('/quality/report')}>报告单页</Button>}>
         {dailyReports.length
           ? (
@@ -176,9 +176,9 @@ export default function QualityDashboardPage() {
       </Card>
 
       <Space wrap>
-        <Button type="primary" onClick={() => router.push('/quality/task')}>📝 检验填报</Button>
-        <Button onClick={() => router.push('/quality/summary')}>📈 汇总统计</Button>
-        <Button onClick={() => router.push('/quality/standards')}>🎯 产品标准</Button>
+        <Button type="primary" onClick={() => router.push('/quality/task')}>检验填报</Button>
+        <Button onClick={() => router.push('/quality/summary')}>汇总统计</Button>
+        <Button onClick={() => router.push('/quality/standards')}>产品标准</Button>
         <Button icon={<CheckCircleOutlined />} onClick={() => load()}>刷新</Button>
       </Space>
     </div>

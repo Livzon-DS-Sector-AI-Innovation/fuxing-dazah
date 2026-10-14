@@ -16,7 +16,7 @@ export default function TrendChart({ trend }: { trend: SummaryTrend }) {
   const pts = trend.points.filter((p) => p.value != null)
   if (pts.length < 2) return null
 
-  // 导出 PNG：SVG 序列化 → canvas 2x 渲染 → 下载
+  // 导出 PNG：SVG 序列化 canvas 2x 渲染 下载
   const handleExportPng = () => {
     const svg = svgRef.current
     if (!svg) return
