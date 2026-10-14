@@ -666,3 +666,118 @@ async def test_slow_moving_and_location(db_session):
     hit = next((r for r in rows if r["container_no"] == no), None)
     assert hit is not None and hit["age_days"] >= 59
     assert hit["location"] == "B-02-05"
+
+
+# ─── 物料请验 → 检验 → 放行全链路 ───
+
+
+async def _setup_material_standard(db_session, code: str, vendor: str | None = None):
+    from app.modules.quality.repository import (
+        create_material,
+        create_material_standard,
+        create_material_standard_item,
+    )
+
+    material = await create_material(db_session, {"code": code, "name": "请验测试物料", "vendor_name": "测试供应商"})
+    std = await create_material_standard(db_session, {
+        "material_code": code, "material_name": material.name, "vendor_code": vendor,
+    })
+    await create_material_standard_item(db_session, {
+        "standard_id": std.id, "seq": 1, "item_name": "水分", "sop_no": "SOP-M-001",
+        "standard_text": "≤3.0%", "operator": "≤", "limit_max": 3.0,
+    })
+    await create_material_standard_item(db_session, {
+        "standard_id": std.id, "seq": 2, "item_name": "外观", "sop_no": None,
+        "standard_text": "白色粉末", "operator": None,
+    })
+    return std
+
+
+async def test_request_sample_task_release_flow(db_session):
+    from app.modules.quality.repository import (
+        list_containers_by_request,
+        list_test_results,
+    )
+    from app.modules.quality.schemas import (
+        MaterialRequestCreate,
+        MaterialRequestRelease,
+        MaterialRequestSample,
+    )
+
+    code = f"MAT-{_rand_code()}"
+    await _setup_material_standard(db_session, code)
+    # 创建请验单
+    req = await material_container_service.create_request(db_session, MaterialRequestCreate(
+        material_code=code, inbound_batch_no=f"IN-RQ-{_rand_code()[:6]}", inbound_qty=3,
+    ))
+    assert req.status == "pending_sample" and req.request_no.startswith("MR-")
+    # 取样
+    req = await material_container_service.sample_request(db_session, req.id, MaterialRequestSample(sampled_qty=1))
+    assert req.status == "sampled"
+    # 建物料检验任务（快照标准 2 行，auto/manual 推导）
+    task = await material_container_service.create_material_task(db_session, req.id)
+    assert task.task_kind == "material" and task.material_request_id == req.id
+    rows = await list_test_results(db_session, task.id)
+    assert len(rows) == 2
+    modes = {r.item_name: r.judge_mode for r in rows}
+    assert modes["水分"] == "auto" and modes["外观"] == "manual"
+    # 赋码挂请验单（3 瓶）→ 放行联动容器
+    containers = await material_container_service.generate_containers(db_session, MaterialContainerGenerateRequest(
+        material_code=code, material_name="请验测试物料", inbound_batch_no=req.inbound_batch_no, count=3,
+    ))
+    for c in containers:
+        c.material_request_id = req.id
+    await db_session.flush()
+    # 放行
+    req = await material_container_service.release_request(db_session, req.id, MaterialRequestRelease(verdict="release"))
+    assert req.status == "released"
+    linked = await list_containers_by_request(db_session, req.id)
+    assert len(linked) == 3 and all(c.status == "qualified" for c in linked)
+
+
+async def test_release_reject_voids_containers(db_session):
+    from app.modules.quality.repository import list_containers_by_request
+    from app.modules.quality.schemas import (
+        MaterialRequestCreate,
+        MaterialRequestRelease,
+    )
+
+    code = f"MAT-{_rand_code()}"
+    await _setup_material_standard(db_session, code)
+    req = await material_container_service.create_request(db_session, MaterialRequestCreate(
+        material_code=code, inbound_batch_no=f"IN-RJ-{_rand_code()[:6]}", inbound_qty=2,
+    ))
+    containers = await material_container_service.generate_containers(db_session, MaterialContainerGenerateRequest(
+        material_code=code, material_name="请验测试物料", inbound_batch_no=req.inbound_batch_no, count=2,
+    ))
+    for c in containers:
+        c.material_request_id = req.id
+    await db_session.flush()
+    req = await material_container_service.release_request(db_session, req.id, MaterialRequestRelease(
+        verdict="reject", remark="杂质超标",
+    ))
+    assert req.status == "rejected" and req.verdict_remark == "杂质超标"
+    linked = await list_containers_by_request(db_session, req.id)
+    assert all(c.status == "void" for c in linked)
+
+
+async def test_request_task_conflicts(db_session):
+    from app.modules.quality.schemas import MaterialRequestCreate
+
+    code = f"MAT-{_rand_code()}"
+    await _setup_material_standard(db_session, code)
+    req = await material_container_service.create_request(db_session, MaterialRequestCreate(
+        material_code=code, inbound_batch_no=f"IN-RC-{_rand_code()[:6]}",
+    ))
+    # 未取样不可建任务
+    with pytest.raises(AppException) as exc:
+        await material_container_service.create_material_task(db_session, req.id)
+    assert exc.value.status_code == 400
+    # 取样后建任务；重复建 → 409
+    from app.modules.quality.schemas import MaterialRequestSample
+
+    await material_container_service.sample_request(db_session, req.id, MaterialRequestSample())
+    await material_container_service.create_material_task(db_session, req.id)
+    with pytest.raises(AppException) as exc2:
+        await material_container_service.create_material_task(db_session, req.id)
+    assert exc2.value.status_code == 409

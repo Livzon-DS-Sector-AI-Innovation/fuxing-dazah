@@ -7,10 +7,14 @@ from typing import Any
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AppException
 from app.modules.quality.models import (
     QualityContainerMovement,
     QualityMaterial,
     QualityMaterialContainer,
+    QualityMaterialRequest,
+    QualityMaterialStandard,
+    QualityMaterialStandardItem,
     QualityStocktakeItem,
     QualityStocktakeSheet,
     QualitySupplier,
@@ -702,3 +706,121 @@ async def list_slow_moving_containers(
             "age_days": age,
         })
     return result
+
+
+# ─── 物料请验 / 物料标准 ───
+
+
+async def create_material_request(db: AsyncSession, data: dict[str, Any]) -> QualityMaterialRequest:
+    req = QualityMaterialRequest(**data)
+    db.add(req)
+    await db.flush()
+    return req
+
+
+async def get_material_request(db: AsyncSession, rid: uuid.UUID) -> QualityMaterialRequest | None:
+    stmt = select(QualityMaterialRequest).where(
+        QualityMaterialRequest.id == rid, QualityMaterialRequest.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_material_requests(
+    db: AsyncSession, status: str | None = None, batch_no: str | None = None
+) -> list[QualityMaterialRequest]:
+    conds = [QualityMaterialRequest.is_deleted == False]  # noqa: E712
+    if status:
+        conds.append(QualityMaterialRequest.status == status)
+    if batch_no:
+        conds.append(QualityMaterialRequest.inbound_batch_no.like(f"%{batch_no}%"))
+    stmt = select(QualityMaterialRequest).where(*conds).order_by(QualityMaterialRequest.created_at.desc())
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def max_material_request_seq(db: AsyncSession, prefix: str) -> int:
+    val = await db.scalar(
+        select(func.max(QualityMaterialRequest.request_no)).where(
+            QualityMaterialRequest.request_no.like(f"{prefix}%"),
+            QualityMaterialRequest.is_deleted == False,  # noqa: E712
+        )
+    )
+    try:
+        return int(str(val or "").rsplit("-", 1)[-1])
+    except ValueError:
+        return 0
+
+
+async def create_material_standard(db: AsyncSession, data: dict[str, Any]) -> QualityMaterialStandard:
+    std = QualityMaterialStandard(**data)
+    db.add(std)
+    await db.flush()
+    return std
+
+
+async def get_material_standard(db: AsyncSession, sid: uuid.UUID) -> QualityMaterialStandard | None:
+    stmt = select(QualityMaterialStandard).where(
+        QualityMaterialStandard.id == sid, QualityMaterialStandard.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_material_standard_by_key(
+    db: AsyncSession, material_code: str, vendor_code: str | None
+) -> QualityMaterialStandard | None:
+    stmt = (
+        select(QualityMaterialStandard)
+        .where(
+            QualityMaterialStandard.material_code == material_code,
+            QualityMaterialStandard.vendor_code == vendor_code,
+            QualityMaterialStandard.is_deleted == False,  # noqa: E712
+        )
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_material_standard_items(
+    db: AsyncSession, standard_id: uuid.UUID
+) -> list[QualityMaterialStandardItem]:
+    stmt = (
+        select(QualityMaterialStandardItem)
+        .where(
+            QualityMaterialStandardItem.standard_id == standard_id,
+            QualityMaterialStandardItem.is_deleted == False,  # noqa: E712
+        )
+        .order_by(QualityMaterialStandardItem.seq, QualityMaterialStandardItem.created_at)
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def create_material_standard_item(
+    db: AsyncSession, data: dict[str, Any]
+) -> QualityMaterialStandardItem:
+    item = QualityMaterialStandardItem(**data)
+    db.add(item)
+    await db.flush()
+    return item
+
+
+async def list_containers_by_request(
+    db: AsyncSession, request_id: uuid.UUID
+) -> list[QualityMaterialContainer]:
+    stmt = select(QualityMaterialContainer).where(
+        QualityMaterialContainer.material_request_id == request_id,
+        QualityMaterialContainer.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def update_material_request(
+    db: AsyncSession, rid: uuid.UUID, data: dict[str, Any]
+) -> QualityMaterialRequest:
+    """更新请验单字段后 re-fetch（UPDATE 后必须 select，见编码规范）。"""
+    req = await get_material_request(db, rid)
+    if req is None:
+        raise AppException(status_code=404, detail="请验单不存在")
+    for key, value in data.items():
+        setattr(req, key, value)
+    await db.flush()
+    stmt = select(QualityMaterialRequest).where(QualityMaterialRequest.id == rid)
+    return (await db.execute(stmt)).scalar_one()

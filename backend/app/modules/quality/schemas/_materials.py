@@ -263,3 +263,100 @@ class MonthlyReportItem(BaseModel):
     return_count: int
     status_count: int
     available: int
+
+
+class MaterialRequestCreate(BaseModel):
+    """创建请验单。"""
+
+    material_code: str = Field(max_length=100)
+    vendor_code: str | None = Field(default=None, max_length=100)
+    inbound_batch_no: str = Field(max_length=100)
+    inbound_qty: int = Field(default=1, ge=1, le=100000)
+    inbound_date: str | None = Field(default=None, max_length=32, description="到货日期 YYYY-MM-DD")
+
+
+class MaterialRequestSample(BaseModel):
+    """取样登记。"""
+
+    sampled_at: str | None = Field(default=None, max_length=32, description="取样日期 YYYY-MM-DD")
+    sampled_qty: int | None = Field(default=None, ge=1, description="取样数量")
+
+
+class MaterialRequestRelease(BaseModel):
+    """放行结论。"""
+
+    verdict: Literal["release", "reject", "concede"]
+    remark: str | None = Field(default=None, max_length=200, description="拒收/让步原因")
+
+
+class MaterialRequestOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    request_no: str
+    material_code: str
+    material_name: str
+    vendor_code: str | None
+    vendor_name: str | None
+    inbound_batch_no: str
+    inbound_qty: int
+    inbound_date: str | None
+    status: str
+    sampled_at: str | None
+    sampled_qty: int | None
+    verdict: str | None
+    verdict_remark: str | None
+    task_id: uuid.UUID | None
+    created_at: datetime
+
+
+class MaterialStandardCreate(BaseModel):
+    """物料质量标准（物料+供应商）。"""
+
+    material_code: str = Field(max_length=100)
+    vendor_code: str | None = Field(default=None, max_length=100, description="空=该物料通用标准")
+    version: str | None = Field(default=None, max_length=32)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class MaterialStandardItemCreate(BaseModel):
+    standard_id: uuid.UUID
+    seq: int | None = Field(default=None)
+    category: str | None = Field(default=None, max_length=100)
+    item_name: str = Field(max_length=200)
+    sop_no: str | None = Field(default=None, max_length=100)
+    standard_text: str | None = Field(default=None, max_length=300)
+    operator: str | None = Field(default=None, max_length=10)
+    limit_min: float | None = Field(default=None)
+    limit_max: float | None = Field(default=None)
+    method_source: str | None = Field(default=None, max_length=64)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class MaterialStandardItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    standard_id: uuid.UUID
+    seq: int | None
+    category: str | None
+    item_name: str
+    sop_no: str | None
+    standard_text: str | None
+    operator: str | None
+    limit_min: float | None
+    limit_max: float | None
+    method_source: str | None
+    remark: str | None
+
+
+class MaterialStandardOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    material_code: str
+    material_name: str
+    vendor_code: str | None
+    version: str | None
+    remark: str | None
+    created_at: datetime

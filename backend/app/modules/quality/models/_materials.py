@@ -9,6 +9,104 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.base_model import BaseModel
 
 
+class QualityMaterialRequest(BaseModel):
+    """物料请验单：到货 → 请验 → 取样 → 检验任务 → 放行/拒收/让步。
+
+    status: pending_sample 待取样 → sampled 已取样 → in_test 检验中
+    → released 已放行 / rejected 已拒收 / conceded 让步接收；void 作废。
+    """
+
+    __tablename__ = "quality_material_requests"
+    __table_args__ = (
+        Index(
+            "uq_quality_material_request_no",
+            "request_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_quality_material_request_status", "status"),
+        Index("ix_quality_material_request_batch", "inbound_batch_no"),
+        {"schema": "quality"},
+    )
+
+    request_no: Mapped[str] = mapped_column(String(100), comment="请验单号 MR+YYMMDD+序号")
+    material_code: Mapped[str] = mapped_column(String(100), comment="物料代码（逻辑引用 quality_materials.code）")
+    material_name: Mapped[str] = mapped_column(String(200), comment="物料名称快照")
+    vendor_code: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="供应商代码")
+    vendor_name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="供应商名称快照")
+    inbound_batch_no: Mapped[str] = mapped_column(String(100), comment="进厂批号")
+    material_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="所属请验单（逻辑引用 quality.quality_material_requests.id，放行联动用）"
+    )
+    inbound_qty: Mapped[int] = mapped_column(Integer, default=1, comment="到货数量（瓶/桶）")
+    inbound_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="到货日期 YYYY-MM-DD")
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending_sample",
+        comment="pending_sample/sampled/in_test/released/rejected/conceded/void",
+    )
+    sampled_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="取样日期")
+    sampled_qty: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="取样数量")
+    sampled_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="取样人")
+    verdict: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="放行结论 release/reject/concede"
+    )
+    verdict_remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="放行备注（拒收/让步原因）")
+    released_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="放行人")
+    released_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="放行日期 YYYY-MM-DD")
+    task_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="关联物料检验任务（逻辑引用 quality_test_tasks.id）")
+
+
+class QualityMaterialStandard(BaseModel):
+    """物料质量标准（按物料+供应商；同物料不同供应商可多条）。"""
+
+    __tablename__ = "quality_material_standards"
+    __table_args__ = (
+        Index(
+            "uq_quality_material_std",
+            "material_code",
+            "vendor_code",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    material_code: Mapped[str] = mapped_column(String(100), comment="物料代码")
+    material_name: Mapped[str] = mapped_column(String(200), comment="物料名称快照")
+    vendor_code: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="供应商代码（空=通用标准）")
+    version: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="版本号")
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityMaterialStandardItem(BaseModel):
+    """物料质量标准检验项目行（与产品标准行同构）。"""
+
+    __tablename__ = "quality_material_standard_items"
+    __table_args__ = (
+        Index(
+            "uq_quality_material_std_item",
+            "standard_id",
+            "sop_no",
+            "item_name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    standard_id: Mapped[uuid.UUID] = mapped_column(comment="逻辑引用 quality_material_standards.id（无 FK）")
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="序号")
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="项目大类")
+    item_name: Mapped[str] = mapped_column(String(200), comment="项目名称")
+    sop_no: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="方法 SOP 号")
+    standard_text: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="合格标准原文")
+    operator: Mapped[str | None] = mapped_column(String(10), nullable=True, comment="≤ ≥ < > 范围")
+    limit_min: Mapped[float | None] = mapped_column(nullable=True, comment="限度下限")
+    limit_max: Mapped[float | None] = mapped_column(nullable=True, comment="限度上限")
+    method_source: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="方法来源")
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
 class QualityStocktakeSheet(BaseModel):
     """库存盘点单：扫码盘点在库容器，结束自动对比系统库存出差异清单。"""
 
@@ -156,6 +254,9 @@ class QualityMaterialContainer(BaseModel):
         String(100), nullable=True, comment="供应商代码"
     )
     inbound_batch_no: Mapped[str] = mapped_column(String(100), comment="进厂批号")
+    material_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="所属请验单（逻辑引用 quality.quality_material_requests.id，放行联动用）"
+    )
     inbound_date: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="入库登记日期 YYYY-MM-DD（入库动作自动记录）"
     )

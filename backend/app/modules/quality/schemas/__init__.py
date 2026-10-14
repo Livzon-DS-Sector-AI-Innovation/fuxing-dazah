@@ -30,6 +30,14 @@ from app.modules.quality.schemas._materials import (  # noqa: F401
     MaterialCreate,
     MaterialMovementOut,
     MaterialOut,
+    MaterialRequestCreate,
+    MaterialRequestOut,
+    MaterialRequestRelease,
+    MaterialRequestSample,
+    MaterialStandardCreate,
+    MaterialStandardItemCreate,
+    MaterialStandardItemOut,
+    MaterialStandardOut,
     MaterialSummaryItem,
     MaterialUpdate,
     MonthlyReportItem,
@@ -74,4 +82,4 @@ from app.modules.quality.schemas._tasks import (  # noqa: F401
     TestTaskStatusUpdate,
 )
 
-__all__ = ['ReportAuditRequest', 'LcTemplateConfigUpdate', 'LcTemplateConfigOut', 'LcTemplateConfigCreate', 'QualityStandardOut', 'ImpurityPeakAreaOut', 'ImpurityResultOut', 'CalculatedResultOut', 'LcReportOut', 'UploadLcResponse', 'InspectionQueryParams', 'InspectionRecordListItem', 'InspectionRecordDetail', 'ImpurityDetailOut', 'GenerateReportRequest', 'ReportRecordOut', 'BatchSummaryOut', 'ProductSummaryOut', 'HistorySummaryOut', 'StandardDocumentCreate', 'StandardDocumentUpdate', 'StandardItemCreate', 'StandardItemUpdate', 'StandardImportDocument', 'StandardImportItem', 'StandardImportConfirm', 'TestTaskCreate', 'TestTaskStatusUpdate', 'TestTaskReviewRequest', 'TestTaskReportDateUpdate', 'TestResultFill', 'TestResultsUpdate', 'TestResultCreate', 'TestResultOut', 'TestTaskListItem', 'TestTaskDetail', 'TaskReportGenerateRequest', 'MaterialContainerGenerateRequest', 'MaterialContainerListItem', 'MaterialContainerOut', 'ContainerMoveRequest', 'ContainerBatchMoveRequest', 'ContainerStatusUpdate', 'ContainerLocationUpdate', 'ContainerMovementOut', 'ContainerLabelRequest', 'MaterialCreate', 'MaterialUpdate', 'MaterialOut', 'MaterialSummaryItem', 'MaterialMovementOut', 'SupplierCreate', 'SupplierUpdate', 'SupplierOut', 'StocktakeCreate', 'StocktakeScanRequest', 'StocktakeSheetOut', 'StocktakeItemOut', 'MonthlyReportItem']
+__all__ = ['ReportAuditRequest', 'LcTemplateConfigUpdate', 'LcTemplateConfigOut', 'LcTemplateConfigCreate', 'QualityStandardOut', 'ImpurityPeakAreaOut', 'ImpurityResultOut', 'CalculatedResultOut', 'LcReportOut', 'UploadLcResponse', 'InspectionQueryParams', 'InspectionRecordListItem', 'InspectionRecordDetail', 'ImpurityDetailOut', 'GenerateReportRequest', 'ReportRecordOut', 'BatchSummaryOut', 'ProductSummaryOut', 'HistorySummaryOut', 'StandardDocumentCreate', 'StandardDocumentUpdate', 'StandardItemCreate', 'StandardItemUpdate', 'StandardImportDocument', 'StandardImportItem', 'StandardImportConfirm', 'TestTaskCreate', 'TestTaskStatusUpdate', 'TestTaskReviewRequest', 'TestTaskReportDateUpdate', 'TestResultFill', 'TestResultsUpdate', 'TestResultCreate', 'TestResultOut', 'TestTaskListItem', 'TestTaskDetail', 'TaskReportGenerateRequest', 'MaterialContainerGenerateRequest', 'MaterialContainerListItem', 'MaterialContainerOut', 'ContainerMoveRequest', 'ContainerBatchMoveRequest', 'ContainerStatusUpdate', 'ContainerLocationUpdate', 'ContainerMovementOut', 'ContainerLabelRequest', 'MaterialCreate', 'MaterialUpdate', 'MaterialOut', 'MaterialRequestCreate', 'MaterialRequestSample', 'MaterialRequestRelease', 'MaterialRequestOut', 'MaterialStandardCreate', 'MaterialStandardItemCreate', 'MaterialStandardItemOut', 'MaterialStandardOut', 'MaterialSummaryItem', 'MaterialMovementOut', 'SupplierCreate', 'SupplierUpdate', 'SupplierOut', 'StocktakeCreate', 'StocktakeScanRequest', 'StocktakeSheetOut', 'StocktakeItemOut', 'MonthlyReportItem']

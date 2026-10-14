@@ -8,6 +8,9 @@ from app.modules.quality.models._materials import (  # noqa: F401
     QualityContainerMovement,
     QualityMaterial,
     QualityMaterialContainer,
+    QualityMaterialRequest,
+    QualityMaterialStandard,
+    QualityMaterialStandardItem,
     QualityStocktakeItem,
     QualityStocktakeSheet,
     QualitySupplier,
@@ -28,4 +31,4 @@ from app.modules.quality.models._tasks import (  # noqa: F401
     QualityTestTask,
 )
 
-__all__ = ['InspectionRecord', 'InspectionImpurity', 'ReportRecord', 'QualityStandardDocument', 'QualityStandardItem', 'CoaTemplateBinding', 'LcTemplateConfig', 'QualityTestTask', 'QualityTaskAttachment', 'QualityTaskReview', 'QualityTestResult', 'QualityMaterial', 'QualityMaterialContainer', 'QualityContainerMovement', 'QualitySupplier', 'QualityStocktakeSheet', 'QualityStocktakeItem']
+__all__ = ['InspectionRecord', 'InspectionImpurity', 'ReportRecord', 'QualityStandardDocument', 'QualityStandardItem', 'CoaTemplateBinding', 'LcTemplateConfig', 'QualityTestTask', 'QualityTaskAttachment', 'QualityTaskReview', 'QualityTestResult', 'QualityMaterial', 'QualityMaterialContainer', 'QualityContainerMovement', 'QualitySupplier', 'QualityStocktakeSheet', 'QualityStocktakeItem', 'QualityMaterialRequest', 'QualityMaterialStandard', 'QualityMaterialStandardItem']

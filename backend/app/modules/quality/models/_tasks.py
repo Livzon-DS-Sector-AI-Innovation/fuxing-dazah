@@ -53,6 +53,12 @@ class QualityTestTask(BaseModel):
     specification: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="本批规格（从标准文档规格中选定，如 5kg/听）"
     )
+    task_kind: Mapped[str] = mapped_column(
+        String(32), default="product", comment="product 产品检验 / material 物料检验"
+    )
+    material_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="物料检验任务关联的请验单（逻辑引用 quality.quality_material_requests.id）"
+    )
     standard_document_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True,
         comment="快照来源标准文档，逻辑引用 quality.quality_standard_documents.id（多文档时为主文档）",

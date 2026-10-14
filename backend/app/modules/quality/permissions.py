@@ -36,4 +36,5 @@ PERMISSIONS: list[PermissionDef] = [
     # ── 物料容器赋码 ──
     PermissionDef("quality:material:read", "查看物料容器台账", "quality", "material", "read"),
     PermissionDef("quality:material:manage", "物料赋码/进出库/状态流转", "quality", "material", "manage"),
+    PermissionDef("quality:material:release", "物料放行/拒收/让步（联动容器状态）", "quality", "material", "release"),
 ]

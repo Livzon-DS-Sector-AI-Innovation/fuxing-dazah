@@ -14,11 +14,15 @@ from app.modules.quality.api._common import router
 from app.modules.quality.repository import (
     create_container_movement,
     create_material,
+    create_material_standard,
+    create_material_standard_item,
     create_supplier,
     delete_material,
     delete_supplier,
     get_material_by_code,
     get_material_container_by_no,
+    get_material_standard,
+    get_material_standard_by_key,
     get_stocktake_sheet,
     get_supplier_by_code,
     list_container_movements,
@@ -26,6 +30,8 @@ from app.modules.quality.repository import (
     list_in_stock_containers,
     list_material_containers,
     list_material_movements,
+    list_material_requests,
+    list_material_standard_items,
     list_materials,
     list_slow_moving_containers,
     list_stocktake_items,
@@ -51,6 +57,14 @@ from app.modules.quality.schemas import (
     MaterialContainerOut,
     MaterialCreate,
     MaterialOut,
+    MaterialRequestCreate,
+    MaterialRequestOut,
+    MaterialRequestRelease,
+    MaterialRequestSample,
+    MaterialStandardCreate,
+    MaterialStandardItemCreate,
+    MaterialStandardItemOut,
+    MaterialStandardOut,
     MaterialSummaryItem,
     MaterialUpdate,
     MonthlyReportItem,
@@ -729,3 +743,144 @@ async def slow_moving_endpoint(
 ) -> JSONResponse:
     rows = await list_slow_moving_containers(db, min_age)
     return success_response(data={"items": rows, "total": len(rows)})
+
+
+# ─── 物料请验 / 物料标准 / 放行 ───
+
+
+@router.post("/material/requests", summary="创建物料请验单（MR+YYMMDD+序号，字典带出物料快照）", status_code=201)
+async def create_material_request_endpoint(
+    payload: MaterialRequestCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    req = await material_container_service.create_request(db, payload, operator=user.id)
+    return success_response(
+        data=MaterialRequestOut.model_validate(req).model_dump(mode="json"),
+        message=f"请验单 {req.request_no} 已创建", status_code=201,
+    )
+
+
+@router.get("/material/requests", summary="物料请验单列表")
+async def list_material_requests_endpoint(
+    status: str | None = Query(default=None),
+    batch_no: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await list_material_requests(db, status=status, batch_no=batch_no)
+    items = [MaterialRequestOut.model_validate(r).model_dump(mode="json") for r in rows]
+    return success_response(data=items)
+
+
+@router.post("/material/requests/{request_id}/sample", summary="取样登记")
+async def sample_material_request_endpoint(
+    request_id: uuid.UUID,
+    payload: MaterialRequestSample = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    req = await material_container_service.sample_request(db, request_id, payload, operator=user.id)
+    return success_response(
+        data=MaterialRequestOut.model_validate(req).model_dump(mode="json"),
+        message="取样已登记",
+    )
+
+
+@router.post("/material/requests/{request_id}/task", summary="按物料标准快照建物料检验任务（复用检验填报链路）", status_code=201)
+async def create_material_task_endpoint(
+    request_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    task = await material_container_service.create_material_task(db, request_id)
+    return success_response(
+        data={"task_id": str(task.id), "batch_number": task.batch_number, "product_name": task.product_name},
+        message="物料检验任务已创建，请到检验填报页完成填报与复核", status_code=201,
+    )
+
+
+@router.post("/material/requests/{request_id}/release", summary="放行结论（release/reject/concede，联动容器状态）")
+async def release_material_request_endpoint(
+    request_id: uuid.UUID,
+    payload: MaterialRequestRelease = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:release")),
+) -> JSONResponse:
+    req = await material_container_service.release_request(db, request_id, payload, operator=user.id)
+    verdict_label = {"release": "已放行", "reject": "已拒收", "concede": "让步接收"}[payload.verdict]
+    return success_response(
+        data=MaterialRequestOut.model_validate(req).model_dump(mode="json"),
+        message=f"请验单 {req.request_no} {verdict_label}" + ("，该批容器已同步更新状态" if req.material_request_id is None else ""),
+    )
+
+
+# ─── 物料标准库 ───
+
+
+@router.post("/material/standards", summary="新建物料质量标准（物料+供应商，同键已存在则 409）", status_code=201)
+async def create_material_standard_endpoint(
+    payload: MaterialStandardCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    code = payload.material_code.strip()
+    from app.modules.quality.repository import get_material_by_code
+
+    material = await get_material_by_code(db, code)
+    if material is None:
+        raise HTTPException(status_code=404, detail=f"物料代码 {code} 不在字典中")
+    if await get_material_standard_by_key(db, code, payload.vendor_code):
+        raise HTTPException(status_code=409, detail="该物料+供应商的标准已存在")
+    std = await create_material_standard(db, {
+        "material_code": code,
+        "material_name": material.name,
+        "vendor_code": payload.vendor_code,
+        "version": payload.version,
+        "remark": payload.remark,
+    })
+    return success_response(
+        data=MaterialStandardOut.model_validate(std).model_dump(mode="json"),
+        message="物料标准已创建", status_code=201,
+    )
+
+
+@router.post("/material/standards/{standard_id}/items", summary="新增物料标准检验项目行", status_code=201)
+async def create_material_standard_item_endpoint(
+    standard_id: uuid.UUID,
+    payload: MaterialStandardItemCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    std = await get_material_standard(db, standard_id)
+    if std is None:
+        raise HTTPException(status_code=404, detail="物料标准不存在")
+    item = await create_material_standard_item(db, {
+        "standard_id": standard_id,
+        "seq": payload.seq,
+        "category": payload.category,
+        "item_name": payload.item_name,
+        "sop_no": payload.sop_no,
+        "standard_text": payload.standard_text,
+        "operator": payload.operator,
+        "limit_min": payload.limit_min,
+        "limit_max": payload.limit_max,
+        "method_source": payload.method_source,
+        "remark": payload.remark,
+    })
+    return success_response(
+        data=MaterialStandardItemOut.model_validate(item).model_dump(mode="json"),
+        message="项目行已添加", status_code=201,
+    )
+
+
+@router.get("/material/standards/{standard_id}/items", summary="物料标准检验项目行列表")
+async def list_material_standard_items_endpoint(
+    standard_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    items = await list_material_standard_items(db, standard_id)
+    return success_response(
+        data=[MaterialStandardItemOut.model_validate(i).model_dump(mode="json") for i in items]
+    )

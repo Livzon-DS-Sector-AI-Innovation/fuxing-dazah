@@ -19,8 +19,10 @@ from app.core.exceptions import AppException
 from app.core.time import today as _today
 from app.modules.quality.models import (
     QualityMaterialContainer,
+    QualityMaterialRequest,
     QualityStocktakeItem,
     QualityStocktakeSheet,
+    QualityTestTask,
 )
 from app.modules.quality.repository import (
     create_container_movement,
@@ -337,6 +339,175 @@ class MaterialContainerService:
         await db.flush()
         stmt = select(QualityStocktakeSheet).where(QualityStocktakeSheet.id == sheet_id)
         return (await db.execute(stmt)).scalar_one()
+    # ── 物料请验 / 检验 / 放行 ──
+
+    @staticmethod
+    async def create_request(
+        db: AsyncSession, payload: Any, operator: uuid.UUID | None = None
+    ) -> QualityMaterialRequest:
+        """创建请验单：MR+YYMMDD+序号；物料/供应商信息从字典带出快照。"""
+        from app.modules.quality.repository import (
+            create_material_request,
+            get_material_by_code,
+            get_supplier_by_code,
+            max_material_request_seq,
+        )
+
+        code = payload.material_code.strip()
+        material = await get_material_by_code(db, code)
+        if material is None:
+            raise AppException(status_code=404, detail=f"物料代码 {code} 不在字典中，请先维护物料字典")
+        vendor_name = material.vendor_name
+        if payload.vendor_code:
+            supplier = await get_supplier_by_code(db, payload.vendor_code.strip())
+            if supplier is not None:
+                vendor_name = supplier.name
+        date_str = datetime.now().strftime("%Y%m%d")
+        prefix = f"MR-{date_str}-"
+        seq = await max_material_request_seq(db, prefix)
+        return await create_material_request(db, {
+            "request_no": f"{prefix}{seq + 1:04d}",
+            "material_code": code,
+            "material_name": material.name,
+            "vendor_code": payload.vendor_code,
+            "vendor_name": vendor_name,
+            "inbound_batch_no": payload.inbound_batch_no.strip(),
+            "inbound_qty": payload.inbound_qty,
+            "inbound_date": payload.inbound_date,
+            "status": "pending_sample",
+        })
+
+    @staticmethod
+    async def sample_request(
+        db: AsyncSession, request_id: uuid.UUID, payload: Any, operator: uuid.UUID | None = None
+    ) -> QualityMaterialRequest:
+        from app.modules.quality.repository import (
+            get_material_request,
+            update_material_request,
+        )
+
+        req = await get_material_request(db, request_id)
+        if req is None:
+            raise AppException(status_code=404, detail="请验单不存在")
+        if req.status != "pending_sample":
+            raise AppException(status_code=400, detail=f"请验单状态为 {req.status}，不可取样")
+        return await update_material_request(db, request_id, {
+            "status": "sampled",
+            "sampled_at": payload.sampled_at or datetime.now().strftime("%Y-%m-%d"),
+            "sampled_qty": payload.sampled_qty,
+            "sampled_by": operator,
+        })
+
+    @staticmethod
+    async def create_material_task(
+        db: AsyncSession, request_id: uuid.UUID, operator: uuid.UUID | None = None
+    ) -> QualityTestTask:
+        """从物料标准快照检验项目行建物料检验任务（复用任务链路）。
+
+        标准匹配：物料+供应商精确 → 物料通用（vendor 空）→ 无标准报错。
+        任务行判定复用 QualityTestResult（judge_mode=auto/manual 由 operator 推导）。
+        """
+        from app.modules.quality.repository import (
+            create_test_results,
+            create_test_task,
+            get_material_request,
+            get_material_standard_by_key,
+            list_material_standard_items,
+            update_material_request,
+        )
+
+        req = await get_material_request(db, request_id)
+        if req is None:
+            raise AppException(status_code=404, detail="请验单不存在")
+        if req.status not in ("sampled", "in_test"):
+            raise AppException(status_code=400, detail=f"请验单状态为 {req.status}，需先取样")
+        if req.task_id:
+            from app.modules.quality.repository import get_test_task
+
+            existing = await get_test_task(db, req.task_id)
+            if existing and not existing.is_deleted:
+                raise AppException(status_code=409, detail=f"该请验单已建检验任务（{existing.batch_number}）")
+        std = await get_material_standard_by_key(db, req.material_code, req.vendor_code)
+        if std is None and req.vendor_code:
+            std = await get_material_standard_by_key(db, req.material_code, None)
+        if std is None:
+            raise AppException(status_code=404, detail=f"物料 {req.material_code} 无检验标准，请先维护物料标准库")
+        items = await list_material_standard_items(db, std.id)
+        if not items:
+            raise AppException(status_code=400, detail="物料标准为空，请先添加检验项目行")
+        task = await create_test_task(
+            db,
+            product_name=req.material_name,
+            batch_number=req.inbound_batch_no,
+            production_date=req.inbound_date,
+            expiry_date=None,
+            specification=None,
+            form_id=None,
+            standard_document_id=None,
+        )
+        task.task_kind = "material"
+        task.material_request_id = request_id
+        task.status = "in_progress"
+        await db.flush()
+        rows = []
+        for item in items:
+            judge_mode = "auto" if item.operator else "manual"
+            rows.append({
+                "standard_item_id": None,
+                "seq": item.seq,
+                "category": item.category,
+                "item_name": item.item_name,
+                "sop_no": item.sop_no,
+                "standard_text": item.standard_text,
+                "operator": item.operator,
+                "limit_min": item.limit_min,
+                "limit_max": item.limit_max,
+                "method_source": item.method_source,
+                "remark": item.remark,
+                "judge_mode": judge_mode,
+                "source": "material",
+                "result_text": None,
+                "result_value": None,
+                "is_pass": None,
+            })
+        await create_test_results(db, task.id, rows)
+        await update_material_request(db, request_id, {"status": "in_test", "task_id": task.id})
+        return task
+
+    @staticmethod
+    async def release_request(
+        db: AsyncSession, request_id: uuid.UUID, payload: Any, operator: uuid.UUID | None = None
+    ) -> QualityMaterialRequest:
+        """放行结论：release/reject/concede，联动该请验单全部容器状态。
+
+        release → 容器转 qualified（已赋码/在库均可直接合格）
+        reject → 容器作废冻结（void）
+        concede → 视同可用转 qualified，结论留痕
+        """
+        from app.modules.quality.repository import (
+            get_material_request,
+            list_containers_by_request,
+            update_container_status,
+            update_material_request,
+        )
+
+        req = await get_material_request(db, request_id)
+        if req is None:
+            raise AppException(status_code=404, detail="请验单不存在")
+        if req.status in ("released", "rejected", "conceded", "void"):
+            raise AppException(status_code=400, detail=f"请验单状态为 {req.status}，已放行过")
+        status_map = {"release": "released", "reject": "rejected", "concede": "conceded"}
+        container_status = {"release": "qualified", "reject": "void", "concede": "qualified"}[payload.verdict]
+        for c in await list_containers_by_request(db, request_id):
+            await update_container_status(db, c.id, container_status)
+        return await update_material_request(db, request_id, {
+            "status": status_map[payload.verdict],
+            "verdict": payload.verdict,
+            "verdict_remark": payload.remark,
+            "released_by": operator,
+            "released_at": datetime.now().strftime("%Y-%m-%d"),
+        })
+
     # ── Excel 批量导入 ──
 
     _DICT_COLUMNS = ["code", "name", "category", "vendor_name", "pack_spec", "min_stock", "valid_months", "remark"]
