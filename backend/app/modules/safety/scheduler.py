@@ -5,6 +5,7 @@
 当前任务:
 - 督办等级计算 (每日 07:30, 已启用): 拉取督办等级未关闭记录 → 规则计算 → 更新回填
 - 持证到期预警 (每日 08:00, 已启用): 扫描 person_certificates → 推送本人/部门负责人/安管人员
+- 外来人员保险预警 (每周三 08:30, 已启用): 直读预报备审批表 → 保险到期三类预警 → 安全速递格子
 - 督办通报 (周四 14:00, 安全速递总卡格子, 已启用)
 - 特殊作业日报 (每日 08:00, 已启用)
 - 特殊作业日报17点 (每日 17:00, 已启用)
@@ -309,6 +310,16 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "description": "拉取危险品日报群当日 Excel → 更新多维表 → 重算风险 → 推送安全AI创新交流群（超量+昨日环比分析日报）；"
                        "同款速递版式加投「危险品日报」群（SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID=off 停用）",
     },
+    # ── 外来人员保险预警（每周三 08:30，直读预报备审批表 → 安全速递格子）──
+    {
+        "name": "外来人员保险预警",
+        "hour": 8, "minute": 30, "dow": 2,  # 周三
+        # 补发窗口：当日 12:00 截止（失败自动重试）
+        "retry_until_hour": 12, "retry_until_minute": 0,
+        "description": "直读「外来人员安全培训通知单 - 预报备审批流程」多维表格 → "
+                       "保险已过期/3天内到期/在厂未填三类预警（无命中也照发），"
+                       "投「安全速递」总卡格子（安全AI创新交流群；总卡关闭时发独立群卡）",
+    },
 ]
 
 # ── 触发状态持久化（PostgreSQL）──
@@ -540,6 +551,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
             await _run_chemical_inventory_weekly(chat_id=chat_id)
         elif job_name == "危化品库存日报":
             await _run_chemical_inventory_daily(chat_id=chat_id)
+        elif job_name == "外来人员保险预警":
+            await _run_visitor_insurance_warning(chat_id=chat_id)
         elif "mode" in job:
             await _run_special_op_daily_report(job, today, chat_id=chat_id)
         else:
@@ -933,6 +946,22 @@ async def _run_cert_warning_notification() -> None:
             "持证预警推送完成: total=%d depts=%d",
             len(warnings), len(by_dept),
         )
+
+
+async def _run_visitor_insurance_warning(chat_id: str | None = None) -> None:
+    """每周三 08:30：外来人员保险到期预警（安全速递格子）。
+
+    直读预报备审批表（visitor_notice/notice）→ 三类口径（已过期/3天内
+    到期/在厂未填）→ 投当日「安全速递」总卡；总卡关闭时发独立群卡
+    （chat_id 为调度配置覆写目标）。推送失败抛错走补发重试。
+    """
+    from app.modules.safety.service.visitor_insurance.report import (
+        send_visitor_insurance_warning,
+    )
+
+    stats = await send_visitor_insurance_warning(chat_id=chat_id)
+    if not stats.get("sent"):
+        raise RuntimeError(f"外来人员保险预警未确认投递: {stats}")
 
 
 async def _run_fire_inspection_pdf_backfill() -> None:

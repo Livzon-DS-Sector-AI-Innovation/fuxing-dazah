@@ -48,6 +48,7 @@ EFFECTIVE_TARGET_CODE: dict[str, str] = {
     "作业票审核": "oc_d102e1a11eaaa9a1de3b41859de9d0c1",
     "危化品库存日报": "oc_f05532603bd7682fc520929c01aca88d",
     "危化品库存周报": "oc_f05532603bd7682fc520929c01aca88d",  # 与日报同群（env 已清空，代码默认兜底）
+    "外来人员保险预警": "oc_f05532603bd7682fc520929c01aca88d",  # 安全速递总卡目标群
 }
 
 

@@ -1066,6 +1066,24 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
+    # ── visitor_notice 外来人员预报备审批（纯只读周报，无事件订阅）──
+    DomainInfo(
+        key="visitor_notice",
+        label="外来人员预报备审批",
+        purpose="外来人员安全培训通知单预报备审批台账（每周三保险到期预警直读源）",
+        subscribe="record",
+        kinds=(
+            KindInfo(
+                kind="notice",
+                label="外来人员预报备审批表",
+                default_connection=DefaultConnection(
+                    app_token="L3bcbKXV8a9VdisU6PFcNGN8n8i",
+                    table_id="tbloisRVTbETLmzF",
+                    note="外来人员安全培训通知单 - 预报备审批流程（保险到期预警数据源）",
+                ),
+            ),
+        ),
+    ),
 )
 
 # 构造时断言：域 key 唯一（重复 key 会在 dict 推导时静默覆盖，故显式校验）
