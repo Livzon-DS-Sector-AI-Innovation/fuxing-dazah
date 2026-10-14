@@ -3,17 +3,12 @@
 export { SafetyOverviewDashboard } from './SafetyOverviewDashboard'
 export { default as SpecialOpsManagement } from './SpecialOpsManagement'
 export { default as SpecialOpsLedger } from './SpecialOpsLedger'
-export { default as SpecialOpsReportPanel } from './SpecialOpsReportPanel'
 export { default as KeyRiskOpsManagement } from './KeyRiskOpsManagement'
 export { default as KeyRiskOpsDetail } from './KeyRiskOpsDetail'
 export { default as HazardLedgerPanel } from './HazardLedgerPanel'
 export { default as HazardLedgerPage } from './HazardLedgerPage'
 export { default as KnowledgeDetailDrawer } from './KnowledgeDetailDrawer'
-export { default as KnowledgeFormModal } from './KnowledgeFormModal'
-export { default as KnowledgeCardEditor } from './KnowledgeCardEditor'
-export { default as InjectionPreviewModal } from './InjectionPreviewModal'
 export { default as AgentUsageStats } from './AgentUsageStats'
-export { default as PptGeneratorPanel } from './PptGeneratorPanel'
 export { default as KnowledgeGraphTree } from './KnowledgeGraphTree'
 export { default as KnowledgeGraphTreeNode } from './KnowledgeGraphTreeNode'
 export {
@@ -68,7 +63,6 @@ export { default as OhFollowupsPanel } from './OhFollowupsPanel'
 
 // ── 持证到期预警（Cert Warning）──
 export { default as CertWarningPanel } from './CertWarningPanel'
-export { default as CertRenewDrawer } from './CertRenewDrawer'
 
 // ── 危化品库存管理（Chemical Inventory）──
 export { default as ChemicalInventoryPanel } from './ChemicalInventoryPanel'

@@ -9,7 +9,6 @@ import {
   Space,
   App,
   Typography,
-  Modal,
   Descriptions,
   DatePicker,
   Checkbox,
@@ -24,7 +23,6 @@ import {
   CloseCircleOutlined,
   CaretUpFilled,
   CaretDownFilled,
-  DeleteOutlined,
   FilePdfOutlined,
   FileExcelOutlined,
 } from '@ant-design/icons'
@@ -34,7 +32,6 @@ import {
   getHILedgerStats,
   exportHazardLedgerPdf,
   exportHazardLedgerExcel,
-  deleteHazardIdentification,
 } from '@/actions/safety'
 import type { HazardIdentification, HazardLedgerStats } from '@/types/safety'
 import { RISK_LEVEL_OPTIONS } from '@/types/safety'
@@ -152,11 +149,6 @@ export default function HazardLedgerPanel() {
   // ── 筛选弹出框状态 ──
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false)
   const [pendingFilterField, setPendingFilterField] = useState<string | null>(null)
-
-  // ── 批量选择 & 删除 ──
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
-  const [deleting, setDeleting] = useState(false)
-  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null)
 
   // ── 导出 Drawer 状态（独立于主表格勾选，翻页保持）──
   const [exportDrawerOpen, setExportDrawerOpen] = useState(false)
@@ -282,7 +274,6 @@ export default function HazardLedgerPanel() {
   useEffect(() => { loadStats() }, [])
 
   useEffect(() => {
-    setSelectedRowKeys([])
     loadData()
   }, [queryParams.page, queryParams.page_size, riskLevel, department, position])
 
@@ -341,38 +332,6 @@ export default function HazardLedgerPanel() {
         }} />
       </span>
     )
-  }
-
-  // ── 批量删除 ──
-  const handleBatchDelete = () => {
-    if (selectedRowKeys.length === 0) return
-    Modal.confirm({
-      title: '确认删除',
-      content: `确定要删除选中的 ${selectedRowKeys.length} 条记录吗？此操作不可撤销。`,
-      okText: '确认删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        setDeleting(true)
-        let succeeded = 0
-        let failed = 0
-        for (const id of selectedRowKeys as string[]) {
-          try {
-            const res = await deleteHazardIdentification(id)
-            if (res.code === 200) succeeded++; else failed++
-          } catch { failed++ }
-        }
-        if (failed === 0) {
-          msgApi.success(`成功删除 ${succeeded} 条记录`)
-        } else {
-          msgApi.warning(`删除完成：${succeeded} 条成功，${failed} 条失败`)
-        }
-        setSelectedRowKeys([])
-        await loadData()
-        loadStats()
-        setDeleting(false)
-      },
-    })
   }
 
   // ── base64 → Blob → 触发下载 ──
@@ -504,68 +463,6 @@ export default function HazardLedgerPanel() {
 
   // ── 表格列定义 ──
   const columns: ColumnsType<HazardIdentification> = [
-    // ── 隐藏式复选框列 ──
-    {
-      title: '',
-      key: '__row_select__',
-      width: 48,
-      fixed: 'start',
-      align: 'center',
-      render: (_: unknown, record: HazardIdentification, index: number) => {
-        const isSelected = selectedRowKeys.includes(record.id)
-        const isHovered = hoveredRowId === record.id
-        const rowNum = ((queryParams.page || 1) - 1) * (queryParams.page_size || 20) + index + 1
-
-        const handleToggle = () => {
-          setSelectedRowKeys((prev) =>
-            prev.includes(record.id)
-              ? prev.filter((k) => k !== record.id)
-              : [...prev, record.id]
-          )
-        }
-
-        if (isSelected) {
-          return <Checkbox checked onChange={handleToggle} style={{ zIndex: 2 }} />
-        }
-
-        return (
-          <span
-            style={{
-              position: 'relative',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 24,
-              height: 24,
-              cursor: 'pointer',
-            }}
-            onClick={handleToggle}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                color: '#a4a097',
-                fontWeight: 400,
-                transition: 'opacity 0.12s ease',
-                opacity: isHovered ? 0 : 1,
-                position: 'absolute',
-              }}
-            >
-              {rowNum}
-            </span>
-            <span
-              style={{
-                transition: 'opacity 0.12s ease',
-                opacity: isHovered ? 1 : 0,
-                position: 'absolute',
-              }}
-            >
-              <Checkbox checked={false} />
-            </span>
-          </span>
-        )
-      },
-    },
     {
       title: '编号',
       dataIndex: 'hazard_id_no',
@@ -1152,41 +1049,8 @@ export default function HazardLedgerPanel() {
         title="风险点台账"
         description={`已完成危险源辨识记录（共 ${total} 条）· 点编号看详情，展开行看评价与措施`}
       >
-        {/* ── 批量删除栏 ── */}
-        {selectedRowKeys.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '8px 16px',
-              marginBottom: 12,
-              borderRadius: 8,
-              background: '#fff1f0',
-              border: '1px solid #ffccc7',
-              flexShrink: 0,
-            }}
-          >
-            <span style={{ fontSize: 13, color: '#e03131', fontWeight: 500 }}>
-              已选择 {selectedRowKeys.length} 条记录
-            </span>
-            <Button
-              danger
-              icon={<DeleteOutlined />}
-              loading={deleting}
-              onClick={handleBatchDelete}
-              size="small"
-            >
-              删除
-            </Button>
-          </div>
-        )}
-
         {/* ── 全局样式 ── */}
         <style>{`
-          .hi-ledger-table .ant-table-row {
-            transition: background 0.12s ease;
-          }
           .hi-ledger-table thead th {
             text-align: center !important;
           }
@@ -1215,10 +1079,6 @@ export default function HazardLedgerPanel() {
               />
             ),
           }}
-          onRow={(record) => ({
-            onMouseEnter: () => setHoveredRowId(record.id),
-            onMouseLeave: () => setHoveredRowId((prev) => (prev === record.id ? null : prev)),
-          })}
           expandable={{
             expandedRowRender,
             expandedRowKeys,

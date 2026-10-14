@@ -11,29 +11,21 @@ import {
   Spin,
   Empty,
   Typography,
-  message,
 } from 'antd'
 import {
   FilePdfOutlined,
   FileTextOutlined,
   FileExcelOutlined,
-  FilePptOutlined,
   DownloadOutlined,
-  HistoryOutlined,
-  RobotOutlined,
   BarChartOutlined,
-  ThunderboltOutlined,
   CalendarOutlined,
   UserOutlined,
   ApartmentOutlined,
   EyeOutlined,
 } from '@ant-design/icons'
-import { getKnowledgeArticle, getArticleVersions, generateSummary } from '@/actions/safety'
+import { getKnowledgeArticle, getArticleVersions } from '@/actions/safety'
 import { fileProxyUrl } from '@/components/safety/file-url'
-import KnowledgeCardEditor from './KnowledgeCardEditor'
-import InjectionPreviewModal from './InjectionPreviewModal'
 import AgentUsageStats from './AgentUsageStats'
-import PptGeneratorPanel from './PptGeneratorPanel'
 import type { SafetyKnowledgeArticle, VersionChainItem } from '@/types/safety'
 import { KNOWLEDGE_CATEGORY_OPTIONS } from '@/types/safety'
 import { getCategoryStyle } from './knowledgeConstants'
@@ -45,20 +37,16 @@ interface Props {
   articleId: string | null
   open: boolean
   onClose: () => void
-  onNewVersion?: (article: SafetyKnowledgeArticle) => void
 }
 
 export default function KnowledgeDetailDrawer({
   articleId,
   open,
   onClose,
-  onNewVersion,
 }: Props) {
   const [loading, setLoading] = useState(false)
   const [article, setArticle] = useState<SafetyKnowledgeArticle | null>(null)
   const [versionChain, setVersionChain] = useState<VersionChainItem[]>([])
-  const [injectionPreviewOpen, setInjectionPreviewOpen] = useState(false)
-  const [generatingSummary, setGeneratingSummary] = useState(false)
 
   const loadArticle = useCallback(async () => {
     if (!articleId || !open) return
@@ -101,30 +89,12 @@ export default function KnowledgeDetailDrawer({
     return <Tag color={s.color}>{s.label}</Tag>
   }
 
-  const handleGenerateSummary = async () => {
-    if (!article) return
-    setGeneratingSummary(true)
-    try {
-      const res = await generateSummary(article.id)
-      if (res.code === 200 && res.data) {
-        message.success(res.data.message || '摘要生成成功')
-        loadArticle()
-      } else {
-        message.error(res.message || '摘要生成失败')
-      }
-    } catch {
-      message.error('摘要生成失败')
-    } finally {
-      setGeneratingSummary(false)
-    }
-  }
-
   const renderSummaryTab = () => {
     if (!article?.content) {
       return (
         <Empty description="文档缺少正文内容，无法生成摘要">
           <Text type="secondary">
-            摘要从文档正文中 AI 提取。请先通过 Bitable 同步解析文档全文。
+            摘要从文档正文中 AI 提取，由 Bitable 同步链路自动生成。
           </Text>
         </Empty>
       )
@@ -132,15 +102,8 @@ export default function KnowledgeDetailDrawer({
 
     return (
       <div>
-        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ marginBottom: 16 }}>
           <span style={{ fontWeight: 600 }}>AI 结构化摘要</span>
-          <Button
-            icon={<ThunderboltOutlined />}
-            loading={generatingSummary}
-            onClick={handleGenerateSummary}
-          >
-            {article.summary ? '重新生成' : '生成摘要'}
-          </Button>
         </div>
 
         {article.summary ? (
@@ -159,16 +122,7 @@ export default function KnowledgeDetailDrawer({
             {article.summary}
           </Paragraph>
         ) : (
-          <Empty description="尚未生成摘要">
-            <Button
-              type="primary"
-              icon={<ThunderboltOutlined />}
-              loading={generatingSummary}
-              onClick={handleGenerateSummary}
-            >
-              AI 生成摘要
-            </Button>
-          </Empty>
+          <Empty description="尚未生成摘要" />
         )}
       </div>
     )
@@ -431,7 +385,7 @@ export default function KnowledgeDetailDrawer({
             </div>
           ) : (
             <span style={{ color: 'var(--color-stone, #a4a097)', fontSize: 13 }}>
-              暂无摘要，可在「摘要」标签页点击 AI 生成
+              暂无摘要
             </span>
           )}
         </div>
@@ -492,18 +446,6 @@ export default function KnowledgeDetailDrawer({
           header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
           body: { padding: '24px' },
         }}
-        extra={
-          article?.status === 'published' && onNewVersion ? (
-            <Button
-              type="primary"
-              ghost
-              icon={<HistoryOutlined />}
-              onClick={() => onNewVersion(article)}
-            >
-              新建版本
-            </Button>
-          ) : undefined
-        }
       >
         {loading ? (
           <div style={{ textAlign: 'center', padding: 80 }}>
@@ -529,21 +471,6 @@ export default function KnowledgeDetailDrawer({
                 children: renderFullContent(),
               },
               {
-                key: 'card',
-                label: (
-                  <span>
-                    <RobotOutlined /> 知识卡片
-                  </span>
-                ),
-                children: (
-                  <KnowledgeCardEditor
-                    article={article}
-                    onRefresh={loadArticle}
-                    onPreviewInjection={() => setInjectionPreviewOpen(true)}
-                  />
-                ),
-              },
-              {
                 key: 'stats',
                 label: (
                   <span>
@@ -562,21 +489,6 @@ export default function KnowledgeDetailDrawer({
                 children: renderSummaryTab(),
               },
               {
-                key: 'ppt',
-                label: (
-                  <span>
-                    <FilePptOutlined /> 生成PPT
-                  </span>
-                ),
-                children: (
-                  <PptGeneratorPanel
-                    articleId={article.id}
-                    articleTitle={article.title}
-                    hasContent={!!article.content}
-                  />
-                ),
-              },
-              {
                 key: 'attachment',
                 label: '附件预览',
                 children: renderAttachmentPreview(),
@@ -592,12 +504,6 @@ export default function KnowledgeDetailDrawer({
           <Empty description="文档不存在" />
         )}
       </Drawer>
-
-      <InjectionPreviewModal
-        article={article}
-        open={injectionPreviewOpen}
-        onClose={() => setInjectionPreviewOpen(false)}
-      />
     </>
   )
 }

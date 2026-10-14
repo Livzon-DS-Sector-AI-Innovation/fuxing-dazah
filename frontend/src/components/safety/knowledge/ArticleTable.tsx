@@ -1,8 +1,8 @@
 'use client'
 
-import { Badge, Dropdown, Empty, Table, Tooltip } from 'antd'
+import { Badge, Empty, Table, Tooltip, Button } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EllipsisOutlined } from '@ant-design/icons'
+import { EyeOutlined } from '@ant-design/icons'
 import type { RagplusDocMapEntry, SafetyKnowledgeArticle } from '@/types/safety'
 import { StatusTag } from '@/components/ui-kit'
 import { getCategoryStyle } from '@/components/safety/knowledgeConstants'
@@ -11,13 +11,7 @@ interface Props {
   articles: SafetyKnowledgeArticle[]
   loading: boolean
   docMap: Record<string, RagplusDocMapEntry>
-  selectedRowKeys: string[]
-  onSelectRowKeys: (keys: string[]) => void
   onOpenDetail: (article: SafetyKnowledgeArticle) => void
-  onEdit: (article: SafetyKnowledgeArticle) => void
-  onGenerateCard: (id: string) => void
-  onGeneratePpt: (id: string) => void
-  onGenerateSummary: (id: string) => void
 }
 
 /** ragplus 引擎入库状态（参考 ragplus 文档表的状态列 + 失败原因提示） */
@@ -80,13 +74,7 @@ export default function ArticleTable({
   articles,
   loading,
   docMap,
-  selectedRowKeys,
-  onSelectRowKeys,
   onOpenDetail,
-  onEdit,
-  onGenerateCard,
-  onGeneratePpt,
-  onGenerateSummary,
 }: Props) {
   const columns: ColumnsType<SafetyKnowledgeArticle> = [
     {
@@ -174,25 +162,14 @@ export default function ArticleTable({
       key: 'actions',
       width: 56,
       render: (_, record) => (
-        <Dropdown
-          menu={{
-            items: [
-              { key: 'detail', label: '查看详情', onClick: () => onOpenDetail(record) },
-              { key: 'edit', label: '编辑', onClick: () => onEdit(record) },
-              { key: 'card', label: '生成知识卡片', onClick: () => onGenerateCard(record.id) },
-              { key: 'ppt', label: '生成培训 PPT', onClick: () => onGeneratePpt(record.id) },
-              { key: 'summary', label: '生成摘要', onClick: () => onGenerateSummary(record.id) },
-            ],
-          }}
-          trigger={['click']}
-        >
-          <button
-            type="button"
-            style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px 6px', color: 'var(--color-steel, #787671)' }}
-          >
-            <EllipsisOutlined />
-          </button>
-        </Dropdown>
+        <Tooltip title="查看详情">
+          <Button
+            type="text"
+            size="small"
+            icon={<EyeOutlined style={{ color: 'var(--color-steel, #787671)' }} />}
+            onClick={() => onOpenDetail(record)}
+          />
+        </Tooltip>
       ),
     },
   ]
@@ -212,16 +189,12 @@ export default function ArticleTable({
             style={{ padding: '48px 0' }}
           >
             <span style={{ fontSize: 12, color: 'var(--color-stone, #a4a097)' }}>
-              请调整筛选条件，或通过「同步」从 Bitable 拉取文档数据
+              请调整筛选条件，或等待 Bitable 同步任务拉取文档数据
             </span>
           </Empty>
         ),
       }}
       pagination={false}
-      rowSelection={{
-        selectedRowKeys,
-        onChange: (keys) => onSelectRowKeys(keys.map(String)),
-      }}
     />
   )
 }

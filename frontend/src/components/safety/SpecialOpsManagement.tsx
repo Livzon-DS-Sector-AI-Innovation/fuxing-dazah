@@ -5,23 +5,21 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  App, Button, Input, InputNumber, Modal,
+  App, Button, Input, Modal,
   Select, Space, Table,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  EditOutlined, EyeOutlined, ReloadOutlined,
-  SaveOutlined, SearchOutlined,
+  EyeOutlined, ReloadOutlined,
+  SearchOutlined,
 } from '@ant-design/icons'
 import { Column } from '@ant-design/charts'
 import dayjs, { type Dayjs } from 'dayjs'
 
 import {
-  deleteSpecialOperationReport,
   getDailyReportStats,
   getSpecialOperationLedgerStats,
   getSpecialOperationReports,
-  updateSpecialOperationReportV35,
 } from '@/actions/safety'
 import type {
   DailyReportStats,
@@ -57,20 +55,6 @@ const MONO_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", mo
 const RISK_LABELS: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' }
 const RISK_TONE: Record<string, Tone> = { high: 'danger', medium: 'warn', low: 'ok' }
 
-// ── V3.5 字段选项 ──
-const FIRE_METHOD_OPTIONS = [
-  { value: '电焊', label: '电焊' }, { value: '气割', label: '气割' },
-  { value: '等离子切割机', label: '等离子切割机' }, { value: '氩弧焊', label: '氩弧焊' },
-  { value: '切割机', label: '切割机' }, { value: '角磨机', label: '角磨机' },
-  { value: '电钻', label: '电钻' }, { value: '冲击钻', label: '冲击钻' },
-  { value: '塑料焊', label: '塑料焊' }, { value: '其他', label: '其他' },
-]
-const HEIGHT_METHOD_OPTIONS = [
-  { value: '门式脚手架', label: '门式脚手架' }, { value: '扣件式脚手架', label: '扣件式脚手架' },
-  { value: '高处作业车', label: '高处作业车' }, { value: '固定式直爬梯', label: '固定式直爬梯' },
-  { value: '便携式钢直梯', label: '便携式钢直梯' }, { value: '其他', label: '其他' },
-]
-
 // ── 状态标签（ui-kit StatusTag 包装，语义 tone 映射）──
 
 function RiskTag({ level }: { level?: string | null }) {
@@ -95,7 +79,7 @@ interface SpecialOpsManagementProps {
 }
 
 export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagementProps) {
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
 
   // ── 列表 ──
   const [rows, setRows] = useState<SpecialOperationReport[]>([])
@@ -117,17 +101,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   // ── 详情抽屉（简单 Modal 替代 Drawer，对齐 AI 审计风格）──
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailItem, setDetailItem] = useState<SpecialOperationReport | null>(null)
-
-  // ── V3.5 字段编辑 ──
-  const [v35Saving, setV35Saving] = useState(false)
-  const [editV35, setEditV35] = useState(false)
-  const [v35Form, setV35Form] = useState<{
-    fire_work_method?: string | null
-    height_work_method?: string | null
-    work_height?: number | null
-    lifting_weight?: number | null
-    contractor_name?: string | null
-  }>({})
 
   // ── 数据加载 ──
   const loadList = useCallback(async (p: number, ps: number) => {
@@ -165,65 +138,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   }, [opType, opLevel])
 
   const refresh = () => { void loadList(page, pageSize); void loadStats() }
-
-  // ── V3.5 字段编辑 ──
-  useEffect(() => {
-    if (detailItem) {
-      setV35Form({
-        fire_work_method: detailItem.fire_work_method ?? null,
-        height_work_method: detailItem.height_work_method ?? null,
-        work_height: detailItem.work_height ?? null,
-        lifting_weight: detailItem.lifting_weight ?? null,
-        contractor_name: detailItem.contractor_name ?? null,
-      })
-      setEditV35(false)
-    }
-  }, [detailItem])
-
-  const handleSaveV35 = async () => {
-    if (!detailItem) return
-    setV35Saving(true)
-    try {
-      const res = await updateSpecialOperationReportV35(detailItem.id, v35Form)
-      if (res.code === 200 && res.data) {
-        message.success('V3.5 字段已保存，风险等级将重新判定')
-        setDetailItem(res.data)
-        setEditV35(false)
-        refresh()
-      } else {
-        message.error(res.message || '保存失败')
-      }
-    } catch {
-      message.error('保存失败')
-    } finally {
-      setV35Saving(false)
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!detailItem) return
-    modal.confirm({
-      title: '确认删除',
-      content: `确定要删除作业记录「${detailItem.report_no || detailItem.id.slice(0, 8)}」吗？`,
-      okText: '确认删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      centered: true,
-      onOk: async () => {
-        try {
-          const res = await deleteSpecialOperationReport(detailItem.id)
-          if (res.code === 200) {
-            message.success('删除成功')
-            setDetailOpen(false)
-            setDetailItem(null)
-            refresh()
-          } else {
-            message.error(res.message || '删除失败')
-          }
-        } catch { message.error('删除失败') }
-      },
-    })
-  }
 
   // ── 表格 ──
   const columns: ColumnsType<SpecialOperationReport> = [
@@ -394,27 +308,9 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
       </SectionCard>
 
       {/* ── 详情 Modal ── */}
-      <Modal title="作业详情" open={detailOpen} onCancel={() => { setDetailOpen(false); setEditV35(false) }} width={640}
+      <Modal title="作业详情" open={detailOpen} onCancel={() => setDetailOpen(false)} width={640}
         footer={
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Button danger onClick={handleDelete}>删除记录</Button>
-            <Space>
-              {detailItem?.source === 'bitable' && !editV35 && (
-                <Button icon={<EditOutlined />} onClick={() => setEditV35(true)}>编辑风险参数</Button>
-              )}
-              {detailItem?.source === 'bitable' && editV35 && (
-                <>
-                  <Button onClick={() => setEditV35(false)} disabled={v35Saving}>取消</Button>
-                  <Button type="primary" icon={<SaveOutlined />} loading={v35Saving}
-                    onClick={handleSaveV35}
-                    style={{ background: UI.brandPurple, fontWeight: 500 }}>
-                    保存风险参数
-                  </Button>
-                </>
-              )}
-              <Button onClick={() => { setDetailOpen(false); setEditV35(false) }}>关闭</Button>
-            </Space>
-          </div>
+          <Button onClick={() => setDetailOpen(false)}>关闭</Button>
         }
       >
         {detailItem && (
@@ -471,42 +367,15 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
                   V3.5 风险判定参数
                 </span>
                 <span style={{ color: UI.stone }}>动火方式</span>
-                {editV35 ? (
-                  <Select size="small" style={{ width: '100%' }} allowClear placeholder="选择动火方式"
-                    value={v35Form.fire_work_method} onChange={(v) => setV35Form(f => ({ ...f, fire_work_method: v }))}
-                    options={FIRE_METHOD_OPTIONS} />
-                ) : (
-                  <span style={{ color: v35Form.fire_work_method ? UI.ink : UI.steel }}>{v35Form.fire_work_method || '—'}</span>
-                )}
+                <span style={{ color: detailItem.fire_work_method ? UI.ink : UI.steel }}>{detailItem.fire_work_method || '—'}</span>
                 <span style={{ color: UI.stone }}>高处作业方式</span>
-                {editV35 ? (
-                  <Select size="small" style={{ width: '100%' }} allowClear placeholder="选择登高方式"
-                    value={v35Form.height_work_method} onChange={(v) => setV35Form(f => ({ ...f, height_work_method: v }))}
-                    options={HEIGHT_METHOD_OPTIONS} />
-                ) : (
-                  <span style={{ color: v35Form.height_work_method ? UI.ink : UI.steel }}>{v35Form.height_work_method || '—'}</span>
-                )}
+                <span style={{ color: detailItem.height_work_method ? UI.ink : UI.steel }}>{detailItem.height_work_method || '—'}</span>
                 <span style={{ color: UI.stone }}>作业高度(米)</span>
-                {editV35 ? (
-                  <InputNumber size="small" style={{ width: '100%' }} min={0} max={200} placeholder="米"
-                    value={v35Form.work_height} onChange={(v) => setV35Form(f => ({ ...f, work_height: v }))} />
-                ) : (
-                  <span style={{ color: v35Form.work_height != null ? UI.ink : UI.steel }}>{v35Form.work_height != null ? `${v35Form.work_height}m` : '—'}</span>
-                )}
+                <span style={{ color: detailItem.work_height != null ? UI.ink : UI.steel }}>{detailItem.work_height != null ? `${detailItem.work_height}m` : '—'}</span>
                 <span style={{ color: UI.stone }}>吊物质量(吨)</span>
-                {editV35 ? (
-                  <InputNumber size="small" style={{ width: '100%' }} min={0} max={1000} placeholder="吨"
-                    value={v35Form.lifting_weight} onChange={(v) => setV35Form(f => ({ ...f, lifting_weight: v }))} />
-                ) : (
-                  <span style={{ color: v35Form.lifting_weight != null ? UI.ink : UI.steel }}>{v35Form.lifting_weight != null ? `${v35Form.lifting_weight}t` : '—'}</span>
-                )}
+                <span style={{ color: detailItem.lifting_weight != null ? UI.ink : UI.steel }}>{detailItem.lifting_weight != null ? `${detailItem.lifting_weight}t` : '—'}</span>
                 <span style={{ color: UI.stone }}>施工单位</span>
-                {editV35 ? (
-                  <Input size="small" style={{ width: '100%' }} placeholder="施工单位"
-                    value={v35Form.contractor_name ?? ''} onChange={(e) => setV35Form(f => ({ ...f, contractor_name: e.target.value || null }))} />
-                ) : (
-                  <span style={{ color: v35Form.contractor_name ? UI.ink : UI.steel }}>{v35Form.contractor_name || '—'}</span>
-                )}
+                <span style={{ color: detailItem.contractor_name ? UI.ink : UI.steel }}>{detailItem.contractor_name || '—'}</span>
               </>
             )}
           </div>

@@ -1,27 +1,21 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
-  App,
   Button,
   Input,
   Select,
-  Space,
   Table,
   Tooltip,
 } from 'antd'
 import {
   ReloadOutlined,
   FileTextOutlined,
-  AlertOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { fetchDrillRecords, fetchDrillStats } from '@/lib/api/safety/emergency-drill'
-import {
-  createHazardsFromIssues,
-} from '@/actions/safety'
 import type { DrillRecord } from '@/types/safety'
 import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
@@ -45,8 +39,6 @@ const REVIEW_STATUS_TONE: Record<string, Tone> = { 已完成: 'ok', 未完成: '
 // ── 主面板 ──
 
 export default function EmergencyDrillPanel() {
-  const { message } = App.useApp()
-
   const [stage, setStage] = useState('')
   const [drillType, setDrillType] = useState('')
   const [department, setDepartment] = useState('')
@@ -61,8 +53,6 @@ export default function EmergencyDrillPanel() {
 
   const [detailRecord, setDetailRecord] = useState<DrillRecord | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
-
-  const queryClient = useQueryClient()
 
   // 统计 query
   const statsQuery = useQuery({
@@ -91,16 +81,6 @@ export default function EmergencyDrillPanel() {
     setApplied({ stage, drillType, department, status, keyword })
     setPage(1)
   }
-
-  const handleCreateHazards = useCallback(async (recordId: string) => {
-    try {
-      const res = await createHazardsFromIssues(recordId)
-      if (res.code === 200) {
-        message.success(res.message || '隐患创建成功')
-        queryClient.invalidateQueries({ queryKey: ['drills'] })
-      } else { message.error(res.message || '创建失败') }
-    } catch { message.error('隐患创建失败') }
-  }, [message, queryClient])
 
   const columns: ColumnsType<DrillRecord> = useMemo(() => [
     {
@@ -145,24 +125,13 @@ export default function EmergencyDrillPanel() {
     },
     { title: '组织人', dataIndex: 'organizer', key: 'organizer', width: 100, ellipsis: true },
     {
-      title: '操作', key: 'actions', width: 120, fixed: 'right',
+      title: '操作', key: 'actions', width: 80, fixed: 'right',
       render: (_: unknown, record: DrillRecord) => (
-        <Space size={4}>
-          {record.issues && !record.status && (
-            <Tooltip title="问题 → 隐患记录">
-              <Button size="small" icon={<AlertOutlined />}
-                onClick={() => handleCreateHazards(record.id)}
-                style={{ fontSize: 12, color: T.warning, borderColor: T.warning }}>
-                转隐患
-              </Button>
-            </Tooltip>
-          )}
-          <Button size="small" type="text" icon={<FileTextOutlined />}
-            onClick={() => { setDetailRecord(record); setDetailOpen(true) }} />
-        </Space>
+        <Button size="small" type="text" icon={<FileTextOutlined />}
+          onClick={() => { setDetailRecord(record); setDetailOpen(true) }} />
       ),
     },
-  ], [handleCreateHazards])
+  ], [])
 
   return (
     <div style={{ padding: '0 0 32px' }}>
@@ -218,8 +187,7 @@ export default function EmergencyDrillPanel() {
       </div>
 
       <DrillDetailDrawer open={detailOpen} record={detailRecord}
-        onClose={() => setDetailOpen(false)}
-        onRefresh={() => queryClient.invalidateQueries({ queryKey: ['drills'] })} />
+        onClose={() => setDetailOpen(false)} />
     </div>
   )
 }

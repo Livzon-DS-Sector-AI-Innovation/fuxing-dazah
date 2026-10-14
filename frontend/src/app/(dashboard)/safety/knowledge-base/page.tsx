@@ -2,23 +2,14 @@
 
 import { Suspense, useMemo, useState } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import { App, Button, Input, Modal, Pagination, Select, Tooltip } from 'antd'
+import { Button, Input, Pagination, Select, Tooltip } from 'antd'
 import {
   ApartmentOutlined,
   FileSearchOutlined,
-  RobotOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  batchGenerateKnowledgeCards,
-  createNewArticleVersion,
-  generateKnowledgeCard,
-  generatePpt,
-  generateSummary,
-} from '@/actions/safety'
 import { KnowledgeQueryProvider } from '@/components/safety/KnowledgeQueryProvider'
 import KnowledgeDetailDrawer from '@/components/safety/KnowledgeDetailDrawer'
-import KnowledgeFormModal from '@/components/safety/KnowledgeFormModal'
 import RagplusEngineBar from '@/components/safety/knowledge/RagplusEngineBar'
 import SemanticResultList from '@/components/safety/knowledge/SemanticResultList'
 import ArticleTable from '@/components/safety/knowledge/ArticleTable'
@@ -33,7 +24,6 @@ import type { SafetyKnowledgeArticle } from '@/types/safety'
 const PAGE_SIZE = 20
 
 function KnowledgeBaseContent() {
-  const { message } = App.useApp()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -48,9 +38,6 @@ function KnowledgeBaseContent() {
 
   // ── 本地状态 ──
   const [searchText, setSearchText] = useState(q)
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
-  const [formOpen, setFormOpen] = useState(false)
-  const [editingRecord, setEditingRecord] = useState<SafetyKnowledgeArticle | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
@@ -122,10 +109,6 @@ function KnowledgeBaseContent() {
     patchUrl({ q: null, page: '1' })
   }
 
-  const handleEdit = (record: SafetyKnowledgeArticle) => {
-    setEditingRecord(record)
-    setFormOpen(true)
-  }
   const handleViewDetail = (record: SafetyKnowledgeArticle) => {
     setDetailId(record.id)
     setDetailOpen(true)
@@ -133,77 +116,6 @@ function KnowledgeBaseContent() {
   const handleOpenDetailById = (id: string) => {
     setDetailId(id)
     setDetailOpen(true)
-  }
-
-  const handleNewVersion = async (article: SafetyKnowledgeArticle) => {
-    const res = await createNewArticleVersion(article.id)
-    if (res.code === 200 && res.data) {
-      message.success('已创建新版本 v' + res.data.new_article.version)
-      setDetailId(res.data.new_article.id)
-      refresh()
-    } else {
-      message.error(res.message || '创建新版本失败')
-    }
-  }
-
-  const handleFormSuccess = () => {
-    setFormOpen(false)
-    setEditingRecord(null)
-    refresh()
-  }
-
-  const handleGenerateCard = async (articleId: string) => {
-    const res = await generateKnowledgeCard(articleId)
-    if (res.code === 200 && res.data) {
-      message.success(res.data.message || '知识卡片生成成功')
-      refresh()
-    } else {
-      message.error(res.message || '生成失败')
-    }
-  }
-
-  const handleBatchGenerateCards = () => {
-    if (selectedRowKeys.length === 0) {
-      message.warning('请先选择文档')
-      return
-    }
-    Modal.confirm({
-      title: '批量生成知识卡片',
-      content: '确认为选中的 ' + selectedRowKeys.length + ' 份文档生成知识卡片吗？',
-      onOk: async () => {
-        const res = await batchGenerateKnowledgeCards(selectedRowKeys)
-        if (res.code === 200 && res.data) {
-          const d = res.data
-          message.success('成功 ' + d.success_count + ' 份，失败 ' + d.failed_count + ' 份')
-          setSelectedRowKeys([])
-          refresh()
-        } else {
-          message.error(res.message || '批量生成失败')
-        }
-      },
-    })
-  }
-
-  const handleGeneratePpt = async (articleId: string) => {
-    const res = await generatePpt(articleId, { template: 'training', style: 'professional' })
-    if (res.code === 200 && res.data) {
-      message.success(res.data.message || 'PPT 生成成功')
-      if (res.data.download_url) {
-        window.open('/api/v1/safety/files/' + encodeURIComponent(res.data.download_url), '_blank')
-      }
-    } else {
-      message.error(res.message || 'PPT 生成失败')
-    }
-  }
-
-  const handleGenerateSummary = async (articleId: string) => {
-    const res = await generateSummary(articleId)
-    if (res.code === 200 && res.data) {
-      message.success(res.data.message || '摘要生成成功')
-      refresh()
-    } else {
-      message.error(res.message || '摘要生成失败')
-    }
   }
 
   // ── Render ──
@@ -276,11 +188,6 @@ function KnowledgeBaseContent() {
             description="Bitable 镜像清单 · 引擎入库状态实时可见"
             action={
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {selectedRowKeys.length > 0 && (
-                  <Button size="small" type="primary" icon={<RobotOutlined />} onClick={handleBatchGenerateCards}>
-                    批量生成卡片（{selectedRowKeys.length}）
-                  </Button>
-                )}
                 <Button size="small" icon={<ApartmentOutlined />} onClick={() => router.push('/safety/knowledge-base/graph')}>
                   知识图谱
                 </Button>
@@ -330,13 +237,7 @@ function KnowledgeBaseContent() {
               articles={pageItems}
               loading={isLoading || docMapQuery.isLoading}
               docMap={docMapQuery.data ?? {}}
-              selectedRowKeys={selectedRowKeys}
-              onSelectRowKeys={setSelectedRowKeys}
               onOpenDetail={handleViewDetail}
-              onEdit={handleEdit}
-              onGenerateCard={handleGenerateCard}
-              onGeneratePpt={handleGeneratePpt}
-              onGenerateSummary={handleGenerateSummary}
             />
 
             {!isLoading && filtered.length > PAGE_SIZE && (
@@ -354,17 +255,10 @@ function KnowledgeBaseContent() {
         </div>
 
       {/* onClose 只关不清：弹层关闭动画中卸载内容会让遮罩卡在全屏状态挡死页面；数据在下次打开时经 effect 重取/重置 */}
-      <KnowledgeFormModal
-        open={formOpen}
-        editingRecord={editingRecord}
-        onClose={() => setFormOpen(false)}
-        onSuccess={handleFormSuccess}
-      />
       <KnowledgeDetailDrawer
         articleId={detailId}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        onNewVersion={handleNewVersion}
       />
     </div>
   )
