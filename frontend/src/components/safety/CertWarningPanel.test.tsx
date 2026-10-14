@@ -5,11 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CertWarningPanel from './CertWarningPanel'
 import { renderWithQuery } from '@/test/utils'
 
-// 回填抽屉走 server actions，桩掉（交互由后端既有行为覆盖，不属本测试范围）
-vi.mock('./CertRenewDrawer', () => ({
-  default: () => <div data-testid="renew-drawer-stub" />,
-}))
-
 const listMock = vi.hoisted(() => vi.fn())
 const summaryMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api/safety/cert-warning', () => ({
@@ -95,7 +90,7 @@ describe('CertWarningPanel（证书台账 + 预警一体，三期强化）', () 
     expect(screen.getByText('已过期')).toBeInTheDocument()
   })
 
-  it('台账默认全量：姓名/状态列渲染、预警状态用 StatusTag、回填入口保留', async () => {
+  it('台账默认全量：姓名/状态列渲染、预警状态用 StatusTag、无回填入口（3.0 只读口径）', async () => {
     renderWithQuery(<CertWarningPanel />)
 
     expect(await screen.findByText('张三')).toBeInTheDocument()
@@ -107,8 +102,8 @@ describe('CertWarningPanel（证书台账 + 预警一体，三期强化）', () 
     expect(screen.getByText('紧急预警')).toBeInTheDocument()
     expect(screen.getAllByText('已逾期').length).toBe(1) // 行内标签（统计卡标签为「已过期」）
     expect(screen.getAllByText('特种作业证').length).toBe(2) // 两行特种作业证
-    // 既有回填交互保留（闭环类既有操作）
-    expect(screen.getAllByText('回填').length).toBe(3)
+    // 回填入口已按只读口径退役
+    expect(screen.queryByText('回填')).not.toBeInTheDocument()
   })
 
   it('姓名筛选：本页检索口径，拉 200 条客户端过滤并停用分页', async () => {

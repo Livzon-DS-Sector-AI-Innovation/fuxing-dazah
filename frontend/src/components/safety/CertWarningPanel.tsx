@@ -1,17 +1,17 @@
 'use client'
 
 // 人员准入与资质：证书台账 + 持证到期预警一体（三期强化）
-// PageHeader → StatCard 统计行（总持证/30 内/31-60/61-90/已过期）→ SectionCard 证书台账（筛选+表+回填）。
+// PageHeader → StatCard 统计行（总持证/30 内/31-60/61-90/已过期）→ SectionCard 证书台账（筛选+表）。
 // 数据全部走既有 cert 端点（列表不筛 status_level 即全量台账；统计行由 summary 六档推导 30/60/90 分层）。
 // 姓名筛选：后端无 person 参数（本期无新后端）——填姓名时拉取前 200 条做检索并停用服务端分页，输入框旁明示口径。
-// 既有交互保留：状态/部门/证件类型/剩余天数筛选、回填 CertRenewDrawer（闭环类既有操作，非新增）。
+// 回填闭环入口已按 3.0 只读口径退役（换证/复审回填走飞书表格或 Agent renew_person_certificate）。
 
 import { useMemo, useState } from 'react'
 import { Button, Input, Select, Table, Tag, Tooltip } from 'antd'
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { fetchCertWarningSummary, fetchCertWarnings } from '@/lib/api/safety/cert-warning'
 import type { CertWarningDetail } from '@/types/safety'
 import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
@@ -23,8 +23,6 @@ import {
   WARNING_LEVEL_FILTER,
   WARNING_LEVEL_UI,
 } from './certWarningConstants'
-import { linkPrimary } from './shared-styles'
-import CertRenewDrawer from './CertRenewDrawer'
 
 /** 姓名（本页）检索时的拉取上限（后端 page_size ≤ 200） */
 const NAME_SEARCH_LIMIT = 200
@@ -67,11 +65,6 @@ export default function CertWarningPanel() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [renewTarget, setRenewTarget] = useState<CertWarningDetail | null>(null)
-
-  const queryClient = useQueryClient()
 
   const applyFilters = () => {
     setApplied({ name, status, department, certCategory, daysWithin })
@@ -154,15 +147,6 @@ export default function CertWarningPanel() {
         ),
     },
     { title: '建议措施', dataIndex: 'suggestion', key: 'suggestion', width: 160, render: (v: string) => v || '-' },
-    {
-      title: '操作', key: 'actions', width: 80, fixed: 'right',
-      render: (_: unknown, r: CertWarningDetail) => (
-        <span role="button" style={{ ...linkPrimary, cursor: 'pointer' }}
-          onClick={() => { setRenewTarget(r); setDrawerOpen(true) }}>
-          回填
-        </span>
-      ),
-    },
   ], [])
 
   return (
@@ -267,17 +251,6 @@ export default function CertWarningPanel() {
           }
         />
       </SectionCard>
-
-      <CertRenewDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        record={renewTarget}
-        onSaved={() => {
-          setDrawerOpen(false)
-          queryClient.invalidateQueries({ queryKey: ['cert-warnings'] })
-          queryClient.invalidateQueries({ queryKey: ['cert-warning-summary'] })
-        }}
-      />
     </div>
   )
 }

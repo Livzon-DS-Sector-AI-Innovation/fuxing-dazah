@@ -16,7 +16,7 @@ import {
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { fetchOhPersons, fetchOhPersonStats } from '@/lib/api/safety/occupational-health'
 import type { OhPerson } from '@/types/safety'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
@@ -81,8 +81,6 @@ export default function OhPersonsPanel({ onViewExams }: OhPersonsPanelProps) {
 
   const [detailPerson, setDetailPerson] = useState<OhPerson | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
-
-  const queryClient = useQueryClient()
 
   // 统计 query
   const statsQuery = useQuery({
@@ -261,11 +259,6 @@ export default function OhPersonsPanel({ onViewExams }: OhPersonsPanelProps) {
         onClose={() => setDetailOpen(false)}
         person={detailPerson}
         onViewExams={onViewExams}
-        onSynced={() => {
-          queryClient.invalidateQueries({ queryKey: ['oh-persons'] })
-          queryClient.invalidateQueries({ queryKey: ['oh-persons-stats'] })
-          queryClient.invalidateQueries({ queryKey: ['oh-persons-recent30d'] })
-        }}
       />
     </div>
   )

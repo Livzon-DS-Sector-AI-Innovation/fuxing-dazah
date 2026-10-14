@@ -1,23 +1,19 @@
 'use client'
 
 // 转岗危害差异分析卡片（OhTransferDiffCard）— 对标 ehsChange/shared.tsx::AiReviewTab
-// 分支：diff 未触发 → muted「审批通过后自动触发差异分析」；
-//      failed → error + 错误信息 + 重新分析（对标 AiReviewTab failed 分支）；
+// 分支：diff 未触发 → muted「审批通过后自动触发差异分析」（WS 自动，无手动入口）；
+//      failed → error + 错误信息；
 //      analyzed → 完整卡片（新增/移除危害 Tag、PPE 小表、重点复查项、needs_exam 大 Pill、健康建议、摘要）。
 
-import { useState } from 'react'
 import {
   Alert,
-  App,
-  Button,
   Space,
   Table,
   Tag,
   Typography,
 } from 'antd'
-import { RobotOutlined, RocketOutlined } from '@ant-design/icons'
+import { RobotOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { analyzeOhApplication } from '@/actions/safety'
 import type { OhExamApplication, OhTransferDiffOutput } from '@/types/safety'
 import {
   CARD_STYLE,
@@ -46,30 +42,11 @@ function TextBlock({ children }: { children?: React.ReactNode }) {
 
 interface OhTransferDiffCardProps {
   application: OhExamApplication
-  onRefresh: () => void
 }
 
-export default function OhTransferDiffCard({ application, onRefresh }: OhTransferDiffCardProps) {
-  const { message } = App.useApp()
-  const [analyzing, setAnalyzing] = useState(false)
-
+export default function OhTransferDiffCard({ application }: OhTransferDiffCardProps) {
   const status = application.diff_analyze_status
   const result: OhTransferDiffOutput | null = application.diff_analyze_result ?? null
-
-  const handleAnalyze = async () => {
-    setAnalyzing(true)
-    try {
-      const res = await analyzeOhApplication(application.id)
-      if (res.code === 200) {
-        message.success('已触发差异分析')
-        onRefresh()
-      } else {
-        message.error(res.message || '分析失败')
-      }
-    } finally {
-      setAnalyzing(false)
-    }
-  }
 
   // ── 未触发 / 审批未通过 ──
   if (!result && status !== 'failed') {
@@ -87,13 +64,8 @@ export default function OhTransferDiffCard({ application, onRefresh }: OhTransfe
           {status === 'parsing' ? (
             <Text style={{ color: T.steel }}>AI 差异分析进行中，请稍后刷新查看结果。</Text>
           ) : (
-            <Text style={{ color: T.steel }}>审批通过后自动触发差异分析，或点击下方按钮手动分析。</Text>
+            <Text style={{ color: T.steel }}>审批通过后自动触发差异分析。</Text>
           )}
-          <div style={{ marginTop: 12 }}>
-            <Button icon={<RocketOutlined />} loading={analyzing} onClick={handleAnalyze}>
-              {status === 'parsing' ? '重新分析' : '触发分析'}
-            </Button>
-          </div>
         </div>
       </div>
     )
@@ -112,16 +84,13 @@ export default function OhTransferDiffCard({ application, onRefresh }: OhTransfe
             </Space>
             <DiffStatusPill status={status} />
           </div>
-          <Text style={{ color: T.error }}>差异分析失败，可点击重新分析重试。</Text>
+          <Text style={{ color: T.error }}>差异分析失败，可稍后刷新重试。</Text>
           {application.diff_analyze_error && (
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: T.slate, marginBottom: 6 }}>失败原因</div>
               <TextBlock>{application.diff_analyze_error}</TextBlock>
             </div>
           )}
-          <div style={{ marginTop: 12 }}>
-            <Button type="primary" icon={<RocketOutlined />} loading={analyzing} onClick={handleAnalyze}>重新分析</Button>
-          </div>
         </div>
       </div>
     )
@@ -235,11 +204,6 @@ export default function OhTransferDiffCard({ application, onRefresh }: OhTransfe
             message={`已自动创建体检登记（体检记录 ID：${application.created_exam_id}，流程状态=未体检）`}
           />
         )}
-
-        {/* 操作行 */}
-        <div style={{ borderTop: `1px solid ${T.hairline}`, paddingTop: 14, marginTop: 16 }}>
-          <Button size="small" icon={<RocketOutlined />} loading={analyzing} onClick={handleAnalyze}>重新分析</Button>
-        </div>
       </div>
     </div>
   )

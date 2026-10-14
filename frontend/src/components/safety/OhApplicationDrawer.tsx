@@ -2,22 +2,19 @@
 
 // 转岗离岗申请详情 Drawer（OhApplicationDrawer）
 // 打开时先展示行内数据，后台拉详情（diff_analyze_result 展开）覆盖。
-// 固定顺序：① 申请信息 Descriptions ② 审批节点 Timeline ③ OhTransferDiffCard ④ 重新分析按钮。
+// 固定顺序：① 申请信息 Descriptions ② 审批节点 Timeline ③ OhTransferDiffCard。
 
 import { useCallback, useEffect, useState } from 'react'
 import {
   App,
-  Button,
   Descriptions,
   Drawer,
   Empty,
-  Popconfirm,
   Space,
   Timeline,
 } from 'antd'
-import { RocketOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { analyzeOhApplication, getOhApplication } from '@/actions/safety'
+import { getOhApplication } from '@/actions/safety'
 import type { OhExamApplication } from '@/types/safety'
 import {
   CARD_STYLE,
@@ -64,7 +61,6 @@ export default function OhApplicationDrawer({
   const { message } = App.useApp()
   const [detail, setDetail] = useState<OhExamApplication | null>(application)
   const [loading, setLoading] = useState(false)
-  const [analyzing, setAnalyzing] = useState(false)
 
   const loadDetail = useCallback(async (id: string) => {
     setLoading(true)
@@ -87,22 +83,6 @@ export default function OhApplicationDrawer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, application?.id])
-
-  const handleAnalyze = async () => {
-    if (!detail) return
-    setAnalyzing(true)
-    try {
-      const res = await analyzeOhApplication(detail.id)
-      if (res.code === 200) {
-        message.success('已触发差异分析')
-        loadDetail(detail.id)
-      } else {
-        message.error(res.message || '分析失败')
-      }
-    } finally {
-      setAnalyzing(false)
-    }
-  }
 
   if (!detail) {
     return <Drawer open={open} onClose={onClose} title="转岗离岗申请详情" width={800}><Empty description="暂无数据" /></Drawer>
@@ -184,21 +164,7 @@ export default function OhApplicationDrawer({
         </SectionCard>
 
         {/* ③ 差异分析卡片 */}
-        <OhTransferDiffCard application={detail} onRefresh={() => loadDetail(detail.id)} />
-
-        {/* ④ 重新分析（仅未完成分析时显示主按钮；卡片内已有 failed 重试入口） */}
-        {detail.diff_analyze_status !== 'analyzed' && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Popconfirm
-              title="重新分析"
-              description="重新调用 AI 进行转岗危害差异分析"
-              okText="确认" cancelText="取消"
-              onConfirm={handleAnalyze}
-            >
-              <Button type="primary" icon={<RocketOutlined />} loading={analyzing}>重新分析</Button>
-            </Popconfirm>
-          </div>
-        )}
+        <OhTransferDiffCard application={detail} />
       </Space>
     </Drawer>
   )

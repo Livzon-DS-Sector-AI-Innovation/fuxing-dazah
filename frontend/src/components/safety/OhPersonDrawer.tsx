@@ -2,24 +2,21 @@
 
 // 人员台账详情 Drawer（OhPersonDrawer）
 // 打开时先展示行内数据，后台拉详情（体检记录链 + 异常随访）覆盖（异常态：失败保留旧数据）。
-// 底部「同步总表」按钮 → syncOhPerson（confirm → loading → 成功 message + onSynced 刷新）。
+// 总表回填由体检解析链路 WS 自动完成，无手动入口。
 
 import { useCallback, useEffect, useState } from 'react'
 import {
   App,
-  Button,
   Descriptions,
   Drawer,
   Empty,
   Space,
   Table,
   Tag,
-  Tooltip,
 } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { getOhPerson, syncOhPerson } from '@/actions/safety'
+import { getOhPerson } from '@/actions/safety'
 import type { OhFollowup, OhHealthExam, OhPerson } from '@/types/safety'
 import {
   OH_AI_CONCLUSION_UI,
@@ -59,7 +56,6 @@ interface OhPersonDrawerProps {
   onClose: () => void
   person: OhPerson | null
   onViewExams: (personName: string) => void
-  onSynced: () => void
 }
 
 export default function OhPersonDrawer({
@@ -67,12 +63,10 @@ export default function OhPersonDrawer({
   onClose,
   person,
   onViewExams,
-  onSynced,
 }: OhPersonDrawerProps) {
   const { message } = App.useApp()
   const [detail, setDetail] = useState<OhPerson | null>(person)
   const [loading, setLoading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
 
   const loadDetail = useCallback(async (id: string) => {
     setLoading(true)
@@ -95,23 +89,6 @@ export default function OhPersonDrawer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, person?.id])
-
-  const handleSync = async () => {
-    if (!detail) return
-    setSyncing(true)
-    try {
-      const res = await syncOhPerson(detail.id)
-      if (res.code === 200) {
-        message.success('已同步总表')
-        onSynced()
-        loadDetail(detail.id)
-      } else {
-        message.error(res.message || '同步失败')
-      }
-    } finally {
-      setSyncing(false)
-    }
-  }
 
   const examColumns: ColumnsType<OhHealthExam> = [
     { title: '体检号', dataIndex: 'exam_no', key: 'exam_no', width: 150, render: (v: string) => <span style={monoFont}>{v || '-'}</span> },
@@ -144,13 +121,6 @@ export default function OhPersonDrawer({
       onClose={onClose}
       width={720}
       loading={loading}
-      footer={
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <Button type="primary" icon={<ReloadOutlined />} loading={syncing} onClick={handleSync}>
-            同步总表
-          </Button>
-        </div>
-      }
     >
       {!detail ? (
         <Empty description="暂无数据" />
@@ -221,10 +191,6 @@ export default function OhPersonDrawer({
               />
             )}
           </div>
-
-          <Tooltip title="取最近一次体检回填人员汇总表并回写 Bitable">
-            <span style={{ color: UI.muted, fontSize: 12 }}>同步总表：从该人员最近体检记录回填「最后体检结论/时间/记录链」并回写飞书</span>
-          </Tooltip>
         </Space>
       )}
     </Drawer>

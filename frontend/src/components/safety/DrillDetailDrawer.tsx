@@ -1,18 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { Button, Descriptions, Drawer, Modal, Tag, Tooltip, message } from 'antd'
-import { ReloadOutlined } from '@ant-design/icons'
+import { Descriptions, Drawer, Tag } from 'antd'
 import dayjs from 'dayjs'
 import type { DrillRecord } from '@/types/safety'
-import { generateDrillEval } from '@/actions/safety'
-import { DRILL_TYPE_UI, REVIEW_STATUS_UI, STAGE_UI, T, UI } from './emergencyDrillConstants'
+import { DRILL_TYPE_UI, REVIEW_STATUS_UI, STAGE_UI, T } from './emergencyDrillConstants'
 
 interface Props {
   open: boolean
   record: DrillRecord | null
   onClose: () => void
-  onRefresh?: () => void
 }
 
 /** 渲染文件列表 — 本地路径显示可点击文件名，JSON 元数据显示占位名 */
@@ -37,38 +33,11 @@ function _renderFiles(files: string[] | undefined | null) {
   )
 }
 
-export default function DrillDetailDrawer({ open, record, onClose, onRefresh }: Props) {
-  const [evalGenerating, setEvalGenerating] = useState(false)
+export default function DrillDetailDrawer({ open, record, onClose }: Props) {
   if (!record) return null
 
   const stage = record.status ? 'review' : record.execution_time ? 'execution' : 'plan'
   const stageUi = STAGE_UI[stage]
-  const hasRecordForm = Boolean(record.drill_record_file?.length)
-
-  const handleRegenerateEval = () => {
-    Modal.confirm({
-      title: '重新生成评估表（AI）',
-      content: '将基于当前演练记录表重新生成评估表，新版本会覆盖多维表格中已生成的附件，确认继续？',
-      okText: '开始生成',
-      cancelText: '取消',
-      onOk: async () => {
-        setEvalGenerating(true)
-        try {
-          const res = await generateDrillEval(record.id)
-          if (res.code === 200 && res.data) {
-            message.success('评估表生成成功')
-            onRefresh?.()
-          } else {
-            message.error(res.message || '评估表生成失败')
-          }
-        } catch {
-          message.error('AI 评估表生成失败')
-        } finally {
-          setEvalGenerating(false)
-        }
-      },
-    })
-  }
 
   return (
     <Drawer
@@ -77,20 +46,6 @@ export default function DrillDetailDrawer({ open, record, onClose, onRefresh }: 
       title={record.drill_content || '演练详情'}
       width={640}
       styles={{ body: { padding: '16px 24px' } }}
-      extra={
-        <Tooltip title={hasRecordForm ? '基于演练记录表重新生成评估表（AI）' : '请先上传演练记录表'}>
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={evalGenerating}
-            disabled={!hasRecordForm}
-            onClick={handleRegenerateEval}
-            style={{ fontSize: 12 }}
-          >
-            重新生成评估
-          </Button>
-        </Tooltip>
-      }
     >
       {/* 环节 + 状态 */}
       <div style={{ marginBottom: 20, display: 'flex', gap: 10, alignItems: 'center' }}>

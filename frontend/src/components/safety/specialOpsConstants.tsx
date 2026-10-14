@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // Special Operations — shared constants
-// Used by: SpecialOpsManagement / SpecialOpsReportPanel / SpecialOpsLedger
+// Used by: SpecialOpsManagement / SpecialOpsLedger
 // ═══════════════════════════════════════════════════════════════
 
 import {
