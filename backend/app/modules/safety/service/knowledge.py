@@ -1253,6 +1253,8 @@ class KnowledgeService:
                 "tags": m.tags if m is not None else None,
                 "status": m.status if m is not None else "",
                 "match_reason": f"条款级命中：{refs}（相似度 {sim_display:.2f}）",
+                "matched_refs": g["refs"][:5],
+                "similarity": round(sim_display, 3),
             })
 
         total = len(result_items)

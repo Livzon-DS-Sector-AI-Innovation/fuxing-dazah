@@ -198,6 +198,16 @@ class RagplusClient:
             )
         return hits
 
+    async def list_datasets(self) -> list[dict[str, Any]]:
+        """列出 token 用户可见的知识库（/api/v1/datasets 原始列表）。
+
+        页面引擎状态卡用：取名单内各库的 doc_count/chunk_count 实时总量。
+        """
+        kbs = await self._request_json("GET", "/api/v1/datasets")
+        if isinstance(kbs, dict):
+            kbs = kbs.get("data") or []
+        return [kb for kb in kbs if isinstance(kb, dict)]
+
     async def _resolve_dataset_ids(self) -> list[str]:
         """按库名单解析 dataset_ids（/api/v1/datasets，进程内 TTL 缓存）。
 

@@ -58,6 +58,139 @@ async def get_knowledge_category_counts(
     return ApiResponse(data=counts)
 
 
+@knowledge_router.get("/knowledge-articles/semantic-search", response_model=ApiResponse, summary="语义搜索知识库")
+async def semantic_search_articles(
+    q: str = Query(..., description="自然语言搜索查询"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> ApiResponse:
+    """用自然语言搜索知识库文档（ragplus 条款级检索 / AI 提词关键词匹配）"""
+    service = KnowledgeService(db)
+    skip = (page - 1) * page_size
+    items, total = await service.semantic_search(q, skip=skip, limit=page_size)
+    return ApiResponse(
+        data=items,
+        meta={"page": page, "page_size": page_size, "total": total},
+    )
+
+
+# ── ragplus 知识引擎状态（S2 页面引擎状态卡/文档表 merge 用） ──
+
+
+@knowledge_router.get("/knowledge-articles/ragplus-overview", response_model=ApiResponse, summary="ragplus 引擎概览")
+async def get_ragplus_overview(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> ApiResponse:
+    """检索库名单内各库文档/chunk 实时总量 + 映射表状态聚合。
+
+    ragplus 不可用时 kbs 置空并携带 error（页面显式提示，不静默）。
+    """
+    from sqlalchemy import func, select
+
+    from app.modules.safety.app_config.store import store as app_config_store
+    from app.modules.safety.knowledge.ragplus_client import (
+        RagplusUnavailableError,
+        get_ragplus_client,
+        ragplus_search_enabled,
+    )
+    from app.modules.safety.models import RagplusDocMap
+
+    error: str | None = None
+    kbs: list[dict] = []
+    if ragplus_search_enabled():
+        try:
+            client = get_ragplus_client()
+            all_kbs = await client.list_datasets()
+            names = {
+                n.strip()
+                for n in (app_config_store.get_str("SAFETY_RAGPLUS_DATASET_NAMES") or "")
+                .replace("，", ",")
+                .split(",")
+                if n.strip()
+            }
+            kbs = [
+                {
+                    "name": kb.get("name"),
+                    "doc_count": kb.get("document_count") or 0,
+                    "chunk_count": kb.get("chunk_count") or 0,
+                }
+                for kb in all_kbs
+                if kb.get("name") in names
+            ]
+        except RagplusUnavailableError as exc:
+            error = str(exc)
+
+    rows = (
+        await db.execute(
+            select(RagplusDocMap.status, func.count(RagplusDocMap.id))
+            .where(RagplusDocMap.is_deleted.is_(False))
+            .group_by(RagplusDocMap.status)
+        )
+    ).all()
+    map_counts = {status: int(count) for status, count in rows}
+
+    return ApiResponse(
+        data={
+            "enabled": ragplus_search_enabled(),
+            "kbs": kbs,
+            "map_counts": map_counts,
+            "error": error,
+        }
+    )
+
+
+@knowledge_router.get("/knowledge-articles/ragplus-doc-map", response_model=ApiResponse, summary="ragplus 文档映射表")
+async def get_ragplus_doc_map(
+    domain: str = Query("regulation", description="业务域：regulation | msds"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> ApiResponse:
+    """{feishu_record_id: {status, version, dataset_name, synced_at}}（文档表 merge 用）。"""
+    from sqlalchemy import select
+
+    from app.modules.safety.models import RagplusDocMap
+
+    rows = (
+        await db.execute(
+            select(RagplusDocMap).where(
+                RagplusDocMap.domain == domain,
+                RagplusDocMap.is_deleted.is_(False),
+            )
+        )
+    ).scalars().all()
+    return ApiResponse(
+        data={
+            row.biz_key: {
+                "status": row.status,
+                "version": row.version,
+                "dataset_name": row.dataset_name,
+                "synced_at": row.synced_at.isoformat() if row.synced_at else None,
+                "last_error": row.last_error,
+            }
+            for row in rows
+        }
+    )
+
+
+@knowledge_router.post("/knowledge-articles/sync", response_model=ApiResponse, summary="从 Bitable 同步知识库")
+async def sync_knowledge_from_bitable(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> ApiResponse:
+    """从飞书多维表格全量同步知识库文档（安全管理制度 + 法规标准 + 设备说明书）。
+
+    以 Bitable 为数据源，三阶段同步：
+    - CREATE：Bitable 有、平台无
+    - UPDATE：双方都有，字段有差异
+    - DELETE：平台有、Bitable 无（软删除）
+    """
+    service = KnowledgeService(db)
+    result = await service.sync_from_bitable()
+    return ApiResponse(data=result.model_dump())
+
 @knowledge_router.post("/knowledge-articles", response_model=ApiResponse, summary="创建安全知识库文章")
 async def create_knowledge_article(
     data: SafetyKnowledgeArticleCreate,
@@ -367,41 +500,9 @@ async def generate_summary(
 # ── 语义搜索 ──
 
 
-@knowledge_router.get("/knowledge-articles/semantic-search", response_model=ApiResponse, summary="语义搜索知识库")
-async def semantic_search_articles(
-    q: str = Query(..., description="自然语言搜索查询"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=1000),
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-) -> ApiResponse:
-    """用自然语言搜索知识库文档（AI 解析查询意图 + 关键词匹配）"""
-    service = KnowledgeService(db)
-    skip = (page - 1) * page_size
-    items, total = await service.semantic_search(q, skip=skip, limit=page_size)
-    return ApiResponse(
-        data=items,
-        meta={"page": page, "page_size": page_size, "total": total},
-    )
-
-
 # ── Bitable 同步 ──
 
 
-@knowledge_router.post("/knowledge-articles/sync", response_model=ApiResponse, summary="从 Bitable 同步知识库")
-async def sync_knowledge_from_bitable(
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-) -> ApiResponse:
-    """从飞书多维表格全量同步知识库文档（安全管理制度 + 法规标准 + 设备说明书）。
 
-    以 Bitable 为数据源，三阶段同步：
-    - CREATE：Bitable 有、平台无
-    - UPDATE：双方都有，字段有差异
-    - DELETE：平台有、Bitable 无（软删除）
-    """
-    service = KnowledgeService(db)
-    result = await service.sync_from_bitable()
-    return ApiResponse(data=result.model_dump())
 
 
