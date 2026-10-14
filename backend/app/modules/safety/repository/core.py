@@ -1447,9 +1447,10 @@ class SafetyRepository:
             )
 
         base_where = SafetyKnowledgeArticle.is_deleted.is_(False)
-        combined = base_where
-        for clause in like_clauses:
-            combined = combined & clause
+        # 任意关键词命中即召回（OR）：AI 提取的 3-5 个关键词是同一意图的
+        # 不同表述，AND 组合几乎恒空（该路径此前因 create_ai_service
+        # 误加 await 从未跑通，AND 语义未经真实校验）
+        combined = base_where & or_(*like_clauses) if like_clauses else base_where
 
         query = select(SafetyKnowledgeArticle).where(combined)
         count_query = select(func.count(SafetyKnowledgeArticle.id)).where(combined)

@@ -303,7 +303,7 @@ class KnowledgeService:
 请直接返回 JSON，不要包含任何其他文字：
 {{"title": "...", "category": "...", "summary": "...", "tags": "...", "source": "...", "author": "...", "publish_date": "..."}}"""
 
-        ai_service = await create_ai_service("text")
+        ai_service = create_ai_service("text")
         try:
             parsed = await ai_service.chat_parsed(
                 messages=[{"role": "user", "content": prompt}],
@@ -404,7 +404,7 @@ class KnowledgeService:
 
 {{"hazard_type_definitions": "...", "hazard_category_criteria": "...", "hazard_level_criteria": "...", "key_defect_examples": "...", "rectification_requirements": "...", "legal_basis_clauses": "..."}}"""
 
-        ai_service = await create_ai_service("text")
+        ai_service = create_ai_service("text")
         try:
             parsed = await ai_service.chat_parsed(
                 messages=[{"role": "user", "content": prompt}],
@@ -597,7 +597,7 @@ class KnowledgeService:
 
         from app.modules.safety.service.config import create_ai_service
 
-        ai_service = await create_ai_service("text")
+        ai_service = create_ai_service("text")
         try:
             parsed = await ai_service.chat_parsed(
                 messages=[{"role": "user", "content": prompt}],
@@ -865,7 +865,7 @@ class KnowledgeService:
 
         from app.modules.safety.service.config import create_ai_service
 
-        ai_service = await create_ai_service("text")
+        ai_service = create_ai_service("text")
         try:
             parsed = await ai_service.chat_parsed(
                 messages=[{"role": "user", "content": prompt}],
@@ -971,7 +971,7 @@ class KnowledgeService:
 - 返回 JSON: {{"duplicates": [0, 2]}} 其中数字是候选文档的索引
 - 如果没有重复，返回 {{"duplicates": []}}"""
 
-        ai_service = await create_ai_service("text")
+        ai_service = create_ai_service("text")
         try:
             parsed = await ai_service.chat_parsed(
                 messages=[{"role": "user", "content": prompt}],
@@ -1130,11 +1130,18 @@ class KnowledgeService:
     ) -> tuple[list[dict[str, Any]], int]:
         """自然语言语义搜索知识库。
 
-        流程：
-        1. AI 解析查询意图 → 提取关键词
-        2. 用关键词做 ILIKE 搜索
-        3. 返回排序结果
+        ragplus 通路（SAFETY_RAGPLUS_SEARCH_ENABLED 开）：条款级检索命中
+        按文档聚合返回——match_reason 携带条款定位与相似度、summary 为首
+        命中片段节选，展示字段（编号/分类/状态）按镜像 title 补全。
+        开关关：走原「AI 提词 + ILIKE」库内过滤路径。
         """
+        from app.modules.safety.knowledge.ragplus_client import (
+            ragplus_search_enabled,
+        )
+
+        if ragplus_search_enabled():
+            return await self._semantic_search_via_ragplus(query, skip=skip, limit=limit)
+
         from app.modules.safety.service.config import create_ai_service
 
         # Step 1: AI extracts search keywords
@@ -1146,7 +1153,7 @@ class KnowledgeService:
 关键词应当是具体的术语或短语，不要泛化。
 返回 JSON: {{"keywords": ["关键词1", "关键词2", ...]}}"""
 
-        ai_service = await create_ai_service("text")
+        ai_service = create_ai_service("text")
         try:
             parsed = await ai_service.chat_parsed(
                 messages=[{"role": "user", "content": prompt}],
@@ -1179,6 +1186,77 @@ class KnowledgeService:
             })
 
         return result_items, total
+
+    async def _semantic_search_via_ragplus(
+        self,
+        query: str,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """ragplus 条款级检索 → 按文档聚合的搜索结果（开关开路径）。
+
+        ragplus 不可用时向上抛 RagplusUnavailableError（API 层显式 500，
+        不静默空列表——与聊天/管线消费方同一故障语义）。
+        """
+        from sqlalchemy import select as sa_select
+
+        from app.modules.safety.knowledge.ragplus_client import get_ragplus_client
+        from app.modules.safety.knowledge.retriever import (
+            _clean_ragplus_doc_name,
+            _ragplus_hit_ref,
+        )
+        from app.modules.safety.models import SafetyKnowledgeArticle
+
+        client = get_ragplus_client()
+        hits = await client.search(query, top_k=max((skip + limit) * 3, 30))
+
+        # ── 按文档聚合（保持引擎相似度顺序）──
+        groups: dict[str, dict[str, Any]] = {}
+        for h in hits:
+            title = _clean_ragplus_doc_name(h.doc_name)
+            g = groups.setdefault(title, {"title": title, "top_sim": 0.0, "refs": [], "preview": ""})
+            g["top_sim"] = max(g["top_sim"], h.similarity)
+            ref = _ragplus_hit_ref(h)
+            if ref and ref not in g["refs"]:
+                g["refs"].append(ref)
+            if not g["preview"] and h.content:
+                g["preview"] = h.content[:200]
+        if not groups:
+            return [], 0
+
+        # ── 镜像按 title 批量补全展示字段（编号/分类/状态/id）──
+        titles = list(groups.keys())
+        mirror: dict[str, Any] = {}
+        rows = (
+            await self.session.execute(
+                sa_select(SafetyKnowledgeArticle).where(
+                    SafetyKnowledgeArticle.title.in_(titles),
+                    SafetyKnowledgeArticle.is_deleted.is_(False),
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            mirror.setdefault(row.title or "", row)
+
+        result_items: list[dict[str, Any]] = []
+        for title, g in groups.items():
+            m = mirror.get(title)
+            refs = "、".join(g["refs"][:3]) if g["refs"] else "片段命中"
+            # 引擎相似度量纲随 rerank 与否在 0~1 / 0~10 间浮动，统一按 >1 则 /10 展示
+            sim_display = g["top_sim"] / 10 if g["top_sim"] > 1 else g["top_sim"]
+            result_items.append({
+                "id": str(m.id) if m is not None else "",
+                "article_no": m.article_no if m is not None else None,
+                "title": title,
+                "category": m.category if m is not None else "",
+                "summary": g["preview"],
+                "tags": m.tags if m is not None else None,
+                "status": m.status if m is not None else "",
+                "match_reason": f"条款级命中：{refs}（相似度 {sim_display:.2f}）",
+            })
+
+        total = len(result_items)
+        return result_items[skip : skip + limit], total
 
     # ═══════════════════════════════════════════════════════════════
     # Bitable 全量同步
