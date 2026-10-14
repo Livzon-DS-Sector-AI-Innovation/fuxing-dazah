@@ -2,33 +2,40 @@
 
 import { Suspense, useMemo, useState } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
-import { App, Button, Input, Select, Modal, Tooltip, Pagination } from 'antd'
-import { SearchOutlined, RobotOutlined, SyncOutlined, ApartmentOutlined } from '@ant-design/icons'
+import { App, Button, Input, Modal, Pagination, Select, Tooltip } from 'antd'
+import {
+  ApartmentOutlined,
+  FileSearchOutlined,
+  RobotOutlined,
+  SyncOutlined,
+} from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  batchGenerateKnowledgeCards,
   createNewArticleVersion,
   generateKnowledgeCard,
-  batchGenerateKnowledgeCards,
   generatePpt,
   generateSummary,
   syncKnowledgeArticles,
 } from '@/actions/safety'
 import { KnowledgeQueryProvider } from '@/components/safety/KnowledgeQueryProvider'
-import DocumentCardGrid from '@/components/safety/DocumentCardGrid'
 import KnowledgeSidebar from '@/components/safety/KnowledgeSidebar'
 import KnowledgeDetailDrawer from '@/components/safety/KnowledgeDetailDrawer'
 import KnowledgeFormModal from '@/components/safety/KnowledgeFormModal'
+import RagplusEngineBar from '@/components/safety/knowledge/RagplusEngineBar'
+import SemanticResultList from '@/components/safety/knowledge/SemanticResultList'
+import ArticleTable from '@/components/safety/knowledge/ArticleTable'
 import { filterByMenuKey, mapCategoryCountsToMenu } from '@/components/safety/knowledgeConstants'
-import { PageHeader, StatCard } from '@/components/ui-kit'
-import { Archive, BookOpen, CircleCheck, FileText, Layers, Paperclip } from 'lucide-react'
+import { PageHeader, SectionCard } from '@/components/ui-kit'
 import {
   fetchKnowledgeArticles,
-  fetchKnowledgeSemanticSearch,
   fetchKnowledgeCategoryCounts,
+  fetchKnowledgeRagplusDocMap,
+  fetchKnowledgeSemanticSearch,
 } from '@/lib/api/knowledge'
 import type { SafetyKnowledgeArticle } from '@/types/safety'
 
-const PAGE_SIZE = 48
+const PAGE_SIZE = 20
 
 function KnowledgeBaseContent() {
   const { message } = App.useApp()
@@ -42,7 +49,7 @@ function KnowledgeBaseContent() {
   const statusFilter = searchParams.get('status') || undefined
   const cardFilter = searchParams.get('card') || undefined
   const menuKey = searchParams.get('menu') || null
-  const smart = searchParams.get('smart') === '1'
+  const searchMode = searchParams.get('mode') === 'kw' ? 'kw' : 'semantic'
   const page = Math.max(1, Number(searchParams.get('page') || '1'))
 
   // ── 本地状态 ──
@@ -66,24 +73,31 @@ function KnowledgeBaseContent() {
   }
 
   // ── 数据查询 ──
+  const searching = !!q && searchMode === 'semantic'
   const allQuery = useQuery({
     queryKey: ['knowledge-articles'],
-    queryFn: () => fetchKnowledgeArticles({ page: 1, page_size: 500 }),
+    queryFn: () => fetchKnowledgeArticles({ page: 1, page_size: 1000 }),
+    enabled: !searching,
   })
   const smartQuery = useQuery({
-    queryKey: ['knowledge-smart', q],
-    queryFn: () => fetchKnowledgeSemanticSearch(q, 1, 500),
-    enabled: smart && !!q,
+    queryKey: ['knowledge-semantic', q],
+    queryFn: () => fetchKnowledgeSemanticSearch(q, 1, 100),
+    enabled: searching,
   })
   const statsQuery = useQuery({
     queryKey: ['knowledge-stats'],
     queryFn: fetchKnowledgeCategoryCounts,
   })
+  const docMapQuery = useQuery({
+    queryKey: ['knowledge-ragplus-doc-map'],
+    queryFn: () => fetchKnowledgeRagplusDocMap('regulation'),
+  })
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['knowledge-articles'] })
     queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] })
-    queryClient.invalidateQueries({ queryKey: ['knowledge-smart'] })
+    queryClient.invalidateQueries({ queryKey: ['knowledge-semantic'] })
+    queryClient.invalidateQueries({ queryKey: ['knowledge-ragplus-doc-map'] })
   }
 
   const menuCounts = useMemo(
@@ -92,10 +106,10 @@ function KnowledgeBaseContent() {
   )
 
   const rawItems = useMemo(() => {
-    return smart && q ? (smartQuery.data?.items ?? []) : (allQuery.data?.items ?? [])
-  }, [smart, q, smartQuery.data, allQuery.data])
+    return searching ? [] : (allQuery.data?.items ?? [])
+  }, [searching, allQuery.data])
 
-  // ── 客户端筛选（基于全量数据） ──
+  // ── 客户端筛选（非检索模式，基于全量数据） ──
   const filtered = useMemo(() => {
     let arr = rawItems
     if (menuKey) arr = filterByMenuKey(arr, menuKey)
@@ -110,31 +124,8 @@ function KnowledgeBaseContent() {
     [filtered, page],
   )
 
-  const isLoading = smart && q ? smartQuery.isLoading : allQuery.isLoading
-  const loadError = (smart && q ? smartQuery.error : allQuery.error) as Error | null
-
-  // ── 页头统计（优先全库接口） ──
-  const stats = useMemo(() => {
-    if (statsQuery.data) {
-      return {
-        total: statsQuery.data.total,
-        draft: statsQuery.data.by_status['draft'] || 0,
-        published: statsQuery.data.by_status['published'] || 0,
-        archived: statsQuery.data.by_status['archived'] || 0,
-        withCard: statsQuery.data.with_card,
-        withAttachment: statsQuery.data.with_attachment,
-      }
-    }
-    const s = { total: rawItems.length, draft: 0, published: 0, archived: 0, withCard: 0, withAttachment: 0 }
-    for (const a of rawItems) {
-      if (a.status === 'draft') s.draft++
-      else if (a.status === 'published') s.published++
-      else if (a.status === 'archived') s.archived++
-      if (a.knowledge_card != null) s.withCard++
-      if (a.attachment_original_name) s.withAttachment++
-    }
-    return s
-  }, [statsQuery.data, rawItems])
+  const isLoading = searching ? smartQuery.isLoading : allQuery.isLoading
+  const loadError = (searching ? smartQuery.error : allQuery.error) as Error | null
 
   // ── 事件处理 ──
   const handleSearch = () => {
@@ -143,13 +134,11 @@ function KnowledgeBaseContent() {
   const handleMenuSelect = (key: string) => patchUrl({ menu: key || null, page: '1' })
   const handleStatusChange = (v?: string) => patchUrl({ status: v || null, page: '1' })
   const handleCardChange = (v?: string) => patchUrl({ card: v || null, page: '1' })
-  const handleSmartToggle = () => patchUrl({ smart: smart ? null : '1', page: '1' })
+  const handleModeToggle = () => patchUrl({ mode: searchMode === 'semantic' ? 'kw' : null, page: '1' })
   const handlePageChange = (p: number) => patchUrl({ page: String(p) })
-
-  const handleSelectCard = (id: string) => {
-    setSelectedRowKeys((prev) =>
-      prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id],
-    )
+  const handleClearSearch = () => {
+    setSearchText('')
+    patchUrl({ q: null, page: '1' })
   }
 
   const handleEdit = (record: SafetyKnowledgeArticle) => {
@@ -158,6 +147,10 @@ function KnowledgeBaseContent() {
   }
   const handleViewDetail = (record: SafetyKnowledgeArticle) => {
     setDetailId(record.id)
+    setDetailOpen(true)
+  }
+  const handleOpenDetailById = (id: string) => {
+    setDetailId(id)
     setDetailOpen(true)
   }
 
@@ -264,149 +257,148 @@ function KnowledgeBaseContent() {
         <PageHeader
           breadcrumb={['安全管理', '法规标准与规程']}
           title="法规标准与规程"
-          description="法规、标准与规程知识库：法规清单、知识卡片与全文检索"
+          description="法规、标准与规程知识库：条款级语义检索（ragplus-x 引擎）+ 台账清单"
         />
 
-        {/* ── 统计行（全库口径，优先 knowledge-stats 接口，缺省回退列表推导） ── */}
-        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <StatCard label="全部文档" value={stats.total} sub="法规/标准/规程全库" icon={<BookOpen size={16} />} />
-          <StatCard
-            label="已发布"
-            value={stats.published}
-            tone={stats.published > 0 ? 'ok' : 'default'}
-            icon={<CircleCheck size={16} />}
-          />
-          <StatCard label="草稿" value={stats.draft} icon={<FileText size={16} />} />
-          <StatCard label="已归档" value={stats.archived} icon={<Archive size={16} />} />
-          <StatCard
-            label="知识卡片"
-            value={stats.withCard}
-            tone={stats.withCard > 0 ? 'primary' : 'default'}
-            icon={<Layers size={16} />}
-          />
-          <StatCard
-            label="含附件"
-            value={stats.withAttachment}
-            tone={stats.withAttachment > 0 ? 'ok' : 'default'}
-            icon={<Paperclip size={16} />}
-          />
-        </div>
+        {/* 引擎状态条（ragplus 库实时总量 + 映射聚合，30s 自动刷新） */}
+        <RagplusEngineBar />
 
-        {/* 错误诊断 */}
-        {loadError && (
-          <div style={{ marginBottom: 20, padding: '12px 16px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 8, fontSize: 13, color: '#a8071a', lineHeight: 1.6, wordBreak: 'break-all' }}>
-            <strong style={{ fontSize: 14 }}>⚠️ API 请求失败</strong>
-            <br />
-            {loadError.message}
-            <br />
-            <button type='button' onClick={() => refresh()} style={{ marginTop: 8, cursor: 'pointer', background: '#a8071a', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 12px', fontSize: 12 }}>
-              重试
-            </button>
-          </div>
-        )}
-
-        {/* Filter Toolbar */}
-        <div style={{ background: 'var(--color-canvas, #ffffff)', borderRadius: 12, border: '1px solid var(--color-hairline, #e5e3df)', padding: '12px 14px', marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Select
-            placeholder='状态'
-            allowClear
-            value={statusFilter}
-            onChange={handleStatusChange}
-            style={{ width: 104 }}
-            options={[
-              { value: 'draft', label: '草稿' },
-              { value: 'published', label: '已发布' },
-              { value: 'archived', label: '已归档' },
-            ]}
-          />
-          <Select
-            placeholder='卡片状态'
-            allowClear
-            value={cardFilter}
-            onChange={handleCardChange}
-            style={{ width: 126 }}
-            options={[
-              { value: 'has_card', label: '有知识卡片' },
-              { value: 'no_card', label: '无知识卡片' },
-            ]}
-          />
-          <Input
-            placeholder={smart ? '如"防爆区域电气安全相关标准"' : '搜索标题 / 内容 / 标签'}
-            prefix={<SearchOutlined style={{ color: 'var(--color-stone, #a4a097)' }} />}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            onPressEnter={handleSearch}
-            allowClear
-            style={{ width: 252 }}
-          />
-          <Tooltip title={smart ? '智能搜索（AI 解析查询意图）' : '关键词搜索'}>
-            <button
-              type='button'
-              onClick={handleSmartToggle}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer',
-                background: smart ? 'rgba(86, 69, 212, 0.08)' : 'transparent',
-                border: smart ? '1px solid var(--color-primary, #5645d4)' : '1px solid var(--color-hairline, #e5e3df)',
-                borderRadius: 999, padding: '3px 12px', fontSize: 12, fontWeight: smart ? 600 : 500,
-                color: smart ? 'var(--color-primary, #5645d4)' : 'var(--color-steel, #787671)',
-                transition: 'all 0.15s ease', lineHeight: '18px',
-              }}
-            >
-              AI
-            </button>
-          </Tooltip>
-          <div style={{ flex: 1 }} />
-          <Button icon={<ApartmentOutlined />} onClick={() => router.push('/safety/knowledge-base/graph')}>
-            知识图谱
-          </Button>
-          <Button icon={<SyncOutlined spin={syncing} />} onClick={handleSync} loading={syncing}>
-            同步
-          </Button>
-          <Button type='primary' icon={<SearchOutlined />} onClick={handleSearch}>
-            查询
-          </Button>
-        </div>
-
-        {/* Batch bar */}
-        {selectedRowKeys.length > 0 && (
-          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'rgba(86, 69, 212, 0.05)', border: '1px solid rgba(86, 69, 212, 0.18)', borderRadius: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary, #5645d4)' }}>
-              已选 {selectedRowKeys.length} 项
-            </span>
-            <Button size='small' type='primary' icon={<RobotOutlined />} onClick={handleBatchGenerateCards}>
-              批量生成卡片
+        {/* 检索区（ragplus 引用风格结果） */}
+        <SectionCard
+          title={searching ? `条款级检索结果${smartQuery.data ? `（${smartQuery.data.total} 部法规命中）` : ''}` : '条款级语义检索'}
+          description="按业务问题检索法规条款，命中带法规名、条款定位与相似度"
+          action={
+            searchMode === 'kw' ? (
+              <Tooltip title="当前为关键词过滤模式，点击切回条款级检索">
+                <Button size="small" onClick={handleModeToggle}>
+                  关键词模式
+                </Button>
+              </Tooltip>
+            ) : (
+              <Tooltip title="引擎不可用时的回退：按关键词过滤文档">
+                <Button size="small" type="text" onClick={handleModeToggle}>
+                  切关键词过滤
+                </Button>
+              </Tooltip>
+            )
+          }
+        >
+          <div style={{ display: 'flex', gap: 8, marginBottom: searching ? 14 : 4 }}>
+            <Input
+              placeholder='如"动火作业前需要办理什么手续""粉尘防爆要求"'
+              prefix={<FileSearchOutlined style={{ color: 'var(--color-stone, #a4a097)' }} />}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              onPressEnter={handleSearch}
+              allowClear
+              size="large"
+              style={{ flex: 1, maxWidth: 560 }}
+            />
+            <Button type="primary" size="large" icon={<FileSearchOutlined />} onClick={handleSearch}>
+              检索
             </Button>
-            <Button size='small' onClick={() => setSelectedRowKeys([])}>
-              取消选择
-            </Button>
+            {searching && (
+              <Button size="large" onClick={handleClearSearch}>
+                清除
+              </Button>
+            )}
           </div>
-        )}
+          {searching && (
+            <SemanticResultList
+              results={smartQuery.data?.items ?? []}
+              loading={smartQuery.isLoading}
+              mode={searchMode === 'semantic' ? 'engine' : 'keyword'}
+              onOpenDetail={handleOpenDetailById}
+            />
+          )}
+        </SectionCard>
 
-        {/* Card grid */}
-        <DocumentCardGrid
-          articles={pageItems}
-          loading={isLoading}
-          selectedCardIds={selectedRowKeys}
-          onSelectCard={handleSelectCard}
-          onArticleClick={handleViewDetail}
-          onEdit={handleEdit}
-          onGenerateCard={handleGenerateCard}
-          onGeneratePpt={handleGeneratePpt}
-          onGenerateSummary={handleGenerateSummary}
-        />
+        {/* 文档清单（ragplus 式表格） */}
+        <div style={{ marginTop: 16 }}>
+          <SectionCard
+            title={`法规台账${filtered.length > 0 ? `（${filtered.length} 份）` : ''}`}
+            description="Bitable 镜像清单 · 引擎入库状态实时可见"
+            action={
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {selectedRowKeys.length > 0 && (
+                  <Button size="small" type="primary" icon={<RobotOutlined />} onClick={handleBatchGenerateCards}>
+                    批量生成卡片（{selectedRowKeys.length}）
+                  </Button>
+                )}
+                <Button size="small" icon={<ApartmentOutlined />} onClick={() => router.push('/safety/knowledge-base/graph')}>
+                  知识图谱
+                </Button>
+                <Button size="small" icon={<SyncOutlined spin={syncing} />} onClick={handleSync} loading={syncing}>
+                  同步
+                </Button>
+              </div>
+            }
+          >
+            {/* 筛选器 */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <Select
+                placeholder="状态"
+                allowClear
+                value={statusFilter}
+                onChange={handleStatusChange}
+                style={{ width: 104 }}
+                size="small"
+                options={[
+                  { value: 'draft', label: '草稿' },
+                  { value: 'published', label: '已发布' },
+                  { value: 'archived', label: '已归档' },
+                ]}
+              />
+              <Select
+                placeholder="卡片状态"
+                allowClear
+                value={cardFilter}
+                onChange={handleCardChange}
+                style={{ width: 126 }}
+                size="small"
+                options={[
+                  { value: 'has_card', label: '有知识卡片' },
+                  { value: 'no_card', label: '无知识卡片' },
+                ]}
+              />
+            </div>
 
-        {/* Pagination */}
-        {!isLoading && filtered.length > PAGE_SIZE && (
-          <Pagination
-            current={page}
-            pageSize={PAGE_SIZE}
-            total={filtered.length}
-            onChange={handlePageChange}
-            showSizeChanger={false}
-            showTotal={(t) => '共 ' + t + ' 份'}
-            style={{ marginTop: 16, textAlign: 'right' }}
-          />
-        )}
+            {/* 错误诊断 */}
+            {loadError && (
+              <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 8, fontSize: 13, color: '#a8071a' }}>
+                ⚠️ API 请求失败：{loadError.message}
+                <button type="button" onClick={() => refresh()} style={{ marginLeft: 10, cursor: 'pointer', background: '#a8071a', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 10px', fontSize: 12 }}>
+                  重试
+                </button>
+              </div>
+            )}
+
+            <ArticleTable
+              articles={pageItems}
+              loading={isLoading || docMapQuery.isLoading}
+              docMap={docMapQuery.data ?? {}}
+              selectedRowKeys={selectedRowKeys}
+              onSelectRowKeys={setSelectedRowKeys}
+              onOpenDetail={handleViewDetail}
+              onEdit={handleEdit}
+              onGenerateCard={handleGenerateCard}
+              onGeneratePpt={handleGeneratePpt}
+              onGenerateSummary={handleGenerateSummary}
+            />
+
+            {!isLoading && filtered.length > PAGE_SIZE && (
+              <Pagination
+                current={page}
+                pageSize={PAGE_SIZE}
+                total={filtered.length}
+                onChange={handlePageChange}
+                showSizeChanger={false}
+                showTotal={(t) => '共 ' + t + ' 份'}
+                style={{ marginTop: 14, textAlign: 'right' }}
+              />
+            )}
+          </SectionCard>
+        </div>
       </div>
 
       {/* onClose 只关不清：弹层关闭动画中卸载内容会让遮罩卡在全屏状态挡死页面；数据在下次打开时经 effect 重取/重置 */}

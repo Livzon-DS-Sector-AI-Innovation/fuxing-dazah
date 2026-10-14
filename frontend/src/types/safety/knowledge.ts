@@ -5,6 +5,7 @@ import { KnowledgeCategory } from "./enums"
 export interface SafetyKnowledgeArticle {
   id: string
   article_no: string | null
+  feishu_record_id?: string | null
   title: string
   category: string
   summary?: string | null
@@ -188,6 +189,27 @@ export interface SemanticSearchResult {
   tags: string | null
   status: string
   match_reason: string | null
+  /** ragplus 条款级命中：命中的条款定位（如「第十四条」/「第7页」） */
+  matched_refs?: string[] | null
+  /** ragplus 条款级命中：归一相似度 0~1 */
+  similarity?: number | null
+}
+
+/** ragplus 引擎概览（/knowledge-articles/ragplus-overview） */
+export interface RagplusOverview {
+  enabled: boolean
+  kbs: Array<{ name: string; doc_count: number; chunk_count: number }>
+  map_counts: Record<string, number>
+  error: string | null
+}
+
+/** ragplus 文档映射行（/knowledge-articles/ragplus-doc-map） */
+export interface RagplusDocMapEntry {
+  status: 'active' | 'failed' | 'archived' | 'deleted'
+  version: number
+  dataset_name: string
+  synced_at: string | null
+  last_error: string | null
 }
 
 // ── Bitable 同步 ──
