@@ -158,7 +158,11 @@ class TestBuildOverview:
         assert wall["chemicals"]["status"] == "warn"
         # 运行中绿卡与灰卡
         assert wall["knowledge-base"]["metric"] == "运行中"
-        assert wall["goals"]["status"] == "inactive"
+        # 四新域卡（四期 1-B）：未接入是常态（registry 连接位空）→ inactive·未接入
+        assert wall["goals"] == {"key": "goals", "status": "inactive", "metric": "未接入"}
+        assert wall["training-behavior"]["metric"] == "未接入"
+        assert wall["facilities"]["metric"] == "未接入"
+        assert wall["incidents"]["metric"] == "未接入"
         # 监督卡（三期起步）：最近一次审核真实指标，违规>0 → 黄
         assert wall["supervision"] == {
             "key": "supervision",
@@ -214,6 +218,37 @@ class TestBuildOverview:
         wall = {c["key"]: c for c in data["module_health"]}
         assert len(wall) == 17
         assert wall["cert-warnings"]["metric"] is None
+
+    async def test_domain_page_cards_three_states(self) -> None:
+        """四新域卡三态（蓝本 §6）：live=ok|warn / 未接入=inactive·未接入 / 降级=inactive·None。"""
+        stubs = _stub_collectors()
+
+        async def live_warn() -> dict[str, Any]:
+            return {
+                "connected": True,
+                "health_status": "warn",
+                "health_metric": "目标达成 2/4 · 责任书签订率 67% · 年投入 75.0万",
+            }
+
+        async def boom() -> dict[str, Any]:
+            raise RuntimeError("bitable down")
+
+        stubs["goals"] = live_warn
+        stubs["facilities"] = boom
+        data = await build_overview(collectors=stubs)
+        wall = {c["key"]: c for c in data["module_health"]}
+        assert len(wall) == 17
+        assert wall["goals"] == {
+            "key": "goals",
+            "status": "warn",
+            "metric": "目标达成 2/4 · 责任书签订率 67% · 年投入 75.0万",
+        }
+        # 采集异常（连接有效但读取失败）→ 降级灰卡无指标 + errors 标注
+        assert wall["facilities"] == {"key": "facilities", "status": "inactive", "metric": None}
+        assert "facilities: RuntimeError" in data["errors"]
+        # 未 stub 的两域走真采集器 → 未接入（registry 连接位空）
+        assert wall["training-behavior"]["metric"] == "未接入"
+        assert wall["incidents"]["status"] == "inactive"
 
 
 class TestCollectSupervision:
@@ -381,3 +416,33 @@ class TestOverviewEndpoint:
         # 健康度墙的 key 与前端菜单约定（抽样校验）
         wall_keys = {c["key"] for c in data["module_health"]}
         assert {"goals", "supervision", "hazard-ledger", "chemicals"} <= wall_keys
+        assert {"training-behavior", "facilities", "incidents"} <= wall_keys
+        # 四新域未接入（连接位空是常态），降级而非报错
+        wall = {c["key"]: c for c in data["module_health"]}
+        assert wall["goals"]["metric"] in ("未接入", None)
+
+
+class TestDomainPageEndpoints:
+    async def test_four_endpoints_not_connected_envelope(self, client: AsyncClient) -> None:
+        """四端点冒烟：未接入常态下 200 + 三态信封（真 store 路径）。"""
+        for path in ("goals", "training-behavior", "facilities", "incidents"):
+            resp = await client.get(f"/api/v1/safety/{path}")
+            assert resp.status_code == 200, f"{path}: {resp.text}"
+            body = resp.json()
+            assert body["code"] == 200
+            data = body["data"]
+            assert data["status"] in ("not_connected", "degraded")
+            if data["status"] == "not_connected":
+                assert data["stats"] is None
+                assert data["ledger"]["data"] == []
+                assert data["ledger"]["meta"] == {"total": 0, "page": 1, "page_size": 20}
+
+    async def test_goals_endpoint_pagination_params(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/v1/safety/goals", params={"page": 2, "page_size": 5})
+        assert resp.status_code == 200
+        meta = resp.json()["data"]["ledger"]["meta"]
+        assert meta == {"total": 0, "page": 2, "page_size": 5}
+
+    async def test_goals_endpoint_rejects_bad_pagination(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/v1/safety/goals", params={"page": 0})
+        assert resp.status_code == 422

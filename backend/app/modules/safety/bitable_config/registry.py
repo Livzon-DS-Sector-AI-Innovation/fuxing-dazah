@@ -1,6 +1,7 @@
 """Bitable 配置域注册表 — 安全模块多维表格配置的代码唯一事实源。
 
-14 域 / 24 条连接行（backend-design §1）。本文件是：
+14 域 / 24 条连接行（backend-design §1）——现已增长为 19 域 / 26 条连接行
+（visitor_notice + 四期四占位域；占位域无连接行）。本文件是：
 
 1. **migration 播种的来源**（单向导出，禁止手抄，防双份常量漂移）；
 2. **运行时 fallback**：DB 缺行/停用时 store 回退到 ``default_connection`` /
@@ -1082,6 +1083,50 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                     note="外来人员安全培训通知单 - 预报备审批流程（保险到期预警数据源）",
                 ),
             ),
+        ),
+    ),
+    # ── 四期四新域（3.0 四期 1-B：结构就位、连接位空——不播种/不订阅/不建 DB 行。
+    #    表结构蓝本：docs/DESIGN-安全模块3.0四期-四新域表结构与页面口径-20261014.md；
+    #    接入=按蓝本建表后在此补 default_connection 或经 bitable 配置页配 DB 行，页面零改码）──
+    DomainInfo(
+        key="goals",
+        label="目标责任与绩效",
+        purpose="S1 目标指标/责任制清单/安全投入台账（占位域，建表接入后供页面与健康度墙直读）",
+        subscribe="record",
+        kinds=(
+            KindInfo(kind="goal_indicator", label="目标指标表"),
+            KindInfo(kind="responsibility", label="责任制清单表"),
+            KindInfo(kind="investment", label="安全投入台账"),
+        ),
+    ),
+    DomainInfo(
+        key="training_behavior",
+        label="教育培训与行为管控",
+        purpose="S6 培训计划实施/违章行为档案（占位域，建表接入后供页面与健康度墙直读）",
+        subscribe="record",
+        kinds=(
+            KindInfo(kind="training", label="培训计划与实施表"),
+            KindInfo(kind="violation", label="违章行为档案表"),
+        ),
+    ),
+    DomainInfo(
+        key="facilities",
+        label="设备设施管理",
+        purpose="S8 设备设施台账/检验校验记录（占位域，建表接入后供页面与健康度墙直读）",
+        subscribe="record",
+        kinds=(
+            KindInfo(kind="equipment_ledger", label="设备设施台账表"),
+            KindInfo(kind="inspection_record", label="检验校验记录表"),
+        ),
+    ),
+    DomainInfo(
+        key="incidents",
+        label="事故事件管理",
+        purpose="S16 事故事件登记/CAPA 措施跟踪（占位域，建表接入后供页面与健康度墙直读）",
+        subscribe="record",
+        kinds=(
+            KindInfo(kind="incident", label="事故事件登记表"),
+            KindInfo(kind="capa", label="CAPA 措施跟踪表"),
         ),
     ),
 )

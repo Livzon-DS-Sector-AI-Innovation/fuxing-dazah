@@ -39,6 +39,11 @@ from app.modules.safety.service import (
     KeyRiskOperationReportService,
     SpecialOperationDailyReportService,
 )
+from app.modules.safety.service.domain_pages import (
+    DOMAIN_PAGE_KEYS,
+    collect_domain_health,
+    module_health_card,
+)
 from app.modules.safety.workticket_review.repository import WorkTicketReviewRepository
 
 logger = logging.getLogger(__name__)
@@ -48,7 +53,6 @@ _DRILLDOWN_LIMIT = 20
 
 # 健康度模块 key（与前端 menu-config safety 子项 key 一一对应；名称/路径/
 # 分组由前端从菜单解析，后端只下发状态与指标文案）
-_INACTIVE_MODULES = ("goals", "training-behavior", "facilities", "incidents")
 _RUNNING_MODULES = (
     "knowledge-base",
     "risk-grading",
@@ -411,10 +415,9 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
         {"key": "contractor-admission", "status": "ok", "metric": "运行中"},
         {"key": "emergency-drill", "status": "ok", "metric": "运行中"},
     ]
-    cards.extend(
-        {"key": key, "status": "inactive", "metric": "未开展"}
-        for key in _INACTIVE_MODULES
-    )
+    # 四新域卡（四期 1-B）：三态=未接入 inactive·「未接入」/ 接入后 ok|warn 按蓝本
+    # 判据 / 采集降级 inactive·无指标（口径 domain_pages.module_health_card）
+    cards.extend(module_health_card(key, parts.get(key)) for key in DOMAIN_PAGE_KEYS)
     # 监督卡（三期起步）：最近一次审核真实指标（违规>0 → 黄）；无记录「待首跑」灰；
     # 采集降级（parts=None）沿单域降级惯例 → 灰卡无指标
     supervision_latest = (parts.get("supervision") or {}).get("latest")
@@ -476,6 +479,11 @@ async def build_overview(
         "key_risk_ops": _db_collector(collect_key_risk_ops),
         "ehs": _db_collector(collect_ehs),
         "supervision": _db_collector(collect_supervision),
+        # 四新域（四期 1-B）：无 DB 采集，读 bitable 配置/表格（未接入是常态）
+        "goals": lambda: collect_domain_health("goals"),
+        "training-behavior": lambda: collect_domain_health("training-behavior"),
+        "facilities": lambda: collect_domain_health("facilities"),
+        "incidents": lambda: collect_domain_health("incidents"),
         "digest": lambda: collect_digest(digest_store),
     }
     merged = {**default_collectors, **(collectors or {})}
