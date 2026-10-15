@@ -15,6 +15,8 @@ from app.modules.safety.models import ChemicalInventoryRecord, ChemicalInventory
 
 KIND_DAILY = "daily"
 KIND_WEEKLY = "weekly"
+# 日终存档快照（每日 23:00 留当日最终库存，纯存档：不参与日报/周报环比口径）
+KIND_NIGHTLY = "nightly"
 
 
 async def take_snapshot(

@@ -468,3 +468,74 @@ class TestSnapshotDuplicateKeyMerge:
         assert snap.quantity == Decimal("17000")
         assert snap.risk_flag == "warn"  # 保守取 warn
         assert snap.source == "sheet"
+
+
+class TestNightlySnapshot:
+    """23:00 日终快照（kind=nightly 纯存档）：源开关两态。"""
+
+    def _seed(
+        self, monkeypatch: pytest.MonkeyPatch, reader: Any,
+    ) -> dict[str, Any]:
+        from app.modules.safety.service.chemical_inventory_direct import (
+            reader as reader_mod,
+        )
+
+        captured: dict[str, Any] = {"snapshots": []}
+
+        async def _spy_take(
+            _db: Any, _d: date, *, kind: str = "weekly",
+            records: list[Any] | None = None, source: str | None = None,
+        ) -> int:
+            captured["snapshots"].append(
+                {"kind": kind, "records": records, "source": source}
+            )
+            return len(records or [])
+
+        monkeypatch.setattr(daily_job, "take_snapshot", _spy_take)
+        monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
+        monkeypatch.setattr(reader_mod, "open_reader", lambda **kw: reader)
+        return captured
+
+    async def test_sheet_mode_nightly_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """sheet 模式：直读视图注入 + kind=nightly + source='sheet' + 风险重算。"""
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
+        views = [_view("r1"), _view("r2")]
+        captured = self._seed(monkeypatch, FakeSheetReader(views))
+
+        result = await daily_job.run_nightly_snapshot()
+
+        assert result["kind"] == "nightly"
+        assert result["source"] == "sheet"
+        assert result["records"] == 2
+        snap = captured["snapshots"][0]
+        assert snap["kind"] == "nightly"
+        assert snap["source"] == "sheet"
+        assert [v.id for v in snap["records"]] == ["r1", "r2"]
+        assert result["scan"]["changed"] >= 0  # 内存重算已执行
+
+    async def test_legacy_mode_snapshots_from_orm_mirror(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """legacy 模式（开关全关）：records=None 快照自取 ORM 镜像，source=bitable。"""
+        monkeypatch.delenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", raising=False)
+        monkeypatch.delenv("SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED", raising=False)
+        from app.modules.safety.service.chemical_inventory_direct import (
+            reader as reader_mod,
+        )
+
+        async def _boom(**_kw: Any) -> Any:
+            raise AssertionError("legacy 模式不该触直读")
+
+        monkeypatch.setattr(reader_mod, "open_reader", _boom)
+        captured = self._seed(monkeypatch, None)
+
+        result = await daily_job.run_nightly_snapshot()
+
+        assert result["source"] == "bitable"
+        assert "scan" not in result
+        snap = captured["snapshots"][0]
+        assert snap["kind"] == "nightly"
+        assert snap["records"] is None   # take_snapshot 内部查 ORM 镜像
+        assert snap["source"] is None

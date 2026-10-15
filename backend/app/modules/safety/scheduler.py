@@ -6,7 +6,7 @@
 - 督办等级计算 (每日 07:30, 已启用): 拉取督办等级未关闭记录 → 规则计算 → 更新回填
 - 持证到期预警 (每日 08:00, 已启用): 扫描 person_certificates → 推送本人/部门负责人/安管人员
 - 外来人员保险预警 (每周三 08:30, 已启用): 直读预报备审批表 → 保险到期三类预警 → 安全速递格子
-- 督办通报 (周四 14:00, 安全速递总卡格子, 已启用)
+- 督办通报 (周四 13:00, 安全速递总卡格子, 已启用; 13:00-18:00 值守轮询即时刷新)
 - 特殊作业日报 (每日 08:00, 已启用)
 - 特殊作业日报17点 (每日 17:00, 已启用)
 - 中控报警日报私发 (每日 17:00, 开关默认关): 日报按车间归属过滤后私发提炼四/五/六部指定人员
@@ -178,11 +178,12 @@ async def _load_effective_jobs() -> list[dict[str, Any]]:
 # ── 调度任务配置 ──
 
 SCHEDULED_JOBS: list[dict[str, Any]] = [
-    # ── 隐患督办通报（每周四 14:00，直读多维表格）──
+    # ── 隐患督办通报（每周四 13:00，直读多维表格；13:00-18:00 值守轮询跟变化）──
     {
         "name": "隐患督办通报",
-        "hour": 14, "minute": 0, "dow": 3,  # 周四
-        "description": "直读多维表格的未关闭隐患，按部门分组推送督办通报到群聊",
+        "hour": 13, "minute": 0, "dow": 3,  # 周四
+        "description": "直读多维表格的未关闭隐患，按部门分组推送督办通报到群聊；"
+                       "13:00-18:00 督办通报值守轮询监控隐患状态变化，即时刷新速递格子",
     },
     # ── 未更新进展催办（每周三 10:00，直读多维表格 + Redis 跟踪进展变化）──
     {
@@ -309,6 +310,14 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "description": "拉取危险品日报群当日 Excel → 更新多维表 → 重算风险 → 推送安全AI创新交流群（超量+昨日环比分析日报）；"
                        "同款速递版式加投「危险品日报」群（SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID=off 停用）",
+    },
+    # ── 危化品库存日终快照（每天 23:00，留当日最终库存全量存档，不推送）──
+    {
+        "name": "危化品库存日终快照",
+        "hour": 23, "minute": 0,
+        "retry_until_hour": 23, "retry_until_minute": 59,
+        "description": "23:00 日终留一张库存全量快照（kind=nightly 纯存档，不分析不推送；"
+                       "数据源随 SAFETY_CHEMICAL_INVENTORY_SOURCE，与 19:30 daily 快照互不影响）",
     },
     # ── 外来人员保险预警（每周三 08:30，直读预报备审批表 → 安全速递格子）──
     {
@@ -563,6 +572,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool:
             await _run_chemical_inventory_weekly(chat_id=chat_id)
         elif job_name == "危化品库存日报":
             await _run_chemical_inventory_daily(chat_id=chat_id)
+        elif job_name == "危化品库存日终快照":
+            await _run_chemical_inventory_nightly_snapshot()
         elif job_name == "外来人员保险预警":
             await _run_visitor_insurance_warning(chat_id=chat_id)
         elif job_name == "法规收录对账巡检":
@@ -600,7 +611,7 @@ async def _run_regulation_ingest_reconcile() -> None:
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:
-    """周四 14:00 督办通报（群聊推送，直读多维表格）。"""
+    """周四 13:00 督办通报（群聊推送，直读多维表格；此后值守轮询跟变化）。"""
     from app.modules.safety.service.hazard_direct.bulletin import send_bulletin
 
     stats = await send_bulletin(chat_id)
@@ -1128,6 +1139,16 @@ async def _run_chemical_inventory_daily(chat_id: str | None = None) -> None:
                 len(result.get("files", [])), result.get("total_updated"),
                 result.get("total_created"), result.get("scan"))
     await send_daily_summary(result, chat_id=chat_id)
+
+
+async def _run_chemical_inventory_nightly_snapshot() -> None:
+    """每天 23:00：危化品库存日终快照（kind=nightly 纯存档，不推送）。"""
+    from app.modules.safety.chemical_inventory.daily_job import run_nightly_snapshot
+
+    result = await run_nightly_snapshot()
+    logger.info("危化品库存日终快照完成: date=%s records=%s source=%s",
+                result.get("snapshot_date"), result.get("records"),
+                result.get("source"))
 
 
 async def _run_scheduled_job_guarded(job: dict[str, Any]) -> None:

@@ -28,6 +28,7 @@ from app.modules.safety.chemical_inventory.daily_report import (
 from app.modules.safety.chemical_inventory.daily_update import apply_daily_workbook
 from app.modules.safety.chemical_inventory.snapshots import (
     KIND_DAILY,
+    KIND_NIGHTLY,
     load_prev_daily_snapshot_with_source,
     take_snapshot,
 )
@@ -332,6 +333,45 @@ async def _apply_revision_freshness(
         operator_name="chemical-sheet-daily",
     )
     return None
+
+
+async def run_nightly_snapshot() -> dict[str, Any]:
+    """每日 23:00：日终留一张库存全量快照（kind=nightly，纯存档不分析不推送）。
+
+    读取链与日报一致（SAFETY_CHEMICAL_INVENTORY_SOURCE）：sheet 模式直读
+    《危险品日报表》并内存重算风险标记（回写按既有开关语义，sheet 下强制关）；
+    legacy 模式快照自取 ORM 镜像（19:30 日报链路已重算过风险标记）。
+    与 19:30 的 daily 快照 kind 互斥，日报/周报环比口径不受影响。
+    """
+    from app.modules.safety.service.chemical_inventory_direct.risk import (
+        scan_inventory_views,
+    )
+
+    rows: list[Any] | None = None
+    source: str | None = None
+    scan: dict[str, int] | None = None
+    if _direct_enabled():
+        from app.modules.safety.service.chemical_inventory_direct.reader import (
+            open_reader,
+        )
+
+        rows = await open_reader().fetch_all(strict=True)
+        scan = await scan_inventory_views(rows)
+        if _sheet_source_enabled():
+            source = "sheet"
+    async with async_session_factory() as db:
+        today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间
+        count = await take_snapshot(
+            db, today, kind=KIND_NIGHTLY, records=rows, source=source,
+        )
+        await db.commit()
+    return {
+        "snapshot_date": today.isoformat(),
+        "kind": KIND_NIGHTLY,
+        "records": count,
+        "source": source or "bitable",
+        **({"scan": scan} if scan is not None else {}),
+    }
 
 
 async def run_scheduled_daily_update() -> dict[str, Any]:
