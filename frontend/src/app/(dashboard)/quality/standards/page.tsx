@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Typography, Table, Button, Modal, Form, Input, InputNumber, Select,
   Space, App, Popconfirm, Upload, Card, Row, Col, Empty, Badge,
-  Descriptions, Tag,
+  Descriptions, Tag, theme,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, UploadOutlined,
@@ -54,6 +54,7 @@ function similarityScore(doc: StandardDocument, templatePath: string): number {
 
 export default function StandardsPage() {
   const { message } = App.useApp()
+  const { token } = theme.useToken()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:standard:manage')
   const canBindTemplate = hasPermission('quality:template:manage')
@@ -424,11 +425,11 @@ export default function StandardsPage() {
                       cursor: 'pointer', padding: '6px 12px', display: 'flex',
                       justifyContent: 'space-between', alignItems: 'center',
                       borderRadius: 4, marginBottom: 2,
-                      background: p === activeProductName ? '#e6f4ff' : undefined,
+                      background: p === activeProductName ? token.colorPrimaryBg : undefined,
                     }}
                   >
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</span>
-                    <Badge count={docsOf(p).length} showZero color="#1677ff" />
+                    <Badge count={docsOf(p).length} showZero color={token.colorPrimary} />
                   </div>
                 ))}
                 {filteredProducts.length === 0 && <Empty description="无匹配产品" />}
@@ -452,11 +453,11 @@ export default function StandardsPage() {
                         cursor: 'pointer', padding: '6px 12px', display: 'flex',
                         justifyContent: 'space-between', alignItems: 'center',
                         borderRadius: 4, marginBottom: 2,
-                        background: c === activeCodeName ? '#e6f4ff' : undefined,
+                        background: c === activeCodeName ? token.colorPrimaryBg : undefined,
                       }}
                     >
                       <span style={{ flex: 1 }}>{c}</span>
-                      <Badge count={fileCount} showZero color="#1677ff" />
+                      <Badge count={fileCount} showZero color={token.colorPrimary} />
                     </div>
                   )
                 })}

@@ -2,16 +2,17 @@
 
 import { useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { theme } from 'antd'
 import type { SummaryTrend } from '@/types/quality'
-
-const GOOD = '#0ca30c'
-const CRITICAL = '#d03b3b'
 
 /** 项目跨批次趋势图：纯 SVG 实现（无图表库依赖，渲染稳定）。
  *  单序列折线 + 上下限度虚线 + 均值 ±3σ 控制线 + 合格/不合格点着色。
  *  数据点可点击跳转对应任务详情。 */
 export default function TrendChart({ trend }: { trend: SummaryTrend }) {
   const router = useRouter()
+  const { token } = theme.useToken()
+  const GOOD = token.colorSuccess
+  const CRITICAL = token.colorError
   const svgRef = useRef<SVGSVGElement>(null)
   const pts = trend.points.filter((p) => p.value != null)
   if (pts.length < 2) return null

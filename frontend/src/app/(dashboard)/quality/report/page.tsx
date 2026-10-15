@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton, Tag } from 'antd'
+import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton, Tag, theme } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons'
 import type { ReportRecord, TemplateNode } from '@/types/quality'
 import { fetchReportRecords, downloadReportFile, generateReport, fetchTemplates } from '@/actions/quality'
@@ -28,6 +28,7 @@ function ReportPageInner() {
   const searchParams = useSearchParams()
   const recordId = searchParams.get('recordId')
   const { message } = App.useApp()
+  const { token } = theme.useToken()
   const { hasPermission } = usePermission()
   const canAudit = hasPermission('quality:report:audit')
   const [auditTarget, setAuditTarget] = useState<ReportRecord | null>(null)
@@ -291,7 +292,7 @@ function ReportPageInner() {
             )}
           </Space>
           {consistency && (
-            <div style={{ border: '1px solid #faad14', borderRadius: 4, padding: 8 }}>
+            <div style={{ border: `1px solid ${token.colorWarning}`, borderRadius: 4, padding: 8 }}>
               {consistency.parsed_mismatches.length === 0 && consistency.standard_drifts.length === 0 ? (
                 <Text type="success" style={{ display: 'block' }}>一致性校验通过</Text>
               ) : (

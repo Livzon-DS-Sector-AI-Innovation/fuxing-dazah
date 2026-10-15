@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Input, Space, Button, App, Segmented, Tag, Typography, Card, Statistic, Select } from 'antd'
+import { Input, Space, Button, App, Segmented, Tag, Typography, Card, Statistic, Select, theme } from 'antd'
 import { ScanOutlined, ClearOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
@@ -14,6 +14,7 @@ type ScanResult = { no: string; ok: boolean; detail: string; at: string }
 
 export default function ScanStation() {
   const { message } = App.useApp()
+  const { token } = theme.useToken()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:material:manage')
   const [scanMode, setScanMode] = useState<'auto' | 'in' | 'out' | 'stocktake'>('auto')
@@ -169,8 +170,8 @@ export default function ScanStation() {
 
       <Card size="small" title="本次会话统计" style={{ marginBottom: 16 }}>
         <Space size={40}>
-          <Statistic title="成功" value={okCount} valueStyle={{ color: '#52c41a' }} />
-          <Statistic title="失败" value={failCount} valueStyle={{ color: '#ff4d4f' }} />
+          <Statistic title="成功" value={okCount} valueStyle={{ color: token.colorSuccess }} />
+          <Statistic title="失败" value={failCount} valueStyle={{ color: token.colorError }} />
           <Statistic title="累计处理" value={okCount + failCount} />
         </Space>
       </Card>

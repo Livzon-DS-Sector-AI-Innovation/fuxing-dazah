@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch, theme } from 'antd'
+import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch, theme, Empty } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DownloadOutlined } from '@ant-design/icons'
 import { TASK_STATUS_META } from '@/types/quality'
@@ -173,6 +173,13 @@ export default function SummaryView() {
           size="small"
           pagination={false}
           scroll={{ x: 400 + (matrix?.columns.length || 0) * 130, y: 480 }}
+          locale={{
+            emptyText: !loading ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无汇总数据">
+                <Typography.Text type="secondary">选择产品或调整日期范围后自动汇总；新建检验任务完成填报后也会出现在这里。</Typography.Text>
+              </Empty>
+            ) : ' ',
+          }}
           onRow={(r: SummaryMatrixRow) => ({
             style: { cursor: 'pointer' },
             onClick: () => router.push(`/quality/task/${r.task_id}`),

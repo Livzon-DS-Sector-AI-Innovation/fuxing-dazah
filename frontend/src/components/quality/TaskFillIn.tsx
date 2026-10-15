@@ -45,6 +45,7 @@ export default function TaskFillIn() {
   const [loading, setLoading] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [voiding, setVoiding] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [data, setData] = useState<TestTaskListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -418,29 +419,8 @@ export default function TaskFillIn() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Input placeholder="标准文件号（SOP.02.xxx）" allowClear style={{ width: 190 }} value={fileNoDraft}
-          onChange={(e) => setFileNoDraft(e.target.value)}
-          onPressEnter={() => { setFileNoFilter(fileNoDraft || undefined); setPage(1) }}
-        />
-        <Input placeholder="产品名称" allowClear value={productDraft}
-          onChange={e => setProductDraft(e.target.value)}
-          onPressEnter={() => { setProductSearch(productDraft); setPage(1) }}
-          style={{ width: 180 }} prefix={<SearchOutlined />} />
-        <Select
-          placeholder="状态筛选" allowClear
-          style={{ width: 140 }}
-          value={statusFilter}
-          onChange={(v) => { setStatusFilter(v); setPage(1) }}
-          options={(Object.keys(TASK_STATUS_META) as TestTaskStatus[]).map((s) => ({ label: TASK_STATUS_META[s].label, value: s }))}
-        />
-        <DatePicker
-          placeholder="出报日期筛选"
-          style={{ width: 150 }}
-          value={reportDateFilter ? dayjs(reportDateFilter) : null}
-          onChange={(d) => { setReportDateFilter(d ? d.format('YYYY-MM-DD') : undefined); setPage(1) }}
-        />
-        <Button type="primary" onClick={() => { setProductSearch(productDraft); setFileNoFilter(fileNoDraft || undefined); setPage(1) }}>搜索</Button>
+      <Space style={{ marginBottom: 8 }} wrap>
+        <Button onClick={() => setFiltersOpen((v) => !v)}>{filtersOpen ? '收起筛选' : '展开筛选'}</Button>
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
         )}
@@ -450,6 +430,32 @@ export default function TaskFillIn() {
           </Popconfirm>
         )}
       </Space>
+      {filtersOpen && (
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Input placeholder="标准文件号（SOP.02.xxx）" allowClear style={{ width: 190 }} value={fileNoDraft}
+            onChange={(e) => setFileNoDraft(e.target.value)}
+            onPressEnter={() => { setFileNoFilter(fileNoDraft || undefined); setPage(1) }}
+          />
+          <Input placeholder="产品名称" allowClear value={productDraft}
+            onChange={e => setProductDraft(e.target.value)}
+            onPressEnter={() => { setProductSearch(productDraft); setPage(1) }}
+            style={{ width: 180 }} prefix={<SearchOutlined />} />
+          <Select
+            placeholder="状态筛选" allowClear
+            style={{ width: 140 }}
+            value={statusFilter}
+            onChange={(v) => { setStatusFilter(v); setPage(1) }}
+            options={(Object.keys(TASK_STATUS_META) as TestTaskStatus[]).map((s) => ({ label: TASK_STATUS_META[s].label, value: s }))}
+          />
+          <DatePicker
+            placeholder="出报日期筛选"
+            style={{ width: 150 }}
+            value={reportDateFilter ? dayjs(reportDateFilter) : null}
+            onChange={(d) => { setReportDateFilter(d ? d.format('YYYY-MM-DD') : undefined); setPage(1) }}
+          />
+          <Button type="primary" onClick={() => { setProductSearch(productDraft); setFileNoFilter(fileNoDraft || undefined); setPage(1) }}>搜索</Button>
+        </Space>
+      )}
 
       <Table
         rowKey="id"

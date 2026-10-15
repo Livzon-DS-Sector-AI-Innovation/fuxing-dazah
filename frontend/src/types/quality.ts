@@ -432,7 +432,7 @@ export const MATERIAL_CONTAINER_STATUS_META: Record<MaterialContainerStatus, { l
   qualified: { label: '合格', color: 'green' },
   issued: { label: '已领出', color: 'blue' },
   returned: { label: '已退库', color: 'purple' },
-  void: { label: '已作废', color: 'red' },
+  void: { label: '已作废', color: 'default' },
 }
 
 export interface MaterialContainerItem {

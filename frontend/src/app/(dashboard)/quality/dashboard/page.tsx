@@ -139,8 +139,8 @@ export default function QualityDashboardPage() {
               return (
                 <div key={t.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                   <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 60 }}>
-                    <div title={`出报单 ${t.reports}`} style={{ width: 10, height: `${(t.reports / max) * 56 + 2}px`, background: '#1677ff', borderRadius: 2 }} />
-                    <div title={`完成任务 ${t.completed_tasks}`} style={{ width: 10, height: `${(t.completed_tasks / max) * 56 + 2}px`, background: '#91caff', borderRadius: 2 }} />
+                    <div title={`出报单 ${t.reports}`} style={{ width: 10, height: `${(t.reports / max) * 56 + 2}px`, background: token.colorPrimary, borderRadius: 2 }} />
+                    <div title={`完成任务 ${t.completed_tasks}`} style={{ width: 10, height: `${(t.completed_tasks / max) * 56 + 2}px`, background: token.colorPrimaryBg, borderRadius: 2 }} />
                   </div>
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>{t.date.slice(5)}</Typography.Text>
                 </div>
@@ -148,8 +148,8 @@ export default function QualityDashboardPage() {
             })}
           </div>
           <Space size={16} style={{ marginTop: 4 }}>
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}><span style={{ color: '#1677ff' }}>■</span> 出报单</Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}><span style={{ color: '#91caff' }}>■</span> 完成任务</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}><span style={{ color: token.colorPrimary }}>■</span> 出报单</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}><span style={{ color: token.colorPrimaryBg }}>■</span> 完成任务</Typography.Text>
           </Space>
         </Card>
       )}

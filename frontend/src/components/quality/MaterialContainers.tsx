@@ -7,6 +7,7 @@ import {
 import { PlusOutlined, SearchOutlined, DownloadOutlined, ScanOutlined, BookOutlined, HistoryOutlined, ShoppingCartOutlined, CheckOutlined, ImportOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
+import { theme } from 'antd'
 import { useCrossTabSignal } from './useCrossTabSignal'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
 import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, SlowMovingItem, StocktakeSheet, SupplierItem } from '@/types/quality'
@@ -36,6 +37,7 @@ const OP_TYPE_META: Record<string, { label: string; color: string }> = {
 
 export default function MaterialContainers() {
   const { message } = App.useApp()
+  const { token } = theme.useToken()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:material:manage')
   const [loading, setLoading] = useState(false)
@@ -1330,7 +1332,7 @@ export default function MaterialContainers() {
                 <div key={t.month} style={{ display: 'flex', alignItems: 'center', marginBlock: 3 }}>
                   <Typography.Text type="secondary" style={{ width: 70 }}>{t.month}</Typography.Text>
                   <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: `${(t.out / maxOut) * 100}%`, minWidth: t.out > 0 ? 18 : 0, height: 16, background: '#1677ff', borderRadius: 3, textAlign: 'center', color: '#fff', fontSize: 11, lineHeight: '16px', transition: 'width .2s' }}>
+                    <div style={{ width: `${(t.out / maxOut) * 100}%`, minWidth: t.out > 0 ? 18 : 0, height: 16, background: token.colorPrimary, borderRadius: 3, textAlign: 'center', color: token.colorWhite, fontSize: 11, lineHeight: '16px', transition: 'width .2s' }}>
                       {t.out > 0 ? t.out : ''}
                     </div>
                     <Typography.Text type="secondary" style={{ fontSize: 11 }}>出库 {t.out}</Typography.Text>
@@ -1338,7 +1340,7 @@ export default function MaterialContainers() {
                 </div>
               )
             })}
-            <div style={{ marginTop: 12, padding: 10, background: '#f5f5f5', borderRadius: 6 }}>
+            <div style={{ marginTop: 12, padding: 10, background: token.colorBgLayout, borderRadius: 6 }}>
               <Typography.Text>
                 月均领用 <Typography.Text strong>{trendData.monthly_avg_out}</Typography.Text> 瓶
                 {trendData.suggested_min_stock != null && (
