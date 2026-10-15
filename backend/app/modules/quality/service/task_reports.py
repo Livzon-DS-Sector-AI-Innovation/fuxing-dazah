@@ -304,9 +304,11 @@ class _TaskReports(_TaskCore):
         page: int,
         page_size: int,
         report_date: str | None = None,
+        file_no: str | None = None,
     ) -> tuple[list[TestTaskListItem], int]:
         items, total = await list_test_tasks(
-            db, product_name, status, report_date=report_date, page=page, page_size=page_size,
+            db, product_name, status, report_date=report_date, file_no=file_no,
+            page=page, page_size=page_size,
         )
         out = []
         for t in items:

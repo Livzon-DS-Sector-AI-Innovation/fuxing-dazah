@@ -50,6 +50,8 @@ export default function TaskFillIn() {
   const [page, setPage] = useState(1)
   // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
   const [productDraft, setProductDraft] = useState('')
+  const [fileNoDraft, setFileNoDraft] = useState('')
+  const [fileNoFilter, setFileNoFilter] = useState<string | undefined>()
   const [productSearch, setProductSearch] = useState('')
   // URL ?status= / ?report_date= 预置筛选：首帧即读入（组件挂在 Suspense 边界内，
   // 无 SSR 水合问题，也不再需要 effect 触发第二次请求）
@@ -79,7 +81,7 @@ export default function TaskFillIn() {
   const load = useCallback(async (p: number, silent = false) => {
     setLoading(true)
     try {
-      const res = await fetchTestTasks(productSearch || undefined, statusFilter, p, reportDateFilter)
+      const res = await fetchTestTasks(productSearch || undefined, statusFilter, p, reportDateFilter, fileNoFilter)
       setData(res.data)
       setTotal(res.meta.total)
     } catch (err: unknown) {
@@ -87,7 +89,7 @@ export default function TaskFillIn() {
     } finally {
       setLoading(false)
     }
-  }, [productSearch, statusFilter, reportDateFilter, message])
+  }, [productSearch, statusFilter, reportDateFilter, fileNoFilter, message])
 
   useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
@@ -417,6 +419,10 @@ export default function TaskFillIn() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
+        <Input placeholder="标准文件号（SOP.02.xxx）" allowClear style={{ width: 190 }} value={fileNoDraft}
+          onChange={(e) => setFileNoDraft(e.target.value)}
+          onPressEnter={() => { setFileNoFilter(fileNoDraft || undefined); setPage(1) }}
+        />
         <Input placeholder="产品名称" allowClear value={productDraft}
           onChange={e => setProductDraft(e.target.value)}
           onPressEnter={() => { setProductSearch(productDraft); setPage(1) }}
@@ -434,7 +440,7 @@ export default function TaskFillIn() {
           value={reportDateFilter ? dayjs(reportDateFilter) : null}
           onChange={(d) => { setReportDateFilter(d ? d.format('YYYY-MM-DD') : undefined); setPage(1) }}
         />
-        <Button type="primary" onClick={() => { setProductSearch(productDraft); setPage(1) }}>搜索</Button>
+        <Button type="primary" onClick={() => { setProductSearch(productDraft); setFileNoFilter(fileNoDraft || undefined); setPage(1) }}>搜索</Button>
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
         )}

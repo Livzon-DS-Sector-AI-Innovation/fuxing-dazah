@@ -483,12 +483,13 @@ export async function updateTestTaskReportDate(
 }
 
 export async function fetchTestTasks(
-  product_name?: string, status?: TestTaskStatus, page = 1, report_date?: string,
+  product_name?: string, status?: TestTaskStatus, page = 1, report_date?: string, fileNo?: string,
 ): Promise<{ data: TestTaskListItem[]; meta: { total: number } }> {
   const params = new URLSearchParams()
   if (product_name) params.set('product_name', product_name)
   if (status) params.set('status', status)
   if (report_date) params.set('report_date', report_date)
+  if (fileNo) params.set('file_no', fileNo)
   params.set('page', String(page))
   params.set('page_size', '20')
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks?${params.toString()}`, {

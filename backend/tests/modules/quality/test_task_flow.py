@@ -328,3 +328,31 @@ async def test_void_task_can_be_rebuilt(db_session):
         standard_document_id=doc.id,
     ))
     assert second.id != first.id
+
+
+async def test_list_tasks_file_no_filter(db_session):
+    """任务列表按标准文件号（SOP.02.xxx）模糊过滤。"""
+    import uuid
+
+    from app.modules.quality.repository import create_standard_document, list_test_tasks
+
+    doc = await create_standard_document(db_session, {
+        "file_no": f"SOP.02.{uuid.uuid4().hex[:4].upper()}.010",
+        "product_name": "文件号筛选测试",
+        "product_code": "HAF",
+    })
+    await db_session.flush()
+    from app.modules.quality.repository import create_test_task
+
+    task = await create_test_task(
+        db_session, product_name="文件号筛选测试", batch_number=f"HAF{uuid.uuid4().hex[:6].upper()}",
+        production_date="2026-10-15", expiry_date=None, specification=None,
+        form_id=None, standard_document_id=doc.id,
+    )
+    await db_session.flush()
+    # 命中：文件号片段
+    items, _total = await list_test_tasks(db_session, file_no=doc.file_no[:12])
+    assert any(t.id == task.id for t in items)
+    # 未命中：乱码文件号
+    items2, _total2 = await list_test_tasks(db_session, file_no="SOP.99.不存在")
+    assert not any(t.id == task.id for t in items2)

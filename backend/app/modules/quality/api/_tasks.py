@@ -62,13 +62,14 @@ async def list_test_task_endpoint(
     product_name: str | None = Query(default=None, description="产品名称（模糊搜索）"),
     status: str | None = Query(default=None, description="状态筛选：in_progress/pending_review/completed/void"),
     report_date: str | None = Query(default=None, description="出报日期精确筛选（YYYY-MM-DD）"),
+    file_no: str | None = Query(default=None, description="标准文件号模糊（SOP.02.xxx）"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     items, total = await test_task_service.list_tasks(
-        db, product_name, status, page, page_size, report_date=report_date,
+        db, product_name, status, page, page_size, report_date=report_date, file_no=file_no,
     )
     return paginated_response(
         data=[it.model_dump(mode="json") for it in items],

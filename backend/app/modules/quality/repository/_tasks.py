@@ -4,7 +4,7 @@ import re
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import (
@@ -117,10 +117,11 @@ async def list_test_tasks(
     product_name: str | None = None,
     status: str | None = None,
     report_date: str | None = None,
+    file_no: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[QualityTestTask], int]:
-    """分页查询任务列表。"""
+    """分页查询任务列表；file_no 按标准文件号（SOP.02.xxx）模糊过滤。"""
     stmt = select(QualityTestTask).where(QualityTestTask.is_deleted == False)  # noqa: E712
     if product_name:
         stmt = stmt.where(QualityTestTask.product_name.ilike(f"%{product_name}%"))
@@ -128,6 +129,24 @@ async def list_test_tasks(
         stmt = stmt.where(QualityTestTask.status == status)
     if report_date:
         stmt = stmt.where(QualityTestTask.report_date == report_date)
+    if file_no:
+        from app.modules.quality.models import QualityStandardDocument
+
+        docs = (
+            await db.execute(
+                select(QualityStandardDocument).where(
+                    QualityStandardDocument.file_no.ilike(f"%{file_no}%"),
+                    QualityStandardDocument.is_deleted == False,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        if not docs:
+            stmt = stmt.where(text("false"))
+        else:
+            conds: list[Any] = [QualityTestTask.standard_document_id.in_([d.id for d in docs])]
+            for d in docs:
+                conds.append(QualityTestTask.standard_document_ids.contains([str(d.id)]))
+            stmt = stmt.where(or_(*conds))
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     stmt = stmt.order_by(
         QualityTestTask.report_date.asc().nulls_last(),
