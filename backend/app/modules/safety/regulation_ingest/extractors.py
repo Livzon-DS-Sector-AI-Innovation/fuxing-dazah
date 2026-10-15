@@ -12,8 +12,9 @@ from __future__ import annotations
 import json as _json
 import logging
 import re
+from typing import Any
 
-from app.modules.safety.regulation_crawler.schemas import CrawledRegulation
+from app.modules.safety.regulation_ingest.schemas import CrawledRegulation
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,7 @@ class AIExtractor:
     def __init__(self) -> None:
         self._ai_service = None  # 延迟初始化
 
-    async def _get_ai_service(self):  # type: ignore[no-untyped-def]
+    async def _get_ai_service(self) -> Any:
         """延迟创建 AI 服务，避免提前触发环境变量校验。"""
         if self._ai_service is None:
             from app.modules.safety.service.config import create_ai_service
@@ -443,8 +444,8 @@ class AIExtractor:
 
     async def classify_and_assess_batch(
         self,
-        items: list[dict],
-    ) -> list[dict]:
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """批量判定内容类型 + 相关性评估。
 
         一次 AI 调用处理最多 20 条法规。将原本 2×N 次 API 调用合并为 1 次。
@@ -476,7 +477,7 @@ class AIExtractor:
             return []
 
         batch_size = 20
-        all_results: list[dict] = []
+        all_results: list[dict[str, Any]] = []
 
         for i in range(0, len(validated), batch_size):
             batch = validated[i:i + batch_size]

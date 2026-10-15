@@ -18,7 +18,7 @@ from typing import Any
 
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
-from app.modules.safety.regulation_crawler.schemas import CrawledRegulation
+from app.modules.safety.regulation_ingest.schemas import CrawledRegulation
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class BitableWriter:
         self.env_bitable = self._build_client(self.env_conn)
 
     @staticmethod
-    def _build_client(conn) -> SafetyBitableClient:
+    def _build_client(conn: Any) -> SafetyBitableClient:
         if conn is None or conn.status == "disabled":
             return SafetyBitableClient()
         return SafetyBitableClient(app_token=conn.app_token, table_id=conn.table_id)
@@ -112,7 +112,7 @@ class BitableWriter:
         decision, _ = await self._classify(bitable, title, item)
         return decision
 
-    async def write_regulation(self, item: CrawledRegulation) -> dict | None:
+    async def write_regulation(self, item: CrawledRegulation) -> dict[str, Any] | None:
         """将一条法规写入 Bitable。返回 {"record_id": ..., "shared_url": ...}，重复时返回 None。
 
         处理流程：
@@ -143,7 +143,7 @@ class BitableWriter:
             logger.warning("去重异常，跳过写入: %s", title[:80])
             return None
 
-        if decision == "update":
+        if decision == "update" and matched_record is not None:
             # 删除旧版记录（Bitable DELETE 事件会触发 knowledge_bitable_handler
             # 自动软删除 knowledge_articles + 图谱重建）
             await self._handle_update(bitable, matched_record, item)
@@ -568,7 +568,7 @@ def _bigram_similarity(a: str, b: str) -> float:
     return len(intersection) / len(union)
 
 
-def _normalize_title(title: str | list | None) -> str:
+def _normalize_title(title: str | list[dict[str, Any]] | None) -> str:
     """归一化标题以进行模糊比较。
 
     处理步骤：
@@ -589,7 +589,7 @@ def _normalize_title(title: str | list | None) -> str:
     return t.lower().strip()
 
 
-def _extract_plain_text(value: str | list | dict | None) -> str:
+def _extract_plain_text(value: str | list[dict[str, Any]] | dict[str, Any] | None) -> str:
     """从 Bitable 字段值中提取纯文本字符串。
 
     Bitable 文本字段可能返回多种格式：
@@ -650,7 +650,7 @@ _DOC_NUM_RE = re.compile(
 )
 
 
-def _extract_standard_identifier(title: str | list | dict | None) -> tuple[str, str]:
+def _extract_standard_identifier(title: str | list[dict[str, Any]] | dict[str, Any] | None) -> tuple[str, str]:
     """从标题中提取标准号和年份。返回 (standard_number, year)。
 
     例如:

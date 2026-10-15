@@ -21,14 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.safety.ai_audit import ai_audit_scope
 from app.modules.safety.app_config.store import store as app_config_store
 from app.modules.safety.models import RegulationIngestRun
-from app.modules.safety.regulation_crawler.engine.extractors import AIExtractor
-from app.modules.safety.regulation_crawler.notifier.push_notifier import PushNotifier
-from app.modules.safety.regulation_crawler.schemas import (
-    CrawledRegulation,
-    CrawlItemResult,
-    CrawlResultSummary,
-)
-from app.modules.safety.regulation_crawler.writer.bitable_writer import (
+from app.modules.safety.regulation_ingest.bitable_writer import (
     BitableWriter,
     _extract_document_number,
     _extract_plain_text,
@@ -39,10 +32,15 @@ from app.modules.safety.regulation_ingest.events import (
     build_regulation_updated_envelope,
     publish_regulation_updated,
 )
+from app.modules.safety.regulation_ingest.extractors import AIExtractor
+from app.modules.safety.regulation_ingest.push_notifier import PushNotifier
 from app.modules.safety.regulation_ingest.ragplus_crawler_client import (
     get_ragplus_crawler_client,
 )
 from app.modules.safety.regulation_ingest.schemas import (
+    CrawledRegulation,
+    CrawlItemResult,
+    CrawlResultSummary,
     IngestCandidateItem,
     IngestCandidatesRequest,
     IngestCandidatesResponse,

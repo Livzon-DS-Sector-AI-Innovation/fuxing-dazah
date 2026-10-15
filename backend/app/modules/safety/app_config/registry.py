@@ -415,14 +415,6 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "法规爬虫调度开关",
     ),
     ConfigItem(
-        "SAFETY_REGULATION_CRAWLER_INTERVAL_HOURS", "misc", "int", 0,
-        "法规爬虫间隔小时数（0 = 仅手动/调度器触发）", minimum=0,
-    ),
-    ConfigItem(
-        "SAFETY_REGULATION_CRAWLER_WEBHOOK_SECRET", "credential", "str", "",
-        "法规爬虫 webhook 校验 secret（空 = 不校验）", secret=True,
-    ),
-    ConfigItem(
         "SAFETY_REGULATION_INGEST_SECRET", "credential", "str", "",
         "法规收录推送校验 secret（空 = 不校验；契约① X-Ingest-Secret 头）",
         secret=True,

@@ -159,7 +159,7 @@ class _FakeExtractor:
 
     @staticmethod
     def has_revision_indicator(title: str) -> bool:
-        from app.modules.safety.regulation_crawler.engine.extractors import AIExtractor
+        from app.modules.safety.regulation_ingest.extractors import AIExtractor
 
         return AIExtractor.has_revision_indicator(title)
 

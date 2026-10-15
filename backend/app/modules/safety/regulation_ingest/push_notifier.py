@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.feishu.notification import send_group_card, send_user_card
-from app.modules.safety.regulation_crawler.schemas import (
+from app.modules.safety.regulation_ingest.schemas import (
     CrawlItemResult,
     CrawlResultSummary,
 )
