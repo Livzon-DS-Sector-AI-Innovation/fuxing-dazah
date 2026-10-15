@@ -64,8 +64,139 @@ def gate_on(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def empty_ledger(monkeypatch: pytest.MonkeyPatch):
-    """空台账：预去重全部放行。"""
+    """空台账 + 判定不可达：预去重放行，AI 判定双路失败 → pending 留痕。"""
     monkeypatch.setattr(ingest_service, "BitableWriter", lambda: _FakeWriter([]))
+    monkeypatch.setattr(
+        ingest_service, "AIExtractor",
+        lambda: _FakeExtractor(batch_results=[], fallback_relevant=None),
+    )
+
+
+# ── AI 批量判定（Ticket 02） ────────────────────────────────
+
+
+class _FakeExtractor:
+    """AIExtractor 替身：预设批量判定返回；可断言调用。"""
+
+    def __init__(
+        self,
+        batch_results: list[dict[str, Any]] | None = None,
+        batch_raises: bool = False,
+        fallback_relevant: bool | None = None,
+    ) -> None:
+        self.batch_results = batch_results
+        self.batch_raises = batch_raises
+        self.fallback_relevant = fallback_relevant
+        self.batch_called = False
+
+    async def classify_and_assess_batch(self, items):
+        self.batch_called = True
+        if self.batch_raises:
+            raise RuntimeError("ai down")
+        return self.batch_results if self.batch_results is not None else []
+
+    async def check_industry_relevance(self, title: str, summary: str = "") -> bool:
+        if self.fallback_relevant is None:
+            raise RuntimeError("fallback not configured")
+        return bool(self.fallback_relevant)
+
+
+def _use_extractor(monkeypatch, extractor: _FakeExtractor) -> _FakeExtractor:
+    monkeypatch.setattr(ingest_service, "AIExtractor", lambda: extractor)
+    return extractor
+
+
+def _two_items() -> list[dict[str, Any]]:
+    return [
+        {
+            "candidate_id": "cand-rel",
+            "source": "npc",
+            "url": "https://example.gov.cn/1",
+            "title": "危险化学品安全管理条例（修订）",
+            "content_digest": "危险化学品安全管理条例修订全文，涉及生产储存使用经营运输安全管理要求。",
+        },
+        {
+            "candidate_id": "cand-irr",
+            "source": "npc",
+            "url": "https://example.gov.cn/2",
+            "title": "某市旅游业发展促进条例",
+            "content_digest": "某市旅游业发展促进条例全文，涉及旅游产业发展与市场推广支持措施。",
+        },
+    ]
+
+
+async def test_ai_relevant_pending_irrelevant_rejected(client, gate_on, empty_ledger, monkeypatch):
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=[
+        {"index": 0, "content_type": "regulation", "relevance_score": 0.92,
+         "impact_level": "高", "business_domains": ["危化品管理"], "core_summary": "危化品管理"},
+        {"index": 1, "content_type": "regulation", "relevance_score": 0.08,
+         "impact_level": "低", "business_domains": [], "core_summary": ""},
+    ]))
+    resp = await client.post(_ENDPOINT, json=_payload(items=_two_items()))
+    results = {r["candidate_id"]: r for r in resp.json()["data"]["results"]}
+    assert results["cand-rel"]["action_taken"] == "pending"
+    assert "判定相关" in results["cand-rel"]["reason"]
+    assert results["cand-irr"]["action_taken"] == "reject"
+    assert "score=0.08" in results["cand-irr"]["reason"]
+
+
+async def test_ai_non_regulation_rejected(client, gate_on, empty_ledger, monkeypatch):
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=[
+        {"index": 0, "content_type": "news", "relevance_score": 0.9},
+    ]))
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "reject"
+    assert "非法规" in r["reason"]
+
+
+async def test_ai_budget_exceeded_marks_pending(client, gate_on, empty_ledger, monkeypatch):
+    """预算护栏：预估超限 → 全部 pending 且不发起 AI 调用。"""
+    monkeypatch.setenv("SAFETY_REGULATION_CRAWLER_MAX_AI_TOKENS_PER_RUN", "1")
+    extractor = _use_extractor(monkeypatch, _FakeExtractor(batch_results=[
+        {"index": 0, "content_type": "regulation", "relevance_score": 0.9},
+    ]))
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "pending"
+    assert "预算超限" in r["reason"]
+    assert extractor.batch_called is False
+
+
+async def test_ai_batch_fail_fallback_per_item(client, gate_on, empty_ledger, monkeypatch):
+    """批量失败 → 逐条回退（行业相关性终判）。"""
+    _use_extractor(monkeypatch, _FakeExtractor(
+        batch_raises=True, fallback_relevant=False,
+    ))
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "reject"
+    assert "逐条回退" in r["reason"]
+
+
+async def test_ai_fallback_relevant_pending(client, gate_on, empty_ledger, monkeypatch):
+    _use_extractor(monkeypatch, _FakeExtractor(
+        batch_results=[], fallback_relevant=True,
+    ))
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "pending"
+    assert "逐条回退" in r["reason"]
+
+
+async def test_duplicate_skips_ai_entirely(client, gate_on, monkeypatch):
+    """去重命中的条目不进入 AI 判定（省 token）。"""
+    monkeypatch.setattr(
+        ingest_service, "BitableWriter",
+        lambda: _FakeWriter([_ledger_item("危险化学品安全管理条例（修订）")]),
+    )
+    extractor = _use_extractor(monkeypatch, _FakeExtractor(batch_results=[
+        {"index": 0, "content_type": "regulation", "relevance_score": 0.9},
+    ]))
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "duplicate"
+    assert extractor.batch_called is False
 
 
 # ── 鉴权 ────────────────────────────────────────────────────
@@ -190,6 +321,9 @@ async def test_new_standard_edition_passes(client, gate_on, monkeypatch):
         ingest_service, "BitableWriter",
         lambda: _FakeWriter([_ledger_item("GB 30871-2022 危险化学品企业特殊作业安全规范")]),
     )
+    _use_extractor(monkeypatch, _FakeExtractor(
+        batch_results=[{"index": 0, "content_type": "regulation", "relevance_score": 0.9}],
+    ))
     payload = _payload(items=[{
         "candidate_id": "cand-new-ver",
         "source": "samr",

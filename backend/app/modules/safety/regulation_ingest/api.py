@@ -9,10 +9,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.shared.schemas import ApiResponse
 from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.regulation_ingest.schemas import IngestCandidatesRequest
 from app.modules.safety.regulation_ingest.service import RegulationIngestService
+from app.shared.schemas import ApiResponse
 
 regulation_ingest_router = APIRouter()
 

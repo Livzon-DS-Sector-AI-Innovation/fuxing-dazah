@@ -1,11 +1,11 @@
 """法规收录服务（契约①接收侧处理链）。
 
-处理链（一期骨架）：鉴权（API 层）→ 总闸 → 幂等重放 → 预去重（vs Bitable
-台账，移植 regulation_crawler 预过滤逻辑）→ [AI 批量判定] → [台账写入/
-修订编排/回执/doc_map/推送] → run 级留痕。
+处理链：鉴权（API 层）→ 总闸 → 幂等重放 → 预去重（vs Bitable 台账）→
+AI 批量相关性判定（token 预算护栏，ai_config 场景 regulation_ingest）→
+[台账写入/修订编排/回执/doc_map/推送] → run 级留痕。
 
-判定与执行段随票据逐步填充；本模块只 flush 不 commit（请求级事务由
-get_db 收口，测试走回滚 session 零残留）。
+执行段随票据逐步填充；本模块只 flush 不 commit（请求级事务由 get_db
+收口，测试走回滚 session 零残留）。
 """
 
 from __future__ import annotations
@@ -17,8 +17,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.safety.ai_audit import ai_audit_scope
 from app.modules.safety.app_config.store import store as app_config_store
 from app.modules.safety.models import RegulationIngestRun
+from app.modules.safety.regulation_crawler.engine.extractors import AIExtractor
 from app.modules.safety.regulation_crawler.writer.bitable_writer import (
     BitableWriter,
     _extract_document_number,
@@ -37,6 +39,13 @@ logger = logging.getLogger(__name__)
 
 # 收录总闸沿用既有键（原爬虫调度开关，语义升级为收录服务总闸）
 _INGEST_ENABLED_KEY = "SAFETY_REGULATION_CRAWLER_ENABLED"
+# 单批 AI token 预算上限（超限标 pending 留痕，不调 AI）
+_MAX_AI_TOKENS_KEY = "SAFETY_REGULATION_CRAWLER_MAX_AI_TOKENS_PER_RUN"
+
+# AI 相关性判定阈值（content_type=regulation 且 score 达标 → 相关）
+_RELEVANCE_THRESHOLD = 0.5
+# 批量判定 prompt 固定开销粗估（每批 system+模板 token）
+_PROMPT_OVERHEAD_TOKENS_PER_BATCH = 600
 
 # 幂等锚点只认已处理完成的行（skipped/failed 可重试多行，与唯一索引口径一致）
 _STATUS_COMPLETED = "completed"
@@ -49,6 +58,7 @@ class RegulationIngestService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.writer = BitableWriter()
+        self.extractor = AIExtractor()
 
     # ── 主入口 ──────────────────────────────────────────────
 
@@ -77,8 +87,8 @@ class RegulationIngestService:
                 results=[IngestItemResult(**r) for r in (existing.items_result or [])],
             )
 
-        # ③ 预去重 → 判定 → 逐条结果（判定/执行段随票据填充）
-        results = await self._process_items(payload.items)
+        # ③ 预去重 → AI 判定 → 逐条结果（执行段随票据填充）
+        results, ai_tokens_used = await self._process_items(payload.items)
 
         # ④ run 级留痕 + 响应
         counts = self._count_results(results)
@@ -87,6 +97,7 @@ class RegulationIngestService:
             status=_STATUS_COMPLETED,
             results=results,
             counts=counts,
+            ai_tokens_used=ai_tokens_used,
         )
         return IngestCandidatesResponse(
             accepted=True, run_log_id=str(run.id), results=results,
@@ -96,8 +107,11 @@ class RegulationIngestService:
 
     async def _process_items(
         self, items: list[IngestCandidateItem],
-    ) -> list[IngestItemResult]:
-        """逐条候选处理：预去重 → （AI 判定/执行段随票据填充）。"""
+    ) -> tuple[list[IngestItemResult], int]:
+        """逐条候选处理：预去重 → AI 批量判定（预算护栏）。
+
+        返回 (逐条结果, AI token 预估消耗)。
+        """
         results: list[IngestItemResult] = []
         try:
             keys = await self._load_existing_standard_keys()
@@ -106,6 +120,7 @@ class RegulationIngestService:
             keys = {"exact_titles": set(), "norm_titles": set(),
                     "std_to_years": {}, "doc_numbers": set()}
 
+        passed: list[IngestCandidateItem] = []
         for item in items:
             dup_reason = self._duplicate_reason(item, keys)
             if dup_reason:
@@ -115,13 +130,147 @@ class RegulationIngestService:
                     reason=dup_reason,
                 ))
                 continue
-            # AI 判定与执行链（02/03 票填充）：当前标记 pending 留痕
-            results.append(IngestItemResult(
+            passed.append(item)
+
+        verdicts, ai_tokens = await self._classify_items(passed)
+        for item in passed:
+            verdict = verdicts.get(item.candidate_id)
+            results.append(self._verdict_to_result(item, verdict))
+        return results, ai_tokens
+
+    # ── AI 批量判定（token 预算护栏） ───────────────────────
+
+    async def _classify_items(
+        self, items: list[IngestCandidateItem],
+    ) -> tuple[dict[str, dict[str, Any]], int]:
+        """AI 批量相关性判定（移植既有批量判定段，场景 regulation_ingest）。
+
+        返回 ({candidate_id: 判定字段}, token 预估)。预算超限时返回
+        ({}, 0) 且不发起 AI 调用（调用方整批判 pending）。
+        """
+        if not items:
+            return {}, 0
+
+        batch_inputs = [
+            {
+                "index": idx,
+                "title": item.title or "",
+                "source_url": item.url or "",
+                "raw_text": (
+                    item.content_digest
+                    if (item.content_digest and len(item.content_digest.strip()) >= 50)
+                    else f"标题: {item.title}\n来源: {item.url}"
+                ) or "",
+            }
+            for idx, item in enumerate(items)
+        ]
+
+        est_tokens = self._estimate_tokens(batch_inputs)
+        budget = app_config_store.get_int(_MAX_AI_TOKENS_KEY, 20000)
+        if est_tokens > budget:
+            logger.warning(
+                "AI 判定预算超限：预估 %d > 预算 %d，本批 %d 条标 pending",
+                est_tokens, budget, len(items),
+            )
+            return {}, 0
+
+        with ai_audit_scope(
+            scenario="regulation_ingest", channel="system",
+            extra={"entry": "regulation_ingest", "items": len(items)},
+        ):
+            try:
+                batch_results = await self.extractor.classify_and_assess_batch(batch_inputs)
+            except Exception:
+                logger.exception("批量判定失败")
+                batch_results = []
+
+        verdicts: dict[str, dict[str, Any]] = {}
+        if batch_results:
+            by_index = {r["index"]: r for r in batch_results if "index" in r}
+            for idx, item in enumerate(items):
+                br = by_index.get(idx)
+                if br is not None:
+                    verdicts[item.candidate_id] = br
+        else:
+            # 批量失败 → 逐条回退（移植既有降级模式：行业相关性终判）
+            for item in items:
+                try:
+                    relevant = await self.extractor.check_industry_relevance(
+                        item.title or "",
+                    )
+                    verdicts[item.candidate_id] = {
+                        "content_type": "regulation",
+                        "fallback": True,
+                        "industry_relevant": bool(relevant),
+                    }
+                except Exception:
+                    logger.exception("逐条回退判定失败: %s", item.title)
+        return verdicts, est_tokens
+
+    @staticmethod
+    def _estimate_tokens(batch_inputs: list[dict[str, Any]]) -> int:
+        """粗估本批 token（中文 1 字≈1 token 保守口径 + 每批 prompt 开销）。
+
+        精确 token 以 ai_call_audits 审计为准；此预估仅用于预算护栏熔断。
+        """
+        batches = max(1, (len(batch_inputs) + 19) // 20)
+        text_tokens = sum(
+            len(str(b.get("title") or "")) + len(str(b.get("raw_text") or ""))
+            for b in batch_inputs
+        )
+        return text_tokens + batches * _PROMPT_OVERHEAD_TOKENS_PER_BATCH
+
+    @staticmethod
+    def _verdict_to_result(
+        item: IngestCandidateItem, verdict: dict[str, Any] | None,
+    ) -> IngestItemResult:
+        """AI 判定 → 逐条处置结果。
+
+        相关（content_type=regulation 且 score 达标）→ pending（待收录执行，
+        执行链票据接入后为 promote）；不相关/非法规内容 → reject；无判定
+        （预算超限/判定失败）→ pending 留痕。
+        """
+        if verdict is None:
+            return IngestItemResult(
                 candidate_id=item.candidate_id,
                 action_taken="pending",
-                reason="判定管线接入前置态",
-            ))
-        return results
+                reason="未判定（AI 预算超限或判定失败），待复核",
+            )
+        content_type = (verdict.get("content_type") or "regulation").strip()
+        if content_type not in ("regulation", "news", "speech", "other"):
+            content_type = "regulation"
+        if content_type != "regulation":
+            return IngestItemResult(
+                candidate_id=item.candidate_id,
+                action_taken="reject",
+                reason=f"内容类型 {content_type}，非法规",
+            )
+        if verdict.get("fallback"):
+            relevant = bool(verdict.get("industry_relevant"))
+            if not relevant:
+                return IngestItemResult(
+                    candidate_id=item.candidate_id,
+                    action_taken="reject",
+                    reason="AI 判定与本厂业务不相关（逐条回退）",
+                )
+            return IngestItemResult(
+                candidate_id=item.candidate_id,
+                action_taken="pending",
+                reason="判定相关（逐条回退），待收录执行",
+            )
+        score = verdict.get("relevance_score")
+        if isinstance(score, (int, float)) and score < _RELEVANCE_THRESHOLD:
+            return IngestItemResult(
+                candidate_id=item.candidate_id,
+                action_taken="reject",
+                reason=f"AI 判定不相关（score={score}）",
+            )
+        score_txt = f"score={score}" if isinstance(score, (int, float)) else "score=高"
+        return IngestItemResult(
+            candidate_id=item.candidate_id,
+            action_taken="pending",
+            reason=f"判定相关（{score_txt}），待收录执行",
+        )
 
     async def _load_existing_standard_keys(self) -> dict[str, Any]:
         """加载 Bitable 已有记录的标准号/文号/标题集合（双表单次拉取）。
@@ -207,6 +356,7 @@ class RegulationIngestService:
         results: list[IngestItemResult] | None = None,
         counts: dict[str, int] | None = None,
         error_summary: str | None = None,
+        ai_tokens_used: int = 0,
     ) -> RegulationIngestRun:
         counts = counts or {}
         run = RegulationIngestRun(
@@ -219,6 +369,7 @@ class RegulationIngestService:
             promoted_count=counts.get("promote", 0),
             rejected_count=counts.get("reject", 0),
             failed_count=counts.get("error", 0),
+            ai_tokens_used=ai_tokens_used,
             items_result=[r.model_dump() for r in results] if results else None,
             error_summary=error_summary,
             finished_at=datetime.now(UTC),
