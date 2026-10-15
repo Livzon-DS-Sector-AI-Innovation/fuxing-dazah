@@ -26,8 +26,8 @@ export default function SummaryView() {
   const [includeInProgress, setIncludeInProgress] = useState(false)
 
   // 趋势分析：选项目 跨批次数值序列
-  const [trendItem, setTrendItem] = useState<string | undefined>()
-  const [trend, setTrend] = useState<SummaryTrend | null>(null)
+  const [trendItems, setTrendItems] = useState<string[]>([])
+  const [trendMap, setTrendMap] = useState<Record<string, SummaryTrend | null>>({})
   const [trendLoading, setTrendLoading] = useState(false)
   const [trendError, setTrendError] = useState<string | null>(null)
   const [trendReloadKey, setTrendReloadKey] = useState(0)
@@ -57,15 +57,21 @@ export default function SummaryView() {
 
   useEffect(() => {
     (async () => {
-      if (!trendItem) { setTrend(null); setTrendError(null); return }
+      if (!trendItems.length) { setTrendMap({}); setTrendError(null); return }
       setTrendLoading(true)
       setTrendError(null)
-      fetchItemTrend(trendItem, selectedProduct)
-        .then((res) => setTrend(res.data))
-        .catch((err: unknown) => setTrendError((err instanceof Error ? err.message : String(err)) || '获取趋势失败'))
-        .finally(() => setTrendLoading(false))
+      const entries = await Promise.all(trendItems.map(async (item) => {
+        try {
+          const res = await fetchItemTrend(item, selectedProduct)
+          return [item, res.data] as const
+        } catch {
+          return [item, null] as const
+        }
+      }))
+      setTrendMap(Object.fromEntries(entries))
+      setTrendLoading(false)
     })()
-  }, [trendItem, selectedProduct, trendReloadKey])
+  }, [trendItems, selectedProduct, trendReloadKey])
 
   const handleExport = async () => {
     try {
@@ -174,32 +180,41 @@ export default function SummaryView() {
         />
       </Card>
 
-      <Card size="small" title="趋势分析（项目跨批次走势，限度参考线）">
+      <Card size="small" title="趋势分析（支持多项目并列对比，限度参考线）">
         <Space style={{ marginBottom: 12 }} wrap>
           <Select
-            placeholder="选择检验项目查看趋势"
+            mode="multiple"
+            placeholder="选择检验项目（可多选并列对比）"
             allowClear
             showSearch
-            value={trendItem}
-            onChange={setTrendItem}
+            value={trendItems}
+            onChange={setTrendItems}
             options={(matrix?.columns || []).map((c) => ({ value: c.name, label: c.name }))}
-            style={{ width: 260 }}
+            style={{ width: 420 }}
+            maxTagCount={4}
           />
-          {trend?.standard_text && (
-            <Text type="secondary">标准：{trend.standard_text}</Text>
-          )}
+          {trendItems.length > 0 && <Button size="small" onClick={() => setTrendReloadKey((k) => k + 1)}>刷新</Button>}
         </Space>
-        {trendError ? (
-          <Space>
-            <Text type="danger">{trendError}</Text>
-            <Button size="small" onClick={() => setTrendReloadKey((k) => k + 1)}>重试</Button>
-          </Space>
-        ) : trend && trend.points.length >= 2 ? (
-          <TrendChart trend={trend} />
+        {trendError && <Text type="danger">{trendError}</Text>}
+        {trendLoading ? (
+          <Text type="secondary">加载中…</Text>
+        ) : trendItems.length === 0 ? (
+          <Text type="secondary">请先选择检验项目</Text>
         ) : (
-          <Text type="secondary">
-            {trendItem ? (trendLoading ? '加载中…' : '该项目数值批次不足 2 批，无法绘制趋势') : '请先选择检验项目'}
-          </Text>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+            {trendItems.map((item) => {
+              const t = trendMap[item]
+              if (!t) return <Text key={item} type="secondary">{item}：加载失败</Text>
+              if (t.points.length < 2) return <Text key={item} type="secondary">{item}：数值批次不足 2 批</Text>
+              return (
+                <div key={item} style={{ width: 480, maxWidth: '100%' }}>
+                  <Text strong>{item}</Text>
+                  {t.standard_text && <Text type="secondary" style={{ marginLeft: 8 }}>标准：{t.standard_text}</Text>}
+                  <TrendChart trend={t} />
+                </div>
+              )
+            })}
+          </div>
         )}
       </Card>
     </div>

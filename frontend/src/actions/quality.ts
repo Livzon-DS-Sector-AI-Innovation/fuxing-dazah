@@ -1419,3 +1419,11 @@ export async function createMaterialStandardItem(standardId: string, input: Part
   }
   return res.json()
 }
+
+export async function fetchDashboardTrend(days = 7): Promise<{ data: { date: string; reports: number; completed_tasks: number }[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/dashboard/trend?days=${days}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取看板趋势失败')
+  return res.json()
+}

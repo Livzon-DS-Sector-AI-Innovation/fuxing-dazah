@@ -3,12 +3,13 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import (
     InspectionRecord,
     QualityTestTask,
+    ReportRecord,
 )
 from app.modules.quality.repository._tasks import list_test_results
 
@@ -136,3 +137,42 @@ async def get_summary_by_product(
         "in_progress": len(in_progress_batches),
         "products": products,
     }
+
+
+async def dashboard_trend(db: AsyncSession, days: int = 7) -> list[dict[str, Any]]:
+    """看板近 N 天趋势：每日报告单生成数与完成任务数（北京时区）。"""
+    from datetime import timedelta as _td
+
+    from app.core.time import today as _today
+
+    report_rows = await db.execute(
+        select(
+            func.to_char(func.timezone("Asia/Shanghai", ReportRecord.created_at), "YYYY-MM-DD").label("d"),
+            func.count().label("c"),
+        )
+        .where(ReportRecord.is_deleted == False)  # noqa: E712
+        .group_by("d")
+    )
+    task_rows = await db.execute(
+        select(
+            func.to_char(func.timezone("Asia/Shanghai", QualityTestTask.updated_at), "YYYY-MM-DD").label("d"),
+            func.count().label("c"),
+        )
+        .where(
+            QualityTestTask.is_deleted == False,  # noqa: E712
+            QualityTestTask.status == "completed",
+        )
+        .group_by("d")
+    )
+    reports = {r.d: int(r.c) for r in report_rows}
+    completed = {r.d: int(r.c) for r in task_rows}
+    today = _today()
+    result = []
+    for i in range(days - 1, -1, -1):
+        d = (today - _td(days=i)).isoformat()
+        result.append({
+            "date": d,
+            "reports": reports.get(d, 0),
+            "completed_tasks": completed.get(d, 0),
+        })
+    return result

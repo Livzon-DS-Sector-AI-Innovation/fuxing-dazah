@@ -22,6 +22,7 @@ from app.modules.quality.api._common import (
 )
 from app.modules.quality.models import ReportRecord
 from app.modules.quality.repository import (
+    dashboard_trend,
     get_product_names,
     get_summary_by_product,
     list_report_records_between,
@@ -35,6 +36,16 @@ from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
 # ─── 汇总表 ───
+
+
+@router.get("/dashboard/trend", summary="看板近 7 天趋势（每日出报单数/完成任务数）")
+async def dashboard_trend_endpoint(
+    days: int = Query(default=7, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> JSONResponse:
+    trend = await dashboard_trend(db, days)
+    return success_response(data=trend)
 
 
 @router.get("/summary/batch/{record_id}", summary="单批次汇总")

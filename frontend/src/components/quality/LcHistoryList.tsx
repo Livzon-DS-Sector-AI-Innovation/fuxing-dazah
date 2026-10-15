@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Table, Tag, Input, Space, Button, App, Popconfirm } from 'antd'
+import { Table, Tag, Input, Space, Button, App, Popconfirm, Empty, Typography } from 'antd'
 import { SearchOutlined, DeleteOutlined, EyeOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
@@ -117,6 +117,13 @@ export default function LcHistoryList() {
         loading={loading}
         pagination={{ current: page, pageSize: 20, total, onChange: (p) => setPage(p) }}
         size="small"
+        locale={{
+          emptyText: !loading ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无液相解析记录">
+              <Typography.Text type="secondary">到「液相解析」页上传计算表，解析结果自动落这里；也可在任务详情上传计算表填入。</Typography.Text>
+            </Empty>
+          ) : ' ',
+        }}
       />
     </div>
   )

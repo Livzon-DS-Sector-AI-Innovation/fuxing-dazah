@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { TASK_STATUS_META } from '@/types/quality'
 import type { TestTaskStatus, QualityDashboard, DailyReportItem } from '@/types/quality'
-import { fetchQualityDashboard, fetchDailyReports, fetchReportRecords } from '@/actions/quality'
+import { fetchQualityDashboard, fetchDailyReports, fetchReportRecords, fetchDashboardTrend } from '@/actions/quality'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -49,20 +49,23 @@ export default function QualityDashboardPage() {
   const [data, setData] = useState<QualityDashboard | null>(null)
   const [dailyReports, setDailyReports] = useState<DailyReportItem[]>([])
   const [pendingAuditCount, setPendingAuditCount] = useState(0)
+  const [trend, setTrend] = useState<{ date: string; reports: number; completed_tasks: number }[]>([])
 
   const today = dayjs().format('YYYY-MM-DD')
   const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD')
 
   const load = useCallback(async (silent = false) => {
     try {
-      const [res, reports, pendingAudit] = await Promise.all([
+      const [res, reports, pendingAudit, trendRes] = await Promise.all([
         fetchQualityDashboard(),
         fetchDailyReports(),
         fetchReportRecords(undefined, undefined, 1, 'pending').catch(() => null),
+        fetchDashboardTrend(7).catch(() => null),
       ])
       setData(res.data)
       setDailyReports(reports.data || [])
       setPendingAuditCount(pendingAudit?.meta.total ?? 0)
+      setTrend(trendRes?.data ?? [])
     } catch (err: unknown) {
       // 自动刷新静默失败（此前后端异常时每 30 秒弹一条错误轰炸）
       if (!silent) message.error((err instanceof Error ? err.message : String(err)) || '加载总览失败')
@@ -127,6 +130,29 @@ export default function QualityDashboardPage() {
           </Card>
         </Col>
       </Row>
+
+      {trend.length > 0 && (
+        <Card size="small" title="近 7 天趋势（出报单 / 完成任务）">
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', height: 90 }}>
+            {trend.map((t) => {
+              const max = Math.max(...trend.map((x) => Math.max(x.reports, x.completed_tasks)), 1)
+              return (
+                <div key={t.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                  <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 60 }}>
+                    <div title={`出报单 ${t.reports}`} style={{ width: 10, height: `${(t.reports / max) * 56 + 2}px`, background: '#1677ff', borderRadius: 2 }} />
+                    <div title={`完成任务 ${t.completed_tasks}`} style={{ width: 10, height: `${(t.completed_tasks / max) * 56 + 2}px`, background: '#91caff', borderRadius: 2 }} />
+                  </div>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>{t.date.slice(5)}</Typography.Text>
+                </div>
+              )
+            })}
+          </div>
+          <Space size={16} style={{ marginTop: 4 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}><span style={{ color: '#1677ff' }}>■</span> 出报单</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}><span style={{ color: '#91caff' }}>■</span> 完成任务</Typography.Text>
+          </Space>
+        </Card>
+      )}
 
       <Row gutter={16}>
         <Col xs={24} md={8}>
