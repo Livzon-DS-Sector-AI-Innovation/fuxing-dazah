@@ -259,6 +259,17 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED", False,
         "危化品库存直读重算的风险标记/说明回写（legacy 回写不受影响）",
     ),
+    ConfigItem(
+        "SAFETY_CHEMICAL_INVENTORY_SOURCE", "direct_gate", "str",
+        "bitable",
+        "危化品库存数据源（bitable=总表直读（默认，行为不变）| sheet=飞书《危险品日报表》"
+        "电子表格直读；回滚=拨回 bitable）",
+    ),
+    ConfigItem(
+        "SAFETY_CHEMICAL_INVENTORY_SHEET_REVISION", "misc", "str", "",
+        "《危险品日报表》revision 状态（运行时记录：{revision}|{最后变化日}；"
+        "19:30 日报判「数据未更新」用，勿手改）",
+    ),
     _gate(
         "SAFETY_KEY_RISK_OP_DIRECT_ENABLED", False,
         "关键风险作业直读总开关（台账/统计/详情/导出与 Agent 查询）",

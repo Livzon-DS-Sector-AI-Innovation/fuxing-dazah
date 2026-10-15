@@ -18,6 +18,7 @@ from app.modules.safety.chemical_inventory.snapshots import (
     KIND_WEEKLY,
     prev_snapshot_date,
     snapshot_rows_for_date,
+    snapshot_rows_source,
     take_snapshot,
 )
 from app.modules.safety.feishu.notification import send_group_card
@@ -40,20 +41,34 @@ async def build_weekly_report(
     snapshot_date: date,
     *,
     current_rows: list[Any] | None = None,
+    source: str | None = None,
 ) -> dict[str, Any]:
     """环比上一份快照，产出部门/物料/预警变化 + Top 增减。
 
     current_rows：直读编排注入的当前行（InventoryView，字段与 ORM 同名）；
     None（默认）时快照自取 ORM 镜像——legacy 行为零变化。
+    source：快照数据源标记（sheet 编排传 "sheet"；D8 环比断点——上一份快照
+    源不一致时跳过环比段，防止部门枚举全体更替产生整周全量误报）。
     """
-    cur_count = await take_snapshot(db, snapshot_date, kind=KIND_WEEKLY, records=current_rows)
+    cur_count = await take_snapshot(
+        db, snapshot_date, kind=KIND_WEEKLY, records=current_rows, source=source,
+    )
     prev_date = await prev_snapshot_date(db, snapshot_date, kind=KIND_WEEKLY)
     if prev_date is None:
         return {"snapshot_date": snapshot_date.isoformat(), "records": cur_count, "first": True}
 
-    prev_rows = {
-        _key(r): r for r in await snapshot_rows_for_date(db, prev_date, kind=KIND_WEEKLY)
-    }
+    prev_raw = await snapshot_rows_for_date(db, prev_date, kind=KIND_WEEKLY)
+    prev_source = snapshot_rows_source(prev_raw)
+    if prev_source != source:
+        # D8 对称断点：切换首日与回滚日都跳过环比（部门枚举口径不可比）
+        return {
+            "snapshot_date": snapshot_date.isoformat(),
+            "records": cur_count,
+            "first": True,
+            "source_switch": True,
+        }
+
+    prev_rows = {_key(r): r for r in prev_raw}
     cur_rows = await snapshot_rows_for_date(db, snapshot_date, kind=KIND_WEEKLY)
 
     dept_delta: dict[str, Decimal] = {}
@@ -135,7 +150,10 @@ def _format_report(report: dict[str, Any], ai_summary: str) -> str:
     """周报 Markdown。"""
     lines = [f"📅 {report.get('snapshot_date')}"]
     if report.get("first"):
-        lines.append("首次快照，暂无环比；下周起输出趋势。")
+        if report.get("source_switch"):
+            lines.append("数据源口径切换（危化品库存改读《危险品日报表》），本周不做环比；下周起恢复趋势输出。")
+        else:
+            lines.append("首次快照，暂无环比；下周起输出趋势。")
         return "\n".join(lines)
     lines.append(f"环比 {report.get('prev_date')}：")
     lines.append("")
@@ -174,8 +192,9 @@ async def run_weekly_job(chat_id: str | None = None) -> dict[str, Any]:
     from app.core.database import async_session_factory
 
     today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间今天
-    # 直读模式：当前行来自 Bitable 直读（镜像停更，拍 ORM 会拍到旧数据）
+    # 直读模式：当前行来自直读（镜像停更，拍 ORM 会拍到旧数据）
     current_rows: list[Any] | None = None
+    source: str | None = None
     from app.modules.safety.service.chemical_inventory_direct import config
 
     if config.direct_enabled():
@@ -184,8 +203,10 @@ async def run_weekly_job(chat_id: str | None = None) -> dict[str, Any]:
         )
 
         current_rows = await open_reader().fetch_all(strict=True)
+        if config.sheet_source_enabled():
+            source = "sheet"
     async with async_session_factory() as db:
-        report = await build_weekly_report(db, today, current_rows=current_rows)
+        report = await build_weekly_report(db, today, current_rows=current_rows, source=source)
         ai_summary = await generate_ai_summary(report)
         report["ai_summary"] = ai_summary
         await db.commit()

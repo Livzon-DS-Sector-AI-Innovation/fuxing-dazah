@@ -28,9 +28,9 @@ class TestRegistry:
         # 新增/删除键时同步更新此数（防 dict 推导静默覆盖与意外丢键）
         # 2026-10-14 +2：消防/中控窗口缓存 TTL 键注册
         # 2026-10-15 +2：法规收录 secret 与 AI token 预算键；-2：爬虫退役废弃
-        # INTERVAL_HOURS/WEBHOOK_SECRET
-        assert len(registry.REGISTRY) == 89
-        assert len(registry.iter_items()) == 89
+        # INTERVAL_HOURS/WEBHOOK_SECRET；+2：危化品库存 sheet 源（SOURCE 开关 + revision 状态）
+        assert len(registry.REGISTRY) == 91
+        assert len(registry.iter_items()) == 91
 
     def test_unknown_key_raises(self):
         with pytest.raises(ValueError, match="未知配置键"):

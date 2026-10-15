@@ -66,10 +66,10 @@ async def create_inventory_record(
     # 直读模式：补录只写平台库镜像（直读列表不可见），明确拒绝防止写进死数据（cert renew 口径）
     if config.direct_enabled():
         from app.modules.safety.service.chemical_inventory_direct.config import (
-            RECEIPT_DIRECT_DISABLED_MESSAGE,
+            receipt_direct_disabled_message,
         )
 
-        return ApiResponse(code=400, message=RECEIPT_DIRECT_DISABLED_MESSAGE)
+        return ApiResponse(code=400, message=receipt_direct_disabled_message())
 
     service = ChemicalInventoryService(db)
     item = await service.create_record(data.model_dump(exclude_none=True))

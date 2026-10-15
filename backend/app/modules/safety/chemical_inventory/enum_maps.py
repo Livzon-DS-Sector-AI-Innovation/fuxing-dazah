@@ -51,6 +51,17 @@ _DEPT_LABEL_TO_ENUM: dict[str, str] = {
     "提炼半合成工程中心": "semi_synth",
     "提炼技术精进中心": "tech_refine",
     "其他": "other",
+    # ── 《危险品日报表》子表=产品线/单元口径（sheet 源，2026-10-15 全拼音拍板；
+    #    与上方职能部门枚举并存，标签=子表名，additive 不动旧值）──
+    "替考": "tikao",
+    "氟雷": "fulei",
+    "米尔贝": "mierbei",
+    "溶媒回收": "rongmei_huishou",
+    "达托": "datuo",
+    "达巴": "daba",
+    "艾默": "aimo",
+    "雷帕": "leipa",
+    "危废库": "weifeiku",
 }
 _DEPT_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _DEPT_LABEL_TO_ENUM.items()}
 

@@ -16,7 +16,11 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from app.modules.safety.chemical_inventory.enum_maps import _text
+from app.modules.safety.feishu.office_client import build_office_client
 from app.modules.safety.service.bitable_direct import reader as bd_reader
+from app.modules.safety.service.chemical_inventory_direct.sheet_reader import (
+    SheetsInventoryReader,
+)
 from app.modules.safety.service.chemical_inventory_direct.views import (
     InventoryView,
     sort_like_inventory,
@@ -26,6 +30,7 @@ from app.modules.safety.service.chemical_inventory_direct.views import (
 __all__ = [
     "InventoryRecordsReader",
     "InventoryBitableReader",
+    "SheetsInventoryReader",
     "open_reader",
 ]
 
@@ -74,28 +79,49 @@ class InventoryBitableReader:
 
 
 _shared_reader: InventoryRecordsReader | None = None
+_shared_reader_source: str | None = None
 
 
 def open_reader(
     *,
     page_size: int = bd_reader.DEFAULT_PAGE_SIZE,
 ) -> InventoryRecordsReader:
-    """真实组装（进程内单例）：配置中心解析连接 + TTL 缓存层。
+    """真实组装（按源开关分支 + 进程内单例）：配置中心解析连接 + TTL 缓存层。
 
-    单例使 TTL 缓存跨调用方生效（查询/统计/驾驶舱共享同一缓存窗口；
-    日报编排的 strict 拉取恒绕过）。registry 域 key 为小写
-    "chemical_inventory"。未配置/停用抛 BitableConfigError。
+    SAFETY_CHEMICAL_INVENTORY_SOURCE=bitable（默认）→ InventoryBitableReader
+    （行为与改造前逐项一致）；=sheet → SheetsInventoryReader（电子表格
+    《危险品日报表》，token 经配置中心 chemical_inventory/source_sheet；
+    page_size 参数仅 bitable 分支消费，sheet 分支整表单次 range 读）。
+    单例按 source 取值缓存——开关切换后自动重建（回滚无需重启进程），
+    TTL 缓存跨调用方生效（查询/统计/驾驶舱共享同一缓存窗口；日报编排的
+    strict 拉取恒绕过）。registry 域 key 为小写 "chemical_inventory"。
+    未配置/停用抛 BitableConfigError。
     """
-    global _shared_reader
-    if _shared_reader is None:
-        client = bd_reader.resolve_client("chemical_inventory", "inventory")
-        inner = InventoryBitableReader(client, page_size=page_size)
-        from app.modules.safety.service.chemical_inventory_direct.cache import (
-            CachedInventoryReader,
-        )
-        from app.modules.safety.service.chemical_inventory_direct.config import (
-            cache_ttl_seconds,
-        )
+    global _shared_reader, _shared_reader_source
+    from app.modules.safety.bitable_config.store import store as bc_store
+    from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+    from app.modules.safety.service.chemical_inventory_direct.cache import (
+        CachedInventoryReader,
+    )
+    from app.modules.safety.service.chemical_inventory_direct.config import (
+        cache_ttl_seconds,
+        current_source,
+    )
 
+    source = current_source()
+    if _shared_reader is None or _shared_reader_source != source:
+        if source == "sheet":
+            conn = bc_store.get_connection("chemical_inventory", "source_sheet")
+            if conn is None or not conn.enabled:
+                raise BitableConfigError(
+                    "电子表格源连接未配置或已停用: chemical_inventory/source_sheet"
+                )
+            inner: InventoryRecordsReader = SheetsInventoryReader(
+                build_office_client(), conn.app_token
+            )
+        else:
+            client = bd_reader.resolve_client("chemical_inventory", "inventory")
+            inner = InventoryBitableReader(client, page_size=page_size)
         _shared_reader = CachedInventoryReader(inner, ttl_seconds=cache_ttl_seconds())
+        _shared_reader_source = source
     return _shared_reader

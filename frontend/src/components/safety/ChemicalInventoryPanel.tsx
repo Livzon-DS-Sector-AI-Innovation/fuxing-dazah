@@ -3,6 +3,8 @@
 // 危化品库存管理 Panel（ChemicalInventoryPanel）— 对标 CertWarningPanel 形态
 // StatCard 统计行（stats 端点）+ SectionCard 台账（筛选 + 表格 + 分页）
 // 风险标记/说明由每日快照任务与 WS 同步链路自动回填（手动扫描入口已按 3.0 只读口径退役）。
+// 2026-10-15 sheet 源口径：库存改读飞书《危险品日报表》，本就无补录入口
+// （纯只读），后端补录端点在直读模式下拒绝并指向源表。
 
 import { useState } from 'react'
 import { Button, Input, Select, Table, Tag, Tooltip } from 'antd'

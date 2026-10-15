@@ -28,6 +28,16 @@ class ChemicalDepartment(str, Enum):  # noqa: UP042
     SEMI_SYNTHESIS = "semi_synth"
     TECH_REFINEMENT = "tech_refine"
     OTHER = "other"
+    # 《危险品日报表》子表=产品线/单元口径（sheet 源 2026-10-15 全拼音拍板，additive）
+    TIKAO = "tikao"
+    FULEI = "fulei"
+    MIERBEI = "mierbei"
+    RONGMEI_HUISHOU = "rongmei_huishou"
+    DATUO = "datuo"
+    DABA = "daba"
+    AIMO = "aimo"
+    LEIPA = "leipa"
+    WEIFEIKU = "weifeiku"
 
 
 CHEMICAL_DEPARTMENT_OPTIONS = [
@@ -44,6 +54,15 @@ CHEMICAL_DEPARTMENT_OPTIONS = [
     {"value": ChemicalDepartment.SEMI_SYNTHESIS, "label": "提炼半合成工程中心"},
     {"value": ChemicalDepartment.TECH_REFINEMENT, "label": "提炼技术精进中心"},
     {"value": ChemicalDepartment.OTHER, "label": "其他"},
+    {"value": ChemicalDepartment.TIKAO, "label": "替考"},
+    {"value": ChemicalDepartment.FULEI, "label": "氟雷"},
+    {"value": ChemicalDepartment.MIERBEI, "label": "米尔贝"},
+    {"value": ChemicalDepartment.RONGMEI_HUISHOU, "label": "溶媒回收"},
+    {"value": ChemicalDepartment.DATUO, "label": "达托"},
+    {"value": ChemicalDepartment.DABA, "label": "达巴"},
+    {"value": ChemicalDepartment.AIMO, "label": "艾默"},
+    {"value": ChemicalDepartment.LEIPA, "label": "雷帕"},
+    {"value": ChemicalDepartment.WEIFEIKU, "label": "危废库"},
 ]
 
 
@@ -171,6 +190,8 @@ class ChemicalInventoryRecordResponse(BaseModel):
     quantity: float | None = None
     unit: str | None = None
     total_quantity_t: float | None = None
+    # 一昼夜使用量/kg（sheet 源新增列，D5：不入 ORM/Bitable；bitable 源恒 None）
+    daily_usage_kg: float | None = None
     max_limit: float | None = None
     max_limit_unit: str | None = None
     hazard_classes: list[str] | None = None

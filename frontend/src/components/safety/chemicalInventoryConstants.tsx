@@ -8,6 +8,8 @@ import { UI, CARD_STYLE } from './emergencyDrillConstants'
 export { T, UI, CARD_STYLE }
 
 // ── 部门（英文枚举 → 中文标签）──
+// 后端权威清单：app/modules/safety/schemas/chemical_inventory.py（CHEMICAL_DEPARTMENT_OPTIONS）
+// 2026-10-15 起《危险品日报表》子表=产品线口径新枚举与旧职能部门枚举并存（全拼音 slug）
 export const CHEMICAL_DEPARTMENT_LABELS: Record<string, string> = {
   warehouse: '仓储部',
   extraction_1: '提炼一部',
@@ -22,6 +24,16 @@ export const CHEMICAL_DEPARTMENT_LABELS: Record<string, string> = {
   semi_synth: '提炼半合成工程中心',
   tech_refine: '提炼技术精进中心',
   other: '其他',
+  // 《危险品日报表》子表（sheet 源，标签=子表名）
+  tikao: '替考',
+  fulei: '氟雷',
+  mierbei: '米尔贝',
+  rongmei_huishou: '溶媒回收',
+  datuo: '达托',
+  daba: '达巴',
+  aimo: '艾默',
+  leipa: '雷帕',
+  weifeiku: '危废库',
 }
 
 export const CHEMICAL_DEPARTMENT_FILTER = [

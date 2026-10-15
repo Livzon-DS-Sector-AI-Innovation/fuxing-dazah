@@ -184,4 +184,8 @@ class ChemicalInventorySnapshot(BaseModel):
         String(16), nullable=False, default="normal", server_default="normal",
         comment="风险标记(正常/预警)"
     )
+    # 快照数据源标记（D8 环比断点判定：'sheet'=《危险品日报表》直读；NULL=legacy/总表口径）
+    source: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="快照数据源(bitable/sheet；NULL=legacy)"
+    )
 

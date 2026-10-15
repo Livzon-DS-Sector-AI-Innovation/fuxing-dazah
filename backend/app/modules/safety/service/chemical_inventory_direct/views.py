@@ -51,6 +51,8 @@ class InventoryView:
     quantity: Decimal | None = None
     unit: str | None = None
     total_quantity_t: Decimal | None = None
+    # 一昼夜使用量/kg（sheet 源新增列，D5：additive 不入 ORM/Bitable，旧 reader 恒 None）
+    daily_usage_kg: Decimal | None = None
     max_limit: Decimal | None = None
     max_limit_unit: str | None = None
     # 默认 None 对齐 ORM（NULL）：直读列表 API 对「危险性为空」行返回 null 与镜像一致

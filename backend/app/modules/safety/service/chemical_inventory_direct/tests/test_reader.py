@@ -116,3 +116,119 @@ class TestStrictModes:
         """查询/统计容错：首页失败返回空（不上抛）。"""
         reader = _reader([[]], error=BitableQueryError("boom"))
         assert await reader.fetch_all(strict=False) == []
+
+
+class TestOpenReaderSourceSwitch:
+    """open_reader 按 SAFETY_CHEMICAL_INVENTORY_SOURCE 分支（P1-T2）。
+
+    组装件全部 monkeypatch（resolve_client / build_office_client /
+    bitable_config store），零真机依赖；单例按 source 取值缓存，切换重建。
+    """
+
+    def _reset_singleton(self) -> None:
+        import app.modules.safety.service.chemical_inventory_direct.reader as rd
+
+        rd._shared_reader = None
+        rd._shared_reader_source = None
+
+    def test_bitable_source_returns_bitable_reader(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import app.modules.safety.service.chemical_inventory_direct.reader as rd
+
+        self._reset_singleton()
+        monkeypatch.delenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", raising=False)
+        built: dict[str, Any] = {}
+
+        def _fake_resolve(domain: str, kind: str, **kw: Any) -> Any:
+            built["bitable"] = (domain, kind)
+            return FakePageClient([[]])
+
+        monkeypatch.setattr(rd.bd_reader, "resolve_client", _fake_resolve)
+        reader = rd.open_reader()
+        assert built["bitable"] == ("chemical_inventory", "inventory")
+        assert isinstance(reader._inner, InventoryBitableReader)
+        self._reset_singleton()
+
+    def test_sheet_source_returns_sheets_reader(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import app.modules.safety.service.chemical_inventory_direct.reader as rd
+        from app.modules.safety.service.chemical_inventory_direct.sheet_reader import (
+            SheetsInventoryReader,
+        )
+
+        self._reset_singleton()
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
+        built: dict[str, Any] = {}
+
+        class _FakeOffice:
+            pass
+
+        def _fake_build() -> Any:
+            built["office"] = True
+            return _FakeOffice()
+
+        def _fake_conn(domain: str, kind: str) -> Any:
+            from types import SimpleNamespace
+
+            built["conn"] = (domain, kind)
+            return SimpleNamespace(app_token="H0YWsAf52hBAIDtmJlxcqThZn2c", enabled=True)
+
+        monkeypatch.setattr(rd, "build_office_client", _fake_build)
+        monkeypatch.setattr(
+            "app.modules.safety.bitable_config.store.store.get_connection", _fake_conn
+        )
+        reader = rd.open_reader()
+        assert built["conn"] == ("chemical_inventory", "source_sheet")
+        assert isinstance(reader._inner, SheetsInventoryReader)
+        self._reset_singleton()
+
+    def test_sheet_source_unconfigured_raises(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import app.modules.safety.service.chemical_inventory_direct.reader as rd
+        from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+
+        self._reset_singleton()
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
+        monkeypatch.setattr(
+            "app.modules.safety.bitable_config.store.store.get_connection",
+            lambda domain, kind: None,
+        )
+        with pytest.raises(BitableConfigError):
+            rd.open_reader()
+        self._reset_singleton()
+
+    def test_singleton_rebuilds_on_source_change(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import app.modules.safety.service.chemical_inventory_direct.reader as rd
+        from app.modules.safety.service.chemical_inventory_direct.sheet_reader import (
+            SheetsInventoryReader,
+        )
+
+        self._reset_singleton()
+        monkeypatch.setattr(
+            rd.bd_reader, "resolve_client", lambda *a, **kw: FakePageClient([[]])
+        )
+
+        def _fake_conn(domain: str, kind: str) -> Any:
+            from types import SimpleNamespace
+
+            return SimpleNamespace(app_token="tok", enabled=True)
+
+        monkeypatch.setattr(
+            "app.modules.safety.bitable_config.store.store.get_connection", _fake_conn
+        )
+        monkeypatch.setattr(rd, "build_office_client", lambda: object())
+
+        monkeypatch.delenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", raising=False)
+        first = rd.open_reader()
+        assert isinstance(first._inner, InventoryBitableReader)
+
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
+        second = rd.open_reader()
+        assert second is not first
+        assert isinstance(second._inner, SheetsInventoryReader)
+        self._reset_singleton()

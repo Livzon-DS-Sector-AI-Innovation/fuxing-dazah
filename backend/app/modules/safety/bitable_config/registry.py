@@ -389,11 +389,11 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
-    # ── chemical_inventory 危化品库存（总表镜像 + 风险回填）────────
+    # ── chemical_inventory 危化品库存（总表镜像 + 风险回填 + sheet 源）────────
     DomainInfo(
         key="chemical_inventory",
         label="危化品库存",
-        purpose="库存总表镜像 + 风险标记/风险说明系统回填",
+        purpose="库存总表镜像 + 风险标记/风险说明系统回填 + 《危险品日报表》sheet 源",
         subscribe="drive",
         kinds=(
             KindInfo(
@@ -414,6 +414,11 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                            "菌种中心": "strain", "QC": "qc", "环保": "env",
                            "精制": "purification", "提炼半合成工程中心": "semi_synth",
                            "提炼技术精进中心": "tech_refine", "其他": "other",
+                           # 《危险品日报表》子表=产品线口径（sheet 源 2026-10-15 全拼音拍板）
+                           "替考": "tikao", "氟雷": "fulei", "米尔贝": "mierbei",
+                           "溶媒回收": "rongmei_huishou", "达托": "datuo",
+                           "达巴": "daba", "艾默": "aimo", "雷帕": "leipa",
+                           "危废库": "weifeiku",
                        }),
                     _m("存放部位", "storage_location", "text"),
                     _m("物料名称", "material_name", "text"),
@@ -435,6 +440,17 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                     _m("备注", "remark", "text"),
                     _m("风险标记", "risk_flag", "enum", value_map={"正常": "normal", "预警": "warn"}),
                     _m("风险说明", "risk_note", "text"),
+                ),
+            ),
+            KindInfo(
+                kind="source_sheet",
+                label="危险品日报表（电子表格源）",
+                default_connection=DefaultConnection(
+                    app_token="H0YWsAf52hBAIDtmJlxcqThZn2c",
+                    table_id="",
+                    note="《危险品日报表》电子表格（13 子表按产品线/单元；"
+                         "wiki https://j0eukrlohu.feishu.cn/wiki/LfYZwcAVOiOCiqkRg8BcKL47nCc；"
+                         "SAFETY_CHEMICAL_INVENTORY_SOURCE=sheet 时启用）",
                 ),
             ),
         ),

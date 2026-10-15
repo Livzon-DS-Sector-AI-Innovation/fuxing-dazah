@@ -14,6 +14,51 @@ from app.modules.safety.feishu.office_client._base import (
 class _SheetOfficeMixin:
     """sheet 读写：读 range / 创建表格 / 写 range。"""
 
+    async def read_sheet_metainfo(self, spreadsheet_token: str) -> OfficeResult:
+        """读取电子表格元信息（sheets/v2 metainfo：revision + 子表清单）。
+
+        data 为精简结构：{"spreadsheet_token", "revision", "title",
+        "sheets": [{"sheetId", "title", "rowCount", "columnCount"}]}。
+        注意 rowCount 是网格行数（实测空表也 ~200），不可作空表判定依据。
+        """
+        try:
+            url = (
+                f"{self._base_url}/sheets/v2/spreadsheets/"
+                f"{spreadsheet_token}/metainfo"
+            )
+            resp = await self._get(url, timeout=30)
+            data = resp.json()
+
+            if data.get("code") != 0:
+                return OfficeResult.failure(
+                    f"读取电子表格元信息失败：code={data.get('code')} "
+                    f"msg={data.get('msg')}"
+                )
+
+            payload = data.get("data") or {}
+            props = payload.get("properties") or {}
+            sheets = [
+                {
+                    "sheetId": s.get("sheetId"),
+                    "title": s.get("title"),
+                    "rowCount": s.get("rowCount"),
+                    "columnCount": s.get("columnCount"),
+                }
+                for s in (payload.get("sheets") or [])
+            ]
+            return OfficeResult.data(
+                {
+                    "spreadsheet_token": payload.get("spreadsheetToken")
+                    or spreadsheet_token,
+                    "revision": props.get("revision"),
+                    "title": props.get("title"),
+                    "sheets": sheets,
+                },
+                meta={"revision": props.get("revision"), "sheet_count": len(sheets)},
+            )
+        except Exception as exc:
+            return self._failure("读取电子表格元信息", exc)
+
     async def read_sheet(
         self,
         spreadsheet_token: str,

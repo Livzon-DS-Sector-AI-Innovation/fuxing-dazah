@@ -16,6 +16,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED",
         "SAFETY_CHEMICAL_INVENTORY_EVENT_SYNC_ENABLED",
         "SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED",
+        "SAFETY_CHEMICAL_INVENTORY_SOURCE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -26,6 +27,8 @@ class TestDefaults:
         assert config.event_sync_enabled() is False
         assert config.writeback_risk_enabled() is False
         assert config.legacy_event_sync_active() is True  # 全关 = 改造前行为
+        assert config.sheet_source_enabled() is False
+        assert config.current_source() == "bitable"
 
     def test_direct_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED", "true")
@@ -34,6 +37,33 @@ class TestDefaults:
     def test_writeback_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED", "true")
         assert config.writeback_risk_enabled() is True
+
+
+class TestSheetSource:
+    """SAFETY_CHEMICAL_INVENTORY_SOURCE（D1：默认 bitable，回滚=拨回）。"""
+
+    def test_sheet_source_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
+        assert config.sheet_source_enabled() is True
+        assert config.current_source() == "sheet"
+
+    def test_sheet_source_implies_direct(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """sheet 模式隐含 direct 语义：DIRECT 关也能点亮全部直读读路径（D1）。"""
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
+        assert config.direct_enabled() is True
+
+    def test_unknown_value_falls_back_bitable(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """拼错的值宁可回退 bitable（安全默认），不当成 sheet。"""
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "xxx")
+        assert config.sheet_source_enabled() is False
+        assert config.current_source() == "bitable"
+
+    def test_explicit_bitable_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "bitable")
+        assert config.sheet_source_enabled() is False
+        assert config.direct_enabled() is False
 
 
 class TestLegacyEventSyncActive:

@@ -138,8 +138,8 @@ class FakeSessionFactory:
         return FakeSession()
 
 
-async def _fake_prev(_db: Any, _today: date) -> list[Any]:
-    return []
+async def _fake_prev_with_source(_db: Any, _today: date) -> tuple[list[Any], str | None]:
+    return [], None
 
 
 async def _noop_take(_db: Any, _d: date, *,
@@ -173,7 +173,7 @@ class TestDailyOrchestration:
             return n
 
         monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
-        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot", _fake_prev)
+        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source)
         monkeypatch.setattr(daily_job, "take_snapshot", _spy_take)
 
         result = await daily_job.run_scheduled_daily_update()
@@ -200,7 +200,7 @@ class TestDailyOrchestration:
         _seed_direct(monkeypatch, reader)
         _seed_files(monkeypatch)
         monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
-        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot", _fake_prev)
+        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source)
         monkeypatch.setattr(daily_job, "take_snapshot", _noop_take)
 
         result = await daily_job.run_scheduled_daily_update()
@@ -226,7 +226,7 @@ class TestDailyOrchestration:
             return 0
 
         monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
-        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot", _fake_prev)
+        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source)
         monkeypatch.setattr(daily_job, "take_snapshot", _spy_take)
 
         result = await daily_job.run_scheduled_daily_update()
@@ -267,7 +267,8 @@ class TestWeeklyOrchestration:
         captured: dict[str, Any] = {}
 
         async def _spy_build(db: Any, d: date, *,
-                             current_rows: list[Any] | None = None) -> dict[str, Any]:
+                             current_rows: list[Any] | None = None,
+                             source: str | None = None) -> dict[str, Any]:
             captured["current_rows"] = current_rows
             return {"snapshot_date": d.isoformat(), "first": True}
 
@@ -299,7 +300,8 @@ class TestWeeklyOrchestration:
         captured: dict[str, Any] = {}
 
         async def _spy_build(db: Any, d: date, *,
-                             current_rows: list[Any] | None = None) -> dict[str, Any]:
+                             current_rows: list[Any] | None = None,
+                             source: str | None = None) -> dict[str, Any]:
             captured["current_rows"] = current_rows
             return {"snapshot_date": d.isoformat(), "first": True}
 

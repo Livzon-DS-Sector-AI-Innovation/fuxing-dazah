@@ -1,4 +1,4 @@
-"""chemical_inventory 直读改造开关与闸门（全部默认关闭）。
+r"""chemical_inventory 直读改造开关与闸门（全部默认关闭）。
 
 命名与 cert/central_alarm 对齐，走 SAFETY_CHEMICAL_INVENTORY_* 环境变量：
 
@@ -7,21 +7,43 @@
 | SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED | false | 日报/周报编排与查询路径走直读 |
 | SAFETY_CHEMICAL_INVENTORY_EVENT_SYNC_ENABLED | false | Bitable 事件 -> 平台库镜像 |
 | SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED | false | 直读重算的风险列回写 |
+| SAFETY_CHEMICAL_INVENTORY_SOURCE | bitable | 库存数据源：bitable 总表直读 \| sheet《危险品日报表》直读 |
 
 本域是「写完再读」回写域：WRITEBACK_RISK 只罩直读路径的重算回写；
 legacy 模式的既有回写行为不受影响。全默认关 = 与改造前行为逐项一致。
+
+sheet 源（2026-10-15）：SOURCE=sheet 时隐含 direct 语义——所有读路径走
+open_reader()（换 SheetsInventoryReader），回滚 = 拨回 bitable，一行不改。
 """
 
 from __future__ import annotations
 
+from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.service.bitable_direct import gates
 
 _DOMAIN = gates.DOMAIN_CHEMICAL_INVENTORY
 
+SOURCE_KEY = "SAFETY_CHEMICAL_INVENTORY_SOURCE"
+
+
+def current_source() -> str:
+    """库存数据源取值：'bitable'（默认）| 'sheet'。
+
+    未知/拼错的值一律按 bitable（安全默认，宁可回退旧行为）。
+    """
+    raw = _app_config_store.get_raw(SOURCE_KEY)
+    value = (raw or "").strip().lower()
+    return "sheet" if value == "sheet" else "bitable"
+
+
+def sheet_source_enabled() -> bool:
+    """《危险品日报表》电子表格源是否生效（默认关）。"""
+    return current_source() == "sheet"
+
 
 def direct_enabled() -> bool:
-    """直读总开关（默认关闭）。"""
-    return gates.direct_enabled(_DOMAIN)
+    """直读总开关（sheet 源隐含 direct 语义，D1：读路径统一走 open_reader()）。"""
+    return gates.direct_enabled(_DOMAIN) or sheet_source_enabled()
 
 
 def event_sync_enabled() -> bool:
@@ -30,8 +52,12 @@ def event_sync_enabled() -> bool:
 
 
 def writeback_risk_enabled() -> bool:
-    """直读重算的风险列回写（默认关闭；legacy 回写不受影响）。"""
-    return gates.writeback_enabled(_DOMAIN, "RISK")
+    """直读重算的风险列回写（默认关闭；legacy 回写不受影响）。
+
+    sheet 源强制视为关（设计 §2：风险标记/说明不回写，值只在内存与快照——
+    Bitable 总表在 sheet 模式下冻结停写）。
+    """
+    return not sheet_source_enabled() and gates.writeback_enabled(_DOMAIN, "RISK")
 
 
 def legacy_event_sync_active() -> bool:
@@ -44,6 +70,13 @@ def legacy_event_sync_active() -> bool:
 RECEIPT_DIRECT_DISABLED_MESSAGE = (
     "直读模式下手工补录不可用，请在飞书表格或当日 Excel 日报中更新库存信息"
 )
+
+
+def receipt_direct_disabled_message() -> str:
+    """补录拒绝文案（D7）：sheet 源指向《危险品日报表》，bitable 直读保留原文案。"""
+    if sheet_source_enabled():
+        return "直读模式下手工补录不可用，请在飞书《危险品日报表》对应子表更新库存"
+    return RECEIPT_DIRECT_DISABLED_MESSAGE
 
 
 def cache_ttl_seconds() -> int:
