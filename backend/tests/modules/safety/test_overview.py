@@ -102,6 +102,9 @@ def _stub_collectors() -> dict[str, Any]:
     async def ehs() -> dict[str, Any]:
         return {"in_progress": 4}
 
+    async def knowledge_base_s2() -> dict[str, str]:
+        return {"status": "ok", "metric": "采集正常 · 近7日+3"}
+
     async def digest() -> dict[str, Any]:
         return {
             "count": 1,
@@ -130,6 +133,7 @@ def _stub_collectors() -> dict[str, Any]:
         "chemicals": chemicals,
         "key_risk_ops": key_risk_ops,
         "ehs": ehs,
+        "knowledge_base_s2": knowledge_base_s2,
         "digest": digest,
         "supervision": supervision,
     }
@@ -157,7 +161,7 @@ class TestBuildOverview:
         assert wall["cert-warnings"]["status"] == "warn"
         assert wall["chemicals"]["status"] == "warn"
         # 运行中绿卡与灰卡
-        assert wall["knowledge-base"]["metric"] == "运行中"
+        assert wall["knowledge-base"]["metric"] == "采集正常 · 近7日+3"
         # 四新域卡（四期 1-B）：未接入是常态（registry 连接位空）→ inactive·未接入
         assert wall["goals"] == {"key": "goals", "status": "inactive", "metric": "未接入"}
         assert wall["training-behavior"]["metric"] == "未接入"

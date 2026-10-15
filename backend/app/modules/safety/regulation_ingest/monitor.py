@@ -23,6 +23,11 @@ from app.modules.safety.regulation_ingest.ragplus_crawler_client import (
 
 logger = logging.getLogger(__name__)
 
+# S2 卡（驾驶舱健康墙 knowledge-base）轻量查询的进程内 TTL 缓存——
+# 驾驶舱刷新频繁，ragplus 网络调用 + 留痕聚合不能每次都打
+_S2_CACHE_TTL_SECONDS = 60.0
+_s2_cache: dict[str, Any] = {"expires_at": 0.0, "value": None}
+
 # 聚合窗口（stats 近7日 / funnel 近30日；待复核与原文待补为累计存量）
 _STATS_WINDOW_DAYS = 7
 _FUNNEL_WINDOW_DAYS = 30
@@ -263,6 +268,49 @@ async def build_monitor_envelope(
         },
         "errors": errors,
     }
+
+
+async def build_s2_metric(session: AsyncSession) -> dict[str, str]:
+    """驾驶舱健康墙 S2 卡（knowledge-base）轻量指标。
+
+    口径：ragplus 未对接（404）=保持「知识库运行中」；不可达/有停摆源=
+    warn 降级摘要；正常=「采集正常·近7日+N」。60s 进程内 TTL 缓存，
+    避免驾驶舱高频刷新反复打 ragplus 与留痕聚合。
+    """
+    import time as _time
+
+    now = _time.monotonic()
+    cached = _s2_cache["value"]
+    if cached is not None and now < float(_s2_cache["expires_at"]):
+        return dict(cached)
+
+    status = "ok"
+    metric = "知识库运行中"
+    try:
+        client = get_ragplus_crawler_client()
+        rag_status = await client.get_crawler_status()
+        sources = rag_status.get("sources") or []
+        down = [
+            s for s in sources
+            if str(s.get("status", "")).lower() in ("down", "suspect_rebuild")
+        ]
+        if down:
+            status = "warn"
+            metric = f"采集降级 · {len(down)} 源停摆"
+        else:
+            recent = await _load_recent_runs(session, _STATS_WINDOW_DAYS)
+            promoted_7d = sum(r.promoted_count for r in recent)
+            metric = f"采集正常 · 近7日+{promoted_7d}"
+    except RagplusCrawlerNotConnectedError:
+        pass  # 未对接：保持知识库自身运行中口径
+    except Exception:  # noqa: BLE001 — S2 卡不得因 ragplus 故障炸驾驶舱
+        status = "warn"
+        metric = "采集降级 · ragplus 不可达"
+
+    value = {"status": status, "metric": metric}
+    _s2_cache["value"] = value
+    _s2_cache["expires_at"] = now + _S2_CACHE_TTL_SECONDS
+    return dict(value)
 
 
 async def build_run_detail(

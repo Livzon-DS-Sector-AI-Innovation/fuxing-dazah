@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.feishu.daily_digest import load_daily_digest_cells
+from app.modules.safety.regulation_ingest.monitor import build_s2_metric
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.service import (
     CertWarningService,
@@ -355,9 +356,16 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
     chemicals = parts.get("chemicals")
     key_risk_ops = parts.get("key_risk_ops")
     ehs = parts.get("ehs")
+    kb_s2 = parts.get("knowledge_base_s2")
 
     cards: list[dict[str, Any]] = [
-        {"key": "knowledge-base", "status": "ok", "metric": "运行中"},
+        {
+            # S2 法规标准与规程：metric=采集状态摘要（ragplus 契约③+收录留痕，
+            # 未对接保持运行中口径；降级变 warn）
+            "key": "knowledge-base",
+            "status": (kb_s2 or {}).get("status", "ok") if kb_s2 else "ok",
+            "metric": (kb_s2 or {}).get("metric") if kb_s2 else "运行中",
+        },
         {"key": "risk-grading", "status": "ok", "metric": "运行中"},
         {
             "key": "hazard-ledger",
@@ -484,6 +492,8 @@ async def build_overview(
         "training-behavior": lambda: collect_domain_health("training-behavior"),
         "facilities": lambda: collect_domain_health("facilities"),
         "incidents": lambda: collect_domain_health("incidents"),
+        # S2 卡采集状态摘要（60s TTL 缓存，ragplus 故障只降级不炸驾驶舱）
+        "knowledge_base_s2": _db_collector(build_s2_metric),
         "digest": lambda: collect_digest(digest_store),
     }
     merged = {**default_collectors, **(collectors or {})}

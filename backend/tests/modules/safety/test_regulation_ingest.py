@@ -711,3 +711,57 @@ async def test_monitor_run_detail_404(monitor_client, monkeypatch):
     _use_status(monkeypatch, _StatusClient())
     resp = await monitor_client.get("/api/v1/safety/regulation-monitor/runs/nope")
     assert resp.status_code == 404
+
+
+# ── S2 卡轻量指标（Ticket 07） ──────────────────────────────
+
+
+@pytest.fixture(autouse=False)
+def s2_cache_reset():
+    ingest_monitor._s2_cache["value"] = None
+    ingest_monitor._s2_cache["expires_at"] = 0.0
+    yield
+    ingest_monitor._s2_cache["value"] = None
+    ingest_monitor._s2_cache["expires_at"] = 0.0
+
+
+async def test_s2_metric_live(db_session, monkeypatch, s2_cache_reset):
+    _use_status(monkeypatch, _StatusClient(sources=[{"name": "应急管理部", "status": "ok"}]))
+    db_session.add(_mk_run_row("run-s2", promoted_count=2))
+    await db_session.flush()
+
+    result = await ingest_monitor.build_s2_metric(db_session)
+    assert result["status"] == "ok"
+    assert result["metric"] == "采集正常 · 近7日+2"
+
+
+async def test_s2_metric_unreachable_warns(db_session, monkeypatch, s2_cache_reset):
+    _use_status(monkeypatch, _StatusClient(raises=RagplusCrawlerError("timeout")))
+    result = await ingest_monitor.build_s2_metric(db_session)
+    assert result["status"] == "warn"
+    assert "采集降级" in result["metric"]
+
+
+async def test_s2_metric_not_connected_keeps_running(db_session, monkeypatch, s2_cache_reset):
+    _use_status(monkeypatch, _StatusClient(raises=RagplusCrawlerNotConnectedError("404")))
+    result = await ingest_monitor.build_s2_metric(db_session)
+    assert result["status"] == "ok"
+    assert result["metric"] == "知识库运行中"
+
+
+async def test_s2_metric_down_source_warns(db_session, monkeypatch, s2_cache_reset):
+    _use_status(monkeypatch, _StatusClient(sources=[
+        {"name": "a", "status": "ok"}, {"name": "b", "status": "down"},
+    ]))
+    result = await ingest_monitor.build_s2_metric(db_session)
+    assert result["status"] == "warn"
+    assert "1 源停摆" in result["metric"]
+
+
+async def test_s2_metric_ttl_cache(db_session, monkeypatch, s2_cache_reset):
+    client = _StatusClient(sources=[{"name": "a", "status": "ok"}])
+    _use_status(monkeypatch, client)
+
+    first = await ingest_monitor.build_s2_metric(db_session)
+    second = await ingest_monitor.build_s2_metric(db_session)
+    assert first == second
