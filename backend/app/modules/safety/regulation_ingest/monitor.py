@@ -178,8 +178,10 @@ async def build_monitor_envelope(
         "ragplus_last_run_status": str(rag_last.get("status")) if rag_last else None,
     }
 
-    # feed：最新收录（promote 条目倒序）
+    # feed：最新收录（promote 条目倒序）；article_id 由 feishu_record_id 反查
+    # knowledge_articles，供前端复用 KnowledgeDetailDrawer
     feed: list[dict[str, Any]] = []
+    record_ids: set[str] = set()
     for row in all_active:
         for item in row.items_result or []:
             if item.get("action_taken") != "promote":
@@ -193,9 +195,25 @@ async def build_monitor_envelope(
                 "bitable_record_id": item.get("bitable_record_id"),
                 "ingested_at": _iso(row.created_at),
             })
+            if item.get("bitable_record_id"):
+                record_ids.add(str(item["bitable_record_id"]))
         if len(feed) >= _FEED_MAX:
             break
     feed = feed[:_FEED_MAX]
+
+    article_ids: dict[str, str] = {}
+    if record_ids:
+        from app.modules.safety.models import SafetyKnowledgeArticle
+
+        art_stmt = select(
+            SafetyKnowledgeArticle.feishu_record_id,
+            SafetyKnowledgeArticle.id,
+        ).where(SafetyKnowledgeArticle.feishu_record_id.in_(record_ids))
+        for rec_id, art_id in (await session.execute(art_stmt)).all():
+            article_ids[str(rec_id)] = str(art_id)
+    for entry in feed:
+        rec_id = entry.get("bitable_record_id")
+        entry["article_id"] = article_ids.get(str(rec_id)) if rec_id else None
 
     # 漏斗：左半 ragplus 近30日 runs（防御取键），右半本仓留痕求和
     funnel = {

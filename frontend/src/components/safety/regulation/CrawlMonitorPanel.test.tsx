@@ -38,7 +38,8 @@ function envelope(overrides: Partial<RegulationMonitorData>): RegulationMonitorD
     ],
     feed: [
       { candidate_id: 'c1', title: '新法规', url: 'https://a.gov/1', reason: '判定相关',
-        is_revision: false, bitable_record_id: 'rec1', ingested_at: '2026-10-15T06:10:00Z' },
+        is_revision: false, bitable_record_id: 'rec1', article_id: null,
+        ingested_at: '2026-10-15T06:10:00Z' },
     ],
     funnel: {
       discovered: 320, parsed: 300, received: 45, deduped: 27, ai_judged: 18,
@@ -64,8 +65,9 @@ describe('CrawlMonitorPanel（采集监控骨架）', () => {
 
     expect(await screen.findByText('采集正常')).toBeInTheDocument()
     expect(screen.getByText('8/10')).toBeInTheDocument()
-    expect(screen.getByText('12')).toBeInTheDocument()  // 近7日新增
-    expect(screen.getByText('2')).toBeInTheDocument()   // 待人工复核
+    // 近7日新增(12) 同时出现在六卡与漏斗收录段——多处出现是预期
+    expect(screen.getAllByText('12').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getAllByText('2').length).toBeGreaterThanOrEqual(1)  // 待人工复核
     const buttons = screen.queryAllByRole('button')
     const biz = buttons.filter((b) => BUSINESS_BUTTON_RE.test(b.textContent ?? ''))
     expect(biz).toHaveLength(0)

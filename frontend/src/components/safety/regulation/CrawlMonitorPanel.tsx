@@ -5,14 +5,19 @@
  *
  * 三态信封渲染：not_connected=未对接引导 / live=正常大盘 /
  * degraded=降级告警（errors 顿号列出，不静默）。
- * T05 骨架：三态 StatusTag + StatCard 六卡 + EmptyGuide 四分支；
- * 内容区（源健康表/法规流/漏斗/运行历史）由 T06 填充。
+ * 布局：StatCard 六卡 → 源健康表+最新法规流（双列）→ 判定漏斗 → 运行历史。
  */
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Col, Row } from 'antd'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import { fetchRegulationMonitor } from '@/lib/api/safety/regulation-monitor'
 import type { RegulationMonitorData, RegulationMonitorStatus } from '@/types/safety'
+import AiFunnel from './AiFunnel'
+import CrawlRunTable from './CrawlRunTable'
+import RegulationFeed from './RegulationFeed'
+import SourceHealthTable from './SourceHealthTable'
 import { formatMonitorTime } from './format'
 
 const STATUS_TAG: Record<RegulationMonitorStatus, { label: string; tone: 'ok' | 'default' | 'warn' }> = {
@@ -22,9 +27,10 @@ const STATUS_TAG: Record<RegulationMonitorStatus, { label: string; tone: 'ok' | 
 }
 
 export default function CrawlMonitorPanel() {
+  const [page, setPage] = useState(1)
   const query = useQuery({
-    queryKey: ['regulation-monitor'],
-    queryFn: () => fetchRegulationMonitor(1, 20),
+    queryKey: ['regulation-monitor', page],
+    queryFn: () => fetchRegulationMonitor(page, 20),
     staleTime: 60_000,
   })
 
@@ -69,6 +75,41 @@ export default function CrawlMonitorPanel() {
       >
         <StatCards data={data} loading={query.isLoading} status={status} />
         {emptyGuide}
+      </SectionCard>
+
+      <Row gutter={16}>
+        <Col xs={24} xl={14}>
+          <SectionCard title="数据源健康度" description="10 政务源采集状况（ragplus 契约③），行点击查看源详情">
+            <SourceHealthTable sources={data?.sources ?? []} />
+          </SectionCard>
+        </Col>
+        <Col xs={24} xl={10}>
+          <SectionCard title="最新法规流" description="最近收录（点击卡片查看法规详情，修订条目带标记）">
+            <RegulationFeed feed={data?.feed ?? []} />
+          </SectionCard>
+        </Col>
+      </Row>
+
+      <SectionCard title="采集判定漏斗" description="发现→解析→推送→去重→AI 判定→收录（两端留痕拼接）">
+        {data ? (
+          <AiFunnel funnel={data.funnel} />
+        ) : (
+          <EmptyGuide compact title="漏斗待数据" description="信封拉取中或暂无运行" />
+        )}
+      </SectionCard>
+
+      <SectionCard title="运行历史" description="收录批次留痕（行点击查看运行详情：采集段+收录段逐条管线）">
+        {data ? (
+          <CrawlRunTable
+            runs={data.runs.data}
+            total={data.runs.meta.total}
+            page={data.runs.meta.page}
+            pageSize={data.runs.meta.page_size}
+            onPageChange={setPage}
+          />
+        ) : (
+          <EmptyGuide compact title="运行历史待数据" description="信封拉取中" />
+        )}
       </SectionCard>
     </div>
   )

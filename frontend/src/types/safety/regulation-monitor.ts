@@ -21,6 +21,8 @@ export interface RegulationFeedItem {
   reason: string | null
   is_revision: boolean
   bitable_record_id: string | null
+  /** knowledge_articles 主键（feishu_record_id 反查），复用 KnowledgeDetailDrawer */
+  article_id: string | null
   ingested_at: string | null
 }
 
