@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
 from app.modules.safety.regulation_ingest import service as ingest_service
 
@@ -31,11 +32,53 @@ class _FakeBitableClient:
 
 
 class _FakeWriter:
-    """BitableWriter 替身：safety/env 双表返回预设记录。"""
+    """BitableWriter 替身：双表返回预设记录；write_regulation 可预设返回。"""
 
-    def __init__(self, safety_records: list[dict[str, Any]], env_records=None) -> None:
+    def __init__(
+        self,
+        safety_records: list[dict[str, Any]],
+        env_records: list[dict[str, Any]] | None = None,
+        write_result: dict[str, Any] | None = None,
+        write_raises: Exception | None = None,
+    ) -> None:
         self.safety_bitable = _FakeBitableClient(safety_records)
         self.env_bitable = _FakeBitableClient(env_records or [])
+        self.write_result = write_result
+        self.write_raises = write_raises
+        self.write_calls: list[str] = []
+
+    async def write_regulation(self, item) -> dict[str, Any] | None:
+        self.write_calls.append(item.title)
+        if self.write_raises:
+            raise self.write_raises
+        return self.write_result
+
+
+class _FakeLifecycleClient:
+    """契约②回执客户端替身：记录调用；可预设失败。"""
+
+    def __init__(self, raises: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.raises = raises
+
+    async def send_lifecycle(self, candidate_id, action, reason="", replace_candidate_id=None):
+        if self.raises:
+            raise self.raises
+        self.calls.append({
+            "candidate_id": candidate_id, "action": action, "reason": reason,
+            "replace_candidate_id": replace_candidate_id,
+        })
+        return {"ok": True}
+
+    async def get_crawler_status(self):
+        return {"sources": [], "runs": []}
+
+
+def _use_receipts(monkeypatch, client: _FakeLifecycleClient) -> _FakeLifecycleClient:
+    monkeypatch.setattr(
+        ingest_service, "get_ragplus_crawler_client", lambda: client,
+    )
+    return client
 
 
 def _payload(run_id: str = "run-001", items: list[dict[str, Any]] | None = None) -> dict:
@@ -64,12 +107,26 @@ def gate_on(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def empty_ledger(monkeypatch: pytest.MonkeyPatch):
-    """空台账 + 判定不可达：预去重放行，AI 判定双路失败 → pending 留痕。"""
+    """空台账 + 判定不可达 + 回执替身：预去重放行，AI 判定双路失败 → pending。"""
     monkeypatch.setattr(ingest_service, "BitableWriter", lambda: _FakeWriter([]))
     monkeypatch.setattr(
         ingest_service, "AIExtractor",
         lambda: _FakeExtractor(batch_results=[], fallback_relevant=None),
     )
+    _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+
+@pytest.fixture
+def push_off(monkeypatch: pytest.MonkeyPatch):
+    """PushNotifier 替身：记录调用不真推。"""
+    sent: list[Any] = []
+
+    class _FakeNotifier:
+        async def send_crawl_result_notification(self, result) -> None:
+            sent.append(result)
+
+    monkeypatch.setattr(ingest_service, "PushNotifier", _FakeNotifier)
+    return sent
 
 
 # ── AI 批量判定（Ticket 02） ────────────────────────────────
@@ -99,6 +156,12 @@ class _FakeExtractor:
         if self.fallback_relevant is None:
             raise RuntimeError("fallback not configured")
         return bool(self.fallback_relevant)
+
+    @staticmethod
+    def has_revision_indicator(title: str) -> bool:
+        from app.modules.safety.regulation_crawler.engine.extractors import AIExtractor
+
+        return AIExtractor.has_revision_indicator(title)
 
 
 def _use_extractor(monkeypatch, extractor: _FakeExtractor) -> _FakeExtractor:
@@ -134,7 +197,8 @@ async def test_ai_relevant_pending_irrelevant_rejected(client, gate_on, empty_le
     ]))
     resp = await client.post(_ENDPOINT, json=_payload(items=_two_items()))
     results = {r["candidate_id"]: r for r in resp.json()["data"]["results"]}
-    assert results["cand-rel"]["action_taken"] == "pending"
+    # 相关条目进入执行链（03）：写入层去重兜底下 promote；不相关 reject
+    assert results["cand-rel"]["action_taken"] == "promote"
     assert "判定相关" in results["cand-rel"]["reason"]
     assert results["cand-irr"]["action_taken"] == "reject"
     assert "score=0.08" in results["cand-irr"]["reason"]
@@ -180,7 +244,7 @@ async def test_ai_fallback_relevant_pending(client, gate_on, empty_ledger, monke
     ))
     resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
     r = resp.json()["data"]["results"][0]
-    assert r["action_taken"] == "pending"
+    assert r["action_taken"] == "promote"
     assert "逐条回退" in r["reason"]
 
 
@@ -324,6 +388,7 @@ async def test_new_standard_edition_passes(client, gate_on, monkeypatch):
     _use_extractor(monkeypatch, _FakeExtractor(
         batch_results=[{"index": 0, "content_type": "regulation", "relevance_score": 0.9}],
     ))
+    _use_receipts(monkeypatch, _FakeLifecycleClient())
     payload = _payload(items=[{
         "candidate_id": "cand-new-ver",
         "source": "samr",
@@ -332,4 +397,150 @@ async def test_new_standard_edition_passes(client, gate_on, monkeypatch):
     }])
     resp = await client.post(_ENDPOINT, json=payload)
     data = resp.json()["data"]
-    assert data["results"][0]["action_taken"] == "pending"
+    # 放行后判定相关 → 执行链（写入 None=去重兜底 → promote 转正）
+    assert data["results"][0]["action_taken"] == "promote"
+
+
+# ── 收录执行链（Ticket 03） ─────────────────────────────────
+
+
+def _rel_verdict(idx: int = 0, score: float = 0.9) -> _FakeExtractor:
+    return _FakeExtractor(batch_results=[
+        {"index": idx, "content_type": "regulation", "relevance_score": score,
+         "impact_level": "高", "business_domains": ["安全生产"], "core_summary": "相关法规"},
+    ])
+
+
+def _use_write(
+    monkeypatch, writer: _FakeWriter, extractor: _FakeExtractor | None = None,
+) -> _FakeWriter:
+    monkeypatch.setattr(ingest_service, "BitableWriter", lambda: writer)
+    if extractor is not None:
+        monkeypatch.setattr(ingest_service, "AIExtractor", lambda: extractor)
+    return writer
+
+
+async def test_promote_full_chain(client, gate_on, empty_ledger, monkeypatch, push_off):
+    """判定相关 → 写台账 → promote 回执 → 结果带 record_id。"""
+    writer = _use_write(monkeypatch, _FakeWriter(
+        [], write_result={"record_id": "rec-1", "shared_url": "https://feishu/rec-1",
+                          "action": "created"},
+    ), _rel_verdict())
+    receipts = _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "promote"
+    assert r["bitable_record_id"] == "rec-1"
+    assert writer.write_calls  # 台账确实被写
+    assert receipts.calls[0]["action"] == "promote"
+    assert receipts.calls[0]["candidate_id"] == "cand-rel"
+
+
+async def test_reject_sends_receipt_not_write(client, gate_on, empty_ledger, monkeypatch, push_off):
+    """判定不相关 → reject 回执，不写台账。"""
+    writer = _use_write(monkeypatch, _FakeWriter(
+        [], write_result={"record_id": "rec-x", "action": "created"},
+    ), _FakeExtractor(batch_results=[
+        {"index": 0, "content_type": "regulation", "relevance_score": 0.1},
+    ]))
+    receipts = _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "reject"
+    assert writer.write_calls == []
+    assert receipts.calls[0]["action"] == "reject"
+
+
+async def test_revision_orchestration(client, gate_on, empty_ledger, monkeypatch, push_off):
+    """修订场景：台账旧版存在 → 写入（updated）+ promote 回执 reason 注明替代。"""
+    old_record = {"fields": {
+        "法律法规及标准名称": "危险化学品安全管理条例",
+        "颁布修订日期": 1600000000000,
+    }}
+    writer = _use_write(monkeypatch, _FakeWriter(
+        [old_record],
+        write_result={"record_id": "rec-new", "shared_url": "u", "action": "updated"},
+    ), _rel_verdict())
+    receipts = _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    item = _two_items()[0]  # 标题含「（修订）」→ 修订指示
+    resp = await client.post(_ENDPOINT, json=_payload(items=[item]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "promote"
+    assert "修订替代《危险化学品安全管理条例》" in r["reason"]
+    assert writer.write_calls  # 删旧写新由 writer 执行（此处 mock 验证调用发生）
+    assert receipts.calls[0]["action"] == "promote"
+    assert "修订替代" in receipts.calls[0]["reason"]
+
+
+async def test_receipt_failure_tolerated(client, gate_on, empty_ledger, monkeypatch, push_off):
+    """回执失败不阻断：收录仍 promote，reason 注记失败，本批其余候选不受影响。"""
+    _use_write(monkeypatch, _FakeWriter(
+        [], write_result={"record_id": "rec-1", "shared_url": "u", "action": "created"},
+    ), _FakeExtractor(batch_results=[
+        {"index": 0, "content_type": "regulation", "relevance_score": 0.9},
+        {"index": 1, "content_type": "regulation", "relevance_score": 0.1},
+    ]))
+    _use_receipts(monkeypatch, _FakeLifecycleClient(raises=RuntimeError("ragplus down")))
+
+    resp = await client.post(_ENDPOINT, json=_payload(items=_two_items()))
+    results = {r["candidate_id"]: r for r in resp.json()["data"]["results"]}
+    assert results["cand-rel"]["action_taken"] == "promote"
+    assert "回执失败" in results["cand-rel"]["reason"]
+    assert results["cand-irr"]["action_taken"] == "reject"
+    assert "回执失败" in results["cand-irr"]["reason"]
+
+
+async def test_write_failure_marks_error(client, gate_on, empty_ledger, monkeypatch, push_off):
+    """台账写入抛错 → error 留痕，不发回执（留待对账补处理）。"""
+    _use_write(monkeypatch, _FakeWriter(
+        [], write_raises=RuntimeError("bitable quota"),
+    ), _rel_verdict())
+    receipts = _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    resp = await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "error"
+    assert "台账写入失败" in r["reason"]
+    assert receipts.calls == []
+
+
+async def test_push_notification_sent_on_promote(client, gate_on, empty_ledger, monkeypatch, push_off):
+    """有收录成功 → 批次飞书推送发生（推送失败不阻断）。"""
+    _use_write(monkeypatch, _FakeWriter(
+        [], write_result={"record_id": "rec-1", "shared_url": "u", "action": "created"},
+    ), _rel_verdict())
+    _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    await client.post(_ENDPOINT, json=_payload(items=[_two_items()[0]]))
+    assert len(push_off) == 1
+    assert push_off[0].new_count == 1
+
+
+async def test_promote_doc_map_registered(db_session, monkeypatch, push_off):
+    """doc_map 登记：promote 写台账成功后 upsert regulation 域映射（直调接缝）。"""
+    from app.modules.safety.models import RagplusDocMap
+    from app.modules.safety.regulation_ingest.schemas import IngestCandidatesRequest
+
+    monkeypatch.setenv(_ENABLED_KEY, "1")
+    monkeypatch.setattr(ingest_service, "BitableWriter", lambda: _FakeWriter(
+        [], write_result={"record_id": "rec-map-1", "shared_url": "u", "action": "created"},
+    ))
+    monkeypatch.setattr(ingest_service, "AIExtractor", lambda: _rel_verdict())
+    _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    service = ingest_service.RegulationIngestService(db_session)
+    resp = await service.ingest_candidates(IngestCandidatesRequest(**_payload()))
+    assert resp.results[0].action_taken == "promote"
+
+    row = (await db_session.execute(
+        select(RagplusDocMap).where(
+            RagplusDocMap.domain == "regulation",
+            RagplusDocMap.biz_key == "rec-map-1",
+        )
+    )).scalar_one_or_none()
+    assert row is not None
+    assert row.status == "active"
+    assert row.dataset_name == "安全法规标准"

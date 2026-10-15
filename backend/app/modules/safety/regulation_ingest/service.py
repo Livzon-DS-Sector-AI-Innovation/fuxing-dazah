@@ -2,10 +2,11 @@
 
 处理链：鉴权（API 层）→ 总闸 → 幂等重放 → 预去重（vs Bitable 台账）→
 AI 批量相关性判定（token 预算护栏，ai_config 场景 regulation_ingest）→
-[台账写入/修订编排/回执/doc_map/推送] → run 级留痕。
+台账写入（含修订编排）→ 契约②生命周期回执 → doc_map 登记 → 飞书推送
+→ run 级留痕。
 
-执行段随票据逐步填充；本模块只 flush 不 commit（请求级事务由 get_db
-收口，测试走回滚 session 零残留）。
+本模块只 flush 不 commit（请求级事务由 get_db 收口，测试走回滚
+session 零残留）。
 """
 
 from __future__ import annotations
@@ -21,12 +22,21 @@ from app.modules.safety.ai_audit import ai_audit_scope
 from app.modules.safety.app_config.store import store as app_config_store
 from app.modules.safety.models import RegulationIngestRun
 from app.modules.safety.regulation_crawler.engine.extractors import AIExtractor
+from app.modules.safety.regulation_crawler.notifier.push_notifier import PushNotifier
+from app.modules.safety.regulation_crawler.schemas import (
+    CrawledRegulation,
+    CrawlItemResult,
+    CrawlResultSummary,
+)
 from app.modules.safety.regulation_crawler.writer.bitable_writer import (
     BitableWriter,
     _extract_document_number,
     _extract_plain_text,
     _extract_standard_identifier,
     _normalize_title,
+)
+from app.modules.safety.regulation_ingest.ragplus_crawler_client import (
+    get_ragplus_crawler_client,
 )
 from app.modules.safety.regulation_ingest.schemas import (
     IngestCandidateItem,
@@ -87,8 +97,8 @@ class RegulationIngestService:
                 results=[IngestItemResult(**r) for r in (existing.items_result or [])],
             )
 
-        # ③ 预去重 → AI 判定 → 逐条结果（执行段随票据填充）
-        results, ai_tokens_used = await self._process_items(payload.items)
+        # ③ 预去重 → AI 判定 → 执行链 → 逐条结果
+        results, ai_tokens_used, receipts = await self._process_items(payload.items)
 
         # ④ run 级留痕 + 响应
         counts = self._count_results(results)
@@ -98,6 +108,7 @@ class RegulationIngestService:
             results=results,
             counts=counts,
             ai_tokens_used=ai_tokens_used,
+            receipts=receipts,
         )
         return IngestCandidatesResponse(
             accepted=True, run_log_id=str(run.id), results=results,
@@ -107,12 +118,13 @@ class RegulationIngestService:
 
     async def _process_items(
         self, items: list[IngestCandidateItem],
-    ) -> tuple[list[IngestItemResult], int]:
-        """逐条候选处理：预去重 → AI 批量判定（预算护栏）。
+    ) -> tuple[list[IngestItemResult], int, dict[str, Any]]:
+        """逐条候选处理：预去重 → AI 批量判定 → 执行链（写入/回执）。
 
-        返回 (逐条结果, AI token 预估消耗)。
+        返回 (逐条结果, AI token 预估消耗, 回执记录)。
         """
         results: list[IngestItemResult] = []
+        receipts: dict[str, Any] = {}
         try:
             keys = await self._load_existing_standard_keys()
         except Exception:
@@ -133,10 +145,27 @@ class RegulationIngestService:
             passed.append(item)
 
         verdicts, ai_tokens = await self._classify_items(passed)
+        to_execute: list[tuple[IngestCandidateItem, dict[str, Any]]] = []
         for item in passed:
             verdict = verdicts.get(item.candidate_id)
-            results.append(self._verdict_to_result(item, verdict))
-        return results, ai_tokens
+            disposition, reason = self._verdict_disposition(item, verdict)
+            if disposition == "execute":
+                assert verdict is not None  # execute 分派仅在判定存在时发生
+                to_execute.append((item, verdict))
+            elif disposition == "reject":
+                results.append(await self._finalize_reject(item, reason, receipts))
+            else:
+                results.append(IngestItemResult(
+                    candidate_id=item.candidate_id,
+                    action_taken="pending",
+                    reason=reason,
+                ))
+
+        for item, verdict in to_execute:
+            results.append(await self._execute_promotion(item, verdict, receipts))
+
+        await self._notify_batch(items, results)
+        return results, ai_tokens, receipts
 
     # ── AI 批量判定（token 预算护栏） ───────────────────────
 
@@ -221,56 +250,236 @@ class RegulationIngestService:
         return text_tokens + batches * _PROMPT_OVERHEAD_TOKENS_PER_BATCH
 
     @staticmethod
-    def _verdict_to_result(
+    def _verdict_disposition(
         item: IngestCandidateItem, verdict: dict[str, Any] | None,
-    ) -> IngestItemResult:
-        """AI 判定 → 逐条处置结果。
+    ) -> tuple[str, str]:
+        """AI 判定 → 处置分派。
 
-        相关（content_type=regulation 且 score 达标）→ pending（待收录执行，
-        执行链票据接入后为 promote）；不相关/非法规内容 → reject；无判定
-        （预算超限/判定失败）→ pending 留痕。
+        返回 (disposition, reason)：execute=进入收录执行链；reject=不相关；
+        pending=未判定（预算超限/判定失败，待复核）。
         """
         if verdict is None:
-            return IngestItemResult(
-                candidate_id=item.candidate_id,
-                action_taken="pending",
-                reason="未判定（AI 预算超限或判定失败），待复核",
-            )
+            return "pending", "未判定（AI 预算超限或判定失败），待复核"
         content_type = (verdict.get("content_type") or "regulation").strip()
         if content_type not in ("regulation", "news", "speech", "other"):
             content_type = "regulation"
         if content_type != "regulation":
-            return IngestItemResult(
-                candidate_id=item.candidate_id,
-                action_taken="reject",
-                reason=f"内容类型 {content_type}，非法规",
-            )
+            return "reject", f"内容类型 {content_type}，非法规"
         if verdict.get("fallback"):
-            relevant = bool(verdict.get("industry_relevant"))
-            if not relevant:
-                return IngestItemResult(
-                    candidate_id=item.candidate_id,
-                    action_taken="reject",
-                    reason="AI 判定与本厂业务不相关（逐条回退）",
-                )
-            return IngestItemResult(
-                candidate_id=item.candidate_id,
-                action_taken="pending",
-                reason="判定相关（逐条回退），待收录执行",
-            )
+            if not bool(verdict.get("industry_relevant")):
+                return "reject", "AI 判定与本厂业务不相关（逐条回退）"
+            return "execute", "判定相关（逐条回退）"
         score = verdict.get("relevance_score")
         if isinstance(score, (int, float)) and score < _RELEVANCE_THRESHOLD:
+            return "reject", f"AI 判定不相关（score={score}）"
+        score_txt = f"score={score}" if isinstance(score, (int, float)) else "score=高"
+        return "execute", f"判定相关（{score_txt}）"
+
+    # ══════════════════════════════════════════════════════════
+    # 收录执行链（写入/修订编排/回执/doc_map）
+    # ══════════════════════════════════════════════════════════
+
+    async def _execute_promotion(
+        self,
+        item: IngestCandidateItem,
+        verdict: dict[str, Any],
+        receipts: dict[str, Any],
+    ) -> IngestItemResult:
+        """判定相关候选的收录执行：写台账（含修订编排）→ 回执 → doc_map。
+
+        各环节独立容错：写入失败=error（无回执，留待对账补处理）；
+        回执失败不改变收录结果（reason 注记，receipts 记错误）。
+        """
+        crawled = self._to_crawled(item, verdict)
+        related_old_title: str | None = None
+        try:
+            # 修订/替代检测（契约 old_version_hint + 标题关键词，移植既有口径）
+            if item.old_version_hint or self.extractor.has_revision_indicator(item.title or ""):
+                old = await self._find_old_version(crawled.title)
+                if old:
+                    related_old_title = old["title"]
+                    crawled.related_old_title = related_old_title
+
+            write = await self.writer.write_regulation(crawled)
+        except Exception as exc:
+            logger.exception("台账写入失败: %s", item.title)
             return IngestItemResult(
                 candidate_id=item.candidate_id,
-                action_taken="reject",
-                reason=f"AI 判定不相关（score={score}）",
+                action_taken="error",
+                reason=f"台账写入失败: {str(exc)[:150]}",
             )
-        score_txt = f"score={score}" if isinstance(score, (int, float)) else "score=高"
+
+        _, base_reason = self._verdict_disposition(item, verdict)
+        if related_old_title:
+            base_reason += f"，修订替代《{related_old_title}》"
+
+        if write is None:
+            # 写入层去重兜底（TOCTOU/三层分类命中）：候选使命完成，仍回执转正
+            ok, err = await self._send_receipt(
+                item.candidate_id, "promote", f"{base_reason}（台账已有，写入层去重）",
+                receipts,
+            )
+            reason = f"{base_reason}（台账已有，写入层去重）"
+            if not ok:
+                reason += f"；回执失败: {err}"
+            return IngestItemResult(
+                candidate_id=item.candidate_id,
+                action_taken="promote", reason=reason,
+            )
+
+        record_id = write.get("record_id", "")
+        # doc_map 登记（biz_key=台账 record_id；kb/engine 文档 id 由 ragplus
+        # 转正后经映射对账工具回填）
+        try:
+            from app.modules.safety.knowledge.ragplus_sync import (
+                KB_REGULATION,
+                upsert_ragplus_map,
+            )
+
+            await upsert_ragplus_map(
+                self.session,
+                domain="regulation",
+                biz_key=record_id,
+                dataset_name=KB_REGULATION,
+                status="active",
+                title=item.title,
+            )
+        except Exception:
+            logger.exception("doc_map 登记失败: record_id=%s", record_id)
+
+        ok, err = await self._send_receipt(
+            item.candidate_id, "promote", base_reason, receipts,
+        )
+        reason = base_reason + (f"（{write.get('action', 'created')}）" if write.get("action") else "")
+        if not ok:
+            reason += f"；回执失败: {err}"
         return IngestItemResult(
             candidate_id=item.candidate_id,
-            action_taken="pending",
-            reason=f"判定相关（{score_txt}），待收录执行",
+            action_taken="promote",
+            reason=reason,
+            bitable_record_id=record_id or None,
         )
+
+    async def _finalize_reject(
+        self,
+        item: IngestCandidateItem,
+        reason: str,
+        receipts: dict[str, Any],
+    ) -> IngestItemResult:
+        """判定不相关：reject 回执（候选终态），不写台账。"""
+        ok, err = await self._send_receipt(
+            item.candidate_id, "reject", reason, receipts,
+        )
+        final_reason = reason if ok else f"{reason}；回执失败: {err}"
+        return IngestItemResult(
+            candidate_id=item.candidate_id,
+            action_taken="reject",
+            reason=final_reason,
+        )
+
+    async def _send_receipt(
+        self,
+        candidate_id: str,
+        action: str,
+        reason: str,
+        receipts: dict[str, Any],
+        replace_candidate_id: str | None = None,
+    ) -> tuple[bool, str | None]:
+        """契约②回执调用（失败容错：返回错误并记入 receipts，不抛出）。"""
+        try:
+            client = get_ragplus_crawler_client()
+            await client.send_lifecycle(
+                candidate_id, action, reason, replace_candidate_id,
+            )
+            receipts[candidate_id] = {"action": action, "ok": True}
+            return True, None
+        except Exception as exc:
+            logger.warning("契约②回执失败: %s %s: %s", action, candidate_id, exc)
+            receipts[candidate_id] = {
+                "action": action, "ok": False, "error": str(exc)[:200],
+            }
+            return False, str(exc)[:150]
+
+    @staticmethod
+    def _to_crawled(
+        item: IngestCandidateItem, verdict: dict[str, Any],
+    ) -> CrawledRegulation:
+        """契约①候选 + AI 判定 → 台账写入模型（字段映射）。"""
+        return CrawledRegulation(
+            title=item.title,
+            document_number=item.metadata.doc_no,
+            publish_date=item.metadata.issued_at,
+            implementation_date=item.metadata.effective_at,
+            issuing_authority=item.metadata.puborg,
+            source_url=item.url,
+            source_type=item.source,
+            raw_text=item.content_digest,
+            content_type=verdict.get("content_type"),
+            impact_level=verdict.get("impact_level"),
+            business_domains=verdict.get("business_domains"),
+            relevance_score=verdict.get("relevance_score"),
+            core_summary=verdict.get("core_summary"),
+        )
+
+    async def _find_old_version(self, title: str) -> dict[str, str] | None:
+        """在台账中查找可能的旧版法规（归一化标题模糊匹配，移植既有逻辑）。"""
+        try:
+            norm = _normalize_title(title)
+            if len(norm) < 4:
+                return None
+            records: list[dict[str, Any]] = []
+            for client in (self.writer.safety_bitable, self.writer.env_bitable):
+                records.extend(await client.list_all_records(page_size=100))
+            best_match: dict[str, str] | None = None
+            best_score = 0
+            for record in records:
+                fields = record.get("fields", {}) or {}
+                existing = _extract_plain_text(fields.get("法律法规及标准名称"))
+                if not existing:
+                    continue
+                existing_norm = _normalize_title(existing)
+                if len(existing_norm) < 4:
+                    continue
+                if norm in existing_norm or existing_norm in norm:
+                    score = len(existing_norm)
+                    if score > best_score:
+                        best_score = score
+                        best_match = {
+                            "title": existing,
+                            "publish_date": str(fields.get("颁布修订日期", "")),
+                            "summary": str(fields.get("核心要点总结", "")),
+                        }
+            if best_match:
+                logger.info("找到旧版法规: new=%s old=%s", title, best_match["title"])
+            return best_match
+        except Exception:
+            logger.exception("查找旧版法规失败: title=%s", title)
+            return None
+
+    async def _notify_batch(
+        self, items: list[IngestCandidateItem], results: list[IngestItemResult],
+    ) -> None:
+        """批次飞书推送（复用既有分级卡片，失败只留痕不阻断）。"""
+        promoted = [r for r in results if r.action_taken == "promote"]
+        if not promoted:
+            return
+        titles = {i.candidate_id: i.title for i in items}
+        summary = CrawlResultSummary(
+            new_count=len(promoted),
+            items=[
+                CrawlItemResult(
+                    title=titles.get(r.candidate_id, r.candidate_id),
+                    status="created",
+                    action="created",
+                )
+                for r in promoted
+            ],
+        )
+        try:
+            notifier = PushNotifier()
+            await notifier.send_crawl_result_notification(summary)
+        except Exception:
+            logger.exception("收录结果飞书推送失败（不阻断收录链）")
 
     async def _load_existing_standard_keys(self) -> dict[str, Any]:
         """加载 Bitable 已有记录的标准号/文号/标题集合（双表单次拉取）。
@@ -357,6 +566,7 @@ class RegulationIngestService:
         counts: dict[str, int] | None = None,
         error_summary: str | None = None,
         ai_tokens_used: int = 0,
+        receipts: dict[str, Any] | None = None,
     ) -> RegulationIngestRun:
         counts = counts or {}
         run = RegulationIngestRun(
@@ -371,6 +581,7 @@ class RegulationIngestService:
             failed_count=counts.get("error", 0),
             ai_tokens_used=ai_tokens_used,
             items_result=[r.model_dump() for r in results] if results else None,
+            receipts=receipts or None,
             error_summary=error_summary,
             finished_at=datetime.now(UTC),
         )
