@@ -223,7 +223,9 @@ async def _finish_direct(file_results: list[dict[str, Any]]) -> dict[str, Any]:
             # D8 对称断点（回滚日）：昨日 sheet 口径 vs 今日总表口径，环比必全量误报
             prev_snapshot = []
             compare_note = "数据源口径切换（回滚至总表），本日不做环比"
-        analysis = compute_daily_analysis(views_final, prev_snapshot)
+        analysis = compute_daily_analysis(
+            views_final, prev_snapshot, compare_skipped=compare_note is not None,
+        )
         await take_snapshot(db, today, kind=KIND_DAILY, records=views_final)
         await db.commit()
 
@@ -276,7 +278,9 @@ async def _run_sheet_mode() -> dict[str, Any]:
             )
         inner = getattr(reader, "_inner", None) or reader
         not_updated_note = await _apply_revision_freshness(db, inner, views, today)
-        analysis = compute_daily_analysis(views, prev_rows)
+        analysis = compute_daily_analysis(
+            views, prev_rows, compare_skipped=compare_note is not None,
+        )
         await take_snapshot(db, today, kind=KIND_DAILY, records=views, source="sheet")
         await db.commit()
 
@@ -383,7 +387,9 @@ async def run_scheduled_daily_update() -> dict[str, Any]:
             # D8 对称断点（回滚日）：昨日 sheet 口径 vs 今日总表口径，环比必全量误报
             prev_snapshot = []
             compare_note = "数据源口径切换（回滚至总表），本日不做环比"
-        analysis = compute_daily_analysis(records, prev_snapshot)
+        analysis = compute_daily_analysis(
+            records, prev_snapshot, compare_skipped=compare_note is not None,
+        )
         await take_snapshot(db, today, kind=KIND_DAILY)
         await db.commit()
 

@@ -238,6 +238,13 @@ class TestSheetModeOrchestration:
         assert result["sheet_alerts"] == []  # 300→10 也不告警（口径不可比）
         assert result["analysis"].surge == [] and result["analysis"].decline == []
         assert result["analysis"].has_prev is False
+        # D8 断点日汇总表必须照常渲染实际库存（compare_skipped ≠ 首日无数据）
+        assert result["analysis"].compare_skipped is True
+        assert result["analysis"].summary, "断点日汇总表不能为空（今日实际数据）"
+        content = daily_job.build_daily_summary(result)
+        assert "危化品 ｜ 今日库存 ｜ 较昨日变化" in content
+        assert "昨日无快照数据" not in content
+        assert any(v.material_name in content for v in result["analysis"].summary)
 
     async def test_same_source_day_compares(
         self, monkeypatch: pytest.MonkeyPatch,

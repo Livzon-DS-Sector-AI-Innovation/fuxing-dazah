@@ -127,6 +127,9 @@ class DailyAnalysis:
 
     report_date: date
     has_prev: bool = True                    # 昨日是否有快照（首日 False）
+    # D8 环比断点（数据源口径切换/回滚日）：与「首日无快照」不同——今日数据
+    # 完整，汇总表照常渲染，仅变化列示为 —
+    compare_skipped: bool = False
     over_limit_items: list[OverLimitItem] = field(default_factory=list)
     dept_over_summary: list[DeptOverSummary] = field(default_factory=list)
     surge: list[MaterialChange] = field(default_factory=list)
@@ -187,6 +190,7 @@ def compute_daily_analysis(
     *,
     surge_ratio: Decimal | None = None,
     surge_abs_t: Decimal | None = None,
+    compare_skipped: bool = False,
 ) -> DailyAnalysis:
     """对当日记录做超量判定 + 与昨日快照环比，产出 DailyAnalysis。
 
@@ -195,6 +199,8 @@ def compute_daily_analysis(
         prev_snapshot_rows: 昨日 daily 快照行（material_name/total_quantity_t 可用）；
             空列表表示首个快照日（无昨日数据）。
         surge_ratio/surge_abs_t: 急剧变化阈值；None 时从环境变量读取。
+        compare_skipped: D8 环比断点（跨源不可比，调用方已传空 prev）——只影响
+            渲染语义（汇总表照常出、变化列 —），计算与首日相同。
     """
     if surge_ratio is None or surge_abs_t is None:
         default_ratio, default_abs = get_surge_thresholds()
@@ -247,7 +253,11 @@ def compute_daily_analysis(
     dept_over_summary = [DeptOverSummary(department=dept, items=items) for dept, items in by_dept.items()]
     dept_over_summary.sort(key=lambda d: (-d.count, -d.max_ratio))
 
-    analysis = DailyAnalysis(report_date=date.today(), has_prev=bool(prev_snapshot_rows))
+    analysis = DailyAnalysis(
+        report_date=date.today(),
+        has_prev=bool(prev_snapshot_rows),
+        compare_skipped=compare_skipped,
+    )
 
     # ── 昨日按物料名聚合 ──
     prev_totals: dict[str, Decimal] = {}
@@ -369,12 +379,17 @@ def render_daily_report(analysis: DailyAnalysis) -> str:
             )
 
     lines.extend(["", "三、主要危化品库存汇总"])
-    if not analysis.has_prev:
+    if analysis.compare_skipped:
+        # D8 断点：今日数据完整，仅不做环比——汇总表必须照常展示实际库存
+        lines.append("· 数据源口径切换，本日不做环比，较昨日变化列示为 —。")
+        lines.append("危化品 ｜ 今日库存 ｜ 较昨日变化 ｜ 趋势 ｜ 数据状态")
+    elif not analysis.has_prev:
         lines.append("· 昨日无快照数据，暂无环比，今日起开始记录。")
     elif not analysis.summary:
         lines.append("· 今日无库存记录。")
     else:
         lines.append("危化品 ｜ 今日库存 ｜ 较昨日变化 ｜ 趋势 ｜ 数据状态")
+    if analysis.compare_skipped or (analysis.has_prev and analysis.summary):
         for chg in analysis.summary:
             status = "⚠️ 未更新" if chg.not_updated else "已更新"
             lines.append(
