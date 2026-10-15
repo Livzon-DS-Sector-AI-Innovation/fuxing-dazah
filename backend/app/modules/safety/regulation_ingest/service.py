@@ -569,6 +569,22 @@ class RegulationIngestService:
         receipts: dict[str, Any] | None = None,
     ) -> RegulationIngestRun:
         counts = counts or {}
+        items_result = None
+        if results is not None:
+            # 留痕逐条附加 title/url/attachment_missing（内部口径，非契约①响应字段）
+            # 供监控 feed/原文待补统计消费
+            by_candidate = {i.candidate_id: i for i in payload.items}
+            items_result = []
+            for r in results:
+                extra = by_candidate.get(r.candidate_id)
+                items_result.append({
+                    **r.model_dump(),
+                    "title": extra.title if extra else None,
+                    "url": extra.url if extra else None,
+                    "attachment_missing": bool(
+                        extra is not None and not extra.attachment.file_id
+                    ),
+                })
         run = RegulationIngestRun(
             source_run_id=payload.run_id,
             source="push",
@@ -580,7 +596,7 @@ class RegulationIngestService:
             rejected_count=counts.get("reject", 0),
             failed_count=counts.get("error", 0),
             ai_tokens_used=ai_tokens_used,
-            items_result=[r.model_dump() for r in results] if results else None,
+            items_result=items_result,
             receipts=receipts or None,
             error_summary=error_summary,
             finished_at=datetime.now(UTC),

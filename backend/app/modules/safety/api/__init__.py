@@ -46,6 +46,7 @@ from app.modules.safety.api.special_operation_reports import (
 from app.modules.safety.api.workticket_review import workticket_review_router
 from app.modules.safety.knowledge.graph_api import graph_router
 from app.modules.safety.regulation_ingest.api import regulation_ingest_router
+from app.modules.safety.regulation_ingest.monitor_api import regulation_monitor_router
 
 router = APIRouter()
 
@@ -84,3 +85,4 @@ router.include_router(special_operation_daily_report_router)
 router.include_router(special_operation_reports_router)
 router.include_router(workticket_review_router)
 router.include_router(regulation_ingest_router)
+router.include_router(regulation_monitor_router)

@@ -544,3 +544,170 @@ async def test_promote_doc_map_registered(db_session, monkeypatch, push_off):
     assert row is not None
     assert row.status == "active"
     assert row.dataset_name == "安全法规标准"
+
+
+# ── 监控聚合端点（Ticket 04） ───────────────────────────────
+
+from app.core.database import get_db as _get_db  # noqa: E402
+from app.main import app as _app  # noqa: E402
+from app.modules.safety.models import RegulationIngestRun  # noqa: E402
+from app.modules.safety.regulation_ingest import monitor as ingest_monitor  # noqa: E402
+from app.modules.safety.regulation_ingest.ragplus_crawler_client import (  # noqa: E402
+    RagplusCrawlerError,
+    RagplusCrawlerNotConnectedError,
+)
+
+
+class _StatusClient:
+    """契约③替身：预设 sources/runs 或异常。"""
+
+    def __init__(
+        self,
+        sources: list[dict[str, Any]] | None = None,
+        runs: list[dict[str, Any]] | None = None,
+        raises: Exception | None = None,
+    ) -> None:
+        self._sources = sources or []
+        self._runs = runs or []
+        self._raises = raises
+
+    async def get_crawler_status(self) -> dict[str, Any]:
+        if self._raises:
+            raise self._raises
+        return {"sources": self._sources, "runs": self._runs}
+
+
+def _use_status(monkeypatch, client: _StatusClient) -> None:
+    monkeypatch.setattr(ingest_monitor, "get_ragplus_crawler_client", lambda: client)
+
+
+@pytest.fixture
+async def monitor_client(db_session):
+    """端点走 db_session 同一事务：直插留痕行对端点可见，回滚零残留。"""
+    from httpx import ASGITransport, AsyncClient
+
+    async def _override():
+        yield db_session
+
+    _app.dependency_overrides[_get_db] = _override
+    transport = ASGITransport(app=_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    _app.dependency_overrides.clear()
+
+
+def _mk_run_row(source_run_id: str, **kw) -> RegulationIngestRun:
+    defaults = dict(
+        source_run_id=source_run_id,
+        source="push",
+        status="completed",
+        received_count=3,
+        duplicate_count=1,
+        pending_count=0,
+        promoted_count=1,
+        rejected_count=1,
+        failed_count=0,
+        ai_tokens_used=800,
+        items_result=[{
+            "candidate_id": "c1", "action_taken": "promote",
+            "reason": "判定相关（score=0.9），修订替代《旧法》",
+            "bitable_record_id": "rec-1", "title": "新法（修订）",
+            "url": "https://example.gov.cn/new", "attachment_missing": False,
+        }],
+    )
+    defaults.update(kw)
+    return RegulationIngestRun(**defaults)
+
+
+async def test_monitor_live(monitor_client, db_session, monkeypatch):
+    _use_status(monkeypatch, _StatusClient(
+        sources=[
+            {"name": "应急管理部", "layer": "api", "last_success_at": "2026-10-15T06:00:00Z",
+             "consecutive_failures": 0, "items_7d": 5, "status": "ok"},
+            {"name": "国家标准委", "layer": "http_parse", "last_success_at": None,
+             "consecutive_failures": 2, "items_7d": 0, "status": "warn"},
+        ],
+        runs=[{"run_id": "rag-1", "status": "success", "found_count": 30, "parsed_count": 28}],
+    ))
+    db_session.add(_mk_run_row("run-live"))
+    await db_session.flush()
+
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor")
+    data = resp.json()["data"]
+    assert data["status"] == "live"
+    assert data["errors"] == []
+    assert data["stats"]["sources_total"] == 2
+    assert data["stats"]["sources_healthy"] == 1
+    assert data["stats"]["items_7d"] == 1
+    assert data["stats"]["pending_review"] == 0
+    assert data["feed"][0]["title"] == "新法（修订）"
+    assert data["feed"][0]["is_revision"] is True
+    assert data["funnel"]["discovered"] == 30
+    assert data["funnel"]["promoted"] == 1
+    assert data["runs"]["meta"]["total"] == 1
+
+
+async def test_monitor_degraded_unreachable_not_silent(monitor_client, db_session, monkeypatch):
+    """ragplus 不可达 → degraded + errors 标注 + 本仓留痕照常返回。"""
+    _use_status(monkeypatch, _StatusClient(raises=RagplusCrawlerError("connect timeout")))
+    db_session.add(_mk_run_row("run-deg"))
+    await db_session.flush()
+
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor")
+    data = resp.json()["data"]
+    assert data["status"] == "degraded"
+    assert any("不可达" in e or "失败" in e for e in data["errors"])
+    assert data["sources"] == []
+    assert data["runs"]["meta"]["total"] == 1  # 本仓留痕不静默清空
+
+
+async def test_monitor_not_connected(monitor_client, monkeypatch):
+    _use_status(monkeypatch, _StatusClient(
+        raises=RagplusCrawlerNotConnectedError("404"),
+    ))
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor")
+    data = resp.json()["data"]
+    assert data["status"] == "not_connected"
+
+
+async def test_monitor_degraded_on_down_source(monitor_client, monkeypatch):
+    _use_status(monkeypatch, _StatusClient(sources=[
+        {"name": "药监局", "layer": "api", "status": "down"},
+    ]))
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor")
+    data = resp.json()["data"]
+    assert data["status"] == "degraded"
+    assert "药监局" in data["errors"][0]
+
+
+async def test_monitor_run_detail_two_segments(monitor_client, db_session, monkeypatch):
+    _use_status(monkeypatch, _StatusClient(
+        runs=[{"run_id": "run-d1", "status": "success", "found_count": 12,
+               "started_at": "2026-10-15T06:00:00Z"}],
+    ))
+    db_session.add(_mk_run_row("run-d1"))
+    await db_session.flush()
+
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor/runs/run-d1")
+    data = resp.json()["data"]
+    assert data["ingest"]["source_run_id"] == "run-d1"
+    assert data["ingest"]["items_result"][0]["candidate_id"] == "c1"
+    assert data["ragplus_run"]["found_count"] == 12
+
+
+async def test_monitor_run_detail_ragplus_fail_tolerated(monitor_client, db_session, monkeypatch):
+    _use_status(monkeypatch, _StatusClient(raises=RagplusCrawlerError("down")))
+    db_session.add(_mk_run_row("run-d2"))
+    await db_session.flush()
+
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor/runs/run-d2")
+    data = resp.json()["data"]
+    assert data["ingest"]["source_run_id"] == "run-d2"
+    assert data["ragplus_run"] is None
+    assert data["errors"]
+
+
+async def test_monitor_run_detail_404(monitor_client, monkeypatch):
+    _use_status(monkeypatch, _StatusClient())
+    resp = await monitor_client.get("/api/v1/safety/regulation-monitor/runs/nope")
+    assert resp.status_code == 404

@@ -25,6 +25,10 @@ class RagplusCrawlerError(RuntimeError):
     """ragplus 爬虫域接口调用失败（含不可达/鉴权失败/非 2xx）。"""
 
 
+class RagplusCrawlerNotConnectedError(RagplusCrawlerError):
+    """ragplus 爬虫模块未部署/路由不存在（404）——监控三态 not_connected 依据。"""
+
+
 class RagplusCrawlerClient:
     """契约②③ 轻量客户端（只读状态 + 生命周期指令）。"""
 
@@ -54,7 +58,7 @@ class RagplusCrawlerClient:
                         "请检查 SAFETY_RAGPLUS_API_TOKEN"
                     )
                 if resp.status_code == 404:
-                    raise RagplusCrawlerError(
+                    raise RagplusCrawlerNotConnectedError(
                         f"ragplus 爬虫模块未部署或路由不存在: {url}（404）"
                     )
                 if resp.status_code >= 500 and attempt < _CONNECT_RETRIES:
