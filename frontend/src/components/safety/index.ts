@@ -8,6 +8,9 @@ export { default as KeyRiskOpsDetail } from './KeyRiskOpsDetail'
 export { default as HazardLedgerPanel } from './HazardLedgerPanel'
 export { default as HazardLedgerPage } from './HazardLedgerPage'
 export { default as KnowledgeDetailDrawer } from './KnowledgeDetailDrawer'
+
+// 法规采集监控（regulation 子包）
+export { default as CrawlMonitorPanel } from './regulation/CrawlMonitorPanel'
 export { default as AgentUsageStats } from './AgentUsageStats'
 export { default as KnowledgeGraphTree } from './KnowledgeGraphTree'
 export { default as KnowledgeGraphTreeNode } from './KnowledgeGraphTreeNode'

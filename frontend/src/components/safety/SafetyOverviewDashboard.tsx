@@ -284,6 +284,11 @@ function HealthWall({ health }: { health: OverviewModuleHealth[] | null }) {
                 const state = byKey.get(item.key)
                 const status = state?.status ?? 'ok'
                 const clickable = !item.disabled && status !== 'upcoming'
+                // S2 法规标准与规程：健康墙卡直达采集监控 Tab（菜单入口仍默认清单检索）
+                const target =
+                  item.key === 'knowledge-base' && item.path
+                    ? `${item.path}?tab=monitor`
+                    : item.path
                 return (
                   <div
                     key={item.key}
@@ -292,14 +297,14 @@ function HealthWall({ health }: { health: OverviewModuleHealth[] | null }) {
                     tabIndex={clickable ? 0 : undefined}
                     onClick={
                       clickable && item.path
-                        ? () => router.push(item.path as string)
+                        ? () => router.push(target as string)
                         : undefined
                     }
                     onKeyDown={
                       clickable
                         ? e => {
                             if (e.key === 'Enter' || e.key === ' ') {
-                              if (item.path) router.push(item.path)
+                              if (item.path) router.push(target as string)
                             }
                           }
                         : undefined

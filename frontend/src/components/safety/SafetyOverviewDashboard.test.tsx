@@ -182,6 +182,10 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
     // 全流程监督（三期已上线）卡片可点直达监督页
     await user.click(screen.getByText('全流程监督'))
     expect(pushMock).toHaveBeenCalledWith('/safety/supervision')
+    pushMock.mockClear()
+    // S2 法规标准与规程：直达采集监控 Tab（?tab=monitor）
+    await user.click(screen.getByText('法规标准与规程'))
+    expect(pushMock).toHaveBeenCalledWith('/safety/knowledge-base?tab=monitor')
   })
 
   it('页面无业务操作按钮（只读态势；刷新/导航/弹层除外）', async () => {
