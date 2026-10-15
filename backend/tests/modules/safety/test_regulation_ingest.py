@@ -327,12 +327,23 @@ async def test_new_batch_returns_pending(client, gate_on, empty_ledger):
     assert data["results"][0]["action_taken"] == "pending"
 
 
-async def test_replay_idempotent(client, gate_on, empty_ledger):
+async def test_replay_idempotent_no_duplicate_side_effects(
+    client, gate_on, empty_ledger, monkeypatch, push_off,
+):
+    """同批重放：命中留痕直接返回既有结果，不重复写台账/回执/推送。"""
+    writer = _use_write(monkeypatch, _FakeWriter(
+        [], write_result={"record_id": "rec-1", "shared_url": "u", "action": "created"},
+    ), _rel_verdict())
+    receipts = _use_receipts(monkeypatch, _FakeLifecycleClient())
+
     first = (await client.post(_ENDPOINT, json=_payload())).json()["data"]
     second = (await client.post(_ENDPOINT, json=_payload())).json()["data"]
     assert second["accepted"] is True
     assert second["run_log_id"] == first["run_log_id"]
     assert second["results"] == first["results"]
+    assert len(writer.write_calls) == 1      # 台账只写一次
+    assert len(receipts.calls) == 1          # 回执只发一次
+    assert len(push_off) == 1                # 推送只发一次
 
 
 async def test_empty_items_batch(client, gate_on, empty_ledger):
@@ -769,7 +780,9 @@ async def test_s2_metric_ttl_cache(db_session, monkeypatch, s2_cache_reset):
 
 # ── 对账兜底巡检（Ticket 08） ───────────────────────────────
 
-from app.modules.safety.regulation_ingest import reconcile as ingest_reconcile  # noqa: E402
+from app.modules.safety.regulation_ingest import (  # noqa: E402
+    reconcile as ingest_reconcile,
+)
 
 
 class _PatrolStatusClient:

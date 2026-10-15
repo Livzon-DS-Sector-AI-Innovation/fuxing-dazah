@@ -73,6 +73,7 @@ class RegulationIngestService:
         self.session = session
         self.writer = BitableWriter()
         self.extractor = AIExtractor()
+        self._event_envelopes: list[dict[str, Any]] = []
 
     # ── 主入口 ──────────────────────────────────────────────
 
@@ -151,14 +152,13 @@ class RegulationIngestService:
                 continue
             passed.append(item)
 
-        self._event_envelopes: list[dict[str, Any]] = []
         verdicts, ai_tokens = await self._classify_items(passed)
         to_execute: list[tuple[IngestCandidateItem, dict[str, Any]]] = []
         for item in passed:
             verdict = verdicts.get(item.candidate_id)
             disposition, reason = self._verdict_disposition(item, verdict)
-            if disposition == "execute":
-                assert verdict is not None  # execute 分派仅在判定存在时发生
+            if disposition == "execute" and verdict is not None:
+                # execute 分派仅在判定存在时发生（verdict=None 只产出 pending）
                 to_execute.append((item, verdict))
             elif disposition == "reject":
                 results.append(await self._finalize_reject(item, reason, receipts))
