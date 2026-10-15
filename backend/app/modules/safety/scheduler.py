@@ -320,6 +320,15 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "保险已过期/3天内到期/在厂未填三类预警（无命中也照发），"
                        "投「安全速递」总卡格子（安全AI创新交流群；总卡关闭时发独立群卡）",
     },
+    # ── 法规收录对账巡检（每日 07:40，拉取 ragplus 契约③比对漏推补处理）──
+    {
+        "name": "法规收录对账巡检",
+        "hour": 7, "minute": 40,
+        "retry_until_hour": 12, "retry_until_minute": 0,
+        "description": "拉取 ragplus 爬虫近期 runs 与本仓收录留痕比对，"
+                       "漏推批次自动补处理（判定→写入→回执→推送），"
+                       "无候选明细的漏推留痕告警",
+    },
 ]
 
 # ── 触发状态持久化（PostgreSQL）──
@@ -556,6 +565,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool:
             await _run_chemical_inventory_daily(chat_id=chat_id)
         elif job_name == "外来人员保险预警":
             await _run_visitor_insurance_warning(chat_id=chat_id)
+        elif job_name == "法规收录对账巡检":
+            await _run_regulation_ingest_reconcile()
         elif "mode" in job:
             await _run_special_op_daily_report(job, today, chat_id=chat_id)
         else:
@@ -575,6 +586,17 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool:
         if attempt_count >= ALERT_AFTER_FAILURES:
             await _maybe_send_failure_alert(job_name, attempt_count)
         raise
+
+
+async def _run_regulation_ingest_reconcile() -> None:
+    """每日 07:40 法规收录对账巡检（ragplus 不可达=任务失败留痕，不静默）。"""
+    from app.core.database import async_session_factory
+    from app.modules.safety.regulation_ingest.reconcile import run_reconcile_patrol
+
+    async with async_session_factory() as session:
+        result = await run_reconcile_patrol(session)
+        if result.get("recovered_runs") or result.get("missing_no_items"):
+            logger.info("法规收录对账巡检结果: %s", result)
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:

@@ -765,3 +765,102 @@ async def test_s2_metric_ttl_cache(db_session, monkeypatch, s2_cache_reset):
     first = await ingest_monitor.build_s2_metric(db_session)
     second = await ingest_monitor.build_s2_metric(db_session)
     assert first == second
+
+
+# ── 对账兜底巡检（Ticket 08） ───────────────────────────────
+
+from app.modules.safety.regulation_ingest import reconcile as ingest_reconcile  # noqa: E402
+
+
+class _PatrolStatusClient:
+    def __init__(self, runs: list[dict[str, Any]]) -> None:
+        self._runs = runs
+
+    async def get_crawler_status(self) -> dict[str, Any]:
+        return {"sources": [], "runs": self._runs}
+
+
+def _rag_run(run_id: str, items: list[dict[str, Any]] | None) -> dict[str, Any]:
+    return {"run_id": run_id, "status": "success", "items": items}
+
+
+async def test_reconcile_recovers_missed_run(db_session, monkeypatch):
+    """人为漏推一批候选 → 巡检补处理成功（走完整链，source=reconcile 留痕）。"""
+    monkeypatch.setenv(_ENABLED_KEY, "1")
+    monkeypatch.setattr(
+        ingest_reconcile, "get_ragplus_crawler_client",
+        lambda: _PatrolStatusClient([_rag_run("missed-1", [
+            {"candidate_id": "c1", "source": "npc", "url": "https://a/1",
+             "title": "漏推的法规", "content_digest": "内容摘要"},
+        ])]),
+    )
+    monkeypatch.setattr(ingest_service, "BitableWriter", lambda: _FakeWriter(
+        [], write_result={"record_id": "rec-m1", "shared_url": "u", "action": "created"},
+    ))
+    monkeypatch.setattr(ingest_service, "AIExtractor", lambda: _rel_verdict())
+    monkeypatch.setattr(
+        ingest_service, "get_ragplus_crawler_client",
+        lambda: _FakeLifecycleClient(),
+    )
+
+    result = await ingest_reconcile.run_reconcile_patrol(db_session)
+
+    assert result["recovered_runs"] == ["missed-1"]
+    row = (await db_session.execute(
+        select(RegulationIngestRun).where(
+            RegulationIngestRun.source_run_id == "missed-1")
+    )).scalar_one()
+    assert row.source == "reconcile"
+    assert row.status == "completed"
+    assert row.promoted_count == 1
+    assert row.items_result[0]["action_taken"] == "promote"
+
+
+async def test_reconcile_skips_known_runs(db_session, monkeypatch):
+    """已收录的 run 不重复处理。"""
+    monkeypatch.setenv(_ENABLED_KEY, "1")
+    db_session.add(_mk_run_row("known-1", status="completed"))
+    await db_session.flush()
+    monkeypatch.setattr(
+        ingest_reconcile, "get_ragplus_crawler_client",
+        lambda: _PatrolStatusClient([_rag_run("known-1", [
+            {"candidate_id": "c1", "source": "npc", "url": "u", "title": "t"},
+        ])]),
+    )
+
+    result = await ingest_reconcile.run_reconcile_patrol(db_session)
+
+    assert result["recovered_runs"] == []
+    assert result["missing_no_items"] == []
+    rows = (await db_session.execute(
+        select(RegulationIngestRun).where(
+            RegulationIngestRun.source_run_id == "known-1")
+    )).scalars().all()
+    assert len(rows) == 1  # 无新增留痕行
+
+
+async def test_reconcile_missing_no_items_tolerated(db_session, monkeypatch):
+    """契约③ run 无候选明细 → 留痕告警（missing_no_items）不炸。"""
+    monkeypatch.setenv(_ENABLED_KEY, "1")
+    monkeypatch.setattr(
+        ingest_reconcile, "get_ragplus_crawler_client",
+        lambda: _PatrolStatusClient([_rag_run("bare-1", None)]),
+    )
+
+    result = await ingest_reconcile.run_reconcile_patrol(db_session)
+
+    assert result["missing_no_items"] == ["bare-1"]
+    assert result["recovered_runs"] == []
+
+
+async def test_reconcile_unreachable_raises(db_session, monkeypatch):
+    """ragplus 不可达 → 异常传播（scheduler guarded 层留痕 failed，不静默）。"""
+    class _Broken:
+        async def get_crawler_status(self):
+            raise RagplusCrawlerError("connect timeout")
+
+    monkeypatch.setattr(
+        ingest_reconcile, "get_ragplus_crawler_client", lambda: _Broken(),
+    )
+    with pytest.raises(RagplusCrawlerError):
+        await ingest_reconcile.run_reconcile_patrol(db_session)

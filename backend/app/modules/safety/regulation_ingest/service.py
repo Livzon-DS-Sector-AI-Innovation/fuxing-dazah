@@ -73,7 +73,7 @@ class RegulationIngestService:
     # ── 主入口 ──────────────────────────────────────────────
 
     async def ingest_candidates(
-        self, payload: IngestCandidatesRequest,
+        self, payload: IngestCandidatesRequest, *, source: str = "push",
     ) -> IngestCandidatesResponse:
         # ① 总闸：关闭时跳过处理并留痕（不锚定幂等，开闸后重推可正常处理）
         if not app_config_store.get_bool(_INGEST_ENABLED_KEY, False):
@@ -81,6 +81,7 @@ class RegulationIngestService:
                 payload,
                 status=_STATUS_SKIPPED_DISABLED,
                 error_summary="收录总闸关闭，跳过处理",
+                source=source,
             )
             return IngestCandidatesResponse(
                 accepted=False,
@@ -109,6 +110,7 @@ class RegulationIngestService:
             counts=counts,
             ai_tokens_used=ai_tokens_used,
             receipts=receipts,
+            source=source,
         )
         return IngestCandidatesResponse(
             accepted=True, run_log_id=str(run.id), results=results,
@@ -567,6 +569,7 @@ class RegulationIngestService:
         error_summary: str | None = None,
         ai_tokens_used: int = 0,
         receipts: dict[str, Any] | None = None,
+        source: str = "push",
     ) -> RegulationIngestRun:
         counts = counts or {}
         items_result = None
@@ -587,7 +590,7 @@ class RegulationIngestService:
                 })
         run = RegulationIngestRun(
             source_run_id=payload.run_id,
-            source="push",
+            source=source,
             status=status,
             received_count=len(payload.items),
             duplicate_count=counts.get("duplicate", 0),
