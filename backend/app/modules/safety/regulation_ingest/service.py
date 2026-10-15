@@ -35,6 +35,10 @@ from app.modules.safety.regulation_crawler.writer.bitable_writer import (
     _extract_standard_identifier,
     _normalize_title,
 )
+from app.modules.safety.regulation_ingest.events import (
+    build_regulation_updated_envelope,
+    publish_regulation_updated,
+)
 from app.modules.safety.regulation_ingest.ragplus_crawler_client import (
     get_ragplus_crawler_client,
 )
@@ -111,6 +115,7 @@ class RegulationIngestService:
             ai_tokens_used=ai_tokens_used,
             receipts=receipts,
             source=source,
+            event_envelopes=self._event_envelopes or None,
         )
         return IngestCandidatesResponse(
             accepted=True, run_log_id=str(run.id), results=results,
@@ -146,6 +151,7 @@ class RegulationIngestService:
                 continue
             passed.append(item)
 
+        self._event_envelopes: list[dict[str, Any]] = []
         verdicts, ai_tokens = await self._classify_items(passed)
         to_execute: list[tuple[IngestCandidateItem, dict[str, Any]]] = []
         for item in passed:
@@ -355,6 +361,31 @@ class RegulationIngestService:
         reason = base_reason + (f"（{write.get('action', 'created')}）" if write.get("action") else "")
         if not ok:
             reason += f"；回执失败: {err}"
+
+        # 收录成功路径 emit regulation.updated（信封落留痕+日志；总线建成后接规则引擎）
+        try:
+            from app.modules.safety.ai_audit.context import current_audit_ctx
+
+            trace_id = None
+            try:
+                audit_ctx = current_audit_ctx()
+                if audit_ctx is not None:
+                    trace_id = audit_ctx.trace_id
+            except Exception:
+                pass
+            envelope = build_regulation_updated_envelope(
+                record_id=record_id,
+                title=item.title,
+                op="updated" if related_old_title else "created",
+                changed_fields=["法律法规及标准名称"] if related_old_title else [],
+                trace_id=trace_id,
+                is_revision=bool(related_old_title),
+            )
+            publish_regulation_updated(envelope)
+            self._event_envelopes.append(envelope)
+        except Exception:
+            logger.exception("regulation.updated 事件构造失败（不阻断收录）")
+
         return IngestItemResult(
             candidate_id=item.candidate_id,
             action_taken="promote",
@@ -570,6 +601,7 @@ class RegulationIngestService:
         ai_tokens_used: int = 0,
         receipts: dict[str, Any] | None = None,
         source: str = "push",
+        event_envelopes: list[dict[str, Any]] | None = None,
     ) -> RegulationIngestRun:
         counts = counts or {}
         items_result = None
@@ -601,6 +633,7 @@ class RegulationIngestService:
             ai_tokens_used=ai_tokens_used,
             items_result=items_result,
             receipts=receipts or None,
+            event_envelope=event_envelopes,
             error_summary=error_summary,
             finished_at=datetime.now(UTC),
         )

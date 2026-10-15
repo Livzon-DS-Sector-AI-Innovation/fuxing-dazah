@@ -864,3 +864,78 @@ async def test_reconcile_unreachable_raises(db_session, monkeypatch):
     )
     with pytest.raises(RagplusCrawlerError):
         await ingest_reconcile.run_reconcile_patrol(db_session)
+
+
+# ── 事件信封 + MCP 工具（Ticket 09） ─────────────────────────
+
+
+async def test_event_envelope_recorded_on_promote(db_session, monkeypatch, push_off):
+    """收录成功路径 emit regulation.updated：信封字段完整落留痕 event_envelope。"""
+    from app.modules.safety.regulation_ingest.schemas import IngestCandidatesRequest
+
+    monkeypatch.setenv(_ENABLED_KEY, "1")
+    monkeypatch.setattr(ingest_service, "BitableWriter", lambda: _FakeWriter(
+        [], write_result={"record_id": "rec-ev-1", "shared_url": "u", "action": "created"},
+    ))
+    monkeypatch.setattr(ingest_service, "AIExtractor", lambda: _rel_verdict())
+    _use_receipts(monkeypatch, _FakeLifecycleClient())
+
+    service = ingest_service.RegulationIngestService(db_session)
+    resp = await service.ingest_candidates(IngestCandidatesRequest(**_payload()))
+    assert resp.results[0].action_taken == "promote"
+
+    row = (await db_session.execute(
+        select(RegulationIngestRun).where(
+            RegulationIngestRun.source_run_id == "run-001")
+    )).scalar_one()
+    envelopes = row.event_envelope or []
+    assert len(envelopes) == 1
+    env = envelopes[0]
+    assert env["event_type"] == "regulation.updated"
+    assert env["source"] == "platform"
+    assert env["actor"] == "platform"
+    assert env["op"] == "created"
+    assert env["record_id"] == "rec-ev-1"
+    assert env["event_id"]
+    assert env["occurred_at"]
+
+
+class _FakeDeps:
+    def __init__(self, db) -> None:
+        self.db = db
+
+
+class _FakeCtx:
+    def __init__(self, db) -> None:
+        self.deps = _FakeDeps(db)
+
+
+async def test_mcp_query_regulation_crawl_status(db_session, monkeypatch):
+    from app.modules.safety.business_agent.tools.read_tools import (
+        query_regulation_crawl_status,
+    )
+
+    _use_status(monkeypatch, _StatusClient(
+        sources=[{"name": "应急管理部", "status": "ok"}],
+        runs=[{"run_id": "r1", "status": "success"}],
+    ))
+    result = await query_regulation_crawl_status(_FakeCtx(db_session))
+    assert result["success"] is True
+    assert result["status"] == "live"
+    assert result["sources"][0]["name"] == "应急管理部"
+    assert result["source"] == "regulation-monitor"
+
+
+async def test_mcp_query_regulation_latest(db_session, monkeypatch):
+    from app.modules.safety.business_agent.tools.read_tools import (
+        query_regulation_latest,
+    )
+
+    _use_status(monkeypatch, _StatusClient())
+    db_session.add(_mk_run_row("run-mcp"))
+    await db_session.flush()
+
+    result = await query_regulation_latest(_FakeCtx(db_session), limit=3)
+    assert result["success"] is True
+    assert result["items"][0]["title"] == "新法（修订）"
+    assert result["items"][0]["is_revision"] is True

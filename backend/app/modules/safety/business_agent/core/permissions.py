@@ -26,6 +26,8 @@ TOOL_QUERY_CONTRACTOR_ADMISSIONS = "query_contractor_admissions"
 TOOL_KNOWLEDGE_SEARCH = "knowledge_search"
 TOOL_WEB_SEARCH = "web_search"
 TOOL_QUERY_LATEST_REGULATIONS = "query_latest_regulations"
+TOOL_QUERY_REGULATION_CRAWL_STATUS = "query_regulation_crawl_status"  # 采集监控状态（收录管线）
+TOOL_QUERY_REGULATION_LATEST = "query_regulation_latest"  # 最新收录（收录管线视角）
 TOOL_QUERY_AI_AUDITS = "query_ai_audits"  # 审计数据含 prompt 全文，仅 safety_admin
 TOOL_QUERY_AI_CONFIG = "query_ai_config"  # AI 配置（模型与场景清单，脱敏）
 TOOL_QUERY_SCHEDULER_TASKS = "query_scheduler_tasks"  # 定时任务清单
@@ -151,6 +153,8 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_KNOWLEDGE_SEARCH,
         TOOL_WEB_SEARCH,
         TOOL_QUERY_LATEST_REGULATIONS,
+        TOOL_QUERY_REGULATION_CRAWL_STATUS,
+        TOOL_QUERY_REGULATION_LATEST,
         TOOL_QUERY_AI_CONFIG,
         TOOL_QUERY_SCHEDULER_TASKS,
         TOOL_QUERY_BITABLE_CONFIG,

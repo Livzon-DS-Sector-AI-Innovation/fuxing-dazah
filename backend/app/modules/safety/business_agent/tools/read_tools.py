@@ -2265,3 +2265,73 @@ async def screen_work_ticket_personnel(
     except RuntimeError as e:
         logger.exception("screen_work_ticket_personnel failed")
         return {"success": False, "error": f"平台拉取失败: {e}"}
+
+
+# ══════════════════════════════════════════════════════════════
+# 法规采集监控（regulation-ingest 09：收录管线视角，与台账维度的
+# query_latest_regulations 互补——本组数据来自采集监控聚合信封）
+# ══════════════════════════════════════════════════════════════
+
+
+async def query_regulation_crawl_status(
+    ctx: RunContext[SafetyDeps],
+) -> dict[str, Any]:
+    """查询法规采集监控状态：数据源健康、最近运行与大盘摘要。
+
+    Returns:
+        dict: {"status": "live|degraded|not_connected", "stats": {...},
+               "sources": [...], "errors": [...], "source": "regulation-monitor"}
+    """
+    from app.modules.safety.regulation_ingest.monitor import build_monitor_envelope
+
+    try:
+        envelope = await build_monitor_envelope(ctx.deps.db, page=1, page_size=1)
+    except Exception as e:
+        logger.exception("query_regulation_crawl_status failed")
+        return {"success": False, "error": f"采集监控聚合失败: {e}"}
+    return {
+        "success": True,
+        "status": envelope["status"],
+        "stats": envelope["stats"],
+        "sources": [
+            {
+                "name": s.get("name"),
+                "status": s.get("status"),
+                "consecutive_failures": s.get("consecutive_failures"),
+                "items_7d": s.get("items_7d"),
+            }
+            for s in envelope["sources"]
+        ],
+        "errors": envelope["errors"],
+        "source": "regulation-monitor",
+    }
+
+
+async def query_regulation_latest(
+    ctx: RunContext[SafetyDeps],
+    limit: int = 5,
+) -> dict[str, Any]:
+    """查询最新收录的法规（收录管线视角：AI 判定摘要与修订标记）。
+
+    Args:
+        limit: 返回条数上限（默认 5，最大 20）
+    """
+    from app.modules.safety.regulation_ingest.monitor import build_monitor_envelope
+
+    limit = max(1, min(limit, 20))
+    try:
+        envelope = await build_monitor_envelope(ctx.deps.db, page=1, page_size=1)
+    except Exception as e:
+        logger.exception("query_regulation_latest failed")
+        return {"success": False, "error": f"采集监控聚合失败: {e}"}
+    items = [
+        {
+            "title": f.get("title"),
+            "ingested_at": f.get("ingested_at"),
+            "is_revision": f.get("is_revision"),
+            "reason": f.get("reason"),
+            "url": f.get("url"),
+        }
+        for f in envelope["feed"][:limit]
+    ]
+    return {"success": True, "items": items, "total": len(items), "source": "regulation-monitor"}

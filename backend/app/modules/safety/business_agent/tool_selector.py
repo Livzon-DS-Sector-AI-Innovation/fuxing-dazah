@@ -26,6 +26,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
         "run_regulation_ai_review",
+        "query_regulation_crawl_status", "query_regulation_latest",
     ],
     "contractor_admission": ["query_contractor_admissions"],
     "drill": [
