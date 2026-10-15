@@ -265,6 +265,9 @@ async def _upload_parse_and_register(
     dataset_id = kb.get("dataset_id") or ""
 
     # ── 解析重试项：按 ragplus 当前状态分诊（DONE 直接登记，RUNNING 只等）──
+    # 注意：ragplus 文档列表每次只回最新 100 条（KBDocument.id desc），
+    # 大库下窗口外的行状态不可见——盲发重解析会把引擎里已 DONE 的文档
+    # 重置重跑。窗口外行跳过并注明，用 ragplus_reconcile_map.py 对账归位。
     retry = [p for p in pending if not p.get("blob") and p.get("kb_doc_id")]
     if retry:
         statuses: dict[int, dict[str, Any]] = {}
@@ -274,15 +277,26 @@ async def _upload_parse_and_register(
                     statuses[int(d["id"])] = d
         except Exception:
             statuses = {}
+        blind_skipped = 0
         for p in retry:
             d = statuses.get(int(p["kb_doc_id"]))
-            current = str((d or {}).get("status") or "UNKNOWN")
+            current = str((d or {}).get("status") or "")
             p["_engine_doc_id"] = (d or {}).get("engine_doc_id")
-            if current == "DONE":
+            if d is None:
+                # 窗口外（超出列表 100 条）状态不可见：不盲发重解析
+                p["_blind_skip"] = True
+                blind_skipped += 1
+            elif current == "DONE":
                 p["_already_done"] = True
             elif current in ("RUNNING", "PARSING"):
                 p["_already_running"] = True
-            # UNSTART/FAIL/CANCEL/UNKNOWN → 重新分批解析
+            # UNSTART/FAIL/CANCEL → 重新分批解析
+        if blind_skipped:
+            print(
+                f"  [{domain}] {blind_skipped} 行超出 ragplus 列表窗口（>100 条）状态不可见，"
+                f"跳过重解析——跑 ragplus_reconcile_map.py --apply 对账归位"
+            )
+        retry = [p for p in retry if not p.get("_blind_skip")]
 
     # ── 全新上传 ──
     items: list[dict[str, Any]] = []
