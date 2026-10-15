@@ -114,6 +114,9 @@ from app.modules.safety.models.occupational_health import (  # noqa: F401
     OhPerson,
     OhPosition,
 )
+from app.modules.safety.models.regulation_ingest import (  # noqa: F401
+    RegulationIngestRun,
+)
 from app.modules.safety.models.regulations import (  # noqa: F401
     OperationRegulation,
     RegulationRevision,
@@ -215,6 +218,7 @@ __all__ = [
     'QualificationType',
     'RagplusDocMap',
     'RegulationChunk',
+    'RegulationIngestRun',
     'RegulationRevision',
     'RegulationStatus',
     'RelatedPartyType',

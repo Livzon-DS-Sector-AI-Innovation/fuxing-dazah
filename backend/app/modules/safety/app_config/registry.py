@@ -422,6 +422,16 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_REGULATION_CRAWLER_WEBHOOK_SECRET", "credential", "str", "",
         "法规爬虫 webhook 校验 secret（空 = 不校验）", secret=True,
     ),
+    ConfigItem(
+        "SAFETY_REGULATION_INGEST_SECRET", "credential", "str", "",
+        "法规收录推送校验 secret（空 = 不校验；契约① X-Ingest-Secret 头）",
+        secret=True,
+    ),
+    ConfigItem(
+        "SAFETY_REGULATION_CRAWLER_MAX_AI_TOKENS_PER_RUN", "misc", "int", 20000,
+        "法规收录单批 AI token 预算上限（超限标 pending 留痕，不调 AI）",
+        minimum=0,
+    ),
 
     # ══════════════════════════════════════════════════════════
     # ragplus-x 知识层（一期壳换芯：检索外接 + 入库短路同一总闸）

@@ -27,8 +27,9 @@ class TestRegistry:
     def test_key_unique_and_count(self):
         # 新增/删除键时同步更新此数（防 dict 推导静默覆盖与意外丢键）
         # 2026-10-14 +2：消防/中控窗口缓存 TTL 键注册
-        assert len(registry.REGISTRY) == 89
-        assert len(registry.iter_items()) == 89
+        # 2026-10-15 +2：法规收录 secret 与 AI token 预算键
+        assert len(registry.REGISTRY) == 91
+        assert len(registry.iter_items()) == 91
 
     def test_unknown_key_raises(self):
         with pytest.raises(ValueError, match="未知配置键"):

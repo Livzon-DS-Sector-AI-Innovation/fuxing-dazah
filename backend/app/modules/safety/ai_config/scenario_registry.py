@@ -37,6 +37,7 @@ _AI_SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "knowledge_chat": ("知识库问答", "安全法规知识库自然语言问答", "text", "web"),
     "graph_build": ("图谱构建", "法规/知识库实体关系图谱构建", "text", "system"),
     "regulation_crawl": ("法规筛选", "外部法规/标准抓取后的 AI 筛选归并", "text", "system"),
+    "regulation_ingest": ("法规收录判定", "ragplus 推送候选的 AI 相关性批量判定与类别评估", "text", "system"),
     "drill_plan_generation": ("演练预案生成", "应急演练标准化预案 AI 生成", "text", "mixed"),
     "drill_report_generation": ("演练报告生成", "演练报告 AI 生成（已废弃，保留兼容）", "text", "system"),
     "drill_issue_parsing": ("演练问题解析", "演练记录问题项 AI 解析", "text", "feishu"),
