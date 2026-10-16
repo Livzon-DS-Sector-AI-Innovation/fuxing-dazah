@@ -62,7 +62,8 @@ def _make_agent() -> Agent:
         output_type=[str, DeferredToolRequests],
         instructions=load_instructions(),
         capabilities=_CAPABILITIES,
-        model_settings={"temperature": 0.3, "max_tokens": 2048},
+        # 1-A：对齐仓储 agent——低温稳结构化任务；8192 防 2048 长内容截断
+        model_settings={"temperature": 0.1, "max_tokens": 8192},
     )
 
 
