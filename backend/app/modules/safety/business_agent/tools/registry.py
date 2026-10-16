@@ -88,8 +88,8 @@ from app.modules.safety.business_agent.tools.write_tools import (
     analyze_oh_transfer,
     close_oh_followup,
     create_oh_followup,
-    generate_daily_report,
     generate_alarm_report,
+    generate_daily_report,
     generate_drill_plan,
     generate_supervision_bulletin,
     override_oh_conclusion,
@@ -186,8 +186,6 @@ TOOL_KIND: dict[str, bool] = {
     "override_oh_conclusion": True,
     # 持证到期预警（写入，需用户确认）
     "renew_person_certificate": True,
-    # 消防报警分析（写入：触发 AI 分析，需用户确认）
-    # 中控报警分析（写入：触发 AI 分析，需用户确认）
     # 隐患直读多维表格模式（写入：调用 AI 并写回多维表格 / 推群，需用户确认）
     "poll_hazard_ai_analysis": True,
     "poll_hazard_rectification_review": True,
@@ -254,8 +252,8 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
 def _all_write_funcs() -> list[Callable[..., Any]]:
     return [
         generate_alarm_report,
-    generate_drill_plan,
-                    sync_drill_plan_to_feishu,
+        generate_drill_plan,
+        sync_drill_plan_to_feishu,
         generate_urs_report_pdf,
         create_urs_review,
         parse_urs_document,
