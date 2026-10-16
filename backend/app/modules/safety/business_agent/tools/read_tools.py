@@ -44,12 +44,12 @@ def _to_display_status(rectification_status: str) -> str:
 
 async def query_hazards(
     ctx: RunContext[SafetyDeps],
-    department: str | None = None,
-    status: str | None = None,
-    rectification_status: str | None = None,
-    keyword: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    department: str = "",
+    status: str = "",
+    rectification_status: str = "",
+    keyword: str = "",
+    date_from: str = "",
+    date_to: str = "",
     limit: int = 20,
 ) -> dict[str, Any]:
     """查询隐患记录列表。
@@ -63,10 +63,17 @@ async def query_hazards(
         status: 隐患状态（"open"/"closed"）
         rectification_status: 整改状态（"pending"未关闭/"in_progress"整改中/"closed"已关闭）
         keyword: 搜索关键词（匹配隐患描述或隐患编号）
-        date_from: 起始日期 ISO 格式（如 "2026-07-01"），按检查日期筛选
-        date_to: 截止日期 ISO 格式（如 "2026-07-31"），按检查日期筛选
-        limit: 返回条数上限（默认 20）
+        date_from: 起始日期 ISO（按检查日期）
+        date_to: 截止日期 ISO（按检查日期）
+        limit: 返回条数上限（默认20）
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    department = department or None
+    status = status or None
+    rectification_status = rectification_status or None
+    keyword = keyword or None
+    date_from = date_from or None
+    date_to = date_to or None
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
     from app.modules.safety.service.hazard_direct import bitable_repo
 
@@ -104,34 +111,24 @@ async def query_hazards(
 
 async def query_hazard_stats(
     ctx: RunContext[SafetyDeps],
-    date_from: str | None = None,
-    date_to: str | None = None,
-    department: str | None = None,
+    date_from: str = "",
+    date_to: str = "",
+    department: str = "",
 ) -> dict[str, Any]:
-    """获取隐患统计数据（精确计数，非估算）。
+    """获取隐患统计精确计数（直读飞书「隐患登记表」多维表格）。
 
-    数据源：**直读飞书多维表格「隐患登记表」**（平台库镜像已停用）。
-
-    返回精确数量，支持按日期范围和部门筛选。
-    状态仅两个值，与多维表格"整改状态"字段完全一致：已关闭 / 未关闭。
-
-    **重要**：当用户问"本月多少条隐患""各部门分布""整改完成率"
-    "已关闭多少"等统计类问题时，必须优先调用此工具获取精确数字。
-    禁止用 query_hazards 逐条数，禁止使用"约""大约""较多""最多"等模糊词。
+    统计类问题（"本月多少条""各部门分布""整改完成率"）必须优先用本工具，
+    禁止逐条数后估算、禁止"约/大约"等模糊词。状态仅两个值：已关闭 / 未关闭。
 
     Args:
-        date_from: 起始日期 ISO 格式（如 "2026-07-01"），按检查日期筛选
-        date_to: 截止日期 ISO 格式（如 "2026-07-31"），按检查日期筛选
-        department: 部门名称筛选（如"生产部"），不传则统计全部
-
-    Returns:
-        dict:
-        - total: 隐患总数（含异常记录）
-        - closed: 已关闭数
-        - unclosed: 未关闭数
-        - abnormal_records: 异常记录数（描述为空或"待AI填写"，仅统计不展示）
-        - status_labels: {"closed": "已关闭", "unclosed": "未关闭", "abnormal_records": "异常记录"}
+        date_from: 起始日期 ISO（如 "2026-07-01"，按检查日期）
+        date_to: 截止日期 ISO（如 "2026-07-31"）
+        department: 部门（如"生产部"，不传统计全部）
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    date_from = date_from or None
+    date_to = date_to or None
+    department = department or None
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
     from app.modules.safety.service.hazard_direct import bitable_repo
 
@@ -238,26 +235,14 @@ async def web_search(
     ctx: RunContext[SafetyDeps],
     query: str,
 ) -> dict[str, Any]:
-    """使用互联网搜索引擎搜索安全法规相关信息。
+    """互联网搜索安全法规信息（严格受限的工具）。
 
-    ⚠️ 仅在以下条件全部满足时才调用此工具：
-    1. knowledge_search 返回了 kb_empty=true（知识库无结果）
-    2. 用户明确表示需要使用互联网搜索
-    3. 你已经向用户说明了互联网搜索的风险提示
-
-    风险提示内容（调用前必须告知用户）：
-    - 互联网搜索可能包含过时、不准确或非权威来源的信息
-    - AI 基于互联网信息生成的回答可能存在幻觉
-    - 答案需要进一步核实，不作为正式法规解释或合规建议
-    - 建议通过官方渠道（.gov.cn、全国标准信息公共服务平台等）验证
+    ⚠️ 仅当 knowledge_search 返回 kb_empty=true、用户明确同意联网、且已向用户
+    展示风险提示（信息可能过时/不权威、AI 可能有幻觉、需自行经官方渠道核实）
+    后才可调用；否则一律不调用。
 
     Args:
-        query: 用户想要在互联网上搜索的具体问题描述
-
-    Returns:
-        dict: {"answer": "...", "sources": [...]}
-        - answer: 基于互联网搜索结果生成的回答
-        - sources: 互联网信息源列表，每项含 title / url / snippet
+        query: 要在互联网上搜索的问题描述
     """
     web_service = WebSearchService()
     results = await web_service.search(query, num_results=5)
@@ -587,10 +572,10 @@ async def _query_drill_records_impl(
 async def query_drills(
     ctx: RunContext[SafetyDeps],
     kind: str = "plans",
-    department: str | None = None,
-    status: str | None = None,
-    drill_type: str | None = None,
-    keyword: str | None = None,
+    department: str = "",
+    status: str = "",
+    drill_type: str = "",
+    keyword: str = "",
     limit: int | None = None,
 ) -> dict[str, Any]:
     """查询应急演练计划或实施记录（kind 区分两类）。
@@ -602,10 +587,15 @@ async def query_drills(
         status: 复核状态筛选（已完成/未完成）
         drill_type: 演练类型（应急疏散演练/现场岗位处置/专项应急演练/综合应急演练/消防器材培训）
         keyword: 演练内容关键词搜索
-        limit: 返回条数上限（默认 20）
+        limit: 返回条数上限（默认20）
 
-    示例：查一下生产部今年的应急疏散演练计划；上个月有哪些演练记录没复核。
+    示例：查生产部今年的演练计划；上月有哪些记录未复核。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    department = department or None
+    status = status or None
+    drill_type = drill_type or None
+    keyword = keyword or None
     kw = {
         "department": department, "status": status, "drill_type": drill_type,
         "keyword": keyword, "limit": 20 if limit is None else limit,
@@ -717,9 +707,9 @@ async def _query_msds_collections_impl(
 async def query_msds(
     ctx: RunContext[SafetyDeps],
     kind: str = "documents",
-    name: str | None = None,
-    cas_no: str | None = None,
-    parse_status: str | None = None,
+    name: str = "",
+    cas_no: str = "",
+    parse_status: str = "",
     limit: int | None = None,
 ) -> dict[str, Any]:
     """查询 MSDS 化学品安全数据台账或供应商资料采集记录（kind 区分两类）。
@@ -733,8 +723,12 @@ async def query_msds(
         parse_status: 解析状态筛选（kind=collections 时有效）
         limit: 返回条数上限（默认 20）
 
-    示例：查一下异丙醇的 MSDS；有哪些 MSDS 解析失败的记录。
+    示例：查异丙醇的 MSDS；哪些采集记录解析失败。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    name = name or None
+    cas_no = cas_no or None
+    parse_status = parse_status or None
     kw = {"limit": 20 if limit is None else limit}
     if kind == "documents":
         return await _query_msds_documents_impl(ctx, name=name, cas_no=cas_no, **kw)
@@ -750,32 +744,32 @@ async def query_msds(
 
 async def query_oh_persons(
     ctx: RunContext[SafetyDeps],
-    department: str | None = None,
-    position: str | None = None,
-    hazard_exposure: str | None = None,
-    last_exam_conclusion: str | None = None,
-    keyword: str | None = None,
+    department: str = "",
+    position: str = "",
+    hazard_exposure: str = "",
+    last_exam_conclusion: str = "",
+    keyword: str = "",
     limit: int = 20,
 ) -> dict[str, Any]:
-    """查询人员职业健康台账（一人一条，含最后体检状态）。
-
-    可按部门、岗位、接触危害、最后体检结论、关键词等条件筛选。
+    """查询人员职业健康台账（一人一条，含接害与最后体检状态）。
 
     Args:
-        department: 部门名称（如"生产部"）
-        position: 岗位名称（如"合成操作工"）
-        hazard_exposure: 是否接触危害（"true"=接触 / "false"=未接触），按接害工龄与危害因素判断
-        last_exam_conclusion: 最后体检结论筛选（normal/abnormal_other/contraindicated/
+        department: 部门（如"生产部"）
+        position: 岗位（如"合成操作工"）
+        hazard_exposure: 是否接触危害（"true"/"false"）
+        last_exam_conclusion: 最后体检结论（normal/abnormal_other/contraindicated/
             suspected_od/od_diagnosed/re_examination）
-        keyword: 搜索关键词（匹配姓名、工号、身份证号）
-        limit: 返回条数上限（默认 20）
+        keyword: 姓名/工号/身份证号
+        limit: 条数上限（默认 20）
 
-    Returns:
-        dict: {"items": [{id, name, employee_no, department, position, work_status,
-            hazard_factors, last_exam_conclusion, ...}], "total": int}
-
-    示例：查一下生产部有多少接触危害的员工；查张三最近的职业健康档案。
+    示例：生产部有多少接触危害的员工；查张三的职业健康档案。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    department = department or None
+    position = position or None
+    hazard_exposure = hazard_exposure or None
+    last_exam_conclusion = last_exam_conclusion or None
+    keyword = keyword or None
     from app.modules.safety.service.oh_person import OhPersonService
 
     items, total = await OhPersonService(ctx.deps.db).get_persons(
@@ -812,34 +806,31 @@ async def query_oh_persons(
 
 async def query_oh_exams(
     ctx: RunContext[SafetyDeps],
-    exam_type: str | None = None,
-    ai_conclusion: str | None = None,
-    ai_parse_status: str | None = None,
-    department: str | None = None,
-    keyword: str | None = None,
+    exam_type: str = "",
+    ai_conclusion: str = "",
+    ai_parse_status: str = "",
+    department: str = "",
+    keyword: str = "",
     limit: int = 20,
 ) -> dict[str, Any]:
-    """查询职业健康体检记录。
-
-    可按体检类型、AI 结论、AI 解析状态、部门、关键词等条件筛选。
+    """查询职业健康体检记录（含 AI 智能解读、结论分类与适配判定）。
 
     Args:
-        exam_type: 体检类型（pre_employment=岗前 / periodic=在岗期间 / post_employment=离岗 /
-            transfer=转岗 / emergency=应急）
-        ai_conclusion: AI 结论（normal=未见异常 / abnormal_other=其他异常 /
-            contraindicated=职业禁忌证 / suspected_od=疑似职业病 /
-            od_diagnosed=职业病确诊 / re_examination=复查）
-        ai_parse_status: AI 解析状态（pending=待解析 / parsing=解析中 / parsed=已解析 / failed=解析失败）
-        department: 部门名称
-        keyword: 搜索关键词（匹配体检号、员工姓名、身份证号）
-        limit: 返回条数上限（默认 20）
+        exam_type: 体检类型
+        ai_conclusion: AI 结论（normal/abnormal/contraindicated 等）
+        ai_parse_status: 解析状态（pending/parsed/failed）
+        department: 部门
+        keyword: 姓名/工号模糊匹配
+        limit: 条数上限（默认 20）
 
-    Returns:
-        dict: {"items": [{id, exam_no, employee_name, department, position, exam_type,
-            exam_date, ai_parse_status, ai_conclusion, ...}], "total": int}
-
-    示例：查一下有哪些体检还没完成 AI 解析；生产部最近一次体检的异常结论。
+    示例：查一下张三最近的体检记录；哪些体检结论为职业禁忌证。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    exam_type = exam_type or None
+    ai_conclusion = ai_conclusion or None
+    ai_parse_status = ai_parse_status or None
+    department = department or None
+    keyword = keyword or None
     from app.modules.safety.service.oh_health_exam import OhHealthExamService
 
     items, total = await OhHealthExamService(ctx.deps.db).get_exams(
@@ -1116,37 +1107,42 @@ async def _query_oh_hazard_enums_impl(
 async def query_oh(
     ctx: RunContext[SafetyDeps],
     entity: str,
-    department: str | None = None,
-    hazard_factors_status: str | None = None,
-    keyword: str | None = None,
-    status: str | None = None,
-    category: str | None = None,
-    person_id: str | None = None,
+    department: str = "",
+    hazard_factors_status: str = "",
+    keyword: str = "",
+    status: str = "",
+    category: str = "",
+    person_id: str = "",
     due_order: bool = False,
-    transfer_type: str | None = None,
+    transfer_type: str = "",
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """查询职业健康明细数据（entity 指定查什么；人员台账与体检记录见独立工具）。
+    """查询职业健康明细（entity 指定查什么；人员台账/体检记录见独立工具）。
 
     Args:
-        entity: positions=岗位危害因素台账（部门+岗位→接触危害因素标准名，含登记状态）/
-            hazard_factors=危害因素 PPE 映射字典（标准名→呼吸防护用品）/
-            followups=异常随访记录（体检异常→复查/转诊闭环跟踪）/
-            applications=转岗/离岗体检申请（含危害差异分析结果）/
-            hazard_enums=危害因素标准字典（42 项 GBZ 188 清单，无其他参数）
-        department: 部门筛选（positions 有效）
-        hazard_factors_status: 危害因素登记状态（filled=已登记/empty=未登记/inferred=推断，positions 有效）
-        keyword: 关键词（hazard_factors 按危害因素名、applications 按编号/姓名/部门）
-        status: 状态筛选（followups: open=待处置/followed=已处置待闭环/closed=已关闭/expired=已逾期；
-            applications: 已通过/审批中/已拒绝等）
-        category: 随访指标类别（lab=检验/vision=视力/hearing=听力/physique=体格/other=其他，followups 有效）
+        entity: positions=岗位危害台账 / hazard_factors=PPE 映射字典 /
+            followups=异常随访闭环 / applications=转岗离岗申请 /
+            hazard_enums=危害因素标准字典（42 项，无其他参数）
+        department: 部门（positions）
+        hazard_factors_status: 登记状态 filled/empty/inferred（positions）
+        keyword: 关键词（hazard_factors 按名称；applications 按编号/姓名/部门）
+        status: followups: open/followed/closed/expired；applications: 已通过/审批中等
+        category: 随访指标类别 lab/vision/hearing/physique/other（followups）
         person_id: 人员 ID（UUID，followups 只看某人）
-        due_order: 按建议处置日期排序、到期优先（followups 有效）
-        transfer_type: 申请类型（transfer=转岗/post_employment=离岗，applications 有效）
-        limit: 返回条数上限（缺省用各实体默认：positions/followups/applications=20、hazard_factors=50）
+        due_order: 到期优先排序（followups）
+        transfer_type: transfer=转岗 / post_employment=离岗（applications）
+        limit: 条数上限（缺省 positions/followups/applications=20、hazard_factors=50）
 
-    示例：查一下哪些岗位接触噪声；有哪些待处置的异常随访；生产部最近的转岗申请分析结果。
+    示例：哪些岗位接触噪声；待处置的异常随访；生产部最近的转岗申请。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    department = department or None
+    hazard_factors_status = hazard_factors_status or None
+    keyword = keyword or None
+    status = status or None
+    category = category or None
+    person_id = person_id or None
+    transfer_type = transfer_type or None
     if entity == "positions":
         return await _query_oh_positions_impl(
             ctx, department=department,
@@ -1208,44 +1204,39 @@ def _to_dict(r: FireAlarmRecord) -> dict[str, Any]:
 
 async def query_fire_alarms(
     ctx: RunContext[SafetyDeps],
-    date_from: str | None = None,
-    date_to: str | None = None,
-    department: str | None = None,
-    alarm_type: str | None = None,
-    alarm_nature: str | None = None,
-    ai_dimension: str | None = None,
-    keyword: str | None = None,
+    date_from: str = "",
+    date_to: str = "",
+    department: str = "",
+    alarm_type: str = "",
+    alarm_nature: str = "",
+    ai_dimension: str = "",
+    keyword: str = "",
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    """查询消防报警记录（含 AI 分析结果）。
+    """查询消防报警记录（飞书「火灾报警信息」表直读，含 AI 维度分类与原因分析）。
 
-    数据源：**直读飞书消防「火灾报警信息」表**。
-
-    可按日期范围、部门、报警类型、报警性质、AI 维度、关键词筛选。
-    未提供日期范围时默认最近 30 天；范围超过 31 天会返回明确提示。
-    返回记录列表与分页统计；items 中 id 为飞书记录 ID，并保留
-    feishu_record_id 字段。
+    未给日期范围时默认最近 30 天；超过 31 天返回提示。items 中 id 为飞书记录 ID。
 
     Args:
-        date_from: 起始日期（ISO，如 "2026-08-18"，可选）
-        date_to: 结束日期（ISO，可选）
-        department: 报警部门（可选）
-        alarm_type: 报警类型（可选）
-        alarm_nature: 报警性质（可选）
-        ai_dimension: AI 维度（process/operation/equipment/other，可选）
-        keyword: 关键词（报警部位/原因模糊匹配，可选）
-        page: 页码（默认 1）
-        page_size: 每页条数（默认 20）
-
-    Returns:
-        {success, items, page, page_size, total}
-        - items: 记录列表（含报警时间/部门/类型/性质/原因/AI 维度分类/
-          原因分析与整改方向等字段）
-        - total: 满足筛选条件的总条数（分页用）
+        date_from / date_to: 起止日期（ISO）
+        department: 报警部门
+        alarm_type: 报警类型
+        alarm_nature: 报警性质
+        ai_dimension: AI 维度（process/operation/equipment/other）
+        keyword: 报警部位/原因模糊匹配
+        page / page_size: 页码/每页条数（默认 20）
 
     示例：查一下 8 月份生产部的消防报警记录；昨天有哪些工艺类报警。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    date_from = date_from or None
+    date_to = date_to or None
+    department = department or None
+    alarm_type = alarm_type or None
+    alarm_nature = alarm_nature or None
+    ai_dimension = ai_dimension or None
+    keyword = keyword or None
     from datetime import date as _date
 
     from app.modules.safety.service.fire_alarm.query import query_fire_alarms_direct
@@ -1269,44 +1260,43 @@ async def query_fire_alarms(
 
 async def query_central_alarms(
     ctx: RunContext[SafetyDeps],
-    date_from: str | None = None,
-    date_to: str | None = None,
-    workshop: str | None = None,
-    line: str | None = None,
-    post: str | None = None,
-    ai_alarm_type: str | None = None,
-    ai_dimension: str | None = None,
-    ai_pattern: str | None = None,
-    keyword: str | None = None,
+    date_from: str = "",
+    date_to: str = "",
+    workshop: str = "",
+    line: str = "",
+    post: str = "",
+    ai_alarm_type: str = "",
+    ai_dimension: str = "",
+    ai_pattern: str = "",
+    keyword: str = "",
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    """查询中控报警记录（含 AI 分析结果）。
-
-    可按日期范围、车间、产线、岗位、报警类型、异常模式、AI 维度、关键词筛选。
-    适用于查看各车间中控报警记录、异常模式（重复/误报/异常依赖）与 AI 分析。
+    """查询中控报警记录（含 AI 分析：报警类型/异常模式/维度/原因与整改方向）。
 
     Args:
-        date_from: 起始日期（ISO，如 "2026-08-18"，可选）
-        date_to: 结束日期（ISO，可选）
-        workshop: 车间（如 车间一/车间二/车间四/新罐区，可选）
-        line: 产线/区域（如 达托/达巴/替考，可选）
-        post: 岗位（如 乙醇纳滤/一次层析，可选）
-        ai_alarm_type: 报警类型（高液位/高温/误报等，可选）
-        ai_dimension: AI 维度（process/operation/equipment/other，可选）
-        ai_pattern: 异常模式（normal_transient/repeated/false_alarm/anomalous，可选）
-        keyword: 关键词（报警情况说明/特殊说明模糊匹配，可选）
-        page: 页码（默认 1）
-        page_size: 每页条数（默认 20）
-
-    Returns:
-        {success, items, page, page_size, total}
-        - items: 记录列表（含日期/车间/岗位/报警情况说明/AI 报警类型/异常模式/
-          维度/原因分析与整改方向等字段）
-        - total: 满足筛选条件的总条数
+        date_from / date_to: 起止日期（ISO）
+        workshop: 车间（如 车间一/车间二/新罐区）
+        line: 产线/区域（如 达托/达巴/替考）
+        post: 岗位（如 乙醇纳滤/一次层析）
+        ai_alarm_type: 报警类型（高液位/高温/误报等）
+        ai_dimension: AI 维度（process/operation/equipment/other）
+        ai_pattern: 异常模式（normal_transient/repeated/false_alarm/anomalous）
+        keyword: 报警情况说明模糊匹配
+        page / page_size: 页码（默认 1）/每页条数（默认 20）
 
     示例：查一下车间一最近的中控高液位报警；有哪些重复报警。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    date_from = date_from or None
+    date_to = date_to or None
+    workshop = workshop or None
+    line = line or None
+    post = post or None
+    ai_alarm_type = ai_alarm_type or None
+    ai_dimension = ai_dimension or None
+    ai_pattern = ai_pattern or None
+    keyword = keyword or None
     from datetime import date as _date
 
     from app.modules.safety.service.central_alarm import config as ca_config
@@ -1848,11 +1838,11 @@ async def query_special_op_records(
         operation_level: 特级/一级/二级/三级/不涉及（或 special/grade1 等）
         daily_risk_level: 高/中/低（或 high/medium/low）
         report_type: 计划内/计划外（或 planned/unplanned）
-        keyword: 作业内容/地点/申请编号模糊匹配
+        keyword: 内容/地点/申请编号模糊匹配
         page: 页码（默认 1）
         page_size: 每页条数（默认 20，最大 100）
 
-    示例：提炼工程五部的作业判定记录；今天的计划外高风险作业。
+    示例：提炼五部的作业判定记录；今天的计划外高风险作业。
     """
     from datetime import date as _date
 
@@ -2094,41 +2084,38 @@ async def query_ehs_changes(
 
 async def query_work_ticket_reviews(
     ctx: RunContext[SafetyDeps],
-    date_from: str | None = None,
-    date_to: str | None = None,
-    ticket_type: str | None = None,
-    rule_no: str | None = None,
-    ticket_no: str | None = None,
-    keyword: str | None = None,
+    date_from: str = "",
+    date_to: str = "",
+    ticket_type: str = "",
+    rule_no: str = "",
+    ticket_no: str = "",
+    keyword: str = "",
     include_not_applicable: bool = False,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    """查询作业票 AI 审核记录与违规明细。
+    """查询作业票 AI 审核记录与违规明细（审核批次统计 + 逐条违规）。
 
-    返回审核批次（每日一次：总数/已审/违规/合格/数据不足统计）与逐条
-    违规明细（票号/票种/违反规则/问题详情）。可按日期、票种、规则编号、
-    票号筛选。默认仅返回真实违规；规则"不适用"记录需显式开启。
+    默认仅返回真实违规；规则"不适用"记录需 include_not_applicable=True。
 
     Args:
-        date_from: 起始日期（ISO，如 "2026-08-31"，按审核日期，可选）
-        date_to: 结束日期（ISO，可选）
+        date_from / date_to: 起止日期（ISO，按审核日期）
         ticket_type: 票种（动火作业/受限空间/高处作业/临时用电，或 hot_work 等 code）
-        rule_no: 规则编号（如 "7.1.3"，可选）
-        ticket_no: 作业票编号，模糊匹配（可选）
-        keyword: 关键词（违规详情/规则名称模糊匹配，可选）
-        include_not_applicable: 是否包含"规则不适用"记录（默认 False，仅真实违规）
-        page: 页码（默认 1，作用于审核批次）
-        page_size: 每页条数（默认 20，最大 100）
+        rule_no: 规则编号（如 "7.1.3"）
+        ticket_no: 作业票编号（模糊匹配）
+        keyword: 违规详情/规则名称模糊匹配
+        include_not_applicable: 含"规则不适用"记录（默认 False）
+        page / page_size: 页码/每页条数（作用于审核批次，默认 20）
 
-    Returns:
-        {success, reviews, violations, page, page_size, total, violation_total}
-        - reviews: 审核批次（日期/总数/已审/违规数/合格数/数据不足/推送状态）
-        - violations: 违规明细（审核日期/票号/票种/规则编号/规则名称/问题详情）
-        - total / violation_total: 批次与违规明细总条数
-
-    示例：8月31日的作业票审核结果；动火票都有哪些违规；受限空间票的气体检测违规。
+    示例：8月31日的作业票审核结果；动火票都有哪些违规。
     """
+    # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    date_from = date_from or None
+    date_to = date_to or None
+    ticket_type = ticket_type or None
+    rule_no = rule_no or None
+    ticket_no = ticket_no or None
+    keyword = keyword or None
     from datetime import date as _date
 
     from sqlalchemy import func, or_, select

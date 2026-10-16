@@ -157,9 +157,6 @@ async def generate_daily_report(
     Args:
         mode: "today" 当日日报，"afternoon" 17点日报(含今日新增计划外作业对比总结)，
               "tomorrow" 次日预警，默认 today
-
-    Returns:
-        完整日报内容（markdown_report 字段）及统计概要。
     """
     from app.modules.safety.service.special_operation_daily_report import (
         SpecialOperationDailyReportService,
@@ -208,9 +205,6 @@ async def generate_supervision_bulletin(
     数据源：**直读飞书多维表格**（隐患登记表），不读平台数据库。
     通报按部门分组，包含每条隐患的描述、责任人、等级和存在天数，
     以及底部各部门的红色/一般预警数量汇总。即时执行，无需用户确认。
-
-    Returns:
-        完整通报内容（bulletin 字段）及统计概要。
     """
     from app.modules.safety.service.hazard_direct.bulletin import build_bulletin
 
@@ -247,9 +241,6 @@ async def run_regulation_ai_review(
 
     Args:
         regulation_id: 操规记录 ID（UUID 字符串）
-
-    Returns:
-        触发结果：{regulation_id, regulation_no, ai_review_status, message}
     """
     import asyncio
     import uuid
@@ -321,10 +312,6 @@ async def trigger_oh_exam_parse(
     Args:
         exam_id: 体检记录 ID（UUID 字符串）
 
-    Returns:
-        dict: {exam_id, exam_no, ai_parse_status, ai_conclusion, ai_parse_error, message}
-        - ai_parse_status: parsed=解析完成 / failed=解析失败（见 ai_parse_error）
-
     示例：把体检记录 xxx 重新解析一下。
     """
     from app.modules.safety.service.oh_health_exam import OhHealthExamService
@@ -384,9 +371,6 @@ async def create_oh_followup(
         responsible: 责任人姓名（可选）
         notes: 备注（可选）
 
-    Returns:
-        dict: {id, person_name, indicator_name, followup_type, followup_date, status}
-
     示例：给体检 xxx 补录一条"谷丙转氨酶"复查随访，建议 2026-08-20 复查。
     """
     from datetime import date
@@ -443,9 +427,6 @@ async def close_oh_followup(
         followup_id: 随访记录 ID（UUID 字符串，必填）
         action_taken: 处置记录（如"已复查，指标恢复正常"，必填）
 
-    Returns:
-        dict: {id, indicator_name, person_name, status, action_taken, closed_at}
-
     示例：把随访 xxx 关闭，处置记录为"已复查，指标恢复正常"。
     """
     from app.modules.safety.service.oh_followup import OhFollowupService
@@ -485,11 +466,6 @@ async def analyze_oh_transfer(
 
     Args:
         application_id: 转岗/离岗申请 ID（UUID 字符串，必填）
-
-    Returns:
-        dict: {application_id, diff_analyze_status, needs_exam, exam_suggestion,
-            diff_summary, created_exam_id, message}
-        - diff_analyze_status: analyzed=完成 / failed=失败
 
     示例：把转岗申请 xxx 做一次危害差异分析。
     """
@@ -551,10 +527,6 @@ async def override_oh_conclusion(
             contraindicated=职业禁忌证 / suspected_od=疑似职业病 /
             od_diagnosed=职业病确诊 / re_examination=复查）
         notes: 覆盖说明（如"医生复核确认正常，原 AI 误判"，建议填写）
-
-    Returns:
-        dict: {exam_id, exam_no, ai_conclusion, override_conclusion,
-            override_by, override_at, ai_override_notes}
 
     示例：把体检 xxx 的结论覆盖为 normal，说明"医生复核确认无异常"。
     """
@@ -625,10 +597,6 @@ async def generate_alarm_report(
         period: daily=日报（默认）/ monthly=月报（仅消防支持，中控暂无月报）
         target_date: 目标日期（ISO，如 "2026-08-18"）。日报默认今天；
             月报传月内任一日期（取其所在自然月），默认上一完整自然月
-
-    Returns:
-        {success, report_date|month_start/month_end, total, analyzed, push_ok, markdown_report}
-        - markdown_report: 已格式化的完整报告，必须原样输出
     """
     if scope == "fire" and period == "daily":
         return await _generate_fire_alarm_daily_impl(ctx, target_date=target_date)

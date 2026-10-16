@@ -175,41 +175,18 @@ async def preview_guardian_subsidy(
     year: int,
     month: int,
 ) -> dict[str, Any]:
-    """监护补贴预览：从平台作业票拉数 → 整理 → 返回清单请用户确认（**只读，无副作用**）。
+    """监护补贴预览（只读无副作用）：按监护人所在部门归集平台作业票，返回待确认清单。
 
-    适用场景：用户提出"整理/统计某部门某月的监护人补贴"（如"整理环保部8月份的
-    监护人补贴"）时，先调用本工具预览，**不要**直接生成 Excel。工具返回
-    ``confirm_suggestion`` 含「确认计算」话术，可直接引导用户确认。
-
-    归集口径（2026-10 制度调整）：按**监护人所在部门**统计（飞书通讯录部门，
-    补贴在监护人部门申报，与申请单位无关）；无证监护人暂按 A 证计入金额，
-    同时进 ``unmatched`` 待核对名单。
+    用户提出"整理/统计某部门某月监护人补贴"时先调本工具（不要直接生成 Excel）；
+    返回的 confirm_suggestion 可直接引述，请用户回复「确认计算」后再调生成工具。
+    无证监护人暂按 A 证计入金额并进 unmatched 待核对名单；部门词包含匹配
+    （"环保"可命中"环保工程中心"），未命中时返回 departments 候选清单与
+    need_department_selection=true。
 
     Args:
-        dept_keyword: 部门关键词（**包含匹配**，如"环保"可命中"环保工程中心"；
-            匹配的是监护人所在部门）
+        dept_keyword: 部门关键词（包含匹配；匹配的是监护人所在部门）
         year: 统计年份（如 2026）
-        month: 统计月份（1-12，如 8；按作业**开始时间**归集）
-
-    Returns:
-        dict（预览结构）：
-            - total_fetched: 窗口命中作业票总数（目标月 ±1 月窗口拉回）
-            - domain_tickets: 目标部门+目标月命中且非作废的票数
-            - matched_records / matched_tickets: 计入补贴的票数
-            - guardian_names: 去重后的监护人名单
-            - guardians: [{name, level, ticket_count}] 监护人 + A/B 证级别 + 票数
-              （无证者 level 显示 A证，另见 unmatched）
-            - a_cert_count / b_cert_count: A 证 / B 证监护人数
-            - unmatched: [{name, ticket_count, operation_types}] 证书未匹配
-              （已暂按A证计入金额，请核对证书台账）
-            - skipped: [{ticket_no, ticket_type, reason}] 跳过票（**目标域内**：
-              目标部门+目标月的作废/缺时间/无监护人/未知类型，非目标域票不在其中）
-            - departments: 窗口内出现过的作业申请单位（部门匹配不到时作候选清单）
-            - need_department_selection: 部门关键词未命中且窗口有票时为 True
-            - hint: 空票/部门不命中时的提示文案
-            - confirm_suggestion: 一句话确认话术（含「确认计算」指令示例）
-            - stats: {total_records, guardian_count, a_cert_count, b_cert_count, total_amount}
-        失败时返回 {"error": ..., "error_type": "platform_fetch_error"|"auth_failed"|"invalid_params"}
+        month: 统计月份（1-12；按作业开始时间归集）
     """
     dept_keyword = (dept_keyword or "").strip()
     if not dept_keyword:
@@ -298,35 +275,21 @@ async def generate_guardian_subsidy(
     dept_keyword: str,
     year: int,
     month: int,
-    filename: str | None = None,
+    filename: str = "",
 ) -> dict[str, Any]:
-    """监护补贴生成：重拉平台作业票 → 重算 → 生成 Excel → 回传当前飞书会话（**写入，需确认**）。
+    """监护补贴生成（写入，需用户确认后执行）：幂等重拉重算 → Excel → 回传当前飞书会话。
 
-    用户对预览明确确认（如回复「确认计算」）后调用。本工具以相同入参**幂等重拉重算**
-    （与 preview 同窗口），按监护人所在部门归集、无证人员暂按 A 证计入，
-    Excel 主表 + 「待核对/跳过说明」第二页：
-    - 主表：按监护人+作业类型拆分补贴，公司模板原样复现；
-    - 第二页：证书未匹配监护人（已暂按A证计入，请核对）+ 跳过票（票号+原因）。
-
-    文件通过 ``ctx.deps.chat_id`` 回传当前会话；web 渠道（chat_id=None）返回降级提示
-    并附 ``file_content_base64`` 兜底（不发送）。
+    仅在用户对预览明确确认（回复「确认计算」）后调用；归集口径与 preview 一致
+    （监护人所在部门、无证暂按 A 证计入）。Excel 主表按监护人+作业类型拆分补贴，
+    第二页为待核对/跳过说明。web 渠道无会话时降级返回 file_content_base64 不发送。
 
     Args:
-        dept_keyword: 部门关键词（包含匹配，如"环保"→"环保工程中心"；匹配监护人所在部门）
+        dept_keyword: 部门关键词（包含匹配；匹配的是监护人所在部门）
         year: 统计年份（如 2026）
         month: 统计月份（1-12；按作业开始时间归集）
-        filename: 可选，文件名（建议 .xlsx 结尾；缺省按「部门 年月 监护补贴统计.xlsx」生成）
-
-    Returns:
-        dict：
-            - 成功: {"sent": True, "file_name", "summary": {total_amount, guardian_count,
-              matched_count, unmatched_count, skipped_count}, "message": 文字摘要}
-              （total_amount = B证按 0.5 系数折算后实发合计，与 Excel K 列口径一致）
-            - 发送失败: {"sent": False, "message", "file_name", "file_content_base64", "summary"}
-            - chat_id 为空: {"sent": False, "degraded": True, "message", "file_name",
-              "file_content_base64"}
-            - 拉取失败/无票/无匹配: {"error", "error_type", ...}
+        filename: 可选文件名（建议 .xlsx 结尾；缺省按「部门 年月 监护补贴统计.xlsx」）
     """
+    filename = filename or None  # schema 瘦身：空串与 None 等价
     dept_keyword = (dept_keyword or "").strip()
     if not dept_keyword:
         return {

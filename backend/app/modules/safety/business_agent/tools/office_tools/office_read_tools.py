@@ -30,10 +30,6 @@ async def office_search_files(
         query: 搜索关键词（文件名片段 / 文档主题，最多 30 个字符）
         space_id: 可选，限定某个知识库空间（wiki space_id）；不传则搜索全部可访问范围
         page_size: 返回条数上限（默认 20，最多 100）
-
-    Returns:
-        dict: {"kind": "data", "content": [{"name", "type", "token", "url"}],
-               "total", "has_more"}
     """
     client = get_office_client(ctx)
     result = await client.search_files(
@@ -56,10 +52,6 @@ async def office_read_docx(
     Args:
         document_id: 云文档 token（docx 链接路径最后一段，如 doxcnXXXX）
         max_chars: 最大返回字符数（默认 20000）
-
-    Returns:
-        dict: {"kind": "data", "content": "正文", "truncated": false,
-               "total_chars", "returned_chars"}
     """
     client = get_office_client(ctx)
     result = await client.read_docx_raw(document_id, max_chars=max_chars)
@@ -83,10 +75,6 @@ async def office_read_sheet(
         sheet_range: 读取区域，如 "Sheet1!A1:D100"
         max_rows: 最大返回行数（默认 500）
         max_cols: 最大返回列数（默认 50）
-
-    Returns:
-        dict: {"kind": "data", "content": [["单元格", ...], ...],
-               "truncated", "total_rows", "total_cols"}
     """
     client = get_office_client(ctx)
     result = await client.read_sheet(
@@ -118,10 +106,6 @@ async def office_read_base(
         page_size: 每页记录数（默认 100，最多 100）
         max_records: 最大返回记录数（默认 500）
         view_id: 可选，指定视图 ID（不传读取默认视图）
-
-    Returns:
-        dict: {"kind": "data", "content": [{"record_id", "fields"}, ...],
-               "truncated", "total", "returned_records"}
     """
     client = get_office_client(ctx)
     result = await client.read_base_records(
@@ -149,11 +133,6 @@ async def office_read_drive_file(
     Args:
         file_token: 云空间文件 token（file 链接路径中的 token）
         include_content: 是否下载文件内容（默认 False，仅元数据）
-
-    Returns:
-        dict: {"kind": "data", "file_token", "type", "size",
-               "file_name", "meta"}；include_content=True 时额外返回
-               "content_base64"
     """
     client = get_office_client(ctx)
     meta_result = await client.file_metadata(file_token)

@@ -98,24 +98,17 @@ async def office_create_docx(
     blocks: list[dict] | None = None,
     markdown_report: str | None = None,
 ) -> dict:
-    """在飞书新建一篇云文档，并返回可编辑链接。
+    """在飞书新建一篇云文档并返回可编辑链接；创建后自动授予发起人管理权限
+    （Web 端匿名跳过授权并提示）。
 
-    创建成功后自动把当前发起人（飞书端真实身份）授予该文档的管理权限；
-    Web 端匿名用户会跳过授权并提示。
-
-    场景模板「日报 → 飞书云文档 → 推群」：把日报/报表工具返回的
-    markdown_report 直接作为 markdown_report 传入，工具会先用
-    build_report_docx_blocks 转成 docx blocks 再创建云文档。
-    若同时传 blocks 与 markdown_report，markdown_report 优先（会覆盖 blocks）。
+    「日报→云文档」场景：日报/报表工具返回的 markdown_report 直接传入，
+    自动转 docx blocks；同时传 blocks 与 markdown_report 时后者优先。
 
     Args:
         title: 云文档标题（必填）
-        folder_token: 目标云空间文件夹 token（可选，不传放应用根目录）
-        blocks: 飞书 docx 内容块列表（可选；不传且无 markdown_report 时建空文档）
-        markdown_report: Markdown 日报/报表正文（可选；自动转 blocks）
-
-    Returns:
-        dict: {"kind": "link", "url", "file_token", "message"}
+        folder_token: 目标文件夹 token（不传放应用根目录）
+        blocks: docx 内容块列表（不传且无 markdown_report 时建空文档）
+        markdown_report: Markdown 日报/报表正文（自动转 blocks）
     """
     if markdown_report is not None:
         blocks = build_report_docx_blocks(title, markdown_report)
@@ -147,9 +140,6 @@ async def office_create_sheet(
         title: 电子表格标题（必填）
         folder_token: 目标云空间文件夹 token（可选）
         rows: 二维数组数据（可选，如 [["姓名","部门"],["张三","生产部"]]）
-
-    Returns:
-        dict: {"kind": "link", "url", "file_token", "message"}
     """
     client = get_office_client(ctx)
     result = await client.create_sheet(
@@ -178,9 +168,6 @@ async def office_write_sheet(
         spreadsheet_token: 电子表格 token（sheets 链接路径中的 token）
         sheet_range: 写入区域（如 "Sheet1!A1:D10"）
         values: 二维数组，与 range 行列一致
-
-    Returns:
-        dict: {"kind": "link", "url", "file_token", "message"}
     """
     client = get_office_client(ctx)
     snapshot_rows = len(values) or 1
@@ -299,9 +286,6 @@ async def office_generate_docx_pdf(
         content: 正文内容（纯文本，多段用换行分隔）
         file_type: 生成类型（docx / pdf，默认 docx）
         sections: 结构化章节（可选）
-
-    Returns:
-        dict: {"kind": "file", "file_name", "size", "content_base64"}
     """
     del ctx  # 本地生成不依赖 ctx.deps.office_client
     normalized_type = (file_type or "docx").strip().lower()
@@ -351,9 +335,6 @@ async def office_upload_file(
         file_path: 本地文件路径（必填）
         parent_token: 目标文件夹 token（可选，不传上传到应用根目录）
         file_name: 上传后的文件名（可选，默认取原文件名）
-
-    Returns:
-        dict: {"kind": "link", "url", "file_token", "message"}
     """
     client = get_office_client(ctx)
     result = await client.upload_drive_file(
