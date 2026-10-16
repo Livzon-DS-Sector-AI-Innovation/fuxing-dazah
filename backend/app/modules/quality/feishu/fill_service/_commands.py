@@ -263,6 +263,41 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             send_menu_card,
         )
 
+        # 物料库存查询：物料 万古 / 物料 VAN（回库存状态与临效/采购建议）
+        material_m = re.match(r"^物料\s*(.+)", kw)
+        if material_m:
+            from app.core.database import async_session_factory
+            from app.modules.quality.repository import material_stock_summary
+
+            query = material_m.group(1).strip()
+            async with async_session_factory() as db:
+                material_summary = await material_stock_summary(db)
+            material_hits = [
+                x for x in material_summary
+                if query.lower() in x["material_code"].lower()
+                or query in x["material_name"]
+            ]
+            if not material_hits:
+                await send_chat_text(chat_id, f"未找到物料「{query}」，请确认物料代码/名称（可在物料字典查看）")
+            else:
+                lines = []
+                for x in material_hits:
+                    status_parts = [
+                        f"可用 {x['available']}",
+                        f"待验 {x['in_warehouse']}",
+                        f"合格 {x['qualified']}",
+                        f"已领出 {x['issued']}",
+                        f"已赋码 {x['labeled']}",
+                    ]
+                    lines.append(
+                        f"- {x['material_name']}（{x['material_code']}）：{'，'.join(status_parts)}"
+                        + (f"｜临效期 {x['near_expiry']} 瓶" if x["near_expiry"] else "")
+                        + (f"｜已过期 {x['expired']} 瓶" if x["expired"] else "")
+                        + (f"｜低于安全库存（阈值 {x['min_stock']}）" if x["below_stock"] else "")
+                    )
+                await send_chat_text(chat_id, "物料库存：\n" + "\n".join(lines))
+            return
+
         # 一句话查询：今日出报单（流水号+产品+批号）
         if "出报单" in kw or ("报告单" in kw and ("今天" in kw or "今日" in kw)):
             from app.core.database import async_session_factory

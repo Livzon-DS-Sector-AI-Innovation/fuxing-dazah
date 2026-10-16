@@ -10,6 +10,7 @@ from app.modules.quality.feishu.daily_push import (
     _parse_hhmm,
     _push_afternoon_reminder,
     _push_material_alerts,
+    _push_stocktake_reminder,
     _push_today_tasks,
 )
 from app.platform.scheduler import (
@@ -43,6 +44,17 @@ AFTERNOON_REMIND_TASK = TaskDefinition(
         timezone="Asia/Shanghai",
     ),
     coro=_push_afternoon_reminder,
+    module="quality",
+)
+
+STOCKTAKE_REMIND_TASK = TaskDefinition(
+    name="quality.stocktake_remind",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.CRON,
+        expression="0 9 25 * *",
+        timezone="Asia/Shanghai",
+    ),
+    coro=_push_stocktake_reminder,
     module="quality",
 )
 

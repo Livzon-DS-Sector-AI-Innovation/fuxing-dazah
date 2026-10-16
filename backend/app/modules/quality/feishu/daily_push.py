@@ -242,3 +242,25 @@ async def _push_material_alerts() -> None:
             await send_chat_text(chat_id, text)
         except Exception:
             logger.exception("物料提醒发送失败: %s", chat_id)
+
+
+async def _push_stocktake_reminder() -> None:
+    """每月 25 日 09:00 盘点提醒（复用幂等标记，key=stocktake:{月份}）。"""
+    from app.modules.quality.feishu.client import (
+        QUALITY_FEISHU_CHAT_IDS,
+        feishu_configured,
+    )
+    from app.modules.quality.feishu.message import send_chat_text
+
+    if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
+        return
+    month = _app_today().strftime("%Y-%m")
+    if not await _mark_pushed(f"stocktake:{month}"):
+        logger.info("本月盘点提醒已推送，跳过（幂等标记）")
+        return
+    text = "本月库存盘点提醒：请到「扫码操作台」选择盘点模式，按盘点单扫码核对库存（系统在库=待验+合格）。盘点完成后差异清单可导出 Excel 归档。"
+    for chat_id in QUALITY_FEISHU_CHAT_IDS:
+        try:
+            await send_chat_text(chat_id, text)
+        except Exception:
+            logger.exception("盘点提醒发送失败: %s", chat_id)
