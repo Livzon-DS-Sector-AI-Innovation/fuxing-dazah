@@ -12,8 +12,6 @@ export { default as KnowledgeDetailDrawer } from './KnowledgeDetailDrawer'
 // 法规采集监控（regulation 子包）
 export { default as CrawlMonitorPanel } from './regulation/CrawlMonitorPanel'
 export { default as AgentUsageStats } from './AgentUsageStats'
-export { default as KnowledgeGraphTree } from './KnowledgeGraphTree'
-export { default as KnowledgeGraphTreeNode } from './KnowledgeGraphTreeNode'
 export {
   BT_CATEGORY_STYLE,
   FALLBACK_STYLE,
@@ -23,15 +21,6 @@ export {
   mapCategoryCountsToMenu,
   getGroupForKey,
 } from './knowledgeConstants'
-export {
-  NODE_TYPE_STYLE,
-  ENTITY_TYPE_STYLE,
-  RELATION_TYPE_STYLE,
-  NODE_STATUS_LABEL,
-  EDGE_STATUS_LABEL,
-  NODE_TYPE_OPTIONS,
-  RELATION_TYPE_OPTIONS,
-} from './graphConstants'
 export type {
   CategoryStyle,
   KnowledgeMenuGroup,

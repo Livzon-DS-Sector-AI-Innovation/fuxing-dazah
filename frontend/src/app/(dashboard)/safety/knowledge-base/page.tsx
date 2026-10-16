@@ -4,7 +4,6 @@ import { Suspense, useMemo, useState } from 'react'
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { Button, Input, Pagination, Select, Tabs, Tooltip } from 'antd'
 import {
-  ApartmentOutlined,
   FileSearchOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -37,7 +36,6 @@ function KnowledgeBaseContent() {
   // ── URL 派生的筛选状态 ──
   const q = searchParams.get('q') || ''
   const statusFilter = searchParams.get('status') || undefined
-  const cardFilter = searchParams.get('card') || undefined
   const searchMode = searchParams.get('mode') === 'kw' ? 'kw' : 'semantic'
   const page = Math.max(1, Number(searchParams.get('page') || '1'))
   const tabParam = searchParams.get('tab')
@@ -102,10 +100,8 @@ function KnowledgeBaseContent() {
   const filtered = useMemo(() => {
     let arr = rawItems
     if (statusFilter) arr = arr.filter((a) => a.status === statusFilter)
-    if (cardFilter === 'has_card') arr = arr.filter((a) => a.knowledge_card != null)
-    else if (cardFilter === 'no_card') arr = arr.filter((a) => !a.knowledge_card)
     return arr
-  }, [rawItems, statusFilter, cardFilter])
+  }, [rawItems, statusFilter])
 
   const pageItems = useMemo(
     () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
@@ -120,7 +116,6 @@ function KnowledgeBaseContent() {
     patchUrl({ q: searchText.trim() || null, page: '1' })
   }
   const handleStatusChange = (v?: string) => patchUrl({ status: v || null, page: '1' })
-  const handleCardChange = (v?: string) => patchUrl({ card: v || null, page: '1' })
   const handleModeToggle = () => patchUrl({ mode: searchMode === 'semantic' ? 'kw' : null, page: '1' })
   const handlePageChange = (p: number) => patchUrl({ page: String(p) })
   const handleClearSearch = () => {
@@ -215,13 +210,6 @@ function KnowledgeBaseContent() {
                   <SectionCard
                     title={`法规台账${filtered.length > 0 ? `（${filtered.length} 份）` : ''}`}
                     description="Bitable 镜像清单 · 引擎入库状态实时可见"
-                    action={
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <Button size="small" icon={<ApartmentOutlined />} onClick={() => router.push('/safety/knowledge-base/graph')}>
-                          知识图谱
-                        </Button>
-                      </div>
-                    }
                   >
                     {/* 筛选器 */}
                     <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -236,18 +224,6 @@ function KnowledgeBaseContent() {
                           { value: 'draft', label: '草稿' },
                           { value: 'published', label: '已发布' },
                           { value: 'archived', label: '已归档' },
-                        ]}
-                      />
-                      <Select
-                        placeholder="卡片状态"
-                        allowClear
-                        value={cardFilter}
-                        onChange={handleCardChange}
-                        style={{ width: 126 }}
-                        size="small"
-                        options={[
-                          { value: 'has_card', label: '有知识卡片' },
-                          { value: 'no_card', label: '无知识卡片' },
                         ]}
                       />
                     </div>
