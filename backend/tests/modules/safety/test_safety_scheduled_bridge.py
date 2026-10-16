@@ -229,3 +229,45 @@ def test_hazard_round_consecutive_failure_alert(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(scenario())
     assert alerts == [("隐患AI分析轮询", 3)]
     assert sched._CONSECUTIVE_FAILURES["ai"] == 0  # 告警后重置
+
+
+def test_hazard_poll_tasks_use_nonblocking_dispatch() -> None:
+    """审查修复回归：hazard 三任务挂派发器而非整轮协程（防引擎内联阻塞）。"""
+    from app.modules.safety import scheduled
+
+    assert scheduled.HAZARD_AI_POLL_TASK.coro is scheduled._dispatch_hazard_ai_round
+    assert (
+        scheduled.HAZARD_REVIEW_POLL_TASK.coro is scheduled._dispatch_hazard_review_round
+    )
+    assert (
+        scheduled.HAZARD_SUPERVISION_POLL_TASK.coro
+        is scheduled._dispatch_hazard_supervision_round
+    )
+    # 派发器应瞬时返回，引擎侧超时不再是整轮上限的守卫位
+    assert scheduled.HAZARD_AI_POLL_TASK.timeout_seconds < scheduled._HAZARD_TIMEOUT
+
+
+def test_hazard_dispatch_returns_before_round_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """整轮在后台任务执行，派发协程不等待整轮完成（超时上限由 wait_for 保留）。"""
+    from app.modules.safety import scheduled
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_round():
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(scheduled, "_run_hazard_ai_round", slow_round)
+
+    async def scenario():
+        await scheduled._dispatch_hazard_ai_round()  # 应立即返回，不等整轮
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert scheduled._BACKGROUND_ROUNDS, "后台任务应持有引用"
+        release.set()
+        await asyncio.sleep(0.05)
+        assert not scheduled._BACKGROUND_ROUNDS, "完成后应释放引用"
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=3))

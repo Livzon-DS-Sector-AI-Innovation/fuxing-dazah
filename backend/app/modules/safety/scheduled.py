@@ -226,13 +226,57 @@ def _bulletin_watch_interval() -> int:
 
 _HAZARD_TIMEOUT = 45 * 60  # 对齐 scheduler.TASK_TIMEOUT（AI 分析单轮上限）
 
+# hazard 整轮的后台任务句柄（持引用防 GC，完成即移除）
+_BACKGROUND_ROUNDS: set[asyncio.Task] = set()
+
+
+def _round_done(task: asyncio.Task) -> None:
+    _BACKGROUND_ROUNDS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("hazard 后台轮询任务异常退出", exc_info=exc)
+
+
+def _dispatch_hazard_round(round_coro: Awaitable, label: str) -> None:
+    """整轮派发到后台任务后立即返回（审查修复：防引擎单循环阻塞）。
+
+    平台引擎对任务协程是内联 await（engine._maybe_run_task），协程直接跑
+    整轮 AI 分析（单轮上限 _HAZARD_TIMEOUT）会把引擎单循环挂起整轮时长，
+    期间全平台任务（含仓储推送、桥接 tick）停摆——与桥接任务「绝不 await」
+    同一纪律。超时上限由 wait_for 在后台任务内保留；重叠防护仍由
+    _hazard_single_round 的 per-key 锁负责（上轮未完跳过本次触发）。
+    """
+    task = asyncio.create_task(
+        asyncio.wait_for(round_coro, timeout=_HAZARD_TIMEOUT), name=label
+    )
+    _BACKGROUND_ROUNDS.add(task)
+    task.add_done_callback(_round_done)
+
+
+async def _dispatch_hazard_ai_round() -> None:
+    _dispatch_hazard_round(_run_hazard_ai_round(), "safety.hazard_ai_poll.round")
+
+
+async def _dispatch_hazard_review_round() -> None:
+    _dispatch_hazard_round(_run_hazard_review_round(), "safety.hazard_review_poll.round")
+
+
+async def _dispatch_hazard_supervision_round() -> None:
+    _dispatch_hazard_round(
+        _run_hazard_supervision_round(), "safety.hazard_supervision_poll.round"
+    )
+
+
 HAZARD_AI_POLL_TASK = TaskDefinition(
     name="safety.hazard_ai_poll",
     schedule=ScheduleConfig(
         strategy=ScheduleStrategy.INTERVAL, interval_seconds=_hazard_poll_interval(),
     ),
-    coro=_run_hazard_ai_round,
-    timeout_seconds=_HAZARD_TIMEOUT,
+    coro=_dispatch_hazard_ai_round,
+    # 引擎侧超时约束的是派发器（瞬时返回）；整轮上限在 _dispatch_hazard_round
+    timeout_seconds=60,
     module="safety",
 )
 
@@ -241,8 +285,8 @@ HAZARD_REVIEW_POLL_TASK = TaskDefinition(
     schedule=ScheduleConfig(
         strategy=ScheduleStrategy.INTERVAL, interval_seconds=_hazard_poll_interval(),
     ),
-    coro=_run_hazard_review_round,
-    timeout_seconds=_HAZARD_TIMEOUT,
+    coro=_dispatch_hazard_review_round,
+    timeout_seconds=60,
     module="safety",
 )
 
@@ -251,8 +295,8 @@ HAZARD_SUPERVISION_POLL_TASK = TaskDefinition(
     schedule=ScheduleConfig(
         strategy=ScheduleStrategy.INTERVAL, interval_seconds=_hazard_poll_interval(),
     ),
-    coro=_run_hazard_supervision_round,
-    timeout_seconds=_HAZARD_TIMEOUT,
+    coro=_dispatch_hazard_supervision_round,
+    timeout_seconds=60,
     module="safety",
 )
 

@@ -334,3 +334,30 @@ def test_delegated_pending_resumes_through_existing_path(monkeypatch: pytest.Mon
     assert len(approved_ids) == 1
     assert results.approvals[approved_ids[0]] is True
     assert captured["resume_tool_names"] == ["create_urs_review"]
+
+
+def test_domain_agent_excludes_delegate_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """审查修复回归：域子 Agent 工具面不含 delegate，防递归委派自身。
+
+    TOOL_GROUPS["urs"] 含 delegate 是 orchestrator 路由挂载口径；
+    get_domain_agent 注册域工具时必须剔除，否则子 Agent 可递归委派。
+    """
+    import app.modules.safety.business_agent.agent as agent_mod
+    from app.modules.safety.business_agent.tools import registry as reg_mod
+
+    agent_mod._DOMAIN_AGENT_CACHE.clear()
+    captured: list[list[str]] = []
+
+    def fake_register(agent, names):
+        captured.append(list(names))
+
+    monkeypatch.setattr(reg_mod, "register_tools_subset", fake_register)
+    try:
+        agent_mod.get_domain_agent("urs")
+        assert captured, "应调用 register_tools_subset"
+        assert "delegate" not in captured[0]
+        # 9 个 URS 域工具仍在
+        assert "query_urs_records" in captured[0]
+        assert "create_urs_review" in captured[0]
+    finally:
+        agent_mod._DOMAIN_AGENT_CACHE.clear()

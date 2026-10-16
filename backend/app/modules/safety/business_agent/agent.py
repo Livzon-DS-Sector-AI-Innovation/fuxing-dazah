@@ -161,7 +161,11 @@ def get_domain_agent(domain: str) -> Agent:
         _DOMAIN_AGENT_CACHE.clear()
 
     agent = _build_agent(cfg, prompt_path.read_text(encoding="utf-8"))
-    register_tools_subset(agent, list(TOOL_GROUPS[domain]))
+    # delegate 是 orchestrator 的元工具，域子 Agent 不持有——防递归委派自身
+    # （审查修复：TOOL_GROUPS["urs"] 含 delegate 是路由挂载口径，注册域
+    # Agent 工具时需剔除）。
+    domain_tools = [t for t in TOOL_GROUPS[domain] if t != "delegate"]
+    register_tools_subset(agent, domain_tools)
     _DOMAIN_AGENT_CACHE[cache_key] = agent
     return agent
 
