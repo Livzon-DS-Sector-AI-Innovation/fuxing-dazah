@@ -79,8 +79,9 @@ _AGENT_CACHE: dict[str, Agent] = {}
 def get_agent_for_tools(tool_names: list[str] | None) -> Agent:
     """获取仅包含指定工具的 Agent 实例。
 
-    按工具名组合的 sha256 哈希做进程内缓存。tool_names 为 None 或
-    包含全部工具时，返回全量 business_agent。
+    按工具名组合的 sha256 哈希做进程内缓存。tool_names 为 None 或等于常驻集时，
+    返回默认 business_agent（1-C：默认 Agent 只注册常驻 RESIDENT_TOOLS，不再全量；
+    按需域工具经 register_tools_subset 在路由命中时挂载）。
 
     警告：返回的 Agent 实例和 business_agent 共享底层模型实例（_MODEL
     是模块级单例），因此多实例并存不会额外占用模型连接资源。

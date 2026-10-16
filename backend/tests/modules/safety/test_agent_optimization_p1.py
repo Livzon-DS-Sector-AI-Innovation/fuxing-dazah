@@ -14,6 +14,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_sampling_params_aligned_to_warehouse() -> None:
     """T02（1-A）：temp 0.1 / max_tokens 8192，对齐仓储 Agent。"""
@@ -317,6 +319,96 @@ def test_generate_alarm_report_dispatch(monkeypatch) -> None:
     )
     assert out["success"] is False
     assert "中控暂无月报" in out["error"]
+
+
+# ── T08（1-C）：常驻清单 + 按需域可达 + resume 挂载 ────────────────
+
+
+def test_resident_tools_within_budget_and_consistent() -> None:
+    from app.modules.safety.business_agent.tools.registry import (
+        RESIDENT_TOOLS,
+        TOOL_KIND,
+    )
+
+    assert len(RESIDENT_TOOLS) <= 38
+    assert RESIDENT_TOOLS <= set(TOOL_KIND)
+    on_demand = set(TOOL_KIND) - RESIDENT_TOOLS
+    assert len(on_demand) == len(TOOL_KIND) - len(RESIDENT_TOOLS)
+
+
+def test_default_agent_mounts_resident_set() -> None:
+    """measure 同口径：默认注册面 = 常驻集（mock transport 计数）。"""
+    import httpx
+    from pydantic_ai import Agent
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["tools"] = json.loads(request.content).get("tools", [])
+        return httpx.Response(
+            200,
+            json={
+                "id": "x", "object": "chat.completion", "created": 1, "model": "m",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    async def run() -> None:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        agent = Agent(
+            OpenAIChatModel("t", provider=OpenAIProvider(api_key="x", http_client=client))
+        )
+        from app.modules.safety.business_agent.tools.registry import (
+            RESIDENT_TOOLS,
+            register_all_tools,
+        )
+
+        register_all_tools(agent)
+        await agent.run("你好")
+        names = {t["function"]["name"] for t in captured["tools"]}
+        await client.aclose()
+        assert names == set(RESIDENT_TOOLS)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("帮我看下最近的URS智能审核记录", "query_urs_records"),
+        ("发起一个设备采购URS审核", "create_urs_review"),
+        ("轮询一下隐患AI分析", "poll_hazard_ai_analysis"),
+        ("补一下隐患的整改审核", "poll_hazard_rectification_review"),
+        ("查一下当前的AI配置和模型清单", "query_ai_config"),
+        ("把这个月的日报整理成多维表格", "office_create_base"),
+        ("查一下特种作业持证到期预警", "query_cert_warnings"),
+    ],
+)
+def test_on_demand_tools_reachable_via_routing(message: str, expected: str) -> None:
+    """按需域工具（urs/ops/office 写/证照）经关键词路由可达。"""
+    from app.modules.safety.business_agent.tool_selector import select_tool_names
+
+    names = select_tool_names(message)
+    assert names is not None, message
+    assert expected in names, f"{message!r} → {sorted(names)[:12]}"
+
+
+def test_resume_mounts_pending_on_demand_tool() -> None:
+    from app.modules.safety.business_agent import executor
+    from app.modules.safety.business_agent.tools.registry import RESIDENT_TOOLS
+
+    mounted = executor._resume_mount_tools(["confirm_urs_assessment", "不存在的工具"])
+    assert "confirm_urs_assessment" in mounted          # 按需工具可达
+    assert RESIDENT_TOOLS <= set(mounted)               # 常驻集全在
+    assert "不存在的工具" not in mounted
+    assert len(mounted) <= len(RESIDENT_TOOLS) + 5      # 未退回全量
 
 
 

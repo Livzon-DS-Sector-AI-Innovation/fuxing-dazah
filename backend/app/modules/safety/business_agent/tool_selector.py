@@ -1,8 +1,9 @@
 """工具按需加载 —— 按用户意图动态选择工具子集，减少 tool definitions 开销。
 
-# DEPRECATED: S4 prompt 分节组装后，tool_catalog 节提示模型可见工具，不再需要关键词选子集。保留兼容期。
-现状：18 个工具全量注册，每轮 ~3,500 tokens 的固定 tool definitions 开销。
-优化后：平均 5-7 个工具，~1,200 tokens。关键词匹配零 AI 调用开销。
+1-C 后口径：名册 67 个工具 = 常驻 37（registry.RESIDENT_TOOLS，默认 Agent 注册面）
++ 按需 30（urs/ops/office 低频写/证照/相关方/明细查询等，域命中时挂载）。
+关键词命中 → 「核心兜底 + 命中域工具集」；未命中由调用方决定兜底（1-D：核心 15，
+不再回退全量）。全量 schema 参考 scripts/measure_tool_schema.py 实测（88.7KB 基线）。
 """
 
 from __future__ import annotations
@@ -18,24 +19,24 @@ logger = logging.getLogger(__name__)
 TOOL_GROUPS: dict[str, list[str]] = {
     "hazard": [
         "query_hazards", "query_hazard_stats",
-        # 隐患直读模式：督办通报（只读生成 / 推群）+ 轮询触发。
-        # agent.md 明确要求这些意图调用它们，漏登记会让关键词收窄时被摘掉。
+        # 隐患直读模式：督办通报（只读生成 / 推群）。轮询触发收 ops 运维域（拍板②）。
         "generate_supervision_bulletin", "send_hazard_supervision_bulletin",
-        "poll_hazard_ai_analysis", "poll_hazard_rectification_review",
     ],
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
         "run_regulation_ai_review",
-        "query_regulation_crawl_status",
     ],
     "contractor_admission": ["query_contractor_admissions"],
     "drill": [
         "query_drills",
         "generate_drill_plan", "sync_drill_plan_to_feishu",
     ],
-    "audit": [
+    "ops": [
+        # 运维域（按需，拍板②④）：隐患轮询补跑 + 管理调试查询（Web 后台均有页面）
+        "poll_hazard_ai_analysis", "poll_hazard_rectification_review",
         "query_ai_audits",
         "query_ai_config", "query_bitable_config", "query_scheduler_tasks",
+        "query_regulation_crawl_status",
     ],
     "daily_report": [
         "generate_daily_report",
@@ -106,9 +107,11 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     ],
     "contractor_admission": ["准入", "承包商", "相关方", "劳务派遣", "外包单位"],
     "drill": ["演练", "应急", "预案", "逃生", "疏散"],
-    "audit": [
+    "ops": [
         "审计", "AI调用", "token", "调用记录",
         "AI配置", "模型配置", "多维表格配置", "定时任务", "调度", "后台任务",
+        # 轮询补跑（拍板②）：「轮询一下隐患AI分析」等话术命中 ops 而非仅 hazard
+        "轮询", "补跑", "补上", "补一下", "采集状态", "采集监控",
     ],
     "daily_report": ["日报", "报表", "特殊作业", "次日预警", "计划外", "17点", "17点日报"],
     "fire_alarm": ["消防报警", "消防", "火警", "报警器"],

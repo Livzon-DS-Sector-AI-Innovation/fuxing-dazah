@@ -317,6 +317,8 @@ async def resume(
                 deps,
                 message_history=messages,
                 deferred_tool_results=results,
+                # 1-C：被确认的工具（可能属按需域）必须在本轮挂载面内
+                resume_tool_names=[c.tool_name for c in deferred_requests.approvals],
             )
     except Exception:
         logger.exception("resume 执行失败")
@@ -588,13 +590,25 @@ _SUMMARY_KEEP_RECENT = 10        # 保留最近 10 条原文不参与摘要（co
 def _registered_tool_names(tool_names: list[str] | None) -> list[str]:
     """本轮 Agent 实际会注册的工具名（口径与 get_agent_for_tools 一致）。
 
-    None/空 = 全量回退（business_agent 含全部工具）；否则取子集，未知名字与
-    register_tools_subset 一样静默丢弃。tool_catalog 节必须用这份名单渲染，
-    否则模型会被提示去调用一个不在工具表里的工具（"工具未挂载"根因）。
+    None/空 = 常驻集（1-C：默认 Agent 只注册 RESIDENT_TOOLS，不再全量）；
+    否则取子集，未知名字与 register_tools_subset 一样静默丢弃。tool_catalog 节
+    必须用这份名单渲染，否则模型会被提示去调用一个不在工具表里的工具
+    （"工具未挂载"根因）。
     """
     if not tool_names:
-        return sorted(TOOL_KIND)
+        from app.modules.safety.business_agent.tools.registry import RESIDENT_TOOLS
+
+        return sorted(RESIDENT_TOOLS)
     return sorted({name for name in tool_names if name in TOOL_KIND})
+
+
+def _resume_mount_tools(resume_tool_names: list[str]) -> list[str]:
+    """resume 轮挂载面 = 常驻集 + 被确认工具（按需域工具如 URS 必须可达）。"""
+    from app.modules.safety.business_agent.tools.registry import RESIDENT_TOOLS
+
+    return sorted(
+        set(RESIDENT_TOOLS) | {n for n in resume_tool_names if n in TOOL_KIND}
+    )
 
 
 async def _agent_run(
@@ -603,6 +617,7 @@ async def _agent_run(
     *,
     message_history: list[ModelMessage] | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
+    resume_tool_names: list[str] | None = None,
 ):
     """统一的 agent.run() 调用包装。"""
     # S3 事件流：读历史优先从事件表 derive（derive_messages），回退旧 message_history。
@@ -637,7 +652,11 @@ async def _agent_run(
     # 必须在 prompt 组装之前算出来：tool_catalog 节要按「本轮真正挂载的工具」
     # 渲染，否则模型会被提示去调用一个不在工具表里的工具（"工具未挂载"根因）。
     selected_tools: list[str] | None = None
-    if user_message and deferred_tool_results is None:
+    if resume_tool_names:
+        # 1-C：resume（写确认恢复）轮必须包含被确认的按需工具（如 URS），
+        # 挂「常驻集 + pending 工具」，不允许退回全量。
+        selected_tools = _resume_mount_tools(resume_tool_names)
+    elif user_message and deferred_tool_results is None:
         from app.modules.safety.business_agent.tool_selector import select_tool_names
 
         # 用原始用户消息做意图词匹配（不用拼了 prompt_prefix 的 effective_message，

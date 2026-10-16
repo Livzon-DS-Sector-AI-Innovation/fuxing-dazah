@@ -297,17 +297,44 @@ def _wrap_tool(func: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     return wrapper
 
 
-def register_all_tools(agent: Agent) -> None:
-    """将所有工具函数注册到给定的 Pydantic AI Agent 实例。
+# ── 1-C 常驻/按需划分 ──────────────────────────────────────────────
+# 常驻集 = 核心兜底 15 + 高频通用工具（默认 Agent 注册面，measure 口径 ≤38）。
+# 按需工具（TOOL_KIND − RESIDENT_TOOLS）仍在名册中，经 tool_selector 域命中
+# 由 register_tools_subset 挂载（urs/ops/office 低频写/证照/相关方/明细查询等）。
 
+RESIDENT_TOOLS: frozenset[str] = frozenset({
+    # 核心兜底 15（1-D 路由置信不足时的挂载集）
+    "knowledge_search", "web_search",
+    "query_hazards", "query_hazard_stats",
+    "query_latest_regulations", "query_special_op_records",
+    "query_chemical_inventory", "query_fire_alarms", "query_central_alarms",
+    "query_drills", "query_oh",
+    "generate_daily_report", "generate_supervision_bulletin",
+    "office_search_files", "office_read_docx",
+    # 高频通用（域外常驻）
+    "query_oh_persons", "query_oh_exams",
+    "query_work_ticket_reviews", "preview_guardian_subsidy", "query_msds",
+    "office_read_sheet",
+    "generate_drill_plan", "generate_alarm_report", "sync_drill_plan_to_feishu",
+    "run_regulation_ai_review",
+    "trigger_oh_exam_parse", "create_oh_followup", "close_oh_followup",
+    "analyze_oh_transfer", "override_oh_conclusion",
+    "generate_guardian_subsidy", "send_hazard_supervision_bulletin",
+    "office_create_docx", "office_create_sheet", "office_write_sheet",
+    "office_generate_docx_pdf", "office_upload_file",
+})
+
+
+def register_all_tools(agent: Agent) -> None:
+    """将**常驻工具集**注册到给定的 Pydantic AI Agent 实例（1-C：默认面 ≤38）。
+
+    按需工具不进默认注册，由 register_tools_subset 在域命中时挂载。
     所有工具注册前先 wrap（统一管道）；写工具额外传 ``requires_approval=True``。
     """
-    # 只读（带 RunContext）
-    for func in _all_read_funcs():
-        agent.tool(_wrap_tool(func, func.__name__))
-    # 写入（带 RunContext + requires_approval）
-    for func in _all_write_funcs():
-        agent.tool(_wrap_tool(func, func.__name__), requires_approval=True)
+    names = sorted(RESIDENT_TOOLS & set(_FUNC_BY_NAME))
+    for name in names:
+        func = _FUNC_BY_NAME[name]
+        agent.tool(_wrap_tool(func, name), requires_approval=TOOL_KIND[name])
 
 
 # ── 函数名 → 函数对象映射（供 register_tools_subset 使用）─────────

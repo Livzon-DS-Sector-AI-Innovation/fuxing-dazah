@@ -72,8 +72,9 @@ def test_catalog_is_explicit_when_nothing_mounted() -> None:
 def test_catalog_fallback_never_exceeds_registry() -> None:
     text = ToolCatalogSection().render(_deps("safety_admin"), {})
     names = _parse_catalog(text)
-    assert names == set(allowed_tools("safety_admin"))
-    assert names <= set(registry.TOOL_KIND)
+    # 1-C：缺省 context 回退常驻集（默认 Agent 注册面），与角色目录取交集
+    assert names == set(allowed_tools("safety_admin")) & set(registry.RESIDENT_TOOLS)
+    assert names <= set(registry.RESIDENT_TOOLS)
 
 
 def test_catalog_empty_for_role_none() -> None:
@@ -103,7 +104,8 @@ def test_bulletin_query_is_both_mounted_and_advertised() -> None:
 def test_registered_tool_names_matches_agent_input() -> None:
     from app.modules.safety.business_agent.executor import _registered_tool_names
 
-    assert _registered_tool_names(None) == sorted(registry.TOOL_KIND)
-    assert _registered_tool_names([]) == sorted(registry.TOOL_KIND)
+    # 1-C：None/空 = 常驻集（默认 Agent 注册面），不再回退全量名册
+    assert _registered_tool_names(None) == sorted(registry.RESIDENT_TOOLS)
+    assert _registered_tool_names([]) == sorted(registry.RESIDENT_TOOLS)
     # 未知工具名与 register_tools_subset 一样被丢弃
     assert _registered_tool_names(["query_hazards", "not_a_tool"]) == ["query_hazards"]

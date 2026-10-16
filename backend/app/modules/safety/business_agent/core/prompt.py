@@ -196,15 +196,15 @@ def _registered_tool_names(context: dict | None) -> frozenset[str]:
     """本轮 Agent 实际注册的工具名集合。
 
     executor 通过 ``context["tool_names"]`` 传入；其它调用方（测试/预览）缺省时
-    回退到 registry 全量，保证渲染结果永远不超出真实工具表。
+    回退到 registry 常驻集（1-C：默认 Agent 不再注册全量，渲染保持真话）。
     """
     names = (context or {}).get("tool_names")
     if names is not None:
         return frozenset(names)
     try:
-        from app.modules.safety.business_agent.tools.registry import TOOL_KIND
+        from app.modules.safety.business_agent.tools.registry import RESIDENT_TOOLS
 
-        return frozenset(TOOL_KIND)
+        return frozenset(RESIDENT_TOOLS)
     except Exception:  # noqa: BLE001 - 渲染失败不应阻塞对话
         return frozenset()
 
