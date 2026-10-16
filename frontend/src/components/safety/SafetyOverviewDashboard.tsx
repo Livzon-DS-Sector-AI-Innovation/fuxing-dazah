@@ -535,7 +535,9 @@ export function SafetyOverviewDashboard() {
 
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} xl={14}>
-          <div className="flex flex-col gap-3">
+          {/* h-full 打通百分比高度链：Col 等高拉伸 → 本列 definite → 图表卡 flex-1 分摊余高，
+              卡内 height:100% 才能解析（echarts 否则回退 100px 小画布缩在卡顶） */}
+          <div className="flex h-full flex-col gap-3">
             <DigestSection
               cells={data?.digest?.cells ?? null}
               degraded={Boolean(data && data.digest === null)}
@@ -544,7 +546,7 @@ export function SafetyOverviewDashboard() {
             <SectionCard
               title="隐患治理趋势"
               description="近 30 天新增 / 闭环"
-              className="flex h-full flex-col"
+              className="flex flex-1 flex-col"
               bodyClassName="flex-1 min-h-[240px]"
             >
               {trend ? (
@@ -566,7 +568,7 @@ export function SafetyOverviewDashboard() {
             <SectionCard
               title="报警分析"
               description="近 7 日消防 / 中控按日计数"
-              className="flex h-full flex-col"
+              className="flex flex-1 flex-col"
               bodyClassName="flex-1 min-h-[240px]"
             >
               {analysis ? (

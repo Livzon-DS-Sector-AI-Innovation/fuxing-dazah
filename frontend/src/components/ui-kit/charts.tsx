@@ -2,7 +2,7 @@
 
 import * as echarts from 'echarts'
 import ReactECharts from 'echarts-for-react'
-import type { CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { EmptyGuide } from './EmptyGuide'
 
 /**
@@ -112,10 +112,39 @@ export function TrendAreaChart({
   height?: number | string
   emptyText?: string
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<ReactECharts>(null)
+  const empty = !hasData([seriesA, seriesB])
+
+  // 卡片被 Row 等高拉伸时 echarts 实例不跟随容器尺寸，canvas 停在初始小尺寸
+  // （表现为图表压在顶部、下方大片空白、Y 轴刻度重叠）——用 ResizeObserver 补 resize。
+  // 首轮回调跳过：echarts 初始化时已按容器尺寸渲染，挂载瞬间再 resize 会与其内部渲染竞态
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (empty || !wrap || typeof ResizeObserver === 'undefined') return
+    let lastW = wrap.clientWidth
+    let lastH = wrap.clientHeight
+    const ro = new ResizeObserver(entries => {
+      const rect = entries[entries.length - 1].contentRect
+      if (rect.width === lastW && rect.height === lastH) return
+      lastW = rect.width
+      lastH = rect.height
+      const chart = chartRef.current?.getEchartsInstance()
+      // 实例可能在 React 重挂载间隙被 dispose；竞态下 resize 抛错则静默跳过，等下次触发
+      if (!chart || chart.isDisposed()) return
+      try {
+        chart.resize()
+      } catch {
+        /* 下一次尺寸变化会再触发 */
+      }
+    })
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [empty])
+
   ensureWarehouseTheme()
-  if (!hasData([seriesA, seriesB])) return <ChartEmpty height={height} text={emptyText} />
+  if (empty) return <ChartEmpty height={height} text={emptyText} />
   const areaStyle = (from: string, to: string) => ({
-    opacity: 0.9,
     color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
       { offset: 0, color: from },
       { offset: 1, color: to },
@@ -123,32 +152,47 @@ export function TrendAreaChart({
   })
   const colorA = TONE_HEX[toneA]
   const colorB = TONE_HEX[toneB]
+  const line = (color: string, data: number[], name: string, areaFrom: number) => ({
+    name,
+    type: 'line',
+    data,
+    smoothMonotone: 'x', // 单调插值：尖峰处样条不再向上过冲出假包络
+    showSymbol: false, // 常态隐藏数据点，悬停/tooltip 高亮时浮现
+    symbol: 'circle',
+    symbolSize: 4.5,
+    lineStyle: { color },
+    itemStyle: { color },
+    emphasis: { focus: 'series' },
+    areaStyle: areaStyle(hexRgba(color, areaFrom), hexRgba(color, 0.02)),
+  })
   const option = {
     tooltip: { trigger: 'axis' },
     legend: { data: [labelA, labelB], right: 8, top: 0 },
-    grid: { left: 44, right: 16, top: 32, bottom: 28 },
-    xAxis: { type: 'category', boundaryGap: false, data: dates },
-    yAxis: { type: 'value' },
+    // containLabel 保证 Y 轴刻度不被裁剪；top 留出图例行高度
+    grid: { left: 8, right: 16, top: 36, bottom: 4, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: dates,
+      axisLabel: { showMaxLabel: true }, // 间隔抽稀时保证最新一天始终可见
+    },
+    yAxis: { type: 'value', minInterval: 1 }, // 计数场景刻度取整
     series: [
-      {
-        name: labelA,
-        type: 'line',
-        data: seriesA,
-        lineStyle: { color: colorA },
-        itemStyle: { color: colorA },
-        areaStyle: areaStyle(hexRgba(colorA, 0.22), hexRgba(colorA, 0.02)),
-      },
-      {
-        name: labelB,
-        type: 'line',
-        data: seriesB,
-        lineStyle: { color: colorB },
-        itemStyle: { color: colorB },
-        areaStyle: areaStyle(hexRgba(colorB, 0.18), hexRgba(colorB, 0.02)),
-      },
+      line(colorA, seriesA, labelA, 0.18),
+      line(colorB, seriesB, labelB, 0.14),
     ],
   }
-  return <ReactECharts option={option} style={{ height } as CSSProperties} theme="warehouse" notMerge />
+  return (
+    <div ref={wrapRef} style={{ height } as CSSProperties}>
+      <ReactECharts
+        ref={chartRef}
+        option={option}
+        style={{ height: '100%', width: '100%' }}
+        theme="warehouse"
+        notMerge
+      />
+    </div>
+  )
 }
 
 /** 分类占比环形图：中心显示总量，统一顺序色环 */
