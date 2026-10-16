@@ -329,22 +329,45 @@ async def web_search(
 
 async def query_latest_regulations(
     ctx: RunContext[SafetyDeps],
+    view: str = "crawl",
+    limit: int | None = None,
+    days: int = 30,
+    impact_level: str = "",
+    business_domain: str = "",
+) -> dict[str, Any]:
+    """查询最新法规标准动态（view 区分爬取/收录两个视角）。
+
+    Args:
+        view: crawl=爬取视角（最近抓取的法规标准更新，支持按影响等级/业务领域筛选）/
+            ingested=收录管线视角（最新收录，含 AI 判定摘要与修订标记，limit 上限 20）
+        limit: 返回条数上限（缺省：crawl=10 / ingested=5，最大 20）
+        days: 查询最近 N 天（默认 30，仅 view=crawl）
+        impact_level: 影响等级筛选：高 / 中 / 低（空=全部，仅 view=crawl）
+        business_domain: 业务领域筛选：安全生产 / 职业健康 / 环保 / 消防 / 危化品 / 特种设备
+            （空=全部，仅 view=crawl）
+
+    示例：最近 30 天有哪些高影响等级的法规更新；最新收录了哪些法规。
+    """
+    if view == "crawl":
+        return await _query_regulations_crawl_impl(
+            ctx, limit=10 if limit is None else limit, days=days,
+            impact_level=impact_level, business_domain=business_domain,
+        )
+    if view == "ingested":
+        return await _query_regulations_ingested_impl(
+            ctx, limit=5 if limit is None else limit,
+        )
+    return {"error": f"未知 view={view!r}，可选：crawl / ingested"}
+
+
+async def _query_regulations_crawl_impl(
+    ctx: RunContext[SafetyDeps],
     limit: int = 10,
     days: int = 30,
     impact_level: str = "",
     business_domain: str = "",
 ) -> dict[str, Any]:
-    """查询最近抓取的安全法规标准更新，支持按影响等级和业务领域筛选。
-
-    Args:
-        limit: 返回条数上限（默认 10）
-        days: 查询最近 N 天的更新（默认 30）
-        impact_level: 影响等级筛选：高 / 中 / 低（空=全部）
-        business_domain: 业务领域筛选：安全生产 / 职业健康 / 环保 / 消防 / 危化品 / 特种设备（空=全部）
-
-    Returns:
-        dict: {"items": [{"id": "...", "article_no": "...", "title": "...", ...}], "total": int}
-    """
+    """爬取视角：最近抓取的安全法规标准更新（合并前 query_latest_regulations 本体）。"""
     # 直读分支（批次二-4）：DIRECT 开启时走两表（安全/环保法规标准）Bitable 直读，
     # 语义忠实复刻 legacy（.scratch/knowledge-direct/spec.md D4/D5）；关=逐行 legacy。
     from app.modules.safety.service.knowledge_direct import config as kd_config
@@ -484,7 +507,7 @@ async def query_ai_audits(
 # ── 应急演练查询 ──────────────────────────────────────────────────
 
 
-async def query_drill_plans(
+async def _query_drill_plans_impl(
     ctx: RunContext[SafetyDeps],
     department: str | None = None,
     status: str | None = None,
@@ -522,7 +545,7 @@ async def query_drill_plans(
     }
 
 
-async def query_drill_records(
+async def _query_drill_records_impl(
     ctx: RunContext[SafetyDeps],
     department: str | None = None,
     status: str | None = None,
@@ -561,12 +584,45 @@ async def query_drill_records(
     }
 
 
+async def query_drills(
+    ctx: RunContext[SafetyDeps],
+    kind: str = "plans",
+    department: str | None = None,
+    status: str | None = None,
+    drill_type: str | None = None,
+    keyword: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """查询应急演练计划或实施记录（kind 区分两类）。
+
+    Args:
+        kind: plans=演练计划（计划阶段、尚未执行）/ records=实施记录（已执行，
+            含待复核与已复核，含执行时间/发现问题/整改人/复核人）
+        department: 部门筛选（如"设备动力部"）
+        status: 复核状态筛选（已完成/未完成）
+        drill_type: 演练类型（应急疏散演练/现场岗位处置/专项应急演练/综合应急演练/消防器材培训）
+        keyword: 演练内容关键词搜索
+        limit: 返回条数上限（默认 20）
+
+    示例：查一下生产部今年的应急疏散演练计划；上个月有哪些演练记录没复核。
+    """
+    kw = {
+        "department": department, "status": status, "drill_type": drill_type,
+        "keyword": keyword, "limit": 20 if limit is None else limit,
+    }
+    if kind == "plans":
+        return await _query_drill_plans_impl(ctx, **kw)
+    if kind == "records":
+        return await _query_drill_records_impl(ctx, **kw)
+    return {"error": f"未知 kind={kind!r}，可选：plans / records"}
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MSDS 智能提取入库 — 只读工具
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def query_msds_documents(
+async def _query_msds_documents_impl(
     ctx: RunContext[SafetyDeps],
     name: str | None = None,
     cas_no: str | None = None,
@@ -624,7 +680,7 @@ async def query_msds_documents(
     }
 
 
-async def query_msds_collections(
+async def _query_msds_collections_impl(
     ctx: RunContext[SafetyDeps],
     parse_status: str | None = None,
     limit: int = 20,
@@ -656,6 +712,35 @@ async def query_msds_collections(
         ],
         "total": total,
     }
+
+
+async def query_msds(
+    ctx: RunContext[SafetyDeps],
+    kind: str = "documents",
+    name: str | None = None,
+    cas_no: str | None = None,
+    parse_status: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """查询 MSDS 化学品安全数据台账或供应商资料采集记录（kind 区分两类）。
+
+    Args:
+        kind: documents=MSDS 标准化台账（危险性说明/理化特性/职业接触限值/
+            健康危害/急救措施等）/ collections=供应商 MSDS 资料采集记录
+            （解析状态跟踪：pending=待解析 / parsed=已解析 / failed=解析失败）
+        name: 物质名称模糊搜索（如"异丙醇"，kind=documents 时有效）
+        cas_no: CAS号搜索（如"67-63-0"，kind=documents 时有效）
+        parse_status: 解析状态筛选（kind=collections 时有效）
+        limit: 返回条数上限（默认 20）
+
+    示例：查一下异丙醇的 MSDS；有哪些 MSDS 解析失败的记录。
+    """
+    kw = {"limit": 20 if limit is None else limit}
+    if kind == "documents":
+        return await _query_msds_documents_impl(ctx, name=name, cas_no=cas_no, **kw)
+    if kind == "collections":
+        return await _query_msds_collections_impl(ctx, parse_status=parse_status, **kw)
+    return {"error": f"未知 kind={kind!r}，可选：documents / collections"}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -791,7 +876,7 @@ async def query_oh_exams(
     }
 
 
-async def query_oh_positions(
+async def _query_oh_positions_impl(
     ctx: RunContext[SafetyDeps],
     department: str | None = None,
     hazard_factors_status: str | None = None,
@@ -838,7 +923,7 @@ async def query_oh_positions(
     }
 
 
-async def query_oh_hazard_factors(
+async def _query_oh_hazard_factors_impl(
     ctx: RunContext[SafetyDeps],
     keyword: str | None = None,
     limit: int = 50,
@@ -890,7 +975,7 @@ async def query_oh_hazard_factors(
     }
 
 
-async def query_oh_followups(
+async def _query_oh_followups_impl(
     ctx: RunContext[SafetyDeps],
     status: str | None = None,
     category: str | None = None,
@@ -952,7 +1037,7 @@ async def query_oh_followups(
     }
 
 
-async def query_oh_applications(
+async def _query_oh_applications_impl(
     ctx: RunContext[SafetyDeps],
     status: str | None = None,
     transfer_type: str | None = None,
@@ -1009,7 +1094,7 @@ async def query_oh_applications(
     }
 
 
-async def query_oh_hazard_enums(
+async def _query_oh_hazard_enums_impl(
     ctx: RunContext[SafetyDeps],
 ) -> dict[str, Any]:
     """查询危害因素标准字典（42 项，GBZ 188 相关标准名清单）。
@@ -1026,6 +1111,70 @@ async def query_oh_hazard_enums(
 
     enums = await OhHazardFactorService(ctx.deps.db).get_enums()
     return {"items": list(enums), "total": len(enums)}
+
+
+async def query_oh(
+    ctx: RunContext[SafetyDeps],
+    entity: str,
+    department: str | None = None,
+    hazard_factors_status: str | None = None,
+    keyword: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+    person_id: str | None = None,
+    due_order: bool = False,
+    transfer_type: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """查询职业健康明细数据（entity 指定查什么；人员台账与体检记录见独立工具）。
+
+    Args:
+        entity: positions=岗位危害因素台账（部门+岗位→接触危害因素标准名，含登记状态）/
+            hazard_factors=危害因素 PPE 映射字典（标准名→呼吸防护用品）/
+            followups=异常随访记录（体检异常→复查/转诊闭环跟踪）/
+            applications=转岗/离岗体检申请（含危害差异分析结果）/
+            hazard_enums=危害因素标准字典（42 项 GBZ 188 清单，无其他参数）
+        department: 部门筛选（positions 有效）
+        hazard_factors_status: 危害因素登记状态（filled=已登记/empty=未登记/inferred=推断，positions 有效）
+        keyword: 关键词（hazard_factors 按危害因素名、applications 按编号/姓名/部门）
+        status: 状态筛选（followups: open=待处置/followed=已处置待闭环/closed=已关闭/expired=已逾期；
+            applications: 已通过/审批中/已拒绝等）
+        category: 随访指标类别（lab=检验/vision=视力/hearing=听力/physique=体格/other=其他，followups 有效）
+        person_id: 人员 ID（UUID，followups 只看某人）
+        due_order: 按建议处置日期排序、到期优先（followups 有效）
+        transfer_type: 申请类型（transfer=转岗/post_employment=离岗，applications 有效）
+        limit: 返回条数上限（缺省用各实体默认：positions/followups/applications=20、hazard_factors=50）
+
+    示例：查一下哪些岗位接触噪声；有哪些待处置的异常随访；生产部最近的转岗申请分析结果。
+    """
+    if entity == "positions":
+        return await _query_oh_positions_impl(
+            ctx, department=department,
+            hazard_factors_status=hazard_factors_status,
+            limit=20 if limit is None else limit,
+        )
+    if entity == "hazard_factors":
+        return await _query_oh_hazard_factors_impl(
+            ctx, keyword=keyword, limit=50 if limit is None else limit,
+        )
+    if entity == "followups":
+        return await _query_oh_followups_impl(
+            ctx, status=status, category=category, person_id=person_id,
+            due_order=due_order, limit=20 if limit is None else limit,
+        )
+    if entity == "applications":
+        return await _query_oh_applications_impl(
+            ctx, status=status, transfer_type=transfer_type, keyword=keyword,
+            limit=20 if limit is None else limit,
+        )
+    if entity == "hazard_enums":
+        return await _query_oh_hazard_enums_impl(ctx)
+    return {
+        "error": (
+            f"未知 entity={entity!r}，可选：positions / hazard_factors / "
+            f"followups / applications / hazard_enums"
+        )
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2307,11 +2456,11 @@ async def query_regulation_crawl_status(
     }
 
 
-async def query_regulation_latest(
+async def _query_regulations_ingested_impl(
     ctx: RunContext[SafetyDeps],
     limit: int = 5,
 ) -> dict[str, Any]:
-    """查询最新收录的法规（收录管线视角：AI 判定摘要与修订标记）。
+    """收录管线视角：最新收录的法规（合并前 query_regulation_latest 本体）。
 
     Args:
         limit: 返回条数上限（默认 5，最大 20）

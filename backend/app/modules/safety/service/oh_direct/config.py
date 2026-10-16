@@ -26,7 +26,7 @@ DEFAULT_CACHE_TTL_SECONDS = 60
 
 
 def direct_enabled() -> bool:
-    """直读总开关（默认关闭）：Agent query_oh_hazard_factors 走危害因素
+    """直读总开关（默认关闭）：Agent query_oh(entity=hazard_factors) 走危害因素
     PPE 表直读（query_oh_positions 不接分支，见模块 docstring）。"""
     return gates.direct_enabled(_DOMAIN)
 

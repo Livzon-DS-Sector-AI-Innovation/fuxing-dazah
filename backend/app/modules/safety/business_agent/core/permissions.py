@@ -25,9 +25,10 @@ TOOL_QUERY_HAZARD_STATS = "query_hazard_stats"
 TOOL_QUERY_CONTRACTOR_ADMISSIONS = "query_contractor_admissions"
 TOOL_KNOWLEDGE_SEARCH = "knowledge_search"
 TOOL_WEB_SEARCH = "web_search"
-TOOL_QUERY_LATEST_REGULATIONS = "query_latest_regulations"
+TOOL_QUERY_LATEST_REGULATIONS = "query_latest_regulations"  # view 区分爬取/收录视角（1-C 合并）
+TOOL_QUERY_DRILLS = "query_drills"  # kind 区分演练计划/实施记录（1-C 合并）
+TOOL_QUERY_MSDS = "query_msds"  # kind 区分 MSDS 台账/采集记录（1-C 合并）
 TOOL_QUERY_REGULATION_CRAWL_STATUS = "query_regulation_crawl_status"  # 采集监控状态（收录管线）
-TOOL_QUERY_REGULATION_LATEST = "query_regulation_latest"  # 最新收录（收录管线视角）
 TOOL_QUERY_AI_AUDITS = "query_ai_audits"  # 审计数据含 prompt 全文，仅 safety_admin
 TOOL_QUERY_AI_CONFIG = "query_ai_config"  # AI 配置（模型与场景清单，脱敏）
 TOOL_QUERY_SCHEDULER_TASKS = "query_scheduler_tasks"  # 定时任务清单
@@ -38,10 +39,6 @@ TOOL_QUERY_EHS_CHANGES = "query_ehs_changes"  # EHS 变更明细（本地同步�
 TOOL_QUERY_WORK_TICKET_REVIEWS = "query_work_ticket_reviews"  # 作业票审核记录与违规明细
 TOOL_SCREEN_WORK_TICKET_PERSONNEL = "screen_work_ticket_personnel"  # 作业票外包人员直读筛查（平台直读，敏感字段打码）
 TOOL_QUERY_HAZARD_IDENTIFICATIONS = "query_hazard_identifications"  # 危险源辨识明细
-TOOL_QUERY_DRILL_PLANS = "query_drill_plans"
-TOOL_QUERY_DRILL_RECORDS = "query_drill_records"
-TOOL_QUERY_MSDS_DOCUMENTS = "query_msds_documents"
-TOOL_QUERY_MSDS_COLLECTIONS = "query_msds_collections"
 # 写入
 TOOL_GENERATE_DRILL_PLAN = "generate_drill_plan"
 TOOL_SYNC_DRILL_TO_FEISHU = "sync_drill_plan_to_feishu"
@@ -66,11 +63,7 @@ TOOL_RUN_REGULATION_AI_REVIEW = "run_regulation_ai_review"
 # 职业健康（只读）
 TOOL_QUERY_OH_PERSONS = "query_oh_persons"
 TOOL_QUERY_OH_EXAMS = "query_oh_exams"
-TOOL_QUERY_OH_POSITIONS = "query_oh_positions"
-TOOL_QUERY_OH_HAZARD_FACTORS = "query_oh_hazard_factors"
-TOOL_QUERY_OH_FOLLOWUPS = "query_oh_followups"
-TOOL_QUERY_OH_APPLICATIONS = "query_oh_applications"
-TOOL_QUERY_OH_HAZARD_ENUMS = "query_oh_hazard_enums"
+TOOL_QUERY_OH = "query_oh"  # entity 合一（1-C）
 # 职业健康（写入）
 TOOL_TRIGGER_OH_EXAM_PARSE = "trigger_oh_exam_parse"
 TOOL_CREATE_OH_FOLLOWUP = "create_oh_followup"
@@ -153,15 +146,12 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_KNOWLEDGE_SEARCH,
         TOOL_WEB_SEARCH,
         TOOL_QUERY_LATEST_REGULATIONS,
+        TOOL_QUERY_DRILLS,
+        TOOL_QUERY_MSDS,
         TOOL_QUERY_REGULATION_CRAWL_STATUS,
-        TOOL_QUERY_REGULATION_LATEST,
         TOOL_QUERY_AI_CONFIG,
         TOOL_QUERY_SCHEDULER_TASKS,
         TOOL_QUERY_BITABLE_CONFIG,
-        TOOL_QUERY_DRILL_PLANS,
-        TOOL_QUERY_DRILL_RECORDS,
-        TOOL_QUERY_MSDS_DOCUMENTS,
-        TOOL_QUERY_MSDS_COLLECTIONS,
         TOOL_GENERATE_DAILY_REPORT,
         TOOL_GENERATE_SUPERVISION_BULLETIN,
         TOOL_QUERY_URS_RECORDS,
@@ -185,11 +175,7 @@ _OH_READ_TOOLS: frozenset[str] = frozenset(
     {
         TOOL_QUERY_OH_PERSONS,
         TOOL_QUERY_OH_EXAMS,
-        TOOL_QUERY_OH_POSITIONS,
-        TOOL_QUERY_OH_HAZARD_FACTORS,
-        TOOL_QUERY_OH_FOLLOWUPS,
-        TOOL_QUERY_OH_APPLICATIONS,
-        TOOL_QUERY_OH_HAZARD_ENUMS,
+        TOOL_QUERY_OH,  # entity 合一：positions/hazard_factors/followups/applications/hazard_enums（1-C）
     }
 )
 

@@ -941,14 +941,14 @@ async def test_mcp_query_regulation_crawl_status(db_session, monkeypatch):
 
 async def test_mcp_query_regulation_latest(db_session, monkeypatch):
     from app.modules.safety.business_agent.tools.read_tools import (
-        query_regulation_latest,
+        query_latest_regulations as query_regulation_latest,
     )
 
     _use_status(monkeypatch, _StatusClient())
     db_session.add(_mk_run_row("run-mcp"))
     await db_session.flush()
 
-    result = await query_regulation_latest(_FakeCtx(db_session), limit=3)
+    result = await query_regulation_latest(_FakeCtx(db_session), view="ingested", limit=3)
     assert result["success"] is True
     assert result["items"][0]["title"] == "新法（修订）"
     assert result["items"][0]["is_revision"] is True

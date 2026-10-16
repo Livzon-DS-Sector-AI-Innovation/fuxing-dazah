@@ -22,7 +22,7 @@ DEFAULT_CACHE_TTL_SECONDS = 60
 
 
 def direct_enabled() -> bool:
-    """直读总开关（默认关闭）：Agent query_msds_documents 走台账表直读。"""
+    """直读总开关（默认关闭）：Agent query_msds(kind=documents) 走台账表直读。"""
     return gates.direct_enabled(_DOMAIN)
 
 

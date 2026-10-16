@@ -310,11 +310,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
     ),
     _gate(
         "SAFETY_MSDS_DIRECT_ENABLED", False,
-        "MSDS 台账直读开关（query_msds_documents；采集/台账订阅不可退订）",
+        "MSDS 台账直读开关（query_msds(kind=documents)；采集/台账订阅不可退订）",
     ),
     _gate(
         "SAFETY_OH_DIRECT_ENABLED", False,
-        "职业健康直读开关（仅 query_oh_hazard_factors 切直读）",
+        "职业健康直读开关（仅 query_oh(entity=hazard_factors) 切直读）",
     ),
     _gate(
         "SAFETY_HAZARD_ID_DIRECT_ENABLED", False,

@@ -26,11 +26,11 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
         "run_regulation_ai_review",
-        "query_regulation_crawl_status", "query_regulation_latest",
+        "query_regulation_crawl_status",
     ],
     "contractor_admission": ["query_contractor_admissions"],
     "drill": [
-        "query_drill_plans", "query_drill_records",
+        "query_drills",
         "generate_drill_plan", "sync_drill_plan_to_feishu",
     ],
     "audit": [
@@ -54,14 +54,12 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "renew_person_certificate",
     ],
     "oh": [
-        "query_oh_persons", "query_oh_exams", "query_oh_positions",
-        "query_oh_hazard_factors", "query_oh_followups", "query_oh_applications",
-        "query_oh_hazard_enums",
+        "query_oh_persons", "query_oh_exams", "query_oh",
         "trigger_oh_exam_parse", "create_oh_followup", "close_oh_followup",
         "analyze_oh_transfer", "override_oh_conclusion",
     ],
     "msds": [
-        "query_msds_documents", "query_msds_collections",
+        "query_msds",
     ],
     "office": [
         "office_search_files", "office_read_docx", "office_read_sheet",

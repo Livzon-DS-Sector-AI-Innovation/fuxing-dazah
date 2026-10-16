@@ -178,4 +178,111 @@ def test_memory_injection_capped(monkeypatch) -> None:
     assert recorded["top_k"] <= memory.MEMORY_INJECT_MAX_PER_TURN
 
 
+# ── T06（1-C）：读域合并 4 组（分发器行为） ────────────────────────
+
+
+def _fake_ctx():
+    return SimpleNamespace(deps=SimpleNamespace(db=None))
+
+
+def test_query_drills_dispatch(monkeypatch) -> None:
+    from app.modules.safety.business_agent.tools import read_tools
+
+    calls: list[dict] = []
+
+    async def fake_plans(ctx, **kw):
+        calls.append({"impl": "plans", **kw})
+        return {"items": [], "total": 0}
+
+    async def fake_records(ctx, **kw):
+        calls.append({"impl": "records", **kw})
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(read_tools, "_query_drill_plans_impl", fake_plans)
+    monkeypatch.setattr(read_tools, "_query_drill_records_impl", fake_records)
+
+    asyncio.run(read_tools.query_drills(_fake_ctx()))                       # 默认 plans
+    asyncio.run(read_tools.query_drills(_fake_ctx(), kind="records", department="生产部"))
+    assert calls[0]["impl"] == "plans"
+    assert calls[1]["impl"] == "records"
+    assert calls[1]["department"] == "生产部"
+
+
+def test_query_msds_dispatch(monkeypatch) -> None:
+    from app.modules.safety.business_agent.tools import read_tools
+
+    calls: list[dict] = []
+
+    async def fake_docs(ctx, **kw):
+        calls.append({"impl": "documents", **kw})
+        return {"items": [], "total": 0}
+
+    async def fake_collections(ctx, **kw):
+        calls.append({"impl": "collections", **kw})
+        return {"items": [], "total": 0}
+
+    monkeypatch.setattr(read_tools, "_query_msds_documents_impl", fake_docs)
+    monkeypatch.setattr(read_tools, "_query_msds_collections_impl", fake_collections)
+
+    asyncio.run(read_tools.query_msds(_fake_ctx(), name="异丙醇"))
+    asyncio.run(read_tools.query_msds(_fake_ctx(), kind="collections", parse_status="failed"))
+    assert calls[0]["impl"] == "documents"
+    assert calls[0]["name"] == "异丙醇"
+    assert calls[1]["impl"] == "collections"
+    assert calls[1]["parse_status"] == "failed"
+
+
+def test_query_oh_dispatch(monkeypatch) -> None:
+    from app.modules.safety.business_agent.tools import read_tools
+
+    calls: list[dict] = {}
+
+    def make(name):
+        async def impl(ctx, **kw):
+            calls[name] = kw
+            return {"items": [], "total": 0}
+        return impl
+
+    monkeypatch.setattr(read_tools, "_query_oh_positions_impl", make("positions"))
+    monkeypatch.setattr(read_tools, "_query_oh_followups_impl", make("followups"))
+    monkeypatch.setattr(read_tools, "_query_oh_hazard_enums_impl", make("hazard_enums"))
+
+    asyncio.run(read_tools.query_oh(_fake_ctx(), entity="positions", department="生产部"))
+    assert calls["positions"] == {
+        "department": "生产部", "hazard_factors_status": None, "limit": 20,
+    }
+
+    asyncio.run(read_tools.query_oh(_fake_ctx(), entity="followups", status="open"))
+    assert calls["followups"]["status"] == "open"
+
+    asyncio.run(read_tools.query_oh(_fake_ctx(), entity="hazard_enums"))
+    assert calls["hazard_enums"] == {}
+
+    out = asyncio.run(read_tools.query_oh(_fake_ctx(), entity="不存在的"))
+    assert "error" in out and "entity" in out["error"]
+
+
+def test_query_latest_regulations_view_dispatch(monkeypatch) -> None:
+    from app.modules.safety.business_agent.tools import read_tools
+
+    calls: list[dict] = []
+
+    async def fake_crawl(ctx, **kw):
+        calls.append({"view": "crawl", **kw})
+        return {"items": [], "total": 0}
+
+    async def fake_ingested(ctx, **kw):
+        calls.append({"view": "ingested", **kw})
+        return {"success": True, "items": [], "total": 0}
+
+    monkeypatch.setattr(read_tools, "_query_regulations_crawl_impl", fake_crawl)
+    monkeypatch.setattr(read_tools, "_query_regulations_ingested_impl", fake_ingested)
+
+    asyncio.run(read_tools.query_latest_regulations(_fake_ctx()))  # 默认爬取视角
+    asyncio.run(read_tools.query_latest_regulations(_fake_ctx(), view="ingested", limit=3))
+    assert calls[0]["view"] == "crawl"
+    assert calls[1] == {"view": "ingested", "limit": 3}
+
+
+
 

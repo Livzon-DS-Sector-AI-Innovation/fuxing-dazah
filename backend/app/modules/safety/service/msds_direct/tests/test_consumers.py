@@ -86,7 +86,7 @@ class TestDirectPathOn:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.modules.safety.business_agent.tools.read_tools import (
-            query_msds_documents,
+            query_msds as query_msds_documents,
         )
 
         reader = FakeReader([
@@ -106,7 +106,7 @@ class TestDirectPathOn:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.modules.safety.business_agent.tools.read_tools import (
-            query_msds_documents,
+            query_msds as query_msds_documents,
         )
 
         reader = FakeReader([_direct_view("recA")])
@@ -129,7 +129,7 @@ class TestDirectPathOn:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.modules.safety.business_agent.tools.read_tools import (
-            query_msds_documents,
+            query_msds as query_msds_documents,
         )
 
         reader = FakeReader([
@@ -152,7 +152,7 @@ class TestLegacyPathOff:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from app.modules.safety.business_agent.tools.read_tools import (
-            query_msds_documents,
+            query_msds as query_msds_documents,
         )
 
         reader = FakeReader([_direct_view("recA")])

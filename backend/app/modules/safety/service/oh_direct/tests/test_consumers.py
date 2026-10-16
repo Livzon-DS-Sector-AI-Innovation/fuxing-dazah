@@ -112,9 +112,10 @@ class TestPositionsMaintainsMirror:
     async def test_switch_on_still_uses_orm(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from app.modules.safety.business_agent.tools.read_tools import (
-            query_oh_positions,
-        )
+        from app.modules.safety.business_agent.tools.read_tools import query_oh
+
+        async def query_oh_positions(ctx, **kw):
+            return await query_oh(ctx, entity="positions", **kw)
 
         reader = FakeReader(positions=[_position_view("recA")])
         _patch_reader(monkeypatch, reader)
@@ -131,9 +132,10 @@ class TestFactorsDirectOn:
     async def test_switch_on_uses_direct_reader(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from app.modules.safety.business_agent.tools.read_tools import (
-            query_oh_hazard_factors,
-        )
+        from app.modules.safety.business_agent.tools.read_tools import query_oh
+
+        async def query_oh_hazard_factors(ctx, **kw):
+            return await query_oh(ctx, entity="hazard_factors", **kw)
 
         reader = FakeReader(factors=[_factor_view("recF")])
         _patch_reader(monkeypatch, reader)
@@ -146,9 +148,10 @@ class TestFactorsDirectOn:
         assert got["items"][0]["id"] == "recF"
 
     async def test_output_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from app.modules.safety.business_agent.tools.read_tools import (
-            query_oh_hazard_factors,
-        )
+        from app.modules.safety.business_agent.tools.read_tools import query_oh
+
+        async def query_oh_hazard_factors(ctx, **kw):
+            return await query_oh(ctx, entity="hazard_factors", **kw)
 
         reader = FakeReader(factors=[_factor_view("recF")])
         _patch_reader(monkeypatch, reader)
@@ -167,9 +170,10 @@ class TestLegacyPathOff:
     async def test_factors_switch_off_skips_direct_reader(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from app.modules.safety.business_agent.tools.read_tools import (
-            query_oh_hazard_factors,
-        )
+        from app.modules.safety.business_agent.tools.read_tools import query_oh
+
+        async def query_oh_hazard_factors(ctx, **kw):
+            return await query_oh(ctx, entity="hazard_factors", **kw)
 
         reader = FakeReader(factors=[_factor_view("recF")])
         _patch_reader(monkeypatch, reader)
