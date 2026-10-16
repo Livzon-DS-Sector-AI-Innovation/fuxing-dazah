@@ -39,6 +39,16 @@ TOOL_QUERY_EHS_CHANGES = "query_ehs_changes"  # EHS 变更明细（本地同步�
 TOOL_QUERY_WORK_TICKET_REVIEWS = "query_work_ticket_reviews"  # 作业票审核记录与违规明细
 TOOL_SCREEN_WORK_TICKET_PERSONNEL = "screen_work_ticket_personnel"  # 作业票外包人员直读筛查（平台直读，敏感字段打码）
 TOOL_QUERY_HAZARD_IDENTIFICATIONS = "query_hazard_identifications"  # 危险源辨识明细
+# 技能加载（2-B SOP 技能化：常驻只读通用工具，四角色均可用）
+TOOL_LOAD_SKILL = "load_skill"
+# 域委派元工具（2-D 试点：只读入口；子 Agent 的每次工具执行仍过管道
+# 权限校验，写请求经确认门透传——deny-by-default 语义不变）
+TOOL_DELEGATE = "delegate"
+# 仓储查询（2-E 消费侧：直接 import 仓储纯查询函数，只读，四角色可用）
+TOOL_WAREHOUSE_QUERY_STOCK = "query_stock"
+TOOL_WAREHOUSE_QUERY_MATERIAL = "query_material"
+TOOL_WAREHOUSE_QUERY_MOVEMENTS = "query_movements"
+TOOL_WAREHOUSE_QUERY_REPORT = "query_report"
 # 写入
 TOOL_GENERATE_DRILL_PLAN = "generate_drill_plan"
 TOOL_SYNC_DRILL_TO_FEISHU = "sync_drill_plan_to_feishu"
@@ -165,6 +175,12 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_QUERY_WORK_TICKET_REVIEWS,
         TOOL_SCREEN_WORK_TICKET_PERSONNEL,
         TOOL_QUERY_HAZARD_IDENTIFICATIONS,
+        TOOL_LOAD_SKILL,
+        TOOL_DELEGATE,
+        TOOL_WAREHOUSE_QUERY_STOCK,
+        TOOL_WAREHOUSE_QUERY_MATERIAL,
+        TOOL_WAREHOUSE_QUERY_MOVEMENTS,
+        TOOL_WAREHOUSE_QUERY_REPORT,
     }
 )
 

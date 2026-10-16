@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from app.modules.safety.business_agent.core.permissions import allowed_tools
 
@@ -156,6 +156,37 @@ class MemoriesSection(PromptSection):
 
 
 @dataclass
+class SkillCatalogSection(PromptSection):
+    """可用技能目录节（2-B）：一行一技能 + load_skill 引导文案。
+
+    数据源 skills/registry 的 catalog_markdown()（mtime 热更新，改 .md
+    下一轮生效）。空目录返回空串（本节跳过）。``_registry`` 仅供测试注入。
+    """
+
+    name: str = "skill_catalog"
+    order: int = 75
+    _registry: Any = field(default=None, repr=False, compare=False)
+
+    def render(self, deps: SafetyDeps, context: dict | None = None) -> str:
+        from app.modules.safety.business_agent.skills.registry import default_registry
+
+        registry = self._registry or default_registry
+        catalog = registry.catalog_markdown()
+        if not catalog.strip():
+            return ""
+        return (
+            "## 可用技能（SOP）\n"
+            "以下是可选的业务技能（标准操作流程）。当任务与某个技能的触发描述"
+            "匹配时，先调用 load_skill(name) 加载完整 SOP，再严格按 SOP 的步骤"
+            "顺序执行、按其输出格式产出报告；涉及写操作时先向用户复述并等待"
+            "确认；所有事实性数据必须来自工具结果，禁止编造。\n"
+            "简单查询（一两个查询工具能直接回答的）不需要加载技能，直接调用"
+            "查询工具作答。\n"
+            f"{catalog}"
+        )
+
+
+@dataclass
 class ToolCatalogSection(PromptSection):
     """工具目录节：本轮真正可用的工具名（角色允许 与 本轮实际挂载 的交集）。
 
@@ -209,12 +240,13 @@ def _registered_tool_names(context: dict | None) -> frozenset[str]:
         return frozenset()
 
 
-# ── 默认五节清单（顺序稳定；调用方可自定义节列表或以切片开关某节） ──
+# ── 默认六节清单（顺序稳定；调用方可自定义节列表或以切片开关某节） ──
 ALL_SECTIONS: list[PromptSection] = [
     PersonaSection(),
     RuntimeDateSection(),
     UserContextSection(),
     MemoriesSection(),
+    SkillCatalogSection(),
     ToolCatalogSection(),
 ]
 

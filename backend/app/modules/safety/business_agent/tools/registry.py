@@ -15,6 +15,12 @@ from pydantic_ai import Agent
 
 from app.modules.safety.business_agent.core.pipeline import execute_tool
 
+# ── 技能（2-B SOP 技能化：load_skill 常驻只读，目录见 skills/）──
+from app.modules.safety.business_agent.skills.registry import load_skill
+
+# ── 域委派（2-D 试点：delegate 按需只读元工具，urs 域路由命中时挂载）──
+from app.modules.safety.business_agent.tools.delegate import delegate
+
 # ── 办公（office_*）──
 from app.modules.safety.business_agent.tools.office_tools import (
     office_create_base,
@@ -81,6 +87,14 @@ from app.modules.safety.business_agent.tools.urs_tools import (
     run_urs_assessment,
     submit_urs_appeal,
     update_urs_item,
+)
+
+# ── 仓储查询（2-E 消费侧：直接 import 仓储 4 个纯查询函数，按需挂载）──
+from app.modules.safety.business_agent.tools.warehouse_query_tools import (
+    query_material,
+    query_movements,
+    query_report,
+    query_stock,
 )
 
 # ── 写入 ──
@@ -159,6 +173,15 @@ TOOL_KIND: dict[str, bool] = {
     "query_hazard_identifications": False,
     # 作业票外包人员直读筛查（只读：平台直读 + 内存比对，零落库）
     "screen_work_ticket_personnel": False,
+    # 技能加载（2-B：常驻只读通用工具）
+    "load_skill": False,
+    # 域委派元工具（2-D：常驻只读；子 Agent 写请求经确认门透传）
+    "delegate": False,
+    # 仓储查询（2-E：只读，按需挂载——命中仓储意图才挂，不进常驻集）
+    "query_stock": False,
+    "query_material": False,
+    "query_movements": False,
+    "query_report": False,
     # 写入
     "generate_alarm_report": True,
     "generate_drill_plan": True,
@@ -246,6 +269,12 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
         query_urs_records,
         query_urs_review_detail,
         preview_guardian_subsidy,
+        load_skill,
+        delegate,
+        query_stock,
+        query_material,
+        query_movements,
+        query_report,
     ] + _OFFICE_READ_FUNCS
 
 
@@ -309,6 +338,8 @@ RESIDENT_TOOLS: frozenset[str] = frozenset({
     "query_drills", "query_oh",
     "generate_daily_report", "generate_supervision_bulletin",
     "office_search_files", "office_read_docx",
+    # 技能加载（2-B：通用能力，任何意图都可用）
+    "load_skill",
     # 高频通用（域外常驻）
     "query_oh_persons", "query_oh_exams",
     "query_work_ticket_reviews", "preview_guardian_subsidy", "query_msds",

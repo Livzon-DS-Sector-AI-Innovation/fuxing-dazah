@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
 import app.modules.production.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+import app.modules.safety.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册（只读，2-E）
 import app.modules.warehouse.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册（只读）
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
 from app.modules.toolbox.registry import TOOL_IMAGE_URL_PREFIX  # noqa: E402
@@ -49,6 +50,7 @@ production_mcp_asgi = get_mcp_app(get_module_mcp("production"), path="/", middle
 equipment_mcp_asgi = get_mcp_app(get_module_mcp("equipment"), path="/", middleware=mcp_middleware)
 platform_mcp_asgi = get_mcp_app(get_module_mcp("platform"), path="/", middleware=mcp_middleware)
 warehouse_mcp_asgi = get_mcp_app(get_module_mcp("warehouse"), path="/", middleware=mcp_middleware)
+safety_mcp_asgi = get_mcp_app(get_module_mcp("safety"), path="/", middleware=mcp_middleware)
 
 
 @asynccontextmanager
@@ -276,6 +278,7 @@ app = FastAPI(
         equipment_mcp_asgi.lifespan,
         platform_mcp_asgi.lifespan,
         warehouse_mcp_asgi.lifespan,
+        safety_mcp_asgi.lifespan,
     ),
     docs_url="/docs" if not settings.is_production else None,
     redoc_url="/redoc" if not settings.is_production else None,
@@ -309,7 +312,11 @@ app.mount("/mcp/production", production_mcp_asgi, name="mcp-production")
 app.mount("/mcp/equipment", equipment_mcp_asgi, name="mcp-equipment")
 app.mount("/mcp/platform", platform_mcp_asgi, name="mcp-platform")
 app.mount("/mcp/warehouse", warehouse_mcp_asgi, name="mcp-warehouse")
-logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform, /mcp/warehouse")
+app.mount("/mcp/safety", safety_mcp_asgi, name="mcp-safety")
+logger.info(
+    "MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform, "
+    "/mcp/warehouse, /mcp/safety"
+)
 
 
 @app.exception_handler(AppException)

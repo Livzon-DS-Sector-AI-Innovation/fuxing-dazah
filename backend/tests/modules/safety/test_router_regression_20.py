@@ -22,6 +22,9 @@ from app.modules.safety.business_agent.tool_selector import (
 
 # (问题, 期望必须可选中的工具)
 GOLDEN_QUESTIONS: list[tuple[str, str]] = [
+    # 2-E 消费侧：仓储查询域（跨模块，按需挂载）
+    ("仓库里乙醇还有多少库存", "query_stock"),
+    ("查一下仓储的物料主数据和入库流水", "query_material"),
     # 隐患域
     ("本月环保部有多少未整改隐患", "query_hazards"),
     ("还有多少隐患没整改？统计一下", "query_hazard_stats"),

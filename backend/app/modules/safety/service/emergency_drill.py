@@ -34,17 +34,13 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return None
 
 # ── AI Prompt ──
+# 2-B 演练 SOP 唯源+热读：8 节格式段以 business_agent/skills/drill-plan-format.md
+# 的「## 八节格式（生成服务唯源）」节为唯一事实源（mtime 缓存热更，改文件下次
+# 生成生效）；技能缺失/无该节/解析异常时回退下方内置默认，生成链路永不中断。
 
-_DRILL_PLAN_SYSTEM_PROMPT = """你是一名应急管理专家，熟悉《生产经营单位生产安全事故应急预案编制导则》（GB/T 29639-2020）和《生产安全事故应急预案管理办法》（AQ/T 9007-2019）。
+_DRILL_SECTIONS_HEADING = "## 八节格式（生成服务唯源）"
 
-你的任务是根据提供的演练计划信息，结合参考法规标准，生成一份标准化的应急演练方案。
-
-★人名规则（重要）：
-- 提供的计划信息中如果包含真实姓名（如组织人、参演人员等），在方案中必须使用这些真实姓名。
-- 未提供姓名的角色，一律使用占位符「【待填写】」表示，严禁编造或捏造任何姓名。
-- 演练脚本中的对白，涉及人物时人名用「【待填写】」占位，角色职责保留。
-
-方案必须包含以下8个部分，每部分都需要详细描述：
+_DEFAULT_DRILL_SECTIONS = """方案必须包含以下8个部分，每部分都需要详细描述：
 
 一、应急演练目的：本次演练的具体目标（如检验预案可行性、提升应急处置能力、磨合部门协作机制等），列出3-5条具体目的。
 
@@ -64,26 +60,65 @@ _DRILL_PLAN_SYSTEM_PROMPT = """你是一名应急管理专家，熟悉《生产�
   【15:31 应急响应】情景：xxx。【待填写】（通讯）："已通知相关部门，请求支援。" 【待填写】（动作）：穿戴防护装备，赶赴现场。
   ...至少列出8-10个时间段的详细脚本。
 
-八、演练要求：参演人员纪律、安全注意事项、保密要求、记录要求等。
+八、演练要求：参演人员纪律、安全注意事项、保密要求、记录要求等。"""
+
+_DRILL_PROMPT_HEAD = """你是一名应急管理专家，熟悉《生产经营单位生产安全事故应急预案编制导则》（GB/T 29639-2020）和《生产安全事故应急预案管理办法》（AQ/T 9007-2019）。
+
+你的任务是根据提供的演练计划信息，结合参考法规标准，生成一份标准化的应急演练方案。
+
+★人名规则（重要）：
+- 提供的计划信息中如果包含真实姓名（如组织人、参演人员等），在方案中必须使用这些真实姓名。
+- 未提供姓名的角色，一律使用占位符「【待填写】」表示，严禁编造或捏造任何姓名。
+- 演练脚本中的对白，涉及人物时人名用「【待填写】」占位，角色职责保留。
+"""
+
+_DRILL_PROMPT_JSON_SCHEMA = """
 
 请以 JSON 格式返回：
 {
   "title": "XX部门XX演练方案",
   "summary": "方案摘要（200字以内）",
   "sections": [
-    {"heading": "一、应急演练目的", "content": "1. xxx\n2. xxx\n3. xxx"},
-    {"heading": "二、演练领导小组", "content": "总指挥：【待填写】（职责）\n副总指挥：【待填写】（职责）\n成员：【待填写】、【待填写】"},
-    {"heading": "三、演练所需器材", "content": "- 器材1（数量）\n- 器材2（数量）"},
+    {"heading": "一、应急演练目的", "content": "1. xxx\\n2. xxx\\n3. xxx"},
+    {"heading": "二、演练领导小组", "content": "总指挥：【待填写】（职责）\\n副总指挥：【待填写】（职责）\\n成员：【待填写】、【待填写】"},
+    {"heading": "三、演练所需器材", "content": "- 器材1（数量）\\n- 器材2（数量）"},
     {"heading": "四、参演人员", "content": "..."},
-    {"heading": "五、现场组织及职责", "content": "现场指挥（1人）：【待填写】\n抢险组（X人）：【待填写】\n通讯协调组（X人）：【待填写】"},
-    {"heading": "六、演练程序及步骤", "content": "时间：\n地点：\n情景设定：\n参与人员："},
-    {"heading": "七、演练设置", "content": "【15:30 事故触发】\n情景：xxx\n【待填写】：\\"对白\\"\n【待填写】（动作）：描述\n\\n【15:31 应急响应】..."},
-    {"heading": "八、演练要求", "content": "1. xxx\n2. xxx"}
+    {"heading": "五、现场组织及职责", "content": "现场指挥（1人）：【待填写】\\n抢险组（X人）：【待填写】\\n通讯协调组（X人）：【待填写】"},
+    {"heading": "六、演练程序及步骤", "content": "时间：\\n地点：\\n情景设定：\\n参与人员："},
+    {"heading": "七、演练设置", "content": "【15:30 事故触发】\\n情景：xxx\\n【待填写】：\\"对白\\"\\n【待填写】（动作）：描述\\n\\n【15:31 应急响应】..."},
+    {"heading": "八、演练要求", "content": "1. xxx\\n2. xxx"}
   ],
   "cited_regulations": [
     {"title": "法规名称", "article": "条款号", "excerpt": "引用摘要"}
   ]
 }"""
+
+
+def _drill_sections_spec() -> str:
+    """演练 8 节格式唯源：技能 .md 热读（改文件下次生成生效），失败回退内置默认。"""
+    try:
+        from app.modules.safety.business_agent.skills.registry import default_registry
+
+        body = default_registry.load_skill("drill-plan-format")
+        if body and _DRILL_SECTIONS_HEADING in body:
+            spec = body.split(_DRILL_SECTIONS_HEADING, 1)[1]
+            spec = spec.split("\n## ", 1)[0].strip()
+            if spec:
+                return spec
+    except Exception:
+        logger.warning("drill-plan-format 技能读取失败，回退内置默认 8 节格式", exc_info=True)
+    return _DEFAULT_DRILL_SECTIONS
+
+
+def _build_drill_plan_prompt() -> str:
+    """组装演练方案生成 system prompt（8 节格式段每次现读唯源技能）。"""
+    return (
+        _DRILL_PROMPT_HEAD
+        + "\n"
+        + _drill_sections_spec()
+        + "\n"
+        + _DRILL_PROMPT_JSON_SCHEMA
+    )
 
 
 # ── Service ──
@@ -442,10 +477,11 @@ class EmergencyDrillService:
                 if knowledge_md:
                     user_prompt += f"\n\n参考法规：\n{knowledge_md}"
 
-                # 调用 AI
+                # 调用 AI（8 节格式段热读自 drill-plan-format 技能唯源）
+                drill_system_prompt = _build_drill_plan_prompt()
                 response_text = await ai_service.chat(
                     [
-                        {"role": "system", "content": _DRILL_PLAN_SYSTEM_PROMPT},
+                        {"role": "system", "content": drill_system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
                     response_format="json_object",
@@ -458,7 +494,7 @@ class EmergencyDrillService:
 
         # ── 估算 token 用量 ──
         estimated_tokens = (
-            len(_DRILL_PLAN_SYSTEM_PROMPT) // 3
+            len(drill_system_prompt) // 3
             + len(user_prompt) // 3
             + len(response_text) // 3
         )

@@ -28,6 +28,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
         "run_regulation_ai_review",
+        # 2-B：技能加载通用工具归知识域（常驻只读，SOP 按需注入）
+        "load_skill",
     ],
     "contractor_admission": ["query_contractor_admissions"],
     "drill": [
@@ -74,6 +76,9 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "create_urs_review", "parse_urs_document", "run_urs_assessment",
         "update_urs_item", "confirm_urs_assessment", "submit_urs_appeal",
         "generate_urs_report_pdf",
+        # 2-D 委派元工具归 urs 域（开 SAFETY_AGENT_URS_DELEGATION 时路由改挂
+        # 「核心集 + delegate」，9 个域工具由域子 Agent 持有）
+        "delegate",
     ],
     "guardian_subsidy": [
         "preview_guardian_subsidy", "generate_guardian_subsidy",
@@ -82,6 +87,11 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "special_op": [
         "query_special_op_records", "query_key_risk_ops",
         "generate_daily_report", "office_create_docx",
+    ],
+    # 仓储查询域（2-E 消费侧：跨模块查库存/物料/流水/报表，按需挂载）
+    "warehouse": [
+        "query_stock", "query_material",
+        "query_movements", "query_report",
     ],
     "ehs_change": ["query_ehs_changes"],
     "work_ticket": ["query_work_ticket_reviews", "screen_work_ticket_personnel"],
@@ -134,6 +144,10 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "特殊作业", "作业判定", "特殊作业记录", "特殊作业明细", "动火作业", "受限空间",
         "高处作业", "吊装", "临时用电", "盲板", "动土", "断路", "计划外作业",
         "关键风险作业", "关键作业",
+    ],
+    "warehouse": [
+        "仓库", "仓储", "入库", "出库", "领用", "呆料", "复验期",
+        "物料名称", "物料代码", "库存移动", "仓储报表",
     ],
     "ehs_change": ["EHS变更", "EHS 变更", "变更管理", "变更台账"],
     "work_ticket": [
@@ -203,12 +217,39 @@ async def route_message_async(user_message: str | None) -> RoutingDecision:
     if hit is None:
         return decision
     domain, confidence = hit
-    tools = sorted(set(TOOL_GROUPS.get(domain, [])) | set(_ALWAYS_INCLUDE))
+    tools = sorted(_mountable_group_tools(domain) | set(_ALWAYS_INCLUDE))
+    if domain == "urs" and _urs_delegation_enabled():
+        # 2-D 委派式（嵌入层与规则层同口径）
+        tools = sorted(_delegated_urs_tools())
     if not tools:
         return decision
     return RoutingDecision(
         tools, domains=(domain,), path="embedding", confidence=confidence,
     )
+
+
+def _urs_delegation_enabled() -> bool:
+    """URS 域委派试点开关（app_config，60s TTL；关 = 挂载式一键回退）。"""
+    try:
+        from app.modules.safety.app_config.store import store as app_config_store
+
+        return app_config_store.get_bool("SAFETY_AGENT_URS_DELEGATION", False)
+    except Exception:
+        return False
+
+
+def _delegated_urs_tools() -> set[str]:
+    """2-D 委派式的挂载面：核心兜底集 + delegate（规则/嵌入两层共用）。"""
+    return set(CORE_FALLBACK_TOOLS) | {"delegate"} | set(_ALWAYS_INCLUDE)
+
+
+def _mountable_group_tools(group: str) -> set[str]:
+    """域的可挂载工具集；delegate 元工具仅在委派开关开时可见（关 = 纯挂载式，
+    模型看不到委派入口，一键回退干净）。"""
+    tools = set(TOOL_GROUPS.get(group, []))
+    if "delegate" in tools and not _urs_delegation_enabled():
+        tools.discard("delegate")
+    return tools
 
 
 def _route_rule(user_message: str | None) -> RoutingDecision:
@@ -233,8 +274,14 @@ def _route_rule(user_message: str | None) -> RoutingDecision:
         return RoutingDecision(sorted(CORE_FALLBACK_TOOLS))
 
     tool_names: set[str] = set(_ALWAYS_INCLUDE)
+    delegate_urs = "urs" in matched and _urs_delegation_enabled()
     for g in matched:
-        tool_names.update(TOOL_GROUPS.get(g, []))
+        if g == "urs" and delegate_urs:
+            # 2-D 委派式：urs 域不挂 9 工具，改挂核心兜底集 + delegate
+            # 元工具（域子 Agent 由 delegate 程序化运行，确认门在 orchestrator）
+            tool_names |= _delegated_urs_tools()
+        else:
+            tool_names |= _mountable_group_tools(g)
     result = sorted(tool_names)
     logger.debug(
         "tool_selector: matched groups=%s → %d tools", sorted(matched), len(result),
