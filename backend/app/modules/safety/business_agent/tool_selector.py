@@ -43,11 +43,11 @@ TOOL_GROUPS: dict[str, list[str]] = {
     ],
     "fire_alarm": [
         "query_fire_alarms",
-        "generate_fire_alarm_daily_report", "generate_fire_alarm_monthly_report",
+        "generate_alarm_report",
     ],
     "central_alarm": [
         "query_central_alarms",
-        "generate_central_alarm_daily_report",
+        "generate_alarm_report",
     ],
     "cert_warning": [
         "query_cert_warnings",

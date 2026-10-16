@@ -1823,47 +1823,36 @@ def _detail_result(items: list[Any], page: int, page_size: int, total: int) -> d
 
 async def query_special_op_records(
     ctx: RunContext[SafetyDeps],
-    department: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    operation_type: str | None = None,
-    operation_level: str | None = None,
-    daily_risk_level: str | None = None,
-    report_type: str | None = None,
-    keyword: str | None = None,
+    department: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    operation_type: str = "",
+    operation_level: str = "",
+    daily_risk_level: str = "",
+    report_type: str = "",
+    keyword: str = "",
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    """查询全厂特殊作业判定明细（逐条，含每日风险判定结果）。
+    """查询全厂特殊作业判定明细（飞书「全厂特殊作业一览表」直读，含每日风险判定）。
 
-    数据源为飞书「全厂特殊作业一览表」**直读**（多维度表格，每条含作业类型/分级、
-    部门、判定风险等级与理由）。可按部门、日期、作业类型、作业分级、风险等级、
-    计划内外筛选  如"提炼工程五部的作业判定记录"应使用本工具而非生成日报。
-
-    风险等级口径：飞书表「日报风险等级（AI）」列有值则读列（该列由日报任务每天
-    回写两次，最长可能陈旧约 9 小时）；列为空则查询时现场判定并展示，**不回写**。
-    判定为排除的作业仍会返回（items 带 is_excluded 与 exclusion_reason）。
+    查"某部门的作业判定记录"用本工具而非生成日报。风险等级优先读表内
+    「日报风险等级（AI）」列（每日回写两次），列为空则现场判定不回写；
+    被排除的作业仍返回（带 is_excluded/exclusion_reason）。
 
     Args:
-        department: 部门名称（如"提炼工程五部"；子串匹配，如"五部"）
-        date_from: 起始日期（ISO，如 "2026-08-31"，按作业计划开始时间，可选）
-        date_to: 结束日期（ISO，可选）
-        operation_type: 作业类型（动火作业/受限空间/高处作业/吊装作业/临时用电/
-            动土作业/断路作业/盲板抽堵，或 hot_work 等英文 code）
-        operation_level: 作业分级（特级/一级/二级/三级/不涉及，或 special/grade1 等）
-        daily_risk_level: 判定风险等级（高/中/低 或 high/medium/low）
-        report_type: 计划类型（计划内/计划外，或 planned/unplanned）
-        keyword: 关键词（作业内容/作业地点/申请编号模糊匹配，可选）
+        department: 部门（子串匹配，如"五部"）
+        date_from: 起始日期（ISO，按作业计划开始时间）
+        date_to: 结束日期（ISO）
+        operation_type: 动火/受限空间/高处/吊装/临时用电/动土/断路/盲板抽堵（或英文 code）
+        operation_level: 特级/一级/二级/三级/不涉及（或 special/grade1 等）
+        daily_risk_level: 高/中/低（或 high/medium/low）
+        report_type: 计划内/计划外（或 planned/unplanned）
+        keyword: 作业内容/地点/申请编号模糊匹配
         page: 页码（默认 1）
         page_size: 每页条数（默认 20，最大 100）
 
-    Returns:
-        {success, items, page, page_size, total}
-        - items: 判定明细（部门/作业类型/分级/判定等级/判定理由/作业内容/地点/
-          计划起止时间/时长/计划内外/申请编号/是否排除等）
-        - total: 满足条件的总条数
-
-    示例：提炼工程五部的作业判定记录；8月31日全厂高风险特殊作业；今天的计划外作业。
+    示例：提炼工程五部的作业判定记录；今天的计划外高风险作业。
     """
     from datetime import date as _date
 

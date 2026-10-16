@@ -72,13 +72,11 @@ TOOL_ANALYZE_OH_TRANSFER = "analyze_oh_transfer"
 TOOL_OVERRIDE_OH_CONCLUSION = (
     "override_oh_conclusion"  # 结论覆盖属合规判定，仅 safety_admin
 )
-# 消防报警分析
+# 消防/中控报警分析（1-C 合一：scope=fire|central + period=daily|monthly）
+TOOL_GENERATE_ALARM_REPORT = "generate_alarm_report"
 TOOL_QUERY_FIRE_ALARMS = "query_fire_alarms"
-TOOL_GENERATE_FIRE_ALARM_DAILY_REPORT = "generate_fire_alarm_daily_report"
-TOOL_GENERATE_FIRE_ALARM_MONTHLY_REPORT = "generate_fire_alarm_monthly_report"
 # 中控报警分析
 TOOL_QUERY_CENTRAL_ALARMS = "query_central_alarms"
-TOOL_GENERATE_CENTRAL_ALARM_DAILY_REPORT = "generate_central_alarm_daily_report"
 # 持证到期预警（只读）
 TOOL_QUERY_CERT_WARNINGS = "query_cert_warnings"
 # 持证到期预警（写入）
@@ -189,18 +187,10 @@ _OH_WRITE_TOOLS_DEPT_LEADER: frozenset[str] = frozenset(
     }
 )
 
-# 消防报警分析写工具集合（生成日报/月报：触发 AI 分析并回写记录，需用户确认；仅 admin/leader）
-_FIRE_ALARM_WRITE_TOOLS: frozenset[str] = frozenset(
+# 报警分析写工具集合（生成消防/中控日报/月报：触发 AI 分析并回写记录，需确认；仅 admin/leader）
+_ALARM_WRITE_TOOLS: frozenset[str] = frozenset(
     {
-        TOOL_GENERATE_FIRE_ALARM_DAILY_REPORT,
-        TOOL_GENERATE_FIRE_ALARM_MONTHLY_REPORT,
-    }
-)
-
-# 中控报警分析写工具集合（生成日报：触发 AI 分析并回写记录，需用户确认；仅 admin/leader）
-_CENTRAL_ALARM_WRITE_TOOLS: frozenset[str] = frozenset(
-    {
-        TOOL_GENERATE_CENTRAL_ALARM_DAILY_REPORT,
+        TOOL_GENERATE_ALARM_REPORT,
     }
 )
 
@@ -250,8 +240,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _OH_WRITE_TOOLS_DEPT_LEADER
     | {TOOL_OVERRIDE_OH_CONCLUSION}
     | {TOOL_RENEW_PERSON_CERTIFICATE}
-    | _FIRE_ALARM_WRITE_TOOLS
-    | _CENTRAL_ALARM_WRITE_TOOLS
+    | _ALARM_WRITE_TOOLS
     | _GUARDIAN_SUBSIDY_TOOLS
     | _HAZARD_POLL_WRITE_TOOLS
     | _HAZARD_BULLETIN_WRITE_TOOLS,
@@ -270,8 +259,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | OFFICE_WRITE_TOOLS
     | _OH_READ_TOOLS
     | _OH_WRITE_TOOLS_DEPT_LEADER
-    | _FIRE_ALARM_WRITE_TOOLS
-    | _CENTRAL_ALARM_WRITE_TOOLS
+    | _ALARM_WRITE_TOOLS
     | _GUARDIAN_SUBSIDY_TOOLS
     | _HAZARD_POLL_WRITE_TOOLS
     | _HAZARD_BULLETIN_WRITE_TOOLS,

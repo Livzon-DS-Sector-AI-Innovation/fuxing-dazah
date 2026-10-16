@@ -284,5 +284,40 @@ def test_query_latest_regulations_view_dispatch(monkeypatch) -> None:
     assert calls[1] == {"view": "ingested", "limit": 3}
 
 
+# ── T07（1-C）：报警生成合一（scope+period） ──────────────────────
+
+
+def test_generate_alarm_report_dispatch(monkeypatch) -> None:
+    from app.modules.safety.business_agent.tools import write_tools
+
+    calls: list[dict] = []
+
+    def make(name):
+        async def impl(ctx, **kw):
+            calls.append({"impl": name, **kw})
+            return {"success": True}
+        return impl
+
+    monkeypatch.setattr(write_tools, "_generate_fire_alarm_daily_impl", make("fire_daily"))
+    monkeypatch.setattr(write_tools, "_generate_fire_alarm_monthly_impl", make("fire_monthly"))
+    monkeypatch.setattr(write_tools, "_generate_central_alarm_daily_impl", make("central_daily"))
+
+    asyncio.run(write_tools.generate_alarm_report(_fake_ctx(), scope="fire"))
+    asyncio.run(
+        write_tools.generate_alarm_report(_fake_ctx(), scope="fire", period="monthly", target_date="2026-08-31")
+    )
+    asyncio.run(write_tools.generate_alarm_report(_fake_ctx(), scope="central"))
+
+    assert calls[0] == {"impl": "fire_daily", "target_date": None}
+    assert calls[1] == {"impl": "fire_monthly", "month_end": "2026-08-31"}
+    assert calls[2] == {"impl": "central_daily", "target_date": None}
+
+    out = asyncio.run(
+        write_tools.generate_alarm_report(_fake_ctx(), scope="central", period="monthly")
+    )
+    assert out["success"] is False
+    assert "中控暂无月报" in out["error"]
+
+
 
 

@@ -612,12 +612,45 @@ def _current_user_name(ctx: RunContext[SafetyDeps]) -> str | None:
     return ctx.deps.person.name if ctx.deps.person else None
 
 
+async def generate_alarm_report(
+    ctx: RunContext[SafetyDeps],
+    scope: str,
+    period: str = "daily",
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    """生成消防/中控报警日报或月报，直接在对话中返回完整报告（需用户确认）。
+
+    Args:
+        scope: fire=消防报警 / central=中控报警
+        period: daily=日报（默认）/ monthly=月报（仅消防支持，中控暂无月报）
+        target_date: 目标日期（ISO，如 "2026-08-18"）。日报默认今天；
+            月报传月内任一日期（取其所在自然月），默认上一完整自然月
+
+    Returns:
+        {success, report_date|month_start/month_end, total, analyzed, push_ok, markdown_report}
+        - markdown_report: 已格式化的完整报告，必须原样输出
+    """
+    if scope == "fire" and period == "daily":
+        return await _generate_fire_alarm_daily_impl(ctx, target_date=target_date)
+    if scope == "fire" and period == "monthly":
+        return await _generate_fire_alarm_monthly_impl(ctx, month_end=target_date)
+    if scope == "central" and period == "daily":
+        return await _generate_central_alarm_daily_impl(ctx, target_date=target_date)
+    return {
+        "success": False,
+        "error": (
+            f"不支持组合 scope={scope!r} period={period!r}："
+            f"可选 fire+daily / fire+monthly / central+daily（中控暂无月报）"
+        ),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 消防报警分析 — 写工具（requires_approval=True）
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def generate_fire_alarm_daily_report(
+async def _generate_fire_alarm_daily_impl(
     ctx: RunContext[SafetyDeps],
     target_date: str | None = None,
 ) -> dict[str, Any]:
@@ -661,7 +694,7 @@ async def generate_fire_alarm_daily_report(
         return {"success": False, "error": f"日报生成失败: {e}"}
 
 
-async def generate_central_alarm_daily_report(
+async def _generate_central_alarm_daily_impl(
     ctx: RunContext[SafetyDeps],
     target_date: str | None = None,
 ) -> dict[str, Any]:
@@ -705,7 +738,7 @@ async def generate_central_alarm_daily_report(
         return {"success": False, "error": f"日报生成失败: {e}"}
 
 
-async def generate_fire_alarm_monthly_report(
+async def _generate_fire_alarm_monthly_impl(
     ctx: RunContext[SafetyDeps],
     month_end: str | None = None,
 ) -> dict[str, Any]:
