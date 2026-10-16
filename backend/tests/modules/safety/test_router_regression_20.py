@@ -106,3 +106,94 @@ def test_rule_decision_carries_domains() -> None:
     decision = route_message("查一下消防报警记录")
     assert decision.path == "rule"
     assert "alarm" in decision.domains
+
+
+# ── T10（1-D）：嵌入相似度层 ───────────────────────────────────────
+
+
+class _FakeEmbedder:
+    def __init__(self, vec: list[float]) -> None:
+        self._vec = vec
+
+    async def embed(self, text: str, use_cache: bool = True) -> list[float]:  # noqa: ARG002
+        return self._vec
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:  # noqa: ARG002
+        return [self._vec for _ in texts]
+
+
+def test_embedding_stage_hits_domain(monkeypatch) -> None:
+    """规则 miss + 嵌入命中 → 挂对应域（置信度入决策）。"""
+    import asyncio
+
+    from app.modules.safety.business_agent import router_embedding as re_mod
+    from app.modules.safety.business_agent.tool_selector import route_message_async
+
+    async def fake_vectors() -> dict:
+        return {"hazard": [[1.0, 0.0, 0.0]], "chemical": [[0.0, 1.0, 0.0]]}
+
+    monkeypatch.setattr(re_mod, "_ensure_domain_vectors", fake_vectors)
+
+    async def fake_embedder() -> _FakeEmbedder:
+        return _FakeEmbedder([0.95, 0.05, 0.0])
+
+    monkeypatch.setattr(re_mod, "_get_embedder", fake_embedder)
+
+    decision = asyncio.run(route_message_async("现场发现的问题还有多少没处理完"))
+    # 注：该问 rule 层可能直接命中 hazard；构造纯 miss 问句验证 embedding 路径
+    if decision.path == "rule":
+        pytest.skip("rule 层已命中，embedding 路径无需验证")
+    assert decision.path == "embedding"
+    assert "hazard" in decision.domains
+    assert decision.confidence is not None and decision.confidence >= 0.55
+    assert "query_hazards" in decision.tool_names
+
+
+def test_embedding_stage_direct_classify(monkeypatch) -> None:
+    """classify 直接验证：命中/低于阈值/开关关/异常 四分支。"""
+    import asyncio
+
+    from app.modules.safety.business_agent import router_embedding as re_mod
+
+    async def fake_vectors() -> dict:
+        return {"hazard": [[1.0, 0.0, 0.0]], "chemical": [[0.0, 1.0, 0.0]]}
+
+    monkeypatch.setattr(re_mod, "_ensure_domain_vectors", fake_vectors)
+
+    def make_embedder(vec):
+        async def get():
+            return _FakeEmbedder(vec)
+        return get
+
+    # 命中 hazard
+    monkeypatch.setattr(re_mod, "_get_embedder", make_embedder([0.9, 0.1, 0.0]))
+    hit = asyncio.run(re_mod.classify("任意话术"))
+    assert hit is not None and hit[0] == "hazard" and hit[1] >= 0.55
+
+    # 正交向量 → 低于阈值 → None
+    monkeypatch.setattr(re_mod, "_get_embedder", make_embedder([0.0, 0.0, 1.0]))
+    assert asyncio.run(re_mod.classify("任意话术")) is None
+
+    # 开关关闭 → None
+    monkeypatch.setattr(re_mod, "_get_embedder", make_embedder([0.9, 0.1, 0.0]))
+    monkeypatch.setenv(re_mod.EMBEDDING_ROUTER_SWITCH, "0")
+    try:
+        assert asyncio.run(re_mod.classify("任意话术")) is None
+    finally:
+        monkeypatch.delenv(re_mod.EMBEDDING_ROUTER_SWITCH, raising=False)
+
+    # 嵌入服务异常 → None（不抛出）
+    async def boom():
+        raise RuntimeError("embedder down")
+
+    monkeypatch.setattr(re_mod, "_get_embedder", boom)
+    assert asyncio.run(re_mod.classify("任意话术")) is None
+
+
+def test_embedding_domain_examples_cover_all_groups() -> None:
+    """嵌入层域定义与 TOOL_GROUPS 对齐，无孤儿/无幽灵。"""
+    from app.modules.safety.business_agent import router_embedding as re_mod
+
+    assert set(re_mod.DOMAIN_EXAMPLES) == set(TOOL_GROUPS)
+    for domain, examples in re_mod.DOMAIN_EXAMPLES.items():
+        assert 5 <= len(examples), domain

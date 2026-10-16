@@ -125,9 +125,9 @@ async def run_turn(
     routing_extra: dict | None = None
     routed_tools: list[str] | None = None
     if user_message:
-        from app.modules.safety.business_agent.tool_selector import route_message
+        from app.modules.safety.business_agent.tool_selector import route_message_async
 
-        decision = route_message(user_message)
+        decision = await route_message_async(user_message)
         routed_tools = decision.tool_names
         routing_extra = {
             "domains": list(decision.domains),

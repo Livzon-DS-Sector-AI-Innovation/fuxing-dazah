@@ -169,11 +169,11 @@ class RoutingDecision:
 
 
 def route_message(user_message: str | None) -> RoutingDecision:
-    """两段式路由入口（1-D 骨架：规则快速路径 + 兜底核心 15，永不返回全量）。
+    """两段式路由入口（规则层，同步）：快速路径 + 兜底核心 15，永不返回全量。
 
     - 办公链接/token → office 域工具集（不再全量回退）
     - 关键词命中 → 命中域工具集 ∪ knowledge_search
-    - 无命中 → 核心兜底 15（T10 嵌入层将在规则 miss 后、兜底前介入）
+    - 无命中 → 核心兜底 15（生产链路请用 ``route_message_async``，嵌入层在此介入）
     - 任何内部异常 → 核心兜底 15（路由永不抛出、永不放大工具面）
     """
     try:
@@ -181,6 +181,34 @@ def route_message(user_message: str | None) -> RoutingDecision:
     except Exception:
         logger.exception("route_message failed → core fallback")
         return RoutingDecision(sorted(CORE_FALLBACK_TOOLS))
+
+
+async def route_message_async(user_message: str | None) -> RoutingDecision:
+    """两段式路由完整入口（生产链路）：规则 → 嵌入相似度 → 核心兜底。
+
+    规则层结果直接沿用（零嵌入成本）；规则 miss 时嵌入层分类 top 域
+    （开关 SAFETY_AGENT_ROUTER_EMBEDDING，异常/低置信自动落核心兜底）。
+    """
+    decision = route_message(user_message)
+    if decision.path != "core_fallback" or not user_message:
+        return decision
+    try:
+        from app.modules.safety.business_agent import router_embedding
+
+        hit = await router_embedding.classify(user_message)
+    except Exception:
+        logger.debug("embedding routing stage failed → keep core fallback",
+                     exc_info=True)
+        hit = None
+    if hit is None:
+        return decision
+    domain, confidence = hit
+    tools = sorted(set(TOOL_GROUPS.get(domain, [])) | set(_ALWAYS_INCLUDE))
+    if not tools:
+        return decision
+    return RoutingDecision(
+        tools, domains=(domain,), path="embedding", confidence=confidence,
+    )
 
 
 def _route_rule(user_message: str | None) -> RoutingDecision:
