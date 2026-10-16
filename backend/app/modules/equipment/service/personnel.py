@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import DuplicateException, NotFoundException
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
-from app.modules.equipment.models.equipment import EquipmentCategory
+from app.modules.equipment.models.equipment import Equipment, EquipmentCategory
 from app.modules.equipment.models.personnel import (
     EquipmentPersonnel,
     EquipmentRole,
@@ -406,8 +406,13 @@ async def get_candidates(
     db: AsyncSession,
     role_codes: list[str],
     category_id: uuid.UUID | None = None,
+    category_ids: list[uuid.UUID] | None = None,
 ) -> list[CandidateResponse]:
-    """按角色编码查找可分配人员"""
+    """按角色编码查找可分配人员。
+
+    category_id 为 API 兼容的单分类入参；category_ids 供自动指派等内部
+    调用方传分类集合（设备多分类并集）。两者都传时以 category_ids 为准。
+    """
     role_result = await db.execute(
         select(EquipmentRole).where(
             EquipmentRole.code.in_(role_codes),
@@ -420,10 +425,14 @@ async def get_candidates(
     if not role_ids:
         return []
 
-    raw = await repo.get_candidates(db, role_ids, category_id=category_id)
+    if category_ids is None and category_id is not None:
+        category_ids = [category_id]
+
+    raw = await repo.get_candidates(db, role_ids, category_ids=category_ids)
     return [
         CandidateResponse(
             personnel_id=r["personnel_id"],
+            user_id=r["user_id"],
             name=r["name"],
             department=r["department"],
             feishu_user_id=r["feishu_user_id"],
@@ -437,6 +446,63 @@ async def get_candidates(
         )
         for r in raw
     ]
+
+
+REPAIR_ROLE_CODE = "repair"
+"""维修工角色编码：工单自动指派维修人时按此角色筛人。
+
+需在「设备人员管理」预先创建 code=repair 的角色并分配给维修工；
+人员可再绑定设备分类做专长约束，未绑定任何分类表示全分类可派。
+"""
+
+
+async def derive_maintainer_for_equipment(
+    db: AsyncSession, equipment: "Equipment"
+) -> uuid.UUID | None:
+    """按设备分类从人员池推导维修人（自动指派用）。
+
+    候选 = 持 REPAIR_ROLE_CODE 角色、与设备同部门、无分类约束或约束与设备
+    分类并集（含子孙分类）相交的在岗人员；设备无分类时仅无约束人员可选。
+    取第一位绑定平台账号（user_id 非空）者。查不到返回 None——调用方
+    不应因无候选而中断建单，由派单超时监控提醒主管人工指派。
+
+    只在设备所属部门内选人：跨部门指派的工单，被指派人在网页端会因数据范围
+    校验无法「开始维修」，工单会卡死。
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.modules.equipment.models.equipment import EquipmentCategoryLink
+
+    # 人员表的 department 存部门名称（与 identity.departments.name 同口径），
+    # 设备侧先把 department_id 换成名称；设备没有部门则无人可选。
+    if not equipment.department_id:
+        return None
+    dept_info = await repo.get_department_info(db, equipment.department_id)
+    dept_name = dept_info.get("name") if dept_info else None
+    if not dept_name:
+        return None
+
+    # 显式查分类链接表，不依赖 equipment.category_links 的加载状态
+    # （自动建单路径拿到的设备对象未必预加载了该 relationship）
+    link_result = await db.execute(
+        sa_select(EquipmentCategoryLink.category_id).where(
+            EquipmentCategoryLink.equipment_id == equipment.id,
+            EquipmentCategoryLink.is_deleted == False,  # noqa: E712
+        )
+    )
+    category_ids: set[uuid.UUID] = set()
+    for (category_id,) in link_result.all():
+        category_ids.update(
+            await repo.get_category_ids_inclusive(db, category_id)
+        )
+
+    candidates = await get_candidates(
+        db, [REPAIR_ROLE_CODE], category_ids=sorted(category_ids),
+    )
+    for candidate in candidates:
+        if candidate.user_id is not None and candidate.department == dept_name:
+            return candidate.user_id
+    return None
 
 
 async def refresh_feishu(db: AsyncSession) -> FeishuRefreshResult:

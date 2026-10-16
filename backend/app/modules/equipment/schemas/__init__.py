@@ -112,6 +112,7 @@ from app.modules.equipment.schemas.spare_part import (
     SparePartUpdate,
     StockAdjustRequest,
     StockInboundRequest,
+    StockOutboundRequest,
     StockResponse,
     StockWarningResponse,
 )
@@ -211,6 +212,7 @@ __all__ = [
     "SparePartResponse",
     "StockResponse",
     "StockInboundRequest",
+    "StockOutboundRequest",
     "StockAdjustRequest",
     "StockWarningResponse",
     "EquipmentConsumptionRecord",

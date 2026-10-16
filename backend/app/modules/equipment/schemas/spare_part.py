@@ -113,6 +113,12 @@ class StockInboundRequest(BaseModel):
     remark: str | None = Field(default=None, description="备注")
 
 
+class StockOutboundRequest(BaseModel):
+    """出库请求"""
+    quantity: int = Field(..., ge=1, description="出库数量")
+    remark: str | None = Field(default=None, max_length=500, description="备注（用途）")
+
+
 class StockAdjustRequest(BaseModel):
     """盘点调整请求"""
     new_qty: int = Field(..., ge=0, description="调整后数量")
@@ -120,12 +126,15 @@ class StockAdjustRequest(BaseModel):
 
 
 class StockWarningResponse(BaseModel):
-    """库存预警响应"""
-    spare_part: SparePartResponse
-    stock: StockResponse
+    """库存预警响应（扁平结构，字段名对齐前端 StockWarning）"""
+    spare_part_id: uuid.UUID
+    code: str
+    name: str
+    specification: str | None = None
+    unit: str | None = None
+    current_qty: int
+    min_qty: int
     shortage: int
-
-    model_config = {"from_attributes": True}
 
 
 # ==================== 设备-备件关联 ====================

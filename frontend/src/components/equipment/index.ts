@@ -58,6 +58,8 @@ export { SparePartTable } from './spare-parts/SparePartTable'
 export { SparePartDrawer } from './spare-parts/SparePartDrawer'
 export { SparePartEquipmentDrawer } from './spare-parts/SparePartEquipmentDrawer'
 export { StockInboundDrawer } from './spare-parts/StockInboundDrawer'
+export { StockOutboundDrawer } from './spare-parts/StockOutboundDrawer'
+export { StockAdjustDrawer } from './spare-parts/StockAdjustDrawer'
 export { StockWarningTable } from './spare-parts/StockWarningTable'
 export { SparePartImportModal } from './spare-parts/SparePartImportModal'
 

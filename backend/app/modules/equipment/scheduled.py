@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -12,7 +14,7 @@ from app.core.config import get_settings
 from app.core.database import async_session_factory
 from app.core.exceptions import AppException
 from app.modules.equipment.deps import EquipmentAccessContext
-from app.modules.equipment.models import WorkOrder
+from app.modules.equipment.models import Equipment, WorkOrder
 from app.modules.equipment.repository import inspection as inspection_repo
 from app.modules.equipment.repository import work_order as work_order_repo
 from app.modules.equipment.repository.inspection import get_due_schedules
@@ -188,10 +190,21 @@ AUTO_CLOSE_TASK = TaskDefinition(
 )
 
 
-async def scan_timeout_work_orders() -> None:
-    """扫描超时未接单的工单，通知设备主管。
+# 派单超时提醒冷却：任务 60s 一扫，同一工单 60 分钟内不重发，
+# 否则会每分钟轰炸设备群。进程内存级，重启后冷却清空（最多多提醒一轮）。
+_REMIND_COOLDOWN_SECONDS = 60 * 60
+# 键为 (工单, 提醒原因)：同一张工单的「未指派」与「已指派未开工」是两阶段提醒，
+# 共用一条冷却记录会让第二阶段被吞掉。
+_last_reminded_at: dict[tuple[uuid.UUID, str], float] = {}
 
-    原驻平台层 feishu/sync.py，迁入设备模块并挂到统一调度引擎。
+
+async def scan_timeout_work_orders() -> None:
+    """扫描派单超时的待处理工单，通知设备主管。
+
+    两类超时：未指派维修人超时（自报单时间起算）与已指派超时未开工
+    （自指派时间起算）。阈值按优先级取 claim_timeout_* 配置（界面称
+    「派单超时配置」）。原驻平台层 feishu/sync.py，迁入设备模块
+    并挂到统一调度引擎。
     """
     dept_id = settings.FEISHU_EQUIPMENT_DEPT_ID
     if not dept_id:
@@ -201,36 +214,66 @@ async def scan_timeout_work_orders() -> None:
         try:
             config = await get_claim_timeout_config(db)
             result = await db.execute(
-                select(WorkOrder).where(
+                select(WorkOrder, Equipment.name)
+                .join(Equipment, WorkOrder.equipment_id == Equipment.id)
+                .where(
                     WorkOrder.status == "待处理",
                     WorkOrder.is_deleted == False,  # noqa: E712
                 )
             )
-            pending_orders = result.scalars().all()
+            pending_rows = result.all()
 
             now = datetime.now(UTC)
+            now_mono = time.monotonic()
             priority_map = {
                 "紧急": "emergency", "高": "high",
                 "中": "medium", "低": "low",
             }
-            for order in pending_orders:
+            leader = await get_department_leader(dept_id)
+            leader_name = (
+                leader.get("name", "主管") if leader else "主管"
+            )
+
+            pending_ids: set[tuple[uuid.UUID, str]] = set()
+            for order, equipment_name in pending_rows:
                 attr = priority_map.get(order.priority, "medium")
                 timeout_minutes = getattr(config, attr, 60)
-                elapsed = (now - order.reported_at).total_seconds() / 60
-                if elapsed > timeout_minutes:
-                    leader = await get_department_leader(dept_id)
-                    leader_name = (
-                        leader.get("name", "主管") if leader else "主管"
-                    )
-                    await send_timeout_notification(
-                        order.work_order_no, "设备", leader_name,
-                    )
-                    logger.info(
-                        "Timeout WO %s (%.0f min > %d min)",
-                        order.work_order_no, elapsed, timeout_minutes,
-                    )
+
+                if order.assignee_id is None:
+                    anchor = order.reported_at
+                    reason, action = "超时未指派维修人", "请及时指派"
+                else:
+                    anchor = order.assigned_at or order.reported_at
+                    reason, action = "已指派超时未开工", "请及时跟进催办"
+
+                pending_ids.add((order.id, reason))
+                elapsed = (now - anchor).total_seconds() / 60
+                if elapsed <= timeout_minutes:
+                    continue
+                # 哨兵用 None：time.monotonic() 是开机时长而非进程启动时长，
+                # 用 0.0 当「从未提醒」会让重启后不足 1 小时的首次提醒被误判为冷却中
+                last_reminded = _last_reminded_at.get((order.id, reason))
+                if (
+                    last_reminded is not None
+                    and now_mono - last_reminded < _REMIND_COOLDOWN_SECONDS
+                ):
+                    continue
+
+                await send_timeout_notification(
+                    order.work_order_no, equipment_name, leader_name,
+                    reason=reason, action=action,
+                )
+                _last_reminded_at[(order.id, reason)] = now_mono
+                logger.info(
+                    "Dispatch timeout WO %s (%.0f min > %d min, %s)",
+                    order.work_order_no, elapsed, timeout_minutes, reason,
+                )
+
+            # 清理已离开待处理状态的冷却记录，避免长期驻留
+            for key in set(_last_reminded_at) - pending_ids:
+                _last_reminded_at.pop(key, None)
         except Exception:
-            logger.exception("Timeout scan error")
+            logger.exception("Dispatch timeout scan error")
         finally:
             await db.rollback()
 

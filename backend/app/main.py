@@ -151,8 +151,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         AUTO_CLOSE_TASK,
         InspectionScheduleGenerator,
     )
+    from app.modules.equipment.scheduled import (
+        TIMEOUT_SCAN_TASK as EQUIPMENT_TIMEOUT_SCAN_TASK,
+    )
     scheduler_registry.register_generator(InspectionScheduleGenerator())
     scheduler_registry.register_task(AUTO_CLOSE_TASK)
+    # 派单超时监控（未指派/已指派未开工超时提醒设备主管），别名避免与
+    # production 的 TIMEOUT_SCAN_TASK（工序执行超时）同名冲突
+    scheduler_registry.register_task(EQUIPMENT_TIMEOUT_SCAN_TASK)
 
     from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
     scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)

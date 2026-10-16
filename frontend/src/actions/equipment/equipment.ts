@@ -6,7 +6,7 @@ import {
   CreateCategoryInput, UpdateCategoryInput, CreateLocationInput, UpdateLocationInput, CreateEquipmentInput, UpdateEquipmentInput,
   CreateFailureCodeInput, UpdateFailureCodeInput,
   CreateWorkOrderInput, UpdateWorkOrderInput, AssignWorkOrderInput, CompleteWorkOrderInput, VerifyWorkOrderInput,
-  CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockAdjustInput, LinkEquipmentInput,
+  CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockOutboundInput, StockAdjustInput, LinkEquipmentInput,
   CreateMaintenancePlanInput, UpdateMaintenancePlanInput,
   CreateInspectionTemplateInput, UpdateInspectionTemplateInput,
   CreateInspectionTemplateItemInput, UpdateInspectionTemplateItemInput,
@@ -280,6 +280,15 @@ export async function deleteSparePart(id: string): Promise<ActionResult> {
 
 export async function stockInbound(sparePartId: string, data: StockInboundInput): Promise<ActionResult> {
   const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/inbound`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function stockOutbound(sparePartId: string, data: StockOutboundInput): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/outbound`, {
     method: 'POST',
     body: JSON.stringify(data),
   })

@@ -87,6 +87,10 @@ export const initialSparePartState = {
   equipmentManagingSparePart: null as SparePart | null,
   stockInboundDrawerOpen: false,
   stockInboundSparePartId: null as string | null,
+  stockOutboundDrawerOpen: false,
+  stockOutboundSparePartId: null as string | null,
+  stockAdjustDrawerOpen: false,
+  stockAdjustSparePartId: null as string | null,
 }
 
 // ============ 维护计划状态 ============
@@ -138,11 +142,7 @@ export const initialRepairState = {
   repairEquipmentId: null as string | null,
 }
 
-// ============ 超时配置 & 维修人员 ============
-
-export const initialTimeoutConfigState = {
-  claimTimeoutConfig: { emergency: 15, high: 30, medium: 60, low: 120 },
-}
+// ============ 维修人员 ============
 
 export const initialMaintainerState = {
   maintainers: [] as Maintainer[],

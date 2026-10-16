@@ -5,6 +5,7 @@
 """
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +33,10 @@ from app.modules.equipment.repository.spare_part import (
 from app.platform.identity.models import User
 
 
-def _make_ctx(data_scope: str = "all") -> EquipmentAccessContext:
+def _make_ctx(
+    data_scope: str = "all",
+    departments: Sequence[uuid.UUID] = (),
+) -> EquipmentAccessContext:
     """创建一个无数据范围限制的访问上下文。"""
     return EquipmentAccessContext(
         user=User(
@@ -41,6 +45,7 @@ def _make_ctx(data_scope: str = "all") -> EquipmentAccessContext:
             employee_no="EMP-REPO-TEST",
         ),
         data_scope=data_scope,
+        visible_department_ids=list(departments),
     )
 
 
@@ -528,9 +533,31 @@ class TestStockWarnings:
             "safety_qty": 20,
         })
 
-        warnings = await get_stock_warnings(db_session)
+        warnings = await get_stock_warnings(db_session, _make_ctx())
         sp_ids_in_warnings = [sp.id for sp, _stock in warnings]
         assert sp.id in sp_ids_in_warnings
+
+    async def test_excludes_other_department(
+        self, db_session: AsyncSession
+    ) -> None:
+        """数据范围之外部门的备件不出现（预警同样受数据范围限制）。"""
+        mine = uuid.uuid4()
+        sp = await create_spare_part(db_session, {
+            "code": f"SP-DEPT-{_rand_suffix()}",
+            "name": "他部门预警备件",
+            "unit": "个",
+            "department_id": uuid.uuid4(),
+        })
+        await create_stock(db_session, {
+            "spare_part_id": sp.id,
+            "current_qty": 5,
+            "safety_qty": 20,
+        })
+
+        warnings = await get_stock_warnings(
+            db_session, _make_ctx("department", [mine])
+        )
+        assert sp.id not in [item.id for item, _stock in warnings]
 
     async def test_excludes_above_safety_stock(
         self, db_session: AsyncSession
@@ -547,7 +574,7 @@ class TestStockWarnings:
             "safety_qty": 20,
         })
 
-        warnings = await get_stock_warnings(db_session)
+        warnings = await get_stock_warnings(db_session, _make_ctx())
         sp_ids = [sp.id for sp, _stock in warnings]
         assert sp.id not in sp_ids
 
@@ -566,7 +593,7 @@ class TestStockWarnings:
             "safety_qty": 0,
         })
 
-        warnings = await get_stock_warnings(db_session)
+        warnings = await get_stock_warnings(db_session, _make_ctx())
         sp_ids = [sp.id for sp, _stock in warnings]
         assert sp.id not in sp_ids
 
@@ -584,7 +611,7 @@ class TestStockWarnings:
         })
         await delete_spare_part(db_session, sp.id)
 
-        warnings = await get_stock_warnings(db_session)
+        warnings = await get_stock_warnings(db_session, _make_ctx())
         sp_ids = [sp.id for sp, _stock in warnings]
         assert sp.id not in sp_ids
 

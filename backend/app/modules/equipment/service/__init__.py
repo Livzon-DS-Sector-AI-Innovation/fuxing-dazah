@@ -104,11 +104,13 @@ from app.modules.equipment.service.maintenance_plan import (
     update_maintenance_plan,
 )
 from app.modules.equipment.service.personnel import (
+    REPAIR_ROLE_CODE,
     add_personnel,
     assign_roles,
     create_role,
     delete_personnel,
     delete_role,
+    derive_maintainer_for_equipment,
     get_candidates,
     get_personnel,
     get_personnel_by_id,
@@ -134,6 +136,8 @@ from app.modules.equipment.service.reference import (
     validate_target_module,
 )
 from app.modules.equipment.service.spare_part import (
+    IMPORT_MODE_ACCUMULATE,
+    IMPORT_MODE_OVERWRITE,
     adjust_stock,
     create_spare_part,
     delete_spare_part,
@@ -251,6 +255,8 @@ __all__ = [
     "get_overdue_maintenance_plans",
     "update_maintenance_plan",
     # spare part
+    "IMPORT_MODE_ACCUMULATE",
+    "IMPORT_MODE_OVERWRITE",
     "adjust_stock",
     "create_spare_part",
     "delete_spare_part",
@@ -290,11 +296,13 @@ __all__ = [
     "get_work_order_images",
     "delete_work_order_image",
     # personnel
+    "REPAIR_ROLE_CODE",
     "add_personnel",
     "assign_roles",
     "create_role",
     "delete_personnel",
     "delete_role",
+    "derive_maintainer_for_equipment",
     "get_candidates",
     "get_personnel",
     "get_personnel_by_id",

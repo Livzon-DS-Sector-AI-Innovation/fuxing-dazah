@@ -298,10 +298,11 @@ export function RoleManagePanel({ roles }: Props) {
             name="code"
             label="角色编码"
             rules={[{ required: true, message: '请输入角色编码' }]}
+            extra="工单自动指派维修人按 repair 编码匹配，维修工角色请填 repair"
           >
             <Input
               maxLength={50}
-              placeholder="如：maintenance_tech"
+              placeholder="如：repair"
               disabled={!!editingRole}
               style={{ borderRadius: 8 }}
             />

@@ -43,6 +43,7 @@ from app.modules.equipment.schemas.inspection import (
     InspectionScheduleResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+from app.modules.equipment.service.personnel import derive_maintainer_for_equipment
 from app.modules.equipment.service.work_order import (
     _MAX_RETRIES,
     generate_work_order_no,
@@ -510,6 +511,21 @@ async def _create_anomaly_work_order(
         if dept_info:
             responsible_user_id = dept_info.get("leader_id")
 
+    # 自动指派维修人：按设备分类从同部门人员池（repair 角色）推导首位候选。
+    # 非关键路径：推导失败只记日志、不阻塞建单（SAVEPOINT 隔离，避免失败的语句
+    # 让本事务进入 aborted 状态）。责任人确定不了时不指派——start_work_order
+    # 要求责任人与维修人都非空，派了也开不了工，留给超时监控提醒主管。
+    assignee_user_id: uuid.UUID | None = None
+    if responsible_user_id is not None:
+        try:
+            async with db.begin_nested():
+                assignee_user_id = await derive_maintainer_for_equipment(db, equipment)
+        except Exception:
+            logger.exception(
+                "自动指派维修人失败，转人工指派: equipment_id=%s", equipment_id,
+            )
+            assignee_user_id = None
+
     # 构建异常描述
     desc_parts: list[str] = []
     for r in abnormal_records:
@@ -530,6 +546,8 @@ async def _create_anomaly_work_order(
             priority=equipment.importance,
             status="待处理",
             responsible_person_id=responsible_user_id,
+            assignee_id=assignee_user_id,
+            assigned_at=app_time.now() if assignee_user_id else None,
             reporter_id=task.assigned_to,
             fault_description=fault_description,
             inspection_task_id=task.id,
@@ -568,6 +586,21 @@ async def _create_anomaly_work_order(
     await send_work_order_notification(
         wo, equipment, task, responsible_user_id_str,
     )
+
+    # 维修人通知（非关键路径，fire-and-forget；通知协程自建 session，
+    # 仅查被指派人飞书账号，不依赖本事务未提交的工单行）
+    if assignee_user_id:
+        from app.modules.equipment.service.work_order import (
+            notify_assignment_in_background,
+        )
+
+        notify_assignment_in_background(
+            assignee_id=assignee_user_id,
+            work_order_no=wo.work_order_no,
+            equipment_name=equipment.name,
+            order_type=wo.order_type,
+            priority=wo.priority,
+        )
 
     return wo
 

@@ -145,6 +145,14 @@ export interface EquipmentStore {
   stockInboundSparePartId: string | null
   openStockInboundDrawer: (sparePartId: string) => void
   closeStockInboundDrawer: () => void
+  stockOutboundDrawerOpen: boolean
+  stockOutboundSparePartId: string | null
+  openStockOutboundDrawer: (sparePartId: string) => void
+  closeStockOutboundDrawer: () => void
+  stockAdjustDrawerOpen: boolean
+  stockAdjustSparePartId: string | null
+  openStockAdjustDrawer: (sparePartId: string) => void
+  closeStockAdjustDrawer: () => void
 
   // ── 维护计划 ──
   maintenancePlans: MaintenancePlan[]
@@ -208,10 +216,6 @@ export interface EquipmentStore {
   repairEquipmentId: string | null
   openRepairDrawer: (equipmentId: string) => void
   closeRepairDrawer: () => void
-
-  // ── 超时配置 ──
-  claimTimeoutConfig: { emergency: number; high: number; medium: number; low: number }
-  setClaimTimeoutConfig: (config: { emergency: number; high: number; medium: number; low: number }) => void
 
   // ── 维修人员 ──
   maintainers: Maintainer[]

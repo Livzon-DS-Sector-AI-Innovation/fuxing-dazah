@@ -216,13 +216,13 @@ async def assign_work_order(
 
     # 飞书通知被指派人
     equipment = wo.equipment
-    asyncio.ensure_future(_notify_assignment(
+    notify_assignment_in_background(
         assignee_id=assignee_id,
         work_order_no=wo.work_order_no,
         equipment_name=equipment.name if equipment else "",
         order_type=wo.order_type,
         priority=wo.priority,
-    ))
+    )
 
     return wo
 
@@ -477,16 +477,17 @@ async def _notify_new_work_order(
         )
 
 
-async def _notify_assignment(
+async def notify_assignment(
     assignee_id: uuid.UUID,
     work_order_no: str,
     equipment_name: str,
     order_type: str,
     priority: str,
 ) -> None:
-    """指派维修人后飞书通知被指派人。
+    """指派维修人后飞书通知被指派人（手动指派与自动指派共用）。
 
     非关键路径：发送失败只记日志，不影响主流程。
+    自建 session、纯标量参数，可在请求上下文与后台任务中直接调用。
     """
     try:
         from sqlalchemy import select as sa_select
@@ -519,6 +520,7 @@ async def _notify_assignment(
             f"**优先级：**{priority}",
             "",
             "你已被指派为该工单的维修人，请及时处理。",
+            "可在飞书机器人对话中说「我的工单」开始处理。",
         ]
         content = "\n".join(lines)
 
@@ -541,6 +543,30 @@ async def _notify_assignment(
         logger.exception(
             "指派通知异常: %s", work_order_no,
         )
+
+
+# asyncio 只对运行中的任务持弱引用，不自己持引用会被 GC 提前取消
+# （日志只有 "Task was destroyed but it is pending"，协程内的 try/except 捕获不到）
+_assignment_notify_tasks: set[asyncio.Task[None]] = set()
+
+
+def notify_assignment_in_background(
+    assignee_id: uuid.UUID,
+    work_order_no: str,
+    equipment_name: str,
+    order_type: str,
+    priority: str,
+) -> None:
+    """后台发送指派通知（fire-and-forget，调用方不等待）。"""
+    task = asyncio.create_task(notify_assignment(
+        assignee_id=assignee_id,
+        work_order_no=work_order_no,
+        equipment_name=equipment_name,
+        order_type=order_type,
+        priority=priority,
+    ))
+    _assignment_notify_tasks.add(task)
+    task.add_done_callback(_assignment_notify_tasks.discard)
 
 
 async def _notify_rejection(
@@ -753,7 +779,10 @@ async def consume_materials(
 
     for item in items:
         spare_part = await get_spare_part_by_id(db, item["spare_part_id"])
-        stock = await get_stock_by_spare_part_id(db, item["spare_part_id"])
+        # 加锁读取：校验与扣减需在同一行锁内，否则并发领料会双双通过校验后互相覆盖
+        stock = await get_stock_by_spare_part_id(
+            db, item["spare_part_id"], for_update=True
+        )
 
         if not stock or stock.current_qty < item["quantity"]:
             raise AppException(

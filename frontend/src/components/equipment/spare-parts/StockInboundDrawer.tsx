@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { App, Drawer, Form, Input, InputNumber, Button, Space } from 'antd'
 import { useEquipmentStore } from '@/stores/equipment'
 import { stockInbound } from '@/actions/equipment'
@@ -14,10 +15,11 @@ interface StockInboundDrawerProps {
 export function StockInboundDrawer({ onRefresh }: StockInboundDrawerProps) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
+  const [submitting, setSubmitting] = useState(false)
   const { stockInboundDrawerOpen, stockInboundSparePartId, closeStockInboundDrawer } = useEquipmentStore()
 
   const handleSubmit = async () => {
-    if (!stockInboundSparePartId) return
+    if (!stockInboundSparePartId || submitting) return
     let values: any
     try {
       values = await form.validateFields()
@@ -27,11 +29,17 @@ export function StockInboundDrawer({ onRefresh }: StockInboundDrawerProps) {
       warehouse_location: values.warehouse_location || undefined,
       remark: values.remark || undefined,
     }
-    const result = await stockInbound(stockInboundSparePartId, data)
-    if (!result.success) { message.error(result.error); return }
-    message.success('入库成功')
-    closeStockInboundDrawer()
-    onRefresh?.()
+    // 重复提交会重复入库，加在途状态挡住第二次点击
+    setSubmitting(true)
+    try {
+      const result = await stockInbound(stockInboundSparePartId, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('入库成功')
+      closeStockInboundDrawer()
+      onRefresh?.()
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -44,7 +52,7 @@ export function StockInboundDrawer({ onRefresh }: StockInboundDrawerProps) {
       extra={
         <Space>
           <Button onClick={closeStockInboundDrawer}>取消</Button>
-          <Button type="primary" onClick={handleSubmit}>确认入库</Button>
+          <Button type="primary" loading={submitting} onClick={handleSubmit}>确认入库</Button>
         </Space>
       }
     >

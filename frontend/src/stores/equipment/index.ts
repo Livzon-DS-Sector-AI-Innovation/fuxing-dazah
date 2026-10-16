@@ -12,7 +12,6 @@ import {
   initialInspectionTemplateState,
   initialInspectionCompleteState,
   initialRepairState,
-  initialTimeoutConfigState,
   initialMaintainerState,
 } from './initialStates'
 
@@ -30,7 +29,6 @@ export const useEquipmentStore = create<EquipmentStore>()(
       ...initialInspectionTemplateState,
       ...initialInspectionCompleteState,
       ...initialRepairState,
-      ...initialTimeoutConfigState,
       ...initialMaintainerState,
 
       // ── 基础操作 ──
@@ -132,6 +130,18 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeStockInboundDrawer: () => set({
         stockInboundDrawerOpen: false, stockInboundSparePartId: null,
       }, false, 'equipment/closeStockInboundDrawer'),
+      openStockOutboundDrawer: (sparePartId) => set({
+        stockOutboundDrawerOpen: true, stockOutboundSparePartId: sparePartId,
+      }, false, 'equipment/openStockOutboundDrawer'),
+      closeStockOutboundDrawer: () => set({
+        stockOutboundDrawerOpen: false, stockOutboundSparePartId: null,
+      }, false, 'equipment/closeStockOutboundDrawer'),
+      openStockAdjustDrawer: (sparePartId) => set({
+        stockAdjustDrawerOpen: true, stockAdjustSparePartId: sparePartId,
+      }, false, 'equipment/openStockAdjustDrawer'),
+      closeStockAdjustDrawer: () => set({
+        stockAdjustDrawerOpen: false, stockAdjustSparePartId: null,
+      }, false, 'equipment/closeStockAdjustDrawer'),
 
       // ── 维护计划操作 ──
       setMaintenancePlans: (plans) => set({ maintenancePlans: plans }, false, 'equipment/setMaintenancePlans'),
@@ -192,9 +202,6 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeRepairDrawer: () => set({
         repairDrawerOpen: false, repairEquipmentId: null,
       }, false, 'equipment/closeRepairDrawer'),
-
-      // ── 超时配置 ──
-      setClaimTimeoutConfig: (config) => set({ claimTimeoutConfig: config }, false, 'equipment/setClaimTimeoutConfig'),
 
       // ── 维修人员 ──
       setMaintainers: (maintainers) => set({ maintainers }, false, 'equipment/setMaintainers'),

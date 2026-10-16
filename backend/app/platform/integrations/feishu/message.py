@@ -145,18 +145,22 @@ async def send_work_order_card(
 
 
 async def send_timeout_notification(
-    work_order_no: str, equipment_name: str, leader_name: str
+    work_order_no: str,
+    equipment_name: str,
+    leader_name: str,
+    reason: str = "超时无人接单",
+    action: str = "请及时派发",
 ) -> bool:
-    """超时未接单通知主管"""
+    """派单超时通知主管（未指派超时 / 已指派超时未开工）"""
     chat_id = settings.FEISHU_EQUIPMENT_CHAT_ID
     if not chat_id:
         return False
 
     return await send_group_card(
         chat_id,
-        title="⏰ 工单超时未接单",
+        title="⏰ 工单派单超时",
         content=(
-            f"**{work_order_no}**（{equipment_name}）超时无人接单\n"
-            f"请主管 **{leader_name}** 及时派发"
+            f"**{work_order_no}**（{equipment_name}）{reason}\n"
+            f"请主管 **{leader_name}** {action}"
         ),
     )

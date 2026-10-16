@@ -9,7 +9,12 @@ import openpyxl
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.spare_part import (
@@ -25,6 +30,7 @@ from app.modules.equipment.schemas.spare_part import (
     SparePartUpdate,
     StockAdjustRequest,
     StockInboundRequest,
+    StockOutboundRequest,
     StockWarningResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
@@ -135,9 +141,10 @@ async def delete_spare_part(
 async def get_stock_by_spare_part_id(
     db: AsyncSession,
     spare_part_id: uuid.UUID,
+    for_update: bool = False,
 ) -> SparePartStock:
-    """获取库存记录"""
-    stock = await repo.get_stock_by_spare_part_id(db, spare_part_id)
+    """获取库存记录（for_update=True 时加行锁，供先校验后增减的写路径使用）"""
+    stock = await repo.get_stock_by_spare_part_id(db, spare_part_id, for_update=for_update)
     if not stock:
         raise NotFoundException("库存记录", str(spare_part_id))
     return stock
@@ -179,17 +186,23 @@ async def inbound_stock(
 async def outbound_stock(
     db: AsyncSession,
     spare_part_id: uuid.UUID,
-    quantity: int,
+    data: StockOutboundRequest,
+    ctx: EquipmentAccessContext | None = None,
 ) -> SparePartStock:
-    """出库（内部使用）"""
-    stock = await get_stock_by_spare_part_id(db, spare_part_id)
+    """出库（手动领用/报废；工单领料走 work_order.consume_materials）"""
+    spare_part = await get_spare_part_by_id(db, spare_part_id)
+    if ctx:
+        await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
 
-    if stock.current_qty < quantity:
+    # 加锁读取：校验与扣减必须在同一行锁内，否则并发出库会双双通过校验后互相覆盖
+    stock = await get_stock_by_spare_part_id(db, spare_part_id, for_update=True)
+
+    if stock.current_qty < data.quantity:
         raise AppException(
-            message=f"库存不足，当前库存 {stock.current_qty}，出库数量 {quantity}"
+            message=f"库存不足，当前库存 {stock.current_qty}，出库数量 {data.quantity}"
         )
 
-    stock = cast(SparePartStock, await repo.update_stock_qty(db, spare_part_id, -quantity))
+    stock = cast(SparePartStock, await repo.update_stock_qty(db, spare_part_id, -data.quantity))
     if not stock:
         raise NotFoundException("库存记录", str(spare_part_id))
 
@@ -198,7 +211,8 @@ async def outbound_stock(
         {
             "spare_part_id": spare_part_id,
             "transaction_type": "出库",
-            "quantity": -quantity,
+            "quantity": -data.quantity,
+            "remark": data.remark,
         },
     )
 
@@ -218,7 +232,7 @@ async def adjust_stock(
     if ctx:
         await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
 
-    stock = await get_stock_by_spare_part_id(db, spare_part_id)
+    stock = await get_stock_by_spare_part_id(db, spare_part_id, for_update=True)
 
     diff = data.new_qty - stock.current_qty
 
@@ -244,15 +258,21 @@ async def adjust_stock(
 
 async def get_stock_warnings(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
 ) -> list[StockWarningResponse]:
-    """获取库存预警"""
-    warnings = await repo.get_stock_warnings(db)
+    """获取库存预警（受数据范围限制）"""
+    warnings = await repo.get_stock_warnings(db, ctx)
     result = []
     for spare_part, stock in warnings:
         result.append(
             StockWarningResponse(
-                spare_part=spare_part,  # pyright: ignore[reportArgumentType]
-                stock=stock,  # pyright: ignore[reportArgumentType]
+                spare_part_id=spare_part.id,
+                code=spare_part.code,
+                name=spare_part.name,
+                specification=spare_part.specification,
+                unit=spare_part.unit,
+                current_qty=stock.current_qty,
+                min_qty=stock.safety_qty,
                 shortage=stock.safety_qty - stock.current_qty,
             )
         )
@@ -269,6 +289,8 @@ SP_COL_UNIT = 3           # D: 计量单位 *
 SP_COL_CATEGORY = 4       # E: 备件分类
 SP_COL_DEFAULT_SUPPLIER = 5  # F: 默认供应商
 SP_COL_UNIT_PRICE = 6     # G: 参考单价（元）
+SP_COL_QUANTITY = 7       # H: 初始库存数量（已有编码时为入库数量）
+SP_COL_SAFETY_QTY = 8     # I: 安全库存
 
 SP_TEMPLATE_HEADERS = [
     ("备件编码 *", 18),       # A
@@ -278,6 +300,8 @@ SP_TEMPLATE_HEADERS = [
     ("备件分类", 16),         # E
     ("默认供应商", 22),       # F
     ("参考单价（元）", 16),    # G
+    ("初始库存数量", 14),     # H
+    ("安全库存", 12),         # I
 ]
 
 
@@ -296,6 +320,42 @@ def _parse_decimal(value: Any) -> float | None:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+def _parse_import_qty(value: Any) -> int | None:
+    """导入数量解析：空→0；整数或整值浮点→int；负数/非数字→None（非法）。"""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        qty: int = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            return None
+        qty = int(value)
+    else:
+        s = str(value).strip()
+        if not s:
+            return 0
+        try:
+            f = float(s)
+        except ValueError:
+            return None
+        if not f.is_integer():
+            return None
+        qty = int(f)
+    return qty if qty >= 0 else None
+
+
+IMPORT_MODE_ACCUMULATE = "accumulate"
+IMPORT_MODE_OVERWRITE = "overwrite"
+IMPORT_MODES = (IMPORT_MODE_ACCUMULATE, IMPORT_MODE_OVERWRITE)
+
+
+def _is_blank_cell(value: Any) -> bool:
+    """单元格是否留空（用于区分「留空=不改」与「填 0=清零」）"""
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def generate_spare_part_template_bytes() -> io.BytesIO:
@@ -336,6 +396,8 @@ def generate_spare_part_template_bytes() -> io.BytesIO:
         "机械密封",
         "XX密封件有限公司",
         "85.50",
+        "50",
+        "10",
     ]
     ws.row_dimensions[2].height = 28
     for i, example in enumerate(examples, start=1):
@@ -355,8 +417,17 @@ async def import_spare_parts_from_excel(
     db: AsyncSession,
     file_bytes: bytes,
     ctx: EquipmentAccessContext,
+    mode: str = IMPORT_MODE_ACCUMULATE,
 ) -> EquipmentImportResponse:
-    """从 Excel 文件字节流导入备件"""
+    """从 Excel 文件字节流导入备件。
+
+    mode 只影响「编码已存在」的行：
+    - accumulate（默认）：表格数量累加进库存，仅刷新参考单价；
+    - overwrite：表格填了的字段以表格为准（含库存数量、安全库存、单价等），
+      留空的字段保持系统原值——重传同一份文件结果一致。
+    """
+    if mode not in IMPORT_MODES:
+        raise ValueError(f"不支持的导入模式：{mode}")
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
 
     if "备件管理" not in wb.sheetnames:
@@ -370,11 +441,13 @@ async def import_spare_parts_from_excel(
     errors: list[ImportRowError] = []
     warnings: list[ImportRowError] = []
 
-    # ── 预加载系统数据 ──
+    # ── 预加载系统数据（按编码索引现有备件，供重复编码累加入库） ──
     existing_result = await db.execute(
-        select(SparePart.code).where(SparePart.is_deleted == False)  # noqa: E712
+        select(SparePart).where(SparePart.is_deleted == False)  # noqa: E712
     )
-    existing_codes: set[str] = {r[0] for r in existing_result.all()}
+    existing_by_code: dict[str, SparePart] = {
+        sp.code: sp for sp in existing_result.scalars().all()
+    }
 
     # 确定导入目标部门
     if ctx.visible_department_ids:
@@ -384,7 +457,7 @@ async def import_spare_parts_from_excel(
 
     for row_num, row in enumerate(rows, start=3):
         try:
-            values = [_sp_cell_str(row, c) for c in range(7)]
+            values = [_sp_cell_str(row, c) for c in range(9)]
             if not any(values):
                 continue
 
@@ -410,18 +483,125 @@ async def import_spare_parts_from_excel(
                 skipped += 1
                 continue
             assert code is not None and name is not None and unit is not None
-            
-            # 编码重复
-            if code in existing_codes:
-                errors.append(
+
+            # 解析数量/安全库存/单价
+            qty_raw = row[SP_COL_QUANTITY] if SP_COL_QUANTITY < len(row) else None
+            safety_raw = row[SP_COL_SAFETY_QTY] if SP_COL_SAFETY_QTY < len(row) else None
+            qty = _parse_import_qty(qty_raw)
+            safety_qty = _parse_import_qty(safety_raw)
+            existing = existing_by_code.get(code)
+
+            # 数值列校验：只拦真正会用到的列——累加模式下已有编码只用数量，
+            # 安全库存填错不该把这行的数量一起丢掉（覆盖模式会写安全库存，仍需有效）。
+            need_safety = existing is None or mode == IMPORT_MODE_OVERWRITE
+            if qty is None or (need_safety and safety_qty is None):
+                bad_field = "初始库存数量" if qty is None else "安全库存"
+                bad_raw = qty_raw if qty is None else safety_raw
+                warnings.append(
                     ImportRowError(
                         row=row_num,
-                        message=f"备件编码「{code}」已存在",
+                        message=f"{bad_field}「{bad_raw}」无效，需为非负整数，已跳过",
                     )
                 )
                 skipped += 1
                 continue
+            if not need_safety and safety_qty is None:
+                warnings.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"安全库存「{safety_raw}」无效，累加入库不写该列，已忽略",
+                    )
+                )
 
+            raw_price = row[SP_COL_UNIT_PRICE] if SP_COL_UNIT_PRICE < len(row) else None
+            unit_price = _parse_decimal(raw_price)
+
+            if existing is not None:
+                # ── 已有编码 → 按模式累加入库 / 覆盖 ──
+                try:
+                    await verify_write_ownership(
+                        ctx, existing, "department_id", "department_id"
+                    )
+                except ForbiddenException:
+                    errors.append(
+                        ImportRowError(
+                            row=row_num,
+                            message=f"备件编码「{code}」已存在，且无权对其所属部门入库",
+                        )
+                    )
+                    skipped += 1
+                    continue
+
+                is_overwrite = mode == IMPORT_MODE_OVERWRITE
+                if not is_overwrite and qty <= 0:
+                    warnings.append(
+                        ImportRowError(
+                            row=row_num,
+                            message=f"备件编码「{code}」已存在且数量为空/0，未入库",
+                        )
+                    )
+                    skipped += 1
+                    continue
+
+                async with db.begin_nested():
+                    if is_overwrite:
+                        # 表格填了的字段以表格为准，留空的不动
+                        for field, value in (
+                            ("name", name),
+                            ("specification", values[SP_COL_SPECIFICATION]),
+                            ("unit", unit),
+                            ("category", values[SP_COL_CATEGORY]),
+                            ("default_supplier", values[SP_COL_DEFAULT_SUPPLIER]),
+                        ):
+                            if value is not None:
+                                setattr(existing, field, value)
+                        if unit_price is not None:
+                            existing.unit_price = unit_price
+
+                        locked = await repo.get_stock_by_spare_part_id(
+                            db, existing.id, for_update=True
+                        )
+                        if not locked:
+                            raise NotFoundException("库存记录", str(existing.id))
+                        if not _is_blank_cell(safety_raw):
+                            assert safety_qty is not None  # need_safety 时非法值已拦行
+                            locked.safety_qty = safety_qty
+                        if not _is_blank_cell(qty_raw):
+                            diff = qty - locked.current_qty
+                            if diff:
+                                locked.current_qty = qty
+                                await repo.create_transaction(
+                                    db,
+                                    {
+                                        "spare_part_id": existing.id,
+                                        "transaction_type": "盘点调整",
+                                        "quantity": diff,
+                                        "remark": "Excel导入覆盖",
+                                    },
+                                )
+                        await db.flush()
+                    else:
+                        # 累加：表数量入账 + 刷新参考单价
+                        locked = await repo.update_stock_qty(db, existing.id, qty)
+                        if not locked:
+                            raise NotFoundException("库存记录", str(existing.id))
+                        if unit_price is not None:
+                            existing.unit_price = unit_price
+                        await repo.create_transaction(
+                            db,
+                            {
+                                "spare_part_id": existing.id,
+                                "transaction_type": "入库",
+                                "quantity": qty,
+                                "remark": "Excel导入入库",
+                            },
+                        )
+                        await db.flush()
+
+                imported += 1
+                continue
+
+            # ── 新编码建档 ──
             # 部门权限校验
             department_id = default_dept_id
             if not ctx.is_unrestricted:
@@ -434,10 +614,6 @@ async def import_spare_parts_from_excel(
                     )
                     skipped += 1
                     continue
-
-            # 解析单价
-            raw_price = row[SP_COL_UNIT_PRICE] if SP_COL_UNIT_PRICE < len(row) else None
-            unit_price = _parse_decimal(raw_price)
 
             # 创建备件（使用 SAVEPOINT 隔离每行）
             async with db.begin_nested():
@@ -457,22 +633,27 @@ async def import_spare_parts_from_excel(
                 db.add(spare_part)
                 await db.flush()
 
-                # 创建库存记录
-                db.add(SparePartStock(spare_part_id=spare_part.id))
+                # 创建库存记录（带初始数量与安全库存）
+                db.add(SparePartStock(
+                    spare_part_id=spare_part.id,
+                    current_qty=qty,
+                    safety_qty=safety_qty,
+                ))
                 await db.flush()
 
-                # 记录入库流水
-                await repo.create_transaction(
-                    db,
-                    {
-                        "spare_part_id": spare_part.id,
-                        "transaction_type": "入库",
-                        "quantity": 0,
-                        "remark": "Excel导入创建",
-                    },
-                )
+                # 数量 > 0 时记录初始库存入库流水
+                if qty > 0:
+                    await repo.create_transaction(
+                        db,
+                        {
+                            "spare_part_id": spare_part.id,
+                            "transaction_type": "入库",
+                            "quantity": qty,
+                            "remark": "Excel导入初始库存",
+                        },
+                    )
 
-            existing_codes.add(code)
+            existing_by_code[code] = spare_part
             imported += 1
 
         except Exception as e:

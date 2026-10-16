@@ -12,6 +12,9 @@ import { SparePartTable } from './SparePartTable'
 import { SparePartDrawer } from './SparePartDrawer'
 import { SparePartEquipmentDrawer } from './SparePartEquipmentDrawer'
 import { StockInboundDrawer } from './StockInboundDrawer'
+import { StockOutboundDrawer } from './StockOutboundDrawer'
+import { StockAdjustDrawer } from './StockAdjustDrawer'
+import { StockWarningTable } from './StockWarningTable'
 import { SparePartImportModal } from './SparePartImportModal'
 import { PageHeading } from '@/components/shared/PageHeading'
 import { PageGuideButton } from '../shared/PageGuideButton'
@@ -21,15 +24,17 @@ const txColumns: ColumnsType<OutboundTransaction> = [
   { title: '备件名称', dataIndex: 'spare_part_name', key: 'spare_part_name', width: 130 },
   { title: '规格', dataIndex: 'specification', key: 'specification', width: 100, render: (v: string | null) => v || '-' },
   {
-    title: '类型', dataIndex: 'transaction_type', key: 'transaction_type', width: 70,
+    title: '类型', dataIndex: 'transaction_type', key: 'transaction_type', width: 80,
     render: (v: string | null) => {
       if (v === '入库') return <Tag color="green">入库</Tag>
       if (v === '出库') return <Tag color="red">出库</Tag>
+      if (v === '盘点调整') return <Tag color="orange">盘点调整</Tag>
       return v || '-'
     },
   },
   { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 60, render: (v: number) => Math.abs(v) },
   { title: '单位', dataIndex: 'unit', key: 'unit', width: 60, render: (v: string | null) => v || '-' },
+  { title: '备注', dataIndex: 'remark', key: 'remark', width: 150, ellipsis: true, render: (v: string | null) => v || '-' },
   { title: '工单编号', dataIndex: 'work_order_no', key: 'work_order_no', width: 150, render: (v: string | null) => v || '-' },
   { title: '设备', dataIndex: 'equipment_name', key: 'equipment_name', width: 120, render: (v: string | null) => v || '-' },
   { title: '消耗时间', dataIndex: 'consumed_at', key: 'consumed_at', width: 140, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
@@ -134,6 +139,7 @@ export function SparePartsPage({
               options={[
                 { label: '入库', value: '入库' },
                 { label: '出库', value: '出库' },
+                { label: '盘点调整', value: '盘点调整' },
               ]}
             />
             <Input.Search
@@ -163,6 +169,11 @@ export function SparePartsPage({
         </div>
       ),
     },
+    {
+      key: 'warnings',
+      label: '库存预警',
+      children: <StockWarningTable onRefresh={fetchData} />,
+    },
   ]
 
   return (
@@ -182,6 +193,8 @@ export function SparePartsPage({
         <SparePartDrawer onRefresh={fetchData} userDepartmentName={userDepartmentName} />
         <SparePartEquipmentDrawer onRefresh={fetchData} />
         <StockInboundDrawer onRefresh={fetchData} />
+        <StockOutboundDrawer onRefresh={fetchData} />
+        <StockAdjustDrawer onRefresh={fetchData} />
         <SparePartImportModal
           open={importModalOpen}
           onClose={() => setImportModalOpen(false)}

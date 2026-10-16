@@ -65,6 +65,11 @@ export interface StockInboundInput {
   remark?: string
 }
 
+export interface StockOutboundInput {
+  quantity: number
+  remark?: string
+}
+
 export interface StockAdjustInput {
   new_qty: number
   remark?: string

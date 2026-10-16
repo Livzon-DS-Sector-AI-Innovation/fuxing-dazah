@@ -3,7 +3,7 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,9 +25,10 @@ from app.modules.equipment.schemas import (
     SparePartUpdate,
     StockAdjustRequest,
     StockInboundRequest,
+    StockOutboundRequest,
     StockResponse,
-    StockWarningResponse,
 )
+from app.modules.equipment.service import IMPORT_MODE_ACCUMULATE
 
 logger = logging.getLogger(__name__)
 
@@ -77,24 +78,17 @@ async def get_stock_warnings(
         require_equipment_access("equipment:spare_part:read"),
     ),
 ) -> JSONResponse:
-    warnings = await service.get_stock_warnings(db)
-    return success_response(
-        data=[
-            StockWarningResponse(
-                spare_part=SparePartResponse.model_validate(w["spare_part"]),
-                stock=StockResponse.model_validate(w["stock"]),
-                shortage=w["shortage"],
-            )
-            for w in warnings
-        ]
-    )
+    warnings = await service.get_stock_warnings(db, ctx)
+    return success_response(data=warnings)
 
 
 @router.get("/transactions", summary="消耗流水")
 async def list_outbound_transactions(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
-    transaction_type: str | None = Query(None, description="类型筛选：入库/出库"),
+    transaction_type: str | None = Query(
+        None, description="类型筛选：入库/出库/盘点调整；不传返回全部"
+    ),
     keyword: str | None = Query(None, description="备件名称搜索"),
     db: AsyncSession = Depends(get_db),
     ctx: EquipmentAccessContext = Depends(
@@ -132,12 +126,19 @@ async def download_spare_part_import_template(
 @router.post("/import", summary="批量导入备件")
 async def import_spare_parts(
     file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
+    mode: str = Form(
+        IMPORT_MODE_ACCUMULATE,
+        description="已有编码的处理方式：accumulate=累加入库（默认），overwrite=以表格为准覆盖",
+    ),
     db: AsyncSession = Depends(get_db),
     ctx: EquipmentAccessContext = Depends(
-        require_equipment_access("equipment:spare_part:create"),
+        require_equipment_access("equipment:spare_part:update"),
     ),
 ) -> JSONResponse:
-    """从 Excel 文件批量导入备件"""
+    """从 Excel 文件批量导入备件。
+
+    导入会写已有备件的库存与主数据，因此要求 update 权限（与入库/出库/改备件一致）。
+    """
     if not file.filename or not file.filename.endswith(".xlsx"):
         return JSONResponse(
             status_code=400,
@@ -145,7 +146,9 @@ async def import_spare_parts(
         )
     try:
         file_bytes = await file.read()
-        result = await service.import_spare_parts_from_excel(db, file_bytes, ctx=ctx)
+        result = await service.import_spare_parts_from_excel(
+            db, file_bytes, ctx=ctx, mode=mode,
+        )
         await db.commit()
         return success_response(data=result.model_dump())
     except ValueError as e:
@@ -279,6 +282,19 @@ async def inbound_stock(
     ),
 ) -> JSONResponse:
     stock = await service.inbound_stock(db, spare_part_id, data, ctx)
+    return success_response(data=StockResponse.model_validate(stock))
+
+
+@router.post("/{spare_part_id}/stock/outbound", summary="出库（手动领用/报废）")
+async def outbound_stock(
+    spare_part_id: uuid.UUID,
+    data: StockOutboundRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:update"),
+    ),
+) -> JSONResponse:
+    stock = await service.outbound_stock(db, spare_part_id, data, ctx)
     return success_response(data=StockResponse.model_validate(stock))
 
 

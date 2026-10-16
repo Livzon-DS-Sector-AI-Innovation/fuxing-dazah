@@ -51,7 +51,8 @@ async def list_work_orders(
     Args:
         operator_id: 实际操作人的 user_id 或姓名（替谁查）
         status: 工单状态过滤，可选值：待处理 / 执行中 / 待验收 / 已完成 / 已关闭。
-                 不传则默认返回「执行中」的工单（维修人当前正在处理的）。
+                 不传则返回全部未处理完的工单（待处理 / 执行中 / 待验收）——
+                 新指派的「待处理」单和正在修的「执行中」单都会列出。
     """
     db = get_db()
     try:
@@ -70,15 +71,17 @@ async def list_work_orders(
                 is_error=True,
             )
         work_orders = [wo for wo in work_orders if wo.status == status]
+        status_label = status
     else:
-        # 默认只返回「执行中」的工单
-        status = "执行中"
-        work_orders = [wo for wo in work_orders if wo.status == "执行中"]
+        # 默认返回全部未处理完的工单（列表本身已排除已关闭单）
+        open_statuses = {"待处理", "执行中", "待验收"}
+        work_orders = [wo for wo in work_orders if wo.status in open_statuses]
+        status_label = "未处理完"
 
     result = [_wo_to_dict(wo) for wo in work_orders]
     if not result:
         return ToolResult(
-            content=f"{user.name} 当前没有「{status}」状态的工单。",
+            content=f"{user.name} 当前没有「{status_label}」状态的工单。",
             structured_content={"result": [], "total": 0},
         )
     lines = [f"{user.name} 共有 {len(result)} 个工单："]

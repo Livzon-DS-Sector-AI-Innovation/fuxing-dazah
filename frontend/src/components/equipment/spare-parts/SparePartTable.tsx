@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react'
 import { App, Table, Button, Space, Input, Tag } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, ImportOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, ImportOutlined, ExportOutlined, AuditOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { SparePart } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -19,6 +19,7 @@ export function SparePartTable({ onRefresh, onImportClick }: Props) {
     sparePartLoading, sparePartKeyword,
     setSparePartPage, setSparePartPageSize, setSparePartKeyword,
     openSparePartDrawer, openSparePartEquipmentDrawer, openStockInboundDrawer,
+    openStockOutboundDrawer, openStockAdjustDrawer,
   } = useEquipmentStore()
   const { hasPermission } = usePermission()
 
@@ -63,11 +64,17 @@ export function SparePartTable({ onRefresh, onImportClick }: Props) {
           : <Tag color="orange">{count} 台设备</Tag>,
     },
     {
-      title: '操作', key: 'action', width: 260, fixed: 'end',
+      title: '操作', key: 'action', width: 380, fixed: 'end',
       render: (_: unknown, r: SparePart) => (
         <Space size={12}>
           {hasPermission('equipment:spare_part:update') && (
             <span role="button" onClick={() => openStockInboundDrawer(r.id)} style={linkPurple}><ImportOutlined /> 入库</span>
+          )}
+          {hasPermission('equipment:spare_part:update') && (
+            <span role="button" onClick={() => openStockOutboundDrawer(r.id)} style={linkDanger}><ExportOutlined /> 出库</span>
+          )}
+          {hasPermission('equipment:spare_part:update') && (
+            <span role="button" onClick={() => openStockAdjustDrawer(r.id)} style={linkPrimary}><AuditOutlined /> 盘点</span>
           )}
           {hasPermission('equipment:spare_part:update') && (
             <span role="button" onClick={() => openSparePartEquipmentDrawer(r)} style={linkPurple}><SettingOutlined /> 关联设备</span>
@@ -97,16 +104,16 @@ export function SparePartTable({ onRefresh, onImportClick }: Props) {
           value={sparePartKeyword || undefined}
           onSearch={v => setSparePartKeyword(v)}
         />
-        {hasPermission('equipment:spare_part:create') && (
-          <Space>
-            {onImportClick && (
-              <Button icon={<ImportOutlined />} onClick={onImportClick}>导入</Button>
-            )}
+        <Space>
+          {onImportClick && hasPermission('equipment:spare_part:update') && (
+            <Button icon={<ImportOutlined />} onClick={onImportClick}>导入</Button>
+          )}
+          {hasPermission('equipment:spare_part:create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>
               新建备件
             </Button>
-          </Space>
-        )}
+          )}
+        </Space>
       </div>
 
       {/* ── 表格 ── */}

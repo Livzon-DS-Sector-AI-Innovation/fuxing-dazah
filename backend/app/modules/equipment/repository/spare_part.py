@@ -187,14 +187,20 @@ async def delete_spare_part(
 async def get_stock_by_spare_part_id(
     db: AsyncSession,
     spare_part_id: uuid.UUID,
+    for_update: bool = False,
 ) -> SparePartStock | None:
-    """根据备件ID获取库存记录"""
-    result = await db.execute(
-        select(SparePartStock).where(
-            SparePartStock.spare_part_id == spare_part_id,
-            SparePartStock.is_deleted == False,  # noqa: E712
-        )
+    """根据备件ID获取库存记录。
+
+    for_update=True 时对库存行加锁，供「先校验后增减」的写路径使用，
+    避免并发下两个请求都读到旧值、各自写回导致丢更新。
+    """
+    stmt = select(SparePartStock).where(
+        SparePartStock.spare_part_id == spare_part_id,
+        SparePartStock.is_deleted == False,  # noqa: E712
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -215,8 +221,8 @@ async def update_stock_qty(
     spare_part_id: uuid.UUID,
     qty_change: int,
 ) -> SparePartStock | None:
-    """更新库存数量"""
-    stock = await get_stock_by_spare_part_id(db, spare_part_id)
+    """更新库存数量（行锁内自增，调用方未见库存行时返回 None）"""
+    stock = await get_stock_by_spare_part_id(db, spare_part_id, for_update=True)
     if not stock:
         return None
     stock.current_qty += qty_change
@@ -238,9 +244,10 @@ async def create_transaction(
 
 async def get_stock_warnings(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
 ) -> list[tuple[SparePart, SparePartStock]]:
-    """获取库存预警：当前库存 < 安全库存"""
-    result = await db.execute(
+    """获取库存预警：当前库存 < 安全库存（按备件归属部门过滤）"""
+    query = (
         select(SparePart, SparePartStock)
         .join(SparePartStock, SparePartStock.spare_part_id == SparePart.id)
         .where(
@@ -250,7 +257,9 @@ async def get_stock_warnings(
             SparePartStock.safety_qty > 0,
         )
     )
-    return list(result.all())
+    scoped = apply_equipment_scope(query, ctx, SparePart.department_id, "department_id")
+    result = await db.execute(scoped)
+    return [(spare_part, stock) for spare_part, stock in result.all()]
 
 
 async def create_equipment_spare_part(
@@ -415,8 +424,6 @@ async def get_outbound_transactions(
 
     if transaction_type:
         base = base.where(SparePartTransaction.transaction_type == transaction_type)
-    else:
-        base = base.where(SparePartTransaction.transaction_type.in_(["入库", "出库"]))
 
     if keyword:
         pattern = f"%{keyword}%"

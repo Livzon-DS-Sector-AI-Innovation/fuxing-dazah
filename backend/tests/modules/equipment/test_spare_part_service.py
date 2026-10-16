@@ -8,15 +8,26 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import select
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.equipment.deps import EquipmentAccessContext
-from app.modules.equipment.models.spare_part import SparePart, SparePartStock
+from app.modules.equipment.models.spare_part import (
+    SparePart,
+    SparePartStock,
+    SparePartTransaction,
+)
 from app.modules.equipment.schemas.spare_part import (
     SparePartCreate,
     SparePartUpdate,
     StockAdjustRequest,
     StockInboundRequest,
+    StockOutboundRequest,
 )
 from app.modules.equipment.service.spare_part import (
     adjust_stock,
@@ -26,6 +37,7 @@ from app.modules.equipment.service.spare_part import (
     get_spare_parts,
     get_stock_by_spare_part_id,
     get_stock_warnings,
+    import_spare_parts_from_excel,
     inbound_stock,
     outbound_stock,
     update_spare_part,
@@ -658,11 +670,16 @@ class TestOutboundStock:
     """outbound_stock 出库业务逻辑测试。"""
 
     async def test_decreases_stock_and_creates_outbound_transaction(self) -> None:
-        """库存充足时出库成功，库存减少并创建出库流水。"""
-        sp_id = uuid.uuid4()
-        stock = _make_stock(sp_id, current_qty=50)
+        """库存充足时出库成功，库存减少并创建出库流水（备注透传）。"""
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, current_qty=50)
 
         with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
             patch(
                 "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
                 new_callable=AsyncMock,
@@ -679,37 +696,52 @@ class TestOutboundStock:
             ) as mock_txn,
         ):
             result = await outbound_stock(
-                db=AsyncMock(), spare_part_id=sp_id, quantity=5,
+                db=AsyncMock(), spare_part_id=sp.id,
+                data=StockOutboundRequest(quantity=5, remark="车间领用"),
             )
             assert result is stock
 
             txn_data = mock_txn.call_args[0][1]
             assert txn_data["transaction_type"] == "出库"
             assert txn_data["quantity"] == -5
+            assert txn_data["remark"] == "车间领用"
 
     async def test_raises_when_stock_insufficient(self) -> None:
         """库存不足时抛出 AppException。"""
-        sp_id = uuid.uuid4()
-        stock = _make_stock(sp_id, current_qty=10)
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, current_qty=10)
 
-        with patch(
-            "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
-            new_callable=AsyncMock,
-            return_value=stock,
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
         ):
             with pytest.raises(AppException) as exc:
                 await outbound_stock(
-                    db=AsyncMock(), spare_part_id=sp_id, quantity=20,
+                    db=AsyncMock(), spare_part_id=sp.id,
+                    data=StockOutboundRequest(quantity=20),
                 )
             assert "库存不足" in exc.value.message
             assert "10" in exc.value.message
 
     async def test_exact_qty_outbound_ok(self) -> None:
         """出库数量等于当前库存时允许（清空库存）。"""
-        sp_id = uuid.uuid4()
-        stock = _make_stock(sp_id, current_qty=5)
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, current_qty=5)
 
         with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
             patch(
                 "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
                 new_callable=AsyncMock,
@@ -726,9 +758,40 @@ class TestOutboundStock:
             ),
         ):
             result = await outbound_stock(
-                db=AsyncMock(), spare_part_id=sp_id, quantity=5,
+                db=AsyncMock(), spare_part_id=sp.id,
+                data=StockOutboundRequest(quantity=5),
             )
             assert result is stock
+
+    async def test_forbidden_when_ctx_lacks_department_ownership(self) -> None:
+        """受限 ctx 对其他部门备件出库时抛 ForbiddenException。"""
+        other_dept = uuid.uuid4()
+        sp = _make_spare_part(department_id=other_dept)
+        stock = _make_stock(sp.id, current_qty=50)
+
+        ctx = EquipmentAccessContext(
+            user=_make_ctx().user,
+            data_scope="department",
+            visible_department_ids=[uuid.uuid4()],
+        )
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
+        ):
+            with pytest.raises(ForbiddenException):
+                await outbound_stock(
+                    db=AsyncMock(), spare_part_id=sp.id,
+                    data=StockOutboundRequest(quantity=5), ctx=ctx,
+                )
 
 
 # ==================== adjust_stock ====================
@@ -916,11 +979,13 @@ class TestGetStockWarnings:
             new_callable=AsyncMock,
             return_value=[(sp, stock)],
         ):
-            result = await get_stock_warnings(db=AsyncMock())
+            result = await get_stock_warnings(db=AsyncMock(), ctx=_make_ctx())
             assert len(result) == 1
             assert result[0].shortage == 15  # 20 - 5
-            assert result[0].spare_part.id == sp.id
-            assert result[0].stock.id == stock.id
+            assert result[0].spare_part_id == sp.id
+            assert result[0].code == "SP-WARN"
+            assert result[0].current_qty == 5
+            assert result[0].min_qty == 20
 
     async def test_returns_empty_list_when_no_warnings(self) -> None:
         """无预警时返回空列表。"""
@@ -929,5 +994,461 @@ class TestGetStockWarnings:
             new_callable=AsyncMock,
             return_value=[],
         ):
-            result = await get_stock_warnings(db=AsyncMock())
+            result = await get_stock_warnings(db=AsyncMock(), ctx=_make_ctx())
             assert result == []
+
+
+# ==================== import_spare_parts_from_excel ====================
+
+
+def _make_import_workbook(rows: list[list[object]]) -> bytes:
+    """构造一个备件导入 xlsx：第1行表头、第2行示例、第3行起数据。"""
+    import io
+
+    import openpyxl as _openpyxl
+
+    wb = _openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "备件管理"
+    headers = [
+        "备件编码 *", "备件名称 *", "规格型号", "计量单位 *",
+        "备件分类", "默认供应商", "参考单价（元）", "初始库存数量", "安全库存",
+    ]
+    ws.append(headers)
+    ws.append(["SP-001", "轴承密封圈", "Φ50×Φ34×7", "个", "机械密封", "示例供应商", "85.50", "50", "10"])
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+class TestImportSparePartsFromExcel:
+    """import_spare_parts_from_excel 导入业务逻辑测试（真库，随 db_session 回滚）。"""
+
+    @pytest.fixture
+    async def imp_user(self, db_session):
+        """在测试库中创建真实用户（导入写 created_by 有外键约束）。"""
+        from app.platform.identity.models import User
+
+        user = User(name="导入测试用户", employee_no=f"EMP-IMP-{uuid.uuid4().hex[:8]}")
+        db_session.add(user)
+        await db_session.flush()
+        return user
+
+    @pytest.fixture
+    def imp_ctx(self, imp_user) -> EquipmentAccessContext:
+        return EquipmentAccessContext(user=imp_user, data_scope="all")
+
+    async def test_new_code_with_quantity_creates_stock_and_transaction(
+        self, db_session, imp_ctx
+    ) -> None:
+        """新编码带数量导入：建档、库存落数量、写初始库存入库流水。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content = _make_import_workbook([
+            [code, "进口轴承", "6204-2RS", "个", "轴承类", "XX供应商", 12.5, 30, 8],
+        ])
+
+        result = await import_spare_parts_from_excel(
+            db_session, content, ctx=imp_ctx
+        )
+        assert result.imported == 1
+        assert result.skipped == 0
+
+        sp = await db_session.execute(
+            select(SparePart).where(SparePart.code == code)
+        )
+        spare_part = sp.scalar_one()
+        assert float(spare_part.unit_price) == 12.5
+
+        stock = await db_session.execute(
+            select(SparePartStock).where(SparePartStock.spare_part_id == spare_part.id)
+        )
+        stock_row = stock.scalar_one()
+        assert stock_row.current_qty == 30
+        assert stock_row.safety_qty == 8
+
+        txns = await db_session.execute(
+            select(SparePartTransaction).where(
+                SparePartTransaction.spare_part_id == spare_part.id
+            )
+        )
+        txn_list = txns.scalars().all()
+        assert len(txn_list) == 1
+        assert txn_list[0].transaction_type == "入库"
+        assert txn_list[0].quantity == 30
+        assert txn_list[0].remark == "Excel导入初始库存"
+
+    async def test_new_code_zero_quantity_no_transaction(self, db_session, imp_ctx) -> None:
+        """新编码数量为空/0：建档库存为0，不产生流水。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content = _make_import_workbook([
+            [code, "国产轴承", None, "个", None, None, None, None, None],
+        ])
+
+        result = await import_spare_parts_from_excel(
+            db_session, content, ctx=imp_ctx
+        )
+        assert result.imported == 1
+
+        sp = await db_session.execute(
+            select(SparePart).where(SparePart.code == code)
+        )
+        spare_part = sp.scalar_one()
+        stock = await db_session.execute(
+            select(SparePartStock).where(SparePartStock.spare_part_id == spare_part.id)
+        )
+        stock_row = stock.scalar_one()
+        assert stock_row.current_qty == 0
+
+        txns = await db_session.execute(
+            select(SparePartTransaction).where(
+                SparePartTransaction.spare_part_id == spare_part.id
+            )
+        )
+        assert txns.scalars().all() == []
+
+    async def test_existing_code_accumulates_stock_and_refreshes_price(
+        self, db_session, imp_ctx
+    ) -> None:
+        """已有编码：数量累加入库 + 写入库流水 + 刷新参考单价。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content1 = _make_import_workbook([
+            [code, "进口轴承", "6204-2RS", "个", "轴承类", None, 12.5, 30, None],
+        ])
+        await import_spare_parts_from_excel(db_session, content1, ctx=imp_ctx)
+
+        # 第二次导入同编码，数量 20、新单价 15.8
+        content2 = _make_import_workbook([
+            [code, "进口轴承", "6204-2RS", "个", "轴承类", None, 15.8, 20, None],
+        ])
+        result = await import_spare_parts_from_excel(
+            db_session, content2, ctx=imp_ctx
+        )
+        assert result.imported == 1
+        assert result.skipped == 0
+
+        sp = await db_session.execute(
+            select(SparePart).where(SparePart.code == code)
+        )
+        spare_part = sp.scalar_one()
+        assert float(spare_part.unit_price) == 15.8
+
+        stock = await db_session.execute(
+            select(SparePartStock).where(SparePartStock.spare_part_id == spare_part.id)
+        )
+        stock_row = stock.scalar_one()
+        assert stock_row.current_qty == 50  # 30 + 20
+
+        txns = await db_session.execute(
+            select(SparePartTransaction).where(
+                SparePartTransaction.spare_part_id == spare_part.id
+            ).order_by(SparePartTransaction.created_at)
+        )
+        txn_list = txns.scalars().all()
+        assert len(txn_list) == 2
+        remarks = [t.remark for t in txn_list]
+        assert "Excel导入初始库存" in remarks
+        assert "Excel导入入库" in remarks
+        inbound_txn = next(t for t in txn_list if t.remark == "Excel导入入库")
+        assert inbound_txn.quantity == 20
+
+    async def test_existing_code_zero_quantity_warns_and_skips(
+        self, db_session, imp_ctx
+    ) -> None:
+        """已有编码且数量为空：警告并跳过，不动库存。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content1 = _make_import_workbook([
+            [code, "进口轴承", None, "个", None, None, None, 30, None],
+        ])
+        await import_spare_parts_from_excel(db_session, content1, ctx=imp_ctx)
+
+        content2 = _make_import_workbook([
+            [code, "进口轴承", None, "个", None, None, None, None, None],
+        ])
+        result = await import_spare_parts_from_excel(
+            db_session, content2, ctx=imp_ctx
+        )
+        assert result.imported == 0
+        assert result.skipped == 1
+        assert any("未入库" in w.message for w in result.warnings)
+
+        sp = await db_session.execute(
+            select(SparePart).where(SparePart.code == code)
+        )
+        spare_part = sp.scalar_one()
+        stock = await db_session.execute(
+            select(SparePartStock).where(SparePartStock.spare_part_id == spare_part.id)
+        )
+        assert stock.scalar_one().current_qty == 30
+
+    async def test_invalid_quantity_warns_and_skips(self, db_session, imp_ctx) -> None:
+        """数量非法（非数字/负数/小数）：该行警告跳过。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content = _make_import_workbook([
+            [f"{code}-A", "备件A", None, "个", None, None, None, "abc", None],
+            [f"{code}-B", "备件B", None, "个", None, None, None, -5, None],
+            [f"{code}-C", "备件C", None, "个", None, None, None, 3.5, None],
+        ])
+
+        result = await import_spare_parts_from_excel(
+            db_session, content, ctx=imp_ctx
+        )
+        assert result.imported == 0
+        assert result.skipped == 3
+        assert len(result.warnings) == 3
+
+        sp = await db_session.execute(
+            select(SparePart).where(SparePart.code == f"{code}-A")
+        )
+        assert sp.scalar_one_or_none() is None
+
+    async def test_existing_code_other_department_errors(
+        self, db_session, imp_user
+    ) -> None:
+        """已有编码归属其他部门且 ctx 无写权限：错误行跳过，库存不变。"""
+        dept_a, dept_b = uuid.uuid4(), uuid.uuid4()
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        owner_ctx = EquipmentAccessContext(
+            user=imp_user,
+            data_scope="department",
+            visible_department_ids=[dept_a],
+        )
+        content1 = _make_import_workbook([
+            [code, "进口轴承", None, "个", None, None, None, 30, None],
+        ])
+        await import_spare_parts_from_excel(db_session, content1, ctx=owner_ctx)
+
+        sp = await db_session.execute(
+            select(SparePart).where(SparePart.code == code)
+        )
+        spare_part = sp.scalar_one()
+        assert spare_part.department_id == dept_a
+
+        other_ctx = EquipmentAccessContext(
+            user=imp_user,
+            data_scope="department",
+            visible_department_ids=[dept_b],
+        )
+        content2 = _make_import_workbook([
+            [code, "进口轴承", None, "个", None, None, None, 10, None],
+        ])
+        result = await import_spare_parts_from_excel(
+            db_session, content2, ctx=other_ctx
+        )
+        assert result.imported == 0
+        assert result.skipped == 1
+        assert result.errors and "无权" in result.errors[0].message
+
+        stock = await db_session.execute(
+            select(SparePartStock).where(SparePartStock.spare_part_id == spare_part.id)
+        )
+        assert stock.scalar_one().current_qty == 30
+
+    async def test_missing_required_fields_warns(self, db_session, imp_ctx) -> None:
+        """缺少必填项：警告跳过。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content = _make_import_workbook([
+            [code, None, None, None, None, None, None, 10, None],
+        ])
+
+        result = await import_spare_parts_from_excel(
+            db_session, content, ctx=imp_ctx
+        )
+        assert result.imported == 0
+        assert result.skipped == 1
+        assert any("缺少必填项" in w.message for w in result.warnings)
+
+    async def test_missing_sheet_raises(self, db_session, imp_ctx) -> None:
+        """缺少「备件管理」工作表时抛 ValueError。"""
+        import io
+
+        import openpyxl as _openpyxl
+
+        wb = _openpyxl.Workbook()
+        wb.active.title = "其他"
+        buf = io.BytesIO()
+        wb.save(buf)
+
+        with pytest.raises(ValueError):
+            await import_spare_parts_from_excel(
+                db_session, buf.getvalue(), ctx=imp_ctx
+            )
+
+    async def test_overwrite_mode_replaces_filled_fields_only(
+        self, db_session, imp_ctx
+    ) -> None:
+        """覆盖模式：表格填了的字段以表格为准，库存按差值调整并写盘点流水。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        await import_spare_parts_from_excel(
+            db_session,
+            _make_import_workbook([
+                [code, "进口轴承", "6204-2RS", "个", "轴承类", "老供应商", 12.5, 30, 8],
+            ]),
+            ctx=imp_ctx,
+        )
+
+        # 第二次：名称/单价/数量/安全库存都改，规格与供应商留空 → 保持原值
+        result = await import_spare_parts_from_excel(
+            db_session,
+            _make_import_workbook([
+                [code, "进口轴承A", None, "个", "轴承类", None, 15.8, 50, 25],
+            ]),
+            ctx=imp_ctx,
+            mode="overwrite",
+        )
+        assert result.imported == 1
+        assert result.skipped == 0
+
+        spare_part = (
+            await db_session.execute(
+                select(SparePart).where(SparePart.code == code)
+            )
+        ).scalar_one()
+        assert spare_part.name == "进口轴承A"
+        assert spare_part.specification == "6204-2RS"
+        assert spare_part.default_supplier == "老供应商"
+        assert float(spare_part.unit_price) == 15.8
+
+        stock = (
+            await db_session.execute(
+                select(SparePartStock).where(
+                    SparePartStock.spare_part_id == spare_part.id
+                )
+            )
+        ).scalar_one()
+        assert stock.current_qty == 50  # 覆盖为表值，不是 30 + 50
+        assert stock.safety_qty == 25
+
+        txns = (
+            await db_session.execute(
+                select(SparePartTransaction)
+                .where(SparePartTransaction.spare_part_id == spare_part.id)
+                .order_by(SparePartTransaction.created_at)
+            )
+        ).scalars().all()
+        adjust = next(t for t in txns if t.transaction_type == "盘点调整")
+        assert adjust.quantity == 20  # 50 - 30
+
+    async def test_overwrite_mode_reimport_does_not_double_stock(
+        self, db_session, imp_ctx
+    ) -> None:
+        """覆盖模式下重传同一份文件：库存不再翻倍（重复导入幂等）。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        content = _make_import_workbook([
+            [code, "进口轴承", None, "个", None, None, 12.5, 50, 10],
+        ])
+        await import_spare_parts_from_excel(db_session, content, ctx=imp_ctx)
+        await import_spare_parts_from_excel(
+            db_session, content, ctx=imp_ctx, mode="overwrite"
+        )
+
+        spare_part = (
+            await db_session.execute(
+                select(SparePart).where(SparePart.code == code)
+            )
+        ).scalar_one()
+        stock = (
+            await db_session.execute(
+                select(SparePartStock).where(
+                    SparePartStock.spare_part_id == spare_part.id
+                )
+            )
+        ).scalar_one()
+        assert stock.current_qty == 50
+
+    async def test_overwrite_mode_blank_quantity_keeps_stock(
+        self, db_session, imp_ctx
+    ) -> None:
+        """覆盖模式：数量留空表示不改库存，也不产生盘点流水。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        await import_spare_parts_from_excel(
+            db_session,
+            _make_import_workbook([
+                [code, "进口轴承", None, "个", None, None, None, 30, 8],
+            ]),
+            ctx=imp_ctx,
+        )
+
+        result = await import_spare_parts_from_excel(
+            db_session,
+            _make_import_workbook([
+                [code, "进口轴承", None, "个", None, None, None, None, 40],
+            ]),
+            ctx=imp_ctx,
+            mode="overwrite",
+        )
+        assert result.imported == 1
+
+        spare_part = (
+            await db_session.execute(
+                select(SparePart).where(SparePart.code == code)
+            )
+        ).scalar_one()
+        stock = (
+            await db_session.execute(
+                select(SparePartStock).where(
+                    SparePartStock.spare_part_id == spare_part.id
+                )
+            )
+        ).scalar_one()
+        assert stock.current_qty == 30  # 数量留空不动
+        assert stock.safety_qty == 40  # 安全库存填了就覆盖
+
+        txns = (
+            await db_session.execute(
+                select(SparePartTransaction).where(
+                    SparePartTransaction.spare_part_id == spare_part.id
+                )
+            )
+        ).scalars().all()
+        assert not [t for t in txns if t.transaction_type == "盘点调整"]
+
+    async def test_accumulate_mode_ignores_invalid_safety_qty(
+        self, db_session, imp_ctx
+    ) -> None:
+        """累加模式：安全库存非法只警告，不再连累该行数量入库（该列本就不写）。"""
+        code = f"SP-IMP-{uuid.uuid4().hex[:6].upper()}"
+        await import_spare_parts_from_excel(
+            db_session,
+            _make_import_workbook([
+                [code, "进口轴承", None, "个", None, None, None, 30, None],
+            ]),
+            ctx=imp_ctx,
+        )
+
+        result = await import_spare_parts_from_excel(
+            db_session,
+            _make_import_workbook([
+                [code, "进口轴承", None, "个", None, None, None, 20, "abc"],
+            ]),
+            ctx=imp_ctx,
+        )
+        assert result.imported == 1
+        assert result.skipped == 0
+        assert any("安全库存" in w.message for w in result.warnings)
+
+        spare_part = (
+            await db_session.execute(
+                select(SparePart).where(SparePart.code == code)
+            )
+        ).scalar_one()
+        stock = (
+            await db_session.execute(
+                select(SparePartStock).where(
+                    SparePartStock.spare_part_id == spare_part.id
+                )
+            )
+        ).scalar_one()
+        assert stock.current_qty == 50  # 30 + 20
+
+    async def test_invalid_mode_raises(self, db_session, imp_ctx) -> None:
+        """未知导入模式抛 ValueError（API 层转 400）。"""
+        with pytest.raises(ValueError):
+            await import_spare_parts_from_excel(
+                db_session,
+                _make_import_workbook([]),
+                ctx=imp_ctx,
+                mode="bogus",
+            )

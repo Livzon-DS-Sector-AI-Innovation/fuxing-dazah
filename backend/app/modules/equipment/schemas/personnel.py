@@ -145,6 +145,7 @@ class CandidateResponse(BaseModel):
     """可分配人员信息（供其他业务模块调用）"""
 
     personnel_id: uuid.UUID
+    user_id: uuid.UUID | None = None
     name: str
     department: str | None
     feishu_user_id: str | None

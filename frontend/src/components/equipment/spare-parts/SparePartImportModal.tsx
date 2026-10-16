@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Modal, Upload, Button, Space, Table, Typography, Alert } from 'antd'
+import { App, Modal, Upload, Button, Space, Table, Typography, Alert, Radio } from 'antd'
 import { DownloadOutlined, InboxOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd'
 import { downloadSparePartImportTemplate, importSpareParts, type ImportResult, type ImportRowError } from '@/actions/equipment'
@@ -21,6 +21,8 @@ export function SparePartImportModal({ open, onClose, onImported }: SparePartImp
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [result, setResult] = useState<ImportResult | null>(null)
   const [downloading, setDownloading] = useState(false)
+  // 已有编码的处理方式：累加=入库（默认），覆盖=以表格为准
+  const [mode, setMode] = useState<'accumulate' | 'overwrite'>('accumulate')
 
   const handleDownloadTemplate = async () => {
     setDownloading(true)
@@ -53,6 +55,7 @@ export function SparePartImportModal({ open, onClose, onImported }: SparePartImp
     try {
       const formData = new FormData()
       formData.append('file', fileList[0].originFileObj as File)
+      formData.append('mode', mode)
       const res = await importSpareParts(formData)
       if (!res.success) {
         message.error(res.error)
@@ -125,6 +128,7 @@ export function SparePartImportModal({ open, onClose, onImported }: SparePartImp
           <Alert
             type={result.errors.length > 0 ? 'warning' : 'success'}
             title={`导入完成：成功 ${result.imported} 条，跳过 ${result.skipped} 条`}
+            description={`已有编码按「${mode === 'accumulate' ? '累加入库' : '覆盖'}」处理`}
             style={{ marginBottom: 12 }}
           />
           {renderResultTable('错误', result.errors, '#e03131')}
@@ -148,6 +152,25 @@ export function SparePartImportModal({ open, onClose, onImported }: SparePartImp
             description="必填列：备件编码、备件名称、单位。分类/供应商/部门需在系统中存在，否则跳过。"
             style={{ marginBottom: 16 }}
           />
+          <div style={{ marginBottom: 16 }}>
+            <Text strong style={{ display: 'block', marginBottom: 6 }}>
+              编码已存在时
+            </Text>
+            <Radio.Group
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              options={[
+                { label: '累加入库（默认）', value: 'accumulate' },
+                { label: '覆盖', value: 'overwrite' },
+              ]}
+              optionType="button"
+            />
+            <Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+              {mode === 'accumulate'
+                ? '表格数量作为入库量加到现有库存上，只刷新参考单价；名称、规格、安全库存等保持系统原值。改完错行重传整份文件会重复入库。'
+                : '以表格为准覆盖填了的字段（名称、规格、单位、分类、供应商、单价、库存数量、安全库存），留空的不动。重传同一份文件结果一致。'}
+            </Text>
+          </div>
           <Dragger
             accept=".xlsx"
             maxCount={1}
