@@ -26,6 +26,12 @@ export interface SafetyKnowledgeArticle {
   card_version?: number
   created_at: string
   updated_at: string
+  // ── 详情外链（仅详情端点返回；列表端点缺失）──
+  feishu_record_url?: string | null
+  ragflow_doc_url?: string | null
+  ragflow_dataset_name?: string | null
+  ragplus_doc_status?: string | null
+  ragplus_synced_at?: string | null
 }
 
 /** 知识卡片 6 维度结构化内容 */

@@ -220,12 +220,14 @@ async def get_knowledge_article(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ) -> ApiResponse:
-    """获取安全知识库文章详情"""
+    """获取安全知识库文章详情（附多维表格 / RagFlow 外链与入库状态）"""
     service = KnowledgeService(db)
     item = await service.get_article(article_id)
     if not item:
         return ApiResponse(code=404, message="文章不存在")
-    return ApiResponse(data=SafetyKnowledgeArticleResponse.model_validate(item))
+    links = await service.get_external_links(item)
+    resp = SafetyKnowledgeArticleResponse.model_validate(item)
+    return ApiResponse(data=resp.model_copy(update=links))
 
 
 @knowledge_router.put("/knowledge-articles/{article_id}", response_model=ApiResponse, summary="更新安全知识库文章")

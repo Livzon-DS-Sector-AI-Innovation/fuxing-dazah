@@ -22,6 +22,8 @@ import {
   UserOutlined,
   ApartmentOutlined,
   EyeOutlined,
+  TableOutlined,
+  CloudServerOutlined,
 } from '@ant-design/icons'
 import { getKnowledgeArticle, getArticleVersions } from '@/actions/safety'
 import { fileProxyUrl } from '@/components/safety/file-url'
@@ -325,6 +327,54 @@ export default function KnowledgeDetailDrawer({
             <Tag color="purple">v{article.version}</Tag>
             <Tag>{getCategoryLabel(article.category)}</Tag>
           </div>
+          {/* 源文档外链：多维表格记录 + RagFlow 引擎库 */}
+          {(article.feishu_record_url ||
+            article.ragflow_doc_url ||
+            article.ragplus_doc_status) && (
+            <div
+              style={{
+                display: 'flex',
+                gap: 14,
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                marginBottom: 8,
+              }}
+            >
+              {article.feishu_record_url && (
+                <Text>
+                  <a
+                    href={article.feishu_record_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: 13 }}
+                  >
+                    <TableOutlined /> 多维表格原文
+                  </a>
+                </Text>
+              )}
+              {article.ragflow_doc_url && (
+                <Text>
+                  <a
+                    href={article.ragflow_doc_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: 13 }}
+                  >
+                    <CloudServerOutlined /> RagFlow 文档
+                    {article.ragflow_dataset_name
+                      ? `（${article.ragflow_dataset_name}）`
+                      : ''}
+                  </a>
+                </Text>
+              )}
+              {article.ragplus_doc_status === 'failed' && (
+                <Tag color="red">ragplus 入库失败</Tag>
+              )}
+              {article.ragplus_doc_status === 'archived' && (
+                <Tag>已归档库</Tag>
+              )}
+            </div>
+          )}
           <div
             style={{
               display: 'flex',

@@ -167,6 +167,89 @@ class KnowledgeService:
             )
         return article
 
+    async def get_external_links(
+        self, article: SafetyKnowledgeArticle
+    ) -> dict[str, str | None]:
+        """详情页外链：飞书多维表格记录 + RagFlow 文档列表（ragplus doc_map）。
+
+        原料缺失的字段返回 None，前端只渲染存在的链接；
+        doc_map 无行（从未入库）时 ragplus_* 全空。
+        """
+        from sqlalchemy import select
+
+        from app.modules.safety.models import RagplusDocMap
+
+        links: dict[str, str | None] = {
+            "feishu_record_url": None,
+            "ragflow_doc_url": None,
+            "ragflow_dataset_name": None,
+            "ragplus_doc_status": None,
+            "ragplus_synced_at": None,
+        }
+
+        # ── 飞书多维表格记录链接（与 sync_from_bitable 的表来源一致）──
+        table_id = self._resolve_feishu_table_id(article.source)
+        if article.feishu_record_id and table_id:
+            from app.modules.safety.bitable_config.store import resolve_connection
+
+            app_token, _ = resolve_connection("knowledge", "collection")
+            if app_token:
+                links["feishu_record_url"] = (
+                    f"https://bytedance.feishu.cn/base/{app_token}"
+                    f"?table={table_id}&record={article.feishu_record_id}"
+                )
+
+        # ── RagFlow 文档链接（regulation 域 biz_key = feishu_record_id）──
+        if article.feishu_record_id:
+            row = (
+                await self.session.execute(
+                    select(RagplusDocMap).where(
+                        RagplusDocMap.domain == "regulation",
+                        RagplusDocMap.biz_key == article.feishu_record_id,
+                        RagplusDocMap.is_deleted.is_(False),
+                    )
+                )
+            ).scalars().first()
+            if row:
+                links["ragflow_dataset_name"] = row.dataset_name
+                links["ragplus_doc_status"] = row.status
+                links["ragplus_synced_at"] = (
+                    row.synced_at.isoformat() if row.synced_at else None
+                )
+                if row.dataset_id:
+                    from app.modules.safety.app_config.store import store
+
+                    web = (store.get_str("SAFETY_RAGPLUS_WEB_URL") or "").rstrip("/")
+                    if web:
+                        links["ragflow_doc_url"] = (
+                            f"{web}/dataset/files/{row.dataset_id}"
+                        )
+
+        return links
+
+    @staticmethod
+    def _resolve_feishu_table_id(source: str | None) -> str | None:
+        """文章 source 标签 → 飞书 table_id（表清单对齐 sync_from_bitable）。"""
+        if not source:
+            return None
+        if source == "制度库":
+            return "tbl36YLqyB1S5qos"
+        kind = {
+            "法规标准库-安全法规标准": "collection",
+            "法规标准库-环保法规标准": "collection_env",
+        }.get(source)
+        if kind is None:
+            return None
+        from app.modules.safety.bitable_config.store import store as _bitable_store
+
+        try:
+            conn = _bitable_store.get_connection("knowledge", kind)
+        except ValueError:
+            return None
+        if conn is None or conn.status == "disabled" or not conn.table_id:
+            return None
+        return conn.table_id
+
     async def create_article(
         self, data: SafetyKnowledgeArticleCreate
     ) -> SafetyKnowledgeArticle:

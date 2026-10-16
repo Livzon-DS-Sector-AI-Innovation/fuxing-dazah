@@ -72,6 +72,15 @@ class SafetyKnowledgeArticleResponse(SafetyKnowledgeArticleBase):
     knowledge_card: dict | None = None
     card_version: int = 1
 
+    # ── 详情外链（仅详情端点填充；列表端点恒 None）──
+    feishu_record_url: str | None = Field(None, description="飞书多维表格记录链接")
+    ragflow_doc_url: str | None = Field(None, description="RagFlow 文档列表链接")
+    ragflow_dataset_name: str | None = Field(None, description="ragplus 引擎内库名")
+    ragplus_doc_status: str | None = Field(
+        None, description="doc_map 状态: active/archived/failed/deleted"
+    )
+    ragplus_synced_at: str | None = Field(None, description="最近入库时间")
+
     class Config:
         from_attributes = True
 
