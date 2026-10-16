@@ -576,7 +576,8 @@ def _strip_reference_section(text: str) -> str:
 
 
 # ── History 压缩（S6 已迁至 core/compaction.py，此处只留常量以作兼容参考） ──
-#    压缩逻辑/摘要 AI 调用已迁至 ``core/compaction.maybe_compact``（token 驱动，超 24k 触发）。
+#    压缩逻辑/摘要 AI 调用已迁至 ``core/compaction.maybe_compact``（token 驱动，超 12k
+#    触发；1-B 起由 schedule/apply_cached_compaction 后台化，本轮不内联等待）。
 #    旧符号 _summarize_history/_co)
 #    常量保留兼容（外部若引用不 404，但不参与新触发逻辑）。
 _MAX_HISTORY_MESSAGES = 20       # 最多保留 20 条消息（~10 轮对话，compaction 兼容参考）
@@ -620,12 +621,17 @@ async def _agent_run(
         message_history = ModelMessagesTypeAdapter.validate_python(message_history)
 
     # ── History 压缩：防止长对话 token 线性增长 ──
-    #    S6：触发从"消息条数 ≥20"改为"token 压力超 24k"（tokenizer 估算），
-    #    迁到 core/compaction.maybe_compact（复用 _summarize_history 的 AI 摘要，不引入新调用）。
+    #    1-B 后台化：token 压力超 12k 时调度后台压缩（复用 maybe_compact 逻辑），
+    #    本轮照常返回原始历史，下一轮经前缀替换应用压缩结果——消除内联摘要
+    #    的偶发整轮 LLM 延迟尖刺。
     if message_history:
-        from app.modules.safety.business_agent.core.compaction import maybe_compact
+        from app.modules.safety.business_agent.core.compaction import (
+            apply_cached_compaction,
+            schedule_background_compaction,
+        )
 
-        message_history = await maybe_compact(message_history, deps)
+        message_history = apply_cached_compaction(message_history, deps)
+        schedule_background_compaction(message_history, deps)
 
     # 按需选择工具子集（减少 tool definitions 开销 66%）
     # 必须在 prompt 组装之前算出来：tool_catalog 节要按「本轮真正挂载的工具」

@@ -39,6 +39,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 1-B：记忆注入每轮硬上限 ≤5 条（钉死常量，防回升）
+MEMORY_INJECT_MAX_PER_TURN = 5
+
 # ── 衰减配置 ──
 _HALF_LIFE_DAYS = 30.0  # 半衰期（天）：score 每 30 天折半
 _DEDUP_SIMILARITY_THRESHOLD = 0.85  # 冲突合并阈值（沿用旧 store 常量）
@@ -318,11 +321,14 @@ async def retrieve_with_decay(
 
     ``query_embedding`` 可显式传入（测试/调用方已知向量时），否则由 ``EmbeddingService`` 生成。
 
+    top_k 被 ``MEMORY_INJECT_MAX_PER_TURN``（1-B：每轮 ≤5 条）钳制。
+
     Returns:
         [{"id": str, "content": str, "memory_type": str, "similarity": float,
           "importance": float, "confidence": float, "decay": float, "last_accessed_at": str|None}, ...]
         按 score 降序。
     """
+    top_k = min(top_k, MEMORY_INJECT_MAX_PER_TURN)
     try:
         if query_embedding is not None:
             query_emb = query_embedding
