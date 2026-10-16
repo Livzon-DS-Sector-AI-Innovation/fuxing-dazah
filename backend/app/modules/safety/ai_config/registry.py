@@ -55,14 +55,16 @@ _PROFILES: tuple[ProfileInfo, ...] = (
             "base_url": "https://api.deepseek.com",
             "model": "deepseek-flash",
             "temperature": 0.1,
+            "max_tokens": 8192,
             "timeout": 120,
         },
-        field_names=("api_key", "base_url", "model", "temperature", "timeout"),
+        field_names=("api_key", "base_url", "model", "temperature", "max_tokens", "timeout"),
         env_map={
             "api_key": "SAFETY_AI_TEXT_API_KEY",
             "base_url": "SAFETY_AI_TEXT_BASE_URL",
             "model": "SAFETY_AI_TEXT_MODEL",
             "temperature": "",          # 无 env（代码默认 0.1）
+            "max_tokens": "",           # 无 env（代码默认 8192，2-A 后台可调）
             "timeout": "",              # 无 env（代码默认 120）
         },
     ),
@@ -75,13 +77,17 @@ _PROFILES: tuple[ProfileInfo, ...] = (
             "api_key": "",
             "base_url": "",
             "model": "",
+            "temperature": 0.1,
+            "max_tokens": 8192,
             "timeout": 120,
         },
-        field_names=("api_key", "base_url", "model", "timeout"),
+        field_names=("api_key", "base_url", "model", "temperature", "max_tokens", "timeout"),
         env_map={
             "api_key": "SAFETY_AI_TEXT_BACKUP_API_KEY",
             "base_url": "SAFETY_AI_TEXT_BACKUP_BASE_URL",
             "model": "SAFETY_AI_TEXT_BACKUP_MODEL",
+            "temperature": "",          # 无 env（代码默认 0.1）
+            "max_tokens": "",           # 无 env（代码默认 8192）
             "timeout": "",              # 无 env（代码默认 120）
         },
     ),

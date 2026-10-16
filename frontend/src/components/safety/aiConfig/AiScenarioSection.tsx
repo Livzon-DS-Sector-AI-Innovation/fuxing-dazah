@@ -140,11 +140,11 @@ export default function AiScenarioSection() {
         onChange={(v) => void handleChangeBinding(f, v)}
       />
     )
-    // agent_chat 场景绑定不生效（Agent 模型模块级创建，重启生效），
-    // 行级 Tooltip 明确标注，避免管理员误以为热切换；控件保留可编辑（后端允许）
+    // agent_chat 场景绑定 2-A 起 per-turn resolve 即时生效（换 profile/调参零重启），
+    // 行级 Tooltip 标注生效时机；控件可编辑
     const editable: ReactNode =
       f.id === 'agent_chat' ? (
-        <Tooltip title="该场景绑定不生效（Agent 模型模块级创建）">{select}</Tooltip>
+        <Tooltip title="该场景绑定下一轮对话即生效（配置运行时化）">{select}</Tooltip>
       ) : (
         select
       )

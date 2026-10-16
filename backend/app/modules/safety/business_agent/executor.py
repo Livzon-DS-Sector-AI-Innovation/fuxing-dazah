@@ -31,8 +31,8 @@ from pydantic_ai import (
 from pydantic_ai.messages import ModelMessage
 
 from app.modules.safety.business_agent.agent import (
-    business_agent,
     get_agent_for_tools,
+    resolve_runtime_config,
 )
 from app.modules.safety.business_agent.permissions import check as perm_check
 from app.modules.safety.business_agent.rules import check_output
@@ -40,18 +40,12 @@ from app.modules.safety.business_agent.schemas import (
     PendingActionData,
     SafetyDeps,
 )
-from app.modules.safety.business_agent.tools.registry import (
-    TOOL_KIND,
-    register_all_tools,
-)
+from app.modules.safety.business_agent.tools.registry import TOOL_KIND
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-# ── 确保工具在 agent 上注册一次 ──
-register_all_tools(business_agent)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -90,8 +84,8 @@ async def run_turn(
     logger.info("run_turn: user=%r role=%r session=%s", user_tag, role_tag, deps.session_id)
 
     # ── 场景熔断：agent_chat 停用 → 不触模型、不建审计作用域，直接返回停用文案 ──
-    #   绑定不生效（Agent 模型模块级创建 _PROVIDER/_MODEL，重启生效——一期决策），
-    #   前端在 agent_chat 绑定列标注「重启生效」（backend-design §5.1）。
+    #   2-A：绑定（model_profile）已经 per-turn resolve 即时生效（换 profile/
+    #   调参零重启）；此处仅保留 enabled 熔断。
     from app.modules.safety.ai_config.scenario_store import scenario_store
 
     if not scenario_store.is_enabled("agent_chat"):
@@ -954,9 +948,8 @@ def _find_deferred_in_history(
 
 
 def _model_name() -> str:
-    """当前 Agent 使用的模型名。"""
-    model = business_agent.model
-    return getattr(model, "model_name", None) or str(model)
+    """当前 Agent 使用的模型名（2-A：per-turn resolve，随配置即时变化）。"""
+    return resolve_runtime_config().model
 
 
 def _extract_usage(result) -> tuple[int | None, int | None]:
@@ -1003,6 +996,13 @@ async def _audit_agent_turn(
         if routing:
             # 1-D：路由决策（域/路径/置信度/挂载数）入审计，供持续调优
             extra["routing"] = routing
+        # 2-A：生效配置入审计（核对换 profile/调参是否落地）
+        _rt = resolve_runtime_config()
+        extra["model_profile"] = {
+            "profile": _rt.profile,
+            "model": _rt.model,
+            "fingerprint": _rt.fingerprint,
+        }
         if pending:
             extra["pending_action"] = {
                 "tool_name": pending.tool_name,
