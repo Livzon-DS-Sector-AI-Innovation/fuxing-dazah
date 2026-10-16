@@ -1,10 +1,11 @@
-"""隐患直读模式 — 轮询循环（① 隐患AI分析 / ② AI整改审核 / ③ 督办等级计算）。
+"""隐患直读模式 — 轮询循环（① 隐患AI分析 / ② AI整改审核 / ③ 督办等级计算 / ④ 督办通报值守）。
 
 由安全模块调度器 ``scheduled_task_loop`` 在启动时挂载为子任务，
 不新增进程、不改 ``app/main.py``；复用调度器的停止信号。
 
-三个轮询错开启动（默认 0 / 2.5 / 1.25 分钟），避免同时打同一张多维表格
-（官方：单表写操作不支持并发，1254291 / 1254607）。
+前三个轮询错开启动（默认 0 / 2.5 / 1.25 分钟），避免同时打同一张多维表格
+（官方：单表写操作不支持并发，1254291 / 1254607）。④ 只读比对，
+与 ③ 错开 30 秒启动。
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ from typing import Any
 from app.modules.safety.service.hazard_direct import config
 from app.modules.safety.service.hazard_direct.ai_analysis import run_ai_analysis_round
 from app.modules.safety.service.hazard_direct.alert import notify_rounds_exceeded
+from app.modules.safety.service.hazard_direct.bulletin_watch import (
+    run_bulletin_watch_once,
+)
 from app.modules.safety.service.hazard_direct.review import run_review_round
 from app.modules.safety.service.hazard_direct.supervision import run_supervision_round
 
@@ -147,8 +151,26 @@ async def _supervision_loop() -> None:
     logger.info("③ 督办等级计算轮询已停止")
 
 
+async def _bulletin_watch_loop() -> None:
+    """④ 督办通报值守轮询（周四 13:00-18:00，速递格子变化即刷新）。
+
+    窗口外每轮只做一次时钟判断（零 IO）；窗口内每轮重建通报比对速递格子，
+    仅变化时投递。详见 ``bulletin_watch`` 模块说明。
+    """
+    interval = config.bulletin_watch_interval_seconds()
+    await _interruptible_sleep(30)  # 与 ③ 错开半分钟，避免同刻打表
+    logger.info("④ 督办通报值守轮询已启动 (周四 13:00-18:00, 间隔=%ds)", interval)
+    while not await _stopped():
+        try:
+            await run_bulletin_watch_once()
+        except Exception:
+            logger.exception("④ 值守轮询异常")
+        await _interruptible_sleep(interval)
+    logger.info("④ 督办通报值守轮询已停止")
+
+
 async def hazard_direct_loop() -> None:
-    """按开关启动 ①②③ 轮询；全部关闭时直接返回（不占用资源）。"""
+    """按开关启动 ①②③④ 轮询；全部关闭时直接返回（不占用资源）。"""
     if not config.direct_poll_enabled():
         logger.info(
             "隐患直读模式未启用（SAFETY_HAZARD_DIRECT_POLL_ENABLED=false），跳过轮询启动"
@@ -169,6 +191,12 @@ async def hazard_direct_loop() -> None:
     else:
         logger.info(
             "③ 督办等级计算轮询未启用（SAFETY_HAZARD_SUPERVISION_POLL_ENABLED=false）"
+        )
+    if config.bulletin_watch_enabled():
+        tasks.append(asyncio.create_task(_bulletin_watch_loop()))
+    else:
+        logger.info(
+            "④ 督办通报值守轮询未启用（SAFETY_HAZARD_BULLETIN_WATCH_ENABLED=false）"
         )
 
     if not tasks:

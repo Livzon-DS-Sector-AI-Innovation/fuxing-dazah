@@ -93,6 +93,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "「安全速递」每日总卡目标群",
     ),
     ConfigItem(
+        "SAFETY_HAZARD_BULLETIN_FORWARD_CHAT_ID", "chat_id", "str", "",
+        "督办通报速递格子「推送到群」按钮目标群（空 = 不渲染按钮）",
+        allow_off=True,
+    ),
+    ConfigItem(
         "SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "chat_id", "str",
         "oc_4ab4a89f7bbb2450f5e0e341bf0f5f10",
         "特殊作业晨/晚报加发群（特殊作业报备及日报表群）；off = 停用加发（空 = 回落默认群）",
@@ -165,7 +170,7 @@ _ITEMS: tuple[ConfigItem, ...] = (
     # ══════════════════════════════════════════════════════════
     _gate(
         "SAFETY_HAZARD_DIRECT_POLL_ENABLED", False,
-        "隐患直读轮询总开关（关闭时 ①②③ 轮询协程不启动）",
+        "隐患直读轮询总开关（关闭时 ①②③④ 轮询协程不启动）",
         restart_required=True,
     ),
     _gate(
@@ -181,6 +186,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
     _gate(
         "SAFETY_HAZARD_SUPERVISION_POLL_ENABLED", False,
         "督办等级计算轮询（③；以总开关打开为前提）",
+        restart_required=True,
+    ),
+    _gate(
+        "SAFETY_HAZARD_BULLETIN_WATCH_ENABLED", False,
+        "督办通报值守轮询（④ 周四 13:00-18:00，速递格子变化即刷新；以总开关打开为前提）",
         restart_required=True,
     ),
     _gate(
@@ -369,6 +379,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         restart_required=True, minimum=0,
     ),
     ConfigItem(
+        "SAFETY_HAZARD_BULLETIN_WATCH_INTERVAL_SECONDS", "poll_param", "int", 60,
+        "④ 值守轮询间隔秒数（下限 30；窗口内每分钟比对一次速递格子）",
+        restart_required=True, minimum=30,
+    ),
+    ConfigItem(
         "SAFETY_HAZARD_POLL_BATCH_LIMIT", "poll_param", "int", 200,
         "单轮最多处理条数",
     ),
@@ -463,6 +478,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_RAGPLUS_DATASET_NAMES", "misc", "str",
         "安全法规标准,MSDS",
         "ragplus-x 检索库名单（逗号分隔；已废止归档库不在名单内即被排除）",
+    ),
+    ConfigItem(
+        "SAFETY_RAGPLUS_WEB_URL", "misc", "str",
+        "http://192.168.100.7:8086",
+        "RagFlow 引擎 Web 地址（文档详情外链用；文档列表页 /dataset/files/<dataset_id>）",
     ),
 
     # ══════════════════════════════════════════════════════════

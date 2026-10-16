@@ -1,4 +1,4 @@
-"""④ 隐患督办通报（周四 14:00）— 直读多维表格。
+"""④ 隐患督办通报（周四 13:00 首发，13:00-18:00 值守轮询跟变化）— 直读多维表格。
 
 改造前：读 DB（``get_hazards_for_notification``）→ 渲染 → 推群。
 改造后：读 **多维表格**（``督办等级`` 为红色/一般预警、且未关闭非整改中）→ 渲染 → 推群。
@@ -6,6 +6,10 @@
 
 「未更新进展」标记不再落库，改为调用 ``progress_track.compute_marks`` 现算
 （Redis 跟踪进展内容变化时间）。
+
+@ 提及标识优先直取记录「整改责任人」人员字段自带的 open_id（读取应用作用域，
+与卡片 @ 同源）；部门映射产生的表外人名才回退 ``feishu.mention``（identity
+桥接，通讯录同步未部署时多数解析不到，退化为纯文本姓名）。
 """
 
 from __future__ import annotations
@@ -71,6 +75,29 @@ async def _load_person_open_ids(names: list[str]) -> dict[str, str]:
     return await mention.resolve_open_ids(names)
 
 
+def _harvest_person_ids(views: list[bitable_repo.HazardView]) -> dict[str, str]:
+    """从记录「整改责任人」人员字段直接收割 姓名 → open_id。
+
+    人员字段返回的是**读取应用作用域**的 open_id——安全机器人自己读表，
+    与卡片 ``<at id=…>`` 所需标识同源，无需通讯录/identity 解析（通讯录
+    同步未部署，identity.users 仅 1 人）。兼容旧列表格式与 ``{"users": […]}``
+    新格式（对齐 ``bd_fields.person_info`` 口径）；部门映射产生的表外人名
+    由调用方走 ``_load_person_open_ids`` 回退。
+    """
+    out: dict[str, str] = {}
+    for view in views:
+        value = view.raw.get(bitable_repo.F_RESPONSIBLE)
+        entries = value.get("users") if isinstance(value, dict) else value
+        for p in entries or []:
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name") or "")
+            pid = str(p.get("id") or p.get("userId") or "")
+            if name and pid and name not in out:
+                out[name] = pid
+    return out
+
+
 def _record_link(view: bitable_repo.HazardView, app_token: str, table_id: str) -> str:
     if not (view.record_id and app_token and table_id):
         return ""
@@ -120,7 +147,8 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
     for view in views:
         view.supervision_progress_status = marks.get(view.record_id)
 
-    # 责任人 → open_id
+    # 责任人 → open_id：优先直取人员字段自带 id，表外名单才走 identity 回退
+    person_open_id = _harvest_person_ids(views)
     persons = {
         effective_responsible_person(
             view.department, view.rectification_responsible_person_name
@@ -128,7 +156,9 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
         for view in views
     }
     persons.discard("")
-    person_open_id = await _load_person_open_ids(list(persons))
+    missing = sorted(persons - set(person_open_id))
+    if missing:
+        person_open_id.update(await _load_person_open_ids(missing))
 
     conn = store.get_connection("hazard", "hazard")
     app_token = conn.app_token if conn and conn.status != "disabled" else ""
@@ -244,6 +274,14 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
 
 async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
     """生成并推送督办通报到群聊（总卡开启时只投「安全速递」格子）。"""
+    content, stats = await build_bulletin()
+    return await deliver_bulletin(content, stats, chat_id)
+
+
+async def deliver_bulletin(
+    content: str, stats: dict[str, Any], chat_id: str | None = None,
+) -> dict[str, Any]:
+    """投递已生成的通报（值守轮询复用，不重复拉表）。"""
     from datetime import UTC, datetime, timedelta
 
     from app.modules.safety.feishu.daily_digest import (
@@ -253,7 +291,6 @@ async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
     )
     from app.modules.safety.feishu.notification import send_group_card
 
-    content, stats = await build_bulletin()
     if not chat_id:
         logger.warning("④ 未配置推送群聊，仅生成不推送")
         stats["sent"] = False

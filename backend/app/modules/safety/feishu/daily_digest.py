@@ -50,8 +50,17 @@ def digest_chat_id() -> str:
         "oc_f05532603bd7682fc520929c01aca88d",
     )
 
+
+def forward_chat_id() -> str:
+    """督办通报「推送到群」按钮目标群（空 = 不渲染按钮）。"""
+    return _app_config_store.get_str(
+        "SAFETY_HAZARD_BULLETIN_FORWARD_CHAT_ID", "",
+    )
+
 _KEY = "safety:daily_digest:{date}"
 _MSG_KEY = "safety:daily_digest:card:{date}"
+# 督办通报「推送到群」当天已推送卡（value=JSON{chat,msg_id}，供后续点击原地更新）
+_FORWARD_KEY = "safety:daily_digest:forward:{date}"
 # 各格子最近一次推送时间（field=报告 key，与格子主 hash 同 TTL）——
 # 驾驶舱「今日安全速递」回放需要推送时间，历史格子（补记上线前写入）无此字段
 _SENT_AT_KEY = "safety:daily_digest:sent_at:{date}"
@@ -98,6 +107,93 @@ def _bj_today() -> date:
 
 def _digest_key(d: date) -> str:
     return _KEY.format(date=d.isoformat())
+
+
+async def cell_detail(report_date: date, key: str, *, store: Any = None) -> str | None:
+    """读取当日总卡某格子的 ``detail`` 原文（缺失/损坏返回 None）。
+
+    供督办通报值守轮询做变化比对：格子现存内容 == 重建内容 → 不投递。
+    """
+    store = store if store is not None else await get_redis()
+    raw = await store.hget(_digest_key(report_date), key)
+    if not raw:
+        return None
+    try:
+        return (json.loads(raw) or {}).get("detail")
+    except (TypeError, ValueError):
+        return None
+
+
+async def _load_bulletin_cell(
+    report_date: date, *, store: Any = None,
+) -> DigestCell | None:
+    """读取当日督办通报格子（缺失/损坏返回 None）。"""
+    store = store if store is not None else await get_redis()
+    raw = await store.hget(_digest_key(report_date), "hazard_bulletin")
+    if not raw:
+        return None
+    try:
+        return DigestCell(**json.loads(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+async def handle_bulletin_forward(event_data: dict[str, Any]) -> dict[str, Any]:
+    """「📤 推送到群」按钮回调：把当日督办通报格子以同款版式发到配置群。
+
+    首次点击发新卡并记录 message_id（Redis，按北京日，TTL 同总卡 7 天）；
+    当天后续点击对已推送卡**原地更新**（PATCH，与总卡滚动更新同机制），
+    不再每点一次多一张卡。目标群变更或旧卡已删（PATCH 失败）时自动转新发。
+    回调 ACK 直返 toast（3s 内完成，不 PATCH 速递原卡）。
+    """
+    target = forward_chat_id()
+    if not target:
+        logger.warning("督办通报推送回调: 未配置目标群")
+        return {"toast": {"type": "error", "content": "未配置推送目标群，请先在应用配置中设置"}}
+    cell = await _load_bulletin_cell(_bj_today())
+    if cell is None:
+        return {"toast": {"type": "error", "content": "今日速递暂无督办通报格子"}}
+    operator = ((event_data.get("operator") or {}).get("open_id")) or ""
+    store = await get_redis()
+
+    # ── 已推送过 → 原地更新 ──
+    forward_key = _FORWARD_KEY.format(date=_bj_today().isoformat())
+    prev_chat = prev_msg = ""
+    try:
+        prev = json.loads(await store.get(forward_key) or "{}")
+        prev_chat, prev_msg = prev.get("chat") or "", prev.get("msg_id") or ""
+    except (TypeError, ValueError):
+        pass
+    if prev_msg and prev_chat == target:
+        element = await _cell_element(asdict(cell), None)
+        card = build_card_dict(
+            f"📌 {cell.title} | {_bj_today().isoformat()}",
+            f"Hi，{cell.title}速递，点「查看详情」展开明细：",
+            "blue", [element],
+        )
+        if await update_card(prev_msg, card):
+            logger.info(
+                "督办通报手动推送已更新: target=%s operator=%s msg=%s",
+                target, operator or "-", prev_msg,
+            )
+            return {"toast": {"type": "success", "content": "已更新群内的督办通报"}}
+        logger.warning("督办通报推送更新失败（旧卡已删？）转新发: %s", prev_msg)
+
+    # ── 首次推送 / 更新失败兜底 ──
+    msg_id = await send_digest_cell_card(cell, chat_id=target)
+    if not msg_id:
+        logger.warning("督办通报手动推送失败: target=%s operator=%s", target, operator or "-")
+        return {"toast": {"type": "error", "content": "推送失败，请稍后重试或查看后端日志"}}
+    await store.set(
+        forward_key,
+        json.dumps({"chat": target, "msg_id": msg_id}, ensure_ascii=False),
+        ex=_TTL_SECONDS,
+    )
+    logger.info(
+        "督办通报已手动推送: target=%s operator=%s msg=%s",
+        target, operator or "-", msg_id,
+    )
+    return {"toast": {"type": "success", "content": "督办通报已推送到目标群"}}
 
 
 async def send_digest_cell_card(
@@ -286,7 +382,7 @@ async def _build_elements(
         cell = cells.get(key)
         if not cell:
             continue
-        elements.append(await _cell_element(cell, limits.get(key)))
+        elements.append(await _cell_element(cell, limits.get(key), key=key))
     if not elements:
         elements.append({"tag": "markdown", "content": "_今日暂无安全动态_"})
     return elements
@@ -299,11 +395,30 @@ def _apply_limit(detail: str, limit: int | None) -> str:
     return detail[:limit].rstrip() + "\n…（明细过长已截断）"
 
 
+def _bulletin_forward_button() -> dict[str, Any] | None:
+    """督办通报格子「推送到群」按钮（未配置目标群返回 None，不渲染）。"""
+    if not forward_chat_id():
+        return None
+    value = {"scope": "hazard_bulletin_forward", "action": "forward"}
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": "📤 推送到群"},
+        "type": "primary",
+        "value": value,
+        "behaviors": [{"type": "callback", "value": value}],
+    }
+
+
 async def _cell_element(
     cell: dict[str, Any],
     detail_limit: int | None,
+    key: str | None = None,
 ) -> dict[str, Any]:
-    """一个日报格子：灰底概览卡 + 内嵌「查看详情」折叠面板（不带图片）。"""
+    """一个日报格子：灰底概览卡 + 内嵌「查看详情」折叠面板（不带图片）。
+
+    ``key`` 为速递格子标识（send_digest_cell_card 转发场景不传）；
+    督办通报格子（hazard_bulletin）配置了推送目标群时在右侧追加按钮列。
+    """
     overview = [
         f"<text_tag color='{cell['tag_color']}'>{cell['tag_text']}</text_tag>"
         f" **{cell['title']}**",
@@ -329,18 +444,25 @@ async def _cell_element(
     ]
     if panel is not None:
         left_elements.append(panel)
+    if key == "hazard_bulletin":
+        button = _bulletin_forward_button()
+        if button is not None:
+            # 面板下方同列放置（与「查看详情」衔接），不做右侧悬浮列
+            left_elements.append(button)
+
+    columns: list[dict[str, Any]] = [{
+        "tag": "column",
+        "width": "weighted",
+        "weight": 1,
+        "vertical_align": "center",
+        "padding": "8px 4px 8px 12px",
+        "elements": left_elements,
+    }]
 
     return {
         "tag": "column_set",
         "flex_mode": "none",
         "background_style": "grey",
         "margin": "0px 0px 8px 0px",
-        "columns": [{
-            "tag": "column",
-            "width": "weighted",
-            "weight": 1,
-            "vertical_align": "center",
-            "padding": "8px 4px 8px 12px",
-            "elements": left_elements,
-        }],
+        "columns": columns,
     }

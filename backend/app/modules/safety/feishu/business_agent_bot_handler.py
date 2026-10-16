@@ -1516,6 +1516,12 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
 
                 return await handle_progress_submit(payload, event_data)
 
+        # ── 安全速递·督办通报格子「📤 推送到群」按钮（scope=hazard_bulletin_forward）──
+        if payload.get("scope") == "hazard_bulletin_forward":
+            from app.modules.safety.feishu.daily_digest import handle_bulletin_forward
+
+            return await handle_bulletin_forward(event_data)
+
         # ── URS 审核卡片回调路由（scope=urs，非 Agent 写操作确认流）──
         if payload.get("scope") == "urs":
             from app.modules.safety.feishu.urs_card import handle_urs_card_action

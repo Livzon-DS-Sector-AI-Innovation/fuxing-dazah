@@ -50,6 +50,13 @@ def supervision_poll_enabled() -> bool:
     )
 
 
+def bulletin_watch_enabled() -> bool:
+    """④ 督办通报值守轮询（周四 13:00-18:00，速递格子变化即刷新）。"""
+    return direct_poll_enabled() and _flag(
+        gates.domain_env(_DOMAIN, "BULLETIN_WATCH_ENABLED"), False
+    )
+
+
 def event_sync_enabled() -> bool:
     """旧路径开关：Bitable 事件 → 平台库镜像（hazard_reports）+ 事件驱动 AI。
 
@@ -109,9 +116,17 @@ def review_stagger_seconds() -> int:
 def supervision_stagger_seconds() -> int:
     """③ 相对 ① 的错开秒数（默认四分之一周期）。"""
     return _int(
-        "SAFETY_HAZARD_SUPERVISION_STAGGER_SECONDS",
+        gates.domain_env(_DOMAIN, "SUPERVISION_STAGGER_SECONDS"),
         poll_interval_seconds() // 4,
         minimum=0,
+    )
+
+
+def bulletin_watch_interval_seconds() -> int:
+    """④ 值守轮询间隔（秒，默认 60；窗口内每分钟比对一次速递格子）。"""
+    return _int(
+        gates.domain_env(_DOMAIN, "BULLETIN_WATCH_INTERVAL_SECONDS"),
+        60, minimum=30,
     )
 
 
