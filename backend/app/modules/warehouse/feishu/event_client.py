@@ -11,6 +11,7 @@ import json
 import logging
 import ssl
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -397,10 +398,41 @@ async def start_ws() -> None:
     logger.info("仓库飞书事件 WebSocket 客户端已停止")
 
 
+# ── event_id 去重：飞书事件是 at-least-once 投递，断线重连窗口内收到的事件会在
+# 重连成功后被原样重推（同 event_id 同 message_id），不去重则 bot 对同一条消息
+# 会各跑一轮完整回复。与安全模块同款（见 safety/feishu/event_client.py）。──
+_EVENT_DEDUP_TTL = 3600.0
+_event_dedup: OrderedDict[str, float] = OrderedDict()
+
+
+def _should_dispatch(event: dict[str, Any]) -> bool:
+    """TTL 窗口内同 event_id 只放行一次，顺带淘汰过期登记控制表大小。"""
+    event_id = event.get("header", {}).get("event_id")
+    if not event_id:
+        return True
+    now = time.monotonic()
+    while _event_dedup:
+        first_seen = next(iter(_event_dedup.values()))
+        if now - first_seen <= _EVENT_DEDUP_TTL:
+            break
+        _event_dedup.popitem(last=False)
+    if event_id in _event_dedup:
+        return False
+    _event_dedup[event_id] = now
+    return True
+
+
 async def _dispatch_event(event: dict[str, Any]) -> Any:
     """解析并分发单个事件，返回处理器的返回值（用于 card 响应）。"""
     # v2 格式: {"schema": "2.0", "header": {"event_type": "..."}, "event": {...}}
     header = event.get("header", {})
+    if not _should_dispatch(event):
+        logger.warning(
+            "仓库飞书事件重复投递，跳过分发: event_id=%s type=%s",
+            header.get("event_id"),
+            header.get("event_type", "?"),
+        )
+        return None
     event_type = header.get("event_type", "")
 
     if not event_type:
