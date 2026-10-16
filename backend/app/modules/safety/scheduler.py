@@ -27,12 +27,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Stop flag, set during app shutdown
-stop_scheduled_task_flag = asyncio.Event()
-
-# Tick interval in seconds
-TICK_INTERVAL = 30
-
 # ── 失败重试/补发配置 ──
 # 失败后重试间隔（秒）：网络/服务器恢复后最多 10 分钟内自动补发
 RETRY_INTERVAL = 10 * 60
@@ -1222,75 +1216,11 @@ async def _warm_direct_query_caches() -> None:
             logger.info("直读缓存预热完成: special_op")
 
 
-async def scheduled_task_loop() -> None:
-    """安全模块定时任务主循环。
-
-    已在 app/main.py lifespan 中启动，每 TICK_INTERVAL 秒检查一次。
-    使用时间窗口（>=）触发，确保不会因服务器重启错过任务。
-    到点任务以独立 task 并行执行，互不阻塞；同一任务由锁保证单实例。
-    """
-    # 首次启动：为无配置行的任务播种默认发送对象（env/代码默认 → DB），
-    # 此后发送对象以 DB 为唯一来源，全部可由前端统一编辑
-    try:
-        from app.modules.safety.service.scheduler_config import (
-            seed_default_task_targets,
-        )
-
-        await seed_default_task_targets()
-    except Exception:
-        logger.exception("默认任务配置播种失败（忽略，继续启动）")
-
-    # 直读看板缓存预热（后台执行不阻塞启动；失败仅记日志，首次访问会现拉）
-    asyncio.create_task(_warm_direct_query_caches())
-
-    jobs = await _load_effective_jobs()
-    logger.info(
-        "安全模块定时任务循环已启动 (tick=%ds, report_jobs=%d, parallel=%s)",
-        TICK_INTERVAL, len(jobs), True,
-    )
-
-    # 启动时输出各任务的下次触发时间
-    for job in jobs:
-        logger.info(
-            "  定时任务: %s @ %02d:%02d",
-            job["name"], job["hour"], job["minute"],
-        )
-
-    running_tasks: set[asyncio.Task] = set()
-
-    # ── 隐患直读模式轮询（① 隐患AI分析 / ② AI整改审核）──
-    # 由开关控制（SAFETY_HAZARD_DIRECT_POLL_ENABLED），未启用时协程立即返回。
-    # 挂在调度器循环内启动，不新增进程、不改 app/main.py。
-    from app.modules.safety.service.hazard_direct.loop import hazard_direct_loop
-
-    direct_task = asyncio.create_task(hazard_direct_loop())
-
-    while not stop_scheduled_task_flag.is_set():
-        try:
-            today = date.today()
-            jobs = await _load_effective_jobs()  # 每次 tick 重读 DB 覆写，配置修改 30s 内生效
-            for job in jobs:
-                if await _should_run(job, today):
-                    task = asyncio.create_task(_run_scheduled_job_guarded(job))
-                    running_tasks.add(task)
-                    task.add_done_callback(running_tasks.discard)
-
-            await asyncio.wait_for(stop_scheduled_task_flag.wait(), timeout=TICK_INTERVAL)
-        except TimeoutError:
-            pass
-        except Exception:
-            logger.exception("定时任务循环异常")
-            await asyncio.sleep(TICK_INTERVAL)
-
-    # 关闭时等待所有在跑任务结束
-    if running_tasks:
-        await asyncio.gather(*running_tasks, return_exceptions=True)
-    # 关闭直读轮询（其在跑的 AI 调用由协程取消自然中断）
-    direct_task.cancel()
-    try:
-        await direct_task
-    except (TimeoutError, asyncio.CancelledError):
-        pass
-    except Exception:
-        logger.debug("直读轮询任务退出异常", exc_info=True)
-    logger.info("安全模块定时任务循环已停止")
+# ── 2-C 调度归一（桥接式）：自研 30s 主循环 scheduled_task_loop 已下线 ──
+# 运行时宿主 = 平台 SchedulerEngine（app/modules/safety/scheduled.py 注册
+# safety.scheduler_bridge 桥接任务，每 30s 一 tick 复用本模块的
+# _load_effective_jobs / _should_run / _run_scheduled_job_guarded）。
+# DB 配置 30s 生效、当日重启补跑、失败重试告警、留痕语义零改动；
+# 语义对照基线：tests/modules/safety/test_scheduler_semantics.py。
+# hazard_direct ①②③④ 常驻轮询协程已转引擎 interval 任务（见 scheduled.py），
+# 旧 loop.py 已删除。

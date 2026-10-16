@@ -8,8 +8,8 @@
 - ``run_bulletin_watch_once`` ④b 督办通报值守（周四 13:00-18:00 变化即刷新）
 - ``send_progress_dunning_dynamic`` ⑤ 未更新进展催办（周三 10:00，动态名单）
 
-由 ``scheduler.scheduled_task_loop`` 启动 ``hazard_direct_loop``（①②③ + ④b 值守）；
-④⑤ 仍走调度器的定点任务，但数据源同为多维表格。
+①②③ + ④b 由平台调度引擎的 interval 任务驱动（``safety/scheduled.py``，
+2-C 调度归一）；④⑤ 走调度器桥接任务的定点任务，数据源同为多维表格。
 Agent 工具与调度器共用同一套 service 函数，避免逻辑分叉。
 
 开关见 ``config`` 模块（全部默认关闭，灰度上线）。
@@ -41,7 +41,6 @@ _LAZY: dict[str, tuple[str, str]] = {
         "progress_dunning",
         "resolve_dunning_recipients",
     ),
-    "hazard_direct_loop": ("loop", "hazard_direct_loop"),
 }
 
 __all__ = list(_LAZY)

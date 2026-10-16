@@ -87,9 +87,12 @@ async def test_chat_does_not_raise_attribute_error(monkeypatch) -> None:  # noqa
 
 
 def test_round_failure_detail_carries_reason() -> None:
-    """连续失败告警必须带上失败原因，避免只报「2 条失败」。"""
+    """连续失败告警必须带上失败原因，避免只报「2 条失败」。
+
+    （2-C 调度归一后该助手随单轮化迁至 safety/scheduled.py。）
+    """
+    from app.modules.safety.scheduled import _round_failure_detail
     from app.modules.safety.service.hazard_direct.ai_analysis import RoundResult
-    from app.modules.safety.service.hazard_direct.loop import _round_failure_detail
 
     result = RoundResult(
         total=2,

@@ -162,14 +162,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     recovery_task = asyncio.create_task(recover_unprocessed_records())  # noqa: F841 — 持有引用防止任务被 GC
 
-    # ── 安全模块定时任务调度引擎 ──
-    from app.modules.safety.scheduler import (
-        scheduled_task_loop,
-        stop_scheduled_task_flag,
-    )
-
-    scheduler_task = asyncio.create_task(scheduled_task_loop())
-
     # ── 统一调度引擎（平台级，各模块可渐进迁移）──
     from app.platform.scheduler import SchedulerEngine, SchedulerRegistry
 
@@ -211,6 +203,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_registry.register_task(PUSH_CENTER_TICK_TASK)
     scheduler_registry.register_task(QC_SCAN_TASK)
 
+    # ── 安全模块调度（2-C 桥接式：DB 配置驱动 + 引擎执行）──
+    # 桥接任务每 30s 一 tick 复用 safety.scheduler 的判定/状态机/留痕语义；
+    # hazard_direct ①②③④ 轮询转 interval 任务（自研主循环已下线）。
+    from app.modules.safety.scheduled import (
+        bootstrap_safety_scheduler,
+        register_safety_tasks,
+    )
+
+    await bootstrap_safety_scheduler()
+    register_safety_tasks(scheduler_registry)
+
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
         scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
@@ -239,16 +242,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await wh_event_client.stop_ws()
         warehouse_ws_task.cancel()
 
-    # 停止定时任务调度引擎
-    stop_scheduled_task_flag.set()
-    scheduler_task.cancel()
-
-    # ── 停止统一调度引擎 ──
+    # ── 停止统一调度引擎（安全桥接任务随引擎停止派发，随后 drain 在跑任务）──
     scheduler_engine.stop()
     try:
         await asyncio.wait_for(scheduler_engine_task, timeout=10)
     except (TimeoutError, asyncio.CancelledError):
         pass
+
+    from app.modules.safety.scheduled import drain_safety_scheduled_tasks
+
+    await drain_safety_scheduled_tasks()
 
     member_task.cancel()
     maintenance_plan_task.cancel()
