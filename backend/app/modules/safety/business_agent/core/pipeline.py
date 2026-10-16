@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -25,6 +26,12 @@ from app.modules.safety.business_agent.rules import check_output
 from app.modules.safety.business_agent.schemas import SafetyDeps
 
 logger = logging.getLogger(__name__)
+
+# 1-B：单条工具结果给模型的内容上限（对齐仓储 agent 的 4KB 截断）。
+# 只截「给模型看的内容」；审计（_post_audit）与业务落库不受影响。
+_TOOL_RESULT_MAX_BYTES = 4096
+# 截断提示文案占位的冗余预算（notice 字段本体不计入上限判定）
+_TOOL_RESULT_NOTICE_SLACK = 512
 
 
 @dataclass
@@ -110,9 +117,62 @@ async def execute_tool(
         banned_hits=banned_hits,
     )
 
-    # 5. result：统一返回
+    # 5. result：统一返回（成功结果超限时截断给模型的内容；错误/拒绝不截断）
     result = ToolResult(ok=ok, data=data, error=err, banned_hits=banned_hits)
-    return result.to_dict()
+    out = result.to_dict()
+    if ok and isinstance(out, dict):
+        return _truncate_tool_result(out)
+    return out
+
+
+def _serialized_len(obj: Any) -> int:
+    """JSON 序列化字节数；失败返回超大值（交给上层兜底路径）。"""
+    try:
+        return len(json.dumps(obj, ensure_ascii=False, default=str).encode())
+    except Exception:  # noqa: BLE001 - 不可序列化对象走整体预览兜底
+        return _TOOL_RESULT_MAX_BYTES * 8
+
+
+def _truncate_tool_result(data: dict) -> dict:
+    """工具结果超 4KB 时截断给模型的内容。
+
+    - 列表字段（取序列化后最大者）：二分保留前 M 条 + 「共 N 条，已显示前 M 条」提示，
+      保持原有 dict 结构（模型可继续按字段消费）。
+    - 无列表可截或单条仍超限：整体降级为截断预览（preview + 截断提示）。
+    """
+    if _serialized_len(data) <= _TOOL_RESULT_MAX_BYTES:
+        return data
+
+    list_fields = [
+        (k, v) for k, v in data.items() if isinstance(v, list) and len(v) > 1
+    ]
+    if list_fields:
+        key, values = max(list_fields, key=lambda kv: _serialized_len(kv[1]))
+        total = len(values)
+        lo, hi = 1, total  # 二分找满足预算的最大保留条数 M
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            candidate = {**data, key: values[:mid]}
+            if _serialized_len(candidate) <= _TOOL_RESULT_MAX_BYTES:
+                lo = mid
+            else:
+                hi = mid - 1
+        trimmed = dict(data)
+        trimmed[key] = values[:lo]
+        trimmed["truncation_notice"] = (
+            f"「{key}」共 {total} 条，已显示前 {lo} 条；"
+            f"如需完整数据请缩小查询范围或分页查询"
+        )
+        if _serialized_len(trimmed) <= _TOOL_RESULT_MAX_BYTES + _TOOL_RESULT_NOTICE_SLACK:
+            return trimmed
+
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    keep = max(0, _TOOL_RESULT_MAX_BYTES - 200)
+    return {
+        "truncated": True,
+        "truncation_notice": "工具结果过长，已整体截断为预览",
+        "preview": payload[:keep],
+    }
 
 
 def _check_banned_output(tool_name: str, data: Any) -> list[str]:
