@@ -32,6 +32,7 @@ class _Rec:
     daily_risk_reason: str | None = "动火作业叠加高处"
     contractor_name: str | None = "某施工单位"
     personnel_type: str | None = "非公司人员"
+    report_type: str | None = None  # V3.6 契约：planned/unplanned/None（未报备）
     planned_start_time: datetime | None = datetime(2026, 9, 15, 1, 0, tzinfo=UTC)
     planned_end_time: datetime | None = datetime(2026, 9, 15, 3, 0, tzinfo=UTC)
     work_duration_hours: float | None = 2.0
@@ -158,20 +159,26 @@ async def test_tomorrow_mode_not_supported() -> None:
 
 
 async def test_afternoon_header_tag_and_new_ops() -> None:
-    afternoon_rec = _Rec(submitted_at=datetime(2026, 9, 15, 6, 0, tzinfo=UTC))
+    afternoon_rec = _Rec(
+        submitted_at=datetime(2026, 9, 15, 6, 0, tzinfo=UTC),
+        report_type="unplanned",
+    )
     reports = [r for r in _sample_reports()[:2]] + [afternoon_rec]
     built = await build_special_op_digest(
         REPORT_DATE, "afternoon", reports, STATS, None, FULL_MARKDOWN,
     )
     assert built is not None
-    # 午后推送带「午后更新」头部标签
+    # 午后推送带「晚报」头部标签（V3.6：午后更新→晚报）
     assert built.header_tags == [{
         "tag": "text_tag",
-        "text": {"tag": "plain_text", "content": "午后更新"},
+        "text": {"tag": "plain_text", "content": "晚报"},
         "color": "orange",
     }]
     contents = [e["content"] for e in built.elements if e["tag"] == "markdown"]
-    assert any("新增计划外" in c and "**1 项**" in c for c in contents)
+    # V3.6 措辞：今日新增 **N** 项（计划外 M）——「新增计划外」为旧版文案已不存在
+    assert any(
+        "今日新增" in c and "（计划外 1）" in c for c in contents
+    )
 
 
 async def test_ai_tips_preferred_over_rule_tips() -> None:
