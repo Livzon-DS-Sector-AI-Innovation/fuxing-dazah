@@ -16,6 +16,8 @@ SQLAlchemy 2.0 typed ORM、async（INSERT 后 ``flush`` 返回即可，无需 re
 
 from __future__ import annotations
 
+import contextvars
+import logging
 import uuid
 from typing import TYPE_CHECKING
 
@@ -105,6 +107,82 @@ class AgentSessionEvent(BaseModel):
 # 事件写入
 # ═══════════════════════════════════════════════════════════════
 
+# 2-F 事件收口：轮内批量器（contextvar）。run_turn/resume 开启后，
+# 本轮 append_event 走内存 seq 分配 + 不逐条 flush，轮末统一一次 flush；
+# 低频/后台路径（memory_write 等独立 session）不受影响走旧路径。
+_current_batch: contextvars.ContextVar[TurnEventBatch | None] = contextvars.ContextVar(
+    "agent_turn_event_batch", default=None
+)
+
+
+class TurnEventBatch:
+    """一轮对话的事件批量收口器（seq 内存连续分配，flush 一次）。
+
+    seq 基准首次现查（SELECT max 一次），此后内存自增——消除逐事件
+    SELECT max（及其触发的 autoflush）与逐事件 flush 的往返。
+    """
+
+    def __init__(self, db: AsyncSession, session_id: uuid.UUID) -> None:
+        self._db = db
+        self._session_id = session_id
+        self._next_seq: int | None = None
+        self.pending: int = 0
+
+    def matches(self, db: AsyncSession, session_id: uuid.UUID) -> bool:
+        """批量器只接管同 db 会话同 session 的事件（memory_write 独立 session 走旧路径）。"""
+        return db is self._db and session_id == self._session_id
+
+    async def _ensure_seq_base(self) -> None:
+        if self._next_seq is None:
+            stmt = (
+                select(func.coalesce(func.max(AgentSessionEvent.seq), 0) + 1)
+                .where(
+                    AgentSessionEvent.session_id == self._session_id,
+                    AgentSessionEvent.is_deleted == False,  # noqa: E712
+                )
+            )
+            self._next_seq = int((await self._db.execute(stmt)).scalar_one())
+
+    async def append(self, *, event_type: str, payload: dict) -> AgentSessionEvent:
+        await self._ensure_seq_base()
+        event = AgentSessionEvent(
+            session_id=self._session_id,
+            seq=self._next_seq,
+            event_type=event_type,
+            payload=payload or {},
+        )
+        self._db.add(event)
+        self._next_seq += 1
+        self.pending += 1
+        return event
+
+    async def flush(self) -> None:
+        if self.pending:
+            await self._db.flush()
+            self.pending = 0
+
+
+def start_turn_event_batch(db: AsyncSession, session_id: uuid.UUID | None) -> TurnEventBatch | None:
+    """开启轮内事件批量（session_id 为空则不开启）。返回批量器（供测试）。"""
+    if session_id is None:
+        return None
+    batch = TurnEventBatch(db, session_id)
+    _current_batch.set(batch)
+    return batch
+
+
+async def end_turn_event_batch() -> None:
+    """结束轮内批量：统一一次 flush 后退出 contextvar。"""
+    batch = _current_batch.get()
+    _current_batch.set(None)
+    if batch is not None:
+        try:
+            await batch.flush()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "轮内事件批量 flush 失败（交由入口层事务兜底）"
+            )
+
 
 async def append_event(
     db: AsyncSession,
@@ -113,18 +191,22 @@ async def append_event(
     event_type: str,
     payload: dict,
 ) -> AgentSessionEvent:
-    """向会话追加一条事件，返回带 ``seq`` 的持久化事件。
+    """向会话追加一条事件。
 
-    同事务内读当前最大 ``seq`` + 1（per session 单调递增），``flush`` 后返回
-    （INSERT RETURNING 回填 id/created_at，无需 re-fetch，符合 async 铁律）。
+    轮内批量开启时（start_turn_event_batch）：内存 seq 连续分配、不 flush，
+    轮末统一收口（2-F：每轮 4-6 次 flush → 1 次）。
+    旧路径（低频/后台/独立 session）：同事务 SELECT max(seq)+1 分配 + flush
+    （INSERT RETURNING 回填 id/created_at）。
 
-    并发保护：run_turn/resume 单会话串行执行（入口层已按 chat_id 串行化），per-session
-    并发低；(session_id, seq) 唯一索引兜底防重。
-
-    TODO(并发兜底，如需强一致)：append 前对 session_id 取 ``pg_advisory_xact_lock``——
-    ``SELECT pg_advisory_xact_lock(hashtext(session_id::text))``，事务结束自动释放。当前
-    测试环境（SQLite/临时事务）不便验证，留作后续接入真实并发压测时启用。
+    并发保护：run_turn/resume 单会话串行执行（入口层已按 chat_id 串行化），
+    per-session 并发低；(session_id, seq) 唯一索引兜底防重。
+    TODO(并发兜底，如需强一致)：append 前对 session_id 取
+    ``pg_advisory_xact_lock``——事务结束自动释放；待真实并发压测时启用。
     """
+    batch = _current_batch.get()
+    if batch is not None and batch.matches(db, session_id):
+        return await batch.append(event_type=event_type, payload=payload)
+
     stmt = (
         select(func.coalesce(func.max(AgentSessionEvent.seq), 0) + 1)
         .where(

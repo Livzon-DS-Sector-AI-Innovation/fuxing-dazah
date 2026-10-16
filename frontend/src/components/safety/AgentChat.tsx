@@ -13,7 +13,8 @@ import {
   BookOutlined,
   LinkOutlined,
 } from '@ant-design/icons'
-import { chatWithAgent, confirmAgentAction } from '@/actions/safety'
+import { confirmAgentAction } from '@/actions/safety'
+import { consumeSseStream } from '@/lib/sse'
 import type { AgentChatSource } from '@/types/safety'
 
 const { Text } = Typography
@@ -287,29 +288,51 @@ export default function AgentChat() {
     cancelledRef.current = false
 
     try {
-      const res = await chatWithAgent(query, sessionId ?? undefined)
+      // 2-F：流式事件反馈（accepted→stage→pending?→message→finished/error），
+      // message 一次性携带完整回复与来源；挂起确认卡片交互不变
+      const resp = await fetch('/api/v1/safety/agent/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: query, session_id: sessionId || null }),
+      })
+      if (!resp.ok || !resp.body) {
+        const body = (await resp.json().catch(() => null)) as { message?: string } | null
+        throw new Error(body?.message ?? `助手服务异常（${resp.status}）`)
+      }
 
-      // Check if cancelled
-      if (cancelledRef.current) return
+      let pendingAction:
+        | { id: string; summary: string }
+        | undefined
+      let errored = false
+      let gotMessage = false
 
-      if (res.code === 200 && res.data) {
-        if (!sessionId) setSessionId(res.data.session_id)
-
-        const pending = res.data.pending_action_id && res.data.pending_action
-          ? { id: res.data.pending_action_id, summary: res.data.pending_action.summary }
-          : undefined
-
-        const aiMsg: ChatMessage = {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          content: res.data.answer,
-          pendingAction: pending,
-          sources: res.data.sources || [],
-          timestamp: Date.now(),
+      await consumeSseStream(resp.body, (event, data) => {
+        if (cancelledRef.current) return
+        if (event === 'pending') {
+          const pa = data.pending_action as { summary?: string } | undefined
+          const id = data.pending_action_id as string | undefined
+          if (id && pa) pendingAction = { id, summary: pa.summary || '' }
+        } else if (event === 'message') {
+          gotMessage = true
+          const sid = data.session_id as string | undefined
+          if (!sessionId && sid) setSessionId(sid)
+          const aiMsg: ChatMessage = {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            content: (data.answer as string) || '',
+            pendingAction,
+            sources: (data.sources as AgentChatSource[]) || [],
+            timestamp: Date.now(),
+          }
+          setMessages((prev) => [...prev, aiMsg])
+        } else if (event === 'error') {
+          errored = true
+          message.error(`请求失败：${(data.error as string) || '未知错误'}`)
         }
-        setMessages((prev) => [...prev, aiMsg])
-      } else {
-        message.error(res.message || '请求失败')
+      })
+      if (cancelledRef.current) return
+      if (!gotMessage && !errored) {
+        message.warning('回复流中断，请重试')
       }
     } catch (err) {
       if (cancelledRef.current) return

@@ -164,6 +164,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED", False,
         "中控报警日报部门过滤私发开关（一部门一卡，动态名单）",
     ),
+    _flag(
+        "SAFETY_AGENT_URS_DELEGATION", False,
+        "URS 域 Agent 委派试点开关（开 = URS 意图经 delegate 元工具走域子流程；"
+        "关 = 挂载式整域工具集，一键回退）",
+    ),
 
     # ══════════════════════════════════════════════════════════
     # 直读闸门（direct_gate）— 隐患域轮询旗标为启动语义（需重启）

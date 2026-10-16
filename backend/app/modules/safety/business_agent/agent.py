@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -109,17 +110,60 @@ def _make_agent(config: AgentRuntimeConfig | None = None) -> Agent:
     base_url/timeout 字段暂不消费（DeepSeekProvider 默认端点，与一期口径一致）。
     """
     cfg = config or resolve_runtime_config()
+    return _build_agent(cfg, load_instructions())
+
+
+def _build_agent(cfg: AgentRuntimeConfig, instructions: str) -> Agent:
+    """按配置快照与 instructions 构建 Agent（orchestrator 与域 Agent 共用）。"""
     provider = DeepSeekProvider(api_key=cfg.api_key)
     model = OpenAIChatModel(cfg.model, provider=provider)
     return Agent(
         model,
         deps_type=SafetyDeps,
         output_type=[str, DeferredToolRequests],
-        instructions=load_instructions(),
+        instructions=instructions,
         capabilities=_CAPABILITIES,
         # 2-A：参数从 ai_config profile 读取（registry 默认 0.1/8192，后台可调）
         model_settings={"temperature": cfg.temperature, "max_tokens": cfg.max_tokens},
     )
+
+
+# ── 域 Agent（2-D 委派试点）：域工具子集 + 域专属 instructions ──────
+# 缓存 key = 域 + 配置指纹 + 域 prompt mtime（域 prompt 热改 → 新实例）。
+
+_DOMAIN_AGENT_CACHE: dict[str, Agent] = {}
+_DOMAIN_AGENT_CACHE_MAX = 16
+
+_DOMAIN_PROMPTS_DIR = Path(__file__).parent / "domain_prompts"
+
+
+def get_domain_agent(domain: str) -> Agent:
+    """获取域 Agent 实例（当前试点域：urs）。
+
+    域 Agent 与 orchestrator 共用确认门/权限/审计（工具注册层 requires_approval
+    + 管道 execute_tool 权限校验 + contextvars 审计继承），不复制这些设施。
+    """
+    from app.modules.safety.business_agent.tool_selector import TOOL_GROUPS
+    from app.modules.safety.business_agent.tools.registry import register_tools_subset
+
+    if domain not in TOOL_GROUPS:
+        raise ValueError(f"未知域 {domain!r}，可用域: {sorted(TOOL_GROUPS)}")
+
+    prompt_path = _DOMAIN_PROMPTS_DIR / f"{domain}.md"
+    mtime = prompt_path.stat().st_mtime
+    cfg = resolve_runtime_config()
+    cache_key = f"{domain}|{cfg.fingerprint}|{mtime}"
+    cached = _DOMAIN_AGENT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if len(_DOMAIN_AGENT_CACHE) >= _DOMAIN_AGENT_CACHE_MAX:
+        _DOMAIN_AGENT_CACHE.clear()
+
+    agent = _build_agent(cfg, prompt_path.read_text(encoding="utf-8"))
+    register_tools_subset(agent, list(TOOL_GROUPS[domain]))
+    _DOMAIN_AGENT_CACHE[cache_key] = agent
+    return agent
 
 
 # ── Agent 缓存（工具名集合 × 配置指纹哈希，进程内复用）─────────────

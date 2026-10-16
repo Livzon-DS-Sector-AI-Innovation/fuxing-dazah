@@ -59,6 +59,24 @@ async def run_turn(
     *,
     message_history: list[ModelMessage] | None = None,
 ) -> dict:
+    """执行一个对话回合（2-F：轮内事件批量收口——seq 内存分配 + 尾部一次 flush）。"""
+    from app.modules.safety.business_agent.core import events as _events_mod
+
+    _events_mod.start_turn_event_batch(deps.db, _session_uuid(deps))
+    try:
+        return await _run_turn_impl(
+            user_message, deps, message_history=message_history,
+        )
+    finally:
+        await _events_mod.end_turn_event_batch()
+
+
+async def _run_turn_impl(
+    user_message: str,
+    deps: SafetyDeps,
+    *,
+    message_history: list[ModelMessage] | None = None,
+) -> dict:
     """执行一个对话回合。
 
     1. 注入 user message → agent.run()
@@ -108,7 +126,6 @@ async def run_turn(
                 deps.db, session_id=_sid, event_type=events.EventType.USER_MESSAGE,
                 payload={"content": user_message},
             )
-            await deps.db.flush()
         except Exception:
             logger.exception("run_turn: append user_message 事件失败（不影响主流程）")
 
@@ -173,6 +190,11 @@ async def run_turn(
 
     # → 检查是否有待确认的写操作
     pending = _extract_pending_action(result)
+    delegated = None
+    if pending is None:
+        # 2-D 委派挂起：delegate 元工具透传的子 Agent 写请求 → 同样走确认门
+        delegated = _extract_delegated_deferral(result)
+        pending = delegated
     if pending:
         # S3 事件流：写工具挂起 → approval_requested（工具调用/结果由残余消息事件承载）
         await _append_approval_requested_event(deps, pending)
@@ -186,9 +208,15 @@ async def run_turn(
             sources=sources, guard_hits=None, status="success", latency_ms=latency_ms,
             trace_id=trace_id, routing=routing_extra,
         )
+        messages_raw = _serialize_messages(result)
+        if delegated is not None:
+            # 合成子 Agent 写调用进消息尾部：resume 的 _find_deferred_in_history
+            # 依据「无对应 ToolReturn 的写 ToolCallPart」找到它，从而完全复用
+            # 既有确认 → resume → 权限再校验 → 执行 → 审计链路
+            messages_raw = _append_delegated_tool_call(messages_raw, delegated)
         return {
             "answer": _pending_prompt(pending),
-            "messages": _serialize_messages(result),
+            "messages": messages_raw,
             "pending_action": pending,
             "sources": sources,
         }
@@ -238,6 +266,25 @@ async def resume(
     approved: bool,
     message_history_raw: list[dict],
 ) -> dict:
+    """恢复被挂起的写操作执行（2-F：轮内事件批量收口同 run_turn）。"""
+    from app.modules.safety.business_agent.core import events as _events_mod
+
+    _events_mod.start_turn_event_batch(deps.db, _session_uuid(session_id))
+    try:
+        return await _resume_impl(
+            session_id, deps, action_id, approved, message_history_raw,
+        )
+    finally:
+        await _events_mod.end_turn_event_batch()
+
+
+async def _resume_impl(
+    session_id: str,
+    deps: SafetyDeps,
+    action_id: str,
+    approved: bool,
+    message_history_raw: list[dict],
+) -> dict:
     """恢复被挂起的写操作执行。
 
     基于之前 run_turn 返回的 message_history，用用户的选择构建
@@ -274,7 +321,6 @@ async def resume(
                     "by": deps.person.name if deps.person else None,
                 },
             )
-            await deps.db.flush()
         except Exception:
             logger.exception("resume: append approval_resolved 事件失败（不影响主流程）")
 
@@ -424,7 +470,6 @@ async def _record_tool_events(deps: SafetyDeps, result) -> None:
                             "denied": p.outcome == "denied",
                         },
                     )
-        await deps.db.flush()
     except Exception:
         logger.exception("run_turn: append tool 事件失败（不影响主流程）")
 
@@ -442,7 +487,6 @@ async def _append_assistant_event(
             deps.db, session_id=sid, event_type=events.EventType.ASSISTANT_MESSAGE,
             payload={"content": content, "usage": usage or {}},
         )
-        await deps.db.flush()
     except Exception:
         logger.exception("append assistant_message 事件失败（不影响主流程）")
 
@@ -458,7 +502,6 @@ async def _append_turn_end_event(deps: SafetyDeps, *, status: str, error: str | 
             deps.db, session_id=sid, event_type=events.EventType.TURN_END,
             payload={"status": status, "error": error},
         )
-        await deps.db.flush()
     except Exception:
         logger.exception("append turn_end 事件失败（不影响主流程）")
 
@@ -749,6 +792,62 @@ def _extract_pending_action(result) -> PendingActionData | None:
         arguments=all_args.get(primary_tool, {}),
         summary=summary,
     )
+
+
+def _extract_delegated_deferral(result) -> PendingActionData | None:
+    """从 delegate 元工具的返回中提取子 Agent 透传的写请求（2-D 委派挂起）。
+
+    只看最近一次 delegate 调用的返回：deferred=True → 组装 PendingActionData
+    （工具名/参数原样透传）；deferred=False 或无 delegate 调用 → None。
+    """
+    from pydantic_ai.messages import ToolReturnPart
+
+    from app.modules.safety.business_agent.tools.delegate import DELEGATED_KEY
+
+    try:
+        for msg in reversed(result.all_messages()):
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, ToolReturnPart) and part.tool_name == "delegate":
+                    content = part.content
+                    if isinstance(content, str):
+                        try:
+                            content = json.loads(content)
+                        except json.JSONDecodeError:
+                            content = None
+                    if isinstance(content, dict) and content.get(DELEGATED_KEY):
+                        tool_name = str(content.get("tool_name") or "")
+                        if not tool_name:
+                            return None
+                        args = content.get("arguments")
+                        return PendingActionData(
+                            tool_name=tool_name,
+                            arguments=dict(args) if isinstance(args, dict) else {},
+                            summary=str(content.get("summary") or tool_name),
+                        )
+                    return None  # 最近一次 delegate 调用未挂起
+    except Exception:
+        logger.debug("delegated deferral 提取失败", exc_info=True)
+    return None
+
+
+def _append_delegated_tool_call(
+    raw_messages: list[dict], pending: PendingActionData
+) -> list[dict]:
+    """把委派挂起的写调用合成为消息尾部的 ToolCallPart（无对应 ToolReturn）。
+
+    resume() 的 _find_deferred_in_history 据此重建 DeferredToolRequests，
+    使委派挂起与 orchestrator 自身挂起共用同一确认/执行/审计链路。
+    """
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    part = ToolCallPart(
+        tool_name=pending.tool_name,
+        args=pending.arguments,
+        tool_call_id=f"delegated-{uuid.uuid4().hex[:12]}",
+    )
+    synthetic = json.loads(ModelMessagesTypeAdapter.dump_json([ModelResponse(parts=[part])]))[0]
+    raw_messages.append(synthetic)
+    return raw_messages
 
 
 def _format_tool_summary(tool_name: str, args: dict) -> str:
@@ -1127,7 +1226,6 @@ async def _append_approval_requested_event(
                 "arguments": pending.arguments,
             },
         )
-        await deps.db.flush()
     except Exception:
         logger.exception("append approval_requested 事件失败（不影响主流程）")
 

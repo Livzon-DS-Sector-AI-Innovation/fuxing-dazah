@@ -168,14 +168,18 @@ def _append_web_office_grant_hint(answer: str) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 
-@business_agent_router.post("/agent/chat", response_model=ApiResponse, summary="业务 Agent 对话")
-async def agent_chat(
-    body: AgentChatRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
+async def _execute_turn_and_persist(
+    db: AsyncSession,
+    *,
+    message: str,
+    session_id: str | None,
+    feishu_user_id: str | None,
 ):
-    """向业务 Agent 发送消息，返回文本或待确认的写操作方案。"""
-    # 延迟导入：避免模块加载时初始化 pydantic-ai Agent（需要 API key 等）
+    """Web 渠道执行一轮对话并持久化（/agent/chat 与 /agent/chat/stream 共用）。
+
+    流水：建会话 → 恢复历史 → run_turn → 办公降级提示 → pending 落库 →
+    历史/消息持久化。返回 (result, session, pending_action_id)。
+    """
     from app.modules.safety.business_agent.executor import run_turn
     from app.modules.safety.business_agent.session_store import (
         create_pending_action,
@@ -184,10 +188,7 @@ async def agent_chat(
         update_session_history,
     )
 
-    feishu_user_id = current_user.feishu_user_id if current_user else None
-    deps = await _build_deps(db, session_id=body.session_id, feishu_user_id=feishu_user_id)
-
-    # 获取或创建会话
+    deps = await _build_deps(db, session_id=session_id, feishu_user_id=feishu_user_id)
     session = await get_or_create_session(
         db,
         channel="web",
@@ -195,12 +196,8 @@ async def agent_chat(
         user_id=feishu_user_id,
         role=deps.role,
     )
-
-    # 恢复消息历史
     history = session.message_history if isinstance(session.message_history, list) else None
-
-    # 执行
-    result = await run_turn(body.message, deps, message_history=history)
+    result = await run_turn(message, deps, message_history=history)
 
     # Web 匿名 + 办公室创建动作：追加友好降级提示（不动 executor 逻辑）
     pending = result.get("pending_action")
@@ -208,7 +205,6 @@ async def agent_chat(
         result["answer"] = _append_web_office_grant_hint(result["answer"])
         pending.summary = _append_web_office_grant_hint(pending.summary)
 
-    # 持久化
     pending_action_id = None
     if pending:
         pa_record = await create_pending_action(
@@ -221,16 +217,31 @@ async def agent_chat(
 
     await update_session_history(
         db, session, messages=result["messages"],
-        title=body.message[:80] if session.message_count == 0 else None,
+        title=message[:80] if session.message_count == 0 else None,
     )
     await save_message(
         db,
         session_id=session.id,
-        user_message=body.message,
+        user_message=message,
         agent_answer=result["answer"],
         pending_action_id=uuid.UUID(pending_action_id) if pending_action_id else None,
     )
+    return result, session, pending_action_id
 
+
+@business_agent_router.post("/agent/chat", response_model=ApiResponse, summary="业务 Agent 对话")
+async def agent_chat(
+    body: AgentChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """向业务 Agent 发送消息，返回文本或待确认的写操作方案。"""
+    result, session, pending_action_id = await _execute_turn_and_persist(
+        db,
+        message=body.message,
+        session_id=body.session_id,
+        feishu_user_id=current_user.feishu_user_id if current_user else None,
+    )
     return ApiResponse(data={
         "session_id": str(session.id),
         "answer": _strip_reference_section(result["answer"]),
@@ -238,6 +249,91 @@ async def agent_chat(
         "pending_action": result["pending_action"].model_dump() if result["pending_action"] else None,
         "sources": result.get("sources") or [],
     })
+
+
+@business_agent_router.post(
+    "/agent/chat/stream",
+    summary="业务 Agent 对话（SSE 事件流）",
+)
+async def agent_chat_stream(
+    body: AgentChatRequest,
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """流式版对话：accepted → stage(处理中) → message(完整回复) → finished。
+
+    挂起轮在 message 前下发 pending 事件（确认卡片交互不变，confirm 走旧端点）；
+    异常以 error 事件收尾不断流；场景熔断直接 503。事件流为「阶段反馈」
+    （对齐仓储 web_gateway 模式），message 一次性携带完整回复——非 token 级。
+    DB 会话流内自开（请求结束即 commit 的 get_db 不适用于长流），尾部一次 commit。
+    """
+    import json as _json
+    import time as _time
+
+    from fastapi.responses import StreamingResponse
+
+    from app.modules.safety.ai_config.scenario_store import scenario_store
+
+    if not scenario_store.is_enabled("agent_chat"):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=503,
+            content={"code": 503, "message": "AI 助手功能已停用", "data": None},
+        )
+
+    feishu_user_id = current_user.feishu_user_id if current_user else None
+    started = _time.monotonic()
+
+    def _sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        seq = 0
+
+        def _next(**fields) -> dict:
+            nonlocal seq
+            seq += 1
+            return {"seq": seq, **fields}
+
+        yield _sse("accepted", _next(message=body.message[:80]))
+        try:
+            from app.core.database import async_session_factory
+
+            async with async_session_factory() as db:
+                yield _sse("stage", _next(label="正在处理"))
+
+                result, session, pending_action_id = await _execute_turn_and_persist(
+                    db,
+                    message=body.message,
+                    session_id=body.session_id,
+                    feishu_user_id=feishu_user_id,
+                )
+                pending = result.get("pending_action")
+                await db.commit()
+
+                if pending:
+                    yield _sse("pending", _next(
+                        pending_action_id=pending_action_id,
+                        pending_action=pending.model_dump(),
+                    ))
+                yield _sse("message", _next(
+                    session_id=str(session.id),
+                    answer=_strip_reference_section(result["answer"]),
+                    sources=result.get("sources") or [],
+                ))
+        except Exception as exc:  # noqa: BLE001 — SSE 流内异常转 error 事件，不断流
+            logger.exception("agent_chat_stream 执行失败")
+            yield _sse("error", _next(error=f"{type(exc).__name__}: {exc}"))
+            return
+        yield _sse("finished", _next(
+            duration_ms=int((_time.monotonic() - started) * 1000),
+        ))
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @business_agent_router.post(
