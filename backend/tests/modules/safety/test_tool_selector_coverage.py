@@ -84,11 +84,11 @@ def test_role_catalog_only_lists_registered_tools() -> None:
 def test_documented_triggers_select_expected_tool(message: str, expected: str) -> None:
     """agent.md 写明的触发话术必须能选到对应工具。
 
-    选择器没有任何匹配时会返回 None（调用方回退全量工具），也算可用；
-    但只要返回了子集，目标工具就必须在子集里。
+    1-D 起路由永不返回 None（兜底=核心 15）；只要返回了子集，
+    目标工具就必须在子集里。
     """
     names = tool_selector.select_tool_names(message)
-    assert names is None or expected in names, f"{message!r}  {names}"
+    assert expected in names, f"{message!r}  {names}"
 
 
 @pytest.mark.parametrize(
@@ -96,10 +96,11 @@ def test_documented_triggers_select_expected_tool(message: str, expected: str) -
     ["把最新的隐患督办通报发给我", "隐患督办通报"],
 )
 def test_hazard_bulletin_phrases_do_not_fall_back_to_all_tools(message: str) -> None:
-    """「隐患督办通报」必须命中 hazard 分组（而非返回 None 让全量回退兜底）。
+    """「隐患督办通报」必须命中 hazard 分组（路径=rule，而非核心兜底）。
 
-    返回 None 虽可用，但说明关键词没覆盖到；这里显式钉住关键词命中。
+    走核心兜底虽可用，但说明关键词没覆盖到；这里显式钉住关键词命中。
     """
-    names = tool_selector.select_tool_names(message)
-    assert names is not None
-    assert {"generate_supervision_bulletin", "query_hazards"} <= set(names)
+    decision = tool_selector.route_message(message)
+    assert decision.path == "rule"
+    assert "hazard" in decision.domains
+    assert {"generate_supervision_bulletin", "query_hazards"} <= set(decision.tool_names)

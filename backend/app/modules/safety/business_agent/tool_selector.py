@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_hazards", "query_hazard_stats",
         # 隐患直读模式：督办通报（只读生成 / 推群）。轮询触发收 ops 运维域（拍板②）。
         "generate_supervision_bulletin", "send_hazard_supervision_bulletin",
+        # 1-D 域收敛：危险源辨识并入隐患域
+        "query_hazard_identifications",
     ],
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
@@ -38,16 +41,10 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_ai_config", "query_bitable_config", "query_scheduler_tasks",
         "query_regulation_crawl_status",
     ],
-    "daily_report": [
-        "generate_daily_report",
-        "office_create_docx",
-    ],
-    "fire_alarm": [
-        "query_fire_alarms",
-        "generate_alarm_report",
-    ],
-    "central_alarm": [
-        "query_central_alarms",
+
+    "alarm": [
+        # 1-D 域收敛：消防+中控报警合一域（生成工具 1-C 已合一）
+        "query_fire_alarms", "query_central_alarms",
         "generate_alarm_report",
     ],
     "cert_warning": [
@@ -59,8 +56,9 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "trigger_oh_exam_parse", "create_oh_followup", "close_oh_followup",
         "analyze_oh_transfer", "override_oh_conclusion",
     ],
-    "msds": [
-        "query_msds",
+    "chemical": [
+        # 1-D 域收敛：危化品库存+MSDS 台账合一域
+        "query_chemical_inventory", "analyze_chemical_risk", "query_msds",
     ],
     "office": [
         "office_search_files", "office_read_docx", "office_read_sheet",
@@ -77,18 +75,16 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "update_urs_item", "confirm_urs_assessment", "submit_urs_appeal",
         "generate_urs_report_pdf",
     ],
-    "chemical_inventory": [
-        "query_chemical_inventory", "analyze_chemical_risk",
-    ],
     "guardian_subsidy": [
         "preview_guardian_subsidy", "generate_guardian_subsidy",
     ],
-    # 已同步本地库的明细查询
-    "special_op": ["query_special_op_records"],
-    "key_risk_op": ["query_key_risk_ops"],
+    # 特殊作业域（1-D 收敛：日报/明细/关键作业合一——日报即特殊作业日报）
+    "special_op": [
+        "query_special_op_records", "query_key_risk_ops",
+        "generate_daily_report", "office_create_docx",
+    ],
     "ehs_change": ["query_ehs_changes"],
     "work_ticket": ["query_work_ticket_reviews", "screen_work_ticket_personnel"],
-    "hazard_id": ["query_hazard_identifications"],
 }
 
 # ── 意图关键词（中文）─────────────────────────────────────────────
@@ -99,6 +95,8 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "危险源", "风险", "关闭",
         # 「督办通报」本身不含「隐患」二字，必须单独给词，否则这类问法收不到工具
         "督办", "通报",
+        # 1-D 域收敛：危险源辨识关键词并入
+        "辨识记录", "LEC", "JHA",
     ],
     "knowledge": [
         "法规", "标准", "规范", "条款", "规定", "制度",
@@ -113,86 +111,116 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         # 轮询补跑（拍板②）：「轮询一下隐患AI分析」等话术命中 ops 而非仅 hazard
         "轮询", "补跑", "补上", "补一下", "采集状态", "采集监控",
     ],
-    "daily_report": ["日报", "报表", "特殊作业", "次日预警", "计划外", "17点", "17点日报"],
-    "fire_alarm": ["消防报警", "消防", "火警", "报警器"],
-    "central_alarm": ["中控报警", "中控", "报警记录"],
+    "alarm": ["消防报警", "消防", "火警", "报警器", "中控报警", "中控", "报警记录"],
     "cert_warning": ["持证", "证书", "换证", "复审", "资质到期", "证件到期"],
-    "oh": ["职业健康", "体检", "随访", "职业病", "岗位危害", "转岗", "离岗"],
-    "msds": ["MSDS", "化学品安全技术说明", "安全数据单"],
+    "oh": ["职业健康", "体检", "随访", "职业病", "岗位危害", "接触危害", "职业危害", "危害因素", "转岗", "离岗"],
+
     "office": [
         "文档", "云文档", "docx", "表格", "电子表格", "sheet",
         "多维表格", "base", "幻灯片", "slides", "知识库", "wiki",
         "上传", "文件", "下载", "管理制度", "制度",
     ],
     "urs": ["URS", "用户需求", "设备采购", "采购评审", "智能审核", "适用性评估", "风险画像", "采购审核"],
-    "chemical_inventory": ["危化品", "库存", "超量", "混存", "禁忌", "易制毒", "易制爆", "现场物料总量", "化学品"],
+    "chemical": [
+        "危化品", "库存", "超量", "混存", "禁忌", "易制毒", "易制爆",
+        "现场物料总量", "化学品", "MSDS", "化学品安全技术说明", "安全数据单",
+    ],
     "guardian_subsidy": [
         "监护人补贴", "监护补贴", "特殊作业补贴", "作业票补贴", "补贴",
     ],
-    # 已同步本地库的明细查询（"特殊作业"同时命中 daily_report 组，两组工具合并激活）
+    # 特殊作业域（日报+明细+关键作业）：日报类话术直接挂 generate_daily_report
     "special_op": [
-        "作业判定", "特殊作业记录", "特殊作业明细", "动火作业", "受限空间",
+        "日报", "报表", "次日预警", "计划外", "17点", "17点日报",
+        "特殊作业", "作业判定", "特殊作业记录", "特殊作业明细", "动火作业", "受限空间",
         "高处作业", "吊装", "临时用电", "盲板", "动土", "断路", "计划外作业",
+        "关键风险作业", "关键作业",
     ],
-    "key_risk_op": ["关键风险作业", "关键作业"],
     "ehs_change": ["EHS变更", "EHS 变更", "变更管理", "变更台账"],
     "work_ticket": [
         "作业票审核", "作业票违规", "作业票", "票审核", "违规",
         "外包人员", "承包商人员", "人员筛查", "实名",
     ],
-    "hazard_id": ["危险源辨识", "辨识记录", "LEC", "JHA"],
 }
 
 # ── 始终激活的工具（基础能力，任何意图都带）────────────────────
 _ALWAYS_INCLUDE = {"knowledge_search"}
 
 
-def select_tool_names(user_message: str) -> list[str]:
-    """根据用户消息意图返回推荐的活跃工具名列表。
+# ── 核心兜底集（1-D：置信不足/无匹配时挂载，永不回退全量）─────────
+CORE_FALLBACK_TOOLS: frozenset[str] = frozenset({
+    "knowledge_search", "web_search",
+    "query_hazards", "query_hazard_stats",
+    "query_latest_regulations", "query_special_op_records",
+    "query_chemical_inventory", "query_fire_alarms", "query_central_alarms",
+    "query_drills", "query_oh",
+    "generate_daily_report", "generate_supervision_bulletin",
+    "office_search_files", "office_read_docx",
+})
 
-    规则：
-    1. 关键词匹配 → 按 INTENT_KEYWORDS 打分
-    2. 始终包含 knowledge_search（基础能力）
-    3. 无匹配时返回 None（调用方使用全量工具作为回退）
 
-    Returns:
-        工具名列表；空列表或匹配数为 0 时返回 None（表示全量回退）。
+@dataclass(frozen=True)
+class RoutingDecision:
+    """一次路由决策（写入 ai_call_audits.extra.routing 供持续调优）。"""
+
+    tool_names: list[str]
+    domains: tuple[str, ...] = ()
+    path: str = "core_fallback"   # rule | embedding | office_reference | core_fallback
+    confidence: float | None = None
+
+
+def route_message(user_message: str | None) -> RoutingDecision:
+    """两段式路由入口（1-D 骨架：规则快速路径 + 兜底核心 15，永不返回全量）。
+
+    - 办公链接/token → office 域工具集（不再全量回退）
+    - 关键词命中 → 命中域工具集 ∪ knowledge_search
+    - 无命中 → 核心兜底 15（T10 嵌入层将在规则 miss 后、兜底前介入）
+    - 任何内部异常 → 核心兜底 15（路由永不抛出、永不放大工具面）
     """
-    if not user_message or not user_message.strip():
-        return None
+    try:
+        return _route_rule(user_message)
+    except Exception:
+        logger.exception("route_message failed → core fallback")
+        return RoutingDecision(sorted(CORE_FALLBACK_TOOLS))
 
-    # 纯办公链接/token 交给 executor 全量回退，不做关键词收窄
+
+def _route_rule(user_message: str | None) -> RoutingDecision:
+    if not user_message or not user_message.strip():
+        return RoutingDecision(sorted(CORE_FALLBACK_TOOLS))
+
+    # 办公链接/显式 token：挂 office 域全量读写（旧路径曾回退全量 76 工具）
     if has_office_reference(user_message):
-        logger.debug("tool_selector: office link/token → fallback to all tools")
-        return None
+        tools = sorted(set(TOOL_GROUPS["office"]) | set(_ALWAYS_INCLUDE))
+        return RoutingDecision(
+            tools, domains=("office",), path="office_reference",
+        )
 
     msg_lower = user_message.lower()
     matched: set[str] = set()
-
     for group, keywords in INTENT_KEYWORDS.items():
         if any(kw.lower() in msg_lower for kw in keywords):
             matched.add(group)
 
     if not matched:
-        logger.debug("tool_selector: no intent matched → fallback to all tools")
-        return None
+        # T10：此处将接入嵌入相似度层（开关 SAFETY_AGENT_ROUTER_EMBEDDING）
+        return RoutingDecision(sorted(CORE_FALLBACK_TOOLS))
 
-    # 收拢工具名
     tool_names: set[str] = set(_ALWAYS_INCLUDE)
     for g in matched:
         tool_names.update(TOOL_GROUPS.get(g, []))
-
     result = sorted(tool_names)
     logger.debug(
-        "tool_selector: matched groups=%s → %d tools: %s",
-        sorted(matched), len(result), result,
+        "tool_selector: matched groups=%s → %d tools", sorted(matched), len(result),
     )
-    return result
+    return RoutingDecision(result, domains=tuple(sorted(matched)), path="rule")
+
+
+def select_tool_names(user_message: str) -> list[str]:
+    """兼容入口：返回路由决策的工具名列表（1-D 起永不返回 None）。"""
+    return route_message(user_message).tool_names
 
 
 # ── office 链接/token 命中检测 ────────────────────────────────────
-# executor 在命中飞书办公链接或显式 token 时绕过子集选择，直接使用全量 Agent，
-# 避免 augment_office_query 注入的提示（含“文档/表格”等词）反而把工具收窄。
+# 1-D：命中时路由到 office 域工具集（14 个读写），不再回退全量 Agent。
 
 _OFFICE_LINK_RE = re.compile(
     r"https?://[^\s<>)]+\.feishu\.cn/"
@@ -210,8 +238,7 @@ _OFFICE_TOKEN_REFERENCE_RE = re.compile(
 def has_office_reference(user_message: str) -> bool:
     """检测消息中是否包含飞书办公链接或显式文件 token。
 
-    命中时调用方应回退全量工具（``get_agent_for_tools(None)``），
-    而不是用关键词子集把办公读写工具摘除。
+    命中时路由挂 office 域全量读写工具（1-D：不再回退全量 Agent）。
     """
     if not user_message:
         return False

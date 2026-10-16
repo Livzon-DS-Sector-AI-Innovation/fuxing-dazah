@@ -120,6 +120,21 @@ async def run_turn(
 
     started = time.monotonic()
     trace_id: str | None = None
+
+    # 1-D：路由决策（命中域/路径/置信度）——工具面选择与审计同源
+    routing_extra: dict | None = None
+    routed_tools: list[str] | None = None
+    if user_message:
+        from app.modules.safety.business_agent.tool_selector import route_message
+
+        decision = route_message(user_message)
+        routed_tools = decision.tool_names
+        routing_extra = {
+            "domains": list(decision.domains),
+            "path": decision.path,
+            "confidence": decision.confidence,
+            "tool_count": len(decision.tool_names),
+        }
     try:
         # 审计作用域：最外层开 safety.agent_chat 根 span（tracing 启用时），
         # 并让工具内嵌套的知识库 AI 调用继承 用户/会话/渠道/trace_id
@@ -132,7 +147,11 @@ async def run_turn(
             user_name=deps.person.name if deps.person else None,
         ) as audit_ctx:
             trace_id = audit_ctx.trace_id
-            result = await _agent_run(user_message, deps, message_history=message_history)
+            result = await _agent_run(
+                user_message, deps,
+                message_history=message_history,
+                routed_tool_names=routed_tools,
+            )
     except Exception as e:
         logger.exception("agent run 失败")
         err_msg = f"抱歉，处理您的请求时发生内部错误，请输入/new重置会话后再尝试提问：{type(e).__name__}: {e}"
@@ -141,7 +160,7 @@ async def run_turn(
             answer=None, result=None, pending=None, sources=None, guard_hits=None,
             status="failed", error=f"{type(e).__name__}: {e}",
             latency_ms=int((time.monotonic() - started) * 1000),
-            trace_id=trace_id,
+            trace_id=trace_id, routing=routing_extra,
         )
         return {
             "answer": err_msg,
@@ -171,7 +190,7 @@ async def run_turn(
             deps, user_message,
             answer=_pending_prompt(pending), result=result, pending=pending,
             sources=sources, guard_hits=None, status="success", latency_ms=latency_ms,
-            trace_id=trace_id,
+            trace_id=trace_id, routing=routing_extra,
         )
         return {
             "answer": _pending_prompt(pending),
@@ -206,7 +225,7 @@ async def run_turn(
         answer=answer, result=result, pending=None, sources=sources,
         guard_hits=guard.banned_hits if not guard.ok else None,
         status="success", latency_ms=latency_ms,
-        trace_id=trace_id,
+        trace_id=trace_id, routing=routing_extra,
     )
 
     return {
@@ -618,6 +637,7 @@ async def _agent_run(
     message_history: list[ModelMessage] | None = None,
     deferred_tool_results: DeferredToolResults | None = None,
     resume_tool_names: list[str] | None = None,
+    routed_tool_names: list[str] | None = None,
 ):
     """统一的 agent.run() 调用包装。"""
     # S3 事件流：读历史优先从事件表 derive（derive_messages），回退旧 message_history。
@@ -651,17 +671,14 @@ async def _agent_run(
     # 按需选择工具子集（减少 tool definitions 开销 66%）
     # 必须在 prompt 组装之前算出来：tool_catalog 节要按「本轮真正挂载的工具」
     # 渲染，否则模型会被提示去调用一个不在工具表里的工具（"工具未挂载"根因）。
+    # 1-D：路由决策由 run_turn 经 route_message 算好传入（决策同步写审计）。
     selected_tools: list[str] | None = None
     if resume_tool_names:
         # 1-C：resume（写确认恢复）轮必须包含被确认的按需工具（如 URS），
         # 挂「常驻集 + pending 工具」，不允许退回全量。
         selected_tools = _resume_mount_tools(resume_tool_names)
-    elif user_message and deferred_tool_results is None:
-        from app.modules.safety.business_agent.tool_selector import select_tool_names
-
-        # 用原始用户消息做意图词匹配（不用拼了 prompt_prefix 的 effective_message，
-        # 否则 agent.md/上下文里的"法规/隐患/制度"等词会污染意图判定，导致全量注册工具）
-        selected_tools = select_tool_names(user_message)
+    else:
+        selected_tools = routed_tool_names
 
     # S4：system-prompt 分节组装（persona/runtime_date/user_context/memories/tool_catalog）
     # 替代旧 MemoryInjector 的 build_user_context + inject_memory_context 前缀拼接。
@@ -969,6 +986,7 @@ async def _audit_agent_turn(
     latency_ms: int,
     error: str | None = None,
     trace_id: str | None = None,
+    routing: dict | None = None,
 ) -> None:
     """将一轮 Agent 对话写入 safety.ai_call_audits。
 
@@ -982,6 +1000,9 @@ async def _audit_agent_turn(
 
         input_tokens, output_tokens = (None, None) if result is None else _extract_usage(result)
         extra: dict = {"role": deps.role}
+        if routing:
+            # 1-D：路由决策（域/路径/置信度/挂载数）入审计，供持续调优
+            extra["routing"] = routing
         if pending:
             extra["pending_action"] = {
                 "tool_name": pending.tool_name,

@@ -86,6 +86,7 @@ async def main() -> None:
         if subset is None:
             print(f"  「{q}」→ 全量回退({len(tools)} 个)")
             continue
+        # 1-D：路由永不 None；此分支仅为历史对照保留
         sub_bytes = sum(
             len(json.dumps(by_name[n], ensure_ascii=False).encode())
             for n in subset
