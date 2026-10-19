@@ -1,13 +1,14 @@
-"""MSDS 台账 → 知识库文章 + RAG chunk 索引。
+"""MSDS 台账 → 知识检索索引（ragplus 通路 / 本地旧管线双态）。
 
-让 MSDS 可被知识库检索：将每条 msds_documents 记录映射为
-knowledge_articles（category='sds'，source=法规标准库、tags=化学品管理），
-并复用 rebuild_article_chunks 生成 chunk + embedding（幂等：删旧重建）。
+让 MSDS 可被知识检索。ragplus 总闸（SAFETY_RAGPLUS_SEARCH_ENABLED）决定走向：
 
-触发点：
-- service/msds.py 写回管线（_create_registry_entries）
-- feishu/msds_bitable_handler.py 事件镜像（created/changed/deleted）
-- scripts/backfill_msds_to_knowledge.py 存量回填
+- 开（现行）：台账 28 字段结构化全文 → .md 文档上传 ragplus「MSDS」库
+  （换版 replace 语义；删除归「已废止」库留痕）。本函数是台账侧唯一
+  收口——三条触发链（service/msds.py 写回管线 _create_registry_entries、
+  feishu/msds_bitable_handler.py 事件镜像 created/changed/deleted、
+  scripts/tmp/backfill_msds_to_ragplus.py 存量回填）零改动接入。
+- 关（回退路径）：本地旧管线——映射 knowledge_articles
+  （category='sds'，source=法规标准库、tags=化学品管理）+ chunk embedding。
 
 注：当前全部非删除台账均纳入（审核流未上线）；未来如按 review_status
 收紧，可在 sync_msds_document_to_knowledge 入口处加过滤。
@@ -15,6 +16,7 @@ knowledge_articles（category='sds'，source=法规标准库、tags=化学品管
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
@@ -116,14 +118,88 @@ async def _find_article_by_msds(
     return await session.scalar(stmt)
 
 
+def _ragplus_biz_key(doc: MsdsDocument) -> str:
+    """ragplus 映射幂等键（registry 前缀=台账行；采集 PDF 侧用 collection: 前缀）。"""
+    rid = (doc.feishu_record_id or "").strip()
+    return f"registry:{rid}" if rid else f"registry:db-{doc.id}"
+
+
+async def _schedule_registry_ragplus_sync(
+    document_id: uuid.UUID, session=None,
+) -> dict:
+    """ragplus 通路：读 doc 构造 md blob → 后台任务上传 MSDS 库。
+
+    blob 在调度前于调用方 session 可见状态下构造（闭包携带），后台任务
+    自建 admin/session——不依赖调用方未提交事务，规避竞态。上传失败由
+    upload_document_to_ragplus 内部落 failed 映射 + 日志，不抛出。
+    """
+    stats: dict = {
+        "document_id": str(document_id),
+        "title": "",
+        "article_id": None,
+        "action": "skipped",
+        "chunks_created": 0,
+        "error": None,
+    }
+
+    own_session = session is None
+    if own_session:
+        session = async_session_factory()
+    try:
+        doc = await session.get(MsdsDocument, document_id)
+        if not doc or doc.is_deleted:
+            stats["error"] = f"MsdsDocument not found or deleted: {document_id}"
+            return stats
+        title = _article_title(doc)
+        biz_key = _ragplus_biz_key(doc)
+        blob = build_msds_full_text(doc).encode("utf-8")
+    finally:
+        if own_session:
+            await session.close()
+
+    if not blob:
+        stats["error"] = "empty full_text"
+        return stats
+    stats["title"] = title
+
+    from app.modules.safety.knowledge.ragplus_sync import (
+        KB_MSDS,
+        upload_document_to_ragplus,
+    )
+
+    async def _task() -> None:
+        try:
+            await upload_document_to_ragplus(
+                domain="msds", biz_key=biz_key, title=title,
+                file_name=f"{title}.md", blob=blob,
+                content_type="text/markdown", kb_name=KB_MSDS,
+            )
+        except Exception:
+            logger.exception("MSDS ragplus 后台上传异常: %s", biz_key)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning(
+            "无运行中的事件循环，MSDS ragplus 上传不调度: %s", biz_key,
+        )
+        stats["error"] = "no running event loop"
+        return stats
+    stats["task"] = loop.create_task(_task())
+    stats["action"] = "scheduled_ragplus"
+    return stats
+
+
 async def sync_msds_document_to_knowledge(
     document_id: uuid.UUID,
     session=None,
 ) -> dict:
-    """同步一条 MSDS 台账到知识库（幂等）。
+    """同步一条 MSDS 台账到知识检索（幂等）。
 
-    创建/更新 knowledge_articles 后调用 rebuild_article_chunks
-    重建 chunk + embedding（删旧重建）。失败仅记日志，不抛异常。
+    ragplus 开：后台上传 .md 全文到 ragplus「MSDS」库（换版 replace）。
+    ragplus 关：本地旧管线——创建/更新 knowledge_articles 后调用
+    rebuild_article_chunks 重建 chunk + embedding（删旧重建）。
+    失败仅记日志，不抛异常。
 
     Args:
         document_id: msds_documents.id
@@ -135,19 +211,7 @@ async def sync_msds_document_to_knowledge(
     from app.modules.safety.knowledge.ragplus_client import ragplus_search_enabled
 
     if ragplus_search_enabled():
-        # ragplus 通路：MSDS 知识检索走 ragplus「MSDS」库（供应商资料 PDF
-        # 由 msds_collection_handler/批量脚本上传），本地索引停用（二期删）。
-        logger.info(
-            "ragplus 通路：msds_indexer 本地索引停用: document_id=%s", document_id,
-        )
-        return {
-            "document_id": str(document_id),
-            "title": "",
-            "article_id": None,
-            "action": "skipped_ragplus",
-            "chunks_created": 0,
-            "error": None,
-        }
+        return await _schedule_registry_ragplus_sync(document_id, session)
 
     stats: dict = {
         "document_id": str(document_id),
@@ -219,14 +283,73 @@ async def sync_msds_document_to_knowledge(
     return stats
 
 
+async def _schedule_registry_ragplus_archive(
+    document_id: uuid.UUID, session=None,
+) -> dict:
+    """ragplus 通路：后台任务归档（主库删 + md 全文移「已废止」库留痕）。
+
+    调用方（msds_bitable_handler._handle_deleted）已先软删镜像行——doc
+    仍可读（含 is_deleted 行），据此重建 md blob 归档。blob 缺失时
+    archive_document_to_ragplus 仅删主库 + 映射标 deleted（法规同款）。
+    """
+    stats: dict = {"document_id": str(document_id), "removed": 0}
+
+    own_session = session is None
+    if own_session:
+        session = async_session_factory()
+    try:
+        doc = await session.get(MsdsDocument, document_id)
+        if not doc:
+            stats["error"] = f"MsdsDocument not found: {document_id}"
+            return stats
+        title = _article_title(doc)
+        biz_key = _ragplus_biz_key(doc)
+        blob = build_msds_full_text(doc).encode("utf-8") or None
+    finally:
+        if own_session:
+            await session.close()
+
+    from app.modules.safety.knowledge.ragplus_sync import (
+        archive_document_to_ragplus,
+    )
+
+    async def _task() -> None:
+        try:
+            await archive_document_to_ragplus(
+                domain="msds", biz_key=biz_key, title=title,
+                file_name=f"{title}.md", blob=blob,
+                content_type="text/markdown",
+            )
+        except Exception:
+            logger.exception("MSDS ragplus 后台归档异常: %s", biz_key)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning(
+            "无运行中的事件循环，MSDS ragplus 归档不调度: %s", biz_key,
+        )
+        stats["error"] = "no running event loop"
+        return stats
+    stats["task"] = loop.create_task(_task())
+    stats["action"] = "scheduled_ragplus_archive"
+    return stats
+
+
 async def remove_msds_from_knowledge(
     document_id: uuid.UUID,
     session=None,
 ) -> dict:
-    """移除 MSDS 台账对应的知识文章（软删）及其 chunks。
+    """移除 MSDS 台账对应的知识索引（幂等）。
 
-    配合台账删除调用；幂等（文章不存在时静默跳过）。
+    ragplus 开：后台归档——主库删文档 + md 全文移「已废止」库（对齐
+    法规删除口径）。ragplus 关：本地旧管线——软删知识文章及其 chunks。
     """
+    from app.modules.safety.knowledge.ragplus_client import ragplus_search_enabled
+
+    if ragplus_search_enabled():
+        return await _schedule_registry_ragplus_archive(document_id, session)
+
     stats: dict = {"document_id": str(document_id), "removed": 0}
 
     own_session = session is None

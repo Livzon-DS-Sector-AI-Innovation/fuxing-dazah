@@ -19,9 +19,10 @@ from app.modules.safety.feishu import (
 from app.modules.safety.feishu import msds_collection_handler as msds_handler
 from app.modules.safety.knowledge import ragplus_sync
 from app.modules.safety.knowledge.msds_indexer import (
+    remove_msds_from_knowledge,
     sync_msds_document_to_knowledge,
 )
-from app.modules.safety.models import RagplusDocMap
+from app.modules.safety.models import MsdsDocument, RagplusDocMap
 
 _SWITCH = "SAFETY_RAGPLUS_SEARCH_ENABLED"
 
@@ -268,8 +269,10 @@ class TestScheduleFromAttachment:
 
 
 class TestIngestShortCircuits:
-    async def test_msds_indexer_short_circuits_when_enabled(self, monkeypatch) -> None:
-        """开关开：msds_indexer 入口直接短路，不触达 chunk 重建。"""
+    async def test_msds_indexer_schedules_ragplus_upload_when_enabled(
+        self, monkeypatch, db_session,
+    ) -> None:
+        """开关开：台账行 → 后台上传调度（md 全文 + registry: 键），不触达本地重建。"""
         monkeypatch.setenv(_SWITCH, "true")
         from app.modules.safety.knowledge import chunk_service
 
@@ -277,9 +280,91 @@ class TestIngestShortCircuits:
             raise AssertionError("开关开时不应执行本地 chunk 重建")
 
         monkeypatch.setattr(chunk_service, "rebuild_article_chunks", _fail)
+        db_session.add(
+            MsdsDocument(
+                name="异丙醇",
+                feishu_record_id="recT1",
+                cas_no="67-63-0",
+                hazard_statement="高度易燃液体和蒸气",
+            )
+        )
+        await db_session.flush()
+        doc = (
+            await db_session.execute(select(MsdsDocument))
+        ).scalar_one()
+
+        uploaded = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "app.modules.safety.knowledge.ragplus_sync.upload_document_to_ragplus",
+            uploaded,
+        )
+
+        stats = await sync_msds_document_to_knowledge(doc.id, session=db_session)
+        assert stats["action"] == "scheduled_ragplus"
+        assert stats["task"] is not None
+        await stats["task"]
+
+        uploaded.assert_awaited_once()
+        kwargs = uploaded.await_args.kwargs
+        assert kwargs["domain"] == "msds"
+        assert kwargs["biz_key"] == "registry:recT1"
+        assert kwargs["kb_name"] == ragplus_sync.KB_MSDS
+        assert kwargs["content_type"] == "text/markdown"
+        assert kwargs["title"] == "异丙醇"
+        assert kwargs["file_name"] == "异丙醇.md"
+        text = kwargs["blob"].decode("utf-8")
+        assert "物质名称：异丙醇" in text
+        assert "CAS号：67-63-0" in text
+
+    async def test_msds_indexer_no_doc_when_enabled(self, monkeypatch) -> None:
+        """开关开 + 行不存在：不调度上传（自建 session 路径），记 error。"""
+        monkeypatch.setenv(_SWITCH, "true")
+        uploaded = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "app.modules.safety.knowledge.ragplus_sync.upload_document_to_ragplus",
+            uploaded,
+        )
 
         stats = await sync_msds_document_to_knowledge(uuid.uuid4())
-        assert stats["action"] == "skipped_ragplus"
+        assert stats["action"] == "skipped"
+        assert stats["error"]
+        uploaded.assert_not_awaited()
+
+    async def test_msds_indexer_remove_schedules_ragplus_archive_when_enabled(
+        self, monkeypatch, db_session,
+    ) -> None:
+        """开关开：台账删除 → 后台归档调度（md 全文留痕 + registry: 键）。"""
+        monkeypatch.setenv(_SWITCH, "true")
+        db_session.add(
+            MsdsDocument(
+                name="乙醇",
+                feishu_record_id="recT2",
+                cas_no="64-17-5",
+                is_deleted=True,  # 调用方（_handle_deleted）已先软删
+            )
+        )
+        await db_session.flush()
+        doc = (
+            await db_session.execute(select(MsdsDocument))
+        ).scalar_one()
+
+        archived = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "app.modules.safety.knowledge.ragplus_sync.archive_document_to_ragplus",
+            archived,
+        )
+
+        stats = await remove_msds_from_knowledge(doc.id, session=db_session)
+        assert stats["action"] == "scheduled_ragplus_archive"
+        assert stats["task"] is not None
+        await stats["task"]
+
+        archived.assert_awaited_once()
+        kwargs = archived.await_args.kwargs
+        assert kwargs["domain"] == "msds"
+        assert kwargs["biz_key"] == "registry:recT2"
+        assert kwargs["file_name"] == "乙醇.md"
+        assert "物质名称：乙醇" in kwargs["blob"].decode("utf-8")
 
     async def test_msds_indexer_runs_when_disabled(self, monkeypatch) -> None:
         """开关关：走旧路径（document 不存在 → 记 error 返回，不异常）。"""
@@ -336,6 +421,7 @@ class TestMsdsCollectionHook:
         pg_id = uuid.uuid4()
         task = msds_handler._schedule_ragplus_upload(
             pg_id,
+            "recC1",
             [{"file_token": "ft-1", "name": "供应商A.pdf", "type": "application/pdf"}],
         )
         assert task is not None
@@ -345,7 +431,7 @@ class TestMsdsCollectionHook:
         uploaded.assert_awaited_once()
         kwargs = uploaded.await_args.kwargs
         assert kwargs["domain"] == "msds"
-        assert kwargs["biz_key"] == str(pg_id)
+        assert kwargs["biz_key"] == "collection:recC1"
         assert kwargs["kb_name"] == ragplus_sync.KB_MSDS
 
     async def test_collection_upload_skipped_when_disabled(self, monkeypatch) -> None:
@@ -358,6 +444,7 @@ class TestMsdsCollectionHook:
         assert (
             msds_handler._schedule_ragplus_upload(
                 uuid.uuid4(),
+                "recC2",
                 [{"file_token": "ft-1", "name": "a.pdf"}],
             )
             is None
