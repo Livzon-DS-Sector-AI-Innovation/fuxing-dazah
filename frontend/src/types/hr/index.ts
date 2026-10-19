@@ -1035,6 +1035,11 @@ export interface DashboardSummary {
   new_hires_this_month: number
   departures_this_month: number
   age_avg: number
+  probation_count: number
+  avg_tenure: number
+  net_growth_this_month: number
+  passive_departures: number
+  contract_expiry_90: number
 }
 
 export interface DistributionItem {
@@ -1070,6 +1075,9 @@ export interface DashboardStats {
   monthly_departure_comparison: MonthlyComparisonItem[]
   departures_by_dept: DistributionItem[]
   distributions: Record<string, DistributionItem[]>
+  position_departure_top: DistributionItem[]
+  monthly_departure_rate: MonthlyItem[]
+  contract_expiry: DistributionItem[]
 }
 
 // ─── 职称评审（v2 投票制） ───

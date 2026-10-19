@@ -854,6 +854,169 @@ async def get_dashboard_stats(
         {"name": r[0], "value": r[1]} for r in dep_by_dept_rows
     ]
 
+    # ── 扩展指标：试用期/司龄/合同预警/留存/离职深度分析 ──
+    from datetime import timedelta as _td
+
+    from app.modules.hr.models import DepartureRecord as DepModel
+
+    today = date.today()
+
+    def _dep_scope_conds():
+        """离职记录数据范围：部门快照落在授权范围；unrestricted 返回 []。"""
+        if hr_scope.is_unrestricted:
+            return []
+        if hr_scope.data_scope == "self_only":
+            return [DepModel.name == ""]  # self_only 不看离职明细
+        return [DepModel.department.in_(hr_scope.scoped_departments)]
+
+    # 试用期人数
+    probation_count = (await session.execute(
+        select(func.count(EmpModel.id)).where(
+            *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.status == "试用期",
+        )
+    )).scalar() or 0
+
+    # 平均司龄（年，按入职日期动态计算）
+    avg_tenure = 0.0
+    hire_rows = (await session.execute(
+        select(EmpModel.hire_date).where(
+            *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.status == "在职", EmpModel.hire_date.is_not(None),
+        )
+    )).scalars().all()
+    if hire_rows:
+        avg_tenure = round(sum((today - h).days for h in hire_rows) / len(hire_rows) / 365, 1)
+
+    # 本月净增
+    net_growth = (new_hires_this_month or 0) - (departures_this_month or 0)
+
+    # 合同到期预警（30/60/90 天三档）
+    contract_expiry = []
+    for days, label in [(30, "30天内"), (60, "31-60天"), (90, "61-90天")]:
+        lo = today + _td(days=(0 if days == 30 else (30 if days == 60 else 61)))
+        hi = today + _td(days=days)
+        cnt = (await session.execute(
+            select(func.count(EmpModel.id)).where(
+                *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+                EmpModel.status == "在职",
+                EmpModel.contract_end_date >= lo,
+                EmpModel.contract_end_date <= hi,
+            )
+        )).scalar() or 0
+        contract_expiry.append({"name": label, "value": cnt})
+
+    # 离职类型分布（offboarding_type）
+    dep_type_rows = (await session.execute(
+        select(DepModel.offboarding_type, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
+        .group_by(DepModel.offboarding_type)
+    )).all()
+    departure_type_distribution = [
+        {"name": r[0] or "未填写", "value": r[1]} for r in dep_type_rows
+    ]
+    passive_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" not in r[0])
+
+    # 离职原因分布（JSON 文本归一化：null/"null"/空 → 未填写）
+    dep_reason_rows = (await session.execute(
+        select(DepModel.offboarding_reason, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
+        .group_by(DepModel.offboarding_reason)
+    )).all()
+    reason_map: dict[str, int] = {}
+    for raw, cnt in dep_reason_rows:
+        text = str(raw) if raw is not None else ""
+        text = text.strip().strip('"')
+        if text in ("", "null", "None"):
+            text = "未填写"
+        reason_map[text] = reason_map.get(text, 0) + int(cnt)
+    departure_reason_distribution = [
+        {"name": k, "value": v} for k, v in sorted(reason_map.items(), key=lambda x: -x[1])
+    ]
+
+    # 离职司龄分布（工作起始→离职日期，年）
+    dep_tenure_rows = (await session.execute(
+        select(DepModel.work_start_date, DepModel.offboarding_date)
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False,  # noqa: E712
+               DepModel.work_start_date.is_not(None), DepModel.offboarding_date.is_not(None))
+    )).all()
+    tenure_buckets = [("1年以内", 0, 1), ("1-3年", 1, 3), ("3-5年", 3, 5), ("5-10年", 5, 10), ("10年以上", 10, 99)]
+    tenure_counts = {label: 0 for label, _, _ in tenure_buckets}
+    for ws, off in dep_tenure_rows:
+        years = (off - ws).days / 365
+        for label, lo, hi in tenure_buckets:
+            if lo <= years < hi:
+                tenure_counts[label] += 1
+                break
+    departure_tenure_distribution = [{"name": k, "value": v} for k, v in tenure_counts.items()]
+
+    # 岗位离职 TOP10
+    dep_pos_rows = (await session.execute(
+        select(DepModel.position, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
+        .group_by(DepModel.position)
+        .order_by(func.count(DepModel.id).desc())
+        .limit(10)
+    )).all()
+    position_departure_top = [{"name": r[0] or "未填写", "value": r[1]} for r in dep_pos_rows]
+
+    # 各部门离职率（2026 离职人数 / 当前部门在职人数，%）
+    dept_headcount_rows = (await session.execute(
+        select(EmpModel.department, func.count(EmpModel.id))
+        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .group_by(EmpModel.department)
+    )).all()
+    dept_headcount = {r[0]: r[1] for r in dept_headcount_rows}
+    dept_dep_rate_rows = (await session.execute(
+        select(DepModel.department, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False,  # noqa: E712
+               DepModel.offboarding_date >= date(current_year, 1, 1))
+        .group_by(DepModel.department)
+    )).all()
+    dept_departure_rate = []
+    for dept, cnt in dept_dep_rate_rows:
+        headcount = dept_headcount.get(dept, 0)
+        rate = round(cnt / headcount * 100, 1) if headcount else 0.0
+        dept_departure_rate.append({"name": dept or "未填写", "value": rate})
+
+    # 月度离职率（2026 每月离职 / 当前在职总数，%）
+    monthly_dep_rate = []
+    for m in range(1, 13):
+        lo = date(current_year, m, 1)
+        hi = date(current_year, m + 1, 1) if m < 12 else date(current_year + 1, 1, 1)
+        cnt = (await session.execute(
+            select(func.count(DepModel.id)).where(
+                *_dep_scope_conds(), DepModel.is_deleted == False,  # noqa: E712
+                DepModel.offboarding_date >= lo, DepModel.offboarding_date < hi,
+            )
+        )).scalar() or 0
+        monthly_dep_rate.append({
+            "month": f"{m}月",
+            "value": round(cnt / total_employees * 100, 2) if total_employees else 0.0,
+        })
+
+    # 新员工 3/6 个月留存率（入职满 N 个月仍在职 / 入职满 N 个月总数）
+    async def _retention(months: int) -> float:
+        boundary = today - _td(days=months * 30)
+        hired_rows = (await session.execute(
+            select(EmpModel.hire_date, EmpModel.departure_date).where(
+                *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+                EmpModel.hire_date.is_not(None), EmpModel.hire_date <= boundary,
+            )
+        )).all()
+        if not hired_rows:
+            return 0.0
+        retained = sum(
+            1 for h, d in hired_rows
+            if d is None or (d - h).days >= months * 30
+        )
+        return round(retained / len(hired_rows) * 100, 1)
+
+    retention_distribution = [
+        {"name": "3个月留存率(%)", "value": await _retention(3)},
+        {"name": "6个月留存率(%)", "value": await _retention(6)},
+    ]
+
     # ── 在职员工平均年龄（从出生年份动态计算）──
     age_avg_result = (await session.execute(
         select(func.avg(current_year - EmpModel.birth_year)).where(
@@ -871,6 +1034,11 @@ async def get_dashboard_stats(
             "new_hires_this_month": new_hires_this_month,
             "departures_this_month": departures_this_month,
             "age_avg": age_avg,
+            "probation_count": probation_count,
+            "avg_tenure": avg_tenure,
+            "net_growth_this_month": net_growth,
+            "passive_departures": passive_departures,
+            "contract_expiry_90": sum(x["value"] for x in contract_expiry),
         },
         "education_distribution": education_distribution,
         "department_distribution": department_distribution,
@@ -890,7 +1058,15 @@ async def get_dashboard_stats(
             "contract_type": contract_type_distribution,
             "household_type": household_type_distribution,
             "tenure": tenure_distribution,
+            "departure_type": departure_type_distribution,
+            "departure_reason": departure_reason_distribution,
+            "departure_tenure": departure_tenure_distribution,
+            "dept_departure_rate": dept_departure_rate,
+            "retention": retention_distribution,
         },
+        "position_departure_top": position_departure_top,
+        "monthly_departure_rate": monthly_dep_rate,
+        "contract_expiry": contract_expiry,
     })
 
 
