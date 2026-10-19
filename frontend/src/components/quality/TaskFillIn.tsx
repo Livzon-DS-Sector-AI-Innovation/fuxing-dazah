@@ -295,6 +295,7 @@ export default function TaskFillIn() {
         production_date: values.production_date ? values.production_date.format('YYYY-MM-DD') : undefined,
         specification: values.specification,
         report_date: values.report_date ? values.report_date.format('YYYY-MM-DD') : undefined,
+        culture_days: values.culture_days,
         standard_document_ids: values.standard_document_ids,
         standard_item_ids: values.sop_ids,
       })
@@ -557,6 +558,12 @@ export default function TaskFillIn() {
           <Form.Item name="report_date" label="出报日期（可选，后续可在列表中补录）">
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
+              <Form.Item
+                name="culture_days" label="培养天数（微生物样品，可选）"
+                tooltip="填写后若未给出报日期，出报日期自动=生产日期+培养天数"
+              >
+                <Input type="number" min={0} max={120} />
+              </Form.Item>
         </Form>
       </Modal>
     </div>

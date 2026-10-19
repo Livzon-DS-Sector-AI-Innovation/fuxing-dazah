@@ -113,8 +113,23 @@ class _TaskLifecycle(_TaskCore):
 
         # 日期分隔符归一化：支持 2026.01.01 / 2026/01/01 等写法
         production_date = _norm_date_str(payload.production_date)
-        report_date = _norm_date_str(payload.report_date)
+        # 出报日期：微生物样品给出培养天数且未给出报日期时自动计算（检测日期+培养天数）
+        report_date: str | None
         # 效期：未显式指定时按主标准文档有效期自动计算（生产日期+x年-1天）
+        if payload.culture_days and not _norm_date_str(payload.report_date):
+            from datetime import timedelta as _td
+
+            from app.core.time import today as _today
+
+            base = _norm_date_str(payload.production_date)
+            if base:
+                from datetime import date as _date
+
+                report_date = (_date.fromisoformat(base) + _td(days=payload.culture_days)).isoformat()
+            else:
+                report_date = (_today() + _td(days=payload.culture_days)).isoformat()
+        else:
+            report_date = _norm_date_str(payload.report_date) or None
         expiry_date = _norm_date_str(payload.expiry_date) or _TaskLifecycle._calc_expiry(
             production_date, primary.valid_years
         )
@@ -130,6 +145,7 @@ class _TaskLifecycle(_TaskCore):
                 standard_document_id=primary.id,
                 report_date=report_date,
                 standard_document_ids=[str(d.id) for d in docs],
+                culture_days=payload.culture_days,
             )
         except IntegrityError as exc:
             # 并发建任务撞唯一索引：应用层查重非原子，DB 兜底转 409

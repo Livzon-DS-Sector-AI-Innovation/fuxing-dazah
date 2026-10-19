@@ -192,6 +192,8 @@ async def _push_material_alerts() -> None:
     )
     from app.modules.quality.feishu.message import send_chat_text
     from app.modules.quality.repository import (
+        lab_expiry_alerts,
+        list_inspection_plans,
         material_expiry_alerts,
         supplier_qual_alerts,
     )
@@ -207,6 +209,8 @@ async def _push_material_alerts() -> None:
         alerts = await material_expiry_alerts(db)
         suggestions = await MaterialContainerService.purchase_suggestions(db)
         supplier_alerts = await supplier_qual_alerts(db)
+        lab_alerts = await lab_expiry_alerts(db)
+        today_plans = await list_inspection_plans(db, date_str=_app_today().isoformat())
     blocks: list[str] = []
     if supplier_alerts:
         lines = [

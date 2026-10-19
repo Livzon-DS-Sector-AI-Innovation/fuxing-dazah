@@ -639,3 +639,38 @@ export interface MaterialStandardRow {
   remark: string | null
   created_at: string
 }
+
+
+// ─── 试剂/仪器台账与请检计划 ───
+
+export type LabItemType = 'reagent' | 'reference_standard' | 'titrant' | 'instrument'
+
+export const LAB_ITEM_TYPE_META: Record<LabItemType, string> = {
+  reagent: '试剂',
+  reference_standard: '对照品',
+  titrant: '滴定液',
+  instrument: '仪器校验',
+}
+
+export interface LabItem {
+  id: string
+  item_type: LabItemType
+  name: string
+  batch_no: string | null
+  spec: string | null
+  opened_at: string | null
+  expiry_date: string | null
+  remark: string | null
+  created_at: string
+}
+
+export interface InspectionPlan {
+  id: string
+  department: string
+  product_name: string
+  batch_no: string | null
+  plan_time: string
+  status: 'pending' | 'inspected'
+  remark: string | null
+  created_at: string
+}

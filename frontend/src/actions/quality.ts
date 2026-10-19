@@ -30,6 +30,8 @@ import type {
   PurchaseSuggestion,
   SupplierItem,
   StocktakeSheet,
+  LabItem,
+  InspectionPlan,
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
@@ -451,6 +453,7 @@ export async function createTestTask(data: {
   specification?: string
   form_id?: string
   report_date?: string
+  culture_days?: number
   standard_document_id?: string
   standard_document_ids?: string[]
   standard_item_ids?: string[]
@@ -1427,4 +1430,102 @@ export async function fetchDashboardTrend(days = 7): Promise<{ data: { date: str
   })
   if (!res.ok) throw new Error('获取看板趋势失败')
   return res.json()
+}
+
+
+// ─── 试剂/仪器台账与请检计划 ───
+
+export async function fetchLabItems(itemType?: string, q?: string): Promise<{ data: LabItem[] }> {
+  const params = new URLSearchParams()
+  if (itemType) params.set('item_type', itemType)
+  if (q) params.set('q', q)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lab-items${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取台账失败')
+  return res.json()
+}
+
+export async function createLabItem(input: Partial<LabItem>): Promise<{ message: string; data: LabItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lab-items`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '新增失败')
+  }
+  return res.json()
+}
+
+export async function updateLabItem(id: string, input: Partial<LabItem>): Promise<{ message: string; data: LabItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lab-items/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error('更新失败')
+  return res.json()
+}
+
+export async function deleteLabItem(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lab-items/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除失败')
+  return res.json()
+}
+
+export async function fetchInspectionPlans(date?: string, department?: string): Promise<{ data: InspectionPlan[] }> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  if (department) params.set('department', department)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取请检计划失败')
+  return res.json()
+}
+
+export async function createInspectionPlan(input: Partial<InspectionPlan>): Promise<{ message: string; data: InspectionPlan }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '新增失败')
+  }
+  return res.json()
+}
+
+export async function updateInspectionPlanStatus(id: string, status: 'pending' | 'inspected'): Promise<{ message: string; data: InspectionPlan }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans/${id}/status`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+  if (!res.ok) throw new Error('状态更新失败')
+  return res.json()
+}
+
+export async function importInspectionPlans(file: File): Promise<{ message: string; data: { created: string[]; skipped: string[] } }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans/import`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '导入失败')
+  }
+  return res.json()
+}
+
+export async function downloadInspectionPlanTemplate(): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans/template`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('模板下载失败')
+  return res.blob()
 }

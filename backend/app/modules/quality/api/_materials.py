@@ -13,10 +13,13 @@ from app.core.response import paginated_response, success_response
 from app.modules.quality.api._common import router
 from app.modules.quality.repository import (
     create_container_movement,
+    create_inspection_plan,
+    create_lab_item,
     create_material,
     create_material_standard,
     create_material_standard_item,
     create_supplier,
+    delete_lab_item,
     delete_material,
     delete_supplier,
     get_material_by_code,
@@ -28,6 +31,8 @@ from app.modules.quality.repository import (
     list_container_movements,
     list_containers_by_nos,
     list_in_stock_containers,
+    list_inspection_plans,
+    list_lab_items,
     list_material_containers,
     list_material_movements,
     list_material_requests,
@@ -42,6 +47,8 @@ from app.modules.quality.repository import (
     material_stock_summary,
     material_today_stats,
     update_container_location,
+    update_inspection_plan_status,
+    update_lab_item,
     update_material,
     update_supplier,
 )
@@ -52,6 +59,12 @@ from app.modules.quality.schemas import (
     ContainerMovementOut,
     ContainerMoveRequest,
     ContainerStatusUpdate,
+    InspectionPlanCreate,
+    InspectionPlanOut,
+    InspectionPlanUpdate,
+    LabItemCreate,
+    LabItemOut,
+    LabItemUpdate,
     MaterialContainerGenerateRequest,
     MaterialContainerListItem,
     MaterialContainerOut,
@@ -883,4 +896,173 @@ async def list_material_standard_items_endpoint(
     items = await list_material_standard_items(db, standard_id)
     return success_response(
         data=[MaterialStandardItemOut.model_validate(i).model_dump(mode="json") for i in items]
+    )
+
+
+# ─── 试剂/仪器台账 ───
+
+
+@router.get("/lab-items", summary="试剂/对照品/滴定液/仪器校验台账列表")
+async def list_lab_items_endpoint(
+    item_type: str | None = Query(default=None, description="reagent/reference_standard/titrant/instrument"),
+    q: str | None = Query(default=None, description="名称模糊"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await list_lab_items(db, item_type=item_type, q=q)
+    items = [LabItemOut.model_validate(r).model_dump(mode="json") for r in rows]
+    return success_response(data=items)
+
+
+@router.post("/lab-items", summary="新增台账条目", status_code=201)
+async def create_lab_item_endpoint(
+    payload: LabItemCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    item = await create_lab_item(db, payload.model_dump())
+    return success_response(
+        data=LabItemOut.model_validate(item).model_dump(mode="json"),
+        message="已新增", status_code=201,
+    )
+
+
+@router.put("/lab-items/{item_id}", summary="更新台账条目")
+async def update_lab_item_endpoint(
+    item_id: uuid.UUID,
+    payload: LabItemUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    item = await update_lab_item(db, item_id, payload.model_dump(exclude_none=True))
+    if item is None:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return success_response(
+        data=LabItemOut.model_validate(item).model_dump(mode="json"),
+        message="已更新",
+    )
+
+
+@router.delete("/lab-items/{item_id}", summary="删除台账条目（软删除）")
+async def delete_lab_item_endpoint(
+    item_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    if not await delete_lab_item(db, item_id):
+        raise HTTPException(status_code=404, detail="条目不存在")
+    return success_response(message="已删除")
+
+
+# ─── 请检计划 ───
+
+
+@router.get("/inspection-plans", summary="请检计划列表（可按日期/车间筛选）")
+async def list_inspection_plans_endpoint(
+    date: str | None = Query(default=None, description="计划日期 YYYY-MM-DD"),
+    department: str | None = Query(default=None, description="车间模糊"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await list_inspection_plans(db, date_str=date, department=department)
+    items = [InspectionPlanOut.model_validate(r).model_dump(mode="json") for r in rows]
+    return success_response(data=items)
+
+
+@router.post("/inspection-plans", summary="手动新增请检计划", status_code=201)
+async def create_inspection_plan_endpoint(
+    payload: InspectionPlanCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    plan = await create_inspection_plan(db, payload.model_dump())
+    return success_response(
+        data=InspectionPlanOut.model_validate(plan).model_dump(mode="json"),
+        message="计划已新增", status_code=201,
+    )
+
+
+@router.put("/inspection-plans/{plan_id}/status", summary="请检计划状态（待请检/已请检）")
+async def update_inspection_plan_endpoint(
+    plan_id: uuid.UUID,
+    payload: InspectionPlanUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    plan = await update_inspection_plan_status(db, plan_id, payload.status)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="计划不存在")
+    return success_response(
+        data=InspectionPlanOut.model_validate(plan).model_dump(mode="json"),
+        message="状态已更新",
+    )
+
+
+@router.post("/inspection-plans/import", summary="批量导入请检计划（Excel：车间/品种/批号/计划请检时间/备注）")
+async def import_inspection_plans_endpoint(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    wb = openpyxl.load_workbook(_io.BytesIO(content))
+    ws = lc_template_parser.active_sheet(wb)
+    created: list[str] = []
+    skipped: list[str] = []
+    header = next(ws.iter_rows(values_only=True), None)
+    columns = [str(h).strip() if h else "" for h in (header or [])]
+    for raw in ws.iter_rows(min_row=2, values_only=True):
+        if not raw or all(v is None or str(v).strip() == "" for v in raw):
+            continue
+        row = {col: (str(raw[i]).strip() if i < len(raw) and raw[i] is not None else "") for i, col in enumerate(columns) if col}
+        dept = row.get("车间") or row.get("department") or ""
+        product = row.get("品种") or row.get("product_name") or ""
+        plan_time = row.get("计划请检时间") or row.get("plan_time") or ""
+        if not dept or not product or not plan_time:
+            skipped.append(f"{product or '(缺品种)'}:字段缺失")
+            continue
+        async with db.begin_nested():
+            await create_inspection_plan(db, {
+                "department": dept,
+                "product_name": product,
+                "batch_no": row.get("批号") or row.get("batch_no") or None,
+                "plan_time": plan_time,
+                "remark": row.get("备注") or row.get("remark") or None,
+            })
+        created.append(f"{dept}-{product}")
+    return success_response(
+        data={"created": created, "skipped": skipped},
+        message=f"已导入 {len(created)} 条" + (f"，跳过 {len(skipped)} 条" if skipped else ""),
+    )
+
+
+@router.get("/inspection-plans/template", summary="请检计划导入模板下载")
+async def inspection_plan_template_endpoint(
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    ws.append(["车间", "品种", "批号", "计划请检时间", "备注"])
+    ws.append(["发酵一车间", "盐酸万古霉素", "HAF2610001", "2026-10-20 09:00", "示例"])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote("请检计划导入模板.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="plan-template.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )

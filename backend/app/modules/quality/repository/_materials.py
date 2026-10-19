@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException
 from app.modules.quality.models import (
     QualityContainerMovement,
+    QualityInspectionPlan,
+    QualityLabItem,
     QualityMaterial,
     QualityMaterialContainer,
     QualityMaterialRequest,
@@ -824,3 +826,114 @@ async def update_material_request(
     await db.flush()
     stmt = select(QualityMaterialRequest).where(QualityMaterialRequest.id == rid)
     return (await db.execute(stmt)).scalar_one()
+
+
+# ─── 试剂/仪器台账与请检计划 ───
+
+
+async def create_lab_item(db: AsyncSession, data: dict[str, Any]) -> QualityLabItem:
+    item = QualityLabItem(**data)
+    db.add(item)
+    await db.flush()
+    return item
+
+
+async def get_lab_item(db: AsyncSession, iid: uuid.UUID) -> QualityLabItem | None:
+    stmt = select(QualityLabItem).where(
+        QualityLabItem.id == iid, QualityLabItem.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_lab_items(
+    db: AsyncSession, item_type: str | None = None, q: str | None = None
+) -> list[QualityLabItem]:
+    conds = [QualityLabItem.is_deleted == False]  # noqa: E712
+    if item_type:
+        conds.append(QualityLabItem.item_type == item_type)
+    if q:
+        conds.append(QualityLabItem.name.ilike(f"%{q}%"))
+    stmt = select(QualityLabItem).where(*conds).order_by(QualityLabItem.expiry_date.asc().nulls_last())
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def update_lab_item(db: AsyncSession, iid: uuid.UUID, data: dict[str, Any]) -> QualityLabItem | None:
+    item = await get_lab_item(db, iid)
+    if item is None:
+        return None
+    for key, value in data.items():
+        setattr(item, key, value)
+    await db.flush()
+    stmt = select(QualityLabItem).where(QualityLabItem.id == iid)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_lab_item(db: AsyncSession, iid: uuid.UUID) -> bool:
+    item = await get_lab_item(db, iid)
+    if item is None:
+        return False
+    item.is_deleted = True
+    await db.flush()
+    return True
+
+
+async def lab_expiry_alerts(db: AsyncSession) -> list[dict[str, Any]]:
+    """试剂/仪器临期（≤30天）与已过期清单（推送提醒用）。"""
+    from app.core.time import today as _today
+
+    today_str = _today().isoformat()
+    deadline = func.to_char(func.now() + text("interval '30 days'"), "YYYY-MM-DD")
+    rows = await db.execute(
+        select(QualityLabItem).where(
+            QualityLabItem.is_deleted == False,  # noqa: E712
+            QualityLabItem.expiry_date.is_not(None),
+            QualityLabItem.expiry_date <= deadline,
+        ).order_by(QualityLabItem.expiry_date)
+    )
+    return [
+        {
+            "name": r.name,
+            "item_type": r.item_type,
+            "expiry_date": r.expiry_date,
+            "expired": bool(r.expiry_date and r.expiry_date < today_str),
+        }
+        for r in rows
+    ]
+
+
+async def create_inspection_plan(db: AsyncSession, data: dict[str, Any]) -> QualityInspectionPlan:
+    plan = QualityInspectionPlan(**data)
+    db.add(plan)
+    await db.flush()
+    return plan
+
+
+async def list_inspection_plans(
+    db: AsyncSession, date_str: str | None = None, department: str | None = None
+) -> list[QualityInspectionPlan]:
+    conds = [QualityInspectionPlan.is_deleted == False]  # noqa: E712
+    if date_str:
+        conds.append(QualityInspectionPlan.plan_time.like(f"{date_str}%"))
+    if department:
+        conds.append(QualityInspectionPlan.department.ilike(f"%{department}%"))
+    stmt = select(QualityInspectionPlan).where(*conds).order_by(QualityInspectionPlan.plan_time)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def get_inspection_plan(db: AsyncSession, pid: uuid.UUID) -> QualityInspectionPlan | None:
+    stmt = select(QualityInspectionPlan).where(
+        QualityInspectionPlan.id == pid, QualityInspectionPlan.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def update_inspection_plan_status(
+    db: AsyncSession, pid: uuid.UUID, status: str
+) -> QualityInspectionPlan | None:
+    plan = await get_inspection_plan(db, pid)
+    if plan is None:
+        return None
+    plan.status = status
+    await db.flush()
+    stmt = select(QualityInspectionPlan).where(QualityInspectionPlan.id == pid)
+    return (await db.execute(stmt)).scalar_one_or_none()

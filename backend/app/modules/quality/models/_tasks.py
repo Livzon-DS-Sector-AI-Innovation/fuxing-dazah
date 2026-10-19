@@ -50,6 +50,9 @@ class QualityTestTask(BaseModel):
     report_date: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="出报日期（YYYY-MM-DD，可后补；关联当日机器人任务推送）"
     )
+    culture_days: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="培养天数（微生物样品：出报日期自动=检测日期+培养天数）"
+    )
     specification: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="本批规格（从标准文档规格中选定，如 5kg/听）"
     )

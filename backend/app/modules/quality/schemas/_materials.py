@@ -360,3 +360,63 @@ class MaterialStandardOut(BaseModel):
     version: str | None
     remark: str | None
     created_at: datetime
+
+
+class LabItemCreate(BaseModel):
+    """试剂/对照品/滴定液/仪器校验台账新增。"""
+
+    item_type: Literal["reagent", "reference_standard", "titrant", "instrument"]
+    name: str = Field(max_length=200)
+    batch_no: str | None = Field(default=None, max_length=100)
+    spec: str | None = Field(default=None, max_length=100)
+    opened_at: str | None = Field(default=None, max_length=32, description="开封日期 YYYY-MM-DD")
+    expiry_date: str | None = Field(default=None, max_length=32, description="效期/下次校验日 YYYY-MM-DD")
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class LabItemUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    batch_no: str | None = Field(default=None, max_length=100)
+    spec: str | None = Field(default=None, max_length=100)
+    opened_at: str | None = Field(default=None, max_length=32)
+    expiry_date: str | None = Field(default=None, max_length=32)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class LabItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    item_type: str
+    name: str
+    batch_no: str | None
+    spec: str | None
+    opened_at: str | None
+    expiry_date: str | None
+    remark: str | None
+    created_at: datetime
+
+
+class InspectionPlanCreate(BaseModel):
+    department: str = Field(max_length=128, description="车间/部门")
+    product_name: str = Field(max_length=200, description="品种/产品名称")
+    batch_no: str | None = Field(default=None, max_length=100)
+    plan_time: str = Field(description="计划请检时间 YYYY-MM-DD HH:mm")
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class InspectionPlanUpdate(BaseModel):
+    status: Literal["pending", "inspected"]
+
+
+class InspectionPlanOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    department: str
+    product_name: str
+    batch_no: str | None
+    plan_time: str
+    status: str
+    remark: str | None
+    created_at: datetime

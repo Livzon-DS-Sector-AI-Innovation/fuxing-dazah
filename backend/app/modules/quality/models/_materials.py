@@ -107,6 +107,53 @@ class QualityMaterialStandardItem(BaseModel):
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
 
+class QualityLabItem(BaseModel):
+    """实验室试剂/对照品/滴定液/仪器校验台账（效期到期提醒数据源）。"""
+
+    __tablename__ = "quality_lab_items"
+    __table_args__ = (
+        Index("ix_quality_lab_item_type", "item_type"),
+        Index("ix_quality_lab_item_expiry", "expiry_date"),
+        {"schema": "quality"},
+    )
+
+    item_type: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        comment="reagent 试剂 / reference_standard 对照品 / titrant 滴定液 / instrument 仪器校验",
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False, comment="名称/仪器名称")
+    batch_no: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="批号（试剂类）")
+    spec: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="规格")
+    opened_at: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="开封日期 YYYY-MM-DD（试剂开启后效期从开封算）"
+    )
+    expiry_date: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="效期/下次校验日期 YYYY-MM-DD（到期提醒依据）"
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityInspectionPlan(BaseModel):
+    """车间中控及成品请检计划（统一台账，请检时间到点提醒）。"""
+
+    __tablename__ = "quality_inspection_plans"
+    __table_args__ = (
+        Index("ix_quality_plan_department", "department"),
+        Index("ix_quality_plan_plan_time", "plan_time"),
+        {"schema": "quality"},
+    )
+
+    department: Mapped[str] = mapped_column(String(128), nullable=False, comment="车间/部门")
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="品种/产品名称")
+    batch_no: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="批号")
+    plan_time: Mapped[str] = mapped_column(String(32), nullable=False, comment="计划请检时间 YYYY-MM-DD HH:mm")
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending", server_default="pending",
+        comment="pending 待请检 / inspected 已请检",
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
 class QualityStocktakeSheet(BaseModel):
     """库存盘点单：扫码盘点在库容器，结束自动对比系统库存出差异清单。"""
 

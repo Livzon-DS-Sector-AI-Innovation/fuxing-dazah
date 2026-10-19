@@ -25,6 +25,9 @@ class TestTaskCreate(BaseModel):
     report_date: str | None = Field(
         default=None, max_length=32, description="出报日期 YYYY-MM-DD（可选，后续可补录；关联当日机器人任务推送）"
     )
+    culture_days: int | None = Field(
+        default=None, ge=0, le=120, description="培养天数（微生物样品：未给出报日期时自动=检测日期+培养天数）"
+    )
     standard_document_id: uuid.UUID | None = Field(
         default=None, description="指定快照标准文档（单份，兼容旧调用）"
     )

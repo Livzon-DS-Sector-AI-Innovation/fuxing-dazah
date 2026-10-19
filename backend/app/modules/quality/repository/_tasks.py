@@ -29,6 +29,7 @@ async def create_test_task(
     standard_document_id: uuid.UUID | None,
     report_date: str | None = None,
     standard_document_ids: list[str] | None = None,
+    culture_days: int | None = None,
 ) -> QualityTestTask:
     """创建任务。INSERT 后 flush 返回（RETURNING 回填 id）。"""
     task = QualityTestTask(
@@ -41,6 +42,7 @@ async def create_test_task(
         standard_document_id=standard_document_id,
         report_date=report_date,
         standard_document_ids=standard_document_ids,
+        culture_days=culture_days,
     )
     db.add(task)
     await db.flush()
