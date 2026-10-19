@@ -7,3 +7,5 @@ export * from './performance'
 export * from './dashboard'
 export * from './system'
 export * from './titleReview'
+
+export * from './incidents'

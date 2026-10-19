@@ -8,7 +8,7 @@ import {
   TeamOutlined, UserAddOutlined, UserDeleteOutlined,
   HolderOutlined, PlusOutlined, CloseOutlined,
   PieChartOutlined, BarChartOutlined, ClockCircleOutlined, EditOutlined,
-  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined,
+  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined, ApartmentOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
@@ -637,6 +637,20 @@ export default function DashboardClient() {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <KpiCard title="90天内合同到期" value={summary.contract_expiry_90 ?? 0} icon={<AlertOutlined />} accent={T.error} />
+        </Col>
+      </Row>
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title={`编制数（达成率 ${summary.quota_rate ?? 0}%）`} value={summary.quota_total ?? 0} icon={<ApartmentOutlined />} accent={T.primary} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本年工伤人次" value={summary.work_injury_count ?? 0} icon={<AlertOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本年劳动纠纷" value={summary.labor_dispute_count ?? 0} icon={<ExclamationCircleOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本年被动离职" value={summary.passive_departures ?? 0} icon={<UserDeleteOutlined />} accent={T.error} />
         </Col>
       </Row>
 

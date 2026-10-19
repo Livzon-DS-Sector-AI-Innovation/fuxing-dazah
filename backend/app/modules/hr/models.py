@@ -929,6 +929,44 @@ class HrPosition(BaseModel):
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", comment="排序"
     )
+    headcount: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="编制人数（人力看板编制达成率依据）"
+    )
+
+
+class HrIncidentRecord(BaseModel):
+    """工伤/劳动纠纷台账（人力看板用工风险指标数据源）。"""
+
+    __tablename__ = "hr_incident_records"
+    __table_args__ = (
+        Index("ix_hr_incident_type", "incident_type"),
+        Index("ix_hr_incident_occurred_date", "occurred_date"),
+        {"schema": "hr"},
+    )
+
+    incident_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="work_injury 工伤 / labor_dispute 劳动纠纷"
+    )
+    employee_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="当事人姓名"
+    )
+    employee_number: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="当事人工号"
+    )
+    department: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="所属部门"
+    )
+    occurred_date: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="发生日期 YYYY-MM-DD"
+    )
+    description: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, comment="情况描述"
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), default="processing", server_default="processing",
+        comment="processing 处理中 / closed 已结案"
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
 
 class PositionTraining(BaseModel):
@@ -1663,4 +1701,6 @@ class PerformanceCategoryScore(BaseModel):
 
 
 # 职称评审子包模型注册到同一 metadata（alembic env 只 import 模块级 models）
-from app.modules.hr.title_review import models as title_review_models  # noqa: E402, F401
+from app.modules.hr.title_review import (
+    models as title_review_models,  # noqa: E402, F401
+)

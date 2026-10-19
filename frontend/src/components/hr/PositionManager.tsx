@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table } from 'antd'
+import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table, InputNumber } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
-import { fetchPositions, createPosition, deletePositionByName } from '@/actions/hr'
+import { fetchPositions, createPosition, deletePositionByName, updatePositionHeadcount } from '@/actions/hr'
 
-interface PositionRow { department: string; name: string; categories?: string[] }
+interface PositionRow { department: string; name: string; categories?: string[]; headcount: number | null }
 
 export default function PositionManager() {
   const [positions, setPositions] = useState<PositionRow[]>([])
@@ -19,7 +19,7 @@ export default function PositionManager() {
     setLoading(true)
     try {
       const data = await fetchPositions(filterDept)
-      setPositions(data.map((p) => ({ department: p.department, name: p.name, categories: p.categories || [] })))
+      setPositions(data.map((p) => ({ department: p.department, name: p.name, categories: p.categories || [], headcount: p.headcount ?? null })))
     } catch { setPositions([]) }
     finally { setLoading(false) }
   }
@@ -28,7 +28,7 @@ export default function PositionManager() {
     const name = newName.trim(); const dept = newDept.trim()
     if (!name || !dept) { message.warning('请填写部门和岗位'); return }
     try {
-      await createPosition({ department: dept, name }).catch(() => {})
+      await createPosition({ department: dept, name, headcount: null }).catch(() => {})
       message.success('已添加')
       setNewName(''); loadData()
     } catch { message.error('添加失败') }
@@ -71,6 +71,27 @@ export default function PositionManager() {
             { title: '部门', dataIndex: 'department', width: 200, filters: deptOptions.map(d => ({ text: d.label, value: d.value })), onFilter: (v, r: PositionRow) => r.department === v,
               render: (v: string) => <Tag color="blue">{v}</Tag> },
             { title: '岗位名称', dataIndex: 'name' },
+            { title: '编制人数', dataIndex: 'headcount', width: 160,
+              render: (v: number | null, r: PositionRow) => (
+                <InputNumber
+                  size="small"
+                  min={0}
+                  placeholder="未设置"
+                  value={v ?? null}
+                  onBlur={async (e) => {
+                    const val = e.target.value.trim()
+                    const num = val === '' ? null : Number(val)
+                    if (num !== null && (Number.isNaN(num) || num < 0)) { message.warning('请输入非负整数'); return }
+                    if (num === (r.headcount ?? null)) return
+                    try {
+                      await updatePositionHeadcount(r.department, r.name, num)
+                      message.success('编制人数已更新')
+                      loadData()
+                    } catch { message.error('编制人数更新失败') }
+                  }}
+                />
+              ),
+            },
             { title: '关联培训大类', dataIndex: 'categories', width: 300,
               render: (cats: string[]) => cats?.length ? cats.map(c => <Tag key={c} className="mb-1">{c}</Tag>) : <span className="text-gray-400">-</span> },
             {

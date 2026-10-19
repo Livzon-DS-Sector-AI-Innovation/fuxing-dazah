@@ -9,7 +9,7 @@ from fastapi import Body, Depends, Form, HTTPException, Query, Response, UploadF
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -891,6 +891,33 @@ async def get_dashboard_stats(
     # 本月净增
     net_growth = (new_hires_this_month or 0) - (departures_this_month or 0)
 
+    # 编制数（positions.headcount 合计，按数据范围部门）与编制达成率
+    from app.modules.hr.models import HrPosition
+
+    quota_q = select(func.coalesce(func.sum(HrPosition.headcount), 0)).where(
+        HrPosition.is_deleted == False, HrPosition.headcount.is_not(None)
+    )
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        quota_q = quota_q.where(HrPosition.department.in_(hr_scope.scoped_departments))
+    quota_total = int((await session.execute(quota_q)).scalar() or 0)
+    quota_rate = round(total_employees / quota_total * 100, 1) if quota_total else 0.0
+
+    # 工伤/劳动纠纷年度计数
+    from app.modules.hr.models import HrIncidentRecord
+
+    async def _async_incident_count(i_type: str) -> int:
+        q = select(func.count(HrIncidentRecord.id)).where(
+            HrIncidentRecord.is_deleted == False,
+            HrIncidentRecord.incident_type == i_type,
+            HrIncidentRecord.occurred_date.like(f"{current_year}%"),
+        )
+        if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+            q = q.where(HrIncidentRecord.department.in_(hr_scope.scoped_departments))
+        return int((await session.execute(q)).scalar() or 0)
+
+    work_injury_count = await _async_incident_count("work_injury")
+    labor_dispute_count = await _async_incident_count("labor_dispute")
+
     # 合同到期预警（30/60/90 天三档）
     contract_expiry = []
     for days, label in [(30, "30天内"), (60, "31-60天"), (90, "61-90天")]:
@@ -1039,6 +1066,10 @@ async def get_dashboard_stats(
             "net_growth_this_month": net_growth,
             "passive_departures": passive_departures,
             "contract_expiry_90": sum(x["value"] for x in contract_expiry),
+            "quota_total": quota_total,
+            "quota_rate": quota_rate,
+            "work_injury_count": work_injury_count,
+            "labor_dispute_count": labor_dispute_count,
         },
         "education_distribution": education_distribution,
         "department_distribution": department_distribution,
@@ -2052,6 +2083,7 @@ async def list_positions(
             "id": str(r.id),
             "department": r.department,
             "name": r.name,
+            "headcount": r.headcount,
             "categories": list(dict.fromkeys(pt_map.get((r.department, r.name), []))),
         }
         for r in rows
@@ -2062,6 +2094,11 @@ async def list_positions(
 class PositionCreate(BaseModel):
     department: str
     name: str
+    headcount: int | None = None
+
+
+class PositionHeadcountUpdate(BaseModel):
+    headcount: int | None = None
 
 
 @router.post("/positions", summary="新建职位")
@@ -2074,13 +2111,42 @@ async def create_position(
     hr_scope.ensure_dept_writable([payload.department])
     from app.modules.hr.models import HrPosition
 
-    pos = HrPosition(department=payload.department, name=payload.name)
+    pos = HrPosition(department=payload.department, name=payload.name, headcount=payload.headcount)
     session.add(pos)
     await session.flush()
     return success_response(
-        data={"id": str(pos.id), "department": pos.department, "name": pos.name},
+        data={"id": str(pos.id), "department": pos.department, "name": pos.name, "headcount": pos.headcount},
         message="职位创建成功",
         status_code=201,
+    )
+
+
+@router.put("/positions/by-name/{position_name}", summary="维护职位编制人数")
+async def update_position_headcount(
+    position_name: str,
+    payload: PositionHeadcountUpdate,
+    department: str = Query(..., description="部门名称"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """更新职位编制人数（人力看板编制达成率数据源）。"""
+    hr_scope.ensure_dept_writable([department])
+    from app.modules.hr.models import HrPosition
+
+    pos = (await session.execute(
+        select(HrPosition).where(
+            HrPosition.department == department,
+            HrPosition.name == position_name,
+            HrPosition.is_deleted == False,
+        )
+    )).scalar_one_or_none()
+    if not pos:
+        raise HTTPException(404, "职位不存在")
+    pos.headcount = payload.headcount
+    await session.flush()
+    return success_response(
+        data={"department": pos.department, "name": pos.name, "headcount": pos.headcount},
+        message="编制人数已更新",
     )
 
 
@@ -6045,3 +6111,117 @@ async def export_performance_report(
     )
 
 
+
+
+# ─── 工伤/劳动纠纷台账 ───
+
+
+class IncidentCreate(BaseModel):
+    incident_type: str = Field(..., description="work_injury 工伤 / labor_dispute 劳动纠纷")
+    employee_name: str | None = None
+    employee_number: str | None = None
+    department: str | None = None
+    occurred_date: str | None = None
+    description: str | None = None
+    status: str = "processing"
+    remark: str | None = None
+
+
+class IncidentUpdate(BaseModel):
+    employee_name: str | None = None
+    employee_number: str | None = None
+    department: str | None = None
+    occurred_date: str | None = None
+    description: str | None = None
+    status: str | None = None
+    remark: str | None = None
+
+
+@router.get("/incidents", summary="工伤/劳动纠纷台账列表")
+async def list_incidents(
+    incident_type: str | None = Query(None),
+    year: int | None = Query(None, description="按发生年份筛选"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    q = select(HrIncidentRecord).where(HrIncidentRecord.is_deleted == False)
+    if incident_type:
+        q = q.where(HrIncidentRecord.incident_type == incident_type)
+    if year:
+        q = q.where(HrIncidentRecord.occurred_date.like(f"{year}%"))
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        q = q.where(HrIncidentRecord.department.in_(hr_scope.scoped_departments))
+    rows = (await session.execute(q.order_by(HrIncidentRecord.occurred_date.desc()))).scalars().all()
+    return success_response(data=[{
+        "id": str(r.id),
+        "incident_type": r.incident_type,
+        "employee_name": r.employee_name,
+        "employee_number": r.employee_number,
+        "department": r.department,
+        "occurred_date": r.occurred_date,
+        "description": r.description,
+        "status": r.status,
+        "remark": r.remark,
+    } for r in rows])
+
+
+@router.post("/incidents", summary="新增工伤/劳动纠纷记录", status_code=201)
+async def create_incident(
+    payload: IncidentCreate,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    if payload.incident_type not in ("work_injury", "labor_dispute"):
+        raise HTTPException(400, "incident_type 仅支持 work_injury / labor_dispute")
+    if payload.department:
+        hr_scope.ensure_dept_writable([payload.department])
+    rec = HrIncidentRecord(**payload.model_dump())
+    session.add(rec)
+    await session.flush()
+    return success_response(data={"id": str(rec.id)}, message="记录已新增", status_code=201)
+
+
+@router.put("/incidents/{incident_id}", summary="更新工伤/劳动纠纷记录")
+async def update_incident(
+    incident_id: UUID,
+    payload: IncidentUpdate,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    rec = (await session.execute(
+        select(HrIncidentRecord).where(
+            HrIncidentRecord.id == incident_id, HrIncidentRecord.is_deleted == False
+        )
+    )).scalar_one_or_none()
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    for key, value in payload.model_dump(exclude_none=True).items():
+        setattr(rec, key, value)
+    await session.flush()
+    return success_response(message="记录已更新")
+
+
+@router.delete("/incidents/{incident_id}", summary="删除工伤/劳动纠纷记录（软删除）")
+async def delete_incident(
+    incident_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    rec = (await session.execute(
+        select(HrIncidentRecord).where(
+            HrIncidentRecord.id == incident_id, HrIncidentRecord.is_deleted == False
+        )
+    )).scalar_one_or_none()
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    rec.is_deleted = True
+    await session.flush()
+    return success_response(message="已删除")
