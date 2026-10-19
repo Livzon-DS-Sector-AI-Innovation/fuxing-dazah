@@ -8,7 +8,7 @@ import {
   TeamOutlined, UserAddOutlined, UserDeleteOutlined,
   HolderOutlined, PlusOutlined, CloseOutlined,
   PieChartOutlined, BarChartOutlined, ClockCircleOutlined, EditOutlined,
-  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined, ApartmentOutlined, ExclamationCircleOutlined,
+  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined, ApartmentOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
@@ -69,6 +69,7 @@ const ALL_STAT_TYPES: StatTypeOption[] = [
   { id: 'monthly-departure-rate', title: '月度离职率(%)', defaultType: 'bar', group: '离职分析', dataSource: 'monthly_departure_rate' },
   { id: 'contract-expiry', title: '合同到期预警', defaultType: 'bar', group: '用工风险', dataSource: 'preset' },
   { id: 'retention', title: '新员工留存率(%)', defaultType: 'bar', group: '招聘', dataSource: 'retention' },
+  { id: 'performance-grade', title: '绩效等级分布', defaultType: 'pie', group: '绩效', dataSource: 'performance_grade' },
 ]
 
 const STAT_TYPE_MAP: Record<string, StatTypeOption> = Object.fromEntries(ALL_STAT_TYPES.map(s => [s.id, s]))
@@ -651,6 +652,12 @@ export default function DashboardClient() {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <KpiCard title="本年被动离职" value={summary.passive_departures ?? 0} icon={<UserDeleteOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="绩效不合格部门数" value={summary.underperforming_count ?? 0} icon={<WarningOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="已完成绩效评估" value={summary.performance_submitted_count ?? 0} icon={<CheckCircleOutlined />} accent={T.success} unit="份" />
         </Col>
       </Row>
 

@@ -918,6 +918,32 @@ async def get_dashboard_stats(
     work_injury_count = await _async_incident_count("work_injury")
     labor_dispute_count = await _async_incident_count("labor_dispute")
 
+    # 绩效等级分布（按部门月度评估 final_score：优秀≥90/佳≥80/尚可≥70/差<70）
+    from app.modules.hr.models import MonthlyPerformanceEvaluation as PerfEval
+
+    perf_q = select(PerfEval.final_score, PerfEval.department).where(
+        PerfEval.is_deleted == False, PerfEval.final_score.is_not(None)
+    )
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        perf_q = perf_q.where(PerfEval.department.in_(hr_scope.scoped_departments))
+    perf_rows = (await session.execute(perf_q)).all()
+    perf_grades = {"优秀(≥90)": 0, "佳(≥80)": 0, "尚可(≥70)": 0, "差(<70)": 0}
+    for score, _dept in perf_rows:
+        s = float(score or 0)
+        if s >= 90:
+            perf_grades["优秀(≥90)"] += 1
+        elif s >= 80:
+            perf_grades["佳(≥80)"] += 1
+        elif s >= 70:
+            perf_grades["尚可(≥70)"] += 1
+        else:
+            perf_grades["差(<70)"] += 1
+    performance_grade_distribution = [{"name": k, "value": v} for k, v in perf_grades.items()]
+    underperforming_count = perf_grades["差(<70)"]
+
+    # 已完成绩效评估的部门数（有 final_score 的评估数，去重按评估记录计）
+    performance_submitted_count = len(perf_rows)
+
     # 合同到期预警（30/60/90 天三档）
     contract_expiry = []
     for days, label in [(30, "30天内"), (60, "31-60天"), (90, "61-90天")]:
@@ -1070,6 +1096,8 @@ async def get_dashboard_stats(
             "quota_rate": quota_rate,
             "work_injury_count": work_injury_count,
             "labor_dispute_count": labor_dispute_count,
+            "underperforming_count": underperforming_count,
+            "performance_submitted_count": performance_submitted_count,
         },
         "education_distribution": education_distribution,
         "department_distribution": department_distribution,
@@ -1094,6 +1122,7 @@ async def get_dashboard_stats(
             "departure_tenure": departure_tenure_distribution,
             "dept_departure_rate": dept_departure_rate,
             "retention": retention_distribution,
+            "performance_grade": performance_grade_distribution,
         },
         "position_departure_top": position_departure_top,
         "monthly_departure_rate": monthly_dep_rate,

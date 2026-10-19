@@ -1045,6 +1045,8 @@ export interface DashboardSummary {
   quota_rate: number
   work_injury_count: number
   labor_dispute_count: number
+  underperforming_count: number
+  performance_submitted_count: number
 }
 
 export interface DistributionItem {
