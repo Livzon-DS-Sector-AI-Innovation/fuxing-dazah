@@ -354,7 +354,7 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "system-config", label: "系统配置", path: "/hr/settings", permissions: ["hr:settings:manage"] },
           { key: "positions", label: "岗位管理", path: "/hr/positions", permissions: ["hr:position:read"] },
-          { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:employee:read"] },
+          { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
           { key: "sop-catalog", label: "SOP管理", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
         ],
       },
