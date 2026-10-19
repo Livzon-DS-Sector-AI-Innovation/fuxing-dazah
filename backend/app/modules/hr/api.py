@@ -970,11 +970,14 @@ async def get_dashboard_stats(
     ]
     passive_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" not in r[0])
 
-    # 离职原因分布（JSON 文本归一化：null/"null"/空 → 未填写）
+    # 离职原因分布（JSON 列需投影为文本才能 GROUP BY；归一化 null/"null"/空 → 未填写）
+    from sqlalchemy import Text as SAText
+
+    reason_expr = func.cast(DepModel.offboarding_reason, SAText)
     dep_reason_rows = (await session.execute(
-        select(DepModel.offboarding_reason, func.count(DepModel.id))
+        select(reason_expr, func.count(DepModel.id))
         .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
-        .group_by(DepModel.offboarding_reason)
+        .group_by(reason_expr)
     )).all()
     reason_map: dict[str, int] = {}
     for raw, cnt in dep_reason_rows:
