@@ -6,7 +6,6 @@ r"""chemical_inventory 直读改造开关与闸门（全部默认关闭）。
 |---|---|---|
 | SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED | false | 日报/周报编排与查询路径走直读 |
 | SAFETY_CHEMICAL_INVENTORY_EVENT_SYNC_ENABLED | false | Bitable 事件 -> 平台库镜像 |
-| SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED | false | 直读重算的风险列回写 |
 | SAFETY_CHEMICAL_INVENTORY_SOURCE | bitable | 库存数据源：bitable 总表直读 \| sheet《危险品日报表》直读 |
 
 本域是「写完再读」回写域：WRITEBACK_RISK 只罩直读路径的重算回写；
@@ -49,15 +48,6 @@ def direct_enabled() -> bool:
 def event_sync_enabled() -> bool:
     """旧路径：Bitable 事件 -> 平台库镜像。"""
     return gates.event_sync_enabled(_DOMAIN)
-
-
-def writeback_risk_enabled() -> bool:
-    """直读重算的风险列回写（默认关闭；legacy 回写不受影响）。
-
-    sheet 源强制视为关（设计 §2：风险标记/说明不回写，值只在内存与快照——
-    Bitable 总表在 sheet 模式下冻结停写）。
-    """
-    return not sheet_source_enabled() and gates.writeback_enabled(_DOMAIN, "RISK")
 
 
 def legacy_event_sync_active() -> bool:

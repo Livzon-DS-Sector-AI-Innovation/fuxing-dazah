@@ -1,23 +1,21 @@
-"""危化品库存每日定时更新。
+"""危化品库存每日任务（sheet 源编排 + 归档总表直读兜底）。
+
+2026-10-19 二期退役（P2）：旧链路「危险品日报群拉 Excel → 异构解析 → 写 Bitable
+总表 → 镜像回拉」整体删码（excel_parser/daily_update/import_excel/realtime handler
+随本批退役）；Bitable 总表停写冻结为历史只读。数据源唯一事实源 = 飞书电子表格
+《危险品日报表》（SAFETY_CHEMICAL_INVENTORY_SOURCE=sheet，2026-10-19 起全面启用）。
 
 流程（每天 19:30，scheduler 调度）：
-  1. 拉取「危险品日报」群当日 .xls/.xlsx 文件消息；
-  2. 逐个下载 → apply_daily_workbook 更新多维表（批量写回，静默）；
-  3. sync_from_bitable + run_full_scan（重算风险，写回风险标记/说明）；
-  4. 对比昨日快照做每日分析（超量 + 急剧上升/下降 + 主要危化品汇总），
-     落今日 daily 快照，把「危化品库存每日分析日报」推送「安全AI创新交流群」。
+  1. sheet 模式：直读《危险品日报表》全量 → 内存重算风险（不回写源表）→
+     对比昨日快照做每日分析（超量 + 急剧上升/下降 + 主要危化品汇总），
+     落今日 daily 快照，把日报投「安全速递」总卡（危险品日报群同款加投）；
+  2. bitable 模式（回滚/归档口径）：直读已冻结的总表走同一收尾流程。
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
-import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
-
-import httpx
-from sqlalchemy import select
 
 from app.core.database import async_session_factory
 from app.modules.safety.app_config.store import store as _app_config_store
@@ -25,29 +23,20 @@ from app.modules.safety.chemical_inventory.daily_report import (
     compute_daily_analysis,
     render_daily_report,
 )
-from app.modules.safety.chemical_inventory.daily_update import apply_daily_workbook
 from app.modules.safety.chemical_inventory.snapshots import (
     KIND_DAILY,
     KIND_NIGHTLY,
     load_prev_daily_snapshot_with_source,
     take_snapshot,
 )
-from app.modules.safety.feishu.business_agent_bot_handler import _download_message_file
-from app.modules.safety.feishu.chemical_inventory_bitable_handler import (
-    sync_inventory_records_from_bitable,
-)
-from app.modules.safety.feishu.client import get_safety_tenant_token
 from app.modules.safety.feishu.notification import send_group_card
-from app.modules.safety.models import ChemicalInventoryRecord
-from app.modules.safety.service.chemical_inventory import ChemicalInventoryService
 
 if TYPE_CHECKING:
     from app.modules.safety.feishu.daily_digest import DigestCell
 
 logger = logging.getLogger(__name__)
 
-DANGEROUS_GOODS_DAILY_CHAT_ID = "oc_ae9c3a305430cb196e42130f69b052bc"   # 危险品日报（数据源）
-INVENTORY_BITABLE_URL = "https://j0eukrlohu.feishu.cn/base/QoUXbLVcQaYAO7sod1CcUH3JnVd?table=tbl78IlFOo3f1fj1"  # 危化品库存总表
+DANGEROUS_GOODS_DAILY_CHAT_ID = "oc_ae9c3a305430cb196e42130f69b052bc"   # 危险品日报群（数据源群，日报加投目标）
 # 主推送目标经调度器 DB 配置传入（send_daily_summary(chat_id=...)）；
 # env SAFETY_CHEMICAL_INVENTORY_DAILY_CHAT_ID 仅作调度器播种/展示回退
 # （service/scheduler_config.py 解析，env > DB 活行 > 代码默认）。
@@ -67,99 +56,9 @@ def _extra_chat_enabled() -> str | None:
         return None
     return extra
 
-_TMP_DIR = "/tmp/chemical_inventory_scheduled"
-
-
-def _inventory_app_token() -> str:
-    """危化品库存总表 app_token（配置中心 store：DB 活行 → registry 默认）。"""
-    from app.modules.safety.bitable_config.store import store
-
-    conn = store.get_connection("chemical_inventory", "inventory")
-    if conn is None or conn.status == "disabled":
-        return ""
-    return conn.app_token
-
-
-def _day_bounds(now: datetime | None = None) -> tuple[int, int]:
-    """返回当日 00:00 与当前时刻的毫秒时间戳。"""
-    now = now or datetime.now()
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return int(start.timestamp() * 1000), int(now.timestamp() * 1000)
-
-
-async def _list_chat_messages(
-    chat_id: str, start_ms: int, end_ms: int
-) -> list[dict[str, Any]]:
-    """分页拉取群消息（Im API GET /im/v1/messages）。"""
-    token = await get_safety_tenant_token()
-    url = "https://open.feishu.cn/open-apis/im/v1/messages"
-    items: list[dict[str, Any]] = []
-    page_token: str | None = None
-    while True:
-        params: dict[str, Any] = {
-            "container_id_type": "chat",
-            "container_id": chat_id,
-            "sort_type": "ByCreateTimeAsc",
-            "page_size": 50,
-            # 飞书 Im 消息列表 API 的 start_time/end_time 为「秒」级 Unix 时间戳
-            "start_time": start_ms // 1000,
-            "end_time": end_ms // 1000,
-        }
-        if page_token:
-            params["page_token"] = page_token
-        async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.get(
-                url, headers={"Authorization": f"Bearer {token}"}, params=params
-            )
-            d = resp.json()
-        if d.get("code", 0) != 0:
-            logger.error("拉取危险品日报群消息失败: code=%s msg=%s", d.get("code"), d.get("msg"))
-            break
-        data = d.get("data", {}) or {}
-        items.extend(data.get("items", []) or [])
-        if not data.get("has_more"):
-            break
-        page_token = data.get("page_token")
-        if not page_token:
-            break
-    return items
-
-
-async def fetch_daily_files(chat_id: str, start_ms: int, end_ms: int) -> list[dict[str, str]]:
-    """从群消息中筛选当日的 .xls/.xlsx 文件。"""
-    msgs = await _list_chat_messages(chat_id, start_ms, end_ms)
-    files: list[dict[str, str]] = []
-    for m in msgs:
-        if m.get("msg_type") != "file":
-            continue
-        # 原始 Im 消息结构为 body.content（lark-cli 才转成顶层 content）
-        raw = m.get("content")
-        if raw is None:
-            body = m.get("body") or {}
-            raw = body.get("content")
-        try:
-            content = json.loads(raw or "{}")
-        except (json.JSONDecodeError, TypeError):
-            continue
-        fk = content.get("file_key", "")
-        fn = content.get("file_name", "unknown")
-        mid = m.get("message_id", "")
-        if not fk or not mid:
-            continue
-        ext = os.path.splitext(fn)[1].lower()
-        if ext not in (".xls", ".xlsx"):
-            continue
-        files.append({"message_id": mid, "file_key": fk, "file_name": fn})
-    return files
-
-
-async def _apply_one(path: str, file_name: str | None = None) -> dict[str, Any]:
-    """应用单个文件到多维表（apply_daily_workbook 内部自建客户端并批量写回）。"""
-    return await apply_daily_workbook(path, _inventory_app_token(), file_name=file_name)
-
 
 def _direct_enabled() -> bool:
-    """直读总开关（惰性导入，避免日常模块加载即拉起直读包）。"""
+    """直读总开关（sheet 源隐含直读语义；惰性导入避免日常模块加载拉起直读包）。"""
     from app.modules.safety.service.chemical_inventory_direct import config
 
     return config.direct_enabled()
@@ -172,82 +71,10 @@ def _sheet_source_enabled() -> bool:
     return config.sheet_source_enabled()
 
 
-def _writeback_risk_enabled() -> bool:
-    """直读重算的风险列回写开关（惰性导入）。"""
-    from app.modules.safety.service.chemical_inventory_direct import config
-
-    return config.writeback_risk_enabled()
-
-
-async def _fetch_views_with_retry(reader: Any, attempts: int = 2) -> list[Any]:
-    """「写完再读」的再读：读失败重试 1 次（写后可见性兜底；探针实测 t≈0 一致）。"""
-    import asyncio
-
-    for attempt in range(attempts):
-        try:
-            views: list[Any] = await reader.fetch_all(strict=True)
-            return views
-        except Exception:  # noqa: BLE001
-            if attempt == attempts - 1:
-                raise
-            logger.warning("危化品库存直读重读失败，1s 后重试 1 次", exc_info=True)
-            await asyncio.sleep(1.0)
-    raise RuntimeError("unreachable")  # pragma: no cover
-
-
-async def _finish_direct(file_results: list[dict[str, Any]]) -> dict[str, Any]:
-    """直读收尾：不回拉镜像，直读全量 → 内存重算（回写按开关）→ 再读 → 分析+快照。
-
-    Excel→Bitable 写入路径（apply_daily_workbook）在调用方已零改动执行；
-    本函数取代 legacy 的 sync_inventory_records_from_bitable + run_full_scan。
-    """
-    from app.modules.safety.service.chemical_inventory_direct.reader import open_reader
-    from app.modules.safety.service.chemical_inventory_direct.risk import (
-        scan_inventory_views,
-    )
-
-    reader = open_reader()
-    views = await reader.fetch_all(strict=True)
-    scan = await scan_inventory_views(views)
-    if _writeback_risk_enabled():
-        # 回写过：再直读一次取回写后值做日报（读失败重试 1 次）
-        views_final = await _fetch_views_with_retry(reader)
-    else:
-        # WRITEBACK 关（灰度观察组合）：内存重算值即最终值（spec §4.4），不重读
-        views_final = views
-
-    async with async_session_factory() as db:
-        today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间
-        prev_snapshot, prev_source = await load_prev_daily_snapshot_with_source(db, today)
-        compare_note: str | None = None
-        if prev_snapshot and prev_source == "sheet":
-            # D8 对称断点（回滚日）：昨日 sheet 口径 vs 今日总表口径，环比必全量误报
-            prev_snapshot = []
-            compare_note = "数据源口径切换（回滚至总表），本日不做环比"
-        analysis = compute_daily_analysis(
-            views_final, prev_snapshot, compare_skipped=compare_note is not None,
-        )
-        await take_snapshot(db, today, kind=KIND_DAILY, records=views_final)
-        await db.commit()
-
-    warnings = [v for v in views_final if v.risk_flag == "warn"]
-    return {
-        "files": file_results,
-        "sync": {"skipped": True, "reason": "direct_mode"},
-        "scan": scan,
-        "warnings": warnings,
-        "analysis": analysis,
-        "compare_note": compare_note,
-        "total_updated": sum(r.get("updated", 0) for r in file_results),
-        "total_created": sum(r.get("created", 0) for r in file_results),
-        "total_parsed": sum(r.get("parsed", 0) for r in file_results),
-    }
-
-
 async def _run_sheet_mode() -> dict[str, Any]:
-    """sheet 源编排：跳过拉群 Excel/写 Bitable，直读→内存重算→分析/快照。
+    """sheet 源编排：直读《危险品日报表》→内存重算→分析/快照。
 
-    - 不回写：WRITEBACK_RISK 在 sheet 模式强制视为关（config 层），风险值只在内存与快照；
+    - 不回写：风险值只在内存与快照（源表是人维护的唯一事实源）；
     - D6 revision：与已记录状态（{revision}|{日期}）比对，未变 → 日报标注
       「数据自 xx 未更新」+ 视图 updated_at 置 None（per-row 未更新标记如实）；
     - §5 骤降告警：行数较昨日 daily 快照骤降 >50% → sheet_alerts 红标（不静默接受源表被清空）；
@@ -305,6 +132,50 @@ async def _run_sheet_mode() -> dict[str, Any]:
     }
 
 
+async def _run_bitable_mode() -> dict[str, Any]:
+    """bitable 归档口径编排：直读已冻结总表 → 内存重算 → 分析/快照（回滚路径）。
+
+    旧 Excel/镜像链路已退役（P2）：本函数是 SAFETY_CHEMICAL_INVENTORY_SOURCE
+    拨回 bitable 后的唯一日编排序，总表只读不写（风险值不回写冻结表）。
+    """
+    from app.modules.safety.service.chemical_inventory_direct.reader import open_reader
+    from app.modules.safety.service.chemical_inventory_direct.risk import (
+        scan_inventory_views,
+    )
+
+    reader = open_reader()
+    views = await reader.fetch_all(strict=True)
+    scan = await scan_inventory_views(views)
+
+    compare_note: str | None = None
+    async with async_session_factory() as db:
+        today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间
+        prev_snapshot, prev_source = await load_prev_daily_snapshot_with_source(db, today)
+        if prev_snapshot and prev_source == "sheet":
+            # D8 对称断点（回滚日）：昨日 sheet 口径 vs 今日总表口径，环比必全量误报
+            prev_snapshot = []
+            compare_note = "数据源口径切换（回滚至总表），本日不做环比"
+        analysis = compute_daily_analysis(
+            views, prev_snapshot, compare_skipped=compare_note is not None,
+        )
+        await take_snapshot(db, today, kind=KIND_DAILY, records=views)
+        await db.commit()
+
+    warnings = [v for v in views if v.risk_flag == "warn"]
+    return {
+        "source": "bitable",
+        "files": [],
+        "sync": {"skipped": True, "reason": "bitable_archive_direct"},
+        "scan": scan,
+        "warnings": warnings,
+        "analysis": analysis,
+        "compare_note": compare_note,
+        "total_updated": 0,
+        "total_created": 0,
+        "total_parsed": 0,
+    }
+
+
 SHEET_REVISION_KEY = "SAFETY_CHEMICAL_INVENTORY_SHEET_REVISION"
 
 
@@ -339,8 +210,7 @@ async def run_nightly_snapshot() -> dict[str, Any]:
     """每日 23:00：日终留一张库存全量快照（kind=nightly，纯存档不分析不推送）。
 
     读取链与日报一致（SAFETY_CHEMICAL_INVENTORY_SOURCE）：sheet 模式直读
-    《危险品日报表》并内存重算风险标记（回写按既有开关语义，sheet 下强制关）；
-    legacy 模式快照自取 ORM 镜像（19:30 日报链路已重算过风险标记）。
+    《危险品日报表》并内存重算风险标记；bitable 模式快照自取 ORM 镜像。
     与 19:30 的 daily 快照 kind 互斥，日报/周报环比口径不受影响。
     """
     from app.modules.safety.service.chemical_inventory_direct.risk import (
@@ -375,75 +245,10 @@ async def run_nightly_snapshot() -> dict[str, Any]:
 
 
 async def run_scheduled_daily_update() -> dict[str, Any]:
-    """执行每日定时更新：拉取 → 下载 → 更新 → 同步 → 重算 → 返回结果。"""
+    """执行每日定时更新：直读当前源 → 内存重算 → 分析/快照 → 返回结果。"""
     if _sheet_source_enabled():
         return await _run_sheet_mode()
-    if not _inventory_app_token():
-        logger.warning("危化品库存 Bitable 未配置，跳过每日更新")
-        return {"skipped": True, "reason": "no_app_token"}
-
-    start_ms, end_ms = _day_bounds()
-    files = await fetch_daily_files(DANGEROUS_GOODS_DAILY_CHAT_ID, start_ms, end_ms)
-    logger.info("危险品日报群当日文件: %d 个", len(files))
-    if not files:
-        return {"skipped": True, "reason": "no_files_today", "files": []}
-
-    file_results: list[dict[str, Any]] = []
-    os.makedirs(_TMP_DIR, exist_ok=True)
-    for f in files:
-        ext = os.path.splitext(f["file_name"])[1].lower()
-        path = os.path.join(_TMP_DIR, f"{uuid.uuid4().hex}{ext}")
-        try:
-            file_bytes = await _download_message_file(f["message_id"], f["file_key"])
-            with open(path, "wb") as fh:
-                fh.write(file_bytes)
-            res = await _apply_one(path, f["file_name"])
-            file_results.append({"file_name": f["file_name"], **res})
-        except Exception:  # noqa: BLE001
-            logger.exception("每日更新文件处理失败: %s", f["file_name"])
-            file_results.append({"file_name": f["file_name"], "parsed": 0, "updated": 0, "created": 0, "error": True})
-        finally:
-            if os.path.exists(path):
-                os.remove(path)
-
-    # 直读模式：不回拉镜像，直读重算 + 风险回写（按开关）+ 再读 + 分析快照
-    if _direct_enabled():
-        return await _finish_direct(file_results)
-
-    async with async_session_factory() as db:
-        sync = await sync_inventory_records_from_bitable()
-        svc = ChemicalInventoryService(db)
-        scan = await svc.run_full_scan()
-        records = list((await db.scalars(select(ChemicalInventoryRecord).where(
-            ChemicalInventoryRecord.is_deleted == False,  # noqa: E712
-        ))).all())
-        warnings = [r for r in records if r.risk_flag == "warn"]
-
-        # 每日分析：与昨日 daily 快照环比（超量 + 急剧变化 + 汇总），并落今日快照
-        today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间
-        prev_snapshot, prev_source = await load_prev_daily_snapshot_with_source(db, today)
-        compare_note = None
-        if prev_snapshot and prev_source == "sheet":
-            # D8 对称断点（回滚日）：昨日 sheet 口径 vs 今日总表口径，环比必全量误报
-            prev_snapshot = []
-            compare_note = "数据源口径切换（回滚至总表），本日不做环比"
-        analysis = compute_daily_analysis(
-            records, prev_snapshot, compare_skipped=compare_note is not None,
-        )
-        await take_snapshot(db, today, kind=KIND_DAILY)
-        await db.commit()
-
-    return {
-        "files": file_results,
-        "sync": sync,
-        "scan": scan,
-        "warnings": warnings,
-        "analysis": analysis,
-        "compare_note": compare_note,
-        "total_updated": sum(r.get("updated", 0) for r in file_results),
-        "total_created": sum(r.get("created", 0) for r in file_results),
-        "total_parsed": sum(r.get("parsed", 0) for r in file_results),
-    }
+    return await _run_bitable_mode()
 
 
 def build_daily_summary(result: dict[str, Any]) -> str:
@@ -452,12 +257,11 @@ def build_daily_summary(result: dict[str, Any]) -> str:
     sheet 模式附加标注（D6/D8/§5）：未更新/口径切换/骤降红标前置在正文之前。
     """
     if result.get("skipped"):
-        if result.get("source") == "sheet":
-            reason = "《危险品日报表》读取异常或无数据"
-        elif result.get("reason") == "no_files_today":
-            reason = "今日危险品日报群未发现 Excel 文件"
-        else:
-            reason = "未配置/跳过"
+        reason = (
+            "《危险品日报表》读取异常或无数据"
+            if result.get("source") == "sheet"
+            else "未配置/跳过"
+        )
         return f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n⚠️ {reason}"
     analysis = result.get("analysis")
     if analysis is None:
@@ -478,7 +282,7 @@ def build_daily_summary(result: dict[str, Any]) -> str:
 
 
 def _build_daily_cell(result: dict[str, Any], content: str) -> tuple[date, DigestCell]:
-    """由任务结果构建「安全速递」格子（有分析/无 Excel 两形态）。
+    """由任务结果构建「安全速递」格子（有分析/无数据两形态）。
 
     Returns:
         (报告日期, 格子)：有分析取 analysis.report_date；无分析用北京时间今天。
@@ -511,11 +315,7 @@ def _build_daily_cell(result: dict[str, Any], content: str) -> tuple[date, Diges
         tag_color="red" if result.get("sheet_alerts") else "grey",
         tag_text="危化品库存",
         title="危化品库存日报",
-        stats=(
-            "《危险品日报表》读取异常或无数据"
-            if result.get("source") == "sheet"
-            else "今日未收到日报 Excel，无库存分析"
-        ),
+        stats="《危险品日报表》读取异常或无数据",
         zone=result.get("reason") or "",
         detail=content,
     )

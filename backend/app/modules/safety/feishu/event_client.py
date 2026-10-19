@@ -487,7 +487,6 @@ async def start_ws() -> None:
                     "app.modules.safety.feishu.central_alarm_bitable_handler",
                     "app.modules.safety.feishu.cert_bitable_handler",
                     "app.modules.safety.feishu.chemical_inventory_bitable_handler",
-                    "app.modules.safety.feishu.chemical_inventory_daily_handler",
                     "app.modules.safety.feishu.msds_bitable_handler",
                     "app.modules.safety.feishu.msds_collection_handler",
                     "app.modules.safety.feishu.menu_handler",

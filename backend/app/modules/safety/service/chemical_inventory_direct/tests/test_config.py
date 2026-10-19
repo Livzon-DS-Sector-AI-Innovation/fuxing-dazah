@@ -15,7 +15,6 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in (
         "SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED",
         "SAFETY_CHEMICAL_INVENTORY_EVENT_SYNC_ENABLED",
-        "SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED",
         "SAFETY_CHEMICAL_INVENTORY_SOURCE",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -25,7 +24,6 @@ class TestDefaults:
     def test_all_default_off(self) -> None:
         assert config.direct_enabled() is False
         assert config.event_sync_enabled() is False
-        assert config.writeback_risk_enabled() is False
         assert config.legacy_event_sync_active() is True  # 全关 = 改造前行为
         assert config.sheet_source_enabled() is False
         assert config.current_source() == "bitable"
@@ -33,10 +31,6 @@ class TestDefaults:
     def test_direct_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_DIRECT_ENABLED", "true")
         assert config.direct_enabled() is True
-
-    def test_writeback_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED", "true")
-        assert config.writeback_risk_enabled() is True
 
 
 class TestSheetSource:

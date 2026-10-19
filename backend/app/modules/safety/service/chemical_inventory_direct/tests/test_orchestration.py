@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -61,43 +62,18 @@ class FakeReader:
         return list(self._views)
 
 
-def _seed_direct(monkeypatch: pytest.MonkeyPatch, reader: FakeReader) -> list[Any]:
-    """替身化直读包 open_reader + 回写哨兵；返回回写调用记录。"""
+def _seed_direct(monkeypatch: pytest.MonkeyPatch, reader: FakeReader) -> None:
+    """替身化直读包 open_reader；P2 退役后回写绝不触发（总表停写冻结）。"""
     from app.modules.safety.service.chemical_inventory_direct import (
         reader as reader_mod,
     )
 
-    calls: list[list[InventoryView]] = []
-
-    async def _spy(records: list[InventoryView]) -> int:
-        calls.append(records)
-        return len(records)
-
-    async def _no_sync() -> dict[str, Any]:
-        raise AssertionError("直读模式不该回拉镜像")
+    async def _no_writeback(records: list[InventoryView]) -> int:
+        raise AssertionError("退役后不该回写 Bitable")
 
     monkeypatch.setattr(config, "direct_enabled", lambda: True)
-    monkeypatch.setattr(config, "writeback_risk_enabled", lambda: True)
     monkeypatch.setattr(reader_mod, "open_reader", lambda **kw: reader)
-    monkeypatch.setattr(handler_mod, "sync_record_flags_to_bitable", _spy)
-    monkeypatch.setattr(daily_job, "sync_inventory_records_from_bitable", _no_sync)
-    return calls
-
-
-def _seed_files(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_files(*_a: Any) -> list[dict[str, str]]:
-        return [{"message_id": "m1", "file_key": "k", "file_name": "a.xls"}]
-
-    async def _fake_download(*_a: Any) -> bytes:
-        return b"xls"
-
-    async def _fake_apply(*_a: Any, **_kw: Any) -> dict[str, Any]:
-        return {"parsed": 1, "updated": 1, "created": 0}
-
-    monkeypatch.setattr(daily_job, "_inventory_app_token", lambda: "appX")
-    monkeypatch.setattr(daily_job, "fetch_daily_files", _fake_files)
-    monkeypatch.setattr(daily_job, "_download_message_file", _fake_download)
-    monkeypatch.setattr(daily_job, "apply_daily_workbook", _fake_apply)
+    monkeypatch.setattr(handler_mod, "sync_record_flags_to_bitable", _no_writeback)
 
 
 class _EmptyResult:
@@ -149,10 +125,12 @@ async def _noop_take(_db: Any, _d: date, *,
 
 
 class TestDailyOrchestration:
-    async def test_direct_branch_full_pipeline(
+    """P2 退役后的日编排序：sheet 模式 / bitable 归档直读双分支（Excel 链路已删码）。"""
+
+    async def test_bitable_mode_pipeline(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """DIRECT 开：写完不回拉镜像；重算→回写→再读→分析→快照注入。"""
+        """bitable 归档口径：直读一次 → 内存重算（无回写）→ 分析 → 快照 source=None。"""
         views = [
             # 已预警且仍超量：计算无差异
             _view("recOver", total="12", flag="warn", note=["over_limit"]),
@@ -160,16 +138,16 @@ class TestDailyOrchestration:
             _view("recFlip", total="12"),
         ]
         reader = FakeReader(views)
-        wb_calls = _seed_direct(monkeypatch, reader)
-        _seed_files(monkeypatch)
+        _seed_direct(monkeypatch, reader)
 
-        snap_calls: list[tuple[date, str, list[Any] | None]] = []
+        snap_calls: list[dict[str, Any]] = []
         real_take = getattr(daily_job, "take_snapshot")
 
         async def _spy_take(db: Any, d: date, kind: str,
-                            records: list[Any] | None = None) -> int:
-            snap_calls.append((d, kind, records))
-            n: int = await real_take(db, d, kind, records=records)
+                            records: list[Any] | None = None,
+                            source: str | None = None) -> int:
+            snap_calls.append({"kind": kind, "records": records, "source": source})
+            n: int = await real_take(db, d, kind, records=records, source=source)
             return n
 
         monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
@@ -178,80 +156,62 @@ class TestDailyOrchestration:
 
         result = await daily_job.run_scheduled_daily_update()
 
-        assert result["sync"] == {"skipped": True, "reason": "direct_mode"}
+        assert result["source"] == "bitable"
+        assert result["sync"] == {"skipped": True, "reason": "bitable_archive_direct"}
+        assert result["files"] == []
         assert result["scan"]["changed"] == 1
-        assert reader.calls == 2  # 初读 + 写后再读
-        assert len(wb_calls) == 1
-        assert [v.id for v in wb_calls[0]] == ["recFlip"]
-        # 快照注入的是「写后再读」的视图（重算回写后的值）
+        assert reader.calls == 1  # 退役后单次直读（无写后再读）
         assert len(snap_calls) == 1
-        _, kind, records = snap_calls[0]
-        assert kind == "daily"
+        assert snap_calls[0]["kind"] == "daily"
+        assert snap_calls[0]["source"] is None  # 归档口径不带 sheet 标记
+        records = snap_calls[0]["records"]
         assert records is not None and [v.id for v in records] == ["recOver", "recFlip"]
         assert result["analysis"].over_limit_count == 2
         assert {w.id for w in result["warnings"]} == {"recOver", "recFlip"}
 
-    async def test_direct_reread_retries_once(
+    async def test_bitable_mode_rollback_day_skips_compare(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """再读失败重试 1 次：第一次抛、第二次成功 → 不上抛。"""
-        views = [_view("recA", total="12", flag="warn", note=["over_limit"])]
-        reader = FakeReader(views, fail_on_call={2})
+        """D8 对称断点（回滚日）：昨日 sheet 口径 → bitable 今日不做环比 + 汇总表照常。"""
+        views = [_view("recA", total="5")]
+        reader = FakeReader(views)
         _seed_direct(monkeypatch, reader)
-        _seed_files(monkeypatch)
+
+        async def _prev_sheet_era(_db: Any, _today: date) -> tuple[list[Any], str | None]:
+            return [_PrevRow(material_name="物料-recA", total_quantity_t=Decimal("1"),
+                             source="sheet")], "sheet"
+
         monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
-        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source)
+        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot_with_source", _prev_sheet_era)
         monkeypatch.setattr(daily_job, "take_snapshot", _noop_take)
 
         result = await daily_job.run_scheduled_daily_update()
-        assert reader.calls == 3  # 初读(1) + 再读失败(2) + 重试成功(3)
-        assert result["scan"]["changed"] == 0
 
-    async def test_writeback_off_skips_reread(
+        assert result["compare_note"] == "数据源口径切换（回滚至总表），本日不做环比"
+        assert result["analysis"].has_prev is False
+        assert result["analysis"].surge == []
+        assert result["analysis"].summary, "断点日汇总表仍渲染今日实际数据"
+
+    async def test_sheet_mode_takes_precedence(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """WRITEBACK 关（灰度组合）：不重读，分析/快照用内存重算值（spec §4.4）。"""
-        views = [_view("recFlip", total="12")]  # normal → 计算翻 warn
-        reader = FakeReader(views)
-        _seed_direct(monkeypatch, reader)
-        monkeypatch.setattr(config, "writeback_risk_enabled", lambda: False)
-        _seed_files(monkeypatch)
+        """SOURCE=sheet：优先走 sheet 编排（_run_bitable_mode 不被触达）。"""
+        async def _no_bitable() -> dict[str, Any]:
+            raise AssertionError("sheet 模式不该进 bitable 归档分支")
 
-        snap_records: list[Any] = []
+        monkeypatch.setattr(daily_job, "_run_bitable_mode", _no_bitable)
+        monkeypatch.setattr(daily_job, "_sheet_source_enabled", lambda: True)
 
-        async def _spy_take(_db: Any, _d: date, *,
-                            kind: str = "weekly",
-                            records: list[Any] | None = None) -> int:
-            snap_records.append(records)
-            return 0
+        async def _sheet_mode() -> dict[str, Any]:
+            return {"source": "sheet", "files": [], "analysis": None}
 
-        monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
-        monkeypatch.setattr(daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source)
-        monkeypatch.setattr(daily_job, "take_snapshot", _spy_take)
-
+        monkeypatch.setattr(daily_job, "_run_sheet_mode", _sheet_mode)
         result = await daily_job.run_scheduled_daily_update()
-        assert reader.calls == 1  # 回写关 → 不重读
-        assert result["scan"]["changed"] == 1
-        # 快照拍的是内存重算后的值（视图被原地重算）
-        assert snap_records[0] is not None and snap_records[0][0].risk_flag == "warn"
-        assert {w.id for w in result["warnings"]} == {"recFlip"}
+        assert result["source"] == "sheet"
 
-    async def test_direct_off_never_enters_direct(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """全关（默认）：无文件时提前跳过，不触直读收尾（哨兵上抛即暴露误用）。"""
-        async def _no_direct(_files: list[dict[str, Any]]) -> dict[str, Any]:
-            raise AssertionError("DIRECT 关时不该进直读收尾")
 
-        monkeypatch.setattr(daily_job, "_finish_direct", _no_direct)
-
-        async def _no_files(*_a: Any) -> list[dict[str, str]]:
-            return []
-
-        monkeypatch.setattr(daily_job, "_inventory_app_token", lambda: "appX")
-        monkeypatch.setattr(daily_job, "fetch_daily_files", _no_files)
-        result = await daily_job.run_scheduled_daily_update()
-        assert result.get("skipped") is True
+class _PrevRow(SimpleNamespace):
+    """load_prev_daily_snapshot_with_source 替身返回的行（带 source）。"""
 
 
 class TestWeeklyOrchestration:

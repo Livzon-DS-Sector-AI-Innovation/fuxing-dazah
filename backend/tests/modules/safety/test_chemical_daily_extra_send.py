@@ -95,17 +95,17 @@ async def test_digest_mode_sends_extra_group_after_cell(
 async def test_absence_cell_also_sent_to_extra_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """今日无 Excel：缺席格投总卡后同样追加投递危险品日报群。"""
+    """sheet 源无数据（缺席格）：投总卡后同样追加投递危险品日报群（P2 退役后口径）。"""
     _stub_extra(monkeypatch, EXTRA_CHAT)
     upsert, extra_send, _ = _stubs(monkeypatch, digest_on=True)
 
-    result = {"skipped": True, "reason": "no_files_today", "analysis": None}
+    result = {"skipped": True, "source": "sheet", "reason": "sheet_empty", "analysis": None}
     ret = await daily_job.send_daily_summary(result, chat_id="oc_main")
 
     assert ret == "digest"
     assert upsert.await_count == 1
     extra_send.assert_awaited_once()
-    assert extra_send.await_args.args[0].stats == "今日未收到日报 Excel，无库存分析"
+    assert extra_send.await_args.args[0].stats == "《危险品日报表》读取异常或无数据"
 
 
 async def test_extra_disabled_by_env_off(monkeypatch: pytest.MonkeyPatch) -> None:

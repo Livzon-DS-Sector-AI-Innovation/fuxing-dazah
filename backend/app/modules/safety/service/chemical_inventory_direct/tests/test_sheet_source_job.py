@@ -7,7 +7,7 @@ writeback 强制关。替身口径同 test_orchestration（FakeSession/FakeReade
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +19,11 @@ from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.service.chemical_inventory_direct import config
 
 TODAY = date(2026, 10, 15)
+
+
+def _bj_today() -> date:
+    """北京时间今天（编排内 take_snapshot/revision 状态用真实当日，勿冻结）。"""
+    return (datetime.now(UTC) + timedelta(hours=8)).date()
 
 
 class _EmptyResult:
@@ -98,11 +103,7 @@ def _seed_sheet(
 
     captured: dict[str, Any] = {"snapshots": [], "set_values": []}
 
-    async def _no_files(*_a: Any, **_kw: Any) -> list[dict[str, str]]:
-        raise AssertionError("sheet 模式不该拉取危险品日报群文件")
-
-    async def _no_sync() -> dict[str, Any]:
-        raise AssertionError("sheet 模式不该回拉 Bitable 镜像")
+    # P2 退役：Excel 拉群/镜像回拉函数已整体删码（结构性保证，无需哨兵）
 
     async def _fake_prev_with_source(_db: Any, _today: date) -> tuple[list[Any], str | None]:
         return prev_rows or [], prev_source
@@ -120,8 +121,6 @@ def _seed_sheet(
         captured["set_values"].append((key, value))
         return {}
 
-    monkeypatch.setattr(daily_job, "fetch_daily_files", _no_files)
-    monkeypatch.setattr(daily_job, "sync_inventory_records_from_bitable", _no_sync)
     monkeypatch.setattr(
         daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source
     )
@@ -181,7 +180,7 @@ class TestSheetModeOrchestration:
 
         assert result["not_updated_note"] is None
         assert captured["set_values"] == [
-            ("SAFETY_CHEMICAL_INVENTORY_SHEET_REVISION", f"365|{TODAY.isoformat()}")
+            ("SAFETY_CHEMICAL_INVENTORY_SHEET_REVISION", f"365|{_bj_today().isoformat()}")
         ]
         assert all(v.updated_at is not None for v in views)
 
@@ -299,17 +298,6 @@ class TestSheetModeWording:
         monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
         assert "《危险品日报表》" in config.receipt_direct_disabled_message()
 
-    def test_writeback_forced_off_in_sheet_mode(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """sheet 源下 WRITEBACK_RISK 强制视为关（风险不回写，设计 §2）。"""
-        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED", "true")
-        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "sheet")
-        assert config.writeback_risk_enabled() is False
-        monkeypatch.setenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", "bitable")
-        assert config.writeback_risk_enabled() is True
-
-
 class TestWeeklySourceSwitch:
     async def test_weekly_cross_source_skips_compare(
         self, monkeypatch: pytest.MonkeyPatch,
@@ -359,67 +347,6 @@ class TestWeeklySourceSwitch:
         assert report["source_switch"] is True
         text = wr._format_report(report, "")
         assert "数据源口径切换" in text
-
-
-class TestRollbackDayD8:
-    """D8 对称断点（回滚日）：昨日 sheet 口径 → 今日 bitable 口径也跳环比。"""
-
-    async def test_direct_finish_skips_sheet_era_prev(
-        self, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """bitable-direct 分支（_finish_direct）：昨日快照 source='sheet' → 跳环比+标注。"""
-        views = [SimpleNamespace(
-            id="r1", feishu_record_id="r1", department="warehouse",
-            storage_location="危库1", material_name="乙醇",
-            quantity=Decimal("5000"), unit="kg", total_quantity_t=Decimal("5"),
-            max_limit=Decimal("10"), max_limit_unit="T", hazard_classes=["flammable"],
-            risk_flag="normal", risk_note=["normal"], updated_at=datetime.now(UTC),
-        )]
-        reader = FakeSheetReader(views, revision=None)
-
-        from app.modules.safety.service.chemical_inventory_direct import (
-            reader as reader_mod,
-        )
-
-        async def _fake_prev_with_source(_db: Any, _today: date) -> tuple[list[Any], str | None]:
-            return [_PrevRow(material_name="乙醇", total_quantity_t=Decimal("1"),
-                             source="sheet")], "sheet"
-
-        async def _spy_take(_db: Any, _d: date, *, kind: str = "weekly",
-                            records: list[Any] | None = None,
-                            source: str | None = None) -> int:
-            return len(records or [])
-
-        async def _fake_files(*_a: Any) -> list[dict[str, str]]:
-            return [{"message_id": "m1", "file_key": "k", "file_name": "a.xls"}]
-
-        async def _fake_download(*_a: Any) -> bytes:
-            return b"xls"
-
-        async def _fake_apply(*_a: Any, **_kw: Any) -> dict[str, Any]:
-            return {"parsed": 1, "updated": 1, "created": 0}
-
-        monkeypatch.delenv("SAFETY_CHEMICAL_INVENTORY_SOURCE", raising=False)
-        monkeypatch.setattr(daily_job, "_inventory_app_token", lambda: "appX")
-        monkeypatch.setattr(daily_job, "fetch_daily_files", _fake_files)
-        monkeypatch.setattr(daily_job, "_download_message_file", _fake_download)
-        monkeypatch.setattr(daily_job, "apply_daily_workbook", _fake_apply)
-        monkeypatch.setattr(
-            daily_job, "load_prev_daily_snapshot_with_source", _fake_prev_with_source
-        )
-        monkeypatch.setattr(daily_job, "take_snapshot", _spy_take)
-        monkeypatch.setattr(daily_job, "async_session_factory", FakeSessionFactory())
-        monkeypatch.setattr(reader_mod, "open_reader", lambda **kw: reader)
-        from app.modules.safety.service.chemical_inventory_direct import config as cfg
-
-        monkeypatch.setattr(cfg, "direct_enabled", lambda: True)
-        monkeypatch.setattr(cfg, "writeback_risk_enabled", lambda: False)
-
-        result = await daily_job.run_scheduled_daily_update()
-
-        assert result["compare_note"] == "数据源口径切换（回滚至总表），本日不做环比"
-        assert result["analysis"].has_prev is False
-        assert result["analysis"].surge == []
 
 
 class TestSnapshotDuplicateKeyMerge:

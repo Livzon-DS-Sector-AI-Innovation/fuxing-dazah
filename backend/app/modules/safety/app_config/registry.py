@@ -153,10 +153,6 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "消防点检 PDF 归档开关（调度任务）",
     ),
     _flag(
-        "SAFETY_CHEMICAL_INVENTORY_DAILY_REALTIME_ENABLED", False,
-        "危化品库存 Excel 实时消息处理开关",
-    ),
-    _flag(
         "SAFETY_FIRE_ALARM_DAILY_DM_ENABLED", False,
         "消防报警日报部门过滤私发开关（一部门一卡，动态名单）",
     ),
@@ -269,10 +265,6 @@ _ITEMS: tuple[ConfigItem, ...] = (
     _gate(
         "SAFETY_CHEMICAL_INVENTORY_EVENT_SYNC_ENABLED", False,
         "危化品库存旧路径：Bitable 事件镜像",
-    ),
-    _gate(
-        "SAFETY_CHEMICAL_INVENTORY_WRITEBACK_RISK_ENABLED", False,
-        "危化品库存直读重算的风险标记/说明回写（legacy 回写不受影响）",
     ),
     ConfigItem(
         "SAFETY_CHEMICAL_INVENTORY_SOURCE", "direct_gate", "str",
