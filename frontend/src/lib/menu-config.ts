@@ -318,6 +318,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
       { key: "onboarding", label: "入职台账", path: "/hr/onboarding" },
       { key: "departure", label: "离职台账", path: "/hr/departure" },
+      { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
       {
         key: "training",
         label: "培训管理",
@@ -354,7 +355,6 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "system-config", label: "系统配置", path: "/hr/settings", permissions: ["hr:settings:manage"] },
           { key: "positions", label: "岗位管理", path: "/hr/positions", permissions: ["hr:position:read"] },
-          { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
           { key: "sop-catalog", label: "SOP管理", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
         ],
       },
