@@ -102,8 +102,14 @@ export default function TaskFillIn() {
     return () => clearInterval(timer)
   }, [load, page, createOpen])
 
-  const openCreateModal = async () => {
+  const openCreateModal = async (preset?: { product_name?: string; batch_number?: string }) => {
     createForm.resetFields()
+    if (preset) {
+      createForm.setFieldsValue({
+        product_name: preset.product_name,
+        batch_number: preset.batch_number,
+      })
+    }
     setSopOptions([])
     setCreateOpen(true)
     try {
@@ -423,7 +429,7 @@ export default function TaskFillIn() {
       <Space style={{ marginBottom: 8 }} wrap>
         <Button onClick={() => setFiltersOpen((v) => !v)}>{filtersOpen ? '收起筛选' : '展开筛选'}</Button>
         {canCreate && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateModal()}>新建检验任务</Button>
         )}
         {canReview && (
           <Popconfirm title={`确认批量作废 ${selectedKeys.length} 个任务？`} onConfirm={onBatchVoid}>

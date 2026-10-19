@@ -263,7 +263,6 @@ export const moduleMenus: ModuleMenu[] = [
         ],
       },
       { key: "quality-lab-items", label: "试剂/仪器台账", path: "/quality/lab-items", permissions: ["quality:material:read"] },
-      { key: "quality-inspection-plans", label: "请检计划", path: "/quality/inspection-plans", permissions: ["quality:material:read"] },
       {
         key: "quality-coa-group",
         label: "COA管理",

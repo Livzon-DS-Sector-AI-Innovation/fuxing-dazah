@@ -11,7 +11,7 @@ import {
   importInspectionPlans, downloadInspectionPlanTemplate,
 } from '@/actions/quality'
 
-export default function InspectionPlans() {
+export default function InspectionPlans({ onBuildTask }: { onBuildTask?: (batch: string, product: string) => void } = {}) {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   const canManage = hasPermission('quality:material:manage')
@@ -133,9 +133,16 @@ export default function InspectionPlans() {
             title: '操作', key: 'actions', width: 110,
             render: (_: unknown, item: InspectionPlan) => (
               canManage ? (
-                <Button size="small" type="link" onClick={() => onToggleStatus(item)}>
-                  {item.status === 'pending' ? '标记已请检' : '改回待请检'}
-                </Button>
+                <Space size="small">
+                  {item.status === 'pending' && onBuildTask && (
+                    <Button size="small" type="primary" onClick={() => onBuildTask(item.batch_no ?? '', item.product_name)}>
+                      建任务
+                    </Button>
+                  )}
+                  <Button size="small" type="link" onClick={() => onToggleStatus(item)}>
+                    {item.status === 'pending' ? '标记已请检' : '改回待请检'}
+                  </Button>
+                </Space>
               ) : '-'
             ),
           },

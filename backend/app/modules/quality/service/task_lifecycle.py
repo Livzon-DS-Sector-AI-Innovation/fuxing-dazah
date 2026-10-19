@@ -155,6 +155,18 @@ class _TaskLifecycle(_TaskCore):
                     detail="该产品+批号已存在检验任务，请直接进入该任务继续填报",
                 ) from exc
             raise
+        # 建任务成功：同批号的待请检计划自动销账（请检计划 → 已请检）
+        try:
+            from app.modules.quality.repository import (
+                list_inspection_plans,
+                update_inspection_plan_status,
+            )
+
+            for plan in await list_inspection_plans(db):
+                if plan.status == "pending" and plan.batch_no == payload.batch_number:
+                    await update_inspection_plan_status(db, plan.id, "inspected")
+        except Exception:
+            logger.warning("请检计划销账失败（不影响建任务）: %s", payload.batch_number)
         # 按 (sop_no, item_name) 去重（多个子项目可共用同一 SOP 号；防跨文档重复）
         seen_keys: set[tuple[str, str]] = set()
         snapshot = []

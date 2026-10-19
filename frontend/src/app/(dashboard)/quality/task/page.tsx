@@ -2,7 +2,7 @@
 
 import { Suspense } from 'react'
 import { Typography, Skeleton } from 'antd'
-import { TaskFillIn } from '@/components/quality'
+import { TaskAndPlans } from '@/components/quality'
 
 const { Title, Paragraph } = Typography
 
@@ -17,7 +17,7 @@ export default function TaskListPage() {
       </div>
       {/* Suspense：TaskFillIn 用 useSearchParams 读 URL 预置筛选，须挂边界避免 SSR 水合问题 */}
       <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
-        <TaskFillIn />
+        <TaskAndPlans />
       </Suspense>
     </div>
   )
