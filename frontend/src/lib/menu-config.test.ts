@@ -121,3 +121,42 @@ describe('safety 菜单结构（体系要素分组，3.0）', () => {
     expect(new Set(keys).size).toBe(keys.length)
   })
 })
+
+
+// 这些路径尚未有对应页面。菜单项必须 disabled，否则点击会进入 404，
+// 而 404 不属于 dashboard 路由组，会导致左侧菜单整栏消失。
+const PLACEHOLDER_MENU_PATHS = [
+  '/rd/projects',
+  '/rd/experiments',
+  '/rd/reports',
+  '/registration/filing',
+  '/registration/regulation',
+  '/registration/documents',
+  '/quality/inspection',
+  '/quality/deviation',
+  '/quality/capa',
+  '/quality/change',
+  '/admin/notice',
+  '/admin/meeting',
+  '/admin/approval',
+  '/purchasing/request',
+  '/purchasing/supplier',
+  '/purchasing/order',
+]
+
+function allLeaves(items: SubMenuItem[]): SubMenuItem[] {
+  return items.flatMap((item) =>
+    item.children?.length ? allLeaves(item.children) : [item],
+  )
+}
+
+describe('未实现页面菜单入口', () => {
+  it('均已置灰，避免点击后进入无侧边栏的 404 页面', () => {
+    const leaves = moduleMenus.flatMap((module) => allLeaves(module.children))
+    for (const path of PLACEHOLDER_MENU_PATHS) {
+      const item = leaves.find((leaf) => leaf.path === path)
+      expect(item, `菜单缺少占位项：${path}`).toBeDefined()
+      expect(item?.disabled, `${path} 应设置 disabled: true`).toBe(true)
+    }
+  })
+})

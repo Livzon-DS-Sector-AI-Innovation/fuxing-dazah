@@ -152,9 +152,10 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/rd",
     permissions: ["research:*:read"],
     children: [
-      { key: "projects", label: "研发项目", path: "/rd/projects" },
-      { key: "experiments", label: "实验记录", path: "/rd/experiments" },
-      { key: "reports", label: "研发报告", path: "/rd/reports" },
+      // 研发模块尚未实现，入口置灰，避免点击后跳到 404 导致侧边栏整体消失
+      { key: "projects", label: "研发项目", path: "/rd/projects", disabled: true },
+      { key: "experiments", label: "实验记录", path: "/rd/experiments", disabled: true },
+      { key: "reports", label: "研发报告", path: "/rd/reports", disabled: true },
     ],
   },
   {
@@ -164,9 +165,10 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/registration",
     permissions: ["registration:*:read"],
     children: [
-      { key: "filing", label: "注册申报", path: "/registration/filing" },
-      { key: "regulation", label: "法规跟踪", path: "/registration/regulation" },
-      { key: "documents", label: "文件管理", path: "/registration/documents" },
+      // 注册模块尚未实现，入口置灰，避免点击后跳到 404 导致侧边栏整体消失
+      { key: "filing", label: "注册申报", path: "/registration/filing", disabled: true },
+      { key: "regulation", label: "法规跟踪", path: "/registration/regulation", disabled: true },
+      { key: "documents", label: "文件管理", path: "/registration/documents", disabled: true },
     ],
   },
   {
@@ -178,10 +180,11 @@ export const moduleMenus: ModuleMenu[] = [
     children: [
       { key: "lc-parser", label: "🧪 液相解析", path: "/quality" },
       { key: "lc-calc", label: "📊 计算表", path: "/quality/calculator" },
-      { key: "inspection", label: "质量检验", path: "/quality/inspection" },
-      { key: "deviation", label: "偏差管理", path: "/quality/deviation" },
-      { key: "capa", label: "CAPA管理", path: "/quality/capa" },
-      { key: "change", label: "变更控制", path: "/quality/change" },
+      // 以下质量子页面尚未落地，入口置灰，避免点到 404 后丢失侧边栏
+      { key: "inspection", label: "质量检验", path: "/quality/inspection", disabled: true },
+      { key: "deviation", label: "偏差管理", path: "/quality/deviation", disabled: true },
+      { key: "capa", label: "CAPA管理", path: "/quality/capa", disabled: true },
+      { key: "change", label: "变更控制", path: "/quality/change", disabled: true },
     ],
   },
   {
@@ -191,9 +194,10 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/admin",
     permissions: ["administration:*:read"],
     children: [
-      { key: "notice", label: "公告通知", path: "/admin/notice" },
-      { key: "meeting", label: "会议管理", path: "/admin/meeting" },
-      { key: "approval", label: "文件审批", path: "/admin/approval" },
+      // 行政模块尚未实现，入口置灰，避免点击后跳到 404 导致侧边栏整体消失
+      { key: "notice", label: "公告通知", path: "/admin/notice", disabled: true },
+      { key: "meeting", label: "会议管理", path: "/admin/meeting", disabled: true },
+      { key: "approval", label: "文件审批", path: "/admin/approval", disabled: true },
     ],
   },
   {
@@ -277,9 +281,10 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/purchasing",
     permissions: ["procurement:*:read"],
     children: [
-      { key: "request", label: "采购申请", path: "/purchasing/request" },
-      { key: "supplier", label: "供应商管理", path: "/purchasing/supplier" },
-      { key: "order", label: "采购订单", path: "/purchasing/order" },
+      // 采购模块尚未实现，入口置灰，避免点击后跳到 404 导致侧边栏整体消失
+      { key: "request", label: "采购申请", path: "/purchasing/request", disabled: true },
+      { key: "supplier", label: "供应商管理", path: "/purchasing/supplier", disabled: true },
+      { key: "order", label: "采购订单", path: "/purchasing/order", disabled: true },
     ],
   },
   {
