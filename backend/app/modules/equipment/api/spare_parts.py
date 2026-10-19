@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -27,6 +28,7 @@ from app.modules.equipment.schemas import (
     StockInboundRequest,
     StockOutboundRequest,
     StockResponse,
+    StockSettingsRequest,
 )
 from app.modules.equipment.service import IMPORT_MODE_ACCUMULATE
 
@@ -52,6 +54,7 @@ async def list_spare_parts(
     category: str | None = Query(None, description="备件分类"),
     keyword: str | None = Query(None, description="关键词搜索"),
     is_active: bool | None = Query(None, description="是否启用"),
+    low_stock: bool | None = Query(None, description="库存状态：true=低于安全线"),
     department_id: uuid.UUID | None = Query(None, description="归属部门ID"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
@@ -62,7 +65,7 @@ async def list_spare_parts(
 ) -> JSONResponse:
     spare_parts, total = await service.get_spare_parts(
         db, ctx, category=category, keyword=keyword,
-        is_active=is_active, department_id=department_id,
+        is_active=is_active, low_stock=low_stock, department_id=department_id,
         page=page, page_size=page_size,
     )
     return paginated_response(
@@ -89,7 +92,10 @@ async def list_outbound_transactions(
     transaction_type: str | None = Query(
         None, description="类型筛选：入库/出库/盘点调整；不传返回全部"
     ),
-    keyword: str | None = Query(None, description="备件名称搜索"),
+    keyword: str | None = Query(None, description="备件编码/名称搜索"),
+    spare_part_id: uuid.UUID | None = Query(None, description="按备件过滤"),
+    date_from: datetime | None = Query(None, description="起始时间"),
+    date_to: datetime | None = Query(None, description="截止时间"),
     db: AsyncSession = Depends(get_db),
     ctx: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:spare_part:read"),
@@ -98,6 +104,7 @@ async def list_outbound_transactions(
     rows, total = await repo.get_outbound_transactions(
         db, ctx, page=page, page_size=page_size,
         transaction_type=transaction_type, keyword=keyword,
+        spare_part_id=spare_part_id, date_from=date_from, date_to=date_to,
     )
     return paginated_response(
         data=[OutboundTransactionResponse(**row) for row in rows],
@@ -131,14 +138,19 @@ async def import_spare_parts(
         description="已有编码的处理方式：accumulate=累加入库（默认），overwrite=以表格为准覆盖",
     ),
     db: AsyncSession = Depends(get_db),
-    ctx: EquipmentAccessContext = Depends(
+    ctx_update: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:spare_part:update"),
+    ),
+    ctx_create: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:create"),
     ),
 ) -> JSONResponse:
     """从 Excel 文件批量导入备件。
 
-    导入会写已有备件的库存与主数据，因此要求 update 权限（与入库/出库/改备件一致）。
+    导入既会新建备件（create）也会写已有备件的库存与主数据（update），
+    因此要求 create + update 双权限。
     """
+    ctx = ctx_update
     if not file.filename or not file.filename.endswith(".xlsx"):
         return JSONResponse(
             status_code=400,
@@ -164,6 +176,7 @@ async def get_spare_part_equipments(
         require_equipment_access("equipment:spare_part:read"),
     ),
 ) -> JSONResponse:
+    await service.ensure_spare_part_readable(db, spare_part_id, ctx)
     links = await repo.get_spare_part_equipments(db, spare_part_id)
     results = []
     for link in links:
@@ -229,7 +242,7 @@ async def get_spare_part(
         require_equipment_access("equipment:spare_part:read"),
     ),
 ) -> JSONResponse:
-    spare_part = await service.get_spare_part_by_id(db, spare_part_id)
+    spare_part = await service.get_spare_part_detail(db, spare_part_id, ctx)
     return success_response(data=SparePartResponse.model_validate(spare_part))
 
 
@@ -268,7 +281,20 @@ async def get_stock(
         require_equipment_access("equipment:spare_part:read"),
     ),
 ) -> JSONResponse:
-    stock = await service.get_stock_by_spare_part_id(db, spare_part_id)
+    stock = await service.get_stock_with_access(db, spare_part_id, ctx)
+    return success_response(data=StockResponse.model_validate(stock))
+
+
+@router.put("/{spare_part_id}/stock/settings", summary="库存设置（安全库存/最小采购批量/库位）")
+async def update_stock_settings(
+    spare_part_id: uuid.UUID,
+    data: StockSettingsRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:update"),
+    ),
+) -> JSONResponse:
+    stock = await service.update_stock_settings(db, spare_part_id, data, ctx)
     return success_response(data=StockResponse.model_validate(stock))
 
 

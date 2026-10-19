@@ -79,6 +79,8 @@ export const initialSparePartState = {
   sparePartPageSize: 20,
   sparePartLoading: false,
   sparePartKeyword: '',
+  sparePartStatusFilter: null as 'active' | 'inactive' | null,
+  sparePartLowStockFilter: null as 'low' | null,
   stockWarnings: [] as StockWarning[],
   stockWarningsLoading: false,
   sparePartDrawerOpen: false,
@@ -91,6 +93,8 @@ export const initialSparePartState = {
   stockOutboundSparePartId: null as string | null,
   stockAdjustDrawerOpen: false,
   stockAdjustSparePartId: null as string | null,
+  stockSettingsDrawerOpen: false,
+  stockSettingsSparePart: null as SparePart | null,
 }
 
 // ============ 维护计划状态 ============

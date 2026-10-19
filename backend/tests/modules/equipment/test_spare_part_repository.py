@@ -21,6 +21,7 @@ from app.modules.equipment.repository.spare_part import (
     exists_spare_part_by_code,
     get_available_spare_parts,
     get_equipment_spare_parts,
+    get_reserved_quantities,
     get_spare_part_by_code,
     get_spare_part_by_id,
     get_spare_part_equipments,
@@ -823,3 +824,74 @@ class TestAvailableSpareParts:
         found = next((s for s in available if s.id == sp.id), None)
         assert found is not None
         assert found.current_qty == 42  # type: ignore[attr-defined]
+
+
+# ==================== 待验收占用 / 全量预警 ====================
+
+
+class TestReservedQuantities:
+    """get_reserved_quantities：待验收工单登记消耗的占用量聚合。"""
+
+    @staticmethod
+    async def _create_test_equipment(db_session: AsyncSession) -> Equipment:
+        suffix = _rand_suffix()
+        location = Location(name="占用测试车间", code=f"LOC-{suffix}")
+        db_session.add(location)
+        await db_session.flush()
+
+        equipment = Equipment(
+            equipment_no=f"EQ-{suffix}",
+            name="占用测试设备",
+            location_id=location.id,
+            status="完好",
+        )
+        db_session.add(equipment)
+        await db_session.flush()
+        return equipment
+
+    async def test_aggregates_pending_verification_consumption(
+        self, db_session: AsyncSession
+    ) -> None:
+        """待验收工单的登记消耗按备件聚合；其他状态不计入。"""
+        import json as _json
+        from datetime import UTC, datetime
+
+        from app.modules.equipment.models.work_order import WorkOrder
+
+        sp_a = await create_spare_part(db_session, {
+            "code": f"SP-RES-A-{_rand_suffix()}",
+            "name": "占用备件A", "unit": "个",
+        })
+        sp_b = await create_spare_part(db_session, {
+            "code": f"SP-RES-B-{_rand_suffix()}",
+            "name": "占用备件B", "unit": "个",
+        })
+        equipment = await self._create_test_equipment(db_session)
+
+        def _wo(status: str, consumed: dict[str, int] | None) -> WorkOrder:
+            wo = WorkOrder(
+                work_order_no=f"WO-RES-{_rand_suffix()}",
+                equipment_id=equipment.id,
+                order_type="故障维修",
+                priority="中",
+                status=status,
+                reported_at=datetime.now(UTC),
+                consumed_parts_data=(
+                    _json.dumps([
+                        {"spare_part_id": sp_id, "quantity": qty}
+                        for sp_id, qty in consumed.items()
+                    ])
+                    if consumed else None
+                ),
+            )
+            db_session.add(wo)
+            return wo
+
+        _wo("待验收", {str(sp_a.id): 3, str(sp_b.id): 2})
+        _wo("待验收", {str(sp_a.id): 4})   # 同备件跨工单累加
+        _wo("执行中", {str(sp_a.id): 99})  # 非待验收不计入
+        await db_session.flush()
+
+        reserved = await get_reserved_quantities(db_session, [sp_a.id, sp_b.id])
+        assert reserved[sp_a.id] == 7
+        assert reserved[sp_b.id] == 2

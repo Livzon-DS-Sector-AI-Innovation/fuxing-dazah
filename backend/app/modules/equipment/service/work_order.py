@@ -277,12 +277,18 @@ async def complete_work_order(
             get_spare_part_by_id,
             get_stock_by_spare_part_id,
         )
+        # 同一备件可能被登记成多行，必须先按备件汇总再校验：
+        # 逐行比较会让每行都单独通过，直到验收扣减第二行才失败，工单卡在待验收
+        needed: dict[uuid.UUID, int] = {}
         for p in data.consumed_parts:
-            sp = await get_spare_part_by_id(db, uuid.UUID(p.spare_part_id))
-            stock = await get_stock_by_spare_part_id(db, uuid.UUID(p.spare_part_id))
-            if not stock or stock.current_qty < p.quantity:
+            pid = uuid.UUID(p.spare_part_id)
+            needed[pid] = needed.get(pid, 0) + p.quantity
+        for pid, qty in needed.items():
+            sp = await get_spare_part_by_id(db, pid)
+            stock = await get_stock_by_spare_part_id(db, pid)
+            if not stock or stock.current_qty < qty:
                 raise AppException(
-                    message=f"备件 '{sp.name}' 库存不足（当前 {stock.current_qty if stock else 0}，需要 {p.quantity}）"
+                    message=f"备件 '{sp.name}' 库存不足（当前 {stock.current_qty if stock else 0}，需要 {qty}）"
                 )
 
         wo.consumed_parts_data = json.dumps(
@@ -774,6 +780,10 @@ async def consume_materials(
         get_stock_by_spare_part_id,
     )
 
+    # 固定加锁顺序：并发验收两张消耗备件顺序相反的工单时，
+    # 按 JSON 顺序逐行 FOR UPDATE 会形成交叉等待（PostgreSQL 死锁，一方被中止）
+    items = sorted(items, key=lambda item: str(item["spare_part_id"]))
+
     total_cost = Decimal('0.00')
     transactions = []
 
@@ -801,6 +811,7 @@ async def consume_materials(
                 "transaction_type": "出库",
                 "quantity": -item["quantity"],
                 "remark": f"工单 {wo.work_order_no} 领料",
+                "created_by": ctx.user.id,
             },
         )
         transactions.append(transaction)

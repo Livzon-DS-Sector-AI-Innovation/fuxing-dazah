@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { App, Drawer, Form, Input, InputNumber, Button, Space, Typography } from 'antd'
 import { useEquipmentStore } from '@/stores/equipment'
 import { stockAdjust } from '@/actions/equipment'
+import { fetchSparePartStockClient } from '@/lib/api/equipment-client'
 import { StockAdjustInput } from '@/types/equipment'
 
 const { TextArea } = Input
@@ -16,12 +17,22 @@ export function StockAdjustDrawer({ onRefresh }: StockAdjustDrawerProps) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const [submitting, setSubmitting] = useState(false)
+  const [currentQty, setCurrentQty] = useState<number | null>(null)
   const {
     stockAdjustDrawerOpen, stockAdjustSparePartId, closeStockAdjustDrawer,
     spareParts,
   } = useEquipmentStore()
   const sparePart = spareParts.find((p) => p.id === stockAdjustSparePartId) ?? null
-  const currentQty = sparePart?.current_qty ?? 0
+
+  // 账面库存按 id 实时拉取，不依赖当前页 store（翻页/筛选后依然准确）
+  const handleOpenChange = (open: boolean) => {
+    if (open && stockAdjustSparePartId) {
+      setCurrentQty(null)
+      fetchSparePartStockClient(stockAdjustSparePartId)
+        .then(stock => { setCurrentQty(stock.current_qty) })
+        .catch(() => { /* 拉取失败仍可提交，后端行锁校验兜底 */ })
+    }
+  }
 
   const handleSubmit = async () => {
     if (!stockAdjustSparePartId || submitting) return
@@ -38,7 +49,7 @@ export function StockAdjustDrawer({ onRefresh }: StockAdjustDrawerProps) {
     try {
       const result = await stockAdjust(stockAdjustSparePartId, data)
       if (!result.success) { message.error(result.error); return }
-      message.success('盘点调整成功')
+      message.success(`盘点完成，当前库存 ${result.data?.current_qty ?? '-'}`)
       closeStockAdjustDrawer()
       onRefresh?.()
     } finally {
@@ -52,6 +63,7 @@ export function StockAdjustDrawer({ onRefresh }: StockAdjustDrawerProps) {
       size={480}
       open={stockAdjustDrawerOpen}
       onClose={closeStockAdjustDrawer}
+      afterOpenChange={handleOpenChange}
       destroyOnHidden
       extra={
         <Space>
@@ -62,7 +74,8 @@ export function StockAdjustDrawer({ onRefresh }: StockAdjustDrawerProps) {
     >
       {sparePart && (
         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-          {sparePart.code} · {sparePart.name}｜账面库存 <Typography.Text strong>{currentQty}</Typography.Text> {sparePart.unit}
+          {sparePart.code} · {sparePart.name}｜账面库存{' '}
+          <Typography.Text strong>{currentQty ?? '…'}</Typography.Text> {sparePart.unit}
         </Typography.Text>
       )}
       <Form form={form} layout="vertical" requiredMark="optional" preserve={false}>

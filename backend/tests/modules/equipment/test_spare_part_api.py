@@ -961,3 +961,165 @@ class TestImportSparePartsApi:
         )
         items = res_list.json()["data"]
         assert items and items[0]["current_qty"] == 4  # 覆盖为 4，不是 10 + 4
+
+
+# ==================== 建档库存设置 ====================
+
+
+class TestCreateWithStockSettingsApi:
+    """POST /spare-parts/ 携带库存设置字段建档。"""
+
+    async def test_create_with_stock_settings(self, client: AsyncClient) -> None:
+        """建档带期初/安全库存/库位：库存接口与详情接口都能读到。"""
+        code = f"SP-STOCK-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "带库存建档备件", "unit": "个",
+            "initial_qty": 50, "safety_qty": 10, "min_order_qty": 5,
+            "warehouse_location": "A-01",
+        })
+        assert res.status_code == 200
+        sp_id = res.json()["data"]["id"]
+
+        stock_res = await client.get(f"/api/v1/equipment/spare-parts/{sp_id}/stock")
+        assert stock_res.status_code == 200
+        stock = stock_res.json()["data"]
+        assert stock["current_qty"] == 50
+        assert stock["safety_qty"] == 10
+        assert stock["min_order_qty"] == 5
+        assert stock["warehouse_location"] == "A-01"
+
+        # 详情接口 current_qty 与库存接口一致（修「详情恒 0」）
+        detail_res = await client.get(f"/api/v1/equipment/spare-parts/{sp_id}")
+        assert detail_res.status_code == 200
+        detail = detail_res.json()["data"]
+        assert detail["current_qty"] == 50
+        assert detail["safety_qty"] == 10
+        assert detail["is_low_stock"] is False
+
+    async def test_create_low_stock_flags_detail(self, client: AsyncClient) -> None:
+        """期初低于安全线时详情返回 is_low_stock=True。"""
+        code = f"SP-LOW-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "低库存建档备件", "unit": "个",
+            "initial_qty": 3, "safety_qty": 10,
+        })
+        sp_id = res.json()["data"]["id"]
+        detail = (
+            await client.get(f"/api/v1/equipment/spare-parts/{sp_id}")
+        ).json()["data"]
+        assert detail["is_low_stock"] is True
+
+
+# ==================== 库存设置端点 ====================
+
+
+class TestStockSettingsApi:
+    """PUT /spare-parts/{id}/stock/settings 库存设置。"""
+
+    async def _create_part(self, client: AsyncClient) -> str:
+        code = f"SP-SET-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "设置测试备件", "unit": "个",
+        })
+        return res.json()["data"]["id"]
+
+    async def test_update_settings(self, client: AsyncClient) -> None:
+        """更新安全库存/采购批量/库位，立即生效且不产生流水。"""
+        sp_id = await self._create_part(client)
+        res = await client.put(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/settings",
+            json={"safety_qty": 20, "min_order_qty": 8, "warehouse_location": "B-02"},
+        )
+        assert res.status_code == 200
+        stock = res.json()["data"]
+        assert stock["safety_qty"] == 20
+        assert stock["min_order_qty"] == 8
+        assert stock["warehouse_location"] == "B-02"
+
+        txns = await client.get(
+            "/api/v1/equipment/spare-parts/transactions",
+            params={"spare_part_id": sp_id},
+        )
+        assert txns.json()["meta"]["total"] == 0
+
+    async def test_unset_fields_unchanged(self, client: AsyncClient) -> None:
+        """只传部分字段时其余保持原值。"""
+        sp_id = await self._create_part(client)
+        await client.put(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/settings",
+            json={"safety_qty": 12},
+        )
+        stock = (
+            await client.get(f"/api/v1/equipment/spare-parts/{sp_id}/stock")
+        ).json()["data"]
+        assert stock["safety_qty"] == 12
+        assert stock["min_order_qty"] == 1  # 默认未动
+        assert stock["warehouse_location"] is None
+
+
+# ==================== 删除守卫 ====================
+
+
+class TestDeleteGuardApi:
+    """DELETE /spare-parts/{id} 库存非零拒绝、归零后放行。"""
+
+    async def test_delete_rejected_when_stock_positive(
+        self, client: AsyncClient
+    ) -> None:
+        code = f"SP-DEL-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "删除守卫备件", "unit": "个",
+            "initial_qty": 5,
+        })
+        sp_id = res.json()["data"]["id"]
+
+        del_res = await client.delete(f"/api/v1/equipment/spare-parts/{sp_id}")
+        assert del_res.status_code == 400
+        assert "盘点归零" in del_res.json()["message"]
+
+        # 盘点归零后可删除
+        await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/adjust",
+            json={"new_qty": 0},
+        )
+        del_res2 = await client.delete(f"/api/v1/equipment/spare-parts/{sp_id}")
+        assert del_res2.status_code == 200
+
+
+# ==================== 流水筛选 ====================
+
+
+class TestTransactionsFiltersApi:
+    """GET /spare-parts/transactions 按备件/日期区间筛选。"""
+
+    async def test_filter_by_spare_part_and_date(
+        self, client: AsyncClient
+    ) -> None:
+        import uuid as _uuid
+        from datetime import UTC, datetime, timedelta
+
+        code = f"SP-TXN-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "流水筛选备件", "unit": "个",
+            "initial_qty": 30,
+        })
+        sp_id = res.json()["data"]["id"]
+
+        # 按备件过滤：只看到该备件的流水
+        res_sp = await client.get(
+            "/api/v1/equipment/spare-parts/transactions",
+            params={"spare_part_id": sp_id},
+        )
+        items = res_sp.json()["data"]
+        assert len(items) == 1
+        assert items[0]["spare_part_id"] == sp_id
+        assert items[0]["transaction_type"] == "入库"
+        assert items[0]["operator_name"] is not None
+
+        # 未来区间查不到
+        future = datetime.now(UTC) + timedelta(days=1)
+        res_future = await client.get(
+            "/api/v1/equipment/spare-parts/transactions",
+            params={"spare_part_id": _uuid.uuid4(), "date_from": future.isoformat()},
+        )
+        assert res_future.json()["meta"]["total"] == 0

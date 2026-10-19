@@ -36,6 +36,8 @@ class SparePart(BaseModel):
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
+        Index("ix_spare_parts_department_id", "department_id"),
+        Index("ix_spare_parts_category", "category"),
         {"schema": "equipment"},
     )
 
@@ -83,6 +85,11 @@ class EquipmentSparePart(BaseModel):
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
+        Index(
+            "ix_equipment_spare_parts_spare_part_id",
+            "spare_part_id",
+            postgresql_where=text("is_deleted = false"),
+        ),
         {"schema": "equipment"},
     )
 
@@ -107,12 +114,18 @@ class SparePartStock(BaseModel):
 
     __tablename__ = "spare_part_stocks"
     __table_args__ = (
+        # 软删条件唯一：软删备件后可重建同备件的库存行而不撞唯一约束
+        Index(
+            "uq_spare_part_stocks_spare_part_id",
+            "spare_part_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         {"schema": "equipment"},
     )
 
     spare_part_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("equipment.spare_parts.id"),
-        unique=True,
         comment="备件ID",
     )
     warehouse_location: Mapped[str | None] = mapped_column(
@@ -140,6 +153,10 @@ class SparePartTransaction(BaseModel):
             "transaction_type IN ('入库', '出库', '盘点调整')",
             name="ck_spare_part_transactions_type",
         ),
+        # 全系统增长最快的表之一，原除主键外无任何索引
+        Index("ix_spare_part_transactions_spare_part_id", "spare_part_id"),
+        Index("ix_spare_part_transactions_work_order_id", "work_order_id"),
+        Index("ix_spare_part_transactions_created_at", "created_at"),
         {"schema": "equipment"},
     )
 

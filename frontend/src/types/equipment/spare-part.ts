@@ -10,6 +10,11 @@ export interface SparePart {
   unit_price: number | null
   min_qty: number
   current_qty: number
+  safety_qty: number
+  min_order_qty: number
+  warehouse_location: string | null
+  is_low_stock: boolean
+  reserved_qty: number
   is_active: boolean
   equipment_count: number
   department_id: string | null
@@ -18,6 +23,9 @@ export interface SparePart {
   updated_at: string
   created_by: string | null
   updated_by: string | null
+  /** 设备可用备件出口专用：是否本设备专用件 / 单台需求数量 */
+  is_linked?: boolean
+  required_qty?: number
 }
 
 export interface CreateSparePartInput {
@@ -30,6 +38,10 @@ export interface CreateSparePartInput {
   unit_price?: number
   is_active?: boolean
   department_id?: string
+  initial_qty?: number
+  safety_qty?: number
+  min_order_qty?: number
+  warehouse_location?: string
 }
 
 export interface UpdateSparePartInput {
@@ -44,10 +56,17 @@ export interface UpdateSparePartInput {
   department_id?: string
 }
 
+export interface StockSettingsInput {
+  safety_qty?: number
+  min_order_qty?: number
+  warehouse_location?: string
+}
+
 export interface SparePartFilters {
   category?: string
   keyword?: string
   is_active?: boolean
+  low_stock?: boolean
   page?: number
   page_size?: number
 }
@@ -79,8 +98,14 @@ export interface StockWarning {
   spare_part_id: string
   code: string
   name: string
+  specification?: string | null
+  unit?: string | null
   current_qty: number
   min_qty: number
+  shortage?: number
+  min_order_qty?: number
+  warehouse_location?: string | null
+  suggested_qty?: number
 }
 
 // ==================== 备件-设备关联 ====================
@@ -110,6 +135,7 @@ export interface OutboundTransaction {
   work_order_id: string | null
   work_order_no: string | null
   equipment_name: string | null
+  operator_name: string | null
   consumed_at: string
   remark: string | null
 }

@@ -6,7 +6,7 @@ import {
   CreateCategoryInput, UpdateCategoryInput, CreateLocationInput, UpdateLocationInput, CreateEquipmentInput, UpdateEquipmentInput,
   CreateFailureCodeInput, UpdateFailureCodeInput,
   CreateWorkOrderInput, UpdateWorkOrderInput, AssignWorkOrderInput, CompleteWorkOrderInput, VerifyWorkOrderInput,
-  CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockOutboundInput, StockAdjustInput, LinkEquipmentInput,
+  CreateSparePartInput, UpdateSparePartInput, StockSettingsInput, StockInboundInput, StockOutboundInput, StockAdjustInput, LinkEquipmentInput,
   CreateMaintenancePlanInput, UpdateMaintenancePlanInput,
   CreateInspectionTemplateInput, UpdateInspectionTemplateInput,
   CreateInspectionTemplateItemInput, UpdateInspectionTemplateItemInput,
@@ -17,10 +17,10 @@ const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BAS
 
 type ActionResult<T = unknown> = { success: true; data: T | null } | { success: false; error: string }
 
-async function actionFetch(
+async function actionFetch<T = unknown>(
   url: string,
   options?: RequestInit,
-): Promise<ActionResult> {
+): Promise<ActionResult<T>> {
   try {
     const authHeaders = await getAuthHeaders()
     const response = await fetch(url, {
@@ -278,8 +278,15 @@ export async function deleteSparePart(id: string): Promise<ActionResult> {
   return result
 }
 
-export async function stockInbound(sparePartId: string, data: StockInboundInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/inbound`, {
+export interface StockMutationResult {
+  current_qty: number
+  safety_qty: number
+  min_order_qty: number
+  warehouse_location: string | null
+}
+
+export async function stockInbound(sparePartId: string, data: StockInboundInput): Promise<ActionResult<StockMutationResult>> {
+  const result = await actionFetch<StockMutationResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/inbound`, {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -287,8 +294,8 @@ export async function stockInbound(sparePartId: string, data: StockInboundInput)
   return result
 }
 
-export async function stockOutbound(sparePartId: string, data: StockOutboundInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/outbound`, {
+export async function stockOutbound(sparePartId: string, data: StockOutboundInput): Promise<ActionResult<StockMutationResult>> {
+  const result = await actionFetch<StockMutationResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/outbound`, {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -296,9 +303,18 @@ export async function stockOutbound(sparePartId: string, data: StockOutboundInpu
   return result
 }
 
-export async function stockAdjust(sparePartId: string, data: StockAdjustInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/adjust`, {
+export async function stockAdjust(sparePartId: string, data: StockAdjustInput): Promise<ActionResult<StockMutationResult>> {
+  const result = await actionFetch<StockMutationResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/adjust`, {
     method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function updateStockSettings(sparePartId: string, data: StockSettingsInput): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/settings`, {
+    method: 'PUT',
     body: JSON.stringify(data),
   })
   if (result.success) revalidatePath('/equipment')

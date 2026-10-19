@@ -438,10 +438,11 @@ async def get_available_spare_parts(
     ),
 ) -> JSONResponse:
     """获取该设备可用的备件：
-    未关联设备的备件（全局可用）+ 关联了此设备的备件
+    未关联设备的备件（全局可用）+ 关联了此设备的备件，
+    附带 is_linked / required_qty 供工单领料分组与默认数量
     """
     await _ensure_equipment_visible(db, equipment_id, ctx)
-    spare_parts = await repo.get_available_spare_parts(db, equipment_id)
+    spare_parts = await repo.get_available_spare_parts(db, equipment_id, ctx=ctx)
     return success_response(
         data=[SparePartResponse.model_validate(sp) for sp in spare_parts],
     )

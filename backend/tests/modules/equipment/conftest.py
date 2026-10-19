@@ -215,9 +215,22 @@ async def client(
     async def _override_get_current_user() -> User:
         return test_reporter
 
+    # 测试用户无 department 属性，可见部门解析恒为空会触发
+    # 「建档必须可确定归属部门」校验——统一 mock 成同一个可见部门
+    # （固定值，保证「同部门内编码唯一」等约束语义成立）。
+    # data_scope 已 mock 为 all，列表/查询过滤不受该部门影响。
+    fixed_dept_id = uuid.uuid4()
+
+    async def _override_visible_departments(db, user, scope):
+        return [fixed_dept_id]
+
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = _override_get_current_user
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    with patch(
+        "app.modules.equipment.deps._resolve_visible_department_ids",
+        new=_override_visible_departments,
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
     app.dependency_overrides.clear()

@@ -121,16 +121,31 @@ export async function fetchSparePartByIdClient(id: string): Promise<SparePart> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/spare-parts/${id}`)
 }
 
+export async function fetchSparePartStockClient(id: string): Promise<{
+  id: string
+  spare_part_id: string
+  warehouse_location: string | null
+  current_qty: number
+  safety_qty: number
+  min_order_qty: number
+}> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/spare-parts/${id}/stock`)
+}
+
 export async function fetchAvailableSparePartsClient(equipmentId: string): Promise<SparePart[]> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/available-spare-parts`)
 }
 
 export async function fetchOutboundTransactionsClient(
   page = 1, pageSize = 20, type?: string, keyword?: string,
+  options?: { sparePartId?: string; dateFrom?: string; dateTo?: string },
 ) {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
   if (type) params.append('transaction_type', type)
   if (keyword) params.append('keyword', keyword)
+  if (options?.sparePartId) params.append('spare_part_id', options.sparePartId)
+  if (options?.dateFrom) params.append('date_from', options.dateFrom)
+  if (options?.dateTo) params.append('date_to', options.dateTo)
   return apiFetchPaginated<import('@/types/equipment').OutboundTransaction>(
     `${API_BASE_URL}/api/v1/equipment/spare-parts/transactions?${params.toString()}`,
   )

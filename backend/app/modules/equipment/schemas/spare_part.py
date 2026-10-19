@@ -35,6 +35,15 @@ class SparePartCreate(BaseModel):
     department_id: uuid.UUID | None = Field(
         default=None, description="归属部门ID"
     )
+    # ── 库存设置（建档时一并初始化，避免建完档再点一次入库） ──
+    initial_qty: int = Field(
+        default=0, ge=0, description="期初库存数量（大于 0 时记一条「期初库存」入库流水）"
+    )
+    safety_qty: int = Field(default=0, ge=0, description="安全库存（预警阈值）")
+    min_order_qty: int = Field(default=1, ge=1, description="最小采购批量")
+    warehouse_location: str | None = Field(
+        default=None, max_length=100, description="库位"
+    )
 
 
 class SparePartUpdate(BaseModel):
@@ -82,7 +91,15 @@ class SparePartResponse(BaseModel):
     is_active: bool
     current_qty: int = 0
     min_qty: int = 0
+    safety_qty: int = 0
+    min_order_qty: int = 1
+    warehouse_location: str | None = None
+    is_low_stock: bool = False
+    reserved_qty: int = 0
     equipment_count: int = 0
+    # 设备可用备件出口专用（列表/详情保持默认值）
+    is_linked: bool = False
+    required_qty: int = 1
     department_id: uuid.UUID | None = None
     department_name: str | None = None
     created_at: datetime
@@ -104,6 +121,15 @@ class StockResponse(BaseModel):
     min_order_qty: int
 
     model_config = {"from_attributes": True}
+
+
+class StockSettingsRequest(BaseModel):
+    """库存设置请求（安全库存/最小采购批量/库位；均留空不改，传空串可清库位）"""
+    safety_qty: int | None = Field(default=None, ge=0, description="安全库存")
+    min_order_qty: int | None = Field(default=None, ge=1, description="最小采购批量")
+    warehouse_location: str | None = Field(
+        default=None, max_length=100, description="库位（传空串清空）"
+    )
 
 
 class StockInboundRequest(BaseModel):
@@ -135,6 +161,9 @@ class StockWarningResponse(BaseModel):
     current_qty: int
     min_qty: int
     shortage: int
+    min_order_qty: int = 1
+    warehouse_location: str | None = None
+    suggested_qty: int = 0
 
 
 # ==================== 设备-备件关联 ====================
@@ -173,6 +202,7 @@ class OutboundTransactionResponse(BaseModel):
     work_order_id: uuid.UUID | None = None
     work_order_no: str | None = None
     equipment_name: str | None = None
+    operator_name: str | None = None
     consumed_at: datetime
     remark: str | None = None
 

@@ -31,6 +31,7 @@ from app.modules.equipment.schemas.spare_part import (
     StockAdjustRequest,
     StockInboundRequest,
     StockOutboundRequest,
+    StockSettingsRequest,
     StockWarningResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
@@ -43,18 +44,45 @@ async def create_spare_part(
     data: SparePartCreate,
     ctx: EquipmentAccessContext,
 ) -> SparePart:
-    """创建备件，自动创建库存记录。department_id 自动从用户部门获取。"""
+    """创建备件，自动创建库存记录（含安全库存/库位等设置与期初库存）。"""
     if await repo.exists_spare_part_by_code(db, data.code):
         raise DuplicateException("备件编码", data.code)
 
     create_data = data.model_dump()
-    # 自动归属用户部门
-    if not create_data.get("department_id") and ctx.visible_department_ids:
-        create_data["department_id"] = ctx.visible_department_ids[0]
+    # 库存设置不入主数据表，建档时写入库存行
+    initial_qty = create_data.pop("initial_qty", 0)
+    stock_init = {
+        "current_qty": initial_qty,
+        "safety_qty": create_data.pop("safety_qty", 0),
+        "min_order_qty": create_data.pop("min_order_qty", 1),
+        "warehouse_location": create_data.pop("warehouse_location", None),
+    }
+
+    # 自动归属用户部门；超管（无可见部门列表）必须显式指定，
+    # 否则产出无主备件——verify_write_ownership 对 None 放行，人人可改
+    if not create_data.get("department_id"):
+        if ctx.visible_department_ids:
+            create_data["department_id"] = ctx.visible_department_ids[0]
+        else:
+            raise AppException(message="无法确定归属部门，请显式指定归属部门")
 
     spare_part = await repo.create_spare_part(db, create_data)
 
-    await repo.create_stock(db, {"spare_part_id": spare_part.id})
+    stock_init["spare_part_id"] = spare_part.id
+    await repo.create_stock(db, stock_init)
+
+    # 期初库存记一条入库流水，保持与「先建档再入库」路径账目一致
+    if initial_qty > 0:
+        await repo.create_transaction(
+            db,
+            {
+                "spare_part_id": spare_part.id,
+                "transaction_type": "入库",
+                "quantity": initial_qty,
+                "remark": "期初库存",
+                "created_by": ctx.user.id,
+            },
+        )
 
     return spare_part
 
@@ -76,6 +104,7 @@ async def get_spare_parts(
     category: str | None = None,
     keyword: str | None = None,
     is_active: bool | None = None,
+    low_stock: bool | None = None,
     department_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -87,18 +116,18 @@ async def get_spare_parts(
         category=category,
         keyword=keyword,
         is_active=is_active,
+        low_stock=low_stock,
         department_id=department_id,
         page=page,
         page_size=page_size,
     )
-    # 批量填充 department_name（缓存去重，避免 API 层直接调用 repo）
-    dept_cache: dict[uuid.UUID, str] = {}
-    for sp in spare_parts:
-        if sp.department_id:
-            if sp.department_id not in dept_cache:
-                dept_info = await repo.get_department_info(db, sp.department_id)
-                dept_cache[sp.department_id] = dept_info["name"] if dept_info else ""
-            sp.department_name = dept_cache.get(sp.department_id, "")  # type: ignore[attr-defined]
+    # 批量填充 department_name（一次查询，避免逐行 N+1）
+    dept_ids = {sp.department_id for sp in spare_parts if sp.department_id}
+    if dept_ids:
+        names = await repo.get_department_names_by_ids(db, list(dept_ids))
+        for sp in spare_parts:
+            if sp.department_id:
+                sp.department_name = names.get(sp.department_id, "")  # type: ignore[attr-defined]
     return spare_parts, total
 
 
@@ -114,6 +143,16 @@ async def update_spare_part(
 
     update_data = data.model_dump(exclude_unset=True)
 
+    # 归属部门不随主数据随意变更：受限用户不能清空（会产出人人可读的无主行）
+    # 也不能移到可见范围外；超管保留改派能力（历史无主数据的修复入口）
+    if "department_id" in update_data:
+        new_dept = update_data["department_id"]
+        if not ctx.is_unrestricted:
+            if new_dept is None:
+                raise ForbiddenException("无权清空备件归属部门")
+            if new_dept not in ctx.visible_department_ids:
+                raise ForbiddenException("无权将备件归属到其他部门")
+
     if "code" in update_data:
         code_exists = await repo.exists_spare_part_by_code(
             db, update_data["code"], exclude_id=spare_part_id
@@ -124,7 +163,9 @@ async def update_spare_part(
     result = await repo.update_spare_part(db, spare_part_id, update_data)
     if not result:
         raise NotFoundException("备件", str(spare_part_id))
-    return result
+    # flush 后 updated_at 等服务端生成列已过期，序列化时懒加载会触发
+    # MissingGreenlet——重新查询取新对象返回（cancel_batch 同模式）
+    return cast(SparePart, await repo.get_spare_part_by_id(db, spare_part_id))
 
 
 async def delete_spare_part(
@@ -132,10 +173,55 @@ async def delete_spare_part(
     spare_part_id: uuid.UUID,
     ctx: EquipmentAccessContext,
 ) -> bool:
-    """删除备件"""
+    """删除备件（软删）：库存必须先归零，关联行随删，避免留孤儿数据。"""
     spare_part = await get_spare_part_by_id(db, spare_part_id)
     await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
+
+    # 加锁读取：否则并发入库可在「读到 0」与「软删库存行」之间插入，
+    # 已提交的入库数量会随库存行一起被软删，账实丢失
+    stock = await repo.get_stock_by_spare_part_id(db, spare_part_id, for_update=True)
+    if stock and stock.current_qty > 0:
+        raise AppException(
+            message=(
+                f"备件当前库存 {stock.current_qty} {spare_part.unit}，"
+                "请先盘点归零或出库后再删除"
+            )
+        )
+
+    await repo.delete_equipment_spare_parts_by_spare_part(db, spare_part_id)
+    if stock:
+        stock.is_deleted = True
+        await db.flush()
     return await repo.delete_spare_part(db, spare_part_id)
+
+
+async def update_stock_settings(
+    db: AsyncSession,
+    spare_part_id: uuid.UUID,
+    data: StockSettingsRequest,
+    ctx: EquipmentAccessContext,
+) -> SparePartStock:
+    """更新库存设置（安全库存/最小采购批量/库位），不产生数量流水。"""
+    spare_part = await get_spare_part_by_id(db, spare_part_id)
+    await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
+
+    stock = await get_stock_by_spare_part_id(db, spare_part_id, for_update=True)
+
+    update_data = data.model_dump(exclude_unset=True)
+    if "safety_qty" in update_data and update_data["safety_qty"] is not None:
+        stock.safety_qty = update_data["safety_qty"]
+    if "min_order_qty" in update_data and update_data["min_order_qty"] is not None:
+        stock.min_order_qty = update_data["min_order_qty"]
+    # warehouse_location 显式传 null 也可清空（传空串同理）
+    if "warehouse_location" in update_data:
+        stock.warehouse_location = update_data["warehouse_location"] or None
+
+    stock.updated_by = ctx.user.id
+    await db.flush()
+    # 重新查询：flush 后服务端生成列过期，原对象直接序列化会 MissingGreenlet
+    return cast(
+        SparePartStock, await repo.get_stock_by_spare_part_id(db, spare_part_id)
+    )
 
 
 async def get_stock_by_spare_part_id(
@@ -150,6 +236,14 @@ async def get_stock_by_spare_part_id(
     return stock
 
 
+def _ensure_inbound_allowed(spare_part: SparePart) -> None:
+    """停用备件拒绝入库/上架（出库清库存不受限）"""
+    if not spare_part.is_active:
+        raise AppException(
+            message=f"备件「{spare_part.name}」已停用，请先启用再入库"
+        )
+
+
 async def inbound_stock(
     db: AsyncSession,
     spare_part_id: uuid.UUID,
@@ -160,6 +254,7 @@ async def inbound_stock(
     spare_part = await get_spare_part_by_id(db, spare_part_id)
     if ctx:
         await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
+    _ensure_inbound_allowed(spare_part)
 
     stock = await repo.update_stock_qty(db, spare_part_id, data.quantity)
     if not stock:
@@ -175,12 +270,13 @@ async def inbound_stock(
             "transaction_type": "入库",
             "quantity": data.quantity,
             "remark": data.remark,
+            "created_by": ctx.user.id if ctx else None,
         },
     )
 
     await db.flush()
-    await db.refresh(stock)
-    return stock
+    # 重新查询：flush 后服务端生成列过期，原对象直接序列化会 MissingGreenlet
+    return cast(SparePartStock, await repo.get_stock_by_spare_part_id(db, spare_part_id))
 
 
 async def outbound_stock(
@@ -213,12 +309,13 @@ async def outbound_stock(
             "transaction_type": "出库",
             "quantity": -data.quantity,
             "remark": data.remark,
+            "created_by": ctx.user.id if ctx else None,
         },
     )
 
     await db.flush()
-    await db.refresh(stock)
-    return stock
+    # 重新查询：flush 后服务端生成列过期，原对象直接序列化会 MissingGreenlet
+    return cast(SparePartStock, await repo.get_stock_by_spare_part_id(db, spare_part_id))
 
 
 async def adjust_stock(
@@ -248,12 +345,13 @@ async def adjust_stock(
                 "transaction_type": "盘点调整",
                 "quantity": diff,
                 "remark": data.remark,
+                "created_by": ctx.user.id if ctx else None,
             },
         )
 
     await db.flush()
-    await db.refresh(stock)
-    return stock
+    # 重新查询：flush 后服务端生成列过期，原对象直接序列化会 MissingGreenlet
+    return cast(SparePartStock, await repo.get_stock_by_spare_part_id(db, spare_part_id))
 
 
 async def get_stock_warnings(
@@ -264,6 +362,10 @@ async def get_stock_warnings(
     warnings = await repo.get_stock_warnings(db, ctx)
     result = []
     for spare_part, stock in warnings:
+        shortage = stock.safety_qty - stock.current_qty
+        # 建议补货量：缺口按最小采购批量向上取整到整数倍
+        batch = stock.min_order_qty if stock.min_order_qty > 0 else 1
+        suggested = ((shortage + batch - 1) // batch) * batch
         result.append(
             StockWarningResponse(
                 spare_part_id=spare_part.id,
@@ -273,10 +375,64 @@ async def get_stock_warnings(
                 unit=spare_part.unit,
                 current_qty=stock.current_qty,
                 min_qty=stock.safety_qty,
-                shortage=stock.safety_qty - stock.current_qty,
+                shortage=shortage,
+                min_order_qty=stock.min_order_qty,
+                warehouse_location=stock.warehouse_location,
+                suggested_qty=suggested,
             )
         )
     return result
+
+
+def _ensure_read_access(spare_part: SparePart, ctx: EquipmentAccessContext) -> None:
+    """读操作归属校验：防止跨部门按 ID 枚举（历史无归属数据放行）。"""
+    if (
+        not ctx.is_unrestricted
+        and spare_part.department_id is not None
+        and spare_part.department_id not in ctx.visible_department_ids
+    ):
+        raise ForbiddenException("无权查看其他部门的备件")
+
+
+async def ensure_spare_part_readable(
+    db: AsyncSession,
+    spare_part_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
+) -> SparePart:
+    """读入口统一的归属校验：不存在抛 404，越权抛 403"""
+    spare_part = await get_spare_part_by_id(db, spare_part_id)
+    _ensure_read_access(spare_part, ctx)
+    return spare_part
+
+
+async def get_stock_with_access(
+    db: AsyncSession,
+    spare_part_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
+) -> SparePartStock:
+    """按 ID 查库存，并做与详情一致的归属读校验"""
+    spare_part = await get_spare_part_by_id(db, spare_part_id)
+    _ensure_read_access(spare_part, ctx)
+    return await get_stock_by_spare_part_id(db, spare_part_id)
+
+
+async def get_spare_part_detail(
+    db: AsyncSession,
+    spare_part_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
+) -> SparePart:
+    """备件详情（带库存/关联设备数/待验收占用），保证与列表口径一致。"""
+    spare_part = await repo.get_spare_part_with_stock_by_id(db, spare_part_id)
+    if not spare_part:
+        raise NotFoundException("备件", str(spare_part_id))
+    _ensure_read_access(spare_part, ctx)
+
+    reserved = await repo.get_reserved_quantities(db, [spare_part.id])
+    spare_part.reserved_qty = reserved.get(spare_part.id, 0)  # type: ignore[attr-defined]
+    if spare_part.department_id:
+        names = await repo.get_department_names_by_ids(db, [spare_part.department_id])
+        spare_part.department_name = names.get(spare_part.department_id, "")  # type: ignore[attr-defined]
+    return spare_part
 
 
 # ==================== Excel 导入 ====================
@@ -577,6 +733,7 @@ async def import_spare_parts_from_excel(
                                         "transaction_type": "盘点调整",
                                         "quantity": diff,
                                         "remark": "Excel导入覆盖",
+                                        "created_by": ctx.user.id if ctx else None,
                                     },
                                 )
                         await db.flush()
@@ -594,6 +751,7 @@ async def import_spare_parts_from_excel(
                                 "transaction_type": "入库",
                                 "quantity": qty,
                                 "remark": "Excel导入入库",
+                                "created_by": ctx.user.id if ctx else None,
                             },
                         )
                         await db.flush()
@@ -602,18 +760,17 @@ async def import_spare_parts_from_excel(
                 continue
 
             # ── 新编码建档 ──
-            # 部门权限校验
+            # 部门必须可确定（超管也不例外），否则产出无归属备件
             department_id = default_dept_id
-            if not ctx.is_unrestricted:
-                if not department_id:
-                    errors.append(
-                        ImportRowError(
-                            row=row_num,
-                            message="无法确定归属部门，导入失败",
-                        )
+            if not department_id:
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message="无法确定归属部门，导入失败",
                     )
-                    skipped += 1
-                    continue
+                )
+                skipped += 1
+                continue
 
             # 创建备件（使用 SAVEPOINT 隔离每行）
             async with db.begin_nested():
@@ -650,6 +807,7 @@ async def import_spare_parts_from_excel(
                             "transaction_type": "入库",
                             "quantity": qty,
                             "remark": "Excel导入初始库存",
+                            "created_by": ctx.user.id if ctx else None,
                         },
                     )
 

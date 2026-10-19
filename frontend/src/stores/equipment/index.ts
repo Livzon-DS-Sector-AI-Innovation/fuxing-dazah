@@ -110,6 +110,8 @@ export const useEquipmentStore = create<EquipmentStore>()(
       setSparePartPageSize: (size) => set({ sparePartPageSize: size, sparePartPage: 1 }, false, 'equipment/setSparePartPageSize'),
       setSparePartLoading: (loading) => set({ sparePartLoading: loading }, false, 'equipment/setSparePartLoading'),
       setSparePartKeyword: (keyword) => set({ sparePartKeyword: keyword, sparePartPage: 1 }, false, 'equipment/setSparePartKeyword'),
+      setSparePartStatusFilter: (filter) => set({ sparePartStatusFilter: filter, sparePartPage: 1 }, false, 'equipment/setSparePartStatusFilter'),
+      setSparePartLowStockFilter: (filter) => set({ sparePartLowStockFilter: filter, sparePartPage: 1 }, false, 'equipment/setSparePartLowStockFilter'),
       setStockWarnings: (warnings) => set({ stockWarnings: warnings }, false, 'equipment/setStockWarnings'),
       setStockWarningsLoading: (loading) => set({ stockWarningsLoading: loading }, false, 'equipment/setStockWarningsLoading'),
       openSparePartDrawer: (part) => set({
@@ -142,6 +144,12 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeStockAdjustDrawer: () => set({
         stockAdjustDrawerOpen: false, stockAdjustSparePartId: null,
       }, false, 'equipment/closeStockAdjustDrawer'),
+      openStockSettingsDrawer: (part) => set({
+        stockSettingsDrawerOpen: true, stockSettingsSparePart: part,
+      }, false, 'equipment/openStockSettingsDrawer'),
+      closeStockSettingsDrawer: () => set({
+        stockSettingsDrawerOpen: false, stockSettingsSparePart: null,
+      }, false, 'equipment/closeStockSettingsDrawer'),
 
       // ── 维护计划操作 ──
       setMaintenancePlans: (plans) => set({ maintenancePlans: plans }, false, 'equipment/setMaintenancePlans'),

@@ -41,6 +41,7 @@ from app.modules.equipment.service.spare_part import (
     inbound_stock,
     outbound_stock,
     update_spare_part,
+    update_stock_settings,
 )
 
 
@@ -57,6 +58,7 @@ def _make_spare_part(
         name=name,
         unit=unit,
         department_id=department_id,
+        is_active=True,
     )
     return sp
 
@@ -79,7 +81,7 @@ def _make_stock(
 
 
 def _make_ctx(data_scope: str = "all") -> EquipmentAccessContext:
-    """创建一个无限制（超管）的访问上下文。"""
+    """创建一个无限制（超管）的访问上下文（带可见部门，满足建档归属校验）。"""
     from app.platform.identity.models import User
 
     user = User(
@@ -87,7 +89,11 @@ def _make_ctx(data_scope: str = "all") -> EquipmentAccessContext:
         name="测试用户",
         employee_no="EMP-TEST",
     )
-    return EquipmentAccessContext(user=user, data_scope=data_scope)
+    return EquipmentAccessContext(
+        user=user,
+        data_scope=data_scope,
+        visible_department_ids=[uuid.uuid4()],
+    )
 
 
 # ==================== create_spare_part ====================
@@ -217,11 +223,9 @@ class TestCreateSparePart:
     async def test_no_department_id_when_context_has_none(
         self, create_data: SparePartCreate
     ) -> None:
-        """ctx.visible_department_ids 为空时不自动设置 department_id。"""
+        """ctx.visible_department_ids 为空且未显式指定部门时拒绝建档（防无主备件）。"""
         ctx_empty = _make_ctx()
         ctx_empty.visible_department_ids = []
-
-        mock_sp = _make_spare_part(department_id=None)
 
         with (
             patch(
@@ -229,21 +233,12 @@ class TestCreateSparePart:
                 new_callable=AsyncMock,
                 return_value=False,
             ),
-            patch(
-                "app.modules.equipment.service.spare_part.repo.create_spare_part",
-                new_callable=AsyncMock,
-            ) as mock_create,
-            patch(
-                "app.modules.equipment.service.spare_part.repo.create_stock",
-                new_callable=AsyncMock,
-            ),
         ):
-            mock_create.return_value = mock_sp
-            await create_spare_part(
-                db=AsyncMock(), data=create_data, ctx=ctx_empty,
-            )
-            call_data = mock_create.call_args[0][1]
-            assert call_data.get("department_id") is None
+            with pytest.raises(AppException) as exc_info:
+                await create_spare_part(
+                    db=AsyncMock(), data=create_data, ctx=ctx_empty,
+                )
+            assert "归属部门" in exc_info.value.message
 
 
 # ==================== get_spare_part_by_id ====================
@@ -330,25 +325,18 @@ class TestGetSpareParts:
             assert call_kwargs["page_size"] == 10
 
     async def test_batch_fills_department_name(self) -> None:
-        """批量查询部门名称并缓存去重。"""
+        """部门名称按去重后的 ID 集合一次批量查询填充。"""
         dept_a = uuid.uuid4()
         dept_b = uuid.uuid4()
         sp1 = _make_spare_part(code="SP-A", department_id=dept_a)
         sp2 = _make_spare_part(code="SP-B", department_id=dept_a)
         sp3 = _make_spare_part(code="SP-C", department_id=dept_b)
 
-        call_count = 0
-
-        async def mock_dept_info(
-            db: object, dept_id: uuid.UUID
-        ) -> dict[str, str] | None:
-            nonlocal call_count
-            call_count += 1
-            if dept_id == dept_a:
-                return {"name": "生产部"}
-            if dept_id == dept_b:
-                return {"name": "质量部"}
-            return None
+        async def mock_dept_names(
+            db: object, dept_ids: list[uuid.UUID]
+        ) -> dict[uuid.UUID, str]:
+            assert set(dept_ids) == {dept_a, dept_b}
+            return {dept_a: "生产部", dept_b: "质量部"}
 
         with (
             patch(
@@ -357,14 +345,15 @@ class TestGetSpareParts:
                 return_value=([sp1, sp2, sp3], 3),
             ),
             patch(
-                "app.modules.equipment.service.spare_part.repo.get_department_info",
+                "app.modules.equipment.service.spare_part.repo.get_department_names_by_ids",
                 new_callable=AsyncMock,
-                side_effect=mock_dept_info,
+                side_effect=mock_dept_names,
             ),
         ):
             await get_spare_parts(db=AsyncMock(), ctx=_make_ctx())
-            # dept_a 被查询两次但缓存命中只调用一次 repo，dept_b 一次
-            assert call_count == 2
+            assert sp1.department_name == "生产部"
+            assert sp2.department_name == "生产部"
+            assert sp3.department_name == "质量部"
 
 
 # ==================== update_spare_part ====================
@@ -488,7 +477,7 @@ class TestDeleteSparePart:
     """delete_spare_part 删除备件业务逻辑测试。"""
 
     async def test_deletes_and_returns_true(self) -> None:
-        """正常删除返回 True。"""
+        """库存为 0 时正常删除返回 True。"""
         sp = _make_spare_part()
         ctx = _make_ctx()
 
@@ -497,6 +486,16 @@ class TestDeleteSparePart:
                 "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
                 new_callable=AsyncMock,
                 return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=_make_stock(sp.id, current_qty=0),
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.delete_equipment_spare_parts_by_spare_part",
+                new_callable=AsyncMock,
+                return_value=0,
             ),
             patch(
                 "app.modules.equipment.service.spare_part.repo.delete_spare_part",
@@ -590,6 +589,11 @@ class TestInboundStock:
                 return_value=stock,
             ),
             patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
+            patch(
                 "app.modules.equipment.service.spare_part.repo.create_transaction",
                 new_callable=AsyncMock,
             ) as mock_txn,
@@ -625,6 +629,11 @@ class TestInboundStock:
                 return_value=stock,
             ),
             patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
+            patch(
                 "app.modules.equipment.service.spare_part.repo.create_transaction",
                 new_callable=AsyncMock,
             ),
@@ -649,6 +658,11 @@ class TestInboundStock:
             ),
             patch(
                 "app.modules.equipment.service.spare_part.repo.update_stock_qty",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
                 new_callable=AsyncMock,
                 return_value=stock,
             ),
@@ -1039,7 +1053,11 @@ class TestImportSparePartsFromExcel:
 
     @pytest.fixture
     def imp_ctx(self, imp_user) -> EquipmentAccessContext:
-        return EquipmentAccessContext(user=imp_user, data_scope="all")
+        return EquipmentAccessContext(
+            user=imp_user,
+            data_scope="all",
+            visible_department_ids=[uuid.uuid4()],
+        )
 
     async def test_new_code_with_quantity_creates_stock_and_transaction(
         self, db_session, imp_ctx
@@ -1452,3 +1470,281 @@ class TestImportSparePartsFromExcel:
                 ctx=imp_ctx,
                 mode="bogus",
             )
+
+
+# ==================== create_spare_part 库存初始化 ====================
+
+
+class TestCreateSparePartStockInit:
+    """建档时的库存设置（期初库存/安全库存/库位）与期初流水。"""
+
+    async def test_create_with_initial_qty_and_settings(self) -> None:
+        """建档带库存设置：库存行落数值，期初 > 0 时写「期初库存」入库流水。"""
+        data = SparePartCreate(
+            code="SP-INIT-001", name="轴承", unit="个",
+            initial_qty=50, safety_qty=10, min_order_qty=5,
+            warehouse_location="A-01",
+        )
+        ctx = _make_ctx()
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.exists_spare_part_by_code",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_spare_part",
+                new_callable=AsyncMock,
+                return_value=_make_spare_part(),
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_stock",
+                new_callable=AsyncMock,
+            ) as mock_stock,
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_transaction",
+                new_callable=AsyncMock,
+            ) as mock_txn,
+        ):
+            await create_spare_part(db=AsyncMock(), data=data, ctx=ctx)
+
+            stock_data = mock_stock.call_args[0][1]
+            assert stock_data["current_qty"] == 50
+            assert stock_data["safety_qty"] == 10
+            assert stock_data["min_order_qty"] == 5
+            assert stock_data["warehouse_location"] == "A-01"
+
+            txn_data = mock_txn.call_args[0][1]
+            assert txn_data["transaction_type"] == "入库"
+            assert txn_data["quantity"] == 50
+            assert txn_data["remark"] == "期初库存"
+            assert txn_data["created_by"] == ctx.user.id
+
+    async def test_create_without_initial_qty_skips_transaction(self) -> None:
+        """期初为 0 时不写流水，其余库存设置照常落库。"""
+        data = SparePartCreate(
+            code="SP-INIT-002", name="密封圈", unit="个",
+            safety_qty=8,
+        )
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.exists_spare_part_by_code",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_spare_part",
+                new_callable=AsyncMock,
+                return_value=_make_spare_part(),
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_stock",
+                new_callable=AsyncMock,
+            ) as mock_stock,
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_transaction",
+                new_callable=AsyncMock,
+            ) as mock_txn,
+        ):
+            await create_spare_part(db=AsyncMock(), data=data, ctx=_make_ctx())
+
+            stock_data = mock_stock.call_args[0][1]
+            assert stock_data["current_qty"] == 0
+            assert stock_data["safety_qty"] == 8
+            mock_txn.assert_not_called()
+
+
+# ==================== delete_spare_part 校验 ====================
+
+
+class TestDeleteSparePartGuards:
+    """删除备件的守卫逻辑：库存非零拒绝、关联与库存行级联软删。"""
+
+    async def test_rejects_when_stock_positive(self) -> None:
+        """库存 > 0 时拒绝删除，提示先归零。"""
+        sp = _make_spare_part()
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=_make_stock(sp.id, current_qty=7),
+            ),
+        ):
+            with pytest.raises(AppException) as exc_info:
+                await delete_spare_part(
+                    db=AsyncMock(), spare_part_id=sp.id, ctx=_make_ctx(),
+                )
+            assert "盘点归零" in exc_info.value.message
+
+    async def test_cascades_links_and_stock(self) -> None:
+        """库存为 0 删除时，设备关联与库存行同步软删。"""
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, current_qty=0)
+        db = AsyncMock()
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.delete_equipment_spare_parts_by_spare_part",
+                new_callable=AsyncMock,
+                return_value=2,
+            ) as mock_cascade,
+            patch(
+                "app.modules.equipment.service.spare_part.repo.delete_spare_part",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await delete_spare_part(
+                db=db, spare_part_id=sp.id, ctx=_make_ctx(),
+            )
+            assert result is True
+            mock_cascade.assert_called_once()
+            assert stock.is_deleted is True
+
+
+# ==================== inbound_stock 停用守卫 ====================
+
+
+class TestInboundInactiveGuard:
+    """停用备件拒绝入库。"""
+
+    async def test_rejects_inactive_spare_part(self) -> None:
+        sp = _make_spare_part()
+        sp.is_active = False
+
+        with patch(
+            "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+            new_callable=AsyncMock,
+            return_value=sp,
+        ):
+            with pytest.raises(AppException) as exc_info:
+                await inbound_stock(
+                    db=AsyncMock(),
+                    spare_part_id=sp.id,
+                    data=StockInboundRequest(quantity=10),
+                    ctx=_make_ctx(),
+                )
+            assert "停用" in exc_info.value.message
+
+
+# ==================== update_stock_settings ====================
+
+
+class TestUpdateStockSettings:
+    """update_stock_settings 库存设置业务逻辑测试。"""
+
+    async def test_updates_fields_without_transaction(self) -> None:
+        """更新安全库存/采购批量/库位，不产生数量流水。"""
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, current_qty=50, safety_qty=10)
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ) as mock_get_stock,
+            patch(
+                "app.modules.equipment.service.spare_part.repo.create_transaction",
+                new_callable=AsyncMock,
+            ) as mock_txn,
+        ):
+            from app.modules.equipment.schemas.spare_part import (
+                StockSettingsRequest,
+            )
+
+            result = await update_stock_settings(
+                db=AsyncMock(),
+                spare_part_id=sp.id,
+                data=StockSettingsRequest(
+                    safety_qty=30, min_order_qty=4, warehouse_location="C-03",
+                ),
+                ctx=_make_ctx(),
+            )
+            assert result is stock
+            assert stock.safety_qty == 30
+            assert stock.min_order_qty == 4
+            assert stock.warehouse_location == "C-03"
+            # 第一次读取带 for_update 行锁（末次为返回前的 re-fetch）
+            assert mock_get_stock.call_args_list[0].kwargs.get("for_update") is True
+            mock_txn.assert_not_called()
+
+    async def test_unset_fields_keep_original(self) -> None:
+        """未传的字段保持原值不变。"""
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, safety_qty=10, warehouse_location="A-01")
+
+        with (
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_spare_part_by_id",
+                new_callable=AsyncMock,
+                return_value=sp,
+            ),
+            patch(
+                "app.modules.equipment.service.spare_part.repo.get_stock_by_spare_part_id",
+                new_callable=AsyncMock,
+                return_value=stock,
+            ),
+        ):
+            from app.modules.equipment.schemas.spare_part import (
+                StockSettingsRequest,
+            )
+
+            await update_stock_settings(
+                db=AsyncMock(),
+                spare_part_id=sp.id,
+                data=StockSettingsRequest(safety_qty=25),
+                ctx=_make_ctx(),
+            )
+            assert stock.safety_qty == 25
+            assert stock.warehouse_location == "A-01"
+            assert stock.min_order_qty == 5  # _make_stock 默认
+
+
+# ==================== get_stock_warnings 建议补货量 ====================
+
+
+class TestStockWarningsSuggested:
+    """预警响应的建议补货量按最小采购批量向上取整。"""
+
+    async def test_suggested_qty_rounds_up_to_batch(self) -> None:
+        sp = _make_spare_part()
+        stock = _make_stock(sp.id, current_qty=5, safety_qty=20)
+        stock.min_order_qty = 4  # 缺口 15 → 建议补 16
+
+        with patch(
+            "app.modules.equipment.service.spare_part.repo.get_stock_warnings",
+            new_callable=AsyncMock,
+            return_value=[(sp, stock)],
+        ):
+            warnings = await get_stock_warnings(db=AsyncMock(), ctx=_make_ctx())
+
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w.shortage == 15
+        assert w.min_order_qty == 4
+        assert w.suggested_qty == 16
+        assert w.warehouse_location == stock.warehouse_location

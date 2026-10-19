@@ -123,6 +123,8 @@ export interface EquipmentStore {
   sparePartPageSize: number
   sparePartLoading: boolean
   sparePartKeyword: string
+  sparePartStatusFilter: 'active' | 'inactive' | null
+  sparePartLowStockFilter: 'low' | null
   stockWarnings: StockWarning[]
   stockWarningsLoading: boolean
   setSpareParts: (parts: SparePart[]) => void
@@ -131,6 +133,8 @@ export interface EquipmentStore {
   setSparePartPageSize: (size: number) => void
   setSparePartLoading: (loading: boolean) => void
   setSparePartKeyword: (keyword: string) => void
+  setSparePartStatusFilter: (filter: 'active' | 'inactive' | null) => void
+  setSparePartLowStockFilter: (filter: 'low' | null) => void
   setStockWarnings: (warnings: StockWarning[]) => void
   setStockWarningsLoading: (loading: boolean) => void
   sparePartDrawerOpen: boolean
@@ -153,6 +157,10 @@ export interface EquipmentStore {
   stockAdjustSparePartId: string | null
   openStockAdjustDrawer: (sparePartId: string) => void
   closeStockAdjustDrawer: () => void
+  stockSettingsDrawerOpen: boolean
+  stockSettingsSparePart: SparePart | null
+  openStockSettingsDrawer: (part: SparePart) => void
+  closeStockSettingsDrawer: () => void
 
   // ── 维护计划 ──
   maintenancePlans: MaintenancePlan[]

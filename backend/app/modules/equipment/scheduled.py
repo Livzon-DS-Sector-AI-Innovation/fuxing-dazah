@@ -259,11 +259,13 @@ async def scan_timeout_work_orders() -> None:
                 ):
                     continue
 
-                await send_timeout_notification(
+                sent = await send_timeout_notification(
                     order.work_order_no, equipment_name, leader_name,
                     reason=reason, action=action,
                 )
-                _last_reminded_at[(order.id, reason)] = now_mono
+                # 发送失败不记冷却，下个扫描周期继续重试（否则飞书抖动会静默一小时）
+                if sent:
+                    _last_reminded_at[(order.id, reason)] = now_mono
                 logger.info(
                     "Dispatch timeout WO %s (%.0f min > %d min, %s)",
                     order.work_order_no, elapsed, timeout_minutes, reason,
@@ -286,3 +288,4 @@ TIMEOUT_SCAN_TASK = TaskDefinition(
     coro=scan_timeout_work_orders,
     module="equipment",
 )
+
