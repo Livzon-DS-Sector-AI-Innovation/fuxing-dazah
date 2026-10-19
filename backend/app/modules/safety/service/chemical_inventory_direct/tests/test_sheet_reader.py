@@ -317,6 +317,8 @@ def test_department_slug_three_mirror_consistency() -> None:
         "替考": "tikao", "氟雷": "fulei", "米尔贝": "mierbei",
         "溶媒回收": "rongmei_huishou", "达托": "datuo", "达巴": "daba",
         "艾默": "aimo", "雷帕": "leipa", "危废库": "weifeiku",
+        "环保工程中心": "huanbao", "精制工程部": "jingzhi",
+        "菌种": "junzhong", "仓库": "cangku",
     }
     for label, slug in expect.items():
         assert _DEPT_LABEL_TO_ENUM.get(label) == slug
@@ -329,3 +331,118 @@ def test_department_slug_three_mirror_consistency() -> None:
     assert dept_map is not None
     for label, slug in expect.items():
         assert dept_map.get(label) == slug
+
+
+class TestDeptSheetFormats:
+    """2026-10-19 部门子表新版式：首行即表头、数值带单位、显式/隐式单位列。
+
+    fixture：danger_goods_daily_20261019.json（revision 1759+，11 张部门子表实读）。
+    """
+
+    _PATH = Path(__file__).parent / "fixtures" / "danger_goods_daily_20261019.json"
+
+    @pytest.fixture
+    def fixture2(self) -> dict[str, Any]:
+        return json.loads(self._PATH.read_text())
+
+    def _client(self, fixture: dict[str, Any]) -> FakeSheetClient:
+        return FakeSheetClient(fixture)
+
+    async def _views(self, fixture: dict[str, Any]) -> list[Any]:
+        return await _reader(self._client(fixture)).fetch_all()
+
+    async def test_all_dept_sheets_ingested(self, fixture2: dict[str, Any]) -> None:
+        """11 张部门子表全部成行（无跳表），部门枚举正确。"""
+        views = await self._views(fixture2)
+        by_dept: dict[str, int] = {}
+        for v in views:
+            by_dept[v.department] = by_dept.get(v.department, 0) + 1
+        for dept in ("fermentation_1", "fermentation_2", "extraction_1",
+                     "extraction_2b", "huanbao", "jingzhi", "semi_synth",
+                     "tech_refine", "qc", "junzhong", "cangku"):
+            assert by_dept.get(dept, 0) > 0, f"{dept} 未被摄取"
+        assert sum(by_dept.values()) == len(views)
+
+    async def test_gram_suffix_quantity(self, fixture2: dict[str, Any]) -> None:
+        """环保工程中心 '3000g'：quantity=3000 g，total=0.003T；上限 '7000g'→0.007T。"""
+        views = await self._views(fixture2)
+        v = next(x for x in views if x.feishu_record_id == "GgfZuX:2")
+        assert v.department == "huanbao"
+        assert v.material_name == "氢氧化钠"
+        assert v.quantity == Decimal("3000")
+        assert v.unit == "g"
+        assert v.total_quantity_t == Decimal("0.003")
+        assert v.max_limit == Decimal("0.007")
+        assert v.max_limit_unit == "T"
+
+    async def test_mixed_units_in_one_sheet(self, fixture2: dict[str, Any]) -> None:
+        """菌种：'490g'/'1000g' 质量折吨；'1L' 体积上限保留原值原单位。"""
+        views = await self._views(fixture2)
+        kg_row = next(x for x in views if x.feishu_record_id == "aXSq8O:4")
+        assert kg_row.material_name == "硝酸钾"
+        assert kg_row.quantity == Decimal("490")
+        assert kg_row.unit == "g"
+        assert kg_row.total_quantity_t == Decimal("0.00049")
+        assert kg_row.max_limit == Decimal("0.001")  # 1000g → 0.001T
+        l_row = next(x for x in views if x.feishu_record_id == "aXSq8O:2")
+        assert l_row.material_name == "盐酸"
+        assert l_row.max_limit == Decimal("1")
+        assert l_row.max_limit_unit == "L"  # 体积上限不折吨
+
+    async def test_explicit_unit_column(self, fixture2: dict[str, Any]) -> None:
+        """提炼技术精进中心：显式「单位」列=L → 体积不折吨。"""
+        views = await self._views(fixture2)
+        v = next(x for x in views if x.feishu_record_id == "wksQNY:2")
+        assert v.department == "tech_refine"
+        assert v.material_name == "国产乙腈"
+        assert v.quantity == Decimal("92")
+        assert v.unit == "L"
+        assert v.total_quantity_t is None
+        assert v.max_limit == Decimal("120")
+        assert v.max_limit_unit == "L"
+
+    async def test_unheadered_trailing_unit_column(
+        self, fixture2: dict[str, Any],
+    ) -> None:
+        """提炼半合成：无表头的行级单位列（危险性后裸 'ml'）被兜底识别。"""
+        views = await self._views(fixture2)
+        v = next(x for x in views if x.feishu_record_id == "PLXjLD:2")
+        assert v.department == "semi_synth"
+        assert v.material_name == "冰醋酸"
+        assert v.quantity == Decimal("1000")
+        assert v.unit == "ml"
+        assert v.total_quantity_t is None
+
+    async def test_extraction1_quantity_now_ingested(
+        self, fixture2: dict[str, Any],
+    ) -> None:
+        """提炼一部（早期缺「当前数量」列已补齐）：数量正常摄取折吨。"""
+        views = await self._views(fixture2)
+        v = next(x for x in views if x.feishu_record_id == "5ct1sn:2")
+        assert v.department == "extraction_1"
+        assert v.material_name == "液碱"
+        assert v.quantity == Decimal("1000")
+        assert v.unit == "kg"
+        assert v.total_quantity_t == Decimal("1")
+        assert v.max_limit == Decimal("18")  # 18000kg → 18T
+
+    async def test_warehouse_plain_kg(self, fixture2: dict[str, Any]) -> None:
+        """仓库：裸数值按表头 /kg 口径 → kg 折吨；无上限行 max_limit None。"""
+        views = await self._views(fixture2)
+        v = next(x for x in views if x.feishu_record_id == "R5FH3m:2")
+        assert v.department == "cangku"
+        assert v.material_name == "丙酮"
+        assert v.quantity == Decimal("27200")
+        assert v.total_quantity_t == Decimal("27.2")
+        assert v.max_limit is None
+
+    async def test_new_hazard_labels(self, fixture2: dict[str, Any]) -> None:
+        """新危险性标签：致癌性/粉尘危害/强氧化性 正确映射。"""
+        views = await self._views(fixture2)
+        cancer = next(x for x in views if x.feishu_record_id == "gt1Zl9:2")
+        assert cancer.material_name == "甲醛"
+        assert "carcinogenic" in (cancer.hazard_classes or [])
+        dust = next(x for x in views if x.material_name == "珍珠岩")
+        assert "dust" in (dust.hazard_classes or [])
+        oxidizer = next(x for x in views if x.material_name == "过硫酸钾（默克）")
+        assert "oxidizer" in (oxidizer.hazard_classes or [])

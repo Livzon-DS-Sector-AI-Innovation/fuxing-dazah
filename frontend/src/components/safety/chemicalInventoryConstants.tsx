@@ -24,7 +24,7 @@ export const CHEMICAL_DEPARTMENT_LABELS: Record<string, string> = {
   semi_synth: '提炼半合成工程中心',
   tech_refine: '提炼技术精进中心',
   other: '其他',
-  // 《危险品日报表》子表（sheet 源，标签=子表名）
+  // 《危险品日报表》子表（sheet 源，标签=子表名；2026-10-19 部门子表齐全）
   tikao: '替考',
   fulei: '氟雷',
   mierbei: '米尔贝',
@@ -34,6 +34,10 @@ export const CHEMICAL_DEPARTMENT_LABELS: Record<string, string> = {
   aimo: '艾默',
   leipa: '雷帕',
   weifeiku: '危废库',
+  huanbao: '环保工程中心',
+  jingzhi: '精制工程部',
+  junzhong: '菌种',
+  cangku: '仓库',
 }
 
 export const CHEMICAL_DEPARTMENT_FILTER = [
@@ -56,6 +60,8 @@ export const HAZARD_CLASS_LABELS: Record<string, string> = {
   toxic: '毒性',
   oxidizer: '氧化剂',
   irritant: '刺激性',
+  carcinogenic: '致癌性',
+  dust: '粉尘危害',
 }
 
 // ── 风险标记（2 值）→ 视觉 ──

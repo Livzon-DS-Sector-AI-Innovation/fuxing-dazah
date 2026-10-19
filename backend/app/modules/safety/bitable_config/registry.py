@@ -393,7 +393,7 @@ _DOMAINS: tuple[DomainInfo, ...] = (
     DomainInfo(
         key="chemical_inventory",
         label="危化品库存",
-        purpose="库存总表镜像 + 风险标记/风险说明系统回填 + 《危险品日报表》sheet 源",
+        purpose="《危险品日报表》sheet 源（现役）+ 库存总表【已归档只读】",
         subscribe="drive",
         kinds=(
             KindInfo(
@@ -402,7 +402,8 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                 default_connection=DefaultConnection(
                     app_token="QoUXbLVcQaYAO7sod1CcUH3JnVd",
                     table_id="tbl78IlFOo3f1fj1",
-                    note="危化品库存总表（固定行每日更新）",
+                    note="危化品库存总表【已归档 2026-10-19：P2 退役停写冻结，"
+                         "历史只读保留（回滚/对账用）；数据源已切《危险品日报表》】",
                 ),
                 default_mappings=(
                     # ← feishu/chemical_inventory_bitable_handler.py INVENTORY_BITABLE_TO_MODEL + *_LABEL_TO_ENUM
@@ -418,7 +419,8 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                            "替考": "tikao", "氟雷": "fulei", "米尔贝": "mierbei",
                            "溶媒回收": "rongmei_huishou", "达托": "datuo",
                            "达巴": "daba", "艾默": "aimo", "雷帕": "leipa",
-                           "危废库": "weifeiku",
+                           "危废库": "weifeiku", "环保工程中心": "huanbao",
+                           "精制工程部": "jingzhi", "菌种": "junzhong", "仓库": "cangku",
                        }),
                     _m("存放部位", "storage_location", "text"),
                     _m("物料名称", "material_name", "text"),

@@ -62,6 +62,11 @@ _DEPT_LABEL_TO_ENUM: dict[str, str] = {
     "艾默": "aimo",
     "雷帕": "leipa",
     "危废库": "weifeiku",
+    # 部门子表（2026-10-19 齐全盘点，全拼音口径续）
+    "环保工程中心": "huanbao",
+    "精制工程部": "jingzhi",
+    "菌种": "junzhong",
+    "仓库": "cangku",
 }
 _DEPT_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _DEPT_LABEL_TO_ENUM.items()}
 

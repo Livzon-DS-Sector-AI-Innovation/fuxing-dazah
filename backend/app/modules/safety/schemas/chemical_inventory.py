@@ -38,6 +38,10 @@ class ChemicalDepartment(str, Enum):  # noqa: UP042
     AIMO = "aimo"
     LEIPA = "leipa"
     WEIFEIKU = "weifeiku"
+    HUANBAO = "huanbao"
+    JINGZHI = "jingzhi"
+    JUNZHONG = "junzhong"
+    CANGKU = "cangku"
 
 
 CHEMICAL_DEPARTMENT_OPTIONS = [
@@ -63,6 +67,10 @@ CHEMICAL_DEPARTMENT_OPTIONS = [
     {"value": ChemicalDepartment.AIMO, "label": "艾默"},
     {"value": ChemicalDepartment.LEIPA, "label": "雷帕"},
     {"value": ChemicalDepartment.WEIFEIKU, "label": "危废库"},
+    {"value": ChemicalDepartment.HUANBAO, "label": "环保工程中心"},
+    {"value": ChemicalDepartment.JINGZHI, "label": "精制工程部"},
+    {"value": ChemicalDepartment.JUNZHONG, "label": "菌种"},
+    {"value": ChemicalDepartment.CANGKU, "label": "仓库"},
 ]
 
 
@@ -104,6 +112,8 @@ class HazardClass(str, Enum):  # noqa: UP042
     TOXIC = "toxic"
     OXIDIZER = "oxidizer"
     IRRITANT = "irritant"
+    CARCINOGENIC = "carcinogenic"
+    DUST = "dust"
 
 
 HAZARD_CLASS_OPTIONS = [
@@ -115,6 +125,8 @@ HAZARD_CLASS_OPTIONS = [
     {"value": HazardClass.TOXIC, "label": "毒性", "color": "gold"},
     {"value": HazardClass.OXIDIZER, "label": "氧化剂", "color": "gold"},
     {"value": HazardClass.IRRITANT, "label": "刺激性", "color": "blue"},
+    {"value": HazardClass.CARCINOGENIC, "label": "致癌性", "color": "red"},
+    {"value": HazardClass.DUST, "label": "粉尘危害", "color": "gold"},
 ]
 
 
