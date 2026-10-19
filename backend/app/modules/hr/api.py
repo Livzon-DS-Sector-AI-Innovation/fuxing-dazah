@@ -969,6 +969,10 @@ async def get_dashboard_stats(
         {"name": r[0] or "未填写", "value": r[1]} for r in dep_type_rows
     ]
     passive_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" not in r[0])
+    active_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" in r[0])
+    dep_total = active_departures + passive_departures
+    active_departure_rate = round(active_departures / dep_total * 100, 1) if dep_total else 0.0
+    passive_departure_rate = round(passive_departures / dep_total * 100, 1) if dep_total else 0.0
 
     # 离职原因分布（JSON 列需投影为文本才能 GROUP BY；归一化 null/"null"/空 → 未填写）
     from sqlalchemy import Text as SAText
@@ -1101,6 +1105,8 @@ async def get_dashboard_stats(
             "labor_dispute_count": labor_dispute_count,
             "underperforming_count": underperforming_count,
             "performance_submitted_count": performance_submitted_count,
+            "active_departure_rate": active_departure_rate,
+            "passive_departure_rate": passive_departure_rate,
         },
         "education_distribution": education_distribution,
         "department_distribution": department_distribution,
@@ -6233,7 +6239,10 @@ async def update_incident(
     )).scalar_one_or_none()
     if not rec:
         raise HTTPException(404, "记录不存在")
-    for key, value in payload.model_dump(exclude_none=True).items():
+    data = payload.model_dump(exclude_none=True)
+    if data.get("department"):
+        hr_scope.ensure_dept_writable([data["department"]])
+    for key, value in data.items():
         setattr(rec, key, value)
     await session.flush()
     return success_response(message="记录已更新")

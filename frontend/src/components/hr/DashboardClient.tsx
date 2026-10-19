@@ -585,6 +585,7 @@ export default function DashboardClient() {
       else if (chartId === 'departures-by-dept') { opts[chartId] = buildDistributionBarOption(data as DistributionItem[]) }
       else if (type === 'pie') { opts[chartId] = buildPieOption(data as DistributionItem[]) }
       else if (chartId === 'monthly-departures') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[8]) }
+      else if (chartId === 'monthly-departure-rate') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[8]) }
       else if (chartId === 'monthly-hires') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[2]) }
       else { opts[chartId] = buildDistributionBarOption(data as DistributionItem[]) }
     })
@@ -658,6 +659,12 @@ export default function DashboardClient() {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <KpiCard title="已完成绩效评估" value={summary.performance_submitted_count ?? 0} icon={<CheckCircleOutlined />} accent={T.success} unit="份" />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="主动离职率" value={summary.active_departure_rate ?? 0} icon={<UserDeleteOutlined />} accent={T.error} unit="%" />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="被动离职率" value={summary.passive_departure_rate ?? 0} icon={<UserDeleteOutlined />} accent={T.error} unit="%" />
         </Col>
       </Row>
 

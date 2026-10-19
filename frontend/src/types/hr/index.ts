@@ -1047,6 +1047,8 @@ export interface DashboardSummary {
   labor_dispute_count: number
   underperforming_count: number
   performance_submitted_count: number
+  active_departure_rate: number
+  passive_departure_rate: number
 }
 
 export interface DistributionItem {
