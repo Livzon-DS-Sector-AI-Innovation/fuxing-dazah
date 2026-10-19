@@ -262,6 +262,8 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "quality-material-scan", label: "扫码操作台", path: "/quality/materials/scan", permissions: ["quality:material:manage"] },
         ],
       },
+      { key: "quality-lab-items", label: "试剂/仪器台账", path: "/quality/lab-items", permissions: ["quality:material:read"] },
+      { key: "quality-inspection-plans", label: "请检计划", path: "/quality/inspection-plans", permissions: ["quality:material:read"] },
       {
         key: "quality-coa-group",
         label: "COA管理",
@@ -276,8 +278,6 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "quality-templates", label: "报告模板", path: "/quality/templates", permissions: ["quality:report:read"] },
           { key: "quality-report", label: "报告单", path: "/quality/report", permissions: ["quality:report:read"] },
           { key: "quality-serial", label: "报告单流水", path: "/quality/serial", permissions: ["quality:report:read"] },
-          { key: "quality-lab-items", label: "试剂/仪器台账", path: "/quality/lab-items", permissions: ["quality:material:read"] },
-          { key: "quality-inspection-plans", label: "请检计划", path: "/quality/inspection-plans", permissions: ["quality:material:read"] },
         ],
       },
     ],
