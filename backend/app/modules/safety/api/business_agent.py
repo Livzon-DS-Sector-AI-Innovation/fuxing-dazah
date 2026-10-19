@@ -178,54 +178,70 @@ async def _execute_turn_and_persist(
     """Web 渠道执行一轮对话并持久化（/agent/chat 与 /agent/chat/stream 共用）。
 
     流水：建会话 → 恢复历史 → run_turn → 办公降级提示 → pending 落库 →
-    历史/消息持久化。返回 (result, session, pending_action_id)。
+    历史/消息持久化 → commit → 调度记忆提取。返回 (result, session, pending_action_id)。
+
+    轮次串行化（turn_gate）：同 session_id 的并发轮次互斥，防事件流 seq
+    撞唯一索引 / message_history 相互覆写；尾部显式 commit 后才调度记忆
+    提取（后台任务用独立 session，见 executor.schedule_memory_extraction）。
     """
-    from app.modules.safety.business_agent.executor import run_turn
+    from app.modules.safety.business_agent.executor import (
+        run_turn,
+        schedule_memory_extraction,
+    )
     from app.modules.safety.business_agent.session_store import (
         create_pending_action,
         get_or_create_session,
         save_message,
         update_session_history,
     )
+    from app.modules.safety.business_agent.turn_gate import turn_gate
 
     deps = await _build_deps(db, session_id=session_id, feishu_user_id=feishu_user_id)
-    session = await get_or_create_session(
-        db,
-        channel="web",
-        chat_id=deps.session_id,
-        user_id=feishu_user_id,
-        role=deps.role,
-    )
-    history = session.message_history if isinstance(session.message_history, list) else None
-    result = await run_turn(message, deps, message_history=history)
+    async with turn_gate(f"web:{deps.session_id}"):
+        session = await get_or_create_session(
+            db,
+            channel="web",
+            chat_id=deps.session_id,
+            user_id=feishu_user_id,
+            role=deps.role,
+        )
+        history = session.message_history if isinstance(session.message_history, list) else None
+        result = await run_turn(message, deps, message_history=history)
 
-    # Web 匿名 + 办公室创建动作：追加友好降级提示（不动 executor 逻辑）
-    pending = result.get("pending_action")
-    if _web_office_grant_hint_needed(deps.person, pending):
-        result["answer"] = _append_web_office_grant_hint(result["answer"])
-        pending.summary = _append_web_office_grant_hint(pending.summary)
+        # Web 匿名 + 办公室创建动作：追加友好降级提示（不动 executor 逻辑）
+        pending = result.get("pending_action")
+        if _web_office_grant_hint_needed(deps.person, pending):
+            result["answer"] = _append_web_office_grant_hint(result["answer"])
+            pending.summary = _append_web_office_grant_hint(pending.summary)
 
-    pending_action_id = None
-    if pending:
-        pa_record = await create_pending_action(
+        pending_action_id = None
+        if pending:
+            pa_record = await create_pending_action(
+                db,
+                session_id=session.id,
+                pending=pending,
+                message_history_snapshot=result["messages"],
+            )
+            pending_action_id = str(pa_record.id)
+
+        await update_session_history(
+            db, session, messages=result["messages"],
+            title=message[:80] if session.message_count == 0 else None,
+        )
+        await save_message(
             db,
             session_id=session.id,
-            pending=pending,
-            message_history_snapshot=result["messages"],
+            user_message=message,
+            agent_answer=result["answer"],
+            pending_action_id=uuid.UUID(pending_action_id) if pending_action_id else None,
         )
-        pending_action_id = str(pa_record.id)
+        await db.commit()
 
-    await update_session_history(
-        db, session, messages=result["messages"],
-        title=message[:80] if session.message_count == 0 else None,
-    )
-    await save_message(
-        db,
-        session_id=session.id,
-        user_message=message,
-        agent_answer=result["answer"],
-        pending_action_id=uuid.UUID(pending_action_id) if pending_action_id else None,
-    )
+        # ── 记忆提取：commit 后调度，后台任务用独立 session ──
+        schedule_memory_extraction(
+            session_id=str(session.id), user_message=message,
+            agent_answer=result["answer"], deps=deps,
+        )
     return result, session, pending_action_id
 
 
@@ -373,36 +389,40 @@ async def confirm_action(
         feishu_user_id=feishu_user_id,
     )
 
-    # 执行
-    result = await resume(
-        str(session.id),
-        deps,
-        action_id=action_id,
-        approved=approved,
-        message_history_raw=(
-            pa.message_history_snapshot
-            if isinstance(pa.message_history_snapshot, list) else []
-        ),
-    )
+    from app.modules.safety.business_agent.turn_gate import turn_gate
 
-    # Web 匿名 + 办公室创建动作：确认执行后追加友好降级提示
-    if approved and _web_office_grant_hint_needed(
-        deps.person, tool_name=pa.tool_name,
-    ):
-        result["answer"] = _append_web_office_grant_hint(result["answer"])
+    async with turn_gate(f"web:{str(session.id)}"):
+        # 执行
+        result = await resume(
+            str(session.id),
+            deps,
+            action_id=action_id,
+            approved=approved,
+            message_history_raw=(
+                pa.message_history_snapshot
+                if isinstance(pa.message_history_snapshot, list) else []
+            ),
+        )
 
-    # 持久化
-    await resolve_pending_action(
-        db, pa, approved=approved, approved_by=feishu_user_id,
-        result_data=result.get("messages") if result["executed"] else None,
-    )
-    await update_session_history(db, session, messages=result["messages"])
-    await save_message(
-        db,
-        session_id=session.id,
-        user_message=f"[确认操作: {action_id}]",
-        agent_answer=result["answer"],
-    )
+        # Web 匿名 + 办公室创建动作：确认执行后追加友好降级提示
+        if approved and _web_office_grant_hint_needed(
+            deps.person, tool_name=pa.tool_name,
+        ):
+            result["answer"] = _append_web_office_grant_hint(result["answer"])
+
+        # 持久化
+        await resolve_pending_action(
+            db, pa, approved=approved, approved_by=feishu_user_id,
+            result_data=result.get("messages") if result["executed"] else None,
+        )
+        await update_session_history(db, session, messages=result["messages"])
+        await save_message(
+            db,
+            session_id=session.id,
+            user_message=f"[确认操作: {action_id}]",
+            agent_answer=result["answer"],
+        )
+        await db.commit()
 
     return ApiResponse(data={
         "session_id": str(session.id),

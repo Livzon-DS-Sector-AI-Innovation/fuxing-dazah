@@ -236,16 +236,16 @@ async def extract_from_events(
     session_id: uuid.UUID,
     deps: SafetyDeps,
 ) -> int:
-    """从事件流提取记忆（替代 executor._schedule_memory_extraction）。
+    """从事件流提取记忆（重放/补录入口）。
 
     1. 从 ``agent_session_events`` 取最近一轮 ``user_message`` + ``assistant_message`` 事件；
-    2. 复用 ``MemoryExtractor.extract``（不改 LLM prompt）得到候选 ``MemoryFact``；
-    3. 对每条生成 embedding → ``merge_on_conflict`` 入库；返回实际保存条数。
+    2. 委托 ``extract_and_save_texts``（LLM 提取 → embedding → 冲突合并 → memory_write 留痕）。
 
     失败可重放：事件已持久化，重跑本函数即可恢复，不依赖任何瞬态 result 对象。
+    ⚠️ ``db`` 必须是调用方自有的独立 session（本函数尾部会 commit），
+    禁止传入与请求主流程共享的轮内会话。
     """
     from app.modules.safety.business_agent.core.events import get_events
-    from app.modules.safety.memory.extractor import MemoryExtractor
 
     # 1. 从事件流取最近一轮对话（事件已持久，可重放）
     events = await get_events(db, session_id)
@@ -253,13 +253,45 @@ async def extract_from_events(
     agent_reply = _last_assistant_message(events)
     if not user_msg or not agent_reply:
         return 0
+    return await extract_and_save_texts(
+        db, session_id=session_id,
+        user_message=user_msg, agent_reply=agent_reply, deps=deps,
+    )
 
-    # 2. 复用现有 LLM 提取逻辑
-    facts = await MemoryExtractor().extract(user_msg, agent_reply, deps)
-    if not facts or not deps.person or not deps.person.user_id:
+
+async def extract_and_save_texts(
+    db: AsyncSession,
+    *,
+    session_id: uuid.UUID,
+    user_message: str,
+    agent_reply: str,
+    deps: SafetyDeps,
+) -> int:
+    """对给定的一轮对话文本做记忆提取入库（调度路径）。
+
+    与 ``extract_from_events`` 的区别：对话内容由调用方直接传入（轮次
+    结束时 answer 就在手边），不从事件表回读——避免「轮内事件尚未提交
+    时回读到上一轮 assistant 消息」的错配，也免去对提交时序的依赖。
+
+    ⚠️ ``db`` 必须是独立 session（尾部 commit），禁止与请求主流程共享：
+    后台任务与主流程并发 flush/commit 同一 session 会触发
+    ``InvalidRequestError: Session is already flushing`` 并导致整轮
+    历史回滚。
+    """
+    from app.modules.safety.business_agent.core.events import append_event
+    from app.modules.safety.memory.extractor import MemoryExtractor
+
+    if not user_message or not agent_reply:
+        return 0
+    if not deps.person or not deps.person.user_id:
         return 0
 
-    # 3. 生成 embedding → 冲突合并 → 入库
+    # 1. LLM 提取候选事实
+    facts = await MemoryExtractor().extract(user_message, agent_reply, deps)
+    if not facts:
+        return 0
+
+    # 2. 生成 embedding → 冲突合并 → 入库
     embedder = await _get_embedder()
     user_id = deps.person.user_id
     saved = 0
@@ -276,9 +308,6 @@ async def extract_from_events(
                 saved += 1
                 # 留痕：写 memory_write 事件（事件持久，失败可重放，审计可追溯）
                 try:
-                    from app.modules.safety.business_agent.core.events import (
-                        append_event,
-                    )
                     await append_event(
                         db, session_id=session_id, event_type="memory_write",
                         payload={
@@ -294,7 +323,7 @@ async def extract_from_events(
             logger.debug("Memory merge/save failed for fact", exc_info=True)
     if saved:
         await db.commit()
-        logger.info("Memory extract_from_events: saved %d facts for user=%s", saved, user_id)
+        logger.info("Memory extract_and_save_texts: saved %d facts for user=%s", saved, user_id)
     return saved
 
 

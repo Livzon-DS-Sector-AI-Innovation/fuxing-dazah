@@ -1645,10 +1645,10 @@ async def _update_hazard_from_bitable(
             )
             if new_status in ("ai_reviewing", "replied"):
                 _debug_log(
-                    f"UPDATE_DISPATCH_AI: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
+                    f"UPDATE_DISPATCH_AI: record_id=%s hazard_no={getattr(hazard, 'hazard_no', '?')} "
                     f"→ run_rectification_review(hazard)"
                 )
-                asyncio.create_task(service.hazard.run_rectification_review(hazard.id))
+                asyncio.create_task(_run_rectification_review_bg(hazard.id))
 
         # ── 增量计算督办等级 ──
         from app.modules.safety.service.hazard_supervision import (
@@ -1670,6 +1670,24 @@ async def _update_hazard_from_bitable(
         return None
     finally:
         await session.close()
+
+
+async def _run_rectification_review_bg(hazard_id: _uuid.UUID) -> None:
+    """后台执行 AI 整改初审（独立 session）。
+
+    不得捕获事件处理链路的 service/session：外层 session 在本函数返回后即
+    close，且督办等级回写等后续操作仍会使用它——共享会在后台任务执行期间
+    与主流程的 flush/commit 互踩（Session is already flushing）。
+    与 ehs_change_bitable_handler._trigger_ai_review 同款模式。
+    """
+    from app.core.database import async_session_factory
+    from app.modules.safety.service import SafetyService
+
+    try:
+        async with async_session_factory() as session:
+            await SafetyService(session).hazard.run_rectification_review(hazard_id)
+    except Exception:
+        logger.exception("AI 整改初审后台任务失败: hazard_id=%s", hazard_id)
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -378,11 +378,9 @@ def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) 
 
     return {
         "schema": "2.0",
+        # 无 header：普通回复不带「🤖 安全助手」标题栏（用户拍板），
+        # 状态卡（确认/执行中/完成/取消）的彩色标题栏有语义，保留。
         "config": {"update_multi": True, "width_mode": "fill"},
-        "header": {
-            "title": {"tag": "plain_text", "content": _CARD_TITLE},
-            "template": "blue",
-        },
         "body": {"elements": elements},
     }
 
@@ -1380,63 +1378,78 @@ async def handle_message(event_data: dict[str, Any]) -> None:
         if message_id:
             await _add_reaction(message_id, "OK")
 
-        # ── Slash command interception ──
-        if query.startswith("/"):
-            space_idx = query.find(" ")
-            cmd = query[:space_idx] if space_idx > 0 else query
-            args = query[space_idx + 1:] if space_idx > 0 else ""
-            known_cmd = _SLASH_COMMANDS.get(cmd)
-            if known_cmd:
-                async with async_session_factory() as db:
-                    feishu_user_id, _deps = await _resolve_sender(db, event_data)
-                    handled = await _handle_slash_command(
-                        cmd, args.strip(), chat_id, db, feishu_user_id,
-                    )
+        # ── 轮次串行化：同 chat 的「执行+持久化」整段互斥（事件流 seq /
+        #    message_history 覆写不能与并发轮次或卡片确认轮交错）──
+        from app.modules.safety.business_agent.turn_gate import turn_gate
+
+        async with turn_gate(f"feishu:{chat_id}"):
+            # ── Slash command interception ──
+            if query.startswith("/"):
+                space_idx = query.find(" ")
+                cmd = query[:space_idx] if space_idx > 0 else query
+                args = query[space_idx + 1:] if space_idx > 0 else ""
+                known_cmd = _SLASH_COMMANDS.get(cmd)
+                if known_cmd:
+                    async with async_session_factory() as db:
+                        feishu_user_id, _deps = await _resolve_sender(db, event_data)
+                        handled = await _handle_slash_command(
+                            cmd, args.strip(), chat_id, db, feishu_user_id,
+                        )
+                        if handled:
+                            await db.commit()
                     if handled:
-                        await db.commit()
-                if handled:
-                    return
-                # 如果命令未被处理（不应该发生），fall through to Agent
+                        return
+                    # 如果命令未被处理（不应该发生），fall through to Agent
 
-        # ── Office 链接/token 增强：识别后注入提示，复用 Agent 主流程 ──
-        query = augment_office_query(query)
+            # ── Office 链接/token 增强：识别后注入提示，复用 Agent 主流程 ──
+            query = augment_office_query(query)
 
-        async with async_session_factory() as db:
-            feishu_user_id, deps = await _resolve_sender(db, event_data)
+            async with async_session_factory() as db:
+                feishu_user_id, deps = await _resolve_sender(db, event_data)
 
-            # 获取/创建会话
-            session = await get_or_create_session(
-                db, channel="feishu", chat_id=chat_id,
-                user_id=feishu_user_id, role=deps.role,
-            )
-            deps.session_id = str(session.id)
-
-            # 恢复历史
-            history = session.message_history if isinstance(session.message_history, list) else None
-
-            # 执行
-            result = await run_turn(query, deps, message_history=history)
-
-            # 持久化
-            pending_action_id = None
-            if result.get("pending_action"):
-                pending = result["pending_action"]
-                pa_record = await create_pending_action(
-                    db, session_id=session.id, pending=pending,
-                    message_history_snapshot=result["messages"],
+                # 获取/创建会话
+                session = await get_or_create_session(
+                    db, channel="feishu", chat_id=chat_id,
+                    user_id=feishu_user_id, role=deps.role,
                 )
-                pending_action_id = str(pa_record.id)
+                deps.session_id = str(session.id)
 
-            await update_session_history(
-                db, session, messages=result["messages"],
-                title=query[:80] if session.message_count == 0 else None,
-            )
-            await save_message(
-                db, session_id=session.id, user_message=query,
-                agent_answer=result["answer"],
-                pending_action_id=uuid.UUID(pending_action_id) if pending_action_id else None,
-            )
-            await db.commit()
+                # 恢复历史
+                history = session.message_history if isinstance(session.message_history, list) else None
+
+                # 执行
+                result = await run_turn(query, deps, message_history=history)
+
+                # 持久化
+                pending_action_id = None
+                if result.get("pending_action"):
+                    pending = result["pending_action"]
+                    pa_record = await create_pending_action(
+                        db, session_id=session.id, pending=pending,
+                        message_history_snapshot=result["messages"],
+                    )
+                    pending_action_id = str(pa_record.id)
+
+                await update_session_history(
+                    db, session, messages=result["messages"],
+                    title=query[:80] if session.message_count == 0 else None,
+                )
+                await save_message(
+                    db, session_id=session.id, user_message=query,
+                    agent_answer=result["answer"],
+                    pending_action_id=uuid.UUID(pending_action_id) if pending_action_id else None,
+                )
+                await db.commit()
+
+                # ── 记忆提取：commit 后调度，后台任务用独立 session ──
+                from app.modules.safety.business_agent.executor import (
+                    schedule_memory_extraction,
+                )
+
+                schedule_memory_extraction(
+                    session_id=deps.session_id, user_message=query,
+                    agent_answer=result["answer"], deps=deps,
+                )
 
         # 发送回复
         if pending_action_id and result.get("pending_action"):
@@ -1772,24 +1785,28 @@ async def _execute_pending_action_background(
                 if isinstance(pa.message_history_snapshot, list)
                 else []
             )
-            result = await resume(
-                str(session.id), deps,
-                action_id=action_id, approved=approved,
-                message_history_raw=snapshot,
-            )
+            # ── 轮次串行化：确认轮与同 chat 的消息轮互斥（seq/历史互踩防护）──
+            from app.modules.safety.business_agent.turn_gate import turn_gate
 
-            # 持久化
-            await resolve_pending_action(
-                db, pa, approved=approved, approved_by=operator_id,
-                result_data=result.get("messages") if result["executed"] else None,
-            )
-            await update_session_history(db, session, messages=result["messages"])
-            await save_message(
-                db, session_id=session.id,
-                user_message=f"[卡片操作: {'确认' if approved else '取消'} {action_id}]",
-                agent_answer=result["answer"],
-            )
-            await db.commit()
+            async with turn_gate(f"feishu:{effective_chat_id or f'pa:{action_id}'}"):
+                result = await resume(
+                    str(session.id), deps,
+                    action_id=action_id, approved=approved,
+                    message_history_raw=snapshot,
+                )
+
+                # 持久化
+                await resolve_pending_action(
+                    db, pa, approved=approved, approved_by=operator_id,
+                    result_data=result.get("messages") if result["executed"] else None,
+                )
+                await update_session_history(db, session, messages=result["messages"])
+                await save_message(
+                    db, session_id=session.id,
+                    user_message=f"[卡片操作: {'确认' if approved else '取消'} {action_id}]",
+                    agent_answer=result["answer"],
+                )
+                await db.commit()
 
         # ── PATCH 卡片为最终状态 ──
         if card_msg_id:

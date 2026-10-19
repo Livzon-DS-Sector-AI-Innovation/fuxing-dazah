@@ -59,7 +59,12 @@ async def run_turn(
     *,
     message_history: list[ModelMessage] | None = None,
 ) -> dict:
-    """执行一个对话回合（2-F：轮内事件批量收口——seq 内存分配 + 尾部一次 flush）。"""
+    """执行一个对话回合（2-F：轮内事件批量收口——seq 内存分配 + 尾部一次 flush）。
+
+    入口层约定：run_turn 返回并持久化/commit 之后，调用
+    ``schedule_memory_extraction(...)`` 做后台记忆提取（见其 docstring）；
+    本函数不再轮内调度（与主流程并发使用轮内会话会互踩 flush）。
+    """
     from app.modules.safety.business_agent.core import events as _events_mod
 
     _events_mod.start_turn_event_batch(deps.db, _session_uuid(deps))
@@ -185,8 +190,8 @@ async def _run_turn_impl(
     # → 提取知识库检索的法规来源
     sources = _extract_knowledge_sources(result)
 
-    # → 异步记忆提取（不阻塞回复，失败不影响业务）S5：从事件流提取
-    await _schedule_memory_extraction_from_events(deps)
+    # → 记忆提取：不再轮内调度（见 schedule_memory_extraction docstring）——
+    #    由入口层在事务 commit 后调用，后台任务用独立 session。
 
     # → 检查是否有待确认的写操作
     pending = _extract_pending_action(result)
@@ -1230,35 +1235,74 @@ async def _append_approval_requested_event(
         logger.exception("append approval_requested 事件失败（不影响主流程）")
 
 
-async def _schedule_memory_extraction_from_events(deps: SafetyDeps) -> None:
-    """调度基于事件流的内存提取任务（fire-and-forget，不阻塞回复）。
+# ═══════════════════════════════════════════════════════════════
+# 记忆提取调度（入口层 commit 后调用）
+# ═══════════════════════════════════════════════════════════════
 
-    S5：从 ``agent_session_events`` 事件流派生本轮对话并在后台提取记忆入库，
-    完全替代旧 ``_schedule_memory_extraction``（后者从瞬态 result 对象扒对话）。
-    失败静默降级，不影响主业务。
+# 强引用防 GC（done 后自动移除）；与 core/compaction._BG_TASKS 同款
+_MEMORY_TASKS: set = set()
+
+
+def schedule_memory_extraction(
+    *,
+    session_id: str | None,
+    user_message: str,
+    agent_answer: str,
+    deps: SafetyDeps,
+):
+    """调度后台记忆提取任务（fire-and-forget，不阻塞回复）。
+
+    ⚠️ 必须在轮次事务 commit 之后调用（入口层负责）：
+    - 对话文本直接由参数传入，不回读事件表——轮内事件未提交时回读会
+      错配到上一轮的 assistant 消息；
+    - ``memory_write`` 事件要在独立 session 里分配 seq，早于轮次提交
+      会与轮内事件撞 ``(session_id, seq)`` 唯一索引。
+
+    后台任务全程使用自开的 ``async_session_factory`` 会话，绝不触碰
+    ``deps.db``（历史 bug：与主流程并发 autoflush/commit 同一轮内会话，
+    触发 ``InvalidRequestError: Session is already flushing``，整轮
+    对话历史随外层异常回滚丢失）。deps 仅供 person/role 提取上下文。
+
+    Returns:
+        创建的 Task；无需提取（缺文本/匿名/无事件循环）时 None。
     """
     import asyncio
 
-    sid = _session_uuid(deps)
-    if sid is None or deps.db is None:
-        return
+    sid = _session_uuid(session_id)
+    if sid is None or not user_message or not agent_answer:
+        return None
+    if not deps.person or not deps.person.user_id:
+        return None
 
     async def _bg_extract():
         try:
+            from app.core.database import async_session_factory
             from app.modules.safety.business_agent.core.memory import (
-                extract_from_events,
+                extract_and_save_texts,
             )
 
-            saved = await extract_from_events(deps.db, sid, deps)
+            async with async_session_factory() as db:
+                saved = await extract_and_save_texts(
+                    db, session_id=sid,
+                    user_message=user_message, agent_reply=agent_answer,
+                    deps=deps,
+                )
             if saved:
                 logger.info(
-                    "Memory extraction(events): saved %d facts for user=%s",
+                    "Memory extraction(texts): saved %d facts for user=%s",
                     saved, deps.person.name if deps.person else "?",
                 )
         except Exception:
-            logger.debug("Background memory extraction(events) failed", exc_info=True)
+            logger.debug("Background memory extraction(texts) failed", exc_info=True)
 
-    asyncio.create_task(_bg_extract())
+    try:
+        task = asyncio.create_task(_bg_extract())
+    except RuntimeError:
+        # 无运行中的事件循环（同步脚本上下文）：跳过
+        return None
+    _MEMORY_TASKS.add(task)
+    task.add_done_callback(_MEMORY_TASKS.discard)
+    return task
 
 
 def _schedule_memory_extraction(
@@ -1268,8 +1312,8 @@ def _schedule_memory_extraction(
 ) -> None:
     """调度后台记忆提取任务（fire-and-forget）。
 
-    DEPRECATED：S5 已由 ``_schedule_memory_extraction_from_events`` 取代（事件流提取，
-    不依赖瞬态 result 对象）。保留兼容，不删除。
+    DEPRECATED：由入口层 post-commit 的 ``schedule_memory_extraction`` 取代
+    （独立 session + 对话文本直传）。保留兼容，不删除。
     """
     import asyncio
 
