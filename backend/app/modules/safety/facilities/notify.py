@@ -91,17 +91,50 @@ async def _visible_tasks(
     return list(rows.scalars().all())
 
 
-def _task_line(task: FacilityCheckTask, today: date) -> str:
+def _task_line(task: FacilityCheckTask, today: date, record_url: str | None = None) -> str:
     remaining = (task.due_date - today).days
     if remaining < 0:
         remain_txt = f"逾期 {abs(remaining)} 天"
     else:
         remain_txt = f"剩 {remaining} 天"
     status_txt = "✅ 已闭环" if task.status == "closed" else "⏳ 待闭环"
+    link = f"｜[📋记录]({record_url})" if record_url else ""
     return (
         f"- {task.equipment_no or task.ledger_key[:8]}｜{task.location or '-'}｜"
-        f"{task.due_date.isoformat()}｜{remain_txt}｜{status_txt}"
+        f"{task.due_date.isoformat()}｜{remain_txt}｜{status_txt}{link}"
     )
+
+
+# 租户域名（与 feishu/progress_card.py 记录直达链接同款拼法）
+_FEISHU_BASE_URL = "https://j0eukrlohu.feishu.cn"
+
+
+def record_urls_for(tasks: list[FacilityCheckTask]) -> dict[str, str]:
+    """任务列表 → 记录直达链接（key=f"{biz_type}:{ledger_key}"）。
+
+    按 biz_type 解析台账连接（store.get_connection 同步带 TTL 缓存）；
+    连接未登记/不完整 → 该类任务无链接（明细行退化为无链接，不影响发卡）。
+    """
+    from app.modules.safety.bitable_config.store import store as _conn_store
+    from app.modules.safety.facilities.ledger import BIZ_TO_KIND, DOMAIN
+
+    urls: dict[str, str] = {}
+    conns: dict[str, Any] = {}
+    for t in tasks:
+        bt = t.biz_type
+        if bt not in conns:
+            conn = _conn_store.get_connection(DOMAIN, BIZ_TO_KIND.get(bt, ""))
+            conns[bt] = (
+                conn if conn is not None and conn.app_token and conn.table_id else None
+            )
+        conn = conns[bt]
+        if conn is None:
+            continue
+        urls[f"{bt}:{t.ledger_key}"] = (
+            f"{_FEISHU_BASE_URL}/base/{conn.app_token}"
+            f"?table={conn.table_id}&record={t.ledger_key}"
+        )
+    return urls
 
 
 def build_batch_card(
@@ -111,10 +144,13 @@ def build_batch_card(
     today: date,
     escalation_md: str = "",
     escalate_open_ids: list[str] | None = None,
+    record_urls: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """部门批次卡（全量重建）：头部进度行 + 分组分区 + @责任人 + 表格指引。
 
     返回 (card_dict, title)；全闭环时头部置绿「✅ 全部完成」。
+    record_urls：明细行追加多维表格记录直达链接（record_urls_for 产出，
+    缺省无链接——纯函数不触 store，测试/未配置场景友好）。
     """
     open_tasks = [t for t in tasks if t.status == "issued"]
     closed_tasks = [t for t in tasks if t.status == "closed"]
@@ -139,11 +175,15 @@ def build_batch_card(
         header_lines.append(escalation_md)
 
     detail_lines: list[str] = []
+    links = record_urls or {}
     for group_key in sorted(groups):
         items = groups[group_key]
         closed_n = sum(1 for t in items if t.status == "closed")
         detail_lines.append(f"**{group_key} {len(items)} 件：已闭环 {closed_n}**")
-        detail_lines.extend(_task_line(t, today) for t in items)
+        detail_lines.extend(
+            _task_line(t, today, links.get(f"{t.biz_type}:{t.ledger_key}"))
+            for t in items
+        )
         detail_lines.append("")
 
     mention_ids = {t.assignee_open_id for t in open_tasks if t.assignee_open_id}
@@ -233,6 +273,7 @@ async def refresh_department_batch(
     card, title = build_batch_card(
         department, tasks, today=today,
         escalation_md=escalation_md, escalate_open_ids=escalate_open_ids,
+        record_urls=record_urls_for(tasks),
     )
 
     # 已有进行中卡 → 限流后原地 PATCH；无 → 新发建批次

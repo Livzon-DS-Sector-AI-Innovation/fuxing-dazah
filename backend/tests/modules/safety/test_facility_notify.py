@@ -21,7 +21,9 @@ from app.modules.safety.facilities.dispatch import run_escalation
 from app.modules.safety.facilities.ledger import BIZ_ACCESSORY
 from app.modules.safety.facilities.notify import (
     DIGEST_KEY,
+    _task_line,
     build_digest_cell_payload,
+    record_urls_for,
     refresh_department_batch,
     reset_throttle,
 )
@@ -338,3 +340,34 @@ async def test_archived_cycle_tasks_not_pulled_into_new_card(db_session):
     # 旧任务仍挂在已归档批次上（审计锚点不被污染）
     await db_session.refresh(old)
     assert old.batch_id == batch1.id
+
+
+# ── 明细行记录直达链接（2026-10-20 需求：待闭环后附多维表格记录链接）──
+
+
+def test_task_line_appends_record_link():
+    t = _task("k9")
+    url = "https://j0eukrlohu.feishu.cn/base/TOKEN?table=TBL&record=k9"
+    assert _task_line(t, TODAY, record_url=url).endswith(f"⏳ 待闭环｜[📋记录]({url})")
+    # 无链接时退化为原格式（未配置连接的台账）
+    assert _task_line(t, TODAY).endswith("⏳ 待闭环")
+
+
+def test_record_urls_for_via_connection(monkeypatch):
+    from app.modules.safety.bitable_config import store as store_mod
+
+    class _Conn:
+        app_token = "Ngd7bJRxMaf6DpsqwlIcZtvpnce"
+        table_id = "tblcnSMMA8vs5p33"
+
+    monkeypatch.setattr(
+        store_mod.store, "get_connection",
+        lambda domain, kind: _Conn() if kind == "accessory_ledger" else None,
+    )
+    urls = record_urls_for([_task("rec1")])
+    assert urls == {
+        "accessory:rec1": (
+            "https://j0eukrlohu.feishu.cn/base/Ngd7bJRxMaf6DpsqwlIcZtvpnce"
+            "?table=tblcnSMMA8vs5p33&record=rec1"
+        )
+    }
