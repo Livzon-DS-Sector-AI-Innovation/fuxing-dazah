@@ -25,6 +25,7 @@ from app.modules.safety.feishu.daily_digest import DigestCell, upsert_daily_dige
 from app.modules.safety.feishu.notification import (
     build_card_dict,
     send_group_card,
+    send_user_card,
     update_card,
 )
 from app.modules.safety.models import (
@@ -238,7 +239,8 @@ async def refresh_department_batch(
     session: AsyncSession,
     department: str,
     *,
-    sender: Any = None,
+    user_sender: Any = None,
+    group_sender: Any = None,
     updater: Any = None,
     chat_id: str | None = None,
     now: float | None = None,
@@ -246,13 +248,20 @@ async def refresh_department_batch(
     escalation_md: str = "",
     escalate_open_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """部门滚动批次卡刷新（新发 / 原地 PATCH / 全闭环置绿归档）。
+    """部门跟进提醒卡刷新（新发 / 原地 PATCH / 全闭环置绿归档）。
+
+    2026-10-20 拍板：**卡片私发责任人**，群里只保留速递格子（facility_check）。
+    私发口径：收件人=未完成任务的责任人（全部闭环终态=全体任务责任人），
+    逐个私发；主收件人（排序首位）的消息 ID 作批次锚点供 PATCH 原地刷新，
+    其余收件人的副本不随进度刷新；无任何责任人（解析全失败）→ 兜底发
+    notice_chat_id() 群卡并告警，绝不静默丢失。
 
     Returns: {"action": "sent|patched|throttled|archived|noop", ...}
     失败只告警不抛（通知绝不阻塞派发/闭环主链路）。
     """
     today = today or _bj_today()
-    sender = sender if sender is not None else send_group_card
+    user_sender = user_sender if user_sender is not None else send_user_card
+    group_sender = group_sender if group_sender is not None else send_group_card
     updater = updater if updater is not None else update_card
     chat = chat_id if chat_id is not None else notice_chat_id()
 
@@ -282,6 +291,31 @@ async def refresh_department_batch(
         record_urls=record_urls_for(tasks),
     )
 
+    # 私发收件人（2026-10-20 拍板）：未完成任务责任人；全闭环终态用全体
+    _recipient_src = [t for t in tasks if t.status == "issued"] or tasks
+    recipients = sorted({t.assignee_open_id for t in _recipient_src if t.assignee_open_id})
+
+    async def _send_card() -> str | bool:
+        """有责任人=逐个私发（返回主收件人 msg_id）；无责任人=兜底群卡。"""
+        content = card["body"]["elements"][0]["content"]
+        elements = card["body"]["elements"][1:]
+        template = card["header"]["template"]
+        if recipients:
+            primary: str | bool = False
+            for idx, oid in enumerate(recipients):
+                got = await user_sender(
+                    open_id=oid, title=title, content=content,
+                    elements=elements, header_template=template,
+                )
+                if idx == 0:
+                    primary = got
+            return primary
+        logger.warning("设施跟进卡无私发收件人，兜底发群: dept=%s chat=%s", department, chat)
+        return await group_sender(
+            chat_id=chat, title=title, content=content,
+            elements=elements, header_template=template,
+        )
+
     # 已有进行中卡 → 限流后原地 PATCH；无 → 新发建批次
     if batch is not None:
         if _throttled(batch.id, now=now):
@@ -293,10 +327,7 @@ async def refresh_department_batch(
             action = "patched"
         else:
             # 旧卡已删（PATCH 失败）→ 降级重发新卡
-            msg_id = await sender(
-                chat_id=chat, title=title, content=card["body"]["elements"][0]["content"],
-                elements=card["body"]["elements"][1:], header_template=card["header"]["template"],
-            )
+            msg_id = await _send_card()
             if not msg_id:
                 logger.warning("设施批次卡重发失败: dept=%s", department)
                 return {"action": "failed"}
@@ -306,12 +337,9 @@ async def refresh_department_batch(
             batch.last_refreshed_at = datetime.now(UTC)
             action = "resent"
     else:
-        msg_id = await sender(
-            chat_id=chat, title=title, content=card["body"]["elements"][0]["content"],
-            elements=card["body"]["elements"][1:], header_template=card["header"]["template"],
-        )
+        msg_id = await _send_card()
         if not msg_id:
-            logger.warning("设施批次卡发送失败: dept=%s", department)
+            logger.warning("设施跟进卡发送失败: dept=%s", department)
             return {"action": "failed"}
         batch = FacilityNoticeBatch(
             department=department,
@@ -362,8 +390,10 @@ class FacilitiesNotifier(NoopNotifier):
     注意 session 事务边界归调用方——刷新只 mutate 批次行，随主事务落库。
     """
 
-    def __init__(self, *, sender: Any = None, updater: Any = None, chat_id: str | None = None):
-        self._sender = sender
+    def __init__(self, *, user_sender: Any = None, group_sender: Any = None,
+                 updater: Any = None, chat_id: str | None = None):
+        self._user_sender = user_sender
+        self._group_sender = group_sender
         self._updater = updater
         self._chat_id = chat_id
 
@@ -372,7 +402,8 @@ class FacilitiesNotifier(NoopNotifier):
             try:
                 await refresh_department_batch(
                     session, dept,
-                    sender=self._sender, updater=self._updater, chat_id=self._chat_id,
+                    user_sender=self._user_sender, group_sender=self._group_sender,
+                    updater=self._updater, chat_id=self._chat_id,
                 )
             except Exception:
                 logger.warning("设施批次卡刷新失败（不影响主链路）: dept=%s", dept, exc_info=True)

@@ -38,16 +38,18 @@ TODAY = date(2026, 10, 20)
 
 
 class SpySender:
-    """send_group_card 替身：记录调用并回递增 message_id。"""
+    """send_user_card / send_group_card 双模替身：记录调用并回递增 message_id。"""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    async def __call__(self, *, chat_id: str, title: str, content: str,
-                       elements=None, header_template: str = "orange", **kw) -> str:
+    async def __call__(self, *, open_id: str | None = None,
+                       chat_id: str | None = None, title: str = "",
+                       content: str = "", elements=None,
+                       header_template: str = "orange", **kw) -> str:
         self.calls.append({
-            "chat_id": chat_id, "title": title, "content": content,
-            "elements": elements, "template": header_template,
+            "open_id": open_id, "chat_id": chat_id, "title": title,
+            "content": content, "elements": elements, "template": header_template,
         })
         return f"om_{len(self.calls)}"
 
@@ -99,7 +101,7 @@ async def test_same_department_merged_into_single_card(db_session):
     reset_throttle()
 
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
     )
     assert out["action"] == "sent"
     assert out["total"] == 3 and out["open"] == 3
@@ -119,7 +121,7 @@ async def test_new_tasks_patch_original_card_not_resend(db_session):
     sender, updater = SpySender(), SpyUpdater()
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=0.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
     assert len(sender.calls) == 1
 
@@ -127,7 +129,7 @@ async def test_new_tasks_patch_original_card_not_resend(db_session):
     db_session.add(_task("k2", group="灭火器·换药"))
     await db_session.flush()
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
         now=1000.0,
     )
     assert out["action"] == "patched"
@@ -144,14 +146,14 @@ async def test_closure_refreshes_in_place_and_archives_when_all_closed(db_sessio
     sender, updater = SpySender(), SpyUpdater()
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=0.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
     assert len(sender.calls) == 1
 
     # 闭环刷新：新窗口内原地 PATCH（不发新消息）
     t1.status = "closed"
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
         now=2000.0,
     )
     assert out["action"] == "archived"
@@ -167,7 +169,7 @@ async def test_closure_refreshes_in_place_and_archives_when_all_closed(db_sessio
     db_session.add(_task("k9"))
     await db_session.flush()
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
         now=3000.0,
     )
     assert out["action"] == "sent"
@@ -181,17 +183,17 @@ async def test_patch_throttle_within_window(db_session):
     sender, updater = SpySender(), SpyUpdater()
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=0.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
     # 5 分钟窗口内第二次刷新 → 跳过（不发不 PATCH）
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=60.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=60.0,
     )
     assert out["action"] == "throttled"
     assert len(sender.calls) == 1 and len(updater.calls) == 0
     # 窗口过后 → 正常 PATCH
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
         now=400.0,
     )
     assert out["action"] == "patched"
@@ -202,10 +204,10 @@ async def test_patch_failure_degrades_to_resend(db_session):
     sender, updater = SpySender(), SpyUpdater(ok=False)  # 旧卡已删
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=0.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=400.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=400.0,
     )
     assert out["action"] == "resent"
     assert len(sender.calls) == 2  # 降级重发新卡
@@ -218,7 +220,7 @@ async def test_mention_assignees_and_guidance_in_card(db_session):
     sender, updater = SpySender(), SpyUpdater()
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
     )
     content = sender.calls[0]["content"]
     assert '<at user_id="ou_zhang"></at>' in content
@@ -236,7 +238,7 @@ async def test_escalation_refreshes_existing_card_with_at_leader(db_session, mon
     sender, updater = SpySender(), SpyUpdater()
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=0.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
 
     refreshed: list[dict] = []
@@ -244,7 +246,7 @@ async def test_escalation_refreshes_existing_card_with_at_leader(db_session, mon
     async def spy_refresher(session, dept, *, escalation_md="", escalate_open_ids=None, **kw):
         refreshed.append({"md": escalation_md, "ids": escalate_open_ids})
         return await refresh_department_batch(
-            session, dept, sender=sender, updater=updater,
+            session, dept, user_sender=sender, updater=updater,
             escalation_md=escalation_md, escalate_open_ids=escalate_open_ids, **kw,
         )
 
@@ -321,7 +323,7 @@ async def test_archived_cycle_tasks_not_pulled_into_new_card(db_session):
     sender, updater = SpySender(), SpyUpdater()
     reset_throttle()
     await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=0.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
     batch1 = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
     old.batch_id = batch1.id
@@ -333,7 +335,7 @@ async def test_archived_cycle_tasks_not_pulled_into_new_card(db_session):
     db_session.add(_task("new1"))
     await db_session.flush()
     out = await refresh_department_batch(
-        db_session, "提炼一部", sender=sender, updater=updater, today=TODAY, now=100.0,
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=100.0,
     )
     assert out["action"] == "sent" and out["total"] == 1
     panel_md = sender.calls[1]["elements"][0]["elements"][0]["content"]
@@ -395,3 +397,34 @@ def test_card_copy_and_fire_pending_text():
     fire.biz_type = BIZ_FIRE
     assert "⏳ 待更换" in _task_line(fire, TODAY)
     assert "⏳ 待闭环" in _task_line(_task("a1"), TODAY)  # 附件默认口径
+
+
+# ── 私发口径（2026-10-20 拍板：卡片私发责任人，群只保留速递格子）──
+
+
+async def test_private_send_per_assignee_primary_anchors_patch(db_session):
+    await _seed(db_session, [
+        _task("p1", assignee="ou_b"), _task("p2", assignee="ou_a"),
+    ])
+    sender, updater = SpySender(), SpyUpdater()
+    reset_throttle()
+    out = await refresh_department_batch(
+        db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY,
+    )
+    assert out["action"] == "sent"
+    assert [c["open_id"] for c in sender.calls] == ["ou_a", "ou_b"]  # 排序逐个私发
+    batch = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
+    assert batch.card_message_id == "om_1"  # 主收件人（首排序）锚定 PATCH
+
+
+async def test_private_send_group_fallback_when_no_assignee(db_session):
+    await _seed(db_session, [_task("g1", dept="环保中心", assignee=None)])
+    sender, updater = SpySender(), SpyUpdater()
+    reset_throttle()
+    out = await refresh_department_batch(
+        db_session, "环保中心", user_sender=sender, group_sender=sender,
+        updater=updater, today=TODAY,
+    )
+    assert out["action"] == "sent"
+    assert len(sender.calls) == 1 and sender.calls[0]["chat_id"]  # 兜底群卡
+    assert sender.calls[0]["open_id"] is None

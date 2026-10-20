@@ -91,7 +91,7 @@ async def send_user_card(
     *,
     subtitle: str | None = None,
     header_tags: list[dict[str, Any]] | None = None,
-) -> bool:
+) -> str | bool:
     """使用安全模块飞书应用发送卡片消息给单个用户（DM）。
 
     Args:
@@ -105,7 +105,8 @@ async def send_user_card(
         header_tags: 标题后缀标签列表（可选，最多 3 个）
 
     Returns:
-        True 表示发送成功，False 表示失败（不抛异常）
+        成功返回 message_id（"om_…"，真值——供后续 PATCH 原地更新锚定）；
+        失败返回 False（不抛异常）。只判真假的既有调用方不受影响。
     """
     logger.info("安全模块 send_user_card: user_id=%s id_type=%s", open_id, id_type)
     try:
@@ -143,8 +144,9 @@ async def send_user_card(
                 open_id, resp.code, resp.msg,
             )
             return False
-        logger.info("安全模块卡片已发送: open_id=%s, title=%s", open_id, title)
-        return True
+        msg_id = getattr(resp, "data", None) and getattr(resp.data, "message_id", None)
+        logger.info("安全模块卡片已发送: open_id=%s title=%s msg=%s", open_id, title, msg_id)
+        return msg_id or True
     except Exception:
         logger.exception("安全模块 send_user_card 异常: open_id=%s", open_id)
         return False
