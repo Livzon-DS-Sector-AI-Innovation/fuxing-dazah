@@ -147,14 +147,16 @@ def test_to_view_incomplete_when_no_anchor():
     assert v.incomplete_reason and "推算" in v.incomplete_reason
 
 
-def test_to_view_incomplete_when_no_equipment_no():
+def test_to_view_equipment_no_synthesized_when_missing():
+    """2026-10-20 灭火器台账拍板：无编号列→合成展示编号，不再进信息不全清单。"""
     today = _bj_today()
     v = to_view(
         _rec("r5", {"设备名称": "灭火器", "下次检查日期": _ms(today)}),
         BIZ_FIRE,
     )
-    assert v.equipment_no is None
-    assert v.incomplete_reason and "缺编号" in v.incomplete_reason
+    # 类别/位置都缺 → 回退名称「灭火器」
+    assert v.equipment_no == "灭火器"
+    assert v.incomplete_reason is None  # 锚点在，编号已合成，不再「缺编号」
     assert v.equipment_label == "灭火器"
 
 
@@ -316,3 +318,5 @@ def test_url_key_biz_mapping_roundtrip():
     assert ledger.URL_TO_BIZ["special-equipment"] == BIZ_SPECIAL
     assert ledger.LEAD_DAYS[BIZ_SPECIAL] == 45
     assert ledger.LEAD_DAYS[BIZ_ACCESSORY] == 30
+    # 消防 60 天：灭火器换新含采购周期约 2 个月（2026-10-20 拍板）
+    assert ledger.LEAD_DAYS[BIZ_FIRE] == 60

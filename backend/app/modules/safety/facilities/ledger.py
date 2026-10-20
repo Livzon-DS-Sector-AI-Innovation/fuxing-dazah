@@ -13,7 +13,9 @@
   （只读不回写）；两者皆缺 → 行进信息不全清单（原因可查，倒逼补录）。
 - 消防器材多锚点：下次日期→检查、换药到期→换药、报废到期→报废更换，
   各锚点独立派生任务（幂等键含 due_date 天然去重）。
-- 编号缺 → 该行不可派任务（进信息不全清单）；状态列缺 → 视为全部在用。
+- 编号列缺 → **合成展示编号**（`类别·位置`→名称→record_id 兜底；2026-10-20
+  灭火器台账拍板：真实表无编号列，行标识本就是 record_id，不阻塞派发）；
+  状态列缺 → 视为全部在用。
 """
 
 from __future__ import annotations
@@ -53,10 +55,11 @@ BIZ_LABELS: dict[str, str] = {
     BIZ_SPECIAL: "特种设备",
 }
 
-# 派发提前量（DESIGN §4.2 / P4 拍板：附件/消防 30 天、特种设备 45 天）
+# 派发提前量（DESIGN §4.2 / P4 拍板：附件 30 天、特种设备 45 天；
+# 消防 60 天——2026-10-20 拍板：灭火器换新含采购周期约 2 个月，提前两个月预警追踪）
 LEAD_DAYS: dict[str, int] = {
     BIZ_ACCESSORY: 30,
-    BIZ_FIRE: 30,
+    BIZ_FIRE: 60,
     BIZ_SPECIAL: 45,
 }
 
@@ -69,7 +72,7 @@ _FIELD_CANDIDATES: dict[str, tuple[str, ...]] = {
     "category": ("设备类别", "附件类别", "器材类别", "类别", "类型", "分类"),
     "location": ("安装位置", "存放位置", "使用位置", "位置", "位置/区域", "区域"),
     "department": ("责任部门", "所属部门", "使用部门", "管理部门", "部门"),
-    "owner": ("责任人", "责任人员", "负责人", "保管人"),
+    "owner": ("责任人", "责任人员", "负责人", "保管人", "到期提醒人员"),
     "last_date": (
         "上次校验日期", "上次检验日期", "上次检查日期",
         "最近校验日期", "最近检验日期", "校验日期", "检验日期",
@@ -256,6 +259,7 @@ class LedgerRowView:
     location: str | None = None
     department: str | None = None
     owner: str | None = None
+    owner_open_id: str | None = None  # person 结构责任人列直取（同应用同号域，@mention 免解析）
     last_date: date | None = None
     cycle_months: int | None = None
     next_date: date | None = None
@@ -289,15 +293,20 @@ class LedgerRowView:
         return getattr(self, anchor_field, None)
 
 
-def _owner_value(fields: dict[str, Any], column: str | None) -> str | None:
-    """责任人列取值：真实表该列可能是 person 型（[{"name":...}]）也可能是
-    文本型（裸字符串）——裸字符串直取，结构化走 person_name。"""
+def _owner_person(fields: dict[str, Any], column: str | None) -> tuple[str | None, str | None]:
+    """责任人列取值 (name, open_id)：真实表该列可能是 person 型
+    （[{"id": "ou_…", "name": …}]，id 与平台同应用同号域可直取）也可能是
+    文本型（裸字符串，只有 name）。"""
     if not column:
-        return None
+        return None, None
     raw = fields.get(column)
     if isinstance(raw, str):
-        return raw.strip() or None
-    return bd_fields.person_name(raw) or None
+        name = raw.strip() or None
+        return name, None
+    info = bd_fields.person_info(raw)
+    name = (info.get("name") or "").strip() or None
+    open_id = (info.get("id") or "").strip() or None
+    return (name or open_id) or None, open_id
 
 
 def to_view(
@@ -312,6 +321,7 @@ def to_view(
     if columns is None:
         columns = resolve_columns(list(fields.keys()))
     record_id = str(record.get("record_id") or "")
+    owner_name, owner_open_id = _owner_person(fields, columns.get("owner"))
 
     view = LedgerRowView(
         record_id=record_id,
@@ -322,7 +332,8 @@ def to_view(
         category=bd_fields.select(fields, columns.get("category") or ""),
         location=bd_fields.text(fields, columns.get("location") or ""),
         department=bd_fields.select(fields, columns.get("department") or ""),
-        owner=_owner_value(fields, columns.get("owner")),
+        owner=owner_name,
+        owner_open_id=owner_open_id,
         last_date=_as_date(fields, columns.get("last_date")),
         cycle_months=_as_int(fields, columns.get("cycle_months")),
         next_date=_as_date(fields, columns.get("next_date")),
@@ -346,10 +357,17 @@ def to_view(
         view.anchor = None
         view.anchor_source = "none"
 
-    # 信息不全判定（编号缺 / 主锚点不可得）
-    reasons: list[str] = []
+    # 编号/名称合成（2026-10-20 灭火器台账拍板）：真实表可无编号/名称列——
+    # 行标识本就是 record_id，二者仅展示用；编号合成 `类别·位置` 链条兜到
+    # record_id，「缺编号」不再进信息不全清单、不阻塞派发。
+    if not view.name:
+        view.name = (view.category or "").strip() or None
     if not view.equipment_no:
-        reasons.append("缺编号")
+        parts = [x for x in (view.category, view.location) if x]
+        view.equipment_no = "·".join(parts) or view.name or view.record_id
+
+    # 信息不全判定（主锚点不可得；编号已合成必有值）
+    reasons: list[str] = []
     if view.anchor is None:
         reasons.append("缺下次日期且无法由上次日期+周期推算")
     view.incomplete_reason = "；".join(reasons) or None

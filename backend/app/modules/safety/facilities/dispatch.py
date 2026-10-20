@@ -110,11 +110,14 @@ class DispatchResult:
 async def _resolve_assignee(
     resolver: OwnerResolver | None, view: LedgerRowView
 ) -> tuple[str | None, str | None]:
-    """责任人解析链：owner（含部门归口覆盖）→ 部门负责人兜底。
+    """责任人解析链：表内 owner open_id（person 列直取，同应用同号域）→
+    owner 姓名（含部门归口覆盖）→ 部门负责人兜底。
 
     返回 (open_id, name)；全链失败返回 (None, None)——任务照建不丢，
     由 unresolved_owner 计数曝光（速递格子/日志告警）。
     """
+    if view.owner_open_id:
+        return view.owner_open_id, view.owner or view.owner_open_id
     if resolver is None:
         return None, None
     owner_name = effective_responsible_person(view.department, view.owner)

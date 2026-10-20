@@ -87,11 +87,21 @@ def test_select_due_window_and_filters():
         _acc("r3", anchor=TODAY - timedelta(days=3)),    # 已逾期照派
         _acc("r4", anchor=None, last=date(2026, 10, 1), cycle=12),  # 推算锚点 2027-10 → 窗外
         _acc("r5", anchor=None),                          # 无锚点不派
-        _acc("r6", anchor=TODAY, no=None),                # 缺编号不派
+        _acc("r6", anchor=TODAY, no=None),                # 缺编号→合成「类别」照派（2026-10-20 拍板）
         _acc("r7", anchor=TODAY, status="已报废"),        # 非在用不派
     ]
     due = select_due(views, TODAY, lead_days=30)
-    assert sorted(c.view.record_id for c in due) == ["r1", "r3"]
+    assert sorted(c.view.record_id for c in due) == ["r1", "r3", "r6"]
+    r6 = next(c for c in due if c.view.record_id == "r6")
+    assert r6.view.equipment_no == "安全阀"  # 合成编号（类别兜底）
+
+
+def test_select_due_guard_raw_view_without_equipment_no():
+    """to_view 已合成编号；引擎守卫仍防裸视图（防御性，非 to_view 产物）。"""
+    from app.modules.safety.facilities.ledger import LedgerRowView
+
+    raw = LedgerRowView(record_id="raw1", biz_type=BIZ_ACCESSORY, anchor=TODAY)
+    assert select_due([raw], TODAY, lead_days=30) == []
 
 
 def test_select_due_fire_multi_anchor():
