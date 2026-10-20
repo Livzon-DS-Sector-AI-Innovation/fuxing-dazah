@@ -93,6 +93,7 @@ TOOL_QUERY_CERT_WARNINGS = "query_cert_warnings"
 TOOL_RENEW_PERSON_CERTIFICATE = "renew_person_certificate"
 # 危化品库存（只读）
 TOOL_QUERY_CHEMICAL_INVENTORY = "query_chemical_inventory"
+TOOL_UPDATE_CHEMICAL_INVENTORY = "update_chemical_inventory"
 TOOL_ANALYZE_CHEMICAL_RISK = "analyze_chemical_risk"
 # 监护补贴统计（平台作业票数据源；只读预览 + 写入生成，涉及持证台账/补贴金额，仅
 # safety_admin 与 dept_leader——部门安环人员主场景；inspector/viewer 不授予）
@@ -248,6 +249,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
         TOOL_CONFIRM_URS_ASSESSMENT,
         TOOL_SUBMIT_URS_APPEAL,
         TOOL_RUN_REGULATION_AI_REVIEW,
+        TOOL_UPDATE_CHEMICAL_INVENTORY,
     }
     | OFFICE_READ_TOOLS
     | OFFICE_WRITE_TOOLS
@@ -270,6 +272,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
         TOOL_UPDATE_URS_ITEM,
         TOOL_SUBMIT_URS_APPEAL,
         TOOL_RUN_REGULATION_AI_REVIEW,
+        TOOL_UPDATE_CHEMICAL_INVENTORY,
     }
     | OFFICE_READ_TOOLS
     | OFFICE_WRITE_TOOLS

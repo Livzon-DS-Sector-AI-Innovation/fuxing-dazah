@@ -31,8 +31,19 @@ __all__ = [
     "InventoryRecordsReader",
     "InventoryBitableReader",
     "SheetsInventoryReader",
+    "invalidate_shared_reader",
     "open_reader",
 ]
+
+
+def invalidate_shared_reader() -> None:
+    """清共享单例的 TTL 缓存（外部写《危险品日报表》后调用，下次读强制现拉）。"""
+    from app.modules.safety.service.chemical_inventory_direct.cache import (
+        CachedInventoryReader,
+    )
+
+    if isinstance(_shared_reader, CachedInventoryReader):
+        _shared_reader.invalidate()
 
 
 @runtime_checkable

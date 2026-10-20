@@ -114,6 +114,7 @@ from app.modules.safety.business_agent.tools.write_tools import (
     send_hazard_supervision_bulletin,
     sync_drill_plan_to_feishu,
     trigger_oh_exam_parse,
+    update_chemical_inventory,
 )
 
 _OFFICE_READ_FUNCS: list[Callable[..., Any]] = [
@@ -165,6 +166,8 @@ TOOL_KIND: dict[str, bool] = {
     # 危化品库存（只读）
     "query_chemical_inventory": False,
     "analyze_chemical_risk": False,
+    # 危化品库存（写入《危险品日报表》数量，需用户确认）
+    "update_chemical_inventory": True,
     # 已同步本地库的明细查询（只读）
     "query_special_op_records": False,
     "query_key_risk_ops": False,
@@ -301,6 +304,7 @@ def _all_write_funcs() -> list[Callable[..., Any]]:
         poll_hazard_ai_analysis,
         poll_hazard_rectification_review,
         send_hazard_supervision_bulletin,
+        update_chemical_inventory,
     ] + _OFFICE_WRITE_FUNCS
 
 

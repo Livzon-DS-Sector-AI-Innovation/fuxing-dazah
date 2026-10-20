@@ -61,6 +61,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "chemical": [
         # 1-D 域收敛：危化品库存+MSDS 台账合一域
         "query_chemical_inventory", "analyze_chemical_risk", "query_msds",
+        # 写《危险品日报表》数量（确认流；admin/dept_leader 才有权限）
+        "update_chemical_inventory",
     ],
     "office": [
         "office_search_files", "office_read_docx", "office_read_sheet",

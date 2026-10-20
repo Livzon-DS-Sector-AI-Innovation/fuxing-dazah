@@ -355,3 +355,100 @@ class SheetsInventoryReader:
             category=_text(cell("category")),
             last_updated_at=self.last_read_at,
         )
+
+
+# ── 写路径助手（business_agent 的 update_chemical_inventory 工具用）────────
+
+# 可写字段白名单 → 表头关键词（列位置由各子表表头现解析，不缓存）
+_WRITABLE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("quantity", "当前数量"),
+    ("daily_usage_kg", "一昼夜使用量"),
+    ("max_limit", "库存上限"),
+)
+
+
+def _sheet_title_matches(title: str, department: str) -> bool:
+    """部门入参（中文标签或英文 slug 均可）与子表标题匹配。"""
+    want = department.strip()
+    if not want:
+        return False
+    slug = _DEPT_LABEL_TO_ENUM.get(want, want)          # 标签 → slug
+    title_slug = _DEPT_LABEL_TO_ENUM.get(title, title)  # 标题 → slug
+    return want == title or slug == title_slug
+
+
+async def locate_inventory_rows(
+    client: Any,
+    spreadsheet_token: str,
+    *,
+    department: str,
+    material_name: str,
+    storage_location: str | None = None,
+) -> list[dict[str, Any]]:
+    """按锚点（部门子表 + 物料名[+存放部位]）定位行，返回定位候选。
+
+    返回每项：sheet_id/sheet_title/row_no/record_id、各白名单字段当前的
+    （列号、原值文本、数值、单位后缀）——写侧凭**当次定位**的行号落笔，
+    不使用查询缓存的行号，天然防行漂移。
+    """
+    meta = await client.read_sheet_metainfo(spreadsheet_token)
+    if meta.kind == "error" or not isinstance(meta.content, dict):
+        raise RuntimeError(f"metainfo 读取失败: {meta.error}")
+    matches: list[dict[str, Any]] = []
+    want_loc = (storage_location or "").strip()
+    for sheet in meta.content.get("sheets") or []:
+        title = str(sheet.get("title") or "")
+        if not _sheet_title_matches(title, department):
+            continue
+        sid = str(sheet.get("sheetId") or "")
+        rows_n = min(int(sheet.get("rowCount") or 0), _MAX_ROWS)
+        cols_n = min(int(sheet.get("columnCount") or 1), _MAX_COLS)
+        if not sid or rows_n <= 0:
+            continue
+        result = await client.read_sheet(
+            spreadsheet_token,
+            f"{sid}!A1:{_column_letter(cols_n)}{rows_n}",
+        )
+        if result.kind == "error" or not isinstance(result.content, list):
+            continue
+        header = _detect_header(result.content)
+        if header is None:
+            continue
+        header_idx, columns = header
+        col_of = {field: columns.get(field) for field, _kw in _WRITABLE_FIELDS}
+        for row_idx, row in enumerate(result.content[header_idx + 1:], start=header_idx + 2):
+            name = _text(row[columns["material_name"]]) if columns.get(
+                "material_name") is not None and columns["material_name"] < len(row) else None
+            if name != material_name.strip():
+                continue
+            loc = _clean_location(_text(row[columns["storage_location"]]) or "") if columns.get(
+                "storage_location") is not None and columns["storage_location"] < len(row) else ""
+            if want_loc and want_loc not in loc:
+                continue
+            fields: dict[str, dict[str, Any]] = {}
+            for field, col in col_of.items():
+                raw = row[col] if col is not None and col < len(row) else None
+                value, suffix = _num_with_unit(raw)
+                fields[field] = {
+                    "col_index": col, "raw": _text(raw),
+                    "value": value, "suffix": suffix,
+                }
+            matches.append({
+                "sheet_id": sid, "sheet_title": title, "row_no": row_idx,
+                "record_id": f"{sid}:{row_idx}",
+                "storage_location": loc or None,
+                "fields": fields,
+            })
+    return matches
+
+
+def cell_address(sheet_id: str, col_index: int, row_no: int) -> str:
+    """写地址（飞书写 API 要求带冒号的单格 range：'2158cd!F3:F3'）。"""
+    a = f"{_column_letter(col_index + 1)}{row_no}"
+    return f"{sheet_id}!{a}:{a}"
+
+
+def write_value_for(field_info: dict[str, Any], new_value: Decimal) -> Any:
+    """写回值：原单元格带单位后缀（'3000g'）则保留后缀，否则写裸数值。"""
+    suffix = field_info.get("suffix")
+    return f"{new_value}{suffix}" if suffix else new_value

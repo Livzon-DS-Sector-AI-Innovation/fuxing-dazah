@@ -925,3 +925,122 @@ async def send_hazard_supervision_bulletin(
     )
     return stats
 
+
+
+# ── 危化品库存：更新《危险品日报表》数量（2026-10-19，sheet 源写路径）──────
+
+
+async def update_chemical_inventory(
+    ctx: RunContext[SafetyDeps],
+    department: str,
+    material_name: str,
+    quantity: float | None = None,
+    daily_usage: float | None = None,
+    max_limit: float | None = None,
+    storage_location: str | None = None,
+) -> dict[str, Any]:
+    """更新飞书《危险品日报表》中一条危化品库存的数量字段（写操作）。
+
+    参数：
+    - department：部门（子表中文名，如「艾默」「危废库」「仓库」，或英文枚举）
+    - material_name：危险品名称（须与表格中名称完全一致，建议先查库存拿准确名称）
+    - quantity / daily_usage / max_limit：新数值（至少填一项；单位口径=该行现有单位，
+      如该行是 kg 填 kg 数、是 g 填克数——工具响应会回报该行当前值与单位）
+    - storage_location：存放部位（同部门同物料多行时用于消歧，模糊匹配）
+
+    只允许改「当前数量 / 一昼夜使用量 / 库存上限」三个数值列；行按
+    部门子表+物料名[+部位]当次现查定位（不信任缓存的行号，防行漂移）。
+    示例：把艾默的乙醇当前数量改成 90000；危废库 米尔贝水层废液 上限改成 25000。
+    """
+    from decimal import Decimal
+
+    from app.modules.safety.bitable_config.store import store as bc_store
+    from app.modules.safety.feishu.office_client import build_office_client
+    from app.modules.safety.service.chemical_inventory_direct.config import (
+        sheet_source_enabled,
+    )
+    from app.modules.safety.service.chemical_inventory_direct.sheet_reader import (
+        cell_address,
+        locate_inventory_rows,
+        write_value_for,
+    )
+
+    if not sheet_source_enabled():
+        return {
+            "ok": False,
+            "error": "危化品库存当前未启用《危险品日报表》数据源（SAFETY_CHEMICAL_INVENTORY_SOURCE），无法通过机器人更新",
+        }
+
+    updates = {
+        "quantity": quantity, "daily_usage_kg": daily_usage, "max_limit": max_limit,
+    }
+    updates = {k: v for k, v in updates.items() if v is not None}
+    if not updates:
+        return {"ok": False, "error": "至少提供 quantity / daily_usage / max_limit 之一"}
+
+    conn = bc_store.get_connection("chemical_inventory", "source_sheet")
+    if conn is None or not conn.enabled:
+        return {"ok": False, "error": "《危险品日报表》连接未配置或已停用"}
+    client = build_office_client()
+
+    rows = await locate_inventory_rows(
+        client, conn.app_token,
+        department=department, material_name=material_name,
+        storage_location=storage_location,
+    )
+    if not rows:
+        return {
+            "ok": False,
+            "error": f"未找到匹配行（部门={department}，物料={material_name}"
+                     f"{'，部位=' + storage_location if storage_location else ''}），"
+                     "请先查库存确认物料名称与所属子表",
+        }
+    if len(rows) > 1:
+        return {
+            "ok": False,
+            "error": f"匹配到 {len(rows)} 行，请用 storage_location 消歧后重试",
+            "matches": [
+                {"record_id": r["record_id"], "storage_location": r["storage_location"],
+                 "sheet_title": r["sheet_title"]} for r in rows
+            ],
+        }
+
+    row = rows[0]
+    changes: list[dict[str, Any]] = []
+    for field, new_raw in updates.items():
+        info = row["fields"].get(field) or {}
+        col = info.get("col_index")
+        if col is None:
+            return {"ok": False, "error": f"子表[{row['sheet_title']}]没有该列（{field}），无法更新"}
+        new_value = Decimal(str(new_raw))
+        if info.get("value") == new_value:
+            continue  # 与现值一致，跳过
+        addr = cell_address(row["sheet_id"], col, row["row_no"])
+        payload = write_value_for(info, new_value)
+        written = await client.write_sheet(conn.app_token, addr, [[payload]])
+        if written.kind == "error":
+            return {"ok": False, "error": f"写入失败（{addr}）：{written.error}",
+                    "partial_changes": changes}
+        changes.append({
+            "field": field, "record_id": row["record_id"],
+            "before": info.get("raw"), "after": str(payload),
+        })
+    if not changes:
+        return {"ok": True, "changed": [], "record_id": row["record_id"],
+                "message": "与当前值一致，无需更新"}
+
+    # 写后失效读缓存（300s TTL 内的查询/统计立即看到新值）
+    from app.modules.safety.service.chemical_inventory_direct.reader import (
+        invalidate_shared_reader,
+    )
+
+    invalidate_shared_reader()
+    return {
+        "ok": True,
+        "changed": changes,
+        "sheet_title": row["sheet_title"],
+        "record_id": row["record_id"],
+        "message": f"已更新《危险品日报表》子表[{row['sheet_title']}] "
+                   f"{material_name}（{row['storage_location'] or '部位未填'}）："
+                   + "；".join(f"{c['field']} {c['before']} → {c['after']}" for c in changes),
+    }

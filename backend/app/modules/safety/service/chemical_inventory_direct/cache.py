@@ -36,6 +36,10 @@ class CachedInventoryReader:
         """当前是否有可复用缓存（测试/观测用）。"""
         return self._entry is not None
 
+    def invalidate(self) -> None:
+        """外部写源表后清缓存（update_chemical_inventory 工具写后调用）。"""
+        self._entry = None
+
     async def fetch_all(self, *, strict: bool = False) -> list[InventoryView]:
         if strict:
             views: list[InventoryView] = await self._inner.fetch_all(strict=True)
