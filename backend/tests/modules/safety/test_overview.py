@@ -125,6 +125,12 @@ def _stub_collectors() -> dict[str, Any]:
     async def supervision() -> dict[str, Any]:
         return {"latest": {"date": "2026-10-12", "violation_count": 2}}
 
+    async def facility_tasks() -> dict[str, Any]:
+        return {"open": 3, "overdue": 1}
+
+    async def facility_tasks_clear() -> dict[str, Any]:
+        return {"open": 0, "overdue": 0}
+
     return {
         "hazards": hazards,
         "special_ops": special_ops,
@@ -136,6 +142,7 @@ def _stub_collectors() -> dict[str, Any]:
         "knowledge_base_s2": knowledge_base_s2,
         "digest": digest,
         "supervision": supervision,
+        "facility_tasks": facility_tasks,
     }
 
 
@@ -249,6 +256,15 @@ class TestBuildOverview:
         }
         # 采集异常（连接有效但读取失败）→ 降级灰卡无指标 + errors 标注
         assert wall["facilities"] == {"key": "facilities", "status": "inactive", "metric": None}
+        # 空任务（open=0）不把未接入卡覆盖成假 ok（facilities-p1 口径）
+        async def facility_tasks_clear() -> dict[str, Any]:
+            return {"open": 0, "overdue": 0}
+
+        stubs_clear = _stub_collectors()
+        stubs_clear["facility_tasks"] = facility_tasks_clear
+        data_clear = await build_overview(collectors=stubs_clear)
+        wall_clear = {c["key"]: c for c in data_clear["module_health"]}
+        assert wall_clear["facilities"]["status"] == "inactive"
         assert "facilities: RuntimeError" in data["errors"]
         # 未 stub 的两域走真采集器 → 未接入（registry 连接位空）
         assert wall["training-behavior"]["metric"] == "未接入"

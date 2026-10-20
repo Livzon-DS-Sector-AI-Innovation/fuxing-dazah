@@ -10,7 +10,7 @@ export interface TaskRunRecord {
   job_name: string
   started_at: string | null
   finished_at: string | null
-  status: 'success' | 'failed'
+  status: 'success' | 'failed' | 'no_source'
   duration_ms: number | null
   error: string | null
 }

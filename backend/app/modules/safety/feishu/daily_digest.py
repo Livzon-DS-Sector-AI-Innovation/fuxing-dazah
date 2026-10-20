@@ -81,6 +81,8 @@ CELL_ORDER: list[str] = [
     "chemical_daily", "chemical_weekly", "progress_dunning", "hazard_bulletin",
     # 外来人员保险到期预警（每周三 08:30）
     "visitor_insurance",
+    # 设施校验任务速递（每日 08:10 派发收尾投递，facilities-p1）
+    "facility_check",
 ]
 
 

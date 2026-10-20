@@ -1,7 +1,14 @@
-// 设备设施管理（S8）——统计+台账+健康度卡（空态即设计，3.0 四期 1-C）
+// 设备设施管理（S8，facilities-p1）——四 Tab：三台账直读 + 校验任务
 
-import DomainLedgerPage from '@/components/safety/domain/DomainLedgerPage'
+import { Suspense } from 'react'
+import FacilitiesPageClient from './page-client'
+
+export const dynamic = 'force-dynamic'
 
 export default function FacilitiesPage() {
-  return <DomainLedgerPage domain="facilities" />
+  return (
+    <Suspense fallback={null}>
+      <FacilitiesPageClient />
+    </Suspense>
+  )
 }

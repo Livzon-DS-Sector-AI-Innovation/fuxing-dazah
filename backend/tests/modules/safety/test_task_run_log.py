@@ -127,10 +127,10 @@ class TestJobRunsEndpoint:
         if last_run is not None:
             for key in ("job_name", "started_at", "finished_at", "status", "duration_ms", "error"):
                 assert key in last_run
-        # 最近历史列表形状一致
+        # 最近历史列表形状一致（no_source=数据源未登记的如实留痕，facilities-p1）
         for row in data["recent"]:
             assert row["job_name"]
-            assert row["status"] in ("success", "failed")
+            assert row["status"] in ("success", "failed", "no_source")
 
     async def test_schedule_text_formats(self, db_session: AsyncSession, client: AsyncClient) -> None:
         resp = await client.get("/api/v1/safety/scheduler-config/job-runs")

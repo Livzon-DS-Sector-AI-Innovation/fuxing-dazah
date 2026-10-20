@@ -1130,11 +1130,18 @@ _DOMAINS: tuple[DomainInfo, ...] = (
     DomainInfo(
         key="facilities",
         label="设备设施管理",
-        purpose="S8 设备设施台账/检验校验记录（占位域，建表接入后供页面与健康度墙直读）",
+        purpose="S8 三台账（安全附件/消防器材/特种设备）+ 设备台账/检验记录骨架"
+                "（一期接入：连接留空待登记，登记后校验任务闭环零改码启用）",
         subscribe="record",
         kinds=(
             KindInfo(kind="equipment_ledger", label="设备设施台账表"),
             KindInfo(kind="inspection_record", label="检验校验记录表"),
+            # ── facilities-p1 三台账（2026-10-19 拍板：三张 bitable 表已存在，
+            #    不新建；default_connection 一律留空，app_token/table_id 由用户
+            #    提供后经 bitable 配置页登记，列映射走表头驱动适配层）──
+            KindInfo(kind="accessory_ledger", label="安全附件台账"),
+            KindInfo(kind="fire_equipment_ledger", label="消防器材台账"),
+            KindInfo(kind="special_equipment_ledger", label="特种设备台账"),
         ),
     ),
     DomainInfo(

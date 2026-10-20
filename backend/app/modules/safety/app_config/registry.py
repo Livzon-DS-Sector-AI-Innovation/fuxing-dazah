@@ -98,6 +98,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         allow_off=True,
     ),
     ConfigItem(
+        "SAFETY_FACILITY_NOTICE_CHAT_ID", "chat_id", "str",
+        "oc_f05532603bd7682fc520929c01aca88d",
+        "设施校验滚动批次卡目标群（默认=安全速递总卡群）",
+    ),
+    ConfigItem(
         "SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "chat_id", "str",
         "oc_4ab4a89f7bbb2450f5e0e341bf0f5f10",
         "特殊作业晨/晚报加发群（特殊作业报备及日报表群）；off = 停用加发（空 = 回落默认群）",

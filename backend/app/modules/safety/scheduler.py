@@ -44,6 +44,11 @@ ALERT_NOTIFY_NAME = "许康福"
 # 并发拖慢导致单任务 20+ 分钟（曾被 20min 超时取消靠重试才完成）；45min 给足余量。
 TASK_TIMEOUT = 45 * 60  # 单个任务最长执行时间（秒）
 
+# no_source 跳过哨兵（facilities-p1）：业务 runner 返回本值表示「数据源连接
+# 未登记，本次跳过」——调度器按 status=no_source 留痕（SchedulerJobRun 当日
+# 去重不重试不告警 + task_run_log 如实一行），严禁假 success（四期空跑事故教训）。
+SKIP_NO_SOURCE = "no_source"
+
 _task_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -332,6 +337,25 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "漏推批次自动补处理（判定→写入→回执→推送），"
                        "无候选明细的漏推留痕告警",
     },
+    # ── 设施校验任务派发（每日 08:10，三台账直读→幂等建任务→对账→批次卡）──
+    {
+        "name": "设施校验任务派发",
+        "hour": 8, "minute": 10,
+        "retry_until_hour": 12, "retry_until_minute": 0,
+        "description": "直读三台账（安全附件/消防器材/特种设备）筛选临期校验项，"
+                       "幂等派发校验任务并按部门合并滚动批次卡通知；"
+                       "顺带对账兜底（行删/停用自动取消、锚点前移自动闭环）。"
+                       "三台账连接未登记时以 no_source 如实留痕跳过（不假成功）",
+    },
+    # ── 校验任务逾期升级（每日 17:10，刷新批次卡追加催办区）──
+    {
+        "name": "校验任务逾期升级",
+        "hour": 17, "minute": 10,
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "description": "已过 due_date 仍未闭环的校验任务 remind_count+1，"
+                       "按部门刷新滚动批次卡追加逾期催办区（@部门负责人+安管，"
+                       ">7 天红档），不逐条私发；台账连接未登记时 no_source 留痕",
+    },
 ]
 
 # ── 触发状态持久化（PostgreSQL）──
@@ -450,8 +474,8 @@ async def _should_run(job: dict[str, Any], today: date, now: datetime | None = N
     if state["fired_date"] != today:
         return True  # 新的一天（旧成功/旧失败都视为全新开始）
 
-    if state["status"] == "success":
-        return False  # 当天已成功，不重发
+    if state["status"] in ("success", SKIP_NO_SOURCE):
+        return False  # 当天已成功/已 no_source 跳过，不重发
 
     # 当天失败 → 退避重试 + 补发窗口（last_attempt_at 为 UTC aware，与 now(UTC) 比较）
     last_attempt = state["last_attempt_at"]
@@ -504,8 +528,12 @@ def _matches_day(job: dict[str, Any], today: date) -> bool:
     return True
 
 
-async def _run_scheduled_job(job: dict[str, Any]) -> bool:
-    """执行一个定时任务，按任务名分发。返回是否真正执行（留痕依据）。
+async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
+    """执行一个定时任务，按任务名分发。
+
+    返回值=留痕依据：False=空跑（非匹配日/未到触发条件，不计运行日志）；
+    True=已执行；SKIP_NO_SOURCE 哨兵=数据源未登记的如实跳过（no_source 留痕）。
+    
 
     时序：先记录 failed 状态（防 30s tick 内重复启动）→ 执行 → 成功改 success；
     失败保留 failed，由后续 tick 在补发窗口内自动重试，达阈值发告警给管理员。
@@ -541,6 +569,7 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool:
     })
     logger.info("定时任务触发: %s (第 %d 次尝试)", job_name, attempt_count)
     chat_id = job.get("target_chat_id")
+    skip_no_source = False
     try:
         if job_name == "隐患督办通报":
             await _run_supervision_bulletin(chat_id=chat_id)
@@ -572,6 +601,10 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool:
             await _run_visitor_insurance_warning(chat_id=chat_id)
         elif job_name == "法规收录对账巡检":
             await _run_regulation_ingest_reconcile()
+        elif job_name == "设施校验任务派发":
+            skip_no_source = await _run_facility_dispatch()
+        elif job_name == "校验任务逾期升级":
+            skip_no_source = await _run_facility_escalation()
         elif "mode" in job:
             await _run_special_op_daily_report(job, today, chat_id=chat_id)
         else:
@@ -579,11 +612,14 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool:
         await _save_state(job_name, {
             "job_name": job_name,
             "fired_date": today,
-            "status": "success",
+            "status": SKIP_NO_SOURCE if skip_no_source else "success",
             "last_attempt_at": now,
             "attempt_count": 0,
             "alerted": False,
         })
+        if skip_no_source:
+            logger.info("定时任务无数据源跳过(no_source): %s", job_name)
+            return SKIP_NO_SOURCE
         logger.info("定时任务完成: %s", job_name)
         return True
     except Exception:
@@ -602,6 +638,30 @@ async def _run_regulation_ingest_reconcile() -> None:
         result = await run_reconcile_patrol(session)
         if result.get("recovered_runs") or result.get("missing_no_items"):
             logger.info("法规收录对账巡检结果: %s", result)
+
+
+async def _run_facility_dispatch() -> bool:
+    """每日 08:10 设施校验任务派发。返回 True=三台账连接未登记（no_source 跳过）。"""
+    from app.core.database import async_session_factory
+    from app.modules.safety.facilities.dispatch import run_dispatch
+
+    async with async_session_factory() as session:
+        result = await run_dispatch(session)
+        await session.commit()
+    logger.info("设施校验任务派发完成: %s", result.summary())
+    return result.no_source
+
+
+async def _run_facility_escalation() -> bool:
+    """每日 17:10 校验任务逾期升级。返回 True=无台账连接（no_source 跳过）。"""
+    from app.core.database import async_session_factory
+    from app.modules.safety.facilities.dispatch import run_escalation
+
+    async with async_session_factory() as session:
+        result = await run_escalation(session)
+        await session.commit()
+    logger.info("校验任务逾期升级完成: %s", result.summary())
+    return result.no_source
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:
@@ -1189,8 +1249,15 @@ async def _run_scheduled_job_guarded(job: dict[str, Any]) -> None:
         else:
             # 空跑（非匹配日/未到触发条件）不计入运行日志
             if executed:
+                no_source = executed == SKIP_NO_SOURCE
                 await record_task_run_fail_open(
-                    job_name=job_name, started_at=started_at, status="success"
+                    job_name=job_name,
+                    started_at=started_at,
+                    status=SKIP_NO_SOURCE if no_source else "success",
+                    error=(
+                        "数据源连接未登记，本次跳过（no_source）"
+                        if no_source else None
+                    ),
                 )
 
 

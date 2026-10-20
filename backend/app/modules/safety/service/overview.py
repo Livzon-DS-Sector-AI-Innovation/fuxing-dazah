@@ -347,6 +347,37 @@ async def collect_supervision(db: AsyncSession) -> dict[str, Any]:
     }
 
 
+async def collect_facility_tasks(db: AsyncSession) -> dict[str, Any]:
+    """设施校验任务（facilities-p1 票 06）：待闭环/逾期计数。
+
+    健康度墙 facilities 卡的任务口径覆盖源——逾期>0 → warn 告警
+    （DESIGN §6：驾驶舱逾期校验任务>0 告警卡；无任务/降级时卡仍走
+    collect_domain_health 三态口径）。
+    """
+    from sqlalchemy import func, select
+
+    from app.modules.safety.models import FacilityCheckTask
+
+    open_n = (
+        await db.execute(
+            select(func.count()).select_from(FacilityCheckTask).where(
+                FacilityCheckTask.status == "issued",
+                FacilityCheckTask.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one()
+    overdue_n = (
+        await db.execute(
+            select(func.count()).select_from(FacilityCheckTask).where(
+                FacilityCheckTask.status == "issued",
+                FacilityCheckTask.due_date < _bj_today(),
+                FacilityCheckTask.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one()
+    return {"open": int(open_n), "overdue": int(overdue_n)}
+
+
 def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
     """17 模块健康度（key 对齐前端菜单；缺数域指标降为 None，不炸墙）。"""
     hazards = parts.get("hazards")
@@ -426,6 +457,23 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
     # 四新域卡（四期 1-B）：三态=未接入 inactive·「未接入」/ 接入后 ok|warn 按蓝本
     # 判据 / 采集降级 inactive·无指标（口径 domain_pages.module_health_card）
     cards.extend(module_health_card(key, parts.get(key)) for key in DOMAIN_PAGE_KEYS)
+    # facilities 卡任务口径覆盖（facilities-p1）：台账已接入（卡非 inactive）
+    # 且已有校验任务时以任务计数为准（逾期>0 → warn 告警卡）；未接入/无任务/
+    # 采集降级保持三态口径——避免空库把「未接入」盖成假 ok
+    facility_tasks = parts.get("facility_tasks")
+    facilities_card = next((c for c in cards if c["key"] == "facilities"), None)
+    if (
+        facility_tasks
+        and (facility_tasks["open"] or facility_tasks["overdue"])
+        and facilities_card is not None
+        and facilities_card.get("status") != "inactive"
+    ):
+        facilities_card["status"] = (
+            "warn" if facility_tasks["overdue"] > 0 else "ok"
+        )
+        facilities_card["metric"] = (
+            f"校验待闭环 {facility_tasks['open']} · 逾期 {facility_tasks['overdue']}"
+        )
     # 监督卡（三期起步）：最近一次审核真实指标（违规>0 → 黄）；无记录「待首跑」灰；
     # 采集降级（parts=None）沿单域降级惯例 → 灰卡无指标
     supervision_latest = (parts.get("supervision") or {}).get("latest")
@@ -487,6 +535,7 @@ async def build_overview(
         "key_risk_ops": _db_collector(collect_key_risk_ops),
         "ehs": _db_collector(collect_ehs),
         "supervision": _db_collector(collect_supervision),
+        "facility_tasks": _db_collector(collect_facility_tasks),
         # 四新域（四期 1-B）：无 DB 采集，读 bitable 配置/表格（未接入是常态）
         "goals": lambda: collect_domain_health("goals"),
         "training-behavior": lambda: collect_domain_health("training-behavior"),

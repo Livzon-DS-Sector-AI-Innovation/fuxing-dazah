@@ -38,6 +38,17 @@ from app.modules.safety.models.contractors import (  # noqa: F401
 from app.modules.safety.models.ehs_changes import (  # noqa: F401
     EhsChange,
 )
+from app.modules.safety.models.facilities import (  # noqa: F401
+    TASK_STATUS_CANCELLED,
+    TASK_STATUS_CLOSED,
+    TASK_STATUS_ISSUED,
+    TRIGGER_EVENT,
+    TRIGGER_MANUAL,
+    TRIGGER_POLL,
+    FacilityCheckTask,
+    FacilityNoticeBatch,
+    FacilityTaskEvent,
+)
 from app.modules.safety.models.enums import (  # noqa: F401
     AbnormalityStatus,
     ActionItemStatus,

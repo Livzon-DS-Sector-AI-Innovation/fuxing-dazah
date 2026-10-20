@@ -215,11 +215,10 @@ export default function SupervisionPage() {
       width: 84,
       render: (_, r) => {
         if (!r.last_run) return <StatusTag tone="default" label="未运行" />
-        return r.last_run.status === 'success' ? (
-          <StatusTag tone="ok" label="成功" />
-        ) : (
-          <StatusTag tone="danger" label="失败" />
-        )
+        if (r.last_run.status === 'success') return <StatusTag tone="ok" label="成功" />
+        if (r.last_run.status === 'no_source')
+          return <StatusTag tone="default" label="无数据源" />
+        return <StatusTag tone="danger" label="失败" />
       },
     },
     {

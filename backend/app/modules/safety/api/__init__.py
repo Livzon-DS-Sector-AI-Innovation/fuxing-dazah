@@ -17,6 +17,7 @@ from app.modules.safety.api.domain_pages import domain_pages_router
 from app.modules.safety.api.ehs_changes import ehs_changes_router
 from app.modules.safety.api.emergency_drills import emergency_drills_router
 from app.modules.safety.api.enums import enums_router
+from app.modules.safety.api.facilities import facilities_router
 from app.modules.safety.api.feishu import feishu_router
 from app.modules.safety.api.files import files_router
 from app.modules.safety.api.fire_alarm import fire_alarm_router
@@ -63,6 +64,7 @@ router.include_router(domain_pages_router)
 router.include_router(ehs_changes_router)
 router.include_router(emergency_drills_router)
 router.include_router(enums_router)
+router.include_router(facilities_router)
 router.include_router(feishu_router)
 router.include_router(files_router)
 router.include_router(fire_alarm_router)
