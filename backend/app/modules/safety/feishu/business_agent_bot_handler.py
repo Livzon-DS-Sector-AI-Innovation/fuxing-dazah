@@ -1541,6 +1541,12 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
 
             return await handle_urs_card_action(payload, event_data)
 
+        # ── 特种设备监控报警卡按钮（scope=telemetry_alarm，facilities-p2）──
+        if payload.get("scope") == "telemetry_alarm":
+            from app.modules.safety.telemetry.card import handle_telemetry_card_action
+
+            return await handle_telemetry_card_action(payload, event_data)
+
         # ── 督办催办卡片提交路由（scope=progress_update）──
         if payload.get("scope") == "progress_update":
             from app.modules.safety.feishu.progress_card import handle_progress_submit

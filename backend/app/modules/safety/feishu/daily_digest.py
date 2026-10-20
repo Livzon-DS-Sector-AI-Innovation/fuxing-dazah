@@ -83,6 +83,8 @@ CELL_ORDER: list[str] = [
     "visitor_insurance",
     # 设施校验任务速递（每日 08:10 派发收尾投递，facilities-p1）
     "facility_check",
+    # 特种设备监控报警（即时并入，facilities-p2）
+    "telemetry_alarm",
 ]
 
 

@@ -31,8 +31,8 @@ class TestRegistry:
         # INTERVAL_HOURS/WEBHOOK_SECRET；+1：RagFlow Web 外链地址键；+2：危化品
         # 库存 sheet 源（SOURCE 开关 + revision 状态）；+2：督办通报值守轮询
         # （④ 开关 + 间隔）；+1：督办通报「推送到群」目标群
-        assert len(registry.REGISTRY) == 95  # facilities-p1 +1：批次卡目标群 CHAT_ID
-        assert len(registry.iter_items()) == 95  # facilities-p1 +1：批次卡目标群 CHAT_ID
+        assert len(registry.REGISTRY) == 104  # facilities-p2 +9：telemetry 采集/报警 9 键
+        assert len(registry.iter_items()) == 104  # facilities-p2 +9：telemetry 采集/报警 9 键
 
     def test_unknown_key_raises(self):
         with pytest.raises(ValueError, match="未知配置键"):

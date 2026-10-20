@@ -518,6 +518,51 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "fldpZSHrTd",
         "消防点检「报告」字段 field_id",
     ),
+
+    # ══════════════════════════════════════════════════════════
+    # 特种设备遥测监控（facilities-p2）— 锅炉群消息采集与阈值报警
+    # ══════════════════════════════════════════════════════════
+    ConfigItem(
+        "SAFETY_TELEMETRY_SOURCE_CHAT_ID", "chat_id", "str", "",
+        "锅炉群消息采集源群（空 = 未接入，采集任务 no_source 留痕跳过）",
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_ALARM_CHAT_ID", "chat_id", "str", "",
+        "监控报警群卡目标群（空 = 回落设施批次卡群）",
+    ),
+    _gate(
+        "SAFETY_TELEMETRY_POLL_ENABLED", False,
+        "锅炉群消息采集轮询开关（interval 任务；关 = 任务不启动）",
+        restart_required=True,
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_POLL_INTERVAL_SECONDS", "poll_param", "int", 300,
+        "采集轮询间隔秒数（下限 60；单例创建时读取，改后需重启）",
+        restart_required=True, minimum=60,
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_SILENCE_SECONDS", "poll_param", "int", 1800,
+        "报警静默窗口秒数（同源同级别窗内不重发）",
+        minimum=60,
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_RULES", "misc", "str", "",
+        "阈值规则 JSON 覆写（规则数组；设备级>类别级>代码默认；非法整体回退默认；"
+        "受长度上限约束请保持紧凑）",
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_SENDER_MAP", "misc", "str", "",
+        "发送人→默认设备编号映射 JSON（如 {\"ou_xxx\":\"GL-01\"}；消息未带编号时兜底归属）",
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_METRIC_ALIASES", "misc", "str", "",
+        "模板指标别名覆写 JSON（如 {\"蒸汽压力\":\"汽压\"}；与内置别名合并，"
+        "「可配模板」的轻量口径——完整正则模板管理待 P5 真实样例）",
+    ),
+    ConfigItem(
+        "SAFETY_TELEMETRY_CURSOR", "misc", "str", "",
+        "采集游标（运行时：last_message_id|create_time；重启增量续拉，勿手改）",
+    ),
 )
 
 # 构造时断言：键唯一（重复键会在 dict 推导时静默覆盖，故显式校验）

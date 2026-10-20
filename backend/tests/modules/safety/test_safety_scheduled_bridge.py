@@ -20,7 +20,7 @@ import pytest
 # ── 桥接任务形状与注册 ───────────────────────────────────────────
 
 
-def test_register_safety_tasks_registers_five() -> None:
+def test_register_safety_tasks_registers_six() -> None:
     from app.modules.safety.scheduled import register_safety_tasks
     from app.platform.scheduler import SchedulerRegistry
 
@@ -33,6 +33,7 @@ def test_register_safety_tasks_registers_five() -> None:
         "safety.hazard_review_poll",
         "safety.hazard_supervision_poll",
         "safety.hazard_bulletin_watch",
+        "safety.telemetry_collect",
     }
 
 

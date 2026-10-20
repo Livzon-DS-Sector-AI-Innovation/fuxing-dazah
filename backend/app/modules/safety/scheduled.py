@@ -20,7 +20,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from app.platform.scheduler import ScheduleConfig, ScheduleStrategy, TaskDefinition
@@ -311,12 +311,90 @@ HAZARD_BULLETIN_WATCH_TASK = TaskDefinition(
     module="safety",
 )
 
+
+# ═══════════════════════════════════════════════════════════════
+# facilities-p2：锅炉群消息采集与判定（interval，默认 5 分钟）
+# ═══════════════════════════════════════════════════════════════
+
+# 运行留痕节流（5 分钟一轮，任务运行中心不被刷屏：状态变化或换日才写行）
+_TELEMETRY_RUN_GATE = None
+
+
+def _telemetry_gate():
+    global _TELEMETRY_RUN_GATE
+    if _TELEMETRY_RUN_GATE is None:
+        from app.modules.safety.telemetry.collector import RunLogGate
+
+        _TELEMETRY_RUN_GATE = RunLogGate()
+    return _TELEMETRY_RUN_GATE
+
+
+def _telemetry_poll_interval() -> int:
+    from app.modules.safety.app_config.store import store
+
+    return store.get_int("SAFETY_TELEMETRY_POLL_INTERVAL_SECONDS", 300, minimum=60)
+
+
+async def _run_telemetry_collect_dispatch() -> None:
+    """采集单轮派发：开关 → overlap 守卫（_RUNNING set）→ 执行 → 节流留痕。"""
+    from app.modules.safety.service.task_run_log import (
+        error_summary,
+        record_task_run_fail_open,
+    )
+    from app.modules.safety.telemetry import collector
+
+    if not collector.poll_enabled():
+        return
+    if "telemetry_collect" in _RUNNING:
+        logger.warning("锅炉群采集上轮未完，跳过本次触发")
+        return
+
+    _RUNNING.add("telemetry_collect")
+    started_at = datetime.now(UTC)
+    try:
+        outcome = await collector.run_scheduled_round()
+        if _telemetry_gate().should_log("锅炉群消息采集", outcome, date.today()):
+            await record_task_run_fail_open(
+                job_name="锅炉群消息采集",
+                started_at=started_at,
+                status=outcome,
+                error=(
+                    "锅炉群未配置（SAFETY_TELEMETRY_SOURCE_CHAT_ID 空），本次跳过"
+                    if outcome == "no_source" else None
+                ),
+            )
+    except Exception as exc:
+        logger.exception("锅炉群采集单轮异常")
+        if _telemetry_gate().should_log("锅炉群消息采集", "failed", date.today()):
+            await record_task_run_fail_open(
+                job_name="锅炉群消息采集",
+                started_at=started_at,
+                status="failed",
+                error=error_summary(exc=exc),
+            )
+    finally:
+        _RUNNING.discard("telemetry_collect")
+
+
+TELEMETRY_COLLECT_TASK = TaskDefinition(
+    name="safety.telemetry_collect",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        interval_seconds=_telemetry_poll_interval(),
+    ),
+    coro=_run_telemetry_collect_dispatch,
+    # 引擎侧超时约束派发器；单轮真实上限在采集内部（AI 调用逐条可控）
+    timeout_seconds=120,
+    module="safety",
+)
+
 _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     SAFETY_SCHEDULER_BRIDGE_TASK,
     HAZARD_AI_POLL_TASK,
     HAZARD_REVIEW_POLL_TASK,
     HAZARD_SUPERVISION_POLL_TASK,
     HAZARD_BULLETIN_WATCH_TASK,
+    TELEMETRY_COLLECT_TASK,
 )
 
 

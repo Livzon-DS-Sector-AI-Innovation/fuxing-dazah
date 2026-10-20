@@ -1,14 +1,43 @@
 'use client'
 
 /**
- * 设备设施管理页 client（facilities-p1 票 01）——四 Tab：
- * 安全附件 / 消防器材 / 特种设备（三台账直读）+ 校验任务（票 03 交付，
- * 当前占位）。页级 PageHeader；台账 Tab 见 FacilitiesLedgerTab。
+ * 设备设施管理页 client（facilities-p1 票 01 / p2 票 01）——四 Tab：
+ * 安全附件 / 消防器材 / 特种设备（「台账 | 监控」子区，监控=锅炉遥测链 p2）+
+ * 校验任务。页级 PageHeader；台账 Tab 见 FacilitiesLedgerTab。
  */
-import { Tabs } from 'antd'
+import { useState } from 'react'
+import { Segmented, Tabs } from 'antd'
 import { PageHeader } from '@/components/ui-kit'
 import FacilitiesLedgerTab from './FacilitiesLedgerTab'
 import FacilityTaskCenterPanel from './FacilityTaskCenterPanel'
+import TelemetryMonitorPanel from '@/components/safety/telemetry/TelemetryMonitorPanel'
+
+function SpecialEquipmentTab() {
+  const [section, setSection] = useState<'ledger' | 'monitor'>('ledger')
+  return (
+    <div>
+      <div className="mb-3">
+        <Segmented
+          value={section}
+          onChange={(v) => setSection(v as 'ledger' | 'monitor')}
+          options={[
+            { value: 'ledger', label: '台账' },
+            { value: 'monitor', label: '监控' },
+          ]}
+        />
+      </div>
+      {section === 'ledger' ? (
+        <FacilitiesLedgerTab
+          ledger="special-equipment"
+          title="特种设备"
+          description="锅炉 / 压力容器等定期检验台账（锅炉监控链二期接入）"
+        />
+      ) : (
+        <TelemetryMonitorPanel />
+      )}
+    </div>
+  )
+}
 
 export default function FacilitiesPageClient() {
   return (
@@ -46,13 +75,7 @@ export default function FacilitiesPageClient() {
           {
             key: 'special-equipment',
             label: '特种设备',
-            children: (
-              <FacilitiesLedgerTab
-                ledger="special-equipment"
-                title="特种设备"
-                description="锅炉 / 压力容器等定期检验台账（锅炉监控链二期接入）"
-              />
-            ),
+            children: <SpecialEquipmentTab />,
           },
           { key: 'tasks', label: '校验任务', children: <FacilityTaskCenterPanel /> },
         ]}

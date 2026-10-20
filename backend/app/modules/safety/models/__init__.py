@@ -145,6 +145,20 @@ from app.modules.safety.models.special_operations import (  # noqa: F401
     SpecialOperationPersonnel,
     SpecialOperationReport,
 )
+from app.modules.safety.models.telemetry import (  # noqa: F401
+    ALARM_LEVEL_ALARM,
+    ALARM_LEVEL_WARNING,
+    ALARM_STATUS_ACKED,
+    ALARM_STATUS_FIRING,
+    ALARM_STATUS_RESOLVED,
+    PARSE_METHOD_AI,
+    PARSE_METHOD_MANUAL,
+    PARSE_METHOD_TEMPLATE,
+    PARSE_STATUS_OK,
+    PARSE_STATUS_PENDING_REVIEW,
+    TelemetryAlarmRecord,
+    TelemetrySnapshot,
+)
 from app.modules.safety.models.trainings import (  # noqa: F401
     SafetyTraining,
     TrainingRecord,
