@@ -238,6 +238,22 @@ async def _push_material_alerts() -> None:
             for s in suggestions
         ]
         blocks.append("采购建议（低于安全库存）：\n" + "\n".join(lines))
+    if lab_alerts:
+        type_label = {"reagent": "试剂", "reference_standard": "对照品", "titrant": "滴定液", "instrument": "仪器校验"}
+        lines = []
+        for a in lab_alerts:
+            label = type_label.get(a["item_type"], a["item_type"])
+            tail = "（已过期，禁止使用）" if a["expired"] else "（临期，请及时处理）"
+            lines.append(f"- {label} {a['name']}：有效期 {a['expiry_date']}{tail}")
+        blocks.append("试剂/仪器效期提醒（30 天内）：\n" + "\n".join(lines))
+    if today_plans:
+        pending = [p for p in today_plans if p.status == "pending"]
+        if pending:
+            lines = []
+            for p in pending:
+                batch = f"（批号 {p.batch_no}）" if p.batch_no else ""
+                lines.append(f"- {p.department} {p.product_name}{batch} 计划请检 {p.plan_time[11:]}")
+            blocks.append(f"今日请检计划（{len(pending)} 项，请相关车间及 QC 安排）：\n" + "\n".join(lines))
     if not blocks:
         return
     text = "\n\n".join(blocks)

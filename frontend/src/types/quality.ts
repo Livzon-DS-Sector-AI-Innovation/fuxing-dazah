@@ -674,3 +674,21 @@ export interface InspectionPlan {
   remark: string | null
   created_at: string
 }
+
+
+// ─── 微生物限度/菌落计数登记 ───
+
+export interface MicroRecord {
+  id: string
+  sample_name: string
+  batch_number: string | null
+  sample_date: string | null
+  colony_count: number | null
+  ai_count: number | null
+  alert_limit: number | null
+  action_limit: number | null
+  judge: 'pass' | 'alert' | 'action' | null
+  photo_keys: string[] | null
+  remark: string | null
+  created_at: string
+}

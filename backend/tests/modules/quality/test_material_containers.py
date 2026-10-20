@@ -781,3 +781,22 @@ async def test_request_task_conflicts(db_session):
     with pytest.raises(AppException) as exc2:
         await material_container_service.create_material_task(db_session, req.id)
     assert exc2.value.status_code == 409
+
+
+async def test_micro_record_judge(db_session):
+    from app.modules.quality.api._materials import _micro_judge
+    from app.modules.quality.repository import create_micro_record, get_micro_record
+
+    # 判定规则
+    assert _micro_judge(5, 10, 20) == "pass"
+    assert _micro_judge(15, 10, 20) == "alert"
+    assert _micro_judge(25, 10, 20) == "action"
+    assert _micro_judge(None, 10, 20) is None
+    # 创建即判定
+    rec = await create_micro_record(db_session, {
+        "sample_name": "微生物限度测试", "batch_number": "HAF2609001",
+        "colony_count": 25, "alert_limit": 10, "action_limit": 20,
+        "judge": "action",
+    })
+    got = await get_micro_record(db_session, rec.id)
+    assert got is not None and got.judge == "action"

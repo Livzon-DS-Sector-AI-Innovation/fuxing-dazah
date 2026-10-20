@@ -32,6 +32,7 @@ import type {
   StocktakeSheet,
   LabItem,
   InspectionPlan,
+  MicroRecord,
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
@@ -1527,5 +1528,85 @@ export async function downloadInspectionPlanTemplate(): Promise<Blob> {
     headers: await _authHeaders(),
   })
   if (!res.ok) throw new Error('模板下载失败')
+  return res.blob()
+}
+
+
+// ─── 微生物限度/菌落计数登记 ───
+
+export async function fetchMicroRecords(batchNo?: string): Promise<{ data: MicroRecord[] }> {
+  const params = new URLSearchParams()
+  if (batchNo) params.set('batch_no', batchNo)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取登记失败')
+  return res.json()
+}
+
+export async function createMicroRecord(input: Partial<MicroRecord>): Promise<{ message: string; data: MicroRecord }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '保存失败')
+  }
+  return res.json()
+}
+
+export async function updateMicroRecord(id: string, input: Partial<MicroRecord>): Promise<{ message: string; data: MicroRecord }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error('更新失败')
+  return res.json()
+}
+
+export async function deleteMicroRecord(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除失败')
+  return res.json()
+}
+
+export async function uploadMicroPhotos(recordId: string, files: File[]): Promise<{ message: string; data: { photo_keys: string[] } }> {
+  const formData = new FormData()
+  for (const f of files) formData.append('files', f)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records/${recordId}/photos`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '照片上传失败')
+  }
+  return res.json()
+}
+
+export async function fetchMicroPhotoDataUrl(recordId: string, key: string): Promise<string> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records/${recordId}/photos/${encodeURIComponent(key)}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('照片加载失败')
+  const blob = await res.blob()
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(reader.result as string)
+    reader.readAsDataURL(blob)
+  })
+}
+
+export async function exportMicroRecords(batchNo?: string): Promise<Blob> {
+  const params = new URLSearchParams()
+  if (batchNo) params.set('batch_no', batchNo)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records/export${qs}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('导出失败')
   return res.blob()
 }

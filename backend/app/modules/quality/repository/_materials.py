@@ -17,6 +17,7 @@ from app.modules.quality.models import (
     QualityMaterialRequest,
     QualityMaterialStandard,
     QualityMaterialStandardItem,
+    QualityMicroRecord,
     QualityStocktakeItem,
     QualityStocktakeSheet,
     QualitySupplier,
@@ -937,3 +938,52 @@ async def update_inspection_plan_status(
     await db.flush()
     stmt = select(QualityInspectionPlan).where(QualityInspectionPlan.id == pid)
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+# ─── 微生物限度/菌落计数登记 ───
+
+
+async def create_micro_record(db: AsyncSession, data: dict[str, Any]) -> QualityMicroRecord:
+    rec = QualityMicroRecord(**data)
+    db.add(rec)
+    await db.flush()
+    return rec
+
+
+async def get_micro_record(db: AsyncSession, rid: uuid.UUID) -> QualityMicroRecord | None:
+    stmt = select(QualityMicroRecord).where(
+        QualityMicroRecord.id == rid, QualityMicroRecord.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_micro_records(
+    db: AsyncSession, batch_no: str | None = None
+) -> list[QualityMicroRecord]:
+    conds = [QualityMicroRecord.is_deleted == False]  # noqa: E712
+    if batch_no:
+        conds.append(QualityMicroRecord.batch_number.ilike(f"%{batch_no}%"))
+    stmt = select(QualityMicroRecord).where(*conds).order_by(QualityMicroRecord.created_at.desc())
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def update_micro_record(
+    db: AsyncSession, rid: uuid.UUID, data: dict[str, Any]
+) -> QualityMicroRecord | None:
+    rec = await get_micro_record(db, rid)
+    if rec is None:
+        return None
+    for key, value in data.items():
+        setattr(rec, key, value)
+    await db.flush()
+    stmt = select(QualityMicroRecord).where(QualityMicroRecord.id == rid)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_micro_record(db: AsyncSession, rid: uuid.UUID) -> bool:
+    rec = await get_micro_record(db, rid)
+    if rec is None:
+        return False
+    rec.is_deleted = True
+    await db.flush()
+    return True

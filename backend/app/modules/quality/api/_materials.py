@@ -4,13 +4,17 @@ import uuid
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
-from app.modules.quality.api._common import router
+from app.modules.quality import storage as quality_storage
+from app.modules.quality.api._common import (
+    _safe_filename,
+    router,
+)
 from app.modules.quality.repository import (
     create_container_movement,
     create_inspection_plan,
@@ -18,14 +22,17 @@ from app.modules.quality.repository import (
     create_material,
     create_material_standard,
     create_material_standard_item,
+    create_micro_record,
     create_supplier,
     delete_lab_item,
     delete_material,
+    delete_micro_record,
     delete_supplier,
     get_material_by_code,
     get_material_container_by_no,
     get_material_standard,
     get_material_standard_by_key,
+    get_micro_record,
     get_stocktake_sheet,
     get_supplier_by_code,
     list_container_movements,
@@ -38,6 +45,7 @@ from app.modules.quality.repository import (
     list_material_requests,
     list_material_standard_items,
     list_materials,
+    list_micro_records,
     list_slow_moving_containers,
     list_stocktake_items,
     list_stocktake_sheets,
@@ -50,6 +58,7 @@ from app.modules.quality.repository import (
     update_inspection_plan_status,
     update_lab_item,
     update_material,
+    update_micro_record,
     update_supplier,
 )
 from app.modules.quality.schemas import (
@@ -80,6 +89,9 @@ from app.modules.quality.schemas import (
     MaterialStandardOut,
     MaterialSummaryItem,
     MaterialUpdate,
+    MicroRecordCreate,
+    MicroRecordOut,
+    MicroRecordUpdate,
     MonthlyReportItem,
     StocktakeCreate,
     StocktakeItemOut,
@@ -1065,4 +1077,154 @@ async def inspection_plan_template_endpoint(
         BytesIO(buf.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="plan-template.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+# ─── 微生物限度/菌落计数登记 ───
+
+
+def _micro_judge(count: int | None, alert: float | None, action: float | None) -> str | None:
+    """判定：超标准限 action / 超警戒线 alert / 其余 pass；无计数不判定。"""
+    if count is None:
+        return None
+    if action is not None and count > action:
+        return "action"
+    if alert is not None and count > alert:
+        return "alert"
+    return "pass"
+
+
+@router.get("/micro-records", summary="微生物限度/菌落计数登记列表")
+async def list_micro_records_endpoint(
+    batch_no: str | None = Query(default=None, description="批号模糊"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    rows = await list_micro_records(db, batch_no=batch_no)
+    items = [MicroRecordOut.model_validate(r).model_dump(mode="json") for r in rows]
+    return success_response(data=items)
+
+
+@router.post("/micro-records", summary="新增微生物登记（按人工确认数判定，AI 预计数可选）", status_code=201)
+async def create_micro_record_endpoint(
+    payload: MicroRecordCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    rec = await create_micro_record(db, {
+        **payload.model_dump(),
+        "judge": _micro_judge(payload.colony_count, payload.alert_limit, payload.action_limit),
+    })
+    return success_response(
+        data=MicroRecordOut.model_validate(rec).model_dump(mode="json"),
+        message="登记已保存", status_code=201,
+    )
+
+
+@router.put("/micro-records/{record_id}", summary="更新微生物登记（重新判定）")
+async def update_micro_record_endpoint(
+    record_id: uuid.UUID,
+    payload: MicroRecordUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    rec = await get_micro_record(db, record_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    data = payload.model_dump(exclude_none=True)
+    data["judge"] = _micro_judge(
+        data.get("colony_count", rec.colony_count),
+        data.get("alert_limit", rec.alert_limit),
+        data.get("action_limit", rec.action_limit),
+    )
+    updated = await update_micro_record(db, record_id, data)
+    return success_response(
+        data=MicroRecordOut.model_validate(updated).model_dump(mode="json"),
+        message="登记已更新",
+    )
+
+
+@router.post("/micro-records/{record_id}/photos", summary="上传平皿照片（多张，归档为原始证据）")
+async def upload_micro_photos_endpoint(
+    record_id: uuid.UUID,
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    rec = await get_micro_record(db, record_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    keys = list(rec.photo_keys or [])
+    for f in files[:10]:
+        content = await f.read()
+        if not content or len(content) > 20 * 1024 * 1024:
+            continue
+        key = f"micro/{record_id}/{uuid.uuid4().hex[:12]}_{_safe_filename(f.filename or 'photo.jpg')}"
+        quality_storage.upload_attachment(key, content, f.content_type or "image/jpeg")
+        keys.append(key)
+    await update_micro_record(db, record_id, {"photo_keys": keys})
+    return success_response(data={"photo_keys": keys}, message=f"已归档 {len(keys)} 张照片")
+
+
+@router.get("/micro-records/{record_id}/photos/{key:path}", summary="平皿照片查看（原始证据）")
+async def get_micro_photo_endpoint(
+    record_id: uuid.UUID,
+    key: str,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> Response:
+    rec = await get_micro_record(db, record_id)
+    if rec is None or not rec.photo_keys or key not in rec.photo_keys:
+        raise HTTPException(status_code=404, detail="照片不存在")
+    data = quality_storage.read_attachment(key)
+    if data is None:
+        raise HTTPException(status_code=404, detail="照片文件缺失")
+    return Response(content=data, media_type="image/jpeg")
+
+
+@router.delete("/micro-records/{record_id}", summary="删除微生物登记（软删除）")
+async def delete_micro_record_endpoint(
+    record_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    if not await delete_micro_record(db, record_id):
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return success_response(message="已删除")
+
+
+@router.get("/micro-records/export", summary="微生物登记表导出 Excel")
+async def export_micro_records_endpoint(
+    batch_no: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    rows = await list_micro_records(db, batch_no=batch_no)
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    ws.title = "微生物登记"
+    ws.append(["品名", "批号", "检测日期", "菌落计数", "警戒线", "标准限", "判定", "备注"])
+    judge_label = {"pass": "合格", "alert": "超警戒", "action": "超标准"}
+    for r in rows:
+        ws.append([
+            r.sample_name, r.batch_number or "-", r.sample_date or "-",
+            r.colony_count if r.colony_count is not None else "-",
+            r.alert_limit if r.alert_limit is not None else "-",
+            r.action_limit if r.action_limit is not None else "-",
+            judge_label.get(r.judge or "", r.judge or "-"),
+            r.remark or "-",
+        ])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote("微生物登记表.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="micro.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )

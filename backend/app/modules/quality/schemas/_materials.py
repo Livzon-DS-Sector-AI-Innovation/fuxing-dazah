@@ -420,3 +420,41 @@ class InspectionPlanOut(BaseModel):
     status: str
     remark: str | None
     created_at: datetime
+
+
+class MicroRecordCreate(BaseModel):
+    """微生物限度/菌落计数登记新增（AI 预计数可选，不作判定依据）。"""
+
+    sample_name: str = Field(max_length=200, description="样品名称/品名")
+    batch_number: str | None = Field(default=None, max_length=100)
+    sample_date: str | None = Field(default=None, max_length=32, description="检测日期 YYYY-MM-DD")
+    colony_count: int | None = Field(default=None, ge=0, description="菌落计数（人工确认数，判定依据）")
+    ai_count: int | None = Field(default=None, ge=0, description="AI 预计数（预留）")
+    alert_limit: float | None = Field(default=None, ge=0, description="警戒线")
+    action_limit: float | None = Field(default=None, ge=0, description="标准限（行动限）")
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class MicroRecordUpdate(BaseModel):
+    colony_count: int | None = Field(default=None, ge=0)
+    ai_count: int | None = Field(default=None, ge=0)
+    alert_limit: float | None = Field(default=None, ge=0)
+    action_limit: float | None = Field(default=None, ge=0)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class MicroRecordOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    sample_name: str
+    batch_number: str | None
+    sample_date: str | None
+    colony_count: int | None
+    ai_count: int | None
+    alert_limit: float | None
+    action_limit: float | None
+    judge: str | None
+    photo_keys: list[str] | None
+    remark: str | None
+    created_at: datetime

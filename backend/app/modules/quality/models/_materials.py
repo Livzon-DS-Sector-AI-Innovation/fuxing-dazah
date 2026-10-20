@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -150,6 +151,32 @@ class QualityInspectionPlan(BaseModel):
     status: Mapped[str] = mapped_column(
         String(32), default="pending", server_default="pending",
         comment="pending 待请检 / inspected 已请检",
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityMicroRecord(BaseModel):
+    """微生物限度/平板菌落计数登记（AI 计数插件预留：ai_count 供未来视觉模型填入）。"""
+
+    __tablename__ = "quality_micro_records"
+    __table_args__ = (
+        Index("ix_quality_micro_batch", "batch_number"),
+        Index("ix_quality_micro_sample_date", "sample_date"),
+        {"schema": "quality"},
+    )
+
+    sample_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="样品名称/品名")
+    batch_number: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="样品批号")
+    sample_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="检测日期 YYYY-MM-DD")
+    colony_count: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="菌落计数（人工确认数，判定依据）")
+    ai_count: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="AI 预计数（视觉模型插件预留，不作判定依据）")
+    alert_limit: Mapped[float | None] = mapped_column(nullable=True, comment="警戒线")
+    action_limit: Mapped[float | None] = mapped_column(nullable=True, comment="标准限（行动限）")
+    judge: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="pass 合格 / alert 超警戒 / action 超标准（按人工确认数判定）"
+    )
+    photo_keys: Mapped[list[str] | None] = mapped_column(
+        JSONB, nullable=True, comment="平皿照片对象键列表（MinIO/本地兜底）"
     )
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
