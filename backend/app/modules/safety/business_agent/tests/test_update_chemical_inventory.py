@@ -104,8 +104,11 @@ def _seed(
     return client
 
 
-def _ctx() -> SimpleNamespace:
-    return SimpleNamespace(deps=SimpleNamespace(db=None))
+def _ctx(
+    *, role: str | None = None, department: str | None = None,
+) -> SimpleNamespace:
+    person = SimpleNamespace(department=department) if department is not None else None
+    return SimpleNamespace(deps=SimpleNamespace(db=None, role=role, person=person))
 
 
 class TestUpdateChemicalInventory:
@@ -115,7 +118,7 @@ class TestUpdateChemicalInventory:
         """单行命中：写当前数量（写地址带冒号）+ 缓存失效 + 前后值回报。"""
         client = _seed(monkeypatch)
         result = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="乙酸乙酯废液", quantity=5200,
+            _ctx(role='safety_admin'), department="危废库", material_name="乙酸乙酯废液", quantity=5200,
         )
         assert result["ok"] is True
         assert result["record_id"] == "H8wjnP:3"
@@ -130,7 +133,7 @@ class TestUpdateChemicalInventory:
         """g 后缀行：写回保留 '5200g' 形态（不裸写数字）。"""
         client = _seed(monkeypatch)
         result = await update_chemical_inventory(
-            _ctx(), department="环保工程中心", material_name="氢氧化钠", quantity=5200,
+            _ctx(role='safety_admin'), department="环保工程中心", material_name="氢氧化钠", quantity=5200,
         )
         assert result["ok"] is True
         assert client.writes == [("GgfZuX!F2:F2", [["5200g"]])]
@@ -142,7 +145,7 @@ class TestUpdateChemicalInventory:
         """部门入参用英文 slug（weifeiku）同样命中。"""
         _seed(monkeypatch)
         result = await update_chemical_inventory(
-            _ctx(), department="weifeiku", material_name="乙酸乙酯废液", quantity=1,
+            _ctx(role='safety_admin'), department="weifeiku", material_name="乙酸乙酯废液", quantity=1,
         )
         assert result["ok"] is True
 
@@ -156,14 +159,14 @@ class TestUpdateChemicalInventory:
         )
         client.row_counts["H8wjnP"] = 4
         result = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="乙酸乙酯废液", quantity=1,
+            _ctx(role='safety_admin'), department="危废库", material_name="乙酸乙酯废液", quantity=1,
         )
         assert result["ok"] is False
         assert "消歧" in result["error"]
         assert len(result["matches"]) == 2
         # 部位消歧后单行命中
         result2 = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="乙酸乙酯废液",
+            _ctx(role='safety_admin'), department="危废库", material_name="乙酸乙酯废液",
             quantity=1, storage_location="危库三",
         )
         assert result2["ok"] is True
@@ -172,7 +175,7 @@ class TestUpdateChemicalInventory:
     async def test_no_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _seed(monkeypatch)
         result = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="不存在的物料", quantity=1,
+            _ctx(role='safety_admin'), department="危废库", material_name="不存在的物料", quantity=1,
         )
         assert result["ok"] is False
         assert "未找到" in result["error"]
@@ -182,7 +185,7 @@ class TestUpdateChemicalInventory:
     ) -> None:
         _seed(monkeypatch, source_on=False)
         result = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="乙酸乙酯废液", quantity=1,
+            _ctx(role='safety_admin'), department="危废库", material_name="乙酸乙酯废液", quantity=1,
         )
         assert result["ok"] is False
         assert "未启用" in result["error"]
@@ -192,7 +195,7 @@ class TestUpdateChemicalInventory:
     ) -> None:
         client = _seed(monkeypatch)
         result = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="乙酸乙酯废液", quantity=4900,
+            _ctx(role='safety_admin'), department="危废库", material_name="乙酸乙酯废液", quantity=4900,
         )
         assert result["ok"] is True
         assert result["changed"] == []
@@ -204,7 +207,7 @@ class TestUpdateChemicalInventory:
         """危废库无「一昼夜使用量」列：明确拒绝而非误写他列。"""
         _seed(monkeypatch)
         result = await update_chemical_inventory(
-            _ctx(), department="危废库", material_name="乙酸乙酯废液", daily_usage=5,
+            _ctx(role='safety_admin'), department="危废库", material_name="乙酸乙酯废液", daily_usage=5,
         )
         assert result["ok"] is False
         assert "没有该列" in result["error"]
@@ -212,13 +215,14 @@ class TestUpdateChemicalInventory:
 
 class TestWiring:
     def test_permissions_matrix(self) -> None:
+        """查询全员开放；写入工具全员可见（部门限制在工具内强制，管理员放行）。"""
         from app.modules.safety.business_agent.core.permissions import check
 
-        assert check("safety_admin", "update_chemical_inventory") is True
-        assert check("dept_leader", "update_chemical_inventory") is True
-        assert check("inspector", "update_chemical_inventory") is False
-        assert check("viewer", "update_chemical_inventory") is False
+        for role in ("safety_admin", "dept_leader", "inspector", "viewer"):
+            assert check(role, "update_chemical_inventory") is True
+            assert check(role, "query_chemical_inventory") is True
         assert check(None, "update_chemical_inventory") is False
+        assert check(None, "query_chemical_inventory") is False
 
     def test_tool_kind_and_routing(self) -> None:
         from app.modules.safety.business_agent.tool_selector import route_message
@@ -228,3 +232,83 @@ class TestWiring:
         tools = route_message("帮我更新危化品库存").tool_names
         assert "update_chemical_inventory" in tools
         assert "query_chemical_inventory" in tools
+
+
+class TestDepartmentScope:
+    """写入部门准入：管理员不限；其余角色仅限本部门（子表名或行内车间归属）。"""
+
+    async def test_admin_bypasses_department_check(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _seed(monkeypatch)
+        result = await update_chemical_inventory(
+            _ctx(role="safety_admin"), department="危废库",
+            material_name="乙酸乙酯废液", quantity=5000,
+        )
+        assert result["ok"] is True
+
+    async def test_functional_dept_matches_sheet_title(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """功能部门（子表名=部门）：本部门子表放行。"""
+        client = _seed(monkeypatch)
+        client.sheets["H8wjnP"][0][1] = "存放部位"  # 标题行仍匹配部门规则走标题
+        result = await update_chemical_inventory(
+            _ctx(role="viewer", department="危废库"),
+            department="危废库", material_name="乙酸乙酯废液", quantity=5000,
+        )
+        assert result["ok"] is True
+        assert client.writes == [("H8wjnP!F3:F3", [[5000]])]
+
+    async def test_other_department_refused(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """非本部门子表：拒绝并点明部门不匹配。"""
+        client = _seed(monkeypatch)
+        result = await update_chemical_inventory(
+            _ctx(role="viewer", department="发酵一部"),
+            department="危废库", material_name="乙酸乙酯废液", quantity=5000,
+        )
+        assert result["ok"] is False
+        assert "仅限本部门" in result["error"]
+        assert client.writes == []
+
+    async def test_workshop_scope_by_storage_location(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """产品线子表按行内车间归属：车间二人员只能改部位含「车间二」的行。"""
+        client = _seed(monkeypatch)
+        client.sheets["H8wjnP"] = [
+            ["序号", "存放部位", "危险品名称", "规格", "管理类别", "当前数量/kg", "库存上限/kg", "危险性"],
+            [1, "车间二提取岗位", "乙醇", "1", "车间储罐", 90000, 150000, "易燃易爆"],
+            [2, "车间一纯化岗位", "乙腈", "1", "车间储罐", 800, 5000, "易燃易爆"],
+        ]
+        client.sheets["GgfZuX"] = [
+            ["序号", "存放部位", "危险品名称", "规格", "管理类别", "当前数量", "库存上限", "危险性"],
+        ]
+        # 同物料跨车间两行：车间二人员 → 只留车间二行（唯一命中可直接写）
+        result = await update_chemical_inventory(
+            _ctx(role="dept_leader", department="车间二"),
+            department="危废库", material_name="乙醇", quantity=95000,
+        )
+        assert result["ok"] is True
+        assert result["record_id"] == "H8wjnP:2"
+        # 车间一人员改乙醇 → 命中行被部门规则滤空 → 拒绝
+        result2 = await update_chemical_inventory(
+            _ctx(role="dept_leader", department="车间一"),
+            department="危废库", material_name="乙醇", quantity=1,
+        )
+        assert result2["ok"] is False
+        assert "仅限本部门" in result2["error"]
+
+    async def test_person_without_department_refused(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """人员信息无部门：非管理员拒绝（deny-by-default）。"""
+        _seed(monkeypatch)
+        result = await update_chemical_inventory(
+            _ctx(role="viewer"), department="危废库",
+            material_name="乙酸乙酯废液", quantity=5000,
+        )
+        assert result["ok"] is False
+        assert "部门" in result["error"]

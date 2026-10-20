@@ -950,6 +950,13 @@ async def update_chemical_inventory(
 
     只允许改「当前数量 / 一昼夜使用量 / 库存上限」三个数值列；行按
     部门子表+物料名[+部位]当次现查定位（不信任缓存的行号，防行漂移）。
+
+    权限口径：管理员（safety_admin）不限部门；其他角色**仅限本部门**——
+    按人员信息（identity.users.department）映射：功能部门子表（发酵一部/
+    提炼一部/QC/仓库/环保工程中心等）按子表名匹配；产品线子表（替考/艾默/
+    达托等）按该行「存放部位」中的车间归属匹配（如 车间二 人员只能改
+    存放部位含「车间二」的行）。非本部门/部门未登记会被拒绝。
+
     示例：把艾默的乙醇当前数量改成 90000；危废库 米尔贝水层废液 上限改成 25000。
     """
     from decimal import Decimal
@@ -970,6 +977,17 @@ async def update_chemical_inventory(
             "ok": False,
             "error": "危化品库存当前未启用《危险品日报表》数据源（SAFETY_CHEMICAL_INVENTORY_SOURCE），无法通过机器人更新",
         }
+
+    # ── 部门准入：管理员不限；其余角色仅限本部门（人员信息 department 映射）──
+    person = getattr(ctx.deps, "person", None)
+    person_dept = (getattr(person, "department", None) or "").strip()
+    if role_of_deps(ctx) != "safety_admin":
+        if not person_dept:
+            return {
+                "ok": False,
+                "error": "写入仅限本部门库存：你的账号在人员信息中没有部门归属，"
+                         "无法校验（请联系管理员补录部门，或由管理员代改）",
+            }
 
     updates = {
         "quantity": quantity, "daily_usage_kg": daily_usage, "max_limit": max_limit,
@@ -1004,6 +1022,17 @@ async def update_chemical_inventory(
                  "sheet_title": r["sheet_title"]} for r in rows
             ],
         }
+
+    if role_of_deps(ctx) != "safety_admin":
+        allowed = [r for r in rows if _row_within_department(r, person_dept)]
+        if not allowed:
+            return {
+                "ok": False,
+                "error": f"写入仅限本部门：目标是[{rows[0]['sheet_title']}]"
+                         f"（部位 {rows[0]['storage_location'] or '未填'}），"
+                         f"与你的部门「{person_dept}」不匹配",
+            }
+        rows = allowed
 
     row = rows[0]
     changes: list[dict[str, Any]] = []
@@ -1044,3 +1073,25 @@ async def update_chemical_inventory(
                    f"{material_name}（{row['storage_location'] or '部位未填'}）："
                    + "；".join(f"{c['field']} {c['before']} → {c['after']}" for c in changes),
     }
+
+
+def role_of_deps(ctx: Any) -> str | None:
+    """从 deps 取角色（bot 侧 SafetyDeps.role；测试替身缺字段返回 None）。"""
+    return getattr(ctx.deps, "role", None)
+
+
+def _row_within_department(row: dict[str, Any], person_dept: str) -> bool:
+    """行是否属于用户部门：功能部门子表按标题匹配；产品线子表按行内车间归属。
+
+    产品线子表（替考/艾默等）跨车间，部门字段（如 车间二）以「存放部位」
+    文本中的车间名归属判定；功能部门子表标题即部门，直接匹配。
+    """
+    from app.modules.safety.service.chemical_inventory_direct.sheet_reader import (
+        _sheet_title_matches,
+    )
+
+    title = row.get("sheet_title") or ""
+    if _sheet_title_matches(title, person_dept):
+        return True
+    location = row.get("storage_location") or ""
+    return bool(location) and person_dept in location

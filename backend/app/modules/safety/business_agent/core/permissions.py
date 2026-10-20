@@ -283,10 +283,13 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _HAZARD_POLL_WRITE_TOOLS
     | _HAZARD_BULLETIN_WRITE_TOOLS,
     ROLE_INSPECTOR: _READ_TOOLS
-    | {TOOL_CREATE_URS_REVIEW}
+    | {TOOL_CREATE_URS_REVIEW, TOOL_UPDATE_CHEMICAL_INVENTORY}
     | OFFICE_READ_TOOLS
     | _OH_READ_TOOLS,
-    ROLE_VIEWER: _READ_TOOLS | OFFICE_READ_TOOLS | _OH_READ_TOOLS,
+    # 查询对全员开放；危化品写入工具对全员可见但工具内强制「仅限本部门」
+    # （管理员除外，见 write_tools.update_chemical_inventory）
+    ROLE_VIEWER: _READ_TOOLS | OFFICE_READ_TOOLS | _OH_READ_TOOLS
+    | {TOOL_UPDATE_CHEMICAL_INVENTORY},
 }
 
 # 所有已知角色（用于校验 agent_user_roles.role 合法性）
