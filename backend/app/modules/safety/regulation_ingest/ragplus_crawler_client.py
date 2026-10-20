@@ -46,12 +46,20 @@ class RagplusCrawlerClient:
 
     async def _request_json(
         self, method: str, url: str, json_body: dict[str, Any] | None = None,
+        *, timeout: float | None = None, retries: int | None = None,
     ) -> dict[str, Any]:
+        """单次 JSON 请求（默认 5xx/网络错误各重试一次）。
+
+        timeout/retries 供写操作覆盖：lifecycle 指令在 ragplus 侧可能触发上传，
+        耗时远超读操作，且**超时重试会造成正式库双传**（2026-10-19 事故根因：
+        10s 超时 + 重试一次，重发落在首次 promote 的解析等待期内）。
+        """
+        max_attempts = (_CONNECT_RETRIES + 1) if retries is None else (retries + 1)
         last_error: Exception | None = None
-        for attempt in range(_CONNECT_RETRIES + 1):
+        for attempt in range(max_attempts):
             try:
                 async with self._client() as client:
-                    resp = await client.request(method, url, json=json_body)
+                    resp = await client.request(method, url, json=json_body, timeout=timeout)
                 if resp.status_code in (401, 403):
                     raise RagplusCrawlerError(
                         f"ragplus 爬虫接口鉴权失败（{resp.status_code}），"
@@ -61,7 +69,7 @@ class RagplusCrawlerClient:
                     raise RagplusCrawlerNotConnectedError(
                         f"ragplus 爬虫模块未部署或路由不存在: {url}（404）"
                     )
-                if resp.status_code >= 500 and attempt < _CONNECT_RETRIES:
+                if resp.status_code >= 500 and attempt < max_attempts - 1:
                     last_error = RagplusCrawlerError(f"ragplus 5xx: {resp.status_code}")
                     continue
                 if resp.status_code >= 400:
@@ -72,7 +80,7 @@ class RagplusCrawlerClient:
                 return data
             except httpx.TransportError as exc:
                 last_error = exc
-                if attempt < _CONNECT_RETRIES:
+                if attempt < max_attempts - 1:
                     continue
         raise RagplusCrawlerError(f"ragplus 不可达: {last_error}")
 
@@ -83,7 +91,11 @@ class RagplusCrawlerClient:
         reason: str = "",
         replace_candidate_id: str | None = None,
     ) -> dict[str, Any]:
-        """契约②：候选生命周期指令（promote/reject/archive_superseded）。"""
+        """契约②：候选生命周期指令（promote/reject/archive_superseded）。
+
+        超时 120s 且不重试：promote 含文件上传（慢属正常），超时盲重发会
+        在 ragplus 侧并发触发第二次上传——双传防御纵深的一环。
+        """
         if action not in _LIFECYCLE_ACTIONS:
             raise ValueError(f"非法 lifecycle action: {action}")
         body: dict[str, Any] = {"action": action, "reason": reason}
@@ -91,6 +103,7 @@ class RagplusCrawlerClient:
             body["replace_candidate_id"] = replace_candidate_id
         return await self._request_json(
             "POST", f"/api/v1/crawler/candidates/{candidate_id}/lifecycle", body,
+            timeout=120.0, retries=0,
         )
 
     async def get_crawler_status(self) -> dict[str, Any]:

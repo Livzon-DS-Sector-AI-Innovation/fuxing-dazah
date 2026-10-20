@@ -142,10 +142,17 @@ class RegulationIngestService:
         for item in items:
             dup_reason = self._duplicate_reason(item, keys)
             if dup_reason:
+                # 预去重也回执收口（reject 语义=清理暂存+终态）：不发回执会让
+                # 候选在 ragplus 侧永久滞留 pending、暂存文档不清理
+                ok, err, _ = await self._send_receipt(
+                    item.candidate_id, "reject",
+                    f"{dup_reason}（预去重：台账已有，原文不重复入正式库）", receipts,
+                )
+                final_reason = dup_reason if ok else f"{dup_reason}；回执失败: {err}"
                 results.append(IngestItemResult(
                     candidate_id=item.candidate_id,
                     action_taken="duplicate",
-                    reason=dup_reason,
+                    reason=final_reason,
                 ))
                 continue
             passed.append(item)
@@ -321,7 +328,7 @@ class RegulationIngestService:
 
         if write is None:
             # 写入层去重兜底（TOCTOU/三层分类命中）：候选使命完成，仍回执转正
-            ok, err = await self._send_receipt(
+            ok, err, _ = await self._send_receipt(
                 item.candidate_id, "promote", f"{base_reason}（台账已有，写入层去重）",
                 receipts,
             )
@@ -334,8 +341,8 @@ class RegulationIngestService:
             )
 
         record_id = write.get("record_id", "")
-        # doc_map 登记（biz_key=台账 record_id；kb/engine 文档 id 由 ragplus
-        # 转正后经映射对账工具回填）
+        # doc_map 登记（biz_key=台账 record_id；kb/engine 文档 id 在下方回执
+        # 成功后由响应直接回填——ragplus promote 返回 kb_doc_id）
         try:
             from app.modules.safety.knowledge.ragplus_sync import (
                 KB_REGULATION,
@@ -353,12 +360,30 @@ class RegulationIngestService:
         except Exception:
             logger.exception("doc_map 登记失败: record_id=%s", record_id)
 
-        ok, err = await self._send_receipt(
+        ok, err, receipt_data = await self._send_receipt(
             item.candidate_id, "promote", base_reason, receipts,
         )
         reason = base_reason + (f"（{write.get('action', 'created')}）" if write.get("action") else "")
         if not ok:
             reason += f"；回执失败: {err}"
+
+        # 回执响应回填映射：kb_doc_id/file_name 落行，免去事后按名对账回填
+        kb_doc_id = (receipt_data or {}).get("kb_doc_id") if ok else None
+        if kb_doc_id:
+            try:
+                from app.modules.safety.knowledge.ragplus_sync import find_ragplus_map
+
+                row = await find_ragplus_map(self.session, "regulation", record_id)
+                if row is not None:
+                    new_doc_id = int(kb_doc_id)
+                    if row.kb_doc_id != new_doc_id:
+                        row.version = (row.version or 1) + 1
+                    row.kb_doc_id = new_doc_id
+                    row.file_name = (item.attachment.filename if item.attachment and item.attachment.filename else row.file_name) or ""
+                    row.synced_at = datetime.now(UTC)
+                    await self.session.flush()
+            except Exception:
+                logger.exception("回执 kb_doc_id 回填映射失败: record_id=%s", record_id)
 
         # 收录成功路径 emit regulation.updated（信封落留痕+日志；总线建成后接规则引擎）
         try:
@@ -398,7 +423,7 @@ class RegulationIngestService:
         receipts: dict[str, Any],
     ) -> IngestItemResult:
         """判定不相关：reject 回执（候选终态），不写台账。"""
-        ok, err = await self._send_receipt(
+        ok, err, _ = await self._send_receipt(
             item.candidate_id, "reject", reason, receipts,
         )
         final_reason = reason if ok else f"{reason}；回执失败: {err}"
@@ -415,21 +440,24 @@ class RegulationIngestService:
         reason: str,
         receipts: dict[str, Any],
         replace_candidate_id: str | None = None,
-    ) -> tuple[bool, str | None]:
-        """契约②回执调用（失败容错：返回错误并记入 receipts，不抛出）。"""
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
+        """契约②回执调用（失败容错：返回错误并记入 receipts，不抛出）。
+
+        返回 (ok, err, 响应体)：promote 响应携带 kb_doc_id 供映射回填。
+        """
         try:
             client = get_ragplus_crawler_client()
-            await client.send_lifecycle(
+            data = await client.send_lifecycle(
                 candidate_id, action, reason, replace_candidate_id,
             )
             receipts[candidate_id] = {"action": action, "ok": True}
-            return True, None
+            return True, None, data
         except Exception as exc:
             logger.warning("契约②回执失败: %s %s: %s", action, candidate_id, exc)
             receipts[candidate_id] = {
                 "action": action, "ok": False, "error": str(exc)[:200],
             }
-            return False, str(exc)[:150]
+            return False, str(exc)[:150], None
 
     @staticmethod
     def _to_crawled(
