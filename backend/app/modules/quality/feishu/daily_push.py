@@ -195,6 +195,7 @@ async def _push_material_alerts() -> None:
         lab_expiry_alerts,
         list_inspection_plans,
         material_expiry_alerts,
+        retained_destroy_alerts,
         supplier_qual_alerts,
     )
     from app.modules.quality.service.material_containers import MaterialContainerService
@@ -210,8 +211,19 @@ async def _push_material_alerts() -> None:
         suggestions = await MaterialContainerService.purchase_suggestions(db)
         supplier_alerts = await supplier_qual_alerts(db)
         lab_alerts = await lab_expiry_alerts(db)
+        retained_alerts = await retained_destroy_alerts(db)
         today_plans = await list_inspection_plans(db, date_str=_app_today().isoformat())
     blocks: list[str] = []
+    if retained_alerts:
+        lines = []
+        for a in retained_alerts:
+            tail = "（已到期未销毁，请尽快安排销毁）" if a["expired"] else "（30 天内到期，请安排销毁计划）"
+            lines.append(
+                f"- {a['sample_name']} 批号 {a['batch_no']}：销毁到期 {a['destroy_due_date']}"
+                + (f"｜位置 {a['location']}" if a["location"] else "")
+                + tail
+            )
+        blocks.append("留样销毁提醒（双人确认销毁后请到留样台账登记）：\n" + "\n".join(lines))
     if supplier_alerts:
         lines = [
             f"- {s['name']}（{s['code']}）：资质效期 {s['qual_expiry_date']}"

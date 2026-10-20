@@ -33,6 +33,7 @@ import type {
   LabItem,
   InspectionPlan,
   MicroRecord,
+  RetainedSample,
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
@@ -1605,6 +1606,87 @@ export async function exportMicroRecords(batchNo?: string): Promise<Blob> {
   if (batchNo) params.set('batch_no', batchNo)
   const qs = params.toString() ? `?${params}` : ''
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/micro-records/export${qs}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('导出失败')
+  return res.blob()
+}
+
+
+// ─── 留样台账 ───
+
+export async function fetchRetainedSamples(params?: {
+  sourceType?: string; batchNo?: string; status?: string
+}): Promise<{ data: RetainedSample[] }> {
+  const q = new URLSearchParams()
+  if (params?.sourceType) q.set('source_type', params.sourceType)
+  if (params?.batchNo) q.set('batch_no', params.batchNo)
+  if (params?.status) q.set('status', params.status)
+  const qs = q.toString() ? `?${q}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取留样台账失败')
+  return res.json()
+}
+
+export async function createRetainedSample(input: Partial<RetainedSample>): Promise<{ message: string; data: RetainedSample }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '留样登记失败')
+  }
+  revalidatePath('/quality/retained')
+  return res.json()
+}
+
+export async function updateRetainedSample(id: string, input: Partial<RetainedSample>): Promise<{ message: string; data: RetainedSample }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '更新失败')
+  }
+  revalidatePath('/quality/retained')
+  return res.json()
+}
+
+export async function destroyRetainedSample(id: string, input: { destroyed_at: string; remark?: string }): Promise<{ message: string; data: RetainedSample }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples/${id}/destroy`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '销毁登记失败')
+  }
+  revalidatePath('/quality/retained')
+  return res.json()
+}
+
+export async function deleteRetainedSample(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除失败')
+  revalidatePath('/quality/retained')
+  return res.json()
+}
+
+export async function exportRetainedSamples(params?: {
+  sourceType?: string; batchNo?: string; status?: string
+}): Promise<Blob> {
+  const q = new URLSearchParams()
+  if (params?.sourceType) q.set('source_type', params.sourceType)
+  if (params?.batchNo) q.set('batch_no', params.batchNo)
+  if (params?.status) q.set('status', params.status)
+  const qs = q.toString() ? `?${q}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples/export${qs}`, {
     headers: await _authHeaders(),
   })
   if (!res.ok) throw new Error('导出失败')

@@ -443,6 +443,64 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             await send_chat_text(chat_id, "交接汇总：\n" + "\n".join(lines))
             return
 
+        # 「留样 批号 X [量 N] [柜 A] [名称 XX] [到期 YYYY-MM-DD]」：留样登记（手机拍照式登记）；
+        # 只带批号则查询该批留样台账
+        if "留样" in text and not pairs:
+            from app.modules.quality.repository import (
+                create_retained_sample,
+                list_retained_samples,
+            )
+
+            retained_existing = [r for r in await list_retained_samples(db, batch_no=batch) if r.batch_no == batch]
+            due_m = re.search(r"到期\s*(\d{4})[-./](\d{1,2})[-./](\d{1,2})", text)
+            qty_m = re.search(r"量\s*([^\s，,]+)", text)
+            loc_m = re.search(r"柜\s*([^\s，,]+)", text)
+            name_m = re.search(r"名称\s*([^\s，,]+)", text)
+            if not due_m and not qty_m and not loc_m and not name_m:
+                # 纯查询：列出该批留样台账
+                if not retained_existing:
+                    await send_chat_text(
+                        chat_id,
+                        f"批号 {batch} 暂无留样登记。可发「留样 批号 {batch} 量 2瓶 柜 A 到期 2028-10-20」登记",
+                    )
+                    return
+                lines = []
+                for r in retained_existing:
+                    state = "已销毁" if r.status == "destroyed" else "在留"
+                    lines.append(
+                        f"- {r.sample_name} 批号 {r.batch_no}：{state}｜留样量 {r.qty or '-'}"
+                        f"｜位置 {r.location or '-'}｜留样日期 {r.retained_at or '-'}"
+                        f"｜销毁到期 {r.destroy_due_date or '-'}"
+                    )
+                await send_chat_text(chat_id, f"批号 {batch} 留样台账：\n" + "\n".join(lines))
+                return
+            if retained_existing:
+                await send_chat_text(chat_id, f"批号 {batch} 已有留样登记，请在网页留样台账中编辑（飞书只登记新增）")
+                return
+            task = await _resolve_task_by_batch(db, batch)
+            sample_name = name_m.group(1) if name_m else (task.product_name if task else "")
+            if not sample_name:
+                await send_chat_text(chat_id, f"批号 {batch} 未找到检验任务，请补名称：留样 批号 {batch} 名称 XX 量 N 柜 A 到期 YYYY-MM-DD")
+                return
+            retained_rec = await create_retained_sample(db, {
+                "source_type": "material" if "物料" in text else "product",
+                "batch_no": batch,
+                "sample_name": sample_name,
+                "qty": qty_m.group(1) if qty_m else None,
+                "location": loc_m.group(1) if loc_m else None,
+                "retained_at": _today_str(),
+                "destroy_due_date": f"{due_m.group(1)}-{int(due_m.group(2)):02d}-{int(due_m.group(3)):02d}" if due_m else None,
+            })
+            await db.commit()
+            _LAST_BATCH[chat_id] = batch
+            await send_chat_text(
+                chat_id,
+                f"留样已登记：{retained_rec.sample_name} 批号 {batch}｜量 {retained_rec.qty or '-'}｜位置 {retained_rec.location or '-'}"
+                f"｜留样日期 {retained_rec.retained_at}｜销毁到期 {retained_rec.destroy_due_date or '-'}\n"
+                "到期前系统会每天在群里提醒销毁，销毁后请到网页台账双人确认登记",
+            )
+            return
+
         if "菌落" in text:
             import uuid as _uuid
 
@@ -495,6 +553,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 updated_rec = await update_micro_record(db, rec.id, rec_data)
                 if updated_rec is not None:
                     rec = updated_rec
+            await db.commit()
             judge_label = {"pass": "合格", "alert": "超警戒线", "action": "超标准限"}.get(rec.judge or "", rec.judge or "未判定")
             await send_chat_text(
                 chat_id,

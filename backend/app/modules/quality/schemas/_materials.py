@@ -458,3 +458,61 @@ class MicroRecordOut(BaseModel):
     photo_keys: list[str] | None
     remark: str | None
     created_at: datetime
+
+
+class RetainedSampleCreate(BaseModel):
+    """留样登记新增（成品/物料批留样台账）。"""
+
+    source_type: Literal["product", "material"] = Field(
+        default="product", description="product 成品 / material 物料"
+    )
+    batch_no: str = Field(max_length=100, description="批号")
+    sample_name: str = Field(max_length=200, description="名称/品名")
+    qty: str | None = Field(default=None, max_length=50, description="留样量（如 2 瓶）")
+    location: str | None = Field(default=None, max_length=50, description="贮存位置（柜号）")
+    retained_at: str | None = Field(default=None, max_length=32, description="留样日期 YYYY-MM-DD")
+    destroy_due_date: str | None = Field(
+        default=None, max_length=32, description="销毁到期日 YYYY-MM-DD（到期提醒依据）"
+    )
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class RetainedSampleUpdate(BaseModel):
+    """留样登记更新（全部可选，仅更新传入字段）。"""
+
+    source_type: Literal["product", "material"] | None = None
+    batch_no: str | None = Field(default=None, max_length=100)
+    sample_name: str | None = Field(default=None, max_length=200)
+    qty: str | None = Field(default=None, max_length=50)
+    location: str | None = Field(default=None, max_length=50)
+    retained_at: str | None = Field(default=None, max_length=32)
+    destroy_due_date: str | None = Field(default=None, max_length=32)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class RetainedSampleDestroy(BaseModel):
+    """销毁登记：登记人自动记录为当前登录用户，需第二人再点一次确认（双人复核模式）。"""
+
+    destroyed_at: str = Field(max_length=32, description="销毁日期 YYYY-MM-DD")
+    remark: str | None = Field(default=None, max_length=200, description="销毁备注（覆盖原备注）")
+
+
+class RetainedSampleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    source_type: str
+    batch_no: str
+    sample_name: str
+    qty: str | None
+    location: str | None
+    retained_at: str | None
+    destroy_due_date: str | None
+    destroyed_at: str | None
+    destroyed_by: uuid.UUID | None
+    destroyed_by_name: str | None
+    destroy_confirm_by: uuid.UUID | None
+    destroy_confirm_by_name: str | None
+    status: str
+    remark: str | None
+    created_at: datetime

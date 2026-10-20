@@ -23,16 +23,20 @@ from app.modules.quality.repository import (
     create_material_standard,
     create_material_standard_item,
     create_micro_record,
+    create_retained_sample,
     create_supplier,
     delete_lab_item,
     delete_material,
     delete_micro_record,
+    delete_retained_sample,
     delete_supplier,
     get_material_by_code,
     get_material_container_by_no,
     get_material_standard,
     get_material_standard_by_key,
     get_micro_record,
+    get_retained_sample,
+    get_retained_sample_with_names,
     get_stocktake_sheet,
     get_supplier_by_code,
     list_container_movements,
@@ -46,6 +50,8 @@ from app.modules.quality.repository import (
     list_material_standard_items,
     list_materials,
     list_micro_records,
+    list_retained_samples,
+    list_retained_samples_with_names,
     list_slow_moving_containers,
     list_stocktake_items,
     list_stocktake_sheets,
@@ -59,6 +65,7 @@ from app.modules.quality.repository import (
     update_lab_item,
     update_material,
     update_micro_record,
+    update_retained_sample,
     update_supplier,
 )
 from app.modules.quality.schemas import (
@@ -93,6 +100,10 @@ from app.modules.quality.schemas import (
     MicroRecordOut,
     MicroRecordUpdate,
     MonthlyReportItem,
+    RetainedSampleCreate,
+    RetainedSampleDestroy,
+    RetainedSampleOut,
+    RetainedSampleUpdate,
     StocktakeCreate,
     StocktakeItemOut,
     StocktakeScanRequest,
@@ -1227,4 +1238,147 @@ async def export_micro_records_endpoint(
         BytesIO(buf.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="micro.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+# ─── 留样台账 ───
+
+
+@router.get("/retained-samples", summary="留样台账列表")
+async def list_retained_samples_endpoint(
+    source_type: str | None = Query(default=None, description="product 成品 / material 物料"),
+    batch_no: str | None = Query(default=None, description="批号模糊"),
+    status: str | None = Query(default=None, description="active 在留 / destroyed 已销毁"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    items = await list_retained_samples_with_names(db, source_type, batch_no, status)
+    return success_response(data=[RetainedSampleOut.model_validate(i).model_dump(mode="json") for i in items])
+
+
+@router.post("/retained-samples", summary="留样登记（成品/物料批留样台账）", status_code=201)
+async def create_retained_sample_endpoint(
+    payload: RetainedSampleCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    rec = await create_retained_sample(db, {**payload.model_dump(), "created_by": user.id})
+    item = await get_retained_sample_with_names(db, rec.id)
+    return success_response(
+        data=RetainedSampleOut.model_validate(item).model_dump(mode="json"),
+        message="留样登记已保存", status_code=201,
+    )
+
+
+@router.put("/retained-samples/{record_id}", summary="更新留样登记")
+async def update_retained_sample_endpoint(
+    record_id: uuid.UUID,
+    payload: RetainedSampleUpdate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    rec = await get_retained_sample(db, record_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    if rec.status == "destroyed":
+        raise HTTPException(status_code=400, detail="已销毁的留样不可修改")
+    data = {**payload.model_dump(exclude_none=True), "updated_by": user.id}
+    await update_retained_sample(db, record_id, data)
+    item = await get_retained_sample_with_names(db, record_id)
+    return success_response(
+        data=RetainedSampleOut.model_validate(item).model_dump(mode="json"),
+        message="留样登记已更新",
+    )
+
+
+@router.post("/retained-samples/{record_id}/destroy", summary="销毁登记（双人确认：第一人登记，第二人确认后状态转已销毁）")
+async def destroy_retained_sample_endpoint(
+    record_id: uuid.UUID,
+    payload: RetainedSampleDestroy = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    rec = await get_retained_sample(db, record_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    if rec.status == "destroyed":
+        raise HTTPException(status_code=400, detail="该留样已销毁")
+    if rec.destroyed_by is None:
+        # 第一人：登记销毁日期
+        data = {
+            "destroyed_at": payload.destroyed_at,
+            "destroyed_by": user.id,
+            "remark": payload.remark or rec.remark,
+            "updated_by": user.id,
+        }
+        await update_retained_sample(db, record_id, data)
+        item = await get_retained_sample_with_names(db, record_id)
+        return success_response(
+            data=RetainedSampleOut.model_validate(item).model_dump(mode="json"),
+            message="销毁登记已记录，等待第二人确认",
+        )
+    if rec.destroyed_by == user.id:
+        raise HTTPException(status_code=400, detail="同一人不能登记又确认，请另一位同事确认")
+    # 第二人：确认销毁，状态转已销毁
+    data = {
+        "destroy_confirm_by": user.id,
+        "status": "destroyed",
+        "updated_by": user.id,
+    }
+    await update_retained_sample(db, record_id, data)
+    item = await get_retained_sample_with_names(db, record_id)
+    return success_response(
+        data=RetainedSampleOut.model_validate(item).model_dump(mode="json"),
+        message="销毁已确认，留样状态已转已销毁",
+    )
+
+
+@router.delete("/retained-samples/{record_id}", summary="删除留样登记（软删除）")
+async def delete_retained_sample_endpoint(
+    record_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:manage")),
+) -> JSONResponse:
+    if not await delete_retained_sample(db, record_id):
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return success_response(message="已删除")
+
+
+@router.get("/retained-samples/export", summary="留样台账导出 Excel")
+async def export_retained_samples_endpoint(
+    source_type: str | None = Query(default=None),
+    batch_no: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    rows = await list_retained_samples(db, source_type=source_type, batch_no=batch_no, status=status)
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    ws.title = "留样台账"
+    ws.append(["类型", "品名", "批号", "留样量", "贮存位置", "留样日期", "销毁到期日", "销毁日期", "状态", "备注"])
+    type_label = {"product": "成品", "material": "物料"}
+    for r in rows:
+        ws.append([
+            type_label.get(r.source_type, r.source_type),
+            r.sample_name, r.batch_no,
+            r.qty or "-", r.location or "-",
+            r.retained_at or "-", r.destroy_due_date or "-",
+            r.destroyed_at or "-",
+            "已销毁" if r.status == "destroyed" else "在留",
+            r.remark or "-",
+        ])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote("留样台账.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="retained.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )

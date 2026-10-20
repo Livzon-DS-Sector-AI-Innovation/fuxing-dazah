@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.exceptions import AppException
 from app.modules.quality.models import (
@@ -18,6 +19,7 @@ from app.modules.quality.models import (
     QualityMaterialStandard,
     QualityMaterialStandardItem,
     QualityMicroRecord,
+    QualityRetainedSample,
     QualityStocktakeItem,
     QualityStocktakeSheet,
     QualitySupplier,
@@ -884,13 +886,13 @@ async def lab_expiry_alerts(db: AsyncSession) -> list[dict[str, Any]]:
 
     today_str = _today().isoformat()
     deadline = func.to_char(func.now() + text("interval '30 days'"), "YYYY-MM-DD")
-    rows = await db.execute(
+    rows = (await db.execute(
         select(QualityLabItem).where(
             QualityLabItem.is_deleted == False,  # noqa: E712
             QualityLabItem.expiry_date.is_not(None),
             QualityLabItem.expiry_date <= deadline,
         ).order_by(QualityLabItem.expiry_date)
-    )
+    )).scalars()
     return [
         {
             "name": r.name,
@@ -987,3 +989,176 @@ async def delete_micro_record(db: AsyncSession, rid: uuid.UUID) -> bool:
     rec.is_deleted = True
     await db.flush()
     return True
+
+
+# ─── 留样台账 ───
+
+
+async def create_retained_sample(db: AsyncSession, data: dict[str, Any]) -> QualityRetainedSample:
+    rec = QualityRetainedSample(**data)
+    db.add(rec)
+    await db.flush()
+    return rec
+
+
+async def get_retained_sample(db: AsyncSession, rid: uuid.UUID) -> QualityRetainedSample | None:
+    stmt = select(QualityRetainedSample).where(
+        QualityRetainedSample.id == rid, QualityRetainedSample.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_retained_samples(
+    db: AsyncSession,
+    source_type: str | None = None,
+    batch_no: str | None = None,
+    status: str | None = None,
+) -> list[QualityRetainedSample]:
+    conds = [QualityRetainedSample.is_deleted == False]  # noqa: E712
+    if source_type:
+        conds.append(QualityRetainedSample.source_type == source_type)
+    if batch_no:
+        conds.append(QualityRetainedSample.batch_no.ilike(f"%{batch_no}%"))
+    if status:
+        conds.append(QualityRetainedSample.status == status)
+    stmt = select(QualityRetainedSample).where(*conds).order_by(QualityRetainedSample.created_at.desc())
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def update_retained_sample(
+    db: AsyncSession, rid: uuid.UUID, data: dict[str, Any]
+) -> QualityRetainedSample | None:
+    rec = await get_retained_sample(db, rid)
+    if rec is None:
+        return None
+    for key, value in data.items():
+        setattr(rec, key, value)
+    await db.flush()
+    stmt = select(QualityRetainedSample).where(QualityRetainedSample.id == rid)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_retained_sample(db: AsyncSession, rid: uuid.UUID) -> bool:
+    rec = await get_retained_sample(db, rid)
+    if rec is None:
+        return False
+    rec.is_deleted = True
+    await db.flush()
+    return True
+
+
+async def retained_destroy_alerts(db: AsyncSession, horizon_days: int = 30) -> list[dict[str, Any]]:
+    """在留样品销毁到期提醒：销毁到期日 ≤ 今天+horizon_days 的 active 记录（含已过期未销毁）。"""
+    from app.core.time import today as _today
+
+    today_str = _today().isoformat()
+    deadline = func.to_char(func.now() + text(f"interval '{horizon_days} days'"), "YYYY-MM-DD")
+    rows = (await db.execute(
+        select(QualityRetainedSample).where(
+            QualityRetainedSample.is_deleted == False,  # noqa: E712
+            QualityRetainedSample.status == "active",
+            QualityRetainedSample.destroy_due_date.is_not(None),
+            QualityRetainedSample.destroy_due_date <= deadline,
+        ).order_by(QualityRetainedSample.destroy_due_date)
+    )).scalars()
+    return [
+        {
+            "batch_no": r.batch_no,
+            "sample_name": r.sample_name,
+            "location": r.location,
+            "destroy_due_date": r.destroy_due_date,
+            "expired": bool(r.destroy_due_date and r.destroy_due_date < today_str),
+        }
+        for r in rows
+    ]
+
+
+def _retained_cond(
+    source_type: str | None = None, batch_no: str | None = None, status: str | None = None
+) -> list[Any]:
+    conds: list[Any] = [QualityRetainedSample.is_deleted == False]  # noqa: E712
+    if source_type:
+        conds.append(QualityRetainedSample.source_type == source_type)
+    if batch_no:
+        conds.append(QualityRetainedSample.batch_no.ilike(f"%{batch_no}%"))
+    if status:
+        conds.append(QualityRetainedSample.status == status)
+    return conds
+
+
+async def list_retained_samples_with_names(
+    db: AsyncSession,
+    source_type: str | None = None,
+    batch_no: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """留样台账列表（含销毁登记人/确认人姓名，联查 identity.users）。"""
+    from app.platform.identity.models import User as IdentityUser
+
+    destroyer = aliased(IdentityUser)
+    confirmer = aliased(IdentityUser)
+    stmt = (
+        select(QualityRetainedSample, destroyer.name, confirmer.name)
+        .join(destroyer, destroyer.id == QualityRetainedSample.destroyed_by, isouter=True)
+        .join(confirmer, confirmer.id == QualityRetainedSample.destroy_confirm_by, isouter=True)
+        .where(*_retained_cond(source_type, batch_no, status))
+        .order_by(QualityRetainedSample.created_at.desc())
+    )
+    out: list[dict[str, Any]] = []
+    for r, by_name, confirm_name in (await db.execute(stmt)).all():
+        item = {
+            "id": r.id,
+            "source_type": r.source_type,
+            "batch_no": r.batch_no,
+            "sample_name": r.sample_name,
+            "qty": r.qty,
+            "location": r.location,
+            "retained_at": r.retained_at,
+            "destroy_due_date": r.destroy_due_date,
+            "destroyed_at": r.destroyed_at,
+            "destroyed_by": r.destroyed_by,
+            "destroyed_by_name": by_name,
+            "destroy_confirm_by": r.destroy_confirm_by,
+            "destroy_confirm_by_name": confirm_name,
+            "status": r.status,
+            "remark": r.remark,
+            "created_at": r.created_at,
+        }
+        out.append(item)
+    return out
+
+
+async def get_retained_sample_with_names(db: AsyncSession, rid: uuid.UUID) -> dict[str, Any] | None:
+    """单条留样记录（含销毁登记人/确认人姓名）。"""
+    from app.platform.identity.models import User as IdentityUser
+
+    destroyer = aliased(IdentityUser)
+    confirmer = aliased(IdentityUser)
+    stmt = (
+        select(QualityRetainedSample, destroyer.name, confirmer.name)
+        .join(destroyer, destroyer.id == QualityRetainedSample.destroyed_by, isouter=True)
+        .join(confirmer, confirmer.id == QualityRetainedSample.destroy_confirm_by, isouter=True)
+        .where(QualityRetainedSample.id == rid, QualityRetainedSample.is_deleted == False)  # noqa: E712
+    )
+    row = (await db.execute(stmt)).first()
+    if row is None:
+        return None
+    r, by_name, confirm_name = row
+    return {
+        "id": r.id,
+        "source_type": r.source_type,
+        "batch_no": r.batch_no,
+        "sample_name": r.sample_name,
+        "qty": r.qty,
+        "location": r.location,
+        "retained_at": r.retained_at,
+        "destroy_due_date": r.destroy_due_date,
+        "destroyed_at": r.destroyed_at,
+        "destroyed_by": r.destroyed_by,
+        "destroyed_by_name": by_name,
+        "destroy_confirm_by": r.destroy_confirm_by,
+        "destroy_confirm_by_name": confirm_name,
+        "status": r.status,
+        "remark": r.remark,
+        "created_at": r.created_at,
+    }

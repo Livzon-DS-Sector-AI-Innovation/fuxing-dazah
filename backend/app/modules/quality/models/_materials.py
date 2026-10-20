@@ -181,6 +181,36 @@ class QualityMicroRecord(BaseModel):
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
 
+class QualityRetainedSample(BaseModel):
+    """留样台账：物料/成品批留样登记、贮存位置、销毁到期提醒。"""
+
+    __tablename__ = "quality_retained_samples"
+    __table_args__ = (
+        Index("ix_quality_retained_batch", "batch_no"),
+        Index("ix_quality_retained_destroy_due", "destroy_due_date"),
+        {"schema": "quality"},
+    )
+
+    source_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="product 成品 / material 物料"
+    )
+    batch_no: Mapped[str] = mapped_column(String(100), nullable=False, comment="批号")
+    sample_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="名称/品名")
+    qty: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="留样量（如 2 瓶）")
+    location: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="贮存位置（柜号）")
+    retained_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="留样日期 YYYY-MM-DD")
+    destroy_due_date: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="销毁到期日 YYYY-MM-DD（到期提醒依据）"
+    )
+    destroyed_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="实际销毁日期")
+    destroyed_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="销毁登记人")
+    destroy_confirm_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="销毁双人确认第二人")
+    status: Mapped[str] = mapped_column(
+        String(32), default="active", server_default="active", comment="active 在留 / destroyed 已销毁"
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
 class QualityStocktakeSheet(BaseModel):
     """库存盘点单：扫码盘点在库容器，结束自动对比系统库存出差异清单。"""
 

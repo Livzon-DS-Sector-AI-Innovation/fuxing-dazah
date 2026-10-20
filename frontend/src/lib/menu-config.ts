@@ -264,6 +264,7 @@ export const moduleMenus: ModuleMenu[] = [
       },
       { key: "quality-lab-items", label: "试剂/仪器台账", path: "/quality/lab-items", permissions: ["quality:material:read"] },
       { key: "quality-micro", label: "微生物登记", path: "/quality/micro", permissions: ["quality:material:read"] },
+      { key: "quality-retained", label: "留样台账", path: "/quality/retained", permissions: ["quality:material:read"] },
       {
         key: "quality-coa-group",
         label: "COA管理",

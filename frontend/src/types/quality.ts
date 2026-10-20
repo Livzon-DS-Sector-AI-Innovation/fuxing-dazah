@@ -692,3 +692,25 @@ export interface MicroRecord {
   remark: string | null
   created_at: string
 }
+
+
+// ─── 留样台账 ───
+
+export interface RetainedSample {
+  id: string
+  source_type: 'product' | 'material'
+  batch_no: string
+  sample_name: string
+  qty: string | null
+  location: string | null
+  retained_at: string | null
+  destroy_due_date: string | null
+  destroyed_at: string | null
+  destroyed_by: string | null
+  destroyed_by_name: string | null
+  destroy_confirm_by: string | null
+  destroy_confirm_by_name: string | null
+  status: 'active' | 'destroyed'
+  remark: string | null
+  created_at: string
+}

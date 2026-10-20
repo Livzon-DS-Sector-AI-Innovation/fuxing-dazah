@@ -3,15 +3,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Table, Tag, Input, Space, Button, App, Descriptions, Card, Modal, Form,
-  InputNumber, Select, Popconfirm, Typography, Upload, Result, Skeleton,
+  InputNumber, Select, Popconfirm, Typography, Upload, Result, Skeleton, DatePicker,
 } from 'antd'
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
   PlusOutlined, DeleteOutlined, RedoOutlined, UploadOutlined, FileTextOutlined,
-  HistoryOutlined, DownloadOutlined, EyeOutlined,
+  HistoryOutlined, DownloadOutlined, EyeOutlined, InboxOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
-import dayjs from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import { REPORT_AUDIT_META, TASK_STATUS_META } from '@/types/quality'
 import type { ReportAuditStatus, TestResultItem, TestTaskDetail, TaskAttachment,
@@ -24,6 +24,7 @@ import {
   fetchTaskReviews, approveTaskReview,
   fetchTaskReports,
   fetchTaskHandover,
+  createRetainedSample,
 } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 
@@ -76,6 +77,9 @@ export default function TaskDetail({ id }: { id: string }) {
     unfilled: string[]; items: { name: string; value: string | number; verdict: string }[];
     reports: { serial_no: string | null; filename: string | null }[];
   } | null>(null)
+  const [retainOpen, setRetainOpen] = useState(false)
+  const [retainSaving, setRetainSaving] = useState(false)
+  const [retainForm] = Form.useForm()
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
   const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
@@ -114,6 +118,40 @@ export default function TaskDetail({ id }: { id: string }) {
   const canFill = hasPermission('quality:task:fill')
   const canViewReport = hasPermission('quality:report:read')
   const canReview = hasPermission('quality:task:review')
+  const canManageMaterial = hasPermission('quality:material:manage')
+
+  const openRetain = () => {
+    if (!detail) return
+    retainForm.setFieldsValue({
+      source_type: 'product',
+      batch_no: detail.batch_number,
+      sample_name: detail.product_name,
+      qty: undefined,
+      location: undefined,
+      retained_at: dayjs(),
+      destroy_due_date: undefined,
+      remark: undefined,
+    })
+    setRetainOpen(true)
+  }
+
+  const onRetainSave = async () => {
+    const values = await retainForm.validateFields()
+    setRetainSaving(true)
+    try {
+      await createRetainedSample({
+        ...values,
+        retained_at: values.retained_at ? (values.retained_at as Dayjs).format('YYYY-MM-DD') : undefined,
+        destroy_due_date: values.destroy_due_date ? (values.destroy_due_date as Dayjs).format('YYYY-MM-DD') : undefined,
+      })
+      message.success('留样登记已保存，销毁到期前飞书群会每日提醒')
+      setRetainOpen(false)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '留样登记失败')
+    } finally {
+      setRetainSaving(false)
+    }
+  }
 
   if (!detail) {
     if (loadError) {
@@ -442,6 +480,9 @@ export default function TaskDetail({ id }: { id: string }) {
             setHandoverOpen(true)
           } catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '获取交接汇总失败') }
         }}>交接汇总</Button>
+        {canManageMaterial && (
+          <Button icon={<InboxOutlined />} onClick={openRetain}>留样登记</Button>
+        )}
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} disabled={!editable}>保存</Button>
         {detail.status === 'in_progress' && (
           <>
@@ -718,6 +759,51 @@ export default function TaskDetail({ id }: { id: string }) {
             </Space>
           ))}
         </Space>
+      </Modal>
+      <Modal
+        title={`留样登记 ${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
+        open={retainOpen}
+        onCancel={() => setRetainOpen(false)}
+        onOk={onRetainSave}
+        confirmLoading={retainSaving}
+        okText="保存"
+        width={520}
+      >
+        <Form form={retainForm} layout="vertical">
+          <Space size={12} style={{ display: 'flex' }}>
+            <Form.Item name="source_type" label="类型" rules={[{ required: true }]} style={{ flex: 1 }}>
+              <Select options={[
+                { value: 'product', label: '成品' },
+                { value: 'material', label: '物料' },
+              ]} />
+            </Form.Item>
+            <Form.Item name="batch_no" label="批号" rules={[{ required: true, message: '必填' }]} style={{ flex: 1 }}>
+              <Input maxLength={100} />
+            </Form.Item>
+          </Space>
+          <Form.Item name="sample_name" label="品名/名称" rules={[{ required: true, message: '必填' }]}>
+            <Input maxLength={200} />
+          </Form.Item>
+          <Space size={12} style={{ display: 'flex' }}>
+            <Form.Item name="qty" label="留样量（如 2 瓶）" style={{ flex: 1 }}>
+              <Input maxLength={50} />
+            </Form.Item>
+            <Form.Item name="location" label="贮存位置（柜号）" style={{ flex: 1 }}>
+              <Input maxLength={50} />
+            </Form.Item>
+          </Space>
+          <Space size={12} style={{ display: 'flex' }}>
+            <Form.Item name="retained_at" label="留样日期" style={{ flex: 1 }}>
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="destroy_due_date" label="销毁到期日" style={{ flex: 1 }}>
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+          </Space>
+          <Form.Item name="remark" label="备注">
+            <Input maxLength={200} />
+          </Form.Item>
+        </Form>
       </Modal>
       <Modal
         title="交接汇总"
