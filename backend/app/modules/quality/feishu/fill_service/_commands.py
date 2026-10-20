@@ -243,7 +243,7 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
             _LAST_IMAGE_TS[chat_id] = time.monotonic()
             await send_chat_text(
                 chat_id,
-                "已收到图片。请回复「附件 批号 XXX」归档；连拍多张可先发「归档模式 批号 XXX」",
+                "已收到图片。请回复「附件 批号 XXX」归档任务证据；微生物菌落可发「菌落 批号 XXX 计数 N」登记（可带「限 A B」设警戒线/标准限）",
             )
         return
     if not chat_id or not text:
@@ -419,6 +419,66 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
 
     async with async_session_factory() as db:
         # 「归档模式 批号 XXX」：连拍多张自动归档
+        # 「菌落 批号 XXX [计数 N] [限 A B]」：微生物登记 + 照片归档 + 判定回执
+        if "菌落" in text:
+            import uuid as _uuid
+
+            from app.modules.quality.api._materials import _micro_judge
+            from app.modules.quality.repository import (
+                create_micro_record,
+                list_micro_records,
+                update_micro_record,
+            )
+
+            cnt_m = re.search(r"计数\s*(\d+)", text)
+            limit_m = re.search(r"限(?:度)?\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)", text)
+            # 找/建当日该批号的登记（同一批号复用一条，多次补录）
+            micro_existing = [r for r in await list_micro_records(db) if r.batch_number == batch]
+            rec = micro_existing[0] if micro_existing else await create_micro_record(db, {
+                "sample_name": batch,
+                "batch_number": batch,
+                "sample_date": _today_str(),
+                "colony_count": None,
+                "alert_limit": None,
+                "action_limit": None,
+                "judge": None,
+            })
+            # 暂存图片归档
+            pending = _LAST_IMAGE.pop(chat_id, None)
+            if pending:
+                image_data = await _download_image(pending["message_id"], pending["file_key"])
+                if image_data:
+                    key = f"micro/{rec.id}/{_uuid.uuid4().hex[:12]}_bot.jpg"
+                    quality_storage.upload_attachment(key, image_data, "image/jpeg")
+                    keys = list(rec.photo_keys or []) + [key]
+                    await update_micro_record(db, rec.id, {"photo_keys": keys})
+                    photo_msg = "照片已归档。"
+                else:
+                    photo_msg = "图片下载失败，可重发。"
+            else:
+                photo_msg = "未收到照片，可直接回复「菌落 批号 %s 计数 N」。"
+            rec_data: dict[str, Any] = {}
+            if cnt_m:
+                rec_data["colony_count"] = int(cnt_m.group(1))
+            if limit_m:
+                rec_data["alert_limit"] = float(limit_m.group(1))
+                rec_data["action_limit"] = float(limit_m.group(2))
+            if rec_data:
+                rec_data["judge"] = _micro_judge(
+                    rec_data.get("colony_count", rec.colony_count),
+                    rec_data.get("alert_limit", rec.alert_limit),
+                    rec_data.get("action_limit", rec.action_limit),
+                )
+                updated_rec = await update_micro_record(db, rec.id, rec_data)
+                if updated_rec is not None:
+                    rec = updated_rec
+            judge_label = {"pass": "合格", "alert": "超警戒线", "action": "超标准限"}.get(rec.judge or "", rec.judge or "未判定")
+            await send_chat_text(
+                chat_id,
+                f"{photo_msg}\n微生物登记（批号 {batch}）：菌落 {rec.colony_count if rec.colony_count is not None else '待填'}，"
+                f"判定：{judge_label}（警戒线 {rec.alert_limit if rec.alert_limit is not None else '-'} / 标准限 {rec.action_limit if rec.action_limit is not None else '-'}）",
+            )
+            return
         if not pairs and "归档模式" in text:
             async with async_session_factory() as db:
                 task = await _resolve_task_by_batch(db, batch)
