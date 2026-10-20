@@ -22,6 +22,7 @@ from app.modules.safety.facilities.ledger import BIZ_ACCESSORY
 from app.modules.safety.facilities.notify import (
     DIGEST_KEY,
     _task_line,
+    build_batch_card,
     build_digest_cell_payload,
     record_urls_for,
     refresh_department_batch,
@@ -104,10 +105,10 @@ async def test_same_department_merged_into_single_card(db_session):
     assert out["total"] == 3 and out["open"] == 3
     assert len(sender.calls) == 1  # 单卡
     card = sender.calls[0]
-    assert "待闭环合计 **3** 件" in card["content"]
+    assert "提炼一部 合计 **3** 件" in card["content"]
     panel_md = card["elements"][0]["elements"][0]["content"]  # 分组明细面板
-    assert "安全阀·校验 2 件：已闭环 0" in panel_md
-    assert "压力表·校验 1 件：已闭环 0" in panel_md
+    assert "安全阀·校验 2 件" in panel_md
+    assert "压力表·校验 1 件" in panel_md
     batch = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
     assert batch.card_message_id == "om_1"
     assert batch.total_count == 3 and batch.open_count == 3
@@ -371,3 +372,26 @@ def test_record_urls_for_via_connection(monkeypatch):
             "?table=tblcnSMMA8vs5p33&record=rec1"
         )
     }
+
+
+def test_card_copy_and_fire_pending_text():
+    """2026-10-20 拍板：标题=设备设施跟进提醒；头部只显示剩余合计；
+    已闭环项不进明细；消防待办文案=待更换（其余台账默认待闭环）。"""
+    from app.modules.safety.facilities.ledger import BIZ_FIRE
+
+    card, title = build_batch_card(
+        "提炼一部",
+        [_task("k1"), _task("k2"), _task("k3", status="closed")],
+        today=TODAY,
+    )
+    assert title == "🔧 提炼一部 设备设施跟进提醒"
+    md = card["body"]["elements"][0]["content"]
+    assert "提炼一部 合计 **2** 件" in md  # 只数未完成
+    panel = card["body"]["elements"][1]["elements"][0]["content"]
+    assert "安全阀·校验 2 件" in panel
+    assert "k3" not in panel and "AQ-k3" not in panel  # 已闭环不展示
+
+    fire = _task("f1")
+    fire.biz_type = BIZ_FIRE
+    assert "⏳ 待更换" in _task_line(fire, TODAY)
+    assert "⏳ 待闭环" in _task_line(_task("a1"), TODAY)  # 附件默认口径

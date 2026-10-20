@@ -91,13 +91,21 @@ async def _visible_tasks(
     return list(rows.scalars().all())
 
 
+# 待办状态文案按台账类型（2026-10-20 拍板：消防器材到期=待更换；
+# 其余台账接入时再定各自口径，默认待闭环）
+_PENDING_TEXT: dict[str, str] = {"fire_equipment": "⏳ 待更换"}
+
+
 def _task_line(task: FacilityCheckTask, today: date, record_url: str | None = None) -> str:
     remaining = (task.due_date - today).days
     if remaining < 0:
         remain_txt = f"逾期 {abs(remaining)} 天"
     else:
         remain_txt = f"剩 {remaining} 天"
-    status_txt = "✅ 已闭环" if task.status == "closed" else "⏳ 待闭环"
+    status_txt = (
+        _PENDING_TEXT.get(task.biz_type, "⏳ 待闭环")
+        if task.status != "closed" else "✅ 已闭环"
+    )
     link = f"｜[📋记录]({record_url})" if record_url else ""
     return (
         f"- {task.equipment_no or task.ledger_key[:8]}｜{task.location or '-'}｜"
@@ -146,29 +154,28 @@ def build_batch_card(
     escalate_open_ids: list[str] | None = None,
     record_urls: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """部门批次卡（全量重建）：头部进度行 + 分组分区 + @责任人 + 表格指引。
+    """部门跟进提醒卡（全量重建）：头部合计 + 分组分区 + @责任人 + 表格指引。
 
-    返回 (card_dict, title)；全闭环时头部置绿「✅ 全部完成」。
+    2026-10-20 拍板口径：标题=「设备设施跟进提醒」；头部只显示剩余合计
+    （「{部门} 合计 N 件」），明细只列未完成项（已闭环不再展示）。
+    返回 (card_dict, title)；全部闭环时置绿「✅ 全部完成」后归档。
     record_urls：明细行追加多维表格记录直达链接（record_urls_for 产出，
     缺省无链接——纯函数不触 store，测试/未配置场景友好）。
     """
     open_tasks = [t for t in tasks if t.status == "issued"]
-    closed_tasks = [t for t in tasks if t.status == "closed"]
     all_done = bool(tasks) and not open_tasks
 
     groups: dict[str, list[FacilityCheckTask]] = {}
-    for t in tasks:
+    for t in open_tasks:
         groups.setdefault(t.group_key, []).append(t)
 
-    title = f"🔧 {department} 设施校验批次卡"
+    title = f"🔧 {department} 设备设施跟进提醒"
     header_lines: list[str] = []
     if all_done:
-        header_lines.append(f"## ✅ 全部完成｜{department} 设施校验（{len(tasks)} 件）")
+        header_lines.append(f"## ✅ 全部完成｜{department}（累计 {len(tasks)} 件）")
         header_template = "green"
     else:
-        header_lines.append(
-            f"## {department} 待闭环合计 **{len(open_tasks)}** 件 · 已闭环 {len(closed_tasks)}"
-        )
+        header_lines.append(f"## {department} 合计 **{len(open_tasks)}** 件")
         header_template = "blue"
     if escalation_md:
         header_lines.append("")
@@ -178,8 +185,7 @@ def build_batch_card(
     links = record_urls or {}
     for group_key in sorted(groups):
         items = groups[group_key]
-        closed_n = sum(1 for t in items if t.status == "closed")
-        detail_lines.append(f"**{group_key} {len(items)} 件：已闭环 {closed_n}**")
+        detail_lines.append(f"**{group_key} {len(items)} 件**")
         detail_lines.extend(
             _task_line(t, today, links.get(f"{t.biz_type}:{t.ledger_key}"))
             for t in items
