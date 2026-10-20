@@ -32,7 +32,7 @@ from app.modules.safety.facilities.ledger import (
 from app.modules.safety.facilities.notify import NoopNotifier
 from app.modules.safety.facilities.reader import FacilitiesLedgerReader
 from app.modules.safety.models import FacilityCheckTask, FacilityTaskEvent
-from app.modules.safety.service.bitable_direct.errors import BitableQueryError
+from app.modules.safety.service.bitable_direct.errors import BitableConfigError, BitableQueryError
 
 from .test_facilities_ledger import FakePageClient, _ms, _rec
 
@@ -404,8 +404,20 @@ async def test_dispatch_partial_config_no_reconcile_for_missing_biz(db_session):
 
 
 async def test_dispatch_no_source_when_all_unconfigured(db_session):
+    """封闭式 no_source：一律用替身 reader 模拟「三台账全未配置」。
+
+    真实 FacilitiesLedgerReader 是否查到连接取决于环境 DB——灭火器台账
+    已真实登记（2026-10-20），走真实 reader 会拉真数据并以默认通知器
+    真发批次卡（当日测试即因此向群里发了 8 张幽灵卡）。本测试禁止任何
+    真实 reader/通知/速递路径。
+    """
+    class _UnconfiguredReader:
+        async def fetch_ledger(self, biz_type, strict=False):
+            raise BitableConfigError(f"未配置: {biz_type}")
+
     result = await run_dispatch(
-        db_session, reader=FacilitiesLedgerReader(None), today=TODAY,
+        db_session, reader=_UnconfiguredReader(), notifier=NoopNotifier(),
+        digest_pusher=_digest_stub, today=TODAY,
     )
     assert result.no_source is True
     assert result.created == 0
@@ -425,7 +437,7 @@ async def test_dispatch_query_error_raises(db_session):
 async def test_scheduler_no_source_state_dedup_for_day(monkeypatch):
     from app.modules.safety import scheduler
 
-    job = {"name": "设施校验任务派发", "hour": 8, "minute": 10,
+    job = {"name": "设施校验任务派发", "hour": 8, "minute": 30,
            "retry_until_hour": 12, "retry_until_minute": 0}
     today = date.today()
     after = datetime.now().replace(hour=9, minute=0)
@@ -462,7 +474,7 @@ async def test_scheduler_job_returns_no_source_sentinel(monkeypatch):
         return None
     monkeypatch.setattr(scheduler, "_load_state", no_state)
 
-    job = {"name": "设施校验任务派发", "hour": 8, "minute": 10}
+    job = {"name": "设施校验任务派发", "hour": 8, "minute": 30}
     result = await scheduler._run_scheduled_job(job)
     assert result == scheduler.SKIP_NO_SOURCE
     assert saved and saved[-1]["status"] == "no_source"

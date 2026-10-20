@@ -337,10 +337,10 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "漏推批次自动补处理（判定→写入→回执→推送），"
                        "无候选明细的漏推留痕告警",
     },
-    # ── 设施校验任务派发（每日 08:10，三台账直读→幂等建任务→对账→批次卡）──
+    # ── 设施校验任务派发（每日 08:30，2026-10-20 拍板；三台账直读→幂等建任务→对账→批次卡）──
     {
         "name": "设施校验任务派发",
-        "hour": 8, "minute": 10,
+        "hour": 8, "minute": 30,
         "retry_until_hour": 12, "retry_until_minute": 0,
         "description": "直读三台账（安全附件/消防器材/特种设备）筛选临期校验项，"
                        "幂等派发校验任务并按部门合并滚动批次卡通知；"
@@ -641,7 +641,7 @@ async def _run_regulation_ingest_reconcile() -> None:
 
 
 async def _run_facility_dispatch() -> bool:
-    """每日 08:10 设施校验任务派发。返回 True=三台账连接未登记（no_source 跳过）。"""
+    """每日 08:30 设施校验任务派发。返回 True=三台账连接未登记（no_source 跳过）。"""
     from app.core.database import async_session_factory
     from app.modules.safety.facilities.dispatch import run_dispatch
 
