@@ -420,6 +420,29 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
     async with async_session_factory() as db:
         # 「归档模式 批号 XXX」：连拍多张自动归档
         # 「菌落 批号 XXX [计数 N] [限 A B]」：微生物登记 + 照片归档 + 判定回执
+        # 「交接 批号 X」：开报人员交接汇总（含未完成项提示）
+        if "交接" in text and not pairs:
+            from app.modules.quality.service import test_task_service
+
+            task = await _resolve_task_by_batch(db, batch)
+            if not task:
+                await send_chat_text(chat_id, f"批号 {batch} 未找到任务")
+                return
+            summary = await test_task_service.handover_summary(db, task.id)
+            status_label = {"in_progress": "填报中", "pending_review": "待复核", "completed": "已完成"}.get(summary["status"], summary["status"])
+            lines = [
+                f"- {summary['product_name']} 批号 {summary['batch_number']}（{status_label}）",
+                f"  已完成 {summary['filled']}/{summary['total']} 项",
+            ]
+            for it in summary["items"]:
+                lines.append(f"  {it['name']}：{it['value']}（{it['verdict']}）")
+            if summary["unfilled"]:
+                lines.append("未完成：" + "、".join(summary["unfilled"]))
+            if summary["reports"]:
+                lines.append("报告单：" + "、".join(r["serial_no"] or "无流水号" for r in summary["reports"]))
+            await send_chat_text(chat_id, "交接汇总：\n" + "\n".join(lines))
+            return
+
         if "菌落" in text:
             import uuid as _uuid
 

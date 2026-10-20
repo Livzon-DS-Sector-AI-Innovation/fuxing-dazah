@@ -1610,3 +1610,18 @@ export async function exportMicroRecords(batchNo?: string): Promise<Blob> {
   if (!res.ok) throw new Error('导出失败')
   return res.blob()
 }
+
+
+export async function fetchTaskHandover(taskId: string): Promise<{ data: {
+  task_id: string; product_name: string; batch_number: string; status: string
+  production_date: string | null; report_date: string | null
+  filled: number; total: number; unfilled: string[]
+  items: { name: string; value: string | number; verdict: string }[]
+  reports: { serial_no: string | null; filename: string | null }[]
+} }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/handover`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取交接汇总失败')
+  return res.json()
+}

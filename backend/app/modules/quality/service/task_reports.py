@@ -3,6 +3,7 @@
 import logging
 import uuid
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -38,6 +39,11 @@ logger = logging.getLogger(__name__)
 
 class _TaskReports(_TaskCore):
     """任务查询与报表：COA 拆分/看板/汇总矩阵/趋势/SOP 汇总。"""
+    @staticmethod
+    async def handover_summary(db: AsyncSession, task_id: uuid.UUID) -> dict[str, Any]:
+        """交接汇总：批次检验完成情况（开报人员交接用），含未完成项提示。"""
+        return await _build_handover_summary(db, task_id)
+
     @staticmethod
     async def build_task_report_splits(
         db: AsyncSession, task_id: uuid.UUID
@@ -376,3 +382,44 @@ class _TaskReports(_TaskCore):
         return {"items": out, "total_items": len(out)}
 
     # ── 组装 ──
+
+
+async def _build_handover_summary(db: AsyncSession, task_id: uuid.UUID) -> dict[str, Any]:
+    """交接汇总：批次检验完成情况（开报人员交接用），含未完成项提示。"""
+    from app.modules.quality.repository import (
+        get_test_task,
+        list_report_records_by_task,
+        list_test_results,
+    )
+
+    task = await get_test_task(db, task_id)
+    if task is None:
+        raise AppException(status_code=404, detail="检验任务不存在")
+    rows = await list_test_results(db, task_id)
+    reports = await list_report_records_by_task(db, task_id)
+    items = []
+    unfilled = []
+    for r in rows:
+        value = r.result_value if r.result_value is not None else r.result_text
+        if value is None:
+            unfilled.append(r.item_name)
+            continue
+        verdict = "合格" if r.is_pass is True else ("不合格" if r.is_pass is False else "待判定")
+        items.append({"name": r.item_name, "value": value, "verdict": verdict})
+    return {
+        "task_id": str(task.id),
+        "product_name": task.product_name,
+        "batch_number": task.batch_number,
+        "status": task.status,
+        "production_date": task.production_date,
+        "report_date": task.report_date,
+        "filled": len(items),
+        "total": len(rows),
+        "unfilled": unfilled,
+        "items": items,
+        "reports": [
+            {"serial_no": p.serial_no, "filename": Path(p.file_path).name if p.file_path else None}
+            for p in reports
+            if not p.is_deleted
+        ],
+    }

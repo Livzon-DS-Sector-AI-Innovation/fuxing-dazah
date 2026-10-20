@@ -329,6 +329,16 @@ async def delete_test_task_endpoint(
     return success_response(message="已删除")
 
 
+@router.get("/tasks/{task_id}/handover", summary="交接汇总（开报人员交接：完成项/结果/判定/未完成项）")
+async def task_handover_endpoint(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    summary = await test_task_service.handover_summary(db, task_id)
+    return success_response(data=summary)
+
+
 @router.get("/tasks/{task_id}/reports", summary="任务已生成的报告单列表")
 async def list_task_reports_endpoint(
     task_id: uuid.UUID,

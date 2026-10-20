@@ -23,6 +23,7 @@ import {
   fetchTaskAttachments, uploadTaskAttachment, downloadTaskAttachment, deleteTaskAttachment,
   fetchTaskReviews, approveTaskReview,
   fetchTaskReports,
+  fetchTaskHandover,
 } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 
@@ -69,6 +70,12 @@ export default function TaskDetail({ id }: { id: string }) {
   // 多份 COA 生成后的逐份下载弹窗（连续自动下载会被浏览器拦截）
   const [coaFiles, setCoaFiles] = useState<{ report_id: string; filename: string; file_no: string }[]>([])
   const [coaPreviewId, setCoaPreviewId] = useState<string | null>(null)
+  const [handoverOpen, setHandoverOpen] = useState(false)
+  const [handover, setHandover] = useState<{
+    product_name: string; batch_number: string; filled: number; total: number;
+    unfilled: string[]; items: { name: string; value: string | number; verdict: string }[];
+    reports: { serial_no: string | null; filename: string | null }[];
+  } | null>(null)
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
   const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
@@ -428,6 +435,13 @@ export default function TaskDetail({ id }: { id: string }) {
     <div className="space-y-4">
       <Space wrap>
         <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/quality/task')}>返回列表</Button>
+        <Button icon={<FileTextOutlined />} onClick={async () => {
+          try {
+            const res = await fetchTaskHandover(id)
+            setHandover(res.data)
+            setHandoverOpen(true)
+          } catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '获取交接汇总失败') }
+        }}>交接汇总</Button>
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} disabled={!editable}>保存</Button>
         {detail.status === 'in_progress' && (
           <>
@@ -705,6 +719,36 @@ export default function TaskDetail({ id }: { id: string }) {
           ))}
         </Space>
       </Modal>
+      <Modal
+        title="交接汇总"
+        open={handoverOpen}
+        onCancel={() => setHandoverOpen(false)}
+        footer={<Button onClick={() => setHandoverOpen(false)}>关闭</Button>}
+        width={620}
+      >
+        {handover && (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Typography.Text strong>{handover.product_name} 批号 {handover.batch_number}</Typography.Text>
+            <Typography.Text type="secondary">
+              已完成 {handover.filled}/{handover.total} 项
+              {handover.unfilled?.length > 0 && <Typography.Text type="warning">｜未完成：{handover.unfilled.join('、')}</Typography.Text>}
+              {handover.reports?.length > 0 && <>｜报告单：{handover.reports.map((r: { serial_no: string | null }) => r.serial_no ?? '无流水号').join('、')}</>}
+            </Typography.Text>
+            <Table
+              size="small"
+              rowKey="name"
+              pagination={false}
+              dataSource={handover.items}
+              columns={[
+                { title: '项目', dataIndex: 'name' },
+                { title: '结果', dataIndex: 'value', width: 160 },
+                { title: '判定', dataIndex: 'verdict', width: 100, render: (v: string) => <Tag color={v === '合格' ? 'green' : v === '不合格' ? 'red' : 'default'}>{v}</Tag> },
+              ]}
+            />
+          </Space>
+        )}
+      </Modal>
+
 
       <CoaPreviewModal
         open={!!coaPreviewId}
