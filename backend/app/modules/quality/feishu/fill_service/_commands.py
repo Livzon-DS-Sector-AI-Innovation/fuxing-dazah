@@ -298,6 +298,77 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 await send_chat_text(chat_id, "物料库存：\n" + "\n".join(lines))
             return
 
+        # 「环境 点位 X 值 N [日期 YYYY-MM-DD]」：洁净区环境监测填报（手机主路径），
+        # 按点位警戒限/行动限双限三态判定，超行动限自动群预警
+        env_m = re.match(r"^环境\s*(.*)", kw)
+        if env_m:
+            from app.modules.quality.api._env import (
+                MONITOR_TYPE_LABELS,
+                _env_judge,
+                _notify_env_action,
+            )
+            from app.modules.quality.repository import (
+                create_env_record,
+                list_env_points,
+            )
+
+            body = env_m.group(1)
+            point_m = re.search(r"点位\s*(\S+)", body)
+            value_m = re.search(r"值\s*(\d+(?:\.\d+)?)", body)
+            date_m = re.search(r"日期\s*(\d{4})[-./](\d{1,2})[-./](\d{1,2})", body)
+            if not point_m:
+                await send_chat_text(chat_id, "格式：环境 点位 P001 值 5（可带「日期 2026-10-21」，不填默认今天）")
+                return
+            from app.core.database import async_session_factory
+
+            async with async_session_factory() as edb:
+                env_points = [
+                    p for p in await list_env_points(edb, keyword=point_m.group(1))
+                    if p.point_no == point_m.group(1)
+                ]
+                if not env_points:
+                    await send_chat_text(chat_id, f"未找到点位 {point_m.group(1)}，请到「环境监测」页确认点位编号")
+                    return
+                if len(env_points) > 1:
+                    rooms = "、".join(sorted({p.room for p in env_points}))
+                    await send_chat_text(chat_id, f"点位 {point_m.group(1)} 在多个房间存在（{rooms}），请到网页环境监测页填报")
+                    return
+                env_point = env_points[0]
+                if env_point.status != "active":
+                    await send_chat_text(chat_id, f"点位 {env_point.point_no} 已停用，请先到网页启用")
+                    return
+                env_value = float(value_m.group(1)) if value_m else None
+                env_judge_result = _env_judge(env_value, env_point.alert_limit, env_point.action_limit)
+                env_rec = await create_env_record(edb, {
+                    "point_id": env_point.id,
+                    "record_date": (
+                        f"{date_m.group(1)}-{int(date_m.group(2)):02d}-{int(date_m.group(3)):02d}"
+                        if date_m else _today_str()
+                    ),
+                    "result_value": env_value,
+                    "alert_limit": env_point.alert_limit,
+                    "action_limit": env_point.action_limit,
+                    "judge": env_judge_result,
+                    "remark": None,
+                })
+                await edb.commit()
+            if env_judge_result == "action" and env_value is not None and env_point.action_limit is not None:
+                spawn_background(_notify_env_action(
+                    env_point.room, env_point.point_no, env_point.monitor_type,
+                    env_rec.record_date, env_value, env_point.action_limit,
+                ))
+            type_label = MONITOR_TYPE_LABELS.get(env_point.monitor_type, env_point.monitor_type)
+            env_judge_label = {"pass": "合格", "alert": "超警戒", "action": "超行动"}
+            await send_chat_text(
+                chat_id,
+                f"环境监测（{env_point.room} {env_point.point_no}｜{type_label}｜{env_rec.record_date}）："
+                f"结果 {env_value if env_value is not None else '待填'}，"
+                f"判定：{env_judge_label.get(env_judge_result or '', env_judge_result or '未判定')}"
+                f"（警戒限 {env_point.alert_limit if env_point.alert_limit is not None else '-'} "
+                f"/ 行动限 {env_point.action_limit if env_point.action_limit is not None else '-'}）",
+            )
+            return
+
         # 一句话查询：今日出报单（流水号+产品+批号）
         if "出报单" in kw or ("报告单" in kw and ("今天" in kw or "今日" in kw)):
             from app.core.database import async_session_factory

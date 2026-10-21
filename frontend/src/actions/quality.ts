@@ -34,6 +34,8 @@ import type {
   InspectionPlan,
   MicroRecord,
   RetainedSample,
+  EnvPoint,
+  EnvRecord,
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
@@ -1687,6 +1689,116 @@ export async function exportRetainedSamples(params?: {
   if (params?.status) q.set('status', params.status)
   const qs = q.toString() ? `?${q}` : ''
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/retained-samples/export${qs}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('导出失败')
+  return res.blob()
+}
+
+
+// ─── 环境监测 ───
+
+export async function fetchEnvPoints(params?: {
+  room?: string; monitorType?: string; status?: string; keyword?: string
+}): Promise<{ data: EnvPoint[] }> {
+  const q = new URLSearchParams()
+  if (params?.room) q.set('room', params.room)
+  if (params?.monitorType) q.set('monitor_type', params.monitorType)
+  if (params?.status) q.set('status', params.status)
+  if (params?.keyword) q.set('keyword', params.keyword)
+  const qs = q.toString() ? `?${q}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/points${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取监测点失败')
+  return res.json()
+}
+
+export async function createEnvPoint(input: Partial<EnvPoint>): Promise<{ message: string; data: EnvPoint }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/points`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '监测点保存失败')
+  }
+  revalidatePath('/quality/env')
+  return res.json()
+}
+
+export async function updateEnvPoint(id: string, input: Partial<EnvPoint>): Promise<{ message: string; data: EnvPoint }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/points/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '监测点更新失败')
+  }
+  revalidatePath('/quality/env')
+  return res.json()
+}
+
+export async function deleteEnvPoint(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/points/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除失败')
+  revalidatePath('/quality/env')
+  return res.json()
+}
+
+export async function fetchEnvRecords(params?: {
+  pointId?: string; judge?: string; dateFrom?: string; dateTo?: string
+}): Promise<{ data: EnvRecord[] }> {
+  const q = new URLSearchParams()
+  if (params?.pointId) q.set('point_id', params.pointId)
+  if (params?.judge) q.set('judge', params.judge)
+  if (params?.dateFrom) q.set('date_from', params.dateFrom)
+  if (params?.dateTo) q.set('date_to', params.dateTo)
+  const qs = q.toString() ? `?${q}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取监测记录失败')
+  return res.json()
+}
+
+export async function createEnvRecord(input: {
+  point_id: string; record_date: string; result_value: number | null; remark?: string
+}): Promise<{ message: string; data: EnvRecord | null }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '记录保存失败')
+  }
+  revalidatePath('/quality/env')
+  return res.json()
+}
+
+export async function deleteEnvRecord(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除失败')
+  revalidatePath('/quality/env')
+  return res.json()
+}
+
+export async function exportEnvRecords(params?: {
+  pointId?: string; judge?: string; dateFrom?: string; dateTo?: string
+}): Promise<Blob> {
+  const q = new URLSearchParams()
+  if (params?.pointId) q.set('point_id', params.pointId)
+  if (params?.judge) q.set('judge', params.judge)
+  if (params?.dateFrom) q.set('date_from', params.dateFrom)
+  if (params?.dateTo) q.set('date_to', params.dateTo)
+  const qs = q.toString() ? `?${q}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records/export${qs}`, {
     headers: await _authHeaders(),
   })
   if (!res.ok) throw new Error('导出失败')

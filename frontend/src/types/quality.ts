@@ -714,3 +714,38 @@ export interface RetainedSample {
   remark: string | null
   created_at: string
 }
+
+
+// ─── 环境监测 ───
+
+export type EnvMonitorType = 'settle' | 'float' | 'particle' | 'temp_humidity' | 'pressure'
+
+export interface EnvPoint {
+  id: string
+  room: string
+  point_no: string
+  monitor_type: EnvMonitorType
+  frequency: 'per_batch' | 'weekly' | 'monthly' | null
+  alert_limit: number | null
+  action_limit: number | null
+  status: 'active' | 'inactive'
+  remark: string | null
+  created_at: string
+}
+
+export interface EnvRecord {
+  id: string
+  point_id: string
+  room: string
+  point_no: string
+  monitor_type: EnvMonitorType
+  record_date: string
+  result_value: number | null
+  alert_limit: number | null
+  action_limit: number | null
+  judge: 'pass' | 'alert' | 'action' | null
+  recorded_by: string | null
+  recorded_by_name: string | null
+  remark: string | null
+  created_at: string
+}

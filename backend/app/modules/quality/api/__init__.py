@@ -6,6 +6,7 @@
 """
 
 from app.modules.quality.api import (  # noqa: F401
+    _env,
     _lc,
     _materials,
     _module_info,
