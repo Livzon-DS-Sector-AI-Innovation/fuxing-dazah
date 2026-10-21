@@ -68,8 +68,12 @@ async def list_facility_tasks(
     response_model=ApiResponse,
     summary="校验任务分桶统计（按部门/分组聚合进度）",
 )
-async def facility_task_summary(db=Depends(get_db)) -> ApiResponse:
-    return ApiResponse(data=await task_summary(db))
+async def facility_task_summary(
+    biz_type: str | None = Query(None),
+    department: str | None = Query(None),
+    db=Depends(get_db),
+) -> ApiResponse:
+    return ApiResponse(data=await task_summary(db, biz_type=biz_type, department=department))
 
 
 @facilities_router.get(

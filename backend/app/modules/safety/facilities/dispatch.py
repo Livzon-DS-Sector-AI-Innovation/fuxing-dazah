@@ -407,16 +407,16 @@ async def _push_digest(
             )
         )
     ).scalars().all()
-    top_overdue = sorted(
+    pending_items = sorted(
         (
             {
                 "department": t.department or "未填写部门",
+                "assignee": t.assignee_name,
                 "equipment_no": t.equipment_no or t.ledger_key[:8],
-                "group_key": t.group_key,
+                # >0 逾期 N 天；<0 剩 N 天（排序=逾期最深在前）
                 "over_days": (today - t.due_date).days,
             }
             for t in open_rows
-            if t.due_date < today
         ),
         key=lambda x: -x["over_days"],
     )
@@ -424,7 +424,7 @@ async def _push_digest(
         open_total=len(open_rows),
         overdue=overdue,
         due_30d=due30,
-        top_overdue=top_overdue,
+        pending_items=pending_items,
         incomplete=result.incomplete_rows,
         unresolved_owner=result.unresolved_owner,
     )
@@ -455,10 +455,12 @@ async def run_escalation(
     resolver: OwnerResolver | None = None,
     refresher: Any = None,
     today: date | None = None,
+    biz_type: str | None = None,
 ) -> EscalationResult:
     """逾期升级：issued 且今日>due_date → remind_count+1 + escalated 事件 →
-    刷新本部门批次卡追加逾期催办区（@部门负责人+安管），绝不逐条私发。
+    刷新本部门跟进卡追加逾期催办区（@部门负责人+安管），绝不逐条私发。
 
+    biz_type 可选过滤（测试隔离用；生产缺省=全部台账）。
     无任何台账连接登记时 no_source（调度器如实留痕跳过）。
     """
     from app.modules.safety.facilities.reader import connection_configured
@@ -483,6 +485,11 @@ async def run_escalation(
                 FacilityCheckTask.status == "issued",
                 FacilityCheckTask.due_date < today,
                 FacilityCheckTask.is_deleted.is_(False),
+                *(
+                    [FacilityCheckTask.biz_type == biz_type]
+                    if biz_type is not None
+                    else []
+                ),
             )
         )
     ).scalars().all()

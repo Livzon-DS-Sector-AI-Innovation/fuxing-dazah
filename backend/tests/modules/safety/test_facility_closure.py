@@ -74,7 +74,9 @@ async def test_event_channel_closes_on_anchor_advanced(db_session):
     assert stats == {"closed": 1, "cancelled": 0}
     assert task.status == "closed"
     assert task.closed_trigger == "event"
-    ev = (await db_session.execute(select(FacilityTaskEvent))).scalars().one()
+    ev = (await db_session.execute(
+        select(FacilityTaskEvent).where(FacilityTaskEvent.task_id == task.id)
+    )).scalars().one()
     assert ev.event_type == "closed"
     assert ev.payload["anchor_after"] == (TODAY + timedelta(days=300)).isoformat()
 
@@ -164,7 +166,9 @@ async def test_reopen_resets_to_issued_and_clears_archived_batch(db_session):
     assert task.closed_trigger is None
     assert task.batch_id is None  # 批次已归档 → 清空
 
-    events = (await db_session.execute(select(FacilityTaskEvent))).scalars().all()
+    events = (await db_session.execute(
+        select(FacilityTaskEvent).where(FacilityTaskEvent.task_id == task.id)
+    )).scalars().all()
     assert events[-1].event_type == "reopened"
     assert events[-1].operator == "ou_admin"
 
@@ -200,7 +204,9 @@ async def test_cancel_manual_records_reason_and_operator(db_session):
     assert task.closed_trigger == "manual"
     assert task.closed_reason == "设备已淘汰"
     assert task.closed_by == "ou_admin"
-    ev = (await db_session.execute(select(FacilityTaskEvent))).scalars().one()
+    ev = (await db_session.execute(
+        select(FacilityTaskEvent).where(FacilityTaskEvent.task_id == task.id)
+    )).scalars().one()
     assert ev.event_type == "cancelled"
     assert ev.payload["reason"] == "设备已淘汰"
 

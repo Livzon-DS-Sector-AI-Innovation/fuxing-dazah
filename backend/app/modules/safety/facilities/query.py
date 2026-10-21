@@ -99,14 +99,30 @@ async def list_tasks(
 
 
 async def task_summary(
-    session: AsyncSession, *, today: date | None = None
+    session: AsyncSession, *, today: date | None = None,
+    biz_type: str | None = None, department: str | None = None,
 ) -> dict[str, Any]:
-    """分桶统计：全局计数 + 按部门/分组聚合（分组进度=已闭环/总数）。"""
+    """分桶统计：全局计数 + 按部门/分组聚合（分组进度=已闭环/总数）。
+
+    biz_type/department 可选过滤（页面按台账/部门下钻；测试隔离圈定作用域）。
+    """
     today = today or _bj_today()
     rows = list(
         (
             await session.execute(
-                select(FacilityCheckTask).where(FacilityCheckTask.is_deleted.is_(False))
+                select(FacilityCheckTask).where(
+                    FacilityCheckTask.is_deleted.is_(False),
+                    *(
+                        [FacilityCheckTask.biz_type == biz_type]
+                        if biz_type is not None
+                        else []
+                    ),
+                    *(
+                        [FacilityCheckTask.department == department]
+                        if department is not None
+                        else []
+                    ),
+                )
             )
         ).scalars().all()
     )

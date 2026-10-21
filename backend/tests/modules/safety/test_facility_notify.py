@@ -10,6 +10,10 @@ mock sender/updater 断言（DESIGN §4.5 拍板口径）：
 - 速递格子 facility_check 文案口径。
 """
 
+# 批次查询圈定到测试部门：dev 库 2026-10-21 08:30 首轮真实派发已落地
+# 4 个部门批次（发酵工程部/提炼工程一部/环保工程中心/精制工程一部），
+# 与测试部门（提炼一部/环保中心）不重叠。
+
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -111,7 +115,9 @@ async def test_same_department_merged_into_single_card(db_session):
     panel_md = card["elements"][0]["elements"][0]["content"]  # 分组明细面板
     assert "安全阀·校验 2 件" in panel_md
     assert "压力表·校验 1 件" in panel_md
-    batch = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
+    batch = (await db_session.execute(
+        select(FacilityNoticeBatch).where(FacilityNoticeBatch.department.in_(("提炼一部", "环保中心")))
+    )).scalar_one()
     assert batch.card_message_id == "om_1"
     assert batch.total_count == 3 and batch.open_count == 3
 
@@ -162,7 +168,9 @@ async def test_closure_refreshes_in_place_and_archives_when_all_closed(db_sessio
     assert "✅ 全部完成" in _card_markdown(patched_card)
     assert patched_card["header"]["template"] == "green"
 
-    batch = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
+    batch = (await db_session.execute(
+        select(FacilityNoticeBatch).where(FacilityNoticeBatch.department.in_(("提炼一部", "环保中心")))
+    )).scalar_one()
     assert batch.status == "archived"
 
     # 归档后新周期任务 → 新开一张批次卡
@@ -174,7 +182,9 @@ async def test_closure_refreshes_in_place_and_archives_when_all_closed(db_sessio
     )
     assert out["action"] == "sent"
     assert len(sender.calls) == 2
-    batches = (await db_session.execute(select(FacilityNoticeBatch))).scalars().all()
+    batches = (await db_session.execute(
+        select(FacilityNoticeBatch).where(FacilityNoticeBatch.department.in_(("提炼一部", "环保中心")))
+    )).scalars().all()
     assert len(batches) == 2
 
 
@@ -211,7 +221,9 @@ async def test_patch_failure_degrades_to_resend(db_session):
     )
     assert out["action"] == "resent"
     assert len(sender.calls) == 2  # 降级重发新卡
-    batch = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
+    batch = (await db_session.execute(
+        select(FacilityNoticeBatch).where(FacilityNoticeBatch.department.in_(("提炼一部", "环保中心")))
+    )).scalar_one()
     assert batch.card_message_id == "om_2"
 
 
@@ -259,6 +271,7 @@ async def test_escalation_refreshes_existing_card_with_at_leader(db_session, mon
 
     result = await run_escalation(
         db_session, resolver=FakeResolver(), refresher=spy_refresher, today=TODAY,
+        biz_type=BIZ_ACCESSORY,  # 圈定作用域：dev 库已有真实 fire 逾期任务
     )
     assert result.escalated == 1
     assert result.departments == ["提炼一部"]
@@ -299,11 +312,13 @@ def test_digest_cell_order_contains_facility_check():
 def test_digest_cell_payload_copy():
     cell = build_digest_cell_payload(
         open_total=5, overdue=2, due_30d=3,
-        top_overdue=[
-            {"department": "提炼一部", "equipment_no": "AQ-1",
-             "group_key": "安全阀·校验", "over_days": 9},
-            {"department": "仓储部", "equipment_no": "FE-2",
-             "group_key": "灭火器·换药", "over_days": 2},
+        pending_items=[
+            {"department": "提炼一部", "assignee": "张三", "equipment_no": "AQ-1",
+             "over_days": 9},
+            {"department": "仓储部", "assignee": "李四", "equipment_no": "FE-2",
+             "over_days": 2},
+            {"department": "发酵部", "assignee": None, "equipment_no": "FE-3",
+             "over_days": -5},
         ],
         incomplete=4, unresolved_owner=1,
     )
@@ -311,9 +326,29 @@ def test_digest_cell_payload_copy():
     assert "待闭环 5" in cell.stats and "逾期 **2**" in cell.stats
     assert "🔴" in cell.detail  # >7 天红档
     assert "🟠" in cell.detail
+    assert "⏳" in cell.detail and "剩 5 天" in cell.detail  # 未到期也展示
+    assert "提炼一部·张三" in cell.detail  # 部门·责任人
+    assert "发酵部·—" in cell.detail      # 无责任人退化
     assert "信息不全 4 行" in cell.detail
     assert "责任人解析失败 1 条" in cell.detail
     assert DIGEST_KEY == "facility_check"
+
+
+def test_digest_cell_pending_overflow_folded():
+    """超过展示上限折叠提示（防撑爆总卡预算）。"""
+    from app.modules.safety.facilities.notify import _DIGEST_PENDING_LIMIT
+
+    items = [
+        {"department": "部", "assignee": "人", "equipment_no": f"X-{i}", "over_days": 30 - i}
+        for i in range(_DIGEST_PENDING_LIMIT + 5)
+    ]
+    cell = build_digest_cell_payload(
+        open_total=len(items), overdue=len(items), due_30d=0,
+        pending_items=items, incomplete=0, unresolved_owner=0,
+    )
+    assert f"另有 5 件" in cell.detail
+    assert "校验任务" in cell.detail
+    assert cell.detail.count("\n- ") <= _DIGEST_PENDING_LIMIT
 
 async def test_archived_cycle_tasks_not_pulled_into_new_card(db_session):
     """MAJOR3 回归：归档周期的历史任务不进新卡、batch_id 不被改写。"""
@@ -325,7 +360,9 @@ async def test_archived_cycle_tasks_not_pulled_into_new_card(db_session):
     await refresh_department_batch(
         db_session, "提炼一部", user_sender=sender, updater=updater, today=TODAY, now=0.0,
     )
-    batch1 = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
+    batch1 = (await db_session.execute(
+        select(FacilityNoticeBatch).where(FacilityNoticeBatch.department.in_(("提炼一部", "环保中心")))
+    )).scalar_one()
     old.batch_id = batch1.id
     await db_session.flush()
     batch1.status = "archived"  # 模拟全闭环归档
@@ -413,7 +450,9 @@ async def test_private_send_per_assignee_primary_anchors_patch(db_session):
     )
     assert out["action"] == "sent"
     assert [c["open_id"] for c in sender.calls] == ["ou_a", "ou_b"]  # 排序逐个私发
-    batch = (await db_session.execute(select(FacilityNoticeBatch))).scalar_one()
+    batch = (await db_session.execute(
+        select(FacilityNoticeBatch).where(FacilityNoticeBatch.department.in_(("提炼一部", "环保中心")))
+    )).scalar_one()
     assert batch.card_message_id == "om_1"  # 主收件人（首排序）锚定 PATCH
 
 

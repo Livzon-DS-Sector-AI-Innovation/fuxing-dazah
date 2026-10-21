@@ -8,6 +8,9 @@
   （不真起调度循环，照 test_scheduler_semantics 风格注入状态）。
 """
 
+# 任务查询一律按 biz_type=accessory 圈定作用域：dev 库 2026-10-21 08:30 首轮
+# 真实派发已落地 fire 任务，全表计数/one() 断言不再与数据环境无关。
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
@@ -219,7 +222,9 @@ async def test_dispatch_creates_tasks_idempotent(db_session):
     assert r1.created == 1 and r1.no_source is False
     assert r1.departments == ["提炼一部"]
 
-    tasks = (await db_session.execute(select(FacilityCheckTask))).scalars().all()
+    tasks = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().all()
     assert len(tasks) == 1
     t = tasks[0]
     assert t.status == "issued"
@@ -230,14 +235,20 @@ async def test_dispatch_creates_tasks_idempotent(db_session):
     assert t.issued_on == TODAY
     assert t.group_key == "安全阀·校验"
     assert t.assignee_open_id == "ou_张三"
-    events = (await db_session.execute(select(FacilityTaskEvent))).scalars().all()
+    events = (await db_session.execute(
+        select(FacilityTaskEvent).join(FacilityCheckTask).where(
+            FacilityCheckTask.biz_type == BIZ_ACCESSORY
+        )
+    )).scalars().all()
     assert [e.event_type for e in events] == ["issued"]
 
     # 重跑：幂等（不重复建任务、不重复发事件）
     r2 = await run_dispatch(db_session, reader=reader, resolver=FakeResolver(), notifier=NoopNotifier(), today=TODAY,
         digest_pusher=_digest_stub)
     assert r2.created == 0 and r2.skipped_existing == 1
-    tasks2 = (await db_session.execute(select(FacilityCheckTask))).scalars().all()
+    tasks2 = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().all()
     assert len(tasks2) == 1
 
 
@@ -257,7 +268,9 @@ async def test_dispatch_owner_fallback_to_department_leader(db_session):
     )
     assert result.created == 1
     assert result.unresolved_owner == 0
-    t = (await db_session.execute(select(FacilityCheckTask))).scalars().one()
+    t = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().one()
     assert t.assignee_open_id == "ou_leader"
     assert resolver.leader_calls == ["提炼二部"]
 
@@ -276,7 +289,9 @@ async def test_dispatch_owner_unresolved_still_creates_task(db_session):
     )
     assert result.created == 1
     assert result.unresolved_owner == 1
-    t = (await db_session.execute(select(FacilityCheckTask))).scalars().one()
+    t = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().one()
     assert t.assignee_open_id is None
 
 
@@ -300,7 +315,9 @@ async def test_dispatch_reconcile_closes_and_cancels(db_session):
     reader1 = _reader_for({BIZ_ACCESSORY: items1})
     await run_dispatch(db_session, reader=reader1, resolver=FakeResolver(), notifier=NoopNotifier(), today=TODAY,
         digest_pusher=_digest_stub)
-    assert (await db_session.execute(select(FacilityCheckTask))).scalars().all().__len__() == 3
+    assert (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().all().__len__() == 3
 
     # 第二次拉取：keep 行更新了校验时间（锚点前移）；gone 行已删除；stopped 行改停用
     items2 = [
@@ -323,7 +340,9 @@ async def test_dispatch_reconcile_closes_and_cancels(db_session):
     assert r2.reconciled_cancelled == 2
 
     tasks = {t.ledger_key: t for t in (
-        (await db_session.execute(select(FacilityCheckTask))).scalars().all()
+        (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().all()
     )}
     assert tasks["keep"].status == "closed"
     assert tasks["keep"].closed_trigger == "poll"
@@ -364,7 +383,9 @@ async def test_dispatch_reconcile_ignores_unrelated_change(db_session):
         today=TODAY + timedelta(days=1), digest_pusher=_digest_stub,
     )
     assert r2.reconciled_closed == 0 and r2.reconciled_cancelled == 0
-    t = (await db_session.execute(select(FacilityCheckTask))).scalars().one()
+    t = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().one()
     assert t.status == "issued"
 
 
@@ -421,7 +442,9 @@ async def test_dispatch_no_source_when_all_unconfigured(db_session):
     )
     assert result.no_source is True
     assert result.created == 0
-    assert (await db_session.execute(select(FacilityCheckTask))).scalars().first() is None
+    assert (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().first() is None
 
 
 async def test_dispatch_query_error_raises(db_session):
@@ -494,7 +517,9 @@ async def test_dispatch_redispatches_after_cancelled(db_session):
         today=TODAY, digest_pusher=_digest_stub,
     )
     assert r1.created == 1
-    t = (await db_session.execute(select(FacilityCheckTask))).scalars().one()
+    t = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().one()
     t.status = "cancelled"
     t.closed_reason = "台账状态停用：停用"
     await db_session.flush()
@@ -505,7 +530,9 @@ async def test_dispatch_redispatches_after_cancelled(db_session):
         today=TODAY, digest_pusher=_digest_stub,
     )
     assert r2.created == 1 and r2.skipped_existing == 0
-    tasks = (await db_session.execute(select(FacilityCheckTask))).scalars().all()
+    tasks = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().all()
     assert len(tasks) == 2
     assert [t.status for t in tasks] == ["cancelled", "issued"]
 
@@ -529,7 +556,9 @@ async def test_dispatch_same_run_no_false_close(db_session):
         today=TODAY, digest_pusher=_digest_stub,
     )
     assert r.created == 1 and r.reconciled_closed == 0
-    t = (await db_session.execute(select(FacilityCheckTask))).scalars().one()
+    t = (await db_session.execute(
+        select(FacilityCheckTask).where(FacilityCheckTask.biz_type == BIZ_ACCESSORY)
+    )).scalars().one()
     assert t.status == "issued"
 
     # 次日对账（非同轮）才按「上次≥派发日」判定闭环

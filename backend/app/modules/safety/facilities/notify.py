@@ -40,6 +40,9 @@ DIGEST_KEY = "facility_check"
 PATCH_THROTTLE_SECONDS = 5 * 60
 _LAST_REFRESH_AT: dict[str, float] = {}  # batch_id hex -> monotonic 时间戳
 
+# 速递格子待闭环跟进项展示上限（超出折叠提示见任务中心，防撑爆总卡预算）
+_DIGEST_PENDING_LIMIT = 15
+
 
 def _bj_today() -> date:
     return (datetime.now(UTC) + timedelta(hours=8)).date()
@@ -427,22 +430,38 @@ def build_digest_cell_payload(
     open_total: int,
     overdue: int,
     due_30d: int,
-    top_overdue: list[dict[str, Any]],
+    pending_items: list[dict[str, Any]],
     incomplete: int,
     unresolved_owner: int,
 ) -> DigestCell:
-    """全厂口径速递格子（分桶计数 + 逾期 Top + ⚪ 信息不全倒逼补录）。"""
+    """全厂口径速递格子（分桶计数 + 待闭环跟进项清单 + ⚪ 信息不全倒逼补录）。
+
+    2026-10-20 需求：待闭环跟进项全部展示（不只逾期 Top）——按逾期最深
+    排序逐行列出（部门·责任人｜设备｜逾期/剩 N 天）；超过上限折叠提示
+    见任务中心，防格子撑爆总卡预算。
+    """
     lines: list[str] = []
-    if overdue:
-        lines.append("**逾期 Top**（红档=逾期>7 天）：")
-        for item in top_overdue[:5]:
-            flag = "🔴" if item["over_days"] > 7 else "🟠"
+    if pending_items:
+        lines.append(f"**待闭环跟进项（{open_total}）**（已私发跟进卡，更新表格校验时间即自动闭环）：")
+        shown = pending_items[:_DIGEST_PENDING_LIMIT]
+        for item in shown:
+            over = item["over_days"]
+            if over > 7:
+                flag = "🔴"
+            elif over > 0:
+                flag = "🟠"
+            else:
+                flag = "⏳"
+            state = f"逾期 {over} 天" if over > 0 else f"剩 {-over} 天"
             lines.append(
-                f"- {flag} {item['department']}｜{item['equipment_no']}｜"
-                f"{item['group_key']}｜逾期 {item['over_days']} 天"
+                f"- {flag} {item['department']}·{item.get('assignee') or '—'}｜"
+                f"{item['equipment_no']}｜{state}"
             )
+        hidden = open_total - len(shown)
+        if hidden > 0:
+            lines.append(f"……另有 {hidden} 件，详见 /safety/facilities 校验任务")
     else:
-        lines.append("今日无逾期校验任务")
+        lines.append("今日无待闭环校验任务")
     if incomplete or unresolved_owner:
         lines.append("")
         lines.append(

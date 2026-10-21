@@ -14,7 +14,9 @@ from sqlalchemy import select
 
 from app.modules.safety.models import FacilityCheckTask, FacilityTaskEvent
 
-TODAY = date(2026, 10, 20)
+# 动态今天（北京时间口径，与 query._bj_today 一致）：固定日期会在跨天后
+# 把 due=今天 的种子行翻转成逾期（2026-10-21 实际踩过）
+TODAY = (datetime.now(UTC) + timedelta(hours=8)).date()
 
 
 def _mk(ledger_key: str, *, dept: str, group: str, status: str = "issued",
@@ -62,7 +64,9 @@ async def _seed(db):
 async def test_list_tasks_filters_and_pagination(sealed_client):
     ac, db = sealed_client
     await _seed(db)
-    resp = await ac.get("/api/v1/safety/facility-tasks")
+    # biz_type 圈定：dev 库 2026-10-21 首轮真实派发已有 fire 任务
+    resp = await ac.get("/api/v1/safety/facility-tasks",
+                        params={"biz_type": "accessory"})
     assert resp.status_code == 200
     body = resp.json()["data"]
     assert body["total"] == 5
@@ -74,7 +78,8 @@ async def test_list_tasks_filters_and_pagination(sealed_client):
     items = resp.json()["data"]["items"]
     assert [i["ledger_key"] for i in items] == ["k2", "k1"]  # 逾期在前
 
-    resp = await ac.get("/api/v1/safety/facility-tasks", params={"overdue": True})
+    resp = await ac.get("/api/v1/safety/facility-tasks",
+                        params={"overdue": True, "biz_type": "accessory"})
     items = resp.json()["data"]["items"]
     assert [i["ledger_key"] for i in items] == ["k2"]
     assert items[0]["overdue"] is True and items[0]["remaining_days"] == -2
@@ -88,7 +93,8 @@ async def test_list_tasks_filters_and_pagination(sealed_client):
 async def test_task_summary_buckets(sealed_client):
     ac, db = sealed_client
     await _seed(db)
-    resp = await ac.get("/api/v1/safety/facility-tasks/summary")
+    resp = await ac.get("/api/v1/safety/facility-tasks/summary",
+                        params={"biz_type": "accessory"})
     data = resp.json()["data"]
     assert data["total"] == 5
     assert data["open"] == 3
