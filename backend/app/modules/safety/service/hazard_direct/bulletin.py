@@ -10,6 +10,11 @@
 @ 提及标识优先直取记录「整改责任人」人员字段自带的 open_id（读取应用作用域，
 与卡片 @ 同源）；部门映射产生的表外人名才回退 ``feishu.mention``（identity
 桥接，通讯录同步未部署时多数解析不到，退化为纯文本姓名）。
+
+外审节（2026-10-21 拍板）：同一份通报追加「外部审计隐患」节——外审缺陷项
+汇总表直读（``external_audit``），**未关闭即红色预警**、已关闭仅计数、不看
+目标期限；并入本格（不新增速递格子）。源未配置/停用/拉取失败时外审节整体
+缺席，内部部分输出与历史逐字节一致（值守轮询不会因此误判变化）。
 """
 
 from __future__ import annotations
@@ -108,6 +113,32 @@ def _record_link(view: bitable_repo.HazardView, app_token: str, table_id: str) -
     return f"[📋 查看记录]({url})"
 
 
+async def _load_external_section() -> tuple[list[str], dict[str, Any]]:
+    """拉取并渲染外审节（源缺席/故障时返回空，通报与现状一致）。
+
+    外审源故障只告警不影响内部督办投递（两源独立 try/except）；记录链接的
+    app_token/table_id 取自外审域连接（连接不可用时链接缺省，明细照发）。
+    """
+    from app.modules.safety.service.hazard_direct import external_audit
+
+    try:
+        views = await external_audit.fetch_external_audit()
+    except Exception:
+        logger.warning("外审缺陷项拉取失败，本次通报不含外审节", exc_info=True)
+        return [], {}
+    if not views:
+        return [], {}  # 源缺席 / 空表：整节缺席（不出只有标题的空节）
+
+    from app.modules.safety.bitable_config.store import store
+
+    conn = store.get_connection(external_audit.DOMAIN, external_audit.KIND)
+    app_token = conn.app_token if conn and conn.status != "disabled" else ""
+    table_id = conn.table_id if conn and conn.status != "disabled" else ""
+    return external_audit.build_external_section(
+        views, app_token=app_token, table_id=table_id,
+    )
+
+
 async def build_bulletin() -> tuple[str, dict[str, Any]]:
     """生成督办通报 Markdown（不推送）。"""
     from app.modules.safety.bitable_config.store import store
@@ -133,14 +164,22 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
         views.append(view)
 
     now = datetime.now().strftime("%Y-%m-%d")
-    stats: dict[str, Any] = {"total": len(views), "urgent": 0, "warning": 0, "marked": 0}
-    if not views:
-        return (
-            f"【隐患督办通报】\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 {now}\n\n"
-            f"✅ **今日无红色预警/一般预警隐患**\n"
-        ), stats
+    # 外审节先渲染（源缺席/故障 → 空节空统计，输出与现状逐字节一致）
+    ext_lines, ext_stats = await _load_external_section()
+    ext_open = int(ext_stats.get("ext_open") or 0)
+    stats: dict[str, Any] = {
+        "total": len(views), "urgent": 0, "warning": 0, "marked": 0,
+        **ext_stats,
+    }
+    if not views and not ext_open:
+        parts = [
+            "【隐患督办通报】", "━" * 20, f"📅 {now}", "",
+            "✅ **今日无红色预警/一般预警隐患**",
+        ]
+        if ext_stats.get("ext_closed"):
+            parts += ["", f"✅ 外审缺陷项已全部关闭（累计 {ext_stats['ext_closed']} 条）"]
+        parts.append("")
+        return "\n".join(parts), stats
 
     # 未更新进展标记（现算，不落库）
     marks = await progress_track.compute_marks(views)
@@ -211,61 +250,81 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
         urgent=total_urgent, warning=total_warning, marked=total_no_progress
     )
 
-    parts: list[str] = ["【隐患督办通报】", "━━━━━━━━━━━━━━━━━━━━", f"📅 {now}", ""]
-    parts.append(
-        f"🔴 红色预警 **{total_urgent}** 条  ·  "
-        f"🟡 一般预警 **{total_warning}** 条  ·  "
-        f"涉及 **{len(sorted_depts)}** 个部门"
-    )
-    if total_no_progress:
-        parts.append(f"⚠️ 未更新进展 **{total_no_progress}** 条")
-    parts.append("")
-
-    for dept in sorted_depts:
-        items = urgent_by_dept.get(dept, [])
-        if not items:
-            continue
-        count_str = f"（{len(items)}条）" if len(items) > 1 else ""
-        mentions = "　".join(_person_at(p) for p in dept_persons.get(dept, []))
-        dept_head = f"**{dept}{count_str}**"
-        if mentions:
-            dept_head += f"　{mentions}"
-        parts.append(dept_head)
-
-        for idx, view in enumerate(items, 1):
-            days = (
-                (datetime.now(UTC).date() - view.discovered_at.date()).days
-                if view.discovered_at else 0
-            )
-            level_label = _level_label(view.hazard_level_manual or view.hazard_level)
-            if level_label not in ("-",) and not level_label.endswith("隐患"):
-                level_label += "隐患"
-            inspection = (view.inspection_category or "-").replace(", ", "、").replace(",", "、")
-            link = _record_link(view, app_token, table_id)
-            no_progress_flag = (
-                "　⚠️**未更新进展**"
-                if view.supervision_progress_status
-                == progress_track.PROGRESS_STATUS_NOT_UPDATED else ""
-            )
-            parts.append(f"**{idx}.** {_full_desc(view)}")
-            parts.append(
-                f"等级：{level_label}｜检查类型：{inspection}｜{days}天{no_progress_flag}"
-            )
-            if link:
-                parts.append(link)
+    parts: list[str] = ["【隐患督办通报】", "━" * 20, f"📅 {now}", ""]
+    if views:
+        parts.append(
+            f"🔴 红色预警 **{total_urgent}** 条  ·  "
+            f"🟡 一般预警 **{total_warning}** 条  ·  "
+            f"涉及 **{len(sorted_depts)}** 个部门"
+        )
+        if ext_open:
+            parts.append(f"🔴 外审未关闭 **{ext_open}** 条")
+        if total_no_progress:
+            parts.append(f"⚠️ 未更新进展 **{total_no_progress}** 条")
         parts.append("")
 
-    parts.append("━━━━━━━━━━━━━━━━━━━━")
+        for dept in sorted_depts:
+            items = urgent_by_dept.get(dept, [])
+            if not items:
+                continue
+            count_str = f"（{len(items)}条）" if len(items) > 1 else ""
+            mentions = "　".join(_person_at(p) for p in dept_persons.get(dept, []))
+            dept_head = f"**{dept}{count_str}**"
+            if mentions:
+                dept_head += f"　{mentions}"
+            parts.append(dept_head)
+
+            for idx, view in enumerate(items, 1):
+                days = (
+                    (datetime.now(UTC).date() - view.discovered_at.date()).days
+                    if view.discovered_at else 0
+                )
+                level_label = _level_label(view.hazard_level_manual or view.hazard_level)
+                if level_label not in ("-",) and not level_label.endswith("隐患"):
+                    level_label += "隐患"
+                inspection = (view.inspection_category or "-").replace(", ", "、").replace(",", "、")
+                link = _record_link(view, app_token, table_id)
+                no_progress_flag = (
+                    "　⚠️**未更新进展**"
+                    if view.supervision_progress_status
+                    == progress_track.PROGRESS_STATUS_NOT_UPDATED else ""
+                )
+                parts.append(f"**{idx}.** {_full_desc(view)}")
+                parts.append(
+                    f"等级：{level_label}｜检查类型：{inspection}｜{days}天{no_progress_flag}"
+                )
+                if link:
+                    parts.append(link)
+            parts.append("")
+    else:
+        parts.append("✅ **今日无红色预警/一般预警隐患**")
+        parts.append("")
+
+    # ── 外部审计隐患节（源缺席时 ext_lines 为空，整节自动缺席）──
+    parts.extend(ext_lines)
+
+    # ── 底部部门汇总：内部排序保持不动，外审部门段并入 / 追加 ──
+    ext_by_dept: dict[str, int] = {
+        str(k): int(v)
+        for k, v in (ext_stats.get("ext_by_dept") or {}).items()
+    }
+    summary_depts = list(sorted_depts) + sorted(
+        d for d in ext_by_dept if d not in set(sorted_depts)
+    )
+    parts.append("━" * 20)
     parts.append("📌 各部门未关闭隐患数量汇总")
-    parts.append("━━━━━━━━━━━━━━━━━━━━")
-    for dept in sorted_depts:
+    parts.append("━" * 20)
+    for dept in summary_depts:
         ug = len(urgent_by_dept.get(dept, []))
         wn = dept_warning_count.get(dept, 0)
+        ext_n = ext_by_dept.get(dept, 0)
         segs: list[str] = []
         if ug:
             segs.append(f"红色预警 {ug} 条")
         if wn:
             segs.append(f"一般预警 {wn} 条")
+        if ext_n:
+            segs.append(f"外审未关闭 {ext_n} 条")
         parts.append(f"**{dept}**：{'　+　'.join(segs)}")
     parts.append("")
 
@@ -276,6 +335,26 @@ async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
     """生成并推送督办通报到群聊（总卡开启时只投「安全速递」格子）。"""
     content, stats = await build_bulletin()
     return await deliver_bulletin(content, stats, chat_id)
+
+
+def _overview_stats_line(stats: dict[str, Any]) -> str:
+    """速递格子概览统计行：外审未关闭并入红色预警计数并标注「含外审 N」。
+
+    外审缺席（ext_open=0/缺键）时与原文案逐字节一致——值守轮询按整格
+    detail 逐字比对，统计行不因上线抖动。
+    """
+    ext_open = int(stats.get("ext_open") or 0)
+    if not ext_open:
+        return (
+            f"未关闭 **{stats.get('total', 0)}** 项 ｜ "
+            f"🔴 红色预警 {stats.get('urgent', 0)} · "
+            f"🟡 一般预警 {stats.get('warning', 0)}"
+        )
+    return (
+        f"未关闭 **{stats.get('total', 0) + ext_open}** 项 ｜ "
+        f"🔴 红色预警 {stats.get('urgent', 0) + ext_open}"
+        f"（含外审 {ext_open}） · 🟡 一般预警 {stats.get('warning', 0)}"
+    )
 
 
 async def deliver_bulletin(
@@ -306,11 +385,7 @@ async def deliver_bulletin(
                     tag_color="yellow",
                     tag_text="隐患督办",
                     title="隐患督办通报",
-                    stats=(
-                        f"未关闭 **{stats.get('total', 0)}** 项 ｜ "
-                        f"🔴 红色预警 {stats.get('urgent', 0)} · "
-                        f"🟡 一般预警 {stats.get('warning', 0)}"
-                    ),
+                    stats=_overview_stats_line(stats),
                     zone="请各责任部门尽快反馈整改进展",
                     detail=content,
                 ),

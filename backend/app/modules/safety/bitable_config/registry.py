@@ -1,7 +1,7 @@
 """Bitable 配置域注册表 — 安全模块多维表格配置的代码唯一事实源。
 
-14 域 / 24 条连接行（backend-design §1）——现已增长为 19 域 / 26 条连接行
-（visitor_notice + 四期四占位域；占位域无连接行）。本文件是：
+14 域 / 24 条连接行（backend-design §1）——现已增长为 20 域 / 27 条连接行
+（visitor_notice + external_audit_hazard + 四期四占位域；占位域无连接行）。本文件是：
 
 1. **migration 播种的来源**（单向导出，禁止手抄，防双份常量漂移）；
 2. **运行时 fallback**：DB 缺行/停用时 store 回退到 ``default_connection`` /
@@ -1099,6 +1099,26 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                     app_token="L3bcbKXV8a9VdisU6PFcNGN8n8i",
                     table_id="tbloisRVTbETLmzF",
                     note="外来人员安全培训通知单 - 预报备审批流程（保险到期预警数据源）",
+                ),
+            ),
+        ),
+    ),
+    # ── external_audit_hazard 外部审计隐患（督办通报外审节直读源，纯只读）──
+    DomainInfo(
+        key="external_audit_hazard",
+        label="外部审计隐患",
+        purpose="外审缺陷项汇总表（督办通报外审节直读源；未关闭即红色预警，无事件订阅）",
+        subscribe="record",
+        kinds=(
+            # 后续新外审源同模式加 kind：一源一 kind，连接独立可停，
+            # 字段名沿用本套（新源表字段名不同时在该 kind 上加覆盖）
+            KindInfo(
+                kind="defect_summary",
+                label="外审缺陷项汇总表",
+                default_connection=DefaultConnection(
+                    app_token="R8uBb4OBQanS95sXcgjcW9HbnEe",
+                    table_id="tbl9RjRjKMeo6B1b",
+                    note="江阴管委会安全检查缺陷项汇总（2026-04-10 建表按批次复用）",
                 ),
             ),
         ),
