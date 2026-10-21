@@ -138,6 +138,13 @@ class ModuleHealthOut(BaseModel):
     metric: str | None = None
 
 
+class FacilityTasksOut(BaseModel):
+    """设施校验任务计数（facilities 卡任务口径覆盖源；前端告警条可用）。"""
+
+    open: int = 0
+    overdue: int = 0
+
+
 class OverviewOut(BaseModel):
     date: str = Field(description="北京日 iso")
     generated_at: datetime
@@ -148,6 +155,7 @@ class OverviewOut(BaseModel):
     chemicals: ChemicalsOut | None = None
     key_risk_ops: KeyRiskOpsOut | None = None
     ehs: EhsOut | None = None
+    facility_tasks: FacilityTasksOut | None = None
     digest: DigestOut | None = None
     module_health: list[ModuleHealthOut] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list, description="降级域标注")
