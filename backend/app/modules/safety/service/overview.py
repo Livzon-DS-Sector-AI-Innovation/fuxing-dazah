@@ -457,16 +457,17 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
     # 四新域卡（四期 1-B）：三态=未接入 inactive·「未接入」/ 接入后 ok|warn 按蓝本
     # 判据 / 采集降级 inactive·无指标（口径 domain_pages.module_health_card）
     cards.extend(module_health_card(key, parts.get(key)) for key in DOMAIN_PAGE_KEYS)
-    # facilities 卡任务口径覆盖（facilities-p1）：台账已接入（卡非 inactive）
-    # 且已有校验任务时以任务计数为准（逾期>0 → warn 告警卡）；未接入/无任务/
-    # 采集降级保持三态口径——避免空库把「未接入」盖成假 ok
+    # facilities 卡任务口径覆盖（facilities-p1；2026-10-21 修正）：有在办任务
+    # （open/overdue>0）即以任务计数为准——任务存在本身证明已有台账接入并跑过
+    # 派发，不再要求域卡非 inactive（域健康查的是四期蓝本旧 kind 的连接，
+    # 三台账新 kind 已接入时旧 kind 仍空连接，曾把卡死锁在「未接入」）；
+    # 无任务时保持三态口径——避免空库把「未接入」盖成假 ok
     facility_tasks = parts.get("facility_tasks")
     facilities_card = next((c for c in cards if c["key"] == "facilities"), None)
     if (
         facility_tasks
         and (facility_tasks["open"] or facility_tasks["overdue"])
         and facilities_card is not None
-        and facilities_card.get("status") != "inactive"
     ):
         facilities_card["status"] = (
             "warn" if facility_tasks["overdue"] > 0 else "ok"
@@ -570,6 +571,7 @@ async def build_overview(
         "chemicals": parts["chemicals"],
         "key_risk_ops": parts["key_risk_ops"],
         "ehs": parts["ehs"],
+        "facility_tasks": parts["facility_tasks"],
         "digest": parts["digest"],
         "module_health": _build_module_health(parts),
         "errors": errors,

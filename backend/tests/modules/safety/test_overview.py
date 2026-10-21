@@ -157,6 +157,7 @@ class TestBuildOverview:
         assert data["key_risk_ops"]["today_approved"] == 3
         assert data["ehs"]["in_progress"] == 4
         assert data["digest"]["count"] == 1
+        assert data["facility_tasks"] == {"open": 3, "overdue": 1}  # 2026-10-21 出参
         assert data["errors"] == []
 
         wall = {c["key"]: c for c in data["module_health"]}
@@ -172,7 +173,13 @@ class TestBuildOverview:
         # 四新域卡（四期 1-B）：未接入是常态（registry 连接位空）→ inactive·未接入
         assert wall["goals"] == {"key": "goals", "status": "inactive", "metric": "未接入"}
         assert wall["training-behavior"]["metric"] == "未接入"
-        assert wall["facilities"]["metric"] == "未接入"
+        # facilities：域卡虽「未接入」（蓝本旧 kind 连接位空），但有在办任务
+        # （open=3>0）→ 任务口径覆盖（2026-10-21 修复：不再被 inactive 卡死）
+        assert wall["facilities"] == {
+            "key": "facilities",
+            "status": "warn",
+            "metric": "校验待闭环 3 · 逾期 1",
+        }
         assert wall["incidents"]["metric"] == "未接入"
         # 监督卡（三期起步）：最近一次审核真实指标，违规>0 → 黄
         assert wall["supervision"] == {
@@ -246,6 +253,13 @@ class TestBuildOverview:
 
         stubs["goals"] = live_warn
         stubs["facilities"] = boom
+        # 降级灰卡断言须配空任务桩：有在办任务时任务口径会覆盖降级卡
+        # （2026-10-21 起 inactive/降级都不再阻塞覆盖）
+
+        async def tasks_clear() -> dict[str, Any]:
+            return {"open": 0, "overdue": 0}
+
+        stubs["facility_tasks"] = tasks_clear
         data = await build_overview(collectors=stubs)
         wall = {c["key"]: c for c in data["module_health"]}
         assert len(wall) == 17
@@ -269,6 +283,28 @@ class TestBuildOverview:
         # 未 stub 的两域走真采集器 → 未接入（registry 连接位空）
         assert wall["training-behavior"]["metric"] == "未接入"
         assert wall["incidents"]["status"] == "inactive"
+
+    async def test_facility_card_task_override_over_inactive(self) -> None:
+        """2026-10-21 修复回归：域卡「未接入」（蓝本旧 kind 连接位空）+
+        有在办任务 → 任务口径覆盖为 warn——三台账新 kind 已接入时
+        域健康看不见新连接，曾把卡死锁在「未接入」。"""
+        stubs = _stub_collectors()  # facilities 未 stub → 真采集 → 未接入
+        data = await build_overview(collectors=stubs)
+        wall = {c["key"]: c for c in data["module_health"]}
+        assert wall["facilities"]["status"] == "warn"
+        assert wall["facilities"]["metric"] == "校验待闭环 3 · 逾期 1"
+
+        # 逾期 0 → ok 口径
+        async def facility_tasks_soon() -> dict[str, Any]:
+            return {"open": 2, "overdue": 0}
+
+        stubs_ok = _stub_collectors()
+        stubs_ok["facility_tasks"] = facility_tasks_soon
+        wall_ok = {
+            c["key"]: c for c in (await build_overview(collectors=stubs_ok))["module_health"]
+        }
+        assert wall_ok["facilities"]["status"] == "ok"
+        assert wall_ok["facilities"]["metric"] == "校验待闭环 2 · 逾期 0"
 
 
 class TestCollectSupervision:
