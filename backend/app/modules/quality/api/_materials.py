@@ -1262,6 +1262,9 @@ async def create_retained_sample_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:material:manage")),
 ) -> JSONResponse:
+    existing = [r for r in await list_retained_samples(db, batch_no=payload.batch_no) if r.batch_no == payload.batch_no]
+    if existing:
+        raise HTTPException(status_code=409, detail=f"批号 {payload.batch_no} 已有留样登记，请直接编辑已有记录")
     rec = await create_retained_sample(db, {**payload.model_dump(), "created_by": user.id})
     item = await get_retained_sample_with_names(db, rec.id)
     return success_response(
@@ -1282,6 +1285,8 @@ async def update_retained_sample_endpoint(
         raise HTTPException(status_code=404, detail="记录不存在")
     if rec.status == "destroyed":
         raise HTTPException(status_code=400, detail="已销毁的留样不可修改")
+    if rec.destroyed_by is not None:
+        raise HTTPException(status_code=400, detail="销毁登记已提交、等待第二人确认，暂不可编辑")
     data = {**payload.model_dump(exclude_none=True), "updated_by": user.id}
     await update_retained_sample(db, record_id, data)
     item = await get_retained_sample_with_names(db, record_id)
@@ -1358,21 +1363,28 @@ async def export_retained_samples_endpoint(
 
     from app.modules.quality import lc_template_parser
 
-    rows = await list_retained_samples(db, source_type=source_type, batch_no=batch_no, status=status)
+    rows = await list_retained_samples_with_names(
+        db, source_type=source_type, batch_no=batch_no, status=status
+    )
     wb = openpyxl.Workbook()
     ws = lc_template_parser.active_sheet(wb)
     ws.title = "留样台账"
-    ws.append(["类型", "品名", "批号", "留样量", "贮存位置", "留样日期", "销毁到期日", "销毁日期", "状态", "备注"])
+    ws.append([
+        "类型", "品名", "批号", "留样量", "贮存位置", "留样日期", "销毁到期日",
+        "销毁日期", "销毁登记人", "销毁确认人", "状态", "备注",
+    ])
     type_label = {"product": "成品", "material": "物料"}
     for r in rows:
         ws.append([
-            type_label.get(r.source_type, r.source_type),
-            r.sample_name, r.batch_no,
-            r.qty or "-", r.location or "-",
-            r.retained_at or "-", r.destroy_due_date or "-",
-            r.destroyed_at or "-",
-            "已销毁" if r.status == "destroyed" else "在留",
-            r.remark or "-",
+            type_label.get(r["source_type"], r["source_type"]),
+            r["sample_name"], r["batch_no"],
+            r["qty"] or "-", r["location"] or "-",
+            r["retained_at"] or "-", r["destroy_due_date"] or "-",
+            r["destroyed_at"] or "-",
+            r["destroyed_by_name"] or "-",
+            r["destroy_confirm_by_name"] or "-",
+            "已销毁" if r["status"] == "destroyed" else "在留",
+            r["remark"] or "-",
         ])
     buf = _io.BytesIO()
     wb.save(buf)

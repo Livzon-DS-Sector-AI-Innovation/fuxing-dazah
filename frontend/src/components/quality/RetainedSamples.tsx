@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, App, Button, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, DatePicker, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Typography } from 'antd'
 import { DownloadOutlined, PlusOutlined, SearchOutlined, WarningOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
@@ -32,6 +32,7 @@ export default function RetainedSamples() {
   const [batchFilter, setBatchFilter] = useState<string | undefined>()
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
+  const [sortByDue, setSortByDue] = useState<boolean>(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState<RetainedSample | null>(null)
   const [saving, setSaving] = useState(false)
@@ -64,6 +65,16 @@ export default function RetainedSamples() {
     return { expired: expired.length, soon: soon.length }
   }, [data])
 
+  // 按销毁到期日排序：在留在前、到期早的在前，无到期日垫底
+  const sortedData = useMemo(() => {
+    if (!sortByDue) return data
+    const rank = (v: string | null) => (v ? dayjs(v).valueOf() : Number.MAX_SAFE_INTEGER)
+    return [...data].sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'active' ? -1 : 1
+      return rank(a.destroy_due_date) - rank(b.destroy_due_date)
+    })
+  }, [data, sortByDue])
+
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
@@ -87,10 +98,16 @@ export default function RetainedSamples() {
 
   const onSave = async () => {
     const values = await form.validateFields()
+    const retained = values.retained_at as Dayjs | undefined
+    const due = values.destroy_due_date as Dayjs | undefined
+    if (retained && due && due.startOf('day').isBefore(retained.startOf('day'))) {
+      message.error('销毁到期日不能早于留样日期')
+      return
+    }
     const payload = {
       ...values,
-      retained_at: values.retained_at ? (values.retained_at as Dayjs).format('YYYY-MM-DD') : undefined,
-      destroy_due_date: values.destroy_due_date ? (values.destroy_due_date as Dayjs).format('YYYY-MM-DD') : undefined,
+      retained_at: retained ? retained.format('YYYY-MM-DD') : undefined,
+      destroy_due_date: due ? due.format('YYYY-MM-DD') : undefined,
     }
     setSaving(true)
     try {
@@ -112,16 +129,22 @@ export default function RetainedSamples() {
 
   const openDestroy = (item: RetainedSample) => {
     destroyForm.resetFields()
+    destroyForm.setFieldsValue({ destroyed_at: dayjs() })
     setDestroyOpen(item)
   }
 
   const onDestroy = async () => {
     if (!destroyOpen) return
     const values = await destroyForm.validateFields()
+    const destroyed = values.destroyed_at as Dayjs
+    if (destroyOpen.retained_at && destroyed.startOf('day').isBefore(dayjs(destroyOpen.retained_at).startOf('day'))) {
+      message.error('销毁日期不能早于留样日期')
+      return
+    }
     setDestroySaving(true)
     try {
       const res = await destroyRetainedSample(destroyOpen.id, {
-        destroyed_at: (values.destroyed_at as Dayjs).format('YYYY-MM-DD'),
+        destroyed_at: destroyed.format('YYYY-MM-DD'),
         remark: values.remark,
       })
       message.success(res.message)
@@ -193,6 +216,15 @@ export default function RetainedSamples() {
             { value: 'destroyed', label: '已销毁' },
           ]}
         />
+        <Segmented
+          size="middle"
+          value={sortByDue ? 'due' : 'created'}
+          onChange={(v) => setSortByDue(v === 'due')}
+          options={[
+            { value: 'created', label: '按登记时间' },
+            { value: 'due', label: '按销毁到期日' },
+          ]}
+        />
         {canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>留样登记</Button>
         )}
@@ -203,7 +235,7 @@ export default function RetainedSamples() {
         rowKey="id"
         size="small"
         loading={loading}
-        dataSource={data}
+        dataSource={sortedData}
         scroll={{ x: 1250 }}
         pagination={{ pageSize: 20 }}
         columns={[
@@ -262,7 +294,7 @@ export default function RetainedSamples() {
                   {item.status === 'active' && (
                     <Button
                       size="small" type="link"
-                      style={{ color: item.destroyed_by ? '#fa8c16' : '#cf1322' }}
+                      danger={!item.destroyed_by}
                       onClick={() => openDestroy(item)}
                     >
                       {item.destroyed_by ? '销毁确认' : '销毁登记'}
