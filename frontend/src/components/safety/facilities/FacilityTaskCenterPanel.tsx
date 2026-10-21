@@ -23,12 +23,12 @@ import {
 } from '@/lib/api/safety/facilities'
 import type { FacilityTask, FacilityTaskSummary } from '@/types/safety/facilities'
 import { EmptyGuide, SectionCard, StatCard } from '@/components/ui-kit'
-
-const STATUS_UI: Record<string, { label: string; color: string }> = {
-  issued: { label: '待闭环', color: 'orange' },
-  closed: { label: '已闭环', color: 'green' },
-  cancelled: { label: '已取消', color: 'default' },
-}
+import {
+  FACILITY_TASK_STATUS_UI,
+  OVERDUE_WARN,
+  facilityStatusUI,
+  overdueColor,
+} from './facilitiesConstants'
 
 const TRIGGER_UI: Record<string, string> = {
   event: '表格变更事件',
@@ -55,15 +55,16 @@ function fmtDate(value: string | null): string {
   return value ? value.slice(0, 10) : '—'
 }
 
-function StatusTagCell({ status }: { status: string }) {
-  const ui = STATUS_UI[status] ?? { label: status, color: 'default' }
+function StatusTagCell({ status, bizType }: { status: string; bizType?: string | null }) {
+  const ui = facilityStatusUI(status, bizType)
   return <Tag color={ui.color}>{ui.label}</Tag>
 }
 
 export default function FacilityTaskCenterPanel() {
   const queryClient = useQueryClient()
   const [view, setView] = useState<'list' | 'group'>('list')
-  const [status, setStatus] = useState<string | undefined>()
+  // 默认只见未完成（「已闭环不再展示」拍板）；已闭环/已取消经筛选器显式查看
+  const [status, setStatus] = useState<string | undefined>('issued')
   const [department, setDepartment] = useState('')
   const [bizType, setBizType] = useState<string | undefined>()
   const [overdueOnly, setOverdueOnly] = useState(false)
@@ -136,8 +137,11 @@ export default function FacilityTaskCenterPanel() {
       width: 90,
       render: (v: number | null, row) => {
         if (row.status !== 'issued' || v === null || v === undefined) return '—'
-        if (v < 0) return <span style={{ color: '#e2585d', fontWeight: 600 }}>逾期 {Math.abs(v)} 天</span>
-        if (v <= 7) return <span style={{ color: '#d9822b', fontWeight: 600 }}>{v} 天</span>
+        if (v < 0) {
+          const color = overdueColor(v)
+          if (color) return <span style={{ color, fontWeight: 600 }}>逾期 {Math.abs(v)} 天</span>
+        }
+        if (v <= 7) return <span style={{ color: OVERDUE_WARN, fontWeight: 600 }}>{v} 天</span>
         return `${v} 天`
       },
     },
@@ -145,7 +149,7 @@ export default function FacilityTaskCenterPanel() {
       title: '状态',
       dataIndex: 'status',
       width: 88,
-      render: (v: string) => <StatusTagCell status={v} />,
+      render: (v: string, row) => <StatusTagCell status={v} bizType={row.biz_type} />,
     },
     {
       title: '闭环通道',
@@ -154,6 +158,22 @@ export default function FacilityTaskCenterPanel() {
       render: (v: string | null) => (v ? TRIGGER_UI[v] ?? v : '—'),
     },
     { title: '催办', dataIndex: 'remind_count', width: 60 },
+    {
+      title: '记录',
+      dataIndex: 'record_url',
+      width: 88,
+      render: (v: string | null) =>
+        v ? (
+          <a
+            href={v}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            打开记录
+          </a>
+        ) : null,
+    },
   ]
 
   const detail = detailQuery.data
@@ -249,7 +269,10 @@ export default function FacilityTaskCenterPanel() {
                 setStatus(v)
                 setPage(1)
               }}
-              options={Object.entries(STATUS_UI).map(([value, ui]) => ({ value, label: ui.label }))}
+              options={Object.entries(FACILITY_TASK_STATUS_UI).map(([value, ui]) => ({
+                value,
+                label: ui.label,
+              }))}
             />
             <Select
               size="small"
@@ -385,7 +408,7 @@ export default function FacilityTaskCenterPanel() {
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-x-4 gap-y-1" style={{ fontSize: 13 }}>
               <span>设备：<b>{detailTask.equipment_no ?? '—'}</b>（{detailTask.equipment_name ?? '—'}）</span>
-              <span>状态：<StatusTagCell status={detailTask.status} /></span>
+              <span>状态：<StatusTagCell status={detailTask.status} bizType={detailTask.biz_type} /></span>
               <span>台账类型：{detailTask.biz_label} · {detailTask.task_kind}</span>
               <span>分组：{detailTask.group_key}</span>
               <span>部门：{detailTask.department ?? '未填写'}</span>

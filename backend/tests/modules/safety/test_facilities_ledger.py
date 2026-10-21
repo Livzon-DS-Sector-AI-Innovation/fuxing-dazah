@@ -320,3 +320,41 @@ def test_url_key_biz_mapping_roundtrip():
     assert ledger.LEAD_DAYS[BIZ_ACCESSORY] == 30
     # 消防 60 天：灭火器换新含采购周期约 2 个月（2026-10-20 拍板）
     assert ledger.LEAD_DAYS[BIZ_FIRE] == 60
+
+
+# ── 行输出 record_url（facilities-frontend：连接已配/未配两态）───────
+
+
+async def test_ledger_page_record_url_configured_and_missing(monkeypatch):
+    """live 行带飞书直达链接；连接未配 → null。
+
+    monkeypatch 替换 store.get_connection 方法本身：绕开 TTL 缓存与
+    dev 库已登记的 fire 真实连接，两态均确定性复现。
+    """
+    from app.modules.safety.bitable_config import store as store_mod
+
+    class _Conn:
+        app_token = "TokLedger"
+        table_id = "TblLedger"
+
+    items = [
+        _rec("r1", {"设备编号": "AQ-9", "下次校验日期": _ms(_bj_today())}),
+        _rec("r2", {"设备编号": "AQ-8"}),
+    ]
+    reader = FacilitiesLedgerReader({BIZ_ACCESSORY: FakePageClient(items)})
+
+    monkeypatch.setattr(
+        store_mod.store, "get_connection",
+        lambda domain, kind: _Conn() if kind == "accessory_ledger" else None,
+    )
+    out = await page.build_ledger_page("accessories", reader=reader)
+    assert out["status"] == "live"
+    assert [r["record_url"] for r in out["ledger"]["data"]] == [
+        "https://j0eukrlohu.feishu.cn/base/TokLedger?table=TblLedger&record=r1",
+        "https://j0eukrlohu.feishu.cn/base/TokLedger?table=TblLedger&record=r2",
+    ]
+
+    monkeypatch.setattr(store_mod.store, "get_connection", lambda domain, kind: None)
+    out = await page.build_ledger_page("accessories", reader=reader)
+    assert out["status"] == "live"
+    assert all(r["record_url"] is None for r in out["ledger"]["data"])

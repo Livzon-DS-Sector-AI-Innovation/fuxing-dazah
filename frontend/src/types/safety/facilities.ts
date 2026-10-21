@@ -16,9 +16,10 @@ export interface FacilitiesLedgerMeta {
   page_size: number
 }
 
-/** 台账标准字段行（日期为 ISO 字符串） */
+/** 台账标准字段行（日期为 ISO 字符串；record_url=飞书记录直达链接，连接未配为 null） */
 export interface FacilitiesLedgerRow {
   record_id: string
+  record_url: string | null
   biz_type: string
   equipment_no: string | null
   name: string | null
@@ -67,6 +68,7 @@ export interface FacilityTask {
   biz_type: string
   biz_label: string
   ledger_key: string
+  record_url: string | null
   equipment_no: string | null
   equipment_name: string | null
   department: string | null

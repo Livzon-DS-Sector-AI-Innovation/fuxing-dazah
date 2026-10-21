@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.facilities.ledger import BIZ_LABELS
+from app.modules.safety.facilities.notify import record_url_for, record_urls_for
 from app.modules.safety.models import FacilityCheckTask, FacilityTaskEvent
 
 
@@ -22,13 +23,16 @@ def _bj_today() -> date:
     return (datetime.now(UTC) + timedelta(hours=8)).date()
 
 
-def task_dict(t: FacilityCheckTask, *, today: date) -> dict[str, Any]:
+def task_dict(
+    t: FacilityCheckTask, *, today: date, record_url: str | None = None
+) -> dict[str, Any]:
     remaining = (t.due_date - today).days if t.status == "issued" else None
     return {
         "id": str(t.id),
         "biz_type": t.biz_type,
         "biz_label": BIZ_LABELS.get(t.biz_type, t.biz_type),
         "ledger_key": t.ledger_key,
+        "record_url": record_url,
         "equipment_no": t.equipment_no,
         "equipment_name": t.equipment_name,
         "department": t.department,
@@ -89,7 +93,13 @@ async def list_tasks(
         stmt = stmt.where(FacilityCheckTask.group_key == group_key)
     rows = list((await session.execute(stmt)).scalars().all())
     rows.sort(key=lambda t: (t.status != "issued", t.due_date))
-    items = [task_dict(t, today=today) for t in rows]
+    urls = record_urls_for(rows)  # 同步带 TTL 缓存，按 biz_type 解析一次
+    items = [
+        task_dict(
+            t, today=today, record_url=urls.get(f"{t.biz_type}:{t.ledger_key}")
+        )
+        for t in rows
+    ]
     if overdue:
         items = [i for i in items if i["overdue"]]
     total = len(items)
@@ -183,6 +193,6 @@ async def task_detail(
         ).scalars().all()
     )
     return {
-        "task": task_dict(task, today=today),
+        "task": task_dict(task, today=today, record_url=record_url_for(task)),
         "events": [event_dict(e) for e in events],
     }

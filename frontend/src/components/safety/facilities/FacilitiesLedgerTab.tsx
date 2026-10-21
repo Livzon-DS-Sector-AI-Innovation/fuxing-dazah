@@ -24,6 +24,7 @@ import {
   StatCard,
   StatusTag,
 } from '@/components/ui-kit'
+import { OVERDUE_WARN, overdueColor } from './facilitiesConstants'
 
 const STATUS_TAG = {
   not_connected: { label: '未接入', tone: 'default' as const },
@@ -115,10 +116,13 @@ export default function FacilitiesLedgerTab({
       title: '剩余天数',
       dataIndex: 'remaining_days',
       width: 90,
-      render: (v: number | null, row: FacilitiesLedgerRow) => {
+      render: (v: number | null, _row: FacilitiesLedgerRow) => {
         if (v === null || v === undefined) return '—'
-        if (v < 0) return <span style={{ color: '#e2585d', fontWeight: 600 }}>逾期 {Math.abs(v)} 天</span>
-        if (v <= 30) return <span style={{ color: '#d9822b', fontWeight: 600 }}>{v} 天</span>
+        if (v < 0) {
+          const color = overdueColor(v)
+          if (color) return <span style={{ color, fontWeight: 600 }}>逾期 {Math.abs(v)} 天</span>
+        }
+        if (v <= 30) return <span style={{ color: OVERDUE_WARN, fontWeight: 600 }}>{v} 天</span>
         return `${v} 天`
       },
     },
@@ -128,6 +132,17 @@ export default function FacilitiesLedgerTab({
       width: 80,
       render: (v: string | null, row: FacilitiesLedgerRow) =>
         v ?? (row.active ? '在用' : '—'),
+    },
+    {
+      title: '记录',
+      dataIndex: 'record_url',
+      width: 88,
+      render: (v: string | null) =>
+        v ? (
+          <a href={v} target="_blank" rel="noreferrer">
+            打开记录
+          </a>
+        ) : null,
     },
   ]
 

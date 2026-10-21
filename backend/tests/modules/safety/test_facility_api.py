@@ -130,3 +130,44 @@ async def test_task_detail_404(sealed_client):
     ac, _db = sealed_client
     resp = await ac.get(f"/api/v1/safety/facility-tasks/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+async def test_task_record_url_configured_and_missing(sealed_client, monkeypatch):
+    """列表/详情行带 record_url（连接已配/未配两态）。
+
+    monkeypatch 替换 store.get_connection 方法本身：绕开 TTL 缓存与
+    dev 库已登记的 fire 真实连接；biz_type=accessory 圈定作用域。
+    """
+    from app.modules.safety.bitable_config import store as store_mod
+
+    class _Conn:
+        app_token = "TokTask"
+        table_id = "TblTask"
+
+    ac, db = sealed_client
+    task = await _seed(db)
+
+    monkeypatch.setattr(
+        store_mod.store, "get_connection",
+        lambda domain, kind: _Conn() if kind == "accessory_ledger" else None,
+    )
+    resp = await ac.get("/api/v1/safety/facility-tasks",
+                        params={"biz_type": "accessory"})
+    items = resp.json()["data"]["items"]
+    assert len(items) == 5
+    assert items[0]["record_url"] == (
+        "https://j0eukrlohu.feishu.cn/base/TokTask"
+        f"?table=TblTask&record={items[0]['ledger_key']}"
+    )
+    resp = await ac.get(f"/api/v1/safety/facility-tasks/{task.id}")
+    assert resp.json()["data"]["task"]["record_url"] == (
+        "https://j0eukrlohu.feishu.cn/base/TokTask"
+        f"?table=TblTask&record={task.ledger_key}"
+    )
+
+    monkeypatch.setattr(store_mod.store, "get_connection", lambda domain, kind: None)
+    resp = await ac.get("/api/v1/safety/facility-tasks",
+                        params={"biz_type": "accessory"})
+    assert all(i["record_url"] is None for i in resp.json()["data"]["items"])
+    resp = await ac.get(f"/api/v1/safety/facility-tasks/{task.id}")
+    assert resp.json()["data"]["task"]["record_url"] is None

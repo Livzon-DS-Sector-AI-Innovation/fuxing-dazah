@@ -17,6 +17,7 @@ from app.modules.safety.facilities.ledger import (
     LedgerRowView,
     LedgerSummary,
 )
+from app.modules.safety.facilities.notify import record_url_prefix
 from app.modules.safety.facilities.reader import (
     CachedLedgerReader,
     FacilitiesLedgerReader,
@@ -35,11 +36,14 @@ def _bj_today() -> date:
     return (datetime.now(UTC) + timedelta(hours=8)).date()
 
 
-def row_dict(v: LedgerRowView, today: date) -> dict[str, Any]:
-    """视图 → API 行（日期 ISO 化 + 剩余天数派生）。"""
+def row_dict(
+    v: LedgerRowView, today: date, *, record_url: str | None = None
+) -> dict[str, Any]:
+    """视图 → API 行（日期 ISO 化 + 剩余天数派生 + 记录直达链接）。"""
     anchor_days = (v.anchor - today).days if v.anchor else None
     return {
         "record_id": v.record_id,
+        "record_url": record_url,
         "biz_type": v.biz_type,
         "equipment_no": v.equipment_no,
         "name": v.name,
@@ -112,8 +116,15 @@ async def build_ledger_page(
 
     summary = LedgerSummary.build(views, today)
     ordered = sorted(views, key=lambda v: (v.anchor is None, v.anchor or date.max))
-    rows = [row_dict(v, today) for v in ordered]
     start = (page - 1) * page_size
+    # 连接前缀一次解析，仅对当前页行拼 record_url（DESIGN §14.1-3）
+    prefix = record_url_prefix(biz_type)
+    rows = [
+        row_dict(
+            v, today, record_url=f"{prefix}{v.record_id}" if prefix else None
+        )
+        for v in ordered[start : start + page_size]
+    ]
     return envelope(
         "live",
         {
@@ -124,7 +135,7 @@ async def build_ledger_page(
                 for k in ("total", "active", "overdue", "due_30d", "incomplete")
             },
         },
-        rows[start : start + page_size],
-        len(rows),
+        rows,
+        len(ordered),
         [],
     )

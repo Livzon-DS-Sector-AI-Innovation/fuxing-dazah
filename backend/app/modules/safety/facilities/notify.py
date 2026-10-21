@@ -121,32 +121,41 @@ def _task_line(task: FacilityCheckTask, today: date, record_url: str | None = No
 _FEISHU_BASE_URL = "https://j0eukrlohu.feishu.cn"
 
 
+def record_url_prefix(biz_type: str) -> str | None:
+    """台账记录直达链接前缀（…&record=；连接未登记/不完整 → None）。
+
+    页面层一次解析、逐行拼 record_id——整页千行不逐条打 store。
+    """
+    from app.modules.safety.bitable_config.store import store as _conn_store
+    from app.modules.safety.facilities.ledger import BIZ_TO_KIND, DOMAIN
+
+    conn = _conn_store.get_connection(DOMAIN, BIZ_TO_KIND.get(biz_type, ""))
+    if conn is None or not (conn.app_token and conn.table_id):
+        return None
+    return f"{_FEISHU_BASE_URL}/base/{conn.app_token}?table={conn.table_id}&record="
+
+
 def record_urls_for(tasks: list[FacilityCheckTask]) -> dict[str, str]:
     """任务列表 → 记录直达链接（key=f"{biz_type}:{ledger_key}"）。
 
     按 biz_type 解析台账连接（store.get_connection 同步带 TTL 缓存）；
     连接未登记/不完整 → 该类任务无链接（明细行退化为无链接，不影响发卡）。
     """
-    from app.modules.safety.bitable_config.store import store as _conn_store
-    from app.modules.safety.facilities.ledger import BIZ_TO_KIND, DOMAIN
-
+    prefixes: dict[str, str | None] = {}
     urls: dict[str, str] = {}
-    conns: dict[str, Any] = {}
     for t in tasks:
         bt = t.biz_type
-        if bt not in conns:
-            conn = _conn_store.get_connection(DOMAIN, BIZ_TO_KIND.get(bt, ""))
-            conns[bt] = (
-                conn if conn is not None and conn.app_token and conn.table_id else None
-            )
-        conn = conns[bt]
-        if conn is None:
-            continue
-        urls[f"{bt}:{t.ledger_key}"] = (
-            f"{_FEISHU_BASE_URL}/base/{conn.app_token}"
-            f"?table={conn.table_id}&record={t.ledger_key}"
-        )
+        if bt not in prefixes:
+            prefixes[bt] = record_url_prefix(bt)
+        prefix = prefixes[bt]
+        if prefix:
+            urls[f"{bt}:{t.ledger_key}"] = f"{prefix}{t.ledger_key}"
     return urls
+
+
+def record_url_for(task: FacilityCheckTask) -> str | None:
+    """单任务记录直达链接（详情场景；键格式不外泄给调用方）。"""
+    return record_urls_for([task]).get(f"{task.biz_type}:{task.ledger_key}")
 
 
 def build_batch_card(
@@ -513,6 +522,9 @@ __all__ = [
     "build_digest_cell_payload",
     "notice_chat_id",
     "push_digest_cell",
+    "record_url_for",
+    "record_url_prefix",
+    "record_urls_for",
     "refresh_department_batch",
     "reset_throttle",
 ]
