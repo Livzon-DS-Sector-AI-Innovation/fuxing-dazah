@@ -5,7 +5,12 @@
 渲染格式与原实现保持一致（部门分组、只列红色预警明细、底部部门汇总）。
 
 「未更新进展」标记不再落库，改为调用 ``progress_track.compute_marks`` 现算
-（Redis 跟踪进展内容变化时间）。
+（Redis 跟踪进展内容变化时间）；顶部速览行已删（2026-10-22 拍板），标记仅
+逐条 ⚠️ 展示。
+
+详情开头（2026-10-22 拍板）：不再输出【隐患督办通报】标题/分隔线/📅 日期/
+速览行，直接从「📌 公司内检查未整改隐患」栏开始（速递格卡片自带标题与
+日期语境）。
 
 @ 提及标识优先直取记录「整改责任人」人员字段自带的 open_id（读取应用作用域，
 与卡片 @ 同源）；部门映射产生的表外人名才回退 ``feishu.mention``（identity
@@ -167,7 +172,6 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
             continue  # 异常占位记录
         views.append(view)
 
-    now = datetime.now().strftime("%Y-%m-%d")
     # 外审节先渲染（源缺席/故障 → 空行空统计，输出与「无外审节」基线一致）
     ext_lines, ext_stats = await _load_external_section()
     ext_open = int(ext_stats.get("ext_open") or 0)
@@ -176,10 +180,7 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
         **ext_stats,
     }
     if not views and not ext_open:
-        parts = [
-            "【隐患督办通报】", "━" * 20, f"📅 {now}", "",
-            "✅ **今日无红色预警/一般预警隐患**",
-        ]
+        parts = ["✅ **今日无红色预警/一般预警隐患**"]
         if ext_stats:
             from app.modules.safety.service.hazard_direct.external_audit import (
                 all_clear_line,
@@ -262,15 +263,9 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
 
     from app.modules.safety.service.hazard_direct.external_audit import SOURCE_LABEL
 
-    parts: list[str] = ["【隐患督办通报】", "━" * 20, f"📅 {now}", ""]
-    # 顶部速览：跨节行（管委会未整改 / 未更新进展）；各节统计行在各自栏头下
-    if ext_open:
-        parts.append(f"🔴 {SOURCE_LABEL}未整改 **{ext_open}** 条")
-    if total_no_progress:
-        parts.append(f"⚠️ 未更新进展 **{total_no_progress}** 条")
-    if ext_open or total_no_progress:
-        parts.append("")
-
+    # 详情直接从公司内检查节开始（2026-10-22 拍板：标题/日期/速览行全删——
+    # 速递格卡片自带标题与日期语境；未更新进展仍逐条 ⚠️ 标记）
+    parts: list[str] = []
     if views:
         # ── 公司内检查未整改隐患节（主表督办数据；栏头与管委会节同格式）──
         parts += ["━" * 20, "📌 公司内检查未整改隐患", "━" * 20]

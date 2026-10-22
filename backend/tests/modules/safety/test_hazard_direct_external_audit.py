@@ -284,13 +284,15 @@ async def test_build_bulletin_merges_external_section(
 
     assert stats["ext_open"] == 1 and stats["ext_closed"] == 1
     assert stats["ext_by_dept"] == {"设备工程部": 1}
+    # 详情直接从公司内检查栏开始（无标题/日期/速览行）
+    assert content.startswith("━")
+    assert "【隐患督办通报】" not in content and "📅" not in content
     # 顺序：公司内检查栏头 → 内部明细 → 管委会检查栏头 → 部门汇总
     i_int = content.index("📌 公司内检查未整改隐患")
     i_detail = content.index("HZ-001 隐患描述")
     i_ext = content.index("📌 管委会检查未整改隐患")
     i_summary = content.index("📌 各部门未关闭隐患数量汇总")
     assert i_int < i_detail < i_ext < i_summary
-    assert "🔴 管委会检查未整改 **1** 条" in content  # 顶部速览行
     assert "<at id=ou_cai></at>" in content
     # 底部部门汇总：同部门内外合并
     assert "**设备工程部**：红色预警 1 条　+　管委会检查未整改 1 条" in content
@@ -308,11 +310,7 @@ async def test_build_bulletin_unchanged_when_external_absent(
 
     content, stats = await bulletin.build_bulletin()
 
-    now = datetime.now().strftime("%Y-%m-%d")
     expected = (
-        "【隐患督办通报】\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📅 {now}\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📌 公司内检查未整改隐患\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
