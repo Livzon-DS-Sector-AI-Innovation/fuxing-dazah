@@ -1,6 +1,8 @@
 """四新域页面骨架三态测试（3.0 四期 1-B）。
 
 口径：docs/DESIGN-安全模块3.0四期-四新域表结构与页面口径-20261014.md §6。
+2026-10-21：goals 域改走体系标准核查引擎（test_standard_check_*.py），
+本文件只覆盖 training-behavior/facilities/incidents 三域。
 
 接缝（照 cert_direct test_reader 手法）：
 - opener 注入（domain, kind -> BitablePageClient 协议替身）验证 live/degraded；
@@ -46,46 +48,6 @@ def _rec(record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     return {"record_id": record_id, "fields": fields}
 
 
-# ── goals 三表样例（字段口径见 DESIGN 蓝本 §2）──
-
-
-def _goals_fixtures() -> dict[str, FakePageClient]:
-    year = str(_bj_today().year)
-    goal_items = [
-        _rec("r1", {"年度": year, "目标名称": "重伤及以上事故为零", "达成状态": "已达成",
-                    "责任部门": ["EHS部"], "责任人": [{"name": "张三"}]}),
-        _rec("r2", {"年度": year, "目标名称": "千人负伤率≤2‰", "达成状态": "已达成"}),
-        _rec("r3", {"年度": year, "目标名称": "培训覆盖率100%", "达成状态": "进行中"}),
-        _rec("r4", {"年度": year, "目标名称": "隐患整改率100%", "达成状态": "未达成"}),
-        _rec("r5", {"年度": str(_bj_today().year - 1), "目标名称": "去年目标", "达成状态": "已达成"}),
-    ]
-    resp_items = [
-        _rec("p1", {"责任层级": "主要负责人", "签订状态": "已签订",
-                    "签订日期": _ms(_bj_today() - timedelta(days=30))}),
-        _rec("p2", {"责任层级": "部门负责人", "签订状态": "已签订"}),
-        _rec("p3", {"责任层级": "班组长", "签订状态": "已过期"}),
-    ]
-    invest_items = [
-        _rec("i1", {"投入日期": _ms(_bj_today()), "投入类别": "安全设施", "金额（元）": "500000"}),
-        _rec("i2", {"投入日期": _ms(_bj_today() - timedelta(days=5)), "投入类别": "教育培训",
-                    "金额（元）": "250000"}),
-        _rec("i3", {"投入日期": _ms(_bj_today() - timedelta(days=400)), "投入类别": "教育培训",
-                    "金额（元）": "999999"}),  # 去年投入不计
-    ]
-    return {
-        "goal_indicator": FakePageClient(goal_items),
-        "responsibility": FakePageClient(resp_items),
-        "investment": FakePageClient(invest_items),
-    }
-
-
-def _goals_opener(fixtures: dict[str, FakePageClient]):
-    def opener(domain: str, kind: str) -> FakePageClient:
-        return fixtures[kind]
-
-    return opener
-
-
 class TestRegistryPlaceholderDomains:
     def test_four_domains_registered_without_connections(self) -> None:
         from app.modules.safety.bitable_config import registry
@@ -111,55 +73,22 @@ class TestRegistryPlaceholderDomains:
 class TestBuildDomainPage:
     async def test_not_connected_is_default_state(self) -> None:
         """未接入（真路径）：registry 连接位空 → not_connected 信封。"""
-        data = await build_domain_page("goals")
+        data = await build_domain_page("training-behavior")
         assert data["status"] == "not_connected"
         assert data["stats"] is None
         assert data["ledger"]["data"] == []
         assert data["ledger"]["meta"] == {"total": 0, "page": 1, "page_size": 20}
         assert data["errors"] == []
 
-    async def test_live_stats_and_ledger(self) -> None:
-        """已接入：三表全拉 → 蓝本口径统计 + 主台账分页。"""
-        data = await build_domain_page(
-            "goals", opener=_goals_opener(_goals_fixtures())
-        )
-        assert data["status"] == "live"
-        assert data["errors"] == []
-        stats = data["stats"]
-        assert stats["goal_total"] == 4  # 去年那条不计
-        assert stats["goal_achieved"] == 2
-        assert stats["goal_in_progress"] == 1
-        assert stats["goal_missed"] == 1
-        assert stats["agreement_rate"] == 67  # 2/3
-        assert stats["investment_wan"] == 75.0  # (50+25)万
-        ledger = data["ledger"]
-        assert ledger["meta"]["total"] == 5  # 台账=全量分页，年份口径只在统计卡
-        assert {r["name"] for r in ledger["data"]} == {
-            "重伤及以上事故为零", "千人负伤率≤2‰", "培训覆盖率100%", "隐患整改率100%", "去年目标",
-        }
-        row = next(r for r in ledger["data"] if r["record_id"] == "r1")
-        assert row["year"] == str(_bj_today().year)
-        assert row["status"] == "已达成"
-        assert row["department"] == ["EHS部"]
-        assert row["owner"] == "张三"
-        assert row["indicator_type"] is None  # 未填字段归 None
-
-    async def test_live_pagination(self) -> None:
-        data = await build_domain_page(
-            "goals", page=2, page_size=3, opener=_goals_opener(_goals_fixtures())
-        )
-        assert data["ledger"]["meta"] == {"total": 5, "page": 2, "page_size": 3}
-        assert len(data["ledger"]["data"]) == 2
-
     async def test_degraded_on_query_error(self) -> None:
         """降级：连接有效但读取失败 → degraded + errors 标注。"""
         data = await build_domain_page(
-            "goals", opener=lambda d, k: FakePageClient([], boom=True)
+            "training-behavior", opener=lambda d, k: FakePageClient([], boom=True)
         )
         assert data["status"] == "degraded"
         assert data["stats"] is None
         assert data["ledger"]["data"] == []
-        assert data["errors"] and "goal_indicator" in data["errors"][0]
+        assert data["errors"] and "training" in data["errors"][0]
 
     async def test_unknown_domain_key_raises(self) -> None:
         import pytest
@@ -170,64 +99,12 @@ class TestBuildDomainPage:
 
 class TestCollectDomainHealth:
     async def test_not_connected(self) -> None:
-        part = await collect_domain_health("goals")
+        part = await collect_domain_health("training-behavior")
         assert part == {"connected": False}
-
-    async def test_live_health_warn(self) -> None:
-        """goals 蓝本判据：goal_missed>0 或责任书已过期>0 → warn。"""
-        part = await collect_domain_health(
-            "goals", opener=_goals_opener(_goals_fixtures())
-        )
-        assert part["connected"] is True
-        assert part["health_status"] == "warn"  # 未达成1 + 过期1
-        assert "目标达成 2/4" in part["health_metric"]
-        assert "年投入 75.0万" in part["health_metric"]
-
-    async def test_facilities_health_ok_and_overdue(self) -> None:
-        today = _bj_today()
-        ledger_items = [
-            _rec("e1", {"设备编号": "EQ-01", "设备名称": "叉车", "设备类别": "特种设备",
-                        "设备状态": "在用"}),
-            _rec("e2", {"设备编号": "EQ-02", "设备名称": "洗眼器", "设备类别": "安全设施",
-                        "设备状态": "在用"}),
-            _rec("e3", {"设备编号": "EQ-03", "设备名称": "旧空压机", "设备类别": "通用设备",
-                        "设备状态": "已报废"}),
-            _rec("e4", {"设备编号": "EQ-04", "设备名称": "维修泵", "设备类别": "通用设备",
-                        "设备状态": "维修中"}),
-        ]
-        inspection_items = [
-            _rec("c1", {"设备编号": "EQ-01", "检验类别": "定期检验", "检验结果": "合格",
-                        "上次检验日期": _ms(today - timedelta(days=350)),
-                        "下次检验日期": _ms(today + timedelta(days=15))}),
-            _rec("c2", {"设备编号": "EQ-02", "检验类别": "校验", "检验结果": "合格",
-                        "上次检验日期": _ms(today - timedelta(days=370)),
-                        "下次检验日期": _ms(today - timedelta(days=5))}),  # 逾期
-            _rec("c3", {"设备编号": "EQ-04", "检验类别": "自查", "检验结果": "不合格",
-                        "上次检验日期": _ms(today - timedelta(days=10)),
-                        "下次检验日期": _ms(today + timedelta(days=80))}),
-        ]
-        fixtures = {
-            "equipment_ledger": FakePageClient(ledger_items),
-            "inspection_record": FakePageClient(inspection_items),
-        }
-        data = await build_domain_page("facilities", opener=lambda d, k: fixtures[k])
-        assert data["status"] == "live"
-        stats = data["stats"]
-        assert stats["equipment_total"] == 3  # 报废不计
-        assert stats["special_equipment"] == 1
-        assert stats["inspection_overdue"] == 1
-        assert stats["inspection_due_30d"] == 1
-        assert stats["inspection_pass_rate"] == 67  # 各设备最近一次：EQ-01/02 合格、EQ-04 不合格 → 2/3
-        assert stats["inactive_equipment"] == 1
-
-        part = await collect_domain_health("facilities", opener=lambda d, k: fixtures[k])
-        assert part["health_status"] == "warn"  # 检验逾期 1
-        assert "检验逾期 1" in part["health_metric"]
-
 
 class TestDomainPageKeys:
     def test_keys_align_frontend_menu(self) -> None:
-        assert DOMAIN_PAGE_KEYS == ("goals", "training-behavior", "facilities", "incidents")
+        assert DOMAIN_PAGE_KEYS == ("training-behavior", "facilities", "incidents")
 
 
 class TestTrainingAndIncidentsLive:

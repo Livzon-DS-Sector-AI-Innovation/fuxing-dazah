@@ -985,6 +985,34 @@ class SafetyBitableClient:
             logger.info("Bitable update_field 成功: field_id=%s", field_id)
             return field
 
+    async def create_table(
+        self,
+        table: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """在当前应用下创建数据表（含字段定义）。
+
+        table 结构照飞书建表 API：{"table": {"name": ..., "default_view_name": ...,
+        "fields": [{"field_name":..., "type":..., "property": {"options":[...]}}]}}。
+        返回 {"table_id": ..., "name": ...}；失败返回 None（错误已记日志）。
+        """
+        token = await self._token()
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
+                f"{BITABLE_BASE}/apps/{self.app_token}/tables",
+                headers={"Authorization": f"Bearer {token}"},
+                json=table,
+            )
+            data = resp.json()
+        if data.get("code") != 0:
+            logger.error(
+                "Bitable create_table 失败: code=%s msg=%s",
+                data.get("code"), data.get("msg"),
+            )
+            return None
+        created = (data.get("data") or {}).get("table") or {}
+        logger.info("Bitable create_table 成功: %s", created.get("table_id"))
+        return created
+
     async def list_tables(
         self,
         page_size: int = 100,

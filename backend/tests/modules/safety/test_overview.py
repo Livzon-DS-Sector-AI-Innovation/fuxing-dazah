@@ -30,6 +30,10 @@ from app.modules.safety.service.overview import (
 
 
 def _stub_collectors() -> dict[str, Any]:
+    async def goals() -> dict[str, Any]:
+        return {"connected": True, "health_status": "ok",
+                "health_metric": "达标 9/9 · 未达标 0 · 无数据 17"}
+
     async def hazards() -> dict[str, Any]:
         return {
             "unclosed": 12,
@@ -132,6 +136,7 @@ def _stub_collectors() -> dict[str, Any]:
         return {"open": 0, "overdue": 0}
 
     return {
+        "goals": goals,
         "hazards": hazards,
         "special_ops": special_ops,
         "alarms": alarms,
@@ -170,8 +175,10 @@ class TestBuildOverview:
         assert wall["chemicals"]["status"] == "warn"
         # 运行中绿卡与灰卡
         assert wall["knowledge-base"]["metric"] == "采集正常 · 近7日+3"
-        # 四新域卡（四期 1-B）：未接入是常态（registry 连接位空）→ inactive·未接入
-        assert wall["goals"] == {"key": "goals", "status": "inactive", "metric": "未接入"}
+        # goals 卡（S1 标准核查，2026-10-21）：stub 供数 → ok；metric=四态口径
+        assert wall["goals"] == {
+            "key": "goals", "status": "ok", "metric": "达标 9/9 · 未达标 0 · 无数据 17"
+        }
         assert wall["training-behavior"]["metric"] == "未接入"
         # facilities：域卡虽「未接入」（蓝本旧 kind 连接位空），但有在办任务
         # （open=3>0）→ 任务口径覆盖（2026-10-21 修复：不再被 inactive 卡死）
@@ -473,15 +480,18 @@ class TestOverviewEndpoint:
         wall_keys = {c["key"] for c in data["module_health"]}
         assert {"goals", "supervision", "hazard-ledger", "chemicals"} <= wall_keys
         assert {"training-behavior", "facilities", "incidents"} <= wall_keys
-        # 四新域未接入（连接位空是常态），降级而非报错
+        # 四新域未接入（连接位空是常态），降级而非报错；
+        # goals 已播种（2026-10-21）：metric 为四态文案或三态兜底
         wall = {c["key"]: c for c in data["module_health"]}
-        assert wall["goals"]["metric"] in ("未接入", None)
+        assert wall["goals"]["metric"] is None or (
+            wall["goals"]["metric"] == "未接入" or "达标" in wall["goals"]["metric"]
+        )
 
 
 class TestDomainPageEndpoints:
     async def test_four_endpoints_not_connected_envelope(self, client: AsyncClient) -> None:
-        """四端点冒烟：未接入常态下 200 + 三态信封（真 store 路径）。"""
-        for path in ("goals", "training-behavior", "facilities", "incidents"):
+        """端点冒烟：三域旧端点 + goals 新核查端点，未接入常态下 200 + 三态信封。"""
+        for path in ("training-behavior", "facilities", "incidents"):
             resp = await client.get(f"/api/v1/safety/{path}")
             assert resp.status_code == 200, f"{path}: {resp.text}"
             body = resp.json()
@@ -493,12 +503,28 @@ class TestDomainPageEndpoints:
                 assert data["ledger"]["data"] == []
                 assert data["ledger"]["meta"] == {"total": 0, "page": 1, "page_size": 20}
 
-    async def test_goals_endpoint_pagination_params(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/safety/goals", params={"page": 2, "page_size": 5})
-        assert resp.status_code == 200
-        meta = resp.json()["data"]["ledger"]["meta"]
-        assert meta == {"total": 0, "page": 2, "page_size": 5}
+    async def test_goals_standards_endpoint_envelope(self, client: AsyncClient) -> None:
+        """goals 体系标准核查端点（2026-10-21）：三态信封；播种后常态 live。"""
+        resp = await client.get("/api/v1/safety/goals/standards")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["status"] in ("not_connected", "live", "degraded")
+        if data["status"] == "live":
+            assert data["summary"]["total"] > 0
+            assert data["groups"]
 
-    async def test_goals_endpoint_rejects_bad_pagination(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/v1/safety/goals", params={"page": 0})
-        assert resp.status_code == 422
+    async def test_old_goals_endpoint_removed(self, client: AsyncClient) -> None:
+        """旧 /goals 三表端点已退役（域改单表核查）。"""
+        resp = await client.get("/api/v1/safety/goals")
+        assert resp.status_code == 404
+
+    async def test_goals_evidence_endpoint_envelope(self, client: AsyncClient) -> None:
+        """证据端点（T3 审查补接线）：四态信封，行不存在=not_found。"""
+        resp = await client.get(
+            "/api/v1/safety/goals/standards/evidence",
+            params={"record_id": "no-such-row"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["status"] == "not_found"
+        assert data["evidence"] == []

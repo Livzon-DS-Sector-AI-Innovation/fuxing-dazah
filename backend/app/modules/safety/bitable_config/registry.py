@@ -1126,15 +1126,20 @@ _DOMAINS: tuple[DomainInfo, ...] = (
     # ── 四期四新域（3.0 四期 1-B：结构就位、连接位空——不播种/不订阅/不建 DB 行。
     #    表结构蓝本：docs/DESIGN-安全模块3.0四期-四新域表结构与页面口径-20261014.md；
     #    接入=按蓝本建表后在此补 default_connection 或经 bitable 配置页配 DB 行，页面零改码）──
+    # ── goals S1 目标责任与绩效（2026-10-21 改造：体系标准符合性核查引擎）──
+    #    旧蓝本三 kind（goal_indicator/responsibility/investment）退役：
+    #    责任书=纸档不做台账、投入台账无核查语义。本域只接一张
+    #    「体系标准核查表」——标准清单×运行数据→四态判定（standard_check 服务）。
+    #    表由播种脚本在主安全库创建后回填 default_connection。
+    #    DESIGN：DESIGN-安全目标责任与绩效模块-体系标准符合性核查引擎-20261021.md
+    #    （其余三新域仍为四期蓝本占位口径）
     DomainInfo(
         key="goals",
         label="目标责任与绩效",
-        purpose="S1 目标指标/责任制清单/安全投入台账（占位域，建表接入后供页面与健康度墙直读）",
+        purpose="S1 体系标准核查表（标准清单×运行数据四态判定；建表接入后供核查页与健康度墙）",
         subscribe="record",
         kinds=(
-            KindInfo(kind="goal_indicator", label="目标指标表"),
-            KindInfo(kind="responsibility", label="责任制清单表"),
-            KindInfo(kind="investment", label="安全投入台账"),
+            KindInfo(kind="standard_check", label="体系标准核查表"),
         ),
     ),
     DomainInfo(

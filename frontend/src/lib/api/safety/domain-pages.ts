@@ -13,7 +13,7 @@ import { apiGet, API_BASE_URL } from '@/lib/http-client'
 export type DomainPageStatus = 'not_connected' | 'live' | 'degraded'
 
 /** 菜单/端点 key（与 menu-config safety 子项 key 一致） */
-export type DomainPageKey = 'goals' | 'training-behavior' | 'facilities' | 'incidents'
+export type DomainPageKey = 'training-behavior' | 'facilities' | 'incidents'
 
 export interface DomainLedgerMeta {
   total: number

@@ -45,6 +45,7 @@ from app.modules.safety.service.domain_pages import (
     collect_domain_health,
     module_health_card,
 )
+from app.modules.safety.service.standard_check import collect_goals_health
 from app.modules.safety.workticket_review.repository import WorkTicketReviewRepository
 
 logger = logging.getLogger(__name__)
@@ -456,6 +457,9 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
     ]
     # 四新域卡（四期 1-B）：三态=未接入 inactive·「未接入」/ 接入后 ok|warn 按蓝本
     # 判据 / 采集降级 inactive·无指标（口径 domain_pages.module_health_card）
+    # goals 卡（S1 体系标准核查，2026-10-21 改造）：四态判定口径
+    # （warn=存在未达标），卡序保持在四新域最前
+    cards.append(module_health_card("goals", parts.get("goals")))
     cards.extend(module_health_card(key, parts.get(key)) for key in DOMAIN_PAGE_KEYS)
     # facilities 卡任务口径覆盖（facilities-p1；2026-10-21 修正）：有在办任务
     # （open/overdue>0）即以任务计数为准——任务存在本身证明已有台账接入并跑过
@@ -538,7 +542,8 @@ async def build_overview(
         "supervision": _db_collector(collect_supervision),
         "facility_tasks": _db_collector(collect_facility_tasks),
         # 四新域（四期 1-B）：无 DB 采集，读 bitable 配置/表格（未接入是常态）
-        "goals": lambda: collect_domain_health("goals"),
+        # goals 走标准核查引擎采集（需 DB：演练计数取数器；keyword-only 适配）
+        "goals": _db_collector(lambda session: collect_goals_health(db=session)),
         "training-behavior": lambda: collect_domain_health("training-behavior"),
         "facilities": lambda: collect_domain_health("facilities"),
         "incidents": lambda: collect_domain_health("incidents"),

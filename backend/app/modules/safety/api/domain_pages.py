@@ -1,9 +1,10 @@
 """Safety API — 四新域页面端点（3.0 四期 1-B）。
 
-只读骨架：GET /safety/{goals|training-behavior|facilities|incidents} 返回
-三态信封（not_connected / live / degraded）。四域当前未接入（连接位空）
-是常态——不抛错不重试；接入后同端点直接出数，页面零改码。
-字段口径见 docs/DESIGN-安全模块3.0四期-四新域表结构与页面口径-20261014.md。
+只读骨架：GET /safety/{training-behavior|facilities|incidents} 返回
+三态信封（not_connected / live / degraded）。未接入（连接位空）是常态——
+不抛错不重试；接入后同端点直接出数，页面零改码。字段口径见
+docs/DESIGN-安全模块3.0四期-四新域表结构与页面口径-20261014.md。
+goals 域已改走体系标准核查引擎（api/standard_check.py，2026-10-21）。
 """
 
 from fastapi import APIRouter, Query
@@ -18,18 +19,6 @@ domain_pages_router = APIRouter()
 async def _page(url_key: str, page: int, page_size: int) -> ApiResponse:
     data = await build_domain_page(url_key, page=page, page_size=page_size)
     return ApiResponse(data=DomainPageOut(**data).model_dump(mode="json"))
-
-
-@domain_pages_router.get(
-    "/goals",
-    response_model=ApiResponse,
-    summary="目标责任与绩效页面数据（三态信封）",
-)
-async def get_goals_page(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-) -> ApiResponse:
-    return await _page("goals", page, page_size)
 
 
 @domain_pages_router.get(

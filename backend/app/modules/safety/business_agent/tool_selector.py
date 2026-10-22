@@ -96,12 +96,18 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_movements", "query_report",
     ],
     "ehs_change": ["query_ehs_changes"],
+    # S1 体系标准核查（2026-10-21）：标准×运行数据四态判定
+    "standard_check": ["query_standard_compliance"],
     "work_ticket": ["query_work_ticket_reviews", "screen_work_ticket_personnel"],
 }
 
 # ── 意图关键词（中文）─────────────────────────────────────────────
 
 INTENT_KEYWORDS: dict[str, list[str]] = {
+    "standard_check": [
+        "标准", "达标", "符合性", "绩效", "核查",
+        "目标责任", "体系运行", "演练做了",
+    ],
     "hazard": [
         "隐患", "整改", "缺陷", "堵头", "泄漏", "防爆",
         "危险源", "风险", "关闭",

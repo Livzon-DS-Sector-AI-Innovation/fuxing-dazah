@@ -65,6 +65,7 @@ from app.modules.safety.business_agent.tools.read_tools import (
     query_regulation_crawl_status,
     query_scheduler_tasks,
     query_special_op_records,
+    query_standard_compliance,
     query_work_ticket_reviews,
     screen_work_ticket_personnel,
     web_search,
@@ -174,6 +175,8 @@ TOOL_KIND: dict[str, bool] = {
     "query_ehs_changes": False,
     "query_work_ticket_reviews": False,
     "query_hazard_identifications": False,
+    # 体系标准符合性核查（S1 目标责任与绩效，只读）
+    "query_standard_compliance": False,
     # 作业票外包人员直读筛查（只读：平台直读 + 内存比对，零落库）
     "screen_work_ticket_personnel": False,
     # 技能加载（2-B：常驻只读通用工具）
@@ -266,6 +269,7 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
         query_ehs_changes,
         query_work_ticket_reviews,
         query_hazard_identifications,
+        query_standard_compliance,
         screen_work_ticket_personnel,
         generate_daily_report,
         generate_supervision_bulletin,

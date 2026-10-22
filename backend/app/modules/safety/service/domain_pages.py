@@ -38,7 +38,7 @@ DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 
 # 页面/端点 key（= 前端 menu-config 子项 key），顺序即健康度墙卡序
-DOMAIN_PAGE_KEYS = ("goals", "training-behavior", "facilities", "incidents")
+DOMAIN_PAGE_KEYS = ("training-behavior", "facilities", "incidents")
 
 # 行映射的字段语义（蓝本各表「类型」列的代码侧归类）
 # text/enum → str | None；multi → list[str]；person → str | None（姓名）；
@@ -147,47 +147,6 @@ def _map_row(record: dict[str, Any], spec: KindSpec) -> dict[str, Any]:
 # 四域规格（字段与判据 = DESIGN 蓝本 §2-§5 的可执行翻译）
 # ═══════════════════════════════════════════════════════════════
 
-_GOAL_KIND = KindSpec(
-    kind="goal_indicator",
-    fields=(
-        ("年度", "year", "enum"),
-        ("目标名称", "name", "text"),
-        ("指标类型", "indicator_type", "enum"),
-        ("指标值", "target_value", "text"),
-        ("统计口径说明", "metric_note", "text"),
-        ("分解层级", "level", "enum"),
-        ("责任部门", "department", "multi"),
-        ("责任人", "owner", "person"),
-        ("完成值", "actual_value", "text"),
-        ("达成状态", "status", "enum"),
-        ("备注", "note", "text"),
-    ),
-)
-_RESP_KIND = KindSpec(
-    kind="responsibility",
-    fields=(
-        ("责任层级", "level", "enum"),
-        ("岗位/角色", "role", "text"),
-        ("职责条款", "duties", "text"),
-        ("签订日期", "signed_at", "datetime"),
-        ("有效期至", "valid_until", "datetime"),
-        ("签订状态", "status", "enum"),
-        ("责任书附件", "agreement_file", "attachment"),
-        ("备注", "note", "text"),
-    ),
-)
-_INVEST_KIND = KindSpec(
-    kind="investment",
-    fields=(
-        ("投入日期", "invested_at", "datetime"),
-        ("投入类别", "category", "enum"),
-        ("项目名称", "project", "text"),
-        ("金额（元）", "amount", "text"),
-        ("责任部门", "department", "multi"),
-        ("凭证附件", "voucher_file", "attachment"),
-        ("备注", "note", "text"),
-    ),
-)
 _TRAINING_KIND = KindSpec(
     kind="training",
     fields=(
@@ -291,51 +250,6 @@ _CAPA_KIND = KindSpec(
         ("备注", "note", "text"),
     ),
 )
-
-
-def _analyze_goals(
-    tables: dict[str, list[dict[str, Any]] | None], today: date
-) -> dict[str, Any]:
-    goals = tables.get("goal_indicator")
-    resp = tables.get("responsibility")
-    invest = tables.get("investment")
-
-    cur = [r for r in (goals or []) if _enum(r, "年度") == str(today.year)]
-    signed = expired = unsigned = 0
-    if resp is not None:
-        signed = _count(resp, lambda r: _enum(r, "签订状态") == "已签订")
-        expired = _count(resp, lambda r: _enum(r, "签订状态") == "已过期")
-        unsigned = _count(resp, lambda r: _enum(r, "签订状态") == "未签订")
-    invested = (
-        sum(
-            _num(r, "金额（元）")
-            for r in (invest or [])
-            if _in_year(r, "投入日期", today)
-        )
-        if invest is not None
-        else None
-    )
-    return {
-        "goal_rows_present": goals is not None,
-        "goal_total": len(cur) if goals is not None else None,
-        "goal_achieved": _count(cur, lambda r: _enum(r, "达成状态") == "已达成")
-        if goals is not None
-        else None,
-        "goal_in_progress": _count(cur, lambda r: _enum(r, "达成状态") == "进行中")
-        if goals is not None
-        else None,
-        "goal_missed": _count(cur, lambda r: _enum(r, "达成状态") == "未达成")
-        if goals is not None
-        else None,
-        "resp_rows_present": resp is not None,
-        "agreement_rate": _pct(signed, signed + expired + unsigned)
-        if resp is not None
-        else None,
-        "resp_expired": expired if resp is not None else 0,
-        "invest_rows_present": invest is not None,
-        # 健康度文案与统计卡共用：万元换算在此一次完成
-        "investment_wan": round(invested / 10000, 1) if invested is not None else None,
-    }
 
 
 def _analyze_training(
@@ -481,16 +395,6 @@ def _analyze_incidents(
     }
 
 
-def _goals_metric(a: dict[str, Any]) -> str:
-    rate = a["agreement_rate"]
-    wan = a["investment_wan"]
-    return (
-        f"目标达成 {a['goal_achieved']}/{a['goal_total']} · "
-        f"责任书签订率 {rate if rate is not None else '—'}% · "
-        f"年投入 {wan if wan is not None else '—'}万"
-    )
-
-
 def _training_metric(a: dict[str, Any]) -> str:
     return (
         f"培训 {a['training_done']}/{a['training_total']} · "
@@ -516,20 +420,6 @@ def _incidents_metric(a: dict[str, Any]) -> str:
 
 
 _SPECS: tuple[DomainPageSpec, ...] = (
-    DomainPageSpec(
-        url_key="goals",
-        domain="goals",
-        label="目标责任与绩效",
-        primary=_GOAL_KIND,
-        extra=(_RESP_KIND, _INVEST_KIND),
-        analyze=_analyze_goals,
-        stat_keys=(
-            "goal_total", "goal_achieved", "goal_in_progress", "goal_missed",
-            "agreement_rate", "investment_wan",
-        ),
-        metric_template=_goals_metric,
-        warn_when=lambda a: (a["goal_missed"] or 0) > 0 or a["resp_expired"] > 0,
-    ),
     DomainPageSpec(
         url_key="training-behavior",
         domain="training_behavior",

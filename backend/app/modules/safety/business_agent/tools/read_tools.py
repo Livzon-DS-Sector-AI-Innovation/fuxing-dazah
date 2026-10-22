@@ -2460,3 +2460,74 @@ async def _query_regulations_ingested_impl(
         for f in envelope["feed"][:limit]
     ]
     return {"success": True, "items": items, "total": len(items), "source": "regulation-monitor"}
+
+
+async def query_standard_compliance(
+    ctx: RunContext[SafetyDeps],
+    element: str = "",
+    status: str = "",
+    year: int | None = None,
+) -> dict[str, Any]:
+    """查询体系标准符合性核查结果（目标责任与绩效：标准×运行数据四态判定）。
+
+    标准清单=GB/T 33000 八要素下的可核查条款（如"综合或专项应急预案演练
+    每半年≥1次"），平台自动对比系统运行数据判定：达标 ok / 进行中
+    in_progress（周期未满）/ 未达标 missed / 无数据 no_data（依赖域未接入）。
+
+    Args:
+        element: 要素归属筛选（目标职责/制度化管理/教育培训/现场管理/
+            风险管控与隐患治理/应急管理/事故管理/持续改进，可选）
+        status: 四态筛选（ok/in_progress/missed/no_data，可选）
+        year: 年度（默认当年，如 2026，可选）
+
+    Returns:
+        {success, summary, groups}
+        - summary: 当年四态计数与综合符合率
+        - groups: 按要素分组的标准行（编号/条款/目标/当前完成值/状态/
+          责任部门/剩余天数/无数据原因）
+
+    示例：今年综合演练做了吗；哪些标准还没达标；应急管理要素的符合情况。
+    """
+    from app.modules.safety.service.standard_check import build_standard_check_page
+
+    try:
+        data = await build_standard_check_page(
+            db=ctx.deps.db,
+            element=element or None,
+            status=status or None,
+            year=year,
+        )
+        if data["status"] == "not_connected":
+            return {
+                "success": False,
+                "error": "体系标准核查表未接入（goals/standard_check 连接未登记）",
+            }
+        if data["status"] == "degraded":
+            return {"success": False, "error": "核查表读取降级，稍后重试"}
+        summary = data["summary"]
+        return {
+            "success": True,
+            "summary": summary,
+            "groups": [
+                {
+                    "element": g["element"],
+                    "rows": [
+                        {
+                            "no": r["no"],
+                            "clause": r["clause"],
+                            "target": r["target_display"],
+                            "actual": r["actual_display"],
+                            "status": r["status"],
+                            "residual_days": r["residual_days"],
+                            "department": "、".join(r["department"]) or "未指派",
+                            "note": r["note"],
+                        }
+                        for r in g["rows"]
+                    ],
+                }
+                for g in data["groups"]
+            ],
+        }
+    except Exception as e:  # noqa: BLE001 —— 工具边界兜底，报错回 Agent
+        logger.exception("query_standard_compliance failed")
+        return {"success": False, "error": f"查询失败: {e}"}

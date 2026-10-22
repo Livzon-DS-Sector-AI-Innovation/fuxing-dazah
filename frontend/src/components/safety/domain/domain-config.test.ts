@@ -1,14 +1,14 @@
 /**
- * 四域页面配置完整性（3.0 四期 1-C）：口径与 DESIGN 蓝本对齐的静态守卫。
+ * 三域页面配置完整性（3.0 四期 1-C）：口径与 DESIGN 蓝本对齐的静态守卫。
+ * goals 已改走体系标准核查引擎（components/safety/goals，2026-10-21），不在本配置内。
  */
 import { describe, expect, it } from 'vitest'
 
 import { DOMAIN_PAGE_CONFIGS } from './domain-config'
 
 describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
-  it('四域齐备，key 对齐前端菜单', () => {
+  it('三域齐备，key 对齐前端菜单', () => {
     expect(Object.keys(DOMAIN_PAGE_CONFIGS)).toEqual([
-      'goals',
       'training-behavior',
       'facilities',
       'incidents',
@@ -17,10 +17,6 @@ describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
 
   it('每域 6 张统计卡，key 与后端 stats 键一一对应（蓝本各域统计口径表）', () => {
     const expected: Record<string, string[]> = {
-      goals: [
-        'goal_total', 'goal_achieved', 'goal_in_progress', 'goal_missed',
-        'agreement_rate', 'investment_wan',
-      ],
       'training-behavior': [
         'training_total', 'completion_rate', 'pass_rate',
         'retraining_due_30d', 'violation_total', 'violation_open',
@@ -43,9 +39,6 @@ describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
 
   it('每域主台账列与蓝本主台账字段一致（抽查首列与关键字段）', () => {
     expect(
-      DOMAIN_PAGE_CONFIGS.goals.columns.map((c) => c.dataIndex),
-    ).toContain('name')
-    expect(
       DOMAIN_PAGE_CONFIGS['training-behavior'].columns.map((c) => c.dataIndex),
     ).toEqual(
       expect.arrayContaining(['name', 'planned_at', 'status', 'next_retraining_at']),
@@ -59,7 +52,6 @@ describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
   })
 
   it('每域分组对齐菜单分组名', () => {
-    expect(DOMAIN_PAGE_CONFIGS.goals.group).toBe('体系治理')
     expect(DOMAIN_PAGE_CONFIGS['training-behavior'].group).toBe('人员管理')
     expect(DOMAIN_PAGE_CONFIGS.facilities.group).toBe('现场管理')
     expect(DOMAIN_PAGE_CONFIGS.incidents.group).toBe('持续改进')

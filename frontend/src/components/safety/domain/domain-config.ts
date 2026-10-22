@@ -1,5 +1,6 @@
 /**
  * 四新域页面配置（3.0 四期 1-C）——「空态即设计」的口径载体。
+ * goals 已改走体系标准核查引擎（components/safety/goals，2026-10-21）。
  *
  * 每域：统计卡（key=后端 stats 键）、台账列（dataIndex=蓝本英文字段）、
  * 面包屑分组（=menu-config 分组名）、健康度口径说明与接入引导文案。
@@ -46,38 +47,6 @@ export interface DomainPageConfig {
 }
 
 export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
-  goals: {
-    key: 'goals',
-    title: '目标责任与绩效',
-    group: '体系治理',
-    description: '安全生产目标制定、分解与达成跟踪；责任制清单与安全投入台账',
-    statCards: [
-      { key: 'goal_total', label: '年度目标总数', tone: 'default', hint: '当年目标指标表行数' },
-      { key: 'goal_achieved', label: '已达成', tone: 'ok', hint: '达成状态=已达成' },
-      { key: 'goal_in_progress', label: '进行中', tone: 'info', hint: '达成状态=进行中' },
-      { key: 'goal_missed', label: '未达成', tone: 'danger', hint: '达成状态=未达成（预警）' },
-      { key: 'agreement_rate', label: '责任书签订率', tone: 'default', unit: '%', hint: '已签订/全部责任书' },
-      { key: 'investment_wan', label: '年度投入', tone: 'default', unit: '万', hint: '当年安全投入合计（万元）' },
-    ],
-    ledgerTitle: '目标指标台账',
-    ledgerDescription: '主台账=目标指标表；责任制清单与安全投入台账接入后扩展展示',
-    columns: [
-      { title: '年度', dataIndex: 'year', width: 70 },
-      { title: '目标名称', dataIndex: 'name', width: 220 },
-      { title: '指标类型', dataIndex: 'indicator_type', width: 90 },
-      { title: '指标值', dataIndex: 'target_value', width: 110 },
-      { title: '分解层级', dataIndex: 'level', width: 90 },
-      { title: '责任部门', dataIndex: 'department', width: 130 },
-      { title: '责任人', dataIndex: 'owner', width: 90 },
-      { title: '完成值', dataIndex: 'actual_value', width: 110 },
-      { title: '达成状态', dataIndex: 'status', width: 90 },
-    ],
-    healthNote: 'warn 判据：存在未达成目标，或责任书已过期未补签；ok 判据：全部达成/进行中且无过期责任书',
-    guideDescription:
-      '在飞书多维表格按蓝本字段建立「目标指标/责任制清单/安全投入」三张表，' +
-      '经系统配置 → 多维表格配置为对应表配好连接后，本页自动出数（页面零改码）',
-    blueprintRef: 'DESIGN-安全模块3.0四期-四新域表结构与页面口径 §2',
-  },
   'training-behavior': {
     key: 'training-behavior',
     title: '教育培训与行为管控',
