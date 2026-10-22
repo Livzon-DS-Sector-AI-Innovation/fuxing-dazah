@@ -6,6 +6,13 @@
 
 发送对象分类型：``ou_``（个人）= 一卡一隐患 DM 私发；``oc_``（群聊）= 群卡片。
 
+收件人解析走三层链（对齐督办通报 ``bulletin._harvest_person_ids`` 的直取先例，
+identity 通讯录同步被 40004 挡死、users/departments 表近乎空表时的修复）：
+  ① Bitable 人员字段直取（整改责任人/检查人员，安全应用作用域 open_id）
+  ② ``feishu.bitable_id_mapper`` 静态映射（全司快照，覆盖表外人名：
+     DEPT_CONFIG 分管安全员、部门映射产生的覆盖责任人）
+  ③ ``IdentityResolver``（identity.users/departments；通讯录同步恢复后自动生效）
+
 私发完成后，向当日「安全速递」总卡投递一个 ``progress_dunning`` 格子
 （发到安全AI创新交流群），简报中注明已私发的对象与催办明细；
 **0 命中时同样投递「今日无需催办」简报**（有无均报，口径对齐消防报警日报）。
@@ -75,17 +82,78 @@ async def find_dunning_overview() -> tuple[list[bitable_repo.HazardView], int]:
     return out, len(views)
 
 
-async def _resolve_officers(resolver: Any, department: str) -> list[Any]:
+def _harvest_person_ids(views: list[bitable_repo.HazardView]) -> dict[str, str]:
+    """从催办记录人员字段直取 姓名 → open_id（安全应用作用域）。
+
+    对齐 ``bulletin._harvest_person_ids``（2026-10-15 修复，当期责任人 100% 覆盖），
+    覆盖面再扩一格：除「整改责任人」外连「检查人员」一并收割（分管安全员
+    常以检查人身份在表）。兼容旧列表格式与 ``{"users": […]}`` 新格式。
+    """
+    out: dict[str, str] = {}
+    for view in views:
+        for field in (bitable_repo.F_RESPONSIBLE, bitable_repo.F_INSPECTOR):
+            value = view.raw.get(field)
+            entries = value.get("users") if isinstance(value, dict) else value
+            for p in entries or []:
+                if not isinstance(p, dict):
+                    continue
+                name = str(p.get("name") or "")
+                pid = str(p.get("id") or p.get("userId") or "")
+                if name and pid and name not in out:
+                    out[name] = pid
+    return out
+
+
+async def _resolve_person(
+    name: str | None,
+    dept_hint: str | None,
+    harvest: dict[str, str],
+    resolver: Any,
+) -> Any:
+    """姓名 → ResolvedPerson，三层链：人员字段直取 → 静态映射 → identity。"""
+    name = (name or "").strip()
+    if not name:
+        return None
+
+    from app.modules.safety.feishu.bitable_id_mapper import get_bitable_open_id
+    from app.modules.safety.feishu.identity_resolver import ResolvedPerson
+
+    for scope, oid in (
+        ("bitable", harvest.get(name)),
+        ("mapper", get_bitable_open_id(name=name)),
+    ):
+        if oid:
+            return ResolvedPerson(
+                open_id=oid, user_id="", name=name,
+                department=dept_hint, id_scope="safety",
+            )
+    return await resolver.resolve_by_name(name, department_hint=dept_hint)
+
+
+async def _resolve_officers(
+    resolver: Any, department: str, harvest: dict[str, str],
+) -> list[Any]:
     """责任部门 → 分管安全员（可多个）。
 
     部门字段可能一格填了多个部门（如「设备工程部, 项目部」），此时逐个拆分尝试，
     把所有能映射到安全员的部门都收进来（按人去重）。
+
+    单部门解析顺序：DEPT_CONFIG 直查（部门字段值即配置键，identity.departments
+    空表时仍可解析）→ 原 identity 链（通讯录同步恢复后模糊匹配生效）。
     """
     dept = (department or "").strip()
     if not dept:
         return []
 
     async def _one(name: str) -> Any:
+        from app.modules.safety.feishu.dept_config import DEPARTMENT_CONFIG
+        from app.modules.safety.service.hazard_supervision import DEPT_NORMALIZE
+
+        # 原名优先，再试归一化名（如「环保」→「环保工程中心」）
+        for key in dict.fromkeys((name, DEPT_NORMALIZE.get(name, name))):
+            officer = (DEPARTMENT_CONFIG.get(key) or {}).get("safety_officer")
+            if officer:
+                return await _resolve_person(officer, key, harvest, resolver)
         try:
             return await resolver.resolve_safety_officer(name)
         except Exception:
@@ -121,10 +189,10 @@ async def resolve_dunning_recipients(
 ) -> list[tuple[bitable_repo.HazardView, str, Any]]:
     """每条隐患 → [(view, 角色, ResolvedPerson)]，角色 ∈ {责任人, 分管安全员}。
 
-    复用 ``IdentityResolver``（与隐患整改通知同一条解析链）：
-      · 责任人   ← effective_responsible_person(dept, 整改责任人) → resolve_by_name
-      · 分管安全员 ← resolve_safety_officer(dept)（按部门映射 DEPT_CONFIG 固定名单；
-                     部门字段含多部门时逐个拆分，见 ``_resolve_officers``）
+    收件人解析三层链（identity 通讯录同步未部署时 ①② 兜底，见模块 docstring）：
+      · 责任人   ← effective_responsible_person(dept, 整改责任人) → 三层链
+      · 分管安全员 ← DEPT_CONFIG 按部门字段值直查（多部门逐个拆分，见
+                     ``_resolve_officers``）→ 三层链
 
     去重规则：同一隐患同一人只保留一次；解析不到的人跳过（记 warning）。
     """
@@ -134,6 +202,7 @@ async def resolve_dunning_recipients(
         effective_responsible_person,
     )
 
+    harvest = _harvest_person_ids(views)
     out: list[tuple[bitable_repo.HazardView, str, Any]] = []
     async with async_session_factory() as session:
         resolver = IdentityResolver(session)
@@ -142,7 +211,9 @@ async def resolve_dunning_recipients(
             resp_name = effective_responsible_person(
                 view.department, view.rectification_responsible_person_name
             )
-            officers = await _resolve_officers(resolver, view.department or "")
+            officers = await _resolve_officers(
+                resolver, view.department or "", harvest
+            )
             if not officers:
                 logger.warning(
                     "⑤ 部门未配置分管安全员，仅发责任人: hazard_no=%s dept=%r",
@@ -151,8 +222,8 @@ async def resolve_dunning_recipients(
             for role, person in (
                 (
                     "责任人",
-                    await resolver.resolve_by_name(
-                        resp_name or "", department_hint=view.department
+                    await _resolve_person(
+                        resp_name, view.department, harvest, resolver
                     ),
                 ),
                 *(("分管安全员", p) for p in officers),
@@ -205,10 +276,21 @@ async def send_progress_dunning_dynamic() -> dict[str, Any]:
         len(views), len(plan), stats["recipients"],
     )
 
-    # @ 提及用「安全应用作用域」open_id（跨应用修正，见 feishu/mention.py）
+    # @ 提及用「安全应用作用域」open_id（跨应用修正，见 feishu/mention.py）。
+    # 直取来源（人员字段/静态映射，id_scope=safety）的 open_id 已是安全应用
+    # 作用域，直接可用；identity 来源的 open_id 是平台应用作用域，才需经
+    # mention 链（identity 桥接 + batch_get_id）换算。
     from app.modules.safety.feishu import mention
 
-    mention_ids = await mention.resolve_open_ids(p.name for _, _, p in plan)
+    mention_ids: dict[str, str] = {}
+    pending_mention: set[str] = set()
+    for _, _, p in plan:
+        if getattr(p, "id_scope", "platform") == "safety" and p.open_id:
+            mention_ids[p.name] = p.open_id
+        else:
+            pending_mention.add(p.name)
+    if pending_mention:
+        mention_ids.update(await mention.resolve_open_ids(pending_mention))
 
     sent_plan: list[tuple[bitable_repo.HazardView, str, Any]] = []
     failed_plan: list[tuple[bitable_repo.HazardView, str, Any]] = []

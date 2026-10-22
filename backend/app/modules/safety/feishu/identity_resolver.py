@@ -47,6 +47,10 @@ class ResolvedPerson:
     name: str
     department: str | None = None
     id: str = ""  # identity.users UUID
+    # open_id 的应用作用域：identity 表同步的是「平台应用」open_id（跨应用无效）；
+    # Bitable 人员字段/静态映射直取的是「安全应用」open_id（可直接发消息与 @ 提及）。
+    # 见 feishu/mention.py 与 hazard_direct/bulletin._harvest_person_ids。
+    id_scope: str = "platform"
 
     def to_dict(self) -> dict[str, str | None]:
         return {
