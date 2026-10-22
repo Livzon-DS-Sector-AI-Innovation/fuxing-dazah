@@ -1103,19 +1103,19 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
-    # ── external_audit_hazard 管委会审计隐患（督办通报外审节直读源，纯只读；
-    #    展示名 2026-10-22 由「外部审计隐患」改「管委会审计隐患」，key 不改）──
+    # ── external_audit_hazard 管委会隐患（督办通报外审节直读源，纯只读；
+    #    展示名 2026-10-22 定稿「管委会隐患」，key 不改）──
     DomainInfo(
         key="external_audit_hazard",
-        label="管委会审计隐患",
-        purpose="管委会审计缺陷项汇总表（督办通报外审节直读源；未关闭即红色预警，无事件订阅）",
+        label="管委会隐患",
+        purpose="管委会缺陷项汇总表（督办通报外审节直读源；未关闭即红色预警，整改中不预警，无事件订阅）",
         subscribe="record",
         kinds=(
             # 后续新外审源同模式加 kind：一源一 kind，连接独立可停，
             # 字段名沿用本套（新源表字段名不同时在该 kind 上加覆盖）
             KindInfo(
                 kind="defect_summary",
-                label="管委会审计缺陷项汇总表",
+                label="管委会缺陷项汇总表",
                 default_connection=DefaultConnection(
                     app_token="R8uBb4OBQanS95sXcgjcW9HbnEe",
                     table_id="tbl9RjRjKMeo6B1b",

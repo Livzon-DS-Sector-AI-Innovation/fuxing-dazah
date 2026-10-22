@@ -1,6 +1,7 @@
-"""管委会审计隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板；
-展示名 2026-10-22 由「外部审计隐患」改为「管委会审计隐患」，域名/文件名
-仍为 external_audit 不动——registry 键是 DB 播种配置，改名断源）。
+"""管委会隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板；
+展示名 2026-10-22 定为「管委会隐患」，历经 外部审计隐患→管委会审计隐患→
+管委会隐患，域名/文件名仍为 external_audit 不动——registry 键是 DB 播种
+配置，改名断源）。
 
 数据源：外审缺陷项汇总多维表格（registry 域 ``external_audit_hazard`` /
 kind ``defect_summary``；首个源为江阴管委会安全检查缺陷项汇总，表按检查
@@ -8,12 +9,15 @@ kind ``defect_summary``；首个源为江阴管委会安全检查缺陷项汇总
 
 拍板口径：
 - **未关闭 = 红色预警**（唯一规则，不看目标期限、不看等级字段——外审表也没有）；
+- **整改中不预警**（2026-10-22 拍板，与主表同口径）：「整改状态=整改中」不进
+  明细、不计入未关闭，仅收口行计数——主表对 in_progress 是整条不通报；
 - **已关闭不再追踪**：明细不列，仅统计行计数；
 - 并入 ``hazard_bulletin`` 速递格子（不新增格子），本模块只负责取数与渲染，
   组装见 ``bulletin.build_bulletin``。
 
-关闭判定**只看「整改状态」字段**：实测存在「未关闭但已填实际完成时间」的行，
-日期字段不可作关闭依据；状态为空/异常值从宽视为未关闭（字段默认值即未关闭）。
+关闭判定**只看「整改状态」字段**（实测存在「未关闭但已填实际完成时间」的行，
+日期字段不可作关闭依据）；三态映射：「已关闭」→closed、「整改中」→
+in_progress、空/异常值从宽视为未关闭（字段默认值即未关闭，不漏报）。
 
 @ 提及直取记录「责任人」人员字段自带的 open_id（读取应用作用域，与卡片 @
 同源，无需 identity 解析——对齐 ``bulletin._harvest_person_ids`` 口径）。
@@ -51,6 +55,7 @@ REQUEST_FIELD_NAMES: tuple[str, ...] = (
 )
 
 STATUS_CLOSED = "已关闭"
+STATUS_IN_PROGRESS = "整改中"
 
 # registry 域/kind（bitable_config 配置中心；registry 默认连接即生产表）
 DOMAIN = "external_audit_hazard"
@@ -69,6 +74,7 @@ class ExternalAuditView:
     plan: str = ""
     departments: list[str] = field(default_factory=list)
     closed: bool = False
+    in_progress: bool = False
     checked_at: date | None = None
     target_date: date | None = None
     responsible: list[tuple[str, str]] = field(default_factory=list)  # (姓名, open_id)
@@ -107,14 +113,16 @@ def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
             continue
         responsible.append((name, str(p.get("id") or p.get("userId") or "")))
 
+    status = bd_fields.select(fields, F_STATUS)
     return ExternalAuditView(
         record_id=str(record.get("record_id") or ""),
         seq=seq,
         description=desc,
         plan=(bd_fields.text(fields, F_PLAN) or "").strip(),
         departments=bd_fields.multi(fields, F_DEPT),
-        # 从宽判定：非「已关闭」一律视为未关闭（字段默认值即未关闭，不漏报）
-        closed=bd_fields.select(fields, F_STATUS) == STATUS_CLOSED,
+        # 三态从宽判定：已关闭/整改中显式识别，其余（空/乱填）视为未关闭（不漏报）
+        closed=status == STATUS_CLOSED,
+        in_progress=status == STATUS_IN_PROGRESS,
         checked_at=_bj_date(checked),
         target_date=_bj_date(target),
         responsible=responsible,
@@ -122,7 +130,7 @@ def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
 
 
 async def fetch_external_audit() -> list[ExternalAuditView] | None:
-    """全量拉取外审缺陷项（含已关闭，供统计计数）。
+    """全量拉取外审缺陷项（含已关闭/整改中，供统计计数）。
 
     Returns:
         None：源未配置/已停用（外审节整体缺席，通报输出与现状逐字节一致）；
@@ -159,6 +167,23 @@ def _record_link(view: ExternalAuditView, app_token: str, table_id: str) -> str:
     return f"[📋 查看记录]({url})"
 
 
+def all_clear_line(stats: dict[str, Any]) -> str:
+    """无未关闭时的收口行（build_bulletin 早退分支复用）。
+
+    全部已关闭 → 累计收口；有整改中 → 并陈计数（整改中不预警但如实计数）；
+    既无已关闭也无整改中（源缺席/空统计）返回空串。
+    """
+    closed = int(stats.get("ext_closed") or 0)
+    doing = int(stats.get("ext_doing") or 0)
+    if not closed and not doing:
+        return ""
+    if not doing:
+        return f"✅ 管委会隐患已全部关闭（累计 {closed} 条）"
+    segs = [f"已关闭 {closed} 条"] if closed else []
+    segs.append(f"整改中 {doing} 条")
+    return f"✅ 管委会隐患无未关闭项（{'，'.join(segs)}）"
+
+
 def build_external_section(
     views: list[ExternalAuditView],
     *,
@@ -166,28 +191,31 @@ def build_external_section(
     table_id: str = "",
     today: date | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """渲染「管委会审计隐患」节（markdown 行列表 + 统计，不推送）。
+    """渲染「管委会隐患」节（markdown 行列表 + 统计，不推送）。
 
-    未关闭进明细按部门分组 @ 责任人；已关闭仅计数。目标完成日期纯展示，
-    不做逾期/剩余天数判定（拍板：不看目标期限）。
+    未关闭进明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为
+    未关闭（仅收口行计数）；已关闭仅计数。目标完成日期纯展示，不做逾期/
+    剩余天数判定（拍板：不看目标期限）。
     """
     from app.modules.safety.feishu import mention
 
-    open_views = [v for v in views if not v.closed]
+    open_views = [v for v in views if not v.closed and not v.in_progress]
     ext_by_dept: dict[str, int] = defaultdict(int)
     for v in open_views:
         ext_by_dept[_dept_label(v)] += 1
     stats: dict[str, Any] = {
         "ext_open": len(open_views),
-        "ext_closed": len(views) - len(open_views),
+        "ext_closed": sum(1 for v in views if v.closed),
+        "ext_doing": sum(1 for v in views if v.in_progress),
         "ext_depts": len(ext_by_dept),
         "ext_by_dept": dict(ext_by_dept),
     }
 
-    lines: list[str] = [_SEP, "📌 管委会审计隐患（未关闭即红色预警）", _SEP]
+    lines: list[str] = [_SEP, "📌 管委会隐患（未关闭即红色预警）", _SEP]
     if not open_views:
-        if stats["ext_closed"]:
-            lines.append(f"✅ 管委会审计缺陷项已全部关闭（累计 {stats['ext_closed']} 条）")
+        clear = all_clear_line(stats)
+        if clear:
+            lines.append(clear)
         lines.append("")
         return lines, stats
 
@@ -249,6 +277,7 @@ __all__ = [
     "KIND",
     "ExternalAuditView",
     "REQUEST_FIELD_NAMES",
+    "all_clear_line",
     "build_external_section",
     "fetch_external_audit",
     "to_view",

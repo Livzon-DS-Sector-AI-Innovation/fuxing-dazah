@@ -1,4 +1,4 @@
-"""管委会审计隐患（督办通报外审节，原「外部审计隐患」）单元测试。
+"""管委会隐患（督办通报外审节，展示名历经 外部审计隐患→管委会审计隐患→管委会隐患）单元测试。
 
 纯内存桩验证，不打飞书网络。分两层（接缝沿 build_bulletin 既有惯例，
 2026-10-21 拍板确认）：
@@ -82,6 +82,13 @@ def test_to_view_closed_only_when_explicit_closed() -> None:
     ).closed is False
 
 
+def test_to_view_in_progress_state() -> None:
+    """「整改中」三态映射：不算关闭也不算未关闭（不进预警）。"""
+    view = external_audit.to_view(_ext_record(1, status=["整改中"]))
+    assert view.in_progress is True and view.closed is False
+    assert external_audit.to_view(_ext_record(2)).in_progress is False
+
+
 def test_to_view_skips_blank_description() -> None:
     assert external_audit.to_view(_ext_record(1, desc="   ")) is None
     assert external_audit.to_view({"record_id": "r", "fields": {}}) is None
@@ -141,6 +148,7 @@ def test_section_groups_mentions_link_and_stats() -> None:
         )),
         external_audit.to_view(_ext_record(3, dept=["动力部"])),
         external_audit.to_view(_ext_record(4, status=["已关闭"])),
+        external_audit.to_view(_ext_record(5, dept=["动力部"], status=["整改中"])),
     ]
     lines, stats = external_audit.build_external_section(
         views, app_token="APP", table_id="TBL", today=date(2026, 10, 21),
@@ -148,16 +156,17 @@ def test_section_groups_mentions_link_and_stats() -> None:
     body = "\n".join(lines)
 
     assert stats == {
-        "ext_open": 3, "ext_closed": 1, "ext_depts": 2,
+        "ext_open": 3, "ext_closed": 1, "ext_doing": 1, "ext_depts": 2,
         "ext_by_dept": {"提炼工程二部": 1, "动力部": 2},
     }
-    assert "管委会审计隐患（未关闭即红色预警）" in body
+    assert "管委会隐患（未关闭即红色预警）" in body
     assert "🔴 未关闭 **3** 条  ·  ✅ 已关闭 1 条  ·  涉及 **2** 个部门" in body
     # 部门按未关闭数降序：动力部在前
     assert body.index("**动力部（2条）**") < body.index("**提炼工程二部**")
     assert "<at id=ou_cai></at>" in body and "<at id=ou_liu></at>" in body
-    # 已关闭项不进明细
+    # 已关闭项与整改中项都不进明细（整改中与主表同口径不预警）
     assert "外审缺陷#4" not in body
+    assert "外审缺陷#5" not in body
     assert "外审缺陷#1 描述" in body
     # 目标日期纯展示、检查日期带天数
     assert "目标：2026-10-31" in body
@@ -176,7 +185,7 @@ def test_section_all_closed_line_and_plain_dept_head() -> None:
     lines, stats = external_audit.build_external_section(views)
     body = "\n".join(lines)
     assert stats["ext_open"] == 0 and stats["ext_closed"] == 2
-    assert "✅ 管委会审计缺陷项已全部关闭（累计 2 条）" in body
+    assert "✅ 管委会隐患已全部关闭（累计 2 条）" in body
 
     solo = external_audit.to_view(_ext_record(1, persons=[]))
     lines, _ = external_audit.build_external_section(
@@ -276,13 +285,13 @@ async def test_build_bulletin_merges_external_section(
     assert stats["ext_open"] == 1 and stats["ext_closed"] == 1
     assert stats["ext_depts"] == 1
     i_detail = content.index("HZ-001 隐患描述")
-    i_ext = content.index("管委会审计隐患（未关闭即红色预警）")
+    i_ext = content.index("管委会隐患（未关闭即红色预警）")
     i_summary = content.index("📌 各部门未关闭隐患数量汇总")
     assert i_detail < i_ext < i_summary
-    assert "管委会审计未关闭 **1** 条" in content  # 顶部统计行追加
+    assert "管委会隐患未关闭 **1** 条" in content  # 顶部统计行追加
     assert "<at id=ou_cai></at>" in content
     # 底部部门汇总：同部门内外合并
-    assert "**设备工程部**：红色预警 1 条　+　管委会审计未关闭 1 条" in content
+    assert "**设备工程部**：红色预警 1 条　+　管委会隐患未关闭 1 条" in content
 
 
 async def test_build_bulletin_unchanged_when_external_absent(
@@ -323,7 +332,7 @@ async def test_build_bulletin_external_failure_isolated(
 
     content, stats = await bulletin.build_bulletin()
 
-    assert "管委会审计" not in content
+    assert "管委会" not in content
     assert "ext_open" not in stats
     assert "HZ-001 隐患描述" in content
 
@@ -337,7 +346,7 @@ async def test_build_bulletin_external_empty_table_absent(
 
     content, stats = await bulletin.build_bulletin()
 
-    assert "管委会审计" not in content
+    assert "管委会" not in content
     assert "ext_open" not in stats
 
 
@@ -354,8 +363,8 @@ async def test_build_bulletin_external_only_no_early_return(
 
     assert stats["total"] == 0 and stats["ext_open"] == 1
     assert "✅ **今日无红色预警/一般预警隐患**" in content
-    assert "管委会审计隐患（未关闭即红色预警）" in content
-    assert "**提炼工程二部**：管委会审计未关闭 1 条" in content
+    assert "管委会隐患（未关闭即红色预警）" in content
+    assert "**提炼工程二部**：管委会隐患未关闭 1 条" in content
 
 
 async def test_build_bulletin_all_closed_external_line(
@@ -371,7 +380,48 @@ async def test_build_bulletin_all_closed_external_line(
 
     assert stats["ext_open"] == 0 and stats["ext_closed"] == 3
     assert "✅ **今日无红色预警/一般预警隐患**" in content
-    assert "✅ 管委会审计缺陷项已全部关闭（累计 3 条）" in content
+    assert "✅ 管委会隐患已全部关闭（累计 3 条）" in content
+
+
+async def test_build_bulletin_doing_not_alerted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """整改中与主表同口径不预警：不进明细、不算未关闭，仅收口行计数。
+
+    内部为空 + 外审（1 已关闭 + 2 整改中）：无未关闭 → 早退分支收口行
+    并陈「已关闭/整改中」；顶部不出「管委会隐患未关闭」行。
+    """
+    _patch_render_deps(monkeypatch, [])
+    _stub_external(monkeypatch, [
+        _ext_record(1, status=["已关闭"], dept=["动力部"]),
+        _ext_record(2, status=["整改中"], dept=["动力部"]),
+        _ext_record(3, status=["整改中"], dept=["提炼工程二部"]),
+    ])
+
+    content, stats = await bulletin.build_bulletin()
+
+    assert stats["ext_open"] == 0 and stats["ext_closed"] == 1
+    assert stats["ext_doing"] == 2
+    assert "✅ **今日无红色预警/一般预警隐患**" in content
+    assert "✅ 管委会隐患无未关闭项（已关闭 1 条，整改中 2 条）" in content
+    assert "管委会隐患未关闭" not in content
+    assert "外审缺陷#2" not in content and "外审缺陷#3" not in content
+
+
+# ── all_clear_line：收口行分支 ──────────────────────────────────
+
+
+def test_all_clear_line_variants() -> None:
+    assert external_audit.all_clear_line({}) == ""
+    assert external_audit.all_clear_line({"ext_closed": 3}) == (
+        "✅ 管委会隐患已全部关闭（累计 3 条）"
+    )
+    assert external_audit.all_clear_line({"ext_doing": 2}) == (
+        "✅ 管委会隐患无未关闭项（整改中 2 条）"
+    )
+    assert external_audit.all_clear_line({"ext_closed": 1, "ext_doing": 2}) == (
+        "✅ 管委会隐患无未关闭项（已关闭 1 条，整改中 2 条）"
+    )
 
 
 # ── 速递格子概览统计行 ─────────────────────────────────────────
@@ -383,7 +433,7 @@ def test_overview_stats_line_with_and_without_external() -> None:
         "未关闭 **3** 项 ｜ 🔴 红色预警 2 · 🟡 一般预警 1"
     )
     assert bulletin._overview_stats_line({**base, "ext_open": 4}) == (
-        "未关闭 **7** 项 ｜ 🔴 红色预警 6（含管委会审计 4） · 🟡 一般预警 1"
+        "未关闭 **7** 项 ｜ 🔴 红色预警 6（含管委会隐患 4） · 🟡 一般预警 1"
     )
 
 
