@@ -678,3 +678,110 @@ register(
     MetricSpec("regulation.ingest_count", "法规收录运行次数", "次", "early"),
     _regulation_ingest_count,
 )
+
+
+# ═══════════════════════════════════════════════════════════════
+# S6 教育培训（源：training_behavior/training Bitable 直读，2026-10-22 接入）
+# ═══════════════════════════════════════════════════════════════
+
+
+_TRAINING_STATUS = "状态"
+_TRAINING_FIELDS_READ = (
+    "培训名称", "状态", "计划日期", "实施日期", "签到表", "考核方式", "考核合格人数",
+)
+_PLANNED_STATUSES = ("未开始", "进行中", "已完成")
+
+
+async def _fetch_trainings(ctx: MetricContext) -> list[dict[str, Any]] | None:
+    """training 表全量直读；未接入返回 None（由调用方转 NoData）。"""
+    open_client = ctx.opener or bd_reader.resolve_client
+    try:
+        client = open_client("training_behavior", "training")
+        return await client.list_all_records(
+            field_names=list(_TRAINING_FIELDS_READ), page_size=500, strict=True
+        )
+    except BitableConfigError as exc:
+        logger.info("training_behavior 域未接入，指标转无数据: %s", exc)
+        return None
+
+
+def _int_text(record: dict[str, Any], cn: str) -> int | None:
+    """数字文本列（应到/合格人数）→ int；缺失/非数字 None。"""
+    raw = bd_fields.text(record.get("fields") or {}, cn)
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return None
+
+
+async def _training_completion_rate(
+    window: PeriodWindow, ctx: MetricContext
+) -> MetricOutcome:
+    """D3-05 计划完成率=窗口内（计划日期锚定）非取消行中已完成/应完成。"""
+    rows = await _fetch_trainings(ctx)
+    if rows is None:
+        return MetricOutcome(no_data_reason="training_behavior 域未接入")
+    hits = [
+        r for r in rows
+        if (d := _rec_date(r, "计划日期")) and window.start <= d <= window.end
+        and _select(r, _TRAINING_STATUS) != "已取消"
+    ]
+    planned = [r for r in hits if _select(r, _TRAINING_STATUS) in _PLANNED_STATUSES]
+    if not planned:
+        return MetricOutcome(no_data_reason="窗口内无培训计划")
+    done = sum(1 for r in planned if _select(r, _TRAINING_STATUS) == "已完成")
+    evidence = (
+        {
+            "title": f"窗口内计划 {len(planned)} 项，已完成 {done} 项",
+            "date": f"{window.start}~{window.end}",
+            "type": "training.completion_rate",
+        },
+    )
+    return MetricOutcome(value=round(done * 100 / len(planned)), evidence=evidence)
+
+
+async def _training_record_integrity(
+    window: PeriodWindow, ctx: MetricContext
+) -> MetricOutcome:
+    """D3-07 台账完整率=窗口内（实施日期锚定）已完成行中留痕完整占比。
+
+    完整=签到表附件非空 且（考核方式=无需考核 或 考核合格人数已填）。
+    """
+    rows = await _fetch_trainings(ctx)
+    if rows is None:
+        return MetricOutcome(no_data_reason="training_behavior 域未接入")
+    held = [
+        r for r in rows
+        if _select(r, _TRAINING_STATUS) == "已完成"
+        and (d := _rec_date(r, "实施日期")) and window.start <= d <= window.end
+    ]
+    if not held:
+        return MetricOutcome(no_data_reason="窗口内无已完成培训")
+
+    def intact(r: dict[str, Any]) -> bool:
+        fields = r.get("fields") or {}
+        has_attendance = bool(bd_fields.attachments(fields, "签到表"))
+        no_exam = _select(r, "考核方式") == "无需考核"
+        return has_attendance and (no_exam or _int_text(r, "考核合格人数") is not None)
+
+    ok = [r for r in held if intact(r)]
+    evidence = (
+        {
+            "title": f"窗口内已完成 {len(held)} 项，留痕完整 {len(ok)} 项",
+            "date": f"{window.start}~{window.end}",
+            "type": "training.record_integrity",
+        },
+    )
+    return MetricOutcome(value=round(len(ok) * 100 / len(held)), evidence=evidence)
+
+
+register(
+    MetricSpec("training.completion_rate", "年度培训计划完成率", "%", "period_end"),
+    _training_completion_rate,
+)
+register(
+    MetricSpec("training.record_integrity", "培训台账记录完整率", "%", "period_end"),
+    _training_record_integrity,
+)

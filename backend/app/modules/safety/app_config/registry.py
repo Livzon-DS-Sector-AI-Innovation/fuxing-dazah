@@ -563,6 +563,28 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_TELEMETRY_CURSOR", "misc", "str", "",
         "采集游标（运行时：last_message_id|create_time；重启增量续拉，勿手改）",
     ),
+
+    # ══════════════════════════════════════════════════════════
+    # S6 教育培训与行为管控（一期 R1）— 三违回流/定向培训/复训到期
+    # ══════════════════════════════════════════════════════════
+    _gate(
+        "SAFETY_TB_RETRAINING_PUSH_ENABLED", False,
+        "违章定向培训要点卡推送开关（默认关=内容仅落表可审；内容审核通过后"
+        "开启，翻本开关即启用）",
+    ),
+    ConfigItem(
+        "SAFETY_TB_RETRAINING_PUSH_CHAT_ID", "chat_id", "str", "",
+        "要点卡推送目标群（空=开关开也仅日志提示；真实发送随启用批接入）",
+    ),
+    ConfigItem(
+        "SAFETY_TB_RETRAINING_DUE_CHAT_ID", "chat_id", "str", "",
+        "复训到期提醒目标群（空=仅域页统计与日志；真实发送随启用批接入）",
+    ),
+    ConfigItem(
+        "SAFETY_TB_BACKFLOW_INTERVAL_SECONDS", "poll_param", "int", 900,
+        "三违回流+定向培训触发轮询间隔秒数（下限 60；单例创建时读取，改后需重启）",
+        restart_required=True, minimum=60,
+    ),
 )
 
 # 构造时断言：键唯一（重复键会在 dict 推导时静默覆盖，故显式校验）

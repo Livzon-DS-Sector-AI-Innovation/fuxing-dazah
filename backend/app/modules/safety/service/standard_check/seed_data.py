@@ -35,8 +35,9 @@ _METRIC_KEYS = (
     "contractor.admit_rate", "contractor.agreement_rate",
     "visitor.notice_rate", "visitor.insurance_rate",
     "msds.coverage_rate", "regulation.ingest_count",
-    # ── 待接入（training/incidents 建表后注册取数器）──
-    "training.completion_rate", "accident.severe.count",
+    # ── 待接入（incidents 建表后注册取数器；training 两键已接入）──
+    "training.completion_rate", "training.record_integrity",
+    "accident.severe.count",
     "incident.near_miss_rate", "capa.on_time_close_rate",
 )
 
@@ -133,10 +134,12 @@ STANDARDS: list[dict[str, str | None]] = [
        "教育培训", period="季度", target="100", unit="%", note="半自动：cert 台账出持证与临期清单"),
     _s("D3-05", "年度培训计划完成率≥95%", "公司制度", "教育培训",
        metric_key="training.completion_rate", operator="≥", target="95", unit="%",
-       note="待 training 域建表接入后自动核查"),
+       note="S6 建表接入后自动核查（2026-10-22 起）"),
     _s("D3-06", "外来人员入厂安全培训报备率100%", "公司制度", "教育培训",
        period="月度", metric_key="visitor.notice_rate", operator="=", target="100", unit="%"),
-    _s("D3-07", "培训台账与签到考核记录完整", "安全培训规定", "教育培训", period="季度"),
+    _s("D3-07", "培训台账与签到考核记录完整", "安全培训规定", "教育培训", period="季度",
+       metric_key="training.record_integrity", operator="≥", target="100", unit="%",
+       note="完整=签到附件非空且考核留痕齐（S6 2026-10-22 接入自动核查）"),
     # ── 四、现场管理（13，含职业健康）──
     _s("D4-01", "特殊作业实行作业许可，作业票审核覆盖率100%", "GB 30871-2022", "现场管理",
        period="月度", metric_key="workticket.audit_rate", operator="=", target="100", unit="%"),

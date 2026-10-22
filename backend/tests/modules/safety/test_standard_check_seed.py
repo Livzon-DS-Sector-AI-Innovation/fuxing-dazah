@@ -25,7 +25,7 @@ def test_55_standards_unique_nos() -> None:
 
 
 PENDING_KEYS = [
-    "training.completion_rate", "accident.severe.count",
+    "accident.severe.count",
     "incident.near_miss_rate", "capa.on_time_close_rate",
 ]
 
@@ -33,12 +33,12 @@ PENDING_KEYS = [
 def test_auto_metric_keys_all_registered() -> None:
     """清单指标键与注册表对齐（随票收紧）。
 
-    T1 后：drill 3 键已注册；待接入 4 键禁止注册（未接域误注册=假数据）。
-    T3/T4 后：除待接入 4 键外全部注册（见文末收紧断言）。
+    T1 后：drill 3 键已注册；待接入键禁止注册（未接域误注册=假数据）。
+    S6 接入（2026-10-22）后：training 两键已注册，待接入仅剩 incidents 3 键。
     """
     auto_keys = {s["metric_key"] for s in seed_data.STANDARDS if s["metric_key"]}
     unregistered = {k for k in auto_keys if sc_metrics.get_metric(k) is None}
-    # 终态（T4 后）：除 4 个待接入键外全部注册
+    # 终态：除待接入键外全部注册
     assert unregistered == set(PENDING_KEYS), f"未注册键超出待接入清单: {sorted(unregistered)}"
     for key in PENDING_KEYS:
         assert key in auto_keys

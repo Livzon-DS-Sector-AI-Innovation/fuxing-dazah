@@ -116,7 +116,7 @@ class TestLive:
             _std("r3", "D1-03", element="目标职责", metric_key=None, manual="已完成"),
             _std("r4", "D1-04", element="目标职责", metric_key=None, manual="未完成"),
             _std("r5", "D2-06", element="制度化管理", metric_key=None, manual=None),  # 待核查
-            _std("r6", "D3-05", element="教育培训", metric_key="training.completion_rate"),  # 未注册 → no_data
+            _std("r6", "D3-05", element="教育培训", metric_key="incident.near_miss_rate"),  # 未注册 → no_data（training 键 2026-10-22 已注册）
             _std("r7", "D0-99", element="其他要素", metric_key=None, manual="不适用"),
             _std("r8", "D0-98", year=str(today.year - 1), metric_key=None, manual="已完成"),  # 去年不计
         ]
@@ -182,7 +182,7 @@ class TestLive:
         assert calls.count("compute:drill.count.site_handling") == 1
 
     async def test_compliance_rate_none_when_no_judged(self, db_session) -> None:
-        items = [_std("r1", "D3-05", metric_key="training.completion_rate")]
+        items = [_std("r1", "D3-05", metric_key="incident.near_miss_rate")]
         data = await sc_page.build_standard_check_page(
             db=db_session, opener=lambda d, k: FakePageClient(items)
         )
@@ -248,7 +248,7 @@ class TestEvidence:
         assert data["verdict_status"] == ST_OK
 
     async def test_evidence_no_data_reason(self, db_session) -> None:
-        items = [_std("r9", "D3-05", metric_key="training.completion_rate")]
+        items = [_std("r9", "D3-05", metric_key="incident.near_miss_rate")]
         data = await sc_page.build_standard_evidence(
             "r9", db=db_session, opener=lambda d, k: FakePageClient(items)
         )

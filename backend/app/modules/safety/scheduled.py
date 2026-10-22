@@ -239,20 +239,24 @@ def _round_done(task: asyncio.Task) -> None:
         logger.error("hazard 后台轮询任务异常退出", exc_info=exc)
 
 
-def _dispatch_hazard_round(round_coro: Awaitable, label: str) -> None:
+def _dispatch_round(round_coro: Awaitable, label: str, timeout: int) -> None:
     """整轮派发到后台任务后立即返回（审查修复：防引擎单循环阻塞）。
 
     平台引擎对任务协程是内联 await（engine._maybe_run_task），协程直接跑
-    整轮 AI 分析（单轮上限 _HAZARD_TIMEOUT）会把引擎单循环挂起整轮时长，
-    期间全平台任务（含仓储推送、桥接 tick）停摆——与桥接任务「绝不 await」
-    同一纪律。超时上限由 wait_for 在后台任务内保留；重叠防护仍由
-    _hazard_single_round 的 per-key 锁负责（上轮未完跳过本次触发）。
+    整轮 AI 分析会把引擎单循环挂起整轮时长，期间全平台任务（含仓储推送、
+    桥接 tick）停摆——与桥接任务「绝不 await」同一纪律。超时上限由
+    wait_for 在后台任务内保留；重叠防护由各单轮函数的 per-key 锁负责
+    （上轮未完跳过本次触发）。
     """
     task = asyncio.create_task(
-        asyncio.wait_for(round_coro, timeout=_HAZARD_TIMEOUT), name=label
+        asyncio.wait_for(round_coro, timeout=timeout), name=label
     )
     _BACKGROUND_ROUNDS.add(task)
     task.add_done_callback(_round_done)
+
+
+def _dispatch_hazard_round(round_coro: Awaitable, label: str) -> None:
+    _dispatch_round(round_coro, label, _HAZARD_TIMEOUT)
 
 
 async def _dispatch_hazard_ai_round() -> None:
@@ -388,6 +392,92 @@ TELEMETRY_COLLECT_TASK = TaskDefinition(
     module="safety",
 )
 
+# S6 一期R1：三违回流 + 定向培训要点卡（interval，默认 15 分钟）
+# ═══════════════════════════════════════════════════════════════
+
+_TB_ROUND_KEY = "tb_backflow"
+_TB_ROUND_TIMEOUT = 10 * 60  # 链5 AI 逐条串行（轮内批上限 5 条），上限对齐 hazard 单轮
+
+
+def _tb_backflow_interval() -> int:
+    from app.modules.safety.app_config.store import store
+
+    return store.get_int("SAFETY_TB_BACKFLOW_INTERVAL_SECONDS", 900, minimum=60)
+
+
+async def _run_tb_round() -> None:
+    """S6 整轮：三违回流 → 链5 定向培训要点卡（推送开关默认关）。
+
+    重叠防护用 per-key 锁（上轮未完跳过本次触发）。
+    """
+    if _TB_ROUND_KEY in _RUNNING:
+        logger.warning("S6 三违回流上轮未完，跳过本次触发")
+        return
+    _RUNNING.add(_TB_ROUND_KEY)
+    try:
+        from app.modules.safety.service.training_behavior import (
+            backflow,
+            retraining,
+        )
+
+        await backflow.run_backflow_round()
+        await retraining.run_retraining_round()
+    except Exception:
+        logger.exception("S6 三违回流单轮异常")
+    finally:
+        _RUNNING.discard(_TB_ROUND_KEY)
+
+
+async def _dispatch_tb_round() -> None:
+    """派发器（瞬时返回）：整轮含 AI 调用，禁止内联 await 进引擎循环。"""
+    _dispatch_round(_run_tb_round(), "safety.tb_backflow.round", _TB_ROUND_TIMEOUT)
+
+
+TB_BACKFLOW_TASK = TaskDefinition(
+    name="safety.tb_backflow",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        interval_seconds=_tb_backflow_interval(),
+    ),
+    coro=_dispatch_tb_round,
+    # 引擎侧超时约束派发器（瞬时返回）；整轮真实上限在后台任务 wait_for 内
+    timeout_seconds=60,
+    module="safety",
+)
+
+
+# 链6 复训到期扫描（每日 08:20 北京，FIXED_TIME 日锚；确定性文本提醒，
+# 非 AI 内容，不受链5推送开关管控）
+_TB_DUE_ROUND_KEY = "tb_retraining_due"
+
+
+async def _run_tb_due_round() -> None:
+    if _TB_DUE_ROUND_KEY in _RUNNING:
+        logger.warning("S6 复训到期扫描上轮未完，跳过本次触发")
+        return
+    _RUNNING.add(_TB_DUE_ROUND_KEY)
+    try:
+        from app.modules.safety.service.training_behavior import retraining_due
+
+        await retraining_due.run_retraining_due_round()
+    except Exception:
+        logger.exception("S6 复训到期扫描单轮异常")
+    finally:
+        _RUNNING.discard(_TB_DUE_ROUND_KEY)
+
+
+TB_RETRAINING_DUE_TASK = TaskDefinition(
+    name="safety.tb_retraining_due",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.FIXED_TIME,
+        time_of_day="08:20",
+        timezone="Asia/Shanghai",
+    ),
+    coro=_run_tb_due_round,
+    timeout_seconds=120,
+    module="safety",
+)
+
 _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     SAFETY_SCHEDULER_BRIDGE_TASK,
     HAZARD_AI_POLL_TASK,
@@ -395,10 +485,12 @@ _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     HAZARD_SUPERVISION_POLL_TASK,
     HAZARD_BULLETIN_WATCH_TASK,
     TELEMETRY_COLLECT_TASK,
+    TB_BACKFLOW_TASK,
+    TB_RETRAINING_DUE_TASK,
 )
 
 
 def register_safety_tasks(registry) -> None:
-    """安全模块 5 个任务注册进平台引擎（main.py 启动接线，对齐仓储模式）。"""
+    """安全模块 8 个任务注册进平台引擎（main.py 启动接线，对齐仓储模式）。"""
     for task in _SAFETY_TASKS:
         registry.register_task(task)

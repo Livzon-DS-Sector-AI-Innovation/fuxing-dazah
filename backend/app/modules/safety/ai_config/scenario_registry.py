@@ -59,6 +59,7 @@ _AI_SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "oh_transfer_hazard_diff": ("转岗危害差异", "转岗/离岗前后危害因素差异 AI 分析", "text", "feishu"),
     "fire_alarm_analysis": ("消防报警分析", "消防报警逐条/日报/周报 AI 汇总分析", "text", "system"),
     "central_alarm_analysis": ("中控报警分析", "中控报警逐条/日报 AI 汇总分析", "text", "system"),
+    "violation_retraining_generation": ("违章定向培训要点卡", "违章→定向培训要点卡 AI 生成（推送开关默认关，内容先落表可审）", "text", "system"),
 }
 
 # 已废弃但保留可配的场景（deprecated=True）；其余均为 False
