@@ -1,15 +1,14 @@
-"""检查未整改隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板）。
+"""管委会检查未整改隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板）。
 
-两个**同级**检查缺陷源（2026-10-22 拍板，逐源一节、格式一致）：
-- **管委会检查**（kind ``defect_summary``，江阴管委会安全检查缺陷项汇总）；
-- **公司内检查**（kind ``internal_defect_summary``，连接位空——配置中心接入
-  后该节自动出现，字段名沿用同套）。
+通报内两个**同级**栏头（2026-10-22 拍板，格式一致）：
+- **公司内检查未整改隐患**：主表督办数据，由 ``bulletin.build_bulletin``
+  直接渲染（不经本模块，无独立数据源）；
+- **管委会检查未整改隐患**：本模块直读江阴管委会安全检查缺陷项汇总表。
 
 展示名 2026-10-22 定稿「{源名}未整改隐患」（历经 外部审计隐患→管委会审计
 隐患→管委会隐患→管委会检查未整改隐患），域名/文件名仍为 external_audit
 不动——registry 键是 DB 播种配置，改名断源。
 
-数据源：检查缺陷项汇总多维表格（registry 域 ``external_audit_hazard``）。
 纯只读：无事件订阅、无缓存，随督办通报每周四拉一次 + 值守轮询。
 
 拍板口径：
@@ -64,14 +63,10 @@ STATUS_IN_PROGRESS = "整改中"
 
 # registry 域/kind（bitable_config 配置中心；registry 默认连接即生产表）
 DOMAIN = "external_audit_hazard"
-
-# 两个同级检查缺陷源：kind → 展示名（节标题/统计行/汇总行用，顺序即节顺序）
-SOURCE_MGMT = "defect_summary"               # 管委会检查（江阴管委会缺陷项汇总）
-SOURCE_COMPANY = "internal_defect_summary"   # 公司内检查（连接位空，配置后生效）
-SOURCE_KINDS: tuple[tuple[str, str], ...] = (
-    (SOURCE_MGMT, "管委会检查"),
-    (SOURCE_COMPANY, "公司内检查"),
-)
+KIND = "defect_summary"
+# 展示名（节标题「📌 管委会检查未整改隐患」/ 顶部速览行 / 部门汇总段共用；
+# 同级的「公司内检查未整改隐患」节由主表数据渲染，见 bulletin）
+SOURCE_LABEL = "管委会检查"
 
 _SEP = "━" * 20
 
@@ -141,28 +136,24 @@ def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
     )
 
 
-async def fetch_external_audit(
-    kind: str = SOURCE_MGMT,
-) -> list[ExternalAuditView] | None:
-    """全量拉取指定检查源的缺陷项（含已关闭/整改中，供统计计数）。
-
-    Args:
-        kind: 检查源 kind（``SOURCE_KINDS`` 之一）。
+async def fetch_external_audit() -> list[ExternalAuditView] | None:
+    """全量拉取管委会检查缺陷项（含已关闭/整改中，供统计计数）。
 
     Returns:
-        None：源未配置/已停用（该源节整体缺席，通报输出与现状逐字节一致）；
-        strict 拉取失败向上抛，由 ``bulletin._load_external_sections`` 兜底为缺席。
+        None：源未配置/已停用（外审节整体缺席，通报输出与「无外审节」基线
+        逐字节一致）；strict 拉取失败向上抛，由 ``bulletin._load_external_section``
+        兜底为缺席。
     """
     try:
-        client = bd_reader.resolve_client(DOMAIN, kind)
+        client = bd_reader.resolve_client(DOMAIN, KIND)
     except BitableConfigError:
         return None
     records = await bd_reader.fetch_all_records(
         client, field_names=REQUEST_FIELD_NAMES, strict=True,
     )
     views = [v for v in (to_view(r) for r in records) if v is not None]
-    logger.info("检查缺陷项直读完成: kind=%s records=%d views=%d",
-                kind, len(records), len(views))
+    logger.info("管委会检查缺陷项直读完成: records=%d views=%d",
+                len(records), len(views))
     return views
 
 
@@ -185,8 +176,8 @@ def _record_link(view: ExternalAuditView, app_token: str, table_id: str) -> str:
     return f"[📋 查看记录]({url})"
 
 
-def all_clear_line(stats: dict[str, Any], source_label: str) -> str:
-    """单源无未整改时的收口行（build_bulletin 早退分支复用）。
+def all_clear_line(stats: dict[str, Any]) -> str:
+    """无未整改时的收口行（build_bulletin 早退分支复用）。
 
     全部已关闭 → 累计收口；有整改中 → 并陈计数（整改中不预警但如实计数）；
     既无已关闭也无整改中（源缺席/空统计）返回空串。
@@ -196,21 +187,20 @@ def all_clear_line(stats: dict[str, Any], source_label: str) -> str:
     if not closed and not doing:
         return ""
     if not doing:
-        return f"✅ {source_label}已全部关闭（累计 {closed} 条）"
+        return f"✅ {SOURCE_LABEL}已全部关闭（累计 {closed} 条）"
     segs = [f"已关闭 {closed} 条"] if closed else []
     segs.append(f"整改中 {doing} 条")
-    return f"✅ {source_label}无未整改项（{'，'.join(segs)}）"
+    return f"✅ {SOURCE_LABEL}无未整改项（{'，'.join(segs)}）"
 
 
 def build_external_section(
     views: list[ExternalAuditView],
     *,
-    source_label: str,
     app_token: str = "",
     table_id: str = "",
     today: date | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """渲染单源「{源名}未整改隐患」节（markdown 行列表 + 统计，不推送）。
+    """渲染「📌 管委会检查未整改隐患」节（markdown 行列表 + 统计，不推送）。
 
     未关闭进明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为
     未整改（仅收口行计数）；已关闭仅计数。目标完成日期纯展示，不做逾期/
@@ -230,9 +220,9 @@ def build_external_section(
         "ext_by_dept": dict(ext_by_dept),
     }
 
-    lines: list[str] = [_SEP, f"📌 {source_label}未整改隐患", _SEP]
+    lines: list[str] = [_SEP, f"📌 {SOURCE_LABEL}未整改隐患", _SEP]
     if not open_views:
-        clear = all_clear_line(stats, source_label)
+        clear = all_clear_line(stats)
         if clear:
             lines.append(clear)
         lines.append("")
@@ -293,9 +283,8 @@ def build_external_section(
 
 __all__ = [
     "DOMAIN",
-    "SOURCE_MGMT",
-    "SOURCE_COMPANY",
-    "SOURCE_KINDS",
+    "KIND",
+    "SOURCE_LABEL",
     "ExternalAuditView",
     "REQUEST_FIELD_NAMES",
     "all_clear_line",

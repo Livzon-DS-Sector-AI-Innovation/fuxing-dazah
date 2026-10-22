@@ -1103,16 +1103,16 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
-    # ── external_audit_hazard 检查未整改隐患（督办通报外审节直读源，纯只读；
-    #    管委会检查/公司内检查两源同级，2026-10-22 拍板；key 不改）──
+    # ── external_audit_hazard 管委会检查未整改隐患（督办通报外审节直读源，
+    #    纯只读；同级「公司内检查未整改隐患」节由主表数据渲染，不经本域）──
     DomainInfo(
         key="external_audit_hazard",
-        label="检查未整改隐患",
-        purpose="管委会/公司内检查缺陷项汇总（督办通报外审节直读源；未关闭即红色预警，整改中不预警，无事件订阅）",
+        label="管委会检查未整改隐患",
+        purpose="管委会检查缺陷项汇总表（督办通报「管委会检查未整改隐患」节直读源；未关闭即红色预警，整改中不预警，无事件订阅）",
         subscribe="record",
         kinds=(
-            # 同级检查源一源一 kind，连接独立可停；字段名沿用本套
-            #（新源表字段名不同时在该 kind 上加覆盖）
+            # 后续新外审源同模式加 kind：一源一 kind，连接独立可停，
+            # 字段名沿用本套（新源表字段名不同时在该 kind 上加覆盖）
             KindInfo(
                 kind="defect_summary",
                 label="管委会检查缺陷项汇总表",
@@ -1121,11 +1121,6 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                     table_id="tbl9RjRjKMeo6B1b",
                     note="江阴管委会安全检查缺陷项汇总（2026-04-10 建表按批次复用）",
                 ),
-            ),
-            KindInfo(
-                kind="internal_defect_summary",
-                label="公司内检查缺陷项汇总表",
-                # 连接位空：配置中心接入后该节自动出现（字段沿用管委会表同套）
             ),
         ),
     ),
