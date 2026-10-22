@@ -1,4 +1,6 @@
-"""外部审计隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板）。
+"""管委会审计隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板；
+展示名 2026-10-22 由「外部审计隐患」改为「管委会审计隐患」，域名/文件名
+仍为 external_audit 不动——registry 键是 DB 播种配置，改名断源）。
 
 数据源：外审缺陷项汇总多维表格（registry 域 ``external_audit_hazard`` /
 kind ``defect_summary``；首个源为江阴管委会安全检查缺陷项汇总，表按检查
@@ -164,7 +166,7 @@ def build_external_section(
     table_id: str = "",
     today: date | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """渲染「外部审计隐患」节（markdown 行列表 + 统计，不推送）。
+    """渲染「管委会审计隐患」节（markdown 行列表 + 统计，不推送）。
 
     未关闭进明细按部门分组 @ 责任人；已关闭仅计数。目标完成日期纯展示，
     不做逾期/剩余天数判定（拍板：不看目标期限）。
@@ -182,10 +184,10 @@ def build_external_section(
         "ext_by_dept": dict(ext_by_dept),
     }
 
-    lines: list[str] = [_SEP, "📌 外部审计隐患（未关闭即红色预警）", _SEP]
+    lines: list[str] = [_SEP, "📌 管委会审计隐患（未关闭即红色预警）", _SEP]
     if not open_views:
         if stats["ext_closed"]:
-            lines.append(f"✅ 外审缺陷项已全部关闭（累计 {stats['ext_closed']} 条）")
+            lines.append(f"✅ 管委会审计缺陷项已全部关闭（累计 {stats['ext_closed']} 条）")
         lines.append("")
         return lines, stats
 

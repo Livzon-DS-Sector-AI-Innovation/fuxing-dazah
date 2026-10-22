@@ -151,7 +151,7 @@ def test_section_groups_mentions_link_and_stats() -> None:
         "ext_open": 3, "ext_closed": 1, "ext_depts": 2,
         "ext_by_dept": {"提炼工程二部": 1, "动力部": 2},
     }
-    assert "外部审计隐患（未关闭即红色预警）" in body
+    assert "管委会审计隐患（未关闭即红色预警）" in body
     assert "🔴 未关闭 **3** 条  ·  ✅ 已关闭 1 条  ·  涉及 **2** 个部门" in body
     # 部门按未关闭数降序：动力部在前
     assert body.index("**动力部（2条）**") < body.index("**提炼工程二部**")
@@ -176,7 +176,7 @@ def test_section_all_closed_line_and_plain_dept_head() -> None:
     lines, stats = external_audit.build_external_section(views)
     body = "\n".join(lines)
     assert stats["ext_open"] == 0 and stats["ext_closed"] == 2
-    assert "✅ 外审缺陷项已全部关闭（累计 2 条）" in body
+    assert "✅ 管委会审计缺陷项已全部关闭（累计 2 条）" in body
 
     solo = external_audit.to_view(_ext_record(1, persons=[]))
     lines, _ = external_audit.build_external_section(
@@ -276,13 +276,13 @@ async def test_build_bulletin_merges_external_section(
     assert stats["ext_open"] == 1 and stats["ext_closed"] == 1
     assert stats["ext_depts"] == 1
     i_detail = content.index("HZ-001 隐患描述")
-    i_ext = content.index("外部审计隐患（未关闭即红色预警）")
+    i_ext = content.index("管委会审计隐患（未关闭即红色预警）")
     i_summary = content.index("📌 各部门未关闭隐患数量汇总")
     assert i_detail < i_ext < i_summary
-    assert "外审未关闭 **1** 条" in content  # 顶部统计行追加
+    assert "管委会审计未关闭 **1** 条" in content  # 顶部统计行追加
     assert "<at id=ou_cai></at>" in content
     # 底部部门汇总：同部门内外合并
-    assert "**设备工程部**：红色预警 1 条　+　外审未关闭 1 条" in content
+    assert "**设备工程部**：红色预警 1 条　+　管委会审计未关闭 1 条" in content
 
 
 async def test_build_bulletin_unchanged_when_external_absent(
@@ -323,7 +323,7 @@ async def test_build_bulletin_external_failure_isolated(
 
     content, stats = await bulletin.build_bulletin()
 
-    assert "外部审计" not in content
+    assert "管委会审计" not in content
     assert "ext_open" not in stats
     assert "HZ-001 隐患描述" in content
 
@@ -337,7 +337,7 @@ async def test_build_bulletin_external_empty_table_absent(
 
     content, stats = await bulletin.build_bulletin()
 
-    assert "外部审计" not in content
+    assert "管委会审计" not in content
     assert "ext_open" not in stats
 
 
@@ -354,8 +354,8 @@ async def test_build_bulletin_external_only_no_early_return(
 
     assert stats["total"] == 0 and stats["ext_open"] == 1
     assert "✅ **今日无红色预警/一般预警隐患**" in content
-    assert "外部审计隐患（未关闭即红色预警）" in content
-    assert "**提炼工程二部**：外审未关闭 1 条" in content
+    assert "管委会审计隐患（未关闭即红色预警）" in content
+    assert "**提炼工程二部**：管委会审计未关闭 1 条" in content
 
 
 async def test_build_bulletin_all_closed_external_line(
@@ -371,7 +371,7 @@ async def test_build_bulletin_all_closed_external_line(
 
     assert stats["ext_open"] == 0 and stats["ext_closed"] == 3
     assert "✅ **今日无红色预警/一般预警隐患**" in content
-    assert "✅ 外审缺陷项已全部关闭（累计 3 条）" in content
+    assert "✅ 管委会审计缺陷项已全部关闭（累计 3 条）" in content
 
 
 # ── 速递格子概览统计行 ─────────────────────────────────────────
@@ -383,7 +383,7 @@ def test_overview_stats_line_with_and_without_external() -> None:
         "未关闭 **3** 项 ｜ 🔴 红色预警 2 · 🟡 一般预警 1"
     )
     assert bulletin._overview_stats_line({**base, "ext_open": 4}) == (
-        "未关闭 **7** 项 ｜ 🔴 红色预警 6（含外审 4） · 🟡 一般预警 1"
+        "未关闭 **7** 项 ｜ 🔴 红色预警 6（含管委会审计 4） · 🟡 一般预警 1"
     )
 
 

@@ -11,7 +11,8 @@
 与卡片 @ 同源）；部门映射产生的表外人名才回退 ``feishu.mention``（identity
 桥接，通讯录同步未部署时多数解析不到，退化为纯文本姓名）。
 
-外审节（2026-10-21 拍板）：同一份通报追加「外部审计隐患」节——外审缺陷项
+外审节（2026-10-21 拍板）：同一份通报追加「管委会审计隐患」节（展示名
+2026-10-22 由「外部审计隐患」改为「管委会审计隐患」）——外审缺陷项
 汇总表直读（``external_audit``），**未关闭即红色预警**、已关闭仅计数、不看
 目标期限；并入本格（不新增速递格子）。源未配置/停用/拉取失败时外审节整体
 缺席，内部部分输出与历史逐字节一致（值守轮询不会因此误判变化）。
@@ -177,7 +178,7 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
             "✅ **今日无红色预警/一般预警隐患**",
         ]
         if ext_stats.get("ext_closed"):
-            parts += ["", f"✅ 外审缺陷项已全部关闭（累计 {ext_stats['ext_closed']} 条）"]
+            parts += ["", f"✅ 管委会审计缺陷项已全部关闭（累计 {ext_stats['ext_closed']} 条）"]
         parts.append("")
         return "\n".join(parts), stats
 
@@ -258,7 +259,7 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
             f"涉及 **{len(sorted_depts)}** 个部门"
         )
         if ext_open:
-            parts.append(f"🔴 外审未关闭 **{ext_open}** 条")
+            parts.append(f"🔴 管委会审计未关闭 **{ext_open}** 条")
         if total_no_progress:
             parts.append(f"⚠️ 未更新进展 **{total_no_progress}** 条")
         parts.append("")
@@ -324,7 +325,7 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
         if wn:
             segs.append(f"一般预警 {wn} 条")
         if ext_n:
-            segs.append(f"外审未关闭 {ext_n} 条")
+            segs.append(f"管委会审计未关闭 {ext_n} 条")
         parts.append(f"**{dept}**：{'　+　'.join(segs)}")
     parts.append("")
 
@@ -338,7 +339,7 @@ async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
 
 
 def _overview_stats_line(stats: dict[str, Any]) -> str:
-    """速递格子概览统计行：外审未关闭并入红色预警计数并标注「含外审 N」。
+    """速递格子概览统计行：外审未关闭并入红色预警计数并标注「含管委会审计 N」。
 
     外审缺席（ext_open=0/缺键）时与原文案逐字节一致——值守轮询按整格
     detail 逐字比对，统计行不因上线抖动。
@@ -353,7 +354,7 @@ def _overview_stats_line(stats: dict[str, Any]) -> str:
     return (
         f"未关闭 **{stats.get('total', 0) + ext_open}** 项 ｜ "
         f"🔴 红色预警 {stats.get('urgent', 0) + ext_open}"
-        f"（含外审 {ext_open}） · 🟡 一般预警 {stats.get('warning', 0)}"
+        f"（含管委会审计 {ext_open}） · 🟡 一般预警 {stats.get('warning', 0)}"
     )
 
 
