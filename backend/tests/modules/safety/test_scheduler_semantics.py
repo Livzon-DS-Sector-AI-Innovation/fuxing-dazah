@@ -142,6 +142,28 @@ def test_matches_day_dow_dom() -> None:
     assert _matches_day({}, friday) is True             # 未配置不限
 
 
+def test_matches_day_months_quarter_gate() -> None:
+    """months=季度首月：非季度月 1 日为空跑（S1 二期标准符合性定格）。"""
+    from app.modules.safety.scheduler import _matches_day
+
+    job = {"dom": 1, "months": [1, 4, 7, 10]}
+    assert _matches_day(job, date(2026, 10, 1)) is True   # 10-1 季度首日触发
+    assert _matches_day(job, date(2026, 11, 1)) is False  # 非季度月 1 日空跑
+    assert _matches_day(job, date(2026, 10, 2)) is False  # dom 不符
+    # 未配置 months 的既有任务不受影响（月报 dom=1 月月照跑）
+    assert _matches_day({"dom": 1}, date(2026, 11, 1)) is True
+
+
+def test_freeze_job_registered_with_quarter_gate() -> None:
+    """SCHEDULED_JOBS 含「标准符合性定格」且带 months 门（装配链透传契约）。"""
+    from app.modules.safety.scheduler import SCHEDULED_JOBS
+
+    job = next(j for j in SCHEDULED_JOBS if j["name"] == "标准符合性定格")
+    assert (job["hour"], job["minute"], job["dom"]) == (8, 20, 1)
+    assert job["months"] == [1, 4, 7, 10]
+    assert (job["retry_until_hour"], job["retry_until_minute"]) == (23, 30)
+
+
 # ── 状态持久化 fail-open（DB 不可用退化纯内存）──────────────────
 
 

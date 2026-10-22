@@ -64,3 +64,22 @@ class StandardEvidenceOut(BaseModel):
     actual_display: str | None = None
     evidence: list[StandardEvidenceItemOut] = Field(default_factory=list)
     no_data_reason: str | None = None
+
+
+class StandardHistoryPeriodOut(BaseModel):
+    """一个定格周期（年/半年/季/月）的定格结果。"""
+
+    period_key: str
+    label: str
+    frozen_at: str
+    summary: dict[str, Any]
+    rows: list[dict[str, Any]]
+
+
+class StandardHistoryOut(BaseModel):
+    """历史定格（读 snapshot 表非实时重算；empty=该年无快照）。"""
+
+    status: Literal["live", "empty"]
+    year: int
+    available_years: list[int] = Field(default_factory=list)
+    periods: list[StandardHistoryPeriodOut] = Field(default_factory=list)

@@ -85,6 +85,8 @@ CELL_ORDER: list[str] = [
     "facility_check",
     # 特种设备监控报警（即时并入，facilities-p2）
     "telemetry_alarm",
+    # 标准符合性季度定格通报（季度首日 08:20 定格收尾投递，S1 二期；一条/季）
+    "standard_compliance",
 ]
 
 

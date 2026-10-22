@@ -4,6 +4,8 @@ GET /safety/goals/standards：标准清单×运行数据四态判定（达标/�
 无数据）。核查表是普通 Bitable 表（安环科维护标准行），平台只读判定不回写。
 GET /safety/goals/standards/evidence：单条标准凭据明细（点开重算一次，取数
 无状态不共享请求间缓存——低频点按低耗重算，口径注释见 page.py）。
+GET /safety/goals/standards/history：历史定格（二期）——读 snapshot 表，
+迎检/自评直接取定格结果，不实时重算。
 DESIGN：docs/DESIGN-安全目标责任与绩效模块-体系标准符合性核查引擎-20261021.md
 """
 
@@ -14,10 +16,12 @@ from app.core.database import get_db
 from app.modules.safety.schemas.standard_check import (
     StandardCheckPageOut,
     StandardEvidenceOut,
+    StandardHistoryOut,
 )
 from app.modules.safety.service.standard_check import (
     build_standard_check_page,
     build_standard_evidence,
+    build_standard_history,
 )
 from app.shared.schemas import ApiResponse
 
@@ -55,3 +59,16 @@ async def get_standard_evidence(
 ) -> ApiResponse:
     data = await build_standard_evidence(record_id, db=db)
     return ApiResponse(data=StandardEvidenceOut(**data).model_dump(mode="json"))
+
+
+@standard_check_router.get(
+    "/goals/standards/history",
+    response_model=ApiResponse,
+    summary="历史定格（读 snapshot 表非实时重算；迎检/自评直接取定格结果）",
+)
+async def get_standard_history(
+    year: int | None = Query(None, description="年度（默认当年，北京时间）"),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse:
+    data = await build_standard_history(year, db=db)
+    return ApiResponse(data=StandardHistoryOut(**data).model_dump(mode="json"))

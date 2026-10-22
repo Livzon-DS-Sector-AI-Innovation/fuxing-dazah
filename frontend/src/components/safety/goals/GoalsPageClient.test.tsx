@@ -7,13 +7,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import GoalsPageClient from './GoalsPageClient'
 import { renderWithQuery } from '@/test/utils'
-import type { StandardCheckData } from '@/lib/api/safety/standard-check'
+import type {
+  StandardCheckData,
+  StandardHistoryData,
+} from '@/lib/api/safety/standard-check'
 
 const fetchMock = vi.hoisted(() => vi.fn())
 const evidenceMock = vi.hoisted(() => vi.fn())
+const historyMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api/safety/standard-check', () => ({
   fetchStandardCheckPage: fetchMock,
   fetchStandardEvidence: evidenceMock,
+  fetchStandardHistory: historyMock,
 }))
 
 const NOT_CONNECTED: StandardCheckData = {
@@ -236,6 +241,128 @@ describe('GoalsPageClient 证据下钻 Drawer', () => {
 async function userClick(el: Element) {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 }
+
+const HISTORY_LIVE: StandardHistoryData = {
+  status: 'live',
+  year: 2099,
+  available_years: [2099],
+  periods: [
+    {
+      period_key: '2099-Q3',
+      label: '2099 第三季度',
+      frozen_at: '2099-10-01T00:20:00Z',
+      summary: {
+        achieved: 1,
+        missed: 1,
+        no_data: 1,
+        manual_done: 1,
+        manual_missed: 0,
+        in_progress: 0,
+        total: 4,
+        compliance_rate: 67,
+      },
+      rows: [
+        {
+          standard_no: 'D4-01',
+          clause: '特殊作业实行作业许可，作业票审核覆盖率',
+          basis: 'GB 30871-2022',
+          element: '现场管理',
+          metric_key: 'workticket.audit_rate',
+          period: '季度',
+          target_display: '≥95%',
+          actual_display: '95%',
+          status: 'achieved',
+          department: ['生产一部'],
+          owner: null,
+          note: null,
+          auto: true,
+        },
+        {
+          standard_no: 'D5-04',
+          clause: '隐患按期整改完成率',
+          basis: '公司年度目标',
+          element: '风险管控与隐患治理',
+          metric_key: 'hazard.on_time_close_rate',
+          period: '季度',
+          target_display: '≥95%',
+          actual_display: '80%',
+          status: 'missed',
+          department: ['生产二部'],
+          owner: null,
+          note: null,
+          auto: true,
+        },
+        {
+          standard_no: 'D1-03',
+          clause: '各级安全责任书按年度签订完成',
+          basis: '公司制度',
+          element: '目标职责',
+          metric_key: null,
+          period: '季度',
+          target_display: '已完成',
+          actual_display: '已完成',
+          status: 'manual_done',
+          department: ['安环部'],
+          owner: null,
+          note: null,
+          auto: false,
+        },
+        {
+          standard_no: 'D3-06',
+          clause: '外来人员入厂安全培训报备率',
+          basis: '公司制度',
+          element: '教育培训',
+          metric_key: 'visitor.notice_rate',
+          period: '月度',
+          target_display: '≥100%',
+          actual_display: null,
+          status: 'no_data',
+          department: ['安环部'],
+          owner: null,
+          note: 'visitor_notice 域未接入',
+          auto: true,
+        },
+      ],
+    },
+  ],
+}
+
+describe('GoalsPageClient 历史定格 Tab（S1 二期）', () => {
+  it('live：分期分组 + 六态状态标签 + 定格元信息', async () => {
+    fetchMock.mockResolvedValue(LIVE)
+    historyMock.mockResolvedValue(HISTORY_LIVE)
+    renderWithQuery(<GoalsPageClient />)
+
+    await userClick(screen.getByRole('tab', { name: '历史定格' }))
+    expect(await screen.findByText('2099 第三季度')).toBeInTheDocument()
+    expect(screen.getByText(/定格于 2099-10-01/)).toBeInTheDocument()
+    expect(screen.getByText(/符合率 67%/)).toBeInTheDocument()
+    const row_ok = screen.getByRole('row', { name: /D4-01/ })
+    expect(within(row_ok).getByText('达标')).toBeInTheDocument()
+    const row_missed = screen.getByRole('row', { name: /D5-04/ })
+    expect(within(row_missed).getByText('未达标')).toBeInTheDocument()
+    const row_manual = screen.getByRole('row', { name: /D1-03/ })
+    expect(within(row_manual).getByText('达标·人工')).toBeInTheDocument()
+    const row_nodata = screen.getByRole('row', { name: /D3-06/ })
+    expect(within(row_nodata).getByText('无数据')).toBeInTheDocument()
+  })
+
+  it('empty：无快照年份显示引导', async () => {
+    fetchMock.mockResolvedValue(LIVE)
+    historyMock.mockResolvedValue({
+      status: 'empty',
+      year: 2099,
+      available_years: [],
+      periods: [],
+    })
+    renderWithQuery(<GoalsPageClient />)
+
+    await userClick(screen.getByRole('tab', { name: '历史定格' }))
+    // 面板本地年份=当前年（2099 只是 mock 返回值），标题动态匹配
+    expect(await screen.findByText(/\d{4} 年暂无定格记录/)).toBeInTheDocument()
+    expect(screen.getByText(/每季度首日 08:20/)).toBeInTheDocument()
+  })
+})
 
 describe('GoalsPageClient 筛选与部门汇总（T5）', () => {
   it('部门汇总 Tab：部门×四态小表', async () => {

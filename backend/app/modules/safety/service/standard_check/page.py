@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -26,6 +27,8 @@ from app.modules.safety.service.standard_check.engine import (
     MetricOutcome,
     PeriodWindow,
     StandardRow,
+    Verdict,
+    format_target,
     judge,
     window_for,
 )
@@ -89,11 +92,7 @@ def _float_or_none(raw: str | None) -> float | None:
 
 
 def _row_payload(row: StandardRow, verdict: Any) -> dict[str, Any]:
-    target = (
-        f"{row.operator or '≥'}{row.target_value:g}{row.unit or ''}"
-        if row.target_value is not None
-        else "—"
-    )
+    target = format_target(row.operator, row.target_value, row.unit)
     return {
         "record_id": row.record_id,
         "no": row.no,
@@ -183,6 +182,45 @@ def _departments(
     )
 
 
+async def _collect_verdicts(
+    rows: list[StandardRow],
+    ctx: MetricContext,
+    today: date,
+    window_of: Callable[[StandardRow], PeriodWindow],
+) -> list[tuple[StandardRow, MetricOutcome, Verdict]]:
+    """逐行判定共享内核（实时页与周期定格共用）。
+
+    window_of 由调用方注入：实时视图=window_for(period, today)（窗口恒含 today）；
+    定格=目标历史周期窗口（评估日=定格日，engine ended 分支出终态）。
+    同 (metric_key, 窗口) 取数去重——多行共享指标/多目标共享窗口不重复打源。
+    """
+    outcome_cache: dict[tuple[str, str], MetricOutcome] = {}
+
+    async def _outcome_for(key: str | None, window: PeriodWindow) -> MetricOutcome:
+        if not key:
+            return MetricOutcome()
+        cached = outcome_cache.get((key, window.key))
+        if cached is not None:
+            return cached
+        metric = get_metric(key)
+        outcome = (
+            await metric.compute(window, ctx)
+            if metric
+            else MetricOutcome(no_data_reason="指标未注册")
+        )
+        outcome_cache[(key, window.key)] = outcome
+        return outcome
+
+    triples: list[tuple[StandardRow, MetricOutcome, Verdict]] = []
+    for row in rows:
+        metric = get_metric(row.metric_key) if row.metric_key else None
+        window = window_of(row)
+        outcome = await _outcome_for(row.metric_key, window)
+        verdict = judge(row, metric.spec if metric else None, outcome, window, today)
+        triples.append((row, outcome, verdict))
+    return triples
+
+
 async def build_standard_check_page(
     *,
     db: Any | None = None,
@@ -219,30 +257,10 @@ async def build_standard_check_page(
     rows = [r for r in rows if r.year == target_year]
 
     ctx = MetricContext(db=db, opener=opener)
-    outcome_cache: dict[tuple[str, str], MetricOutcome] = {}
-
-    async def _outcome_for(key: str | None, window: PeriodWindow) -> MetricOutcome:
-        if not key:
-            return MetricOutcome()
-        cached = outcome_cache.get((key, window.key))
-        if cached is not None:
-            return cached
-        metric = get_metric(key)
-        outcome = (
-            await metric.compute(window, ctx)
-            if metric
-            else MetricOutcome(no_data_reason="指标未注册")
-        )
-        outcome_cache[(key, window.key)] = outcome
-        return outcome
-
-    payloads: list[dict[str, Any]] = []
-    for row in rows:
-        metric = get_metric(row.metric_key) if row.metric_key else None
-        window = window_for(row.period or "年度", today)
-        outcome = await _outcome_for(row.metric_key, window)
-        verdict = judge(row, metric.spec if metric else None, outcome, window, today)
-        payloads.append(_row_payload(row, verdict))
+    triples = await _collect_verdicts(
+        rows, ctx, today, lambda row: window_for(row.period or "年度", today)
+    )
+    payloads = [_row_payload(row, verdict) for row, _outcome, verdict in triples]
 
     if element:
         payloads = [p for p in payloads if p["element"] == element]

@@ -276,6 +276,29 @@ async def test_load_cells_ordered_with_sent_at(monkeypatch: pytest.MonkeyPatch) 
     assert await load_daily_digest_cells(date(2026, 1, 1), store=store) == []
 
 
+async def test_standard_compliance_cell_tail_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S1 二期季度符合性格子：CELL_ORDER 队尾，与设施/报警格同卡共存。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+
+    async def sender(**kw: Any) -> str | None:
+        return "om_1"
+
+    await upsert_daily_digest(
+        D, "standard_compliance", _cell(), store=store, sender=sender,
+        updater=_ok_updater,
+    )
+    await upsert_daily_digest(
+        D, "telemetry_alarm", _cell(), store=store, sender=sender,
+        updater=_ok_updater,
+    )
+    cells = await load_daily_digest_cells(D, store=store)
+    assert [c["key"] for c in cells] == ["telemetry_alarm", "standard_compliance"]
+    assert cells[-1]["key"] == "standard_compliance"
+
+
 async def test_load_cells_legacy_without_sent_at() -> None:
     """补记上线前的历史格子：主 hash 有内容但无 sent_at → 该字段为 None。"""
     store = _FakeStore()

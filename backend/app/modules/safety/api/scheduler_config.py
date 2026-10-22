@@ -376,11 +376,16 @@ _WEEKDAY_NAMES = "一二三四五六日"
 
 
 def _schedule_text(task: dict[str, Any]) -> str:
-    """任务计划时间的人类可读文案（dom=每月几号 / dow=周几 / 缺省=每日）。"""
+    """任务计划时间的人类可读文案（months=年内指定月 / dom=每月几号 / dow=周几 / 缺省=每日）。"""
     hour, minute = task.get("hour"), task.get("minute")
     if hour is None or minute is None:
         return "—"
     hm = f"{hour:02d}:{minute:02d}"
+    months = task.get("months")
+    if months:
+        # 季度类任务（months=[1,4,7,10]+dom=1）如实显示指定月，不误标「每月」
+        dom_text = f"{task['dom']}日" if task.get("dom") is not None else ""
+        return f"每年{'/'.join(str(m) for m in months)}月{dom_text} {hm}"
     if task.get("dom") is not None:
         return f"每月{task['dom']}日 {hm}"
     if task.get("dow") is not None:

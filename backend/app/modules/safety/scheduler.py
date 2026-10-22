@@ -163,6 +163,7 @@ async def _load_effective_jobs() -> list[dict[str, Any]]:
             "minute": t.get("minute"),
             "dow": t.get("dow"),
             "dom": t.get("dom"),
+            "months": t.get("months"),
             "mode": t.get("mode"),
             "description": t.get("description"),
             "retry_until_hour": t.get("retry_until_hour"),
@@ -356,6 +357,17 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "按部门刷新滚动批次卡追加逾期催办区（@部门负责人+安管，"
                        ">7 天红档），不逐条私发；台账连接未登记时 no_source 留痕",
     },
+    # ── 标准符合性季度定格（季度首日 08:20，S1 二期；1-1 同跑上年度终版）──
+    {
+        "name": "标准符合性定格",
+        "hour": 8, "minute": 20, "dom": 1, "months": [1, 4, 7, 10],
+        # 与 08:00/08:30 既有任务错峰；补发窗口：当日 23:30 截止（失败自动重试）
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "description": "定格上一季度标准达成 snapshot（季度+月度项终版、半年项窗口"
+                       "结束即定格、年度项中期快照；1-1 另定格上一年度终版），"
+                       "重复定格幂等 upsert；收尾投「安全速递」季度符合性格子"
+                       "（总卡关闭时独立群卡）。核查表未接入时 no_source 如实留痕跳过",
+    },
 ]
 
 # ── 触发状态持久化（PostgreSQL）──
@@ -518,12 +530,17 @@ def _matches_day(job: dict[str, Any], today: date) -> bool:
 
     - dow=0周一..6周日，未配置则不限星期
     - dom=每月几号（1~31），未配置则不限日期；月报类任务靠它保证每月只跑一次
+    - months=季度首月列表（如 [1,4,7,10]），未配置则不限月份；季度类任务靠它
+      保证非季度月 1 日为空跑（不留状态、不进运行日志）
     """
     required_dow = job.get("dow")
     if required_dow is not None and today.weekday() != required_dow:
         return False
     required_dom = job.get("dom")
     if required_dom is not None and today.day != required_dom:
+        return False
+    required_months = job.get("months")
+    if required_months is not None and today.month not in required_months:
         return False
     return True
 
@@ -605,6 +622,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             skip_no_source = await _run_facility_dispatch()
         elif job_name == "校验任务逾期升级":
             skip_no_source = await _run_facility_escalation()
+        elif job_name == "标准符合性定格":
+            skip_no_source = await _run_standard_check_freeze(chat_id=chat_id)
         elif "mode" in job:
             await _run_special_op_daily_report(job, today, chat_id=chat_id)
         else:
@@ -662,6 +681,31 @@ async def _run_facility_escalation() -> bool:
         await session.commit()
     logger.info("校验任务逾期升级完成: %s", result.summary())
     return result.no_source
+
+
+async def _run_standard_check_freeze(chat_id: str | None = None) -> bool:
+    """季度首日 08:20 标准符合性定格 + 季度速递格（S1 二期）。
+
+    返回 True=核查表未接入（no_source 跳过，不假 success）。定格幂等 upsert；
+    速递格投递失败上抛 → 调度器标 failed 在补发窗口（当日 23:30）内重试，
+    重试时定格重跑不产生重复行、格子按定格日 key 重投不重复发卡。
+    """
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.standard_check.freeze import (
+        freeze_due,
+        send_standard_compliance_digest,
+    )
+
+    async with async_session_factory() as session:
+        result = await freeze_due(db=session)
+        if result.no_source:
+            return True
+        await session.commit()
+    if result.ran:
+        stats = await send_standard_compliance_digest(result, chat_id=chat_id)
+        logger.info("标准符合性定格完成: frozen=%d targets=%s digest=%s",
+                    result.frozen, result.targets, stats)
+    return False
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:

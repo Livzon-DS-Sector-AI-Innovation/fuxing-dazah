@@ -13,15 +13,18 @@ import { useState } from 'react'
 import { Drawer, Select, Table, Tabs } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
-import { ClipboardCheck, DatabaseZap, TriangleAlert } from 'lucide-react'
+import { ClipboardCheck, DatabaseZap, History, TriangleAlert } from 'lucide-react'
 import {
   fetchStandardCheckPage,
   fetchStandardEvidence,
+  fetchStandardHistory,
   type StandardCheckData,
   type StandardCheckFilters,
   type StandardCheckStatus,
   type StandardDeptSummary,
+  type StandardHistoryRow,
   type StandardRow,
+  type StandardSnapshotStatus,
   type StandardSummary,
 } from '@/lib/api/safety/standard-check'
 import {
@@ -44,6 +47,16 @@ const ROW_STATUS: Record<StandardRow['status'], { label: string; tone: Tone }> =
   in_progress: { label: '进行中', tone: 'info' },
   missed: { label: '未达标', tone: 'danger' },
   no_data: { label: '无数据', tone: 'default' },
+}
+
+// 定格六态（snapshot）：人工达标/未达标与自动项同色系，中期快照=进行中
+const SNAP_STATUS: Record<StandardSnapshotStatus, { label: string; tone: Tone }> = {
+  achieved: { label: '达标', tone: 'ok' },
+  manual_done: { label: '达标·人工', tone: 'ok' },
+  missed: { label: '未达标', tone: 'danger' },
+  manual_missed: { label: '未达标·人工', tone: 'danger' },
+  no_data: { label: '无数据', tone: 'default' },
+  in_progress: { label: '进行中', tone: 'info' },
 }
 
 const STAT_CARDS: {
@@ -359,6 +372,11 @@ export default function GoalsPageClient() {
             label: '责任部门汇总',
             children: <DeptSummaryPanel departments={data?.departments ?? []} live={status === 'live'} />,
           },
+          {
+            key: 'history',
+            label: '历史定格',
+            children: <StandardHistoryPanel />,
+          },
         ]}
       />
 
@@ -447,6 +465,131 @@ function DeptSummaryPanel({
           ),
         }}
       />
+    </SectionCard>
+  )
+}
+
+function StandardHistoryPanel() {
+  const [year, setYear] = useState<number>(new Date().getFullYear())
+  const query = useQuery({
+    queryKey: ['standard-history', year],
+    queryFn: () => fetchStandardHistory(year),
+  })
+  const data = query.data
+  const yearOptions = (() => {
+    const current = new Date().getFullYear()
+    const years = new Set<number>(data?.available_years ?? [])
+    years.add(current)
+    years.add(year)
+    return [...years].sort((a, b) => b - a).map((v) => ({ value: v, label: String(v) }))
+  })()
+
+  const columns: ColumnsType<StandardHistoryRow> = [
+    { title: '编号', dataIndex: 'standard_no', width: 90, fixed: 'left' },
+    { title: '标准条款（定格快照）', dataIndex: 'clause', ellipsis: true },
+    {
+      title: '目标',
+      dataIndex: 'target_display',
+      width: 100,
+      render: (v: string) => v || '—',
+    },
+    {
+      title: '定格完成',
+      dataIndex: 'actual_display',
+      width: 110,
+      render: (v: string | null) => v || '—',
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (s: StandardSnapshotStatus) => {
+        const tag = SNAP_STATUS[s]
+        return <StatusTag label={tag.label} tone={tag.tone} />
+      },
+    },
+    {
+      title: '责任部门',
+      dataIndex: 'department',
+      width: 130,
+      render: (v: string[]) => (v.length > 0 ? v.join('、') : '—'),
+    },
+    {
+      title: '附注',
+      dataIndex: 'note',
+      width: 140,
+      ellipsis: true,
+      render: (v: string | null) => v || '—',
+    },
+  ]
+
+  const emptyGuide = query.isError ? (
+    <EmptyGuide
+      compact
+      icon={<TriangleAlert size={28} />}
+      title="数据暂时不可用"
+      description="定格记录加载失败，请稍后重试"
+    />
+  ) : (
+    <EmptyGuide
+      compact
+      icon={<History size={28} />}
+      title={`${year} 年暂无定格记录`}
+      description={
+        (data?.available_years ?? []).length > 0
+          ? `定格任务每季度首日 08:20 运行；可切换到有定格记录的年份（${data!.available_years.join('、')}）`
+          : '定格任务每季度首日 08:20 自动定格上季度标准达成情况；首次定格前本页为空，属正常'
+      }
+    />
+  )
+
+  return (
+    <SectionCard
+      title="历史定格"
+      description="周期末自动定格的达成留档（snapshot），迎检/自评直接取定格结果，不实时重算；清单后续修订不影响已定格历史"
+    >
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Select
+          placeholder="年份"
+          style={{ width: 100 }}
+          value={year}
+          onChange={(v) => setYear(v)}
+          options={yearOptions}
+        />
+      </div>
+      <div className="space-y-4">
+        {(data?.periods ?? []).map((period) => {
+          const s = period.summary
+          return (
+            <div key={period.period_key}>
+              <div
+                className="mb-2 flex items-center gap-2"
+                style={{ fontSize: 14, fontWeight: 600 }}
+              >
+                <History size={16} style={{ color: '#4b8a5a' }} />
+                {period.label}
+                <span style={{ fontSize: 12, color: '#a4a097', fontWeight: 400 }}>
+                  定格于 {period.frozen_at.slice(0, 10)} · 达标 {s.achieved + s.manual_done}/
+                  {s.achieved + s.manual_done + s.missed + s.manual_missed}
+                  {s.compliance_rate !== null && ` · 符合率 ${s.compliance_rate}%`}
+                  {s.no_data > 0 && ` · 无数据 ${s.no_data}`}
+                  {s.in_progress > 0 && ` · 进行中 ${s.in_progress}`}
+                </span>
+              </div>
+              <Table
+                columns={columns}
+                dataSource={period.rows}
+                rowKey={(r) => `${period.period_key}-${r.standard_no}`}
+                size="small"
+                loading={query.isLoading}
+                scroll={{ x: 'max-content' }}
+                pagination={false}
+              />
+            </div>
+          )
+        })}
+        {!query.isLoading && (data?.periods ?? []).length === 0 && emptyGuide}
+      </div>
     </SectionCard>
   )
 }

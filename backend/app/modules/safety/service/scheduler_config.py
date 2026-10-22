@@ -123,6 +123,8 @@ def _merge_job(job: dict[str, Any], row: SchedulerTaskConfig | None) -> dict[str
         # dom（每月几号）必须从代码默认带过来：DB 行没有 dom 列值时
         # （NULL=用代码默认），月报类任务的 dom=1 若在此丢失会退化成每天触发
         "dom": job.get("dom"),
+        # months（季度首月列表）同理：DB 无该覆写概念，丢在这里季度任务会月月触发
+        "months": job.get("months"),
         "enabled": job.get("enabled", True),
         "target_chat_id": None,
         "target_chat_name": None,

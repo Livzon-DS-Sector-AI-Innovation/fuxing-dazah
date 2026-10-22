@@ -111,3 +111,57 @@ export async function fetchStandardEvidence(
     API_BASE_URL + `/api/v1/safety/goals/standards/evidence?record_id=${encodeURIComponent(recordId)}`,
   )
 }
+
+// ── 历史定格（S1 二期：读 snapshot 表非实时重算）──
+
+export type StandardSnapshotStatus =
+  | 'achieved'
+  | 'missed'
+  | 'no_data'
+  | 'manual_done'
+  | 'manual_missed'
+  | 'in_progress'
+
+export interface StandardHistoryRow {
+  standard_no: string
+  clause: string
+  basis: string | null
+  element: string | null
+  metric_key: string | null
+  period: string | null
+  target_display: string
+  actual_display: string | null
+  status: StandardSnapshotStatus
+  department: string[]
+  owner: string | null
+  note: string | null
+  auto: boolean
+}
+
+export interface StandardHistorySummary
+  extends Record<StandardSnapshotStatus, number> {
+  total: number
+  compliance_rate: number | null
+}
+
+export interface StandardHistoryPeriod {
+  period_key: string
+  label: string
+  frozen_at: string
+  summary: StandardHistorySummary
+  rows: StandardHistoryRow[]
+}
+
+export interface StandardHistoryData {
+  status: 'live' | 'empty'
+  year: number
+  available_years: number[]
+  periods: StandardHistoryPeriod[]
+}
+
+export async function fetchStandardHistory(
+  year?: number,
+): Promise<StandardHistoryData> {
+  const qs = year ? `?year=${year}` : ''
+  return apiGet(API_BASE_URL + '/api/v1/safety/goals/standards/history' + qs)
+}

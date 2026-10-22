@@ -145,6 +145,9 @@ from app.modules.safety.models.special_operations import (  # noqa: F401
     SpecialOperationPersonnel,
     SpecialOperationReport,
 )
+from app.modules.safety.models.standard_check import (  # noqa: F401
+    StandardCheckSnapshot,
+)
 from app.modules.safety.models.telemetry import (  # noqa: F401
     ALARM_LEVEL_ALARM,
     ALARM_LEVEL_WARNING,
@@ -263,6 +266,7 @@ __all__ = [
     'SpecialOperationPermit',
     'SpecialOperationPersonnel',
     'SpecialOperationReport',
+    'StandardCheckSnapshot',
     'TrainingLevel',
     'TrainingMode',
     'TrainingRecord',
