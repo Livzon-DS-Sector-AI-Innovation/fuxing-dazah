@@ -18,6 +18,9 @@ class MaterialContainerGenerateRequest(BaseModel):
     inbound_batch_no: str = Field(max_length=100, description="进厂批号")
     expiry_date: str | None = Field(default=None, max_length=32, description="复验期 YYYY-MM-DD")
     count: int = Field(default=1, ge=1, le=500, description="本批容器数量")
+    material_request_id: uuid.UUID | None = Field(
+        default=None, description="可选：挂到请验单（放行结论联动本批容器状态）"
+    )
 
 
 class MaterialContainerOut(BaseModel):
@@ -307,6 +310,7 @@ class MaterialRequestOut(BaseModel):
     verdict: str | None
     verdict_remark: str | None
     task_id: uuid.UUID | None
+    linked_containers: int = Field(default=0, description="已挂单容器数（列表接口填充）")
     created_at: datetime
 
 

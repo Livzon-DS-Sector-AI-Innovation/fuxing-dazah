@@ -10,7 +10,7 @@ import { usePermission } from '@/hooks/usePermission'
 import { theme } from 'antd'
 import { useCrossTabSignal } from './useCrossTabSignal'
 import { MATERIAL_CONTAINER_STATUS_META } from '@/types/quality'
-import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, SlowMovingItem, StocktakeSheet, SupplierItem } from '@/types/quality'
+import type { MaterialContainerItem, MaterialContainerStatus, MaterialDictItem, MaterialMovementItem, MaterialRequestItem, MaterialSummaryItem, MonthlyReportItem, PurchaseSuggestion, SlowMovingItem, StocktakeSheet, SupplierItem } from '@/types/quality'
 import {
   fetchMaterialContainers, generateMaterialContainers, moveMaterialContainer,
   updateMaterialContainerStatus, downloadContainerLabels, batchMoveMaterialContainers,
@@ -22,7 +22,7 @@ import {
   fetchStocktakes, createStocktake, fetchStocktakeDetail, exportStocktake,
   fetchMonthlyReport, exportMonthlyReport,
   downloadImportTemplate, importMaterialDict, importMaterialContainers,
-  fetchSlowMoving, updateContainerLocation,
+  fetchSlowMoving, updateContainerLocation, fetchMaterialRequests,
 } from '@/actions/quality'
 
 const STATUS_ORDER: MaterialContainerStatus[] = ['labeled', 'in_warehouse', 'qualified', 'issued', 'returned', 'void']
@@ -51,6 +51,8 @@ export default function MaterialContainers() {
   const [generateOpen, setGenerateOpen] = useState(false)
   const [genForm] = Form.useForm()
   const [genLoading, setGenLoading] = useState(false)
+  const [genRequests, setGenRequests] = useState<MaterialRequestItem[]>([])
+  const genMaterialCode = Form.useWatch('material_code', genForm)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [labelLoading, setLabelLoading] = useState(false)
   // 字典与概览
@@ -215,6 +217,10 @@ export default function MaterialContainers() {
       }
     } catch { /* 忽略 */ }
     setGenerateOpen(true)
+    // 挂单候选：未结单的请验单（放行/拒收/让步/作废后不可挂）
+    void fetchMaterialRequests().then((res) => {
+      setGenRequests(res.data.filter((r) => ['pending_sample', 'sampled', 'in_test'].includes(r.status)))
+    }).catch(() => { /* 请验单拉取失败不影响赋码 */ })
   }
 
   const onGenerate = async () => {
@@ -228,6 +234,7 @@ export default function MaterialContainers() {
         inbound_batch_no: values.inbound_batch_no,
         expiry_date: values.expiry_date ? values.expiry_date.format('YYYY-MM-DD') : undefined,
         count: values.count,
+        material_request_id: values.material_request_id || undefined,
       })
       const nos = res.data.map((c) => c.container_no)
       const blob = await downloadContainerLabels(nos)
@@ -806,6 +813,20 @@ export default function MaterialContainers() {
           </Form.Item>
           <Form.Item name="inbound_batch_no" label="进厂批号" rules={[{ required: true, message: '请输入进厂批号' }]}>
             <Input placeholder="IN-20261010-01" />
+          </Form.Item>
+          <Form.Item name="material_request_id" label="挂到请验单（可选，放行时联动本批容器状态）">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择物料匹配的未结单请验单"
+              options={genRequests
+                .filter((r) => !genMaterialCode || r.material_code === genMaterialCode)
+                .map((r) => ({
+                  value: r.id,
+                  label: `${r.request_no}｜${r.material_name}｜${r.inbound_batch_no}`,
+                }))}
+            />
           </Form.Item>
           <Form.Item name="expiry_date" label="复验期（可选）">
             <DatePicker style={{ width: '100%' }} />

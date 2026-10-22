@@ -724,15 +724,49 @@ async def test_request_sample_task_release_flow(db_session):
     # 赋码挂请验单（3 瓶）→ 放行联动容器
     containers = await material_container_service.generate_containers(db_session, MaterialContainerGenerateRequest(
         material_code=code, material_name="请验测试物料", inbound_batch_no=req.inbound_batch_no, count=3,
+        material_request_id=req.id,
     ))
-    for c in containers:
-        c.material_request_id = req.id
-    await db_session.flush()
+    assert all(c.material_request_id == req.id for c in containers)
     # 放行
     req = await material_container_service.release_request(db_session, req.id, MaterialRequestRelease(verdict="release"))
     assert req.status == "released"
     linked = await list_containers_by_request(db_session, req.id)
     assert len(linked) == 3 and all(c.status == "qualified" for c in linked)
+
+
+async def test_generate_link_request_validation(db_session):
+    """赋码挂单校验：物料不一致 400、已结单 400、不存在的请验单 404。"""
+    from app.modules.quality.schemas import (
+        MaterialRequestCreate,
+        MaterialRequestRelease,
+    )
+
+    code = f"MAT-{_rand_code()}"
+    await _setup_material_standard(db_session, code)
+    req = await material_container_service.create_request(db_session, MaterialRequestCreate(
+        material_code=code, inbound_batch_no=f"IN-RQ-{_rand_code()[:6]}", inbound_qty=2,
+    ))
+    gen = lambda **kw: material_container_service.generate_containers(  # noqa: E731
+        db_session, MaterialContainerGenerateRequest(
+            material_code=kw.pop("material_code", code), material_name="挂单校验物料",
+            inbound_batch_no=req.inbound_batch_no, count=2, **kw,
+        )
+    )
+    # 物料不一致
+    with pytest.raises(AppException) as exc:
+        await gen(material_code=f"OTHER-{_rand_code()}", material_request_id=req.id)
+    assert exc.value.status_code == 400
+    # 请验单不存在
+    with pytest.raises(AppException) as exc2:
+        await gen(material_request_id=uuid.uuid4())
+    assert exc2.value.status_code == 404
+    # 已结单不可挂
+    await material_container_service.release_request(
+        db_session, req.id, MaterialRequestRelease(verdict="release")
+    )
+    with pytest.raises(AppException) as exc3:
+        await gen(material_request_id=req.id)
+    assert exc3.value.status_code == 400
 
 
 async def test_release_reject_voids_containers(db_session):

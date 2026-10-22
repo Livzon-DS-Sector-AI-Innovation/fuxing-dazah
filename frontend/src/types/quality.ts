@@ -612,6 +612,7 @@ export interface MaterialRequestItem {
   verdict: string | null
   verdict_remark: string | null
   task_id: string | null
+  linked_containers: number
   created_at: string
 }
 

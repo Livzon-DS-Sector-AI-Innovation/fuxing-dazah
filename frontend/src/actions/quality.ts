@@ -939,6 +939,7 @@ export async function generateMaterialContainers(input: {
   inbound_batch_no: string
   expiry_date?: string
   count: number
+  material_request_id?: string
 }): Promise<{ message: string; data: MaterialContainerItem[] }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/material/containers/generate`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' }, body: JSON.stringify(input),

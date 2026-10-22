@@ -84,6 +84,17 @@ class MaterialContainerService:
         code = payload.material_code.strip()
         if not code or "/" in code or " " in code:
             raise AppException(status_code=400, detail="物料代码不能为空且不能含空格/斜杠")
+        # 挂单校验：请验单存在、物料一致、尚未结单（放行/拒收/让步/作废后不可再挂）
+        if payload.material_request_id:
+            from app.modules.quality.repository import get_material_request
+
+            req = await get_material_request(db, payload.material_request_id)
+            if req is None:
+                raise AppException(status_code=404, detail="请验单不存在")
+            if req.material_code != code:
+                raise AppException(status_code=400, detail=f"请验单物料 {req.material_code} 与赋码物料 {code} 不一致")
+            if req.status in ("released", "rejected", "conceded", "void"):
+                raise AppException(status_code=400, detail=f"请验单已结单（{req.status}），不可再挂单")
         date_str = datetime.now().strftime("%Y%m%d")
         prefix = MaterialContainerService._prefix(code, date_str)
         start = await max_container_seq(db, prefix)
@@ -95,6 +106,7 @@ class MaterialContainerService:
                 "material_name": payload.material_name,
                 "vendor_code": payload.vendor_code,
                 "inbound_batch_no": payload.inbound_batch_no,
+                "material_request_id": payload.material_request_id,
                 "expiry_date": payload.expiry_date,
                 "seq": start + i + 1,
                 "status": "labeled",

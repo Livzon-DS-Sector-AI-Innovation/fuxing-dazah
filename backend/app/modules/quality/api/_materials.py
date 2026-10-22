@@ -41,6 +41,7 @@ from app.modules.quality.repository import (
     get_supplier_by_code,
     list_container_movements,
     list_containers_by_nos,
+    list_containers_by_request,
     list_in_stock_containers,
     list_inspection_plans,
     list_lab_items,
@@ -805,7 +806,11 @@ async def list_material_requests_endpoint(
     _user: User = Depends(require_permission("quality:material:read")),
 ) -> JSONResponse:
     rows = await list_material_requests(db, status=status, batch_no=batch_no)
-    items = [MaterialRequestOut.model_validate(r).model_dump(mode="json") for r in rows]
+    items = []
+    for r in rows:
+        item = MaterialRequestOut.model_validate(r).model_dump(mode="json")
+        item["linked_containers"] = len(await list_containers_by_request(db, r.id))
+        items.append(item)
     return success_response(data=items)
 
 
@@ -843,11 +848,13 @@ async def release_material_request_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:material:release")),
 ) -> JSONResponse:
+    linked = await list_containers_by_request(db, request_id)
     req = await material_container_service.release_request(db, request_id, payload, operator=user.id)
     verdict_label = {"release": "已放行", "reject": "已拒收", "concede": "让步接收"}[payload.verdict]
+    suffix = f"，该批 {len(linked)} 个容器已同步更新状态" if linked else "（无挂单容器）"
     return success_response(
         data=MaterialRequestOut.model_validate(req).model_dump(mode="json"),
-        message=f"请验单 {req.request_no} {verdict_label}" + ("，该批容器已同步更新状态" if req.material_request_id is None else ""),
+        message=f"请验单 {req.request_no} {verdict_label}{suffix}",
     )
 
 

@@ -171,6 +171,10 @@ export default function MaterialRequests() {
     { title: '进厂批号', dataIndex: 'inbound_batch_no', width: 150 },
     { title: '数量', dataIndex: 'inbound_qty', width: 70 },
     {
+      title: '挂单容器', dataIndex: 'linked_containers', width: 90,
+      render: (v: number | null) => (v ? <Tag color="blue">{v} 个</Tag> : '-'),
+    },
+    {
       title: '状态', dataIndex: 'status', width: 100,
       render: (v: MaterialRequestStatus) => <Tag color={REQUEST_STATUS_META[v]?.color}>{REQUEST_STATUS_META[v]?.label ?? v}</Tag>,
     },

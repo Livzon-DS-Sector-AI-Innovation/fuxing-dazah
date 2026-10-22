@@ -36,9 +36,6 @@ class QualityMaterialRequest(BaseModel):
     vendor_code: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="供应商代码")
     vendor_name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="供应商名称快照")
     inbound_batch_no: Mapped[str] = mapped_column(String(100), comment="进厂批号")
-    material_request_id: Mapped[uuid.UUID | None] = mapped_column(
-        nullable=True, comment="所属请验单（逻辑引用 quality.quality_material_requests.id，放行联动用）"
-    )
     inbound_qty: Mapped[int] = mapped_column(Integer, default=1, comment="到货数量（瓶/桶）")
     inbound_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="到货日期 YYYY-MM-DD")
     status: Mapped[str] = mapped_column(
