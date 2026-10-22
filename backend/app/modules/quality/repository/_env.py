@@ -140,3 +140,34 @@ async def delete_env_record(db: AsyncSession, rid: uuid.UUID) -> bool:
     rec.is_deleted = True
     await db.flush()
     return True
+
+
+async def env_trend(db: AsyncSession, point_id: uuid.UUID, days: int = 90) -> dict[str, Any] | None:
+    """点位监测趋势：近 N 天记录时间序列 + 点位当前警戒/行动限（画控制线用）。"""
+    from datetime import timedelta
+
+    from app.core.time import today as _today
+
+    point = await get_env_point(db, point_id)
+    if point is None:
+        return None
+    date_from = (_today() - timedelta(days=days)).isoformat()
+    rows = (await db.execute(
+        select(QualityEnvRecord).where(
+            QualityEnvRecord.point_id == point_id,
+            QualityEnvRecord.is_deleted == False,  # noqa: E712
+            QualityEnvRecord.record_date >= date_from,
+        ).order_by(QualityEnvRecord.record_date)
+    )).scalars()
+    items = [
+        {"record_date": r.record_date, "result_value": r.result_value, "judge": r.judge}
+        for r in rows
+    ]
+    return {
+        "room": point.room,
+        "point_no": point.point_no,
+        "monitor_type": point.monitor_type,
+        "alert_limit": point.alert_limit,
+        "action_limit": point.action_limit,
+        "items": items,
+    }

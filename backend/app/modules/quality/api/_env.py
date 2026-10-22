@@ -19,6 +19,7 @@ from app.modules.quality.repository import (
     create_env_record,
     delete_env_point,
     delete_env_record,
+    env_trend,
     get_env_point,
     list_env_points,
     list_env_records,
@@ -141,6 +142,19 @@ async def delete_env_point_endpoint(
 
 
 # ─── 监测记录 ───
+
+
+@router.get("/env/trend", summary="点位监测趋势（近 N 天时间序列 + 警戒/行动限）")
+async def env_trend_endpoint(
+    point_id: uuid.UUID = Query(..., description="监测点"),
+    days: int = Query(default=90, ge=7, le=730, description="近 N 天"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:env:read")),
+) -> JSONResponse:
+    data = await env_trend(db, point_id, days)
+    if data is None:
+        raise HTTPException(status_code=404, detail="监测点不存在")
+    return success_response(data=data)
 
 
 @router.get("/env/records", summary="环境监测记录列表")

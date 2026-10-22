@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
-  Select, Space, Table, Tabs, Tag, Typography,
+  Segmented, Select, Space, Spin, Table, Tabs, Tag, Typography,
 } from 'antd'
-import { DownloadOutlined, PlusOutlined } from '@ant-design/icons'
+import { DownloadOutlined, LineChartOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
-import type { EnvMonitorType, EnvPoint, EnvRecord } from '@/types/quality'
+import type { EnvMonitorType, EnvPoint, EnvRecord, EnvTrend } from '@/types/quality'
 import {
   fetchEnvPoints, createEnvPoint, updateEnvPoint, deleteEnvPoint,
-  fetchEnvRecords, createEnvRecord, deleteEnvRecord, exportEnvRecords,
+  fetchEnvRecords, createEnvRecord, deleteEnvRecord, exportEnvRecords, fetchEnvTrend,
 } from '@/actions/quality'
+import { EnvTrendChart } from '@/components/quality'
 
 const TYPE_META: Record<string, { label: string; color: string }> = {
   settle: { label: '沉降菌', color: 'green' },
@@ -134,6 +135,36 @@ export default function EnvMonitor() {
     recordForm.resetFields()
     recordForm.setFieldsValue({ record_date: dayjs() })
     setRecordOpen(true)
+  }
+
+  // ─── 趋势图 ───
+  const [trendOpen, setTrendOpen] = useState(false)
+  const [trendPointId, setTrendPointId] = useState<string | undefined>()
+  const [trendDays, setTrendDays] = useState<number>(90)
+  const [trend, setTrend] = useState<EnvTrend | null>(null)
+  const [trendLoading, setTrendLoading] = useState(false)
+
+  const loadTrend = useCallback(async (pointId: string, days: number) => {
+    setTrendLoading(true)
+    try {
+      const res = await fetchEnvTrend(pointId, days)
+      setTrend(res.data)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取趋势失败')
+      setTrend(null)
+    } finally {
+      setTrendLoading(false)
+    }
+  }, [message])
+
+  const openTrend = () => {
+    const firstPoint = points.find((p) => p.status === 'active')
+    const pid = firstPoint?.id
+    setTrendPointId(pid)
+    setTrendDays(90)
+    setTrend(null)
+    setTrendOpen(true)
+    if (pid) void loadTrend(pid, 90)
   }
 
   const onRecordSave = async () => {
@@ -287,6 +318,7 @@ export default function EnvMonitor() {
                   {canManage && (
                     <Button type="primary" icon={<PlusOutlined />} onClick={openRecordCreate}>填报记录</Button>
                   )}
+                  <Button icon={<LineChartOutlined />} onClick={openTrend}>趋势图</Button>
                   <Button icon={<DownloadOutlined />} onClick={onExportRecords}>导出 Excel</Button>
                 </Space>
                 <Table
@@ -348,6 +380,44 @@ export default function EnvMonitor() {
             </Form.Item>
           </Space>
         </Form>
+      </Modal>
+
+      <Modal
+        title={`监测趋势${trend ? `（${trend.room} ${trend.point_no}）` : ''}`}
+        open={trendOpen}
+        onCancel={() => setTrendOpen(false)}
+        footer={null}
+        width={840}
+      >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择点位（房间+编号+类型）"
+            style={{ width: 320 }}
+            value={trendPointId}
+            onChange={(v) => { setTrendPointId(v); void loadTrend(v, trendDays) }}
+            options={pointOptions}
+          />
+          <Segmented
+            value={trendDays}
+            onChange={(v) => { const d = v as number; setTrendDays(d); if (trendPointId) void loadTrend(trendPointId, d) }}
+            options={[
+              { value: 30, label: '近30天' },
+              { value: 90, label: '近90天' },
+              { value: 180, label: '近180天' },
+            ]}
+          />
+        </Space>
+        <Spin spinning={trendLoading}>
+          <div style={{ minHeight: 200 }}>
+            {trend ? (
+              <EnvTrendChart trend={trend} />
+            ) : (
+              <Typography.Text type="secondary">选择点位后展示：数据折线 + 警戒限/行动限虚线，超限点按判定着色。</Typography.Text>
+            )}
+          </div>
+        </Spin>
       </Modal>
 
       <Modal

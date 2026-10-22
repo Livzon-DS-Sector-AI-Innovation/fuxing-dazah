@@ -749,3 +749,12 @@ export interface EnvRecord {
   remark: string | null
   created_at: string
 }
+
+export interface EnvTrend {
+  room: string
+  point_no: string
+  monitor_type: EnvMonitorType
+  alert_limit: number | null
+  action_limit: number | null
+  items: { record_date: string; result_value: number | null; judge: 'pass' | 'alert' | 'action' | null }[]
+}

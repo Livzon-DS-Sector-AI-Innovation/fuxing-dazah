@@ -36,6 +36,7 @@ import type {
   RetainedSample,
   EnvPoint,
   EnvRecord,
+  EnvTrend,
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
@@ -1803,6 +1804,14 @@ export async function exportEnvRecords(params?: {
   })
   if (!res.ok) throw new Error('导出失败')
   return res.blob()
+}
+
+export async function fetchEnvTrend(pointId: string, days = 90): Promise<{ data: EnvTrend }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/trend?point_id=${pointId}&days=${days}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取趋势失败')
+  return res.json()
 }
 
 
