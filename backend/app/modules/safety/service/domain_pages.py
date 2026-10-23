@@ -15,6 +15,9 @@
 
 副表（非主台账 kind）未配置不算降级：其统计组归 None（前端显示「—」），
 主台账与已配置表的统计照常。
+副台账（DomainPageSpec.secondary，2026-10-23 S6 违章档案首用）：live 时
+随页面全量返回映射行（行数据与统计同一次全量拉回，零额外读取；前端客户
+端分页），副表未接入/非 live 为 null——不改变三态语义。
 """
 
 from __future__ import annotations
@@ -64,6 +67,9 @@ class DomainPageSpec:
 
     analyze 把各表原始记录归约为统计/健康度需要的数字（唯一计算点，
     build_stats 与 build_health 共用，防两处口径漂移）。
+    secondary 为副台账展示（live 时随页面全量返回行，前端客户端分页）：
+    约定其 KindSpec 必须同时出现在 extra 里（统计取数与行展示同源同一次
+    读取）；None=本域无副台账区块。
     """
 
     url_key: str
@@ -75,6 +81,7 @@ class DomainPageSpec:
     stat_keys: tuple[str, ...]
     metric_template: Callable[[dict[str, Any]], str]
     warn_when: Callable[[dict[str, Any]], bool]
+    secondary: KindSpec | None = None
 
 
 def _bj_today() -> date:
@@ -433,6 +440,7 @@ _SPECS: tuple[DomainPageSpec, ...] = (
         ),
         metric_template=_training_metric,
         warn_when=lambda a: (a["violation_open"] or 0) > 0 or a["overdue_unplanned"] > 0,
+        secondary=_VIOLATION_KIND,  # 副台账：违章行为档案（live 全量行随包返回）
     ),
     DomainPageSpec(
         url_key="facilities",
@@ -481,6 +489,7 @@ def _envelope(
     page: int,
     page_size: int,
     errors: list[str],
+    secondary_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "status": status,
@@ -489,6 +498,9 @@ def _envelope(
             "data": rows,
             "meta": {"total": total, "page": page, "page_size": page_size},
         },
+        # 副台账（如 S6 违章档案）：行数据随统计同一次全量拉回，live 时整包
+        # 返回（前端客户端分页）；副表未接入/not_connected/degraded 为 None
+        "secondary_ledger": {"data": secondary_rows} if secondary_rows is not None else None,
         "errors": errors,
     }
 
@@ -531,6 +543,12 @@ async def build_domain_page(
 
     analysis = spec.analyze(tables, _bj_today())
     primary_rows = [_map_row(r, spec.primary) for r in (tables[spec.primary.kind] or [])]
+    secondary_rows: list[dict[str, Any]] | None = None
+    if spec.secondary is not None and tables.get(spec.secondary.kind) is not None:
+        secondary_rows = [
+            _map_row(r, spec.secondary)
+            for r in (tables[spec.secondary.kind] or [])
+        ]
     start = (page - 1) * page_size
     return _envelope(
         "live",
@@ -540,6 +558,7 @@ async def build_domain_page(
         page,
         page_size,
         [],
+        secondary_rows=secondary_rows,
     )
 
 

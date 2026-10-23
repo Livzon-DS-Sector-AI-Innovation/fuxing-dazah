@@ -27,6 +27,13 @@ export interface DomainColumnConfig {
   width?: number
 }
 
+export interface DomainSecondaryLedgerConfig {
+  /** 副台账区块标题（如「违章行为档案」） */
+  title: string
+  description: string
+  columns: DomainColumnConfig[]
+}
+
 export interface DomainPageConfig {
   key: DomainPageKey
   /** 页面标题（菜单同名） */
@@ -38,6 +45,8 @@ export interface DomainPageConfig {
   ledgerTitle: string
   ledgerDescription: string
   columns: DomainColumnConfig[]
+  /** 副台账区块（后端 secondary_ledger；无则本域无副台账） */
+  secondaryLedger?: DomainSecondaryLedgerConfig
   /** 本域健康度口径说明（ok/warn 判据） */
   healthNote: string
   /** 未接入时的建表引导 */
@@ -61,7 +70,7 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
       { key: 'violation_open', label: '违章未纠正', tone: 'danger', hint: '状态=纠正中（预警）' },
     ],
     ledgerTitle: '培训计划与实施台账',
-    ledgerDescription: '主台账=培训计划与实施表；违章行为档案接入后扩展展示',
+    ledgerDescription: '主台账=培训计划与实施表；违章行为档案见下方区块',
     columns: [
       { title: '培训名称', dataIndex: 'name', width: 200 },
       { title: '培训类别', dataIndex: 'category', width: 110 },
@@ -73,6 +82,21 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
       { title: '状态', dataIndex: 'status', width: 80 },
       { title: '下次复训', dataIndex: 'next_retraining_at', width: 110 },
     ],
+    secondaryLedger: {
+      title: '违章行为档案',
+      description: '全量含跨年（客户端分页）；未纠正行计入统计卡预警，纠正闭环在飞书侧维护',
+      columns: [
+        { title: '违章日期', dataIndex: 'occurred_at', width: 100 },
+        { title: '违章人员', dataIndex: 'person_name', width: 90 },
+        { title: '所属单位', dataIndex: 'department', width: 110 },
+        { title: '违章类别', dataIndex: 'category', width: 90 },
+        { title: '违章等级', dataIndex: 'level', width: 80 },
+        { title: '违章描述', dataIndex: 'description', width: 260 },
+        { title: '处理方式', dataIndex: 'handling', width: 90 },
+        { title: '状态', dataIndex: 'status', width: 80 },
+        { title: '关联隐患编号', dataIndex: 'related_hazard_no', width: 120 },
+      ],
+    },
     healthNote: 'warn 判据：违章未纠正>0，或培训计划逾期未实施；ok 判据：违章全部纠正且无逾期计划',
     guideDescription:
       '在飞书多维表格按蓝本字段建立「培训计划与实施/违章行为档案」两张表，' +

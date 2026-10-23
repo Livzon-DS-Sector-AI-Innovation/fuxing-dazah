@@ -15,7 +15,10 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from app.modules.safety.service.bitable_direct.errors import BitableQueryError
+from app.modules.safety.service.bitable_direct.errors import (
+    BitableConfigError,
+    BitableQueryError,
+)
 from app.modules.safety.service.domain_pages import (
     DOMAIN_PAGE_KEYS,
     build_domain_page,
@@ -95,6 +98,88 @@ class TestBuildDomainPage:
 
         with pytest.raises(ValueError, match="未知"):
             await build_domain_page("no-such-domain")
+
+
+class TestSecondaryLedger:
+    """副台账载荷（S6 违章档案）：live 全量行随包返回，其余态为 null。"""
+
+    async def test_live_returns_violation_rows_mapped(self) -> None:
+        today = _bj_today()
+        training_items = [
+            _rec("t1", {"培训名称": "专项培训", "计划日期": _ms(today), "状态": "已完成"}),
+        ]
+        violation_items = [
+            _rec("v1", {
+                "违章日期": _ms(today - timedelta(days=2)),
+                "违章人员": [{"id": "ou1", "name": "张三"}],
+                "所属单位": ["生产一部"],
+                "违章类别": "操作违章", "违章等级": "严重",
+                "违章描述": "未佩戴安全帽登高作业",
+                "处理方式": "停工培训", "状态": "纠正中",
+                "关联隐患编号": "HJ-2026-001",
+            }),
+            _rec("v2", {
+                "违章日期": _ms(today - timedelta(days=400)),  # 跨年行也在档案表
+                "违章类别": "防护缺失", "状态": "已纠正",
+            }),
+        ]
+        fixtures = {
+            "training": FakePageClient(training_items),
+            "violation": FakePageClient(violation_items),
+        }
+        data = await build_domain_page("training-behavior", opener=lambda d, k: fixtures[k])
+        assert data["status"] == "live"
+        rows = data["secondary_ledger"]["data"]
+        assert len(rows) == 2  # 全量（含跨年），不分页
+        first = rows[0]
+        assert first["record_id"] == "v1"
+        assert first["person_name"] == "张三"
+        assert first["department"] == ["生产一部"]
+        assert first["category"] == "操作违章"
+        assert first["level"] == "严重"
+        assert first["description"] == "未佩戴安全帽登高作业"
+        assert first["handling"] == "停工培训"
+        assert first["status"] == "纠正中"
+        assert first["related_hazard_no"] == "HJ-2026-001"
+        assert first["occurred_at"] is not None
+
+    async def test_violation_not_configured_keeps_page_live(self) -> None:
+        """副表未接入：页面仍 live（主台账照常），secondary_ledger=null。"""
+        today = _bj_today()
+        training_items = [
+            _rec("t1", {"培训名称": "专项培训", "计划日期": _ms(today), "状态": "已完成"}),
+        ]
+
+        def opener(domain: str, kind: str) -> Any:
+            if kind == "violation":
+                raise BitableConfigError("未配置: training_behavior/violation")
+            return FakePageClient(training_items)
+
+        data = await build_domain_page("training-behavior", opener=opener)
+        assert data["status"] == "live"
+        assert data["secondary_ledger"] is None
+        assert data["stats"]["violation_total"] is None  # 副表统计组归 None 不变
+        assert data["ledger"]["data"]  # 主台账照常
+
+    async def test_other_domains_have_no_secondary(self) -> None:
+        today = _bj_today()
+        incident_items = [
+            _rec("x1", {"事件编号": "EV-01", "发生日期": _ms(today), "状态": "已结案"}),
+        ]
+        fixtures = {
+            "incident": FakePageClient(incident_items),
+            "capa": FakePageClient([]),
+        }
+        data = await build_domain_page("incidents", opener=lambda d, k: fixtures[k])
+        assert data["status"] == "live"
+        assert data["secondary_ledger"] is None
+
+    async def test_degraded_has_null_secondary(self) -> None:
+        data = await build_domain_page(
+            "training-behavior", opener=lambda d, k: FakePageClient([], boom=True)
+        )
+        assert data["status"] == "degraded"
+        assert data["secondary_ledger"] is None
 
 
 class TestCollectDomainHealth:

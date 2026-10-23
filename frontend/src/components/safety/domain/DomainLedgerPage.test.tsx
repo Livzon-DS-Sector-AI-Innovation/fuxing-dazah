@@ -51,6 +51,38 @@ const LIVE: DomainPageData = {
   errors: [],
 }
 
+const LIVE_WITH_VIOLATIONS: DomainPageData = {
+  ...LIVE,
+  secondary_ledger: {
+    data: [
+      {
+        record_id: 'v1',
+        occurred_at: '2026-10-20T16:00:00+00:00',
+        person_name: '李四',
+        department: ['生产一部'],
+        category: '操作违章',
+        level: '严重',
+        description: '未佩戴安全帽登高作业',
+        handling: '停工培训',
+        status: '纠正中',
+        related_hazard_no: 'HJ-2026-001',
+      },
+      {
+        record_id: 'v2',
+        occurred_at: null,
+        person_name: null,
+        department: [],
+        category: null,
+        level: null,
+        description: '往年存量违章',
+        handling: null,
+        status: '已纠正',
+        related_hazard_no: null,
+      },
+    ],
+  },
+}
+
 const DEGRADED: DomainPageData = {
   status: 'degraded',
   stats: null,
@@ -109,6 +141,36 @@ describe('DomainLedgerPage（四新域通用页面；goals 已改走标准核查
     expect(await screen.findByText('数据降级')).toBeInTheDocument()
     expect(screen.getByText('数据源读取降级')).toBeInTheDocument()
     expect(screen.getByText(/training: BitableQueryError/)).toBeInTheDocument()
+  })
+
+  it('live 且违章档案有数据：主台账下方渲染「违章行为档案」区块（行/列头/空值「—」）', async () => {
+    fetchMock.mockResolvedValue(LIVE_WITH_VIOLATIONS)
+    renderWithQuery(<DomainLedgerPage domain="training-behavior" />)
+
+    expect(await screen.findByText('违章行为档案')).toBeInTheDocument()
+    // 副台账列头（违章专属列，主台账没有）
+    expect(screen.getByRole('columnheader', { name: '违章等级' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '关联隐患编号' })).toBeInTheDocument()
+    // 行内容 + 空值「—」（在违章行内断言）
+    const row = screen.getByRole('row', { name: /未佩戴安全帽登高作业/ })
+    expect(within(row).getByText('操作违章')).toBeInTheDocument()
+    expect(within(row).getByText('纠正中')).toBeInTheDocument()
+    expect(within(row).getByText('HJ-2026-001')).toBeInTheDocument()
+    const sparseRow = screen.getByRole('row', { name: /往年存量违章/ })
+    expect(within(sparseRow).getAllByText('—').length).toBeGreaterThanOrEqual(5)
+    // 主台账仍在（两表同屏）
+    expect(screen.getByRole('row', { name: /入厂三级教育/ })).toBeInTheDocument()
+    // 副台账共 2 条（客户端分页 showTotal）
+    expect(screen.getByText('共 2 条')).toBeInTheDocument()
+  })
+
+  it('live 但违章副表未接入（secondary_ledger=null）：区块整体隐藏，主台账照常', async () => {
+    fetchMock.mockResolvedValue(LIVE)
+    renderWithQuery(<DomainLedgerPage domain="training-behavior" />)
+
+    expect(await screen.findByText('已接入')).toBeInTheDocument()
+    expect(screen.getByRole('row', { name: /入厂三级教育/ })).toBeInTheDocument()
+    expect(screen.queryByText('违章行为档案')).not.toBeInTheDocument()
   })
 
   it('四域配置各自生效（标题/列头抽查）', async () => {

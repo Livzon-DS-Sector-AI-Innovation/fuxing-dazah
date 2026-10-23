@@ -26,6 +26,12 @@ class LedgerOut(BaseModel):
     meta: LedgerMetaOut
 
 
+class SecondaryLedgerOut(BaseModel):
+    """副台账（如 S6 违章档案）：全量行随包返回，客户端分页，无分页元数据。"""
+
+    data: list[dict[str, Any]]
+
+
 class DomainPageOut(BaseModel):
     """三态信封（蓝本 §6）：not_connected=表未建；live=直读出数；degraded=读取降级。"""
 
@@ -34,4 +40,8 @@ class DomainPageOut(BaseModel):
         default=None, description="蓝本统计卡字段；未接入/降级为 null，副表未配置的统计组为 null"
     )
     ledger: LedgerOut
+    secondary_ledger: SecondaryLedgerOut | None = Field(
+        default=None,
+        description="副台账行（如 S6 违章档案）；live 且副表已接入时有值，其余为 null",
+    )
     errors: list[str] = Field(default_factory=list, description="降级时的错误标注")

@@ -4,7 +4,8 @@
  * 四新域通用页面（3.0 四期 1-C）——「空态即设计」。
  *
  * 结构：PageHeader（三态 StatusTag）→ StatCard 统计行（未接入值「—」）→
- * 本域健康度口径 → 主台账分页表（列=蓝本，空表 EmptyGuide 建表接入引导）。
+ * 本域健康度口径 → 主台账分页表（列=蓝本，空表 EmptyGuide 建表接入引导）→
+ * 可选副台账表（如 S6 违章档案，全量行客户端分页，副表未接入时区块隐藏）。
  * 纯只读监控，零业务操作按钮（3.0 口径：操作在飞书多维表格与机器人）；
  * 接入数据源后本组件零改码出数。差异配置见 ./domain-config.ts。
  */
@@ -29,6 +30,7 @@ import {
 } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
 import { getDomainConfig } from './domain-config'
+import type { DomainColumnConfig } from './domain-config'
 
 const STATUS_TAG: Record<DomainPageStatus, { label: string; tone: Tone }> = {
   not_connected: { label: '未接入', tone: 'default' },
@@ -60,12 +62,17 @@ export default function DomainLedgerPage({ domain }: { domain: DomainPageKey }) 
   const status = data?.status
   const tag = status ? STATUS_TAG[status] : undefined
 
-  const columns: ColumnsType<DomainLedgerRow> = config.columns.map((col) => ({
-    title: col.title,
-    dataIndex: col.dataIndex,
-    width: col.width,
-    render: (value: unknown) => formatCell(value),
-  }))
+  const toColumns = (cols: DomainColumnConfig[]) =>
+    cols.map((col) => ({
+      title: col.title,
+      dataIndex: col.dataIndex,
+      width: col.width,
+      render: (value: unknown) => formatCell(value),
+    }))
+
+  const columns: ColumnsType<DomainLedgerRow> = toColumns(config.columns)
+  const secondaryConfig = config.secondaryLedger
+  const secondaryColumns = secondaryConfig ? toColumns(secondaryConfig.columns) : null
 
   const emptyGuide = (() => {
     if (query.isError) {
@@ -175,6 +182,38 @@ export default function DomainLedgerPage({ domain }: { domain: DomainPageKey }) 
           }}
         />
       </SectionCard>
+
+      {/* 副台账（如 S6 违章档案）：全量行客户端分页；副表未接入时区块整体隐藏 */}
+      {secondaryConfig && secondaryColumns && data?.secondary_ledger && (
+        <SectionCard
+          title={secondaryConfig.title}
+          description={secondaryConfig.description}
+          className="mt-4"
+        >
+          <Table
+            columns={secondaryColumns}
+            dataSource={data.secondary_ledger.data}
+            rowKey="record_id"
+            size="small"
+            loading={query.isLoading}
+            scroll={{ x: 'max-content' }}
+            locale={{
+              emptyText: (
+                <EmptyGuide
+                  compact
+                  title="暂无违章记录"
+                  description="违章行为档案在飞书多维表格维护"
+                />
+              ),
+            }}
+            pagination={{
+              pageSize,
+              showSizeChanger: true,
+              showTotal: (total) => `共 ${total} 条`,
+            }}
+          />
+        </SectionCard>
+      )}
     </div>
   )
 }

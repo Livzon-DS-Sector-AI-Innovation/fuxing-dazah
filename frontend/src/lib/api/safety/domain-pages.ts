@@ -28,6 +28,8 @@ export interface DomainPageData {
   status: DomainPageStatus
   stats: Record<string, number | null> | null
   ledger: { data: DomainLedgerRow[]; meta: DomainLedgerMeta }
+  /** 副台账（如 S6 违章档案）：live 且副表已接入时全量行（客户端分页），其余 null */
+  secondary_ledger?: { data: DomainLedgerRow[] } | null
   errors: string[]
 }
 

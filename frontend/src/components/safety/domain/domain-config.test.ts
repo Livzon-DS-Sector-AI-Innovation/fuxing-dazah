@@ -65,4 +65,18 @@ describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
       expect(config.healthNote).toMatch(/warn 判据/)
     }
   })
+
+  it('副台账配置：仅 training-behavior 有违章档案（核心 9 列）', () => {
+    const tb = DOMAIN_PAGE_CONFIGS['training-behavior']
+    expect(tb.secondaryLedger).toBeDefined()
+    expect(tb.secondaryLedger!.title).toBe('违章行为档案')
+    expect(tb.secondaryLedger!.columns.map((c) => c.dataIndex)).toEqual([
+      'occurred_at', 'person_name', 'department', 'category', 'level',
+      'description', 'handling', 'status', 'related_hazard_no',
+    ])
+    // 「接入后扩展展示」承诺已兑现为真实区块，文案改为指向下方
+    expect(tb.ledgerDescription).not.toMatch(/接入后扩展展示/)
+    expect(DOMAIN_PAGE_CONFIGS.facilities.secondaryLedger).toBeUndefined()
+    expect(DOMAIN_PAGE_CONFIGS.incidents.secondaryLedger).toBeUndefined()
+  })
 })
