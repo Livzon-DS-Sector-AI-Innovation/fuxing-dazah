@@ -292,3 +292,11 @@ __all__ += [
     'OhHazardMonitor',
     'SafetyCheck',
 ]
+
+from app.modules.safety.models.training_demand_draft import (  # noqa: F401, E402
+    TrainingDemandDraft,
+)
+
+__all__ += [
+    'TrainingDemandDraft',
+]

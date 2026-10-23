@@ -46,6 +46,7 @@ from app.modules.safety.api.special_operation_reports import (
     special_operation_reports_router,
 )
 from app.modules.safety.api.telemetry import telemetry_router
+from app.modules.safety.api.training_behavior import training_behavior_router
 from app.modules.safety.api.workticket_review import workticket_review_router
 from app.modules.safety.knowledge.graph_api import graph_router
 from app.modules.safety.regulation_ingest.api import regulation_ingest_router
@@ -89,6 +90,7 @@ router.include_router(scheduler_config_router)
 router.include_router(special_operation_daily_report_router)
 router.include_router(special_operation_reports_router)
 router.include_router(telemetry_router)
+router.include_router(training_behavior_router)
 router.include_router(workticket_review_router)
 router.include_router(regulation_ingest_router)
 router.include_router(regulation_monitor_router)

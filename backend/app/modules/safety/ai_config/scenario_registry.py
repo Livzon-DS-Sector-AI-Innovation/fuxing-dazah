@@ -1,4 +1,4 @@
-"""AI 场景注册表 — 27 个 AI 调用场景的代码唯一事实源（backend-design §2）。
+"""AI 场景注册表 — 33 个 AI 调用场景的代码唯一事实源（backend-design §2）。
 
 本文件是：
 
@@ -60,6 +60,9 @@ _AI_SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "fire_alarm_analysis": ("消防报警分析", "消防报警逐条/日报/周报 AI 汇总分析", "text", "system"),
     "central_alarm_analysis": ("中控报警分析", "中控报警逐条/日报 AI 汇总分析", "text", "system"),
     "violation_retraining_generation": ("违章定向培训要点卡", "违章→定向培训要点卡 AI 生成（推送开关默认关，内容先落表可审）", "text", "system"),
+    "training_demand_generation": ("培训需求生成", "五源数据→年度培训需求清单草案 AI 生成（草案先入库，采纳后才写台账）", "text", "web"),
+    "training_material_generation": ("课件试卷生成", "培训行→讲义要点卡与试卷 docx AI 生成（产物挂附件列）", "text", "web"),
+    "training_record_parsing": ("签到成绩解析", "签到表/成绩单照片 vision 解析回填台账", "vision", "web"),
 }
 
 # 已废弃但保留可配的场景（deprecated=True）；其余均为 False
