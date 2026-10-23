@@ -3,16 +3,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
-  Segmented, Select, Space, Spin, Table, Tabs, Tag, Typography,
+  Segmented, Select, Space, Spin, Table, Tabs, Tag, Typography, Upload,
 } from 'antd'
-import { DownloadOutlined, LineChartOutlined, PlusOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ImportOutlined, LineChartOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import type { EnvMonitorType, EnvPoint, EnvRecord, EnvTrend } from '@/types/quality'
 import {
   fetchEnvPoints, createEnvPoint, updateEnvPoint, deleteEnvPoint,
   fetchEnvRecords, createEnvRecord, deleteEnvRecord, exportEnvRecords, fetchEnvTrend,
-  handleEnvRecord,
+  handleEnvRecord, importEnvPoints, importEnvRecords, downloadEnvImportTemplate,
 } from '@/actions/quality'
 import { EnvTrendChart } from '@/components/quality'
 
@@ -109,6 +109,7 @@ export default function EnvMonitor() {
   const [records, setRecords] = useState<EnvRecord[]>([])
   const [recordsLoading, setRecordsLoading] = useState(false)
   const [judgeFilter, setJudgeFilter] = useState<string | undefined>()
+  const [handleStatusFilter, setHandleStatusFilter] = useState<string | undefined>()
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null)
   const [recordOpen, setRecordOpen] = useState(false)
   const [recordSaving, setRecordSaving] = useState(false)
@@ -119,6 +120,7 @@ export default function EnvMonitor() {
     try {
       const res = await fetchEnvRecords({
         judge: judgeFilter,
+        handleStatus: handleStatusFilter,
         dateFrom: dateRange?.[0]?.format('YYYY-MM-DD'),
         dateTo: dateRange?.[1]?.format('YYYY-MM-DD'),
       })
@@ -128,9 +130,51 @@ export default function EnvMonitor() {
     } finally {
       setRecordsLoading(false)
     }
-  }, [message, judgeFilter, dateRange])
+  }, [message, judgeFilter, handleStatusFilter, dateRange])
 
   useEffect(() => { (async () => { await loadRecords() })() }, [loadRecords])
+
+  const onDownloadTemplate = async (type: 'points' | 'records') => {
+    try {
+      const blob = await downloadEnvImportTemplate(type)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = type === 'points' ? '环境监测点导入模板.xlsx' : '环境监测记录导入模板.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '模板下载失败')
+    }
+  }
+
+  const onImportPoints = async (file: File) => {
+    try {
+      const res = await importEnvPoints(file)
+      const errTail = res.data.errors.length
+        ? `，失败 ${res.data.errors.length} 行：${res.data.errors.slice(0, 3).map((e) => `第${e.row}行 ${e.reason}`).join('；')}`
+        : ''
+      message.success(res.message + errTail)
+      loadPoints()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '导入失败')
+    }
+    return false
+  }
+
+  const onImportRecords = async (file: File) => {
+    try {
+      const res = await importEnvRecords(file)
+      const errTail = res.data.errors.length
+        ? `，失败 ${res.data.errors.length} 行：${res.data.errors.slice(0, 3).map((e) => `第${e.row}行 ${e.reason}`).join('；')}`
+        : ''
+      message.success(res.message + errTail)
+      loadRecords()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '导入失败')
+    }
+    return false
+  }
 
   const openRecordCreate = () => {
     recordForm.resetFields()
@@ -337,6 +381,12 @@ export default function EnvMonitor() {
                   {canManage && (
                     <Button type="primary" icon={<PlusOutlined />} onClick={openPointCreate}>新增监测点</Button>
                   )}
+                  {canManage && (
+                    <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={onImportPoints}>
+                      <Button icon={<ImportOutlined />}>导入点位</Button>
+                    </Upload>
+                  )}
+                  <Button icon={<DownloadOutlined />} onClick={() => onDownloadTemplate('points')}>下载模板</Button>
                 </Space>
                 <Table
                   rowKey="id" size="small" loading={pointsLoading} dataSource={points}
@@ -361,11 +411,26 @@ export default function EnvMonitor() {
                       { value: 'action', label: '超行动' },
                     ]}
                   />
+                  <Select
+                    allowClear placeholder="处理状态" style={{ width: 120 }}
+                    value={handleStatusFilter}
+                    onChange={(v) => setHandleStatusFilter(v)}
+                    options={[
+                      { value: 'open', label: '未处理' },
+                      { value: 'handled', label: '已处理' },
+                    ]}
+                  />
                   <DatePicker.RangePicker value={dateRange} onChange={(v) => setDateRange(v as [Dayjs, Dayjs] | null)} />
                   {canManage && (
                     <Button type="primary" icon={<PlusOutlined />} onClick={openRecordCreate}>填报记录</Button>
                   )}
+                  {canManage && (
+                    <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={onImportRecords}>
+                      <Button icon={<ImportOutlined />}>导入记录</Button>
+                    </Upload>
+                  )}
                   <Button icon={<LineChartOutlined />} onClick={openTrend}>趋势图</Button>
+                  <Button icon={<DownloadOutlined />} onClick={() => onDownloadTemplate('records')}>下载模板</Button>
                   <Button icon={<DownloadOutlined />} onClick={onExportRecords}>导出 Excel</Button>
                 </Space>
                 <Table

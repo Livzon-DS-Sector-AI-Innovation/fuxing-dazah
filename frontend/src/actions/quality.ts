@@ -1753,13 +1753,14 @@ export async function deleteEnvPoint(id: string): Promise<{ message: string }> {
 }
 
 export async function fetchEnvRecords(params?: {
-  pointId?: string; judge?: string; dateFrom?: string; dateTo?: string
+  pointId?: string; judge?: string; dateFrom?: string; dateTo?: string; handleStatus?: string
 }): Promise<{ data: EnvRecord[] }> {
   const q = new URLSearchParams()
   if (params?.pointId) q.set('point_id', params.pointId)
   if (params?.judge) q.set('judge', params.judge)
   if (params?.dateFrom) q.set('date_from', params.dateFrom)
   if (params?.dateTo) q.set('date_to', params.dateTo)
+  if (params?.handleStatus) q.set('handle_status', params.handleStatus)
   const qs = q.toString() ? `?${q}` : ''
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records${qs}`, {
     headers: await _authHeaders(), cache: 'no-store',
@@ -1835,6 +1836,42 @@ export async function fetchDashboardAlerts(): Promise<{ data: QualityAlerts }> {
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取提醒中心失败')
+  return res.json()
+}
+
+export async function downloadEnvImportTemplate(type: 'points' | 'records'): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/import-template?type=${type}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('模板下载失败')
+  return res.blob()
+}
+
+export async function importEnvPoints(file: File): Promise<{ message: string; data: { created: number; skipped: number; errors: { row: number; reason: string }[] } }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/points/import`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '导入失败')
+  }
+  revalidatePath('/quality/env')
+  return res.json()
+}
+
+export async function importEnvRecords(file: File): Promise<{ message: string; data: { created: number; errors: { row: number; reason: string }[] } }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records/import`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '导入失败')
+  }
+  revalidatePath('/quality/env')
   return res.json()
 }
 

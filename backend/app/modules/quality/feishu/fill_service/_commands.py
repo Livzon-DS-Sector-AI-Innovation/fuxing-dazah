@@ -298,6 +298,28 @@ async def handle_fill_command(event: dict[str, Any]) -> None:
                 await send_chat_text(chat_id, "物料库存：\n" + "\n".join(lines))
             return
 
+        # 「留样到期」：30 天内销毁到期清单（无批号查询，像「待复核」一样随时可查）
+        if "留样" in kw and "到期" in kw:
+            from app.modules.quality.repository import retained_destroy_alerts
+
+            async with async_session_factory() as ldb:
+                due_alerts = await retained_destroy_alerts(ldb)
+            if not due_alerts:
+                await send_chat_text(chat_id, "留样销毁到期：无（30 天内无到期留样）")
+                return
+            due_lines = []
+            for a in due_alerts:
+                tail = "（已到期未销毁）" if a["expired"] else "（30 天内）"
+                due_lines.append(
+                    f"- {a['sample_name']} 批号 {a['batch_no']}：销毁到期 {a['destroy_due_date']}{tail}"
+                    + (f"｜位置 {a['location']}" if a["location"] else "")
+                )
+            await send_chat_text(
+                chat_id,
+                f"留样销毁到期（{len(due_alerts)} 条，销毁后请到留样台账双人确认登记）：\n" + "\n".join(due_lines),
+            )
+            return
+
         # 「环境 点位 X 值 N [日期 YYYY-MM-DD]」：洁净区环境监测填报（手机主路径），
         # 按点位警戒限/行动限双限三态判定，超行动限自动群预警
         env_m = re.match(r"^环境\s*(.*)", kw)

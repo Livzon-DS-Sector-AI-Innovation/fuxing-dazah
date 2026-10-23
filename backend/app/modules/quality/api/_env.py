@@ -5,9 +5,10 @@
 
 import uuid
 from io import BytesIO
+from typing import Any
 from urllib.parse import quote
 
-from fastapi import Body, Depends, HTTPException, Query
+from fastapi import Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +45,9 @@ MONITOR_TYPE_LABELS = {
     "temp_humidity": "温湿度",
     "pressure": "压差",
 }
+MONITOR_TYPE_CODES = {v: k for k, v in MONITOR_TYPE_LABELS.items()}
+FREQ_LABELS = {"per_batch": "每批", "weekly": "每周", "monthly": "每月"}
+FREQ_CODES = {v: k for k, v in FREQ_LABELS.items()}
 
 
 def _env_judge(value: float | None, alert: float | None, action: float | None) -> str | None:
@@ -285,7 +289,7 @@ async def export_env_records_endpoint(
     wb = openpyxl.Workbook()
     ws = lc_template_parser.active_sheet(wb)
     ws.title = "环境监测记录"
-    ws.append(["房间", "点位", "类型", "监测日期", "结果值", "警戒限", "行动限", "判定", "填报人", "备注"])
+    ws.append(["房间", "点位", "类型", "监测日期", "结果值", "警戒限", "行动限", "判定", "处理状态", "处理日期", "处理人", "处理说明", "填报人", "备注"])
     judge_label = {"pass": "合格", "alert": "超警戒", "action": "超行动"}
     for r in rows:
         ws.append([
@@ -295,6 +299,10 @@ async def export_env_records_endpoint(
             r["alert_limit"] if r["alert_limit"] is not None else "-",
             r["action_limit"] if r["action_limit"] is not None else "-",
             judge_label.get(r["judge"] or "", r["judge"] or "-"),
+            "已处理" if r["handle_status"] == "handled" else "未处理",
+            r["handled_at"] or "-",
+            r["handled_by_name"] or "-",
+            r["handled_remark"] or "-",
             r["recorded_by_name"] or "-",
             r["remark"] or "-",
         ])
@@ -305,4 +313,160 @@ async def export_env_records_endpoint(
         BytesIO(buf.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="env.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+# ─── Excel 批量导入 ───
+
+
+@router.get("/env/import-template", summary="环境监测导入模板下载（points=监测点 / records=监测记录）")
+async def env_import_template_endpoint(
+    type_: str = Query(default="points", alias="type", description="points / records"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:env:read")),
+) -> StreamingResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    wb = openpyxl.Workbook()
+    ws = lc_template_parser.active_sheet(wb)
+    if type_ == "records":
+        ws.title = "监测记录导入"
+        ws.append(["房间", "点位编号", "监测日期", "结果值", "备注"])
+        ws.append(["灌装间", "P-001", "2026-10-23", 3, "示例行，导入前删除"])
+        filename = "环境监测记录导入模板.xlsx"
+    else:
+        ws.title = "监测点导入"
+        ws.append(["房间", "点位编号", "监测类型", "频次", "警戒限", "行动限", "备注"])
+        ws.append(["灌装间", "P-001", "沉降菌", "每周", 5, 10, "示例行，导入前删除"])
+        filename = "环境监测点导入模板.xlsx"
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote(filename)
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="env-import.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+@router.post("/env/points/import", summary="批量导入监测点（Excel，逐行校验，重复跳过）")
+async def import_env_points_endpoint(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:env:manage")),
+) -> JSONResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    content = await file.read()
+    wb = openpyxl.load_workbook(_io.BytesIO(content))
+    ws = lc_template_parser.active_sheet(wb)
+    rows_iter = ws.iter_rows(values_only=True)
+    header = next(rows_iter, None)
+    if not header:
+        raise HTTPException(status_code=400, detail="Excel 为空或缺少表头")
+    created = 0
+    skipped = 0
+    errors: list[dict[str, Any]] = []
+    for idx, raw in enumerate(rows_iter, start=2):
+        if not raw or all(v is None or str(v).strip() == "" for v in raw):
+            continue
+        room, point_no, type_label, freq_label, alert_v, action_v, remark = (list(raw) + [None] * 7)[:7]
+        room = str(room or "").strip()
+        point_no = str(point_no or "").strip()
+        monitor_type = MONITOR_TYPE_CODES.get(str(type_label or "").strip(), "")
+        frequency = FREQ_CODES.get(str(freq_label or "").strip())
+        if not room or not point_no:
+            errors.append({"row": idx, "reason": "房间/点位编号为空"})
+            continue
+        if not monitor_type:
+            errors.append({"row": idx, "reason": f"监测类型「{type_label}」无法识别（沉降菌/浮游菌/悬浮粒子/温湿度/压差）"})
+            continue
+        dup = [
+            p for p in await list_env_points(db, room=room, monitor_type=monitor_type)
+            if p.point_no == point_no
+        ]
+        if dup:
+            skipped += 1
+            continue
+        def _num(v: object) -> float | None:
+            try:
+                return float(str(v).strip()) if v is not None and str(v).strip() != "" else None
+            except (TypeError, ValueError):
+                return None
+
+        await create_env_point(db, {
+            "room": room, "point_no": point_no, "monitor_type": monitor_type,
+            "frequency": frequency, "alert_limit": _num(alert_v), "action_limit": _num(action_v),
+            "remark": str(remark).strip() if remark else None, "created_by": user.id,
+        })
+        created += 1
+    return success_response(
+        data={"created": created, "skipped": skipped, "errors": errors},
+        message=f"导入完成：新增 {created}，跳过重复 {skipped}" + (f"，错误 {len(errors)} 行" if errors else ""),
+    )
+
+
+@router.post("/env/records/import", summary="批量导入监测记录（Excel，按房间+点位匹配，自动判定）")
+async def import_env_records_endpoint(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:env:manage")),
+) -> JSONResponse:
+    import io as _io
+
+    import openpyxl
+
+    from app.modules.quality import lc_template_parser
+
+    content = await file.read()
+    wb = openpyxl.load_workbook(_io.BytesIO(content))
+    ws = lc_template_parser.active_sheet(wb)
+    rows_iter = ws.iter_rows(values_only=True)
+    header = next(rows_iter, None)
+    if not header:
+        raise HTTPException(status_code=400, detail="Excel 为空或缺少表头")
+    created = 0
+    errors: list[dict[str, Any]] = []
+    for idx, raw in enumerate(rows_iter, start=2):
+        if not raw or all(v is None or str(v).strip() == "" for v in raw):
+            continue
+        room, point_no, date_str, value_v, remark = (list(raw) + [None] * 5)[:5]
+        room = str(room or "").strip()
+        point_no = str(point_no or "").strip()
+        date_str = str(date_str or "").strip()[:10]
+        if not room or not point_no or not date_str:
+            errors.append({"row": idx, "reason": "房间/点位编号/监测日期为空"})
+            continue
+        matched = [
+            p for p in await list_env_points(db, room=room)
+            if p.point_no == point_no and p.status == "active"
+        ]
+        if len(matched) != 1:
+            errors.append({"row": idx, "reason": f"点位 {point_no} 在房间 {room} 未找到或停用"})
+            continue
+        point = matched[0]
+        try:
+            value = float(str(value_v).strip()) if value_v is not None and str(value_v).strip() != "" else None
+        except (TypeError, ValueError):
+            errors.append({"row": idx, "reason": f"结果值「{value_v}」不是数字"})
+            continue
+        await create_env_record(db, {
+            "point_id": point.id, "record_date": date_str, "result_value": value,
+            "alert_limit": point.alert_limit, "action_limit": point.action_limit,
+            "judge": _env_judge(value, point.alert_limit, point.action_limit),
+            "recorded_by": user.id, "created_by": user.id,
+            "remark": str(remark).strip() if remark else None,
+        })
+        created += 1
+    return success_response(
+        data={"created": created, "errors": errors},
+        message=f"导入完成：新增 {created} 条记录" + (f"，错误 {len(errors)} 行" if errors else ""),
     )
