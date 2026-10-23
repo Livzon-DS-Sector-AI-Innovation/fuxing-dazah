@@ -174,6 +174,42 @@ async def quality_dashboard(
     return success_response(data=data)
 
 
+@router.get("/dashboard/alerts", summary="提醒中心：留样销毁/试剂效期/环境超限未处理/环境欠账/今日请检")
+async def dashboard_alerts(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> JSONResponse:
+    """每日推送内容固化到看板：群里消息会刷掉，此处可回查。"""
+    from app.modules.quality.repository import (
+        env_missed_points,
+        lab_expiry_alerts,
+        list_env_records,
+        list_inspection_plans,
+        retained_destroy_alerts,
+    )
+
+    retained = await retained_destroy_alerts(db)
+    lab = await lab_expiry_alerts(db)
+    env_open = await list_env_records(db, judge="action", handle_status="open")
+    env_missed = await env_missed_points(db)
+    plans = [p for p in await list_inspection_plans(db, date_str=today().isoformat()) if p.status == "pending"]
+    return success_response(data={
+        "retained": retained,
+        "lab": lab,
+        "env_action_open": env_open,
+        "env_missed": env_missed,
+        "today_plans": [
+            {
+                "department": p.department,
+                "product_name": p.product_name,
+                "batch_no": p.batch_no,
+                "plan_time": p.plan_time,
+            }
+            for p in plans
+        ],
+    })
+
+
 @router.get("/summary/matrix", summary="QC 汇总表矩阵：行=批次，列=全部检验项目横向列出")
 async def summary_matrix(
     product_name: str | None = Query(default=None, description="产品名称"),

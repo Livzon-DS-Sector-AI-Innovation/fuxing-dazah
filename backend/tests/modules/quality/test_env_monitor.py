@@ -1,17 +1,21 @@
-"""环境监测测试：点位台账 CRUD、双限三态判定、记录填报快照限值。
+"""环境监测测试：点位台账 CRUD、双限三态判定、记录填报快照限值、应测未测、超限闭环。
 
 注意：db_session 是回滚式夹具（teardown rollback），测试内不 commit。
 """
 
 import uuid
+from datetime import timedelta
 
+from app.core.time import today as _app_today
 from app.modules.quality.api._env import _env_judge
 from app.modules.quality.repository import (
     create_env_point,
     create_env_record,
     delete_env_point,
     delete_env_record,
+    env_missed_points,
     get_env_point,
+    handle_env_record,
     list_env_points,
     list_env_records,
     update_env_point,
@@ -91,3 +95,57 @@ async def test_env_record_fill_and_list(db_session):
     assert await list_env_records(db_session, judge="pass") == []
     assert await delete_env_record(db_session, rec.id) is True
     assert await list_env_records(db_session, point_id=point.id) == []
+
+
+async def test_env_missed_points(db_session):
+    today = _app_today()
+    # 每周点位：本周无记录 → 欠账
+    weekly_no_record = await create_env_point(db_session, _point(frequency="weekly"))
+    # 每周点位：本周有记录 → 不欠账
+    weekly_ok = await create_env_point(db_session, _point(frequency="weekly"))
+    await create_env_record(db_session, {
+        "point_id": weekly_ok.id, "record_date": today.isoformat(),
+        "result_value": 3.0, "alert_limit": 5.0, "action_limit": 10.0, "judge": "pass",
+    })
+    # 每月点位：上月有记录 → 欠账
+    monthly_stale = await create_env_point(db_session, _point(frequency="monthly"))
+    await create_env_record(db_session, {
+        "point_id": monthly_stale.id,
+        "record_date": (today - timedelta(days=40)).isoformat(),
+        "result_value": 3.0, "alert_limit": 5.0, "action_limit": 10.0, "judge": "pass",
+    })
+    # 每批点位：不参与自动点名
+    await create_env_point(db_session, _point(frequency="per_batch"))
+    # 停用点位：不点名
+    await create_env_point(db_session, _point(frequency="weekly", status="inactive"))
+
+    missed = await env_missed_points(db_session)
+    missed_keys = {(m["point_no"], m["frequency"]) for m in missed}
+    assert (weekly_no_record.point_no, "weekly") in missed_keys
+    assert (monthly_stale.point_no, "monthly") in missed_keys
+    assert (weekly_ok.point_no, "weekly") not in missed_keys
+    # 每批与停用点位不出现
+    assert all(m["frequency"] != "per_batch" for m in missed)
+    # 欠账记录带上次检测日期
+    stale = next(m for m in missed if m["point_no"] == monthly_stale.point_no)
+    assert stale["last_date"] == (today - timedelta(days=40)).isoformat()
+
+
+async def test_env_record_handle_closure(db_session):
+    point = await create_env_point(db_session, _point())
+    rec = await create_env_record(db_session, {
+        "point_id": point.id, "record_date": "2026-10-22",
+        "result_value": 15.0, "alert_limit": 5.0, "action_limit": 10.0, "judge": "action",
+    })
+    assert rec.handle_status == "open"
+    updated = await handle_env_record(db_session, rec.id, {
+        "handle_status": "handled", "handled_at": "2026-10-22",
+        "handled_remark": "已现场处置并复核", "updated_by": None,
+    })
+    assert updated is not None and updated.handle_status == "handled"
+    assert updated.handled_at == "2026-10-22" and updated.handled_remark == "已现场处置并复核"
+
+    # 列表带处理字段与筛选
+    rows = await list_env_records(db_session, judge="action", handle_status="handled")
+    assert len(rows) == 1 and rows[0]["handle_status"] == "handled"
+    assert await list_env_records(db_session, judge="action", handle_status="open") == []

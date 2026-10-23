@@ -37,6 +37,7 @@ import type {
   EnvPoint,
   EnvRecord,
   EnvTrend,
+  QualityAlerts,
   StocktakeItem,
   MonthlyReportItem,
   SlowMovingItem,
@@ -1812,6 +1813,28 @@ export async function fetchEnvTrend(pointId: string, days = 90): Promise<{ data:
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取趋势失败')
+  return res.json()
+}
+
+export async function handleEnvRecord(recordId: string, input: { handled_remark?: string }): Promise<{ message: string; data: EnvRecord }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/records/${recordId}/handle`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '标记处理失败')
+  }
+  revalidatePath('/quality/env')
+  revalidatePath('/quality/dashboard')
+  return res.json()
+}
+
+export async function fetchDashboardAlerts(): Promise<{ data: QualityAlerts }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/dashboard/alerts`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取提醒中心失败')
   return res.json()
 }
 

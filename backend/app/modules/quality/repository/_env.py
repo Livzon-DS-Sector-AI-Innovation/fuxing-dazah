@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -89,15 +89,18 @@ async def list_env_records(
     judge: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    handle_status: str | None = None,
 ) -> list[dict[str, Any]]:
-    """监测记录列表（联查点位信息与填报人姓名）。"""
+    """监测记录列表（联查点位信息、填报人/处理人姓名）。"""
     from app.platform.identity.models import User as IdentityUser
 
-    user_alias = aliased(IdentityUser)
+    recorder = aliased(IdentityUser)
+    handler = aliased(IdentityUser)
     stmt = (
-        select(QualityEnvRecord, QualityEnvPoint, user_alias.name)
+        select(QualityEnvRecord, QualityEnvPoint, recorder.name, handler.name)
         .join(QualityEnvPoint, QualityEnvPoint.id == QualityEnvRecord.point_id)
-        .join(user_alias, user_alias.id == QualityEnvRecord.recorded_by, isouter=True)
+        .join(recorder, recorder.id == QualityEnvRecord.recorded_by, isouter=True)
+        .join(handler, handler.id == QualityEnvRecord.handled_by, isouter=True)
         .where(
             QualityEnvRecord.is_deleted == False,  # noqa: E712
             QualityEnvPoint.is_deleted == False,  # noqa: E712
@@ -111,9 +114,11 @@ async def list_env_records(
         stmt = stmt.where(QualityEnvRecord.record_date >= date_from)
     if date_to:
         stmt = stmt.where(QualityEnvRecord.record_date <= date_to)
+    if handle_status:
+        stmt = stmt.where(QualityEnvRecord.handle_status == handle_status)
     stmt = stmt.order_by(QualityEnvRecord.record_date.desc(), QualityEnvRecord.created_at.desc())
     out: list[dict[str, Any]] = []
-    for r, p, by_name in (await db.execute(stmt)).all():
+    for r, p, by_name, handled_name in (await db.execute(stmt)).all():
         out.append({
             "id": r.id,
             "point_id": r.point_id,
@@ -125,11 +130,64 @@ async def list_env_records(
             "alert_limit": r.alert_limit,
             "action_limit": r.action_limit,
             "judge": r.judge,
+            "handle_status": r.handle_status,
+            "handled_at": r.handled_at,
+            "handled_by": r.handled_by,
+            "handled_by_name": handled_name,
+            "handled_remark": r.handled_remark,
             "recorded_by": r.recorded_by,
             "recorded_by_name": by_name,
             "remark": r.remark,
             "created_at": r.created_at,
         })
+    return out
+
+
+async def handle_env_record(db: AsyncSession, rid: uuid.UUID, data: dict[str, Any]) -> QualityEnvRecord | None:
+    """超行动限记录闭环：标记已处理（处理人/日期/说明）。"""
+    rec = await get_env_record(db, rid)
+    if rec is None:
+        return None
+    for key, value in data.items():
+        setattr(rec, key, value)
+    await db.flush()
+    stmt = select(QualityEnvRecord).where(QualityEnvRecord.id == rid)
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def env_missed_points(db: AsyncSession) -> list[dict[str, Any]]:
+    """应测未测点名：weekly 点位本周无记录 / monthly 点位本月无记录（per_batch 不参与自动点名）。"""
+    from datetime import timedelta
+
+    from app.core.time import today as _today
+
+    t = _today()
+    week_start = (t - timedelta(days=t.weekday())).isoformat()
+    month_start = t.replace(day=1).isoformat()
+    points = (await db.execute(
+        select(QualityEnvPoint).where(
+            QualityEnvPoint.is_deleted == False,  # noqa: E712
+            QualityEnvPoint.status == "active",
+            QualityEnvPoint.frequency.in_(["weekly", "monthly"]),
+        ).order_by(QualityEnvPoint.room, QualityEnvPoint.point_no)
+    )).scalars()
+    out: list[dict[str, Any]] = []
+    for p in points:
+        threshold = week_start if p.frequency == "weekly" else month_start
+        last = (await db.execute(
+            select(func.max(QualityEnvRecord.record_date)).where(
+                QualityEnvRecord.point_id == p.id,
+                QualityEnvRecord.is_deleted == False,  # noqa: E712
+            )
+        )).scalar_one_or_none()
+        if last is None or last < threshold:
+            out.append({
+                "room": p.room,
+                "point_no": p.point_no,
+                "monitor_type": p.monitor_type,
+                "frequency": p.frequency,
+                "last_date": last,
+            })
     return out
 
 

@@ -53,5 +53,12 @@ class QualityEnvRecord(BaseModel):
     judge: Mapped[str | None] = mapped_column(
         String(16), nullable=True, comment="pass 合格 / alert 超警戒 / action 超行动"
     )
+    handle_status: Mapped[str] = mapped_column(
+        String(16), default="open", server_default="open",
+        comment="open 未处理 / handled 已处理（仅超行动限记录需要闭环）",
+    )
+    handled_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="处理日期 YYYY-MM-DD")
+    handled_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="处理人，逻辑引用 identity.users.id")
+    handled_remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="处理说明")
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="填报人，逻辑引用 identity.users.id")
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")

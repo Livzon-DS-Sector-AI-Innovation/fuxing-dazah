@@ -192,7 +192,9 @@ async def _push_material_alerts() -> None:
     )
     from app.modules.quality.feishu.message import send_chat_text
     from app.modules.quality.repository import (
+        env_missed_points,
         lab_expiry_alerts,
+        list_env_records,
         list_inspection_plans,
         material_expiry_alerts,
         retained_destroy_alerts,
@@ -212,8 +214,25 @@ async def _push_material_alerts() -> None:
         supplier_alerts = await supplier_qual_alerts(db)
         lab_alerts = await lab_expiry_alerts(db)
         retained_alerts = await retained_destroy_alerts(db)
+        env_missed = await env_missed_points(db)
+        env_open = await list_env_records(db, judge="action", handle_status="open")
         today_plans = await list_inspection_plans(db, date_str=_app_today().isoformat())
     blocks: list[str] = []
+    if env_missed:
+        type_label = {"settle": "沉降菌", "float": "浮游菌", "particle": "悬浮粒子", "temp_humidity": "温湿度", "pressure": "压差"}
+        freq_label = {"weekly": "每周", "monthly": "每月"}
+        lines = [
+            f"- {m['room']} {m['point_no']}（{type_label.get(m['monitor_type'], m['monitor_type'])}｜{freq_label.get(m['frequency'], m['frequency'])}）"
+            + (f"上次检测 {m['last_date']}" if m["last_date"] else "尚无检测记录")
+            for m in env_missed
+        ]
+        blocks.append(f"环境监测欠账（{len(env_missed)} 个点位本周/本月应测未测，请安排检测）：\n" + "\n".join(lines))
+    if env_open:
+        lines = [
+            f"- {r['room']} {r['point_no']} {r['record_date']} 结果 {r['result_value']}（行动限 {r['action_limit']}）"
+            for r in env_open
+        ]
+        blocks.append(f"环境超行动限未处理（{len(env_open)} 项，请到环境监测页标记处理并留说明）：\n" + "\n".join(lines))
     if retained_alerts:
         lines = []
         for a in retained_alerts:

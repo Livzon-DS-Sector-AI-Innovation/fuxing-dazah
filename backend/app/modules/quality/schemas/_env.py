@@ -70,7 +70,18 @@ class EnvRecordOut(BaseModel):
     alert_limit: float | None
     action_limit: float | None
     judge: str | None
+    handle_status: str
+    handled_at: str | None
+    handled_by: uuid.UUID | None
+    handled_by_name: str | None
+    handled_remark: str | None
     recorded_by: uuid.UUID | None
     recorded_by_name: str | None
     remark: str | None
     created_at: datetime
+
+
+class EnvRecordHandle(BaseModel):
+    """超行动限记录闭环：标记已处理并留处理说明。"""
+
+    handled_remark: str | None = Field(default=None, max_length=200, description="处理说明")

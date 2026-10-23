@@ -745,6 +745,11 @@ export interface EnvRecord {
   alert_limit: number | null
   action_limit: number | null
   judge: 'pass' | 'alert' | 'action' | null
+  handle_status: 'open' | 'handled'
+  handled_at: string | null
+  handled_by: string | null
+  handled_by_name: string | null
+  handled_remark: string | null
   recorded_by: string | null
   recorded_by_name: string | null
   remark: string | null
@@ -758,4 +763,12 @@ export interface EnvTrend {
   alert_limit: number | null
   action_limit: number | null
   items: { record_date: string; result_value: number | null; judge: 'pass' | 'alert' | 'action' | null }[]
+}
+
+export interface QualityAlerts {
+  retained: { batch_no: string; sample_name: string; location: string | null; destroy_due_date: string | null; expired: boolean }[]
+  lab: { name: string; item_type: string; expiry_date: string | null; expired: boolean }[]
+  env_action_open: EnvRecord[]
+  env_missed: { room: string; point_no: string; monitor_type: EnvMonitorType; frequency: string; last_date: string | null }[]
+  today_plans: { department: string; product_name: string; batch_no: string | null; plan_time: string }[]
 }

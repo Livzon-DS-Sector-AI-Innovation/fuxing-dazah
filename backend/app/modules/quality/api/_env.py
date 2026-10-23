@@ -21,6 +21,7 @@ from app.modules.quality.repository import (
     delete_env_record,
     env_trend,
     get_env_point,
+    handle_env_record,
     list_env_points,
     list_env_records,
     update_env_point,
@@ -30,6 +31,7 @@ from app.modules.quality.schemas import (
     EnvPointOut,
     EnvPointUpdate,
     EnvRecordCreate,
+    EnvRecordHandle,
     EnvRecordOut,
 )
 from app.platform.identity.models import User
@@ -163,10 +165,14 @@ async def list_env_records_endpoint(
     judge: str | None = Query(default=None, description="pass/alert/action"),
     date_from: str | None = Query(default=None, description="YYYY-MM-DD"),
     date_to: str | None = Query(default=None, description="YYYY-MM-DD"),
+    handle_status: str | None = Query(default=None, description="open 未处理 / handled 已处理"),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:env:read")),
 ) -> JSONResponse:
-    items = await list_env_records(db, point_id=point_id, judge=judge, date_from=date_from, date_to=date_to)
+    items = await list_env_records(
+        db, point_id=point_id, judge=judge, date_from=date_from, date_to=date_to,
+        handle_status=handle_status,
+    )
     return success_response(data=[EnvRecordOut.model_validate(i).model_dump(mode="json") for i in items])
 
 
@@ -223,6 +229,41 @@ async def delete_env_record_endpoint(
     if not await delete_env_record(db, record_id):
         raise HTTPException(status_code=404, detail="记录不存在")
     return success_response(message="已删除")
+
+
+@router.post("/env/records/{record_id}/handle", summary="超行动限记录闭环：标记已处理（处理人/日期自动记录）")
+async def handle_env_record_endpoint(
+    record_id: uuid.UUID,
+    payload: EnvRecordHandle = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:env:manage")),
+) -> JSONResponse:
+    from app.core.time import today as _today
+    from app.modules.quality.repository import get_env_record
+
+    rec = await get_env_record(db, record_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    if rec.judge != "action":
+        raise HTTPException(status_code=400, detail="仅超行动限记录需要闭环处理")
+    if rec.handle_status == "handled":
+        raise HTTPException(status_code=409, detail="该记录已标记处理")
+    await handle_env_record(db, record_id, {
+        "handle_status": "handled",
+        "handled_at": _today().isoformat(),
+        "handled_by": user.id,
+        "handled_remark": payload.handled_remark,
+        "updated_by": user.id,
+    })
+    return success_response(
+        data=EnvRecordOut.model_validate(
+            next(
+                (r for r in await list_env_records(db, point_id=rec.point_id) if r["id"] == rec.id),
+                None,
+            )
+        ).model_dump(mode="json"),
+        message="已标记处理（处理人/日期已留痕）",
+    )
 
 
 @router.get("/env/records/export", summary="环境监测记录导出 Excel")

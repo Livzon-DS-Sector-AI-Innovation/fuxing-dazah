@@ -12,6 +12,7 @@ import type { EnvMonitorType, EnvPoint, EnvRecord, EnvTrend } from '@/types/qual
 import {
   fetchEnvPoints, createEnvPoint, updateEnvPoint, deleteEnvPoint,
   fetchEnvRecords, createEnvRecord, deleteEnvRecord, exportEnvRecords, fetchEnvTrend,
+  handleEnvRecord,
 } from '@/actions/quality'
 import { EnvTrendChart } from '@/components/quality'
 
@@ -137,6 +138,32 @@ export default function EnvMonitor() {
     setRecordOpen(true)
   }
 
+  // ─── 超行动限闭环 ───
+  const [handleOpen, setHandleOpen] = useState<EnvRecord | null>(null)
+  const [handleSaving, setHandleSaving] = useState(false)
+  const [handleForm] = Form.useForm()
+
+  const openHandle = (item: EnvRecord) => {
+    handleForm.resetFields()
+    setHandleOpen(item)
+  }
+
+  const onHandle = async () => {
+    if (!handleOpen) return
+    const values = await handleForm.validateFields()
+    setHandleSaving(true)
+    try {
+      const res = await handleEnvRecord(handleOpen.id, { handled_remark: values.handled_remark })
+      message.success(res.message)
+      setHandleOpen(null)
+      loadRecords()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '标记处理失败')
+    } finally {
+      setHandleSaving(false)
+    }
+  }
+
   // ─── 趋势图 ───
   const [trendOpen, setTrendOpen] = useState(false)
   const [trendPointId, setTrendPointId] = useState<string | undefined>()
@@ -259,17 +286,37 @@ export default function EnvMonitor() {
       title: '判定', dataIndex: 'judge', width: 95,
       render: (v: string | null) => (v ? <Tag color={JUDGE_META[v]?.color}>{JUDGE_META[v]?.label ?? v}</Tag> : '-'),
     },
+    {
+      title: '处理', dataIndex: 'handle_status', width: 95,
+      render: (_: string | null, item: EnvRecord) => {
+        if (item.judge !== 'action') return '-'
+        if (item.handle_status === 'handled') {
+          return (
+            <Tag color="green" style={{ cursor: 'help' }}>
+              已处理{item.handled_at ? ` ${item.handled_at}` : ''}
+              {item.handled_by_name ? ` ${item.handled_by_name}` : ''}
+            </Tag>
+          )
+        }
+        return <Tag color="red">未处理</Tag>
+      },
+    },
     { title: '填报人', dataIndex: 'recorded_by_name', width: 90, render: (v: string | null) => v || '-' },
     { title: '备注', dataIndex: 'remark', width: 130, ellipsis: true, render: (v: string | null) => v || '-' },
     {
-      title: '操作', key: 'actions', width: 80, fixed: 'right' as const,
+      title: '操作', key: 'actions', width: 150, fixed: 'right' as const,
       render: (_: unknown, item: EnvRecord) => (
         canManage ? (
-          <Popconfirm title="确认删除该记录？（填报纠错用）" onConfirm={async () => {
-            try { await deleteEnvRecord(item.id); message.success('已删除'); loadRecords() } catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '删除失败') }
-          }}>
-            <Button size="small" type="link" danger>删除</Button>
-          </Popconfirm>
+          <Space size="small">
+            {item.judge === 'action' && item.handle_status === 'open' && (
+              <Button size="small" type="link" danger onClick={() => openHandle(item)}>标记已处理</Button>
+            )}
+            <Popconfirm title="确认删除该记录？（填报纠错用）" onConfirm={async () => {
+              try { await deleteEnvRecord(item.id); message.success('已删除'); loadRecords() } catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '删除失败') }
+            }}>
+              <Button size="small" type="link" danger>删除</Button>
+            </Popconfirm>
+          </Space>
         ) : '-'
       ),
     },
@@ -418,6 +465,25 @@ export default function EnvMonitor() {
             )}
           </div>
         </Spin>
+      </Modal>
+
+      <Modal
+        title={`标记已处理 ${handleOpen ? `（${handleOpen.room} ${handleOpen.point_no} ${handleOpen.record_date} 结果 ${handleOpen.result_value}）` : ''}`}
+        open={!!handleOpen}
+        onCancel={() => setHandleOpen(null)}
+        onOk={onHandle}
+        confirmLoading={handleSaving}
+        okText="确认处理"
+        width={480}
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12.5 }}>
+          处理人和处理日期由系统自动记录；请在处理说明中写明处置措施（如已通知车间整改、已重新清洁消毒等），满足 GMP 超限处置留痕。
+        </Typography.Paragraph>
+        <Form form={handleForm} layout="vertical">
+          <Form.Item name="handled_remark" label="处理说明">
+            <Input.TextArea rows={3} maxLength={200} placeholder="如：已通知车间停止生产并重新清洁消毒，复测合格" />
+          </Form.Item>
+        </Form>
       </Modal>
 
       <Modal
