@@ -239,3 +239,75 @@ def test_ticket_with_real_violation_and_data_insufficient_in_both_sections() -> 
     assert "作业开始前无有效气体分析记录" in real_section
     assert "数据不足：缺少 结束时间" in insufficient_section
 
+
+
+# ── 前日问题整改复查节 ──
+
+def _rectify_summary() -> dict[str, Any]:
+    return {
+        "source_date": "2026-08-25",
+        "checked_date": "2026-08-26",
+        "problem_total": 3,
+        "rectified": 1,
+        "unrectified": 1,
+        "uncheckable": 1,
+        "tickets": [
+            {
+                "ticket_no": "DH-100",
+                "ticket_type": "hot_work",
+                "ticket_type_name": "动火作业",
+                "status": "rectified",
+                "rule_results": [
+                    {"rule_no": "TIME_ORDER", "rule_name": "时间顺序链",
+                     "yesterday_detail": "倒签", "resolved": True, "today_detail": None},
+                ],
+                "note": None,
+            },
+            {
+                "ticket_no": "DH-101",
+                "ticket_type": "hot_work",
+                "ticket_type_name": "动火作业",
+                "status": "unrectified",
+                "rule_results": [
+                    {"rule_no": "TIME_ORDER", "rule_name": "时间顺序链",
+                     "yesterday_detail": "倒签", "resolved": False,
+                     "today_detail": "申请晚于气体分析"},
+                    {"rule_no": "DURATION", "rule_name": "作业时长上限",
+                     "yesterday_detail": None, "resolved": False,
+                     "today_detail": "超 72 小时"},
+                ],
+                "note": None,
+            },
+            {
+                "ticket_no": "GC-100",
+                "ticket_type": "height_work",
+                "ticket_type_name": "高处作业",
+                "status": "uncheckable",
+                "rule_results": [],
+                "note": "复查拉取平台详情失败",
+            },
+        ],
+    }
+
+
+def test_rectify_section_rendered() -> None:
+    tickets, violations, stats = _make_fixture()
+    report = BUILDER.build(
+        date(2026, 8, 26), tickets, violations, stats, rectify=_rectify_summary(),
+    )
+    section = report.split("🔁 前日问题整改复查")[1].split("🟢 合格摘要")[0]
+    assert "前日问题整改复查（2026-08-25）" in report
+    assert "问题票 3 张" in section
+    assert "✅ 已整改 1" in section and "❌ 未整改 1" in section and "⚠️ 无法复查 1" in section
+    assert "【动火作业】DH-100（已整改）" in section
+    assert "【动火作业】DH-101（未整改：时间顺序链、作业时长上限）" in section
+    assert "· ✅ 时间顺序链 已整改" not in section.split("DH-101")[1]  # 未整改票只列未消除规则
+    assert "· ❌ 时间顺序链：申请晚于气体分析" in section
+    assert "· ➕ 新增 作业时长上限：超 72 小时" in section
+    assert "【高处作业】GC-100（无法复查：复查拉取平台详情失败）" in section
+
+
+def test_rectify_section_omitted_when_none() -> None:
+    tickets, violations, stats = _make_fixture()
+    report = _report(tickets, violations, stats)
+    assert "前日问题整改复查" not in report

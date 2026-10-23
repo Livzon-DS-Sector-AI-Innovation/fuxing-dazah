@@ -67,10 +67,13 @@ def build_workticket_digest(
     violations_by_ticket: dict[str, list[Violation]],
     stats: dict[str, Any],
     full_markdown: str,
+    rectify: dict[str, Any] | None = None,
 ) -> DigestCard | None:
     """构建速递卡；构建异常或超限返回 None，调用方回退旧长卡。"""
     try:
-        return _build(review_date, tickets, violations_by_ticket, stats, full_markdown)
+        return _build(
+            review_date, tickets, violations_by_ticket, stats, full_markdown, rectify,
+        )
     except Exception:
         logger.warning("作业票速递卡构建失败，回退旧长卡", exc_info=True)
         return None
@@ -82,6 +85,7 @@ def _build(
     violations_by_ticket: dict[str, list[Violation]],
     stats: dict[str, Any],
     full_markdown: str,
+    rectify: dict[str, Any] | None = None,
 ) -> DigestCard | None:
     real_map: dict[str, tuple[WorkTicket, list[Violation]]] = {}
     insufficient_map: dict[str, tuple[WorkTicket, list[Violation]]] = {}
@@ -128,6 +132,11 @@ def _build(
             ),
         })
 
+    # 前日问题整改复查节（无复查数据时省略）
+    if rectify:
+        rectify_elements = _rectify_elements(rectify)
+        elements.extend(rectify_elements)
+
     # 通过票聚合
     if compliant:
         elements.append({
@@ -169,6 +178,91 @@ def _build(
 
 def _is_insufficient(v: Violation) -> bool:
     return not v.not_applicable and v.detail.strip().startswith("数据不足")
+
+
+# 复查状态 → (text_tag 颜色, 文案)
+_RECTIFY_TAGS: dict[str, tuple[str, str]] = {
+    "rectified": ("green", "已整改"),
+    "unrectified": ("red", "未整改"),
+    "uncheckable": ("yellow", "无法复查"),
+}
+
+
+def _rectify_elements(rectify: dict[str, Any]) -> list[dict[str, Any]]:
+    """前日问题整改复查节：汇总标签行 + 未整改/无法复查票逐条（上限同问题票）。"""
+    source_date = rectify.get("source_date", "")
+    counts = [
+        (rectify.get("rectified", 0), "rectified"),
+        (rectify.get("unrectified", 0), "unrectified"),
+        (rectify.get("uncheckable", 0), "uncheckable"),
+    ]
+    tags = " ".join(
+        f"<text_tag color='{_RECTIFY_TAGS[key][0]}'>"
+        f"{_RECTIFY_TAGS[key][1]} {count}</text_tag>"
+        for count, key in counts
+    )
+    elements: list[dict[str, Any]] = [{
+        "tag": "markdown",
+        "content": (
+            f"🔁 **前日问题整改复查**（{source_date} 问题票 "
+            f"{rectify.get('problem_total', 0)} 张）：{tags}"
+        ),
+    }]
+
+    open_tickets = [
+        t for t in rectify.get("tickets") or []
+        if t.get("status") in ("unrectified", "uncheckable")
+    ]
+    for ticket in open_tickets[:_MAX_PROBLEM_ITEMS]:
+        status = str(ticket.get("status", ""))
+        color, text = _RECTIFY_TAGS.get(status, ("grey", status))
+        cn_type = ticket.get("ticket_type_name") or ticket.get("ticket_type", "")
+        lines = [
+            f"<text_tag color='{color}'>{text}</text_tag>"
+            f" <text_tag color='{_type_color(cn_type)}'>{cn_type}</text_tag>",
+            f"**{ticket.get('ticket_no', '')}**",
+        ]
+        if status == "uncheckable":
+            lines.append(f"<font color='grey'>{ticket.get('note') or '原因未知'}</font>")
+        else:
+            unresolved = [
+                r for r in ticket.get("rule_results") or [] if not r.get("resolved")
+            ]
+            if unresolved:
+                first = unresolved[0]
+                label = first.get("rule_name") or first.get("rule_no", "")
+                if first.get("yesterday_detail") is None:
+                    desc = f"新增 {label}: {first.get('today_detail', '')}"
+                else:
+                    desc = f"{label}: {first.get('today_detail', '')}"
+                if len(desc) > 50:
+                    desc = desc[:50] + "…"
+                if len(unresolved) > 1:
+                    desc += f"（共 {len(unresolved)} 项）"
+                lines.append(f"⚠️ {desc}")
+        elements.append({
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": "grey",
+            "margin": "0px 0px 6px 0px",
+            "columns": [{
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "vertical_align": "center",
+                "padding": "8px 12px",
+                "elements": [{"tag": "markdown", "content": "\n".join(lines)}],
+            }],
+        })
+    hidden = len(open_tickets) - _MAX_PROBLEM_ITEMS
+    if hidden > 0:
+        elements.append({
+            "tag": "markdown",
+            "content": (
+                f"<font color='grey'>其余 {hidden} 张未整改/无法复查票见「完整明细」</font>"
+            ),
+        })
+    return elements
 
 
 def _greeting(

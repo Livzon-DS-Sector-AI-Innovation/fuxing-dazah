@@ -102,6 +102,7 @@ class WorkTicketReviewReportBuilder:
         tickets: list[WorkTicket],
         violations_by_ticket: dict[str, list[Violation]],
         stats: dict[str, Any],
+        rectify: dict[str, Any] | None = None,
     ) -> str:
         """生成固定模板 Markdown 报告。
 
@@ -110,6 +111,8 @@ class WorkTicketReviewReportBuilder:
         violations_by_ticket：ticket_no -> list[Violation]（可为空 dict）。
         stats：审核摘要，至少含 total/reviewed/violation_count/compliant_count/
                data_insufficient；其余如 pushed 用于展示。
+        rectify：前日问题整改复查汇总（rectify.run_rectify_check 返回），
+                 None/无问题票时省略该节。
         """
         date_text = self._format_date(review_date)
 
@@ -148,6 +151,8 @@ class WorkTicketReviewReportBuilder:
             )
         )
         sections.append(self._render_violations(real_map, insufficient_map))
+        if rectify:
+            sections.append(self._render_rectify(rectify))
         sections.append(self._render_compliant(compliant))
         return "\n\n".join(part for part in sections if part).strip() + "\n"
 
@@ -274,6 +279,53 @@ class WorkTicketReviewReportBuilder:
                     lines.append(f"❓ {_cn_detail(v.detail)}")
                 blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
+
+    def _render_rectify(self, rectify: dict[str, Any]) -> str:
+        """前日问题整改复查节（run_rectify_check 汇总 → 固定模板）。"""
+        source_date = rectify.get("source_date", "")
+        lines = [
+            f"🔁 前日问题整改复查（{source_date}）",
+            "━━━━━━━━━━━━━━━━━━━━",
+            (
+                f"• 问题票 {rectify.get('problem_total', 0)} 张："
+                f"✅ 已整改 {rectify.get('rectified', 0)} ｜ "
+                f"❌ 未整改 {rectify.get('unrectified', 0)} ｜ "
+                f"⚠️ 无法复查 {rectify.get('uncheckable', 0)}"
+            ),
+        ]
+        status_marks = {
+            "rectified": "✅",
+            "unrectified": "❌",
+            "uncheckable": "⚠️",
+        }
+        for ticket in rectify.get("tickets") or []:
+            status = str(ticket.get("status", ""))
+            mark = status_marks.get(status, "•")
+            header = (
+                f"{mark} 【{ticket.get('ticket_type_name') or ticket.get('ticket_type', '')}】"
+                f"{ticket.get('ticket_no', '')}"
+            )
+            if status == "rectified":
+                lines.append(f"{header}（已整改）")
+            elif status == "uncheckable":
+                lines.append(f"{header}（无法复查：{ticket.get('note') or '原因未知'}）")
+            else:
+                unresolved = [
+                    r for r in ticket.get("rule_results") or [] if not r.get("resolved")
+                ]
+                summary = "、".join(
+                    r.get("rule_name") or r.get("rule_no", "") for r in unresolved
+                )
+                lines.append(f"{header}（未整改：{summary or '仍有问题'}）")
+                for r in ticket.get("rule_results") or []:
+                    rule_label = r.get("rule_name") or r.get("rule_no", "")
+                    if r.get("resolved"):
+                        lines.append(f"  · ✅ {rule_label} 已整改")
+                    elif r.get("yesterday_detail") is None:
+                        lines.append(f"  · ➕ 新增 {rule_label}：{r.get('today_detail', '')}")
+                    else:
+                        lines.append(f"  · ❌ {rule_label}：{r.get('today_detail', '')}")
+        return "\n".join(lines)
 
     def _render_compliant(self, compliant: list[WorkTicket]) -> str:
         lines = ["🟢 合格摘要", "━━━━━━━━━━━━━━━━━━━━"]

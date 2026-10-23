@@ -125,3 +125,46 @@ class WorkTicketReviewViolation(BaseModel):
     )
 
 
+class WorkTicketRectifyCheck(BaseModel):
+    """作业票审核问题整改复查表（次日 10 点复查前日审核的违规票是否整改）。
+
+    一行 = 一次复查中一张问题票的结论；(source_review_date, ticket_no) partial
+    unique 支撑重跑幂等覆盖（同日重复复查只留最新结论）。
+    """
+
+    __tablename__ = "work_ticket_rectify_checks"
+    __table_args__ = (
+        Index(
+            "uq_work_ticket_rectify_date_ticket",
+            "source_review_date",
+            "ticket_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_work_ticket_rectify_source_date", "source_review_date"),
+        {"schema": "safety"},
+    )
+
+    source_review_date: Mapped[date] = mapped_column(
+        Date, nullable=False, comment="被复查的审核日期（该审核覆盖的作业日期）"
+    )
+    checked_date: Mapped[date] = mapped_column(
+        Date, nullable=False, comment="复查执行日（Asia/Shanghai）"
+    )
+    ticket_no: Mapped[str] = mapped_column(String(64), nullable=False, comment="作业票号")
+    ticket_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="作业类型: hot_work/confined_space/height_work/..."
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unrectified", server_default="unrectified",
+        comment="复查结论: rectified(已整改) / unrectified(未整改) / uncheckable(无法复查)",
+    )
+    rule_results: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON, nullable=True,
+        comment="逐规则比对 [{rule_no, rule_name, yesterday_detail, resolved, today_detail}]",
+    )
+    note: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="无法复查原因（拉取失败/缺原始数据等）"
+    )
+
+

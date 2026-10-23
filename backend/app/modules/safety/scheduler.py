@@ -22,7 +22,7 @@
 import asyncio
 import contextlib
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -224,13 +224,13 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "description": "17点特殊作业日报(含新增计划外作业对比总结)+推送（失败自动重试，补发窗口至 23:30）；"
                        "晚报速递卡在主目标群之外加投「特殊作业报备及日报表群」",
     },
-    # ── 作业票审核（每日 17:00）──
+    # ── 作业票审核（每日 10:00，审核昨日票）──
     {
         "name": "作业票审核",
-        "hour": 17, "minute": 0,
-        # 补发窗口：当日 23:30 截止（失败自动重试）
-        "retry_until_hour": 23, "retry_until_minute": 30,
-        "description": "当日标准8类作业票按4条规则审核+生成审核日报+推送特殊作业自动分配群",
+        "hour": 10, "minute": 0,
+        # 补发窗口：当日 12:00 截止（审的是昨日数据，上午发出才有当日跟进价值）
+        "retry_until_hour": 12, "retry_until_minute": 0,
+        "description": "审核昨日标准8类作业票（5条规则）+复查前日审核问题整改情况+生成审核日报推送特殊作业自动分配群",
     },
     # ── 消防报警日报（每日 17:00）──
     {
@@ -817,17 +817,20 @@ async def _run_special_op_daily_report(
         )
 
 async def _run_work_ticket_review(today: date, chat_id: str | None = None) -> None:
-    """作业票审核定时任务（每日 17:00）：拉取当日标准8类作业票 → 规则审核 → 落库 → 推送群。
+    """作业票审核定时任务（每日 10:00）：审核**昨日**标准8类作业票 + 复查前日
+    审核问题整改情况 → 规则审核 → 落库 → 推送群。
 
-    复用 WorkTicketReviewService.run_review(date, push=True)；run_review 内部已 commit
-    （成功/失败均落库 status），失败由调度器补发窗口重试机制接管。
+    复查「前一日 10 点的审核结果」= 落库日期为前两日的审核记录（service 内
+    以 review_date - 1 天定位）。复用 WorkTicketReviewService.run_review
+    (date, push=True)；run_review 内部已 commit（成功/失败均落库 status），
+    失败由调度器补发窗口重试机制接管。
     """
     from app.core.database import async_session_factory
     from app.modules.safety.workticket_review.service import WorkTicketReviewService
 
     async with async_session_factory() as session:
         service = WorkTicketReviewService(session, chat_id=chat_id)
-        result = await service.run_review(today, push=True)
+        result = await service.run_review(today - timedelta(days=1), push=True)
         logger.info(
             "  作业票审核完成: date=%s total=%d reviewed=%d violation=%d compliant=%d data_insufficient=%d push=%s",
             result.get("date"), result.get("total"), result.get("reviewed"),

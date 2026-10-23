@@ -167,6 +167,7 @@ from app.modules.safety.models.trainings import (  # noqa: F401
     TrainingRecord,
 )
 from app.modules.safety.models.work_ticket_review import (  # noqa: F401
+    WorkTicketRectifyCheck,
     WorkTicketReview,
     WorkTicketReviewViolation,
 )
@@ -275,6 +276,7 @@ __all__ = [
     'URSReviewDocument',
     'URSStandardItem',
     'WorkRecordStatus',
+    'WorkTicketRectifyCheck',
     'WorkTicketReview',
     'WorkTicketReviewViolation',
 ]

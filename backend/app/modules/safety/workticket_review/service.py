@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date as date_cls
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -35,6 +35,7 @@ from app.modules.safety.workticket_review.client import (
     WorkTicketPlatformClient,
 )
 from app.modules.safety.workticket_review.parser import WorkTicket, WorkTicketParser
+from app.modules.safety.workticket_review.rectify import run_rectify_check
 from app.modules.safety.workticket_review.report_builder import (
     TICKET_TYPE_NAMES,
     WorkTicketReviewReportBuilder,
@@ -141,12 +142,38 @@ class WorkTicketReviewService:
         tickets, parse_errors = self._normalize(raw_tickets)
         violations_by_ticket, stats = self._evaluate(tickets)
 
+        # ── 前日问题整改复查（失败只告警，不阻断主审核）──
+        # 主拉取的自有 client 已在上文 finally 关闭，复查按需另起短生命周期
+        # 客户端；注入 client 的调用方（测试/复用）直接复用注入实例。
+        rectify_summary: dict[str, Any] | None = None
+        try:
+            source_review_date = review_date - timedelta(days=1)
+            checked_date = datetime.now(TZ).date()
+            if self._owns_client:
+                async with WorkTicketPlatformClient() as rectify_client:
+                    rectify_summary = await run_rectify_check(
+                        self.session, rectify_client,
+                        source_review_date, checked_date,
+                    )
+            else:
+                rectify_summary = await run_rectify_check(
+                    self.session, self.client,
+                    source_review_date, checked_date,
+                )
+        except Exception:
+            logger.warning(
+                "前日问题整改复查失败 date=%s（不影响主审核）",
+                review_date, exc_info=True,
+            )
+            await self.session.rollback()
+
         # 先构建“未推送”版本 markdown 用于卡片内容；push 失败时亦以此落库。
         markdown = self.builder.build(
             review_date,
             tickets,
             violations_by_ticket,
             {**stats, "pushed": False},
+            rectify=rectify_summary,
         )
 
         push_result: dict[str, Any] = {
@@ -165,6 +192,7 @@ class WorkTicketReviewService:
 
                 digest_card = build_workticket_digest(
                     review_date, tickets, violations_by_ticket, stats, markdown,
+                    rectify=rectify_summary,
                 )
                 if digest_card is not None:
                     msg_id = await send_group_card(
@@ -250,6 +278,7 @@ class WorkTicketReviewService:
                 tickets,
                 violations_by_ticket,
                 {**stats, "pushed": True},
+                rectify=rectify_summary,
             )
             review.report_markdown = markdown
 
@@ -307,6 +336,7 @@ class WorkTicketReviewService:
             violations_by_ticket=violations_by_ticket,
             status="success",
             parse_errors=parse_errors,
+            rectify=rectify_summary,
         )
 
     # ── 内部编排辅助 ──
@@ -507,6 +537,7 @@ class WorkTicketReviewService:
         violations_by_ticket: dict[str, list[Violation]],
         status: str,
         parse_errors: list[dict[str, Any]],
+        rectify: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         real_details: list[dict[str, Any]] = []
         insufficient_details: list[dict[str, Any]] = []
@@ -555,6 +586,7 @@ class WorkTicketReviewService:
             "violation_details": real_details,
             "data_insufficient_details": insufficient_details,
             "parse_errors": parse_errors,
+            "rectify_check": rectify,
         }
 
     # ── 工具方法 ──

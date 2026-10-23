@@ -108,3 +108,54 @@ async def test_oversize_returns_none() -> None:
         D, tickets, {}, STATS, FULL_MD + "x" * 30_000,
     )
     assert card is None
+
+
+async def test_rectify_section_rendered() -> None:
+    rectify = {
+        "source_date": "2026-09-14",
+        "checked_date": "2026-09-15",
+        "problem_total": 3,
+        "rectified": 1,
+        "unrectified": 1,
+        "uncheckable": 1,
+        "tickets": [
+            {"ticket_no": "DH-100", "ticket_type": "hot_work",
+             "ticket_type_name": "动火作业", "status": "rectified",
+             "rule_results": [], "note": None},
+            {"ticket_no": "DH-101", "ticket_type": "hot_work",
+             "ticket_type_name": "动火作业", "status": "unrectified",
+             "rule_results": [
+                 {"rule_no": "TIME_ORDER", "rule_name": "时间顺序链",
+                  "yesterday_detail": "倒签", "resolved": False,
+                  "today_detail": "申请晚于气体分析"},
+             ], "note": None},
+            {"ticket_no": "GC-100", "ticket_type": "height_work",
+             "ticket_type_name": "高处作业", "status": "uncheckable",
+             "rule_results": [], "note": "复查拉取平台详情失败"},
+        ],
+    }
+    card = build_workticket_digest(
+        D, [_ticket("DH-003")], {}, {"total": 1, "compliant_count": 1},
+        FULL_MD, rectify=rectify,
+    )
+    assert card is not None
+    contents = [e["content"] for e in card.elements if e["tag"] == "markdown"]
+    summary = next(c for c in contents if "前日问题整改复查" in c)
+    assert "2026-09-14" in summary
+    assert "已整改 1" in summary and "未整改 1" in summary and "无法复查 1" in summary
+    # 未整改/无法复查票逐条（复用问题票 column_set 样式）
+    column_sets = [e for e in card.elements if e["tag"] == "column_set"]
+    assert len(column_sets) == 2  # 1 未整改 + 1 无法复查
+    joined = json.dumps(column_sets, ensure_ascii=False)
+    assert "DH-101" in joined and "时间顺序链" in joined
+    assert "GC-100" in joined and "复查拉取平台详情失败" in joined
+    assert "DH-100" not in joined  # 已整改票不逐条展开
+
+
+async def test_rectify_omitted_when_none() -> None:
+    card = build_workticket_digest(
+        D, [_ticket("DH-003")], {}, {"total": 1, "compliant_count": 1}, FULL_MD,
+    )
+    assert card is not None
+    contents = [e["content"] for e in card.elements if e["tag"] == "markdown"]
+    assert not any("前日问题整改复查" in c for c in contents)

@@ -1,6 +1,6 @@
 """Safety API — workticket_review endpoints.
 
-手动触发作业票审核 + 查询指定日期审核摘要与违规明细。
+手动触发作业票审核 + 查询指定日期审核摘要与违规明细（含该日问题的整改复查结论）。
 """
 
 import logging
@@ -8,10 +8,14 @@ from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.modules.safety.models import WorkTicketReviewViolation
+from app.modules.safety.models import (
+    WorkTicketRectifyCheck,
+    WorkTicketReviewViolation,
+)
 from app.modules.safety.schemas import WorkTicketReviewRunRequest
 from app.modules.safety.workticket_review.repository import WorkTicketReviewRepository
 from app.modules.safety.workticket_review.service import WorkTicketReviewService
@@ -34,6 +38,8 @@ async def run_work_ticket_review(
     """手动触发一次作业票审核。
 
     Body 可选：{date?: 'YYYY-MM-DD', push?: bool}，默认 date=今天、push=False。
+    调度口径为「每日 10 点审昨日票」，手动触发按传入 date 审核（未传时默认今天），
+    同时会复查 date-1 那次审核的问题整改情况。
     """
     review_date = data.date if data and data.date else date.today()
     push = data.push if data else False
@@ -66,13 +72,36 @@ async def get_work_ticket_review(
     review_date: date,
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
-    """查询 safety.work_ticket_reviews 摘要 + 逐票违规明细。"""
+    """查询 safety.work_ticket_reviews 摘要 + 逐票违规明细 + 该日问题整改复查。"""
     repo = WorkTicketReviewRepository(db)
     review = await repo.get_by_date(review_date)
     if review is None:
         return ApiResponse(code=404, message="未找到该日期的作业票审核记录")
 
     violations = await repo.list_violations(review.id)
+    rectify_stmt = (
+        select(WorkTicketRectifyCheck)
+        .where(
+            WorkTicketRectifyCheck.source_review_date == review_date,
+            WorkTicketRectifyCheck.is_deleted.is_(False),
+        )
+        .order_by(WorkTicketRectifyCheck.ticket_no)
+    )
+    rectify_rows = list((await db.execute(rectify_stmt)).scalars().all())
+    rectify_summary: dict[str, Any] | None = None
+    if rectify_rows:
+        by_status: dict[str, int] = {"rectified": 0, "unrectified": 0, "uncheckable": 0}
+        for row in rectify_rows:
+            by_status[row.status] = by_status.get(row.status, 0) + 1
+        rectify_summary = {
+            "source_date": review_date.isoformat(),
+            "checked_date": rectify_rows[0].checked_date.isoformat(),
+            "problem_total": len(rectify_rows),
+            "rectified": by_status.get("rectified", 0),
+            "unrectified": by_status.get("unrectified", 0),
+            "uncheckable": by_status.get("uncheckable", 0),
+            "tickets": [_serialize_rectify(row) for row in rectify_rows],
+        }
     return ApiResponse(
         data={
             "date": review.date.isoformat(),
@@ -88,8 +117,23 @@ async def get_work_ticket_review(
             "error": review.error,
             "finished_at": review.finished_at.isoformat() if review.finished_at else None,
             "violations": [_serialize_violation(v) for v in violations],
+            "rectify_check": rectify_summary,
         }
     )
+
+
+def _serialize_rectify(row: WorkTicketRectifyCheck) -> dict[str, Any]:
+    from app.modules.safety.workticket_review.report_builder import TICKET_TYPE_NAMES
+
+    return {
+        "ticket_no": row.ticket_no,
+        "ticket_type": row.ticket_type,
+        "ticket_type_name": TICKET_TYPE_NAMES.get(row.ticket_type, row.ticket_type),
+        "status": row.status,
+        "rule_results": row.rule_results or [],
+        "note": row.note,
+        "checked_date": row.checked_date.isoformat(),
+    }
 
 
 def _serialize_violation(v: WorkTicketReviewViolation) -> dict[str, Any]:
