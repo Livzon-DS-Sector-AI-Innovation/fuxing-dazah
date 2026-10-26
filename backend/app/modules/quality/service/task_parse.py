@@ -160,8 +160,11 @@ class _TaskParse(_TaskCore):
             calc_cfg = (cfg.config or {}).get("calc") if cfg else None
             if not calc_cfg:
                 raise AppException(status_code=400, detail=f"表号 {table_no} 未配置计算规则，请用直接填值模式")
-            if calc_cfg.get("mode") == "external_std":
+            mode = calc_cfg.get("mode")
+            if mode == "external_std":
                 computed = calc_engine.compute_external_std(calc_cfg, inputs)
+            elif mode == "external_std_content":
+                computed = calc_engine.compute_external_std_content(calc_cfg, inputs)
             else:
                 computed = calc_engine.compute_normalization(calc_cfg, inputs)
             for item in computed["items"]:

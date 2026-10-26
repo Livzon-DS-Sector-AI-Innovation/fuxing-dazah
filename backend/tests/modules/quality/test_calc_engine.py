@@ -73,3 +73,26 @@ def test_external_std_math_and_rsd():
     assert item["std_avg"] == 1000.0
     # 对照 RSD：std=sqrt((0+100+100+25+25)/4)=7.906 → 0.7906%
     assert abs((item["std_rsd"] or 0) - 0.79) < 0.01
+
+
+def test_external_std_content_math():
+    cfg = {"mode": "external_std_content", "samples": 3, "main_std_name": "含量"}
+    # 达托霉素公式：含量% = 标准1质量×标准品含量×样面积/样质量/标准1平均面积/(1-水分%)×100
+    inputs = {
+        "std1_mass": 25.2, "std_content": 0.955,
+        "std_area_1": 1000000, "std_area_2": 1002000, "std_area_3": 998000,
+        "std_area_4": 1001000, "std_area_5": 999000,
+        "sample_area_1": 980000, "sample_mass_1": 25.0,
+        "sample_area_2": 985000, "sample_mass_2": 25.1,
+        "sample_area_3": 978000, "sample_mass_3": 25.0,
+        "moisture": 0.5,
+    }
+    result = calc_engine.compute_external_std_content(cfg, inputs)
+    item = result["items"][0]
+    std_avg = (1000000 + 1002000 + 998000 + 1001000 + 999000) / 5
+    c1 = 25.2 * 0.955 * 980000 / 25.0 / std_avg / (1 - 0.5 / 100) * 100
+    c2 = 25.2 * 0.955 * 985000 / 25.1 / std_avg / (1 - 0.5 / 100) * 100
+    c3 = 25.2 * 0.955 * 978000 / 25.0 / std_avg / (1 - 0.5 / 100) * 100
+    assert abs(item["value"] - (c1 + c2 + c3) / 3) < 1e-9
+    assert item["std_avg"] == std_avg
+    assert item["std_rsd"] is not None and item["std_rsd"] < 0.2

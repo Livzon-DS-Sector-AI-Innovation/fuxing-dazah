@@ -161,3 +161,49 @@ def compute_external_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[st
             "std_rsd": round(std_rsd, 2) if std_rsd is not None else None,
         })
     return {"mode": "external_std", "items": items}
+
+
+def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """外标法含量计算（对照品 + 水分折算，照达托霉素含量表公式）。
+
+    含量% = 标准1质量 × 标准品含量 × 供试品面积 / 供试品质量
+            / 标准1平均面积 / (1 - 水分%/100) × 100
+    inputs 键约定：std1_mass（标准1质量 mg）、std_content（标准品含量，分数如 0.955）、
+    std_area_1..6（标准1峰面积，含回针可选）、sample_area_1..N / sample_mass_1..N（供试品，N=cfg.samples）、
+    moisture（水分%，如 0.5 表示 0.5%，缺省 0）。
+    """
+    samples = int(cfg.get("samples") or 3)
+    std_mass = _num(inputs.get("std1_mass"))
+    std_content = _num(inputs.get("std_content"))
+    std_areas = [_num(inputs.get(f"std_area_{i}")) for i in range(1, 7)]
+    std_present = [a for a in std_areas if a is not None]
+    std_avg = sum(std_present) / len(std_present) if std_present else None
+    std_rsd = _rsd(std_present)
+    moisture = _num(inputs.get("moisture")) or 0.0
+    content_vals: list[float | None] = []
+    for i in range(1, samples + 1):
+        s_area = _num(inputs.get(f"sample_area_{i}"))
+        s_mass = _num(inputs.get(f"sample_mass_{i}"))
+        if s_area is None or s_mass is None or std_mass is None or std_content is None or std_avg is None:
+            content_vals.append(None)
+            continue
+        content_vals.append(
+            std_mass * std_content * s_area / s_mass / std_avg / (1 - moisture / 100) * 100
+        )
+    present = [v for v in content_vals if v is not None]
+    avg = sum(present) / len(present) if present else None
+    detail = " / ".join(
+        f"样{i} {v:.2f}%" if v is not None else f"样{i} 缺数据"
+        for i, v in enumerate(content_vals, start=1)
+    )
+    return {
+        "mode": "external_std_content",
+        "items": [{
+            "std_name": cfg.get("main_std_name") or "含量",
+            "label": "含量",
+            "value": avg,
+            "detail": detail,
+            "std_avg": std_avg,
+            "std_rsd": round(std_rsd, 2) if std_rsd is not None else None,
+        }],
+    }

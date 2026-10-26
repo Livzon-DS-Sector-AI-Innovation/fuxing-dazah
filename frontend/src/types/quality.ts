@@ -431,7 +431,14 @@ export interface CalcExternalStdCfg {
   solvents: { key: string; label: string; std_name: string; limit: string | null }[]
 }
 
-export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg
+export interface CalcExternalStdContentCfg {
+  mode: 'external_std_content'
+  samples: number
+  main_std_name: string
+  has_moisture?: boolean
+}
+
+export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg
 
 
 // ─── 任务报告单 ───

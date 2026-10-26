@@ -2,7 +2,7 @@
 
 import { Divider, InputNumber, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
-import type { CalcCfg, CalcExternalStdCfg, CalcNormalizationCfg } from '@/types/quality'
+import type { CalcCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcNormalizationCfg } from '@/types/quality'
 
 const { Text } = Typography
 
@@ -24,6 +24,9 @@ export default function CalcForm({ cfg, inputs, onChange }: {
 
   if (cfg.mode === 'normalization') {
     return <NormForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'external_std_content') {
+    return <ContentForm cfg={cfg} inputs={inputs} set={set} />
   }
   return <ExtForm cfg={cfg} inputs={inputs} set={set} />
 }
@@ -207,6 +210,84 @@ function ExtForm({ cfg, inputs, set }: {
           </div>
         )
       })}
+    </Space>
+  )
+}
+
+
+function ContentForm({ cfg, inputs, set }: {
+  cfg: CalcExternalStdContentCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const stdAreas = Array.from({ length: 6 }, (_, i) => num(inputs[`std_area_${i + 1}`]))
+  const stdPresent = stdAreas.filter((v): v is number => v != null)
+  const stdAvg = stdPresent.length ? stdPresent.reduce((a, b) => a + b, 0) / stdPresent.length : null
+  const stdRsd = stdPresent.length >= 2 && stdAvg
+    ? (Math.sqrt(stdPresent.reduce((a, v) => a + (v - stdAvg) ** 2, 0) / (stdPresent.length - 1)) / stdAvg) * 100
+    : null
+  const moisture = num(inputs.moisture) ?? 0
+  const stdMass = num(inputs.std1_mass)
+  const stdContent = num(inputs.std_content)
+  const content = (i: number) => {
+    const sArea = num(inputs[`sample_area_${i}`])
+    const sMass = num(inputs[`sample_mass_${i}`])
+    if (sArea == null || sMass == null || stdMass == null || stdContent == null || stdAvg == null) return null
+    return (stdMass * stdContent * sArea) / sMass / stdAvg / (1 - moisture / 100) * 100
+  }
+  const vals = Array.from({ length: cfg.samples }, (_, i) => content(i + 1))
+  const present = vals.filter((v): v is number => v != null)
+  const avg = present.length ? present.reduce((a, b) => a + b, 0) / present.length : null
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        外标法含量：含量% = 标准1质量×标准品含量×样面积/样质量/标准1平均面积/(1-水分%)×100（照达托霉素含量表公式）。
+      </Text>
+      <Space wrap size={10}>
+        <span style={{ fontSize: 12.5 }}>标准1质量(mg)
+          <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs.std1_mass}
+            onChange={(v) => set('std1_mass', v)} />
+        </span>
+        <span style={{ fontSize: 12.5 }}>标准品含量
+          <InputNumber size="small" style={{ width: 90, marginLeft: 4 }} value={inputs.std_content}
+            onChange={(v) => set('std_content', v)} />
+        </span>
+        {cfg.has_moisture && (
+          <span style={{ fontSize: 12.5 }}>水分%
+            <InputNumber size="small" style={{ width: 80, marginLeft: 4 }} value={inputs.moisture}
+              onChange={(v) => set('moisture', v)} />
+          </span>
+        )}
+      </Space>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12 }}>标准1峰面积（5 针 + 回针可选）：</Text>
+        <Space wrap size={4} style={{ marginTop: 4 }}>
+          {stdAreas.map((_, i) => (
+            <InputNumber key={i} size="small" style={{ width: 90 }} value={inputs[`std_area_${i + 1}`]}
+              onChange={(v) => set(`std_area_${i + 1}`, v)} />
+          ))}
+          <Text style={{ fontSize: 12 }}>平均 <Text strong>{stdAvg != null ? stdAvg.toFixed(0) : '-'}</Text>　RSD{' '}
+            <Text strong type={stdRsd != null && stdRsd > 2 ? 'danger' : undefined}>{stdRsd != null ? stdRsd.toFixed(2) + '%' : '-'}</Text>
+          </Text>
+        </Space>
+      </div>
+      <Space wrap size={10}>
+        {Array.from({ length: cfg.samples }, (_, i) => (
+          <span key={i} style={{ fontSize: 12.5 }}>
+            样{i + 1}质量(mg)
+            <InputNumber size="small" style={{ width: 90, marginLeft: 4 }} value={inputs[`sample_mass_${i + 1}`]}
+              onChange={(v) => set(`sample_mass_${i + 1}`, v)} />
+            　样{i + 1}面积
+            <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs[`sample_area_${i + 1}`]}
+              onChange={(v) => set(`sample_area_${i + 1}`, v)} />
+            　<Text>{vals[i] != null ? vals[i].toFixed(2) + '%' : '-'}</Text>
+          </span>
+        ))}
+      </Space>
+      <div style={{ fontSize: 13 }}>
+        <Text type="secondary">平均含量：</Text>
+        <Tag color={avg != null ? 'blue' : 'default'}>{avg != null ? avg.toFixed(2) + '%' : '-'}</Tag>
+      </div>
     </Space>
   )
 }
