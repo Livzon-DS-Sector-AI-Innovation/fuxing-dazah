@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 from zipfile import ZipFile
 
-from app.modules.qa import mineru
+from app.modules.qa.processing import mineru
 
 
 def _zip(members: dict[str, str]) -> bytes:

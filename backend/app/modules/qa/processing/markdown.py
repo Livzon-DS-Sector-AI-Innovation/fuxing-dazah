@@ -16,7 +16,7 @@ from typing import Any
 from markdown_it import MarkdownIt
 from markdown_it.rules_block import StateBlock
 
-from app.modules.qa.document_processing import RawBlock
+from app.modules.qa.processing.document import RawBlock
 
 # ``RawBlock.content`` 始终是 MinerU 的原始证据。检索和 embedding 消费的
 # 文本需要另行归一化；版本号写入 metadata/下游 hash，便于以后调整规则后
@@ -289,7 +289,9 @@ def _markdown_table_text(value: str) -> str | None:
         cells = _split_markdown_table_row(line)
         if len(cells) < 2:
             return None
-        if index == 1 and all(re.fullmatch(r":?-{1,}:?", cell.replace(" ", "")) for cell in cells):
+        if index == 1 and all(
+            re.fullmatch(r":?-{1,}:?", cell.replace(" ", "")) for cell in cells
+        ):
             found_table = True
             continue
         found_table = True
@@ -369,12 +371,16 @@ def normalize_retrieval_text(
     # HTMLParser 对没有标签的 Markdown 文本会原样回调数据；统一处理
     # Markdown 链接/列表/强调，兼容 MinerU 混排结果。
     if value:
-        value = "\n".join(_normalize_markdown_inline(line) for line in value.splitlines())
+        value = "\n".join(
+            _normalize_markdown_inline(line) for line in value.splitlines()
+        )
     return _collapse_retrieval_whitespace(value)
 
 
 def _formula_rule(state: StateBlock, start: int, end: int, silent: bool) -> bool:
-    line = state.src[state.bMarks[start] + state.tShift[start] : state.eMarks[start]].strip()
+    line = state.src[
+        state.bMarks[start] + state.tShift[start] : state.eMarks[start]
+    ].strip()
     if not line.startswith(("$$", "\\[")):
         return False
     opener = "$$" if line.startswith("$$") else "\\["
@@ -476,15 +482,17 @@ def markdown_blocks(markdown: str) -> list[RawBlock]:
         }
         if extra:
             metadata.update(extra)
-        blocks.append(RawBlock(
-            content=content.strip(),
-            locator=f"md:line:{start + 1}-{end}",
-            source_order=len(blocks) + 1,
-            block_type=block_type,
-            table_index=table_index if block_type == "table" else None,
-            heading_path=tuple(title for _, title in headings),
-            source_metadata=metadata,
-        ))
+        blocks.append(
+            RawBlock(
+                content=content.strip(),
+                locator=f"md:line:{start + 1}-{end}",
+                source_order=len(blocks) + 1,
+                block_type=block_type,
+                table_index=table_index if block_type == "table" else None,
+                heading_path=tuple(title for _, title in headings),
+                source_metadata=metadata,
+            )
+        )
 
     for index, token in enumerate(tokens):
         if token.map is None or token.nesting == -1 or token.level != 0:
@@ -503,18 +511,33 @@ def markdown_blocks(markdown: str) -> list[RawBlock]:
             headings.append((level, title))
             # 标题正文与 DOCX/PDF 标题保持同一语义格式；原始 ``#`` 仍可
             # 通过 source_metadata 的行/字符区间回到完整 Markdown。
-            add(title, "heading", start, end, {"level": level, "title": title, "markdown_source": raw})
+            add(
+                title,
+                "heading",
+                start,
+                end,
+                {"level": level, "title": title, "markdown_source": raw},
+            )
         elif kind == "table_open":
-            add(raw, "table", start, end, {"table_atomic": True, "table_format": "markdown"})
+            add(
+                raw,
+                "table",
+                start,
+                end,
+                {"table_atomic": True, "table_format": "markdown"},
+            )
         elif kind in {"fence", "code_block"}:
             add(raw, "code", start, end, {"language": token.info.strip() or None})
         elif kind == "formula":
             add(raw, "formula", start, end)
         elif kind in {"bullet_list_open", "ordered_list_open"}:
             item_ranges = [
-                item.map for item in tokens[index + 1 :]
-                if item.type == "list_item_open" and item.level == 1
-                and item.map is not None and start <= item.map[0] < end
+                item.map
+                for item in tokens[index + 1 :]
+                if item.type == "list_item_open"
+                and item.level == 1
+                and item.map is not None
+                and start <= item.map[0] < end
             ]
             if item_ranges:
                 for item_start, item_end in item_ranges:
@@ -531,11 +554,18 @@ def markdown_blocks(markdown: str) -> list[RawBlock]:
             cursor = 0
             for table_start, table_end in _HTMLTables(raw).spans:
                 add(raw[cursor:table_start], "paragraph", start, end)
-                add(raw[table_start:table_end], "table", start, end, {
-                    "table_atomic": True, "table_format": "html",
-                    "char_start": line_offsets[start] + table_start,
-                    "char_end": line_offsets[start] + table_end,
-                })
+                add(
+                    raw[table_start:table_end],
+                    "table",
+                    start,
+                    end,
+                    {
+                        "table_atomic": True,
+                        "table_format": "html",
+                        "char_start": line_offsets[start] + table_start,
+                        "char_end": line_offsets[start] + table_end,
+                    },
+                )
                 cursor = table_end
             add(raw[cursor:], "paragraph", start, end)
         elif kind == "blockquote_open":
@@ -595,11 +625,21 @@ def structured_blocks(payload: Any) -> tuple[list[RawBlock], bool]:
     table_index = 0
     unknown = False
     aliases = {
-        "text": "paragraph", "paragraph": "paragraph", "title": "heading",
-        "heading": "heading", "section_header": "heading", "table": "table",
-        "table_body": "table", "html_table": "table", "list": "list",
-        "list_item": "list", "code": "code", "equation": "formula",
-        "interline_equation": "formula", "formula": "formula", "quote": "quote",
+        "text": "paragraph",
+        "paragraph": "paragraph",
+        "title": "heading",
+        "heading": "heading",
+        "section_header": "heading",
+        "table": "table",
+        "table_body": "table",
+        "html_table": "table",
+        "list": "list",
+        "list_item": "list",
+        "code": "code",
+        "equation": "formula",
+        "interline_equation": "formula",
+        "formula": "formula",
+        "quote": "quote",
         "image": "image",
     }
 
@@ -629,17 +669,28 @@ def structured_blocks(payload: Any) -> tuple[list[RawBlock], bool]:
                 return
             text = _value_text(node).strip()
             if block_type == "image":
-                caption = _value_text(node.get("img_caption") or node.get("image_caption"))
-                footnote = _value_text(node.get("img_footnote") or node.get("image_footnote"))
+                caption = _value_text(
+                    node.get("img_caption") or node.get("image_caption")
+                )
+                footnote = _value_text(
+                    node.get("img_footnote") or node.get("image_footnote")
+                )
                 image_path = node.get("img_path")
-                text = "\n\n".join(part for part in (
-                    f"![{caption}]({image_path})" if image_path else caption, footnote
-                ) if part)
+                text = "\n\n".join(
+                    part
+                    for part in (
+                        f"![{caption}]({image_path})" if image_path else caption,
+                        footnote,
+                    )
+                    if part
+                )
             elif block_type == "table":
                 caption = _value_text(node.get("table_caption"))
                 footnote = _value_text(node.get("table_footnote"))
                 text = "\n\n".join(part for part in (caption, text, footnote) if part)
-            level = _level(node.get("text_level", node.get("heading_level", node.get("level"))))
+            level = _level(
+                node.get("text_level", node.get("heading_level", node.get("level")))
+            )
             if level is not None and block_type == "paragraph":
                 block_type = "heading"
             if not text:
@@ -654,25 +705,52 @@ def structured_blocks(payload: Any) -> tuple[list[RawBlock], bool]:
             if block_type == "table":
                 table_index += 1
             metadata: dict[str, Any] = {
-                "source_format": "structured_json", "json_type": kind, "json_path": path,
+                "source_format": "structured_json",
+                "json_type": kind,
+                "json_path": path,
             }
-            for key in ("bbox", "polygon", "page_idx", "page_size", "page_width", "page_height", "index", "id", "text_level"):
+            for key in (
+                "bbox",
+                "polygon",
+                "page_idx",
+                "page_size",
+                "page_width",
+                "page_height",
+                "index",
+                "id",
+                "text_level",
+            ):
                 if key in node:
                     metadata[key] = node[key]
             if block_type == "heading":
                 metadata.update(level=level, title=text)
             if block_type == "table":
                 metadata["table_atomic"] = True
-            blocks.append(RawBlock(
-                content=text, locator=f"json:{path}"[:255], source_order=len(blocks) + 1,
-                block_type=block_type, page_number=page_number,
-                table_index=table_index if block_type == "table" else None,
-                heading_path=tuple(title for _, title in headings), source_metadata=metadata,
-            ))
+            blocks.append(
+                RawBlock(
+                    content=text,
+                    locator=f"json:{path}"[:255],
+                    source_order=len(blocks) + 1,
+                    block_type=block_type,
+                    page_number=page_number,
+                    table_index=table_index if block_type == "table" else None,
+                    heading_path=tuple(title for _, title in headings),
+                    source_metadata=metadata,
+                )
+            )
             return
         # 同一包装层可能同时存在 preproc_blocks 和 para_blocks，只读取最
         # 接近最终阅读顺序的一个容器，避免一段正文被重复收入。
-        for key in ("content_list", "pdf_info", "pages", "para_blocks", "blocks", "preproc_blocks", "content", "data"):
+        for key in (
+            "content_list",
+            "pdf_info",
+            "pages",
+            "para_blocks",
+            "blocks",
+            "preproc_blocks",
+            "content",
+            "data",
+        ):
             if isinstance(node.get(key), (dict, list)):
                 visit(node[key], page_number, f"{path}.{key}")
                 return
@@ -701,22 +779,32 @@ def _content_words(text: str) -> Counter[str]:
     return Counter(re.findall(r"[\u3400-\u9fff]|[A-Za-z0-9_]+", visible.casefold()))
 
 
-def select_blocks(markdown: str, structured: Any = None) -> tuple[list[RawBlock], dict[str, Any]]:
+def select_blocks(
+    markdown: str, structured: Any = None
+) -> tuple[list[RawBlock], dict[str, Any]]:
     md_blocks = markdown_blocks(markdown)
     if structured is None:
         return md_blocks, {"source_format": "markdown", "structured_status": "absent"}
     json_blocks, unknown = structured_blocks(structured)
     md_words = sum((_content_words(block.content) for block in md_blocks), Counter())
-    json_words = sum((_content_words(block.content) for block in json_blocks), Counter())
+    json_words = sum(
+        (_content_words(block.content) for block in json_blocks), Counter()
+    )
     covers_text = all(json_words[word] >= count for word, count in md_words.items())
     covers_tables = sum(block.block_type == "table" for block in json_blocks) >= sum(
         block.block_type == "table" for block in md_blocks
     )
     if json_blocks and not unknown and covers_text and covers_tables:
-        return json_blocks, {"source_format": "structured_json", "structured_status": "complete"}
+        return json_blocks, {
+            "source_format": "structured_json",
+            "structured_status": "complete",
+        }
     if not md_blocks:
         # 没有 Markdown 可回退时，未知 JSON 不能当成完整文档成功返回。
-        return [], {"source_format": "structured_json", "structured_status": "unsupported"}
+        return [], {
+            "source_format": "structured_json",
+            "structured_status": "unsupported",
+        }
     # 覆盖不足时保留全部 MD，只对明确匹配的节点附加页码和原始坐标。
     # 单向游标同时约束重复正文的对应顺序，不凭相似度猜测页码。
     next_json = 0
@@ -736,9 +824,12 @@ def select_blocks(markdown: str, structured: Any = None) -> tuple[list[RawBlock]
             metadata["structured_source"] = matched.source_metadata
             if "bbox" in matched.source_metadata:
                 metadata["bbox"] = matched.source_metadata["bbox"]
-            block = replace(block, page_number=matched.page_number, source_metadata=metadata)
+            block = replace(
+                block, page_number=matched.page_number, source_metadata=metadata
+            )
         enriched.append(block)
     return enriched, {
-        "source_format": "markdown", "structured_status": "fallback",
+        "source_format": "markdown",
+        "structured_status": "fallback",
         "structured_unknown_nodes": unknown,
     }

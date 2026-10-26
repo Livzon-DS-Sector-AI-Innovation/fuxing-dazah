@@ -254,8 +254,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "lc-parser", label: "🧪 液相解析", path: "/quality" },
       { key: "lc-calc", label: "📊 计算表", path: "/quality/calculator" },
       { key: "inspection", label: "质量检验", path: "/quality/inspection" },
-      { key: "deviation", label: "偏差管理", path: "/quality/deviation" },
-      { key: "capa", label: "CAPA管理", path: "/quality/capa" },
+      // 偏差管理与 CAPA 落在 QA 模块（/qa/deviation、/qa/capa）。
       { key: "change", label: "变更控制", path: "/quality/change" },
     ],
   },
@@ -270,6 +269,9 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "overview", label: "概览", path: "/qa" },
       { key: "master-data", label: "质量主数据", path: "/qa/master-data" },
       { key: "documents", label: "批准文件台账", path: "/qa/documents" },
+      // 偏差/CAPA 有独立读码，持模块通配读码的 QA 人员同样可见。
+      { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:deviation:read", "qa:*:read"] },
+      { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:capa:read", "qa:*:read"] },
       { key: "audit", label: "审计日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
     ],
   },

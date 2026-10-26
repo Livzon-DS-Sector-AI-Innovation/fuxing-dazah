@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.qa import service
+from app.modules.qa.service import extraction as service
 
 
 def _file(*, file_id, extraction_id=None, chunk_id=None, status="ready"):
@@ -62,6 +62,11 @@ def _chunk_run(run_id, extraction_id, *, status="ready"):
 async def test_processing_results_truncate_content_and_hide_nested_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """解析结果预览按限额截断正文，嵌套结构（行文本/单元格文本）不外泄。
+
+    该端点能分页取走整篇正文，与受保护下载同口径：预览给诊断用，
+    完整内容不随列表接口整包吐出。
+    """
     file_id = uuid4()
     extraction_id = uuid4()
     chunk_id = uuid4()
@@ -129,6 +134,11 @@ async def test_processing_results_truncate_content_and_hide_nested_text(
 async def test_processing_results_chunk_preview_includes_only_current_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """chunk 视图展示归一化检索文本与到原文块的映射，不回传原始内容。
+
+    审核员要能判断「这段检索文本对应原文哪里」，但原始 HTML 内容
+    属于受保护正文，不进预览。
+    """
     file_id = uuid4()
     extraction_id = uuid4()
     chunk_id = uuid4()
@@ -212,6 +222,7 @@ async def test_processing_results_chunk_preview_includes_only_current_mapping(
 async def test_processing_results_legacy_chunk_does_not_display_raw_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """新版管线之前入库的旧 chunk 没有归一化文本：如实显示为空，不回退展示原始内容。"""
     file_id = uuid4()
     extraction_id = uuid4()
     chunk_id = uuid4()
@@ -273,6 +284,7 @@ async def test_processing_results_legacy_chunk_does_not_display_raw_content(
 async def test_processing_results_does_not_fallback_to_legacy_while_new_run_is_queued(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """新一轮解析排队期间不回退展示旧版结果，避免把过期内容当成当前态。"""
     file_id = uuid4()
     extraction_id = uuid4()
     file_row = _file(file_id=file_id, status="queued")

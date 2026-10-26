@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.exceptions import AppException, ForbiddenException, NotFoundException
-from app.modules.qa.document_processing import CHUNK_VERSION
 from app.modules.qa.models import (
     AIAnalysisStatus,
     AIAuthorityPolicy,
@@ -48,6 +47,7 @@ from app.modules.qa.models import (
     RelationType,
     VersionStatus,
 )
+from app.modules.qa.processing.document import CHUNK_VERSION
 from app.modules.qa.repository import (
     get_ai_run,
     get_aliases,
@@ -57,7 +57,7 @@ from app.modules.qa.repository import (
     list_masters,
     list_proposals,
 )
-from app.modules.qa.service import _actor_id, _audit, normalize_text
+from app.modules.qa.service._shared import _actor_id, _audit, normalize_text
 from app.platform.identity.models import User
 from app.platform.integrations.ai.client import AIOutputError, AIService
 from app.platform.permission.deps import get_user_permissions
@@ -472,7 +472,9 @@ async def create_analysis_run(
             .with_for_update()
         )
         for active_run in active_runs_result.scalars():
-            await _mark_analysis_stale(db, active_run, "已被人工强制重跑替代", user=user)
+            await _mark_analysis_stale(
+                db, active_run, "已被人工强制重跑替代", user=user
+            )
     run = DocumentAIAnalysisRun(
         version_id=version_id,
         file_id=file_row.id,

@@ -20,7 +20,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.modules.qa import file_service
-from app.modules.qa.document_processing import (
+from app.modules.qa.processing.document import (
     ExtractionDocument,
     parse_extracted_document,
 )
@@ -130,7 +130,9 @@ def _json_response(response: httpx.Response, operation: str) -> dict[str, Any]:
     return body
 
 
-async def _with_client(client: httpx.AsyncClient | None) -> tuple[httpx.AsyncClient, bool]:
+async def _with_client(
+    client: httpx.AsyncClient | None,
+) -> tuple[httpx.AsyncClient, bool]:
     if client is not None:
         return client, False
     return httpx.AsyncClient(timeout=MINERU_REQUEST_TIMEOUT_SECONDS), True
@@ -150,7 +152,10 @@ async def request_upload(
         response = await http.post(
             f"{base_url}/file-urls/batch",
             headers=_auth_headers(token),
-            json={"files": [{"name": filename, "data_id": data_id}], "model_version": model_version},
+            json={
+                "files": [{"name": filename, "data_id": data_id}],
+                "model_version": model_version,
+            },
         )
         body = _json_response(response, "申请上传地址")
         payload = body.get("data")
@@ -158,7 +163,9 @@ async def request_upload(
             raise MineruError("MinerU 申请上传地址响应缺少 data")
         batch_id = str(payload.get("batch_id") or "").strip()
         urls = payload.get("file_urls")
-        upload_url = str(urls[0] or "").strip() if isinstance(urls, list) and urls else ""
+        upload_url = (
+            str(urls[0] or "").strip() if isinstance(urls, list) and urls else ""
+        )
         if not batch_id or not upload_url:
             raise MineruError("MinerU 申请上传地址响应缺少 batch_id/file_urls")
         return MineruUploadSession(batch_id, upload_url, filename, data_id)
@@ -218,11 +225,17 @@ async def poll_result(
         else:
             candidates = []
         result = next(
-            (item for item in candidates if str(item.get("file_name") or "") == filename),
+            (
+                item
+                for item in candidates
+                if str(item.get("file_name") or "") == filename
+            ),
             candidates[0] if candidates else {},
         )
         state = str(result.get("state") or "pending").casefold()
-        task_id = str(result.get("task_id") or result.get("data_id") or "").strip() or None
+        task_id = (
+            str(result.get("task_id") or result.get("data_id") or "").strip() or None
+        )
         error = str(result.get("err_msg") or "").strip()[:500] or None
         progress = result.get("extract_progress")
         return MineruPollResult(
@@ -247,7 +260,9 @@ async def poll_result(
 
 def _normalise_name(name: str) -> str:
     value = str(PurePosixPath(name.replace("\\", "/")))
-    parts = [part for part in value.lstrip("/").split("/") if part not in {"", ".", ".."}]
+    parts = [
+        part for part in value.lstrip("/").split("/") if part not in {"", ".", ".."}
+    ]
     return "/".join(parts)[:512] or "artifact"
 
 
@@ -266,9 +281,7 @@ def _artifact_type(name: str) -> str:
     return "asset"
 
 
-def _markdown_document(
-    markdown: str, structured: Any = None
-) -> ExtractionDocument:
+def _markdown_document(markdown: str, structured: Any = None) -> ExtractionDocument:
     """使用 QA 统一 Markdown/JSON 归一化和分块算法。"""
 
     return parse_extracted_document(markdown, structured)
@@ -290,11 +303,16 @@ def _unzip_artifacts(zip_data: bytes) -> tuple[list[MineruArtifact], str | None,
             source_name = _normalise_name(info.filename)
             content = archive.read(info)
             artifact_type = _artifact_type(source_name)
-            artifacts.append(MineruArtifact(
-                source_name=source_name, data=content, artifact_type=artifact_type,
-                mime_type=mimetypes.guess_type(source_name)[0] or "application/octet-stream",
-                metadata={"archive_member": source_name},
-            ))
+            artifacts.append(
+                MineruArtifact(
+                    source_name=source_name,
+                    data=content,
+                    artifact_type=artifact_type,
+                    mime_type=mimetypes.guess_type(source_name)[0]
+                    or "application/octet-stream",
+                    metadata={"archive_member": source_name},
+                )
+            )
             if artifact_type == "markdown":
                 # ZIP 成员顺序不保证 full.md 在前。先到先得会把分页 md 之类
                 # 的旁支当正文，之后每一段、每个 chunk、每次 AI 抽取都跑在
@@ -303,10 +321,14 @@ def _unzip_artifacts(zip_data: bytes) -> tuple[list[MineruArtifact], str | None,
                 if markdown is None or (is_full and not markdown_is_full):
                     markdown = content.decode("utf-8-sig", errors="replace")
                     markdown_is_full = is_full
-            elif artifact_type == "structure" and structured is None and (
-                "content_list" in source_name.casefold()
-                or "middle" in source_name.casefold()
-                or "layout" in source_name.casefold()
+            elif (
+                artifact_type == "structure"
+                and structured is None
+                and (
+                    "content_list" in source_name.casefold()
+                    or "middle" in source_name.casefold()
+                    or "layout" in source_name.casefold()
+                )
             ):
                 try:
                     import json
@@ -369,30 +391,48 @@ async def download_result(
             http, poll.full_zip_url, limit=MAX_RESULT_ARCHIVE_BYTES
         )
         artifacts, markdown, structured = _unzip_artifacts(archive_bytes)
-        artifacts.insert(0, MineruArtifact(
-            source_name="full.zip", data=archive_bytes, artifact_type="zip",
-            mime_type="application/zip", metadata={"batch_id": poll.batch_id},
-        ))
+        artifacts.insert(
+            0,
+            MineruArtifact(
+                source_name="full.zip",
+                data=archive_bytes,
+                artifact_type="zip",
+                mime_type="application/zip",
+                metadata={"batch_id": poll.batch_id},
+            ),
+        )
         if markdown is None and poll.markdown_url:
             markdown_response = await http.get(poll.markdown_url, follow_redirects=True)
             if 200 <= markdown_response.status_code < 300:
                 markdown_data = bytes(markdown_response.content)
                 markdown = markdown_data.decode("utf-8-sig", errors="replace")
-                artifacts.append(MineruArtifact(
-                    source_name="full.md", data=markdown_data, artifact_type="markdown",
-                    mime_type="text/markdown", metadata={"download": "markdown_url"},
-                ))
+                artifacts.append(
+                    MineruArtifact(
+                        source_name="full.md",
+                        data=markdown_data,
+                        artifact_type="markdown",
+                        mime_type="text/markdown",
+                        metadata={"download": "markdown_url"},
+                    )
+                )
         if markdown is None:
             raise MineruError("MinerU 结果中未找到 full.md")
         task_id = poll.task_id or poll.batch_id
         document = _markdown_document(markdown, structured)
         statistics = {
-            **document.statistics, "provider": "mineru", "batch_id": poll.batch_id,
-            "task_id": task_id, "artifact_count": len(artifacts),
+            **document.statistics,
+            "provider": "mineru",
+            "batch_id": poll.batch_id,
+            "task_id": task_id,
+            "artifact_count": len(artifacts),
         }
         return MineruResult(
-            task_id=task_id, batch_id=poll.batch_id, markdown=markdown,
-            document=document, artifacts=tuple(artifacts), statistics=statistics,
+            task_id=task_id,
+            batch_id=poll.batch_id,
+            markdown=markdown,
+            document=document,
+            artifacts=tuple(artifacts),
+            statistics=statistics,
         )
     except httpx.TimeoutException as exc:
         raise MineruError("MinerU 下载结果超时") from exc
@@ -421,22 +461,42 @@ async def persist_artifacts(
     for artifact in result.artifacts:
         source_name = _normalise_name(artifact.source_name)
         key = f"extraction-artifacts/{file_id}/{extraction_run_id}/{source_name}"
-        await asyncio.to_thread(file_service.store_object, key, artifact.data, artifact.mime_type)
-        output.append({
-            "file_id": file_id, "extraction_run_id": extraction_run_id,
-            "artifact_type": artifact.artifact_type, "source_name": source_name,
-            "storage_key": key, "mime_type": artifact.mime_type,
-            "size_bytes": artifact.size_bytes, "sha256": artifact.sha256,
-            "artifact_metadata": {
-                **artifact.metadata, "batch_id": result.batch_id, "task_id": result.task_id,
-            },
-        })
+        await asyncio.to_thread(
+            file_service.store_object, key, artifact.data, artifact.mime_type
+        )
+        output.append(
+            {
+                "file_id": file_id,
+                "extraction_run_id": extraction_run_id,
+                "artifact_type": artifact.artifact_type,
+                "source_name": source_name,
+                "storage_key": key,
+                "mime_type": artifact.mime_type,
+                "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256,
+                "artifact_metadata": {
+                    **artifact.metadata,
+                    "batch_id": result.batch_id,
+                    "task_id": result.task_id,
+                },
+            }
+        )
     return output
 
 
 __all__ = [
-    "MINERU_MODEL_VERSION", "MINERU_PARSER_VERSION", "MINERU_POLL_INTERVAL_SECONDS",
-    "MineruArtifact", "MineruError", "MineruPollResult", "MineruResult",
-    "MineruUploadSession", "download_result", "persist_artifacts", "poll_interval",
-    "poll_result", "request_upload", "upload_bytes",
+    "MINERU_MODEL_VERSION",
+    "MINERU_PARSER_VERSION",
+    "MINERU_POLL_INTERVAL_SECONDS",
+    "MineruArtifact",
+    "MineruError",
+    "MineruPollResult",
+    "MineruResult",
+    "MineruUploadSession",
+    "download_result",
+    "persist_artifacts",
+    "poll_interval",
+    "poll_result",
+    "request_upload",
+    "upload_bytes",
 ]

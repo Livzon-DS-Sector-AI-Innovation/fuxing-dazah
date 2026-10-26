@@ -61,7 +61,7 @@ class RawBlock:
 
         # 延迟导入避免 markdown_processing -> document_processing 的循环
         # 导入；属性只有在解析完成后才会被下游检索/持久化层访问。
-        from app.modules.qa.markdown_processing import normalize_retrieval_text
+        from app.modules.qa.processing.markdown import normalize_retrieval_text
 
         return normalize_retrieval_text(
             self.content,
@@ -106,7 +106,7 @@ class DocumentChunk:
     def retrieval_text(self) -> str:
         """返回 chunk 的可读检索文本；``content`` 仍保留原始证据格式。"""
 
-        from app.modules.qa.markdown_processing import normalize_retrieval_text
+        from app.modules.qa.processing.markdown import normalize_retrieval_text
 
         return normalize_retrieval_text(
             self.content,
@@ -163,13 +163,15 @@ def _token_count(value: str) -> int:
     # 在 chunk 运行中增加 tokenizer_version 并重建统计值。
     if not value:
         return 0
-    return max(1, int(len(re.findall(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\w\s]", value)) * 1.05))
+    return max(
+        1, int(len(re.findall(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+|[^\w\s]", value)) * 1.05)
+    )
 
 
 def _retrieval_text_version() -> str:
     """延迟读取归一化规则版本，避免模块互相导入。"""
 
-    from app.modules.qa.markdown_processing import RETRIEVAL_TEXT_VERSION
+    from app.modules.qa.processing.markdown import RETRIEVAL_TEXT_VERSION
 
     return RETRIEVAL_TEXT_VERSION
 
@@ -230,7 +232,9 @@ def _table_header_context(value: str) -> tuple[str, bool]:
     return context, context != value
 
 
-def _heading_path_for(style_name: str, text: str, current: list[str]) -> tuple[str, ...]:
+def _heading_path_for(
+    style_name: str, text: str, current: list[str]
+) -> tuple[str, ...]:
     match = re.search(r"(?:heading|标题)\s*([1-9][0-9]*)", style_name, re.I)
     if not match:
         return tuple(current)
@@ -330,7 +334,9 @@ def _docx_blocks(data: bytes) -> list[RawBlock]:
                 or "列表" in style_name
                 or numbering is not None
             )
-            block_type = "heading" if is_heading else ("list_item" if is_list else "paragraph")
+            block_type = (
+                "heading" if is_heading else ("list_item" if is_list else "paragraph")
+            )
             order += 1
             blocks.append(
                 RawBlock(
@@ -400,9 +406,9 @@ def _docx_blocks(data: bytes) -> list[RawBlock]:
                     span = int(grid_span) if grid_span and grid_span.isdigit() else 1
                     cells.append(
                         {
-                        "row": row_index,
-                        "column": column_index,
-                        "cell_index": table_cell_index,
+                            "row": row_index,
+                            "column": column_index,
+                            "cell_index": table_cell_index,
                             "text": value,
                             "grid_span": span if span > 1 else None,
                             "v_merge": v_merge,
@@ -476,7 +482,12 @@ def _pdf_reading_order(
             continue
         items.append((index, block, bbox))
     if len(items) < 2 or page_width <= 0:
-        return [(index, block) for index, block, _ in sorted(items, key=lambda item: (item[2][1], item[2][0], item[0]))]
+        return [
+            (index, block)
+            for index, block, _ in sorted(
+                items, key=lambda item: (item[2][1], item[2][0], item[0])
+            )
+        ]
 
     spanning: list[tuple[int, dict[str, Any], list[float]]] = []
     narrow: list[tuple[int, dict[str, Any], list[float]]] = []
@@ -493,7 +504,10 @@ def _pdf_reading_order(
     clusters: list[list[tuple[int, dict[str, Any], list[float]]]] = []
     gap_limit = max(12.0, page_width * 0.04)
     for item in sorted(narrow, key=lambda value: (value[2][0], value[2][1], value[0])):
-        if not clusters or item[2][0] > max(value[2][2] for value in clusters[-1]) + gap_limit:
+        if (
+            not clusters
+            or item[2][0] > max(value[2][2] for value in clusters[-1]) + gap_limit
+        ):
             clusters.append([item])
         else:
             clusters[-1].append(item)
@@ -501,7 +515,9 @@ def _pdf_reading_order(
     if len(clusters) < 2:
         return [
             (index, block)
-            for index, block, _ in sorted(items, key=lambda item: (item[2][1], item[2][0], item[0]))
+            for index, block, _ in sorted(
+                items, key=lambda item: (item[2][1], item[2][0], item[0])
+            )
         ]
     clusters.sort(key=lambda cluster: min(item[2][0] for item in cluster))
 
@@ -551,23 +567,32 @@ def _pdf_blocks(data: bytes) -> list[RawBlock]:
             page_dict = page.get_text("dict", sort=False)
             page_height = float(page.rect.height or 0)
             page_blocks = page_dict.get("blocks", [])
-            ordered_blocks = _pdf_reading_order(page_blocks, float(page.rect.width or 0))
+            ordered_blocks = _pdf_reading_order(
+                page_blocks, float(page.rect.width or 0)
+            )
             for block_index, block in ordered_blocks:
                 lines: list[str] = []
                 span_count = 0
                 line_metadata: list[dict[str, Any]] = []
                 for line in block.get("lines", []):
-                    text = "".join(str(span.get("text", "")) for span in line.get("spans", []))
+                    text = "".join(
+                        str(span.get("text", "")) for span in line.get("spans", [])
+                    )
                     if text.strip():
                         lines.append(text.strip())
                     span_count += len(line.get("spans", []))
                     line_metadata.append(
                         {
-                            "bbox": [float(value) for value in line.get("bbox", [0, 0, 0, 0])],
+                            "bbox": [
+                                float(value) for value in line.get("bbox", [0, 0, 0, 0])
+                            ],
                             "spans": [
                                 {
                                     "text": str(span.get("text", "")),
-                                    "bbox": [float(value) for value in span.get("bbox", [0, 0, 0, 0])],
+                                    "bbox": [
+                                        float(value)
+                                        for value in span.get("bbox", [0, 0, 0, 0])
+                                    ],
                                     "font": span.get("font"),
                                     "size": span.get("size"),
                                 }
@@ -658,7 +683,8 @@ def _make_chunk(
     derived_metadata: dict[str, Any] = {
         "raw_block_count": len(blocks),
         "contains_table": any(
-            block.block_type in {"table", "table_header", "table_row"} for block in blocks
+            block.block_type in {"table", "table_header", "table_row"}
+            for block in blocks
         ),
         "contains_code": any(block.block_type == "code" for block in blocks),
         "contains_formula": any(block.block_type == "formula" for block in blocks),
@@ -671,7 +697,7 @@ def _make_chunk(
     }
     # 将派生文本规则版本随 chunk 一起持久化，规则升级时可以只重建
     # retrieval/embedding 索引，不必重新调用 MinerU。
-    from app.modules.qa.markdown_processing import RETRIEVAL_TEXT_VERSION
+    from app.modules.qa.processing.markdown import RETRIEVAL_TEXT_VERSION
 
     derived_metadata["retrieval_text_version"] = RETRIEVAL_TEXT_VERSION
     if omitted:
@@ -719,12 +745,18 @@ def _build_native_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
     table_header_truncated = False
 
     def flush() -> None:
-        nonlocal current_blocks, current_parts, current_fragments, current_omitted, current_table, table_header, table_header_block, table_header_truncated
+        nonlocal \
+            current_blocks, \
+            current_parts, \
+            current_fragments, \
+            current_omitted, \
+            current_table, \
+            table_header, \
+            table_header_block, \
+            table_header_truncated
         if current_parts:
             metadata = (
-                {"table_header_truncated": True}
-                if table_header_truncated
-                else None
+                {"table_header_truncated": True} if table_header_truncated else None
             )
             chunks.append(
                 _make_chunk(
@@ -782,15 +814,23 @@ def _build_native_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
                 table_header_truncated = False
             if block.block_type == "table_header":
                 normalized = _normal(block.content)
-                duplicate = table_header is not None and normalized == _normal(table_header)
+                duplicate = table_header is not None and normalized == _normal(
+                    table_header
+                )
                 if duplicate:
                     # raw block 仍映射到当前 chunk，但派生正文不再重复表头。
                     current_blocks.append(block)
                     current_omitted.add(block.source_order)
                     continue
-                table_header, table_header_truncated = _table_header_context(block.content)
+                table_header, table_header_truncated = _table_header_context(
+                    block.content
+                )
                 table_header_block = block
-            part = table_header if block.block_type == "table_header" and table_header else block.content
+            part = (
+                table_header
+                if block.block_type == "table_header" and table_header
+                else block.content
+            )
         else:
             if current_table is not None:
                 flush()
@@ -821,7 +861,9 @@ def _build_native_chunks(blocks: list[RawBlock]) -> list[DocumentChunk]:
                     current_parts.append(header_text)
                     if header_block:
                         current_blocks.append(header_block)
-                        current_fragments.append((header_block.source_order, header_text))
+                        current_fragments.append(
+                            (header_block.source_order, header_text)
+                        )
             current_parts.append(piece)
             current_blocks.append(block)
             current_fragments.append((block.source_order, piece))
@@ -855,18 +897,28 @@ def parse_extracted_document(
     """
 
     try:
-        from app.modules.qa.markdown_processing import select_blocks
+        from app.modules.qa.processing.markdown import select_blocks
 
         blocks, source_stats = select_blocks(markdown, structured)
     except Exception as exc:
         return ExtractionDocument(
-            "failed", (), (), parser_version=MARKDOWN_PARSER_VERSION,
-            chunk_version=CHUNK_VERSION, mode="mineru", error=str(exc)[:2000],
+            "failed",
+            (),
+            (),
+            parser_version=MARKDOWN_PARSER_VERSION,
+            chunk_version=CHUNK_VERSION,
+            mode="mineru",
+            error=str(exc)[:2000],
         )
     if not blocks:
         return ExtractionDocument(
-            "text_not_available", (), (), parser_version=MARKDOWN_PARSER_VERSION,
-            chunk_version=CHUNK_VERSION, mode="mineru", statistics=source_stats,
+            "text_not_available",
+            (),
+            (),
+            parser_version=MARKDOWN_PARSER_VERSION,
+            chunk_version=CHUNK_VERSION,
+            mode="mineru",
+            statistics=source_stats,
         )
     chunks = build_chunks(blocks)
     statistics = {
@@ -881,10 +933,14 @@ def parse_extracted_document(
             not block.retrieval_text for block in blocks
         ),
         "table_block_count": sum(block.block_type == "table" for block in blocks),
-        "page_count": len({block.page_number for block in blocks if block.page_number is not None}),
+        "page_count": len(
+            {block.page_number for block in blocks if block.page_number is not None}
+        ),
     }
     return ExtractionDocument(
-        "ready", tuple(blocks), tuple(chunks),
+        "ready",
+        tuple(blocks),
+        tuple(chunks),
         parser_version=MARKDOWN_PARSER_VERSION,
         chunk_version=CHUNK_VERSION,
         mode="mineru",
@@ -906,16 +962,22 @@ def parse_document(
 
     ext = extension.lower().lstrip(".")
     if mode not in {"native_text", "ocr", "mineru"}:
-        return ExtractionDocument("unsupported", (), (), mode=mode, error="不支持的解析模式")
+        return ExtractionDocument(
+            "unsupported", (), (), mode=mode, error="不支持的解析模式"
+        )
     if mode == "ocr":
-        return ExtractionDocument("text_not_available", (), (), mode=mode, statistics={"ocr_reserved": True})
+        return ExtractionDocument(
+            "text_not_available", (), (), mode=mode, statistics={"ocr_reserved": True}
+        )
     if ext in {"md", "markdown"}:
         return parse_extracted_document(data.decode("utf-8-sig"))
     if ext in {"json", "content_list", "middle"}:
         try:
             structured = json.loads(data.decode("utf-8-sig"))
         except (ValueError, UnicodeError):
-            return ExtractionDocument("failed", (), (), mode="mineru", error="结构化 JSON 无效")
+            return ExtractionDocument(
+                "failed", (), (), mode="mineru", error="结构化 JSON 无效"
+            )
         return parse_extracted_document("", structured)
     if ext not in {"pdf", "docx"}:
         return ExtractionDocument("unsupported", (), (), statistics={"extension": ext})
@@ -933,7 +995,11 @@ def parse_document(
     chunks = build_chunks(blocks)
     statistics = {
         "extension": ext,
-        "source_format": "structured_json" if ext in {"json", "content_list", "middle"} else "markdown" if ext in {"md", "markdown"} else "native",
+        "source_format": "structured_json"
+        if ext in {"json", "content_list", "middle"}
+        else "markdown"
+        if ext in {"md", "markdown"}
+        else "native",
         "block_count": len(blocks),
         "chunk_count": len(chunks),
         "char_count": sum(len(block.content) for block in blocks),
@@ -942,10 +1008,16 @@ def parse_document(
         "retrieval_empty_block_count": sum(
             not block.retrieval_text for block in blocks
         ),
-        "table_block_count": sum(block.block_type.startswith("table") for block in blocks),
+        "table_block_count": sum(
+            block.block_type.startswith("table") for block in blocks
+        ),
         "pdf_block_count": sum(block.block_type == "pdf_block" for block in blocks),
     }
-    parser_version = MARKDOWN_PARSER_VERSION if ext in {"md", "markdown", "json", "content_list", "middle"} else PARSER_VERSION
+    parser_version = (
+        MARKDOWN_PARSER_VERSION
+        if ext in {"md", "markdown", "json", "content_list", "middle"}
+        else PARSER_VERSION
+    )
     return ExtractionDocument(
         "ready",
         tuple(blocks),

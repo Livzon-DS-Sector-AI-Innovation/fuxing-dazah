@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import hashlib
 
-from app.modules.qa.document_processing import (
+from app.modules.qa.processing.document import (
     RawBlock,
     build_chunks,
     parse_extracted_document,
 )
-from app.modules.qa.markdown_processing import (
+from app.modules.qa.processing.markdown import (
     RETRIEVAL_TEXT_VERSION,
     normalize_retrieval_text,
 )
 
 
 def test_html_normalization_removes_markup_attributes_and_preserves_boundaries() -> None:
+    """HTML 噪声（标签属性、链接、脚本）不进检索文本，但词与段落边界保留。
+
+    检索文本是用户查询的直接匹配对象：标记混进去会把「设备 R-101」
+    拆成查不到的碎片，脚本内容则纯属污染。
+    """
     raw = (
         '<p>设备 <strong class="label">R-101</strong></p>'
         '<p>状态 <a href="https://example.invalid">有效</a></p>'
@@ -32,6 +37,11 @@ def test_html_normalization_removes_markup_attributes_and_preserves_boundaries()
 
 
 def test_html_and_markdown_tables_keep_cell_and_row_boundaries() -> None:
+    """HTML 与 Markdown 表格归一成统一的「单元格 | 分隔、行换行」形态。
+
+    编码、名称这类关键字段按列对齐后才能被精确检索到，而不是整表
+    挤成一串。
+    """
     html = (
         '<table class="result"><thead><tr><th>编码</th><th>名称</th></tr></thead>'
         "<tbody><tr><td>R-101</td><td>反应釜</td></tr></tbody></table>"
@@ -51,6 +61,7 @@ def test_html_and_markdown_tables_keep_cell_and_row_boundaries() -> None:
 
 
 def test_code_and_formula_keep_angle_brackets_as_semantic_content() -> None:
+    """代码块与公式里的尖括号是内容本身，归一化时原样保留。"""
     assert normalize_retrieval_text(
         "```xml\n<tag attr=\"value\">R-101</tag>\n```", block_type="code"
     ) == '<tag attr="value">R-101</tag>'
@@ -58,6 +69,7 @@ def test_code_and_formula_keep_angle_brackets_as_semantic_content() -> None:
 
 
 def test_code_chunk_uses_code_normalization_without_stripping_tags() -> None:
+    """整段代码进入 chunk 时走代码归一化，标签不被当成 HTML 剥掉。"""
     parsed = parse_extracted_document(
         "```xml\n<tag attr=\"value\">R-101</tag>\n```\n"
     )
@@ -66,6 +78,10 @@ def test_code_chunk_uses_code_normalization_without_stripping_tags() -> None:
 
 
 def test_empty_anchor_is_kept_as_raw_evidence_but_not_chunked() -> None:
+    """空锚点（目录书签等）保留为原始证据但不进检索/分块。
+
+    锚点没有任何可检索内容，混进 chunk 只会制造空片段。
+    """
     anchor = RawBlock(
         '<a id="_Toc123456"></a>',
         "md:line:1-1",
@@ -97,6 +113,11 @@ def test_empty_anchor_is_kept_as_raw_evidence_but_not_chunked() -> None:
 
 
 def test_raw_hash_and_offsets_are_based_on_original_markup() -> None:
+    """哈希与偏移锚定原始标记文本，归一化文本另算独立哈希。
+
+    原文哈希是证据防篡改口径，归一化哈希是检索索引口径，两者不可
+    混用；偏移量必须能在原文上精确切出对应片段。
+    """
     raw = '<p>设备编码 <strong data-kind="code">R-101</strong></p>'
     block = RawBlock(raw, "md:line:1-1", 1, "paragraph")
 
@@ -120,6 +141,7 @@ def test_raw_hash_and_offsets_are_based_on_original_markup() -> None:
 
 
 def test_retrieval_text_version_is_explicit_for_derived_indexes() -> None:
+    """派生检索文本带显式版本号：归一化规则一旦演进，索引可识别重建。"""
     assert RETRIEVAL_TEXT_VERSION.startswith("qa-retrieval-text-")
 
 

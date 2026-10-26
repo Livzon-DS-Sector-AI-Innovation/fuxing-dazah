@@ -11,11 +11,6 @@ from sqlalchemy import case, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.database import async_session_factory
-from app.modules.qa.ai_analysis import (
-    AI_LEASE_MINUTES,
-    AI_MAX_RETRY_COUNT,
-    process_analysis_run,
-)
 from app.modules.qa.models import (
     AIAnalysisStatus,
     DocumentAIAnalysisRun,
@@ -25,6 +20,11 @@ from app.modules.qa.models import (
     ExtractionStatus,
 )
 from app.modules.qa.service import EXTRACTION_LEASE_MINUTES, process_file
+from app.modules.qa.service.ai_analysis import (
+    AI_LEASE_MINUTES,
+    AI_MAX_RETRY_COUNT,
+    process_analysis_run,
+)
 from app.platform.scheduler import ScheduleConfig, ScheduleStrategy, TaskGenerator
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,10 @@ class QaTextExtractionGenerator(TaskGenerator):
                     or_(
                         DocumentFile.extraction_status == ExtractionStatus.QUEUED.value,
                         (
-                            (DocumentFile.extraction_status == ExtractionStatus.FAILED.value)
+                            (
+                                DocumentFile.extraction_status
+                                == ExtractionStatus.FAILED.value
+                            )
                             & (DocumentFile.retry_count < MAX_RETRY_COUNT)
                         ),
                     ),
@@ -122,7 +125,9 @@ class QaTextExtractionGenerator(TaskGenerator):
                 if hasattr(item, "extraction_status"):
                     item.extraction_status = ExtractionStatus.PROCESSING.value
                     item.extraction_worker_token = uuid.uuid4().hex
-                    item.extraction_lease_until = now + timedelta(minutes=EXTRACTION_LEASE_MINUTES)
+                    item.extraction_lease_until = now + timedelta(
+                        minutes=EXTRACTION_LEASE_MINUTES
+                    )
             # claim 先提交，实际读取/解析不持有数据库锁。
             if hasattr(session, "commit"):
                 await session.commit()
@@ -199,11 +204,17 @@ class QaAIAnalysisGenerator(TaskGenerator):
                     DocumentAIAnalysisRun.is_deleted.is_(False),
                     or_(
                         (
-                            (DocumentAIAnalysisRun.status == AIAnalysisStatus.QUEUED.value)
+                            (
+                                DocumentAIAnalysisRun.status
+                                == AIAnalysisStatus.QUEUED.value
+                            )
                             & (DocumentAIAnalysisRun.retry_count < AI_MAX_RETRY_COUNT)
                         ),
                         (
-                            (DocumentAIAnalysisRun.status == AIAnalysisStatus.PROCESSING.value)
+                            (
+                                DocumentAIAnalysisRun.status
+                                == AIAnalysisStatus.PROCESSING.value
+                            )
                             & (
                                 DocumentAIAnalysisRun.lease_until.is_(None)
                                 | (DocumentAIAnalysisRun.lease_until < stale_before)
@@ -211,7 +222,10 @@ class QaAIAnalysisGenerator(TaskGenerator):
                             & (DocumentAIAnalysisRun.retry_count < AI_MAX_RETRY_COUNT)
                         ),
                         (
-                            (DocumentAIAnalysisRun.status == AIAnalysisStatus.FAILED.value)
+                            (
+                                DocumentAIAnalysisRun.status
+                                == AIAnalysisStatus.FAILED.value
+                            )
                             & (DocumentAIAnalysisRun.retry_count < AI_MAX_RETRY_COUNT)
                         ),
                     ),

@@ -22,7 +22,7 @@ from app.core import storage as object_storage
 from app.core.config import get_settings
 
 if TYPE_CHECKING:
-    from app.modules.qa.document_processing import ExtractionDocument
+    from app.modules.qa.processing.document import ExtractionDocument
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +79,7 @@ def content_disposition(disposition: str, filename: str) -> str:
         extension = Path(safe_name).suffix.lower()
         ascii_name = f"document{extension}"
     encoded_name = quote(safe_name, safe="")
-    return (
-        f'{disposition}; filename="{ascii_name}"; '
-        f"filename*=UTF-8''{encoded_name}"
-    )
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
 
 # 允许内联渲染的类型。提取产物的 MIME 是从远端 ZIP 成员名推出来的
@@ -90,14 +87,16 @@ def content_disposition(disposition: str, filename: str) -> str:
 # 是什么；text/html、image/svg+xml 一旦 inline 就是 API 域下的存储型 XSS
 # ——next.config.ts 把 /api 重写到后端，与 auth_token 同源。图片要放行是
 # 因为 Markdown 预览用 <img src> 直接取产物；SVG 可以带脚本，不放。
-_INLINE_MEDIA_TYPES = frozenset({
-    "application/pdf",
-    "image/bmp",
-    "image/gif",
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-})
+_INLINE_MEDIA_TYPES = frozenset(
+    {
+        "application/pdf",
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+)
 
 
 def inline_media_type(mime_type: str | None) -> str | None:
@@ -126,7 +125,9 @@ def _detect_magic(extension: str, data: bytes) -> bool:
     return False
 
 
-def validate_file(filename: str | None, content_type: str | None, data: bytes) -> tuple[str, str, str]:
+def validate_file(
+    filename: str | None, content_type: str | None, data: bytes
+) -> tuple[str, str, str]:
     """校验扩展名、MIME、大小和魔数，返回安全文件名/扩展名/MIME。"""
     safe_name = _safe_filename(filename)
     extension = Path(safe_name).suffix.lower()
@@ -167,7 +168,9 @@ def _local_root() -> Path:
     return root
 
 
-def store_file(filename: str | None, content_type: str | None, data: bytes) -> StoredFile:
+def store_file(
+    filename: str | None, content_type: str | None, data: bytes
+) -> StoredFile:
     safe_name, extension, mime = validate_file(filename, content_type, data)
     digest = hashlib.sha256(data).hexdigest()
     key = f"documents/{uuid.uuid4().hex}.{extension}"
@@ -198,7 +201,9 @@ def read_file(key: str) -> tuple[bytes, str] | None:
     path = _local_root() / key
     if not path.is_file() or not path.resolve().is_relative_to(_local_root().resolve()):
         return None
-    return path.read_bytes(), mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return path.read_bytes(), mimetypes.guess_type(path.name)[
+        0
+    ] or "application/octet-stream"
 
 
 def store_object(
@@ -251,7 +256,7 @@ def extract_text(extension: str, data: bytes) -> tuple[str, list[TextSegment]]:
     扫描 PDF 返回 ``text_not_available`` 由 service 判断；旧 DOC 不解析。
     这里不做 OCR、不转换 Word。
     """
-    from app.modules.qa.document_processing import parse_document
+    from app.modules.qa.processing.document import parse_document
 
     extension = extension.lower().lstrip(".")
     parsed = parse_document(extension, data)
@@ -314,7 +319,7 @@ def extract_document(
     extension: str, data: bytes, *, mode: str = "native_text"
 ) -> ExtractionDocument:
     """返回包含 raw block/chunk 的新版解析结果。"""
-    from app.modules.qa.document_processing import parse_document
+    from app.modules.qa.processing.document import parse_document
 
     return parse_document(extension, data, mode=mode)
 
