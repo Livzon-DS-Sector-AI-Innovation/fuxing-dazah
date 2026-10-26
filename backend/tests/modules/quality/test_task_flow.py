@@ -356,3 +356,69 @@ async def test_list_tasks_file_no_filter(db_session):
     # 未命中：乱码文件号
     items2, _total2 = await list_test_tasks(db_session, file_no="SOP.99.不存在")
     assert not any(t.id == task.id for t in items2)
+
+
+# ── 在线计算表填报 ──
+
+
+async def test_calc_form_fill_and_merge(db_session):
+    from app.modules.quality.repository import (
+        create_lc_template_config,
+        create_test_results,
+        create_test_task,
+        get_inspection_by_batch,
+        list_test_results,
+    )
+
+    # 建任务：杂质B1/B2 与合并项 杂质B(B1+B2) 共 3 行
+    doc = await _make_doc(db_session, "HAF")
+    task = await create_test_task(db_session,
+        product_name=doc.product_name, batch_number=_rand_batch("HAF"),
+        production_date="2026-09-01", expiry_date="2029-08-31",
+        specification=None, form_id=None, standard_document_id=doc.id)
+    task.status = "in_progress"
+    await db_session.flush()
+    await create_test_results(db_session, task.id, [
+        {"item_name": "杂质B1", "sop_no": "SOP.03.3333", "standard_text": "≤0.5%",
+         "operator": "≤", "limit_max": 0.5, "judge_mode": "auto", "source": "manual"},
+        {"item_name": "杂质B2", "sop_no": "SOP.03.4444", "standard_text": "≤0.5%",
+         "operator": "≤", "limit_max": 0.5, "judge_mode": "auto", "source": "manual"},
+        {"item_name": "杂质B(B1+B2)", "sop_no": "SOP.03.5555", "standard_text": "≤1.0%",
+         "operator": "≤", "limit_max": 1.0, "judge_mode": "auto", "source": "manual"},
+    ])
+    # 表号配置：合并规则 B1+B2 → B(B1+B2)
+    table_no = f"EX-HA-{_rand_batch('9')[:4]}-001"
+    await create_lc_template_config(db_session, table_no, doc.product_name, None, None,
+        {"merge": [{"op": "sum", "from": ["杂质B1", "杂质B2"], "into": "杂质B(B1+B2)"}], "blocks": [], "batch_label": "批号"})
+
+    from app.modules.quality.service import TestTaskService
+    filled, unmatched = await TestTaskService.submit_calc_form(
+        db_session, task, table_no, "2026-09-05",
+        [("杂质B1", 0.2), ("杂质B2", 0.3)],
+    )
+    assert set(filled) == {"杂质B1", "杂质B2", "杂质B(B1+B2)"}
+    assert unmatched == []
+    rows = await list_test_results(db_session, task.id)
+    by_name = {r.item_name: r for r in rows}
+    assert by_name["杂质B1"].is_pass is True and by_name["杂质B1"].source == "parse"
+    assert by_name["杂质B(B1+B2)"].result_value == 0.5
+    # 检验记录留痕：表单快照存 raw_data
+    rec = await get_inspection_by_batch(db_session, task.product_name, task.batch_number)
+    assert rec is not None and rec.raw_data["source"] == "calc_form"
+
+
+async def test_calc_form_unmatched_and_status_guard(db_session):
+    from app.modules.quality.service import TestTaskService
+
+    doc = await _make_doc(db_session, "HAF")
+    task, _rows = await _make_task_with_rows(db_session, doc)
+    # manual 行不参与自动判定 → 未匹配
+    filled, unmatched = await TestTaskService.submit_calc_form(
+        db_session, task, None, None, [("外观", 0.5)],
+    )
+    assert filled == [] and unmatched == ["外观"]
+    # 非填报中任务拦截
+    task.status = "pending_review"
+    await db_session.flush()
+    with pytest.raises(AppException):
+        await TestTaskService.submit_calc_form(db_session, task, None, None, [("水分", 1.0)])

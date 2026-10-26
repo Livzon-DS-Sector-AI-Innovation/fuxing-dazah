@@ -77,6 +77,21 @@ class TestResultsUpdate(BaseModel):
     results: list[TestResultFill] = Field(min_length=1, max_length=500)
 
 
+class CalcFormItem(BaseModel):
+    """在线计算表单个项目：项目名 + 数值。"""
+
+    item_name: str = Field(max_length=200)
+    value: float
+
+
+class CalcFormSubmit(BaseModel):
+    """在线计算表提交：免 Excel 直接填计算后数值，系统按表号合并规则计算并按任务限度判定。"""
+
+    table_no: str | None = Field(default=None, max_length=100, description="计算表表号（触发合并规则，如杂质B1+B2）")
+    record_date: str | None = Field(default=None, max_length=32, description="检验日期 YYYY-MM-DD（留痕用）")
+    values: list[CalcFormItem] = Field(min_length=1, max_length=200)
+
+
 class TestResultCreate(BaseModel):
     """追加临时结果行（judge_mode 由后端按 operator/limit 推断）。"""
 

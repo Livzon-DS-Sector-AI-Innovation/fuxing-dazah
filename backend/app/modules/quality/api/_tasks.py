@@ -33,6 +33,7 @@ from app.modules.quality.repository import (
     list_task_reviews_with_names,
 )
 from app.modules.quality.schemas import (
+    CalcFormSubmit,
     TestResultCreate,
     TestResultsUpdate,
     TestTaskCreate,
@@ -161,6 +162,32 @@ async def parse_lc_into_task_endpoint(
     if unmatched:
         msg += f"；未匹配 {len(unmatched)} 项：{'、'.join(unmatched)}"
     return success_response(data=detail.model_dump(mode="json"), message=msg)
+
+
+@router.post("/tasks/{task_id}/calc-fill", summary="在线计算表填报（免 Excel：数值+表号合并规则→判定填入）")
+async def submit_calc_form_endpoint(
+    task_id: uuid.UUID,
+    payload: CalcFormSubmit = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:fill")),
+) -> JSONResponse:
+    task = await get_test_task(db, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="检验任务不存在")
+    filled, unmatched = await test_task_service.submit_calc_form(
+        db, task, payload.table_no, payload.record_date,
+        [(v.item_name, v.value) for v in payload.values], filled_by=user.id,
+    )
+    detail = await test_task_service.get_task_detail(db, task_id)
+    msg = f"计算表已提交：已填入 {len(filled)} 项"
+    if filled:
+        msg += f"（{'、'.join(filled)}）"
+    if unmatched:
+        msg += f"；未匹配 {len(unmatched)} 项：{'、'.join(unmatched)}"
+    return success_response(
+        data={"filled": filled, "unmatched": unmatched, "detail": detail.model_dump(mode="json") if detail else None},
+        message=msg,
+    )
 
 
 @router.post("/tasks/{task_id}/attachments", summary="上传任务原始证据附件（计算表/图谱等）")

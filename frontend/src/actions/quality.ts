@@ -1839,6 +1839,21 @@ export async function fetchDashboardAlerts(): Promise<{ data: QualityAlerts }> {
   return res.json()
 }
 
+export async function submitCalcFill(taskId: string, input: {
+  table_no?: string; record_date?: string; values: { item_name: string; value: number }[]
+}): Promise<{ message: string; data: { filled: string[]; unmatched: string[] } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/calc-fill`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '计算表提交失败')
+  }
+  revalidatePath(`/quality/task/${taskId}`)
+  return res.json()
+}
+
 export async function downloadEnvImportTemplate(type: 'points' | 'records'): Promise<Blob> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/import-template?type=${type}`, {
     headers: await _authHeaders(),

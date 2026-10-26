@@ -134,6 +134,55 @@ class _TaskParse(_TaskCore):
         detail = _TaskParse._to_detail(task, await list_test_results(db, task_id))
         return detail, filled, unmatched
 
+    @staticmethod
+    async def submit_calc_form(
+        db: AsyncSession,
+        task: QualityTestTask,
+        table_no: str | None,
+        record_date: str | None,
+        values: list[tuple[str, float]],
+        filled_by: uuid.UUID | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """在线计算表提交：数值候选 + 表号合并规则计算 → 复用/创建检验记录留痕 → 判定填入任务。
+
+        返回 (filled_names, unmatched_names)。判定以任务行标准快照为准，与液相解析同链路。
+        """
+        if task.status != "in_progress":
+            raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可填报计算表")
+        candidates: list[tuple[str, float]] = list(values)
+        # 表号合并规则：如 杂质B(B1+B2) = 杂质B1 + 杂质B2（配置 merge op=sum）
+        if table_no:
+            cfg = await get_lc_template_by_table_no(db, table_no)
+            if cfg and isinstance(cfg.config, dict):
+                value_map: dict[str, float] = {}
+                for name, v in candidates:
+                    value_map[_TaskParse._norm_name(name)] = v
+                for rule in cfg.config.get("merge", []) or []:
+                    if rule.get("op") == "sum":
+                        parts = [
+                            value_map.get(_TaskParse._norm_name(n))
+                            for n in (rule.get("from") or [])
+                        ]
+                        if parts and all(v is not None for v in parts):
+                            candidates.append((str(rule["into"]), sum(p for p in parts if p is not None)))
+        # 检验记录：同批已有则复用（唯一索引），否则创建；raw_data 存表单快照留痕
+        record = await get_inspection_by_batch(db, task.product_name, task.batch_number)
+        if record is None:
+            record = await create_inspection_record(
+                db, task.product_name, task.batch_number, table_no, None,
+                None, None, None, None, None, None, None, None, None, None,
+                all_pass=True,
+                raw_data={
+                    "source": "calc_form", "table_no": table_no, "record_date": record_date,
+                    "values": [{"item_name": n, "value": v} for n, v in candidates],
+                },
+                excel_filename=None,
+            )
+        filled, unmatched = await _TaskParse._fill_candidates(
+            db, task, candidates, record.id, filled_by=filled_by
+        )
+        return filled, unmatched
+
     # ── 模板配置驱动的通用解析 ──
 
     @staticmethod
