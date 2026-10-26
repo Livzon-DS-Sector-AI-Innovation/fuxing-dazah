@@ -3,6 +3,7 @@
  * 接缝：vi.mock fetchDomainPage（照 SupervisionPage.test 手法）。
  */
 import { screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import DomainLedgerPage from './DomainLedgerPage'
@@ -66,6 +67,11 @@ const LIVE_WITH_VIOLATIONS: DomainPageData = {
         handling: '停工培训',
         status: '纠正中',
         related_hazard_no: 'HJ-2026-001',
+        corrective_action: '停工当日完成安全帽佩戴复训',
+        retraining_note: '已生成待推送（2026-10-22）\n- 进入生产区必须正确佩戴安全帽',
+        evidence_files: ['现场照片1.jpg', '现场照片2.jpg'],
+        ai_level_suggestion: '建议定级：严重（高处作业未防护）',
+        note: null,
       },
       {
         record_id: 'v2',
@@ -171,6 +177,67 @@ describe('DomainLedgerPage（四新域通用页面；goals 已改走标准核查
     expect(await screen.findByText('已接入')).toBeInTheDocument()
     expect(screen.getByRole('row', { name: /入厂三级教育/ })).toBeInTheDocument()
     expect(screen.queryByText('违章行为档案')).not.toBeInTheDocument()
+  })
+
+  it('点击违章行打开详情 Drawer：要点卡/证据附件/AI判级建议（表格外字段）', async () => {
+    fetchMock.mockResolvedValue(LIVE_WITH_VIOLATIONS)
+    renderWithQuery(<DomainLedgerPage domain="training-behavior" />)
+
+    const row = await screen.findByRole('row', { name: /未佩戴安全帽登高作业/ })
+    await userEvent.click(row)
+
+    expect(await screen.findByText('违章行为档案详情')).toBeInTheDocument()
+    expect(screen.getByText('定向培训要点卡')).toBeInTheDocument()
+    expect(
+      screen.getByText(/已生成待推送（2026-10-22）\s*- 进入生产区必须正确佩戴安全帽/),
+    ).toBeInTheDocument()
+    expect(screen.getByText('证据附件')).toBeInTheDocument()
+    expect(screen.getByText('现场照片1.jpg、现场照片2.jpg')).toBeInTheDocument()
+    expect(screen.getByText('建议定级：严重（高处作业未防护）')).toBeInTheDocument()
+
+    // 关闭后可再次点击另一行（空字段行 Drawer 里显示「—」）
+    await userEvent.click(screen.getByRole('button', { name: /close/i }))
+    const sparseRow = screen.getByRole('row', { name: /往年存量违章/ })
+    await userEvent.click(sparseRow)
+    expect(screen.getByText('违章行为档案详情')).toBeInTheDocument()
+    expect(screen.getByText('定向培训要点卡')).toBeInTheDocument()
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+
+  it('facilities 副台账：检验记录区块通用渲染（配置驱动）', async () => {
+    fetchMock.mockResolvedValue({
+      status: 'live',
+      stats: {
+        equipment_total: 1, special_equipment: 0, inspection_overdue: 0,
+        inspection_due_30d: 1, inspection_pass_rate: 100, inactive_equipment: 0,
+      },
+      ledger: {
+        data: [{ record_id: 'e1', equipment_no: 'EQ-01', name: '叉车', status: '在用' }],
+        meta: { total: 1, page: 1, page_size: 20 },
+      },
+      secondary_ledger: {
+        data: [
+          {
+            record_id: 'i1',
+            equipment_no: 'EQ-01',
+            equipment_name: '叉车',
+            category: '定期检验',
+            next_inspected_at: '2026-11-01T00:00:00',
+            result: '合格',
+            report_file: ['检验报告.pdf'],
+          },
+        ],
+      },
+      errors: [],
+    } as DomainPageData)
+    renderWithQuery(<DomainLedgerPage domain="facilities" />)
+
+    expect(await screen.findByText('检验校验记录')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '下次检验日期' })).toBeInTheDocument()
+    const row = screen.getByRole('row', { name: /定期检验/ })
+    expect(within(row).getByText('合格')).toBeInTheDocument()
+    // 主台账与检验记录是同设备的两行（设备台账 e1 + 检验记录 i1）→ 两表齐渲染
+    expect(screen.getAllByRole('row', { name: /EQ-01/ })).toHaveLength(2)
   })
 
   it('四域配置各自生效（标题/列头抽查）', async () => {

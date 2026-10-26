@@ -66,7 +66,7 @@ describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
     }
   })
 
-  it('副台账配置：仅 training-behavior 有违章档案（核心 9 列）', () => {
+  it('副台账配置：三域齐备（S6 违章档案核心 9 列 + 详情字段）', () => {
     const tb = DOMAIN_PAGE_CONFIGS['training-behavior']
     expect(tb.secondaryLedger).toBeDefined()
     expect(tb.secondaryLedger!.title).toBe('违章行为档案')
@@ -74,9 +74,27 @@ describe('DOMAIN_PAGE_CONFIGS（蓝本口径配置）', () => {
       'occurred_at', 'person_name', 'department', 'category', 'level',
       'description', 'handling', 'status', 'related_hazard_no',
     ])
+    // 详情 Drawer 供给字段（后端 14 列全覆盖中的表格外字段）
+    expect(tb.secondaryLedger!.detailFields!.map((f) => f.dataIndex)).toEqual(
+      expect.arrayContaining(['retraining_note', 'evidence_files', 'ai_level_suggestion']),
+    )
     // 「接入后扩展展示」承诺已兑现为真实区块，文案改为指向下方
     expect(tb.ledgerDescription).not.toMatch(/接入后扩展展示/)
-    expect(DOMAIN_PAGE_CONFIGS.facilities.secondaryLedger).toBeUndefined()
-    expect(DOMAIN_PAGE_CONFIGS.incidents.secondaryLedger).toBeUndefined()
+
+    const facilities = DOMAIN_PAGE_CONFIGS.facilities
+    expect(facilities.secondaryLedger!.title).toBe('检验校验记录')
+    expect(facilities.secondaryLedger!.columns.map((c) => c.dataIndex)).toEqual(
+      expect.arrayContaining([
+        'equipment_no', 'next_inspected_at', 'result',
+      ]),
+    )
+    expect(facilities.ledgerDescription).not.toMatch(/接入后扩展展示/)
+
+    const incidents = DOMAIN_PAGE_CONFIGS.incidents
+    expect(incidents.secondaryLedger!.title).toBe('CAPA 措施跟踪')
+    expect(incidents.secondaryLedger!.columns.map((c) => c.dataIndex)).toEqual(
+      expect.arrayContaining(['incident_no', 'description', 'status']),
+    )
+    expect(incidents.ledgerDescription).not.toMatch(/接入后扩展展示/)
   })
 })

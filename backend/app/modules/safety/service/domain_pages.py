@@ -189,6 +189,8 @@ _VIOLATION_KIND = KindSpec(
         ("关联隐患编号", "related_hazard_no", "text"),
         ("定向培训", "retraining_note", "text"),
         ("备注", "note", "text"),
+        ("证据附件", "evidence_files", "attachment"),
+        ("AI判级建议", "ai_level_suggestion", "text"),
     ),
 )
 _EQUIPMENT_KIND = KindSpec(
@@ -455,6 +457,7 @@ _SPECS: tuple[DomainPageSpec, ...] = (
         ),
         metric_template=_facilities_metric,
         warn_when=lambda a: (a["inspection_overdue"] or 0) > 0,
+        secondary=_INSPECTION_KIND,  # 副台账：检验校验记录（接入后零改码出数）
     ),
     DomainPageSpec(
         url_key="incidents",
@@ -470,6 +473,7 @@ _SPECS: tuple[DomainPageSpec, ...] = (
         metric_template=_incidents_metric,
         warn_when=lambda a: (a["capa_overdue"] or 0) > 0
         or a["investigating_over_30d"] > 0,
+        secondary=_CAPA_KIND,  # 副台账：CAPA 措施跟踪（接入后零改码出数）
     ),
 )
 

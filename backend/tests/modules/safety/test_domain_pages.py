@@ -117,6 +117,9 @@ class TestSecondaryLedger:
                 "违章描述": "未佩戴安全帽登高作业",
                 "处理方式": "停工培训", "状态": "纠正中",
                 "关联隐患编号": "HJ-2026-001",
+                "定向培训": "已生成待推送（2026-10-22）\n- 要点卡内容",
+                "证据附件": [{"file_token": "tok1", "name": "现场照片.jpg"}],
+                "AI判级建议": "建议定级：严重",
             }),
             _rec("v2", {
                 "违章日期": _ms(today - timedelta(days=400)),  # 跨年行也在档案表
@@ -142,6 +145,10 @@ class TestSecondaryLedger:
         assert first["status"] == "纠正中"
         assert first["related_hazard_no"] == "HJ-2026-001"
         assert first["occurred_at"] is not None
+        # 详情 Drawer 供给字段（14 列全覆盖）
+        assert first["retraining_note"].startswith("已生成待推送")
+        assert first["evidence_files"] == ["现场照片.jpg"]
+        assert first["ai_level_suggestion"] == "建议定级：严重"
 
     async def test_violation_not_configured_keeps_page_live(self) -> None:
         """副表未接入：页面仍 live（主台账照常），secondary_ledger=null。"""
@@ -161,18 +168,47 @@ class TestSecondaryLedger:
         assert data["stats"]["violation_total"] is None  # 副表统计组归 None 不变
         assert data["ledger"]["data"]  # 主台账照常
 
-    async def test_other_domains_have_no_secondary(self) -> None:
+    async def test_other_domains_secondary_too(self) -> None:
+        """facilities=检验校验记录、incidents=CAPA 也随包出副台账行。"""
         today = _bj_today()
+        facilities_fixtures = {
+            "equipment_ledger": FakePageClient([
+                _rec("e1", {"设备编号": "EQ-01", "设备名称": "叉车",
+                            "设备状态": "在用"}),
+            ]),
+            "inspection_record": FakePageClient([
+                _rec("i1", {
+                    "设备编号": "EQ-01", "设备名称": "叉车",
+                    "检验类别": "定期检验",
+                    "下次检验日期": _ms(today + timedelta(days=10)),
+                    "检验结果": "合格",
+                    "报告附件": [{"file_token": "tk", "name": "报告.pdf"}],
+                }),
+            ]),
+        }
+        data = await build_domain_page(
+            "facilities", opener=lambda d, k: facilities_fixtures[k]
+        )
+        assert data["status"] == "live"
+        assert data["secondary_ledger"]["data"][0]["equipment_no"] == "EQ-01"
+        assert data["secondary_ledger"]["data"][0]["report_file"] == ["报告.pdf"]
+
         incident_items = [
             _rec("x1", {"事件编号": "EV-01", "发生日期": _ms(today), "状态": "已结案"}),
         ]
-        fixtures = {
+        capa_items = [
+            _rec("c1", {"关联事件编号": "EV-01", "措施类型": "纠正",
+                        "措施描述": "加装防护罩", "状态": "已完成"}),
+        ]
+        incidents_fixtures = {
             "incident": FakePageClient(incident_items),
-            "capa": FakePageClient([]),
+            "capa": FakePageClient(capa_items),
         }
-        data = await build_domain_page("incidents", opener=lambda d, k: fixtures[k])
+        data = await build_domain_page(
+            "incidents", opener=lambda d, k: incidents_fixtures[k]
+        )
         assert data["status"] == "live"
-        assert data["secondary_ledger"] is None
+        assert data["secondary_ledger"]["data"][0]["description"] == "加装防护罩"
 
     async def test_degraded_has_null_secondary(self) -> None:
         data = await build_domain_page(

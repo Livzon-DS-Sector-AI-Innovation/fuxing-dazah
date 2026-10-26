@@ -32,6 +32,8 @@ export interface DomainSecondaryLedgerConfig {
   title: string
   description: string
   columns: DomainColumnConfig[]
+  /** 行详情 Drawer 附加字段（表格未展示的列；配置后行可点击） */
+  detailFields?: DomainColumnConfig[]
 }
 
 export interface DomainPageConfig {
@@ -96,6 +98,13 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
         { title: '状态', dataIndex: 'status', width: 80 },
         { title: '关联隐患编号', dataIndex: 'related_hazard_no', width: 120 },
       ],
+      detailFields: [
+        { title: '纠正措施', dataIndex: 'corrective_action' },
+        { title: '定向培训要点卡', dataIndex: 'retraining_note' },
+        { title: '证据附件', dataIndex: 'evidence_files' },
+        { title: 'AI判级建议', dataIndex: 'ai_level_suggestion' },
+        { title: '备注', dataIndex: 'note' },
+      ],
     },
     healthNote: 'warn 判据：违章未纠正>0，或培训计划逾期未实施；ok 判据：违章全部纠正且无逾期计划',
     guideDescription:
@@ -117,7 +126,7 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
       { key: 'inactive_equipment', label: '停用/维修中', tone: 'default', hint: '状态=停用或维修中' },
     ],
     ledgerTitle: '设备设施台账',
-    ledgerDescription: '主台账=设备设施台账表；检验校验记录接入后扩展展示',
+    ledgerDescription: '主台账=设备设施台账表；检验校验记录见下方区块',
     columns: [
       { title: '设备编号', dataIndex: 'equipment_no', width: 110 },
       { title: '设备名称', dataIndex: 'name', width: 160 },
@@ -127,6 +136,24 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
       { title: '责任人', dataIndex: 'owner', width: 90 },
       { title: '设备状态', dataIndex: 'status', width: 90 },
     ],
+    secondaryLedger: {
+      title: '检验校验记录',
+      description: '检验逾期/到期统计见上方统计卡；本表为逐台记录（接入后零改码出数）',
+      columns: [
+        { title: '设备编号', dataIndex: 'equipment_no', width: 110 },
+        { title: '设备名称', dataIndex: 'equipment_name', width: 150 },
+        { title: '检验类别', dataIndex: 'category', width: 100 },
+        { title: '上次检验日期', dataIndex: 'last_inspected_at', width: 110 },
+        { title: '下次检验日期', dataIndex: 'next_inspected_at', width: 110 },
+        { title: '检验机构', dataIndex: 'agency', width: 140 },
+        { title: '检验结果', dataIndex: 'result', width: 90 },
+      ],
+      detailFields: [
+        { title: '检验周期（月）', dataIndex: 'cycle_months' },
+        { title: '报告附件', dataIndex: 'report_file' },
+        { title: '备注', dataIndex: 'note' },
+      ],
+    },
     healthNote: 'warn 判据：存在检验逾期的设备；ok 判据：无逾期（30 天内到期仅提示）',
     guideDescription:
       '在飞书多维表格按蓝本字段建立「设备设施台账/检验校验记录」两张表，' +
@@ -147,7 +174,7 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
       { key: 'capa_overdue', label: 'CAPA 逾期', tone: 'danger', hint: '状态=已逾期（预警）' },
     ],
     ledgerTitle: '事故事件登记台账',
-    ledgerDescription: '主台账=事故事件登记表；CAPA 措施跟踪接入后扩展展示',
+    ledgerDescription: '主台账=事故事件登记表；CAPA 措施跟踪见下方区块',
     columns: [
       { title: '事件编号', dataIndex: 'incident_no', width: 110 },
       { title: '发生日期', dataIndex: 'occurred_at', width: 110 },
@@ -159,6 +186,25 @@ export const DOMAIN_PAGE_CONFIGS: Record<DomainPageKey, DomainPageConfig> = {
       { title: '直接损失(万)', dataIndex: 'direct_loss', width: 110 },
       { title: '状态', dataIndex: 'status', width: 90 },
     ],
+    secondaryLedger: {
+      title: 'CAPA 措施跟踪',
+      description: '未闭环/逾期统计见上方统计卡；本表为逐条措施（接入后零改码出数）',
+      columns: [
+        { title: '关联事件编号', dataIndex: 'incident_no', width: 120 },
+        { title: '措施类型', dataIndex: 'type', width: 90 },
+        { title: '措施描述', dataIndex: 'description', width: 220 },
+        { title: '责任部门', dataIndex: 'department', width: 120 },
+        { title: '责任人', dataIndex: 'owner', width: 90 },
+        { title: '完成期限', dataIndex: 'deadline', width: 110 },
+        { title: '完成日期', dataIndex: 'completed_at', width: 110 },
+        { title: '验证结果', dataIndex: 'verify_result', width: 90 },
+        { title: '状态', dataIndex: 'status', width: 90 },
+      ],
+      detailFields: [
+        { title: '验证人', dataIndex: 'verifier' },
+        { title: '备注', dataIndex: 'note' },
+      ],
+    },
     healthNote: 'warn 判据：CAPA 逾期>0，或调查中超 30 天未结案；ok 判据：CAPA 无逾期',
     guideDescription:
       '在飞书多维表格按蓝本字段建立「事故事件登记/CAPA 措施跟踪」两张表，' +

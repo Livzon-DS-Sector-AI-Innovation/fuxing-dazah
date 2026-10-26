@@ -5,12 +5,13 @@
  *
  * 结构：PageHeader（三态 StatusTag）→ StatCard 统计行（未接入值「—」）→
  * 本域健康度口径 → 主台账分页表（列=蓝本，空表 EmptyGuide 建表接入引导）→
- * 可选副台账表（如 S6 违章档案，全量行客户端分页，副表未接入时区块隐藏）。
+ * 可选副台账表（如 S6 违章档案，全量行客户端分页，副表未接入时区块隐藏；
+ * 配置 detailFields 后行可点击打开详情 Drawer，展示表格未容纳的字段）。
  * 纯只读监控，零业务操作按钮（3.0 口径：操作在飞书多维表格与机器人）；
  * 接入数据源后本组件零改码出数。差异配置见 ./domain-config.ts。
  */
 import { useState } from 'react'
-import { Table } from 'antd'
+import { Drawer, Table } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import dayjs from 'dayjs'
@@ -53,6 +54,7 @@ export default function DomainLedgerPage({ domain }: { domain: DomainPageKey }) 
   const config = getDomainConfig(domain)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const [detailRow, setDetailRow] = useState<DomainLedgerRow | null>(null)
 
   const query = useQuery({
     queryKey: ['domain-page', domain, { page, pageSize }],
@@ -201,11 +203,19 @@ export default function DomainLedgerPage({ domain }: { domain: DomainPageKey }) 
               emptyText: (
                 <EmptyGuide
                   compact
-                  title="暂无违章记录"
-                  description="违章行为档案在飞书多维表格维护"
+                  title={`暂无${secondaryConfig.title}记录`}
+                  description="台账在飞书多维表格维护"
                 />
               ),
             }}
+            onRow={
+              secondaryConfig.detailFields?.length
+                ? (record) => ({
+                    onClick: () => setDetailRow(record),
+                    style: { cursor: 'pointer' },
+                  })
+                : undefined
+            }
             pagination={{
               pageSize,
               showSizeChanger: true,
@@ -214,6 +224,40 @@ export default function DomainLedgerPage({ domain }: { domain: DomainPageKey }) 
           />
         </SectionCard>
       )}
+
+      {/* 副台账行详情：detailFields=表格未容纳的字段（要点卡/附件/AI建议等） */}
+      <Drawer
+        open={detailRow !== null}
+        onClose={() => setDetailRow(null)}
+        title={secondaryConfig ? `${secondaryConfig.title}详情` : '详情'}
+        width={520}
+      >
+        {detailRow && secondaryConfig?.detailFields && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {secondaryConfig.detailFields.map((field) => {
+              const value = formatCell(detailRow[field.dataIndex])
+              return (
+                <div key={field.dataIndex}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#a4a097', marginBottom: 2 }}>
+                    {field.title}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: '#43403a',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {value}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Drawer>
     </div>
   )
 }
