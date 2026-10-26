@@ -163,12 +163,12 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
     expect(await screen.findByText('作业明细全文内容')).toBeInTheDocument()
   })
 
-  it('健康度墙 17 个模块全展示且与菜单对齐；灰卡可点占位页、监督卡可点监督页', async () => {
+  it('健康度墙 18 个模块全展示且与菜单对齐；灰卡可点占位页、监督卡可点监督页', async () => {
     const user = userEvent.setup()
     renderWithQuery(<SafetyOverviewDashboard />)
 
     await screen.findByText('体系模块健康度')
-    expect(screen.getAllByTestId('module-card')).toHaveLength(17)
+    expect(screen.getAllByTestId('module-card')).toHaveLength(18)
     // 分组与一期菜单一致（8 个体系要素分组标题全渲染）
     for (const g of [
       '体系治理', '风险管控', '隐患治理', '人员管理',
@@ -180,7 +180,7 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
     for (const label of [
       '目标责任与绩效', '法规标准与规程', '风险分级管控', '隐患排查与治理',
       '人员准入与资质', '教育培训与行为管控', '职业健康管理', '设备设施管理',
-      '危化品与 MSDS 管理', '特殊作业管理', '风险作业报备', '监测报警与预警',
+      '危化品与 MSDS 管理', '特殊作业管理', '监护补贴申报', '风险作业报备', '监测报警与预警',
       'EHS 变更管理', '相关方管理', '应急管理', '全流程监督', '事故事件管理',
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument()

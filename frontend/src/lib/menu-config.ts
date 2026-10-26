@@ -129,6 +129,9 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "facilities", label: "设备设施管理", path: "/safety/facilities", group: "现场管理" },
       { key: "chemicals", label: "危化品与 MSDS 管理", path: "/safety/chemicals", group: "现场管理" },
       { key: "special-ops", label: "特殊作业管理", path: "/safety/special-ops", group: "现场管理" },
+      // 监护补贴申报数据（平台作业票+四/五/六部申报台账口径）与特殊作业台账分域：
+      // 2026-10-26 从特殊作业管理页迁出独立，避免「补贴申报≠特殊作业台账」语义混淆
+      { key: "subsidy", label: "监护补贴申报", path: "/safety/subsidy", group: "现场管理" },
       { key: "risk-reporting", label: "风险作业报备", path: "/safety/risk-reporting", group: "现场管理" },
       { key: "alarms", label: "监测报警与预警", path: "/safety/alarms", group: "现场管理" },
       { key: "ehs-change", label: "EHS 变更管理", path: "/safety/ehs-change", group: "现场管理" },

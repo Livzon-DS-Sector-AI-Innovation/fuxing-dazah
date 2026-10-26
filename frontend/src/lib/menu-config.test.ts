@@ -104,6 +104,7 @@ describe('safety 菜单结构（体系要素分组，3.0）', () => {
       '/safety/facilities',
       '/safety/chemicals',
       '/safety/special-ops',
+      '/safety/subsidy',
       '/safety/risk-reporting',
       '/safety/alarms',
       '/safety/ehs-change',
