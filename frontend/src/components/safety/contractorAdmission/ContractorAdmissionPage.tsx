@@ -39,6 +39,7 @@ import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/comp
 import type { Tone } from '@/components/ui-kit'
 import { T } from '../shared-styles'
 import { fileProxyUrl } from '../file-url'
+import { ContractorWorkersLedger } from './ContractorWorkersLedger'
 import {
   ADMISSION_CONCLUSION_UI,
   AI_REVIEW_STATUS_UI,
@@ -509,6 +510,9 @@ export function ContractorAdmissionPage() {
           }}
         />
       </SectionCard>
+
+      {/* 承包商在册人员副台账（3.x 平台实名台账+三组交叉；并行一次拉回） */}
+      <ContractorWorkersLedger />
 
       {/* 详情 Drawer */}
       <Drawer

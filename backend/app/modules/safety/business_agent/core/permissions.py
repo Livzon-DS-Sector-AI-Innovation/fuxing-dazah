@@ -23,6 +23,8 @@ ROLE_VIEWER = "viewer"  # 只读：仅查询
 TOOL_QUERY_HAZARDS = "query_hazards"
 TOOL_QUERY_HAZARD_STATS = "query_hazard_stats"
 TOOL_QUERY_CONTRACTOR_ADMISSIONS = "query_contractor_admissions"
+TOOL_QUERY_CONTRACTOR_WORKERS = "query_contractor_workers"  # 承包商在册人员（平台直读，打码）
+TOOL_QUERY_ORG_POSTS = "query_org_posts"  # 岗位字典（平台全员主档去重，无个人明细）
 TOOL_KNOWLEDGE_SEARCH = "knowledge_search"
 TOOL_WEB_SEARCH = "web_search"
 TOOL_QUERY_LATEST_REGULATIONS = "query_latest_regulations"  # view 区分爬取/收录视角（1-C 合并）
@@ -152,6 +154,8 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_QUERY_HAZARDS,
         TOOL_QUERY_HAZARD_STATS,
         TOOL_QUERY_CONTRACTOR_ADMISSIONS,
+        TOOL_QUERY_CONTRACTOR_WORKERS,
+        TOOL_QUERY_ORG_POSTS,
         TOOL_KNOWLEDGE_SEARCH,
         TOOL_WEB_SEARCH,
         TOOL_QUERY_LATEST_REGULATIONS,

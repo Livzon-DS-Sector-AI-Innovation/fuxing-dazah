@@ -32,6 +32,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "load_skill",
     ],
     "contractor_admission": ["query_contractor_admissions"],
+    # 3.x 平台关联 F1：在册人员副台账 + 岗位字典（按需，常驻不动）
+    "contractor_workers": ["query_contractor_workers", "query_org_posts"],
     "drill": [
         "query_drills",
         "generate_drill_plan", "sync_drill_plan_to_feishu",
@@ -122,6 +124,10 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "操规", "操作规程",
     ],
     "contractor_admission": ["准入", "承包商", "相关方", "劳务派遣", "外包单位"],
+    "contractor_workers": [
+        "在册", "花名册", "实名", "在场人员", "在厂人员", "外包",
+        "岗位字典", "有哪些岗位", "岗位有哪些", "厂里岗位",
+    ],
     "drill": ["演练", "应急", "预案", "逃生", "疏散"],
     "ops": [
         "审计", "AI调用", "token", "调用记录",

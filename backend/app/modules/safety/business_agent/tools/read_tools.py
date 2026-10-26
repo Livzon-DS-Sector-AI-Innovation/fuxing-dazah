@@ -2531,3 +2531,138 @@ async def query_standard_compliance(
     except Exception as e:  # noqa: BLE001 —— 工具边界兜底，报错回 Agent
         logger.exception("query_standard_compliance failed")
         return {"success": False, "error": f"查询失败: {e}"}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 承包商在册人员 / 岗位字典 — 只读工具（3.x 平台关联 F1，按需挂载）
+# ═══════════════════════════════════════════════════════════════════
+
+
+async def query_contractor_workers(
+    ctx: RunContext[SafetyDeps],
+    contractor: str | None = None,
+    work_type: str | None = None,
+    age_above: int | None = None,
+    insurance_missing: bool = False,
+    cert_missing_only: bool = False,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    """查询承包商在册人员（3.x 平台实名台账 + 三组交叉核验）。
+
+    「现场现在有哪些承包商的电工」「保险没覆盖的外包人员名单」直接可答。
+    口径统一「在册」（平台 bind/定位字段全空，不称「在场」）；身份证/手机
+    返回打码值（前 3 后 2，与 S14 副台账页面同口径）。
+
+    Args:
+        contractor: 承包商单位名（包含匹配，如"天目"）
+        work_type: 工种精确匹配（普工/焊工/电工/架子工/驾驶员等，平台实测值域）
+        age_above: 年龄阈值（≥该值的在册人员）
+        insurance_missing: 仅看无有效保险人员（未覆盖/未填报/已过期；
+            临期属已覆盖需关注，不算缺失——与统计卡口径一致）
+        cert_missing_only: 仅看特种工种且证书台账未见持证记录人员
+            （注意：dazah 证书台账主体是内部员工证书，未见记录≠无证）
+        page: 页码（从1开始）
+        page_size: 每页条数
+
+    Returns:
+        {status, fetched_at, message, stats, total, page, page_size, items: [...]}
+    """
+    from app.modules.safety.service.contractor_workers import open_service
+
+    payload = await open_service().get_payload()
+    if payload["status"] == "empty":
+        return {
+            "status": "empty",
+            "message": payload["message"],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "items": [],
+        }
+
+    # 口径与统计卡一致：expiring（临期）属「已覆盖但需关注」，不算缺失——
+    # 临期人员经 anomalies「保险临期」标签与「仅看异常」筛选可及
+    no_effective_insurance = ("uncovered", "unfiled", "expired")
+    workers = payload["workers"]
+    if contractor:
+        kw = contractor.strip()
+        workers = [w for w in workers if kw in (w.get("contractor_name") or "")]
+    if work_type:
+        workers = [w for w in workers if (w.get("work_type") or "") == work_type]
+    if age_above is not None:
+        workers = [
+            w for w in workers
+            if isinstance(w.get("age"), (int, float)) and w["age"] >= age_above
+        ]
+    if insurance_missing:
+        workers = [
+            w for w in workers
+            if w.get("insurance_status") in no_effective_insurance
+        ]
+    if cert_missing_only:
+        workers = [w for w in workers if w.get("cert_status") == "missing"]
+
+    total = len(workers)
+    start = max(page - 1, 0) * page_size
+    items = [
+        {
+            "name": w.get("name"),
+            "contractor_name": w.get("contractor_name"),
+            "work_type": w.get("work_type"),
+            "age": w.get("age"),
+            "join_job_date": w.get("join_job_date"),
+            "card_no_masked": w.get("card_no_masked"),
+            "phone_masked": w.get("phone_masked"),
+            "insurance_status": w.get("insurance_status"),
+            "insurance_expire_date": w.get("insurance_expire_date"),
+            "cert_status": w.get("cert_status"),
+            "cert_project": w.get("cert_project"),
+            "age_flag": w.get("age_flag"),
+            "anomalies": w.get("anomalies"),
+        }
+        for w in workers[start : start + page_size]
+    ]
+    return {
+        "status": payload["status"],
+        "fetched_at": payload["fetched_at"],
+        "message": payload["message"],
+        "stats": payload["stats"],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+
+
+async def query_org_posts(
+    ctx: RunContext[SafetyDeps],
+    dept: str | None = None,
+    keyword: str | None = None,
+) -> dict[str, Any]:
+    """查询全厂岗位字典（3.x 平台全员主档去重）。
+
+    「厂里冻干岗位有哪些」可答：返回岗位（postName 分组）× 部门列表 × 人数。
+    个人明细不返回（隐私口径，平台主档身份证为空）。
+
+    Args:
+        dept: 部门名（包含匹配，如"精制"）
+        keyword: 岗位名关键词（包含匹配，如"冻干"）
+
+    Returns:
+        {status, fetched_at, message, total, posts: [{post_name, dept_names, headcount}]}
+    """
+    from app.modules.safety.service.org_directory import open_org_posts_service
+
+    payload = await open_org_posts_service().get_payload(dept=dept, keyword=keyword)
+    posts = payload["posts"]
+    # 防刷屏：超出 50 条截断并提示（岗位字典全量约 300+，按需收窄关键词）
+    capped = posts[:50]
+    return {
+        "status": payload["status"],
+        "fetched_at": payload["fetched_at"],
+        "message": payload["message"],
+        "total": len(posts),
+        "truncated": len(posts) > len(capped),
+        "posts": capped,
+    }

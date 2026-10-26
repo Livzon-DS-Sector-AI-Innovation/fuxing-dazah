@@ -712,6 +712,67 @@ class WorkTicketPlatformClient:
     # 分页防御上限（同上注释；类属性便于测试覆写）
     _CONTRACTOR_USER_MAX_PAGES = 50
 
+    # ── 系统主档（tiji-system）全员分页：岗位字典（F1）专用 ──────────────
+    #
+    # 2026-10-26 实测：GET /api/tiji-system/user/page?current&size（blade-auth
+    # 平台 token，100/页共 14 页，total=1400）；postName/deptName/jobNo/
+    # nickname 实，idCardNo 恒空——只作部门×岗位字典，不作个人主数据。
+    ORG_USER_PAGE_URL = "/api/tiji-system/user/page"
+
+    async def list_org_users(self, *, page_size: int = 100) -> list[dict[str, Any]]:
+        """分页拉取全员主档（只读直读；岗位字典消费，个人明细不落库）。
+
+        Returns:
+            主档全量记录 list[dict]（字段同平台返回：nickname/jobNo/
+            accountName/deptName/postName/idCardNo(空)…）。
+
+        Raises:
+            RuntimeError: 平台接口返回非成功 code 或分页超出防御上限。
+        """
+        pt, _ = await self._ensure_tokens()
+        headers = {
+            "Blade-Auth": f"bearer {pt}",
+            "Tenant-Id": platform_tenant_id(),
+        }
+
+        records: list[dict[str, Any]] = []
+        current = 1
+        while True:
+            params = {"current": current, "size": page_size}
+            url = f"{platform_base_url()}{self.ORG_USER_PAGE_URL}"
+            resp = await self._request_json("GET", url, headers=headers, params=params)
+            if resp.get("code") not in (0, 200):
+                raise RuntimeError(
+                    f"全员主档接口返回失败 code={resp.get('code')}: "
+                    f"{str(resp.get('msg'))[:200]}"
+                )
+            data = resp.get("data")
+            if not isinstance(data, dict):
+                raise RuntimeError(f"全员主档响应缺少 data: {resp!r}")
+            page_records = data.get("records")
+            if not isinstance(page_records, list):
+                page_records = []
+            records.extend(item for item in page_records if isinstance(item, dict))
+            total = data.get("total")
+            try:
+                total_int = int(total) if total is not None else len(records)
+            except (TypeError, ValueError):
+                total_int = len(records)
+            if len(records) >= total_int or not page_records:
+                break
+            if current >= self._ORG_USER_MAX_PAGES:
+                raise RuntimeError(
+                    f"全员主档分页超出防御上限（{self._ORG_USER_MAX_PAGES} 页，"
+                    f"已取 {len(records)}/{total_int}），疑似平台 total 异常"
+                )
+            current += 1
+
+        logger.info("全员主档拉取完成：%d 人", len(records))
+        return records
+
+    # 分页防御上限（1400 人/100 每页=14 页；类属性便于测试覆写）
+    _ORG_USER_MAX_PAGES = 30
+
 
 __all__ = [
     "TICKET_TYPE_KEYS",
