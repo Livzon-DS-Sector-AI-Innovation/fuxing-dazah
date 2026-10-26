@@ -8,6 +8,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DatePicker, Select, Table } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import {
+  FileDoneOutlined, MinusCircleOutlined, PayCircleOutlined,
+  TeamOutlined, WarningOutlined,
+} from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 
 import {
@@ -171,49 +175,58 @@ export default function SubsidyPanel() {
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── 查询条件 ── */}
-      <SectionCard title="监护补贴查询" description="级别以台账登记为准，未登级别暂按 A 证计入；提炼六部台账无级别列，全员待核对">
-        <div className="flex flex-wrap items-center gap-3">
-          <Select
-            style={{ minWidth: 180 }}
-            placeholder="选择部门"
-            value={department || undefined}
-            options={sources.map((s) => ({ value: s.department, label: s.department }))}
-            onChange={setDepartment}
-          />
-          <DatePicker
-            picker="month"
-            value={month}
-            allowClear={false}
-            disabledDate={(d) => d.isBefore(MIN_MONTH, 'month') || d.isAfter(dayjs(), 'month')}
-            onChange={(v) => v && setMonth(v)}
-          />
+      {/* ── 查询条件（单行紧凑：说明左、筛选右） ── */}
+      <SectionCard title="监护补贴查询">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span style={{ color: UI.steel, fontSize: 12 }}>
+            级别以台账登记为准，未登级别暂按 A 证计入；提炼六部台账无级别列，全员待核对
+          </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <Select
+              style={{ minWidth: 180 }}
+              placeholder="选择部门"
+              value={department || undefined}
+              options={sources.map((s) => ({ value: s.department, label: s.department }))}
+              onChange={setDepartment}
+            />
+            <DatePicker
+              picker="month"
+              value={month}
+              allowClear={false}
+              disabledDate={(d) => d.isBefore(MIN_MONTH, 'month') || d.isAfter(dayjs(), 'month')}
+              onChange={(v) => v && setMonth(v)}
+            />
+          </div>
         </div>
       </SectionCard>
 
       {/* ── 汇总卡 ── */}
       {stats && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <StatCard label="计入条数" value={stats.matched} />
-          <StatCard label="监护人数" value={stats.guardians} />
+          <StatCard label="计入条数" value={stats.matched} icon={<FileDoneOutlined />} />
+          <StatCard label="监护人数" value={stats.guardians} icon={<TeamOutlined />} tone="info" />
           <StatCard
             label="补贴总额（折算后）"
             value={stats.adjusted_total}
             sub={stats.adjusted_total !== stats.total_amount
               ? `折算前 ${stats.total_amount} 元（B证×0.5）`
               : 'A 证全额，无 B 证折算'}
+            icon={<PayCircleOutlined />}
+            tone="primary"
           />
           <StatCard
             label="待核对"
             value={stats.unmatched_people}
             sub={`未登级别 ${stats.unmatched} 条，暂按 A 证`}
             tone={stats.unmatched_people > 0 ? 'warn' : 'default'}
+            icon={<WarningOutlined />}
           />
           <StatCard
             label="跳过"
             value={stats.skipped}
             sub="缺时间/无法解析/重叠去重"
             tone={stats.skipped > 0 ? 'warn' : 'default'}
+            icon={<MinusCircleOutlined />}
           />
         </div>
       )}

@@ -217,11 +217,6 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── 工具行（页头已上提至页级 page-client，刷新按钮保留在此） ── */}
-      <div className="flex justify-end">
-        <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新">刷新</Button>
-      </div>
-
       {/* ── 八类作业票统计（点击卡片筛选台账） ── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {OP_TYPE_KEYS.map((key) => {
@@ -277,7 +272,14 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
       </SectionCard>
 
       {/* ── 作业台账（筛选栏并入卡头）── */}
-      <SectionCard title="作业台账" description={`八类特殊作业记录（共 ${total} 条）`}>
+      <SectionCard
+        title="作业台账"
+        description={`八类特殊作业记录（共 ${total} 条）`}
+        action={
+          <Button size="small" type="text" icon={<ReloadOutlined />}
+            onClick={refresh} title="刷新台账与统计" />
+        }
+      >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
           <Space wrap>
             <Select allowClear placeholder="作业类型" style={{ width: 130 }} value={opType} onChange={setOpType}
