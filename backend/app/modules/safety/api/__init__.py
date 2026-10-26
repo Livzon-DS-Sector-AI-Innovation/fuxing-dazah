@@ -15,11 +15,11 @@ from app.modules.safety.api.chemical_inventory import chemical_inventory_router
 from app.modules.safety.api.contractor_admission import contractor_admission_router
 from app.modules.safety.api.contractor_workers import contractor_workers_router
 from app.modules.safety.api.domain_pages import domain_pages_router
-from app.modules.safety.api.standard_check import standard_check_router
 from app.modules.safety.api.ehs_changes import ehs_changes_router
 from app.modules.safety.api.emergency_drills import emergency_drills_router
 from app.modules.safety.api.enums import enums_router
 from app.modules.safety.api.facilities import facilities_router
+from app.modules.safety.api.facility_map import facility_map_router
 from app.modules.safety.api.feishu import feishu_router
 from app.modules.safety.api.files import files_router
 from app.modules.safety.api.fire_alarm import fire_alarm_router
@@ -46,6 +46,8 @@ from app.modules.safety.api.special_operation_daily_report import (
 from app.modules.safety.api.special_operation_reports import (
     special_operation_reports_router,
 )
+from app.modules.safety.api.standard_check import standard_check_router
+from app.modules.safety.api.subsidy import subsidy_router
 from app.modules.safety.api.telemetry import telemetry_router
 from app.modules.safety.api.training_behavior import training_behavior_router
 from app.modules.safety.api.workticket_review import workticket_review_router
@@ -56,6 +58,7 @@ from app.modules.safety.regulation_ingest.monitor_api import regulation_monitor_
 router = APIRouter()
 
 router.include_router(ai_audits_router)
+router.include_router(subsidy_router)
 router.include_router(oh_hazard_monitors_router)
 router.include_router(bitable_config_router)
 router.include_router(app_config_router)
@@ -71,6 +74,7 @@ router.include_router(ehs_changes_router)
 router.include_router(emergency_drills_router)
 router.include_router(enums_router)
 router.include_router(facilities_router)
+router.include_router(facility_map_router)
 router.include_router(feishu_router)
 router.include_router(files_router)
 router.include_router(fire_alarm_router)

@@ -1,7 +1,8 @@
 'use client'
 
-// 特殊作业管理 — ui-kit 视觉（PageHeader / StatCard / SectionCard / StatusTag / EmptyGuide）
+// 特殊作业管理·台账 Tab — ui-kit 视觉（StatCard / SectionCard / StatusTag / EmptyGuide）
 // 数据流保持不变（本地 state + server actions，不迁 react-query）。
+// 页头在页级 page-client（Tabs 骨架），本组件作为 Tab1 内容嵌入。
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
@@ -26,7 +27,7 @@ import type {
   SpecialOperationLedgerStats,
   SpecialOperationReport,
 } from '@/types/safety'
-import { EmptyGuide, PageHeader, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
+import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
 import type { Tone } from '@/components/ui-kit'
 
 import { OP_LEVEL_LABELS, OP_TYPE_CONFIG, OP_TYPE_KEYS } from './specialOpsConstants'
@@ -216,13 +217,10 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── 页头 ── */}
-      <PageHeader
-        breadcrumb={['安全管理', '特殊作业管理']}
-        title="特殊作业管理"
-        description="八类特殊作业票台账与当日作业态势"
-        actions={<Button icon={<ReloadOutlined />} onClick={refresh} title="刷新" />}
-      />
+      {/* ── 工具行（页头已上提至页级 page-client，刷新按钮保留在此） ── */}
+      <div className="flex justify-end">
+        <Button icon={<ReloadOutlined />} onClick={refresh} title="刷新">刷新</Button>
+      </div>
 
       {/* ── 八类作业票统计（点击卡片筛选台账） ── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

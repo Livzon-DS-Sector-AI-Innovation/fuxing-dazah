@@ -1,4 +1,4 @@
-import SpecialOpsManagement from '@/components/safety/SpecialOpsManagement'
+import SpecialOpsPageClient from './page-client'
 import { getSpecialOperationLedgerStats } from '@/actions/safety'
 import type { SpecialOperationLedgerStats } from '@/types/safety'
 
@@ -11,5 +11,5 @@ export default async function SpecialOpsPage() {
     if (res.code === 200) initialStats = res.data || []
   } catch { /* client will refetch */ }
 
-  return <SpecialOpsManagement initialStats={initialStats} />
+  return <SpecialOpsPageClient initialStats={initialStats} />
 }
