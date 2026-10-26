@@ -257,6 +257,18 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "description": "上一自然月（1 日~月末）消防报警分析月报（重复问题/原因归纳/整改建议 + @部门负责人），每月 1 日 08:30 生成，投安全速递总卡（总卡关闭时发独立群卡）",
     },
+    # ── 监护补贴月报（每月 1 日 08:30，2026-10-26 拍板；参考消防月报私发名单）──
+    {
+        "name": "监护补贴月报",
+        "hour": 8, "minute": 30, "dom": 1,  # 每月 1 日，与消防月报同刻（拉台账轻，不抢平台窗口）
+        # 补发窗口：当日 23:30 截止（失败自动重试）
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "target_type": "person",  # 私发个人（提炼四部杨昆/五部蔡嘉旺/六部陈美丽，DEPT_CONFIG 名单）
+        "description": "上一自然月监护补贴统计：提炼四/五/六部台账各生成 Excel（级别以台账"
+                       "为准、无记录部门跳过不空发），私发各部门分管安全员（DEPARTMENT_CONFIG "
+                       "safety_officer：四部杨昆、五部蔡嘉旺、六部陈美丽），"
+                       "开关 SAFETY_SUBSIDY_MONTHLY_DM_ENABLED 默认开",
+    },
     # ── 中控报警日报（每日 17:00）──
     {
         "name": "中控报警日报",
@@ -550,7 +562,7 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
 
     返回值=留痕依据：False=空跑（非匹配日/未到触发条件，不计运行日志）；
     True=已执行；SKIP_NO_SOURCE 哨兵=数据源未登记的如实跳过（no_source 留痕）。
-    
+
 
     时序：先记录 failed 状态（防 30s tick 内重复启动）→ 执行 → 成功改 success；
     失败保留 failed，由后续 tick 在补发窗口内自动重试，达阈值发告警给管理员。
@@ -600,6 +612,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             await _run_fire_alarm_daily_dm()
         elif job_name == "消防报警月报":
             await _run_fire_alarm_monthly_report(chat_id=chat_id)
+        elif job_name == "监护补贴月报":
+            await _run_subsidy_monthly_report()
         elif job_name == "中控报警日报":
             await _run_central_alarm_daily_report(chat_id=chat_id)
         elif job_name == "中控报警日报私发":
@@ -927,6 +941,28 @@ async def _run_fire_alarm_monthly_report(chat_id: str | None = None) -> None:
     logger.info(
         "  消防报警月报完成: %s~%s total=%d pushed=%d",
         result.month_start, result.target_date, result.total, pushed,
+    )
+
+
+async def _run_subsidy_monthly_report() -> None:
+    """监护补贴月报定时任务（每月 1 日 08:30）：上一自然月台账三部门 Excel 私发分管安全员。
+
+    复用 scheduler-ready 入口 run_monthly_subsidy_dispatch（独立 session）；
+    year/month 缺省取上一完整自然月（1 日触发 → 上月）。台账拉取失败向上抛出，
+    由调度器补发窗口重试；开关关闭时入口返回 None 直接跳过。
+    """
+    from app.modules.safety.service.subsidy_dispatch import (
+        run_monthly_subsidy_dispatch,
+    )
+
+    stats = await run_monthly_subsidy_dispatch()
+    if stats is None:
+        logger.info("  监护补贴月报跳过（开关未启用）")
+        return
+    logger.info(
+        "  监护补贴月报完成: sent=%d skipped_empty=%d errors=%d unresolved=%d",
+        stats.get("sent", 0), stats.get("skipped_empty", 0),
+        stats.get("errors", 0), stats.get("unresolved", 0),
     )
 
 
