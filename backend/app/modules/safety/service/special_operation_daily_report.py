@@ -1773,6 +1773,25 @@ class SpecialOperationDailyReportService:
 
     async def get_stats(self, target_date: date | None = None) -> dict:
         target_date = target_date or date.today()
+        # ── 直读分支（2026-10-26 修复）：与日报/速递同源现算 ──
+        # 镜像同步退役后镜像表停供，本统计若只读镜像则「今日作业/风险」恒 0；
+        # 直读开启时拉一览表当日行，excluded（撤回等）不入统计，口径=速递卡。
+        from app.modules.safety.service.special_op_direct import config as direct_config
+
+        if direct_config.direct_enabled():
+            from app.modules.safety.service.special_op_direct.bitable_repo import (
+                fetch_day_views,
+            )
+
+            views = await fetch_day_views(target_date)
+            effective = [v for v in views if not v.is_excluded]
+            return {
+                "date": target_date.isoformat(),
+                "total": len(effective),
+                "high": sum(1 for v in effective if v.daily_risk_level == "high"),
+                "medium": sum(1 for v in effective if v.daily_risk_level == "medium"),
+                "low": sum(1 for v in effective if v.daily_risk_level == "low"),
+            }
         reports = await self.get_reports_by_date(target_date, include_excluded=False)
         return {
             "date": target_date.isoformat(),
