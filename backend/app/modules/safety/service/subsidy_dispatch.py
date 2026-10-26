@@ -6,10 +6,12 @@
   一份上一自然月监护补贴 Excel（口径与 Agent 生成工具一致：级别以台账登记为准、
   未登级别暂按 A 证计入并进待核对、同日重叠去重、B 证 0.5 系数折算实发合计）；
   当月无计入记录的部门跳过（不空发）。
-- **收件名单**：DEPARTMENT_CONFIG（``feishu/dept_config.py`` 人工维护权威名单）
-  的 ``safety_officer`` —— 四部林锴彬、五部蔡嘉旺、六部孙长宽（2026-10-26 用户
-  更新：四部杨昆→林锴彬、六部陈美丽→孙长宽）；部门未配置安全员
-  时该部门跳过并记 unresolved。
+- **收件名单**：**补贴业务专属名单**（``SUBSIDY_DM_OVERRIDES``，2026-10-26 用户
+  拍板：该业务四部由林锴彬、六部由孙长宽负责）优先；未覆盖部门回退
+  DEPARTMENT_CONFIG（``feishu/dept_config.py`` 人工维护权威名单）的
+  ``safety_officer``（五部即蔡嘉旺）。**不改全局分管安全员名单**——消防私发/
+  隐患督办@提及/危化品预警等其他消费方仍按原名单；收件人解析失败时该部门
+  跳过并记 unresolved。
 - **身份链路**：与中控日报私发同款 ``feishu.mention.resolve_open_ids``
   （identity → 邮箱 batch_get_id / user_id 反查 → **安全应用作用域 open_id**，
   2026-09-30 真机已验证三人可解析），卡片 ``send_user_card``、Excel
@@ -64,8 +66,20 @@ def previous_month(today: date | None = None) -> tuple[int, int]:
     return (t.year - 1, 12) if t.month == 1 else (t.year, t.month - 1)
 
 
-def dept_safety_officer(department: str) -> str:
-    """部门 → DEPARTMENT_CONFIG 分管安全员姓名（未配置返回空串）。"""
+# 补贴业务专属收件人：部门 → 姓名（2026-10-26 用户拍板，该业务由下列人员负责）。
+# 只作用于月报私发，不改 DEPARTMENT_CONFIG 全局分管安全员名单；
+# 未覆盖部门回退该部门 safety_officer。
+SUBSIDY_DM_OVERRIDES: dict[str, str] = {
+    "提炼工程四部": "林锴彬",
+    "提炼工程六部": "孙长宽",
+}
+
+
+def subsidy_recipient(department: str) -> str:
+    """补贴月报收件人：业务专属名单优先，未覆盖回退 DEPARTMENT_CONFIG 安全员。"""
+    override = SUBSIDY_DM_OVERRIDES.get(department, "").strip()
+    if override:
+        return override
     return (DEPARTMENT_CONFIG.get(department, {}).get("safety_officer") or "").strip()
 
 
@@ -158,7 +172,7 @@ async def run_monthly_subsidy_dispatch(
 
     # ── ② 收件人 union_id 解析（姓名 → 邮箱 → batch_get_id，与消防私发同链）──
     officers = {
-        source.department: dept_safety_officer(source.department)
+        source.department: subsidy_recipient(source.department)
         for source, *_ in dept_payload
     }
     names = {n for n in officers.values() if n}
@@ -210,7 +224,8 @@ __all__ = [
     "run_monthly_subsidy_dispatch",
     "dispatch_enabled",
     "previous_month",
-    "dept_safety_officer",
+    "subsidy_recipient",
+    "SUBSIDY_DM_OVERRIDES",
     "build_monthly_excel",
     "build_summary_card",
 ]

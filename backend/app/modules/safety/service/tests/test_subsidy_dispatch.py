@@ -12,15 +12,16 @@ from typing import Any
 
 import pytest
 
+from app.modules.safety.feishu.dept_config import DEPARTMENT_CONFIG
 from app.modules.safety.scheduler import SCHEDULED_JOBS
 from app.modules.safety.service import subsidy_dispatch
 from app.modules.safety.service.subsidy_dept_ledgers import LEDGER_SOURCES
 from app.modules.safety.service.subsidy_dispatch import (
     build_monthly_excel,
     build_summary_card,
-    dept_safety_officer,
     previous_month,
     run_monthly_subsidy_dispatch,
+    subsidy_recipient,
 )
 
 
@@ -73,12 +74,20 @@ def test_previous_month() -> None:
     assert previous_month(date(2026, 10, 26)) == (2026, 9)
 
 
-def test_dept_safety_officer_matches_dept_config() -> None:
-    """分管安全员名单来源 = DEPARTMENT_CONFIG（2026-10-26 更新四部/六部）。"""
-    assert dept_safety_officer("提炼工程四部") == "林锴彬"
-    assert dept_safety_officer("提炼工程五部") == "蔡嘉旺"
-    assert dept_safety_officer("提炼工程六部") == "孙长宽"
-    assert dept_safety_officer("不存在的部门") == ""
+def test_subsidy_recipient_override_scoped_to_business() -> None:
+    """补贴收件人=业务专属名单优先（四部林锴彬/六部孙长宽），不改全局分管安全员。
+
+    2026-10-26 用户口径：两人只负责补贴业务，DEPARTMENT_CONFIG 的
+    safety_officer（四部杨昆/六部陈美丽）保持原样供其他消费方使用。
+    """
+    assert subsidy_recipient("提炼工程四部") == "林锴彬"
+    assert subsidy_recipient("提炼工程六部") == "孙长宽"
+    # 未覆盖部门回退 DEPARTMENT_CONFIG safety_officer
+    assert subsidy_recipient("提炼工程五部") == "蔡嘉旺"
+    assert subsidy_recipient("不存在的部门") == ""
+    # 全局名单未被补贴业务改写（过度修改回归防线）
+    assert DEPARTMENT_CONFIG["提炼工程四部"]["safety_officer"] == "杨昆"
+    assert DEPARTMENT_CONFIG["提炼工程六部"]["safety_officer"] == "陈美丽"
 
 
 def test_build_monthly_excel_and_empty_skip() -> None:
@@ -151,7 +160,7 @@ async def test_dispatch_sends_per_dept_and_skips_empty(monkeypatch: pytest.Monke
     stats = await run_monthly_subsidy_dispatch(year=2026, month=9)
 
     assert stats == {"sent": 2, "skipped_empty": 1, "errors": 0, "unresolved": 0}
-    # 收件人 = DEPARTMENT_CONFIG 分管安全员（open_id 链）
+    # 收件人 = 补贴业务专属名单（open_id 链）
     assert {uid for uid, _ in cards} == {"on_林锴彬", "on_孙长宽"}
     assert {name for _, _, name in files} == {
         "提炼工程四部 2026年9月 监护补贴统计.xlsx",
