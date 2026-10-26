@@ -7,7 +7,8 @@
   未登级别暂按 A 证计入并进待核对、同日重叠去重、B 证 0.5 系数折算实发合计）；
   当月无计入记录的部门跳过（不空发）。
 - **收件名单**：DEPARTMENT_CONFIG（``feishu/dept_config.py`` 人工维护权威名单）
-  的 ``safety_officer`` —— 四部杨昆、五部蔡嘉旺、六部陈美丽；部门未配置安全员
+  的 ``safety_officer`` —— 四部林锴彬、五部蔡嘉旺、六部孙长宽（2026-10-26 用户
+  更新：四部杨昆→林锴彬、六部陈美丽→孙长宽）；部门未配置安全员
   时该部门跳过并记 unresolved。
 - **身份链路**：与中控日报私发同款 ``feishu.mention.resolve_open_ids``
   （identity → 邮箱 batch_get_id / user_id 反查 → **安全应用作用域 open_id**，

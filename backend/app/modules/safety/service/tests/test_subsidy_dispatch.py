@@ -74,10 +74,10 @@ def test_previous_month() -> None:
 
 
 def test_dept_safety_officer_matches_dept_config() -> None:
-    """分管安全员名单来源 = DEPARTMENT_CONFIG（2026-10-02 消防月报同源）。"""
-    assert dept_safety_officer("提炼工程四部") == "杨昆"
+    """分管安全员名单来源 = DEPARTMENT_CONFIG（2026-10-26 更新四部/六部）。"""
+    assert dept_safety_officer("提炼工程四部") == "林锴彬"
     assert dept_safety_officer("提炼工程五部") == "蔡嘉旺"
-    assert dept_safety_officer("提炼工程六部") == "陈美丽"
+    assert dept_safety_officer("提炼工程六部") == "孙长宽"
     assert dept_safety_officer("不存在的部门") == ""
 
 
@@ -151,8 +151,8 @@ async def test_dispatch_sends_per_dept_and_skips_empty(monkeypatch: pytest.Monke
     stats = await run_monthly_subsidy_dispatch(year=2026, month=9)
 
     assert stats == {"sent": 2, "skipped_empty": 1, "errors": 0, "unresolved": 0}
-    # 收件人 = DEPARTMENT_CONFIG 分管安全员（union_id 链）
-    assert {uid for uid, _ in cards} == {"on_杨昆", "on_陈美丽"}
+    # 收件人 = DEPARTMENT_CONFIG 分管安全员（open_id 链）
+    assert {uid for uid, _ in cards} == {"on_林锴彬", "on_孙长宽"}
     assert {name for _, _, name in files} == {
         "提炼工程四部 2026年9月 监护补贴统计.xlsx",
         "提炼工程六部 2026年9月 监护补贴统计.xlsx",

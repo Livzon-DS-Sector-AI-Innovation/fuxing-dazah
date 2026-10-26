@@ -263,10 +263,10 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "hour": 8, "minute": 30, "dom": 1,  # 每月 1 日，与消防月报同刻（拉台账轻，不抢平台窗口）
         # 补发窗口：当日 23:30 截止（失败自动重试）
         "retry_until_hour": 23, "retry_until_minute": 30,
-        "target_type": "person",  # 私发个人（提炼四部杨昆/五部蔡嘉旺/六部陈美丽，DEPT_CONFIG 名单）
+        "target_type": "person",  # 私发个人（提炼四部林锴彬/五部蔡嘉旺/六部孙长宽，DEPT_CONFIG 名单）
         "description": "上一自然月监护补贴统计：提炼四/五/六部台账各生成 Excel（级别以台账"
                        "为准、无记录部门跳过不空发），私发各部门分管安全员（DEPARTMENT_CONFIG "
-                       "safety_officer：四部杨昆、五部蔡嘉旺、六部陈美丽），"
+                       "safety_officer：四部林锴彬、五部蔡嘉旺、六部孙长宽），"
                        "开关 SAFETY_SUBSIDY_MONTHLY_DM_ENABLED 默认开",
     },
     # ── 中控报警日报（每日 17:00）──
