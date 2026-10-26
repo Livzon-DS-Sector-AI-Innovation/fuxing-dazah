@@ -1,12 +1,14 @@
-"""监护补贴统计（平台作业票数据源）Agent 工具。
+"""监护补贴统计（部门台账 + 平台作业票双数据源）Agent 工具。
 
 替换旧 4 个工具（import_subsidy_records / fetch_subsidy_bitable /
 calculate_guardian_subsidy / export_subsidy_report 及文件/bitable 解析辅助）为
 分步确认的 2 个新工具：
 
 - ``preview_guardian_subsidy``（**只读**，TOOL_KIND=False，直接执行）：
-  按目标月 ±1 月窗口从平台拉 8 类标准作业票 → Parser 归一化 → 证书映射查询 →
-  ``SubsidyPlanBuilder.build`` → 返回预览 dict（票数/监护人/待核对/跳过/候选部门），
+  按部门关键词选源（提炼四/五/六部 → 部门监护人台账 Bitable，见
+  ``service/subsidy_dept_ledgers.py``；其余部门 → 目标月 ±1 月窗口平台拉 8 类
+  标准作业票 → Parser 归一化 → 证书映射查询 → ``SubsidyPlanBuilder.build``）→
+  返回预览 dict（票数/监护人/待核对/跳过/候选部门/数据源），
   附一句「确认计算」话术，无任何副作用。
 - ``generate_guardian_subsidy``（**写入**，TOOL_KIND=True，requires_approval=True）：
   以相同入参幂等重拉重算 → ``SubsidyService.calculate`` →
@@ -14,8 +16,8 @@ calculate_guardian_subsidy / export_subsidy_report 及文件/bitable 解析辅�
   回传当前飞书会话（``ctx.deps.chat_id``）；web 渠道（chat_id=None）返回降级提示 +
   base64 兜底。
 
-核心计算/整理逻辑均在 ``service/subsidy_plan.py`` 与 ``service/subsidy.py``，
-本文件只做参数适配/拉数/编排/降级，不写业务规则。
+核心计算/整理逻辑均在 ``service/subsidy_plan.py``、``service/subsidy_dept_ledgers.py``
+与 ``service/subsidy.py``，本文件只做参数适配/拉数/编排/降级，不写业务规则。
 """
 
 from __future__ import annotations
@@ -30,6 +32,11 @@ from pydantic_ai import RunContext
 from app.modules.safety.business_agent.schemas import SafetyDeps
 from app.modules.safety.feishu.chat_sender import send_file_to_chat
 from app.modules.safety.service.subsidy import SubsidyService, b_cert_adjusted_total
+from app.modules.safety.service.subsidy_dept_ledgers import (
+    build_ledger_plan,
+    fetch_ledger_rows,
+    match_ledger_source,
+)
 from app.modules.safety.service.subsidy_plan import (
     ReviewNotes,
     SubsidyPlan,
@@ -143,25 +150,86 @@ async def _build_plan(
 
 
 def _confirm_suggestion(
-    dept_keyword: str, year: int, month: int, plan: SubsidyPlan, need_selection: bool
+    dept_keyword: str,
+    year: int,
+    month: int,
+    plan: SubsidyPlan,
+    need_selection: bool,
+    fetched_label: str = "",
+    level_note: str = "",
 ) -> str:
     """一句话话术：Agent 引述给用户确认（含「确认计算」指令示例）。"""
     levels = {r.guardian_name: r.guardian_level for r in plan.records}
     a_cert = sum(1 for v in levels.values() if v == "A证")
     b_cert = sum(1 for v in levels.values() if v == "B证")
+    fetched = fetched_label or f"窗口拉取 {plan.total_tickets} 张作业票"
     text = (
         f"以上为「{dept_keyword}」{year}年{month}月监护补贴预览："
-        f"窗口拉取 {plan.total_tickets} 张作业票，{plan.matched_tickets} 张计入补贴"
+        f"{fetched}，{plan.matched_tickets} 条计入补贴"
         f"（监护人 {len(levels)} 名：A证 {a_cert} 名、B证 {b_cert} 名；"
-        f"按监护人所在部门归集），"
-        f"待核对 {plan.unmatched_tickets} 张（{len(plan.unmatched)} 人未匹配证书，已暂按A证计入），"
-        f"跳过 {plan.skipped_tickets} 张（目标域内）。"
+        f"按监护人所在部门归集{level_note}），"
+        f"待核对 {plan.unmatched_tickets} 条（{len(plan.unmatched)} 人未登记级别，已暂按A证计入），"
+        f"跳过 {plan.skipped_tickets} 条（目标域内）。"
     )
     if need_selection:
         text += "当前部门关键词未命中，请从候选部门中选择或换更精准的部门词后重试。"
     else:
         text += "确认无误请回复「确认计算」；如需调整，请告知新的部门或月份。"
     return text
+
+
+async def _resolve_plan(
+    db: Any, dept_keyword: str, year: int, month: int
+) -> tuple[SubsidyPlan | None, dict[str, Any] | None, dict[str, Any]]:
+    """按部门关键词选数据源并产出补贴计划（preview/generate 共用）。
+
+    - 提炼四/五/六部 → **部门台账源**（Bitable；级别以台账登记为准，不走
+      平台作业票，不查证书库）；fetched_label/level_note 为台账口径话术；
+    - 其余部门 → 平台作业票源（±1 月窗口 + 按监护人所在部门归集）。
+
+    Returns:
+        (plan, error_dict, meta)；error 非 None 时 plan 为 None。
+        meta: source / departments / matched_depts / fetched_label / level_note。
+    """
+    source = match_ledger_source(dept_keyword)
+    if source is not None:
+        try:
+            rows = await fetch_ledger_rows(source)
+        except Exception as exc:
+            logger.warning(
+                "%s监护台账拉取失败 year=%s month=%s err=%s",
+                source.department, year, month, exc,
+            )
+            return None, {
+                "error": f"{source.department}监护台账拉取失败，请稍后重试或联系管理员。",
+                "error_type": "ledger_fetch_error",
+                "detail": str(exc),
+            }, {}
+        plan = build_ledger_plan(source, rows, year, month, uncertified_level=_UNCERTIFIED_LEVEL)
+        meta = {
+            "source": source,
+            "departments": [source.department],
+            "matched_depts": [source.department],
+            "fetched_label": f"台账拉取 {plan.total_tickets} 行登记",
+            "level_note": "；数据源为部门监护人台账，证书级别以台账登记为准",
+        }
+        return plan, None, meta
+
+    tickets, err = await _fetch_and_parse(year, month)
+    if err:
+        return None, err, {}
+    assert tickets is not None  # err 为 None 时必有拉取结果
+
+    plan = await _build_plan(db, tickets, dept_keyword, year, month)
+    keyword = dept_keyword.lower()
+    meta = {
+        "source": None,
+        "departments": sorted(plan.departments),
+        "matched_depts": [d for d in sorted(plan.departments) if keyword in d.lower()],
+        "fetched_label": f"窗口拉取 {plan.total_tickets} 张作业票",
+        "level_note": "",
+    }
+    return plan, None, meta
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -175,12 +243,14 @@ async def preview_guardian_subsidy(
     year: int,
     month: int,
 ) -> dict[str, Any]:
-    """监护补贴预览（只读无副作用）：按监护人所在部门归集平台作业票，返回待确认清单。
+    """监护补贴预览（只读无副作用）：按部门选数据源（台账/平台）归集，返回待确认清单。
 
+    提炼四部/五部/六部 → 部门监护人台账（Bitable，证书级别以台账登记为准）；
+    其余部门 → 按监护人所在部门归集平台作业票。
     用户提出"整理/统计某部门某月监护人补贴"时先调本工具（不要直接生成 Excel）；
     返回的 confirm_suggestion 可直接引述，请用户回复「确认计算」后再调生成工具。
-    无证监护人暂按 A 证计入金额并进 unmatched 待核对名单；部门词包含匹配
-    （"环保"可命中"环保工程中心"），未命中时返回 departments 候选清单与
+    未登记级别监护人暂按 A 证计入金额并进 unmatched 待核对名单；平台源部门词
+    包含匹配（"环保"可命中"环保工程中心"），未命中时返回 departments 候选清单与
     need_department_selection=true。
 
     Args:
@@ -198,12 +268,10 @@ async def preview_guardian_subsidy(
     if err:
         return err
 
-    tickets, err = await _fetch_and_parse(year, month)
+    plan, err, meta = await _resolve_plan(ctx.deps.db, dept_keyword, year, month)
     if err:
         return err
-    assert tickets is not None  # err 为 None 时必有拉取结果
-
-    plan = await _build_plan(ctx.deps.db, tickets, dept_keyword, year, month)
+    assert plan is not None
 
     # ── 监护人聚合（去重 + 级别 + 票数） ──
     guardians: dict[str, dict[str, Any]] = {}
@@ -216,14 +284,18 @@ async def preview_guardian_subsidy(
 
     a_cert = sum(1 for g in guardians.values() if g["level"] == "A证")
     b_cert = sum(1 for g in guardians.values() if g["level"] == "B证")
-    departments = sorted(plan.departments)
-    keyword = dept_keyword.lower()
-    matched_depts = [d for d in departments if keyword in d.lower()]
+    departments: list[str] = meta["departments"]
+    matched_depts: list[str] = meta["matched_depts"]
+    is_ledger = meta["source"] is not None
 
     hint: str | None = None
     need_selection = False
     if plan.total_tickets == 0:
-        hint = "目标窗口未拉到作业票，请确认部门关键词/月份是否正确，或平台是否有数据。"
+        hint = (
+            "台账未拉到登记行，请确认部门/月份是否正确，或台账是否有数据。"
+            if is_ledger
+            else "目标窗口未拉到作业票，请确认部门关键词/月份是否正确，或平台是否有数据。"
+        )
     elif not matched_depts:
         need_selection = True
         hint = "未按部门关键词匹配到作业票，请从候选部门中选择，或换更精准的部门词。"
@@ -252,9 +324,14 @@ async def preview_guardian_subsidy(
             for s in plan.skipped
         ],
         "departments": departments,
+        "data_source": "dept_ledger" if is_ledger else "platform_tickets",
         "need_department_selection": need_selection,
         "hint": hint,
-        "confirm_suggestion": _confirm_suggestion(dept_keyword, year, month, plan, need_selection),
+        "confirm_suggestion": _confirm_suggestion(
+            dept_keyword, year, month, plan, need_selection,
+            fetched_label=meta["fetched_label"],
+            level_note=meta["level_note"],
+        ),
         "stats": {
             "total_records": len(plan.records),
             "guardian_count": len(guardians),
@@ -279,9 +356,10 @@ async def generate_guardian_subsidy(
 ) -> dict[str, Any]:
     """监护补贴生成（写入，需用户确认后执行）：幂等重拉重算 → Excel → 回传当前飞书会话。
 
-    仅在用户对预览明确确认（回复「确认计算」）后调用；归集口径与 preview 一致
-    （监护人所在部门、无证暂按 A 证计入）。Excel 主表按监护人+作业类型拆分补贴，
-    第二页为待核对/跳过说明。web 渠道无会话时降级返回 file_content_base64 不发送。
+    仅在用户对预览明确确认（回复「确认计算」）后调用；数据源与归集口径与 preview
+    一致（提炼四/五/六部走台账，其余按监护人所在部门、未登级别暂按 A 证计入）。
+    Excel 主表按监护人+作业类型拆分补贴，第二页为待核对/跳过说明。web 渠道无会话
+    时降级返回 file_content_base64 不发送。
 
     Args:
         dept_keyword: 部门关键词（包含匹配；匹配的是监护人所在部门）
@@ -300,30 +378,34 @@ async def generate_guardian_subsidy(
     if err:
         return err
 
-    tickets, err = await _fetch_and_parse(year, month)
+    plan, err, meta = await _resolve_plan(ctx.deps.db, dept_keyword, year, month)
     if err:
         return err
-    assert tickets is not None  # err 为 None 时必有拉取结果
+    assert plan is not None
 
-    plan = await _build_plan(ctx.deps.db, tickets, dept_keyword, year, month)
+    is_ledger = meta["source"] is not None
+    matched_depts: list[str] = meta["matched_depts"]
 
     if plan.total_tickets == 0:
         return {
-            "error": "目标窗口未拉到作业票，无法生成补贴 Excel。请确认部门关键词/月份是否正确，或平台是否有数据。",
+            "error": (
+                "台账未拉到登记行，无法生成补贴 Excel。请确认部门/月份是否正确，或台账是否有数据。"
+                if is_ledger
+                else "目标窗口未拉到作业票，无法生成补贴 Excel。请确认部门关键词/月份是否正确，或平台是否有数据。"
+            ),
             "error_type": "no_tickets",
         }
 
-    keyword = dept_keyword.lower()
-    matched_depts = [d for d in sorted(plan.departments) if keyword in d.lower()]
     if plan.matched_tickets == 0:
-        extra: dict[str, Any] = {"departments": sorted(plan.departments)}
+        extra: dict[str, Any] = {"departments": meta["departments"]}
         if not matched_depts:
             extra["hint"] = "部门关键词未匹配到作业票，请先用 preview_guardian_subsidy 查看候选部门后重试。"
         else:
             extra["hint"] = "该部门在目标月份没有可计入补贴的记录（全部被跳过或待核对），请先用 preview_guardian_subsidy 查看明细。"
         return {"error": "没有可计入补贴的作业票，未生成 Excel。", "error_type": "no_matched_records", **extra}
 
-    # ── 标题/部门名：从命中的归集部门取（确定性：排序后取第一个），回退关键词 ──
+    # ── 标题/部门名：台账源取归集部门全名；平台源从命中的归集部门取 ──
+    # （确定性：排序后取第一个），均回退关键词
     department = matched_depts[0] if matched_depts else dept_keyword
     title = f"{department} {year}年{month}月 监护补贴统计"
     file_name = (filename or "").strip() or f"{title}.xlsx"
@@ -376,13 +458,17 @@ async def generate_guardian_subsidy(
             "summary": summary,
         }
 
+    source_note = (
+        "数据源为部门监护人台账，证书级别以台账登记为准，未登级别暂按A证计入"
+        if is_ledger
+        else "按监护人所在部门归集，无证人员暂按A证计入"
+    )
     message = (
         f"已生成《{title}》并发送到当前会话。"
-        f"统计：{plan.matched_tickets} 张票、{summary['guardian_count']} 名监护人、"
+        f"统计：{plan.matched_tickets} 条记录、{summary['guardian_count']} 名监护人、"
         f"补贴总额 {summary['total_amount']:.2f} 元"
-        f"（B证按{_B_CERT_RATE}系数折算后实发合计，Excel K 列口径；"
-        f"按监护人所在部门归集，无证人员暂按A证计入）；"
-        f"待核对 {summary['unmatched_count']} 张、跳过 {summary['skipped_count']} 张"
+        f"（B证按{_B_CERT_RATE}系数折算后实发合计，Excel K 列口径；{source_note}）；"
+        f"待核对 {summary['unmatched_count']} 条、跳过 {summary['skipped_count']} 条"
         f"（目标域内，详见 Excel 第二页「待核对-跳过说明」）。"
     )
     return {"sent": True, "file_name": file_name, "summary": summary, "message": message}

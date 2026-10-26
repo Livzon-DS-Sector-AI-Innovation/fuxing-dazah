@@ -482,3 +482,106 @@ def test_executor_summary_branch() -> None:
     assert "将在" in generic
     # 旧格式化函数已删除
     assert not hasattr(executor, "_format_subsidy_export_summary")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 台账源路由（提炼四/五/六部 → Bitable，不走平台作业票）
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _d6_rows() -> list[dict[str, Any]]:
+    """六部台账样例行（文本日期 + 时间段 + MultiSelect 类型，无级别列）。"""
+    def row(name: str, day: str, period: str) -> dict[str, Any]:
+        return {"fields": {
+            "姓名": [{"text": name, "type": "text"}],
+            "特殊作业类型": ["动火作业"],
+            "作业级别": "一级",
+            "作业地点及内容": [{"text": "二期车间更换灯具", "type": "text"}],
+            "日期": [{"text": day, "type": "text"}],
+            "时间段": [{"text": period, "type": "text"}],
+        }}
+    return [
+        row("池守城", "2026.09.10", "09:10-17:10"),
+        row("彭飞琼", "2026.09.10", "08：35-18：30"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_preview_ledger_source_skips_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """提炼六部 → 台账源：平台 client 不被调用，data_source=dept_ledger。"""
+    fake_platform = _set_client(monkeypatch)  # 若被调用即断言失败
+    fetched: list[Any] = []
+
+    async def fake_fetch(source: Any) -> list[dict[str, Any]]:
+        fetched.append(source)
+        return _d6_rows()
+
+    monkeypatch.setattr(subsidy_tools, "fetch_ledger_rows", fake_fetch)
+
+    result = await preview_guardian_subsidy(_ctx(_FakeSession()), "提炼六部", 2026, 9)
+
+    assert fake_platform.calls == []
+    assert fetched[0].department == "提炼工程六部"
+    assert result["data_source"] == "dept_ledger"
+    assert result["departments"] == ["提炼工程六部"]
+    assert result["matched_records"] == 2
+    assert result["need_department_selection"] is False
+    assert "台账" in result["confirm_suggestion"]
+    # 六部无级别列 → 全员待核对并按 A 证暂计
+    assert result["a_cert_count"] == 2
+    assert {u["name"] for u in result["unmatched"]} == {"池守城", "彭飞琼"}
+
+
+@pytest.mark.asyncio
+async def test_preview_ledger_fetch_error_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
+    """台账拉取失败 → ledger_fetch_error。"""
+    _set_client(monkeypatch)
+
+    async def boom(source: Any) -> list[dict[str, Any]]:
+        raise RuntimeError("bitable 查询失败 code=1254030")
+
+    monkeypatch.setattr(subsidy_tools, "fetch_ledger_rows", boom)
+
+    result = await preview_guardian_subsidy(_ctx(_FakeSession()), "四部", 2026, 9)
+    assert result["error_type"] == "ledger_fetch_error"
+    assert "台账拉取失败" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_generate_ledger_source_sends_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """台账源生成：标题用部门全名，正常回传会话；平台 client 不被调用。"""
+    fake_platform = _set_client(monkeypatch)
+
+    async def fake_fetch(source: Any) -> list[dict[str, Any]]:
+        return _d6_rows()
+
+    monkeypatch.setattr(subsidy_tools, "fetch_ledger_rows", fake_fetch)
+
+    sent: list[tuple[str, bytes, str]] = []
+
+    async def fake_send(chat_id: str, file_bytes: bytes, file_name: str) -> bool:
+        sent.append((chat_id, file_bytes, file_name))
+        return True
+
+    monkeypatch.setattr(subsidy_tools, "send_file_to_chat", fake_send)
+
+    result = await generate_guardian_subsidy(_ctx(_FakeSession()), "提炼六部", 2026, 9)
+
+    assert fake_platform.calls == []
+    assert result["sent"] is True
+    assert result["file_name"] == "提炼工程六部 2026年9月 监护补贴统计.xlsx"
+    assert result["summary"]["matched_count"] == 2
+    assert result["summary"]["unmatched_count"] == 2
+    assert "台账" in result["message"]
+    assert sent[0][0] == "oc_test"
+    assert len(sent[0][1]) > 0
+
+
+def test_executor_summary_ledger_branch() -> None:
+    """确认卡摘要：提炼四部 → 台账口径文案。"""
+    text = executor._format_tool_summary(
+        "generate_guardian_subsidy",
+        {"dept_keyword": "提炼四部", "year": 2026, "month": 9, "filename": None},
+    )
+    assert "台账" in text
+    assert "平台" not in text

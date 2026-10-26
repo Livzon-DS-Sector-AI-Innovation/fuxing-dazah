@@ -929,20 +929,35 @@ def _format_guardian_subsidy_summary(args: dict) -> str:
     """为 generate_guardian_subsidy 生成确认卡摘要。
 
     票数/监护人/总额在执行时才算得出（生成工具按同参数幂等重拉重算），
-    确认卡先给部门/月份/文件名，并说明执行范围。
+    确认卡先给部门/月份/文件名，并说明执行范围。提炼四/五/六部走部门
+    监护人台账，其余部门走平台作业票。
     """
     dept = args.get("dept_keyword", "")
     year = args.get("year", "")
     month = args.get("month", "")
     filename = args.get("filename") or ""
 
+    from app.modules.safety.service.subsidy_dept_ledgers import match_ledger_source
+
+    if match_ledger_source(str(dept)) is not None:
+        title = "监护补贴统计（部门监护人台账）"
+        scope = (
+            "重拉部门监护人台账（Bitable）→ 按月份整理、级别以台账登记为准 → "
+            "计算补贴 → 生成 Excel（主表 + 待核对/跳过说明页）→ 回传当前会话"
+        )
+    else:
+        title = "监护补贴统计（平台作业票）"
+        scope = (
+            "从平台重拉作业票（±1 月窗口）→ 按部门/月份/证书匹配整理 → "
+            "计算补贴 → 生成 Excel（主表 + 待核对/跳过说明页）→ 回传当前会话"
+        )
+
     lines = [
-        "📊 **监护补贴统计（平台作业票）**",
+        f"📊 **{title}**",
         "",
         f"• 部门关键词：{dept}",
         f"• 统计月份：{year}年{month}月",
-        "• 执行内容：从平台重拉作业票（±1 月窗口）→ 按部门/月份/证书匹配整理 → "
-        "计算补贴 → 生成 Excel（主表 + 待核对/跳过说明页）→ 回传当前会话",
+        f"• 执行内容：{scope}",
     ]
     if filename:
         lines.append(f"• 文件名：{filename}")
