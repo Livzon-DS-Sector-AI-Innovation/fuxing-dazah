@@ -406,8 +406,32 @@ export interface LcTemplateConfig {
   product_name: string
   sop_no: string | null
   description: string | null
-  config: Record<string, unknown>
+  config: Record<string, unknown> & {
+    calc?: CalcCfg
+    merge?: { op: string; from: string[]; into: string }[]
+    batch_label?: string
+  }
 }
+
+export interface CalcNormalizationCfg {
+  mode: 'normalization'
+  rrf: number
+  samples: number
+  main_item: { label: string; std_name: string }
+  impurities: { key: string; label: string; std_name: string }[]
+  total_std_name: string
+}
+
+export interface CalcExternalStdCfg {
+  mode: 'external_std'
+  samples: number
+  std_injections: number
+  dilution_factor: number
+  ppm_scale: number
+  solvents: { key: string; label: string; std_name: string; limit: string | null }[]
+}
+
+export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg
 
 
 // ─── 任务报告单 ───

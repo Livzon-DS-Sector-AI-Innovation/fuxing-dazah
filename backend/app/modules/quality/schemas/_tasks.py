@@ -85,11 +85,16 @@ class CalcFormItem(BaseModel):
 
 
 class CalcFormSubmit(BaseModel):
-    """在线计算表提交：免 Excel 直接填计算后数值，系统按表号合并规则计算并按任务限度判定。"""
+    """在线计算表提交：免 Excel 直接填计算后数值，系统按表号合并规则计算并按任务限度判定。
 
-    table_no: str | None = Field(default=None, max_length=100, description="计算表表号（触发合并规则，如杂质B1+B2）")
+    inputs 存在时走色谱计算引擎（按表号 calc 配置从峰面积/质量算百分比）；
+    否则 values 为直接填写的计算结果（兼容旧表单）。
+    """
+
+    table_no: str | None = Field(default=None, max_length=100, description="计算表表号（触发合并规则与计算引擎配置）")
     record_date: str | None = Field(default=None, max_length=32, description="检验日期 YYYY-MM-DD（留痕用）")
-    values: list[CalcFormItem] = Field(min_length=1, max_length=200)
+    values: list[CalcFormItem] = Field(default=[], max_length=200)
+    inputs: dict[str, object] | None = Field(default=None, description="原始数据（峰面积/质量），驱动色谱计算引擎")
 
 
 class TestResultCreate(BaseModel):

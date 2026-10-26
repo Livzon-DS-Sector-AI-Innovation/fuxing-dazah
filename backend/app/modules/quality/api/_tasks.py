@@ -177,6 +177,7 @@ async def submit_calc_form_endpoint(
     filled, unmatched = await test_task_service.submit_calc_form(
         db, task, payload.table_no, payload.record_date,
         [(v.item_name, v.value) for v in payload.values], filled_by=user.id,
+        inputs=payload.inputs,
     )
     detail = await test_task_service.get_task_detail(db, task_id)
     msg = f"计算表已提交：已填入 {len(filled)} 项"

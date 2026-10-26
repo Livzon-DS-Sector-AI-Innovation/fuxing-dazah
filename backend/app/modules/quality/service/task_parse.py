@@ -142,14 +142,31 @@ class _TaskParse(_TaskCore):
         record_date: str | None,
         values: list[tuple[str, float]],
         filled_by: uuid.UUID | None = None,
+        inputs: dict[str, Any] | None = None,
     ) -> tuple[list[str], list[str]]:
         """在线计算表提交：数值候选 + 表号合并规则计算 → 复用/创建检验记录留痕 → 判定填入任务。
 
-        返回 (filled_names, unmatched_names)。判定以任务行标准快照为准，与液相解析同链路。
+        inputs 存在时按表号 calc 配置走色谱计算引擎（峰面积→百分比），
+        否则 values 为直接填写的计算结果。返回 (filled_names, unmatched_names)。
         """
         if task.status != "in_progress":
             raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可填报计算表")
         candidates: list[tuple[str, float]] = list(values)
+        computed: dict[str, Any] | None = None
+        if inputs is not None and table_no:
+            from app.modules.quality import calc_engine
+
+            cfg = await get_lc_template_by_table_no(db, table_no)
+            calc_cfg = (cfg.config or {}).get("calc") if cfg else None
+            if not calc_cfg:
+                raise AppException(status_code=400, detail=f"表号 {table_no} 未配置计算规则，请用直接填值模式")
+            if calc_cfg.get("mode") == "external_std":
+                computed = calc_engine.compute_external_std(calc_cfg, inputs)
+            else:
+                computed = calc_engine.compute_normalization(calc_cfg, inputs)
+            for item in computed["items"]:
+                if item.get("value") is not None:
+                    candidates.append((item["std_name"], float(item["value"])))
         # 表号合并规则：如 杂质B(B1+B2) = 杂质B1 + 杂质B2（配置 merge op=sum）
         if table_no:
             cfg = await get_lc_template_by_table_no(db, table_no)
@@ -174,6 +191,8 @@ class _TaskParse(_TaskCore):
                 all_pass=True,
                 raw_data={
                     "source": "calc_form", "table_no": table_no, "record_date": record_date,
+                    "inputs": inputs,
+                    "computed": computed,
                     "values": [{"item_name": n, "value": v} for n, v in candidates],
                 },
                 excel_filename=None,

@@ -28,7 +28,7 @@ import {
   fetchLcTemplateConfigs,
   submitCalcFill,
 } from '@/actions/quality'
-import { CoaPreviewModal } from '@/components/quality'
+import { CoaPreviewModal, CalcForm } from '@/components/quality'
 
 const { Text } = Typography
 
@@ -88,6 +88,7 @@ export default function TaskDetail({ id }: { id: string }) {
   const [calcTableNo, setCalcTableNo] = useState<string | undefined>()
   const [calcDate, setCalcDate] = useState<Dayjs | null>(dayjs())
   const [calcValues, setCalcValues] = useState<Record<string, number | undefined>>({})
+  const [calcInputs, setCalcInputs] = useState<Record<string, number | undefined>>({})
   const [calcConfigs, setCalcConfigs] = useState<LcTemplateConfig[]>([])
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
@@ -164,6 +165,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
   // 在线计算表：未填的数值型项目行（manual 行不在此表单）
   const calcRows = (detail?.results ?? []).filter((r) => r.judge_mode === 'auto' && r.is_pass === null)
+  const activeCalcCfg = calcConfigs.find((c) => c.table_no === calcTableNo)?.config.calc
   const calcMergeRules = (calcConfigs
     .find((c) => c.table_no === calcTableNo)
     ?.config as { merge?: { op: string; from: string[]; into: string }[] } | undefined)?.merge ?? []
@@ -176,6 +178,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const openCalc = () => {
     setCalcValues({})
+    setCalcInputs({})
     setCalcTableNo(undefined)
     setCalcDate(dayjs())
     setCalcOpen(true)
@@ -183,20 +186,39 @@ export default function TaskDetail({ id }: { id: string }) {
   }
 
   const onCalcSubmit = async () => {
-    const values = calcRows
-      .map((r) => ({ item_name: r.item_name, value: calcValues[r.id] }))
-      .filter((v): v is { item_name: string; value: number } => v.value != null)
-    if (!values.length) {
-      message.warning('请至少填写一个项目数值')
-      return
-    }
-    setCalcSaving(true)
-    try {
-      const res = await submitCalcFill(id, {
+    const useEngine = !!activeCalcCfg
+    let payload: { table_no?: string; record_date?: string; values: { item_name: string; value: number }[]; inputs?: Record<string, number | undefined> }
+    if (useEngine) {
+      const filledInputs = Object.fromEntries(
+        Object.entries(calcInputs).filter(([, v]) => v != null && v > 0),
+      )
+      if (!Object.keys(filledInputs).length) {
+        message.warning('请至少填写一项原始数据')
+        return
+      }
+      payload = {
+        table_no: calcTableNo,
+        record_date: calcDate ? calcDate.format('YYYY-MM-DD') : undefined,
+        values: [],
+        inputs: filledInputs,
+      }
+    } else {
+      const values = calcRows
+        .map((r) => ({ item_name: r.item_name, value: calcValues[r.id] }))
+        .filter((v): v is { item_name: string; value: number } => v.value != null)
+      if (!values.length) {
+        message.warning('请至少填写一个项目数值')
+        return
+      }
+      payload = {
         table_no: calcTableNo,
         record_date: calcDate ? calcDate.format('YYYY-MM-DD') : undefined,
         values,
-      })
+      }
+    }
+    setCalcSaving(true)
+    try {
+      const res = await submitCalcFill(id, payload)
       message.success(res.message)
       setCalcOpen(false)
       loadDetail()
@@ -827,64 +849,72 @@ export default function TaskDetail({ id }: { id: string }) {
         width={640}
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12.5 }}>
-          免 Excel：直接把计算好的数值填进来，系统按任务限度自动判定并填入（不合格不落库）；选择表号时自动套用合并规则（如 杂质B(B1+B2)=B1+B2）。
+          {activeCalcCfg
+            ? '原始数据填峰面积/质量，系统按表号计算规则自动算百分比、判定并填入任务（不合格不落库），双份平均与 RSD 系统计算。'
+            : '免 Excel：直接把计算好的数值填进来，系统按任务限度自动判定并填入（不合格不落库）；选择表号时自动套用合并规则（如 杂质B(B1+B2)=B1+B2）。'}
         </Typography.Paragraph>
         <Space size={12} style={{ display: 'flex', marginBottom: 12 }}>
           <Select
-            allowClear placeholder="计算表表号（可选，触发合并规则）" style={{ flex: 1 }}
+            allowClear placeholder="计算表表号" style={{ flex: 1 }}
             value={calcTableNo}
             onChange={setCalcTableNo}
             options={calcConfigs.map((c) => ({ value: c.table_no, label: c.table_no }))}
           />
           <DatePicker value={calcDate} onChange={setCalcDate} />
         </Space>
-        <Table
-          rowKey="id"
-          size="small"
-          pagination={false}
-          dataSource={calcRows}
-          scroll={{ x: 560 }}
-          columns={[
-            { title: '项目', dataIndex: 'item_name', width: 160 },
-            { title: '限度', dataIndex: 'standard_text', width: 130, render: (v: string | null) => v || '-' },
-            {
-              title: '结果值', key: 'value', width: 130,
-              render: (_: unknown, r: TestResultItem) => (
-                <InputNumber
-                  size="small" style={{ width: '100%' }}
-                  value={calcValues[r.id]}
-                  onChange={(v) => setCalcValues((m) => ({ ...m, [r.id]: v ?? undefined }))}
-                />
-              ),
-            },
-            {
-              title: '预判', key: 'preview', width: 90,
-              render: (_: unknown, r: TestResultItem) => {
-                const v = calcValues[r.id]
-                if (v == null) return '-'
-                const pass = previewPass(r.operator, r.limit_min, r.limit_max, v)
-                return pass === null ? <Tag>需人工判定</Tag> : pass ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>
-              },
-            },
-          ]}
-        />
-        {calcMergeRules && calcMergeRules.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>合并计算项（表号 {calcTableNo} 规则，自动求和）：</Typography.Text>
-            {calcMergeRules.map((rule, i) => {
-              const computed = rule.from.every((n) => calcTyped[normItem(n)] != null)
-                ? rule.from.reduce((a, n) => a + (calcTyped[normItem(n)] ?? 0), 0)
-                : null
-              return (
-                <div key={i} style={{ fontSize: 13, paddingBlock: 2 }}>
-                  {rule.into} = {rule.from.join(' + ')} = <Typography.Text strong>{computed != null ? computed : '（待填齐）'}</Typography.Text>
-                </div>
-              )
-            })}
-          </div>
-        )}
-        {calcRows.length === 0 && (
-          <Typography.Text type="secondary">本任务数值型项目已全部填写，无待填项。</Typography.Text>
+        {activeCalcCfg ? (
+          <CalcForm cfg={activeCalcCfg} inputs={calcInputs} onChange={setCalcInputs} />
+        ) : (
+          <>
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={calcRows}
+              scroll={{ x: 560 }}
+              columns={[
+                { title: '项目', dataIndex: 'item_name', width: 160 },
+                { title: '限度', dataIndex: 'standard_text', width: 130, render: (v: string | null) => v || '-' },
+                {
+                  title: '结果值', key: 'value', width: 130,
+                  render: (_: unknown, r: TestResultItem) => (
+                    <InputNumber
+                      size="small" style={{ width: '100%' }}
+                      value={calcValues[r.id]}
+                      onChange={(v) => setCalcValues((m) => ({ ...m, [r.id]: v ?? undefined }))}
+                    />
+                  ),
+                },
+                {
+                  title: '预判', key: 'preview', width: 90,
+                  render: (_: unknown, r: TestResultItem) => {
+                    const v = calcValues[r.id]
+                    if (v == null) return '-'
+                    const pass = previewPass(r.operator, r.limit_min, r.limit_max, v)
+                    return pass === null ? <Tag>需人工判定</Tag> : pass ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>
+                  },
+                },
+              ]}
+            />
+            {calcMergeRules.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>合并计算项（表号 {calcTableNo} 规则，自动求和）：</Typography.Text>
+                {calcMergeRules.map((rule, i) => {
+                  const computed = rule.from.every((n) => calcTyped[normItem(n)] != null)
+                    ? rule.from.reduce((a, n) => a + (calcTyped[normItem(n)] ?? 0), 0)
+                    : null
+                  return (
+                    <div key={i} style={{ fontSize: 13, paddingBlock: 2 }}>
+                      {rule.into} = {rule.from.join(' + ')} = <Typography.Text strong>{computed != null ? computed : '（待填齐）'}</Typography.Text>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {calcRows.length === 0 && (
+              <Typography.Text type="secondary">本任务数值型项目已全部填写，无待填项。</Typography.Text>
+            )}
+          </>
         )}
       </Modal>
 

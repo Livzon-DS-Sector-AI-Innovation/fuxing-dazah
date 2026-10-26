@@ -1840,7 +1840,9 @@ export async function fetchDashboardAlerts(): Promise<{ data: QualityAlerts }> {
 }
 
 export async function submitCalcFill(taskId: string, input: {
-  table_no?: string; record_date?: string; values: { item_name: string; value: number }[]
+  table_no?: string; record_date?: string
+  values?: { item_name: string; value: number }[]
+  inputs?: Record<string, number | undefined>
 }): Promise<{ message: string; data: { filled: string[]; unmatched: string[] } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/calc-fill`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
