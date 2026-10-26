@@ -14,6 +14,16 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: pushMock, replace: vi.fn(), back: vi.fn() }),
 }))
 
+// 图卡 pins 独立 useQuery：替身为空数据（图卡行为另有专测 FacilityMapCard.test.tsx）
+vi.mock('@/lib/api/safety/facility-map', () => ({
+  fetchFacilityMapPins: vi.fn(async () => ({
+    date: '2026-10-12',
+    pins: [],
+    unmapped: [],
+    errors: [],
+  })),
+}))
+
 // vi.mock factory 会被提升到文件顶部，样例数据必须内联在 factory 里
 vi.mock('@/lib/api/safety/overview', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/api/safety/overview')>()

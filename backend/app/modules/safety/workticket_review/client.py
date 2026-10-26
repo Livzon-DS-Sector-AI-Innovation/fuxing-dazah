@@ -773,6 +773,74 @@ class WorkTicketPlatformClient:
     # 分页防御上限（1400 人/100 每页=14 页；类属性便于测试覆写）
     _ORG_USER_MAX_PAGES = 30
 
+    # ── 风险分区（tiji-risk-prevention）：厂区风险分区轮廓（F2）专用 ──────
+    #
+    # 2026-10-26 实测：GET /api/tiji-risk-prevention/openapi/risk-district/page
+    # （blade-auth 平台 token，params tenantId=100001&orgCode=000&size=100 一页
+    # 拉 64 个）；行含 distId/distName/rails[{id,name,pointsList}]，pointsList
+    # 为本地米制平面坐标的嵌套 JSON 字符串（无经纬度、无风险等级字段）。
+    # 分区属一次性建模无维护迹象——本方法仅供一次性资产抓取脚本消费。
+    RISK_DISTRICT_PAGE_URL = "/api/tiji-risk-prevention/openapi/risk-district/page"
+
+    async def list_risk_districts(self, *, page_size: int = 100) -> list[dict[str, Any]]:
+        """分页拉取厂区风险分区（只读直读；一次性资产抓取用）。
+
+        Returns:
+            分区全量记录 list[dict]（字段同平台返回：distId/distName/
+            rails[{id,name,pointsList}]…）。
+
+        Raises:
+            RuntimeError: 平台接口返回非成功 code 或分页超出防御上限。
+        """
+        pt, _ = await self._ensure_tokens()
+        headers = {
+            "Blade-Auth": f"bearer {pt}",
+            "Tenant-Id": platform_tenant_id(),
+        }
+
+        records: list[dict[str, Any]] = []
+        current = 1
+        while True:
+            params = {
+                "tenantId": platform_tenant_id(),
+                "orgCode": platform_org_code(),
+                "current": current,
+                "size": page_size,
+            }
+            url = f"{platform_base_url()}{self.RISK_DISTRICT_PAGE_URL}"
+            resp = await self._request_json("GET", url, headers=headers, params=params)
+            if resp.get("code") not in (0, 200):
+                raise RuntimeError(
+                    f"风险分区接口返回失败 code={resp.get('code')}: "
+                    f"{str(resp.get('msg'))[:200]}"
+                )
+            data = resp.get("data")
+            if not isinstance(data, dict):
+                raise RuntimeError(f"风险分区响应缺少 data: {resp!r}")
+            page_records = data.get("records")
+            if not isinstance(page_records, list):
+                page_records = []
+            records.extend(item for item in page_records if isinstance(item, dict))
+            total = data.get("total")
+            try:
+                total_int = int(total) if total is not None else len(records)
+            except (TypeError, ValueError):
+                total_int = len(records)
+            if len(records) >= total_int or not page_records:
+                break
+            if current >= self._RISK_DISTRICT_MAX_PAGES:
+                raise RuntimeError(
+                    f"风险分区分页超出防御上限（{self._RISK_DISTRICT_MAX_PAGES} 页，"
+                    f"已取 {len(records)}/{total_int}），疑似平台 total 异常"
+                )
+            current += 1
+
+        logger.info("风险分区拉取完成：%d 个", len(records))
+        return records
+
+    # 分页防御上限（64 个/100 每页=1 页；类属性便于测试覆写）
+    _RISK_DISTRICT_MAX_PAGES = 10
+
 
 __all__ = [
     "TICKET_TYPE_KEYS",

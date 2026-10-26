@@ -162,6 +162,9 @@ from app.modules.safety.models.telemetry import (  # noqa: F401
     TelemetryAlarmRecord,
     TelemetrySnapshot,
 )
+from app.modules.safety.models.location_district_map import (  # noqa: F401
+    LocationDistrictMap,
+)
 from app.modules.safety.models.trainings import (  # noqa: F401
     SafetyTraining,
     TrainingRecord,
@@ -225,6 +228,7 @@ __all__ = [
     'InjurySeverity',
     'KeyRiskOperationReport',
     'KnowledgeCategory',
+    'LocationDistrictMap',
     'MonitorStatus',
     'MsdsCollectionRecord',
     'MsdsDocument',

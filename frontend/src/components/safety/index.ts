@@ -1,6 +1,7 @@
 // safety module components
 
 export { SafetyOverviewDashboard } from './SafetyOverviewDashboard'
+export { FacilityMapCard } from './FacilityMapCard'
 export { default as SpecialOpsManagement } from './SpecialOpsManagement'
 export { default as SpecialOpsLedger } from './SpecialOpsLedger'
 export { default as KeyRiskOpsManagement } from './KeyRiskOpsManagement'
@@ -58,6 +59,7 @@ export { default as CertWarningPanel } from './CertWarningPanel'
 
 // ── 危化品库存管理（Chemical Inventory）──
 export { default as ChemicalInventoryPanel } from './ChemicalInventoryPanel'
+
 
 // ── AI 配置 + 定时任务（scheduler-config）──
 export { default as AiConfigModelCard } from './AiConfigModelCard'

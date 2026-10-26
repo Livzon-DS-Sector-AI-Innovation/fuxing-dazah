@@ -29,6 +29,7 @@ import {
   type Tone,
 } from '@/components/ui-kit'
 import { MarkdownView } from '@/components/toolbox/MarkdownView'
+import { FacilityMapCard } from '@/components/safety/FacilityMapCard'
 import { moduleMenus } from '@/lib/menu-config'
 import {
   fetchSafetyOverview,
@@ -609,6 +610,12 @@ export function SafetyOverviewDashboard() {
         </Col>
         <Col xs={24} xl={10}>
           <HealthWall health={data?.module_health ?? null} />
+        </Col>
+      </Row>
+
+      <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+        <Col xs={24}>
+          <FacilityMapCard />
         </Col>
       </Row>
 
