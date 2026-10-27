@@ -99,6 +99,8 @@ interface RenderedDistrict {
   dist: DistrictAsset
   /** 每 rail 的 points 串（预投影） */
   shapes: string[]
+  /** 轮廓签（points 串拼接）——同建筑多分区判定键 */
+  shapesKey: string
   /** 徽标挂点：最大 rail 的 bbox 中心 */
   anchor: [number, number]
   /** 最大 rail 的 bbox [x, y, w, h]（viewBox 单位，名称标注放得下判断用） */
@@ -132,10 +134,26 @@ const RENDERED: RenderedDistrict[] = (() => {
       }
     }
     if (!shapes.length) continue
-    out.push({ dist, shapes, anchor: best!.anchor, bbox: best!.bbox })
+    out.push({ dist, shapes, anchor: best!.anchor, bbox: best!.bbox, shapesKey: shapes.join('|') })
   }
   return out
 })()
+
+// ── 同轮廓分组：平台按建筑建模，多个分区（产线/功能区）共用同一轮廓。
+// 徽标按组合并计数只挂一组（否则叠死在同一点）；点击弹窗按分区分段展示。
+const GEOM_GROUPS: RenderedDistrict[][] = (() => {
+  const byKey = new Map<string, RenderedDistrict[]>()
+  for (const r of RENDERED) {
+    const list = byKey.get(r.shapesKey)
+    if (list) list.push(r)
+    else byKey.set(r.shapesKey, [r])
+  }
+  return [...byKey.values()]
+})()
+
+const GROUP_BY_DIST = new Map<string, RenderedDistrict[]>(
+  GEOM_GROUPS.flatMap(g => g.map(r => [r.dist.distId, g] as const)),
+)
 
 const BY_DIST_ID = new Map(RENDERED.map(r => [r.dist.distId, r]))
 
@@ -323,84 +341,97 @@ const OVER_LIMIT_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
   { title: '超储阈值', dataIndex: 'max_limit', width: 100, render: (v: number | null) => (v ?? '—') },
 ]
 
+/** 弹窗分区段：单分区组直接渲染；同轮廓组分段（每分区副标题 + 各自四表） */
+function ZoneSection({ pin }: { pin: FacilityMapDistrictPin }) {
+  const jobs = pin.refs.filter(r => r.kind === 'job')
+  const keyRisks = pin.refs.filter(r => r.kind === 'key_risk')
+  const overLimits = pin.refs.filter(r => r.kind === 'over_limit')
+  const alarms = pin.refs.filter(r => r.kind === 'fire' || r.kind === 'central')
+  const sections: { label: string; columns: TableColumnsType<FacilityMapPinRef>; rows: FacilityMapPinRef[]; empty: string; key: string }[] = [
+    {
+      label: `特殊作业票 ${jobs.length} 张${pin.truncated ? '（明细超 50 条已截断，计数完整）' : ''}`,
+      columns: JOB_COLUMNS, rows: jobs, empty: '本分区当日无作业票', key: 'j',
+    },
+    {
+      label: `关键风险作业 ${keyRisks.length} 项（当日已通过/审批中）`,
+      columns: KEY_RISK_COLUMNS, rows: keyRisks, empty: '本分区当日无关键风险作业', key: 'k',
+    },
+    {
+      label: `超储物料 ${overLimits.length} 项（当前库存态）`,
+      columns: OVER_LIMIT_COLUMNS, rows: overLimits, empty: '本分区无超储物料', key: 'o',
+    },
+    {
+      label: `今日报警 ${alarms.length} 条`,
+      columns: ALARM_COLUMNS, rows: alarms, empty: '本分区今日无报警', key: 'a',
+    },
+  ]
+  return (
+    <div className="flex flex-col gap-4">
+      {sections.map(s => (
+        <div key={s.key}>
+          <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
+            {s.label}
+          </div>
+          <Table
+            rowKey={(_, i) => `${s.key}${i}`}
+            size="small"
+            columns={s.columns}
+            dataSource={s.rows}
+            pagination={false}
+            locale={{ emptyText: s.empty }}
+          />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const EMPTY_PIN = (distId: string): FacilityMapDistrictPin => ({
+  dist_id: distId,
+  jobs: { hot: 0, confined: 0, other: 0 },
+  alarms: { fire: 0, central: 0 },
+  key_risks: 0,
+  over_limits: 0,
+  refs: [],
+  truncated: false,
+})
+
 function DistrictModal({
-  pin,
-  distName,
+  members,
   date,
   onClose,
 }: {
-  pin: FacilityMapDistrictPin | null
-  distName: string
+  members: { name: string; pin: FacilityMapDistrictPin }[] | null
   date: string
   onClose: () => void
 }) {
-  const jobs = pin?.refs.filter(r => r.kind === 'job') ?? []
-  const keyRisks = pin?.refs.filter(r => r.kind === 'key_risk') ?? []
-  const overLimits = pin?.refs.filter(r => r.kind === 'over_limit') ?? []
-  const alarms =
-    pin?.refs.filter(r => r.kind === 'fire' || r.kind === 'central') ?? []
+  // 同轮廓多分区：只展开有明细的分区；全组无数据则退回首分区空表
+  const withRefs = members?.filter(m => m.pin.refs.length > 0) ?? []
+  const shown = withRefs.length > 0 ? withRefs : (members ? [members[0]] : [])
+  const title =
+    shown.length > 3
+      ? `${shown[0].name} 等 ${shown.length} 分区`
+      : shown.map(m => m.name).join(' / ')
   return (
     <Modal
-      open={pin !== null}
-      title={pin ? `${distName} · ${date} 当日明细` : ''}
+      open={members !== null}
+      title={members ? `${title} · ${date} 当日明细` : ''}
       footer={null}
       width={760}
       onCancel={onClose}
     >
-      {pin && (
-        <div className="flex flex-col gap-4 pt-2">
-          <div>
-            <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
-              特殊作业票 {jobs.length} 张{pin.truncated ? '（明细超 50 条已截断，计数完整）' : ''}
+      {members && (
+        <div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pt-2">
+          {shown.map(m => (
+            <div key={m.pin.dist_id} className="flex flex-col gap-4">
+              {shown.length > 1 && (
+                <div className="border-l-2 border-[var(--color-hairline)] pl-2 text-[13px] font-semibold text-[var(--color-charcoal)]">
+                  {m.name}
+                </div>
+              )}
+              <ZoneSection pin={m.pin} />
             </div>
-            <Table
-              rowKey={(_, i) => `j${i}`}
-              size="small"
-              columns={JOB_COLUMNS}
-              dataSource={jobs}
-              pagination={false}
-              locale={{ emptyText: '本分区当日无作业票' }}
-            />
-          </div>
-          <div>
-            <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
-              关键风险作业 {keyRisks.length} 项（当日已通过/审批中）
-            </div>
-            <Table
-              rowKey={(_, i) => `k${i}`}
-              size="small"
-              columns={KEY_RISK_COLUMNS}
-              dataSource={keyRisks}
-              pagination={false}
-              locale={{ emptyText: '本分区当日无关键风险作业' }}
-            />
-          </div>
-          <div>
-            <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
-              超储物料 {overLimits.length} 项（当前库存态）
-            </div>
-            <Table
-              rowKey={(_, i) => `o${i}`}
-              size="small"
-              columns={OVER_LIMIT_COLUMNS}
-              dataSource={overLimits}
-              pagination={false}
-              locale={{ emptyText: '本分区无超储物料' }}
-            />
-          </div>
-          <div>
-            <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
-              今日报警 {alarms.length} 条
-            </div>
-            <Table
-              rowKey={(_, i) => `a${i}`}
-              size="small"
-              columns={ALARM_COLUMNS}
-              dataSource={alarms}
-              pagination={false}
-              locale={{ emptyText: '本分区今日无报警' }}
-            />
-          </div>
+          ))}
         </div>
       )}
     </Modal>
@@ -458,7 +489,9 @@ export function FacilityMapCard() {
     queryKey: ['safety', 'facility-map-pins'],
     queryFn: fetchFacilityMapPins,
   })
-  const [openDist, setOpenDist] = useState<FacilityMapDistrictPin | null>(null)
+  const [openGroup, setOpenGroup] = useState<{
+    members: { name: string; pin: FacilityMapDistrictPin }[]
+  } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [vb, setVb] = useState<ViewBox>(INITIAL_VB)
   const [panning, setPanning] = useState(false)
@@ -523,9 +556,51 @@ export function FacilityMapCard() {
     () => new Map((data?.pins ?? []).map(p => [p.dist_id, p])),
     [data],
   )
+  /** 同轮廓组视图：组内各分区 pin（缺省空）+ 聚合计数徽标；徽标/弹窗按组走 */
+  const groups = useMemo(
+    () =>
+      GEOM_GROUPS.map(members => {
+        const withPins = members.map(m => ({
+          name: m.dist.distName,
+          pin: pinById.get(m.dist.distId) ?? EMPTY_PIN(m.dist.distId),
+        }))
+        const agg = withPins.reduce(
+          (acc, { pin }) => {
+            acc.jobs.hot += pin.jobs.hot
+            acc.jobs.confined += pin.jobs.confined
+            acc.jobs.other += pin.jobs.other
+            acc.alarms.fire += pin.alarms.fire
+            acc.alarms.central += pin.alarms.central
+            acc.key_risks += pin.key_risks
+            acc.over_limits += pin.over_limits
+            return acc
+          },
+          {
+            jobs: { hot: 0, confined: 0, other: 0 },
+            alarms: { fire: 0, central: 0 },
+            key_risks: 0,
+            over_limits: 0,
+          },
+        )
+        return {
+          key: members[0].dist.distId,
+          anchor: members[0].anchor,
+          members: withPins,
+          agg,
+          hasPin: members.some(m => pinById.has(m.dist.distId)),
+        }
+      }),
+    [pinById],
+  )
   const unmappedEvents = useMemo(
     () => (data?.unmapped ?? []).reduce((n, u) => n + u.count, 0),
     [data],
+  )
+  /** distId → 组视图（渲染热路径查表用） */
+  const groupViewByDist = useMemo(
+    () =>
+      new Map(groups.flatMap(g => GROUP_BY_DIST.get(g.key)!.map(m => [m.dist.distId, g] as const))),
+    [groups],
   )
 
   /** 客户端坐标 → viewBox 坐标（含 preserveAspectRatio 留白修正） */
@@ -629,21 +704,23 @@ export function FacilityMapCard() {
   }
 
   // 名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让：先占位全部落点徽标
-  // 矩形，再按分区面积降序放标签；每个标签依次尝试首选位（有落点=徽标
-  // 下方、无落点=质心下方）与备选位（质心上方），全碰撞才跳过——相邻
-  // 重叠分区（米尔贝/提四米贝同轮廓）必跳一个，放大后逐级显现
+  // 矩形（同轮廓组合并为一组徽标），再按分区面积降序放标签；每个标签依次
+  // 尝试首选位（有落点=徽标下方、无落点=质心下方）与备选位（质心上方），
+  // 全碰撞才跳过——相邻重叠分区（同轮廓）必跳一个，放大后逐级显现
   const labels = useMemo<(RenderedDistrict & { dy: number })[]>(() => {
     const fs = 13 / zoom
     const placed: { x1: number; y1: number; x2: number; y2: number }[] = []
-    for (const pin of data?.pins ?? []) {
-      const rendered = BY_DIST_ID.get(pin.dist_id)
-      if (!rendered) continue
-      const w = (badgeChips(pin).length * 38 - 4) / zoom
+    for (const g of groups) {
+      if (!g.hasPin) continue
+      const chips =
+        badgeChips({ ...EMPTY_PIN(g.key), ...g.agg } as FacilityMapDistrictPin)
+      if (!chips.length) continue
+      const w = (chips.length * 38 - 4) / zoom
       placed.push({
-        x1: rendered.anchor[0] - w / 2,
-        y1: rendered.anchor[1] - 11 / zoom,
-        x2: rendered.anchor[0] + w / 2,
-        y2: rendered.anchor[1] + 11 / zoom,
+        x1: g.anchor[0] - w / 2,
+        y1: g.anchor[1] - 11 / zoom,
+        x2: g.anchor[0] + w / 2,
+        y2: g.anchor[1] + 11 / zoom,
       })
     }
     const hits = (r: { x1: number; y1: number; x2: number; y2: number }) =>
@@ -655,7 +732,7 @@ export function FacilityMapCard() {
     for (const item of cands) {
       const w = item.dist.distName.length * fs * 0.95
       const h = fs * 1.3
-      const pinned = pinById.get(item.dist.distId) !== undefined
+      const pinned = groupViewByDist.get(item.dist.distId)?.hasPin ?? false
       let settled: number | null = null
       for (const dy of pinned ? [24] : [5, -16]) {
         const cy = item.anchor[1] + dy / zoom
@@ -674,7 +751,7 @@ export function FacilityMapCard() {
       if (settled !== null) out.push({ ...item, dy: settled })
     }
     return out
-  }, [zoom, pinById, data])
+  }, [zoom, groups, groupViewByDist])
 
   return (
     <SectionCard
@@ -759,34 +836,26 @@ export function FacilityMapCard() {
                 onClickCapture={onClickCapture}
               >
                 {RENDERED.map(({ dist, shapes }) => {
-                  const pin = pinById.get(dist.distId)
+                  // 同轮廓组合并态：填充/悬浮/点击/tooltip 均按组（点击任一共用
+                  // 轮廓的分区打开整组明细，避免徽标挂在 A 分区点开却是 B 分区）
+                  const g = groupViewByDist.get(dist.distId)
                   return (
                     <g
                       key={dist.distId}
                       data-testid={`district-poly-${dist.distId}`}
                       className="cursor-pointer [&:hover_polygon]:fill-[#dce6fa]"
-                      onClick={() =>
-                        setOpenDist(
-                          pin ?? {
-                            dist_id: dist.distId,
-                            jobs: { hot: 0, confined: 0, other: 0 },
-                            alarms: { fire: 0, central: 0 },
-                            key_risks: 0,
-                            over_limits: 0,
-                            refs: [],
-                            truncated: false,
-                          },
-                        )
-                      }
+                      onClick={() => {
+                        if (g) setOpenGroup({ members: g.members })
+                      }}
                     >
-                      <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 关键风险 ${pin.key_risks} / 超储 ${pin.over_limits} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
+                      <title>{`${dist.distName}${g?.hasPin ? ` · 作业 ${g.agg.jobs.hot + g.agg.jobs.confined + g.agg.jobs.other} / 关键风险 ${g.agg.key_risks} / 超储 ${g.agg.over_limits} / 报警 ${g.agg.alarms.fire + g.agg.alarms.central}` : ''}`}</title>
                       {shapes.map((points, i) => (
                         <polygon
                           key={i}
                           points={points}
-                          fill={pin ? FILL_ACTIVE : FILL_BASE}
-                          stroke={pin ? STROKE_ACTIVE : STROKE_BASE}
-                          strokeWidth={pin ? 1.4 : 1}
+                          fill={g?.hasPin ? FILL_ACTIVE : FILL_BASE}
+                          stroke={g?.hasPin ? STROKE_ACTIVE : STROKE_BASE}
+                          strokeWidth={g?.hasPin ? 1.4 : 1}
                         />
                       ))}
                     </g>
@@ -812,14 +881,17 @@ export function FacilityMapCard() {
                     {dist.distName}
                   </text>
                 ))}
-                {data.pins.map(pin => {
-                  const rendered = BY_DIST_ID.get(pin.dist_id)
-                  if (!rendered) return null
+                {groups.map(g => {
+                  const chips = badgeChips({
+                    ...EMPTY_PIN(g.key),
+                    ...g.agg,
+                  } as FacilityMapDistrictPin)
+                  if (!chips.length) return null
                   return (
                     <BadgeGroup
-                      key={pin.dist_id}
-                      pin={pin}
-                      anchor={rendered.anchor}
+                      key={`bg-${g.key}`}
+                      pin={{ ...EMPTY_PIN(g.key), ...g.agg } as FacilityMapDistrictPin}
+                      anchor={g.anchor}
                       zoom={zoom}
                     />
                   )
@@ -890,10 +962,9 @@ export function FacilityMapCard() {
         </div>
       )}
       <DistrictModal
-        pin={openDist}
-        distName={openDist ? BY_DIST_ID.get(openDist.dist_id)?.dist.distName ?? openDist.dist_id : ''}
+        members={openGroup?.members ?? null}
         date={data?.date ?? ''}
-        onClose={() => setOpenDist(null)}
+        onClose={() => setOpenGroup(null)}
       />
       <AiSuggestionConfirmModal<DistrictSuggestionRow>
         open={confirmOpen}

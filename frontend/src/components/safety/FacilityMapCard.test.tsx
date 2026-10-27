@@ -49,6 +49,43 @@ const PINS = {
         },
       ],
     },
+    // 同轮廓组：车间一达托(1)/车间一达巴(11) 共用建筑轮廓——徽标合并、
+    // 点击任一多边形弹出整组（两分区）明细
+    {
+      dist_id: '1',
+      jobs: { hot: 0, confined: 0, other: 0 },
+      alarms: { fire: 0, central: 1 },
+      key_risks: 0,
+      over_limits: 0,
+      truncated: false,
+      refs: [
+        {
+          kind: 'central',
+          alarm_date: '2026-10-26',
+          alarm_description: 'P0405A泵温度高',
+          workshop: '车间一',
+        },
+      ],
+    },
+    {
+      dist_id: '11',
+      jobs: { hot: 0, confined: 0, other: 0 },
+      alarms: { fire: 0, central: 0 },
+      key_risks: 0,
+      over_limits: 1,
+      truncated: false,
+      refs: [
+        {
+          kind: 'over_limit',
+          material_name: '乙醇',
+          department: 'daba',
+          storage_location: '车间一达巴粗提',
+          total_quantity_t: 4,
+          max_limit: 3,
+          unit: 'kg',
+        },
+      ],
+    },
   ],
   unmapped: [
     { text: '212罐', count: 3, kinds: ['job'] },
@@ -120,6 +157,23 @@ describe('FacilityMapCard', () => {
     expect(modal.textContent).toContain('乙腈')
     expect(modal.textContent).toContain('米尔贝放硅胶')
     expect(modal.textContent).toContain('已通过')
+  })
+
+  it('同轮廓分区组合并：点达托/达巴任一多边形都弹出两分区明细与超储', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^district-poly-/)
+    // 徽标合并挂组首分区（资产顺序车间一达巴=11 在前）：警1 + 储1
+    const badge = await screen.findByTestId('district-badge-11')
+    expect(badge.textContent).toContain('警1')
+    expect(badge.textContent).toContain('储1')
+    // 点击车间一达巴的多边形（与达托共用轮廓）也开整组
+    await user.click(screen.getByTestId('district-poly-11'))
+    const modal = await screen.findByRole('dialog')
+    expect(modal.textContent).toContain('车间一达巴 / 车间一达托')
+    expect(modal.textContent).toContain('车间一达巴粗提')
+    expect(modal.textContent).toContain('乙醇')
+    expect(modal.textContent).toContain('P0405A泵温度高')
   })
 
   it('按压带轻微抖动（<4px）仍是点击，弹出明细 Modal', async () => {
