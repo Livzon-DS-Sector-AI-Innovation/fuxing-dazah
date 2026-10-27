@@ -390,10 +390,14 @@ async def _fake_updater(message_id: str, card: dict[str, Any]) -> bool:
     return True
 
 
-async def test_digest_card_keeps_morning_and_evening_cells_separate() -> None:
+async def test_digest_card_keeps_morning_and_evening_cells_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """晚报投 special_op_pm 独立格子：晨报格子不被覆盖，两格子按序渲染。"""
     from app.modules.safety.feishu import daily_digest
 
+    # 总卡重建护栏按北京时间「今天」放行；本测试固定日期 DAY 需钉为今天
+    monkeypatch.setattr(daily_digest, "_bj_today", lambda: DAY)
     store = _FakeStore()
 
     async def _capture_sender(**kwargs: Any) -> str:
@@ -442,8 +446,11 @@ async def test_run_upserts_evening_to_separate_cell_key(
     # 总卡开关保持开启（不设 env 即默认开）；upsert 打桩只记录调用
     calls: list[dict[str, Any]] = []
 
-    async def _spy(report_date: date, key: str, cell: Any) -> bool:
-        calls.append({"key": key, "title": cell.title, "color": cell.tag_color})
+    async def _spy(report_date: date, key: str, cell: Any, **kwargs: Any) -> bool:
+        calls.append({
+            "key": key, "title": cell.title, "color": cell.tag_color,
+            "board": kwargs.get("board", "safety"),
+        })
         return True
 
     monkeypatch.setattr(daily_digest_module, "upsert_daily_digest", _spy)
@@ -458,7 +465,40 @@ async def test_run_upserts_evening_to_separate_cell_key(
         pusher=FakePusher(), analyst=FakeAnalyst(), writeback=False,
     )
 
-    assert [c["key"] for c in calls] == ["special_op", "special_op_pm"]
+    # 晨/晚各投两板：安全速递板 + 特殊作业速递板（同 key 不同板）
+    assert [(c["key"], c["board"]) for c in calls] == [
+        ("special_op", "safety"), ("special_op", "special"),
+        ("special_op_pm", "safety"), ("special_op_pm", "special"),
+    ]
     assert calls[0]["title"] == "特殊作业日报" and calls[0]["color"] == "blue"
-    assert calls[1]["title"] == "特殊作业日报·晚报" and calls[1]["color"] == "orange"
+    assert calls[2]["title"] == "特殊作业日报·晚报" and calls[2]["color"] == "orange"
+
+
+async def test_run_extra_group_gets_cell_instead_of_standalone_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """加发群（特殊作业速递板目标群）不再收独立日报卡，收纳为板格子。"""
+    import app.modules.safety.feishu.daily_digest as daily_digest_module
+
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_DIGEST_CARD_ENABLED", "false")
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "oc_extra_group")
+    boards: list[str | None] = []
+
+    async def _spy(report_date: date, key: str, cell: Any, **kwargs: Any) -> bool:
+        boards.append(kwargs.get("board"))
+        return True
+
+    monkeypatch.setattr(daily_digest_module, "upsert_daily_digest", _spy)
+
+    items = [record("r1", **LOW_FIELDS, 报备类型="计划内作业", 发起时间=_OLD_SUBMITTED)]
+    pusher = FakePusher()
+    await daily.run(
+        DAY, "today", reader=FakeReader(records=items),
+        pusher=pusher, analyst=FakeAnalyst(), writeback=False,
+        target_chats=["oc_main_group", "oc_extra_group"],
+    )
+
+    # 独立卡只发主目标群；加发群由 special 板格子承载
+    assert [c["chat_id"] for c in pusher.calls] == ["oc_main_group"]
+    assert "special" in boards
 

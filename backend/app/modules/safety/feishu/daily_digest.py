@@ -15,6 +15,11 @@
   现仅「今天/昨天」允许重建发卡（昨天=当日补发窗口，留作兜底）；作业票审核
   2026-10-27 起改为按运行日投格（10 点审昨日→格进今日卡），不再依赖昨天口径；
   更早日期只写存储不发群，原地 PATCH 存活卡不受限
+- 多板（2026-10-27）：BOARD_SAFETY=安全AI创新交流群「安全速递」（全量格子，
+  Redis 前缀 safety:daily_digest，键结构不变）；BOARD_SPECIAL=特殊作业报备及
+  日报表群「特殊作业速递」（晨报/作业票审核/晚报三格，前缀 safety:special_digest，
+  目标群复用 SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID，off/false/none=板停用）。
+  两板键/卡片 message_id 完全隔离，同日互不干扰。
 """
 
 from __future__ import annotations
@@ -62,13 +67,9 @@ def forward_chat_id() -> str:
         "SAFETY_HAZARD_BULLETIN_FORWARD_CHAT_ID", "",
     )
 
-_KEY = "safety:daily_digest:{date}"
-_MSG_KEY = "safety:daily_digest:card:{date}"
-# 督办通报「推送到群」当天已推送卡（value=JSON{chat,msg_id}，供后续点击原地更新）
+# 督办通报「推送到群」当天已推送卡（value=JSON{chat,msg_id}，供后续点击原地更新；
+# 仅安全速递板有转发按钮，前缀直接沿用 safety:daily_digest）
 _FORWARD_KEY = "safety:daily_digest:forward:{date}"
-# 各格子最近一次推送时间（field=报告 key，与格子主 hash 同 TTL）——
-# 驾驶舱「今日安全速递」回放需要推送时间，历史格子（补记上线前写入）无此字段
-_SENT_AT_KEY = "safety:daily_digest:sent_at:{date}"
 _TTL_SECONDS = 7 * 86400
 # 整卡大小预算（字节）。实测飞书 interactive 消息 content 上限约 150KB
 # （123KB 实测通过、154KB 报 230025），留 ~10KB 余量；正常日报总量远达不到，
@@ -107,6 +108,71 @@ class DigestCell:
     detail: str         # 详情 markdown（完整展示，不截断）
 
 
+# ── 多板（board）：一块板 = 一个群的一张每日速递卡 ──
+
+BOARD_SAFETY = "safety"
+BOARD_SPECIAL = "special"
+
+# 特殊作业速递板停用语（与 special_operation_daily_report 加发开关语义一致：
+# off/false/none = 停用；空值在配置中心语义为回落代码默认群，不停用）
+_BOARD_DISABLED = {"off", "false", "none"}
+
+
+def special_digest_chat_id() -> str:
+    """特殊作业速递板目标群（=特殊作业晨/晚报加发群，两口径共用同一配置键）。
+
+    默认值与 service/special_operation_daily_report.extra_report_chat_id 一致
+    （该键无 env/DB 行时取代码默认，两处默认必须保持同一群）。
+    """
+    return _app_config_store.get_str(
+        "SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID",
+        "oc_4ab4a89f7bbb2450f5e0e341bf0f5f10",
+    )
+
+
+def special_digest_enabled() -> bool:
+    return special_digest_chat_id().strip().lower() not in _BOARD_DISABLED
+
+
+@dataclass(frozen=True)
+class DigestBoard:
+    """一块速递板的全部差异配置（键前缀/标题/格子集/目标群/开关）。"""
+
+    redis_prefix: str               # 格子 hash / 卡片 msg_id / sent_at 共用前缀
+    title: str                      # 卡片标题（含日期占位 {date}）
+    subtitle_fmt: str               # 副标题（{n}=当日格子数）
+    greeting: str
+    empty_text: str
+    cell_order: tuple[str, ...]     # 本板格子固定顺序（缺席跳过）
+    chat_resolver: Any              # () -> str 目标群
+    enabled_resolver: Any           # () -> bool 板开关
+
+
+BOARDS: dict[str, DigestBoard] = {
+    BOARD_SAFETY: DigestBoard(
+        redis_prefix="safety:daily_digest",
+        title="📌 安全速递 | {date}",
+        subtitle_fmt="今日已汇总 {n} 项安全动态",
+        greeting="Hi，今日安全动态汇总，点各条目的「查看详情」展开明细：",
+        empty_text="_今日暂无安全动态_",
+        cell_order=tuple(CELL_ORDER),
+        chat_resolver=digest_chat_id,
+        enabled_resolver=digest_enabled,
+    ),
+    BOARD_SPECIAL: DigestBoard(
+        redis_prefix="safety:special_digest",
+        title="📋 特殊作业速递 | {date}",
+        subtitle_fmt="今日已汇总 {n} 项特殊作业动态",
+        greeting="Hi，今日特殊作业动态汇总，点各条目的「查看详情」展开明细：",
+        empty_text="_今日暂无特殊作业动态_",
+        # 按当日时间序：晨报 08:00 → 作业票审核 10:00 → 晚报 17:00
+        cell_order=("special_op", "workticket", "special_op_pm"),
+        chat_resolver=special_digest_chat_id,
+        enabled_resolver=special_digest_enabled,
+    ),
+}
+
+
 # 同日多报告并发推送时串行化「读格子 → 建卡 → PATCH」（单进程内足够）
 _lock = asyncio.Lock()
 
@@ -116,8 +182,27 @@ def _bj_today() -> date:
     return (datetime.now(UTC) + timedelta(hours=8)).date()
 
 
-def _digest_key(d: date) -> str:
-    return _KEY.format(date=d.isoformat())
+def _digest_key(d: date, board: str = BOARD_SAFETY) -> str:
+    return f"{BOARDS[board].redis_prefix}:{d.isoformat()}"
+
+
+def _card_msg_key(d: date, board: str = BOARD_SAFETY) -> str:
+    return f"{BOARDS[board].redis_prefix}:card:{d.isoformat()}"
+
+
+def _sent_key(d: date, board: str = BOARD_SAFETY) -> str:
+    return f"{BOARDS[board].redis_prefix}:sent_at:{d.isoformat()}"
+
+
+async def get_board_card_message_id(
+    report_date: date,
+    board: str = BOARD_SAFETY,
+    *,
+    store: Any = None,
+) -> str | None:
+    """读取某板当日速递卡的 message_id（无卡返回 None；供调用方落 push_message_id）。"""
+    store = store if store is not None else await get_redis()
+    return await store.get(_card_msg_key(report_date, board))
 
 
 async def cell_detail(report_date: date, key: str, *, store: Any = None) -> str | None:
@@ -252,59 +337,64 @@ async def upsert_daily_digest(
     key: str,
     cell: DigestCell,
     *,
+    board: str = BOARD_SAFETY,
     chat_id: str | None = None,
     store: Any = None,
     sender: Any = None,
     updater: Any = None,
 ) -> bool:
-    """保存格子并创建/更新当日总卡。
+    """保存格子并创建/更新某板的当日总卡。
 
     Args:
         report_date: 报告日期（北京时间日）
-        key: 报告标识（CELL_ORDER 之一）
+        key: 报告标识（所属板 cell_order 之一）
         cell: 格子内容
+        board: 目标板（BOARD_SAFETY 安全速递 / BOARD_SPECIAL 特殊作业速递）
         chat_id / store / sender / updater: 测试与覆盖用接缝
             （默认真实 Redis / send_group_card / update_card）
 
     Returns:
-        True 表示总卡已包含该格子；False 表示失败（只告警，不抛异常），含被
-        历史日期护栏拦下（格子已写存储，但不向群内重建旧日期总卡）
+        True 表示总卡已包含该格子；False 表示失败（只告警，不抛异常），含板
+        停用、被历史日期护栏拦下（格子已写存储，但不向群内重建旧日期总卡）
     """
-    if not digest_enabled():
+    board_cfg = BOARDS.get(board)
+    if board_cfg is None or not board_cfg.enabled_resolver():
+        if board_cfg is None:
+            logger.warning("安全速递投格收到未知板 %r，忽略", board)
         return False
     store = store if store is not None else await get_redis()
     sender = sender if sender is not None else send_group_card
     updater = updater if updater is not None else update_card
-    chat = chat_id or digest_chat_id()
+    chat = chat_id or board_cfg.chat_resolver()
     try:
         payload = asdict(cell)
         async with _lock:
             await store.hset(
-                _digest_key(report_date), key, json.dumps(payload, ensure_ascii=False),
+                _digest_key(report_date, board), key, json.dumps(payload, ensure_ascii=False),
             )
-            await store.expire(_digest_key(report_date), _TTL_SECONDS)
-            sent_at_key = _SENT_AT_KEY.format(date=report_date.isoformat())
+            await store.expire(_digest_key(report_date, board), _TTL_SECONDS)
+            sent_at_key = _sent_key(report_date, board)
             await store.hset(
                 sent_at_key, key, datetime.now(UTC).isoformat(),
             )
             await store.expire(sent_at_key, _TTL_SECONDS)
-            cells = await _load_cells(store, report_date)
-            card, title, subtitle, greeting = await _build_card(report_date, cells)
-            msg_id_key = _MSG_KEY.format(date=report_date.isoformat())
+            cells = await _load_cells(store, report_date, board)
+            card, title, subtitle, greeting = await _build_card(report_date, cells, board)
+            msg_id_key = _card_msg_key(report_date, board)
             msg_id = await store.get(msg_id_key)
             updated = False
             if msg_id:
                 updated = await updater(msg_id, card)
                 if not updated:
-                    logger.warning("安全速递总卡 PATCH 失败，转重建: %s", msg_id)
+                    logger.warning("速递总卡 PATCH 失败，转重建: board=%s msg=%s", board, msg_id)
             if not updated:
                 # 历史日期护栏：早于北京昨天的日期不再向群里重建总卡（原卡键
                 # 早已过期，重建=新发一张旧日期卡）；格子照写，供驾驶舱回放
                 if report_date < _bj_today() - timedelta(days=1):
                     logger.warning(
-                        "安全速递总卡拒绝为历史日期重建发卡（仅写存储不发群）: "
-                        "date=%s key=%s prev_msg=%s",
-                        report_date, key, msg_id or "-",
+                        "速递总卡拒绝为历史日期重建发卡（仅写存储不发群）: "
+                        "board=%s date=%s key=%s prev_msg=%s",
+                        board, report_date, key, msg_id or "-",
                     )
                     return False
                 # sender 内部会把 greeting 作为首个元素重拼，这里剥掉已含的问候元素
@@ -317,25 +407,29 @@ async def upsert_daily_digest(
                     subtitle=subtitle,
                 )
                 if not new_id:
-                    logger.warning("安全速递总卡创建失败: date=%s", report_date)
+                    logger.warning("速递总卡创建失败: board=%s date=%s", board, report_date)
                     return False
                 await store.set(msg_id_key, new_id, ex=_TTL_SECONDS)
             return True
     except Exception:
-        logger.warning("安全速递总卡更新异常（不影响报告推送）", exc_info=True)
+        logger.warning("速递总卡更新异常（不影响报告推送）board=%s", board, exc_info=True)
         return False
 
 
-async def _load_cells(store: Any, report_date: date) -> dict[str, dict[str, Any]]:
-    raw = await store.hgetall(_digest_key(report_date))
+async def _load_cells(
+    store: Any,
+    report_date: date,
+    board: str = BOARD_SAFETY,
+) -> dict[str, dict[str, Any]]:
+    raw = await store.hgetall(_digest_key(report_date, board))
     cells: dict[str, dict[str, Any]] = {}
     for key, value in raw.items():
-        if key not in CELL_ORDER:
+        if key not in BOARDS[board].cell_order:
             continue
         try:
             cells[key] = json.loads(value)
         except (TypeError, ValueError):
-            logger.warning("安全速递格子数据损坏，跳过: %s", key)
+            logger.warning("速递格子数据损坏，跳过: board=%s key=%s", board, key)
     return cells
 
 
@@ -346,15 +440,13 @@ async def load_daily_digest_cells(
 ) -> list[dict[str, Any]]:
     """读取当日已推送的速递格子（只读回放，供 /safety/overview 驾驶舱）。
 
-    按 CELL_ORDER 固定顺序返回 [{key, tag_color, tag_text, title, stats, zone,
-    detail, sent_at}]；sent_at 为最近一次推送时间（补记上线前的历史格子为 None）。
-    与推送写入链路解耦：本函数只读，不建卡不发消息。
+    固定读安全速递板（BOARD_SAFETY），按其 CELL_ORDER 返回 [{key, tag_color,
+    tag_text, title, stats, zone, detail, sent_at}]；sent_at 为最近一次推送时间
+    （补记上线前的历史格子为 None）。与推送写入链路解耦：只读，不建卡不发消息。
     """
     store = store if store is not None else await get_redis()
     cells = await _load_cells(store, report_date)
-    sent_at_raw = await store.hgetall(
-        _SENT_AT_KEY.format(date=report_date.isoformat())
-    )
+    sent_at_raw = await store.hgetall(_sent_key(report_date))
     out: list[dict[str, Any]] = []
     for key in CELL_ORDER:
         cell = cells.get(key)
@@ -367,16 +459,18 @@ async def load_daily_digest_cells(
 async def _build_card(
     report_date: date,
     cells: dict[str, dict[str, Any]],
+    board: str = BOARD_SAFETY,
 ) -> tuple[dict[str, Any], str, str, str]:
-    """构建总卡：明细完整展示；仅当整卡超预算时兜底逐格减半（正常数据达不到）。"""
-    title = f"📌 安全速递 | {report_date.isoformat()}"
-    subtitle = f"今日已汇总 {len(cells)} 项安全动态"
-    greeting = "Hi，今日安全动态汇总，点各条目的「查看详情」展开明细："
+    """构建某板总卡：明细完整展示；仅当整卡超预算时兜底逐格减半（正常数据达不到）。"""
+    board_cfg = BOARDS[board]
+    title = board_cfg.title.format(date=report_date.isoformat())
+    subtitle = board_cfg.subtitle_fmt.format(n=len(cells))
+    greeting = board_cfg.greeting
 
     # key → 明细字符上限；None 表示完整展示
     limits: dict[str, int] = {}
     while True:
-        elements = await _build_elements(cells, limits)
+        elements = await _build_elements(cells, limits, board)
         card = build_card_dict(title, greeting, "blue", elements, subtitle=subtitle)
         size = len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
         if size <= _MAX_CARD_BYTES:
@@ -397,15 +491,16 @@ async def _build_card(
 async def _build_elements(
     cells: dict[str, dict[str, Any]],
     limits: dict[str, int],
+    board: str = BOARD_SAFETY,
 ) -> list[dict[str, Any]]:
     elements: list[dict[str, Any]] = []
-    for key in CELL_ORDER:
+    for key in BOARDS[board].cell_order:
         cell = cells.get(key)
         if not cell:
             continue
         elements.append(await _cell_element(cell, limits.get(key), key=key))
     if not elements:
-        elements.append({"tag": "markdown", "content": "_今日暂无安全动态_"})
+        elements.append({"tag": "markdown", "content": BOARDS[board].empty_text})
     return elements
 
 

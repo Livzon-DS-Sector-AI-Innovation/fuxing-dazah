@@ -242,10 +242,20 @@ async def run(
             )
 
     target_list = target_chats if target_chats is not None else [DAILY_REPORT_CHAT_ID]
+    # 特殊作业速递板目标群（加发群）2026-10-27 起不再收独立日报卡，收纳为
+    # 「特殊作业速递」每日一张卡的格子（见下方 board 投格）；主目标群独立卡不变。
+    extra_chat = ""
+    try:
+        from app.modules.safety.feishu.daily_digest import special_digest_chat_id
+
+        extra_chat = special_digest_chat_id().strip()
+    except Exception:
+        logger.warning("特殊作业速递板目标群解析失败", exc_info=True)
+    standalone_targets = [c for c in target_list if not (extra_chat and c == extra_chat)]
     push_results: list[dict[str, Any]] = []
     if push:
         sender = pusher or _FeishuGroupPusher()
-        for chat_id in target_list:
+        for chat_id in standalone_targets:
             try:
                 msg_id = await sender.send(
                     chat_id=chat_id,
@@ -265,8 +275,13 @@ async def run(
                 logger.exception("推送失败: chat_id=%s", chat_id)
                 push_results.append({"chat_id": chat_id, "success": False, "error": str(exc)})
         # 任一目标推送失败（异常或未返回 message_id）视为任务失败：抛出让调度器
-        # 标记 failed 并进入补发窗口，避免静默丢失
-        if not push_results or not all(r.get("success") for r in push_results):
+        # 标记 failed 并进入补发窗口，避免静默丢失。
+        # 独立卡目标全部为加发群被滤掉（主目标=加发群）时不判失败——该群由
+        # 特殊作业速递板格子承载。
+        only_extra_filtered = bool(target_list) and not standalone_targets
+        if not only_extra_filtered and (
+            not push_results or not all(r.get("success") for r in push_results)
+        ):
             failed = next(
                 (r.get("error") for r in push_results if not r.get("success")),
                 "未返回 message_id",
@@ -322,6 +337,28 @@ async def run(
                 )
             except Exception:
                 logger.warning("安全速递总卡投递失败（特殊作业）", exc_info=True)
+
+            # 「特殊作业速递」板格子（特殊作业报备及日报表群）：该群 2026-10-27
+            # 起不再收独立日报卡，晨/晚报收纳为每日一张速递卡的格子；板停用
+            # （加发群未配置）时 no-op。失败只告警，不影响日报本身。
+            try:
+                from app.modules.safety.feishu.daily_digest import BOARD_SPECIAL
+
+                await upsert_daily_digest(
+                    target_date,
+                    cell_key,
+                    DigestCell(
+                        tag_color=cell_color,
+                        tag_text=cell_tag_text,
+                        title=cell_title,
+                        stats=cell_stats,
+                        zone=zone,
+                        detail=markdown,
+                    ),
+                    board=BOARD_SPECIAL,
+                )
+            except Exception:
+                logger.warning("特殊作业速递板投格失败（特殊作业）", exc_info=True)
 
     return DailyReportResponse(
         report_date=target_date,

@@ -474,3 +474,142 @@ async def test_send_digest_cell_card_failure_returns_none(
     assert await daily_digest.send_digest_cell_card(
         _cell(), chat_id="oc_extra", sender=boom,
     ) is None
+
+
+# ── 特殊作业速递板（BOARD_SPECIAL，多板隔离）──
+
+async def test_special_board_creates_isolated_card(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """special 板独立前缀/独立卡 message_id，与 safety 板同日互不干扰。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "oc_special_group")
+    store = _FakeStore()
+    sent: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return f"om_special_{len(sent)}"
+
+    # 先给 safety 板投一格（建 safety 卡），再给 special 板投一格
+    ok1 = await upsert_daily_digest(
+        D, "special_op", _cell(), store=store, sender=sender, updater=_ok_updater,
+    )
+    ok2 = await upsert_daily_digest(
+        D, "workticket", _cell("作业票明细"),
+        board="special", store=store, sender=sender, updater=_ok_updater,
+    )
+    assert ok1 and ok2
+    # 两板各自建卡、message_id 隔离
+    assert store.strings["safety:daily_digest:card:2026-09-15"] == "om_special_1"
+    assert store.strings["safety:special_digest:card:2026-09-15"] == "om_special_2"
+    assert sent[0]["chat_id"] != sent[1]["chat_id"]
+    # special 板标题与目标群
+    assert sent[1]["title"] == "📋 特殊作业速递 | 2026-09-15"
+    # special 板 hash 只含 special 板格子，safety 板不受污染
+    assert "workticket" in store.hashes["safety:special_digest:2026-09-15"]
+    assert "workticket" not in store.hashes["safety:daily_digest:2026-09-15"]
+
+
+async def test_special_board_patch_rolls_cells(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """special 板三格按序滚动：special_op → workticket → special_op_pm。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "oc_special_group")
+    store = _FakeStore()
+    sent: list[dict[str, Any]] = []
+    patched: list[str] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return "om_sp_1"
+
+    patched_cards: list[dict[str, Any]] = []
+
+    async def updater(msg_id: str, card: dict[str, Any]) -> bool:
+        patched.append(msg_id)
+        patched_cards.append(card)
+        return True
+
+    for key in ("special_op", "workticket", "special_op_pm"):
+        ok = await upsert_daily_digest(
+            D, key, _cell(f"{key} 明细"),
+            board="special", store=store, sender=sender, updater=updater,
+        )
+        assert ok
+    assert len(sent) == 1                      # 只建一次卡
+    assert len(patched) == 2                   # 后两格原地 PATCH
+    # 最后一次 PATCH 的卡含全部三格，按板序（晨报→作业票→晚报）渲染
+    body = json.dumps(patched_cards[-1]["body"]["elements"], ensure_ascii=False)
+    assert body.index("special_op 明细") < body.index("workticket 明细") < body.index("special_op_pm 明细")
+
+
+async def test_special_board_filters_foreign_cells(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非 special 板格子集的 key（如 fire_alarm）写存储但不渲染进卡。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "oc_special_group")
+    store = _FakeStore()
+    captured: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        captured.append(kw)
+        return "om_sp_x"
+
+    await upsert_daily_digest(
+        D, "fire_alarm", _cell("消防明细"),
+        board="special", store=store, sender=sender, updater=_ok_updater,
+    )
+    assert "fire_alarm" in store.hashes["safety:special_digest:2026-09-15"]
+    body = json.dumps(captured[0]["elements"], ensure_ascii=False)
+    assert "消防明细" not in body               # 不在本板 cell_order，不渲染
+
+
+async def test_special_board_disabled_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """加发群 off/false/none → special 板停用：不写存储不发卡。"""
+    for off in ("off", "false", "none"):
+        monkeypatch.setenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", off)
+        store = _FakeStore()
+        sent: list[dict[str, Any]] = []
+
+        async def sender(**kw: Any) -> str | None:
+            sent.append(kw)
+            return "om_should_not"
+
+        ok = await upsert_daily_digest(
+            D, "workticket", _cell(),
+            board="special", store=store, sender=sender, updater=_ok_updater,
+        )
+        assert ok is False
+        assert sent == []
+        assert store.hashes == {}
+    # safety 板不受停用影响
+    monkeypatch.delenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", raising=False)
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+
+    async def sender2(**kw: Any) -> str | None:
+        return "om_ok"
+
+    ok = await upsert_daily_digest(
+        D, "workticket", _cell(), store=store, sender=sender2, updater=_ok_updater,
+    )
+    assert ok is True
+
+
+async def test_get_board_card_message_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID", "oc_special_group")
+    store = _FakeStore()
+    store.strings["safety:special_digest:card:2026-09-15"] = "om_sp_card"
+
+    from app.modules.safety.feishu.daily_digest import get_board_card_message_id
+
+    assert await get_board_card_message_id(D, "special", store=store) == "om_sp_card"
+    assert await get_board_card_message_id(D, store=store) is None

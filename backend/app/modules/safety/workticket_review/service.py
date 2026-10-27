@@ -25,7 +25,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.app_config.store import store as _app_config_store
-from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import (
     WorkTicketReview,
     WorkTicketReviewViolation,
@@ -98,7 +97,8 @@ class WorkTicketReviewService:
         self.rule_engine = rule_engine or WorkTicketRuleEngine()
         self.repo = repo or WorkTicketReviewRepository(session)
         self.builder = builder or WorkTicketReviewReportBuilder()
-        self.chat_id = chat_id  # 发送目标唯一来源：调度器/调用方配置（DB 播种/覆写），不再回退默认群
+        self.chat_id = chat_id  # 历史字段：独立群卡 2026-10-27 起取消（速递格推送），
+        # 保留兼容调度器/手动 API 传参，不再用于发送
         self._owns_client = client is None
 
     # ── 对外入口 ──
@@ -184,140 +184,130 @@ class WorkTicketReviewService:
         }
 
         if push:
-            try:
-                # 速递卡优先（构建失败/超限回退旧长卡）
-                from app.modules.safety.feishu.workticket_digest import (
-                    build_workticket_digest,
-                )
+            # 群出口 = 特殊作业速递板格子（特殊作业报备及日报表群，每日一张卡
+            # 滚动更新）；独立群卡 2026-10-27 起取消（原特殊作业自动分配群推送）。
+            from app.modules.safety.feishu.daily_digest import (
+                BOARD_SPECIAL,
+                DigestCell,
+                get_board_card_message_id,
+                special_digest_enabled,
+                upsert_daily_digest,
+            )
 
-                digest_card = build_workticket_digest(
-                    review_date, tickets, violations_by_ticket, stats, markdown,
-                    rectify=rectify_summary,
-                )
-                if digest_card is not None:
-                    msg_id = await send_group_card(
-                        chat_id=self.chat_id,
-                        title=digest_card.title,
-                        content=digest_card.content,
-                        elements=digest_card.elements,
-                        header_template=digest_card.header_template,
-                        subtitle=digest_card.subtitle,
-                        header_tags=digest_card.header_tags,
+            digest_date = datetime.now(TZ).date()
+            stats_line = (
+                f"{review_date.isoformat()} 审核 **{stats.get('total', 0)}** 票 ｜ "
+                f"✅ 通过 {stats.get('compliant_count', 0)} · "
+                f"❌ 驳回 {stats.get('violation_count', 0)} · "
+                f"待补 {stats.get('data_insufficient', 0)}"
+            )
+            if rectify_summary:
+                if rectify_summary.get("problem_total"):
+                    stats_line += (
+                        f" ｜ 🔁 前日复查 ✅ {rectify_summary.get('rectified', 0)}"
+                        f" · ❌ {rectify_summary.get('unrectified', 0)}"
+                        f" · ⚠️ {rectify_summary.get('uncheckable', 0)}"
                     )
                 else:
-                    msg_id = await send_group_card(
-                        chat_id=self.chat_id,
-                        title=f"作业票审核日报 - {review_date.isoformat()}",
-                        content=markdown,
-                    )
-                if msg_id:
-                    push_result = {
-                        "chat_id": self.chat_id,
-                        "pushed": True,
-                        "success": True,
-                        "message_id": msg_id,
-                    }
-                else:
-                    push_result = {
-                        "chat_id": self.chat_id,
-                        "pushed": False,
-                        "success": False,
-                        "message_id": None,
-                        "error": "飞书未返回 message_id",
-                    }
-            except Exception as exc:
-                logger.exception(
-                    "作业票审核推送失败 date=%s chat_id=%s",
-                    review_date,
-                    self.chat_id,
+                    stats_line += " ｜ 🔁 前日复查：无问题票"
+            cell = DigestCell(
+                tag_color="green",
+                tag_text="作业票审核",
+                title="作业票审核日报",
+                stats=stats_line,
+                zone="",
+                detail=markdown,
+            )
+
+            if not special_digest_enabled():
+                # 配置态而非故障：不判失败，审核照常成功落库（仅告警）
+                logger.warning(
+                    "特殊作业速递板未配置目标群（SAFETY_SPECIAL_OP_EXTRA_REPORT_CHAT_ID），"
+                    "作业票审核本次不推送群卡 date=%s", review_date,
                 )
                 push_result = {
-                    "chat_id": self.chat_id,
+                    "chat_id": None,
                     "pushed": False,
-                    "success": False,
+                    "success": None,
                     "message_id": None,
-                    "error": str(exc),
+                    "error": "特殊作业速递板未配置目标群",
                 }
+            else:
+                push_error: str | None = None
+                try:
+                    ok = await upsert_daily_digest(
+                        digest_date, "workticket", cell, board=BOARD_SPECIAL,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "作业票审核速递格投递异常 date=%s", review_date,
+                    )
+                    push_error = str(exc)
+                else:
+                    if ok:
+                        push_result = {
+                            "chat_id": None,
+                            "pushed": True,
+                            "success": True,
+                            "message_id": await get_board_card_message_id(
+                                digest_date, BOARD_SPECIAL,
+                            ),
+                        }
+                    else:
+                        push_error = "特殊作业速递格投递失败（详见日志）"
 
-            if not push_result.get("success"):
-                error_text = push_result.get("error") or "未返回 message_id"
-                review = self._make_review(
-                    review_date,
-                    stats,
-                    markdown,
-                    status="failed",
-                    pushed=False,
-                    message_id=None,
-                    error=f"推送失败：{error_text}",
-                    raw_tickets=raw_tickets,
-                    parse_errors=parse_errors,
-                )
-                await self.repo.save_review(
-                    review,
-                    self._build_violation_rows(review, tickets, violations_by_ticket),
-                )
-                await self.session.commit()
-                raise RuntimeError(
-                    f"作业票审核推送失败 {review_date} ({self.chat_id}): {error_text}"
-                ) from None
+                if push_error is not None:
+                    review = self._make_review(
+                        review_date,
+                        stats,
+                        markdown,
+                        status="failed",
+                        pushed=False,
+                        message_id=None,
+                        error=f"推送失败：{push_error}",
+                        raw_tickets=raw_tickets,
+                        parse_errors=parse_errors,
+                    )
+                    await self.repo.save_review(
+                        review,
+                        self._build_violation_rows(review, tickets, violations_by_ticket),
+                    )
+                    await self.session.commit()
+                    raise RuntimeError(
+                        f"作业票审核推送失败 {review_date}: {push_error}"
+                    ) from None
 
+            # 「安全速递」板格子（安全AI创新交流群）：双出口之二，失败只告警。
+            # 调度口径为每日 10 点审昨日——总卡按**运行日**落格（昨日结论进
+            # 今日速递）；不能按 review_date 落，否则 PATCH 的是昨日已发卡，
+            # 今日新卡永远缺作业票格子（2026-10-27 实测踩坑）。
             review = self._make_review(
                 review_date,
                 stats,
                 markdown,
                 status="success",
-                pushed=True,
+                pushed=bool(push_result.get("success")),
                 message_id=push_result.get("message_id"),
                 error=None,
                 raw_tickets=raw_tickets,
                 parse_errors=parse_errors,
             )
-            # 推送成功后更新 markdown 的“已推送”状态。
-            markdown = self.builder.build(
-                review_date,
-                tickets,
-                violations_by_ticket,
-                {**stats, "pushed": True},
-                rectify=rectify_summary,
-            )
-            review.report_markdown = markdown
-
-            # 「安全速递」总卡：投递本报告格子（失败不影响审核日报本身）。
-            # 调度口径为每日 10 点审昨日——总卡按**运行日**落格（昨日结论进
-            # 今日速递）；不能按 review_date 落，否则 PATCH 的是昨日已发卡，
-            # 今日新卡永远缺作业票格子（2026-10-27 实测踩坑）。
+            if push_result.get("success"):
+                # 推送成功后更新 markdown 的“已推送”状态。
+                markdown = self.builder.build(
+                    review_date,
+                    tickets,
+                    violations_by_ticket,
+                    {**stats, "pushed": True},
+                    rectify=rectify_summary,
+                )
+                review.report_markdown = markdown
             try:
-                from app.modules.safety.feishu.daily_digest import (
-                    DigestCell,
-                    upsert_daily_digest,
-                )
-
-                stats_line = (
-                    f"{review_date.isoformat()} 审核 **{stats.get('total', 0)}** 票 ｜ "
-                    f"✅ 通过 {stats.get('compliant_count', 0)} · "
-                    f"❌ 驳回 {stats.get('violation_count', 0)} · "
-                    f"待补 {stats.get('data_insufficient', 0)}"
-                )
-                if rectify_summary:
-                    if rectify_summary.get("problem_total"):
-                        stats_line += (
-                            f" ｜ 🔁 前日复查 ✅ {rectify_summary.get('rectified', 0)}"
-                            f" · ❌ {rectify_summary.get('unrectified', 0)}"
-                            f" · ⚠️ {rectify_summary.get('uncheckable', 0)}"
-                        )
-                    else:
-                        stats_line += " ｜ 🔁 前日复查：无问题票"
+                cell.detail = markdown
                 await upsert_daily_digest(
-                    datetime.now(TZ).date(),
+                    digest_date,
                     "workticket",
-                    DigestCell(
-                        tag_color="green",
-                        tag_text="作业票审核",
-                        title="作业票审核日报",
-                        stats=stats_line,
-                        zone="",
-                        detail=markdown,
-                    ),
+                    cell,
                 )
             except Exception:
                 logger.warning("安全速递总卡投递失败（作业票审核）", exc_info=True)
