@@ -143,6 +143,7 @@ class _TaskParse(_TaskCore):
         values: list[tuple[str, float]],
         filled_by: uuid.UUID | None = None,
         inputs: dict[str, Any] | None = None,
+        section: int = 0,
     ) -> tuple[list[str], list[str]]:
         """在线计算表提交：数值候选 + 表号合并规则计算 → 复用/创建检验记录留痕 → 判定填入任务。
 
@@ -157,9 +158,13 @@ class _TaskParse(_TaskCore):
             from app.modules.quality import calc_engine
 
             cfg = await get_lc_template_by_table_no(db, table_no)
-            calc_cfg = (cfg.config or {}).get("calc") if cfg else None
+            if cfg and (cfg.config or {}).get("calc_sections"):
+                sections = cfg.config["calc_sections"]
+                calc_cfg = sections[section]["calc"] if section < len(sections) else None
+            else:
+                calc_cfg = (cfg.config or {}).get("calc") if cfg else None
             if not calc_cfg:
-                raise AppException(status_code=400, detail=f"表号 {table_no} 未配置计算规则，请用直接填值模式")
+                raise AppException(status_code=400, detail=f"表号 {table_no} 该节未配置计算规则，请用直接填值模式")
             mode = calc_cfg.get("mode")
             if mode == "external_std":
                 computed = calc_engine.compute_external_std(calc_cfg, inputs)
@@ -233,6 +238,7 @@ class _TaskParse(_TaskCore):
         get, max_row, max_col = lc_template_parser.open_sheet(file_bytes, filename)
         table_no = lc_template_parser.detect_table_no(get, max_row, max_col)
         if not table_no:
+            logger.warning("液相计算表未识别到表号（EX-xx-xxxx-vvv），回落旧解析器")
             return None
         cfg = await get_lc_template_by_table_no(db, table_no)
         if not cfg:

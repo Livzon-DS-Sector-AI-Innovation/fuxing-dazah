@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { usePermission } from '@/hooks/usePermission'
 import { Card, Table, Button, Space, App, Modal, Form, Input, Popconfirm, Tag, Typography } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ExperimentOutlined } from '@ant-design/icons'
 import type { LcTemplateConfig } from '@/types/quality'
 import {
   fetchLcTemplateConfigs,
   createLcTemplateConfig,
   updateLcTemplateConfig,
   deleteLcTemplateConfig,
+  testCalc,
 } from '@/actions/quality'
+import { CalcForm } from '@/components/quality'
 
 const { Text } = Typography
 
@@ -25,6 +27,30 @@ export default function LcTemplateConfigs() {
   const [editing, setEditing] = useState<LcTemplateConfig | null>(null)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
+  // 测试计算：选表号填数值跑引擎，不落库
+  const [testOpen, setTestOpen] = useState(false)
+  const [testCfg, setTestCfg] = useState<LcTemplateConfig | null>(null)
+  const [testSection, setTestSection] = useState(0)
+  const [testInputs, setTestInputs] = useState<Record<string, number | undefined>>({})
+  const [testResult, setTestResult] = useState<{ items: { label: string; std_name: string; value: number | null; nd?: boolean; detail?: string }[] } | null>(null)
+
+  const openTest = (r: LcTemplateConfig) => {
+    setTestCfg(r)
+    setTestSection(0)
+    setTestInputs({})
+    setTestResult(null)
+    setTestOpen(true)
+  }
+
+  const runTest = async () => {
+    if (!testCfg) return
+    try {
+      const res = await testCalc(testCfg.table_no, testSection, testInputs)
+      setTestResult(res.data)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '测试计算失败')
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -121,11 +147,14 @@ export default function LcTemplateConfigs() {
     },
     { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
     {
-      title: '操作', key: 'actions', width: 120,
+      title: '操作', key: 'actions', width: 230,
       render: (_: unknown, r: LcTemplateConfig) => (
         <Space size={4}>
           {canManage && (
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+          )}
+          {(r.config.calc || r.config.calc_sections) && (
+          <Button size="small" icon={<ExperimentOutlined />} onClick={() => openTest(r)}>测试计算</Button>
           )}
           {canManage && (
           <Popconfirm
@@ -162,6 +191,52 @@ export default function LcTemplateConfigs() {
         scroll={{ x: 720 }}
         pagination={false}
       />
+
+      <Modal
+        title={`测试计算 ${testCfg ? testCfg.table_no : ''}（不落库，仅验证计算规则）`}
+        open={testOpen}
+        onCancel={() => setTestOpen(false)}
+        footer={null}
+        width={760}
+      >
+        {testCfg?.config.calc_sections && testCfg.config.calc_sections.length > 1 && (
+          <Space style={{ marginBottom: 10 }}>
+            {testCfg.config.calc_sections.map((sec, i) => (
+              <Button
+                key={i}
+                size="small"
+                type={testSection === i ? 'primary' : 'default'}
+                onClick={() => { setTestSection(i); setTestInputs({}); setTestResult(null) }}
+              >
+                {sec.name}
+              </Button>
+            ))}
+          </Space>
+        )}
+        {(() => {
+          const cfg = testCfg?.config.calc_sections
+            ? testCfg.config.calc_sections[testSection]?.calc
+            : testCfg?.config.calc
+          if (!cfg) return <Text type="secondary">该表号未配置计算规则</Text>
+          return (
+            <Space direction="vertical" style={{ width: '100%' }} size={10}>
+              <CalcForm cfg={cfg} inputs={testInputs} onChange={setTestInputs} />
+              <Button type="primary" onClick={runTest}>运行计算</Button>
+              {testResult && (
+                <Table
+                  rowKey="std_name" size="small" pagination={false}
+                  dataSource={testResult.items ?? []}
+                  columns={[
+                    { title: '项目', dataIndex: 'label', width: 180 },
+                    { title: '结果', dataIndex: 'value', width: 120, render: (v: number | null, r: { nd?: boolean }) => v != null ? <Text strong>{v.toFixed(4)}{r.nd ? '（未检出）' : ''}</Text> : '-' },
+                    { title: '明细', dataIndex: 'detail', ellipsis: true },
+                  ]}
+                />
+              )}
+            </Space>
+          )
+        })()}
+      </Modal>
 
       <Modal
         title={editing ? `编辑配置 ${editing.table_no}` : '新增液相模板配置'}

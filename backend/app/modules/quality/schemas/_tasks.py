@@ -92,6 +92,7 @@ class CalcFormSubmit(BaseModel):
     """
 
     table_no: str | None = Field(default=None, max_length=100, description="计算表表号（触发合并规则与计算引擎配置）")
+    section: int = Field(default=0, ge=0, le=9, description="表号分节索引（含量/有关物质多节表用，0=主节）")
     record_date: str | None = Field(default=None, max_length=32, description="检验日期 YYYY-MM-DD（留痕用）")
     values: list[CalcFormItem] = Field(default=[], max_length=200)
     inputs: dict[str, object] | None = Field(default=None, description="原始数据（峰面积/质量），驱动色谱计算引擎")

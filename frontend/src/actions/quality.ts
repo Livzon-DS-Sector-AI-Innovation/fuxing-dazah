@@ -1831,6 +1831,18 @@ export async function handleEnvRecord(recordId: string, input: { handled_remark?
   return res.json()
 }
 
+export async function testCalc(tableNo: string, section: number, inputs: Record<string, number | undefined>): Promise<{ data: { items: { label: string; std_name: string; value: number | null; nd?: boolean; detail?: string }[] } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/test-calc`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ table_no: tableNo, section, inputs, values: [] }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '测试计算失败')
+  }
+  return res.json()
+}
+
 export async function fetchDashboardAlerts(): Promise<{ data: QualityAlerts }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/dashboard/alerts`, {
     headers: await _authHeaders(), cache: 'no-store',
@@ -1843,6 +1855,7 @@ export async function submitCalcFill(taskId: string, input: {
   table_no?: string; record_date?: string
   values?: { item_name: string; value: number }[]
   inputs?: Record<string, number | undefined>
+  section?: number
 }): Promise<{ message: string; data: { filled: string[]; unmatched: string[] } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/calc-fill`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },

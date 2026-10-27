@@ -689,9 +689,18 @@ function GroupRrfForm({ cfg, inputs, set }: {
   inputs: Inputs
   set: (k: string, v: number | null) => void
 }) {
-  const mainTotal = num(inputs.main_total) ?? 0
+  const mtSpec = cfg.main_total
+  const rawMain = num(inputs.main_total) ?? 0
   const areas = Object.fromEntries(cfg.items.map((it) => [it.key, num(inputs[`area_${it.key}`]) ?? 0]))
-  const rrfSum = cfg.rrf_denom.reduce((a, k) => a + (areas[k] ?? 0), 0)
+  // 求和项：成员面积相加
+  const resolved = Object.fromEntries(cfg.items.map((it) => [
+    it.key,
+    it.sum_of ? it.sum_of.reduce((a, k) => a + (num(inputs[`area_${k}`]) ?? 0), 0) : (areas[it.key] ?? 0),
+  ]))
+  const mainTotal = typeof mtSpec === 'object'
+    ? Math.max((num(inputs[mtSpec.key]) ?? 0) - (mtSpec.minus ?? []).reduce((a, k) => a + (num(inputs[`area_${k}`]) ?? 0), 0), 0)
+    : rawMain
+  const rrfSum = cfg.rrf_denom.reduce((a, k) => a + (resolved[k] ?? 0), 0)
   const denom = mainTotal + cfg.rrf * rrfSum
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={8}>
@@ -699,11 +708,29 @@ function GroupRrfForm({ cfg, inputs, set }: {
         分组校正因子归一化：校正总面积 = 主组总峰面积 + {cfg.rrf}×校正组面积；校正组成员% = {cfg.rrf}×面积/校正总面积×100。
         {cfg.review && <Text type="warning">　⚠ {cfg.review}</Text>}
       </Text>
-      <span style={{ fontSize: 12.5 }}>
-        {cfg.main_std_name}（主组）总峰面积
-        <InputNumber size="small" style={{ width: 130, marginLeft: 6 }} value={inputs.main_total}
-          onChange={(v) => set('main_total', v)} />
-      </span>
+      {typeof mtSpec === 'object' ? (
+        <Space wrap size={6}>
+          <span style={{ fontSize: 12.5 }}>
+            总峰面积
+            <InputNumber size="small" style={{ width: 130, marginLeft: 6 }} value={inputs[mtSpec.key]}
+              onChange={(v) => set(mtSpec.key, v)} />
+          </span>
+          {(mtSpec.minus ?? []).map((k) => (
+            <span key={k} style={{ fontSize: 12.5 }}>
+              {cfg.items.find((it) => it.key === k)?.label ?? k}（扣除）
+              <InputNumber size="small" style={{ width: 130, marginLeft: 6 }} value={inputs[`area_${k}`]}
+                onChange={(v) => set(`area_${k}`, v)} />
+            </span>
+          ))}
+          <Text type="secondary" style={{ fontSize: 12 }}>主组面积 = {mainTotal.toFixed(0)}</Text>
+        </Space>
+      ) : (
+        <span style={{ fontSize: 12.5 }}>
+          {cfg.main_std_name}（主组）总峰面积
+          <InputNumber size="small" style={{ width: 130, marginLeft: 6 }} value={inputs.main_total}
+            onChange={(v) => set('main_total', v)} />
+        </span>
+      )}
       <Table<{ key: string; label: string; isRrf: boolean }>
         rowKey="key" size="small" pagination={false}
         dataSource={cfg.items.map((it) => ({ key: it.key, label: it.label, isRrf: cfg.rrf_group.includes(it.key) }))}
@@ -713,16 +740,26 @@ function GroupRrfForm({ cfg, inputs, set }: {
             <span>{v}{r.isRrf && <Text type="warning" style={{ fontSize: 11 }}>（×{cfg.rrf}）</Text>}</span>
           ) },
           {
-            title: '峰面积', key: 'area', width: 140,
-            render: (_: unknown, r) => (
-              <InputNumber size="small" style={{ width: '100%' }} value={inputs[`area_${r.key}`]}
-                onChange={(v) => set(`area_${r.key}`, v)} />
+            title: '峰面积', key: 'area', width: 200,
+            render: (_: unknown, r: { key: string; sum_of?: string[] }) => (
+              r.sum_of ? (
+                <Space size={4}>
+                  {r.sum_of.map((k) => (
+                    <InputNumber key={k} size="small" style={{ width: 88 }} placeholder={k}
+                      value={inputs[`area_${k}`]}
+                      onChange={(v) => set(`area_${k}`, v)} />
+                  ))}
+                </Space>
+              ) : (
+                <InputNumber size="small" style={{ width: '100%' }} value={inputs[`area_${r.key}`]}
+                  onChange={(v) => set(`area_${r.key}`, v)} />
+              )
             ),
           },
           {
             title: '结果%', key: 'v', width: 130,
-            render: (_: unknown, r) => {
-              const a = num(inputs[`area_${r.key}`]) ?? 0
+            render: (_: unknown, r: { key: string; isRrf: boolean }) => {
+              const a = resolved[r.key] ?? 0
               if (denom <= 0) return '-'
               const v = (r.isRrf ? cfg.rrf * a : a) / denom * 100
               return <Text strong>{v.toFixed(4)}%</Text>

@@ -164,6 +164,49 @@ async def parse_lc_into_task_endpoint(
     return success_response(data=detail.model_dump(mode="json"), message=msg)
 
 
+@router.post("/lc/test-calc", summary="测试计算：填数值跑计算引擎（配置页自验，不落库）")
+async def test_calc_endpoint(
+    payload: CalcFormSubmit = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:template:manage")),
+) -> JSONResponse:
+    from app.modules.quality import calc_engine
+    from app.modules.quality.repository import get_lc_template_by_table_no
+
+    if not payload.table_no:
+        raise HTTPException(status_code=400, detail="请选择表号")
+    cfg = await get_lc_template_by_table_no(db, payload.table_no)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"表号 {payload.table_no} 未配置，请到「报告模板→计算表取值配置」添加")
+    if (cfg.config or {}).get("calc_sections"):
+        sections = cfg.config["calc_sections"]
+        calc_cfg = sections[payload.section]["calc"] if payload.section < len(sections) else None
+    else:
+        calc_cfg = (cfg.config or {}).get("calc")
+    if not calc_cfg or not payload.inputs:
+        raise HTTPException(status_code=400, detail="该表号未配置计算规则或无输入数据")
+    mode = calc_cfg.get("mode")
+    if mode == "external_std":
+        computed = calc_engine.compute_external_std(calc_cfg, payload.inputs)
+    elif mode == "external_std_content":
+        computed = calc_engine.compute_external_std_content(calc_cfg, payload.inputs)
+    elif mode == "external_std_content_multi":
+        computed = calc_engine.compute_content_multi(calc_cfg, payload.inputs)
+    elif mode == "impurity_vs_std":
+        computed = calc_engine.compute_impurity_vs_std(calc_cfg, payload.inputs)
+    elif mode == "impurity_std_ratio":
+        computed = calc_engine.compute_impurity_std_ratio(calc_cfg, payload.inputs)
+    elif mode == "std_curve":
+        computed = calc_engine.compute_std_curve(calc_cfg, payload.inputs)
+    elif mode == "group_rrf":
+        computed = calc_engine.compute_group_rrf(calc_cfg, payload.inputs)
+    elif mode == "impurity_rrf_std":
+        computed = calc_engine.compute_impurity_rrf_std(calc_cfg, payload.inputs)
+    else:
+        computed = calc_engine.compute_normalization(calc_cfg, payload.inputs)
+    return success_response(data=computed)
+
+
 @router.post("/tasks/{task_id}/calc-fill", summary="在线计算表填报（免 Excel：数值+表号合并规则→判定填入）")
 async def submit_calc_form_endpoint(
     task_id: uuid.UUID,
@@ -177,7 +220,7 @@ async def submit_calc_form_endpoint(
     filled, unmatched = await test_task_service.submit_calc_form(
         db, task, payload.table_no, payload.record_date,
         [(v.item_name, v.value) for v in payload.values], filled_by=user.id,
-        inputs=payload.inputs,
+        inputs=payload.inputs, section=payload.section,
     )
     detail = await test_task_service.get_task_detail(db, task_id)
     msg = f"计算表已提交：已填入 {len(filled)} 项"

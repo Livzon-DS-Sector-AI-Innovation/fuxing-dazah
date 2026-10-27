@@ -313,6 +313,7 @@ def compute_impurity_vs_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict
         return f if f is not None else 0.0
 
     std_factor = float(cfg.get("std_factor") or 1)
+    result_div = float(cfg.get("result_div") or 1)
     std_c = sum(_area(inputs.get(f"std_c_area_{c['key']}")) for c in components) * std_factor
     if std_c <= 0:
         return {"mode": "impurity_vs_std", "items": [], "error": "标准溶液c面积未填写"}
@@ -322,7 +323,7 @@ def compute_impurity_vs_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict
         key = str(imp["key"])
         vals: list[float] = []
         for i in range(1, samples + 1):
-            vals.append(_area(inputs.get(f"imp_{key}_{i}")) / std_c * 100)
+            vals.append(_area(inputs.get(f"imp_{key}_{i}")) / std_c * 100 / result_div)
         avg = sum(vals) / len(vals)
         nd = all(v == 0 for v in vals)
         detail = " / ".join(
@@ -335,7 +336,7 @@ def compute_impurity_vs_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict
     for i in range(1, samples + 1):
         total = _area(inputs.get(f"sample_total_{i}"))
         mains = sum(_area(inputs.get(f"sample_main_{c['key']}_{i}")) for c in components)
-        tot_vals.append(max(total - mains, 0.0) / std_c * 100)
+        tot_vals.append(max(total - mains, 0.0) / std_c * 100 / result_div)
     avg_t = sum(tot_vals) / len(tot_vals)
     items.append({
         "std_name": cfg.get("total_std_name") or "总杂",
@@ -410,14 +411,23 @@ def compute_impurity_std_ratio(cfg: dict[str, Any], inputs: dict[str, Any]) -> d
     std_areas = [_num(inputs.get(f"std_area_{i}")) for i in range(1, 6)]
     std_present = [a for a in std_areas if a is not None]
     rs1 = sum(std_present) / len(std_present) if std_present else None
-    cs1 = (
-        std_mass / std_vol / std_dilution / 100 * 1000
-        if std_mass is not None else None
-    )
-    cu: list[float | None] = []
-    for i in range(1, samples + 1):
-        m = _num(inputs.get(f"sample_mass_{i}"))
-        cu.append(m / sample_vol / sample_dilution * 1000 if m is not None else None)
+    if cfg.get("conc_mode") == "direct":
+        std_conc_div = float(cfg.get("std_conc_div") or 1000)
+        sample_conc_div = float(cfg.get("sample_conc_div") or 50)
+        cs1 = std_mass / std_conc_div if std_mass is not None else None
+        cu = []
+        for i in range(1, samples + 1):
+            m = _num(inputs.get(f"sample_mass_{i}"))
+            cu.append(m / sample_conc_div if m is not None else None)
+    else:
+        cs1 = (
+            std_mass / std_vol / std_dilution / 100 * 1000
+            if std_mass is not None else None
+        )
+        cu = []
+        for i in range(1, samples + 1):
+            m = _num(inputs.get(f"sample_mass_{i}"))
+            cu.append(m / sample_vol / sample_dilution * 1000 if m is not None else None)
 
     def _imp_pct(key: str, i: int) -> float | None:
         c1 = cs1
@@ -533,8 +543,22 @@ def compute_group_rrf(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, 
         f = _num(v)
         return f if f is not None else 0.0
 
-    main_total = _area(inputs.get("main_total"))
-    areas = {str(it["key"]): _area(inputs.get(f"area_{it['key']}")) for it in items_cfg}
+    # 主组总面积：直接输入 main_total，或 总峰面积-扣除项（黏菌素式）
+    mt_spec = cfg.get("main_total")
+    if isinstance(mt_spec, dict):
+        main_total = _area(inputs.get(mt_spec.get("key") or "main_total"))
+        for k in mt_spec.get("minus") or []:
+            main_total = max(main_total - _area(inputs.get(f"area_{k}")), 0.0)
+    else:
+        main_total = _area(inputs.get("main_total"))
+    # 组分面积：直接输入或多项求和（庆大霉素 C2+C2a 式）
+    areas: dict[str, float] = {}
+    for it in items_cfg:
+        key = str(it["key"])
+        if it.get("sum_of"):
+            areas[key] = sum(_area(inputs.get(f"area_{k}")) for k in it["sum_of"])
+        else:
+            areas[key] = _area(inputs.get(f"area_{key}"))
     rrf_sum = sum(areas[k] for k in denom_keys if k in areas)
     denom = main_total + rrf * rrf_sum
     items: list[dict[str, Any]] = []

@@ -408,6 +408,7 @@ export interface LcTemplateConfig {
   description: string | null
   config: Record<string, unknown> & {
     calc?: CalcCfg
+    calc_sections?: { name: string; calc: CalcCfg }[]
     merge?: { op: string; from: string[]; into: string }[]
     batch_label?: string
   }
@@ -479,7 +480,8 @@ export interface CalcGroupRrfCfg {
   rrf_group: string[]
   rrf_denom: string[]
   main_std_name: string
-  items: { key: string; label: string; std_name: string }[]
+  main_total?: string | { key: string; minus: string[] }
+  items: { key: string; label: string; std_name: string; sum_of?: string[] }[]
   review?: string
 }
 
