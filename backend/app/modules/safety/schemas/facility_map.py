@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class PinRef(BaseModel):
-    """分区明细引用（job/fire/central 三形，字段按 kind 取用）。"""
+    """分区明细引用（job/fire/central/key_risk 四形，字段按 kind 取用）。"""
 
     kind: str
     ticket_type: str | None = None
@@ -19,12 +19,18 @@ class PinRef(BaseModel):
     alarm_date: str | None = None
     alarm_description: str | None = None
     workshop: str | None = None
+    report_no: str | None = None
+    apply_status: str | None = None
+    area: str | None = None
+    operation_content: str | None = None
+    start_time: str | None = None
 
 
 class DistrictPin(BaseModel):
     dist_id: str
     jobs: dict[str, int]
     alarms: dict[str, int]
+    key_risks: int = 0
     refs: list[PinRef]
     truncated: bool = False
 

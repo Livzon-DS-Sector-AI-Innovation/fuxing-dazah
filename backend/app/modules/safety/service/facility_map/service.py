@@ -8,6 +8,9 @@
                                         location/building}
 - central_reader(date) -> list[dict]    中控报警 {alarm_date/
                                         alarm_description/workshop/line}
+- key_risk_reader(date) -> list[dict]   关键风险作业 {report_no/apply_status/
+                                        area/operation_content/start_time}
+                                        （当日已通过+审批中，start_time 落日）
 - map_rows() -> list[dict]              location_district_map 行
                                         （location_text/dist_id）
 
@@ -41,10 +44,11 @@ Readers = tuple[
     Callable[[date], Any],
     Callable[[date], Any],
     Callable[[date], Any],
+    Callable[[date], Any],
     Callable[[], Any],
 ]
 
-_SOURCE_LABELS = ("作业票", "消防报警", "中控报警", "分区映射表")
+_SOURCE_LABELS = ("作业票", "消防报警", "中控报警", "关键风险作业", "分区映射表")
 
 
 def bj_today() -> date:
@@ -56,13 +60,20 @@ class FacilityMapPinsService:
     """GET /safety/facility-map/pins 的编排层。"""
 
     def __init__(self, *, readers: Readers) -> None:
-        self._ticket_reader, self._fire_reader, self._central_reader, self._map_rows = readers
+        (
+            self._ticket_reader,
+            self._fire_reader,
+            self._central_reader,
+            self._key_risk_reader,
+            self._map_rows,
+        ) = readers
 
     async def get_pins(self, target: date) -> dict[str, Any]:
         errors: list[str] = []
         jobs: list[dict[str, Any]] = []
         fires: list[dict[str, Any]] = []
         centrals: list[dict[str, Any]] = []
+        key_risks: list[dict[str, Any]] = []
         map_rows: list[dict[str, Any]] = []
 
         async def _gather(label: str, fn: Any, *args: Any) -> Any:
@@ -82,13 +93,16 @@ class FacilityMapPinsService:
         centrals_raw = await _gather(_SOURCE_LABELS[2], self._central_reader, target)
         if centrals_raw:
             centrals = centrals_raw
-        rows = await _gather(_SOURCE_LABELS[3], self._map_rows)
+        key_risks_raw = await _gather(_SOURCE_LABELS[3], self._key_risk_reader, target)
+        if key_risks_raw:
+            key_risks = key_risks_raw
+        rows = await _gather(_SOURCE_LABELS[4], self._map_rows)
         if rows:
             map_rows = rows
 
         index = build_match_index(map_rows)
         aggregated = aggregate_pins(
-            jobs=jobs, fires=fires, centrals=centrals, index=index
+            jobs=jobs, fires=fires, centrals=centrals, key_risks=key_risks, index=index
         )
         return {
             "date": target.isoformat(),
@@ -180,6 +194,42 @@ def _default_central_reader() -> Callable[[date], Any]:
     return read
 
 
+def _default_key_risk_reader(session: Any) -> Callable[[date], Any]:
+    """关键风险作业（Bitable 直读/镜像）→ 归一 dict；区域文本=area。
+
+    当日口径与总览卡一致：start_time 落目标日 + 状态已通过/审批中。
+    """
+
+    async def read(target: date) -> list[dict[str, Any]]:
+        from app.modules.safety.service.key_risk_operation_report import (
+            KeyRiskOperationReportService,
+        )
+
+        service = KeyRiskOperationReportService(session)
+        items, _total = await service.get_reports(
+            0, 500, date_from=target, date_to=target
+        )
+        out: list[dict[str, Any]] = []
+        for it in items:
+            if getattr(it, "apply_status", None) not in ("已通过", "审批中"):
+                continue
+            start_time = getattr(it, "start_time", None)
+            out.append(
+                {
+                    "report_no": getattr(it, "report_no", None),
+                    "apply_status": getattr(it, "apply_status", None),
+                    "area": getattr(it, "area", None),
+                    "operation_content": getattr(it, "operation_content", None),
+                    "start_time": (
+                        start_time.isoformat() if start_time is not None else None
+                    ),
+                }
+            )
+        return out
+
+    return read
+
+
 def _default_map_rows(session: Any) -> Callable[[], Any]:
     async def read() -> list[dict[str, Any]]:
         result = await session.execute(
@@ -196,12 +246,13 @@ def _default_map_rows(session: Any) -> Callable[[], Any]:
 
 
 def open_pins_service(*, session: Any = None) -> FacilityMapPinsService:
-    """生产装配：平台/消防/中控默认读取器 + DB 映射表读取器。"""
+    """生产装配：平台/消防/中控/关键风险默认读取器 + DB 映射表读取器。"""
     return FacilityMapPinsService(
         readers=(
             _default_ticket_reader(),
             _default_fire_reader(),
             _default_central_reader(),
+            _default_key_risk_reader(session),
             _default_map_rows(session),
         )
     )

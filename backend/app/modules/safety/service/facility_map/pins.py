@@ -1,9 +1,11 @@
-"""当日作业票/报警 → 分区 pins 聚合（纯函数）。
+"""当日作业票/报警/关键风险作业 → 分区 pins 聚合（纯函数）。
 
 输入为已归一的浅 dict（服务层适配器负责从各源 reader 拉取并转形）：
-- job:     {ticket_type, ticket_no, work_site, work_content}
-- fire:    {alarm_time, alarm_type, location, building}   位置=部位优先楼栋兜底
-- central: {alarm_date, alarm_description, workshop, line} 位置=车间+产线
+- job:      {ticket_type, ticket_no, work_site, work_content}
+- fire:     {alarm_time, alarm_type, location, building}   位置=部位优先楼栋兜底
+- central:  {alarm_date, alarm_description, workshop, line} 位置=车间+产线
+- key_risk: {report_no, apply_status, area, operation_content, start_time}
+            位置=区域（area）
 输出 pins 聚合 + 未映射清单，契约见 .scratch/f2-facility-map/spec.md。
 """
 
@@ -61,11 +63,13 @@ def aggregate_pins(
     fires: list[dict[str, Any]],
     centrals: list[dict[str, Any]],
     index: Any,
+    key_risks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """三路当日数据 × 匹配索引 → {pins, unmapped}。
+    """四路当日数据 × 匹配索引 → {pins, unmapped}。
 
-    - 命中 → 分区聚合：jobs 按 hot/confined/other 计数，alarms 按 fire/central
-      计数，refs 保明细（job/fire/central 三形）；计数全保留，refs 截 REFS_CAP。
+    - 命中 → 分区聚合：jobs 按 hot/confined/other 计数，key_risks 单计，
+      alarms 按 fire/central 计数，refs 保明细（job/fire/central/key_risk
+      四形）；计数全保留，refs 截 REFS_CAP。
     - 未命中/空文本 → unmapped 按归一化文本去重，累计 count 与 kinds。
     """
     pins: dict[str, dict[str, Any]] = {}
@@ -77,6 +81,7 @@ def aggregate_pins(
                 "dist_id": dist_id,
                 "jobs": {"hot": 0, "confined": 0, "other": 0},
                 "alarms": {"fire": 0, "central": 0},
+                "key_risks": 0,
                 "refs": [],
                 "truncated": False,
             }
@@ -152,10 +157,28 @@ def aggregate_pins(
         pin["alarms"]["central"] += 1
         _add_ref(pin, ref)
 
+    for kr in key_risks or []:
+        area = (kr.get("area") or "").strip()
+        ref = {
+            "kind": "key_risk",
+            "report_no": _as_str(kr.get("report_no")) or "",
+            "apply_status": _as_str(kr.get("apply_status")),
+            "area": area or None,
+            "operation_content": _as_str(kr.get("operation_content")),
+            "start_time": _as_str(kr.get("start_time")),
+        }
+        dist_id = match_location(area, index) if area else None
+        if dist_id is None:
+            _unmapped(area, "key_risk")
+            continue
+        pin = _pin(dist_id)
+        pin["key_risks"] += 1
+        _add_ref(pin, ref)
+
     pin_list = sorted(
         pins.values(),
         key=lambda p: (
-            -sum(p["jobs"].values()) - sum(p["alarms"].values()),
+            -sum(p["jobs"].values()) - sum(p["alarms"].values()) - p["key_risks"],
             p["dist_id"],
         ),
     )

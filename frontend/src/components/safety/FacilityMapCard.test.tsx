@@ -13,6 +13,7 @@ const PINS = {
       dist_id: '77',
       jobs: { hot: 2, confined: 0, other: 0 },
       alarms: { fire: 1, central: 0 },
+      key_risks: 1,
       truncated: false,
       refs: [
         {
@@ -28,12 +29,21 @@ const PINS = {
           alarm_type: '火灾报警',
           location: '消控室一层感烟',
         },
+        {
+          kind: 'key_risk',
+          report_no: '20261026001',
+          apply_status: '已通过',
+          area: '消防控制室',
+          operation_content: '米尔贝放硅胶',
+          start_time: '2026-10-26T06:00:00+00:00',
+        },
       ],
     },
   ],
   unmapped: [
     { text: '212罐', count: 3, kinds: ['job'] },
     { text: '新罐区', count: 5, kinds: ['central'] },
+    { text: '车间四二楼合成岗位', count: 1, kinds: ['key_risk'] },
   ],
   errors: [],
 }
@@ -78,13 +88,14 @@ describe('FacilityMapCard', () => {
     // 每条 rail 一个多边形（64 分区 / 84 rail）
     const polys = document.querySelectorAll('[data-testid^="district-poly-"] polygon')
     expect(polys.length).toBe(RAIL_COUNT)
-    // 消防控制室(dist 77)：动火 2 徽标 + 报警 1 徽标
+    // 消防控制室(dist 77)：动火 2 + 关键风险 1 + 报警 1 徽标
     const badge = await screen.findByTestId('district-badge-77')
     expect(badge.textContent).toContain('火2')
+    expect(badge.textContent).toContain('险1')
     expect(badge.textContent).toContain('警1')
   })
 
-  it('点击分区弹出当日明细 Modal', async () => {
+  it('点击分区弹出当日明细 Modal（含关键风险作业段）', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
     await screen.findByTestId('district-badge-77')
@@ -92,6 +103,9 @@ describe('FacilityMapCard', () => {
     const modal = await screen.findByRole('dialog')
     expect(modal.textContent).toContain('DH-20261026-004')
     expect(modal.textContent).toContain('火灾报警')
+    expect(modal.textContent).toContain('关键风险作业 1 项')
+    expect(modal.textContent).toContain('米尔贝放硅胶')
+    expect(modal.textContent).toContain('已通过')
   })
 
   it('按压带轻微抖动（<4px）仍是点击，弹出明细 Modal', async () => {
@@ -123,7 +137,7 @@ describe('FacilityMapCard', () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
     // 清单随卡片直出（右侧栏），无需展开
-    expect(await screen.findByText(/未映射 2 处/)).toBeInTheDocument()
+    expect(await screen.findByText(/未映射 3 处/)).toBeInTheDocument()
     expect(screen.getAllByText('212罐').length).toBeGreaterThan(0)
     expect(screen.getByText('×5')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /AI 建议映射/ }))
@@ -167,13 +181,18 @@ describe('FacilityMapCard', () => {
     expect(labels.some(l => names.has(l.textContent ?? ''))).toBe(true)
   })
 
-  it('重叠分区名称不全画（米尔贝/提四米贝锚点近重合，贪心避让跳过一个）', async () => {
+  it('重叠分区名称上下错开不全叠（米尔贝/提四米贝锚点近重合，备选位避让）', async () => {
     renderWithQuery(<FacilityMapCard />)
     await screen.findAllByTestId(/^district-poly-/)
     await waitFor(() => {
       const milbei = document.querySelector('[data-testid="district-label-7"]')
       const tiSi = document.querySelector('[data-testid="district-label-20"]')
-      expect(!(milbei && tiSi)).toBe(true)
+      expect(milbei).toBeTruthy()
+      expect(tiSi).toBeTruthy()
+      // 备选位生效：两标签 y 至差一个字号以上（zoom=1 时 fs=13 viewBox 单位）
+      const y1 = Number(milbei!.getAttribute('y'))
+      const y2 = Number(tiSi!.getAttribute('y'))
+      expect(Math.abs(y1 - y2)).toBeGreaterThanOrEqual(13)
     })
   })
 })

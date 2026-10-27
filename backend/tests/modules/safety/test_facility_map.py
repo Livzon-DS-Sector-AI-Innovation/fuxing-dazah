@@ -368,7 +368,63 @@ class TestAggregatePins:
         assert pin["jobs"]["hot"] + pin["jobs"]["confined"] == 60
 
 
-def _ok_readers(jobs=None, fires=None, centrals=None, rows=None):
+class TestAggregateKeyRisks:
+    def test_counts_refs_and_merges_with_jobs(self):
+        """关键风险按 area 命中分区：单列 key_risks 计数，与作业票同分区共存。"""
+        out = aggregate_pins(
+            jobs=[_job("hot_work", "车间一达托", "RQ-1")],
+            fires=[],
+            centrals=[],
+            key_risks=[
+                _key_risk("车间一达托", "K-1"),
+                _key_risk("车间一达托新线", "K-2", status="审批中"),
+                _key_risk("危化品库", "K-3"),
+                _key_risk("车间四二楼合成岗位", "K-4"),  # 未映射 → unmapped
+                _key_risk("", "K-5"),  # 空区域 → 占位文本
+            ],
+            index=build_match_index(MAP_ROWS),
+        )
+        pins = {p["dist_id"]: p for p in out["pins"]}
+        assert pins["64"]["key_risks"] == 2
+        assert pins["64"]["jobs"]["hot"] == 1  # 票计数不受影响
+        kr_refs = [r for r in pins["64"]["refs"] if r["kind"] == "key_risk"]
+        assert {r["report_no"] for r in kr_refs} == {"K-1", "K-2"}
+        assert kr_refs[0]["apply_status"] in ("已通过", "审批中")
+        assert pins["35"]["key_risks"] == 1  # 危化品库
+        unmapped = {u["text"]: u for u in out["unmapped"]}
+        assert unmapped["车间四二楼合成岗位"]["kinds"] == ["key_risk"]
+        assert unmapped["（未填写作业地点）"]["kinds"] == ["key_risk"]
+
+    def test_status_field_in_ref(self):
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            key_risks=[_key_risk("车间一达托", "K-9", status="审批中")],
+            index=build_match_index(MAP_ROWS),
+        )
+        ref = out["pins"][0]["refs"][0]
+        assert ref == {
+            "kind": "key_risk",
+            "report_no": "K-9",
+            "apply_status": "审批中",
+            "area": "车间一达托",
+            "operation_content": "结晶收粉",
+            "start_time": "2026-10-27T06:00:00+00:00",
+        }
+
+
+def _key_risk(area: str, no: str = "20261027001", status: str = "已通过") -> dict:
+    return {
+        "report_no": no,
+        "apply_status": status,
+        "area": area,
+        "operation_content": "结晶收粉",
+        "start_time": "2026-10-27T06:00:00+00:00",
+    }
+
+
+def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, rows=None):
     async def ticket_reader(d):
         return jobs or []
 
@@ -378,10 +434,13 @@ def _ok_readers(jobs=None, fires=None, centrals=None, rows=None):
     async def central_reader(d):
         return centrals or []
 
+    async def key_risk_reader(d):
+        return key_risks or []
+
     async def map_rows():
         return rows if rows is not None else MAP_ROWS
 
-    return ticket_reader, fire_reader, central_reader, map_rows
+    return ticket_reader, fire_reader, central_reader, key_risk_reader, map_rows
 
 
 class TestPinsService:
@@ -406,8 +465,8 @@ class TestPinsService:
         async def boom(d):
             raise RuntimeError("平台超时")
 
-        t, f, c, m = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
-        svc = FacilityMapPinsService(readers=(boom, f, c, m))
+        t, f, c, k, m = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
+        svc = FacilityMapPinsService(readers=(boom, f, c, k, m))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert len(payload["errors"]) == 1
         assert "作业票" in payload["errors"][0]
@@ -419,9 +478,21 @@ class TestPinsService:
         async def boom_rows():
             raise RuntimeError("db down")
 
-        t, f, c, _ = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
-        svc = FacilityMapPinsService(readers=(t, f, c, boom_rows))
+        t, f, c, k, _ = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
+        svc = FacilityMapPinsService(readers=(t, f, c, k, boom_rows))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert any("映射" in e for e in payload["errors"])
         # 映射表失败 → 全部进 unmapped（文本可见，图卡可解释）
         assert payload["unmapped"][0]["text"] == "车间一达托"
+
+    async def test_key_risk_reader_failure_degrades(self):
+        """关键风险作业路失败仅记一条 error，其余路照常。"""
+
+        async def boom_kr(d):
+            raise RuntimeError("bitable 超时")
+
+        t, f, c, _, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, boom_kr, m))
+        payload = await svc.get_pins(date(2026, 10, 26))
+        assert payload["errors"] == ["关键风险作业拉取失败: bitable 超时"]
+        assert payload["pins"] == []

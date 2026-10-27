@@ -177,10 +177,14 @@ const BADGES = [
 const ALARM_FILL = '#f2c94c'
 const ALARM_STROKE = '#b5860a'
 
+// 关键风险作业徽标（紫，区别于作业票三桶与报警黄）
+const RISK_FILL = '#7a5af8'
+
 const KIND_LABEL: Record<string, string> = {
   job: '作业票',
   fire: '消防报警',
   central: '中控报警',
+  key_risk: '关键风险作业',
 }
 
 const TICKET_TYPE_LABEL: Record<string, string> = {
@@ -194,13 +198,14 @@ const TICKET_TYPE_LABEL: Record<string, string> = {
   blind_plate: '盲板',
 }
 
-/** 徽标组内容（作业桶非零 + 报警合计）；BadgeGroup 与标注避让共用 */
+/** 徽标组内容（作业桶非零 + 关键风险 + 报警合计）；BadgeGroup 与标注避让共用 */
 function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string }[] {
   const chips: { label: string; fill: string }[] = []
   for (const b of BADGES) {
     const n = pin.jobs[b.key]
     if (n > 0) chips.push({ label: `${b.label}${n}`, fill: b.fill })
   }
+  if (pin.key_risks > 0) chips.push({ label: `险${pin.key_risks}`, fill: RISK_FILL })
   const alarms = pin.alarms.fire + pin.alarms.central
   if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
   return chips
@@ -278,6 +283,23 @@ const ALARM_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
   },
 ]
 
+const KEY_RISK_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
+  {
+    title: '开始时间',
+    dataIndex: 'start_time',
+    width: 110,
+    render: (v: string | null) => (v ? v.slice(5, 16).replace('T', ' ') : '—'),
+  },
+  { title: '区域', dataIndex: 'area', width: 170, render: (v: string | null) => v || '—' },
+  {
+    title: '审批状态',
+    dataIndex: 'apply_status',
+    width: 90,
+    render: (v: string | null) => v || '—',
+  },
+  { title: '作业内容', dataIndex: 'operation_content', ellipsis: true },
+]
+
 function DistrictModal({
   pin,
   distName,
@@ -290,7 +312,9 @@ function DistrictModal({
   onClose: () => void
 }) {
   const jobs = pin?.refs.filter(r => r.kind === 'job') ?? []
-  const alarms = pin?.refs.filter(r => r.kind !== 'job') ?? []
+  const keyRisks = pin?.refs.filter(r => r.kind === 'key_risk') ?? []
+  const alarms =
+    pin?.refs.filter(r => r.kind === 'fire' || r.kind === 'central') ?? []
   return (
     <Modal
       open={pin !== null}
@@ -312,6 +336,19 @@ function DistrictModal({
               dataSource={jobs}
               pagination={false}
               locale={{ emptyText: '本分区当日无作业票' }}
+            />
+          </div>
+          <div>
+            <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
+              关键风险作业 {keyRisks.length} 项（当日已通过/审批中）
+            </div>
+            <Table
+              rowKey={(_, i) => `k${i}`}
+              size="small"
+              columns={KEY_RISK_COLUMNS}
+              dataSource={keyRisks}
+              pagination={false}
+              locale={{ emptyText: '本分区当日无关键风险作业' }}
             />
           </div>
           <div>
@@ -601,7 +638,7 @@ export function FacilityMapCard() {
   return (
     <SectionCard
       title="厂区风险分区 · 当日分布"
-      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
+      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票/关键风险作业与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
       action={
         <div className="flex items-center gap-2 text-[11px] text-[var(--color-steel)]">
           <span className="inline-flex items-center gap-1">
@@ -620,6 +657,13 @@ export function FacilityMapCard() {
               {b.label === '火' ? '动火' : b.label === '受' ? '受限' : '其他作业'}
             </span>
           ))}
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: RISK_FILL }}
+            />
+            关键风险作业
+          </span>
           <span className="inline-flex items-center gap-1">
             <span
               className="inline-block h-2 w-2 rounded-full"
@@ -680,13 +724,14 @@ export function FacilityMapCard() {
                             dist_id: dist.distId,
                             jobs: { hot: 0, confined: 0, other: 0 },
                             alarms: { fire: 0, central: 0 },
+                            key_risks: 0,
                             refs: [],
                             truncated: false,
                           },
                         )
                       }
                     >
-                      <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
+                      <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 关键风险 ${pin.key_risks} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
                       {shapes.map((points, i) => (
                         <polygon
                           key={i}
