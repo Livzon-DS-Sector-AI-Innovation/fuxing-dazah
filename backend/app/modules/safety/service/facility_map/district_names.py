@@ -1,9 +1,10 @@
-"""64 风险分区（distId+distName）静态清单——facility_map_suggest 提示词资产。
+"""65 风险分区（distId+distName）静态清单——facility_map_suggest 提示词资产。
 
-自 docs/assets/tiji-risk-districts-20261026.json 一次性生成（与前端
+自 docs/assets/tiji-risk-districts-20261026.json 生成（与前端
 src/data/tiji-risk-districts.json 同源快照）。内嵌常量而非运行时读文件：
-服务器部署无 docs/ 本地资产（CLAUDE.md 部署口径），分区属一次性建模。
-排序=资产原序（distId 数字升序），提示词按此序输出。
+服务器部署无 docs/ 本地资产（CLAUDE.md 部署口径）。
+2026-10-27 追加本地补建分区 9001=罐区（平台未建模，见
+scripts/append_local_district.py）。排序=资产原序，提示词按此序输出。
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ DISTRICT_PAIRS: tuple[tuple[str, str], ...] = (
     ("3", "环保RTO"),
     ("2", "环保水处理"),
     ("1", "车间一达托"),
+    ("9001", "罐区"),
 )
 
 DISTRICT_IDS: frozenset[str] = frozenset(did for did, _ in DISTRICT_PAIRS)
@@ -88,5 +90,5 @@ DISTRICT_NAME_BY_ID: dict[str, str] = {did: name for did, name in DISTRICT_PAIRS
 
 
 def format_district_list() -> str:
-    """64 分区清单文本（提示词用：distId=distName 每行一条）。"""
-    return "\n".join(f"{did}={name}" for did, name in DISTRICT_PAIRS)
+    """65 分区清单文本（提示词用：distId=distName 每行一条）。"""
+    return "\n".join(f"{{did}}={{name}}" for did, name in DISTRICT_PAIRS)
