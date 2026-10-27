@@ -11,9 +11,9 @@
  * 屏幕等大，名称标注随放大逐级显现（放得下才显示）。
  * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
  * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
- * 底部「未映射 N 处」为入口（#2）：点击打开 AI 建议确认 Modal——
- * 扫描近 30 天未映射文本 → AI 建议（置信度/理由）→ 人工逐条/批量确认
- * 写映射资产（只增不改），或忽略。
+ * 布局：地图区 + 右侧「未映射地点」栏（lg+ 并排，窄屏堆叠）；未映射清单
+ * 直出，入口按钮打开 AI 建议确认 Modal（#2）——扫描近 30 天未映射文本 →
+ * AI 建议（置信度/理由）→ 人工逐条/批量确认写映射资产（只增不改），或忽略。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -59,6 +59,9 @@ const VIEW_W = 1000
 // 厂区纬度 ~25.46°N，cos 纠正纬度跨度后 N-S 比例接近真实
 const LAT_SCALE = Math.cos((25.46 * Math.PI) / 180)
 
+// 画布内边距：边缘分区的名称标注不被 viewBox 裁切
+const CANVAS_PAD = 18
+
 const GEOM = (() => {
   let minX = Infinity
   let maxX = -Infinity
@@ -76,14 +79,17 @@ const GEOM = (() => {
   }
   const spanX = Math.max(maxX - minX, 1e-9)
   const spanY = Math.max(maxY - minY, 1e-9)
-  const viewH = (VIEW_W * spanY * LAT_SCALE) / spanX
+  // 内容区内接于 padding 后的画布；纬度按 cos(25.46°) 纠正 N-S 比例
+  const innerW = VIEW_W - CANVAS_PAD * 2
+  const innerH = (innerW * spanY * LAT_SCALE) / spanX
+  const viewH = innerH + CANVAS_PAD * 2
   return {
     viewH,
     /** 经纬度 → viewBox 坐标（y 翻转北上） */
     project(lng: number, lat: number): [number, number] {
       return [
-        ((lng - minX) / spanX) * VIEW_W,
-        viewH - ((lat - minY) / spanY) * viewH * LAT_SCALE,
+        CANVAS_PAD + ((lng - minX) / spanX) * innerW,
+        CANVAS_PAD + innerH - ((lat - minY) / spanY) * innerH,
       ]
     },
   }
@@ -206,22 +212,22 @@ function BadgeGroup({
   }
   if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
   if (!chips.length) return null
-  const w = 34
+  const w = 38
   const total = chips.length * w
   return (
     <g
       data-testid={`district-badge-${pin.dist_id}`}
       pointerEvents="none"
-      transform={`translate(${anchor[0]} ${anchor[1]}) scale(${1 / zoom}) translate(${-total / 2} ${-10})`}
+      transform={`translate(${anchor[0]} ${anchor[1]}) scale(${1 / zoom}) translate(${-total / 2} ${-11})`}
     >
       {chips.map((chip, i) => (
         <g key={chip.label} transform={`translate(${i * w}, 0)`}>
-          <rect width={w - 4} height={20} rx={10} fill="#fff" stroke={chip.fill} strokeWidth={1.5} />
+          <rect width={w - 4} height={22} rx={11} fill="#fff" stroke={chip.fill} strokeWidth={1.5} />
           <text
             x={(w - 4) / 2}
-            y={14}
+            y={15}
             textAnchor="middle"
-            fontSize={12}
+            fontSize={13}
             fontWeight={600}
             fill={chip.fill === ALARM_FILL ? ALARM_STROKE : chip.fill}
           >
@@ -542,8 +548,8 @@ export function FacilityMapCard() {
     }
   }
 
-  // 名称标注：字号按 1/zoom 保持屏幕 11px；多边形放得下名字才显示（放大逐级显现）
-  const labelFs = 11 / zoom
+  // 名称标注：字号按 1/zoom 保持屏幕 13px；多边形放得下名字才显示（放大逐级显现）
+  const labelFs = 13 / zoom
   const labels = RENDERED.filter(
     ({ dist, bbox }) => bbox[2] >= dist.distName.length * labelFs * 0.85,
   )
@@ -598,118 +604,151 @@ export function FacilityMapCard() {
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
-          <div className="relative">
-            <svg
-              ref={svgRef}
-              viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-              className="w-full select-none"
-              style={{
-                maxHeight: 480,
-                touchAction: 'none',
-                cursor: panning ? 'grabbing' : 'grab',
-              }}
-              role="img"
-              aria-label="厂区风险分区底图"
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onClickCapture={onClickCapture}
-            >
-              {RENDERED.map(({ dist, shapes }) => {
-                const pin = pinById.get(dist.distId)
-                return (
-                  <g
-                    key={dist.distId}
-                    data-testid={`district-poly-${dist.distId}`}
-                    className="cursor-pointer [&:hover_polygon]:fill-[#dce6fa]"
-                    onClick={() =>
-                      setOpenDist(
-                        pin ?? {
-                          dist_id: dist.distId,
-                          jobs: { hot: 0, confined: 0, other: 0 },
-                          alarms: { fire: 0, central: 0 },
-                          refs: [],
-                          truncated: false,
-                        },
-                      )
-                    }
-                  >
-                    <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
-                    {shapes.map((points, i) => (
-                      <polygon
-                        key={i}
-                        points={points}
-                        fill={pin ? FILL_ACTIVE : FILL_BASE}
-                        stroke={pin ? STROKE_ACTIVE : STROKE_BASE}
-                        strokeWidth={pin ? 1.4 : 1}
-                      />
-                    ))}
-                  </g>
-                )
-              })}
-              {labels.map(({ dist, anchor }) => (
-                <text
-                  key={`lb-${dist.distId}`}
-                  data-testid={`district-label-${dist.distId}`}
-                  x={anchor[0]}
-                  y={anchor[1] + (pinById.get(dist.distId) ? 24 : 5) / zoom}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize={labelFs}
-                  fontWeight={500}
-                  fill={LABEL_FILL}
-                  stroke="#ffffff"
-                  strokeWidth={3 / zoom}
-                  strokeLinejoin="round"
-                  paintOrder="stroke"
-                  pointerEvents="none"
-                >
-                  {dist.distName}
-                </text>
-              ))}
-              {data.pins.map(pin => {
-                const rendered = BY_DIST_ID.get(pin.dist_id)
-                if (!rendered) return null
-                return (
-                  <BadgeGroup
-                    key={pin.dist_id}
-                    pin={pin}
-                    anchor={rendered.anchor}
-                    zoom={zoom}
-                  />
-                )
-              })}
-            </svg>
-            <div className="absolute right-2 top-2 flex flex-col gap-1">
-              <button type="button" aria-label="放大" className={MAP_BTN_CLS} onClick={() => zoomBy(ZOOM_STEP)}>
-                <Plus size={14} />
-              </button>
-              <button type="button" aria-label="缩小" className={MAP_BTN_CLS} onClick={() => zoomBy(1 / ZOOM_STEP)}>
-                <Minus size={14} />
-              </button>
-              <button
-                type="button"
-                aria-label="重置视图"
-                className={MAP_BTN_CLS}
-                onClick={() => setVb(INITIAL_VB)}
+          <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[minmax(0,1fr)_264px]">
+            <div className="relative min-w-0">
+              <svg
+                ref={svgRef}
+                viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
+                className="w-full select-none"
+                style={{
+                  height: 'clamp(480px, 68vh, 800px)',
+                  touchAction: 'none',
+                  cursor: panning ? 'grabbing' : 'grab',
+                }}
+                role="img"
+                aria-label="厂区风险分区底图"
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onClickCapture={onClickCapture}
               >
-                <Maximize size={13} />
-              </button>
+                {RENDERED.map(({ dist, shapes }) => {
+                  const pin = pinById.get(dist.distId)
+                  return (
+                    <g
+                      key={dist.distId}
+                      data-testid={`district-poly-${dist.distId}`}
+                      className="cursor-pointer [&:hover_polygon]:fill-[#dce6fa]"
+                      onClick={() =>
+                        setOpenDist(
+                          pin ?? {
+                            dist_id: dist.distId,
+                            jobs: { hot: 0, confined: 0, other: 0 },
+                            alarms: { fire: 0, central: 0 },
+                            refs: [],
+                            truncated: false,
+                          },
+                        )
+                      }
+                    >
+                      <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
+                      {shapes.map((points, i) => (
+                        <polygon
+                          key={i}
+                          points={points}
+                          fill={pin ? FILL_ACTIVE : FILL_BASE}
+                          stroke={pin ? STROKE_ACTIVE : STROKE_BASE}
+                          strokeWidth={pin ? 1.4 : 1}
+                        />
+                      ))}
+                    </g>
+                  )
+                })}
+                {labels.map(({ dist, anchor }) => (
+                  <text
+                    key={`lb-${dist.distId}`}
+                    data-testid={`district-label-${dist.distId}`}
+                    x={anchor[0]}
+                    y={anchor[1] + (pinById.get(dist.distId) ? 24 : 5) / zoom}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontSize={labelFs}
+                    fontWeight={500}
+                    fill={LABEL_FILL}
+                    stroke="#ffffff"
+                    strokeWidth={3 / zoom}
+                    strokeLinejoin="round"
+                    paintOrder="stroke"
+                    pointerEvents="none"
+                  >
+                    {dist.distName}
+                  </text>
+                ))}
+                {data.pins.map(pin => {
+                  const rendered = BY_DIST_ID.get(pin.dist_id)
+                  if (!rendered) return null
+                  return (
+                    <BadgeGroup
+                      key={pin.dist_id}
+                      pin={pin}
+                      anchor={rendered.anchor}
+                      zoom={zoom}
+                    />
+                  )
+                })}
+              </svg>
+              <div className="absolute right-2 top-2 flex flex-col gap-1">
+                <button type="button" aria-label="放大" className={MAP_BTN_CLS} onClick={() => zoomBy(ZOOM_STEP)}>
+                  <Plus size={14} />
+                </button>
+                <button type="button" aria-label="缩小" className={MAP_BTN_CLS} onClick={() => zoomBy(1 / ZOOM_STEP)}>
+                  <Minus size={14} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="重置视图"
+                  className={MAP_BTN_CLS}
+                  onClick={() => setVb(INITIAL_VB)}
+                >
+                  <Maximize size={13} />
+                </button>
+              </div>
+              <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-white/80 px-1.5 py-0.5 text-[11px] text-[var(--color-steel)]">
+                {Math.round(zoom * 100)}%
+              </div>
             </div>
-            <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-white/80 px-1.5 py-0.5 text-[11px] text-[var(--color-stone)]">
-              {Math.round(zoom * 100)}%
-            </div>
-          </div>
-          <div className="flex items-start justify-between gap-3 border-t border-[var(--color-hairline-soft)] pt-2 text-[12px] text-[var(--color-steel)]">
-            <Button
-              type="link"
-              size="small"
-              className="h-auto p-0 text-[12px]"
-              onClick={() => setConfirmOpen(true)}
-            >
-              未映射 {data.unmapped.length} 处（{unmappedEvents} 条事件）· AI 建议映射 →
-            </Button>
-            <span>未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）</span>
+            <aside className="flex flex-col gap-2 rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] p-3">
+              <div className="text-[13px] font-medium text-[var(--color-charcoal)]">
+                未映射 {data.unmapped.length} 处
+                <span className="ml-1 font-normal text-[var(--color-steel)]">
+                  （{unmappedEvents} 条事件）
+                </span>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+                {data.unmapped.length === 0 ? (
+                  <span className="py-6 text-center text-[12px] text-[var(--color-steel)]">
+                    今日全部落图 ✓
+                  </span>
+                ) : (
+                  data.unmapped.slice(0, 40).map(u => (
+                    <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
+                      <span className="truncate text-[var(--color-charcoal)]" title={u.text}>
+                        {u.text}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        {u.kinds.map(k => (
+                          <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
+                            {KIND_LABEL[k] ?? k}
+                          </Tag>
+                        ))}
+                        <span className="text-[var(--color-steel)]">×{u.count}</span>
+                      </span>
+                    </div>
+                  ))
+                )}
+                {data.unmapped.length > 40 && (
+                  <span className="text-[11px] text-[var(--color-steel)]">
+                    其余 {data.unmapped.length - 40} 条在确认列表内查看
+                  </span>
+                )}
+              </div>
+              <Button type="primary" ghost size="small" block onClick={() => setConfirmOpen(true)}>
+                AI 建议映射 →
+              </Button>
+              <span className="text-[11px] leading-4 text-[var(--color-steel)]">
+                未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）
+              </span>
+            </aside>
           </div>
         </div>
       )}

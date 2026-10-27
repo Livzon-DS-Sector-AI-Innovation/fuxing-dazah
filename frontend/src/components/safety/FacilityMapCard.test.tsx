@@ -119,17 +119,18 @@ describe('FacilityMapCard', () => {
     expect(document.querySelector('.ant-modal')).toBeNull()
   })
 
-  it('底部未映射入口打开 AI 建议确认 Modal（#2）', async () => {
+  it('右侧未映射栏直出清单，入口按钮打开 AI 建议确认 Modal（#2）', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
-    const entry = await screen.findByText(/未映射 2 处/)
-    await user.click(entry)
+    // 清单随卡片直出（右侧栏），无需展开
+    expect(await screen.findByText(/未映射 2 处/)).toBeInTheDocument()
+    expect(screen.getAllByText('212罐').length).toBeGreaterThan(0)
+    expect(screen.getByText('×5')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /AI 建议映射/ }))
     // 确认页工作集：建议分区名/置信度/理由 + 触发扫描按钮在 footer
     expect(await screen.findByText(/AI 分区建议确认/)).toBeInTheDocument()
-    expect(await screen.findByText('212罐')).toBeInTheDocument()
-    expect(screen.getByText('新罐区')).toBeInTheDocument()
+    expect(screen.getAllByText('212罐').length).toBeGreaterThan(0)
     expect(screen.getByText('位于新罐区')).toBeInTheDocument()
-    // 触发扫描按钮在 footer
     expect(screen.getByText('扫描近 30 天生成建议')).toBeInTheDocument()
   })
 
