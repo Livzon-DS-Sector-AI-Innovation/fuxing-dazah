@@ -164,3 +164,71 @@ def test_impurity_vs_std_math():
     t1 = 260000 - 10000 - 240000
     t2 = 262000 - 10100 - 241000
     assert abs(by_name["总杂"]["value"] - (t1 + t2) / std_c * 100 / 2) < 1e-9
+
+
+def test_impurity_std_ratio_math():
+    cfg = {
+        "mode": "impurity_std_ratio", "samples": 2,
+        "std_vol": 50, "sample_vol": 50, "std_dilution": 10, "sample_dilution": 5,
+        "impurities": [
+            {"key": "D", "label": "杂质D", "std_name": "杂质D"},
+            {"key": "F", "label": "杂质F", "std_name": "杂质F"},
+        ],
+        "total_from": ["D", "F"],
+        "total_std_name": "总杂质",
+    }
+    # Cs1 = 12.5/50/10/100×1000 = 0.25 μg/ml；Cu = 25/50/5×1000 = 100 μg/ml；rs1 = 1000000
+    inputs = {
+        "std1_mass": 12.5,
+        "std_area_1": 1000000, "std_area_2": 1002000, "std_area_3": 998000,
+        "std_area_4": 1001000, "std_area_5": 999000,
+        "sample_mass_1": 25.0, "sample_mass_2": 25.1,
+        "imp_D_1": 500, "imp_D_2": 400,
+        "imp_F_1": "", "imp_F_2": 300,
+    }
+    result = calc_engine.compute_impurity_std_ratio(cfg, inputs)
+    by_name = {i["std_name"]: i for i in result["items"]}
+    rs1 = (1000000 + 1002000 + 998000 + 1001000 + 999000) / 5
+    cs1 = 12.5 / 50 / 10 / 100 * 1000
+    cu1 = 25.0 / 50 / 5 * 1000
+    cu2 = 25.1 / 50 / 5 * 1000
+    d1 = cs1 * 500 * 100 / (cu1 * rs1)
+    d2 = cs1 * 400 * 100 / (cu2 * rs1)
+    assert abs(by_name["杂质D"]["value"] - (d1 + d2) / 2) < 1e-12
+    # 未检出 F 第1份=0
+    f2 = cs1 * 300 * 100 / (cu2 * rs1)
+    assert abs(by_name["杂质F"]["value"] - f2 / 2) < 1e-12
+    # 总杂 = D+F 求和
+    t1 = cs1 * 500 * 100 / (cu1 * rs1)
+    t2 = cs1 * 700 * 100 / (cu2 * rs1)
+    assert abs(by_name["总杂质"]["value"] - (t1 + t2) / 2) < 1e-12
+
+
+def test_std_curve_math():
+    import math
+
+    cfg = {
+        "mode": "std_curve",
+        "dilutions": [20, 10, 5], "volume": 50, "conc_factor": 100 / 6,
+        "items": [
+            {"key": "max_single", "label": "最大单一杂质", "std_name": "最大单一杂质"},
+            {"key": "other", "label": "其他单个杂质", "std_name": "其他单个杂质"},
+        ],
+    }
+    inputs = {
+        "std_mass": 10.0,
+        "std_area_1": 1000, "std_area_2": 10000, "std_area_3": 50000,
+        "imp_max_single_1": 3000,
+    }
+    result = calc_engine.compute_std_curve(cfg, inputs)
+    concs = [10.0 / 50 / (100 / 6) / d * 1000 for d in (20, 10, 5)]
+    log_c = [math.log10(c) for c in concs]
+    log_a = [math.log10(a) for a in (1000, 10000, 50000)]
+    b = calc_engine._slope(log_a, log_c)
+    a_int = calc_engine._intercept(log_a, log_c)
+    expect = 10 ** (b * math.log10(3000) + a_int)
+    item = result["items"][0]
+    assert abs(item["value"] - expect) < 1e-9
+    assert result["correl"] is not None and result["correl"] > 0.99
+    # 未填面积 → 缺数据
+    assert result["items"][1]["value"] is None

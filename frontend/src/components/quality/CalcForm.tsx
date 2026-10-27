@@ -2,7 +2,7 @@
 
 import { Divider, InputNumber, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
-import type { CalcCfg, CalcContentMultiCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcImpurityVsStdCfg, CalcNormalizationCfg } from '@/types/quality'
+import type { CalcCfg, CalcContentMultiCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcImpurityStdRatioCfg, CalcImpurityVsStdCfg, CalcNormalizationCfg, CalcStdCurveCfg } from '@/types/quality'
 
 const { Text } = Typography
 
@@ -33,6 +33,12 @@ export default function CalcForm({ cfg, inputs, onChange }: {
   }
   if (cfg.mode === 'impurity_vs_std') {
     return <ImpVsStdForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'impurity_std_ratio') {
+    return <ImpStdRatioForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'std_curve') {
+    return <StdCurveForm cfg={cfg} inputs={inputs} set={set} />
   }
   return <ExtForm cfg={cfg} inputs={inputs} set={set} />
 }
@@ -489,6 +495,184 @@ function ImpVsStdForm({ cfg, inputs, set }: {
           ))}
         </Space>
       </div>
+    </Space>
+  )
+}
+
+
+function ImpStdRatioForm({ cfg, inputs, set }: {
+  cfg: CalcImpurityStdRatioCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const stdMass = num(inputs.std1_mass)
+  const stdAreas = Array.from({ length: 5 }, (_, i) => num(inputs[`std_area_${i + 1}`]))
+  const stdPresent = stdAreas.filter((v): v is number => v != null)
+  const rs1 = stdPresent.length ? stdPresent.reduce((a, b) => a + b, 0) / stdPresent.length : null
+  const cs1 = stdMass != null ? stdMass / cfg.std_vol / cfg.std_dilution / 100 * 1000 : null
+  const cu = (i: number) => {
+    const m = num(inputs[`sample_mass_${i}`])
+    return m != null ? m / cfg.sample_vol / cfg.sample_dilution * 1000 : null
+  }
+  const pct = (key: string, i: number) => {
+    const a = num(inputs[`imp_${key}_${i}`]) ?? 0
+    const cuI = cu(i)
+    if (cs1 == null || rs1 == null || cuI == null) return null
+    return cs1 * a * 100 / (cuI * rs1)
+  }
+  const rows = cfg.impurities.map((imp) => ({
+    key: imp.key, label: imp.label,
+    a1: inputs[`imp_${imp.key}_1`], a2: inputs[`imp_${imp.key}_2`],
+    v1: pct(imp.key, 1), v2: pct(imp.key, 2),
+  }))
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        对照浓度比值法：Cs1 = 储备液称样量/{cfg.std_vol}/{cfg.std_dilution}/100×1000 μg/ml；Cu = 样品称样量/{cfg.sample_vol}/{cfg.sample_dilution}×1000 μg/ml；杂质% = Cs1×杂质面积×100/(Cu×标准1平均面积)。
+      </Text>
+      <Space wrap size={10}>
+        <span style={{ fontSize: 12.5 }}>储备液称样量(mg)
+          <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs.std1_mass}
+            onChange={(v) => set('std1_mass', v)} />
+        </span>
+        <span style={{ fontSize: 12.5 }}>样品1称样量(mg)
+          <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs.sample_mass_1}
+            onChange={(v) => set('sample_mass_1', v)} />
+        </span>
+        <span style={{ fontSize: 12.5 }}>样品2称样量(mg)
+          <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs.sample_mass_2}
+            onChange={(v) => set('sample_mass_2', v)} />
+        </span>
+      </Space>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12 }}>标准1主峰面积（5 针）：</Text>
+        <Space wrap size={4} style={{ marginTop: 4 }}>
+          {stdAreas.map((_, i) => (
+            <InputNumber key={i} size="small" style={{ width: 95 }} value={inputs[`std_area_${i + 1}`]}
+              onChange={(v) => set(`std_area_${i + 1}`, v)} />
+          ))}
+          <Text style={{ fontSize: 12 }}>平均 <Text strong>{rs1 != null ? rs1.toFixed(0) : '-'}</Text>　Cs1{' '}
+            <Text strong>{cs1 != null ? cs1.toFixed(4) : '-'}</Text>
+          </Text>
+        </Space>
+      </div>
+      <Table<ImpRatioRow>
+        rowKey="key" size="small" pagination={false} dataSource={rows} scroll={{ x: 620 }}
+        columns={[
+          { title: '杂质', dataIndex: 'label', width: 150 },
+          {
+            title: '第一份面积', key: 'a1', width: 130,
+            render: (_: unknown, r) => (
+              <InputNumber size="small" style={{ width: '100%' }} value={r.a1}
+                onChange={(v) => set(`imp_${r.key}_1`, v)} />
+            ),
+          },
+          {
+            title: '第二份面积', key: 'a2', width: 130,
+            render: (_: unknown, r) => (
+              <InputNumber size="small" style={{ width: '100%' }} value={r.a2}
+                onChange={(v) => set(`imp_${r.key}_2`, v)} />
+            ),
+          },
+          {
+            title: '第一份%', key: 'p1', width: 100,
+            render: (_: unknown, r) => r.v1 != null ? r.v1.toFixed(4) + '%' : '-',
+          },
+          {
+            title: '第二份%', key: 'p2', width: 100,
+            render: (_: unknown, r) => r.v2 != null ? r.v2.toFixed(4) + '%' : '-',
+          },
+          {
+            title: '平均%', key: 'avg', width: 110,
+            render: (_: unknown, r) => {
+              const both = [r.v1, r.v2].filter((v): v is number => v != null)
+              const avg = both.length ? both.reduce((a, b) => a + b, 0) / both.length : null
+              return avg != null ? <Text strong>{avg.toFixed(4)}%</Text> : '-'
+            },
+          },
+        ]}
+      />
+    </Space>
+  )
+}
+
+type ImpRatioRow = { key: string; label: string; a1: number | undefined; a2: number | undefined; v1: number | null; v2: number | null }
+
+function StdCurveForm({ cfg, inputs, set }: {
+  cfg: CalcStdCurveCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const stdMass = num(inputs.std_mass)
+  const stdAreas = cfg.dilutions.map((_, i) => num(inputs[`std_area_${i + 1}`]))
+  const concs = cfg.dilutions.map((d) => (stdMass != null ? stdMass / cfg.volume / cfg.conc_factor / d * 1000 : null))
+  const b = (() => {
+    const xs = stdAreas.filter((v): v is number => v != null).map((v) => Math.log10(v))
+    const ys = concs.filter((v): v is number => v != null).map((v) => Math.log10(v))
+    if (xs.length < 2 || ys.length < 2) return null
+    const xm = xs.reduce((a, c) => a + c, 0) / xs.length
+    const ym = ys.reduce((a, c) => a + c, 0) / ys.length
+    const denom = xs.reduce((a, c) => a + (c - xm) ** 2, 0)
+    if (denom === 0) return null
+    return xs.reduce((a, c, i) => a + (c - xm) * (ys[i] - ym), 0) / denom
+  })()
+  const aInt = (() => {
+    if (b == null) return null
+    const xs = stdAreas.filter((v): v is number => v != null).map((v) => Math.log10(v))
+    const ys = concs.filter((v): v is number => v != null).map((v) => Math.log10(v))
+    return ys.reduce((a, c) => a + c, 0) / ys.length - b * xs.reduce((a, c) => a + c, 0) / xs.length
+  })()
+  const result = (key: string) => {
+    const area = num(inputs[`imp_${key}_1`])
+    if (area == null || b == null || aInt == null) return null
+    return 10 ** (b * Math.log10(area) + aInt)
+  }
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        标准曲线回归法：对照 3 点终浓度 = 称重/{cfg.volume}/(100/6)/稀释倍数×1000 μg/ml；log-log 回归（log浓度=b×log面积+a）；结果 = 10^(b×log面积+a) μg/ml。
+      </Text>
+      <Space wrap size={10}>
+        <span style={{ fontSize: 12.5 }}>对照品称重(mg)
+          <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs.std_mass}
+            onChange={(v) => set('std_mass', v)} />
+        </span>
+        {cfg.dilutions.map((d, i) => (
+          <span key={d} style={{ fontSize: 12.5 }}>
+            {d}×面积
+            <InputNumber size="small" style={{ width: 95, marginLeft: 4 }} value={inputs[`std_area_${i + 1}`]}
+              onChange={(v) => set(`std_area_${i + 1}`, v)} />
+          </span>
+        ))}
+      </Space>
+      <div style={{ fontSize: 12.5 }}>
+        <Text type="secondary">回归：斜率 b = </Text>
+        <Text strong>{b != null ? b.toFixed(4) : '-'}</Text>
+        <Text type="secondary">　截距 a = </Text>
+        <Text strong>{aInt != null ? aInt.toFixed(4) : '-'}</Text>
+      </div>
+      <Table<{ key: string; label: string; v: number | null }>
+        rowKey="key" size="small" pagination={false}
+        dataSource={cfg.items.map((it) => ({ key: it.key, label: it.label, v: result(it.key) }))}
+        scroll={{ x: 480 }}
+        columns={[
+          { title: '项目', dataIndex: 'label', width: 150 },
+          {
+            title: '峰面积', key: 'area', width: 140,
+            render: (_: unknown, r) => (
+              <InputNumber size="small" style={{ width: '100%' }} value={inputs[`imp_${r.key}_1`]}
+                onChange={(v) => set(`imp_${r.key}_1`, v)} />
+            ),
+          },
+          {
+            title: '结果（μg/ml）', key: 'v', width: 130,
+            render: (_: unknown, r) => r.v != null ? <Text strong>{r.v.toFixed(4)}</Text> : '-',
+          },
+        ]}
+      />
+      <Text type="warning" style={{ fontSize: 12 }}>
+        注：Ch.P. 模板结果列无内置公式，系统按 10^(b×log面积+a) 计算；结果单位（μg/ml）与限度口径请与业务确认。
+      </Text>
     </Space>
   )
 }

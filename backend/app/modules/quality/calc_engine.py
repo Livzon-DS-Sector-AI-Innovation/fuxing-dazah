@@ -344,3 +344,172 @@ def compute_impurity_vs_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict
         "detail": " / ".join(f"第{i}份 {v:.4g}%" for i, v in enumerate(tot_vals, start=1)),
     })
     return {"mode": "impurity_vs_std", "items": items}
+
+
+def _slope(xs: list[float], ys: list[float]) -> float | None:
+    """最小二乘斜率（Excel SLOPE 等价）。"""
+    n = len(xs)
+    if n < 2:
+        return None
+    xm = sum(xs) / n
+    ym = sum(ys) / n
+    denom = sum((x - xm) ** 2 for x in xs)
+    if denom == 0:
+        return None
+    return sum((x - xm) * (y - ym) for x, y in zip(xs, ys)) / denom
+
+
+def _intercept(xs: list[float], ys: list[float]) -> float | None:
+    n = len(xs)
+    if n < 2:
+        return None
+    b = _slope(xs, ys)
+    if b is None:
+        return None
+    return sum(ys) / n - b * sum(xs) / n
+
+
+def _correl(xs: list[float], ys: list[float]) -> float | None:
+    import math
+
+    n = len(xs)
+    if n < 2:
+        return None
+    xm = sum(xs) / n
+    ym = sum(ys) / n
+    sxy = sum((x - xm) * (y - ym) for x, y in zip(xs, ys))
+    sxx = sum((x - xm) ** 2 for x in xs)
+    syy = sum((y - ym) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    return sxy / math.sqrt(sxx * syy)
+
+
+def compute_impurity_std_ratio(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """有关物质·对照浓度比值法（照妥布霉素有关物质 Empower 版公式，输出百分数）。
+
+    rs1 = 标准1主峰平均（5 针）；Cs1 = 储备液称样量/稀释体积/10/100×1000 μg/ml；
+    Cu = 样品称样量/稀释体积/5×1000 μg/ml；
+    杂质% = Cs1 × 杂质面积 × 100 / (Cu × rs1)；总杂 = Σ指定杂质行（面积求和后同式）。
+    inputs 键约定：std1_mass、std_area_1..5、sample_mass_1/2、imp_<key>_1/2。
+    """
+    samples = int(cfg.get("samples") or 2)
+    std_vol = float(cfg.get("std_vol") or 50)
+    sample_vol = float(cfg.get("sample_vol") or 50)
+    std_dilution = float(cfg.get("std_dilution") or 10)
+    sample_dilution = float(cfg.get("sample_dilution") or 5)
+    impurities: list[dict[str, Any]] = cfg.get("impurities") or []
+    total_from: list[str] = cfg.get("total_from") or []
+
+    def _area(v: Any) -> float:
+        f = _num(v)
+        return f if f is not None else 0.0
+
+    std_mass = _num(inputs.get("std1_mass"))
+    std_areas = [_num(inputs.get(f"std_area_{i}")) for i in range(1, 6)]
+    std_present = [a for a in std_areas if a is not None]
+    rs1 = sum(std_present) / len(std_present) if std_present else None
+    cs1 = (
+        std_mass / std_vol / std_dilution / 100 * 1000
+        if std_mass is not None else None
+    )
+    cu: list[float | None] = []
+    for i in range(1, samples + 1):
+        m = _num(inputs.get(f"sample_mass_{i}"))
+        cu.append(m / sample_vol / sample_dilution * 1000 if m is not None else None)
+
+    def _imp_pct(key: str, i: int) -> float | None:
+        c1 = cs1
+        r1 = rs1
+        cu_i = cu[i - 1]
+        if c1 is None or r1 is None or cu_i is None:
+            return None
+        return c1 * _area(inputs.get(f"imp_{key}_{i}")) * 100 / (cu_i * r1)
+
+    items: list[dict[str, Any]] = []
+    for imp in impurities:
+        key = str(imp["key"])
+        vals = [_imp_pct(key, i) for i in range(1, samples + 1)]
+        present = [v for v in vals if v is not None]
+        avg = sum(present) / len(present) if present else None
+        areas = [_area(inputs.get(f"imp_{key}_{i}")) for i in range(1, samples + 1)]
+        items.append({
+            "std_name": imp["std_name"], "label": imp["label"], "value": avg,
+            "nd": all(a == 0 for a in areas),
+            "detail": " / ".join(
+                f"第{i}份 {v:.4g}%{'（未检出）' if all(a == 0 for a in areas) else ''}"
+                for i, v in enumerate(vals, start=1)
+            ),
+        })
+    # 总杂 = Σ指定行
+    tot_vals: list[float | None] = []
+    for i in range(1, samples + 1):
+        c1 = cs1
+        r1 = rs1
+        cu_i = cu[i - 1]
+        if c1 is None or r1 is None or cu_i is None:
+            tot_vals.append(None)
+            continue
+        total_area = sum(_area(inputs.get(f"imp_{k}_{i}")) for k in total_from)
+        tot_vals.append(c1 * total_area * 100 / (cu_i * r1))
+    present_t = [v for v in tot_vals if v is not None]
+    items.append({
+        "std_name": cfg.get("total_std_name") or "总杂质",
+        "label": "总杂质",
+        "value": sum(present_t) / len(present_t) if present_t else None,
+        "nd": False,
+        "detail": " / ".join(
+            f"第{i}份 {v:.4g}%" if v is not None else f"第{i}份 缺数据"
+            for i, v in enumerate(tot_vals, start=1)
+        ),
+    })
+    std_rsd_val = _rsd(std_present)
+    return {"mode": "impurity_std_ratio", "items": items, "std_rsd": round(std_rsd_val, 2) if std_rsd_val is not None else None}
+
+
+def compute_std_curve(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """有关物质·标准曲线回归法（照妥布霉素 Ch.P. 版公式）。
+
+    对照 3 点：终浓度 = 称重/稀释体积/(100/6)/稀释倍数×1000 μg/ml；
+    log-log 回归：b=SLOPE(log浓度, log面积)、a=INTERCEPT、r=CORREL；
+    样品结果 = 10^(b×log10(面积)+a)（μg/ml，限度同单位）。
+    inputs 键约定：std_mass、std_area_1..3、imp_<key>_1（样品面积，单份）。
+    """
+    import math
+
+    dilutions: list[float] = cfg.get("dilutions") or [20, 10, 5]
+    volume = float(cfg.get("volume") or 50)
+    conc_factor = float(cfg.get("conc_factor") or (100 / 6))
+    items_cfg: list[dict[str, Any]] = cfg.get("items") or []
+
+    std_mass = _num(inputs.get("std_mass"))
+    std_areas = [_num(inputs.get(f"std_area_{i}")) for i in range(1, 4)]
+    if std_mass is None or any(a is None for a in std_areas):
+        return {"mode": "std_curve", "items": [], "error": "对照品称重/3 点峰面积未填写完整"}
+    concs: list[float] = []
+    for d in dilutions:
+        concs.append(std_mass / volume / conc_factor / d * 1000)
+    log_c = [math.log10(c) for c in concs]
+    log_a = [math.log10(a) for a in std_areas if a is not None]
+    b = _slope(log_a, log_c)  # y=log浓度, x=log面积
+    a_inter = _intercept(log_a, log_c)
+    r = _correl(log_a, log_c)
+
+    items: list[dict[str, Any]] = []
+    for it in items_cfg:
+        key = str(it["key"])
+        area = _num(inputs.get(f"imp_{key}_1"))
+        value: float | None = None
+        if area is not None and b is not None and a_inter is not None:
+            value = 10 ** (b * math.log10(area) + a_inter)
+        items.append({
+            "std_name": it["std_name"], "label": it["label"], "value": value,
+            "nd": area is None,
+            "detail": f"{value:.4g}" if value is not None else "缺数据",
+        })
+    return {
+        "mode": "std_curve", "items": items,
+        "slope": round(b, 4) if b is not None else None,
+        "intercept": round(a_inter, 4) if a_inter is not None else None,
+        "correl": round(r, 4) if r is not None else None,
+    }

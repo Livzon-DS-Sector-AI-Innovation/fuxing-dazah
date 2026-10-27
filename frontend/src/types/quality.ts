@@ -453,7 +453,27 @@ export interface CalcImpurityVsStdCfg {
   total_std_name: string
 }
 
-export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg | CalcContentMultiCfg | CalcImpurityVsStdCfg
+export interface CalcImpurityStdRatioCfg {
+  mode: 'impurity_std_ratio'
+  samples: number
+  std_vol: number
+  sample_vol: number
+  std_dilution: number
+  sample_dilution: number
+  impurities: { key: string; label: string; std_name: string }[]
+  total_from: string[]
+  total_std_name: string
+}
+
+export interface CalcStdCurveCfg {
+  mode: 'std_curve'
+  dilutions: number[]
+  volume: number
+  conc_factor: number
+  items: { key: string; label: string; std_name: string }[]
+}
+
+export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg | CalcContentMultiCfg | CalcImpurityVsStdCfg | CalcImpurityStdRatioCfg | CalcStdCurveCfg
 
 
 // ─── 任务报告单 ───

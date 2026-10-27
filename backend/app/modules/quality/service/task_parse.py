@@ -169,6 +169,10 @@ class _TaskParse(_TaskCore):
                 computed = calc_engine.compute_content_multi(calc_cfg, inputs)
             elif mode == "impurity_vs_std":
                 computed = calc_engine.compute_impurity_vs_std(calc_cfg, inputs)
+            elif mode == "impurity_std_ratio":
+                computed = calc_engine.compute_impurity_std_ratio(calc_cfg, inputs)
+            elif mode == "std_curve":
+                computed = calc_engine.compute_std_curve(calc_cfg, inputs)
             else:
                 computed = calc_engine.compute_normalization(calc_cfg, inputs)
             for item in computed["items"]:
