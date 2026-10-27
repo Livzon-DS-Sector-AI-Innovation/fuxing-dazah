@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FacilityMapCard } from './FacilityMapCard'
@@ -92,6 +92,31 @@ describe('FacilityMapCard', () => {
     const modal = await screen.findByRole('dialog')
     expect(modal.textContent).toContain('DH-20261026-004')
     expect(modal.textContent).toContain('火灾报警')
+  })
+
+  it('按压带轻微抖动（<4px）仍是点击，弹出明细 Modal', async () => {
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^district-poly-/)
+    const poly = screen.getByTestId('district-poly-77')
+    // pointer 事件挂在 svg 上，从 polygon 冒泡；抖动 3px 未过拖动阈值
+    fireEvent.pointerDown(poly, { button: 0, pointerId: 1 })
+    fireEvent.pointerMove(poly, { pointerId: 1, clientX: 2, clientY: 1 })
+    fireEvent.pointerUp(poly, { pointerId: 1 })
+    fireEvent.click(poly)
+    const modal = await screen.findByRole('dialog')
+    expect(modal.textContent).toContain('DH-20261026-004')
+  })
+
+  it('拖动平移后的松手不当作分区点击（不弹 Modal）', async () => {
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^district-poly-/)
+    const poly = screen.getByTestId('district-poly-77')
+    fireEvent.pointerDown(poly, { button: 0, pointerId: 1 })
+    fireEvent.pointerMove(poly, { pointerId: 1, clientX: 12, clientY: 3 }) // 15px 越过阈值
+    fireEvent.pointerUp(poly, { pointerId: 1 })
+    fireEvent.click(poly)
+    // click 被吞：无分区明细（本测试无其他 dialog 触发源）
+    expect(document.querySelector('.ant-modal')).toBeNull()
   })
 
   it('底部未映射入口打开 AI 建议确认 Modal（#2）', async () => {

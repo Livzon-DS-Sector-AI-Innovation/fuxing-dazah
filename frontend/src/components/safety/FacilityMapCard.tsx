@@ -488,23 +488,35 @@ export function FacilityMapCard() {
 
   function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (e.button !== 0) return
+    // 新按压周期：作废上一周期可能残留的吞点击标记（pointerup 后浏览器
+    // 未派发 click 时标记会留存，否则误吞本次真实点击）
+    suppressClickRef.current = false
     dragRef.current = { cx: e.clientX, cy: e.clientY, vb: vbRef.current, moved: false }
     setPanning(true)
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId)
-    } catch {
-      // happy-dom 等环境无实现，拖动降级为仅视图内移动
-    }
+    // 注意：这里不能 setPointerCapture——支持该 API 的浏览器会把后续
+    // click 一并重定向到 svg，<g onClick> 收不到，点击分区永远不弹
+    // Modal（真机 bug 2026-10-27）；capture 延迟到真正拖动时再做
   }
 
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
     const d = dragRef.current
     const svg = svgRef.current
     if (!d || !svg) return
+    if (Math.abs(e.clientX - d.cx) + Math.abs(e.clientY - d.cy) > 4) {
+      if (!d.moved) {
+        d.moved = true
+        // 越过拖动阈值才捕获指针：单击（含轻微抖动）不捕获，click 正常
+        // 派发到分区多边形；真拖动则锁住指针获得 viewport 外的连续平移
+        try {
+          svg.setPointerCapture(e.pointerId)
+        } catch {
+          // happy-dom 等环境无实现，拖动降级为仅视图内移动
+        }
+      }
+    }
+    if (!d.moved) return
     const rect = svg.getBoundingClientRect()
     const scale = Math.min(rect.width / d.vb.w, rect.height / d.vb.h)
-    if (Math.abs(e.clientX - d.cx) + Math.abs(e.clientY - d.cy) > 4) d.moved = true
-    if (!d.moved) return
     const dx = (e.clientX - d.cx) / scale
     const dy = (e.clientY - d.cy) / scale
     setVb(clampVb({ ...d.vb, x: d.vb.x - dx, y: d.vb.y - dy }))
