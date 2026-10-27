@@ -473,7 +473,26 @@ export interface CalcStdCurveCfg {
   items: { key: string; label: string; std_name: string }[]
 }
 
-export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg | CalcContentMultiCfg | CalcImpurityVsStdCfg | CalcImpurityStdRatioCfg | CalcStdCurveCfg
+export interface CalcGroupRrfCfg {
+  mode: 'group_rrf'
+  rrf: number
+  rrf_group: string[]
+  rrf_denom: string[]
+  main_std_name: string
+  items: { key: string; label: string; std_name: string }[]
+  review?: string
+}
+
+export interface CalcImpurityRrfStdCfg {
+  mode: 'impurity_rrf_std'
+  samples: number
+  std_keys?: string[]
+  rrf_from_input?: string
+  items: { key: string; label: string; std_name: string; rrf?: number }[]
+  review?: string
+}
+
+export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg | CalcContentMultiCfg | CalcImpurityVsStdCfg | CalcImpurityStdRatioCfg | CalcStdCurveCfg | CalcGroupRrfCfg | CalcImpurityRrfStdCfg
 
 
 // ─── 任务报告单 ───

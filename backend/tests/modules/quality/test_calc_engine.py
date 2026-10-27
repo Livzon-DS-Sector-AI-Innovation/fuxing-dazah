@@ -258,3 +258,18 @@ def test_group_rrf_math():
     assert abs(by_name["A2-1系"]["value"] - 100000 / denom * 100) < 1e-9
     # 主组 = 900000/983000×100
     assert abs(by_name["A2系"]["value"] - 900000 / denom * 100) < 1e-9
+
+
+def test_impurity_rrf_std_math():
+    cfg = {
+        "mode": "impurity_rrf_std", "samples": 2,
+        "items": [
+            {"key": "a", "label": "杂质A", "std_name": "杂质A", "rrf": 0.75},
+            {"key": "b", "label": "杂质B", "std_name": "杂质B", "rrf": 0.63},
+        ],
+    }
+    inputs = {"std_area_std_1": 100000, "std_area_std_2": 100000, "imp_a_1": 500, "imp_a_2": 400, "imp_b_1": "", "imp_b_2": 300}
+    result = calc_engine.compute_impurity_rrf_std(cfg, inputs)
+    by_name = {i["std_name"]: i for i in result["items"]}
+    assert abs(by_name["杂质A"]["value"] - (500 * 0.75 + 400 * 0.75) / 100000 / 2) < 1e-12
+    assert abs(by_name["杂质B"]["value"] - 300 * 0.63 / 100000 / 2) < 1e-12

@@ -2,7 +2,7 @@
 
 import { Divider, InputNumber, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
-import type { CalcCfg, CalcContentMultiCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcImpurityStdRatioCfg, CalcImpurityVsStdCfg, CalcNormalizationCfg, CalcStdCurveCfg } from '@/types/quality'
+import type { CalcCfg, CalcContentMultiCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcGroupRrfCfg, CalcImpurityRrfStdCfg, CalcImpurityStdRatioCfg, CalcImpurityVsStdCfg, CalcNormalizationCfg, CalcStdCurveCfg } from '@/types/quality'
 
 const { Text } = Typography
 
@@ -39,6 +39,12 @@ export default function CalcForm({ cfg, inputs, onChange }: {
   }
   if (cfg.mode === 'std_curve') {
     return <StdCurveForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'group_rrf') {
+    return <GroupRrfForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'impurity_rrf_std') {
+    return <ImpRrfStdForm cfg={cfg} inputs={inputs} set={set} />
   }
   return <ExtForm cfg={cfg} inputs={inputs} set={set} />
 }
@@ -673,6 +679,145 @@ function StdCurveForm({ cfg, inputs, set }: {
       <Text type="warning" style={{ fontSize: 12 }}>
         注：Ch.P. 模板结果列无内置公式，系统按 10^(b×log面积+a) 计算；结果单位（μg/ml）与限度口径请与业务确认。
       </Text>
+    </Space>
+  )
+}
+
+
+function GroupRrfForm({ cfg, inputs, set }: {
+  cfg: CalcGroupRrfCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const mainTotal = num(inputs.main_total) ?? 0
+  const areas = Object.fromEntries(cfg.items.map((it) => [it.key, num(inputs[`area_${it.key}`]) ?? 0]))
+  const rrfSum = cfg.rrf_denom.reduce((a, k) => a + (areas[k] ?? 0), 0)
+  const denom = mainTotal + cfg.rrf * rrfSum
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        分组校正因子归一化：校正总面积 = 主组总峰面积 + {cfg.rrf}×校正组面积；校正组成员% = {cfg.rrf}×面积/校正总面积×100。
+        {cfg.review && <Text type="warning">　⚠ {cfg.review}</Text>}
+      </Text>
+      <span style={{ fontSize: 12.5 }}>
+        {cfg.main_std_name}（主组）总峰面积
+        <InputNumber size="small" style={{ width: 130, marginLeft: 6 }} value={inputs.main_total}
+          onChange={(v) => set('main_total', v)} />
+      </span>
+      <Table<{ key: string; label: string; isRrf: boolean }>
+        rowKey="key" size="small" pagination={false}
+        dataSource={cfg.items.map((it) => ({ key: it.key, label: it.label, isRrf: cfg.rrf_group.includes(it.key) }))}
+        scroll={{ x: 520 }}
+        columns={[
+          { title: '组分', dataIndex: 'label', width: 150, render: (v: string, r) => (
+            <span>{v}{r.isRrf && <Text type="warning" style={{ fontSize: 11 }}>（×{cfg.rrf}）</Text>}</span>
+          ) },
+          {
+            title: '峰面积', key: 'area', width: 140,
+            render: (_: unknown, r) => (
+              <InputNumber size="small" style={{ width: '100%' }} value={inputs[`area_${r.key}`]}
+                onChange={(v) => set(`area_${r.key}`, v)} />
+            ),
+          },
+          {
+            title: '结果%', key: 'v', width: 130,
+            render: (_: unknown, r) => {
+              const a = num(inputs[`area_${r.key}`]) ?? 0
+              if (denom <= 0) return '-'
+              const v = (r.isRrf ? cfg.rrf * a : a) / denom * 100
+              return <Text strong>{v.toFixed(4)}%</Text>
+            },
+          },
+        ]}
+      />
+      <div style={{ fontSize: 13 }}>
+        <Text type="secondary">{cfg.main_std_name}%：</Text>
+        <Tag color="blue">{denom > 0 ? (mainTotal / denom * 100).toFixed(4) + '%' : '-'}</Tag>
+      </div>
+    </Space>
+  )
+}
+
+function ImpRrfStdForm({ cfg, inputs, set }: {
+  cfg: CalcImpurityRrfStdCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const stdKeys = cfg.std_keys ?? ['std']
+  const rrfInput = cfg.rrf_from_input ? (num(inputs[cfg.rrf_from_input]) ?? 1) : null
+  const pct = (key: string, rrf: number | undefined, i: number) => {
+    const stdK = stdKeys[Math.min(i - 1, stdKeys.length - 1)]
+    const stdArea = num(inputs[`std_area_${stdK}_${i}`])
+    const a = num(inputs[`imp_${key}_${i}`]) ?? 0
+    if (stdArea == null) return null
+    return a * (rrf ?? rrfInput ?? 1) / stdArea
+  }
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        校正因子对标准面积：杂质% = 杂质面积×校正因子/标准面积。
+        {cfg.review && <Text type="warning">　⚠ {cfg.review}</Text>}
+      </Text>
+      <Space wrap size={6}>
+        {Array.from({ length: cfg.samples }, (_, i) => (
+          <span key={i} style={{ fontSize: 12.5 }}>
+            标准面积{stdKeys.length > 1 ? `（${stdKeys[i]}）` : ''}·第{i + 1}份
+            <InputNumber size="small" style={{ width: 110, marginLeft: 4 }} value={inputs[`std_area_${stdKeys[Math.min(i, stdKeys.length - 1)]}_${i + 1}`]}
+              onChange={(v) => set(`std_area_${stdKeys[Math.min(i, stdKeys.length - 1)]}_${i + 1}`, v)} />
+          </span>
+        ))}
+        {cfg.rrf_from_input && (
+          <span style={{ fontSize: 12.5 }}>
+            {cfg.rrf_from_input}
+            <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs[cfg.rrf_from_input]}
+              onChange={(v) => set(cfg.rrf_from_input!, v)} />
+          </span>
+        )}
+      </Space>
+      <Table<{ key: string; label: string; rrf?: number }>
+        rowKey="key" size="small" pagination={false}
+        dataSource={cfg.items.map((it) => ({ key: it.key, label: it.label, rrf: it.rrf }))}
+        scroll={{ x: 620 }}
+        columns={[
+          { title: '项目', dataIndex: 'label', width: 160 },
+          {
+            title: '第1份面积', key: 'a1', width: 130,
+            render: (_: unknown, r) => (
+              <InputNumber size="small" style={{ width: '100%' }} value={inputs[`imp_${r.key}_1`]}
+                onChange={(v) => set(`imp_${r.key}_1`, v)} />
+            ),
+          },
+          {
+            title: '第2份面积', key: 'a2', width: 130,
+            render: (_: unknown, r) => (
+              <InputNumber size="small" style={{ width: '100%' }} value={inputs[`imp_${r.key}_2`]}
+                onChange={(v) => set(`imp_${r.key}_2`, v)} />
+            ),
+          },
+          {
+            title: '第1份%', key: 'p1', width: 100,
+            render: (_: unknown, r) => {
+              const v = pct(r.key, r.rrf, 1)
+              return v != null ? v.toFixed(4) + '%' : '-'
+            },
+          },
+          {
+            title: '第2份%', key: 'p2', width: 100,
+            render: (_: unknown, r) => {
+              const v = pct(r.key, r.rrf, 2)
+              return v != null ? v.toFixed(4) + '%' : '-'
+            },
+          },
+          {
+            title: '平均%', key: 'avg', width: 110,
+            render: (_: unknown, r) => {
+              const both = [pct(r.key, r.rrf, 1), pct(r.key, r.rrf, 2)].filter((v): v is number => v != null)
+              const avg = both.length ? both.reduce((a, b) => a + b, 0) / both.length : null
+              return avg != null ? <Text strong>{avg.toFixed(4)}%</Text> : '-'
+            },
+          },
+        ]}
+      />
     </Space>
   )
 }

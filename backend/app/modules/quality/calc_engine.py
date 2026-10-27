@@ -136,7 +136,7 @@ def compute_external_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[st
         std_present = [a for a in std_areas if a is not None]
         std_avg = sum(std_present) / len(std_present) if std_present else None
         std_rsd = _rsd(std_present)
-        std_vol = _num(inputs.get(f"{key}_std_vol"))
+        std_vol = _num(inputs.get(f"{key}_std_vol")) or 1.0
         purity = _num(inputs.get(f"{key}_std_purity")) or 1.0
         ppm_vals: list[float | None] = []
         for i in range(1, samples + 1):
@@ -173,6 +173,7 @@ def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) ->
     moisture（水分%，如 0.5 表示 0.5%，缺省 0）。
     """
     samples = int(cfg.get("samples") or 3)
+    factor = float(cfg.get("factor") or 1)
     std_mass = _num(inputs.get("std1_mass"))
     std_content = _num(inputs.get("std_content")) or 1.0
     std_areas = [_num(inputs.get(f"std_area_{i}")) for i in range(1, 7)]
@@ -197,7 +198,7 @@ def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) ->
             content_vals.append(None)
             continue
         content_vals.append(
-            std_mass * std_content * s_area / s_mass / std_avg / (1 - moisture / 100) * 100
+            factor * std_mass * std_content * s_area / s_mass / std_avg / (1 - moisture / 100) * 100
         )
     present = [v for v in content_vals if v is not None]
     avg = sum(present) / len(present) if present else None
@@ -526,6 +527,7 @@ def compute_group_rrf(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, 
     rrf = float(cfg.get("rrf") or 1)
     items_cfg: list[dict[str, Any]] = cfg.get("items") or []
     rrf_keys: set[str] = set(cfg.get("rrf_group") or [])
+    denom_keys: set[str] = set(cfg.get("rrf_denom") or rrf_keys)
 
     def _area(v: Any) -> float:
         f = _num(v)
@@ -533,7 +535,7 @@ def compute_group_rrf(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, 
 
     main_total = _area(inputs.get("main_total"))
     areas = {str(it["key"]): _area(inputs.get(f"area_{it['key']}")) for it in items_cfg}
-    rrf_sum = sum(areas[k] for k in rrf_keys if k in areas)
+    rrf_sum = sum(areas[k] for k in denom_keys if k in areas)
     denom = main_total + rrf * rrf_sum
     items: list[dict[str, Any]] = []
     for it in items_cfg:
@@ -554,3 +556,45 @@ def compute_group_rrf(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, 
         "detail": f"{main_value:.4g}%" if main_value is not None else "缺数据",
     })
     return {"mode": "group_rrf", "items": items, "denom": denom}
+
+
+def compute_impurity_rrf_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """有关物质·校正因子对标准面积（照阿卡波糖有关物质公式，输出百分数）。
+
+    杂质% = 杂质面积 × 校正因子 / 标准面积（阿卡波糖：= 面积/标准面积×RRF×0.01 的分数值×100）。
+    inputs 键约定：std_area（标准/对照面积）、imp_<key>_1/2（各杂质面积，空/0=未检出）。
+    """
+    samples = int(cfg.get("samples") or 2)
+    items_cfg: list[dict[str, Any]] = cfg.get("items") or []
+
+    def _area(v: Any) -> float:
+        f = _num(v)
+        return f if f is not None else 0.0
+
+    std_keys: list[str] = cfg.get("std_keys") or ["std"]
+    rrf_from_input = cfg.get("rrf_from_input")
+    rrf_input = _num(inputs.get(rrf_from_input)) if rrf_from_input else None
+    items: list[dict[str, Any]] = []
+    for it in items_cfg:
+        key = str(it["key"])
+        rrf = float(it.get("rrf") or (rrf_input or 1))
+        vals: list[float | None] = []
+        for i in range(1, samples + 1):
+            std_area = _num(inputs.get(f"std_area_{std_keys[min(i - 1, len(std_keys) - 1)]}_{i}"))
+            if std_area is None:
+                vals.append(None)
+                continue
+            vals.append(_area(inputs.get(f"imp_{key}_{i}")) * rrf / std_area)
+        present = [v for v in vals if v is not None]
+        avg = sum(present) / len(present) if present else None
+        areas = [_area(inputs.get(f"imp_{key}_{i}")) for i in range(1, samples + 1)]
+        items.append({
+            "std_name": it["std_name"], "label": it["label"], "value": avg,
+            "nd": all(a == 0 for a in areas),
+            "detail": " / ".join(
+                f"第{i}份 {v:.4g}%{'（未检出）' if all(a == 0 for a in areas) else ''}"
+                if v is not None else f"第{i}份 缺数据"
+                for i, v in enumerate(vals, start=1)
+            ),
+        })
+    return {"mode": "impurity_rrf_std", "items": items}

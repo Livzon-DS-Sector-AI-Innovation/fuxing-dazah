@@ -175,6 +175,8 @@ class _TaskParse(_TaskCore):
                 computed = calc_engine.compute_std_curve(calc_cfg, inputs)
             elif mode == "group_rrf":
                 computed = calc_engine.compute_group_rrf(calc_cfg, inputs)
+            elif mode == "impurity_rrf_std":
+                computed = calc_engine.compute_impurity_rrf_std(calc_cfg, inputs)
             else:
                 computed = calc_engine.compute_normalization(calc_cfg, inputs)
             for item in computed["items"]:
