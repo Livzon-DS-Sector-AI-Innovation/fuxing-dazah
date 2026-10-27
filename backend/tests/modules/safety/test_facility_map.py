@@ -69,6 +69,21 @@ def _district(**overrides) -> dict:
     return base
 
 
+class TestDistrictNames:
+    def test_format_district_list_has_real_names(self):
+        """提示词分区清单必须是真实名称——曾因生成器 f-string 转义错误
+        写出整片 {did}={name} 占位符，AI 拿不到分区名全部判 null。"""
+        from app.modules.safety.service.facility_map.district_names import (
+            DISTRICT_PAIRS,
+            format_district_list,
+        )
+
+        lines = format_district_list().split("\n")
+        assert len(lines) == len(DISTRICT_PAIRS)
+        assert all("{did}" not in line and "={name}" not in line for line in lines)
+        assert any(name in format_district_list() for _, name in DISTRICT_PAIRS)
+
+
 class TestRailPolygon:
     def test_prefers_point_dtos_lng_lat(self):
         """主坐标源 pointDTOS（经纬度），输出按 6 位小数舍入的 (x, y) 序列。"""

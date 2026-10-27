@@ -23,10 +23,15 @@ SYSTEM_PROMPT = """你是制药厂区的地点匹配专员。给定全厂风险�
 
 
 def build_user_prompt(items: list[tuple[str, int]]) -> str:
-    """items = [(location_text, count), …]（≤20 条/批）。"""
-    lines = [f"{i + 1}. {text}（近段出现 {count} 次）" for i, (text, count) in enumerate(items)]
+    """items = [(location_text, count), …]（≤20 条/批）。
+
+    频次不拼进条目行——模型会整行回显 text 字段，混入计数后缀会破坏
+    解析侧的原文精确匹配（2026-10-27 实测 443 条全丢弃的根因）。
+    """
+    lines = [f"{i + 1}. {text}" for i, (text, _) in enumerate(items)]
     numbered = "\n".join(lines)
     return (
         f"## 全厂风险分区清单（distId=名称）\n{format_district_list()}\n\n"
-        f"## 待映射地点文本\n{numbered}\n\n请逐条给出建议。"
+        f"## 待映射地点文本（共 {len(items)} 条，每条各输出一行建议，全部输出不得省略）\n"
+        f"{numbered}\n\n请逐条给出建议。"
     )

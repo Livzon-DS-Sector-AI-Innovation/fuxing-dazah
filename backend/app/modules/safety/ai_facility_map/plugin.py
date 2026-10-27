@@ -14,6 +14,7 @@ dist_id 校验必须落在 64 分区内（否则置 None），medium 归一 mid�
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.modules.safety.ai_facility_map.prompts import (
@@ -33,6 +34,19 @@ _EXPECTED_KEYS = ["suggestions"]
 
 # AI 可能输出 medium（后端既有 vision 链口径），统一归一为 mid
 _CONFIDENCE_ALIASES = {"medium": CONFIDENCE_MID, "中": CONFIDENCE_MID}
+
+# 模型回显 text 时可能带上的输入行装饰（编号前缀/频次后缀），剥掉再匹配
+_ECHO_NOISE = (
+    (re.compile(r"（近段出现 \d+ 次）$"), ""),
+    (re.compile(r"^\d+[.、]\s*"), ""),
+)
+
+
+def _normalize_echo(text: str) -> str:
+    cleaned = text.strip()
+    for pattern, repl in _ECHO_NOISE:
+        cleaned = pattern.sub(repl, cleaned).strip()
+    return cleaned
 
 
 class FacilityMapSuggestError(Exception):
@@ -80,7 +94,7 @@ class FacilityMapSuggestPlugin:
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            text = str(row.get("text") or "").strip()
+            text = _normalize_echo(str(row.get("text") or ""))
             if not text or text not in known:
                 continue  # 回显与输入不一致（改写/幻觉行）丢弃
             dist_id = row.get("dist_id")
