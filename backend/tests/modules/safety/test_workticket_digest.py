@@ -159,3 +159,20 @@ async def test_rectify_omitted_when_none() -> None:
     assert card is not None
     contents = [e["content"] for e in card.elements if e["tag"] == "markdown"]
     assert not any("前日问题整改复查" in c for c in contents)
+
+
+async def test_rectify_zero_problem_renders_explicit_tag() -> None:
+    rectify = {
+        "source_date": "2026-09-14", "checked_date": "2026-09-15",
+        "problem_total": 0, "rectified": 0, "unrectified": 0,
+        "uncheckable": 0, "tickets": [],
+    }
+    card = build_workticket_digest(
+        D, [_ticket("DH-003")], {}, {"total": 1, "compliant_count": 1},
+        FULL_MD, rectify=rectify,
+    )
+    assert card is not None
+    contents = [e["content"] for e in card.elements if e["tag"] == "markdown"]
+    summary = next(c for c in contents if "前日问题整改复查" in c)
+    assert "无问题票" in summary
+    assert not [e for e in card.elements if e["tag"] == "column_set"]

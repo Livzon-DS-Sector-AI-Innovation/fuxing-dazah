@@ -189,8 +189,19 @@ _RECTIFY_TAGS: dict[str, tuple[str, str]] = {
 
 
 def _rectify_elements(rectify: dict[str, Any]) -> list[dict[str, Any]]:
-    """前日问题整改复查节：汇总标签行 + 未整改/无法复查票逐条（上限同问题票）。"""
+    """前日问题整改复查节：汇总标签行 + 未整改/无法复查票逐条（上限同问题票）。
+
+    零问题票也渲染一行显式结论（区分「查了没事」与「没查」）。
+    """
     source_date = rectify.get("source_date", "")
+    if not rectify.get("problem_total"):
+        return [{
+            "tag": "markdown",
+            "content": (
+                f"🔁 **前日问题整改复查**（{source_date}）："
+                f"<text_tag color='green'>无问题票</text_tag>"
+            ),
+        }]
     counts = [
         (rectify.get("rectified", 0), "rectified"),
         (rectify.get("unrectified", 0), "unrectified"),

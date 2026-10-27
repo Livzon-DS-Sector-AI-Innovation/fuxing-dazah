@@ -259,12 +259,15 @@ async def test_run_no_review_returns_none() -> None:
     assert session.added == []
 
 
-async def test_run_no_flagged_violations_returns_none() -> None:
+async def test_run_no_flagged_violations_returns_zero_summary() -> None:
+    """零问题票返回 problem_total=0 的空汇总（渲染层显式展示「无问题票」）。"""
     review = _fake_review()
     rows = [_violation_row("DH-1", not_applicable=True)]
     checker, session = _checker(review, rows, FakeDetailClient({}))
     result = await checker.run(date(2026, 10, 20), date(2026, 10, 21))
-    assert result is None
+    assert result is not None
+    assert result["problem_total"] == 0
+    assert result["tickets"] == []
     assert session.added == []
 
 

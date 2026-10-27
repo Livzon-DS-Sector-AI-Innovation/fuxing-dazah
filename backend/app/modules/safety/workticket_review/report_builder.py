@@ -281,18 +281,24 @@ class WorkTicketReviewReportBuilder:
         return "\n\n".join(blocks)
 
     def _render_rectify(self, rectify: dict[str, Any]) -> str:
-        """前日问题整改复查节（run_rectify_check 汇总 → 固定模板）。"""
+        """前日问题整改复查节（run_rectify_check 汇总 → 固定模板）。
+
+        零问题票也显式渲染一行（区分「查了没事」与「没查」）。
+        """
         source_date = rectify.get("source_date", "")
         lines = [
             f"🔁 前日问题整改复查（{source_date}）",
             "━━━━━━━━━━━━━━━━━━━━",
-            (
-                f"• 问题票 {rectify.get('problem_total', 0)} 张："
-                f"✅ 已整改 {rectify.get('rectified', 0)} ｜ "
-                f"❌ 未整改 {rectify.get('unrectified', 0)} ｜ "
-                f"⚠️ 无法复查 {rectify.get('uncheckable', 0)}"
-            ),
         ]
+        if not rectify.get("problem_total"):
+            lines.append("• 前日审核无问题票，无需整改复查")
+            return "\n".join(lines)
+        lines.append(
+            f"• 问题票 {rectify.get('problem_total', 0)} 张："
+            f"✅ 已整改 {rectify.get('rectified', 0)} ｜ "
+            f"❌ 未整改 {rectify.get('unrectified', 0)} ｜ "
+            f"⚠️ 无法复查 {rectify.get('uncheckable', 0)}"
+        )
         status_marks = {
             "rectified": "✅",
             "unrectified": "❌",

@@ -299,11 +299,14 @@ class WorkTicketReviewService:
                     f"待补 {stats.get('data_insufficient', 0)}"
                 )
                 if rectify_summary:
-                    stats_line += (
-                        f" ｜ 🔁 前日复查 ✅ {rectify_summary.get('rectified', 0)}"
-                        f" · ❌ {rectify_summary.get('unrectified', 0)}"
-                        f" · ⚠️ {rectify_summary.get('uncheckable', 0)}"
-                    )
+                    if rectify_summary.get("problem_total"):
+                        stats_line += (
+                            f" ｜ 🔁 前日复查 ✅ {rectify_summary.get('rectified', 0)}"
+                            f" · ❌ {rectify_summary.get('unrectified', 0)}"
+                            f" · ⚠️ {rectify_summary.get('uncheckable', 0)}"
+                        )
+                    else:
+                        stats_line += " ｜ 🔁 前日复查：无问题票"
                 await upsert_daily_digest(
                     datetime.now(TZ).date(),
                     "workticket",

@@ -190,8 +190,9 @@ class RectifyChecker:
     ) -> dict[str, Any] | None:
         """复查 source_review_date 审核的问题票，落库并返回汇总。
 
-        返回 None = 无可复查对象（该日无审核记录 / 审核无问题票 / 拉取失败），
-        调用方省略复查节，不视为错误。
+        返回 None = 无可复查对象（该日无审核记录 / 复查链路异常），调用方省略
+        复查节；审核存在但零问题票时返回 problem_total=0 的空汇总，由渲染层
+        显式展示「前日无问题票」，区分「查了没事」与「没查」。
         """
         review = await self.repo.get_by_date(source_review_date)
         if review is None:
@@ -201,8 +202,8 @@ class RectifyChecker:
         violations = await self.repo.list_violations(review.id)
         flagged_rows = [v for v in violations if _is_flagged_row(v.not_applicable)]
         if not flagged_rows:
-            logger.info("整改复查：%s 审核无问题票，跳过", source_review_date)
-            return None
+            logger.info("整改复查：%s 审核无问题票", source_review_date)
+            return self._summary(source_review_date, checked_date, [])
 
         # 昨日问题票 → {ticket_no: (ticket_type, {rule_no: [detail]})}
         yesterday: dict[str, tuple[str, dict[str, list[str]]]] = {}

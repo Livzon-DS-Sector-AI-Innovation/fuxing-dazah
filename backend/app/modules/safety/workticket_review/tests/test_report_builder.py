@@ -311,3 +311,18 @@ def test_rectify_section_omitted_when_none() -> None:
     tickets, violations, stats = _make_fixture()
     report = _report(tickets, violations, stats)
     assert "前日问题整改复查" not in report
+
+
+def test_rectify_zero_problem_renders_explicit_line() -> None:
+    """零问题票显式渲染「无问题票」，区分「查了没事」与「没查」。"""
+    tickets, violations, stats = _make_fixture()
+    report = BUILDER.build(
+        date(2026, 8, 26), tickets, violations, stats,
+        rectify={
+            "source_date": "2026-08-25", "checked_date": "2026-08-26",
+            "problem_total": 0, "rectified": 0, "unrectified": 0,
+            "uncheckable": 0, "tickets": [],
+        },
+    )
+    assert "🔁 前日问题整改复查（2026-08-25）" in report
+    assert "前日审核无问题票，无需整改复查" in report
