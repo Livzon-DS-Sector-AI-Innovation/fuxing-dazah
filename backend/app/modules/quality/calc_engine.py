@@ -174,7 +174,7 @@ def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) ->
     """
     samples = int(cfg.get("samples") or 3)
     std_mass = _num(inputs.get("std1_mass"))
-    std_content = _num(inputs.get("std_content"))
+    std_content = _num(inputs.get("std_content")) or 1.0
     std_areas = [_num(inputs.get(f"std_area_{i}")) for i in range(1, 7)]
     std_present = [a for a in std_areas if a is not None]
     std_avg = sum(std_present) / len(std_present) if std_present else None
@@ -184,7 +184,7 @@ def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) ->
     for i in range(1, samples + 1):
         s_area = _num(inputs.get(f"sample_area_{i}"))
         s_mass = _num(inputs.get(f"sample_mass_{i}"))
-        if s_area is None or s_mass is None or std_mass is None or std_content is None or std_avg is None:
+        if s_area is None or s_mass is None or std_mass is None or std_avg is None:
             content_vals.append(None)
             continue
         content_vals.append(
@@ -302,7 +302,8 @@ def compute_impurity_vs_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict
         f = _num(v)
         return f if f is not None else 0.0
 
-    std_c = sum(_area(inputs.get(f"std_c_area_{c['key']}")) for c in components)
+    std_factor = float(cfg.get("std_factor") or 1)
+    std_c = sum(_area(inputs.get(f"std_c_area_{c['key']}")) for c in components) * std_factor
     if std_c <= 0:
         return {"mode": "impurity_vs_std", "items": [], "error": "标准溶液c面积未填写"}
 
