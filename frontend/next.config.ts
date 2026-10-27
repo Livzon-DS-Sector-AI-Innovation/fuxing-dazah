@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // CI 隔离构建目录：dev server 运行中跑 next build 会共用 .next 互杀
+  // （2026-10 实测坑）；BUILD_DIST_DIR 指定时写入独立目录，不动 dev 的 .next
+  ...(process.env.BUILD_DIST_DIR ? { distDir: process.env.BUILD_DIST_DIR } : {}),
   turbopack: {
     root: __dirname,
   },
