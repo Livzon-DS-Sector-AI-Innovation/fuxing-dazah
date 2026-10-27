@@ -5,17 +5,20 @@
  *
  * 底图：64 分区轮廓静态资产（src/data/tiji-risk-districts.json，经纬度坐标，
  * 一次性快照），SVG 直绘无地图库——经纬差投影到 viewBox（纬度按 cos(25.46°)
- * 纠正 N-S 比例，y 轴翻转北上）；浅灰填充 + hover 名称。
+ * 纠正 N-S 比例，y 轴翻转北上）；当日有落点的分区淡靛底色强调，其余暖灰。
+ * 交互：滚轮/触控板缩放（以光标为锚）+ 拖动平移（viewBox 实现，拖动后不触发
+ * 分区点击）+ 右上角放大/缩小/重置按钮；徽标与名称标注按 1/zoom 缩放保持
+ * 屏幕等大，名称标注随放大逐级显现（放得下才显示）。
  * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
  * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
  * 底部「未映射 N 处」可展开清单（纯展示，AI 建议入口另议）。
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Modal, Spin, Table, Tag } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { MapPinned } from 'lucide-react'
+import { MapPinned, Maximize, Minus, Plus } from 'lucide-react'
 import { EmptyGuide, SectionCard } from '@/components/ui-kit'
 import {
   fetchFacilityMapPins,
@@ -80,13 +83,15 @@ interface RenderedDistrict {
   shapes: string[]
   /** 徽标挂点：最大 rail 的 bbox 中心 */
   anchor: [number, number]
+  /** 最大 rail 的 bbox [x, y, w, h]（viewBox 单位，名称标注放得下判断用） */
+  bbox: [number, number, number, number]
 }
 
 const RENDERED: RenderedDistrict[] = (() => {
   const out: RenderedDistrict[] = []
   for (const dist of DISTRICTS) {
     const shapes: string[] = []
-    let best: { area: number; anchor: [number, number] } | null = null
+    let best: { area: number; anchor: [number, number]; bbox: [number, number, number, number] } | null = null
     for (const rail of dist.rails) {
       if (rail.polygon.length < 3) continue
       let sx = Infinity
@@ -105,17 +110,45 @@ const RENDERED: RenderedDistrict[] = (() => {
       shapes.push(pts.join(' '))
       const area = (bx - sx) * (by - sy)
       if (!best || area > best.area) {
-        best = { area, anchor: [(sx + bx) / 2, (sy + by) / 2] }
+        best = { area, anchor: [(sx + bx) / 2, (sy + by) / 2], bbox: [sx, sy, bx - sx, by - sy] }
       }
     }
     if (!shapes.length) continue
-    out.push({ dist, shapes, anchor: best!.anchor })
+    out.push({ dist, shapes, anchor: best!.anchor, bbox: best!.bbox })
   }
   return out
 })()
 
 const BY_DIST_ID = new Map(RENDERED.map(r => [r.dist.distId, r]))
 
+// ── 视图（viewBox 缩放平移）──────────────────────────────────────────
+interface ViewBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+const INITIAL_VB: ViewBox = { x: 0, y: 0, w: VIEW_W, h: GEOM.viewH }
+const MAX_ZOOM = 12
+const ZOOM_STEP = 1.4
+
+function clampVb(v: ViewBox): ViewBox {
+  const w = Math.min(Math.max(v.w, VIEW_W / MAX_ZOOM), VIEW_W)
+  const h = w * (GEOM.viewH / VIEW_W)
+  const x = Math.min(Math.max(v.x, 0), VIEW_W - w)
+  const y = Math.min(Math.max(v.y, 0), GEOM.viewH - h)
+  return { x, y, w, h }
+}
+
+// ── 配色 ────────────────────────────────────────────────────────────
+// 底图：当日有落点=淡靛强调，其余暖灰；hover 统一加深
+const FILL_BASE = '#f5f4f1'
+const STROKE_BASE = '#d7d3cb'
+const FILL_ACTIVE = '#e9eefb'
+const STROKE_ACTIVE = '#8ba3e8'
+const FILL_HOVER = '#dce6fa'
+const LABEL_FILL = '#7a766d'
 // 徽标色（动火红/受限橙/其他蓝/报警黄）
 const BADGES = [
   { key: 'hot', label: '火', fill: '#d92d20' },
@@ -143,8 +176,16 @@ const TICKET_TYPE_LABEL: Record<string, string> = {
   blind_plate: '盲板',
 }
 
-/** 徽标组：作业桶（非零）+ 报警合计，横向串排 */
-function BadgeGroup({ pin, anchor }: { pin: FacilityMapDistrictPin; anchor: [number, number] }) {
+/** 徽标组：作业桶（非零）+ 报警合计，横向串排；按 1/zoom 缩放保持屏幕等大 */
+function BadgeGroup({
+  pin,
+  anchor,
+  zoom,
+}: {
+  pin: FacilityMapDistrictPin
+  anchor: [number, number]
+  zoom: number
+}) {
   const alarms = pin.alarms.fire + pin.alarms.central
   const chips: { label: string; fill: string }[] = []
   for (const b of BADGES) {
@@ -153,13 +194,16 @@ function BadgeGroup({ pin, anchor }: { pin: FacilityMapDistrictPin; anchor: [num
   }
   if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
   if (!chips.length) return null
-  const [cx, cy] = anchor
   const w = 34
   const total = chips.length * w
   return (
-    <g data-testid={`district-badge-${pin.dist_id}`} pointerEvents="none">
+    <g
+      data-testid={`district-badge-${pin.dist_id}`}
+      pointerEvents="none"
+      transform={`translate(${anchor[0]} ${anchor[1]}) scale(${1 / zoom}) translate(${-total / 2} ${-10})`}
+    >
       {chips.map((chip, i) => (
-        <g key={chip.label} transform={`translate(${cx - total / 2 + i * w}, ${cy - 10})`}>
+        <g key={chip.label} transform={`translate(${i * w}, 0)`}>
           <rect width={w - 4} height={20} rx={10} fill="#fff" stroke={chip.fill} strokeWidth={1.5} />
           <text
             x={(w - 4) / 2}
@@ -265,6 +309,9 @@ function DistrictModal({
   )
 }
 
+const MAP_BTN_CLS =
+  'flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-hairline)] bg-white/90 text-[var(--color-charcoal)] shadow-sm transition-colors hover:bg-[var(--color-surface)]'
+
 export function FacilityMapCard() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['safety', 'facility-map-pins'],
@@ -272,7 +319,15 @@ export function FacilityMapCard() {
   })
   const [openDist, setOpenDist] = useState<FacilityMapDistrictPin | null>(null)
   const [showUnmapped, setShowUnmapped] = useState(false)
+  const [vb, setVb] = useState<ViewBox>(INITIAL_VB)
+  const [panning, setPanning] = useState(false)
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  const vbRef = useRef(vb)
+  vbRef.current = vb
+  const dragRef = useRef<{ cx: number; cy: number; vb: ViewBox; moved: boolean } | null>(null)
+  const suppressClickRef = useRef(false)
 
+  const zoom = VIEW_W / vb.w
   const pinById = useMemo(
     () => new Map((data?.pins ?? []).map(p => [p.dist_id, p])),
     [data],
@@ -282,12 +337,113 @@ export function FacilityMapCard() {
     [data],
   )
 
+  /** 客户端坐标 → viewBox 坐标（含 preserveAspectRatio 留白修正） */
+  function clientToView(clientX: number, clientY: number): { x: number; y: number } {
+    const svg = svgRef.current
+    if (!svg) return { x: 0, y: 0 }
+    const rect = svg.getBoundingClientRect()
+    const cur = vbRef.current
+    const scale = Math.min(rect.width / cur.w, rect.height / cur.h)
+    const ox = (rect.width - cur.w * scale) / 2
+    const oy = (rect.height - cur.h * scale) / 2
+    return {
+      x: cur.x + (clientX - rect.left - ox) / scale,
+      y: cur.y + (clientY - rect.top - oy) / scale,
+    }
+  }
+
+  /** 以 viewBox 锚点 (ax, ay) 为中心缩放；factor>1 放大 */
+  function zoomAt(factor: number, ax: number, ay: number) {
+    setVb(prev => {
+      const w = Math.min(Math.max(prev.w / factor, VIEW_W / MAX_ZOOM), VIEW_W)
+      const eff = prev.w / w
+      const h = w * (GEOM.viewH / VIEW_W)
+      return clampVb({ x: ax - (ax - prev.x) / eff, y: ay - (ay - prev.y) / eff, w, h })
+    })
+  }
+
+  const zoomBy = (factor: number) => {
+    const cur = vbRef.current
+    zoomAt(factor, cur.x + cur.w / 2, cur.y + cur.h / 2)
+  }
+
+  // 滚轮/触控板缩放：React onWheel 为 passive，需原生监听 preventDefault
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const p = clientToView(e.clientX, e.clientY)
+      zoomAt(Math.exp(-e.deltaY * 0.002), p.x, p.y)
+    }
+    svg.addEventListener('wheel', onWheel, { passive: false })
+    return () => svg.removeEventListener('wheel', onWheel)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (e.button !== 0) return
+    dragRef.current = { cx: e.clientX, cy: e.clientY, vb: vbRef.current, moved: false }
+    setPanning(true)
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // happy-dom 等环境无实现，拖动降级为仅视图内移动
+    }
+  }
+
+  function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    const d = dragRef.current
+    const svg = svgRef.current
+    if (!d || !svg) return
+    const rect = svg.getBoundingClientRect()
+    const scale = Math.min(rect.width / d.vb.w, rect.height / d.vb.h)
+    if (Math.abs(e.clientX - d.cx) + Math.abs(e.clientY - d.cy) > 4) d.moved = true
+    if (!d.moved) return
+    const dx = (e.clientX - d.cx) / scale
+    const dy = (e.clientY - d.cy) / scale
+    setVb(clampVb({ ...d.vb, x: d.vb.x - dx, y: d.vb.y - dy }))
+  }
+
+  function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
+    if (dragRef.current?.moved) suppressClickRef.current = true
+    dragRef.current = null
+    setPanning(false)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      // 同上，环境不支持时忽略
+    }
+  }
+
+  /** 拖动过的松手不当作分区点击（否则平移结束会误开 Modal） */
+  function onClickCapture(e: React.MouseEvent) {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false
+      e.stopPropagation()
+      e.preventDefault()
+    }
+  }
+
+  // 名称标注：字号按 1/zoom 保持屏幕 11px；多边形放得下名字才显示（放大逐级显现）
+  const labelFs = 11 / zoom
+  const labels = RENDERED.filter(
+    ({ dist, bbox }) => bbox[2] >= dist.distName.length * labelFs * 0.85,
+  )
+
   return (
     <SectionCard
       title="厂区风险分区 · 当日分布"
-      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票与消防/中控报警落点，点击分区看明细`}
+      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
       action={
         <div className="flex items-center gap-2 text-[11px] text-[var(--color-steel)]">
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-[2px]"
+              style={{ background: FILL_ACTIVE, border: `1px solid ${STROKE_ACTIVE}` }}
+            />
+            当日有落点
+          </span>
           {BADGES.map(b => (
             <span key={b.key} className="inline-flex items-center gap-1">
               <span
@@ -315,7 +471,7 @@ export function FacilityMapCard() {
           description="落点数据拉取失败（平台或表格抖动），稍后自动恢复；分区底图不受影响"
         />
       ) : isLoading || !data ? (
-        <div className="flex h-[380px] items-center justify-center">
+        <div className="flex h-[420px] items-center justify-center">
           <Spin />
         </div>
       ) : (
@@ -325,51 +481,108 @@ export function FacilityMapCard() {
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
-          <svg
-            viewBox={`0 0 ${VIEW_W} ${GEOM.viewH.toFixed(1)}`}
-            className="h-auto w-full"
-            style={{ maxHeight: 460 }}
-            role="img"
-            aria-label="厂区风险分区底图"
-          >
-            {RENDERED.map(({ dist, shapes }) => {
-              const pin = pinById.get(dist.distId)
-              return (
-                <g
-                  key={dist.distId}
-                  data-testid={`district-poly-${dist.distId}`}
-                  className="cursor-pointer [&:hover_polygon]:fill-[#ded9d0]"
-                  onClick={() =>
-                    setOpenDist(
-                      pin ?? {
-                        dist_id: dist.distId,
-                        jobs: { hot: 0, confined: 0, other: 0 },
-                        alarms: { fire: 0, central: 0 },
-                        refs: [],
-                        truncated: false,
-                      },
-                    )
-                  }
+          <div className="relative">
+            <svg
+              ref={svgRef}
+              viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
+              className="w-full select-none"
+              style={{
+                maxHeight: 480,
+                touchAction: 'none',
+                cursor: panning ? 'grabbing' : 'grab',
+              }}
+              role="img"
+              aria-label="厂区风险分区底图"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onClickCapture={onClickCapture}
+            >
+              {RENDERED.map(({ dist, shapes }) => {
+                const pin = pinById.get(dist.distId)
+                return (
+                  <g
+                    key={dist.distId}
+                    data-testid={`district-poly-${dist.distId}`}
+                    className="cursor-pointer [&:hover_polygon]:fill-[#dce6fa]"
+                    onClick={() =>
+                      setOpenDist(
+                        pin ?? {
+                          dist_id: dist.distId,
+                          jobs: { hot: 0, confined: 0, other: 0 },
+                          alarms: { fire: 0, central: 0 },
+                          refs: [],
+                          truncated: false,
+                        },
+                      )
+                    }
+                  >
+                    <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
+                    {shapes.map((points, i) => (
+                      <polygon
+                        key={i}
+                        points={points}
+                        fill={pin ? FILL_ACTIVE : FILL_BASE}
+                        stroke={pin ? STROKE_ACTIVE : STROKE_BASE}
+                        strokeWidth={pin ? 1.4 : 1}
+                      />
+                    ))}
+                  </g>
+                )
+              })}
+              {labels.map(({ dist, anchor }) => (
+                <text
+                  key={`lb-${dist.distId}`}
+                  data-testid={`district-label-${dist.distId}`}
+                  x={anchor[0]}
+                  y={anchor[1] + (pinById.get(dist.distId) ? 24 : 5) / zoom}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={labelFs}
+                  fontWeight={500}
+                  fill={LABEL_FILL}
+                  stroke="#ffffff"
+                  strokeWidth={3 / zoom}
+                  strokeLinejoin="round"
+                  paintOrder="stroke"
+                  pointerEvents="none"
                 >
-                  <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
-                  {shapes.map((points, i) => (
-                    <polygon
-                      key={i}
-                      points={points}
-                      fill={pin ? '#e8e4dd' : '#f0eeea'}
-                      stroke={pin ? '#9c948a' : '#d8d4cd'}
-                      strokeWidth={1}
-                    />
-                  ))}
-                </g>
-              )
-            })}
-            {data.pins.map(pin => {
-              const rendered = BY_DIST_ID.get(pin.dist_id)
-              if (!rendered) return null
-              return <BadgeGroup key={pin.dist_id} pin={pin} anchor={rendered.anchor} />
-            })}
-          </svg>
+                  {dist.distName}
+                </text>
+              ))}
+              {data.pins.map(pin => {
+                const rendered = BY_DIST_ID.get(pin.dist_id)
+                if (!rendered) return null
+                return (
+                  <BadgeGroup
+                    key={pin.dist_id}
+                    pin={pin}
+                    anchor={rendered.anchor}
+                    zoom={zoom}
+                  />
+                )
+              })}
+            </svg>
+            <div className="absolute right-2 top-2 flex flex-col gap-1">
+              <button type="button" aria-label="放大" className={MAP_BTN_CLS} onClick={() => zoomBy(ZOOM_STEP)}>
+                <Plus size={14} />
+              </button>
+              <button type="button" aria-label="缩小" className={MAP_BTN_CLS} onClick={() => zoomBy(1 / ZOOM_STEP)}>
+                <Minus size={14} />
+              </button>
+              <button
+                type="button"
+                aria-label="重置视图"
+                className={MAP_BTN_CLS}
+                onClick={() => setVb(INITIAL_VB)}
+              >
+                <Maximize size={13} />
+              </button>
+            </div>
+            <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-white/80 px-1.5 py-0.5 text-[11px] text-[var(--color-stone)]">
+              {Math.round(zoom * 100)}%
+            </div>
+          </div>
           <div className="flex items-start justify-between gap-3 border-t border-[var(--color-hairline-soft)] pt-2 text-[12px] text-[var(--color-steel)]">
             <button
               type="button"

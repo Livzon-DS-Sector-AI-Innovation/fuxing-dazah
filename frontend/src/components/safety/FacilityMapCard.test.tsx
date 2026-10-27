@@ -90,4 +90,28 @@ describe('FacilityMapCard', () => {
       expect(screen.getByText(/分区数据暂时不可用/)).toBeInTheDocument(),
     )
   })
+
+  it('缩放按钮调整视图且可重置', async () => {
+    const user = userEvent.setup()
+    const { container } = renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^district-poly-/)
+    const svg = container.querySelector('svg[aria-label="厂区风险分区底图"]') as SVGSVGElement
+    const vbW = () => Number(svg.getAttribute('viewBox')!.split(/\s+/)[2])
+    expect(vbW()).toBe(1000)
+    await user.click(screen.getByRole('button', { name: '放大' }))
+    await user.click(screen.getByRole('button', { name: '放大' }))
+    expect(vbW()).toBeLessThan(999)
+    await user.click(screen.getByRole('button', { name: '重置视图' }))
+    expect(vbW()).toBe(1000)
+  })
+
+  it('分区名称标注随放大显现', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^district-poly-/)
+    await user.click(screen.getByRole('button', { name: '放大' }))
+    const labels = await screen.findAllByTestId(/^district-label-/)
+    const names = new Set(asset.districts.map(d => d.distName))
+    expect(labels.some(l => names.has(l.textContent ?? ''))).toBe(true)
+  })
 })
