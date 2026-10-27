@@ -14,6 +14,8 @@
  * 布局：svg 按底图宽高比自适应居中（不留横向空白）；名称标注贪心避让
  * （标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；底部
  * 「未映射」栏清单直出 + AI 建议确认入口（#2）。
+ * 第七/八路（2026-10-27）：今日新增隐患（患·深红）+ 未整改隐患（改·紫红，
+ * 当前态）+ 消防设施到期（消到·橙，已到期+30 天临期，当前态）。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -201,12 +203,30 @@ const RISK_FILL = '#7a5af8'
 // 超储物料徽标（青，当前态快照）
 const OVER_LIMIT_FILL = '#0e9388'
 
+// 今日新增隐患徽标（深红）
+const HAZARD_NEW_FILL = '#b42318'
+
+// 未整改隐患徽标（紫红，当前态快照）
+const HAZARD_OPEN_FILL = '#c2255c'
+
+// 消防设施到期徽标（橙，当前态快照：已到期+30 天临期）
+const FIRE_EXT_FILL = '#e8590c'
+
 const KIND_LABEL: Record<string, string> = {
   job: '作业票',
   fire: '消防报警',
   central: '中控报警',
   key_risk: '关键风险作业',
   over_limit: '超储物料',
+  hazard_new: '今日新增隐患',
+  hazard_open: '未整改隐患',
+  fire_ext_due: '消防设施到期',
+}
+
+const HAZARD_LEVEL_LABEL: Record<string, string> = {
+  general: '一般',
+  serious: '较大',
+  major: '重大',
 }
 
 const TICKET_TYPE_LABEL: Record<string, string> = {
@@ -220,7 +240,7 @@ const TICKET_TYPE_LABEL: Record<string, string> = {
   blind_plate: '盲板',
 }
 
-/** 徽标组内容（作业桶非零 + 关键风险 + 超储 + 报警合计）；BadgeGroup 与标注避让共用 */
+/** 徽标组内容（作业桶非零 + 关键风险 + 超储 + 隐患双口径 + 消防到期 + 报警合计）；BadgeGroup 与标注避让共用 */
 function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string }[] {
   const chips: { label: string; fill: string }[] = []
   for (const b of BADGES) {
@@ -229,6 +249,9 @@ function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string 
   }
   if (pin.key_risks > 0) chips.push({ label: `险${pin.key_risks}`, fill: RISK_FILL })
   if (pin.over_limits > 0) chips.push({ label: `储${pin.over_limits}`, fill: OVER_LIMIT_FILL })
+  if (pin.hazard_news > 0) chips.push({ label: `患${pin.hazard_news}`, fill: HAZARD_NEW_FILL })
+  if (pin.hazard_opens > 0) chips.push({ label: `改${pin.hazard_opens}`, fill: HAZARD_OPEN_FILL })
+  if (pin.fire_ext_dues > 0) chips.push({ label: `消到${pin.fire_ext_dues}`, fill: FIRE_EXT_FILL })
   const alarms = pin.alarms.fire + pin.alarms.central
   if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
   return chips
@@ -341,11 +364,59 @@ const OVER_LIMIT_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
   { title: '超储阈值', dataIndex: 'max_limit', width: 100, render: (v: number | null) => (v ?? '—') },
 ]
 
-/** 弹窗分区段：单分区组直接渲染；同轮廓组分段（每分区副标题 + 各自四表） */
+// 隐患双口径共用列（今日新增/未整改；描述即位置载体）
+const HAZARD_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
+  {
+    title: '级别',
+    dataIndex: 'hazard_level',
+    width: 64,
+    render: (v: string | null) => {
+      if (!v) return '—'
+      const label = HAZARD_LEVEL_LABEL[v] ?? v
+      return v === 'major' ? (
+        <span className="font-medium text-[#b42318]">{label}</span>
+      ) : label
+    },
+  },
+  { title: '编号', dataIndex: 'hazard_no', width: 140, render: (v: string | null) => v || '—' },
+  { title: '隐患描述', dataIndex: 'hazard_desc', ellipsis: true },
+  {
+    title: '目前进展',
+    dataIndex: 'progress',
+    width: 150,
+    ellipsis: true,
+    render: (v: string | null) => v || '—',
+  },
+]
+
+const FIRE_EXT_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
+  {
+    title: '位置',
+    width: 190,
+    render: (_, r) => [r.workshop, r.location].filter(Boolean).join(' · ') || '—',
+  },
+  { title: '类型', dataIndex: 'ext_type', width: 150, render: (v: string | null) => v || '—' },
+  { title: '数量', dataIndex: 'ext_count', width: 64, render: (v: number | null) => v ?? '—' },
+  { title: '到期日', dataIndex: 'due_date', width: 100 },
+  {
+    title: '状态',
+    dataIndex: 'is_overdue',
+    width: 76,
+    render: (v: boolean | null) =>
+      v ? <span className="font-medium text-[#b42318]">已到期</span> : (
+        <span className="text-[#e8590c]">临期</span>
+      ),
+  },
+]
+
+/** 弹窗分区段：单分区组直接渲染；同轮廓组分段（每分区副标题 + 各自七表） */
 function ZoneSection({ pin }: { pin: FacilityMapDistrictPin }) {
   const jobs = pin.refs.filter(r => r.kind === 'job')
   const keyRisks = pin.refs.filter(r => r.kind === 'key_risk')
   const overLimits = pin.refs.filter(r => r.kind === 'over_limit')
+  const hazardsNew = pin.refs.filter(r => r.kind === 'hazard_new')
+  const hazardsOpen = pin.refs.filter(r => r.kind === 'hazard_open')
+  const fireExts = pin.refs.filter(r => r.kind === 'fire_ext_due')
   const alarms = pin.refs.filter(r => r.kind === 'fire' || r.kind === 'central')
   const sections: { label: string; columns: TableColumnsType<FacilityMapPinRef>; rows: FacilityMapPinRef[]; empty: string; key: string }[] = [
     {
@@ -359,6 +430,18 @@ function ZoneSection({ pin }: { pin: FacilityMapDistrictPin }) {
     {
       label: `超储物料 ${overLimits.length} 项（当前库存态）`,
       columns: OVER_LIMIT_COLUMNS, rows: overLimits, empty: '本分区无超储物料', key: 'o',
+    },
+    {
+      label: `今日新增隐患 ${hazardsNew.length} 条（检查日期=今日）`,
+      columns: HAZARD_COLUMNS, rows: hazardsNew, empty: '本分区今日无新增隐患', key: 'hn',
+    },
+    {
+      label: `未整改隐患 ${hazardsOpen.length} 条（当前未闭环）`,
+      columns: HAZARD_COLUMNS, rows: hazardsOpen, empty: '本分区无未整改隐患', key: 'ho',
+    },
+    {
+      label: `消防设施到期 ${fireExts.length} 处（已到期+30 天内临期）`,
+      columns: FIRE_EXT_COLUMNS, rows: fireExts, empty: '本分区无到期/临期消防设施', key: 'fe',
     },
     {
       label: `今日报警 ${alarms.length} 条`,
@@ -392,6 +475,9 @@ const EMPTY_PIN = (distId: string): FacilityMapDistrictPin => ({
   alarms: { fire: 0, central: 0 },
   key_risks: 0,
   over_limits: 0,
+  hazard_news: 0,
+  hazard_opens: 0,
+  fire_ext_dues: 0,
   refs: [],
   truncated: false,
 })
@@ -573,6 +659,9 @@ export function FacilityMapCard() {
             acc.alarms.central += pin.alarms.central
             acc.key_risks += pin.key_risks
             acc.over_limits += pin.over_limits
+            acc.hazard_news += pin.hazard_news
+            acc.hazard_opens += pin.hazard_opens
+            acc.fire_ext_dues += pin.fire_ext_dues
             return acc
           },
           {
@@ -580,6 +669,9 @@ export function FacilityMapCard() {
             alarms: { fire: 0, central: 0 },
             key_risks: 0,
             over_limits: 0,
+            hazard_news: 0,
+            hazard_opens: 0,
+            fire_ext_dues: 0,
           },
         )
         return {
@@ -756,7 +848,7 @@ export function FacilityMapCard() {
   return (
     <SectionCard
       title="厂区风险分区 · 当日分布"
-      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票/关键风险作业/超储物料与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
+      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 作业票/关键风险/超储/隐患（新增+未整改）/消防设施到期与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
       action={
         <div className="flex items-center gap-2 text-[11px] text-[var(--color-steel)]">
           <span className="inline-flex items-center gap-1">
@@ -788,6 +880,27 @@ export function FacilityMapCard() {
               style={{ background: OVER_LIMIT_FILL }}
             />
             超储物料
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: HAZARD_NEW_FILL }}
+            />
+            今日新增隐患
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: HAZARD_OPEN_FILL }}
+            />
+            未整改隐患
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: FIRE_EXT_FILL }}
+            />
+            消防设施到期
           </span>
           <span className="inline-flex items-center gap-1">
             <span
@@ -848,7 +961,7 @@ export function FacilityMapCard() {
                         if (g) setOpenGroup({ members: g.members })
                       }}
                     >
-                      <title>{`${dist.distName}${g?.hasPin ? ` · 作业 ${g.agg.jobs.hot + g.agg.jobs.confined + g.agg.jobs.other} / 关键风险 ${g.agg.key_risks} / 超储 ${g.agg.over_limits} / 报警 ${g.agg.alarms.fire + g.agg.alarms.central}` : ''}`}</title>
+                      <title>{`${dist.distName}${g?.hasPin ? ` · 作业 ${g.agg.jobs.hot + g.agg.jobs.confined + g.agg.jobs.other} / 关键风险 ${g.agg.key_risks} / 超储 ${g.agg.over_limits} / 新增隐患 ${g.agg.hazard_news} / 未整改 ${g.agg.hazard_opens} / 消防到期 ${g.agg.fire_ext_dues} / 报警 ${g.agg.alarms.fire + g.agg.alarms.central}` : ''}`}</title>
                       {shapes.map((points, i) => (
                         <polygon
                           key={i}
@@ -970,7 +1083,7 @@ export function FacilityMapCard() {
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         title="未映射地点 · AI 分区建议确认"
-        description="扫描近 30 天作业票/消防/中控的未映射地点文本，AI 逐条给出分区建议与置信度；确认后写入映射资产（location_district_map，只增不改），忽略后不再建议。"
+        description="扫描近 30 天作业票/报警/隐患/消防设施等来源的未映射地点文本，AI 逐条给出分区建议与置信度；确认后写入映射资产（location_district_map，只增不改），忽略后不再建议。"
         rows={suggestionsQuery.data ?? []}
         loading={suggestionsQuery.isLoading}
         columns={SUGGESTION_COLUMNS}

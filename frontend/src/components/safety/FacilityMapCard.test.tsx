@@ -15,6 +15,9 @@ const PINS = {
       alarms: { fire: 1, central: 0 },
       key_risks: 1,
       over_limits: 1,
+      hazard_news: 1,
+      hazard_opens: 1,
+      fire_ext_dues: 1,
       truncated: false,
       refs: [
         {
@@ -47,6 +50,29 @@ const PINS = {
           max_limit: 20,
           unit: 'kg',
         },
+        {
+          kind: 'hazard_new',
+          hazard_no: 'HZ-20261026-008',
+          hazard_desc: '消防控制室门口堆放纸箱堵塞通道',
+          hazard_level: 'general',
+          progress: '',
+        },
+        {
+          kind: 'hazard_open',
+          hazard_no: 'HZ-20261010-003',
+          hazard_desc: '消防控制室UPS电池鼓包待更换',
+          hazard_level: 'major',
+          progress: '已联系仪表，待更换',
+        },
+        {
+          kind: 'fire_ext_due',
+          location: '消控室入口东侧',
+          workshop: '消防控制室',
+          ext_type: '手提式干粉灭火器',
+          ext_count: 2,
+          due_date: '2026-10-20',
+          is_overdue: true,
+        },
       ],
     },
     // 同轮廓组：车间一达托(1)/车间一达巴(11) 共用建筑轮廓——徽标合并、
@@ -57,6 +83,9 @@ const PINS = {
       alarms: { fire: 0, central: 1 },
       key_risks: 0,
       over_limits: 0,
+      hazard_news: 0,
+      hazard_opens: 0,
+      fire_ext_dues: 0,
       truncated: false,
       refs: [
         {
@@ -73,6 +102,9 @@ const PINS = {
       alarms: { fire: 0, central: 0 },
       key_risks: 0,
       over_limits: 1,
+      hazard_news: 0,
+      hazard_opens: 0,
+      fire_ext_dues: 0,
       truncated: false,
       refs: [
         {
@@ -92,6 +124,8 @@ const PINS = {
     { text: '新罐区', count: 5, kinds: ['central'] },
     { text: '车间四二楼合成岗位', count: 1, kinds: ['key_risk'] },
     { text: '四楼危化品储柜', count: 1, kinds: ['over_limit'] },
+    { text: '陶瓷膜旁立柱', count: 1, kinds: ['fire_ext_due'] },
+    { text: '质检楼顶灯损坏', count: 2, kinds: ['hazard_new', 'hazard_open'] },
   ],
   errors: [],
 }
@@ -136,11 +170,14 @@ describe('FacilityMapCard', () => {
     // 每条 rail 一个多边形（64 分区 / 84 rail）
     const polys = document.querySelectorAll('[data-testid^="district-poly-"] polygon')
     expect(polys.length).toBe(RAIL_COUNT)
-    // 消防控制室(dist 77)：动火 2 + 关键风险 1 + 报警 1 徽标
+    // 消防控制室(dist 77)：动火 2 + 关键风险 1 + 超储 1 + 隐患双口径 + 消防到期 + 报警 1 徽标
     const badge = await screen.findByTestId('district-badge-77')
     expect(badge.textContent).toContain('火2')
     expect(badge.textContent).toContain('险1')
     expect(badge.textContent).toContain('储1')
+    expect(badge.textContent).toContain('患1')
+    expect(badge.textContent).toContain('改1')
+    expect(badge.textContent).toContain('消到1')
     expect(badge.textContent).toContain('警1')
   })
 
@@ -157,6 +194,29 @@ describe('FacilityMapCard', () => {
     expect(modal.textContent).toContain('乙腈')
     expect(modal.textContent).toContain('米尔贝放硅胶')
     expect(modal.textContent).toContain('已通过')
+  })
+
+  it('Modal 隐患双口径与消防设施到期三段：描述/级别/进展/到期状态', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findByTestId('district-badge-77')
+    await user.click(screen.getByTestId('district-poly-77'))
+    const modal = await screen.findByRole('dialog')
+    // 三段标题
+    expect(modal.textContent).toContain('今日新增隐患 1 条')
+    expect(modal.textContent).toContain('未整改隐患 1 条')
+    expect(modal.textContent).toContain('消防设施到期 1 处')
+    // 新增段：编号+描述；未整改段：级别(重大)+进展
+    expect(modal.textContent).toContain('HZ-20261026-008')
+    expect(modal.textContent).toContain('消防控制室门口堆放纸箱堵塞通道')
+    expect(modal.textContent).toContain('HZ-20261010-003')
+    expect(modal.textContent).toContain('重大')
+    expect(modal.textContent).toContain('已联系仪表，待更换')
+    // 消防段：位置/类型/数量/到期日/已到期标红文案
+    expect(modal.textContent).toContain('消控室入口东侧')
+    expect(modal.textContent).toContain('手提式干粉灭火器')
+    expect(modal.textContent).toContain('2026-10-20')
+    expect(modal.textContent).toContain('已到期')
   })
 
   it('同轮廓分区组合并：点达托/达巴任一多边形都弹出两分区明细与超储', async () => {
@@ -205,7 +265,7 @@ describe('FacilityMapCard', () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
     // 清单随卡片直出（右侧栏），无需展开
-    expect(await screen.findByText(/未映射 4 处/)).toBeInTheDocument()
+    expect(await screen.findByText(/未映射 6 处/)).toBeInTheDocument()
     expect(screen.getAllByText('212罐').length).toBeGreaterThan(0)
     expect(screen.getByText('×5')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /AI 建议映射/ }))

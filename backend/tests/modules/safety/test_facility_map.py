@@ -461,8 +461,8 @@ class TestAggregateOverLimits:
         async def boom_ol(d):
             raise RuntimeError("sheet 超时")
 
-        t, f, c, k, _, m = _ok_readers()
-        svc = FacilityMapPinsService(readers=(t, f, c, k, boom_ol, m))
+        t, f, c, k, _, h, fe, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, k, boom_ol, h, fe, m))
         payload = await svc.get_pins(date(2026, 10, 27))
         assert payload["errors"] == ["超储物料拉取失败: sheet 超时"]
         assert payload["pins"] == []
@@ -489,7 +489,10 @@ def _over_limit(site: str, material: str = "乙腈") -> dict:
     }
 
 
-def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, over_limits=None, rows=None):
+def _ok_readers(
+    jobs=None, fires=None, centrals=None, key_risks=None, over_limits=None,
+    hazards=None, fire_ext_dues=None, rows=None,
+):
     async def ticket_reader(d):
         return jobs or []
 
@@ -505,6 +508,12 @@ def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, over_limit
     async def over_limit_reader(d):
         return over_limits or []
 
+    async def hazard_reader(d):
+        return hazards if hazards is not None else {"new": [], "open": []}
+
+    async def fire_ext_reader(d):
+        return fire_ext_dues or []
+
     async def map_rows():
         return rows if rows is not None else MAP_ROWS
 
@@ -514,6 +523,8 @@ def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, over_limit
         central_reader,
         key_risk_reader,
         over_limit_reader,
+        hazard_reader,
+        fire_ext_reader,
         map_rows,
     )
 
@@ -540,8 +551,8 @@ class TestPinsService:
         async def boom(d):
             raise RuntimeError("平台超时")
 
-        t, f, c, k, o, m = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
-        svc = FacilityMapPinsService(readers=(boom, f, c, k, o, m))
+        t, f, c, k, o, h, fe, m = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
+        svc = FacilityMapPinsService(readers=(boom, f, c, k, o, h, fe, m))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert len(payload["errors"]) == 1
         assert "作业票" in payload["errors"][0]
@@ -553,8 +564,8 @@ class TestPinsService:
         async def boom_rows():
             raise RuntimeError("db down")
 
-        t, f, c, k, o, _ = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
-        svc = FacilityMapPinsService(readers=(t, f, c, k, o, boom_rows))
+        t, f, c, k, o, h, fe, _ = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
+        svc = FacilityMapPinsService(readers=(t, f, c, k, o, h, fe, boom_rows))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert any("映射" in e for e in payload["errors"])
         # 映射表失败 → 全部进 unmapped（文本可见，图卡可解释）
@@ -566,8 +577,361 @@ class TestPinsService:
         async def boom_kr(d):
             raise RuntimeError("bitable 超时")
 
-        t, f, c, _, o, m = _ok_readers()
-        svc = FacilityMapPinsService(readers=(t, f, c, boom_kr, o, m))
+        t, f, c, _, o, h, fe, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, boom_kr, o, h, fe, m))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert payload["errors"] == ["关键风险作业拉取失败: bitable 超时"]
         assert payload["pins"] == []
+
+
+# ══════════════════════ 第七/八路：隐患双口径 + 消防设施到期 ══════════════════════
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.modules.safety.service.facility_map.service import (  # noqa: E402
+    fire_ext_due_rows,
+    hazard_rows_for_day,
+)
+
+
+def _hazard(desc: str, no: str = "HZ-20261027-001", level: str = "general") -> dict:
+    return {
+        "hazard_no": no,
+        "hazard_desc": desc,
+        "hazard_level": level,
+        "progress": "已联系仪表，待更换",
+    }
+
+
+def _fire_ext(
+    location: str,
+    workshop: str = "车间四",
+    due: str = "2026-10-20",
+    ext_type: str = "手提式干粉灭火器",
+    ext_count: int = 2,
+    is_overdue: bool = True,
+) -> dict:
+    return {
+        "location": location,
+        "workshop": workshop,
+        "ext_type": ext_type,
+        "ext_count": ext_count,
+        "due_date": due,
+        "is_overdue": is_overdue,
+    }
+
+
+class TestAggregateHazards:
+    def test_counts_refs_by_description(self):
+        """隐患位置内嵌描述：两级匹配落分区，hazard_news/hazard_opens 单列计数。"""
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            hazards_new=[
+                _hazard("车间四二楼米尔贝合成岗位的加湿器漏水", no="HZ-1"),  # 无映射词
+                _hazard("危化品库东侧通道堵塞", no="HZ-2"),  # 命中 35
+                _hazard("", no="HZ-4"),  # 空描述 → 占位文本
+            ],
+            hazards_open=[_hazard("接罐站管廊渗漏", no="HZ-5")],  # 命中 28
+            index=build_match_index(MAP_ROWS),
+        )
+        pins = {p["dist_id"]: p for p in out["pins"]}
+        assert pins["35"]["hazard_news"] == 1
+        assert pins["28"]["hazard_opens"] == 1
+        new_ref = [r for r in pins["35"]["refs"] if r["kind"] == "hazard_new"][0]
+        assert new_ref["hazard_no"] == "HZ-2"
+        unmapped = {u["text"]: u for u in out["unmapped"]}
+        assert unmapped["车间四二楼米尔贝合成岗位的加湿器漏水"]["kinds"] == ["hazard_new"]
+        assert unmapped["（未填写作业地点）"]["kinds"] == ["hazard_new"]
+
+    def test_desc_containment_hit_and_dedup_across_kinds(self):
+        """同一描述当日新增且未闭环：new/open 各计一次，未命中去重合一条 unmapped。"""
+        desc = "212罐区东阀法兰渗漏"
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            hazards_new=[_hazard(desc), _hazard(desc)],
+            hazards_open=[_hazard(desc)],
+            index=build_match_index(MAP_ROWS),
+        )
+        assert out["pins"] == []
+        assert len(out["unmapped"]) == 1
+        u = out["unmapped"][0]
+        assert u["count"] == 3
+        assert set(u["kinds"]) == {"hazard_new", "hazard_open"}
+
+    def test_unmapped_text_capped_for_suggestion_table(self):
+        """超长描述截 120 字符（建议表 location_text VARCHAR(128)，真扫回滚教训）。"""
+        long_desc = "10月21日员工在车间二楼顶部测量风管尺寸涉高处临边作业" * 6  # 312 字符
+        assert len(long_desc) > 128
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            hazards_new=[_hazard(long_desc)],
+            index=build_match_index(MAP_ROWS),
+        )
+        assert len(out["unmapped"]) == 1
+        assert len(out["unmapped"][0]["text"]) == 120
+        assert out["unmapped"][0]["text"] == long_desc[:120]
+
+    def test_ref_shape(self):
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            hazards_open=[_hazard("危化品库门口堆放杂物", no="HZ-9", level="major")],
+            index=build_match_index(MAP_ROWS),
+        )
+        ref = out["pins"][0]["refs"][0]
+        assert ref == {
+            "kind": "hazard_open",
+            "hazard_no": "HZ-9",
+            "hazard_desc": "危化品库门口堆放杂物",
+            "hazard_level": "major",
+            "progress": "已联系仪表，待更换",
+        }
+
+
+class TestAggregateFireExt:
+    def test_three_way_match_location_concat_workshop(self):
+        """三试匹配：位置命中 / 车间+位置拼接命中 / 车间兜底。"""
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            fire_ext_dues=[
+                _fire_ext("危化品库西门口", workshop="仓库一"),  # 位置直接命中 35
+                _fire_ext("二楼东侧走廊", workshop="车间一达托"),  # 拼接命中 64
+                _fire_ext("中控室角落", workshop="接罐站"),  # 前两试未中 → 车间兜底 28
+                _fire_ext("陶瓷膜旁立柱", workshop="精制部"),  # 全未中 → unmapped
+                _fire_ext("", workshop="精制部"),  # 位置空 → 车间也未中 → unmapped
+            ],
+            index=build_match_index(MAP_ROWS),
+        )
+        pins = {p["dist_id"]: p for p in out["pins"]}
+        assert pins["35"]["fire_ext_dues"] == 1
+        assert pins["64"]["fire_ext_dues"] == 1
+        assert pins["28"]["fire_ext_dues"] == 1
+        unmapped = {u["text"]: u for u in out["unmapped"]}
+        assert unmapped["陶瓷膜旁立柱"]["kinds"] == ["fire_ext_due"]
+        # 位置空时未映射文本取车间
+        assert unmapped["精制部"]["kinds"] == ["fire_ext_due"]
+
+    def test_ref_shape_with_overdue_flag(self):
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            fire_ext_dues=[_fire_ext("危化品库", due="2026-11-10", is_overdue=False)],
+            index=build_match_index(MAP_ROWS),
+        )
+        ref = out["pins"][0]["refs"][0]
+        assert ref["kind"] == "fire_ext_due"
+        assert ref["location"] == "危化品库"
+        assert ref["workshop"] == "车间四"
+        assert ref["ext_type"] == "手提式干粉灭火器"
+        assert ref["ext_count"] == 2
+        assert ref["due_date"] == "2026-11-10"
+        assert ref["is_overdue"] is False
+
+
+def _hz_view(
+    *,
+    no: str = "HZ-1",
+    desc: str = "某处隐患",
+    status: str = "pending",
+    discovered_at=None,
+    progress: str = "",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        record_id="rec-1",
+        hazard_no=no,
+        description=desc,
+        hazard_level="general",
+        hazard_level_manual=None,
+        progress_note=progress,
+        discovered_at=discovered_at,
+        rectification_status=status,
+    )
+
+
+class TestHazardRowsForDay:
+    """第七路纯函数：new=检查日期落日（+8h 北京日界）；open=当前态仅今日。"""
+
+    TODAY = date(2026, 10, 27)
+
+    def test_new_by_check_date_with_bj_boundary(self):
+        from datetime import UTC, datetime
+
+        views = [
+            # 北京 2026-10-27 09:30 → 归 10-27
+            _hz_view(no="A", discovered_at=datetime(2026, 10, 27, 1, 30, tzinfo=UTC)),
+            # UTC 10-26 17:30 = 北京 10-27 01:30 → 跨日界归 10-27
+            _hz_view(no="B", discovered_at=datetime(2026, 10, 26, 17, 30, tzinfo=UTC)),
+            # 北京 10-26 → 不归 10-27
+            _hz_view(no="C", discovered_at=datetime(2026, 10, 26, 1, 30, tzinfo=UTC)),
+            _hz_view(no="D", discovered_at=None),  # 无检查日期不进 new
+        ]
+        out = hazard_rows_for_day(views, date(2026, 10, 27), self.TODAY)
+        assert [r["hazard_no"] for r in out["new"]] == ["A", "B"]
+
+    def test_open_only_today_and_only_unclosed(self):
+        """open=整改状态≠已关闭（未关闭/整改中），且仅 target=今日时返回。"""
+        from datetime import UTC, datetime
+
+        views = [
+            _hz_view(no="P", status="pending"),      # 未关闭 → open
+            _hz_view(no="I", status="in_progress"),  # 整改中 → open
+            _hz_view(no="C", status="closed"),       # 已关闭 → 不进 open
+            _hz_view(
+                no="N", status="pending",
+                discovered_at=datetime(2026, 10, 26, 1, 30, tzinfo=UTC),
+            ),  # 昨日新增但未闭环 → 今日 open（当前态与发现日无关）
+        ]
+        out = hazard_rows_for_day(views, self.TODAY, self.TODAY)
+        assert sorted(r["hazard_no"] for r in out["open"]) == ["I", "N", "P"]
+        # 历史日期：当前态零贡献（防 AI 扫描回溯灌水）
+        hist = hazard_rows_for_day(views, date(2026, 10, 26), self.TODAY)
+        assert hist["open"] == []
+
+    def test_row_shape_progress_kept(self):
+        out = hazard_rows_for_day(
+            [_hz_view(no="X", desc=" 描述 ", progress="施工中 ")],
+            self.TODAY,
+            self.TODAY,
+        )
+        assert out["open"] == [{
+            "hazard_no": "X",
+            "hazard_desc": " 描述 ",
+            "hazard_level": "general",
+            "progress": "施工中",
+        }]
+
+
+def _fire_record(
+    *,
+    due_ms: int | None,
+    formula_ms: int | None = None,
+    workshop: str = "车间四",
+    location: str = "二楼东侧走廊",
+    status: str | None = None,
+    ext_count: int = 2,
+    record_id: str = "recF",
+) -> dict:
+    fields: dict = {
+        "车间": workshop,
+        "位置": location,
+        "灭火器类型": "手提式干粉灭火器",
+        "数量": ext_count,
+        "生产日期": 1600000000000,
+    }
+    if due_ms is not None:
+        fields["到期日期"] = due_ms
+    if formula_ms is not None:
+        fields["到期日期（公式自动生成）"] = {"type": 5, "value": [formula_ms]}
+    if status is not None:
+        fields["状态"] = status
+    return {"record_id": record_id, "fields": fields}
+
+
+def _bj_ms(d: date) -> int:
+    from datetime import UTC, datetime, timedelta
+
+    # 造一个 +8h 后落在北京日 d 的毫秒时间戳（真实表存 d 00:00 北京时，
+    # 即 UTC 前一日 16:00；提取侧只关心 +8h 后落日）
+    return int((datetime(d.year, d.month, d.day, tzinfo=UTC) + timedelta(hours=8)).timestamp() * 1000)
+
+
+class TestFireExtDueRows:
+    """第八路纯函数：到期/临期 30 天口径 + 公式列回退 + 停用剔除。"""
+
+    TODAY = date(2026, 10, 27)
+
+    def test_overdue_soon_excluded_ranges(self):
+        records = [
+            _fire_record(due_ms=_bj_ms(date(2026, 10, 20)), record_id="overdue"),
+            _fire_record(due_ms=_bj_ms(date(2026, 11, 20)), record_id="soon"),   # +24d
+            _fire_record(due_ms=_bj_ms(date(2026, 11, 26)), record_id="edge"),   # +30d 含
+            _fire_record(due_ms=_bj_ms(date(2026, 11, 27)), record_id="far"),    # +31d 排除
+            _fire_record(due_ms=_bj_ms(date(2026, 12, 15)), record_id="far2"),
+        ]
+        rows = fire_ext_due_rows(records, self.TODAY)
+        assert [r["due_date"] for r in rows] == [
+            "2026-10-20", "2026-11-20", "2026-11-26",
+        ]
+        assert rows[0]["is_overdue"] is True
+        assert rows[1]["is_overdue"] is False
+        assert rows[0]["ext_type"] == "手提式干粉灭火器"
+        assert rows[0]["ext_count"] == 2
+        assert rows[0]["workshop"] == "车间四"
+        assert rows[0]["location"] == "二楼东侧走廊"
+
+    def test_formula_column_fallback(self):
+        """普通「到期日期」缺值时解包公式列 {'type':5,'value':[ms]}。"""
+        records = [
+            _fire_record(
+                due_ms=None,
+                formula_ms=_bj_ms(date(2026, 10, 1)),
+                record_id="formula",
+            ),
+            _fire_record(due_ms=None, formula_ms=None, record_id="nodue"),  # 无到期值
+        ]
+        rows = fire_ext_due_rows(records, self.TODAY)
+        assert [r["due_date"] for r in rows] == ["2026-10-01"]
+        assert rows[0]["is_overdue"] is True
+
+    def test_inactive_status_excluded(self):
+        records = [
+            _fire_record(due_ms=_bj_ms(date(2026, 10, 20)), status="已报废", record_id="scrapped"),
+            _fire_record(due_ms=_bj_ms(date(2026, 10, 20)), status="在用", record_id="active"),
+        ]
+        rows = fire_ext_due_rows(records, self.TODAY)
+        assert len(rows) == 1
+
+
+class TestPinsServiceNewReaders:
+    async def test_hazard_reader_failure_degrades(self):
+        """隐患路失败仅记一条 error，其余路照常。"""
+
+        async def boom_hz(d):
+            raise RuntimeError("bitable 超时")
+
+        t, f, c, k, o, _, fe, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, k, o, boom_hz, fe, m))
+        payload = await svc.get_pins(date(2026, 10, 27))
+        assert payload["errors"] == ["隐患拉取失败: bitable 超时"]
+        assert payload["pins"] == []
+
+    async def test_fire_ext_reader_failure_degrades(self):
+        """消防设施到期路失败仅记一条 error，其余路照常。"""
+
+        async def boom_fe(d):
+            raise RuntimeError("台账超时")
+
+        t, f, c, k, o, h, _, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, k, o, h, boom_fe, m))
+        payload = await svc.get_pins(date(2026, 10, 27))
+        assert payload["errors"] == ["消防设施到期拉取失败: 台账超时"]
+        assert payload["pins"] == []
+
+    async def test_hazard_dual_kinds_flow_through_service(self):
+        """双口径经服务编排：描述命中/未命中进 pins/unmapped，两种 kind 各自计数。"""
+        desc_hit = "危化品库门口堆放杂物"
+        desc_miss = "212罐区渗漏"
+        t, f, c, k, o, h, fe, m = _ok_readers(
+            hazards={"new": [_hazard(desc_hit, no="N1")], "open": [_hazard(desc_miss, no="O1")]},
+            fire_ext_dues=[_fire_ext("危化品库")],
+        )
+        svc = FacilityMapPinsService(readers=(t, f, c, k, o, h, fe, m))
+        payload = await svc.get_pins(date(2026, 10, 27))
+        assert payload["errors"] == []
+        pin = {p["dist_id"]: p for p in payload["pins"]}["35"]
+        assert pin["hazard_news"] == 1
+        assert pin["hazard_opens"] == 0
+        assert pin["fire_ext_dues"] == 1
+        assert payload["unmapped"] == [
+            {"text": desc_miss, "count": 1, "kinds": ["hazard_open"]}
+        ]

@@ -1,4 +1,4 @@
-"""当日作业票/报警/关键风险作业/超储物料 → 分区 pins 聚合（纯函数）。
+"""当日作业票/报警/关键风险作业/超储物料/隐患/消防到期 → 分区 pins 聚合（纯函数）。
 
 输入为已归一的浅 dict（服务层适配器负责从各源 reader 拉取并转形）：
 - job:        {ticket_type, ticket_no, work_site, work_content}
@@ -8,6 +8,10 @@
               位置=区域（area）
 - over_limit: {material_name, department, storage_location, total_quantity_t,
               max_limit, unit}                                  位置=存储位置
+- hazard_*:   {hazard_no, hazard_desc, hazard_level, progress}
+              位置=隐患描述文本（表内嵌位置，两级包含匹配）
+- fire_ext:   {location, workshop, ext_type, ext_count, due_date, is_overdue}
+              位置=位置优先→车间+位置拼接→车间兜底（三试）
 输出 pins 聚合 + 未映射清单，契约见 .scratch/f2-facility-map/spec.md。
 """
 
@@ -35,6 +39,12 @@ EMPTY_SITE_PLACEHOLDER = "（未填写作业地点）"
 # 单分区 refs 明细上限（超出截断并置 truncated）
 REFS_CAP = 50
 
+# 未映射文本截断（建议表 location_district_suggestions.location_text 为
+# VARCHAR(128)；隐患整句描述常超长，2026-10-27 真扫曾整批回滚。匹配仍用
+# 全文，只有未映射展示/建议入库用截断文本——同款描述（模板化文案会复现）
+# 作映射词时前缀包含仍可命中；边界禁改建议表模型，故在产出侧收口）
+UNMAPPED_TEXT_CAP = 120
+
 # 作业票类型 → 图卡徽标桶（其余 6 类全部 other）
 _JOB_BUCKETS: dict[str, str] = {"hot_work": "hot", "confined_space": "confined"}
 
@@ -53,6 +63,27 @@ def _fire_location(fire: dict[str, Any]) -> str:
     return (fire.get("location") or fire.get("building") or "").strip()
 
 
+def _fire_ext_location(fe: dict[str, Any]) -> str:
+    """消防设施位置文本 = 位置优先，空则车间兜底（未映射展示用）。"""
+    return (fe.get("location") or fe.get("workshop") or "").strip()
+
+
+def _fire_ext_match(fe: dict[str, Any], index: Any) -> str | None:
+    """消防设施三试匹配：位置 → 车间+位置拼接 → 车间。
+
+    位置多为设备点位（可能自带分区词），车间是建筑级兜底；拼接试覆盖
+    「车间四+二楼东侧走廊」这类位置单独无区域词的组合（同中控车间+产线）。
+    """
+    loc = (fe.get("location") or "").strip()
+    workshop = (fe.get("workshop") or "").strip()
+    dist_id = match_location(loc, index) if loc else None
+    if dist_id is None and workshop and loc:
+        dist_id = match_location(f"{workshop}{loc}", index)
+    if dist_id is None and workshop:
+        dist_id = match_location(workshop, index)
+    return dist_id
+
+
 def _as_str(value: Any) -> str | None:
     if value is None:
         return None
@@ -67,12 +98,17 @@ def aggregate_pins(
     index: Any,
     key_risks: list[dict[str, Any]] | None = None,
     over_limits: list[dict[str, Any]] | None = None,
+    hazards_new: list[dict[str, Any]] | None = None,
+    hazards_open: list[dict[str, Any]] | None = None,
+    fire_ext_dues: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """五路数据 × 匹配索引 → {pins, unmapped}。
+    """七路数据 × 匹配索引 → {pins, unmapped}。
 
-    - 命中 → 分区聚合：jobs 按 hot/confined/other 计数，key_risks/over_limits
-      单计，alarms 按 fire/central 计数，refs 保明细（job/fire/central/
-      key_risk/over_limit 五形）；计数全保留，refs 截 REFS_CAP。
+    - 命中 → 分区聚合：jobs 按 hot/confined/other 计数，key_risks/
+      over_limits/hazard_news/hazard_opens/fire_ext_dues 单计，alarms 按
+      fire/central 计数，refs 保明细（job/fire/central/key_risk/
+      over_limit/hazard_new/hazard_open/fire_ext_due 八形）；计数全保留，
+      refs 截 REFS_CAP。
     - 未命中/空文本 → unmapped 按归一化文本去重，累计 count 与 kinds。
     """
     pins: dict[str, dict[str, Any]] = {}
@@ -86,17 +122,20 @@ def aggregate_pins(
                 "alarms": {"fire": 0, "central": 0},
                 "key_risks": 0,
                 "over_limits": 0,
+                "hazard_news": 0,
+                "hazard_opens": 0,
+                "fire_ext_dues": 0,
                 "refs": [],
                 "truncated": False,
             }
         return pins[dist_id]
 
     def _unmapped(text: str, kind: str) -> None:
-        key = normalize_location_text(text) or EMPTY_SITE_PLACEHOLDER
+        raw = text if str(text or "").strip() else EMPTY_SITE_PLACEHOLDER
+        display = raw[:UNMAPPED_TEXT_CAP]
+        key = normalize_location_text(display) or EMPTY_SITE_PLACEHOLDER
         entry = unmapped.setdefault(
-            key,
-            {"text": text if str(text or "").strip() else EMPTY_SITE_PLACEHOLDER,
-             "count": 0, "kinds": []},
+            key, {"text": display, "count": 0, "kinds": []},
         )
         entry["count"] += 1
         if kind not in entry["kinds"]:
@@ -198,6 +237,51 @@ def aggregate_pins(
         pin["over_limits"] += 1
         _add_ref(pin, ref)
 
+    def _hazard_ref(kind: str, h: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "hazard_no": _as_str(h.get("hazard_no")),
+            "hazard_desc": _as_str(h.get("hazard_desc")),
+            "hazard_level": _as_str(h.get("hazard_level")),
+            "progress": _as_str(h.get("progress")),
+        }
+
+    # 隐患双口径共用行形：位置内嵌描述文本，直接对描述做两级匹配；
+    # 同一条隐患当日新增且未闭环时，new/open 各计一次（两 kind 各自计数），
+    # 未命中同一描述文本去重合入同一条 unmapped（kinds 并集）。
+    for kind, rows, counter in (
+        ("hazard_new", hazards_new, "hazard_news"),
+        ("hazard_open", hazards_open, "hazard_opens"),
+    ):
+        for h in rows or []:
+            desc = (h.get("hazard_desc") or "").strip()
+            dist_id = match_location(desc, index) if desc else None
+            if dist_id is None:
+                _unmapped(desc, kind)
+                continue
+            pin = _pin(dist_id)
+            pin[counter] += 1
+            _add_ref(pin, _hazard_ref(kind, h))
+
+    for fe in fire_ext_dues or []:
+        text = _fire_ext_location(fe)
+        ref = {
+            "kind": "fire_ext_due",
+            "location": (fe.get("location") or "").strip() or None,
+            "workshop": (fe.get("workshop") or "").strip() or None,
+            "ext_type": _as_str(fe.get("ext_type")),
+            "ext_count": fe.get("ext_count"),
+            "due_date": _as_str(fe.get("due_date")),
+            "is_overdue": bool(fe.get("is_overdue")),
+        }
+        dist_id = _fire_ext_match(fe, index)
+        if dist_id is None:
+            _unmapped(text, "fire_ext_due")
+            continue
+        pin = _pin(dist_id)
+        pin["fire_ext_dues"] += 1
+        _add_ref(pin, ref)
+
     pin_list = sorted(
         pins.values(),
         key=lambda p: (
@@ -206,6 +290,9 @@ def aggregate_pins(
                 + sum(p["alarms"].values())
                 + p["key_risks"]
                 + p["over_limits"]
+                + p["hazard_news"]
+                + p["hazard_opens"]
+                + p["fire_ext_dues"]
             ),
             p["dist_id"],
         ),

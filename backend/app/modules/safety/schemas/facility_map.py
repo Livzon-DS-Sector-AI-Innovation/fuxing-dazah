@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 class PinRef(BaseModel):
-    """分区明细引用（job/fire/central/key_risk/over_limit 五形，字段按 kind 取用）。"""
+    """分区明细引用（job/fire/central/key_risk/over_limit/hazard/fire_ext 八形，字段按 kind 取用）。"""
 
     kind: str
     ticket_type: str | None = None
@@ -30,6 +30,16 @@ class PinRef(BaseModel):
     total_quantity_t: float | None = None
     max_limit: float | None = None
     unit: str | None = None
+    # 隐患双口径（hazard_new/hazard_open）
+    hazard_no: str | None = None
+    hazard_desc: str | None = None
+    hazard_level: str | None = None
+    progress: str | None = None
+    # 消防设施到期（fire_ext_due）
+    ext_type: str | None = None
+    ext_count: int | None = None
+    due_date: str | None = None
+    is_overdue: bool | None = None
 
 
 class DistrictPin(BaseModel):
@@ -38,6 +48,9 @@ class DistrictPin(BaseModel):
     alarms: dict[str, int]
     key_risks: int = 0
     over_limits: int = 0
+    hazard_news: int = 0
+    hazard_opens: int = 0
+    fire_ext_dues: int = 0
     refs: list[PinRef]
     truncated: bool = False
 
