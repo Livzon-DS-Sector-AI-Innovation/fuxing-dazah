@@ -740,14 +740,14 @@ export function FacilityMapCard() {
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
-          <div className="flex justify-center">
-            <div className="relative">
+          {/* 底图宽高比容器：padding-top 百分比手法（CSS aspect-ratio 在
+              部分渲染内核对 svg 不生效，地图会缩成固有尺寸小方块） */}
+          <div className="relative w-full" style={{ paddingTop: `${(GEOM.viewH / VIEW_W) * 100}%` }}>
               <svg
                 ref={svgRef}
                 viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-                className="w-full select-none"
+                className="absolute left-0 top-0 h-full w-full select-none"
                 style={{
-                  aspectRatio: `${VIEW_W} / ${GEOM.viewH}`,
                   touchAction: 'none',
                   cursor: panning ? 'grabbing' : 'grab',
                 }}
@@ -844,7 +844,6 @@ export function FacilityMapCard() {
               <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-white/80 px-1.5 py-0.5 text-[11px] text-[var(--color-steel)]">
                 {Math.round(zoom * 100)}%
               </div>
-            </div>
           </div>
           <div className="rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
