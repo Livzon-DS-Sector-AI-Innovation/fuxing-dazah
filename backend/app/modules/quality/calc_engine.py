@@ -180,9 +180,18 @@ def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) ->
     std_avg = sum(std_present) / len(std_present) if std_present else None
     std_rsd = _rsd(std_present)
     moisture = _num(inputs.get("moisture")) or 0.0
+    main_components: list[str] | None = cfg.get("main_components")
     content_vals: list[float | None] = []
     for i in range(1, samples + 1):
-        s_area = _num(inputs.get(f"sample_area_{i}"))
+        s_area: float | None
+        if main_components:
+            comp_areas = [_num(inputs.get(f"sample_area_{c}_{i}")) for c in main_components]
+            if all(a is not None for a in comp_areas):
+                s_area = sum(a for a in comp_areas if a is not None)
+            else:
+                s_area = None
+        else:
+            s_area = _num(inputs.get(f"sample_area_{i}"))
         s_mass = _num(inputs.get(f"sample_mass_{i}"))
         if s_area is None or s_mass is None or std_mass is None or std_avg is None:
             content_vals.append(None)
