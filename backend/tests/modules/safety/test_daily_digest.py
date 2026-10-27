@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, cast
 
 import pytest
@@ -20,6 +20,14 @@ from app.modules.safety.feishu.daily_digest import (
 from app.modules.safety.feishu.notification import build_card_dict
 
 D = date(2026, 9, 15)
+# 历史日期护栏口径：以 _bj_today 判定「今天/昨天」，比 D 早 4 天（= 事故当天）
+OLD = date(2026, 9, 11)
+
+
+@pytest.fixture(autouse=True)
+def _pin_bj_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    """总卡重建护栏按北京时间「今天」放行；测试里把 D 钉为今天。"""
+    monkeypatch.setattr(daily_digest, "_bj_today", lambda: D)
 
 
 class _FakeStore:
@@ -159,6 +167,101 @@ async def test_patch_failure_falls_back_to_recreate(monkeypatch: pytest.MonkeyPa
     assert ok is True
     assert calls == ["create", "create"]  # PATCH 失败 → 重建新卡
     assert store.strings["safety:daily_digest:card:2026-09-15"] == "om_card_2"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 历史日期护栏（2026-10-26 事故：手动对 09-11 投格，原卡键已过期 → 重建向
+# 群里连发两张旧日期总卡）。仅「今天/昨天」允许重建发卡（今天由 autouse
+# 夹具钉为 D；昨天=D-1=作业票审核投 review_date 的合法口径）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def test_stale_date_no_card_never_rebuilds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """历史日期无存活卡片：只写存储，绝不向群里新发旧日期总卡。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+    sent: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return "om_should_not_happen"
+
+    ok = await upsert_daily_digest(
+        OLD, "special_op", _cell(), store=store, sender=sender, updater=_ok_updater,
+    )
+    assert ok is False
+    assert sent == []
+    # 格子照写（驾驶舱回放仍可见），但不留卡片键
+    stored = await store.hgetall(f"safety:daily_digest:{OLD.isoformat()}")
+    assert set(stored) == {"special_op"}
+    assert f"safety:daily_digest:card:{OLD.isoformat()}" not in store.strings
+
+
+async def test_stale_date_live_card_patch_still_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """历史日期但卡片仍存活（TTL 7 天内）：原地 PATCH 放行，不发新卡。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+    store.strings[f"safety:daily_digest:card:{OLD.isoformat()}"] = "om_alive"
+    sent: list[dict[str, Any]] = []
+    patched: list[str] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return "om_should_not_happen"
+
+    async def updater(msg_id: str, card: dict[str, Any]) -> bool:
+        patched.append(msg_id)
+        return True
+
+    ok = await upsert_daily_digest(
+        OLD, "special_op", _cell(), store=store, sender=sender, updater=updater,
+    )
+    assert ok is True
+    assert patched == ["om_alive"]
+    assert sent == []
+
+
+async def test_stale_date_patch_fail_does_not_recreate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """历史日期 PATCH 失败（卡被删）：不重建（事故当天 15:28 第二张卡的路径）。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+    store.strings[f"safety:daily_digest:card:{OLD.isoformat()}"] = "om_dead"
+    sent: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return "om_should_not_happen"
+
+    async def updater(msg_id: str, card: dict[str, Any]) -> bool:
+        return False
+
+    ok = await upsert_daily_digest(
+        OLD, "special_op", _cell(), store=store, sender=sender, updater=updater,
+    )
+    assert ok is False
+    assert sent == []
+
+
+async def test_yesterday_rebuild_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """昨天仍允许重建发卡（当日补发窗口兜底；作业票审核已改按运行日投格）。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+    sent: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        sent.append(kw)
+        return "om_card_y"
+
+    ok = await upsert_daily_digest(
+        D - timedelta(days=1), "workticket", _cell(),
+        store=store, sender=sender, updater=_ok_updater,
+    )
+    assert ok is True
+    assert sent and sent[0]["title"].endswith((D - timedelta(days=1)).isoformat())
 
 
 async def test_disabled_flag_noop(monkeypatch: pytest.MonkeyPatch) -> None:

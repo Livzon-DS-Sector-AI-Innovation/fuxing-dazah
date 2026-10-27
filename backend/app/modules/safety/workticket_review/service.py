@@ -282,26 +282,36 @@ class WorkTicketReviewService:
             )
             review.report_markdown = markdown
 
-            # 「安全速递」总卡：投递本报告格子（失败不影响审核日报本身）
+            # 「安全速递」总卡：投递本报告格子（失败不影响审核日报本身）。
+            # 调度口径为每日 10 点审昨日——总卡按**运行日**落格（昨日结论进
+            # 今日速递）；不能按 review_date 落，否则 PATCH 的是昨日已发卡，
+            # 今日新卡永远缺作业票格子（2026-10-27 实测踩坑）。
             try:
                 from app.modules.safety.feishu.daily_digest import (
                     DigestCell,
                     upsert_daily_digest,
                 )
 
+                stats_line = (
+                    f"{review_date.isoformat()} 审核 **{stats.get('total', 0)}** 票 ｜ "
+                    f"✅ 通过 {stats.get('compliant_count', 0)} · "
+                    f"❌ 驳回 {stats.get('violation_count', 0)} · "
+                    f"待补 {stats.get('data_insufficient', 0)}"
+                )
+                if rectify_summary:
+                    stats_line += (
+                        f" ｜ 🔁 前日复查 ✅ {rectify_summary.get('rectified', 0)}"
+                        f" · ❌ {rectify_summary.get('unrectified', 0)}"
+                        f" · ⚠️ {rectify_summary.get('uncheckable', 0)}"
+                    )
                 await upsert_daily_digest(
-                    review_date,
+                    datetime.now(TZ).date(),
                     "workticket",
                     DigestCell(
                         tag_color="green",
                         tag_text="作业票审核",
                         title="作业票审核日报",
-                        stats=(
-                            f"今日审核 **{stats.get('total', 0)}** 票 ｜ "
-                            f"✅ 通过 {stats.get('compliant_count', 0)} · "
-                            f"❌ 驳回 {stats.get('violation_count', 0)} · "
-                            f"待补 {stats.get('data_insufficient', 0)}"
-                        ),
+                        stats=stats_line,
                         zone="",
                         detail=markdown,
                     ),

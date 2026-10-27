@@ -10,6 +10,11 @@
 - 滚动更新：首个报告创建卡片，后续报告把新格子加进同一张卡（PATCH 全量重建）
 - 顺序固定（CELL_ORDER），当天未产生的报告自动缺席
 - 任何异常只告警返回 False——总卡失败绝不影响报告自身的生成与重试链路
+- 历史日期护栏（2026-10-26 事故）：总卡键 TTL 7 天，过期后再对旧日期投格会
+  走「转重建」向群里新发一张旧日期总卡（当天为手动对 09-11 投格连发两张）。
+  现仅「今天/昨天」允许重建发卡（昨天=当日补发窗口，留作兜底）；作业票审核
+  2026-10-27 起改为按运行日投格（10 点审昨日→格进今日卡），不再依赖昨天口径；
+  更早日期只写存储不发群，原地 PATCH 存活卡不受限
 """
 
 from __future__ import annotations
@@ -262,7 +267,8 @@ async def upsert_daily_digest(
             （默认真实 Redis / send_group_card / update_card）
 
     Returns:
-        True 表示总卡已包含该格子；False 表示失败（只告警，不抛异常）
+        True 表示总卡已包含该格子；False 表示失败（只告警，不抛异常），含被
+        历史日期护栏拦下（格子已写存储，但不向群内重建旧日期总卡）
     """
     if not digest_enabled():
         return False
@@ -292,6 +298,15 @@ async def upsert_daily_digest(
                 if not updated:
                     logger.warning("安全速递总卡 PATCH 失败，转重建: %s", msg_id)
             if not updated:
+                # 历史日期护栏：早于北京昨天的日期不再向群里重建总卡（原卡键
+                # 早已过期，重建=新发一张旧日期卡）；格子照写，供驾驶舱回放
+                if report_date < _bj_today() - timedelta(days=1):
+                    logger.warning(
+                        "安全速递总卡拒绝为历史日期重建发卡（仅写存储不发群）: "
+                        "date=%s key=%s prev_msg=%s",
+                        report_date, key, msg_id or "-",
+                    )
+                    return False
                 # sender 内部会把 greeting 作为首个元素重拼，这里剥掉已含的问候元素
                 new_id = await sender(
                     chat_id=chat,
