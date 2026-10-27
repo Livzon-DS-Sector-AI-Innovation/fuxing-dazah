@@ -217,6 +217,67 @@ class DeviationUpdate(BaseModel):
         return _strip_optional(value)
 
 
+# ───────────────────────── AI 辅助 ─────────────────────────
+
+
+DeviationAiAssistKind = Literal["describe", "m1e", "why", "hypothesis"]
+
+
+class DeviationAiAssistIn(BaseModel):
+    """偏差 AI 辅助请求：携带当前表单快照换取建议，服务端不落库。
+
+    登记辅助发生在创建前（偏差尚无 id），调查辅助也要能看到未保存的
+    草稿内容，因此无状态地由前端传上下文；``deviation_id`` 仅用于审计
+    归属，可选。
+    """
+
+    kind: DeviationAiAssistKind
+    deviation_id: uuid.UUID | None = None
+    description: str = Field(min_length=10, max_length=20000)
+    department_name: str | None = Field(default=None, max_length=255)
+    group_name: str | None = Field(default=None, max_length=128)
+    reporter_name: str | None = Field(default=None, max_length=128)
+    emergency_measures: str | None = Field(default=None, max_length=8000)
+    items: list[DeviationItemIn] = Field(default_factory=list, max_length=50)
+    m1e_personnel: str | None = Field(default=None, max_length=8000)
+    m1e_machine: str | None = Field(default=None, max_length=8000)
+    m1e_material: str | None = Field(default=None, max_length=8000)
+    m1e_method: str | None = Field(default=None, max_length=8000)
+    m1e_environment: str | None = Field(default=None, max_length=8000)
+    m1e_other: str | None = Field(default=None, max_length=8000)
+    direct_cause: str | None = Field(default=None, max_length=8000)
+    root_cause: str | None = Field(default=None, max_length=8000)
+    why_chain: list[WhyStep] = Field(default_factory=list, max_length=20)
+    hypothesis_tests: list[HypothesisTestIn] = Field(default_factory=list, max_length=50)
+
+    @field_validator("description")
+    @classmethod
+    def _trim_description(cls, value: str) -> str:
+        # 过短的描述没有可规范化的信息量，直接挡在 422。
+        text = value.strip()
+        if len(text) < 10:
+            raise ValueError("偏差描述过短，无法进行 AI 辅助")
+        return text
+
+    @field_validator(
+        "department_name",
+        "group_name",
+        "reporter_name",
+        "emergency_measures",
+        "m1e_personnel",
+        "m1e_machine",
+        "m1e_material",
+        "m1e_method",
+        "m1e_environment",
+        "m1e_other",
+        "direct_cause",
+        "root_cause",
+    )
+    @classmethod
+    def _trim_optional(cls, value: str | None) -> str | None:
+        return _strip_optional(value)
+
+
 DeviationTransitionAction = Literal["start_investigation", "submit_assessment", "close"]
 
 

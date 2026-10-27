@@ -61,9 +61,9 @@ def test_subpackages_reexport_all_public_definitions() -> None:
         for sub in sorted((QA_ROOT / pkg_name).glob("*.py")):
             if sub.name.startswith("_"):
                 continue
-            if pkg_name == "service" and sub.name == "ai_analysis.py":
-                # AI 分析以整模块暴露（service.ai_analysis），不逐名 re-export
-                assert hasattr(module, "ai_analysis")
+            if pkg_name == "service" and sub.name in ("ai_analysis.py", "deviation_ai.py"):
+                # AI 分析/偏差 AI 辅助以整模块暴露（service.X），不逐名 re-export
+                assert hasattr(module, sub.stem)
                 continue
             for name in _public_defs(sub):
                 if not hasattr(module, name):

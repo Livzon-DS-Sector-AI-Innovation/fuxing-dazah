@@ -195,6 +195,62 @@ export interface DeviationListParams {
   page_size?: number
 }
 
+// ───────────────────────── AI 辅助 ─────────────────────────
+
+export type DeviationAiAssistKind = 'describe' | 'm1e' | 'why' | 'hypothesis'
+
+/** 偏差 AI 辅助请求：携带当前表单快照，服务端只产建议不落库。 */
+export interface DeviationAiAssistInput {
+  kind: DeviationAiAssistKind
+  deviation_id?: string
+  description: string
+  department_name?: string | null
+  group_name?: string | null
+  reporter_name?: string | null
+  emergency_measures?: string | null
+  items?: DeviationItem[]
+  m1e_personnel?: string | null
+  m1e_machine?: string | null
+  m1e_material?: string | null
+  m1e_method?: string | null
+  m1e_environment?: string | null
+  m1e_other?: string | null
+  direct_cause?: string | null
+  root_cause?: string | null
+  why_chain?: WhyStep[]
+  hypothesis_tests?: DeviationHypothesisTest[]
+}
+
+export interface DeviationAiMasterMatch {
+  master_id: string
+  code: string
+  name: string
+  object_type: string
+  match_type: 'exact_code' | 'exact_name' | 'exact_alias' | 'fuzzy'
+  confidence: number
+}
+
+export interface DeviationAiSuggestedItem {
+  category: DeviationItemCategory
+  name: string
+  batch_no: string | null
+  evidence: string | null
+  match: DeviationAiMasterMatch | null
+}
+
+/** 四种 kind 的响应字段按需出现（kind 之外还有 prompt_version/model）。 */
+export interface DeviationAiAssistResult {
+  kind: DeviationAiAssistKind
+  prompt_version: string
+  model: string
+  description?: string
+  missing_elements?: string[]
+  items?: DeviationAiSuggestedItem[]
+  checklists?: Partial<Record<'personnel' | 'machine' | 'material' | 'method' | 'environment' | 'other', string[]>>
+  steps?: WhyStep[]
+  hypotheses?: Array<Pick<DeviationHypothesisTest, 'hypothesis' | 'sample' | 'protocol' | 'expected'>>
+}
+
 // ───────────────────────── CAPA ─────────────────────────
 
 export type CapaStatus = 'planned' | 'in_progress' | 'completed' | 'effect_evaluating' | 'closed'

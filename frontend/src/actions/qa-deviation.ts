@@ -9,6 +9,8 @@ import type {
   CapaDetail,
   CapaTransitionAction,
   CapaUpdateInput,
+  DeviationAiAssistInput,
+  DeviationAiAssistResult,
   DeviationAttachment,
   DeviationCreateInput,
   DeviationDetail,
@@ -107,6 +109,18 @@ export async function deleteDeviationAttachment(id: string, attachmentId: string
   const result = await actionFetch(`${BASE}/deviations/${id}/attachments/${attachmentId}`, { method: 'DELETE' })
   if (result.success) revalidateDeviation(id)
   return result
+}
+
+// ───────────────────────── AI 辅助 ─────────────────────────
+
+export async function deviationAiAssist(
+  input: DeviationAiAssistInput,
+): Promise<ActionResult<DeviationAiAssistResult>> {
+  // 纯建议接口无副作用，不需要 revalidate。
+  return actionFetch<DeviationAiAssistResult>(`${BASE}/deviations/ai-assist`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 // ───────────────────────── CAPA ─────────────────────────

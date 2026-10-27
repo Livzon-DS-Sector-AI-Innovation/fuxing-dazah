@@ -22,12 +22,14 @@ from app.modules.qa.schemas import (
     CapaCreate,
     CapaTransitionIn,
     CapaUpdate,
+    DeviationAiAssistIn,
     DeviationCreate,
     DeviationExtendIn,
     DeviationTransitionIn,
     DeviationUpdate,
 )
 from app.modules.qa.service import deviation as service
+from app.modules.qa.service import deviation_ai as ai_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
@@ -36,6 +38,7 @@ router = APIRouter()
 _deviation_read = require_permission("qa:deviation:read", "qa:*:read")
 _deviation_create = require_permission("qa:deviation:create")
 _deviation_update = require_permission("qa:deviation:update")
+_deviation_assist = require_permission("qa:deviation:create", "qa:deviation:update")
 _capa_read = require_permission("qa:capa:read", "qa:*:read")
 _capa_create = require_permission("qa:capa:create")
 _capa_update = require_permission("qa:capa:update")
@@ -93,6 +96,16 @@ async def create_deviation(
 ) -> Any:
     row = await service.create_deviation(db, payload, user)
     return success_response(await service.deviation_detail(db, row.id), status_code=201)
+
+
+# 单段静态路径必须在 /deviations/{deviation_id} 之前注册，避免被路径参数捕获。
+@router.post("/deviations/ai-assist", summary="偏差 AI 辅助（描述规范化 / 调查引导建议）")
+async def deviation_ai_assist(
+    payload: DeviationAiAssistIn,
+    user: User = Depends(_deviation_assist),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(await ai_service.ai_assist(db, payload, user))
 
 
 @router.get("/deviations/{deviation_id}", summary="偏差详情")

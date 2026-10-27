@@ -933,7 +933,7 @@ export function WorkbenchInner() {
                               setMergeParentIds([])
                             }}
                           >
-                            合并接收
+                            合并接收 · {items[0].route_name}
                           </Button>
                         ))}
                       </div>

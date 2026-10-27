@@ -21,6 +21,12 @@ import {
   type WhyStep,
 } from '@/types/qa-deviation'
 import { DeviationReportFields, reportFormInitialValues, reportFormToPayload, useQaDepartments, type ReportFormValues } from './DeviationReportFields'
+import {
+  appendHypothesisTests,
+  appendM1eQuestions,
+  DeviationAiAssistButton,
+  fillWhySteps,
+} from './DeviationAiAssist'
 import { Field, actionError, cardStyle, cardStyles, fmtDate, toOptions } from './shared'
 
 const trimOrNull = (value?: string | null) => (value && value.trim() ? value.trim() : null)
@@ -77,11 +83,13 @@ function FormBlock({
   title,
   hint,
   first = false,
+  extra,
   children,
 }: {
   title: string
   hint?: string
   first?: boolean
+  extra?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -95,6 +103,7 @@ function FormBlock({
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: '#37352f' }}>{title}</span>
         {hint && <span style={{ fontSize: 12, color: '#787671' }}>{hint}</span>}
+        {extra && <span style={{ marginLeft: 'auto' }}>{extra}</span>}
       </div>
       {children}
     </section>
@@ -240,6 +249,43 @@ export function InvestigationSection({
   const [form] = Form.useForm<InvestigationFormValues>()
   const { saving, save } = useSectionSave(detail.id, onSaved)
 
+  // AI 辅助的请求上下文：已保存的偏差事实 + 表单里未保存的草稿一并携带。
+  const buildAssistContext = () => {
+    const values = form.getFieldsValue()
+    return {
+      deviation_id: detail.id,
+      description: detail.description,
+      department_name: detail.department_name ?? null,
+      group_name: detail.group_name ?? null,
+      reporter_name: detail.reporter_name ?? null,
+      emergency_measures: detail.emergency_measures ?? null,
+      items: detail.items.map((item) => ({ category: item.category, name: item.name, batch_no: item.batch_no ?? null })),
+      m1e_personnel: values.m1e_personnel ?? null,
+      m1e_machine: values.m1e_machine ?? null,
+      m1e_material: values.m1e_material ?? null,
+      m1e_method: values.m1e_method ?? null,
+      m1e_environment: values.m1e_environment ?? null,
+      m1e_other: values.m1e_other ?? null,
+      direct_cause: values.direct_cause ?? null,
+      root_cause: values.root_cause ?? null,
+      why_chain: (values.why_chain ?? [])
+        .filter((step) => step.question?.trim() && step.answer?.trim())
+        .map((step) => ({ question: step.question!, answer: step.answer! })),
+      hypothesis_tests: (values.hypothesis_tests ?? [])
+        .filter((test) => test.hypothesis?.trim())
+        .map((test) => ({
+          hypothesis: test.hypothesis!,
+          sample: test.sample ?? null,
+          protocol: test.protocol ?? null,
+          expected: test.expected ?? null,
+          result: test.result ?? null,
+          conclusion: test.conclusion ?? null,
+          tested_by: test.tested_by ?? null,
+          tested_at: test.tested_at ? test.tested_at.format('YYYY-MM-DD') : null,
+        })),
+    }
+  }
+
   const hasInvestigation = Boolean(
     detail.m1e_personnel || detail.m1e_machine || detail.m1e_material || detail.m1e_method ||
     detail.m1e_environment || detail.m1e_other || detail.direct_cause || detail.root_cause ||
@@ -305,7 +351,21 @@ export function InvestigationSection({
       )}
       {editing ? (
         <Form form={form} layout="vertical" initialValues={initial} onFinish={handleFinish}>
-          <FormBlock title="人机料法环" hint="从人、机、料、法、环、其他六个方向记录现场事实" first>
+          <FormBlock
+            title="人机料法环"
+            hint="从人、机、料、法、环、其他六个方向记录现场事实"
+            first
+            extra={
+              <DeviationAiAssistButton
+                kind="m1e"
+                label="生成问题清单"
+                buildInput={() => ({ ...buildAssistContext(), kind: 'm1e' })}
+                onAdopt={(payload) => {
+                  if (payload.kind === 'm1e') appendM1eQuestions(form, payload.inserts)
+                }}
+              />
+            }
+          >
             <Row gutter={[16, 16]}>
               {M1E_FIELDS.map((field) => (
                 <Col key={field.key} xs={24} sm={12} xl={8}>
@@ -317,7 +377,20 @@ export function InvestigationSection({
             </Row>
           </FormBlock>
 
-          <FormBlock title="5Why 根本原因分析" hint="连续追问，直到找到系统性原因">
+          <FormBlock
+            title="5Why 根本原因分析"
+            hint="连续追问，直到找到系统性原因"
+            extra={
+              <DeviationAiAssistButton
+                kind="why"
+                label="追问建议"
+                buildInput={() => ({ ...buildAssistContext(), kind: 'why' })}
+                onAdopt={(payload) => {
+                  if (payload.kind === 'why') fillWhySteps(form, payload.steps)
+                }}
+              />
+            }
+          >
             <Form.List name="why_chain">
               {(fields, { add, remove }) => (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -349,7 +422,7 @@ export function InvestigationSection({
                       <div
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.6fr) 32px',
+                          gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.6fr) 44px',
                           gap: 8,
                           alignItems: 'start',
                           paddingBottom: index < fields.length - 1 ? 12 : 0,
@@ -414,12 +487,24 @@ export function InvestigationSection({
               </Col>
             </Row>
             <div style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#37352f', marginBottom: 8 }}>假设性检验</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#37352f' }}>假设性检验</span>
+                <span style={{ marginLeft: 'auto' }}>
+                  <DeviationAiAssistButton
+                    kind="hypothesis"
+                    label="生成假设草案"
+                    buildInput={() => ({ ...buildAssistContext(), kind: 'hypothesis' })}
+                    onAdopt={(payload) => {
+                      if (payload.kind === 'hypothesis') appendHypothesisTests(form, payload.tests)
+                    }}
+                  />
+                </span>
+              </div>
               <Form.List name="hypothesis_tests">
                 {(fields, { add, remove }) => (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {fields.map((field) => (
-                      <div key={field.key} style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: 12, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr)) 32px', gap: 8, alignItems: 'start' }}>
+                      <div key={field.key} style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: 12, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr)) 44px', gap: 8, alignItems: 'start' }}>
                         <Form.Item name={[field.name, 'hypothesis']} style={{ marginBottom: 0, gridColumn: 'span 2' }} rules={[{ required: true, whitespace: true, message: '填写假设原因' }]}>
                           <Input placeholder="假设原因" maxLength={4000} />
                         </Form.Item>

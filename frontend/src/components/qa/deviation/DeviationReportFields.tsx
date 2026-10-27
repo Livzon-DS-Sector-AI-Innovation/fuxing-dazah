@@ -8,10 +8,12 @@ import { fetchQaDepartments } from '@/lib/api/qa'
 import type { QaDepartmentReference } from '@/types/qa'
 import {
   DEVIATION_ITEM_CATEGORY_LABEL,
+  type DeviationAiAssistInput,
   type DeviationCreateInput,
   type DeviationDetail,
   type DeviationItem,
 } from '@/types/qa-deviation'
+import { DeviationAiAssistButton } from './DeviationAiAssist'
 import { toOptions } from './shared'
 
 const ITEM_CATEGORY_OPTIONS = toOptions(DEVIATION_ITEM_CATEGORY_LABEL)
@@ -100,7 +102,8 @@ export function DeviationItemsFields({ showHandling = false }: { showHandling?: 
               key={field.key}
               style={{
                 display: 'grid',
-                gridTemplateColumns: showHandling ? '120px 1fr 160px 1fr 32px' : '120px 1fr 180px 32px',
+                // 末列留 44px：antd v6 图标按钮最小点击区 44×44，给 32px 会撑出横向滚动条。
+                gridTemplateColumns: showHandling ? '120px 1fr 160px 1fr 44px' : '120px 1fr 180px 44px',
                 gap: 8,
                 alignItems: 'start',
               }}
@@ -141,7 +144,22 @@ export function DeviationReportFields({
   showItems?: boolean
   showHandling?: boolean
 }) {
+  const form = Form.useFormInstance<ReportFormValues>()
   const departmentOptions = departments.map((dept) => ({ value: dept.name }))
+  const buildDescribeInput = (): DeviationAiAssistInput => {
+    const values = form.getFieldsValue()
+    return {
+      kind: 'describe',
+      description: values.description ?? '',
+      department_name: values.department_name ?? null,
+      group_name: values.group_name ?? null,
+      reporter_name: values.reporter_name ?? null,
+      emergency_measures: values.emergency_measures ?? null,
+      items: (values.items ?? [])
+        .filter((item): item is DeviationItem => Boolean(item && item.name && item.name.trim() && item.category))
+        .map((item) => ({ category: item.category, name: item.name, batch_no: item.batch_no ?? null })),
+    }
+  }
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0 16px' }}>
@@ -172,7 +190,28 @@ export function DeviationReportFields({
       </div>
       <Form.Item
         name="description"
-        label="偏差描述（5W1H）"
+        label={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            偏差描述（5W1H）
+            <DeviationAiAssistButton
+              kind="describe"
+              label="规范化"
+              buildInput={buildDescribeInput}
+              onAdopt={(payload) => {
+                if (payload.kind !== 'describe') return
+                if (payload.description) {
+                  form.setFieldValue('description', payload.description)
+                  // 采纳后把焦点放到描述框，长表单里用户能立刻复核改写结果。
+                  form.focusField('description')
+                }
+                if (payload.items.length > 0) {
+                  const existing = (form.getFieldValue('items') as Partial<DeviationItem>[] | undefined) ?? []
+                  form.setFieldValue('items', [...existing, ...payload.items])
+                }
+              }}
+            />
+          </span>
+        }
         rules={[{ required: true, whitespace: true, message: '请填写偏差描述' }]}
         extra="何时、何地、谁、发现了什么、如何导致、为何算偏差（正确做法是什么）"
       >
