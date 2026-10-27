@@ -166,4 +166,14 @@ describe('FacilityMapCard', () => {
     const names = new Set(asset.districts.map(d => d.distName))
     expect(labels.some(l => names.has(l.textContent ?? ''))).toBe(true)
   })
+
+  it('重叠分区名称不全画（米尔贝/提四米贝锚点近重合，贪心避让跳过一个）', async () => {
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^district-poly-/)
+    await waitFor(() => {
+      const milbei = document.querySelector('[data-testid="district-label-7"]')
+      const tiSi = document.querySelector('[data-testid="district-label-20"]')
+      expect(!(milbei && tiSi)).toBe(true)
+    })
+  })
 })

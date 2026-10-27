@@ -11,9 +11,9 @@
  * 屏幕等大，名称标注随放大逐级显现（放得下才显示）。
  * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
  * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
- * 布局：地图区 + 右侧「未映射地点」栏（lg+ 并排，窄屏堆叠）；未映射清单
- * 直出，入口按钮打开 AI 建议确认 Modal（#2）——扫描近 30 天未映射文本 →
- * AI 建议（置信度/理由）→ 人工逐条/批量确认写映射资产（只增不改），或忽略。
+ * 布局：svg 按底图宽高比自适应居中（不留横向空白）；名称标注贪心避让
+ * （标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；底部
+ * 「未映射」栏清单直出 + AI 建议确认入口（#2）。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -194,7 +194,19 @@ const TICKET_TYPE_LABEL: Record<string, string> = {
   blind_plate: '盲板',
 }
 
-/** 徽标组：作业桶（非零）+ 报警合计，横向串排；按 1/zoom 缩放保持屏幕等大 */
+/** 徽标组内容（作业桶非零 + 报警合计）；BadgeGroup 与标注避让共用 */
+function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string }[] {
+  const chips: { label: string; fill: string }[] = []
+  for (const b of BADGES) {
+    const n = pin.jobs[b.key]
+    if (n > 0) chips.push({ label: `${b.label}${n}`, fill: b.fill })
+  }
+  const alarms = pin.alarms.fire + pin.alarms.central
+  if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
+  return chips
+}
+
+/** 徽标组：横向串排；按 1/zoom 缩放保持屏幕等大 */
 function BadgeGroup({
   pin,
   anchor,
@@ -204,13 +216,7 @@ function BadgeGroup({
   anchor: [number, number]
   zoom: number
 }) {
-  const alarms = pin.alarms.fire + pin.alarms.central
-  const chips: { label: string; fill: string }[] = []
-  for (const b of BADGES) {
-    const n = pin.jobs[b.key]
-    if (n > 0) chips.push({ label: `${b.label}${n}`, fill: b.fill })
-  }
-  if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
+  const chips = badgeChips(pin)
   if (!chips.length) return null
   const w = 38
   const total = chips.length * w
@@ -548,11 +554,49 @@ export function FacilityMapCard() {
     }
   }
 
-  // 名称标注：字号按 1/zoom 保持屏幕 13px；多边形放得下名字才显示（放大逐级显现）
-  const labelFs = 13 / zoom
-  const labels = RENDERED.filter(
-    ({ dist, bbox }) => bbox[2] >= dist.distName.length * labelFs * 0.85,
-  )
+  // 名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让：先占位全部落点徽标
+  // 矩形，再按分区面积降序尝试放标签——与已放标签/徽标相交即跳过
+  // （相邻重叠分区如米尔贝/提四米贝锚点几乎重合，全画必叠；放大后字号
+  // 变小、放得下的变多，逐级显现）
+  const labels = useMemo(() => {
+    const fs = 13 / zoom
+    const placed: { x1: number; y1: number; x2: number; y2: number }[] = []
+    for (const pin of data?.pins ?? []) {
+      const rendered = BY_DIST_ID.get(pin.dist_id)
+      if (!rendered) continue
+      const w = (badgeChips(pin).length * 38 - 4) / zoom
+      placed.push({
+        x1: rendered.anchor[0] - w / 2,
+        y1: rendered.anchor[1] - 11 / zoom,
+        x2: rendered.anchor[0] + w / 2,
+        y2: rendered.anchor[1] + 11 / zoom,
+      })
+    }
+    const cands = RENDERED.filter(
+      ({ dist, bbox }) => bbox[2] >= dist.distName.length * fs * 0.85,
+    ).sort((a, b) => b.bbox[2] * b.bbox[3] - a.bbox[2] * a.bbox[3])
+    const out: RenderedDistrict[] = []
+    for (const item of cands) {
+      const w = item.dist.distName.length * fs * 0.95
+      const h = fs * 1.3
+      const cy = item.anchor[1] + (pinById.get(item.dist.distId) ? 24 : 5) / zoom
+      const rect = {
+        x1: item.anchor[0] - w / 2,
+        y1: cy - h / 2,
+        x2: item.anchor[0] + w / 2,
+        y2: cy + h / 2,
+      }
+      if (
+        placed.some(
+          p => rect.x1 < p.x2 && rect.x2 > p.x1 && rect.y1 < p.y2 && rect.y2 > p.y1,
+        )
+      )
+        continue
+      placed.push(rect)
+      out.push(item)
+    }
+    return out
+  }, [zoom, pinById, data])
 
   return (
     <SectionCard
@@ -604,14 +648,15 @@ export function FacilityMapCard() {
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
-          <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[minmax(0,1fr)_264px]">
-            <div className="relative min-w-0">
+          <div className="flex justify-center">
+            <div className="relative">
               <svg
                 ref={svgRef}
                 viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-                className="w-full select-none"
+                className="select-none"
                 style={{
-                  height: 'clamp(480px, 68vh, 800px)',
+                  height: 'clamp(460px, 62vh, 760px)',
+                  aspectRatio: `${VIEW_W} / ${GEOM.viewH}`,
                   touchAction: 'none',
                   cursor: panning ? 'grabbing' : 'grab',
                 }}
@@ -662,7 +707,7 @@ export function FacilityMapCard() {
                     y={anchor[1] + (pinById.get(dist.distId) ? 24 : 5) / zoom}
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    fontSize={labelFs}
+                    fontSize={13 / zoom}
                     fontWeight={500}
                     fill={LABEL_FILL}
                     stroke="#ffffff"
@@ -707,48 +752,48 @@ export function FacilityMapCard() {
                 {Math.round(zoom * 100)}%
               </div>
             </div>
-            <aside className="flex flex-col gap-2 rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] p-3">
-              <div className="text-[13px] font-medium text-[var(--color-charcoal)]">
+          </div>
+          <div className="rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <span className="text-[13px] font-medium text-[var(--color-charcoal)]">
                 未映射 {data.unmapped.length} 处
                 <span className="ml-1 font-normal text-[var(--color-steel)]">
                   （{unmappedEvents} 条事件）
                 </span>
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
-                {data.unmapped.length === 0 ? (
-                  <span className="py-6 text-center text-[12px] text-[var(--color-steel)]">
-                    今日全部落图 ✓
-                  </span>
-                ) : (
-                  data.unmapped.slice(0, 40).map(u => (
-                    <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
-                      <span className="truncate text-[var(--color-charcoal)]" title={u.text}>
-                        {u.text}
-                      </span>
-                      <span className="flex shrink-0 items-center gap-1">
-                        {u.kinds.map(k => (
-                          <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
-                            {KIND_LABEL[k] ?? k}
-                          </Tag>
-                        ))}
-                        <span className="text-[var(--color-steel)]">×{u.count}</span>
-                      </span>
-                    </div>
-                  ))
-                )}
-                {data.unmapped.length > 40 && (
-                  <span className="text-[11px] text-[var(--color-steel)]">
-                    其余 {data.unmapped.length - 40} 条在确认列表内查看
-                  </span>
-                )}
-              </div>
-              <Button type="primary" ghost size="small" block onClick={() => setConfirmOpen(true)}>
-                AI 建议映射 →
-              </Button>
-              <span className="text-[11px] leading-4 text-[var(--color-steel)]">
-                未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）
               </span>
-            </aside>
+              <span className="flex items-center gap-3">
+                <span className="text-[11px] text-[var(--color-steel)]">
+                  未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）
+                </span>
+                <Button type="primary" ghost size="small" onClick={() => setConfirmOpen(true)}>
+                  AI 建议映射 →
+                </Button>
+              </span>
+            </div>
+            {data.unmapped.length > 0 && (
+              <div className="mt-2 grid max-h-36 grid-cols-1 gap-x-8 gap-y-1 overflow-y-auto border-t border-[var(--color-hairline-soft)] pt-2 md:grid-cols-2 xl:grid-cols-3">
+                {data.unmapped.slice(0, 60).map(u => (
+                  <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
+                    <span className="truncate text-[var(--color-charcoal)]" title={u.text}>
+                      {u.text}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {u.kinds.map(k => (
+                        <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
+                          {KIND_LABEL[k] ?? k}
+                        </Tag>
+                      ))}
+                      <span className="text-[var(--color-steel)]">×{u.count}</span>
+                    </span>
+                  </div>
+                ))}
+                {data.unmapped.length > 60 && (
+                  <span className="text-[11px] text-[var(--color-steel)]">
+                    其余 {data.unmapped.length - 60} 条在确认列表内查看
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
