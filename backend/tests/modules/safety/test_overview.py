@@ -16,13 +16,18 @@ from typing import Any
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.safety.models import HazardReport, WorkTicketReview
+from app.modules.safety.models import (
+    HazardReport,
+    KeyRiskOperationReport,
+    WorkTicketReview,
+)
 from app.modules.safety.service.overview import (
     _bj_day_start_utc,
     _bj_today,
     build_overview,
     collect_alarms,
     collect_hazards,
+    collect_key_risk_ops,
     collect_supervision,
 )
 
@@ -331,6 +336,50 @@ class TestCollectSupervision:
                 "violation_count": 3,
             }
         }
+
+
+class TestCollectKeyRiskOps:
+    async def test_lists_today_approved_and_all_in_review(self, db_session: AsyncSession) -> None:
+        """表格列今日已通过 + 全部审批中（不限日期，与 in_progress 计数口径一致）。"""
+        today = _bj_today()
+        y0 = _bj_day_start_utc(today)
+        db = db_session
+
+        async def add(
+            no: str,
+            status: str,
+            start_off: timedelta | None,
+        ) -> None:
+            db.add(
+                KeyRiskOperationReport(
+                    report_no=f"KRO-TEST-{no}",
+                    apply_status=status,
+                    department="提炼四部",
+                    operation_content=f"作业{no}",
+                    start_time=(y0 + start_off) if start_off is not None else None,
+                )
+            )
+
+        await add("A", "已通过", timedelta(hours=14))  # 今日 14:00 已通过
+        await add("B", "已通过", timedelta(days=-1))  # 昨日已通过 → 不进列表
+        await add("C", "审批中", timedelta(hours=16))  # 今日 16:00 审批中
+        await add("D", "审批中", timedelta(days=-1))  # 昨日报备仍审批中 → 进列表
+        await add("E", "审批中", None)  # 审批中无开始时间 → 进列表沉底
+        await db.flush()
+
+        data = await collect_key_risk_ops(db)
+
+        assert data["today_approved"] == 1
+        assert data["in_progress"] == 3
+        # 合并清单：C(16:00) > A(14:00) > D(昨日) > E(无开始时间)
+        assert [it["operation_content"] for it in data["items"]] == [
+            "作业C", "作业A", "作业D", "作业E",
+        ]
+        assert all(
+            set(it) == {"start_time", "department", "operation_content", "apply_status"}
+            for it in data["items"]
+        )
+        assert data["items"][-1]["start_time"] is None
 
 
 class TestCollectHazards:

@@ -290,30 +290,53 @@ async def collect_chemicals(db: AsyncSession) -> dict[str, Any]:
     return {"over_limit": stats["over_limit"], "materials": materials}
 
 
+def _key_risk_item(it: Any) -> dict[str, Any]:
+    return {
+        "start_time": getattr(it, "start_time", None),
+        "department": getattr(it, "department", None),
+        "operation_content": getattr(it, "operation_content", None),
+        "apply_status": getattr(it, "apply_status", None),
+    }
+
+
+def _sort_key_risk_items_desc(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """start_time 降序、空值沉底（与台账排序一致，空开始时间排最后不压首行）。"""
+    return sorted(
+        items,
+        key=lambda it: (
+            it["start_time"] is None,
+            -it["start_time"].timestamp() if it["start_time"] is not None else 0.0,
+        ),
+    )
+
+
 async def collect_key_risk_ops(db: AsyncSession) -> dict[str, Any]:
-    """关键风险作业：今日通过/审批中计数 + 当日已通过清单（spec 下钻三列口径）。"""
+    """关键风险作业：今日通过/审批中计数 + 当日已通过与全部审批中清单。
+
+    审批中不限日期（与 in_progress 计数口径一致——昨日报备今天仍在批也算）。
+    """
     service = KeyRiskOperationReportService(db)
     stats = await service.get_stats()
     today = _bj_today()
-    items, _total = await service.get_reports(
+    approved, _ = await service.get_reports(
         0,
         _DRILLDOWN_LIMIT,
         date_from=today,
         date_to=today,
         apply_status="已通过",
     )
+    in_review, _ = await service.get_reports(
+        0,
+        _DRILLDOWN_LIMIT,
+        apply_status="审批中",
+    )
     return {
         "today_approved": stats.get("today_approved", 0),
         "in_progress": stats.get("in_progress", 0),
-        "items": [
-            {
-                "start_time": getattr(it, "start_time", None),
-                "department": getattr(it, "department", None),
-                "operation_content": getattr(it, "operation_content", None),
-                "apply_status": getattr(it, "apply_status", None),
-            }
-            for it in items
-        ],
+        "items": _sort_key_risk_items_desc(
+            [_key_risk_item(it) for it in approved]
+            + [_key_risk_item(it) for it in in_review]
+        ),
     }
 
 
