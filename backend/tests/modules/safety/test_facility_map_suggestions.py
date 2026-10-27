@@ -145,7 +145,11 @@ class TestCollectAndScan:
         assert result["suggested"] == 2
         assert result["no_judgement"] == 1
 
-        rows = await suggestions.list_suggestions(db_session)
+        # 只看本用例前缀行（表内有真实验收数据，勿全表断言）
+        rows = [
+            r for r in await suggestions.list_suggestions(db_session)
+            if r["location_text"].startswith(_PREFIX)
+        ]
         by_text = {r["location_text"]: r for r in rows}
         assert set(by_text) == {f"{_PREFIX}212罐", f"{_PREFIX}新罐区"}
         row = by_text[f"{_PREFIX}212罐"]

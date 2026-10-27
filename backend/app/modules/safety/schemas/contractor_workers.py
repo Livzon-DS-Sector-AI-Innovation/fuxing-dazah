@@ -23,6 +23,13 @@ class OrgPostRowOut(BaseModel):
     headcount: int = Field(description="该岗位主档人数（全厂口径，不受过滤影响）")
 
 
+class FamilyAggRowOut(BaseModel):
+    """岗位族×人数聚合行（#4；未归类岗位单列「未归类」）。"""
+
+    family: str
+    headcount: int
+
+
 class OrgPostsOut(BaseModel):
     """岗位字典三态信封（口径同 ContractorWorkersOut）。"""
 
@@ -32,6 +39,10 @@ class OrgPostsOut(BaseModel):
     )
     message: str | None = Field(default=None, description="降级/空态提示；live 为 null")
     posts: list[OrgPostRowOut] = Field(default_factory=list)
+    families: list[FamilyAggRowOut] | None = Field(
+        default=None,
+        description="族×人数聚合（#4，live 且有归类行时返回；其余 null 不阻塞字典）",
+    )
 
 
 class ContractorWorkersStatsOut(BaseModel):

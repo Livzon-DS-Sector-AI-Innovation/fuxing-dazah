@@ -168,6 +168,9 @@ from app.modules.safety.models.location_district_map import (  # noqa: F401
 from app.modules.safety.models.location_district_suggestion import (  # noqa: F401
     LocationDistrictSuggestion,
 )
+from app.modules.safety.models.org_post_families import (  # noqa: F401
+    OrgPostFamily,
+)
 from app.modules.safety.models.trainings import (  # noqa: F401
     SafetyTraining,
     TrainingRecord,
@@ -240,6 +243,7 @@ __all__ = [
     'OELComplianceStatus',
     'OhExamApplication',
     'OhFollowup',
+    'OrgPostFamily',
     'OhHazardFactor',
     'OhHealthExam',
     'OhPerson',

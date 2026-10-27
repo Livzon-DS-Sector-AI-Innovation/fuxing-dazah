@@ -118,5 +118,6 @@ export const AI_AUDIT_SCENARIO_LABELS: Record<string, string> = {
   fire_alarm_analysis: '消防报警分析',
   central_alarm_analysis: '中控报警分析',
   facility_map_suggest: '分区建议映射',
+  org_post_classify: '岗位族归类',
   unknown: '未归因',
 }

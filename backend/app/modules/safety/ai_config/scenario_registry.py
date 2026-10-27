@@ -1,4 +1,4 @@
-"""AI 场景注册表 — 34 个 AI 调用场景的代码唯一事实源（backend-design §2）。
+"""AI 场景注册表 — 35 个 AI 调用场景的代码唯一事实源（backend-design §2）。
 
 本文件是：
 
@@ -64,6 +64,7 @@ _AI_SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "training_material_generation": ("课件试卷生成", "培训行→讲义要点卡与试卷 docx AI 生成（产物挂附件列）", "text", "web"),
     "training_record_parsing": ("签到成绩解析", "签到表/成绩单照片 vision 解析回填台账", "vision", "web"),
     "facility_map_suggest": ("分区建议映射", "未映射地点文本→64分区候选+置信度批量建议（人工确认后入映射表）", "text", "system"),
+    "org_post_classify": ("岗位族归类", "全厂岗位名→9标准岗位族批量归类（人工确认/修正后成资产）", "text", "system"),
 }
 
 # 已废弃但保留可配的场景（deprecated=True）；其余均为 False

@@ -40,6 +40,7 @@ import type { Tone } from '@/components/ui-kit'
 import { T } from '../shared-styles'
 import { fileProxyUrl } from '../file-url'
 import { ContractorWorkersLedger } from './ContractorWorkersLedger'
+import { OrgPostFamilyPanel } from './OrgPostFamilyPanel'
 import {
   ADMISSION_CONCLUSION_UI,
   AI_REVIEW_STATUS_UI,
@@ -513,6 +514,9 @@ export function ContractorAdmissionPage() {
 
       {/* 承包商在册人员副台账（3.x 平台实名台账+三组交叉；并行一次拉回） */}
       <ContractorWorkersLedger />
+
+      {/* #4 岗位族归类（AI 归类→人工确认；org-posts 同域挂此） */}
+      <OrgPostFamilyPanel />
 
       {/* 详情 Drawer */}
       <Drawer

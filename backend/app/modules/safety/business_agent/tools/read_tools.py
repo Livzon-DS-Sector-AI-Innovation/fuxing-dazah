@@ -498,6 +498,8 @@ async def _query_drill_plans_impl(
     status: str | None = None,
     drill_type: str | None = None,
     keyword: str | None = None,
+    date_from: Any = None,
+    date_to: Any = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     """查询应急演练计划（计划阶段：尚未执行的演练记录）。
@@ -507,6 +509,7 @@ async def _query_drill_plans_impl(
     - status: 复核状态筛选（已完成/未完成）
     - drill_type: 演练类型（应急疏散演练/现场岗位处置/专项应急演练/综合应急演练/消防器材培训）
     - keyword: 演练内容关键词搜索
+    - date_from/date_to: 日期区间（ISO，按计划时间过滤，含两端，可选）
     - limit: 返回条数上限，默认 20
     """
     from app.modules.safety.service.emergency_drill import EmergencyDrillService
@@ -514,6 +517,7 @@ async def _query_drill_plans_impl(
     items, total = await EmergencyDrillService(ctx.deps.db).list_records(
         skip=0, limit=limit, department=department, drill_type=drill_type,
         status=status, keyword=keyword, stage="plan",
+        date_from=date_from, date_to=date_to,
     )
     return {
         "items": [
@@ -536,6 +540,8 @@ async def _query_drill_records_impl(
     status: str | None = None,
     drill_type: str | None = None,
     keyword: str | None = None,
+    date_from: Any = None,
+    date_to: Any = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     """查询应急演练记录（已执行的演练记录，含待复核与已复核的）。
@@ -545,6 +551,7 @@ async def _query_drill_records_impl(
     - status: 复核状态筛选（已完成/未完成）
     - drill_type: 演练类型
     - keyword: 演练内容关键词搜索
+    - date_from/date_to: 日期区间（ISO，按实施时间过滤，含两端，可选）
     - limit: 返回条数上限，默认 20
     """
     from app.modules.safety.service.emergency_drill import EmergencyDrillService
@@ -552,6 +559,7 @@ async def _query_drill_records_impl(
     items, total = await EmergencyDrillService(ctx.deps.db).list_records(
         skip=0, limit=limit, department=department, drill_type=drill_type,
         status=status, keyword=keyword, stage="execution",
+        date_from=date_from, date_to=date_to,
     )
     return {
         "items": [
@@ -576,6 +584,8 @@ async def query_drills(
     status: str = "",
     drill_type: str = "",
     keyword: str = "",
+    date_from: str = "",
+    date_to: str = "",
     limit: int | None = None,
 ) -> dict[str, Any]:
     """查询应急演练计划或实施记录（kind 区分两类）。
@@ -587,18 +597,26 @@ async def query_drills(
         status: 复核状态筛选（已完成/未完成）
         drill_type: 演练类型（应急疏散演练/现场岗位处置/专项应急演练/综合应急演练/消防器材培训）
         keyword: 演练内容关键词搜索
+        date_from: 起始日期（ISO，如 2026-10-01；plans 按计划时间、records 按
+            实施时间过滤，可选）
+        date_to: 结束日期（ISO，含当日，可选）
         limit: 返回条数上限（默认20）
 
-    示例：查生产部今年的演练计划；上月有哪些记录未复核。
+    示例：本月执行了多少次演练；查生产部今年的演练计划；上月有哪些记录未复核。
     """
     # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    from datetime import date as _date
+
     department = department or None
     status = status or None
     drill_type = drill_type or None
     keyword = keyword or None
     kw = {
         "department": department, "status": status, "drill_type": drill_type,
-        "keyword": keyword, "limit": 20 if limit is None else limit,
+        "keyword": keyword,
+        "date_from": _date.fromisoformat(date_from) if date_from else None,
+        "date_to": _date.fromisoformat(date_to) if date_to else None,
+        "limit": 20 if limit is None else limit,
     }
     if kind == "plans":
         return await _query_drill_plans_impl(ctx, **kw)
@@ -673,20 +691,24 @@ async def _query_msds_documents_impl(
 async def _query_msds_collections_impl(
     ctx: RunContext[SafetyDeps],
     parse_status: str | None = None,
+    date_from: Any = None,
+    date_to: Any = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     """查询供应商 MSDS 资料采集记录（解析状态跟踪）。
 
     参数：
     - parse_status: 解析状态筛选（pending=待解析 / parsed=已解析 / failed=解析失败）
+    - date_from/date_to: 日期区间（ISO，按采集时间过滤，含两端，可选）
     - limit: 返回条数上限，默认 20
 
-    示例：查一下有哪些 MSDS 解析失败的记录；最近上传的供应商资料。
+    示例：本月采集了多少份供应商资料；有哪些 MSDS 解析失败的记录。
     """
     from app.modules.safety.service.msds import MsdsService
 
     items, total = await MsdsService(ctx.deps.db).list_collections(
         skip=0, limit=limit, parse_status=parse_status,
+        date_from=date_from, date_to=date_to,
     )
     return {
         "items": [
@@ -710,6 +732,8 @@ async def query_msds(
     name: str = "",
     cas_no: str = "",
     parse_status: str = "",
+    date_from: str = "",
+    date_to: str = "",
     limit: int | None = None,
 ) -> dict[str, Any]:
     """查询 MSDS 化学品安全数据台账或供应商资料采集记录（kind 区分两类）。
@@ -721,11 +745,16 @@ async def query_msds(
         name: 物质名称模糊搜索（如"异丙醇"，kind=documents 时有效）
         cas_no: CAS号搜索（如"67-63-0"，kind=documents 时有效）
         parse_status: 解析状态筛选（kind=collections 时有效）
+        date_from: 起始日期（ISO，如 2026-10-01；按采集时间过滤，仅
+            kind=collections 时有效，可选）
+        date_to: 结束日期（ISO，含当日，可选，仅 kind=collections 时有效）
         limit: 返回条数上限（默认 20）
 
-    示例：查异丙醇的 MSDS；哪些采集记录解析失败。
+    示例：本月采集了多少份供应商 MSDS 资料；查异丙醇的 MSDS；哪些采集记录解析失败。
     """
     # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    from datetime import date as _date
+
     name = name or None
     cas_no = cas_no or None
     parse_status = parse_status or None
@@ -733,7 +762,12 @@ async def query_msds(
     if kind == "documents":
         return await _query_msds_documents_impl(ctx, name=name, cas_no=cas_no, **kw)
     if kind == "collections":
-        return await _query_msds_collections_impl(ctx, parse_status=parse_status, **kw)
+        return await _query_msds_collections_impl(
+            ctx, parse_status=parse_status,
+            date_from=_date.fromisoformat(date_from) if date_from else None,
+            date_to=_date.fromisoformat(date_to) if date_to else None,
+            **kw,
+        )
     return {"error": f"未知 kind={kind!r}，可选：documents / collections"}
 
 
@@ -811,9 +845,13 @@ async def query_oh_exams(
     ai_parse_status: str = "",
     department: str = "",
     keyword: str = "",
+    date_from: str = "",
+    date_to: str = "",
     limit: int = 20,
 ) -> dict[str, Any]:
     """查询职业健康体检记录（含 AI 智能解读、结论分类与适配判定）。
+
+    统计某月体检数量（如"本月有多少人体检"）用 date_from/date_to 圈定区间看 total。
 
     Args:
         exam_type: 体检类型
@@ -821,11 +859,15 @@ async def query_oh_exams(
         ai_parse_status: 解析状态（pending/parsed/failed）
         department: 部门
         keyword: 姓名/工号模糊匹配
+        date_from: 起始日期（ISO，如 2026-10-01；按体检时间过滤，可选）
+        date_to: 结束日期（ISO，含当日，如 2026-10-31，可选）
         limit: 条数上限（默认 20）
 
-    示例：查一下张三最近的体检记录；哪些体检结论为职业禁忌证。
+    示例：本月有多少人体检；查一下张三最近的体检记录；哪些体检结论为职业禁忌证。
     """
     # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
+    from datetime import date as _date
+
     exam_type = exam_type or None
     ai_conclusion = ai_conclusion or None
     ai_parse_status = ai_parse_status or None
@@ -841,6 +883,8 @@ async def query_oh_exams(
         ai_conclusion=ai_conclusion,
         ai_parse_status=ai_parse_status,
         keyword=keyword,
+        date_from=_date.fromisoformat(date_from) if date_from else None,
+        date_to=_date.fromisoformat(date_to) if date_to else None,
     )
     return {
         "items": [
@@ -1381,6 +1425,8 @@ def _to_central_dict(r: Any) -> dict[str, Any]:
 async def query_contractor_admissions(
     ctx: RunContext[SafetyDeps],
     related_party_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     submit_status: str | None = None,
     ai_review_status: str | None = None,
     keyword: str | None = None,
@@ -1389,11 +1435,14 @@ async def query_contractor_admissions(
 ) -> dict[str, Any]:
     """查询相关方准入记录。
 
-    按相关方类型/提交状态/AI审核状态/关键词查询准入审核记录，返回记录列表与统计。
+    按相关方类型/日期区间/提交状态/AI审核状态/关键词查询准入审核记录，返回记录列表与统计。
     适用于：查看哪些承包商已通过准入审核、哪些材料待补充、准入进度跟踪。
+    统计某月准入数量（如"本月有多少相关方准入"）用 date_from/date_to 圈定区间看 total。
 
     Args:
         related_party_type: 相关方类型筛选（承包商/合作类相关方/劳务派遣/其他相关方）
+        date_from: 起始日期（ISO，如 2026-10-01；按记录创建日期=准入申请提交日，可选）
+        date_to: 结束日期（ISO，含当日，如 2026-10-31，可选）
         submit_status: 提交状态（已完成/进行中/未开始）
         ai_review_status: AI审核状态（none/processing/completed/failed）
         keyword: 关键词（作业单位名称模糊匹配）
@@ -1403,6 +1452,8 @@ async def query_contractor_admissions(
     Returns:
         {items: [...], total: N, page, page_size}
     """
+    from datetime import date as _date
+
     from app.modules.safety.service.contractor_admission import (
         ContractorAdmissionService,
     )
@@ -1413,6 +1464,8 @@ async def query_contractor_admissions(
             "submit_status": submit_status,
             "ai_review_status": ai_review_status,
             "keyword": keyword,
+            "date_from": _date.fromisoformat(date_from) if date_from else None,
+            "date_to": _date.fromisoformat(date_to) if date_to else None,
         },
         page=page,
         page_size=page_size,
@@ -1807,6 +1860,13 @@ def _date_bounds(date_from: str | None, date_to: str | None) -> tuple[Any, Any]:
     return start, end_exclusive
 
 
+def _next_day(d: Any) -> Any:
+    """date + 1 天（半开区间上界，工具内 date 过滤统一用）。"""
+    from datetime import timedelta
+
+    return d + timedelta(days=1)
+
+
 def _detail_result(items: list[Any], page: int, page_size: int, total: int) -> dict[str, Any]:
     return {"success": True, "items": items, "page": page, "page_size": page_size, "total": total}
 
@@ -1971,6 +2031,8 @@ async def query_key_risk_ops(
 async def query_ehs_changes(
     ctx: RunContext[SafetyDeps],
     department: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     change_type: str | None = None,
     change_grade: str | None = None,
     status: str | None = None,
@@ -1981,10 +2043,13 @@ async def query_ehs_changes(
 ) -> dict[str, Any]:
     """查询 EHS 变更管理明细（变更台账，含 AI 预审状态）。
 
-    可按部门、变更类型、变更等级、流程状态、AI 预审状态、关键词筛选。
+    可按部门、日期区间、变更类型、变更等级、流程状态、AI 预审状态、关键词筛选。
+    统计某月变更数量（如"本月有多少变更"）用 date_from/date_to 圈定区间看 total。
 
     Args:
         department: 部门名称，模糊匹配（可选）
+        date_from: 起始日期（ISO，如 2026-10-01；按记录创建时间=申请提交日，可选）
+        date_to: 结束日期（ISO，含当日，如 2026-10-31，可选）
         change_type: 变更类型（设备变更/工艺技术/管理等，可选）
         change_grade: 变更等级（重大/一般，或 major/general，可选）
         status: 流程状态（under_review/approved/closed/rejected/withdrawn，可选）
@@ -1999,45 +2064,58 @@ async def query_ehs_changes(
           申请人/AI 预审状态等）
         - total: 满足条件的总条数
 
-    示例：生产部有哪些重大变更；最近 AI 预审完成的变更。
+    示例：本月有多少变更；生产部有哪些重大变更；最近 AI 预审完成的变更。
     """
     # 直读分支（批次三）：DIRECT 开启时走 EHS 变更审批/验收两表 Bitable 直读，
     # 语义忠实复刻 legacy（spec D3：排序键 created_at→Bitable created_time 受控
     # 偏差、offset raw/limit cap 分页 quirk、actual_* 恒 None 复刻——状态机零
     # 使用探针坐实）。关=逐行 legacy。事件链路/AI 审核回写/API/状态机/前端零
     # 改动（spec D1）。
+    from datetime import date as _date
+
     from app.modules.safety.service.ehs_change_direct import config as ehs_config
 
-    if ehs_config.direct_enabled():
-        from app.modules.safety.service.ehs_change_direct import (
-            query as ehs_query,
-        )
-        from app.modules.safety.service.ehs_change_direct import (
-            reader as ehs_reader,
-        )
-
-        views = await ehs_reader.open_reader().fetch_all()
-        items, total = ehs_query.ehs_changes(
-            views,
-            department=department,
-            change_type=change_type,
-            change_grade=change_grade,
-            status=status,
-            ai_review_status=ai_review_status,
-            keyword=keyword,
-            page=page,
-            page_size=page_size,
-        )
-        return _detail_result(items, page, page_size, total)
-
-    from sqlalchemy import func, or_, select
-
-    from app.modules.safety.models import EhsChange
-
     try:
+        d_from = _date.fromisoformat(date_from) if date_from else None
+        d_to = _date.fromisoformat(date_to) if date_to else None
+
+        if ehs_config.direct_enabled():
+            from app.modules.safety.service.ehs_change_direct import (
+                query as ehs_query,
+            )
+            from app.modules.safety.service.ehs_change_direct import (
+                reader as ehs_reader,
+            )
+
+            views = await ehs_reader.open_reader().fetch_all()
+            items, total = ehs_query.ehs_changes(
+                views,
+                department=department,
+                date_from=d_from,
+                date_to=d_to,
+                change_type=change_type,
+                change_grade=change_grade,
+                status=status,
+                ai_review_status=ai_review_status,
+                keyword=keyword,
+                page=page,
+                page_size=page_size,
+            )
+            return _detail_result(items, page, page_size, total)
+
+        from sqlalchemy import func, or_, select
+
+        from app.modules.safety.models import EhsChange
+
         conds = [EhsChange.is_deleted.is_(False)]
         if department:
             conds.append(EhsChange.department.ilike(f"%{department}%"))
+        # legacy created_at 为镜像首次插入时间（与直读 created_time 存在受控
+        # 偏差，同排序偏差口径）；直读开着时不走本分支
+        if d_from:
+            conds.append(EhsChange.created_at >= d_from)
+        if d_to:
+            conds.append(EhsChange.created_at < _next_day(d_to))
         if change_type:
             conds.append(EhsChange.change_type == change_type.strip())
         if grade := _norm_choice(change_grade, {"重大": "major", "一般": "general"}):
@@ -2220,6 +2298,8 @@ async def query_work_ticket_reviews(
 async def query_hazard_identifications(
     ctx: RunContext[SafetyDeps],
     department: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     position: str | None = None,
     risk_stage: str | None = None,
     risk_level: str | None = None,
@@ -2231,11 +2311,14 @@ async def query_hazard_identifications(
     """查询危险源辨识记录明细（LEC 评级结果）。
 
     每条含辨识的作业活动/设备设施、危险因素、可能事故、固有/残余/事后
-    三阶段 LEC 评级（一级/重大 ～ 四级/低）。可按部门、岗位、评级阶段
-    与等级、整体状态筛选。
+    三阶段 LEC 评级（一级/重大 ～ 四级/低）。可按部门、日期区间、岗位、
+    评级阶段与等级、整体状态筛选。统计某月辨识数量（如"本月辨识了多少
+    条"）用 date_from/date_to 圈定区间看 total。
 
     Args:
         department: 部门名称，模糊匹配（如"提炼工程五部"）
+        date_from: 起始日期（ISO，如 2026-10-01；按记录创建时间=辨识提交日，可选）
+        date_to: 结束日期（ISO，含当日，如 2026-10-31，可选）
         position: 岗位，模糊匹配（可选）
         risk_stage: 评级阶段（inherent=固有 / residual=残余 / post=事后，可选；
             需与 risk_level 搭配使用）
@@ -2252,49 +2335,62 @@ async def query_hazard_identifications(
           三阶段风险等级/管控层级/建议措施/整体状态/飞书链接）
         - total: 满足条件的总条数
 
-    示例：提炼五部有哪些重大风险辨识；残余风险为一般的辨识记录。
+    示例：本月辨识了多少条危险源；提炼五部有哪些重大风险辨识。
     """
     # 直读分支（批次四-2）：DIRECT 开启时走危险源辨识表 Bitable 直读，语义
     # 忠实复刻 legacy（spec D5：排序键 created_at→Bitable created_time 受控
     # 偏差、offset raw/limit cap 分页 quirk、脚本6 人工列缺失 quirk、
     # feishu_url 恒 None 死值复刻）；部门按提交人 identity 现算（镜像同规则，
     # spec D6）。关=逐行 legacy。事件链路/AI 流程/API/前端零改动（spec D1）。
+    from datetime import date as _date
+
     from app.modules.safety.service.hazard_id_direct import config as hid_config
 
-    if hid_config.direct_enabled():
-        from app.modules.safety.service.hazard_id_direct import (
-            query as hid_query,
-        )
-        from app.modules.safety.service.hazard_id_direct import (
-            reader as hid_reader,
-        )
-
-        views = await hid_reader.open_reader().fetch_all()
-        departments = await hid_query.resolve_departments(
-            ctx.deps.db, {v.submitter_name for v in views},
-        )
-        items, total = hid_query.hazard_identifications(
-            views,
-            departments=departments,
-            department=department,
-            position=position,
-            risk_stage=risk_stage,
-            risk_level=risk_level,
-            overall_status=overall_status,
-            keyword=keyword,
-            page=page,
-            page_size=page_size,
-        )
-        return _detail_result(items, page, page_size, total)
-
-    from sqlalchemy import func, or_, select
-
-    from app.modules.safety.models import HazardIdentification
-
     try:
+        d_from = _date.fromisoformat(date_from) if date_from else None
+        d_to = _date.fromisoformat(date_to) if date_to else None
+
+        if hid_config.direct_enabled():
+            from app.modules.safety.service.hazard_id_direct import (
+                query as hid_query,
+            )
+            from app.modules.safety.service.hazard_id_direct import (
+                reader as hid_reader,
+            )
+
+            views = await hid_reader.open_reader().fetch_all()
+            departments = await hid_query.resolve_departments(
+                ctx.deps.db, {v.submitter_name for v in views},
+            )
+            items, total = hid_query.hazard_identifications(
+                views,
+                departments=departments,
+                department=department,
+                position=position,
+                risk_stage=risk_stage,
+                risk_level=risk_level,
+                overall_status=overall_status,
+                keyword=keyword,
+                date_from=d_from,
+                date_to=d_to,
+                page=page,
+                page_size=page_size,
+            )
+            return _detail_result(items, page, page_size, total)
+
+        from sqlalchemy import func, or_, select
+
+        from app.modules.safety.models import HazardIdentification
+
         conds = [HazardIdentification.is_deleted.is_(False)]
         if department:
             conds.append(HazardIdentification.department.ilike(f"%{department}%"))
+        # legacy created_at 为镜像首次插入时间（与直读 created_time 存在受控
+        # 偏差，同排序偏差口径）；直读开着时不走本分支
+        if d_from:
+            conds.append(HazardIdentification.created_at >= d_from)
+        if d_to:
+            conds.append(HazardIdentification.created_at < _next_day(d_to))
         if position:
             conds.append(HazardIdentification.position.ilike(f"%{position}%"))
         if risk_stage and risk_level:
@@ -2639,30 +2735,47 @@ async def query_org_posts(
     ctx: RunContext[SafetyDeps],
     dept: str | None = None,
     keyword: str | None = None,
+    family: str | None = None,
 ) -> dict[str, Any]:
-    """查询全厂岗位字典（3.x 平台全员主档去重）。
+    """查询全厂岗位字典（3.x 平台全员主档去重；#4 可按岗位族过滤）。
 
-    「厂里冻干岗位有哪些」可答：返回岗位（postName 分组）× 部门列表 × 人数。
+    「厂里冻干岗位有哪些」「特种作业相关岗位有哪些」可答：返回岗位
+    （postName 分组）× 部门列表 × 人数，行带岗位族归类（未归类为 null）。
     个人明细不返回（隐私口径，平台主档身份证为空）。
 
     Args:
         dept: 部门名（包含匹配，如"精制"）
         keyword: 岗位名关键词（包含匹配，如"冻干"）
+        family: 岗位族过滤（#4 九族枚举之一，如"特种作业相关"；「未归类」
+            可查尚未归类的岗位）
 
     Returns:
-        {status, fetched_at, message, total, posts: [{post_name, dept_names, headcount}]}
+        {status, fetched_at, message, total, truncated, families,
+         posts: [{post_name, dept_names, headcount, family}]}
     """
     from app.modules.safety.service.org_directory import open_org_posts_service
+    from app.modules.safety.service.org_post_families import (
+        build_family_aggregation,
+        family_map_for_posts,
+    )
 
     payload = await open_org_posts_service().get_payload(dept=dept, keyword=keyword)
     posts = payload["posts"]
+    family_map = await family_map_for_posts(ctx.deps.db)
+    families = build_family_aggregation(
+        open_org_posts_service().cached_all_posts() or posts, family_map
+    )
+    rows = [{**p, "family": family_map.get(p["post_name"])} for p in posts]
+    if family:
+        rows = [r for r in rows if (r["family"] or "未归类") == family]
     # 防刷屏：超出 50 条截断并提示（岗位字典全量约 300+，按需收窄关键词）
-    capped = posts[:50]
+    capped = rows[:50]
     return {
         "status": payload["status"],
         "fetched_at": payload["fetched_at"],
         "message": payload["message"],
-        "total": len(posts),
-        "truncated": len(posts) > len(capped),
+        "total": len(rows),
+        "truncated": len(rows) > len(capped),
+        "families": families,
         "posts": capped,
     }

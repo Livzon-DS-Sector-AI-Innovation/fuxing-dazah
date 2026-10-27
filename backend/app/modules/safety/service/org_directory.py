@@ -139,6 +139,15 @@ class OrgPostsService:
             "posts": posts,
         }
 
+    def cached_all_posts(self) -> list[dict[str, Any]] | None:
+        """缓存内全量岗位行（无过滤口径；未构建缓存时 None）。
+
+        #4 族聚合用：聚合要全厂口径，不受 dept/keyword 过滤影响。
+        """
+        if self._entry is None:
+            return None
+        return list(self._entry.posts)
+
 
 def _filter_posts(
     posts: list[dict[str, Any]],
