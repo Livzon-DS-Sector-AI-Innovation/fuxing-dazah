@@ -592,10 +592,10 @@ export function FacilityMapCard() {
   }
 
   // 名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让：先占位全部落点徽标
-  // 矩形，再按分区面积降序尝试放标签——与已放标签/徽标相交即跳过
-  // （相邻重叠分区如米尔贝/提四米贝锚点几乎重合，全画必叠；放大后字号
-  // 变小、放得下的变多，逐级显现）
-  const labels = useMemo(() => {
+  // 矩形，再按分区面积降序放标签；每个标签依次尝试首选位（有落点=徽标
+  // 下方、无落点=质心下方）与备选位（质心上方），全碰撞才跳过——相邻
+  // 重叠分区（米尔贝/提四米贝同轮廓）必跳一个，放大后逐级显现
+  const labels = useMemo<(RenderedDistrict & { dy: number })[]>(() => {
     const fs = 13 / zoom
     const placed: { x1: number; y1: number; x2: number; y2: number }[] = []
     for (const pin of data?.pins ?? []) {
@@ -609,28 +609,32 @@ export function FacilityMapCard() {
         y2: rendered.anchor[1] + 11 / zoom,
       })
     }
+    const hits = (r: { x1: number; y1: number; x2: number; y2: number }) =>
+      placed.some(p => r.x1 < p.x2 && r.x2 > p.x1 && r.y1 < p.y2 && r.y2 > p.y1)
     const cands = RENDERED.filter(
       ({ dist, bbox }) => bbox[2] >= dist.distName.length * fs * 0.85,
     ).sort((a, b) => b.bbox[2] * b.bbox[3] - a.bbox[2] * a.bbox[3])
-    const out: RenderedDistrict[] = []
+    const out: (RenderedDistrict & { dy: number })[] = []
     for (const item of cands) {
       const w = item.dist.distName.length * fs * 0.95
       const h = fs * 1.3
-      const cy = item.anchor[1] + (pinById.get(item.dist.distId) ? 24 : 5) / zoom
-      const rect = {
-        x1: item.anchor[0] - w / 2,
-        y1: cy - h / 2,
-        x2: item.anchor[0] + w / 2,
-        y2: cy + h / 2,
+      const pinned = pinById.get(item.dist.distId) !== undefined
+      let settled: number | null = null
+      for (const dy of pinned ? [24] : [5, -16]) {
+        const cy = item.anchor[1] + dy / zoom
+        const rect = {
+          x1: item.anchor[0] - w / 2,
+          y1: cy - h / 2,
+          x2: item.anchor[0] + w / 2,
+          y2: cy + h / 2,
+        }
+        if (!hits(rect)) {
+          settled = dy
+          placed.push(rect)
+          break
+        }
       }
-      if (
-        placed.some(
-          p => rect.x1 < p.x2 && rect.x2 > p.x1 && rect.y1 < p.y2 && rect.y2 > p.y1,
-        )
-      )
-        continue
-      placed.push(rect)
-      out.push(item)
+      if (settled !== null) out.push({ ...item, dy: settled })
     }
     return out
   }, [zoom, pinById, data])
@@ -697,9 +701,8 @@ export function FacilityMapCard() {
               <svg
                 ref={svgRef}
                 viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
-                className="select-none"
+                className="w-full select-none"
                 style={{
-                  height: 'clamp(460px, 62vh, 760px)',
                   aspectRatio: `${VIEW_W} / ${GEOM.viewH}`,
                   touchAction: 'none',
                   cursor: panning ? 'grabbing' : 'grab',
@@ -744,12 +747,12 @@ export function FacilityMapCard() {
                     </g>
                   )
                 })}
-                {labels.map(({ dist, anchor }) => (
+                {labels.map(({ dist, anchor, dy }) => (
                   <text
                     key={`lb-${dist.distId}`}
                     data-testid={`district-label-${dist.distId}`}
                     x={anchor[0]}
-                    y={anchor[1] + (pinById.get(dist.distId) ? 24 : 5) / zoom}
+                    y={anchor[1] + dy / zoom}
                     textAnchor="middle"
                     dominantBaseline="middle"
                     fontSize={13 / zoom}

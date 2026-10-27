@@ -181,7 +181,7 @@ describe('FacilityMapCard', () => {
     expect(labels.some(l => names.has(l.textContent ?? ''))).toBe(true)
   })
 
-  it('重叠分区名称上下错开不全叠（米尔贝/提四米贝锚点近重合，备选位避让）', async () => {
+  it('重叠分区名称不相交（米尔贝/提四米贝锚点近邻，贪心避让保证矩形分离）', async () => {
     renderWithQuery(<FacilityMapCard />)
     await screen.findAllByTestId(/^district-poly-/)
     await waitFor(() => {
@@ -189,10 +189,20 @@ describe('FacilityMapCard', () => {
       const tiSi = document.querySelector('[data-testid="district-label-20"]')
       expect(milbei).toBeTruthy()
       expect(tiSi).toBeTruthy()
-      // 备选位生效：两标签 y 至差一个字号以上（zoom=1 时 fs=13 viewBox 单位）
-      const y1 = Number(milbei!.getAttribute('y'))
-      const y2 = Number(tiSi!.getAttribute('y'))
-      expect(Math.abs(y1 - y2)).toBeGreaterThanOrEqual(13)
+      // 与避让算法同口径的矩形（zoom=1：fs=13，w=len*fs*0.95，h=fs*1.3）：
+      // 两标签矩形必须不相交（x 分离或 y 分离）
+      const fs = 13
+      const rectOf = (el: Element, name: string) => {
+        const w = name.length * fs * 0.95
+        const x = Number(el.getAttribute('x'))
+        const y = Number(el.getAttribute('y'))
+        return { x1: x - w / 2, x2: x + w / 2, y1: y - fs * 0.65, y2: y + fs * 0.65 }
+      }
+      const a = rectOf(milbei!, '米尔贝')
+      const b = rectOf(tiSi!, '提四米贝')
+      const separated =
+        a.x2 <= b.x1 || b.x2 <= a.x1 || a.y2 <= b.y1 || b.y2 <= a.y1
+      expect(separated).toBe(true)
     })
   })
 })
