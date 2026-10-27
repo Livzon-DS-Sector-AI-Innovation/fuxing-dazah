@@ -152,6 +152,10 @@ class TestEndpoint:
                     "posts": [{"post_name": "电工", "dept_names": ["动力部"], "headcount": 3}],
                 }
 
+            def cached_all_posts(self) -> list[dict] | None:
+                # #4 族聚合的全厂口径来源（无缓存时 API 回退过滤后的 posts）
+                return [{"post_name": "电工", "dept_names": ["动力部"], "headcount": 3}]
+
         monkeypatch.setattr(api_module, "open_org_posts_service", lambda: _StubService())
         resp = await client.get("/api/v1/safety/contractor-workers/org-posts")
         assert resp.status_code == 200, resp.text
