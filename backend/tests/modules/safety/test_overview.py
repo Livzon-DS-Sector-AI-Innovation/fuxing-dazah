@@ -339,8 +339,11 @@ class TestCollectSupervision:
 
 
 class TestCollectKeyRiskOps:
-    async def test_lists_today_approved_and_all_in_review(self, db_session: AsyncSession) -> None:
-        """表格列今日已通过 + 全部审批中（不限日期，与 in_progress 计数口径一致）。"""
+    async def test_lists_today_approved_and_in_review_only(self, db_session: AsyncSession) -> None:
+        """整卡当日口径：清单与计数均只含今日（start_time 落今日）的已通过/审批中。
+
+        历史积压审批中（2026-10-27 拍板）与昨日已通过都不进卡。
+        """
         today = _bj_today()
         y0 = _bj_day_start_utc(today)
         db = db_session
@@ -361,25 +364,22 @@ class TestCollectKeyRiskOps:
             )
 
         await add("A", "已通过", timedelta(hours=14))  # 今日 14:00 已通过
-        await add("B", "已通过", timedelta(days=-1))  # 昨日已通过 → 不进列表
+        await add("B", "已通过", timedelta(days=-1))  # 昨日已通过 → 不进卡
         await add("C", "审批中", timedelta(hours=16))  # 今日 16:00 审批中
-        await add("D", "审批中", timedelta(days=-1))  # 昨日报备仍审批中 → 进列表
-        await add("E", "审批中", None)  # 审批中无开始时间 → 进列表沉底
+        await add("D", "审批中", timedelta(days=-1))  # 昨日报备仍审批中 → 不进卡
+        await add("E", "审批中", None)  # 审批中无开始时间 → 无法落日 → 不进卡
         await db.flush()
 
         data = await collect_key_risk_ops(db)
 
         assert data["today_approved"] == 1
-        assert data["in_progress"] == 3
-        # 合并清单：C(16:00) > A(14:00) > D(昨日) > E(无开始时间)
-        assert [it["operation_content"] for it in data["items"]] == [
-            "作业C", "作业A", "作业D", "作业E",
-        ]
+        assert data["in_progress"] == 1
+        # 当日清单：C(16:00) > A(14:00)；D/E 为其他日期或无日期，均不列
+        assert [it["operation_content"] for it in data["items"]] == ["作业C", "作业A"]
         assert all(
             set(it) == {"start_time", "department", "operation_content", "apply_status"}
             for it in data["items"]
         )
-        assert data["items"][-1]["start_time"] is None
 
 
 class TestCollectHazards:

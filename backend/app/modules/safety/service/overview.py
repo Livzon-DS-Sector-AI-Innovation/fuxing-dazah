@@ -311,28 +311,30 @@ def _sort_key_risk_items_desc(items: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 async def collect_key_risk_ops(db: AsyncSession) -> dict[str, Any]:
-    """关键风险作业：今日通过/审批中计数 + 当日已通过与全部审批中清单。
+    """关键风险作业：当日已通过/审批中计数 + 当日清单（整卡当日口径）。
 
-    审批中不限日期（与 in_progress 计数口径一致——昨日报备今天仍在批也算）。
+    审批中同样按 start_time 落在今日过滤——历史积压的审批中不在本卡展示
+    （2026-10-27 用户拍板：其他日期的不展示）。台账页 KPI 仍为全量口径。
     """
     service = KeyRiskOperationReportService(db)
-    stats = await service.get_stats()
     today = _bj_today()
-    approved, _ = await service.get_reports(
+    approved, approved_total = await service.get_reports(
         0,
         _DRILLDOWN_LIMIT,
         date_from=today,
         date_to=today,
         apply_status="已通过",
     )
-    in_review, _ = await service.get_reports(
+    in_review, in_review_total = await service.get_reports(
         0,
         _DRILLDOWN_LIMIT,
+        date_from=today,
+        date_to=today,
         apply_status="审批中",
     )
     return {
-        "today_approved": stats.get("today_approved", 0),
-        "in_progress": stats.get("in_progress", 0),
+        "today_approved": approved_total,
+        "in_progress": in_review_total,
         "items": _sort_key_risk_items_desc(
             [_key_risk_item(it) for it in approved]
             + [_key_risk_item(it) for it in in_review]
@@ -456,7 +458,7 @@ def _build_module_health(parts: dict[str, Any | None]) -> list[dict[str, Any]]:
             "status": "ok",
             "metric": (
                 f"今日通过 {key_risk_ops['today_approved']} / "
-                f"审批中 {key_risk_ops['in_progress']}"
+                f"今日审批中 {key_risk_ops['in_progress']}"
                 if key_risk_ops
                 else None
             ),

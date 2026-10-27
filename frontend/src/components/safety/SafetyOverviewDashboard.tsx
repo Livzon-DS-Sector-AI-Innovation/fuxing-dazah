@@ -364,7 +364,7 @@ function KeyRiskOpsTable({ data }: { data: OverviewKeyRiskOps | null }) {
   return (
     <SectionCard
       title="今日关键风险作业"
-      description={`今日已通过 ${data?.today_approved ?? 0} 项 · 审批中 ${data?.in_progress ?? 0} 项`}
+      description={`今日已通过 ${data?.today_approved ?? 0} 项 · 今日审批中 ${data?.in_progress ?? 0} 项`}
     >
       {data ? (
         <Table
