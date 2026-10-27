@@ -11,20 +11,32 @@
  * 屏幕等大，名称标注随放大逐级显现（放得下才显示）。
  * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
  * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
- * 底部「未映射 N 处」可展开清单（纯展示，AI 建议入口另议）。
+ * 底部「未映射 N 处」为入口（#2）：点击打开 AI 建议确认 Modal——
+ * 扫描近 30 天未映射文本 → AI 建议（置信度/理由）→ 人工逐条/批量确认
+ * 写映射资产（只增不改），或忽略。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Modal, Spin, Table, Tag } from 'antd'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Button, Modal, Spin, Table, Tag, message } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { MapPinned, Maximize, Minus, Plus } from 'lucide-react'
 import { EmptyGuide, SectionCard } from '@/components/ui-kit'
 import {
+  fetchDistrictSuggestions,
   fetchFacilityMapPins,
+  confirmDistrictSuggestion,
+  confirmHighDistrictSuggestions,
+  ignoreDistrictSuggestion,
+  scanDistrictSuggestions,
+  type DistrictSuggestionRow,
   type FacilityMapDistrictPin,
   type FacilityMapPinRef,
 } from '@/lib/api/safety/facility-map'
+import {
+  AiSuggestionConfirmModal,
+  ConfidenceTag,
+} from '@/components/safety/aiConfirm/AiSuggestionConfirmModal'
 import asset from '@/data/tiji-risk-districts.json'
 
 interface RailAsset {
@@ -312,13 +324,56 @@ function DistrictModal({
 const MAP_BTN_CLS =
   'flex h-7 w-7 items-center justify-center rounded-md border border-[var(--color-hairline)] bg-white/90 text-[var(--color-charcoal)] shadow-sm transition-colors hover:bg-[var(--color-surface)]'
 
+// ── #2 AI 建议确认列表业务列 ────────────────────────────────────────
+const SUGGESTION_COLUMNS: TableColumnsType<DistrictSuggestionRow> = [
+  {
+    title: '地点文本',
+    dataIndex: 'location_text',
+    width: 180,
+    ellipsis: true,
+  },
+  { title: '次数', dataIndex: 'count', width: 64 },
+  {
+    title: '来源',
+    dataIndex: 'kinds',
+    width: 140,
+    render: (kinds: string[]) =>
+      kinds.map(k => (
+        <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
+          {KIND_LABEL[k] ?? k}
+        </Tag>
+      )),
+  },
+  {
+    title: 'AI 建议分区',
+    dataIndex: 'dist_name',
+    width: 140,
+    render: (v: string | null) =>
+      v ? <span className="font-medium">{v}</span> : (
+        <span className="text-[var(--color-steel)]">无法判断</span>
+      ),
+  },
+  {
+    title: '置信度',
+    dataIndex: 'confidence',
+    width: 76,
+    render: (v: string) => <ConfidenceTag value={v} />,
+  },
+  {
+    title: '理由',
+    dataIndex: 'reason',
+    ellipsis: true,
+  },
+]
+
 export function FacilityMapCard() {
+  const queryClient = useQueryClient()
   const { data, isLoading, isError } = useQuery({
     queryKey: ['safety', 'facility-map-pins'],
     queryFn: fetchFacilityMapPins,
   })
   const [openDist, setOpenDist] = useState<FacilityMapDistrictPin | null>(null)
-  const [showUnmapped, setShowUnmapped] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [vb, setVb] = useState<ViewBox>(INITIAL_VB)
   const [panning, setPanning] = useState(false)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -326,6 +381,56 @@ export function FacilityMapCard() {
   vbRef.current = vb
   const dragRef = useRef<{ cx: number; cy: number; vb: ViewBox; moved: boolean } | null>(null)
   const suppressClickRef = useRef(false)
+
+  // #2 确认页工作集（打开才拉）
+  const suggestionsQuery = useQuery({
+    queryKey: ['safety', 'facility-map-suggestions'],
+    queryFn: () => fetchDistrictSuggestions('pending'),
+    enabled: confirmOpen,
+  })
+
+  const invalidateAll = () => {
+    void queryClient.invalidateQueries({ queryKey: ['safety', 'facility-map-suggestions'] })
+    void queryClient.invalidateQueries({ queryKey: ['safety', 'facility-map-pins'] })
+  }
+
+  const scanMutation = useMutation({
+    mutationFn: () => scanDistrictSuggestions(30),
+    onSuccess: r => {
+      message.success(
+        `扫描完成：候选 ${r.candidates} 条，AI 建议 ${r.suggested} 条（无法判断 ${r.no_judgement}）`,
+      )
+      invalidateAll()
+    },
+    onError: e => message.error(e instanceof Error ? e.message : '扫描失败，请稍后重试'),
+  })
+
+  const confirmMutation = useMutation({
+    mutationFn: (id: string) => confirmDistrictSuggestion(id),
+    onSuccess: () => {
+      message.success('已确认并写入映射')
+      invalidateAll()
+    },
+    onError: e => message.error(e instanceof Error ? e.message : '确认失败'),
+  })
+
+  const ignoreMutation = useMutation({
+    mutationFn: (id: string) => ignoreDistrictSuggestion(id),
+    onSuccess: () => {
+      message.success('已忽略')
+      invalidateAll()
+    },
+    onError: e => message.error(e instanceof Error ? e.message : '忽略失败'),
+  })
+
+  const confirmHighMutation = useMutation({
+    mutationFn: confirmHighDistrictSuggestions,
+    onSuccess: r => {
+      message.success(`已批量确认 ${r.confirmed} 条`)
+      invalidateAll()
+    },
+    onError: e => message.error(e instanceof Error ? e.message : '批量确认失败'),
+  })
 
   const zoom = VIEW_W / vb.w
   const pinById = useMemo(
@@ -584,33 +689,16 @@ export function FacilityMapCard() {
             </div>
           </div>
           <div className="flex items-start justify-between gap-3 border-t border-[var(--color-hairline-soft)] pt-2 text-[12px] text-[var(--color-steel)]">
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-[var(--color-surface)]"
-              onClick={() => setShowUnmapped(v => !v)}
+            <Button
+              type="link"
+              size="small"
+              className="h-auto p-0 text-[12px]"
+              onClick={() => setConfirmOpen(true)}
             >
-              未映射 {data.unmapped.length} 处（{unmappedEvents} 条事件）
-              <span className="text-[10px]">{showUnmapped ? '▲' : '▼'}</span>
-            </button>
-            <span>未映射=地点文本未能对应分区（映射底座只读，补充映射另行处理）</span>
+              未映射 {data.unmapped.length} 处（{unmappedEvents} 条事件）· AI 建议映射 →
+            </Button>
+            <span>未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）</span>
           </div>
-          {showUnmapped && (
-            <div className="flex max-h-32 flex-col gap-1 overflow-y-auto rounded-md bg-[var(--color-surface)] px-3 py-2">
-              {data.unmapped.map(u => (
-                <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
-                  <span className="truncate text-[var(--color-charcoal)]">{u.text}</span>
-                  <span className="flex shrink-0 items-center gap-1">
-                    {u.kinds.map(k => (
-                      <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
-                        {KIND_LABEL[k] ?? k}
-                      </Tag>
-                    ))}
-                    <span>×{u.count}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
       <DistrictModal
@@ -618,6 +706,32 @@ export function FacilityMapCard() {
         distName={openDist ? BY_DIST_ID.get(openDist.dist_id)?.dist.distName ?? openDist.dist_id : ''}
         date={data?.date ?? ''}
         onClose={() => setOpenDist(null)}
+      />
+      <AiSuggestionConfirmModal<DistrictSuggestionRow>
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="未映射地点 · AI 分区建议确认"
+        description="扫描近 30 天作业票/消防/中控的未映射地点文本，AI 逐条给出分区建议与置信度；确认后写入映射资产（location_district_map，只增不改），忽略后不再建议。"
+        rows={suggestionsQuery.data ?? []}
+        loading={suggestionsQuery.isLoading}
+        columns={SUGGESTION_COLUMNS}
+        canConfirm={row => row.dist_id !== null}
+        onConfirm={row => confirmMutation.mutateAsync(row.id)}
+        onIgnore={row => ignoreMutation.mutateAsync(row.id)}
+        batchConfirmHigh={{ run: confirmHighMutation.mutateAsync }}
+        extraFooter={
+          <span className="flex items-center gap-2 text-[12px] text-[var(--color-steel)]">
+            <Button
+              size="small"
+              loading={scanMutation.isPending}
+              disabled={scanMutation.isPending}
+              onClick={() => scanMutation.mutate()}
+            >
+              扫描近 30 天生成建议
+            </Button>
+            <span>含 AI 批量调用，候选多时需数分钟</span>
+          </span>
+        }
       />
     </SectionCard>
   )

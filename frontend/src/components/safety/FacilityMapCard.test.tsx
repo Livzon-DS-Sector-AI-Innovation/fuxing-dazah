@@ -40,9 +40,31 @@ const PINS = {
 
 vi.mock('@/lib/api/safety/facility-map', () => ({
   fetchFacilityMapPins: vi.fn(async () => PINS),
+  fetchDistrictSuggestions: vi.fn(async () => SUGGESTIONS),
+  scanDistrictSuggestions: vi.fn(async () => ({
+    days: 30, unmapped_texts: 2, candidates: 2, batches: 1,
+    suggested: 2, no_judgement: 1, batch_id: 'b1',
+  })),
+  confirmDistrictSuggestion: vi.fn(async () => ({})),
+  ignoreDistrictSuggestion: vi.fn(async () => ({})),
+  confirmHighDistrictSuggestions: vi.fn(async () => ({ confirmed: 1, map_created: 1 })),
 }))
 
 const RAIL_COUNT = asset.districts.reduce((n, d) => n + d.rails.length, 0)
+
+// #2 AI 建议确认页工作集（打开 Modal 才拉取）
+const SUGGESTIONS = [
+  {
+    id: 's1', location_text: '212罐', count: 3, kinds: ['job'],
+    dist_id: '27', dist_name: '新罐区', confidence: 'high' as const,
+    reason: '位于新罐区', batch_id: 'b1', status: 'pending' as const, created_at: null,
+  },
+  {
+    id: 's2', location_text: '新罐区西门', count: 1, kinds: ['central'],
+    dist_id: null, dist_name: null, confidence: 'low' as const,
+    reason: '无法判断', batch_id: 'b1', status: 'pending' as const, created_at: null,
+  },
+]
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -72,14 +94,18 @@ describe('FacilityMapCard', () => {
     expect(modal.textContent).toContain('火灾报警')
   })
 
-  it('底部未映射汇总行可展开清单', async () => {
+  it('底部未映射入口打开 AI 建议确认 Modal（#2）', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
-    const summary = await screen.findByText(/未映射 2 处/)
-    expect(screen.queryByText('212罐')).not.toBeInTheDocument()
-    await user.click(summary)
+    const entry = await screen.findByText(/未映射 2 处/)
+    await user.click(entry)
+    // 确认页工作集：建议分区名/置信度/理由 + 触发扫描按钮在 footer
+    expect(await screen.findByText(/AI 分区建议确认/)).toBeInTheDocument()
     expect(await screen.findByText('212罐')).toBeInTheDocument()
     expect(screen.getByText('新罐区')).toBeInTheDocument()
+    expect(screen.getByText('位于新罐区')).toBeInTheDocument()
+    // 触发扫描按钮在 footer
+    expect(screen.getByText('扫描近 30 天生成建议')).toBeInTheDocument()
   })
 
   it('接口失败显示降级空态', async () => {
