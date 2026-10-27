@@ -513,3 +513,44 @@ def compute_std_curve(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, 
         "intercept": round(a_inter, 4) if a_inter is not None else None,
         "correl": round(r, 4) if r is not None else None,
     }
+
+
+def compute_group_rrf(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """归一化法·分组校正因子（照替考拉宁有关物质公式，输出百分数）。
+
+    校正后总面积 = 主组总峰面积 + RRF×校正组总面积；
+    校正组成员% = RRF×面积/校正总面积×100；其余% = 面积/校正总面积×100；
+    主组% = 主组总峰面积/校正总面积×100。
+    inputs 键约定：main_total（主组总峰面积）、area_<key>（各组分峰面积，空/0=未检出）。
+    """
+    rrf = float(cfg.get("rrf") or 1)
+    items_cfg: list[dict[str, Any]] = cfg.get("items") or []
+    rrf_keys: set[str] = set(cfg.get("rrf_group") or [])
+
+    def _area(v: Any) -> float:
+        f = _num(v)
+        return f if f is not None else 0.0
+
+    main_total = _area(inputs.get("main_total"))
+    areas = {str(it["key"]): _area(inputs.get(f"area_{it['key']}")) for it in items_cfg}
+    rrf_sum = sum(areas[k] for k in rrf_keys if k in areas)
+    denom = main_total + rrf * rrf_sum
+    items: list[dict[str, Any]] = []
+    for it in items_cfg:
+        key = str(it["key"])
+        a = areas[key]
+        num = rrf * a if key in rrf_keys else a
+        value = num / denom * 100 if denom > 0 else None
+        items.append({
+            "std_name": it["std_name"], "label": it["label"], "value": value,
+            "nd": a == 0,
+            "detail": f"{value:.4g}%" if value is not None else "缺数据",
+        })
+    main_value = main_total / denom * 100 if denom > 0 else None
+    items.append({
+        "std_name": cfg.get("main_std_name") or "主组分",
+        "label": cfg.get("main_std_name") or "主组分",
+        "value": main_value, "nd": False,
+        "detail": f"{main_value:.4g}%" if main_value is not None else "缺数据",
+    })
+    return {"mode": "group_rrf", "items": items, "denom": denom}

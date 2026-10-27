@@ -232,3 +232,29 @@ def test_std_curve_math():
     assert result["correl"] is not None and result["correl"] > 0.99
     # 未填面积 → 缺数据
     assert result["items"][1]["value"] is None
+
+
+def test_group_rrf_math():
+    cfg = {
+        "mode": "group_rrf", "rrf": 0.83,
+        "rrf_group": ["S3"],
+        "main_std_name": "A2系",
+        "items": [
+            {"key": "S3", "label": "A3系（S3）", "std_name": "A3系"},
+            {"key": "S2_1", "label": "A2-1系", "std_name": "A2-1系"},
+        ],
+    }
+    inputs = {
+        "main_total": 900000,  # A2系总峰面积
+        "area_S3": 100000,
+        "area_S2_1": 100000,
+    }
+    result = calc_engine.compute_group_rrf(cfg, inputs)
+    by_name = {i["std_name"]: i for i in result["items"]}
+    denom = 900000 + 0.83 * 100000  # 983000
+    # A3系% = 0.83×100000/983000×100
+    assert abs(by_name["A3系"]["value"] - 0.83 * 100000 / denom * 100) < 1e-9
+    # A2-1系% = 100000/983000×100
+    assert abs(by_name["A2-1系"]["value"] - 100000 / denom * 100) < 1e-9
+    # 主组 = 900000/983000×100
+    assert abs(by_name["A2系"]["value"] - 900000 / denom * 100) < 1e-9
