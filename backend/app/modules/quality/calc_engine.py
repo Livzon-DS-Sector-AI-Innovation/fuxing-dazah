@@ -207,3 +207,130 @@ def compute_external_std_content(cfg: dict[str, Any], inputs: dict[str, Any]) ->
             "std_rsd": round(std_rsd, 2) if std_rsd is not None else None,
         }],
     }
+
+
+def compute_content_multi(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """外标法含量·多组分（照米尔贝肟含量表公式，输出百分数）。
+
+    组分含量% = 标准1质量 × 组分含量 × 样面积 / 样质量
+              / 标准1该组分平均面积 / (1 - 水分%/100) × 100
+    总含量% = Σ组分含量%；标准1 峰面积 5 针 + 回针可选（回针仅计入 RSD 校验口径）。
+    inputs 键约定：std1_mass、std_content_<comp>、std_area_<comp>_1..6、
+    sample_mass_1..N、sample_area_<comp>_1..N、moisture。
+    """
+    samples = int(cfg.get("samples") or 3)
+    components: list[dict[str, Any]] = cfg.get("components") or []
+    std_mass = _num(inputs.get("std1_mass"))
+    moisture = _num(inputs.get("moisture")) or 0.0
+    items: list[dict[str, Any]] = []
+    for comp in components:
+        key = str(comp["key"])
+        std_content = _num(inputs.get(f"std_content_{key}"))
+        std_areas = [_num(inputs.get(f"std_area_{key}_{i}")) for i in range(1, 7)]
+        std_present = [a for a in std_areas if a is not None]
+        std_avg = sum(std_present) / len(std_present) if std_present else None
+        std_rsd = _rsd(std_present)
+        vals: list[float | None] = []
+        for i in range(1, samples + 1):
+            s_area = _num(inputs.get(f"sample_area_{key}_{i}"))
+            s_mass = _num(inputs.get(f"sample_mass_{i}"))
+            if s_area is None or s_mass is None or std_mass is None or std_content is None or std_avg is None:
+                vals.append(None)
+                continue
+            vals.append(
+                std_mass * std_content * s_area / s_mass / std_avg / (1 - moisture / 100) * 100
+            )
+        present = [v for v in vals if v is not None]
+        avg = sum(present) / len(present) if present else None
+        detail = " / ".join(
+            f"样{i} {v:.2f}%" if v is not None else f"样{i} 缺数据"
+            for i, v in enumerate(vals, start=1)
+        )
+        items.append({
+            "std_name": comp["std_name"],
+            "label": comp["label"],
+            "value": avg,
+            "detail": detail,
+            "std_avg": std_avg,
+            "std_rsd": round(std_rsd, 2) if std_rsd is not None else None,
+        })
+    # 总含量 = Σ组分（按样品维度从原始输入聚合）
+    total_by_sample: list[float | None] = []
+    for i in range(1, samples + 1):
+        s = 0.0
+        ok = True
+        for comp in components:
+            key = str(comp["key"])
+            s_area = _num(inputs.get(f"sample_area_{key}_{i}"))
+            s_mass = _num(inputs.get(f"sample_mass_{i}"))
+            std_content = _num(inputs.get(f"std_content_{key}"))
+            std_area_vals = [_num(inputs.get(f"std_area_{key}_{j}")) for j in range(1, 7)]
+            std_present2: list[float] = [a for a in std_area_vals if a is not None]
+            std_avg = sum(std_present2) / len(std_present2) if std_present2 else None
+            if s_area is None or s_mass is None or std_content is None or std_avg is None or std_mass is None:
+                ok = False
+                break
+            s += std_mass * std_content * s_area / s_mass / std_avg / (1 - moisture / 100) * 100
+        total_by_sample.append(s if ok else None)
+    present_t = [v for v in total_by_sample if v is not None]
+    items.append({
+        "std_name": cfg.get("total_std_name") or "总含量",
+        "label": "总含量",
+        "value": sum(present_t) / len(present_t) if present_t else None,
+        "detail": " / ".join(
+            f"样{i} {v:.2f}%" if v is not None else f"样{i} 缺数据"
+            for i, v in enumerate(total_by_sample, start=1)
+        ),
+        "nd": False,
+    })
+    return {"mode": "external_std_content_multi", "items": items}
+
+
+def compute_impurity_vs_std(cfg: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """有关物质·对标准溶液归一（照米尔贝肟有关物质公式，输出百分数）。
+
+    杂质% = 杂质峰面积 / 标准溶液c总面积 × 100；
+    总杂% = (供试品总峰面积 - Σ主组分面积) / 标准溶液c总面积 × 100。
+    inputs 键约定：std_c_area_<comp>（标准溶液c 各主组分峰面积）、
+    sample_total_1/2、sample_main_<comp>_1/2、imp_<key>_1/2（杂质面积，空/0=未检出）。
+    """
+    samples = int(cfg.get("samples") or 2)
+    components: list[dict[str, Any]] = cfg.get("components") or []
+    impurities: list[dict[str, Any]] = cfg.get("impurities") or []
+
+    def _area(v: Any) -> float:
+        f = _num(v)
+        return f if f is not None else 0.0
+
+    std_c = sum(_area(inputs.get(f"std_c_area_{c['key']}")) for c in components)
+    if std_c <= 0:
+        return {"mode": "impurity_vs_std", "items": [], "error": "标准溶液c面积未填写"}
+
+    items: list[dict[str, Any]] = []
+    for imp in impurities:
+        key = str(imp["key"])
+        vals: list[float] = []
+        for i in range(1, samples + 1):
+            vals.append(_area(inputs.get(f"imp_{key}_{i}")) / std_c * 100)
+        avg = sum(vals) / len(vals)
+        nd = all(v == 0 for v in vals)
+        detail = " / ".join(
+            f"第{i}份 {v:.4g}%{'（未检出）' if nd else ''}"
+            for i, v in enumerate(vals, start=1)
+        )
+        items.append({"std_name": imp["std_name"], "label": imp["label"], "value": avg, "nd": nd, "detail": detail})
+    # 总杂：总峰面积 - 主组分面积
+    tot_vals: list[float] = []
+    for i in range(1, samples + 1):
+        total = _area(inputs.get(f"sample_total_{i}"))
+        mains = sum(_area(inputs.get(f"sample_main_{c['key']}_{i}")) for c in components)
+        tot_vals.append(max(total - mains, 0.0) / std_c * 100)
+    avg_t = sum(tot_vals) / len(tot_vals)
+    items.append({
+        "std_name": cfg.get("total_std_name") or "总杂",
+        "label": "总杂",
+        "value": avg_t,
+        "nd": all(v == 0 for v in tot_vals),
+        "detail": " / ".join(f"第{i}份 {v:.4g}%" for i, v in enumerate(tot_vals, start=1)),
+    })
+    return {"mode": "impurity_vs_std", "items": items}

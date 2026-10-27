@@ -2,7 +2,7 @@
 
 import { Divider, InputNumber, Space, Table, Tag, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
-import type { CalcCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcNormalizationCfg } from '@/types/quality'
+import type { CalcCfg, CalcContentMultiCfg, CalcExternalStdCfg, CalcExternalStdContentCfg, CalcImpurityVsStdCfg, CalcNormalizationCfg } from '@/types/quality'
 
 const { Text } = Typography
 
@@ -27,6 +27,12 @@ export default function CalcForm({ cfg, inputs, onChange }: {
   }
   if (cfg.mode === 'external_std_content') {
     return <ContentForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'external_std_content_multi') {
+    return <ContentMultiForm cfg={cfg} inputs={inputs} set={set} />
+  }
+  if (cfg.mode === 'impurity_vs_std') {
+    return <ImpVsStdForm cfg={cfg} inputs={inputs} set={set} />
   }
   return <ExtForm cfg={cfg} inputs={inputs} set={set} />
 }
@@ -287,6 +293,201 @@ function ContentForm({ cfg, inputs, set }: {
       <div style={{ fontSize: 13 }}>
         <Text type="secondary">平均含量：</Text>
         <Tag color={avg != null ? 'blue' : 'default'}>{avg != null ? avg.toFixed(2) + '%' : '-'}</Tag>
+      </div>
+    </Space>
+  )
+}
+
+
+function ContentMultiForm({ cfg, inputs, set }: {
+  cfg: CalcContentMultiCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const moisture = num(inputs.moisture) ?? 0
+  const stdMass = num(inputs.std1_mass)
+  const compContent = (key: string, i: number) => {
+    const sArea = num(inputs[`sample_area_${key}_${i}`])
+    const sMass = num(inputs[`sample_mass_${i}`])
+    const stdContent = num(inputs[`std_content_${key}`])
+    const stdAreas = Array.from({ length: 6 }, (_, j) => num(inputs[`std_area_${key}_${j + 1}`]))
+    const stdPresent = stdAreas.filter((v): v is number => v != null)
+    const stdAvg = stdPresent.length ? stdPresent.reduce((a, b) => a + b, 0) / stdPresent.length : null
+    if (sArea == null || sMass == null || stdContent == null || stdAvg == null || stdMass == null) return null
+    return (stdMass * stdContent * sArea) / sMass / stdAvg / (1 - moisture / 100) * 100
+  }
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        外标法含量（多组分）：组分% = 标准1质量×组分含量×样面积/样质量/标准1平均面积/(1-水分%)×100；总含量 = Σ组分%。
+      </Text>
+      <Space wrap size={10}>
+        <span style={{ fontSize: 12.5 }}>标准1质量(mg)
+          <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs.std1_mass}
+            onChange={(v) => set('std1_mass', v)} />
+        </span>
+        <span style={{ fontSize: 12.5 }}>水分%
+          <InputNumber size="small" style={{ width: 80, marginLeft: 4 }} value={inputs.moisture}
+            onChange={(v) => set('moisture', v)} />
+        </span>
+      </Space>
+      {cfg.components.map((comp) => {
+        const stdAreas = Array.from({ length: 6 }, (_, j) => num(inputs[`std_area_${comp.key}_${j + 1}`]))
+        const stdPresent = stdAreas.filter((v): v is number => v != null)
+        const stdAvg = stdPresent.length ? stdPresent.reduce((a, b) => a + b, 0) / stdPresent.length : null
+        const stdRsd = stdPresent.length >= 2 && stdAvg
+          ? (Math.sqrt(stdPresent.reduce((a, v) => a + (v - stdAvg) ** 2, 0) / (stdPresent.length - 1)) / stdAvg) * 100
+          : null
+        const vals = Array.from({ length: cfg.samples }, (_, i) => compContent(comp.key, i + 1))
+        const present = vals.filter((v): v is number => v != null)
+        const avg = present.length ? present.reduce((a, b) => a + b, 0) / present.length : null
+        return (
+          <div key={comp.key} style={{ border: '1px solid #e5e5e5', borderRadius: 8, padding: 10 }}>
+            <Text strong>{comp.label}</Text>
+            <Space wrap size={10} style={{ marginTop: 6 }}>
+              <span style={{ fontSize: 12.5 }}>组分含量
+                <InputNumber size="small" style={{ width: 80, marginLeft: 4 }} value={inputs[`std_content_${comp.key}`]}
+                  onChange={(v) => set(`std_content_${comp.key}`, v)} />
+              </span>
+            </Space>
+            <div style={{ marginTop: 6 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>标准1峰面积（5 针+回针）：</Text>
+              <Space wrap size={4} style={{ marginTop: 4 }}>
+                {stdAreas.map((_, j) => (
+                  <InputNumber key={j} size="small" style={{ width: 85 }} value={inputs[`std_area_${comp.key}_${j + 1}`]}
+                    onChange={(v) => set(`std_area_${comp.key}_${j + 1}`, v)} />
+                ))}
+                <Text style={{ fontSize: 12 }}>平均 <Text strong>{stdAvg != null ? stdAvg.toFixed(0) : '-'}</Text>　RSD{' '}
+                  <Text strong type={stdRsd != null && stdRsd > 2 ? 'danger' : undefined}>{stdRsd != null ? stdRsd.toFixed(2) + '%' : '-'}</Text>
+                </Text>
+              </Space>
+            </div>
+            <Space wrap size={10} style={{ marginTop: 6 }}>
+              {Array.from({ length: cfg.samples }, (_, i) => (
+                <span key={i} style={{ fontSize: 12.5 }}>
+                  样{i + 1}面积
+                  <InputNumber size="small" style={{ width: 95, marginLeft: 4 }} value={inputs[`sample_area_${comp.key}_${i + 1}`]}
+                    onChange={(v) => set(`sample_area_${comp.key}_${i + 1}`, v)} />
+                  　<Text>{vals[i] != null ? vals[i].toFixed(2) + '%' : '-'}</Text>
+                </span>
+              ))}
+            </Space>
+            <div style={{ marginTop: 4, fontSize: 13 }}>
+              <Text type="secondary">{comp.label} 平均：</Text>
+              <Tag color={avg != null ? 'blue' : 'default'}>{avg != null ? avg.toFixed(2) + '%' : '-'}</Tag>
+            </div>
+          </div>
+        )
+      })}
+      <div style={{ fontSize: 13 }}>
+        <Text type="secondary">样品质量（各份共用）：</Text>
+        <Space wrap size={6} style={{ marginTop: 4 }}>
+          {Array.from({ length: cfg.samples }, (_, i) => (
+            <span key={i} style={{ fontSize: 12.5 }}>
+              样{i + 1}质量(mg)
+              <InputNumber size="small" style={{ width: 90, marginLeft: 4 }} value={inputs[`sample_mass_${i + 1}`]}
+                onChange={(v) => set(`sample_mass_${i + 1}`, v)} />
+            </span>
+          ))}
+        </Space>
+      </div>
+    </Space>
+  )
+}
+
+type ImpRow = { key: string; label: string; v1: number | null; v2: number | null }
+
+function ImpVsStdForm({ cfg, inputs, set }: {
+  cfg: CalcImpurityVsStdCfg
+  inputs: Inputs
+  set: (k: string, v: number | null) => void
+}) {
+  const stdC = cfg.components.reduce((a, c) => a + (num(inputs[`std_c_area_${c.key}`]) ?? 0), 0)
+  const impPct = (key: string, i: number) => (stdC > 0 ? ((num(inputs[`imp_${key}_${i}`]) ?? 0) / stdC) * 100 : null)
+  const impColumns: TableColumnsType<ImpRow> = [
+    { title: '项目', dataIndex: 'label', width: 160 },
+    {
+      title: '第1份面积', key: 'a1', width: 130,
+      render: (_: unknown, r) => (
+        <InputNumber size="small" style={{ width: '100%' }} value={inputs[`imp_${r.key}_1`]}
+          onChange={(v) => set(`imp_${r.key}_1`, v)} />
+      ),
+    },
+    {
+      title: '第2份面积', key: 'a2', width: 130,
+      render: (_: unknown, r) => (
+        <InputNumber size="small" style={{ width: '100%' }} value={inputs[`imp_${r.key}_2`]}
+          onChange={(v) => set(`imp_${r.key}_2`, v)} />
+      ),
+    },
+    {
+      title: '第1份%', key: 'p1', width: 90,
+      render: (_: unknown, r) => r.v1 != null ? r.v1.toFixed(4) + '%' : '-',
+    },
+    {
+      title: '第2份%', key: 'p2', width: 90,
+      render: (_: unknown, r) => r.v2 != null ? r.v2.toFixed(4) + '%' : '-',
+    },
+    {
+      title: '平均%', key: 'avg', width: 100,
+      render: (_: unknown, r) => {
+        const both = [r.v1, r.v2].filter((v): v is number => v != null)
+        const avg = both.length ? both.reduce((a, b) => a + b, 0) / both.length : null
+        return avg != null ? <Text strong>{avg.toFixed(4)}%</Text> : '-'
+      },
+    },
+  ]
+  const totalPct = (i: number) => {
+    const total = num(inputs[`sample_total_${i}`])
+    if (total == null || stdC <= 0) return null
+    const mains = cfg.components.reduce((a, c) => a + (num(inputs[`sample_main_${c.key}_${i}`]) ?? 0), 0)
+    return (Math.max(total - mains, 0) / stdC) * 100
+  }
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+      <Text type="secondary" style={{ fontSize: 12.5 }}>
+        有关物质（对标准溶液c归一）：杂质% = 杂质面积/标准c总面积×100；总杂% = (供试品总峰面积-主组分面积)/标准c总面积×100。
+      </Text>
+      <div>
+        <Text type="secondary" style={{ fontSize: 12 }}>标准溶液c 峰面积：</Text>
+        <Space wrap size={6} style={{ marginTop: 4 }}>
+          {cfg.components.map((c) => (
+            <span key={c.key} style={{ fontSize: 12.5 }}>
+              {c.label}
+              <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs[`std_c_area_${c.key}`]}
+                onChange={(v) => set(`std_c_area_${c.key}`, v)} />
+            </span>
+          ))}
+          <Text style={{ fontSize: 12 }}>合计 <Text strong>{stdC.toFixed(0)}</Text></Text>
+        </Space>
+      </div>
+      <Table<ImpRow>
+        rowKey="key" size="small" pagination={false}
+        dataSource={cfg.impurities.map((imp) => ({
+          key: imp.key, label: imp.label,
+          v1: impPct(imp.key, 1), v2: impPct(imp.key, 2),
+        }))}
+        scroll={{ x: 560 }}
+        columns={impColumns}
+      />
+      <div>
+        <Text type="secondary" style={{ fontSize: 12 }}>供试品（每份）：总峰面积 与 主组分面积：</Text>
+        <Space wrap size={8} style={{ marginTop: 4 }}>
+          {Array.from({ length: cfg.samples }, (_, i) => (
+            <span key={i} style={{ fontSize: 12.5 }}>
+              第{i + 1}份 总峰
+              <InputNumber size="small" style={{ width: 100, marginLeft: 4 }} value={inputs[`sample_total_${i + 1}`]}
+                onChange={(v) => set(`sample_total_${i + 1}`, v)} />
+              {cfg.components.map((c) => (
+                <span key={c.key}>　{c.label}
+                  <InputNumber size="small" style={{ width: 95, marginLeft: 4 }} value={inputs[`sample_main_${c.key}_${i + 1}`]}
+                    onChange={(v) => set(`sample_main_${c.key}_${i + 1}`, v)} />
+                </span>
+              ))}
+              　总杂 <Text strong>{totalPct(i + 1) != null ? totalPct(i + 1)!.toFixed(4) + '%' : '-'}</Text>
+            </span>
+          ))}
+        </Space>
       </div>
     </Space>
   )

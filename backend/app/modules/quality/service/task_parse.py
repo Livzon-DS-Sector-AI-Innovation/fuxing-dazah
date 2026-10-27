@@ -165,6 +165,10 @@ class _TaskParse(_TaskCore):
                 computed = calc_engine.compute_external_std(calc_cfg, inputs)
             elif mode == "external_std_content":
                 computed = calc_engine.compute_external_std_content(calc_cfg, inputs)
+            elif mode == "external_std_content_multi":
+                computed = calc_engine.compute_content_multi(calc_cfg, inputs)
+            elif mode == "impurity_vs_std":
+                computed = calc_engine.compute_impurity_vs_std(calc_cfg, inputs)
             else:
                 computed = calc_engine.compute_normalization(calc_cfg, inputs)
             for item in computed["items"]:

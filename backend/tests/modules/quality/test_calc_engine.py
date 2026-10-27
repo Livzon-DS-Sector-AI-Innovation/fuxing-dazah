@@ -96,3 +96,71 @@ def test_external_std_content_math():
     assert abs(item["value"] - (c1 + c2 + c3) / 3) < 1e-9
     assert item["std_avg"] == std_avg
     assert item["std_rsd"] is not None and item["std_rsd"] < 0.2
+
+
+def test_content_multi_math():
+    cfg = {
+        "mode": "external_std_content_multi", "samples": 3,
+        "components": [
+            {"key": "A3", "label": "A3", "std_name": "米尔贝肟A3"},
+            {"key": "A4", "label": "A4", "std_name": "米尔贝肟A4"},
+        ],
+        "total_std_name": "总含量",
+    }
+    # 米尔贝肟公式（输出百分数）：A3% = 标准1质量×A3含量×样面积/样质量/标准1平均面积/(1-水分%)×100
+    inputs = {
+        "std1_mass": 25.0, "std_content_A3": 0.2, "std_content_A4": 0.8,
+        "std_area_A3_1": 100000, "std_area_A3_2": 100200, "std_area_A3_3": 99900,
+        "std_area_A3_4": 100100, "std_area_A3_5": 100000,
+        "std_area_A4_1": 400000, "std_area_A4_2": 400500, "std_area_A4_3": 399800,
+        "std_area_A4_4": 400200, "std_area_A4_5": 400000,
+        "sample_mass_1": 25.1, "sample_area_A3_1": 100300, "sample_area_A4_1": 401200,
+        "sample_mass_2": 25.0, "sample_area_A3_2": 100100, "sample_area_A4_2": 400400,
+        "sample_mass_3": 25.2, "sample_area_A3_3": 100500, "sample_area_A4_3": 402000,
+        "moisture": 0.3,
+    }
+    result = calc_engine.compute_content_multi(cfg, inputs)
+    by_name = {i["std_name"]: i for i in result["items"]}
+    a3_avg = (100000 + 100200 + 99900 + 100100 + 100000) / 5
+    a4_avg = (400000 + 400500 + 399800 + 400200 + 400000) / 5
+    a3_1 = 25.0 * 0.2 * 100300 / 25.1 / a3_avg / (1 - 0.3 / 100) * 100
+    a3_2 = 25.0 * 0.2 * 100100 / 25.0 / a3_avg / (1 - 0.3 / 100) * 100
+    a3_3 = 25.0 * 0.2 * 100500 / 25.2 / a3_avg / (1 - 0.3 / 100) * 100
+    assert abs(by_name["米尔贝肟A3"]["value"] - (a3_1 + a3_2 + a3_3) / 3) < 1e-9
+    a4_1 = 25.0 * 0.8 * 401200 / 25.1 / a4_avg / (1 - 0.3 / 100) * 100
+    a4_2 = 25.0 * 0.8 * 400400 / 25.0 / a4_avg / (1 - 0.3 / 100) * 100
+    a4_3 = 25.0 * 0.8 * 402000 / 25.2 / a4_avg / (1 - 0.3 / 100) * 100
+    assert abs(by_name["米尔贝肟A4"]["value"] - (a4_1 + a4_2 + a4_3) / 3) < 1e-9
+    # 总含量 = A3+A4 平均
+    assert abs(
+        by_name["总含量"]["value"] - (by_name["米尔贝肟A3"]["value"] + by_name["米尔贝肟A4"]["value"])
+    ) < 1e-9
+
+
+def test_impurity_vs_std_math():
+    cfg = {
+        "mode": "impurity_vs_std", "samples": 2,
+        "components": [{"key": "A3", "label": "A3", "std_name": "A3"}, {"key": "A4", "label": "A4", "std_name": "A4"}],
+        "impurities": [
+            {"key": "D", "label": "杂质D", "std_name": "杂质D"},
+            {"key": "other", "label": "其他最大未知杂质", "std_name": "其他最大未知杂质"},
+        ],
+        "total_std_name": "总杂",
+    }
+    inputs = {
+        "std_c_area_A3": 50000, "std_c_area_A4": 200000,
+        "sample_total_1": 260000, "sample_main_A3_1": 10000, "sample_main_A4_1": 240000,
+        "sample_total_2": 262000, "sample_main_A3_2": 10100, "sample_main_A4_2": 241000,
+        "imp_D_1": 125, "imp_D_2": 100, "imp_other_1": "", "imp_other_2": 50,
+    }
+    result = calc_engine.compute_impurity_vs_std(cfg, inputs)
+    by_name = {i["std_name"]: i for i in result["items"]}
+    std_c = 250000
+    # 杂质D% = (125/250000×100 + 100/250000×100)/2
+    assert abs(by_name["杂质D"]["value"] - (225 / std_c * 100) / 2) < 1e-9
+    # 未检出 → 0
+    assert by_name["其他最大未知杂质"]["value"] == 50 / std_c * 100 / 2
+    # 总杂 = (260000-250000 + 262000-251100)/250000×100/2
+    t1 = 260000 - 10000 - 240000
+    t2 = 262000 - 10100 - 241000
+    assert abs(by_name["总杂"]["value"] - (t1 + t2) / std_c * 100 / 2) < 1e-9

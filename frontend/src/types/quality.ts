@@ -438,7 +438,22 @@ export interface CalcExternalStdContentCfg {
   has_moisture?: boolean
 }
 
-export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg
+export interface CalcContentMultiCfg {
+  mode: 'external_std_content_multi'
+  samples: number
+  components: { key: string; label: string; std_name: string }[]
+  total_std_name: string
+}
+
+export interface CalcImpurityVsStdCfg {
+  mode: 'impurity_vs_std'
+  samples: number
+  components: { key: string; label: string; std_name: string }[]
+  impurities: { key: string; label: string; std_name: string }[]
+  total_std_name: string
+}
+
+export type CalcCfg = CalcNormalizationCfg | CalcExternalStdCfg | CalcExternalStdContentCfg | CalcContentMultiCfg | CalcImpurityVsStdCfg
 
 
 // ─── 任务报告单 ───
