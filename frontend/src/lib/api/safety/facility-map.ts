@@ -10,7 +10,7 @@
  */
 import { apiGet, apiPost, API_BASE_URL } from '@/lib/http-client'
 
-export type PinRefKind = 'job' | 'fire' | 'central' | 'key_risk'
+export type PinRefKind = 'job' | 'fire' | 'central' | 'key_risk' | 'over_limit'
 
 export interface FacilityMapPinRef {
   kind: PinRefKind
@@ -29,6 +29,12 @@ export interface FacilityMapPinRef {
   area?: string | null
   operation_content?: string | null
   start_time?: string | null
+  material_name?: string | null
+  department?: string | null
+  storage_location?: string | null
+  total_quantity_t?: number | null
+  max_limit?: number | null
+  unit?: string | null
 }
 
 export interface FacilityMapDistrictPin {
@@ -36,6 +42,7 @@ export interface FacilityMapDistrictPin {
   jobs: { hot: number; confined: number; other: number }
   alarms: { fire: number; central: number }
   key_risks: number
+  over_limits: number
   refs: FacilityMapPinRef[]
   truncated: boolean
 }

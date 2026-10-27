@@ -180,11 +180,15 @@ const ALARM_STROKE = '#b5860a'
 // 关键风险作业徽标（紫，区别于作业票三桶与报警黄）
 const RISK_FILL = '#7a5af8'
 
+// 超储物料徽标（青，当前态快照）
+const OVER_LIMIT_FILL = '#0e9388'
+
 const KIND_LABEL: Record<string, string> = {
   job: '作业票',
   fire: '消防报警',
   central: '中控报警',
   key_risk: '关键风险作业',
+  over_limit: '超储物料',
 }
 
 const TICKET_TYPE_LABEL: Record<string, string> = {
@@ -198,7 +202,7 @@ const TICKET_TYPE_LABEL: Record<string, string> = {
   blind_plate: '盲板',
 }
 
-/** 徽标组内容（作业桶非零 + 关键风险 + 报警合计）；BadgeGroup 与标注避让共用 */
+/** 徽标组内容（作业桶非零 + 关键风险 + 超储 + 报警合计）；BadgeGroup 与标注避让共用 */
 function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string }[] {
   const chips: { label: string; fill: string }[] = []
   for (const b of BADGES) {
@@ -206,6 +210,7 @@ function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string 
     if (n > 0) chips.push({ label: `${b.label}${n}`, fill: b.fill })
   }
   if (pin.key_risks > 0) chips.push({ label: `险${pin.key_risks}`, fill: RISK_FILL })
+  if (pin.over_limits > 0) chips.push({ label: `储${pin.over_limits}`, fill: OVER_LIMIT_FILL })
   const alarms = pin.alarms.fire + pin.alarms.central
   if (alarms > 0) chips.push({ label: `警${alarms}`, fill: ALARM_FILL })
   return chips
@@ -300,6 +305,24 @@ const KEY_RISK_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
   { title: '作业内容', dataIndex: 'operation_content', ellipsis: true },
 ]
 
+const OVER_LIMIT_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
+  { title: '物料', dataIndex: 'material_name', width: 110 },
+  {
+    title: '存储位置',
+    dataIndex: 'storage_location',
+    width: 170,
+    render: (v: string | null) => v || '—',
+  },
+  { title: '部门', dataIndex: 'department', width: 90, render: (v: string | null) => v || '—' },
+  {
+    title: '当前库存',
+    width: 110,
+    render: (_, r) =>
+      `${r.total_quantity_t ?? '—'} ${r.unit ?? ''}`.trim(),
+  },
+  { title: '超储阈值', dataIndex: 'max_limit', width: 100, render: (v: number | null) => (v ?? '—') },
+]
+
 function DistrictModal({
   pin,
   distName,
@@ -313,6 +336,7 @@ function DistrictModal({
 }) {
   const jobs = pin?.refs.filter(r => r.kind === 'job') ?? []
   const keyRisks = pin?.refs.filter(r => r.kind === 'key_risk') ?? []
+  const overLimits = pin?.refs.filter(r => r.kind === 'over_limit') ?? []
   const alarms =
     pin?.refs.filter(r => r.kind === 'fire' || r.kind === 'central') ?? []
   return (
@@ -349,6 +373,19 @@ function DistrictModal({
               dataSource={keyRisks}
               pagination={false}
               locale={{ emptyText: '本分区当日无关键风险作业' }}
+            />
+          </div>
+          <div>
+            <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">
+              超储物料 {overLimits.length} 项（当前库存态）
+            </div>
+            <Table
+              rowKey={(_, i) => `o${i}`}
+              size="small"
+              columns={OVER_LIMIT_COLUMNS}
+              dataSource={overLimits}
+              pagination={false}
+              locale={{ emptyText: '本分区无超储物料' }}
             />
           </div>
           <div>
@@ -642,7 +679,7 @@ export function FacilityMapCard() {
   return (
     <SectionCard
       title="厂区风险分区 · 当日分布"
-      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票/关键风险作业与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
+      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 特殊作业票/关键风险作业/超储物料与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
       action={
         <div className="flex items-center gap-2 text-[11px] text-[var(--color-steel)]">
           <span className="inline-flex items-center gap-1">
@@ -667,6 +704,13 @@ export function FacilityMapCard() {
               style={{ background: RISK_FILL }}
             />
             关键风险作业
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: OVER_LIMIT_FILL }}
+            />
+            超储物料
           </span>
           <span className="inline-flex items-center gap-1">
             <span
@@ -728,13 +772,14 @@ export function FacilityMapCard() {
                             jobs: { hot: 0, confined: 0, other: 0 },
                             alarms: { fire: 0, central: 0 },
                             key_risks: 0,
+                            over_limits: 0,
                             refs: [],
                             truncated: false,
                           },
                         )
                       }
                     >
-                      <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 关键风险 ${pin.key_risks} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
+                      <title>{`${dist.distName}${pin ? ` · 作业 ${pin.jobs.hot + pin.jobs.confined + pin.jobs.other} / 关键风险 ${pin.key_risks} / 超储 ${pin.over_limits} / 报警 ${pin.alarms.fire + pin.alarms.central}` : ''}`}</title>
                       {shapes.map((points, i) => (
                         <polygon
                           key={i}

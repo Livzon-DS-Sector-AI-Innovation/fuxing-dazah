@@ -14,6 +14,7 @@ const PINS = {
       jobs: { hot: 2, confined: 0, other: 0 },
       alarms: { fire: 1, central: 0 },
       key_risks: 1,
+      over_limits: 1,
       truncated: false,
       refs: [
         {
@@ -37,6 +38,15 @@ const PINS = {
           operation_content: '米尔贝放硅胶',
           start_time: '2026-10-26T06:00:00+00:00',
         },
+        {
+          kind: 'over_limit',
+          material_name: '乙腈',
+          department: 'daba',
+          storage_location: '消控室试剂柜',
+          total_quantity_t: 28.13,
+          max_limit: 20,
+          unit: 'kg',
+        },
       ],
     },
   ],
@@ -44,6 +54,7 @@ const PINS = {
     { text: '212罐', count: 3, kinds: ['job'] },
     { text: '新罐区', count: 5, kinds: ['central'] },
     { text: '车间四二楼合成岗位', count: 1, kinds: ['key_risk'] },
+    { text: '四楼危化品储柜', count: 1, kinds: ['over_limit'] },
   ],
   errors: [],
 }
@@ -92,6 +103,7 @@ describe('FacilityMapCard', () => {
     const badge = await screen.findByTestId('district-badge-77')
     expect(badge.textContent).toContain('火2')
     expect(badge.textContent).toContain('险1')
+    expect(badge.textContent).toContain('储1')
     expect(badge.textContent).toContain('警1')
   })
 
@@ -104,6 +116,8 @@ describe('FacilityMapCard', () => {
     expect(modal.textContent).toContain('DH-20261026-004')
     expect(modal.textContent).toContain('火灾报警')
     expect(modal.textContent).toContain('关键风险作业 1 项')
+    expect(modal.textContent).toContain('超储物料 1 项')
+    expect(modal.textContent).toContain('乙腈')
     expect(modal.textContent).toContain('米尔贝放硅胶')
     expect(modal.textContent).toContain('已通过')
   })
@@ -137,7 +151,7 @@ describe('FacilityMapCard', () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
     // 清单随卡片直出（右侧栏），无需展开
-    expect(await screen.findByText(/未映射 3 处/)).toBeInTheDocument()
+    expect(await screen.findByText(/未映射 4 处/)).toBeInTheDocument()
     expect(screen.getAllByText('212罐').length).toBeGreaterThan(0)
     expect(screen.getByText('×5')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /AI 建议映射/ }))

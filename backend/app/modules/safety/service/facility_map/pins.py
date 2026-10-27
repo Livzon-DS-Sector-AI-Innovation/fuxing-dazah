@@ -1,11 +1,13 @@
-"""当日作业票/报警/关键风险作业 → 分区 pins 聚合（纯函数）。
+"""当日作业票/报警/关键风险作业/超储物料 → 分区 pins 聚合（纯函数）。
 
 输入为已归一的浅 dict（服务层适配器负责从各源 reader 拉取并转形）：
-- job:      {ticket_type, ticket_no, work_site, work_content}
-- fire:     {alarm_time, alarm_type, location, building}   位置=部位优先楼栋兜底
-- central:  {alarm_date, alarm_description, workshop, line} 位置=车间+产线
-- key_risk: {report_no, apply_status, area, operation_content, start_time}
-            位置=区域（area）
+- job:        {ticket_type, ticket_no, work_site, work_content}
+- fire:       {alarm_time, alarm_type, location, building}   位置=部位优先楼栋兜底
+- central:    {alarm_date, alarm_description, workshop, line} 位置=车间+产线
+- key_risk:   {report_no, apply_status, area, operation_content, start_time}
+              位置=区域（area）
+- over_limit: {material_name, department, storage_location, total_quantity_t,
+              max_limit, unit}                                  位置=存储位置
 输出 pins 聚合 + 未映射清单，契约见 .scratch/f2-facility-map/spec.md。
 """
 
@@ -64,12 +66,13 @@ def aggregate_pins(
     centrals: list[dict[str, Any]],
     index: Any,
     key_risks: list[dict[str, Any]] | None = None,
+    over_limits: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """四路当日数据 × 匹配索引 → {pins, unmapped}。
+    """五路数据 × 匹配索引 → {pins, unmapped}。
 
-    - 命中 → 分区聚合：jobs 按 hot/confined/other 计数，key_risks 单计，
-      alarms 按 fire/central 计数，refs 保明细（job/fire/central/key_risk
-      四形）；计数全保留，refs 截 REFS_CAP。
+    - 命中 → 分区聚合：jobs 按 hot/confined/other 计数，key_risks/over_limits
+      单计，alarms 按 fire/central 计数，refs 保明细（job/fire/central/
+      key_risk/over_limit 五形）；计数全保留，refs 截 REFS_CAP。
     - 未命中/空文本 → unmapped 按归一化文本去重，累计 count 与 kinds。
     """
     pins: dict[str, dict[str, Any]] = {}
@@ -82,6 +85,7 @@ def aggregate_pins(
                 "jobs": {"hot": 0, "confined": 0, "other": 0},
                 "alarms": {"fire": 0, "central": 0},
                 "key_risks": 0,
+                "over_limits": 0,
                 "refs": [],
                 "truncated": False,
             }
@@ -175,10 +179,34 @@ def aggregate_pins(
         pin["key_risks"] += 1
         _add_ref(pin, ref)
 
+    for ol in over_limits or []:
+        site = (ol.get("storage_location") or "").strip()
+        ref = {
+            "kind": "over_limit",
+            "material_name": _as_str(ol.get("material_name")),
+            "department": _as_str(ol.get("department")),
+            "storage_location": site or None,
+            "total_quantity_t": ol.get("total_quantity_t"),
+            "max_limit": ol.get("max_limit"),
+            "unit": _as_str(ol.get("unit")),
+        }
+        dist_id = match_location(site, index) if site else None
+        if dist_id is None:
+            _unmapped(site, "over_limit")
+            continue
+        pin = _pin(dist_id)
+        pin["over_limits"] += 1
+        _add_ref(pin, ref)
+
     pin_list = sorted(
         pins.values(),
         key=lambda p: (
-            -sum(p["jobs"].values()) - sum(p["alarms"].values()) - p["key_risks"],
+            -(
+                sum(p["jobs"].values())
+                + sum(p["alarms"].values())
+                + p["key_risks"]
+                + p["over_limits"]
+            ),
             p["dist_id"],
         ),
     )

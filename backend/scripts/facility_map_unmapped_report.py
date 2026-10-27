@@ -34,6 +34,7 @@ async def main(days: int) -> None:
         "fire": [0, 0],
         "central": [0, 0],
         "key_risk": [0, 0],
+        "over_limit": [0, 0],
     }  # [mapped, unmapped]
 
     async with async_session_factory() as session:
@@ -47,7 +48,11 @@ async def main(days: int) -> None:
             mapped_fire = sum(p["alarms"]["fire"] for p in payload["pins"])
             mapped_central = sum(p["alarms"]["central"] for p in payload["pins"])
             mapped_kr = sum(p.get("key_risks", 0) for p in payload["pins"])
-            per_kind = {"job": 0, "fire": 0, "central": 0, "key_risk": 0}
+            mapped_ol = sum(p.get("over_limits", 0) for p in payload["pins"])
+            per_kind = {
+                "job": 0, "fire": 0, "central": 0,
+                "key_risk": 0, "over_limit": 0,
+            }
             for u in payload["unmapped"]:
                 for kind in u["kinds"]:
                     per_kind[kind] += u["count"]
@@ -60,21 +65,28 @@ async def main(days: int) -> None:
             tot["central"][1] += per_kind["central"]
             tot["key_risk"][0] += mapped_kr
             tot["key_risk"][1] += per_kind["key_risk"]
-            total_events = mapped_jobs + mapped_fire + mapped_central + mapped_kr + sum(per_kind.values())
+            tot["over_limit"][0] += mapped_ol
+            tot["over_limit"][1] += per_kind["over_limit"]
+            total_events = (
+                mapped_jobs + mapped_fire + mapped_central + mapped_kr + mapped_ol
+                + sum(per_kind.values())
+            )
             unmapped_all = sum(per_kind.values())
             rate = f"{unmapped_all / total_events * 100:.0f}%" if total_events else "—"
             print(
                 f"{day}: 票 {mapped_jobs}+{per_kind['job']}未 | 消防 {mapped_fire}+{per_kind['fire']}未"
                 f" | 中控 {mapped_central}+{per_kind['central']}未"
-                f" | 关键风险 {mapped_kr}+{per_kind['key_risk']}未 | 未映射率 {rate}"
+                f" | 关键风险 {mapped_kr}+{per_kind['key_risk']}未"
+                f" | 超储 {mapped_ol}+{per_kind['over_limit']}未 | 未映射率 {rate}"
             )
 
-    print(f"\n=== 近 {days} 天汇总（命中+未映射） ===")
+    print(f"\n=== 近 {days} 天汇总（命中+未映射；超储=当日当前态） ===")
     for kind, label in (
         ("job", "作业票"),
         ("fire", "消防"),
         ("central", "中控"),
         ("key_risk", "关键风险作业"),
+        ("over_limit", "超储物料"),
     ):
         hit, miss = tot[kind]
         all_events = hit + miss

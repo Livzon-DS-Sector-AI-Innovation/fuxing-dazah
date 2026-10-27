@@ -414,6 +414,45 @@ class TestAggregateKeyRisks:
         }
 
 
+class TestAggregateOverLimits:
+    def test_counts_refs_by_storage_location(self):
+        """超储按 storage_location 命中：单列 over_limits 计数，未命中进 unmapped。"""
+        out = aggregate_pins(
+            jobs=[],
+            fires=[],
+            centrals=[],
+            over_limits=[
+                _over_limit("车间一达巴制备", "乙腈"),
+                _over_limit("车间一达巴粗提", "乙醇"),
+                _over_limit("危化品库", "氢氧化钠"),
+                _over_limit("四楼危化品储柜", "浓氨水"),  # 未映射
+                _over_limit("", "丙酮"),  # 空位置 → 占位文本
+            ],
+            index=build_match_index(MAP_ROWS),
+        )
+        pins = {p["dist_id"]: p for p in out["pins"]}
+        assert pins["63"]["over_limits"] == 2  # 车间一达巴
+        assert pins["35"]["over_limits"] == 1  # 危化品库
+        ol_refs = [r for r in pins["63"]["refs"] if r["kind"] == "over_limit"]
+        assert {r["material_name"] for r in ol_refs} == {"乙腈", "乙醇"}
+        assert ol_refs[0]["total_quantity_t"] == 28.13
+        unmapped = {u["text"]: u for u in out["unmapped"]}
+        assert unmapped["四楼危化品储柜"]["kinds"] == ["over_limit"]
+        assert unmapped["（未填写作业地点）"]["kinds"] == ["over_limit"]
+
+    async def test_service_over_limit_reader_failure_degrades(self):
+        """超储物料路失败仅记一条 error，其余路照常。"""
+
+        async def boom_ol(d):
+            raise RuntimeError("sheet 超时")
+
+        t, f, c, k, _, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, k, boom_ol, m))
+        payload = await svc.get_pins(date(2026, 10, 27))
+        assert payload["errors"] == ["超储物料拉取失败: sheet 超时"]
+        assert payload["pins"] == []
+
+
 def _key_risk(area: str, no: str = "20261027001", status: str = "已通过") -> dict:
     return {
         "report_no": no,
@@ -424,7 +463,18 @@ def _key_risk(area: str, no: str = "20261027001", status: str = "已通过") -> 
     }
 
 
-def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, rows=None):
+def _over_limit(site: str, material: str = "乙腈") -> dict:
+    return {
+        "material_name": material,
+        "department": "daba",
+        "storage_location": site,
+        "total_quantity_t": 28.13,
+        "max_limit": 20.0,
+        "unit": "kg",
+    }
+
+
+def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, over_limits=None, rows=None):
     async def ticket_reader(d):
         return jobs or []
 
@@ -437,10 +487,20 @@ def _ok_readers(jobs=None, fires=None, centrals=None, key_risks=None, rows=None)
     async def key_risk_reader(d):
         return key_risks or []
 
+    async def over_limit_reader(d):
+        return over_limits or []
+
     async def map_rows():
         return rows if rows is not None else MAP_ROWS
 
-    return ticket_reader, fire_reader, central_reader, key_risk_reader, map_rows
+    return (
+        ticket_reader,
+        fire_reader,
+        central_reader,
+        key_risk_reader,
+        over_limit_reader,
+        map_rows,
+    )
 
 
 class TestPinsService:
@@ -465,8 +525,8 @@ class TestPinsService:
         async def boom(d):
             raise RuntimeError("平台超时")
 
-        t, f, c, k, m = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
-        svc = FacilityMapPinsService(readers=(boom, f, c, k, m))
+        t, f, c, k, o, m = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
+        svc = FacilityMapPinsService(readers=(boom, f, c, k, o, m))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert len(payload["errors"]) == 1
         assert "作业票" in payload["errors"][0]
@@ -478,8 +538,8 @@ class TestPinsService:
         async def boom_rows():
             raise RuntimeError("db down")
 
-        t, f, c, k, _ = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
-        svc = FacilityMapPinsService(readers=(t, f, c, k, boom_rows))
+        t, f, c, k, o, _ = _ok_readers(jobs=[_job("hot_work", "车间一达托")])
+        svc = FacilityMapPinsService(readers=(t, f, c, k, o, boom_rows))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert any("映射" in e for e in payload["errors"])
         # 映射表失败 → 全部进 unmapped（文本可见，图卡可解释）
@@ -491,8 +551,8 @@ class TestPinsService:
         async def boom_kr(d):
             raise RuntimeError("bitable 超时")
 
-        t, f, c, _, m = _ok_readers()
-        svc = FacilityMapPinsService(readers=(t, f, c, boom_kr, m))
+        t, f, c, _, o, m = _ok_readers()
+        svc = FacilityMapPinsService(readers=(t, f, c, boom_kr, o, m))
         payload = await svc.get_pins(date(2026, 10, 26))
         assert payload["errors"] == ["关键风险作业拉取失败: bitable 超时"]
         assert payload["pins"] == []

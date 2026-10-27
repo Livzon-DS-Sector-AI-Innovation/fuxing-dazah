@@ -11,6 +11,10 @@
 - key_risk_reader(date) -> list[dict]   关键风险作业 {report_no/apply_status/
                                         area/operation_content/start_time}
                                         （当日已通过+审批中，start_time 落日）
+- over_limit_reader(date) -> list[dict] 超储物料 {material_name/department/
+                                        storage_location/total_quantity_t/
+                                        max_limit/unit}（当前态快照，
+                                        仅 target=今日时返回，历史日零贡献）
 - map_rows() -> list[dict]              location_district_map 行
                                         （location_text/dist_id）
 
@@ -45,10 +49,11 @@ Readers = tuple[
     Callable[[date], Any],
     Callable[[date], Any],
     Callable[[date], Any],
+    Callable[[date], Any],
     Callable[[], Any],
 ]
 
-_SOURCE_LABELS = ("作业票", "消防报警", "中控报警", "关键风险作业", "分区映射表")
+_SOURCE_LABELS = ("作业票", "消防报警", "中控报警", "关键风险作业", "超储物料", "分区映射表")
 
 
 def bj_today() -> date:
@@ -65,6 +70,7 @@ class FacilityMapPinsService:
             self._fire_reader,
             self._central_reader,
             self._key_risk_reader,
+            self._over_limit_reader,
             self._map_rows,
         ) = readers
 
@@ -74,6 +80,7 @@ class FacilityMapPinsService:
         fires: list[dict[str, Any]] = []
         centrals: list[dict[str, Any]] = []
         key_risks: list[dict[str, Any]] = []
+        over_limits: list[dict[str, Any]] = []
         map_rows: list[dict[str, Any]] = []
 
         async def _gather(label: str, fn: Any, *args: Any) -> Any:
@@ -96,13 +103,21 @@ class FacilityMapPinsService:
         key_risks_raw = await _gather(_SOURCE_LABELS[3], self._key_risk_reader, target)
         if key_risks_raw:
             key_risks = key_risks_raw
-        rows = await _gather(_SOURCE_LABELS[4], self._map_rows)
+        over_limits_raw = await _gather(_SOURCE_LABELS[4], self._over_limit_reader, target)
+        if over_limits_raw:
+            over_limits = over_limits_raw
+        rows = await _gather(_SOURCE_LABELS[5], self._map_rows)
         if rows:
             map_rows = rows
 
         index = build_match_index(map_rows)
         aggregated = aggregate_pins(
-            jobs=jobs, fires=fires, centrals=centrals, key_risks=key_risks, index=index
+            jobs=jobs,
+            fires=fires,
+            centrals=centrals,
+            key_risks=key_risks,
+            over_limits=over_limits,
+            index=index,
         )
         return {
             "date": target.isoformat(),
@@ -230,6 +245,24 @@ def _default_key_risk_reader(session: Any) -> Callable[[date], Any]:
     return read
 
 
+def _default_over_limit_reader(session: Any) -> Callable[[date], Any]:
+    """超储物料（当前态快照）→ 归一 dict；位置文本=storage_location。
+
+    库存是当前状态不是当日事件：仅 target=北京时间今日时返回数据，
+    历史日期零贡献（AI 建议扫描回溯近 N 天时不会被同一批文本灌水）。
+    """
+
+    async def read(target: date) -> list[dict[str, Any]]:
+        if target != bj_today():
+            return []
+        from app.modules.safety.service import ChemicalInventoryService
+
+        service = ChemicalInventoryService(session)
+        return await service.get_over_limit_materials(limit=200)
+
+    return read
+
+
 def _default_map_rows(session: Any) -> Callable[[], Any]:
     async def read() -> list[dict[str, Any]]:
         result = await session.execute(
@@ -246,13 +279,14 @@ def _default_map_rows(session: Any) -> Callable[[], Any]:
 
 
 def open_pins_service(*, session: Any = None) -> FacilityMapPinsService:
-    """生产装配：平台/消防/中控/关键风险默认读取器 + DB 映射表读取器。"""
+    """生产装配：平台/消防/中控/关键风险/超储物料默认读取器 + DB 映射表读取器。"""
     return FacilityMapPinsService(
         readers=(
             _default_ticket_reader(),
             _default_fire_reader(),
             _default_central_reader(),
             _default_key_risk_reader(session),
+            _default_over_limit_reader(session),
             _default_map_rows(session),
         )
     )
