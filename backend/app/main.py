@@ -257,6 +257,11 @@ app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
+# 私有模块目录只能经带权限的代理接口读取，不能被公共静态挂载绕过。
+# qa：质量原件；feedback：用户反馈截图（本人或管理员才可读）。
+_PRIVATE_UPLOAD_PREFIXES = ("qa", "feedback")
+
+
 # 挂载静态文件目录（图片上传等）。QA 本地回退文件虽然仍兼容落在
 # ``UPLOAD_DIR/qa``（开发环境已有文件不能因为本次升级突然不可读），但
 # 质量原件必须始终经过带权限的 QA 代理接口，不能被这个公共静态挂载绕过。
@@ -265,7 +270,10 @@ class _PublicUploads(StaticFiles):
         # StaticFiles 自身会做 realpath 校验；这里也必须先规范化 ``..``，
         # 否则 ``/uploads/public/../qa/...`` 可能绕过简单的前缀判断。
         normalized = posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/").casefold()
-        if normalized == "qa" or normalized.startswith("qa/"):
+        if any(
+            normalized == prefix or normalized.startswith(prefix + "/")
+            for prefix in _PRIVATE_UPLOAD_PREFIXES
+        ):
             return PlainTextResponse("Not Found", status_code=404)
         return await super().get_response(path, scope)
 

@@ -53,6 +53,8 @@ async def list_permissions(
             module_name = module_def.name
         elif module_code == "permission":
             module_name = "权限管理"
+        elif module_code == "system":
+            module_name = "系统功能"
         else:
             module_name = module_code
         result.append(

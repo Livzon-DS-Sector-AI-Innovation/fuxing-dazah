@@ -6,7 +6,8 @@ import { usePathname, useRouter } from "next/navigation"
 import { Dropdown, Avatar } from "antd"
 import { LogoutOutlined, UserOutlined, EllipsisOutlined } from "@ant-design/icons"
 import { moduleMenus } from "@/lib/menu-config"
-import { ModuleIcon, SearchIcon, BellIcon } from "@/components/icons"
+import { ModuleIcon, BellIcon } from "@/components/icons"
+import { FeedbackEntry } from "@/components/feedback"
 import styles from "./TopNav.module.css"
 import chromeStyles from './LayoutChrome.module.css'
 import { logout, getCurrentUser, getImpersonationStatus } from "@/actions/auth"
@@ -252,9 +253,7 @@ export function TopNav() {
         >
           {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
         </button>
-        <button className={styles.iconButton} aria-label="搜索">
-          <SearchIcon className="w-[18px] h-[18px]" />
-        </button>
+        <FeedbackEntry buttonClassName={styles.iconButton} />
         <button className={styles.iconButton} aria-label="通知">
           <BellIcon className="w-[18px] h-[18px]" />
           <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-error)] rounded-full" />

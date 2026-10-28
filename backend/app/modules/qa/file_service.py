@@ -1,30 +1,27 @@
 """QA 文件校验、私有存储和正文提取辅助。
 
-文件永远通过 QA API 代理访问。生产环境使用独立 ``dazah-qa`` bucket；
-本地开发没有 MinIO，回退到 ``UPLOAD_DIR/qa`` 下的本地目录。
+文件永远通过 QA API 代理访问。存储/响应头/魔数等通用能力委托给
+``app.core.file_storage``（MinIO 开启用独立 ``dazah-qa`` bucket，本地开发回退到
+``UPLOAD_DIR/qa``）；这里只保留 QA 文档归档专用的校验规则与正文提取。
+
+本模块对外函数名保持稳定：qa 内部以模块属性方式调用，测试也以此为 patch 点。
 """
 
 from __future__ import annotations
 
 import hashlib
-import logging
 import mimetypes
-import os
-import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import quote
-from zipfile import BadZipFile, ZipFile
 
-from app.core import storage as object_storage
-from app.core.config import get_settings
+from app.core import file_storage
 
 if TYPE_CHECKING:
     from app.modules.qa.processing.document import ExtractionDocument
 
-logger = logging.getLogger(__name__)
+_MODULE = "qa"
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc"}
@@ -65,64 +62,15 @@ class TextSegment:
 
 
 def _safe_filename(filename: str | None) -> str:
-    value = (filename or "document").replace("\\", "/").rsplit("/", 1)[-1]
-    value = re.sub(r"[^\w.()\-\u4e00-\u9fff ]", "_", value).strip()
-    return value[:255] or "document"
+    return file_storage.safe_filename(filename, "document")
 
 
-def content_disposition(disposition: str, filename: str) -> str:
-    """生成兼容 latin-1 响应头与 UTF-8 文件名的 Content-Disposition。"""
-    safe_name = _safe_filename(filename)
-    ascii_name = safe_name.encode("ascii", "ignore").decode("ascii")
-    ascii_name = re.sub(r"[^A-Za-z0-9.()_ -]", "_", ascii_name).strip()
-    if not ascii_name or ascii_name.startswith("."):
-        extension = Path(safe_name).suffix.lower()
-        ascii_name = f"document{extension}"
-    encoded_name = quote(safe_name, safe="")
-    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
-
-
-# 允许内联渲染的类型。提取产物的 MIME 是从远端 ZIP 成员名推出来的
-# （mineru._unzip_artifacts 里的 mimetypes.guess_type），成员名叫什么就
-# 是什么；text/html、image/svg+xml 一旦 inline 就是 API 域下的存储型 XSS
-# ——next.config.ts 把 /api 重写到后端，与 auth_token 同源。图片要放行是
-# 因为 Markdown 预览用 <img src> 直接取产物；SVG 可以带脚本，不放。
-_INLINE_MEDIA_TYPES = frozenset(
-    {
-        "application/pdf",
-        "image/bmp",
-        "image/gif",
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-    }
-)
-
-
-def inline_media_type(mime_type: str | None) -> str | None:
-    """可以安全内联渲染时返回该类型，否则返回 None。"""
-
-    normalized = (mime_type or "").split(";", 1)[0].strip().casefold()
-    return normalized if normalized in _INLINE_MEDIA_TYPES else None
+content_disposition = file_storage.content_disposition
+inline_media_type = file_storage.inline_media_type
 
 
 def _detect_magic(extension: str, data: bytes) -> bool:
-    if extension == ".pdf":
-        return data.startswith(b"%PDF-")
-    if extension == ".docx":
-        if not data.startswith(b"PK"):
-            return False
-        try:
-            with ZipFile(__import__("io").BytesIO(data)) as archive:
-                names = set(archive.namelist())
-                return "[Content_Types].xml" in names and any(
-                    name.startswith("word/") for name in names
-                )
-        except (BadZipFile, OSError):
-            return False
-    if extension == ".doc":
-        return data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
-    return False
+    return file_storage.magic_matches(extension, data)
 
 
 def validate_file(
@@ -156,18 +104,6 @@ def validate_file(
     return safe_name, extension[1:], mime
 
 
-def _local_root() -> Path:
-    settings = get_settings()
-    # 与 safety 等模块同口径：本地回退文件统一落在 UPLOAD_DIR 下的 qa/ 子目录。
-    root = Path(settings.UPLOAD_DIR).expanduser() / "qa"
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        os.chmod(root, 0o700)
-    except OSError:
-        pass
-    return root
-
-
 def store_file(
     filename: str | None, content_type: str | None, data: bytes
 ) -> StoredFile:
@@ -175,16 +111,7 @@ def store_file(
     digest = hashlib.sha256(data).hexdigest()
     key = f"documents/{uuid.uuid4().hex}.{extension}"
     try:
-        if object_storage.is_enabled():
-            object_storage.upload_object("qa", key, data, len(data), mime)
-        else:
-            path = _local_root() / key
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+        file_storage.store_object(_MODULE, key, data, mime)
     except Exception:
         # 对象存储/本地写入可能在写入一半时失败；尽力清掉已产生的对象，
         # 避免没有数据库行可追踪的孤儿文件。
@@ -194,16 +121,7 @@ def store_file(
 
 
 def read_file(key: str) -> tuple[bytes, str] | None:
-    if not _is_safe_key(key):
-        return None
-    if object_storage.is_enabled():
-        return object_storage.get_object("qa", key)
-    path = _local_root() / key
-    if not path.is_file() or not path.resolve().is_relative_to(_local_root().resolve()):
-        return None
-    return path.read_bytes(), mimetypes.guess_type(path.name)[
-        0
-    ] or "application/octet-stream"
+    return file_storage.read_object(_MODULE, key)
 
 
 def store_object(
@@ -211,23 +129,10 @@ def store_object(
     data: bytes,
     content_type: str = "application/octet-stream",
 ) -> str:
-    """保存 QA 受保护对象，供原文件之外的解析产物复用同一存储策略。
-
-    MinIO 开启时统一调用 ``app.core.storage``；本地开发沿用 QA 私有目录，
-    这样切换提取后端不会引入第二套对象存储配置。
-    """
+    """保存 QA 受保护对象，供原文件之外的解析产物复用同一存储策略。"""
     if not _is_safe_key(key):
         raise FileValidationError("对象存储键不安全")
-    if object_storage.is_enabled():
-        return object_storage.upload_object("qa", key, data, len(data), content_type)
-    path = _local_root() / key
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return key
+    return file_storage.store_object(_MODULE, key, data, content_type)
 
 
 def read_object(key: str) -> tuple[bytes, str] | None:
@@ -236,18 +141,11 @@ def read_object(key: str) -> tuple[bytes, str] | None:
 
 
 def delete_file(key: str) -> None:
-    if not _is_safe_key(key):
-        return
-    if object_storage.is_enabled():
-        object_storage.delete_object("qa", key)
-        return
-    path = _local_root() / key
-    if path.exists() and path.resolve().is_relative_to(_local_root().resolve()):
-        path.unlink(missing_ok=True)
+    file_storage.delete_object(_MODULE, key)
 
 
 def _is_safe_key(key: str) -> bool:
-    return bool(key) and not key.startswith(("/", "\\")) and ".." not in Path(key).parts
+    return file_storage.is_safe_key(key)
 
 
 def extract_text(extension: str, data: bytes) -> tuple[str, list[TextSegment]]:
@@ -325,8 +223,6 @@ def extract_document(
 
 
 def cleanup_stored_file(stored: StoredFile | str) -> None:
+    """尽力删除已写入的对象；失败只记日志（与 core 的通用清理同口径）。"""
     key = stored.key if isinstance(stored, StoredFile) else stored
-    try:
-        delete_file(key)
-    except Exception:
-        logger.exception("Unable to clean up QA stored file %s", key)
+    file_storage.cleanup_object(_MODULE, key)

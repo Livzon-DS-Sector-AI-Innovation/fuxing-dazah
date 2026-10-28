@@ -9,17 +9,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 import uuid
 from datetime import date, timedelta
-from io import BytesIO
-from pathlib import Path
 from typing import Any
-from zipfile import BadZipFile, ZipFile
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import file_storage
 from app.core import time as app_time
 from app.core.exceptions import AppException, NotFoundException
 from app.modules.qa import file_service
@@ -634,63 +631,22 @@ _ATTACHMENT_MIME = {
     ".jpeg": "image/jpeg",
     ".png": "image/png",
 }
-_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
-
-
-def _safe_attachment_name(filename: str | None) -> str:
-    value = (filename or "attachment").replace("\\", "/").rsplit("/", 1)[-1]
-    value = re.sub(r"[^\w.()\-\u4e00-\u9fff ]", "_", value).strip()
-    return value[:255] or "attachment"
-
-
-def _zip_has(data: bytes, member_prefix: str) -> bool:
-    if not data.startswith(b"PK"):
-        return False
-    try:
-        with ZipFile(BytesIO(data)) as archive:
-            names = set(archive.namelist())
-    except (BadZipFile, OSError):
-        return False
-    return "[Content_Types].xml" in names and any(
-        name.startswith(member_prefix) for name in names
-    )
-
-
-def _attachment_magic_ok(extension: str, data: bytes) -> bool:
-    if extension == ".pdf":
-        return data.startswith(b"%PDF-")
-    if extension in {".doc", ".xls"}:
-        return data.startswith(_OLE_MAGIC)
-    if extension == ".docx":
-        return _zip_has(data, "word/")
-    if extension == ".xlsx":
-        return _zip_has(data, "xl/")
-    if extension in {".jpg", ".jpeg"}:
-        return data.startswith(b"\xff\xd8\xff")
-    if extension == ".png":
-        return data.startswith(b"\x89PNG\r\n\x1a\n")
-    return False
 
 
 def validate_attachment(
     filename: str | None, content_type: str | None, data: bytes
 ) -> tuple[str, str, str]:
-    """返回 (安全文件名, 不带点的扩展名, MIME)。"""
-    safe_name = _safe_attachment_name(filename)
-    extension = Path(safe_name).suffix.lower()
-    if extension not in _ATTACHMENT_MIME:
-        raise AppException(
-            status_code=422, message="仅支持 PDF、Word、Excel、JPG、PNG 附件"
-        )
-    if not data:
-        raise AppException(status_code=422, message="附件不能为空")
-    if len(data) > ATTACHMENT_MAX_SIZE:
-        raise AppException(status_code=422, message="附件大小不能超过 20MB")
-    if not _attachment_magic_ok(extension, data):
-        raise AppException(
-            status_code=422, message="附件内容与扩展名不匹配或文件已损坏"
-        )
-    return safe_name, extension[1:], _ATTACHMENT_MIME[extension]
+    """返回 (安全文件名, 不带点的扩展名, MIME)。
+
+    ``content_type`` 保留在签名中以兼容 API 调用方；终裁只看扩展名与文件头。
+    """
+    return file_storage.validate_upload(
+        filename,
+        data,
+        allowed=_ATTACHMENT_MIME,
+        max_size=ATTACHMENT_MAX_SIZE,
+        kind_label="PDF、Word、Excel、JPG、PNG",
+    )
 
 
 async def add_attachment(

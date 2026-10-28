@@ -10,6 +10,7 @@ from app.shared.module_registry import BUSINESS_MODULES, BUSINESS_SCHEMAS
 
 # Import platform and module models so Alembic can detect them.
 import_module("app.platform.audit.models")
+import_module("app.platform.feedback.models")
 import_module("app.platform.identity.models")
 import_module("app.platform.permission.models")
 for module in BUSINESS_MODULES:
@@ -26,7 +27,7 @@ target_metadata = Base.metadata
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
-PROJECT_SCHEMAS = frozenset(("identity", "audit", "permission", *BUSINESS_SCHEMAS))
+PROJECT_SCHEMAS = frozenset(("identity", "audit", "feedback", "permission", *BUSINESS_SCHEMAS))
 
 
 def include_name(
