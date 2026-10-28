@@ -11,8 +11,10 @@
  * 屏幕等大，名称标注随放大逐级显现（放得下才显示）。
  * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
  * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
- * 布局：svg 按底图宽高比自适应居中（不留横向空白）；名称标注贪心避让
- * （标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；底部
+ * 布局：底图近正方形（宽高比≈1.05），通栏卡按宽撑高会到 ~1.3 屏高——
+ * 地图盒高度封顶 min(60vh,640px)、宽度=高×宽高比（贴合绘制区）；xl 起
+ * 图例 + 「未映射」栏收进右侧纵栏与地图并排，整卡一屏可见。名称标注贪心
+ * 避让（标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；
  * 「未映射」栏清单直出 + AI 建议确认入口（#2）。
  * 第七/八路（2026-10-27）：今日新增隐患（患·深红）+ 未整改隐患（改·紫红，
  * 当前态）+ 消防设施到期（消到·橙，已到期+30 天临期，当前态）。
@@ -179,6 +181,16 @@ function clampVb(v: ViewBox): ViewBox {
   return { x, y, w, h }
 }
 
+// ── 一屏可见：地图盒高度封顶，宽度=高×底图宽高比且封顶 100%。宽高比用
+// min() 显式算而非 CSS aspect-ratio——部分渲染内核对 svg 容器不生效
+const MAP_MAX_H_VH = 60
+const MAP_MAX_H_PX = 640
+const MAP_RATIO = VIEW_W / GEOM.viewH
+const MAP_BOX_STYLE = {
+  height: `min(${MAP_MAX_H_VH}vh, ${MAP_MAX_H_PX}px)`,
+  width: `min(100%, ${(MAP_MAX_H_VH * MAP_RATIO).toFixed(2)}vh, ${Math.round(MAP_MAX_H_PX * MAP_RATIO)}px)`,
+} as const
+
 // ── 配色 ────────────────────────────────────────────────────────────
 // 底图：当日有落点=淡靛强调，其余暖灰；hover 统一加深
 const FILL_BASE = '#f5f4f1'
@@ -211,6 +223,21 @@ const HAZARD_OPEN_FILL = '#c2255c'
 
 // 消防设施到期徽标（橙，当前态快照：已到期+30 天临期）
 const FIRE_EXT_FILL = '#e8590c'
+
+// 图例（10 项）：原挤卡头 action 通栏下要换行 3-4 行，迁至右侧纵栏
+const LEGEND: { label: string; fill: string; stroke?: string; square?: boolean }[] = [
+  { label: '当日有落点', fill: FILL_ACTIVE, stroke: STROKE_ACTIVE, square: true },
+  ...BADGES.map(b => ({
+    label: b.label === '火' ? '动火' : b.label === '受' ? '受限' : '其他作业',
+    fill: b.fill as string,
+  })),
+  { label: '关键风险作业', fill: RISK_FILL },
+  { label: '超储物料', fill: OVER_LIMIT_FILL },
+  { label: '今日新增隐患', fill: HAZARD_NEW_FILL },
+  { label: '未整改隐患', fill: HAZARD_OPEN_FILL },
+  { label: '消防设施到期', fill: FIRE_EXT_FILL },
+  { label: '报警', fill: ALARM_FILL, stroke: ALARM_STROKE },
+]
 
 const KIND_LABEL: Record<string, string> = {
   job: '作业票',
@@ -849,68 +876,6 @@ export function FacilityMapCard() {
     <SectionCard
       title="厂区风险分区 · 当日分布"
       description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 作业票/关键风险/超储/隐患（新增+未整改）/消防设施到期与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
-      action={
-        <div className="flex items-center gap-2 text-[11px] text-[var(--color-steel)]">
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-[2px]"
-              style={{ background: FILL_ACTIVE, border: `1px solid ${STROKE_ACTIVE}` }}
-            />
-            当日有落点
-          </span>
-          {BADGES.map(b => (
-            <span key={b.key} className="inline-flex items-center gap-1">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ background: b.fill }}
-              />
-              {b.label === '火' ? '动火' : b.label === '受' ? '受限' : '其他作业'}
-            </span>
-          ))}
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: RISK_FILL }}
-            />
-            关键风险作业
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: OVER_LIMIT_FILL }}
-            />
-            超储物料
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: HAZARD_NEW_FILL }}
-            />
-            今日新增隐患
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: HAZARD_OPEN_FILL }}
-            />
-            未整改隐患
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: FIRE_EXT_FILL }}
-            />
-            消防设施到期
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ background: ALARM_FILL, border: `1px solid ${ALARM_STROKE}` }}
-            />
-            报警
-          </span>
-        </div>
-      }
     >
       {isError ? (
         <EmptyGuide
@@ -920,19 +885,20 @@ export function FacilityMapCard() {
           description="落点数据拉取失败（平台或表格抖动），稍后自动恢复；分区底图不受影响"
         />
       ) : isLoading || !data ? (
-        <div className="flex h-[420px] items-center justify-center">
+        <div className="flex items-center justify-center" style={{ height: MAP_BOX_STYLE.height }}>
           <Spin />
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-3">
           {data.errors.length > 0 && (
             <div className="rounded-md bg-[var(--wh-warn-bg)] px-3 py-1.5 text-[12px] text-[var(--wh-warn)]">
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
-          {/* 底图宽高比容器：padding-top 百分比手法（CSS aspect-ratio 在
-              部分渲染内核对 svg 不生效，地图会缩成固有尺寸小方块） */}
-          <div className="relative w-full" style={{ paddingTop: `${(GEOM.viewH / VIEW_W) * 100}%` }}>
+          {/* 地图盒：高度封顶一屏可见；宽度=高×宽高比贴合绘制区（svg 绝对
+              填充，preserveAspectRatio 居中兜底）。xl 起与右侧图例/未映射纵栏并排 */}
+          <div className="flex flex-col gap-3 xl:flex-row">
+            <div className="relative mx-auto w-full flex-none" style={MAP_BOX_STYLE}>
               <svg
                 ref={svgRef}
                 viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
@@ -1029,48 +995,75 @@ export function FacilityMapCard() {
               <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-white/80 px-1.5 py-0.5 text-[11px] text-[var(--color-steel)]">
                 {Math.round(zoom * 100)}%
               </div>
-          </div>
-          <div className="rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-              <span className="text-[13px] font-medium text-[var(--color-charcoal)]">
-                未映射 {data.unmapped.length} 处
-                <span className="ml-1 font-normal text-[var(--color-steel)]">
-                  （{unmappedEvents} 条事件）
-                </span>
-              </span>
-              <span className="flex items-center gap-3">
-                <span className="text-[11px] text-[var(--color-steel)]">
-                  未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）
-                </span>
-                <Button type="primary" ghost size="small" onClick={() => setConfirmOpen(true)}>
-                  AI 建议映射 →
-                </Button>
-              </span>
             </div>
-            {data.unmapped.length > 0 && (
-              <div className="mt-2 grid max-h-36 grid-cols-1 gap-x-8 gap-y-1 overflow-y-auto border-t border-[var(--color-hairline-soft)] pt-2 md:grid-cols-2 xl:grid-cols-3">
-                {data.unmapped.slice(0, 60).map(u => (
-                  <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
-                    <span className="truncate text-[var(--color-charcoal)]" title={u.text}>
-                      {u.text}
+            {/* 右侧纵栏：图例 + 未映射清单（原分置卡头与地图下方，均占竖向
+                空间；收进侧栏与地图并排，整卡一屏可见） */}
+            <aside className="flex min-w-0 flex-1 flex-col gap-2">
+              <div className="rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2">
+                <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">图例</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {LEGEND.map(l => (
+                    <span
+                      key={l.label}
+                      className="inline-flex items-center gap-1 text-[11px] text-[var(--color-steel)]"
+                    >
+                      <span
+                        className={`inline-block h-2 w-2 ${l.square ? 'rounded-[2px]' : 'rounded-full'}`}
+                        style={{
+                          background: l.fill,
+                          ...(l.stroke ? { border: `1px solid ${l.stroke}` } : {}),
+                        }}
+                      />
+                      {l.label}
                     </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {u.kinds.map(k => (
-                        <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
-                          {KIND_LABEL[k] ?? k}
-                        </Tag>
-                      ))}
-                      <span className="text-[var(--color-steel)]">×{u.count}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-col rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2 xl:min-h-0 xl:flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                  <span className="text-[13px] font-medium text-[var(--color-charcoal)]">
+                    未映射 {data.unmapped.length} 处
+                    <span className="ml-1 font-normal text-[var(--color-steel)]">
+                      （{unmappedEvents} 条事件）
                     </span>
-                  </div>
-                ))}
-                {data.unmapped.length > 60 && (
-                  <span className="text-[11px] text-[var(--color-steel)]">
-                    其余 {data.unmapped.length - 60} 条在确认列表内查看
                   </span>
+                  <Button type="primary" ghost size="small" onClick={() => setConfirmOpen(true)}>
+                    AI 建议映射 →
+                  </Button>
+                </div>
+                <div className="mt-0.5 text-[11px] text-[var(--color-steel)]">
+                  未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）
+                </div>
+                {data.unmapped.length > 0 ? (
+                  <div className="mt-2 grid min-h-0 max-h-48 flex-1 grid-cols-1 gap-x-8 gap-y-1 overflow-y-auto border-t border-[var(--color-hairline-soft)] pt-2 md:grid-cols-2 xl:max-h-none">
+                    {data.unmapped.slice(0, 60).map(u => (
+                      <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
+                        <span className="truncate text-[var(--color-charcoal)]" title={u.text}>
+                          {u.text}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          {u.kinds.map(k => (
+                            <Tag key={k} className="m-0" style={{ fontSize: 10, lineHeight: '16px' }}>
+                              {KIND_LABEL[k] ?? k}
+                            </Tag>
+                          ))}
+                          <span className="text-[var(--color-steel)]">×{u.count}</span>
+                        </span>
+                      </div>
+                    ))}
+                    {data.unmapped.length > 60 && (
+                      <span className="text-[11px] text-[var(--color-steel)]">
+                        其余 {data.unmapped.length - 60} 条在确认列表内查看
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-2 border-t border-[var(--color-hairline-soft)] pt-2 text-[12px] text-[var(--color-steel)]">
+                    当日无未映射事件
+                  </div>
                 )}
               </div>
-            )}
+            </aside>
           </div>
         </div>
       )}
