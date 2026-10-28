@@ -82,7 +82,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "chemical": [
         # 1-D 域收敛：危化品库存+MSDS 台账合一域
         "query_chemical_inventory", "analyze_chemical_risk", "query_msds",
-        # 写《危险品日报表》数量（确认流；admin/dept_leader 才有权限）
+        # 写《危险品日报表》数量（确认流；creator/manager 才有权限）
         "update_chemical_inventory",
         # agent-query-p1：库存趋势派生面
         "query_chemical_trend",

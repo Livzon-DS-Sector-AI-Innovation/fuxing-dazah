@@ -17,7 +17,7 @@
 - chat_id=None → 降级（不调发送）；
 - 发送失败 → 兜底 base64；
 - registry TOOL_KIND / _all_read_funcs / _all_write_funcs 接线；
-- permissions 角色授予（admin/leader 可，inspector/viewer 拒）；
+- permissions 角色授予（creator/manager 可，viewer 拒）；
 - executor 确认卡摘要分支（新的 generate_guardian_subsidy，旧 export_subsidy_report
   分支已删除）。
 """
@@ -179,7 +179,7 @@ def _ctx(db: Any, *, chat_id: str | None = "oc_test") -> RunContext[SafetyDeps]:
     deps = SafetyDeps(
         db=db,
         person=None,
-        role="safety_admin",
+        role="creator",
         session_id="",
         channel="feishu",
         chat_id=chat_id,
@@ -451,12 +451,11 @@ def test_registry_kind_and_func_lists() -> None:
 
 
 def test_permissions_role_policy() -> None:
-    """监护补贴工具：safety_admin / dept_leader 可调；inspector / viewer 拒绝。"""
-    assert core_permissions.check("safety_admin", TOOL_PREVIEW_GUARDIAN_SUBSIDY)
-    assert core_permissions.check("safety_admin", TOOL_GENERATE_GUARDIAN_SUBSIDY)
-    assert core_permissions.check("dept_leader", TOOL_PREVIEW_GUARDIAN_SUBSIDY)
-    assert core_permissions.check("dept_leader", TOOL_GENERATE_GUARDIAN_SUBSIDY)
-    assert not core_permissions.check("inspector", TOOL_GENERATE_GUARDIAN_SUBSIDY)
+    """监护补贴工具：creator / manager 可调；viewer 拒绝。"""
+    assert core_permissions.check("creator", TOOL_PREVIEW_GUARDIAN_SUBSIDY)
+    assert core_permissions.check("creator", TOOL_GENERATE_GUARDIAN_SUBSIDY)
+    assert core_permissions.check("manager", TOOL_PREVIEW_GUARDIAN_SUBSIDY)
+    assert core_permissions.check("manager", TOOL_GENERATE_GUARDIAN_SUBSIDY)
     assert not core_permissions.check("viewer", TOOL_PREVIEW_GUARDIAN_SUBSIDY)
     assert not core_permissions.check(None, TOOL_PREVIEW_GUARDIAN_SUBSIDY)
 

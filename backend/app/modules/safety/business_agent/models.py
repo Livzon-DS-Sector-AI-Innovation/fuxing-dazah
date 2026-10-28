@@ -143,7 +143,7 @@ class AgentPendingAction(BaseModel):
 class AgentUserRole(BaseModel):
     """用户角色绑定。
 
-    将飞书 user_id 映射到固定角色（safety_admin / dept_leader / inspector / viewer）。
+    将飞书 user_id 映射到固定角色（creator / manager / viewer，2026-10-28 四档并三档）。
     角色对应权限见 ``permissions.py`` 的 ``ROLE_TOOL_POLICY``。
     """
 
@@ -157,7 +157,7 @@ class AgentUserRole(BaseModel):
         String(128), unique=True, comment="identity.users.feishu_user_id"
     )
     role: Mapped[str] = mapped_column(
-        String(64), comment="角色：safety_admin / dept_leader / inspector / viewer"
+        String(64), comment="角色：creator / manager / viewer（旧值经别名映射兼容）"
     )
     display_name: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="备注/显示名"

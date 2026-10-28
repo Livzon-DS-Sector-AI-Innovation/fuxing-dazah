@@ -3,7 +3,7 @@
 覆盖 spec（.scratch/agent-action-p3/spec.md）T4：
 submit_hazard_identification（draft → in_progress 提交进 AI 流程）/
 retry_hazard_identification_node（事件丢失兜底重触发当前节点）。
-仅 safety_admin。
+仅 creator。
 
 测试接缝：工具函数边界直接调用；resolve 走 FakeSession（select 结果），
 SafetyService.submit / advance_bitable_record 类级/模块级打桩。
@@ -19,9 +19,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     check,
 )
@@ -58,7 +57,7 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-def _ctx(db: Any, role: str = "safety_admin") -> SimpleNamespace:
+def _ctx(db: Any, role: str = "creator") -> SimpleNamespace:
     return SimpleNamespace(
         deps=SimpleNamespace(db=db, person=None, role=role, session_id="s1", channel="test")
     )
@@ -112,9 +111,8 @@ class TestHazardIdActionWiring:
 
     def test_permissions_admin_only(self) -> None:
         for tool in ("submit_hazard_identification", "retry_hazard_identification_node"):
-            assert check(ROLE_SAFETY_ADMIN, tool)
-            assert not check(ROLE_DEPT_LEADER, tool)
-            assert not check(ROLE_INSPECTOR, tool)
+            assert check(ROLE_CREATOR, tool)
+            assert not check(ROLE_MANAGER, tool)
             assert not check(ROLE_VIEWER, tool)
 
 

@@ -1,7 +1,7 @@
 """特殊作业报备查询与审批工具（agent-action-p2）。
 
 query_special_operation_reports（只读，四角色）+ approve /
-reject_special_operation_report（写，仅 safety_admin——部门负责人可能是
+reject_special_operation_report（写，仅 creator——管理者可能是
 报备发起方，避免自审自发，spec 拍板②）。工具体不重写业务逻辑，直接调
 SpecialOperationReportService；report_no / report_id 双态定位（resolve_pg_record
 同款模式，用户口头引用报备编号即可）。
@@ -188,7 +188,7 @@ async def approve_special_operation_report(
     ctx: RunContext[SafetyDeps],
     report_id: str,
 ) -> dict[str, Any]:
-    """审批通过特殊作业报备（已提交→已审批，仅安全管理员可用）。
+    """审批通过特殊作业报备（已提交→已审批，仅创建者可用）。
 
     审批前建议先用 query_special_operation_reports 查看待审批清单，
     在确认卡中向用户复述报备编号/作业类型/部门/负责人后再执行。
@@ -228,7 +228,7 @@ async def reject_special_operation_report(
     report_id: str,
     reason: str,
 ) -> dict[str, Any]:
-    """驳回报备（已提交→已驳回，仅安全管理员可用；驳回原因必填）。
+    """驳回报备（已提交→已驳回，仅创建者可用；驳回原因必填）。
 
     驳回原因会写回报备单，报备部门据此修改后重新提交。
 

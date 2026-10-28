@@ -24,9 +24,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     allowed_tools,
 )
@@ -52,9 +51,8 @@ class TestExportHazardReportWiring:
         assert "export_hazard_report" in tool_selector.TOOL_GROUPS["hazard"]
 
     def test_permissions_admin_and_leader_only(self) -> None:
-        assert "export_hazard_report" in allowed_tools(ROLE_SAFETY_ADMIN)
-        assert "export_hazard_report" in allowed_tools(ROLE_DEPT_LEADER)
-        assert "export_hazard_report" not in allowed_tools(ROLE_INSPECTOR)
+        assert "export_hazard_report" in allowed_tools(ROLE_CREATOR)
+        assert "export_hazard_report" in allowed_tools(ROLE_MANAGER)
         assert "export_hazard_report" not in allowed_tools(ROLE_VIEWER)
 
     @pytest.mark.parametrize(
@@ -342,9 +340,8 @@ class TestSendHazardUrgeWiring:
         assert "send_hazard_urge" in tool_selector.TOOL_GROUPS["hazard"]
 
     def test_permissions_admin_and_leader_only(self) -> None:
-        assert "send_hazard_urge" in allowed_tools(ROLE_SAFETY_ADMIN)
-        assert "send_hazard_urge" in allowed_tools(ROLE_DEPT_LEADER)
-        assert "send_hazard_urge" not in allowed_tools(ROLE_INSPECTOR)
+        assert "send_hazard_urge" in allowed_tools(ROLE_CREATOR)
+        assert "send_hazard_urge" in allowed_tools(ROLE_MANAGER)
         assert "send_hazard_urge" not in allowed_tools(ROLE_VIEWER)
 
     @pytest.mark.parametrize(
@@ -585,7 +582,7 @@ class TestSendHazardUrgeConfirmationFlow:
         captured = self._install_stubs(monkeypatch)
         sid = "11111111-2222-3333-4444-555555555555"
         deps = SafetyDeps(
-            db=SimpleNamespace(), person=None, role="safety_admin",
+            db=SimpleNamespace(), person=None, role="creator",
             session_id=sid, channel="test",
         )
 
@@ -610,7 +607,7 @@ class TestSendHazardUrgeConfirmationFlow:
         captured = self._install_stubs(monkeypatch)
         sid = "11111111-2222-3333-4444-555555555555"
         deps = SafetyDeps(
-            db=SimpleNamespace(), person=None, role="safety_admin",
+            db=SimpleNamespace(), person=None, role="creator",
             session_id=sid, channel="test",
         )
 
@@ -667,9 +664,8 @@ class TestPushReportToChatWiring:
         assert "push_report_to_chat" in tool_selector.TOOL_GROUPS["hazard"]
 
     def test_permissions_admin_and_leader_only(self) -> None:
-        assert "push_report_to_chat" in allowed_tools(ROLE_SAFETY_ADMIN)
-        assert "push_report_to_chat" in allowed_tools(ROLE_DEPT_LEADER)
-        assert "push_report_to_chat" not in allowed_tools(ROLE_INSPECTOR)
+        assert "push_report_to_chat" in allowed_tools(ROLE_CREATOR)
+        assert "push_report_to_chat" in allowed_tools(ROLE_MANAGER)
         assert "push_report_to_chat" not in allowed_tools(ROLE_VIEWER)
 
     @pytest.mark.parametrize(
@@ -879,7 +875,7 @@ def _run(coro: Any) -> Any:
 
 def _ctx(db: Any, *, chat_id: str | None = "oc_test") -> SimpleNamespace:
     return SimpleNamespace(
-        deps=SimpleNamespace(db=db, chat_id=chat_id, role="safety_admin",
+        deps=SimpleNamespace(db=db, chat_id=chat_id, role="creator",
                              person=None),
     )
 

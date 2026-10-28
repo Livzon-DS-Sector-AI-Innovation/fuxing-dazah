@@ -21,9 +21,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     check,
 )
@@ -98,7 +97,7 @@ def _alarm(alarm_id: uuid.UUID, status: str = "firing", **kw: Any) -> SimpleName
     return obj
 
 
-def _ctx(db: FakeSession, role: str = "safety_admin", person: Any = None) -> SimpleNamespace:
+def _ctx(db: FakeSession, role: str = "creator", person: Any = None) -> SimpleNamespace:
     return SimpleNamespace(
         deps=SimpleNamespace(db=db, person=person, role=role, session_id="s1", channel="test")
     )
@@ -150,9 +149,8 @@ class TestTelemetryActionWiring:
 
     def test_permissions_admin_leader_only(self) -> None:
         for tool in ("ack_telemetry_alarm", "resolve_telemetry_alarm"):
-            assert check(ROLE_SAFETY_ADMIN, tool)
-            assert check(ROLE_DEPT_LEADER, tool)
-            assert not check(ROLE_INSPECTOR, tool)
+            assert check(ROLE_CREATOR, tool)
+            assert check(ROLE_MANAGER, tool)
             assert not check(ROLE_VIEWER, tool)
 
 
@@ -373,7 +371,7 @@ class TestAckConfirmationFlow:
         return out, captured
 
     def test_approved_grants_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        out, captured = self._resume(monkeypatch, role="safety_admin", approved=True)
+        out, captured = self._resume(monkeypatch, role="creator", approved=True)
         assert out["executed"] is True
         assert captured["resume_tool_names"] == ["ack_telemetry_alarm"]
         results = captured["deferred_tool_results"]
@@ -382,7 +380,7 @@ class TestAckConfirmationFlow:
     def test_cancelled_denies_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic_ai.tools import ToolDenied
 
-        out, captured = self._resume(monkeypatch, role="safety_admin", approved=False)
+        out, captured = self._resume(monkeypatch, role="creator", approved=False)
         value = list(captured["deferred_tool_results"].approvals.values())[0]
         assert isinstance(value, ToolDenied)
 

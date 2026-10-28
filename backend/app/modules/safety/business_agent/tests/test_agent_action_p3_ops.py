@@ -19,9 +19,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     check,
 )
@@ -38,7 +37,7 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-def _ctx(db: Any = None, role: str = "safety_admin") -> SimpleNamespace:
+def _ctx(db: Any = None, role: str = "creator") -> SimpleNamespace:
     return SimpleNamespace(
         deps=SimpleNamespace(
             db=db or SimpleNamespace(), person=None, role=role,
@@ -103,9 +102,8 @@ class TestOpsActionWiring:
 
     def test_permissions_admin_only(self) -> None:
         for tool in ("sync_domain_data", "run_workticket_review"):
-            assert check(ROLE_SAFETY_ADMIN, tool)
-            assert not check(ROLE_DEPT_LEADER, tool)
-            assert not check(ROLE_INSPECTOR, tool)
+            assert check(ROLE_CREATOR, tool)
+            assert not check(ROLE_MANAGER, tool)
             assert not check(ROLE_VIEWER, tool)
 
 
@@ -371,7 +369,7 @@ class TestSyncConfirmationFlow:
         return out, captured
 
     def test_approved_grants_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        out, captured = self._resume(monkeypatch, role="safety_admin", approved=True)
+        out, captured = self._resume(monkeypatch, role="creator", approved=True)
         assert out["executed"] is True
         assert captured["resume_tool_names"] == ["sync_domain_data"]
         assert list(captured["deferred_tool_results"].approvals.values()) == [True]
@@ -379,14 +377,14 @@ class TestSyncConfirmationFlow:
     def test_cancelled_denies_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic_ai.tools import ToolDenied
 
-        out, captured = self._resume(monkeypatch, role="safety_admin", approved=False)
+        out, captured = self._resume(monkeypatch, role="creator", approved=False)
         value = list(captured["deferred_tool_results"].approvals.values())[0]
         assert isinstance(value, ToolDenied)
 
     def test_low_role_denied_with_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic_ai.tools import ToolDenied
 
-        out, captured = self._resume(monkeypatch, role="dept_leader", approved=True)
+        out, captured = self._resume(monkeypatch, role="manager", approved=True)
         value = list(captured["deferred_tool_results"].approvals.values())[0]
         assert isinstance(value, ToolDenied)
         assert "权限不足" in str(value)

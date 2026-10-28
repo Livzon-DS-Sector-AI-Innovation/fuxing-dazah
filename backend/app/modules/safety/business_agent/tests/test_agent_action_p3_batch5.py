@@ -3,7 +3,7 @@
 覆盖 spec（.scratch/agent-action-p3/spec.md）T6：
 freeze_standard_check（季度定格，无参=今天/date 补跑）/
 scan_chemical_inventory（危化品全量风险扫描）/
-reseed_daily_digest（按日期重投速递格子）。仅 safety_admin。
+reseed_daily_digest（按日期重投速递格子）。仅 creator。
 
 测试接缝：工具函数边界直接调用；freeze_due/send_standard_compliance_digest、
 ChemicalInventoryService.run_full_scan、生成链（fire/special_op）、
@@ -20,9 +20,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     check,
 )
@@ -40,7 +39,7 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-def _ctx(db: Any = None, role: str = "safety_admin") -> SimpleNamespace:
+def _ctx(db: Any = None, role: str = "creator") -> SimpleNamespace:
     if db is None:
         db = _FakeDb()
     return SimpleNamespace(
@@ -94,9 +93,8 @@ class TestBatch5Wiring:
 
     def test_permissions_admin_only(self) -> None:
         for tool in ("freeze_standard_check", "scan_chemical_inventory", "reseed_daily_digest"):
-            assert check(ROLE_SAFETY_ADMIN, tool)
-            assert not check(ROLE_DEPT_LEADER, tool)
-            assert not check(ROLE_INSPECTOR, tool)
+            assert check(ROLE_CREATOR, tool)
+            assert not check(ROLE_MANAGER, tool)
             assert not check(ROLE_VIEWER, tool)
 
 

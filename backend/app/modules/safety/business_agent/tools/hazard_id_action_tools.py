@@ -8,7 +8,7 @@
 工具体不重写业务逻辑：提交复用 SafetyService.submit_hazard_identification，
 补触发复用 feishu/hazard_identification_bitable_handler.advance_bitable_record。
 定位双态（照二期 report_no/report_id 先例）：平台 UUID / hazard_id_no
-（HI-YYYYMMDD-NNN）/ feishu_record_id 三选一。仅 safety_admin。
+（HI-YYYYMMDD-NNN）/ feishu_record_id 三选一。仅 creator。
 """
 
 from __future__ import annotations

@@ -19,9 +19,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     check,
 )
@@ -39,7 +38,7 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-def _ctx(db: Any = None, role: str = "safety_admin") -> SimpleNamespace:
+def _ctx(db: Any = None, role: str = "creator") -> SimpleNamespace:
     return SimpleNamespace(
         deps=SimpleNamespace(
             db=db or SimpleNamespace(), person=None, role=role,
@@ -132,9 +131,8 @@ class TestKnowledgeActionWiring:
             "generate_knowledge_ppt",
             "generate_knowledge_summary",
         ):
-            assert check(ROLE_SAFETY_ADMIN, tool)
-            assert check(ROLE_DEPT_LEADER, tool)
-            assert not check(ROLE_INSPECTOR, tool)
+            assert check(ROLE_CREATOR, tool)
+            assert check(ROLE_MANAGER, tool)
             assert not check(ROLE_VIEWER, tool)
 
 

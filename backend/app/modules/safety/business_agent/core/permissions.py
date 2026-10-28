@@ -12,10 +12,9 @@ agent.md 里的「能力清单」只是给模型的引导；能不能真正调�
 
 from __future__ import annotations
 
-# ── 角色 ─────────────────────────────────────────────────────────
-ROLE_SAFETY_ADMIN = "safety_admin"  # 安全管理员：全部能力
-ROLE_DEPT_LEADER = "dept_leader"  # 部门负责人：查询 + 建隐患 + 派整改
-ROLE_INSPECTOR = "inspector"  # 检查人员：查询 + 建隐患
+# ── 角色（2026-10-28 拍板：四档并三档，dept_leader+inspector 合并为 manager）──
+ROLE_CREATOR = "creator"  # 创建者：全部能力（原 safety_admin）
+ROLE_MANAGER = "manager"  # 管理者：查询 + 建隐患 + 派整改 + 执行面（原 dept_leader∪inspector，inspector 为其真子集）
 ROLE_VIEWER = "viewer"  # 只读：仅查询
 
 # ── 工具名（与 tools/registry.py 保持一致）─────────────────────────
@@ -31,7 +30,7 @@ TOOL_QUERY_LATEST_REGULATIONS = "query_latest_regulations"  # view 区分爬取/
 TOOL_QUERY_DRILLS = "query_drills"  # kind 区分演练计划/实施记录（1-C 合并）
 TOOL_QUERY_MSDS = "query_msds"  # kind 区分 MSDS 台账/采集记录（1-C 合并）
 TOOL_QUERY_REGULATION_CRAWL_STATUS = "query_regulation_crawl_status"  # 采集监控状态（收录管线）
-TOOL_QUERY_AI_AUDITS = "query_ai_audits"  # 审计数据含 prompt 全文，仅 safety_admin
+TOOL_QUERY_AI_AUDITS = "query_ai_audits"  # 审计数据含 prompt 全文，仅 creator
 TOOL_QUERY_AI_CONFIG = "query_ai_config"  # AI 配置（模型与场景清单，脱敏）
 TOOL_QUERY_SCHEDULER_TASKS = "query_scheduler_tasks"  # 定时任务清单
 TOOL_QUERY_BITABLE_CONFIG = "query_bitable_config"  # Bitable 连接/映射配置（app_token 脱敏）
@@ -101,7 +100,7 @@ TOOL_EXPORT_HAZARD_REPORT = "export_hazard_report"
 TOOL_PUSH_REPORT_TO_CHAT = "push_report_to_chat"
 # 特殊作业报备单查询（agent-action-p2：PG 库报备单，只读，四角色）
 TOOL_QUERY_SPECIAL_OPERATION_REPORTS = "query_special_operation_reports"
-# 特殊作业报备审批（agent-action-p2：状态流转，仅 safety_admin——部门负责人
+# 特殊作业报备审批（agent-action-p2：状态流转，仅 creator——管理者
 # 可能是报备发起方，避免自审自发，spec 拍板②）
 TOOL_APPROVE_SPECIAL_OPERATION_REPORT = "approve_special_operation_report"
 TOOL_REJECT_SPECIAL_OPERATION_REPORT = "reject_special_operation_report"
@@ -130,7 +129,7 @@ TOOL_CREATE_OH_FOLLOWUP = "create_oh_followup"
 TOOL_CLOSE_OH_FOLLOWUP = "close_oh_followup"
 TOOL_ANALYZE_OH_TRANSFER = "analyze_oh_transfer"
 TOOL_OVERRIDE_OH_CONCLUSION = (
-    "override_oh_conclusion"  # 结论覆盖属合规判定，仅 safety_admin
+    "override_oh_conclusion"  # 结论覆盖属合规判定，仅 creator
 )
 # 消防/中控报警分析（1-C 合一：scope=fire|central + period=daily|monthly）
 TOOL_GENERATE_ALARM_REPORT = "generate_alarm_report"
@@ -146,7 +145,7 @@ TOOL_QUERY_CHEMICAL_INVENTORY = "query_chemical_inventory"
 TOOL_UPDATE_CHEMICAL_INVENTORY = "update_chemical_inventory"
 TOOL_ANALYZE_CHEMICAL_RISK = "analyze_chemical_risk"
 # 监护补贴统计（平台作业票数据源；只读预览 + 写入生成，涉及持证台账/补贴金额，仅
-# safety_admin 与 dept_leader——部门安环人员主场景；inspector/viewer 不授予）
+# creator 与 manager——部门安环人员主场景；viewer 不授予）
 TOOL_PREVIEW_GUARDIAN_SUBSIDY = "preview_guardian_subsidy"
 TOOL_GENERATE_GUARDIAN_SUBSIDY = "generate_guardian_subsidy"
 
@@ -188,7 +187,7 @@ OFFICE_WRITE_TOOLS: frozenset[str] = frozenset(
         TOOL_OFFICE_UPLOAD_FILE,
     }
 )
-# 高危办公写工具：仅 safety_admin（dept_leader 不授予）
+# 高危办公写工具：仅 creator（manager 不授予）
 OFFICE_DANGEROUS_TOOLS: frozenset[str] = frozenset(
     {
         TOOL_OFFICE_SET_PERMISSION,
@@ -307,7 +306,7 @@ _HAZARD_ACTION_WRITE_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# 特殊作业报备审批（仅 safety_admin；查询走 _READ_TOOLS 四角色）
+# 特殊作业报备审批（仅 creator，防管理者自审自发；查询走 _READ_TOOLS 全角色）
 _SPECIAL_OP_APPROVAL_WRITE_TOOLS: frozenset[str] = frozenset(
     {
         TOOL_APPROVE_SPECIAL_OPERATION_REPORT,
@@ -344,7 +343,7 @@ _KNOWLEDGE_GENERATION_WRITE_TOOLS: frozenset[str] = frozenset(
 )
 
 # 危险源辨识流转执行面（agent-action-p3）：提交 AI 流程 / 节点补触发
-# （仅 safety_admin，拍板：流转触发类与运维同口径）
+# （仅 creator，拍板：流转触发类与运维同口径）
 _HAZARD_ID_WRITE_TOOLS: frozenset[str] = frozenset(
     {
         TOOL_SUBMIT_HAZARD_IDENTIFICATION,
@@ -353,7 +352,7 @@ _HAZARD_ID_WRITE_TOOLS: frozenset[str] = frozenset(
 )
 
 # 运维触发执行面（agent-action-p3）：手动同步 / 手动跑审核 / 定格 / 扫描 /
-# 速递重投（仅 safety_admin，低频运维补触发收口到安全管理员，拍板⑥）
+# 速递重投（仅 creator，低频运维补触发收口到创建者，拍板⑥）
 _OPS_WRITE_TOOLS: frozenset[str] = frozenset(
     {
         TOOL_SYNC_DOMAIN_DATA,
@@ -366,7 +365,7 @@ _OPS_WRITE_TOOLS: frozenset[str] = frozenset(
 
 # ── 角色 → 允许工具（deny-by-default：未列出的角色/工具一律拒绝）──────
 ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
-    ROLE_SAFETY_ADMIN: _READ_TOOLS
+    ROLE_CREATOR: _READ_TOOLS
     | {
         TOOL_QUERY_AI_AUDITS,
         TOOL_GENERATE_DRILL_PLAN,
@@ -399,7 +398,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _KNOWLEDGE_GENERATION_WRITE_TOOLS
     | _HAZARD_ID_WRITE_TOOLS
     | _OPS_WRITE_TOOLS,
-    ROLE_DEPT_LEADER: _READ_TOOLS
+    ROLE_MANAGER: _READ_TOOLS
     | {
         TOOL_GENERATE_DRILL_PLAN,
         TOOL_SYNC_DRILL_TO_FEISHU,
@@ -423,12 +422,8 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _DRILL_ACTION_WRITE_TOOLS
     | _TELEMETRY_ACTION_WRITE_TOOLS
     | _KNOWLEDGE_GENERATION_WRITE_TOOLS,
-    ROLE_INSPECTOR: _READ_TOOLS
-    | {TOOL_CREATE_URS_REVIEW, TOOL_UPDATE_CHEMICAL_INVENTORY}
-    | OFFICE_READ_TOOLS
-    | _OH_READ_TOOLS,
     # 查询对全员开放；危化品写入工具对全员可见但工具内强制「仅限本部门」
-    # （管理员除外，见 write_tools.update_chemical_inventory）
+    # （创建者除外，见 write_tools.update_chemical_inventory）
     ROLE_VIEWER: _READ_TOOLS | OFFICE_READ_TOOLS | _OH_READ_TOOLS
     | {TOOL_UPDATE_CHEMICAL_INVENTORY},
 }
@@ -436,12 +431,20 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
 # 所有已知角色（用于校验 agent_user_roles.role 合法性）
 KNOWN_ROLES: frozenset[str] = frozenset(ROLE_TOOL_POLICY.keys())
 
+# 旧角色值别名（2026-10-28 四档并三档）：DB/调用方残留旧值时按新角色解释，
+# 未知值仍 deny-by-default 返回空集
+_LEGACY_ROLE_ALIASES: dict[str, str] = {
+    "safety_admin": ROLE_CREATOR,
+    "dept_leader": ROLE_MANAGER,
+    "inspector": ROLE_MANAGER,
+}
+
 
 def allowed_tools(role: str | None) -> frozenset[str]:
     """返回该角色被允许调用的工具集合；未知/空角色返回空集（deny-by-default）。"""
     if not role:
         return frozenset()
-    return ROLE_TOOL_POLICY.get(role, frozenset())
+    return ROLE_TOOL_POLICY.get(_LEGACY_ROLE_ALIASES.get(role, role), frozenset())
 
 
 def check(role: str | None, tool_name: str) -> bool:

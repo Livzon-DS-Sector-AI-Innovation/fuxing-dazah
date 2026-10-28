@@ -9,7 +9,7 @@
 
 工具体不重写业务逻辑：直接调各域 service；直读闸门/投格护栏照抄各 API
 与调度链口径。直读短路返回 skipped=True + 说明（不是错误）；service 异常
-捕获降级返回 success=False 不抛出（照 API 层降级模式）。仅 safety_admin。
+捕获降级返回 success=False 不抛出（照 API 层降级模式）。仅 creator。
 """
 
 from __future__ import annotations

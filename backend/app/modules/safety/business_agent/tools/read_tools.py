@@ -514,7 +514,7 @@ async def query_ai_audits(
     days: int = 7,
     limit: int = 10,
 ) -> dict[str, Any]:
-    """查询 AI 调用审计记录（仅安全管理员可用）。
+    """查询 AI 调用审计记录（仅创建者可用）。
 
     可回答"昨天整改初审失败的调用有哪些""这周 AI 花了多少 token"等问题。
     返回每次 AI 调用的场景、关联业务对象、模型、token 用量、耗时、状态与错误信息。
@@ -537,11 +537,11 @@ async def query_ai_audits(
         check as perm_check,
     )
 
-    # 硬护栏：只读工具不走 resume 权限校验，审计数据仅 safety_admin 可查，
+    # 硬护栏：只读工具不走 resume 权限校验，审计数据仅 creator 可查，
     # 必须在工具执行层自行强制（deny-by-default）。
     if not perm_check(ctx.deps.role, TOOL_QUERY_AI_AUDITS):
         return {
-            "error": "权限不足：AI 调用审计仅安全管理员（safety_admin）可查询。",
+            "error": "权限不足：AI 调用审计仅创建者（creator）可查询。",
             "items": [],
             "total": 0,
         }

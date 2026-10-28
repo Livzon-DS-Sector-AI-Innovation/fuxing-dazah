@@ -21,9 +21,8 @@ import pytest
 
 from app.modules.safety.business_agent import tool_selector
 from app.modules.safety.business_agent.core.permissions import (
-    ROLE_DEPT_LEADER,
-    ROLE_INSPECTOR,
-    ROLE_SAFETY_ADMIN,
+    ROLE_CREATOR,
+    ROLE_MANAGER,
     ROLE_VIEWER,
     allowed_tools,
 )
@@ -75,7 +74,7 @@ class FakeSession:
 
 def _ctx(db: Any) -> SimpleNamespace:
     return SimpleNamespace(
-        deps=SimpleNamespace(db=db, chat_id="oc_test", role="safety_admin",
+        deps=SimpleNamespace(db=db, chat_id="oc_test", role="creator",
                              person=None),
     )
 
@@ -127,9 +126,8 @@ class TestDrillActionWiring:
     def test_permissions_admin_and_leader(self) -> None:
         """对齐 generate_drill_plan 现状：admin + leader。"""
         for name in ("generate_drill_eval", "create_hazards_from_drill"):
-            assert name in allowed_tools(ROLE_SAFETY_ADMIN)
-            assert name in allowed_tools(ROLE_DEPT_LEADER)
-            assert name not in allowed_tools(ROLE_INSPECTOR)
+            assert name in allowed_tools(ROLE_CREATOR)
+            assert name in allowed_tools(ROLE_MANAGER)
             assert name not in allowed_tools(ROLE_VIEWER)
 
     @pytest.mark.parametrize(
@@ -336,15 +334,14 @@ class TestSpecialOpApprovalWiring:
             assert name in tool_selector.TOOL_GROUPS["special_op"]
 
     def test_permissions_query_all_roles(self) -> None:
-        for role in (ROLE_SAFETY_ADMIN, ROLE_DEPT_LEADER, ROLE_INSPECTOR,
-                     ROLE_VIEWER):
+        for role in (ROLE_CREATOR, ROLE_MANAGER, ROLE_VIEWER):
             assert "query_special_operation_reports" in allowed_tools(role)
 
     def test_permissions_approve_reject_admin_only(self) -> None:
-        """审批仅 safety_admin；其余三角色拒绝（spec 拍板②）。"""
-        assert "approve_special_operation_report" in allowed_tools(ROLE_SAFETY_ADMIN)
-        assert "reject_special_operation_report" in allowed_tools(ROLE_SAFETY_ADMIN)
-        for role in (ROLE_DEPT_LEADER, ROLE_INSPECTOR, ROLE_VIEWER):
+        """审批仅 creator；其余角色拒绝（spec 拍板②，防管理者自审自发）。"""
+        assert "approve_special_operation_report" in allowed_tools(ROLE_CREATOR)
+        assert "reject_special_operation_report" in allowed_tools(ROLE_CREATOR)
+        for role in (ROLE_MANAGER, ROLE_VIEWER):
             assert "approve_special_operation_report" not in allowed_tools(role)
             assert "reject_special_operation_report" not in allowed_tools(role)
 

@@ -29,9 +29,8 @@ if TYPE_CHECKING:
 
 # 角色中文标签（迁自 memory/injector.py 的 _ROLE_LABELS，保持展示一致）
 _ROLE_LABELS: dict[str, str] = {
-    "safety_admin": "安全管理员",
-    "dept_leader": "部门负责人",
-    "inspector": "检查人员",
+    "creator": "创建者",
+    "manager": "管理者",
     "viewer": "只读用户",
 }
 

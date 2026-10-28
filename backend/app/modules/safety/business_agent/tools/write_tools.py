@@ -1035,7 +1035,7 @@ async def update_chemical_inventory(
     只允许改「当前数量 / 一昼夜使用量 / 库存上限」三个数值列；行按
     部门子表+物料名[+部位]当次现查定位（不信任缓存的行号，防行漂移）。
 
-    权限口径：管理员（safety_admin）不限部门；其他角色**仅限本部门**——
+    权限口径：创建者（creator）不限部门；其他角色**仅限本部门**——
     按人员信息（identity.users.department）映射：功能部门子表（发酵一部/
     提炼一部/QC/仓库/环保工程中心等）按子表名匹配；产品线子表（替考/艾默/
     达托等）按该行「存放部位」中的车间归属匹配（如 车间二 人员只能改
@@ -1065,7 +1065,7 @@ async def update_chemical_inventory(
     # ── 部门准入：管理员不限；其余角色仅限本部门（人员信息 department 映射）──
     person = getattr(ctx.deps, "person", None)
     person_dept = (getattr(person, "department", None) or "").strip()
-    if role_of_deps(ctx) != "safety_admin":
+    if role_of_deps(ctx) != "creator":
         if not person_dept:
             return {
                 "ok": False,
@@ -1107,7 +1107,7 @@ async def update_chemical_inventory(
             ],
         }
 
-    if role_of_deps(ctx) != "safety_admin":
+    if role_of_deps(ctx) != "creator":
         allowed = [r for r in rows if _row_within_department(r, person_dept)]
         if not allowed:
             return {

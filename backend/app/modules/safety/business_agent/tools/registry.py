@@ -313,7 +313,7 @@ TOOL_KIND: dict[str, bool] = {
     "export_hazard_report": True,
     # 隐患执行面（agent-action-p2：三类报表推群，需用户确认）
     "push_report_to_chat": True,
-    # 特殊作业报备审批（agent-action-p2：状态流转，仅安全管理员，需用户确认）
+    # 特殊作业报备审批（agent-action-p2：状态流转，仅创建者，需用户确认）
     "approve_special_operation_report": True,
     "reject_special_operation_report": True,
     # 演练执行面（agent-action-p2：AI 评估表/问题转隐患，需用户确认）
@@ -326,13 +326,13 @@ TOOL_KIND: dict[str, bool] = {
     "generate_knowledge_card": True,
     "generate_knowledge_ppt": True,
     "generate_knowledge_summary": True,
-    # 危险源辨识流转执行面（agent-action-p3：提交/补触发，仅安全管理员，需用户确认）
+    # 危险源辨识流转执行面（agent-action-p3：提交/补触发，仅创建者，需用户确认）
     "submit_hazard_identification": True,
     "retry_hazard_identification_node": True,
-    # 运维触发执行面（agent-action-p3：手动同步/跑审核，仅安全管理员，需用户确认）
+    # 运维触发执行面（agent-action-p3：手动同步/跑审核，仅创建者，需用户确认）
     "sync_domain_data": True,
     "run_workticket_review": True,
-    # 第 5 组（agent-action-p3）：季度定格/危化品扫描/速递重投，仅安全管理员
+    # 第 5 组（agent-action-p3）：季度定格/危化品扫描/速递重投，仅创建者
     "freeze_standard_check": True,
     "scan_chemical_inventory": True,
     "reseed_daily_digest": True,
