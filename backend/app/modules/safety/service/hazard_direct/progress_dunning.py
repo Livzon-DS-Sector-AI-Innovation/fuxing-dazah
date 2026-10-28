@@ -242,35 +242,27 @@ async def resolve_dunning_recipients(
     return out
 
 
-async def send_progress_dunning_dynamic() -> dict[str, Any]:
-    """一卡一隐患，私发给每条隐患的「责任人 + 分管安全员」。
+async def send_urge_cards(
+    views: list[bitable_repo.HazardView],
+) -> tuple[dict[str, Any], list[tuple[bitable_repo.HazardView, str, Any]],
+           list[tuple[bitable_repo.HazardView, str, Any]],
+           list[tuple[bitable_repo.HazardView, str, Any]]]:
+    """对给定隐患逐条解析收件人并 DM 催办卡（定时链与 Agent 手动催办共用）。
 
-    0 命中时不发卡，但仍向「安全速递」总卡投递「今日无需催办」简报
-    （有无均报，口径对齐消防报警日报）。
+    收件人解析三层链 + @提及作用域换算 + 发送循环，与定时催办完全同链；
+    卡片内「提交进展」表单直接回写多维表格。不含拉取与速递投递（调用方负责）。
+
+    Returns:
+        (stats, plan, sent_plan, failed_plan)——plan 供速递简报引用。
     """
     from app.modules.safety.feishu.notification import send_user_card
     from app.modules.safety.feishu.progress_card import build_progress_card
 
-    views, candidates = await find_dunning_overview()
-    stats: dict[str, Any] = {
-        "total": len(views), "candidates": candidates,
-        "sent": 0, "skipped": 0, "errors": 0,
-        "marked": len(views), "recipients": 0,
-    }
-    if not views:
-        logger.info("⑤ 当前无「未更新进展」隐患，不发卡（督办候选 %d 条）", candidates)
-        # 0 命中也投速递格子（报告口径对齐消防报警日报：有无均报）
-        try:
-            stats["digest_upserted"] = await _upsert_dunning_digest(
-                views, [], [], [], stats,
-            )
-        except Exception:
-            stats["digest_upserted"] = False
-            logger.exception("⑤ 催办简报投递安全速递异常（不影响私发结果）")
-        return stats
-
     plan = await resolve_dunning_recipients(views)
-    stats["recipients"] = len({(p.user_id or p.open_id) for _, _, p in plan})
+    stats: dict[str, Any] = {
+        "total": len(views), "sent": 0, "skipped": 0, "errors": 0,
+        "recipients": len({(p.user_id or p.open_id) for _, _, p in plan}),
+    }
     logger.info(
         "⑤ 动态收件人: 隐患=%d 收件人次=%d 去重人数=%d",
         len(views), len(plan), stats["recipients"],
@@ -337,6 +329,36 @@ async def send_progress_dunning_dynamic() -> dict[str, Any]:
         "⑤ 催办完成(动态名单): sent=%d skipped=%d errors=%d 收件人=%d",
         stats["sent"], stats["skipped"], stats["errors"], stats["recipients"],
     )
+    return stats, plan, sent_plan, failed_plan
+
+
+async def send_progress_dunning_dynamic() -> dict[str, Any]:
+    """一卡一隐患，私发给每条隐患的「责任人 + 分管安全员」。
+
+    0 命中时不发卡，但仍向「安全速递」总卡投递「今日无需催办」简报
+    （有无均报，口径对齐消防报警日报）。
+    """
+    views, candidates = await find_dunning_overview()
+    stats: dict[str, Any] = {
+        "total": len(views), "candidates": candidates,
+        "marked": len(views),
+    }
+    if not views:
+        logger.info("⑤ 当前无「未更新进展」隐患，不发卡（督办候选 %d 条）", candidates)
+        stats.update(sent=0, skipped=0, errors=0, recipients=0)
+        # 0 命中也投速递格子（报告口径对齐消防报警日报：有无均报）
+        try:
+            stats["digest_upserted"] = await _upsert_dunning_digest(
+                views, [], [], [], stats,
+            )
+        except Exception:
+            stats["digest_upserted"] = False
+            logger.exception("⑤ 催办简报投递安全速递异常（不影响私发结果）")
+        return stats
+
+    send_stats, plan, sent_plan, failed_plan = await send_urge_cards(views)
+    stats.update(send_stats)
+    stats["marked"] = len(views)
 
     # 私发完成后，催办简报（含已私发对象）投递「安全速递」总卡；
     # 失败只告警，不影响私发结果与任务状态。

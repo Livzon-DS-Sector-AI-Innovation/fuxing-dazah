@@ -125,13 +125,29 @@ from app.modules.safety.business_agent.tools.domain_query_tools import (
     query_visitor_insurance,
 )
 
+# ── 隐患/报表执行面（agent-action-p2：催办/导出/推群，按需挂载）──
+from app.modules.safety.business_agent.tools.hazard_action_tools import (
+    export_hazard_report,
+    push_report_to_chat,
+    send_hazard_urge,
+)
+
+# ── 特殊作业报备查询与审批（agent-action-p2：查询只读+审批写，按需挂载）──
+from app.modules.safety.business_agent.tools.special_op_action_tools import (
+    approve_special_operation_report,
+    query_special_operation_reports,
+    reject_special_operation_report,
+)
+
 # ── 写入 ──
 from app.modules.safety.business_agent.tools.write_tools import (
     analyze_oh_transfer,
     close_oh_followup,
+    create_hazards_from_drill,
     create_oh_followup,
     generate_alarm_report,
     generate_daily_report,
+    generate_drill_eval,
     generate_drill_plan,
     generate_supervision_bulletin,
     override_oh_conclusion,
@@ -204,6 +220,8 @@ TOOL_KIND: dict[str, bool] = {
     "query_ehs_changes": False,
     "query_work_ticket_reviews": False,
     "query_hazard_identifications": False,
+    # 特殊作业报备单查询（agent-action-p2：PG 库报备单，只读）
+    "query_special_operation_reports": False,
     # 体系标准符合性核查（S1 目标责任与绩效，只读）
     "query_standard_compliance": False,
     # 作业票外包人员直读筛查（只读：平台直读 + 内存比对，零落库）
@@ -261,6 +279,18 @@ TOOL_KIND: dict[str, bool] = {
     "poll_hazard_ai_analysis": True,
     "poll_hazard_rectification_review": True,
     "send_hazard_supervision_bulletin": True,
+    # 隐患执行面（agent-action-p2：DM 催办卡，需用户确认）
+    "send_hazard_urge": True,
+    # 隐患执行面（agent-action-p2：导出 Excel 发对话，需用户确认）
+    "export_hazard_report": True,
+    # 隐患执行面（agent-action-p2：三类报表推群，需用户确认）
+    "push_report_to_chat": True,
+    # 特殊作业报备审批（agent-action-p2：状态流转，仅安全管理员，需用户确认）
+    "approve_special_operation_report": True,
+    "reject_special_operation_report": True,
+    # 演练执行面（agent-action-p2：AI 评估表/问题转隐患，需用户确认）
+    "generate_drill_eval": True,
+    "create_hazards_from_drill": True,
     # 监护补贴统计（只读：预览；写入：生成 Excel 并回传文件，需用户确认）
     "preview_guardian_subsidy": False,
     "generate_guardian_subsidy": True,
@@ -331,11 +361,12 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
         query_facility_ledgers,
         query_facility_tasks,
         query_facility_inspections,
-        query_training_behavior,
-        query_visitor_insurance,
-        query_overview,
-        query_chemical_trend,
-    ] + _OFFICE_READ_FUNCS
+    query_training_behavior,
+    query_visitor_insurance,
+    query_overview,
+    query_chemical_trend,
+    query_special_operation_reports,
+] + _OFFICE_READ_FUNCS
 
 
 def _all_write_funcs() -> list[Callable[..., Any]]:
@@ -362,6 +393,13 @@ def _all_write_funcs() -> list[Callable[..., Any]]:
         poll_hazard_rectification_review,
         send_hazard_supervision_bulletin,
         update_chemical_inventory,
+        send_hazard_urge,
+        export_hazard_report,
+        push_report_to_chat,
+        approve_special_operation_report,
+        reject_special_operation_report,
+        generate_drill_eval,
+        create_hazards_from_drill,
     ] + _OFFICE_WRITE_FUNCS
 
 

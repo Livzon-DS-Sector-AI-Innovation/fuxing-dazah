@@ -116,6 +116,90 @@ async def sync_drill_plan_to_feishu(
 # generate_drill_report 已移除 — 当前版本仅支持 AI 演练方案生成
 
 
+# ── 演练执行面（agent-action-p2）：AI 评估表 / 问题转隐患 ──────────
+
+
+async def generate_drill_eval(
+    ctx: RunContext[SafetyDeps],
+    record_id: str,
+) -> dict[str, Any]:
+    """AI 生成演练评估表（基于演练记录表，回写「演练评估表（AI）」）。
+
+    输入演练记录 ID，AI 根据记录表全文（必要时对照演练方案）生成符合
+    标准的评估表文档并版本化落库，回填记录的复核字段。要求该记录已
+    上传演练记录表附件。
+
+    参数：
+    - record_id: 演练记录 ID（平台 UUID 或 Bitable recXXX，双态；必填）
+
+    返回评估表文档信息（文档 ID/标题/版本/飞书链接）。
+    注意：此操作调用 AI 生成文档，需要用户确认后才执行。
+    """
+    from app.modules.safety.service.drill_eval import generate_eval_form
+    from app.modules.safety.service.emergency_drill import EmergencyDrillService
+
+    service = EmergencyDrillService(ctx.deps.db)
+    record = await service.resolve_pg_record(record_id)
+    if record is None:
+        return {"success": False,
+                "error": f"演练记录不存在，请确认 record_id（UUID 或 recXXX）: {record_id}"}
+    if not record.drill_record_file:
+        return {"success": False, "error": "该记录未上传演练记录表，无法生成评估表"}
+    doc = await generate_eval_form(ctx.deps.db, record.id, source="manual")
+    await ctx.deps.db.commit()
+    if doc is None:
+        return {
+            "success": False,
+            "error": "评估表生成失败（记录表无可解析文本或 AI 服务不可用），请稍后重试",
+        }
+    return {
+        "success": True,
+        "action": "drill_eval_generated",
+        "document_id": str(doc.id),
+        "title": doc.title,
+        "doc_type": doc.doc_type,
+        "version": doc.version,
+        "feishu_doc_url": doc.feishu_doc_url,
+        "feishu_doc_status": doc.feishu_doc_status,
+        "message": f"评估表《{doc.title}》已生成（v{doc.version}）",
+    }
+
+
+async def create_hazards_from_drill(
+    ctx: RunContext[SafetyDeps],
+    record_id: str,
+) -> dict[str, Any]:
+    """把演练发现的问题一键转为隐患记录（AI 拆分并建立追踪关联）。
+
+    将演练记录的「演练问题」字段经 AI 拆分为逐条隐患，生成隐患编号并
+    建立演练↔隐患追踪关联；已关联过隐患的记录幂等跳过（返回既有关联）。
+
+    参数：
+    - record_id: 演练记录 ID（平台 UUID 或 Bitable recXXX，双态；必填）
+
+    返回创建的隐患清单（hazard_id / hazard_no / drill_record_id）。
+    注意：此操作会实际创建隐患记录，需要用户确认后才执行。
+    """
+    from app.modules.safety.service.emergency_drill import EmergencyDrillService
+
+    service = EmergencyDrillService(ctx.deps.db)
+    record = await service.resolve_pg_record(record_id)
+    if record is None:
+        return {"success": False,
+                "error": f"演练记录不存在，请确认 record_id（UUID 或 recXXX）: {record_id}"}
+    if not (record.issues or "").strip():
+        return {"success": False, "error": "该记录的演练问题为空，没有可转隐患的内容"}
+    created = await service.create_hazards_from_issues(record.id)
+    await ctx.deps.db.commit()
+    return {
+        "success": True,
+        "action": "drill_hazards_created",
+        "created_count": len(created),
+        "items": created,
+        "message": f"已从演练问题创建 {len(created)} 条隐患记录并建立追踪关联",
+    }
+
+
 async def sync_audit_hazards(
     ctx: RunContext[SafetyDeps],
 ) -> dict[str, Any]:

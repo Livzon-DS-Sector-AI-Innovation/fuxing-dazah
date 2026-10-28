@@ -124,41 +124,27 @@ async def query_hazards(
         """外审缺陷项 → hazard 风格 items；未接入返回 (空, 0, 提示)。
 
         过滤映射：status/rectification_status=closed→已关闭行、其余值→未关闭行；
-        date_from/date_to 按检查日期 checked_at（含当日）；截断同 limit。"""
-        from datetime import date as _date
-        from datetime import timedelta as _td
-
+        date_from/date_to 按检查日期 checked_at（含当日）；截断同 limit。
+        过滤实现复用 external_audit.filter_views（与报表导出同口径）。"""
         from app.modules.safety.service.hazard_direct.external_audit import (
             fetch_external_audit,
+            filter_views,
         )
 
         views = await fetch_external_audit()
         if views is None:
             return [], 0, "管委会外审隐患表未接入"
-        rows = views
-        if department:
-            rows = [v for v in rows if department in "、".join(v.departments)]
+        want_closed: bool | None = None
         if rectification_status or status:
             want_closed = (rectification_status or status) == "closed"
-            rows = [v for v in rows if v.closed == want_closed]
-        if keyword:
-            rows = [
-                v for v in rows
-                if keyword in v.description or keyword in v.plan
-            ]
-        d_from = _date.fromisoformat(date_from) if date_from else None
-        d_to = _date.fromisoformat(date_to) if date_to else None
-        if d_from or d_to:
-            def _in_window(v: Any) -> bool:
-                if v.checked_at is None:
-                    return False
-                if d_from and v.checked_at < d_from:
-                    return False
-                if d_to and v.checked_at > d_to:
-                    return False
-                return True
-            rows = [v for v in rows if _in_window(v)]
-        rows = rows[:limit]
+        rows = filter_views(
+            views,
+            department=department,
+            closed=want_closed,
+            keyword=keyword,
+            date_from=date_from,
+            date_to=date_to,
+        )[:limit]
         items = [
             {
                 "id": v.record_id,

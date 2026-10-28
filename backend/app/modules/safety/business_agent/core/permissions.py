@@ -73,6 +73,21 @@ TOOL_GENERATE_SUPERVISION_BULLETIN = "generate_supervision_bulletin"
 TOOL_POLL_HAZARD_AI_ANALYSIS = "poll_hazard_ai_analysis"
 TOOL_POLL_HAZARD_RECTIFICATION_REVIEW = "poll_hazard_rectification_review"
 TOOL_SEND_HAZARD_SUPERVISION_BULLETIN = "send_hazard_supervision_bulletin"
+# 隐患执行面（agent-action-p2）：点对点催办（DM 催办卡给责任人+分管安全员）
+TOOL_SEND_HAZARD_URGE = "send_hazard_urge"
+# 隐患执行面（agent-action-p2）：隐患报表导出（Excel 发到当前对话）
+TOOL_EXPORT_HAZARD_REPORT = "export_hazard_report"
+# 隐患执行面（agent-action-p2）：三类报表通用推群
+TOOL_PUSH_REPORT_TO_CHAT = "push_report_to_chat"
+# 特殊作业报备单查询（agent-action-p2：PG 库报备单，只读，四角色）
+TOOL_QUERY_SPECIAL_OPERATION_REPORTS = "query_special_operation_reports"
+# 特殊作业报备审批（agent-action-p2：状态流转，仅 safety_admin——部门负责人
+# 可能是报备发起方，避免自审自发，spec 拍板②）
+TOOL_APPROVE_SPECIAL_OPERATION_REPORT = "approve_special_operation_report"
+TOOL_REJECT_SPECIAL_OPERATION_REPORT = "reject_special_operation_report"
+# 演练执行面（agent-action-p2）：AI 评估表 / 问题转隐患
+TOOL_GENERATE_DRILL_EVAL = "generate_drill_eval"
+TOOL_CREATE_HAZARDS_FROM_DRILL = "create_hazards_from_drill"
 # URS 智能审核
 TOOL_QUERY_URS_RECORDS = "query_urs_records"
 TOOL_QUERY_URS_REVIEW_DETAIL = "query_urs_review_detail"
@@ -208,6 +223,7 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_QUERY_VISITOR_INSURANCE,
         TOOL_QUERY_OVERVIEW,
         TOOL_QUERY_CHEMICAL_TREND,
+        TOOL_QUERY_SPECIAL_OPERATION_REPORTS,
     }
 )
 
@@ -260,6 +276,33 @@ _HAZARD_BULLETIN_WRITE_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# 隐患执行面（agent-action-p2）：点对点催办 / 报表导出 / 通用推群
+# （DM 催办卡 / 发文件到对话 / 推群，均需用户确认；admin/leader）
+_HAZARD_ACTION_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_SEND_HAZARD_URGE,
+        TOOL_EXPORT_HAZARD_REPORT,
+        TOOL_PUSH_REPORT_TO_CHAT,
+    }
+)
+
+# 特殊作业报备审批（仅 safety_admin；查询走 _READ_TOOLS 四角色）
+_SPECIAL_OP_APPROVAL_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_APPROVE_SPECIAL_OPERATION_REPORT,
+        TOOL_REJECT_SPECIAL_OPERATION_REPORT,
+    }
+)
+
+# 演练执行面（agent-action-p2）：AI 评估表 / 问题转隐患（admin/leader，
+# 对齐 generate_drill_plan 现状）
+_DRILL_ACTION_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_GENERATE_DRILL_EVAL,
+        TOOL_CREATE_HAZARDS_FROM_DRILL,
+    }
+)
+
 # ── 角色 → 允许工具（deny-by-default：未列出的角色/工具一律拒绝）──────
 ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     ROLE_SAFETY_ADMIN: _READ_TOOLS
@@ -287,7 +330,10 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _ALARM_WRITE_TOOLS
     | _GUARDIAN_SUBSIDY_TOOLS
     | _HAZARD_POLL_WRITE_TOOLS
-    | _HAZARD_BULLETIN_WRITE_TOOLS,
+    | _HAZARD_BULLETIN_WRITE_TOOLS
+    | _HAZARD_ACTION_WRITE_TOOLS
+    | _SPECIAL_OP_APPROVAL_WRITE_TOOLS
+    | _DRILL_ACTION_WRITE_TOOLS,
     ROLE_DEPT_LEADER: _READ_TOOLS
     | {
         TOOL_GENERATE_DRILL_PLAN,
@@ -307,7 +353,9 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _ALARM_WRITE_TOOLS
     | _GUARDIAN_SUBSIDY_TOOLS
     | _HAZARD_POLL_WRITE_TOOLS
-    | _HAZARD_BULLETIN_WRITE_TOOLS,
+    | _HAZARD_BULLETIN_WRITE_TOOLS
+    | _HAZARD_ACTION_WRITE_TOOLS
+    | _DRILL_ACTION_WRITE_TOOLS,
     ROLE_INSPECTOR: _READ_TOOLS
     | {TOOL_CREATE_URS_REVIEW, TOOL_UPDATE_CHEMICAL_INVENTORY}
     | OFFICE_READ_TOOLS

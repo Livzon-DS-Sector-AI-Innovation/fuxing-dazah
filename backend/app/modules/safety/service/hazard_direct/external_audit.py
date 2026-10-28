@@ -166,6 +166,44 @@ def _dept_label(view: ExternalAuditView) -> str:
     return "、".join(DEPT_NORMALIZE.get(d, d) for d in view.departments)
 
 
+def filter_views(
+    views: list[ExternalAuditView],
+    *,
+    department: str | None = None,
+    closed: bool | None = None,
+    keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[ExternalAuditView]:
+    """外审缺陷项内存过滤（查询工具与报表导出共用，保持两路口径一致）。
+
+    department 子串匹配多选部门并集；closed=True/False 精确筛选（None=不过滤）；
+    keyword 匹配描述或整改方案；date_from/date_to 按检查日期（含当日，ISO）。
+    """
+    from datetime import date as _date
+
+    rows = views
+    if department:
+        rows = [v for v in rows if department in "、".join(v.departments)]
+    if closed is not None:
+        rows = [v for v in rows if v.closed == closed]
+    if keyword:
+        rows = [v for v in rows if keyword in v.description or keyword in v.plan]
+    d_from = _date.fromisoformat(date_from) if date_from else None
+    d_to = _date.fromisoformat(date_to) if date_to else None
+    if d_from or d_to:
+        def _in_window(v: ExternalAuditView) -> bool:
+            if v.checked_at is None:
+                return False
+            if d_from and v.checked_at < d_from:
+                return False
+            if d_to and v.checked_at > d_to:
+                return False
+            return True
+        rows = [v for v in rows if _in_window(v)]
+    return rows
+
+
 def _record_link(view: ExternalAuditView, app_token: str, table_id: str) -> str:
     if not (view.record_id and app_token and table_id):
         return ""
@@ -290,5 +328,6 @@ __all__ = [
     "all_clear_line",
     "build_external_section",
     "fetch_external_audit",
+    "filter_views",
     "to_view",
 ]

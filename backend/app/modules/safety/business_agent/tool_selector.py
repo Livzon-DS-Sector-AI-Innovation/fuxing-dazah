@@ -1,9 +1,10 @@
 """工具按需加载 —— 按用户意图动态选择工具子集，减少 tool definitions 开销。
 
-1-C 后口径：名册 67 个工具 = 常驻 37（registry.RESIDENT_TOOLS，默认 Agent 注册面）
-+ 按需 30（urs/ops/office 低频写/证照/相关方/明细查询等，域命中时挂载）。
-关键词命中 → 「核心兜底 + 命中域工具集」；未命中由调用方决定兜底（1-D：核心 15，
-不再回退全量）。全量 schema 参考 scripts/measure_tool_schema.py 实测（88.7KB 基线）。
+1-C 后口径：名册 75 个工具 = 常驻 37（registry.RESIDENT_TOOLS，默认 Agent 注册面）
++ 按需 38（urs/ops/office 低频写/证照/相关方/明细查询/执行面动作等，域命中时
+挂载；agent-action-p2 增 8）。关键词命中 → 「核心兜底 + 命中域工具集」；未命中
+由调用方决定兜底（1-D：核心 15，不再回退全量）。全量 schema 参考
+scripts/measure_tool_schema.py 实测（88.7KB 基线）。
 """
 
 from __future__ import annotations
@@ -22,6 +23,12 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_hazards", "query_hazard_stats",
         # 隐患直读模式：督办通报（只读生成 / 推群）。轮询触发收 ops 运维域（拍板②）。
         "generate_supervision_bulletin", "send_hazard_supervision_bulletin",
+        # 执行面（agent-action-p2）：点对点催办（DM 催办卡给责任人+分管安全员）
+        "send_hazard_urge",
+        # 执行面（agent-action-p2）：隐患报表导出（Excel 发对话）
+        "export_hazard_report",
+        # 执行面（agent-action-p2）：三类报表通用推群
+        "push_report_to_chat",
         # 1-D 域收敛：危险源辨识并入隐患域
         "query_hazard_identifications",
     ],
@@ -37,6 +44,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "drill": [
         "query_drills",
         "generate_drill_plan", "sync_drill_plan_to_feishu",
+        # 执行面（agent-action-p2）：AI 评估表 / 问题转隐患
+        "generate_drill_eval", "create_hazards_from_drill",
     ],
     "ops": [
         # 运维域（按需，拍板②④）：隐患轮询补跑 + 管理调试查询（Web 后台均有页面）
@@ -93,6 +102,10 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "special_op": [
         "query_special_op_records", "query_key_risk_ops",
         "generate_daily_report", "office_create_docx",
+        # 执行面（agent-action-p2）：报备单查询 + 审批（仅管理员）
+        "query_special_operation_reports",
+        "approve_special_operation_report",
+        "reject_special_operation_report",
     ],
     # 仓储查询域（2-E 消费侧：跨模块查库存/物料/流水/报表，按需挂载）
     "warehouse": [
@@ -130,6 +143,13 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "危险源", "风险", "关闭",
         # 「督办通报」本身不含「隐患」二字，必须单独给词，否则这类问法收不到工具
         "督办", "通报",
+        # 执行面（agent-action-p2）：点对点催办话术
+        "催一下", "催办", "督办到人", "催责任人", "催一遍",
+        # 执行面（agent-action-p2）：报表导出话术（与隐患同现时才有意义，
+        # 裸「导出」多挂无害，模型按语义选工具）
+        "导出", "导一份",
+        # 执行面（agent-action-p2）：通用推群话术
+        "发到群里", "推送到群",
         # 1-D 域收敛：危险源辨识关键词并入
         "辨识记录", "LEC", "JHA",
     ],
@@ -143,7 +163,11 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "在册", "花名册", "实名", "在场人员", "在厂人员", "外包",
         "岗位字典", "有哪些岗位", "岗位有哪些", "厂里岗位",
     ],
-    "drill": ["演练", "应急", "预案", "逃生", "疏散"],
+    "drill": [
+        "演练", "应急", "预案", "逃生", "疏散",
+        # 执行面（agent-action-p2）：评估表/转隐患话术
+        "评估表", "转隐患",
+    ],
     "ops": [
         "审计", "AI调用", "token", "调用记录",
         "AI配置", "模型配置", "多维表格配置", "定时任务", "调度", "后台任务",
@@ -175,6 +199,8 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "特殊作业", "作业判定", "特殊作业记录", "特殊作业明细", "动火作业", "受限空间",
         "高处作业", "吊装", "临时用电", "盲板", "动土", "断路", "计划外作业",
         "关键风险作业", "关键作业",
+        # 执行面（agent-action-p2）：报备审批话术
+        "报备", "审批", "驳回", "通过",
     ],
     "warehouse": [
         "仓库", "仓储", "入库", "出库", "领用", "呆料", "复验期",
