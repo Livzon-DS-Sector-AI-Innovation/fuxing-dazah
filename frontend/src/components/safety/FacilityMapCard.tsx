@@ -12,9 +12,10 @@
  * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
  * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
  * 布局：底图近正方形（宽高比≈1.05），通栏卡按宽撑高会到 ~1.3 屏高——
- * 地图盒高度封顶 min(60vh,640px)、宽度=高×宽高比（贴合绘制区）；xl 起
- * 图例 + 「未映射」栏收进右侧纵栏与地图并排，整卡一屏可见。名称标注贪心
- * 避让（标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；
+ * 地图盒高度封顶 min(75vh,760px)、宽度=高×宽高比（贴合绘制区）；图例
+ * 通栏横条一行；「未映射」栏 xl 起固定 300px 与地图并排等高（清单滚轮
+ * 滚动），整卡一屏可见。名称标注贪心避让
+ * （标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；
  * 「未映射」栏清单直出 + AI 建议确认入口（#2）。
  * 第七/八路（2026-10-27）：今日新增隐患（患·深红）+ 未整改隐患（改·紫红，
  * 当前态）+ 消防设施到期（消到·橙，已到期+30 天临期，当前态）。
@@ -183,8 +184,9 @@ function clampVb(v: ViewBox): ViewBox {
 
 // ── 一屏可见：地图盒高度封顶，宽度=高×底图宽高比且封顶 100%。宽高比用
 // min() 显式算而非 CSS aspect-ratio——部分渲染内核对 svg 容器不生效
-const MAP_MAX_H_VH = 60
-const MAP_MAX_H_PX = 640
+// （未映射栏收窄为固定 300px 后高度上限 60vh→75vh，图随之放大）
+const MAP_MAX_H_VH = 75
+const MAP_MAX_H_PX = 760
 const MAP_RATIO = VIEW_W / GEOM.viewH
 const MAP_BOX_STYLE = {
   height: `min(${MAP_MAX_H_VH}vh, ${MAP_MAX_H_PX}px)`,
@@ -895,10 +897,32 @@ export function FacilityMapCard() {
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
+          {/* 图例横条：通栏一行放下（10 项 ×90px ≈ 900px），不占侧栏竖向空间 */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {LEGEND.map(l => (
+              <span
+                key={l.label}
+                className="inline-flex items-center gap-1 text-[11px] text-[var(--color-steel)]"
+              >
+                <span
+                  className={`inline-block h-2 w-2 ${l.square ? 'rounded-[2px]' : 'rounded-full'}`}
+                  style={{
+                    background: l.fill,
+                    ...(l.stroke ? { border: `1px solid ${l.stroke}` } : {}),
+                  }}
+                />
+                {l.label}
+              </span>
+            ))}
+          </div>
           {/* 地图盒：高度封顶一屏可见；宽度=高×宽高比贴合绘制区（svg 绝对
-              填充，preserveAspectRatio 居中兜底）。xl 起与右侧图例/未映射纵栏并排 */}
-          <div className="flex flex-col gap-3 xl:flex-row">
-            <div className="relative mx-auto w-full flex-none" style={MAP_BOX_STYLE}>
+              填充，preserveAspectRatio 居中兜底）。xl 起与固定宽未映射栏并排
+              （栏高拉伸与地图等高），窄 xl 视口下地图再让出栏宽防溢出 */}
+          <div className="flex flex-col gap-3 xl:flex-row xl:justify-center">
+            <div
+              className="relative mx-auto w-full flex-none xl:mx-0 xl:max-w-[calc(100%-312px)]"
+              style={MAP_BOX_STYLE}
+            >
               <svg
                 ref={svgRef}
                 viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
@@ -996,29 +1020,10 @@ export function FacilityMapCard() {
                 {Math.round(zoom * 100)}%
               </div>
             </div>
-            {/* 右侧纵栏：图例 + 未映射清单（原分置卡头与地图下方，均占竖向
-                空间；收进侧栏与地图并排，整卡一屏可见） */}
-            <aside className="flex min-w-0 flex-1 flex-col gap-2">
-              <div className="rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2">
-                <div className="mb-1.5 text-[12px] font-medium text-[var(--color-stone)]">图例</div>
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  {LEGEND.map(l => (
-                    <span
-                      key={l.label}
-                      className="inline-flex items-center gap-1 text-[11px] text-[var(--color-steel)]"
-                    >
-                      <span
-                        className={`inline-block h-2 w-2 ${l.square ? 'rounded-[2px]' : 'rounded-full'}`}
-                        style={{
-                          background: l.fill,
-                          ...(l.stroke ? { border: `1px solid ${l.stroke}` } : {}),
-                        }}
-                      />
-                      {l.label}
-                    </span>
-                  ))}
-                </div>
-              </div>
+            {/* 未映射栏：xl 固定 300px 窄栏，高度=地图高度表达式（与
+                MAP_MAX_H_* 常量同步改），清单在栏内滚轮滚动（原 flex-1 宽栏
+                ~610px，收窄一半腾宽放大地图；不设高度时行高会被清单内容撑开） */}
+            <aside className="flex min-w-0 flex-col xl:h-[min(75vh,760px)] xl:flex-none xl:w-[300px]">
               <div className="flex flex-col rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2 xl:min-h-0 xl:flex-1">
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
                   <span className="text-[13px] font-medium text-[var(--color-charcoal)]">
