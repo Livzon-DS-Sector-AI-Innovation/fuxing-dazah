@@ -126,6 +126,13 @@ def window_for(period: str, today: date) -> PeriodWindow:
     return PeriodWindow(date(y, 1, 1), date(y, 12, 31))
 
 
+def format_target(operator: str | None, target_value: float | None, unit: str | None) -> str:
+    """目标值展示（page 清单行与 snapshot 历史行同一口径）：≥1次 / —。"""
+    if target_value is None:
+        return "—"
+    return f"{operator or '≥'}{target_value:g}{unit or ''}"
+
+
 def _compare(value: float, operator: str | None, target: float | None) -> bool:
     if target is None:
         return False
