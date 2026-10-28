@@ -51,10 +51,12 @@ async def query_hazards(
     date_from: str = "",
     date_to: str = "",
     limit: int = 20,
+    source: str = "",
 ) -> dict[str, Any]:
-    """查询隐患记录列表。
+    """查询隐患记录列表（默认公司内部登记表；可切换/合并管委会外审来源）。
 
-    数据源：**直读飞书多维表格「隐患登记表」**（平台库镜像已停用）。
+    数据源：**直读飞书多维表格**——内部隐患走「隐患登记表」，external 走
+    「管委会检查缺陷项汇总表」（两张表无交集）。
 
     可按部门、隐患状态、整改状态、关键词、日期范围等条件筛选。
 
@@ -66,6 +68,8 @@ async def query_hazards(
         date_from: 起始日期 ISO（按检查日期）
         date_to: 截止日期 ISO（按检查日期）
         limit: 返回条数上限（默认20）
+        source: 数据来源——空/internal=公司内部隐患登记表（默认）/
+            external=管委会检查外审隐患 / all=两表合并（items 带 source 标记）
     """
     # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
     department = department or None
@@ -74,36 +78,134 @@ async def query_hazards(
     keyword = keyword or None
     date_from = date_from or None
     date_to = date_to or None
-    from app.modules.safety.feishu.bitable_client import SafetyBitableClient
-    from app.modules.safety.service.hazard_direct import bitable_repo
-
-    views, total = await bitable_repo.query_hazards(
-        SafetyBitableClient(),
-        department=department,
-        status=status,
-        rectification_status=rectification_status,
-        keyword=keyword,
-        date_from=date_from,
-        date_to=date_to,
-        limit=limit,
-    )
-    items = [
-        {
-            "id": v.record_id,
-            "hazard_no": v.hazard_no,
-            "department": v.department,
-            "description": v.description,
-            "status": v.status,
-            "rectification_status": v.rectification_status,
-            "display_status": _to_display_status(v.rectification_status),
-            "discovered_at": v.discovered_at.isoformat() if v.discovered_at else None,
-            "rectification_responsible_person_name": (
-                v.rectification_responsible_person_name
-            ),
+    src = (source or "internal").strip().lower()
+    if src not in ("internal", "external", "all"):
+        return {
+            "success": False,
+            "error": f"未知 source={source!r}，可选：internal / external / all",
         }
-        for v in views
-    ]
-    return {"items": items, "total": total, "source": "bitable"}
+
+    async def _internal_items() -> tuple[list[dict[str, Any]], int]:
+        from app.modules.safety.feishu.bitable_client import SafetyBitableClient
+        from app.modules.safety.service.hazard_direct import bitable_repo
+
+        views, total = await bitable_repo.query_hazards(
+            SafetyBitableClient(),
+            department=department,
+            status=status,
+            rectification_status=rectification_status,
+            keyword=keyword,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+        items = [
+            {
+                "id": v.record_id,
+                "source": "internal",
+                "hazard_no": v.hazard_no,
+                "department": v.department,
+                "description": v.description,
+                "status": v.status,
+                "rectification_status": v.rectification_status,
+                "display_status": _to_display_status(v.rectification_status),
+                "discovered_at": (
+                    v.discovered_at.isoformat() if v.discovered_at else None
+                ),
+                "rectification_responsible_person_name": (
+                    v.rectification_responsible_person_name
+                ),
+            }
+            for v in views
+        ]
+        return items, total
+
+    async def _external_items() -> tuple[list[dict[str, Any]], int, str | None]:
+        """外审缺陷项 → hazard 风格 items；未接入返回 (空, 0, 提示)。
+
+        过滤映射：status/rectification_status=closed→已关闭行、其余值→未关闭行；
+        date_from/date_to 按检查日期 checked_at（含当日）；截断同 limit。"""
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        from app.modules.safety.service.hazard_direct.external_audit import (
+            fetch_external_audit,
+        )
+
+        views = await fetch_external_audit()
+        if views is None:
+            return [], 0, "管委会外审隐患表未接入"
+        rows = views
+        if department:
+            rows = [v for v in rows if department in "、".join(v.departments)]
+        if rectification_status or status:
+            want_closed = (rectification_status or status) == "closed"
+            rows = [v for v in rows if v.closed == want_closed]
+        if keyword:
+            rows = [
+                v for v in rows
+                if keyword in v.description or keyword in v.plan
+            ]
+        d_from = _date.fromisoformat(date_from) if date_from else None
+        d_to = _date.fromisoformat(date_to) if date_to else None
+        if d_from or d_to:
+            def _in_window(v: Any) -> bool:
+                if v.checked_at is None:
+                    return False
+                if d_from and v.checked_at < d_from:
+                    return False
+                if d_to and v.checked_at > d_to:
+                    return False
+                return True
+            rows = [v for v in rows if _in_window(v)]
+        rows = rows[:limit]
+        items = [
+            {
+                "id": v.record_id,
+                "source": "external",
+                "seq": v.seq,
+                "departments": v.departments,
+                "description": v.description,
+                "plan": v.plan,
+                "closed": v.closed,
+                "in_progress": v.in_progress,
+                "display_status": "已关闭" if v.closed else "未关闭",
+                "checked_at": (
+                    v.checked_at.isoformat() if v.checked_at else None
+                ),
+                "target_date": (
+                    v.target_date.isoformat() if v.target_date else None
+                ),
+                "responsible_names": [name for name, _ in v.responsible],
+            }
+            for v in rows
+        ]
+        return items, len(items), None
+
+    try:
+        if src == "external":
+            items, total, note = await _external_items()
+            return {
+                "items": items, "total": total,
+                "source": "external_audit",
+                **({"not_connected": note} if note else {}),
+            }
+        if src == "all":
+            int_items, int_total = await _internal_items()
+            ext_items, ext_total, note = await _external_items()
+            return {
+                "items": int_items + ext_items,
+                "total": int_total + ext_total,
+                "source": "bitable",
+                "internal_total": int_total,
+                "external_total": ext_total,
+                **({"not_connected": note} if note else {}),
+            }
+        items, total = await _internal_items()
+        return {"items": items, "total": total, "source": "bitable"}
+    except Exception as e:
+        logger.exception("query_hazards failed")
+        return {"success": False, "error": f"查询失败: {e}"}
 
 
 # ── 隐患统计 ────────────────────────────────────────────────────
@@ -1159,6 +1261,7 @@ async def query_oh(
     person_id: str = "",
     due_order: bool = False,
     transfer_type: str = "",
+    detection_type: str = "",
     limit: int | None = None,
 ) -> dict[str, Any]:
     """查询职业健康明细（entity 指定查什么；人员台账/体检记录见独立工具）。
@@ -1166,18 +1269,23 @@ async def query_oh(
     Args:
         entity: positions=岗位危害台账 / hazard_factors=PPE 映射字典 /
             followups=异常随访闭环 / applications=转岗离岗申请 /
+            monitors=职业危害因素监测 /
             hazard_enums=危害因素标准字典（42 项，无其他参数）
         department: 部门（positions）
         hazard_factors_status: 登记状态 filled/empty/inferred（positions）
-        keyword: 关键词（hazard_factors 按名称；applications 按编号/姓名/部门）
+        keyword: 关键词（hazard_factors 按名称；applications 按编号/姓名/部门；
+            monitors 按监测编号/场所/位置）
         status: followups: open/followed/closed/expired；applications: 已通过/审批中等
         category: 随访指标类别 lab/vision/hearing/physique/other（followups）
         person_id: 人员 ID（UUID，followups 只看某人）
         due_order: 到期优先排序（followups）
         transfer_type: transfer=转岗 / post_employment=离岗（applications）
+        detection_type: 检测类型（monitors：regular=定期/commissioned=委托/
+            evaluation=验收/accident=事故）
         limit: 条数上限（缺省 positions/followups/applications=20、hazard_factors=50）
 
-    示例：哪些岗位接触噪声；待处置的异常随访；生产部最近的转岗申请。
+    示例：哪些岗位接触噪声；待处置的异常随访；生产部最近的转岗申请；
+    今年的职业危害因素监测做了哪些。
     """
     # schema 瘦身：可选过滤参数默认空串（去除 anyOf 包装），空串与 None 等价
     department = department or None
@@ -1187,6 +1295,12 @@ async def query_oh(
     category = category or None
     person_id = person_id or None
     transfer_type = transfer_type or None
+    detection_type = detection_type or None
+    if entity == "monitors":
+        return await _query_oh_monitors_impl(
+            ctx, status=status, detection_type=detection_type,
+            keyword=keyword, limit=20 if limit is None else limit,
+        )
     if entity == "positions":
         return await _query_oh_positions_impl(
             ctx, department=department,
@@ -1212,9 +1326,49 @@ async def query_oh(
     return {
         "error": (
             f"未知 entity={entity!r}，可选：positions / hazard_factors / "
-            f"followups / applications / hazard_enums"
+            f"followups / applications / monitors / hazard_enums"
         )
     }
+
+
+async def _query_oh_monitors_impl(
+    ctx: RunContext[SafetyDeps],
+    *,
+    status: str | None,
+    detection_type: str | None,
+    keyword: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    """monitors=职业危害因素监测（本地库，agent-query-p1 新增）。"""
+    from app.modules.safety.service.oh_hazard_monitor import OhHazardMonitorService
+
+    rows, total = await OhHazardMonitorService(ctx.deps.db).get_monitors(
+        skip=0,
+        limit=min(max(limit, 1), 100),
+        status=status,
+        detection_type=detection_type,
+        workplace=None,
+        keyword=keyword,
+    )
+    items = [
+        {
+            "id": str(m.id),
+            "monitor_no": m.monitor_no,
+            "workplace": m.workplace,
+            "location": m.location,
+            "equipment_info": m.equipment_info,
+            "detection_type": m.detection_type,
+            "detection_date": (
+                m.detection_date.isoformat() if m.detection_date else None
+            ),
+            "detection_agency": m.detection_agency,
+            "status": m.status,
+            "inspector_name": m.inspector_name,
+            "detection_results": m.detection_results,
+        }
+        for m in rows
+    ]
+    return {"items": items, "total": total, "source": "db"}
 
 
 # ═══════════════════════════════════════════════════════════════════

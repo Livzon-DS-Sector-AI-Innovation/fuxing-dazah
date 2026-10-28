@@ -566,6 +566,34 @@ async def build_domain_page(
     )
 
 
+async def fetch_kind_rows(
+    url_key: str, kind: str, *, opener: Opener | None = None
+) -> list[dict[str, Any]] | None:
+    """单表全量行（标准字段映射后的行视图）；未接入返回 None。
+
+    包外只读消费方（如 business_agent 培训域工具）复用域页读取与字段
+    映射，避免复制映射表；主表/副表/extra 均可按 kind 取。
+    """
+    spec = SPECS.get(url_key)
+    if spec is None:
+        raise ValueError(f"未知域页面: {url_key}")
+    kind_specs = {k.kind: k for k in (spec.primary, *spec.extra)}
+    if spec.secondary is not None:
+        kind_specs[spec.secondary.kind] = spec.secondary
+    kind_spec = kind_specs.get(kind)
+    if kind_spec is None:
+        raise ValueError(f"域 {url_key} 无表: {kind}")
+    open_client = opener or bd_reader.resolve_client
+    try:
+        client = open_client(spec.domain, kind_spec.kind)
+        records = await bd_reader.fetch_all_records(
+            client, field_names=kind_spec.field_names, strict=True
+        )
+    except BitableConfigError:
+        return None
+    return [_map_row(r, kind_spec) for r in records]
+
+
 async def collect_domain_health(
     url_key: str, *, opener: Opener | None = None
 ) -> dict[str, Any]:

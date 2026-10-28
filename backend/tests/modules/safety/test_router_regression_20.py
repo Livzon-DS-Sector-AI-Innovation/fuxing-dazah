@@ -59,6 +59,20 @@ GOLDEN_QUESTIONS: list[tuple[str, str]] = [
     # 按需域：URS / 运维
     ("帮我发起一个设备采购URS审核", "create_urs_review"),
     ("轮询一下隐患AI分析", "poll_hazard_ai_analysis"),
+    # agent-query-p1 新域（8 个数据缺口补齐）
+    ("灭火器有效期情况", "query_facility_ledgers"),
+    ("安全附件有哪些快到期了", "query_facility_ledgers"),
+    ("校验任务还有哪些没完成", "query_facility_tasks"),
+    ("灭火器点检记录查一下", "query_facility_inspections"),
+    ("锅炉现在压力多少", "query_telemetry_latest"),
+    ("锅炉昨天有没有报警", "query_telemetry_alarms"),
+    ("谁有违章记录", "query_training_behavior"),
+    ("培训计划完成情况怎么样", "query_training_behavior"),
+    ("哪些人快到复训期了", "query_training_behavior"),
+    ("外来人员保险到期的有哪些", "query_visitor_insurance"),
+    ("今天安全状况怎么样", "query_overview"),
+    ("危化品库存趋势怎么样", "query_chemical_trend"),
+    ("最近有哪些变更", "query_ehs_changes"),
 ]
 
 # 大白话（无任何关键词）→ 核心兜底 15，绝不回退全量

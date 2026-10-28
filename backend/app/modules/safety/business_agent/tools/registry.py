@@ -100,6 +100,31 @@ from app.modules.safety.business_agent.tools.warehouse_query_tools import (
     query_stock,
 )
 
+# ── 遥测查询（agent-query-p1：特种设备最新读数/报警，按需挂载）──
+from app.modules.safety.business_agent.tools.telemetry_tools import (
+    query_telemetry_alarms,
+    query_telemetry_latest,
+)
+
+# ── 设施管理查询（agent-query-p1：三台账/校验任务/点检，按需挂载）──
+from app.modules.safety.business_agent.tools.facility_tools import (
+    query_facility_inspections,
+    query_facility_ledgers,
+    query_facility_tasks,
+)
+
+# ── 培训与行为管控查询（agent-query-p1：违章/培训/草案/复训，按需挂载）──
+from app.modules.safety.business_agent.tools.training_tools import (
+    query_training_behavior,
+)
+
+# ── 三小域查询（agent-query-p1：外来人员保险/总览/危化品趋势，按需挂载）──
+from app.modules.safety.business_agent.tools.domain_query_tools import (
+    query_chemical_trend,
+    query_overview,
+    query_visitor_insurance,
+)
+
 # ── 写入 ──
 from app.modules.safety.business_agent.tools.write_tools import (
     analyze_oh_transfer,
@@ -192,6 +217,19 @@ TOOL_KIND: dict[str, bool] = {
     "query_material": False,
     "query_movements": False,
     "query_report": False,
+    # 遥测查询（agent-query-p1：只读，按需挂载——遥测域命中才挂）
+    "query_telemetry_latest": False,
+    "query_telemetry_alarms": False,
+    # 设施管理查询（agent-query-p1：只读，按需挂载——设施域命中才挂）
+    "query_facility_ledgers": False,
+    "query_facility_tasks": False,
+    "query_facility_inspections": False,
+    # 培训与行为管控查询（agent-query-p1：只读，按需挂载——培训域命中才挂）
+    "query_training_behavior": False,
+    # 三小域查询（agent-query-p1：只读，按需挂载——保险/总览/化学趋势域命中才挂）
+    "query_visitor_insurance": False,
+    "query_overview": False,
+    "query_chemical_trend": False,
     # 写入
     "generate_alarm_report": True,
     "generate_drill_plan": True,
@@ -288,6 +326,15 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
         query_material,
         query_movements,
         query_report,
+        query_telemetry_latest,
+        query_telemetry_alarms,
+        query_facility_ledgers,
+        query_facility_tasks,
+        query_facility_inspections,
+        query_training_behavior,
+        query_visitor_insurance,
+        query_overview,
+        query_chemical_trend,
     ] + _OFFICE_READ_FUNCS
 
 

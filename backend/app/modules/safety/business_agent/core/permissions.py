@@ -51,6 +51,19 @@ TOOL_WAREHOUSE_QUERY_STOCK = "query_stock"
 TOOL_WAREHOUSE_QUERY_MATERIAL = "query_material"
 TOOL_WAREHOUSE_QUERY_MOVEMENTS = "query_movements"
 TOOL_WAREHOUSE_QUERY_REPORT = "query_report"
+# 遥测查询（agent-query-p1：特种设备最新读数/报警，只读，四角色可用）
+TOOL_QUERY_TELEMETRY_LATEST = "query_telemetry_latest"
+TOOL_QUERY_TELEMETRY_ALARMS = "query_telemetry_alarms"
+# 设施管理查询（agent-query-p1：三台账/校验任务/点检，只读，四角色可用）
+TOOL_QUERY_FACILITY_LEDGERS = "query_facility_ledgers"
+TOOL_QUERY_FACILITY_TASKS = "query_facility_tasks"
+TOOL_QUERY_FACILITY_INSPECTIONS = "query_facility_inspections"
+# 培训与行为管控查询（agent-query-p1：违章/培训/草案/复训，只读，四角色可用）
+TOOL_QUERY_TRAINING_BEHAVIOR = "query_training_behavior"
+# 三小域查询（agent-query-p1：外来人员保险/总览/危化品趋势，只读，四角色可用）
+TOOL_QUERY_VISITOR_INSURANCE = "query_visitor_insurance"
+TOOL_QUERY_OVERVIEW = "query_overview"
+TOOL_QUERY_CHEMICAL_TREND = "query_chemical_trend"
 # 写入
 TOOL_GENERATE_DRILL_PLAN = "generate_drill_plan"
 TOOL_SYNC_DRILL_TO_FEISHU = "sync_drill_plan_to_feishu"
@@ -186,6 +199,15 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_WAREHOUSE_QUERY_MATERIAL,
         TOOL_WAREHOUSE_QUERY_MOVEMENTS,
         TOOL_WAREHOUSE_QUERY_REPORT,
+        TOOL_QUERY_TELEMETRY_LATEST,
+        TOOL_QUERY_TELEMETRY_ALARMS,
+        TOOL_QUERY_FACILITY_LEDGERS,
+        TOOL_QUERY_FACILITY_TASKS,
+        TOOL_QUERY_FACILITY_INSPECTIONS,
+        TOOL_QUERY_TRAINING_BEHAVIOR,
+        TOOL_QUERY_VISITOR_INSURANCE,
+        TOOL_QUERY_OVERVIEW,
+        TOOL_QUERY_CHEMICAL_TREND,
     }
 )
 

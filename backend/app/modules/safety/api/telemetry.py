@@ -10,7 +10,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
@@ -31,7 +30,7 @@ from app.modules.safety.telemetry.lifecycle import (
     list_pending_reviews,
     resolve_alarm,
 )
-from app.modules.safety.telemetry.query import history_series, latest_values
+from app.modules.safety.telemetry.query import history_series, latest_values, list_alarms
 from app.modules.safety.telemetry.rules import effective_rules
 from app.shared.schemas import ApiResponse
 
@@ -146,23 +145,10 @@ async def get_telemetry_alarms(
     page_size: int = Query(20, ge=1, le=100),
     db=Depends(get_db),
 ) -> ApiResponse:
-    from sqlalchemy import func
-
-    stmt = select(TelemetryAlarmRecord).where(TelemetryAlarmRecord.is_deleted.is_(False))
-    if status:
-        stmt = stmt.where(TelemetryAlarmRecord.status == status)
-    if equipment_no:
-        stmt = stmt.where(TelemetryAlarmRecord.equipment_no == equipment_no)
-    total = int(
-        await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows, total = await list_alarms(
+        db, status=status, equipment_no=equipment_no,
+        page=page, page_size=page_size,
     )
-    rows = (
-        await db.execute(
-            stmt.order_by(TelemetryAlarmRecord.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        )
-    ).scalars().all()
     return ApiResponse(
         data={
             "items": [_alarm_out(r) for r in rows],

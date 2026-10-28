@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.models import (
     PARSE_STATUS_OK,
+    TelemetryAlarmRecord,
     TelemetrySnapshot,
 )
 
 _INTERVALS = {"hour", "day"}
+
+_ALARM_STATUSES = {"firing", "acked", "resolved"}
 
 
 def _ok_conditions() -> list[ColumnElement[bool]]:
@@ -123,3 +126,46 @@ async def history_series(
         {"ts": r.bucket, "value": float(r.value), "count": int(r.count)}
         for r in rows
     ]
+
+
+async def list_alarms(
+    db: AsyncSession,
+    *,
+    status: str | None = None,
+    equipment_no: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[TelemetryAlarmRecord], int]:
+    """报警记录分页查询（时间倒序）。
+
+    Web 端点 GET /telemetry/alarms 与 business_agent query_telemetry_alarms
+    共用（原先内联在 API 层）；date_from/date_to 按报警发生时间 recorded_at
+    过滤（date_to 含当日），Web 端点不传即无日期过滤、行为不变。
+    """
+    if status is not None and status not in _ALARM_STATUSES:
+        raise ValueError(f"status 仅支持 {'/'.join(sorted(_ALARM_STATUSES))}")
+    stmt = select(TelemetryAlarmRecord).where(TelemetryAlarmRecord.is_deleted.is_(False))
+    if status:
+        stmt = stmt.where(TelemetryAlarmRecord.status == status)
+    if equipment_no:
+        stmt = stmt.where(TelemetryAlarmRecord.equipment_no == equipment_no)
+    if date_from is not None:
+        stmt = stmt.where(TelemetryAlarmRecord.recorded_at >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(
+            TelemetryAlarmRecord.recorded_at < date_to + timedelta(days=1)
+        )
+    total = int(
+        (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar()
+        or 0
+    )
+    rows = (
+        await db.execute(
+            stmt.order_by(TelemetryAlarmRecord.created_at.desc())
+            .offset((max(page, 1) - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return list(rows), total

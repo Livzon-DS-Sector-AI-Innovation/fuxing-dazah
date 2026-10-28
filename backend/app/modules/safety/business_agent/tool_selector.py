@@ -65,6 +65,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_chemical_inventory", "analyze_chemical_risk", "query_msds",
         # 写《危险品日报表》数量（确认流；admin/dept_leader 才有权限）
         "update_chemical_inventory",
+        # agent-query-p1：库存趋势派生面
+        "query_chemical_trend",
     ],
     "office": [
         "office_search_files", "office_read_docx", "office_read_sheet",
@@ -101,6 +103,19 @@ TOOL_GROUPS: dict[str, list[str]] = {
     # S1 体系标准核查（2026-10-21）：标准×运行数据四态判定
     "standard_check": ["query_standard_compliance"],
     "work_ticket": ["query_work_ticket_reviews", "screen_work_ticket_personnel"],
+    # 遥测域（agent-query-p1：特种设备最新读数/报警，按需挂载）
+    "telemetry": ["query_telemetry_latest", "query_telemetry_alarms"],
+    # 设施管理域（agent-query-p1：三台账/校验任务/灭火器点检，按需挂载）
+    "facilities": [
+        "query_facility_ledgers", "query_facility_tasks",
+        "query_facility_inspections",
+    ],
+    # 培训与行为管控域（agent-query-p1：违章档案/培训/草案/复训，按需挂载）
+    "training": ["query_training_behavior"],
+    # 外来人员保险域（agent-query-p1：预报备+三类保险预警，按需挂载）
+    "visitor_insurance": ["query_visitor_insurance"],
+    # 总览聚合域（agent-query-p1：驾驶舱 KPI 一句话总览，按需挂载）
+    "overview": ["query_overview"],
 }
 
 # ── 意图关键词（中文）─────────────────────────────────────────────
@@ -148,6 +163,8 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     "chemical": [
         "危化品", "库存", "超量", "混存", "禁忌", "易制毒", "易制爆",
         "现场物料总量", "化学品", "MSDS", "化学品安全技术说明", "安全数据单",
+        # agent-query-p1：趋势派生面
+        "趋势", "环比", "异动",
     ],
     "guardian_subsidy": [
         "监护人补贴", "监护补贴", "特殊作业补贴", "作业票补贴", "补贴",
@@ -163,11 +180,27 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "仓库", "仓储", "入库", "出库", "领用", "呆料", "复验期",
         "物料名称", "物料代码", "库存移动", "仓储报表",
     ],
-    "ehs_change": ["EHS变更", "EHS 变更", "变更管理", "变更台账"],
+    # agent-query-p1 补「变更」裸词：「最近有哪些变更」此前不命中规则层，
+    # 掉进核心兜底 15（无 query_ehs_changes）必失败
+    "ehs_change": ["EHS变更", "EHS 变更", "变更管理", "变更台账", "变更"],
     "work_ticket": [
         "作业票审核", "作业票违规", "作业票", "票审核", "违规",
         "外包人员", "承包商人员", "人员筛查", "实名",
     ],
+    # 遥测域（agent-query-p1）：「特种设备报警」与设施域「特种设备台账」词面互不
+    # 包含，两域同命中时多挂无害（模型按问题语义选工具）
+    "telemetry": ["锅炉", "压力", "遥测", "抄表", "特种设备报警", "读数"],
+    # 设施管理域（agent-query-p1）：「消防」裸词归报警域，「消防器材」才归设施
+    "facilities": [
+        "灭火器", "消防器材", "安全附件", "特种设备台账", "设施",
+        "校验任务", "点检",
+    ],
+    # 培训与行为管控域（agent-query-p1）：「违规」归作业票域，「违章」归培训域
+    "training": ["培训", "违章", "三违", "复训", "讲义", "课件"],
+    # 外来人员保险域（agent-query-p1）
+    "visitor_insurance": ["外来人员", "保险", "报备", "访客"],
+    # 总览聚合域（agent-query-p1）
+    "overview": ["总览", "整体情况", "概况", "安全状况"],
 }
 
 # ── 始终激活的工具（基础能力，任何意图都带）────────────────────

@@ -247,14 +247,27 @@ async def test_ehs_changes_query() -> None:
     row = EhsChange(change_no="EHS-001", title="DCS 系统升级",
                     change_grade="major", department="生产部")
     db = FakeSession([_FakeResult(scalar=1), _FakeResult(rows=[row])])
-    r = await query_ehs_changes(_ctx(db), change_grade="重大", keyword="DCS")
+    r = await query_ehs_changes(_ctx(db), change_grade="重大", keyword="DCS",
+                                date_from="2026-10-01", date_to="2026-10-31")
     assert r["success"] is True
     assert r["items"][0]["title"] == "DCS 系统升级"
     sql = str(db.statements[0])
     assert "change_grade =" in sql
     assert "title" in sql
+    # 日期区间（半开）：created_at >= 起始日 / < 结束次日零点
+    assert "created_at >=" in sql
+    assert "created_at <" in sql
     # "重大" → major
     assert "major" in str(db.statements[0].compile().params)
+
+
+@pytest.mark.asyncio
+async def test_ehs_changes_query_bad_date_returns_error() -> None:
+    """非法 ISO 日期串不抛穿工具层，统一回 success=False。"""
+    db = FakeSession([_FakeResult(scalar=1), _FakeResult(rows=[])])
+    r = await query_ehs_changes(_ctx(db), date_from="2026/10/01")
+    assert r["success"] is False
+    assert "查询失败" in r["error"]
 
 
 # ── 作业票审核 ────────────────────────────────────────────────────
