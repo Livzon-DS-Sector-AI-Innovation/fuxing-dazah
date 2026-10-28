@@ -38,6 +38,9 @@ TOOL_QUERY_BITABLE_CONFIG = "query_bitable_config"  # Bitable 连接/映射配�
 TOOL_QUERY_SPECIAL_OP_RECORDS = "query_special_op_records"  # 特殊作业判定明细（本地同步库）
 TOOL_QUERY_KEY_RISK_OPS = "query_key_risk_ops"  # 关键风险作业明细（本地同步库）
 TOOL_QUERY_EHS_CHANGES = "query_ehs_changes"  # EHS 变更明细（本地同步库）
+# S1 体系标准核查快照（2026-10-28 补挂：S1 交付时漏进 _READ_TOOLS，四角色全拒
+# 成死查询路径——路由能挂载但权限层拦死，机器人问「达标情况」必被拒）
+TOOL_QUERY_STANDARD_COMPLIANCE = "query_standard_compliance"
 TOOL_QUERY_WORK_TICKET_REVIEWS = "query_work_ticket_reviews"  # 作业票审核记录与违规明细
 TOOL_SCREEN_WORK_TICKET_PERSONNEL = "screen_work_ticket_personnel"  # 作业票外包人员直读筛查（平台直读，敏感字段打码）
 TOOL_QUERY_HAZARD_IDENTIFICATIONS = "query_hazard_identifications"  # 危险源辨识明细
@@ -210,6 +213,7 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_QUERY_AI_CONFIG,
         TOOL_QUERY_SCHEDULER_TASKS,
         TOOL_QUERY_BITABLE_CONFIG,
+        TOOL_QUERY_STANDARD_COMPLIANCE,
         TOOL_GENERATE_DAILY_REPORT,
         TOOL_GENERATE_SUPERVISION_BULLETIN,
         TOOL_QUERY_URS_RECORDS,

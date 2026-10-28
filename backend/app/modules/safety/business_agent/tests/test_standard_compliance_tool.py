@@ -77,3 +77,43 @@ async def test_tool_not_connected(monkeypatch) -> None:
     result = await query_standard_compliance(ctx)
     assert result["success"] is False
     assert "未接入" in result["error"]
+
+
+# ── 权限接线回归（2026-10-28：S1 交付漏挂 _READ_TOOLS，四角色全拒成死路径）──
+
+def test_standard_compliance_allowed_for_all_roles() -> None:
+    from app.modules.safety.business_agent.core.permissions import (
+        ROLE_DEPT_LEADER,
+        ROLE_INSPECTOR,
+        ROLE_SAFETY_ADMIN,
+        ROLE_VIEWER,
+        allowed_tools,
+    )
+
+    for role in (ROLE_SAFETY_ADMIN, ROLE_DEPT_LEADER, ROLE_INSPECTOR, ROLE_VIEWER):
+        tools = allowed_tools(role)
+        names = set(tools) if isinstance(tools, (set, frozenset, list)) else set(tools.tools)
+        assert "query_standard_compliance" in names, f"{role} 应放行 query_standard_compliance"
+
+
+def test_every_roster_tool_reachable_by_some_role() -> None:
+    """名册（TOOL_KIND）中每个工具必须至少被一个角色放行。
+
+    防复发守卫：五处同步漏掉 permissions 时（如 S1 的
+    query_standard_compliance 曾四角色全拒），此测试先红。
+    """
+    from app.modules.safety.business_agent.core.permissions import (
+        ROLE_DEPT_LEADER,
+        ROLE_INSPECTOR,
+        ROLE_SAFETY_ADMIN,
+        ROLE_VIEWER,
+        allowed_tools,
+    )
+    from app.modules.safety.business_agent.tools.registry import TOOL_KIND
+
+    union: set[str] = set()
+    for role in (ROLE_SAFETY_ADMIN, ROLE_DEPT_LEADER, ROLE_INSPECTOR, ROLE_VIEWER):
+        tools = allowed_tools(role)
+        union |= set(tools) if isinstance(tools, (set, frozenset, list)) else set(tools.tools)
+    dead = sorted(name for name in TOOL_KIND if name not in union)
+    assert not dead, f"名册工具无任何角色可放行（漏接 permissions）: {dead}"
