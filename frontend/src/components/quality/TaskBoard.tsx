@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Card, Empty, Modal, Progress, Segmented, Select, Space, Tag, Typography } from 'antd'
-import { TeamOutlined } from '@ant-design/icons'
+import { DragOutlined, TeamOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
 import type { BoardTask, PersonnelItem, TaskAssignment } from '@/types/quality'
@@ -10,7 +10,7 @@ import { fetchTaskBoard, fetchPersonnel, saveTaskAssignments } from '@/actions/q
 
 const { Text } = Typography
 
-/** 任务看板：按人员分列展示任务 SOP 分工，支持手动排班（人员自选）。 */
+/** 任务看板：筛选特定成员分列展示，拖拽任务卡到成员列即排班（分配未分配 SOP）。 */
 export default function TaskBoard() {
   const router = useRouter()
   const { message } = App.useApp()
@@ -20,9 +20,11 @@ export default function TaskBoard() {
   const [personnel, setPersonnel] = useState<PersonnelItem[]>([])
   const [loading, setLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState('in_progress,pending_review')
+  const [memberFilter, setMemberFilter] = useState<string[]>([])
   const [assignOpen, setAssignOpen] = useState<BoardTask | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string | undefined>>({})
   const [saving, setSaving] = useState(false)
+  const [dragOver, setDragOver] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -42,23 +44,33 @@ export default function TaskBoard() {
 
   useEffect(() => { (async () => { await load() })() }, [load])
 
-  // 人员列：有分工的人 + 未分配列
+  const personOptions = personnel.map((p) => ({
+    value: p.id,
+    label: `${p.name}${p.employee_no ? `（${p.employee_no}）` : ''}${p.department ? ` ${p.department}` : ''}`,
+  }))
+
+  // 列：筛选的成员（默认=有分工的成员）+ 未分配列
   const columns = useMemo(() => {
-    const names: { id: string | null; name: string }[] = []
-    const seen = new Set<string>()
+    const assigned = new Map<string, string>()
     for (const t of tasks) {
       for (const a of t.assignments) {
-        if (a.assignee_name && !seen.has(a.assignee_id)) {
-          seen.add(a.assignee_id)
-          names.push({ id: a.assignee_id, name: a.assignee_name })
-        }
+        if (a.assignee_name && !assigned.has(a.assignee_id)) assigned.set(a.assignee_id, a.assignee_name)
       }
     }
-    names.push({ id: null, name: '未分配' })
-    return names
-  }, [tasks])
-
-  const personOptions = personnel.map((p) => ({ value: p.id, label: `${p.name}${p.employee_no ? `（${p.employee_no}）` : ''}` }))
+    const chosen = memberFilter.length > 0 ? memberFilter : [...assigned.keys()]
+    const list: { id: string | null; name: string }[] = []
+    for (const id of chosen) {
+      const p = personnel.find((x) => x.id === id)
+      list.push({ id, name: p?.name ?? assigned.get(id) ?? id })
+    }
+    if (memberFilter.length > 0) {
+      // 筛选时仍显示未分配列
+      list.push({ id: null, name: '未分配' })
+      return list
+    }
+    list.push({ id: null, name: '未分配' })
+    return list
+  }, [tasks, memberFilter, personnel])
 
   const openAssign = (t: BoardTask) => {
     const init: Record<string, string | undefined> = {}
@@ -86,6 +98,28 @@ export default function TaskBoard() {
     }
   }
 
+  /** 拖拽落列：任务所有未分配 SOP 分配给该成员（若全部已分配则整体改派给该成员）。 */
+  const onDropTask = async (taskId: string, personId: string | null, personName: string) => {
+    if (!canAssign || personId === null) return
+    const t = tasks.find((x) => x.task_id === taskId)
+    if (!t) return
+    const existing = t.assignments.map((a) => ({ sop_no: a.sop_no, assignee_id: a.assignee_id }))
+    const targets = t.unassigned_sops.length > 0 ? t.unassigned_sops : t.assignments.map((a) => a.sop_no)
+    for (const sop of targets) {
+      const i = existing.findIndex((a) => a.sop_no === sop)
+      if (i >= 0) existing[i] = { sop_no: sop, assignee_id: personId }
+      else existing.push({ sop_no: sop, assignee_id: personId })
+    }
+    try {
+      const res = await saveTaskAssignments(taskId, existing)
+      message.success(`${res.message}${t.unassigned_sops.length > 0 ? '' : '（全部 SOP 已改派）'}`)
+      load()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '拖拽分配失败')
+    }
+    setDragOver(null)
+  }
+
   const statusMeta: Record<string, { label: string; color: string }> = {
     in_progress: { label: '填报中', color: 'blue' },
     pending_review: { label: '待复核', color: 'orange' },
@@ -106,6 +140,8 @@ export default function TaskBoard() {
           <Text type="secondary">批号 {t.batch_number}</Text>
         </Space>}
         extra={<Tag color={statusMeta[t.status]?.color}>{statusMeta[t.status]?.label ?? t.status}</Tag>}
+        draggable={canAssign}
+        onDragStart={(e) => { e.dataTransfer.setData('text/plain', t.task_id); e.dataTransfer.effectAllowed = 'move' }}
       >
         <Progress percent={t.total ? Math.round((t.filled / t.total) * 100) : 0} size="small" format={() => `${t.filled}/${t.total}`} />
         {personId === null ? (
@@ -149,33 +185,59 @@ export default function TaskBoard() {
             { value: 'pending_review', label: '待复核' },
           ]}
         />
+        <Select
+          mode="multiple" allowClear showSearch optionFilterProp="label"
+          placeholder="筛选成员（空=有分工的人）" style={{ minWidth: 280 }}
+          value={memberFilter}
+          onChange={setMemberFilter}
+          options={personOptions}
+          maxTagCount={3}
+        />
         <Text type="secondary" style={{ fontSize: 12.5 }}>
-          <TeamOutlined /> 看板按人员分列；点「分配」给任务内各 SOP 指派负责人（人员手动选择）
+          <TeamOutlined /> <DragOutlined /> 拖任务卡到成员列即排班；点「分配」可逐 SOP 选人
         </Text>
       </Space>
 
       <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 8 }}>
-        {columns.map((col) => (
-          <div key={col.id ?? '__unassigned'} style={{ flex: '0 0 300px' }}>
-            <div style={{
-              padding: '6px 10px', borderRadius: 6, marginBottom: 8,
-              background: col.id === null ? '#fff7e6' : '#e6f4ff', fontWeight: 500,
-            }}>
-              {col.name}
-              <Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>
-                {col.id === null
-                  ? tasks.filter((t) => t.unassigned_sops.length > 0).length
-                  : tasks.filter((t) => t.assignments.some((a) => a.assignee_id === col.id)).length} 个任务
-              </Text>
+        {columns.map((col) => {
+          const colTasks = tasks.filter((t) => (
+            col.id === null
+              ? t.unassigned_sops.length > 0
+              : t.assignments.some((a) => a.assignee_id === col.id)
+          ))
+          return (
+            <div
+              key={col.id ?? '__unassigned'}
+              style={{
+                flex: '0 0 300px',
+                minHeight: 200,
+                borderRadius: 8,
+                padding: 4,
+                outline: dragOver === (col.id ?? '__unassigned') ? '2px dashed #1677ff' : 'none',
+                background: dragOver === (col.id ?? '__unassigned') ? '#f0f7ff' : 'transparent',
+              }}
+              onDragOver={(e) => { if (canAssign && col.id !== null) { e.preventDefault(); setDragOver(col.id) } }}
+              onDragLeave={() => setDragOver(null)}
+              onDrop={(e) => {
+                e.preventDefault()
+                const taskId = e.dataTransfer.getData('text/plain')
+                if (taskId) void onDropTask(taskId, col.id, col.name)
+              }}
+            >
+              <div style={{
+                padding: '6px 10px', borderRadius: 6, marginBottom: 8,
+                background: col.id === null ? '#fff7e6' : '#e6f4ff', fontWeight: 500,
+              }}>
+                {col.name}
+                <Text type="secondary" style={{ marginLeft: 6, fontSize: 12 }}>{colTasks.length} 个任务</Text>
+              </div>
+              {colTasks.map((t) => renderCard(t, col.id))}
+              {colTasks.length === 0 && (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={col.id === null ? '无待分配任务' : '拖任务卡到这里排班'} />
+              )}
             </div>
-            {tasks
-              .filter((t) => (col.id === null ? t.unassigned_sops.length > 0 : t.assignments.some((a) => a.assignee_id === col.id)))
-              .map((t) => renderCard(t, col.id))}
-            {tasks.filter((t) => (col.id === null ? t.unassigned_sops.length > 0 : t.assignments.some((a) => a.assignee_id === col.id))).length === 0 && (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无任务" />
-            )}
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       <Modal
