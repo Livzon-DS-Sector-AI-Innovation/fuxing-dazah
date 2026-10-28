@@ -28,12 +28,16 @@ from app.modules.quality.repository import (
     delete_task_attachment,
     get_task_attachment,
     get_test_task,
+    list_board_tasks,
     list_report_records_by_task,
+    list_task_assignments_with_names,
     list_task_attachments,
     list_task_reviews_with_names,
+    replace_task_assignments,
 )
 from app.modules.quality.schemas import (
     CalcFormSubmit,
+    TaskAssignmentsSave,
     TestResultCreate,
     TestResultsUpdate,
     TestTaskCreate,
@@ -398,6 +402,52 @@ async def delete_test_task_endpoint(
     if not task:
         raise HTTPException(status_code=404, detail="检验任务不存在")
     return success_response(message="已删除")
+
+
+@router.get("/tasks/board", summary="任务看板：任务 + SOP 分工明细（未分配 SOP 清单）")
+async def task_board_endpoint(
+    status: str | None = Query(default="in_progress,pending_review", description="逗号分隔状态"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    statuses = [x.strip() for x in (status or "").split(",") if x.strip()] or None
+    items = await list_board_tasks(db, statuses=statuses)
+    return success_response(data=items)
+
+
+@router.get("/tasks/{task_id}/assignments", summary="任务 SOP 分工列表（含负责人姓名与项目明细）")
+async def list_task_assignments_endpoint(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    items = await list_task_assignments_with_names(db, task_id)
+    return success_response(data=items)
+
+
+@router.put("/tasks/{task_id}/assignments", summary="整组替换任务 SOP 分工（排班：人员手动选择）")
+async def save_task_assignments_endpoint(
+    task_id: uuid.UUID,
+    payload: TaskAssignmentsSave = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import get_test_task, list_test_results
+
+    task = await get_test_task(db, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="检验任务不存在")
+    valid_sops = {(r.sop_no or "").strip() for r in await list_test_results(db, task_id) if (r.sop_no or "").strip()}
+    for a in payload.assignments:
+        if a.sop_no.strip() not in valid_sops:
+            raise HTTPException(status_code=400, detail=f"SOP {a.sop_no} 不在任务项目内（任务 SOP：{'、'.join(sorted(valid_sops)) or '无'}）")
+    await replace_task_assignments(db, task_id, [
+        {"task_id": task_id, "sop_no": a.sop_no.strip(), "assignee_id": a.assignee_id,
+         "assigned_by": user.id, "created_by": user.id}
+        for a in payload.assignments
+    ])
+    items = await list_task_assignments_with_names(db, task_id)
+    return success_response(data=items, message=f"分工已保存（{len(items)} 个 SOP）")
 
 
 @router.get("/tasks/{task_id}/handover", summary="交接汇总（开报人员交接：完成项/结果/判定/未完成项）")

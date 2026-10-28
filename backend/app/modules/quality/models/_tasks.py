@@ -10,6 +10,26 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.base_model import BaseModel
 
 
+class QualityTaskAssignment(BaseModel):
+    """检验任务 SOP 分工：任务内各 SOP 指派负责人（排班），人员手动选择。"""
+
+    __tablename__ = "quality_task_assignments"
+    __table_args__ = (
+        Index("ix_quality_assign_task", "task_id"),
+        Index(
+            "uq_quality_assign_task_sop", "task_id", "sop_no",
+            unique=True, postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    task_id: Mapped[uuid.UUID] = mapped_column(nullable=False, comment="检验任务（逻辑引用）")
+    sop_no: Mapped[str] = mapped_column(String(100), nullable=False, comment="SOP 号")
+    assignee_id: Mapped[uuid.UUID] = mapped_column(nullable=False, comment="负责人，逻辑引用 identity.users.id")
+    assigned_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="排班人")
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
 class QualityTestTask(BaseModel):
     """检验任务（检阅单）：选产品+批号+日期，从标准库快照全部检验项目行。"""
 

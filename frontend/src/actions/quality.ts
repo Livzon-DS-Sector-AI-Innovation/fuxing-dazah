@@ -35,6 +35,9 @@ import type {
   MicroRecord,
   RetainedSample,
   BatchRelease,
+  BoardTask,
+  TaskAssignment,
+  PersonnelItem,
   EnvPoint,
   EnvRecord,
   EnvTrend,
@@ -1879,6 +1882,47 @@ export async function releaseBatchRecord(id: string, input: { release_remark?: s
     throw new Error(err.detail || '放行失败')
   }
   revalidatePath('/quality/release')
+  return res.json()
+}
+
+export async function fetchPersonnel(keyword?: string): Promise<{ data: { items: PersonnelItem[]; total: number } }> {
+  const q = new URLSearchParams()
+  if (keyword) q.set('keyword', keyword)
+  q.set('limit', '200')
+  const res = await fetch(`${API_BASE_URL}/api/v1/identity/personnel?${q.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取人员名单失败')
+  return res.json()
+}
+
+export async function fetchTaskAssignments(taskId: string): Promise<{ data: TaskAssignment[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/assignments`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取分工失败')
+  return res.json()
+}
+
+export async function saveTaskAssignments(taskId: string, assignments: { sop_no: string; assignee_id: string }[]): Promise<{ message: string; data: TaskAssignment[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/assignments`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assignments }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '保存分工失败')
+  }
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function fetchTaskBoard(status?: string): Promise<{ data: BoardTask[] }> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/board${q}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取任务看板失败')
   return res.json()
 }
 

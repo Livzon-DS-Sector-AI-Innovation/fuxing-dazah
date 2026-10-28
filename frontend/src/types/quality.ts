@@ -877,6 +877,35 @@ export interface BatchRelease {
   created_at: string
 }
 
+export interface TaskAssignment {
+  sop_no: string
+  assignee_id: string
+  assignee_name: string | null
+  items: string[]
+  filled: number
+  total: number
+  remark: string | null
+}
+
+export interface BoardTask {
+  task_id: string
+  product_name: string
+  batch_number: string
+  status: string
+  report_date: string | null
+  filled: number
+  total: number
+  assignments: TaskAssignment[]
+  unassigned_sops: string[]
+}
+
+export interface PersonnelItem {
+  id: string
+  name: string
+  employee_no: string | null
+  department: string | null
+}
+
 export interface QualityAlerts {
   retained: { batch_no: string; sample_name: string; location: string | null; destroy_due_date: string | null; expired: boolean }[]
   lab: { name: string; item_type: string; expiry_date: string | null; expired: boolean }[]

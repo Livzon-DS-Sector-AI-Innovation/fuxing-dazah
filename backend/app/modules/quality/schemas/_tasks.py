@@ -77,6 +77,19 @@ class TestResultsUpdate(BaseModel):
     results: list[TestResultFill] = Field(min_length=1, max_length=500)
 
 
+class TaskAssignmentItem(BaseModel):
+    """任务 SOP 分工：SOP 号 → 负责人。"""
+
+    sop_no: str = Field(max_length=100)
+    assignee_id: uuid.UUID
+
+
+class TaskAssignmentsSave(BaseModel):
+    """整组替换任务分工（空列表=清空）。"""
+
+    assignments: list[TaskAssignmentItem] = Field(max_length=200)
+
+
 class CalcFormItem(BaseModel):
     """在线计算表单个项目：项目名 + 数值。"""
 

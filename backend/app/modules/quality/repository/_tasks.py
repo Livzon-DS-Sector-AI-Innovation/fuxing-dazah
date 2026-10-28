@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import (
     QualityStandardItem,
+    QualityTaskAssignment,
     QualityTaskAttachment,
     QualityTaskReview,
     QualityTestResult,
@@ -413,5 +414,89 @@ async def list_task_reviews_with_names(db: AsyncSession, task_id: uuid.UUID) -> 
             "reviewer_name": reviewer_name,
             "comment": r.comment,
             "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return out
+
+
+# ─── 任务 SOP 分工 ───
+
+
+async def list_task_assignments(db: AsyncSession, task_id: uuid.UUID) -> list[QualityTaskAssignment]:
+    stmt = select(QualityTaskAssignment).where(
+        QualityTaskAssignment.task_id == task_id,
+        QualityTaskAssignment.is_deleted == False,  # noqa: E712
+    ).order_by(QualityTaskAssignment.created_at)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def list_task_assignments_with_names(
+    db: AsyncSession, task_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """任务 SOP 分工（含负责人姓名与项目行明细/未填数）。"""
+    from app.platform.identity.models import User as IdentityUser
+
+    rows = await list_test_results(db, task_id)
+    assignments = await list_task_assignments(db, task_id)
+    user_ids = {a.assignee_id for a in assignments}
+    users: dict[uuid.UUID, str] = {}
+    if user_ids:
+        stmt = select(IdentityUser).where(IdentityUser.id.in_(user_ids))
+        for u in (await db.execute(stmt)).scalars():
+            users[u.id] = u.name
+    out: list[dict[str, Any]] = []
+    for a in assignments:
+        items = [r for r in rows if (r.sop_no or "").strip().upper() == (a.sop_no or "").strip().upper()]
+        out.append({
+            "sop_no": a.sop_no,
+            "assignee_id": a.assignee_id,
+            "assignee_name": users.get(a.assignee_id),
+            "items": [r.item_name for r in items],
+            "filled": sum(1 for r in items if r.is_pass is not None),
+            "total": len(items),
+            "remark": a.remark,
+        })
+    return out
+
+
+async def replace_task_assignments(
+    db: AsyncSession, task_id: uuid.UUID, rows: list[dict[str, Any]]
+) -> None:
+    """整组替换任务分工：软删旧分配，插入新分配（重复 SOP 覆盖）。"""
+    for old in await list_task_assignments(db, task_id):
+        old.is_deleted = True
+    for row in rows:
+        db.add(QualityTaskAssignment(**row))
+    await db.flush()
+
+
+async def list_board_tasks(
+    db: AsyncSession, statuses: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """任务看板数据：任务 + 分工明细（按任务聚合）。"""
+    from app.modules.quality.repository import list_test_tasks  # 防循环导入
+
+    items, _ = await list_test_tasks(db, product_name=None, status=None, page=1, page_size=500)
+    if statuses:
+        items = [t for t in items if t.status in statuses]
+    out: list[dict[str, Any]] = []
+    for t in items:
+        assignments = await list_task_assignments_with_names(db, t.id)
+        results = await list_test_results(db, t.id)
+        out.append({
+            "task_id": t.id,
+            "product_name": t.product_name,
+            "batch_number": t.batch_number,
+            "status": t.status,
+            "report_date": t.report_date,
+            "filled": sum(1 for r in results if r.is_pass is not None),
+            "total": len(results),
+            "assignments": assignments,
+            "unassigned_sops": sorted({
+                (r.sop_no or "").strip()
+                for r in results
+                if (r.sop_no or "").strip()
+                and (r.sop_no or "").strip().upper()
+                not in {(a["sop_no"] or "").strip().upper() for a in assignments}
+            }),
         })
     return out
