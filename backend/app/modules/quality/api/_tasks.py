@@ -92,6 +92,17 @@ async def task_summary_by_sop_endpoint(
     return success_response(data=data)
 
 
+@router.get("/tasks/board", summary="任务看板：任务 + SOP 分工明细（未分配 SOP 清单）")
+async def task_board_endpoint(
+    status: str | None = Query(default="in_progress,pending_review", description="逗号分隔状态"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    statuses = [x.strip() for x in (status or "").split(",") if x.strip()] or None
+    items = await list_board_tasks(db, statuses=statuses)
+    return success_response(data=items)
+
+
 @router.get("/tasks/{task_id}", summary="检验任务详情（含结果行）")
 async def get_test_task_endpoint(
     task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
@@ -402,17 +413,6 @@ async def delete_test_task_endpoint(
     if not task:
         raise HTTPException(status_code=404, detail="检验任务不存在")
     return success_response(message="已删除")
-
-
-@router.get("/tasks/board", summary="任务看板：任务 + SOP 分工明细（未分配 SOP 清单）")
-async def task_board_endpoint(
-    status: str | None = Query(default="in_progress,pending_review", description="逗号分隔状态"),
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:read")),
-) -> JSONResponse:
-    statuses = [x.strip() for x in (status or "").split(",") if x.strip()] or None
-    items = await list_board_tasks(db, statuses=statuses)
-    return success_response(data=items)
 
 
 @router.get("/tasks/{task_id}/assignments", summary="任务 SOP 分工列表（含负责人姓名与项目明细）")
