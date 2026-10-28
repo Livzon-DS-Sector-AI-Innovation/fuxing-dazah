@@ -29,6 +29,7 @@ class InspectionRecordListItem(BaseModel):
     standard_type: str | None = None
     all_pass: bool
     excel_filename: str | None = None
+    source: str = "parse"
     created_at: datetime | None = None
 
 
@@ -42,8 +43,10 @@ class InspectionRecordDetail(BaseModel):
     standard_type: str | None = None
     all_pass: bool
     excel_filename: str | None = None
+    source: str = "parse"
     created_at: datetime | None = None
     report: LcReportOut
+    raw_data: dict[str, object] | None = None
     impurities: list["ImpurityDetailOut"] = Field(default_factory=list)
 
 

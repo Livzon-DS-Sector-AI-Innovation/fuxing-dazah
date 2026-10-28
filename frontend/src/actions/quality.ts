@@ -34,6 +34,7 @@ import type {
   InspectionPlan,
   MicroRecord,
   RetainedSample,
+  BatchRelease,
   EnvPoint,
   EnvRecord,
   EnvTrend,
@@ -1840,6 +1841,44 @@ export async function testCalc(tableNo: string, section: number, inputs: Record<
     const err: ApiErrorBody = await res.json().catch(() => ({}))
     throw new Error(err.detail || '测试计算失败')
   }
+  return res.json()
+}
+
+export async function fetchBatchReleases(params?: { batchNo?: string; status?: string }): Promise<{ data: BatchRelease[] }> {
+  const q = new URLSearchParams()
+  if (params?.batchNo) q.set('batch_no', params.batchNo)
+  if (params?.status) q.set('status', params.status)
+  const qs = q.toString() ? `?${q}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/release-records${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取放行记录失败')
+  return res.json()
+}
+
+export async function createBatchRelease(input: { task_id: string; remark?: string }): Promise<{ message: string; data: BatchRelease }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/release-records`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '发起放行失败')
+  }
+  revalidatePath('/quality/release')
+  return res.json()
+}
+
+export async function releaseBatchRecord(id: string, input: { release_remark?: string }): Promise<{ message: string; data: BatchRelease }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/release-records/${id}/release`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '放行失败')
+  }
+  revalidatePath('/quality/release')
   return res.json()
 }
 

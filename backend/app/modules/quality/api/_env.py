@@ -28,6 +28,9 @@ from app.modules.quality.repository import (
     update_env_point,
 )
 from app.modules.quality.schemas import (
+    BatchReleaseCreate,
+    BatchReleaseOut,
+    BatchReleaseRelease,
     EnvPointCreate,
     EnvPointOut,
     EnvPointUpdate,
@@ -469,4 +472,128 @@ async def import_env_records_endpoint(
     return success_response(
         data={"created": created, "errors": errors},
         message=f"导入完成：新增 {created} 条记录" + (f"，错误 {len(errors)} 行" if errors else ""),
+    )
+
+
+# ─── 批放行记录 ───
+
+
+async def _build_release_snapshot(db: AsyncSession, task_id: uuid.UUID) -> dict[str, object] | None:
+    """发起放行时的检验汇总快照：判定/填报/复核/报告单/留样状态。"""
+    from app.modules.quality.repository import (
+        get_test_task,
+        list_report_records_by_task,
+        list_retained_samples,
+        list_task_reviews_with_names,
+        list_test_results,
+    )
+
+    task = await get_test_task(db, task_id)
+    if task is None:
+        return None
+    rows = await list_test_results(db, task.id)
+    filled = sum(1 for r in rows if r.is_pass is not None)
+    reviews = await list_task_reviews_with_names(db, task.id)
+    reports = await list_report_records_by_task(db, task.id)
+    retained = await list_retained_samples(db, batch_no=task.batch_number)
+    ret = retained[0] if retained and retained[0].batch_no == task.batch_number else None
+    return {
+        "task_status": task.status,
+        "all_pass": all(r.is_pass for r in rows if r.is_pass is not None) if rows else None,
+        "filled": filled,
+        "total": len(rows),
+        "reviewers": [r["reviewer_name"] for r in reviews if r.get("reviewer_name")],
+        "report_serials": [r.serial_no for r in reports if r.serial_no],
+        "retained": (
+            {
+                "qty": ret.qty, "location": ret.location,
+                "destroy_due_date": ret.destroy_due_date, "status": ret.status,
+            }
+            if ret else None
+        ),
+    }
+
+
+@router.post("/release-records", summary="发起批放行（已完成检验任务 → 放行记录 + 汇总快照）", status_code=201)
+async def create_batch_release_endpoint(
+    payload: BatchReleaseCreate = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:review")),
+) -> JSONResponse:
+    from app.modules.quality.repository import (
+        create_batch_release,
+        get_batch_release_by_batch,
+        get_test_task,
+    )
+
+    task = await get_test_task(db, payload.task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="检验任务不存在")
+    if task.status != "completed":
+        raise HTTPException(status_code=400, detail=f"任务状态为 {task.status}，仅已完成任务可发起放行")
+    existing = await get_batch_release_by_batch(db, task.batch_number)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"批号 {task.batch_number} 已有放行记录（{existing.status}），请直接处理")
+    snapshot = await _build_release_snapshot(db, task.id)
+    rec = await create_batch_release(db, {
+        "batch_no": task.batch_number,
+        "product_name": task.product_name,
+        "task_id": task.id,
+        "snapshot": snapshot,
+        "remark": payload.remark,
+        "created_by": user.id,
+    })
+    return success_response(
+        data=BatchReleaseOut.model_validate(rec).model_dump(mode="json"),
+        message="放行记录已创建（含检验汇总快照）", status_code=201,
+    )
+
+
+@router.get("/release-records", summary="批放行记录列表")
+async def list_batch_releases_endpoint(
+    batch_no: str | None = Query(default=None),
+    status: str | None = Query(default=None, description="pending/released"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> JSONResponse:
+    from app.modules.quality.repository import list_batch_releases
+
+    rows = await list_batch_releases(db, batch_no=batch_no, status=status)
+    items = []
+    for r in rows:
+        item = BatchReleaseOut.model_validate(r).model_dump(mode="json")
+        if r.released_by:
+            from app.platform.identity.repository import UserRepository
+
+            u = await UserRepository().get_by_id(db, r.released_by)
+            item["released_by_name"] = u.name if u else None
+        items.append(item)
+    return success_response(data=items)
+
+
+@router.post("/release-records/{record_id}/release", summary="专员放行（记录放行人/日期/备注）")
+async def release_batch_record_endpoint(
+    record_id: uuid.UUID,
+    payload: BatchReleaseRelease = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:review")),
+) -> JSONResponse:
+    from app.core.time import today as _today
+    from app.modules.quality.repository import get_batch_release, update_batch_release
+
+    rec = await get_batch_release(db, record_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="放行记录不存在")
+    if rec.status != "pending":
+        raise HTTPException(status_code=400, detail=f"放行记录状态为 {rec.status}，不可放行")
+    updated = await update_batch_release(db, record_id, {
+        "status": "released",
+        "released_by": user.id,
+        "released_at": _today().isoformat(),
+        "release_remark": payload.release_remark,
+        "updated_by": user.id,
+    })
+    return success_response(
+        data=BatchReleaseOut.model_validate(updated).model_dump(mode="json"),
+        message="已放行（放行人/日期已留痕）",
     )

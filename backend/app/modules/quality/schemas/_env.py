@@ -85,3 +85,33 @@ class EnvRecordHandle(BaseModel):
     """超行动限记录闭环：标记已处理并留处理说明。"""
 
     handled_remark: str | None = Field(default=None, max_length=200, description="处理说明")
+
+
+class BatchReleaseCreate(BaseModel):
+    """发起批放行：以已完成检验任务为基准生成放行记录与汇总快照。"""
+
+    task_id: uuid.UUID = Field(description="已完成检验任务")
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class BatchReleaseRelease(BaseModel):
+    """专员放行：记录放行人/日期与备注。"""
+
+    release_remark: str | None = Field(default=None, max_length=200, description="放行备注")
+
+
+class BatchReleaseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    batch_no: str
+    product_name: str
+    task_id: uuid.UUID | None
+    snapshot: dict[str, object] | None
+    status: str
+    released_by: uuid.UUID | None
+    released_by_name: str | None = None
+    released_at: str | None
+    release_remark: str | None
+    remark: str | None
+    created_at: datetime

@@ -7,7 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.modules.quality.models import QualityEnvPoint, QualityEnvRecord
+from app.modules.quality.models import (
+    QualityBatchRelease,
+    QualityEnvPoint,
+    QualityEnvRecord,
+)
 
 # ─── 监测点台账 ───
 
@@ -229,3 +233,50 @@ async def env_trend(db: AsyncSession, point_id: uuid.UUID, days: int = 90) -> di
         "action_limit": point.action_limit,
         "items": items,
     }
+
+
+# ─── 批放行记录 ───
+
+
+async def create_batch_release(db: AsyncSession, data: dict[str, Any]) -> QualityBatchRelease:
+    rec = QualityBatchRelease(**data)
+    db.add(rec)
+    await db.flush()
+    return rec
+
+
+async def get_batch_release(db: AsyncSession, rid: uuid.UUID) -> QualityBatchRelease | None:
+    stmt = select(QualityBatchRelease).where(
+        QualityBatchRelease.id == rid, QualityBatchRelease.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_batch_releases(
+    db: AsyncSession, batch_no: str | None = None, status: str | None = None
+) -> list[QualityBatchRelease]:
+    conds = [QualityBatchRelease.is_deleted == False]  # noqa: E712
+    if batch_no:
+        conds.append(QualityBatchRelease.batch_no.ilike(f"%{batch_no}%"))
+    if status:
+        conds.append(QualityBatchRelease.status == status)
+    stmt = select(QualityBatchRelease).where(*conds).order_by(QualityBatchRelease.created_at.desc())
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def get_batch_release_by_batch(db: AsyncSession, batch_no: str) -> QualityBatchRelease | None:
+    stmt = select(QualityBatchRelease).where(
+        QualityBatchRelease.batch_no == batch_no, QualityBatchRelease.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def update_batch_release(db: AsyncSession, rid: uuid.UUID, data: dict[str, Any]) -> QualityBatchRelease | None:
+    rec = await get_batch_release(db, rid)
+    if rec is None:
+        return None
+    for key, value in data.items():
+        setattr(rec, key, value)
+    await db.flush()
+    stmt = select(QualityBatchRelease).where(QualityBatchRelease.id == rid)
+    return (await db.execute(stmt)).scalar_one_or_none()

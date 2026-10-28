@@ -1,8 +1,10 @@
 """环境监测模型：洁净区监测点台账与监测记录。"""
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Float, Index, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -61,4 +63,29 @@ class QualityEnvRecord(BaseModel):
     handled_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="处理人，逻辑引用 identity.users.id")
     handled_remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="处理说明")
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="填报人，逻辑引用 identity.users.id")
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityBatchRelease(BaseModel):
+    """批放行记录：已完成检验任务发起放行，快照检验汇总，专员放行留痕。"""
+
+    __tablename__ = "quality_batch_releases"
+    __table_args__ = (
+        Index("ix_quality_release_batch", "batch_no"),
+        Index("ix_quality_release_status", "status"),
+        {"schema": "quality"},
+    )
+
+    batch_no: Mapped[str] = mapped_column(String(100), nullable=False, comment="批号")
+    product_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="产品名称")
+    task_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="关联检验任务（逻辑引用）")
+    snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="发起时检验汇总快照（判定/复核/报告单/留样）"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending", comment="pending 待放行 / released 已放行 / void 已作废"
+    )
+    released_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="放行人")
+    released_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="放行日期 YYYY-MM-DD")
+    release_remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="放行备注")
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")

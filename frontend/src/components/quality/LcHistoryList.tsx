@@ -67,6 +67,12 @@ export default function LcHistoryList() {
         ? <Tag color="success">合格</Tag>
         : <Tag color="error">不合格</Tag>,
     },
+    {
+      title: '来源', dataIndex: 'source', key: 'source', width: 100,
+      render: (v: string) => v === 'calc_form'
+        ? <Tag color="blue">在线计算表</Tag>
+        : <Tag color="green">Excel 解析</Tag>,
+    },
     { title: '文件名', dataIndex: 'excel_filename', key: 'excel_filename', ellipsis: true },
     {
       title: '上传时间', dataIndex: 'created_at', key: 'created_at', width: 170,

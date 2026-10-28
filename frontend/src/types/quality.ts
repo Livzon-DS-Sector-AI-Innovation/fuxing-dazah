@@ -104,12 +104,14 @@ export interface InspectionRecordListItem {
   standard_type: string | null
   all_pass: boolean
   excel_filename: string | null
+  source: 'calc_form' | 'parse' | string
   created_at: string | null
 }
 
 export interface InspectionRecordDetail extends InspectionRecordListItem {
   impurities: ImpurityResult[]
   report: LcReportData
+  raw_data?: Record<string, unknown> | null
 }
 
 // ─── 报告单记录 ───
@@ -850,6 +852,29 @@ export interface EnvTrend {
   alert_limit: number | null
   action_limit: number | null
   items: { record_date: string; result_value: number | null; judge: 'pass' | 'alert' | 'action' | null }[]
+}
+
+export interface BatchRelease {
+  id: string
+  batch_no: string
+  product_name: string
+  task_id: string | null
+  snapshot: {
+    task_status: string
+    all_pass: boolean | null
+    filled: number
+    total: number
+    reviewers: string[]
+    report_serials: string[]
+    retained: { qty: string | null; location: string | null; destroy_due_date: string | null; status: string } | null
+  } | null
+  status: 'pending' | 'released'
+  released_by: string | null
+  released_by_name: string | null
+  released_at: string | null
+  release_remark: string | null
+  remark: string | null
+  created_at: string
 }
 
 export interface QualityAlerts {
