@@ -1035,7 +1035,7 @@ export function FacilityMapCard() {
                   未映射=地点文本未能对应分区；AI 建议经人工确认后写入映射（只增不改）
                 </div>
                 {data.unmapped.length > 0 ? (
-                  <div className="mt-2 grid min-h-0 max-h-48 flex-1 grid-cols-1 gap-x-8 gap-y-1 overflow-y-auto border-t border-[var(--color-hairline-soft)] pt-2 md:grid-cols-2 xl:max-h-none">
+                  <div className="mt-2 grid min-h-0 max-h-48 flex-1 grid-cols-1 gap-y-1 overflow-y-auto border-t border-[var(--color-hairline-soft)] pt-2 xl:max-h-none">
                     {data.unmapped.slice(0, 60).map(u => (
                       <div key={u.text} className="flex items-center justify-between gap-2 text-[12px]">
                         <span className="truncate text-[var(--color-charcoal)]" title={u.text}>
