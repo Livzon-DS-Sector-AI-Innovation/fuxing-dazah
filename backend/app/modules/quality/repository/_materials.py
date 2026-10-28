@@ -1162,3 +1162,74 @@ async def get_retained_sample_with_names(db: AsyncSession, rid: uuid.UUID) -> di
         "remark": r.remark,
         "created_at": r.created_at,
     }
+
+
+async def list_plans_board(db: AsyncSession, date_from: str) -> list[dict[str, Any]]:
+    """请检计划排班看板：今天及以后的计划 + 待检 SOP（任务已有取任务项目，否则取产品标准项目）。"""
+    from app.modules.quality.repository import (
+        get_test_task_by_batch_number,
+        list_standard_documents_by_product,
+        list_standard_items,
+        list_test_results,
+    )
+    from app.platform.identity.models import User as IdentityUser
+
+    plans = [p for p in await list_inspection_plans(db) if p.plan_time >= date_from]
+    out: list[dict[str, Any]] = []
+    for p in plans:
+        task = await get_test_task_by_batch_number(db, p.batch_no) if p.batch_no else None
+        sops: list[dict[str, Any]] = []
+        if task is not None:
+            for r in await list_test_results(db, task.id):
+                sop = (r.sop_no or "").strip()
+                if not sop:
+                    continue
+                s = next((x for x in sops if x["sop_no"] == sop), None)
+                if s is None:
+                    sops.append({"sop_no": sop, "items": [r.item_name], "filled": 1 if r.is_pass is not None else 0, "total": 1})
+                else:
+                    if r.item_name not in s["items"]:
+                        s["items"].append(r.item_name)
+                    s["total"] += 1
+                    if r.is_pass is not None:
+                        s["filled"] += 1
+        else:
+            seen: set[str] = set()
+            for d in await list_standard_documents_by_product(db, p.product_name):
+                for it in await list_standard_items(db, d.id):
+                    sop = (it.sop_no or "").strip()
+                    if not sop:
+                        continue
+                    if sop not in seen:
+                        seen.add(sop)
+                        sops.append({"sop_no": sop, "items": [it.item_name], "filled": 0, "total": 1})
+                    else:
+                        s = next(x for x in sops if x["sop_no"] == sop)
+                        if it.item_name not in s["items"]:
+                            s["items"].append(it.item_name)
+                        s["total"] += 1
+        # 排班（JSONB 存字符串 ID）
+        assignments = p.assignments or []
+        assignee_ids = {str(a.get("assignee_id")) for a in assignments if a.get("assignee_id")}
+        names: dict[str, str] = {}
+        if assignee_ids:
+            stmt = select(IdentityUser).where(IdentityUser.id.in_(assignee_ids))
+            for u in (await db.execute(stmt)).scalars():
+                names[str(u.id)] = u.name
+        out.append({
+            "plan_id": p.id,
+            "department": p.department,
+            "product_name": p.product_name,
+            "batch_no": p.batch_no,
+            "plan_time": p.plan_time,
+            "status": p.status,
+            "task_id": task.id if task else None,
+            "task_status": task.status if task else None,
+            "sops": sops,
+            "assignments": [
+                {"sop_no": str(a.get("sop_no")), "assignee_id": str(a.get("assignee_id")),
+                 "assignee_name": names.get(str(a.get("assignee_id")))}
+                for a in assignments
+            ],
+        })
+    return out

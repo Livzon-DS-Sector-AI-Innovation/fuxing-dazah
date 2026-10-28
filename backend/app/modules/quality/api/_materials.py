@@ -51,6 +51,7 @@ from app.modules.quality.repository import (
     list_material_standard_items,
     list_materials,
     list_micro_records,
+    list_plans_board,
     list_retained_samples,
     list_retained_samples_with_names,
     list_slow_moving_containers,
@@ -101,6 +102,7 @@ from app.modules.quality.schemas import (
     MicroRecordOut,
     MicroRecordUpdate,
     MonthlyReportItem,
+    PlanAssignmentsSave,
     RetainedSampleCreate,
     RetainedSampleDestroy,
     RetainedSampleOut,
@@ -985,6 +987,55 @@ async def delete_lab_item_endpoint(
 
 
 # ─── 请检计划 ───
+
+
+@router.get("/plans/board", summary="请检计划排班看板（今天及以后计划 + 待检 SOP + 排班）")
+async def plans_board_endpoint(
+    date_from: str | None = Query(default=None, description="YYYY-MM-DD，默认今天"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:material:read")),
+) -> JSONResponse:
+    from app.core.time import today as _today
+
+    items = await list_plans_board(db, date_from or _today().isoformat())
+    return success_response(data=items)
+
+
+@router.put("/inspection-plans/{plan_id}/assignments", summary="请检计划排班（SOP→人员；已建任务自动同步任务分工）")
+async def save_plan_assignments_endpoint(
+    plan_id: uuid.UUID,
+    payload: PlanAssignmentsSave = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import (
+        get_inspection_plan,
+        get_test_task_by_batch_number,
+        list_test_results,
+        replace_task_assignments,
+    )
+
+    plan = await get_inspection_plan(db, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="请检计划不存在")
+    rows = [
+        {"sop_no": a.sop_no.strip(), "assignee_id": str(a.assignee_id)}
+        for a in payload.assignments
+    ]
+    plan.assignments = rows
+    await db.flush()
+    # 已建任务：同步任务分工
+    task = await get_test_task_by_batch_number(db, plan.batch_no) if plan.batch_no else None
+    if task is not None:
+        valid = {(r.sop_no or "").strip() for r in await list_test_results(db, task.id) if (r.sop_no or "").strip()}
+        await replace_task_assignments(db, task.id, [
+            {"task_id": task.id, "sop_no": a["sop_no"], "assignee_id": uuid.UUID(a["assignee_id"]),
+             "assigned_by": user.id, "created_by": user.id}
+            for a in rows if a["sop_no"] in valid
+        ])
+    items = await list_plans_board(db, "0000-01-01")
+    item = next((x for x in items if x["plan_id"] == plan.id), None)
+    return success_response(data=item, message=f"排班已保存（{len(rows)} 个 SOP）")
 
 
 @router.get("/inspection-plans", summary="请检计划列表（可按日期/车间筛选）")

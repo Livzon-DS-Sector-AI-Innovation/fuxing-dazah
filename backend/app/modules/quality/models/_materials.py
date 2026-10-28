@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -148,6 +149,9 @@ class QualityInspectionPlan(BaseModel):
     status: Mapped[str] = mapped_column(
         String(32), default="pending", server_default="pending",
         comment="pending 待请检 / inspected 已请检",
+    )
+    assignments: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB, nullable=True, comment="排班 [{\"sop_no\": ..., \"assignee_id\": ...}]"
     )
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 

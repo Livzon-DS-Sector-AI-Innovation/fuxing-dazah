@@ -11,7 +11,7 @@ export default function BoardPage() {
       <div>
         <Title level={3}>任务看板</Title>
         <Paragraph type="secondary">
-          按人员分列的检验任务看板：请检任务内各 SOP 指派负责人（人员手动选择），分工与完成进度一目了然。
+          今天及以后的请检任务排班看板：按计划展示待检 SOP，逐 SOP 选择负责人员，分配后人员名字显示在任务下方；建任务后分工自动带到检验任务。
         </Paragraph>
       </div>
       <TaskBoard />

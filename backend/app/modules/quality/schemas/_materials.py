@@ -401,6 +401,19 @@ class LabItemOut(BaseModel):
     created_at: datetime
 
 
+class PlanAssignmentItem(BaseModel):
+    """请检计划排班：SOP 号 → 负责人。"""
+
+    sop_no: str = Field(max_length=100)
+    assignee_id: uuid.UUID
+
+
+class PlanAssignmentsSave(BaseModel):
+    """整组替换计划排班（空列表=清空）。"""
+
+    assignments: list[PlanAssignmentItem] = Field(max_length=200)
+
+
 class InspectionPlanCreate(BaseModel):
     department: str = Field(max_length=128, description="车间/部门")
     product_name: str = Field(max_length=200, description="品种/产品名称")

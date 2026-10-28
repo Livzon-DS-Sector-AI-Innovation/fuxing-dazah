@@ -165,6 +165,18 @@ class _TaskLifecycle(_TaskCore):
             for plan in await list_inspection_plans(db):
                 if plan.status == "pending" and plan.batch_no == payload.batch_number:
                     await update_inspection_plan_status(db, plan.id, "inspected")
+                    # 计划排班拷贝到任务分工（SOP→人员）
+                    if plan.assignments:
+                        from app.modules.quality.repository import (
+                            replace_task_assignments,
+                        )
+
+                        await replace_task_assignments(db, task.id, [
+                            {"task_id": task.id, "sop_no": str(a.get("sop_no")),
+                             "assignee_id": uuid.UUID(str(a.get("assignee_id"))),
+                             "assigned_by": None, "created_by": None}
+                            for a in plan.assignments if a.get("assignee_id")
+                        ])
         except Exception:
             logger.warning("请检计划销账失败（不影响建任务）: %s", payload.batch_number)
         # 按 (sop_no, item_name) 去重（多个子项目可共用同一 SOP 号；防跨文档重复）

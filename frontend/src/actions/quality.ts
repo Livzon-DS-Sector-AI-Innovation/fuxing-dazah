@@ -36,6 +36,7 @@ import type {
   RetainedSample,
   BatchRelease,
   BoardTask,
+  PlanBoardItem,
   TaskAssignment,
   PersonnelItem,
   EnvPoint,
@@ -1912,6 +1913,27 @@ export async function saveTaskAssignments(taskId: string, assignments: { sop_no:
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
     throw new Error(err.detail || '保存分工失败')
+  }
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function fetchPlanBoard(): Promise<{ data: PlanBoardItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/plans/board`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取排班看板失败')
+  return res.json()
+}
+
+export async function savePlanAssignments(planId: string, assignments: { sop_no: string; assignee_id: string }[]): Promise<{ message: string; data: PlanBoardItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans/${planId}/assignments`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assignments }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '排班保存失败')
   }
   revalidatePath('/quality/board')
   return res.json()

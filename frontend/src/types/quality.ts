@@ -877,6 +877,19 @@ export interface BatchRelease {
   created_at: string
 }
 
+export interface PlanBoardItem {
+  plan_id: string
+  department: string
+  product_name: string
+  batch_no: string | null
+  plan_time: string
+  status: string
+  task_id: string | null
+  task_status: string | null
+  sops: { sop_no: string; items: string[]; filled: number; total: number }[]
+  assignments: { sop_no: string; assignee_id: string; assignee_name: string | null }[]
+}
+
 export interface TaskAssignment {
   sop_no: string
   assignee_id: string
