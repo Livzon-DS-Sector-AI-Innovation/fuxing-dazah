@@ -54,6 +54,23 @@ TOOL_WAREHOUSE_QUERY_REPORT = "query_report"
 # 遥测查询（agent-query-p1：特种设备最新读数/报警，只读，四角色可用）
 TOOL_QUERY_TELEMETRY_LATEST = "query_telemetry_latest"
 TOOL_QUERY_TELEMETRY_ALARMS = "query_telemetry_alarms"
+# 遥测处置执行面（agent-action-p3：报警值班确认/处置关闭）
+TOOL_ACK_TELEMETRY_ALARM = "ack_telemetry_alarm"
+TOOL_RESOLVE_TELEMETRY_ALARM = "resolve_telemetry_alarm"
+# 知识库 AI 生产执行面（agent-action-p3）：卡片/PPT/摘要（只富化文章，消耗 AI 配额）
+TOOL_GENERATE_KNOWLEDGE_CARD = "generate_knowledge_card"
+TOOL_GENERATE_KNOWLEDGE_PPT = "generate_knowledge_ppt"
+TOOL_GENERATE_KNOWLEDGE_SUMMARY = "generate_knowledge_summary"
+# 危险源辨识流转执行面（agent-action-p3）：提交 AI 流程 / 节点补触发
+TOOL_SUBMIT_HAZARD_IDENTIFICATION = "submit_hazard_identification"
+TOOL_RETRY_HAZARD_IDENTIFICATION_NODE = "retry_hazard_identification_node"
+# 运维触发执行面（agent-action-p3）：手动同步 / 手动跑审核
+TOOL_SYNC_DOMAIN_DATA = "sync_domain_data"
+TOOL_RUN_WORKTICKET_REVIEW = "run_workticket_review"
+# 第 5 组（agent-action-p3）：季度定格 / 危化品全量扫描 / 速递按日期重投
+TOOL_FREEZE_STANDARD_CHECK = "freeze_standard_check"
+TOOL_SCAN_CHEMICAL_INVENTORY = "scan_chemical_inventory"
+TOOL_RESEED_DAILY_DIGEST = "reseed_daily_digest"
 # 设施管理查询（agent-query-p1：三台账/校验任务/点检，只读，四角色可用）
 TOOL_QUERY_FACILITY_LEDGERS = "query_facility_ledgers"
 TOOL_QUERY_FACILITY_TASKS = "query_facility_tasks"
@@ -303,6 +320,46 @@ _DRILL_ACTION_WRITE_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# 遥测处置执行面（agent-action-p3）：报警值班确认/处置关闭（admin/leader；
+# 「值班」角色不存在于现 4 角色体系，拍板映射到 admin+leader）
+_TELEMETRY_ACTION_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_ACK_TELEMETRY_ALARM,
+        TOOL_RESOLVE_TELEMETRY_ALARM,
+    }
+)
+
+# 知识库 AI 生产执行面（agent-action-p3）：卡片/PPT/摘要（admin/leader，
+# 拍板③：部门负责人做培训拿 PPT/卡片是高频场景）
+_KNOWLEDGE_GENERATION_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_GENERATE_KNOWLEDGE_CARD,
+        TOOL_GENERATE_KNOWLEDGE_PPT,
+        TOOL_GENERATE_KNOWLEDGE_SUMMARY,
+    }
+)
+
+# 危险源辨识流转执行面（agent-action-p3）：提交 AI 流程 / 节点补触发
+# （仅 safety_admin，拍板：流转触发类与运维同口径）
+_HAZARD_ID_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_SUBMIT_HAZARD_IDENTIFICATION,
+        TOOL_RETRY_HAZARD_IDENTIFICATION_NODE,
+    }
+)
+
+# 运维触发执行面（agent-action-p3）：手动同步 / 手动跑审核 / 定格 / 扫描 /
+# 速递重投（仅 safety_admin，低频运维补触发收口到安全管理员，拍板⑥）
+_OPS_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_SYNC_DOMAIN_DATA,
+        TOOL_RUN_WORKTICKET_REVIEW,
+        TOOL_FREEZE_STANDARD_CHECK,
+        TOOL_SCAN_CHEMICAL_INVENTORY,
+        TOOL_RESEED_DAILY_DIGEST,
+    }
+)
+
 # ── 角色 → 允许工具（deny-by-default：未列出的角色/工具一律拒绝）──────
 ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     ROLE_SAFETY_ADMIN: _READ_TOOLS
@@ -333,7 +390,11 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _HAZARD_BULLETIN_WRITE_TOOLS
     | _HAZARD_ACTION_WRITE_TOOLS
     | _SPECIAL_OP_APPROVAL_WRITE_TOOLS
-    | _DRILL_ACTION_WRITE_TOOLS,
+    | _DRILL_ACTION_WRITE_TOOLS
+    | _TELEMETRY_ACTION_WRITE_TOOLS
+    | _KNOWLEDGE_GENERATION_WRITE_TOOLS
+    | _HAZARD_ID_WRITE_TOOLS
+    | _OPS_WRITE_TOOLS,
     ROLE_DEPT_LEADER: _READ_TOOLS
     | {
         TOOL_GENERATE_DRILL_PLAN,
@@ -355,7 +416,9 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _HAZARD_POLL_WRITE_TOOLS
     | _HAZARD_BULLETIN_WRITE_TOOLS
     | _HAZARD_ACTION_WRITE_TOOLS
-    | _DRILL_ACTION_WRITE_TOOLS,
+    | _DRILL_ACTION_WRITE_TOOLS
+    | _TELEMETRY_ACTION_WRITE_TOOLS
+    | _KNOWLEDGE_GENERATION_WRITE_TOOLS,
     ROLE_INSPECTOR: _READ_TOOLS
     | {TOOL_CREATE_URS_REVIEW, TOOL_UPDATE_CHEMICAL_INVENTORY}
     | OFFICE_READ_TOOLS

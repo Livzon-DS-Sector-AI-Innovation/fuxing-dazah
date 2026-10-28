@@ -98,9 +98,10 @@ class TestTelemetryToolsWiring:
             assert registry.TOOL_KIND[name] is False
             assert registry._FUNC_BY_NAME[name] is func
             assert name not in registry.RESIDENT_TOOLS
-        assert set(tool_selector.TOOL_GROUPS["telemetry"]) == {
+        # agent-action-p3 组已扩报警处置两件（写工具），此处只锚定一期只读件仍在组
+        assert {
             "query_telemetry_latest", "query_telemetry_alarms",
-        }
+        } <= set(tool_selector.TOOL_GROUPS["telemetry"])
 
     def test_permissions_viewer_can_query(self) -> None:
         viewer = allowed_tools(ROLE_VIEWER)

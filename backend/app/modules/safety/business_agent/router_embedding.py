@@ -26,6 +26,9 @@ DOMAIN_EXAMPLES: dict[str, list[str]] = {
         "目标责任与绩效核查结果",
         "隐患按期整改率这条标准达标了吗",
         "现在体系运行有哪些没做到的",
+        # agent-action-p3 季度定格
+        "这个季度的核查结果定个格",
+        "上季度定格没跑成给补一下",
     ],
     "warehouse": [
         "仓库里乙醇还有多少库存",
@@ -62,6 +65,9 @@ DOMAIN_EXAMPLES: dict[str, list[str]] = {
         # agent-action-p2 执行面：通用推群话术
         "把这个报表发到群里让大家看",
         "日报推送给群里",
+        # agent-action-p3 执行面：辨识流转话术
+        "这条辨识交给 AI 跑一遍",
+        "辨识的流程卡住了再推一下节点",
     ],
     "knowledge": [
         "储罐之间的距离怎么规定",
@@ -74,6 +80,10 @@ DOMAIN_EXAMPLES: dict[str, list[str]] = {
         "这属于哪个标准管",
         "有没有相关条款可以引用",
         "查一下权威资料",
+        # AI 生产执行面（agent-action-p3）
+        "给这份制度生成一张 AI 卡片",
+        "帮我把这个文档做一份培训用的PPT",
+        "给这篇规定出一段内容摘要",
     ],
     "oh": [
         "谁体检结果有异常",
@@ -179,6 +189,9 @@ DOMAIN_EXAMPLES: dict[str, list[str]] = {
         "易制爆的有哪些",
         "接触限值是多少",
         "仓库混放风险大不大",
+        # agent-action-p3 全量扫描
+        "库存风险重新都算一遍",
+        "危化品的扫描整个跑一次",
     ],
     "guardian_subsidy": [
         "上个月监工费怎么算",
@@ -239,6 +252,10 @@ DOMAIN_EXAMPLES: dict[str, list[str]] = {
         "接口调用成功率如何",
         "日志里有什么异常",
         "采集任务卡住了没",
+        # agent-action-p3 运维触发
+        "消防的数据手动拉一遍最新",
+        "中控的数据不同步一下吗",
+        "作业票昨天没自动审给我补一次",
     ],
     # 3.x F1 批次补漏（TOOL_GROUPS 已有组、示例缺位）
     "contractor_workers": [
@@ -248,13 +265,16 @@ DOMAIN_EXAMPLES: dict[str, list[str]] = {
         "在厂的外来施工人员名单",
         "我们厂有哪些岗位",
     ],
-    # agent-query-p1 遥测域
+    # agent-query-p1 遥测域（后三条 agent-action-p3 报警处置）
     "telemetry": [
         "锅炉现在压力多少",
         "锅炉温度正常吗",
         "特种设备最新读数报一下",
         "锅炉有没有超压报警",
         "昨天的抄表数据是多少",
+        "值班的我把这炉子的警报确认掉",
+        "这条锅炉报警我已经处理好了关掉它",
+        "把 GL-01 的警报销掉",
     ],
     # agent-query-p1 设施管理域
     "facilities": [

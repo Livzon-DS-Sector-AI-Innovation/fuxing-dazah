@@ -139,6 +139,34 @@ from app.modules.safety.business_agent.tools.special_op_action_tools import (
     reject_special_operation_report,
 )
 
+# ── 遥测处置执行面（agent-action-p3：报警确认/处置关闭，按需挂载）──
+from app.modules.safety.business_agent.tools.telemetry_action_tools import (
+    ack_telemetry_alarm,
+    resolve_telemetry_alarm,
+)
+
+# ── 知识库 AI 生产执行面（agent-action-p3：卡片/PPT/摘要，按需挂载）──
+from app.modules.safety.business_agent.tools.knowledge_action_tools import (
+    generate_knowledge_card,
+    generate_knowledge_ppt,
+    generate_knowledge_summary,
+)
+
+# ── 危险源辨识流转执行面（agent-action-p3：提交 AI 流程/节点补触发，按需挂载）──
+from app.modules.safety.business_agent.tools.hazard_id_action_tools import (
+    retry_hazard_identification_node,
+    submit_hazard_identification,
+)
+
+# ── 运维触发执行面（agent-action-p3：手动同步/手动跑审核+第5组，按需挂载）──
+from app.modules.safety.business_agent.tools.ops_action_tools import (
+    freeze_standard_check,
+    reseed_daily_digest,
+    run_workticket_review,
+    scan_chemical_inventory,
+    sync_domain_data,
+)
+
 # ── 写入 ──
 from app.modules.safety.business_agent.tools.write_tools import (
     analyze_oh_transfer,
@@ -291,6 +319,23 @@ TOOL_KIND: dict[str, bool] = {
     # 演练执行面（agent-action-p2：AI 评估表/问题转隐患，需用户确认）
     "generate_drill_eval": True,
     "create_hazards_from_drill": True,
+    # 遥测处置执行面（agent-action-p3：报警值班确认/处置关闭，需用户确认）
+    "ack_telemetry_alarm": True,
+    "resolve_telemetry_alarm": True,
+    # 知识库 AI 生产执行面（agent-action-p3：卡片/PPT/摘要，需用户确认）
+    "generate_knowledge_card": True,
+    "generate_knowledge_ppt": True,
+    "generate_knowledge_summary": True,
+    # 危险源辨识流转执行面（agent-action-p3：提交/补触发，仅安全管理员，需用户确认）
+    "submit_hazard_identification": True,
+    "retry_hazard_identification_node": True,
+    # 运维触发执行面（agent-action-p3：手动同步/跑审核，仅安全管理员，需用户确认）
+    "sync_domain_data": True,
+    "run_workticket_review": True,
+    # 第 5 组（agent-action-p3）：季度定格/危化品扫描/速递重投，仅安全管理员
+    "freeze_standard_check": True,
+    "scan_chemical_inventory": True,
+    "reseed_daily_digest": True,
     # 监护补贴统计（只读：预览；写入：生成 Excel 并回传文件，需用户确认）
     "preview_guardian_subsidy": False,
     "generate_guardian_subsidy": True,
@@ -400,6 +445,18 @@ def _all_write_funcs() -> list[Callable[..., Any]]:
         reject_special_operation_report,
         generate_drill_eval,
         create_hazards_from_drill,
+        ack_telemetry_alarm,
+        resolve_telemetry_alarm,
+        generate_knowledge_card,
+        generate_knowledge_ppt,
+        generate_knowledge_summary,
+        submit_hazard_identification,
+        retry_hazard_identification_node,
+        sync_domain_data,
+        run_workticket_review,
+        freeze_standard_check,
+        scan_chemical_inventory,
+        reseed_daily_digest,
     ] + _OFFICE_WRITE_FUNCS
 
 

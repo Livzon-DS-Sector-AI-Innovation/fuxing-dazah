@@ -31,12 +31,18 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "push_report_to_chat",
         # 1-D 域收敛：危险源辨识并入隐患域
         "query_hazard_identifications",
+        # 流转执行面（agent-action-p3）：提交 AI 流程 / 节点补触发（仅安全管理员）
+        "submit_hazard_identification",
+        "retry_hazard_identification_node",
     ],
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
         "run_regulation_ai_review",
         # 2-B：技能加载通用工具归知识域（常驻只读，SOP 按需注入）
         "load_skill",
+        # AI 生产执行面（agent-action-p3）：卡片/PPT/摘要
+        "generate_knowledge_card", "generate_knowledge_ppt",
+        "generate_knowledge_summary",
     ],
     "contractor_admission": ["query_contractor_admissions"],
     # 3.x 平台关联 F1：在册人员副台账 + 岗位字典（按需，常驻不动）
@@ -53,6 +59,10 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_ai_audits",
         "query_ai_config", "query_bitable_config", "query_scheduler_tasks",
         "query_regulation_crawl_status",
+        # 运维触发执行面（agent-action-p3）：手动同步/跑审核（仅安全管理员）
+        "sync_domain_data", "run_workticket_review",
+        # 第 5 组（agent-action-p3）：速递按日期重投（仅安全管理员）
+        "reseed_daily_digest",
     ],
 
     "alarm": [
@@ -76,6 +86,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "update_chemical_inventory",
         # agent-query-p1：库存趋势派生面
         "query_chemical_trend",
+        # 第 5 组（agent-action-p3）：全量风险扫描（仅安全管理员）
+        "scan_chemical_inventory",
     ],
     "office": [
         "office_search_files", "office_read_docx", "office_read_sheet",
@@ -113,11 +125,20 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "query_movements", "query_report",
     ],
     "ehs_change": ["query_ehs_changes"],
-    # S1 体系标准核查（2026-10-21）：标准×运行数据四态判定
-    "standard_check": ["query_standard_compliance"],
-    "work_ticket": ["query_work_ticket_reviews", "screen_work_ticket_personnel"],
-    # 遥测域（agent-query-p1：特种设备最新读数/报警，按需挂载）
-    "telemetry": ["query_telemetry_latest", "query_telemetry_alarms"],
+    # S1 体系标准核查（2026-10-21）：标准×运行数据四态判定；
+    # agent-action-p3 追加季度定格
+    "standard_check": ["query_standard_compliance", "freeze_standard_check"],
+    "work_ticket": [
+        "query_work_ticket_reviews", "screen_work_ticket_personnel",
+        # 运维触发执行面（agent-action-p3）：「作业票审核」问法直接命中本组
+        "run_workticket_review",
+    ],
+    # 遥测域（agent-query-p1：特种设备最新读数/报警，按需挂载；
+    # agent-action-p3 追加报警处置两件）
+    "telemetry": [
+        "query_telemetry_latest", "query_telemetry_alarms",
+        "ack_telemetry_alarm", "resolve_telemetry_alarm",
+    ],
     # 设施管理域（agent-query-p1：三台账/校验任务/灭火器点检，按需挂载）
     "facilities": [
         "query_facility_ledgers", "query_facility_tasks",
@@ -137,6 +158,8 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     "standard_check": [
         "标准", "达标", "符合性", "绩效", "核查",
         "目标责任", "体系运行", "演练做了",
+        # 第 5 组（agent-action-p3）：季度定格
+        "定格", "季度定格",
     ],
     "hazard": [
         "隐患", "整改", "缺陷", "堵头", "泄漏", "防爆",
@@ -152,11 +175,16 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "发到群里", "推送到群",
         # 1-D 域收敛：危险源辨识关键词并入
         "辨识记录", "LEC", "JHA",
+        # 流转执行面（agent-action-p3）：提交/补触发话术
+        "提交辨识", "重新触发", "补触发", "提交 AI 流程", "提交AI流程",
     ],
     "knowledge": [
         "法规", "标准", "规范", "条款", "规定", "制度",
         "GB", "AQ", "HG", "SH", "TSG", "GB/T", "AQ/T",
         "操规", "操作规程",
+        # AI 生产执行面（agent-action-p3）：卡片/PPT/摘要话术
+        "生成卡片", "AI卡片", "知识卡片", "做一份PPT", "做个PPT", "做PPT",
+        "生成PPT", "生成摘要", "做一份摘要",
     ],
     "contractor_admission": ["准入", "承包商", "相关方", "劳务派遣", "外包单位"],
     "contractor_workers": [
@@ -173,6 +201,10 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "AI配置", "模型配置", "多维表格配置", "定时任务", "调度", "后台任务",
         # 轮询补跑（拍板②）：「轮询一下隐患AI分析」等话术命中 ops 而非仅 hazard
         "轮询", "补跑", "补上", "补一下", "采集状态", "采集监控",
+        # 运维触发执行面（agent-action-p3）：手动同步/跑审核话术
+        "同步一下", "手动同步", "补同步", "跑一次审核", "跑审核", "跑一遍审核", "补审",
+        # 第 5 组（agent-action-p3）：速递重投话术
+        "重投", "投格", "格子重投",
     ],
     "alarm": ["消防报警", "消防", "火警", "报警器", "中控报警", "中控", "报警记录"],
     "cert_warning": ["持证", "证书", "换证", "复审", "资质到期", "证件到期"],
@@ -189,6 +221,8 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "现场物料总量", "化学品", "MSDS", "化学品安全技术说明", "安全数据单",
         # agent-query-p1：趋势派生面
         "趋势", "环比", "异动",
+        # 第 5 组（agent-action-p3）：全量扫描话术
+        "全量扫描", "重新扫描", "风险扫描",
     ],
     "guardian_subsidy": [
         "监护人补贴", "监护补贴", "特殊作业补贴", "作业票补贴", "补贴",
@@ -215,7 +249,11 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     ],
     # 遥测域（agent-query-p1）：「特种设备报警」与设施域「特种设备台账」词面互不
     # 包含，两域同命中时多挂无害（模型按问题语义选工具）
-    "telemetry": ["锅炉", "压力", "遥测", "抄表", "特种设备报警", "读数"],
+    # 报警处置话术（agent-action-p3）：「处置」裸词多域命中无害（hazard 也常含）
+    "telemetry": [
+        "锅炉", "压力", "遥测", "抄表", "特种设备报警", "读数",
+        "报警确认", "值班确认", "处置", "销警",
+    ],
     # 设施管理域（agent-query-p1）：「消防」裸词归报警域，「消防器材」才归设施
     "facilities": [
         "灭火器", "消防器材", "安全附件", "特种设备台账", "设施",

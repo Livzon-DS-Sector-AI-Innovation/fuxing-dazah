@@ -58,6 +58,23 @@ from app.modules.safety.business_agent.core.permissions import (
     TOOL_REJECT_SPECIAL_OPERATION_REPORT,
     TOOL_GENERATE_DRILL_EVAL,
     TOOL_CREATE_HAZARDS_FROM_DRILL,
+    # 执行面（agent-action-p3）：遥测报警处置
+    TOOL_ACK_TELEMETRY_ALARM,
+    TOOL_RESOLVE_TELEMETRY_ALARM,
+    # 执行面（agent-action-p3）：知识库 AI 生产
+    TOOL_GENERATE_KNOWLEDGE_CARD,
+    TOOL_GENERATE_KNOWLEDGE_PPT,
+    TOOL_GENERATE_KNOWLEDGE_SUMMARY,
+    # 执行面（agent-action-p3）：危险源辨识流转
+    TOOL_SUBMIT_HAZARD_IDENTIFICATION,
+    TOOL_RETRY_HAZARD_IDENTIFICATION_NODE,
+    # 执行面（agent-action-p3）：运维触发
+    TOOL_SYNC_DOMAIN_DATA,
+    TOOL_RUN_WORKTICKET_REVIEW,
+    # 执行面（agent-action-p3）：第 5 组（定格/扫描/速递重投）
+    TOOL_FREEZE_STANDARD_CHECK,
+    TOOL_SCAN_CHEMICAL_INVENTORY,
+    TOOL_RESEED_DAILY_DIGEST,
     allowed_tools,
     check,
 )
@@ -117,6 +134,23 @@ __all__ = [
     "TOOL_REJECT_SPECIAL_OPERATION_REPORT",
     "TOOL_GENERATE_DRILL_EVAL",
     "TOOL_CREATE_HAZARDS_FROM_DRILL",
+    # 执行面（agent-action-p3）：遥测报警处置
+    "TOOL_ACK_TELEMETRY_ALARM",
+    "TOOL_RESOLVE_TELEMETRY_ALARM",
+    # 执行面（agent-action-p3）：知识库 AI 生产
+    "TOOL_GENERATE_KNOWLEDGE_CARD",
+    "TOOL_GENERATE_KNOWLEDGE_PPT",
+    "TOOL_GENERATE_KNOWLEDGE_SUMMARY",
+    # 执行面（agent-action-p3）：危险源辨识流转
+    "TOOL_SUBMIT_HAZARD_IDENTIFICATION",
+    "TOOL_RETRY_HAZARD_IDENTIFICATION_NODE",
+    # 执行面（agent-action-p3）：运维触发
+    "TOOL_SYNC_DOMAIN_DATA",
+    "TOOL_RUN_WORKTICKET_REVIEW",
+    # 执行面（agent-action-p3）：第 5 组（定格/扫描/速递重投）
+    "TOOL_FREEZE_STANDARD_CHECK",
+    "TOOL_SCAN_CHEMICAL_INVENTORY",
+    "TOOL_RESEED_DAILY_DIGEST",
     "allowed_tools",
     "check",
 ]
