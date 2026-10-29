@@ -246,14 +246,30 @@ async def query_hazard_stats(
 # ── 知识库检索（包装现有 RAG）───────────────────────────────────
 
 
+# P2-10：RAG snippet 可能含整段文档 HTML（表格倒灌），渲染观感差；后端统一清洗
+_HTML_TAG_RE = None  # 惰性编译（避免 import 期正则开销）
+
+
+def _clean_snippet(text: Any, limit: int = 120) -> str:
+    """snippet 清洗：strip HTML 标签 → 压空白 → 截断 ~120 字。"""
+    global _HTML_TAG_RE
+    import re
+
+    if _HTML_TAG_RE is None:
+        _HTML_TAG_RE = re.compile(r"<[^>]{1,200}>")
+    cleaned = _HTML_TAG_RE.sub("", str(text or ""))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:limit] + ("…" if len(cleaned) > limit else "")
+
+
 def _serialize_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """确保 sources 中的值均为 JSON 可序列化类型。"""
+    """确保 sources 中的值均为 JSON 可序列化类型（snippet 顺带清洗截断）。"""
     clean: list[dict[str, Any]] = []
     for s in sources:
         clean.append({
             "doc_title": str(s.get("doc_title", "")),
             "article_ref": str(s.get("article_ref", "")),
-            "chunk_text": str(s.get("chunk_text", "")),
+            "chunk_text": _clean_snippet(s.get("chunk_text", "")),
             "doc_category": str(s.get("doc_category", "")),
             "feishu_url": str(s.get("feishu_url", "")),
         })
@@ -864,6 +880,21 @@ async def query_msds(
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _oh_field(row: Any, key: str, default: Any = None) -> Any:
+    """OH 行统一取值：直读行（OhRowView）mapped 条件写键，缺键不得抛
+    AttributeError 崩工具（验收 #4：无体检号行 query_oh_exams 直接崩）；
+    镜像 ORM 行走 getattr。缺键/无属性 → default。
+    """
+    mapped = getattr(row, "mapped", None)
+    if isinstance(mapped, dict):
+        return mapped.get(key, default)
+    return getattr(row, key, default)
+
+
+def _oh_date(value: Any) -> str | None:
+    return value.isoformat() if value else None
+
+
 async def query_oh_persons(
     ctx: RunContext[SafetyDeps],
     department: str = "",
@@ -907,18 +938,18 @@ async def query_oh_persons(
         "items": [
             {
                 "id": str(p.id),
-                "name": p.name,
-                "employee_no": p.employee_no,
-                "department": p.department,
-                "position": p.position,
-                "gender": p.gender,
-                "age": p.age,
-                "work_status": p.work_status,
-                "hazard_exposure_years": p.hazard_exposure_years,
-                "hazard_factors": p.hazard_factors or [],
-                "last_exam_at": p.last_exam_at.isoformat() if p.last_exam_at else None,
-                "last_exam_type": p.last_exam_type,
-                "last_exam_conclusion": p.last_exam_conclusion,
+                "name": _oh_field(p, "name"),
+                "employee_no": _oh_field(p, "employee_no"),
+                "department": _oh_field(p, "department"),
+                "position": _oh_field(p, "position"),
+                "gender": _oh_field(p, "gender"),
+                "age": _oh_field(p, "age"),
+                "work_status": _oh_field(p, "work_status"),
+                "hazard_exposure_years": _oh_field(p, "hazard_exposure_years"),
+                "hazard_factors": _oh_field(p, "hazard_factors") or [],
+                "last_exam_at": _oh_date(_oh_field(p, "last_exam_at")),
+                "last_exam_type": _oh_field(p, "last_exam_type"),
+                "last_exam_conclusion": _oh_field(p, "last_exam_conclusion"),
             }
             for p in items
         ],
@@ -978,20 +1009,20 @@ async def query_oh_exams(
         "items": [
             {
                 "id": str(e.id),
-                "exam_no": e.exam_no,
-                "employee_name": e.employee_name,
-                "department": e.department,
-                "position": e.position,
-                "exam_type": e.exam_type,
-                "exam_agency": e.exam_agency,
-                "exam_date": e.exam_date.isoformat() if e.exam_date else None,
-                "hazard_factors": e.hazard_factors or [],
-                "status": e.status,
-                "ai_parse_status": e.ai_parse_status,
-                "ai_conclusion": e.ai_conclusion,
-                "override_conclusion": e.override_conclusion,
-                "ai_fitness": e.ai_fitness,
-                "ai_interpretation": e.ai_interpretation,
+                "exam_no": _oh_field(e, "exam_no"),
+                "employee_name": _oh_field(e, "employee_name"),
+                "department": _oh_field(e, "department"),
+                "position": _oh_field(e, "position"),
+                "exam_type": _oh_field(e, "exam_type"),
+                "exam_agency": _oh_field(e, "exam_agency"),
+                "exam_date": _oh_date(_oh_field(e, "exam_date")),
+                "hazard_factors": _oh_field(e, "hazard_factors") or [],
+                "status": _oh_field(e, "status"),
+                "ai_parse_status": _oh_field(e, "ai_parse_status"),
+                "ai_conclusion": _oh_field(e, "ai_conclusion"),
+                "override_conclusion": _oh_field(e, "override_conclusion"),
+                "ai_fitness": _oh_field(e, "ai_fitness"),
+                "ai_interpretation": _oh_field(e, "ai_interpretation"),
             }
             for e in items
         ],
