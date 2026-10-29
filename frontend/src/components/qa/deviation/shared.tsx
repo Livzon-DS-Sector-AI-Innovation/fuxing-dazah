@@ -47,6 +47,25 @@ export const cardStyles: { header: CSSProperties; body: CSSProperties } = {
 export const subtleText: CSSProperties = { color: '#787671', fontSize: 12 }
 export const tabularNums: CSSProperties = { fontVariantNumeric: 'tabular-nums' }
 
+/** 图片瓦片角标按钮（删除/下载）：半透明黑底圆形，压在缩略图上方。 */
+export const photoOverlayButtonStyle: CSSProperties = {
+  position: 'absolute',
+  right: 2,
+  top: 2,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 20,
+  height: 20,
+  borderRadius: '50%',
+  border: 'none',
+  padding: 0,
+  background: 'rgba(0, 0, 0, 0.6)',
+  color: '#fff',
+  cursor: 'pointer',
+  zIndex: 2,
+}
+
 /** 台账/详情共用的空状态：说明发生了什么，并给出下一步动作。 */
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
   return (

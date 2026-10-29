@@ -1,15 +1,18 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Button, Timeline, Upload } from 'antd'
-import { DeleteOutlined, DownloadOutlined, PaperClipOutlined, UploadOutlined } from '@ant-design/icons'
+import { App, Button, Image, Timeline, Tooltip, Upload } from 'antd'
+import { CloseOutlined, DeleteOutlined, DownloadOutlined, PaperClipOutlined, UploadOutlined } from '@ant-design/icons'
 import { deleteDeviationAttachment, uploadDeviationAttachment } from '@/actions/qa-deviation'
 import { deviationAttachmentUrl } from '@/lib/api/qa-deviation'
 import { DEVIATION_ACTION_LABEL, DEVIATION_STATUS_LABEL, type DeviationDetail, type DeviationStatus, type StatusLog } from '@/types/qa-deviation'
 import { SectionCard } from './DeviationSections'
-import { actionError, fmtBytes, fmtDateTime } from './shared'
+import { actionError, fmtBytes, fmtDateTime, photoOverlayButtonStyle } from './shared'
 
 const ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png'
+
+/** 图片附件走缩略图墙；与后端 _ATTACHMENT_MIME 的图片白名单一致。 */
+const IMAGE_MIME = new Set(['image/jpeg', 'image/png'])
 
 /** 偏差附件：批记录复印件、校验标签照片、COA 等；PDF/图片可直接预览。 */
 export function AttachmentsCard({
@@ -60,6 +63,9 @@ export function AttachmentsCard({
     })
   }
 
+  const images = detail.attachments.filter((attachment) => IMAGE_MIME.has(attachment.mime_type))
+  const others = detail.attachments.filter((attachment) => !IMAGE_MIME.has(attachment.mime_type))
+
   return (
     <SectionCard
       title="附件"
@@ -83,37 +89,81 @@ export function AttachmentsCard({
       {detail.attachments.length === 0 ? (
         <div style={{ color: '#a4a097', fontSize: 13 }}>暂无附件（支持 PDF、Word、Excel、JPG、PNG，单个 ≤ 20MB）</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {detail.attachments.map((attachment) => (
-            <div
-              key={attachment.id}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid #ede9e4', borderRadius: 8 }}
-            >
-              <PaperClipOutlined style={{ color: '#787671' }} />
-              <a
-                href={deviationAttachmentUrl(detail.id, attachment.id)}
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: '#0075de', fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              >
-                {attachment.file_name}
-              </a>
-              <span style={{ color: '#787671', fontSize: 12, whiteSpace: 'nowrap' }}>
-                {fmtBytes(attachment.file_size)} · {attachment.uploaded_by_name || '—'} · {fmtDateTime(attachment.created_at)}
-              </span>
-              <Button
-                type="text"
-                size="small"
-                icon={<DownloadOutlined />}
-                href={deviationAttachmentUrl(detail.id, attachment.id, true)}
-                aria-label="下载"
-              />
-              {canEdit && (
-                <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => remove(attachment.id, attachment.file_name)} aria-label="删除" />
-              )}
+        <>
+          {images.length > 0 && (
+            <Image.PreviewGroup>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: others.length > 0 ? 12 : 0 }}>
+                {images.map((attachment) => (
+                  <Tooltip
+                    key={attachment.id}
+                    title={`${attachment.file_name} · ${fmtBytes(attachment.file_size)} · ${attachment.uploaded_by_name || '—'} · ${fmtDateTime(attachment.created_at)}`}
+                  >
+                    <div style={{ position: 'relative', width: 80, height: 80, borderRadius: 8, overflow: 'hidden' }}>
+                      <Image
+                        src={deviationAttachmentUrl(detail.id, attachment.id)}
+                        alt={attachment.file_name}
+                        width={80}
+                        height={80}
+                        loading="lazy"
+                        style={{ objectFit: 'cover' }}
+                      />
+                      <a
+                        href={deviationAttachmentUrl(detail.id, attachment.id, true)}
+                        aria-label="下载照片"
+                        style={{ ...photoOverlayButtonStyle, left: 2, right: 'auto', top: 'auto', bottom: 2 }}
+                      >
+                        <DownloadOutlined style={{ fontSize: 10 }} />
+                      </a>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          aria-label="删除照片"
+                          onClick={() => remove(attachment.id, attachment.file_name)}
+                          style={photoOverlayButtonStyle}
+                        >
+                          <CloseOutlined style={{ fontSize: 10 }} />
+                        </button>
+                      )}
+                    </div>
+                  </Tooltip>
+                ))}
+              </div>
+            </Image.PreviewGroup>
+          )}
+          {others.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {others.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid #ede9e4', borderRadius: 8 }}
+                >
+                  <PaperClipOutlined style={{ color: '#787671' }} />
+                  <a
+                    href={deviationAttachmentUrl(detail.id, attachment.id)}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: '#0075de', fontWeight: 500, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {attachment.file_name}
+                  </a>
+                  <span style={{ color: '#787671', fontSize: 12, whiteSpace: 'nowrap' }}>
+                    {fmtBytes(attachment.file_size)} · {attachment.uploaded_by_name || '—'} · {fmtDateTime(attachment.created_at)}
+                  </span>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    href={deviationAttachmentUrl(detail.id, attachment.id, true)}
+                    aria-label="下载"
+                  />
+                  {canEdit && (
+                    <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => remove(attachment.id, attachment.file_name)} aria-label="删除" />
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </SectionCard>
   )

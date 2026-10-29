@@ -27,7 +27,7 @@ from app.core.exceptions import (
 )
 from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch
+from app.modules.production.models import Batch, NodeExecution
 from app.modules.production.schemas import (
     DemandAllocationCreate,
     DemandCreate,
@@ -1112,17 +1112,19 @@ class TestChangePlanOrder:
                 PlanOrderChangeRequest(change_reason="测试"), test_user,
             )
 
-    async def test_change_deletes_item_and_cancels_batch(
+    async def test_change_deletes_item_and_frees_unstarted_batch(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,
     ) -> None:
-        """变更删除计划项：对应批次报废、计划项软删、版本号递增。"""
+        """变更删除计划项：从未开工的批次整批软删让出批号、计划项软删、版本号递增。"""
         order, item = await self._released_order(
             db_session, published_route, test_user,
         )
         version_before = order.plan_version
         allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
         batch_id = allocs[0].batch_id
+        batch_no = item.batch_no
+        assert batch_no and await repo.get_batch_by_no(db_session, batch_no) is not None
 
         changed = await planning_service.change_plan_order(
             db_session, order.id,
@@ -1133,8 +1135,9 @@ class TestChangePlanOrder:
             test_user,
         )
         assert changed.plan_version == version_before + 1
-        batch = await repo.get_batch(db_session, batch_id)
-        assert batch is not None and batch.status == "cancelled"
+        # 零痕迹批次软删（存活查询不可见），批号随即释放
+        assert await repo.get_batch(db_session, batch_id) is None
+        assert await repo.get_batch_by_no(db_session, batch_no) is None
         assert await repo.get_plan_item(db_session, item.id) is None
         detail = await planning_service.get_plan_order_detail(db_session, order.id)
         assert len(detail.change_logs) == 1
@@ -1297,6 +1300,245 @@ class TestChangePlanOrder:
                 ),
                 test_user,
             )
+
+    async def test_change_delete_allows_received_pending_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """批次已被接收（scheduled→pending）但未开工：删除放行，整批报废撤出待接收池。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        batch.status = "pending"
+        await db_session.flush()
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="接收方未开工，砍掉该批",
+                items_delete=[item.id],
+            ),
+            test_user,
+        )
+
+        # get_plan_item/get_plan_allocations_by_item 只返回存活行：
+        # 删除前均存在，删除后应查不到（软删生效）
+        assert await repo.get_plan_item(db_session, item.id) is None
+        assert await repo.get_plan_allocations_by_item(db_session, item.id) == []
+        # 从未开工的批次整批软删（而非仅转 cancelled），批号同步释放
+        assert await repo.get_batch(db_session, batch.id) is None
+        assert await repo.get_batch_by_no(db_session, batch.batch_no) is None
+
+    async def test_change_delete_with_shift_renumbers_following_batches(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """删除并补位（前端本地改名随 upsert 回传）：后续项与真实批次一起改号，让号链成立。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["NPA-5", "NPA-6", "NPA-7"], test_user,
+        )
+        for it in items:
+            await _schedule_item(db_session, it, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        await planning_service.release_plan_order(db_session, order.id, test_user)
+        allocs0 = await repo.get_plan_allocations_by_item(db_session, items[0].id)
+        deleted_batch_id = allocs0[0].batch_id
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="空出一天，批次前移补位",
+                items_delete=[items[0].id],
+                items_upsert=[
+                    PlanItemChangeItem(id=items[1].id, batch_no="NPA-5"),
+                    PlanItemChangeItem(id=items[2].id, batch_no="NPA-6"),
+                ],
+            ),
+            test_user,
+        )
+
+        # 计划项与真实批次的批号必须同步前移，不脱钩
+        for item, expected_no in ((items[1], "NPA-5"), (items[2], "NPA-6")):
+            refreshed = await repo.get_plan_item(db_session, item.id)
+            assert refreshed is not None and refreshed.batch_no == expected_no
+            allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+            batch = await repo.get_batch(db_session, allocs[0].batch_id)
+            assert batch is not None and batch.batch_no == expected_no
+            holder = await repo.get_batch_by_no(db_session, expected_no)
+            assert holder is not None and holder.id == batch.id
+        # 删除项的批次整批软删；队尾让出的 NPA-7 号完全释放
+        assert await repo.get_batch(db_session, deleted_batch_id) is None
+        assert await repo.get_batch_by_no(db_session, "NPA-7") is None
+
+    async def test_change_updates_received_pending_item_fields(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """已被接收（pending）但未开工的批次：变更数量/时间不再被静默吞掉，批次数量同步。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        batch.status = "pending"
+        await db_session.flush()
+        new_start = datetime.now(UTC) + timedelta(days=1)
+        new_end = new_start + timedelta(hours=8)
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="往后顺延一天",
+                items_upsert=[PlanItemChangeItem(
+                    id=item.id,
+                    planned_quantity=66,
+                    planned_start=new_start,
+                    planned_end=new_end,
+                )],
+            ),
+            test_user,
+        )
+
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None
+        assert refreshed.planned_quantity == 66
+        assert refreshed.planned_start == new_start
+        assert refreshed.planned_end == new_end
+        batch_after = await repo.get_batch(db_session, batch.id)
+        assert batch_after is not None and batch_after.quantity == 66
+        allocs_after = await repo.get_plan_allocations_by_item(db_session, item.id)
+        assert allocs_after[0].allocated_quantity == 66
+
+    async def test_change_delete_keeps_traceable_cancelled_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """有执行留痕的报废批次删除项后保持可见并继续占号；他项补位进该号被拒。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["TRC-1", "TRC-2"], test_user,
+        )
+        for it in items:
+            await _schedule_item(db_session, it, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        await planning_service.release_plan_order(db_session, order.id, test_user)
+
+        allocs1 = await repo.get_plan_allocations_by_item(db_session, items[0].id)
+        traceable = await repo.get_batch(db_session, allocs1[0].batch_id)
+        assert traceable is not None
+        nodes = await repo.get_route_nodes(db_session, published_route["route"].id)
+        db_session.add(NodeExecution(
+            batch_id=traceable.id, node_id=nodes[0].id,
+            started_at=datetime.now(UTC),
+        ))
+        traceable.status = "cancelled"
+        await db_session.flush()
+
+        # 删除留痕项 + 试图让 TRC-2 项补位进 TRC-1：占号未释放，整单变更被拒
+        with pytest.raises(DuplicateException, match="批次号"):
+            await planning_service.change_plan_order(
+                db_session, order.id,
+                PlanOrderChangeRequest(
+                    change_reason="删除留痕报废项",
+                    items_delete=[items[0].id],
+                    items_upsert=[PlanItemChangeItem(id=items[1].id, batch_no="TRC-1")],
+                ),
+                test_user,
+            )
+        # 留痕批次本身保持可见（软删会让执行记录失去挂靠）
+        assert await repo.get_batch(db_session, traceable.id) is not None
+
+    async def test_change_delete_releases_demand_allocation(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """删除承担需求分配的计划项：分配行软删，需求履约量与状态回退。"""
+        demand = await _make_demand(
+            db_session, published_route, test_user, quantity=100,
+        )
+        await planning_service.confirm_demand(db_session, demand.id, test_user)
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        await planning_service.create_demand_allocation(
+            db_session, demand.id,
+            DemandAllocationCreate(plan_item_id=item.id, allocated_quantity=60),
+            test_user,
+        )
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="删除承担需求的项",
+                items_delete=[item.id],
+            ),
+            test_user,
+        )
+
+        # 需求分配随计划项一起解除，履约量按存活分配重算回 0
+        assert await repo.get_demand_allocations(db_session, demand.id) == []
+        refreshed = await repo.get_demand(db_session, demand.id)
+        assert refreshed is not None
+        assert refreshed.allocated_quantity == 0
+        assert refreshed.status == "confirmed"
+
+    @pytest.mark.parametrize("blank", ["", " "])
+    async def test_change_rejects_blank_batch_no(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User, blank: str,
+    ) -> None:
+        """空/空白批号不能写到真实批次上：拒绝而不是抹掉批次身份号。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        original_no = batch.batch_no
+
+        with pytest.raises(AppException, match="批次号不能为空"):
+            await planning_service.change_plan_order(
+                db_session, order.id,
+                PlanOrderChangeRequest(
+                    change_reason="空白批号",
+                    items_upsert=[PlanItemChangeItem(id=item.id, batch_no=blank)],
+                ),
+                test_user,
+            )
+        assert batch.batch_no == original_no
+
+    async def test_change_renames_cancelled_batch_still_allocated(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """手工报废但分配未断开的批次：改计划项批号仍同步真实批次，避免脱钩。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        batch.status = "cancelled"
+        await db_session.flush()
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="报废后改批号",
+                items_upsert=[PlanItemChangeItem(id=item.id, batch_no="CNL-9")],
+            ),
+            test_user,
+        )
+
+        refreshed = await repo.get_batch(db_session, batch.id)
+        assert refreshed is not None and refreshed.batch_no == "CNL-9"
+        item_after = await repo.get_plan_item(db_session, item.id)
+        assert item_after is not None and item_after.batch_no == "CNL-9"
 
     async def test_change_quantity_updates_batch(
         self, db_session: AsyncSession, published_route: dict[str, Any],

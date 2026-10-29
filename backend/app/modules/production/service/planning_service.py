@@ -57,6 +57,7 @@ from app.modules.production.service.reminder_service import (
     schedule_plan_released_notification,
 )
 from app.modules.production.service.route_service import require_published_route
+from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
@@ -596,11 +597,14 @@ async def change_plan_order(
                 if batch:
                     item_batch_map[item_id] = batch
 
-    # 校验不可变更的项（batch 已进入生产）
+    # 校验不可变更的项：批次已开工即拦。pending = 已被接收但未开工，无执行/
+    # 谱系数据，与 scheduled 同等对待（可删可改）。
     blocked_ids: set[uuid.UUID] = set()
     cancelled_batch_ids: set[uuid.UUID] = set()
+    # 删除项释放的需求分配：需求履约量是全局合计，末尾要按存活分配重算。
+    touched_demand_ids: set[uuid.UUID] = set()
     for item_id, batch in item_batch_map.items():
-        if batch.status not in ("scheduled", "cancelled"):
+        if batch.status not in ("scheduled", "pending", "cancelled"):
             blocked_ids.add(item_id)
 
     # ── 删除计划项 ──
@@ -615,13 +619,24 @@ async def change_plan_order(
                 )
             batch = item_batch_map.get(item_id)
             if batch:
+                # 删除计划项一律报废对应批次；只有从未开工、无执行/谱系留痕的
+                # 批次整批软删让出批号（部分唯一索引只看 is_deleted，cancelled
+                # 行同样占号），否则"删除并补位"永远撞上自己刚删的批号。有留痕
+                # 的批次保持可见，承接执行/谱系记录。
                 batch.status = "cancelled"
+                if not await repo.batch_has_history(db, batch.id):
+                    batch.is_deleted = True
                 batch.updated_by = user.id if user else None
                 cancelled_batch_ids.add(batch.id)
             plan_allocs = await repo.get_plan_allocations_by_item(db, item_id)
             for pa in plan_allocs:
                 pa.is_deleted = True
                 pa.updated_by = user.id if user else None
+            # 解除该计划项的需求分配，并把受影响需求纳入末尾的履约量重算。
+            for demand_alloc in await repo.get_demand_allocations_by_item(db, item_id):
+                demand_alloc.is_deleted = True
+                demand_alloc.updated_by = user.id if user else None
+                touched_demand_ids.add(demand_alloc.demand_id)
             item = await repo.get_plan_item(db, item_id)
             if item:
                 item.is_deleted = True
@@ -641,8 +656,33 @@ async def change_plan_order(
                         item.remark = ci.remark
                         item.updated_by = user.id if user else None
                     continue
+                batch = item_batch_map.get(ci.id)
                 if ci.batch_no is not None and ci.batch_no != item.batch_no:
+                    # 空/空白批号不能写到真实批次上（Batch.batch_no 是身份数据）；
+                    # _check_batch_no_unique 对空串直接放行，必须在这里拦。
+                    if not ci.batch_no.strip():
+                        raise AppException(
+                            status_code=400,
+                            message=f"计划项 {item.item_no} 的批次号不能为空",
+                        )
                     await _check_batch_no_unique(db, ci.batch_no, ci.id)
+                    # 改批号必须同步真实批次：历史版本只改计划项，导致计划中心
+                    # 与批次记录脱钩。只要批次仍通过存活分配与本项关联就同步，
+                    # 包括已手工报废（cancelled）但分配未断开的批次。
+                    if batch is not None and batch.status in ("scheduled", "pending", "cancelled"):
+                        old_batch_no = batch.batch_no
+                        batch.batch_no = ci.batch_no
+                        batch.updated_by = user.id if user else None
+                        await record_audit_log(
+                            db,
+                            action="production.batch.rename_no",
+                            user=user,
+                            resource_type="batch",
+                            resource_id=batch.id,
+                            old_value={"batch_no": old_batch_no},
+                            new_value={"batch_no": ci.batch_no},
+                            extra={"status": batch.status, "source": "plan_change"},
+                        )
                 update_data = ci.model_dump(exclude_unset=True, exclude={"id"})
                 # 设备 UUID 变更必须通过 production 引用授权；快照始终由
                 # 服务端摘要覆盖，不能信任请求体中的名称/编号。
@@ -662,7 +702,7 @@ async def change_plan_order(
                     "route_id" in update_data
                     and update_data["route_id"] != item.route_id
                 ):
-                    if item_batch_map.get(ci.id) is not None:
+                    if batch is not None:
                         raise AppException(
                             status_code=400,
                             message=f"计划项 {item.item_no} 已生成批次，不能变更工艺路线",
@@ -686,8 +726,7 @@ async def change_plan_order(
                     )
                 item.updated_by = user.id if user else None
                 if qty_changed:
-                    batch = item_batch_map.get(ci.id)
-                    if batch:
+                    if batch is not None:
                         batch.quantity = ci.planned_quantity
                         batch.updated_by = user.id if user else None
                     plan_allocs = await repo.get_plan_allocations_by_item(db, ci.id)
@@ -806,17 +845,20 @@ async def change_plan_order(
             )
 
     # ── 需求履约重算 ──
+    # 履约量是跨计划单的全局合计：受影响需求（含被删项释放的分配）必须用
+    # 全部存活分配重算，不能只看本单剩余计划项的分配。
     all_items = await repo.list_plan_items(db, order_id)
-    if all_items:
-        item_ids = [i.id for i in all_items]
-        all_das = await repo.get_demand_allocations_by_items(db, item_ids)
-        demand_ids = {da.demand_id for da in all_das}
-        for did in demand_ids:
-            demand = await repo.get_demand(db, did)
-            if demand:
-                das_for_demand = [da for da in all_das if da.demand_id == did]
-                _recalc_demand_fulfillment(demand, das_for_demand)
-                _update_demand_status(demand)
+    all_das = await repo.get_demand_allocations_by_items(
+        db, [i.id for i in all_items],
+    )
+    demand_ids = touched_demand_ids | {da.demand_id for da in all_das}
+    for did in demand_ids:
+        demand = await repo.get_demand(db, did)
+        if demand:
+            _recalc_demand_fulfillment(
+                demand, await repo.get_demand_allocations(db, did),
+            )
+            _update_demand_status(demand)
 
     refreshed = await repo.get_plan_order(db, order_id)
     assert refreshed is not None
