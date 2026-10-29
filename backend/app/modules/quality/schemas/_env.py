@@ -115,3 +115,29 @@ class BatchReleaseOut(BaseModel):
     release_remark: str | None
     remark: str | None
     created_at: datetime
+
+
+class ShiftTeamIn(BaseModel):
+    """班组保存（成员为 identity.users.id 列表）。"""
+
+    name: str = Field(max_length=64)
+    member_ids: list[uuid.UUID] = Field(default_factory=list, description="班组成员")
+    seq: int = Field(default=0, ge=0)
+    remark: str | None = Field(default=None, max_length=200)
+
+
+class ShiftTeamOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    member_ids: list[str] | None
+    member_names: list[str] = Field(default_factory=list)
+    seq: int
+    remark: str | None
+
+
+class ShiftConfigIn(BaseModel):
+    """轮换配置：基准日期 + 周期天数 + 同时当班班组数。"""
+
+    start_date: str = Field(max_length=32, description="基准日期 YYYY-MM-DD")
+    period_days: int = Field(default=3, ge=1, le=30)
+    duty_teams: int = Field(default=2, ge=1, le=10)

@@ -1,12 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Card, Empty, Progress, Select, Space, Tag, Typography } from 'antd'
-import { ReloadOutlined, TeamOutlined } from '@ant-design/icons'
+import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Progress, Select, Space, Tag, Typography } from 'antd'
+import { ReloadOutlined, SettingOutlined, TeamOutlined } from '@ant-design/icons'
+import dayjs, { type Dayjs } from 'dayjs'
 import { useRouter } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
 import type { PersonnelItem, PlanBoardItem } from '@/types/quality'
-import { fetchPlanBoard, fetchPersonnel, savePlanAssignments } from '@/actions/quality'
+import {
+  fetchPlanBoard, fetchPersonnel, savePlanAssignments,
+  fetchShiftTeams, createShiftTeam, updateShiftTeam, deleteShiftTeam,
+  fetchShiftConfig, saveShiftConfig, fetchShiftDuty,
+} from '@/actions/quality'
 
 const { Text } = Typography
 
@@ -18,17 +23,27 @@ export default function TaskBoard() {
   const canAssign = hasPermission('quality:task:create')
   const [plans, setPlans] = useState<PlanBoardItem[]>([])
   const [personnel, setPersonnel] = useState<PersonnelItem[]>([])
+  const [shiftTeams, setShiftTeams] = useState<{ id: string; name: string; member_ids: string[]; member_names: string[]; seq: number }[]>([])
+  const [shiftConfig, setShiftConfig] = useState<{ start_date: string | null; period_days: number; duty_teams: number } | null>(null)
+  const [duty, setDuty] = useState<{ teams: { id: string; name: string }[]; members: { id: string; name: string }[] } | null>(null)
+  const [shiftOpen, setShiftOpen] = useState(false)
+  const [shiftSaving, setShiftSaving] = useState(false)
+  const [shiftForm] = Form.useForm()
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [boardRes, personRes] = await Promise.all([
+      const [boardRes, personRes, teamsRes, dutyRes] = await Promise.all([
         fetchPlanBoard(),
         fetchPersonnel(),
+        fetchShiftTeams().catch(() => null),
+        fetchShiftDuty().catch(() => null),
       ])
       setPlans(boardRes.data)
       setPersonnel(personRes.data.items ?? [])
+      setShiftTeams(teamsRes?.data ?? [])
+      setDuty(dutyRes?.data ?? null)
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '获取排班看板失败')
     } finally {
@@ -42,6 +57,15 @@ export default function TaskBoard() {
     value: p.id,
     label: `${p.name}${p.employee_no ? `（${p.employee_no}）` : ''}${p.department ? ` ${p.department}` : ''}`,
   }))
+  const dutyIds = new Set(duty?.members.map((m) => m.id) ?? [])
+  const dutyOptions = personOptions.filter((o) => dutyIds.has(o.value))
+  const otherOptions = personOptions.filter((o) => !dutyIds.has(o.value))
+  const groupedPersonOptions = [
+    ...(dutyOptions.length
+      ? [{ label: `今日当班（${duty?.teams.map((t) => t.name).join('+') ?? ''}）`, options: dutyOptions }]
+      : []),
+    ...(otherOptions.length ? [{ label: '其他人员', options: otherOptions }] : []),
+  ]
 
   // 按请检日期分组（今天 / 之后按日期）
   const groups = useMemo(() => {
@@ -58,6 +82,33 @@ export default function TaskBoard() {
       items: items.sort((a, b) => a.plan_time.localeCompare(b.plan_time)),
     }))
   }, [plans])
+
+  const openShiftConfig = () => {
+    void Promise.all([fetchShiftTeams(), fetchShiftConfig()]).then(([t, c]) => {
+      setShiftTeams(t.data)
+      setShiftConfig(c.data)
+      setShiftOpen(true)
+    }).catch(() => message.error('获取班组配置失败'))
+  }
+
+  const onSaveShift = async () => {
+    const values = await shiftForm.validateFields()
+    setShiftSaving(true)
+    try {
+      await saveShiftConfig({
+        start_date: (values.start_date as Dayjs).format('YYYY-MM-DD'),
+        period_days: values.period_days ?? 3,
+        duty_teams: values.duty_teams ?? 2,
+      })
+      message.success('轮换配置已保存')
+      setShiftOpen(false)
+      load()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '保存失败')
+    } finally {
+      setShiftSaving(false)
+    }
+  }
 
   const onAssign = async (plan: PlanBoardItem, sopNo: string, assigneeId: string | undefined) => {
     if (!canAssign) return
@@ -83,6 +134,9 @@ export default function TaskBoard() {
     <>
       <Space wrap style={{ marginBottom: 12 }}>
         <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>
+        {canAssign && (
+          <Button icon={<SettingOutlined />} onClick={openShiftConfig}>班组配置</Button>
+        )}
         <Text type="secondary" style={{ fontSize: 12.5 }}>
           <TeamOutlined /> 今天及以后的请检任务排班：每个 SOP 选人，分配后人员名字显示在计划下方；建任务后分工自动带到检验任务
         </Text>
@@ -148,7 +202,7 @@ export default function TaskBoard() {
                             disabled={!canAssign}
                             value={a?.assignee_id}
                             onChange={(v) => onAssign(plan, sop.sop_no, v)}
-                            options={personOptions}
+                            options={groupedPersonOptions}
                           />
                         </div>
                       )
@@ -175,6 +229,83 @@ export default function TaskBoard() {
           </Space>
         </div>
       ))}
+
+      <Modal
+        title="班组排班配置"
+        open={shiftOpen}
+        onCancel={() => setShiftOpen(false)}
+        onOk={onSaveShift}
+        confirmLoading={shiftSaving}
+        okText="保存轮换配置"
+        width={680}
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12.5 }}>
+          班组固定成员、每 {shiftConfig?.period_days ?? 3} 天交替、同时 {shiftConfig?.duty_teams ?? 2} 个班组当班；排班选人时「今日当班」人员排在最前。
+        </Typography.Paragraph>
+        <Space direction="vertical" style={{ width: '100%' }} size={10}>
+          {shiftTeams.map((team) => (
+            <div key={team.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
+              <Space wrap size={6} align="center">
+                <Text strong style={{ width: 110 }}>{team.name}</Text>
+                <Select
+                  mode="multiple" showSearch optionFilterProp="label"
+                  style={{ minWidth: 380 }}
+                  placeholder="选择班组成员"
+                  value={team.member_ids}
+                  onChange={(v) => {
+                    void updateShiftTeam(team.id, {
+                      name: team.name, seq: team.seq, member_ids: v,
+                    }).then(() => {
+                      setShiftTeams((ts) => ts.map((x) => x.id === team.id ? { ...x, member_ids: v } : x))
+                      message.success(`${team.name} 成员已更新`)
+                    }).catch((e: unknown) => message.error((e instanceof Error ? e.message : String(e)) || '更新失败'))
+                  }}
+                  options={personOptions}
+                  maxTagCount={5}
+                />
+                <Button size="small" danger onClick={() => {
+                  void deleteShiftTeam(team.id).then(() => {
+                    setShiftTeams((ts) => ts.filter((x) => x.id !== team.id))
+                    message.success('已删除')
+                  })
+                }}>删除</Button>
+              </Space>
+            </div>
+          ))}
+          <Space size={6}>
+            <Input placeholder="新班组名" style={{ width: 130 }} id="shift-team-name" />
+            <Button onClick={() => {
+              const name = (document.getElementById('shift-team-name') as HTMLInputElement).value.trim()
+              if (!name) { message.warning('请输入班组名'); return }
+              void createShiftTeam({ name, member_ids: [], seq: shiftTeams.length }).then(() => {
+                message.success('班组已创建，请在下方选择成员')
+                void fetchShiftTeams().then((t) => setShiftTeams(t.data))
+                ;(document.getElementById('shift-team-name') as HTMLInputElement).value = ''
+              })
+            }}>新增班组</Button>
+          </Space>
+          <Form form={shiftForm} layout="inline" initialValues={{
+            start_date: shiftConfig?.start_date ? dayjs(shiftConfig.start_date) : undefined,
+            period_days: shiftConfig?.period_days ?? 3,
+            duty_teams: shiftConfig?.duty_teams ?? 2,
+          }}>
+            <Form.Item name="start_date" label="轮换基准日" rules={[{ required: true, message: '必填' }]}>
+              <DatePicker />
+            </Form.Item>
+            <Form.Item name="period_days" label="周期(天)">
+              <InputNumber min={1} max={30} />
+            </Form.Item>
+            <Form.Item name="duty_teams" label="当班班组数">
+              <InputNumber min={1} max={5} />
+            </Form.Item>
+          </Form>
+          {duty && duty.teams.length > 0 && (
+            <Text type="secondary" style={{ fontSize: 12.5 }}>
+              今日当班：{duty.teams.map((t) => t.name).join('、')}（{duty.members.length} 人）
+            </Text>
+          )}
+        </Space>
+      </Modal>
     </>
   )
 }

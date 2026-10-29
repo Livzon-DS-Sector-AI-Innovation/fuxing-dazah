@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import Float, Index, String
+from sqlalchemy import Float, Index, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,6 +63,40 @@ class QualityEnvRecord(BaseModel):
     handled_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="处理人，逻辑引用 identity.users.id")
     handled_remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="处理说明")
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="填报人，逻辑引用 identity.users.id")
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityShiftTeam(BaseModel):
+    """排班班组：固定成员，轮换当班（一般两个班组同时当班，每三天交替）。"""
+
+    __tablename__ = "quality_shift_teams"
+    __table_args__ = (
+        Index("ix_quality_shift_team_seq", "seq"),
+        {"schema": "quality"},
+    )
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="班组名")
+    member_ids: Mapped[list[str] | None] = mapped_column(
+        JSONB, nullable=True, comment="班组成员（identity.users.id 字符串列表）"
+    )
+    seq: Mapped[int] = mapped_column(Integer, default=0, comment="排序（轮换顺序按 seq）")
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityShiftConfig(BaseModel):
+    """排班轮换配置（单行，key=rotation）：基准日期 + 轮换周期天数 + 同时当班班组数。"""
+
+    __tablename__ = "quality_shift_configs"
+    __table_args__ = (
+        Index("uq_quality_shift_config_key", "key", unique=True,
+              postgresql_where=text("is_deleted = false")),
+        {"schema": "quality"},
+    )
+
+    key: Mapped[str] = mapped_column(String(32), nullable=False, comment="配置键（rotation）")
+    value: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="{start_date, period_days, duty_teams}"
+    )
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
 

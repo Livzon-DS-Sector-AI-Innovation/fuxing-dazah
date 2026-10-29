@@ -37,6 +37,9 @@ from app.modules.quality.schemas import (
     EnvRecordCreate,
     EnvRecordHandle,
     EnvRecordOut,
+    ShiftConfigIn,
+    ShiftTeamIn,
+    ShiftTeamOut,
 )
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
@@ -597,3 +600,141 @@ async def release_batch_record_endpoint(
         data=BatchReleaseOut.model_validate(updated).model_dump(mode="json"),
         message="已放行（放行人/日期已留痕）",
     )
+
+
+# ─── 排班班组与轮换 ───
+
+
+@router.get("/shift/teams", summary="排班班组列表（含成员姓名）")
+async def list_shift_teams_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    from app.modules.quality.repository import list_shift_teams
+
+    teams = await list_shift_teams(db)
+    items = []
+    for t in teams:
+        ids = t.member_ids or []
+        names: list[str] = []
+        if ids:
+            from sqlalchemy import select as _select
+
+            from app.platform.identity.models import User as IdentityUser
+
+            stmt = _select(IdentityUser).where(IdentityUser.id.in_(ids))
+            name_map = {str(u.id): u.name for u in (await db.execute(stmt)).scalars()}
+            names = [name_map.get(str(i), "未知") for i in ids]
+        items.append(ShiftTeamOut(
+            id=t.id, name=t.name, member_ids=[str(i) for i in ids],
+            member_names=names, seq=t.seq, remark=t.remark,
+        ).model_dump(mode="json"))
+    return success_response(data=items)
+
+
+@router.post("/shift/teams", summary="新增排班班组", status_code=201)
+async def create_shift_team_endpoint(
+    payload: ShiftTeamIn = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import upsert_shift_team
+
+    team = await upsert_shift_team(db, None, {
+        "name": payload.name, "member_ids": [str(i) for i in payload.member_ids],
+        "seq": payload.seq, "remark": payload.remark, "created_by": user.id,
+    })
+    return success_response(data={"id": str(team.id), "name": team.name}, message="班组已保存", status_code=201)
+
+
+@router.put("/shift/teams/{team_id}", summary="更新排班班组")
+async def update_shift_team_endpoint(
+    team_id: uuid.UUID,
+    payload: ShiftTeamIn = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import upsert_shift_team
+
+    team = await upsert_shift_team(db, team_id, {
+        "name": payload.name, "member_ids": [str(i) for i in payload.member_ids],
+        "seq": payload.seq, "remark": payload.remark, "updated_by": user.id,
+    })
+    return success_response(data={"id": str(team.id), "name": team.name}, message="班组已更新")
+
+
+@router.delete("/shift/teams/{team_id}", summary="删除排班班组（软删除）")
+async def delete_shift_team_endpoint(
+    team_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import delete_shift_team
+
+    if not await delete_shift_team(db, team_id):
+        raise HTTPException(status_code=404, detail="班组不存在")
+    return success_response(message="已删除")
+
+
+@router.get("/shift/config", summary="排班轮换配置")
+async def get_shift_config_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    from app.modules.quality.repository import get_shift_config
+
+    cfg = await get_shift_config(db, "rotation")
+    return success_response(data=cfg.value if cfg and cfg.value else {"start_date": None, "period_days": 3, "duty_teams": 2})
+
+
+@router.put("/shift/config", summary="保存排班轮换配置")
+async def save_shift_config_endpoint(
+    payload: ShiftConfigIn = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import upsert_shift_config
+
+    await upsert_shift_config(db, "rotation", payload.model_dump())
+    return success_response(message="轮换配置已保存")
+
+
+@router.get("/shift/duty", summary="当日当班班组与成员（排班选人时优先展示）")
+async def shift_duty_endpoint(
+    date: str | None = Query(default=None, description="YYYY-MM-DD，默认今天"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    from app.core.time import today as _today
+    from app.modules.quality.repository import (
+        get_shift_config,
+        list_shift_teams,
+        shift_duty_teams,
+    )
+
+    on_date = date or _today().isoformat()
+    cfg = await get_shift_config(db, "rotation")
+    value = cfg.value if cfg and cfg.value else {}
+    start_date = value.get("start_date")
+    period_days = int(value.get("period_days") or 3)
+    duty_count = int(value.get("duty_teams") or 2)
+    teams = await list_shift_teams(db)
+    team_dicts = [{"id": str(t.id), "name": t.name, "member_ids": t.member_ids or []} for t in teams]
+    duty = shift_duty_teams(team_dicts, start_date or on_date, period_days, duty_count, on_date) if start_date else []
+    member_ids: list[str] = []
+    for t in duty:
+        member_ids.extend(t["member_ids"])
+    names: dict[str, str] = {}
+    if member_ids:
+        from sqlalchemy import select as _select
+
+        from app.platform.identity.models import User as IdentityUser
+
+        stmt = _select(IdentityUser).where(IdentityUser.id.in_(member_ids))
+        names = {str(u.id): u.name for u in (await db.execute(stmt)).scalars()}
+    return success_response(data={
+        "date": on_date,
+        "configured": bool(start_date),
+        "teams": [{"id": t["id"], "name": t["name"]} for t in duty],
+        "members": [{"id": i, "name": names.get(i, "未知")} for i in member_ids],
+    })

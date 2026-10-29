@@ -11,6 +11,8 @@ from app.modules.quality.models import (
     QualityBatchRelease,
     QualityEnvPoint,
     QualityEnvRecord,
+    QualityShiftConfig,
+    QualityShiftTeam,
 )
 
 # ─── 监测点台账 ───
@@ -280,3 +282,81 @@ async def update_batch_release(db: AsyncSession, rid: uuid.UUID, data: dict[str,
     await db.flush()
     stmt = select(QualityBatchRelease).where(QualityBatchRelease.id == rid)
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+# ─── 排班班组与轮换 ───
+
+
+async def list_shift_teams(db: AsyncSession) -> list[QualityShiftTeam]:
+    stmt = select(QualityShiftTeam).where(
+        QualityShiftTeam.is_deleted == False  # noqa: E712
+    ).order_by(QualityShiftTeam.seq, QualityShiftTeam.created_at)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def get_shift_team(db: AsyncSession, tid: uuid.UUID) -> QualityShiftTeam | None:
+    stmt = select(QualityShiftTeam).where(
+        QualityShiftTeam.id == tid, QualityShiftTeam.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def upsert_shift_team(db: AsyncSession, tid: uuid.UUID | None, data: dict[str, Any]) -> QualityShiftTeam:
+    if tid is not None:
+        team = await get_shift_team(db, tid)
+        if team is None:
+            raise ValueError("班组不存在")
+        for key, value in data.items():
+            setattr(team, key, value)
+    else:
+        team = QualityShiftTeam(**data)
+        db.add(team)
+    await db.flush()
+    return team
+
+
+async def delete_shift_team(db: AsyncSession, tid: uuid.UUID) -> bool:
+    team = await get_shift_team(db, tid)
+    if team is None:
+        return False
+    team.is_deleted = True
+    await db.flush()
+    return True
+
+
+async def get_shift_config(db: AsyncSession, key: str) -> QualityShiftConfig | None:
+    stmt = select(QualityShiftConfig).where(
+        QualityShiftConfig.key == key, QualityShiftConfig.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def upsert_shift_config(db: AsyncSession, key: str, value: dict[str, Any]) -> QualityShiftConfig:
+    cfg = await get_shift_config(db, key)
+    if cfg is None:
+        cfg = QualityShiftConfig(key=key, value=value)
+        db.add(cfg)
+    else:
+        cfg.value = value
+    await db.flush()
+    return cfg
+
+
+def shift_duty_teams(teams: list[dict[str, Any]], start_date: str, period_days: int, duty_count: int, on_date: str) -> list[dict[str, Any]]:
+    """按轮换规则算当日当班班组：每 period_days 天交替，同时 duty_count 个班组当班。
+
+    teams 按 seq 排序；第 k 个周期（k=0,1,2...）当班班组 = teams[k%n .. (k+duty_count-1)%n]。
+    """
+    from datetime import date
+
+    n = len(teams)
+    if n == 0 or duty_count <= 0:
+        return []
+    d0 = date.fromisoformat(start_date)
+    d1 = date.fromisoformat(on_date)
+    days = (d1 - d0).days
+    k = (max(days, 0) // max(period_days, 1)) % n
+    out = []
+    for i in range(min(duty_count, n)):
+        out.append(teams[(k + i) % n])
+    return out

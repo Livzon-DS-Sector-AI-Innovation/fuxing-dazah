@@ -1918,6 +1918,81 @@ export async function saveTaskAssignments(taskId: string, assignments: { sop_no:
   return res.json()
 }
 
+export interface ShiftTeamItem {
+  id: string
+  name: string
+  member_ids: string[]
+  member_names: string[]
+  seq: number
+  remark: string | null
+}
+
+export async function fetchShiftTeams(): Promise<{ data: ShiftTeamItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/teams`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取班组失败')
+  return res.json()
+}
+
+export async function createShiftTeam(input: { name: string; member_ids: string[]; seq: number; remark?: string }): Promise<{ message: string; data: { id: string; name: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/teams`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '保存班组失败')
+  }
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function updateShiftTeam(id: string, input: { name: string; member_ids: string[]; seq: number; remark?: string }): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/teams/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error('更新班组失败')
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function deleteShiftTeam(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/teams/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除班组失败')
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function fetchShiftConfig(): Promise<{ data: { start_date: string | null; period_days: number; duty_teams: number } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/config`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取轮换配置失败')
+  return res.json()
+}
+
+export async function saveShiftConfig(input: { start_date: string; period_days: number; duty_teams: number }): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/config`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error('保存轮换配置失败')
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function fetchShiftDuty(): Promise<{ data: { date: string; configured: boolean; teams: { id: string; name: string }[]; members: { id: string; name: string }[] } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/duty`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取当班信息失败')
+  return res.json()
+}
+
 export async function fetchPlanBoard(): Promise<{ data: PlanBoardItem[] }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/plans/board`, {
     headers: await _authHeaders(), cache: 'no-store',
