@@ -18,12 +18,12 @@
 
 外审节（2026-10-21 拍板）：同一份通报按**同级栏头**分节（格式一致）——
 「📌 公司内检查未整改隐患」节为主表督办数据（本文件直接渲染，无独立数据
-源），其后依次为「📌 管委会检查未整改隐患」「📌 省应急局检查未整改隐患」
-（2026-10-29 接入）等外审源直读节（``external_audit.SOURCES``，顺序即节
-顺序），**未关闭即红色预警**、整改中与主表同口径不预警（不进明细不计数，
-仅收口行计数）、已关闭仅计数、不看目标期限；并入本格（不新增速递格子）。
-外审源未配置/停用/拉取失败时该源节整体缺席，内部部分输出与「无外审节」
-基线逐字节一致（值守轮询不会因此误判变化）。
+源），其后依次为「📌 管委会检查未整改隐患」「📌 重大隐患」（省应急局检查
+缺陷项，2026-10-29 接入）等外审源直读节（``external_audit.SOURCES``，顺序
+即节顺序），**未关闭即红色预警**、整改中与主表同口径不预警（不进明细不
+计数，仅收口行计数）、已关闭仅计数、不看目标期限；并入本格（不新增速递
+格子）。外审源未配置/停用/拉取失败时该源节整体缺席，内部部分输出与「无
+外审节」基线逐字节一致（值守轮询不会因此误判变化）。
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ async def _load_external_sections() -> list[dict[str, Any]]:
         table_id = conn.table_id if conn and conn.status != "disabled" else ""
         lines, stats = external_audit.build_external_section(
             views, source_label=spec.label, plan_label=spec.plan_label,
-            app_token=app_token, table_id=table_id,
+            bar_title=spec.bar_title, app_token=app_token, table_id=table_id,
         )
         sections.append({"label": spec.label, "lines": lines, "stats": stats})
     return sections

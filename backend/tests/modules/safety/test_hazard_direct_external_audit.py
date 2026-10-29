@@ -472,10 +472,10 @@ async def test_build_bulletin_doing_not_alerted(
 async def test_build_bulletin_two_external_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """管委会检查/省应急局检查同级各一节：节顺序、逐源汇总段、字段覆盖生效。
+    """管委会检查/重大隐患（省应急局）同级各一节：节顺序、逐源汇总段、字段覆盖。
 
-    省应急局节走 SourceSpec 覆盖：方案列=「目前进展」→「进展：」前缀、
-    无目标完成日期列。
+    重大隐患节走 SourceSpec 覆盖：栏头全名「重大隐患」（不套未整改模板）、
+    方案列=「目前进展」→「进展：」前缀、无目标完成日期列。
     """
     _patch_render_deps(monkeypatch, [])
     eb_record = _ext_record(
@@ -500,14 +500,14 @@ async def test_build_bulletin_two_external_sources(
 
     content, stats = await bulletin.build_bulletin()
 
-    assert stats["ext_open"] == 2  # 管委会 1 + 省应急局 1（整改中不计）
-    assert stats["ext_sources"]["省应急局检查"]["doing"] == 1
-    # 节顺序：今日无（内部空）→ 管委会检查 → 省应急局检查 → 部门汇总
+    assert stats["ext_open"] == 2  # 管委会 1 + 重大隐患 1（整改中不计）
+    assert stats["ext_sources"]["重大隐患"]["doing"] == 1
+    # 节顺序：今日无（内部空）→ 管委会检查 → 重大隐患 → 部门汇总
     i_mgmt = content.index("📌 管委会检查未整改隐患")
-    i_eb = content.index("📌 省应急局检查未整改隐患")
+    i_eb = content.index("📌 重大隐患")
     i_summary = content.index("📌 各部门未关闭隐患数量汇总")
     assert i_mgmt < i_eb < i_summary
-    # 省应急局明细：「进展：」前缀（字段覆盖）、无「目标：」段；整改中不进明细
+    # 重大隐患明细：「进展：」前缀（字段覆盖）、无「目标：」段；整改中不进明细
     eb_body = content[i_eb:i_summary]
     assert "环保装置未见工艺设计图" in eb_body
     assert "进展：待进行招标" in eb_body
@@ -515,10 +515,10 @@ async def test_build_bulletin_two_external_sources(
     assert "外审缺陷#12" not in content
     # 部门汇总逐源分段
     assert "**提炼工程二部**：管委会检查未整改 1 条" in content
-    assert "**环保工程中心**：省应急局检查未整改 1 条" in content
+    assert "**环保工程中心**：重大隐患未整改 1 条" in content
     # 速递格概览行逐源标注
     assert bulletin._overview_stats_line(stats) == (
-        "未关闭 **2** 项 ｜ 🔴 红色预警 2（含管委会检查 1、省应急局检查 1）"
+        "未关闭 **2** 项 ｜ 🔴 红色预警 2（含管委会检查 1、重大隐患 1）"
         " · 🟡 一般预警 0"
     )
 
@@ -531,8 +531,8 @@ def test_all_clear_line_variants() -> None:
     assert external_audit.all_clear_line({"ext_closed": 3}, "管委会检查") == (
         "✅ 管委会检查已全部关闭（累计 3 条）"
     )
-    assert external_audit.all_clear_line({"ext_doing": 2}, "省应急局检查") == (
-        "✅ 省应急局检查无未整改项（整改中 2 条）"
+    assert external_audit.all_clear_line({"ext_doing": 2}, "重大隐患") == (
+        "✅ 重大隐患无未整改项（整改中 2 条）"
     )
     assert external_audit.all_clear_line(
         {"ext_closed": 1, "ext_doing": 2}, "管委会检查",
@@ -557,10 +557,10 @@ def test_overview_stats_line_with_and_without_external() -> None:
         **base, "ext_open": 7,
         "ext_sources": {
             "管委会检查": {"open": 3},
-            "省应急局检查": {"open": 4, "closed": 1},
+            "重大隐患": {"open": 4, "closed": 1},
         },
     }) == (
-        "未关闭 **10** 项 ｜ 🔴 红色预警 9（含管委会检查 3、省应急局检查 4）"
+        "未关闭 **10** 项 ｜ 🔴 红色预警 9（含管委会检查 3、重大隐患 4）"
         " · 🟡 一般预警 1"
     )
 

@@ -4,9 +4,9 @@
 - **公司内检查未整改隐患**：主表督办数据，由 ``bulletin.build_bulletin``
   直接渲染（不经本模块，无独立数据源）；
 - **管委会检查未整改隐患**：本模块直读江阴管委会安全检查缺陷项汇总表；
-- **省应急局检查未整改隐患**：本模块直读福建省应急局安全检查缺陷项汇总表
-  （2026-10-29 接入；字段差异：方案列叫「目前进展」、无目标完成日期列，
-  经 ``SourceSpec`` 覆盖）。
+- **重大隐患**（栏头定名 2026-10-29 拍板，即省应急局检查缺陷项）：本模块直读
+  福建省应急局安全检查缺陷项汇总表（2026-10-29 接入；字段差异：方案列叫
+  「目前进展」、无目标完成日期列，经 ``SourceSpec`` 覆盖）。
 
 展示名 2026-10-22/29 定稿「{源名}未整改隐患」，域名/文件名仍为
 external_audit 不动——registry 键是 DB 播种配置，改名断源。
@@ -72,18 +72,24 @@ class SourceSpec:
     """
 
     kind: str
-    label: str                              # 节标题「📌 {label}未整改隐患」
+    label: str                              # 收口行/汇总段/速递格标注用名
     plan_field: str = F_PLAN                # 方案/进展列名
     plan_label: str = "方案"                # 明细行前缀
     target_field: str | None = F_TARGET     # 目标完成日期列名（无此列 None）
+    title: str = ""                         # 栏头全名（缺省 f"{label}未整改隐患"）
+
+    @property
+    def bar_title(self) -> str:
+        return self.title or f"{self.label}未整改隐患"
 
 
-# 检查源清单（顺序即通报节顺序：管委会检查 → 省应急局检查；同级的
+# 检查源清单（顺序即通报节顺序：管委会检查 → 重大隐患；同级的
 # 「公司内检查未整改隐患」节由主表数据渲染，见 bulletin，不经本清单）
 SOURCE_MGMT = SourceSpec("defect_summary", "管委会检查")
 SOURCE_EMERGENCY_BUREAU = SourceSpec(
-    "emergency_bureau", "省应急局检查",
+    "emergency_bureau", "重大隐患",
     plan_field="目前进展", plan_label="进展", target_field=None,
+    title="重大隐患",
 )
 SOURCES: tuple[SourceSpec, ...] = (
     SOURCE_MGMT, SOURCE_EMERGENCY_BUREAU,
@@ -294,15 +300,17 @@ def build_external_section(
     *,
     source_label: str = SOURCE_LABEL,
     plan_label: str = "方案",
+    bar_title: str = "",
     app_token: str = "",
     table_id: str = "",
     today: date | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """渲染单源「📌 {源名}未整改隐患」节（markdown 行列表 + 统计，不推送）。
+    """渲染单源栏头节（markdown 行列表 + 统计，不推送）。
 
-    未关闭进明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为
-    未整改（仅收口行计数）；已关闭仅计数。目标完成日期纯展示，不做逾期/
-    剩余天数判定（拍板：不看目标期限）。
+    栏头全名 ``bar_title`` 缺省 ``f"{source_label}未整改隐患"``；未关闭进
+    明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为未整改
+    （仅收口行计数）；已关闭仅计数。目标完成日期纯展示，不做逾期/剩余
+    天数判定（拍板：不看目标期限）。
     """
     from app.modules.safety.feishu import mention
 
@@ -318,7 +326,9 @@ def build_external_section(
         "ext_by_dept": dict(ext_by_dept),
     }
 
-    lines: list[str] = [_SEP, f"📌 {source_label}未整改隐患", _SEP]
+    lines: list[str] = [
+        _SEP, f"📌 {bar_title or f'{source_label}未整改隐患'}", _SEP,
+    ]
     if not open_views:
         clear = all_clear_line(stats, source_label)
         if clear:
