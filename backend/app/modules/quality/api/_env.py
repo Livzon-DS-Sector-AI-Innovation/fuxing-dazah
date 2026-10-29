@@ -626,7 +626,8 @@ async def list_shift_teams_endpoint(
             name_map = {str(u.id): u.name for u in (await db.execute(stmt)).scalars()}
             names = [name_map.get(str(i), "未知") for i in ids]
         items.append(ShiftTeamOut(
-            id=t.id, name=t.name, member_ids=[str(i) for i in ids],
+            id=t.id, name=t.name, group_key=t.group_key,
+            member_ids=[str(i) for i in ids],
             member_names=names, seq=t.seq, remark=t.remark,
         ).model_dump(mode="json"))
     return success_response(data=items)

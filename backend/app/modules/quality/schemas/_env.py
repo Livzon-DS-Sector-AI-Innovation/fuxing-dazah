@@ -130,6 +130,7 @@ class ShiftTeamIn(BaseModel):
 class ShiftTeamOut(BaseModel):
     id: uuid.UUID
     name: str
+    group_key: str = "仪器组"
     member_ids: list[str] | None
     member_names: list[str] = Field(default_factory=list)
     seq: int
