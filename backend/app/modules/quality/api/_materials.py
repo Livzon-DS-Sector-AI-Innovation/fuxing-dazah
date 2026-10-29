@@ -1022,6 +1022,31 @@ async def save_plan_assignments_endpoint(
         {"sop_no": a.sop_no.strip(), "assignee_id": str(a.assignee_id)}
         for a in payload.assignments
     ]
+    # 组别权限：SOP 组别 = 项目名关键词映射；负责人必须在对应组别的班组成员中
+    from app.modules.quality.repository import (
+        get_shift_config,
+        group_member_ids,
+        item_group,
+    )
+
+    board = await list_plans_board(db, "0000-01-01")
+    board_item = next((x for x in board if x["plan_id"] == plan.id), None)
+    group_cfg = await get_shift_config(db, "item_groups")
+    mapping = (group_cfg.value if group_cfg else None) or {}
+    sop_groups: dict[str, str] = {}
+    for sop in (board_item or {}).get("sops", []):
+        names = " ".join(sop.get("items", []))
+        sop_groups[sop["sop_no"]] = item_group(names, mapping)
+    for a in rows:
+        g = sop_groups.get(a["sop_no"])
+        if g is None:
+            continue
+        allowed = await group_member_ids(db, g)
+        if allowed and a["assignee_id"] not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"SOP {a['sop_no']} 属 {g}，所选人员不在该组班组成员中",
+            )
     plan.assignments = rows
     await db.flush()
     # 已建任务：同步任务分工

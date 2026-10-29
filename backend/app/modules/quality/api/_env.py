@@ -641,7 +641,8 @@ async def create_shift_team_endpoint(
     from app.modules.quality.repository import upsert_shift_team
 
     team = await upsert_shift_team(db, None, {
-        "name": payload.name, "member_ids": [str(i) for i in payload.member_ids],
+        "name": payload.name, "group_key": payload.group_key,
+        "member_ids": [str(i) for i in payload.member_ids],
         "seq": payload.seq, "remark": payload.remark, "created_by": user.id,
     })
     return success_response(data={"id": str(team.id), "name": team.name}, message="班组已保存", status_code=201)
@@ -657,7 +658,8 @@ async def update_shift_team_endpoint(
     from app.modules.quality.repository import upsert_shift_team
 
     team = await upsert_shift_team(db, team_id, {
-        "name": payload.name, "member_ids": [str(i) for i in payload.member_ids],
+        "name": payload.name, "group_key": payload.group_key,
+        "member_ids": [str(i) for i in payload.member_ids],
         "seq": payload.seq, "remark": payload.remark, "updated_by": user.id,
     })
     return success_response(data={"id": str(team.id), "name": team.name}, message="班组已更新")
@@ -687,7 +689,7 @@ async def get_shift_config_endpoint(
     return success_response(data=cfg.value if cfg and cfg.value else {"start_date": None, "period_days": 3, "duty_teams": 2})
 
 
-@router.put("/shift/config", summary="保存排班轮换配置")
+@router.put("/shift/config", summary="保存排班轮换配置（group 为空=全局，否则按组）")
 async def save_shift_config_endpoint(
     payload: ShiftConfigIn = Body(...),
     db: AsyncSession = Depends(get_db),
@@ -695,8 +697,80 @@ async def save_shift_config_endpoint(
 ) -> JSONResponse:
     from app.modules.quality.repository import upsert_shift_config
 
-    await upsert_shift_config(db, "rotation", payload.model_dump())
+    key = f"rotation:{payload.group}" if payload.group else "rotation"
+    value = {"start_date": payload.start_date, "period_days": payload.period_days, "duty_teams": payload.duty_teams}
+    await upsert_shift_config(db, key, value)
     return success_response(message="轮换配置已保存")
+
+
+@router.get("/shift/groups", summary="组别概览（各组班组/轮换配置/当日当班成员）")
+async def shift_groups_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    from app.core.time import today as _today
+    from app.modules.quality.repository import (
+        get_shift_config,
+        group_duty,
+        list_shift_teams,
+    )
+
+    on_date = _today().isoformat()
+    group_keys: list[str] = []
+    for t in await list_shift_teams(db):
+        if t.group_key not in group_keys:
+            group_keys.append(t.group_key)
+    cfg = await get_shift_config(db, "item_groups")
+    mapping = (cfg.value if cfg else None) or {}
+    for g in mapping:
+        if g not in group_keys:
+            group_keys.append(g)
+    groups = []
+    for g in group_keys:
+        duty = await group_duty(db, g, on_date)
+        members = duty["members"]
+        names: dict[str, str] = {}
+        if members:
+            from sqlalchemy import select as _select
+
+            from app.platform.identity.models import User as IdentityUser
+
+            stmt = _select(IdentityUser).where(IdentityUser.id.in_(members))
+            names = {str(u.id): u.name for u in (await db.execute(stmt)).scalars()}
+        groups.append({
+            "group": g,
+            "configured": duty["configured"],
+            "teams": duty["teams"],
+            "members": [{"id": i, "name": names.get(i, "未知")} for i in members],
+        })
+    return success_response(data={"groups": groups, "mapping": mapping})
+
+
+@router.get("/shift/item-groups", summary="项目组别映射配置（项目名关键词 → 组别）")
+async def shift_item_groups_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:read")),
+) -> JSONResponse:
+    from app.modules.quality.repository import get_shift_config
+
+    cfg = await get_shift_config(db, "item_groups")
+    return success_response(data=(cfg.value if cfg else None) or {
+        "仪器组": ["杂质", "含量", "有关物质", "组分", "残留溶剂", "色谱"],
+        "生物组": ["微生物", "菌", "效价", "内毒素", "无菌"],
+        "理化组": ["pH", "水分", "干燥失重", "炽灼残渣", "澄清", "颜色", "熔点"],
+    })
+
+
+@router.put("/shift/item-groups", summary="保存项目组别映射配置")
+async def save_shift_item_groups_endpoint(
+    payload: dict[str, object] = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from app.modules.quality.repository import upsert_shift_config
+
+    await upsert_shift_config(db, "item_groups", payload)
+    return success_response(message="项目组别映射已保存")
 
 
 @router.get("/shift/duty", summary="当日当班班组与成员（排班选人时优先展示）")

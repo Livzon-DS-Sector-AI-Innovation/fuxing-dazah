@@ -1921,6 +1921,7 @@ export async function saveTaskAssignments(taskId: string, assignments: { sop_no:
 export interface ShiftTeamItem {
   id: string
   name: string
+  group_key: string
   member_ids: string[]
   member_names: string[]
   seq: number
@@ -1935,7 +1936,7 @@ export async function fetchShiftTeams(): Promise<{ data: ShiftTeamItem[] }> {
   return res.json()
 }
 
-export async function createShiftTeam(input: { name: string; member_ids: string[]; seq: number; remark?: string }): Promise<{ message: string; data: { id: string; name: string } }> {
+export async function createShiftTeam(input: { name: string; group_key?: string; member_ids: string[]; seq: number; remark?: string }): Promise<{ message: string; data: { id: string; name: string } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/teams`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -1948,7 +1949,7 @@ export async function createShiftTeam(input: { name: string; member_ids: string[
   return res.json()
 }
 
-export async function updateShiftTeam(id: string, input: { name: string; member_ids: string[]; seq: number; remark?: string }): Promise<{ message: string }> {
+export async function updateShiftTeam(id: string, input: { name: string; group_key?: string; member_ids: string[]; seq: number; remark?: string }): Promise<{ message: string }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/teams/${id}`, {
     method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -1975,12 +1976,35 @@ export async function fetchShiftConfig(): Promise<{ data: { start_date: string |
   return res.json()
 }
 
-export async function saveShiftConfig(input: { start_date: string; period_days: number; duty_teams: number }): Promise<{ message: string }> {
+export async function saveShiftConfig(input: { start_date: string; period_days: number; duty_teams: number; group?: string }): Promise<{ message: string }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/config`, {
     method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   })
   if (!res.ok) throw new Error('保存轮换配置失败')
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export interface ShiftGroupData {
+  groups: { group: string; configured: boolean; teams: { id: string; name: string }[]; members: { id: string; name: string }[] }[]
+  mapping: Record<string, string[]>
+}
+
+export async function fetchShiftGroups(): Promise<{ data: ShiftGroupData }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/groups`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取组别失败')
+  return res.json()
+}
+
+export async function saveShiftItemGroups(mapping: Record<string, string[]>): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/item-groups`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(mapping),
+  })
+  if (!res.ok) throw new Error('保存组别映射失败')
   revalidatePath('/quality/board')
   return res.json()
 }

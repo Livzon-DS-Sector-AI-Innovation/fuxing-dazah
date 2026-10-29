@@ -76,6 +76,10 @@ class QualityShiftTeam(BaseModel):
     )
 
     name: Mapped[str] = mapped_column(String(64), nullable=False, comment="班组名")
+    group_key: Mapped[str] = mapped_column(
+        String(32), default="仪器组", server_default="仪器组",
+        comment="班组归属组别（仪器组/生物组/理化组，互相独立轮换）",
+    )
     member_ids: Mapped[list[str] | None] = mapped_column(
         JSONB, nullable=True, comment="班组成员（identity.users.id 字符串列表）"
     )

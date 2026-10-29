@@ -287,10 +287,11 @@ async def update_batch_release(db: AsyncSession, rid: uuid.UUID, data: dict[str,
 # ─── 排班班组与轮换 ───
 
 
-async def list_shift_teams(db: AsyncSession) -> list[QualityShiftTeam]:
-    stmt = select(QualityShiftTeam).where(
-        QualityShiftTeam.is_deleted == False  # noqa: E712
-    ).order_by(QualityShiftTeam.seq, QualityShiftTeam.created_at)
+async def list_shift_teams(db: AsyncSession, group_key: str | None = None) -> list[QualityShiftTeam]:
+    conds = [QualityShiftTeam.is_deleted == False]  # noqa: E712
+    if group_key:
+        conds.append(QualityShiftTeam.group_key == group_key)
+    stmt = select(QualityShiftTeam).where(*conds).order_by(QualityShiftTeam.seq, QualityShiftTeam.created_at)
     return list((await db.execute(stmt)).scalars().all())
 
 
@@ -299,6 +300,52 @@ async def get_shift_team(db: AsyncSession, tid: uuid.UUID) -> QualityShiftTeam |
         QualityShiftTeam.id == tid, QualityShiftTeam.is_deleted == False  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+def item_group(item_name: str, mapping: dict[str, list[str]] | None) -> str:
+    """项目名 → 组别（关键词匹配）：仪器组/生物组/理化组，未匹配回退理化组。"""
+    mapping = mapping or {}
+    for group, keywords in mapping.items():
+        for kw in keywords:
+            if kw and kw in item_name:
+                return group
+    return "理化组"
+
+
+async def group_duty(
+    db: AsyncSession, group_key: str, on_date: str
+) -> dict[str, Any]:
+    """某组别当日当班：该组班组按该组轮换配置计算（无配置回退全局 rotation）。"""
+    cfg = await get_shift_config(db, f"rotation:{group_key}")
+    if cfg is None:
+        cfg = await get_shift_config(db, "rotation")
+    value = (cfg.value or {}) if cfg else {}
+    start_date = value.get("start_date")
+    period_days = int(value.get("period_days") or 3)
+    duty_count = int(value.get("duty_teams") or 2)
+    teams = await list_shift_teams(db, group_key=group_key)
+    team_dicts = [{"id": str(t.id), "name": t.name, "member_ids": t.member_ids or []} for t in teams]
+    duty = (
+        shift_duty_teams(team_dicts, start_date, period_days, duty_count, on_date)
+        if start_date else team_dicts[:duty_count]
+    )
+    member_ids: list[str] = []
+    for t in duty:
+        member_ids.extend(t["member_ids"])
+    return {
+        "group": group_key,
+        "configured": bool(start_date),
+        "teams": [{"id": t["id"], "name": t["name"]} for t in duty],
+        "members": member_ids,
+    }
+
+
+async def group_member_ids(db: AsyncSession, group_key: str) -> set[str]:
+    """组别全部成员（该组所有班组并集），用于分配权限校验。"""
+    out: set[str] = set()
+    for t in await list_shift_teams(db, group_key=group_key):
+        out.update(t.member_ids or [])
+    return out
 
 
 async def upsert_shift_team(db: AsyncSession, tid: uuid.UUID | None, data: dict[str, Any]) -> QualityShiftTeam:
