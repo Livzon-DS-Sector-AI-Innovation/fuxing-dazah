@@ -84,6 +84,21 @@
 | B09 部门拒绝路径 | ⏭️ 未实跑：creator 不走部门校验=真执行会真写（违反红线）；守卫代码本次零改动，卡+确认链已验 | |
 | 定时链路 | ✅ service 层零字节改动（工具层方案）；B05c 后总卡三格逐字节不变；周四 13:00 督办+值守轮询路径未触碰 | |
 
+## 复测截图（screenshots/fix-*.png，2026-10-29 浏览器端补充）
+
+API 级复测当日完成后追加的浏览器端截图（IAB webview，creator=许康福 / viewer=TEST-VIEWER-001）：
+
+| 文件 | 场景 | 画面 |
+|---|---|---|
+| fix-B05a-push-card.png | #3/#5 | 一轮直出 push_report_to_chat 卡，chat_id 入卡 |
+| fix-B05d-pending-guard.png | #8 | 卡未点发新消息 → ⚠️ 守门话术（原 UserError 报废） |
+| fix-A14-stock-summary.png | #11 | 库存总量聚合表（1500 批次/252 物料/按物料×单位） |
+| fix-C1v-viewer-fireext.png | #1 | 未绑定 viewer 答疑灭火器到期（1331 台/逾期 4/临期 3） |
+| fix-help-forget.png | #9 | /help 显示 /forget 指令与记忆留存提示 |
+| fix-A09-overview.png | #2 层3 | 前端 160s 止损话术（见下注） |
+
+**IAB 流式环境注记**：A09（30s+ 长流式轮）在 IAB webview 内两连挂——一次服务端轮被客户端断连静默取消、一次请求未达后端；同问法 curl 直打 `/agent/chat/stream` 36.3s 完整出答案、审计 success。与既往已知 IAB 流式页故障一致（短回合 2-12s 在 IAB 全部正常），**非本次代码回归**；fix-A09-overview.png 恰好留证前端止损兜底生效（不再无限转圈）。A09 答案内容的证据以 curl 流式捕获 + ai_call_audits（15:38:31 success 35.9s）为准。
+
 ## 遗留与观察项
 
 1. **A13 类重报表轮次超 150s**：按拍板档位起步；观察 ai_call_audits 分位再调（fix-plan 原口径）
