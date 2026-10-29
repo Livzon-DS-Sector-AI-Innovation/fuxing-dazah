@@ -168,9 +168,6 @@ export default function TaskBoard() {
         {canAssign && (
           <Button icon={<SettingOutlined />} onClick={openShiftConfig}>班组配置</Button>
         )}
-        <Text type="secondary" style={{ fontSize: 12.5 }}>
-          <TeamOutlined /> 今天及以后的请检任务排班：SOP 按组别（仪器组/生物组/理化组）从对应组当班人员中选人；建任务后分工自动带到检验任务
-        </Text>
       </Space>
 
       {plans.length === 0 && !loading && (
