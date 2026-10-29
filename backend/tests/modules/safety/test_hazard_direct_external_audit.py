@@ -167,7 +167,7 @@ def test_section_groups_mentions_link_and_stats() -> None:
         external_audit.to_view(_ext_record(5, dept=["动力部"], status=["整改中"])),
     ]
     lines, stats = external_audit.build_external_section(
-        views, app_token="APP", table_id="TBL", today=date(2026, 10, 21),
+        views, app_token="APP", table_id="TBL",
     )
     body = "\n".join(lines)
 
@@ -184,9 +184,8 @@ def test_section_groups_mentions_link_and_stats() -> None:
     assert "外审缺陷#4" not in body
     assert "外审缺陷#5" not in body
     assert "外审缺陷#1 描述" in body
-    # 目标日期纯展示、检查日期带天数
-    assert "目标：2026-10-31" in body
-    assert "检查：2026-10-19（2 天）" in body
+    # 检查/目标日期不展示（2026-10-29 拍板，仅用于排序）
+    assert "检查：" not in body and "目标：" not in body
     assert (
         "https://j0eukrlohu.feishu.cn/base/APP?table=TBL&record=rec_ext_1" in body
     )
@@ -204,9 +203,7 @@ def test_section_all_closed_line_and_plain_dept_head() -> None:
     assert "✅ 管委会检查已全部关闭（累计 2 条）" in body
 
     solo = external_audit.to_view(_ext_record(1, persons=[]))
-    lines, _ = external_audit.build_external_section(
-        [solo], today=date(2026, 10, 21),
-    )
+    lines, _ = external_audit.build_external_section([solo])
     body = "\n".join(lines)
     assert "**提炼工程二部**" in body
     assert "<at" not in body
@@ -502,16 +499,17 @@ async def test_build_bulletin_two_external_sources(
 
     assert stats["ext_open"] == 2  # 管委会 1 + 重大隐患 1（整改中不计）
     assert stats["ext_sources"]["重大隐患"]["doing"] == 1
-    # 节顺序：今日无（内部空）→ 管委会检查 → 重大隐患 → 部门汇总
+    # 节顺序：今日无（内部空）→ 管委会检查 → 重大隐患+安全设计诊断 → 部门汇总
     i_mgmt = content.index("📌 管委会检查未整改隐患")
-    i_eb = content.index("📌 重大隐患")
+    i_eb = content.index("📌 重大隐患+安全设计诊断")
     i_summary = content.index("📌 各部门未关闭隐患数量汇总")
     assert i_mgmt < i_eb < i_summary
-    # 重大隐患明细：「进展：」前缀（字段覆盖）、无「目标：」段；整改中不进明细
+    # 重大隐患明细：「进展：」前缀（字段覆盖）、无检查/目标日期；整改中不进明细
     eb_body = content[i_eb:i_summary]
     assert "环保装置未见工艺设计图" in eb_body
     assert "进展：待进行招标" in eb_body
     assert "目标：" not in eb_body
+    assert "检查：" not in eb_body
     assert "外审缺陷#12" not in content
     # 部门汇总逐源分段
     assert "**提炼工程二部**：管委会检查未整改 1 条" in content

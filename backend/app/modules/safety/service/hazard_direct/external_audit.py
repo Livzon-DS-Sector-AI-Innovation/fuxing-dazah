@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.modules.safety.service.bitable_direct import fields as bd_fields
@@ -89,7 +89,7 @@ SOURCE_MGMT = SourceSpec("defect_summary", "管委会检查")
 SOURCE_EMERGENCY_BUREAU = SourceSpec(
     "emergency_bureau", "重大隐患",
     plan_field="目前进展", plan_label="进展", target_field=None,
-    title="重大隐患",
+    title="重大隐患+安全设计诊断",
 )
 SOURCES: tuple[SourceSpec, ...] = (
     SOURCE_MGMT, SOURCE_EMERGENCY_BUREAU,
@@ -303,14 +303,13 @@ def build_external_section(
     bar_title: str = "",
     app_token: str = "",
     table_id: str = "",
-    today: date | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """渲染单源栏头节（markdown 行列表 + 统计，不推送）。
 
     栏头全名 ``bar_title`` 缺省 ``f"{source_label}未整改隐患"``；未关闭进
     明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为未整改
-    （仅收口行计数）；已关闭仅计数。目标完成日期纯展示，不做逾期/剩余
-    天数判定（拍板：不看目标期限）。
+    （仅收口行计数）；已关闭仅计数。检查/目标日期**不展示**（2026-10-29
+    拍板，仅用于部门内排序与日期过滤），明细行只留 链接段。
     """
     from app.modules.safety.feishu import mention
 
@@ -336,7 +335,6 @@ def build_external_section(
         lines.append("")
         return lines, stats
 
-    today = today or (datetime.now(UTC) + timedelta(hours=8)).date()
     lines.append(
         f"🔴 未关闭 **{len(open_views)}** 条  ·  "
         f"✅ 已关闭 {stats['ext_closed']} 条  ·  "
@@ -373,17 +371,10 @@ def build_external_section(
             lines.append(f"**{idx}.** {_flat(v.description)}")
             if v.plan:
                 lines.append(f"{plan_label}：{_flat(v.plan)}")
-            segs: list[str] = []
-            if v.checked_at:
-                days = (today - v.checked_at).days
-                segs.append(f"检查：{v.checked_at.isoformat()}（{days} 天）")
-            if v.target_date:
-                segs.append(f"目标：{v.target_date.isoformat()}")
+            # 检查/目标日期不展示（2026-10-29 拍板）；检查日期仍用于上方排序
             link = _record_link(v, app_token, table_id)
             if link:
-                segs.append(link)
-            if segs:
-                lines.append("｜".join(segs))
+                lines.append(link)
         lines.append("")
 
     return lines, stats
