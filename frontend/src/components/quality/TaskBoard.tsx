@@ -59,13 +59,8 @@ export default function TaskBoard() {
   }))
   const dutyIds = new Set(duty?.members.map((m) => m.id) ?? [])
   const dutyOptions = personOptions.filter((o) => dutyIds.has(o.value))
-  const otherOptions = personOptions.filter((o) => !dutyIds.has(o.value))
-  const groupedPersonOptions = [
-    ...(dutyOptions.length
-      ? [{ label: `今日当班（${duty?.teams.map((t) => t.name).join('+') ?? ''}）`, options: dutyOptions }]
-      : []),
-    ...(otherOptions.length ? [{ label: '其他人员', options: otherOptions }] : []),
-  ]
+  // 排班选人：配置了轮换时仅限今日当班成员；未配置则全部人员
+  const selectablePersonOptions = duty && duty.members.length > 0 ? dutyOptions : personOptions
 
   // 按请检日期分组（今天 / 之后按日期）
   const groups = useMemo(() => {
@@ -138,7 +133,7 @@ export default function TaskBoard() {
           <Button icon={<SettingOutlined />} onClick={openShiftConfig}>班组配置</Button>
         )}
         <Text type="secondary" style={{ fontSize: 12.5 }}>
-          <TeamOutlined /> 今天及以后的请检任务排班：每个 SOP 选人，分配后人员名字显示在计划下方；建任务后分工自动带到检验任务
+          <TeamOutlined /> 今天及以后的请检任务排班：每个 SOP 从「今日当班」成员中选人（班组配置轮换后生效），分配后人员名字显示在计划下方；建任务后分工自动带到检验任务
         </Text>
       </Space>
 
@@ -198,11 +193,11 @@ export default function TaskBoard() {
                             allowClear showSearch optionFilterProp="label"
                             size="small"
                             style={{ flex: '0 0 240px' }}
-                            placeholder={canAssign ? '选择负责人员' : '未分配'}
+                            placeholder={canAssign ? (duty && duty.members.length > 0 ? '从当班人员中选择' : '选择负责人员') : '未分配'}
                             disabled={!canAssign}
                             value={a?.assignee_id}
                             onChange={(v) => onAssign(plan, sop.sop_no, v)}
-                            options={groupedPersonOptions}
+                            options={selectablePersonOptions}
                           />
                         </div>
                       )
