@@ -78,14 +78,34 @@ async def get_or_create_session(
     user_id: str | None = None,
     role: str | None = None,
 ) -> AgentSession:
-    """按 channel + chat_id 获取已有会话，不存在则创建。"""
-    stmt = select(AgentSession).where(
-        AgentSession.channel == channel,
-        AgentSession.chat_id == chat_id,
-        AgentSession.is_deleted == False,  # noqa: E712
-    )
-    result = await db.execute(stmt)
-    session = result.scalar_one_or_none()
+    """按 channel + chat_id 获取已有会话，不存在则创建。
+
+    web 续轮由前端回传**会话行 id**（首轮响应的 session_id），而新建行的
+    chat_id 存的是首轮随机串——只按 chat_id 查永远 miss，每轮新建空会话
+    （web 历史断链根因，验收 #8 的 web 表现）。故 chat_id 可解析为 UUID 时
+    先按行 id 回查。飞书 chat_id 为 oc_/ou_ 前缀，该分支天然不命中。
+    """
+    import uuid as _uuid
+
+    session: AgentSession | None = None
+    try:
+        row_id = _uuid.UUID(str(chat_id)) if chat_id else None
+    except (ValueError, AttributeError, TypeError):
+        row_id = None
+    if row_id is not None:
+        stmt = select(AgentSession).where(
+            AgentSession.id == row_id,
+            AgentSession.channel == channel,
+            AgentSession.is_deleted == False,  # noqa: E712
+        )
+        session = (await db.execute(stmt)).scalar_one_or_none()
+    if session is None:
+        stmt = select(AgentSession).where(
+            AgentSession.channel == channel,
+            AgentSession.chat_id == chat_id,
+            AgentSession.is_deleted == False,  # noqa: E712
+        )
+        session = (await db.execute(stmt)).scalar_one_or_none()
     if session is not None:
         session.last_active_at = datetime.now(UTC)
         await db.flush()

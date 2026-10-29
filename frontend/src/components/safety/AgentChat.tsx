@@ -47,6 +47,10 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { command: '/抄送', description: '将对话结果抄送到飞书' },
 ]
 
+// 前端流式止损（P0-2）：服务端轮次看门狗 150s（超时+30s）会先下发终态；
+// 此计时为纯兜底（看门狗 150s + 10s 余量），到点 abort 不再无限转圈。
+const STREAM_TIMEOUT_MS = 160_000
+
 const HELP_TEXT = `**可用指令**
 
 | 指令 | 说明 |
@@ -95,6 +99,7 @@ export default function AgentChat() {
   const [showCommands, setShowCommands] = useState(false)
   const [commandIndex, setCommandIndex] = useState(0)
   const cancelledRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<any>(null)
 
@@ -147,15 +152,16 @@ export default function AgentChat() {
       case '/stop': {
         if (loading) {
           cancelledRef.current = true
+          abortRef.current?.abort()
           setLoading(false)
           const stopMsg: ChatMessage = {
             id: `a-${Date.now()}`,
             role: 'assistant',
-            content: '⏹ 已停止生成。',
+            content: '⏹ 已停止显示（后台可能仍在处理，结果不会展示在本页）。',
             timestamp: Date.now(),
           }
           setMessages((prev) => [...prev, stopMsg])
-          message.info('已停止生成')
+          message.info('已停止显示')
         } else {
           message.info('当前没有正在生成的回复')
         }
@@ -287,6 +293,11 @@ export default function AgentChat() {
     setLoading(true)
     cancelledRef.current = false
 
+    // P0-2 前端止损：AbortController 到点中断，不再无限转圈
+    const controller = new AbortController()
+    abortRef.current = controller
+    const clientTimer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS)
+
     try {
       // 2-F：流式事件反馈（accepted→stage→pending?→message→finished/error），
       // message 一次性携带完整回复与来源；挂起确认卡片交互不变
@@ -294,6 +305,7 @@ export default function AgentChat() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: query, session_id: sessionId || null }),
+        signal: controller.signal,
       })
       if (!resp.ok || !resp.body) {
         const body = (await resp.json().catch(() => null)) as { message?: string } | null
@@ -336,8 +348,20 @@ export default function AgentChat() {
       }
     } catch (err) {
       if (cancelledRef.current) return
-      message.error(`网络请求失败：${err instanceof Error ? err.message : String(err)}`)
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        const timeoutMsg: ChatMessage = {
+          id: `a-${Date.now()}`,
+          role: 'assistant',
+          content: `⏱ 请求超时（${Math.round(STREAM_TIMEOUT_MS / 1000)} 秒）已停止等待，请重试或换个问法。`,
+          timestamp: Date.now(),
+        }
+        setMessages((prev) => [...prev, timeoutMsg])
+      } else {
+        message.error(`网络请求失败：${err instanceof Error ? err.message : String(err)}`)
+      }
     } finally {
+      clearTimeout(clientTimer)
+      if (abortRef.current === controller) abortRef.current = null
       if (!cancelledRef.current) {
         setLoading(false)
       }

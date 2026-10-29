@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 
 _TREND_DAYS = 30
 _DRILLDOWN_LIMIT = 20
+# P1-6：overview 单域采集超时（秒）——慢域降级记 errors，不拖死整页/整轮
+_DOMAIN_TIMEOUT = 30
 
 # 健康度模块 key（与前端 menu-config safety 子项 key 一一对应；名称/路径/
 # 分组由前端从菜单解析，后端只下发状态与指标文案）
@@ -582,7 +584,13 @@ async def build_overview(
         name: str, fn: Callable[[], Awaitable[Any]]
     ) -> tuple[str, Any, None] | tuple[str, None, str]:
         try:
-            return name, await fn(), None
+            # P1-6：单域 30s 超时——慢域（直读全量分页拉取）到点降级记 errors，
+            # 不再拖死整轮（与工具层 120s 超时构成双保险）。DB 采集器各自
+            # 独立开 session，wait_for 取消即整链关闭，不留半途 session。
+            return name, await asyncio.wait_for(fn(), timeout=_DOMAIN_TIMEOUT), None
+        except asyncio.TimeoutError:
+            logger.warning("overview 采集超时 domain=%s timeout=%ss", name, _DOMAIN_TIMEOUT)
+            return name, None, f"{name}: TimeoutError({_DOMAIN_TIMEOUT}s)"
         except Exception as exc:  # noqa: BLE001 —— 单域失败只降级不炸整页
             logger.warning("overview 采集降级 domain=%s: %r", name, exc)
             return name, None, f"{name}: {type(exc).__name__}"

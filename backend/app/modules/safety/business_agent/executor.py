@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -46,6 +47,17 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# P0-2：轮次看门狗 = 单次 LLM 超时 + 30s（覆盖模型多轮工具循环的正常收尾）。
+# 超时走 failed 审计 + 友好话术 → SSE 下发 error/终态，前端不再无限转圈。
+_TURN_WATCHDOG_SLACK = 30
+
+# P1-8：pending 守门话术 —— 历史仍有未回包写 ToolCall（确认卡未处理）时，
+# 直接拦截新消息，不进模型（否则 pydantic-ai UserError 会话报废）。
+_PENDING_GUARD_PROMPT = (
+    "⚠️ 您有一项写操作正在等待确认（见上方确认卡片），"
+    "请先点击【确认执行】或【取消】后再继续提问。"
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -120,6 +132,21 @@ async def _run_turn_impl(
             "sources": None,
         }
 
+    # ── P1-8：pending 守门 ──
+    #   历史尾部存在未回包的写 ToolCall（确认卡未处理）时，新用户消息会让
+    #   pydantic-ai 抛 UserError("unprocessed tool calls") 报废整会话；
+    #   此处提前拦截，不进模型，session 不落死。
+    if await _has_unprocessed_write_call(message_history, deps):
+        logger.warning(
+            "run_turn: 检测到未处理的写工具挂起，拦截新消息 session=%s", deps.session_id,
+        )
+        return {
+            "answer": _PENDING_GUARD_PROMPT,
+            "messages": message_history or [],
+            "pending_action": None,
+            "sources": None,
+        }
+
     # S3 事件流：入口 user_message 事件（双写期，逐事件 append）
     if deps.session_id:
         try:
@@ -156,6 +183,7 @@ async def _run_turn_impl(
         # 并让工具内嵌套的知识库 AI 调用继承 用户/会话/渠道/trace_id
         from app.modules.safety.ai_audit import ai_audit_scope
 
+        _turn_timeout = float(resolve_runtime_config().timeout) + _TURN_WATCHDOG_SLACK
         with ai_audit_scope(
             scenario="agent_chat",
             session_id=deps.session_id or None,
@@ -163,11 +191,34 @@ async def _run_turn_impl(
             user_name=deps.person.name if deps.person else None,
         ) as audit_ctx:
             trace_id = audit_ctx.trace_id
-            result = await _agent_run(
-                user_message, deps,
-                message_history=message_history,
-                routed_tool_names=routed_tools,
+            result = await asyncio.wait_for(
+                _agent_run(
+                    user_message, deps,
+                    message_history=message_history,
+                    routed_tool_names=routed_tools,
+                ),
+                timeout=_turn_timeout,
             )
+    except asyncio.TimeoutError:
+        logger.error("agent run 超时（>%ss）session=%s", _turn_timeout, deps.session_id)
+        err_msg = (
+            f"抱歉，本次请求处理超时（{_turn_timeout:.0f} 秒）已自动中止，"
+            "请稍后重试或换个问法；仍超时可输入 /new 重置会话。"
+        )
+        await _audit_agent_turn(
+            deps, user_message,
+            answer=None, result=None, pending=None, sources=None, guard_hits=None,
+            status="failed",
+            error=f"TimeoutError: turn exceeded {_turn_timeout:.0f}s",
+            latency_ms=int((time.monotonic() - started) * 1000),
+            trace_id=trace_id, routing=routing_extra,
+        )
+        return {
+            "answer": err_msg,
+            "messages": message_history or [],
+            "pending_action": None,
+            "sources": None,
+        }
     except Exception as e:
         logger.exception("agent run 失败")
         err_msg = f"抱歉，处理您的请求时发生内部错误，请输入/new重置会话后再尝试提问：{type(e).__name__}: {e}"
@@ -369,6 +420,7 @@ async def _resume_impl(
     try:
         from app.modules.safety.ai_audit import ai_audit_scope
 
+        _turn_timeout = float(resolve_runtime_config().timeout) + _TURN_WATCHDOG_SLACK
         with ai_audit_scope(
             scenario="agent_chat",
             session_id=session_id or None,
@@ -376,14 +428,38 @@ async def _resume_impl(
             user_name=deps.person.name if deps.person else None,
         ) as audit_ctx:
             trace_id = audit_ctx.trace_id
-            final = await _agent_run(
-                None,  # 无新用户消息，仅执行 approved tools
-                deps,
-                message_history=messages,
-                deferred_tool_results=results,
-                # 1-C：被确认的工具（可能属按需域）必须在本轮挂载面内
-                resume_tool_names=[c.tool_name for c in deferred_requests.approvals],
+            final = await asyncio.wait_for(
+                _agent_run(
+                    None,  # 无新用户消息，仅执行 approved tools
+                    deps,
+                    message_history=messages,
+                    deferred_tool_results=results,
+                    # 1-C：被确认的工具（可能属按需域）必须在本轮挂载面内
+                    resume_tool_names=[c.tool_name for c in deferred_requests.approvals],
+                ),
+                timeout=_turn_timeout,
             )
+    except asyncio.TimeoutError:
+        # 写工具可能已执行（超时点常在模型收尾生成），话术须防重复发起
+        logger.error("resume 超时（>%ss）action=%s", _turn_timeout, action_id)
+        await _append_turn_end_event(
+            deps, status="failed", error=f"resume timeout after {_turn_timeout:.0f}s",
+        )
+        await _audit_agent_resume(
+            deps, session_id,
+            action_id=action_id, approved=approved,
+            tool_names=[c.tool_name for c in deferred_requests.approvals],
+            answer="操作执行超时", result=None,
+            trace_id=trace_id,
+        )
+        return {
+            "answer": (
+                "操作执行超时，执行结果未知——请勿立即重复发起，"
+                "可先查询相关数据确认是否已执行，或联系管理员。"
+            ),
+            "messages": message_history_raw,
+            "executed": False,
+        }
     except Exception:
         logger.exception("resume 执行失败")
         return {
@@ -1059,6 +1135,29 @@ def _find_deferred_in_history(
                 return DeferredToolRequests(approvals=calls)
             return None  # 最近一条模型回复没有挂起的写调用
     return None
+
+
+async def _has_unprocessed_write_call(
+    message_history: list[ModelMessage] | None,
+    deps: SafetyDeps,
+) -> bool:
+    """P1-8：会话历史尾部是否存在未回包的写 ToolCall（确认卡未处理）。
+
+    历史来源与 ``_agent_run`` 同序：显式传入优先，None 时从事件表派生
+    （web 首轮/飞书链路可能不传旧列）。只探测不消费，失败视为无挂起。
+    """
+    history = message_history
+    if history is None and deps.db is not None and deps.session_id:
+        history = await _derive_session_history(deps)
+    if not history:
+        return False
+    try:
+        if isinstance(history[0], dict):
+            history = ModelMessagesTypeAdapter.validate_python(history)
+        return _find_deferred_in_history(history) is not None
+    except Exception:
+        logger.debug("pending 守门历史探测失败（按无挂起处理）", exc_info=True)
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════

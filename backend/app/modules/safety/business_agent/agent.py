@@ -16,6 +16,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.deepseek import DeepSeekProvider
@@ -54,6 +55,7 @@ if _TRACING_ENABLED:
 
 _DEFAULT_TEMPERATURE = 0.1
 _DEFAULT_MAX_TOKENS = 8192
+_DEFAULT_TIMEOUT = 120
 _AGENT_CACHE_MAX = 64
 
 
@@ -66,6 +68,7 @@ class AgentRuntimeConfig:
     api_key: str
     temperature: float
     max_tokens: int
+    timeout: int
     fingerprint: str
 
 
@@ -87,11 +90,16 @@ def resolve_runtime_config() -> AgentRuntimeConfig:
         max_tokens = int(config.get("max_tokens", _DEFAULT_MAX_TOKENS))
     except (TypeError, ValueError):
         max_tokens = _DEFAULT_MAX_TOKENS
+    # P0-2：单次 LLM 调用超时（秒）——registry 默认 120，接线到 provider http_client
+    try:
+        timeout = int(config.get("timeout", _DEFAULT_TIMEOUT))
+    except (TypeError, ValueError):
+        timeout = _DEFAULT_TIMEOUT
     # 指纹只含 api_key 尾 4 位（防泄漏），足以区分配置版本
     fingerprint = hashlib.sha256(
         "|".join((
             profile, model, config.get("base_url") or "", api_key[-4:],
-            str(temperature), str(max_tokens),
+            str(temperature), str(max_tokens), str(timeout),
         )).encode()
     ).hexdigest()[:12]
     return AgentRuntimeConfig(
@@ -100,6 +108,7 @@ def resolve_runtime_config() -> AgentRuntimeConfig:
         api_key=api_key,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=timeout,
         fingerprint=fingerprint,
     )
 
@@ -107,7 +116,8 @@ def resolve_runtime_config() -> AgentRuntimeConfig:
 def _make_agent(config: AgentRuntimeConfig | None = None) -> Agent:
     """创建基础 Agent 实例（不含工具注册）；缺省按当前生效配置构建。
 
-    base_url/timeout 字段暂不消费（DeepSeekProvider 默认端点，与一期口径一致）。
+    base_url 字段暂不消费（DeepSeekProvider 默认端点，与一期口径一致）；
+    timeout 已接线到 provider http_client（P0-2：openai SDK 默认 600s → 配置驱动）。
     """
     cfg = config or resolve_runtime_config()
     return _build_agent(cfg, load_instructions())
@@ -115,7 +125,12 @@ def _make_agent(config: AgentRuntimeConfig | None = None) -> Agent:
 
 def _build_agent(cfg: AgentRuntimeConfig, instructions: str) -> Agent:
     """按配置快照与 instructions 构建 Agent（orchestrator 与域 Agent 共用）。"""
-    provider = DeepSeekProvider(api_key=cfg.api_key)
+    # P0-2：显式超时（openai SDK 默认 read 600s，LLM 挂死时单调用可挂 10 分钟）。
+    # 实例随 Agent 缓存存续，配置指纹含 timeout → 调参即换新实例。
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(float(cfg.timeout), connect=5.0),
+    )
+    provider = DeepSeekProvider(api_key=cfg.api_key, http_client=http_client)
     model = OpenAIChatModel(cfg.model, provider=provider)
     return Agent(
         model,

@@ -205,6 +205,12 @@ async def _execute_turn_and_persist(
             user_id=feishu_user_id,
             role=deps.role,
         )
+        # web 断链修复（验收 #8）：事件流/记忆提取按真实会话行 id 归位——
+        # 首轮 deps.session_id 是随机串，行 id 是服务端生成的另一 UUID，
+        # 不对齐则首轮事件全部孤儿化、派生历史永远为空。
+        # （直接赋值而非 replace：测试替身可能不是 dataclass）
+        if deps.session_id != str(session.id):
+            deps.session_id = str(session.id)
         history = session.message_history if isinstance(session.message_history, list) else None
         result = await run_turn(message, deps, message_history=history)
 

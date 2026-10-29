@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,10 @@ from app.modules.safety.business_agent.rules import check_output
 from app.modules.safety.business_agent.schemas import SafetyDeps
 
 logger = logging.getLogger(__name__)
+
+# P0-2/P1-6：单工具执行超时（秒）。慢工具（直读全量/外部 bitable 分页拉取）
+# 到点即cancelled 返回错误，不再拖死整轮；轮次看门狗（timeout+30s）兜底。
+_TOOL_EXEC_TIMEOUT = 120
 
 # 1-B：单条工具结果给模型的内容上限（对齐仓储 agent 的 4KB 截断）。
 # 只截「给模型看的内容」；审计（_post_audit）与业务落库不受影响。
@@ -94,11 +99,18 @@ async def execute_tool(
     # 2. guard：写工具（TOOL_KIND[name]=True）的审批挂起由 Pydantic AI
     #    DeferredToolRequests 处理，不在管道内重复（机制不变）。
 
-    # 3. execute：调真实工具函数
+    # 3. execute：调真实工具函数（P0-2：到点超时，防慢工具拖死整轮）
     try:
-        data = await real_func(ctx, **args)
+        data = await asyncio.wait_for(
+            real_func(ctx, **args), timeout=_TOOL_EXEC_TIMEOUT,
+        )
         ok = True
         err = None
+    except asyncio.TimeoutError:
+        data = None
+        ok = False
+        err = f"TimeoutError: 工具执行超时（{_TOOL_EXEC_TIMEOUT}s），已中止"
+        logger.warning("pipeline 工具超时 tool=%s timeout=%ss", tool_name, _TOOL_EXEC_TIMEOUT)
     except Exception as e:
         data = None
         ok = False
