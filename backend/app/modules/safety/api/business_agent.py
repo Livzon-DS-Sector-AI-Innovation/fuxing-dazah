@@ -110,18 +110,24 @@ async def _build_deps(
     session_id: str | None = None,
     feishu_user_id: str | None = None,
 ) -> SafetyDeps:
-    """为每次请求构建 SafetyDeps 依赖。"""
+    """为每次请求构建 SafetyDeps 依赖。
+
+    P0-1 权限口径（与飞书链路一致）：登录（feishu_user_id 非空）未绑定角色
+    → 兜底 viewer（55 只读工具），不再 role=None 全拒；匿名（无身份）保持
+    role=None → deny-by-default（web 无飞书租户边界，匿名给只读=内网裸奔）。
+    """
     sid = session_id or str(uuid.uuid4())
 
     # 身份
     person = None
     role = None
     if feishu_user_id:
+        role = "viewer"
         resolver = IdentityResolver(db)
         person = await resolver.resolve_by_user_id(feishu_user_id)
         if person:
             from app.modules.safety.business_agent.session_store import get_user_role
-            role = await get_user_role(db, feishu_user_id)
+            role = await get_user_role(db, feishu_user_id) or "viewer"
 
     return SafetyDeps(db=db, person=person, role=role, session_id=sid, channel="web")
 
