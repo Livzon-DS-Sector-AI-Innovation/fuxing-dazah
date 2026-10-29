@@ -674,7 +674,13 @@ async def generate_alarm_report(
     period: str = "daily",
     target_date: str | None = None,
 ) -> dict[str, Any]:
-    """生成消防/中控报警日报或月报，直接在对话中返回完整报告（需用户确认）。
+    """生成报警日报/月报的**报告内容**并在对话中展示（仅此用途，需用户确认）。
+
+    ⚠️ 消歧（勿误用）：
+    - 仅当用户要看「报警日报/月报内容」（"生成今天的中控报警日报"）时选本工具；
+    - 用户要求「推送到指定群/发到某群」时必须改用 push_report_to_chat(chat_id=…)；
+    - 「处置/销警/确认报警」与本工具无关：遥测报警用 resolve_telemetry_alarm/
+      ack_telemetry_alarm；中控群消息报警无处置工具时应先向用户澄清。
 
     Args:
         scope: fire=消防报警 / central=中控报警

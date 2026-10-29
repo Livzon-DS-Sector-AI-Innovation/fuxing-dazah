@@ -341,7 +341,7 @@ async def push_report_to_chat(
     mode: str = "today",
     scope: str = "fire",
 ) -> dict[str, Any]:
-    """把安全报表推送到飞书群（三类报表，目标群默认系统配置、可指定）。
+    """把安全报表推送到飞书群（三类报表；用户点名目标群时必选本工具直发）。
 
     支持的报表类型：
     - supervision：隐患督办通报（红色/一般预警清单，按部门分组）
@@ -349,6 +349,8 @@ async def push_report_to_chat(
     - alarm：消防/中控报警日报（scope=fire 消防默认 / central 中控）
 
     典型用法：用户说「把日报发到群里」「把督办通报推送到XX群」「报表推送」时调用。
+    ⚠️ 用户显式给出群名/chat_id（「发到XX群」「推送到指定群」）时必须选本工具并
+    填 chat_id，不要改用 generate_alarm_report 等生成类工具。
     「把督办通报发到群里」不指定群时走常驻的 send_hazard_supervision_bulletin
     即可；本工具用于需要指定目标群、或推其他两类报表的场景。
 
@@ -363,6 +365,75 @@ async def push_report_to_chat(
     """
     kind = (report_kind or "").strip().lower()
     target = (chat_id or "").strip() or None
+
+    # ── P0-3：点名群只发点名群（不写速递总卡）─────────────────────
+    # service 层 deliver 分支在总卡开启时会吞掉显式 chat_id 投格子（值守
+    # 轮询/定时任务也都带 chat_id 调同一函数，不能在 service 层按 chat_id
+    # 区分）；故显式目标在工具层绕开 service 推送路径：生成(不推) + 直发。
+    if kind == "supervision" and target:
+        from app.modules.safety.feishu.notification import send_group_card
+        from app.modules.safety.service.hazard_direct.bulletin import build_bulletin
+
+        content, stats = await build_bulletin()
+        ok = await send_group_card(
+            chat_id=target, title="隐患督办通报", content=content,
+        )
+        stats["sent"] = bool(ok)
+        stats["success"] = True
+        stats["action"] = "report_pushed"
+        stats["message"] = (
+            f"督办通报已直发指定群：未关闭 {stats.get('total', 0)} 项"
+            f"（红色预警 {stats.get('urgent', 0)}、一般预警 {stats.get('warning', 0)}），"
+            f"推送{'成功' if ok else '未成功'}"
+        )
+        return stats
+
+    if kind == "alarm" and target:
+        svc_scope = (scope or "fire").strip().lower()
+        if svc_scope == "fire":
+            from app.modules.safety.service.fire_alarm.service import FireAlarmService
+
+            service = FireAlarmService(ctx.deps.db)
+            title_tpl = "消防报警日报"
+        elif svc_scope == "central":
+            from app.modules.safety.service.central_alarm.service import (
+                CentralAlarmService,
+            )
+
+            service = CentralAlarmService(ctx.deps.db)
+            title_tpl = "中控报警日报"
+        else:
+            return {
+                "success": False,
+                "error": (
+                    f"未知 scope={scope!r}，报警日报可选：fire（消防）/ central（中控）"
+                ),
+            }
+        result = await service.generate_daily_report(
+            push=False, channel="feishu",
+        )
+        from app.modules.safety.feishu.notification import send_group_card
+
+        title = f"{title_tpl} - {result.target_date.strftime('%Y-%m-%d')}"
+        ok = await send_group_card(
+            chat_id=target, title=title, content=result.markdown_report,
+        )
+        await ctx.deps.db.commit()
+        return {
+            "success": True,
+            "action": "report_pushed",
+            "report_kind": "alarm",
+            "scope": svc_scope,
+            "report_date": result.target_date.isoformat()
+            if hasattr(result.target_date, "isoformat") else str(result.target_date),
+            "total": result.total,
+            "analyzed": getattr(result, "analyzed", None),
+            "sent": bool(ok),
+            "message": (
+                f"{'消防' if svc_scope == 'fire' else '中控'}报警日报已直发指定群："
+                f"当日报警 {result.total} 条，推送{'成功' if ok else '未成功'}"
+            ),
+        }
 
     if kind == "supervision":
         from app.modules.safety.service.hazard_direct.bulletin import send_bulletin
