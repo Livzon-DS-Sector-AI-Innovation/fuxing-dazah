@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FacilityMapCard } from './FacilityMapCard'
 import { renderWithQuery } from '@/test/utils'
 import asset from '@/data/tiji-risk-districts.json'
+import { BUILDINGS } from '@/data/f2-buildings'
 
 // pins 数据走接口替身（vi.mock factory 提升到顶部，样例必须内联）
 const PINS = {
@@ -75,8 +76,8 @@ const PINS = {
         },
       ],
     },
-    // 同轮廓组：车间一达托(1)/车间一达巴(11) 共用建筑轮廓——徽标合并、
-    // 点击任一多边形弹出整组（两分区）明细
+    // 1 号楼（车间一）：达托(1) 中控报警 + 达巴(11) 超储 + 雷帕(29) 中控
+    // 报警——29 的平台几何画在 2 号楼轮廓组，数据按拍板归 1 号楼
     {
       dist_id: '1',
       jobs: { hot: 0, confined: 0, other: 0 },
@@ -118,6 +119,25 @@ const PINS = {
         },
       ],
     },
+    {
+      dist_id: '29',
+      jobs: { hot: 0, confined: 0, other: 0 },
+      alarms: { fire: 0, central: 1 },
+      key_risks: 0,
+      over_limits: 0,
+      hazard_news: 0,
+      hazard_opens: 0,
+      fire_ext_dues: 0,
+      truncated: false,
+      refs: [
+        {
+          kind: 'central',
+          alarm_date: '2026-10-26',
+          alarm_description: '雷帕四楼反应釜温度高',
+          workshop: '提四雷帕',
+        },
+      ],
+    },
   ],
   unmapped: [
     { text: '212罐', count: 3, kinds: ['job'] },
@@ -142,6 +162,22 @@ vi.mock('@/lib/api/safety/facility-map', () => ({
   confirmHighDistrictSuggestions: vi.fn(async () => ({ confirmed: 1, map_created: 1 })),
 }))
 
+// 同轮廓组去重后期望的轮廓数（独立于实现：按原始坐标分组，每组只计
+// 首个成员的有效 rail 数）
+const EXPECTED_POLYS = (() => {
+  const seen = new Map<string, number>()
+  for (const d of asset.districts) {
+    const key = d.rails
+      .map(r => r.polygon.map(p => p.join(',')).join(';'))
+      .sort()
+      .join('|')
+    if (!seen.has(key)) {
+      seen.set(key, d.rails.filter(r => r.polygon.length >= 3).length)
+    }
+  }
+  return [...seen.values()].reduce((a, b) => a + b, 0)
+})()
+
 const RAIL_COUNT = asset.districts.reduce((n, d) => n + d.rails.length, 0)
 
 // #2 AI 建议确认页工作集（打开 Modal 才拉取）
@@ -162,31 +198,44 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('FacilityMapCard', () => {
-  it('渲染资产全部分区轮廓与落点徽标', async () => {
+describe('FacilityMapCard · 建筑级视图', () => {
+  it('渲染 33 栋建筑；同轮廓组只画一次（雷帕 29 不单独画轮廓）', async () => {
     renderWithQuery(<FacilityMapCard />)
-    const groups = await screen.findAllByTestId(/^district-poly-/)
-    expect(groups.length).toBe(asset.districts.length)
-    // 每条 rail 一个多边形（64 分区 / 84 rail）
-    const polys = document.querySelectorAll('[data-testid^="district-poly-"] polygon')
-    expect(polys.length).toBe(RAIL_COUNT)
-    // 消防控制室(dist 77)：动火 2 + 关键风险 1 + 超储 1 + 隐患双口径 + 消防到期 + 报警 1 徽标
-    const badge = await screen.findByTestId('district-badge-77')
-    expect(badge.textContent).toContain('火2')
-    expect(badge.textContent).toContain('险1')
-    expect(badge.textContent).toContain('储1')
-    expect(badge.textContent).toContain('患1')
-    expect(badge.textContent).toContain('改1')
-    expect(badge.textContent).toContain('消到1')
-    expect(badge.textContent).toContain('警1')
+    const groups = await screen.findAllByTestId(/^building-poly-/)
+    expect(groups).toHaveLength(BUILDINGS.length)
+    expect(BUILDINGS).toHaveLength(33)
+    // 同轮廓组合成：多分区共用轮廓画一次（29 所在组 6 成员仅 1 片轮廓）
+    const polys = document.querySelectorAll('[data-testid^="building-poly-"] polygon')
+    expect(polys.length).toBe(EXPECTED_POLYS)
+    expect(EXPECTED_POLYS).toBeLessThan(RAIL_COUNT)
+    // 2 号楼：9/21/22/23/24/29 六分区共用轮廓 → 一片轮廓
+    expect(
+      document.querySelectorAll('[data-testid="building-poly-2"] polygon').length,
+    ).toBe(1)
+    // 1 号楼：达托/达巴共用轮廓一片 + 异丙醇回收(27) 一片；29 不贡献轮廓
+    expect(
+      document.querySelectorAll('[data-testid="building-poly-1"] polygon').length,
+    ).toBe(2)
   })
 
-  it('点击分区弹出当日明细 Modal（含关键风险作业段）', async () => {
+  it('徽标按建筑聚合：1 号楼含 29 的雷帕报警（警2）与达巴超储（储1）', async () => {
+    renderWithQuery(<FacilityMapCard />)
+    const badge = await screen.findByTestId('building-badge-1')
+    expect(badge.textContent).toContain('警2')
+    expect(badge.textContent).toContain('储1')
+  })
+
+  it('点击 28 号楼弹出建筑信息头与七路明细', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
-    await screen.findByTestId('district-badge-77')
-    await user.click(screen.getByTestId('district-poly-77'))
+    await screen.findByTestId('building-badge-28')
+    await user.click(screen.getByTestId('building-poly-28'))
     const modal = await screen.findByRole('dialog')
+    // 建筑信息头：编号+名称+责任部门+产线明细
+    expect(modal.textContent).toContain('28 消防控制室')
+    expect(modal.textContent).toContain('责任部门：安全工程中心')
+    expect(modal.textContent).toContain('消控室（仅消防')
+    // 明细
     expect(modal.textContent).toContain('DH-20261026-004')
     expect(modal.textContent).toContain('火灾报警')
     expect(modal.textContent).toContain('关键风险作业 1 项')
@@ -194,52 +243,61 @@ describe('FacilityMapCard', () => {
     expect(modal.textContent).toContain('乙腈')
     expect(modal.textContent).toContain('米尔贝放硅胶')
     expect(modal.textContent).toContain('已通过')
-  })
-
-  it('Modal 隐患双口径与消防设施到期三段：描述/级别/进展/到期状态', async () => {
-    const user = userEvent.setup()
-    renderWithQuery(<FacilityMapCard />)
-    await screen.findByTestId('district-badge-77')
-    await user.click(screen.getByTestId('district-poly-77'))
-    const modal = await screen.findByRole('dialog')
-    // 三段标题
+    // 隐患双口径 + 消防到期
     expect(modal.textContent).toContain('今日新增隐患 1 条')
     expect(modal.textContent).toContain('未整改隐患 1 条')
     expect(modal.textContent).toContain('消防设施到期 1 处')
-    // 新增段：编号+描述；未整改段：级别(重大)+进展
-    expect(modal.textContent).toContain('HZ-20261026-008')
-    expect(modal.textContent).toContain('消防控制室门口堆放纸箱堵塞通道')
-    expect(modal.textContent).toContain('HZ-20261010-003')
-    expect(modal.textContent).toContain('重大')
-    expect(modal.textContent).toContain('已联系仪表，待更换')
-    // 消防段：位置/类型/数量/到期日/已到期标红文案
-    expect(modal.textContent).toContain('消控室入口东侧')
-    expect(modal.textContent).toContain('手提式干粉灭火器')
-    expect(modal.textContent).toContain('2026-10-20')
     expect(modal.textContent).toContain('已到期')
+    expect(modal.textContent).toContain('收编分区：消防控制室')
   })
 
-  it('同轮廓分区组合并：点达托/达巴任一多边形都弹出两分区明细与超储', async () => {
+  it('点击 1 号楼：达托/达巴/雷帕成员明细聚合展示，子单元与责任部门可见（29 数据归 1 号楼钉子）', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
-    await screen.findAllByTestId(/^district-poly-/)
-    // 徽标合并挂组首分区（资产顺序车间一达巴=11 在前）：警1 + 储1
-    const badge = await screen.findByTestId('district-badge-11')
-    expect(badge.textContent).toContain('警1')
-    expect(badge.textContent).toContain('储1')
-    // 点击车间一达巴的多边形（与达托共用轮廓）也开整组
-    await user.click(screen.getByTestId('district-poly-11'))
+    await screen.findByTestId('building-badge-1')
+    await user.click(screen.getByTestId('building-poly-1'))
     const modal = await screen.findByRole('dialog')
-    expect(modal.textContent).toContain('车间一达巴 / 车间一达托')
+    expect(modal.textContent).toContain('1 车间一')
+    expect(modal.textContent).toContain('责任部门：提炼工程五部')
+    expect(modal.textContent).toContain('└ 子单元：异丙醇回收（提炼工程四部）')
+    expect(modal.textContent).toContain('收编分区：')
+    expect(modal.textContent).toContain('提四雷帕')
+    expect(modal.textContent).toContain('车间一达托')
+    // 三个成员的当日明细都在同一弹窗（29 的雷帕报警落 1 号楼）
+    expect(modal.textContent).toContain('P0405A泵温度高')
+    expect(modal.textContent).toContain('雷帕四楼反应釜温度高')
     expect(modal.textContent).toContain('车间一达巴粗提')
     expect(modal.textContent).toContain('乙醇')
-    expect(modal.textContent).toContain('P0405A泵温度高')
+    expect(modal.textContent).toContain('今日报警 2 条')
+  })
+
+  it('点击 3 号楼：子单元「乙腈回收＋丙醇回收」在信息头展示', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^building-poly-/)
+    await user.click(screen.getByTestId('building-poly-3'))
+    const modal = await screen.findByRole('dialog')
+    expect(modal.textContent).toContain('3 待命名')
+    expect(modal.textContent).toContain('└ 子单元：乙腈回收＋丙醇回收（提炼工程四部）')
+    expect(modal.textContent).toContain('替考')
+  })
+
+  it('色系族图例（11 族）与徽标图例同条展示', async () => {
+    renderWithQuery(<FacilityMapCard />)
+    await screen.findAllByTestId(/^building-poly-/)
+    expect(screen.getByText('提炼一部')).toBeInTheDocument()
+    expect(screen.getByText('提炼多部共用')).toBeInTheDocument()
+    expect(screen.getByText('公用辅助')).toBeInTheDocument()
+    expect(screen.getByText('环保')).toBeInTheDocument()
+    expect(screen.getByText('动火')).toBeInTheDocument()
+    // 「未整改隐患」同时在图例与未映射栏来源 Tag 出现——多处命中即存在
+    expect(screen.getAllByText('未整改隐患').length).toBeGreaterThan(0)
   })
 
   it('按压带轻微抖动（<4px）仍是点击，弹出明细 Modal', async () => {
     renderWithQuery(<FacilityMapCard />)
-    await screen.findAllByTestId(/^district-poly-/)
-    const poly = screen.getByTestId('district-poly-77')
+    await screen.findAllByTestId(/^building-poly-/)
+    const poly = screen.getByTestId('building-poly-28')
     // pointer 事件挂在 svg 上，从 polygon 冒泡；抖动 3px 未过拖动阈值
     fireEvent.pointerDown(poly, { button: 0, pointerId: 1 })
     fireEvent.pointerMove(poly, { pointerId: 1, clientX: 2, clientY: 1 })
@@ -249,15 +307,15 @@ describe('FacilityMapCard', () => {
     expect(modal.textContent).toContain('DH-20261026-004')
   })
 
-  it('拖动平移后的松手不当作分区点击（不弹 Modal）', async () => {
+  it('拖动平移后的松手不当作建筑点击（不弹 Modal）', async () => {
     renderWithQuery(<FacilityMapCard />)
-    await screen.findAllByTestId(/^district-poly-/)
-    const poly = screen.getByTestId('district-poly-77')
+    await screen.findAllByTestId(/^building-poly-/)
+    const poly = screen.getByTestId('building-poly-28')
     fireEvent.pointerDown(poly, { button: 0, pointerId: 1 })
     fireEvent.pointerMove(poly, { pointerId: 1, clientX: 12, clientY: 3 }) // 15px 越过阈值
     fireEvent.pointerUp(poly, { pointerId: 1 })
     fireEvent.click(poly)
-    // click 被吞：无分区明细（本测试无其他 dialog 触发源）
+    // click 被吞：无建筑明细（本测试无其他 dialog 触发源）
     expect(document.querySelector('.ant-modal')).toBeNull()
   })
 
@@ -288,8 +346,8 @@ describe('FacilityMapCard', () => {
   it('缩放按钮调整视图且可重置', async () => {
     const user = userEvent.setup()
     const { container } = renderWithQuery(<FacilityMapCard />)
-    await screen.findAllByTestId(/^district-poly-/)
-    const svg = container.querySelector('svg[aria-label="厂区风险分区底图"]') as SVGSVGElement
+    await screen.findAllByTestId(/^building-poly-/)
+    const svg = container.querySelector('svg[aria-label="厂区建筑底图"]') as SVGSVGElement
     const vbW = () => Number(svg.getAttribute('viewBox')!.split(/\s+/)[2])
     expect(vbW()).toBe(1000)
     await user.click(screen.getByRole('button', { name: '放大' }))
@@ -299,38 +357,23 @@ describe('FacilityMapCard', () => {
     expect(vbW()).toBe(1000)
   })
 
-  it('分区名称标注随放大显现', async () => {
+  it('放大后建筑编号/名称标注显现（编号+名称格式）', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
-    await screen.findAllByTestId(/^district-poly-/)
+    await screen.findAllByTestId(/^building-poly-/)
     await user.click(screen.getByRole('button', { name: '放大' }))
-    const labels = await screen.findAllByTestId(/^district-label-/)
-    const names = new Set(asset.districts.map(d => d.distName))
-    expect(labels.some(l => names.has(l.textContent ?? ''))).toBe(true)
-  })
-
-  it('重叠分区名称不相交（米尔贝/提四米贝锚点近邻，贪心避让保证矩形分离）', async () => {
-    renderWithQuery(<FacilityMapCard />)
-    await screen.findAllByTestId(/^district-poly-/)
-    await waitFor(() => {
-      const milbei = document.querySelector('[data-testid="district-label-7"]')
-      const tiSi = document.querySelector('[data-testid="district-label-20"]')
-      expect(milbei).toBeTruthy()
-      expect(tiSi).toBeTruthy()
-      // 与避让算法同口径的矩形（zoom=1：fs=13，w=len*fs*0.95，h=fs*1.3）：
-      // 两标签矩形必须不相交（x 分离或 y 分离）
-      const fs = 13
-      const rectOf = (el: Element, name: string) => {
-        const w = name.length * fs * 0.95
-        const x = Number(el.getAttribute('x'))
-        const y = Number(el.getAttribute('y'))
-        return { x1: x - w / 2, x2: x + w / 2, y1: y - fs * 0.65, y2: y + fs * 0.65 }
-      }
-      const a = rectOf(milbei!, '米尔贝')
-      const b = rectOf(tiSi!, '提四米贝')
-      const separated =
-        a.x2 <= b.x1 || b.x2 <= a.x1 || a.y2 <= b.y1 || b.y2 <= a.y1
-      expect(separated).toBe(true)
-    })
+    await user.click(screen.getByRole('button', { name: '放大' }))
+    await user.click(screen.getByRole('button', { name: '放大' }))
+    const labels = await screen.findAllByTestId(/^building-label-/)
+    // 标注文本都是合法建筑标注（编号 或 编号+名称）
+    const valid = new Set(
+      BUILDINGS.map(b => (b.name ? `${b.id} ${b.name}` : `${b.id}`)),
+    )
+    for (const l of labels) {
+      expect(valid.has(l.textContent ?? '')).toBe(true)
+    }
+    // 放大三级后多数建筑已有标注
+    const distinct = new Set(labels.map(l => l.getAttribute('data-testid')))
+    expect(distinct.size).toBeGreaterThanOrEqual(20)
   })
 })

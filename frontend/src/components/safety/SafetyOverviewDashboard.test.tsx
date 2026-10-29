@@ -141,14 +141,19 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
   it('渲染 6 项 KPI（含隐患较昨日 delta 与高险/真报副文本）', async () => {
     renderWithQuery(<SafetyOverviewDashboard />)
 
-    expect(await screen.findByText('12')).toBeInTheDocument()
+    // KPI 数字按 div 收窄——图卡建筑编号标注（svg text）也产出纯数字文本
+    const kpiNum = (v: string) =>
+      screen.getByText((content, el) => el?.tagName === 'DIV' && content === v)
+    expect(await screen
+      .findByText((content, el) => el?.tagName === 'DIV' && content === '12')
+    ).toBeInTheDocument()
     expect(screen.getByText(/较昨日/)).toBeInTheDocument()
-    expect(screen.getByText('8')).toBeInTheDocument()
+    expect(kpiNum('8')).toBeInTheDocument()
     expect(screen.getByText('高风险 2 项')).toBeInTheDocument()
-    expect(screen.getByText('15')).toBeInTheDocument()
+    expect(kpiNum('15')).toBeInTheDocument()
     expect(screen.getByText('真报 1 起（消防口径）')).toBeInTheDocument()
-    expect(screen.getByText('9')).toBeInTheDocument()
-    expect(screen.getByText('3')).toBeInTheDocument()
+    expect(kpiNum('9')).toBeInTheDocument()
+    expect(kpiNum('3')).toBeInTheDocument()
     // 「今日安全速递」同时是 KPI 标签与速递区块标题
     expect(screen.getAllByText('今日安全速递')).toHaveLength(2)
     expect(screen.getByText('机器人已推送日报条数')).toBeInTheDocument()

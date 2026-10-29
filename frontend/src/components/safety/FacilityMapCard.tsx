@@ -1,24 +1,26 @@
 'use client'
 
 /**
- * 厂区风险分区 · 当日分布图卡（3.x 平台关联 F2）。
+ * 厂区风险分区 · 当日分布图卡（3.x 平台关联 F2 · 建筑级两级模型）。
  *
- * 底图：64 分区轮廓静态资产（src/data/tiji-risk-districts.json，经纬度坐标，
- * 一次性快照），SVG 直绘无地图库——经纬差投影到 viewBox（纬度按 cos(25.46°)
- * 纠正 N-S 比例，y 轴翻转北上）；当日有落点的分区淡靛底色强调，其余暖灰。
- * 交互：滚轮/触控板缩放（以光标为锚）+ 拖动平移（viewBox 实现，拖动后不触发
- * 分区点击）+ 右上角放大/缩小/重置按钮；徽标与名称标注按 1/zoom 缩放保持
- * 屏幕等大，名称标注随放大逐级显现（放得下才显示）。
- * 落点：当日作业票（动火红/受限橙/其他蓝）+ 今日消防/中控报警（黄），
- * 多票计数徽标挂分区质心；点击分区出当日明细 Modal。
- * 布局：底图近正方形（宽高比≈1.05），通栏卡按宽撑高会到 ~1.3 屏高——
- * 地图盒高度封顶 min(75vh,760px)、宽度=高×宽高比（贴合绘制区）；图例
- * 通栏横条一行；「未映射」栏 xl 起固定 300px 与地图并排等高（清单滚轮
- * 滚动），整卡一屏可见。名称标注贪心避让
- * （标签×标签、标签×徽标矩形相交即跳过，相邻重叠分区不全画）；
- * 「未映射」栏清单直出 + AI 建议确认入口（#2）。
- * 第七/八路（2026-10-27）：今日新增隐患（患·深红）+ 未整改隐患（改·紫红，
- * 当前态）+ 消防设施到期（消到·橙，已到期+30 天临期，当前态）。
+ * 视图（2026-10 分区大改，旧 64 分区视图退役）：33 栋建筑（图上唯一编号
+ * 1-33，一建筑一号）+ 建筑内子单元；建筑定义与 distId 归并为前端静态配置
+ * （src/data/f2-buildings.ts），映射/落点后端链路不动。底图为 64 分区轮廓
+ * 静态资产（src/data/tiji-risk-districts.json，经纬度快照），SVG 直绘无地图
+ * 库——经纬差投影到 viewBox（纬度按 cos(25.46°) 纠正 N-S 比例，y 轴翻转
+ * 北上）。
+ *
+ * 几何合成：平台按建筑建模，多个分区共用同一轮廓（shapesKey 同轮廓组）；
+ * 每组轮廓归属=组内多数成员所在建筑（平票取小建筑号），画一次代表轮廓——
+ * 母建筑多片轮廓标同号；少数派成员（雷帕 dist29，几何画进 2 号楼轮廓组）
+ * 收数据不收轮廓：数据/落点/弹窗全归 1 号楼（拍板特例）。
+ * 色系：按主责部门归并 11 族（BUILDING_FAMILIES），当日有落点用各族
+ * active 态强调；徽标/计数/弹窗七路明细全部按建筑聚合。
+ * 交互：滚轮/触控板缩放（光标锚）+ 拖动平移（拖动吞点击）+ 右上角放大/
+ * 缩小/重置；徽标与编号标注按 1/zoom 缩放保持屏幕等大，标注随放大逐级显现。
+ * 布局：地图盒高度封顶 min(75vh,760px)、宽度=高×宽高比（min() 显式算而非
+ * aspect-ratio——部分渲染内核对 svg 容器不生效）；「未映射」栏 xl 起固定
+ * 300px 与地图并排等高（清单滚轮滚动），整卡一屏可见。编号标注贪心避让。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -43,6 +45,12 @@ import {
   ConfidenceTag,
 } from '@/components/safety/aiConfirm/AiSuggestionConfirmModal'
 import asset from '@/data/tiji-risk-districts.json'
+import {
+  BUILDINGS,
+  BUILDING_FAMILIES,
+  DIST_TO_BUILDING,
+  type BuildingDef,
+} from '@/data/f2-buildings'
 
 interface RailAsset {
   name: string
@@ -64,7 +72,7 @@ const VIEW_W = 1000
 // 厂区纬度 ~25.46°N，cos 纠正纬度跨度后 N-S 比例接近真实
 const LAT_SCALE = Math.cos((25.46 * Math.PI) / 180)
 
-// 画布内边距：边缘分区的名称标注不被 viewBox 裁切
+// 画布内边距：边缘建筑的编号标注不被 viewBox 裁切
 const CANVAS_PAD = 18
 
 const GEOM = (() => {
@@ -108,7 +116,7 @@ interface RenderedDistrict {
   shapesKey: string
   /** 徽标挂点：最大 rail 的 bbox 中心 */
   anchor: [number, number]
-  /** 最大 rail 的 bbox [x, y, w, h]（viewBox 单位，名称标注放得下判断用） */
+  /** 最大 rail 的 bbox [x, y, w, h]（viewBox 单位，编号标注放得下判断用） */
   bbox: [number, number, number, number]
 }
 
@@ -145,7 +153,8 @@ const RENDERED: RenderedDistrict[] = (() => {
 })()
 
 // ── 同轮廓分组：平台按建筑建模，多个分区（产线/功能区）共用同一轮廓。
-// 徽标按组合并计数只挂一组（否则叠死在同一点）；点击弹窗按分区分段展示。
+// 组轮廓归属=组内多数成员所在建筑（平票取小建筑号）；少数派成员收数据
+// 不收轮廓（雷帕 dist29：几何画进 2 号楼轮廓组，数据全归 1 号楼）。
 const GEOM_GROUPS: RenderedDistrict[][] = (() => {
   const byKey = new Map<string, RenderedDistrict[]>()
   for (const r of RENDERED) {
@@ -156,11 +165,68 @@ const GEOM_GROUPS: RenderedDistrict[][] = (() => {
   return [...byKey.values()]
 })()
 
-const GROUP_BY_DIST = new Map<string, RenderedDistrict[]>(
-  GEOM_GROUPS.flatMap(g => g.map(r => [r.dist.distId, g] as const)),
-)
+interface BuildingPiece {
+  /** 一片轮廓=该建筑名下一个同轮廓组的代表 rail 集（各 rail 同形状只画一次） */
+  shapes: string[]
+  anchor: [number, number]
+  bbox: [number, number, number, number]
+}
 
-const BY_DIST_ID = new Map(RENDERED.map(r => [r.dist.distId, r]))
+interface BuildingGeo {
+  id: number
+  /** 轮廓片（面积降序；[0] 为主片=徽标/标注锚点） */
+  pieces: BuildingPiece[]
+  anchor: [number, number]
+  bbox: [number, number, number, number]
+}
+
+const BUILDING_GEOS: BuildingGeo[] = (() => {
+  const byBuilding = new Map<number, BuildingPiece[]>()
+  for (const group of GEOM_GROUPS) {
+    // 多数成员归属（平票取小建筑号：按建筑号升序遍历、严格大于才接管）
+    const counts = new Map<number, number>()
+    for (const r of group) {
+      const b = DIST_TO_BUILDING.get(r.dist.distId)
+      if (b != null) counts.set(b, (counts.get(b) ?? 0) + 1)
+    }
+    let owner = -1
+    let best = 0
+    for (const b of [...counts.keys()].sort((a, z) => a - z)) {
+      const n = counts.get(b)!
+      if (n > best) {
+        best = n
+        owner = b
+      }
+    }
+    const rep =
+      group.find(r => DIST_TO_BUILDING.get(r.dist.distId) === owner) ?? group[0]
+    const list = byBuilding.get(owner)
+    if (list) list.push({ shapes: rep.shapes, anchor: rep.anchor, bbox: rep.bbox })
+    else byBuilding.set(owner, [{ shapes: rep.shapes, anchor: rep.anchor, bbox: rep.bbox }])
+  }
+  return BUILDINGS.map(def => {
+    const pieces = (byBuilding.get(def.id) ?? []).sort(
+      (a, b) => b.bbox[2] * b.bbox[3] - a.bbox[2] * a.bbox[3],
+    )
+    const main = pieces[0]
+    return {
+      id: def.id,
+      pieces,
+      anchor: main?.anchor ?? [0, 0],
+      bbox: main?.bbox ?? [0, 0, 0, 0],
+    }
+  }).filter(g => g.pieces.length > 0)
+})()
+
+const GEO_BY_ID = new Map(BUILDING_GEOS.map(g => [g.id, g] as const))
+
+/** 建筑数据成员（资产分区级，含数据-only 成员如雷帕 29） */
+const MEMBERS_BY_BUILDING = new Map<number, RenderedDistrict[]>(
+  BUILDINGS.map(def => [
+    def.id,
+    RENDERED.filter(r => DIST_TO_BUILDING.get(r.dist.distId) === def.id),
+  ] as const),
+)
 
 // ── 视图（viewBox 缩放平移）──────────────────────────────────────────
 interface ViewBox {
@@ -194,14 +260,9 @@ const MAP_BOX_STYLE = {
 } as const
 
 // ── 配色 ────────────────────────────────────────────────────────────
-// 底图：当日有落点=淡靛强调，其余暖灰；hover 统一加深
-const FILL_BASE = '#f5f4f1'
-const STROKE_BASE = '#d7d3cb'
-const FILL_ACTIVE = '#e9eefb'
-const STROKE_ACTIVE = '#8ba3e8'
-const FILL_HOVER = '#dce6fa'
+// 建筑底色=色系族（BUILDING_FAMILIES，11 族按主责部门归并）；当日有落点
+// 用各族 active 态。徽标色不变（动火红/受限橙/其他蓝/报警黄等）。
 const LABEL_FILL = '#7a766d'
-// 徽标色（动火红/受限橙/其他蓝/报警黄）
 const BADGES = [
   { key: 'hot', label: '火', fill: '#d92d20' },
   { key: 'confined', label: '受', fill: '#f79009' },
@@ -225,21 +286,6 @@ const HAZARD_OPEN_FILL = '#c2255c'
 
 // 消防设施到期徽标（橙，当前态快照：已到期+30 天临期）
 const FIRE_EXT_FILL = '#e8590c'
-
-// 图例（10 项）：原挤卡头 action 通栏下要换行 3-4 行，迁至右侧纵栏
-const LEGEND: { label: string; fill: string; stroke?: string; square?: boolean }[] = [
-  { label: '当日有落点', fill: FILL_ACTIVE, stroke: STROKE_ACTIVE, square: true },
-  ...BADGES.map(b => ({
-    label: b.label === '火' ? '动火' : b.label === '受' ? '受限' : '其他作业',
-    fill: b.fill as string,
-  })),
-  { label: '关键风险作业', fill: RISK_FILL },
-  { label: '超储物料', fill: OVER_LIMIT_FILL },
-  { label: '今日新增隐患', fill: HAZARD_NEW_FILL },
-  { label: '未整改隐患', fill: HAZARD_OPEN_FILL },
-  { label: '消防设施到期', fill: FIRE_EXT_FILL },
-  { label: '报警', fill: ALARM_FILL, stroke: ALARM_STROKE },
-]
 
 const KIND_LABEL: Record<string, string> = {
   job: '作业票',
@@ -286,31 +332,36 @@ function badgeChips(pin: FacilityMapDistrictPin): { label: string; fill: string 
   return chips
 }
 
+// 徽标片尺寸（BadgeGroup 渲染与标注避让占位共用同一口径）
+const CHIP_W = 38
+const CHIP_HALF_H = 11
+
 /** 徽标组：横向串排；按 1/zoom 缩放保持屏幕等大 */
 function BadgeGroup({
+  buildingId,
   pin,
   anchor,
   zoom,
 }: {
+  buildingId: number
   pin: FacilityMapDistrictPin
   anchor: [number, number]
   zoom: number
 }) {
   const chips = badgeChips(pin)
   if (!chips.length) return null
-  const w = 38
-  const total = chips.length * w
+  const total = chips.length * CHIP_W
   return (
     <g
-      data-testid={`district-badge-${pin.dist_id}`}
+      data-testid={`building-badge-${buildingId}`}
       pointerEvents="none"
-      transform={`translate(${anchor[0]} ${anchor[1]}) scale(${1 / zoom}) translate(${-total / 2} ${-11})`}
+      transform={`translate(${anchor[0]} ${anchor[1]}) scale(${1 / zoom}) translate(${-total / 2} ${-CHIP_HALF_H})`}
     >
       {chips.map((chip, i) => (
-        <g key={chip.label} transform={`translate(${i * w}, 0)`}>
-          <rect width={w - 4} height={22} rx={11} fill="#fff" stroke={chip.fill} strokeWidth={1.5} />
+        <g key={chip.label} transform={`translate(${i * CHIP_W}, 0)`}>
+          <rect width={CHIP_W - 4} height={CHIP_HALF_H * 2} rx={CHIP_HALF_H} fill="#fff" stroke={chip.fill} strokeWidth={1.5} />
           <text
-            x={(w - 4) / 2}
+            x={(CHIP_W - 4) / 2}
             y={15}
             textAnchor="middle"
             fontSize={13}
@@ -438,8 +489,8 @@ const FIRE_EXT_COLUMNS: TableColumnsType<FacilityMapPinRef> = [
   },
 ]
 
-/** 弹窗分区段：单分区组直接渲染；同轮廓组分段（每分区副标题 + 各自七表） */
-function ZoneSection({ pin }: { pin: FacilityMapDistrictPin }) {
+/** 弹窗当日七路段（按建筑聚合：全部成员 refs 合并，计数完整） */
+function BuildingDetailSection({ pin }: { pin: FacilityMapDistrictPin }) {
   const jobs = pin.refs.filter(r => r.kind === 'job')
   const keyRisks = pin.refs.filter(r => r.kind === 'key_risk')
   const overLimits = pin.refs.filter(r => r.kind === 'over_limit')
@@ -450,31 +501,31 @@ function ZoneSection({ pin }: { pin: FacilityMapDistrictPin }) {
   const sections: { label: string; columns: TableColumnsType<FacilityMapPinRef>; rows: FacilityMapPinRef[]; empty: string; key: string }[] = [
     {
       label: `特殊作业票 ${jobs.length} 张${pin.truncated ? '（明细超 50 条已截断，计数完整）' : ''}`,
-      columns: JOB_COLUMNS, rows: jobs, empty: '本分区当日无作业票', key: 'j',
+      columns: JOB_COLUMNS, rows: jobs, empty: '本建筑当日无作业票', key: 'j',
     },
     {
       label: `关键风险作业 ${keyRisks.length} 项（当日已通过/审批中）`,
-      columns: KEY_RISK_COLUMNS, rows: keyRisks, empty: '本分区当日无关键风险作业', key: 'k',
+      columns: KEY_RISK_COLUMNS, rows: keyRisks, empty: '本建筑当日无关键风险作业', key: 'k',
     },
     {
       label: `超储物料 ${overLimits.length} 项（当前库存态）`,
-      columns: OVER_LIMIT_COLUMNS, rows: overLimits, empty: '本分区无超储物料', key: 'o',
+      columns: OVER_LIMIT_COLUMNS, rows: overLimits, empty: '本建筑无超储物料', key: 'o',
     },
     {
       label: `今日新增隐患 ${hazardsNew.length} 条（检查日期=今日）`,
-      columns: HAZARD_COLUMNS, rows: hazardsNew, empty: '本分区今日无新增隐患', key: 'hn',
+      columns: HAZARD_COLUMNS, rows: hazardsNew, empty: '本建筑今日无新增隐患', key: 'hn',
     },
     {
       label: `未整改隐患 ${hazardsOpen.length} 条（当前未闭环）`,
-      columns: HAZARD_COLUMNS, rows: hazardsOpen, empty: '本分区无未整改隐患', key: 'ho',
+      columns: HAZARD_COLUMNS, rows: hazardsOpen, empty: '本建筑无未整改隐患', key: 'ho',
     },
     {
       label: `消防设施到期 ${fireExts.length} 处（已到期+30 天内临期）`,
-      columns: FIRE_EXT_COLUMNS, rows: fireExts, empty: '本分区无到期/临期消防设施', key: 'fe',
+      columns: FIRE_EXT_COLUMNS, rows: fireExts, empty: '本建筑无到期/临期消防设施', key: 'fe',
     },
     {
       label: `今日报警 ${alarms.length} 条`,
-      columns: ALARM_COLUMNS, rows: alarms, empty: '本分区今日无报警', key: 'a',
+      columns: ALARM_COLUMNS, rows: alarms, empty: '本建筑今日无报警', key: 'a',
     },
   ]
   return (
@@ -511,42 +562,76 @@ const EMPTY_PIN = (distId: string): FacilityMapDistrictPin => ({
   truncated: false,
 })
 
-function DistrictModal({
-  members,
+interface BuildingMemberView {
+  distId: string
+  distName: string
+  pin: FacilityMapDistrictPin
+}
+
+interface BuildingView {
+  def: BuildingDef
+  members: BuildingMemberView[]
+  agg: Pick<
+    FacilityMapDistrictPin,
+    'jobs' | 'alarms' | 'key_risks' | 'over_limits' | 'hazard_news' | 'hazard_opens' | 'fire_ext_dues'
+  >
+  hasPin: boolean
+}
+
+/** 建筑聚合 pin（计数口径，徽标/标注避让共用） */
+function buildingCountsPin(b: BuildingView): FacilityMapDistrictPin {
+  return { ...EMPTY_PIN(String(b.def.id)), ...b.agg }
+}
+
+/** 建筑弹窗：建筑信息头（名称/责任部门/产线/子单元/收编分区）+ 七路聚合明细 */
+function BuildingModal({
+  building,
   date,
   onClose,
 }: {
-  members: { name: string; pin: FacilityMapDistrictPin }[] | null
+  building: BuildingView | null
   date: string
   onClose: () => void
 }) {
-  // 同轮廓多分区：只展开有明细的分区；全组无数据则退回首分区空表
-  const withRefs = members?.filter(m => m.pin.refs.length > 0) ?? []
-  const shown = withRefs.length > 0 ? withRefs : (members ? [members[0]] : [])
-  const title =
-    shown.length > 3
-      ? `${shown[0].name} 等 ${shown.length} 分区`
-      : shown.map(m => m.name).join(' / ')
+  const pin = useMemo<FacilityMapDistrictPin>(() => {
+    if (!building) return EMPTY_PIN('')
+    return {
+      ...buildingCountsPin(building),
+      refs: building.members.flatMap(m => m.pin.refs),
+      truncated: building.members.some(m => m.pin.truncated),
+    }
+  }, [building])
+  const def = building?.def
   return (
     <Modal
-      open={members !== null}
-      title={members ? `${title} · ${date} 当日明细` : ''}
+      open={building !== null}
+      title={def ? `${def.id} ${def.name ?? '待命名'} · ${date} 当日明细` : ''}
       footer={null}
       width={760}
       onCancel={onClose}
     >
-      {members && (
+      {def && building && (
         <div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pt-2">
-          {shown.map(m => (
-            <div key={m.pin.dist_id} className="flex flex-col gap-4">
-              {shown.length > 1 && (
-                <div className="border-l-2 border-[var(--color-hairline)] pl-2 text-[13px] font-semibold text-[var(--color-charcoal)]">
-                  {m.name}
-                </div>
-              )}
-              <ZoneSection pin={m.pin} />
+          <div className="flex flex-col gap-1 rounded-md border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2">
+            <div className="flex flex-wrap items-baseline gap-x-3">
+              <span className="text-[14px] font-semibold text-[var(--color-charcoal)]">
+                {def.id} {def.name ?? '待命名'}
+              </span>
+              <span className="text-[12px] text-[var(--color-charcoal)]">
+                责任部门：{def.depts.join(' / ')}
+              </span>
             </div>
-          ))}
+            <div className="text-[12px] text-[var(--color-charcoal)]">产线/岗位：{def.lines}</div>
+            {def.subunits.map(su => (
+              <div key={su.name} className="text-[12px] text-[var(--color-charcoal)]">
+                └ 子单元：{su.name}（{su.dept}）
+              </div>
+            ))}
+            <div className="text-[11px] text-[var(--color-steel)]">
+              收编分区：{building.members.map(m => m.distName).join(' / ')}
+            </div>
+          </div>
+          <BuildingDetailSection pin={pin} />
         </div>
       )}
     </Modal>
@@ -598,15 +683,33 @@ const SUGGESTION_COLUMNS: TableColumnsType<DistrictSuggestionRow> = [
   },
 ]
 
+// 色系族图例（11 族方点）+ 徽标图例（圆点）；族内深色=当日有落点
+const FAMILY_LEGEND = Object.values(BUILDING_FAMILIES).map(f => ({
+  key: f.key,
+  label: f.label,
+  fill: f.fillActive,
+  stroke: f.strokeBase,
+}))
+const BADGE_LEGEND = [
+  ...BADGES.map(b => ({
+    label: b.label === '火' ? '动火' : b.label === '受' ? '受限' : '其他作业',
+    fill: b.fill as string,
+  })),
+  { label: '关键风险作业', fill: RISK_FILL },
+  { label: '超储物料', fill: OVER_LIMIT_FILL },
+  { label: '今日新增隐患', fill: HAZARD_NEW_FILL },
+  { label: '未整改隐患', fill: HAZARD_OPEN_FILL },
+  { label: '消防设施到期', fill: FIRE_EXT_FILL },
+  { label: '报警', fill: ALARM_FILL },
+]
+
 export function FacilityMapCard() {
   const queryClient = useQueryClient()
   const { data, isLoading, isError } = useQuery({
     queryKey: ['safety', 'facility-map-pins'],
     queryFn: fetchFacilityMapPins,
   })
-  const [openGroup, setOpenGroup] = useState<{
-    members: { name: string; pin: FacilityMapDistrictPin }[]
-  } | null>(null)
+  const [openId, setOpenId] = useState<number | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [vb, setVb] = useState<ViewBox>(INITIAL_VB)
   const [panning, setPanning] = useState(false)
@@ -671,15 +774,16 @@ export function FacilityMapCard() {
     () => new Map((data?.pins ?? []).map(p => [p.dist_id, p])),
     [data],
   )
-  /** 同轮廓组视图：组内各分区 pin（缺省空）+ 聚合计数徽标；徽标/弹窗按组走 */
-  const groups = useMemo(
+  /** 建筑视图：成员分区 pin（缺省空）按 distId 归并聚合；徽标/弹窗按建筑走 */
+  const buildings = useMemo<BuildingView[]>(
     () =>
-      GEOM_GROUPS.map(members => {
-        const withPins = members.map(m => ({
-          name: m.dist.distName,
-          pin: pinById.get(m.dist.distId) ?? EMPTY_PIN(m.dist.distId),
+      BUILDINGS.map(def => {
+        const members: BuildingMemberView[] = (MEMBERS_BY_BUILDING.get(def.id) ?? []).map(r => ({
+          distId: r.dist.distId,
+          distName: r.dist.distName,
+          pin: pinById.get(r.dist.distId) ?? EMPTY_PIN(r.dist.distId),
         }))
-        const agg = withPins.reduce(
+        const agg = members.reduce(
           (acc, { pin }) => {
             acc.jobs.hot += pin.jobs.hot
             acc.jobs.confined += pin.jobs.confined
@@ -704,24 +808,21 @@ export function FacilityMapCard() {
           },
         )
         return {
-          key: members[0].dist.distId,
-          anchor: members[0].anchor,
-          members: withPins,
+          def,
+          members,
           agg,
-          hasPin: members.some(m => pinById.has(m.dist.distId)),
+          hasPin: members.some(m => pinById.has(m.distId)),
         }
       }),
     [pinById],
   )
+  const buildingById = useMemo(
+    () => new Map(buildings.map(b => [b.def.id, b])),
+    [buildings],
+  )
   const unmappedEvents = useMemo(
     () => (data?.unmapped ?? []).reduce((n, u) => n + u.count, 0),
     [data],
-  )
-  /** distId → 组视图（渲染热路径查表用） */
-  const groupViewByDist = useMemo(
-    () =>
-      new Map(groups.flatMap(g => GROUP_BY_DIST.get(g.key)!.map(m => [m.dist.distId, g] as const))),
-    [groups],
   )
 
   /** 客户端坐标 → viewBox 坐标（含 preserveAspectRatio 留白修正） */
@@ -776,7 +877,7 @@ export function FacilityMapCard() {
     dragRef.current = { cx: e.clientX, cy: e.clientY, vb: vbRef.current, moved: false }
     setPanning(true)
     // 注意：这里不能 setPointerCapture——支持该 API 的浏览器会把后续
-    // click 一并重定向到 svg，<g onClick> 收不到，点击分区永远不弹
+    // click 一并重定向到 svg，<g onClick> 收不到，点击建筑永远不弹
     // Modal（真机 bug 2026-10-27）；capture 延迟到真正拖动时再做
   }
 
@@ -788,7 +889,7 @@ export function FacilityMapCard() {
       if (!d.moved) {
         d.moved = true
         // 越过拖动阈值才捕获指针：单击（含轻微抖动）不捕获，click 正常
-        // 派发到分区多边形；真拖动则锁住指针获得 viewport 外的连续平移
+        // 派发到建筑多边形；真拖动则锁住指针获得 viewport 外的连续平移
         try {
           svg.setPointerCapture(e.pointerId)
         } catch {
@@ -815,7 +916,7 @@ export function FacilityMapCard() {
     }
   }
 
-  /** 拖动过的松手不当作分区点击（否则平移结束会误开 Modal） */
+  /** 拖动过的松手不当作建筑点击（否则平移结束会误开 Modal） */
   function onClickCapture(e: React.MouseEvent) {
     if (suppressClickRef.current) {
       suppressClickRef.current = false
@@ -824,43 +925,58 @@ export function FacilityMapCard() {
     }
   }
 
-  // 名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让：先占位全部落点徽标
-  // 矩形（同轮廓组合并为一组徽标），再按分区面积降序放标签；每个标签依次
-  // 尝试首选位（有落点=徽标下方、无落点=质心下方）与备选位（质心上方），
-  // 全碰撞才跳过——相邻重叠分区（同轮廓）必跳一个，放大后逐级显现
-  const labels = useMemo<(RenderedDistrict & { dy: number })[]>(() => {
+  // 编号/名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让：先占位全部落点
+  // 徽标矩形（每建筑一枚、挂主片锚点），再按轮廓片面积降序放标签；母建筑
+  // 多片轮廓各自尝试放同号标注（放得下才显示，放大后逐级显现）；每个标签
+  // 依次尝试首选位（有落点主片=徽标下方、其余=质心下方）与备选位（质心
+  // 上方），全碰撞才跳过
+  const labels = useMemo<
+    { id: number; text: string; x: number; y: number }[]
+  >(() => {
     const fs = 13 / zoom
     const placed: { x1: number; y1: number; x2: number; y2: number }[] = []
-    for (const g of groups) {
-      if (!g.hasPin) continue
-      const chips =
-        badgeChips({ ...EMPTY_PIN(g.key), ...g.agg } as FacilityMapDistrictPin)
+    for (const b of buildings) {
+      if (!b.hasPin) continue
+      const geo = GEO_BY_ID.get(b.def.id)
+      if (!geo) continue
+      const chips = badgeChips(buildingCountsPin(b))
       if (!chips.length) continue
-      const w = (chips.length * 38 - 4) / zoom
+      const w = (chips.length * CHIP_W - 4) / zoom
       placed.push({
-        x1: g.anchor[0] - w / 2,
-        y1: g.anchor[1] - 11 / zoom,
-        x2: g.anchor[0] + w / 2,
-        y2: g.anchor[1] + 11 / zoom,
+        x1: geo.anchor[0] - w / 2,
+        y1: geo.anchor[1] - CHIP_HALF_H / zoom,
+        x2: geo.anchor[0] + w / 2,
+        y2: geo.anchor[1] + CHIP_HALF_H / zoom,
       })
     }
     const hits = (r: { x1: number; y1: number; x2: number; y2: number }) =>
       placed.some(p => r.x1 < p.x2 && r.x2 > p.x1 && r.y1 < p.y2 && r.y2 > p.y1)
-    const cands = RENDERED.filter(
-      ({ dist, bbox }) => bbox[2] >= dist.distName.length * fs * 0.85,
-    ).sort((a, b) => b.bbox[2] * b.bbox[3] - a.bbox[2] * a.bbox[3])
-    const out: (RenderedDistrict & { dy: number })[] = []
+    const cands = BUILDING_GEOS.flatMap(geo => {
+      const b = buildingById.get(geo.id)
+      if (!b) return []
+      const text = b.def.name ? `${b.def.id} ${b.def.name}` : `${b.def.id}`
+      return geo.pieces
+        .filter(p => p.bbox[2] >= text.length * fs * 0.85)
+        .map((piece, i) => ({
+          geo,
+          piece,
+          text,
+          main: i === 0,
+          area: piece.bbox[2] * piece.bbox[3],
+        }))
+    }).sort((a, b) => b.area - a.area)
+    const out: { id: number; text: string; x: number; y: number }[] = []
     for (const item of cands) {
-      const w = item.dist.distName.length * fs * 0.95
+      const w = item.text.length * fs * 0.95
       const h = fs * 1.3
-      const pinned = groupViewByDist.get(item.dist.distId)?.hasPin ?? false
+      const pinned = item.main && (buildingById.get(item.geo.id)?.hasPin ?? false)
       let settled: number | null = null
       for (const dy of pinned ? [24] : [5, -16]) {
-        const cy = item.anchor[1] + dy / zoom
+        const cy = item.piece.anchor[1] + dy / zoom
         const rect = {
-          x1: item.anchor[0] - w / 2,
+          x1: item.piece.anchor[0] - w / 2,
           y1: cy - h / 2,
-          x2: item.anchor[0] + w / 2,
+          x2: item.piece.anchor[0] + w / 2,
           y2: cy + h / 2,
         }
         if (!hits(rect)) {
@@ -869,22 +985,29 @@ export function FacilityMapCard() {
           break
         }
       }
-      if (settled !== null) out.push({ ...item, dy: settled })
+      if (settled !== null) {
+        out.push({
+          id: item.geo.id,
+          text: item.text,
+          x: item.piece.anchor[0],
+          y: item.piece.anchor[1] + settled / zoom,
+        })
+      }
     }
     return out
-  }, [zoom, groups, groupViewByDist])
+  }, [zoom, buildings, buildingById])
 
   return (
     <SectionCard
       title="厂区风险分区 · 当日分布"
-      description={`64 分区底图（3.x 平台快照）· ${data?.date ?? '—'} 作业票/关键风险/超储/隐患（新增+未整改）/消防设施到期与消防/中控报警落点 · 滚轮缩放 / 拖动平移`}
+      description={`33 栋建筑两级模型（建筑级视图，分区大改 2026-10）· ${data?.date ?? '—'} 作业票/关键风险/超储/隐患（新增+未整改）/消防设施到期与消防/中控报警按建筑落点 · 滚轮缩放 / 拖动平移`}
     >
       {isError ? (
         <EmptyGuide
           compact
           icon={<MapPinned size={18} />}
           title="分区数据暂时不可用"
-          description="落点数据拉取失败（平台或表格抖动），稍后自动恢复；分区底图不受影响"
+          description="落点数据拉取失败（平台或表格抖动），稍后自动恢复；建筑底图不受影响"
         />
       ) : isLoading || !data ? (
         <div className="flex items-center justify-center" style={{ height: MAP_BOX_STYLE.height }}>
@@ -897,20 +1020,27 @@ export function FacilityMapCard() {
               部分数据源降级：{data.errors.join('；')}
             </div>
           )}
-          {/* 图例横条：通栏一行放下（10 项 ×90px ≈ 900px），不占侧栏竖向空间 */}
+          {/* 图例横条两段：色系族（方点，族内深色=当日有落点）+ 徽标（圆点） */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            {LEGEND.map(l => (
+            {FAMILY_LEGEND.map(l => (
+              <span
+                key={l.key}
+                className="inline-flex items-center gap-1 text-[11px] text-[var(--color-steel)]"
+              >
+                <span
+                  className="inline-block h-2 w-2 rounded-[2px]"
+                  style={{ background: l.fill, border: `1px solid ${l.stroke}` }}
+                />
+                {l.label}
+              </span>
+            ))}
+            <span className="text-[var(--color-hairline)]">|</span>
+            {BADGE_LEGEND.map(l => (
               <span
                 key={l.label}
                 className="inline-flex items-center gap-1 text-[11px] text-[var(--color-steel)]"
               >
-                <span
-                  className={`inline-block h-2 w-2 ${l.square ? 'rounded-[2px]' : 'rounded-full'}`}
-                  style={{
-                    background: l.fill,
-                    ...(l.stroke ? { border: `1px solid ${l.stroke}` } : {}),
-                  }}
-                />
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: l.fill }} />
                 {l.label}
               </span>
             ))}
@@ -932,44 +1062,48 @@ export function FacilityMapCard() {
                   cursor: panning ? 'grabbing' : 'grab',
                 }}
                 role="img"
-                aria-label="厂区风险分区底图"
+                aria-label="厂区建筑底图"
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
                 onClickCapture={onClickCapture}
               >
-                {RENDERED.map(({ dist, shapes }) => {
-                  // 同轮廓组合并态：填充/悬浮/点击/tooltip 均按组（点击任一共用
-                  // 轮廓的分区打开整组明细，避免徽标挂在 A 分区点开却是 B 分区）
-                  const g = groupViewByDist.get(dist.distId)
+                {BUILDING_GEOS.map(geo => {
+                  const b = buildingById.get(geo.id)
+                  if (!b) return null
+                  const fam = BUILDING_FAMILIES[b.def.family]
+                  const active = b.hasPin
+                  const counts = active
+                    ? ` · 作业 ${b.agg.jobs.hot + b.agg.jobs.confined + b.agg.jobs.other} / 关键风险 ${b.agg.key_risks} / 超储 ${b.agg.over_limits} / 新增隐患 ${b.agg.hazard_news} / 未整改 ${b.agg.hazard_opens} / 消防到期 ${b.agg.fire_ext_dues} / 报警 ${b.agg.alarms.fire + b.agg.alarms.central}`
+                    : ''
                   return (
                     <g
-                      key={dist.distId}
-                      data-testid={`district-poly-${dist.distId}`}
-                      className="cursor-pointer [&:hover_polygon]:fill-[#dce6fa]"
-                      onClick={() => {
-                        if (g) setOpenGroup({ members: g.members })
-                      }}
+                      key={geo.id}
+                      data-testid={`building-poly-${geo.id}`}
+                      className="cursor-pointer [&:hover_polygon]:stroke-[2.2]"
+                      onClick={() => setOpenId(geo.id)}
                     >
-                      <title>{`${dist.distName}${g?.hasPin ? ` · 作业 ${g.agg.jobs.hot + g.agg.jobs.confined + g.agg.jobs.other} / 关键风险 ${g.agg.key_risks} / 超储 ${g.agg.over_limits} / 新增隐患 ${g.agg.hazard_news} / 未整改 ${g.agg.hazard_opens} / 消防到期 ${g.agg.fire_ext_dues} / 报警 ${g.agg.alarms.fire + g.agg.alarms.central}` : ''}`}</title>
-                      {shapes.map((points, i) => (
-                        <polygon
-                          key={i}
-                          points={points}
-                          fill={g?.hasPin ? FILL_ACTIVE : FILL_BASE}
-                          stroke={g?.hasPin ? STROKE_ACTIVE : STROKE_BASE}
-                          strokeWidth={g?.hasPin ? 1.4 : 1}
-                        />
-                      ))}
+                      <title>{`${b.def.id} ${b.def.name ?? '待命名'} · ${b.def.depts.join(' / ')}${counts}`}</title>
+                      {geo.pieces.flatMap((piece, pi) =>
+                        piece.shapes.map((points, i) => (
+                          <polygon
+                            key={`${pi}-${i}`}
+                            points={points}
+                            fill={active ? fam.fillActive : fam.fillBase}
+                            stroke={active ? fam.strokeActive : fam.strokeBase}
+                            strokeWidth={active ? 1.4 : 1}
+                          />
+                        )),
+                      )}
                     </g>
                   )
                 })}
-                {labels.map(({ dist, anchor, dy }) => (
+                {labels.map(l => (
                   <text
-                    key={`lb-${dist.distId}`}
-                    data-testid={`district-label-${dist.distId}`}
-                    x={anchor[0]}
-                    y={anchor[1] + dy / zoom}
+                    key={`lb-${l.id}-${l.x.toFixed(1)}-${l.y.toFixed(1)}`}
+                    data-testid={`building-label-${l.id}`}
+                    x={l.x}
+                    y={l.y}
                     textAnchor="middle"
                     dominantBaseline="middle"
                     fontSize={13 / zoom}
@@ -981,20 +1115,20 @@ export function FacilityMapCard() {
                     paintOrder="stroke"
                     pointerEvents="none"
                   >
-                    {dist.distName}
+                    {l.text}
                   </text>
                 ))}
-                {groups.map(g => {
-                  const chips = badgeChips({
-                    ...EMPTY_PIN(g.key),
-                    ...g.agg,
-                  } as FacilityMapDistrictPin)
-                  if (!chips.length) return null
+                {buildings.map(b => {
+                  const geo = GEO_BY_ID.get(b.def.id)
+                  if (!geo) return null
+                  const pin = buildingCountsPin(b)
+                  if (!badgeChips(pin).length) return null
                   return (
                     <BadgeGroup
-                      key={`bg-${g.key}`}
-                      pin={{ ...EMPTY_PIN(g.key), ...g.agg } as FacilityMapDistrictPin}
-                      anchor={g.anchor}
+                      key={`bg-${b.def.id}`}
+                      buildingId={b.def.id}
+                      pin={pin}
+                      anchor={geo.anchor}
                       zoom={zoom}
                     />
                   )
@@ -1021,8 +1155,8 @@ export function FacilityMapCard() {
               </div>
             </div>
             {/* 未映射栏：xl 固定 300px 窄栏，高度=地图高度表达式（与
-                MAP_MAX_H_* 常量同步改），清单在栏内滚轮滚动（原 flex-1 宽栏
-                ~610px，收窄一半腾宽放大地图；不设高度时行高会被清单内容撑开） */}
+                MAP_MAX_H_* 常量同步改），清单在栏内滚轮滚动（不设高度时
+                行高会被清单内容撑开） */}
             <aside className="flex min-w-0 flex-col xl:h-[min(75vh,760px)] xl:flex-none xl:w-[300px]">
               <div className="flex flex-col rounded-lg border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] px-3 py-2 xl:min-h-0 xl:flex-1">
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
@@ -1072,10 +1206,10 @@ export function FacilityMapCard() {
           </div>
         </div>
       )}
-      <DistrictModal
-        members={openGroup?.members ?? null}
+      <BuildingModal
+        building={openId === null ? null : (buildingById.get(openId) ?? null)}
         date={data?.date ?? ''}
-        onClose={() => setOpenGroup(null)}
+        onClose={() => setOpenId(null)}
       />
       <AiSuggestionConfirmModal<DistrictSuggestionRow>
         open={confirmOpen}

@@ -223,6 +223,34 @@ class TestSeedRows:
         rows = seed_rows_from_asset(doc, synonyms={"不存在分区": ["某处"]})
         assert [r["location_text"] for r in rows] == ["消防控制室"]
 
+    def test_building_level_synonyms_landed(self):
+        """2026-10-29 建筑级拍板同义词：真实 SEED_SYNONYMS 对含相关分区名
+        的资产落行——中控室→车间一(1)/危废库族→危化品库(37)/莫昔→莫西(23)/
+        非达→达巴新线(10)/动力设施族→空冷班组(76)/旧原料库→原辅料库(38)/
+        罐区俗称族→罐区(9001)。"""
+        dists = [
+            _district(distId="1", distName="车间一达托", rails=[]),
+            _district(distId="37", distName="危化品库", rails=[]),
+            _district(distId="23", distName="提四莫西", rails=[]),
+            _district(distId="10", distName="车间二达巴新线", rails=[]),
+            _district(distId="76", distName="空冷班组", rails=[]),
+            _district(distId="38", distName="原辅料库", rails=[]),
+            _district(distId="9001", distName="罐区", rails=[]),
+        ]
+        doc = build_asset_doc(dists, fetched_at="2026-10-29T12:00:00+08:00")
+        rows = seed_rows_from_asset(doc)  # 不传 synonyms → 用真实 SEED_SYNONYMS
+        by_text = {row["location_text"]: row["dist_id"] for row in rows}
+        assert by_text["中控室"] == "1"
+        for alias in ("危废库", "危库二", "危库三"):
+            assert by_text[alias] == "37"
+        assert by_text["莫昔"] == "23"
+        assert by_text["非达"] == "10"
+        for alias in ("新动力车间", "空压站", "二期冷却塔", "二期制水"):
+            assert by_text[alias] == "76"
+        assert by_text["旧原料库"] == "38"
+        for alias in ("庆大罐区", "妥布北侧罐区", "提二罐区"):
+            assert by_text[alias] == "9001"
+
 
 # ══════════════════════ T2：映射匹配 / pins 聚合 / 服务编排 ══════════════════════
 
