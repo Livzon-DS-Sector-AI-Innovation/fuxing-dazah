@@ -23,22 +23,28 @@ async def query_stock(
     keyword: str = "",
     qc_status: str = "",
     expiring_days: int | None = None,
+    summary: bool = False,
 ) -> dict[str, Any]:
-    """查询仓储物料库存明细（当前在库批次，跨模块查仓储）。
+    """查询仓储物料库存（当前在库批次明细或按物料×单位的总量聚合）。
 
-    用户问「仓库里某物料还有多少库存、存在哪、放行了没」时用本工具。
+    用户问「仓库里某物料还有多少库存、存在哪、放行了没」时用明细模式（默认），
     返回每批次：物料名称、批号、剩余数量、单位、贮存位置、QA放行、
     入库日期、有效期/复验期。
+    用户问「库存还有多少/总量/一共有多少物料」这类**总量问题**时置
+    summary=true，返回按物料×单位聚合的总量行（物料数、批次数、分单位总量），
+    不要拿 10 条明细去估算总量。
 
     Args:
         keyword: 物料名称或批号关键词（模糊匹配），如「乙醇」「10407」；空查全部
         qc_status: QA放行状态过滤：放行 / 条件放行 / 否决
         expiring_days: 临期过滤：未来 N 天内到期，如 30 查 30 天内临期批次
+        summary: true=总量聚合模式（物料×单位汇总）；false=批次明细模式
     """
     return await warehouse_query.query_stock(
         keyword=keyword or None,
         qc_status=qc_status or None,
         expiring_days=expiring_days,
+        summary=summary,
     )
 
 

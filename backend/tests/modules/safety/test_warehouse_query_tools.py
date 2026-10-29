@@ -47,8 +47,8 @@ def test_warehouse_adapter_passthrough(monkeypatch) -> None:
 
     calls: list[dict] = []
 
-    async def fake_stock(*, keyword=None, qc_status=None, expiring_days=None):
-        calls.append({"kw": keyword, "qc": qc_status})
+    async def fake_stock(*, keyword=None, qc_status=None, expiring_days=None, summary=False):
+        calls.append({"kw": keyword, "qc": qc_status, "summary": summary})
         return {"total": 1, "records": [{"物料名称": "乙醇"}]}
 
     monkeypatch.setattr(warehouse_query, "query_stock", fake_stock)
@@ -58,9 +58,9 @@ def test_warehouse_adapter_passthrough(monkeypatch) -> None:
         warehouse_query_tools.query_stock(ctx, keyword="乙醇", qc_status="放行")
     )
     assert out["total"] == 1
-    assert calls == [{"kw": "乙醇", "qc": "放行"}]
+    assert calls == [{"kw": "乙醇", "qc": "放行", "summary": False}]
 
     # 空串参数归一为 None（仓储实现核口径）
     out2 = asyncio.run(warehouse_query_tools.query_stock(ctx))
-    assert calls[-1] == {"kw": None, "qc": None}
+    assert calls[-1] == {"kw": None, "qc": None, "summary": False}
     assert out2["total"] == 1

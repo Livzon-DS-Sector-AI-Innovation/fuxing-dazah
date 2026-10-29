@@ -13,7 +13,7 @@ import {
   BookOutlined,
   LinkOutlined,
 } from '@ant-design/icons'
-import { confirmAgentAction } from '@/actions/safety'
+import { confirmAgentAction, forgetAgentMemories } from '@/actions/safety'
 import { consumeSseStream } from '@/lib/sse'
 import type { AgentChatSource } from '@/types/safety'
 
@@ -43,6 +43,7 @@ interface SlashCommand {
 const SLASH_COMMANDS: SlashCommand[] = [
   { command: '/help', description: '显示可用指令' },
   { command: '/new', description: '新建会话' },
+  { command: '/forget', description: '删除AI对你的全部长期记忆' },
   { command: '/stop', description: '停止当前生成' },
   { command: '/抄送', description: '将对话结果抄送到飞书' },
 ]
@@ -56,9 +57,12 @@ const HELP_TEXT = `**可用指令**
 | 指令 | 说明 |
 |------|------|
 | \`/help\` | 显示可用指令 |
-| \`/new\` | 新建会话，清空对话历史 |
+| \`/new\` | 新建会话，清空对话历史（长期记忆不受影响） |
+| \`/forget\` | 删除 AI 对你的**全部长期记忆**（不可恢复，需二次确认） |
 | \`/stop\` | 停止当前正在生成的回复 |
 | \`/抄送\` | 将对话结果抄送到飞书（输入 \`/抄送 收件人姓名\`） |
+
+💡 对话内容可能被提取为长期记忆（跨会话注入，最多 5 条/轮）；不希望留存请用 \`/forget\`。
 
 其他问题直接用自然语言输入，Agent 会自动判断意图。`
 
@@ -90,7 +94,7 @@ function renderMarkdown(text: string): string {
 // ═══════════════════════════════════════════════════════════════
 
 export default function AgentChat() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(false)
@@ -149,6 +153,36 @@ export default function AgentChat() {
         break
       }
 
+      case '/forget': {
+        // P2-9：删除长期记忆是删除操作，需二次确认
+        modal.confirm({
+          title: '删除全部长期记忆？',
+          content: '将删除 AI 对你的所有跨会话记忆（偏好/事实等），不可恢复。对话历史不受影响。',
+          okText: '删除记忆',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: async () => {
+            try {
+              const res = await forgetAgentMemories()
+              const n = res.data?.deleted ?? 0
+              const forgetMsg: ChatMessage = {
+                id: `a-${Date.now()}`,
+                role: 'assistant',
+                content: n > 0
+                  ? `🧹 已删除 ${n} 条长期记忆。此后新会话不再回放这些内容。`
+                  : '🧹 当前没有需要清除的长期记忆。',
+                timestamp: Date.now(),
+              }
+              setMessages((prev) => [...prev, forgetMsg])
+              message.success(n > 0 ? `已删除 ${n} 条记忆` : '无记忆可删除')
+            } catch (err) {
+              message.error(`删除失败：${err instanceof Error ? err.message : String(err)}`)
+            }
+          },
+        })
+        break
+      }
+
       case '/stop': {
         if (loading) {
           cancelledRef.current = true
@@ -203,7 +237,7 @@ export default function AgentChat() {
         break
       }
     }
-  }, [loading, messages, message])
+  }, [loading, messages, message, modal])
 
   // ── Input handlers ──
 
@@ -529,6 +563,9 @@ export default function AgentChat() {
   // ── Render ──
 
   const filteredCommands = showCommands ? getFilteredCommands(inputValue) : []
+  // P1-7：末条助手消息挂着未处理确认卡时，输入框提示先处理卡片
+  const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
+  const hasPendingCard = Boolean(lastAssistant?.pendingAction)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 112px)' }}>
@@ -761,7 +798,9 @@ export default function AgentChat() {
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="输入问题，或输入 / 查看指令…"
+            placeholder={hasPendingCard
+              ? '⚠️ 有待确认操作，请先点击上方卡片的【确认执行】或【取消】…'
+              : '输入问题，或输入 / 查看指令…'}
             autoSize={{ minRows: 1, maxRows: 4 }}
             disabled={loading}
             style={{ flex: 1, borderRadius: 8 }}

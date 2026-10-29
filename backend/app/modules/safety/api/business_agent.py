@@ -443,6 +443,31 @@ async def confirm_action(
     })
 
 
+@business_agent_router.post(
+    "/agent/memories/forget", response_model=ApiResponse,
+    summary="清除当前用户的跨会话记忆（/forget 指令后端）",
+)
+async def forget_agent_memories(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """软删除当前登录用户的全部长期记忆（/new 只清会话，本端点清记忆）。"""
+    feishu_user_id = current_user.feishu_user_id if current_user else None
+    if not feishu_user_id:
+        raise HTTPException(status_code=403, detail="请先登录再使用 /forget")
+
+    resolver = IdentityResolver(db)
+    person = await resolver.resolve_by_user_id(feishu_user_id)
+    if person is None or not person.user_id:
+        return ApiResponse(data={"deleted": 0, "message": "未识别到绑定身份，无记忆可清除"})
+
+    from app.modules.safety.business_agent.core.memory import delete_all_for_user
+
+    deleted = await delete_all_for_user(db, person.user_id)
+    await db.commit()
+    return ApiResponse(data={"deleted": deleted})
+
+
 @business_agent_router.get(
     "/agent/sessions/{session_id}", response_model=ApiResponse,
     summary="获取业务 Agent 会话详情",

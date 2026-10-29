@@ -552,6 +552,13 @@ export async function confirmAgentAction(actionId: string, approved: boolean) {
   return res
 }
 
+export async function forgetAgentMemories() {
+  const res = await fetchApi<{ deleted: number }>(`/safety/agent/memories/forget`, {
+    method: 'POST',
+  })
+  return res
+}
+
 export async function getAgentSession(sessionId: string) {
   const res = await fetchApi<{
     id: string

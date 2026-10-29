@@ -266,8 +266,13 @@ async def query_stock(
     keyword: str | None = None,
     qc_status: str | None = None,
     expiring_days: int | None = None,
+    summary: bool = False,
 ) -> dict[str, Any]:
-    """查物料库存明细（material_stock）：按关键词/QA放行状态/临期天数过滤。"""
+    """查物料库存明细（material_stock）：按关键词/QA放行状态/临期天数过滤。
+
+    summary=True 时按「物料×单位」聚合返回总量行（A14「库存还有多少/总量」
+    类问题），False（默认）返回批次明细。
+    """
     field_names = [
         "物料名称",
         "物料批号",
@@ -348,11 +353,43 @@ async def query_stock(
         ]
         if n
     ]
-    return {
+    result: dict[str, Any] = {
         "total": len(matched),
         "records": detail,
         "note": "；".join(notes),
     }
+    if summary:
+        # A14 总量口径：物料×单位 聚合（数量不可解析按 0 计入批次但不加总量）
+        agg: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in matched:
+            f = row["fields"]
+            name = _as_text(f.get("物料名称")) or "（未填名称）"
+            unit = _as_text(f.get("单位"))
+            num = _cell_number(f.get("剩余数量"))
+            slot = agg.setdefault(
+                (name, unit),
+                {"物料名称": name, "单位": unit, "总数量": 0.0, "批次数": 0},
+            )
+            slot["总数量"] += num or 0.0
+            slot["批次数"] += 1
+        summary_rows = sorted(agg.values(), key=lambda s: -float(s["总数量"]))
+        result["summary"] = True
+        result["summary_rows"] = [
+            {
+                **s,
+                "总数量": (
+                    str(int(s["总数量"])) if s["总数量"] == int(s["总数量"])
+                    else round(s["总数量"], 2)
+                ),
+            }
+            for s in summary_rows[:50]
+        ]
+        result["summary_materials"] = len(summary_rows)
+        if len(summary_rows) > 50:
+            result["note"] = "；".join(
+                [result["note"], f"聚合物料共 {len(summary_rows)} 种，已显示数量前 50 种"]
+            )
+    return result
 
 
 # ── 2. query_material：物料名称代码一览表（主数据） ──

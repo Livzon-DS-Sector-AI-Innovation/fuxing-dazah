@@ -28,7 +28,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.modules.safety.memory.models import AgentMemory
 
@@ -41,6 +41,25 @@ logger = logging.getLogger(__name__)
 
 # 1-B：记忆注入每轮硬上限 ≤5 条（钉死常量，防回升）
 MEMORY_INJECT_MAX_PER_TURN = 5
+
+
+async def delete_all_for_user(db: AsyncSession, user_id: str) -> int:
+    """P2-9 /forget：软删除当前用户全部记忆，返回删除条数。
+
+    软删除与既有检索口径一致（retrieve/merge 均过滤 is_deleted），
+    不物理删行（追溯留痕）。
+    """
+    stmt = (
+        update(AgentMemory)
+        .where(
+            AgentMemory.user_id == user_id,
+            AgentMemory.is_deleted == False,  # noqa: E712
+        )
+        .values(is_deleted=True, updated_at=datetime.now(UTC))
+    )
+    result = await db.execute(stmt)
+    await db.flush()
+    return int(result.rowcount or 0)
 
 # ── 衰减配置 ──
 _HALF_LIFE_DAYS = 30.0  # 半衰期（天）：score 每 30 天折半

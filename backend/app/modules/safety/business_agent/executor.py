@@ -165,12 +165,23 @@ async def _run_turn_impl(
     trace_id: str | None = None
 
     # 1-D：路由决策（命中域/路径/置信度）——工具面选择与审计同源
+    # P1-7 粘性路由：裸肯定/否定短词（确认/好的/取消…）对嵌入层是噪声
+    # （两字分类漂移到无关域 = 裸「确认」脱轨根因），改用上一轮用户消息
+    # 的路由口径，让上一轮提议的写工具仍在挂载面内。
     routing_extra: dict | None = None
     routed_tools: list[str] | None = None
     if user_message:
         from app.modules.safety.business_agent.tool_selector import route_message_async
 
-        decision = await route_message_async(user_message)
+        route_input = user_message
+        sticky_used = False
+        if _is_bare_confirmation(user_message):
+            prev = _previous_user_message(message_history)
+            if prev:
+                route_input = prev
+                sticky_used = True
+                logger.info("粘性路由生效：%r → 沿用上轮口径 %r", user_message, prev[:40])
+        decision = await route_message_async(route_input)
         routed_tools = decision.tool_names
         routing_extra = {
             "domains": list(decision.domains),
@@ -178,6 +189,8 @@ async def _run_turn_impl(
             "confidence": decision.confidence,
             "tool_count": len(decision.tool_names),
         }
+        if sticky_used:
+            routing_extra["sticky"] = True
     try:
         # 审计作用域：最外层开 safety.agent_chat 根 span（tracing 启用时），
         # 并让工具内嵌套的知识库 AI 调用继承 用户/会话/渠道/trace_id
@@ -1098,13 +1111,30 @@ def _extract_knowledge_sources(result) -> list[dict] | None:
             if getattr(part, "tool_name", None) != "knowledge_search":
                 continue
             # 解析 tool return content 中的 sources
+            # P2-10：structured_content 失败/非 dict 时回退解析 part.content
+            # JSON（A19 sources 空提取根因）；仍无 sources 打 debug 便于定位 RAG 侧
+            data = None
             try:
                 data = part.structured_content()
-                if not isinstance(data, dict):
-                    continue
-                srcs = data.get("sources", [])
             except Exception:
+                data = None
+            if not isinstance(data, dict):
+                try:
+                    raw = part.content
+                    if isinstance(raw, str):
+                        raw = json.loads(raw)
+                    if isinstance(raw, dict):
+                        data = raw
+                except Exception:
+                    data = None
+            if not isinstance(data, dict):
                 continue
+            srcs = data.get("sources") or []
+            if not srcs:
+                logger.debug(
+                    "knowledge_search 返回无 sources（tool_call_id=%s）",
+                    getattr(part, "tool_call_id", "?"),
+                )
             for s in srcs:
                 title = s.get("doc_title", "")
                 if title and title not in seen_titles:
@@ -1158,6 +1188,52 @@ async def _has_unprocessed_write_call(
     except Exception:
         logger.debug("pending 守门历史探测失败（按无挂起处理）", exc_info=True)
         return False
+
+
+# P1-7：裸肯定/否定白名单（从严：整条消息须恰为其中一个短词）
+_BARE_CONFIRM_WORDS: frozenset[str] = frozenset({
+    "确认", "确定", "好的", "好", "是", "是的", "嗯", "可以", "执行", "同意",
+    "继续", "取消", "不用", "不用了", "否", "算了", "ok", "好嘞", "对的",
+})
+
+
+def _is_bare_confirmation(message: str | None) -> bool:
+    """整条消息是否为裸肯定/否定短词（去标点后精确匹配白名单，≤6 字符）。"""
+    text = (message or "").strip().strip("。，！!？?、 \t")
+    return 0 < len(text) <= 6 and text.lower() in _BARE_CONFIRM_WORDS
+
+
+def _previous_user_message(
+    message_history: list[ModelMessage] | None,
+) -> str | None:
+    """P1-7：取上一条用户消息原文（粘性路由的输入）。
+
+    剥掉 S4 prompt 前缀（``前缀\\n---\\n用户原文``，取最后一段）；纯内存
+    扫描（web 断链修复后历史必传入；None/失败回退常规路由）。
+    空合成 prompt（resume 轮会塞空 UserPromptPart）与裸确认词自身都跳过，
+    继续向前找最近一条有内容的真实用户消息。
+    """
+    if not message_history:
+        return None
+    try:
+        from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+        history = message_history
+        if isinstance(history[0], dict):
+            history = ModelMessagesTypeAdapter.validate_python(history)
+        for msg in reversed(history):
+            if not isinstance(msg, ModelRequest):
+                continue
+            for part in msg.parts:
+                if not isinstance(part, UserPromptPart):
+                    continue
+                text = str(part.content).rsplit("\n---\n", 1)[-1].strip()
+                if text and not _is_bare_confirmation(text):
+                    return text
+        return None
+    except Exception:
+        logger.debug("上一条用户消息提取失败（回退常规路由）", exc_info=True)
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════
