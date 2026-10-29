@@ -115,6 +115,22 @@ def test_to_view_fields_and_beijing_dates() -> None:
     assert view.responsible == [("洪川林", "ou_hong"), ("刘柳兵", "ou_liu")]
 
 
+def test_to_view_field_overrides_for_emergency_bureau() -> None:
+    """省应急局源字段覆盖：方案列=「目前进展」、无目标完成日期列。"""
+    rec = _ext_record(
+        6, dept=["环保工程中心"], plan="待设备部出方案",
+        persons=[{"id": "ou_yang", "name": "杨剑"}],
+        checked_ms=_ms(2026, 10, 27),
+    )
+    rec["fields"]["目前进展"] = [{"text": "待进行招标", "type": "text"}]
+    view = external_audit.to_view(
+        rec, plan_field="目前进展", target_field=None,
+    )
+    assert view.plan == "待进行招标"
+    assert view.target_date is None
+    assert view.checked_at == date(2026, 10, 27)
+
+
 # ── fetch：源未配置 → None ──────────────────────────────────────
 
 
@@ -250,20 +266,42 @@ def _patch_render_deps(
     )
 
 
-def _stub_external(
+def _stub_external_multi(
     monkeypatch: pytest.MonkeyPatch,
-    records: list[dict[str, Any]] | None,
+    stubs: dict[str, list[dict[str, Any]] | None | Exception],
 ) -> None:
-    """外审表桩：None=源缺席；列表=直读结果；Exception=源故障。"""
+    """多检查源桩：kind → None(源缺席)/列表(直读结果)/Exception(源故障)。
 
-    async def fake_fetch() -> list[Any] | None:
+    未出现在 stubs 里的 kind 一律视为源未配置（缺席）。
+    """
+
+    async def fake_fetch(spec: Any = None) -> list[Any] | None:
+        sp = spec or external_audit.SOURCE_MGMT
+        kind = getattr(sp, "kind", sp)
+        if kind not in stubs:
+            return None
+        records = stubs[kind]
         if isinstance(records, Exception):
             raise records
         if records is None:
             return None
-        return [external_audit.to_view(r) for r in records]
+        return [
+            external_audit.to_view(
+                r, plan_field=sp.plan_field, target_field=sp.target_field,
+            )
+            for r in records
+        ]
 
     monkeypatch.setattr(external_audit, "fetch_external_audit", fake_fetch)
+
+
+def _stub_external(
+    monkeypatch: pytest.MonkeyPatch,
+    records: list[dict[str, Any]] | None,
+    kind: str = "defect_summary",
+) -> None:
+    """单源桩（默认管委会检查源；其余源保持缺席）。"""
+    _stub_external_multi(monkeypatch, {kind: records})
 
 
 async def test_build_bulletin_merges_external_section(
@@ -283,7 +321,7 @@ async def test_build_bulletin_merges_external_section(
     content, stats = await bulletin.build_bulletin()
 
     assert stats["ext_open"] == 1 and stats["ext_closed"] == 1
-    assert stats["ext_by_dept"] == {"设备工程部": 1}
+    assert stats["ext_sources"]["管委会检查"]["by_dept"] == {"设备工程部": 1}
     # 详情直接从公司内检查栏开始（无标题/日期/速览行）
     assert content.startswith("━")
     assert "【隐患督办通报】" not in content and "📅" not in content
@@ -431,19 +469,73 @@ async def test_build_bulletin_doing_not_alerted(
     assert "外审缺陷#2" not in content and "外审缺陷#3" not in content
 
 
+async def test_build_bulletin_two_external_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """管委会检查/省应急局检查同级各一节：节顺序、逐源汇总段、字段覆盖生效。
+
+    省应急局节走 SourceSpec 覆盖：方案列=「目前进展」→「进展：」前缀、
+    无目标完成日期列。
+    """
+    _patch_render_deps(monkeypatch, [])
+    eb_record = _ext_record(
+        11, dept=["环保工程中心"], desc="环保装置未见工艺设计图",
+        plan="待进行招标", checked_ms=_ms(2026, 10, 27),
+    )
+    eb_record["fields"]["目前进展"] = eb_record["fields"].pop("整改方案")
+    eb_record["fields"].pop("目标完成日期", None)
+    _stub_external_multi(monkeypatch, {
+        "defect_summary": [
+            _ext_record(
+                1, dept=["提炼工程二部"],
+                persons=[{"id": "ou_cai", "name": "蔡万进"}],
+                checked_ms=_ms(2026, 10, 19), target_ms=_ms(2026, 10, 31),
+            ),
+        ],
+        "emergency_bureau": [
+            eb_record,
+            _ext_record(12, dept=["环保工程中心"], status=["整改中"]),
+        ],
+    })
+
+    content, stats = await bulletin.build_bulletin()
+
+    assert stats["ext_open"] == 2  # 管委会 1 + 省应急局 1（整改中不计）
+    assert stats["ext_sources"]["省应急局检查"]["doing"] == 1
+    # 节顺序：今日无（内部空）→ 管委会检查 → 省应急局检查 → 部门汇总
+    i_mgmt = content.index("📌 管委会检查未整改隐患")
+    i_eb = content.index("📌 省应急局检查未整改隐患")
+    i_summary = content.index("📌 各部门未关闭隐患数量汇总")
+    assert i_mgmt < i_eb < i_summary
+    # 省应急局明细：「进展：」前缀（字段覆盖）、无「目标：」段；整改中不进明细
+    eb_body = content[i_eb:i_summary]
+    assert "环保装置未见工艺设计图" in eb_body
+    assert "进展：待进行招标" in eb_body
+    assert "目标：" not in eb_body
+    assert "外审缺陷#12" not in content
+    # 部门汇总逐源分段
+    assert "**提炼工程二部**：管委会检查未整改 1 条" in content
+    assert "**环保工程中心**：省应急局检查未整改 1 条" in content
+    # 速递格概览行逐源标注
+    assert bulletin._overview_stats_line(stats) == (
+        "未关闭 **2** 项 ｜ 🔴 红色预警 2（含管委会检查 1、省应急局检查 1）"
+        " · 🟡 一般预警 0"
+    )
+
+
 # ── all_clear_line：收口行分支 ──────────────────────────────────
 
 
 def test_all_clear_line_variants() -> None:
-    assert external_audit.all_clear_line({}) == ""
-    assert external_audit.all_clear_line({"ext_closed": 3}) == (
+    assert external_audit.all_clear_line({}, "管委会检查") == ""
+    assert external_audit.all_clear_line({"ext_closed": 3}, "管委会检查") == (
         "✅ 管委会检查已全部关闭（累计 3 条）"
     )
-    assert external_audit.all_clear_line({"ext_doing": 2}) == (
-        "✅ 管委会检查无未整改项（整改中 2 条）"
+    assert external_audit.all_clear_line({"ext_doing": 2}, "省应急局检查") == (
+        "✅ 省应急局检查无未整改项（整改中 2 条）"
     )
     assert external_audit.all_clear_line(
-        {"ext_closed": 1, "ext_doing": 2},
+        {"ext_closed": 1, "ext_doing": 2}, "管委会检查",
     ) == "✅ 管委会检查无未整改项（已关闭 1 条，整改中 2 条）"
 
 
@@ -455,8 +547,21 @@ def test_overview_stats_line_with_and_without_external() -> None:
     assert bulletin._overview_stats_line(base) == (
         "未关闭 **3** 项 ｜ 🔴 红色预警 2 · 🟡 一般预警 1"
     )
-    assert bulletin._overview_stats_line({**base, "ext_open": 4}) == (
+    assert bulletin._overview_stats_line({
+        **base, "ext_open": 4,
+        "ext_sources": {"管委会检查": {"open": 4}},
+    }) == (
         "未关闭 **7** 项 ｜ 🔴 红色预警 6（含管委会检查 4） · 🟡 一般预警 1"
+    )
+    assert bulletin._overview_stats_line({
+        **base, "ext_open": 7,
+        "ext_sources": {
+            "管委会检查": {"open": 3},
+            "省应急局检查": {"open": 4, "closed": 1},
+        },
+    }) == (
+        "未关闭 **10** 项 ｜ 🔴 红色预警 9（含管委会检查 3、省应急局检查 4）"
+        " · 🟡 一般预警 1"
     )
 
 

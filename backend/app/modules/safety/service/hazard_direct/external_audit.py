@@ -1,13 +1,15 @@
-"""管委会检查未整改隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板）。
+"""检查未整改隐患 — 督办通报「外审节」（未关闭即红色预警，2026-10-21 拍板）。
 
-通报内两个**同级**栏头（2026-10-22 拍板，格式一致）：
+通报内同级栏头（格式一致，顺序即列示顺序）：
 - **公司内检查未整改隐患**：主表督办数据，由 ``bulletin.build_bulletin``
   直接渲染（不经本模块，无独立数据源）；
-- **管委会检查未整改隐患**：本模块直读江阴管委会安全检查缺陷项汇总表。
+- **管委会检查未整改隐患**：本模块直读江阴管委会安全检查缺陷项汇总表；
+- **省应急局检查未整改隐患**：本模块直读福建省应急局安全检查缺陷项汇总表
+  （2026-10-29 接入；字段差异：方案列叫「目前进展」、无目标完成日期列，
+  经 ``SourceSpec`` 覆盖）。
 
-展示名 2026-10-22 定稿「{源名}未整改隐患」（历经 外部审计隐患→管委会审计
-隐患→管委会隐患→管委会检查未整改隐患），域名/文件名仍为 external_audit
-不动——registry 键是 DB 播种配置，改名断源。
+展示名 2026-10-22/29 定稿「{源名}未整改隐患」，域名/文件名仍为
+external_audit 不动——registry 键是 DB 播种配置，改名断源。
 
 纯只读：无事件订阅、无缓存，随督办通报每周四拉一次 + 值守轮询。
 
@@ -54,19 +56,54 @@ F_CHECKED_AT = "检查时间"
 F_TARGET = "目标完成日期"
 F_RESPONSIBLE = "责任人"
 
-REQUEST_FIELD_NAMES: tuple[str, ...] = (
-    F_SEQ, F_DESC, F_PLAN, F_DEPT, F_STATUS, F_CHECKED_AT, F_TARGET, F_RESPONSIBLE,
-)
-
 STATUS_CLOSED = "已关闭"
 STATUS_IN_PROGRESS = "整改中"
 
 # registry 域/kind（bitable_config 配置中心；registry 默认连接即生产表）
 DOMAIN = "external_audit_hazard"
-KIND = "defect_summary"
-# 展示名（节标题「📌 管委会检查未整改隐患」/ 顶部速览行 / 部门汇总段共用；
-# 同级的「公司内检查未整改隐患」节由主表数据渲染，见 bulletin）
-SOURCE_LABEL = "管委会检查"
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    """一个外审检查源（kind + 展示名 + 字段覆盖）。
+
+    字段名与管委会表不同的源只覆盖差异项：省应急局表的方案列叫
+    「目前进展」、无目标完成日期列。
+    """
+
+    kind: str
+    label: str                              # 节标题「📌 {label}未整改隐患」
+    plan_field: str = F_PLAN                # 方案/进展列名
+    plan_label: str = "方案"                # 明细行前缀
+    target_field: str | None = F_TARGET     # 目标完成日期列名（无此列 None）
+
+
+# 检查源清单（顺序即通报节顺序：管委会检查 → 省应急局检查；同级的
+# 「公司内检查未整改隐患」节由主表数据渲染，见 bulletin，不经本清单）
+SOURCE_MGMT = SourceSpec("defect_summary", "管委会检查")
+SOURCE_EMERGENCY_BUREAU = SourceSpec(
+    "emergency_bureau", "省应急局检查",
+    plan_field="目前进展", plan_label="进展", target_field=None,
+)
+SOURCES: tuple[SourceSpec, ...] = (
+    SOURCE_MGMT, SOURCE_EMERGENCY_BUREAU,
+)
+
+# 兼容导出：默认源（管委会检查）
+KIND = SOURCE_MGMT.kind
+SOURCE_LABEL = SOURCE_MGMT.label
+
+
+def request_fields(spec: SourceSpec) -> tuple[str, ...]:
+    """按源拼 field_names 投影（只请求该源消费的列）。"""
+    names = [F_SEQ, F_DESC, spec.plan_field, F_DEPT, F_STATUS, F_CHECKED_AT]
+    if spec.target_field:
+        names.append(spec.target_field)
+    names.append(F_RESPONSIBLE)
+    return tuple(names)
+
+
+REQUEST_FIELD_NAMES: tuple[str, ...] = request_fields(SOURCE_MGMT)
 
 _SEP = "━" * 20
 
@@ -87,8 +124,13 @@ class ExternalAuditView:
     responsible: list[tuple[str, str]] = field(default_factory=list)  # (姓名, open_id)
 
 
-def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
-    """API 记录 → 视图。
+def to_view(
+    record: dict[str, Any],
+    *,
+    plan_field: str = F_PLAN,
+    target_field: str | None = F_TARGET,
+) -> ExternalAuditView | None:
+    """API 记录 → 视图（plan/target 列名按源覆盖，缺列自然为空）。
 
     无缺陷描述的行跳过（明细无从落地）；「隐患部门」多选取并集为组键，
     空归「未分配部门」。
@@ -104,7 +146,10 @@ def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
         seq = None
 
     checked = bd_fields.datetime_ms(fields, F_CHECKED_AT)
-    target = bd_fields.datetime_ms(fields, F_TARGET)
+    target = (
+        bd_fields.datetime_ms(fields, target_field)
+        if target_field else None
+    )
 
     def _bj_date(dt: datetime | None) -> date | None:
         return dt.astimezone(_BJ).date() if dt else None
@@ -125,7 +170,7 @@ def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
         record_id=str(record.get("record_id") or ""),
         seq=seq,
         description=desc,
-        plan=(bd_fields.text(fields, F_PLAN) or "").strip(),
+        plan=(bd_fields.text(fields, plan_field) or "").strip() if plan_field else "",
         departments=bd_fields.multi(fields, F_DEPT),
         # 三态从宽判定：已关闭/整改中显式识别，其余（空/乱填）视为未关闭（不漏报）
         closed=status == STATUS_CLOSED,
@@ -136,24 +181,37 @@ def to_view(record: dict[str, Any]) -> ExternalAuditView | None:
     )
 
 
-async def fetch_external_audit() -> list[ExternalAuditView] | None:
-    """全量拉取管委会检查缺陷项（含已关闭/整改中，供统计计数）。
+async def fetch_external_audit(
+    spec: SourceSpec = SOURCE_MGMT,
+) -> list[ExternalAuditView] | None:
+    """全量拉取指定检查源的缺陷项（含已关闭/整改中，供统计计数）。
+
+    Args:
+        spec: 检查源（``SOURCES`` 之一，默认管委会检查）。
 
     Returns:
-        None：源未配置/已停用（外审节整体缺席，通报输出与「无外审节」基线
-        逐字节一致）；strict 拉取失败向上抛，由 ``bulletin._load_external_section``
+        None：源未配置/已停用（该源节整体缺席，通报输出与「无该节」基线
+        逐字节一致）；strict 拉取失败向上抛，由 ``bulletin._load_external_sections``
         兜底为缺席。
     """
     try:
-        client = bd_reader.resolve_client(DOMAIN, KIND)
+        client = bd_reader.resolve_client(DOMAIN, spec.kind)
     except BitableConfigError:
         return None
     records = await bd_reader.fetch_all_records(
-        client, field_names=REQUEST_FIELD_NAMES, strict=True,
+        client, field_names=request_fields(spec), strict=True,
     )
-    views = [v for v in (to_view(r) for r in records) if v is not None]
-    logger.info("管委会检查缺陷项直读完成: records=%d views=%d",
-                len(records), len(views))
+    views = [
+        v for v in (
+            to_view(
+                r, plan_field=spec.plan_field, target_field=spec.target_field,
+            )
+            for r in records
+        )
+        if v is not None
+    ]
+    logger.info("检查缺陷项直读完成: kind=%s records=%d views=%d",
+                spec.kind, len(records), len(views))
     return views
 
 
@@ -214,8 +272,8 @@ def _record_link(view: ExternalAuditView, app_token: str, table_id: str) -> str:
     return f"[📋 查看记录]({url})"
 
 
-def all_clear_line(stats: dict[str, Any]) -> str:
-    """无未整改时的收口行（build_bulletin 早退分支复用）。
+def all_clear_line(stats: dict[str, Any], source_label: str) -> str:
+    """单源无未整改时的收口行（build_bulletin 早退分支复用）。
 
     全部已关闭 → 累计收口；有整改中 → 并陈计数（整改中不预警但如实计数）；
     既无已关闭也无整改中（源缺席/空统计）返回空串。
@@ -225,20 +283,22 @@ def all_clear_line(stats: dict[str, Any]) -> str:
     if not closed and not doing:
         return ""
     if not doing:
-        return f"✅ {SOURCE_LABEL}已全部关闭（累计 {closed} 条）"
+        return f"✅ {source_label}已全部关闭（累计 {closed} 条）"
     segs = [f"已关闭 {closed} 条"] if closed else []
     segs.append(f"整改中 {doing} 条")
-    return f"✅ {SOURCE_LABEL}无未整改项（{'，'.join(segs)}）"
+    return f"✅ {source_label}无未整改项（{'，'.join(segs)}）"
 
 
 def build_external_section(
     views: list[ExternalAuditView],
     *,
+    source_label: str = SOURCE_LABEL,
+    plan_label: str = "方案",
     app_token: str = "",
     table_id: str = "",
     today: date | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """渲染「📌 管委会检查未整改隐患」节（markdown 行列表 + 统计，不推送）。
+    """渲染单源「📌 {源名}未整改隐患」节（markdown 行列表 + 统计，不推送）。
 
     未关闭进明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为
     未整改（仅收口行计数）；已关闭仅计数。目标完成日期纯展示，不做逾期/
@@ -258,9 +318,9 @@ def build_external_section(
         "ext_by_dept": dict(ext_by_dept),
     }
 
-    lines: list[str] = [_SEP, f"📌 {SOURCE_LABEL}未整改隐患", _SEP]
+    lines: list[str] = [_SEP, f"📌 {source_label}未整改隐患", _SEP]
     if not open_views:
-        clear = all_clear_line(stats)
+        clear = all_clear_line(stats, source_label)
         if clear:
             lines.append(clear)
         lines.append("")
@@ -302,7 +362,7 @@ def build_external_section(
         for idx, v in enumerate(items, 1):
             lines.append(f"**{idx}.** {_flat(v.description)}")
             if v.plan:
-                lines.append(f"方案：{_flat(v.plan)}")
+                lines.append(f"{plan_label}：{_flat(v.plan)}")
             segs: list[str] = []
             if v.checked_at:
                 days = (today - v.checked_at).days
@@ -323,11 +383,16 @@ __all__ = [
     "DOMAIN",
     "KIND",
     "SOURCE_LABEL",
+    "SOURCES",
+    "SOURCE_MGMT",
+    "SOURCE_EMERGENCY_BUREAU",
+    "SourceSpec",
     "ExternalAuditView",
     "REQUEST_FIELD_NAMES",
     "all_clear_line",
     "build_external_section",
     "fetch_external_audit",
     "filter_views",
+    "request_fields",
     "to_view",
 ]
