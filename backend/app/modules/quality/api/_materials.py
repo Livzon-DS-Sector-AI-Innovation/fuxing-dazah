@@ -1037,16 +1037,16 @@ async def save_plan_assignments_endpoint(
     for sop in (board_item or {}).get("sops", []):
         names = " ".join(sop.get("items", []))
         sop_groups[sop["sop_no"]] = item_group(names, mapping)
+    conflicts: list[str] = []
     for a in rows:
         g = sop_groups.get(a["sop_no"])
         if g is None:
             continue
         allowed = await group_member_ids(db, g)
         if allowed and a["assignee_id"] not in allowed:
-            raise HTTPException(
-                status_code=400,
-                detail=f"SOP {a['sop_no']} 属 {g}，所选人员不在该组班组成员中",
-            )
+            conflicts.append(f"SOP {a['sop_no']} 属 {g}，所选人员不在该组班组成员中")
+    if conflicts:
+        raise HTTPException(status_code=400, detail="；".join(conflicts) + "（请先修正或清除跨组旧排班）")
     plan.assignments = rows
     await db.flush()
     # 已建任务：同步任务分工
