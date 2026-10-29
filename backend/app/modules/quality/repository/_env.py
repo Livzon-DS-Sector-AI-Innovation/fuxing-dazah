@@ -316,9 +316,7 @@ async def group_duty(
     db: AsyncSession, group_key: str, on_date: str
 ) -> dict[str, Any]:
     """某组别当日当班：该组班组按该组轮换配置计算（无配置回退全局 rotation）。"""
-    cfg = await get_shift_config(db, f"rotation:{group_key}")
-    if cfg is None:
-        cfg = await get_shift_config(db, "rotation")
+    cfg = await get_shift_config(db, "rotation")
     value = (cfg.value or {}) if cfg else {}
     start_date = value.get("start_date")
     period_days = int(value.get("period_days") or 3)

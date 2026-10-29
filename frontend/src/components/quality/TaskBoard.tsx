@@ -105,12 +105,11 @@ export default function TaskBoard() {
     setShiftSaving(true)
     try {
       await saveShiftConfig({
-        group: activeGroup,
         start_date: (values.start_date as Dayjs).format('YYYY-MM-DD'),
         period_days: values.period_days ?? 3,
         duty_teams: values.duty_teams ?? 2,
       })
-      message.success(`${activeGroup}轮换配置已保存`)
+      message.success('轮换配置已保存')
       setShiftOpen(false)
       load()
     } catch (err: unknown) {
@@ -256,9 +255,7 @@ export default function TaskBoard() {
         title="班组与组别配置"
         open={shiftOpen}
         onCancel={() => setShiftOpen(false)}
-        onOk={onSaveShift}
-        confirmLoading={shiftSaving}
-        okText="保存轮换配置"
+        footer={null}
         width={760}
       >
         <Tabs
@@ -269,9 +266,6 @@ export default function TaskBoard() {
             label: g,
             children: (
               <Space direction="vertical" style={{ width: '100%' }} size={10}>
-                <Typography.Paragraph type="secondary" style={{ fontSize: 12.5, margin: 0 }}>
-                  {g}班组固定成员、每 3 天交替、同时 2 个班组当班（各组独立轮换）。
-                </Typography.Paragraph>
                 {shiftTeams.filter((t) => t.group_key === g).map((team) => (
                   <div key={team.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
                     <Space wrap size={6} align="center">
@@ -313,26 +307,30 @@ export default function TaskBoard() {
                     })
                   }}>新增班组</Button>
                 </Space>
-                <Form form={shiftForm} layout="inline">
-                  <Form.Item name="start_date" label="轮换基准日" rules={[{ required: true, message: '必填' }]}>
-                    <DatePicker />
-                  </Form.Item>
-                  <Form.Item name="period_days" label="周期(天)">
-                    <InputNumber min={1} max={30} />
-                  </Form.Item>
-                  <Form.Item name="duty_teams" label="当班班组数">
-                    <InputNumber min={1} max={5} />
-                  </Form.Item>
-                </Form>
-                {groups.find((x) => x.group === g) && (
-                  <Text type="secondary" style={{ fontSize: 12.5 }}>
-                    今日当班：{groups.find((x) => x.group === g)!.teams.map((t) => t.name).join('、') || '未配置'}（{groups.find((x) => x.group === g)!.members.length} 人）
-                  </Text>
-                )}
               </Space>
             ),
           }))}
         />
+        <Typography.Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>轮换配置（全局，所有组共用）</Typography.Paragraph>
+        <Form form={shiftForm} layout="inline" style={{ marginBottom: 4 }}>
+          <Form.Item name="start_date" label="轮换基准日" rules={[{ required: true, message: '必填' }]}>
+            <DatePicker />
+          </Form.Item>
+          <Form.Item name="period_days" label="周期(天)">
+            <InputNumber min={1} max={30} />
+          </Form.Item>
+          <Form.Item name="duty_teams" label="当班班组数">
+            <InputNumber min={1} max={5} />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" loading={shiftSaving} onClick={onSaveShift}>保存轮换配置</Button>
+          </Form.Item>
+        </Form>
+        {groups.length > 0 && (
+          <Text type="secondary" style={{ fontSize: 12.5, display: 'block', marginBottom: 8 }}>
+            今日当班：{groups.map((x) => `${x.group} ${x.teams.map((t) => t.name).join('+') || '未配置'}`).join('；')}
+          </Text>
+        )}
         <Typography.Paragraph strong style={{ marginTop: 12, marginBottom: 4 }}>项目组别映射（项目名关键词 → 组别）</Typography.Paragraph>
         <Space direction="vertical" style={{ width: '100%' }} size={6}>
           {Object.keys(mappingDrafts).map((g) => (
