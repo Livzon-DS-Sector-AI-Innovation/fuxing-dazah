@@ -309,14 +309,18 @@ def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) 
     """构建普通回复卡片，底部附加「📚 参考法规」链接列表。
 
     1. 剥离模型自生成的参考区块
-    2. 提取正文中 [N] 引用 → 重编号为 [1][2][3]… 顺序
-    3. 参考栏只列正文实际引用的文档，编号与正文一致
+    2. 提取正文中 [N] 引用 → 列出对应文档
+    3. 编号契约：正文 [N] 必须对应 sources[N-1]（RAG 管线锚定的编号），
+       此处**只映射、不重编号**——2026-10-30 事故根因即「按正文出现顺序
+       重排编号」把正文编号与 sources 顺序的对应关系打断，参考栏列出
+       了完全无关的文档。正文编号与 sources 顺序由 SYSTEM_PROMPT/
+       工具 docstring 双重锚定，两端一致后重编号只会制造错位。
     """
     import re
 
     answer_text = _strip_trailing_references(answer.strip())
 
-    # ── 参考法规：去重 + 按正文引用重编号 ──
+    # ── 参考法规：去重 + 按正文 [N] 原编号映射 ──
     if sources:
         # 按 doc_title 去重
         seen: set[str] = set()
@@ -334,23 +338,10 @@ def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) 
             if 1 <= n <= len(unique_sources):
                 cited_old.add(n)
 
-        if cited_old:
-            # old → new 顺序映射：被引用的按原文顺序重排为 [1][2][3]…
-            sorted_old = sorted(cited_old)
-            mapping: dict[int, int] = {old: new for new, old in enumerate(sorted_old, 1)}
-
-            # 重编号正文中的 [N] 引用
-            def _replace_ref(m: re.Match) -> str:
-                n = int(m.group(1))
-                return f"[{mapping[n]}]" if n in mapping else m.group(0)
-
-            answer_text = re.sub(r"\[(\d+)\]", _replace_ref, answer_text)
-
-            # 只保留被引用的 source，按新编号顺序
-            cited_sources = [unique_sources[old - 1] for old in sorted_old]
-        else:
-            # 正文无引用标记 → 不显示参考栏
-            cited_sources = []
+        # 仅保留被引用的 source，按原编号升序展示（编号与正文一致）
+        cited_sources = [
+            (n, unique_sources[n - 1]) for n in sorted(cited_old)
+        ]
     else:
         cited_sources = []
 
@@ -359,10 +350,10 @@ def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) 
 
     elements: list[dict[str, Any]] = [{"tag": "markdown", "content": answer_text}]
 
-    # ── 参考法规栏（仅列出正文实际引用的文档）──
+    # ── 参考法规栏（仅列出正文实际引用的文档，编号保持与正文一致）──
     if cited_sources:
         ref_lines = ["**📚 参考法规**"]
-        for i, s in enumerate(cited_sources[:_MAX_SOURCES], 1):
+        for i, s in cited_sources[:_MAX_SOURCES]:
             title = s.get("doc_title", "未知文档")
             url = s.get("feishu_url", "")
             line = f"**[{i}] {title}**"

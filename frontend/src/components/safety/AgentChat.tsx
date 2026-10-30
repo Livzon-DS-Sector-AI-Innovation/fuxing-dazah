@@ -475,6 +475,23 @@ export default function AgentChat() {
                     minWidth: 0,
                   }}
                 >
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      minWidth: 20,
+                      padding: '0 4px',
+                      marginRight: 6,
+                      borderRadius: 4,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: 'var(--color-primary, #5645d4)',
+                      background: '#e6e0f5',
+                      textAlign: 'center',
+                      lineHeight: '18px',
+                    }}
+                  >
+                    {i + 1}
+                  </span>
                   {s.doc_title}
                 </span>
                 {s.feishu_url ? (

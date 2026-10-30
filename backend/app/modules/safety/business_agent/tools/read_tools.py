@@ -294,6 +294,15 @@ async def knowledge_search(
         - answer: AI 生成的带引用回答（含内联 [N] 标注）
         - kb_empty: True 表示知识库中完全未找到相关法规条款
         - sources: 法规来源列表（含 doc_title / feishu_url，供卡片构建器生成参考法规栏）
+
+    ⚠️ 引用编号规则（转述 answer 时严格遵守）：
+    - answer 中的 [N] 与 sources 数组一一对应（[1]=sources[0]），系统末尾的
+      参考法规栏按同一编号渲染。转述/改写 answer 时必须原样保留 [N]，
+      不得重新编号、不得增删。
+    - 只允许在 sources 内的文档名旁保留 [N]；条款正文中提及的其他标准
+      （如规范性引用清单里列出的 SH/T、GB/T 编号）不是 sources 文档，
+      严禁给它们添加 [N]。
+    - 禁止自行生成「参考法规」列表——系统会依据 sources 自动附加。
     """
     user_id = ctx.deps.person.user_id if ctx.deps.person else None
     answer, sources = await run_knowledge_chat(
