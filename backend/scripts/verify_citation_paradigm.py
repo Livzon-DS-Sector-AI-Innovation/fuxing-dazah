@@ -43,12 +43,20 @@ async def main() -> None:
         print(f"❌ 越界编号: {[n for n in cited if n > len(sources)]}")
         ok = False
     # 检查每个 [N] 前的《...》是否与 sources[N-1].doc_title 相容
-    for m in re.finditer(r"《([^》]{4,80})》\s*\[(\d+)\]", answer):
+    # （库内标题常为文件名式「SH-T3020-2013石油化工…」，模型引用的是标准
+    #   正名《石油化工仪表供气设计规范》——剥离标准号前缀后做包含匹配）
+    import re as _re
+
+    def _norm_title(t: str) -> str:
+        t = _re.sub(r"(SH|GB|GBT|GB/T|AQ|HG|NB|TSG|SY)[/T]?\s*[-]?\s*\d+(?:[.\-]\d+)*", "", t)
+        t = _re.sub(r"(征求意见稿|\.pdf|\.docx?|[-–—_/（）()]+)", "", t)
+        return _re.sub(r"\s+", "", t)
+
+    for m in _re.finditer(r"《([^》]{4,80})》\s*\[(\d+)\]", answer):
         title, n = m.group(1), int(m.group(2))
         src_title = sources[n - 1]["doc_title"] if 1 <= n <= len(sources) else ""
-        key = re.sub(r"[-/\\s︱︱（）() _]+", "", title)[:10]
-        src_key = re.sub(r"[-/\\s︱︱（）() _]+", "", src_title)[:10]
-        if key and src_key and key[:6] not in src_key and src_key[:6] not in key:
+        a, b = _norm_title(title), _norm_title(src_title)
+        if a and b and a[:6] not in b and b[:6] not in a:
             print(f"❌ 编号错位: 《{title}》[{n}] 但 sources[{n}] = {src_title}")
             ok = False
     if re.search(r"(📚|📖)\s*参考", answer) or "## 参考法规" in answer:
