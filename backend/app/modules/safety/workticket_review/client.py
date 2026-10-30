@@ -773,6 +773,73 @@ class WorkTicketPlatformClient:
     # 分页防御上限（1400 人/100 每页=14 页；类属性便于测试覆写）
     _ORG_USER_MAX_PAGES = 30
 
+    # ── 系统主档（tiji-system）openapi：账号查询/人员详情（F3 身份卡）────
+    #
+    # 2026-10-30 实测：GET /api/tiji-system/openapi/account/query（blade-auth
+    # 平台 token，params 必带 tenantId+orgCode=000，按 jobNo/nickname/
+    # idCardNo 等精确查、仅在职；data 为行数组——注意行内 deptName/postName
+    # 实测恒空，组织字段须 user/detail 拉取；idCardNo 键查=0 命中，平台侧
+    # 证件号恒空=身份证关联键不可用的设计依据）。GET
+    # /api/tiji-system/openapi/user/detail（params id=平台人员 id，data 为
+    # 人员 dict：postName/deptName/deptWholeName/directLeaderName/jobNo/
+    # telephone/email/status(1在职/0离职)，entryDate 等大面积空容空）。
+    ACCOUNT_QUERY_URL = "/api/tiji-system/openapi/account/query"
+    USER_DETAIL_URL = "/api/tiji-system/openapi/user/detail"
+
+    async def _openapi_get(self, url_path: str, extra_params: dict[str, str]) -> Any:
+        """openapi 域 GET 脚手架：平台 token 头 + tenantId/orgCode 基础参数
+        + code 校验；data 形状由各调用方自行校验。"""
+        pt, _ = await self._ensure_tokens()
+        headers = {
+            "Blade-Auth": f"bearer {pt}",
+            "Tenant-Id": platform_tenant_id(),
+        }
+        params = {
+            "tenantId": platform_tenant_id(),
+            "orgCode": platform_org_code() or "000",
+            **extra_params,
+        }
+        url = f"{platform_base_url()}{url_path}"
+        resp = await self._request_json("GET", url, headers=headers, params=params)
+        if resp.get("code") not in (0, 200):
+            raise RuntimeError(
+                f"平台 openapi 接口返回失败 {url_path} code={resp.get('code')}: "
+                f"{str(resp.get('msg'))[:200]}"
+            )
+        return resp.get("data")
+
+    async def query_account(self, params: dict[str, str]) -> list[dict[str, Any]]:
+        """按工号/姓名等键精确查平台账号（只读；仅在职）。
+
+        Args:
+            params: 查询键值（jobNo / nickname / idCardNo / …，单键精确查）。
+
+        Returns:
+            账号行 list[dict]（id/nickname/jobNo/telephone…；deptName 实测恒空）。
+
+        Raises:
+            RuntimeError: 平台接口返回非成功 code 或 data 结构异常。
+        """
+        data = await self._openapi_get(self.ACCOUNT_QUERY_URL, params)
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            raise RuntimeError(f"平台账号查询响应 data 非数组: {data!r}")
+        rows = [item for item in data if isinstance(item, dict)]
+        logger.info("平台账号查询完成：%d 条", len(rows))
+        return rows
+
+    async def user_detail(self, user_id: str) -> dict[str, Any]:
+        """按平台人员 id 拉人员详情（只读）。
+
+        Raises:
+            RuntimeError: 平台接口返回非成功 code 或 data 结构异常。
+        """
+        data = await self._openapi_get(self.USER_DETAIL_URL, {"id": user_id})
+        if not isinstance(data, dict):
+            raise RuntimeError(f"平台人员详情响应缺少 data 对象: {data!r}")
+        return data
+
     # ── 风险分区（tiji-risk-prevention）：厂区风险分区轮廓（F2）专用 ──────
     #
     # 2026-10-26 实测：GET /api/tiji-risk-prevention/openapi/risk-district/page

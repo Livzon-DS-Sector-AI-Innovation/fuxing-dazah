@@ -1,4 +1,4 @@
-"""个人完整档案聚合（OhProfileService）— 五源身份匹配口径 + 降级。
+"""个人完整档案聚合（OhProfileService）— 六源身份匹配口径 + 降级。
 
 覆盖：
 - 人员解析 UUID / feishu_record_id 双入口；
@@ -6,7 +6,8 @@
   不算失配、明确不同才排除），参训=OCR 姓名等值；
 - 违章 open_id 强匹配：同 open_id 命中 / 无 open_id 姓名兜底 / open_id
   不同=同名不同人排除；源失败与未接入降级不阻塞；
-- 违章投影 person_open_id 字段映射（fields.py + _VIOLATION_KIND）。
+- 违章投影 person_open_id 字段映射（fields.py + _VIOLATION_KIND）；
+- 平台身份卡第 6 源：autouse 替身防真实平台调用，信封透传 + 源失败降级。
 """
 
 from __future__ import annotations
@@ -23,13 +24,49 @@ from app.modules.safety.models import (
     OhPerson,
     TrainingAttendee,
 )
-from app.modules.safety.service import domain_pages, oh_profile as oh_profile_mod
+from app.modules.safety.service import domain_pages
+from app.modules.safety.service import oh_profile as oh_profile_mod
 from app.modules.safety.service.oh_direct import config as od_config
 from app.modules.safety.service.oh_direct import ledger as od_ledger
 from app.modules.safety.service.oh_profile import OhProfileService
 
 NAME = "档案测试甲"
 ID_CARD = "330000199001010000"
+
+
+class _StubIdentityService:
+    """身份卡替身：默认 unmatched 信封；测试可覆写 payload / error。"""
+
+    def __init__(self) -> None:
+        self.payload: dict[str, Any] | None = None
+        self.error: Exception | None = None
+        self.calls = 0
+        self.persons: list[Any] = []
+
+    async def get_identity(self, person: Any) -> dict[str, Any]:
+        self.calls += 1
+        self.persons.append(person)
+        if self.error is not None:
+            raise self.error
+        if self.payload is not None:
+            return dict(self.payload)
+        return {
+            "status": "unmatched",
+            "fetched_at": "2026-10-30T10:00:00+08:00",
+            "match_basis": None,
+            "person": None,
+            "message": "平台未唯一确定匹配（同名多人或零命中，未自动匹配）",
+        }
+
+
+@pytest.fixture(autouse=True)
+def platform_identity_stub(monkeypatch: pytest.MonkeyPatch) -> _StubIdentityService:
+    """第 6 源替身（autouse：本文件所有 build_profile 调用不打真实平台）。"""
+    from app.modules.safety.service import platform_identity as pi_mod
+
+    stub = _StubIdentityService()
+    monkeypatch.setattr(pi_mod, "open_platform_identity_service", lambda: stub)
+    return stub
 
 
 @pytest.fixture
@@ -136,10 +173,12 @@ async def test_resolve_person_by_uuid_then_feishu_record_id(db_session) -> None:
     assert (await svc._resolve_person("00000000-0000-0000-0000-000000000000")) is None
 
 
-# ── 五源聚合 ──
+# ── 六源聚合 ──
 
 
-async def test_profile_aggregates_five_sources(db_session, vio_rows, mirror_mode) -> None:
+async def test_profile_aggregates_six_sources(
+    db_session, vio_rows, mirror_mode
+) -> None:
     person = await _seed(db_session)
     profile = await OhProfileService(db_session).build_profile(str(person.id))
     assert profile is not None
@@ -158,6 +197,9 @@ async def test_profile_aggregates_five_sources(db_session, vio_rows, mirror_mode
     assert profile["match_notes"] == {
         "trainings": "name", "violations": "mixed",
     }
+    # 平台身份卡第 6 源：替身默认 unmatched 信封原样透传
+    assert profile["platform"]["status"] == "unmatched"
+    assert profile["platform"]["person"] is None
     assert profile["errors"] == []
 
 
@@ -208,6 +250,53 @@ async def test_violations_domain_not_connected(
     assert profile["violations"] is None
     assert profile["errors"] == []
     assert profile["match_notes"]["violations"] is None
+
+
+# ── 平台身份卡第 6 源 ──
+
+
+async def test_platform_identity_envelope_passthrough(
+    db_session, vio_rows, mirror_mode, platform_identity_stub
+) -> None:
+    person = await _seed(db_session)
+    platform_identity_stub.payload = {
+        "status": "live",
+        "fetched_at": "2026-10-30T11:00:00+08:00",
+        "match_basis": "job_no",
+        "person": {
+            "platform_id": "9001", "post_name": "电焊工",
+            "dept_name": "提炼一部", "dept_whole_name": None,
+            "direct_leader": "李班组长", "job_no": "900000001",
+            "telephone": "13900000001", "email": "pingce@test.example",
+            "status": "在职", "entry_date": None,
+        },
+        "message": None,
+    }
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    assert profile["platform"]["status"] == "live"
+    assert profile["platform"]["match_basis"] == "job_no"
+    assert profile["platform"]["person"]["post_name"] == "电焊工"
+    # duck-type 匹配入参原样到达身份卡服务（直读/镜像模式无关）
+    assert platform_identity_stub.calls == 1
+    got_person = platform_identity_stub.persons[0]
+    assert got_person.name == NAME
+    assert got_person.employee_no is None  # _seed 未设工号
+    assert profile["errors"] == []
+
+
+async def test_platform_identity_failure_degrades(
+    db_session, mirror_mode, platform_identity_stub
+) -> None:
+    person = await _seed(db_session)
+    platform_identity_stub.error = RuntimeError("platform boom")
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    assert profile["platform"] is None
+    assert any(
+        e.startswith("platform_identity") for e in profile["errors"]
+    )
+    # 其余区块不受影响
+    assert len(profile["exams"]) == 1
+    assert len(profile["trainings"]) == 1
 
 
 # ── 直读模式（当前线上形态：镜像表空，人员/体检走 ledger）──

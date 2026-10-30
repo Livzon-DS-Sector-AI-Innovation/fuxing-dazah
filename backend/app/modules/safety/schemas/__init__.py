@@ -284,6 +284,8 @@ from app.modules.safety.schemas.oh_persons import (
     OhPersonResponse,
     OhPersonStats,
     OhPersonUpdate,
+    OhPlatformIdentity,
+    OhPlatformIdentityPerson,
     OhProfileApplicationOut,
     OhProfileViolationOut,
     OhTrainingAttendeeOut,

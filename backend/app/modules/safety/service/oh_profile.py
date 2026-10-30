@@ -1,4 +1,4 @@
-"""职业健康个人完整档案聚合 Service — 单人五源聚合（供档案页）。
+"""职业健康个人完整档案聚合 Service — 单人六源聚合（供档案页）。
 
 双模式（与人员/体检台账同一开关 SAFETY_OH_DIRECT_ENABLED，DB 配置中心）：
 - 直读模式（当前线上形态，镜像表已清空）：人员/体检走 oh_direct.ledger
@@ -15,8 +15,9 @@
   不同 = 同名不同人直接排除；缺任一方 open_id 才姓名兜底（逐行标注）。
 
 降级：违章源（Bitable 直读）失败/未接入置 None + errors[] 标注，不阻塞
-其余区块（overview 采集器同口径）。共用 AsyncSession 的 DB 查询串行，
-与违章网络拉取并行。
+其余区块（overview 采集器同口径）；3.x 平台身份卡为第 6 源（信封自身
+三态降级，异常时同样进 errors 不阻塞）。共用 AsyncSession 的 DB 查询串行，
+与违章/平台身份网络拉取并行。
 """
 
 from __future__ import annotations
@@ -170,10 +171,22 @@ class OhProfileService:
         trainings = await self._get_trainings(person)
         return exams, followups, applications, trainings
 
+    async def _get_platform_identity(self, person: Any) -> dict[str, Any]:
+        """第 6 源：3.x 平台身份卡（duck-type person，模式无关）。
+
+        信封自身不抛（平台失败→degraded/empty）；此方法只会因编程错误
+        冒泡，由 build_profile 按源降级进 errors。
+        """
+        from app.modules.safety.service import platform_identity
+
+        return await platform_identity.open_platform_identity_service().get_identity(
+            person
+        )
+
     # ── 聚合入口 ──
 
     async def build_profile(self, person_ref: str) -> dict[str, Any] | None:
-        """五源聚合；人员不存在返回 None，单源失败降级进 errors。
+        """六源聚合；人员不存在返回 None，单源失败降级进 errors。
 
         直读模式：person_ref=Bitable record_id，人员/体检走 ledger 直读行；
         镜像模式：UUID/feishu_record_id 解析，体检/随访走 repo person_id。
@@ -193,8 +206,9 @@ class OhProfileService:
             return None
         db_task = self._get_db_sources(person, direct=direct)
         violation_task = self._get_violations(person)
-        (db_result, violation_result) = await asyncio.gather(
-            db_task, violation_task, return_exceptions=True
+        platform_task = self._get_platform_identity(person)
+        (db_result, violation_result, platform_result) = await asyncio.gather(
+            db_task, violation_task, platform_task, return_exceptions=True
         )
 
         errors: list[str] = []
@@ -220,6 +234,17 @@ class OhProfileService:
         else:
             violations, violation_basis = violation_result
 
+        platform: dict[str, Any] | None
+        if isinstance(platform_result, Exception):
+            # 隐私红线：身份卡源失败只记异常类名，不打个人明细
+            logger.warning(
+                "档案平台身份源采集失败：%s", platform_result.__class__.__name__
+            )
+            errors.append(f"platform_identity: {platform_result.__class__.__name__}")
+            platform = None
+        else:
+            platform = platform_result
+
         return {
             "person": person,
             "exams": exams,
@@ -227,6 +252,7 @@ class OhProfileService:
             "applications": applications,
             "trainings": trainings,
             "violations": violations,
+            "platform": platform,
             "match_notes": {
                 "trainings": "name",
                 "violations": violation_basis,

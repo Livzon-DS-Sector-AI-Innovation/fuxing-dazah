@@ -21,6 +21,7 @@ from app.modules.safety.schemas import (
     OhPersonProfile,
     OhPersonResponse,
     OhPersonStats,
+    OhPlatformIdentity,
     OhProfileApplicationOut,
     OhProfileViolationOut,
     OhTrainingAttendeeOut,
@@ -97,17 +98,18 @@ async def get_oh_person(
 
 
 @oh_persons_router.get(
-    "/oh/persons/{person_id}/profile", response_model=ApiResponse, summary="个人完整档案（五源聚合）"
+    "/oh/persons/{person_id}/profile", response_model=ApiResponse, summary="个人完整档案（六源聚合）"
 )
 async def get_oh_person_profile(
     person_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """个人完整档案：基本信息 + 体检史 + 异常随访 + 转岗离岗申请 + 培训参训 + 违章。
+    """个人完整档案：基本信息 + 体检史 + 异常随访 + 转岗离岗申请 + 培训参训 + 违章 + 3.x 平台身份。
 
     person_id 支持 UUID 与 Bitable record_id（直读行防呆）；违章源（Bitable
-    直读）失败降级为 None 不阻塞其余区块，见 errors/match_notes。
+    直读）失败降级为 None 不阻塞其余区块，见 errors/match_notes；平台身份卡
+    （第 6 源）自带三态信封（platform.status），不匹配/降级不阻塞其余区块。
     """
     service = OhProfileService(db)
     profile = await service.build_profile(person_id)
@@ -127,6 +129,11 @@ async def get_oh_person_profile(
         violations=(
             [OhProfileViolationOut(**v) for v in raw_violations]
             if raw_violations is not None
+            else None
+        ),
+        platform=(
+            OhPlatformIdentity.model_validate(profile["platform"])
+            if profile.get("platform") is not None
             else None
         ),
         match_notes=profile["match_notes"],

@@ -133,7 +133,7 @@ class OhPersonStats(BaseModel):
     by_last_exam_conclusion: dict[str, int] = Field(default_factory=dict, description="按最后体检结论分布")
 
 
-# ═══════════════ 个人完整档案（五源聚合）═══════════════
+# ═══════════════ 个人完整档案（六源聚合）═══════════════
 
 
 class OhTrainingAttendeeOut(BaseModel):
@@ -195,8 +195,35 @@ class OhProfileApplicationOut(BaseModel):
     created_exam_id: uuid.UUID | None = None
 
 
+class OhPlatformIdentityPerson(BaseModel):
+    """3.x 平台身份卡字段组（user/detail 投影；身份证等敏感键一律不含）"""
+
+    platform_id: str = Field(..., description="平台人员 id")
+    post_name: str | None = Field(None, description="岗位（平台主档）")
+    dept_name: str | None = Field(None, description="部门（平台主档）")
+    dept_whole_name: str | None = Field(None, description="部门全路径")
+    direct_leader: str | None = Field(None, description="直属上级")
+    job_no: str | None = Field(None, description="工号（平台主档）")
+    telephone: str | None = Field(None, description="电话")
+    email: str | None = Field(None, description="邮箱")
+    status: str | None = Field(None, description="在职状态: 在职/离职")
+    entry_date: str | None = Field(None, description="入职日期（平台大面积空，容空）")
+
+
+class OhPlatformIdentity(BaseModel):
+    """平台身份卡信封（第 6 源；org_directory 三态口径 + unmatched）"""
+
+    status: str = Field(..., description="live | degraded | empty | unmatched")
+    fetched_at: str | None = Field(None, description="数据时点（ISO）")
+    match_basis: str | None = Field(None, description="匹配口径: job_no | name_dept")
+    person: OhPlatformIdentityPerson | None = Field(
+        None, description="平台身份字段组（unmatched/empty 时为 None）"
+    )
+    message: str | None = Field(None, description="降级/未匹配提示")
+
+
 class OhPersonProfile(BaseModel):
-    """个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章"""
+    """个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 + 平台身份"""
 
     person: OhPersonResponse
     exams: list[Any] = Field(default_factory=list, description="体检记录链（OhHealthExamResponse）")
@@ -209,6 +236,9 @@ class OhPersonProfile(BaseModel):
     )
     violations: list[OhProfileViolationOut] | None = Field(
         None, description="违章档案行（None=源未接入/失败降级）"
+    )
+    platform: OhPlatformIdentity | None = Field(
+        None, description="3.x 平台身份卡（第 6 源；None=采集异常降级，见 errors）"
     )
     match_notes: dict[str, str | None] = Field(
         default_factory=dict, description="匹配口径标注: trainings/violations"
