@@ -209,6 +209,16 @@ def person(fields: dict[str, Any], name: str) -> str | None:
     return person_name(fields.get(name)) or None
 
 
+def person_open_id(fields: dict[str, Any], name: str) -> str | None:
+    """字段名 -> 人员 open_id/userId（缺失返回 None）；姓名另走 person()。
+
+    同一人员字段可双出口取用（姓名 + open_id），open_id 供跨域强匹配
+    （如违章人员 ↔ 职业健康人员台账 open_id），消除同名误配。
+    """
+    info = person_info(fields.get(name))
+    return info["id"] or None
+
+
 def datetime_ms(fields: dict[str, Any], name: str) -> datetime | None:
     """字段名 -> UTC aware datetime；缺失或非法返回 None。"""
     return ms_to_utc(fields.get(name))

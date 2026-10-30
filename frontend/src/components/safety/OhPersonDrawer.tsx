@@ -5,8 +5,10 @@
 // 总表回填由体检解析链路 WS 自动完成，无手动入口。
 
 import { useCallback, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   App,
+  Button,
   Descriptions,
   Drawer,
   Empty,
@@ -14,6 +16,7 @@ import {
   Table,
   Tag,
 } from 'antd'
+import { ProfileOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { getOhPerson } from '@/actions/safety'
@@ -65,6 +68,7 @@ export default function OhPersonDrawer({
   onViewExams,
 }: OhPersonDrawerProps) {
   const { message } = App.useApp()
+  const router = useRouter()
   const [detail, setDetail] = useState<OhPerson | null>(person)
   const [loading, setLoading] = useState(false)
 
@@ -116,7 +120,20 @@ export default function OhPersonDrawer({
 
   return (
     <Drawer
-      title={detail ? `${detail.name} — 人员详情` : '人员详情'}
+      title={
+        detail ? (
+          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 22 }}>
+            <span>{detail.name} — 人员详情</span>
+            <Button
+              size="small"
+              icon={<ProfileOutlined />}
+              onClick={() => router.push(`/safety/occupational-health/profile/${encodeURIComponent(detail.id)}`)}
+            >
+              查看完整档案
+            </Button>
+          </span>
+        ) : '人员详情'
+      }
       open={open}
       onClose={onClose}
       width={720}

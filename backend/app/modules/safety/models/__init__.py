@@ -175,6 +175,9 @@ from app.modules.safety.models.trainings import (  # noqa: F401
     SafetyTraining,
     TrainingRecord,
 )
+from app.modules.safety.models.training_attendees import (  # noqa: F401
+    TrainingAttendee,
+)
 from app.modules.safety.models.work_ticket_review import (  # noqa: F401
     WorkTicketRectifyCheck,
     WorkTicketReview,
@@ -280,6 +283,7 @@ __all__ = [
     'SpecialOperationPersonnel',
     'SpecialOperationReport',
     'StandardCheckSnapshot',
+    'TrainingAttendee',
     'TrainingLevel',
     'TrainingMode',
     'TrainingRecord',

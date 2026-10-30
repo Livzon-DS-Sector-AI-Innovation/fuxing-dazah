@@ -510,3 +510,69 @@ export interface OhHazardMonitorQueryParams {
   workplace?: string
   keyword?: string
 }
+
+// ── 个人完整档案（五源聚合 /oh/persons/{id}/profile）──
+
+/** 参训人明细（签到表/成绩单 AI 转录，一人一场一行） */
+export interface OhTrainingAttendee {
+  training_record_id: string
+  training_name?: string
+  category?: string
+  form?: string
+  held_at?: string
+  hours?: number
+  assessment?: string
+  training_department?: string
+  person_name: string
+  score?: number | null
+  unrecognized: boolean
+  confidence?: string
+  source: string
+}
+
+/** 违章档案行（Bitable 直读投影 + 逐行匹配口径） */
+export interface OhProfileViolation {
+  record_id: string
+  occurred_at?: string
+  person_name?: string
+  department: string[]
+  category?: string
+  level?: string
+  description?: string
+  handling?: string
+  status?: string
+  retraining_note?: string
+  match_basis: 'open_id' | 'name'
+}
+
+/** 转岗/离岗申请摘要（档案页投影） */
+export interface OhProfileApplication {
+  id: string
+  application_no?: string
+  apply_status?: string
+  transfer_type?: string
+  exam_type?: string
+  employee_name?: string
+  department?: string
+  position?: string
+  new_department?: string
+  new_position?: string
+  submitted_at?: string
+  transfer_date?: string
+  leave_date?: string
+  diff_summary?: string
+  needs_exam?: boolean | null
+  created_exam_id?: string | null
+}
+
+/** 个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 */
+export interface OhPersonProfile {
+  person: OhPerson
+  exams: OhHealthExam[]
+  followups: OhFollowup[]
+  applications: OhProfileApplication[]
+  trainings: OhTrainingAttendee[]
+  violations: OhProfileViolation[] | null // null=源未接入/失败降级
+  match_notes: { trainings?: string | null; violations?: string | null }
+  errors: string[]
+}

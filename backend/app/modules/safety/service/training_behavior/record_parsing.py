@@ -24,6 +24,9 @@ import logging
 import os
 from typing import Any
 
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.modules.safety.ai_training_record_parsing import (
     CONFIDENCE_HIGH,
     DOC_UNKNOWN,
@@ -32,6 +35,7 @@ from app.modules.safety.ai_training_record_parsing import (
     TrainingRecordParsingError,
     TrainingRecordParsingPlugin,
 )
+from app.modules.safety.models import TrainingAttendee
 from app.modules.safety.service.bitable_direct import fields as bd_fields
 from app.modules.safety.service.bitable_direct import reader as bd_reader
 from app.modules.safety.service.bitable_direct.writer import resolve_field_id
@@ -44,9 +48,17 @@ ATTENDANCE_COLUMN = "实到人数"
 PASSED_COLUMN = "考核合格人数"
 REMARK_COLUMN = "备注"
 
+# 培训行快照列（参训人明细落库用，与 Bitable「培训计划与实施表」列名契约一致）
+CATEGORY_COLUMN = "培训类别"
+FORM_COLUMN = "培训形式"
+HELD_AT_COLUMN = "实施日期"
+HOURS_COLUMN = "培训学时"
+DEPARTMENT_COLUMN = "组织部门"
+
 _READ_FIELDS = (
     "培训名称", "应到人数", "考核方式", SIGN_COLUMN,
     ATTENDANCE_COLUMN, PASSED_COLUMN, REMARK_COLUMN,
+    CATEGORY_COLUMN, FORM_COLUMN, HELD_AT_COLUMN, HOURS_COLUMN, DEPARTMENT_COLUMN,
 )
 
 
@@ -94,6 +106,91 @@ def build_writeback_fields(
     return fields
 
 
+# ═══════════════════════════ 参训人明细落库 ═══════════════════════════
+
+
+def _score_by_name(output: TrainingRecordParseOutput) -> dict[str, float]:
+    """成绩单分数明细 -> {姓名: 分数}（score 只抄录不推算，非法值丢弃）。"""
+    scores: dict[str, float] = {}
+    for item in output.scores:
+        name = str(item.get("name") or "").strip()
+        raw = item.get("score")
+        if not name or raw is None:
+            continue
+        try:
+            scores[name] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return scores
+
+
+def build_attendee_rows(
+    record_id: str, fields: dict[str, Any], output: TrainingRecordParseOutput
+) -> list[TrainingAttendee]:
+    """解析输出 + 培训行 → 参训人明细行（一人一场一行；无法识别返回 []）。
+
+    names 逐名转录去重保序；unrecognized 名单不在 names 时单独成行
+    （unrecognized=True，展示灰显）。培训行快照随行落库，档案页不回查 Bitable。
+    """
+    if output.doc_type == DOC_UNKNOWN:
+        return []
+    unrecognized_set = {n.strip() for n in output.unrecognized if n.strip()}
+    ordered: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+    for raw_name in output.names:
+        name = (raw_name or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ordered.append((name, name in unrecognized_set))
+    for name in sorted(unrecognized_set - seen):
+        ordered.append((name, True))
+    if not ordered:
+        return []
+
+    hours_raw = bd_fields.text(fields, HOURS_COLUMN)
+    try:
+        hours = float(hours_raw) if hours_raw else None
+    except (TypeError, ValueError):
+        hours = None
+    department = "、".join(bd_fields.multi(fields, DEPARTMENT_COLUMN)) or None
+    score_map = _score_by_name(output)
+    return [
+        TrainingAttendee(
+            training_record_id=record_id,
+            training_name=bd_fields.text(fields, "培训名称"),
+            category=bd_fields.select(fields, CATEGORY_COLUMN),
+            form=bd_fields.select(fields, FORM_COLUMN),
+            held_at=bd_fields.datetime_ms(fields, HELD_AT_COLUMN),
+            hours=hours,
+            assessment=bd_fields.select(fields, "考核方式"),
+            training_department=department,
+            person_name=name,
+            score=score_map.get(name),
+            unrecognized=is_unrecognized,
+            confidence=output.confidence,
+            source="ai_parse",
+        )
+        for name, is_unrecognized in ordered
+    ]
+
+
+async def persist_attendees(
+    db: AsyncSession, record_id: str, rows: list[TrainingAttendee]
+) -> None:
+    """幂等落库：软删该培训行旧明细后重插（部分唯一索引外不冲突）。"""
+    await db.execute(
+        update(TrainingAttendee)
+        .where(
+            TrainingAttendee.training_record_id == record_id,
+            TrainingAttendee.is_deleted == False,  # noqa: E712
+        )
+        .values(is_deleted=True)
+    )
+    db.add_all(rows)
+    await db.flush()
+
+
 # ═══════════════════════════ 解析编排 ═══════════════════════════
 
 
@@ -102,8 +199,14 @@ async def parse_training_record(
     record_id: str,
     opener: Opener | None = None,
     ai_service: Any = None,
+    db: AsyncSession | None = None,
 ) -> dict[str, Any]:
-    """单行解析：读行 → 下载签到表首个附件 → vision 解析 → 分级回填。"""
+    """单行解析：读行 → 下载签到表首个附件 → vision 解析 → 分级回填。
+
+    db 提供时同步落参训人明细（names/scores/unrecognized，一人一场一行，
+    重跑幂等=软删旧重插）；落库失败仅告警不阻塞 Bitable 回填（联动不阻塞
+    主流程，与人员汇总表回填同口径）。db=None 兼容旧调用方（不落库）。
+    """
     open_client = opener or bd_reader.resolve_client
     try:
         client = open_client("training_behavior", "training")
@@ -176,10 +279,32 @@ async def parse_training_record(
         record_id, output.doc_type, output.confidence,
         [k for k in (ATTENDANCE_COLUMN, PASSED_COLUMN) if k in writeback],
     )
+    attendees_persisted: int | None = None
+    if db is not None:
+        rows = build_attendee_rows(record_id, fields, output)
+        if rows:
+            try:
+                await persist_attendees(db, record_id, rows)
+                attendees_persisted = len(rows)
+                logger.info(
+                    "参训人明细落库：record=%s %d 行（unrecognized=%d）",
+                    record_id, len(rows),
+                    sum(1 for r in rows if r.unrecognized),
+                )
+            except Exception:
+                await db.rollback()
+                logger.warning(
+                    "参训人明细落库失败（不阻塞解析回填）: record=%s",
+                    record_id, exc_info=True,
+                )
+                attendees_persisted = 0
+        else:
+            attendees_persisted = 0
     return {
         "record_id": record_id,
         "parse": output.model_dump(),
         "writeback_keys": list(writeback.keys()),
+        "attendees_persisted": attendees_persisted,
     }
 
 
@@ -190,7 +315,9 @@ __all__ = [
     "SIGN_COLUMN",
     "RecordParseStateError",
     "TrainingRecordParsingError",
+    "build_attendee_rows",
     "build_remark_line",
     "build_writeback_fields",
     "parse_training_record",
+    "persist_attendees",
 ]

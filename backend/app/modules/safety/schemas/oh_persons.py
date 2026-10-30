@@ -107,6 +107,11 @@ class OhPersonResponse(OhPersonBase):
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
+    # Bitable 总表身份证列存在脏值（如逗号拼接的重复号，实测 39 字符），
+    # 响应层放宽避免整页 500（人员面板统计卡拉 200 条曾被此打断）；
+    # 写入路径（Create/Update→DB String(32)）仍走 Base 的 32 上限。
+    id_card_no: str | None = Field(None, max_length=128)
+
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
@@ -126,3 +131,86 @@ class OhPersonStats(BaseModel):
     by_position: dict[str, int] = Field(default_factory=dict, description="按岗位分布")
     by_work_status: dict[str, int] = Field(default_factory=dict, description="按在岗状态分布")
     by_last_exam_conclusion: dict[str, int] = Field(default_factory=dict, description="按最后体检结论分布")
+
+
+# ═══════════════ 个人完整档案（五源聚合）═══════════════
+
+
+class OhTrainingAttendeeOut(BaseModel):
+    """参训人明细（签到表/成绩单 AI 转录，一人一场一行）"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    training_record_id: str = Field(..., description="培训行 Bitable record_id")
+    training_name: str | None = Field(None, description="培训名称快照")
+    category: str | None = Field(None, description="培训类别快照")
+    form: str | None = Field(None, description="培训形式快照")
+    held_at: datetime | None = Field(None, description="实施日期快照")
+    hours: float | None = Field(None, description="培训学时快照")
+    assessment: str | None = Field(None, description="考核方式快照")
+    training_department: str | None = Field(None, description="组织部门快照")
+    person_name: str = Field(..., description="参训人姓名（OCR 转录）")
+    score: float | None = Field(None, description="考核成绩（成绩单明细按名匹配）")
+    unrecognized: bool = Field(False, description="姓名辨认不清（展示灰显）")
+    confidence: str | None = Field(None, description="解析置信度: high/medium/low")
+    source: str = Field("ai_parse", description="来源: ai_parse | manual")
+
+
+class OhProfileViolationOut(BaseModel):
+    """违章档案行（Bitable 直读投影 + 逐行匹配口径）"""
+
+    record_id: str = Field("", description="Bitable record_id")
+    occurred_at: str | None = Field(None, description="违章日期（ISO）")
+    person_name: str | None = Field(None, description="违章人员姓名")
+    department: list[str] = Field(default_factory=list, description="所属单位")
+    category: str | None = Field(None, description="违章类别")
+    level: str | None = Field(None, description="违章等级")
+    description: str | None = Field(None, description="违章描述")
+    handling: str | None = Field(None, description="处理方式")
+    status: str | None = Field(None, description="状态")
+    retraining_note: str | None = Field(None, description="定向培训")
+    match_basis: str = Field(..., description="匹配口径: open_id | name")
+
+
+class OhProfileApplicationOut(BaseModel):
+    """转岗/离岗申请摘要（档案页投影）"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    application_no: str | None = None
+    apply_status: str | None = None
+    transfer_type: str | None = None
+    exam_type: str | None = None
+    employee_name: str | None = None
+    department: str | None = None
+    position: str | None = None
+    new_department: str | None = None
+    new_position: str | None = None
+    submitted_at: datetime | None = None
+    transfer_date: datetime | None = None
+    leave_date: datetime | None = None
+    diff_summary: str | None = None
+    needs_exam: bool | None = None
+    created_exam_id: uuid.UUID | None = None
+
+
+class OhPersonProfile(BaseModel):
+    """个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章"""
+
+    person: OhPersonResponse
+    exams: list[Any] = Field(default_factory=list, description="体检记录链（OhHealthExamResponse）")
+    followups: list[Any] = Field(default_factory=list, description="异常随访（OhFollowupResponse）")
+    applications: list[OhProfileApplicationOut] = Field(
+        default_factory=list, description="转岗/离岗申请"
+    )
+    trainings: list[OhTrainingAttendeeOut] = Field(
+        default_factory=list, description="培训参训明细（签到表AI转录，姓名匹配）"
+    )
+    violations: list[OhProfileViolationOut] | None = Field(
+        None, description="违章档案行（None=源未接入/失败降级）"
+    )
+    match_notes: dict[str, str | None] = Field(
+        default_factory=dict, description="匹配口径标注: trainings/violations"
+    )
+    errors: list[str] = Field(default_factory=list, description="降级源标注")

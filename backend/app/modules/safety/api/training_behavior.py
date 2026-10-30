@@ -185,18 +185,21 @@ class RecordParseRequest(BaseModel):
 )
 async def parse_training_record(
     body: RecordParseRequest,
+    db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
     try:
         data = await record_parsing.parse_training_record(
-            record_id=body.record_id
+            record_id=body.record_id, db=db
         )
     except record_parsing.RecordParseStateError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TrainingRecordParsingError as exc:
         raise HTTPException(status_code=502, detail=f"vision 解析失败: {exc}") from exc
     parse = data["parse"]
+    persisted = data.get("attendees_persisted")
+    suffix = f"，参训人明细 {persisted} 行落库" if persisted else ""
     message = (
         f"解析完成：{parse['doc_type']}（confidence={parse['confidence']}），"
-        f"回填列：{data['writeback_keys'] or '仅备注'}"
+        f"回填列：{data['writeback_keys'] or '仅备注'}{suffix}"
     )
     return ApiResponse(data=data, message=message)

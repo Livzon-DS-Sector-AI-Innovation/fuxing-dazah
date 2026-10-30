@@ -6,6 +6,7 @@
 //     接触危害 Select 选中任意因素即按「接害人员」筛选。
 
 import { useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Button,
   Input,
@@ -67,6 +68,7 @@ interface OhPersonsPanelProps {
 }
 
 export default function OhPersonsPanel({ onViewExams }: OhPersonsPanelProps) {
+  const router = useRouter()
   const [keyword, setKeyword] = useState('')
   const [department, setDepartment] = useState('')
   const [position, setPosition] = useState('')
@@ -192,6 +194,18 @@ export default function OhPersonsPanel({ onViewExams }: OhPersonsPanelProps) {
     {
       title: '最后结论', dataIndex: 'last_exam_conclusion', key: 'last_exam_conclusion', width: 100,
       render: (v: string) => <Pill status={v} map={OH_AI_CONCLUSION_UI} toneMap={AI_CONCLUSION_TONE} />,
+    },
+    {
+      title: '操作', key: 'ops', width: 90, fixed: 'right',
+      render: (_: unknown, record: OhPerson) => (
+        <span
+          role="button"
+          style={{ ...linkPrimary, cursor: 'pointer' }}
+          onClick={() => router.push(`/safety/occupational-health/profile/${encodeURIComponent(record.id)}`)}
+        >
+          查看档案
+        </span>
+      ),
     },
   ], []) // eslint-disable-line react-hooks/exhaustive-deps
 

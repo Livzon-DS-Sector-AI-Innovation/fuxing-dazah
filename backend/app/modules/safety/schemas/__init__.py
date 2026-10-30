@@ -280,9 +280,13 @@ from app.modules.safety.schemas.oh_persons import (
     OhPersonBase,
     OhPersonCreate,
     OhPersonDetail,
+    OhPersonProfile,
     OhPersonResponse,
     OhPersonStats,
     OhPersonUpdate,
+    OhProfileApplicationOut,
+    OhProfileViolationOut,
+    OhTrainingAttendeeOut,
     OhWorkStatus,
 )
 from app.modules.safety.schemas.oh_positions import (

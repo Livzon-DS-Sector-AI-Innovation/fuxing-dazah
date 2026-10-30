@@ -18,10 +18,14 @@ from app.modules.safety.schemas import (
     OhFollowupResponse,
     OhHealthExamResponse,
     OhPersonDetail,
+    OhPersonProfile,
     OhPersonResponse,
     OhPersonStats,
+    OhProfileApplicationOut,
+    OhProfileViolationOut,
+    OhTrainingAttendeeOut,
 )
-from app.modules.safety.service import OhPersonService
+from app.modules.safety.service import OhPersonService, OhProfileService
 
 oh_persons_router = APIRouter()
 
@@ -90,6 +94,45 @@ async def get_oh_person(
     detail.exams = [OhHealthExamResponse.model_validate(e) for e in exams]
     detail.followups = [OhFollowupResponse.model_validate(f) for f in followups]
     return ApiResponse(data=detail)
+
+
+@oh_persons_router.get(
+    "/oh/persons/{person_id}/profile", response_model=ApiResponse, summary="个人完整档案（五源聚合）"
+)
+async def get_oh_person_profile(
+    person_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """个人完整档案：基本信息 + 体检史 + 异常随访 + 转岗离岗申请 + 培训参训 + 违章。
+
+    person_id 支持 UUID 与 Bitable record_id（直读行防呆）；违章源（Bitable
+    直读）失败降级为 None 不阻塞其余区块，见 errors/match_notes。
+    """
+    service = OhProfileService(db)
+    profile = await service.build_profile(person_id)
+    if profile is None:
+        return ApiResponse(code=404, message="人员记录不存在")
+    raw_violations = profile["violations"]
+    data = OhPersonProfile(
+        person=OhPersonResponse.model_validate(profile["person"]),
+        exams=[OhHealthExamResponse.model_validate(e) for e in profile["exams"]],
+        followups=[OhFollowupResponse.model_validate(f) for f in profile["followups"]],
+        applications=[
+            OhProfileApplicationOut.model_validate(a) for a in profile["applications"]
+        ],
+        trainings=[
+            OhTrainingAttendeeOut.model_validate(t) for t in profile["trainings"]
+        ],
+        violations=(
+            [OhProfileViolationOut(**v) for v in raw_violations]
+            if raw_violations is not None
+            else None
+        ),
+        match_notes=profile["match_notes"],
+        errors=profile["errors"],
+    )
+    return ApiResponse(data=data)
 
 
 @oh_persons_router.get(

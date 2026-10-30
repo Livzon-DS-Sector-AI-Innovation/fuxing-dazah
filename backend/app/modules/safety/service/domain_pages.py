@@ -136,6 +136,8 @@ def _map_row(record: dict[str, Any], spec: KindSpec) -> dict[str, Any]:
             row[en] = bd_fields.multi(fields, cn)
         elif ftype == "person":
             row[en] = bd_fields.person(fields, cn)
+        elif ftype == "person_open_id":
+            row[en] = bd_fields.person_open_id(fields, cn)
         elif ftype == "datetime":
             dt = bd_fields.datetime_ms(fields, cn)
             row[en] = dt.isoformat() if dt else None
@@ -179,6 +181,7 @@ _VIOLATION_KIND = KindSpec(
     fields=(
         ("违章日期", "occurred_at", "datetime"),
         ("违章人员", "person_name", "person"),
+        ("违章人员", "person_open_id", "person_open_id"),
         ("所属单位", "department", "multi"),
         ("违章类别", "category", "enum"),
         ("违章等级", "level", "enum"),

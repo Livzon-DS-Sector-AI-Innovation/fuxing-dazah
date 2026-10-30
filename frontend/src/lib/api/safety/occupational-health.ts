@@ -1,4 +1,4 @@
-import type { OhPerson, OhPersonQueryParams, OhPersonStats, OhHealthExam, OhHealthExamQueryParams, OhExamStats, OhFollowup, OhFollowupQueryParams, OhPosition, OhPositionQueryParams, OhHazardFactor, OhHazardFactorQueryParams } from '@/types/safety'
+import type { OhPerson, OhPersonQueryParams, OhPersonStats, OhPersonProfile, OhHealthExam, OhHealthExamQueryParams, OhExamStats, OhFollowup, OhFollowupQueryParams, OhPosition, OhPositionQueryParams, OhHazardFactor, OhHazardFactorQueryParams } from '@/types/safety'
 import { apiGet, apiFetchPaginated, API_BASE_URL } from '@/lib/http-client'
 
 
@@ -82,4 +82,11 @@ export async function fetchOhHazardFactors(
   if (params?.page_size) sp.set('page_size', String(params.page_size))
   const qs = sp.toString()
   return apiGet(API_BASE_URL + '/api/v1/safety/oh/hazard-factors' + (qs ? '?' + qs : ''))
+}
+
+/** 个人完整档案（五源聚合：人员+体检+随访+转岗申请+培训参训+违章） */
+export async function fetchOhPersonProfile(personId: string): Promise<OhPersonProfile> {
+  return apiGet(
+    API_BASE_URL + `/api/v1/safety/oh/persons/${encodeURIComponent(personId)}/profile`,
+  )
 }

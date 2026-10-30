@@ -39,5 +39,6 @@ from app.modules.safety.service.special_operation_report import (
 __all__ = ['SafetyService', 'HazardService', 'SopGeneratorService', 'create_ai_service', 'KnowledgeService', 'SpecialOperationReportService', 'KeyRiskOperationReportService', 'RiskAssessmentEngine', 'ReportBuilder', 'SpecialOperationDailyReportService', 'EhsChangeService', 'URSService', 'EmergencyDrillService', 'OhHealthExamService', 'OhPersonService', 'OhPositionService', 'OhTransferService', 'OhHazardFactorService', 'OhFollowupService', 'MsdsService', 'OhArchiveService', 'ContractorAdmissionService', 'CertWarningService', 'CertWarningEngine', 'ChemicalInventoryService']
 from app.modules.safety.service.hazard_risk_option import HazardRiskOptionService
 from app.modules.safety.service.oh_hazard_monitor import OhHazardMonitorService
+from app.modules.safety.service.oh_profile import OhProfileService
 
-__all__ += ['HazardRiskOptionService', 'OhHazardMonitorService']
+__all__ += ['HazardRiskOptionService', 'OhHazardMonitorService', 'OhProfileService']
