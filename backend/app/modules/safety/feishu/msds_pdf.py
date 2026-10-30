@@ -40,11 +40,16 @@ _FONT = "STSong-Light"
 # 字号对齐《无水硫酸镁；泻盐MSDS.pdf》（客观测量）：
 #   - 标题 36pt、顶部两行（名称/分子式/UNNo/CAS No 及值）12pt 横排
 #   - 其余全部 9pt（竖排标签、节标题、正文）
+# 单页自适应（2026-10-30，打印需求）：以上为 1.0 倍基准，放不进一页时按
+# _SCALE_STEPS 逐档整体缩小字号重排（列宽/版式不变），直到整表收进一页。
 _TITLE = ParagraphStyle("msds_title", fontName=_FONT, fontSize=36, leading=42, alignment=1, spaceAfter=8)
 _LABEL_TOP = ParagraphStyle("msds_label_top", fontName=_FONT, fontSize=12, leading=16, alignment=1)
 _VALUE_TOP = ParagraphStyle("msds_value_top", fontName=_FONT, fontSize=12, leading=16)
 _LABEL = ParagraphStyle("msds_label", fontName=_FONT, fontSize=9, leading=12, wordWrap="CJK")
 _BODY = ParagraphStyle("msds_body", fontName=_FONT, fontSize=9, leading=13, wordWrap="CJK")
+
+# 缩放档位：内容多时先挤上下边距与行距，再缩字号；下限 6.5pt 仍放不下才分页
+_SCALE_STEPS: tuple[float, ...] = (1.0, 0.94, 0.89, 0.83, 0.78, 0.72, 0.67)
 
 # 列宽（pt）：左竖排标签(20) + 顶部横排标签位(40) + 内容(186.65) ×2；边距 51pt → 表格宽 493.3
 _COL_LABEL_NARROW = 20
@@ -103,12 +108,12 @@ def _bullet_lines(section: str, entry: dict, section_parts: dict) -> list[str]:
     return lines
 
 
-def _block_cell(header: str, body_lines: list[str]) -> Paragraph:
-    """大块单元格：节标题（字号略大）+ ● 内容行。"""
+def _block_cell(header: str, body_lines: list[str], style: ParagraphStyle | None = None) -> Paragraph:
+    """大块单元格：节标题（字号略大）+ ● 内容行（style 注入供自适应档位）。"""
     pieces = [_section_header(header)]
     for line in body_lines:
         pieces.append(_esc(line))
-    return Paragraph("<br/>".join(pieces), _BODY)
+    return Paragraph("<br/>".join(pieces), style or _BODY)
 
 
 def _section_header(text: str) -> str:
@@ -138,13 +143,132 @@ def _body(text: str) -> Paragraph:
 # ── 主入口 ────────────────────────────────────────────────────────────
 
 
+def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
+    """按缩放系数派生一套字号/行距（标题档位差压平，正文线性缩）。"""
+    title = ParagraphStyle(
+        "msds_title", fontName=_FONT,
+        fontSize=round(36 * scale), leading=42 * scale, alignment=1,
+        spaceAfter=8 * scale,
+    )
+    top = round(12 * scale, 1)
+    body = round(9 * scale, 2)
+    return {
+        "title": title,
+        "label_top": ParagraphStyle("msds_label_top", fontName=_FONT, fontSize=top, leading=16 * scale, alignment=1),
+        "value_top": ParagraphStyle("msds_value_top", fontName=_FONT, fontSize=top, leading=16 * scale),
+        "label": ParagraphStyle("msds_label", fontName=_FONT, fontSize=body, leading=12 * scale, wordWrap="CJK"),
+        "body": ParagraphStyle("msds_body", fontName=_FONT, fontSize=body, leading=13 * scale, wordWrap="CJK"),
+    }
+
+
+def _clip_entry(entry: dict, limit: int) -> dict:
+    """极端长文安全阀：每个文本字段截到 limit 字（保号 + …截断 标记）。"""
+    clipped: dict = {}
+    for k, v in entry.items():
+        if isinstance(v, str) and len(v) > limit:
+            clipped[k] = v[:limit].rstrip() + "…截断"
+        else:
+            clipped[k] = v
+    return clipped
+
+
+def _fits_one_page(
+    title: Paragraph,
+    table: Table,
+    scale: float,
+) -> bool:
+    """试排：该档位下「标题 + 表格」能否收进一页（落临时文件数页数）。"""
+    top_margin = max(18.0, 31 * scale)
+    bottom_margin = max(16.0, 30 * scale)
+
+    doc = SimpleDocTemplate(
+        "/tmp/_msds_fits_probe.pdf", pagesize=A4,
+        leftMargin=51.3, rightMargin=51.3,
+        topMargin=top_margin, bottomMargin=bottom_margin,
+    )
+    try:
+        doc.build([title, table])
+    except Exception:
+        # 单个 Flowable 本身高过一页（极端长文）→ 该档位判不放
+        return False
+    import os
+
+    try:
+        from pypdf import PdfReader
+
+        pages = len(PdfReader("/tmp/_msds_fits_probe.pdf").pages)
+    except ImportError:
+        # pypdf 缺失时退回文件大小启发式（不精确兜底）
+        pages = 1 if os.path.getsize("/tmp/_msds_fits_probe.pdf") < 65536 else 2
+    finally:
+        try:
+            os.unlink("/tmp/_msds_fits_probe.pdf")
+        except OSError:
+            pass
+    return pages <= 1
+
+
 def build_standard_msds_pdf(entry: dict, output_path: str) -> str:
-    """将单条 28 字段填充为企业标准 PDF（复刻无水硫酸镁格式）。
+    """将单条 28 字段填充为企业标准 PDF，**强制收进单页**（打印需求）。
+
+    从参考版式 1.0 倍起步逐档缩小字号重排（版式/列宽不变），直到整表
+    收进一页；最小档仍放不下时逐级截断超长内容（保号留「…截断」标记，
+    完整全文永远在飞书台账行里）。
 
     Args:
         entry: AI 提取的单化学品 28 字段 dict
         output_path: 输出 pdf 路径
     """
+    parts: tuple[Paragraph, Table] | None = None
+    scale = _SCALE_STEPS[-1]
+    for step in _SCALE_STEPS:
+        style = _scaled_styles(step)
+        parts = _build_parts(entry, style)
+        if _fits_one_page(parts[0], parts[1], step):
+            scale = step
+            break
+        if step == _SCALE_STEPS[-1]:
+            # 最小档放不下：内容截断逐级加倍直到收进一页（极端长文安全阀）
+            for cut in (800, 400, 200, 100, 50):
+                clipped = _clip_entry(entry, cut)
+                parts = _build_parts(clipped, style)
+                if _fits_one_page(parts[0], parts[1], step):
+                    logger.warning(
+                        "MSDS PDF 内容超长已截断(每字段≤%d字): %s", cut, entry.get("name")
+                    )
+                    break
+    title, table = parts  # type: ignore[misc]
+    top_margin = max(18.0, 31 * scale)
+    bottom_margin = max(16.0, 30 * scale)
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=A4,
+        leftMargin=51.3, rightMargin=51.3,
+        topMargin=top_margin, bottomMargin=bottom_margin,
+        title="化学品安全技术说明书（MSDS）",
+        author="DAZAH 安全模块",
+    )
+    doc.build([title, table])
+    logger.info(
+        "MSDS 标准 PDF 已生成(单页自适应 scale=%.2f): %s", scale, output_path
+    )
+    return output_path
+
+
+def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragraph, Table]:
+    """组装流内容：返回（标题, 主表格）。样式由单页自适应档位注入。"""
+    def st_body(text: str) -> Paragraph:
+        return Paragraph(_esc(text), style["body"])
+
+    def st_label(text: str) -> Paragraph:
+        return Paragraph(_esc(text), style["label"])
+
+    def st_label_top(text: str) -> Paragraph:
+        return Paragraph(_esc(text), style["label_top"])
+
+    def st_value_top(text: str) -> Paragraph:
+        return Paragraph(_esc(text), style["value_top"])
+
     # 预拆分组合字段
     section_parts: dict[str, dict[str, str]] = {}
     for section, field_key in _SECTION_FIELD.items():
@@ -171,30 +295,30 @@ def build_standard_msds_pdf(entry: dict, output_path: str) -> str:
 
     # ② 大块内容（左：健康危害/急救/接触控制；右：稳定性/泄漏/消防/废弃）
     health = entry.get("health_hazard") or ""
-    left_block = _block_cell("健康危害", [f"● {health}"] if health else [])
+    left_block = _block_cell("健康危害", [f"● {health}"] if health else [], style["body"])
     first_aid_lines = _bullet_lines("急救措施", entry, section_parts)
     if first_aid_lines:
         left_block = Paragraph(
             left_block.text + "<br/><br/>" + _section_header("急救措施") + "<br/>"
             + "<br/>".join(_esc(line) for line in first_aid_lines),
-            _BODY,
+            style["body"],
         )
     exposure_lines = _bullet_lines("接触控制/个体防护", entry, section_parts)
     if exposure_lines:
         left_block = Paragraph(
             left_block.text + "<br/><br/>" + _section_header("接触控制/个体防护") + "<br/>"
             + "<br/>".join(_esc(line) for line in exposure_lines),
-            _BODY,
+            style["body"],
         )
 
-    right_block = _block_cell("稳定性和反应性", _bullet_lines("稳定性和反应性", entry, section_parts))
+    right_block = _block_cell("稳定性和反应性", _bullet_lines("稳定性和反应性", entry, section_parts), style["body"])
     for section in ("泄漏应急处理", "消防措施", "废弃处置"):
         lines = _bullet_lines(section, entry, section_parts)
         if lines:
             right_block = Paragraph(
                 right_block.text + "<br/><br/>" + _section_header(section) + "<br/>"
                 + "<br/>".join(_esc(line) for line in lines),
-                _BODY,
+                style["body"],
             )
 
     # ③ 操作处置与储存注意事项
@@ -209,29 +333,35 @@ def build_standard_msds_pdf(entry: dict, output_path: str) -> str:
     hazard_statement = entry.get("hazard_statement") or ""
     label_elements = entry.get("label_elements") or ""
 
-    # 顶部两行横排 12pt（对齐参考）
+    # 顶部两行横排（对齐参考）
     table_data: list[list[object]] = [
-        [_label_top("名 称"), "", _value_top(name), _label_top("UN No"), "", _value_top(un_no)],
-        [_label_top("分子式"), "", _value_top(formula), _label_top("CAS No"), "", _value_top(cas_no)],
+        [st_label_top("名 称"), "", st_value_top(name), st_label_top("UN No"), "", st_value_top(un_no)],
+        [st_label_top("分子式"), "", st_value_top(formula), st_label_top("CAS No"), "", st_value_top(cas_no)],
     ]
-    # 危险性说明 / 标签要素（竖排 9pt 标签 + 内容跨 2 列；内容放 SPAN 锚点列）
+    # 危险性说明 / 标签要素（竖排标签 + 内容跨 2 列；内容放 SPAN 锚点列）
     table_data.append(
-        [_label("危险性说明"), _body(hazard_statement), "", _label("标签要素"), _body(label_elements), ""]
+        [st_label("危险性说明"), st_body(hazard_statement), "", st_label("标签要素"), st_body(label_elements), ""]
     )
     # 理化特性(左) × 职业接触限值(右) 交错 6 行（标签竖排跨 6 行；内容放 SPAN 锚点列）
     for i in range(6):
         table_data.append(
             [
-                "" if i else _label("理化特性"),
-                _body(phys_rows[i][0]), "",
-                "" if i else _label("职业接触限值"),
-                _body(oel_rows[i]), "",
+                "" if i else st_label("理化特性"),
+                st_body(phys_rows[i][0]), "",
+                "" if i else st_label("职业接触限值"),
+                st_body(oel_rows[i]), "",
             ]
         )
     # 大块左右分栏 + 底部操作处置（内容放 SPAN 锚点列）
     table_data.append([left_block, "", "", right_block, "", ""])
-    table_data.append([_label("操作处置与储存注意事项"), Paragraph(handling_text, _BODY), "", "", "", ""])
+    table_data.append([st_label("操作处置与储存注意事项"), Paragraph(handling_text, style["body"]), "", "", "", ""])
 
+    title_para = Paragraph("MSDS 表", style["title"])
+    return title_para, _build_table(table_data)
+
+
+def _build_table(table_data: list[list[object]]) -> Table:
+    """6 列 SPAN/GRID 版式（列宽/边距固定，缩字号即缩行数 → 高度自适应）。"""
     table = Table(table_data, colWidths=_COLS)
     spans = [
         # 顶部两行：标签横跨左/右标签+延伸列
@@ -270,17 +400,7 @@ def build_standard_msds_pdf(entry: dict, output_path: str) -> str:
             ]
         )
     )
-
-    doc = SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        leftMargin=51.3, rightMargin=51.3, topMargin=31, bottomMargin=30,
-        title="化学品安全技术说明书（MSDS）",
-        author="DAZAH 安全模块",
-    )
-    doc.build([Paragraph("MSDS 表", _TITLE), table])
-    logger.info("MSDS 标准 PDF 已生成: %s", output_path)
-    return output_path
+    return table
 
 
 def standard_pdf_filename(entry: dict, collection_id: str, idx: int) -> str:

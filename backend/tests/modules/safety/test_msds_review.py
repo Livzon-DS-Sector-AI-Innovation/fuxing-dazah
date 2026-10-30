@@ -231,3 +231,39 @@ async def test_proofread_entry_skips_empty_entry(fake_ai_factory):
 async def test_proofread_entry_none_issues_tolerated(fake_ai_factory):
     fake_ai_factory({"issues": None})
     assert await proofread_entry({"name": "乙醇"}) == []
+
+
+# ── 标准 PDF 单页契约（打印需求，2026-10-30）──
+
+
+def test_standard_pdf_single_page(tmp_path):
+    """常规与超长内容都必须输出单页（自适应缩放 + 极端截断安全阀）。"""
+    pypdf = pytest.importorskip("pypdf")
+    from app.modules.safety.feishu.msds_pdf import build_standard_msds_pdf
+
+    base = {
+        "name": "乙醇；酒精", "cas_no": "64-17-5", "molecular_formula": "C2H6O",
+        "un_no": "1170", "hazard_statement": "高度易燃液体和蒸气，其蒸气与空气混合,能形成爆炸性混合物。",
+        "appearance": "无色液体,有酒香。", "solubility": "与水混溶。",
+        "melting_point": "-114.1℃", "boiling_point": "78.3℃", "flash_point": "13℃（CC）",
+        "relative_density": "1.59", "explosion_upper_limit": "19.0", "explosion_lower_limit": "3.3",
+        "autoignition_temperature": "363℃", "decomposition_temperature": "无资料",
+        "pc_twa": "1000ppm", "pc_stel": "/", "mac": "/",
+        "health_hazard": "本品为中枢神经系统抑制剂。" * 20,
+        "first_aid": "皮肤接触：立即脱去污染的衣着,用流动清水彻底冲洗。就医。" * 10,
+        "fire_fighting": "灭火剂:用抗溶性泡沫、干粉、二氧化碳、砂土灭火。" * 8,
+        "leakage_response": "消除所有点火源。根据液体流动和蒸气扩散的影响区域划定警戒区。" * 8,
+        "waste_disposal": "废弃化学品：建议用焚烧法处置。" * 6,
+        "exposure_controls": "工程控制：生产过程密闭,加强通风。" * 8,
+        "handling_storage": "操作注意事项：密闭操作,全面通风。" * 10,
+        "stability_reactivity": "稳定性稳定 禁配物强氧化剂、酸类、酸酐、碱金属、胺类。" * 6,
+        "environmental_hazard": "对水生环境有害。" * 6,
+    }
+    out1 = tmp_path / "normal.pdf"
+    build_standard_msds_pdf(base, str(out1))
+    assert len(pypdf.PdfReader(str(out1)).pages) == 1
+
+    extreme = {k: (v * 30 if isinstance(v, str) else v) for k, v in base.items()}
+    out2 = tmp_path / "extreme.pdf"
+    build_standard_msds_pdf(extreme, str(out2))
+    assert len(pypdf.PdfReader(str(out2)).pages) == 1
