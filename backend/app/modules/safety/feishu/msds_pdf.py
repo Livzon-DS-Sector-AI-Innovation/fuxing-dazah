@@ -53,8 +53,9 @@ _COL_CONTENT = 186.65
 _COLS = [_COL_LABEL_NARROW, _COL_LABEL_WIDE, _COL_CONTENT, _COL_LABEL_NARROW, _COL_LABEL_WIDE, _COL_CONTENT]
 
 # 理化特性 6 行的左栏子项（模板标签，直接字段；每行最多两个并排）
+# 「外观与性状」为 GB/T 16483 标准术语（2026-10-30 修正历史错别字「外观与现状」）
 _PHYS_ROW_LABELS: list[tuple[str, str | None]] = [
-    ("外观与现状", None),
+    ("外观与性状", None),
     ("溶解性", None),
     ("熔点", "闪点"),
     ("沸点", "相对密度（水）"),

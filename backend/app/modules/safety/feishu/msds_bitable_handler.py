@@ -43,6 +43,9 @@ def _get_msds_table_id() -> str:
 
 
 # Bitable 中文字段名 → msds_documents 列
+# 「外观与性状」为新列名（2026-10-30 修正历史错别字，线上列已改名）；
+# 「外观与现状」保留兼容未改名环境。「错别字审核/明细」「修订记录」为
+# 审核+修订机制字段（scripts/tmp/setup_msds_review_fields.py 幂等建列）。
 BITABLE_TO_MODEL: dict[str, str] = {
     "物质名称": "name",
     "CAS号": "cas_no",
@@ -50,6 +53,7 @@ BITABLE_TO_MODEL: dict[str, str] = {
     "UN编号": "un_no",
     "日期": "source_date",
     "危险性说明": "hazard_statement",
+    "外观与性状": "appearance",
     "外观与现状": "appearance",
     "溶解性": "solubility",
     "熔点": "melting_point",
@@ -73,6 +77,9 @@ BITABLE_TO_MODEL: dict[str, str] = {
     "操作处置与储存注意事项": "handling_storage",
     "稳定性和反应性": "stability_reactivity",
     "MSDS附件": "msds_attachment",
+    "错别字审核": "typo_review_status",
+    "错别字明细": "typo_review_detail",
+    "修订记录": "revision_log",
 }
 
 
@@ -118,16 +125,22 @@ def _attachments(raw: Any) -> list | None:
 
 
 def _map_fields(values: dict) -> dict[str, Any]:
-    """MSDS 表字段 → msds_documents 列值。"""
+    """MSDS 表字段 → msds_documents 列值。
+
+    外观列新旧名共存映射：None 值不覆盖已取到的值（新列「外观与性状」
+    缺值时回落旧列「外观与现状」）。
+    """
     mapped: dict[str, Any] = {}
     for bitable_field, model_col in BITABLE_TO_MODEL.items():
         raw = values.get(bitable_field)
         if model_col == "source_date":
-            mapped[model_col] = _date_from_raw(raw)
+            val = _date_from_raw(raw)
         elif model_col == "msds_attachment":
-            mapped[model_col] = _attachments(raw)
+            val = _attachments(raw)
         else:
-            mapped[model_col] = _text(raw)
+            val = _text(raw)
+        if val is not None or model_col not in mapped:
+            mapped[model_col] = val
     return {k: v for k, v in mapped.items() if v is not None}
 
 
@@ -246,6 +259,23 @@ async def _handle_changed(event_data: dict) -> None:
                 await sync_msds_document_to_knowledge(doc_id)
             except Exception:
                 logger.exception("MSDS 镜像→知识索引同步失败: record_id=%s", record_id)
+
+        # 修订同步：内容字段被人工修改 → 重生成标准 PDF 追平「MSDS附件」
+        # （msds_review 内部 hash 比对防环：平台自写/审核字段变化不触发）
+        try:
+            from app.modules.safety.service.msds_review import sync_pdf_revision
+
+            result = await sync_pdf_revision(record_id)
+            if result.get("status") not in (
+                "skip_up_to_date", "skip_self_write", "skip_no_content",
+                "skip_not_found",
+            ):
+                logger.info(
+                    "MSDS 修订同步结果: record_id=%s status=%s",
+                    record_id, result.get("status"),
+                )
+        except Exception:
+            logger.exception("MSDS 修订同步失败: record_id=%s", record_id)
     except Exception:
         logger.exception("MSDS 镜像变更失败: %s", record_id)
 

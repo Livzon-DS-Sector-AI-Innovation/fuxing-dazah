@@ -21,6 +21,7 @@ from app.modules.safety.schemas.msds import (
     ARCHIVE_STATUS_OPTIONS,
     PARSE_STATUS_OPTIONS,
     REVIEW_STATUS_OPTIONS,
+    TYPO_REVIEW_STATUS_OPTIONS,
     MsdsCollectionResponse,
     MsdsDocumentResponse,
     MsdsStatsResponse,
@@ -39,6 +40,7 @@ async def get_enums():
         "parse_status": PARSE_STATUS_OPTIONS,
         "review_status": REVIEW_STATUS_OPTIONS,
         "archive_status": ARCHIVE_STATUS_OPTIONS,
+        "typo_review_status": TYPO_REVIEW_STATUS_OPTIONS,
     })
 
 
@@ -154,3 +156,60 @@ async def get_document(
     if not item or item.is_deleted:
         raise HTTPException(status_code=404, detail="台账记录不存在")
     return ApiResponse(data=MsdsDocumentResponse.model_validate(item))
+
+
+async def _resolve_feishu_record_id(document_id: str, db: AsyncSession) -> str:
+    """document_id 兼容双形态：PG 镜像 UUID / 台账表飞书 record_id（直读模式）。"""
+    try:
+        pg_id = uuid.UUID(document_id)
+    except ValueError:
+        pg_id = None
+    if pg_id is not None:
+        service = MsdsService(db)
+        item = await service.get_document(pg_id)
+        if item and not item.is_deleted and item.feishu_record_id:
+            return item.feishu_record_id
+        raise HTTPException(status_code=404, detail="台账记录不存在")
+    if document_id.startswith("rec"):
+        return document_id
+    raise HTTPException(status_code=404, detail="台账记录不存在（需 PG id 或 rec 开头的飞书记录 id）")
+
+
+@msds_router.post(
+    "/msds/{document_id}/proofread", response_model=ApiResponse,
+    summary="重跑错别字 AI 校对（结果写回台账表「错别字审核/明细」）",
+)
+async def proofread_document(
+    document_id: str,
+    current_user: CurrentUser | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动触发单条错别字校对（写回管线自动跑，此端点供人工重跑/存量补跑）。
+
+    权限口径同 retry_parse：写操作面向 safety_admin + dept_leader。
+    """
+    record_id = await _resolve_feishu_record_id(document_id, db)
+    from app.modules.safety.service.msds_review import run_proofread_for_record
+
+    result = await run_proofread_for_record(record_id)
+    return ApiResponse(data=result)
+
+
+@msds_router.post(
+    "/msds/{document_id}/rebuild-pdf", response_model=ApiResponse,
+    summary="强制重建标准 PDF 并替换「MSDS附件」",
+)
+async def rebuild_document_pdf(
+    document_id: str,
+    current_user: CurrentUser | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """跳过内容 hash 判定直接重建 PDF（模板修复后追平存量附件用）。
+
+    权限口径同 retry_parse：写操作面向 safety_admin + dept_leader。
+    """
+    record_id = await _resolve_feishu_record_id(document_id, db)
+    from app.modules.safety.service.msds_review import sync_pdf_revision
+
+    result = await sync_pdf_revision(record_id, force=True)
+    return ApiResponse(data=result)

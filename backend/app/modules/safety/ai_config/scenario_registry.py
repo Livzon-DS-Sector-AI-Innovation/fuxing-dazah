@@ -52,6 +52,7 @@ _AI_SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "contractor_admission_review": ("相关方准入审核", "承包商/相关方准入 AI 审核", "text", "mixed"),
     "urs_review": ("URS 智能审核", "设备采购 URS AI 合规审核", "text", "web"),
     "msds_extraction": ("MSDS提取", "危化品 MSDS 关键信息 AI 提取", "text", "mixed"),
+    "msds_proofread": ("MSDS错别字校对", "危化品 MSDS 字段文本 AI 错别字校对（只标记不修改，人工裁决）", "text", "system"),
     "sop_generation": ("操规AI补全", "安全操作规程 AI 编制补全", "text", "web"),
     "sop_review": ("操规AI审核", "安全操作规程 AI 审核校验", "text", "web"),
     "regulation_ocr": ("法规扫描件OCR", "法规/标准扫描件视觉 OCR 还原全文", "vision", "system"),

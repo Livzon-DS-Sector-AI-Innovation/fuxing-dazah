@@ -28,6 +28,12 @@ ARCHIVE_STATUS_OPTIONS = [
     {"value": "archived", "label": "已归档"},
 ]
 
+TYPO_REVIEW_STATUS_OPTIONS = [
+    {"value": "未审核", "label": "未审核"},
+    {"value": "无错别字", "label": "无错别字"},
+    {"value": "疑似错别字", "label": "疑似错别字"},
+]
+
 
 # ── AI 提取 28 字段（单个化学品）──
 
@@ -170,6 +176,9 @@ class MsdsDocumentResponse(BaseModel):
     msds_attachment: list | None = None
     review_status: str = "pending"
     archive_status: str = "pending"
+    typo_review_status: str = "未审核"
+    typo_review_detail: str | None = None
+    revision_log: str | None = None
     is_deleted: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None

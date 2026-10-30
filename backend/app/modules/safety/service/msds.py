@@ -13,7 +13,7 @@ import logging
 import mimetypes
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -33,18 +33,28 @@ from app.modules.safety.feishu.msds_pdf import (
 )
 from app.modules.safety.knowledge.msds_indexer import sync_msds_document_to_knowledge
 from app.modules.safety.models import MsdsCollectionRecord, MsdsDocument
+from app.modules.safety.service.msds_review import (
+    FIELD_TYPO_DETAIL,
+    FIELD_TYPO_STATUS,
+    TYPO_STATUS_UNREVIEWED,
+    msds_content_hash,
+    proofread_entry,
+    set_self_write_marker,
+    typo_review_fields,
+)
 
 logger = logging.getLogger(__name__)
 
 # AI 提取 entry 字段 → MSDS 表 Bitable 中文字段名
 # label_elements 不在 MSDS 表（无该字段），写回时丢弃，仅平台存档（spec 决策 Q5）
+# 「外观与性状」为 2026-10-30 修正后的标准列名（历史错别字「外观与现状」）
 ENTRY_TO_BITABLE_FIELD: dict[str, str] = {
     "name": "物质名称",
     "cas_no": "CAS号",
     "molecular_formula": "分子式",
     "un_no": "UN编号",
     "hazard_statement": "危险性说明",
-    "appearance": "外观与现状",
+    "appearance": "外观与性状",
     "solubility": "溶解性",
     "melting_point": "熔点",
     "boiling_point": "沸点",
@@ -85,7 +95,7 @@ MSDS_EXTRACT_SYSTEM_PROMPT = """你是化学品安全数据表（MSDS/SDS）结�
 - label_elements（标签要素/象形图说明，如 GHS 警示语）
 
 理化特性：
-- appearance（外观与现状）
+- appearance（外观与性状）
 - solubility（溶解性）
 - melting_point（熔点）
 - boiling_point（沸点）
@@ -354,7 +364,7 @@ class MsdsService:
                     logger.warning("标准 PDF 上传失败, 跳过: %s", filename)
                     continue
 
-                # ③ 构造 MSDS 表字段（label_elements 丢弃）
+                # ③ 构造 MSDS 表字段（label_elements 丢弃）+ 错别字 AI 校对合并
                 fields: dict = {
                     bitable_field: entry[entry_key]
                     for entry_key, bitable_field in ENTRY_TO_BITABLE_FIELD.items()
@@ -365,11 +375,19 @@ class MsdsService:
                     fields["日期"] = int(
                         datetime.combine(rec.source_date, datetime.min.time(), tzinfo=UTC).timestamp() * 1000
                     )
+                content_hash = msds_content_hash(entry)
+                try:
+                    review = typo_review_fields(await proofread_entry(entry))
+                except Exception:
+                    logger.exception("MSDS 错别字校对失败(降级未审核): name=%s", entry.get("name"))
+                    review = {}
+                fields.update(review)
 
-                # ④ 同 CAS 查重 → UPDATE / CREATE
+                # ④ 同 CAS 查重 → UPDATE / CREATE（自写标记先落，防 edited 回环重生成）
                 existing = await self._find_msds_by_cas(msds_client, entry.get("cas_no"))
                 target_id = existing
                 if existing:
+                    await set_self_write_marker(existing, content_hash)
                     ok = await msds_client.update_record(record_id=existing, fields=fields)
                     if ok:
                         created_ids.append(existing)
@@ -378,6 +396,7 @@ class MsdsService:
                     result = await msds_client.create_record(fields=fields)
                     if result:
                         target_id = result["record_id"]
+                        await set_self_write_marker(target_id, content_hash)
                         created_ids.append(target_id)
                         logger.info(
                             "MSDS 写回 CREATE: %s name=%s", result["record_id"], entry.get("name")
@@ -395,6 +414,9 @@ class MsdsService:
                         "collection_record_id": collection_id,
                         "msds_attachment": [upload],
                         "msds_attachment_path": std_pdf_path,
+                        "pdf_content_hash": content_hash,
+                        "typo_review_status": review.get(FIELD_TYPO_STATUS) or TYPO_STATUS_UNREVIEWED,
+                        "typo_review_detail": review.get(FIELD_TYPO_DETAIL) or None,
                     })
                     registry_rows[target_id] = row_values
             except Exception:
@@ -414,6 +436,12 @@ class MsdsService:
                             existing_row.collection_record_id = row_values["collection_record_id"]
                         if row_values.get("msds_attachment"):
                             existing_row.msds_attachment = row_values["msds_attachment"]
+                        if row_values.get("pdf_content_hash"):
+                            existing_row.pdf_content_hash = row_values["pdf_content_hash"]
+                        if row_values.get("typo_review_status"):
+                            existing_row.typo_review_status = row_values["typo_review_status"]
+                        if row_values.get("typo_review_detail") is not None:
+                            existing_row.typo_review_detail = row_values["typo_review_detail"]
                     else:
                         self.db.add(MsdsDocument(**row_values))
                 await self.db.commit()
@@ -476,13 +504,26 @@ class MsdsService:
         *,
         parse_status: str | None = None,
         keyword: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> tuple[list[MsdsCollectionRecord], int]:
-        """供应商资料采集列表（分页 + 解析状态/关键词筛选）。"""
+        """供应商资料采集列表（分页 + 解析状态/关键词/日期区间筛选）。
+
+        date_from/date_to：按采集时间（created_at）过滤的闭区间（北京时间日界）。
+        """
         filters = [MsdsCollectionRecord.is_deleted == False]  # noqa: E712
         if parse_status:
             filters.append(MsdsCollectionRecord.parse_status == parse_status)
         if keyword:
             filters.append(MsdsCollectionRecord.feishu_record_id.ilike(f"%{keyword}%"))
+        if date_from or date_to:
+            from app.modules.safety.service.bitable_direct.filters import date_range_window
+
+            dt_from, dt_to = date_range_window(date_from, date_to)
+            if dt_from:
+                filters.append(MsdsCollectionRecord.created_at >= dt_from)
+            if dt_to:
+                filters.append(MsdsCollectionRecord.created_at < dt_to)
 
         total = await self.db.scalar(
             select(func.count()).select_from(MsdsCollectionRecord).where(*filters)

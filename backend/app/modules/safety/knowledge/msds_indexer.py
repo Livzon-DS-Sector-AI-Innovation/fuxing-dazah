@@ -49,7 +49,7 @@ MSDS_FIELD_LABELS: list[tuple[str, str]] = [
     ("危险性说明", "hazard_statement"),
     ("标签要素", "label_elements"),
     # 理化特性
-    ("外观与现状", "appearance"),
+    ("外观与性状", "appearance"),
     ("溶解性", "solubility"),
     ("熔点", "melting_point"),
     ("沸点", "boiling_point"),

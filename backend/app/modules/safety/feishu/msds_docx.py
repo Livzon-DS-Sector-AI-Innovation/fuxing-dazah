@@ -32,6 +32,8 @@ _DIRECT_LABEL_TO_FIELD: dict[str, str] = {
     "分子式": "molecular_formula",
     "CASNo": "cas_no",
     "危险性说明": "hazard_statement",
+    # 「外观与性状」标准术语（PDF 标签）；保留「外观与现状」兼容内置 docx 模板旧印字
+    "外观与性状": "appearance",
     "外观与现状": "appearance",
     "溶解性": "solubility",
     "熔点": "melting_point",

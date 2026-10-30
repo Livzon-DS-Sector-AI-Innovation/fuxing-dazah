@@ -40,7 +40,7 @@ _TEXT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("分子式", "molecular_formula"),
     ("UN编号", "un_no"),
     ("危险性说明", "hazard_statement"),
-    ("外观与现状", "appearance"),
+    ("外观与性状", "appearance"),
     ("溶解性", "solubility"),
     ("熔点", "melting_point"),
     ("沸点", "boiling_point"),
@@ -107,6 +107,11 @@ class MsdsDocumentView:
     msds_attachment: list[dict[str, Any]] | None = None
     msds_attachment_path: str | None = None
 
+    # 错别字审核 + 修订同步（2026-10-30 机制字段，列缺失时保持默认）
+    typo_review_status: str = "未审核"
+    typo_review_detail: str | None = None
+    revision_log: str | None = None
+
     # 状态列（镜像专属；直读常量，见模块 docstring）
     review_status: str = "pending"
     reviewed_by: str | None = None
@@ -143,7 +148,16 @@ def view_from_record(record_id: str, fields: dict[str, Any]) -> MsdsDocumentView
     view = MsdsDocumentView(id=record_id, feishu_record_id=record_id)
     for column, attr in _TEXT_COLUMNS:
         setattr(view, attr, bd_fields.text(fields, column))
+    # 外观列历史名兜底：新列「外观与性状」缺值时回落旧列「外观与现状」
+    if view.appearance is None:
+        view.appearance = bd_fields.text(fields, "外观与现状")
     raw_date = bd_fields.datetime_ms(fields, "日期")
     view.source_date = raw_date.date() if raw_date else None
     view.msds_attachment = _attachments_like_handler(fields.get("MSDS附件"))
+    # 审核/修订字段（列未建时 text 返回 None → 保持默认「未审核」）
+    typo_status = bd_fields.text(fields, "错别字审核")
+    if typo_status:
+        view.typo_review_status = typo_status
+    view.typo_review_detail = bd_fields.text(fields, "错别字明细")
+    view.revision_log = bd_fields.text(fields, "修订记录")
     return view

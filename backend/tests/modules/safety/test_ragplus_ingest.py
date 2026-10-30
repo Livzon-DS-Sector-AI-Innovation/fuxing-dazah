@@ -289,8 +289,11 @@ class TestIngestShortCircuits:
             )
         )
         await db_session.flush()
+        # dev 库有真实镜像行时裸 scalar_one 会 MultipleResultsFound，按本用例行过滤
         doc = (
-            await db_session.execute(select(MsdsDocument))
+            await db_session.execute(
+                select(MsdsDocument).where(MsdsDocument.feishu_record_id == "recT1")
+            )
         ).scalar_one()
 
         uploaded = AsyncMock(return_value=True)
@@ -345,7 +348,9 @@ class TestIngestShortCircuits:
         )
         await db_session.flush()
         doc = (
-            await db_session.execute(select(MsdsDocument))
+            await db_session.execute(
+                select(MsdsDocument).where(MsdsDocument.feishu_record_id == "recT2")
+            )
         ).scalar_one()
 
         archived = AsyncMock(return_value=True)

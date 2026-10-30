@@ -118,7 +118,7 @@ class MsdsDocument(BaseModel):
     )
 
     # ── 理化特性（10）──
-    appearance: Mapped[str | None] = mapped_column(Text, nullable=True, comment="外观与现状")
+    appearance: Mapped[str | None] = mapped_column(Text, nullable=True, comment="外观与性状")
     solubility: Mapped[str | None] = mapped_column(Text, nullable=True, comment="溶解性")
     melting_point: Mapped[str | None] = mapped_column(Text, nullable=True, comment="熔点")
     boiling_point: Mapped[str | None] = mapped_column(Text, nullable=True, comment="沸点")
@@ -172,6 +172,22 @@ class MsdsDocument(BaseModel):
     )
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="归档时间"
+    )
+
+    # ── 错别字审核 + 修订同步（2026-10-30，msds_review.py）──
+    typo_review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="未审核", server_default="未审核",
+        comment="错别字审核: 未审核/无错别字/疑似错别字（AI 校对只标记，人工裁决）",
+    )
+    typo_review_detail: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="错别字明细（字段名：『原文』→『建议』（类型），一行一条）"
+    )
+    revision_log: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="修订记录（字段修改→PDF 同步重生成日志，最近 20 行）"
+    )
+    pdf_content_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="标准 PDF 生成时的内容字段 hash（修订同步判定：不一致才重生成附件）",
     )
 
 

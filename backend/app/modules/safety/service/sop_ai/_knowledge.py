@@ -42,7 +42,7 @@ _CHEM_ABBREV = {
 }
 
 _MSDS_PHYSICOCHEM_FIELDS = (
-    ("外观与现状", "appearance"),
+    ("外观与性状", "appearance"),
     ("溶解性", "solubility"),
     ("熔点", "melting_point"),
     ("沸点", "boiling_point"),

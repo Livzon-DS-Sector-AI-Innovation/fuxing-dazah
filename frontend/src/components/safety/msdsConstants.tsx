@@ -33,7 +33,15 @@ export const ARCHIVE_STATUS_UI: Record<string, { label: string; color: string; b
   archived: { label: '已归档', color: '#0075de', bg: T.sky },
 }
 
-// ── MSDS 详情展示字段分组（28 字段）──
+// ── 错别字审核状态 → 视觉（AI 校对只标记，人工裁决）──
+
+export const TYPO_REVIEW_STATUS_UI: Record<string, { label: string; color: string; bg: string }> = {
+  未审核: { label: '未审核', color: T.steel, bg: T.gray },
+  无错别字: { label: '无错别字', color: '#1aae39', bg: T.mint },
+  疑似错别字: { label: '疑似错别字', color: T.error, bg: T.rose },
+}
+
+// ── MSDS 详情展示字段分组（28 字段 + 审核修订）──
 export const MSDS_DETAIL_GROUPS: { label: string; fields: { label: string; key: string }[] }[] = [
   {
     label: '基础标识',
@@ -54,7 +62,7 @@ export const MSDS_DETAIL_GROUPS: { label: string; fields: { label: string; key: 
   {
     label: '理化特性',
     fields: [
-      { label: '外观与现状', key: 'appearance' },
+      { label: '外观与性状', key: 'appearance' },
       { label: '溶解性', key: 'solubility' },
       { label: '熔点', key: 'melting_point' },
       { label: '沸点', key: 'boiling_point' },
@@ -96,6 +104,14 @@ export const MSDS_DETAIL_GROUPS: { label: string; fields: { label: string; key: 
       { label: '接触控制与个体防护', key: 'exposure_controls' },
       { label: '操作处置与储存注意事项', key: 'handling_storage' },
       { label: '稳定性和反应性', key: 'stability_reactivity' },
+    ],
+  },
+  {
+    label: '错别字审核与修订',
+    fields: [
+      { label: '错别字审核', key: 'typo_review_status' },
+      { label: '错别字明细', key: 'typo_review_detail' },
+      { label: '修订记录', key: 'revision_log' },
     ],
   },
 ]

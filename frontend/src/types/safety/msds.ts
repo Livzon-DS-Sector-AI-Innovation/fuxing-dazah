@@ -30,6 +30,10 @@ export interface MsdsExtractionEntry {
   exposure_controls?: string | null
   handling_storage?: string | null
   stability_reactivity?: string | null
+  // 审核/修订字段（台账详情抽屉展示用，采集解析条目恒空）
+  typo_review_status?: string | null
+  typo_review_detail?: string | null
+  revision_log?: string | null
 }
 
 // ── 供应商资料采集记录 ──
@@ -88,6 +92,10 @@ export interface MsdsDocument {
   msds_attachment_path?: string | null
   review_status: 'pending' | 'approved' | 'rejected'
   archive_status: 'pending' | 'archived'
+  // 错别字审核 + 修订同步（2026-10-30 机制字段）
+  typo_review_status?: '未审核' | '无错别字' | '疑似错别字' | string
+  typo_review_detail?: string | null
+  revision_log?: string | null
   is_deleted?: boolean
   created_at?: string | null
   updated_at?: string | null

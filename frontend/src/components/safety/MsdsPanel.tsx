@@ -23,6 +23,7 @@ import MsdsDetailDrawer from './MsdsDetailDrawer'
 import {
   ARCHIVE_STATUS_UI,
   REVIEW_STATUS_UI,
+  TYPO_REVIEW_STATUS_UI,
   T,
   UI,
 } from './msdsConstants'
@@ -38,6 +39,13 @@ const REVIEW_STATUS_TONE: Record<string, Tone> = {
 const ARCHIVE_STATUS_TONE: Record<string, Tone> = {
   pending: 'default',
   archived: 'info',
+}
+
+/** 错别字审核状态 → ui-kit 语义 tone */
+const TYPO_REVIEW_TONE: Record<string, Tone> = {
+  未审核: 'default',
+  无错别字: 'ok',
+  疑似错别字: 'danger',
 }
 
 function Pill({ status, map, toneMap }: {
@@ -108,6 +116,10 @@ export default function MsdsPanel() {
     {
       title: '归档', dataIndex: 'archive_status', key: 'archive_status', width: 90,
       render: (s: string) => <Pill status={s} map={ARCHIVE_STATUS_UI} toneMap={ARCHIVE_STATUS_TONE} />,
+    },
+    {
+      title: '错别字', dataIndex: 'typo_review_status', key: 'typo_review_status', width: 100,
+      render: (s: string) => <Pill status={s} map={TYPO_REVIEW_STATUS_UI} toneMap={TYPO_REVIEW_TONE} />,
     },
     {
       title: '日期', dataIndex: 'source_date', key: 'source_date', width: 110,
