@@ -17,9 +17,15 @@ from docx import Document
 from app.modules.toolbox.tools.document_translate._engine.cli import run_pipeline
 from app.modules.toolbox.tools.document_translate._engine.config import Settings
 from app.modules.toolbox.tools.document_translate._engine.glossary import Glossary
+from app.modules.toolbox.tools.document_translate._engine.pdf.build import build_docx
+from app.modules.toolbox.tools.document_translate._engine.pdf.extract import (
+    Block,
+    _norm,
+)
 from app.modules.toolbox.tools.document_translate._engine.runner import translate_all
 from app.modules.toolbox.tools.document_translate._engine.translate import (
     LLMTranslator,
+    build_user_prompt,
     make_batches,
 )
 
@@ -276,3 +282,58 @@ def test_placeholder_retry_is_concurrent_and_reports_tail_progress(concurrency: 
     assert fracs == sorted(fracs), "进度必须单调不减"
     assert any(m.startswith("重译占位符异常段落") for _, m in progress)
     assert fracs[-1] > 0.9, "重译阶段必须落在阶段进度的尾段（0.9~1.0）"
+
+
+# ── PDF 字体映射缺陷：控制字符清洗（USP-NF 类 PDF 的 ToUnicode 破损）──
+
+
+def test_pdf_norm_scrubs_xml_incompatible_chars() -> None:
+    """XML 1.0 非法字符在抽取出口统一替换为 � 占位，正常文本零改动。
+
+    部分源 PDF 的连字字形（fi/fl/ffi）被映射成 0x01~0x04 控制码，不清洗会在
+    写 DOCX 时被 lxml 以 "All strings must be XML compatible" 拒绝。
+    """
+    assert _norm("O\x01cial") == "O�cial"  # 0x01 = ffi 连字（Official）
+    assert _norm("di\x03cult") == "di�cult"
+    assert _norm("x\x7fy") == "x�y"        # DEL
+    assert _norm("x\ufffey") == "x�y"      # U+FFFE（XML 1.0 非法区）
+    # \x0b/\x0c 属空白，先被 \s+ 归并为空格（空格本身 XML 合法，无需占位）
+    assert _norm("a\x0cb") == "a b"
+    assert _norm("clean  text\n") == "clean text"
+
+
+def test_build_user_prompt_injects_fffd_restore_instruction() -> None:
+    """批次含 � 时注入按上下文还原的指令，普通批次不注入。"""
+    contaminated = build_user_prompt(
+        [(1, "The speci�cation de�nes water for pharmaceutical purposes.")],
+        "中文（简体中文）", "测试", [], "",
+    )
+    assert "U+FFFD" in contaminated
+    assert "还原" in contaminated
+
+    clean = build_user_prompt([(1, "The specification defines water.")], "中文（简体中文）", "测试", [], "")
+    assert "U+FFFD" not in clean
+
+
+def test_pdf_build_docx_guards_control_chars(tmp_path: Path) -> None:
+    """写入端终局守卫：即使未来有路径漏网，控制字符也不再触发 lxml 异常。
+
+    直接构造含裸控制字符的 Block（绕过抽取层清洗），旧实现在 add_run 即抛
+    ValueError: All strings must be XML compatible。
+    """
+    blocks = [
+        Block(kind="para", page=1, text="O\x01cial status of the\x7f document",
+              _y=100.0, _size=11.0),
+        Block(kind="table", page=1, rows=[["di\x03cult", None], ["clean", "cell"]],
+              _y=120.0),
+    ]
+    doc, _ = build_docx(blocks, "bilingual")
+    out = tmp_path / "guarded.docx"
+    doc.save(str(out))
+
+    reopened = Document(str(out))
+    body = "\n".join(p.text for p in reopened.paragraphs) + "\n".join(
+        p.text for t in reopened.tables for row in t.rows for c in row.cells for p in c.paragraphs
+    )
+    assert "\ufffd" in body, "非法字符应替换为可见的 � 占位而非崩溃或静默丢失"
+    assert "\x01" not in body and "\x7f" not in body and "\x03" not in body

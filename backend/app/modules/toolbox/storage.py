@@ -23,7 +23,19 @@ EXEC_DIR_ROOT = Path(get_settings().UPLOAD_DIR) / "toolbox"
 MAX_AGE_SECONDS = 48 * 3600
 _CLEANUP_INTERVAL_SECONDS = 3600
 
-_ALLOWED_SUFFIXES = {".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".pdf", ".csv", ".txt", ".json", ".md"}
+_ALLOWED_SUFFIXES = {
+    ".docx",
+    ".xlsx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".pdf",
+    ".csv",
+    ".txt",
+    ".json",
+    ".md",
+    ".zip",
+}
 
 
 def exec_dir(execution_id: str) -> Path:
@@ -42,6 +54,14 @@ def save_upload(execution_id: str, filename: str, data: bytes) -> tuple[str, Pat
     file_id = uuid.uuid4().hex
     path = exec_dir(execution_id) / f"{file_id}{_safe_suffix(filename)}"
     path.write_bytes(data)
+    return file_id, path
+
+
+def save_upload_copy(execution_id: str, filename: str, src: Path) -> tuple[str, Path]:
+    """把已落盘的本地文件复制为执行产物（大文件不必再读进内存）。"""
+    file_id = uuid.uuid4().hex
+    path = exec_dir(execution_id) / f"{file_id}{_safe_suffix(filename)}"
+    shutil.copyfile(src, path)
     return file_id, path
 
 

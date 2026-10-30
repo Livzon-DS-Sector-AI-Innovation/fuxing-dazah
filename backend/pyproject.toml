@@ -85,6 +85,23 @@ ignore_missing_imports = true
 module = ["app.modules.toolbox.tools.document_translate._engine.*"]
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+# PyMuPDF 的 Python 侧函数（Page.get_text / Font.text_length 等）没有类型标注，
+# 调用点必然触发 no-untyped-call；只关闭这类噪声，其余类型检查照常
+module = [
+    "app.modules.toolbox.tools.chromatogram_translate",
+    "app.modules.toolbox.tools.chromatogram_translate.*",
+]
+disable_error_code = ["no-untyped-call"]
+
+[[tool.mypy.overrides]]
+# 新工具测试沿用仓库既有写法（测试函数不带注解），随模块一并豁免
+module = [
+    "tests.modules.toolbox.chromatogram_translate",
+    "tests.modules.toolbox.chromatogram_translate.*",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

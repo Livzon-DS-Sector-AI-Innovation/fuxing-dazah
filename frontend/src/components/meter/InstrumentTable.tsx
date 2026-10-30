@@ -334,7 +334,7 @@ export function InstrumentTable() {
       onFilter: () => true,
     },
     {
-      title: '器具编号', dataIndex: 'serial_number', width: 110, ellipsis: true,
+      title: '器具编号', dataIndex: 'serial_number', width: 110,
       filteredValue: columnFilters.serial_number ? columnFilters.serial_number.split(',') : null,
       filterDropdown: textFilter('serial_number', '器具编号'),
       onFilter: () => true,

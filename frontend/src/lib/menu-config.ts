@@ -90,10 +90,12 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/meter",
     permissions: ["meter:*:read"],
     children: [
-      { key: "overview", label: "仪表总览", path: "/meter" },
-      { key: "instruments", label: "标准计量器具", path: "/meter/instruments" },
-      { key: "gas-detectors", label: "有毒有害可燃探测器", path: "/meter/gas-detectors" },
-      { key: "departments", label: "部门管理", path: "/meter/departments" },
+      // 总览/部门管理是管理侧功能，跟 meter:config:manage 走；
+      // 台账两项对通配码与对应资源码可见，纯查询角色（只授资源码）看不到上面两项
+      { key: "overview", label: "仪表总览", path: "/meter", permissions: ["meter:config:manage"] },
+      { key: "instruments", label: "标准计量器具", path: "/meter/instruments", permissions: ["meter:*:read", "meter:instrument:read"] },
+      { key: "gas-detectors", label: "有毒有害可燃探测器", path: "/meter/gas-detectors", permissions: ["meter:*:read", "meter:gas-detector:read"] },
+      { key: "departments", label: "部门管理", path: "/meter/departments", permissions: ["meter:config:manage"] },
     ],
   },
 

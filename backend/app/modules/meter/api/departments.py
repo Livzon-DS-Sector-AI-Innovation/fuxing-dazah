@@ -28,7 +28,7 @@ from app.modules.meter.schemas import (
 # ═══════════════════════════════════════════
 
 
-@router.get("/departments", summary="部门列表", dependencies=[Depends(_deps.read_any)])
+@router.get("/departments", summary="部门列表", dependencies=[Depends(_deps.departments_read)])
 async def list_departments(
     source: str | None = Query(default=None, pattern="^(instrument|gas_detector)$", description="来源筛选"),
     db: AsyncSession = Depends(get_db),
@@ -109,7 +109,7 @@ async def toggle_department_auto_notify(
 
 
 
-@router.get("/departments/personnel-candidates", summary="获取可选负责人列表（从 identity.users 查询）", dependencies=[Depends(_deps.read_any)])
+@router.get("/departments/personnel-candidates", summary="获取可选负责人列表（从 identity.users 查询）", dependencies=[Depends(_deps.departments_read)])
 async def get_personnel_candidates(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:

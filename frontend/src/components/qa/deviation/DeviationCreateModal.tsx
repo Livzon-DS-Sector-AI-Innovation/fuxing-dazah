@@ -122,7 +122,7 @@ export function DeviationCreateModal({ open, onClose }: { open: boolean; onClose
       okText={uploadingIndex != null ? `上传照片中 (${uploadingIndex}/${photos.length})…` : '登记并生成编号'}
       cancelText="取消"
       confirmLoading={submitting}
-      maskClosable={!submitting}
+      mask={{ closable: !submitting }}
       keyboard={!submitting}
       cancelButtonProps={{ disabled: submitting }}
       width={880}

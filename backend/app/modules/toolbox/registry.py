@@ -84,9 +84,17 @@ class StepContext:
     execution_id: str
     user_id: str
     prev_outputs: dict[str, Any]
-    file_paths: dict[str, list[str]]  # input_key -> 本地绝对路径列表（单文件也是单元素列表）
+    file_paths: dict[
+        str, list[str]
+    ]  # input_key -> 本地绝对路径列表（单文件也是单元素列表）
     output_dir: Path  # 工具产出文件目录（已创建）
-    config: dict[str, Any] | None = None  # 工具配置 JSON（声明 config_schema 时由 api 层从数据库加载）
+    # input_key -> 用户上传时的原始文件名（与 file_paths 逐位对齐）。
+    # 落盘文件名是内部 file_id，工具给产物命名/写报告必须用这里的原始名，
+    # 否则用户下载到的会是「uuid_英文.pdf」这类无法辨认的名字。
+    file_names: dict[str, list[str]] = field(default_factory=dict)
+    config: dict[str, Any] | None = (
+        None  # 工具配置 JSON（声明 config_schema 时由 api 层从数据库加载）
+    )
     # 进度上报（仅 background 工具由 api 层注入；同步工具为 None）。
     # 同步函数且线程安全：工具在 to_thread 中调用也会被安全转回事件循环写 Redis。
     report_progress: Callable[[int, str], None] | None = None
@@ -127,12 +135,18 @@ def tool(
     执行，经 context.report_progress 上报进度，前端轮询会话状态直到完成。
     """
 
-    def deco(func: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awaitable[dict[str, Any]]]:
+    def deco(
+        func: Callable[..., Awaitable[dict[str, Any]]],
+    ) -> Callable[..., Awaitable[dict[str, Any]]]:
         if id in _REGISTRY:
             raise ValueError(f"tool id 重复: {id}")
         _REGISTRY[id] = Tool(
-            id=id, name=name, description=description,
-            image=image, steps=list(steps), func=func,
+            id=id,
+            name=name,
+            description=description,
+            image=image,
+            steps=list(steps),
+            func=func,
             config_schema=list(config_schema or []),
             background=background,
         )
