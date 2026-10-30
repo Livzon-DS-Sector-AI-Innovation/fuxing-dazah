@@ -1,14 +1,17 @@
 'use client'
 
-// 职业健康个人完整档案（profile/[personId]）— 五源聚合展示。
+// 职业健康个人完整档案（profile/[personId]）— 六源聚合展示。
 //
-// 数据：fetchOhPersonProfile（人员+体检+随访+转岗申请+培训参训+违章一次拉全）。
-// 区块：PageHeader → 人员信息卡（Descriptions+接害Tag）→ StatCard 行 →
-// Tabs（综合时间线 / 体检 / 培训 / 违章 / 转岗申请 / 随访）。
+// 数据：fetchOhPersonProfile（人员+体检+随访+转岗申请+培训参训+违章+平台身份一次拉全）。
+// 区块：PageHeader → 人员信息卡（Descriptions+接害Tag）→ 平台身份卡（3.x，
+// OH/平台值并排+差异标签）→ StatCard 行 → Tabs（综合时间线 / 体检 / 培训 /
+// 违章 / 转岗申请 / 随访）。
 // 匹配口径标注：培训=签到表AI转录按姓名；违章=open_id 强匹配（姓名兜底时
-// 明确提示同名误差）；违章源失败降级（violations=null + errors 提示）。
+// 明确提示同名误差）；违章源失败降级（violations=null + errors 提示）；
+// 平台身份卡三态信封独立降级（platform.status）。
 
 import { useMemo } from 'react'
+import type { CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Button,
@@ -29,7 +32,9 @@ import { fetchOhPersonProfile } from '@/lib/api/safety/occupational-health'
 import type {
   OhFollowup,
   OhHealthExam,
+  OhPerson,
   OhPersonProfile,
+  OhPlatformIdentity,
   OhProfileApplication,
   OhProfileViolation,
   OhTrainingAttendee,
@@ -168,6 +173,120 @@ function buildTimeline(profile: OhPersonProfile): TimelineEntry[] {
   return entries
     .filter((e) => e.at)
     .sort((a, b) => dayjs(b.at).valueOf() - dayjs(a.at).valueOf())
+}
+
+// ── 平台身份卡（3.x，第 6 源）──
+
+const PLATFORM_STATUS_UI: Record<string, { label: string; tone: Tone }> = {
+  live: { label: '已关联', tone: 'ok' },
+  degraded: { label: '缓存降级', tone: 'warn' },
+  empty: { label: '平台不可用', tone: 'default' },
+  unmatched: { label: '平台未匹配', tone: 'default' },
+}
+
+const MATCH_BASIS_LABEL: Record<string, string> = {
+  job_no: '按工号精确匹配',
+  name_dept: '按姓名 + 部门匹配',
+}
+
+function normText(v?: string | null): string {
+  return (v ?? '').trim()
+}
+
+/** 一行三列对比：字段 | OH 台账 | 3.x 平台；两侧有值且不一致打「两侧不一致」 */
+const COMPARE_GRID_STYLE: CSSProperties = {
+  display: 'grid', gridTemplateColumns: '90px 1fr 1fr', gap: 8,
+}
+
+function CompareField({ label, oh, pf, ohMissingHint }: {
+  label: string
+  oh: string
+  pf: string
+  ohMissingHint?: boolean
+}) {
+  const differs = oh !== pf && (oh !== '' || pf !== '')
+  // 工号行专属：台账缺、平台有 → 「台账未登记」提示（替代差异标签，语义更准）
+  const ohMissing = Boolean(ohMissingHint) && oh === '' && pf !== ''
+  return (
+    <div style={{ ...COMPARE_GRID_STYLE, padding: '7px 0', borderTop: '1px solid #f0f0f0' }}>
+      <span style={{ color: UI.muted, fontSize: 12 }}>{label}</span>
+      <span style={{ fontSize: 13, color: oh ? UI.ink : UI.muted }}>{oh || '-'}</span>
+      <span style={{ fontSize: 13, color: pf ? UI.ink : UI.muted, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {pf || '-'}
+        {ohMissing && <Tag color="default" style={{ marginInlineEnd: 0 }}>台账未登记</Tag>}
+        {differs && !ohMissing && <Tag color="warning" style={{ marginInlineEnd: 0 }}>两侧不一致</Tag>}
+      </span>
+    </div>
+  )
+}
+
+function PlatformIdentityCard({ person, platform }: {
+  person: OhPerson
+  platform?: OhPlatformIdentity | null
+}) {
+  if (!platform) {
+    return (
+      <SectionCard title="平台身份（3.x）" description="3.x 平台主数据关联（第 6 源，独立降级）">
+        <EmptyGuide compact title="平台身份源不可用" description="平台身份卡采集失败，不影响其余档案区块" />
+      </SectionCard>
+    )
+  }
+  const ui = PLATFORM_STATUS_UI[platform.status] ?? PLATFORM_STATUS_UI.empty
+  const basis = platform.match_basis ? MATCH_BASIS_LABEL[platform.match_basis] ?? platform.match_basis : null
+  const p = platform.person
+  return (
+    <SectionCard
+      title="平台身份（3.x）"
+      description="3.x 平台主数据关联（工号优先匹配；差异仅展示，不回写台账）"
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <StatusTag tone={ui.tone} label={ui.label} />
+        {basis && <span style={{ fontSize: 12, color: UI.steel }}>{basis}</span>}
+        {platform.fetched_at && (
+          <span style={{ fontSize: 12, color: UI.muted }}>数据时点 {dayjs(platform.fetched_at).format('YYYY-MM-DD HH:mm')}</span>
+        )}
+      </div>
+
+      {platform.status === 'empty' && (
+        <EmptyGuide compact title="平台暂不可用" description={platform.message ?? '3.x 平台接口暂不可用，请稍后重试'} />
+      )}
+      {platform.status === 'unmatched' && (
+        <EmptyGuide compact title="平台未匹配" description={platform.message ?? '同名多人或零命中，未自动匹配'} />
+      )}
+      {(platform.status === 'live' || platform.status === 'degraded') && (
+        <>
+          {/* degraded 且缓存结论为未匹配（person=null）时同样要有提示正文 */}
+          {platform.status === 'degraded' && (
+            <div style={{ fontSize: 12, color: UI.steel, marginBottom: 8 }}>
+              {platform.message}
+              {!p && '（上次缓存结论为平台未匹配）'}
+            </div>
+          )}
+          {p && (
+            <>
+              <div style={{ ...COMPARE_GRID_STYLE, padding: '6px 0', fontWeight: 600, fontSize: 12, color: UI.muted, borderBottom: '1px solid #f0f0f0' }}>
+                <span>字段</span><span>OH 台账</span><span>3.x 平台</span>
+              </div>
+              <CompareField label="工号" oh={normText(person.employee_no)} pf={normText(p.job_no)} ohMissingHint />
+              <CompareField label="部门" oh={normText(person.department)} pf={normText(p.dept_name)} />
+              <CompareField label="岗位" oh={normText(person.position)} pf={normText(p.post_name)} />
+              <Descriptions column={3} size="small" style={{ marginTop: 12 }}>
+                <Descriptions.Item label="部门全路径">{p.dept_whole_name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="直属上级">{p.direct_leader || '-'}</Descriptions.Item>
+                <Descriptions.Item label="在职状态">{p.status || '-'}</Descriptions.Item>
+                <Descriptions.Item label="电话">{p.telephone || '-'}</Descriptions.Item>
+                <Descriptions.Item label="邮箱">{p.email || '-'}</Descriptions.Item>
+                <Descriptions.Item label="入职日期">{p.entry_date ? fmtDate(p.entry_date) : '-'}</Descriptions.Item>
+              </Descriptions>
+              <div style={{ marginTop: 8, fontSize: 12, color: UI.muted }}>
+                平台字段未填时以 - 容空；工号/部门/岗位与台账的差异仅并排展示，不回写任何一侧。
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </SectionCard>
+  )
 }
 
 // ── 页面 ──
@@ -339,6 +458,9 @@ export default function OccupationalHealthProfileClient({ personId }: { personId
         </div>
       </div>
 
+      {/* ── 平台身份卡（3.x，第 6 源）── */}
+      <PlatformIdentityCard person={person} platform={profile.platform} />
+
       {/* ── 统计行 ── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <StatCard
@@ -378,9 +500,9 @@ export default function OccupationalHealthProfileClient({ personId }: { personId
                   style={{ marginTop: 8, paddingTop: 4 }}
                   items={timeline.map((e) => ({
                     key: e.key,
-                    label: <span style={{ color: UI.muted, fontSize: 12 }}>{fmtDate(e.at)}</span>,
+                    title: <span style={{ color: UI.muted, fontSize: 12 }}>{fmtDate(e.at)}</span>,
                     color: e.color,
-                    children: (
+                    content: (
                       <span style={{ fontSize: 13 }}>
                         <span style={{ fontWeight: 600, color: UI.ink, marginRight: 8 }}>
                           <Tag style={{ marginInlineEnd: 8 }} color={e.color}>{e.typeLabel}</Tag>

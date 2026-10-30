@@ -565,7 +565,30 @@ export interface OhProfileApplication {
   created_exam_id?: string | null
 }
 
-/** 个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 */
+/** 平台身份卡字段组（user/detail 投影；身份证等敏感字段一律不含） */
+export interface OhPlatformIdentityPerson {
+  platform_id: string
+  post_name?: string | null
+  dept_name?: string | null
+  dept_whole_name?: string | null
+  direct_leader?: string | null
+  job_no?: string | null
+  telephone?: string | null
+  email?: string | null
+  status?: string | null // 在职/离职
+  entry_date?: string | null
+}
+
+/** 平台身份卡信封（第 6 源；三态 + unmatched） */
+export interface OhPlatformIdentity {
+  status: 'live' | 'degraded' | 'empty' | 'unmatched'
+  fetched_at?: string | null
+  match_basis?: 'job_no' | 'name_dept' | null
+  person?: OhPlatformIdentityPerson | null
+  message?: string | null
+}
+
+/** 个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 + 平台身份 */
 export interface OhPersonProfile {
   person: OhPerson
   exams: OhHealthExam[]
@@ -573,6 +596,7 @@ export interface OhPersonProfile {
   applications: OhProfileApplication[]
   trainings: OhTrainingAttendee[]
   violations: OhProfileViolation[] | null // null=源未接入/失败降级
+  platform?: OhPlatformIdentity | null // 3.x 平台身份卡（第 6 源）
   match_notes: { trainings?: string | null; violations?: string | null }
   errors: string[]
 }
