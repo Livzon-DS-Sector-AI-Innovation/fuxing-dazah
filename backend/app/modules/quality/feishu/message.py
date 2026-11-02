@@ -137,6 +137,32 @@ async def send_user_interactive_card(open_id: str, card: dict[str, Any]) -> None
         logger.error("质量飞书发单聊卡片失败: %s", resp.msg)
 
 
+async def send_user_text(open_id: str, text: str) -> None:
+    """向指定用户单聊发送文本消息（机器人身份）。"""
+    await _throttle()
+    client = build_client()
+    from lark_oapi.api.im.v1 import (
+        CreateMessageRequest,
+        CreateMessageRequestBody,
+    )
+
+    req = (
+        CreateMessageRequest.builder()
+        .receive_id_type("open_id")
+        .request_body(
+            CreateMessageRequestBody.builder()
+            .receive_id(open_id)
+            .msg_type("text")
+            .content(json.dumps({"text": text}, ensure_ascii=False))
+            .build()
+        )
+        .build()
+    )
+    resp = await client.im.v1.message.acreate(req)
+    if not resp.success():
+        logger.error("质量飞书发单聊消息失败: %s", resp.msg)
+
+
 async def get_chat_id_of_message(message_id: str) -> str | None:
     """按消息 ID 反查所属群 chat_id（schema 2.0 卡片事件的 context 可能不含 chat_id）。"""
     client = build_client()

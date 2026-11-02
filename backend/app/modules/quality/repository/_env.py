@@ -321,10 +321,11 @@ async def group_duty(
     start_date = value.get("start_date")
     period_days = int(value.get("period_days") or 3)
     duty_count = int(value.get("duty_teams") or 2)
+    team_order = value.get("team_order") or []
     teams = await list_shift_teams(db, group_key=group_key)
     team_dicts = [{"id": str(t.id), "name": t.name, "member_ids": t.member_ids or []} for t in teams]
     duty = (
-        shift_duty_teams(team_dicts, start_date, period_days, duty_count, on_date)
+        shift_duty_teams(team_dicts, start_date, period_days, duty_count, on_date, team_order)
         if start_date else team_dicts[:duty_count]
     )
     member_ids: list[str] = []
@@ -343,6 +344,16 @@ async def group_member_ids(db: AsyncSession, group_key: str) -> set[str]:
     out: set[str] = set()
     for t in await list_shift_teams(db, group_key=group_key):
         out.update(t.member_ids or [])
+    return out
+
+
+async def user_shift_groups(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
+    """用户所属组别：出现在哪些组别的班组成员名单中（未编入任何班组则返回空集=不限组）。"""
+    out: set[str] = set()
+    uid = str(user_id)
+    for t in await list_shift_teams(db):
+        if uid in (t.member_ids or []):
+            out.add(t.group_key)
     return out
 
 
@@ -387,14 +398,27 @@ async def upsert_shift_config(db: AsyncSession, key: str, value: dict[str, Any])
     return cfg
 
 
-def shift_duty_teams(teams: list[dict[str, Any]], start_date: str, period_days: int, duty_count: int, on_date: str) -> list[dict[str, Any]]:
-    """按轮换规则算当日当班班组：每 period_days 天交替，同时 duty_count 个班组当班。
+def shift_duty_teams(
+    teams: list[dict[str, Any]],
+    start_date: str,
+    period_days: int,
+    duty_count: int,
+    on_date: str,
+    team_order: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """按轮换规则算当日当班班组。
 
-    teams 按 seq 排序；第 k 个周期（k=0,1,2...）当班班组 = teams[k%n .. (k+duty_count-1)%n]。
+    team_order 非空：班组按该顺序排列（未列出的班组不参与轮换），
+    每 period_days 天滑一位，同时 duty_count 个班组当班；
+    为空则 teams 按 seq 排序滑窗。
     """
     from datetime import date
 
-    n = len(teams)
+    ordered = teams
+    if team_order:
+        by_name = {t["name"]: t for t in teams}
+        ordered = [by_name[name] for name in team_order if name in by_name]
+    n = len(ordered)
     if n == 0 or duty_count <= 0:
         return []
     d0 = date.fromisoformat(start_date)
@@ -403,5 +427,5 @@ def shift_duty_teams(teams: list[dict[str, Any]], start_date: str, period_days: 
     k = (max(days, 0) // max(period_days, 1)) % n
     out = []
     for i in range(min(duty_count, n)):
-        out.append(teams[(k + i) % n])
+        out.append(ordered[(k + i) % n])
     return out

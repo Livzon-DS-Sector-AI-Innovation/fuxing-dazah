@@ -138,9 +138,16 @@ class ShiftTeamOut(BaseModel):
 
 
 class ShiftConfigIn(BaseModel):
-    """轮换配置：基准日期 + 周期天数 + 同时当班班组数（group 为空=全局）。"""
+    """轮换配置：基准日期 + 周期天数 + 同时当班班组数（group 为空=全局）。
+
+    team_order 为自定义轮换顺序：班组名列表（按序），滑窗按此顺序轮换，
+    未列出的班组不参与轮换；为空则按班组创建顺序滑窗。
+    """
 
     group: str | None = Field(default=None, max_length=32, description="组别（空=全局）")
     start_date: str = Field(max_length=32, description="基准日期 YYYY-MM-DD")
     period_days: int = Field(default=3, ge=1, le=30)
     duty_teams: int = Field(default=2, ge=1, le=10)
+    team_order: list[str] | None = Field(
+        default=None, description="自定义轮换顺序（班组名列表，按序），空=按创建顺序"
+    )

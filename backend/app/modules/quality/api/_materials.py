@@ -120,6 +120,33 @@ from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
 
+async def _notify_plan_assignments(
+    plan_product: str, plan_batch: str | None, plan_time: str,
+    notify_rows: list[dict[str, str]],
+) -> None:
+    """排班保存后：向被排班人飞书单聊发送排班通知（后台执行，open_id 在端点内已解析）。"""
+    from app.modules.quality.feishu.client import feishu_configured
+    from app.modules.quality.feishu.message import send_user_text
+
+    if not feishu_configured():
+        return
+    batch = plan_batch or "-"
+    for r in notify_rows:
+        open_id = r.get("open_id")
+        if not open_id:
+            continue
+        text = (
+            f"📋 排班通知：你被安排负责以下请检项目\n"
+            f"{plan_product}（批号 {batch}，请检 {plan_time}）\n"
+            f"SOP {r['sop_no']}：{r.get('items_label', '')}\n"
+            f"请按时完成检验填报。"
+        )
+        try:
+            await send_user_text(open_id, text)
+        except Exception:
+            pass
+
+
 @router.post("/material/containers/generate", summary="批量赋码：生成连续容器号（MC-物料代码-日期-流水）")
 async def generate_containers_endpoint(
     payload: MaterialContainerGenerateRequest = Body(...),
@@ -993,12 +1020,25 @@ async def delete_lab_item_endpoint(
 async def plans_board_endpoint(
     date_from: str | None = Query(default=None, description="YYYY-MM-DD，默认今天"),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:material:read")),
+    user: User = Depends(require_permission("quality:material:read")),
 ) -> JSONResponse:
     from app.core.time import today as _today
+    from app.modules.quality.repository import (
+        filter_board_by_groups,
+        get_shift_config,
+        user_shift_groups,
+    )
 
     items = await list_plans_board(db, date_from or _today().isoformat())
-    return success_response(data=items)
+    # 组别过滤：编入班组的用户只看本组 SOP（未编入任何班组则不限组）
+    groups = await user_shift_groups(db, user.id)
+    meta = None
+    if groups:
+        cfg = await get_shift_config(db, "item_groups")
+        mapping = (cfg.value if cfg else None) or {}
+        items = filter_board_by_groups(items, groups, mapping)
+        meta = {"scope_groups": sorted(groups)}
+    return success_response(data=items, meta=meta)
 
 
 @router.put("/inspection-plans/{plan_id}/assignments", summary="请检计划排班（SOP→人员；已建任务自动同步任务分工）")
@@ -1027,6 +1067,8 @@ async def save_plan_assignments_endpoint(
         get_shift_config,
         group_member_ids,
         item_group,
+        list_task_assignments,
+        user_shift_groups,
     )
 
     board = await list_plans_board(db, "0000-01-01")
@@ -1037,30 +1079,131 @@ async def save_plan_assignments_endpoint(
     for sop in (board_item or {}).get("sops", []):
         names = " ".join(sop.get("items", []))
         sop_groups[sop["sop_no"]] = item_group(names, mapping)
+    # 编入班组的用户只能排本组 SOP：其余组排班保留原值（未编入班组则整单替换）
+    user_groups = await user_shift_groups(db, user.id)
+    apply_rows = (
+        [a for a in rows if sop_groups.get(a["sop_no"]) in user_groups]
+        if user_groups else rows
+    )
+    # 未变更的已有排班跳过校验（历史排班不受当前轮换/班组配置影响）
+    old_map = {str(a.get("sop_no")): str(a.get("assignee_id")) for a in (plan.assignments or [])}
     conflicts: list[str] = []
-    for a in rows:
+    for a in apply_rows:
+        if old_map.get(a["sop_no"]) == a["assignee_id"]:
+            continue
         g = sop_groups.get(a["sop_no"])
         if g is None:
             continue
         allowed = await group_member_ids(db, g)
-        if allowed and a["assignee_id"] not in allowed:
+        if not allowed:
+            conflicts.append(f"SOP {a['sop_no']} 属 {g}，该组尚未配置班组，暂不能排班")
+        elif a["assignee_id"] not in allowed:
             conflicts.append(f"SOP {a['sop_no']} 属 {g}，所选人员不在该组班组成员中")
     if conflicts:
         raise HTTPException(status_code=400, detail="；".join(conflicts) + "（请先修正或清除跨组旧排班）")
-    plan.assignments = rows
+    if user_groups:
+        kept = [
+            a for a in (plan.assignments or [])
+            if sop_groups.get(str(a.get("sop_no"))) not in user_groups
+        ]
+        new_assignments = kept + apply_rows
+    else:
+        new_assignments = rows
+    # 排班实际变化则清空通知标记（管理员需重新确认下发）
+    new_map = {a["sop_no"]: a["assignee_id"] for a in new_assignments}
+    if old_map != new_map:
+        plan.notified_at = None
+    plan.assignments = new_assignments
     await db.flush()
-    # 已建任务：同步任务分工
+    # 已建任务：同步任务分工（受限用户只动本组 SOP，其余保留）
     task = await get_test_task_by_batch_number(db, plan.batch_no) if plan.batch_no else None
     if task is not None:
         valid = {(r.sop_no or "").strip() for r in await list_test_results(db, task.id) if (r.sop_no or "").strip()}
-        await replace_task_assignments(db, task.id, [
+        sync_rows = [
             {"task_id": task.id, "sop_no": a["sop_no"], "assignee_id": uuid.UUID(a["assignee_id"]),
              "assigned_by": user.id, "created_by": user.id}
-            for a in rows if a["sop_no"] in valid
-        ])
+            for a in apply_rows if a["sop_no"] in valid
+        ]
+        if user_groups:
+            keep_rows = [
+                {"task_id": task.id, "sop_no": old.sop_no, "assignee_id": old.assignee_id,
+                 "assigned_by": old.assigned_by or user.id, "created_by": old.created_by or user.id}
+                for old in await list_task_assignments(db, task.id)
+                if sop_groups.get(old.sop_no) not in user_groups
+            ]
+            sync_rows = keep_rows + sync_rows
+        await replace_task_assignments(db, task.id, sync_rows)
     items = await list_plans_board(db, "0000-01-01")
     item = next((x for x in items if x["plan_id"] == plan.id), None)
-    return success_response(data=item, message=f"排班已保存（{len(rows)} 个 SOP）")
+    return success_response(data=item, message=f"排班已保存（{len(apply_rows)} 个 SOP）")
+
+
+@router.post("/inspection-plans/{plan_id}/notify", summary="下发排班通知（管理员确认后向被排班人飞书单聊发送）")
+async def notify_plan_assignments_endpoint(
+    plan_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:create")),
+) -> JSONResponse:
+    from sqlalchemy import select as _select
+
+    from app.core.time import now as _now
+    from app.modules.quality.repository import (
+        get_inspection_plan,
+        get_shift_config,
+        item_group,
+        user_shift_groups,
+    )
+    from app.modules.quality.service import spawn_background
+    from app.platform.identity.models import User as IdentityUser
+
+    plan = await get_inspection_plan(db, plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="请检计划不存在")
+    board = await list_plans_board(db, "0000-01-01")
+    board_item = next((x for x in board if x["plan_id"] == plan.id), None)
+    assignments = plan.assignments or []
+    # 组别权限：编入班组的用户只能下发本组 SOP 的通知
+    groups = await user_shift_groups(db, user.id)
+    if groups:
+        group_cfg = await get_shift_config(db, "item_groups")
+        mapping = (group_cfg.value if group_cfg else None) or {}
+        sop_groups: dict[str, str] = {}
+        for sop in (board_item or {}).get("sops", []):
+            names = " ".join(sop.get("items", []))
+            sop_groups[sop["sop_no"]] = item_group(names, mapping)
+        assignments = [
+            a for a in assignments
+            if sop_groups.get(str(a.get("sop_no"))) in groups
+        ]
+    if not assignments:
+        return success_response(data={"notified": 0, "skipped": 0}, message="无本组排班可通知")
+    # 解析被排班人 open_id 与 SOP 项目清单（端点内完成，后台只发消息）
+    uids = [str(a.get("assignee_id")) for a in assignments if a.get("assignee_id")]
+    open_ids: dict[str, str | None] = {}
+    if uids:
+        stmt = _select(IdentityUser).where(IdentityUser.id.in_(uids))
+        open_ids = {str(u.id): u.feishu_open_id for u in (await db.execute(stmt)).scalars()}
+    items_label: dict[str, str] = {}
+    for sop in (board_item or {}).get("sops", []):
+        items_label[sop["sop_no"]] = "、".join(sop.get("items", [])[:6])
+    notify_rows = [
+        {
+            "sop_no": str(a.get("sop_no")),
+            "items_label": items_label.get(str(a.get("sop_no")), ""),
+            "open_id": open_ids.get(str(a.get("assignee_id"))) or "",
+        }
+        for a in assignments
+    ]
+    notified = sum(1 for r in notify_rows if r["open_id"])
+    spawn_background(_notify_plan_assignments(
+        plan.product_name, plan.batch_no, str(plan.plan_time)[:16], notify_rows,
+    ))
+    plan.notified_at = _now().strftime("%Y-%m-%d %H:%M")
+    await db.flush()
+    return success_response(
+        data={"notified": notified, "skipped": len(notify_rows) - notified},
+        message=f"已下发 {notified} 人通知（{len(notify_rows) - notified} 人无飞书账号跳过）" if notified else "排班人员均无飞书账号，未发送",
+    )
 
 
 @router.get("/inspection-plans", summary="请检计划列表（可按日期/车间筛选）")
@@ -1095,12 +1238,12 @@ async def update_inspection_plan_endpoint(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:material:manage")),
 ) -> JSONResponse:
-    plan = await update_inspection_plan_status(db, plan_id, payload.status)
+    plan = await update_inspection_plan_status(db, plan_id, payload.status, payload.plan_time)
     if plan is None:
         raise HTTPException(status_code=404, detail="计划不存在")
     return success_response(
         data=InspectionPlanOut.model_validate(plan).model_dump(mode="json"),
-        message="状态已更新",
+        message="已更新（含改期）" if payload.plan_time else "状态已更新",
     )
 
 

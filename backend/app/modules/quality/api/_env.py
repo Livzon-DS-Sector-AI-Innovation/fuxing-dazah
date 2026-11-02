@@ -639,7 +639,12 @@ async def create_shift_team_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
-    from app.modules.quality.repository import upsert_shift_team
+    from app.modules.quality.repository import upsert_shift_team, user_shift_groups
+
+    # 组别权限：编入班组的用户只能管理本组班组
+    groups = await user_shift_groups(db, user.id)
+    if groups and payload.group_key not in groups:
+        raise HTTPException(status_code=403, detail="只能管理本组班组")
 
     team = await upsert_shift_team(db, None, {
         "name": payload.name, "group_key": payload.group_key,
@@ -656,7 +661,20 @@ async def update_shift_team_endpoint(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
-    from app.modules.quality.repository import upsert_shift_team
+    from app.modules.quality.repository import (
+        get_shift_team,
+        upsert_shift_team,
+        user_shift_groups,
+    )
+
+    # 组别权限：编入班组的用户只能管理本组班组
+    groups = await user_shift_groups(db, user.id)
+    if groups:
+        existing = await get_shift_team(db, team_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="班组不存在")
+        if existing.group_key not in groups or payload.group_key not in groups:
+            raise HTTPException(status_code=403, detail="只能管理本组班组")
 
     team = await upsert_shift_team(db, team_id, {
         "name": payload.name, "group_key": payload.group_key,
@@ -670,9 +688,22 @@ async def update_shift_team_endpoint(
 async def delete_shift_team_endpoint(
     team_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:create")),
+    user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
-    from app.modules.quality.repository import delete_shift_team
+    from app.modules.quality.repository import (
+        delete_shift_team,
+        get_shift_team,
+        user_shift_groups,
+    )
+
+    # 组别权限：编入班组的用户只能管理本组班组
+    groups = await user_shift_groups(db, user.id)
+    if groups:
+        existing = await get_shift_team(db, team_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="班组不存在")
+        if existing.group_key not in groups:
+            raise HTTPException(status_code=403, detail="只能管理本组班组")
 
     if not await delete_shift_team(db, team_id):
         raise HTTPException(status_code=404, detail="班组不存在")
@@ -687,19 +718,35 @@ async def get_shift_config_endpoint(
     from app.modules.quality.repository import get_shift_config
 
     cfg = await get_shift_config(db, "rotation")
-    return success_response(data=cfg.value if cfg and cfg.value else {"start_date": None, "period_days": 3, "duty_teams": 2})
+    default: dict[str, Any] = {"start_date": None, "period_days": 3, "duty_teams": 2, "team_order": []}
+    return success_response(data=cfg.value if cfg and cfg.value else default)
 
 
 @router.put("/shift/config", summary="保存排班轮换配置（group 为空=全局，否则按组）")
 async def save_shift_config_endpoint(
     payload: ShiftConfigIn = Body(...),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:create")),
+    user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
-    from app.modules.quality.repository import upsert_shift_config
+    from app.modules.quality.repository import upsert_shift_config, user_shift_groups
 
+    # 组别权限：轮换配置为全局设置，编入班组的用户不可修改
+    if await user_shift_groups(db, user.id):
+        raise HTTPException(status_code=403, detail="轮换配置为全局设置，仅管理人员可修改")
+
+    # 轮换顺序归一化：去空白、按原顺序去重
+    team_order: list[str] = []
+    for name in payload.team_order or []:
+        n = name.strip()
+        if n and n not in team_order:
+            team_order.append(n)
     key = f"rotation:{payload.group}" if payload.group else "rotation"
-    value = {"start_date": payload.start_date, "period_days": payload.period_days, "duty_teams": payload.duty_teams}
+    value = {
+        "start_date": payload.start_date,
+        "period_days": payload.period_days,
+        "duty_teams": payload.duty_teams,
+        "team_order": team_order,
+    }
     await upsert_shift_config(db, key, value)
     return success_response(message="轮换配置已保存")
 
@@ -707,13 +754,15 @@ async def save_shift_config_endpoint(
 @router.get("/shift/groups", summary="组别概览（各组班组/轮换配置/当日当班成员）")
 async def shift_groups_endpoint(
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:read")),
+    user: User = Depends(require_permission("quality:task:read")),
 ) -> JSONResponse:
     from app.core.time import today as _today
     from app.modules.quality.repository import (
         get_shift_config,
         group_duty,
+        group_member_ids,
         list_shift_teams,
+        user_shift_groups,
     )
 
     on_date = _today().isoformat()
@@ -730,21 +779,26 @@ async def shift_groups_endpoint(
     for g in group_keys:
         duty = await group_duty(db, g, on_date)
         members = duty["members"]
+        all_ids = list(await group_member_ids(db, g))
         names: dict[str, str] = {}
-        if members:
+        if members or all_ids:
             from sqlalchemy import select as _select
 
             from app.platform.identity.models import User as IdentityUser
 
-            stmt = _select(IdentityUser).where(IdentityUser.id.in_(members))
+            stmt = _select(IdentityUser).where(IdentityUser.id.in_(set(members) | set(all_ids)))
             names = {str(u.id): u.name for u in (await db.execute(stmt)).scalars()}
         groups.append({
             "group": g,
             "configured": duty["configured"],
             "teams": duty["teams"],
             "members": [{"id": i, "name": names.get(i, "未知")} for i in members],
+            "all_members": [{"id": i, "name": names.get(i, "未知")} for i in all_ids],
         })
-    return success_response(data={"groups": groups, "mapping": mapping})
+    # 组别范围：编入班组的用户只看到本组（前端据此隐藏其他组页签与全局配置页签）
+    user_groups = await user_shift_groups(db, user.id)
+    meta = {"scope_groups": sorted(user_groups)} if user_groups else None
+    return success_response(data={"groups": groups, "mapping": mapping}, meta=meta)
 
 
 @router.get("/shift/item-groups", summary="项目组别映射配置（项目名关键词 → 组别）")
@@ -766,9 +820,13 @@ async def shift_item_groups_endpoint(
 async def save_shift_item_groups_endpoint(
     payload: dict[str, object] = Body(...),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:create")),
+    user: User = Depends(require_permission("quality:task:create")),
 ) -> JSONResponse:
-    from app.modules.quality.repository import upsert_shift_config
+    from app.modules.quality.repository import upsert_shift_config, user_shift_groups
+
+    # 组别权限：项目组别映射为全局设置，编入班组的用户不可修改
+    if await user_shift_groups(db, user.id):
+        raise HTTPException(status_code=403, detail="项目组别映射为全局设置，仅管理人员可修改")
 
     await upsert_shift_config(db, "item_groups", payload)
     return success_response(message="项目组别映射已保存")
@@ -793,9 +851,10 @@ async def shift_duty_endpoint(
     start_date = value.get("start_date")
     period_days = int(value.get("period_days") or 3)
     duty_count = int(value.get("duty_teams") or 2)
+    team_order = value.get("team_order") or []
     teams = await list_shift_teams(db)
-    team_dicts = [{"id": str(t.id), "name": t.name, "member_ids": t.member_ids or []} for t in teams]
-    duty = shift_duty_teams(team_dicts, start_date or on_date, period_days, duty_count, on_date) if start_date else []
+    team_dicts = [{"id": str(t.id), "name": t.name, "group_key": t.group_key, "member_ids": t.member_ids or []} for t in teams]
+    duty = shift_duty_teams(team_dicts, start_date or on_date, period_days, duty_count, on_date, team_order) if start_date else []
     member_ids: list[str] = []
     for t in duty:
         member_ids.extend(t["member_ids"])

@@ -424,6 +424,7 @@ class InspectionPlanCreate(BaseModel):
 
 class InspectionPlanUpdate(BaseModel):
     status: Literal["pending", "inspected"]
+    plan_time: str | None = Field(default=None, description="计划请检时间 YYYY-MM-DD HH:mm（改期用，不改不传）")
 
 
 class InspectionPlanOut(BaseModel):

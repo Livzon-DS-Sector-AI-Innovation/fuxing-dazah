@@ -931,12 +931,14 @@ async def get_inspection_plan(db: AsyncSession, pid: uuid.UUID) -> QualityInspec
 
 
 async def update_inspection_plan_status(
-    db: AsyncSession, pid: uuid.UUID, status: str
+    db: AsyncSession, pid: uuid.UUID, status: str, plan_time: str | None = None
 ) -> QualityInspectionPlan | None:
     plan = await get_inspection_plan(db, pid)
     if plan is None:
         return None
     plan.status = status
+    if plan_time:
+        plan.plan_time = plan_time
     await db.flush()
     stmt = select(QualityInspectionPlan).where(QualityInspectionPlan.id == pid)
     return (await db.execute(stmt)).scalar_one_or_none()
@@ -1164,6 +1166,30 @@ async def get_retained_sample_with_names(db: AsyncSession, rid: uuid.UUID) -> di
     }
 
 
+def filter_board_by_groups(
+    items: list[dict[str, Any]], groups: set[str], mapping: dict[str, list[str]]
+) -> list[dict[str, Any]]:
+    """看板按组别过滤：仅保留所属组别的 SOP 与对应排班；无可见 SOP 的计划整条隐藏。"""
+    from app.modules.quality.repository import item_group
+
+    out: list[dict[str, Any]] = []
+    for it in items:
+        sops = [
+            s for s in it.get("sops", [])
+            if item_group(" ".join(s.get("items", [])), mapping) in groups
+        ]
+        if not sops:
+            continue
+        sop_nos = {s["sop_no"] for s in sops}
+        item = dict(it)
+        item["sops"] = sops
+        item["assignments"] = [
+            a for a in it.get("assignments", []) if a.get("sop_no") in sop_nos
+        ]
+        out.append(item)
+    return out
+
+
 async def list_plans_board(db: AsyncSession, date_from: str) -> list[dict[str, Any]]:
     """请检计划排班看板：今天及以后的计划 + 待检 SOP（任务已有取任务项目，否则取产品标准项目）。"""
     from app.modules.quality.repository import (
@@ -1174,7 +1200,8 @@ async def list_plans_board(db: AsyncSession, date_from: str) -> list[dict[str, A
     )
     from app.platform.identity.models import User as IdentityUser
 
-    plans = [p for p in await list_inspection_plans(db) if p.plan_time >= date_from]
+    # 今天及以后的计划；已过期但仍待请检的计划也保留（可改期/补排班），前端标「已过期」
+    plans = [p for p in await list_inspection_plans(db) if p.plan_time >= date_from or p.status == "pending"]
     out: list[dict[str, Any]] = []
     for p in plans:
         task = await get_test_task_by_batch_number(db, p.batch_no) if p.batch_no else None
@@ -1223,6 +1250,7 @@ async def list_plans_board(db: AsyncSession, date_from: str) -> list[dict[str, A
             "batch_no": p.batch_no,
             "plan_time": p.plan_time,
             "status": p.status,
+            "notified_at": p.notified_at,
             "task_id": task.id if task else None,
             "task_status": task.status if task else None,
             "sops": sops,

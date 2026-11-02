@@ -153,6 +153,9 @@ class QualityInspectionPlan(BaseModel):
     assignments: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB, nullable=True, comment="排班 [{\"sop_no\": ..., \"assignee_id\": ...}]"
     )
+    notified_at: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="排班通知最近下发时间 YYYY-MM-DD HH:mm（排班变更后清空）"
+    )
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
 
 
