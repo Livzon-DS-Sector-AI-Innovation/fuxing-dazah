@@ -356,3 +356,39 @@ def test_heiti_font_registered_or_fallback():
     assert styles["label_top"].alignment == TA_CENTER
     assert styles["value_top"].alignment == TA_CENTER
     assert styles["section_head"].alignment == TA_CENTER
+
+
+def test_rich_markup_cjk_gap_and_punctuation():
+    """中文排版规范化：断词残留清除 + CJK 间半角标点全角化（2026-11-02 审计批）。"""
+    from app.modules.safety.feishu.msds_pdf import _rich_markup
+
+    # 供应商 PDF 断行残留（换行/空格夹在 CJK 之间）
+    assert _rich_markup("呼吸道刺\n激性气味") == "呼吸道刺激性气味"
+    assert _rich_markup("建 议操作人员") == "建议操作人员"
+    # 半角标点任一侧是 CJK 即转全角（含标点后接拉丁：非常大,L）
+    assert _rich_markup("眼损伤,可能") == "眼损伤，可能"
+    assert _rich_markup("氨溶液;氨水") == "氨溶液；氨水"
+    assert _rich_markup("毒性非常大,LC") == "毒性非常大，LC"
+    # 两侧都是数字/拉丁不动（3.5、13:00、20 mg/m3、1,2-丙二醇安全）
+    assert _rich_markup("13:00") == "13:00"
+    assert _rich_markup("1,2-丙二醇") == "1,2-丙二醇"
+    assert _rich_markup("沸点 38.3℃") == "沸点 38.3℃"
+    assert _rich_markup("20 mg/m3") == "20 mg/m3"
+    # 组合：断词 + 半角 + 上下标一起
+    assert _rich_markup("对水生 生物毒性非常大,LC₅₀") == "对水生生物毒性非常大，LC<sub>50</sub>"
+
+
+def test_environmental_hazard_rendered(tmp_path):
+    """环境危害字段有值必须上 PDF（内容完整性审计 27 处缺漏的回归锚）。"""
+    pypdf = pytest.importorskip("pypdf")
+    from app.modules.safety.feishu.msds_pdf import build_standard_msds_pdf
+
+    entry = {
+        "name": "测试环境危害", "cas_no": "67-64-1",
+        "health_hazard": "轻度刺激。",
+        "environmental_hazard": "对环境可能有害。",
+    }
+    out = tmp_path / "env.pdf"
+    build_standard_msds_pdf(entry, str(out))
+    text = "".join(p.extract_text() or "" for p in pypdf.PdfReader(str(out)).pages)
+    assert "对环境可能有害" in text.replace("\n", "")

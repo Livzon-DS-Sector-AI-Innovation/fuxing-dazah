@@ -112,17 +112,38 @@ _SUPERSCRIPT_MAP = {
     "⁺": "+", "⁻": "−", "ⁿ": "n",
 }
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+# CJK 字符类：汉字 + CJK 标点（。，、；）+ 全角形式（（）：？！％）
+_CJK_CLASS = r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]"
+# CJK↔CJK 之间的空白（含换行）：供应商 PDF 断行残留（「刺 激」「建 议」类）
+_CJK_GAP_RE = re.compile(rf"(?<={_CJK_CLASS})[\s\u3000]+(?={_CJK_CLASS})")
+# CJK 之间的半角标点 → 全角：任一侧是 CJK 即转（中文句子中标点后接拉丁也该
+# 全角，如「非常大,L」）；两侧都是数字/拉丁不动（3.5、13:00、1,2-丙二醇安全）
+_HALF_TO_FULL = {
+    ",": "，", ";": "；", ":": "：", "?": "？", "!": "！",
+}
+_HALF_FULL_RES = [
+    (re.compile(rf"(?<={_CJK_CLASS}){re.escape(half)}"), full)
+    for half, full in _HALF_TO_FULL.items()
+] + [
+    (re.compile(rf"{re.escape(half)}(?={_CJK_CLASS})"), full)
+    for half, full in _HALF_TO_FULL.items()
+]
 
 
 def _rich_markup(value: str) -> str:
-    """XML 转义 + 上下标/零宽规范化（所有单元格文本统一入口）。
+    """XML 转义 + 中文排版规范化（所有单元格文本统一入口）。
 
-    STSong-Light/NotoSansSC 均无下标字形（MgSO₄ 渲染丢字根因）：
-    连续下标字符 → <sub>12</sub>；上标字符 → <sup>3</sup>（mg/m³ 类）；
-    零宽字符（\u200b 等，AI 提取残留）直接删除。标记由本函数生成，
-    无注入面。
+    - 上下标：STSong-Light/NotoSansSC 均无下标字形（MgSO₄ 渲染丢字根因），
+      连续下标字符 → <sub>12</sub>；上标字符 → <sup>3</sup>（mg/m³ 类）
+    - 零宽字符（\u200b 等，AI 提取残留）删除
+    - CJK 之间空白删除：供应商 PDF 断行残留（「刺\\n激」「建 议」类断词）
+    - CJK 之间半角标点全角化（,;:?! → 全角；数字/拉丁间不动）
+    标记由本函数生成，无注入面。
     """
     s = _INVISIBLE_RE.sub("", html.escape(value or ""))
+    s = _CJK_GAP_RE.sub("", s)
+    for pattern, full in _HALF_FULL_RES:
+        s = pattern.sub(full, s)
     out: list[str] = []
     i = 0
     while i < len(s):
@@ -313,7 +334,9 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
         return Paragraph(_rich_markup(text), style["body"])
 
     def st_label(text: str) -> Paragraph:
-        return Paragraph(_esc(text), style["label"])
+        """竖排标签：显式逐字一行（窄列自动断行会把 5-11 字标签折成两列，
+        「危险性说明」折成『危险性说/明』两列的排版事故根因）。"""
+        return Paragraph("<br/>".join(_esc(ch) for ch in text), style["label"])
 
     def st_label_top(text: str) -> Paragraph:
         return Paragraph(_esc(text), style["label_top"])
@@ -355,6 +378,13 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
     if health:
         # 健康危害内容黑体（模板 bold+黑体）
         left_cells.extend(_section_cell("健康危害", [Paragraph(_rich_markup(f"● {health}"), style["heiti"])]))
+    # 环境危害（GB/T 16483 与健康危害相邻；参考模板无此格，字段有值即渲染，
+    # 内容完整性 2026-11-02 审计补）
+    environmental = entry.get("environmental_hazard") or ""
+    if environmental:
+        left_cells.extend(_section_cell(
+            "环境危害", [Paragraph(_rich_markup(f"● {environmental}"), style["body"])],
+        ))
     first_aid_lines = _bullet_lines("急救措施", entry, section_parts)
     if first_aid_lines:
         left_cells.extend(_section_cell(
