@@ -20,7 +20,10 @@ export default function InspectionPlans({ onBuildTask }: { onBuildTask?: (batch:
   const [dateFilter, setDateFilter] = useState<string | undefined>(dayjs().format('YYYY-MM-DD'))
   const [createOpen, setCreateOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [reschedule, setReschedule] = useState<InspectionPlan | null>(null)
+  const [rescheduling, setRescheduling] = useState(false)
   const [form] = Form.useForm()
+  const [rescheduleForm] = Form.useForm()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -62,6 +65,22 @@ export default function InspectionPlans({ onBuildTask }: { onBuildTask?: (batch:
       load()
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : String(err)) || '状态更新失败')
+    }
+  }
+
+  const onReschedule = async () => {
+    const values = await rescheduleForm.validateFields()
+    if (!reschedule) return
+    setRescheduling(true)
+    try {
+      await updateInspectionPlanStatus(reschedule.id, reschedule.status, values.plan_time.format('YYYY-MM-DD HH:mm'))
+      message.success('已改期')
+      setReschedule(null)
+      load()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '改期失败')
+    } finally {
+      setRescheduling(false)
     }
   }
 
@@ -130,13 +149,21 @@ export default function InspectionPlans({ onBuildTask }: { onBuildTask?: (batch:
             render: (v: string) => v === 'pending' ? <Tag color="gold">待请检</Tag> : <Tag color="green">已请检</Tag>,
           },
           {
-            title: '操作', key: 'actions', width: 110,
+            title: '操作', key: 'actions', width: 160,
             render: (_: unknown, item: InspectionPlan) => (
               canManage ? (
                 <Space size="small">
                   {item.status === 'pending' && onBuildTask && (
                     <Button size="small" type="primary" onClick={() => onBuildTask(item.batch_no ?? '', item.product_name)}>
                       建任务
+                    </Button>
+                  )}
+                  {item.status === 'pending' && (
+                    <Button size="small" type="link" onClick={() => {
+                      rescheduleForm.setFieldsValue({ plan_time: dayjs(item.plan_time) })
+                      setReschedule(item)
+                    }}>
+                      改期
                     </Button>
                   )}
                   <Button size="small" type="link" onClick={() => onToggleStatus(item)}>
@@ -173,6 +200,22 @@ export default function InspectionPlans({ onBuildTask }: { onBuildTask?: (batch:
           </Form.Item>
           <Form.Item name="remark" label="备注（可选）">
             <Input maxLength={200} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`请检计划改期（${reschedule?.product_name ?? ''}${reschedule?.batch_no ? ` 批号 ${reschedule.batch_no}` : ''}）`}
+        open={!!reschedule}
+        onCancel={() => setReschedule(null)}
+        onOk={onReschedule}
+        confirmLoading={rescheduling}
+        okText="保存"
+        width={360}
+      >
+        <Form form={rescheduleForm} layout="vertical">
+          <Form.Item name="plan_time" label="计划请检时间" rules={[{ required: true, message: '必填' }]}>
+            <DatePicker showTime style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>

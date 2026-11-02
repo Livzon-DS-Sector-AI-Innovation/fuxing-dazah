@@ -1512,10 +1512,10 @@ export async function createInspectionPlan(input: Partial<InspectionPlan>): Prom
   return res.json()
 }
 
-export async function updateInspectionPlanStatus(id: string, status: 'pending' | 'inspected'): Promise<{ message: string; data: InspectionPlan }> {
+export async function updateInspectionPlanStatus(id: string, status: 'pending' | 'inspected', plan_time?: string): Promise<{ message: string; data: InspectionPlan }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans/${id}/status`, {
     method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, plan_time }),
   })
   if (!res.ok) throw new Error('状态更新失败')
   return res.json()
@@ -1968,7 +1968,7 @@ export async function deleteShiftTeam(id: string): Promise<{ message: string }> 
   return res.json()
 }
 
-export async function fetchShiftConfig(): Promise<{ data: { start_date: string | null; period_days: number; duty_teams: number } }> {
+export async function fetchShiftConfig(): Promise<{ data: { start_date: string | null; period_days: number; duty_teams: number; team_order: string[] | null } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/config`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
@@ -1976,7 +1976,7 @@ export async function fetchShiftConfig(): Promise<{ data: { start_date: string |
   return res.json()
 }
 
-export async function saveShiftConfig(input: { start_date: string; period_days: number; duty_teams: number; group?: string }): Promise<{ message: string }> {
+export async function saveShiftConfig(input: { start_date: string; period_days: number; duty_teams: number; team_order?: string[]; group?: string }): Promise<{ message: string }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/config`, {
     method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -1987,11 +1987,11 @@ export async function saveShiftConfig(input: { start_date: string; period_days: 
 }
 
 export interface ShiftGroupData {
-  groups: { group: string; configured: boolean; teams: { id: string; name: string }[]; members: { id: string; name: string }[] }[]
+  groups: { group: string; configured: boolean; teams: { id: string; name: string }[]; members: { id: string; name: string }[]; all_members: { id: string; name: string }[] }[]
   mapping: Record<string, string[]>
 }
 
-export async function fetchShiftGroups(): Promise<{ data: ShiftGroupData }> {
+export async function fetchShiftGroups(): Promise<{ data: ShiftGroupData; meta?: { scope_groups?: string[] } | null }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/shift/groups`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
@@ -2017,7 +2017,7 @@ export async function fetchShiftDuty(): Promise<{ data: { date: string; configur
   return res.json()
 }
 
-export async function fetchPlanBoard(): Promise<{ data: PlanBoardItem[] }> {
+export async function fetchPlanBoard(): Promise<{ data: PlanBoardItem[]; meta?: { scope_groups?: string[] } | null }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/plans/board`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
@@ -2033,6 +2033,19 @@ export async function savePlanAssignments(planId: string, assignments: { sop_no:
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))
     throw new Error(err.detail || '排班保存失败')
+  }
+  revalidatePath('/quality/board')
+  return res.json()
+}
+
+export async function notifyPlanAssignments(planId: string): Promise<{ message: string; data: { notified: number; skipped: number } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/inspection-plans/${planId}/notify`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '排班通知下发失败')
   }
   revalidatePath('/quality/board')
   return res.json()

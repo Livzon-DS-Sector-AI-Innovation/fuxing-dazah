@@ -884,6 +884,7 @@ export interface PlanBoardItem {
   batch_no: string | null
   plan_time: string
   status: string
+  notified_at: string | null
   task_id: string | null
   task_status: string | null
   sops: { sop_no: string; items: string[]; filled: number; total: number }[]
