@@ -37,6 +37,7 @@ from app.modules.safety.service.msds_review import (
     FIELD_TYPO_DETAIL,
     FIELD_TYPO_STATUS,
     TYPO_STATUS_UNREVIEWED,
+    derive_label_elements,
     msds_content_hash,
     proofread_entry,
     set_self_write_marker,
@@ -46,14 +47,15 @@ from app.modules.safety.service.msds_review import (
 logger = logging.getLogger(__name__)
 
 # AI 提取 entry 字段 → MSDS 表 Bitable 中文字段名
-# label_elements 不在 MSDS 表（无该字段），写回时丢弃，仅平台存档（spec 决策 Q5）
-# 「外观与性状」为 2026-10-30 修正后的标准列名（历史错别字「外观与现状」）
+# label_elements → 「标签要素」列（2026-11-02 起 MSDS 表有列；AI 未提取时
+# 由 derive_label_elements 规则推导兜底，人工改列后修订同步自动追平 PDF）
 ENTRY_TO_BITABLE_FIELD: dict[str, str] = {
     "name": "物质名称",
     "cas_no": "CAS号",
     "molecular_formula": "分子式",
     "un_no": "UN编号",
     "hazard_statement": "危险性说明",
+    "label_elements": "标签要素",
     "appearance": "外观与性状",
     "solubility": "溶解性",
     "melting_point": "熔点",
@@ -92,7 +94,7 @@ MSDS_EXTRACT_SYSTEM_PROMPT = """你是化学品安全数据表（MSDS/SDS）结�
 
 危险性概述：
 - hazard_statement（危险性说明/危险概述，如"高度易燃液体和蒸气"）
-- label_elements（标签要素/象形图说明，如 GHS 警示语）
+- label_elements（标签要素/象形图说明，如"图形：火焰；信号词：危险"，尽量从原文 GHS 分类/危险性概述提取）
 
 理化特性：
 - appearance（外观与性状）
@@ -364,7 +366,11 @@ class MsdsService:
                     logger.warning("标准 PDF 上传失败, 跳过: %s", filename)
                     continue
 
-                # ③ 构造 MSDS 表字段（label_elements 丢弃）+ 错别字 AI 校对合并
+                # ③ 构造 MSDS 表字段（label_elements AI 空值规则推导兜底）+ 错别字 AI 校对合并
+                if not entry.get("label_elements"):
+                    derived = derive_label_elements(entry)
+                    if derived:
+                        entry["label_elements"] = derived
                 fields: dict = {
                     bitable_field: entry[entry_key]
                     for entry_key, bitable_field in ENTRY_TO_BITABLE_FIELD.items()

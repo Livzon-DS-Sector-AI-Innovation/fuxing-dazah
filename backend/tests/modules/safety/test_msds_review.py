@@ -42,9 +42,10 @@ def test_content_hash_stable_and_whitespace_normalized():
 
 def test_content_hash_independent_of_extra_keys():
     a = {"name": "乙醇"}
-    b = {"name": "乙醇", "label_elements": "GHS02", "msds_attachment": [{"x": 1}]}
-    # label_elements 不在内容比对面（台账表无该列），附件/日期不参与
+    b = {"name": "乙醇", "msds_attachment": [{"x": 1}]}
+    # 附件/日期不参与内容比对；标签要素 2026-11-02 起入内容面（改列→PDF 追平）
     assert msds_content_hash(a) == msds_content_hash(b)
+    assert msds_content_hash(a) != msds_content_hash({**a, "label_elements": "图形：火焰"})
 
 
 # ── 同步判定矩阵 ──
@@ -89,12 +90,13 @@ def test_entry_from_bitable_fields_rich_text_segments():
 def test_entry_from_bitable_fields_excludes_non_content_columns():
     entry = entry_from_bitable_fields({
         "物质名称": "乙醇",
+        "标签要素": "图形：火焰；信号词：危险",
         "日期": 1785945600000,
         "MSDS附件": [{"file_token": "x"}],
         "错别字审核": "疑似错别字",
         "修订记录": "2026-10-30 …",
     })
-    assert set(entry) == {"name"}
+    assert set(entry) == {"name", "label_elements"}
     assert "typo_review_status" not in entry and "source_date" not in entry
 
 
@@ -267,3 +269,90 @@ def test_standard_pdf_single_page(tmp_path):
     out2 = tmp_path / "extreme.pdf"
     build_standard_msds_pdf(extreme, str(out2))
     assert len(pypdf.PdfReader(str(out2)).pages) == 1
+
+
+# ── PDF 文本规范化（分子式上下标修复，2026-11-02）──
+
+
+def test_rich_markup_subscript_conversion():
+    from app.modules.safety.feishu.msds_pdf import _rich_markup
+
+    # Unicode 下标 → <sub>（STSong-Light 无 U+208x 字形，MgSO₄ 原样渲染丢 ₄）
+    assert _rich_markup("MgSO₄") == "MgSO<sub>4</sub>"
+    assert _rich_markup("MnO₂") == "MnO<sub>2</sub>"
+    # 连续下标合并一个标记
+    assert _rich_markup("C₂H₆O") == "C<sub>2</sub>H<sub>6</sub>O"
+    # 上标（mg/m³ 类）与中点保留
+    assert _rich_markup("mg/m³") == "mg/m<sup>3</sup>"
+    assert _rich_markup("NH₃·H₂O") == "NH<sub>3</sub>·H<sub>2</sub>O"
+
+
+def test_rich_markup_invisible_chars_and_escape():
+    from app.modules.safety.feishu.msds_pdf import _rich_markup
+
+    # AI 提取残留零宽字符删除
+    assert _rich_markup("C4\u200bH6\u200bCaO4") == "C4H6CaO4"
+    # XML 转义仍生效
+    assert _rich_markup("a<b>&c") == "a&lt;b&gt;&amp;c"
+    assert _rich_markup("") == ""
+
+
+# ── 标签要素 GHS 规则推导（2026-11-02）──
+
+
+def test_derive_label_elements_flammable():
+    from app.modules.safety.service.msds_review import derive_label_elements
+
+    # 「爆炸性混合物」是易燃蒸气特性描述，不是爆炸物类别 → 只给火焰
+    r = derive_label_elements({
+        "hazard_statement": "高度易燃液体和蒸气，其蒸气与空气混合能形成爆炸性混合物。",
+    })
+    assert "火焰" in r and "爆炸" not in r and "信号词：危险" in r
+
+
+def test_derive_label_elements_corrosive_warning_dominance():
+    from app.modules.safety.service.msds_review import derive_label_elements
+
+    # 腐蚀（危险）+ 刺激（警告）→ 信号词取最高级别"危险"，图形按名去重
+    r = derive_label_elements({
+        "hazard_statement": "造成严重皮肤灼伤和眼损伤。",
+        "health_hazard": "可引起呼吸道刺激。",
+    })
+    assert "腐蚀" in r and "感叹号" in r and "信号词：危险" in r
+    assert r.count("感叹号") == 1  # 同图形多类别命中只出现一次
+
+
+def test_derive_label_elements_negative_and_empty():
+    from app.modules.safety.service.msds_review import derive_label_elements
+
+    # 「不燃/不危险性分类」类物质不给火焰（描述词宽匹配负向排除）
+    r = derive_label_elements({
+        "hazard_statement": "根据全球统一制度，该化学品不危险性分类。",
+        "health_hazard": "吞咽可能有害。",
+    })
+    assert "火焰" not in r
+    assert derive_label_elements({"hazard_statement": "无资料"}) == ""
+    assert derive_label_elements({}) == ""
+
+
+def test_derive_label_elements_shape():
+    from app.modules.safety.service.msds_review import derive_label_elements
+
+    r = derive_label_elements({"name": "硫酸", "hazard_statement": "造成皮肤腐蚀"})
+    assert r.startswith("图形：") and "；信号词：" in r
+
+
+# ── 黑体注册（缺字体环境回退不炸）──
+
+
+def test_heiti_font_registered_or_fallback():
+    from app.modules.safety.feishu import msds_pdf
+
+    assert msds_pdf._HEITI in ("NotoSansSC", "STSong-Light")
+    styles = msds_pdf._scaled_styles(1.0)
+    # 顶部表头黑体居中（docx 模板基准：bold+黑体+居中）
+    from reportlab.lib.enums import TA_CENTER
+
+    assert styles["label_top"].alignment == TA_CENTER
+    assert styles["value_top"].alignment == TA_CENTER
+    assert styles["section_head"].alignment == TA_CENTER

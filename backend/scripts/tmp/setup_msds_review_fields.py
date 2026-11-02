@@ -21,6 +21,7 @@ OLD_APPEARANCE = "外观与现状"
 NEW_APPEARANCE = "外观与性状"
 
 NEW_FIELDS: list[tuple[str, int, dict | None]] = [
+    ("标签要素", 1, None),  # 2026-11-02：PDF 标签要素列（空值由 GHS 规则推导兜底）
     ("错别字审核", 3, {"options": [{"name": "未审核"}, {"name": "无错别字"}, {"name": "疑似错别字"}]}),
     ("错别字明细", 1, None),
     ("修订记录", 1, None),

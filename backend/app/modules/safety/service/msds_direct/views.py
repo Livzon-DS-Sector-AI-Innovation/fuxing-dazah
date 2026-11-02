@@ -7,7 +7,7 @@
 2. 直读常量列（spec §0 结论三 + §4.3）：
    - review_status/archive_status 恒 "pending"：全库无赋值点、审核流未上线，
      与镜像实际值一致；审核流上线需重评估切面；
-   - collection_record_id/label_elements/hazard_class/msds_attachment_path/
+   - collection_record_id/hazard_class/msds_attachment_path/
      reviewed_by/reviewed_at/archived_at：Bitable 无此列或镜像专属 → 恒 None；
    - created_at/updated_at：PG 审计时间不可直读 → 恒 None；
    - is_deleted 恒 False：Bitable 行删除即物理消失，直读天然不含已删行。
@@ -32,14 +32,16 @@ __all__ = [
     "view_from_record",
 ]
 
-# 台账表 28 个数据列的 Bitable 中文列名 → 视图属性
-# （= handler BITABLE_TO_MODEL 去 source_date/msds_attachment 的文本面）
+# 台账表 29 个数据列的 Bitable 中文列名 → 视图属性
+# （= handler BITABLE_TO_MODEL 去 source_date/msds_attachment/审核修订字段的文本面；
+#   「标签要素」列 2026-11-02 起存在，空值→None）
 _TEXT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("物质名称", "name"),
     ("CAS号", "cas_no"),
     ("分子式", "molecular_formula"),
     ("UN编号", "un_no"),
     ("危险性说明", "hazard_statement"),
+    ("标签要素", "label_elements"),
     ("外观与性状", "appearance"),
     ("溶解性", "solubility"),
     ("熔点", "melting_point"),

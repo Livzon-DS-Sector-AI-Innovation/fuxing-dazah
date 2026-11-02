@@ -362,6 +362,7 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                     _m("UN编号", "un_no", "text"),
                     _m("日期", "source_date", "datetime"),
                     _m("危险性说明", "hazard_statement", "text"),
+                    _m("标签要素", "label_elements", "text"),
                     _m("外观与性状", "appearance", "text"),
                     _m("溶解性", "solubility", "text"),
                     _m("熔点", "melting_point", "text"),

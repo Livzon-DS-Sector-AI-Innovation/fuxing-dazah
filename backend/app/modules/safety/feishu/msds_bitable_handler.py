@@ -53,6 +53,7 @@ BITABLE_TO_MODEL: dict[str, str] = {
     "UN编号": "un_no",
     "日期": "source_date",
     "危险性说明": "hazard_statement",
+    "标签要素": "label_elements",
     "外观与性状": "appearance",
     "外观与现状": "appearance",
     "溶解性": "solubility",
@@ -261,11 +262,16 @@ async def _handle_changed(event_data: dict) -> None:
                 logger.exception("MSDS 镜像→知识索引同步失败: record_id=%s", record_id)
 
         # 修订同步：内容字段被人工修改 → 重生成标准 PDF 追平「MSDS附件」
-        # （msds_review 内部 hash 比对防环：平台自写/审核字段变化不触发）
+        # （msds_review 内部 hash 比对防环：平台自写/审核字段变化不触发；
+        #    全局信号量限并发防事件风暴打爆连接池）
         try:
-            from app.modules.safety.service.msds_review import sync_pdf_revision
+            from app.modules.safety.service.msds_review import (
+                pdf_sync_semaphore,
+                sync_pdf_revision,
+            )
 
-            result = await sync_pdf_revision(record_id)
+            async with pdf_sync_semaphore:
+                result = await sync_pdf_revision(record_id)
             if result.get("status") not in (
                 "skip_up_to_date", "skip_self_write", "skip_no_content",
                 "skip_not_found",

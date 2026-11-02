@@ -1,26 +1,38 @@
 """MSDS 标准 PDF 生成器 — 复刻《无水硫酸镁；泻盐MSDS.pdf》企业格式。
 
-输出 A4 纵向 PDF：顶部居中「MSDS 表」标题；单表四列（窄列竖排标签 + 内容两栏）；
-理化特性(左)×职业接触限值(右)交错 6 行；健康危害/急救措施/接触控制(左)×
-稳定性/泄漏/消防/废弃(右)两大块；● 项目符号；操作处置与储存注意事项收尾。
+输出 A4 纵向 PDF，单页自适应：以 1.0 缩放（标题 36pt/顶行 12pt/正文 9pt）
+试排，量出的总高超出可用页高时按比例整体缩小字号重排，直到收进一页
+（打印要求；下限 0.67 防长文病态缩到不可读，再放不下走内容截断安全阀）。
+
+格式基线对齐 docx 模板（msds_standard_template.docx，2026-11-02 实测格式）：
+  - 顶部两行（名 称/分子式/UN No/CAS No 及值）：**黑体加粗居中**（NotoSansSC，
+    复用 assets/fonts/NotoSansSC.ttf，缺字体环境回退 STSong-Light）
+  - 大块节标题（健康危害/急救措施/…）：独立段落**黑体居中**
+  - 健康危害内容：黑体左对齐（模板 bold+黑体）
+  - 其余正文 9pt STSong-Light
+
+文本规范化 `_rich_markup`（分子式修复，2026-11-02）：STSong-Light 无
+U+208x/U+207x 字形，MgSO₄/MnO₂/m³ 等直接渲染丢字（「台账字段对、PDF 错」
+根因）→ Unicode 下标/上标字符统一转 <sub>/<sup> 标记渲染，零宽字符删除。
 
 共享 msds_docx 的标签映射与组合字段拆分逻辑（_DIRECT_LABEL_TO_FIELD /
 _SUB_LABEL_SPECS / _SECTION_FIELD / _resolve_value / _split_into_parts）。
-
-字体用 reportlab 内置 CID 字体 STSong-Light（无需字体文件，Docker 无中文字体
-也能渲染）。中文换行用 wordWrap="CJK"。
 """
 
 from __future__ import annotations
 
 import html
 import logging
+import re
+from pathlib import Path
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 
 from app.modules.safety.feishu.msds_docx import (
@@ -35,20 +47,34 @@ logger = logging.getLogger(__name__)
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 _FONT = "STSong-Light"
 
-# ── 样式 ──────────────────────────────────────────────────────────────
+# 黑体（Noto Sans SC，无衬线中文）：顶部表头/节标题/健康危害内容用。
+# 复用 hr 模块 assets/fonts/NotoSansSC.ttf（OFL 可再分发）；缺字体环境
+# 回退 STSong-Light（仅失黑体观感，排版不炸）。
+_HEITI = "STSong-Light"
 
-# 字号对齐《无水硫酸镁；泻盐MSDS.pdf》（客观测量）：
-#   - 标题 36pt、顶部两行（名称/分子式/UNNo/CAS No 及值）12pt 横排
-#   - 其余全部 9pt（竖排标签、节标题、正文）
-# 单页自适应（2026-10-30，打印需求）：以上为 1.0 倍基准，放不进一页时按
-# _SCALE_STEPS 逐档整体缩小字号重排（列宽/版式不变），直到整表收进一页。
-_TITLE = ParagraphStyle("msds_title", fontName=_FONT, fontSize=36, leading=42, alignment=1, spaceAfter=8)
-_LABEL_TOP = ParagraphStyle("msds_label_top", fontName=_FONT, fontSize=12, leading=16, alignment=1)
-_VALUE_TOP = ParagraphStyle("msds_value_top", fontName=_FONT, fontSize=12, leading=16)
-_LABEL = ParagraphStyle("msds_label", fontName=_FONT, fontSize=9, leading=12, wordWrap="CJK")
-_BODY = ParagraphStyle("msds_body", fontName=_FONT, fontSize=9, leading=13, wordWrap="CJK")
 
-# 缩放档位：内容多时先挤上下边距与行距，再缩字号；下限 6.5pt 仍放不下才分页
+def _register_heiti() -> str:
+    global _HEITI
+    if _HEITI != "STSong-Light":
+        return _HEITI
+    candidates = (
+        Path("assets/fonts/NotoSansSC.ttf"),
+        Path(__file__).resolve().parents[4] / "assets" / "fonts" / "NotoSansSC.ttf",
+    )
+    for p in candidates:
+        if p.exists():
+            try:
+                pdfmetrics.registerFont(TTFont("NotoSansSC", str(p)))
+                _HEITI = "NotoSansSC"
+                break
+            except Exception:
+                logger.warning("NotoSansSC 注册失败, 黑体回退 STSong-Light", exc_info=True)
+    return _HEITI
+
+
+_register_heiti()
+
+# 缩放档位：内容多时先缩字号行距；下限 0.67 仍放不下走截断安全阀
 _SCALE_STEPS: tuple[float, ...] = (1.0, 0.94, 0.89, 0.83, 0.78, 0.72, 0.67)
 
 # 列宽（pt）：左竖排标签(20) + 顶部横排标签位(40) + 内容(186.65) ×2；边距 51pt → 表格宽 493.3
@@ -75,7 +101,48 @@ _OEL_ROW_LABELS: dict[int, str] = {
     4: "最高容许浓度（MAC）",
 }
 
-# ── 工具 ──────────────────────────────────────────────────────────────
+# ── 文本规范化（分子式/单位上下标修复）────────────────────────────────
+
+# Unicode 下标数字（U+2080-2089）→ ASCII 数字
+_SUBSCRIPT_MAP = {chr(0x2080 + i): str(i) for i in range(10)}
+# 常见 Unicode 上标（数字/正负/n）→ ASCII
+_SUPERSCRIPT_MAP = {
+    "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+    "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+    "⁺": "+", "⁻": "−", "ⁿ": "n",
+}
+_INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+
+
+def _rich_markup(value: str) -> str:
+    """XML 转义 + 上下标/零宽规范化（所有单元格文本统一入口）。
+
+    STSong-Light/NotoSansSC 均无下标字形（MgSO₄ 渲染丢字根因）：
+    连续下标字符 → <sub>12</sub>；上标字符 → <sup>3</sup>（mg/m³ 类）；
+    零宽字符（\u200b 等，AI 提取残留）直接删除。标记由本函数生成，
+    无注入面。
+    """
+    s = _INVISIBLE_RE.sub("", html.escape(value or ""))
+    out: list[str] = []
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch in _SUBSCRIPT_MAP:
+            digits: list[str] = []
+            while i < len(s) and s[i] in _SUBSCRIPT_MAP:
+                digits.append(_SUBSCRIPT_MAP[s[i]])
+                i += 1
+            out.append("<sub>" + "".join(digits) + "</sub>")
+        elif ch in _SUPERSCRIPT_MAP:
+            digits = []
+            while i < len(s) and s[i] in _SUPERSCRIPT_MAP:
+                digits.append(_SUPERSCRIPT_MAP[s[i]])
+                i += 1
+            out.append("<sup>" + "".join(digits) + "</sup>")
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _esc(value: str) -> str:
@@ -108,57 +175,7 @@ def _bullet_lines(section: str, entry: dict, section_parts: dict) -> list[str]:
     return lines
 
 
-def _block_cell(header: str, body_lines: list[str], style: ParagraphStyle | None = None) -> Paragraph:
-    """大块单元格：节标题（字号略大）+ ● 内容行（style 注入供自适应档位）。"""
-    pieces = [_section_header(header)]
-    for line in body_lines:
-        pieces.append(_esc(line))
-    return Paragraph("<br/>".join(pieces), style or _BODY)
-
-
-def _section_header(text: str) -> str:
-    """节标题标记：参考为 9pt 宋体（SimSun），同正文字号。"""
-    return _esc(text)
-
-
-def _label(text: str) -> Paragraph:
-    """竖排标签（9pt）：CJK 逐字竖排，供窄列使用。"""
-    return Paragraph(_esc(text), _LABEL)
-
-
-def _label_top(text: str) -> Paragraph:
-    """顶部两行标签（12pt 横排）：名 称/分子式/UNNo/CAS No。"""
-    return Paragraph(_esc(text), _LABEL_TOP)
-
-
-def _value_top(text: str) -> Paragraph:
-    """顶部两行值（12pt 横排）。"""
-    return Paragraph(_esc(text), _VALUE_TOP)
-
-
-def _body(text: str) -> Paragraph:
-    return Paragraph(_esc(text), _BODY)
-
-
 # ── 主入口 ────────────────────────────────────────────────────────────
-
-
-def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
-    """按缩放系数派生一套字号/行距（标题档位差压平，正文线性缩）。"""
-    title = ParagraphStyle(
-        "msds_title", fontName=_FONT,
-        fontSize=round(36 * scale), leading=42 * scale, alignment=1,
-        spaceAfter=8 * scale,
-    )
-    top = round(12 * scale, 1)
-    body = round(9 * scale, 2)
-    return {
-        "title": title,
-        "label_top": ParagraphStyle("msds_label_top", fontName=_FONT, fontSize=top, leading=16 * scale, alignment=1),
-        "value_top": ParagraphStyle("msds_value_top", fontName=_FONT, fontSize=top, leading=16 * scale),
-        "label": ParagraphStyle("msds_label", fontName=_FONT, fontSize=body, leading=12 * scale, wordWrap="CJK"),
-        "body": ParagraphStyle("msds_body", fontName=_FONT, fontSize=body, leading=13 * scale, wordWrap="CJK"),
-    }
 
 
 def _clip_entry(entry: dict, limit: int) -> dict:
@@ -170,6 +187,40 @@ def _clip_entry(entry: dict, limit: int) -> dict:
         else:
             clipped[k] = v
     return clipped
+
+
+def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
+    """按缩放系数派生整套样式（黑体档位差压平，正文线性缩）。
+
+    label_top/value_top：顶部表头标签与值——黑体居中（模板 bold+黑体+居中）。
+    section_head：大块节标题——黑体居中独立段。heiti：健康危害内容——黑体左对齐。
+    """
+    heiti = _HEITI
+    title = ParagraphStyle(
+        "msds_title", fontName=_FONT,
+        fontSize=round(36 * scale), leading=42 * scale, alignment=1,
+        spaceAfter=8 * scale,
+    )
+    top = round(12 * scale, 1)
+    body = round(9 * scale, 2)
+    return {
+        "title": title,
+        "label_top": ParagraphStyle(
+            "msds_label_top", fontName=heiti, fontSize=top, leading=16 * scale,
+            alignment=TA_CENTER,
+        ),
+        "value_top": ParagraphStyle(
+            "msds_value_top", fontName=heiti, fontSize=top, leading=16 * scale,
+            alignment=TA_CENTER,
+        ),
+        "label": ParagraphStyle("msds_label", fontName=_FONT, fontSize=body, leading=12 * scale, wordWrap="CJK"),
+        "body": ParagraphStyle("msds_body", fontName=_FONT, fontSize=body, leading=13 * scale, wordWrap="CJK"),
+        "section_head": ParagraphStyle(
+            "msds_section_head", fontName=heiti, fontSize=body, leading=13 * scale,
+            alignment=TA_CENTER, spaceBefore=4 * scale,
+        ),
+        "heiti": ParagraphStyle("msds_heiti", fontName=heiti, fontSize=body, leading=13 * scale, wordWrap="CJK"),
+    }
 
 
 def _fits_one_page(
@@ -257,8 +308,9 @@ def build_standard_msds_pdf(entry: dict, output_path: str) -> str:
 
 def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragraph, Table]:
     """组装流内容：返回（标题, 主表格）。样式由单页自适应档位注入。"""
+
     def st_body(text: str) -> Paragraph:
-        return Paragraph(_esc(text), style["body"])
+        return Paragraph(_rich_markup(text), style["body"])
 
     def st_label(text: str) -> Paragraph:
         return Paragraph(_esc(text), style["label"])
@@ -267,7 +319,7 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
         return Paragraph(_esc(text), style["label_top"])
 
     def st_value_top(text: str) -> Paragraph:
-        return Paragraph(_esc(text), style["value_top"])
+        return Paragraph(_rich_markup(text), style["value_top"])
 
     # 预拆分组合字段
     section_parts: dict[str, dict[str, str]] = {}
@@ -294,36 +346,42 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
             oel_rows.append("")
 
     # ② 大块内容（左：健康危害/急救/接触控制；右：稳定性/泄漏/消防/废弃）
+    #    单元格为 Flowable 列表：每节标题独立段（黑体居中，对齐 docx 模板）
+    def _section_cell(header: str, body_paras: list[Paragraph]) -> list:
+        return [Paragraph(_esc(header), style["section_head"]), *body_paras]
+
+    left_cells: list = []
     health = entry.get("health_hazard") or ""
-    left_block = _block_cell("健康危害", [f"● {health}"] if health else [], style["body"])
+    if health:
+        # 健康危害内容黑体（模板 bold+黑体）
+        left_cells.extend(_section_cell("健康危害", [Paragraph(_rich_markup(f"● {health}"), style["heiti"])]))
     first_aid_lines = _bullet_lines("急救措施", entry, section_parts)
     if first_aid_lines:
-        left_block = Paragraph(
-            left_block.text + "<br/><br/>" + _section_header("急救措施") + "<br/>"
-            + "<br/>".join(_esc(line) for line in first_aid_lines),
-            style["body"],
-        )
+        left_cells.extend(_section_cell(
+            "急救措施", [Paragraph(_rich_markup(line), style["body"]) for line in first_aid_lines],
+        ))
     exposure_lines = _bullet_lines("接触控制/个体防护", entry, section_parts)
     if exposure_lines:
-        left_block = Paragraph(
-            left_block.text + "<br/><br/>" + _section_header("接触控制/个体防护") + "<br/>"
-            + "<br/>".join(_esc(line) for line in exposure_lines),
-            style["body"],
-        )
+        left_cells.extend(_section_cell(
+            "接触控制/个体防护", [Paragraph(_rich_markup(line), style["body"]) for line in exposure_lines],
+        ))
 
-    right_block = _block_cell("稳定性和反应性", _bullet_lines("稳定性和反应性", entry, section_parts), style["body"])
+    right_cells: list = []
+    stability_lines = _bullet_lines("稳定性和反应性", entry, section_parts)
+    if stability_lines:
+        right_cells.extend(_section_cell(
+            "稳定性和反应性", [Paragraph(_rich_markup(line), style["body"]) for line in stability_lines],
+        ))
     for section in ("泄漏应急处理", "消防措施", "废弃处置"):
         lines = _bullet_lines(section, entry, section_parts)
         if lines:
-            right_block = Paragraph(
-                right_block.text + "<br/><br/>" + _section_header(section) + "<br/>"
-                + "<br/>".join(_esc(line) for line in lines),
-                style["body"],
-            )
+            right_cells.extend(_section_cell(
+                section, [Paragraph(_rich_markup(line), style["body"]) for line in lines],
+            ))
 
     # ③ 操作处置与储存注意事项
     handling_lines = _bullet_lines("操作处置与储存注意事项", entry, section_parts)
-    handling_text = "<br/>".join(_esc(line) for line in handling_lines) if handling_lines else ""
+    handling_text = "<br/>".join(_rich_markup(line) for line in handling_lines) if handling_lines else ""
 
     # ④ 组装表格（6 列：左标签20 + 顶行标签延伸40 + 左内容186.65 + 右标签20 + 右标签延伸40 + 右内容186.65）
     name = entry.get("name") or ""
@@ -333,7 +391,7 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
     hazard_statement = entry.get("hazard_statement") or ""
     label_elements = entry.get("label_elements") or ""
 
-    # 顶部两行横排（对齐参考）
+    # 顶部两行横排：标签与值黑体居中（对齐参考）
     table_data: list[list[object]] = [
         [st_label_top("名 称"), "", st_value_top(name), st_label_top("UN No"), "", st_value_top(un_no)],
         [st_label_top("分子式"), "", st_value_top(formula), st_label_top("CAS No"), "", st_value_top(cas_no)],
@@ -352,8 +410,8 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
                 st_body(oel_rows[i]), "",
             ]
         )
-    # 大块左右分栏 + 底部操作处置（内容放 SPAN 锚点列）
-    table_data.append([left_block, "", "", right_block, "", ""])
+    # 大块左右分栏 + 底部操作处置（内容放 SPAN 锚点列；空列表置 ""）
+    table_data.append([left_cells or "", "", "", right_cells or "", "", ""])
     table_data.append([st_label("操作处置与储存注意事项"), Paragraph(handling_text, style["body"]), "", "", "", ""])
 
     title_para = Paragraph("MSDS 表", style["title"])

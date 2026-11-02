@@ -22,6 +22,7 @@ hash 归一化：比对剥离全部空白（\s+）——Bitable 富文本/换行
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -57,14 +58,20 @@ REVISION_LOG_MAX_LINES = 20
 _SELF_WRITE_KEY = "msds_self_write_{}"
 _SELF_WRITE_TTL = 600
 
+# 修订同步全局并发闸（2026-11-02 连接池打爆教训）：批量回填/事件风暴时
+# N 路 sync 并发各占 DB 连接（镜像+hash+AI+上传），QueuePool(10+20) 会耗尽
+# 抛 TimeoutError——限 3 并发后峰值连接占用 ≤6，事件排队消化不丢。
+pdf_sync_semaphore = asyncio.Semaphore(3)
+
 # 参与内容比对/PDF 生成的字段（中文列名 → entry key；新旧外观列名共存）。
 # 排除面（写它们绝不触发 PDF 重生成，否则同步自身写回会死循环）：
 # source_date/msds_attachment（非内容）、typo_review_status/typo_review_detail/
-# revision_log（审核与修订机制自身字段）。
+# revision_log（审核与修订机制自身字段）。label_elements 2026-11-02 起在
+# 台账表有「标签要素」列并纳入内容面（人工改该列 → PDF 追平）。
 _EXCLUDED_MODEL_COLS = frozenset({
     "source_date", "msds_attachment",
     "typo_review_status", "typo_review_detail", "revision_log",
-    "label_elements", "hazard_class",  # 台账表无列/非内容（镜像专属）
+    "hazard_class",  # 台账表无列/非内容（镜像专属）
 })
 _CONTENT_COLUMNS: tuple[tuple[str, str], ...] = tuple(
     (cn, en) for cn, en in BITABLE_TO_MODEL.items()
@@ -148,6 +155,59 @@ async def set_self_write_marker(record_id: str, content_hash: str) -> None:
         )
     except Exception:
         logger.warning("MSDS 自写标记写入失败(非致命): record_id=%s", record_id)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 标签要素 GHS 规则推导（2026-11-02：台账「标签要素」列空值兜底）
+# ═══════════════════════════════════════════════════════════════════
+
+# 关键词 → (GHS 图形, 信号词)；命中即收集，信号词取最高级别（危险>警告），
+# 图形按标准名去重。关键词用 GHS 危险类别的标准措辞，避免描述性文本误命中
+# （如「蒸气与空气形成爆炸性混合物」是易燃特性描述，不是爆炸物类别）。
+# 基于 GB/T 16483：标签要素 = 象形图 + 信号词 + 危害说明。
+_GHS_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("爆炸物", "爆炸品", "爆炸性物质"), "爆炸", "危险"),
+    (("极易燃", "高度易燃", "易燃液体", "易燃固体", "易燃气体", "易燃蒸气"), "火焰", "危险"),
+    (("氧化剂", "氧化性固体", "氧化性液体", "氧化性气体"), "火焰加圆圈", "危险"),
+    (("剧毒", "急性毒性", "致死", "致命", "高毒"), "骷髅和交叉骨", "危险"),
+    (("自燃", "自热", "遇水放出易燃"), "火焰", "危险"),
+    (("皮肤腐蚀", "严重眼损伤", "腐蚀", "灼伤"), "腐蚀", "危险"),
+    (("致癌", "致突变", "生殖毒性", "致畸", "生殖细胞"), "健康危害", "危险"),
+    (("高压气体", "压缩气体", "液化气体", "加压气体"), "气瓶", "警告"),
+    (("刺激", "致敏", "麻醉", "嗜睡", "头晕"), "感叹号", "警告"),
+    (("环境危害", "水生毒性", "水生环境", "对水生"), "环境", "警告"),
+    (("吞咽可能有害", "吸入可能有害", "皮肤接触可能有害", "可能有害"), "感叹号", "警告"),
+)
+# 火焰类规则负向词：整体无危险分类/不燃类物质描述（如「不危险性分类」「不燃」）
+_FLAMMABLE_NEGATIVE = ("不燃", "不可燃", "不易燃", "不危险性", "无危险")
+
+
+def derive_label_elements(entry: Mapping[str, Any]) -> str:
+    """按危险性说明/健康危害关键词推导 GHS 标签要素（确定性规则，非 AI）。
+
+    输出「图形：X、Y；信号词：危险/警告」；无命中返回 ""（不硬造）。
+    人工在台账「标签要素」列填写的值永远优先（本函数只兜空值）。
+    """
+    text = " ".join(
+        str(entry.get(k) or "")
+        for k in ("hazard_statement", "health_hazard", "environmental_hazard")
+    )
+    if not text.strip():
+        return ""
+    negative = any(neg in text for neg in _FLAMMABLE_NEGATIVE)
+    pictograms: list[str] = []
+    signal = ""
+    for keywords, picto, word in _GHS_RULES:
+        if picto == "火焰" and negative:
+            continue  # 「不燃/无危险分类」物质不给火焰图形
+        if any(kw in text for kw in keywords):
+            if picto not in pictograms:
+                pictograms.append(picto)
+            if word == "危险" or not signal:
+                signal = word
+    if not pictograms:
+        return ""
+    return f"图形：{'、'.join(pictograms)}；信号词：{signal}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -307,6 +367,13 @@ async def sync_pdf_revision(record_id: str, *, force: bool = False) -> dict[str,
     entry = entry_from_bitable_fields(fields)
     if not entry:
         return {"status": "skip_no_content", "record_id": record_id}
+    # 「标签要素」列空值兜底：规则推导并回写列（推导必须在 hash 计算前，
+    # 否则回写后下次事件 hash 失配多跑一轮）；人工已填的值永远优先
+    derived_label = ""
+    if not entry.get("label_elements"):
+        derived_label = derive_label_elements(entry)
+        if derived_label:
+            entry["label_elements"] = derived_label
     current_hash = msds_content_hash(entry)
 
     # PG 镜像行：pdf hash + label_elements 补充（台账表无该列）
@@ -337,9 +404,7 @@ async def sync_pdf_revision(record_id: str, *, force: bool = False) -> dict[str,
                     await session.commit()
         return {"status": decision, "record_id": record_id}
 
-    # ① 重生成标准 PDF（label_elements 从镜像补，台账表无此列）
-    if row and row.label_elements:
-        entry["label_elements"] = row.label_elements
+    # ① 重生成标准 PDF（label_elements 已在 hash 前补齐，直接渲染）
     filename = revision_pdf_filename(entry, record_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp_path = tmp.name
@@ -368,6 +433,8 @@ async def sync_pdf_revision(record_id: str, *, force: bool = False) -> dict[str,
         "MSDS附件": [upload],
         FIELD_REVISION_LOG: append_revision_log(fields.get(FIELD_REVISION_LOG), revision_line),
     }
+    if derived_label:
+        update_fields["标签要素"] = derived_label  # 推导值回写列，人工可见可改
     try:
         review = typo_review_fields(await proofread_entry(entry))
         update_fields.update(review)
