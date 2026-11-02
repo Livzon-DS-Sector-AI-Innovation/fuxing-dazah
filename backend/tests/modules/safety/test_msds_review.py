@@ -373,7 +373,8 @@ def test_rich_markup_cjk_gap_and_punctuation():
     assert _rich_markup("13:00") == "13:00"
     assert _rich_markup("1,2-丙二醇") == "1,2-丙二醇"
     assert _rich_markup("沸点 38.3℃") == "沸点 38.3℃"
-    assert _rich_markup("20 mg/m3") == "20 mg/m3"
+    # m3 单位上标（参考《丁醇》实测 5.8pt 上标），两侧数字/拉丁其余不动
+    assert _rich_markup("20 mg/m3") == "20 mg/m<sup>3</sup>"
     # 半角引号配对全角化（含已有全角引号的状态承接）；escape 实体不被全角化破坏
     assert _rich_markup("这种\"物质\"有危险") == "这种“物质”有危险"
     assert _rich_markup("可发生“金属烟热\"，病人") == "可发生“金属烟热”，病人"

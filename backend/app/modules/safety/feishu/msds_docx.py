@@ -40,6 +40,9 @@ _DIRECT_LABEL_TO_FIELD: dict[str, str] = {
     "闪点": "flash_point",
     "沸点": "boiling_point",
     "相对密度（水）": "relative_density",
+    # 《丁醇》参考模板标签（2026-11-02 复刻批）；保留（水）兼容内置 docx 模板
+    "相对密度（空）": "relative_density",
+    "相对密度（空气）": "relative_density",
     "爆炸上限(%)": "explosion_upper_limit",
     "爆炸下限(%)": "explosion_lower_limit",
     "自燃温度": "autoignition_temperature",
@@ -175,9 +178,10 @@ def _resolve_value(
     # ① 直接字段
     if label in _DIRECT_LABEL_TO_FIELD:
         val = entry.get(_DIRECT_LABEL_TO_FIELD[label]) or ""
-        if label == "相对密度（水）":
-            # 模板 label 已含"（水）"，AI 值常含"（水=1）"，去重避免"相对密度（水）：0.786（水=1）"
-            val = val.replace("（水=1）", "").replace("(水=1)", "")
+        if label in ("相对密度（水）", "相对密度（空）", "相对密度（空气）"):
+            # 模板 label 已含基准说明，AI 值常带"（水=1）/（空气=1）"标注，去重避免重复
+            for tag in ("（水=1）", "(水=1)", "（空=1）", "(空=1)", "（空气=1）", "(空气=1)", "（空）", "(空)"):
+                val = val.replace(tag, "")
         return val
     # ② 组合子标签
     if label in _SUB_LABEL_SPECS:

@@ -101,22 +101,39 @@ def _ghs_asset(name: str) -> Path | None:
 # 缩放档位：内容多时先缩字号行距；下限 0.67 仍放不下走截断安全阀
 _SCALE_STEPS: tuple[float, ...] = (1.0, 0.94, 0.89, 0.83, 0.78, 0.72, 0.67)
 
-# 列宽（pt）：左竖排标签(20) + 顶部横排标签位(40) + 内容(186.65) ×2；边距 51pt → 表格宽 493.3
-_COL_LABEL_NARROW = 20
-_COL_LABEL_WIDE = 40
-_COL_CONTENT = 186.65
-_COLS = [_COL_LABEL_NARROW, _COL_LABEL_WIDE, _COL_CONTENT, _COL_LABEL_NARROW, _COL_LABEL_WIDE, _COL_CONTENT]
+# ── 复刻《丁醇；正丁醇.pdf》企业标准版式（2026-11-02 pdfplumber 客观测量）──
+# 页面：A4 595.3×841.9，左 51.5 / 右 51.3；标题「MSDS表」36pt 居中（无空格）；
+# 表格全宽 51.5→544.0（492.5pt），9 竖线 10 列：
+_XS = [51.5, 71.2, 93.4, 129.6, 170.6, 201.8, 279.4, 300.7, 344.9, 544.0]
+_COLS = [round(_XS[i + 1] - _XS[i], 2) for i in range(len(_XS) - 1)]
+#  = [19.7, 22.2, 36.2, 41.0, 31.2, 77.6, 21.3, 44.2, 199.1]
+# 关键结构：
+#  - 顶行 2 行（黑体 12pt 全居中）：[0-2 名称|3-5 值][6-7 UN No|8 值]
+#  - 危标行：[0 竖排危险性说明 | 1-5 内容][6 竖排标签要素 | 7-8 内容(象形图)]
+#  - 理化 6 行：[0 竖排理化特性跨6行 | 行1-2 整格 / 行3-5 分界170.6 / 行6 分界201.8]
+#               [6 竖排职业接触限值跨6行 | 7-8 OEL 三行]
+#  - 大块行：左[0-5](227.9pt 窄) 右[6-8](264.6pt 宽)——右宽左窄
+#  - 操作行：[0-1 竖排标签 | 2-8 内容]（无 ●，段落式）
 
 # 理化特性 6 行的左栏子项（模板标签，直接字段；每行最多两个并排）
 # 「外观与性状」为 GB/T 16483 标准术语（2026-10-30 修正历史错别字「外观与现状」）
+# 「相对密度（空）」照抄参考《丁醇》模板字面（疑为「空气」缺字，业务确认中）
 _PHYS_ROW_LABELS: list[tuple[str, str | None]] = [
     ("外观与性状", None),
     ("溶解性", None),
     ("熔点", "闪点"),
-    ("沸点", "相对密度（水）"),
+    ("沸点", "相对密度（空）"),
     ("爆炸上限(%)", "爆炸下限(%)"),
     ("自燃温度", "分解温度"),
 ]
+
+# 竖排标签行距（参考测量：字列居中成团，跨 6 行大标签近似撑满）；
+# 随单页自适应档位整体缩放
+_VERTICAL_LEADING: dict[str, float] = {
+    "危险性说明": 13.0, "标签要素": 15.0,
+    "理化特性": 22.0, "职业接触限值": 15.0,
+    "操作处置与储存注意事项": 8.0,
+}
 
 # OEL 值出现的行（其余行留空，匹配参考网格）
 _OEL_ROW_LABELS: dict[int, str] = {
@@ -190,6 +207,8 @@ def _rich_markup(value: str) -> str:
     s = _normalize_quotes(s)
     # ② XML 转义（只转 &<>；裸 " 已全角化，reportlab 属性外文本无需转义）
     s = html.escape(s, quote=False)
+    # m3 单位上标（参考实测 5.8pt 上标：100mg/m3 → 100mg/m³；转义后注入防二次转义）
+    s = re.sub(r"([mg]/m)3\b", r"\1<sup>3</sup>", s)
     out: list[str] = []
     i = 0
     while i < len(s):
@@ -330,17 +349,18 @@ def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
             alignment=TA_CENTER, wordWrap="CJK",
         ),
         "label": ParagraphStyle("msds_label", fontName=_FONT, fontSize=body, leading=12 * scale, wordWrap="CJK"),
-        "body": ParagraphStyle("msds_body", fontName=_FONT, fontSize=body, leading=13 * scale, wordWrap="CJK"),
+        "body": ParagraphStyle("msds_body", fontName=_FONT, fontSize=body, leading=12 * scale, wordWrap="CJK"),
         "section_head": ParagraphStyle(
-            "msds_section_head", fontName=heiti, fontSize=body, leading=13 * scale,
-            alignment=TA_CENTER, spaceBefore=4 * scale,
+            "msds_section_head", fontName=heiti, fontSize=body, leading=12 * scale,
+            alignment=TA_CENTER, spaceBefore=6 * scale,
         ),
-        "heiti": ParagraphStyle("msds_heiti", fontName=heiti, fontSize=body, leading=13 * scale, wordWrap="CJK"),
+        "heiti": ParagraphStyle("msds_heiti", fontName=heiti, fontSize=body, leading=12 * scale, wordWrap="CJK"),
         "signal": ParagraphStyle(
-            "msds_signal", fontName=heiti, fontSize=body, leading=13 * scale,
+            "msds_signal", fontName=heiti, fontSize=body, leading=12 * scale,
             alignment=TA_CENTER, spaceBefore=2 * scale,
         ),
-        "ghs_pt": 40 * scale,
+        "ghs_pt": 36 * scale,
+        "scale": scale,  # type: ignore[dict-item]
     }
 
 
@@ -428,15 +448,23 @@ def build_standard_msds_pdf(entry: dict, output_path: str) -> str:
 
 
 def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragraph, Table]:
-    """组装流内容：返回（标题, 主表格）。样式由单页自适应档位注入。"""
+    """组装流内容（复刻《丁醇；正丁醇.pdf》网格）：返回（标题, 主表格）。
+
+    9 列网格布局见 _XS 注释；行内 SPAN 见 _build_table。
+    """
+    scale = style["scale"]
 
     def st_body(text: str) -> Paragraph:
         return Paragraph(_rich_markup(text), style["body"])
 
     def st_label(text: str) -> Paragraph:
-        """竖排标签：显式逐字一行（窄列自动断行会把 5-11 字标签折成两列，
-        「危险性说明」折成『危险性说/明』两列的排版事故根因）。"""
-        return Paragraph("<br/>".join(_esc(ch) for ch in text), style["label"])
+        """竖排标签：逐字一行，行距按参考测量表（随档位缩放），垂直居中。"""
+        lead = _VERTICAL_LEADING.get(text, 12.0) * scale
+        vs = ParagraphStyle(
+            f"v_{text[:2]}", fontName=style["label"].fontName,
+            fontSize=style["label"].fontSize, leading=lead, wordWrap="CJK",
+        )
+        return Paragraph("<br/>".join(_esc(ch) for ch in text), vs)
 
     def st_label_top(text: str) -> Paragraph:
         return Paragraph(_esc(text), style["label_top"])
@@ -456,9 +484,9 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
         if not imgs:
             return [st_body(label_elements)] if label_elements else []
         rows = [imgs[i:i + 4] for i in range(0, len(imgs), 4)]
+        # 象形图格宽 = col7+col8 = 44.2+199.1 = 243.3
         inner = Table(
-            rows, colWidths=[(_COL_LABEL_WIDE + _COL_CONTENT) / 4] * min(4, len(imgs)),
-            hAlign="CENTER",
+            rows, colWidths=[243.3 / 4] * min(4, len(imgs)), hAlign="CENTER",
         )
         inner.setStyle(TableStyle([
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
@@ -472,6 +500,17 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
         if sig:
             cells.append(Paragraph(f"信号词：{_esc(sig)}", style["signal"]))
         return cells
+
+    def _section_cell(header: str, body_paras: list) -> list:
+        return [Paragraph(_esc(header), style["section_head"]), *body_paras]
+
+    def _bullet(text: str) -> Paragraph:
+        """● 行：悬挂缩进 21pt（参考 x56.8→77.8）。"""
+        bs = ParagraphStyle(
+            f"b_{style['body'].fontSize}", parent=style["body"],
+            leftIndent=21 * scale, firstLineIndent=-21 * scale,
+        )
+        return Paragraph(_rich_markup(text), bs)
 
     # 预拆分组合字段
     section_parts: dict[str, dict[str, str]] = {}
@@ -497,52 +536,43 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
         else:
             oel_rows.append("")
 
-    # ② 大块内容（左：健康危害/急救/接触控制；右：稳定性/泄漏/消防/废弃）
-    #    单元格为 Flowable 列表：每节标题独立段（黑体居中，对齐 docx 模板）
-    def _section_cell(header: str, body_paras: list[Paragraph]) -> list:
-        return [Paragraph(_esc(header), style["section_head"]), *body_paras]
-
+    # ② 大块：左列 5 节（健康危害→环境危害→急救→接触控制→稳定性），
+    #    右列 3 节（泄漏→消防→废弃）——复刻参考编排
     left_cells: list = []
-    health = entry.get("health_hazard") or ""
-    if health:
-        # 健康危害内容黑体（模板 bold+黑体）
-        left_cells.extend(_section_cell("健康危害", [Paragraph(_rich_markup(f"● {health}"), style["heiti"])]))
-    # 环境危害（GB/T 16483 与健康危害相邻；参考模板无此格，字段有值即渲染，
-    # 内容完整性 2026-11-02 审计补）
-    environmental = entry.get("environmental_hazard") or ""
-    if environmental:
-        left_cells.extend(_section_cell(
-            "环境危害", [Paragraph(_rich_markup(f"● {environmental}"), style["body"])],
-        ))
-    first_aid_lines = _bullet_lines("急救措施", entry, section_parts)
-    if first_aid_lines:
-        left_cells.extend(_section_cell(
-            "急救措施", [Paragraph(_rich_markup(line), style["body"]) for line in first_aid_lines],
-        ))
-    exposure_lines = _bullet_lines("接触控制/个体防护", entry, section_parts)
-    if exposure_lines:
-        left_cells.extend(_section_cell(
-            "接触控制/个体防护", [Paragraph(_rich_markup(line), style["body"]) for line in exposure_lines],
-        ))
+    for header, field_key in (
+        ("健康危害", "health_hazard"), ("环境危害", "environmental_hazard"),
+    ):
+        v = entry.get(field_key) or ""
+        if v:
+            left_cells.extend(_section_cell(header, [_bullet(f"● {v}")]))
+
+    for section in ("急救措施", "接触控制/个体防护", "稳定性和反应性"):
+        lines_ = _bullet_lines(section, entry, section_parts)
+        if lines_:
+            left_cells.extend(_section_cell(header=section, body_paras=[_bullet(ln) for ln in lines_]))
 
     right_cells: list = []
-    stability_lines = _bullet_lines("稳定性和反应性", entry, section_parts)
-    if stability_lines:
-        right_cells.extend(_section_cell(
-            "稳定性和反应性", [Paragraph(_rich_markup(line), style["body"]) for line in stability_lines],
-        ))
     for section in ("泄漏应急处理", "消防措施", "废弃处置"):
-        lines = _bullet_lines(section, entry, section_parts)
-        if lines:
-            right_cells.extend(_section_cell(
-                section, [Paragraph(_rich_markup(line), style["body"]) for line in lines],
-            ))
+        lines_ = _bullet_lines(section, entry, section_parts)
+        if lines_:
+            right_cells.extend(_section_cell(header=section, body_paras=[_bullet(ln) for ln in lines_]))
 
-    # ③ 操作处置与储存注意事项
-    handling_lines = _bullet_lines("操作处置与储存注意事项", entry, section_parts)
-    handling_text = "<br/>".join(_rich_markup(line) for line in handling_lines) if handling_lines else ""
+    # ③ 操作处置与储存注意事项：段落式无 ●（参考版式）
+    hs_parts = section_parts.get("操作处置与储存注意事项", {})
+    handling_paras: list[Paragraph] = []
+    for lbl, aliases in (
+        ("操作注意事项", ("操作注意事项",)),
+        ("储存注意事项", ("储存注意事项", "储存事项")),
+    ):
+        seg = next((v for k, v in hs_parts.items() if any(a == k for a in aliases)), None)
+        if seg:
+            handling_paras.append(st_body(f"{lbl}：{seg}"))
+    if not handling_paras:
+        raw = (entry.get("handling_storage") or "").strip()
+        if raw:
+            handling_paras.append(st_body(raw))
 
-    # ④ 组装表格（6 列：左标签20 + 顶行标签延伸40 + 左内容186.65 + 右标签20 + 右标签延伸40 + 右内容186.65）
+    # ④ 组装 9 列 × 11 行网格
     name = entry.get("name") or ""
     formula = entry.get("molecular_formula") or ""
     un_no = entry.get("un_no") or ""
@@ -550,54 +580,62 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
     hazard_statement = entry.get("hazard_statement") or ""
     label_elements = entry.get("label_elements") or ""
 
-    # 顶部两行横排：标签与值黑体居中（对齐参考）
-    table_data: list[list[object]] = [
-        [st_label_top("名 称"), "", st_value_top(name), st_label_top("UN No"), "", st_value_top(un_no)],
-        [st_label_top("分子式"), "", Paragraph(_formula_markup(formula), style["value_top"]), st_label_top("CAS No"), "", st_value_top(cas_no)],
-    ]
-    # 危险性说明 / 标签要素（竖排标签 + 内容跨 2 列；内容放 SPAN 锚点列；
-    #   标签要素 = GHS 象形图网格 + 信号词，2026-11-02 业务要求图片形式）
-    table_data.append(
-        [st_label("危险性说明"), st_body(hazard_statement), "", st_label("标签要素"), _ghs_cell(label_elements) or "", ""]
-    )
-    # 理化特性(左) × 职业接触限值(右) 交错 6 行（标签竖排跨 6 行；内容放 SPAN 锚点列）
+    grid: list[list[object]] = []
+    # r0/r1 顶行两行（黑体 12pt 居中）
+    grid.append([st_label_top("名 称"), "", "", st_value_top(name), "", "", st_label_top("UN No"), "", st_value_top(un_no)])
+    grid.append([st_label_top("分子式"), "", "", Paragraph(_formula_markup(formula), style["value_top"]), "", "", st_label_top("CAS No"), "", st_value_top(cas_no)])
+    # r2 危险性说明 / 标签要素
+    grid.append([st_label("危险性说明"), st_body(hazard_statement), "", "", "", "", st_label("标签要素"), _ghs_cell(label_elements) or "", ""])
+    # r3-r8 理化 6 行（左内容两格分界随行变化 + 右 OEL）；
+    # 竖排标签锚在 r3（SPAN 覆盖 r3-r8）
     for i in range(6):
-        table_data.append(
-            [
-                "" if i else st_label("理化特性"),
-                st_body(phys_rows[i][0]), "",
-                "" if i else st_label("职业接触限值"),
-                st_body(oel_rows[i]), "",
-            ]
-        )
-    # 大块左右分栏 + 底部操作处置（内容放 SPAN 锚点列；空列表置 ""）
-    table_data.append([left_cells or "", "", "", right_cells or "", "", ""])
-    table_data.append([st_label("操作处置与储存注意事项"), Paragraph(handling_text, style["body"]), "", "", "", ""])
+        if i < 2:  # 外观/溶解：整格 col1-5
+            left = [st_body(phys_rows[i][0]), "", "", "", ""]
+        elif i < 5:  # 熔闪/沸密/爆炸：col1-3 + col4-5（分界 170.6）
+            pair = phys_rows[i][0].split("  ", 1)
+            left = [st_body(pair[0]), "", "", st_body(pair[1] if len(pair) > 1 else ""), ""]
+        else:  # 自燃/分解：col1-4 + col5（分界 201.8）
+            pair = phys_rows[i][0].split("  ", 1)
+            left = [st_body(pair[0]), "", "", "", st_body(pair[1] if len(pair) > 1 else "")]
+        col0 = st_label("理化特性") if i == 0 else ""
+        col6 = st_label("职业接触限值") if i == 0 else ""
+        grid.append([col0] + left + [col6, st_body(oel_rows[i]), ""])
+    # r9 大块：左 0-5 / 右 6-8
+    grid.append([left_cells or "", "", "", "", "", "", right_cells or "", "", ""])
+    # r10 操作处置：标签 0-1 / 内容 2-8（段落式无 ●）
+    grid.append([st_label("操作处置与储存注意事项"), "", handling_paras or "", "", "", "", "", "", ""])
 
-    title_para = Paragraph("MSDS 表", style["title"])
-    return title_para, _build_table(table_data)
+    title_para = Paragraph("MSDS表", style["title"])
+    return title_para, _build_table(grid)
 
 
-def _build_table(table_data: list[list[object]]) -> Table:
-    """6 列 SPAN/GRID 版式（列宽/边距固定，缩字号即缩行数 → 高度自适应）。"""
-    table = Table(table_data, colWidths=_COLS)
+def _build_table(grid: list[list[object]]) -> Table:
+    """9 列复刻网格的 SPAN/GRID（列界 _XS；局部竖线按参考 y 范围还原）。"""
+    table = Table(grid, colWidths=_COLS)
     spans = [
-        # 顶部两行：标签横跨左/右标签+延伸列
-        ("SPAN", (0, 0), (1, 0)), ("SPAN", (3, 0), (4, 0)),
-        ("SPAN", (0, 1), (1, 1)), ("SPAN", (3, 1), (4, 1)),
-        # 危险性说明行：内容横跨内容+延伸列
-        ("SPAN", (1, 2), (2, 2)), ("SPAN", (4, 2), (5, 2)),
-        # 理化特性/职业接触限值竖排标签跨 6 行
-        ("SPAN", (0, 3), (0, 8)), ("SPAN", (3, 3), (3, 8)),
-        # 左大块跨 3 列、右大块跨 3 列
-        ("SPAN", (0, 9), (2, 9)), ("SPAN", (3, 9), (5, 9)),
-        # 操作处置内容跨 5 列
-        ("SPAN", (1, 10), (5, 10)),
+        # 顶行两行：标签/值横跨
+        ("SPAN", (0, 0), (2, 0)), ("SPAN", (3, 0), (5, 0)), ("SPAN", (6, 0), (7, 0)),
+        ("SPAN", (0, 1), (2, 1)), ("SPAN", (3, 1), (5, 1)), ("SPAN", (6, 1), (7, 1)),
+        # 危标行：内容横跨
+        ("SPAN", (1, 2), (5, 2)), ("SPAN", (7, 2), (8, 2)),
+        # 理化/职业接触限值竖排标签跨 6 行
+        ("SPAN", (0, 3), (0, 8)), ("SPAN", (6, 3), (6, 8)),
+        # 大块左右分栏
+        ("SPAN", (0, 9), (5, 9)), ("SPAN", (6, 9), (8, 9)),
+        # 操作处置标签跨 2 列、内容跨 7 列
+        ("SPAN", (0, 10), (1, 10)), ("SPAN", (2, 10), (8, 10)),
     ]
-    # 理化/OEL 内容行：每行内容跨 内容+延伸列
+    # 理化 6 行内容跨列（分界随行：r3/r4 整格；r5-r7 分界 col3|4；r8 分界 col4|5）
     for i in range(6):
-        spans.append(("SPAN", (1, 3 + i), (2, 3 + i)))
-        spans.append(("SPAN", (4, 3 + i), (5, 3 + i)))
+        r = 3 + i
+        spans.append(("SPAN", (7, r), (8, r)))  # OEL 内容
+        if i < 2:
+            spans.append(("SPAN", (1, r), (5, r)))
+        elif i < 5:
+            spans.append(("SPAN", (1, r), (3, r)))
+            spans.append(("SPAN", (4, r), (5, r)))
+        else:
+            spans.append(("SPAN", (1, r), (4, r)))
     table.setStyle(
         TableStyle(
             spans
@@ -606,11 +644,11 @@ def _build_table(table_data: list[list[object]]) -> Table:
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 # 竖排标签垂直居中
                 ("VALIGN", (0, 2), (0, 2), "MIDDLE"),
-                ("VALIGN", (3, 2), (3, 2), "MIDDLE"),
+                ("VALIGN", (6, 2), (6, 2), "MIDDLE"),
                 ("VALIGN", (0, 3), (0, 8), "MIDDLE"),
-                ("VALIGN", (3, 3), (3, 8), "MIDDLE"),
-                ("VALIGN", (0, 10), (0, 10), "MIDDLE"),
-                # 收紧单元格 padding，窄标签列留足可写宽度
+                ("VALIGN", (6, 3), (6, 8), "MIDDLE"),
+                ("VALIGN", (0, 10), (1, 10), "MIDDLE"),
+                # 收紧单元格 padding
                 ("LEFTPADDING", (0, 0), (-1, -1), 2),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 2),
                 ("TOPPADDING", (0, 0), (-1, -1), 2),
