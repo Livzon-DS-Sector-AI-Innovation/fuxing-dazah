@@ -178,7 +178,13 @@ async def _handle_binary_message(ws: ClientConnection, message: bytes) -> None:
 
 async def _run_ws() -> None:
     while not _stop.is_set():
-        url, service_id = await _get_ws_url()
+        try:
+            url, service_id = await _get_ws_url()
+        except Exception:
+            # 代理/网络抖动时 httpx 可能直接抛异常，必须兜住，否则监听任务永久死亡
+            logger.warning("质量飞书获取 WS URL 异常，10s 后重试", exc_info=True)
+            await asyncio.sleep(10)
+            continue
         if not url:
             await asyncio.sleep(10)
             continue
