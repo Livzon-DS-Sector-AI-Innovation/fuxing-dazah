@@ -90,7 +90,7 @@ async def get_guardian_subsidy_summary(
         )
 
     try:
-        rows = await fetch_ledger_rows(source)
+        rows = await fetch_ledger_rows(source, year=year, month=month)
     except Exception:
         logger.exception("监护台账拉取失败: dept=%s %d-%02d", department, year, month)
         return ApiResponse(code=502, message=f"{department}监护台账拉取失败，请稍后重试。")

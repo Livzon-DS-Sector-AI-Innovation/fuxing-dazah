@@ -194,7 +194,7 @@ async def _resolve_plan(
     source = match_ledger_source(dept_keyword)
     if source is not None:
         try:
-            rows = await fetch_ledger_rows(source)
+            rows = await fetch_ledger_rows(source, year=year, month=month)
         except Exception as exc:
             logger.warning(
                 "%s监护台账拉取失败 year=%s month=%s err=%s",

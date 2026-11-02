@@ -25,7 +25,7 @@ async def main() -> int:
     subsidy_dispatch.send_user_card = fake_card
     subsidy_dispatch.send_file_to_chat = fake_file
 
-    stats = await subsidy_dispatch.run_monthly_subsidy_dispatch(year=2026, month=9)
+    stats = await subsidy_dispatch.run_monthly_subsidy_dispatch(year=2026, month=10)
     print("stats =", stats)
     for uid, title, content in intercepted_cards:
         print(f"[CARD] {uid} | {title}\n       {content}")

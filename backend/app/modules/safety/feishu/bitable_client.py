@@ -154,6 +154,30 @@ class SafetyBitableClient:
             pass
         return self.app_token
 
+    async def list_tables(self) -> list[dict[str, Any]]:
+        """列出 base 下全部子表（[{table_id, name, ...}]）；失败抛 BitableQueryError。"""
+        token = await self._token()
+        items: list[dict[str, Any]] = []
+        page_token: str | None = None
+        async with httpx.AsyncClient(timeout=15) as http:
+            while True:
+                url = f"{BITABLE_BASE}/apps/{self.app_token}/tables?page_size=100"
+                if page_token:
+                    url += f"&page_token={page_token}"
+                resp = await http.get(
+                    url, headers={"Authorization": f"Bearer {token}"},
+                )
+                data = resp.json()
+                if data.get("code") != 0:
+                    raise BitableQueryError(
+                        data.get("code"), f"列出子表失败: {data.get('msg')}"
+                    )
+                payload = data.get("data") or {}
+                items.extend(payload.get("items") or [])
+                page_token = payload.get("page_token") or None
+                if not payload.get("has_more") or not page_token:
+                    return items
+
     async def get_record_shared_url(
         self, record_id: str, table_id: str | None = None,
     ) -> str:

@@ -511,7 +511,9 @@ async def test_preview_ledger_source_skips_platform(monkeypatch: pytest.MonkeyPa
     fake_platform = _set_client(monkeypatch)  # 若被调用即断言失败
     fetched: list[Any] = []
 
-    async def fake_fetch(source: Any) -> list[dict[str, Any]]:
+    async def fake_fetch(
+        source: Any, year: int | None = None, month: int | None = None
+    ) -> list[dict[str, Any]]:
         fetched.append(source)
         return _d6_rows()
 
@@ -551,7 +553,9 @@ async def test_generate_ledger_source_sends_file(monkeypatch: pytest.MonkeyPatch
     """台账源生成：标题用部门全名，正常回传会话；平台 client 不被调用。"""
     fake_platform = _set_client(monkeypatch)
 
-    async def fake_fetch(source: Any) -> list[dict[str, Any]]:
+    async def fake_fetch(
+        source: Any, year: int | None = None, month: int | None = None
+    ) -> list[dict[str, Any]]:
         return _d6_rows()
 
     monkeypatch.setattr(subsidy_tools, "fetch_ledger_rows", fake_fetch)

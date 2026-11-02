@@ -98,6 +98,7 @@ class DeptLedgerConfig:
     f_date: str = ""                # date_period 布局
     f_period: str = ""
     f_date_datetime: bool = False   # 日期列是真 datetime（四部）还是文本（六部）
+    monthly_tables: bool = False   # 按月分表（四部/六部）：按 (year, month) 路由子表
 
 
 LEDGER_SOURCES: tuple[DeptLedgerConfig, ...] = (
@@ -106,8 +107,11 @@ LEDGER_SOURCES: tuple[DeptLedgerConfig, ...] = (
         aliases=("提炼工程四部", "提炼四部", "四部"),
         # wiki: https://j0eukrlohu.feishu.cn/wiki/EpW4wkioGivl13kihomcDA0AnTd
         # （底层 Base app_token=TPe1bPKRxaxNX5sBIqAcJtUXn9e，表名「提四特殊作业监护人作业统计」）
+        # ⚠️ base 内按月分表（「2026.09月监护作业表」「2026.10月监护作业表」…），
+        # table_id 仅为兜底（月份子表未命中时），真实路由见 _resolve_table_id。
         app_token="EpW4wkioGivl13kihomcDA0AnTd",
         table_id="tblDqCn4k6cnGD0V",
+        monthly_tables=True,
         layout=_LAYOUT_DATE_PERIOD,
         fetch_fields=(
             "姓名", "特殊作业类型", "监护内容（具体到作业位置）", "日期",
@@ -141,8 +145,10 @@ LEDGER_SOURCES: tuple[DeptLedgerConfig, ...] = (
         aliases=("提炼工程六部", "提炼六部", "六部"),
         # wiki: https://j0eukrlohu.feishu.cn/wiki/Kq15wDxPoibykdkBZ12ce0wjnSh
         # （底层 Base app_token=MKfvbc552a28JOs6dSkc4vxjnge，表名「提炼工程六部监护人补贴记录表」）
+        # ⚠️ base 内按月分表（「2026年09月份」「2026年10月份」…），同四部按月路由。
         app_token="Kq15wDxPoibykdkBZ12ce0wjnSh",
         table_id="tblGELhxJrfIyBal",
+        monthly_tables=True,
         layout=_LAYOUT_DATE_PERIOD,
         fetch_fields=(
             "姓名", "特殊作业类型", "作业级别", "作业地点及内容", "日期", "时间段",
@@ -356,15 +362,84 @@ def _known_op_type(op_label: str) -> bool:
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def fetch_ledger_rows(source: DeptLedgerConfig) -> list[dict[str, Any]]:
-    """分页拉取台账全部行（安全应用凭据已验证可读；只请求需要的列）。"""
+# ── 按月分表路由（四部/六部：base 内一个自然月一张子表）──
+# 实测表名（2026-11-02 盘点）：四部「2026.09月监护作业表」/2025 早期「9月监护作业」；
+# 六部「2026年09月份」/2025「2025年9月份」。年份锚定优先，无年份前缀的旧表名兜底。
+_RE_YEAR_MONTH = re.compile(r"(20\d{2})[.．年]\s*(1[0-2]|0?[1-9])月")
+_RE_MONTH_ONLY = re.compile(r"^\s*(1[0-2]|0?[1-9])月")
+
+
+def match_month_table(
+    items: list[tuple[str, str]], year: int, month: int
+) -> str | None:
+    """子表清单 [(table_id, name)] → 目标 (year, month) 的 table_id；未命中返回 None。
+
+    匹配优先级：
+    1. 表名带年份且年月都对（「2026.10月监护作业表」「2026年09月份」）；
+       多张命中取第一张（按清单顺序，Bitable 返回建表序）。
+    2. 无年份前缀的「N月…」旧表名（2024 遗留），仅在无年份命中时使用。
+    """
+    year_hits: list[str] = []
+    month_only: list[str] = []
+    for tid, name in items:
+        m = _RE_YEAR_MONTH.search(name)
+        if m and int(m.group(1)) == year and int(m.group(2)) == month:
+            year_hits.append(tid)
+            continue
+        if _RE_MONTH_ONLY.match(name):
+            mm = _RE_MONTH_ONLY.match(name)
+            if int(mm.group(1)) == month:
+                month_only.append(tid)
+    if year_hits:
+        return year_hits[0]
+    return month_only[0] if month_only else None
+
+
+async def _resolve_table_id(
+    source: DeptLedgerConfig, year: int | None, month: int | None
+) -> str:
+    """台账源 → 本次拉取用的 table_id（按月分表时按 (year, month) 路由）。"""
+    if not source.monthly_tables:
+        return source.table_id
+    if year is None or month is None:
+        raise ValueError(
+            f"{source.department}台账按月分表，拉取必须提供 year/month"
+            f"（got year={year} month={month}）"
+        )
+    client = SafetyBitableClient(app_token=source.app_token)
+    tables = await client.list_tables()
+    tid = match_month_table(
+        [(t.get("table_id", ""), t.get("name", "")) for t in tables],
+        year, month,
+    )
+    if tid is None:
+        raise ValueError(
+            f"{source.department}台账未找到 {year}-{month:02d} 月子表"
+            f"（base 共 {len(tables)} 张子表）；请确认台账维护人已建当月表"
+        )
+    return tid
+
+
+async def fetch_ledger_rows(
+    source: DeptLedgerConfig,
+    year: int | None = None,
+    month: int | None = None,
+) -> list[dict[str, Any]]:
+    """分页拉取台账全部行（安全应用凭据已验证可读；只请求需要的列）。
+
+    四部/六部按月分表：year/month 必传，子表路由见 ``_resolve_table_id``；
+    五部单表汇总：忽略 year/month，沿用配置 table_id。
+    """
+    table_id = await _resolve_table_id(source, year, month)
     client = SafetyBitableClient(app_token=source.app_token)
     rows = await fetch_all_records(
         client,
-        table_id=source.table_id,
+        table_id=table_id,
         field_names=list(source.fetch_fields),
     )
-    logger.info("%s监护台账拉取完成: %d 行", source.department, len(rows))
+    logger.info(
+        "%s监护台账拉取完成: %d 行 (table=%s)", source.department, len(rows), table_id,
+    )
     return rows
 
 
