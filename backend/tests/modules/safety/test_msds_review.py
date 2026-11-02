@@ -374,6 +374,10 @@ def test_rich_markup_cjk_gap_and_punctuation():
     assert _rich_markup("1,2-丙二醇") == "1,2-丙二醇"
     assert _rich_markup("沸点 38.3℃") == "沸点 38.3℃"
     assert _rich_markup("20 mg/m3") == "20 mg/m3"
+    # 半角引号配对全角化（含已有全角引号的状态承接）；escape 实体不被全角化破坏
+    assert _rich_markup("这种\"物质\"有危险") == "这种“物质”有危险"
+    assert _rich_markup("可发生“金属烟热\"，病人") == "可发生“金属烟热”，病人"
+    assert _rich_markup("全角“对”没问题") == "全角“对”没问题"
     # 组合：断词 + 半角 + 上下标一起
     assert _rich_markup("对水生 生物毒性非常大,LC₅₀") == "对水生生物毒性非常大，LC<sub>50</sub>"
 
@@ -392,3 +396,70 @@ def test_environmental_hazard_rendered(tmp_path):
     build_standard_msds_pdf(entry, str(out))
     text = "".join(p.extract_text() or "" for p in pypdf.PdfReader(str(out)).pages)
     assert "对环境可能有害" in text.replace("\n", "")
+
+
+# ── 分子式下标 + GHS 象形图 + 静态字体（2026-11-02 业务反馈批）──
+
+
+def test_formula_markup_plain_digits_to_subscript():
+    from app.modules.safety.feishu.msds_pdf import _formula_markup
+
+    # 普通数字形态 → 下标（业务反馈"识别成大数字"根因）
+    assert _formula_markup("C2H6O") == "C<sub>2</sub>H<sub>6</sub>O"
+    assert _formula_markup("CH4O") == "CH<sub>4</sub>O"
+    # Unicode 下标形态保持（已转 sub 不二次处理）
+    assert _formula_markup("MgSO₄") == "MgSO<sub>4</sub>"
+    # 行首系数不下标；·中点保留
+    assert _formula_markup("2H2O·SiO2") == "2H<sub>2</sub>O·SiO<sub>2</sub>"
+    # 右括号后数字（配位）下标
+    assert _formula_markup("(C2H5)2") == "(C<sub>2</sub>H<sub>5</sub>)<sub>2</sub>"
+
+
+def test_parse_label_elements():
+    from app.modules.safety.feishu.msds_pdf import _parse_label_elements
+
+    names, sig = _parse_label_elements("图形：火焰、感叹号；信号词：危险")
+    assert names == ["火焰", "感叹号"] and sig == "危险"
+    # 宽容人工填写：图形名子串匹配；未知图形跳过；无信号词返回空
+    names, sig = _parse_label_elements("图形：骷髅和交叉骨（急性毒性）,环境 信号词：警告")
+    assert names == ["骷髅和交叉骨", "环境"] and sig == "警告"
+    assert _parse_label_elements("随便写的文本") == ([], "")
+    assert _parse_label_elements("") == ([], "")
+
+
+def test_heiti_font_is_static_not_variable():
+    """黑体必须用静态实例：原 NotoSansSC.ttf 是 VF（默认 wght=100 Thin），
+    reportlab 按 100 极细渲染=「淡黑色」+ 子集嵌入部分阅读器乱码。"""
+    from app.modules.safety.feishu import msds_pdf
+
+    if msds_pdf._HEITI == "NotoSansSC":
+        from fontTools.ttLib import TTFont as FT
+
+        path = next(
+            p for p in (
+                __import__("pathlib").Path("assets/fonts/NotoSansSC-Medium.ttf"),
+            ) if p.exists()
+        )
+        ft = FT(str(path))
+        assert "fvar" not in ft, "不得使用可变字体"
+        assert ft["OS/2"].usWeightClass == 500
+
+
+def test_label_elements_ghs_images_rendered(tmp_path):
+    """标签要素渲染为象形图网格（图片形式）+ 信号词，PDF 可生成且单页。"""
+    pypdf = pytest.importorskip("pypdf")
+    from app.modules.safety.feishu.msds_pdf import build_standard_msds_pdf
+
+    entry = {
+        "name": "测试象形图", "cas_no": "64-17-5", "un_no": "1170",
+        "label_elements": "图形：火焰、感叹号、环境；信号词：危险",
+    }
+    out = tmp_path / "ghs.pdf"
+    build_standard_msds_pdf(entry, str(out))
+    reader = pypdf.PdfReader(str(out))
+    assert len(reader.pages) == 1
+    # 图片存在性：页面资源含 XObject 图像
+    xo = reader.pages[0].get("/Resources", {}).get("/XObject", {})
+    assert xo and len(xo) >= 3, "应嵌入至少 3 张象形图"
+    text = "".join(p.extract_text() or "" for p in reader.pages).replace("\n", "")
+    assert "信号词：危险" in text

@@ -33,7 +33,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Table, TableStyle
 
 from app.modules.safety.feishu.msds_docx import (
     _SECTION_FIELD,
@@ -47,9 +47,11 @@ logger = logging.getLogger(__name__)
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 _FONT = "STSong-Light"
 
-# 黑体（Noto Sans SC，无衬线中文）：顶部表头/节标题/健康危害内容用。
-# 复用 hr 模块 assets/fonts/NotoSansSC.ttf（OFL 可再分发）；缺字体环境
-# 回退 STSong-Light（仅失黑体观感，排版不炸）。
+# 黑体（Noto Sans SC Medium 静态实例）：顶部表头/节标题/健康危害内容用。
+# **必须用静态实例**（assets/fonts/NotoSansSC-Medium.ttf，fontTools instancer
+# wght=500 产出）：仓库原 NotoSansSC.ttf 是可变字体（fvar，默认实例 wght=100
+# Thin）——reportlab 不支持 VF，按 100 极细渲染（业务反馈"淡黑色"）且子集
+# 嵌入在部分阅读器字形错乱（"UN 号乱码"）。缺静态字体环境回退 STSong-Light。
 _HEITI = "STSong-Light"
 
 
@@ -58,8 +60,8 @@ def _register_heiti() -> str:
     if _HEITI != "STSong-Light":
         return _HEITI
     candidates = (
-        Path("assets/fonts/NotoSansSC.ttf"),
-        Path(__file__).resolve().parents[4] / "assets" / "fonts" / "NotoSansSC.ttf",
+        Path("assets/fonts/NotoSansSC-Medium.ttf"),
+        Path(__file__).resolve().parents[4] / "assets" / "fonts" / "NotoSansSC-Medium.ttf",
     )
     for p in candidates:
         if p.exists():
@@ -68,11 +70,33 @@ def _register_heiti() -> str:
                 _HEITI = "NotoSansSC"
                 break
             except Exception:
-                logger.warning("NotoSansSC 注册失败, 黑体回退 STSong-Light", exc_info=True)
+                logger.warning("NotoSansSC-Medium 注册失败, 黑体回退 STSong-Light", exc_info=True)
     return _HEITI
 
 
 _register_heiti()
+
+# GHS 象形图（UN 官方图形，公有领域；assets/ghs/，2026-11-02 业务要求标签要素
+# 以图片形式体现）。名称 = derive_label_elements 的图形名，缺图自动跳过。
+_GHS_PICTOGRAMS: dict[str, str] = {
+    "爆炸": "ghs01-explosion.png",
+    "火焰": "ghs02-flame.png",
+    "火焰加圆圈": "ghs03-flame-circle.png",
+    "气瓶": "ghs04-gas-cylinder.png",
+    "腐蚀": "ghs05-corrosion.png",
+    "骷髅和交叉骨": "ghs06-skull.png",
+    "感叹号": "ghs07-exclamation.png",
+    "健康危害": "ghs08-health-hazard.png",
+    "环境": "ghs09-environment.png",
+}
+
+
+def _ghs_asset(name: str) -> Path | None:
+    for d in (Path("assets/ghs"), Path(__file__).resolve().parents[4] / "assets" / "ghs"):
+        p = d / name
+        if p.exists():
+            return p
+    return None
 
 # 缩放档位：内容多时先缩字号行距；下限 0.67 仍放不下走截断安全阀
 _SCALE_STEPS: tuple[float, ...] = (1.0, 0.94, 0.89, 0.83, 0.78, 0.72, 0.67)
@@ -112,8 +136,8 @@ _SUPERSCRIPT_MAP = {
     "⁺": "+", "⁻": "−", "ⁿ": "n",
 }
 _INVISIBLE_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
-# CJK 字符类：汉字 + CJK 标点（。，、；）+ 全角形式（（）：？！％）
-_CJK_CLASS = r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]"
+# CJK 字符类：汉字 + CJK 标点（。，、；）+ 全角形式（（）：？！％）+ 中英文引号
+_CJK_CLASS = r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\u201c-\u201d’‘]"
 # CJK↔CJK 之间的空白（含换行）：供应商 PDF 断行残留（「刺 激」「建 议」类）
 _CJK_GAP_RE = re.compile(rf"(?<={_CJK_CLASS})[\s\u3000]+(?={_CJK_CLASS})")
 # CJK 之间的半角标点 → 全角：任一侧是 CJK 即转（中文句子中标点后接拉丁也该
@@ -128,6 +152,24 @@ _HALF_FULL_RES = [
     (re.compile(rf"{re.escape(half)}(?={_CJK_CLASS})"), full)
     for half, full in _HALF_TO_FULL.items()
 ]
+# 半角双引号全角化（配对状态机：奇数个 " 交替 “/”）。中文排版规范 +
+# 消除 STSong 对 U+0022 的字形/ToUnicode 歧义（提取器读出 `";` 的根源之一）。
+def _normalize_quotes(s: str) -> str:
+    out: list[str] = []
+    open_q = False
+    for ch in s:
+        if ch == "“":
+            out.append("“")
+            open_q = True
+        elif ch == "”":
+            out.append("”")
+            open_q = False
+        elif ch == '"':
+            out.append("”" if open_q else "“")
+            open_q = not open_q
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _rich_markup(value: str) -> str:
@@ -140,10 +182,14 @@ def _rich_markup(value: str) -> str:
     - CJK 之间半角标点全角化（,;:?! → 全角；数字/拉丁间不动）
     标记由本函数生成，无注入面。
     """
-    s = _INVISIBLE_RE.sub("", html.escape(value or ""))
+    # ① 文本规范化（必须在 escape 前：escape 实体 &quot; 的 ";" 会被全角化破坏）
+    s = _INVISIBLE_RE.sub("", value or "")
     s = _CJK_GAP_RE.sub("", s)
     for pattern, full in _HALF_FULL_RES:
         s = pattern.sub(full, s)
+    s = _normalize_quotes(s)
+    # ② XML 转义（只转 &<>；裸 " 已全角化，reportlab 属性外文本无需转义）
+    s = html.escape(s, quote=False)
     out: list[str] = []
     i = 0
     while i < len(s):
@@ -169,6 +215,53 @@ def _rich_markup(value: str) -> str:
 def _esc(value: str) -> str:
     """转义 XML 实体，安全嵌入 reportlab Paragraph 标记。"""
     return html.escape(value or "")
+
+
+# 分子式普通数字下标：字母/右括号后的数字串（C2H6O → C₂H₆O 视觉形态）；
+# 行首系数（2H2O 的 2）与中文/标点后的数字（“闪点 11℃”）不动
+_FORMULA_DIGIT_RE = re.compile(r"(?<=[A-Za-z\)])\d+")
+
+
+def _formula_markup(value: str) -> str:
+    """分子式专用渲染：_rich_markup 基础上把字母后的普通数字转下标。
+
+    台账分子式两种形态并存（MgSO₄ Unicode 下标 / C2H6O 普通数字），后者
+    渲染成全大数字（业务反馈"识别成大数字"）——统一转 <sub> 下标形态。
+    """
+    s = _rich_markup(value)
+    parts = re.split(r"(<sub>[^<]*</sub>|<sup>[^<]*</sup>)", s)
+    out: list[str] = []
+    for tok in parts:
+        if tok.startswith(("<sub>", "<sup>")):
+            out.append(tok)
+        else:
+            out.append(_FORMULA_DIGIT_RE.sub(r"<sub>\g<0></sub>", tok))
+    return "".join(out)
+
+
+def _parse_label_elements(text: str) -> tuple[list[str], str]:
+    """解析标签要素文本 → (GHS 图形名列表, 信号词)。
+
+    兼容人工填写：图形段按 、,， 切分后按标准图形名子串匹配；
+    无图形段/全部无图时返回 ([], "")，调用方回退纯文本渲染。
+    """
+    if not text:
+        return [], ""
+    names: list[str] = []
+    m = re.search(r"图形[：:](.+?)(?:[；;]|$)", text)
+    if m:
+        for part in re.split(r"[、,，]", m.group(1)):
+            p = part.strip()
+            for key in _GHS_PICTOGRAMS:
+                if key in p:
+                    if key not in names:
+                        names.append(key)
+                    break
+    sig = ""
+    m2 = re.search(r"信号词[：:]\s*(危险|警告)", text)
+    if m2:
+        sig = m2.group(1)
+    return names, sig
 
 
 def _resolve(label: str, entry: dict, section_parts: dict) -> str:
@@ -213,8 +306,10 @@ def _clip_entry(entry: dict, limit: int) -> dict:
 def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
     """按缩放系数派生整套样式（黑体档位差压平，正文线性缩）。
 
-    label_top/value_top：顶部表头标签与值——黑体居中（模板 bold+黑体+居中）。
+    label_top/value_top：顶部表头标签与值——黑体居中（模板 bold+黑体+居中）；
+    value_top 带 CJK 折行（长 UN 值如"2672（含氨量10%-35%）；2073…"不溢出）。
     section_head：大块节标题——黑体居中独立段。heiti：健康危害内容——黑体左对齐。
+    signal：标签要素信号词——黑体居中。ghs_pt：象形图边长（随档位缩放）。
     """
     heiti = _HEITI
     title = ParagraphStyle(
@@ -232,7 +327,7 @@ def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
         ),
         "value_top": ParagraphStyle(
             "msds_value_top", fontName=heiti, fontSize=top, leading=16 * scale,
-            alignment=TA_CENTER,
+            alignment=TA_CENTER, wordWrap="CJK",
         ),
         "label": ParagraphStyle("msds_label", fontName=_FONT, fontSize=body, leading=12 * scale, wordWrap="CJK"),
         "body": ParagraphStyle("msds_body", fontName=_FONT, fontSize=body, leading=13 * scale, wordWrap="CJK"),
@@ -241,6 +336,11 @@ def _scaled_styles(scale: float) -> dict[str, ParagraphStyle]:
             alignment=TA_CENTER, spaceBefore=4 * scale,
         ),
         "heiti": ParagraphStyle("msds_heiti", fontName=heiti, fontSize=body, leading=13 * scale, wordWrap="CJK"),
+        "signal": ParagraphStyle(
+            "msds_signal", fontName=heiti, fontSize=body, leading=13 * scale,
+            alignment=TA_CENTER, spaceBefore=2 * scale,
+        ),
+        "ghs_pt": 40 * scale,
     }
 
 
@@ -344,6 +444,35 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
     def st_value_top(text: str) -> Paragraph:
         return Paragraph(_rich_markup(text), style["value_top"])
 
+    def _ghs_cell(label_elements: str) -> list:
+        """标签要素格：GHS 象形图网格（4/行）+ 信号词；无图回退纯文本。"""
+        names, sig = _parse_label_elements(label_elements)
+        pt = style["ghs_pt"]
+        imgs = []
+        for n in names:
+            p = _ghs_asset(_GHS_PICTOGRAMS[n])
+            if p:
+                imgs.append(Image(str(p), width=pt, height=pt))
+        if not imgs:
+            return [st_body(label_elements)] if label_elements else []
+        rows = [imgs[i:i + 4] for i in range(0, len(imgs), 4)]
+        inner = Table(
+            rows, colWidths=[(_COL_LABEL_WIDE + _COL_CONTENT) / 4] * min(4, len(imgs)),
+            hAlign="CENTER",
+        )
+        inner.setStyle(TableStyle([
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        cells: list = [inner]
+        if sig:
+            cells.append(Paragraph(f"信号词：{_esc(sig)}", style["signal"]))
+        return cells
+
     # 预拆分组合字段
     section_parts: dict[str, dict[str, str]] = {}
     for section, field_key in _SECTION_FIELD.items():
@@ -424,11 +553,12 @@ def _build_parts(entry: dict, style: dict[str, ParagraphStyle]) -> tuple[Paragra
     # 顶部两行横排：标签与值黑体居中（对齐参考）
     table_data: list[list[object]] = [
         [st_label_top("名 称"), "", st_value_top(name), st_label_top("UN No"), "", st_value_top(un_no)],
-        [st_label_top("分子式"), "", st_value_top(formula), st_label_top("CAS No"), "", st_value_top(cas_no)],
+        [st_label_top("分子式"), "", Paragraph(_formula_markup(formula), style["value_top"]), st_label_top("CAS No"), "", st_value_top(cas_no)],
     ]
-    # 危险性说明 / 标签要素（竖排标签 + 内容跨 2 列；内容放 SPAN 锚点列）
+    # 危险性说明 / 标签要素（竖排标签 + 内容跨 2 列；内容放 SPAN 锚点列；
+    #   标签要素 = GHS 象形图网格 + 信号词，2026-11-02 业务要求图片形式）
     table_data.append(
-        [st_label("危险性说明"), st_body(hazard_statement), "", st_label("标签要素"), st_body(label_elements), ""]
+        [st_label("危险性说明"), st_body(hazard_statement), "", st_label("标签要素"), _ghs_cell(label_elements) or "", ""]
     )
     # 理化特性(左) × 职业接触限值(右) 交错 6 行（标签竖排跨 6 行；内容放 SPAN 锚点列）
     for i in range(6):
