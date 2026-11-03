@@ -261,17 +261,23 @@ class AgentInput(Base):
 class AgentPolicy(Base):
     """Policy 版本 —— 不可变（rules+accept_mode+admission 哈希成版本号）。
 
-    当前版本 = 最新 created_at 行（不另建 KV 指针表）。
+    当前版本 = max(seq) 行。seq 单调递增（插入时 max+1，唯一索引兜并发）：
+    created_at 同秒多版本时按时间取现行不稳定（迁移 G 修复的间歇缺陷），
+    不另建 KV 指针表。
     """
 
     __tablename__ = "agent_policies"
     __table_args__ = (
         Index("uq_agent_policies_version", "version_hash", unique=True),
+        Index("uq_agent_policies_seq", "seq", unique=True),
         {"schema": "superagent"},
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    seq: Mapped[int] = mapped_column(
+        BigInteger, comment="单调版本序（现行版本 = max(seq)；插入时 max+1）",
     )
     version_hash: Mapped[str] = mapped_column(String(64), comment="内容哈希（版本号）")
     rules: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]",

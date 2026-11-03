@@ -230,11 +230,19 @@ class LlmAssessor:
 
 
 async def get_current_policy(session: Any) -> AgentPolicy | None:
+    # 现行 = max(seq)：created_at 同秒并列时按时间取不稳定（迁移 G 修复）
     return (
         await session.execute(
-            select(AgentPolicy).order_by(AgentPolicy.created_at.desc()).limit(1)
+            select(AgentPolicy).order_by(AgentPolicy.seq.desc()).limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def _next_policy_seq(session: Any) -> int:
+    max_seq = (
+        await session.execute(select(func.max(AgentPolicy.seq)))
+    ).scalar_one_or_none()
+    return (max_seq or 0) + 1
 
 
 async def apply_new_policy(
@@ -266,6 +274,7 @@ async def apply_new_policy(
         policy = existing
     else:
         policy = AgentPolicy(
+            seq=await _next_policy_seq(session),
             version_hash=vhash, rules=rules or [],
             accept_mode=accept_mode, admission=admission or {},
         )
