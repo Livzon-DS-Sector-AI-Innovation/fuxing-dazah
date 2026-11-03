@@ -528,7 +528,7 @@ def _render(model: dict, lay: dict, output_path: str) -> None:
     for t, sub in runs:
         s = base12 * (0.62 if sub else 1)
         f = run_font(t)
-        solid(t, cx, yy + (base12 * 0.25 if sub else 0), s, bold=True, font=f)
+        solid(t, cx, yy - (base12 * 0.25 if sub else 0), s, bold=True, font=f)
         cx += _sw(t, f, s)
 
     # 危险性说明 / 标签要素
