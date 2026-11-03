@@ -487,7 +487,7 @@ def _render(model: dict, lay: dict, output_path: str) -> None:
     c.line(XS[3], Y(ys[0]), XS[3], Y(ys[2]))
     c.line(XS[4], Y(ys[5]), XS[4], Y(ys[8]))
     c.line(XS[5], Y(ys[8]), XS[5], Y(ys[9]))
-    c.line(XS[6], Y(ys[0]), XS[6], Y(ys[9]))
+    c.line(XS[6], Y(ys[0]), XS[6], Y(ys[10]))
     c.line(XS[7], Y(ys[2]), XS[7], Y(ys[9]))
     c.line(XS[8], Y(ys[0]), XS[8], Y(ys[2]))
 
