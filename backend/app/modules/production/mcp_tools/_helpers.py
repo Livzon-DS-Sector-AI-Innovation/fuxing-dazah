@@ -19,8 +19,10 @@ from app.modules.production.models import (
 from app.modules.production.repository.assignment import (
     get_user_node_assignments,
     get_user_stages,
+    list_node_assignments,
 )
 from app.modules.production.schemas import FieldValueIn
+from app.platform.identity.models import User
 
 
 # ponytail: 无批量 get_route_nodes_by_route_ids 仓库方法，内联批量查询避免 N+1
@@ -213,3 +215,30 @@ def _field_dict_to_in(f: dict[str, Any]) -> FieldValueIn:
     except KeyError:
         raise ValueError(f"字段缺少 field_key：{f}")
     return FieldValueIn(field_key=key, value=f.get("value"))
+
+
+async def _get_configured_step_executors(
+    db: AsyncSession, operator_id: uuid.UUID, node_id: uuid.UUID,
+) -> list[User]:
+    """操作人为指定工序配置的默认执行人（NodeAssignment，assigned_by=操作人）。
+
+    与工作台/GET node-assignments 的「各负责人只看自己配置的默认值」同口径。
+    """
+    assignments = await list_node_assignments(
+        db, node_id=node_id, assigned_by=operator_id,
+    )
+    if not assignments:
+        return []
+    stmt = select(User).where(
+        User.id.in_([a.user_id for a in assignments]),
+        User.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+def _match_users_by_name(users: list[User], text: str) -> list[User]:
+    """在给定用户集合内按姓名匹配：先精确，再包含式；返回全部命中。"""
+    exact = [u for u in users if u.name == text]
+    if exact:
+        return exact
+    return [u for u in users if text in u.name]

@@ -166,9 +166,18 @@ class TestSparePartStockModel:
         assert stock.warehouse_location is None
 
     def test_spare_part_id_is_unique(self) -> None:
-        """spare_part_id 字段有 unique=True 约束（一个备件一条库存）。"""
+        """spare_part_id 唯一性由软删条件部分唯一索引保证（一个未删备件一条库存，
+        软删后可重建库存行）。"""
         col = SparePartStock.__table__.c.spare_part_id
-        assert col.unique is True
+        assert col.unique is None  # 列级不再挂全表唯一约束
+        idx = next(
+            (i for i in SparePartStock.__table__.indexes
+             if i.name == "uq_spare_part_stocks_spare_part_id"),
+            None,
+        )
+        assert idx is not None
+        assert idx.unique is True
+        assert "is_deleted = false" in str(idx.dialect_options["postgresql"]["where"])
 
     def test_schema_is_equipment(self) -> None:
         """库存表属于 equipment schema。"""

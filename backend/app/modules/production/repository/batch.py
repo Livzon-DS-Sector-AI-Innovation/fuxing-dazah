@@ -3,10 +3,10 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.production.models import Batch
+from app.modules.production.models import Batch, BatchLink, NodeExecution
 from app.modules.production.repository.trace import trace_links_multi
 
 # 未完工批次 = 非终态。计划下达生成的是 scheduled（不是 pending），
@@ -24,6 +24,7 @@ __all__ = [
     "get_batch_by_no",
     "get_batches_by_ids",
     "get_parent_links",
+    "batch_has_history",
     "list_batches",
     "list_active_batches_by_route",
     "list_batches_started_within",
@@ -58,6 +59,27 @@ async def get_batch_by_no(db: AsyncSession, batch_no: str) -> Batch | None:
         Batch.batch_no == batch_no, Batch.is_deleted == False  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def batch_has_history(db: AsyncSession, batch_id: uuid.UUID) -> bool:
+    """批次是否附着生产痕迹：任一存活工序执行或任一谱系链接（父子任一方向）。
+
+    无痕迹的批次（从未开工）软删不留任何追溯空洞；有痕迹的必须保持可见。
+    """
+    exec_stmt = select(NodeExecution.id).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.is_deleted == False,  # noqa: E712
+    ).limit(1)
+    if (await db.execute(exec_stmt)).first() is not None:
+        return True
+    link_stmt = select(BatchLink.id).where(
+        or_(
+            BatchLink.parent_batch_id == batch_id,
+            BatchLink.child_batch_id == batch_id,
+        ),
+        BatchLink.is_deleted == False,  # noqa: E712
+    ).limit(1)
+    return (await db.execute(link_stmt)).first() is not None
 
 
 async def list_active_batches_by_route(

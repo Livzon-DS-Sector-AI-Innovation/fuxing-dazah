@@ -45,6 +45,14 @@ _PLATFORM_PERMISSIONS: list[PermissionDef] = [
         "permission:user:assign", "分配用户角色", "permission", "user", "assign"
     ),
     PermissionDef("permission:user:view", "查看用户权限", "permission", "user", "view"),
+    PermissionDef(
+        "system:feedback:manage",
+        "查看与处理系统反馈",
+        "system",
+        "feedback",
+        "manage",
+        "超管默认拥有；可单独授予需要处理用户反馈的角色",
+    ),
 ]
 
 

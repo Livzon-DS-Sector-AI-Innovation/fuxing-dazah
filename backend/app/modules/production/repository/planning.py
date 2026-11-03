@@ -48,6 +48,7 @@ __all__ = [
     "get_chain_node_execution_progress",
     "get_change_logs",
     "get_batches_by_plan_items",
+    "get_chain_batches_by_plan_items",
 ]
 
 
@@ -520,3 +521,72 @@ async def get_batches_by_plan_items(
     )
     rows = (await db.execute(stmt)).all()
     return {row[0]: row[1] for row in rows}
+
+
+async def get_chain_batches_by_plan_items(
+    db: AsyncSession, item_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[Batch]]:
+    """PlanItem → 谱系链上全部批次（根 + 跨边界子批次），批量版。
+
+    与 planning_service._collect_chain_batches 同规则：根批次取自
+    PlanAllocation，沿 BatchLink 逐层下钻；cancelled 批次不计入，
+    仅在**同层全部报废**时继续下钻其子批次（报废不打断链）；一旦
+    同层存在有效子批次，报废分支即为废弃分支，不再下钻。
+    与之的差异仅在多有效子批次时取全部分支（统计场景需要），
+    _collect_chain_batches 为单线取第一个。
+    """
+    if not item_ids:
+        return {}
+    from app.modules.production.models.batch import BatchLink
+
+    rows = (
+        await db.execute(
+            select(PlanAllocation.plan_item_id, Batch)
+            .join(Batch, Batch.id == PlanAllocation.batch_id)
+            .where(
+                PlanAllocation.plan_item_id.in_(item_ids),
+                PlanAllocation.is_deleted == False,  # noqa: E712
+                Batch.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).all()
+    result: dict[uuid.UUID, list[Batch]] = {}
+    # 已到访批次 → 所属计划项；兼作环/合流防护（首个归属者优先）
+    owner_by_batch: dict[uuid.UUID, uuid.UUID] = {}
+    frontier: list[Batch] = []
+    for item_id, batch in rows:
+        owner_by_batch[batch.id] = item_id
+        frontier.append(batch)
+        if batch.status != "cancelled":
+            result.setdefault(item_id, []).append(batch)
+    while frontier:
+        parents = [b.id for b in frontier]
+        child_rows = (
+            await db.execute(
+                select(BatchLink.parent_batch_id, Batch)
+                .join(Batch, Batch.id == BatchLink.child_batch_id)
+                .where(
+                    BatchLink.parent_batch_id.in_(parents),
+                    BatchLink.is_deleted == False,  # noqa: E712
+                    Batch.is_deleted == False,  # noqa: E712
+                )
+            )
+        ).all()
+        children_by_parent: dict[uuid.UUID, list[Batch]] = {}
+        for parent_id, child in child_rows:
+            children_by_parent.setdefault(parent_id, []).append(child)
+        frontier = []
+        for parent_id, children in children_by_parent.items():
+            item_id = owner_by_batch.get(parent_id)
+            if item_id is None:
+                continue
+            # 同层有有效子批次时只走有效分支，报废分支视为废弃不再下钻
+            valid = [c for c in children if c.status != "cancelled"]
+            for child in valid or children:
+                if child.id in owner_by_batch:
+                    continue
+                owner_by_batch[child.id] = item_id
+                frontier.append(child)
+                if child.status != "cancelled":
+                    result.setdefault(item_id, []).append(child)
+    return result

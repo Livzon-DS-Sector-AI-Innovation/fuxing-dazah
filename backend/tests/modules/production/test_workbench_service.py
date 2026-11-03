@@ -9,12 +9,14 @@
 """
 
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, DuplicateException
+from app.core.time import now
 from app.modules.production.schemas import (
     BatchCreate,
     ChildBatchIn,
@@ -47,6 +49,47 @@ async def _get_or_create_user(db: AsyncSession) -> User:
     db.add(user)
     await db.flush()
     return user
+
+
+async def _complete_abc(
+    db: AsyncSession, ctx: dict[str, Any], batch: Any, base: Any,
+) -> tuple[Any, Any, Any]:
+    """辅助：按 A→B→C 顺序完成三个工序，返回三条执行。"""
+    ex_a = await execution_service.start_execution(
+        db, batch.id,
+        ExecutionStartIn(node_id=ctx["node_a"].id, started_at=base),
+        user=None,
+    )
+    await execution_service.complete_execution(
+        db, ex_a.id,
+        ExecutionCompleteIn(finished_at=base + timedelta(hours=1)),
+        user=None,
+    )
+    ex_b = await execution_service.start_execution(
+        db, batch.id,
+        ExecutionStartIn(
+            node_id=ctx["node_b"].id,
+            started_at=base + timedelta(hours=1),
+            field_values=[FieldValueIn(field_key="temp", value=25)],
+        ),
+        user=None,
+    )
+    await execution_service.complete_execution(
+        db, ex_b.id,
+        ExecutionCompleteIn(finished_at=base + timedelta(hours=3)),
+        user=None,
+    )
+    ex_c = await execution_service.start_execution(
+        db, batch.id,
+        ExecutionStartIn(node_id=ctx["node_c"].id, started_at=base + timedelta(hours=3)),
+        user=None,
+    )
+    await execution_service.complete_execution(
+        db, ex_c.id,
+        ExecutionCompleteIn(finished_at=base + timedelta(hours=4)),
+        user=None,
+    )
+    return ex_a, ex_b, ex_c
 
 
 class TestWorkbenchQuery:
@@ -181,6 +224,179 @@ class TestWorkbenchQuery:
         completes = [it for it in result.items if it.type == "pending_complete"]
         assert len(completes) >= 1
         assert completes[0].is_last_in_stage is True
+
+    async def test_completed_node_not_pending_start_when_predecessor_time_backfilled_later(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """前道结束时间被补录成晚于已完成后道时，不应把后道再当成待开始。
+
+        历史/补录数据里结束时间倒挂不代表前道返工过。
+        """
+        user_id = uuid.uuid4()
+        route_id = published_route["route"].id
+        node_c_id = published_route["node_c"].id
+        await assignment_service.create_node_assignment(
+            db_session,
+            user_id=user_id,
+            node_id=node_c_id,
+            route_id=route_id,
+            assigned_by=user_id,
+        )
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        base = now() - timedelta(hours=6)
+        _, ex_b, _ = await _complete_abc(db_session, published_route, batch, base)
+        # 模拟补录：前道 B 的结束时间晚于后道 C 的结束时间
+        ex_b.finished_at = base + timedelta(hours=5)
+        await db_session.flush()
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        starts = [
+            it for it in result.items
+            if it.type == "pending_start" and it.node_id == node_c_id
+        ]
+        assert starts == []
+
+    async def test_completed_node_pending_start_after_predecessor_rework(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """前道真实返工（execution_seq>1）且晚于后道完成 → 后道应向前流转。"""
+        user_id = uuid.uuid4()
+        route_id = published_route["route"].id
+        node_b_id = published_route["node_b"].id
+        node_c_id = published_route["node_c"].id
+        await assignment_service.create_node_assignment(
+            db_session,
+            user_id=user_id,
+            node_id=node_c_id,
+            route_id=route_id,
+            assigned_by=user_id,
+        )
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        base = now() - timedelta(hours=6)
+        await _complete_abc(db_session, published_route, batch, base)
+        rework = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=node_b_id,
+                started_at=base + timedelta(hours=5),
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, rework.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=6)),
+            user=None,
+        )
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        starts = [
+            it for it in result.items
+            if it.type == "pending_start" and it.node_id == node_c_id
+        ]
+        assert len(starts) == 1
+        assert starts[0].start_type == "normal"
+
+    async def test_first_completion_after_abort_not_treated_as_rework(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """中止只占用 execution_seq，不应把首次成功完成当成返工。"""
+        user_id = uuid.uuid4()
+        route_id = published_route["route"].id
+        node_c_id = published_route["node_c"].id
+        await assignment_service.create_node_assignment(
+            db_session,
+            user_id=user_id,
+            node_id=node_c_id,
+            route_id=route_id,
+            assigned_by=user_id,
+        )
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        base = now() - timedelta(hours=6)
+        ex_a = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id, started_at=base),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_a.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=1)),
+            user=None,
+        )
+        # B 第一次启动后中止：abort 保留行，占用 execution_seq=1
+        aborted = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                started_at=base + timedelta(hours=1),
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.abort_execution(db_session, aborted.id, user=None)
+        # 再次启动 B 并完成：这是 B 的首次成功完成，但 seq=2
+        ex_b = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                started_at=base + timedelta(hours=1),
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        ex_c = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_c"].id,
+                started_at=base + timedelta(hours=2),
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_b.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=3)),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_c.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=4)),
+            user=None,
+        )
+        assert ex_b.execution_seq == 2
+        # 模拟补录：后道 C 的结束时间早于前道 B 的首次成功完成时间
+        ex_c.finished_at = base + timedelta(hours=2, minutes=30)
+        await db_session.flush()
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        starts = [
+            it for it in result.items
+            if it.type == "pending_start" and it.node_id == node_c_id
+        ]
+        assert starts == []
 
     async def test_assigned_routes_structure(
         self, db_session: AsyncSession, published_route: dict[str, Any],

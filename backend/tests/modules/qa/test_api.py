@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.qa.api import reference_sources
+from app.modules.qa.api.references import reference_sources
 from app.platform.identity.models import User
 
 
@@ -62,6 +62,7 @@ async def test_equipment_reference_selector_uses_qa_grants(
 
 @pytest.mark.asyncio
 async def test_unsupported_reference_kind_is_rejected() -> None:
+    """引用选择器只接受既定的外部来源类型，未知类型直接 422。"""
     with pytest.raises(Exception) as error:
         await reference_sources(
             "NOT_A_SOURCE",

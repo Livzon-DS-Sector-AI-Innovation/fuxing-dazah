@@ -1024,6 +1024,96 @@ async def test_submit_all_normal_no_work_order(
     assert len(pending) == 0
 
 
+async def test_submit_anomaly_auto_assigns_maintainer(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+    department: Department,
+) -> None:
+    """存在同部门 repair 角色候选人时，异常工单自动指派首位维修人。"""
+    from sqlalchemy import select as sa_select
+
+    from app.modules.equipment.models import (
+        EquipmentPersonnel,
+        EquipmentPersonnelRole,
+        EquipmentRole,
+    )
+    from app.modules.equipment.service.personnel import REPAIR_ROLE_CODE
+
+    # repair 角色是自动指派功能的预置配置（code 有唯一索引），已配置过的库
+    # （含开发库）里已存在，直接 INSERT 会撞唯一键
+    role = (
+        await db_session.execute(
+            sa_select(EquipmentRole).where(
+                EquipmentRole.code == REPAIR_ROLE_CODE,
+                EquipmentRole.is_deleted == False,  # noqa: E712
+            )
+        )
+    ).scalars().first()
+    if role is None:
+        role = EquipmentRole(name="维修工", code=REPAIR_ROLE_CODE)
+        db_session.add(role)
+        await db_session.flush()
+
+    maintainer = User(
+        name="自动指派维修工", employee_no=f"EMP-AS-{uuid.uuid4().hex[:8]}"
+    )
+    db_session.add(maintainer)
+    await db_session.flush()
+
+    person = EquipmentPersonnel(
+        name=maintainer.name,
+        user_id=maintainer.id,
+        department=department.name,
+    )
+    db_session.add(person)
+    await db_session.flush()
+    db_session.add(
+        EquipmentPersonnelRole(personnel_id=person.id, role_id=role.id)
+    )
+    await db_session.flush()
+
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [{"template_item_id": items[0].id, "result": "异常", "remark": "温度超标"}],
+    )
+
+    pending = await get_pending_work_orders_by_inspection_task(
+        db_session, inspection_task.id
+    )
+    assert len(pending) == 1
+    wo = pending[0]
+    assert wo.assignee_id == maintainer.id
+    assert wo.assigned_at is not None
+
+
+async def test_submit_anomaly_without_candidate_leaves_unassigned(
+    db_session: AsyncSession,
+    inspection_task: InspectionTask,
+    equipment_with_dept: Equipment,
+    template_with_items: InspectionTemplate,
+) -> None:
+    """无 repair 角色候选人时工单照常创建，维修人留空待人工指派。"""
+    items = await _get_template_items(db_session, template_with_items.id)
+    await submit_equipment_check(
+        db_session,
+        inspection_task.id,
+        equipment_with_dept.id,
+        [{"template_item_id": items[0].id, "result": "异常", "remark": "温度超标"}],
+    )
+
+    pending = await get_pending_work_orders_by_inspection_task(
+        db_session, inspection_task.id
+    )
+    assert len(pending) == 1
+    assert pending[0].assignee_id is None
+    assert pending[0].assigned_at is None
+
+
 async def test_duplicate_work_order_not_created(
     db_session: AsyncSession,
     inspection_task: InspectionTask,

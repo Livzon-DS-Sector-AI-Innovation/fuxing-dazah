@@ -16,6 +16,9 @@ _TIMEOUT_KEYS = [
     "claim_timeout_medium",
     "claim_timeout_low",
 ]
+# 语义为「派单超时配置」：待处理工单未指派/已指派未开工超过对应优先级
+# 分钟数时，由派单超时监控提醒设备主管。key 沿用历史命名，前端展示
+# 已改为「派单超时配置」。
 
 
 async def get_claim_timeout_config(

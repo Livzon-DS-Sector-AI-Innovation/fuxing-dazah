@@ -320,9 +320,9 @@ async def soft_delete_personnel_categories(
 async def get_candidates(
     db: AsyncSession,
     role_ids: list[uuid.UUID],
-    category_id: uuid.UUID | None = None,
+    category_ids: list[uuid.UUID] | None = None,
 ) -> list[dict]:
-    """按角色编码查找可分配人员，支持设备分类过滤"""
+    """按角色查找可分配人员，支持设备分类集合过滤（与集合任一分类相交即可）"""
     base = (
         select(
             EquipmentPersonnel,
@@ -355,6 +355,7 @@ async def get_candidates(
         if pid not in candidates:
             candidates[pid] = {
                 "personnel_id": pid,
+                "user_id": personnel.user_id,
                 "name": personnel.name,
                 "department": personnel.department,
                 "feishu_user_id": personnel.feishu_user_id,
@@ -365,7 +366,7 @@ async def get_candidates(
             {"id": role.id, "name": role.name, "code": role.code, "scope": role.scope}
         )
 
-    if category_id is not None:
+    if category_ids is not None:
         # 查所有有分类约束的人员
         constrained_result = await db.execute(
             select(EquipmentPersonnelCategory.personnel_id).where(
@@ -374,10 +375,10 @@ async def get_candidates(
         )
         constrained_ids = {row[0] for row in constrained_result.all()}
 
-        # 查匹配当前分类的约束
+        # 查匹配任一目标分类的约束
         matched_result = await db.execute(
             select(EquipmentPersonnelCategory).where(
-                EquipmentPersonnelCategory.category_id == category_id,
+                EquipmentPersonnelCategory.category_id.in_(category_ids),
                 EquipmentPersonnelCategory.is_deleted == False,  # noqa: E712
             )
         )

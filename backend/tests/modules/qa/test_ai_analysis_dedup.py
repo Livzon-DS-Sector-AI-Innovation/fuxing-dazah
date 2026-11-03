@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.qa.ai_analysis import _merge_evidence_locations
+from app.modules.qa.service.ai_analysis import _merge_evidence_locations
 
 
 def _entry(hash_value: str, locator: str) -> dict[str, Any]:

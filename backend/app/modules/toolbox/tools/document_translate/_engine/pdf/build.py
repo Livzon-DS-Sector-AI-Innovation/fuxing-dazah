@@ -8,6 +8,7 @@ PDF 无法原位回写（打印坐标流），输出为干净重排：
   - 标题对照沿用 docx 流水线惯例：同段追加为 "原文 / 译文"
 行内字符格式（粗斜体混排）不保留——重排输出以内容与结构为准。
 """
+
 from __future__ import annotations
 
 from io import BytesIO
@@ -16,6 +17,8 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
+
+from . import XML_BAD_RE
 
 # 中文正文字体（Word 全平台自带，避免目标机器缺字体）
 _EAST_ASIA = "宋体"
@@ -35,13 +38,16 @@ def _set_cjk_font(style, latin: str):
 
 
 def _fill_para(p, text: str):
-    """往已有段落填文本。换行转为软换行（保留表格单元格内的多行内容）。"""
+    """往已有段落填文本。换行转为软换行（保留表格单元格内的多行内容）。
+
+    终局守卫：抽取层已清洗控制字符，这里防未来路径漏网——lxml 遇到控制字符
+    会以 "All strings must be XML compatible" 直接拒绝。"""
     chunks = text.split("\n")
     for i, chunk in enumerate(chunks):
         if i:
             p.add_run().add_break(WD_BREAK.LINE)
         if chunk:
-            p.add_run(chunk)
+            p.add_run(XML_BAD_RE.sub("\ufffd", chunk))
     return p
 
 

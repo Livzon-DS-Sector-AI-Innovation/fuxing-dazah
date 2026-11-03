@@ -12,7 +12,6 @@ import {
   initialInspectionTemplateState,
   initialInspectionCompleteState,
   initialRepairState,
-  initialTimeoutConfigState,
   initialMaintainerState,
 } from './initialStates'
 
@@ -30,7 +29,6 @@ export const useEquipmentStore = create<EquipmentStore>()(
       ...initialInspectionTemplateState,
       ...initialInspectionCompleteState,
       ...initialRepairState,
-      ...initialTimeoutConfigState,
       ...initialMaintainerState,
 
       // ── 基础操作 ──
@@ -112,6 +110,8 @@ export const useEquipmentStore = create<EquipmentStore>()(
       setSparePartPageSize: (size) => set({ sparePartPageSize: size, sparePartPage: 1 }, false, 'equipment/setSparePartPageSize'),
       setSparePartLoading: (loading) => set({ sparePartLoading: loading }, false, 'equipment/setSparePartLoading'),
       setSparePartKeyword: (keyword) => set({ sparePartKeyword: keyword, sparePartPage: 1 }, false, 'equipment/setSparePartKeyword'),
+      setSparePartStatusFilter: (filter) => set({ sparePartStatusFilter: filter, sparePartPage: 1 }, false, 'equipment/setSparePartStatusFilter'),
+      setSparePartLowStockFilter: (filter) => set({ sparePartLowStockFilter: filter, sparePartPage: 1 }, false, 'equipment/setSparePartLowStockFilter'),
       setStockWarnings: (warnings) => set({ stockWarnings: warnings }, false, 'equipment/setStockWarnings'),
       setStockWarningsLoading: (loading) => set({ stockWarningsLoading: loading }, false, 'equipment/setStockWarningsLoading'),
       openSparePartDrawer: (part) => set({
@@ -132,6 +132,24 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeStockInboundDrawer: () => set({
         stockInboundDrawerOpen: false, stockInboundSparePartId: null,
       }, false, 'equipment/closeStockInboundDrawer'),
+      openStockOutboundDrawer: (sparePartId) => set({
+        stockOutboundDrawerOpen: true, stockOutboundSparePartId: sparePartId,
+      }, false, 'equipment/openStockOutboundDrawer'),
+      closeStockOutboundDrawer: () => set({
+        stockOutboundDrawerOpen: false, stockOutboundSparePartId: null,
+      }, false, 'equipment/closeStockOutboundDrawer'),
+      openStockAdjustDrawer: (sparePartId) => set({
+        stockAdjustDrawerOpen: true, stockAdjustSparePartId: sparePartId,
+      }, false, 'equipment/openStockAdjustDrawer'),
+      closeStockAdjustDrawer: () => set({
+        stockAdjustDrawerOpen: false, stockAdjustSparePartId: null,
+      }, false, 'equipment/closeStockAdjustDrawer'),
+      openStockSettingsDrawer: (part) => set({
+        stockSettingsDrawerOpen: true, stockSettingsSparePart: part,
+      }, false, 'equipment/openStockSettingsDrawer'),
+      closeStockSettingsDrawer: () => set({
+        stockSettingsDrawerOpen: false, stockSettingsSparePart: null,
+      }, false, 'equipment/closeStockSettingsDrawer'),
 
       // ── 维护计划操作 ──
       setMaintenancePlans: (plans) => set({ maintenancePlans: plans }, false, 'equipment/setMaintenancePlans'),
@@ -192,9 +210,6 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeRepairDrawer: () => set({
         repairDrawerOpen: false, repairEquipmentId: null,
       }, false, 'equipment/closeRepairDrawer'),
-
-      // ── 超时配置 ──
-      setClaimTimeoutConfig: (config) => set({ claimTimeoutConfig: config }, false, 'equipment/setClaimTimeoutConfig'),
 
       // ── 维修人员 ──
       setMaintainers: (maintainers) => set({ maintainers }, false, 'equipment/setMaintainers'),

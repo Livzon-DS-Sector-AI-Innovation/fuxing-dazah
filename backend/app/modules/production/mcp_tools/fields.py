@@ -9,6 +9,7 @@ from app.modules.production.mcp_tools._helpers import (
     _DATA_TYPE_CN,
     _STATUS_MARK,
     _format_field_value,
+    _get_configured_step_executors,
     _get_latest_execution,
     _resolve_batch_and_node,
 )
@@ -16,6 +17,7 @@ from app.modules.production.models import NodeFieldValue
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
 )
+from app.platform.identity.mcp_tools import resolve_user
 from app.platform.mcp.deps import get_db
 from app.platform.mcp.server import get_module_mcp
 
@@ -27,6 +29,7 @@ async def query_step_fields(
     batch_no: str,
     step_name: str,
     phase: str,
+    operator_id: str | None = None,
 ) -> ToolResult:
     """查询某批次某工序需要填报的字段定义。
 
@@ -37,10 +40,15 @@ async def query_step_fields(
     如果已有执行记录，同时返回当前已填的值。
     如果工序已结束但缺少必填字段，会标注可补录的字段。
 
+    传入 operator_id 且 phase="start" 时，同时返回您为该工序配置的
+    可选工序执行人（开始工序时可通过 owner 参数指定）。
+
     Args:
         batch_no: 批次号
         step_name: 工序名称
         phase: 阶段，"start"（开始工序时填）或 "end"（结束工序时填）
+        operator_id: 操作人的飞书 user_id；start 阶段传入时附带给定操作人
+            视角的可选工序执行人名单
     """
     if phase not in ("start", "end"):
         return ToolResult(content=f"无效阶段 `{phase}`，仅支持 start 或 end。", is_error=True)
@@ -50,6 +58,35 @@ async def query_step_fields(
         batch, node = await _resolve_batch_and_node(db, batch_no, step_name)
     except ValueError as e:
         return ToolResult(content=f"{e}", is_error=True)
+
+    # start 阶段且指定操作人时，附带该操作人视角的可选执行人名单。
+    # 该名单只是附带信息，操作人解析失败不能连字段定义一起吞掉——那会让
+    # 一线工人拿不到必须填报的字段清单
+    executor_lines: list[str] = []
+    if phase == "start" and operator_id:
+        operator = None
+        try:
+            operator = await resolve_user(db, operator_id)
+        except ValueError as e:
+            executor_lines.append("")
+            executor_lines.append(f"（无法解析操作人「{operator_id}」：{e}，已略过可选执行人名单）")
+        if operator is not None:
+            candidates = await _get_configured_step_executors(db, operator.id, node.id)
+            executor_lines.append("")
+            if candidates:
+                executor_lines.append("可选工序执行人（您为该工序配置的默认执行人）：")
+                for u in candidates:
+                    label = f"{u.name}（工号 {u.employee_no}）" if u.employee_no else u.name
+                    executor_lines.append(f"- {label}")
+                executor_lines.append(
+                    "开始工序时可在 `change_batch_step_status` 的 `owner` 参数指定"
+                    "（姓名或飞书 user_id）；不指定默认为您本人。"
+                )
+            else:
+                executor_lines.append(
+                    "您未为该工序配置默认执行人；开始工序时不指定 `owner` 则以您本人为执行人。"
+                )
+
     defs = await repo.get_field_defs_by_nodes(db, [node.id])
     phase_defs = [d for d in defs if d.phase == phase]
 
@@ -76,6 +113,7 @@ async def query_step_fields(
 
     if not phase_defs:
         lines.append("该阶段无需填报字段。")
+        lines.extend(executor_lines)
         return ToolResult(content="\n".join(lines))
 
     lines.append("| # | 字段 | 键 | 类型 | 必填 | 约束 | 当前值 |")
@@ -122,5 +160,6 @@ async def query_step_fields(
             "开始阶段字段是开工先决条件，须在开始工序时一并提交；"
             "开始阶段字段**不支持事后补录**，如需修正请联系有修改权限的人员。"
         )
+        lines.extend(executor_lines)
 
     return ToolResult(content="\n".join(lines))

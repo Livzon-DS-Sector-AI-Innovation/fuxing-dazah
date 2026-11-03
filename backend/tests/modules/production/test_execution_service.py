@@ -1438,6 +1438,116 @@ class TestManualTime:
                 user=None,
             )
 
+    async def test_complete_allows_finished_before_predecessor_on_overlap(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """流水线并行：后道先于前道结束，按真实时间完成应被接受。"""
+        batch = await _make_batch(db_session, published_route)
+        base = now() - timedelta(hours=6)
+        ex_a = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id, started_at=base),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_a.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=1)),
+            user=None,
+        )
+        ex_b = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                started_at=base + timedelta(hours=2),
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_b.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=4)),
+            user=None,
+        )
+        ex_c = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_c"].id,
+                started_at=base + timedelta(hours=3),
+            ),
+            user=None,
+        )
+        done = await execution_service.complete_execution(
+            db_session,
+            ex_c.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=3, minutes=30)),
+            user=None,
+        )
+        assert done.status == "completed"
+        assert done.finished_at == base + timedelta(hours=3, minutes=30)
+
+    async def test_complete_allows_earlier_finish_after_predecessor_rework(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """前道在后续完成之后返工：后道仍可按真实结束时间完成。"""
+        batch = await _make_batch(db_session, published_route)
+        base = now() - timedelta(hours=8)
+        ex_a = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id, started_at=base),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_a.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=1)),
+            user=None,
+        )
+        ex_b = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                started_at=base + timedelta(hours=2),
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        ex_c = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_c"].id,
+                started_at=base + timedelta(hours=3),
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_b.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=4)),
+            user=None,
+        )
+        rework = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                started_at=base + timedelta(hours=5),
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, rework.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=6)),
+            user=None,
+        )
+        done = await execution_service.complete_execution(
+            db_session,
+            ex_c.id,
+            ExecutionCompleteIn(finished_at=base + timedelta(hours=3, minutes=30)),
+            user=None,
+        )
+        assert done.status == "completed"
+        assert done.finished_at == base + timedelta(hours=3, minutes=30)
+
     async def test_complete_rejects_future_finished_at(self) -> None:
         """未来结束时间在 schema 层即被拒绝。"""
         with pytest.raises(ValidationError):

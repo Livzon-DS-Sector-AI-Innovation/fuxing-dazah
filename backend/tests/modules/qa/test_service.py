@@ -24,6 +24,9 @@ from app.modules.qa.models import (
     VersionStatus,
 )
 from app.modules.qa.schemas import MasterObjectCreate, RelationIn, SourceLinkIn
+from app.modules.qa.service import master as master_service
+from app.modules.qa.service import retrieval as search_service
+from app.modules.qa.service import version as version_service
 from app.platform.identity.models import User
 
 
@@ -85,9 +88,9 @@ def test_normalization_and_snippet_have_stable_search_rules() -> None:
     """编码规范化、紧凑匹配和正文片段长度遵循固定搜索规则。"""
     assert service.normalize_code(" r-101  ") == "R-101"
     assert service.normalize_text("设备   编号") == "设备 编号"
-    assert service._rank("master_object", "code", "R101", "R-101") == 100
+    assert search_service._rank("master_object", "code", "R101", "R-101") == 100
 
-    snippet = service._snippet("前" * 200 + "needle" + "后" * 200, "needle")
+    snippet = search_service._snippet("前" * 200 + "needle" + "后" * 200, "needle")
     assert len(snippet) <= 240
     assert "needle" in snippet
 
@@ -98,12 +101,12 @@ async def test_create_master_normalizes_identity_and_snapshots_relations(
 ) -> None:
     """创建主数据时规范化编码，并保存别名和外部来源快照。"""
     db = _FakeDb()
-    monkeypatch.setattr(service, "_ensure_master_code_available", _async_noop)
-    monkeypatch.setattr(service, "_ensure_alias_available", _async_noop)
-    monkeypatch.setattr(service, "_validate_region_parent", _async_noop)
-    monkeypatch.setattr(service, "_validate_department", _department_ok)
-    monkeypatch.setattr(service, "_get_external_source", _source_ok)
-    monkeypatch.setattr(service, "_audit", _async_noop)
+    monkeypatch.setattr(master_service, "_ensure_master_code_available", _async_noop)
+    monkeypatch.setattr(master_service, "_ensure_alias_available", _async_noop)
+    monkeypatch.setattr(master_service, "_validate_region_parent", _async_noop)
+    monkeypatch.setattr(master_service, "_validate_department", _department_ok)
+    monkeypatch.setattr(master_service, "_get_external_source", _source_ok)
+    monkeypatch.setattr(master_service, "_audit", _async_noop)
 
     source_id = uuid.uuid4()
     payload = MasterObjectCreate(
@@ -120,7 +123,7 @@ async def test_create_master_normalizes_identity_and_snapshots_relations(
         ],
     )
 
-    row = await service.create_master(cast(AsyncSession, db), payload)
+    row = await master_service.create_master(cast(AsyncSession, db), payload)
 
     assert row.code == "EQ-01"
     assert row.normalized_code == "EQ-01"
@@ -138,11 +141,11 @@ async def test_create_master_rejects_duplicate_source_in_payload(
 ) -> None:
     """同一主数据请求重复关联来源对象时抛出冲突异常。"""
     db = _FakeDb()
-    monkeypatch.setattr(service, "_ensure_master_code_available", _async_noop)
-    monkeypatch.setattr(service, "_validate_region_parent", _async_noop)
-    monkeypatch.setattr(service, "_validate_department", _department_ok)
-    monkeypatch.setattr(service, "_get_external_source", _source_ok)
-    monkeypatch.setattr(service, "_audit", _async_noop)
+    monkeypatch.setattr(master_service, "_ensure_master_code_available", _async_noop)
+    monkeypatch.setattr(master_service, "_validate_region_parent", _async_noop)
+    monkeypatch.setattr(master_service, "_validate_department", _department_ok)
+    monkeypatch.setattr(master_service, "_get_external_source", _source_ok)
+    monkeypatch.setattr(master_service, "_audit", _async_noop)
     source_id = uuid.uuid4()
     payload = MasterObjectCreate(
         object_type="EQUIPMENT",
@@ -163,7 +166,7 @@ async def test_create_master_rejects_duplicate_source_in_payload(
     )
 
     with pytest.raises(DuplicateException):
-        await service.create_master(cast(AsyncSession, db), payload)
+        await master_service.create_master(cast(AsyncSession, db), payload)
 
 
 @pytest.mark.asyncio
@@ -191,7 +194,7 @@ async def test_equipment_source_uses_qa_reference_validation_for_user(
     )
     db = _FakeDb()
     user = cast(User, SimpleNamespace(id=uuid.uuid4()))
-    code, name = await service._get_external_source(
+    code, name = await master_service._get_external_source(
         cast(AsyncSession, db),
         "EQUIPMENT",
         "equipment",
@@ -223,7 +226,7 @@ async def test_equipment_source_internal_task_keeps_trusted_brief_path(
         return brief
 
     monkeypatch.setattr("app.modules.equipment.public_api.get_equipment_brief", _brief)
-    code, name = await service._get_external_source(
+    code, name = await master_service._get_external_source(
         cast(AsyncSession, _FakeDb()),
         "EQUIPMENT",
         "equipment",
@@ -250,7 +253,7 @@ async def test_equipment_source_rejects_hidden_or_revoked_reference(
         "app.modules.equipment.public_api.validate_equipment_references", _reject
     )
     with pytest.raises(ForbiddenException, match="无权关联"):
-        await service._get_external_source(
+        await master_service._get_external_source(
             cast(AsyncSession, _FakeDb()),
             "EQUIPMENT",
             "equipment",
@@ -285,7 +288,7 @@ async def test_qa_external_availability_does_not_reexpose_revoked_equipment(
     monkeypatch.setattr(
         "app.modules.equipment.public_api.get_equipment_references_by_ids", _refs
     )
-    result = await service._availability_map(
+    result = await master_service._availability_map(
         cast(AsyncSession, _FakeDb()), [source], user
     )
 
@@ -300,7 +303,7 @@ async def test_region_parent_rejects_self_and_cycles(
     """区域不能自引用，也不能通过父级链形成循环。"""
     object_id = uuid.uuid4()
     with pytest.raises(AppException) as self_error:
-        await service._validate_region_parent(
+        await master_service._validate_region_parent(
             cast(AsyncSession, _FakeDb()), object_id, object_id
         )
     assert self_error.value.status_code == 422
@@ -314,10 +317,10 @@ async def test_region_parent_rejects_self_and_cycles(
     )
     parent.id = uuid.uuid4()
     parent.region_parent_id = object_id
-    monkeypatch.setattr(service, "get_master", _returning(parent))
+    monkeypatch.setattr(master_service, "get_master", _returning(parent))
 
     with pytest.raises(AppException) as cycle_error:
-        await service._validate_region_parent(
+        await master_service._validate_region_parent(
             cast(AsyncSession, _FakeDb()), object_id, parent.id
         )
     assert cycle_error.value.status_code == 422
@@ -336,12 +339,12 @@ async def test_create_version_requires_external_approval_and_cleans_failed_stora
         store_calls.append(True)
         return _stored_file()
 
-    monkeypatch.setattr(service, "_next_version_sequence", _sequence_one)
-    monkeypatch.setattr(service, "_audit", _async_noop)
-    monkeypatch.setattr(service.file_service, "store_file", _store_and_record)
+    monkeypatch.setattr(version_service, "_next_version_sequence", _sequence_one)
+    monkeypatch.setattr(version_service, "_audit", _async_noop)
+    monkeypatch.setattr(version_service.file_service, "store_file", _store_and_record)
 
     with pytest.raises(AppException) as error:
-        await service.create_version(
+        await version_service.create_version(
             cast(AsyncSession, db),
             document.id,
             version_label="V1.0",
@@ -356,7 +359,7 @@ async def test_create_version_requires_external_approval_and_cleans_failed_stora
     cleanup: list[Any] = []
     db = _FakeDb([_Result(scalar=document), _Result()])
     monkeypatch.setattr(
-        service.file_service, "cleanup_stored_file", lambda value: cleanup.append(value)
+        version_service.file_service, "cleanup_stored_file", lambda value: cleanup.append(value)
     )
     original_flush = db.flush
 
@@ -367,7 +370,7 @@ async def test_create_version_requires_external_approval_and_cleans_failed_stora
 
     db.flush = fail_second_flush  # type: ignore[method-assign]
     with pytest.raises(RuntimeError):
-        await service.create_version(
+        await version_service.create_version(
             cast(AsyncSession, db),
             document.id,
             version_label="V1.0",
@@ -409,13 +412,13 @@ async def test_relations_reject_inactive_master_and_soft_delete_old_links(
         status="inactive",
     )
     inactive.id = uuid.uuid4()
-    monkeypatch.setattr(service, "get_version", _returning(version))
-    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(version))
-    monkeypatch.setattr(service, "_audit", _async_noop)
-    monkeypatch.setattr(service, "get_master", _returning(active))
+    monkeypatch.setattr(version_service, "get_version", _returning(version))
+    monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(version))
+    monkeypatch.setattr(version_service, "_audit", _async_noop)
+    monkeypatch.setattr(version_service, "get_master", _returning(active))
     db = _FakeDb([_Result(rows=[old_link])])
 
-    rows = await service.set_relations(
+    rows = await version_service.set_relations(
         cast(AsyncSession, db), version.id, [RelationIn(master_object_id=active.id)]
     )
 
@@ -423,9 +426,9 @@ async def test_relations_reject_inactive_master_and_soft_delete_old_links(
     assert rows[0].code_snapshot == "EQ-NEW"
     assert rows[0].name_snapshot == "新设备"
 
-    monkeypatch.setattr(service, "get_master", _returning(inactive))
+    monkeypatch.setattr(version_service, "get_master", _returning(inactive))
     with pytest.raises(AppException) as error:
-        await service.set_relations(
+        await version_service.set_relations(
             cast(AsyncSession, db),
             version.id,
             [RelationIn(master_object_id=inactive.id)],
@@ -446,13 +449,13 @@ async def test_relations_allow_current_version_but_freeze_history(
         status="active",
     )
     active.id = uuid.uuid4()
-    monkeypatch.setattr(service, "_audit", _async_noop)
-    monkeypatch.setattr(service, "get_master", _returning(active))
+    monkeypatch.setattr(version_service, "_audit", _async_noop)
+    monkeypatch.setattr(version_service, "get_master", _returning(active))
 
     current = _version(status=VersionStatus.CURRENT.value)
     current.locked_at = current.first_locked_at = datetime(2026, 1, 1, tzinfo=UTC)
-    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(current))
-    rows = await service.set_relations(
+    monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(current))
+    rows = await version_service.set_relations(
         cast(AsyncSession, _FakeDb([_Result(rows=[])])),
         current.id,
         [RelationIn(master_object_id=active.id)],
@@ -460,9 +463,9 @@ async def test_relations_allow_current_version_but_freeze_history(
     assert [row.master_object_id for row in rows] == [active.id]
 
     history = _version(status=VersionStatus.HISTORY.value)
-    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(history))
+    monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(history))
     with pytest.raises(AppException) as error:
-        await service.set_relations(
+        await version_service.set_relations(
             cast(AsyncSession, _FakeDb()),
             history.id,
             [RelationIn(master_object_id=active.id)],
@@ -492,11 +495,11 @@ async def test_relations_append_keeps_existing_links_by_default(
         status="active",
     )
     approved.id = uuid.uuid4()
-    monkeypatch.setattr(service, "_audit", _async_noop)
-    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(version))
+    monkeypatch.setattr(version_service, "_audit", _async_noop)
+    monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(version))
     db = _FakeDb([_Result(rows=[kept_link]), _Result(rows=[approved])])
 
-    rows = await service.set_relations_append(
+    rows = await version_service.set_relations_append(
         cast(AsyncSession, db), version.id, [approved.id]
     )
 
@@ -530,11 +533,11 @@ async def test_relations_append_prunes_missing_only_when_explicit(
         status="active",
     )
     kept.id = uuid.uuid4()
-    monkeypatch.setattr(service, "_audit", _async_noop)
-    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(version))
+    monkeypatch.setattr(version_service, "_audit", _async_noop)
+    monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(version))
     db = _FakeDb([_Result(rows=[removed_link]), _Result(rows=[kept])])
 
-    rows = await service.set_relations_append(
+    rows = await version_service.set_relations_append(
         cast(AsyncSession, db), version.id, [kept.id], prune_missing=True
     )
 
@@ -556,13 +559,13 @@ async def test_make_current_moves_previous_to_history_and_locks_versions(
     file_row = SimpleNamespace(sha256="abc123")
     # 第三次是 UPDATE 后的 re-fetch（回填 updated_at），返回被设为当前的 target
     monkeypatch.setattr(
-        service, "get_version", _returning_sequence([target, previous, target])
+        version_service, "get_version", _returning_sequence([target, previous, target])
     )
-    monkeypatch.setattr(service, "get_file_for_version", _returning(file_row))
-    monkeypatch.setattr(service, "_audit", _async_noop)
+    monkeypatch.setattr(version_service, "get_file_for_version", _returning(file_row))
+    monkeypatch.setattr(version_service, "_audit", _async_noop)
     db = _FakeDb([_Result(scalar=document)])
 
-    result = await service.make_current(cast(AsyncSession, db), document.id, target.id)
+    result = await version_service.make_current(cast(AsyncSession, db), document.id, target.id)
 
     assert result is target
     assert document.current_version_id == target.id
@@ -579,11 +582,11 @@ async def test_disable_current_version_is_forbidden(
 ) -> None:
     """当前版本不能直接停用，必须先切换当前指针。"""
     current = _version(status=VersionStatus.CURRENT.value)
-    monkeypatch.setattr(service, "get_version", _returning(current))
-    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(current))
+    monkeypatch.setattr(version_service, "get_version", _returning(current))
+    monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(current))
 
     with pytest.raises(AppException) as error:
-        await service.disable_version(cast(AsyncSession, _FakeDb()), current.id)
+        await version_service.disable_version(cast(AsyncSession, _FakeDb()), current.id)
     assert error.value.status_code == 409
 
 

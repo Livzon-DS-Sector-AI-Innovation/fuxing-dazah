@@ -1,5 +1,6 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App } from 'antd'
 import { UserSelect } from '@/components/shared'
@@ -31,20 +32,33 @@ export function AssigneeConfig({ routes, onChanged }: Props) {
     },
   })
 
-  const getNodeAssignee = (nodeId: string) =>
-    (allAssignments ?? []).find(a => a.node_id === nodeId)
+  // 节点数 × 负责人的双层渲染：先建索引，避免每节点 filter 一次全量分配
+  const assignmentsByNode = useMemo(() => {
+    const m = new Map<string, NodeAssignment[]>()
+    for (const a of allAssignments ?? []) {
+      const list = m.get(a.node_id)
+      if (list) list.push(a)
+      else m.set(a.node_id, [a])
+    }
+    return m
+  }, [allAssignments])
+  const getNodeAssignees = (nodeId: string) => assignmentsByNode.get(nodeId) ?? []
 
   const { data: personnelData } = useQuery({
     queryKey: ['identity-personnel'],
     queryFn: () => fetchIdentityPersonnel({ limit: 9999 }),
     staleTime: 5 * 60 * 1000,
   })
+  // 人员列表 limit=9999，逐 chip 线性扫会被负责人数量放大成 O(n·m)
+  const personnelNameById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const p of personnelData?.items ?? []) m.set(p.id, p.name)
+    return m
+  }, [personnelData])
   const getPersonnelName = (userId: string) =>
-    personnelData?.items?.find(p => p.id === userId)?.name ?? userId.slice(0, 8)
+    personnelNameById.get(userId) ?? userId.slice(0, 8)
 
   const handleAssign = async (nodeId: string, routeId: string, userId: string) => {
-    const existing = (allAssignments ?? []).find(a => a.node_id === nodeId)
-    if (existing) await deleteNodeAssignment(existing.id)
     const r = await createNodeAssignment({ user_id: userId, node_id: nodeId, route_id: routeId })
     if (r.success) {
       queryClient.invalidateQueries({ queryKey: ['production-all-node-assignments'] })
@@ -97,7 +111,7 @@ export function AssigneeConfig({ routes, onChanged }: Props) {
                   borderBottom: '1px solid #f0eeec',
                 }}>
                   {nodes.map((node, ni) => {
-                    const assignee = getNodeAssignee(node.node_id)
+                    const assignees = getNodeAssignees(node.node_id)
                     return (
                       <div key={node.node_id} style={{
                         display: 'flex', alignItems: 'center', gap: 16,
@@ -126,39 +140,41 @@ export function AssigneeConfig({ routes, onChanged }: Props) {
                           {node.node_name}
                         </span>
 
-                        {/* 当前负责人 */}
-                        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                          {assignee ? (
-                            <span style={{
-                              display: 'inline-flex', alignItems: 'center', gap: 4,
-                              padding: '3px 10px', borderRadius: 4,
-                              fontSize: 12, fontWeight: 500,
-                              background: '#e8f8e8', color: '#1aae39',
-                            }}>
-                              {getPersonnelName(assignee.user_id)}
-                              <span
-                                onClick={() => handleRemove(assignee.id)}
-                                style={{
-                                  cursor: 'pointer', fontSize: 12, lineHeight: 1,
-                                  color: '#1aae39', opacity: 0.6,
-                                  padding: '0 2px',
-                                }}
-                                title="移除"
-                              >
-                                ×
+                        {/* 当前负责人（可多人） */}
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          {assignees.length > 0 ? (
+                            assignees.map(assignee => (
+                              <span key={assignee.id} style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 4,
+                                padding: '3px 10px', borderRadius: 4,
+                                fontSize: 12, fontWeight: 500,
+                                background: '#e8f8e8', color: '#1aae39',
+                              }}>
+                                {getPersonnelName(assignee.user_id)}
+                                <span
+                                  onClick={() => handleRemove(assignee.id)}
+                                  style={{
+                                    cursor: 'pointer', fontSize: 12, lineHeight: 1,
+                                    color: '#1aae39', opacity: 0.6,
+                                    padding: '0 2px',
+                                  }}
+                                  title="移除"
+                                >
+                                  ×
+                                </span>
                               </span>
-                            </span>
+                            ))
                           ) : (
                             <span style={{ fontSize: 12, color: '#b5b1a8' }}>未设置</span>
                           )}
                         </div>
 
-                        {/* 选择器 */}
+                        {/* 选择器：累加式，已在名单中的人不可再选 */}
                         <div style={{ width: 220, flexShrink: 0 }}>
                           <UserSelect
                             style={{ width: '100%' }}
-                            placeholder={assignee ? '更换负责人' : '选择负责人'}
-                            excludeIds={assignee ? [assignee.user_id] : []}
+                            placeholder={assignees.length > 0 ? '添加负责人' : '选择负责人'}
+                            excludeIds={assignees.map(a => a.user_id)}
                             onSelect={userId => handleAssign(node.node_id, route.route_id, userId)}
                           />
                         </div>

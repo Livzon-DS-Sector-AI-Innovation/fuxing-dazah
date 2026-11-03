@@ -14,7 +14,9 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
     libffi8 shared-mime-info && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# 走清华 PyPI 装 uv，不直连 ghcr.io（国内无 CDN，拉这个 19MB 镜像常卡几分钟）
+# 锁定版本：保证不同时间构建出的是同一个 uv（与本地开发环境一致）
+RUN pip install --no-cache-dir "uv==0.11.28" -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY pyproject.toml uv.lock* ./
 # 挂载 uv 下载缓存：依赖清单未变时跳过下载，直接复用

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core import storage
+from app.core import file_storage, storage
 from app.modules.qa import file_service
 
 
@@ -40,8 +40,9 @@ def test_store_file_uses_upload_subdir_and_round_trips(
 ) -> None:
     """本地开发存储落在 UPLOAD_DIR/qa 下，并支持读写回环。"""
     upload_dir = tmp_path / "uploads"
+    # UPLOAD_DIR 由 core 的通用存储基座读取，QA 只传模块名
     monkeypatch.setattr(
-        file_service,
+        file_storage,
         "get_settings",
         lambda: SimpleNamespace(UPLOAD_DIR=str(upload_dir)),
     )

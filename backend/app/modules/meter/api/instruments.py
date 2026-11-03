@@ -37,7 +37,7 @@ from app.modules.meter.schemas import (
 logger = logging.getLogger(__name__)
 
 
-@router.get("/overview", summary="仪表总览统计", dependencies=[Depends(_deps.read_any)])
+@router.get("/overview", summary="仪表总览统计", dependencies=[Depends(_deps.overview_read)])
 async def get_meter_overview(
     source: str = Query(default="instrument", pattern="^(instrument|gas_detector)$", description="数据源"),
     db: AsyncSession = Depends(get_db),

@@ -434,6 +434,7 @@ def _classify_pending_starts(
     batch_completed: dict[uuid.UUID, set[uuid.UUID]],
     batch_in_progress: dict[uuid.UUID, set[uuid.UUID]],
     batch_node_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]],
+    batch_rework_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]],
 ) -> list[tuple]:
     """对每个批次的每个已授权节点分类 start_type，返回 [(batch, node, start_type), ...]。
 
@@ -465,7 +466,8 @@ def _classify_pending_starts(
                         and e.from_node_id in completed
                         and e.from_node_id not in in_progress
                     ):
-                        pred_done_at = batch_node_done_at.get(b.id, {}).get(e.from_node_id)
+                        # 仅前驱真实返工（seq>1）且返工完成晚于本节点时，才需向前流转
+                        pred_done_at = batch_rework_done_at.get(b.id, {}).get(e.from_node_id)
                         if pred_done_at and node_done_at and pred_done_at > node_done_at:
                             start_type = "normal"
                             forward_legal = True
@@ -668,12 +670,20 @@ async def query_workbench(
     batch_in_progress: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
     # 每个批次-节点的最新完成时间（返工判断关键：比较前后节点完成时间确定流转方向）
     batch_node_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]] = defaultdict(dict)
+    # 真实返工：同一节点至少完成两次，首次完成之后的完成才算返工。
+    # 结束时间是业务时间、可补录/修改，单看时间倒挂不能认定前驱返工过；
+    # execution_seq 是「第几次开始」（中止也占号），不能直接当返工证据。
+    batch_rework_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]] = defaultdict(dict)
+    completed_seq_times: dict[
+        tuple[uuid.UUID, uuid.UUID], list[tuple[int, datetime]]
+    ] = defaultdict(list)
     if all_batch_ids_for_status:
         for row in (
             await db.execute(
                 select(
                     NodeExecution.batch_id, NodeExecution.node_id,
                     NodeExecution.status, NodeExecution.finished_at,
+                    NodeExecution.execution_seq,
                 ).where(
                     NodeExecution.batch_id.in_(all_batch_ids_for_status),
                     NodeExecution.status.in_(["completed", "in_progress"]),
@@ -687,8 +697,19 @@ async def query_workbench(
                     cur = batch_node_done_at[row.batch_id].get(row.node_id)
                     if cur is None or row.finished_at > cur:
                         batch_node_done_at[row.batch_id][row.node_id] = row.finished_at
+                    completed_seq_times[(row.batch_id, row.node_id)].append(
+                        (row.execution_seq, row.finished_at)
+                    )
             else:
                 batch_in_progress[row.batch_id].add(row.node_id)
+    for (batch_id, node_id), seq_times in completed_seq_times.items():
+        if len(seq_times) < 2:
+            continue
+        seq_times.sort(key=lambda item: item[0])
+        # 首次完成之后都是返工；取返工完成的最晚时间（与补录时间语义一致）
+        batch_rework_done_at[batch_id][node_id] = max(
+            finished_at for _, finished_at in seq_times[1:]
+        )
 
     linked_pairs: set[tuple] = set()
     all_boundary_edge_ids = {
@@ -780,6 +801,7 @@ async def query_workbench(
             batches, permitted_node_ids, node_map,
             edges_by_to, rework_sources, normal_outgoing,
             batch_completed, batch_in_progress, batch_node_done_at,
+            batch_rework_done_at,
         ):
             can_operate = _can_operate_batch(b, node.id)
             if view_mode == "mine" and not can_operate:

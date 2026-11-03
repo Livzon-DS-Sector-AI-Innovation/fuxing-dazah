@@ -16,6 +16,7 @@ from app.modules.research import router as research_router
 from app.modules.safety import router as safety_router
 from app.modules.toolbox import router as toolbox_router
 from app.modules.warehouse import router as warehouse_router
+from app.platform.feedback import router as feedback_router
 from app.platform.identity.api import (
     dept_router,
     impersonation_router,
@@ -62,4 +63,5 @@ api_router.include_router(
 api_router.include_router(quality_router, prefix="/quality", tags=["质量管理"])
 api_router.include_router(qa_router, prefix="/qa", tags=["QA"])
 api_router.include_router(meter_router, prefix="/meter", tags=["仪表管理"])
+api_router.include_router(feedback_router, prefix="/feedback", tags=["系统反馈"])
 api_router.include_router(permission_router, prefix="/permission", tags=["权限管理"])

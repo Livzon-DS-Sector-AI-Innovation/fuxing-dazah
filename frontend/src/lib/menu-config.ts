@@ -90,10 +90,12 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/meter",
     permissions: ["meter:*:read"],
     children: [
-      { key: "overview", label: "仪表总览", path: "/meter" },
-      { key: "instruments", label: "标准计量器具", path: "/meter/instruments" },
-      { key: "gas-detectors", label: "有毒有害可燃探测器", path: "/meter/gas-detectors" },
-      { key: "departments", label: "部门管理", path: "/meter/departments" },
+      // 总览/部门管理是管理侧功能，跟 meter:config:manage 走；
+      // 台账两项对通配码与对应资源码可见，纯查询角色（只授资源码）看不到上面两项
+      { key: "overview", label: "仪表总览", path: "/meter", permissions: ["meter:config:manage"] },
+      { key: "instruments", label: "标准计量器具", path: "/meter/instruments", permissions: ["meter:*:read", "meter:instrument:read"] },
+      { key: "gas-detectors", label: "有毒有害可燃探测器", path: "/meter/gas-detectors", permissions: ["meter:*:read", "meter:gas-detector:read"] },
+      { key: "departments", label: "部门管理", path: "/meter/departments", permissions: ["meter:config:manage"] },
     ],
   },
 
@@ -290,11 +292,15 @@ export const moduleMenus: ModuleMenu[] = [
     label: "QA",
     icon: "document",
     path: "/qa",
-    // 所有登录用户可读；写操作在页面内按 QA 权限码显示。
+    // 与 meter 一致：显式授权读取（授 qa:*:read），写操作在页面内按 QA 权限码显示。
+    permissions: ["qa:*:read"],
     children: [
       { key: "overview", label: "概览", path: "/qa" },
       { key: "master-data", label: "质量主数据", path: "/qa/master-data" },
       { key: "documents", label: "批准文件台账", path: "/qa/documents" },
+      // 偏差/CAPA 有独立读码，持模块通配读码的 QA 人员同样可见。
+      { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:deviation:read", "qa:*:read"] },
+      { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:capa:read", "qa:*:read"] },
       { key: "audit", label: "审计日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
     ],
   },

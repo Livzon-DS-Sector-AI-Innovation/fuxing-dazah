@@ -287,7 +287,7 @@ async def delete_location(
     return True
 
 
-async def _get_category_child_ids(
+async def get_category_ids_inclusive(
     db: AsyncSession,
     parent_id: uuid.UUID,
 ) -> list[uuid.UUID]:
@@ -301,7 +301,7 @@ async def _get_category_child_ids(
     child_ids = list(result.scalars().all())
     all_ids: list[uuid.UUID] = [parent_id]
     for child_id in child_ids:
-        all_ids.extend(await _get_category_child_ids(db, child_id))
+        all_ids.extend(await get_category_ids_inclusive(db, child_id))
     return all_ids
 
 
@@ -455,7 +455,7 @@ async def get_equipments(
     query = apply_equipment_scope(query, ctx, Equipment.department_id, "department_id")
 
     if category_id:
-        category_ids = await _get_category_child_ids(db, category_id)
+        category_ids = await get_category_ids_inclusive(db, category_id)
         query = query.where(
             Equipment.id.in_(
                 select(EquipmentCategoryLink.equipment_id).where(

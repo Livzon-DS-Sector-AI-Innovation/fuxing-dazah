@@ -94,7 +94,7 @@ export function MaintenancePage({
       configMsg.error(result.error)
       return
     }
-    configMsg.success('超时配置保存成功')
+    configMsg.success('派单超时配置保存成功')
   }
 
   const handleSaveAdvanceDays = async () => {
@@ -222,7 +222,7 @@ export function MaintenancePage({
             style={{ marginTop: 16, marginBottom: 16 }}
             items={[{
               key: 'timeout-config',
-              label: '抢单超时配置',
+              label: '派单超时配置',
               children: (
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   {[

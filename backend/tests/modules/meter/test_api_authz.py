@@ -101,3 +101,63 @@ class TestMeterAuthz:
         ):
             resp = await client.put("/api/v1/meter/settings", json={"notify_time": "18:00"})
         assert resp.status_code == 403
+
+    async def test_overview_excludes_ledger_readers(
+        self, api_context: tuple[AsyncClient, Any]
+    ) -> None:
+        """仅持台账读码：总览 403（管理侧数据）；台账页内嵌的到期提醒照常 200。"""
+        client, _ = api_context
+
+        async def _ledger_reader(user_id: str, db: object) -> set[str]:
+            return {"meter:instrument:read", "meter:gas-detector:read"}
+
+        with patch(
+            "app.platform.permission.deps.get_user_permissions", new=_ledger_reader
+        ):
+            overview = await client.get("/api/v1/meter/overview")
+            alerts = await client.get("/api/v1/meter/calibration/alerts")
+        assert overview.status_code == 403
+        assert alerts.status_code == 200
+
+    async def test_overview_requires_config_manage(
+        self, api_context: tuple[AsyncClient, Any]
+    ) -> None:
+        """总览只认 config:manage；到期提醒属台账页，按台账读码放行。"""
+        client, _ = api_context
+
+        async def _wildcard_only(user_id: str, db: object) -> set[str]:
+            return {"meter:*:read"}
+
+        async def _config_only(user_id: str, db: object) -> set[str]:
+            return {"meter:config:manage"}
+
+        with patch(
+            "app.platform.permission.deps.get_user_permissions", new=_wildcard_only
+        ):
+            wildcard_overview = await client.get("/api/v1/meter/overview")
+            wildcard_alerts = await client.get("/api/v1/meter/calibration/alerts")
+        with patch(
+            "app.platform.permission.deps.get_user_permissions", new=_config_only
+        ):
+            config_overview = await client.get("/api/v1/meter/overview")
+            config_alerts = await client.get("/api/v1/meter/calibration/alerts")
+        assert wildcard_overview.status_code == 403
+        assert wildcard_alerts.status_code == 200
+        assert config_overview.status_code == 200
+        # 配置管理员不读台账：台账页的提醒面板对它是隐藏的，接口也不放行
+        assert config_alerts.status_code == 403
+
+    async def test_departments_readable_with_config_manage_only(
+        self, api_context: tuple[AsyncClient, Any]
+    ) -> None:
+        """只持 config:manage 也能读部门列表（部门管理页由该精确码放行）。"""
+        client, _ = api_context
+
+        async def _config_only(user_id: str, db: object) -> set[str]:
+            return {"meter:config:manage"}
+
+        with patch(
+            "app.platform.permission.deps.get_user_permissions", new=_config_only
+        ):
+            resp = await client.get("/api/v1/meter/departments")
+        assert resp.status_code == 200

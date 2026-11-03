@@ -93,15 +93,22 @@ async def _write_progress_safe(
             exec_data = await sessions.get_execution(redis, execution_id)
             if exec_data is None:
                 return
-            if exec_data.get("progress", {}).get(step_id, {}).get("status") in ("done", "failed"):
+            if exec_data.get("progress", {}).get(step_id, {}).get("status") in (
+                "done",
+                "failed",
+            ):
                 return
             sessions.set_progress(exec_data, step_id, percent=percent, message=message)
             await sessions.save_execution(redis, exec_data)
     except Exception:
-        logger.exception("toolbox 进度写入失败 execution=%s step=%s", execution_id, step_id)
+        logger.exception(
+            "toolbox 进度写入失败 execution=%s step=%s", execution_id, step_id
+        )
 
 
-def _make_progress_reporter(redis: Redis, execution_id: str, step_id: str) -> Callable[[int, str], None]:
+def _make_progress_reporter(
+    redis: Redis, execution_id: str, step_id: str
+) -> Callable[[int, str], None]:
     """构造线程安全的进度上报函数：工作线程调用时 schedule 回事件循环写 Redis。"""
     loop = asyncio.get_running_loop()
 
@@ -117,6 +124,30 @@ def _make_progress_reporter(redis: Redis, execution_id: str, step_id: str) -> Ca
     return report
 
 
+def _register_output_files(
+    exec_data: dict[str, Any], result: dict[str, Any] | None
+) -> None:
+    """把工具结果里引用的产物文件（{file_id, filename}，含数组内）登记进会话
+    文件元数据——否则下载端点拿不到原始文件名，Content-Disposition 回退为
+    落盘的 uuid 名（批量下载时用户看到一堆随机码文件的根源）。"""
+    if not result:
+        return
+
+    def _walk(v: Any) -> None:
+        if isinstance(v, dict):
+            fid, fname = v.get("file_id"), v.get("filename")
+            if isinstance(fid, str) and isinstance(fname, str):
+                exec_data["files"][fid] = {"filename": fname}
+            else:
+                for x in v.values():
+                    _walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                _walk(x)
+
+    _walk(result)
+
+
 async def _finish_background(
     redis: Redis,
     execution_id: str,
@@ -129,22 +160,32 @@ async def _finish_background(
         async with sessions.session_lock(execution_id):
             exec_data = await sessions.get_execution(redis, execution_id)
             if exec_data is None:
-                logger.error("toolbox 后台执行收尾时会话不存在 execution=%s", execution_id)
+                logger.error(
+                    "toolbox 后台执行收尾时会话不存在 execution=%s", execution_id
+                )
                 return
             if result is not None:
+                _register_output_files(exec_data, result)
                 sessions.add_step_output(exec_data, step_id, result)
-                sessions.set_progress(exec_data, step_id, percent=100, message="执行完成", status="done")
+                sessions.set_progress(
+                    exec_data, step_id, percent=100, message="执行完成", status="done"
+                )
             else:
                 # 失败保留失败前的进度百分比，避免「失败却显示 100%」
                 prev = exec_data.get("progress", {}).get(step_id) or {}
                 sessions.set_progress(
-                    exec_data, step_id,
+                    exec_data,
+                    step_id,
                     percent=int(prev.get("percent") or 0),
-                    message="执行失败", status="failed", error=error,
+                    message="执行失败",
+                    status="failed",
+                    error=error,
                 )
             await sessions.save_execution(redis, exec_data)
     except Exception:
-        logger.exception("toolbox 后台执行记录保存失败 execution=%s step=%s", execution_id, step_id)
+        logger.exception(
+            "toolbox 后台执行记录保存失败 execution=%s step=%s", execution_id, step_id
+        )
 
 
 async def _run_tool_background(
@@ -161,22 +202,34 @@ async def _run_tool_background(
     except ToolError as e:
         logger.warning(
             "toolbox 后台工具执行失败(预期内) tool=%s step=%s execution=%s: %s",
-            tool.id, step_id, execution_id, e,
+            tool.id,
+            step_id,
+            execution_id,
+            e,
         )
-        await _finish_background(redis, execution_id, step_id, result=None, error=str(e))
+        await _finish_background(
+            redis, execution_id, step_id, result=None, error=str(e)
+        )
         return
     except Exception as e:
         # 内部系统：异常消息写进会话供前端展示，堆栈仅进日志
         logger.exception(
             "toolbox 后台工具执行失败 tool=%s step=%s execution=%s: %s",
-            tool.id, step_id, execution_id, e,
+            tool.id,
+            step_id,
+            execution_id,
+            e,
         )
-        await _finish_background(redis, execution_id, step_id, result=None, error=f"工具执行失败: {e}")
+        await _finish_background(
+            redis, execution_id, step_id, result=None, error=f"工具执行失败: {e}"
+        )
         return
     await _finish_background(redis, execution_id, step_id, result=result)
 
 
-def _tool_to_out(t: Tool, can_use: bool = False, can_config: bool = False) -> dict[str, Any]:
+def _tool_to_out(
+    t: Tool, can_use: bool = False, can_config: bool = False
+) -> dict[str, Any]:
     d = ToolOut.model_validate(t).model_dump(mode="json")
     if t.image:
         d["image"] = f"{TOOL_IMAGE_URL_PREFIX}/{t.image}"
@@ -271,7 +324,9 @@ async def run_step(
         if isinstance(ref, dict) and ref.get("file_ids"):
             for fid in ref["file_ids"]:
                 if storage.resolve_file(execution_id, str(fid)) is None:
-                    return error_response(f"引用的文件不存在: {inp.label}", status_code=400)
+                    return error_response(
+                        f"引用的文件不存在: {inp.label}", status_code=400
+                    )
             continue
         up_list = uploads_for(inp.key)
         if not up_list:
@@ -286,11 +341,15 @@ async def run_step(
                 suffix = Path(up.filename or "").suffix.lower()
                 if allowed and suffix not in allowed:
                     return error_response(
-                        f"文件类型不符: {inp.label} 只接受 {', '.join(sorted(allowed))}", status_code=400
+                        f"文件类型不符: {inp.label} 只接受 {', '.join(sorted(allowed))}",
+                        status_code=400,
                     )
 
     # ── 第二遍：读取并落盘（写盘放线程池，避免阻塞事件循环）──
     file_paths: dict[str, list[str]] = {}
+    file_names: dict[
+        str, list[str]
+    ] = {}  # 原始文件名（与 file_paths 对齐），工具产物命名用
     file_ids: dict[str, list[str]] = {}
     registered: list[tuple[str, str, str]] = []  # (input_key, file_id, filename)
 
@@ -301,18 +360,25 @@ async def run_step(
         if isinstance(ref, dict) and ref.get("file_ids"):
             # 引用本会话已上传文件（{"file_ids": [...]}）
             paths: list[str] = []
+            names: list[str] = []
             for fid in ref["file_ids"]:
                 p = storage.resolve_file(execution_id, str(fid))
                 if p is None:
-                    return error_response(f"引用的文件不存在: {inp.key}", status_code=400)
+                    return error_response(
+                        f"引用的文件不存在: {inp.key}", status_code=400
+                    )
                 paths.append(str(p))
+                meta = exec_data.get("files", {}).get(str(fid), {})
+                names.append(str(meta.get("filename") or Path(p).name))
             file_paths[inp.key] = paths
+            file_names[inp.key] = names
             continue
         up_list = uploads_for(inp.key)
         if not up_list:
             continue
         saved_paths: list[str] = []
         saved_ids: list[str] = []
+        saved_names: list[str] = []
         for up in up_list:
             data = await up.read(MAX_UPLOAD_BYTES + 1)
             if len(data) > MAX_UPLOAD_BYTES:
@@ -323,7 +389,9 @@ async def run_step(
             registered.append((inp.key, fid, up.filename or ""))
             saved_paths.append(str(path))
             saved_ids.append(fid)
+            saved_names.append(up.filename or path.name)
         file_paths[inp.key] = saved_paths
+        file_names[inp.key] = saved_names
         file_ids[inp.key] = saved_ids
 
     # 已有会话的文件登记先落库：工具执行耗时长，失败后客户端仍可引用已上传文件。
@@ -345,6 +413,7 @@ async def run_step(
         prev_outputs=json.loads(json.dumps(exec_data["outputs"])),
         file_paths=file_paths,
         output_dir=storage.exec_dir(execution_id),
+        file_names=file_names,
         config=tool_config,
     )
 
@@ -357,7 +426,10 @@ async def run_step(
         # 登记进用户执行历史：用户中途离开后，重进工具页可经列表端点找回进行中的任务
         try:
             await sessions.remember_execution(
-                redis, str(user.id), execution_id, float(exec_data.get("created_at") or 0.0)
+                redis,
+                str(user.id),
+                execution_id,
+                float(exec_data.get("created_at") or 0.0),
             )
         except Exception:
             # 登记失败不再占位：撤销 running 标记，客户端可重试
@@ -365,7 +437,9 @@ async def run_step(
             raise
         context.report_progress = _make_progress_reporter(redis, execution_id, step_id)
         task = asyncio.create_task(
-            _run_tool_background(redis, tool, step_id, params_dict, context, execution_id)
+            _run_tool_background(
+                redis, tool, step_id, params_dict, context, execution_id
+            )
         )
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
@@ -380,10 +454,13 @@ async def run_step(
         return error_response(str(e), status_code=400)
     except Exception as e:
         # 内部系统：异常消息直接反馈给用户，堆栈仅进日志
-        logger.exception("toolbox 工具执行失败 tool=%s step=%s: %s", tool_id, step_id, e)
+        logger.exception(
+            "toolbox 工具执行失败 tool=%s step=%s: %s", tool_id, step_id, e
+        )
         return error_response(f"工具执行失败: {e}", status_code=500)
 
     sessions.add_files(exec_data, registered)
+    _register_output_files(exec_data, result)
     sessions.add_step_output(exec_data, step_id, result)
     warning: str | None = None
     try:
@@ -398,7 +475,10 @@ async def run_step(
     except Exception:
         # 工具已执行成功，仅记录失败：不再抛 500 误导用户，降级为成功响应附带警告
         logger.exception(
-            "toolbox 执行记录保存失败 tool=%s step=%s execution=%s", tool_id, step_id, execution_id
+            "toolbox 执行记录保存失败 tool=%s step=%s execution=%s",
+            tool_id,
+            step_id,
+            execution_id,
         )
         warning = "执行成功，但执行记录保存失败，刷新页面可能丢失本次结果"
     response = StepRunResponse(
@@ -485,7 +565,9 @@ async def put_tool_grants(
     """
     discover_tools()
     tool = get_tool(tool_id)
-    if tool is None and tool_id not in await _grant_service.list_tool_ids_with_grants(db):
+    if tool is None and tool_id not in await _grant_service.list_tool_ids_with_grants(
+        db
+    ):
         return error_response(f"工具不存在: {tool_id}", status_code=404)
     try:
         await _grant_service.update_tool_grants(
@@ -498,7 +580,9 @@ async def put_tool_grants(
     if target is None:
         # 孤儿行刚被清空：回退为空名单响应（注册工具恒有列表项，不会走到这里）
         target = ToolGrantsOut(tool_id=tool_id, tool_name=tool_id)
-    return success_response(data=target.model_dump(mode="json"), message="使用权限保存成功")
+    return success_response(
+        data=target.model_dump(mode="json"), message="使用权限保存成功"
+    )
 
 
 @router.get("/executions/{execution_id}", summary="执行会话状态")
@@ -541,7 +625,9 @@ def _summarize_execution(exec_data: dict[str, Any]) -> dict[str, Any]:
     # 摘要字段与聚合状态同源：running/failed 取对应步骤（避免失败会话展示
     # 完成步骤的「执行完成 / 100%」矛盾行）；无进度记录则全为空
     candidates = [p for p in progress.values() if p.get("status") == status]
-    latest = max(candidates, key=lambda p: p.get("updated_at") or 0) if candidates else None
+    latest = (
+        max(candidates, key=lambda p: p.get("updated_at") or 0) if candidates else None
+    )
     return {
         "execution_id": exec_data["execution_id"],
         "tool_id": exec_data["tool_id"],
@@ -576,7 +662,10 @@ async def list_my_executions(
         reverse=True,
     )
     return success_response(
-        data=[ExecutionSummaryOut.model_validate(s).model_dump(mode="json") for s in summaries]
+        data=[
+            ExecutionSummaryOut.model_validate(s).model_dump(mode="json")
+            for s in summaries
+        ]
     )
 
 

@@ -274,10 +274,13 @@ class TestStockWarningResponse:
     """StockWarningResponse 库存预警响应 Schema 测试。"""
 
     def test_required_fields_present(self) -> None:
-        """预警响应包含备件信息、库存信息和短缺量。"""
+        """预警响应为扁平结构，字段名对齐前端 StockWarning。"""
         fields = StockWarningResponse.model_fields
-        assert "spare_part" in fields
-        assert "stock" in fields
+        assert "spare_part_id" in fields
+        assert "code" in fields
+        assert "name" in fields
+        assert "current_qty" in fields
+        assert "min_qty" in fields
         assert "shortage" in fields
 
 

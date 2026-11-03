@@ -550,17 +550,26 @@ class TestStockWarningsApi:
     async def test_warnings_includes_low_stock_items(
         self, client: AsyncClient
     ) -> None:
-        """库存不足的备件出现在预警列表且 shortage 计算正确。"""
-        # 需要直接操作数据库创建低库存场景（API 不支持直接设置 safety_qty）
-        # 使用创建备件 + 入库接口，然后通过调整接口触发预警条件不可达
-        # 改为验证接口正常响应即可（repository 层已详细测试预警逻辑）
+        """库存不足的备件出现在预警列表，且字段为前端契约的扁平结构。"""
+        code = f"SP-WARNAPI-{_rand_suffix()}"
+        # 走导入创建低库存场景（API 其它入口不写 safety_qty）
+        content = _make_import_file([
+            [code, "预警API备件", None, "个", None, None, 1.0, 1, 10],
+        ])
+        await client.post(
+            "/api/v1/equipment/spare-parts/import",
+            files={"file": ("预警.xlsx", content, "application/octet-stream")},
+        )
+
         res = await client.get("/api/v1/equipment/spare-parts/stock/warnings")
         assert res.status_code == 200
-        # 预警列表中的每个项都有预期字段
-        for item in res.json()["data"]:
-            assert "spare_part" in item
-            assert "stock" in item
-            assert "shortage" in item
+        items = res.json()["data"]
+        target = next(i for i in items if i["code"] == code)
+        assert target["name"] == "预警API备件"
+        assert target["current_qty"] == 1
+        assert target["min_qty"] == 10
+        assert target["shortage"] == 9
+        assert target["spare_part_id"]
 
 
 # ==================== 消耗流水 ====================
@@ -751,3 +760,366 @@ class TestEquipmentLinkApi:
             json={"equipment_id": eq_id, "quantity": 2},
         )
         assert res2.status_code == 400
+
+
+# ==================== 出库 ====================
+
+
+class TestOutboundStockApi:
+    """POST /api/v1/equipment/spare-parts/{id}/stock/outbound 出库测试。"""
+
+    async def _create_with_stock(self, client: AsyncClient, qty: int) -> str:
+        code = f"SP-OUTAPI-{_rand_suffix()}"
+        res_create = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "出库API备件", "unit": "个",
+        })
+        sp_id = res_create.json()["data"]["id"]
+        await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/inbound",
+            json={"quantity": qty},
+        )
+        return sp_id
+
+    async def test_outbound_decreases_stock(self, client: AsyncClient) -> None:
+        """出库成功后库存减少，备注写入流水。"""
+        sp_id = await self._create_with_stock(client, 30)
+
+        res = await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/outbound",
+            json={"quantity": 5, "remark": "车间领用"},
+        )
+        assert res.status_code == 200
+        assert res.json()["data"]["current_qty"] == 25
+
+        # 流水中可见出库记录
+        res_tx = await client.get("/api/v1/equipment/spare-parts/transactions")
+        tx_items = res_tx.json()["data"]
+        outbound_rows = [
+            t for t in tx_items
+            if t["spare_part_id"] == sp_id and t["transaction_type"] == "出库"
+        ]
+        assert outbound_rows
+        assert outbound_rows[0]["quantity"] == -5
+        assert outbound_rows[0]["remark"] == "车间领用"
+
+    async def test_outbound_exact_qty_clears_stock(self, client: AsyncClient) -> None:
+        """出库数量等于库存时允许（清空）。"""
+        sp_id = await self._create_with_stock(client, 8)
+
+        res = await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/outbound",
+            json={"quantity": 8},
+        )
+        assert res.status_code == 200
+        assert res.json()["data"]["current_qty"] == 0
+
+    async def test_outbound_insufficient_returns_400(self, client: AsyncClient) -> None:
+        """库存不足时返回 400。"""
+        sp_id = await self._create_with_stock(client, 10)
+
+        res = await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/outbound",
+            json={"quantity": 999},
+        )
+        assert res.status_code == 400
+
+    async def test_outbound_zero_quantity_returns_422(self, client: AsyncClient) -> None:
+        """出库数量为 0 时返回 422（校验 ge=1）。"""
+        sp_id = await self._create_with_stock(client, 10)
+
+        res = await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/outbound",
+            json={"quantity": 0},
+        )
+        assert res.status_code == 422
+
+    async def test_outbound_nonexistent_returns_404(self, client: AsyncClient) -> None:
+        """对不存在的备件出库返回 404。"""
+        res = await client.post(
+            f"/api/v1/equipment/spare-parts/{uuid.uuid4()}/stock/outbound",
+            json={"quantity": 1},
+        )
+        assert res.status_code == 404
+
+
+# ==================== Excel 导入 ====================
+
+
+def _make_import_file(rows: list[list[object]]) -> bytes:
+    """构造备件导入 xlsx（表头 + 示例行 + 数据行）。"""
+    import io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "备件管理"
+    ws.append([
+        "备件编码 *", "备件名称 *", "规格型号", "计量单位 *",
+        "备件分类", "默认供应商", "参考单价（元）", "初始库存数量", "安全库存",
+    ])
+    ws.append(["SP-001", "轴承密封圈", "Φ50×Φ34×7", "个", "机械密封", "示例供应商", "85.50", "50", "10"])
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+class TestImportSparePartsApi:
+    """GET/POST /api/v1/equipment/spare-parts/import 备件导入测试。"""
+
+    async def test_template_contains_quantity_headers(self, client: AsyncClient) -> None:
+        """导入模板包含新增的数量/安全库存列。"""
+        import io
+
+        import openpyxl
+
+        res = await client.get("/api/v1/equipment/spare-parts/import/template")
+        assert res.status_code == 200
+
+        wb = openpyxl.load_workbook(io.BytesIO(res.content))
+        assert "备件管理" in wb.sheetnames
+        headers = [c.value for c in wb["备件管理"][1]]
+        assert "初始库存数量" in headers
+        assert "安全库存" in headers
+
+    async def test_import_with_quantity(self, client: AsyncClient) -> None:
+        """带数量导入：建档成功且库存落数量。"""
+        code = f"SP-IMPAPI-{_rand_suffix()}"
+        content = _make_import_file([
+            [code, "导入备件", "DN50", "个", "五金机械", None, 9.9, 12, 3],
+        ])
+
+        res = await client.post(
+            "/api/v1/equipment/spare-parts/import",
+            files={"file": ("备件.xlsx", content, "application/octet-stream")},
+        )
+        assert res.status_code == 200
+        data = res.json()["data"]
+        assert data["imported"] == 1
+        assert data["skipped"] == 0
+
+        res_list = await client.get(
+            "/api/v1/equipment/spare-parts/", params={"keyword": code}
+        )
+        items = res_list.json()["data"]
+        assert items and items[0]["current_qty"] == 12
+
+    async def test_import_existing_code_accumulates(self, client: AsyncClient) -> None:
+        """重复导入同编码：数量累加而非报错。"""
+        code = f"SP-IMPAPI-{_rand_suffix()}"
+        content1 = _make_import_file([
+            [code, "累加备件", None, "个", None, None, 5.0, 10, None],
+        ])
+        await client.post(
+            "/api/v1/equipment/spare-parts/import",
+            files={"file": ("备件1.xlsx", content1, "application/octet-stream")},
+        )
+
+        content2 = _make_import_file([
+            [code, "累加备件", None, "个", None, None, 6.0, 15, None],
+        ])
+        res2 = await client.post(
+            "/api/v1/equipment/spare-parts/import",
+            files={"file": ("备件2.xlsx", content2, "application/octet-stream")},
+        )
+        assert res2.status_code == 200
+        assert res2.json()["data"]["imported"] == 1
+
+        res_list = await client.get(
+            "/api/v1/equipment/spare-parts/", params={"keyword": code}
+        )
+        items = res_list.json()["data"]
+        assert items and items[0]["current_qty"] == 25  # 10 + 15
+
+    async def test_import_overwrite_mode_via_form(self, client: AsyncClient) -> None:
+        """mode 表单参数生效：overwrite 时库存覆盖为表值而非累加。"""
+        code = f"SP-IMPAPI-{_rand_suffix()}"
+        content1 = _make_import_file([
+            [code, "覆盖备件", None, "个", None, None, 5.0, 10, None],
+        ])
+        await client.post(
+            "/api/v1/equipment/spare-parts/import",
+            files={"file": ("备件1.xlsx", content1, "application/octet-stream")},
+        )
+
+        content2 = _make_import_file([
+            [code, "覆盖备件", None, "个", None, None, 5.0, 4, None],
+        ])
+        res = await client.post(
+            "/api/v1/equipment/spare-parts/import",
+            data={"mode": "overwrite"},
+            files={"file": ("备件2.xlsx", content2, "application/octet-stream")},
+        )
+        assert res.status_code == 200
+        assert res.json()["data"]["imported"] == 1
+
+        res_list = await client.get(
+            "/api/v1/equipment/spare-parts/", params={"keyword": code}
+        )
+        items = res_list.json()["data"]
+        assert items and items[0]["current_qty"] == 4  # 覆盖为 4，不是 10 + 4
+
+
+# ==================== 建档库存设置 ====================
+
+
+class TestCreateWithStockSettingsApi:
+    """POST /spare-parts/ 携带库存设置字段建档。"""
+
+    async def test_create_with_stock_settings(self, client: AsyncClient) -> None:
+        """建档带期初/安全库存/库位：库存接口与详情接口都能读到。"""
+        code = f"SP-STOCK-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "带库存建档备件", "unit": "个",
+            "initial_qty": 50, "safety_qty": 10, "min_order_qty": 5,
+            "warehouse_location": "A-01",
+        })
+        assert res.status_code == 200
+        sp_id = res.json()["data"]["id"]
+
+        stock_res = await client.get(f"/api/v1/equipment/spare-parts/{sp_id}/stock")
+        assert stock_res.status_code == 200
+        stock = stock_res.json()["data"]
+        assert stock["current_qty"] == 50
+        assert stock["safety_qty"] == 10
+        assert stock["min_order_qty"] == 5
+        assert stock["warehouse_location"] == "A-01"
+
+        # 详情接口 current_qty 与库存接口一致（修「详情恒 0」）
+        detail_res = await client.get(f"/api/v1/equipment/spare-parts/{sp_id}")
+        assert detail_res.status_code == 200
+        detail = detail_res.json()["data"]
+        assert detail["current_qty"] == 50
+        assert detail["safety_qty"] == 10
+        assert detail["is_low_stock"] is False
+
+    async def test_create_low_stock_flags_detail(self, client: AsyncClient) -> None:
+        """期初低于安全线时详情返回 is_low_stock=True。"""
+        code = f"SP-LOW-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "低库存建档备件", "unit": "个",
+            "initial_qty": 3, "safety_qty": 10,
+        })
+        sp_id = res.json()["data"]["id"]
+        detail = (
+            await client.get(f"/api/v1/equipment/spare-parts/{sp_id}")
+        ).json()["data"]
+        assert detail["is_low_stock"] is True
+
+
+# ==================== 库存设置端点 ====================
+
+
+class TestStockSettingsApi:
+    """PUT /spare-parts/{id}/stock/settings 库存设置。"""
+
+    async def _create_part(self, client: AsyncClient) -> str:
+        code = f"SP-SET-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "设置测试备件", "unit": "个",
+        })
+        return res.json()["data"]["id"]
+
+    async def test_update_settings(self, client: AsyncClient) -> None:
+        """更新安全库存/采购批量/库位，立即生效且不产生流水。"""
+        sp_id = await self._create_part(client)
+        res = await client.put(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/settings",
+            json={"safety_qty": 20, "min_order_qty": 8, "warehouse_location": "B-02"},
+        )
+        assert res.status_code == 200
+        stock = res.json()["data"]
+        assert stock["safety_qty"] == 20
+        assert stock["min_order_qty"] == 8
+        assert stock["warehouse_location"] == "B-02"
+
+        txns = await client.get(
+            "/api/v1/equipment/spare-parts/transactions",
+            params={"spare_part_id": sp_id},
+        )
+        assert txns.json()["meta"]["total"] == 0
+
+    async def test_unset_fields_unchanged(self, client: AsyncClient) -> None:
+        """只传部分字段时其余保持原值。"""
+        sp_id = await self._create_part(client)
+        await client.put(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/settings",
+            json={"safety_qty": 12},
+        )
+        stock = (
+            await client.get(f"/api/v1/equipment/spare-parts/{sp_id}/stock")
+        ).json()["data"]
+        assert stock["safety_qty"] == 12
+        assert stock["min_order_qty"] == 1  # 默认未动
+        assert stock["warehouse_location"] is None
+
+
+# ==================== 删除守卫 ====================
+
+
+class TestDeleteGuardApi:
+    """DELETE /spare-parts/{id} 库存非零拒绝、归零后放行。"""
+
+    async def test_delete_rejected_when_stock_positive(
+        self, client: AsyncClient
+    ) -> None:
+        code = f"SP-DEL-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "删除守卫备件", "unit": "个",
+            "initial_qty": 5,
+        })
+        sp_id = res.json()["data"]["id"]
+
+        del_res = await client.delete(f"/api/v1/equipment/spare-parts/{sp_id}")
+        assert del_res.status_code == 400
+        assert "盘点归零" in del_res.json()["message"]
+
+        # 盘点归零后可删除
+        await client.post(
+            f"/api/v1/equipment/spare-parts/{sp_id}/stock/adjust",
+            json={"new_qty": 0},
+        )
+        del_res2 = await client.delete(f"/api/v1/equipment/spare-parts/{sp_id}")
+        assert del_res2.status_code == 200
+
+
+# ==================== 流水筛选 ====================
+
+
+class TestTransactionsFiltersApi:
+    """GET /spare-parts/transactions 按备件/日期区间筛选。"""
+
+    async def test_filter_by_spare_part_and_date(
+        self, client: AsyncClient
+    ) -> None:
+        import uuid as _uuid
+        from datetime import UTC, datetime, timedelta
+
+        code = f"SP-TXN-{_rand_suffix()}"
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": code, "name": "流水筛选备件", "unit": "个",
+            "initial_qty": 30,
+        })
+        sp_id = res.json()["data"]["id"]
+
+        # 按备件过滤：只看到该备件的流水
+        res_sp = await client.get(
+            "/api/v1/equipment/spare-parts/transactions",
+            params={"spare_part_id": sp_id},
+        )
+        items = res_sp.json()["data"]
+        assert len(items) == 1
+        assert items[0]["spare_part_id"] == sp_id
+        assert items[0]["transaction_type"] == "入库"
+        assert items[0]["operator_name"] is not None
+
+        # 未来区间查不到
+        future = datetime.now(UTC) + timedelta(days=1)
+        res_future = await client.get(
+            "/api/v1/equipment/spare-parts/transactions",
+            params={"spare_part_id": _uuid.uuid4(), "date_from": future.isoformat()},
+        )
+        assert res_future.json()["meta"]["total"] == 0

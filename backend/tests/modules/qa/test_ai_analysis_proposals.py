@@ -14,7 +14,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
-from app.modules.qa import ai_analysis, service
+from app.modules.qa import service
+from app.modules.qa.service import ai_analysis
 from app.platform.identity.models import User
 
 
@@ -280,6 +281,7 @@ async def test_reject_all_proposals_rejects_pending_and_skips_unauthorized(
 
 @pytest.mark.asyncio
 async def test_reject_all_proposals_without_pending_is_noop() -> None:
+    """提案箱没有待审提案时一键拒绝是安全空操作，不报错也不计数。"""
     db = _FakeDb([_Result(rows=[])])
     rejected, skipped = await ai_analysis.reject_all_proposals(db, None)
     assert (rejected, skipped) == (0, 0)

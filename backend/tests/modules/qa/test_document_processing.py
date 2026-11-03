@@ -7,10 +7,15 @@ import json
 
 from docx import Document
 
-from app.modules.qa.document_processing import RawBlock, build_chunks, parse_document
+from app.modules.qa.processing.document import RawBlock, build_chunks, parse_document
 
 
 def test_docx_preserves_body_interleaving_and_table_grid() -> None:
+    """DOCX 解析保留段落与表格的正文交错顺序及表格行列网格。
+
+    顺序错了证据定位会指到错误位置；单元格列号是后续按列对齐
+    表格数据的前提。
+    """
     document = Document()
     document.add_paragraph("段落一")
     table = document.add_table(rows=2, cols=2)
@@ -40,6 +45,11 @@ def test_docx_preserves_body_interleaving_and_table_grid() -> None:
 
 
 def test_chunk_rebuild_is_deterministic_and_maps_table_rows() -> None:
+    """同一文件重复解析得到完全一致的分块，且每个 chunk 可回溯到原文。
+
+    确定性保证重跑解析不会让已有 AI 证据/关联错位；chunk 到 raw
+    block 的映射是「证据可点回原文」的基础。
+    """
     document = Document()
     document.add_heading("SOP", level=1)
     for index in range(20):
@@ -59,6 +69,11 @@ def test_chunk_rebuild_is_deterministic_and_maps_table_rows() -> None:
 
 
 def test_chunk_respects_token_estimate_for_long_cjk_block() -> None:
+    """超长中文块会被拆分为多个 chunk，且字符数与 token 估算都不越界。
+
+    AI 分析与检索都按 chunk 送入，单块过大要么被截断丢内容、要么
+    超出模型上下文。
+    """
     block = RawBlock("中" * 4000, "paragraph:1", 1)
 
     chunks = build_chunks([block])
@@ -69,6 +84,11 @@ def test_chunk_respects_token_estimate_for_long_cjk_block() -> None:
 
 
 def test_long_table_header_is_bounded_in_derived_chunks_but_kept_as_raw_evidence() -> None:
+    """异常长的表头在派生 chunk 里截断，但原文证据仍完整保留。
+
+    表头要拼进每个数据行的检索文本；不设界一个病态表头就能吃掉
+    整块预算，而 raw block 层不能丢内容——那是审计证据。
+    """
     blocks = [
         RawBlock("中" * 5000, "table:1/row:1", 1, "table_header", table_index=1),
         RawBlock("行" * 20, "table:1/row:2", 2, "table_row", table_index=1),
@@ -83,6 +103,10 @@ def test_long_table_header_is_bounded_in_derived_chunks_but_kept_as_raw_evidence
 
 
 def test_docx_preserves_horizontal_and_vertical_merge_metadata() -> None:
+    """合并单元格的合并方向（纵向 restart/continue）随单元格一起保留。
+
+    合并信息丢了，跨行字段会被读成多个独立值，表格语义就错了。
+    """
     document = Document()
     table = document.add_table(rows=3, cols=2)
     table.cell(0, 0).text = "字段"
@@ -103,6 +127,7 @@ def test_docx_preserves_horizontal_and_vertical_merge_metadata() -> None:
 
 
 def test_docx_marks_repeated_table_header_for_derived_deduplication() -> None:
+    """跨页重复表头被识别标记，派生文本只保留一份但原文映射不丢。"""
     document = Document()
     table = document.add_table(rows=3, cols=2)
     table.cell(0, 0).text = "编码"
@@ -123,6 +148,7 @@ def test_docx_marks_repeated_table_header_for_derived_deduplication() -> None:
 
 
 def test_duplicate_table_header_keeps_raw_mapping_without_duplicate_text() -> None:
+    """重复表头不出现在派生文本里，但 block 偏移仍完整指向原文。"""
     blocks = [
         RawBlock("编码 | 名称", "table:1/row:1", 1, "table_header", table_index=1),
         RawBlock("P-01 | 产品", "table:1/row:2", 2, "table_row", table_index=1),
@@ -140,6 +166,7 @@ def test_duplicate_table_header_keeps_raw_mapping_without_duplicate_text() -> No
 
 
 def test_scan_pdf_is_reserved_without_ocr() -> None:
+    """无文本层的扫描 PDF 明确标记为「无文本」而非伪造正文；OCR 模式预留。"""
     import fitz
 
     pdf = fitz.open()
@@ -153,6 +180,10 @@ def test_scan_pdf_is_reserved_without_ocr() -> None:
 
 
 def test_pdf_two_columns_keep_column_reading_order_and_coordinates() -> None:
+    """双栏 PDF 按先左栏后右栏的阅读顺序输出，并保留每块坐标。
+
+    逐行输出会把左右栏句子交错成天书；坐标是证据高亮的定位依据。
+    """
     import fitz
 
     pdf = fitz.open()
@@ -178,6 +209,11 @@ def test_pdf_two_columns_keep_column_reading_order_and_coordinates() -> None:
 
 
 def test_mineru_markdown_uses_one_atomic_chunk_for_a_table() -> None:
+    """MinerU 结果里的整张表格作为一个原子 chunk，不被拆散。
+
+    表格拆行后行与表头失联，AI 抽实体、检索按列查都会读错；标题
+    路径随 chunk 保留，便于按章节过滤。
+    """
     markdown = """# 物料清单
 
 说明段落。
@@ -210,6 +246,7 @@ def test_mineru_markdown_uses_one_atomic_chunk_for_a_table() -> None:
 
 
 def test_mineru_markdown_keeps_code_and_list_boundaries() -> None:
+    """MinerU 正文里代码块与列表项保持独立块类型，并归属所在标题路径。"""
     markdown = """# 操作步骤
 
 1. 检查设备
@@ -234,6 +271,7 @@ print('ok')
 
 
 def test_mineru_structured_json_keeps_table_and_page_metadata() -> None:
+    """MinerU 结构化 JSON 输入同样落成块/原子表格 chunk，并保留页码与坐标。"""
     payload = {
         "pdf_info": [
             {
@@ -260,6 +298,7 @@ def test_mineru_structured_json_keeps_table_and_page_metadata() -> None:
 
 
 def test_mineru_oversized_markdown_table_remains_one_chunk() -> None:
+    """超尺寸表格宁可标记 oversized 也保持单 chunk，不破坏原子性。"""
     rows = "\n".join(f"| {i} | {'值' * 1000} |" for i in range(8))
     markdown = f"| 编号 | 说明 |\n| --- | --- |\n{rows}"
 

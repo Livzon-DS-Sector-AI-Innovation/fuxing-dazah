@@ -973,6 +973,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
 
           <ReleaseConfirmModal
             orderId={order.id}
+            orderNo={order.order_no}
             open={releaseModalOpen}
             items={order.items}
             onClose={() => setReleaseModalOpen(false)}
