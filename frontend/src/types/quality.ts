@@ -854,6 +854,17 @@ export interface EnvTrend {
   items: { record_date: string; result_value: number | null; judge: 'pass' | 'alert' | 'action' | null }[]
 }
 
+export interface EnvPlan {
+  id: string
+  plan_date: string
+  room: string
+  point_no: string
+  monitor_type: EnvMonitorType
+  frequency: 'weekly' | 'monthly' | null
+  completed: boolean
+  completed_at: string | null
+}
+
 export interface BatchRelease {
   id: string
   batch_no: string

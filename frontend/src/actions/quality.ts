@@ -42,6 +42,7 @@ import type {
   EnvPoint,
   EnvRecord,
   EnvTrend,
+  EnvPlan,
   QualityAlerts,
   StocktakeItem,
   MonthlyReportItem,
@@ -1819,6 +1820,15 @@ export async function fetchEnvTrend(pointId: string, days = 90): Promise<{ data:
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取趋势失败')
+  return res.json()
+}
+
+export async function fetchEnvPlans(date?: string): Promise<{ data: { date: string; items: EnvPlan[] } }> {
+  const q = date ? `?date=${encodeURIComponent(date)}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/env/plans${q}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取周期计划失败')
   return res.json()
 }
 

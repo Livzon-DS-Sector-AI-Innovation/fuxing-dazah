@@ -8,10 +8,11 @@ import {
 import { DownloadOutlined, ImportOutlined, LineChartOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
-import type { EnvMonitorType, EnvPoint, EnvRecord, EnvTrend } from '@/types/quality'
+import type { EnvMonitorType, EnvPlan, EnvPoint, EnvRecord, EnvTrend } from '@/types/quality'
 import {
   fetchEnvPoints, createEnvPoint, updateEnvPoint, deleteEnvPoint,
   fetchEnvRecords, createEnvRecord, deleteEnvRecord, exportEnvRecords, fetchEnvTrend,
+  fetchEnvPlans,
   handleEnvRecord, importEnvPoints, importEnvRecords, downloadEnvImportTemplate,
 } from '@/actions/quality'
 import { EnvTrendChart } from '@/components/quality'
@@ -208,6 +209,28 @@ export default function EnvMonitor() {
     }
   }
 
+  // ─── 周期计划（3b） ───
+  const [plans, setPlans] = useState<EnvPlan[]>([])
+  const [plansLoading, setPlansLoading] = useState(false)
+  const [planDate, setPlanDate] = useState<Dayjs>(dayjs())
+
+  const loadPlans = useCallback(async (date: Dayjs) => {
+    setPlansLoading(true)
+    try {
+      const res = await fetchEnvPlans(date.format('YYYY-MM-DD'))
+      setPlans(res.data.items)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '获取周期计划失败')
+      setPlans([])
+    } finally {
+      setPlansLoading(false)
+    }
+  }, [message])
+
+  useEffect(() => {
+    if (tab === 'plans') { void loadPlans(planDate) }
+  }, [tab, planDate, loadPlans])
+
   // ─── 趋势图 ───
   const [trendOpen, setTrendOpen] = useState(false)
   const [trendPointId, setTrendPointId] = useState<string | undefined>()
@@ -366,6 +389,21 @@ export default function EnvMonitor() {
     },
   ]
 
+  const planColumns = [
+    { title: '房间/区域', dataIndex: 'room', width: 150 },
+    { title: '点位', dataIndex: 'point_no', width: 110 },
+    {
+      title: '类型', dataIndex: 'monitor_type', width: 95,
+      render: (v: EnvMonitorType) => <Tag color={TYPE_META[v]?.color}>{TYPE_META[v]?.label ?? v}</Tag>,
+    },
+    { title: '频次', dataIndex: 'frequency', width: 80, render: (v: string | null) => (v ? FREQ_META[v] ?? v : '-') },
+    {
+      title: '状态', dataIndex: 'completed', width: 100,
+      render: (v: boolean) => (v ? <Tag color="green">已完成</Tag> : <Tag color="red">未完成</Tag>),
+    },
+    { title: '完成时间', dataIndex: 'completed_at', width: 120, render: (v: string | null) => v ?? '-' },
+  ]
+
   return (
     <>
       <Tabs
@@ -436,6 +474,27 @@ export default function EnvMonitor() {
                 <Table
                   rowKey="id" size="small" loading={recordsLoading} dataSource={records}
                   scroll={{ x: 1150 }} pagination={{ pageSize: 20 }} columns={recordColumns}
+                />
+              </>
+            ),
+          },
+          {
+            key: 'plans',
+            label: '周期计划',
+            children: (
+              <>
+                <Space wrap style={{ marginBottom: 12 }}>
+                  <DatePicker value={planDate} allowClear={false} onChange={(v) => v && setPlanDate(v)} />
+                  <Typography.Text type="secondary">
+                    应测 {plans.length} 个点位 · 已完成 {plans.filter((p) => p.completed).length} · 未完成 {plans.filter((p) => !p.completed).length}
+                    （每周/每月频次点位自动生成，完成状态按当日填报记录判定）
+                  </Typography.Text>
+                </Space>
+                <Table
+                  rowKey="id" size="small" loading={plansLoading} dataSource={plans}
+                  scroll={{ x: 700 }} pagination={{ pageSize: 20 }}
+                  locale={{ emptyText: plansLoading ? '加载中...' : '当日无应测计划（每周/每月频次点位本周期已测或无启用点位）' }}
+                  columns={planColumns}
                 />
               </>
             ),
