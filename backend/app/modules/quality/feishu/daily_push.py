@@ -192,8 +192,9 @@ async def _push_material_alerts() -> None:
     )
     from app.modules.quality.feishu.message import send_chat_text
     from app.modules.quality.repository import (
-        env_missed_points,
+        generate_env_plans,
         lab_expiry_alerts,
+        list_env_plans,
         list_env_records,
         list_inspection_plans,
         material_expiry_alerts,
@@ -214,19 +215,24 @@ async def _push_material_alerts() -> None:
         supplier_alerts = await supplier_qual_alerts(db)
         lab_alerts = await lab_expiry_alerts(db)
         retained_alerts = await retained_destroy_alerts(db)
-        env_missed = await env_missed_points(db)
         env_open = await list_env_records(db, judge="action", handle_status="open")
+        await generate_env_plans(db, today)
+        env_plans = await list_env_plans(db, today)
         today_plans = await list_inspection_plans(db, date_str=_app_today().isoformat())
     blocks: list[str] = []
-    if env_missed:
+    if env_plans:
         type_label = {"settle": "沉降菌", "float": "浮游菌", "particle": "悬浮粒子", "temp_humidity": "温湿度", "pressure": "压差"}
-        freq_label = {"weekly": "每周", "monthly": "每月"}
-        lines = [
-            f"- {m['room']} {m['point_no']}（{type_label.get(m['monitor_type'], m['monitor_type'])}｜{freq_label.get(m['frequency'], m['frequency'])}）"
-            + (f"上次检测 {m['last_date']}" if m["last_date"] else "尚无检测记录")
-            for m in env_missed
-        ]
-        blocks.append(f"环境监测欠账（{len(env_missed)} 个点位本周/本月应测未测，请安排检测）：\n" + "\n".join(lines))
+        pending = [x for x in env_plans if not x["completed"]]
+        if pending:
+            lines = [
+                f"- {x['room']} {x['point_no']}（{type_label.get(x['monitor_type'], x['monitor_type'])}）"
+                for x in pending
+            ]
+            blocks.append(
+                f"环境监测今日计划（应测 {len(env_plans)} 个点位，已完成 {len(env_plans) - len(pending)}，未完成 {len(pending)}）：\n"
+                + "\n".join(lines)
+                + "\n完成请飞书填报：环境 点位 P001 值 5"
+            )
     if env_open:
         lines = [
             f"- {r['room']} {r['point_no']} {r['record_date']} 结果 {r['result_value']}（行动限 {r['action_limit']}）"

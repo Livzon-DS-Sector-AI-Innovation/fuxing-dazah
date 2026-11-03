@@ -2,6 +2,7 @@
 
 from app.modules.quality.models._env import (  # noqa: F401
     QualityBatchRelease,
+    QualityEnvPlan,
     QualityEnvPoint,
     QualityEnvRecord,
     QualityShiftConfig,
@@ -43,4 +44,4 @@ from app.modules.quality.models._tasks import (  # noqa: F401
     QualityTestTask,
 )
 
-__all__ = ['InspectionRecord', 'InspectionImpurity', 'ReportRecord', 'QualityStandardDocument', 'QualityStandardItem', 'CoaTemplateBinding', 'LcTemplateConfig', 'QualityTestTask', 'QualityTaskAttachment', 'QualityTaskReview', 'QualityTestResult', 'QualityTaskAssignment', 'QualityMaterial', 'QualityMaterialContainer', 'QualityContainerMovement', 'QualitySupplier', 'QualityStocktakeSheet', 'QualityStocktakeItem', 'QualityMaterialRequest', 'QualityMaterialStandard', 'QualityMaterialStandardItem', 'QualityLabItem', 'QualityInspectionPlan', 'QualityMicroRecord', 'QualityRetainedSample', 'QualityEnvPoint', 'QualityEnvRecord', 'QualityBatchRelease', 'QualityShiftTeam', 'QualityShiftConfig']
+__all__ = ['InspectionRecord', 'InspectionImpurity', 'ReportRecord', 'QualityStandardDocument', 'QualityStandardItem', 'CoaTemplateBinding', 'LcTemplateConfig', 'QualityTestTask', 'QualityTaskAttachment', 'QualityTaskReview', 'QualityTestResult', 'QualityTaskAssignment', 'QualityMaterial', 'QualityMaterialContainer', 'QualityContainerMovement', 'QualitySupplier', 'QualityStocktakeSheet', 'QualityStocktakeItem', 'QualityMaterialRequest', 'QualityMaterialStandard', 'QualityMaterialStandardItem', 'QualityLabItem', 'QualityInspectionPlan', 'QualityMicroRecord', 'QualityRetainedSample', 'QualityEnvPlan', 'QualityEnvPoint', 'QualityEnvRecord', 'QualityBatchRelease', 'QualityShiftTeam', 'QualityShiftConfig']

@@ -127,3 +127,24 @@ class QualityBatchRelease(BaseModel):
     released_at: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="放行日期 YYYY-MM-DD")
     release_remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="放行备注")
     remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityEnvPlan(BaseModel):
+    """环境监测周期计划（3b）：每日为应测点位生成计划行，完成状态按当日记录派生。"""
+
+    __tablename__ = "quality_env_plans"
+    __table_args__ = (
+        Index("ix_quality_env_plan_date", "plan_date"),
+        Index(
+            "uq_quality_env_plan_point_date", "point_id", "plan_date",
+            unique=True, postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    plan_date: Mapped[str] = mapped_column(String(10), nullable=False, comment="应测日期 YYYY-MM-DD")
+    point_id: Mapped[uuid.UUID] = mapped_column(nullable=False, comment="监测点，逻辑引用 quality_env_points.id")
+    room: Mapped[str] = mapped_column(String(128), nullable=False, comment="房间快照")
+    point_no: Mapped[str] = mapped_column(String(64), nullable=False, comment="点位编号快照")
+    monitor_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="监测类型快照")
+    frequency: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="频次快照")

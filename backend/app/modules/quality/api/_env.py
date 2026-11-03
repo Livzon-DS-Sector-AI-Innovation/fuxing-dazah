@@ -169,6 +169,27 @@ async def env_trend_endpoint(
     return success_response(data=data)
 
 
+@router.get("/env/plans", summary="环境监测周期计划（某日应测清单，查看时自动补生成）")
+async def env_plans_endpoint(
+    date: str | None = Query(default=None, description="YYYY-MM-DD，默认今天"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:env:read")),
+) -> JSONResponse:
+    from datetime import date as _date
+
+    from app.core.time import today as _today
+    from app.modules.quality.repository import generate_env_plans, list_env_plans
+
+    on_date = date or _today().isoformat()
+    try:
+        _date.fromisoformat(on_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="date 格式应为 YYYY-MM-DD")
+    await generate_env_plans(db, on_date)
+    items = await list_env_plans(db, on_date)
+    return success_response(data={"date": on_date, "items": items})
+
+
 @router.get("/env/records", summary="环境监测记录列表")
 async def list_env_records_endpoint(
     point_id: uuid.UUID | None = Query(default=None),

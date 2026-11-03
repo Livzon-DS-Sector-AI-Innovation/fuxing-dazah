@@ -9,6 +9,7 @@ from sqlalchemy.orm import aliased
 
 from app.modules.quality.models import (
     QualityBatchRelease,
+    QualityEnvPlan,
     QualityEnvPoint,
     QualityEnvRecord,
     QualityShiftConfig,
@@ -195,6 +196,86 @@ async def env_missed_points(db: AsyncSession) -> list[dict[str, Any]]:
                 "last_date": last,
             })
     return out
+
+
+async def generate_env_plans(db: AsyncSession, on_date: str) -> int:
+    """为某日生成应测计划（3b）：weekly 本周无记录 / monthly 本月无记录 的启用点位。
+
+    幂等：同 (point_id, plan_date) 已存在则跳过（唯一索引兜底）。返回本次新增行数。
+    """
+    from datetime import date as _date
+    from datetime import timedelta
+
+    d = _date.fromisoformat(on_date)
+    week_start = (d - timedelta(days=d.weekday())).isoformat()
+    month_start = d.replace(day=1).isoformat()
+    points = (await db.execute(
+        select(QualityEnvPoint).where(
+            QualityEnvPoint.is_deleted == False,  # noqa: E712
+            QualityEnvPoint.status == "active",
+            QualityEnvPoint.frequency.in_(["weekly", "monthly"]),
+        )
+    )).scalars()
+    existing = {
+        (str(p.point_id), p.plan_date)
+        for p in (await db.execute(
+            select(QualityEnvPlan).where(
+                QualityEnvPlan.plan_date == on_date,
+                QualityEnvPlan.is_deleted == False,  # noqa: E712
+            )
+        )).scalars()
+    }
+    created = 0
+    for p in points:
+        if (str(p.id), on_date) in existing:
+            continue
+        threshold = week_start if p.frequency == "weekly" else month_start
+        last = (await db.execute(
+            select(func.max(QualityEnvRecord.record_date)).where(
+                QualityEnvRecord.point_id == p.id,
+                QualityEnvRecord.is_deleted == False,  # noqa: E712
+            )
+        )).scalar_one_or_none()
+        if last is None or last < threshold:
+            db.add(QualityEnvPlan(
+                plan_date=on_date, point_id=p.id, room=p.room,
+                point_no=p.point_no, monitor_type=p.monitor_type, frequency=p.frequency,
+            ))
+            created += 1
+    await db.flush()
+    return created
+
+
+async def list_env_plans(db: AsyncSession, plan_date: str) -> list[dict[str, Any]]:
+    """某日应测计划 + 完成状态（该点位当天有记录即视为完成，状态派生）。"""
+    plans = (await db.execute(
+        select(QualityEnvPlan).where(
+            QualityEnvPlan.plan_date == plan_date,
+            QualityEnvPlan.is_deleted == False,  # noqa: E712
+        ).order_by(QualityEnvPlan.room, QualityEnvPlan.point_no)
+    )).scalars()
+    done: dict[str, str] = {}
+    if plans:
+        recs = (await db.execute(
+            select(QualityEnvRecord.point_id, func.max(QualityEnvRecord.record_date)).where(
+                QualityEnvRecord.record_date == plan_date,
+                QualityEnvRecord.is_deleted == False,  # noqa: E712
+            ).group_by(QualityEnvRecord.point_id)
+        )).all()
+        done = {str(r[0]): r[1] for r in recs if r[1]}
+    return [
+        {
+            "id": str(p.id),
+            "plan_date": p.plan_date,
+            "room": p.room,
+            "point_no": p.point_no,
+            "monitor_type": p.monitor_type,
+            "frequency": p.frequency,
+            "completed": str(p.point_id) in done,
+            "completed_at": done.get(str(p.point_id)),
+        }
+        for p in plans
+    ]
 
 
 async def delete_env_record(db: AsyncSession, rid: uuid.UUID) -> bool:
