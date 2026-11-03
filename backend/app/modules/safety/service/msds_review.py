@@ -49,7 +49,11 @@ FIELD_REVISION_LOG = "修订记录"
 TYPO_STATUS_UNREVIEWED = "未审核"
 TYPO_STATUS_CLEAN = "无错别字"
 TYPO_STATUS_SUSPECT = "疑似错别字"
-TYPO_STATUS_OPTIONS = (TYPO_STATUS_UNREVIEWED, TYPO_STATUS_CLEAN, TYPO_STATUS_SUSPECT)
+TYPO_STATUS_AUTOFIXED = "已自动修正"
+TYPO_STATUS_OPTIONS = (
+    TYPO_STATUS_UNREVIEWED, TYPO_STATUS_CLEAN,
+    TYPO_STATUS_SUSPECT, TYPO_STATUS_AUTOFIXED,
+)
 
 # 修订记录最多保留行数（追加裁剪，防无限增长撑爆单元格）
 REVISION_LOG_MAX_LINES = 20
@@ -226,8 +230,13 @@ MSDS_PROOFREAD_SYSTEM_PROMPT = """你是中文化学品安全技术说明书（M
 4. 「无资料」「/」「无意义」等占位原样保留，不算错别字。
 5. 不确定时不标记（宁漏勿误）。
 
+置信度分级（confidence，用于自动修正决策）：
+- "high"：确定性错别字——仅限单字或两字内的同音/形近/字序替换（如
+  「迅术→迅速」「眼晴→眼睛」「灼烧感→烧灼感」），修正后语义不变。
+- "low"：疑似但需人工确认（涉及多字改动、专业措辞、语义可能变化）。
+
 输出 JSON：
-{"issues": [{"field": "字段名(原样返回)", "original": "原文错误片段(≤20字)", "suggestion": "修正后片段", "reason": "错别字类型,如 形近字/字序颠倒"}]}
+{"issues": [{"field": "字段名(原样返回)", "original": "原文错误片段(≤20字)", "suggestion": "修正后片段", "reason": "错别字类型,如 形近字/字序颠倒", "confidence": "high|low"}]}
 无错别字输出 {"issues": []}。禁止输出任何其他文字。"""
 
 
@@ -237,7 +246,11 @@ def _clip(text: Any, limit: int = 60) -> str:
 
 
 def _validate_issues(raw_issues: Iterable[Any]) -> list[dict[str, str]]:
-    """过滤/裁剪 AI 输出：字段名须在已知清单，片段非空，条数≤30。"""
+    """过滤/裁剪 AI 输出：字段名须在已知清单，片段非空，条数≤30。
+
+    confidence 规则：AI 未给或非法值一律降为 low；只有 1-2 字内的纯替换
+    才允许 high（自动修正安全阀，防长片段改写）。
+    """
     known_fields = set(_FIELD_LABELS.values()) | set(_FIELD_LABELS.keys())
     valid: list[dict[str, str]] = []
     for item in raw_issues:
@@ -250,11 +263,20 @@ def _validate_issues(raw_issues: Iterable[Any]) -> list[dict[str, str]]:
             continue
         if not original or not suggestion or original == suggestion:
             continue
+        confidence = str(item.get("confidence") or "low").lower()
+        # 自动修正安全阀：high 仅限 1-2 字片段的等长或近长替换
+        if confidence == "high" and not (
+            len(original) <= 2
+            and abs(len(suggestion) - len(original)) <= 1
+            and len(set(suggestion) & set(original)) >= 1  # 至少一字符相同（替换非重写）
+        ):
+            confidence = "low"
         valid.append({
             "field": field,
             "original": original,
             "suggestion": suggestion,
             "reason": _clip(item.get("reason"), 30) or "疑似错别字",
+            "confidence": confidence,
         })
         if len(valid) >= 30:
             break
@@ -301,21 +323,76 @@ async def proofread_entry(entry: Mapping[str, Any]) -> list[dict[str, str]]:
     return _validate_issues(raw)
 
 
-def typo_review_fields(issues: list[dict[str, str]]) -> dict[str, str]:
-    """校对结果 → 台账表写字段（单选状态 + 明细文本）。"""
+def apply_issues(
+    entry: Mapping[str, Any],
+    issues: list[dict[str, str]],
+) -> tuple[dict[str, Any], list[dict[str, str]], list[dict[str, str]]]:
+    """把 proofread_entry 的 issues 应用到 entry：high 修正 / low 标记。"""
+    fixed = dict(entry)
+    applied: list[dict[str, str]] = []
+    flagged: list[dict[str, str]] = []
+    key_by_label = {label: key for key, label in _FIELD_LABELS.items()}
+    key_by_label.update({key: key for key in _FIELD_LABELS})
+    for issue in issues:
+        key = key_by_label.get(issue["field"])
+        if not key:
+            continue
+        text = fixed.get(key)
+        if not isinstance(text, str) or issue["original"] not in text:
+            flagged.append(issue)  # 原文定位失败（数据已变），留给人工
+            continue
+        if issue.get("confidence") == "high":
+            fixed[key] = text.replace(issue["original"], issue["suggestion"], 1)
+            applied.append({**issue, "key": key})
+        else:
+            flagged.append(issue)
+    return fixed, applied, flagged
+
+
+def typo_review_fields(
+    applied: list[dict[str, str]] | None = None,
+    flagged: list[dict[str, str]] | None = None,
+    issues: list[dict[str, str]] | None = None,
+) -> dict[str, str]:
+    """校对结果 → 台账表写字段（单选状态 + 明细文本）。
+
+    2026-11-03 审核前置后主入口为 (applied, flagged) 双列表形态；
+    issues 兼容旧「仅标记」调用（视为全 flagged）。状态：
+    有已修正 → 已自动修正；仅待人工 → 疑似错别字；全空 → 无错别字。
+    """
+    if issues is not None and applied is None and flagged is None:
+        applied, flagged = [], issues
+    applied = applied or []
+    flagged = flagged or []
+    if applied:
+        status = TYPO_STATUS_AUTOFIXED
+    elif flagged:
+        status = TYPO_STATUS_SUSPECT
+    else:
+        status = TYPO_STATUS_CLEAN
     return {
-        FIELD_TYPO_STATUS: TYPO_STATUS_SUSPECT if issues else TYPO_STATUS_CLEAN,
-        FIELD_TYPO_DETAIL: format_typo_detail(issues),
+        FIELD_TYPO_STATUS: status,
+        FIELD_TYPO_DETAIL: format_typo_detail(applied, flagged),
     }
 
 
-def format_typo_detail(issues: list[dict[str, str]]) -> str:
-    """明细行：「急救措施」：『迅术』→『迅速』（形近字）。空返回空串。"""
-    lines = [
-        f"「{i['field']}」：『{i['original']}』→『{i['suggestion']}』（{i['reason']}）"
-        for i in issues
-    ]
-    return "\n".join(lines)
+def format_typo_detail(
+    applied: list[dict[str, str]] | None = None,
+    flagged: list[dict[str, str]] | None = None,
+) -> str:
+    """明细：已自动修正段 + 待人工复核段。空返回空串。"""
+    parts: list[str] = []
+    if applied:
+        parts.append("已自动修正：\n" + "\n".join(
+            f"「{i['field']}」：『{i['original']}』→『{i['suggestion']}』（{i['reason']}）"
+            for i in applied
+        ))
+    if flagged:
+        parts.append("待人工复核：\n" + "\n".join(
+            f"「{i['field']}」：『{i['original']}』→ 建议『{i['suggestion']}』（{i['reason']}）"
+            for i in flagged
+        ))
+    return "\n".join(parts)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -375,6 +452,16 @@ async def sync_pdf_revision(record_id: str, *, force: bool = False) -> dict[str,
         derived_label = derive_label_elements(entry)
         if derived_label:
             entry["label_elements"] = derived_label
+    # 错别字校对前置（2026-11-03 拍板）：PDF 生成前先把字段内容审好——
+    # high 置信自动修正进 entry（PDF 与写表都用修正后值），low 置信仅标记。
+    # 修正必须在 hash 前（写表=修正值 → 下次事件 hash 一致闭环）。
+    applied: list[dict[str, str]] = []
+    flagged: list[dict[str, str]] = []
+    try:
+        issues = await proofread_entry(entry)
+        entry, applied, flagged = apply_issues(entry, issues)
+    except Exception:
+        logger.exception("MSDS 修订前错别字校对失败(PDF 按原字段生成): %s", record_id)
     current_hash = msds_content_hash(entry)
 
     # PG 镜像行：pdf hash + label_elements 补充（台账表无该列）
@@ -425,26 +512,36 @@ async def sync_pdf_revision(record_id: str, *, force: bool = False) -> dict[str,
         logger.error("MSDS 修订 PDF 上传失败: record_id=%s file=%s", record_id, filename)
         return {"status": "failed_upload", "record_id": record_id}
 
-    # ③ 写回：替换附件 + 追加修订记录（+修订后重跑错别字校对）
+    # ③ 写回：修正后的内容字段 + 替换附件 + 追加修订记录 + 审核字段
+    #    （一次 update 写全，字段值=PDF 值=修正值）
     revision_line = (
         "标准 PDF 已重建（人工触发，内容未变）" if force
         else "内容字段已修改，标准 PDF 已同步重新生成"
     )
+    if applied:
+        revision_line += f"；自动修正错别字 {len(applied)} 处（见错别字明细）"
     update_fields: dict[str, Any] = {
         "MSDS附件": [upload],
         FIELD_REVISION_LOG: append_revision_log(fields.get(FIELD_REVISION_LOG), revision_line),
     }
     if derived_label:
         update_fields["标签要素"] = derived_label  # 推导值回写列，人工可见可改
-    try:
-        review = typo_review_fields(await proofread_entry(entry))
+    # 自动修正的字段回写台账表（en key → 中文列名；明细已留痕，人工可改回）
+    if applied:
+        for issue in applied:
+            col = _FIELD_LABELS.get(issue["key"])
+            key = issue["key"]
+            if col and entry.get(key) is not None:
+                update_fields.setdefault(col, entry[key])
+    # 审核字段：本次有发现则刷新；无发现且原状态为「已自动修正」时保留
+    # 留痕（粘性状态，防止后续重建把修正历史覆盖成「无错别字」）
+    typo_status: str | None = None
+    typo_detail: str | None = None
+    if applied or flagged or fields.get(FIELD_TYPO_STATUS) != TYPO_STATUS_AUTOFIXED:
+        review = typo_review_fields(applied, flagged)
         update_fields.update(review)
         typo_status = review[FIELD_TYPO_STATUS]
         typo_detail = review[FIELD_TYPO_DETAIL] or None
-    except Exception:
-        logger.exception("MSDS 修订后错别字校对失败(附件替换不受影响): %s", record_id)
-        typo_status = None
-        typo_detail = None
 
     # 自写标记先落（本次 update 触发的 edited 回环靠它跳过）
     await set_self_write_marker(record_id, current_hash)
@@ -496,10 +593,17 @@ async def run_proofread_for_record(record_id: str) -> dict[str, Any]:
         return {"status": "skip_no_content", "record_id": record_id}
 
     issues = await proofread_entry(entry)
-    review = typo_review_fields(issues)
-    # hash 标记防环：审核字段写入不触发 PDF 重生成（hash 本就不变，双保险）
-    await set_self_write_marker(record_id, msds_content_hash(entry))
-    ok = await client.update_record(record_id=record_id, fields=review)
+    entry, applied, flagged = apply_issues(entry, issues)
+    review = typo_review_fields(applied, flagged)
+    # 修正字段 + 审核字段一次写回。不设自写标记：修正使内容 hash 变化时，
+    # 写表事件自然触发修订同步按修正值重建 PDF（审核前置闭环）；hash 未变
+    # 则事件按 skip_up_to_date 跳过，无谓重建。
+    update: dict[str, Any] = dict(review)
+    for issue in applied:
+        col = _FIELD_LABELS.get(issue["key"])
+        if col and entry.get(issue["key"]) is not None:
+            update.setdefault(col, entry[issue["key"]])
+    ok = await client.update_record(record_id=record_id, fields=update)
     if not ok:
         return {"status": "failed_update", "record_id": record_id, "issues": issues}
 
@@ -515,4 +619,7 @@ async def run_proofread_for_record(record_id: str) -> dict[str, Any]:
             obj.typo_review_detail = review[FIELD_TYPO_DETAIL] or None
             await session.commit()
 
-    return {"status": "ok", "record_id": record_id, "issues": issues}
+    return {
+        "status": "ok", "record_id": record_id,
+        "autofixed": len(applied), "flagged": len(flagged),
+    }

@@ -37,6 +37,7 @@ from app.modules.safety.service.msds_review import (
     FIELD_TYPO_DETAIL,
     FIELD_TYPO_STATUS,
     TYPO_STATUS_UNREVIEWED,
+    apply_issues,
     derive_label_elements,
     msds_content_hash,
     proofread_entry,
@@ -346,6 +347,16 @@ class MsdsService:
 
         for idx, entry in enumerate(entries):
             try:
+                # ⓪ 错别字校对前置（2026-11-03 拍板：PDF 生成前先把字段审好）：
+                #    high 置信自动修正进 entry，PDF 与写表都用修正后的值；
+                #    low 置信仅标记留给人工。全程「错别字明细」留痕。
+                applied: list[dict[str, str]] = []
+                flagged: list[dict[str, str]] = []
+                try:
+                    issues = await proofread_entry(entry)
+                    entry, applied, flagged = apply_issues(entry, issues)
+                except Exception:
+                    logger.exception("MSDS 写回前错别字校对失败(按原字段生成): name=%s", entry.get("name"))
                 # ① 生成标准 PDF → 临时文件 → store_bytes 入桶（MinIO key / 本地相对路径）
                 filename = standard_pdf_filename(entry, str(rec.id), idx)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -381,12 +392,8 @@ class MsdsService:
                     fields["日期"] = int(
                         datetime.combine(rec.source_date, datetime.min.time(), tzinfo=UTC).timestamp() * 1000
                     )
-                content_hash = msds_content_hash(entry)
-                try:
-                    review = typo_review_fields(await proofread_entry(entry))
-                except Exception:
-                    logger.exception("MSDS 错别字校对失败(降级未审核): name=%s", entry.get("name"))
-                    review = {}
+                content_hash = msds_content_hash(entry)  # 修正后的值参与 hash
+                review = typo_review_fields(applied, flagged)  # 前置校对结果
                 fields.update(review)
 
                 # ④ 同 CAS 查重 → UPDATE / CREATE（自写标记先落，防 edited 回环重生成）

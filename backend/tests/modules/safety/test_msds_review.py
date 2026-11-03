@@ -147,20 +147,64 @@ def test_validate_issues_accepts_english_field_key():
 
 
 def test_typo_review_fields_status_and_detail():
-    issues = [{
-        "field": "急救措施", "original": "迅术脱离现场",
-        "suggestion": "迅速脱离现场", "reason": "形近字",
+    from app.modules.safety.service.msds_review import TYPO_STATUS_AUTOFIXED
+
+    applied = [{
+        "field": "急救措施", "original": "迅术", "suggestion": "迅速",
+        "reason": "形近字", "confidence": "high", "key": "first_aid",
     }]
-    fields = typo_review_fields(issues)
-    assert fields[FIELD_TYPO_STATUS] == TYPO_STATUS_SUSPECT
-    assert "『迅术脱离现场』→『迅速脱离现场』" in fields[FIELD_TYPO_DETAIL]
-    assert typo_review_fields([]) == {
+    flagged = [{
+        "field": "健康危害", "original": "吸入后对鼻、喉有刺激性",
+        "suggestion": "（语义级改动建议）", "reason": "疑似", "confidence": "low",
+    }]
+    # 有已修正 → 已自动修正；明细分段（已自动修正 + 待人工复核）
+    fields = typo_review_fields(applied, flagged)
+    assert fields[FIELD_TYPO_STATUS] == TYPO_STATUS_AUTOFIXED
+    assert "已自动修正" in fields[FIELD_TYPO_DETAIL]
+    assert "『迅术』→『迅速』" in fields[FIELD_TYPO_DETAIL]
+    assert "待人工复核" in fields[FIELD_TYPO_DETAIL]
+    # 仅待人工 → 疑似错别字
+    fields2 = typo_review_fields([], flagged)
+    assert fields2[FIELD_TYPO_STATUS] == TYPO_STATUS_SUSPECT
+    # 全空 → 无错别字
+    assert typo_review_fields([], []) == {
         FIELD_TYPO_STATUS: TYPO_STATUS_CLEAN, FIELD_TYPO_DETAIL: "",
     }
+    # 旧「仅 issues」调用形态兼容（视为全 flagged）
+    assert typo_review_fields(issues=flagged)[FIELD_TYPO_STATUS] == TYPO_STATUS_SUSPECT
+
+
+def test_apply_issues_autofix_and_flag():
+    from app.modules.safety.service.msds_review import apply_issues
+
+    entry = {
+        "first_aid": "吸入：迅术脱离现场至空气新鲜处。眼晴接触时立即冲洗。",
+        "health_hazard": "长期接触可引起过敏性皮炎样改变。",
+    }
+    issues = [
+        # high：1 字形近替换 → 自动修正
+        {"field": "急救措施", "original": "迅术", "suggestion": "迅速",
+         "reason": "形近字", "confidence": "high"},
+        # high：但原文在字段中不存在 → 降级待人工（防误定位）
+        {"field": "急救措施", "original": "吸入佳", "suggestion": "吸入后",
+         "reason": "形近字", "confidence": "high"},
+        # low：只标记不改
+        {"field": "健康危害", "original": "皮炎样", "suggestion": "皮疹样",
+         "reason": "疑似", "confidence": "low"},
+        # 中文标签字段名同样可定位
+        {"field": "急救措施", "original": "眼晴", "suggestion": "眼睛",
+         "reason": "形近字", "confidence": "high"},
+    ]
+    fixed, applied, flagged = apply_issues(entry, issues)
+    assert fixed["first_aid"] == "吸入：迅速脱离现场至空气新鲜处。眼睛接触时立即冲洗。"
+    assert fixed["health_hazard"] == entry["health_hazard"]  # low 未改
+    assert {a["original"] for a in applied} == {"迅术", "眼晴"}
+    assert {f["original"] for f in flagged} == {"吸入佳", "皮炎样"}
 
 
 def test_format_typo_detail_empty():
-    assert format_typo_detail([]) == ""
+    assert format_typo_detail([], []) == ""
+    assert format_typo_detail() == ""
 
 
 # ── 修订记录裁剪 ──

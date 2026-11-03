@@ -22,7 +22,9 @@ NEW_APPEARANCE = "外观与性状"
 
 NEW_FIELDS: list[tuple[str, int, dict | None]] = [
     ("标签要素", 1, None),  # 2026-11-02：PDF 标签要素列（空值由 GHS 规则推导兜底）
-    ("错别字审核", 3, {"options": [{"name": "未审核"}, {"name": "无错别字"}, {"name": "疑似错别字"}]}),
+    ("错别字审核", 3, {"options": [
+        {"name": "未审核"}, {"name": "无错别字"}, {"name": "疑似错别字"}, {"name": "已自动修正"},
+    ]}),
     ("错别字明细", 1, None),
     ("修订记录", 1, None),
 ]
@@ -51,13 +53,31 @@ async def main() -> None:
     else:
         print(f"[warn] {OLD_APPEARANCE}/{NEW_APPEARANCE} 列均不存在，跳过改名")
 
-    # ② 机制字段建列
+    # ② 机制字段建列（单选已存在时补齐缺的选项——update_field 需全量 options）
     for name, ftype, property_ in NEW_FIELDS:
-        if name in names:
-            print(f"[skip] {name} 已存在")
+        existing = next((f for f in fields if f.get("field_name") == name), None)
+        if existing is None:
+            created = await client.create_field(name, ftype, property_=property_)
+            print(f"[create] {name} (type={ftype}): {'OK' if created else 'FAILED'}")
             continue
-        created = await client.create_field(name, ftype, property_=property_)
-        print(f"[create] {name} (type={ftype}): {'OK' if created else 'FAILED'}")
+        if ftype == 3 and property_:
+            want = [o["name"] for o in property_["options"]]
+            have = [o.get("name") for o in (existing.get("property") or {}).get("options", [])]
+            missing = [n for n in want if n not in have]
+            if missing:
+                # 已有选项保留完整对象（含 id），新选项仅 name——全量传回
+                raw_opts = (existing.get("property") or {}).get("options", [])
+                merged = [o for o in raw_opts if o.get("name") in have] + [{"name": n, "color": 3} for n in missing]
+                # 坑：单选更新必须同时带 field_name（飞书校验要求，否则 99992402）
+                r = await client.update_field(
+                    existing["field_id"], field_name=name, field_type=ftype,
+                    property_={"options": merged},
+                )
+                print(f"[update] {name} 补选项 {missing}: {'OK' if r else 'FAILED'}")
+            else:
+                print(f"[skip] {name} 选项已齐")
+        else:
+            print(f"[skip] {name} 已存在")
 
     final = {f.get("field_name") for f in await client.list_fields()}
     print(f"最终字段 {len(final)} 个；机制字段就绪："
