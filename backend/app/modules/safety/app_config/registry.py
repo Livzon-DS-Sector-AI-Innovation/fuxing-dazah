@@ -181,6 +181,12 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "冒烟②：hazard 督办轮询收编 superagent bitable_poll Source（开 = 原轮询跳过、"
         "新路径接管；关 = 原路径不变；需 SUPERAGENT_ENABLED 同开）",
     ),
+    ConfigItem(
+        "SAFETY_R1_FIRE_CARD_CHAT_ID", "chat_id", "str", "",
+        "R1 报警联动 P4 目标群汇总卡 chat_id（执行器生成隐患后经 outbox 发卡；"
+        "空 = 不发卡）；需 R1 Source 实例启用 + 转正后才有卡",
+        allow_off=True,
+    ),
 
     # ══════════════════════════════════════════════════════════
     # 直读闸门（direct_gate）— 隐患域轮询旗标为启动语义（需重启）

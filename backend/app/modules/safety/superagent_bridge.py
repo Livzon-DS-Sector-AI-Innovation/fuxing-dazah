@@ -178,10 +178,52 @@ def register_superagent_bridge() -> None:
     if get_bitable_fetcher("fire_alarm_ledger") is None:
         register_bitable_fetcher("fire_alarm_ledger", _fire_alarm_ledger_fetcher)
 
+    # R1 消防扫描源（二期）：cron 门控 + 记录粒度 Trigger（扩展点注册制）
+    from app.platform.superagent.sources import source_registry
+
+    if source_registry.get("cron_scan") is None:
+        from app.modules.safety.service.alarm_hazard_r1.scan_source import (
+            FireAlarmScanSource,
+        )
+
+        source_registry.register(FireAlarmScanSource())
+
+    # R1 程序执行器 + P4 群卡 outbox sender（二期）
+    from app.platform.superagent.executors import get_executor, register_executor
+
+    if get_executor("alarm_hazard_create") is None:
+        from app.modules.safety.service.alarm_hazard_r1.executor import (
+            alarm_hazard_create,
+        )
+
+        register_executor("alarm_hazard_create", alarm_hazard_create)
+    from app.platform.superagent.effects import register_outbox_sender
+
+    try:
+        register_outbox_sender("feishu_card", _feishu_card_sender)
+    except ValueError:
+        pass  # 已注册（bootstrap 幂等）
+
     # dm_admin 真发接线（平台注入点 ← 安全通知原语；平台零业务依赖）
     from app.platform.superagent.effects import set_dm_sender
 
     set_dm_sender(_send_admin_dm)
+
+
+async def _feishu_card_sender(channel: dict[str, Any], body: dict[str, Any]) -> bool:
+    """outbox 卡片发送（行内 chat_id 唯一权威；失败 False 走退避重试）。"""
+    from app.modules.safety.feishu.notification import send_group_card
+
+    try:
+        mid = await send_group_card(
+            str(channel.get("chat_id") or ""),
+            title=str(body.get("title") or ""),
+            content=str(body.get("content") or ""),
+        )
+        return bool(mid)
+    except Exception:
+        logger.exception("feishu_card 发送失败: chat=%s", channel.get("chat_id"))
+        return False
 
 
 async def _send_admin_dm(open_id: str, text: str) -> bool:
@@ -200,11 +242,51 @@ async def _send_admin_dm(open_id: str, text: str) -> bool:
 
 
 async def bootstrap_superagent_policy_seed() -> None:
-    """基线 Policy 播种（无 Policy 时；消防候选规则 observe 模式）。"""
+    """R1 Policy 播种/升版（规则随代码部署生效；accept_mode 切换权留给人工）。"""
     try:
-        await seed_baseline_policy_if_absent()
+        await ensure_r1_policy()
     except Exception:
-        logger.exception("Super-agent 基线 Policy 播种失败（忽略，可手动补）")
+        logger.exception("Super-agent R1 Policy ensure 失败（忽略，可手动补）")
+
+
+async def ensure_r1_policy(session: AsyncSession | None = None) -> str | None:
+    """幂等确保现行 Policy 为 R1 规则集（白名单∪故障∪闭环，实测字段名）。
+
+    - 无 Policy：播种 R1 规则 + observe（冒烟③基线模式）
+    - 有 Policy 且内容不同：apply_new_policy 升版——**沿用现行 accept_mode 与
+      admission**（规则是代码的一部分随部署生效；模式切换是人工权限，部署
+      不得覆盖人工 auto/observe 决定）
+    - 内容一致：幂等返回现行版本号
+    """
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.alarm_hazard_r1.rule import r1_fire_rule
+    from app.platform.superagent.policy import (
+        apply_new_policy,
+        get_current_policy,
+        policy_version_hash,
+    )
+
+    own_session = session is None
+    ses = session or async_session_factory()
+    try:
+        rules = [r1_fire_rule()]
+        current = await get_current_policy(ses)
+        mode = current.accept_mode if current is not None else "observe"
+        admission = (current.admission if current is not None else {}) or {}
+        if current is not None and current.version_hash == policy_version_hash(
+            rules, mode, admission,
+        ):
+            return current.version_hash
+        policy, _ = await apply_new_policy(
+            ses, rules=rules, accept_mode=mode, admission=admission,
+        )
+        if own_session:
+            await ses.commit()
+        logger.info("Super-agent R1 Policy 已就绪（%s, mode=%s）", policy.version_hash[:12], mode)
+        return policy.version_hash
+    finally:
+        if own_session:
+            await ses.close()
 
 
 # ═══════════════════════════════════════════════════════════════
