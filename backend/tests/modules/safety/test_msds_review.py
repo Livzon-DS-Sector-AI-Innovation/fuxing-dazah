@@ -507,4 +507,5 @@ def test_label_elements_ghs_images_rendered(tmp_path):
     xo = reader.pages[0].get("/Resources", {}).get("/XObject", {})
     assert xo and len(xo) >= 3, "应嵌入至少 3 张象形图"
     text = "".join(p.extract_text() or "" for p in reader.pages).replace("\n", "")
-    assert "信号词：危险" in text
+    # 参考件版式：标签要素格只放象形图，不重复打印信号词
+    assert "信号词：危险" not in text
