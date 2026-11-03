@@ -150,6 +150,22 @@ class Settings(BaseSettings):
     WAREHOUSE_AGENT_MAX_TURNS: int = 10
     WAREHOUSE_AGENT_SESSION_ROUNDS: int = 12
 
+    # Super-agent 平台底座（一期旁路上线，默认全关；docs/DESIGN-SuperAgent底座）
+    # 总闸：关 = 底座生成器每 tick 空转（表照常可查）
+    SUPERAGENT_ENABLED: bool = False
+    # Source 轮询间隔秒（下限 10；注册时读取，改后需重启）
+    SUPERAGENT_SOURCE_POLL_INTERVAL_SECONDS: int = 30
+    # effects/outbox 消费轮询间隔秒（注册时读取，改后需重启）
+    SUPERAGENT_EFFECTS_POLL_INTERVAL_SECONDS: int = 2
+    # Watchdog 巡检间隔秒（注册时读取）
+    SUPERAGENT_WATCHDOG_INTERVAL_SECONDS: int = 300
+    # Watchdog 阈值：受阻告警小时 / 排队告警小时 / observe 积压告警条数
+    SUPERAGENT_BLOCKED_ALERT_HOURS: int = 24
+    SUPERAGENT_QUEUED_ALERT_HOURS: int = 2
+    SUPERAGENT_OBSERVE_BACKLOG_ALERT: int = 50
+    # Watchdog/健康告警 DM 收件人（逗号分隔 open_id；空=仅留痕不发）
+    SUPERAGENT_ADMIN_OPEN_IDS: str = ""
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

@@ -26,6 +26,7 @@ from app.platform.identity.api import (
     router as identity_router,
 )
 from app.platform.permission.api import router as permission_router
+from app.platform.superagent.api import router as superagent_router
 from app.platform.system import router as system_router
 
 api_router = APIRouter()
@@ -61,3 +62,8 @@ api_router.include_router(
 api_router.include_router(quality_router, prefix="/quality", tags=["质量管理"])
 api_router.include_router(meter_router, prefix="/meter", tags=["仪表管理"])
 api_router.include_router(permission_router, prefix="/permission", tags=["权限管理"])
+api_router.include_router(
+    superagent_router,
+    prefix="/platform/superagent",
+    tags=["Super-agent 底座"],
+)

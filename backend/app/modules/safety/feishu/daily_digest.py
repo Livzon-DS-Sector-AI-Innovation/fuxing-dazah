@@ -93,6 +93,9 @@ CELL_ORDER: list[str] = [
     "telemetry_alarm",
     # 标准符合性季度定格通报（季度首日 08:20 定格收尾投递，S1 二期；一条/季）
     "standard_compliance",
+    # Super-agent「需要人」格（每日 08:00 cron_tick→effects 构建；只读摘要，
+    # 转正/忽略走底座 REST——§6 触点：daily_digest 仅此一格）
+    "superagent_needs_human",
 ]
 
 

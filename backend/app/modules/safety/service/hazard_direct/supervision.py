@@ -145,22 +145,7 @@ async def run_supervision_round(
                     record_id, current or "(空)", label,
                 )
                 return
-            async with write_lock:
-                from app.modules.safety.feishu.bitable_handler import (
-                    _format_bitable_select_value,
-                )
-
-                ok = await client.update_record(
-                    record_id,
-                    {
-                        bitable_repo.F_SUPERVISION: _format_bitable_select_value(
-                            bitable_repo.F_SUPERVISION, label
-                        )
-                    },
-                )
-                if not ok:
-                    raise RuntimeError("写回 Bitable 返回 False")
-                await asyncio.sleep(0.5)  # 单表写串行化，规避 1254291
+            await writeback_supervision_label(client, record_id, label)
             result.changed += 1
             logger.info(
                 "③ 督办等级更新: record_id=%s %s → %s", record_id, current or "(空)", label
@@ -187,3 +172,53 @@ async def run_supervision_round(
                 result.job_label, failures=result.failures, total=result.total
             )
     return result
+
+
+async def writeback_supervision_label(client: Any, record_id: str, label: str) -> None:
+    """写回督办等级（锁内格式化+更新+0.5s 串行）——整轮版与 superagent 单记录版共用。"""
+    async with _WRITE_LOCK:
+        from app.modules.safety.feishu.bitable_handler import (
+            _format_bitable_select_value,
+        )
+
+        ok = await client.update_record(
+            record_id,
+            {
+                bitable_repo.F_SUPERVISION: _format_bitable_select_value(
+                    bitable_repo.F_SUPERVISION, label
+                )
+            },
+        )
+        if not ok:
+            raise RuntimeError("写回 Bitable 返回 False")
+        await asyncio.sleep(0.5)  # 单表写串行化，规避 1254291
+
+
+async def run_supervision_for_record(record: dict[str, Any]) -> dict[str, Any]:
+    """单条督办等级计算+回写（冒烟②：superagent bitable_poll 路径的执行体）。
+
+    与整轮版同口径：EXCLUDED_DEPARTMENTS / 外审跳过 / 只写变化 / 写锁 + 0.5s
+    串行。record 形如 {"record_id", "fields"}（Trigger payload 直用）。
+    幂等：算得与当前一致则不写——重复投递零副作用。
+    """
+    record_id = record.get("record_id", "")
+    view = bitable_repo.to_view(record)
+    if (view.department or "") in EXCLUDED_DEPARTMENTS:
+        return {"record_id": record_id, "outcome": "excluded_department"}
+    if bitable_repo.is_audit_record(view.raw):
+        return {"record_id": record_id, "outcome": "excluded_audit"}
+
+    label = _compute_label(view)
+    current = (view.supervision_level or "").strip()
+    if not label or label == current:
+        return {"record_id": record_id, "outcome": "unchanged"}
+
+    from app.modules.safety.feishu.bitable_client import SafetyBitableClient
+
+    client = SafetyBitableClient()
+    await writeback_supervision_label(client, record_id, label)
+    logger.info(
+        "③ [superagent] 督办等级更新: record_id=%s %s → %s",
+        record_id, current or "(空)", label,
+    )
+    return {"record_id": record_id, "outcome": "updated", "label": label}

@@ -171,6 +171,16 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "URS 域 Agent 委派试点开关（开 = URS 意图经 delegate 元工具走域子流程；"
         "关 = 挂载式整域工具集，一键回退）",
     ),
+    _flag(
+        "SAFETY_SUPERAGENT_DIGEST_CELL_EFFECTS", False,
+        "冒烟①：速递格投递旁挂 superagent effects（开 = workticket 格走先存后做队列；"
+        "关 = 原路径直调，行为不变；需 SUPERAGENT_ENABLED 同开）",
+    ),
+    _gate(
+        "SAFETY_HAZARD_SUPERVISION_VIA_SUPERAGENT", False,
+        "冒烟②：hazard 督办轮询收编 superagent bitable_poll Source（开 = 原轮询跳过、"
+        "新路径接管；关 = 原路径不变；需 SUPERAGENT_ENABLED 同开）",
+    ),
 
     # ══════════════════════════════════════════════════════════
     # 直读闸门（direct_gate）— 隐患域轮询旗标为启动语义（需重启）

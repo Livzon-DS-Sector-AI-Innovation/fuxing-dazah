@@ -216,6 +216,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await bootstrap_safety_scheduler()
     register_safety_tasks(scheduler_registry)
 
+    # ── Super-agent 平台底座（一期旁路上线；SUPERAGENT_ENABLED 默认 false，
+    #    表未就绪时不注册生成器，不阻塞启动）──
+    from app.platform.superagent.runtime import bootstrap_superagent
+
+    await bootstrap_superagent(scheduler_registry)
+
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
         scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)

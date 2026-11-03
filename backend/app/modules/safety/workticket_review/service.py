@@ -304,10 +304,14 @@ class WorkTicketReviewService:
                 review.report_markdown = markdown
             try:
                 cell.detail = markdown
-                await upsert_daily_digest(
-                    digest_date,
-                    "workticket",
-                    cell,
+                # 冒烟①旁挂点（§6 触点）：开关关=原路径直调（行为不变）；
+                # 开=入队 superagent effects（chat_id 行内权威、先存后做可对账）
+                from app.modules.safety.superagent_bridge import (
+                    post_workticket_safety_cell,
+                )
+
+                await post_workticket_safety_cell(
+                    self.session, digest_date=digest_date, cell=cell,
                 )
             except Exception:
                 logger.warning("安全速递总卡投递失败（作业票审核）", exc_info=True)

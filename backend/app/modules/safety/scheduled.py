@@ -47,6 +47,18 @@ async def bootstrap_safety_scheduler() -> None:
     except Exception:
         logger.exception("默认任务配置播种失败（忽略，继续启动）")
 
+    # Super-agent 底座安全侧桥接（冒烟①②③ effect handler/fetcher 注册，幂等）
+    try:
+        from app.modules.safety.superagent_bridge import (
+            bootstrap_superagent_policy_seed,
+            register_superagent_bridge,
+        )
+
+        register_superagent_bridge()
+        await bootstrap_superagent_policy_seed()
+    except Exception:
+        logger.exception("superagent 桥接注册失败（忽略，继续启动）")
+
     from app.modules.safety.scheduler import _warm_direct_query_caches
 
     asyncio.create_task(_warm_direct_query_caches())
@@ -187,8 +199,23 @@ async def _run_hazard_review_round() -> None:
 
 
 async def _run_hazard_supervision_round() -> None:
-    """③ 督办等级计算（相对 ① 错开四分之一周期，只回写多维表格）。"""
+    """③ 督办等级计算（相对 ① 错开四分之一周期，只回写多维表格）。
+
+    冒烟②旁挂（§6 触点）：SAFETY_HAZARD_SUPERVISION_VIA_SUPERAGENT 开 =
+    本路径跳过，由 superagent bitable_poll Source + supervision_writeback
+    effect 接管（读位持久化，重启不重放）；关 = 原路径不变。
+    """
     from app.modules.safety.service.hazard_direct import config
+
+    try:
+        from app.modules.safety.superagent_bridge import supervision_via_superagent
+
+        if supervision_via_superagent():
+            logger.info("③ 督办轮询走 superagent 路径（旁挂开关开），原路径本轮跳过")
+            return
+    except Exception:
+        logger.exception("冒烟②旁挂开关读取失败，回退原路径")
+
     from app.modules.safety.service.hazard_direct.supervision import (
         run_supervision_round,
     )
