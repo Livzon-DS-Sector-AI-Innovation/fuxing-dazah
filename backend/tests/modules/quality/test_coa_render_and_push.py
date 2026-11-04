@@ -1,11 +1,13 @@
 """COA 渲染链路与推送幂等测试（此前 _render_cao_file/_mark_pushed 零覆盖）。"""
 
+from pathlib import Path
+
 import pytest
 
 # ── _render_cao_file：模板填充落盘 ──
 
 
-def test_render_coa_file_fills_placeholders():
+def test_render_coa_file_fills_placeholders() -> None:
     from app.modules.quality.api._common import _render_cao_file
     from app.modules.quality.storage import REPORT_TEMPLATE_DIR
 
@@ -36,7 +38,7 @@ def test_render_coa_file_fills_placeholders():
         output_path.unlink(missing_ok=True)
 
 
-def test_render_coa_file_unique_filename_with_serial():
+def test_render_coa_file_unique_filename_with_serial() -> None:
     from app.modules.quality.api._common import _render_cao_file
     from app.modules.quality.storage import REPORT_TEMPLATE_DIR
 
@@ -62,7 +64,7 @@ def test_render_coa_file_unique_filename_with_serial():
 
 
 @pytest.mark.anyio
-async def test_mark_pushed_blocks_second_call():
+async def test_mark_pushed_blocks_second_call() -> None:
     from app.modules.quality.feishu.daily_push import _mark_pushed
 
     key = "test:mark_pushed"
@@ -84,7 +86,7 @@ async def test_mark_pushed_blocks_second_call():
 # ── 存储降级：MinIO 未启用时纯本地 ──
 
 
-def test_upload_attachment_local_fallback(monkeypatch, tmp_path):
+def test_upload_attachment_local_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from app.modules.quality import storage as qs
 
     monkeypatch.setattr(qs, "ATTACH_LOCAL_DIR", tmp_path)

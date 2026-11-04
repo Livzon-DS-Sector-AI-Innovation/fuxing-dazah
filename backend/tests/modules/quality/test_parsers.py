@@ -14,11 +14,11 @@ from app.modules.quality.standard_doc_parser import (
 # ── 标准文档：数值标准结构化 ──
 
 
-def test_structure_le():
+def test_structure_le() -> None:
     assert _structure_numeric("≤3.0%") == ("≤", None, 3.0)
 
 
-def test_structure_pharmacopeia_text_operators():
+def test_structure_pharmacopeia_text_operators() -> None:
     # 药典式文字限度（「不得过/不得少于」等）结构化
     assert _structure_numeric("不得过3.0%") == ("≤", None, 3.0)
     assert _structure_numeric("不得少于91.0%") == ("≥", 91.0, None)
@@ -26,34 +26,34 @@ def test_structure_pharmacopeia_text_operators():
     assert _structure_numeric("不得大于0.5%") == ("<", None, 0.5)
 
 
-def test_structure_ge():
+def test_structure_ge() -> None:
     assert _structure_numeric("≥91.0%") == ("≥", 91.0, None)
 
 
-def test_structure_range_fullwidth():
+def test_structure_range_fullwidth() -> None:
     assert _structure_numeric("2.5～4.5") == ("范围", 2.5, 4.5)
 
 
-def test_structure_range_tilde():
+def test_structure_range_tilde() -> None:
     assert _structure_numeric("3.5~4.5") == ("范围", 3.5, 4.5)
 
 
-def test_structure_lt_gt():
+def test_structure_lt_gt() -> None:
     assert _structure_numeric("＜0.25IU/mg") == ("<", None, 0.25)
     assert _structure_numeric(">95%") == (">", 95.0, None)
 
 
-def test_structure_plain_text_not_numeric():
+def test_structure_plain_text_not_numeric() -> None:
     # 文字标准不带运算符 → 不结构化（人工判定）
     assert _structure_numeric("应为白色粉末") == (None, None, None)
 
 
-def test_structure_number_without_operator_ignored():
+def test_structure_number_without_operator_ignored() -> None:
     # 附带数字但无运算符（如「乙醇（96%）」）不当作限度
     assert _structure_numeric("乙醇（96%）") == (None, None, None)
 
 
-def test_structure_operator_without_number():
+def test_structure_operator_without_number() -> None:
     assert _structure_numeric("≤") == (None, None, None)
 
 
@@ -80,7 +80,7 @@ def _sample_text() -> str:
     ])
 
 
-def test_parse_header_fields():
+def test_parse_header_fields() -> None:
     doc = parse_standard_doc(_sample_text())
     assert doc.product_name == "盐酸万古霉素"
     assert doc.product_code == "HAF"
@@ -88,7 +88,7 @@ def test_parse_header_fields():
     assert doc.valid_years == "36个月"
 
 
-def test_parse_items_with_sop_anchors():
+def test_parse_items_with_sop_anchors() -> None:
     doc = parse_standard_doc(_sample_text())
     items = {it.item_name: it for it in doc.items}
     assert set(items) == {"水分", "性状"}
@@ -97,7 +97,7 @@ def test_parse_items_with_sop_anchors():
     assert items["性状"].operator is None  # 文字标准保留人工判定
 
 
-def test_parse_empty_text_returns_empty_doc():
+def test_parse_empty_text_returns_empty_doc() -> None:
     doc = parse_standard_doc("")
     assert not doc.product_name and not doc.items
 
@@ -105,7 +105,7 @@ def test_parse_empty_text_returns_empty_doc():
 # ── 液相模板解析：纯函数 ──
 
 
-def test_lc_col_letter():
+def test_lc_col_letter() -> None:
     from app.modules.quality.lc_template_parser import _col_letter
 
     assert _col_letter(1) == "A"
@@ -114,7 +114,7 @@ def test_lc_col_letter():
     assert _col_letter(28) == "AB"
 
 
-def test_lc_cell_coord():
+def test_lc_cell_coord() -> None:
     from app.modules.quality.lc_template_parser import _cell_coord
 
     # 1-indexed，(行, 列)
@@ -123,7 +123,7 @@ def test_lc_cell_coord():
     assert _cell_coord("AA10") == (10, 27)
 
 
-def test_lc_parse_value():
+def test_lc_parse_value() -> None:
     from app.modules.quality.lc_template_parser import _parse_value
 
     assert _parse_value(0.956) == pytest.approx(0.956)
@@ -134,7 +134,7 @@ def test_lc_parse_value():
     assert _parse_value(None) is None
 
 
-def test_lc_detect_table_no_from_sheet():
+def test_lc_detect_table_no_from_sheet() -> None:
     import io
 
     import openpyxl
@@ -151,7 +151,7 @@ def test_lc_detect_table_no_from_sheet():
     assert detect_table_no(get, max_row, max_col) == "EX-HA-5246-001"
 
 
-def test_lc_find_batch():
+def test_lc_find_batch() -> None:
     import io
 
     import openpyxl
@@ -171,7 +171,7 @@ def test_lc_find_batch():
 # ── 旧解析器边界行为 ──
 
 
-def test_parse_lc_excel_rejects_garbage():
+def test_parse_lc_excel_rejects_garbage() -> None:
     from app.modules.quality.excel_parser import parse_lc_excel
 
     with pytest.raises(Exception):

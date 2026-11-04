@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import ReportRecord
 from app.modules.quality.repository import (
@@ -28,7 +29,7 @@ def _insert_args(batch: str) -> dict:
     }
 
 
-async def test_duplicate_serial_rejected_by_db(db_session):
+async def test_duplicate_serial_rejected_by_db(db_session: AsyncSession) -> None:
     await create_report_record(db_session, **_insert_args("B-1"))
     with pytest.raises(IntegrityError) as exc_info:
         await create_report_record(db_session, **_insert_args("B-2"))
@@ -37,7 +38,7 @@ async def test_duplicate_serial_rejected_by_db(db_session):
     await db_session.rollback()
 
 
-async def test_other_integrity_error_not_misdetected(db_session):
+async def test_other_integrity_error_not_misdetected(db_session: AsyncSession) -> None:
     # 非流水号冲突（NOT NULL 违反）不应被识别为撞号
     rec = ReportRecord(
         template_path=None,  # 故意违反 NOT NULL
@@ -51,5 +52,5 @@ async def test_other_integrity_error_not_misdetected(db_session):
     await db_session.rollback()
 
 
-def test_plain_exception_not_serial_violation():
+def test_plain_exception_not_serial_violation() -> None:
     assert not is_serial_unique_violation(ValueError("uq_quality_report_record_serial"))

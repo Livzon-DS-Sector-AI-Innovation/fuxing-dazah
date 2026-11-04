@@ -6,15 +6,21 @@
 
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.feishu.fill_service import _commands as cmds
 from app.modules.quality.feishu.fill_service._common import (
     _LAST_IMAGE,
 )
-from app.modules.quality.models import QualityStandardDocument
+from app.modules.quality.models import (
+    QualityStandardDocument,
+    QualityTestResult,
+    QualityTestTask,
+)
 from app.modules.quality.repository import (
     create_standard_item,
     create_test_results,
@@ -66,7 +72,7 @@ def _image_event(chat_id: str = "oc_test", sender: str = "ou_test", chat_type: s
 
 
 @pytest.fixture
-def feishu_env(db_session, monkeypatch):
+def feishu_env(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """mock 消息发送/后台任务/图片下载 + 会话工厂指向回滚式 session。"""
     sent_texts: list[tuple[str, str]] = []
     sent_cards: list[dict] = []
@@ -98,7 +104,7 @@ def feishu_env(db_session, monkeypatch):
         monkeypatch.setattr(f"app.modules.quality.feishu.message.{name}", fake_send_any)
 
     @asynccontextmanager
-    async def _fake_factory():
+    async def _fake_factory() -> None:
         yield db_session
 
     monkeypatch.setattr("app.core.database.async_session_factory", _fake_factory)
@@ -113,7 +119,7 @@ def feishu_env(db_session, monkeypatch):
     }
 
 
-async def _make_doc(db) -> QualityStandardDocument:
+async def _make_doc(db: AsyncSession) -> QualityStandardDocument:
     doc = QualityStandardDocument(
         file_no=_rand_file_no(),
         product_name=f"测试产品{uuid.uuid4().hex[:6]}",
@@ -125,7 +131,7 @@ async def _make_doc(db) -> QualityStandardDocument:
     return doc
 
 
-async def _make_task_with_rows(db, doc: QualityStandardDocument, batch: str | None = None):
+async def _make_task_with_rows(db: AsyncSession, doc: QualityStandardDocument, batch: str | None = None) -> tuple[QualityTestTask, list[QualityTestResult]]:
     task = await create_test_task(
         db,
         product_name=doc.product_name,
@@ -148,7 +154,7 @@ async def _make_task_with_rows(db, doc: QualityStandardDocument, batch: str | No
 # ── 填报指令 ──
 
 
-async def test_fill_command_writes_judged_result(feishu_env):
+async def test_fill_command_writes_judged_result(feishu_env: dict[str, Any]) -> None:
     doc = await _make_doc(feishu_env["db"])
     await create_standard_item(feishu_env["db"], doc.id, {
         "seq": 1, "item_name": "水分", "sop_no": "SOP.03.1111",
@@ -166,7 +172,7 @@ async def test_fill_command_writes_judged_result(feishu_env):
     assert feishu_env["commit_mock"].await_count >= 1  # 写库必须显式提交
 
 
-async def test_fill_unqualified_not_saved_and_notifies(feishu_env):
+async def test_fill_unqualified_not_saved_and_notifies(feishu_env: dict[str, Any]) -> None:
     doc = await _make_doc(feishu_env["db"])
     task, _rows = await _make_task_with_rows(feishu_env["db"], doc)
     batch = task.batch_number
@@ -182,7 +188,7 @@ async def test_fill_unqualified_not_saved_and_notifies(feishu_env):
     assert len(feishu_env["spawned"]) >= 1
 
 
-async def test_fill_all_judged_auto_advances(feishu_env):
+async def test_fill_all_judged_auto_advances(feishu_env: dict[str, Any]) -> None:
     doc = await _make_doc(feishu_env["db"])
     task, rows = await _make_task_with_rows(feishu_env["db"], doc)
     # 追加一条「细菌内毒素」manual 行（默认规则已自动填「符合规定」）
@@ -202,7 +208,7 @@ async def test_fill_all_judged_auto_advances(feishu_env):
 # ── 建任务指令 ──
 
 
-async def test_create_task_command_sends_card(feishu_env):
+async def test_create_task_command_sends_card(feishu_env: dict[str, Any]) -> None:
     doc = await _make_doc(feishu_env["db"])
     await create_standard_item(feishu_env["db"], doc.id, {
         "seq": 1, "item_name": "水分", "sop_no": "SOP.03.1111",
@@ -219,7 +225,7 @@ async def test_create_task_command_sends_card(feishu_env):
 # ── 图片归档 ──
 
 
-async def test_image_archive_flow(feishu_env):
+async def test_image_archive_flow(feishu_env: dict[str, Any]) -> None:
     doc = await _make_doc(feishu_env["db"])
     task, _rows = await _make_task_with_rows(feishu_env["db"], doc)
     batch = task.batch_number

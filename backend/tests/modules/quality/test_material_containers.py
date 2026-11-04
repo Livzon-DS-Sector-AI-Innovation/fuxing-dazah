@@ -7,8 +7,10 @@
 import uuid
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.modules.quality.models import QualityMaterialStandard
 from app.modules.quality.repository import (
     get_material_container_by_no,
     list_container_movements,
@@ -36,7 +38,7 @@ def _gen_req(count: int = 3, code: str | None = None) -> MaterialContainerGenera
     )
 
 
-async def test_generate_containers_sequential(db_session):
+async def test_generate_containers_sequential(db_session: AsyncSession) -> None:
     req = _gen_req(3)
     containers = await material_container_service.generate_containers(db_session, req)
     nos = [c.container_no for c in containers]
@@ -49,7 +51,7 @@ async def test_generate_containers_sequential(db_session):
     assert more[1].container_no.endswith("0005")
 
 
-async def test_max_seq_isolation_by_prefix(db_session):
+async def test_max_seq_isolation_by_prefix(db_session: AsyncSession) -> None:
     req = _gen_req(2)
     containers = await material_container_service.generate_containers(db_session, req)
     assert await max_container_seq(db_session, f"MC-{req.material_code}-") == containers[-1].seq
@@ -58,7 +60,7 @@ async def test_max_seq_isolation_by_prefix(db_session):
     assert await max_container_seq(db_session, other) == 0
 
 
-async def test_move_in_then_out_with_movements(db_session):
+async def test_move_in_then_out_with_movements(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
     # 入库登记
@@ -76,7 +78,7 @@ async def test_move_in_then_out_with_movements(db_session):
     assert movements[0].related_doc == "LL-001"
 
 
-async def test_move_invalid_transition_rejected(db_session):
+async def test_move_invalid_transition_rejected(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
     # labeled 状态直接出库 → 400
@@ -94,7 +96,7 @@ async def test_move_invalid_transition_rejected(db_session):
     assert exc2.value.status_code == 400
 
 
-async def test_move_missing_container_404(db_session):
+async def test_move_missing_container_404(db_session: AsyncSession) -> None:
     with pytest.raises(AppException) as exc:
         await material_container_service.move_container(
             db_session, f"MC-{_rand_code()}-20261010-0001", ContainerMoveRequest(op_type="in"), operator=None
@@ -102,7 +104,7 @@ async def test_move_missing_container_404(db_session):
     assert exc.value.status_code == 404
 
 
-async def test_status_update_qualified_and_void(db_session):
+async def test_status_update_qualified_and_void(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
     # labeled 直接合格不允许（须先入库）
@@ -118,7 +120,7 @@ async def test_status_update_qualified_and_void(db_session):
     assert updated.status == "issued"
 
 
-async def test_label_pdf_contains_qr_labels(db_session):
+async def test_label_pdf_contains_qr_labels(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(5))
     pdf = await material_container_service.build_label_pdf(
         db_session, [c.container_no for c in containers]
@@ -127,7 +129,7 @@ async def test_label_pdf_contains_qr_labels(db_session):
     assert len(pdf) > 5000  # 5 个带二维码标签的 PDF 有实质内容
 
 
-async def test_label_pdf_missing_skipped_and_unknown_404(db_session):
+async def test_label_pdf_missing_skipped_and_unknown_404(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(2))
     # 混入不存在编号：只出存在的
     pdf = await material_container_service.build_label_pdf(
@@ -140,14 +142,14 @@ async def test_label_pdf_missing_skipped_and_unknown_404(db_session):
     assert exc.value.status_code == 404
 
 
-async def test_get_by_no_returns_container(db_session):
+async def test_get_by_no_returns_container(db_session: AsyncSession) -> None:
     req = _gen_req(1)
     containers = await material_container_service.generate_containers(db_session, req)
     found = await get_material_container_by_no(db_session, containers[0].container_no)
     assert found is not None and found.material_code == req.material_code
 
 
-async def test_batch_move_mixed_results(db_session):
+async def test_batch_move_mixed_results(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(3))
     # 第 1 瓶先入库，其余保持 labeled；批量入库时第 1 瓶应失败、其余成功
     await material_container_service.move_container(
@@ -166,7 +168,7 @@ async def test_batch_move_mixed_results(db_session):
     assert len(fails) == 1 and fails[0]["container_no"] == containers[0].container_no
 
 
-async def test_expired_container_cannot_out(db_session):
+async def test_expired_container_cannot_out(db_session: AsyncSession) -> None:
     req = MaterialContainerGenerateRequest(
         material_code=_rand_code(),
         material_name="过期物料",
@@ -186,7 +188,7 @@ async def test_expired_container_cannot_out(db_session):
     assert "复验期" in exc.value.detail
 
 
-async def test_near_expiry_not_blocked(db_session):
+async def test_near_expiry_not_blocked(db_session: AsyncSession) -> None:
     """未过期（未来日期）不受拦截。"""
     import datetime as _dt
 
@@ -211,7 +213,7 @@ async def test_near_expiry_not_blocked(db_session):
 # ─── 物料字典 / 库存概览 / 台账 ───
 
 
-async def test_material_dict_crud(db_session):
+async def test_material_dict_crud(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import (
         create_material,
         delete_material,
@@ -235,7 +237,7 @@ async def test_material_dict_crud(db_session):
     assert await get_material_by_code(db_session, code) is None
 
 
-async def test_stock_summary_aggregation(db_session):
+async def test_stock_summary_aggregation(db_session: AsyncSession) -> None:
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
@@ -275,7 +277,7 @@ async def test_stock_summary_aggregation(db_session):
     assert item["below_stock"] is True
 
 
-async def test_movements_ledger_join(db_session):
+async def test_movements_ledger_join(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import list_material_movements
 
     req = _gen_req(1)
@@ -292,7 +294,7 @@ async def test_movements_ledger_join(db_session):
     assert len(rows2) == 0
 
 
-async def test_inbound_date_recorded_on_in_move(db_session):
+async def test_inbound_date_recorded_on_in_move(db_session: AsyncSession) -> None:
     from app.core.time import today as _today
 
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
@@ -307,7 +309,7 @@ async def test_inbound_date_recorded_on_in_move(db_session):
 # ─── 效期预警与采购建议 ───
 
 
-async def test_expiry_alerts_only_in_stock(db_session):
+async def test_expiry_alerts_only_in_stock(db_session: AsyncSession) -> None:
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
@@ -342,7 +344,7 @@ async def test_expiry_alerts_only_in_stock(db_session):
     assert item["earliest"] == past
 
 
-async def test_purchase_suggestions(db_session):
+async def test_purchase_suggestions(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import create_material
 
     code = f"MAT-{_rand_code()}"
@@ -365,7 +367,7 @@ async def test_purchase_suggestions(db_session):
     assert all(s["material_code"] != "VAN" for s in suggestions if False) or True
 
 
-async def test_qr_content_rich_text(db_session):
+async def test_qr_content_rich_text(db_session: AsyncSession) -> None:
     from app.modules.quality.service.material_containers import _qr_content
 
     req = _gen_req(1)
@@ -386,7 +388,7 @@ async def test_qr_content_rich_text(db_session):
     assert buf.getvalue()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-async def test_move_auto_by_status(db_session):
+async def test_move_auto_by_status(db_session: AsyncSession) -> None:
     """auto 模式：已赋码→入库；在库→出库；已领出→报错。"""
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
@@ -409,7 +411,7 @@ async def test_move_auto_by_status(db_session):
     assert "自动判定" in exc.value.detail
 
 
-async def test_move_auto_qualified_goes_out(db_session):
+async def test_move_auto_qualified_goes_out(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
     await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
@@ -420,7 +422,7 @@ async def test_move_auto_qualified_goes_out(db_session):
     assert updated.status == "issued"
 
 
-async def test_move_return_flow(db_session):
+async def test_move_return_flow(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
     await material_container_service.move_container(db_session, no, ContainerMoveRequest(op_type="in"))
@@ -437,7 +439,7 @@ async def test_move_return_flow(db_session):
     assert updated.status == "in_warehouse"
 
 
-async def test_status_update_with_remark(db_session):
+async def test_status_update_with_remark(db_session: AsyncSession) -> None:
     containers = await material_container_service.generate_containers(db_session, _gen_req(1))
     no = containers[0].container_no
     await material_container_service.update_status(db_session, no, "void", remark="标签贴错作废")
@@ -445,7 +447,7 @@ async def test_status_update_with_remark(db_session):
     assert movements[0].remark == "标签贴错作废"
 
 
-async def test_today_stats(db_session):
+async def test_today_stats(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import material_today_stats
 
     # 开发库共享：用增量断言而非绝对值（当天可能有真实操作数据）
@@ -459,7 +461,7 @@ async def test_today_stats(db_session):
     assert after["today_out"] == before["today_out"] + 1
 
 
-async def test_consumption_trend_shape(db_session):
+async def test_consumption_trend_shape(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import material_consumption_trend
 
     req = _gen_req(1)
@@ -473,7 +475,7 @@ async def test_consumption_trend_shape(db_session):
     assert current["out"] >= 1  # 当月有出库
 
 
-async def test_supplier_crud_and_alerts(db_session):
+async def test_supplier_crud_and_alerts(db_session: AsyncSession) -> None:
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
@@ -503,7 +505,7 @@ async def test_supplier_crud_and_alerts(db_session):
     assert await get_supplier_by_code(db_session, code) is None
 
 
-async def test_supplier_expired_alert(db_session):
+async def test_supplier_expired_alert(db_session: AsyncSession) -> None:
     from datetime import datetime as _dt
     from datetime import timedelta as _td
 
@@ -518,7 +520,7 @@ async def test_supplier_expired_alert(db_session):
     assert any(a["code"] == code and a["expired"] for a in alerts)
 
 
-async def test_stocktake_full_flow(db_session):
+async def test_stocktake_full_flow(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import (
         list_stocktake_items,
     )
@@ -559,7 +561,7 @@ async def test_stocktake_full_flow(db_session):
     assert len(items) == 3
 
 
-async def test_stocktake_missing_detection(db_session):
+async def test_stocktake_missing_detection(db_session: AsyncSession) -> None:
     code = f"MAT-{_rand_code()}"
     req = MaterialContainerGenerateRequest(
         material_code=code, material_name="盘亏测试物料",
@@ -576,7 +578,7 @@ async def test_stocktake_missing_detection(db_session):
     assert finished.missing_count == 1
 
 
-async def test_monthly_report(db_session):
+async def test_monthly_report(db_session: AsyncSession) -> None:
     from app.core.time import today as _today
     from app.modules.quality.repository import material_monthly_report
 
@@ -598,7 +600,7 @@ async def test_monthly_report(db_session):
     assert item["out_count"] == before_out + 1
 
 
-async def test_import_dict_rows(db_session):
+async def test_import_dict_rows(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import get_material_by_code
 
     code = f"MAT-{_rand_code()}"
@@ -620,7 +622,7 @@ async def test_import_dict_rows(db_session):
     assert await get_material_by_code(db_session, code) is not None
 
 
-async def test_import_container_rows(db_session):
+async def test_import_container_rows(db_session: AsyncSession) -> None:
     import io as _io
 
     import openpyxl
@@ -644,7 +646,7 @@ async def test_import_container_rows(db_session):
     assert imported.location == "A-01-03" and imported.status == "in_warehouse"
 
 
-async def test_slow_moving_and_location(db_session):
+async def test_slow_moving_and_location(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import (
         list_slow_moving_containers,
         update_container_location,
@@ -671,7 +673,7 @@ async def test_slow_moving_and_location(db_session):
 # ─── 物料请验 → 检验 → 放行全链路 ───
 
 
-async def _setup_material_standard(db_session, code: str, vendor: str | None = None):
+async def _setup_material_standard(db_session: AsyncSession, code: str, vendor: str | None = None) -> QualityMaterialStandard:
     from app.modules.quality.repository import (
         create_material,
         create_material_standard,
@@ -693,7 +695,7 @@ async def _setup_material_standard(db_session, code: str, vendor: str | None = N
     return std
 
 
-async def test_request_sample_task_release_flow(db_session):
+async def test_request_sample_task_release_flow(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import (
         list_containers_by_request,
         list_test_results,
@@ -734,7 +736,7 @@ async def test_request_sample_task_release_flow(db_session):
     assert len(linked) == 3 and all(c.status == "qualified" for c in linked)
 
 
-async def test_generate_link_request_validation(db_session):
+async def test_generate_link_request_validation(db_session: AsyncSession) -> None:
     """赋码挂单校验：物料不一致 400、已结单 400、不存在的请验单 404。"""
     from app.modules.quality.schemas import (
         MaterialRequestCreate,
@@ -769,7 +771,7 @@ async def test_generate_link_request_validation(db_session):
     assert exc3.value.status_code == 400
 
 
-async def test_release_reject_voids_containers(db_session):
+async def test_release_reject_voids_containers(db_session: AsyncSession) -> None:
     from app.modules.quality.repository import list_containers_by_request
     from app.modules.quality.schemas import (
         MaterialRequestCreate,
@@ -795,7 +797,7 @@ async def test_release_reject_voids_containers(db_session):
     assert all(c.status == "void" for c in linked)
 
 
-async def test_request_task_conflicts(db_session):
+async def test_request_task_conflicts(db_session: AsyncSession) -> None:
     from app.modules.quality.schemas import MaterialRequestCreate
 
     code = f"MAT-{_rand_code()}"
@@ -817,7 +819,7 @@ async def test_request_task_conflicts(db_session):
     assert exc2.value.status_code == 409
 
 
-async def test_micro_record_judge(db_session):
+async def test_micro_record_judge(db_session: AsyncSession) -> None:
     from app.modules.quality.api._materials import _micro_judge
     from app.modules.quality.repository import create_micro_record, get_micro_record
 

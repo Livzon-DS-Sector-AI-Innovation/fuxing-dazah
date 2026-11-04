@@ -1,10 +1,13 @@
 """复核状态机测试：自动流转待复核 + 状态转移规则（回滚式 db_session）。"""
 
 import uuid
+from typing import Any
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.modules.quality.models import QualityTestTask
 from app.modules.quality.repository import (
     create_test_results,
     create_test_task,
@@ -15,7 +18,7 @@ from app.modules.quality.schemas import TestTaskStatusUpdate
 from app.modules.quality.service import TestTaskService
 
 
-def _row_data(**overrides) -> dict:
+def _row_data(**overrides: Any) -> dict:
     data = {
         "item_name": "水分",
         "sop_no": "SOP.03.1111",
@@ -30,7 +33,7 @@ def _row_data(**overrides) -> dict:
     return data
 
 
-async def _make_task(db, status="in_progress", filled: bool = True):
+async def _make_task(db: AsyncSession, status: str = "in_progress", filled: bool = True) -> QualityTestTask:
     task = await create_test_task(
         db,
         product_name="盐酸万古霉素",
@@ -53,7 +56,7 @@ async def _make_task(db, status="in_progress", filled: bool = True):
     return task
 
 
-async def test_auto_advance_when_all_filled(db_session):
+async def test_auto_advance_when_all_filled(db_session: AsyncSession) -> None:
     task = await _make_task(db_session, filled=True)
     advanced = await TestTaskService.auto_advance_pending_review(db_session, task.id)
     assert advanced is True
@@ -61,7 +64,7 @@ async def test_auto_advance_when_all_filled(db_session):
     assert fresh.status == "pending_review"
 
 
-async def test_no_advance_when_unfilled(db_session):
+async def test_no_advance_when_unfilled(db_session: AsyncSession) -> None:
     task = await _make_task(db_session, filled=False)
     advanced = await TestTaskService.auto_advance_pending_review(db_session, task.id)
     assert advanced is False
@@ -69,7 +72,7 @@ async def test_no_advance_when_unfilled(db_session):
     assert fresh.status == "in_progress"
 
 
-async def test_review_requires_two_distinct_reviewers(db_session):
+async def test_review_requires_two_distinct_reviewers(db_session: AsyncSession) -> None:
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
     reviewer_a = uuid.uuid4()
@@ -90,7 +93,7 @@ async def test_review_requires_two_distinct_reviewers(db_session):
     assert detail2.status == "completed"
 
 
-async def test_review_same_reviewer_not_counted(db_session):
+async def test_review_same_reviewer_not_counted(db_session: AsyncSession) -> None:
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
     reviewer = uuid.uuid4()
@@ -99,7 +102,7 @@ async def test_review_same_reviewer_not_counted(db_session):
         await TestTaskService.add_review(db_session, task.id, reviewer, None)
 
 
-async def test_direct_complete_from_review_rejected(db_session):
+async def test_direct_complete_from_review_rejected(db_session: AsyncSession) -> None:
     """完成只能经双人复核接口，直接改状态应被拒绝。"""
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
@@ -109,7 +112,7 @@ async def test_direct_complete_from_review_rejected(db_session):
         )
 
 
-async def test_reject_transition_removed(db_session):
+async def test_reject_transition_removed(db_session: AsyncSession) -> None:
     """驳回链路已删除（专员复核时直接改结果），pending_review→in_progress 应被拒绝。"""
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
@@ -119,7 +122,7 @@ async def test_reject_transition_removed(db_session):
         )
 
 
-async def test_completed_reopen(db_session):
+async def test_completed_reopen(db_session: AsyncSession) -> None:
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
     await TestTaskService.add_review(db_session, task.id, uuid.uuid4(), None)
@@ -130,7 +133,7 @@ async def test_completed_reopen(db_session):
     assert detail.status == "in_progress"
 
 
-async def test_illegal_direct_complete_rejected(db_session):
+async def test_illegal_direct_complete_rejected(db_session: AsyncSession) -> None:
     task = await _make_task(db_session, filled=True)
     with pytest.raises(AppException):
         await TestTaskService.update_status(
@@ -138,7 +141,7 @@ async def test_illegal_direct_complete_rejected(db_session):
         )
 
 
-async def test_manual_pending_review_requires_all_filled(db_session):
+async def test_manual_pending_review_requires_all_filled(db_session: AsyncSession) -> None:
     task = await _make_task(db_session, filled=False)
     with pytest.raises(AppException):
         await TestTaskService.update_status(
@@ -146,7 +149,7 @@ async def test_manual_pending_review_requires_all_filled(db_session):
         )
 
 
-async def test_void_from_pending_review(db_session):
+async def test_void_from_pending_review(db_session: AsyncSession) -> None:
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
     detail = await TestTaskService.update_status(
@@ -155,7 +158,7 @@ async def test_void_from_pending_review(db_session):
     assert detail.status == "void"
 
 
-async def test_results_preserved_after_advance(db_session):
+async def test_results_preserved_after_advance(db_session: AsyncSession) -> None:
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
     rows = await list_test_results(db_session, task.id)

@@ -6,6 +6,8 @@
 
 from datetime import datetime
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.time import APP_TZ
 from app.modules.quality.models import ReportRecord
 from app.modules.quality.repository import list_report_records_by_date
@@ -21,7 +23,7 @@ def _rec(batch: str, created_at: datetime) -> ReportRecord:
     )
 
 
-async def test_day_boundary_is_beijing_time(db_session):
+async def test_day_boundary_is_beijing_time(db_session: AsyncSession) -> None:
     # 北京 9-20 00:30 = UTC 9-19 16:30：必须归到 9-20（按 UTC 计日会归到 9-19）
     early_beijing = _rec("B-EARLY", datetime(2026, 9, 20, 0, 30, tzinfo=APP_TZ))
     # 北京 9-19 17:00 = UTC 9-19 09:00：必须归到 9-19
