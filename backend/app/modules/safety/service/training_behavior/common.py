@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any, Protocol
 
-
 BJ_TZ = _dt.timezone(_dt.timedelta(hours=8))
 
 

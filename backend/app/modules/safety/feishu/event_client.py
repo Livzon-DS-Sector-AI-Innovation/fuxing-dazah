@@ -308,6 +308,7 @@ def _get_frame_stats() -> dict:
 
 async def _handle_binary_message(ws, message: bytes) -> None:
     """处理 protobuf 帧（区分 CONTROL 和 DATA）。"""
+    global _last_pong_at  # PONG 时间戳供 PONG 看门狗与 get_ws_status 读取
     _frame_count["received"] += 1
     try:
         from lark_oapi.ws.client import _get_by_key
@@ -404,7 +405,7 @@ async def start_ws() -> None:
     与设备交互机器人一致：无限重连模式，连接断开后自动重试，不设重试上限。
     仅当显式调用 stop_ws() 或 restart_ws() 时才会停止。
     """
-    global _stop, _ws_task
+    global _stop, _ws_task, _subscription_ok
     _stop = asyncio.Event()
     _ws_task = asyncio.current_task()
 

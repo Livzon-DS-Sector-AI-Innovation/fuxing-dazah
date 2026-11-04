@@ -44,6 +44,9 @@ def fire_inspection_report_field_id() -> str:
 _PAGE_SIZE = 500
 # base v3 新端点用字符串码，v1 用整数 0；缺 code 视为成功
 _OK_CODES: tuple[object, ...] = (0, "0", "Ok", "Success", "ok", "success")
+# get_attachments 的 record_id_list 上限 10（2026-11-01 起缺档 >10 触发
+# code=800010701 "Array must contain at most 10 element(s)"，整任务中断）
+_GET_ATTACHMENTS_MAX_IDS = 10
 
 
 class BitableError(RuntimeError):
@@ -146,6 +149,11 @@ async def search_records(
             page_token = next_token
 
 
+def _chunked(items: list[str], size: int) -> list[list[str]]:
+    """按固定长度切片（分片请求用，纯函数）。"""
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 async def get_attachment_extras(
     tenant_token: str,
     app_token: str,
@@ -153,17 +161,24 @@ async def get_attachment_extras(
     record_ids: list[str],
     http: httpx.AsyncClient | None = None,
 ) -> dict[str, dict[str, str]]:
-    """批量取记录附件的 extra_info（Base 附件下载必带，见官方下载流程）。"""
+    """批量取记录附件的 extra_info（Base 附件下载必带，见官方下载流程）。
+
+    record_id_list 单请求上限 10 条，超出按 _GET_ATTACHMENTS_MAX_IDS 分片
+    请求后合并（对调用方透明）。
+    """
     if not record_ids:
         return {}
+    merged: dict[str, dict[str, str]] = {}
     async with _own_client(http) as client:
-        resp = await client.post(
-            f"{_BASE_URL}/open-apis/base/v3/bases/{app_token}/tables/{table_id}/get_attachments",
-            headers={"Authorization": f"Bearer {tenant_token}"},
-            json={"record_id_list": record_ids},
-        )
-        envelope = ensure_ok(resp.json())
-        return parse_get_attachments(envelope.get("data") or {})
+        for chunk in _chunked(record_ids, _GET_ATTACHMENTS_MAX_IDS):
+            resp = await client.post(
+                f"{_BASE_URL}/open-apis/base/v3/bases/{app_token}/tables/{table_id}/get_attachments",
+                headers={"Authorization": f"Bearer {tenant_token}"},
+                json={"record_id_list": chunk},
+            )
+            envelope = ensure_ok(resp.json())
+            merged.update(parse_get_attachments(envelope.get("data") or {}))
+    return merged
 
 
 async def download_media(

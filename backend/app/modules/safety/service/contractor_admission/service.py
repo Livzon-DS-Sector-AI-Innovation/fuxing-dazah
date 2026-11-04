@@ -142,16 +142,21 @@ class ContractorAdmissionService:
         filters 支持键：
           - related_party_type / submit_status / ai_review_status / ai_conclusion（精确匹配）
           - keyword（模糊匹配 company_name / contact_person）
+          - date_from / date_to（date 对象：按记录创建日期过滤的闭区间，
+            北京时间日界；直读=Bitable「创建日期」公式列、镜像=created_at
+            首次插入时间，受控偏差同排序口径）
           - sort_by（entry_date / actual_complete_date / created_at / company_name）
           - sort_order（asc / desc，默认 desc）
         """
         f = dict(filters or {})
+        from app.modules.safety.service.bitable_direct.filters import date_range_window
         from app.modules.safety.service.contractor_admission_direct import (
             config as direct_config,
         )
 
         if direct_config.direct_enabled():
             return await self._get_list_direct(f, page=page, page_size=page_size)
+        dt_from, dt_to = date_range_window(f.get("date_from"), f.get("date_to"))
         return await self.repo.get_contractor_admission_list(
             skip=(page - 1) * page_size,
             limit=page_size,
@@ -160,6 +165,8 @@ class ContractorAdmissionService:
             ai_review_status=f.get("ai_review_status"),
             ai_conclusion=f.get("ai_conclusion"),
             keyword=f.get("keyword"),
+            date_from=dt_from,
+            date_to=dt_to,
             sort_by=f.get("sort_by"),
             sort_order=f.get("sort_order", "desc"),
         )
@@ -209,6 +216,8 @@ class ContractorAdmissionService:
             ai_review_status=f.get("ai_review_status"),
             ai_conclusion=f.get("ai_conclusion"),
             keyword=f.get("keyword"),
+            date_from=f.get("date_from"),
+            date_to=f.get("date_to"),
         )
         ordered = direct_query.sort_views(
             filtered, f.get("sort_by"), f.get("sort_order", "desc")

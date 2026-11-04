@@ -60,6 +60,8 @@ export { default as CertWarningPanel } from './CertWarningPanel'
 // ── 危化品库存管理（Chemical Inventory）──
 export { default as ChemicalInventoryPanel } from './ChemicalInventoryPanel'
 
+// ── 危化品趋势看板（Chemical Trend）──
+export { default as ChemicalTrendPanel } from './ChemicalTrendPanel'
 
 // ── AI 配置 + 定时任务（scheduler-config）──
 export { default as AiConfigModelCard } from './AiConfigModelCard'

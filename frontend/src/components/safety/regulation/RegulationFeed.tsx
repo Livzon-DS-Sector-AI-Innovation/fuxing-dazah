@@ -10,7 +10,14 @@ import { EmptyGuide } from '@/components/ui-kit'
 import { formatMonitorTimeFull } from './format'
 import type { RegulationFeedItem } from '@/types/safety'
 
-export default function RegulationFeed({ feed }: { feed: RegulationFeedItem[] }) {
+export default function RegulationFeed({
+  feed,
+  scrollable = false,
+}: {
+  feed: RegulationFeedItem[]
+  /** 外层卡片限高时，卡片流在容器内滚动 */
+  scrollable?: boolean
+}) {
   const [articleId, setArticleId] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
 
@@ -18,8 +25,7 @@ export default function RegulationFeed({ feed }: { feed: RegulationFeedItem[] })
     return <EmptyGuide compact title="暂无收录" description="候选判定收录后将在此展示" />
   }
 
-  return (
-    <>
+  const list = (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {feed.map((item) => (
           <div
@@ -78,6 +84,25 @@ export default function RegulationFeed({ feed }: { feed: RegulationFeedItem[] })
           </div>
         ))}
       </div>
+  )
+
+  return (
+    <>
+      {scrollable ? (
+        <div
+          aria-label="最新法规流"
+          style={{
+            height: '100%',
+            overflowY: 'auto',
+            paddingRight: 6,
+            overscrollBehavior: 'contain',
+          }}
+        >
+          {list}
+        </div>
+      ) : (
+        list
+      )}
       {/* onClose 只关不清（遮罩卡死防御，口径同知识库页） */}
       <KnowledgeDetailDrawer
         articleId={articleId}

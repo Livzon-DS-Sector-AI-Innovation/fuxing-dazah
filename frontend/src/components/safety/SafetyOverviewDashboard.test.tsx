@@ -22,6 +22,109 @@ vi.mock('@/lib/api/safety/facility-map', () => ({
     unmapped: [],
     errors: [],
   })),
+  // FacilityMapCard 的 AI 建议管道 mutations（本套测试不触达，仅需可导入）
+  fetchDistrictSuggestions: vi.fn(async () => []),
+  scanDistrictSuggestions: vi.fn(async () => ({ found: 0, suggested: 0, high: 0 })),
+  confirmDistrictSuggestion: vi.fn(async () => ({})),
+  ignoreDistrictSuggestion: vi.fn(async () => ({})),
+  confirmHighDistrictSuggestions: vi.fn(async () => ({ confirmed: 0, map_created: 0 })),
+}))
+
+// KPI 抽屉数据源替身（仅抽屉打开时启用查询）
+vi.mock('@/lib/api/safety/hazard', () => ({
+  fetchHazards: vi.fn(async () => ({
+    items: [
+      {
+        id: 'h1',
+        hazard_no: 'HZ-001',
+        description: '车间电缆桥架积尘未整改',
+        hazard_level: 'general',
+        hazard_level_manual: null,
+        department: '一车间',
+        discovered_at: '2026-10-10T02:00:00+00:00',
+        deadline: '2026-10-09',
+        rectification_status: 'in_progress',
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 200,
+  })),
+}))
+
+vi.mock('@/lib/api/safety/special-ops', () => ({
+  fetchSpecialOperationLedger: vi.fn(async () => ({
+    items: [
+      {
+        id: 's1',
+        report_no: 'R-001',
+        operation_type: 'hot_work',
+        work_description: '储罐区动火作业',
+        department: '二车间',
+        planned_start_time: '2026-10-12T02:00:00+00:00',
+        is_critical: true,
+        status: 'approved',
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 200,
+  })),
+}))
+
+vi.mock('@/lib/api/safety/fire-alarm', () => ({
+  fetchFireAlarmRecords: vi.fn(async () => ({
+    items: [
+      {
+        id: 'f1',
+        alarm_time: '2026-10-12T01:30:00+00:00',
+        alarm_type: '手动报警',
+        building: '综合楼',
+        location: '一层走廊',
+        alarm_nature: '误报',
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 100,
+  })),
+}))
+
+vi.mock('@/lib/api/safety/central-alarm', () => ({
+  fetchCentralAlarmRecords: vi.fn(async () => ({
+    items: [
+      {
+        id: 'c1',
+        alarm_date: '2026-10-12T01:40:00+00:00',
+        workshop: '车间一',
+        line: '达托',
+        post: '干燥岗位',
+        alarm_description: '高液位报警',
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 100,
+  })),
+}))
+
+vi.mock('@/lib/api/safety/cert-warning', () => ({
+  fetchCertWarnings: vi.fn(async () => ({
+    items: [
+      {
+        id: 'cert1',
+        person_name: '李四',
+        department: 'EHS部',
+        cert_category: 'guardian_a',
+        deadline: '2026-11-05',
+        remaining_days: 24,
+        status_level: 'key_warning',
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 200,
+  })),
 }))
 
 // vi.mock factory 会被提升到文件顶部，样例数据必须内联在 factory 里
@@ -223,5 +326,57 @@ describe('SafetyOverviewDashboard（3.0 只读驾驶舱）', () => {
     expect(screen.getByText('甲醇')).toBeInTheDocument()
     // 图表：隐患趋势 + 报警分析 + Top 类型 = 3 个 echart 占位
     expect(screen.getAllByTestId('echart')).toHaveLength(3)
+  })
+
+  // ── KPI 格子统一「点击开抽屉」行为（不再整页跳转）──
+
+  it('六个 KPI 格子点击均开抽屉展示明细，不触发路由跳转', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<SafetyOverviewDashboard />)
+    // 等 KPI 数字渲染（骨架屏退场=总览数据到位），再点格子
+    await screen.findByText('12')
+
+    // 未闭环隐患：抽屉含趋势图 + 未闭环清单
+    await user.click(screen.getByText('未闭环隐患'))
+    expect(await screen.findByText('车间电缆桥架积尘未整改')).toBeInTheDocument()
+    expect(screen.getByText('整改期限')).toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+
+    // 今日特殊作业
+    await user.click(screen.getByText('今日特殊作业'))
+    expect(await screen.findByText('储罐区动火作业')).toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+
+    // 今日报警：消防/中控当日两源明细
+    await user.click(screen.getByText('今日报警'))
+    expect(await screen.findByText('手动报警')).toBeInTheDocument()
+    expect(screen.getByText('高液位报警')).toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+
+    // 30 天内到期证书（卡片与底部区块标题同名，取首个=卡片）
+    await user.click(screen.getAllByText('30 天内到期证书')[0]!)
+    expect(await screen.findByText('李四')).toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+
+    // 危化品超储（总览载荷直出，含存放位置列）
+    await user.click(screen.getByText('危化品超储'))
+    expect(await screen.findByText('库1')).toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+
+    // 今日安全速递：此前无点击行为，现在也开抽屉直出全文
+    await user.click(screen.getAllByText('今日安全速递')[0]!)
+    expect(await screen.findByText('作业明细全文内容')).toBeInTheDocument()
+    expect(pushMock).not.toHaveBeenCalled()
+  })
+
+  it('抽屉右上角「前往模块页」关闭抽屉并跳转', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<SafetyOverviewDashboard />)
+    await screen.findByText('12')
+
+    await user.click(screen.getByText('未闭环隐患'))
+    await screen.findByText('车间电缆桥架积尘未整改')
+    await user.click(screen.getByText('前往隐患排查与治理'))
+    expect(pushMock).toHaveBeenCalledWith('/safety/hazard-ledger')
   })
 })

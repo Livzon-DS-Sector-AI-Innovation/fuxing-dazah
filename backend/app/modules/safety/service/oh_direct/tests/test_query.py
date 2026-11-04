@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.modules.safety.service.oh_direct.query import (
     oh_hazard_factors,
     oh_positions,
@@ -152,3 +154,43 @@ class TestOhHazardFactors:
         items, _ = oh_hazard_factors([_fac("1", "噪声", "耳塞")])
         assert set(items[0].keys()) == FACTOR_KEYS
         assert items[0]["ppe_respiratory"] == "耳塞"
+
+
+class TestListExamsDateRange:
+    """ledger.list_exams 日期区间：体检时间（exam_date）北京时间日界闭区间。"""
+
+    @staticmethod
+    def _exam(rid: str, exam_date: object) -> Any:
+        from app.modules.safety.service.oh_direct.ledger import OhRowView
+
+        return OhRowView(rid, {"exam_date": exam_date})
+
+    def test_range_beijing_bounds(self) -> None:
+        from datetime import UTC, date, datetime
+
+        from app.modules.safety.service.oh_direct.ledger import list_exams
+
+        views = [
+            # 北京 2026-10-01 00:00 = UTC 09-30 16:00：起始边界含
+            self._exam("octA", datetime(2026, 9, 30, 16, 0, tzinfo=UTC)),
+            self._exam("octB", datetime(2026, 10, 15, 6, 0, tzinfo=UTC)),
+            # 北京 2026-11-01 01:00：超出 10 月（结束次日零点不含）
+            self._exam("nov", datetime(2026, 10, 31, 17, 0, tzinfo=UTC)),
+            self._exam("sep", datetime(2026, 9, 30, 15, 59, tzinfo=UTC)),
+            self._exam("noDate", None),
+        ]
+        got, total = list_exams(
+            views, date_from=date(2026, 10, 1), date_to=date(2026, 10, 31),
+        )
+        assert total == 2
+        assert [e.id for e in got] == ["octA", "octB"]
+
+    def test_missing_exam_date_excluded_only_when_range_set(self) -> None:
+        from datetime import date
+
+        from app.modules.safety.service.oh_direct.ledger import list_exams
+
+        views = [self._exam("noDate", None)]
+        _, filtered = list_exams(views, date_from=date(2026, 10, 1))
+        _, unfiltered = list_exams(views)
+        assert (filtered, unfiltered) == (0, 1)

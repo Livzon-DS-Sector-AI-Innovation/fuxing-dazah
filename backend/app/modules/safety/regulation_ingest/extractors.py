@@ -14,6 +14,9 @@ import logging
 import re
 from typing import Any
 
+from app.modules.safety.regulation_ingest.business_profile import (
+    DEFAULT_PROFILE_TEXT,
+)
 from app.modules.safety.regulation_ingest.schemas import CrawledRegulation
 
 logger = logging.getLogger(__name__)
@@ -108,9 +111,7 @@ EXTRACTION_USER_TEMPLATE = """请从以下网页内容中提取安全生产相�
 ASSESS_SYSTEM_PROMPT = """你是安全生产法规评估专家。你的任务是对给定的法规标准，评估其对原料药生产企业的影响。
 
 ## 企业背景
-- 行业：医药制造业（化学药品原料药制造）
-- 涉及领域：安全生产、职业健康、环境保护、消防安全、危化品管理、特种设备
-- 工厂位于福建省福州市
+{business_profile}
 
 ## 评估维度
 
@@ -349,10 +350,13 @@ class AIExtractor:
     # ③ 相关性评估 + 影响等级 + 应对建议
     # ═══════════════════════════════════════════════════════════
 
-    async def assess_relevance(self, item: CrawledRegulation) -> CrawledRegulation:
+    async def assess_relevance(
+        self, item: CrawledRegulation, business_profile: str = "",
+    ) -> CrawledRegulation:
         """评估法规对企业的相关性、影响等级，并生成摘要和应对建议。
 
         原地修改传入的 CrawledRegulation 并返回。
+        business_profile 为空时回退内置默认画像。
         """
         # 构建法规信息摘要
         raw_summary = item.raw_text or ""
@@ -363,7 +367,9 @@ class AIExtractor:
             ai = await self._get_ai_service()
             response = await ai.chat(
                 messages=[
-                    {"role": "system", "content": ASSESS_SYSTEM_PROMPT},
+                    {"role": "system", "content": ASSESS_SYSTEM_PROMPT.replace(
+                        "{business_profile}", business_profile or DEFAULT_PROFILE_TEXT,
+                    )},
                     {"role": "user", "content": ASSESS_USER_TEMPLATE.format(
                         title=item.title,
                         document_number=item.document_number or "未知",
@@ -417,8 +423,7 @@ class AIExtractor:
     BATCH_CLASSIFY_ASSESS_PROMPT = """你是一个法规内容分类与相关性评估助手。对给定的法规列表进行批量判定。
 
 ## 企业背景
-- 行业：医药制造业（化学药品原料药制造）
-- 涉及领域：安全生产、职业健康、环境保护、消防安全、危化品管理、特种设备
+{business_profile}
 
 ## 对每条法规进行两项判定
 
@@ -445,6 +450,7 @@ class AIExtractor:
     async def classify_and_assess_batch(
         self,
         items: list[dict[str, Any]],
+        business_profile: str = "",
     ) -> list[dict[str, Any]]:
         """批量判定内容类型 + 相关性评估。
 
@@ -452,6 +458,7 @@ class AIExtractor:
 
         Args:
             items: [{"index": 0, "title": "...", "source_url": "...", "raw_text": "..."}, ...]
+            business_profile: 企业业务画像（空 = 内置默认画像）
 
         Returns:
             [{"index": 0, "content_type": "regulation", "impact_level": "高",
@@ -460,6 +467,10 @@ class AIExtractor:
         """
         if not items:
             return []
+
+        system_prompt = self.BATCH_CLASSIFY_ASSESS_PROMPT.replace(
+            "{business_profile}", business_profile or DEFAULT_PROFILE_TEXT,
+        )
 
         validated = []
         for it in items:
@@ -485,7 +496,7 @@ class AIExtractor:
                 ai = await self._get_ai_service()
                 response = await ai.chat(
                     messages=[
-                        {"role": "system", "content": self.BATCH_CLASSIFY_ASSESS_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": self.BATCH_CLASSIFY_USER_TEMPLATE.format(
                             items_json=_json.dumps(batch, ensure_ascii=False),
                         )},

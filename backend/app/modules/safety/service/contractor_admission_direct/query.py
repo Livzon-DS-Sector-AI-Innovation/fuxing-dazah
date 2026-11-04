@@ -6,6 +6,9 @@ repository.get_contractor_admission_list / get_contractor_admission_stats：
 - related_party_type / submit_status / ai_review_status 精确等值；
   ai_review_status=processing/failed 在直读下恒空（派生态只含 none/completed，
   spec §4.2 用户已接受）；ai_conclusion 精确匹配派生 overall_conclusion；
+- 日期区间 date_from/date_to（对称新增）：按记录创建日期（「创建日期」公式列）
+  以北京时间日界半开区间过滤；created_at 缺失行在设定区间时不命中；repo
+  镜像分支对称过滤 created_at（镜像首次插入时间，受控偏差同排序口径）；
 - keyword 大小写不敏感子串，company_name / contact_person 两字段（复刻 ilike %kw%）；
   已知边界：keyword 含 % 或 _ 时按字面匹配（legacy ilike 按通配符解释），
   极端输入下两路径结果不同（key_risk_op/cert 同款已落档限制）；
@@ -21,8 +24,10 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
+from app.modules.safety.service.bitable_direct.filters import date_range_window
 from app.modules.safety.service.contractor_admission_direct.views import (
     ContractorAdmissionView,
 )
@@ -55,8 +60,14 @@ def filter_views(
     ai_review_status: str | None = None,
     ai_conclusion: str | None = None,
     keyword: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[ContractorAdmissionView]:
-    """API/Agent 列表过滤口径（repo.get_contractor_admission_list 等价内存实现）。"""
+    """API/Agent 列表过滤口径（repo.get_contractor_admission_list 等价内存实现）。
+
+    date_from/date_to：按记录创建日期（「创建日期」公式列）以北京时间日界
+    过滤的闭区间；created_at 缺失行在设定区间时不命中。
+    """
     filtered = views
     if related_party_type:
         filtered = [v for v in filtered if v.related_party_type == related_party_type]
@@ -72,6 +83,20 @@ def filter_views(
             if _ci_contains(v.company_name, keyword)
             or _ci_contains(v.contact_person, keyword)
         ]
+    if date_from or date_to:
+        start, end = date_range_window(date_from, date_to)
+
+        def _in_range(v: ContractorAdmissionView) -> bool:
+            ts = v.created_at
+            if ts is None:
+                return False
+            if start is not None and ts < start:
+                return False
+            if end is not None and ts >= end:
+                return False
+            return True
+
+        filtered = [v for v in filtered if _in_range(v)]
     return filtered
 
 

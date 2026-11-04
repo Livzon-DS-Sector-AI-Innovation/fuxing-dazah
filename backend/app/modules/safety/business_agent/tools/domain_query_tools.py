@@ -61,8 +61,8 @@ async def query_visitor_insurance(
 
     示例：外来人员保险到期的有哪些；访客保险过期了没；哪些外包单位没填保险。
     """
-    from app.modules.safety.service.visitor_insurance import report as vi_report
     from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+    from app.modules.safety.service.visitor_insurance import report as vi_report
 
     cat = category.strip().lower() or "all"
     if cat not in ("all", "expired", "soon", "missing"):

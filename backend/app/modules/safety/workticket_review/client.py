@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import time
 from datetime import date, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -115,6 +116,36 @@ STANDARD_TICKET_TYPES: list[tuple[str, str]] = list(TICKET_TYPE_KEYS.items())
 _HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _MAX_RETRIES = 3
 _RETRY_STATUS = {500, 502, 503, 504}
+
+# ── 平台 token 进程级缓存（2026-11-02 性能修复）─────────────────────────
+# 客户端按请求实例化（async with ...），实例级 token 缓存对跨请求无效——
+# pins 作业票路每次都要「密码登录→换 LCP token」两个额外外部往返。
+# 平台 token 有效期远大于本 TTL（保守 30 分钟），401 时主动失效重登。
+_TOKEN_CACHE_TTL_SECONDS = 30 * 60
+_token_cache: dict[str, Any] = {"platform": None, "lcp": None, "at": 0.0}
+_token_lock: asyncio.Lock | None = None
+
+
+def _get_token_lock() -> asyncio.Lock:
+    global _token_lock
+    if _token_lock is None:
+        _token_lock = asyncio.Lock()
+    return _token_lock
+
+
+def _token_cache_fresh() -> bool:
+    return bool(
+        _token_cache["platform"]
+        and _token_cache["lcp"]
+        and time.monotonic() - _token_cache["at"] < _TOKEN_CACHE_TTL_SECONDS
+    )
+
+
+def invalidate_platform_tokens() -> None:
+    """清空进程级 token 缓存（401/鉴权失败后调用，下次调用重新登录）。"""
+    _token_cache["platform"] = None
+    _token_cache["lcp"] = None
+    _token_cache["at"] = 0.0
 
 
 def _to_asia_date(value: Any) -> date | None:
@@ -303,6 +334,10 @@ class WorkTicketPlatformClient:
                     continue
                 # 非 2xx：抛清晰异常
                 if resp.status_code >= 400:
+                    if resp.status_code == 401:
+                        # token 失效（进程缓存期内被平台吊销等）：清缓存，
+                        # 下次调用重新走登录链
+                        invalidate_platform_tokens()
                     body_snippet = resp.text[:500]
                     raise RuntimeError(
                         f"平台接口调用失败 {method} {url} -> HTTP {resp.status_code}: "
@@ -371,14 +406,22 @@ class WorkTicketPlatformClient:
         return str(token)
 
     async def _ensure_tokens(self) -> tuple[str, str]:
-        """获取（并缓存）平台 token + LCP token。"""
+        """获取（并缓存）平台 token + LCP token。
+
+        优先级：实例注入 token（测试接缝）→ 进程级 TTL 缓存 → 真实登录。
+        登录双往返只在缓存冷/过期时发生，锁内二次检查防并发重复登录。
+        """
         if self._lcp_token and self._platform_token:
             return self._platform_token, self._lcp_token
-        pt = self._platform_token or await self.get_platform_token()
-        self._platform_token = pt
-        lcp = self._lcp_token or await self.get_lcp_token(pt)
-        self._lcp_token = lcp
-        return pt, lcp
+        if _token_cache_fresh():
+            return _token_cache["platform"], _token_cache["lcp"]
+        async with _get_token_lock():
+            if _token_cache_fresh():  # 等锁期间别的协程已刷新
+                return _token_cache["platform"], _token_cache["lcp"]
+            pt = await self.get_platform_token()
+            lcp = await self.get_lcp_token(pt)
+            _token_cache.update(platform=pt, lcp=lcp, at=time.monotonic())
+            return pt, lcp
 
     def _workflow_headers(self, platform_token: str, lcp_token: str) -> dict[str, str]:
         """工作流接口统一请求头（兼容设计文档与实测两种写法）。"""
@@ -913,6 +956,7 @@ __all__ = [
     "TICKET_TYPE_KEYS",
     "STANDARD_TICKET_TYPES",
     "WorkTicketPlatformClient",
+    "invalidate_platform_tokens",
     "platform_auth_basic",
     "platform_base_url",
     "platform_org_code",

@@ -509,3 +509,65 @@ def test_label_elements_ghs_images_rendered(tmp_path):
     text = "".join(p.extract_text() or "" for p in reader.pages).replace("\n", "")
     # 参考件版式：标签要素格只放象形图，不重复打印信号词
     assert "信号词：危险" not in text
+
+
+# ── 格式突出修复 + UN No=NA 写「无」（2026-11-03 业务反馈批）──
+
+
+def test_un_no_na_displayed_as_wu(tmp_path):
+    """UN No 占位值 NA/N/A/none 统一显示「无」（2026-11-03 拍板）。"""
+    pypdf = pytest.importorskip("pypdf")
+    from app.modules.safety.feishu.msds_pdf import _un_display, build_standard_msds_pdf
+
+    assert _un_display("NA") == "无"
+    assert _un_display("N/A") == "无"
+    assert _un_display("N.A.") == "无"
+    assert _un_display("none") == "无"
+    assert _un_display("1170") == "1170"  # 真实编号原样
+    assert _un_display("") == ""
+
+    entry = {
+        "name": "磷酸二氢钾", "cas_no": "7778-77-0",
+        "molecular_formula": "KH2PO4", "un_no": "NA",
+    }
+    out = tmp_path / "un_na.pdf"
+    build_standard_msds_pdf(entry, str(out))
+    text = "".join(p.extract_text() or "" for p in pypdf.PdfReader(str(out)).pages)
+    flat = text.replace("\n", "")
+    assert "NA" not in flat, "UN No=NA 不得原样上 PDF"
+    assert "无" in flat
+
+
+def test_layout_row_floors_cover_vertical_labels():
+    """行高下限必须容纳竖排栏目标签：短内容行（操作处置/危险性说明）
+    曾以 40pt 最小行高对 48/60pt 标签做垂直居中 → 标签顶穿上边线压线。"""
+    import math
+
+    from app.modules.safety.feishu import msds_pdf as mp
+
+    entry = {
+        "name": "亚硫酸氢钠", "cas_no": "7631-90-5",
+        "hazard_statement": "不明。",
+        "stability_reactivity": "稳定性：稳定。",
+        "handling_storage": "储存注意事项：贮存在阴凉处。容器保持紧闭。",
+    }
+    for scale in mp.SCALES:
+        lay = mp._layout(mp._build_model(entry), scale)
+        op_h = lay["ys"][11] - lay["ys"][10]
+        op_label_h = math.ceil(len("操作处置与储存注意事项") / 3) * lay["lead"]
+        assert op_h >= op_label_h, f"op 行高须容纳竖排标签 scale={scale}"
+        assert lay["r2_h"] >= 5 * lay["lead"], f"r2 行高须容纳「危险性说明」5 行 scale={scale}"
+        # 竖排标签垂直居中后首行不得高于行上边线
+        top = lay["ys"][10] + (op_h - op_label_h) / 2
+        assert top >= lay["ys"][10] - 1e-6, f"标签顶穿 op 行上边线 scale={scale}"
+
+
+def test_wrap_trailing_punct_never_exceeds_width():
+    """闭合标点不悬挂出格：任何折行结果行宽不得超过可用宽度（追い出し）。"""
+    from app.modules.safety.feishu.msds_pdf import BODY_FONT, _sw, _wrap
+
+    for text in ("自燃温度：无资料。", "注意事项：严禁烟火！！！），。",
+                 "监测方法：无资料。"):
+        for width in (63.0, 66.8, 98.4):
+            for ln in _wrap(text, BODY_FONT, 9.0, width):
+                assert _sw(ln, BODY_FONT, 9.0) <= width, f"{ln!r} 越界 w={width}"

@@ -28,7 +28,9 @@ class CandidateMetadata(BaseModel):
 class CandidateAttachment(BaseModel):
     """候选原文附件（ragplus 侧已暂存的 PDF 等）。"""
 
-    file_id: str | None = Field(default=None, description="ragplus 侧附件 id")
+    file_id: str | int | None = Field(
+        default=None, description="ragplus 侧附件 id（契约为字符串，兼容历史整数 id）",
+    )
     filename: str | None = Field(default=None, description="附件文件名")
 
 
@@ -42,10 +44,14 @@ class IngestCandidateItem(BaseModel):
     metadata: CandidateMetadata = Field(default_factory=CandidateMetadata, description="元数据")
     attachment: CandidateAttachment = Field(default_factory=CandidateAttachment, description="附件")
     content_digest: str | None = Field(default=None, description="正文摘要（供 AI 判定）")
-    old_version_hint: str | None = Field(
-        default=None, description="旧版法规标题提示（修订/替代场景）",
+    # ragplus 契约实现可能发结构化提示（dict），也兼容历史纯文本提示
+    old_version_hint: str | dict[str, Any] | None = Field(
+        default=None, description="旧版法规提示（文本或结构化对象，修订/替代场景）",
     )
-    discovered_at: str | None = Field(default=None, description="发现时间 (ISO 8601)")
+    # 契约规范为 ISO 8601 字符串；兼容 ragplus 早期实现的 Unix 秒级时间戳
+    discovered_at: str | int | None = Field(
+        default=None, description="发现时间（ISO 8601 字符串或 Unix 秒）",
+    )
 
 
 class IngestCandidatesRequest(BaseModel):
@@ -64,6 +70,15 @@ class IngestItemResult(BaseModel):
     )
     reason: str = Field(default="", description="处置原因")
     bitable_record_id: str | None = Field(default=None, description="写入台账的 record_id")
+    # 展示元数据（_notify_batch 转入飞书卡片；可选，旧调用方无需传）
+    bitable_shared_url: str | None = Field(default=None, description="台账记录分享链接")
+    action: str | None = Field(default=None, description="created | updated（修订替代=updated）")
+    impact_level: str | None = Field(default=None, description="AI 判定影响等级（高/中/低）")
+    core_summary: str | None = Field(default=None, description="AI 核心摘要")
+    action_recommendations: str | None = Field(default=None, description="AI 应对建议")
+    applicability: str | None = Field(default=None, description="适用性结论（三级）")
+    applicability_reasons: list[str] = Field(default_factory=list, description="适用性理由")
+    applicability_suggestions: list[str] = Field(default_factory=list, description="落地建议")
 
 
 class IngestCandidatesResponse(BaseModel):
@@ -184,6 +199,11 @@ class CrawlItemResult(BaseModel):
     action: str | None = None  # "created" | "updated" — 区分新增 vs 修订替代
     core_summary: str | None = None  # 新增法规的 AI 核心摘要
     comparison_summary: str | None = None  # 修订法规的新旧对比摘要
+    action_recommendations: str | None = None  # AI 应对建议（制度/培训/时间节点）
+    # 适用性深度分析（仅高关注项；分析未跑/失败时 applicability=None → 卡片标"分析待补"）
+    applicability: str | None = None  # applicable | partially_applicable | not_applicable
+    applicability_reasons: list[str] = Field(default_factory=list)
+    applicability_suggestions: list[str] = Field(default_factory=list)
     error: str | None = None
 
 

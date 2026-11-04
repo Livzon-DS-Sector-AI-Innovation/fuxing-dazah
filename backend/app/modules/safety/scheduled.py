@@ -505,6 +505,64 @@ TB_RETRAINING_DUE_TASK = TaskDefinition(
     module="safety",
 )
 
+
+# ═══════════════════════════════════════════════════════════════
+# 驾驶舱缓存预热（interval，默认 120s；总览/图卡/goals 结果缓存 force 刷新）
+# 2026-11-02 性能修复 P1：用户打开页面恒命中热缓存，「用户等待」变「后台刷新」
+# ═══════════════════════════════════════════════════════════════
+
+_WARMUP_ROUND_KEY = "dashboard_warmup"
+# 整轮上限：goals force 重算并行取数后 <30s，留余量
+_WARMUP_ROUND_TIMEOUT = 5 * 60
+
+
+def _dashboard_warmup_interval() -> int:
+    from app.modules.safety.app_config.store import store
+
+    # 0/负值=停用（预热只是加速，关掉不影响正确性）
+    return store.get_int("SAFETY_DASHBOARD_WARMUP_INTERVAL_SECONDS", 120, minimum=0)
+
+
+async def _run_dashboard_warmup_round() -> None:
+    from app.modules.safety.service.dashboard_warmup import (
+        run_dashboard_warmup_once,
+    )
+
+    if _dashboard_warmup_interval() <= 0:
+        return
+    if _WARMUP_ROUND_KEY in _RUNNING:
+        logger.warning("驾驶舱预热上轮未完，跳过本次触发")
+        return
+    _RUNNING.add(_WARMUP_ROUND_KEY)
+    try:
+        await run_dashboard_warmup_once()
+    except Exception:
+        logger.exception("驾驶舱预热单轮异常")
+    finally:
+        _RUNNING.discard(_WARMUP_ROUND_KEY)
+
+
+async def _dispatch_dashboard_warmup_round() -> None:
+    """派发器（瞬时返回）：整轮含多路 Bitable 全量直读，禁止内联 await 进引擎循环。"""
+    _dispatch_round(
+        _run_dashboard_warmup_round(), "safety.dashboard_warmup.round",
+        _WARMUP_ROUND_TIMEOUT,
+    )
+
+
+DASHBOARD_WARMUP_TASK = TaskDefinition(
+    name="safety.dashboard_warmup",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        # 引擎侧下限 30s（0=停用时也别每 tick 空转派发；协程内自查开关）
+        interval_seconds=max(30, _dashboard_warmup_interval()),
+    ),
+    coro=_dispatch_dashboard_warmup_round,
+    # 引擎侧超时约束派发器（瞬时返回）；整轮真实上限在后台任务 wait_for 内
+    timeout_seconds=60,
+    module="safety",
+)
+
 _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     SAFETY_SCHEDULER_BRIDGE_TASK,
     HAZARD_AI_POLL_TASK,
@@ -514,10 +572,11 @@ _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     TELEMETRY_COLLECT_TASK,
     TB_BACKFLOW_TASK,
     TB_RETRAINING_DUE_TASK,
+    DASHBOARD_WARMUP_TASK,
 )
 
 
 def register_safety_tasks(registry) -> None:
-    """安全模块 8 个任务注册进平台引擎（main.py 启动接线，对齐仓储模式）。"""
+    """安全模块任务注册进平台引擎（main.py 启动接线，对齐仓储模式）。"""
     for task in _SAFETY_TASKS:
         registry.register_task(task)

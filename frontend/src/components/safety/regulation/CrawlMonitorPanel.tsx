@@ -8,7 +8,7 @@
  * 布局：StatCard 六卡 → 源健康表+最新法规流（双列）→ 判定漏斗 → 运行历史。
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Col, Row } from 'antd'
 import { EmptyGuide, SectionCard, StatCard, StatusTag } from '@/components/ui-kit'
@@ -28,11 +28,37 @@ const STATUS_TAG: Record<RegulationMonitorStatus, { label: string; tone: 'ok' | 
 
 export default function CrawlMonitorPanel() {
   const [page, setPage] = useState(1)
+  const healthCardRef = useRef<HTMLDivElement>(null)
+  const [feedHeight, setFeedHeight] = useState<number | null>(null)
   const query = useQuery({
     queryKey: ['regulation-monitor', page],
     queryFn: () => fetchRegulationMonitor(page, 20),
     staleTime: 60_000,
   })
+
+  // 让右侧「最新法规流」与左侧「数据源健康度」卡片等高：桌面端实测左卡高度，
+  // 右卡按同一高度收起，内部卡片流改为滚轮滚动，避免法规流把整行撑长。
+  useEffect(() => {
+    const el = healthCardRef.current
+    if (el == null) return
+    const desktop = window.matchMedia('(min-width: 1200px)')
+    const measure = () => {
+      if (!desktop.matches) {
+        setFeedHeight(null)
+        return
+      }
+      const next = Math.round(el.getBoundingClientRect().height)
+      setFeedHeight((prev) => (prev === next ? prev : next))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    desktop.addEventListener('change', measure)
+    return () => {
+      ro.disconnect()
+      desktop.removeEventListener('change', measure)
+    }
+  }, [])
 
   const data = query.data
   const status = data?.status ?? 'not_connected'
@@ -79,14 +105,23 @@ export default function CrawlMonitorPanel() {
 
       <Row gutter={16}>
         <Col xs={24} xl={14}>
-          <SectionCard title="数据源健康度" description="10 政务源采集状况（ragplus 契约③），行点击查看源详情">
-            <SourceHealthTable sources={data?.sources ?? []} />
-          </SectionCard>
+          <div ref={healthCardRef}>
+            <SectionCard title="数据源健康度" description="10 政务源采集状况（ragplus 契约③），行点击查看源详情">
+              <SourceHealthTable sources={data?.sources ?? []} />
+            </SectionCard>
+          </div>
         </Col>
         <Col xs={24} xl={10}>
-          <SectionCard title="最新法规流" description="最近收录（点击卡片查看法规详情，修订条目带标记）">
-            <RegulationFeed feed={data?.feed ?? []} />
-          </SectionCard>
+          <div style={feedHeight != null ? { height: feedHeight, display: 'flex' } : undefined}>
+            <SectionCard
+              title="最新法规流"
+              description="最近收录（点击卡片查看法规详情，修订条目带标记）"
+              className={feedHeight != null ? 'flex h-full w-full flex-col' : 'w-full'}
+              bodyClassName={feedHeight != null ? 'flex-1 min-h-0 overflow-hidden' : ''}
+            >
+              <RegulationFeed feed={data?.feed ?? []} scrollable={feedHeight != null} />
+            </SectionCard>
+          </div>
         </Col>
       </Row>
 

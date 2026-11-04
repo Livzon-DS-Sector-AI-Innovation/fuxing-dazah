@@ -474,6 +474,19 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "法规收录单批 AI token 预算上限（超限标 pending 留痕，不调 AI）",
         minimum=0,
     ),
+    _flag(
+        "SAFETY_APPLICABILITY_ANALYSIS_ENABLED", True,
+        "法规收录后对高关注项做适用性深度分析开关（LLM 三级适用+落地建议，随飞书卡展示）",
+    ),
+    ConfigItem(
+        "SAFETY_APPLICABILITY_MAX_PER_RUN", "misc", "int", 10,
+        "每轮收录适用性深度分析条数上限（超出项卡片标\"分析待补\"）",
+        minimum=0,
+    ),
+    ConfigItem(
+        "SAFETY_BUSINESS_PROFILE_TEXT", "misc", "str", "",
+        "企业业务画像基线文本（空=内置默认；AI 判定与适用性分析注入，动态事实自动附加）",
+    ),
 
     # ══════════════════════════════════════════════════════════
     # ragplus-x 知识层（一期壳换芯：检索外接 + 入库短路同一总闸）

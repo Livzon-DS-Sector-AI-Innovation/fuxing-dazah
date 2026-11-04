@@ -145,9 +145,11 @@ class _FakeExtractor:
         self.batch_raises = batch_raises
         self.fallback_relevant = fallback_relevant
         self.batch_called = False
+        self.batch_profile: str | None = None
 
-    async def classify_and_assess_batch(self, items):
+    async def classify_and_assess_batch(self, items, business_profile: str = ""):
         self.batch_called = True
+        self.batch_profile = business_profile
         if self.batch_raises:
             raise RuntimeError("ai down")
         return self.batch_results if self.batch_results is not None else []
@@ -952,3 +954,380 @@ async def test_mcp_query_regulation_latest(db_session, monkeypatch):
     assert result["success"] is True
     assert result["items"][0]["title"] == "新法（修订）"
     assert result["items"][0]["is_revision"] is True
+
+
+# ── 契约兼容性（ragplus 现状负载） ──────────────────────────
+
+
+def test_ingest_request_accepts_ragplus_native_payload_types():
+    """ragplus 现网负载含 int file_id/discovered_at 与 dict old_version_hint。
+
+    契约规范写 ISO str / str id，但推送器实际发 Unix 秒与整数 id；接收端必须
+    兼容，否则推送会 422，采集监控长期空白。该回归用例锁定兼容边界。
+    """
+    from app.modules.safety.regulation_ingest.schemas import IngestCandidatesRequest
+
+    req = IngestCandidatesRequest.model_validate({
+        "run_id": "3",
+        "items": [{
+            "candidate_id": "cand-native",
+            "source": "mem",
+            "url": "https://example.gov.cn/law/1",
+            "title": "中华人民共和国安全生产法",
+            "metadata": {"doc_no": "主席令第八十八号", "issued_at": None,
+                         "puborg": "全国人大常委会", "effective_at": None},
+            "attachment": {"file_id": 142, "filename": "a.pdf"},
+            "content_digest": "digest",
+            "old_version_hint": {"existing_candidate_id": "old", "old_doc_no": "AQ 1-2020"},
+            "discovered_at": 1792360871,
+        }],
+    })
+    item = req.items[0]
+    assert item.attachment.file_id == 142
+    assert item.discovered_at == 1792360871
+    assert item.old_version_hint == {
+        "existing_candidate_id": "old", "old_doc_no": "AQ 1-2020",
+    }
+
+
+# ── 适用性深度分析 + 业务画像注入（V1.2） ─────────────────────
+
+
+class _FakeApplicability:
+    """ApplicabilityAnalyzer 替身：预设分析返回；可断言调用。"""
+
+    def __init__(
+        self,
+        result: dict[str, Any] | None = None,
+        raises: bool = False,
+    ) -> None:
+        self.result = result
+        self.raises = raises
+        self.calls: list[dict[str, Any]] = []
+
+    async def analyze(self, title: str, content: str, business_profile: str):
+        self.calls.append({
+            "title": title, "content": content, "profile": business_profile,
+        })
+        if self.raises:
+            raise RuntimeError("llm down")
+        return self.result
+
+
+def _use_applicability(monkeypatch, analyzer: _FakeApplicability) -> _FakeApplicability:
+    monkeypatch.setattr(
+        ingest_service, "ApplicabilityAnalyzer", lambda: analyzer,
+    )
+    return analyzer
+
+
+@pytest.fixture
+def full_write(monkeypatch: pytest.MonkeyPatch):
+    """台账写入成功路径：write_regulation 返回 record/shared_url/action。"""
+    monkeypatch.setattr(ingest_service, "BitableWriter", lambda: _FakeWriter(
+        [], write_result={
+            "record_id": "rec-1",
+            "shared_url": "https://feishu.cn/base/xxx?record=rec-1",
+            "action": "created",
+        },
+    ))
+
+
+_HIGH_VERDICT = [{
+    "index": 0, "content_type": "regulation", "relevance_score": 0.95,
+    "impact_level": "高", "business_domains": ["危化品管理"],
+    "core_summary": "危化品企业安全管理新要求",
+}]
+
+
+def _high_item() -> list[dict[str, Any]]:
+    return [{
+        "candidate_id": "cand-high",
+        "source": "npc",
+        "url": "https://example.gov.cn/1",
+        "title": "危险化学品安全管理条例",
+        "content_digest": "危化品安全管理条例全文摘要，含生产储存使用全链条要求。",
+    }]
+
+
+_ANALYSIS = {
+    "applicability": "applicable",
+    "reasons": ["企业涉及危化品生产储存，属强制适用范围"],
+    "suggestions": ["制度：修订危化品安全管理制度", "培训：仓库人员专项培训", "时间：实施日前完成"],
+    "affected_domains": ["危化品管理"],
+}
+
+
+async def test_business_profile_passed_to_batch(
+    client, gate_on, empty_ledger, monkeypatch,
+):
+    """企业画像注入批量判定（静态基线兜底 + 动态事实附加）。"""
+    from app.modules.safety.regulation_ingest import business_profile as bp
+
+    bp.reset_profile_cache()
+    extractor = _use_extractor(monkeypatch, _FakeExtractor(batch_results=_HIGH_VERDICT))
+    resp = await client.post(_ENDPOINT, json=_payload(items=_high_item()))
+    assert resp.status_code == 200
+    assert extractor.batch_profile  # 画像非空注入
+    assert "行业" in extractor.batch_profile  # 静态基线在场
+    bp.reset_profile_cache()
+
+
+async def test_high_impact_promotion_runs_applicability(
+    client, gate_on, empty_ledger, full_write, monkeypatch,
+):
+    """高关注 promote（台账写入成功）→ 适用性分析被调且结果随响应回流。"""
+    from app.modules.safety.regulation_ingest import business_profile as bp
+
+    bp.reset_profile_cache()
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=_HIGH_VERDICT))
+    analyzer = _use_applicability(monkeypatch, _FakeApplicability(result=_ANALYSIS))
+    resp = await client.post(_ENDPOINT, json=_payload(items=_high_item()))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "promote"
+    assert r["impact_level"] == "高"
+    assert r["applicability"] == "applicable"
+    assert r["applicability_reasons"] == _ANALYSIS["reasons"]
+    assert r["bitable_shared_url"].endswith("rec-1")
+    assert len(analyzer.calls) == 1
+    assert analyzer.calls[0]["title"] == "危险化学品安全管理条例"
+    bp.reset_profile_cache()
+
+
+async def test_low_impact_skips_applicability(
+    client, gate_on, empty_ledger, full_write, monkeypatch,
+):
+    """中低关注项不触发适用性分析。"""
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=[{
+        "index": 0, "content_type": "regulation", "relevance_score": 0.9,
+        "impact_level": "中", "business_domains": ["安全生产"], "core_summary": "x",
+    }]))
+    analyzer = _use_applicability(monkeypatch, _FakeApplicability(result=_ANALYSIS))
+    resp = await client.post(_ENDPOINT, json=_payload(items=_high_item()))
+    r = resp.json()["data"]["results"][0]
+    assert r["action_taken"] == "promote"
+    assert r["applicability"] is None
+    assert analyzer.calls == []
+
+
+async def test_applicability_quota_exhausts(
+    client, gate_on, empty_ledger, full_write, monkeypatch,
+):
+    """每轮限额：上限 1 时第二条高关注项不再分析（applicability=None）。"""
+    from app.modules.safety.regulation_ingest import business_profile as bp
+
+    bp.reset_profile_cache()
+    monkeypatch.setenv("SAFETY_APPLICABILITY_MAX_PER_RUN", "1")
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=[
+        {**_HIGH_VERDICT[0], "index": 0},
+        {**_HIGH_VERDICT[0], "index": 1},
+    ]))
+    analyzer = _use_applicability(monkeypatch, _FakeApplicability(result=_ANALYSIS))
+    items = _high_item() + [{**_high_item()[0], "candidate_id": "cand-high-2"}]
+    resp = await client.post(_ENDPOINT, json=_payload(items=items))
+    results = {r["candidate_id"]: r for r in resp.json()["data"]["results"]}
+    assert results["cand-high"]["applicability"] == "applicable"
+    assert results["cand-high-2"]["applicability"] is None
+    assert len(analyzer.calls) == 1
+    bp.reset_profile_cache()
+
+
+async def test_applicability_disabled_by_flag(
+    client, gate_on, empty_ledger, full_write, monkeypatch,
+):
+    """总开关关闭 → 高关注项也不分析。"""
+    monkeypatch.setenv("SAFETY_APPLICABILITY_ANALYSIS_ENABLED", "0")
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=_HIGH_VERDICT))
+    analyzer = _use_applicability(monkeypatch, _FakeApplicability(result=_ANALYSIS))
+    resp = await client.post(_ENDPOINT, json=_payload(items=_high_item()))
+    assert resp.json()["data"]["results"][0]["applicability"] is None
+    assert analyzer.calls == []
+
+
+async def test_notify_batch_carries_verdict_fields(
+    client, gate_on, empty_ledger, full_write, monkeypatch, push_off,
+):
+    """_notify_batch 数据流：判定/适用性/台账链接全量进卡片模型。"""
+    from app.modules.safety.regulation_ingest import business_profile as bp
+
+    bp.reset_profile_cache()
+    _use_extractor(monkeypatch, _FakeExtractor(batch_results=_HIGH_VERDICT))
+    _use_applicability(monkeypatch, _FakeApplicability(result=_ANALYSIS))
+    resp = await client.post(_ENDPOINT, json=_payload(items=_high_item()))
+    assert resp.status_code == 200
+    assert len(push_off) == 1
+    card_item = push_off[0].items[0]
+    assert card_item.impact_level == "高"
+    assert card_item.core_summary == "危化品企业安全管理新要求"
+    assert card_item.applicability == "applicable"
+    assert card_item.applicability_suggestions
+    assert card_item.bitable_shared_url.endswith("rec-1")
+    bp.reset_profile_cache()
+
+
+def test_analyzer_normalize_clamps_output():
+    """输出清洗：非法三级值弃用；列表截断保序。"""
+    from app.modules.safety.regulation_ingest.applicability import (
+        ApplicabilityAnalyzer,
+    )
+
+    assert ApplicabilityAnalyzer._normalize({"applicability": "yes"}) is None
+    out = ApplicabilityAnalyzer._normalize({
+        "applicability": "partially_applicable",
+        "reasons": [f"理由{i}" for i in range(5)],
+        "suggestions": ["制度：x"],
+        "affected_domains": "not-a-list",
+    })
+    assert out["applicability"] == "partially_applicable"
+    assert len(out["reasons"]) == 3
+    assert out["affected_domains"] == []
+
+
+def test_card_renders_applicability_block():
+    """卡片渲染：三级结论+建议上卡；高关注无分析标待补；中关注不渲染。"""
+    from app.modules.safety.regulation_ingest.push_notifier import PushNotifier
+    from app.modules.safety.regulation_ingest.schemas import (
+        CrawlItemResult,
+        CrawlResultSummary,
+    )
+
+    summary = CrawlResultSummary(items=[
+        CrawlItemResult(
+            title="高已析", status="created", action="created", impact_level="高",
+            applicability="applicable",
+            applicability_reasons=["属强制适用范围"],
+            applicability_suggestions=["制度：修订管理制度"],
+        ),
+        CrawlItemResult(title="高未析", status="created", action="created", impact_level="高"),
+        CrawlItemResult(
+            title="中关注", status="created", action="created", impact_level="中",
+            applicability="not_applicable",
+        ),
+    ])
+    content = PushNotifier._build_content(summary, summary.items)
+    assert "适用性：✅ 适用 — 属强制适用范围" in content
+    assert "💡 制度：修订管理制度" in content
+    assert "适用性：⏳ 分析待补" in content
+    # 中关注项即使带分析结果也不渲染适用性行
+    assert "❌ 不适用" not in content
+    assert PushNotifier._pick_header(summary.items) == "red"
+
+
+async def test_business_profile_degrades_and_caches(db_session, monkeypatch):
+    """画像聚合：事实查询失败降级静态基线；TTL 缓存内只聚合一次。"""
+    from app.modules.safety.regulation_ingest import business_profile as bp
+
+    bp.reset_profile_cache()
+    calls = {"n": 0}
+
+    async def _boom(session):
+        calls["n"] += 1
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(bp, "_collect_facts", _boom)
+    text1 = await bp.get_business_profile(db_session)
+    text2 = await bp.get_business_profile(db_session)
+    assert "行业" in text1  # 静态基线兜底
+    assert calls["n"] == 1  # 第二次命中缓存
+    bp.reset_profile_cache()
+
+
+# ── 安全速递总卡接入（V1.2） ─────────────────────────────
+
+
+def _one_summary(**item_kw):
+    from app.modules.safety.regulation_ingest.schemas import (
+        CrawlItemResult,
+        CrawlResultSummary,
+    )
+
+    return CrawlResultSummary(items=[CrawlItemResult(
+        title="危险化学品安全管理条例", status="created", action="created",
+        impact_level="高", applicability="applicable",
+        applicability_reasons=["强制适用"], applicability_suggestions=["制度：修订"],
+        **item_kw,
+    )])
+
+
+async def test_notification_prefers_digest(monkeypatch):
+    """总卡开启（默认）→ regulation 格子入安全速递，不再发独立群卡。"""
+    from app.modules.safety.regulation_ingest import push_notifier as pn
+
+    upserts: list[Any] = []
+
+    async def _fake_upsert(report_date, key, cell, **kw):
+        upserts.append((report_date, key, cell))
+        return True
+
+    standalone: list[dict] = []
+
+    async def _fake_group_card(**kw):
+        standalone.append(kw)
+        return "msg-id"
+
+    monkeypatch.setattr(pn, "upsert_daily_digest", _fake_upsert)
+    monkeypatch.setattr(pn, "send_group_card", _fake_group_card)
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    monkeypatch.delenv("SAFETY_REGULATION_CRAWLER_NOTIFY_CHAT_ID", raising=False)
+
+    notifier = pn.PushNotifier()
+    await notifier.send_crawl_result_notification(_one_summary())
+    assert len(upserts) == 1 and upserts[0][1] == "regulation"
+    cell = upserts[0][2]
+    assert cell.tag_color == "red"  # 含高关注 → 红标
+    assert "收录 **1**" in cell.stats
+    assert "《危险化学品安全管理条例》" in cell.zone
+    assert "适用性：✅ 适用" in cell.detail
+    assert standalone == []  # 总卡成功 → 无独立群卡
+
+
+async def test_notification_digest_failure_falls_back(monkeypatch):
+    """投格失败 + 配置了独立群目标 → 回退独立分级卡片。"""
+    from app.modules.safety.regulation_ingest import push_notifier as pn
+
+    async def _fail_upsert(report_date, key, cell, **kw):
+        return False
+
+    standalone: list[dict] = []
+
+    async def _fake_group_card(**kw):
+        standalone.append(kw)
+        return "msg-id"
+
+    monkeypatch.setattr(pn, "upsert_daily_digest", _fail_upsert)
+    monkeypatch.setattr(pn, "send_group_card", _fake_group_card)
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    monkeypatch.setenv("SAFETY_REGULATION_CRAWLER_NOTIFY_CHAT_ID", "oc_test")
+
+    notifier = pn.PushNotifier()
+    await notifier.send_crawl_result_notification(_one_summary())
+    assert len(standalone) == 1
+    assert standalone[0]["chat_id"] == "oc_test"
+    assert standalone[0]["header_template"] == "red"  # 分级 header 保持
+
+
+async def test_notification_digest_disabled_uses_standalone(monkeypatch):
+    """总卡停用（SAFETY_DAILY_DIGEST_ENABLED=0）→ 直接走独立群卡。"""
+    from app.modules.safety.regulation_ingest import push_notifier as pn
+
+    upserts: list[Any] = []
+
+    async def _fake_upsert(report_date, key, cell, **kw):
+        upserts.append(key)
+        return True
+
+    standalone: list[dict] = []
+
+    async def _fake_group_card(**kw):
+        standalone.append(kw)
+        return "msg-id"
+
+    monkeypatch.setattr(pn, "upsert_daily_digest", _fake_upsert)
+    monkeypatch.setattr(pn, "send_group_card", _fake_group_card)
+    monkeypatch.setenv("SAFETY_DAILY_DIGEST_ENABLED", "0")
+    monkeypatch.setenv("SAFETY_REGULATION_CRAWLER_NOTIFY_CHAT_ID", "oc_test")
+
+    notifier = pn.PushNotifier()
+    await notifier.send_crawl_result_notification(_one_summary())
+    assert upserts == []      # 总卡停用不投格
+    assert len(standalone) == 1

@@ -1,6 +1,7 @@
 """Safety database queries."""
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -40,6 +41,8 @@ class ContractorAdmissionRepository(SafetyRepository):
         ai_review_status: str | None = None,
         ai_conclusion: str | None = None,
         keyword: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
         sort_by: str | None = None,
         sort_order: str = "desc",
     ) -> tuple[list[ContractorAdmission], int]:
@@ -47,6 +50,9 @@ class ContractorAdmissionRepository(SafetyRepository):
 
         - ai_conclusion 匹配 ai_review_result.overall_conclusion（审核通过/需补充完善/审核不通过）
         - keyword 模糊匹配 company_name / contact_person
+        - date_from/date_to：created_at 半开区间 [date_from, date_to)，aware
+          datetime（service 层已按北京时间日界换算；镜像 created_at 为首次
+          插入时间，与直读「创建日期」公式列存在受控偏差）
         - sort_by 白名单: entry_date / actual_complete_date / created_at / company_name
         """
         base = ContractorAdmission.is_deleted.is_(False)
@@ -75,6 +81,10 @@ class ContractorAdmissionRepository(SafetyRepository):
                     ContractorAdmission.contact_person.ilike(like),
                 )
             )
+        if date_from:
+            conditions.append(ContractorAdmission.created_at >= date_from)
+        if date_to:
+            conditions.append(ContractorAdmission.created_at < date_to)
         for cond in conditions:
             query = query.where(cond)
             count_query = count_query.where(cond)

@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any
 
 from app.modules.safety.service.facility_map.mapping import (

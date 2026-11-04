@@ -187,6 +187,45 @@ def test_render_embeds_images_and_stays_single_page() -> None:
         assert sum(len(page.images) for page in doc.pages) == 3
 
 
+def _oversize_jpeg(width: int = 3200, height: int = 2400) -> bytes:
+    """构造 >300KB 的随机噪声 JPEG（MPO 事故同形态：大尺寸 + 压不动）。"""
+    import random
+
+    from PIL import Image as PILImage
+
+    random.seed(42)
+    noise = PILImage.frombytes("RGB", (width, height), random.randbytes(width * height * 3))
+    out = BytesIO()
+    noise.save(out, format="JPEG", quality=90)
+    return out.getvalue()
+
+
+def test_normalize_for_embed_passes_small_images_through() -> None:
+    png = _png_bytes()
+
+    assert fi_pdf._normalize_for_embed(png) is png
+
+
+def test_normalize_for_embed_downscales_oversize_photos() -> None:
+    from PIL import Image as PILImage
+
+    raw = _oversize_jpeg()
+    assert len(raw) > fi_pdf._IMAGE_REENCODE_THRESHOLD  # 前置：确实超阈值
+
+    normalized = fi_pdf._normalize_for_embed(raw)
+
+    with PILImage.open(BytesIO(normalized)) as img:
+        assert img.format == "JPEG"
+        assert max(img.size) <= fi_pdf._IMAGE_MAX_DIMENSION
+    assert len(normalized) < len(raw)
+
+
+def test_normalize_for_embed_falls_back_on_undecodable_bytes() -> None:
+    garbage = b"\x89PNG\r\x1a\n" + b"\x00" * (fi_pdf._IMAGE_REENCODE_THRESHOLD + 1)
+
+    assert fi_pdf._normalize_for_embed(garbage) is garbage
+
+
 # ── Bitable 端口：纯解析函数（票据 02）──
 
 
@@ -265,6 +304,48 @@ def test_parse_get_attachments_maps_token_to_extra() -> None:
 
     assert extra_map == {"rec1": {"t1": "e1", "t2": "e2", "t3": "e3"}}
     assert fi_bitable.parse_get_attachments({}) == {}
+
+
+def test_chunked_slices_by_size() -> None:
+    assert fi_bitable._chunked([], 10) == []
+    assert fi_bitable._chunked(["a"], 10) == [["a"]]
+    assert fi_bitable._chunked([f"r{i}" for i in range(25)], 10) == [
+        [f"r{i}" for i in range(10)],
+        [f"r{i}" for i in range(10, 20)],
+        [f"r{i}" for i in range(20, 25)],
+    ]
+
+
+class _FakeHttp:
+    """get_attachment_extras 专用 httpx 桩：记录请求体并按分片回附件信封。"""
+
+    def __init__(self) -> None:
+        self.payloads: list[list[str]] = []
+
+    async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> Any:
+        ids = json["record_id_list"]
+        self.payloads.append(list(ids))
+        return type(
+            "Resp",
+            (),
+            {"json": lambda self_: {  # type: ignore[no-any-return]
+                "code": 0,
+                "data": {"attachments": {rid: {"fldX": [{"file_token": f"t-{rid}", "extra_info": "e"}]} for rid in ids}},
+            }},
+        )()
+
+
+async def test_get_attachment_extras_chunks_over_ten_ids() -> None:
+    """缺档 >10 条时 record_id_list 必须分片 ≤10，否则 800010701 整任务中断。"""
+    http = _FakeHttp()
+    ids = [f"rec{i:02d}" for i in range(23)]
+
+    merged = await fi_bitable.get_attachment_extras("tok", "app", "tbl", ids, http=http)
+
+    assert [len(p) for p in http.payloads] == [10, 10, 3]
+    assert all(len(p) <= 10 for p in http.payloads)
+    assert set(merged) == set(ids)
+    assert all(extra == {f"t-{rid}": "e"} for rid, extra in merged.items())
 
 
 # ── 归档编排 service（票据 03，接缝①）──
@@ -373,6 +454,24 @@ async def test_backfill_single_failure_does_not_block_others() -> None:
 
     assert [rid for rid, _ in result.failed] == ["rec_bad"]
     assert result.generated == ["rec_ok"]
+
+
+async def test_backfill_failure_reason_keeps_exception_class_for_empty_message() -> None:
+    """httpx.ReadError('') 一类空消息异常（2026-11-03 事故）：失败原因必须含异常类名。"""
+
+    class _EmptyMsgError(Exception):
+        pass
+
+    repo = FakeRepo([_missing_record("rec_empty", "FE-EMPTY")])
+
+    async def boom_upload(file_name: str, content: bytes) -> str:
+        raise _EmptyMsgError()
+
+    repo.upload = boom_upload  # type: ignore[method-assign]
+
+    result = await fi_service.generate_and_backfill(repo=repo)
+
+    assert result.failed == [("rec_empty", "_EmptyMsgError")]
 
 
 async def test_backfill_filename_falls_back_to_created_time() -> None:

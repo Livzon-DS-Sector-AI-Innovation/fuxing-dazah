@@ -13,6 +13,9 @@
   （宋体描边模拟，标题用 Noto Sans SC）。
 - 单页自适应：内容过长时按档位整体缩字号（1.0→0.68），仍放不下时按
   字段截断兜底（保号 + 「…截断」），确保永远单页（打印要求）。
+- 2026-11-03 突出修复：行高下限强制容纳竖排栏目标签（危险性说明 5 行、
+  操作处置与储存 4 行、UN 值 2 行）；闭合标点追い出し不再悬挂出格；
+  UN No 占位值 NA/N.A./none 显示「无」。
 
 公共 API 保持：``build_standard_msds_pdf(entry, output_path)``、
 ``standard_pdf_filename(entry, collection_id, idx)``。
@@ -173,7 +176,12 @@ def _wrap(text: str, font: str, size: float, width: float) -> list[str]:
             i += 1
             continue
         if ch in "，。、；：？！）】》”’%,.;:?!)]":
-            cur = trial
+            # 闭合标点不悬挂出格：连同前一字推到下一行，保证行宽≤格宽（2026-11-03 突出修复）
+            if len(cur) >= 2:
+                lines.append(cur[:-1])
+                cur = cur[-1] + ch
+            else:
+                cur = trial
             i += 1
             continue
         if ch.isascii() and ch.isalnum():
@@ -266,6 +274,11 @@ def _icons(label_text: str, hazard: str, env: str) -> list[str]:
 
 # ── 内容模型 ─────────────────────────────────────────────────────────
 
+def _un_display(value: str) -> str:
+    """UN No 展示值：NA/N.A./none 类占位统一显示「无」（2026-11-03 业务拍板）。"""
+    token = re.sub(r"[\s./\\]", "", value or "").lower()
+    return "无" if token in {"na", "none", "无", "notapplicable"} else value
+
 
 def _bullet_lines(section: str, entry: dict, parts: dict) -> list[str]:
     raw = _norm(entry.get(_SECTION_FIELD[section]))
@@ -297,7 +310,7 @@ def _build_model(entry: dict) -> dict:
     model = {
         "name": v("name"),
         "formula": v("molecular_formula").replace("（", "(").replace("）", ")"),
-        "un": v("un_no"), "cas": v("cas_no"),
+        "un": _un_display(v("un_no")), "cas": v("cas_no"),
         "hazard": v("hazard_statement"), "labels": v("label_elements"),
         "phys": [
             [("外观与性状", v("appearance"))],
@@ -385,8 +398,10 @@ def _layout(model: dict, scale: float) -> dict:
 
     main_h = max(blocks_h(lay["left_wrap"]), blocks_h(lay["right_wrap"])) + 2 * scale
     icon_rows = max(1, (len(lay["icons"]) + 2) // 3) if lay["icons"] else 0
+    # 竖排栏目标签高度下限（危险性说明 5 字一行=5 行）：行高不足会顶穿行上边线（2026-11-03 突出修复）
     r2_h = max(icon_rows * icon + 20 * scale if lay["icons"] else 0,
-               len(lay["hazard"]) * lead + 12 * scale, 40 * scale)
+               len(lay["hazard"]) * lead + 12 * scale, 40 * scale,
+               5 * lead + 8 * scale)
 
     phys_h = []
     for i, cells in enumerate(lay["phys"]):
@@ -397,9 +412,13 @@ def _layout(model: dict, scale: float) -> dict:
     lay["op"] = []
     for para in model["handling"]:
         lay["op"].extend(_wrap(para, BODY_FONT, body, (XS[9] - XS[2]) - 2 * pad))
-    op_h = max(len(lay["op"]) * lead + 4 * scale, 40 * scale)
+    # 竖排标签「操作处置与储存注意事项」11 字 3 字一行=4 行：行高必须容纳，否则顶穿上边线
+    op_h = max(len(lay["op"]) * lead + 4 * scale, 40 * scale, 4 * lead + 8 * scale)
 
-    r0_h = max(27.6 * scale, len(lay["name_lines"]) * 16 * scale + 6 * scale)
+    # r0 行同时承载名称值与 UN 值（各最多 16pt 行距×行数）：取两者高度较大者
+    r0_h = max(27.6 * scale,
+               len(lay["name_lines"]) * 16 * scale + 6 * scale,
+               len(lay["un_lines"]) * 16 * scale + 6 * scale)
     r1_h = max(23.4 * scale, 16 * scale + 6 * scale)
     ys = [Y0, Y0 + r0_h, Y0 + r0_h + r1_h]
     ys.append(ys[-1] + r2_h)

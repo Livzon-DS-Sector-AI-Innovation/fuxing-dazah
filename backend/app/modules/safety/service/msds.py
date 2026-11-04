@@ -530,7 +530,9 @@ class MsdsService:
         if keyword:
             filters.append(MsdsCollectionRecord.feishu_record_id.ilike(f"%{keyword}%"))
         if date_from or date_to:
-            from app.modules.safety.service.bitable_direct.filters import date_range_window
+            from app.modules.safety.service.bitable_direct.filters import (
+                date_range_window,
+            )
 
             dt_from, dt_to = date_range_window(date_from, date_to)
             if dt_from:

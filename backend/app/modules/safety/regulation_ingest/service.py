@@ -21,12 +21,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.safety.ai_audit import ai_audit_scope
 from app.modules.safety.app_config.store import store as app_config_store
 from app.modules.safety.models import RegulationIngestRun
+from app.modules.safety.regulation_ingest.applicability import (
+    ApplicabilityAnalyzer,
+)
 from app.modules.safety.regulation_ingest.bitable_writer import (
     BitableWriter,
     _extract_document_number,
     _extract_plain_text,
     _extract_standard_identifier,
     _normalize_title,
+)
+from app.modules.safety.regulation_ingest.business_profile import (
+    get_business_profile,
 )
 from app.modules.safety.regulation_ingest.events import (
     build_regulation_updated_envelope,
@@ -53,6 +59,9 @@ logger = logging.getLogger(__name__)
 _INGEST_ENABLED_KEY = "SAFETY_REGULATION_CRAWLER_ENABLED"
 # 单批 AI token 预算上限（超限标 pending 留痕，不调 AI）
 _MAX_AI_TOKENS_KEY = "SAFETY_REGULATION_CRAWLER_MAX_AI_TOKENS_PER_RUN"
+# 适用性深度分析（仅高关注项；开关 + 每轮条数上限）
+_APPLICABILITY_ENABLED_KEY = "SAFETY_APPLICABILITY_ANALYSIS_ENABLED"
+_APPLICABILITY_MAX_KEY = "SAFETY_APPLICABILITY_MAX_PER_RUN"
 
 # AI 相关性判定阈值（content_type=regulation 且 score 达标 → 相关）
 _RELEVANCE_THRESHOLD = 0.5
@@ -71,7 +80,11 @@ class RegulationIngestService:
         self.session = session
         self.writer = BitableWriter()
         self.extractor = AIExtractor()
+        self.applicability = ApplicabilityAnalyzer()
         self._event_envelopes: list[dict[str, Any]] = []
+        # 请求级缓存：画像文本取一次；适用性配额惰性初始化
+        self._profile_text: str | None = None
+        self._applicability_left: int | None = None
 
     # ── 主入口 ──────────────────────────────────────────────
 
@@ -221,7 +234,9 @@ class RegulationIngestService:
             extra={"entry": "regulation_ingest", "items": len(items)},
         ):
             try:
-                batch_results = await self.extractor.classify_and_assess_batch(batch_inputs)
+                batch_results = await self.extractor.classify_and_assess_batch(
+                    batch_inputs, business_profile=await self._get_profile(),
+                )
             except Exception:
                 logger.exception("批量判定失败")
                 batch_results = []
@@ -291,6 +306,41 @@ class RegulationIngestService:
     # ══════════════════════════════════════════════════════════
     # 收录执行链（写入/修订编排/回执/doc_map）
     # ══════════════════════════════════════════════════════════
+
+    # ── 业务画像 / 适用性深度分析 ────────────────────────────
+
+    async def _get_profile(self) -> str:
+        """企业业务画像（请求级缓存一次）；聚合内部已降级，这里兜底空串。"""
+        if self._profile_text is None:
+            try:
+                self._profile_text = await get_business_profile(self.session)
+            except Exception:
+                logger.exception("业务画像聚合失败，降级空画像")
+                self._profile_text = ""
+        return self._profile_text
+
+    async def _maybe_analyze_applicability(
+        self, item: IngestCandidateItem, verdict: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """高关注项适用性深度分析（开关 + 每轮限额内）；关闭/超限/失败返回 None。"""
+        if not app_config_store.get_bool(_APPLICABILITY_ENABLED_KEY, True):
+            return None
+        if (verdict.get("impact_level") or "") != "高":
+            return None
+        if self._applicability_left is None:
+            self._applicability_left = app_config_store.get_int(
+                _APPLICABILITY_MAX_KEY, 10,
+            )
+        if self._applicability_left <= 0:
+            return None
+        self._applicability_left -= 1
+        try:
+            return await self.applicability.analyze(
+                item.title or "", item.content_digest or "", await self._get_profile(),
+            )
+        except Exception:
+            logger.exception("适用性分析失败（降级跳过）: %s", item.title)
+            return None
 
     async def _execute_promotion(
         self,
@@ -409,12 +459,25 @@ class RegulationIngestService:
         except Exception:
             logger.exception("regulation.updated 事件构造失败（不阻断收录）")
 
-        return IngestItemResult(
+        # 高关注项适用性深度分析（限额内；失败降级不阻断）
+        analysis = await self._maybe_analyze_applicability(item, verdict)
+
+        result = IngestItemResult(
             candidate_id=item.candidate_id,
             action_taken="promote",
             reason=reason,
             bitable_record_id=record_id or None,
+            bitable_shared_url=(write.get("shared_url") or None),
+            action=write.get("action") or None,
+            impact_level=(verdict.get("impact_level") or None),
+            core_summary=(verdict.get("core_summary") or None),
+            action_recommendations=(verdict.get("action_recommendations") or None),
         )
+        if analysis:
+            result.applicability = analysis.get("applicability")
+            result.applicability_reasons = list(analysis.get("reasons") or [])
+            result.applicability_suggestions = list(analysis.get("suggestions") or [])
+        return result
 
     async def _finalize_reject(
         self,
@@ -518,7 +581,7 @@ class RegulationIngestService:
     async def _notify_batch(
         self, items: list[IngestCandidateItem], results: list[IngestItemResult],
     ) -> None:
-        """批次飞书推送（复用既有分级卡片，失败只留痕不阻断）。"""
+        """批次飞书推送（分级卡片含判定/适用性结果，失败只留痕不阻断）。"""
         promoted = [r for r in results if r.action_taken == "promote"]
         if not promoted:
             return
@@ -529,7 +592,15 @@ class RegulationIngestService:
                 CrawlItemResult(
                     title=titles.get(r.candidate_id, r.candidate_id),
                     status="created",
-                    action="created",
+                    action="updated" if r.action == "updated" else "created",
+                    impact_level=r.impact_level,
+                    core_summary=r.core_summary,
+                    action_recommendations=r.action_recommendations,
+                    applicability=r.applicability,
+                    applicability_reasons=r.applicability_reasons,
+                    applicability_suggestions=r.applicability_suggestions,
+                    bitable_record_id=r.bitable_record_id,
+                    bitable_shared_url=r.bitable_shared_url,
                 )
                 for r in promoted
             ],

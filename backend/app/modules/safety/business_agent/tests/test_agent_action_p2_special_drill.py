@@ -28,7 +28,6 @@ from app.modules.safety.business_agent.core.permissions import (
 )
 from app.modules.safety.business_agent.tools import registry
 
-
 # ── Fake DB（按调用序返回；记录 statement）────────────────────────
 
 

@@ -74,7 +74,7 @@ async def _ack_many(alarm_ids: list[str], *, operator: str) -> tuple[int, int, i
 
     from app.core.database import async_session_factory
     from app.modules.safety.models import ALARM_STATUS_FIRING, TelemetryAlarmRecord
-    from app.modules.safety.telemetry.lifecycle import ack_alarm, AlarmStateError
+    from app.modules.safety.telemetry.lifecycle import AlarmStateError, ack_alarm
 
     acked = skipped = missing = 0
     async with async_session_factory() as session:

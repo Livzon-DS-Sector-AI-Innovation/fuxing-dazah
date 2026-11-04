@@ -26,9 +26,10 @@ import logging
 import re
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import Any, Callable
+from datetime import date, datetime
+from typing import Any
 
 from app.modules.safety.service.bitable_direct import gates
 from app.modules.safety.service.cert_direct.reader import CertWarningView

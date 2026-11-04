@@ -6,7 +6,7 @@
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -254,12 +254,17 @@ class EmergencyDrillService:
         status: str | None = None,
         keyword: str | None = None,
         stage: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> tuple[list[EmergencyDrillRecord | EmergencyDrillRecordView], int]:
         """分页查询演练记录。
 
         stage 可选值：plan（计划阶段：无实施时间）、execution（实施阶段：有实施时间）、
         review（复核阶段：有复核状态）。execution 不再排除 status 非空的记录，
         已复核（status 非空）但已执行的演练也能被查（execution 只看有没有执行时间）。
+
+        date_from/date_to：plan 按计划时间（plan_time_ref）、其余按实施时间
+        （execution_time）过滤的闭区间；对应列为空的行在设定区间时不命中。
 
         直读模式（SAFETY_EMERGENCY_DRILL_DIRECT_ENABLED）：Bitable 主表全量直读 +
         应用侧过滤/排序/分页；默认排序 plan_time_ref desc NULLS LAST（spec D3，
@@ -285,6 +290,8 @@ class EmergencyDrillService:
                 status=status,
                 keyword=keyword,
                 stage=stage,
+                date_from=date_from,
+                date_to=date_to,
             )
             ordered = direct_query.sort_views(filtered)
             return direct_query.paginate(ordered, skip, limit)
@@ -324,6 +331,18 @@ class EmergencyDrillService:
             count_base = count_base.where(
                 EmergencyDrillRecord.status.isnot(None),
             )
+        if date_from or date_to:
+            date_col = (
+                EmergencyDrillRecord.plan_time_ref
+                if stage == "plan"
+                else EmergencyDrillRecord.execution_time
+            )
+            if date_from:
+                base = base.where(date_col >= date_from)
+                count_base = count_base.where(date_col >= date_from)
+            if date_to:
+                base = base.where(date_col <= date_to)
+                count_base = count_base.where(date_col <= date_to)
 
         total = (await self.session.scalar(count_base)) or 0
         query = base.offset(skip).limit(limit).order_by(EmergencyDrillRecord.created_at.desc())

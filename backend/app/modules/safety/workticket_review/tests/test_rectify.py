@@ -19,16 +19,15 @@ from typing import Any
 
 from app.modules.safety.models import WorkTicketRectifyCheck
 from app.modules.safety.workticket_review.rectify import (
-    RectifyChecker,
-    RuleResult,
     STATUS_RECTIFIED,
     STATUS_UNCHECKABLE,
     STATUS_UNRECTIFIED,
+    RectifyChecker,
+    RuleResult,
     _compare_rules,
     _pid_map_from_raw,
 )
 from app.modules.safety.workticket_review.rule_engine import RuleNo
-
 
 # ── 比对纯函数 ──
 

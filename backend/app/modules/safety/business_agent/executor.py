@@ -212,7 +212,7 @@ async def _run_turn_impl(
                 ),
                 timeout=_turn_timeout,
             )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("agent run 超时（>%ss）session=%s", _turn_timeout, deps.session_id)
         err_msg = (
             f"抱歉，本次请求处理超时（{_turn_timeout:.0f} 秒）已自动中止，"
@@ -452,7 +452,7 @@ async def _resume_impl(
                 ),
                 timeout=_turn_timeout,
             )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # 写工具可能已执行（超时点常在模型收尾生成），话术须防重复发起
         logger.error("resume 超时（>%ss）action=%s", _turn_timeout, action_id)
         await _append_turn_end_event(

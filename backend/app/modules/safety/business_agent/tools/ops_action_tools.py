@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 from datetime import date as _date
-from datetime import timedelta
 from datetime import datetime as _datetime
+from datetime import timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -94,7 +94,9 @@ async def sync_domain_data(
             }
         if dom == "central":
             from app.modules.safety.service.central_alarm import config as ca_config
-            from app.modules.safety.service.central_alarm.service import CentralAlarmService
+            from app.modules.safety.service.central_alarm.service import (
+                CentralAlarmService,
+            )
 
             if ca_config.direct_enabled():
                 return _skipped(action, dom, "直读模式已开启，无需同步镜像")
@@ -270,7 +272,7 @@ async def freeze_standard_check(
     digest_stats: dict | None = None
     try:
         digest_stats = await send_standard_compliance_digest(result)
-    except Exception as exc:
+    except Exception:
         logger.exception("standard_compliance digest after manual freeze failed")
     return {
         "success": True,
@@ -387,7 +389,9 @@ async def reseed_daily_digest(
     for kind in raw_kinds:
         try:
             if kind == "fire_alarm":
-                from app.modules.safety.service.fire_alarm.service import FireAlarmService
+                from app.modules.safety.service.fire_alarm.service import (
+                    FireAlarmService,
+                )
 
                 await FireAlarmService(ctx.deps.db).generate_daily_report(
                     target, push=True,

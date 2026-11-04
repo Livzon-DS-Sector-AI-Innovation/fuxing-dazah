@@ -21,6 +21,40 @@ from app.modules.safety.business_agent.skills.registry import load_skill
 # ── 域委派（2-D 试点：delegate 按需只读元工具，urs 域路由命中时挂载）──
 from app.modules.safety.business_agent.tools.delegate import delegate
 
+# ── 三小域查询（agent-query-p1：外来人员保险/总览/危化品趋势，按需挂载）──
+from app.modules.safety.business_agent.tools.domain_query_tools import (
+    query_chemical_trend,
+    query_overview,
+    query_visitor_insurance,
+)
+
+# ── 设施管理查询（agent-query-p1：三台账/校验任务/点检，按需挂载）──
+from app.modules.safety.business_agent.tools.facility_tools import (
+    query_facility_inspections,
+    query_facility_ledgers,
+    query_facility_tasks,
+)
+
+# ── 隐患/报表执行面（agent-action-p2：催办/导出/推群，按需挂载）──
+from app.modules.safety.business_agent.tools.hazard_action_tools import (
+    export_hazard_report,
+    push_report_to_chat,
+    send_hazard_urge,
+)
+
+# ── 危险源辨识流转执行面（agent-action-p3：提交 AI 流程/节点补触发，按需挂载）──
+from app.modules.safety.business_agent.tools.hazard_id_action_tools import (
+    retry_hazard_identification_node,
+    submit_hazard_identification,
+)
+
+# ── 知识库 AI 生产执行面（agent-action-p3：卡片/PPT/摘要，按需挂载）──
+from app.modules.safety.business_agent.tools.knowledge_action_tools import (
+    generate_knowledge_card,
+    generate_knowledge_ppt,
+    generate_knowledge_summary,
+)
+
 # ── 办公（office_*）──
 from app.modules.safety.business_agent.tools.office_tools import (
     office_create_base,
@@ -39,6 +73,15 @@ from app.modules.safety.business_agent.tools.office_tools import (
     rollback_office_file,
 )
 
+# ── 运维触发执行面（agent-action-p3：手动同步/手动跑审核+第5组，按需挂载）──
+from app.modules.safety.business_agent.tools.ops_action_tools import (
+    freeze_standard_check,
+    reseed_daily_digest,
+    run_workticket_review,
+    scan_chemical_inventory,
+    sync_domain_data,
+)
+
 # ── 只读 ──
 from app.modules.safety.business_agent.tools.read_tools import (
     analyze_chemical_risk,
@@ -51,7 +94,6 @@ from app.modules.safety.business_agent.tools.read_tools import (
     query_chemical_inventory,
     query_contractor_admissions,
     query_contractor_workers,
-    query_org_posts,
     query_drills,
     query_ehs_changes,
     query_fire_alarms,
@@ -64,6 +106,7 @@ from app.modules.safety.business_agent.tools.read_tools import (
     query_oh,
     query_oh_exams,
     query_oh_persons,
+    query_org_posts,
     query_regulation_crawl_status,
     query_scheduler_tasks,
     query_special_op_records,
@@ -73,10 +116,34 @@ from app.modules.safety.business_agent.tools.read_tools import (
     web_search,
 )
 
+# ── 特殊作业报备查询与审批（agent-action-p2：查询只读+审批写，按需挂载）──
+from app.modules.safety.business_agent.tools.special_op_action_tools import (
+    approve_special_operation_report,
+    query_special_operation_reports,
+    reject_special_operation_report,
+)
+
 # ── 监护补贴统计（平台作业票数据源）──
 from app.modules.safety.business_agent.tools.subsidy_tools import (
     generate_guardian_subsidy,
     preview_guardian_subsidy,
+)
+
+# ── 遥测处置执行面（agent-action-p3：报警确认/处置关闭，按需挂载）──
+from app.modules.safety.business_agent.tools.telemetry_action_tools import (
+    ack_telemetry_alarm,
+    resolve_telemetry_alarm,
+)
+
+# ── 遥测查询（agent-query-p1：特种设备最新读数/报警，按需挂载）──
+from app.modules.safety.business_agent.tools.telemetry_tools import (
+    query_telemetry_alarms,
+    query_telemetry_latest,
+)
+
+# ── 培训与行为管控查询（agent-query-p1：违章/培训/草案/复训，按需挂载）──
+from app.modules.safety.business_agent.tools.training_tools import (
+    query_training_behavior,
 )
 
 # ── URS 智能审核 ──
@@ -98,73 +165,6 @@ from app.modules.safety.business_agent.tools.warehouse_query_tools import (
     query_movements,
     query_report,
     query_stock,
-)
-
-# ── 遥测查询（agent-query-p1：特种设备最新读数/报警，按需挂载）──
-from app.modules.safety.business_agent.tools.telemetry_tools import (
-    query_telemetry_alarms,
-    query_telemetry_latest,
-)
-
-# ── 设施管理查询（agent-query-p1：三台账/校验任务/点检，按需挂载）──
-from app.modules.safety.business_agent.tools.facility_tools import (
-    query_facility_inspections,
-    query_facility_ledgers,
-    query_facility_tasks,
-)
-
-# ── 培训与行为管控查询（agent-query-p1：违章/培训/草案/复训，按需挂载）──
-from app.modules.safety.business_agent.tools.training_tools import (
-    query_training_behavior,
-)
-
-# ── 三小域查询（agent-query-p1：外来人员保险/总览/危化品趋势，按需挂载）──
-from app.modules.safety.business_agent.tools.domain_query_tools import (
-    query_chemical_trend,
-    query_overview,
-    query_visitor_insurance,
-)
-
-# ── 隐患/报表执行面（agent-action-p2：催办/导出/推群，按需挂载）──
-from app.modules.safety.business_agent.tools.hazard_action_tools import (
-    export_hazard_report,
-    push_report_to_chat,
-    send_hazard_urge,
-)
-
-# ── 特殊作业报备查询与审批（agent-action-p2：查询只读+审批写，按需挂载）──
-from app.modules.safety.business_agent.tools.special_op_action_tools import (
-    approve_special_operation_report,
-    query_special_operation_reports,
-    reject_special_operation_report,
-)
-
-# ── 遥测处置执行面（agent-action-p3：报警确认/处置关闭，按需挂载）──
-from app.modules.safety.business_agent.tools.telemetry_action_tools import (
-    ack_telemetry_alarm,
-    resolve_telemetry_alarm,
-)
-
-# ── 知识库 AI 生产执行面（agent-action-p3：卡片/PPT/摘要，按需挂载）──
-from app.modules.safety.business_agent.tools.knowledge_action_tools import (
-    generate_knowledge_card,
-    generate_knowledge_ppt,
-    generate_knowledge_summary,
-)
-
-# ── 危险源辨识流转执行面（agent-action-p3：提交 AI 流程/节点补触发，按需挂载）──
-from app.modules.safety.business_agent.tools.hazard_id_action_tools import (
-    retry_hazard_identification_node,
-    submit_hazard_identification,
-)
-
-# ── 运维触发执行面（agent-action-p3：手动同步/手动跑审核+第5组，按需挂载）──
-from app.modules.safety.business_agent.tools.ops_action_tools import (
-    freeze_standard_check,
-    reseed_daily_digest,
-    run_workticket_review,
-    scan_chemical_inventory,
-    sync_domain_data,
 )
 
 # ── 写入 ──

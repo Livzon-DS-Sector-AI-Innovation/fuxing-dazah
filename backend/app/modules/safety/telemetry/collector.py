@@ -32,7 +32,6 @@ from app.modules.safety.telemetry.source import (
     GroupMessageSource,
     SourceMessage,
     TelemetrySourceAdapter,
-    TelemetrySourceError,
     save_cursor,
     source_chat_id,
 )
@@ -355,8 +354,8 @@ async def load_monitored_equipment_info() -> dict[str, dict[str, Any]]:
     「锅炉」兜底——采集源即锅炉群，事实即类别证据），不抛错不阻塞采集。
     """
     try:
-        from app.modules.safety.facilities.ledger import BIZ_SPECIAL
         from app.modules.safety.facilities import reader as fac_reader
+        from app.modules.safety.facilities.ledger import BIZ_SPECIAL
 
         if not fac_reader.connection_configured(BIZ_SPECIAL):
             return {}

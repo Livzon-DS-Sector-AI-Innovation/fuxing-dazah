@@ -15,13 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.safety.facilities.engine import category_label
 from app.modules.safety.models import (
     ALARM_STATUS_FIRING,
-    PARSE_STATUS_OK,
     TelemetryAlarmRecord,
     TelemetrySnapshot,
 )
-from app.modules.safety.facilities.engine import category_label
 from app.modules.safety.telemetry.rules import (
     RuleSpec,
     dedupe_key,

@@ -6,15 +6,20 @@
 - degraded：连接有效但读取异常 → errors 标注
 
 取数去重：同 (metric_key, 周期窗口) 只取一次数——多张标准行共享同一指标时
-（如综合/专项与疏散各有两张行）不重复打源。
+（如综合/专项与疏散各有两张行）不重复打源。唯一组合并行取数（2026-11-02
+性能修复：55 行串行逐指标全量直读是总览 goals 域 30s 超时的根因）。
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+import os
+import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from app.modules.safety.service.bitable_direct import fields as bd_fields
 from app.modules.safety.service.bitable_direct import reader as bd_reader
@@ -192,36 +197,138 @@ async def _collect_verdicts(
 
     window_of 由调用方注入：实时视图=window_for(period, today)（窗口恒含 today）；
     定格=目标历史周期窗口（评估日=定格日，engine ended 分支出终态）。
-    同 (metric_key, 窗口) 取数去重——多行共享指标/多目标共享窗口不重复打源。
+    同 (metric_key, 窗口) 取数去重——多行共享指标/多目标共享窗口不重复打源；
+    唯一组合 asyncio.gather 并行取数（信号量限宽，防瞬间打爆 Bitable）。
     """
-    outcome_cache: dict[tuple[str, str], MetricOutcome] = {}
+    # ctx.db 可能被多个指标共享（演练计数等 PG 查询）——SQLAlchemy 会话禁
+    # 并发，包一层锁代理把 execute 串行化；Bitable 直读指标不触 db 不受影响
+    locked_ctx = (
+        MetricContext(db=cast(Any, _LockedDB(ctx.db)), opener=ctx.opener)
+        if ctx.db is not None
+        else ctx
+    )
 
-    async def _outcome_for(key: str | None, window: PeriodWindow) -> MetricOutcome:
-        if not key:
-            return MetricOutcome()
-        cached = outcome_cache.get((key, window.key))
-        if cached is not None:
-            return cached
+    combos: dict[tuple[str, str], tuple[str, PeriodWindow]] = {}
+    for row in rows:
+        if not row.metric_key:
+            continue
+        window = window_of(row)
+        combos[(row.metric_key, window.key)] = (row.metric_key, window)
+
+    outcome_cache: dict[tuple[str, str], MetricOutcome] = {}
+    sem = asyncio.Semaphore(_METRIC_CONCURRENCY)
+
+    async def _compute(key: str, window: PeriodWindow) -> None:
         metric = get_metric(key)
-        outcome = (
-            await metric.compute(window, ctx)
-            if metric
-            else MetricOutcome(no_data_reason="指标未注册")
-        )
+        async with sem:
+            outcome = (
+                await metric.compute(window, locked_ctx)
+                if metric
+                else MetricOutcome(no_data_reason="指标未注册")
+            )
         outcome_cache[(key, window.key)] = outcome
-        return outcome
+
+    if combos:
+        await asyncio.gather(*(
+            _compute(key, window) for key, window in combos.values()
+        ))
 
     triples: list[tuple[StandardRow, MetricOutcome, Verdict]] = []
     for row in rows:
         metric = get_metric(row.metric_key) if row.metric_key else None
         window = window_of(row)
-        outcome = await _outcome_for(row.metric_key, window)
+        if not row.metric_key:
+            outcome = MetricOutcome()
+        else:
+            outcome = outcome_cache[(row.metric_key, window.key)]
         verdict = judge(row, metric.spec if metric else None, outcome, window, today)
         triples.append((row, outcome, verdict))
     return triples
 
 
+# 指标并行取数宽度（Bitable 全量直读路为主；太宽会瞬间压上飞书 API）
+_METRIC_CONCURRENCY = 6
+
+
+class _LockedDB:
+    """AsyncSession 锁代理：并行 gather 下共享会话的禁并发保护。
+
+    指标取数器只用 db.execute（PG 本地查询，串行代价可忽略）；属性透传
+    内层会话，非调用点（如类型判断）不受影响。
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self._lock = asyncio.Lock()
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        async def _locked(*args: Any, **kwargs: Any) -> Any:
+            async with self._lock:
+                result = attr(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
+
+        return _locked
+
+
 async def build_standard_check_page(
+    *,
+    db: Any | None = None,
+    opener: Any | None = None,
+    today: date | None = None,
+    element: str | None = None,
+    status: str | None = None,
+    department: str | None = None,
+    year: int | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """核查清单页数据（三态信封）+ 生产路径 TTL 结果缓存。
+
+    缓存仅对生产装配（opener 未注入）生效，测试注入 opener/db 替身直算；
+    force=True 绕过读缓存强制重算（后台预热刷新用），算完仍回填。
+    """
+    cacheable = opener is None and _PAGE_CACHE_TTL_SECONDS > 0
+    cache_key = (
+        today or _bj_today(), element or "", status or "", department or "",
+        year,
+    )
+    if cacheable and not force:
+        hit = _page_cache.get(cache_key)
+        if hit is not None and time.monotonic() - hit[0] < _PAGE_CACHE_TTL_SECONDS:
+            return hit[1]
+
+    data = await _build_standard_check_page_uncached(
+        db=db, opener=opener, today=today, element=element, status=status,
+        department=department, year=year,
+    )
+    # 只缓存 live 信封：degraded/not_connected 是瞬态/未接入状态，缓存住
+    # 会让恢复后的请求继续吃到旧降级（NOT_CONNECTED 缓存更会掩盖新接入）
+    if cacheable and data.get("status") == "live":
+        _page_cache[cache_key] = (time.monotonic(), data)
+        if len(_page_cache) > _PAGE_CACHE_MAX_ENTRIES:
+            for key in sorted(_page_cache, key=lambda k: _page_cache[k][0]):
+                _page_cache.pop(key, None)
+                if len(_page_cache) <= _PAGE_CACHE_MAX_ENTRIES:
+                    break
+    return data
+
+
+# ── 页面级 TTL 结果缓存（2026-11-02 性能修复 P1）────────────────────────
+# goals 指标全量直读即使并行取数仍要 10s+；驾驶舱/核查页对分钟级陈旧不
+# 敏感（月/季合规数字），缓存 + 后台预热让用户请求恒命中热数据。
+_PAGE_CACHE_TTL_SECONDS = int(
+    os.getenv("SAFETY_STANDARD_CHECK_PAGE_CACHE_TTL_SECONDS", "300")
+)
+_PAGE_CACHE_MAX_ENTRIES = 16
+_page_cache: dict[tuple, tuple[float, dict[str, Any]]] = {}
+
+
+async def _build_standard_check_page_uncached(
     *,
     db: Any | None = None,
     opener: Any | None = None,

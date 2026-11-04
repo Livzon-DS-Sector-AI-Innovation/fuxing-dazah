@@ -32,7 +32,6 @@ from app.modules.safety.business_agent.tools.telemetry_action_tools import (
     resolve_telemetry_alarm,
 )
 
-
 # ── 打桩基建（照 test_agent_action_p2_special_drill.FakeSession）──
 
 

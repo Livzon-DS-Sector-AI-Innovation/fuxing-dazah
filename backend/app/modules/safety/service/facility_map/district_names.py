@@ -91,4 +91,4 @@ DISTRICT_NAME_BY_ID: dict[str, str] = {did: name for did, name in DISTRICT_PAIRS
 
 def format_district_list() -> str:
     """65 分区清单文本（提示词用：distId=distName 每行一条）。"""
-    return "\n".join(f"{{did}}={{name}}" for did, name in DISTRICT_PAIRS)
+    return "\n".join(f"{did}={name}" for did, name in DISTRICT_PAIRS)

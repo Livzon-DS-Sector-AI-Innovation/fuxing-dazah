@@ -199,6 +199,35 @@ async def update_card(message_id: str, card: dict) -> bool:
         return False
 
 
+async def delete_message(message_id: str) -> bool:
+    """撤回已发送的消息（DELETE im/v1/messages/{message_id}，仅能撤自己发的）。
+
+    Returns:
+        True 表示撤回成功，False 表示失败（不抛异常）
+    """
+    logger.info("安全模块 delete_message: message_id=%s", message_id)
+    try:
+        client = await get_safety_feishu_client()
+        token = await get_safety_tenant_token(client)
+
+        from lark_oapi.api.im.v1 import DeleteMessageRequest
+
+        req = DeleteMessageRequest.builder().message_id(message_id).build()
+        req.headers["Authorization"] = f"Bearer {token}"
+        resp = await client.im.v1.message.adelete(req)
+        if not resp.success():
+            logger.error(
+                "安全模块 delete_message 失败: message_id=%s, code=%s, msg=%s",
+                message_id, resp.code, resp.msg,
+            )
+            return False
+        logger.info("安全模块消息已撤回: message_id=%s", message_id)
+        return True
+    except Exception:
+        logger.exception("安全模块 delete_message 异常: message_id=%s", message_id)
+        return False
+
+
 async def send_group_card(
     chat_id: str,
     title: str,

@@ -141,7 +141,10 @@ async def query_facility_ledgers(
 
     from app.modules.safety.facilities import notify as fac_notify
     from app.modules.safety.facilities.ledger import (
-        BIZ_ACCESSORY, BIZ_FIRE, BIZ_SPECIAL, LedgerSummary,
+        BIZ_ACCESSORY,
+        BIZ_FIRE,
+        BIZ_SPECIAL,
+        LedgerSummary,
     )
     from app.modules.safety.facilities.reader import open_reader
     from app.modules.safety.service.bitable_direct.errors import BitableConfigError

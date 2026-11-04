@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from app.modules.safety.service.hazard_id_direct.query import (
@@ -215,3 +216,35 @@ class TestResolveDepartments:
         db = FakeDB([])
         got = await resolve_departments(db, [None, " ", ""])
         assert got == {} and db.executed == 0
+
+
+class TestDateRangeFilter:
+    """date_from/date_to：created_time 北京时间日界半开区间（与 ehs_change 同款）。"""
+
+    def _ms(self, iso: str) -> int:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        dt = datetime.fromisoformat(iso).replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+        return int(dt.timestamp() * 1000)
+
+    async def test_range_half_open_beijing_bounds(self) -> None:
+        views = [
+            _view("recStart", created_time_ms=self._ms("2026-10-01T00:00")),  # 起始边界含
+            _view("recMid", created_time_ms=self._ms("2026-10-15T12:00")),
+            _view("recNov1", created_time_ms=self._ms("2026-11-01T00:00")),   # 结束次日零点不含
+            _view("recSep", created_time_ms=self._ms("2026-09-30T23:59")),
+        ]
+        items, total = hazard_identifications(
+            views, date_from=date(2026, 10, 1), date_to=date(2026, 10, 31),
+        )
+        assert total == 2
+        assert {i["hazard_id_no"] for i in items} == {
+            "HI-" + r[-12:] for r in ("recStart", "recMid")
+        }
+
+    async def test_missing_created_time_excluded_only_when_range_set(self) -> None:
+        views = [_view("recNoTime", created_time_ms=None)]
+        _, filtered = hazard_identifications(views, date_from=date(2026, 10, 1))
+        _, unfiltered = hazard_identifications(views)
+        assert (filtered, unfiltered) == (0, 1)

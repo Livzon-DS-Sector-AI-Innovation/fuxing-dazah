@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -131,11 +131,12 @@ class GroupMessageSource(TelemetrySourceAdapter):
         self, start_ts: int, page_token: str | None
     ) -> tuple[list[SourceMessage], str | None]:
         """真实拉取一页（lark im/v1/messages 列表）。"""
+        from lark_oapi.api.im.v1 import ListMessageRequest
+
         from app.modules.safety.feishu.client import (
             get_safety_feishu_client,
             get_safety_tenant_token,
         )
-        from lark_oapi.api.im.v1 import ListMessageRequest
 
         client = await get_safety_feishu_client()
         token = await get_safety_tenant_token(client)

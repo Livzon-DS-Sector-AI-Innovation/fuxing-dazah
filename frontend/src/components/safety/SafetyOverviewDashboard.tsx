@@ -30,6 +30,7 @@ import {
 } from '@/components/ui-kit'
 import { MarkdownView } from '@/components/toolbox/MarkdownView'
 import { FacilityMapCard } from '@/components/safety/FacilityMapCard'
+import { OverviewKpiDrawer, type OverviewKpiKey } from '@/components/safety/OverviewKpiDrawer'
 import { moduleMenus } from '@/lib/menu-config'
 import {
   fetchSafetyOverview,
@@ -121,11 +122,12 @@ function withRowKeys<T extends object>(items: T[]): (T & { _key: number })[] {
 function KpiSection({
   data,
   loading,
+  onOpen,
 }: {
   data: ReturnType<typeof useOverviewData>['data']
   loading: boolean
+  onOpen: (kpi: OverviewKpiKey) => void
 }) {
-  const router = useRouter()
   const hazards = data?.hazards
   const specialOps = data?.special_ops
   const alarms = data?.alarms
@@ -151,7 +153,7 @@ function KpiSection({
               </span>
             ) : undefined
           }
-          onClick={() => router.push('/safety/hazard-ledger')}
+          onClick={() => onOpen('hazards')}
         />
       </Col>
       <Col xs={12} xl={4}>
@@ -162,7 +164,7 @@ function KpiSection({
           loading={loading}
           value={specialOps?.today_total ?? 0}
           sub={`高风险 ${specialOps?.high ?? 0} 项`}
-          onClick={() => router.push('/safety/special-ops')}
+          onClick={() => onOpen('special_ops')}
         />
       </Col>
       <Col xs={12} xl={4}>
@@ -173,7 +175,7 @@ function KpiSection({
           loading={loading}
           value={alarms?.today_total ?? 0}
           sub={`真报 ${alarms?.fire_real_today ?? 0} 起（消防口径）`}
-          onClick={() => router.push('/safety/alarms')}
+          onClick={() => onOpen('alarms')}
         />
       </Col>
       <Col xs={12} xl={4}>
@@ -184,7 +186,7 @@ function KpiSection({
           loading={loading}
           value={certs?.within_30d ?? 0}
           sub={certs ? `8 天内/已逾期 ${certs.urgent_or_overdue} 人` : undefined}
-          onClick={() => router.push('/safety/cert-warnings')}
+          onClick={() => onOpen('certs')}
         />
       </Col>
       <Col xs={12} xl={4}>
@@ -195,7 +197,7 @@ function KpiSection({
           loading={loading}
           value={chemicals?.over_limit ?? 0}
           sub="存量超上限物料"
-          onClick={() => router.push('/safety/chemicals')}
+          onClick={() => onOpen('chemicals')}
         />
       </Col>
       <Col xs={12} xl={4}>
@@ -206,6 +208,7 @@ function KpiSection({
           loading={loading}
           value={digest?.count ?? 0}
           sub="机器人已推送日报条数"
+          onClick={() => onOpen('digest')}
         />
       </Col>
     </Row>
@@ -496,6 +499,14 @@ export function SafetyOverviewDashboard() {
   const queryClient = useQueryClient()
   const { data, isLoading, isError } = useOverviewData()
   const [openCell, setOpenCell] = useState<OverviewDigestCell | null>(null)
+  // KPI 抽屉：kpi=null 关闭；lastKpi 保留上次打开的域，关闭动画期间仍渲染其内容
+  // （抽屉内 useQuery 以 active=kpi!==null 为闸，动画期不再触发请求）
+  const [kpi, setKpi] = useState<OverviewKpiKey | null>(null)
+  const [lastKpi, setLastKpi] = useState<OverviewKpiKey | null>(null)
+  const openKpi = (k: OverviewKpiKey) => {
+    setLastKpi(k)
+    setKpi(k)
+  }
 
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ['safety', 'overview'] })
@@ -532,7 +543,14 @@ export function SafetyOverviewDashboard() {
         </div>
       )}
 
-      <KpiSection data={data} loading={isLoading} />
+      <KpiSection data={data} loading={isLoading} onOpen={openKpi} />
+
+      <OverviewKpiDrawer
+        kpi={kpi ?? lastKpi}
+        active={kpi !== null}
+        overview={data ?? null}
+        onClose={() => setKpi(null)}
+      />
 
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} xl={14}>

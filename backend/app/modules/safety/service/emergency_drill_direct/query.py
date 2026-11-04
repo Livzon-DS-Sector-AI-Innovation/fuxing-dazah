@@ -9,6 +9,9 @@ service/emergency_drill.py list_records / get_stats（legacy 镜像口径）：
   极端输入下两路径结果不同（key_risk_op/cert/contractor 同款已落档限制）；
 - stage 三态照 PG 口径：plan=execution_time 为空、execution=execution_time
   非空、review=status 非空；
+- 日期区间 date_from/date_to（对称新增）：plans 按计划时间（plan_time_ref）、
+  其余按实施时间（execution_time）过滤的闭区间（date 对象）；对应列为空
+  的行在设定区间时不命中（ORM 分支同口径，列选择同 stage 规则）；
 - 排序：本域 API 不暴露排序参数，legacy 恒 created_at desc；直读取
   plan_time_ref desc NULLS LAST（spec §4.1 D3：探针实证无创建日期公式列，
   111/112 行有值；顺序差异为受控偏差，前端不展示 created_at 列）；
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from app.modules.safety.service.emergency_drill_direct.views import (
@@ -48,8 +52,14 @@ def filter_views(
     status: str | None = None,
     keyword: str | None = None,
     stage: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[EmergencyDrillRecordView]:
-    """API/Agent 列表过滤口径（list_records 等价内存实现）。"""
+    """API/Agent 列表过滤口径（list_records 等价内存实现）。
+
+    date_from/date_to：plans 按计划时间（plan_time_ref）、其余按实施时间
+    （execution_time）过滤的闭区间；对应列为空的行在设定区间时不命中。
+    """
     filtered = views
     if department:
         filtered = [v for v in filtered if v.department == department]
@@ -65,6 +75,20 @@ def filter_views(
         filtered = [v for v in filtered if v.execution_time is not None]
     elif stage == "review":
         filtered = [v for v in filtered if v.status is not None]
+    if date_from or date_to:
+        attr = "plan_time_ref" if stage == "plan" else "execution_time"
+
+        def _in_range(v: EmergencyDrillRecordView) -> bool:
+            x = getattr(v, attr)
+            if x is None:
+                return False
+            if date_from and x < date_from:
+                return False
+            if date_to and x > date_to:
+                return False
+            return True
+
+        filtered = [v for v in filtered if _in_range(v)]
     return filtered
 
 

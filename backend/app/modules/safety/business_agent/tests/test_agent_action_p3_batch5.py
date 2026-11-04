@@ -235,7 +235,6 @@ class TestReseedDailyDigest:
     def test_default_all_kinds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._enable_digest(monkeypatch)
         import app.modules.safety.service.fire_alarm.service as fire_mod
-        import app.modules.safety.service.special_op_direct.daily as so_daily
 
         fired: list[dict] = []
 

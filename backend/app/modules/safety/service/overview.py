@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, time, timedelta
+from time import monotonic as _mono
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -556,8 +558,20 @@ async def build_overview(
     *,
     digest_store: Any = None,
     collectors: dict[str, Callable[[], Awaitable[Any]]] | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
-    """聚合入口：并行采集 + 单域降级。collectors 可整体注入（测试接缝）。"""
+    """聚合入口：并行采集 + 单域降级。collectors 可整体注入（测试接缝）。
+
+    生产路径（collectors 未注入）加 TTL 结果缓存：后台预热任务（scheduled.py
+    DASHBOARD_WARMUP_TASK）force 刷新，用户请求恒命中热数据（2026-11-02
+    性能修复——驾驶舱冷缓存 p95 30s 的用户等待变后台刷新）。
+    """
+    cacheable = collectors is None and _OVERVIEW_CACHE_TTL_SECONDS > 0
+    if cacheable and not force:
+        hit = _overview_cache.get("default")
+        if hit is not None and _mono() - hit[0] < _OVERVIEW_CACHE_TTL_SECONDS:
+            return hit[1]
+
     default_collectors: dict[str, Callable[[], Awaitable[Any]]] = {
         "hazards": _db_collector(collect_hazards),
         "special_ops": _db_collector(collect_special_ops),
@@ -588,7 +602,7 @@ async def build_overview(
             # 不再拖死整轮（与工具层 120s 超时构成双保险）。DB 采集器各自
             # 独立开 session，wait_for 取消即整链关闭，不留半途 session。
             return name, await asyncio.wait_for(fn(), timeout=_DOMAIN_TIMEOUT), None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("overview 采集超时 domain=%s timeout=%ss", name, _DOMAIN_TIMEOUT)
             return name, None, f"{name}: TimeoutError({_DOMAIN_TIMEOUT}s)"
         except Exception as exc:  # noqa: BLE001 —— 单域失败只降级不炸整页
@@ -599,7 +613,7 @@ async def build_overview(
     parts = {name: value for name, value, _err in results}
     errors = [err for _n, _v, err in results if err]
 
-    return {
+    data = {
         "date": _bj_today().isoformat(),
         "generated_at": datetime.now(UTC),
         "hazards": parts["hazards"],
@@ -614,3 +628,15 @@ async def build_overview(
         "module_health": _build_module_health(parts),
         "errors": errors,
     }
+    if cacheable:
+        # 带降级 errors 的结果也照常缓存（单域瞬态故障 5 分钟内自愈由下轮
+        # 预热刷新兜住，用户至少立刻看到其余域）
+        _overview_cache["default"] = (_mono(), data)
+    return data
+
+
+# ── 总览结果 TTL 缓存（2026-11-02 性能修复 P1；单键即当日生产口径）──────
+_OVERVIEW_CACHE_TTL_SECONDS = int(
+    os.getenv("SAFETY_OVERVIEW_CACHE_TTL_SECONDS", "150")
+)
+_overview_cache: dict[str, tuple[float, dict[str, Any]]] = {}

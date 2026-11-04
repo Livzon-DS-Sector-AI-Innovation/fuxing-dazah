@@ -7,7 +7,7 @@
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -30,7 +30,11 @@ from app.modules.safety.telemetry.lifecycle import (
     list_pending_reviews,
     resolve_alarm,
 )
-from app.modules.safety.telemetry.query import history_series, latest_values, list_alarms
+from app.modules.safety.telemetry.query import (
+    history_series,
+    latest_values,
+    list_alarms,
+)
 from app.modules.safety.telemetry.rules import effective_rules
 from app.shared.schemas import ApiResponse
 
@@ -95,7 +99,7 @@ async def get_telemetry_history(
     to: str | None = Query(None),
     db=Depends(get_db),
 ) -> ApiResponse:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = _parse_dt(from_, field="from") or (now - timedelta(days=_DEFAULT_WINDOW_DAYS))
     end = _parse_dt(to, field="to") or now
     if start > end:

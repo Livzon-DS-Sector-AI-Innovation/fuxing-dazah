@@ -79,6 +79,22 @@ class TestFilterViews:
         assert [v.id for v in filter_views(views, ai_review_status="none")] == ["r2", "r3"]
         assert [v.id for v in filter_views(views, ai_review_status="completed")] == ["r1", "r4"]
 
+    def test_date_range_on_created_at_beijing_bounds(self) -> None:
+        # 「创建日期」公式列（aware datetime）× 北京时间日界闭区间；
+        # r3 created_at 为 None → 设区间即排除
+        views = [
+            # 北京时间 2026-10-01 00:00 = UTC 2026-09-30 16:00：跨时区边界
+            _view("octA", created=datetime(2026, 9, 30, 16, 0, tzinfo=UTC)),
+            _view("octB", created=datetime(2026, 10, 15, 6, 0, tzinfo=UTC)),
+            _view("nov", created=datetime(2026, 10, 31, 17, 0, tzinfo=UTC)),  # 北京 11-01 01:00
+            _view("sep", created=datetime(2026, 9, 30, 15, 59, tzinfo=UTC)),  # 北京 09-30 23:59
+            _view("noneTs", created=None),
+        ]
+        got = filter_views(views, date_from=date(2026, 10, 1), date_to=date(2026, 10, 31))
+        assert [v.id for v in got] == ["octA", "octB"]
+        got2 = filter_views(views)
+        assert [v.id for v in got2] == ["octA", "octB", "nov", "sep", "noneTs"]
+
     def test_ai_review_status_processing_failed_always_empty(self) -> None:
         """派生态只含 none/completed：processing/failed 过滤恒空（spec §4.2）。"""
         assert filter_views(_views(), ai_review_status="processing") == []

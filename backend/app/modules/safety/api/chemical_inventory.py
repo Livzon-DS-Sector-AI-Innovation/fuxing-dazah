@@ -105,3 +105,64 @@ async def get_inventory_stats(
     if direct:
         meta = {"mode": "direct", "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
     return ApiResponse(data=stats, meta=meta)
+
+
+# ── 趋势看板（daily 快照只读聚合，trend.py 业务层）──
+
+
+@chemical_inventory_router.get(
+    "/chemical-inventory/trend", response_model=ApiResponse, summary="库存趋势（daily 快照逐日聚合）"
+)
+async def get_inventory_trend(
+    days: int = Query(30, ge=7, le=180, description="最近 N 个快照日"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    from app.modules.safety.chemical_inventory import trend
+
+    t0 = time.perf_counter()
+    points = await trend.daily_trend_points(db, days=days)
+    return ApiResponse(
+        data={"days": days, "points": points},
+        meta={"days": days, "elapsed_ms": int((time.perf_counter() - t0) * 1000)},
+    )
+
+
+@chemical_inventory_router.get(
+    "/chemical-inventory/changes", response_model=ApiResponse, summary="物料异动明细（目标日 vs 前一快照日）"
+)
+async def get_inventory_changes(
+    date: str | None = Query(None, description="目标快照日 YYYY-MM-DD（默认最新 daily 快照日）"),
+    limit: int = Query(100, ge=1, le=500, description="明细条数（按|变化量|降序截取）"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    from datetime import date as date_type
+
+    from app.modules.safety.chemical_inventory import trend
+
+    t0 = time.perf_counter()
+    target = date_type.fromisoformat(date) if date else None
+    result = await trend.material_changes(db, target_date=target, limit=limit)
+    return ApiResponse(
+        data=result,
+        meta={"elapsed_ms": int((time.perf_counter() - t0) * 1000)},
+    )
+
+
+@chemical_inventory_router.get(
+    "/chemical-inventory/changes/trend", response_model=ApiResponse, summary="异动趋势（逐日急剧上升/下降条数）"
+)
+async def get_inventory_change_trend(
+    days: int = Query(30, ge=7, le=180, description="最近 N 个快照日"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    from app.modules.safety.chemical_inventory import trend
+
+    t0 = time.perf_counter()
+    points = await trend.change_trend(db, days=days)
+    return ApiResponse(
+        data={"days": days, "points": points},
+        meta={"days": days, "elapsed_ms": int((time.perf_counter() - t0) * 1000)},
+    )

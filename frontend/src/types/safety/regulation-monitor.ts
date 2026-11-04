@@ -7,7 +7,8 @@ export type RegulationMonitorStatus = 'not_connected' | 'live' | 'degraded'
 export interface RegulationCrawlSource {
   name: string
   layer?: string
-  last_success_at?: string | null
+  /** ragplus 契约③ 可能返回 Unix 秒级时间戳 */
+  last_success_at?: string | number | null
   consecutive_failures?: number
   items_7d?: number
   status?: 'ok' | 'warn' | 'down' | 'suspect_rebuild' | string

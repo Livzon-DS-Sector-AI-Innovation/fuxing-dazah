@@ -106,7 +106,7 @@ async def execute_tool(
         )
         ok = True
         err = None
-    except asyncio.TimeoutError:
+    except TimeoutError:
         data = None
         ok = False
         err = f"TimeoutError: 工具执行超时（{_TOOL_EXEC_TIMEOUT}s），已中止"

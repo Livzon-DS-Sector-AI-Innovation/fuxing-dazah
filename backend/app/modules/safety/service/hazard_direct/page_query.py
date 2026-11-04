@@ -146,8 +146,13 @@ def _matches(
 ) -> bool:
     if status and v.status != status:
         return False
-    if rectification_status and v.rectification_status != rectification_status:
-        return False
+    if rectification_status:
+        # 'unclosed' 特殊值 = 未闭环（≠已关闭），与 stats 的 closed 口径互补
+        if rectification_status == "unclosed":
+            if v.rectification_status == "closed":
+                return False
+        elif v.rectification_status != rectification_status:
+            return False
     if hazard_type and (v.hazard_type or "") != hazard_type:
         return False
     if hazard_level and not _match_level(v.hazard_level, hazard_level):

@@ -10,6 +10,10 @@ spec D3）：
   原样返回=零命中）/ status 精确 lower / ai_review_status 精确 lower /
   keyword（title/description ilike）。ilike ≈ 大小写不敏感子串匹配
   （全中文场景等价，oh/hazard_id query 同款口径）；
+- 日期区间 date_from/date_to（两分支对称新增）：直读按 Bitable
+  created_time（epoch 毫秒）以北京时间日界半开区间过滤；created_time
+  缺失行在设定区间时不命中；legacy 镜像分支对称过滤 created_at（镜像
+  首次插入时间，与 created_time 存在受控偏差，同下方排序偏差口径）；
 - 排序（受控偏差，spec D3）：legacy created_at desc（镜像首次插入时间）
   → Bitable created_time desc（真实创建时间），created_time 缺失
   防御性放最后；稳定排序保持拉取序兜底同秒行；
@@ -22,8 +26,13 @@ spec D3）：
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
+from app.modules.safety.service.bitable_direct.filters import (
+    date_range_window,
+    epoch_ms,
+)
 from app.modules.safety.service.ehs_change_direct.views import EhsChangeView
 
 __all__ = ["ehs_changes"]
@@ -57,6 +66,12 @@ def _norm_choice(value: str | None) -> str | None:
 def _contains(needle: str, haystack: str | None) -> bool:
     """ilike(f"%needle%") 等价：大小写不敏感子串（全中文场景等价）。"""
     return needle.lower() in (haystack or "").lower()
+
+
+def _day_bounds_ms(date_from: date | None, date_to: date | None) -> tuple[int | None, int | None]:
+    """[起始日零点, 结束次日零点) 半开区间 → epoch 毫秒（北京时间日界）。"""
+    start, end = date_range_window(date_from, date_to)
+    return (epoch_ms(start) if start else None, epoch_ms(end) if end else None)
 
 
 def _iso(v: Any) -> str | None:
@@ -96,6 +111,8 @@ def ehs_changes(
     status: str | None = None,
     ai_review_status: str | None = None,
     keyword: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     change_duration: str | None = None,
     source: str | None = None,
     feishu_table_id: str | None = None,
@@ -106,6 +123,9 @@ def ehs_changes(
 ) -> tuple[list[dict[str, Any]], int]:
     """EHS 变更台账（legacy query_ehs_changes 等价内存实现，两表并集）。
 
+    date_from/date_to：按记录创建时间（Bitable created_time，北京时间
+    日界）过滤的闭区间（date 对象）；created_time 缺失行设定区间时不
+    命中。Agent「本月变更」类提问走此参数（口径=申请提交日）。
     change_duration/source/feishu_table_id/sort_* 为 Web 台账页面参数
     （批次 4 接线时补齐，默认值不影响 Agent 工具既有调用）：
     - source：直读行全部来自 bitable——manual 筛选直接空集；
@@ -115,6 +135,7 @@ def ehs_changes(
     grade_norm = _norm_choice(change_grade)
     status_norm = status.strip().lower() if status else None
     ai_norm = ai_review_status.strip().lower() if ai_review_status else None
+    start_ms, end_ms = _day_bounds_ms(date_from, date_to)
 
     def _match(v: EhsChangeView) -> bool:
         if department and not _contains(department, v.department):
@@ -136,6 +157,11 @@ def ehs_changes(
         if keyword and not (
             _contains(keyword, v.title) or _contains(keyword, v.description)
         ):
+            return False
+        # 日期区间：created_time 缺失行无法判定归属，设区间即排除
+        if start_ms is not None and (v.created_time_ms is None or v.created_time_ms < start_ms):
+            return False
+        if end_ms is not None and (v.created_time_ms is None or v.created_time_ms >= end_ms):
             return False
         return True
 

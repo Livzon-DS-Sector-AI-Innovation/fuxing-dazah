@@ -34,9 +34,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import select
 
@@ -52,6 +56,7 @@ __all__ = [
     "FacilityMapPinsService",
     "bj_today",
     "fire_ext_due_rows",
+    "get_pins_cached",
     "hazard_rows_for_day",
     "open_pins_service",
 ]
@@ -113,29 +118,51 @@ class FacilityMapPinsService:
                 errors.append(f"{label}拉取失败: {str(exc)[:120]}")
                 return None
 
-        raw_tickets = await _gather(_SOURCE_LABELS[0], self._ticket_reader, target)
+        async def _session_group() -> tuple[Any, Any, Any]:
+            # 可能共享注入 AsyncSession 的三路（key_risk/over_limit 镜像模式
+            # 走 repo、map_rows 直查）串行执行——SQLAlchemy 会话禁并发；
+            # 直读模式下前两路不触会话，串行代价可忽略
+            key_risks_raw = await _gather(
+                _SOURCE_LABELS[3], self._key_risk_reader, target
+            )
+            over_limits_raw = await _gather(
+                _SOURCE_LABELS[4], self._over_limit_reader, target
+            )
+            rows = await _gather(_SOURCE_LABELS[7], self._map_rows)
+            return key_risks_raw, over_limits_raw, rows
+
+        # 五路无会话读取器并行 + 会话组串行链并行（2026-11-02 性能修复：
+        # 原逐路串行 await，总耗时=八路相加，冷缓存实测 43s；并行后≈最慢一路）
+        (
+            raw_tickets,
+            fires_raw,
+            centrals_raw,
+            hazards_raw,
+            fire_ext_raw,
+            (key_risks_raw, over_limits_raw, rows),
+        ) = await asyncio.gather(
+            _gather(_SOURCE_LABELS[0], self._ticket_reader, target),
+            _gather(_SOURCE_LABELS[1], self._fire_reader, target),
+            _gather(_SOURCE_LABELS[2], self._central_reader, target),
+            _gather(_SOURCE_LABELS[5], self._hazard_reader, target),
+            _gather(_SOURCE_LABELS[6], self._fire_ext_reader, target),
+            _session_group(),
+        )
         if raw_tickets:
             jobs = raw_tickets
-        fires_raw = await _gather(_SOURCE_LABELS[1], self._fire_reader, target)
         if fires_raw:
             fires = fires_raw
-        centrals_raw = await _gather(_SOURCE_LABELS[2], self._central_reader, target)
         if centrals_raw:
             centrals = centrals_raw
-        key_risks_raw = await _gather(_SOURCE_LABELS[3], self._key_risk_reader, target)
         if key_risks_raw:
             key_risks = key_risks_raw
-        over_limits_raw = await _gather(_SOURCE_LABELS[4], self._over_limit_reader, target)
         if over_limits_raw:
             over_limits = over_limits_raw
-        hazards_raw = await _gather(_SOURCE_LABELS[5], self._hazard_reader, target)
         if hazards_raw:
             hazards_new = hazards_raw.get("new") or []
             hazards_open = hazards_raw.get("open") or []
-        fire_ext_raw = await _gather(_SOURCE_LABELS[6], self._fire_ext_reader, target)
         if fire_ext_raw:
             fire_ext_dues = fire_ext_raw
-        rows = await _gather(_SOURCE_LABELS[7], self._map_rows)
         if rows:
             map_rows = rows
 
@@ -472,3 +499,45 @@ def open_pins_service(*, session: Any = None) -> FacilityMapPinsService:
             _default_map_rows(session),
         )
     )
+
+
+# ── pins 结果 TTL 缓存（2026-11-02 性能修复 P1）────────────────────────
+# 八路直读聚合冷缓存 10s+，用户每次打开图卡都要现场等；缓存 + 后台预热任务
+# （scheduled.py DASHBOARD_WARMUP_TASK）把「用户等待」变「后台刷新」。
+# 构造注入替身的测试直连 get_pins，不经本层，不受影响。
+_PINS_CACHE_TTL_SECONDS = int(
+    os.getenv("SAFETY_FACILITY_MAP_PINS_CACHE_TTL_SECONDS", "150")
+)
+_PINS_CACHE_MAX_ENTRIES = 8
+_pins_cache: dict[date, tuple[float, dict[str, Any]]] = {}
+
+
+async def get_pins_cached(
+    target: date, *, session: Any = None, force: bool = False
+) -> dict[str, Any]:
+    """生产 pins 读取（API/预热共用）：TTL 缓存命中直接回放，miss 现算回填。
+
+    force=True 绕过读缓存强制重算（预热任务刷新用），算完仍回填。
+    """
+    ttl = _PINS_CACHE_TTL_SECONDS
+    if ttl > 0 and not force:
+        hit = _pins_cache.get(target)
+        if hit is not None and time.monotonic() - hit[0] < ttl:
+            return hit[1]
+
+    if session is None:
+        from app.core.database import async_session_factory
+
+        async with async_session_factory() as fresh:
+            data = await open_pins_service(session=fresh).get_pins(target)
+    else:
+        data = await open_pins_service(session=session).get_pins(target)
+
+    if ttl > 0:
+        _pins_cache[target] = (time.monotonic(), data)
+        if len(_pins_cache) > _PINS_CACHE_MAX_ENTRIES:
+            for key in sorted(_pins_cache, key=lambda k: _pins_cache[k][0]):
+                _pins_cache.pop(key, None)
+                if len(_pins_cache) <= _PINS_CACHE_MAX_ENTRIES:
+                    break
+    return data

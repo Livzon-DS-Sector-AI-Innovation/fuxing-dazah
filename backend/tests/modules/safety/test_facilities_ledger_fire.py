@@ -1,9 +1,10 @@
-"""灭火器台账（消防器材首张真实表）列映射校准回归（2026-10-20）。
+"""灭火器台账（消防器材首张真实表）列映射校准回归（2026-10-20，10-29 修订）。
 
 真实表：base Ngd7bJRxMaf6DpsqwlIcZtvpnce / tblcnSMMA8vs5p33，12 列（见
-REAL_FIRE_HEADERS）。锁定三处校准口径：
-1. 两段式映射自动命中：到期日期→主锚点、到期提醒人员.部门→责任部门、
-   灭火器类型→类别、位置；owner 候选补「到期提醒人员」；
+REAL_FIRE_HEADERS）。锁定校准口径：
+1. 两段式映射自动命中：到期日期（公式自动生成）→主锚点（2026-10-29 拍板，
+   公式列=生产日期+5年；人工「到期日期」两列并存时退役）、
+   到期提醒人员.部门→责任部门、灭火器类型→类别、位置；owner 候选补「到期提醒人员」；
 2. person 责任人列同取 name+open_id（派发 @mention 免解析直取）；
 3. 无编号/名称列 → 合成（类别·位置 / 类别），不进信息不全清单。
 """
@@ -67,14 +68,39 @@ def _fire_row(
 
 def test_real_headers_column_resolution():
     cols = resolve_columns(REAL_FIRE_HEADERS)
-    assert cols["next_date"] == "到期日期"
+    # 2026-10-29 拍板：公式自动生成列（=生产日期+5年）为主锚点，人工「到期日期」退役
+    assert cols["next_date"] == "到期日期（公式自动生成）"
     assert cols["department"] == "到期提醒人员.部门"
     assert cols["category"] == "灭火器类型"
     assert cols["location"] == "位置"
     assert cols["owner"] == "到期提醒人员"
-    # 公式到期列不被误认领（精确段「到期日期」已占列，模糊段跳过已解析字段）
+    # 人工「到期日期」两列并存时不再被任何标准字段认领（精确段已被公式列占位）
+    assert "到期日期" not in cols.values()
     assert cols.get("last_date") is None
     assert cols.get("cycle_months") is None
+
+
+def test_formula_column_envelope_parsed_and_wins():
+    """公式列 {'type':5,'value':[ms]} 解包取锚点；人工到期列同存时不参与。"""
+    row = _fire_row(expires=date(2026, 10, 1))
+    row["fields"]["到期日期（公式自动生成）"] = {"type": 5, "value": [_ms(date(2028, 6, 1))]}
+    v = to_view(row, BIZ_FIRE)  # 单行现解析：表头含两列
+    assert v.anchor == date(2028, 6, 1)
+    assert v.anchor_source == "next_date"
+
+
+def test_formula_column_missing_value_falls_to_incomplete():
+    """全表头含公式列但某行公式值缺（key 缺失）→ 该行主锚点不可得进信息不全。"""
+    row_a = _fire_row(expires=date(2030, 7, 1))
+    row_a["fields"]["到期日期（公式自动生成）"] = {"type": 5, "value": [_ms(date(2030, 7, 1))]}
+    row_b = _fire_row(expires=date(2030, 7, 1))  # 无公式值：人工列不被认领 → 无锚点
+    row_b["record_id"] = "rec_no_formula"
+    views = to_views([row_a, row_b], BIZ_FIRE)
+    anchors = {v.record_id: v.anchor for v in views}
+    assert anchors["rec_test"] == date(2030, 7, 1)
+    assert anchors["rec_no_formula"] is None
+    incomplete = {v.record_id: v.incomplete_reason for v in views}
+    assert incomplete["rec_no_formula"]
 
 
 def test_real_row_view_owner_open_id_and_synthesis():

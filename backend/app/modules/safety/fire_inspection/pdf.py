@@ -45,6 +45,13 @@ _NOTE = ParagraphStyle("fi_note", fontName=_FONT, fontSize=8, leading=12, wordWr
 _NOTE_RIGHT = ParagraphStyle("fi_note_right", fontName=_FONT, fontSize=8, leading=12, alignment=2)
 
 _GRAY = colors.Color(0.94, 0.94, 0.94)
+
+# 嵌入图体积防线（2026-11-03 事故：iPhone MPO 大图 reportlab 无法 DCT 直嵌，
+# 裸像素膨胀出 29-38MB PDF，飞书上传连接被掐断 httpx.ReadError('')）。
+# 图框最宽 68mm，1600px 已≈600DPI，超出纯冗余；签字小图（PNG ~16KB）不受影响。
+_IMAGE_MAX_DIMENSION = 1600
+_IMAGE_REENCODE_THRESHOLD = 300 * 1024
+_JPEG_QUALITY = 85
 # reportlab TableStyle 指令元组形状随指令类型不同而不同，统一按宽元组处理
 _VALIGN_MIDDLE: list[tuple[Any, ...]] = [("VALIGN", (0, 0), (-1, -1), "MIDDLE")]
 _CELL_PADDING: list[tuple[Any, ...]] = [
@@ -172,6 +179,37 @@ def _photos_section(record: InspectionRecord, images: dict[str, bytes]) -> Table
     return table
 
 
+def _normalize_for_embed(data: bytes) -> bytes:
+    """超大图降采样重编码为 JPEG，控制归档 PDF 体积。
+
+    - 小图（≤阈值）原样返回：签字 PNG 等小附件字节不动。
+    - 尺寸已达标且本就是 JPEG 的直接返回（reportlab 走 DCT 直嵌不膨胀）。
+    - 其余（MPO/超大 JPEG/大 PNG）降采样转 JPEG；重编码失败回退原字节，
+      宁可 PDF 变大也不能让归档失败。
+    """
+    if len(data) <= _IMAGE_REENCODE_THRESHOLD:
+        return data
+    try:
+        from PIL import Image as PILImage
+
+        with PILImage.open(io.BytesIO(data)) as img:
+            if max(img.size) <= _IMAGE_MAX_DIMENSION and img.format == "JPEG":
+                return data
+            if img.mode in ("RGBA", "LA", "P"):
+                rgba = img.convert("RGBA")
+                background = PILImage.new("RGB", rgba.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.split()[-1])
+                img = background
+            else:
+                img = img.convert("RGB")
+            img.thumbnail((_IMAGE_MAX_DIMENSION, _IMAGE_MAX_DIMENSION))
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=_JPEG_QUALITY)
+            return out.getvalue()
+    except Exception:
+        return data
+
+
 def _fit_image(
     attachments: tuple[Attachment, ...],
     images: dict[str, bytes],
@@ -185,6 +223,7 @@ def _fit_image(
         data = images.get(att.file_token)
         if not data:
             continue
+        data = _normalize_for_embed(data)
         reader = ImageReader(io.BytesIO(data))
         iw, ih = reader.getSize()
         if iw <= 0 or ih <= 0:

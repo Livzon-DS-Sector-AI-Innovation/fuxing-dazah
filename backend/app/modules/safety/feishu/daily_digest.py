@@ -35,6 +35,7 @@ from app.core.redis import get_redis
 from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.feishu.notification import (
     build_card_dict,
+    delete_message,
     send_group_card,
     update_card,
 )
@@ -93,6 +94,8 @@ CELL_ORDER: list[str] = [
     "telemetry_alarm",
     # 标准符合性季度定格通报（季度首日 08:20 定格收尾投递，S1 二期；一条/季）
     "standard_compliance",
+    # 法规收录更新（ragplus 周一 06:00 采集轮收录后即时并入；分级+适用性详情）
+    "regulation",
     # Super-agent「需要人」格（每日 08:00 cron_tick→effects 构建；只读摘要，
     # 转正/忽略走底座 REST——§6 触点：daily_digest 仅此一格）
     "superagent_needs_human",
@@ -293,6 +296,41 @@ async def handle_bulletin_forward(event_data: dict[str, Any]) -> dict[str, Any]:
         target, operator or "-", msg_id,
     )
     return {"toast": {"type": "success", "content": "督办通报已推送到目标群"}}
+
+
+async def handle_bulletin_forward_recall(event_data: dict[str, Any]) -> dict[str, Any]:
+    """「🗑 撤回推送」按钮回调：撤回当天已推到目标群的督办通报卡。
+
+    撤回成功后删除当日推送记录（_FORWARD_KEY），此后再点「推送到群」
+    走重新推送（新发）而非原地更新。撤回失败时保留记录——若消息其实
+    已被手动删除，后续推送会经 PATCH 失败兜底转新发，两态语义一致。
+    不依赖 forward_chat_id 当前配置：按钮渲染时配置过即可，撤回按
+    记录中的 message_id 删（目标群中途改配置不影响撤回旧卡）。
+    """
+    operator = ((event_data.get("operator") or {}).get("open_id")) or ""
+    store = await get_redis()
+    forward_key = _FORWARD_KEY.format(date=_bj_today().isoformat())
+    prev_chat = prev_msg = ""
+    try:
+        prev = json.loads(await store.get(forward_key) or "{}")
+        prev_chat, prev_msg = prev.get("chat") or "", prev.get("msg_id") or ""
+    except (TypeError, ValueError):
+        pass
+    if not prev_msg:
+        return {"toast": {"type": "error", "content": "今日尚未推送，无需撤回"}}
+
+    if not await delete_message(prev_msg):
+        logger.warning(
+            "督办通报撤回失败: msg=%s chat=%s operator=%s",
+            prev_msg, prev_chat or "-", operator or "-",
+        )
+        return {"toast": {"type": "error", "content": "撤回失败，请稍后重试或查看后端日志"}}
+    await store.delete(forward_key)
+    logger.info(
+        "督办通报已撤回群内推送: chat=%s msg=%s operator=%s",
+        prev_chat or "-", prev_msg, operator or "-",
+    )
+    return {"toast": {"type": "success", "content": "已撤回群内今日推送的督办通报"}}
 
 
 async def send_digest_cell_card(
@@ -514,17 +552,51 @@ def _apply_limit(detail: str, limit: int | None) -> str:
     return detail[:limit].rstrip() + "\n…（明细过长已截断）"
 
 
-def _bulletin_forward_button() -> dict[str, Any] | None:
-    """督办通报格子「推送到群」按钮（未配置目标群返回 None，不渲染）。"""
-    if not forward_chat_id():
-        return None
-    value = {"scope": "hazard_bulletin_forward", "action": "forward"}
-    return {
+def _bulletin_forward_button(action: str, text: str, btn_type: str,
+                             confirm: dict[str, Any] | None = None) -> dict[str, Any]:
+    """督办通报格子按钮（callback 回传 scope+action）。"""
+    value = {"scope": "hazard_bulletin_forward", "action": action}
+    button: dict[str, Any] = {
         "tag": "button",
-        "text": {"tag": "plain_text", "content": "📤 推送到群"},
-        "type": "primary",
+        "text": {"tag": "plain_text", "content": text},
+        "type": btn_type,
         "value": value,
         "behaviors": [{"type": "callback", "value": value}],
+    }
+    if confirm is not None:
+        button["confirm"] = confirm
+    return button
+
+
+def _bulletin_forward_buttons() -> dict[str, Any] | None:
+    """督办通报格子「推送到群 / 撤回推送」并排按钮行（未配置目标群不渲染）。
+
+    嵌套 column_set（2.0 允许 column 内嵌分栏，≤5 层）：auto 宽单按钮列横排。
+    撤回为不可逆的群内操作，带二次确认弹窗。
+    """
+    if not forward_chat_id():
+        return None
+    recall_confirm = {
+        "title": {"tag": "plain_text", "content": "撤回推送"},
+        "text": {"tag": "plain_text", "content": "将撤回已推送到群的今日督办通报卡片，确认撤回？"},
+    }
+    buttons = [
+        _bulletin_forward_button("forward", "📤 推送到群", "primary"),
+        _bulletin_forward_button("recall", "🗑 撤回推送", "danger", recall_confirm),
+    ]
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "margin": "6px 0px 0px 0px",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "auto",
+                "vertical_align": "top",
+                "elements": [button],
+            }
+            for button in buttons
+        ],
     }
 
 
@@ -564,10 +636,11 @@ async def _cell_element(
     if panel is not None:
         left_elements.append(panel)
     if key == "hazard_bulletin":
-        button = _bulletin_forward_button()
-        if button is not None:
-            # 面板下方同列放置（与「查看详情」衔接），不做右侧悬浮列
-            left_elements.append(button)
+        buttons = _bulletin_forward_buttons()
+        if buttons is not None:
+            # 面板下方同列放置（与「查看详情」衔接），不做右侧悬浮列；
+            # 双按钮以嵌套 column_set 横排
+            left_elements.append(buttons)
 
     columns: list[dict[str, Any]] = [{
         "tag": "column",

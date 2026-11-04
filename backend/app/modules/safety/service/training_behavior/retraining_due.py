@@ -11,8 +11,9 @@ SAFETY_TB_RETRAINING_DUE_CHAT_ID（真实群发送随启用批接入，当前为
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import date
+from typing import Any
 
 from app.modules.safety.service.bitable_direct import fields as bd_fields
 from app.modules.safety.service.bitable_direct import reader as bd_reader

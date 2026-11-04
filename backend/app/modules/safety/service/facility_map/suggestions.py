@@ -23,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.ai_facility_map import (
-    FacilityMapSuggestError,
     FacilityMapSuggestPlugin,
 )
 from app.modules.safety.models.location_district_map import LocationDistrictMap

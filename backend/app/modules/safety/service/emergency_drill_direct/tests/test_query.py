@@ -80,6 +80,39 @@ class TestFilterViews:
         got = filter_views(views, department="设备动力部", stage="plan")
         assert got == []
 
+    def test_date_range_plans_use_plan_time_ref(self) -> None:
+        # plans 按计划时间过滤；plan_time_ref 为空（rec3）设区间即排除
+        views = _sample()
+        got = filter_views(
+            views, stage="plan",
+            date_from=date(2026, 1, 1), date_to=date(2026, 1, 31),
+        )
+        assert [v.id for v in got] == []
+        got2 = filter_views(
+            views, stage="plan",
+            date_from=date(2025, 12, 1), date_to=date(2026, 1, 31),
+        )
+        assert [v.id for v in got2] == ["rec4"]
+
+    def test_date_range_execution_uses_execution_time(self) -> None:
+        # execution/records 按实施时间过滤（闭区间，含两端）
+        views = _sample()
+        got = filter_views(
+            views, stage="execution",
+            date_from=date(2026, 1, 20), date_to=date(2026, 2, 10),
+        )
+        assert [v.id for v in got] == ["rec1", "rec2"]
+        got2 = filter_views(
+            views, stage="execution", date_to=date(2026, 1, 31),
+        )
+        assert [v.id for v in got2] == ["rec1"]
+
+    def test_date_range_without_stage_uses_execution_time(self) -> None:
+        views = _sample()
+        got = filter_views(views, date_from=date(2026, 2, 1))
+        # rec1 实施时间在 2 月前被排除；rec2 保留；rec3/rec4 无实施时间排除
+        assert [v.id for v in got] == ["rec2"]
+
 
 class TestSortViews:
     def test_default_plan_time_ref_desc_nulls_last(self) -> None:

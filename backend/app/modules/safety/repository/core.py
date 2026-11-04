@@ -66,7 +66,11 @@ class SafetyRepository:
         if status:
             query = query.where(HazardReport.status == status)
         if rectification_status:
-            query = query.where(HazardReport.rectification_status == rectification_status)
+            # 'unclosed' 特殊值 = 未闭环（≠已关闭），与 stats 的 closed 口径互补
+            if rectification_status == "unclosed":
+                query = query.where(HazardReport.rectification_status != "closed")
+            else:
+                query = query.where(HazardReport.rectification_status == rectification_status)
         if hazard_type:
             query = query.where(HazardReport.hazard_type == hazard_type)
         if hazard_level:
@@ -92,7 +96,10 @@ class SafetyRepository:
         if status:
             count_query = count_query.where(HazardReport.status == status)
         if rectification_status:
-            count_query = count_query.where(HazardReport.rectification_status == rectification_status)
+            if rectification_status == "unclosed":
+                count_query = count_query.where(HazardReport.rectification_status != "closed")
+            else:
+                count_query = count_query.where(HazardReport.rectification_status == rectification_status)
         if hazard_type:
             count_query = count_query.where(HazardReport.hazard_type == hazard_type)
         if hazard_level:
@@ -2051,8 +2058,14 @@ class SafetyRepository:
         keyword: str | None = None,
         ai_conclusion: str | None = None,
         ai_parse_status: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
     ) -> tuple[list[OhHealthExam], int]:
-        """获取职业健康体检列表"""
+        """获取职业健康体检列表。
+
+        date_from/date_to：体检时间（exam_date）半开区间 [from, to)，aware
+        datetime（service 层已按北京时间日界换算）。
+        """
         query = select(OhHealthExam).where(OhHealthExam.is_deleted.is_(False))
 
         if status:
@@ -2078,6 +2091,10 @@ class SafetyRepository:
                 | OhHealthExam.department.ilike(like)
                 | OhHealthExam.id_card_no.ilike(like)
             )
+        if date_from:
+            query = query.where(OhHealthExam.exam_date >= date_from)
+        if date_to:
+            query = query.where(OhHealthExam.exam_date < date_to)
 
         count_query = select(func.count(OhHealthExam.id)).where(OhHealthExam.is_deleted.is_(False))
         if status:
@@ -2103,6 +2120,10 @@ class SafetyRepository:
                 | OhHealthExam.department.ilike(like)
                 | OhHealthExam.id_card_no.ilike(like)
             )
+        if date_from:
+            count_query = count_query.where(OhHealthExam.exam_date >= date_from)
+        if date_to:
+            count_query = count_query.where(OhHealthExam.exam_date < date_to)
 
         query = query.order_by(OhHealthExam.created_at.desc()).offset(skip).limit(limit)
         result = await self.session.execute(query)

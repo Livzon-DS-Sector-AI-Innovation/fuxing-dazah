@@ -15,10 +15,12 @@ created_at 倒序，二者对同一批业务行通常一致）；响应 id=recXX
 from __future__ import annotations
 
 import time
+from datetime import date
 from typing import Any, cast
 
 from app.modules.safety.feishu import oh_bitable_handler as oh_handler
 from app.modules.safety.service.bitable_direct import reader as bd_reader
+from app.modules.safety.service.bitable_direct.filters import date_range_window
 from app.modules.safety.service.oh_direct import config
 
 
@@ -203,11 +205,19 @@ def list_exams(
     ai_conclusion: str | None = None,
     ai_parse_status: str | None = None,
     keyword: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[list[OhRowView], int]:
+    """体检记录列表（内存过滤 + 分页）。
+
+    date_from/date_to：按体检时间（exam_date）以北京时间日界过滤的闭区间；
+    exam_date 缺失行在设定区间时不命中（repo 镜像分支同口径）。
+    """
     filtered = [
         e for e in exams
         if _exam_matches(
-            e, status, exam_type, department, ai_conclusion, ai_parse_status, keyword,
+            e, status, exam_type, department, ai_conclusion, ai_parse_status,
+            keyword, date_from, date_to,
         )
     ]
     total = len(filtered)
@@ -222,6 +232,8 @@ def _exam_matches(
     ai_conclusion: str | None,
     ai_parse_status: str | None,
     keyword: str | None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> bool:
     m = e.mapped
     if status and m.get("status") != status:
@@ -242,6 +254,15 @@ def _exam_matches(
             kw in str(m.get(f) or "").lower()
             for f in ("exam_no", "employee_name", "department", "id_card_no")
         ):
+            return False
+    if date_from or date_to:
+        ts = m.get("exam_date")
+        start, end = date_range_window(date_from, date_to)
+        if ts is None:
+            return False
+        if start is not None and ts < start:
+            return False
+        if end is not None and ts >= end:
             return False
     return True
 

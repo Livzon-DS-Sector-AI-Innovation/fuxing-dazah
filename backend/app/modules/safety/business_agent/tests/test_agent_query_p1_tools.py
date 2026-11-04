@@ -15,7 +15,6 @@ query_hazards 来源过滤 / query_oh monitors。
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -124,10 +123,10 @@ class TestTelemetryToolsWiring:
 
 class TestQueryTelemetryLatest:
     def test_returns_items_with_iso_timestamps(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from app.modules.safety.models import TelemetrySnapshot
         from app.modules.safety.business_agent.tools.telemetry_tools import (
             query_telemetry_latest,
         )
+        from app.modules.safety.models import TelemetrySnapshot
 
         # 避开真实 app_config 读取：规则为空 → status 恒 normal
         monkeypatch.setattr(
@@ -170,10 +169,10 @@ class TestQueryTelemetryLatest:
 
 class TestQueryTelemetryAlarms:
     def test_returns_paged_alarms(self) -> None:
-        from app.modules.safety.models import TelemetryAlarmRecord
         from app.modules.safety.business_agent.tools.telemetry_tools import (
             query_telemetry_alarms,
         )
+        from app.modules.safety.models import TelemetryAlarmRecord
 
         alarm = TelemetryAlarmRecord(
             equipment_no="GL-01",
@@ -222,7 +221,7 @@ def asyncio_run(coro: Any) -> Any:
 
 
 def _bj_today():
-    from datetime import date, datetime, timedelta, timezone
+    from datetime import datetime, timedelta, timezone
 
     return datetime.now(timezone(timedelta(hours=8))).date()
 
@@ -386,10 +385,10 @@ class TestQueryFacilityTasks:
     def test_returns_tasks_with_summary(self) -> None:
         from datetime import timedelta
 
-        from app.modules.safety.models import FacilityCheckTask
         from app.modules.safety.business_agent.tools.facility_tools import (
             query_facility_tasks,
         )
+        from app.modules.safety.models import FacilityCheckTask
 
         today = _bj_today()
         task = FacilityCheckTask(
@@ -682,7 +681,6 @@ class TestQueryTrainingPlansAndRetraining:
 
 class TestQueryTrainingDemandDrafts:
     def test_drafts_via_db(self) -> None:
-        from datetime import datetime
 
         from app.modules.safety.business_agent.tools.training_tools import (
             query_training_behavior,
@@ -737,7 +735,9 @@ def _warning_result() -> Any:
     from datetime import date, timedelta
 
     from app.modules.safety.service.visitor_insurance.warning import (
-        ExpiringGroup, MissingGroup, WarningResult,
+        ExpiringGroup,
+        MissingGroup,
+        WarningResult,
     )
 
     today = date(2026, 10, 28)
@@ -978,7 +978,7 @@ class TestQueryChemicalTrend:
 
 def _ext_view(record_id: str, *, closed: bool = False, desc: str = "罐区围堰破损",
               departments: list[str] | None = None,
-              checked_at: "date | None" = None) -> Any:
+              checked_at: date | None = None) -> Any:
     from datetime import date
 
     from app.modules.safety.service.hazard_direct.external_audit import (
@@ -1072,9 +1072,9 @@ class TestQueryHazardsSource:
         assert sources == {"internal", "external"}
 
     def test_source_external_date_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from app.modules.safety.business_agent.tools.read_tools import query_hazards
-
         from datetime import date
+
+        from app.modules.safety.business_agent.tools.read_tools import query_hazards
 
         async def _fake_fetch():
             return [

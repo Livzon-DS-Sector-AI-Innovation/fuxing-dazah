@@ -17,8 +17,10 @@ from app.modules.safety.service.ehs_change_direct.views import EhsChangeView
 
 ENV_DIRECT = "SAFETY_EHS_CHANGE_DIRECT_ENABLED"
 
-# legacy 工具体输出键（read_tools.query_ehs_changes 逐字对齐）
+# 工具体输出键（批次四页面接线起为 18 键：legacy 13 键 + id/feishu_record_id/
+# source/kind/change_duration）
 EHS_KEYS = {
+    "id", "feishu_record_id", "source", "kind", "change_duration",
     "change_no", "title", "change_type", "change_grade", "department",
     "location_unit", "status", "expected_start", "expected_completion",
     "actual_start", "actual_completion", "applicant_name", "ai_review_status",

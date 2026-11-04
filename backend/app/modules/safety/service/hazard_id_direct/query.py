@@ -8,7 +8,10 @@ spec D3/D5）：
   给出且均可识别才生效——legacy 同款静默不过滤）/ overall_status 等值
   （实值域 draft/completed）/ keyword（specific_activity/hazard_type/
   possible_accident 三列 ilike）。ilike ≈ 大小写不敏感子串匹配（全中文
-  场景等价，oh query 同款口径）；
+  场景等价，oh query 同款口径）；日期区间 date_from/date_to（对称新增）：
+  按 Bitable created_time（epoch 毫秒）以北京时间日界半开区间过滤，
+  created_time 缺失行在设定区间时不命中；legacy 镜像分支对称过滤
+  created_at（受控偏差同下方排序口径）；
 - 排序（受控偏差，spec D5）：legacy created_at desc（镜像首次插入时间）→
   Bitable created_time desc（真实创建时间，秒粒度），created_time 缺失
   防御性放最后；稳定排序保持拉取序兜底同秒行；
@@ -21,15 +24,26 @@ spec D3/D5）：
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date
 from typing import Any
 
 from sqlalchemy import select
 
+from app.modules.safety.service.bitable_direct.filters import (
+    date_range_window,
+    epoch_ms,
+)
 from app.modules.safety.service.hazard_id_direct.views import (
     HazardIdentificationView,
 )
 
 __all__ = ["hazard_identifications", "resolve_departments"]
+
+
+def _created_bounds_ms(date_from: date | None, date_to: date | None) -> tuple[int | None, int | None]:
+    """[起始日零点, 结束次日零点) 半开区间 → epoch 毫秒（北京时间日界）。"""
+    start, end = date_range_window(date_from, date_to)
+    return (epoch_ms(start) if start else None, epoch_ms(end) if end else None)
 
 # 与 legacy 工具体逐字同款拷贝（read_tools._HI_LEVEL_KEYWORDS；工具模块不
 # 反向 import service，oh_direct/query 同款口径）
@@ -92,10 +106,17 @@ def hazard_identifications(
     risk_level: str | None = None,
     overall_status: str | None = None,
     keyword: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict[str, Any]], int]:
-    """危险源辨识明细（legacy query_hazard_identifications 等价内存实现）。"""
+    """危险源辨识明细（legacy query_hazard_identifications 等价内存实现）。
+
+    date_from/date_to：按记录创建时间（Bitable created_time，北京时间日界）
+    过滤的闭区间（date 对象）；created_time 缺失行设定区间时不命中。
+    Agent「本月辨识了多少条」类提问走此参数。
+    """
     dept_map = departments or {}
 
     # legacy：stage/level 须同时给出且均可识别才过滤；任一不可识别=静默不加条件
@@ -106,6 +127,7 @@ def hazard_identifications(
     kws = _HI_LEVEL_KEYWORDS.get(risk_level.strip()) if risk_level else None
     stage_filter_on = bool(stage_attr and kws)
     status_norm = overall_status.strip().lower() if overall_status else None
+    start_ms, end_ms = _created_bounds_ms(date_from, date_to)
 
     def _match(v: HazardIdentificationView) -> bool:
         if department and not _contains(
@@ -124,6 +146,11 @@ def hazard_identifications(
             _contains(keyword, getattr(v, f))
             for f in ("specific_activity", "hazard_type", "possible_accident")
         ):
+            return False
+        # 日期区间：created_time 缺失行无法判定归属，设区间即排除
+        if start_ms is not None and (v.created_time_ms is None or v.created_time_ms < start_ms):
+            return False
+        if end_ms is not None and (v.created_time_ms is None or v.created_time_ms >= end_ms):
             return False
         return True
 

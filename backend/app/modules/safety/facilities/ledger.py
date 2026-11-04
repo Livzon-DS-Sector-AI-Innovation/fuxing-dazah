@@ -82,6 +82,9 @@ _FIELD_CANDIDATES: dict[str, tuple[str, ...]] = {
         "校验周期", "检验周期", "检查周期", "周期（月）", "周期",
     ),
     "next_date": (
+        # 公式自动生成到期列优先（2026-10-29 拍板：灭火器台账到期以公式列
+        # =生产日期+5年为准，两列并存时人工「到期日期」不再作督办锚点）
+        "到期日期（公式自动生成）",
         "下次校验日期", "下次检验日期", "下次检查日期",
         "校验到期日期", "检验到期日期", "到期日期",
     ),
@@ -213,10 +216,18 @@ def _shift_months(d: date, months: int) -> date:
 
 
 def _as_date(fields: dict[str, Any], column: str | None) -> date | None:
-    """列名 -> 北京日期（毫秒时间戳 +8h 取日；缺列/空值 None）。"""
+    """列名 -> 北京日期（毫秒时间戳 +8h 取日；缺列/空值 None）。
+
+    公式日期列 {'type':5,'value':[ms]} 自动解包——底座 ms_to_utc 不认 dict，
+    照 facility_map._formula_date 范式本地处理（不动底座，零波及其他域）。
+    """
     if not column:
         return None
-    dt = bd_fields.datetime_ms(fields, column)
+    raw = fields.get(column)
+    if isinstance(raw, dict):
+        value = raw.get("value")
+        raw = value[0] if isinstance(value, (list, tuple)) and value else value
+    dt = bd_fields.ms_to_utc(raw)
     return (dt + timedelta(hours=8)).date() if dt else None
 
 

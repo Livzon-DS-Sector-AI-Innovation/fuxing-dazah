@@ -19,7 +19,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from app.modules.safety.ai_violation_retraining import (
     ViolationRetrainingError,

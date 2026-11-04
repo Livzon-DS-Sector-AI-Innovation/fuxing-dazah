@@ -429,10 +429,11 @@ async def sync_pdf_revision(record_id: str, *, force: bool = False) -> dict[str,
     返回 {"status": skip_up_to_date/skip_self_write/skip_no_content/
     skip_not_found/failed_not_configured/regenerated/failed_upload, ...}。
     """
+    import tempfile
+
     from app.modules.safety.attachment_store import cleanup_temp, store_bytes
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
     from app.modules.safety.feishu.msds_pdf import build_standard_msds_pdf
-    import tempfile
 
     conn = store.get_connection("msds", "registry")
     if conn is None or conn.status == "disabled":

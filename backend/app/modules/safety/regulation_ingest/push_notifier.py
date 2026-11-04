@@ -1,7 +1,9 @@
 """飞书卡片推送：法规抓取结果通知。
 
-V1.1：按影响等级分段展示（🔴高关注 / 🟠值得关注 / 🟡参考了解）。
-复用 safety/feishu/notification.py 已有的 send_group_card() / send_user_card()。
+V1.2：主路径并入当日「安全速递」总卡（安全AI创新交流群，regulation 格子，
+分级+适用性详情走折叠面板）；总卡停用/投格失败且配置了独立目标时回退独立
+分级卡片（V1.1 行为）。复用 safety/feishu 已有 send_group_card() /
+send_user_card() / upsert_daily_digest()。
 """
 
 from __future__ import annotations
@@ -12,6 +14,11 @@ from datetime import datetime, timedelta, timezone
 
 from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.bitable_config.store import store
+from app.modules.safety.feishu.daily_digest import (
+    DigestCell,
+    digest_enabled,
+    upsert_daily_digest,
+)
 from app.modules.safety.feishu.notification import send_group_card, send_user_card
 from app.modules.safety.regulation_ingest.schemas import (
     CrawlItemResult,
@@ -25,6 +32,13 @@ _FEISHU_BASE_URL = os.getenv("FEISHU_BASE_URL", "https://livzon.feishu.cn")
 
 # ── 影响等级排序 ──
 _IMPACT_ORDER = {"高": 0, "中": 1, "低": 2}
+
+# ── 适用性三级结论展示 ──
+_APPLICABILITY_LABELS = {
+    "applicable": "✅ 适用",
+    "partially_applicable": "⚠️ 部分适用",
+    "not_applicable": "❌ 不适用",
+}
 
 
 class PushNotifier:
@@ -44,43 +58,78 @@ class PushNotifier:
         ]
 
     async def send_crawl_result_notification(self, result: CrawlResultSummary) -> None:
-        """发送爬取结果汇总通知（区分更新/新增 + 展示概要）。"""
-        if not self.chat_id and not self.user_ids:
-            logger.info("未配置通知目标（chat_id 或 users），跳过推送")
-            return
-
+        """发送爬取结果通知：主路径并入安全速递总卡，回退独立分级卡片。"""
         # 只推送 created/deleted 的项目
         actionable = [i for i in result.items if i.status in ("created", "deleted")]
         if not actionable:
             return
 
-        content = self._build_content(result, actionable)
-        header = self._pick_header(actionable)
+        delivered_to_group = False
+        if digest_enabled():
+            delivered_to_group = await self.send_crawl_result_digest(result, actionable)
+            if not delivered_to_group:
+                logger.warning("安全速递投格未生效，尝试独立卡片回退")
 
-        # 发送到群聊
-        if self.chat_id:
+        # 独立群卡兜底：总卡停用/投格失败 且显式配置了群目标
+        if not delivered_to_group and self.chat_id:
             try:
                 await send_group_card(
                     chat_id=self.chat_id,
                     title=_CARD_TITLE,
-                    content=content,
-                    header_template=header,
+                    content=self._build_content(result, actionable),
+                    header_template=self._pick_header(actionable),
                 )
-                logger.info("法规更新通知已发送到群聊: chat_id=%s", self.chat_id)
+                delivered_to_group = True
+                logger.info("法规更新独立通知已发送到群聊: chat_id=%s", self.chat_id)
             except Exception:
                 logger.exception("发送群聊通知失败")
 
-        # 发送到个人
+        # 私发独立卡（与总卡互不影响；未配置则静默）
         for user_id in self.user_ids:
             try:
                 await send_user_card(
                     open_id=user_id,
                     title=_CARD_TITLE,
-                    content=content,
+                    content=self._build_content(result, actionable),
                 )
                 logger.info("法规更新通知已发送到用户: user_id=%s", user_id)
             except Exception:
                 logger.exception("发送用户通知失败: user_id=%s", user_id)
+
+        if not delivered_to_group and not self.user_ids:
+            logger.info("法规更新未投递（总卡不可用且未配置通知目标）")
+
+    async def send_crawl_result_digest(
+        self, result: CrawlResultSummary, actionable: list[CrawlItemResult],
+    ) -> bool:
+        """并入当日「安全速递」总卡（regulation 格子，详情=完整分级内容）。
+
+        失败只告警返回 False（由调用方决定是否独立卡回退），不抛异常。
+        """
+        created = [i for i in actionable if i.status == "created"]
+        updated = [i for i in created if i.action == "updated"]
+        deleted = [i for i in actionable if i.status == "deleted"]
+        high = [i for i in created if i.impact_level == "高"]
+
+        stats = (
+            f"本次收录 **{len(created)}** 条 · 🔴高关注 **{len(high)}**"
+            f" · 🔄更新 **{len(updated)}** · 🗑️废止 **{len(deleted)}**"
+        )
+        zone = f"最高关注：《{high[0].title}》" if high else ""
+        cell = DigestCell(
+            tag_color="red" if high else "blue",
+            tag_text="法规更新",
+            title="法规收录更新",
+            stats=stats,
+            zone=zone,
+            detail=self._build_content(result, actionable),
+        )
+        report_date = datetime.now(timezone(timedelta(hours=8))).date()
+        try:
+            return await upsert_daily_digest(report_date, "regulation", cell)
+        except Exception:
+            logger.exception("法规更新并入安全速递失败")
+            return False
 
     # ── 卡片内容构建 ──
 
@@ -154,6 +203,7 @@ class PushNotifier:
                 summary = (item.comparison_summary or item.core_summary or "").strip()
                 if summary:
                     lines.append(f"    {cls._truncate_summary(summary)}")
+                cls._render_applicability(lines, item)
                 lines.append("")
             lines.append("━━━━━━━━━━━━━━━━━━━━")
 
@@ -182,6 +232,7 @@ class PushNotifier:
                     summary = (item.core_summary or "").strip()
                     if summary:
                         lines.append(f"    {cls._truncate_summary(summary)}")
+                    cls._render_applicability(lines, item)
                     lines.append("")
 
             _render_created_group(high_items, "🔴", "高关注")
@@ -212,6 +263,27 @@ class PushNotifier:
         if len(t) <= max_len:
             return t
         return t[:max_len - 3] + "..."
+
+    @classmethod
+    def _render_applicability(cls, lines: list[str], item: CrawlItemResult) -> None:
+        """适用性深度分析行：三级结论 + 首条理由 + 落地建议（≤2 条）。
+
+        高关注项未获分析（限额/失败/开关关）标"分析待补"；中低关注项不渲染。
+        """
+        if item.impact_level != "高":
+            return
+        if not item.applicability:
+            lines.append("    适用性：⏳ 分析待补")
+            return
+        label = _APPLICABILITY_LABELS.get(item.applicability, item.applicability)
+        reasons = item.applicability_reasons or []
+        line = f"    适用性：{label}"
+        if reasons and reasons[0]:
+            line += f" — {cls._truncate_summary(reasons[0], 80)}"
+        lines.append(line)
+        for sug in (item.applicability_suggestions or [])[:2]:
+            if sug:
+                lines.append(f"    💡 {cls._truncate_summary(sug, 80)}")
 
     async def send_empty_summary_notification(
         self, crawled_count: int = 0, reason: str = "",

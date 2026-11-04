@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select, update
@@ -101,8 +101,14 @@ class OhHealthExamService:
         ai_conclusion: str | None = None,
         ai_parse_status: str | None = None,
         keyword: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> tuple[list[Any], int]:
-        """获取体检列表（筛选 + keyword + 分页；直读模式见 oh_direct.ledger）。"""
+        """获取体检列表（筛选 + keyword + 分页；直读模式见 oh_direct.ledger）。
+
+        date_from/date_to：按体检时间（exam_date）过滤的闭区间（北京时间
+        日界）；exam_date 为空的行在设定区间时不命中。
+        """
         from app.modules.safety.service.oh_direct import config as od_config
 
         if od_config.direct_enabled():
@@ -115,7 +121,11 @@ class OhHealthExamService:
                 status=status, exam_type=exam_type, department=department,
                 ai_conclusion=ai_conclusion, ai_parse_status=ai_parse_status,
                 keyword=keyword,
+                date_from=date_from, date_to=date_to,
             )
+        from app.modules.safety.service.bitable_direct.filters import date_range_window
+
+        dt_from, dt_to = date_range_window(date_from, date_to)
         return await self.repo.get_health_exams(
             skip,
             limit,
@@ -125,6 +135,8 @@ class OhHealthExamService:
             keyword,
             ai_conclusion,
             ai_parse_status,
+            date_from=dt_from,
+            date_to=dt_to,
         )
 
     async def get_exam(self, exam_id: uuid.UUID) -> OhHealthExam | None:

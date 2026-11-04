@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.modules.safety.service.ehs_change_direct.query import ehs_changes
 from app.modules.safety.service.ehs_change_direct.views import EhsChangeView
@@ -96,6 +97,44 @@ class TestFilters:
         assert total == 1
 
 
+_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _ms(y: int, m: int, d: int, h: int = 0) -> int:
+    return int(datetime(y, m, d, h, tzinfo=_TZ).timestamp() * 1000)
+
+
+class TestDateRangeFilter:
+    def test_range_beijing_day_bounds_half_open(self) -> None:
+        # [10-01 零点, 11-01 零点)：起始边界含、结束次日零点不含
+        views = [
+            _view("recStart", created_time_ms=_ms(2026, 10, 1)),
+            _view("recMid", created_time_ms=_ms(2026, 10, 15, 12)),
+            _view("recNov1", created_time_ms=_ms(2026, 11, 1)),
+            _view("recSep", created_time_ms=_ms(2026, 9, 30, 23)),
+        ]
+        items, total = ehs_changes(
+            views, date_from=date(2026, 10, 1), date_to=date(2026, 10, 31)
+        )
+        assert total == 2
+        assert {i["change_no"] for i in items} == {"BT-recStart", "BT-recMid"}
+
+    def test_only_from_or_only_to(self) -> None:
+        views = [
+            _view("recOct", created_time_ms=_ms(2026, 10, 15)),
+            _view("recSep", created_time_ms=_ms(2026, 9, 5)),
+        ]
+        _, t_from = ehs_changes(views, date_from=date(2026, 10, 1))
+        _, t_to = ehs_changes(views, date_to=date(2026, 9, 30))
+        assert (t_from, t_to) == (1, 1)
+
+    def test_missing_created_time_excluded_only_when_range_set(self) -> None:
+        views = [_view("recNoTime", created_time_ms=None)]
+        _, filtered = ehs_changes(views, date_from=date(2026, 10, 1))
+        _, unfiltered = ehs_changes(views)
+        assert (filtered, unfiltered) == (0, 1)
+
+
 class TestSortAndPagination:
     def test_missing_created_time_goes_last(self) -> None:
         views = [
@@ -130,7 +169,10 @@ class TestSortAndPagination:
 
 
 class TestOutputShape:
+    # 批次四页面接线起 _item 输出 18 键（legacy 13 键 + 页面所需的
+    # id/feishu_record_id/source/kind/change_duration）
     EHS_KEYS = {
+        "id", "feishu_record_id", "source", "kind", "change_duration",
         "change_no", "title", "change_type", "change_grade", "department",
         "location_unit", "status", "expected_start", "expected_completion",
         "actual_start", "actual_completion", "applicant_name",

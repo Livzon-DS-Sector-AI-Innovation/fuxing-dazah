@@ -38,17 +38,6 @@ from app.modules.safety.models.contractors import (  # noqa: F401
 from app.modules.safety.models.ehs_changes import (  # noqa: F401
     EhsChange,
 )
-from app.modules.safety.models.facilities import (  # noqa: F401
-    TASK_STATUS_CANCELLED,
-    TASK_STATUS_CLOSED,
-    TASK_STATUS_ISSUED,
-    TRIGGER_EVENT,
-    TRIGGER_MANUAL,
-    TRIGGER_POLL,
-    FacilityCheckTask,
-    FacilityNoticeBatch,
-    FacilityTaskEvent,
-)
 from app.modules.safety.models.enums import (  # noqa: F401
     AbnormalityStatus,
     ActionItemStatus,
@@ -97,6 +86,17 @@ from app.modules.safety.models.enums import (  # noqa: F401
     TrainingType,
     WorkRecordStatus,
 )
+from app.modules.safety.models.facilities import (  # noqa: F401
+    TASK_STATUS_CANCELLED,
+    TASK_STATUS_CLOSED,
+    TASK_STATUS_ISSUED,
+    TRIGGER_EVENT,
+    TRIGGER_MANUAL,
+    TRIGGER_POLL,
+    FacilityCheckTask,
+    FacilityNoticeBatch,
+    FacilityTaskEvent,
+)
 from app.modules.safety.models.hazard_identifications import (  # noqa: F401
     HazardIdentification,
 )
@@ -107,6 +107,12 @@ from app.modules.safety.models.knowledge import (  # noqa: F401
     RagplusDocMap,
     RegulationChunk,
     SafetyKnowledgeArticle,
+)
+from app.modules.safety.models.location_district_map import (  # noqa: F401
+    LocationDistrictMap,
+)
+from app.modules.safety.models.location_district_suggestion import (  # noqa: F401
+    LocationDistrictSuggestion,
 )
 from app.modules.safety.models.msds import (  # noqa: F401
     CentralAlarmRecord,
@@ -124,6 +130,9 @@ from app.modules.safety.models.occupational_health import (  # noqa: F401
     OhHealthExam,
     OhPerson,
     OhPosition,
+)
+from app.modules.safety.models.org_post_families import (  # noqa: F401
+    OrgPostFamily,
 )
 from app.modules.safety.models.regulation_ingest import (  # noqa: F401
     RegulationIngestRun,
@@ -162,21 +171,12 @@ from app.modules.safety.models.telemetry import (  # noqa: F401
     TelemetryAlarmRecord,
     TelemetrySnapshot,
 )
-from app.modules.safety.models.location_district_map import (  # noqa: F401
-    LocationDistrictMap,
-)
-from app.modules.safety.models.location_district_suggestion import (  # noqa: F401
-    LocationDistrictSuggestion,
-)
-from app.modules.safety.models.org_post_families import (  # noqa: F401
-    OrgPostFamily,
+from app.modules.safety.models.training_attendees import (  # noqa: F401
+    TrainingAttendee,
 )
 from app.modules.safety.models.trainings import (  # noqa: F401
     SafetyTraining,
     TrainingRecord,
-)
-from app.modules.safety.models.training_attendees import (  # noqa: F401
-    TrainingAttendee,
 )
 from app.modules.safety.models.work_ticket_review import (  # noqa: F401
     WorkTicketRectifyCheck,

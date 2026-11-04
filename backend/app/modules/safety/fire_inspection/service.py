@@ -196,8 +196,11 @@ async def generate_and_backfill(
                 result.generated.append(record.record_id)
                 next_seq += 1
             except Exception as exc:
-                logger.warning("点检归档失败 record=%s: %s", record.record_id, exc)
-                result.failed.append((record.record_id, str(exc)))
+                # httpx.ReadError 等异常 str 为空（2026-11-03 告警不可诊断教训），
+                # 失败原因拼异常类名保证留痕可读。
+                reason = f"{type(exc).__name__}: {exc}".rstrip(": ")
+                logger.warning("点检归档失败 record=%s: %s", record.record_id, reason)
+                result.failed.append((record.record_id, reason))
         return result
     finally:
         if own_repo:

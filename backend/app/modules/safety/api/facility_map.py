@@ -27,7 +27,7 @@ from app.modules.safety.schemas.facility_map import FacilityMapPinsOut
 from app.modules.safety.service.facility_map import suggestions
 from app.modules.safety.service.facility_map.service import (
     bj_today,
-    open_pins_service,
+    get_pins_cached,
 )
 from app.shared.schemas import ApiResponse
 
@@ -46,7 +46,7 @@ async def get_facility_map_pins(
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse:
     target = date or bj_today()
-    payload = await open_pins_service(session=db).get_pins(target)
+    payload = await get_pins_cached(target, session=db)
     return ApiResponse(
         data=FacilityMapPinsOut(**payload).model_dump(mode="json"),
         meta={"source": "tiji-platform+bitable", "mode": "direct"},
