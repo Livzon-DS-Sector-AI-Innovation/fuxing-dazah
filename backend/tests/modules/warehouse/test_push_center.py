@@ -174,13 +174,26 @@ class TestPushRegistry:
             "material_usage_compare",
             "workshop_weekly_usage",
             "annual_report",
+            # 五金库（设计 2026-11-04）
+            "hardware_direct_pickup",
+            "hardware_receipt_rejected",
+            "hardware_requisition_rejected",
             # V3.0 二期 P1（缺口补齐，1 个定时型）
             "low_stock_alert",
         }
 
     def test_scheduled_vs_event(self) -> None:
         by_name = {info.task_name: info for info in iter_tasks()}
-        for name in ("express_notify", "arrival_inspection", "qc_progress_alert", "release_notify"):
+        for name in (
+            "express_notify",
+            "arrival_inspection",
+            "qc_progress_alert",
+            "release_notify",
+            # 五金库（设计 2026-11-04，事件型）
+            "hardware_direct_pickup",
+            "hardware_receipt_rejected",
+            "hardware_requisition_rejected",
+        ):
             assert by_name[name].trigger == "event"
             assert by_name[name].default_schedule is None
         for name in (
