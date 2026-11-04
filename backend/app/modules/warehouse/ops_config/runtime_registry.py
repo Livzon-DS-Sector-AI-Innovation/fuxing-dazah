@@ -213,6 +213,55 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
             "已配置客户展示 目标/达成率/差异。空=无目标（卡显示未配置提示）"
         ),
     ),
+    RuntimeKeyInfo(
+        key="agent_submit_enabled",
+        label="Agent 单据写 Base 总闸（空=随环境）",
+        group="多维表格",
+        value_type="str",
+        default="",
+        env_var="",
+        min_value=None,
+        max_value=None,
+        max_length=1,
+        description=(
+            "2026-11-04 生产版只读切换：五条提交链（入库/GMP出库/"
+            "成品出库/领料/成品入库）create_record 前统一拦截。"
+            "空=随 bitable_env_mode（prod 拒写 fail-safe / test 放行）；"
+            "1=强制允许（含 prod）；0=强制禁止（含 test）"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="warehouse_direct_read_enabled",
+        label="展示/分析类端点直读开关（1=直读 Base，0=回退镜像）",
+        group="多维表格",
+        value_type="str",
+        default="1",
+        env_var="",
+        min_value=None,
+        max_value=None,
+        max_length=8,
+        description=(
+            "2026-11-04 直读改造（用户拍板：前端真实展示走直读不走镜像）。"
+            "1=概览/驾驶舱/库存/流水/物料/报表直读生产 Base+TTL 缓存"
+            "（meta.mode=direct）；0=一键回退本地镜像原路径（形状不变）。"
+            "盘点/计划单/库位/对账等业务流始终走本地，不受此开关影响"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="warehouse_direct_cache_ttl_seconds",
+        label="直读缓存 TTL 秒（0=关）",
+        group="多维表格",
+        value_type="int",
+        default=300,
+        env_var="",
+        min_value=0,
+        max_value=86400,
+        max_length=None,
+        description=(
+            "直读三域（库存/物料/流水）统一进程内 TTL，默认 300 秒；"
+            "0=关闭缓存（每次直读）。改值下一次取数生效，无需重启"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

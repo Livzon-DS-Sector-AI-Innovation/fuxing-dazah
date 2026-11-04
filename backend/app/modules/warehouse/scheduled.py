@@ -207,3 +207,82 @@ QC_SCAN_TASK = TaskDefinition(
     timeout_seconds=600,
     module="warehouse",
 )
+
+
+async def _run_scheduled_analysis_report() -> None:
+    """每日库存分析定档（直读取数；00:30 在效期冻结后、晨报前）。"""
+    from app.modules.warehouse.analysis import run_inventory_analysis
+
+    async with async_session_factory() as session:
+        row = await run_inventory_analysis(session, trigger="scheduled")
+        await session.commit()
+        logger.info(
+            "warehouse analysis report done: date=%s skus=%s",
+            row.report_date, row.summary.get("kpi", {}).get("stock_skus"),
+        )
+
+
+ANALYSIS_REPORT_TASK = TaskDefinition(
+    name="warehouse.analysis_report",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.FIXED_TIME,
+        time_of_day="00:30",
+        timezone="Asia/Shanghai",
+    ),
+    coro=_run_scheduled_analysis_report,
+    timeout_seconds=600,
+    module="warehouse",
+)
+
+
+# ── 直读缓存预热（2026-11-04 直读改造：消除首访冷启，出库表冷拉 ~50s）──
+
+_direct_warmup_running = False
+
+
+async def _run_direct_cache_warmup() -> None:
+    global _direct_warmup_running
+    if _direct_warmup_running:
+        return
+    _direct_warmup_running = True
+    try:
+        from app.modules.warehouse.direct import reader as direct_reader
+        from app.modules.warehouse.direct import config as direct_config
+        from app.modules.warehouse.direct import service as direct_service
+
+        if not direct_config.direct_read_enabled():
+            return
+        stocks = await direct_service.stock_cache.get(direct_reader.fetch_stocks, force=True)
+        movements = await direct_service.movement_cache.get(direct_reader.fetch_movements, force=True)
+        materials = await direct_service.material_cache.get(direct_reader.fetch_materials, force=True)
+        logger.info(
+            "warehouse direct cache warmup: stocks=%d movements=%d materials=%d",
+            len(stocks), len(movements), len(materials),
+        )
+    except Exception:
+        logger.warning("warehouse direct cache warmup failed", exc_info=True)
+    finally:
+        _direct_warmup_running = False
+
+
+DIRECT_CACHE_WARMUP_TASK = TaskDefinition(
+    name="warehouse.direct_cache_warmup",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        interval_seconds=300,  # 对齐默认 TTL——缓存窗口内始终有热数据
+    ),
+    coro=_run_direct_cache_warmup,
+    timeout_seconds=300,
+    module="warehouse",
+)
+
+
+async def bootstrap_direct_cache_warmup() -> None:
+    """启动即热一次（延迟数秒避开启动高峰；消除用户首访/首跑 70s 冷启）。"""
+    import asyncio
+
+    async def _delayed() -> None:
+        await asyncio.sleep(10)
+        await _run_direct_cache_warmup()
+
+    asyncio.create_task(_delayed())

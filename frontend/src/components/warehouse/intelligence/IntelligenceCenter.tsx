@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { App, Button, Drawer, InputNumber, Space, Switch, Tabs, Tag, Typography } from 'antd'
+import { App, Button, Drawer, InputNumber, Space, Switch, Tabs, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { Card } from 'antd'
 import { RefreshCw, Settings2 } from 'lucide-react'
@@ -26,6 +26,7 @@ import type {
 } from '@/types/warehouse'
 import { DataTable } from '../DataTable'
 import { EmptyGuide, PageHeader, StatCard, StatusTag, type Tone } from '@/components/ui-kit'
+import { AnalysisSection } from './AnalysisSection'
 
 const RULE_LABEL: Record<string, string> = {
   low_stock: '低库存',
@@ -507,6 +508,7 @@ export function IntelligenceCenter() {
           { key: 'alerts', label: '异常检测', children: <AlertsTab /> },
           { key: 'replenishment', label: '补货建议', children: <SuggestionsTab /> },
           { key: 'expiry-idle', label: '效期与呆滞', children: <ExpiryIdleTab /> },
+          { key: 'analysis', label: '库存分析', children: <AnalysisSection /> },
         ]}
       />
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { DirectModeBadge } from './DirectModeBadge'
 import { useRouter } from 'next/navigation'
 import { Col, Row, Spin } from 'antd'
 import {
@@ -294,9 +295,12 @@ export function WarehouseDashboard() {
         title="仓储驾驶舱"
         description="库存总览、出入库趋势、分布与待办"
         actions={
-          <Button icon={<RefreshCw size={14} />} onClick={refresh}>
-            刷新
-          </Button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <DirectModeBadge />
+            <Button icon={<RefreshCw size={14} />} onClick={refresh}>
+              刷新
+            </Button>
+          </span>
         }
       />
 

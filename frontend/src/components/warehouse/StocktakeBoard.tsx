@@ -296,6 +296,7 @@ function StocktakeDetailDrawer(props: {
     for (const item of record.items) {
       if (item.counted_quantity != null) next[item.id] = item.counted_quantity
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCounted(next)
   }, [record])
 

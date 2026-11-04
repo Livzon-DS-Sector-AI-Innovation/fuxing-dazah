@@ -191,6 +191,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     register_energy_tasks(scheduler_registry)
 
     from app.modules.warehouse.scheduled import (
+        ANALYSIS_REPORT_TASK,
+        DIRECT_CACHE_WARMUP_TASK,
         EXPIRY_FREEZE_TASK,
         INTELLIGENCE_SCAN_TASK,
         MORNING_REPORT_TASK,
@@ -204,6 +206,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_registry.register_task(MORNING_REPORT_TASK)
     scheduler_registry.register_task(PUSH_CENTER_TICK_TASK)
     scheduler_registry.register_task(QC_SCAN_TASK)
+    scheduler_registry.register_task(ANALYSIS_REPORT_TASK)
+    scheduler_registry.register_task(DIRECT_CACHE_WARMUP_TASK)
+    from app.modules.warehouse.scheduled import bootstrap_direct_cache_warmup
+    await bootstrap_direct_cache_warmup()
 
     # ── 安全模块调度（2-C 桥接式：DB 配置驱动 + 引擎执行）──
     # 桥接任务每 30s 一 tick 复用 safety.scheduler 的判定/状态机/留痕语义；

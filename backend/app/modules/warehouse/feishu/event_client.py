@@ -186,6 +186,7 @@ _last_pong_at: float = 0.0  # monotonic seconds
 
 async def _handle_binary_message(ws: Any, message: bytes) -> None:
     """处理 protobuf 帧（区分 CONTROL 和 DATA）。"""
+    global _last_pong_at  # PONG 时间戳供 PONG 看门狗读取
     _frame_count["received"] += 1
     try:
         from lark_oapi.ws.client import _get_by_key

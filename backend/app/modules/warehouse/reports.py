@@ -295,11 +295,22 @@ async def get_usage_compare(db: AsyncSession, year: int, month: int) -> dict[str
     ).all()
     actual_by_name = {r.material_name: float(r.actual) for r in rows}
 
-    master_rows = await fetch_all_records(
-        WarehouseBitableAdapter(),
-        "material_master",
-        ["物料名称", "月度预期用量"],
-    )
+    from app.modules.warehouse.bitable_adapter import WarehouseBitableError
+
+    try:
+        master_rows = await fetch_all_records(
+            WarehouseBitableAdapter(),
+            "material_master",
+            ["物料名称", "月度预期用量"],
+        )
+    except WarehouseBitableError as exc:
+        # 生产 material_master 无「月度预期用量」列（2026-11-04 只读切换字段
+        # 比对发现，D 期 API 建列仅存在于测试 Base）→ 降级为全量无基准
+        # （与 no_baseline 同语义，推送卡走「请先维护基准」文案），不 500；
+        # 生产侧补建该列后自动恢复，无需改码。
+        if "FieldNameNotFound" not in str(exc) and "1254045" not in str(exc):
+            raise
+        master_rows = []
     expected_by_name: dict[str, float] = {}
     for raw in master_rows:
         fields = raw.get("fields") or {}

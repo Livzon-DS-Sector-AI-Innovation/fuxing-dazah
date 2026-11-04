@@ -644,6 +644,36 @@ class WarehouseDailyBriefing(BaseModel):
     )
 
 
+class WarehouseAnalysisReport(BaseModel):
+    """库存分析定档（2026-11-04 直读改造）：每日/手动把全量分析结果
+    JSONB 按日落库（report_date 唯一，重跑覆盖——晨报同款幂等）。"""
+
+    __tablename__ = "analysis_reports"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_analysis_reports_date",
+            "report_date",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "warehouse"},
+    )
+
+    report_date: Mapped[date] = mapped_column(Date, nullable=False, comment="分析业务日（北京时区）")
+    summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
+        comment="分析结果 JSON（KPI/分布/Top/预警）",
+    )
+    trigger: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="scheduled", server_default="scheduled",
+        comment="触发方式：scheduled 定时 / manual 手动",
+    )
+    duration_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="生成耗时毫秒（含直读缓存命中情况）",
+    )
+
+
 class WarehouseSyncCheckRun(BaseModel):
     """对账运行：一次库存台账比对的批次记录。"""
 

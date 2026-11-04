@@ -35,6 +35,7 @@ import {
 } from '@/lib/api/warehouse'
 import { createMovement, deleteMovement } from '@/actions/warehouse'
 import { PageHeader, StatusTag, type Tone } from '@/components/ui-kit'
+import { DirectModeBadge } from './DirectModeBadge'
 
 const DIRECTION_TONE: Record<MovementDirection, Tone> = {
   inbound: 'ok',
@@ -276,9 +277,12 @@ export function MovementTable() {
         title="出入库记录"
         description="登记入库/出库，撤销记录自动冲销库存"
         actions={
-          <Button type="primary" icon={<Plus size={14} />} onClick={openCreate}>
-            登记出入库
-          </Button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <DirectModeBadge />
+            <Button type="primary" icon={<Plus size={14} />} onClick={openCreate}>
+              登记出入库
+            </Button>
+          </span>
         }
       />
 

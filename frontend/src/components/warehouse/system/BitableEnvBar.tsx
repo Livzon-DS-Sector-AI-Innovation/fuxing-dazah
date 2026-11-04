@@ -135,6 +135,8 @@ export default function BitableEnvBar({
   }, [])
 
   useEffect(() => {
+    // 既有模式：catch 分支同步回退 setState（行为保持，重构另立项）
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadMode()
   }, [loadMode])
 

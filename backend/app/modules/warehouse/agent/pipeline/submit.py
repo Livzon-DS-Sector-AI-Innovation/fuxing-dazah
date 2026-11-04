@@ -73,6 +73,29 @@ from app.modules.warehouse.models import WarehouseAgentDraft
 
 logger = logging.getLogger(__name__)
 
+# 单据写 Base 总闸（2026-11-04 生产版只读切换）：prod 拒写 fail-safe
+_BASE_WRITE_BLOCKED_MSG = (
+    "当前为生产版只读模式，单据写入已停用"
+    "（配置中心运行参数 agent_submit_enabled 置 1 可显式开启）"
+)
+
+
+def agent_base_write_allowed() -> bool:
+    """单据写 Base 总闸：显式 1/0 优先，缺省随坐标环境。
+
+    - ``agent_submit_enabled=1/0``：强制开/关（含测试环境）；
+    - 缺省：prod=只读拒写（fail-safe），test=放行（历史行为不变）。
+    五条提交链（入库/GMP出库/成品出库/领料/成品入库）统一在入口拦截。
+    """
+    from app.modules.warehouse.bitable_config.store import ENV_TEST, current_env_mode
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    override = str(runtime_store.get_value("agent_submit_enabled") or "").strip()
+    if override in ("0", "1"):
+        return override == "1"
+    return current_env_mode() == ENV_TEST
+
+
 # 目标表（spec：识别入库写测试版物料入库总账）
 RECEIPT_TABLE = "material_receipt"
 
@@ -353,6 +376,8 @@ async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
     failed 为终态无法重试——用户需重新拍照发起新识别，见 cards 回执话术）；mismatch 不算失败——draft 仍 submitted，
     audit error_code="mismatch" + 回执 ⚠。
     """
+    if not agent_base_write_allowed():
+        raise DraftFlowError(_BASE_WRITE_BLOCKED_MSG)
     started = time.monotonic()
     if draft.status != "confirmed":
         raise DraftFlowError(
@@ -578,6 +603,8 @@ async def submit_gmp(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None
     :class:`DraftFlowError`；写入异常向上抛（confirm 置 failed）；mismatch
     不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
     """
+    if not agent_base_write_allowed():
+        raise DraftFlowError(_BASE_WRITE_BLOCKED_MSG)
     started = time.monotonic()
     if draft.status != "confirmed":
         raise DraftFlowError(
@@ -777,6 +804,8 @@ async def submit_outbound(db: AsyncSession, draft: WarehouseAgentDraft) -> str |
     附加推送引导（spec 决策 3——用户回复 group:/user: 目标后 LLM 经
     send_card 确认门发送发货通知，见 prompts 规则）。
     """
+    if not agent_base_write_allowed():
+        raise DraftFlowError(_BASE_WRITE_BLOCKED_MSG)
     started = time.monotonic()
     if draft.status != "confirmed":
         raise DraftFlowError(
@@ -997,6 +1026,8 @@ async def submit_picking(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
     不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
     跨批拆分建议在回执中提示人工拆行（首批自动写入，2B 台账权威）。
     """
+    if not agent_base_write_allowed():
+        raise DraftFlowError(_BASE_WRITE_BLOCKED_MSG)
     started = time.monotonic()
     if draft.status != "confirmed":
         raise DraftFlowError(
@@ -1595,6 +1626,8 @@ async def submit_finished_receipt(db: AsyncSession, draft: WarehouseAgentDraft) 
     :class:`DraftFlowError`；写入异常向上抛（confirm 置 failed）；mismatch
     不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
     """
+    if not agent_base_write_allowed():
+        raise DraftFlowError(_BASE_WRITE_BLOCKED_MSG)
     started = time.monotonic()
     if draft.status != "confirmed":
         raise DraftFlowError(

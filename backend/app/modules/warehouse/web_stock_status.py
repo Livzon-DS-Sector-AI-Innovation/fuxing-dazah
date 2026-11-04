@@ -47,6 +47,21 @@ async def change_stock_status(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:intelligence:update")),
 ) -> JSONResponse:
+    # 直读模式拒绝（2026-11-04 直读改造）：库存行来自生产 Base（只读），
+    # 无本地镜像行可变更；拨 warehouse_direct_read_enabled=0 回镜像后可用
+    from app.modules.warehouse.direct.config import direct_read_enabled
+
+    if direct_read_enabled():
+        return JSONResponse(
+            status_code=400,
+            content={
+                "code": 400,
+                "message": (
+                    "直读模式下库存行来自多维表格（只读），暂不支持状态变更；"
+                    "如需本地流转请将运行参数 warehouse_direct_read_enabled 置 0"
+                ),
+            },
+        )
     stock = (
         await db.execute(
             select(WarehouseStock).where(

@@ -4,6 +4,7 @@ import { Tabs } from 'antd'
 import { LocationTable } from './LocationTable'
 import { MaterialTable } from './MaterialTable'
 import { StockTable } from './StockTable'
+import { DirectModeBadge } from './DirectModeBadge'
 
 interface InventoryPanelsProps {
   /** 驾驶舱下钻带入的初始筛选（来自 URL searchParams） */
@@ -17,19 +18,24 @@ export function InventoryPanels({
   initialCategory,
 }: InventoryPanelsProps = {}) {
   return (
-    <Tabs
-      defaultActiveKey="stock"
-      items={[
-        {
-          key: 'stock',
-          label: '现有库存',
-          children: (
-            <StockTable initialKeyword={initialKeyword} initialCategory={initialCategory} />
-          ),
-        },
-        { key: 'material', label: '物料主数据', children: <MaterialTable /> },
-        { key: 'location', label: '库位管理', children: <LocationTable /> },
-      ]}
-    />
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+        <DirectModeBadge />
+      </div>
+      <Tabs
+        defaultActiveKey="stock"
+        items={[
+          {
+            key: 'stock',
+            label: '现有库存',
+            children: (
+              <StockTable initialKeyword={initialKeyword} initialCategory={initialCategory} />
+            ),
+          },
+          { key: 'material', label: '物料主数据', children: <MaterialTable /> },
+          { key: 'location', label: '库位管理', children: <LocationTable /> },
+        ]}
+      />
+    </div>
   )
 }

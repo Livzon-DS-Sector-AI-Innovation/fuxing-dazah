@@ -14,12 +14,14 @@ from tests.modules.warehouse.conftest import (
 )
 
 
-async def _stock_quantity(client: AsyncClient, material_id: str) -> float | None:
+async def _stock_quantity(client: AsyncClient, material: object) -> float | None:
+    # 回灌后本地镜像带生产规模数据（2731 行）——按随机唯一编码过滤而非翻首页
     resp = await client.get(
-        "/api/v1/warehouse/stocks", params={"page_size": 200}
+        "/api/v1/warehouse/stocks",
+        params={"page_size": 50, "keyword": material.code},
     )
     for item in resp.json()["data"]:
-        if item["material_id"] == material_id:
+        if item["material_id"] == str(material.id):
             return item["quantity"]
     return None
 
@@ -46,7 +48,7 @@ class TestCreateMovement:
         data = resp.json()["data"]
         assert data["movement_no"].startswith("IN-")
         assert data["unit"] == material.unit
-        assert await _stock_quantity(client, str(material.id)) == 25
+        assert await _stock_quantity(client, material) == 25
 
     async def test_outbound_insufficient_returns_400(
         self, api_context: tuple[AsyncClient, Any]
@@ -84,7 +86,7 @@ class TestCreateMovement:
             },
         )
         assert resp.status_code == 201
-        assert await _stock_quantity(client, str(material.id)) == 37.5
+        assert await _stock_quantity(client, material) == 37.5
 
     async def test_unknown_material_returns_404(
         self, api_context: tuple[AsyncClient, Any]
@@ -119,7 +121,7 @@ class TestDeleteMovement:
         )
         resp = await client.delete(f"/api/v1/warehouse/movements/{movement.id}")
         assert resp.status_code == 200
-        assert await _stock_quantity(client, str(material.id)) == 10
+        assert await _stock_quantity(client, material) == 10
 
     async def test_delete_outbound_reverses_stock(
         self, api_context: tuple[AsyncClient, Any]
@@ -133,7 +135,7 @@ class TestDeleteMovement:
         )
         resp = await client.delete(f"/api/v1/warehouse/movements/{movement.id}")
         assert resp.status_code == 200
-        assert await _stock_quantity(client, str(material.id)) == 14
+        assert await _stock_quantity(client, material) == 14
 
     async def test_delete_inbound_when_stock_consumed_returns_400(
         self, api_context: tuple[AsyncClient, Any]

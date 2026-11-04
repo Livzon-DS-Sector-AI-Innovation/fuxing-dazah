@@ -1,6 +1,7 @@
 'use client'
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useDirectMode } from './DirectModeBadge'
 import { useEffect, useState } from 'react'
 import {
   Alert,
@@ -76,6 +77,7 @@ export function StockTable(props: {
   const [expiryRange, setExpiryRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
   const [statusFilter, setStatusFilter] = useState<StockStatus | undefined>(undefined)
   const [detail, setDetail] = useState<{ id: string; code: string; name: string } | null>(null)
+  const directMode = useDirectMode()
   const [statusTarget, setStatusTarget] = useState<{ record: StockRecord; next: StockStatus } | null>(
     null,
   )
@@ -247,6 +249,9 @@ export function StockTable(props: {
       width: 130,
       render: (_, record) => {
         const current = statusOf(record.status)
+        if (directMode) {
+          return <span style={{ fontSize: 12, color: 'var(--color-steel)' }}>直读只读</span>
+        }
         return (
           <span onClick={e => e.stopPropagation()}>
             <Button

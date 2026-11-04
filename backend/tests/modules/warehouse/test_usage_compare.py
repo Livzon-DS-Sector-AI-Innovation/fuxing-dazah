@@ -117,3 +117,31 @@ class TestUsageCompareGenerator:
             str(el.get("content") or "") for el in card["body"]["elements"]
         )
         assert "月度预期用量" in text  # 引导维护基准
+
+
+async def test_usage_compare_missing_baseline_column_degrades(
+    db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """生产 material_master 缺「月度预期用量」列（FieldNameNotFound）→
+    无基准降级不 500（2026-11-04 生产只读切换验收发现）。"""
+
+    from app.modules.warehouse.bitable_adapter import WarehouseBitableError
+    from app.modules.warehouse import reports
+
+    async def _raise(adapter: Any, table_key: str, fields: list[str]) -> list[dict]:
+        raise WarehouseBitableError(
+            "飞书 API 失败: POST .../records/search code=1254045 msg=FieldNameNotFound"
+        )
+
+    monkeypatch.setattr(reports, "fetch_all_records", _raise)
+    report = await get_usage_compare(db_session, 2026, 10)
+    assert report["items"] == []
+    assert report["no_baseline_with_usage"] == 0  # 本地无 outbound 用量
+
+    # 其他 Bitable 错误（如权限）不得吞——必须原样上抛
+    async def _raise_other(adapter: Any, table_key: str, fields: list[str]) -> list[dict]:
+        raise WarehouseBitableError("missing_credentials")
+
+    monkeypatch.setattr(reports, "fetch_all_records", _raise_other)
+    with pytest.raises(WarehouseBitableError):
+        await get_usage_compare(db_session, 2026, 10)

@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,6 +79,14 @@ async def get_overview(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.overview_data(db)
+        return success_response(
+            OverviewResponse(**data).model_dump(mode="json"), meta=meta_extra
+        )
     data = await service.get_overview(db)
     return success_response(OverviewResponse(**data).model_dump(mode="json"))
 
@@ -91,6 +99,12 @@ async def dashboard_summary(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.summary_data(db)
+        return success_response(data, meta=meta_extra)
     return success_response(await dashboard_service.get_summary(db))
 
 
@@ -100,6 +114,12 @@ async def dashboard_movement_trend(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.trend_data(days)
+        return success_response(data, meta=meta_extra)
     return success_response(await dashboard_service.get_movement_trend(db, days))
 
 
@@ -108,6 +128,12 @@ async def dashboard_stock_distribution(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.distribution_data()
+        return success_response(data, meta=meta_extra)
     return success_response(await dashboard_service.get_stock_distribution(db))
 
 
@@ -117,6 +143,12 @@ async def dashboard_low_stock_top(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.low_stock_top_data(limit)
+        return success_response(data, meta=meta_extra)
     return success_response(await dashboard_service.get_low_stock_top(db, limit))
 
 
@@ -125,6 +157,12 @@ async def dashboard_todos(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.todos_data(db)
+        return success_response(data, meta=meta_extra)
     return success_response(await dashboard_service.get_todos(db))
 
 
@@ -140,6 +178,18 @@ async def list_materials(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:material:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, total, meta_extra = await direct_service.materials_page(
+            page=page, page_size=page_size,
+            category=_clean(category), keyword=_clean(keyword),
+        )
+        return success_response(data=data, meta={
+            "page": page, "page_size": page_size, "total": total,
+            **meta_extra,
+        })
     items, total = await service.list_materials(
         db, page=page, page_size=page_size, category=_clean(category), keyword=_clean(keyword)
     )
@@ -462,6 +512,12 @@ async def report_monthly(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.monthly_report_data(year, month)
+        return success_response(data, meta=meta_extra)
     return success_response(await reports_service.get_monthly_report(db, year, month))
 
 
@@ -472,6 +528,14 @@ async def report_monthly_export(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> Response:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        report, _m = await direct_service.monthly_report_data(year, month)
+        return _xlsx_response(
+            f"出入库月报-{year}-{month:02d}.xlsx", reports_service.build_monthly_xlsx(report)
+        )
     report = await reports_service.get_monthly_report(db, year, month)
     return _xlsx_response(
         f"出入库月报-{year}-{month:02d}.xlsx", reports_service.build_monthly_xlsx(report)
@@ -484,6 +548,12 @@ async def report_annual(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.annual_report_data(year)
+        return success_response(data, meta=meta_extra)
     return success_response(await reports_service.get_annual_report(db, year))
 
 
@@ -493,6 +563,12 @@ async def report_annual_export(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> Response:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        report, _m = await direct_service.annual_report_data(year)
+        return _xlsx_response(f"出入库年报-{year}.xlsx", reports_service.build_annual_xlsx(report))
     report = await reports_service.get_annual_report(db, year)
     return _xlsx_response(f"出入库年报-{year}.xlsx", reports_service.build_annual_xlsx(report))
 
@@ -549,6 +625,12 @@ async def report_turnover(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.turnover_data(days, limit, order)
+        return success_response(data, meta=meta_extra)
     return success_response(await reports_service.get_turnover_ranking(db, days, limit, order))
 
 
@@ -560,7 +642,13 @@ async def report_turnover_export(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> Response:
-    rows = await reports_service.get_turnover_ranking(db, days, limit, order)
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        rows, _m = await direct_service.turnover_data(days, limit, order)
+    else:
+        rows = await reports_service.get_turnover_ranking(db, days, limit, order)
     content = reports_service.build_table_xlsx(
         "周转率排行",
         ["物料编码", "物料名称", "出库数量", "当前库存", "周转率"],
@@ -577,6 +665,12 @@ async def report_consumption(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, meta_extra = await direct_service.consumption_data(days, limit)
+        return success_response(data, meta=meta_extra)
     return success_response(await reports_service.get_consumption_ranking(db, days, limit))
 
 
@@ -587,7 +681,13 @@ async def report_consumption_export(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> Response:
-    rows = await reports_service.get_consumption_ranking(db, days, limit)
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        rows, _m = await direct_service.consumption_data(days, limit)
+    else:
+        rows = await reports_service.get_consumption_ranking(db, days, limit)
     content = reports_service.build_table_xlsx(
         "消耗排名",
         ["物料编码", "物料名称", "单位", "出库数量"],
@@ -603,6 +703,14 @@ async def report_stock(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, total, meta_extra = await direct_service.stock_report_data(page, page_size)
+        return success_response(data, meta={
+            "page": page, "page_size": page_size, "total": total, **meta_extra,
+        })
     items, total = await reports_service.get_stock_report(db, page=page, page_size=page_size)
     data = [
         {
@@ -623,6 +731,21 @@ async def report_stock_export(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> Response:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        rows, _total, _m = await direct_service.stock_report_data(1, 5000)
+        content = reports_service.build_table_xlsx(
+            "当前库存",
+            ["物料编码", "物料名称", "批次号", "库位", "效期", "数量"],
+            [
+                [r["material_code"], r["material_name"], r["batch_no"], "",
+                 r["expiry_date"] or "", r["quantity"]]
+                for r in rows
+            ],
+        )
+        return _xlsx_response("当前库存报表.xlsx", content)
     items, _total = await reports_service.get_stock_report(db, page=1, page_size=5000)
     content = reports_service.build_table_xlsx(
         "当前库存",
@@ -781,6 +904,12 @@ async def batch_trace(
     batch_no: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        trace, _m = await direct_service.batch_trace_data(material_code, batch_no)
+        return success_response(trace)
     return success_response(
         await reports_service.get_batch_trace(db, material_code=material_code, batch_no=batch_no)
     )
@@ -792,6 +921,13 @@ async def batch_trace_export(
     batch_no: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),) -> Response:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        trace, _m = await direct_service.batch_trace_data(material_code, batch_no)
+        content = reports_service.build_batch_trace_xlsx(trace)
+        return _xlsx_response(f"批次追溯-{material_code}-{batch_no}.xlsx", content)
     trace = await reports_service.get_batch_trace(db, material_code=material_code, batch_no=batch_no)
     content = reports_service.build_batch_trace_xlsx(trace)
     return _xlsx_response(f"批次追溯-{material_code}-{batch_no}.xlsx", content)
@@ -816,6 +952,23 @@ async def list_stocks(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
+    # 直读分支（2026-11-04 直读改造）：生产 Base 真实行 + TTL 缓存；
+    # 开关 0 走下方镜像原路径（形状不变）
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, total, meta_extra = await direct_service.stocks_page(
+            page=page, page_size=page_size,
+            category=_clean(category), keyword=_clean(keyword),
+            location_id=location_id, batch_no=_clean(batch_no),
+            expiry_from=expiry_from, expiry_to=expiry_to, status=status,
+        )
+        return success_response(data=data, meta={
+            "page": page, "page_size": page_size, "total": total,
+            **meta_extra,
+        })
+
     # QC 三列随行返回（V3.0 分期B 链路4：镜像按批号关联，service 层组装）
     data, total = await service.list_stocks_with_qc(
         db,
@@ -843,12 +996,36 @@ async def list_movements(
     source_type: str | None = Query(default=None, description="业务来源"),
     keyword: str | None = Query(default=None, description="单号/物料/批次关键词"),
     location_id: UUID | None = Query(default=None, description="库位ID"),
-    material_id: UUID | None = Query(default=None, description="物料ID（详情时间线用）"),
+    # 直读行 id 为飞书记录 ID（rec…非 UUID），放宽为 str；镜像路径内部转 UUID
+    material_id: str | None = Query(default=None, description="物料ID（详情时间线用）"),
     occurred_from: datetime | None = Query(default=None, description="发生时间起"),
     occurred_to: datetime | None = Query(default=None, description="发生时间止"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:movement:read")),
 ) -> JSONResponse:
+    from app.modules.warehouse.direct import config as direct_config
+    from app.modules.warehouse.direct import service as direct_service
+
+    if direct_config.direct_read_enabled():
+        data, total, meta_extra = await direct_service.movements_page(
+            page=page, page_size=page_size,
+            direction=_clean(direction), source_type=_clean(source_type),
+            keyword=_clean(keyword), location_id=location_id,
+            material_id=material_id,
+            occurred_from=occurred_from, occurred_to=occurred_to,
+        )
+        return success_response(data=data, meta={
+            "page": page, "page_size": page_size, "total": total,
+            **meta_extra,
+        })
+    mirror_material_id: UUID | None = None
+    if material_id:
+        try:
+            mirror_material_id = UUID(material_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="material_id 非合法 UUID"
+            ) from exc
     items, total = await service.list_movements(
         db,
         page=page,
@@ -857,7 +1034,7 @@ async def list_movements(
         source_type=_clean(source_type),
         keyword=_clean(keyword),
         location_id=location_id,
-        material_id=material_id,
+        material_id=mirror_material_id,
         occurred_from=occurred_from,
         occurred_to=occurred_to,
     )
@@ -957,3 +1134,57 @@ async def delete_stocktake(
 ) -> JSONResponse:
     await service.delete_stocktake(db, stocktake_id, user)
     return success_response(message="删除成功")
+
+
+# ── 库存分析定档（2026-11-04 直读改造）──
+
+
+def _analysis_row(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "report_date": row.report_date.isoformat(),
+        "trigger": row.trigger,
+        "duration_ms": row.duration_ms,
+        "summary": row.summary,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.get("/analysis/latest", summary="库存分析：最新定档")
+async def analysis_latest(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:read")),
+) -> JSONResponse:
+    from app.modules.warehouse import analysis as analysis_service
+
+    row = await analysis_service.get_latest_analysis(db)
+    if row is None:
+        return success_response(None, message="尚无分析记录，可手动生成")
+    return success_response(_analysis_row(row))
+
+
+@router.get("/analysis/reports", summary="库存分析：历史定档分页")
+async def analysis_reports(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:read")),
+) -> JSONResponse:
+    from app.modules.warehouse import analysis as analysis_service
+
+    rows, total = await analysis_service.list_analysis_reports(
+        db, page=page, page_size=page_size
+    )
+    return paginated_response([_analysis_row(r) for r in rows], page, page_size, total)
+
+
+@router.post("/analysis/run", status_code=201, summary="库存分析：手动生成（当日幂等覆盖）")
+async def analysis_run(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:update")),
+) -> JSONResponse:
+    from app.modules.warehouse import analysis as analysis_service
+
+    # 不显式 commit：生产由 get_db 请求级统一提交；测试共享会话防泄漏
+    row = await analysis_service.run_inventory_analysis(db, trigger="manual")
+    return success_response(_analysis_row(row), status_code=201)

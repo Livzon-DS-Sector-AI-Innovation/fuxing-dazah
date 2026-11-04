@@ -178,7 +178,7 @@ async def test_runtime_list_and_update(
     resp = await client.get(RUNTIME)
     assert resp.status_code == 200
     configs = resp.json()["data"]["configs"]
-    assert len(configs) == 13  # 既有 12 键 + sales_target_monthly（P1 销量对比）
+    assert len(configs) == 16  # 12 基础 + sales_target_monthly + agent_submit_enabled + 直读开关/TTL
     assert {c["source"] for c in configs} <= {"db", "env", "default"}
     # 回写开关/环境模式：共享库 live 值随验收期翻转（C 期交互式验收会把
     # qc_writeback_enabled 临时置 1），API 测试只断言键存在且取值合法；
@@ -249,11 +249,16 @@ async def test_bitable_connections_list_and_update(
     data = resp.json()["data"]
     assert data["table_id"] == "tblOverride01"
     assert data["table_id_source"] == "db"
+    # live 库审计行 append-only（生产版切换等脚本会留 update_env 行）——
+    # 断言本测试刚写入的最新一条，而非「恰好只有一条」
     audit = (
         await db.execute(
-            select(BitableConfigAudit).where(BitableConfigAudit.table_key == "material_receipt")
+            select(BitableConfigAudit)
+            .where(BitableConfigAudit.table_key == "material_receipt")
+            .order_by(BitableConfigAudit.created_at.desc())
         )
-    ).scalars().one()
+    ).scalars().first()
+    assert audit is not None
     assert audit.action == "update"
 
 

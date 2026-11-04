@@ -179,3 +179,83 @@ async def create_movement(
     db.add(movement)
     await db.flush()
     return movement
+
+
+@pytest.fixture(autouse=True)
+def _pin_bitable_env_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    """仓库测试钉住两项运行参数（live 库会随生产切换/直读改造翻转）：
+
+    - bitable_env_mode=test（prod 只读闸会让提交链测试先撞闸）；
+    - warehouse_direct_read_enabled=0（直读分支会真连 Base——既有测试
+      一律走镜像原路径；直读分支测试自行 monkeypatch 开关与 reader）。
+
+    只覆写这两键，其余运行参数仍读 live 值；测试体内自行 monkeypatch
+    runtime_store 者后到先得（fixture 先装、体内后装）。
+    """
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    original = runtime_store.get_value
+
+    def _get_value(key: str) -> Any:
+        if key == "bitable_env_mode":
+            return "test"
+        if key == "warehouse_direct_read_enabled":
+            return "0"
+            return "test"
+        return original(key)
+
+    monkeypatch.setattr(runtime_store, "get_value", _get_value)
+
+
+@pytest.fixture(autouse=True)
+async def _hide_backfilled_mirror_rows(db_session: AsyncSession) -> AsyncIterator[None]:
+    """回灌镜像数据对测试不可见（2026-11-04 生产切换回灌了 2731 库存行 +
+    2.5w 流水行；盘点快照/月报聚合等断言按「干净库」口径写）。
+
+    软删（updated_by 是 users 外键，不能做标记位）：
+    - 正常回滚 → live 数据原样；
+    - 端点显式 commit 泄漏（reconciliation run 先例）→ teardown 用新会话
+      按签名补偿复活并提交，live 数据无净变更。
+    """
+    from sqlalchemy import update
+
+    from app.modules.warehouse.models import WarehouseMovement, WarehouseStock
+
+    await db_session.execute(
+        update(WarehouseMovement)
+        .where(
+            WarehouseMovement.movement_no.like("RCPT-%")
+            | WarehouseMovement.movement_no.like("OTB-%")
+        )
+        .values(is_deleted=True)
+    )
+    await db_session.execute(
+        update(WarehouseStock)
+        .where(WarehouseStock.location_code == "RECON-IMPORT")
+        .values(is_deleted=True)
+    )
+    yield
+    # 补偿（按回灌签名复活；正常回滚时为空操作。签名行若被真实业务刻意
+    # 软删会被测试运行复活——回灌行不属本地操作域，可接受）。
+    # 用测试专用 NullPool 工厂——全局池连接跨测试事件循环复用会炸
+    from tests.conftest import _test_session_factory
+
+    async with _test_session_factory() as heal:
+        await heal.execute(
+            update(WarehouseMovement)
+            .where(
+                WarehouseMovement.is_deleted.is_(True),
+                WarehouseMovement.movement_no.like("RCPT-%")
+                | WarehouseMovement.movement_no.like("OTB-%"),
+            )
+            .values(is_deleted=False)
+        )
+        await heal.execute(
+            update(WarehouseStock)
+            .where(
+                WarehouseStock.is_deleted.is_(True),
+                WarehouseStock.location_code == "RECON-IMPORT",
+            )
+            .values(is_deleted=False)
+        )
+        await heal.commit()
