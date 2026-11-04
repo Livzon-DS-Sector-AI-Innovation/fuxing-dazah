@@ -193,6 +193,12 @@ class Settings(BaseSettings):
     LOG_ROOT_LEVEL: str = "WARNING"  # root logger 兜底级别
     LOG_DIR: str = "logs"  # 生产环境日志文件目录
 
+    # ── 宣传函 GitHub Pages 发布（飞书对话修改运动会邀请函）──
+    INVITATION_GITHUB_TOKEN: str = ""  # fine-grained token：Contents 读写、仅授权 mid-autumn-invitation 仓库
+    INVITATION_GITHUB_REPO: str = "Cheris0419/mid-autumn-invitation"
+    INVITATION_GITHUB_PATH: str = "index.html"
+    INVITATION_PUBLIC_URL: str = "https://cheris0419.github.io/mid-autumn-invitation/"
+
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"

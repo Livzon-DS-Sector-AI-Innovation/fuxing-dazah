@@ -109,6 +109,8 @@ async def test_list_ai_scenarios(
         "agent_chat",
         "receipt_recognition",
         "finished_receipt_recognition",
+        # 五金库送货单识别（M2，2026-11-04 设计）
+        "hardware_receipt_recognition",
     }
     assert all(s["enabled"] is True for s in scenarios)
 

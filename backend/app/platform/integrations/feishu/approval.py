@@ -139,3 +139,62 @@ def _normalize_attachment_value(value: Any) -> list[dict[str, Any]] | None:
             if entry:
                 result.append(entry)
     return result or None
+
+
+# ── 创建审批实例（五金库领料审批 M3 首次落地；原辅料领料审批可直接复用）──
+
+
+async def create_instance(
+    approval_code: str,
+    user_id: str,
+    form: list[dict[str, Any]] | str,
+    *,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+    uuid_idempotency: str | None = None,
+    node_approver_user_id_list: dict[str, list[str]] | None = None,
+    node_approver_open_id_list: dict[str, list[str]] | None = None,
+) -> str:
+    """创建审批实例，返回 instance_code。
+
+    - 幂等：``uuid_idempotency`` 传入同一 uuid 重复提交返回同一实例
+      （官方 x-lark-uuid 头）；业务侧持久化 uuid 实现重试不重单。
+    - form：控件 JSON（list[dict]）或已序列化的 JSON 字符串（官方要求
+      form 为 JSON 字符串，list 输入内部 json.dumps 兜底）。
+    - 凭证：缺省回落全局 FEISHU_*；五金库走 safety 应用（2026-10-28
+      已拍板口径，approval:instance 权限已具备）。
+    - 审批人：node_approver_user_id_list / node_approver_open_id_list
+      按节点 key 指定（定义流程为「发起人自选」时必传）。
+    """
+    import uuid as _uuid
+
+    try:
+        token = await get_tenant_token(app_id=app_id, app_secret=app_secret)
+        body: dict[str, Any] = {
+            "approval_code": approval_code,
+            "user_id": user_id,
+            "form": form if isinstance(form, str) else json.dumps(form, ensure_ascii=False),
+        }
+        if node_approver_user_id_list:
+            body["node_approver_user_id_list"] = node_approver_user_id_list
+        if node_approver_open_id_list:
+            body["node_approver_open_id_list"] = node_approver_open_id_list
+        data = await feishu_request(
+            "POST",
+            f"{APPROVAL_BASE}/instances",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "x-lark-uuid": uuid_idempotency or str(_uuid.uuid4()),
+            },
+            json_body=body,
+        )
+    except FeishuAPIError as exc:
+        raise ApprovalAPIError(str(exc)) from exc
+    instance_code = (data.get("data") or {}).get("instance_code", "")
+    if not instance_code:
+        raise ApprovalAPIError(f"创建审批实例成功但未返回 instance_code: {data}")
+    logger.info(
+        "飞书审批实例已创建: approval_code=%s instance_code=%s user=%s",
+        approval_code, instance_code, user_id,
+    )
+    return instance_code

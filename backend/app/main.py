@@ -208,6 +208,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_registry.register_task(QC_SCAN_TASK)
     scheduler_registry.register_task(ANALYSIS_REPORT_TASK)
     scheduler_registry.register_task(DIRECT_CACHE_WARMUP_TASK)
+    # 五金库（M3）：紧急领用 24h 补单检查 + feishu 审批结果轮询兜底
+    from app.modules.warehouse.hardware.scheduled import register_hardware_tasks
+    register_hardware_tasks(scheduler_registry)
     from app.modules.warehouse.scheduled import bootstrap_direct_cache_warmup
     await bootstrap_direct_cache_warmup()
 
