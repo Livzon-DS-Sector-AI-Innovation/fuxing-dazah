@@ -588,6 +588,23 @@ export async function getAiCallAudit(id: string) {
   return fetchApi<AiCallAuditDetail>(`/safety/ai-audits/${id}`)
 }
 
+// ═══ 督办留痕（系统配置·hazard-audit）═══
+
+export async function listHazardAudit(params?: {
+  days?: number
+  keyword?: string
+}) {
+  return fetchApi<import('@/types/safety').HazardAuditItem[]>(
+    `/safety/hazard-audit${buildQueryString(params ?? { days: 30 })}`,
+  )
+}
+
+export async function getHazardAuditTimeline(recordId: string, days = 90) {
+  return fetchApi<import('@/types/safety').HazardAuditEvent[]>(
+    `/safety/hazard-audit/${recordId}/timeline${buildQueryString({ days })}`,
+  )
+}
+
 export async function getAiAuditStats(params?: {
   days?: number
   date_from?: string

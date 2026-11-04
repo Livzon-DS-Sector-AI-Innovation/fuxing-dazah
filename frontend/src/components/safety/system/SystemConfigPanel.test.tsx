@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SystemConfigPanel from './SystemConfigPanel'
 import { renderWithQuery } from '@/test/utils'
 
-// 六个 Tab 内容段以桩代替（各段内部行为由各自测试覆盖；本测试只验容器编排与 URL 直达/同步）
+// 七个 Tab 内容段以桩代替（各段内部行为由各自测试覆盖；本测试只验容器编排与 URL 直达/同步）
 vi.mock('../aiConfig/AiModelsSection', () => ({
   default: () => <div data-testid="tab-ai-models" />,
 }))
@@ -23,6 +23,9 @@ vi.mock('../AppConfigPanel', () => ({
 }))
 vi.mock('../AiAuditPanel', () => ({
   default: () => <div data-testid="tab-ai-audits" />,
+}))
+vi.mock('./HazardAuditPanel', () => ({
+  default: () => <div data-testid="tab-hazard-audit" />,
 }))
 
 const searchParamsMock = vi.hoisted(() => ({ get: vi.fn() }))
@@ -49,7 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('SystemConfigPanel（/safety/system 六 Tab 配置单页）', () => {
+describe('SystemConfigPanel（/safety/system 七 Tab 配置单页）', () => {
   it('渲染页头与六个 Tab，默认激活 AI 模型', () => {
     renderWithQuery(<SystemConfigPanel />)
 
@@ -63,6 +66,7 @@ describe('SystemConfigPanel（/safety/system 六 Tab 配置单页）', () => {
       '定时任务',
       '应用配置',
       'AI 调用审计',
+      '督办留痕',
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument()
     }

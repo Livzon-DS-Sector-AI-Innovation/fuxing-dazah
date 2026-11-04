@@ -258,3 +258,66 @@ async def test_direct_submit_full_audit(monkeypatch) -> None:
         assert trigger.thread_key == "bitable:hazard:rec_c1"
         assert [x["step"] for x in trigger.disposition] == ["stored", "applied"]
         assert trigger.payload["hazard_no"] == "HZ-C1"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 方向 C：聚合查询（list / timeline）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _seed_query_data(db_session, monkeypatch) -> None:
+    _on(monkeypatch)
+    await audit_trail.record_card_submission(
+        db_session, record_id="rec_q1", text="已完成更换",
+        operator="ou_zhang", message_key="om_q1:a", applied=True, hazard_no="HZ-Q1",
+    )
+    await audit_trail.record_card_submission(
+        db_session, record_id="rec_q1", text="补充照片",
+        operator="ou_li", message_key="om_q1:b", applied=False, hazard_no="HZ-Q1",
+    )
+    await audit_trail.record_dunning_card_sent(
+        db_session, record_id="rec_q1", hazard_no="HZ-Q1",
+        receive_id="ou_a", id_type="open_id", role="责任人", name="张三",
+    )
+    await audit_trail.record_dunning_card_sent(
+        db_session, record_id="rec_q2", hazard_no="HZ-Q2",
+        receive_id="ou_b", id_type="open_id", role="分管安全员", name="李四",
+    )
+
+
+async def test_query_list_aggregates(db_session, monkeypatch) -> None:
+    """聚合：同隐患提交/催办计数、失败计数、最近活动排序。"""
+    from app.modules.safety.service.hazard_direct.audit_query import list_hazard_audit
+
+    await _seed_query_data(db_session, monkeypatch)
+
+    items = await list_hazard_audit(db_session, days=30)
+
+    by_rid = {i["record_id"]: i for i in items}
+    q1 = by_rid["rec_q1"]
+    assert q1["hazard_no"] == "HZ-Q1"
+    assert q1["dunning_count"] == 1 and q1["dunning_recipient_count"] == 1
+    assert q1["submission_count"] == 2 and q1["submission_failed"] == 1
+    assert q1["last_submission"]["operator"] == "ou_li"  # 最近一次提交
+    q2 = by_rid["rec_q2"]
+    assert q2["dunning_count"] == 1 and q2["submission_count"] == 0
+    # keyword 过滤
+    only_q2 = await list_hazard_audit(db_session, days=30, keyword="HZ-Q2")
+    assert [i["record_id"] for i in only_q2] == ["rec_q2"]
+
+
+async def test_query_timeline_merges(db_session, monkeypatch) -> None:
+    """时间线：催办+提交合并、倒序、提交带 outcome。"""
+    from app.modules.safety.service.hazard_direct.audit_query import (
+        hazard_audit_timeline,
+    )
+
+    await _seed_query_data(db_session, monkeypatch)
+
+    events = await hazard_audit_timeline(db_session, "rec_q1", days=30)
+
+    kinds = [e["kind"] for e in events]
+    assert kinds.count("submission") == 2 and kinds.count("dunning") == 1
+    assert events == sorted(events, key=lambda e: e["at"], reverse=True)
+    failed = [e for e in events if e["kind"] == "submission" and e["outcome"] == "failed"]
+    assert failed and failed[0]["text"] == "补充照片"
