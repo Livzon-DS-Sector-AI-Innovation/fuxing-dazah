@@ -252,6 +252,30 @@ async def download_report(
         filename=fp.name,
     )
 
+
+@router.get("/report/records/{report_id}/preview-html", summary="报告单在线预览（服务端 docx 转 HTML）")
+async def preview_report_html(
+    report_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> Response:
+    """预览不再让浏览器下载 docx 再转换：服务端用存量 mammoth 转 HTML，前端 iframe 直接渲染。"""
+    from starlette.concurrency import run_in_threadpool
+
+    report = await get_report_record(db, report_id)
+    if not report or not report.file_path:
+        raise HTTPException(status_code=404, detail="报告文件不存在")
+    fp = Path(report.file_path)
+    data = quality_storage.read_report_from_minio(fp.name)
+    if not data:
+        if not fp.exists():
+            raise HTTPException(status_code=404, detail="报告文件已被清理")
+        data = fp.read_bytes()
+    import mammoth
+
+    result = await run_in_threadpool(mammoth.convert_to_html, BytesIO(data))
+    return Response(content=result.value, media_type="text/html")
+
 @router.post("/report/records/{report_id}/audit", summary="报告单审核（比对原始证据后通过/退回）")
 async def audit_report_endpoint(
     report_id: uuid.UUID,

@@ -593,6 +593,15 @@ export async function downloadReportFile(reportId: string): Promise<Blob> {
   return res.blob()
 }
 
+/** 报告单在线预览 HTML（服务端 docx→HTML 转换，已鉴权）。 */
+export async function fetchReportPreviewHtml(reportId: string): Promise<string> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/report/records/${reportId}/preview-html`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取报告预览失败')
+  return res.text()
+}
+
 /** 下载 COA 模板文件（带鉴权；后端端点已加 require_permission）。 */
 export async function downloadTemplateFile(path: string): Promise<Blob> {
   const res = await fetch(

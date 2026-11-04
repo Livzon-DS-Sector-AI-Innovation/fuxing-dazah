@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Modal, Spin, Result, Button } from 'antd'
-import { downloadReportFile } from '@/actions/quality'
+import { fetchReportPreviewHtml } from '@/actions/quality'
 
 interface Props {
   open: boolean
@@ -19,7 +19,7 @@ const PREVIEW_STYLE = `
   h1, h2, h3 { font-size: 16px; text-align: center; margin: 8px 0; }
 `
 
-/** 报告单在线预览：下载 docx mammoth 转 HTML iframe 渲染（下载端点已鉴权，走 Server Action）。 */
+/** 报告单在线预览：服务端 docx→HTML（后端存量 mammoth 转换，鉴权端点），iframe 直接渲染。 */
 export default function CoaPreviewModal({ open, reportId, title, onClose }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -34,11 +34,8 @@ export default function CoaPreviewModal({ open, reportId, title, onClose }: Prop
       setError('')
       setHtml('')
       try {
-        const blob = await downloadReportFile(reportId)
-        // 动态导入 mammoth（体积较大，仅预览时加载）
-        const mammoth = (await import('mammoth')).default
-        const result = await mammoth.convertToHtml({ arrayBuffer: await blob.arrayBuffer() })
-        if (!cancelled) setHtml(result.value)
+        const value = await fetchReportPreviewHtml(reportId)
+        if (!cancelled) setHtml(value)
       } catch {
         if (!cancelled) setError('预览加载失败，请重试或下载查看')
       } finally {
