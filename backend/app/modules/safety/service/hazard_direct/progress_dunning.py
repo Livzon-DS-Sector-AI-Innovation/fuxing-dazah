@@ -287,44 +287,75 @@ async def send_urge_cards(
     sent_plan: list[tuple[bitable_repo.HazardView, str, Any]] = []
     failed_plan: list[tuple[bitable_repo.HazardView, str, Any]] = []
 
-    for view, role, person in plan:
-        # open_id 按应用隔离：平台同步的 open_id 对安全应用会报 99992361 cross app，
-        # 统一用租户级 user_id（identity.users.feishu_user_id）发送。
-        receive_id = person.user_id or person.open_id
-        id_type = "user_id" if person.user_id else "open_id"
-        try:
-            content, elements = build_progress_card(
-                view, mention_ids.get(person.name, "")
-            )
-            ok = await send_user_card(
-                open_id=receive_id,
-                title="⏰ 督办催办 · 未更新进展",
-                content=content,
-                elements=elements,
-                header_template="red",
-                id_type=id_type,
-            )
-            if ok:
-                stats["sent"] += 1
-                sent_plan.append((view, role, person))
-                logger.info(
-                    "⑤ 催办卡片已发送: record_id=%s → %s(%s) id_type=%s",
-                    view.record_id, person.name, role, id_type,
-                )
-            else:
-                stats["skipped"] += 1
-                failed_plan.append((view, role, person))
-                logger.warning(
-                    "⑤ 催办卡片发送失败: record_id=%s → %s(%s)",
-                    view.record_id, person.name, role,
-                )
-        except Exception:
-            stats["errors"] += 1
-            failed_plan.append((view, role, person))
-            logger.exception(
-                "⑤ 催办卡片发送异常: record_id=%s → %s", view.record_id, person.name
-            )
+    # 留痕会话（方向B 旁挂；开关关时 record_* 直接空转，session 仅惰性使用）
+    from app.modules.safety.service.hazard_direct.audit_trail import (
+        audit_enabled,
+        record_dunning_card_sent,
+    )
+    audit_session = None
 
+    async def _audit_sent(view: Any, role: str, person: Any,
+                          receive_id: str, id_type: str) -> None:
+        nonlocal audit_session
+        if not audit_enabled():
+            return
+        if audit_session is None:
+            from app.core.database import async_session_factory
+
+            audit_session = async_session_factory()
+        await record_dunning_card_sent(
+            audit_session, record_id=view.record_id, hazard_no=view.hazard_no,
+            receive_id=receive_id, id_type=id_type,
+            role=role, name=person.name,
+        )
+
+    try:
+        for view, role, person in plan:
+            # open_id 按应用隔离：平台同步的 open_id 对安全应用会报 99992361 cross app，
+            # 统一用租户级 user_id（identity.users.feishu_user_id）发送。
+            receive_id = person.user_id or person.open_id
+            id_type = "user_id" if person.user_id else "open_id"
+            try:
+                content, elements = build_progress_card(
+                    view, mention_ids.get(person.name, "")
+                )
+                ok = await send_user_card(
+                    open_id=receive_id,
+                    title="⏰ 督办催办 · 未更新进展",
+                    content=content,
+                    elements=elements,
+                    header_template="red",
+                    id_type=id_type,
+                )
+                if ok:
+                    stats["sent"] += 1
+                    sent_plan.append((view, role, person))
+                    logger.info(
+                        "⑤ 催办卡片已发送: record_id=%s → %s(%s) id_type=%s",
+                        view.record_id, person.name, role, id_type,
+                    )
+                    await _audit_sent(view, role, person, receive_id, id_type)
+                else:
+                    stats["skipped"] += 1
+                    failed_plan.append((view, role, person))
+                    logger.warning(
+                        "⑤ 催办卡片发送失败: record_id=%s → %s(%s)",
+                        view.record_id, person.name, role,
+                    )
+            except Exception:
+                stats["errors"] += 1
+                failed_plan.append((view, role, person))
+                logger.exception(
+                    "⑤ 催办卡片发送异常: record_id=%s → %s", view.record_id, person.name
+                )
+    finally:
+        # 留痕 best-effort：发送循环异常也提交已发生的留痕行，会话必关
+        if audit_session is not None:
+            try:
+                await audit_session.commit()
+            except Exception:
+                logger.exception("⑤ 催办留痕提交失败（不影响催办结果）")
+            await audit_session.close()
     logger.info(
         "⑤ 催办完成(动态名单): sent=%d skipped=%d errors=%d 收件人=%d",
         stats["sent"], stats["skipped"], stats["errors"], stats["recipients"],

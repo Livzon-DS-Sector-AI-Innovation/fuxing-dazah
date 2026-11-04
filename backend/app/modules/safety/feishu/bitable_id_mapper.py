@@ -116,6 +116,25 @@ def get_user_id_by_bitable_open_id(bitable_open_id: str) -> str | None:
     return None
 
 
+def get_name_by_bitable_open_id(bitable_open_id: str) -> str | None:
+    """反查：安全应用 open_id → 姓名（卡片提交署名 best-effort）。"""
+    if not bitable_open_id:
+        return None
+    mapping = _load()
+    for entry in mapping.values():
+        if entry["bitable_open_id"] == bitable_open_id:
+            return entry.get("name") or None
+    return None
+
+
+def get_name_by_user_id(user_id: str | None) -> str | None:
+    """直查：employee user_id → 姓名。"""
+    if not user_id:
+        return None
+    entry = _load().get(user_id.strip())
+    return (entry or {}).get("name") or None
+
+
 def get_bitable_person_value(
     user_id: str | None = None,
     name: str | None = None,

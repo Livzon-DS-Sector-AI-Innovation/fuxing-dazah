@@ -147,6 +147,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "隐患复查/整改 DM 通知开关",
     ),
     _flag(
+        "SAFETY_HAZARD_AUDIT_TRAIL_ENABLED", False,
+        "督办留痕（方向B）：表单提交落底座 Trigger + 催办发送落底座 Outbox "
+        "留痕行（关 = 零旁挂零行为变化；开 = 仅增留痕数据，交互不变）",
+    ),
+    _flag(
         "SAFETY_SUPERVISION_NOTIFICATION_ENABLED", False,
         "督办等级通知开关（hazard_supervision）",
     ),

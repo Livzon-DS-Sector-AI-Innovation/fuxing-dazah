@@ -159,19 +159,123 @@ def build_submitted_card(hazard_no: str, text: str) -> dict:
     }
 
 
-async def push_progress_note_to_bitable(record_id: str, text: str) -> bool:
+def _plain_text(value: Any) -> str:
+    """Bitable 字段值 → 纯文本（str 直取；富文本 list 拼接；dict 取 text）。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(
+            el.get("text", "") if isinstance(el, dict) else str(el) for el in value
+        )
+    if isinstance(value, dict):
+        return str(value.get("text") or "")
+    return str(value)
+
+
+async def _audit_submission(
+    *, record_id: str, hazard_no: str, text: str, operator: str,
+    event_data: dict, applied: bool,
+) -> None:
+    """提交动作旁挂留痕（方向 B；开关关=零写，失败不抛——不影响业务链路）。"""
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.hazard_direct.audit_trail import (
+        record_card_submission,
+    )
+
+    context = event_data.get("context") or {}
+    action = event_data.get("action") or {}
+    message_key = f"{context.get('open_message_id') or ''}:{action.get('name') or ''}"
+    try:
+        async with async_session_factory() as session:
+            await record_card_submission(
+                session, record_id=record_id, text=text, operator=operator,
+                message_key=message_key, applied=applied, hazard_no=hazard_no,
+                note="bitable_write" if applied else "bitable_write_failed",
+            )
+            await session.commit()
+    except Exception:
+        logger.exception("提交留痕异常（不影响业务）: record_id=%s", record_id)
+
+
+async def _push_and_audit(
+    record_id: str, hazard_no: str, text: str,
+    operator: str, event_data: dict,
+) -> None:
+    """镜像路径后台任务：回写台账 + 留痕（原 push 后台任务的超集）。"""
+    ok = await push_progress_note_to_bitable(
+        record_id, text, operator_open_id=operator,
+    )
+    await _audit_submission(
+        record_id=record_id, hazard_no=hazard_no, text=text, operator=operator,
+        event_data=event_data, applied=ok,
+    )
+
+
+def build_submission_line(
+    text: str, sender_name: str, *, at: datetime | None = None,
+) -> str:
+    """台账追加行：【卡片提交·YYYY-MM-DD HH:mm·姓名】原文（北京时间）。"""
+    from zoneinfo import ZoneInfo
+
+    stamp = (at or datetime.now(ZoneInfo("Asia/Shanghai"))).strftime(
+        "%Y-%m-%d %H:%M"
+    )
+    return f"【卡片提交·{stamp}·{sender_name}】{(text or '').strip()}"
+
+
+def append_progress_value(existing: str, *lines: str) -> str:
+    """现值追加（只 append 不改写历史；空行分隔）。"""
+    base = (existing or "").rstrip()
+    new = "\n\n".join(x for x in lines if x)
+    if base and new:
+        return f"{base}\n\n{new}"
+    return new or base
+
+
+def resolve_operator_name(identifier: str | None) -> str:
+    """提交人标识 → 姓名（user_id 直查 → open_id 反查 → 尾 12 位兜底）。
+
+    card.action 的 operator 可能带 user_id（租户级）或 open_id（安全应用作用域），
+    两条链都走静态映射 best-effort。
+    """
+    from app.modules.safety.feishu import bitable_id_mapper
+
+    ident = (identifier or "").strip()
+    if not ident:
+        return "未知"
+    if ident.startswith("ou_"):
+        name = bitable_id_mapper.get_name_by_bitable_open_id(ident)
+    else:
+        name = bitable_id_mapper.get_name_by_user_id(ident)
+    return name or ident[-12:]
+
+
+async def push_progress_note_to_bitable(
+    record_id: str, text: str, *, operator_open_id: str | None = None,
+) -> bool:
     """定向回写「目前进展」到 Bitable（best-effort，失败仅告警不阻塞）。
 
-    写回前打 _set_sync_ignore 标记，抑制 changed_v1 事件回声。
+    留痕语义（2026-11-04 拍板）：**追加**带署名行【卡片提交·时间·姓名】原文，
+    不再覆盖——「目前进展」成为有 attribution 的提交历史；③轮询按全文字
+    hash 判变化，追加语义天然兼容。写回前打 _set_sync_ignore 抑制回声。
     """
     if not record_id or not text:
         return False
     try:
-        await _set_sync_ignore(record_id, ttl=30)
+        line = build_submission_line(text, resolve_operator_name(operator_open_id))
         bitable = SafetyBitableClient()
-        ok = await bitable.update_record(record_id, {"目前进展": text})
+        fields = await bitable.get_record(record_id)
+        existing = _plain_text((fields or {}).get("目前进展")).strip()
+        await _set_sync_ignore(record_id, ttl=30)
+        ok = await bitable.update_record(
+            record_id, {"目前进展": append_progress_value(existing, line)},
+        )
         if ok:
-            logger.info("Bitable 回写「目前进展」成功: record_id=%s", record_id)
+            logger.info(
+                "Bitable 回写「目前进展」成功(追加署名): record_id=%s", record_id,
+            )
         else:
             logger.warning("Bitable 回写「目前进展」失败: record_id=%s", record_id)
         return ok
@@ -213,7 +317,13 @@ async def handle_progress_submit_direct(record_id: str, event_data: dict) -> dic
     except Exception:
         logger.debug("读取隐患编号失败（不影响提交）: record_id=%s", record_id, exc_info=True)
 
-    ok = await push_progress_note_to_bitable(record_id, text)
+    ok = await push_progress_note_to_bitable(
+        record_id, text, operator_open_id=operator_open_id or "",
+    )
+    await _audit_submission(
+        record_id=record_id, hazard_no=hazard_no, text=text,
+        operator=operator_open_id or "", event_data=event_data, applied=ok,
+    )
     if not ok:
         return {"toast": {"type": "error", "content": "提交失败，请稍后重试"}}
 
@@ -285,7 +395,9 @@ async def handle_progress_submit(payload: dict, event_data: dict) -> dict | None
     from app.modules.safety.service.hazard_direct.config import event_sync_enabled
 
     if record_id and event_sync_enabled():
-        asyncio.create_task(push_progress_note_to_bitable(record_id, text))
+        asyncio.create_task(_push_and_audit(
+            record_id, hazard_no, text, operator_open_id or "", event_data,
+        ))
     elif record_id:
         logger.debug("隐患事件同步已关闭，跳过「目前进展」回写: record_id=%s", record_id)
 
