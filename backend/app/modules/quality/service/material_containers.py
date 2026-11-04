@@ -6,12 +6,12 @@ from datetime import datetime
 from typing import Any
 
 import segno
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4  # type: ignore[import-untyped]
+from reportlab.lib.units import mm  # type: ignore[import-untyped]
+from reportlab.lib.utils import ImageReader  # type: ignore[import-untyped]
+from reportlab.pdfbase import pdfmetrics  # type: ignore[import-untyped]
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # type: ignore[import-untyped]
+from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

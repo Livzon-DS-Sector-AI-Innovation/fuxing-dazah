@@ -222,14 +222,14 @@ async def _push_material_alerts() -> None:
     blocks: list[str] = []
     if env_plans:
         type_label = {"settle": "沉降菌", "float": "浮游菌", "particle": "悬浮粒子", "temp_humidity": "温湿度", "pressure": "压差"}
-        pending = [x for x in env_plans if not x["completed"]]
-        if pending:
+        env_pending = [x for x in env_plans if not x["completed"]]
+        if env_pending:
             lines = [
                 f"- {x['room']} {x['point_no']}（{type_label.get(x['monitor_type'], x['monitor_type'])}）"
-                for x in pending
+                for x in env_pending
             ]
             blocks.append(
-                f"环境监测今日计划（应测 {len(env_plans)} 个点位，已完成 {len(env_plans) - len(pending)}，未完成 {len(pending)}）：\n"
+                f"环境监测今日计划（应测 {len(env_plans)} 个点位，已完成 {len(env_plans) - len(env_pending)}，未完成 {len(env_pending)}）：\n"
                 + "\n".join(lines)
                 + "\n完成请飞书填报：环境 点位 P001 值 5"
             )
