@@ -144,6 +144,12 @@ class Settings(BaseSettings):
     WAREHOUSE_ALERT_CHAT_ID: str = ""
     # 冒烟测试目标群（可选；配置后 test_live_smoke 真发一条卡片）
     WAREHOUSE_TEST_CHAT_ID: str = ""
+    # 五金库领料审批通道（M3，设计 §五）：feishu=对接新审批定义（需配
+    # HARDWARE_APPROVAL_CODE，未配置自动落 manual）；manual=部门主管在
+    # 领用中心点确认（审批结果代录）。状态机对通道无感。
+    HARDWARE_APPROVAL_CHANNEL: str = "manual"
+    HARDWARE_APPROVAL_CODE: str = ""
+    HARDWARE_APPROVAL_USER_KEY: str = "user_id"
     # 仓库机器人 open_id（部署身份：gateway 去重排除自身消息；未配置回退 gateway 代码常量）
     WAREHOUSE_FEISHU_BOT_OPEN_ID: str = ""
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）

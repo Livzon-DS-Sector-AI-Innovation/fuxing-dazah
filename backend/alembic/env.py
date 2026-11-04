@@ -23,6 +23,9 @@ import_module("app.modules.safety.business_agent.models")
 import_module("app.modules.safety.business_agent.core.events")
 import_module("app.modules.safety.memory.models")
 
+# warehouse 模块同理：五金库子包模型（hardware_* 7 表，本地权威仓储域）。
+import_module("app.modules.warehouse.hardware.models")
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

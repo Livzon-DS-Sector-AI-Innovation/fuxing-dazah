@@ -53,6 +53,7 @@ from app.modules.warehouse.web_stock_status import (
 from app.modules.warehouse.web_stock_status import (
     router as web_stock_status_router,
 )
+from app.modules.warehouse.hardware.api import router as hardware_router
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 from app.shared.module_api import create_module_router
@@ -64,6 +65,7 @@ router.include_router(web_agent_router)
 router.include_router(web_quick_register_router)
 router.include_router(web_reconciliation_router)
 router.include_router(web_stock_status_router)
+router.include_router(hardware_router)
 
 
 def _clean(value: str | None) -> str | None:
