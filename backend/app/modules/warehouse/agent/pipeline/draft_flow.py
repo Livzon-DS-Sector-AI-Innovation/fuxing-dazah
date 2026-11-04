@@ -63,6 +63,7 @@ GMP_OUTBOUND_SCENE = "gmp_outbound"
 FINISHED_OUTBOUND_SCENE = "finished_outbound"  # 票02：成品出库登记（预留）
 PICKING_OUTBOUND_SCENE = "picking_outbound"  # V3.0 分期C：领料 FIFO 登记
 FINISHED_RECEIPT_SCENE = "finished_receipt"  # V3.0 §4.6：成品入库登记（识别+对话）
+HARDWARE_RECEIPT_SCENE = "hardware_receipt"  # 五金库送货单入库（M2：识别→匹配→草稿→确认入账）
 
 # pending_confirm TTL（秒）：读运行参数配置（DB → env → 默认 600），改值即时生效
 def _draft_ttl_seconds() -> int:
@@ -606,6 +607,18 @@ async def _finished_receipt_submit_callback(
     return await submit_finished_receipt(db, draft)
 
 
+async def _hardware_receipt_submit_callback(
+    db: AsyncSession, draft: WarehouseAgentDraft
+) -> str | None:
+    """scene=hardware_receipt 确认回调（五金库 M2）：薄包装延迟 import
+    hardware submit_hardware_receipt——confirmed → 入库单 draft→accepted
+    （批次/双流水/领取卡推送）→ 读回核对 → submitted。双签口径：仓管员=
+    卡片确认人（操作人 open_id），使用部门经办=草稿发起人。"""
+    from app.modules.warehouse.hardware.agent_submit import submit_hardware_receipt
+
+    return await submit_hardware_receipt(db, draft)
+
+
 # 场景配置表（spec Implementation Decisions 1/2/5/6）：scene → 配置。
 # receipt 沿用识别必提集合；gmp_outbound 对话必收四件套 + 可写八字段
 # （物料名称为 lookup 拒写，不在此列——仅确认卡片展示）；finished_outbound
@@ -721,6 +734,14 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "备注",
         ),
         submit=_finished_receipt_submit_callback,
+    ),
+    # 五金库送货单入库（M2）：aligned 存 hardware_receipts 草稿引用
+    # （receipt_id/receipt_no/rows 摘要/匹配统计），确认 → accept 入账。
+    HARDWARE_RECEIPT_SCENE: SceneConfig(
+        name_cn="五金库入库登记",
+        required_fields=("receipt_id",),
+        writable_fields=("供应商", "送货单号", "直发车间", "行物料/数量"),
+        submit=_hardware_receipt_submit_callback,
     ),
 }
 

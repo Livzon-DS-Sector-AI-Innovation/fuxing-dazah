@@ -725,6 +725,7 @@ CANCEL_FINISHED_BUTTON_LABEL = "❌ 取消"
 
 # 成品入库（V3.0 §4.6：识别+对话双入口；质量状态恒写待检，卡片静态提示）
 FINISHED_RECEIPT_SCENE = "finished_receipt"
+HARDWARE_RECEIPT_SCENE = "hardware_receipt"
 FINISHED_RECEIPT_CONFIRM_CARD_TITLE = "🏭 成品入库登记"
 CONFIRM_FINISHED_RECEIPT_BUTTON_LABEL = "✅ 确认入库"
 CANCEL_FINISHED_RECEIPT_BUTTON_LABEL = "❌ 取消"
@@ -1233,6 +1234,53 @@ def render_confirm_status_card(
     }
 
 
+def _render_hardware_receipt_confirm_card(draft: Any) -> dict[str, Any]:
+    """五金库入库确认卡（M2）：aligned 存 receipt_id/receipt_no/supplier/
+    rows 摘要（OCR+四级匹配后草稿），低置信行 ⚠ 标注只标记不代改。"""
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [
+        f"**草稿**：{draft_no or '-'}",
+        f"**入库单**：{aligned.get('receipt_no') or '-'}",
+        f"**供应商**：{aligned.get('supplier') or '-'}",
+        f"**类别**：{'车间单独需求（直发）' if aligned.get('mode') == 'direct' else '共用类（入库存）'}",
+    ]
+    if aligned.get("target_dept"):
+        lines.append(f"**直发车间**：{aligned.get('target_dept')}")
+    lines.append("")
+    rows = aligned.get("rows") or []
+    for i, row in enumerate(rows[:12], 1):
+        warn = " ⚠️低置信" if row.get("low_confidence") else ""
+        matched = row.get("matched") or "未匹配（按车间单独需求登记）"
+        lines.append(
+            f"{i}. {row.get('ocr_name') or '-'} {row.get('ocr_spec') or ''} × {row.get('quantity')}"
+            f"（→ {matched}{warn}）"
+        )
+    if len(rows) > 12:
+        lines.append(f"…共 {len(rows)} 行")
+    lines.extend([
+        "",
+        "确认前请核对实物与单据一致；低置信行可在 Web 入库台修正后再确认。",
+    ])
+
+    value_base = {"scene": HARDWARE_RECEIPT_SCENE, "draft_id": draft_id}
+    return build_card(
+        title="🔩 五金库入库确认",
+        template="orange",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label="✅ 确认入账",
+                cancel_label="❌ 取消",
+            ),
+        ],
+    )
+
+
 def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     """登记确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
 
@@ -1257,6 +1305,8 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         return _render_picking_confirm_card(draft)
     if scene == FINISHED_RECEIPT_SCENE:
         return _render_finished_receipt_confirm_card(draft)
+    if scene == HARDWARE_RECEIPT_SCENE:
+        return _render_hardware_receipt_confirm_card(draft)
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)

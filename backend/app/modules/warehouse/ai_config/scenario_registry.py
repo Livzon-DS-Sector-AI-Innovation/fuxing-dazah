@@ -42,6 +42,15 @@ _SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
         "vision",
         "feishu",
     ),
+    # 五金库系统原生域（设计 2026-11-04）：打印体送货单拍照 OCR 直接入库
+    # 主通道——供应商/单号/到货日期/多行品名规格数量结构化提取，随后走
+    # 四级主数据匹配生成入库草稿（人确认入账，AI 永不自动动账）。
+    "hardware_receipt_recognition": (
+        "五金库送货单识别",
+        "五金库送货单拍照 OCR 结构化提取（入库草稿主通道，双入口 web/feishu）",
+        "vision",
+        "mixed",
+    ),
 }
 
 

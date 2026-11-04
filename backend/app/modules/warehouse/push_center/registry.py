@@ -191,6 +191,34 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule={"type": "daily", "time": "08:10"},
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
+    # ── 五金库（系统原生仓储域，设计 2026-11-04 §9.5）──
+    PushTaskInfo(
+        task_name="hardware_direct_pickup",
+        scene="hardware_direct_pickup",
+        label="五金库直发领取卡",
+        description="direct 车间单独需求类到货确认入账后推办事员领取卡（到货直接领走，不走审批）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="hardware_receipt_rejected",
+        scene="hardware_receipt_rejected",
+        label="五金库拒收通知",
+        description="入库单拒收留证后通知采购退换货（事件触发）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="hardware_requisition_rejected",
+        scene="hardware_requisition_rejected",
+        label="五金库领用驳回通知",
+        description="领用申请驳回后通知申请人（预扣已释放，事件触发）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
 )
 
 PUSH_REGISTRY: dict[str, PushTaskInfo] = {t.task_name: t for t in _TASKS}

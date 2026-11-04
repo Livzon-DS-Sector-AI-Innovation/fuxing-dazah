@@ -23,6 +23,7 @@ from app.modules.warehouse.agent.pipeline.draft_flow import (
     DRAFT_NO_RETRIES,
     FINISHED_OUTBOUND_SCENE,
     FINISHED_RECEIPT_SCENE,
+    HARDWARE_RECEIPT_SCENE,
     GMP_OUTBOUND_SCENE,
     PICKING_OUTBOUND_SCENE,
     RECEIPT_SCENE,

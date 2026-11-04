@@ -198,6 +198,76 @@ def render_supplier_mismatch_alert_card(payload: dict[str, Any]) -> dict[str, An
 register_event_renderer("supplier_mismatch_alert", render_supplier_mismatch_alert_card)
 
 
+# ── 五金库（系统原生仓储域，设计 2026-11-04 §9.5）──
+
+
+def render_hardware_direct_pickup_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """direct 直发领取卡：车间单独需求类到货即领（不走审批，出入双流水留痕）。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    rows = payload.get("rows") or []
+    lines = [f"**{r.get('name', '-')}** {r.get('spec') or ''} × {r.get('quantity', '-')} {r.get('unit') or ''}"
+             for r in rows[:10]]
+    if len(rows) > 10:
+        lines.append(f"…共 {len(rows)} 行")
+    return build_card(
+        title="🔩 五金库到货待领",
+        template="blue",
+        elements=[{"tag": "markdown", "content": "\n".join([
+            f"**直发车间** {payload.get('dept', '-')}",
+            f"**供应商** {payload.get('supplier', '-') or '-'}",
+            f"**入库单** {payload.get('receipt_no', '-')}",
+            "",
+            *lines,
+            "",
+            "车间单独需求类已确认入账（出入双流水留痕），请办事员到五金库领取。",
+        ])}],
+    )
+
+
+register_event_renderer("hardware_direct_pickup", render_hardware_direct_pickup_card)
+
+
+def render_hardware_receipt_rejected_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """拒收通知采购：留证原因+供应商，采购负责退换货。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    return build_card(
+        title="🚫 五金库入库拒收",
+        template="red",
+        elements=[{"tag": "markdown", "content": "\n".join([
+            f"**入库单** {payload.get('receipt_no', '-')}",
+            f"**供应商** {payload.get('supplier_name', '-') or '-'}",
+            f"**拒收原因** {payload.get('reason', '-') or '-'}",
+            "",
+            "请采购跟进退换货（照片证据已留档）。",
+        ])}],
+    )
+
+
+register_event_renderer("hardware_receipt_rejected", render_hardware_receipt_rejected_card)
+
+
+def render_hardware_requisition_rejected_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """领用驳回通知申请人（预扣已释放）。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    return build_card(
+        title="❌ 领用申请已驳回",
+        template="orange",
+        elements=[{"tag": "markdown", "content": "\n".join([
+            f"**单号** {payload.get('req_no', '-')}",
+            f"**申请人** {payload.get('applicant', '-')}",
+            f"**驳回原因** {payload.get('reason', '-') or '-'}",
+            "",
+            "预扣库存已释放，可修改后重新提交。",
+        ])}],
+    )
+
+
+register_event_renderer("hardware_requisition_rejected", render_hardware_requisition_rejected_card)
+
+
 async def fire_push_event(
     db: AsyncSession,
     scene: str,
@@ -284,3 +354,27 @@ async def _execute_event(
     if ok_count < log_count:
         _fire_failure(view, f"事件推送部分目标发送失败（{view.task_name}）")
     return PushRunResult(view.task_name, view.scene, STATUS_EXECUTED, None, log_count)
+
+
+def render_hardware_urgent_overdue_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """紧急领用 24h 未补单提醒（设计 §4.2：仓储部有权暂停该部门后续领用）。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    items = payload.get("items") or []
+    lines = [f"- {it.get('req_no', '-')}（{it.get('dept', '-')} / {it.get('applicant', '-')}）" for it in items[:10]]
+    if len(items) > 10:
+        lines.append(f"…共 {len(items)} 单")
+    return build_card(
+        title="⏰ 五金库紧急领用超期未补单",
+        template="red",
+        elements=[{"tag": "markdown", "content": "\n".join([
+            f"**{payload.get('count', len(items))} 单**紧急领用超过 24 小时未补审批单，已标记超期：",
+            "",
+            *lines,
+            "",
+            "依据制度 5.3.4，仓储部有权暂停该部门后续领用，请尽快补单。",
+        ])}],
+    )
+
+
+register_event_renderer("hardware_urgent_overdue", render_hardware_urgent_overdue_card)

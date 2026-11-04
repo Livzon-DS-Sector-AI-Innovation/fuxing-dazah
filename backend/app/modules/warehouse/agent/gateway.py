@@ -493,6 +493,35 @@ async def handle_im_message(event: dict[str, Any]) -> None:
                 chat_id=chat_id, open_id=open_id,
             )
             return
+        # 五金库意图路由（M2）：文本含「五金」→ 五金送货单入库链
+        # （hardware_receipt_recognition 场景 + hardware_receipts 草稿）
+        from app.modules.warehouse.hardware.gateway_inbound import (
+            has_hardware_intent,
+            process_hardware_image,
+        )
+
+        if has_hardware_intent(user_text):
+            try:
+                await _send_card_to(
+                    chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                    card=_build_image_processing_card(len(image_keys)),
+                )
+            except Exception:
+                logger.exception("仓库网关五金图片占位卡片发送失败")
+            for image_key in image_keys:
+                _spawn_receipt_task(
+                    process_hardware_image(
+                        chat_id=chat_id,
+                        chat_type=chat_type,
+                        open_id=open_id,
+                        message_id=message_id,
+                        image_key=image_key,
+                        user_text=user_text,
+                        msg_type=msg_type,
+                        started=started,
+                    )
+                )
+            return
         # 占位卡片先回（识别为分钟级耗时，Pipeline 后台异步跑）
         try:
             await _send_card_to(
