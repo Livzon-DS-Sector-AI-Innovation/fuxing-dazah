@@ -59,5 +59,5 @@ export function usePermission() {
     }
   }, [isLoaded, loadError, setPermissionData, setLoadError])
 
-  return { permissions, roles, dataScopes, isLoaded, hasPermission, reset }
+  return { permissions, roles, dataScopes, isLoaded, loadError, hasPermission, reset }
 }

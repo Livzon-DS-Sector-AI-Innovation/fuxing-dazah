@@ -139,12 +139,13 @@ export function Sidebar() {
   const collapsed = useSidebarStore((s) => s.collapsed)
   const permissions = usePermissionStore((s) => s.permissions)
   const permissionLoaded = usePermissionStore((s) => s.isLoaded)
+  const permissionLoadFailed = usePermissionStore((s) => s.loadError)
   const moduleKey = pathname.split("/")[1] || "production"
   const currentModule = getModuleByKey(moduleKey)
 
-  // 权限加载完成前不过滤（避免闪烁）；加载后按模块级与 children 的 permissions 声明过滤
+  // 权限加载完成前、或加载失败时不过滤，避免菜单因临时接口故障整块消失；后端接口仍做真实鉴权。
   const visibleChildren = useMemo(() => {
-    if (!currentModule || !permissionLoaded) return currentModule?.children ?? []
+    if (!currentModule || !permissionLoaded || permissionLoadFailed) return currentModule?.children ?? []
     // 模块级权限与 TopNav 口径一致：不满足则全部子项隐藏
     if (
       currentModule.permissions &&
@@ -154,7 +155,7 @@ export function Sidebar() {
       return []
     }
     return filterByPermissions(currentModule.children, permissions)
-  }, [currentModule, permissions, permissionLoaded])
+  }, [currentModule, permissions, permissionLoaded, permissionLoadFailed])
 
   const menuItems = currentModule ? buildMenuItems(visibleChildren) : []
   const keyPathMap = currentModule ? buildKeyPathMap(visibleChildren) : new Map<string, string>()

@@ -14,7 +14,9 @@ function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 30 * 1000,
+        // 5 分钟：后端已有 TTL 缓存 + 定时预热，前端窗口内切页/回看直接
+        // 用缓存，不再每 30s 过期就重打一遍重接口（2026-11-02 性能修复）
+        staleTime: 5 * 60 * 1000,
         retry: 1,
       },
     },

@@ -2,7 +2,7 @@
 
 import * as echarts from 'echarts'
 import ReactECharts from 'echarts-for-react'
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties, type RefObject } from 'react'
 import { EmptyGuide } from './EmptyGuide'
 
 /**
@@ -72,6 +72,38 @@ function hasData(series: number[][]): boolean {
   return series.some(values => values.some(v => Number(v) > 0))
 }
 
+/** 卡片被 Row 等高拉伸时 echarts 实例不跟随容器尺寸，canvas 停在初始小尺寸
+ * （表现为图表压在顶部、下方大片空白、Y 轴刻度重叠）——用 ResizeObserver 补 resize。
+ * 首轮回调跳过：echarts 初始化时已按容器尺寸渲染，挂载瞬间再 resize 会与其内部渲染竞态 */
+function useChartAutoResize(
+  wrapRef: RefObject<HTMLDivElement | null>,
+  chartRef: RefObject<ReactECharts | null>,
+  enabled: boolean,
+) {
+  useEffect(() => {
+    const wrap = wrapRef.current
+    if (!enabled || !wrap || typeof ResizeObserver === 'undefined') return
+    let lastW = wrap.clientWidth
+    let lastH = wrap.clientHeight
+    const ro = new ResizeObserver(entries => {
+      const rect = entries[entries.length - 1].contentRect
+      if (rect.width === lastW && rect.height === lastH) return
+      lastW = rect.width
+      lastH = rect.height
+      const chart = chartRef.current?.getEchartsInstance()
+      // 实例可能在 React 重挂载间隙被 dispose；竞态下 resize 抛错则静默跳过，等下次触发
+      if (!chart || chart.isDisposed()) return
+      try {
+        chart.resize()
+      } catch {
+        /* 下一次尺寸变化会再触发 */
+      }
+    })
+    ro.observe(wrap)
+    return () => ro.disconnect()
+  }, [enabled, wrapRef, chartRef])
+}
+
 function ChartEmpty({ height, text }: { height: number | string; text: string }) {
   return (
     <div style={{ height }} className="flex items-center justify-center">
@@ -116,31 +148,7 @@ export function TrendAreaChart({
   const chartRef = useRef<ReactECharts>(null)
   const empty = !hasData([seriesA, seriesB])
 
-  // 卡片被 Row 等高拉伸时 echarts 实例不跟随容器尺寸，canvas 停在初始小尺寸
-  // （表现为图表压在顶部、下方大片空白、Y 轴刻度重叠）——用 ResizeObserver 补 resize。
-  // 首轮回调跳过：echarts 初始化时已按容器尺寸渲染，挂载瞬间再 resize 会与其内部渲染竞态
-  useEffect(() => {
-    const wrap = wrapRef.current
-    if (empty || !wrap || typeof ResizeObserver === 'undefined') return
-    let lastW = wrap.clientWidth
-    let lastH = wrap.clientHeight
-    const ro = new ResizeObserver(entries => {
-      const rect = entries[entries.length - 1].contentRect
-      if (rect.width === lastW && rect.height === lastH) return
-      lastW = rect.width
-      lastH = rect.height
-      const chart = chartRef.current?.getEchartsInstance()
-      // 实例可能在 React 重挂载间隙被 dispose；竞态下 resize 抛错则静默跳过，等下次触发
-      if (!chart || chart.isDisposed()) return
-      try {
-        chart.resize()
-      } catch {
-        /* 下一次尺寸变化会再触发 */
-      }
-    })
-    ro.observe(wrap)
-    return () => ro.disconnect()
-  }, [empty])
+  useChartAutoResize(wrapRef, chartRef, !empty)
 
   ensureWarehouseTheme()
   if (empty) return <ChartEmpty height={height} text={emptyText} />
@@ -282,4 +290,135 @@ export function RankBarChart({
       onEvents={onPick ? { click: (params: { name: string }) => onPick(params.name) } : undefined}
     />
   )
+}
+
+/** 单序列趋势面积图（库存总量等单一指标；TrendAreaChart 固定双序列不适用） */
+export function SingleTrendChart({
+  dates,
+  values,
+  label,
+  tone = 'primary',
+  height = 260,
+  emptyText = '近期暂无数据',
+}: {
+  dates: string[]
+  values: number[]
+  label: string
+  tone?: ChartTone
+  /** 像素高度，或 '100%' 让图表随容器（flex-1 卡片体）自适应 */
+  height?: number | string
+  emptyText?: string
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<ReactECharts>(null)
+  const empty = !hasData([values])
+
+  useChartAutoResize(wrapRef, chartRef, !empty)
+
+  ensureWarehouseTheme()
+  if (empty) return <ChartEmpty height={height} text={emptyText} />
+  const color = TONE_HEX[tone]
+  const option = {
+    tooltip: { trigger: 'axis' },
+    legend: { data: [label], right: 8, top: 0 },
+    grid: { left: 8, right: 16, top: 36, bottom: 4, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: dates,
+      axisLabel: { showMaxLabel: true },
+    },
+    yAxis: { type: 'value' },
+    series: [
+      {
+        name: label,
+        type: 'line',
+        data: values,
+        smoothMonotone: 'x',
+        showSymbol: false,
+        symbol: 'circle',
+        symbolSize: 4.5,
+        lineStyle: { color },
+        itemStyle: { color },
+        emphasis: { focus: 'series' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: hexRgba(color, 0.18) },
+            { offset: 1, color: hexRgba(color, 0.02) },
+          ]),
+        },
+      },
+    ],
+  }
+  return (
+    <div ref={wrapRef} style={{ height } as CSSProperties}>
+      <ReactECharts
+        ref={chartRef}
+        option={option}
+        style={{ height: '100%', width: '100%' }}
+        theme="warehouse"
+        notMerge
+      />
+    </div>
+  )
+}
+
+/** 极简占比仪表盘：柔和阈值带轨道 + 当前区间色进度弧 + 中心大数字，无指针无刻度 */
+export function GaugeChart({
+  value,
+  label,
+  bands,
+  height = 190,
+}: {
+  /** 百分比 0-100 */
+  value: number
+  /** 中心下方说明文字 */
+  label: string
+  /** 阈值带（升序，to=该段百分比上限；末段不足 100 自动补齐，颜色延续末段） */
+  bands: { to: number; tone: ChartTone }[]
+  height?: number
+}) {
+  ensureWarehouseTheme()
+  const v = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0
+  const sorted = [...bands].sort((a, b) => a.to - b.to)
+  const zone = sorted.find(b => v <= b.to) ?? sorted[sorted.length - 1]
+  const zoneColor = TONE_HEX[zone.tone]
+  const track: [number, string][] = sorted.map(b => [
+    Math.min(100, b.to) / 100,
+    hexRgba(TONE_HEX[b.tone], 0.16),
+  ])
+  if (track.length === 0 || track[track.length - 1][0] < 1) {
+    track.push([1, hexRgba(zoneColor, 0.16)])
+  }
+  const option = {
+    tooltip: { trigger: 'item' },
+    series: [
+      {
+        type: 'gauge',
+        startAngle: 210,
+        endAngle: -30,
+        min: 0,
+        max: 100,
+        radius: '95%',
+        center: ['50%', '56%'],
+        axisLine: { lineStyle: { width: 14, color: track } },
+        progress: { show: true, width: 14, roundCap: true, itemStyle: { color: zoneColor } },
+        pointer: { show: false },
+        anchor: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { show: false },
+        title: { offsetCenter: [0, '38%'], fontSize: 12, color: WH.axisLabel },
+        detail: {
+          offsetCenter: [0, '-2%'],
+          fontSize: 26,
+          fontWeight: 700,
+          color: zoneColor,
+          formatter: '{value}%',
+        },
+        data: [{ value: Math.round(v * 10) / 10, name: label }],
+      },
+    ],
+  }
+  return <ReactECharts option={option} style={{ height } as CSSProperties} theme="warehouse" notMerge />
 }

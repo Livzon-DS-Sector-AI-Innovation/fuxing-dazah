@@ -36,7 +36,7 @@ export function TopNav() {
   const activeModule = pathname.split("/")[1] || "production"
   const [loggingOut, setLoggingOut] = useState(false)
   const [user, setUser] = useState<User | null>(null)
-  const { hasPermission, isLoaded } = usePermission()
+  const { hasPermission, isLoaded, loadError: permissionLoadFailed } = usePermission()
   const { collapsed, toggle: toggleSidebar } = useSidebarStore()
   const navRef = useRef<HTMLElement>(null)
   const measureItems = useRef<Map<string, HTMLElement>>(new Map())
@@ -60,12 +60,12 @@ export function TopNav() {
   const displayName = user?.name || "API"
 
   const visibleMenus = useMemo(() => {
-    if (!isLoaded) return moduleMenus
+    if (!isLoaded || permissionLoadFailed) return moduleMenus
     return moduleMenus.filter((mod) => {
       if (!mod.permissions || mod.permissions.length === 0) return true
       return hasPermission(...mod.permissions)
     })
-  }, [isLoaded, hasPermission])
+  }, [isLoaded, permissionLoadFailed, hasPermission])
 
   // 测量每个 tab 宽度，计算哪些模块需要折叠进「更多」
   useLayoutEffect(() => {

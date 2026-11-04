@@ -33,8 +33,8 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
       loadError: false,
     }),
 
-  // 加载失败（重试耗尽）后也视为已加载：以空权限生效侧边栏/TopNav 过滤，
-  // 权限受限菜单 fail-closed，避免整会话静默 fail-open
+  // 加载失败（重试耗尽）后标记 isLoaded + loadError；导航组件检测到 loadError 时
+  // 降级展示完整菜单，避免临时接口故障把侧边栏/顶栏清空。真实权限仍由后端接口校验。
   setLoadError: () => set({ loadError: true, isLoaded: true }),
 
   hasPermission: (...codes: string[]) => {

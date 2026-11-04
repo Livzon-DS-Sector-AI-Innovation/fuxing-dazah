@@ -11,7 +11,7 @@ import { getCurrentUser } from '@/actions/auth'
 import type { User } from '@/types/user'
 
 export function WelcomeHero() {
-  const { hasPermission, isLoaded } = usePermission()
+  const { hasPermission, isLoaded, loadError: permissionLoadFailed } = usePermission()
   const [user, setUser] = useState<User | null>(null)
 
   useEffect(() => {
@@ -19,14 +19,14 @@ export function WelcomeHero() {
   }, [])
 
   // 与 TopNav 相同的模块可见性过滤逻辑
-  const visibleMenus = isLoaded
-    ? moduleMenus.filter((mod) => {
+  const visibleMenus = (!isLoaded || permissionLoadFailed)
+    ? moduleMenus
+    : moduleMenus.filter((mod) => {
         if (!mod.permissions || mod.permissions.length === 0) return true
         return hasPermission(...mod.permissions)
       })
-    : []
 
-  const noAccess = isLoaded && visibleMenus.length === 0
+  const noAccess = isLoaded && !permissionLoadFailed && visibleMenus.length === 0
 
   return (
     <div className="relative h-full overflow-hidden">
@@ -65,7 +65,7 @@ export function WelcomeHero() {
               </p>
             </div>
 
-            {isLoaded && (
+            {(isLoaded || permissionLoadFailed) && (
               <div className="flex flex-wrap items-center justify-center gap-3 max-w-3xl px-8 pointer-events-auto">
                 {visibleMenus.map((mod) => (
                   <Link
