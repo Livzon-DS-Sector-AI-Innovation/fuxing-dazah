@@ -32,3 +32,11 @@ gui-test-screenshots/
 uploads/
 loki_search.json
 
+# 本地运行时库（不入库）
+backend/app.db
+backend/scripts/tmp/
+
+# 独立工程（不入本仓库）：运动会插件有独立 git 仓库、宣传函归属同一运动会项目
+/sports-invitation/
+/sports-meet-plugin/
+
