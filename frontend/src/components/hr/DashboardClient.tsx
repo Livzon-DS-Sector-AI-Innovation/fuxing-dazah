@@ -8,6 +8,7 @@ import {
   TeamOutlined, UserAddOutlined, UserDeleteOutlined,
   HolderOutlined, PlusOutlined, CloseOutlined,
   PieChartOutlined, BarChartOutlined, ClockCircleOutlined, EditOutlined,
+  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined, ApartmentOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
@@ -60,6 +61,15 @@ const ALL_STAT_TYPES: StatTypeOption[] = [
   { id: 'political_status', title: '政治面貌分布', defaultType: 'pie', group: '人员结构', dataSource: 'political_status' },
   { id: 'contract_type', title: '合同类型分布', defaultType: 'pie', group: '人员结构', dataSource: 'contract_type' },
   { id: 'tenure', title: '司龄分布', defaultType: 'bar', group: '人员结构', dataSource: 'tenure' },
+  { id: 'departure-type', title: '离职类型分布', defaultType: 'pie', group: '离职分析', dataSource: 'departure_type' },
+  { id: 'departure-reason', title: '离职原因分布', defaultType: 'pie', group: '离职分析', dataSource: 'departure_reason' },
+  { id: 'departure-tenure', title: '离职司龄分布', defaultType: 'bar', group: '离职分析', dataSource: 'departure_tenure' },
+  { id: 'position-departure-top', title: '岗位离职TOP10', defaultType: 'bar', group: '离职分析', dataSource: 'preset' },
+  { id: 'dept-departure-rate', title: '各部门离职率(%)', defaultType: 'bar', group: '离职分析', dataSource: 'dept_departure_rate' },
+  { id: 'monthly-departure-rate', title: '月度离职率(%)', defaultType: 'bar', group: '离职分析', dataSource: 'monthly_departure_rate' },
+  { id: 'contract-expiry', title: '合同到期预警', defaultType: 'bar', group: '用工风险', dataSource: 'preset' },
+  { id: 'retention', title: '新员工留存率(%)', defaultType: 'bar', group: '招聘', dataSource: 'retention' },
+  { id: 'performance-grade', title: '绩效等级分布', defaultType: 'pie', group: '绩效', dataSource: 'performance_grade' },
 ]
 
 const STAT_TYPE_MAP: Record<string, StatTypeOption> = Object.fromEntries(ALL_STAT_TYPES.map(s => [s.id, s]))
@@ -263,8 +273,8 @@ function buildHorizontalBarOption(data: DistributionItem[]): EChartsOption {
 // ═══════════════════════════════════════════════════════════════
 // KPI 卡片
 // ═══════════════════════════════════════════════════════════════
-function KpiCard({ title, value, icon, accent }: {
-  title: string; value: number; icon: ReactNode; accent: string
+function KpiCard({ title, value, icon, accent, unit = '人' }: {
+  title: string; value: number; icon: ReactNode; accent: string; unit?: string
 }) {
   const animatedValue = useCountUp(value, 1400)
 
@@ -305,7 +315,7 @@ function KpiCard({ title, value, icon, accent }: {
         <div className="text-[34px] font-bold leading-none tracking-tight mb-1"
           style={{ color: T.ink, fontFeatureSettings: '"tnum"', letterSpacing: '-0.02em' }}>
           {animatedValue.toLocaleString('zh-CN')}
-          <span className="text-[18px] font-medium ml-1" style={{ color: T.steel }}>人</span>
+          <span className="text-[18px] font-medium ml-1" style={{ color: T.steel }}>{unit}</span>
         </div>
 
         {/* 标题 */}
@@ -552,6 +562,9 @@ export default function DashboardClient() {
       case 'monthly-departures': return stats.monthly_departures
       case 'departure-comparison': return stats.monthly_departure_comparison
       case 'departures-by-dept': return stats.departures_by_dept
+      case 'position-departure-top': return stats.position_departure_top
+      case 'monthly-departure-rate': return stats.monthly_departure_rate
+      case 'contract-expiry': return stats.contract_expiry
       default: {
         const dsKey = STAT_TYPE_MAP[chartId]?.dataSource
         return dsKey && stats.distributions ? (stats.distributions as Record<string, DistributionItem[]>)[dsKey] || null : null
@@ -572,6 +585,7 @@ export default function DashboardClient() {
       else if (chartId === 'departures-by-dept') { opts[chartId] = buildDistributionBarOption(data as DistributionItem[]) }
       else if (type === 'pie') { opts[chartId] = buildPieOption(data as DistributionItem[]) }
       else if (chartId === 'monthly-departures') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[8]) }
+      else if (chartId === 'monthly-departure-rate') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[8]) }
       else if (chartId === 'monthly-hires') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[2]) }
       else { opts[chartId] = buildDistributionBarOption(data as DistributionItem[]) }
     })
@@ -611,6 +625,46 @@ export default function DashboardClient() {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <CountdownCard />
+        </Col>
+      </Row>
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="试用期人数" value={summary.probation_count ?? 0} icon={<SafetyCertificateOutlined />} accent={T.primary} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="平均司龄" value={summary.avg_tenure ?? 0} icon={<FieldTimeOutlined />} accent={T.blue} unit="年" />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本月净增人数" value={summary.net_growth_this_month ?? 0} icon={<RiseOutlined />} accent={T.success} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="90天内合同到期" value={summary.contract_expiry_90 ?? 0} icon={<AlertOutlined />} accent={T.error} />
+        </Col>
+      </Row>
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title={`编制数（达成率 ${summary.quota_rate ?? 0}%）`} value={summary.quota_total ?? 0} icon={<ApartmentOutlined />} accent={T.primary} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本年工伤人次" value={summary.work_injury_count ?? 0} icon={<AlertOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本年劳动纠纷" value={summary.labor_dispute_count ?? 0} icon={<ExclamationCircleOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="本年被动离职" value={summary.passive_departures ?? 0} icon={<UserDeleteOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="绩效不合格部门数" value={summary.underperforming_count ?? 0} icon={<WarningOutlined />} accent={T.error} />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="已完成绩效评估" value={summary.performance_submitted_count ?? 0} icon={<CheckCircleOutlined />} accent={T.success} unit="份" />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="主动离职率" value={summary.active_departure_rate ?? 0} icon={<UserDeleteOutlined />} accent={T.error} unit="%" />
+        </Col>
+        <Col xs={24} sm={12} md={6}>
+          <KpiCard title="被动离职率" value={summary.passive_departure_rate ?? 0} icon={<UserDeleteOutlined />} accent={T.error} unit="%" />
         </Col>
       </Row>
 

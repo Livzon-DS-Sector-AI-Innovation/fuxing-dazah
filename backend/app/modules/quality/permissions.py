@@ -6,15 +6,33 @@ PERMISSIONS: list[PermissionDef] = [
     # ── 液相计算表解析 ──
     PermissionDef("quality:lc:read", "查看液相解析", "quality", "lc", "read"),
     PermissionDef("quality:lc:upload", "上传液相计算表", "quality", "lc", "upload"),
-    # ── 报告生成 ──
+    # ── 报告生成与审核 ──
     PermissionDef("quality:report:read", "查看报告单", "quality", "report", "read"),
     PermissionDef("quality:report:generate", "生成报告单", "quality", "report", "generate"),
+    PermissionDef("quality:report:audit", "审核报告单（比对原始证据后通过/退回）", "quality", "report", "audit"),
     # ── 质量检验 ──
+    # 预留：当前无端点使用（标准库读已改 task:read），为偏差/CAPA/变更等
+    # 规划中模块的检验数据查看预留；角色勿单独授此码
     PermissionDef("quality:inspection:read", "查看质量检验", "quality", "inspection", "read"),
     PermissionDef("quality:inspection:create", "新增检验记录", "quality", "inspection", "create"),
     PermissionDef("quality:inspection:update", "编辑检验记录", "quality", "inspection", "update"),
+    # ── 检验任务填报/复核 ──
+    PermissionDef("quality:task:read", "查看检验任务", "quality", "task", "read"),
+    PermissionDef("quality:task:create", "创建检验任务", "quality", "task", "create"),
+    PermissionDef("quality:task:fill", "填报检验结果", "quality", "task", "fill"),
+    PermissionDef("quality:task:review", "复核检验任务（审核/驳回/作废/删除）", "quality", "task", "review"),
+    # ── 标准库/模板维护 ──
+    PermissionDef("quality:standard:manage", "维护产品标准（文档/项目行/导入）", "quality", "standard", "manage"),
+    PermissionDef("quality:template:manage", "维护报告模板（上传/删除/绑定）", "quality", "template", "manage"),
     # 偏差管理与 CAPA 落在 qa 模块（qa:deviation:* / qa:capa:*），此处不再声明。
     # ── 变更控制 ──
     PermissionDef("quality:change:read", "查看变更", "quality", "change", "read"),
     PermissionDef("quality:change:create", "新增变更", "quality", "change", "create"),
+    # ── 物料容器赋码 ──
+    PermissionDef("quality:material:read", "查看物料容器台账", "quality", "material", "read"),
+    PermissionDef("quality:material:manage", "物料赋码/进出库/状态流转", "quality", "material", "manage"),
+    PermissionDef("quality:material:release", "物料放行/拒收/让步（联动容器状态）", "quality", "material", "release"),
+    # ── 环境监测 ──
+    PermissionDef("quality:env:read", "查看环境监测（点位/记录）", "quality", "env", "read"),
+    PermissionDef("quality:env:manage", "维护监测点位/填报监测记录", "quality", "env", "manage"),
 ]

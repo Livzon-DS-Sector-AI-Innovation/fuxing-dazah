@@ -996,6 +996,7 @@ export interface PositionOption {
   department: string
   name: string
   categories?: string[]
+  headcount: number | null
 }
 
 // ─── 月度绩效考核 ───
@@ -1035,6 +1036,19 @@ export interface DashboardSummary {
   new_hires_this_month: number
   departures_this_month: number
   age_avg: number
+  probation_count: number
+  avg_tenure: number
+  net_growth_this_month: number
+  passive_departures: number
+  contract_expiry_90: number
+  quota_total: number
+  quota_rate: number
+  work_injury_count: number
+  labor_dispute_count: number
+  underperforming_count: number
+  performance_submitted_count: number
+  active_departure_rate: number
+  passive_departure_rate: number
 }
 
 export interface DistributionItem {
@@ -1070,6 +1084,9 @@ export interface DashboardStats {
   monthly_departure_comparison: MonthlyComparisonItem[]
   departures_by_dept: DistributionItem[]
   distributions: Record<string, DistributionItem[]>
+  position_departure_top: DistributionItem[]
+  monthly_departure_rate: MonthlyItem[]
+  contract_expiry: DistributionItem[]
 }
 
 // ─── 职称评审（v2 投票制） ───
@@ -1219,4 +1236,17 @@ export interface TitleReviewReconcileStats {
 export interface TitleReviewJudgeAssignItem {
   employee_id: string
   role: string
+}
+
+
+export interface IncidentRecord {
+  id: string
+  incident_type: 'work_injury' | 'labor_dispute'
+  employee_name: string | null
+  employee_number: string | null
+  department: string | null
+  occurred_date: string | null
+  description: string | null
+  status: string
+  remark: string | null
 }

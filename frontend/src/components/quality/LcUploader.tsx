@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { Upload, App, Space, Typography } from 'antd'
+import { Upload, App, Typography } from 'antd'
 import { InboxOutlined, FileExcelOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd'
 import { uploadLcExcel } from '@/actions/quality'
@@ -26,10 +26,18 @@ export default function LcUploader({ onResult }: Props) {
       formData.append('file', file)
 
       const result = await uploadLcExcel(formData)
-      message.success(`解析成功：${result.report.product_name} / ${result.report.batch_number}`)
+      if (result.task_link) {
+        message.success(
+          `解析成功并已自动关联检验任务：填入 ${result.task_link.filled.length} 项` +
+          (result.task_link.unmatched.length ? `，未匹配 ${result.task_link.unmatched.length} 项` : ''),
+          5,
+        )
+      } else {
+        message.success(`解析成功：${result.report.product_name} / ${result.report.batch_number}`)
+      }
       onResult(result)
-    } catch (err: any) {
-      message.error(err.message || '解析失败')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '解析失败')
     } finally {
       setUploading(false)
     }

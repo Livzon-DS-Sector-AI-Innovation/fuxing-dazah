@@ -1,0 +1,376 @@
+"""reports API 路由（api.py 拆分）。"""
+
+import asyncio
+import uuid
+from datetime import datetime, time
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+from fastapi import (
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+)
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.response import paginated_response, success_response
+from app.core.time import APP_TZ, today
+from app.modules.quality import storage as quality_storage
+from app.modules.quality.api._common import (
+    REPORT_TEMPLATE_DIR,
+    _coa_response,
+    _render_cao_file,
+    router,
+)
+from app.modules.quality.models import QualityTestTask
+from app.modules.quality.repository import (
+    count_report_records_since,
+    create_report_record,
+    get_inspection_record,
+    get_report_record,
+    get_standard_item_by_id,
+    is_serial_unique_violation,
+    list_report_records,
+    list_test_results,
+    update_report_audit,
+)
+from app.modules.quality.schemas import (
+    GenerateReportRequest,
+    ReportAuditRequest,
+    TaskReportGenerateRequest,
+)
+from app.modules.quality.service import (
+    lc_report_service,
+    test_task_service,
+)
+from app.platform.identity.models import User
+from app.platform.permission.deps import require_permission
+
+
+async def _task_status_map(db: AsyncSession, task_ids: list[uuid.UUID]) -> dict[uuid.UUID, str | None]:
+    """报告单关联任务的当前状态（含 void=已作废、缺失=任务已删除），一次查询。"""
+    if not task_ids:
+        return {}
+    stmt = select(QualityTestTask.id, QualityTestTask.status).where(
+        QualityTestTask.id.in_(task_ids),
+        QualityTestTask.is_deleted == False,  # noqa: E712
+    )
+    return {tid: status for tid, status in (await db.execute(stmt)).all()}
+
+@router.post("/report/generate", summary="生成报告单")
+async def generate_report(
+    payload: GenerateReportRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:generate")),
+) -> StreamingResponse:
+    tp = REPORT_TEMPLATE_DIR / payload.template
+    if not quality_storage.ensure_template_local(payload.template).is_file():
+        raise HTTPException(status_code=404, detail=f"模板不存在：{payload.template}")
+
+    # 获取填充数据
+    fill_data: dict[str, Any] = {}
+    product_name = ""
+    batch_number = ""
+    record_id: uuid.UUID | None = None
+
+    if payload.inspection_record_id:
+        # 从数据库加载检验记录自动填充
+        detail = await lc_report_service.get_record_detail(db, payload.inspection_record_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="检验记录不存在")
+        fill_data = lc_report_service.build_report_data(detail.report)
+        product_name = detail.product_name
+        batch_number = detail.batch_number
+        record_id = detail.id
+    elif payload.data:
+        fill_data = payload.data
+        product_name = fill_data.get("产品名称", "")
+        batch_number = fill_data.get("批号", "")
+    else:
+        raise HTTPException(status_code=400, detail="请提供 inspection_record_id 或 data")
+
+    # 流水号按北京时间计日：当天已生成的报告数作为序号起点。
+    # 并发撞号时（唯一索引冲突）重算流水号重试，最多 3 次。
+    for attempt in range(3):
+        today_start = datetime.combine(today(), time.min, tzinfo=APP_TZ)
+        serial_no = f"{today():%y%m%d}{await count_report_records_since(db, today_start) + 1:02d}"
+        # 直接覆盖：保证 docx 内流水号与入库流水号一致（重试时也能换新号）
+        fill_data["流水号"] = serial_no
+        output_path, output_filename, content = _render_cao_file(
+            tp, fill_data, product_name, batch_number
+        )
+        try:
+            # 两条路径（inspection_record_id / payload.data）都落库，
+            # 否则流水号不入库不计数，下一次出报拿到同一个号
+            await create_report_record(
+                db=db,
+                inspection_record_id=record_id,
+                template_path=payload.template,
+                product_name=product_name,
+                batch_number=batch_number,
+                file_path=str(output_path),
+                file_size=output_path.stat().st_size,
+                serial_no=serial_no,
+            )
+            break
+        except IntegrityError as exc:
+            if not is_serial_unique_violation(exc) or attempt == 2:
+                raise
+            await db.rollback()  # flush 失败后 session 已不可用，回滚后才能重查计数
+            await asyncio.sleep(0.1 * (attempt + 1))  # 等并发对手提交后再重算
+
+    return _coa_response(output_filename, content)
+
+
+@router.post("/tasks/{task_id}/report", summary="从已完成任务按标准文件逐份生成 COA 报告单")
+async def generate_task_report(
+    task_id: uuid.UUID,
+    payload: TaskReportGenerateRequest | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:generate")),
+) -> JSONResponse:
+    # 逐份生成：每个标准文件各出一份 COA（行归属其标准文件；模板按该文件 COA 绑定取）。
+    # 并发撞号时（唯一索引冲突）整体重算流水号重试，最多 3 次。
+    for attempt in range(3):
+        try:
+            splits = await test_task_service.build_task_report_splits(db, task_id)
+            generated = []
+            for split in splits:
+                template = split["template"]
+                tp = REPORT_TEMPLATE_DIR / template
+                if not quality_storage.ensure_template_local(template).is_file():
+                    raise HTTPException(status_code=404, detail=f"模板不存在：{template}")
+                output_path, output_filename, _content = _render_cao_file(
+                    tp, split["fill_data"], split["product_name"], split["batch_number"],
+                    suffix=split["doc"].file_no,
+                )
+                record = await create_report_record(
+                    db=db,
+                    test_task_id=task_id,
+                    template_path=template,
+                    product_name=split["product_name"],
+                    batch_number=split["batch_number"],
+                    file_path=str(output_path),
+                    file_size=output_path.stat().st_size,
+                    serial_no=split["fill_data"].get("流水号", ""),
+                )
+                generated.append({
+                    "report_id": str(record.id),
+                    "filename": output_filename,
+                    "file_no": split["doc"].file_no,
+                    "template_path": template,
+                })
+            msg = f"已按标准文件逐份生成 {len(generated)} 份 COA"
+            skipped: list[str] = next(
+                (s["skipped_file_nos"] for s in splits if s.get("skipped_file_nos")), []
+            )
+            if skipped:
+                msg += f"；跳过无结果行的标准文件：{'、'.join(skipped)}"
+            return success_response(data=generated, message=msg)
+        except IntegrityError as exc:
+            if not is_serial_unique_violation(exc) or attempt == 2:
+                raise
+            await db.rollback()  # flush 失败后 session 已不可用，回滚后才能重查计数
+            await asyncio.sleep(0.1 * (attempt + 1))  # 等并发对手提交后再重算
+    raise HTTPException(status_code=500, detail="流水号重试次数用尽，请重新生成")
+
+
+# ─── 报告单记录 ───
+
+
+@router.get("/report/records", summary="报告单历史列表")
+async def list_reports(
+    product_name: str | None = Query(default=None),
+    batch_number: str | None = Query(default=None),
+    audit_status: str | None = Query(default=None, description="审核状态筛选：pending/approved/rejected"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> JSONResponse:
+    items, total = await list_report_records(
+        db, product_name=product_name, batch_number=batch_number,
+        page=page, page_size=page_size, audit_status=audit_status,
+    )
+    status_map = await _task_status_map(db, [it.test_task_id for it in items if it.test_task_id])
+    return paginated_response(
+        data=[
+            {
+                "id": str(it.id),
+                "inspection_record_id": str(it.inspection_record_id) if it.inspection_record_id else None,
+                "test_task_id": str(it.test_task_id) if it.test_task_id else None,
+                "template_path": it.template_path,
+                "product_name": it.product_name,
+                "batch_number": it.batch_number,
+                "serial_no": it.serial_no,
+                "task_status": status_map.get(it.test_task_id) if it.test_task_id else None,
+                "audit_status": it.audit_status,
+                "audit_comment": it.audit_comment,
+                "audited_at": it.audited_at.isoformat() if it.audited_at else None,
+                "file_path": it.file_path,
+                "file_size": it.file_size,
+                "created_at": it.created_at.isoformat() if it.created_at else None,
+            }
+            for it in items
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get("/report/records/{report_id}/download", summary="下载已生成的报告单")
+async def download_report(
+    report_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> Response:
+    report = await get_report_record(db, report_id)
+    if not report or not report.file_path:
+        raise HTTPException(status_code=404, detail="报告文件不存在")
+    fp = Path(report.file_path)
+    # MinIO 优先（容器重建后本地文件丢失时仍可下载），本地副本兜底
+    minio_data = quality_storage.read_report_from_minio(fp.name)
+    if minio_data:
+        return StreamingResponse(
+            BytesIO(minio_data),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{fp.name}"'},
+        )
+    if not fp.exists():
+        raise HTTPException(status_code=404, detail="报告文件已被清理")
+    return FileResponse(
+        str(fp),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=fp.name,
+    )
+
+
+@router.get("/report/records/{report_id}/preview-html", summary="报告单在线预览（服务端 docx 转 HTML）")
+async def preview_report_html(
+    report_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+) -> Response:
+    """预览不再让浏览器下载 docx 再转换：服务端用存量 mammoth 转 HTML，前端 iframe 直接渲染。"""
+    from starlette.concurrency import run_in_threadpool
+
+    report = await get_report_record(db, report_id)
+    if not report or not report.file_path:
+        raise HTTPException(status_code=404, detail="报告文件不存在")
+    fp = Path(report.file_path)
+    data = quality_storage.read_report_from_minio(fp.name)
+    if not data:
+        if not fp.exists():
+            raise HTTPException(status_code=404, detail="报告文件已被清理")
+        data = fp.read_bytes()
+    import mammoth
+
+    result = await run_in_threadpool(mammoth.convert_to_html, BytesIO(data))
+    return Response(content=result.value, media_type="text/html")
+
+@router.post("/report/records/{report_id}/audit", summary="报告单审核（比对原始证据后通过/退回）")
+async def audit_report_endpoint(
+    report_id: uuid.UUID,
+    payload: ReportAuditRequest = Body(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:report:audit")),
+) -> JSONResponse:
+    if payload.action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action 必须为 approve 或 reject")
+    report = await update_report_audit(
+        db, report_id,
+        audit_status="approved" if payload.action == "approve" else "rejected",
+        audited_by=user.id, comment=payload.comment,
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="报告单不存在")
+    return success_response(data={
+        "report_id": str(report.id),
+        "audit_status": report.audit_status,
+        "audited_at": report.audited_at.isoformat() if report.audited_at else None,
+    }, message="审核已通过" if payload.action == "approve" else "报告单已退回")
+
+@router.get("/report/records/{report_id}/consistency", summary="报告单一致性校验（解析值 vs 填报值、快照 vs 现行标准）")
+async def report_consistency_endpoint(
+    report_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:audit")),
+) -> JSONResponse:
+    """确定性机审：审核弹窗展示的两类一致性检查（仅提示，不阻断）。
+
+    A. 解析值 vs 填报值：任务行（source=parse）当前填值与解析原始值不一致。
+    B. 快照 vs 现行标准：任务快照与现行标准库的标准文本/限度不一致。
+    """
+    report = await get_report_record(db, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="报告单不存在")
+    if not report.test_task_id:
+        return success_response(data={"parsed_mismatches": [], "standard_drifts": []})
+
+    rows = await list_test_results(db, report.test_task_id)
+    parsed_mismatches: list[dict[str, Any]] = []
+    standard_drifts: list[dict[str, Any]] = []
+
+    for r in rows:
+        if r.standard_item_id:
+            item = await get_standard_item_by_id(db, r.standard_item_id, include_deleted=True)
+            if item is not None and (
+                item.standard_text != r.standard_text
+                or item.operator != r.operator
+                or item.limit_min != r.limit_min
+                or item.limit_max != r.limit_max
+            ):
+                standard_drifts.append({
+                    "item_name": r.item_name,
+                    "snapshot_text": r.standard_text,
+                    "current_text": item.standard_text,
+                })
+        if r.inspection_record_id and r.result_value is not None:
+            rec = await get_inspection_record(db, r.inspection_record_id)
+            if rec and rec.raw_data:
+                parsed = _find_parsed_value(rec.raw_data, r.item_name)
+                if parsed is not None and abs(parsed - r.result_value) > 1e-9:
+                    parsed_mismatches.append({
+                        "item_name": r.item_name,
+                        "report_value": r.result_value,
+                        "parsed_value": parsed,
+                    })
+
+    return success_response(data={
+        "parsed_mismatches": parsed_mismatches,
+        "standard_drifts": standard_drifts,
+    })
+
+
+def _find_parsed_value(raw_data: dict[str, Any], item_name: str) -> float | None:
+    """从解析原始数据按项目名找数值（兼容通用解析 components 与旧解析器结构）。"""
+    import re as _re
+
+    def norm(s: str) -> str:
+        return _re.sub(r"[\s.％%]", "", s).lower()
+
+    target = norm(item_name)
+    for c in raw_data.get("components") or []:
+        if isinstance(c, dict) and norm(str(c.get("name", ""))) == target:
+            v = c.get("report_value")
+            return float(v) if v is not None else None
+    report = raw_data.get("report") or raw_data
+    for field in ("vancomycin_b", "total_impurities"):
+        v = report.get(field)
+        if isinstance(v, dict) and norm(str(v.get("name", ""))) == target:
+            rv = v.get("rounded_first")
+            return float(rv) if rv is not None else None
+    for imp in report.get("impurity_results") or []:
+        if isinstance(imp, dict) and norm(str(imp.get("name", ""))) == target:
+            rv = imp.get("second_percent") or imp.get("first_percent")
+            return float(rv) if rv is not None else None
+    return None
+

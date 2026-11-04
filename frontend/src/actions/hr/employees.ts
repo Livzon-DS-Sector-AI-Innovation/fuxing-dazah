@@ -225,7 +225,7 @@ export async function fetchPositions(department?: string): Promise<PositionOptio
   return d.data || []
 }
 
-export async function createPosition(data: { department: string; name: string }) {
+export async function createPosition(data: { department: string; name: string; headcount?: number | null }) {
   return fetchHrApi('/hr/positions', {
     method: 'POST',
     body: JSON.stringify(data),
@@ -237,5 +237,15 @@ export async function deletePositionByName(name: string, department?: string) {
   return fetchHrApi(`/hr/positions/by-name/${encodeURIComponent(name)}?department=${encodeURIComponent(department ?? '')}`, {
     method: 'DELETE',
     errorMessage: '删除失败',
+  })
+}
+
+
+export async function updatePositionHeadcount(department: string, name: string, headcount: number | null): Promise<{ message: string }> {
+  return fetchHrApi(`/hr/positions/by-name/${encodeURIComponent(name)}?department=${encodeURIComponent(department ?? '')}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ headcount }),
+    errorMessage: '编制人数更新失败',
   })
 }

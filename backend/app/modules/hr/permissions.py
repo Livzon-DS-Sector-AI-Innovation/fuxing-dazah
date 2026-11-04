@@ -44,6 +44,8 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("hr:settings:manage", "管理系统设置", "hr", "settings", "manage"),
     # ── 岗位管理 ──
     PermissionDef("hr:position:read", "查看岗位管理", "hr", "position", "read"),
+    PermissionDef("hr:incident:read", "查看工伤/纠纷台账", "hr", "incident", "read"),
+    PermissionDef("hr:incident:manage", "维护工伤/纠纷台账", "hr", "incident", "manage"),
     PermissionDef("hr:position:manage", "管理岗位", "hr", "position", "manage"),
     # ── 内训师管理 ──
     PermissionDef("hr:trainer:read", "查看内训师", "hr", "trainer", "read"),

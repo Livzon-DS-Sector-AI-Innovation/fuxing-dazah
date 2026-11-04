@@ -9,7 +9,7 @@ from fastapi import Body, Depends, Form, HTTPException, Query, Response, UploadF
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -854,6 +854,229 @@ async def get_dashboard_stats(
         {"name": r[0], "value": r[1]} for r in dep_by_dept_rows
     ]
 
+    # ── 扩展指标：试用期/司龄/合同预警/留存/离职深度分析 ──
+    from datetime import timedelta as _td
+
+    from app.modules.hr.models import DepartureRecord as DepModel
+
+    today = date.today()
+
+    def _dep_scope_conds():
+        """离职记录数据范围：部门快照落在授权范围；unrestricted 返回 []。"""
+        if hr_scope.is_unrestricted:
+            return []
+        if hr_scope.data_scope == "self_only":
+            return [DepModel.name == ""]  # self_only 不看离职明细
+        return [DepModel.department.in_(hr_scope.scoped_departments)]
+
+    # 试用期人数
+    probation_count = (await session.execute(
+        select(func.count(EmpModel.id)).where(
+            *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.status == "试用期",
+        )
+    )).scalar() or 0
+
+    # 平均司龄（年，按入职日期动态计算）
+    avg_tenure = 0.0
+    hire_rows = (await session.execute(
+        select(EmpModel.hire_date).where(
+            *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.status == "在职", EmpModel.hire_date.is_not(None),
+        )
+    )).scalars().all()
+    if hire_rows:
+        avg_tenure = round(sum((today - h).days for h in hire_rows) / len(hire_rows) / 365, 1)
+
+    # 本月净增
+    net_growth = (new_hires_this_month or 0) - (departures_this_month or 0)
+
+    # 编制数（positions.headcount 合计，按数据范围部门）与编制达成率
+    from app.modules.hr.models import HrPosition
+
+    quota_q = select(func.coalesce(func.sum(HrPosition.headcount), 0)).where(
+        HrPosition.is_deleted == False, HrPosition.headcount.is_not(None)
+    )
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        quota_q = quota_q.where(HrPosition.department.in_(hr_scope.scoped_departments))
+    quota_total = int((await session.execute(quota_q)).scalar() or 0)
+    quota_rate = round(total_employees / quota_total * 100, 1) if quota_total else 0.0
+
+    # 工伤/劳动纠纷年度计数
+    from app.modules.hr.models import HrIncidentRecord
+
+    async def _async_incident_count(i_type: str) -> int:
+        q = select(func.count(HrIncidentRecord.id)).where(
+            HrIncidentRecord.is_deleted == False,
+            HrIncidentRecord.incident_type == i_type,
+            HrIncidentRecord.occurred_date.like(f"{current_year}%"),
+        )
+        if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+            q = q.where(HrIncidentRecord.department.in_(hr_scope.scoped_departments))
+        return int((await session.execute(q)).scalar() or 0)
+
+    work_injury_count = await _async_incident_count("work_injury")
+    labor_dispute_count = await _async_incident_count("labor_dispute")
+
+    # 绩效等级分布（按部门月度评估 final_score：优秀≥90/佳≥80/尚可≥70/差<70）
+    from app.modules.hr.models import MonthlyPerformanceEvaluation as PerfEval
+
+    perf_q = select(PerfEval.final_score, PerfEval.department).where(
+        PerfEval.is_deleted == False, PerfEval.final_score.is_not(None)
+    )
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        perf_q = perf_q.where(PerfEval.department.in_(hr_scope.scoped_departments))
+    perf_rows = (await session.execute(perf_q)).all()
+    perf_grades = {"优秀(≥90)": 0, "佳(≥80)": 0, "尚可(≥70)": 0, "差(<70)": 0}
+    for score, _dept in perf_rows:
+        s = float(score or 0)
+        if s >= 90:
+            perf_grades["优秀(≥90)"] += 1
+        elif s >= 80:
+            perf_grades["佳(≥80)"] += 1
+        elif s >= 70:
+            perf_grades["尚可(≥70)"] += 1
+        else:
+            perf_grades["差(<70)"] += 1
+    performance_grade_distribution = [{"name": k, "value": v} for k, v in perf_grades.items()]
+    underperforming_count = perf_grades["差(<70)"]
+
+    # 已完成绩效评估的部门数（有 final_score 的评估数，去重按评估记录计）
+    performance_submitted_count = len(perf_rows)
+
+    # 合同到期预警（30/60/90 天三档）
+    contract_expiry = []
+    for days, label in [(30, "30天内"), (60, "31-60天"), (90, "61-90天")]:
+        lo = today + _td(days=(0 if days == 30 else (30 if days == 60 else 61)))
+        hi = today + _td(days=days)
+        cnt = (await session.execute(
+            select(func.count(EmpModel.id)).where(
+                *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+                EmpModel.status == "在职",
+                EmpModel.contract_end_date >= lo,
+                EmpModel.contract_end_date <= hi,
+            )
+        )).scalar() or 0
+        contract_expiry.append({"name": label, "value": cnt})
+
+    # 离职类型分布（offboarding_type）
+    dep_type_rows = (await session.execute(
+        select(DepModel.offboarding_type, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
+        .group_by(DepModel.offboarding_type)
+    )).all()
+    departure_type_distribution = [
+        {"name": r[0] or "未填写", "value": r[1]} for r in dep_type_rows
+    ]
+    passive_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" not in r[0])
+    active_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" in r[0])
+    dep_total = active_departures + passive_departures
+    active_departure_rate = round(active_departures / dep_total * 100, 1) if dep_total else 0.0
+    passive_departure_rate = round(passive_departures / dep_total * 100, 1) if dep_total else 0.0
+
+    # 离职原因分布（JSON 列需投影为文本才能 GROUP BY；归一化 null/"null"/空 → 未填写）
+    from sqlalchemy import Text as SAText
+
+    reason_expr = func.cast(DepModel.offboarding_reason, SAText)
+    dep_reason_rows = (await session.execute(
+        select(reason_expr, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
+        .group_by(reason_expr)
+    )).all()
+    reason_map: dict[str, int] = {}
+    for raw, cnt in dep_reason_rows:
+        text = str(raw) if raw is not None else ""
+        text = text.strip().strip('"')
+        if text in ("", "null", "None"):
+            text = "未填写"
+        reason_map[text] = reason_map.get(text, 0) + int(cnt)
+    departure_reason_distribution = [
+        {"name": k, "value": v} for k, v in sorted(reason_map.items(), key=lambda x: -x[1])
+    ]
+
+    # 离职司龄分布（工作起始→离职日期，年）
+    dep_tenure_rows = (await session.execute(
+        select(DepModel.work_start_date, DepModel.offboarding_date)
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False,  # noqa: E712
+               DepModel.work_start_date.is_not(None), DepModel.offboarding_date.is_not(None))
+    )).all()
+    tenure_buckets = [("1年以内", 0, 1), ("1-3年", 1, 3), ("3-5年", 3, 5), ("5-10年", 5, 10), ("10年以上", 10, 99)]
+    tenure_counts = {label: 0 for label, _, _ in tenure_buckets}
+    for ws, off in dep_tenure_rows:
+        years = (off - ws).days / 365
+        for label, lo, hi in tenure_buckets:
+            if lo <= years < hi:
+                tenure_counts[label] += 1
+                break
+    departure_tenure_distribution = [{"name": k, "value": v} for k, v in tenure_counts.items()]
+
+    # 岗位离职 TOP10
+    dep_pos_rows = (await session.execute(
+        select(DepModel.position, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False)  # noqa: E712
+        .group_by(DepModel.position)
+        .order_by(func.count(DepModel.id).desc())
+        .limit(10)
+    )).all()
+    position_departure_top = [{"name": r[0] or "未填写", "value": r[1]} for r in dep_pos_rows]
+
+    # 各部门离职率（2026 离职人数 / 当前部门在职人数，%）
+    dept_headcount_rows = (await session.execute(
+        select(EmpModel.department, func.count(EmpModel.id))
+        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .group_by(EmpModel.department)
+    )).all()
+    dept_headcount = {r[0]: r[1] for r in dept_headcount_rows}
+    dept_dep_rate_rows = (await session.execute(
+        select(DepModel.department, func.count(DepModel.id))
+        .where(*_dep_scope_conds(), DepModel.is_deleted == False,  # noqa: E712
+               DepModel.offboarding_date >= date(current_year, 1, 1))
+        .group_by(DepModel.department)
+    )).all()
+    dept_departure_rate = []
+    for dept, cnt in dept_dep_rate_rows:
+        headcount = dept_headcount.get(dept, 0)
+        rate = round(cnt / headcount * 100, 1) if headcount else 0.0
+        dept_departure_rate.append({"name": dept or "未填写", "value": rate})
+
+    # 月度离职率（2026 每月离职 / 当前在职总数，%）
+    monthly_dep_rate = []
+    for m in range(1, 13):
+        lo = date(current_year, m, 1)
+        hi = date(current_year, m + 1, 1) if m < 12 else date(current_year + 1, 1, 1)
+        cnt = (await session.execute(
+            select(func.count(DepModel.id)).where(
+                *_dep_scope_conds(), DepModel.is_deleted == False,  # noqa: E712
+                DepModel.offboarding_date >= lo, DepModel.offboarding_date < hi,
+            )
+        )).scalar() or 0
+        monthly_dep_rate.append({
+            "month": f"{m}月",
+            "value": round(cnt / total_employees * 100, 2) if total_employees else 0.0,
+        })
+
+    # 新员工 3/6 个月留存率（入职满 N 个月仍在职 / 入职满 N 个月总数）
+    async def _retention(months: int) -> float:
+        boundary = today - _td(days=months * 30)
+        hired_rows = (await session.execute(
+            select(EmpModel.hire_date, EmpModel.departure_date).where(
+                *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
+                EmpModel.hire_date.is_not(None), EmpModel.hire_date <= boundary,
+            )
+        )).all()
+        if not hired_rows:
+            return 0.0
+        retained = sum(
+            1 for h, d in hired_rows
+            if d is None or (d - h).days >= months * 30
+        )
+        return round(retained / len(hired_rows) * 100, 1)
+
+    retention_distribution = [
+        {"name": "3个月留存率(%)", "value": await _retention(3)},
+        {"name": "6个月留存率(%)", "value": await _retention(6)},
+    ]
+
     # ── 在职员工平均年龄（从出生年份动态计算）──
     age_avg_result = (await session.execute(
         select(func.avg(current_year - EmpModel.birth_year)).where(
@@ -871,6 +1094,19 @@ async def get_dashboard_stats(
             "new_hires_this_month": new_hires_this_month,
             "departures_this_month": departures_this_month,
             "age_avg": age_avg,
+            "probation_count": probation_count,
+            "avg_tenure": avg_tenure,
+            "net_growth_this_month": net_growth,
+            "passive_departures": passive_departures,
+            "contract_expiry_90": sum(x["value"] for x in contract_expiry),
+            "quota_total": quota_total,
+            "quota_rate": quota_rate,
+            "work_injury_count": work_injury_count,
+            "labor_dispute_count": labor_dispute_count,
+            "underperforming_count": underperforming_count,
+            "performance_submitted_count": performance_submitted_count,
+            "active_departure_rate": active_departure_rate,
+            "passive_departure_rate": passive_departure_rate,
         },
         "education_distribution": education_distribution,
         "department_distribution": department_distribution,
@@ -890,7 +1126,16 @@ async def get_dashboard_stats(
             "contract_type": contract_type_distribution,
             "household_type": household_type_distribution,
             "tenure": tenure_distribution,
+            "departure_type": departure_type_distribution,
+            "departure_reason": departure_reason_distribution,
+            "departure_tenure": departure_tenure_distribution,
+            "dept_departure_rate": dept_departure_rate,
+            "retention": retention_distribution,
+            "performance_grade": performance_grade_distribution,
         },
+        "position_departure_top": position_departure_top,
+        "monthly_departure_rate": monthly_dep_rate,
+        "contract_expiry": contract_expiry,
     })
 
 
@@ -1876,6 +2121,7 @@ async def list_positions(
             "id": str(r.id),
             "department": r.department,
             "name": r.name,
+            "headcount": r.headcount,
             "categories": list(dict.fromkeys(pt_map.get((r.department, r.name), []))),
         }
         for r in rows
@@ -1886,6 +2132,11 @@ async def list_positions(
 class PositionCreate(BaseModel):
     department: str
     name: str
+    headcount: int | None = None
+
+
+class PositionHeadcountUpdate(BaseModel):
+    headcount: int | None = None
 
 
 @router.post("/positions", summary="新建职位")
@@ -1898,13 +2149,42 @@ async def create_position(
     hr_scope.ensure_dept_writable([payload.department])
     from app.modules.hr.models import HrPosition
 
-    pos = HrPosition(department=payload.department, name=payload.name)
+    pos = HrPosition(department=payload.department, name=payload.name, headcount=payload.headcount)
     session.add(pos)
     await session.flush()
     return success_response(
-        data={"id": str(pos.id), "department": pos.department, "name": pos.name},
+        data={"id": str(pos.id), "department": pos.department, "name": pos.name, "headcount": pos.headcount},
         message="职位创建成功",
         status_code=201,
+    )
+
+
+@router.put("/positions/by-name/{position_name}", summary="维护职位编制人数")
+async def update_position_headcount(
+    position_name: str,
+    payload: PositionHeadcountUpdate,
+    department: str = Query(..., description="部门名称"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """更新职位编制人数（人力看板编制达成率数据源）。"""
+    hr_scope.ensure_dept_writable([department])
+    from app.modules.hr.models import HrPosition
+
+    pos = (await session.execute(
+        select(HrPosition).where(
+            HrPosition.department == department,
+            HrPosition.name == position_name,
+            HrPosition.is_deleted == False,
+        )
+    )).scalar_one_or_none()
+    if not pos:
+        raise HTTPException(404, "职位不存在")
+    pos.headcount = payload.headcount
+    await session.flush()
+    return success_response(
+        data={"department": pos.department, "name": pos.name, "headcount": pos.headcount},
+        message="编制人数已更新",
     )
 
 
@@ -5869,3 +6149,120 @@ async def export_performance_report(
     )
 
 
+
+
+# ─── 工伤/劳动纠纷台账 ───
+
+
+class IncidentCreate(BaseModel):
+    incident_type: str = Field(..., description="work_injury 工伤 / labor_dispute 劳动纠纷")
+    employee_name: str | None = None
+    employee_number: str | None = None
+    department: str | None = None
+    occurred_date: str | None = None
+    description: str | None = None
+    status: str = "processing"
+    remark: str | None = None
+
+
+class IncidentUpdate(BaseModel):
+    employee_name: str | None = None
+    employee_number: str | None = None
+    department: str | None = None
+    occurred_date: str | None = None
+    description: str | None = None
+    status: str | None = None
+    remark: str | None = None
+
+
+@router.get("/incidents", summary="工伤/劳动纠纷台账列表")
+async def list_incidents(
+    incident_type: str | None = Query(None),
+    year: int | None = Query(None, description="按发生年份筛选"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    q = select(HrIncidentRecord).where(HrIncidentRecord.is_deleted == False)
+    if incident_type:
+        q = q.where(HrIncidentRecord.incident_type == incident_type)
+    if year:
+        q = q.where(HrIncidentRecord.occurred_date.like(f"{year}%"))
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        q = q.where(HrIncidentRecord.department.in_(hr_scope.scoped_departments))
+    rows = (await session.execute(q.order_by(HrIncidentRecord.occurred_date.desc()))).scalars().all()
+    return success_response(data=[{
+        "id": str(r.id),
+        "incident_type": r.incident_type,
+        "employee_name": r.employee_name,
+        "employee_number": r.employee_number,
+        "department": r.department,
+        "occurred_date": r.occurred_date,
+        "description": r.description,
+        "status": r.status,
+        "remark": r.remark,
+    } for r in rows])
+
+
+@router.post("/incidents", summary="新增工伤/劳动纠纷记录", status_code=201)
+async def create_incident(
+    payload: IncidentCreate,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    if payload.incident_type not in ("work_injury", "labor_dispute"):
+        raise HTTPException(400, "incident_type 仅支持 work_injury / labor_dispute")
+    if payload.department:
+        hr_scope.ensure_dept_writable([payload.department])
+    rec = HrIncidentRecord(**payload.model_dump())
+    session.add(rec)
+    await session.flush()
+    return success_response(data={"id": str(rec.id)}, message="记录已新增", status_code=201)
+
+
+@router.put("/incidents/{incident_id}", summary="更新工伤/劳动纠纷记录")
+async def update_incident(
+    incident_id: UUID,
+    payload: IncidentUpdate,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    rec = (await session.execute(
+        select(HrIncidentRecord).where(
+            HrIncidentRecord.id == incident_id, HrIncidentRecord.is_deleted == False
+        )
+    )).scalar_one_or_none()
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    data = payload.model_dump(exclude_none=True)
+    if data.get("department"):
+        hr_scope.ensure_dept_writable([data["department"]])
+    for key, value in data.items():
+        setattr(rec, key, value)
+    await session.flush()
+    return success_response(message="记录已更新")
+
+
+@router.delete("/incidents/{incident_id}", summary="删除工伤/劳动纠纷记录（软删除）")
+async def delete_incident(
+    incident_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.models import HrIncidentRecord
+
+    rec = (await session.execute(
+        select(HrIncidentRecord).where(
+            HrIncidentRecord.id == incident_id, HrIncidentRecord.is_deleted == False
+        )
+    )).scalar_one_or_none()
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    rec.is_deleted = True
+    await session.flush()
+    return success_response(message="已删除")

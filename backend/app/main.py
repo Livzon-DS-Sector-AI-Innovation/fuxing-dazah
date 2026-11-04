@@ -128,6 +128,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     safety_ws_task = asyncio.create_task(start_ws())
 
+    # ── 质量模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
+    from app.modules.quality.feishu.lifecycle import start_ws_task
+
+    start_ws_task()
+
     # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
     from app.modules.safety.feishu.catch_up import recover_unprocessed_records
 
@@ -184,6 +189,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
 
+    from app.modules.quality.scheduled import register_tasks as register_quality_tasks
+
+    register_quality_tasks(scheduler_registry)
+
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
         scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
@@ -207,6 +216,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 停止安全模块 WebSocket
     await stop_ws()
     safety_ws_task.cancel()
+
+    # 停止质量模块 WebSocket
+    from app.modules.quality.feishu.lifecycle import stop_ws_task
+
+    await stop_ws_task()
 
     # 停止定时任务调度引擎
     stop_scheduled_task_flag.set()
