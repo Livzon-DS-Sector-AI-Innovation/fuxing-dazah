@@ -15,6 +15,7 @@ from app.modules.quality.feishu.daily_push import (
 )
 from app.platform.scheduler import (
     ScheduleConfig,
+    SchedulerRegistry,
     ScheduleStrategy,
     TaskDefinition,
 )
@@ -68,3 +69,11 @@ MATERIAL_ALERT_TASK = TaskDefinition(
     coro=_push_material_alerts,
     module="quality",
 )
+
+
+def register_tasks(registry: SchedulerRegistry) -> None:
+    """聚合注册质量模块全部定时任务，main.py 一行挂载（仿 energy 模式）。"""
+    registry.register_task(MORNING_PUSH_TASK)
+    registry.register_task(AFTERNOON_REMIND_TASK)
+    registry.register_task(MATERIAL_ALERT_TASK)
+    registry.register_task(STOCKTAKE_REMIND_TASK)
