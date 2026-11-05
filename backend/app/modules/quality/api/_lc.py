@@ -88,6 +88,16 @@ async def upload_lc_excel(
                 ],
             )
             return result
+        # 回落旧解析器前先确认：识别出表号但无配置 → 明确报错，而非旧万古霉素解析器乱读
+        from app.modules.quality.lc_template_parser import detect_table_no, open_sheet
+
+        get, max_row, max_col = open_sheet(file_bytes, filename)
+        table_no = detect_table_no(get, max_row, max_col)
+        if table_no:
+            raise HTTPException(
+                status_code=422,
+                detail=f"表号 {table_no} 未配置计算规则，暂不支持解析（可在「报告模板→计算表取值配置」添加，或使用在线计算表）",
+            )
         result = await lc_report_service.parse_and_validate(file_bytes, filename, db=db)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"无法解析：{e}") from e

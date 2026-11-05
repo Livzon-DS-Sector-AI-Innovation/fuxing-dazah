@@ -175,17 +175,23 @@ def detect_table_no(get: CellGetter, max_row: int, max_col: int) -> str | None:
 
 
 def find_batch(get: CellGetter, max_row: int, max_col: int, label: str = "批号") -> str:
-    """定位「批号」标签：值在同格冒号后，或标签右侧一格。"""
+    """定位「批号」标签：值在同格冒号后、标签右侧一格，或标签与值分列较远（同行扫首个非标签值）。"""
     for r in range(1, min(15, max_row + 1)):
-        for c in range(1, min(8, max_col + 1)):
+        for c in range(1, max_col + 1):
             v = get(r, c)
             if v and isinstance(v, str) and label in v:
                 rest = v.replace(label, "").strip().lstrip("：:").strip()
                 if rest:
                     return rest
                 nxt = get(r, c + 1)
-                if nxt is not None and str(nxt).strip():
+                if nxt is not None and str(nxt).strip() and label not in str(nxt):
                     return str(nxt).strip()
+                for cc in range(1, max_col + 1):
+                    if cc == c:
+                        continue
+                    w = get(r, cc)
+                    if w is not None and str(w).strip() and label not in str(w):
+                        return str(w).strip()
     return ""
 
 
