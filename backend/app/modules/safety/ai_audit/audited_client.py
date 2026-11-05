@@ -130,19 +130,17 @@ def _vision_json_mode_enabled() -> bool:
         return False
 
 
-# 视觉 json mode 400 回退判定：只有「端点不认识 response_format/json_object」类
-# 报错才去参重试；图片超限等其它 400 不能白烧一次调用、也不能掩盖真实错误。
-_RESPONSE_FORMAT_UNSUPPORTED_HINTS = (
-    "response_format",
-    "json_object",
-    "unsupported",
-    "not support",
-    "invalidparameter",
-)
+# 视觉 json mode 400 回退判定（A2-400 收紧）：响应体必须**点名**
+# response_format / json_object 才视为「端点不认识该参数」，才去参重试一次；
+# 通用参数错误（如 DashScope {"code":"InvalidParameter"} 图片超限/格式非法）
+# 不能白烧一次调用、也不能掩盖真实错误。不要退化成 unsupported / invalidparameter
+# 单关键词：历史单关键词匹配方向不一致（该触发的可能不触发、不该触发的反而触发），
+# 当前语义以「响应体是否点名 response_format/json_object」为准。
+_RESPONSE_FORMAT_UNSUPPORTED_HINTS = ("response_format", "json_object")
 
 
 def _response_format_unsupported(resp: Any) -> bool:
-    """400 响应是否指向 response_format 不受支持（决定是否去参重试）。"""
+    """400 响应体是否点名 response_format/json_object（决定是否去参重试）。"""
     try:
         body = str(getattr(resp, "text", "") or "").lower()
     except Exception:  # noqa: BLE001 — 读响应体失败按「不支持」处理会误伤，故按 False
@@ -624,6 +622,13 @@ class AuditedAIService(AIService):
         A1（2026-11-05）：解析链先做本地修复（去围栏/取对象/删尾逗号/全角引号），
         可修复样本零额外调用；修复后仍失败才**带错误反馈**重试一次，替代历史
         「同 prompt 盲重发」。
+
+        调用次数上界（T4 口径，勿写成无条件 ≤4）：默认 json mode 关时，
+        插件严格校验失败重试 1 次 × 本方法解析失败带反馈重试 1 次 = **最坏
+        4 次 AI 调用（4 次 POST）/条/轮**；若 `SAFETY_AI_VISION_JSON_MODE_ENABLED`
+        开启且每次命中 400 response_format 回退，每层再 ×2 = 最坏 **8 次 POST**
+        （其中 4 次为 400、不烧 token）。审计可用 `parse_attempts`（客户端解析
+        重试）与 `vision_json_mode_fallback`（400 回退）反推实际调用次数。
         """
         raw = await self.chat_vision(
             text_prompt,
@@ -861,6 +866,13 @@ async def _write_audit(
                    确保时间戳反映调用时刻而非审计落库时刻；不传则走 DB server_default。
         audit_extra: 仅本次调用行的额外维度（如视觉 json mode 标记），
                      与 ctx.extra 合并后落库，不污染共享审计上下文。
+
+    Note:
+        ``ctx.extra`` 与 ``audit_extra`` 都为空时本行 ``extra`` 写 ``None``；
+        SQLAlchemy JSONB 默认 ``none_as_null=False``，落库为 **JSON null
+        （``'null'::jsonb``）而非 SQL NULL** —— 这是历史语义，不要改成 SQL NULL
+        （会改变已存 4045 行与前端展示口径）。解析质量回写
+        ``_mark_parse_outcome`` 的合并式已用 ``jsonb_typeof`` 守护此类行。
     """
     # 每次写入前重置：解析质量维度只回写「本次调用」对应的审计行
     _last_audit_row_id.set(None)
@@ -943,8 +955,18 @@ async def _mark_parse_outcome(
 ) -> None:
     """把 JSON 质量维度合并写回最近一次审计行的 ``extra``（A1/A7）。
 
-    独立 session + JSONB 合并（``coalesce(extra,'{}') || patch``），任何异常只
-    记日志、绝不影响业务；无审计行（如测试 fake 掉 ``_write_audit``）时 no-op。
+    独立 session + JSONB 合并，任何异常只记日志、绝不影响业务；无审计行
+    （如测试 fake 掉 ``_write_audit``）时 no-op。
+
+    合并式（B0）：``(CASE WHEN jsonb_typeof(extra)='object' THEN extra
+    ELSE cast({}, JSONB) END) || patch``。不能直接写
+    ``coalesce(extra, cast({}, JSONB))``：SQLAlchemy JSONB 默认
+    ``none_as_null=False``，``_write_audit`` 对无 extra 的 scope 落的是
+    **JSON null（``'null'::jsonb``）而非 SQL NULL**，coalesce 永不取兜底，
+    ``'null'::jsonb || patch`` 会得到 ``[null, {...}]`` 数组（历史 BLOCK：
+    ``AICallAuditDetail.extra: dict|None`` 校验失败 → 详情接口 500）。
+    CASE 对 SQL NULL / JSON null / 数组在合并前统一回落空对象，再覆盖 patch；
+    对象起始值保留原有键。
     """
     row_id = _last_audit_row_id.get()
     if row_id is None:
@@ -956,15 +978,19 @@ async def _mark_parse_outcome(
         "parse_attempts": int(parse_attempts),
     }
     try:
-        from sqlalchemy import cast, func, update
+        from sqlalchemy import case, cast, func, update
         from sqlalchemy.dialects.postgresql import JSONB
 
         from app.core.database import async_session_factory
         from app.modules.safety.ai_audit.models import AICallAudit
 
-        merged = func.coalesce(AICallAudit.extra, cast("{}", JSONB)).op("||")(
-            cast(patch, JSONB)
+        # B0：JSON null / SQL NULL / 数组都先回落空对象，避免 'null'::jsonb || patch
+        # 变成 [null, {...}] 数组；对象起始值保留原有键。
+        base = case(
+            (func.jsonb_typeof(AICallAudit.extra) == "object", AICallAudit.extra),
+            else_=cast({}, JSONB),
         )
+        merged = base.op("||")(cast(patch, JSONB))
         stmt = (
             update(AICallAudit)
             .where(AICallAudit.id == row_id)

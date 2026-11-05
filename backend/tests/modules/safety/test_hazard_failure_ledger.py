@@ -74,6 +74,14 @@ class FakeRedis:
             return {}
         return dict(bucket)
 
+    async def hget(self, key: str, field: str) -> Any:
+        self._check()
+        self.calls.append(f"hget:{key}:{field}")
+        bucket = self.store.get(key)
+        if not isinstance(bucket, dict):
+            return None
+        return bucket.get(field)
+
     async def hdel(self, key: str, field: str) -> Any:
         self._check()
         bucket = self.store.get(key)
@@ -321,3 +329,87 @@ async def test_should_emit_infra_alert_fail_open() -> None:
     assert (
         await failure_ledger.should_emit_infra_alert(1, redis=redis)
     ) is True
+
+
+# ═══════════════════════════════════════════════════════════════
+# T03 · F5 死信 fail-safe：attempts 过期但死信 hash 仍在 → 不重试
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_retry_status_ok_backoff_dead() -> None:
+    """retry_status 三态：未见记录 ok；退避中 backoff；到点 ok；死信 dead。"""
+    redis = FakeRedis()
+
+    assert await failure_ledger.retry_status("rec-1", 10, redis=redis) == "ok"
+
+    await failure_ledger.record_failure("rec-1", 10, "api_error", "超时", redis=redis)
+    assert await failure_ledger.retry_status("rec-1", 10, redis=redis) == "backoff"
+    assert await failure_ledger.retry_status("rec-1", 11, redis=redis) == "ok"
+
+    for round_seq in (11, 14, 23, 32):
+        await failure_ledger.record_failure(
+            "rec-1", round_seq, "api_error", "超时", redis=redis
+        )
+    assert await failure_ledger.retry_status("rec-1", 999, redis=redis) == "dead"
+
+
+async def test_dead_hash_blocks_retry_after_attempts_key_expired() -> None:
+    """F5：attempts key 过期（7 天 TTL 到）但死信 hash 仍在 → 不复活重试。"""
+    redis = FakeRedis()
+    for round_seq in (1, 2, 5, 14, 23):
+        await failure_ledger.record_failure(
+            "rec-dead", round_seq, "json_invalid", "持续畸形输出", redis=redis
+        )
+    assert len(await failure_ledger.list_dead_letters(redis=redis)) == 1
+
+    # 模拟 attempts key 的 7 天 TTL 到期；死信 hash 因后续新增死信刷新而仍存在
+    redis.store.pop(failure_ledger.attempts_key("rec-dead"), None)
+    assert redis.store.get(failure_ledger.attempts_key("rec-dead")) is None
+
+    assert await failure_ledger.retry_status("rec-dead", 999, redis=redis) == "dead"
+    assert await failure_ledger.should_retry("rec-dead", 999, redis=redis) is False
+
+
+async def test_record_success_restores_retry_after_cross_ttl_dead() -> None:
+    """record_success 同时 DEL attempts + HDEL dead hash（跨 TTL 死信也不复活）。"""
+    redis = FakeRedis()
+    for round_seq in (1, 2, 5, 14, 23):
+        await failure_ledger.record_failure(
+            "rec-recover", round_seq, "api_error", "boom", redis=redis
+        )
+    redis.store.pop(failure_ledger.attempts_key("rec-recover"), None)
+    assert await failure_ledger.should_retry("rec-recover", 999, redis=redis) is False
+
+    await failure_ledger.record_success("rec-recover", redis=redis)
+
+    assert await failure_ledger.retry_status("rec-recover", 1, redis=redis) == "ok"
+    assert await failure_ledger.should_retry("rec-recover", 999, redis=redis) is True
+    assert await failure_ledger.list_dead_letters(redis=redis) == []
+    assert (
+        await redis.hget(failure_ledger.DEAD_LETTERS_KEY, "rec-recover") is None
+    )
+
+
+async def test_dead_hash_missing_falls_back_to_attempts_state() -> None:
+    """死信 hash 缺失时按 attempts 状态判定（未死信记录不受 F5 影响）。"""
+    redis = FakeRedis()
+    await failure_ledger.record_failure("rec-live", 1, "api_error", "boom", redis=redis)
+
+    assert (
+        await redis.hget(failure_ledger.DEAD_LETTERS_KEY, "rec-live") is None
+    )
+    assert await failure_ledger.retry_status("rec-live", 1, redis=redis) == "backoff"
+    assert await failure_ledger.retry_status("rec-live", 2, redis=redis) == "ok"
+
+    # 两者都缺失 → 首次处理，可重试
+    redis.store.pop(failure_ledger.attempts_key("rec-live"), None)
+    assert await failure_ledger.retry_status("rec-live", 1, redis=redis) == "ok"
+
+
+async def test_retry_status_fail_open_on_redis_error() -> None:
+    """Redis 异常 fail-open：retry_status="ok"、should_retry=True。"""
+    redis = FakeRedis()
+    redis.fail = True
+
+    assert await failure_ledger.retry_status("rec-x", 1, redis=redis) == "ok"
+    assert await failure_ledger.should_retry("rec-x", 1, redis=redis) is True

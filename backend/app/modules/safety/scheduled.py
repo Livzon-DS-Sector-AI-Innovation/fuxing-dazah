@@ -158,7 +158,11 @@ async def _hazard_single_round(
     try:
         result = await round_fn()
         failed = getattr(result, "failed", 0)
-        if failed == 0:
+        # 只按「记录级失败」累计连续失败轮数：基础设施失败（RAG/AI 不可用）
+        # 不转人工也不该触发连续失败告警（另有 infra 去重告警覆盖）。
+        # ②③④⑤ 老结果类型无 non_infra_failed → 回退 failed（原语义不变）。
+        non_infra_failed = getattr(result, "non_infra_failed", failed)
+        if non_infra_failed == 0:
             _CONSECUTIVE_FAILURES[key] = 0
             return
         _CONSECUTIVE_FAILURES[key] = _CONSECUTIVE_FAILURES.get(key, 0) + 1

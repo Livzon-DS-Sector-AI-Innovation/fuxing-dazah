@@ -526,7 +526,7 @@ async def test_round_passes_round_id_to_identify_one(
     monkeypatch.setattr(
         bitable_repo,
         "search_pending_ai",
-        lambda client, *, limit=None: _async_list(
+        lambda client, *, limit=None, keep=None: _async_list(
             [_raw("rec_1", "HZ-20261105-001"), _raw("rec_2", "HZ-20261105-002")]
         ),
     )

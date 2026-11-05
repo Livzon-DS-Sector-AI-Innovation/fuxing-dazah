@@ -728,7 +728,11 @@ async def _wire_round(
     *,
     records: list[dict[str, Any]],
 ) -> None:
-    async def fake_search(client: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+    async def fake_search(
+        client: Any, *, limit: int | None = None, keep: Any = None
+    ) -> list[dict[str, Any]]:
+        # 本文件只测失败治理/告警语义：取数桩忽略 keep（F2 预过滤由
+        # test_hazard_queue_starvation.py 用真实 search_pending_ai 覆盖）。
         return list(records)
 
     monkeypatch.setattr(bitable_repo, "search_pending_ai", fake_search)
@@ -1091,13 +1095,17 @@ class TestRunRoundInfraFailures:
     async def test_infra_alert_dedup_by_redis_helper(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """RAG 失败告警：达到阈值且去重助手放行才通知，同窗口内只报一次。"""
+        """RAG 失败告警：达到阈值且去重助手放行才通知，同窗口内只报一次。
+
+        R1-3 对齐：RAG infra 样本用 ``retrieval_degraded``（``no_chunks`` 已改
+        记录级，见 ``test_no_chunks_is_record_level_not_infra``）。
+        """
         env = _make_env()
         monkeypatch.setattr(hazard_config, "alert_min_failures", lambda: 1)
         env.ledger.infra_alert_results = [True, False]  # 第 1 轮放行、第 2 轮窗口内去重
 
         async def rag_down(view: Any) -> dict[str, Any]:
-            raise QualityGateError("no_chunks", "RAG 零召回")
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
 
         env.identify_impl = rag_down
         await _wire_round(monkeypatch, env, records=[_raw_record("rec-1")])
@@ -1107,10 +1115,40 @@ class TestRunRoundInfraFailures:
 
         assert len(env.notify_failures) == 1
         assert "RAG 基础设施失败" in env.notify_failures[0]["error"]
-        assert "no_chunks=1" in env.notify_failures[0]["error"]
+        assert "retrieval_degraded=1" in env.notify_failures[0]["error"]
         assert env.ledger.infra_alert_calls == [(7, 1800), (7, 1800)]
         # 不进失败账本
         assert env.ledger.failure_calls == []
+
+    async def test_no_chunks_is_record_level_not_infra(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R1-3：no_chunks（数据性零召回）属记录级失败，计 attempts、不发 infra 告警。
+
+        与 ``retrieval_degraded``（RAG 不可用）区分：前者收敛到人工，后者免死信。
+        """
+        env = _make_env()
+        monkeypatch.setattr(hazard_config, "alert_min_failures", lambda: 1)
+
+        async def zero_chunks(view: Any) -> dict[str, Any]:
+            raise QualityGateError("no_chunks", "RAG 零召回")
+
+        env.identify_impl = zero_chunks
+        await _wire_round(monkeypatch, env, records=[_raw_record("rec-1")])
+
+        result = await ai_analysis.run_ai_analysis_round(notify=True)
+
+        # 记录级：调用 record_failure（计 attempts），不是基础设施失败
+        assert len(env.ledger.failure_calls) == 1
+        assert env.ledger.failure_calls[0][2] == "no_chunks"
+        assert result.failed == 1
+        assert result.infra_failed == 0
+        assert result.non_infra_failed == 1
+        # 不发 RAG infra 去重告警；走原「新增失败」告警通道
+        assert env.ledger.infra_alert_calls == []
+        assert len(env.notify_failures) == 1
+        assert "no_chunks=1" in env.notify_failures[0]["error"]
+        assert "RAG 基础设施失败" not in env.notify_failures[0]["error"]
 
     async def test_infra_alert_below_threshold_silent(
         self, monkeypatch: pytest.MonkeyPatch

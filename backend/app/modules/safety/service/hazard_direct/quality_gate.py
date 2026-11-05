@@ -4,9 +4,12 @@
 ``ai_analysis`` 统一转为「本条失败、不写任何字段、保持 AI 分类为空」：
 
 1. **RAG 预检（调 AI 之前）** —— ``ensure_knowledge``：
-   - ``context is None`` 或 ``degradation != "ragplus"`` → ``retrieval_degraded``
+   - ``context is None`` 或 ``degradation`` 不在「允许集合」→ ``retrieval_degraded``
    - ``chunks == 0`` → ``no_chunks``
    命中即失败：不创建 AI 客户端、不调 AI、不下载附件。
+   **允许集合是有意安全阀**（随检索内核开关联动，见 ``_allowed_degradations``）：
+   ``ragplus_search_enabled()`` 开 → ``{ragplus}``；关 → ``{full, llm_expanded}``
+   （避免 ragplus 关闭时健康的本地 hybrid 检索被误拒）。
 
 2. **输出质量闸门（写回之前）** —— ``ensure_output``：
    - 判定依据为空 → ``empty_basis``

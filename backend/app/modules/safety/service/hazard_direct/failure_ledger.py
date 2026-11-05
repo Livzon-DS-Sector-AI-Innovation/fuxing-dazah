@@ -40,8 +40,11 @@ TTL_SECONDS = 7 * 24 * 3600
 KEY_PREFIX = "safety:hazard:ai:attempts"
 DEAD_LETTERS_KEY = "safety:hazard:ai:dead_letters"
 ROUND_SEQ_KEY = "safety:hazard:ai:round_seq"
-# RAG 基础设施失败（retrieval_degraded/no_chunks）告警去重 key（SET NX EX）
+# RAG 基础设施失败（retrieval_degraded）告警去重 key（SET NX EX）
 INFRA_ALERT_KEY = "safety:hazard:ai:infra_alert_at"
+# AI 基础设施失败（欠费/鉴权/服务端/超时/连接/配置）告警独立去重 key：
+# 与 RAG infra 互不吞并，两路故障可各自告警一次（F1-3）。
+AI_INFRA_ALERT_KEY = "safety:hazard:ai:ai_infra_alert_at"
 
 
 class RedisLike(Protocol):
@@ -60,6 +63,8 @@ class RedisLike(Protocol):
     async def hset(self, key: str, field: str, value: str) -> Any: ...
 
     async def hgetall(self, key: str) -> dict[str, str]: ...
+
+    async def hget(self, key: str, field: str) -> Any: ...
 
     async def hdel(self, key: str, field: str) -> Any: ...
 
@@ -125,31 +130,52 @@ async def next_round_seq(redis: RedisLike | None = None) -> int:
         return int(time.time())
 
 
+async def retry_status(
+    record_id: str, round_seq: int, *, redis: RedisLike | None = None
+) -> str:
+    """该记录本轮可执行状态：``"ok"`` / ``"backoff"`` / ``"dead"``。
+
+    - attempts key 存在：``dead`` → ``"dead"``；未到 ``next_round`` → ``"backoff"``；
+      到点/无退避字段 → ``"ok"``；
+    - attempts key 缺失（首次处理 / 7 天 TTL 到期 / 人工清除）→ **补查死信
+      hash**：命中 → ``"dead"``，否则 ``"ok"``（F5：防「attempts 过期但死信
+      hash 因后续新增死信刷新而仍存在」时死信复活重复烧 AI）；
+    - Redis 异常 fail-open ``"ok"``（绝不阻塞识别主流程）。
+    """
+    client = _resolve(redis)
+    try:
+        state = _decode(await client.get(attempts_key(record_id)))
+        if state is not None:
+            if state.get("dead"):
+                return "dead"
+            next_round = state.get("next_round")
+            if not isinstance(next_round, int):
+                return "ok"
+            return "ok" if round_seq >= next_round else "backoff"
+        # F5：attempts 状态缺失时补查死信 hash（跨 TTL 死信 fail-safe）
+        dead_marker = await client.hget(DEAD_LETTERS_KEY, record_id)
+        return "dead" if dead_marker else "ok"
+    except Exception:
+        logger.warning(
+            "失败账本读取失败，fail-open 视为可重试: record_id=%s",
+            record_id,
+            exc_info=True,
+        )
+        return "ok"
+
+
 async def should_retry(
     record_id: str, round_seq: int, *, redis: RedisLike | None = None
 ) -> bool:
     """该记录本轮是否应处理（到点重试 / 首次处理 / 未死信）。
 
-    ``attempts`` key 不存在 = 可重试（首次处理，或该记录的状态已整体过期）。
-    状态 TTL（attempts key 与死信索引同为 7 天）到期后重新计数属**刻意策略**：
-    超过 7 天没有新失败的人记录不应被永久退避，给一次重新尝试的机会。
+    行为委托 :func:`retry_status`（``"ok"`` 才处理），含 F5 跨 TTL 死信
+    fail-safe；Redis 异常时 fail-open 返回 True。
+
+    attempts key 与死信 hash 均过期（7 天无任何新失败）后重新计数属**刻意
+    策略**：长期无失败的人记录给一次重新尝试的机会。
     """
-    client = _resolve(redis)
-    try:
-        state = _decode(await client.get(attempts_key(record_id)))
-    except Exception:
-        logger.warning(
-            "失败账本读取失败，fail-open 允许重试: record_id=%s", record_id, exc_info=True
-        )
-        return True
-    if state is None:
-        return True
-    if state.get("dead"):
-        return False
-    next_round = state.get("next_round")
-    if not isinstance(next_round, int):
-        return True
-    return round_seq >= next_round
+    return (await retry_status(record_id, round_seq, redis=redis)) == "ok"
 
 
 async def record_failure(
@@ -279,22 +305,27 @@ async def should_emit_infra_alert(
     interval_seconds: int = 1800,
     *,
     redis: RedisLike | None = None,
+    key: str = INFRA_ALERT_KEY,
 ) -> bool:
-    """RAG 基础设施失败告警去重（SET NX EX，默认 30 分钟窗口）。
+    """基础设施失败告警去重（SET NX EX，默认 30 分钟窗口）。
 
-    retrieval_degraded / no_chunks 属「基础设施不可用」而非记录自身失败：
-    不累计 attempts、不进死信；告警也只在窗口内报一次，避免 RAG 降级期间
-    每轮刷屏。返回 True = 本轮应发送告警（首次 / 窗口已过，或 Redis
-    异常时 fail-open）；False = 窗口内已告警过。
+    ``retrieval_degraded`` / AI 端点基础设施失败属「基础设施不可用」而非记录
+    自身失败：不累计 attempts、不进死信；告警也只在窗口内报一次，避免故障
+    期间每轮刷屏。``key`` 区分两路告警：RAG 用 ``INFRA_ALERT_KEY``，AI 用
+    独立的 ``AI_INFRA_ALERT_KEY``（两路互不吞并）。返回 True = 本轮应发送
+    告警（首次 / 窗口已过，或 Redis 异常时 fail-open）；False = 窗口内已告警过。
+
+    注：``no_chunks`` 属数据性零召回（R1-3），已改为记录级（计 attempts/死信），
+    不再走本去重告警。
     """
     client = _resolve(redis)
     ttl = max(1, int(interval_seconds))
     try:
-        acquired = await client.set(INFRA_ALERT_KEY, str(round_seq), ex=ttl, nx=True)
+        acquired = await client.set(key, str(round_seq), ex=ttl, nx=True)
         return bool(acquired)
     except Exception:
         logger.warning(
-            "RAG 基础设施告警去重失败，fail-open 允许告警", exc_info=True
+            "基础设施告警去重失败，fail-open 允许告警: key=%s", key, exc_info=True
         )
         return True
 

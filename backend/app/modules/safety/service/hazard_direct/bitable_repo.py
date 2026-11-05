@@ -19,7 +19,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -327,15 +327,33 @@ def to_view(record: dict[str, Any]) -> HazardView:
 
 
 async def search_pending_ai(
-    client: SafetyBitableClient, *, limit: int | None = None
+    client: SafetyBitableClient,
+    *,
+    limit: int | None = None,
+    keep: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
 ) -> list[dict[str, Any]]:
-    """① 待 AI 识别记录（隐患分类（AI）为空）。"""
+    """① 待 AI 识别记录（隐患分类（AI）为空）。
+
+    ``keep`` 可选异步谓词（F2 队列饥饿修复）：全量取数后按记录顺序逐条判定，
+    命中即收集，**凑满 ``limit or config.batch_limit()`` 条即停**——死信/退避
+    记录不占处理窗口（改造前先按 batch_limit 截断再过滤，死信 ≥ batch_limit
+    时新记录永久饥饿）。``keep is None`` → 原切片行为（向后兼容其它调用方）。
+    """
     records = await client.list_all_records(
         filter_info=_and(COND_AI_PENDING),
         page_size=500,
         strict=True,
     )
-    return records[: (limit or config.batch_limit())]
+    capacity = limit or config.batch_limit()
+    if keep is None:
+        return records[:capacity]
+    selected: list[dict[str, Any]] = []
+    for record in records:
+        if await keep(record):
+            selected.append(record)
+            if len(selected) >= capacity:
+                break
+    return selected
 
 
 async def search_pending_review(

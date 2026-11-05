@@ -24,6 +24,16 @@ class RoundResult:
     deferred: int = 0
     # 失败明细：{"record_id", "category", "reason"}（category 见 spec 失败分类）
     failures: list[dict[str, str]] = field(default_factory=list)
+    # 基础设施失败（RAG 不可用 / AI 端点欠费/鉴权/超时/配置等）：不计 attempts、
+    # 不进死信；failed 维持全量（= infra_failed + non_infra_failed）。
+    infra_failed: int = 0
+    # 基础设施失败明细：{"record_id", "category", "reason"}，供调度/告警按类聚合
+    infra_failures: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def non_infra_failed(self) -> int:
+        """记录级失败数（用于调度器「连续失败轮数」累计，infra-only 轮不计）。"""
+        return max(0, self.failed - self.infra_failed)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -33,4 +43,6 @@ class RoundResult:
             "failed": self.failed,
             "deferred": self.deferred,
             "failures": self.failures,
+            "infra_failed": self.infra_failed,
+            "non_infra_failed": self.non_infra_failed,
         }

@@ -18,6 +18,19 @@ A5 失败治理（2026-11-05）：
 - 每轮只处理「到点该重试」的记录，未到点/已死信计入 deferred，不烧 AI；
 - 告警只统计本轮**新增失败**与新死信，不再每轮重复刷同一批失败。
 
+F1 基础设施失败免死信化（2026-11-05）：
+- AI 端点欠费/鉴权/服务端/超时/连接/配置异常与 RAG 不可用同语义：**不计
+  attempts、不进死信、不占退避**（故障恢复后记录立即可重试，不再等 7 天 TTL）；
+- ``RoundResult`` 区分 ``infra_failed`` / ``non_infra_failed``，调度器只按非
+  infra 失败累计连续失败轮数；
+- 告警分路去重：RAG infra 用 ``INFRA_ALERT_KEY``、AI infra 用独立
+  ``AI_INFRA_ALERT_KEY``，均 30 分钟一次；
+- 失败分类优先读插件结构化 ``IdentificationError.category``，中文子串仅兜底。
+
+F2 队列饥饿修复（2026-11-05）：
+- 取数改为「全量取 + 逐条预过滤」：死信/退避记录不占 ``batch_limit`` 窗口，
+  仅可执行记录进入本轮处理；死信 ≥ 窗口时输出高水位 warning。
+
 编号：若「隐患编号」为空或以 ERROR: 开头 → 重新分配 HZ-YYYYMMDD-NNN 并覆盖。
 """
 
@@ -36,6 +49,10 @@ from app.modules.safety.service.hazard_direct import (
     quality_gate,
 )
 from app.modules.safety.service.hazard_direct.alert import notify_admin, notify_failures
+from app.modules.safety.service.hazard_direct.failure_ledger import (
+    AI_INFRA_ALERT_KEY,
+    DEAD_LETTERS_KEY,
+)
 from app.modules.safety.service.hazard_direct.round_result import RoundResult
 
 if TYPE_CHECKING:
@@ -71,7 +88,24 @@ class _WritebackError(Exception):
 
 # RAG 基础设施失败分类：属「知识库/RAG 不可用」而非记录自身失败。
 # 不累计 attempts、不进死信 —— RAG 恢复后记录仍在轮询队列、无退避可直接重试。
-_INFRA_FAILURE_CATEGORIES = frozenset({quality_gate.RETRIEVAL_DEGRADED, quality_gate.NO_CHUNKS})
+# 注：no_chunks 属数据性零召回（R1-3），按记录级失败计 attempts/死信，不在此集合。
+RAG_INFRA_CATEGORIES = frozenset({quality_gate.RETRIEVAL_DEGRADED})
+
+# AI 基础设施失败分类：AI 端点欠费/鉴权/服务端/超时/连接/配置异常。
+# 与 RAG infra 同语义：**不计 attempts、不进死信、不占退避**（F1）。
+AI_INFRA_CATEGORIES = frozenset(
+    {
+        "api_auth",
+        "api_quota",
+        "api_server",
+        "api_timeout",
+        "api_connect",
+        "api_config",
+    }
+)
+
+# 全部基础设施失败分类：不累计 attempts / 不进死信 / 不占退避
+_INFRA_FAILURE_CATEGORIES = AI_INFRA_CATEGORIES | RAG_INFRA_CATEGORIES
 
 
 async def _load_knowledge_context(
@@ -208,26 +242,93 @@ async def _identify_one(
     return result
 
 
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """异常链展平（``__cause__`` / ``__context__``，防环）。"""
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _infra_category_from_exception(exc: BaseException) -> str | None:
+    """单个异常节点 → AI 基础设施失败分类（非基础设施返回 None）。
+
+    精确类型优先：httpx 状态码/超时/连接；配置类看安全模块的
+    ``ScenarioDisabledError``（场景熔断叶子异常，**只继承 Exception、不是
+    RuntimeError**，由 ``ai_audit.audited_client`` 在调用前抛出）与消息含
+    「未配置」/「配置」/``SAFETY_AI_`` 的 ``RuntimeError``（中文子串仅兜底，
+    spec §F1）。
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (401, 403):
+            return "api_auth"
+        if status in (402, 429):
+            return "api_quota"
+        if 500 <= status <= 599:
+            return "api_server"
+        return None
+    if isinstance(exc, httpx.TimeoutException):
+        return "api_timeout"
+    if isinstance(exc, httpx.ConnectError):
+        return "api_connect"
+
+    # 延迟 import：安全模块 ai_config.exceptions 是叶子模块（零业务 import），
+    # ① 链路实际抛出的就是它（场景熔断在 ai_audit.audited_client 调用前拦截）
+    from app.modules.safety.ai_config.exceptions import ScenarioDisabledError
+
+    if isinstance(exc, ScenarioDisabledError):
+        return "api_config"
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        if "未配置" in message or "配置" in message or "SAFETY_AI_" in message:
+            return "api_config"
+    return None
+
+
 def _categorize_failure(exc: BaseException) -> str:
-    """异常 → 失败分类（spec A5/A7 失败分类表）。"""
+    """异常 → 失败分类（spec §F1 / F11，优先级从高到低）。
+
+    1. ``QualityGateError`` → 自带 category；
+    2. ``_WritebackError`` → ``writeback_error``；
+    3. ``IdentificationError.category`` 非空 → **结构化优先**（F11）；
+    4. 异常链基础设施失败（httpx / ScenarioDisabled / 配置类 RuntimeError）；
+    5. 链上 ``AIOutputError`` → ``json_invalid``（兼容未包 category 的旧路径）；
+    6. ``IdentificationError`` 中文子串兜底（``validation_failed`` / ``json_invalid``）；
+    7. 其余 → ``api_error``。
+    """
     if isinstance(exc, quality_gate.QualityGateError):
         return exc.category
     if isinstance(exc, _WritebackError):
         return "writeback_error"
 
-    from app.platform.integrations.ai.client import AIOutputError
-
-    # 插件会把 AIOutputError 包成 IdentificationError，沿 cause 链找 json_invalid
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, AIOutputError):
-            return "json_invalid"
-        current = current.__cause__ or current.__context__
-
     from app.modules.safety.ai_hazard_identification import IdentificationError
 
+    # F11：插件/上层显式给出的结构化分类优先，中文子串不再参与判定
+    if isinstance(exc, IdentificationError) and exc.category is not None:
+        return exc.category
+
+    chain = _exception_chain(exc)
+
+    # 基础设施失败：精确异常类型（httpx 状态/超时/连接、场景熔断、配置类）
+    for current in chain:
+        infra = _infra_category_from_exception(current)
+        if infra is not None:
+            return infra
+
+    # 兼容未包 category 的旧路径：链上 AIOutputError → json_invalid
+    from app.platform.integrations.ai.client import AIOutputError
+
+    if any(isinstance(current, AIOutputError) for current in chain):
+        return "json_invalid"
+
+    # 中文子串仅兜底（无结构化 category 的旧调用）
     if isinstance(exc, IdentificationError):
         message = str(exc)
         if "验证失败" in message or "校验" in message:
@@ -303,9 +404,41 @@ async def run_ai_analysis_round(
     result = RoundResult(job_label="隐患AI分析轮询")
     round_id = _new_round_id()
     round_seq = await failure_ledger.next_round_seq()
+
+    # F2 取数预过滤：死信/退避记录不占 batch_limit 窗口（改造前先截断再过滤，
+    # 死信 ≥ batch_limit 时新记录永久饥饿）。计数只用于 deferred 与日志。
+    queue_stats = {"backoff": 0, "dead": 0}
+
+    async def _keep_record(record: dict[str, Any]) -> bool:
+        record_id = record.get("record_id", "")
+        if not record_id:
+            return False
+        status = await failure_ledger.retry_status(record_id, round_seq)
+        if status == "ok":
+            return True
+        queue_stats[status] += 1
+        return False
+
     client = SafetyBitableClient()
-    records = await bitable_repo.search_pending_ai(client, limit=limit)
+    records = await bitable_repo.search_pending_ai(
+        client, limit=limit, keep=_keep_record
+    )
+    # F2 后 total=本轮可执行窗口条数（不含预过滤掉的退避/死信），故 deferred 可
+    # 大于 total；正常路径（无死信/退避）与原语义一致（前 batch_limit 条）。
     result.total = len(records)
+    window = limit or config.batch_limit()
+    logger.info(
+        "① 取数预过滤: 可执行=%d 退避中=%d 死信=%d（窗口=%d）",
+        len(records), queue_stats["backoff"], queue_stats["dead"], window,
+    )
+    if queue_stats["dead"] >= window:
+        logger.warning(
+            "① 队列高水位：本轮预过滤死信 %d 条 ≥ 窗口 %d（死信清单 key=%s），"
+            "新记录已按预过滤正常处理，但死信长期占位应尽快人工清理",
+            queue_stats["dead"], window, DEAD_LETTERS_KEY,
+        )
+    # 未到重试点 / 已死信而跳过、不调 AI 的条数（语义同 _worker 内 deferred）
+    result.deferred += queue_stats["backoff"] + queue_stats["dead"]
     if not records:
         logger.info("① 无待分析记录")
         return result
@@ -319,10 +452,11 @@ async def run_ai_analysis_round(
     semaphore = asyncio.Semaphore(config.write_concurrency())
 
     # 告警收敛：只收集「本轮首次失败」与新死信（旧失败不重复告警）；
-    # 基础设施失败（RAG 不可用）单独聚合，走 Redis 去重告警且不进失败账本。
+    # 基础设施失败（RAG/AI 不可用）按路分别聚合，走 Redis 去重告警且不进失败账本。
     new_failures: list[dict[str, str]] = []
     new_dead_letters: list[dict[str, Any]] = []
-    infra_failures: list[dict[str, str]] = []
+    rag_infra_failures: list[dict[str, str]] = []
+    ai_infra_failures: list[dict[str, str]] = []
 
     async def _worker(record: dict[str, Any]) -> None:
         record_id = record.get("record_id", "")
@@ -372,21 +506,32 @@ async def run_ai_analysis_round(
             except Exception as exc:
                 category = _categorize_failure(exc)
                 reason = f"{type(exc).__name__}: {exc}"[:200]
+                failure = {
+                    "record_id": record_id,
+                    "category": category,
+                    "reason": reason,
+                }
                 result.failed += 1
-                result.failures.append(
-                    {"record_id": record_id, "category": category, "reason": reason}
-                )
+                result.failures.append(failure)
                 if category in _INFRA_FAILURE_CATEGORIES:
-                    # RAG 基础设施失败：可观测（failed/failures）但**不累计 attempts、
-                    # 不进死信** —— RAG 恢复后记录仍可立即重试，不被退避/死信卡住。
-                    infra_failures.append(
-                        {"record_id": record_id, "category": category, "reason": reason}
-                    )
-                    logger.warning(
-                        "① 基础设施失败（不累计 attempts，RAG 恢复后可重试）: "
-                        "record_id=%s category=%s",
-                        record_id, category,
-                    )
+                    # 基础设施失败：可观测（failed/failures/infra_failed）但
+                    # **不累计 attempts、不进死信** —— 故障恢复后记录可立即重试。
+                    result.infra_failed += 1
+                    result.infra_failures.append(failure)
+                    if category in AI_INFRA_CATEGORIES:
+                        ai_infra_failures.append(failure)
+                        logger.warning(
+                            "① AI 基础设施失败（不累计 attempts，端点恢复后可重试）: "
+                            "record_id=%s category=%s",
+                            record_id, category,
+                        )
+                    else:
+                        rag_infra_failures.append(failure)
+                        logger.warning(
+                            "① RAG 基础设施失败（不累计 attempts，RAG 恢复后可重试）: "
+                            "record_id=%s category=%s",
+                            record_id, category,
+                        )
                 else:
                     state = await failure_ledger.record_failure(
                         record_id, round_seq, category, reason
@@ -418,10 +563,11 @@ async def run_ai_analysis_round(
     dead_letters = await failure_ledger.list_dead_letters(limit=100)
     logger.info(
         "① 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d 延后=%d 新增失败=%d "
-        "新死信=%d 累计死信=%d 基础设施失败=%d round_id=%s",
+        "新死信=%d 累计死信=%d 基础设施失败(RAG=%d/AI=%d) round_id=%s",
         result.total, result.succeeded, result.failed, result.skipped,
         result.deferred, len(new_failures), len(new_dead_letters),
-        len(dead_letters), len(infra_failures), round_id,
+        len(dead_letters), len(rag_infra_failures), len(ai_infra_failures),
+        round_id,
     )
     if notify:
         # 告警收敛：阈值只看本轮新增失败（同一批失败不会每轮重复告警）
@@ -439,17 +585,34 @@ async def run_ai_analysis_round(
         # RAG 基础设施失败：不累计 attempts/不进死信，但降级期间仍需可观测；
         # 用 Redis SET NX EX 去重（默认 30 分钟窗口），避免每轮刷屏。
         if (
-            infra_failures
-            and len(infra_failures) >= config.alert_min_failures()
+            rag_infra_failures
+            and len(rag_infra_failures) >= config.alert_min_failures()
             and await failure_ledger.should_emit_infra_alert(round_seq)
         ):
             await notify_failures(
                 result.job_label,
-                failures=infra_failures,
+                failures=rag_infra_failures,
                 total=result.total,
                 error=(
                     "RAG 基础设施失败（不累计 attempts、不进死信，恢复后可直接重试；"
-                    "30 分钟内只告警一次）：" + _format_category_counts(infra_failures)
+                    "30 分钟内只告警一次）：" + _format_category_counts(rag_infra_failures)
+                ),
+            )
+        # AI 基础设施失败：独立去重 key，与 RAG 路互不吞并（F1-3）。
+        if (
+            ai_infra_failures
+            and len(ai_infra_failures) >= config.alert_min_failures()
+            and await failure_ledger.should_emit_infra_alert(
+                round_seq, key=AI_INFRA_ALERT_KEY
+            )
+        ):
+            await notify_failures(
+                result.job_label,
+                failures=ai_infra_failures,
+                total=result.total,
+                error=(
+                    "AI 基础设施失败（不累计 attempts、不进死信，恢复后可直接重试；"
+                    "30 分钟内只告警一次）：" + _format_category_counts(ai_infra_failures)
                 ),
             )
     return result

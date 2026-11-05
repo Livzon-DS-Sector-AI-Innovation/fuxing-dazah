@@ -16,6 +16,11 @@
     - 只 SELECT，不写库、不调 AI、不访问 Bitable、无其它网络请求；
     - 不依赖 /tmp 历史文件（存在时仅作额外样本）。
 
+口径说明（T3）：
+    本脚本「现状合法」= 剥 markdown 围栏后 `json.loads`，**不等于**审计
+    `extra.json_valid`（审计口径是「原文可直接解析、不剥围栏」），也不等于
+    「修复后合法」；三套口径不可直接互比，看板/报告引用时须注明。
+
 用法（cwd=backend）：:
 
     .venv/bin/python scripts/hazard_ai_quality_replay.py --days 30
@@ -437,6 +442,9 @@ def render_markdown(stats: dict[str, Any], *, days: int) -> str:
         f"- 样本：{totals['calls']} 次调用（视觉 {vision['calls']} / 文本 {text['calls']}）",
         "",
         "## JSON 合法率（A1 本地修复，零额外调用）",
+        "",
+        "> 口径（T3）：「现状合法」= 剥 markdown 围栏后 `json.loads`；审计",
+        "> `extra.json_valid` 是「原文可直接解析、不剥围栏」，两者不可直接对比。",
         "",
         "| 链路 | 调用数 | 现状合法 | 修复后合法 | 修复后提升 | 本地修复数 |",
         "|---|---|---|---|---|---|",

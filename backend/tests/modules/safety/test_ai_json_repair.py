@@ -103,6 +103,51 @@ def test_repair_json_general_supports_list() -> None:
     assert result.repaired is True
 
 
+# ── T1③ 误修复矩阵：不确定的畸形宁可返回 None，也不伪造成「合法对象」 ──
+
+
+@pytest.mark.parametrize(
+    ("raw", "reason"),
+    [
+        ('注意{不是JSON}，结果：{"a": 1}', "prose 先出现 { → slice 区间错误"),
+        ('{"a": 1,}}', "多余闭合符（不配平）"),
+        ('{"a": 1， "b": 2}', "中文逗号非分隔符"),
+        ("{'a': 1}", "单引号 JSON"),
+        ('{"a": 1', "缺闭合"),
+        ('结果：“a”: 1', "全角引号但无对象包裹"),
+    ],
+)
+def test_repair_object_does_not_fake_repair_malformed(raw: str, reason: str) -> None:
+    """误修复矩阵：这些形态不得被「修」成貌似合法的错误对象（安全优先）。"""
+    result = repair_json_object(raw)
+    assert result.data is None, f"{reason}：不应伪造成合法对象 {result.data!r}"
+
+
+def test_repair_object_fullwidth_after_slice_still_repairs() -> None:
+    """边界另一侧：可安全修复的全角引号对象仍应修复（避免把修复能力一起收掉）。"""
+    result = repair_json_object('结果如下：{“a”: 1}')
+    assert result.data == {"a": 1}
+    assert "fullwidth_quotes" in result.stages
+
+
+# ── T1④ 空/非字符串输入：返回 empty response，不抛异常 ──
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_repair_json_empty_input_returns_error(raw: Any) -> None:
+    result = repair_json(raw)
+    assert result.data is None
+    assert result.repaired is False
+    assert result.error == "empty response"
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_repair_json_object_empty_input_returns_error(raw: Any) -> None:
+    result = repair_json_object(raw)
+    assert result.data is None
+    assert result.error == "empty response"
+
+
 # ═══════════════════════════════════════════════════════════════
 # 测试用 service / handler
 # ═══════════════════════════════════════════════════════════════
@@ -268,6 +313,47 @@ async def test_vision_retry_twice_fails(monkeypatch: pytest.MonkeyPatch) -> None
     finally:
         await service.close()
     assert len(calls.bodies) == 2  # 只重试一次
+
+
+async def test_vision_parse_retry_writes_two_audit_rows_and_meta_targets_each_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T1①：客户端解析重试一次 → 2 条审计行，parse 元数据落在各自「最近」的行。
+
+    第 1 次输出不可解析：`json_valid=false / parse_attempts=1` → row-1；
+    第 2 次输出合法：`json_valid=true / parse_attempts=2` → row-2。
+    """
+    audit_rows: list[dict[str, Any]] = []
+    marks: list[tuple[str | None, dict[str, Any]]] = []
+
+    async def _fake_write_audit(**kwargs: object) -> None:  # noqa: ANN003
+        row_id = f"row-{len(audit_rows) + 1}"
+        audit_rows.append({"row_id": row_id, **kwargs})
+        audited_client._last_audit_row_id.set(row_id)
+
+    async def _capture_mark(**kwargs: object) -> None:  # noqa: ANN003
+        marks.append((audited_client._last_audit_row_id.get(), dict(kwargs)))
+
+    monkeypatch.setattr(audited_client, "_write_audit", _fake_write_audit)
+    monkeypatch.setattr(audited_client, "_mark_parse_outcome", _capture_mark)
+    calls = _Calls([_completion("完全不是 JSON"), _completion('{"a": 1}')])
+    service = _make_service(calls)
+    try:
+        assert await service.chat_vision_parsed("p", [], ["a"]) == {"a": 1}
+    finally:
+        await service.close()
+
+    assert len(calls.bodies) == 2
+    assert [row["row_id"] for row in audit_rows] == ["row-1", "row-2"]
+    assert [mark[0] for mark in marks] == ["row-1", "row-2"]
+    # 第 1 次：不可解析 → json_valid=false，attempts=1
+    assert marks[0][1]["parse_attempts"] == 1
+    assert marks[0][1]["json_valid"] is False
+    assert marks[0][1]["json_repaired"] is False
+    # 第 2 次：原文合法 → json_valid=true，attempts=2
+    assert marks[1][1]["parse_attempts"] == 2
+    assert marks[1][1]["json_valid"] is True
+    assert marks[1][1]["json_repaired"] is False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -460,7 +546,13 @@ async def test_missing_keys_keeps_json_valid_true(monkeypatch: pytest.MonkeyPatc
 async def test_mark_parse_outcome_writes_extra_via_independent_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A7 落库路径：独立 session 执行 JSONB 合并 UPDATE（fake session 捕获语句）。"""
+    """A7 落库路径：独立 session 执行 JSONB 合并 UPDATE（fake session 捕获语句）。
+
+    注意（B0）：本用例只断言 UPDATE 语句的 patch 绑定参数，**不执行 SQL**，
+    不能作为 extra 合并语义的验收证据（旧 `coalesce(extra, cast("{}"))` 实现下
+    它同样通过，但真 PG 里 `'null'::jsonb || patch` 会变成数组）；真 PG 级
+    验收见 ``test_ai_audit_extra_merge_db.py``。
+    """
     import uuid
 
     captured: dict[str, object] = {}
@@ -493,7 +585,12 @@ async def test_mark_parse_outcome_writes_extra_via_independent_session(
     assert captured.get("committed") is True
     stmt = captured["stmt"]
     params = stmt.compile().params  # type: ignore[attr-defined]
-    patches = [value for value in params.values() if isinstance(value, dict)]
+    # CASE 的 ELSE 兜底空对象（{}）也是 dict 绑定参数，这里只挑 patch 载荷
+    patches = [
+        value
+        for value in params.values()
+        if isinstance(value, dict) and "json_valid" in value
+    ]
     assert patches, params
     assert patches[0]["json_valid"] is False
     assert patches[0]["json_repaired"] is True

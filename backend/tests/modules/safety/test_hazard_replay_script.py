@@ -6,6 +6,12 @@
     - 行集合汇总（视觉/文本拆分、按天、重跑窗口按 record 聚合）；
     - 197 条 ground truth 一致性对照（用临时文件，不依赖 /tmp 真实样本）；
     - Markdown 渲染包含关键结论行。
+
+T1⑤ 数据口径（fix2）：197 条 ground truth（其中 140 条 success 样本用于 A4 规则回归）
+属于生产台账派生数据，**不入库**；
+`/tmp/rerun_results.jsonl` 只是本地/CI 都可选的可复现输入，缺失时
+`compare_ground_truth` / `rule_regression_from_ground_truth` 返回 None（跳过对照），
+本文件全部用 `tmp_path` 合成样本，不依赖 /tmp。
 """
 
 from __future__ import annotations
@@ -197,6 +203,14 @@ def test_ground_truth_missing_returns_none(
 ) -> None:
     monkeypatch.setattr(replay, "GROUND_TRUTH_FILE", tmp_path / "nope.jsonl")
     assert replay.compare_ground_truth([_row(output=GOOD)]) is None
+
+
+def test_rule_regression_missing_ground_truth_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T1⑤：ground truth 不入库、缺失时规则回归对照跳过（不报错、不依赖 /tmp）。"""
+    monkeypatch.setattr(replay, "GROUND_TRUTH_FILE", tmp_path / "nope.jsonl")
+    assert replay.rule_regression_from_ground_truth() is None
 
 
 # ═══════════════════════════════════════════════════════════════

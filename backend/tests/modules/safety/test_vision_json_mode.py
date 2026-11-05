@@ -149,12 +149,12 @@ async def test_flag_on_400_twice_raises_and_audits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(KEY, "true")
-    recorder = _Recorder(
-        [
-            httpx.Response(400, json={"error": "unsupported"}),
-            httpx.Response(400, json={"error": "unsupported"}),
-        ]
-    )
+    # A2-400 收紧后：只有点名 response_format/json_object 的 400 才去参重试
+    body = {
+        "code": "InvalidParameter",
+        "message": "The response_format parameter is not supported",
+    }
+    recorder = _Recorder([httpx.Response(400, json=body), httpx.Response(400, json=body)])
     monkeypatch.setattr(audited_client, "_write_audit", recorder.write_audit)
     service = _make_service(recorder)
     try:
@@ -187,3 +187,106 @@ async def test_flag_on_unrelated_400_does_not_retry(
     assert len(recorder.bodies) == 1
     assert recorder.audits[-1]["status"] == "failed"
     assert recorder.audits[-1]["audit_extra"]["vision_json_mode_fallback"] is False
+
+
+# ═══════════════════════════════════════════════════════════════
+# A2-400 收紧：只有点名 response_format/json_object 的 400 才去参重试
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_flag_on_generic_invalid_parameter_body_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实 DashScope 通用参数错误 body（code=InvalidParameter、未点名 response_format）。
+
+    旧实现 hints 含 "invalidparameter" 单关键词 → 误触发去参重试、白烧一次调用；
+    收紧后必须只发 1 次 HTTP 并直接失败。
+    """
+    monkeypatch.setenv(KEY, "true")
+    recorder = _Recorder(
+        [
+            httpx.Response(
+                400,
+                json={
+                    "code": "InvalidParameter",
+                    "message": "image format is invalid",
+                    "request_id": "req-1",
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(audited_client, "_write_audit", recorder.write_audit)
+    service = _make_service(recorder)
+    try:
+        with ai_audit_scope(scenario="hazard_identification"):
+            with pytest.raises(httpx.HTTPStatusError):
+                await service.chat_vision("识别", [])
+    finally:
+        await service.close()
+
+    assert len(recorder.bodies) == 1
+    assert recorder.audits[-1]["status"] == "failed"
+    assert recorder.audits[-1]["audit_extra"]["vision_json_mode_fallback"] is False
+
+
+async def test_flag_on_invalid_parameter_error_code_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI 兼容体下划线写法（invalid_parameter_error）也不得触发（旧实现漏判口径）。"""
+    monkeypatch.setenv(KEY, "true")
+    recorder = _Recorder(
+        [
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "invalid_parameter_error",
+                        "message": "invalid image format",
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr(audited_client, "_write_audit", recorder.write_audit)
+    service = _make_service(recorder)
+    try:
+        with ai_audit_scope(scenario="hazard_identification"):
+            with pytest.raises(httpx.HTTPStatusError):
+                await service.chat_vision("识别", [])
+    finally:
+        await service.close()
+
+    assert len(recorder.bodies) == 1
+    assert recorder.audits[-1]["audit_extra"]["vision_json_mode_fallback"] is False
+
+
+async def test_flag_on_400_naming_response_format_retries_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """点名 response_format 的真实「不支持」body → 去参重试一次并成功。"""
+    monkeypatch.setenv(KEY, "true")
+    recorder = _Recorder(
+        [
+            httpx.Response(
+                400,
+                json={
+                    "code": "InvalidParameter",
+                    "message": "The response_format parameter is not supported",
+                },
+            ),
+            _completion(),
+        ]
+    )
+    monkeypatch.setattr(audited_client, "_write_audit", recorder.write_audit)
+    service = _make_service(recorder)
+    try:
+        with ai_audit_scope(scenario="hazard_identification"):
+            text = await service.chat_vision("识别", [])
+    finally:
+        await service.close()
+
+    assert text == '{"a": 1}'
+    assert len(recorder.bodies) == 2
+    assert "response_format" not in recorder.bodies[1]
+    assert recorder.audits[-1]["audit_extra"]["vision_json_mode_fallback"] is True
