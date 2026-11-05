@@ -207,6 +207,12 @@ async def start_ws() -> None:
     global _stop, _ws_task
     if _ws_task and not _ws_task.done():
         return
+    if not feishu_configured():
+        # 未配置属预期状态（功能未启用），照 safety 打一条 warning 跳过，不起无限重连循环
+        logger.warning(
+            "质量模块飞书配置缺失（QUALITY_FEISHU_APP_ID / QUALITY_FEISHU_APP_SECRET），跳过事件订阅"
+        )
+        return
     _stop = asyncio.Event()
     _ws_task = asyncio.create_task(_run_ws())
 

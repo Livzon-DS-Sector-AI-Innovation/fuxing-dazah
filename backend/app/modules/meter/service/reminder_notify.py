@@ -61,12 +61,12 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
     settings = get_settings()
     if not settings.METER_CALIBRATION_AUTO_NOTIFY_ENABLED:
         logger.info("全局自动提醒开关已关闭，跳过发送")
-        return {"sent": 0, "skipped": 0, "errors": 0}
+        return {"sent": 0, "skipped": 0, "errors": 0, "delivered": 0}
 
     depts = await repo.get_notifiable_departments(db)
     if not depts:
         logger.info("没有需要发送提醒的部门")
-        return {"sent": 0, "skipped": 0, "errors": 0}
+        return {"sent": 0, "skipped": 0, "errors": 0, "delivered": 0}
 
     # 预加载 identity.users 的 name → feishu_user_id 映射（user_id 跨应用有效）
     from sqlalchemy import select as sa_select
@@ -88,9 +88,18 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
     sent = 0
     skipped = 0
     errors = 0
+    # 实际送达的卡片数：部门内部分负责人失败时，已送达的人不能因重试再收一遍
+    delivered = 0
 
     for dept in depts:
-        heads_list: list[dict[str, str]] = dept.heads or []  # type: ignore[assignment]
+        # 历史 JSONB 可能混入非 dict 条目（旧版 heads 曾按 dict 存），
+        # 跳过它们，避免 .get 抛异常导致整轮发送中断/重试重复投递
+        raw_heads = dept.heads or []
+        heads_list: list[dict[str, Any]] = [h for h in raw_heads if isinstance(h, dict)]
+        if len(heads_list) != len(raw_heads):
+            logger.warning(
+                "部门负责人数据格式异常，已忽略非对象条目: 部门=%s", dept.name
+            )
         if not heads_list:
             skipped += 1
             continue
@@ -150,12 +159,12 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
 
         all_ok = True
         for head in heads_list:
-            head_name = head.get("name", "未知")
+            head_name = head.get("name") or "未知"
             # 优先使用 user_id（应用无关），其次回退到 open_id
             feishu_id = name_to_user_id.get(head_name, "")
             receive_id_type: str = "user_id"
             if not feishu_id:
-                feishu_id = head.get("feishu_open_id", "").strip()
+                feishu_id = str(head.get("feishu_open_id") or "").strip()
                 receive_id_type = "open_id"
             if not feishu_id:
                 # 负责人无法解析为飞书 ID：视为未送达，避免该部门被误计为 sent
@@ -177,6 +186,8 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
                     "检定到期提醒发送失败: 部门=%s, 负责人=%s",
                     dept.name, head_name,
                 )
+            else:
+                delivered += 1
 
         if all_ok:
             sent += 1
@@ -188,10 +199,10 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
             errors += 1
 
     logger.info(
-        "检定到期提醒发送完成: sent=%d, skipped=%d, errors=%d",
-        sent, skipped, errors,
+        "检定到期提醒发送完成: sent=%d, skipped=%d, errors=%d, delivered=%d",
+        sent, skipped, errors, delivered,
     )
-    return {"sent": sent, "skipped": skipped, "errors": errors}
+    return {"sent": sent, "skipped": skipped, "errors": errors, "delivered": delivered}
 
 
 # ═══════════════════════════════════════════

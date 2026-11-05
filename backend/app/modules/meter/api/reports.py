@@ -47,7 +47,7 @@ async def upload_report(
         try:
             instrument_id = UUID(str(instrument_id_raw))
         except ValueError:
-            pass
+            return JSONResponse(status_code=400, content={"code": 400, "message": "instrument_id 格式非法（需 UUID）"})
 
     gas_detector_id_raw = form.get("gas_detector_id")
     gas_detector_id: UUID | None = None
@@ -55,7 +55,7 @@ async def upload_report(
         try:
             gas_detector_id = UUID(str(gas_detector_id_raw))
         except ValueError:
-            pass
+            return JSONResponse(status_code=400, content={"code": 400, "message": "gas_detector_id 格式非法（需 UUID）"})
 
     report_date_raw = form.get("report_date")
     report_date_val: date | None = None
@@ -63,18 +63,22 @@ async def upload_report(
         try:
             report_date_val = date.fromisoformat(str(report_date_raw))
         except ValueError:
-            pass
+            return JSONResponse(status_code=400, content={"code": 400, "message": "report_date 格式非法（需 YYYY-MM-DD）"})
 
     remark_val: str | None = str(form.get("remark")) if form.get("remark") else None
 
-    report = await service.upload_report(
-        db,
-        file=file,  # type: ignore[arg-type]
-        instrument_id=instrument_id,
-        gas_detector_id=gas_detector_id,
-        report_date=report_date_val,
-        remark=remark_val,
-    )
+    try:
+        report = await service.upload_report(
+            db,
+            file=file,  # type: ignore[arg-type]
+            instrument_id=instrument_id,
+            gas_detector_id=gas_detector_id,
+            report_date=report_date_val,
+            remark=remark_val,
+        )
+    except ValueError as e:
+        # 关联目标缺失/冲突等参数问题 → 400，而非 500
+        return JSONResponse(status_code=400, content={"code": 400, "message": str(e)})
     return success_response(
         ReportResponse(
             id=str(report.id),

@@ -20,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.meter import repository as repo
 from app.modules.meter import service
-from tests.modules.meter.conftest import build_xlsx, create_instrument
+from tests.modules.meter.conftest import (
+    build_xlsx,
+    create_gas_detector,
+    create_instrument,
+)
 
 
 class TestNormalizeHeader:
@@ -466,7 +470,7 @@ class TestImportGasDetectorLedger:
     async def test_falls_back_to_first_sheet(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """无关键词匹配 sheet 时应回退到第一个 sheet。"""
+        """无关键词匹配 sheet 时应回退到第一个 sheet（行需带产品编号才能导入）。"""
         monkeypatch.setattr(db_session, "commit", AsyncMock())
         marker = uuid4().hex[:8]
         xlsx = build_xlsx(
@@ -476,8 +480,8 @@ class TestImportGasDetectorLedger:
                     "rows": [
                         ["标题"],
                         ["部门：测试部"],
-                        ["器具名称", "检定时间"],
-                        [f"探测器{marker}", "2026-03-01"],
+                        ["器具名称", "产品编号", "检定时间"],
+                        [f"探测器{marker}", f"PN-{marker}", "2026-03-01"],
                     ],
                 }
             ]
@@ -510,6 +514,59 @@ class TestImportGasDetectorLedger:
         """不支持的扩展名应抛 ValueError。"""
         with pytest.raises(ValueError):
             await service.import_gas_detector_ledger(db_session, b"", "f.csv")
+
+    async def test_row_missing_required_fields_neither_clobbers_nor_deletes(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """残缺行（名称为空）不得清空旧记录字段，也不得触发旧记录软删。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        from tests.modules.meter.conftest import create_gas_detector
+
+        marker = uuid4().hex[:8]
+        old = await create_gas_detector(
+            db_session,
+            product_number=f"PN-{marker}",
+            instrument_name=f"探测器{marker}",
+            detection_model="旧型号",
+        )
+        xlsx = build_xlsx(
+            [
+                {
+                    "name": "有毒气体探测器台账",
+                    "rows": [
+                        ["探测器台账"],
+                        ["部门：安全部"],
+                        ["器具名称", "检定时间", "产品编号"],
+                        # 名称为空的残缺行：跳过，不回写旧记录
+                        ["", "2026-03-01", f"PN-{marker}"],
+                        # 完整行正常导入
+                        [f"备用探测器{marker}", "2026-03-01", f"PN2-{marker}"],
+                    ],
+                }
+            ]
+        )
+        result = await service.import_gas_detector_ledger(db_session, xlsx, "探测器台账.xlsx")
+        assert result["imported_count"] == 1
+        # 残缺行命中的旧记录既没被清空、也没被「文件未出现」软删
+        record = await repo.get_gas_detector_by_id(db_session, old.id)
+        assert record is not None
+        assert record.instrument_name == f"探测器{marker}"
+        assert record.detection_model == "旧型号"
+
+    async def test_keyless_existing_record_preserved(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """无产品编号的存量记录无法与文件匹配，不能被「文件未出现即删除」误删。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        old = await create_gas_detector(
+            db_session, product_number=None, instrument_name="手工新增无编号探测器"
+        )
+        marker = uuid4().hex[:8]
+        result = await service.import_gas_detector_ledger(
+            db_session, self._detector_xlsx(marker), "探测器台账.xlsx"
+        )
+        assert result["imported_count"] == 1
+        assert await repo.get_gas_detector_by_id(db_session, old.id) is not None
 
 
 class TestImportDateTypedCells:

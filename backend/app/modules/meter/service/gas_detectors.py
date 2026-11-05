@@ -60,9 +60,11 @@ async def batch_create_gas_detectors(
             continue
 
         try:
-            max_order += 1
-            item["sort_order"] = max_order
-            record = await repo.create_gas_detector(db, item)
+            # 每项独立 SAVEPOINT：单行插入失败只回滚该行，不毒化整批事务
+            async with db.begin_nested():
+                max_order += 1
+                item["sort_order"] = max_order
+                record = await repo.create_gas_detector(db, item)
             created += 1
             results.append({
                 "index": i, "asset_number": None,

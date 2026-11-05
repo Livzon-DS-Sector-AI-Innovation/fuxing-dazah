@@ -107,6 +107,10 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
     setCertEdit(null)
     setPreviewImage(null)
     setActiveTab('history')
+    // seq 递增后 finally 里的条件复位不会再执行，这里必须显式复位，
+    // 否则识别/上传中关闭弹窗，重开后 matching/uploading 永久卡 true
+    setMatching(false)
+    setUploading(false)
     onClose()
   }
 

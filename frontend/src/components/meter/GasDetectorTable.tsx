@@ -91,7 +91,11 @@ export function GasDetectorTable() {
     setPage(1)
   }, [])
 
+  // 请求序号：快速翻页/改筛选时，慢的旧响应后到不得覆盖新结果
+  const fetchSeqRef = useRef(0)
+
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeqRef.current
     setLoading(true)
     try {
       const params: GasDetectorFilter = { page, page_size: pageSize }
@@ -110,14 +114,15 @@ export function GasDetectorTable() {
         if (key && value) (params as Record<string, unknown>)[key] = value
       }
       const res = await getGasDetectors(params)
+      if (seq !== fetchSeqRef.current) return
       setData(res.items)
       setTotal(res.total)
     } catch {
-      message.error('获取数据失败')
+      if (seq === fetchSeqRef.current) message.error('获取数据失败')
     } finally {
-      setLoading(false)
+      if (seq === fetchSeqRef.current) setLoading(false)
     }
-  }, [page, pageSize, keyword, columnFilters, dateFilters])
+  }, [page, pageSize, keyword, columnFilters, dateFilters, message])
 
   // setTimeout 延后到下一 tick，避免 effect 内同步 setState 链（react-hooks/set-state-in-effect）
   useEffect(() => {
@@ -129,7 +134,9 @@ export function GasDetectorTable() {
     try {
       await deleteGasDetector(id)
       message.success('删除成功')
-      fetchData()
+      // 当前页只剩这一条且不在第一页：回退一页（改 page 会经 effect 重新拉取）
+      if (data.length === 1 && page > 1) setPage(page - 1)
+      else fetchData()
     } catch {
       message.error('删除失败')
     }
@@ -255,7 +262,10 @@ export function GasDetectorTable() {
           message.success(`成功删除 ${result.deleted_count} 条记录`)
           setSelectedRowKeys([])
           setSelectAllAcrossPages(false)
-          fetchData()
+          // 删除后当前页可能越界：回退到最后一个有效页（改 page 会经 effect 重新拉取）
+          const maxPage = Math.max(1, Math.ceil((total - result.deleted_count) / pageSize))
+          if (page > maxPage) setPage(maxPage)
+          else fetchData()
         } catch {
           message.error('批量删除失败')
         }

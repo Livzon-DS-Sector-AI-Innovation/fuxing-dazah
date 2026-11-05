@@ -22,6 +22,8 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
   useEffect(() => {
     if (open) {
       if (record) {
+        // 清掉上一条记录遗留的字段值与校验状态，避免跨记录串数据
+        form.resetFields()
         form.setFieldsValue({
           instrument_name: record.instrument_name,
           detection_model: record.detection_model,
@@ -39,6 +41,7 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
           calibration_date: record.calibration_date ? dayjs(record.calibration_date) : null,
           next_calibration_date: record.next_calibration_date ? dayjs(record.next_calibration_date) : null,
           status: record.status,
+          remark: record.remark,
         })
       } else {
         form.resetFields()

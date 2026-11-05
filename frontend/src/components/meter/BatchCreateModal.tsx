@@ -43,6 +43,7 @@ function emptyInstrumentRow(dept: string, key: number): RowItem {
     calibration_unit: null,
     calibration_result: null,
     next_calibration_date: null,
+    remark: null,
   }
 }
 
@@ -64,6 +65,7 @@ function emptyGasDetectorRow(dept: string, key: number): RowItem {
     detection_unit: null,
     next_calibration_date: null,
     manufacturer: null,
+    remark: null,
   }
 }
 

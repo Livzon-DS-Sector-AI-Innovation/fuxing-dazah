@@ -300,6 +300,36 @@ class TestOverview:
         assert after["total"] == before["total"] + 1
         assert after["stopped"] == before["stopped"] + 1
 
+    async def test_instrument_due_window_scope(self, db_session: AsyncSession) -> None:
+        """停用不计入到期窗口；计量室记录仍在台账统计内（只是不推送提醒）。"""
+        before = await repo.get_instrument_overview(db_session)
+        due = date.today() + timedelta(days=3)
+        await create_instrument(db_session, status="停用", next_calibration_date=due)
+        stopped = await repo.get_instrument_overview(db_session)
+        assert stopped["due_7d"] == before["due_7d"]
+        assert stopped["total"] == before["total"] + 1
+
+        await create_instrument(
+            db_session, calibration_unit="计量室", next_calibration_date=due
+        )
+        metrology = await repo.get_instrument_overview(db_session)
+        assert metrology["due_7d"] == before["due_7d"] + 1
+
+    async def test_gas_detector_due_window_scope(self, db_session: AsyncSession) -> None:
+        """探测器：停用不计入到期窗口，计量室记录仍在统计内。"""
+        before = await repo.get_gas_detector_overview(db_session)
+        due = date.today() + timedelta(days=3)
+        await create_gas_detector(db_session, status="停用", next_calibration_date=due)
+        stopped = await repo.get_gas_detector_overview(db_session)
+        assert stopped["due_7d"] == before["due_7d"]
+        assert stopped["total"] == before["total"] + 1
+
+        await create_gas_detector(
+            db_session, detection_unit="计量室", next_calibration_date=due
+        )
+        metrology = await repo.get_gas_detector_overview(db_session)
+        assert metrology["due_7d"] == before["due_7d"] + 1
+
 
 class TestDateStatsRepo:
     async def test_flat_rows_aggregation(self, db_session: AsyncSession) -> None:

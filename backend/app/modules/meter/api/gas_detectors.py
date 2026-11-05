@@ -208,7 +208,8 @@ async def export_gas_detectors_excel(
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
-    # 导出全量数据，绕过 page_size 上限
+    # 导出全量数据，绕过 page_size 上限；page 重置为 1 防偏移
+    object.__setattr__(filters, 'page', 1)
     object.__setattr__(filters, 'page_size', 100000)
     records, _ = await service.list_gas_detectors(db, filters)
 
