@@ -20,7 +20,7 @@ import pytest
 # ── 桥接任务形状与注册 ───────────────────────────────────────────
 
 
-def test_register_safety_tasks_registers_eight() -> None:
+def test_register_safety_tasks_registers_all() -> None:
     from app.modules.safety.scheduled import register_safety_tasks
     from app.platform.scheduler import SchedulerRegistry
 
@@ -33,9 +33,11 @@ def test_register_safety_tasks_registers_eight() -> None:
         "safety.hazard_review_poll",
         "safety.hazard_supervision_poll",
         "safety.hazard_bulletin_watch",
+        "safety.hazard_scoring_poll",  # 2026-11-05 ⑤ 隐患AI评分轮询
         "safety.telemetry_collect",
         "safety.tb_backflow",
         "safety.tb_retraining_due",
+        "safety.dashboard_warmup",  # 2026-10-30 驾驶舱预热（原计数断言漏更，预存红）
     }
 
 

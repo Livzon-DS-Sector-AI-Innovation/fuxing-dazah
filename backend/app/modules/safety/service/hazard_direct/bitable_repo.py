@@ -44,6 +44,10 @@ from app.modules.safety.service.hazard_direct import config
 
 logger = logging.getLogger(__name__)
 
+# 进程级写回锁：Bitable 单表写不支持并发（1254291 / 1254607）。
+# ①识别/⑤评分等所有写回轮共用（手动触发与定时轮询并发时共享同一把锁才真正串行）。
+WRITE_LOCK = asyncio.Lock()
+
 # 回写字段的 Bitable 类型：2026-09-17 只读核对生产表，4 个字段（隐患分类/级别/类别（AI）、督办等级）
 # 均为单选 type=3，因此 format_write_value 对它们等于原样返回。
 _SELECT_FIELD_TYPE = 3
@@ -77,6 +81,8 @@ F_DEADLINE = "整改期限"
 F_PROGRESS = "目前进展"
 F_REVIEW_RESULT = "AI初审结果"
 F_REVIEW_NOTE = "AI初审说明"
+F_SCORE = "评分结果"
+F_SCORING_NOTE = "评分说明"
 
 # ── ① 待处理判据：AI 识别输出字段为空 ──
 COND_AI_PENDING: list[dict[str, Any]] = [
@@ -89,6 +95,13 @@ COND_REVIEW_PENDING: list[dict[str, Any]] = [
     {"field_name": F_REVIEW_RESULT, "operator": "isEmpty", "value": []},
     {"field_name": F_RECTIFY_STATUS, "operator": "isNot", "value": ["已关闭"]},
 ]
+
+# ── ⑤ 待评分判据：①识别已完成 且 尚未评分（检查日期回填窗口在查询时叠加）──
+COND_SCORING_PENDING: list[dict[str, Any]] = [
+    {"field_name": F_TYPE_AI, "operator": "isNotEmpty", "value": []},
+    {"field_name": F_SCORE, "operator": "isEmpty", "value": []},
+]
+
 
 # ── ③ 日报：未闭环台账 ──
 COND_OPEN: list[dict[str, Any]] = [
@@ -143,6 +156,14 @@ def f_person(fields: dict[str, Any], name: str) -> str:
 def f_datetime(fields: dict[str, Any], name: str) -> datetime | None:
     """日期字段 → datetime（缺失返回 None）。"""
     return bd_fields.datetime_ms(fields, name)
+
+
+def f_number(fields: dict[str, Any], name: str) -> float | None:
+    """数字字段 → float（Bitable 数字字段原生返回 int/float；缺失/非法返回 None）。"""
+    value = fields.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def f_attachments(fields: dict[str, Any], name: str) -> list[dict[str, Any]]:
@@ -219,6 +240,9 @@ class HazardView:
     key_defect: str | None = None
     corrective_preventive_measures: str | None = None
     actual_completion_date: datetime | None = None
+    # ── ⑤ AI 评分（2026-11-05 新增）──
+    score: float | None = None
+    score_note: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -266,6 +290,8 @@ def to_view(record: dict[str, Any]) -> HazardView:
         key_defect=f_text(fields, F_DESC_AI) or None,
         corrective_preventive_measures=f_text(fields, F_ADVICE_AI) or None,
         actual_completion_date=f_datetime(fields, F_RECTIFY_DONE_AT),
+        score=f_number(fields, F_SCORE),
+        score_note=f_text(fields, F_SCORING_NOTE) or None,
         raw=fields,
     )
 
@@ -293,6 +319,30 @@ async def search_pending_review(
     """② 待 AI 初审记录（已填回复 且 未初审 且 未关闭）。"""
     records = await client.list_all_records(
         filter_info=_and(COND_REVIEW_PENDING),
+        page_size=500,
+        strict=True,
+    )
+    return records[: (limit or config.batch_limit())]
+
+
+async def search_pending_scoring(
+    client: SafetyBitableClient, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """⑤ 待评分记录（①识别已完成 且 未评分 且 检查日期在回填窗口内）。
+
+    回填窗口 ``config.scoring_backfill_days()``（默认 120 天，0=不限）：
+    控制灰度开闸首轮的存量回填量；检查日期为业务日期字段可过滤
+    （系统字段不可过滤，见模块头注释）。
+    """
+    conds = list(COND_SCORING_PENDING)
+    days = config.scoring_backfill_days()
+    if days > 0:
+        since = datetime.now(UTC) - timedelta(days=days)
+        date_cond = bd_filters.date_condition(F_DATE, since, lower=True)
+        if date_cond:
+            conds.append(date_cond)
+    records = await client.list_all_records(
+        filter_info=_and(conds),
         page_size=500,
         strict=True,
     )
@@ -617,6 +667,30 @@ async def write_ai_analysis(
     if not writeback:
         logger.warning("① 无字段可写回，跳过: record_id=%s", record_id)
         return False
+    result = await bd_writer.write_serial(
+        client,
+        [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
+        interval_seconds=0.0,
+    )
+    return result.written > 0
+
+
+async def write_scoring(
+    client: SafetyBitableClient,
+    record_id: str,
+    *,
+    total: float,
+    note: str,
+) -> bool:
+    """⑤ 写回评分结果（2 列：评分结果=数字、评分说明=文本）。
+
+    只写多维表格，不写数据库。数字字段直传 float（format_write_value
+    仅对多选整形，其余类型原样）。
+    """
+    writeback: dict[str, Any] = {
+        F_SCORE: round(float(total), 1),
+        F_SCORING_NOTE: note,
+    }
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],

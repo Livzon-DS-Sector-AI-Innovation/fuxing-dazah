@@ -239,6 +239,19 @@ async def _run_hazard_bulletin_watch() -> None:
     )
 
 
+async def _run_hazard_scoring_round() -> None:
+    """⑤ 隐患AI评分（相对 ① 错开五分之一周期；判据=分类（AI）已填 ∧ 评分结果为空）。"""
+    from app.modules.safety.service.hazard_direct import config
+    from app.modules.safety.service.hazard_direct.hazard_scoring import (
+        run_scoring_round,
+    )
+
+    await _hazard_single_round(
+        "scoring", "隐患AI评分轮询", config.scoring_stagger_seconds(),
+        config.scoring_poll_enabled, run_scoring_round,
+    )
+
+
 def _hazard_poll_interval() -> int:
     from app.modules.safety.service.hazard_direct import config
 
@@ -300,6 +313,10 @@ async def _dispatch_hazard_supervision_round() -> None:
     )
 
 
+async def _dispatch_hazard_scoring_round() -> None:
+    _dispatch_hazard_round(_run_hazard_scoring_round(), "safety.hazard_scoring_poll.round")
+
+
 HAZARD_AI_POLL_TASK = TaskDefinition(
     name="safety.hazard_ai_poll",
     schedule=ScheduleConfig(
@@ -339,6 +356,17 @@ HAZARD_BULLETIN_WATCH_TASK = TaskDefinition(
     ),
     coro=_run_hazard_bulletin_watch,
     timeout_seconds=300,
+    module="safety",
+)
+
+HAZARD_SCORING_POLL_TASK = TaskDefinition(
+    name="safety.hazard_scoring_poll",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=_hazard_poll_interval(),
+    ),
+    coro=_dispatch_hazard_scoring_round,
+    # 引擎侧超时约束的是派发器（瞬时返回）；整轮上限在 _dispatch_hazard_round
+    timeout_seconds=60,
     module="safety",
 )
 
@@ -569,6 +597,7 @@ _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     HAZARD_REVIEW_POLL_TASK,
     HAZARD_SUPERVISION_POLL_TASK,
     HAZARD_BULLETIN_WATCH_TASK,
+    HAZARD_SCORING_POLL_TASK,
     TELEMETRY_COLLECT_TASK,
     TB_BACKFLOW_TASK,
     TB_RETRAINING_DUE_TASK,

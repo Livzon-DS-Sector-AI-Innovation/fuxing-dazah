@@ -57,6 +57,13 @@ def bulletin_watch_enabled() -> bool:
     )
 
 
+def scoring_poll_enabled() -> bool:
+    """⑤ 隐患AI评分轮询（依赖 ① 识别完成；写回 评分结果/评分说明 2 列）。"""
+    return direct_poll_enabled() and _flag(
+        gates.domain_env(_DOMAIN, "SCORING_POLL_ENABLED"), False
+    )
+
+
 def event_sync_enabled() -> bool:
     """旧路径开关：Bitable 事件 → 平台库镜像（hazard_reports）+ 事件驱动 AI。
 
@@ -119,6 +126,25 @@ def supervision_stagger_seconds() -> int:
         gates.domain_env(_DOMAIN, "SUPERVISION_STAGGER_SECONDS"),
         poll_interval_seconds() // 4,
         minimum=0,
+    )
+
+
+def scoring_stagger_seconds() -> int:
+    """⑤ 相对 ① 的错开秒数（默认五分之一周期，避开①②③写窗口）。"""
+    return _int(
+        gates.domain_env(_DOMAIN, "SCORING_STAGGER_SECONDS"),
+        poll_interval_seconds() // 5,
+        minimum=0,
+    )
+
+
+def scoring_backfill_days() -> int:
+    """⑤ 只处理近 N 天（检查日期）记录；0=不限（存量全量回填用）。
+
+    控制灰度开闸首轮的存量回填量；默认 120 天覆盖评选两月窗口有余量。
+    """
+    return _int(
+        gates.domain_env(_DOMAIN, "SCORING_BACKFILL_DAYS"), 120, minimum=0
     )
 
 

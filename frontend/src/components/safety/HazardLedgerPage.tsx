@@ -391,6 +391,25 @@ export default function HazardLedgerPage() {
       },
     },
     {
+      title: '风险分',
+      dataIndex: 'score',
+      key: 'score',
+      width: 85,
+      // ⑤ AI 评分 D=L×E×C×X；说明格式「H｜四维=D｜评语｜依据[｜重大判定][｜⚠]」，首段即 H/M/L
+      render: (score: number | null | undefined, record: HazardReport) => {
+        if (score == null) return <span style={{ color: '#a4a097' }}>—</span>
+        const band = (record.score_note ?? '').split('｜')[0]?.trim()
+        const bandColor: Record<string, string> = { H: '#e5484d', M: '#f07731', L: '#3b82f6' }
+        const color = bandColor[band] ?? '#8a857c'
+        return (
+          <span title={record.score_note ?? ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
+            <span style={{ fontWeight: 600 }}>{score.toFixed(1)}</span>
+          </span>
+        )
+      },
+    },
+    {
       title: '进展状态',
       dataIndex: 'supervision_progress_status',
       key: 'supervision_progress_status',

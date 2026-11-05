@@ -42,6 +42,7 @@ _RE_CHEMICAL = _re.compile(
 # Scenarios that ALWAYS disable thinking (structured extraction, no reasoning)
 FORCE_OFF_SCENARIOS: set[str] = {
     "hazard_identification",     # 隐患识别: template-filling → JSON
+    "hazard_scoring",            # 隐患评分: 档位选择 → JSON（同识别，结构化抽取）
     "rectification_review",      # 整改初审: comparison → JSON
     "regulation_crawl",          # 法规筛选: document classification
     "agent_chat",                # 助手对话: tool-calling → summarization

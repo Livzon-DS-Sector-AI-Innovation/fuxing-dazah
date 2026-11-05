@@ -72,6 +72,9 @@ class HazardReportBase(BaseModel):
     rectification_photos: str | None = Field(None, description="整改后图片JSON数组")
     notes: str | None = Field(None, description="备注")
     progress_note: str | None = Field(None, description="目前进展（Bitable「目前进展」字段单向同步）")
+    # ── ⑤ AI 评分（2026-11-05；直读模式透传，镜像模式恒 None）──
+    score: float | None = Field(None, description="AI评分 D=L×E×C×X（制度 §10.3，1 位小数）")
+    score_note: str | None = Field(None, description="评分说明（band｜四维=D｜评语｜依据[｜重大判定][｜⚠]）")
 
     _norm_level_manual = field_validator("hazard_level_manual", mode="before")(
         _normalize_hazard_level_manual

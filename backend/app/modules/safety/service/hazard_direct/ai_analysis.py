@@ -14,17 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 from typing import Any
 
 from app.modules.safety.service.hazard_direct import bitable_repo, config
 from app.modules.safety.service.hazard_direct.alert import notify_failures
+from app.modules.safety.service.hazard_direct.round_result import RoundResult
 
 logger = logging.getLogger(__name__)
 
 # 进程级写回锁：Bitable 单表写不支持并发（1254291 / 1254607）。
-# 放在模块级（而非每轮新建）——手动触发与定时轮询可能并发，共享同一把锁才真正串行。
-_WRITE_LOCK = asyncio.Lock()
+# 2026-11-05 收编到 bitable_repo.WRITE_LOCK（①识别/⑤评分共享同一把锁才真正串行）。
+_WRITE_LOCK = bitable_repo.WRITE_LOCK
 
 VALID_TYPES = {
     "unsafe_action",
@@ -39,28 +39,6 @@ VALID_CATEGORIES = {
     "label_signage", "process_mgmt", "contractor_defect", "documentation",
     "special_operation",
 }
-
-
-@dataclass
-class RoundResult:
-    """单轮执行结果。"""
-
-    job_label: str = "隐患AI分析轮询"
-    total: int = 0
-    succeeded: int = 0
-    failed: int = 0
-    skipped: int = 0
-    failures: list[dict[str, str]] = field(default_factory=list)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "job_label": self.job_label,
-            "total": self.total,
-            "succeeded": self.succeeded,
-            "failed": self.failed,
-            "skipped": self.skipped,
-            "failures": self.failures,
-        }
 
 
 async def _load_knowledge_context(session: Any, description: str) -> str | None:
@@ -194,7 +172,7 @@ async def run_ai_analysis_round(
     """执行一轮 ① 隐患AI分析。"""
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 
-    result = RoundResult()
+    result = RoundResult(job_label="隐患AI分析轮询")
     client = SafetyBitableClient()
     records = await bitable_repo.search_pending_ai(client, limit=limit)
     result.total = len(records)
