@@ -43,6 +43,7 @@ import type {
   EnvRecord,
   EnvTrend,
   EnvPlan,
+  ChromatogramPeak,
   QualityAlerts,
   StocktakeItem,
   MonthlyReportItem,
@@ -2102,6 +2103,20 @@ export async function submitCalcFill(taskId: string, input: {
     throw new Error(err.detail || '计算表提交失败')
   }
   revalidatePath(`/quality/task/${taskId}`)
+  return res.json()
+}
+
+/** 图谱截图/PDF 解析（MinerU VLM，仅预览：返回峰表草稿，不落库）。 */
+export async function parseChromatogram(file: File): Promise<{ data: { filename: string; peaks: ChromatogramPeak[]; markdown_preview: string } }> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/chromatograms/parse`, {
+    method: 'POST', headers: await _authHeaders(), body: form,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '图谱解析失败')
+  }
   return res.json()
 }
 

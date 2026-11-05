@@ -176,3 +176,22 @@ def test_parse_lc_excel_rejects_garbage() -> None:
 
     with pytest.raises(Exception):
         parse_lc_excel(b"not an excel file", "bad.xlsx")
+
+
+def test_extract_peak_table_from_markdown() -> None:
+    """图谱 Markdown 峰表提取：面积列优先、两位小数、非数据行跳过。"""
+    from app.modules.quality.service.chromatogram import extract_peak_table
+
+    md = """# 图谱报告
+
+| 峰名 | 保留时间(min) | 面积 | %面积 |
+| --- | --- | --- | --- |
+| 万古霉素B | 12.345 | 1234567.891 | 98.52 |
+| 单去氯万古霉素 | 14.2 | 18888.5 | 1.48 |
+| 未知1 | 3.1 | 99.999 | 0.01 |
+"""
+    peaks = extract_peak_table(md)
+    assert [p["name"] for p in peaks] == ["万古霉素B", "单去氯万古霉素", "未知1"]
+    assert [p["area"] for p in peaks] == [1234567.89, 18888.5, 100.0]
+    # 无表格时返回空
+    assert extract_peak_table("纯文本没有表格") == []

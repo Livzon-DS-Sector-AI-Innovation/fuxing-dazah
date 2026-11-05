@@ -8,7 +8,7 @@ import {
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
   PlusOutlined, DeleteOutlined, RedoOutlined, UploadOutlined, FileTextOutlined,
-  HistoryOutlined, DownloadOutlined, EyeOutlined, InboxOutlined, CalculatorOutlined,
+  HistoryOutlined, DownloadOutlined, EyeOutlined, InboxOutlined, CalculatorOutlined, FileImageOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -28,7 +28,7 @@ import {
   fetchLcTemplateConfigs,
   submitCalcFill,
 } from '@/actions/quality'
-import { CoaPreviewModal, CalcForm } from '@/components/quality'
+import { CoaPreviewModal, CalcForm, ChromatogramModal } from '@/components/quality'
 
 const { Text } = Typography
 
@@ -84,6 +84,7 @@ export default function TaskDetail({ id }: { id: string }) {
   const [retainForm] = Form.useForm()
   // 在线计算表：免 Excel 直接填计算后数值（表号合并规则由后端计算）
   const [calcOpen, setCalcOpen] = useState(false)
+  const [chromaOpen, setChromaOpen] = useState(false)
   const [calcSaving, setCalcSaving] = useState(false)
   const [calcTableNo, setCalcTableNo] = useState<string | undefined>()
   const [calcDate, setCalcDate] = useState<Dayjs | null>(dayjs())
@@ -562,6 +563,9 @@ export default function TaskDetail({ id }: { id: string }) {
         {canFill && detail.status === 'in_progress' && (
           <Button icon={<CalculatorOutlined />} onClick={openCalc}>在线计算表</Button>
         )}
+        {canFill && detail.status === 'in_progress' && (
+          <Button icon={<FileImageOutlined />} onClick={() => setChromaOpen(true)}>图谱解析</Button>
+        )}
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} disabled={!editable}>保存</Button>
         {detail.status === 'in_progress' && (
           <>
@@ -993,6 +997,14 @@ export default function TaskDetail({ id }: { id: string }) {
         )}
       </Modal>
 
+
+      <ChromatogramModal
+        open={chromaOpen}
+        taskId={id}
+        title={`图谱解析${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
+        onClose={() => setChromaOpen(false)}
+        onFilled={loadDetail}
+      />
 
       <CoaPreviewModal
         open={!!coaPreviewId}

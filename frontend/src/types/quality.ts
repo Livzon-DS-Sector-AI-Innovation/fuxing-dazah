@@ -865,6 +865,11 @@ export interface EnvPlan {
   completed_at: string | null
 }
 
+export interface ChromatogramPeak {
+  name: string
+  area: number | null
+}
+
 export interface BatchRelease {
   id: string
   batch_no: string
