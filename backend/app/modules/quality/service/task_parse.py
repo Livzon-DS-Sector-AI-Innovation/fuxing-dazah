@@ -429,6 +429,27 @@ class _TaskParse(_TaskCore):
         rec = await get_inspection_record(db, record_id)
         task_link = None
         task = await get_test_task_by_batch(db, parsed.product_name, parsed.batch_number)
+        if task is None and parsed.batch_number and len(parsed.batch_number) >= 6:
+            # 稳定性试验表批号带试验条件后缀（如 HAF2504009A长期试验18个月）：
+            # 任务批号为解析批号前缀时回退关联（取最长匹配，最具体）
+            from sqlalchemy import select as _select
+
+            head = parsed.batch_number[:6]
+            rows = (await db.execute(
+                _select(QualityTestTask).where(
+                    QualityTestTask.is_deleted == False,  # noqa: E712
+                    QualityTestTask.status == "in_progress",
+                    QualityTestTask.batch_number.startswith(head),
+                )
+            )).scalars()
+            pb = parsed.batch_number
+            candidates = [
+                t for t in rows
+                if pb.startswith(t.batch_number)
+                and _TaskCore._norm_name(t.product_name) == _TaskCore._norm_name(parsed.product_name)
+            ]
+            if candidates:
+                task = max(candidates, key=lambda t: len(t.batch_number))
         if task and task.status == "in_progress":
             filled, appended, remaining = await _TaskParse._fill_generic_into_task(
                 db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,

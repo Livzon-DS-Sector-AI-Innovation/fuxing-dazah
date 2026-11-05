@@ -30,23 +30,33 @@ export default function QualityPage() {
         <Paragraph type="secondary">没有上传液相计算表的权限</Paragraph>
       )}
 
-      {result && result.record_id && (
+      {result && result.record_id && result.task_link?.task_id && (
         <Space style={{ marginTop: 12 }}>
-          {result.task_link?.task_id && (
-            <Link href={`/quality/task/${result.task_link.task_id}`}>
-              <Button type="primary" icon={<FileTextOutlined />}>
-                去任务填报
-              </Button>
-            </Link>
-          )}
+          <Link href={`/quality/task/${result.task_link.task_id}`}>
+            <Button type="primary" icon={<FileTextOutlined />}>
+              去任务确认归入（已自动填入待确认）
+            </Button>
+          </Link>
           <Link href="/quality/history">
             <Button icon={<HistoryOutlined />}>历史记录</Button>
           </Link>
         </Space>
       )}
       {result && result.record_id && !result.task_link?.task_id && (
-        <Paragraph type="secondary" style={{ marginTop: 12 }}>
-          报告单在任务填报完成并复核通过后生成（含全部检验项目），请先在「检验填报」页建任务并上传计算表填入。
+        <Space style={{ marginTop: 12 }}>
+          <Link href="/quality/task">
+            <Button type="primary" icon={<FileTextOutlined />}>
+              去检验填报建任务归入
+            </Button>
+          </Link>
+          <Link href="/quality/history">
+            <Button icon={<HistoryOutlined />}>历史记录</Button>
+          </Link>
+        </Space>
+      )}
+      {result && result.record_id && !result.task_link?.task_id && (
+        <Paragraph type="secondary" style={{ marginTop: 8 }}>
+          未找到同批号任务：建任务后重新上传计算表（或在任务详情上传）即可自动归入；报告单在任务填报完成并复核通过后生成。
         </Paragraph>
       )}
 
