@@ -96,10 +96,14 @@ class TestUpsertIdempotent:
 
         row1 = await run_inventory_analysis(db_session, trigger="scheduled")
         row2 = await run_inventory_analysis(db_session, trigger="manual")
+        # 测试连共享开发库（仅写回滚），在跑服务的 00:30 定档任务会留下其他日期的
+        # 已提交行——幂等断言只看当日，免疫跨日行污染。
+        today = datetime.now(CN_TZ).date()
         rows = (
             await db_session.execute(
                 select(WarehouseAnalysisReport).where(
-                    WarehouseAnalysisReport.is_deleted.is_(False)
+                    WarehouseAnalysisReport.report_date == today,
+                    WarehouseAnalysisReport.is_deleted.is_(False),
                 )
             )
         ).scalars().all()

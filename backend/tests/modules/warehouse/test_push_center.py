@@ -31,6 +31,7 @@ from app.modules.warehouse.feishu import notification
 from app.modules.warehouse.models import (
     WarehouseDailyBriefing,
     WarehousePushLog,
+    WarehousePushTask,
     WarehousePushTaskAudit,
 )
 from app.modules.warehouse.push_center import engine, generators
@@ -274,6 +275,21 @@ class TestPushStore:
     async def test_set_task_writes_row_and_audit(
         self, monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
     ) -> None:
+        # 封闭性：清该任务既有行与审计（共享开发库存在真机配置记录——如晨报
+        # 被运维关闭的 enabled=False 行会让 action 断言变 update；事务内删除
+        # 随回滚撤销，不伤真机数据）
+        from sqlalchemy import delete
+
+        await db_session.execute(
+            delete(WarehousePushTaskAudit).where(
+                WarehousePushTaskAudit.task_name == "morning_report"
+            )
+        )
+        await db_session.execute(
+            delete(WarehousePushTask).where(
+                WarehousePushTask.task_name == "morning_report"
+            )
+        )
         store = _make_store({}, monkeypatch)
         view = await store.set_task(
             db_session,

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.warehouse.ai_audit import failure_notifier
 from app.modules.warehouse.models import (
     WarehousePushLog,
+    WarehousePushTask,
     WarehousePushTaskAudit,
 )
 from app.modules.warehouse.push_center import engine
@@ -65,13 +66,17 @@ async def test_put_push_task_updates_and_audits(
     api_context: tuple[AsyncClient, AsyncSession],
 ) -> None:
     client, db = api_context
-    # 封闭性：清该任务既有审计（共享库存在真机配置记录；事务内删除随回滚撤销）
+    # 封闭性：清该任务既有行与审计（共享库存在真机配置记录——如晨报被运维
+    # 关闭的 enabled=False 行，会使更新语义断言失真；事务内删除随回滚撤销）
     from sqlalchemy import delete
 
     await db.execute(
         delete(WarehousePushTaskAudit).where(
             WarehousePushTaskAudit.task_name == "morning_report"
         )
+    )
+    await db.execute(
+        delete(WarehousePushTask).where(WarehousePushTask.task_name == "morning_report")
     )
     resp = await client.put(
         f"{PUSH_TASKS}/morning_report", json={"targets": "oc_x", "note": "验收配置"}
