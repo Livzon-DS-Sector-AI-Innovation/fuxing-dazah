@@ -17,7 +17,8 @@ interface Props {
 export default function LcUploader({ onResult }: Props) {
   const [uploading, setUploading] = useState(false)
   const [fileList, setFileList] = useState<UploadFile[]>([])
-  const [password, setPassword] = useState('')
+  // 实验室计算表通行密码默认填好（可修改/清空）
+  const [password, setPassword] = useState('zlkz6941')
   const { message } = App.useApp()
 
   const handleUpload = useCallback(async (file: File) => {
