@@ -69,10 +69,13 @@ async def build_ocr_draft(
     content_type: str = "image/jpeg",
     source_image_token: str | None = None,
     operator: str | None = None,
+    auto_accept: bool = True,
 ) -> tuple[HardwareReceipt, dict[str, Any]]:
     """图片 → 识别 → 匹配 → 入库草稿（不动账）。
 
     返回 (receipt, summary)；summary 含逐行匹配置信度（前端标黄依据）。
+    auto_accept=False 供 agent 对话入口（gateway_inbound）禁用 M9 自动
+    入账评估——对话入库保持两段式确认卡人工红线。
     """
     if not scenario_store.is_enabled(HARDWARE_SCENARIO):
         raise ScenarioDisabled("五金库送货单识别场景已停用")
@@ -163,6 +166,18 @@ async def build_ocr_draft(
         "unmatched": unmatched,
         "rows": match_summary,
     }
+
+    # M9：direct 高置信自动入账评估（开关关=短路返回 None，行为逐字节现状；
+    # agent 对话入口 auto_accept=False 保持人工确认卡）
+    if auto_accept:
+        from app.modules.warehouse.hardware.service import try_auto_accept_direct
+
+        auto = await try_auto_accept_direct(
+            db, receipt.id, operator=operator or "ocr_pipeline"
+        )
+        if auto is not None:
+            receipt = auto
+            summary["auto_accepted"] = True
     return receipt, summary
 
 

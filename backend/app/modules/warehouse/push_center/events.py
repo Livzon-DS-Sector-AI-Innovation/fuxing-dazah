@@ -433,6 +433,7 @@ def render_hardware_digest_card(payload: dict[str, Any]) -> dict[str, Any]:
 
     summary = str(payload.get("ai_summary") or "").strip()
     frequency = str(payload.get("frequency") or "日报")
+    auto_count = int(payload.get("auto_accepted_count", 0) or 0)
     lines = [
         f"**{payload.get('date', '-')} 五金库{frequency}**",
         "",
@@ -441,6 +442,11 @@ def render_hardware_digest_card(payload: dict[str, Any]) -> dict[str, Any]:
         f"- 待发料：{payload.get('to_issue', 0)} 单 ｜ 紧急未补：{payload.get('urgent_overdue', 0)} 单",
         f"- 待确认草稿：{payload.get('draft_backlog', 0)} 张 ｜ 低库存物料：{payload.get('low_stock_count', 0)} 项",
     ]
+    if auto_count:
+        # M9 放权披露（§9.3）：direct 高置信自动入账单数+复核抽检入口
+        lines += [
+            f"- ⚙️ 自动入账（direct 高置信）：{auto_count} 张——请到报表·ERP 对账 Tab 抽检复核",
+        ]
     if summary:
         lines += ["", f"> {summary}"]
     return build_card(

@@ -68,6 +68,7 @@ async def process_hardware_image(
                 image_b64=image_b64,
                 content_type=content_type,
                 operator=open_id,
+                auto_accept=False,  # agent 对话入口保持两段式确认卡（M9 auto 仅 Web/ERP 导入）
             )
 
             # ③ AgentDraft（scene=hardware_receipt，aligned=入库草稿引用）

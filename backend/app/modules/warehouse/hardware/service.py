@@ -550,10 +550,18 @@ async def accept_receipt(
     净零直发 target_dept。mode=stocked 的单出现无主数据行时默认阻断
     （allow_unmatched=False），人工逐行指定或改 direct 单。
     行级人工修正（低置信标黄改后）以 items 覆盖草稿原行。
+
+    M8 红线：erp_import 单已与 OCR 单双向 verified（对账载体）→ 禁止再
+    入账（防双计——库存已由 OCR 单批次承载）。
     """
     receipt = await _load_receipt(db, receipt_id)
     if receipt.status != "draft":
         raise HardwareError(f"入库单状态 {receipt.status} 不可确认（仅 draft 可确认入账）")
+    if receipt.source == "erp_import" and receipt.reconcile_status == "verified":
+        raise HardwareError(
+            f"ERP 单 {receipt.receipt_no} 已与 OCR 单对账核对通过（verified），"
+            "库存由 OCR 单承载，不可重复入账（防双计）"
+        )
 
     # 人工修正：删除草稿行重建
     if items is not None:
@@ -1332,3 +1340,120 @@ async def create_location(
     db.add(loc)
     await db.flush()
     return loc
+
+
+# ── M9 observe→auto 阶段1：direct 类高置信自动入账（默认关，设计 §9.3）──
+
+#: runtime 键（runtime_registry 注册；env 兜底，DB 优先）
+AUTO_DIRECT_ENABLED_KEY = "hardware_ocr_auto_direct_enabled"
+AUTO_DIRECT_THRESHOLD_KEY = "hardware_ocr_auto_direct_min_confidence"
+
+
+async def try_auto_accept_direct(
+    db: AsyncSession, receipt_id: UUID, *, operator: str | None = None
+) -> HardwareReceipt | None:
+    """direct 高置信自动入账评估（草稿创建后即时调用；幂等）。
+
+    生效条件（全部满足才自动 accepted）：
+    ① 开关开（runtime_configs > env > 默认关）；
+    ② 单内全部行为 direct 类（行级判定：无批次载体——material 缺失或
+       managed_class=direct；**stocked 行永不自动**红线）；
+    ③ 全部行匹配置信度 ≥ 阈值（match_score 0-100 分制 vs 阈值×100；
+       score=NULL 视为不满足）；
+    ④ 无照片初筛异常标记（photo_screening.flagged 均非 true）；
+    ⑤ 状态 draft（accepted 单幂等原样返回 None）。
+
+    满足→accepted（双签 system:auto + auto_accepted + 触发快照落库）；
+    任一不满足→返回 None（留人工队列，零副作用）。开关关→首条件短路，
+    行为与现状逐字节一致。
+    """
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    receipt = await _load_receipt(db, receipt_id)
+    if receipt.status != "draft":
+        return None
+
+    enabled_view = runtime_store.get_view(AUTO_DIRECT_ENABLED_KEY)
+    enabled = int(enabled_view.value or 0) == 1
+    threshold = float(runtime_store.get_value(AUTO_DIRECT_THRESHOLD_KEY) or 0.9)
+    threshold_score = Decimal(str(threshold)) * Decimal("100")
+
+    decision_snapshot: dict[str, Any] = {
+        "switch_source": enabled_view.source,
+        "enabled": enabled,
+        "threshold": threshold,
+        "screening_flagged": None,
+        "row_scores": None,
+        "decision": "skipped_switch_off" if not enabled else None,
+        "evaluated_at": _now().isoformat(),
+        "operator": operator or "system",
+    }
+    if not enabled:
+        return None  # ① 短路：零副作用
+
+    rows = await list_receipt_items(db, receipt_id)
+    if not rows:
+        decision_snapshot["decision"] = "rejected_no_rows"
+        receipt.auto_accept_snapshot = decision_snapshot
+        return None
+
+    # ② 全部行 direct 类（stocked 行存在=永不自动）
+    stocked_rows: list[str] = []
+    for row in rows:
+        material = await db.get(HardwareMaterial, row.material_id) if row.material_id else None
+        if material is not None and material.managed_class == "stocked":
+            stocked_rows.append(row.name)
+    if stocked_rows:
+        decision_snapshot["decision"] = f"rejected_stocked_rows:{';'.join(stocked_rows[:3])}"
+        receipt.auto_accept_snapshot = decision_snapshot
+        await db.flush()
+        return None
+
+    # ③ 全部行置信 ≥ 阈值
+    row_scores: list[dict[str, Any]] = []
+    low_rows: list[str] = []
+    for row in rows:
+        score = row.match_score
+        ok = score is not None and score >= threshold_score
+        row_scores.append({
+            "name": row.name,
+            "score": float(score) if score is not None else None,
+            "method": row.match_confidence,
+            "pass": ok,
+        })
+        if not ok:
+            low_rows.append(row.name)
+    decision_snapshot["row_scores"] = row_scores
+    if low_rows:
+        decision_snapshot["decision"] = f"rejected_low_confidence:{';'.join(low_rows[:3])}"
+        receipt.auto_accept_snapshot = decision_snapshot
+        await db.flush()
+        return None
+
+    # ④ 无照片初筛异常标记
+    screening_flagged = any((r.photo_screening or {}).get("flagged") for r in rows)
+    decision_snapshot["screening_flagged"] = screening_flagged
+    if screening_flagged:
+        decision_snapshot["decision"] = "rejected_screening_flagged"
+        receipt.auto_accept_snapshot = decision_snapshot
+        await db.flush()
+        return None
+
+    # 全条件满足：自动 accepted（复用 accept_receipt 主体——direct 双流水净零）
+    decision_snapshot["decision"] = "auto_accepted"
+    receipt.auto_accept_snapshot = decision_snapshot
+    accepted = await accept_receipt(
+        db,
+        receipt_id,
+        inspected_by_warehouse="system:auto",
+        inspected_by_dept="system:auto",
+        allow_unmatched=True,
+    )
+    accepted.auto_accepted = True
+    accepted.auto_accept_snapshot = decision_snapshot
+    await db.flush()
+    logger.info(
+        "direct 单自动入账: receipt=%s threshold=%s source=%s",
+        accepted.receipt_no, threshold, enabled_view.source,
+    )
+    return accepted

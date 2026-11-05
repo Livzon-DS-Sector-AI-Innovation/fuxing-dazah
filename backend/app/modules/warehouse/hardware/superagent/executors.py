@@ -260,6 +260,14 @@ async def fetch_digest_numbers(
             .subquery()
         )
     )
+    # M9 自动入账披露（本周 auto_accepted 单数；§9.3 放权观察口径）
+    auto_accepted_count = await session.scalar(
+        select(func.count()).select_from(HardwareReceipt).where(
+            HardwareReceipt.auto_accepted.is_(True),
+            HardwareReceipt.accepted_at >= day_start,
+            HardwareReceipt.is_deleted.is_(False),
+        )
+    )
     return {
         "date": now.strftime("%Y-%m-%d"),
         "days": days,
@@ -270,6 +278,7 @@ async def fetch_digest_numbers(
         "urgent_overdue": int(urgent_overdue or 0),
         "draft_backlog": int(draft_backlog or 0),
         "low_stock_count": int(low_count or 0),
+        "auto_accepted_count": int(auto_accepted_count or 0),
     }
 
 
