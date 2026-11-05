@@ -581,3 +581,94 @@ async def test_round_passes_round_id_to_identify_one(
 
 async def _async_list(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items
+
+
+# ═══════════════════════════════════════════════════════════════
+# 4. ②初审 to_thread：慢速同步图片编码期间事件循环不被阻塞（P0-B / F12）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _review_fake_output() -> SimpleNamespace:
+    level = SimpleNamespace(value="medium")
+    return SimpleNamespace(
+        defect_reassessment="整改后缺陷已消除",
+        defect_reassessment_level="medium",
+        photo_match_analysis="照片一致",
+        photo_match_level=level,
+        measure_quality_assessment="措施有效",
+        measure_quality_level=level,
+        standard_compliance="符合要求",
+        standard_compliance_level=level,
+        review_conclusion=SimpleNamespace(value="已通过"),
+        review_comments="整改到位",
+        confidence=0.9,
+        reasoning="依据充分",
+    )
+
+
+async def test_review_photo_encoding_runs_in_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_review_one 的 photos_to_data_uris 是同步慢编码，必须在线程里跑（F12）。"""
+    from app.modules.safety.service.hazard_direct import review
+
+    threads: list[str] = []
+
+    async def fake_download_photos(
+        client: Any,
+        fields: dict[str, Any],
+        *,
+        record_id: str,
+        include_rectification: bool = True,
+    ) -> dict[str, list[str]]:
+        return {
+            "defect": ["/tmp/a.jpg"],
+            "rectification": ["/tmp/b.jpg"] if include_rectification else [],
+        }
+
+    def slow_photos_to_data_uris(paths: list[str]) -> list[str]:
+        time.sleep(0.2)  # 同步阻塞假件
+        threads.append(threading.current_thread().name)
+        return ["data:image/jpeg;base64,1"] if paths else []
+
+    monkeypatch.setattr(bitable_repo, "download_photos", fake_download_photos)
+    monkeypatch.setattr(bitable_repo, "photos_to_data_uris", slow_photos_to_data_uris)
+
+    async def fake_load_knowledge(session: Any, description: str) -> None:
+        return None
+
+    monkeypatch.setattr(review, "_load_knowledge_context", fake_load_knowledge)
+
+    class _FakeAIService:
+        def __init__(self, config_type: str) -> None:
+            self.config_type = config_type
+
+        async def close(self) -> None:
+            return None
+
+    import app.modules.safety.service.config as service_config
+
+    monkeypatch.setattr(
+        service_config, "create_ai_service", lambda config_type="text": _FakeAIService(config_type)
+    )
+
+    class _FakeReviewer:
+        def __init__(self, ai_service: Any, plugin_config: Any, knowledge_context: Any = None) -> None:
+            self.ai_service = ai_service
+
+        async def review(self, input_data: Any) -> SimpleNamespace:
+            return _review_fake_output()
+
+    import app.modules.safety.ai_rectification_review as rectification_review
+
+    monkeypatch.setattr(rectification_review, "AIRectificationReviewer", _FakeReviewer)
+
+    view = bitable_repo.HazardView(
+        record_id="rec1", description="隐患描述", rectify_reply="已整改"
+    )
+    _, ticks = await _run_with_heartbeat(review._review_one(object(), view))
+
+    # 2 次 0.2s 同步阻塞若在事件循环线程：心跳最多 0~1 次；在线程里约 40 次。
+    assert ticks >= 8
+    assert len(threads) == 2
+    assert threads[0] != threading.main_thread().name

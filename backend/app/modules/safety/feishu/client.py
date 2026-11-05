@@ -31,10 +31,13 @@ _DEFAULT_TOKEN_EXPIRE_SECONDS = 7200.0
 _TOKEN_REFRESH_MARGIN_MAX_SECONDS = 300.0
 _TOKEN_REFRESH_MARGIN_RATIO = 0.1
 
-# 进程内缓存：(token, 提前刷新时间点，monotonic 秒)
-_token_cache: tuple[str, float] | None = None
+# 进程内缓存：app_id → (token, 提前刷新时间点，monotonic 秒)。
+# 按 app_id 分键（F10）：进程内多应用安全，不同应用凭证的 token 互不串用。
+_token_caches: dict[str, tuple[str, float]] = {}
 # 单飞锁：按当前事件循环惰性创建——asyncio.Lock 首次使用后绑定 loop，
 # 不能跨 loop 复用（pytest 每个用例新 loop），故换 loop 重建而不是全局单锁。
+# 注：单飞锁仍为进程级（未按 app 粒度拆分），多 app 高并发时会互相等待；
+# 低风险，记录为后续优化项（F10 本窗口口径）。
 _token_lock: asyncio.Lock | None = None
 _token_lock_loop: asyncio.AbstractEventLoop | None = None
 
@@ -78,17 +81,21 @@ def _parse_expire_seconds(raw: Any) -> float:
     return expire if expire > 0 else _DEFAULT_TOKEN_EXPIRE_SECONDS
 
 
-def _cached_token() -> str | None:
+def _cache_key(app_id: str | None = None) -> str:
+    """token 缓存键：显式 app_id 优先，否则取当前配置的安全应用 app_id。"""
+    return app_id if app_id is not None else SAFETY_FEISHU_APP_ID
+
+
+def _cached_token(cache_key: str) -> str | None:
     """缓存命中（未到提前刷新点）返回 token，否则返回 None。"""
-    cached = _token_cache
+    cached = _token_caches.get(cache_key)
     if cached is not None and _now() < cached[1]:
         return cached[0]
     return None
 
 
-def _store_token(token: str, expire_seconds: float) -> None:
-    global _token_cache
-    _token_cache = (token, _refresh_at(expire_seconds))
+def _store_token(cache_key: str, token: str, expire_seconds: float) -> None:
+    _token_caches[cache_key] = (token, _refresh_at(expire_seconds))
 
 
 def _get_token_lock() -> asyncio.Lock:
@@ -101,11 +108,18 @@ def _get_token_lock() -> asyncio.Lock:
     return _token_lock
 
 
-def invalidate_safety_tenant_token() -> None:
-    """清空进程内 tenant_access_token 缓存（token 失效 / 需强制重取时调用）。"""
-    global _token_cache
-    _token_cache = None
-    logger.debug("安全模块飞书 tenant token 缓存已清空")
+def invalidate_safety_tenant_token(app_id: str | None = None) -> None:
+    """清空进程内 tenant_access_token 缓存。
+
+    ``app_id=None`` → 清空全部应用（维持既有调用语义）；
+    传 ``app_id`` → 只清该应用的缓存（F10 粒度，token 失效重试可用）。
+    """
+    if app_id is None:
+        _token_caches.clear()
+        logger.debug("安全模块飞书 tenant token 缓存已清空（全部应用）")
+    else:
+        _token_caches.pop(app_id, None)
+        logger.debug("安全模块飞书 tenant token 缓存已清空: app_id=%s", app_id)
 
 
 async def _fetch_safety_tenant_token(
@@ -147,23 +161,25 @@ async def _fetch_safety_tenant_token(
 async def get_safety_tenant_token(client: lark.Client | None = None) -> str:
     """获取安全模块飞书应用的 tenant_access_token（进程内缓存 + 单飞）。
 
-    缓存按响应 ``expire`` 提前刷新（margin = min(300s, expire 的 10%)，
-    拿不到 expire 默认 7200s）；``invalidate_safety_tenant_token()`` 可强制
-    下次重取。并发穿透由单飞锁挡住：同一时刻最多一次底层 token 请求。
+    缓存按 ``app_id`` 分键（F10：进程内多应用安全），按响应 ``expire`` 提前刷新
+    （margin = min(300s, expire 的 10%)，拿不到 expire 默认 7200s）；
+    ``invalidate_safety_tenant_token()`` 可强制下次重取（传 app_id 可只清该应用）。
+    并发穿透由单飞锁挡住：同一时刻最多一次底层 token 请求。
 
     获取失败仍抛 RuntimeError，失败结果不缓存（下次调用会重新尝试）。
     """
-    cached = _cached_token()
+    cache_key = _cache_key()
+    cached = _cached_token(cache_key)
     if cached is not None:
         return cached
 
     async with _get_token_lock():
-        cached = _cached_token()
+        cached = _cached_token(cache_key)
         if cached is not None:
             return cached
         token, expire_seconds = await _fetch_safety_tenant_token(client)
         if token:
-            _store_token(token, expire_seconds)
+            _store_token(cache_key, token, expire_seconds)
         else:
             logger.warning("安全模块飞书 tenant token 响应缺少 token，暂不缓存")
         return token

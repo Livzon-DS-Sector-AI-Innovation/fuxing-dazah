@@ -9,7 +9,12 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from collections.abc import Iterator
 from typing import Any
+
+import pytest
 
 from app.modules.safety.service.hazard_direct import failure_ledger
 
@@ -93,6 +98,72 @@ class FakeRedis:
         self._check()
         self.calls.append(f"delete:{key}")
         return 1 if self.store.pop(key, None) is not None else 0
+
+
+class FlakyRedis(FakeRedis):
+    """可让指定 Redis 命令抛异常的假件（模拟连接抖动/部分命令失败）。
+
+    与 ``fail=True``（所有命令失败）不同，本假件只让 ``fail_methods`` 中的
+    单个命令抛 ``ConnectionError``，用于验证失败账本各写入步骤的异常安全。
+    """
+
+    def __init__(self, fail_methods: set[str] | None = None) -> None:
+        super().__init__()
+        self.fail_methods = set(fail_methods or ())
+
+    def _maybe_fail(self, method: str) -> None:
+        if method in self.fail_methods:
+            raise ConnectionError(f"redis {method} down")
+
+    async def get(self, key: str) -> Any:
+        self._maybe_fail("get")
+        return await super().get(key)
+
+    async def set(
+        self, key: str, value: str, *, ex: int | None = None, nx: bool = False
+    ) -> Any:
+        self._maybe_fail("set")
+        return await super().set(key, value, ex=ex, nx=nx)
+
+    async def incr(self, key: str) -> int:
+        self._maybe_fail("incr")
+        return await super().incr(key)
+
+    async def expire(self, key: str, seconds: int) -> Any:
+        self._maybe_fail("expire")
+        return await super().expire(key, seconds)
+
+    async def hset(self, key: str, field: str, value: str) -> Any:
+        self._maybe_fail("hset")
+        return await super().hset(key, field, value)
+
+    async def hgetall(self, key: str) -> dict[str, str]:
+        self._maybe_fail("hgetall")
+        return await super().hgetall(key)
+
+    async def hget(self, key: str, field: str) -> Any:
+        self._maybe_fail("hget")
+        return await super().hget(key, field)
+
+    async def hdel(self, key: str, field: str) -> Any:
+        self._maybe_fail("hdel")
+        return await super().hdel(key, field)
+
+    async def delete(self, key: str) -> Any:
+        self._maybe_fail("delete")
+        return await super().delete(key)
+
+
+@pytest.fixture
+def ledger_log_capture(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCaptureFixture]:
+    """捕获 failure_ledger 日志（应用 logger 可能 propagate=False，直挂 handler）。"""
+    logger = logging.getLogger(failure_ledger.__name__)
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=failure_ledger.__name__)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
 
 
 async def test_next_round_seq_increments_and_keeps_ttl() -> None:
@@ -413,3 +484,115 @@ async def test_retry_status_fail_open_on_redis_error() -> None:
 
     assert await failure_ledger.retry_status("rec-x", 1, redis=redis) == "ok"
     assert await failure_ledger.should_retry("rec-x", 1, redis=redis) is True
+
+
+# ═══════════════════════════════════════════════════════════════
+# T08 · F6 失败账本异常路径 + round_seq 进程内单调（spec B7-1）
+# ═══════════════════════════════════════════════════════════════
+
+# 4 次失败（未死信）作为种子；第 5 次失败进入死信写入路径（hset + expire）。
+_SEED_ROUNDS: tuple[int, ...] = (1, 2, 5, 14)
+
+
+def _attempts_payload(redis: FakeRedis, record_id: str) -> dict[str, Any]:
+    raw = redis.store.get(failure_ledger.attempts_key(record_id))
+    assert raw is not None
+    payload: Any = json.loads(raw)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _dead_hash(redis: FakeRedis) -> dict[str, Any]:
+    bucket = redis.store.get(failure_ledger.DEAD_LETTERS_KEY)
+    return dict(bucket) if isinstance(bucket, dict) else {}
+
+
+@pytest.mark.parametrize("fail_method", ["get", "set", "hset", "expire"])
+async def test_record_failure_redis_errors_never_raise_and_suppress_alert(
+    fail_method: str, ledger_log_capture: pytest.LogCaptureFixture
+) -> None:
+    """每个写入步骤抛异常：不向上抛、is_new=False（不刷告警）、warning 日志。"""
+    redis = FlakyRedis()
+    for round_seq in _SEED_ROUNDS:
+        await failure_ledger.record_failure(
+            "rec-flaky", round_seq, "api_error", "超时", redis=redis
+        )
+    redis.fail_methods = {fail_method}
+
+    state = await failure_ledger.record_failure(
+        "rec-flaky", 23, "api_error", "超时", redis=redis
+    )
+
+    assert state.is_new is False  # 异常路径不触发「本轮新增失败」告警
+    assert state.dead is False  # fail-open 不对外宣称死信
+    assert any(
+        "失败账本写入失败" in record.getMessage()
+        for record in ledger_log_capture.records
+    )
+    # 数据一致性钉子：attempts 标 dead ⇒ 死信 hash 必须存在
+    payload = _attempts_payload(redis, "rec-flaky")
+    if payload.get("dead"):
+        assert "rec-flaky" in _dead_hash(redis)
+
+
+async def test_dead_letter_hash_write_failure_keeps_attempts_not_dead(
+    ledger_log_capture: pytest.LogCaptureFixture,
+) -> None:
+    """死信 hash 写失败 → attempts 不得标 dead（避免死信静默丢失）。"""
+    redis = FlakyRedis()
+    for round_seq in _SEED_ROUNDS:
+        await failure_ledger.record_failure(
+            "rec-dead-flaky", round_seq, "api_error", "永久失败", redis=redis
+        )
+    redis.fail_methods = {"hset"}
+
+    state = await failure_ledger.record_failure(
+        "rec-dead-flaky", 23, "api_error", "永久失败", redis=redis
+    )
+
+    assert state.is_new is False
+    assert state.dead is False
+    payload = _attempts_payload(redis, "rec-dead-flaky")
+    assert payload.get("dead") is False
+    assert "rec-dead-flaky" not in _dead_hash(redis)
+
+
+async def test_record_failure_resolve_error_is_suppressed(
+    monkeypatch: pytest.MonkeyPatch, ledger_log_capture: pytest.LogCaptureFixture
+) -> None:
+    """Redis 客户端解析失败（_resolve 抛异常）也不向上抛。"""
+
+    def _boom() -> Any:
+        raise RuntimeError("redis client 初始化失败")
+
+    monkeypatch.setattr(failure_ledger, "_get_redis", _boom)
+
+    state = await failure_ledger.record_failure("rec-no-redis", 1, "api_error", "boom")
+
+    assert state.is_new is False
+    assert state.dead is False
+    assert any(
+        "失败账本写入失败" in record.getMessage()
+        for record in ledger_log_capture.records
+    )
+
+
+async def test_next_round_seq_monotonic_during_outage_and_after_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redis 故障期间本地序号递增；恢复后不得回退到已发序号之下。"""
+    monkeypatch.setattr(failure_ledger, "_LAST_SEQ", 0)
+    redis = FlakyRedis({"incr", "expire"})
+
+    issued = [await failure_ledger.next_round_seq(redis=redis) for _ in range(3)]
+    assert issued == sorted(set(issued))  # 严格递增（不重复）
+    assert issued[0] >= 1
+
+    # Redis 恢复（但计数器从 1 重新开始，低于故障期间已发序号）→ 进程内单调
+    redis.fail_methods = set()
+    recovered = [await failure_ledger.next_round_seq(redis=redis) for _ in range(3)]
+
+    history = issued + recovered
+    assert history == sorted(history)  # 非降（进程内单调不回退）
+    assert recovered[0] >= issued[-1]
+    assert redis.ttls[failure_ledger.ROUND_SEQ_KEY] == SEVEN_DAYS

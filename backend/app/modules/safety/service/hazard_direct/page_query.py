@@ -153,11 +153,13 @@ def _matches(
                 return False
         elif v.rectification_status != rectification_status:
             return False
-    if hazard_type and (v.hazard_type or "") != hazard_type:
+    # 筛选口径 = 展示口径（P0-B B2）：人工列优先、AI 列 fallback 的 effective_*
+    # 才参与权威判断；AI 原始等级/分类/类别列仅用于 tooltip/审计，不再作筛选依据。
+    if hazard_type and (v.effective_type or "") != hazard_type:
         return False
-    if hazard_level and not _match_level(v.hazard_level, hazard_level):
+    if hazard_level and not _match_level(v.effective_level, hazard_level):
         return False
-    if hazard_category and (v.hazard_category or "") != hazard_category:
+    if hazard_category and (v.effective_category or "") != hazard_category:
         return False
     if inspection_category and inspection_category not in (v.inspection_category or ""):
         return False

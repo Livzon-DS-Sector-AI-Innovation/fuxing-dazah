@@ -40,9 +40,11 @@ async def _score_one(client: Any, view: bitable_repo.HazardView):
         hazard_no=view.hazard_no or view.record_id[:8],
         description=view.description or "无描述",
         key_defect=view.key_defect,
-        hazard_type=view.hazard_type,
-        hazard_category=view.hazard_category,
-        hazard_level=view.hazard_level,
+        # 读口径（P0-B B2）：评分输入 = effective_*（人工优先、AI fallback），
+        # 不再直读 AI 列；口径来源在评分说明末尾标注。
+        hazard_type=view.effective_type,
+        hazard_category=view.effective_category,
+        hazard_level=view.effective_level,
         major_hazard_basis=view.major_hazard_basis or None,
         department=view.department,
         inspection_category=view.inspection_category,
@@ -64,11 +66,18 @@ async def _score_one(client: Any, view: bitable_repo.HazardView):
         await ai_service.close()
 
 
-def _build_note(out: "HazardScoringOutput", total: float) -> str:
+def _build_note(
+    out: "HazardScoringOutput", total: float, level_source: str | None = None
+) -> str:
     """评分说明固定格式（前端按「｜」切分取首段做 H/M/L 色点）。
 
     模板：{band}｜{L档}{L值}×{E档}{E值}×{C档}{C值}×{X档}{X值}={D}｜{评语}｜依据:{条目}
           [｜重大判定:{条款;条款}] [｜⚠分值与风险等级不一致…]
+          [｜基于人工等级 | ｜基于AI等级（人工等级缺失）]
+
+    等级口径段追加在**末尾**（首段=band 的前端契约不变）：输入等级取自
+    ``effective_level``，human 来源标注「基于人工等级」；AI fallback 标注
+    「基于AI等级（人工等级缺失）」，避免把 AI 候选当人工结论。
     """
     from app.modules.safety.ai_hazard_scoring import rules
 
@@ -96,6 +105,11 @@ def _build_note(out: "HazardScoringOutput", total: float) -> str:
     warning = rules.band_consistency(out, total)
     if warning:
         parts.append(warning)
+    # 等级口径标注（末尾追加，不破坏「首段=band」前端契约）
+    if level_source == "human":
+        parts.append("基于人工等级")
+    elif level_source == "ai":
+        parts.append("基于AI等级（人工等级缺失）")
     return "｜".join(parts)
 
 
@@ -132,7 +146,7 @@ async def run_scoring_round(
                     view = bitable_repo.to_view(record)
                     output = await _score_one(client, view)
                     total = compute_total(output)
-                    note = _build_note(output, total)
+                    note = _build_note(output, total, view.effective_level_source)
 
                 async with write_lock:
                     ok = await bitable_repo.write_scoring(

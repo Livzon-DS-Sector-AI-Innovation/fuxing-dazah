@@ -270,6 +270,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await drain_safety_scheduled_tasks()
 
+    # ── 关闭进程级 AI 单例（①视觉/文本客户端是进程级 httpx.AsyncClient，
+    #    shutdown 不关闭会泄漏连接；异常只告警，不阻塞退出）──
+    try:
+        from app.modules.safety.service.config import close_all_ai_services
+
+        await close_all_ai_services()
+    except Exception:
+        logger.warning("关闭 AI 单例失败（不阻塞退出）", exc_info=True)
+
     member_task.cancel()
     maintenance_plan_task.cancel()
 

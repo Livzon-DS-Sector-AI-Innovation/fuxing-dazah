@@ -52,6 +52,7 @@ from app.modules.safety.service.hazard_direct.alert import notify_admin, notify_
 from app.modules.safety.service.hazard_direct.failure_ledger import (
     AI_INFRA_ALERT_KEY,
     DEAD_LETTERS_KEY,
+    format_dead_letter_lines,
 )
 from app.modules.safety.service.hazard_direct.round_result import RoundResult
 
@@ -569,6 +570,9 @@ async def run_ai_analysis_round(
         len(dead_letters), len(rag_infra_failures), len(ai_infra_failures),
         round_id,
     )
+    # F8 死信可观测：轮末打印 top-N 明细（不再只有累计数量），人工排查无需进 Redis。
+    for dead_letter_line in format_dead_letter_lines(dead_letters, limit=10):
+        logger.info("① 死信明细: %s", dead_letter_line)
     if notify:
         # 告警收敛：阈值只看本轮新增失败（同一批失败不会每轮重复告警）
         if new_failures and len(new_failures) >= config.alert_min_failures():

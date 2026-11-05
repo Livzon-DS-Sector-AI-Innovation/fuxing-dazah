@@ -147,7 +147,9 @@ def _internal_export_rows(views: list[Any]) -> list[list[str]]:
             "内部",
             v.department or "",
             v.description or "",
-            v.hazard_level or v.hazard_level_manual or "",
+            # 读口径（P0-B B2）：effective_level = 人工优先 / AI fallback
+            # （旧实现 AI 优先，人工等级被 AI 值覆盖）
+            v.effective_level or "",
             v.rectification_responsible_person_name or "",
             v.discovered_at.isoformat() if v.discovered_at else "",
             _RECTIFY_LABELS.get(v.rectification_status, "未关闭"),

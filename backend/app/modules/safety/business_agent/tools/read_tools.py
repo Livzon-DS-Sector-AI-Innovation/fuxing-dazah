@@ -115,6 +115,18 @@ async def query_hazards(
                 "rectification_responsible_person_name": (
                     v.rectification_responsible_person_name
                 ),
+                # 读口径（P0-B B2）：等级/类型/类别统一走 effective_*（人工优先、
+                # AI fallback）+ source；mismatch 时附 AI 原始 EN 值供 Agent 说明
+                # 「AI 建议」。外部来源 items 不带这些字段（字段缺省）。
+                "hazard_level": v.effective_level,
+                "hazard_level_source": v.effective_level_source,
+                "hazard_type": v.effective_type,
+                "hazard_category": v.effective_category,
+                **(
+                    {"ai_hazard_level": v.hazard_level}
+                    if v.effective_level_mismatch
+                    else {}
+                ),
             }
             for v in views
         ]

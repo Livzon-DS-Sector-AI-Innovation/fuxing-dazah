@@ -6,6 +6,7 @@
 - ``invalidate_safety_tenant_token()`` 后下一次调用重新取；
 - 缓存不绑定 event loop（跨 loop 复用缓存 / 单飞锁换 loop 不报错）；
 - 获取失败仍抛 RuntimeError 且不污染缓存；
+- 缓存按 app_id 分键（F10）：两个应用互不串用、invalidate 支持单 app 粒度；
 - 主路径 ``search_records`` / ``update_record`` / ``download_attachment_from_url``
   遇到飞书 token 失效码 → invalidate 后重试一次（仅一次）。
 
@@ -426,3 +427,72 @@ async def test_main_paths_reuse_cached_token_without_refetch(
 
     assert len(requests) == 2
     assert fake_tenant_api.calls == 1  # 两条主路径复用同一缓存 token
+
+
+# ═══════════════════════════════════════════════════════════
+# 5. F10：token 缓存按 app_id 分键 + invalidate 粒度
+# ═══════════════════════════════════════════════════════════
+
+
+async def test_two_apps_have_separate_token_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """不同 app 凭证的 token 缓存互不串用（进程内多应用安全）。"""
+    api = _FakeTenantTokenAPI(tokens=["tok-a", "tok-b"])
+    fake = _fake_lark_client(api)
+
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-a")
+    assert await get_safety_tenant_token(fake) == "tok-a"
+
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-b")
+    assert await get_safety_tenant_token(fake) == "tok-b"
+    assert api.calls == 2
+
+    # 切回 app-a：命中 app-a 自己的缓存，不重新取
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-a")
+    assert await get_safety_tenant_token(fake) == "tok-a"
+    assert api.calls == 2
+
+
+async def test_invalidate_single_app_keeps_other_app_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """invalidate(app_id) 只清该应用；其余应用缓存保留。"""
+    api = _FakeTenantTokenAPI(tokens=["tok-a", "tok-b"])
+    fake = _fake_lark_client(api)
+
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-a")
+    assert await get_safety_tenant_token(fake) == "tok-a"
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-b")
+    assert await get_safety_tenant_token(fake) == "tok-b"
+    assert api.calls == 2
+
+    invalidate_safety_tenant_token("app-b")
+    # 只清 app-b：下一次 app-b 调用重取（app-a 不受影响）
+    assert await get_safety_tenant_token(fake) == "tok-b"
+    assert api.calls == 3
+
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-a")
+    assert await get_safety_tenant_token(fake) == "tok-a"
+    assert api.calls == 3  # app-a 缓存保留，未重取
+
+
+async def test_invalidate_without_app_clears_all_apps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """invalidate() 无参 = 全部清（维持既有调用语义）。"""
+    api = _FakeTenantTokenAPI(tokens=["tok-a", "tok-b"])
+    fake = _fake_lark_client(api)
+
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-a")
+    assert await get_safety_tenant_token(fake) == "tok-a"
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-b")
+    assert await get_safety_tenant_token(fake) == "tok-b"
+    assert api.calls == 2
+
+    invalidate_safety_tenant_token()
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-a")
+    await get_safety_tenant_token(fake)
+    monkeypatch.setattr(client_module, "SAFETY_FEISHU_APP_ID", "app-b")
+    await get_safety_tenant_token(fake)
+    assert api.calls == 4  # 全部清 → 两个 app 都重取

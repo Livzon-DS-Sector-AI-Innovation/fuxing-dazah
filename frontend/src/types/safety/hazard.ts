@@ -63,6 +63,19 @@ export interface HazardReport {
   // ── ⑤ AI 评分（D=L×E×C×X，制度 §10.3）──
   score?: number | null  // 直读模式透传；未评分为 null
   score_note?: string | null  // 「H｜四维=D｜评语｜依据[｜重大判定][｜⚠]」，首段即 H/M/L
+  // ── 字段口径治理（P0-B）：人工优先 + AI fallback 的统一读口径 ──
+  // 直读模式有值；mirror 模式（旧 DB 路径）为 null/undefined，前端回退旧口径展示。
+  // effective_* 与原始 hazard_level/type/category 同域（EN 枚举码），中文 label 由前端映射；
+  // 原始 hazard_level/type/category 即 AI 原始建议值，仅用于 mismatch 提示。
+  effective_level?: HazardLevel | null
+  effective_level_source?: 'human' | 'ai' | null
+  effective_level_mismatch?: boolean | null
+  effective_type?: HazardType | null
+  effective_type_source?: 'human' | 'ai' | null
+  effective_type_mismatch?: boolean | null
+  effective_category?: HazardCategory | null
+  effective_category_source?: 'human' | 'ai' | null
+  effective_category_mismatch?: boolean | null
 }
 
 export interface HazardReportFormData {

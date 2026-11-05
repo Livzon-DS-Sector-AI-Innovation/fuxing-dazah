@@ -309,7 +309,9 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
                     (datetime.now(UTC).date() - view.discovered_at.date()).days
                     if view.discovered_at else 0
                 )
-                level_label = _level_label(view.hazard_level_manual or view.hazard_level)
+                # 读口径（P0-B B2）：effective_level（人工优先 / AI fallback），
+                # 多选人工级别已按最高严重度归一，不再直读人工 raw / AI 列。
+                level_label = _level_label(view.effective_level)
                 if level_label not in ("-",) and not level_label.endswith("隐患"):
                     level_label += "隐患"
                 inspection = (view.inspection_category or "-").replace(", ", "、").replace(",", "、")

@@ -172,6 +172,32 @@ class HazardReportResponse(HazardReportBase):
     # ── 督办进展监控（系统回写，用户不可写）──
     supervision_progress_status: str | None = None
     progress_note_updated_at: datetime | None = None
+    # ── 字段口径治理（P0-B）：人工优先 + AI fallback 的统一读口径 ──
+    # 直读模式：人工列非空取人工，否则 fallback AI 列并标注 source；mirror 模式恒 None。
+    # mismatch=True 仅人工与 AI 双方均有值且不相等（前端据此展示「AI建议」差异提示）。
+    effective_level: HazardLevel | None = Field(
+        None, description="隐患等级（人工优先；AI 为空时回退 AI）"
+    )
+    effective_level_source: str | None = Field(
+        None, description="effective_level 来源：human / ai / null"
+    )
+    effective_level_mismatch: bool | None = Field(
+        None, description="人工与 AI 等级是否不一致（双方均有值且不等）"
+    )
+    effective_type: HazardType | None = Field(
+        None, description="隐患分类（人工优先；AI 为空时回退 AI）"
+    )
+    effective_type_source: str | None = Field(None, description="human / ai / null")
+    effective_type_mismatch: bool | None = Field(
+        None, description="人工与 AI 分类是否不一致"
+    )
+    effective_category: HazardCategory | None = Field(
+        None, description="隐患类别（人工优先；AI 为空时回退 AI）"
+    )
+    effective_category_source: str | None = Field(None, description="human / ai / null")
+    effective_category_mismatch: bool | None = Field(
+        None, description="人工与 AI 类别是否不一致"
+    )
 
     class Config:
         from_attributes = True

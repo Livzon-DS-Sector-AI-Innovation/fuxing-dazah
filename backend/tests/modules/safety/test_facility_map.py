@@ -780,6 +780,8 @@ def _hz_view(
         description=desc,
         hazard_level="general",
         hazard_level_manual=None,
+        # T02 接口对齐：hazard_rows_for_day 读 effective_level（人工优先/AI fallback）
+        effective_level="general",
         progress_note=progress,
         discovered_at=discovered_at,
         rectification_status=status,

@@ -7,6 +7,7 @@ import {
   Input,
   Space,
   Popover,
+  Tooltip,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -120,9 +121,149 @@ const FILTER_FIELDS: FilterFieldConfig[] = [
   },
 ]
 
-// ── 隐患类别标签映射 ──
-const HAZARD_CATEGORY_LABEL_MAP: Record<string, string> = {}
-HAZARD_CATEGORY_OPTIONS.forEach((o) => { HAZARD_CATEGORY_LABEL_MAP[o.value] = o.label })
+// ═══════════════════════════════════════════════════════════════
+// 字段口径治理（P0-B）：隐患等级/类别/类型三列统一读口径
+// 权威值 = effective_*（人工优先 + AI fallback）；mirror 模式（effective 全 null）
+// 回退旧字段，旧 DB 路径页面不空。原始 hazard_level/type/category 仅作 AI 建议展示。
+// ═══════════════════════════════════════════════════════════════
+type EffectiveFieldKey = 'hazard_level' | 'hazard_type' | 'hazard_category'
+type EffectiveSource = 'human' | 'ai'
+
+interface EffectiveCellValue {
+  /** 权威展示值（EN 枚举码；mirror 模式回退旧字段归一后的值） */
+  value: string | null
+  /** 来源：human=人工；ai=人工为空回退 AI 建议；null=mirror 模式/无值 */
+  source: EffectiveSource | null
+  /** 人工与 AI 双方均有值且不一致 */
+  mismatch: boolean
+  /** AI 原始建议值（EN 枚举码，mismatch 提示用） */
+  aiValue: string | null
+}
+
+/** 解析三列统一读口径：effective_* 优先，mirror 模式（source 缺失）回退旧口径。
+ *
+ * 三态：
+ * 1. effective 有值 → 直读权威值（source=human/ai）；
+ * 2. effective 为空且 source="human" → 人工权威但枚举无法归一（如 Bitable 新增
+ *    选项），**不回退 AI/旧字段**，按空值展示（避免 AI 建议被当权威）；
+ * 3. source 缺失（mirror/DB 模式）→ 回退旧字段，保持旧页面行为。
+ */
+function resolveEffectiveCell(record: HazardReport, field: EffectiveFieldKey): EffectiveCellValue {
+  if (field === 'hazard_level') {
+    const effective = record.effective_level ?? null
+    const source = record.effective_level_source ?? null
+    if (effective) {
+      return {
+        value: effective,
+        source,
+        mismatch: record.effective_level_mismatch === true,
+        aiValue: record.hazard_level ?? null,
+      }
+    }
+    if (source === 'human') {
+      return { value: null, source, mismatch: false, aiValue: record.hazard_level ?? null }
+    }
+    // effective（直读）已是 EN 枚举码；仅 mirror 回退路径需要中文归一。
+    return {
+      value: normalizeHazardLevel(record.hazard_level_manual || record.hazard_level) || null,
+      source: null,
+      mismatch: false,
+      aiValue: record.hazard_level ?? null,
+    }
+  }
+  const effective = field === 'hazard_type' ? record.effective_type : record.effective_category
+  const source = field === 'hazard_type'
+    ? record.effective_type_source
+    : record.effective_category_source
+  const mirrorValue = field === 'hazard_type' ? record.hazard_type : record.hazard_category
+  const mismatch = field === 'hazard_type'
+    ? record.effective_type_mismatch === true
+    : record.effective_category_mismatch === true
+  const aiValue = mirrorValue ?? null
+  if (effective) {
+    return { value: effective, source: source ?? null, mismatch, aiValue }
+  }
+  if (source === 'human') {
+    // 人工权威但枚举无法归一：不回退 AI 值（审查 (c)1 修复）
+    return { value: null, source, mismatch: false, aiValue }
+  }
+  return { value: mirrorValue ?? null, source: null, mismatch: false, aiValue }
+}
+
+/** EN 枚举码 → 中文 label（未识别时回退原值）。 */
+function effectiveLabel(field: EffectiveFieldKey, value: string | null): string | null {
+  if (!value) return null
+  if (field === 'hazard_level') {
+    return HAZARD_LEVEL_OPTIONS.find((o) => o.value === value)?.label ?? value
+  }
+  const options = field === 'hazard_type' ? HAZARD_TYPE_OPTIONS : HAZARD_CATEGORY_OPTIONS
+  return options.find((o) => o.value === value)?.label ?? value
+}
+
+/** 三列共用渲染：StatusTag +（source=ai）「AI建议」徽标 +（mismatch）Tooltip 展示 AI 建议差异。 */
+function renderEffectiveStatus(record: HazardReport, field: EffectiveFieldKey) {
+  const cell = resolveEffectiveCell(record, field)
+  const label = effectiveLabel(field, cell.value)
+  if (!cell.value || !label) return <span style={{ color: '#a4a097' }}>-</span>
+
+  const tag = (
+    <StatusTag
+      tone={field === 'hazard_level' ? (LEVEL_TONE[cell.value] ?? 'default') : 'default'}
+      label={label}
+    />
+  )
+  const aiLabel = effectiveLabel(field, cell.aiValue)
+  const mismatchText = cell.mismatch && aiLabel
+    ? `AI建议：${aiLabel}（与人工不一致）`
+    : null
+
+  if (mismatchText) {
+    return (
+      <Tooltip title={mismatchText}>
+        <span
+          data-testid={`effective-cell-${field}`}
+          data-mismatch="true"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'help' }}
+        >
+          {tag}
+        </span>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <span
+      data-testid={`effective-cell-${field}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+    >
+      {tag}
+      {cell.source === 'ai' && (
+        <span
+          data-testid="ai-suggestion-badge"
+          style={{
+            fontSize: 10,
+            lineHeight: '16px',
+            padding: '0 4px',
+            borderRadius: 4,
+            background: '#f0eeec',
+            color: '#787671',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          AI建议
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** 客户端排序取值：三列按 effective（mirror 回退旧口径），其余按原字段。 */
+function sortableValue(record: HazardReport, field: string): string {
+  if (field === 'hazard_level' || field === 'hazard_type' || field === 'hazard_category') {
+    return resolveEffectiveCell(record, field).value ?? ''
+  }
+  return String((record as unknown as Record<string, unknown>)[field] ?? '')
+}
 
 export default function HazardLedgerPage() {
   const [searchText, setSearchText] = useState('')
@@ -175,14 +316,12 @@ export default function HazardLedgerPage() {
     }),
   })
 
-  // 客户端排序
+  // 客户端排序（三列按 effective 显示口径排序，其余按原字段）
   const hazards = useMemo(() => {
     const items = listData?.items ?? []
     if (sortField && sortOrder) {
       return [...items].sort((a, b) => {
-        const aVal = (a as unknown as Record<string, unknown>)[sortField] ?? ''
-        const bVal = (b as unknown as Record<string, unknown>)[sortField] ?? ''
-        const cmp = String(aVal).localeCompare(String(bVal), 'zh-CN')
+        const cmp = sortableValue(a, sortField).localeCompare(sortableValue(b, sortField), 'zh-CN')
         return sortOrder === 'ascend' ? cmp : -cmp
       })
     }
@@ -286,11 +425,6 @@ export default function HazardLedgerPage() {
     }
   }
 
-  const getLevelLabel = (level: string) => {
-    const option = HAZARD_LEVEL_OPTIONS.find((o) => o.value === normalizeHazardLevel(level))
-    return option?.label || level
-  }
-
   // ── 统计（来自 API 全局数据，不受分页/筛选影响）──
   const getPillCount = (key: string): number => {
     if (!hazardStats) return 0
@@ -372,12 +506,7 @@ export default function HazardLedgerPage() {
       key: 'hazard_level',
       width: 100,
       sorter: false,
-      render: (_: unknown, record: HazardReport) => {
-        // 督办判定以人工等级为准，台账展示优先显示人工等级，缺失时回退 AI 等级
-        // 归一化兼容 DB 中英文混存（一般隐患/general）
-        const level = normalizeHazardLevel(record.hazard_level_manual || record.hazard_level)
-        return <StatusTag tone={LEVEL_TONE[level] ?? 'default'} label={getLevelLabel(level)} />
-      },
+      render: (_: unknown, record: HazardReport) => renderEffectiveStatus(record, 'hazard_level'),
     },
     {
       title: '督办等级',
@@ -434,10 +563,8 @@ export default function HazardLedgerPage() {
       key: 'hazard_category',
       width: 100,
       sorter: false,
-      render: (category: string) => {
-        const option = HAZARD_CATEGORY_OPTIONS.find((o) => o.value === category)
-        return <StatusTag label={option?.label || category || '-'} />
-      },
+      render: (_: unknown, record: HazardReport) =>
+        renderEffectiveStatus(record, 'hazard_category'),
     },
     {
       title: (
@@ -452,10 +579,7 @@ export default function HazardLedgerPage() {
       key: 'hazard_type',
       width: 120,
       sorter: false,
-      render: (type: string) => {
-        const option = HAZARD_TYPE_OPTIONS.find((o) => o.value === type)
-        return <StatusTag label={option?.label || type} />
-      },
+      render: (_: unknown, record: HazardReport) => renderEffectiveStatus(record, 'hazard_type'),
     },
     {
       title: '隐患描述',

@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -41,6 +42,94 @@ from app.modules.safety.service.bitable_direct import filters as bd_filters
 from app.modules.safety.service.bitable_direct import locks as bd_locks
 from app.modules.safety.service.bitable_direct import writer as bd_writer
 from app.modules.safety.service.hazard_direct import config
+from app.modules.safety.service.hazard_direct import field_authority as fa
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_ADVICE_AI as F_ADVICE_AI,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_BASIS_AI as F_BASIS_AI,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_CATEGORY_AI as F_CATEGORY_AI,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_CATEGORY_MANUAL as F_CATEGORY_MANUAL,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_DATE as F_DATE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_DEADLINE as F_DEADLINE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_DEPT as F_DEPT,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_DESC as F_DESC,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_DESC_AI as F_DESC_AI,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_INSPECTION_CATEGORY as F_INSPECTION_CATEGORY,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_INSPECTOR as F_INSPECTOR,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_INSPECTOR_DEPT as F_INSPECTOR_DEPT,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_LEVEL_AI as F_LEVEL_AI,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_LEVEL_MANUAL as F_LEVEL_MANUAL,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_NO as F_NO,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_PHOTO_DEFECT as F_PHOTO_DEFECT,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_PHOTO_RECTIFY as F_PHOTO_RECTIFY,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_PROGRESS as F_PROGRESS,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_RECTIFY_DONE_AT as F_RECTIFY_DONE_AT,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_RECTIFY_REPLY as F_RECTIFY_REPLY,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_RECTIFY_STATUS as F_RECTIFY_STATUS,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_RESPONSIBLE as F_RESPONSIBLE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_REVIEW_NOTE as F_REVIEW_NOTE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_REVIEW_RESULT as F_REVIEW_RESULT,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_SCORE as F_SCORE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_SCORING_NOTE as F_SCORING_NOTE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_SUPERVISION as F_SUPERVISION,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_TYPE_AI as F_TYPE_AI,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    F_TYPE_MANUAL as F_TYPE_MANUAL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,37 +141,8 @@ WRITE_LOCK = asyncio.Lock()
 # 均为单选 type=3，因此 format_write_value 对它们等于原样返回。
 _SELECT_FIELD_TYPE = 3
 
-# ═══════════════════════════════════════════════════════════════
-# 字段名常量（与多维表格实际列名一致）
-# ═══════════════════════════════════════════════════════════════
-
-F_NO = "隐患编号"
-F_DESC = "隐患描述"
-F_DESC_AI = "隐患描述（AI）"
-F_PHOTO_DEFECT = "缺陷图片"
-F_PHOTO_RECTIFY = "整改后图片"
-F_DATE = "检查日期"
-F_INSPECTOR = "检查人员"
-F_INSPECTOR_DEPT = "检查人员.部门"
-F_INSPECTION_CATEGORY = "检查类别"
-F_DEPT = "整改责任人.部门"
-F_RESPONSIBLE = "整改责任人"
-F_LEVEL_MANUAL = "隐患级别"
-F_TYPE_AI = "隐患分类（AI）"
-F_LEVEL_AI = "隐患级别（AI）"
-F_CATEGORY_AI = "隐患类别（AI）"
-F_BASIS_AI = "隐患判定依据（AI）"
-F_ADVICE_AI = "整改建议（AI）"
-F_SUPERVISION = "督办等级"
-F_RECTIFY_STATUS = "整改状态"
-F_RECTIFY_REPLY = "纠正预防措施"
-F_RECTIFY_DONE_AT = "整改完成时间"
-F_DEADLINE = "整改期限"
-F_PROGRESS = "目前进展"
-F_REVIEW_RESULT = "AI初审结果"
-F_REVIEW_NOTE = "AI初审说明"
-F_SCORE = "评分结果"
-F_SCORING_NOTE = "评分说明"
+# 字段名常量已收口到 field_authority（单一事实源，P0-B）；本模块上方同名 import
+# 继续作为 re-export，保证既有 `bitable_repo.F_*` 外部引用不破坏。
 
 # ── ① 待处理判据：AI 识别输出字段为空 ──
 COND_AI_PENDING: list[dict[str, Any]] = [
@@ -243,6 +303,9 @@ class HazardView:
     inspection_category: str | None = None
     hazard_level_manual: str | None = None
     hazard_level: str | None = None
+    # ── 字段口径治理（P0-B）：人工列原始值（供 effective 归一/差异展示）──
+    hazard_type_manual: str | None = None
+    hazard_category_manual: str | None = None
     discovered_at: datetime | None = None
     rectification_status: str = "pending"
     status: str = "open"
@@ -268,6 +331,17 @@ class HazardView:
     # ── ⑤ AI 评分（2026-11-05 新增）──
     score: float | None = None
     score_note: str | None = None
+    # ── 字段口径治理（P0-B）：人工优先 + AI fallback 的统一读口径 ──
+    # source ∈ "human" | "ai" | None；mismatch 仅双方均有值且不相等时为 True。
+    effective_level: str | None = None
+    effective_level_source: str | None = None
+    effective_level_mismatch: bool = False
+    effective_type: str | None = None
+    effective_type_source: str | None = None
+    effective_type_mismatch: bool = False
+    effective_category: str | None = None
+    effective_category_source: str | None = None
+    effective_category_mismatch: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -287,6 +361,28 @@ def to_view(record: dict[str, Any]) -> HazardView:
     status_cn = f_select(fields, F_RECTIFY_STATUS)
     status_map = {"已关闭": "closed", "未关闭": "pending", "整改中": "in_progress"}
     rect_status = status_map.get(status_cn, "pending")
+    # ── 字段口径治理（P0-B）：人工列优先、AI 列 fallback + source/mismatch ──
+    # 人工列取原始值（多选经 bd_fields.select 以 ", " 拼接），由 field_authority
+    # 统一归一（级别多选取最高严重度；分类/类别 CN→EN）。
+    # 列名从 field_authority 矩阵读取（权威列 + fallback 列 = 单一事实源；
+    # 不在读路径里硬编码第二份列名映射）。
+    def _manual_or_none(semantic: str) -> str | None:
+        field = fa.authoritative_field(semantic)
+        return (f_select(fields, field) or None) if field else None
+
+    def _ai_or_none(semantic: str) -> str | None:
+        field = fa.fallback_field(semantic)
+        return (f_select(fields, field) or None) if field else None
+
+    manual_level_raw = _manual_or_none("level")
+    manual_type_raw = _manual_or_none("type")
+    manual_category_raw = _manual_or_none("category")
+    ai_level_raw = _ai_or_none("level")
+    ai_type_raw = _ai_or_none("type")
+    ai_category_raw = _ai_or_none("category")
+    level_eff = fa.resolve_effective(manual_level_raw, ai_level_raw, "level")
+    type_eff = fa.resolve_effective(manual_type_raw, ai_type_raw, "type")
+    category_eff = fa.resolve_effective(manual_category_raw, ai_category_raw, "category")
     return HazardView(
         record_id=record.get("record_id", ""),
         hazard_no=f_text(fields, F_NO),
@@ -295,10 +391,12 @@ def to_view(record: dict[str, Any]) -> HazardView:
         responsible_person=f_person(fields, F_RESPONSIBLE) or None,
         rectification_responsible_person_name=f_person(fields, F_RESPONSIBLE) or None,
         inspection_category=f_select(fields, F_INSPECTION_CATEGORY) or None,
-        hazard_level_manual=f_select(fields, F_LEVEL_MANUAL) or None,
+        hazard_level_manual=manual_level_raw,
         # EN 枚举码（与镜像 hazard_reports.hazard_level 同口径；督办/通报的
         # _level_label 对 EN/CN 均收敛，见 bulletin._level_label）
-        hazard_level=HAZARD_LEVEL_MAP.get(f_select(fields, F_LEVEL_AI)) or None,
+        hazard_level=HAZARD_LEVEL_MAP.get(ai_level_raw or "") or None,
+        hazard_type_manual=manual_type_raw,
+        hazard_category_manual=manual_category_raw,
         discovered_at=f_datetime(fields, F_DATE),
         rectification_status=rect_status,
         status="closed" if rect_status == "closed" else "open",
@@ -308,8 +406,8 @@ def to_view(record: dict[str, Any]) -> HazardView:
         supervision_level=f_select(fields, F_SUPERVISION),
         progress_note=f_text(fields, F_PROGRESS),
         major_hazard_basis=f_text(fields, F_BASIS_AI),
-        hazard_type=HAZARD_TYPE_MAP.get(f_select(fields, F_TYPE_AI)) or None,
-        hazard_category=HAZARD_CATEGORY_MAP.get(f_select(fields, F_CATEGORY_AI)) or None,
+        hazard_type=HAZARD_TYPE_MAP.get(ai_type_raw or "") or None,
+        hazard_category=HAZARD_CATEGORY_MAP.get(ai_category_raw or "") or None,
         discovered_by_name=f_person(fields, F_INSPECTOR) or None,
         inspector_department=f_select(fields, F_INSPECTOR_DEPT) or None,
         key_defect=f_text(fields, F_DESC_AI) or None,
@@ -317,6 +415,15 @@ def to_view(record: dict[str, Any]) -> HazardView:
         actual_completion_date=f_datetime(fields, F_RECTIFY_DONE_AT),
         score=f_number(fields, F_SCORE),
         score_note=f_text(fields, F_SCORING_NOTE) or None,
+        effective_level=level_eff.value,
+        effective_level_source=level_eff.source,
+        effective_level_mismatch=level_eff.mismatch,
+        effective_type=type_eff.value,
+        effective_type_source=type_eff.source,
+        effective_type_mismatch=type_eff.mismatch,
+        effective_category=category_eff.value,
+        effective_category_source=category_eff.source,
+        effective_category_mismatch=category_eff.mismatch,
         raw=fields,
     )
 
@@ -710,6 +817,30 @@ async def record_lock(record_id: str) -> AsyncIterator[bool]:
 # 写回
 # ═══════════════════════════════════════════════════════════════
 
+# ── B3 回退期告警节流：③ 未开启时 ① 保留写「督办等级」，但 WARNING ≥300s 一条 ──
+_last_supervision_fallback_warn_at: float | None = None
+
+
+def _monotonic() -> float:
+    """单调时钟接缝（回退告警节流）；测试 monkeypatch 推进假时钟。"""
+    return time.monotonic()
+
+
+def _warn_supervision_fallback(record_id: str) -> None:
+    """① 回退写督办等级时的节流告警（③ 未开启，上线顺序未就绪）。"""
+    global _last_supervision_fallback_warn_at
+    now = _monotonic()
+    last = _last_supervision_fallback_warn_at
+    interval = fa.SUPERVISION_FALLBACK_WARN_INTERVAL_SECONDS
+    if last is not None and now - last < interval:
+        return
+    _last_supervision_fallback_warn_at = now
+    logger.warning(
+        "③督办轮询未开启，①回退写督办等级（守卫未生效，请确认上线顺序）: "
+        "record_id=%s",
+        record_id,
+    )
+
 
 async def write_ai_analysis(
     client: SafetyBitableClient,
@@ -719,7 +850,13 @@ async def write_ai_analysis(
     output: dict[str, Any],
     supervision_label: str | None = None,
 ) -> bool:
-    """① 写回 AI 识别结果（7 个字段 + 督办等级）。
+    """① 写回 AI 识别结果（6 个 AI 列 + 隐患编号 + 条件性督办等级）。
+
+    B1 写白名单：写前 ``field_authority.assert_write_allowed("ai_analysis", …)``，
+    人工列一旦混入立即抛 ``FieldAuthorityError``（不写任何列）。
+    B3 督办单写者守卫：``supervision_label`` 仍由 ① 计算，但只有 ③ 督办轮询
+    未开启时才回退写「督办等级」（保留兜底 + ≥300s 节流告警）；③ 开启时
+    ① 只算不写（debug 日志可辨识）。
 
     只写多维表格，不写数据库。
     """
@@ -742,11 +879,25 @@ async def write_ai_analysis(
     if output.get("advice_text"):
         writeback[F_ADVICE_AI] = output["advice_text"]
     if supervision_label:
-        writeback[F_SUPERVISION] = bd_writer.format_write_value(_SELECT_FIELD_TYPE, supervision_label
-        )
+        # B3 单写者守卫（运行期读 ③ 开关）：③ 开 → ① 只算不写；③ 关 → 保留写 + 节流告警
+        writer_role = fa.supervision_writer_role()
+        if writer_role == "ai":
+            _warn_supervision_fallback(record_id)
+            writeback[F_SUPERVISION] = bd_writer.format_write_value(
+                _SELECT_FIELD_TYPE, supervision_label
+            )
+        else:
+            logger.debug(
+                "①只算不写：③督办轮询已开启，督办等级写者为 %s: record_id=%s label=%s",
+                writer_role,
+                record_id,
+                supervision_label,
+            )
     if not writeback:
         logger.warning("① 无字段可写回，跳过: record_id=%s", record_id)
         return False
+    # B1 写白名单钉子：AI 写路径不得写人工列/白名单外字段（越权即抛，不发起写入）
+    fa.assert_write_allowed("ai_analysis", writeback)
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
@@ -771,6 +922,8 @@ async def write_scoring(
         F_SCORE: round(float(total), 1),
         F_SCORING_NOTE: note,
     }
+    # B1 写白名单钉子：⑤ 只允许写评分 2 列（不碰人工列）
+    fa.assert_write_allowed("scoring", writeback)
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
@@ -790,12 +943,12 @@ async def write_review(
 
     conclusion 必须是「AI初审结果」字段的既有选项之一；未知结论由调用方拦截，不写。
     """
+    writeback: dict[str, Any] = {F_REVIEW_RESULT: conclusion, F_REVIEW_NOTE: summary}
+    # B1 写白名单钉子：② 只允许写 AI 初审 2 列（不碰人工列）
+    fa.assert_write_allowed("review", writeback)
     result = await bd_writer.write_serial(
         client,
-        [bd_writer.RecordUpdate(
-            record_id=record_id,
-            fields={F_REVIEW_RESULT: conclusion, F_REVIEW_NOTE: summary},
-        )],
+        [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
         interval_seconds=0.0,
     )
     return result.written > 0
@@ -808,20 +961,34 @@ async def write_review(
 
 # 附件下载并发上限：官方素材下载 5 QPS + 10,000 次/天 → 取 3 保守值
 _DOWNLOAD_SEM = asyncio.Semaphore(3)
-# 字段名 → field_id 缓存（仅回退下载路径需要 extra 时用，进程内一次）
-_field_id_cache: dict[str, str] = {}
+# field_id 缓存：键=(table_id, field_name)，多表场景互不串用（进程内一次）。
+# 只缓存成功值：取不到时（异常/None）不写缓存，下次调用可重试（F10）。
+_field_id_cache: dict[tuple[str, str], str] = {}
 
 
 async def _field_id_of(client: SafetyBitableClient, field_name: str) -> str:
-    """取字段 field_id（进程内缓存；失败返回空串，回退路径将不带 extra）。"""
-    if field_name in _field_id_cache:
-        return _field_id_cache[field_name]
+    """取字段 field_id（按 (table_id, field_name) 进程内缓存）。
+
+    失败/未找到返回空串且**不缓存**（下次可重试）；回退下载路径拿不到
+    field_id 时不带 extra 直接尝试 Drive API。
+    """
+    table_id = client.table_id
+    cache_key = (table_id, field_name)
+    cached = _field_id_cache.get(cache_key)
+    if cached:
+        return cached
     try:
         value = await client.get_field_id_by_name(field_name) or ""
     except Exception:
-        logger.debug("获取 field_id 失败: %s", field_name, exc_info=True)
+        logger.debug(
+            "获取 field_id 失败: table_id=%s field=%s",
+            table_id,
+            field_name,
+            exc_info=True,
+        )
         value = ""
-    _field_id_cache[field_name] = value
+    if value:
+        _field_id_cache[cache_key] = value
     return value
 
 

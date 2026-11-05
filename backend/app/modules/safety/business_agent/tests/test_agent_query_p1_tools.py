@@ -1010,6 +1010,13 @@ class TestQueryHazardsSource:
                 self.rectification_status = "pending"
                 self.discovered_at = date(2026, 10, 1)
                 self.rectification_responsible_person_name = "李四"
+                # T04 接口对齐：query_hazards 读 effective_*（人工优先/AI fallback）
+                self.hazard_level = "general"
+                self.effective_level = "general"
+                self.effective_level_source = "ai"
+                self.effective_level_mismatch = False
+                self.effective_type = "unsafe_condition"
+                self.effective_category = None
 
         async def _fake_query(client, **kwargs):
             views = [_FakeView("1"), _FakeView("2")]

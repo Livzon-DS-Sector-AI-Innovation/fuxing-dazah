@@ -26,8 +26,9 @@ from app.modules.safety.service.hazard_direct.alert import notify_failures
 
 logger = logging.getLogger(__name__)
 
-# 进程级写回锁（同 ai_analysis：手动触发与定时轮询可能并发，需共享同一把锁）
-_WRITE_LOCK = asyncio.Lock()
+# 进程级写回锁：①②③⑤ 共用 bitable_repo.WRITE_LOCK（2026-11-05 P0-B/B4：
+# 自建独立锁会让 ② 与 ①/⑤ 并发写 Bitable，单表写不支持并发）。
+_WRITE_LOCK = bitable_repo.WRITE_LOCK
 
 
 @dataclass
@@ -81,8 +82,14 @@ async def _review_one(client: Any, view: bitable_repo.HazardView) -> dict[str, A
     photos = await bitable_repo.download_photos(
         client, view.raw, record_id=view.record_id
     )
-    defect_uris = bitable_repo.photos_to_data_uris(photos.get("defect", []))
-    rectify_uris = bitable_repo.photos_to_data_uris(photos.get("rectification", []))
+    # 图片编码/URI 构造是同步文件+CPU 操作，放线程跑避免阻塞共享事件循环（F12；
+    # 与 ① ai_analysis 同口径）。
+    defect_uris = await asyncio.to_thread(
+        bitable_repo.photos_to_data_uris, photos.get("defect", [])
+    )
+    rectify_uris = await asyncio.to_thread(
+        bitable_repo.photos_to_data_uris, photos.get("rectification", [])
+    )
 
     advice = bitable_repo.f_text(view.raw, bitable_repo.F_ADVICE_AI)
     input_data = RectificationReviewInput(

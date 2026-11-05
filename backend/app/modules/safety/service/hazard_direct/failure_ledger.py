@@ -27,6 +27,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ INFRA_ALERT_KEY = "safety:hazard:ai:infra_alert_at"
 # AI 基础设施失败（欠费/鉴权/服务端/超时/连接/配置）告警独立去重 key：
 # 与 RAG infra 互不吞并，两路故障可各自告警一次（F1-3）。
 AI_INFRA_ALERT_KEY = "safety:hazard:ai:ai_infra_alert_at"
+
+# 进程内轮次序号（B7-1 / F6）：Redis 故障期间本地自增，恢复后仍不回退。
+_LAST_SEQ = 0
 
 
 class RedisLike(Protocol):
@@ -115,19 +119,30 @@ def _decode(raw: Any) -> dict[str, Any] | None:
 
 
 async def next_round_seq(redis: RedisLike | None = None) -> int:
-    """取下一轮序号（Redis INCR，TTL 7 天）。
+    """取下一轮序号（Redis INCR，TTL 7 天；进程内单调不回退）。
 
-    fail-open：Redis 异常时用当前时间戳兜底（仍单调递增，供同轮比较；
-    ``should_retry`` 在异常时也会 fail-open 返回 True，不会误判）。
+    B7-1 / F6：模块级 ``_LAST_SEQ`` 保证**进程内单调**——Redis 异常时本地
+    ``+1`` 兜底（不再像旧实现返回时间戳），Redis 恢复后返回值也不低于故障
+    期间已发序号。退避判定依赖 ``round_seq >= next_round``，序号回退会导致
+    记录被误判永远「未到重试轮次」，故必须单调。
     """
-    client = _resolve(redis)
+    global _LAST_SEQ
     try:
+        client = _resolve(redis)
         seq = int(await client.incr(ROUND_SEQ_KEY))
         await client.expire(ROUND_SEQ_KEY, TTL_SECONDS)
-        return seq
+        # 成功 INCR 后仍取进程内最大值：Redis 计数被重置/落后时也不回退到
+        # 故障期间已发序号之下（返回同一序号是非降，不影响退避比较语义）。
+        _LAST_SEQ = max(_LAST_SEQ, seq)
+        return _LAST_SEQ
     except Exception:
-        logger.warning("失败账本 round_seq 读取失败，使用时间戳兜底", exc_info=True)
-        return int(time.time())
+        _LAST_SEQ += 1
+        logger.warning(
+            "失败账本 round_seq 读取失败，使用进程内单调序号兜底: seq=%d",
+            _LAST_SEQ,
+            exc_info=True,
+        )
+        return _LAST_SEQ
 
 
 async def retry_status(
@@ -188,12 +203,18 @@ async def record_failure(
 ) -> FailureState:
     """记录一次失败；达到上限时写入死信索引。
 
-    fail-open：Redis 异常时返回「首次失败」状态（调用方仍会告警，
-    退化为改造前行为），绝不向上抛。
+    写入顺序（B7-1 / F6）：**死信 hash（若本轮 dead）→ attempts payload →
+    死信 hash EXPIRE**。先写死信再写 attempts，保证不会出现「attempts 标
+    dead 但死信 hash 缺失」的静默丢死信：死信 hash 写失败时立即退出，
+    attempts 保持上一轮状态（不标 dead）。
+
+    fail-open：``_resolve``/参数解析/各写入步骤异常一律不向上抛，返回
+    ``is_new=False`` 的兜底状态（避免基础设施抖动被放大成「新增失败」告警
+    风暴），只记 warning 日志。
     """
-    client = _resolve(redis)
     reason = (reason or "")[:200]
     try:
+        client = _resolve(redis)
         state = _decode(await client.get(attempts_key(record_id))) or {}
         attempts = int(state.get("attempts") or 0) + 1
         dead = attempts >= MAX_ATTEMPTS
@@ -209,15 +230,18 @@ async def record_failure(
             "dead": dead,
             "dead_at": dead_at,
         }
-        encoded = json.dumps(payload, ensure_ascii=False)
-        await client.set(attempts_key(record_id), encoded, ex=TTL_SECONDS)
         if dead:
+            # 先写死信 hash：写失败则本次不写 attempts（不标 dead），
+            # 死信索引与 attempts 状态不会出现「标死但索引缺失」。
             dead_payload = {"record_id": record_id, **payload}
             await client.hset(
                 DEAD_LETTERS_KEY,
                 record_id,
                 json.dumps(dead_payload, ensure_ascii=False),
             )
+        encoded = json.dumps(payload, ensure_ascii=False)
+        await client.set(attempts_key(record_id), encoded, ex=TTL_SECONDS)
+        if dead:
             # 死信 hash 与 attempts key 同 TTL（7 天，新增死信时刷新整个 hash）：
             # 避免「attempts 过期但死信永存」→ 死信复活重复告警 / 永久占位。
             await client.expire(DEAD_LETTERS_KEY, TTL_SECONDS)
@@ -236,8 +260,13 @@ async def record_failure(
             is_new=attempts == 1,
         )
     except Exception:
+        # 写入非原子：极端半写（HSET 死信成功、SET attempts 失败）会出现
+        # 「死信 hash 可见但 attempts 未标 dead」，下轮失败会重写 attempts ——
+        # 属可接受的失败安全侧（不会静默停摆，也不产生告警风暴）。
         logger.warning(
-            "失败账本写入失败，fail-open 视为首次失败: record_id=%s", record_id, exc_info=True
+            "失败账本写入失败，fail-open 返回非新增失败状态: record_id=%s",
+            record_id,
+            exc_info=True,
         )
         return FailureState(
             record_id=record_id,
@@ -247,7 +276,7 @@ async def record_failure(
             reason=reason,
             dead=False,
             dead_at=None,
-            is_new=True,
+            is_new=False,  # 不进入「本轮新增失败」告警集合，避免告警风暴
         )
 
 
@@ -298,6 +327,31 @@ async def list_dead_letters(
         )
     items.sort(key=lambda item: float(item.get("dead_at") or 0), reverse=True)
     return items[: max(0, int(limit))]
+
+
+def format_dead_letter_lines(
+    items: list[dict[str, Any]], limit: int = 10, *, max_reason: int = 60
+) -> list[str]:
+    """死信 top-N 明细行（①轮末日志 / 只读查询脚本共用的摘要格式）。
+
+    每条：``record_id [category] 第 attempts 次 · dead_at · last_reason 摘要``。
+    ``items`` 采用 :func:`list_dead_letters` 的输出结构（已按 dead_at 倒序）；
+    ``limit`` 只控制展示条数（top-N），不改变数据。
+    """
+    lines: list[str] = []
+    for item in items[: max(0, int(limit))]:
+        reason = str(item.get("reason") or "")
+        if len(reason) > max_reason:
+            reason = reason[: max_reason - 1] + "…"
+        when = "-"
+        dead_at = item.get("dead_at")
+        if isinstance(dead_at, (int, float)) and dead_at > 0:
+            when = datetime.fromtimestamp(float(dead_at), tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+        lines.append(
+            f"{item.get('record_id', '')} [{item.get('category', 'unknown')}] "
+            f"第 {item.get('attempts', '?')} 次 · {when} · {reason}"
+        )
+    return lines
 
 
 async def should_emit_infra_alert(

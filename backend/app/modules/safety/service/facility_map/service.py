@@ -342,7 +342,9 @@ def hazard_rows_for_day(
         return {
             "hazard_no": (v.hazard_no or "").strip() or None,
             "hazard_desc": v.description or "",
-            "hazard_level": v.hazard_level or v.hazard_level_manual or None,
+            # 读口径（P0-B B2）：effective_level = 人工优先 / AI fallback；
+            # 不再直读 AI 原始等级列
+            "hazard_level": v.effective_level or None,
             "progress": (v.progress_note or "").strip() or None,
         }
 

@@ -27,8 +27,9 @@ logger = logging.getLogger(__name__)
 # 不参与督办的测试部门（与旧任务口径一致）
 EXCLUDED_DEPARTMENTS: tuple[str, ...] = ("AI创新部",)
 
-# 进程级写回锁（同 ai_analysis：手动触发与定时轮询可能并发，需共享同一把锁）
-_WRITE_LOCK = asyncio.Lock()
+# 进程级写回锁：①②③⑤ 共用 bitable_repo.WRITE_LOCK（2026-11-05 P0-B/B4：
+# 自建独立锁会让 ③ 与 ①/⑤ 并发写 Bitable，单表写不支持并发）。
+_WRITE_LOCK = bitable_repo.WRITE_LOCK
 
 
 @dataclass
@@ -120,8 +121,6 @@ async def run_supervision_round(
         logger.info("③ 无需要计算督办等级的记录")
         return result
 
-    write_lock = _WRITE_LOCK
-
     async def _worker(record: dict[str, Any]) -> None:
         record_id = record.get("record_id", "")
         view = bitable_repo.to_view(record)
@@ -175,20 +174,23 @@ async def run_supervision_round(
 
 
 async def writeback_supervision_label(client: Any, record_id: str, label: str) -> None:
-    """写回督办等级（锁内格式化+更新+0.5s 串行）——整轮版与 superagent 单记录版共用。"""
-    async with _WRITE_LOCK:
-        from app.modules.safety.feishu.bitable_handler import (
-            _format_bitable_select_value,
-        )
+    """写回督办等级（锁内格式化+更新+0.5s 串行）——整轮版与 superagent 单记录版共用。
 
-        ok = await client.update_record(
-            record_id,
-            {
-                bitable_repo.F_SUPERVISION: _format_bitable_select_value(
-                    bitable_repo.F_SUPERVISION, label
-                )
-            },
+    ③ 是「督办等级」唯一写者（B3）：写前经 field_authority 白名单断言（B1）。
+    """
+    from app.modules.safety.feishu.bitable_handler import (
+        _format_bitable_select_value,
+    )
+    from app.modules.safety.service.hazard_direct import field_authority as fa
+
+    writeback = {
+        bitable_repo.F_SUPERVISION: _format_bitable_select_value(
+            bitable_repo.F_SUPERVISION, label
         )
+    }
+    fa.assert_write_allowed(fa.WRITER_SUPERVISION, writeback)
+    async with _WRITE_LOCK:
+        ok = await client.update_record(record_id, writeback)
         if not ok:
             raise RuntimeError("写回 Bitable 返回 False")
         await asyncio.sleep(0.5)  # 单表写串行化，规避 1254291

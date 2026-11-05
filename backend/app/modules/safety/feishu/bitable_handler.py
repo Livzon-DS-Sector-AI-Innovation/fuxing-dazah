@@ -488,7 +488,15 @@ def _format_bitable_select_value(field_cn: str, value: Any) -> Any:
 
 
 def _map_model_to_bitable(hazard: Any) -> dict[str, Any]:
-    """将 HazardReport 模型 → Bitable 中文字段 dict（仅含需要回写的字段）。"""
+    """将 HazardReport 模型 → Bitable 中文字段 dict（仅含需要回写的字段）。
+
+    .. deprecated:: 2026-11-05
+       已废弃：旧事件通道专用整行映射（含隐患描述/级别/纠正预防措施/整改状态/完成
+       时间/期限/督办等级等人工列）。直读模式以多维表格为唯一数据源，本函数
+       仅作历史回滚路径保留；`EVENT_SYNC=true` 时 `push_hazard_to_bitable`
+       会直接拒绝整次回写（B5 止血），防止误开覆盖人工列。
+    """
+    # 人工列整行映射已废弃，仅历史回滚路径存在（B5；直读模式禁止调用）。
     result: dict[str, Any] = {}
 
     for en_name, cn_name in MODEL_TO_BITABLE.items():
@@ -1732,6 +1740,14 @@ async def _push_supervision_async(hazard_id: _uuid.UUID) -> None:
 async def push_hazard_to_bitable(hazard: Any) -> bool:
     """平台 HazardReport 更新后，将变更推送到 Bitable。
 
+    .. deprecated:: 2026-11-05
+       旧事件通道（Bitable 事件 ↔ 平台库镜像）已废弃：直读模式以多维表格为
+       唯一数据源，本函数会经 ``_map_model_to_bitable`` 整行回写人工列
+       （隐患描述/级别/纠正预防措施/整改状态/完成时间/期限/督办等级）。
+       **B5 止血**：``SAFETY_HAZARD_EVENT_SYNC_ENABLED=true`` 时直接拒绝整次
+       回写（CRITICAL 告警，return False），防止开关误开覆盖人工列；
+       ``EVENT_SYNC=false`` 时保留历史兼容行为（仅回滚路径可能调用）。
+
     在 SafetyService.update_hazard() 等写操作后调用。
     仅当 hazard.feishu_record_id 非空时执行。
 
@@ -1743,7 +1759,25 @@ async def push_hazard_to_bitable(hazard: Any) -> bool:
       调用前必须确保缓存已加载，否则 multi_select 字段会因纯文本格式而触发
       MultiSelectFieldConvFail (1254063)。
     """
+    logger.warning(
+        "push_hazard_to_bitable 已废弃（旧事件通道整行回写人工列），"
+        "请勿在直读模式下调用: hazard_id=%s",
+        getattr(hazard, "id", None),
+    )
+
     if not hazard.feishu_record_id:
+        return False
+
+    # B5 止血：开关误开时拒绝整行回写（否则会覆盖人工列），仅告警不写任何字段。
+    from app.modules.safety.service.hazard_direct.config import event_sync_enabled
+
+    if event_sync_enabled():
+        logger.critical(
+            "旧事件通道 EVENT_SYNC=true：拒绝整行回写以防覆盖人工列 "
+            "(hazard_id=%s record_id=%s)",
+            getattr(hazard, "id", None),
+            hazard.feishu_record_id,
+        )
         return False
 
     # 确保字段类型缓存已加载（_format_bitable_select_value 依赖此缓存）
