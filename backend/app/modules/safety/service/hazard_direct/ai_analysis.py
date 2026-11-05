@@ -1,11 +1,22 @@
 """① 隐患AI分析轮询 — 直读多维表格，不落库。
 
 链路：
-    search(隐患分类（AI）isEmpty) → per-record 锁 → 下载缺陷图 → 视觉AI + RAG
-      → 结构化输出 + 枚举校验 → 写回 Bitable（7 字段 + 督办等级）→ 释放锁
+    search(隐患分类（AI）isEmpty) → RAG 预检 → per-record 锁 → 下载缺陷图
+      → 视觉AI + RAG → 结构化输出 + 枚举校验 + 输出质量闸门
+      → 写回 Bitable（7 字段 + 督办等级）→ 释放锁
 
 失败语义：**不写任何 AI 字段** → 下一轮仍命中同一判据 → 自动重试。
 （对比旧路径：失败时把 ERROR 标记写进「隐患编号」，导致永久不再重试。）
+
+A3 质量闸门（2026-11-05）：
+- RAG 检索降级 / 零召回 → 本条直接失败，不调 AI、不写字段；
+- 输出依据为空 / 命中占位文案 / 无法规引用 → 不写回，保持「隐患分类（AI）」
+  为空以便 RAG 恢复后自动重试；失败带 category。
+
+A5 失败治理（2026-11-05）：
+- 失败 attempts 落 Redis 失败账本，按 1/3/9 轮退避，第 5 次失败进死信；
+- 每轮只处理「到点该重试」的记录，未到点/已死信计入 deferred，不烧 AI；
+- 告警只统计本轮**新增失败**与新死信，不再每轮重复刷同一批失败。
 
 编号：若「隐患编号」为空或以 ERROR: 开头 → 重新分配 HZ-YYYYMMDD-NNN 并覆盖。
 """
@@ -14,17 +25,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import secrets
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
-from app.modules.safety.service.hazard_direct import bitable_repo, config
-from app.modules.safety.service.hazard_direct.alert import notify_failures
+from app.modules.safety.service.hazard_direct import (
+    bitable_repo,
+    config,
+    failure_ledger,
+    quality_gate,
+)
+from app.modules.safety.service.hazard_direct.alert import notify_admin, notify_failures
 from app.modules.safety.service.hazard_direct.round_result import RoundResult
+
+if TYPE_CHECKING:
+    from app.modules.safety.knowledge.retriever import KnowledgeContext
 
 logger = logging.getLogger(__name__)
 
 # 进程级写回锁：Bitable 单表写不支持并发（1254291 / 1254607）。
 # 2026-11-05 收编到 bitable_repo.WRITE_LOCK（①识别/⑤评分共享同一把锁才真正串行）。
 _WRITE_LOCK = bitable_repo.WRITE_LOCK
+
+# 死信上限（只在告警文案展示，模块级常量避免把 failure_ledger 模块整体替换后失联）
+_MAX_ATTEMPTS = failure_ledger.MAX_ATTEMPTS
 
 VALID_TYPES = {
     "unsafe_action",
@@ -41,21 +65,36 @@ VALID_CATEGORIES = {
 }
 
 
-async def _load_knowledge_context(session: Any, description: str) -> str | None:
-    """RAG 法规检索（知识库仍在平台数据库，与隐患记录无关）。"""
+class _WritebackError(Exception):
+    """写回 Bitable 失败（调用方据此归类 writeback_error）。"""
+
+
+# RAG 基础设施失败分类：属「知识库/RAG 不可用」而非记录自身失败。
+# 不累计 attempts、不进死信 —— RAG 恢复后记录仍在轮询队列、无退避可直接重试。
+_INFRA_FAILURE_CATEGORIES = frozenset({quality_gate.RETRIEVAL_DEGRADED, quality_gate.NO_CHUNKS})
+
+
+async def _load_knowledge_context(
+    session: Any, description: str
+) -> KnowledgeContext | None:
+    """RAG 法规检索（知识库仍在平台数据库，与隐患记录无关）。
+
+    返回完整 ``KnowledgeContext``（chunks/degradation/markdown）而非仅
+    markdown —— 调用方先做 RAG 预检（降级/零召回不调 AI），再把
+    ``context.markdown`` 注入 prompt。检索异常 → None（由质量闸门判失败）。
+    """
     try:
         from app.modules.safety.knowledge.retriever import SafetyKnowledgeRetriever
 
         retriever = SafetyKnowledgeRetriever(session)
         context = await retriever.retrieve(description=description, target_chunks=8)
-        text = retriever.build_injection_context(context)
         logger.info(
             "① RAG 检索完成: chunks=%d degradation=%s len=%d",
-            len(context.chunks), context.degradation, len(text),
+            len(context.chunks), context.degradation, len(context.markdown),
         )
-        return text
+        return context
     except Exception:
-        logger.warning("① RAG 法规检索失败，继续不使用知识增强", exc_info=True)
+        logger.warning("① RAG 法规检索失败", exc_info=True)
         return None
 
 
@@ -72,21 +111,48 @@ def _build_advice_text(output: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+async def _load_context_for_view(view: bitable_repo.HazardView) -> KnowledgeContext | None:
+    """用独立 session 做 RAG 检索（异常已在 _load_knowledge_context 内收敛为 None）。"""
+    from app.core.database import async_session_factory
+
+    async with async_session_factory() as session:
+        return await _load_knowledge_context(session, view.description)
+
+
 async def _identify_one(
-    client: Any, view: bitable_repo.HazardView
+    client: Any, view: bitable_repo.HazardView, *, round_id: str | None = None
 ) -> dict[str, Any]:
-    """调用 AI 识别插件，返回结构化输出 dict（不做任何写回）。"""
+    """调用 AI 识别插件，返回结构化输出 dict（不做任何写回）。
+
+    质量闸门顺序（A3）：
+    1. RAG 预检 —— 降级/零召回直接抛 ``QualityGateError``，**不建 AI 客户端、不调 AI**；
+    2. 只下载缺陷图（① 不用整改后图，下载量 -44%），图片编码放线程；
+    3. AI 客户端用进程级单例（不再逐条 close），strict_mode=True；
+    4. 输出枚举校验后走输出质量闸门（空依据/占位/无引用 → 失败不写回）。
+    """
     from app.modules.safety.ai_hazard_identification import (
         AIHazardIdentifier,
         HazardIdentificationInput,
         PluginConfig,
     )
-    from app.modules.safety.service.config import create_ai_service
+    from app.modules.safety.service.config import get_ai_service
 
+    # ── 1. RAG 预检：失败即抛，不建客户端、不调 AI、不下载 ──
+    knowledge_context = await _load_context_for_view(view)
+    quality_gate.ensure_knowledge(knowledge_context)
+    assert knowledge_context is not None  # ensure_knowledge 已排除 None（供 mypy 收窄）
+    knowledge_text = knowledge_context.markdown or None
+
+    # ── 2. 只下缺陷图；图片编码/落盘走线程，不阻塞事件循环 ──
     photos = await bitable_repo.download_photos(
-        client, view.raw, record_id=view.record_id
+        client,
+        view.raw,
+        record_id=view.record_id,
+        include_rectification=False,
     )
-    image_uris = bitable_repo.photos_to_data_uris(photos.get("defect", []))
+    image_uris = await asyncio.to_thread(
+        bitable_repo.photos_to_data_uris, photos.get("defect", [])
+    )
 
     input_data = HazardIdentificationInput(
         hazard_no=view.hazard_no or view.record_id[:8],
@@ -98,48 +164,110 @@ async def _identify_one(
         defect_photos=image_uris,
     )
 
-    ai_service = create_ai_service("vision" if image_uris else "text")
-    try:
-        knowledge_context = None
-        from app.core.database import async_session_factory
+    # ── 3. AI 客户端单例（进程级生命周期；不在此处 close）──
+    ai_service = get_ai_service("vision" if image_uris else "text")
+    plugin_config = PluginConfig(
+        temperature=0.05,
+        strict_mode=True,
+        enable_vision=bool(image_uris),
+        enable_knowledge=bool(knowledge_text),
+    )
+    from app.modules.safety.ai_audit import ai_audit_scope
 
-        async with async_session_factory() as session:
-            knowledge_context = await _load_knowledge_context(session, view.description)
-
-        plugin_config = PluginConfig(
-            temperature=0.05,
-            strict_mode=False,
-            enable_vision=bool(image_uris),
-            enable_knowledge=bool(knowledge_context),
+    with ai_audit_scope(
+        scenario="hazard_identification",
+        resource_type="hazard",
+        channel="system",
+        extra={
+            "bitable_record_id": view.record_id,
+            "source": "bitable_direct",
+            "round_id": round_id,
+        },
+    ):
+        plugin = AIHazardIdentifier(
+            ai_service, plugin_config, knowledge_context=knowledge_text
         )
-        from app.modules.safety.ai_audit import ai_audit_scope
+        output = await plugin.identify(input_data)
 
-        with ai_audit_scope(
-            scenario="hazard_identification",
-            resource_type="hazard",
-            channel="system",
-            extra={"bitable_record_id": view.record_id, "source": "bitable_direct"},
-        ):
-            plugin = AIHazardIdentifier(
-                ai_service, plugin_config, knowledge_context=knowledge_context
-            )
-            output = await plugin.identify(input_data)
+    result = {
+        "key_defect": output.key_defect,
+        "hazard_type": output.hazard_type.value,
+        "hazard_category": output.hazard_category.value,
+        "hazard_level": output.hazard_level.value,
+        "major_hazard_basis": output.major_hazard_basis,
+        "defect_substance": output.defect_substance.value,
+        "defect_substance_reasoning": output.defect_substance_reasoning,
+        "rectification_suggestion": {
+            "corrective": output.rectification_suggestion.corrective,
+            "preventive": output.rectification_suggestion.preventive,
+        },
+    }
+    # ── 4. 枚举校验 → 输出质量闸门（写回前最后一道）──
+    _validate(result)
+    quality_gate.ensure_output(result)
+    return result
 
-        return {
-            "key_defect": output.key_defect,
-            "hazard_type": output.hazard_type.value,
-            "hazard_category": output.hazard_category.value,
-            "hazard_level": output.hazard_level.value,
-            "major_hazard_basis": output.major_hazard_basis,
-            "defect_substance": output.defect_substance.value,
-            "defect_substance_reasoning": output.defect_substance_reasoning,
-            "rectification_suggestion": {
-                "corrective": output.rectification_suggestion.corrective,
-                "preventive": output.rectification_suggestion.preventive,
-            },
-        }
-    finally:
-        await ai_service.close()
+
+def _categorize_failure(exc: BaseException) -> str:
+    """异常 → 失败分类（spec A5/A7 失败分类表）。"""
+    if isinstance(exc, quality_gate.QualityGateError):
+        return exc.category
+    if isinstance(exc, _WritebackError):
+        return "writeback_error"
+
+    from app.platform.integrations.ai.client import AIOutputError
+
+    # 插件会把 AIOutputError 包成 IdentificationError，沿 cause 链找 json_invalid
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, AIOutputError):
+            return "json_invalid"
+        current = current.__cause__ or current.__context__
+
+    from app.modules.safety.ai_hazard_identification import IdentificationError
+
+    if isinstance(exc, IdentificationError):
+        message = str(exc)
+        if "验证失败" in message or "校验" in message:
+            return "validation_failed"
+        if "解析失败" in message:
+            return "json_invalid"
+    return "api_error"
+
+
+def _format_category_counts(failures: list[dict[str, str]]) -> str:
+    """失败分类计数摘要（告警文案用）。"""
+    counts: dict[str, int] = {}
+    for item in failures:
+        category = item.get("category") or "unknown"
+        counts[category] = counts.get(category, 0) + 1
+    return "分类计数：" + ", ".join(
+        f"{category}={count}" for category, count in sorted(counts.items())
+    )
+
+
+def _format_dead_letter_alert(dead_letters: list[dict[str, Any]]) -> str:
+    """新死信告警文案（record_id / 分类 / 次数 / 最近原因）。"""
+    lines = [
+        f"**隐患AI识别** 本轮新增死信 **{len(dead_letters)}** 条（已达 "
+        f"{_MAX_ATTEMPTS} 次失败，不再自动重试，请人工处理）",
+        f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "死信明细（最多 20 条）：",
+    ]
+    for item in dead_letters[:20]:
+        lines.append(
+            f"• `{item.get('record_id', '')}` [{item.get('category', 'unknown')}] "
+            f"第 {item.get('attempts', '?')} 次 · {item.get('reason', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _new_round_id() -> str:
+    """每轮唯一 round_id（写入该轮所有 AI 审计 extra，供按轮归因）。"""
+    return f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(2)}"
 
 
 def _validate(output: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +301,8 @@ async def run_ai_analysis_round(
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 
     result = RoundResult(job_label="隐患AI分析轮询")
+    round_id = _new_round_id()
+    round_seq = await failure_ledger.next_round_seq()
     client = SafetyBitableClient()
     records = await bitable_repo.search_pending_ai(client, limit=limit)
     result.total = len(records)
@@ -180,14 +310,28 @@ async def run_ai_analysis_round(
         logger.info("① 无待分析记录")
         return result
 
-    logger.info("① 待分析 %d 条（判据: 隐患分类（AI）为空）", len(records))
+    logger.info(
+        "① 待分析 %d 条（判据: 隐患分类（AI）为空）round_id=%s round_seq=%d",
+        len(records), round_id, round_seq,
+    )
     allocator = bitable_repo.HazardNoAllocator(client)
     write_lock = _WRITE_LOCK
     semaphore = asyncio.Semaphore(config.write_concurrency())
 
+    # 告警收敛：只收集「本轮首次失败」与新死信（旧失败不重复告警）；
+    # 基础设施失败（RAG 不可用）单独聚合，走 Redis 去重告警且不进失败账本。
+    new_failures: list[dict[str, str]] = []
+    new_dead_letters: list[dict[str, Any]] = []
+    infra_failures: list[dict[str, str]] = []
+
     async def _worker(record: dict[str, Any]) -> None:
         record_id = record.get("record_id", "")
         if not record_id:
+            return
+        # 失败治理：未到重试轮次 / 已死信 → 不烧 AI（deferred），不计失败
+        if not await failure_ledger.should_retry(record_id, round_seq):
+            result.deferred += 1
+            logger.info("① 延后（退避中或已死信，不调 AI）: record_id=%s", record_id)
             return
         async with bitable_repo.record_lock(record_id) as acquired:
             if not acquired:
@@ -197,7 +341,7 @@ async def run_ai_analysis_round(
             try:
                 async with semaphore:
                     view = bitable_repo.to_view(record)
-                    output = _validate(await _identify_one(client, view))
+                    output = await _identify_one(client, view, round_id=round_id)
 
                 async with write_lock:
                     hazard_no = None
@@ -215,31 +359,97 @@ async def run_ai_analysis_round(
                         supervision_label=_supervision_label(view),
                     )
                     if not ok:
-                        raise RuntimeError("写回 Bitable 返回 False")
+                        raise _WritebackError("写回 Bitable 返回 False")
 
+                await failure_ledger.record_success(record_id)
                 result.succeeded += 1
                 logger.info(
-                    "① 完成: record_id=%s 分类=%s 级别=%s 类别=%s",
+                    "① 完成: record_id=%s 分类=%s 级别=%s 类别=%s round_id=%s",
                     record_id, output.get("hazard_type"),
                     output.get("hazard_level"), output.get("hazard_category"),
+                    round_id,
                 )
             except Exception as exc:
+                category = _categorize_failure(exc)
+                reason = f"{type(exc).__name__}: {exc}"[:200]
                 result.failed += 1
                 result.failures.append(
-                    {"record_id": record_id, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+                    {"record_id": record_id, "category": category, "reason": reason}
                 )
-                logger.exception("① 处理失败（不写字段，下轮自动重试）: record_id=%s", record_id)
+                if category in _INFRA_FAILURE_CATEGORIES:
+                    # RAG 基础设施失败：可观测（failed/failures）但**不累计 attempts、
+                    # 不进死信** —— RAG 恢复后记录仍可立即重试，不被退避/死信卡住。
+                    infra_failures.append(
+                        {"record_id": record_id, "category": category, "reason": reason}
+                    )
+                    logger.warning(
+                        "① 基础设施失败（不累计 attempts，RAG 恢复后可重试）: "
+                        "record_id=%s category=%s",
+                        record_id, category,
+                    )
+                else:
+                    state = await failure_ledger.record_failure(
+                        record_id, round_seq, category, reason
+                    )
+                    if state.is_new:
+                        new_failures.append(
+                            {
+                                "record_id": record_id,
+                                "category": category,
+                                "reason": reason,
+                            }
+                        )
+                    if state.dead:
+                        new_dead_letters.append(
+                            {
+                                "record_id": record_id,
+                                "category": category,
+                                "attempts": state.attempts,
+                                "reason": reason,
+                            }
+                        )
+                    logger.exception(
+                        "① 处理失败（不写字段，按退避重试）: record_id=%s category=%s",
+                        record_id, category,
+                    )
 
     await asyncio.gather(*(_worker(rec) for rec in records))
 
+    dead_letters = await failure_ledger.list_dead_letters(limit=100)
     logger.info(
-        "① 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d",
+        "① 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d 延后=%d 新增失败=%d "
+        "新死信=%d 累计死信=%d 基础设施失败=%d round_id=%s",
         result.total, result.succeeded, result.failed, result.skipped,
+        result.deferred, len(new_failures), len(new_dead_letters),
+        len(dead_letters), len(infra_failures), round_id,
     )
-    if notify and len(result.failures) >= config.alert_min_failures():
-        await notify_failures(
-            result.job_label,
-            failures=result.failures,
-            total=result.total,
-        )
+    if notify:
+        # 告警收敛：阈值只看本轮新增失败（同一批失败不会每轮重复告警）
+        if new_failures and len(new_failures) >= config.alert_min_failures():
+            await notify_failures(
+                result.job_label,
+                failures=new_failures,
+                total=result.total,
+                error=_format_category_counts(new_failures),
+            )
+        if new_dead_letters:
+            await notify_admin(
+                "⚠️ 隐患AI识别死信告警", _format_dead_letter_alert(new_dead_letters)
+            )
+        # RAG 基础设施失败：不累计 attempts/不进死信，但降级期间仍需可观测；
+        # 用 Redis SET NX EX 去重（默认 30 分钟窗口），避免每轮刷屏。
+        if (
+            infra_failures
+            and len(infra_failures) >= config.alert_min_failures()
+            and await failure_ledger.should_emit_infra_alert(round_seq)
+        ):
+            await notify_failures(
+                result.job_label,
+                failures=infra_failures,
+                total=result.total,
+                error=(
+                    "RAG 基础设施失败（不累计 attempts、不进死信，恢复后可直接重试；"
+                    "30 分钟内只告警一次）：" + _format_category_counts(infra_failures)
+                ),
+            )
     return result

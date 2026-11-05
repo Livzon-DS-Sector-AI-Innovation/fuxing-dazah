@@ -19,11 +19,13 @@ import hashlib
 import json
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from app.modules.safety.ai_audit.context import AIAuditContext, current_audit_ctx
+from app.modules.safety.ai_audit.json_repair import repair_json, repair_json_object
 from app.modules.safety.ai_audit.tracing import ai_call_span
 from app.modules.safety.ai_config.exceptions import ScenarioDisabledError
 from app.platform.integrations.ai.client import AIOutputError, AIService
@@ -63,6 +65,114 @@ def _record_span_usage(span, usage: dict | None) -> None:
         pass
 
 
+# 最近一次审计行 id：解析完成后把 json_valid/json_repaired/... 回写该行 extra。
+# 无审计上下文（如 fake 掉 _write_audit 的测试）时为 None，回写自动 no-op。
+_last_audit_row_id: ContextVar[Any] = ContextVar(
+    "safety_ai_audit_last_row_id", default=None
+)
+
+
+@dataclass(frozen=True)
+class ParseOutcome:
+    """一次 JSON 解析的结果（含「是否经过本地修复」元信息，供 A1/A7 使用）。"""
+
+    data: dict[str, Any]
+    json_valid: bool  # 首次（未修复）解析是否即成功
+    repaired: bool  # 是否经本地修复后才成功
+    stages: tuple[str, ...] = ()  # 生效的修复阶段（fence/slice_object/...）
+
+
+def _coerce_bool_strings(parsed: dict[str, Any]) -> None:
+    """布尔字符串转 bool（与平台 AIService.chat_parsed / 历史视觉解析一致）。"""
+    for k, v in parsed.items():
+        if isinstance(v, str) and v.lower() in ("true", "false"):
+            parsed[k] = v.lower() == "true"
+
+
+def _merge_list_parsed(parsed: Any, raw: str) -> dict[str, Any]:
+    """兼容 AI 返回数组：合并数组中的对象（与平台 AIService.chat_parsed 一致）。"""
+    if isinstance(parsed, list):
+        if len(parsed) == 0:
+            raise AIOutputError("AI returned empty list", raw)
+        if isinstance(parsed[0], dict):
+            merged: dict[str, Any] = {}
+            for item in parsed:
+                for k, v in item.items():
+                    if k in merged and isinstance(v, str):
+                        merged[k] = merged[k] + "；" + v
+                    else:
+                        merged[k] = v
+            return merged
+        return {"_raw": raw}
+    if not isinstance(parsed, dict):
+        raise AIOutputError("AI response is not a dict", raw)
+    return parsed
+
+
+def _validate_expected_keys(
+    parsed: dict[str, Any], expected_keys: list[str], raw: str, prefix: str
+) -> dict[str, Any]:
+    """布尔转换 + 缺键校验（视觉/文本链共用；错误消息前缀保持历史口径）。"""
+    _coerce_bool_strings(parsed)
+    missing = [key for key in expected_keys if key not in parsed]
+    if missing:
+        raise AIOutputError(f"{prefix} missing keys: {missing}", raw)
+    return parsed
+
+
+def _vision_json_mode_enabled() -> bool:
+    """视觉 json mode 灰度开关（app_config；默认关，读取异常按关处理）。"""
+    try:
+        from app.modules.safety.app_config.store import store
+
+        return bool(store.get_bool("SAFETY_AI_VISION_JSON_MODE_ENABLED", False))
+    except Exception:  # noqa: BLE001 — 配置读取永不影响业务
+        return False
+
+
+# 视觉 json mode 400 回退判定：只有「端点不认识 response_format/json_object」类
+# 报错才去参重试；图片超限等其它 400 不能白烧一次调用、也不能掩盖真实错误。
+_RESPONSE_FORMAT_UNSUPPORTED_HINTS = (
+    "response_format",
+    "json_object",
+    "unsupported",
+    "not support",
+    "invalidparameter",
+)
+
+
+def _response_format_unsupported(resp: Any) -> bool:
+    """400 响应是否指向 response_format 不受支持（决定是否去参重试）。"""
+    try:
+        body = str(getattr(resp, "text", "") or "").lower()
+    except Exception:  # noqa: BLE001 — 读响应体失败按「不支持」处理会误伤，故按 False
+        return False
+    return any(hint in body for hint in _RESPONSE_FORMAT_UNSUPPORTED_HINTS)
+
+
+def _attach_parse_meta(
+    exc: AIOutputError,
+    *,
+    json_valid: bool,
+    repaired: bool,
+    stages: tuple[str, ...],
+) -> None:
+    """给解析异常附带「质量元信息」，供上层审计回写（A7），不改变异常行为。"""
+    try:
+        exc.parse_meta = {  # type: ignore[attr-defined]
+            "json_valid": bool(json_valid),
+            "json_repaired": bool(repaired),
+            "repair_stages": tuple(stages),
+        }
+    except Exception:  # noqa: BLE001 — 附加元信息失败不影响原异常
+        pass
+
+
+def _parse_meta_of(exc: AIOutputError) -> dict[str, Any]:
+    """读取异常上的解析元信息（没有则返回空 dict）。"""
+    return dict(getattr(exc, "parse_meta", {}) or {})
+
+
 @dataclass(frozen=True)
 class ScenarioPlan:
     """场景熔断守卫产物：绑定 text_backup 时的主调用切向（模型/客户端/base_url）。
@@ -91,7 +201,7 @@ class AuditedAIService(AIService):
     （degradation_level="backup_model"）写入审计记录。
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # 平台层 AIService 不暴露 base_url（只存在其内部 httpx 客户端上），
         # 但本类的 thinking_policy DeepSeek 判定与备份切换需要读取它，
@@ -240,6 +350,81 @@ class AuditedAIService(AIService):
             )
             return content
 
+    async def chat_parsed(
+        self,
+        messages: list[dict[str, Any]],
+        expected_keys: list[str],
+        temperature: float = 0.1,
+    ) -> dict[str, Any]:
+        """文本 chat + JSON 解析（A1：原样解析失败时先本地修复，不额外重试）。
+
+        与平台 ``AIService.chat_parsed`` 语义兼容：数组→合并、布尔串转换、
+        缺键抛 ``AIOutputError``；唯一差异是原样解析失败时先做本地修复
+        （去围栏/取对象/删尾逗号/全角引号），修复成功即零额外 AI 调用。
+        文本链的重试策略由调用方（① 识别插件）负责，本方法不加额外重试。
+        """
+        raw = await self.chat(messages, temperature=temperature)
+        try:
+            outcome = self._parse_text_response_with_meta(raw, expected_keys)
+        except AIOutputError as exc:
+            meta = _parse_meta_of(exc)
+            await _mark_parse_outcome(
+                json_valid=bool(meta.get("json_valid", False)),
+                json_repaired=bool(meta.get("json_repaired", False)),
+                stages=tuple(meta.get("repair_stages", ())),
+                parse_attempts=1,
+            )
+            raise
+        await _mark_parse_outcome(
+            json_valid=outcome.json_valid,
+            json_repaired=outcome.repaired,
+            stages=outcome.stages,
+            parse_attempts=1,
+        )
+        return outcome.data
+
+    @staticmethod
+    def _parse_text_response_with_meta(
+        raw: str, expected_keys: list[str]
+    ) -> ParseOutcome:
+        """文本链解析（平台语义 + 本地修复）。
+
+        ``json_valid`` = 原文能否直接 ``json.loads``（不含任何清理）；文本链历史
+        上不剥围栏，因此「仅围栏修复」也算 ``json_repaired=True``。
+        """
+        json_valid = False
+        stages: tuple[str, ...] = ()
+        try:
+            parsed = json.loads(raw)
+            json_valid = True
+        except json.JSONDecodeError:
+            repair = repair_json(raw)
+            if repair.data is None:
+                exc = AIOutputError("AI response is not valid JSON", raw)
+                _attach_parse_meta(
+                    exc,
+                    json_valid=False,
+                    repaired=False,
+                    stages=repair.stages,
+                )
+                raise exc from None
+            parsed, stages = repair.data, repair.stages
+            json_valid = False
+        repaired = bool(stages)
+        try:
+            merged = _merge_list_parsed(parsed, raw)
+            data = _validate_expected_keys(
+                merged, expected_keys, raw, "AI response"
+            )
+        except AIOutputError as exc:
+            _attach_parse_meta(
+                exc, json_valid=json_valid, repaired=repaired, stages=stages
+            )
+            raise
+        return ParseOutcome(
+            data=data, json_valid=json_valid, repaired=repaired, stages=stages
+        )
+
     async def _fallback_chat(
         self,
         *,
@@ -343,6 +528,12 @@ class AuditedAIService(AIService):
             "max_tokens": max_tokens,
         }
 
+        # ── 视觉 json mode 灰度（A2）：默认关；端点 400 不支持时自动去参重试一次 ──
+        json_mode = _vision_json_mode_enabled()
+        json_mode_fallback = False
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+
         # ── Thinking mode auto-decision ──
         _apply_thinking_policy(body, [{"role": "user", "content": text_prompt}], base_url)
 
@@ -359,6 +550,15 @@ class AuditedAIService(AIService):
         with ai_call_span(model, ctx.scenario if ctx else None) as span:
             try:
                 resp = await client.post("/chat/completions", json=body)
+                if (
+                    json_mode
+                    and resp.status_code == 400
+                    and _response_format_unsupported(resp)
+                ):
+                    # 仅当 400 指向 response_format 不支持时才去参重试一次
+                    json_mode_fallback = True
+                    body.pop("response_format", None)
+                    resp = await client.post("/chat/completions", json=body)
                 resp.raise_for_status()
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"]
@@ -382,6 +582,10 @@ class AuditedAIService(AIService):
                     status="failed",
                     error=error_msg,
                     called_at=called_at,
+                    audit_extra={
+                        "vision_json_mode": json_mode,
+                        "vision_json_mode_fallback": json_mode_fallback,
+                    },
                 )
                 raise
 
@@ -396,6 +600,10 @@ class AuditedAIService(AIService):
                 latency_ms=int((time.monotonic() - started) * 1000),
                 status="success",
                 called_at=called_at,
+                audit_extra={
+                    "vision_json_mode": json_mode,
+                    "vision_json_mode_fallback": json_mode_fallback,
+                },
             )
             return content
 
@@ -412,55 +620,121 @@ class AuditedAIService(AIService):
         父类 AIService.chat_vision_parsed 不接受 max_tokens 参数，导致视觉调用
         始终使用 chat_vision 的默认值 16384。qwen-vl-max 输出上限约 8192，
         超限可能触发 DashScope 400。此处覆写以接受并透传 max_tokens，默认 4096。
-        解析失败（非法 JSON / 缺键）时自动重试一次。
+
+        A1（2026-11-05）：解析链先做本地修复（去围栏/取对象/删尾逗号/全角引号），
+        可修复样本零额外调用；修复后仍失败才**带错误反馈**重试一次，替代历史
+        「同 prompt 盲重发」。
         """
         raw = await self.chat_vision(
-            text_prompt, image_urls, temperature=temperature, max_tokens=max_tokens,
+            text_prompt,
+            image_urls,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         try:
-            return self._parse_json_response(raw, expected_keys)
-        except AIOutputError:
-            raw = await self.chat_vision(
-                text_prompt, image_urls, temperature=temperature, max_tokens=max_tokens,
+            outcome = self._parse_json_response_with_meta(raw, expected_keys)
+        except AIOutputError as first_error:
+            first_meta = _parse_meta_of(first_error)
+            await _mark_parse_outcome(
+                json_valid=bool(first_meta.get("json_valid", False)),
+                json_repaired=bool(first_meta.get("json_repaired", False)),
+                stages=tuple(first_meta.get("repair_stages", ())),
+                parse_attempts=1,
             )
-            return self._parse_json_response(raw, expected_keys)
+            feedback = (
+                "\n\n上一次输出无法解析为合法 JSON："
+                f"{str(first_error)[:500]}。请只输出一个 JSON 对象"
+                "（不要 markdown 围栏、不要注释或多余文字），并确保包含全部必需字段。"
+            )
+            raw = await self.chat_vision(
+                text_prompt + feedback,
+                image_urls,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            try:
+                outcome = self._parse_json_response_with_meta(raw, expected_keys)
+            except AIOutputError as retry_error:
+                retry_meta = _parse_meta_of(retry_error)
+                await _mark_parse_outcome(
+                    json_valid=bool(retry_meta.get("json_valid", False)),
+                    json_repaired=bool(retry_meta.get("json_repaired", False)),
+                    stages=tuple(retry_meta.get("repair_stages", ())),
+                    parse_attempts=2,
+                )
+                raise
+            await _mark_parse_outcome(
+                json_valid=outcome.json_valid,
+                json_repaired=outcome.repaired,
+                stages=outcome.stages,
+                parse_attempts=2,
+            )
+            return outcome.data
+
+        await _mark_parse_outcome(
+            json_valid=outcome.json_valid,
+            json_repaired=outcome.repaired,
+            stages=outcome.stages,
+            parse_attempts=1,
+        )
+        return outcome.data
 
     @staticmethod
     def _parse_json_response(raw: str, expected_keys: list[str]) -> dict:
-        """解析视觉调用返回的 JSON（与平台层 chat_vision_parsed 解析逻辑保持一致）。
+        """解析视觉调用返回的 JSON（A1：原样失败时先本地修复再校验）。
 
         同步义务：平台层若修改其解析逻辑（去代码围栏 / 布尔串转换 / 缺键校验），
         本方法必须同步。
         """
+        return AuditedAIService._parse_json_response_with_meta(raw, expected_keys).data
+
+    @staticmethod
+    def _parse_json_response_with_meta(
+        raw: str, expected_keys: list[str]
+    ) -> ParseOutcome:
+        """视觉解析 + 本地修复：返回解析结果与「是否修复」元信息。
+
+        - ``json_valid`` = 原文能否直接 ``json.loads``（不含围栏清理/修复）；
+        - 失败时用 ``json_repair`` 级联修复（围栏/首尾大括号/尾逗号/全角引号），
+          修复成功仍需通过 dict / 布尔串 / 缺键校验，否则按历史口径抛
+          ``AIOutputError``（异常上附带 parse_meta，供审计质量维度回写）。
+        """
+        json_valid = False
+        stages: tuple[str, ...] = ()
         try:
-            # Strip markdown code fences if present
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                # Find first line that doesn't start with ```
-                for i, line in enumerate(lines):
-                    if not line.strip().startswith("```"):
-                        cleaned = "\n".join(lines[i:])
-                        break
-                # Remove trailing ```
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3].strip()
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            raise AIOutputError("Vision AI response is not valid JSON", raw) from e
+            parsed = json.loads(raw)
+            json_valid = True
+        except json.JSONDecodeError:
+            repair = repair_json_object(raw)
+            if repair.data is None:
+                exc = AIOutputError("Vision AI response is not valid JSON", raw)
+                _attach_parse_meta(
+                    exc, json_valid=False, repaired=False, stages=repair.stages
+                )
+                raise exc from None
+            parsed, stages = dict(repair.data), repair.stages
+            json_valid = False
+        repaired = bool(stages)
 
         if not isinstance(parsed, dict):
-            raise AIOutputError("Vision AI response is not a dict", raw)
+            exc = AIOutputError("Vision AI response is not a dict", raw)
+            _attach_parse_meta(
+                exc, json_valid=json_valid, repaired=repaired, stages=stages
+            )
+            raise exc
 
-        # coerce boolean strings
-        for k, v in parsed.items():
-            if isinstance(v, str) and v.lower() in ("true", "false"):
-                parsed[k] = v.lower() == "true"
-
-        missing = [k for k in expected_keys if k not in parsed]
-        if missing:
-            raise AIOutputError(f"Vision AI response missing keys: {missing}", raw)
-        return parsed
+        try:
+            data = _validate_expected_keys(
+                parsed, expected_keys, raw, "Vision AI response"
+            )
+        except AIOutputError as exc:
+            _attach_parse_meta(
+                exc, json_valid=json_valid, repaired=repaired, stages=stages
+            )
+            raise
+        return ParseOutcome(
+            data=data, json_valid=json_valid, repaired=repaired, stages=stages
+        )
 
     async def close(self) -> None:
         """关闭主客户端 + 备份客户端（风险 10：绑定/降级后备份连接泄漏）。
@@ -578,13 +852,18 @@ async def _write_audit(
     status: str,
     error: str | None = None,
     called_at: datetime | None = None,
+    audit_extra: dict[str, Any] | None = None,
 ) -> None:
     """独立 session 写入一条审计记录。任何异常只告警，不向上抛。
 
     Args:
         called_at: API 调用发起时刻（UTC）。传入时显式设置 created_at，
                    确保时间戳反映调用时刻而非审计落库时刻；不传则走 DB server_default。
+        audit_extra: 仅本次调用行的额外维度（如视觉 json mode 标记），
+                     与 ctx.extra 合并后落库，不污染共享审计上下文。
     """
+    # 每次写入前重置：解析质量维度只回写「本次调用」对应的审计行
+    _last_audit_row_id.set(None)
     try:
         from app.core.database import async_session_factory
         from app.modules.safety.ai_audit.models import AICallAudit
@@ -597,6 +876,9 @@ async def _write_audit(
         output_text, output_trunc = _truncate(output)
 
         usage = usage or {}
+        extra_payload: dict[str, Any] = dict(ctx.extra) if ctx and ctx.extra else {}
+        if audit_extra:
+            extra_payload.update(audit_extra)
         row = AICallAudit(
             trace_id=ctx.trace_id if ctx else None,
             scenario=ctx.scenario if ctx else "unknown",
@@ -622,14 +904,20 @@ async def _write_audit(
             error=(error or None) and error[:2000],
             degradation_level=ctx.degradation_level if ctx else None,
             cited_sources=ctx.cited_sources if ctx else None,
-            extra=ctx.extra if ctx else None,
+            extra=extra_payload or None,
         )
         if called_at is not None:
             row.created_at = called_at
 
         async with async_session_factory() as session:
             session.add(row)
+            # flush 拿 id（postgres INSERT RETURNING 回填），commit 后属性会过期
+            await session.flush()
+            row_id = row.id
             await session.commit()
+
+        # 记录本次调用审计行 id，供解析后回写 json_valid/json_repaired 等质量维度
+        _last_audit_row_id.set(row_id)
 
         # ── 失败飞书通知（fire-and-forget，不阻塞审计写入） ──
         if status == "failed":
@@ -644,6 +932,49 @@ async def _write_audit(
             )
     except Exception:
         logger.exception("AI 调用审计写入失败（不影响业务）")
+
+
+async def _mark_parse_outcome(
+    *,
+    json_valid: bool,
+    json_repaired: bool,
+    stages: tuple[str, ...] | list[str],
+    parse_attempts: int,
+) -> None:
+    """把 JSON 质量维度合并写回最近一次审计行的 ``extra``（A1/A7）。
+
+    独立 session + JSONB 合并（``coalesce(extra,'{}') || patch``），任何异常只
+    记日志、绝不影响业务；无审计行（如测试 fake 掉 ``_write_audit``）时 no-op。
+    """
+    row_id = _last_audit_row_id.get()
+    if row_id is None:
+        return
+    patch = {
+        "json_valid": bool(json_valid),
+        "json_repaired": bool(json_repaired),
+        "repair_stages": [str(stage) for stage in stages],
+        "parse_attempts": int(parse_attempts),
+    }
+    try:
+        from sqlalchemy import cast, func, update
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        from app.core.database import async_session_factory
+        from app.modules.safety.ai_audit.models import AICallAudit
+
+        merged = func.coalesce(AICallAudit.extra, cast("{}", JSONB)).op("||")(
+            cast(patch, JSONB)
+        )
+        stmt = (
+            update(AICallAudit)
+            .where(AICallAudit.id == row_id)
+            .values(extra=merged)
+        )
+        async with async_session_factory() as session:
+            await session.execute(stmt)
+            await session.commit()
+    except Exception:  # noqa: BLE001 — 质量维度回写失败永不影响业务
+        logger.exception("AI 审计解析质量维度回写失败（不影响业务）")
 
 
 # ═══════════════════════════════════════════════════════════════

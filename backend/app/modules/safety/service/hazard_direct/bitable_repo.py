@@ -102,6 +102,31 @@ COND_SCORING_PENDING: list[dict[str, Any]] = [
     {"field_name": F_SCORE, "operator": "isEmpty", "value": []},
 ]
 
+# ── ②-b 已关闭自动通过判据（2026-11-04 拍板：已关闭即通过）：
+#    未初审 且 已关闭（不要求有整改回复——关闭即视为整改被接受）。
+#    兜两处漏：①回复与关闭同窗口填写、5 分钟轮询没赶上的竞速记录；
+#    ②历史上初审链路未覆盖期的存量（2026-11-04 时点 1127 条）。──
+COND_REVIEW_AUTOPASS: list[dict[str, Any]] = [
+    {"field_name": F_REVIEW_RESULT, "operator": "isEmpty", "value": []},
+    {"field_name": F_RECTIFY_STATUS, "operator": "is", "value": ["已关闭"]},
+]
+
+# ── ②-c 已关闭跟随改写判据（2026-11-05 拍板：人工关闭优先，AI 结论单向跟随）：
+#    AI初审结论为 未通过/无需整改 且 已关闭 → 改写「已通过」。
+#    改写说明保留原结论与原因摘要（可审计）；「已通过」+关闭不命中即不重写。
+#    实现注意：Bitable filter 不支持嵌套条件组（bd_filters 实测约束），
+#    「多值 is AND 已关闭」表达不了（1254018 InvalidFilter）→ 拆两条单值
+#    判据分查合并（search_override_review）。──
+COND_REVIEW_OVERRIDE_FAILED: list[dict[str, Any]] = [
+    {"field_name": F_REVIEW_RESULT, "operator": "is", "value": ["未通过"]},
+    {"field_name": F_RECTIFY_STATUS, "operator": "is", "value": ["已关闭"]},
+]
+COND_REVIEW_OVERRIDE_NA: list[dict[str, Any]] = [
+    {"field_name": F_REVIEW_RESULT, "operator": "is", "value": ["无需整改"]},
+    {"field_name": F_RECTIFY_STATUS, "operator": "is", "value": ["已关闭"]},
+]
+# 兼容旧引用（单测判据形状断言 = 未通过分支）
+COND_REVIEW_OVERRIDE = COND_REVIEW_OVERRIDE_FAILED
 
 # ── ③ 日报：未闭环台账 ──
 COND_OPEN: list[dict[str, Any]] = [
@@ -347,6 +372,43 @@ async def search_pending_scoring(
         strict=True,
     )
     return records[: (limit or config.batch_limit())]
+
+
+async def search_autopass_review(
+    client: SafetyBitableClient, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """②-b 已关闭自动通过记录（未初审 且 已关闭）。"""
+    records = await client.list_all_records(
+        filter_info=_and(COND_REVIEW_AUTOPASS),
+        page_size=500,
+        strict=True,
+    )
+    return records[: (limit or config.batch_limit())]
+
+
+async def search_override_review(
+    client: SafetyBitableClient, *, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """②-c 已关闭跟随改写记录（AI初审=未通过/无需整改 且 已关闭）。
+
+    Bitable filter 不支持嵌套条件组，「(未通过 OR 无需整改) AND 已关闭」
+    表达不了 → 两条单值判据分查、按 record_id 去重合并。
+    """
+    seen: set[str] = set()
+    merged: list[dict[str, Any]] = []
+    for cond in (COND_REVIEW_OVERRIDE_FAILED, COND_REVIEW_OVERRIDE_NA):
+        records = await client.list_all_records(
+            filter_info=_and(cond),
+            page_size=500,
+            strict=True,
+        )
+        for record in records:
+            rid = record.get("record_id", "")
+            if rid and rid in seen:
+                continue
+            seen.add(rid)
+            merged.append(record)
+    return merged[: (limit or config.batch_limit())]
 
 
 async def search_open_hazards(client: SafetyBitableClient) -> list[dict[str, Any]]:
@@ -750,8 +812,12 @@ async def download_photos(
     fields: dict[str, Any],
     *,
     record_id: str,
+    include_rectification: bool = True,
 ) -> dict[str, list[str]]:
     """下载缺陷图 / 整改后图到统一存储，返回 {"defect": [...], "rectification": [...]}。
+
+    ``include_rectification=False`` 时跳过整改后图（① AI 识别只用缺陷图，
+    可减少约 44% 附件下载；② 初审需要对比整改后图，保持默认 True 不变）。
 
     **不再调用 ``get_record``**：``records/search`` 返回的附件元数据已含
     ``url``（内嵌 bitablePerm extra）与 ``tmp_url``，可直接下载。
@@ -766,7 +832,11 @@ async def download_photos(
 
     saved: dict[str, list[str]] = {"defect": [], "rectification": []}
 
-    for field_name, key in ((F_PHOTO_DEFECT, "defect"), (F_PHOTO_RECTIFY, "rectification")):
+    targets: list[tuple[str, str]] = [(F_PHOTO_DEFECT, "defect")]
+    if include_rectification:
+        targets.append((F_PHOTO_RECTIFY, "rectification"))
+
+    for field_name, key in targets:
         for att in f_attachments(fields, field_name):
             file_token = str(att.get("file_token") or "")
             file_name = str(att.get("name") or "unknown")
@@ -811,7 +881,9 @@ async def download_photos(
 
             try:
                 safe_name = file_name.replace("\\", "/").split("/")[-1]
-                stored = store_bytes(
+                # 图片编码/落盘是同步 CPU/IO，放线程跑避免阻塞事件循环（A6）
+                stored = await asyncio.to_thread(
+                    store_bytes,
                     "hazard",
                     f"direct_{record_id}_{file_token[:12]}_{safe_name}",
                     data,

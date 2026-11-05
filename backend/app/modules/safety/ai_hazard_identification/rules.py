@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 
+from app.modules.safety.ai_hazard_identification.citations import has_citation
 from app.modules.safety.ai_hazard_identification.schemas import (
     HazardCategoryEnum,
     HazardIdentificationInput,
@@ -32,28 +33,9 @@ def _enum_value(val: object) -> str:
     return getattr(val, "value", str(val))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 已知法规标准引用正则（用于快速检测编造的法规）
-# ═══════════════════════════════════════════════════════════════════════════
-
-KNOWN_REGULATIONS = [
-    "安全生产法",
-    "消防法",
-    "职业病防治法",
-    "特种设备安全法",
-    "危险化学品安全管理条例",
-    "化工和危险化学品生产经营单位重大生产安全事故隐患判定标准",
-    "工贸行业重大生产安全事故隐患判定标准",
-    "安全生产事故隐患排查治理暂行规定",
-    "GB/T 13861",
-    "GB 30871",
-    "GB 3836",
-    "GB 50016",
-    "GB 50160",
-    "GB 4053",
-    "AQ",
-    "安全生产十大禁令",
-]
+# key_defect 字段上限（与 HazardIdentificationOutput.max_length 对齐）。
+# A4 字段级容错：超长仅截断该字段，不放大为整条识别失败。
+KEY_DEFECT_MAX_LENGTH = 200
 
 # 严禁出现的泛泛表述
 BANNED_PHRASES = [
@@ -184,7 +166,7 @@ class RuleEngine:
 
     def _validate_rectification(
         self,
-        suggestion: RectificationSuggestion | dict,
+        suggestion: RectificationSuggestion | dict[str, str],
         errors: list[str],
         warnings: list[str],
     ) -> None:
@@ -215,21 +197,18 @@ class RuleEngine:
         errors: list[str],
         warnings: list[str],
     ) -> None:
-        """验证判定依据引用质量。"""
+        """验证判定依据引用质量（引用判定与 A3 质量闸门同源）。"""
         if len(basis) < 20:
             errors.append(f"隐患判定依据过短（{len(basis)}字），必须包含具体法规引用")
 
-        # 检查是否至少引用了法规名称
-        has_regulation_ref = any(
-            reg in basis
-            for reg in KNOWN_REGULATIONS
-        )
-        if not has_regulation_ref:
+        # 与 A3 质量闸门共用 citations.has_citation，接受《》、标准号、
+        # 〔YYYY〕N号、[YYYY]N号、第X条/第X.X条/X.X条等真实引用格式。
+        if not has_citation(basis):
             errors.append(
                 "隐患判定依据必须引用具体法规/标准名称（如《安全生产法》、GB 30871 等）"
             )
 
-        # 检查是否有条文编号（第X条、第X.X节等）
+        # 检查是否有条文编号（第X条、第X.X节等）——仅 warning，不阻塞
         has_article_ref = bool(
             re.search(r"第[一二三四五六七八九十\d]+[条章节]", basis)
             or re.search(r"第\s*\d+(\.\d+)*\s*[条章节]", basis)
@@ -288,12 +267,12 @@ class RuleEngine:
 def auto_correct(output: HazardIdentificationOutput) -> HazardIdentificationOutput:
     """对 AI 输出进行自动修正（不改变语义，只修正格式问题）。
 
-    - 去除 key_defect 首尾空白
+    - 去除 key_defect 首尾空白；超 200 字截断到 200（字段级容错）
     - 确保 rectification_suggestion 各字段非空
     - 修正已知的枚举值拼写/大小写
     """
-    # 清理描述
-    output.key_defect = output.key_defect.strip()
+    # 清理描述；超长截断而非整条失败（A4）
+    output.key_defect = output.key_defect.strip()[:KEY_DEFECT_MAX_LENGTH]
 
     # 保障整改建议非空
     for field_name in ("corrective", "preventive"):

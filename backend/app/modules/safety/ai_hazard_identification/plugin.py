@@ -29,6 +29,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import time
+from contextlib import AbstractContextManager
 from typing import Any
 
 from app.modules.safety.ai_hazard_identification.prompts import (
@@ -39,6 +40,7 @@ from app.modules.safety.ai_hazard_identification.prompts import (
     get_expected_keys,
 )
 from app.modules.safety.ai_hazard_identification.rules import (
+    KEY_DEFECT_MAX_LENGTH,
     RuleEngine,
     auto_correct,
 )
@@ -51,10 +53,75 @@ from app.modules.safety.ai_hazard_identification.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# A4 带错误反馈重试：把规则校验错误 + 「只输出 JSON」要求回灌给 AI（只重试一次）。
+_RETRY_FEEDBACK_TEMPLATE = """
+## 上次输出未通过规则校验，请修正后重新输出
+
+你上一次输出的 JSON 已成功解析，但未通过规则校验，错误如下：
+{errors}
+
+请逐条修正上述问题后重新输出**完整**的 JSON（字段结构与格式要求同上）。
+只输出 JSON，不要输出 markdown 代码块或任何解释文字。"""
+
+
+def _build_retry_feedback(errors: list[str]) -> str:
+    """构造规则校验错误反馈文本（A4 重试 prompt 片段）。"""
+    error_lines = "\n".join(f"- {error}" for error in errors)
+    return _RETRY_FEEDBACK_TEMPLATE.format(errors=error_lines)
+
+
+def _attempt_audit_scope(attempt_no: int) -> AbstractContextManager[Any]:
+    """嵌套审计作用域，只在 `extra` 上覆盖 `attempt_no`（A7）。
+
+    - 首次 AI 调用 attempt_no=1，A4 反馈重试 attempt_no=2；
+    - 合并当前外层 `current_audit_ctx().extra`（保留 round_id /
+      bitable_record_id 等轮级语义），不覆盖/丢弃外层字段；
+    - 延迟 import：插件在无审计场景的独立脚本/单测中同样可用。
+    """
+    from app.modules.safety.ai_audit.context import (  # 避免插件模块导入即拉起审计层
+        ai_audit_scope,
+        current_audit_ctx,
+    )
+
+    parent = current_audit_ctx()
+    merged_extra = dict(parent.extra) if parent is not None and parent.extra else {}
+    merged_extra["attempt_no"] = attempt_no
+    return ai_audit_scope(extra=merged_extra)
+
+
 
 class IdentificationError(Exception):
-    """AI 识别失败异常。"""
-    pass
+    """AI 识别失败异常。
+
+    `category` 是 A5/A7 的结构化失败分类（`json_invalid` / `validation_failed`
+    等），供上层失败治理直接读取；`None` 表示插件无法判定，由上层回退到
+    原有字符串匹配，保证向后兼容（原 `IdentificationError(msg)` 调用不变）。
+    """
+
+    def __init__(self, message: str, *, category: str | None = None) -> None:
+        super().__init__(message)
+        self.category: str | None = category
+
+
+def _error_category(exc: BaseException | None) -> str | None:
+    """沿异常链推断失败分类（供 AI 调用失败包装使用）。
+
+    - 异常链上已有带 category 的 `IdentificationError` → 原样保留；
+    - 链上出现平台 `AIOutputError`（输出 JSON 不可解析/缺键）→ `json_invalid`；
+    - 其它（网络/超时/未知）→ None，让上层按原逻辑回退。
+    """
+    from app.platform.integrations.ai.client import AIOutputError  # 延迟 import
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, IdentificationError) and current.category:
+            return current.category
+        if isinstance(current, AIOutputError):
+            return "json_invalid"
+        current = current.__cause__ or current.__context__
+    return None
 
 
 class AIHazardIdentifier:
@@ -123,27 +190,41 @@ class AIHazardIdentifier:
         logger.info("阶段二：AI 分析 — has_photos=%s has_knowledge=%s",
                      has_photos, bool(self.knowledge_context))
 
-        if has_photos and self.config.enable_vision:
-            raw_output = await self._call_vision_ai(input_data)
-        else:
-            raw_output = await self._call_text_ai(input_data)
+        # A7：每次 AI 调用带 attempt_no（首次=1；外层 round_id 等 extra 保留）
+        with _attempt_audit_scope(1):
+            raw_output = await self._call_ai(input_data)
 
         # ── 阶段三：解析 & 验证 ──
         logger.info("阶段三：解析输出并规则验证")
-        output = self._parse_output(raw_output)
-
-        # 自动修正
-        output = auto_correct(output)
+        output = auto_correct(self._parse_output(raw_output))
 
         # 规则验证
         validation = self.rule_engine.validate(input_data, output)
         if not validation.is_valid:
             error_detail = "; ".join(validation.errors)
             if self.config.strict_mode:
-                raise IdentificationError(
-                    f"AI 输出验证失败: {error_detail}\n"
-                    f"原始输出: {_json.dumps(raw_output, ensure_ascii=False, default=str)[:500]}"
+                # A4：JSON 已解析但规则不通过 → 带错误反馈重试一次。
+                # JSON/schema 解析失败不进入本分支（由客户端/上一层重试）。
+                logger.warning(
+                    "AI 输出规则校验失败（严格模式），带错误反馈重试一次: %s",
+                    error_detail,
                 )
+                with _attempt_audit_scope(2):
+                    retry_raw = await self._call_ai(
+                        input_data,
+                        retry_errors=validation.errors,
+                        previous_output=raw_output,
+                    )
+                output = auto_correct(self._parse_output(retry_raw))
+                retry_validation = self.rule_engine.validate(input_data, output)
+                if not retry_validation.is_valid:
+                    retry_detail = "; ".join(retry_validation.errors)
+                    raise IdentificationError(
+                        "AI 输出验证失败（已带错误反馈重试一次）: "
+                        f"{retry_detail}\n"
+                        f"首次校验错误: {error_detail}",
+                        category="validation_failed",
+                    )
             else:
                 logger.warning("AI 输出验证失败（非严格模式，继续返回）: %s", error_detail)
 
@@ -185,8 +266,33 @@ class AIHazardIdentifier:
 
     # ── 内部方法 ──
 
-    async def _call_text_ai(self, input_data: HazardIdentificationInput) -> dict:
-        """纯文本模式 AI 调用。"""
+    async def _call_ai(
+        self,
+        input_data: HazardIdentificationInput,
+        *,
+        retry_errors: list[str] | None = None,
+        previous_output: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """按输入/配置选择视觉或文本 AI 入口。
+
+        A4 重试时通过 `retry_errors` / `previous_output` 把规则校验错误回灌 prompt。
+        """
+        if input_data.defect_photos and self.config.enable_vision:
+            return await self._call_vision_ai(input_data, retry_errors=retry_errors)
+        return await self._call_text_ai(
+            input_data,
+            retry_errors=retry_errors,
+            previous_output=previous_output,
+        )
+
+    async def _call_text_ai(
+        self,
+        input_data: HazardIdentificationInput,
+        *,
+        retry_errors: list[str] | None = None,
+        previous_output: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """纯文本模式 AI 调用（A4 重试时可携带校验错误反馈）。"""
         context = build_context_text(
             hazard_no=input_data.hazard_no,
             description=input_data.description,
@@ -205,23 +311,42 @@ class AIHazardIdentifier:
         )
         expected_keys = get_expected_keys()
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_ROLE},
             {"role": "user", "content": prompt},
         ]
+        if retry_errors:
+            if previous_output is not None:
+                messages.append({
+                    "role": "assistant",
+                    "content": _json.dumps(
+                        previous_output, ensure_ascii=False, default=str
+                    ),
+                })
+            messages.append(
+                {"role": "user", "content": _build_retry_feedback(retry_errors)}
+            )
 
         try:
-            return await self.ai_service.chat_parsed(
+            parsed: dict[str, Any] = await self.ai_service.chat_parsed(
                 messages=messages,
                 expected_keys=expected_keys,
                 temperature=self.config.temperature,
             )
+            return parsed
         except Exception as e:
             logger.error("文本 AI 调用失败: %s", e)
-            raise IdentificationError(f"AI 文本分析失败: {e}") from e
+            raise IdentificationError(
+                f"AI 文本分析失败: {e}", category=_error_category(e)
+            ) from e
 
-    async def _call_vision_ai(self, input_data: HazardIdentificationInput) -> dict:
-        """多模态 AI 调用（带图片）。"""
+    async def _call_vision_ai(
+        self,
+        input_data: HazardIdentificationInput,
+        *,
+        retry_errors: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """多模态 AI 调用（带图片；A4 重试时在 prompt 末尾追加错误反馈）。"""
         context = build_vision_context_text(
             hazard_no=input_data.hazard_no,
             description=input_data.description,
@@ -234,16 +359,20 @@ class AIHazardIdentifier:
         try:
             # 检查 AI 服务是否支持 vision
             if hasattr(self.ai_service, "chat_vision_parsed"):
-                return await self.ai_service.chat_vision_parsed(
-                    text_prompt=build_full_prompt(
-                        context, vision_mode=True, include_fewshot=True,
-                        knowledge_context=self.knowledge_context,
-                    ),
+                text_prompt = build_full_prompt(
+                    context, vision_mode=True, include_fewshot=True,
+                    knowledge_context=self.knowledge_context,
+                )
+                if retry_errors:
+                    text_prompt += "\n\n" + _build_retry_feedback(retry_errors)
+                parsed: dict[str, Any] = await self.ai_service.chat_vision_parsed(
+                    text_prompt=text_prompt,
                     image_urls=input_data.defect_photos,
                     expected_keys=expected_keys,
                     temperature=self.config.temperature,
                     max_tokens=self.config.max_tokens,
                 )
+                return parsed
 
             # Fallback: 将图片信息嵌入文本 prompt
             logger.warning("AI 服务不支持 vision，降级为纯文本模式")
@@ -262,14 +391,22 @@ class AIHazardIdentifier:
                 discovered_at=input_data.discovered_at,
                 defect_photos=[],  # 清空图片，走纯文本
             )
-            return await self._call_text_ai(fallback_input)
+            return await self._call_text_ai(
+                fallback_input, retry_errors=retry_errors
+            )
 
         except Exception as e:
             logger.error("多模态 AI 调用失败: %s", e)
-            raise IdentificationError(f"AI 视觉分析失败: {e}") from e
+            raise IdentificationError(
+                f"AI 视觉分析失败: {e}", category=_error_category(e)
+            ) from e
 
-    def _parse_output(self, raw: dict) -> HazardIdentificationOutput:
-        """将 AI 返回的字典解析为强类型输出。"""
+    def _parse_output(self, raw: dict[str, Any]) -> HazardIdentificationOutput:
+        """将 AI 返回的字典解析为强类型输出。
+
+        A4 字段级容错：`key_defect` 超 schema max_length 时先截断再构造，
+        避免一个字过长导致整条识别硬失败（auto_correct 兜底同一上限）。
+        """
         try:
             # 解析枚举
             from app.modules.safety.ai_hazard_identification.schemas import (
@@ -277,6 +414,13 @@ class AIHazardIdentifier:
                 HazardCategoryEnum,
                 HazardLevelEnum,
                 HazardTypeEnum,
+            )
+
+            raw_key_defect = raw.get("key_defect", "")
+            key_defect = (
+                raw_key_defect[:KEY_DEFECT_MAX_LENGTH]
+                if isinstance(raw_key_defect, str)
+                else raw_key_defect
             )
 
             # 如果 rectification_suggestion 是字符串（某些模型可能这样返回），做兼容处理
@@ -289,7 +433,7 @@ class AIHazardIdentifier:
                     rs = {"corrective": rs, "preventive": ""}
 
             return HazardIdentificationOutput(
-                key_defect=raw.get("key_defect", ""),
+                key_defect=key_defect,
                 hazard_type=HazardTypeEnum(raw.get("hazard_type", "")),
                 hazard_category=HazardCategoryEnum(raw.get("hazard_category", "")),
                 hazard_level=HazardLevelEnum(raw.get("hazard_level", "")),
@@ -306,5 +450,6 @@ class AIHazardIdentifier:
         except (ValueError, KeyError, TypeError) as e:
             raise IdentificationError(
                 f"AI 输出解析失败: {e}\n"
-                f"原始输出: {_json.dumps(raw, ensure_ascii=False, default=str)[:500]}"
+                f"原始输出: {_json.dumps(raw, ensure_ascii=False, default=str)[:500]}",
+                category="json_invalid",
             ) from e

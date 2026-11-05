@@ -7,14 +7,18 @@
 import logging
 import os
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.env_loader import load_safety_env
-from app.modules.safety.feishu.client import get_safety_tenant_token
+from app.modules.safety.feishu.client import (
+    get_safety_tenant_token,
+    invalidate_safety_tenant_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,48 @@ BITABLE_BASE = "https://open.feishu.cn/open-apis/bitable/v1"
 # 飞书 Bitable 错误码：字段不存在（对目标表更新不存在的字段时返回）
 # 属于良性/预期场景（如向无 article_no 字段的表回写编号），不应记为 ERROR 噪音
 BITABLE_ERR_FIELD_NOT_FOUND = 1254045
+
+# 飞书 token 失效/过期错误码：与 lark_oapi.channel.errors._TOKEN_INVALID_CODES 对齐，
+# 并补充 99991661（tenant_access_token 无效）。主路径（search/update/download）
+# 命中这些码时清空 token 缓存 → 重取 → 重试一次（仅一次）。
+TOKEN_INVALID_ERROR_CODES: frozenset[int] = frozenset({
+    99991661,
+    99991663,
+    99991664,
+    99991665,
+    99991666,
+    99991668,
+})
+
+
+class _BitableTokenInvalidError(RuntimeError):
+    """内部信号：飞书返回 token 失效码，触发 invalidate + 重试一次。"""
+
+    def __init__(self, code: int) -> None:
+        self.code = code
+        super().__init__(f"Bitable token 失效: code={code}")
+
+
+def _coerce_error_code(raw: Any) -> int | None:
+    """把响应里的 code 规整成 int（缺失/非数字返回 None）。"""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _token_invalid_code_from_response(resp: httpx.Response) -> int | None:
+    """从飞书 JSON 错误响应提取 token 失效码；非 JSON / 非 token 码返回 None。"""
+    try:
+        data = resp.json()
+    except ValueError:  # 非 JSON（HTML 网关页等），交给常规重试/降级逻辑
+        return None
+    if not isinstance(data, dict):
+        return None
+    code = _coerce_error_code(data.get("code"))
+    if code is not None and code in TOKEN_INVALID_ERROR_CODES:
+        return code
+    return None
 
 
 class BitableQueryError(RuntimeError):
@@ -131,7 +177,22 @@ class SafetyBitableClient:
         return f"{base}/{record_id}" if record_id else base
 
     async def _token(self) -> str:
+        """取 tenant access token（复用 client 模块进程内缓存，不每次重取）。"""
         return await get_safety_tenant_token()
+
+    async def _request_with_token_retry(
+        self,
+        call: Callable[[str], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        """执行一次 JSON API 调用；飞书返回 token 失效码时清缓存、重取、重试一次。"""
+        token = await self._token()
+        data = await call(token)
+        code = _coerce_error_code(data.get("code"))
+        if code is not None and code in TOKEN_INVALID_ERROR_CODES:
+            logger.warning("Bitable token 失效(code=%s)，清空缓存后重试一次", code)
+            invalidate_safety_tenant_token()
+            data = await call(await self._token())
+        return data
 
     async def _resolve_app_token(self, token: str) -> str:
         """获取真实 app_token（Drive API 上传时需要 parent_node）。
@@ -240,34 +301,40 @@ class SafetyBitableClient:
         fields: dict[str, Any],
         table_id: str | None = None,
     ) -> bool:
-        """更新单条记录的字段。返回是否成功。"""
+        """更新单条记录的字段。返回是否成功。
+
+        飞书返回 token 失效码时自动清缓存重取并重试一次（见 TOKEN_INVALID_ERROR_CODES）。
+        """
         if not fields:
             return True
-        token = await self._token()
-        async with httpx.AsyncClient(timeout=15) as http:
-            resp = await http.put(
-                self._record_url(table_id, record_id),
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json; charset=utf-8",
-                },
-                json={"fields": fields},
-            )
-            data = resp.json()
-            if data.get("code") != 0:
-                if data.get("code") == BITABLE_ERR_FIELD_NOT_FOUND:
-                    logger.warning(
-                        "Bitable update_record 字段不存在（跳过）: record_id=%s code=%s msg=%s",
-                        record_id, data.get("code"), data.get("msg"),
-                    )
-                else:
-                    logger.error(
-                        "Bitable update_record 失败: record_id=%s code=%s msg=%s",
-                        record_id, data.get("code"), data.get("msg"),
-                    )
-                return False
-            logger.info("Bitable update_record 成功: record_id=%s fields=%s", record_id, list(fields.keys()))
-            return True
+
+        async def _update_once(token: str) -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=15) as http:
+                resp = await http.put(
+                    self._record_url(table_id, record_id),
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                    json={"fields": fields},
+                )
+                return cast("dict[str, Any]", resp.json())
+
+        data = await self._request_with_token_retry(_update_once)
+        if data.get("code") != 0:
+            if data.get("code") == BITABLE_ERR_FIELD_NOT_FOUND:
+                logger.warning(
+                    "Bitable update_record 字段不存在（跳过）: record_id=%s code=%s msg=%s",
+                    record_id, data.get("code"), data.get("msg"),
+                )
+            else:
+                logger.error(
+                    "Bitable update_record 失败: record_id=%s code=%s msg=%s",
+                    record_id, data.get("code"), data.get("msg"),
+                )
+            return False
+        logger.info("Bitable update_record 成功: record_id=%s fields=%s", record_id, list(fields.keys()))
+        return True
 
     async def create_record(
         self,
@@ -576,14 +643,37 @@ class SafetyBitableClient:
         3. 验证 Content-Type 是图片/文件，避免将 HTML 错误页误存为图片
 
         单次请求超时 120s，失败自动重试最多 3 次（指数退避）。
+        飞书返回 token 失效码时清空 token 缓存、重取后整体重试一次（仅一次）。
         """
+        for attempt in range(2):
+            token = await self._token()
+            try:
+                return await self._download_attachment_from_url_once(
+                    download_url, token,
+                )
+            except _BitableTokenInvalidError as exc:
+                if attempt >= 1:
+                    logger.error(
+                        "Bitable URL 下载 token 失效且重试后仍失败: code=%s url=%s...",
+                        exc.code, download_url[:120],
+                    )
+                    return None
+                logger.warning(
+                    "Bitable URL 下载遇到 token 失效(code=%s)，清空缓存后重试一次",
+                    exc.code,
+                )
+                invalidate_safety_tenant_token()
+        return None
+
+    async def _download_attachment_from_url_once(
+        self, download_url: str, token: str,
+    ) -> bytes | None:
+        """单轮下载（带/不带 Auth 两种策略）；token 失效抛内部信号交上层重试。"""
         import asyncio
 
-        token = await self._token()
-
-        async def _try(headers: dict | None = None) -> bytes | None:
-            h = headers if headers is not None else {}
-            last_error = None
+        async def _try(headers: dict[str, str] | None = None) -> bytes | None:
+            h: dict[str, str] = headers or {}
+            last_error: str | None = None
             for attempt in range(3):
                 try:
                     async with httpx.AsyncClient(
@@ -591,6 +681,9 @@ class SafetyBitableClient:
                     ) as http:
                         resp = await http.get(download_url, headers=h)
                         if resp.status_code != 200:
+                            token_code = _token_invalid_code_from_response(resp)
+                            if token_code is not None:
+                                raise _BitableTokenInvalidError(token_code)
                             logger.warning(
                                 "Bitable URL 下载附件失败: url=%s... status=%s body=%s (attempt %d/3)",
                                 download_url[:120], resp.status_code,
@@ -613,6 +706,9 @@ class SafetyBitableClient:
                                 await asyncio.sleep(2 ** attempt)
                             continue
                         if ct.startswith("application/json") or ct.startswith("text/html"):
+                            token_code = _token_invalid_code_from_response(resp)
+                            if token_code is not None:
+                                raise _BitableTokenInvalidError(token_code)
                             text = content[:500].decode(errors="replace")
                             logger.warning(
                                 "Bitable URL 返回非文件内容(ct=%s): url=%s... body=%s (attempt %d/3)",
@@ -627,6 +723,8 @@ class SafetyBitableClient:
                             len(content), ct, download_url[:120],
                         )
                         return content
+                except _BitableTokenInvalidError:
+                    raise
                 except Exception as exc:
                     logger.warning(
                         "Bitable URL 下载异常: url=%s... error=%s (attempt %d/3)",
@@ -649,11 +747,7 @@ class SafetyBitableClient:
 
         # 策略2: 不带 Authorization（预签名 URL 可能不需要）
         logger.info("Bitable URL 尝试无 Auth 下载: url=%s...", download_url[:120])
-        result = await _try()
-        if result is not None:
-            return result
-
-        return None
+        return await _try()
 
     async def search_records(
         self,
@@ -685,7 +779,6 @@ class SafetyBitableClient:
         strict: True 时查询失败抛 ``BitableQueryError``；False（默认）时返回空结果
             （保持旧行为，仅供能容忍「失败=无数据」的调用方使用）
         """
-        token = await self._token()
         tid = table_id or self.table_id
         payload: dict[str, Any] = {"page_size": page_size}
         if filter_info:
@@ -705,32 +798,35 @@ class SafetyBitableClient:
         if page_token:
             params["page_token"] = page_token
 
-        async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.post(
-                f"{BITABLE_BASE}/apps/{self.app_token}/tables/{tid}/records/search",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json; charset=utf-8",
-                },
-                params=params,
-                json=payload,
-            )
-            data = resp.json()
-            if data.get("code") != 0:
-                logger.error("Bitable search_records 失败: %s", data.get("msg"))
-                if strict:
-                    raise BitableQueryError(data.get("code"), data.get("msg"))
-                return {
-                    "items": [], "has_more": False,
-                    "page_token": None, "total": None,
-                }
-            result = data.get("data", {})
+        async def _search_once(token: str) -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=30) as http:
+                resp = await http.post(
+                    f"{BITABLE_BASE}/apps/{self.app_token}/tables/{tid}/records/search",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                    params=params,
+                    json=payload,
+                )
+                return cast("dict[str, Any]", resp.json())
+
+        data = await self._request_with_token_retry(_search_once)
+        if data.get("code") != 0:
+            logger.error("Bitable search_records 失败: %s", data.get("msg"))
+            if strict:
+                raise BitableQueryError(data.get("code"), data.get("msg"))
             return {
-                "items": result.get("items", []),
-                "has_more": result.get("has_more", False),
-                "page_token": result.get("page_token"),
-                "total": result.get("total"),
+                "items": [], "has_more": False,
+                "page_token": None, "total": None,
             }
+        result = data.get("data", {})
+        return {
+            "items": result.get("items", []),
+            "has_more": result.get("has_more", False),
+            "page_token": result.get("page_token"),
+            "total": result.get("total"),
+        }
 
     async def list_all_records(
         self,

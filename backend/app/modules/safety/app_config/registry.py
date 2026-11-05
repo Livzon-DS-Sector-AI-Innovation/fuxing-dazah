@@ -152,6 +152,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "留痕行（关 = 零旁挂零行为变化；开 = 仅增留痕数据，交互不变）",
     ),
     _flag(
+        "SAFETY_AI_VISION_JSON_MODE_ENABLED", False,
+        "视觉 AI 调用 response_format=json_object 灰度（A2：开 = 请求体带 json mode；"
+        "端点 400 不支持时自动去参重试一次；默认关，热生效）",
+    ),
+    _flag(
         "SAFETY_SUPERVISION_NOTIFICATION_ENABLED", False,
         "督办等级通知开关（hazard_supervision）",
     ),
@@ -192,6 +197,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "空 = 不发卡）；需 R1 Source 实例启用 + 转正后才有卡",
         allow_off=True,
     ),
+    _flag(
+        "SAFETY_GUARDIAN_R2_DM_ENABLED", True,
+        "R2 监护人资格追踪私信总开关（提醒/取证/复审/换证/取消资格/恢复 DM；"
+        "关 = 执行器跳过发送与提醒计数，其余留痕不变）",
+    ),
 
     # ══════════════════════════════════════════════════════════
     # 直读闸门（direct_gate）— 隐患域轮询旗标为启动语义（需重启）
@@ -210,6 +220,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_HAZARD_REVIEW_POLL_ENABLED", False,
         "AI 整改审核轮询（②；以总开关打开为前提）",
         restart_required=True,
+    ),
+    _flag(
+        "SAFETY_HAZARD_REVIEW_AUTOPASS_ENABLED", True,
+        "②-b 已关闭自动通过（2026-11-04 拍板：已关闭即通过；写「已通过+未走"
+        "AI初审」说明，兜竞速漏单与历史存量，默认开）",
     ),
     _gate(
         "SAFETY_HAZARD_SUPERVISION_POLL_ENABLED", False,
@@ -520,6 +535,22 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_RAGPLUS_WEB_URL", "misc", "str",
         "http://192.168.100.7:8086",
         "RagFlow 引擎 Web 地址（文档详情外链用；文档列表页 /dataset/files/<dataset_id>）",
+    ),
+
+    # ── RAG 知识层健康探活（2026-11-04 智谱欠费 3 天无人知事故补丁）──
+    _flag(
+        "SAFETY_RAG_HEALTH_ENABLED", False,
+        "RAG 知识层探活告警开关（开=每 30 分钟真调一次 embedding 直连与 "
+        "ragflow 检索，故障/恢复私发管理员卡片；关=完全静默）",
+    ),
+    ConfigItem(
+        "SAFETY_RAG_HEALTH_INTERVAL_SECONDS", "misc", "int", 1800,
+        "探活间隔秒数（下限 300；改后需重启任务注册）",
+        restart_required=True,
+    ),
+    ConfigItem(
+        "SAFETY_RAG_HEALTH_ALERT_REPEAT_HOURS", "misc", "int", 24,
+        "持续故障重提醒间隔小时数（防轰炸；热生效）",
     ),
 
     # ══════════════════════════════════════════════════════════
