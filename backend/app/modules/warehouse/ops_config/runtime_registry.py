@@ -262,6 +262,59 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
             "0=关闭缓存（每次直读）。改值下一次取数生效，无需重启"
         ),
     ),
+    # ── 五金库三期（M8 列映射 / M9 放权双通道）──
+    RuntimeKeyInfo(
+        key="hardware_erp_column_mapping",
+        label="五金库 ERP 导入列映射（JSON）",
+        group="五金库",
+        value_type="str",
+        default="",
+        env_var="",
+        min_value=None,
+        max_value=None,
+        max_length=4000,
+        description=(
+            "ERP 入库导出文件列名映射（M8 A 档）。JSON："
+            '{"doc_no": "单据号", "date": "日期", "supplier": "供应商",'
+            ' "material_code": "物料编码", "name": "品名", "spec": "规格",'
+            ' "quantity": "数量", "unit": "单位", "dept": "部门"}'
+            "（键=系统字段，值=ERP 文件列头；列可缺省=该字段不解析）。"
+            "空=内置默认映射；JSON 非法回落默认。ERP 样例文件到位后只调此处"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_ocr_auto_direct_enabled",
+        label="direct 类高置信自动入账开关（0/1）",
+        group="五金库",
+        value_type="int",
+        default=0,
+        env_var="HARDWARE_OCR_AUTO_DIRECT_ENABLED",
+        min_value=0,
+        max_value=1,
+        max_length=None,
+        description=(
+            "M9 observe→auto 阶段1（默认 0=关，行为与现状一致）。"
+            "1=入库草稿创建后即时评估：单内全部行为 direct 类∧全部行置信≥"
+            "hardware_ocr_auto_direct_min_confidence∧无照片初筛异常标记"
+            "→自动 accepted（审计快照落 auto_accept_snapshot）。"
+            "stocked 类永不自动（红线）；关后存量自动单不受影响"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="hardware_ocr_auto_direct_min_confidence",
+        label="direct 自动入账置信度阈值（0-1）",
+        group="五金库",
+        value_type="float",
+        default=0.9,
+        env_var="HARDWARE_OCR_AUTO_DIRECT_MIN_CONFIDENCE",
+        min_value=0.0,
+        max_value=1.0,
+        max_length=None,
+        description=(
+            "M9 自动入账的行匹配置信度下限（与 match_score/100 比较，"
+            "默认 0.9=90 分）。仅 direct 单生效，stocked 永不自动"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

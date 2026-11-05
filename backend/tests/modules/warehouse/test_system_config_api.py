@@ -114,6 +114,8 @@ async def test_list_ai_scenarios(
         # 五金库二期 M5/M6（2026-11-05：计划用量注释+速递总结）
         "hardware_plan_annotation",
         "hardware_digest_summary",
+        # 五金库三期 M7（2026-11-05：实物照片初筛，advisory 只标记）
+        "hardware_photo_screening",
     }
     assert all(s["enabled"] is True for s in scenarios)
 
@@ -183,7 +185,7 @@ async def test_runtime_list_and_update(
     resp = await client.get(RUNTIME)
     assert resp.status_code == 200
     configs = resp.json()["data"]["configs"]
-    assert len(configs) == 16  # 12 基础 + sales_target_monthly + agent_submit_enabled + 直读开关/TTL
+    assert len(configs) == 19  # 12 基础 + sales_target_monthly + agent_submit_enabled + 直读开关/TTL + 三期五金库（ERP列映射/auto-direct开关/阈值）
     assert {c["source"] for c in configs} <= {"db", "env", "default"}
     # 回写开关/环境模式：共享库 live 值随验收期翻转（C 期交互式验收会把
     # qc_writeback_enabled 临时置 1），API 测试只断言键存在且取值合法；
