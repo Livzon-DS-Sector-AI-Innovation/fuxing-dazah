@@ -6,6 +6,7 @@ from fastapi import (
     Body,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -48,6 +49,7 @@ from app.platform.permission.deps import require_permission
 @router.post("/lc/upload", response_model=UploadLcResponse, summary="上传液相计算表并解析")
 async def upload_lc_excel(
     file: UploadFile = File(...),
+    password: str | None = Form(default=None, description="文件密码（加密计算表用；仅内存解密，不落库）"),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:lc:upload")),
 ) -> UploadLcResponse:
@@ -59,6 +61,13 @@ async def upload_lc_excel(
         raise HTTPException(status_code=400, detail="文件为空")
     if len(file_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件超过 10MB")
+    if password:
+        from app.modules.quality.lc_template_parser import decrypt_office_file
+
+        try:
+            file_bytes = decrypt_office_file(file_bytes, password)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
     try:
         # 优先模板配置驱动的通用解析（表号识别）；无匹配配置回落到旧解析器
         generic = await test_task_service.parse_lc_generic(db, file_bytes, filename, filled_by=_user.id)

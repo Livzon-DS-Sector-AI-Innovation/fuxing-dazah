@@ -103,12 +103,30 @@ def _open_xls(file_bytes: bytes) -> tuple[CellGetter, int, int]:
     return get_xls, sh.nrows, sh.ncols
 
 
+def decrypt_office_file(file_bytes: bytes, password: str) -> bytes:
+    """解密 Excel 密码保护文件（CDFV2/OLE 容器，openpyxl 无法直接读取）。
+
+    密码仅内存使用、不落库；解密后字节仅用于本次解析，原件仍按加密态归档留痕。
+    失败抛 ValueError（端点转 422 友好提示）。
+    """
+    import msoffcrypto  # type: ignore[import-untyped]
+
+    try:
+        office = msoffcrypto.OfficeFile(BytesIO(file_bytes))
+        office.load_key(password=password)
+        decrypted = BytesIO()
+        office.decrypt(decrypted)
+        return decrypted.getvalue()
+    except Exception:
+        raise ValueError("文件解密失败：密码不正确或文件已损坏") from None
+
+
 def open_sheet(
     file_bytes: bytes, filename: str
 ) -> tuple[CellGetter, int, int]:
     """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。
 
-    xlsx 扩展名但内容不是 zip（旧版 xls 改扩展名/加密/损坏）时先尝试 xlrd 兜底，
+    xlsx 扩展名但内容不是 zip（旧版 xls 改扩展名/损坏）时先尝试 xlrd 兜底，
     仍失败则抛 ValueError（端点转为 422 友好提示，而非 500）。
     """
     if filename.lower().endswith(".xls"):
@@ -123,7 +141,8 @@ def open_sheet(
             return _open_xls(file_bytes)
         except Exception:
             raise ValueError(
-                "无法读取该文件：请确认是 Excel 计算表；旧版 .xls 请用 Excel 另存为 .xlsx 后重试"
+                "无法读取该文件：文件可能已加密（请在解析时填写文件密码）或格式损坏；"
+                "旧版 .xls 请用 Excel 另存为 .xlsx 后重试"
             ) from None
     ws = active_sheet(wb)
     # 合并单元格映射：非锚点格读锚点值（报告值常一格跨多行，如 M22:M25）

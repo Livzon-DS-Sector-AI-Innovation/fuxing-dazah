@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { Upload, App, Typography } from 'antd'
+import { Upload, App, Typography, Input } from 'antd'
 import { InboxOutlined, FileExcelOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd'
 import { uploadLcExcel } from '@/actions/quality'
@@ -17,6 +17,7 @@ interface Props {
 export default function LcUploader({ onResult }: Props) {
   const [uploading, setUploading] = useState(false)
   const [fileList, setFileList] = useState<UploadFile[]>([])
+  const [password, setPassword] = useState('')
   const { message } = App.useApp()
 
   const handleUpload = useCallback(async (file: File) => {
@@ -24,6 +25,7 @@ export default function LcUploader({ onResult }: Props) {
     try {
       const formData = new FormData()
       formData.append('file', file)
+      if (password) formData.append('password', password)
 
       const result = await uploadLcExcel(formData)
       if (result.task_link) {
@@ -42,7 +44,7 @@ export default function LcUploader({ onResult }: Props) {
       setUploading(false)
     }
     return false // 阻止 antd 默认上传行为
-  }, [onResult, message])
+  }, [onResult, message, password])
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -79,6 +81,18 @@ export default function LcUploader({ onResult }: Props) {
           支持 .xlsx / .xls 格式，文件大小不超过 10MB
         </p>
       </Dragger>
+      <div style={{ marginTop: 8 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          文件有密码？（Excel 加密保护的计算表需填写；密码仅用于本次解析，不保存）
+        </Typography.Text>
+        <Input.Password
+          placeholder="文件密码（无密码可留空）"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={{ maxWidth: 260, marginTop: 4 }}
+          autoComplete="new-password"
+        />
+      </div>
 
       {uploading && (
         <div style={{ textAlign: 'center', marginTop: 12 }}>
