@@ -88,28 +88,43 @@ def _parse_value(v: Any) -> float | None:
         return None
 
 
+def _open_xls(file_bytes: bytes) -> tuple[CellGetter, int, int]:
+    """旧版 .xls：xlrd 读取（无 py.typed，导入点局部 ignore）。"""
+    import xlrd  # type: ignore[import-untyped]
+
+    book = xlrd.open_workbook(file_contents=file_bytes)
+    sh = book.sheet_by_index(0)
+
+    def get_xls(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > sh.nrows or c > sh.ncols:
+            return None
+        return sh.cell_value(r - 1, c - 1)
+
+    return get_xls, sh.nrows, sh.ncols
+
+
 def open_sheet(
     file_bytes: bytes, filename: str
 ) -> tuple[CellGetter, int, int]:
-    """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。"""
+    """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。
+
+    xlsx 扩展名但内容不是 zip（旧版 xls 改扩展名/加密/损坏）时先尝试 xlrd 兜底，
+    仍失败则抛 ValueError（端点转为 422 友好提示，而非 500）。
+    """
     if filename.lower().endswith(".xls"):
-        # xlrd 未提供 py.typed 且无第三方 stubs；mypy overrides 不可改
-        # （配置在 pyproject.toml，属本次任务禁改范围）
-        import xlrd  # type: ignore[import-untyped]
-
-        book = xlrd.open_workbook(file_contents=file_bytes)
-        sh = book.sheet_by_index(0)
-
-        def get_xls(r: int, c: int) -> Any:
-            if r < 1 or c < 1 or r > sh.nrows or c > sh.ncols:
-                return None
-            return sh.cell_value(r - 1, c - 1)
-
-        return get_xls, sh.nrows, sh.ncols
+        return _open_xls(file_bytes)
 
     from openpyxl import load_workbook
 
-    wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    try:
+        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    except Exception:
+        try:
+            return _open_xls(file_bytes)
+        except Exception:
+            raise ValueError(
+                "无法读取该文件：请确认是 Excel 计算表；旧版 .xls 请用 Excel 另存为 .xlsx 后重试"
+            ) from None
     ws = active_sheet(wb)
     # 合并单元格映射：非锚点格读锚点值（报告值常一格跨多行，如 M22:M25）
     merge_anchor: dict[tuple[int, int], tuple[int, int]] = {}
