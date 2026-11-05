@@ -227,6 +227,7 @@ export interface TestResultItem {
   judge_mode: 'auto' | 'manual'
   source: 'manual' | 'parse'
   filled_at: string | null
+  pending_confirm: boolean
 }
 
 export interface TestTaskListItem {

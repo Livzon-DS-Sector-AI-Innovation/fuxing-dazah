@@ -316,7 +316,7 @@ class _TaskLifecycle(_TaskCore):
         if changed:
             await db.flush()
             rows = await list_test_results(db, task_id)
-        if not rows or any(r.is_pass is None for r in rows):
+        if not rows or any(r.is_pass is None or r.pending_confirm for r in rows):
             return False
         # 新一轮复核：清空上一轮复核记录
         await soft_delete_task_reviews(db, task_id)

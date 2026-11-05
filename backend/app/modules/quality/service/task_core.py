@@ -251,6 +251,7 @@ class _TaskCore:
             judge_mode=r.judge_mode,
             source=r.source,
             filled_at=r.filled_at,
+            pending_confirm=r.pending_confirm,
         )
 
     @staticmethod

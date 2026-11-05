@@ -145,6 +145,7 @@ class TestResultOut(BaseModel):
     judge_mode: str
     source: str
     filled_at: datetime | None = None
+    pending_confirm: bool = False
 
 
 class TestTaskListItem(BaseModel):

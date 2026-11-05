@@ -220,6 +220,10 @@ class QualityTestResult(BaseModel):
         String(10), default="manual", server_default="manual",
         comment="数据来源：manual 手工填报 / parse 液相解析映射",
     )
+    pending_confirm: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false",
+        comment="解析自动填入待人工确认（确认后正式归入）",
+    )
     inspection_record_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True,
         comment="关联液相解析记录，逻辑引用 quality.inspection_records.id（P1 预留）",

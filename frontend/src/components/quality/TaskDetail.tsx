@@ -24,6 +24,7 @@ import {
   fetchTaskReviews, approveTaskReview,
   fetchTaskReports,
   fetchTaskHandover,
+  confirmTaskResult,
   createRetainedSample,
   fetchLcTemplateConfigs,
   submitCalcFill,
@@ -531,17 +532,32 @@ export default function TaskDetail({ id }: { id: string }) {
     { title: '备注', dataIndex: 'remark', key: 'remark', width: 140, ellipsis: true, render: (v: string | null) => v || '-' },
     { title: '填报', key: 'fill', width: 280, render: (_: unknown, row: TestResultItem) => renderFillCell(row) },
     {
-      title: '已判定', dataIndex: 'is_pass', key: 'is_pass', width: 80,
-      render: (v: boolean | null) => v === null
-        ? <Tag>未填</Tag>
-        : v ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
+      title: '已判定', dataIndex: 'is_pass', key: 'is_pass', width: 110,
+      render: (v: boolean | null, row: TestResultItem) => row.pending_confirm
+        ? <Tag color="orange">待确认</Tag>
+        : v === null
+          ? <Tag>未填</Tag>
+          : v ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
     },
     {
-      title: '操作', key: 'actions', width: 80,
+      title: '操作', key: 'actions', width: 130,
       render: (_: unknown, row: TestResultItem) => editable ? (
-        <Popconfirm title="确认删除该行?" onConfirm={() => handleDeleteRow(row.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
+        <Space size={4}>
+          {row.pending_confirm && (
+            <Popconfirm
+              title={`确认归入：${row.item_name} ${row.result_value ?? ''}（${row.is_pass ? '合格' : '不合格'}）`}
+              onConfirm={async () => {
+                try { await confirmTaskResult(id, row.id); message.success('已确认归入'); loadDetail() }
+                catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '确认失败') }
+              }}
+            >
+              <Button size="small" type="primary">确认</Button>
+            </Popconfirm>
+          )}
+          <Popconfirm title="确认删除该行?" onConfirm={() => handleDeleteRow(row.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
       ) : null,
     },
   ]
@@ -636,7 +652,7 @@ export default function TaskDetail({ id }: { id: string }) {
             <Tag color={displayStatus.color}>{displayStatus.label}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="进度">
-            {detail.results.filter((r) => r.is_pass !== null).length}/{detail.results.length} 项已判定
+            {detail.results.filter((r) => r.is_pass !== null && !r.pending_confirm).length}/{detail.results.length} 项已判定
           </Descriptions.Item>
         </Descriptions>
       </Card>

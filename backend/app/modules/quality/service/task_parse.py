@@ -103,15 +103,39 @@ class _TaskParse(_TaskCore):
                 "inspection_record_id": record_id,
                 "filled_by": filled_by,
                 "filled_at": now,
+                "pending_confirm": True,
             })
             filled_names.append(row.item_name)
         if updates:
             await update_test_results_fill(db, updates)
+        # 解析超限直接提醒：暂存待确认 + 飞书群通知
+        fails = [u for u in updates if u.get("is_pass") is False]
+        if fails:
+            from app.modules.quality.feishu.client import QUALITY_FEISHU_CHAT_IDS
+            from app.modules.quality.feishu.message import send_chat_text
+            from app.modules.quality.service.helpers import spawn_background
+
+            lines = "\n".join(
+                f"- {u.get('result_text')} {u.get('result_value')}"
+                for u in fails
+            )
+            text = (
+                f"液相解析超限提醒：任务 {task.batch_number} 有 {len(fails)} 项超限，"
+                f"已暂存待人工确认，请进任务详情核对：\n{lines}"
+            )
+
+            async def _notify_fails() -> None:
+                for chat_id in QUALITY_FEISHU_CHAT_IDS:
+                    try:
+                        await send_chat_text(chat_id, text)
+                    except Exception:  # noqa: BLE001 — 单个群失败不阻断填入
+                        logger.warning("超限提醒发送失败 chat=%s", chat_id)
+
+            spawn_background(_notify_fails())
         # 全部判定完成后自动进入待复核
         await _TaskLifecycle.auto_advance_pending_review(db, task.id)
         return filled_names, unmatched
 
-    @staticmethod
     @staticmethod
     async def parse_lc_into_task(
         db: AsyncSession,
@@ -252,7 +276,6 @@ class _TaskParse(_TaskCore):
     # ── 模板配置驱动的通用解析 ──
 
     @staticmethod
-    @staticmethod
     async def _persist_generic_record(
         db: AsyncSession,
         parsed: "lc_template_parser.GenericLcParse",
@@ -369,6 +392,7 @@ class _TaskParse(_TaskCore):
                 "is_pass": verdict,
                 "inspection_record_id": record_id,
                 "filled_at": datetime.now(UTC),
+                "pending_confirm": True,
             }])
             next_seq += 1
             existing_names.add(norm)

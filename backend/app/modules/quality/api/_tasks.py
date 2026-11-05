@@ -222,6 +222,33 @@ async def test_calc_endpoint(
     return success_response(data=computed)
 
 
+@router.post("/tasks/{task_id}/results/{result_id}/confirm", summary="确认解析自动填入的结果（正式归入）")
+async def confirm_parsed_result_endpoint(
+    task_id: uuid.UUID,
+    result_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:fill")),
+) -> JSONResponse:
+    """解析填入的值（合格与否）需人工确认后正式归入；确认后参与自动流转。"""
+    from app.modules.quality.repository import list_test_results
+    from app.modules.quality.service.task_lifecycle import _TaskLifecycle
+
+    row = next(
+        (r for r in await list_test_results(db, task_id) if r.id == result_id), None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="结果行不存在")
+    if not row.pending_confirm:
+        raise HTTPException(status_code=409, detail="该行无需确认")
+    row.pending_confirm = False
+    row.filled_by = _user.id
+    await db.flush()
+    detail = await test_task_service.get_task_detail(db, task_id)
+    # 确认后若全部行已判定且无待确认，自动流转待复核
+    await _TaskLifecycle.auto_advance_pending_review(db, task_id)
+    return success_response(data={"message": "已确认归入", "detail": detail})
+
+
 @router.post("/tasks/{task_id}/calc-fill", summary="在线计算表填报（免 Excel：数值+表号合并规则→判定填入）")
 async def submit_calc_form_endpoint(
     task_id: uuid.UUID,

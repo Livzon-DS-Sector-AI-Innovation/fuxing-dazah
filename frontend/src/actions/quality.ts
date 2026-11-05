@@ -2106,6 +2106,19 @@ export async function submitCalcFill(taskId: string, input: {
   return res.json()
 }
 
+/** 确认解析自动填入的结果（正式归入；确认后参与自动流转）。 */
+export async function confirmTaskResult(taskId: string, resultId: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/results/${resultId}/confirm`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '确认失败')
+  }
+  revalidatePath(`/quality/task/${taskId}`)
+  return res.json()
+}
+
 /** 图谱截图/PDF 解析（MinerU VLM，仅预览：返回峰表草稿，不落库）。 */
 export async function parseChromatogram(file: File): Promise<{ data: { filename: string; peaks: ChromatogramPeak[]; markdown_preview: string } }> {
   const form = new FormData()
