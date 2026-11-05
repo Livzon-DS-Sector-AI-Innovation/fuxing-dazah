@@ -219,6 +219,25 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule=None,
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
+    # ── 五金库二期 M5（2026-11-05）──
+    PushTaskInfo(
+        task_name="hardware_stale_list",
+        scene="hardware_stale_list",
+        label="五金库呆滞物资清单",
+        description="季度扫描连续 3 个月无出库且仍有库存的物料清单卡（事件触发）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="hardware_env_remind",
+        scene="hardware_env_remind",
+        label="五金库温湿度日检提醒",
+        description="每日 17:00 当天温湿度未填写时提醒仓管员（事件触发）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
 )
 
 PUSH_REGISTRY: dict[str, PushTaskInfo] = {t.task_name: t for t in _TASKS}

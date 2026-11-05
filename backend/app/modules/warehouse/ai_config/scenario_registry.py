@@ -1,6 +1,6 @@
 """AI 场景注册表 — 仓库 Agent LLM 调用场景的代码唯一事实源。
 
-场景 = 业务功能级开关（不是每次调用一个场景）。仓库当前三条 LLM 业务链路：
+场景 = 业务功能级开关（不是每次调用一个场景）。仓库 LLM 业务链路：
 
 - ``agent_chat``：Runner tool-calling 主循环（查询/计划/记忆/草稿收集/办公工具）；
 - ``receipt_recognition``：送货单识别管线（方向预判 + 字段识别，审计以
@@ -50,6 +50,15 @@ _SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
         "五金库送货单拍照 OCR 结构化提取（入库草稿主通道，双入口 web/feishu）",
         "vision",
         "mixed",
+    ),
+    # 五金库二期 M5（L4 决策辅助）：月度采购计划草案的 AI 用量注释——
+    # 近 3 月消耗趋势/异常波动一行建议落 ai_note 建议态字段，人审核采纳，
+    # 不自动改数量（红线：AI 注释只落建议态）。
+    "hardware_plan_annotation": (
+        "五金库计划用量注释",
+        "月度采购计划草案 AI 用量注释（近 3 月趋势/异常波动建议，人不采纳不改数）",
+        "text",
+        "system",
     ),
 }
 

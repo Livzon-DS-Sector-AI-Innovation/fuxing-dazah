@@ -24,6 +24,9 @@ import type {
   HardwareStocktakeRecord,
   HardwareStocktakeItemRecord,
   HardwareReturnRecord,
+  HardwarePlanRecord,
+  HardwarePlanItemRecord,
+  HardwareEnvLogRecord,
 } from '@/types/warehouse-hardware'
 
 const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -351,4 +354,60 @@ export async function rejectHardwareReturnClient(
   id: string, reason: string,
 ): Promise<HardwareReturnRecord> {
   return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/reject`, { reason })
+}
+
+
+// ── 月度采购计划（二期 M5）──
+
+export async function fetchHardwarePlansClient(
+  page = 1, pageSize = 20,
+): Promise<PaginatedCompat<HardwarePlanRecord>> {
+  const sp = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return apiFetchPaginated<HardwarePlanRecord>(`${CLIENT_API}${BASE}/plans?${sp.toString()}`)
+}
+
+export async function fetchHardwarePlanClient(planMonth: string): Promise<HardwarePlanRecord> {
+  return apiGet<HardwarePlanRecord>(`${CLIENT_API}${BASE}/plans/${planMonth}`)
+}
+
+export async function generateHardwarePlanClient(
+  planMonth?: string, annotate = true,
+): Promise<HardwarePlanRecord> {
+  return apiPost<HardwarePlanRecord>(`${CLIENT_API}${BASE}/plans/generate`, {
+    plan_month: planMonth, annotate,
+  })
+}
+
+export async function updateHardwarePlanItemClient(
+  planMonth: string, itemId: string,
+  payload: { purchase_qty?: number; remark?: string; ai_note?: string },
+): Promise<HardwarePlanItemRecord> {
+  return apiPut<HardwarePlanItemRecord>(
+    `${CLIENT_API}${BASE}/plans/${planMonth}/items/${itemId}`, payload,
+  )
+}
+
+export function hardwarePlanExportUrl(planMonth: string): string {
+  return `${CLIENT_API}${BASE}/plans/${planMonth}/export`
+}
+
+// ── 温湿度日检（二期 M5）──
+
+export async function upsertHardwareEnvLogClient(
+  payload: {
+    log_date: string
+    temperature?: number
+    humidity?: number
+    checked_by?: string
+    abnormal_note?: string
+  },
+): Promise<HardwareEnvLogRecord> {
+  return apiPost<HardwareEnvLogRecord>(`${CLIENT_API}${BASE}/env-logs`, payload)
+}
+
+export async function fetchHardwareEnvLogsClient(days = 30): Promise<HardwareEnvLogRecord[]> {
+  const data = await apiGet<HardwareEnvLogRecord[]>(
+    `${CLIENT_API}${BASE}/env-logs?days=${days}`,
+  )
+  return data ?? []
 }

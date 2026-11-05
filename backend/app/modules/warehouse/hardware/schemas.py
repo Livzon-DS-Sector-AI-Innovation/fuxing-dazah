@@ -468,3 +468,72 @@ class ReturnResponse(BaseModel):
     lot_adjustments: list[dict[str, Any]] | None
     remark: str | None
     created_at: datetime
+
+
+# ── 月度采购计划（二期 M5）──
+
+
+class PlanGenerate(BaseModel):
+    """手动生成/重跑计划草案（25 日任务同款入口；同月幂等）。"""
+
+    plan_month: str | None = Field(
+        default=None, description="缺省=次月（YYYY-MM）", pattern=r"^\d{4}-\d{2}$"
+    )
+    annotate: bool = Field(default=True, description="是否跑 AI 用量注释")
+
+
+class PlanItemUpdate(BaseModel):
+    """人工编辑草案行（→ is_edited，同月重跑保留人工值）。"""
+
+    purchase_qty: Decimal | None = Field(default=None, ge=0)
+    remark: str | None = Field(default=None, max_length=500)
+    ai_note: str | None = Field(default=None, max_length=500, description="采纳注释时可改写")
+
+
+class PlanItemResponse(BaseModel):
+    id: StrUUID
+    material_id: StrUUID
+    code: str | None
+    name: str
+    spec: str | None
+    unit: str | None
+    monthly_demand_total: Decimal
+    safety_stock: Decimal
+    stock_on_25th: Decimal
+    monthly_usage: Decimal
+    purchase_qty: Decimal
+    ai_note: str | None
+    is_edited: bool
+    remark: str | None
+
+
+class PlanResponse(BaseModel):
+    id: StrUUID
+    plan_month: str
+    status: str
+    snapshot_at: datetime | None
+    usage_window_days: int
+    annotated: bool
+    exported_at: datetime | None
+    remark: str | None
+    created_at: datetime
+
+
+# ── 温湿度日检（二期 M5）──
+
+
+class EnvLogUpsert(BaseModel):
+    log_date: date
+    temperature: Decimal | None = Field(default=None, ge=-50, le=80)
+    humidity: Decimal | None = Field(default=None, ge=0, le=100)
+    checked_by: str | None = Field(default=None, max_length=100)
+    abnormal_note: str | None = Field(default=None, max_length=500)
+
+
+class EnvLogResponse(BaseModel):
+    id: StrUUID
+    log_date: date
+    temperature: Decimal | None
+    humidity: Decimal | None
+    checked_by: str | None
+    abnormal_note: str | None

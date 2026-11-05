@@ -53,7 +53,7 @@ async def test_list_push_tasks(api_context: tuple[AsyncClient, AsyncSession]) ->
     from app.modules.warehouse.push_center.registry import iter_tasks
 
     assert len(tasks) == len(list(iter_tasks()))
-    assert len(tasks) == 20  # A 5 + B 3 + C 1 + D 7 + P1 1 + 五金库 3
+    assert len(tasks) == 22  # A 5 + B 3 + C 1 + D 7 + P1 1 + 五金库 3 + 二期 M5 2
     by_name = {t["task_name"]: t for t in tasks}
     assert by_name["morning_report"]["trigger"] == "scheduled"
     assert by_name["morning_report"]["schedule"] == {"type": "daily", "time": "08:00"}

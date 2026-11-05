@@ -378,3 +378,50 @@ def render_hardware_urgent_overdue_card(payload: dict[str, Any]) -> dict[str, An
 
 
 register_event_renderer("hardware_urgent_overdue", render_hardware_urgent_overdue_card)
+
+
+def render_hardware_stale_list_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """呆滞物资季度清单卡（设计 §2.6：连续 3 个月无 outbound 且有库存）。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    items = payload.get("items") or []
+    lines = [
+        f"- {it.get('name', '-')}（{it.get('spec') or '-'}）：库存 {it.get('on_hand', 0)}"
+        f" {it.get('unit') or ''}，静默 {it.get('silent_days', '—')} 天"
+        for it in items[:15]
+    ]
+    if len(items) > 15:
+        lines.append(f"…共 {len(items)} 项")
+    return build_card(
+        title="📦 五金库呆滞物资清单（季度扫描）",
+        template="orange",
+        elements=[{"tag": "markdown", "content": "\n".join([
+            f"**{payload.get('count', len(items))} 项**物资连续 3 个月无出库且仍有库存：",
+            "",
+            *lines,
+            "",
+            "请仓储→生产/财务/使用部门确认处置（调拨/报废走三期）。",
+        ])}],
+    )
+
+
+register_event_renderer("hardware_stale_list", render_hardware_stale_list_card)
+
+
+def render_hardware_env_remind_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """温湿度日检每日提醒（17:00 当天未填才推）。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    return build_card(
+        title="🌡️ 五金库温湿度日检提醒",
+        template="blue",
+        elements=[{"tag": "markdown", "content": "\n".join([
+            f"今天（{payload.get('date', '-')}）的温湿度日检还未填写。",
+            "",
+            "请仓管员到 系统 → 仓储管理 → 五金温湿度日检 完成登记"
+            "（温度/湿度/异常说明，每日一行）。",
+        ])}],
+    )
+
+
+register_event_renderer("hardware_env_remind", render_hardware_env_remind_card)

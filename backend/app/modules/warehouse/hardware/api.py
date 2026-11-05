@@ -25,8 +25,14 @@ from app.modules.warehouse.hardware.schemas import (
     MaterialResponse,
     MaterialStockDetailResponse,
     MaterialUpdate,
+    EnvLogResponse,
+    EnvLogUpsert,
     MovementErpMark,
     MovementResponse,
+    PlanGenerate,
+    PlanItemResponse,
+    PlanItemUpdate,
+    PlanResponse,
     ReceiptAccept,
     ReceiptCreate,
     ReceiptReject,
@@ -49,6 +55,7 @@ from app.modules.warehouse.hardware.schemas import (
     StocktakeResponse,
     StocktakeReview,
 )
+from app.modules.warehouse.hardware import planning as planning_service
 from app.modules.warehouse.hardware import stocktake as stocktake_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
@@ -935,3 +942,127 @@ async def reject_return(
 ) -> JSONResponse:
     ret = await stocktake_service.reject_return(db, return_id, reason=payload.reason)
     return success_response(_return_response(ret))
+
+
+# ── 月度采购计划（二期 M5：25 日快照+P7 公式+AI 注释+表样导出）──
+
+
+def _plan_response(p: Any) -> dict[str, Any]:
+    return PlanResponse.model_validate(p).model_dump(mode="json")
+
+
+@router.get("/plans", summary="月度采购计划分页列表")
+async def list_plans(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:plan:read")),
+) -> JSONResponse:
+    items, total = await planning_service.list_plans(db, page=page, page_size=page_size)
+    return paginated_response(
+        [_plan_response(p) for p in items], total=total, page=page, page_size=page_size
+    )
+
+
+@router.get("/plans/{plan_month}", summary="计划详情（含明细行）")
+async def get_plan(
+    plan_month: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:plan:read")),
+) -> JSONResponse:
+    plan = await planning_service.get_plan_by_month(db, plan_month)
+    items = await planning_service.list_plan_items(db, plan.id)
+    return success_response({
+        **_plan_response(plan),
+        "items": [PlanItemResponse.model_validate(i).model_dump(mode="json") for i in items],
+    })
+
+
+@router.post("/plans/generate", status_code=201, summary="生成/重跑计划草案（P7 公式，同月幂等）")
+async def generate_plan(
+    payload: PlanGenerate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:plan:manage")),
+) -> JSONResponse:
+    plan_month = payload.plan_month or planning_service.next_month()
+    plan = await planning_service.generate_monthly_plan(
+        db, plan_month, annotate=payload.annotate, user=user
+    )
+    return success_response(_plan_response(plan))
+
+
+@router.put("/plans/{plan_month}/items/{item_id}", summary="编辑计划行（→ is_edited 重跑保留）")
+async def update_plan_item(
+    plan_month: str,
+    item_id: UUID,
+    payload: PlanItemUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:plan:manage")),
+) -> JSONResponse:
+    plan = await planning_service.get_plan_by_month(db, plan_month)
+    item = await planning_service.update_plan_item(
+        db, item_id,
+        purchase_qty=payload.purchase_qty, remark=payload.remark, ai_note=payload.ai_note,
+    )
+    if str(item.purchase_plan_id) != str(plan.id):
+        raise HTTPException(status_code=404, detail="计划行不属于该计划")
+    return success_response(PlanItemResponse.model_validate(item).model_dump(mode="json"))
+
+
+@router.get("/plans/{plan_month}/export", summary="导出制度附件 4 表样 Excel（11 列）")
+async def export_plan(
+    plan_month: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:plan:read")),
+):
+    from datetime import datetime as _dt
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    plan = await planning_service.get_plan_by_month(db, plan_month)
+    items = await planning_service.list_plan_items(db, plan.id)
+    xlsx = planning_service.export_plan_excel(items, plan_month=plan.plan_month)
+    plan.status = "exported"
+    plan.exported_at = _dt.now()
+    plan.exported_by = getattr(user, "display_name", None) or str(user.id)
+    await db.flush()
+    filename = f"五金库物资月度采购计划表_{plan.plan_month}_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+# ── 温湿度日检（二期 M5：每日一行 upsert）──
+
+
+@router.post("/env-logs", summary="温湿度日检录入（当日 upsert 幂等）")
+async def upsert_env_log(
+    payload: EnvLogUpsert,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:env:manage")),
+) -> JSONResponse:
+    log = await planning_service.upsert_env_log(
+        db,
+        log_date=payload.log_date,
+        temperature=payload.temperature,
+        humidity=payload.humidity,
+        checked_by=payload.checked_by,
+        abnormal_note=payload.abnormal_note,
+        user=user,
+    )
+    return success_response(EnvLogResponse.model_validate(log).model_dump(mode="json"))
+
+
+@router.get("/env-logs", summary="温湿度记录（近 N 天）")
+async def list_env_logs(
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stock:read")),
+) -> JSONResponse:
+    logs = await planning_service.list_env_logs(db, days=days)
+    return success_response([
+        EnvLogResponse.model_validate(l).model_dump(mode="json") for l in logs
+    ])

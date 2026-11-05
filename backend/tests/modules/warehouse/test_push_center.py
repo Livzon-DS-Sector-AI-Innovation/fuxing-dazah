@@ -179,6 +179,9 @@ class TestPushRegistry:
             "hardware_direct_pickup",
             "hardware_receipt_rejected",
             "hardware_requisition_rejected",
+            # 五金库二期 M5（2026-11-05）
+            "hardware_stale_list",
+            "hardware_env_remind",
             # V3.0 二期 P1（缺口补齐，1 个定时型）
             "low_stock_alert",
         }
@@ -190,10 +193,12 @@ class TestPushRegistry:
             "arrival_inspection",
             "qc_progress_alert",
             "release_notify",
-            # 五金库（设计 2026-11-04，事件型）
+            # 五金库（设计 2026-11-04 + 二期 M5，事件型）
             "hardware_direct_pickup",
             "hardware_receipt_rejected",
             "hardware_requisition_rejected",
+            "hardware_stale_list",
+            "hardware_env_remind",
         ):
             assert by_name[name].trigger == "event"
             assert by_name[name].default_schedule is None

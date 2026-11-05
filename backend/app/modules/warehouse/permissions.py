@@ -357,4 +357,28 @@ PERMISSIONS: list[PermissionDef] = [
         action="manage",
         description="退库单登记/负责人签收/仓管员验收批次回加/不合格拒退",
     ),
+    PermissionDef(
+        code="warehouse:hardware:plan:read",
+        name="查看五金库采购计划",
+        module="warehouse",
+        resource="hardware",
+        action="read",
+        description="月度采购计划草案/公式各列/AI 注释查看与表样导出",
+    ),
+    PermissionDef(
+        code="warehouse:hardware:plan:manage",
+        name="五金库采购计划管理",
+        module="warehouse",
+        resource="hardware",
+        action="manage",
+        description="计划草案生成/重跑/行编辑（人工值重跑保留）",
+    ),
+    PermissionDef(
+        code="warehouse:hardware:env:manage",
+        name="五金库温湿度日检",
+        module="warehouse",
+        resource="hardware",
+        action="manage",
+        description="温湿度日检录入（每日一行 upsert）",
+    ),
 ]

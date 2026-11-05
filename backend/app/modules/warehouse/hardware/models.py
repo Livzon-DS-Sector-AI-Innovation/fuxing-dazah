@@ -547,6 +547,7 @@ class HardwareMovement(BaseModel):
 STOCKTAKE_TYPES = ("monthly", "annual", "special", "calibration")
 STOCKTAKE_STATUSES = ("draft", "counting", "reviewed", "confirmed", "cancelled")
 RETURN_STATUSES = ("draft", "accepted", "rejected")
+PLAN_STATUSES = ("draft", "exported")
 
 
 class HardwareStocktake(BaseModel):
@@ -721,3 +722,131 @@ class HardwareReturn(BaseModel):
         JSONB, comment="批次回加结果 [{material, lot_no, mode: preferred/new, qty}]"
     )
     remark: Mapped[str | None] = mapped_column(Text)
+
+
+class HardwarePurchasePlan(BaseModel):
+    """五金库月度采购计划（设计 §2.6）：25 日快照 → P7 公式草案 → 人工编辑 → 导出。
+
+    plan_month 'YYYY-MM' 唯一=同月重跑幂等键（未编辑行刷新、is_edited 行保留）。
+    P7：月采购量 = 安全库存量 + 月使用量 − 25 日实际库存量（负取 0+备注）。
+    """
+
+    __tablename__ = "hardware_purchase_plans"
+    __table_args__ = (
+        Index(
+            "uq_hardware_purchase_plans_month",
+            "plan_month",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'exported')",
+            name="ck_hardware_purchase_plans_status",
+        ),
+        {"schema": "warehouse"},
+    )
+
+    plan_month: Mapped[str] = mapped_column(
+        String(7), nullable=False, comment="计划月 'YYYY-MM'（同月重跑幂等键）"
+    )
+    status: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="draft", server_default="draft",
+        comment="draft 草案可编辑 / exported 已导出报采购",
+    )
+    snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="25 日快照时间"
+    )
+    usage_window_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default="30",
+        comment="月使用量回溯窗口（天）",
+    )
+    annotated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="AI 用量注释是否已跑（失败/关闭=False）",
+    )
+    exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exported_by: Mapped[str | None] = mapped_column(String(100))
+    remark: Mapped[str | None] = mapped_column(Text)
+
+
+class HardwarePurchasePlanItem(BaseModel):
+    """计划明细行：物料快照 + P7 公式各列（与制度附件 4 表样列对齐）。"""
+
+    __tablename__ = "hardware_purchase_plan_items"
+    __table_args__ = (
+        CheckConstraint("purchase_qty >= 0", name="ck_hardware_plan_items_purchase"),
+        Index("ix_hardware_plan_items_plan", "purchase_plan_id"),
+        Index("ix_hardware_plan_items_material", "material_id"),
+        {"schema": "warehouse"},
+    )
+
+    purchase_plan_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_purchase_plans.id"),
+        nullable=False,
+    )
+    material_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_materials.id"),
+        nullable=False,
+    )
+    code: Mapped[str | None] = mapped_column(String(50), comment="物料编码快照")
+    name: Mapped[str] = mapped_column(String(200), nullable=False, comment="品名快照")
+    spec: Mapped[str | None] = mapped_column(String(200), comment="规格快照")
+    unit: Mapped[str | None] = mapped_column(String(20), comment="单位快照")
+    monthly_demand_total: Mapped[Decimal] = mapped_column(
+        _QTY, nullable=False, default=Decimal("0"), server_default="0",
+        comment="月需求合计（5 部门 monthly_demands 求和）",
+    )
+    safety_stock: Mapped[Decimal] = mapped_column(
+        _QTY, nullable=False, default=Decimal("0"), server_default="0",
+        comment="安全库存量快照",
+    )
+    stock_on_25th: Mapped[Decimal] = mapped_column(
+        _QTY, nullable=False, default=Decimal("0"), server_default="0",
+        comment="当月 25 日实际库存量（on_hand 快照）",
+    )
+    monthly_usage: Mapped[Decimal] = mapped_column(
+        _QTY, nullable=False, default=Decimal("0"), server_default="0",
+        comment="月使用量=近 30 天出库流水聚合（req_issue+urgent_issue）",
+    )
+    purchase_qty: Mapped[Decimal] = mapped_column(
+        _QTY, nullable=False, default=Decimal("0"), server_default="0",
+        comment="月度采购量=P7 公式（负取 0）；人工编辑后 is_edited",
+    )
+    ai_note: Mapped[str | None] = mapped_column(
+        String(500),
+        comment="AI 用量注释（近 3 月趋势/异常波动；建议态，人审核采纳不改数量）",
+    )
+    is_edited: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="人工编辑标记（同月重跑保留此行人工值）",
+    )
+    remark: Mapped[str | None] = mapped_column(String(500))
+
+
+class HardwareEnvLog(BaseModel):
+    """五金库温湿度日检（设计 §2.6）：每日一行（log_date 唯一）。"""
+
+    __tablename__ = "hardware_env_logs"
+    __table_args__ = (
+        Index(
+            "uq_hardware_env_logs_date",
+            "log_date",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "warehouse"},
+    )
+
+    log_date: Mapped[date] = mapped_column(Date, nullable=False, comment="日期（每日一行）")
+    temperature: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 1), comment="温度 ℃"
+    )
+    humidity: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 1), comment="湿度 %RH"
+    )
+    checked_by: Mapped[str | None] = mapped_column(String(100), comment="检查人")
+    abnormal_note: Mapped[str | None] = mapped_column(
+        String(500), comment="异常说明"
+    )

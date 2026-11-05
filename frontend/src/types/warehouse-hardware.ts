@@ -414,3 +414,45 @@ export interface HardwareReturnRecord {
   remark: string | null
   created_at: string
 }
+
+
+// ── 月度采购计划 + 温湿度（二期 M5）──
+
+export interface HardwarePlanItemRecord {
+  id: string
+  material_id: string
+  code: string | null
+  name: string
+  spec: string | null
+  unit: string | null
+  monthly_demand_total: number
+  safety_stock: number
+  stock_on_25th: number
+  monthly_usage: number
+  purchase_qty: number
+  ai_note: string | null
+  is_edited: boolean
+  remark: string | null
+}
+
+export interface HardwarePlanRecord {
+  id: string
+  plan_month: string
+  status: 'draft' | 'exported'
+  snapshot_at: string | null
+  usage_window_days: number
+  annotated: boolean
+  exported_at: string | null
+  remark: string | null
+  created_at: string
+  items?: HardwarePlanItemRecord[]
+}
+
+export interface HardwareEnvLogRecord {
+  id: string
+  log_date: string
+  temperature: number | null
+  humidity: number | null
+  checked_by: string | null
+  abnormal_note: string | null
+}
