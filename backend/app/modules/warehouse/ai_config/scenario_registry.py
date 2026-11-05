@@ -60,6 +60,14 @@ _SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
         "text",
         "system",
     ),
+    # 五金库二期 M6：日/周报速递 AI 总结文本——结构化数字全 SQL 聚合
+    # （数字永不由 LLM 生成），LLM 只产叙述总结。
+    "hardware_digest_summary": (
+        "五金库速递总结",
+        "五金库日/周报速递 AI 总结文本（数字来自流水聚合，LLM 只写叙述）",
+        "text",
+        "system",
+    ),
 }
 
 

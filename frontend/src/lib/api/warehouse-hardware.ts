@@ -411,3 +411,23 @@ export async function fetchHardwareEnvLogsClient(days = 30): Promise<HardwareEnv
   )
   return data ?? []
 }
+
+
+// ── 报表完善（二期 M6）──
+
+export function hardwareMovementsExportUrl(params: {
+  direction?: string
+  business_type?: string
+  keyword?: string
+  dept_name?: string
+  erp_status?: string
+} = {}): string {
+  const sp = new URLSearchParams()
+  if (params.direction) sp.set('direction', params.direction)
+  if (params.business_type) sp.set('business_type', params.business_type)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.dept_name) sp.set('dept_name', params.dept_name)
+  if (params.erp_status) sp.set('erp_status', params.erp_status)
+  const qs = sp.toString()
+  return `${CLIENT_API}${BASE}/movements/export${qs ? `?${qs}` : ''}`
+}

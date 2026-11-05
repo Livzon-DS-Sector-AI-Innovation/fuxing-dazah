@@ -1163,6 +1163,88 @@ async def mark_movements_entered(
     return count
 
 
+#: 台账导出行数上限（防全量导出拖垮；超限由调用方提示）
+MOVEMENT_EXPORT_LIMIT = 5000
+
+_BIZ_LABEL = {
+    "receipt": "入库", "pass_in": "直发入", "pass_out": "直发出",
+    "req_issue": "领料出库", "urgent_issue": "紧急发料", "return_in": "退库",
+    "stocktake_adj": "盘点调整", "scrap": "报废",
+}
+_DIRECTION_LABEL = {"inbound": "入", "outbound": "出", "adjust": "调"}
+
+
+async def export_movements_excel(
+    db: AsyncSession,
+    *,
+    direction: str | None = None,
+    business_type: str | None = None,
+    keyword: str | None = None,
+    dept_name: str | None = None,
+    erp_status: str | None = None,
+    occurred_from: datetime | None = None,
+    occurred_to: datetime | None = None,
+    limit: int = MOVEMENT_EXPORT_LIMIT,
+) -> tuple[bytes, int, bool]:
+    """全量流水台账导出 Excel（列=台账口径；返回 (xlsx, 行数, 是否截断)）。"""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    # 复用 list_movements 过滤语义，一页取满 limit
+    items, total = await list_movements(
+        db,
+        direction=direction, business_type=business_type, keyword=keyword,
+        dept_name=dept_name, erp_status=erp_status,
+        occurred_from=occurred_from, occurred_to=occurred_to,
+        page=1, page_size=limit,
+    )
+    truncated = total > limit
+
+    # 物料编码批量查（无 relationship；direct 未匹配行无编码）
+    material_ids = {mv.material_id for mv in items if mv.material_id}
+    code_by_id: dict[Any, str | None] = {}
+    if material_ids:
+        rows = (
+            await db.execute(
+                select(HardwareMaterial.id, HardwareMaterial.code).where(
+                    HardwareMaterial.id.in_(material_ids)
+                )
+            )
+        ).all()
+        code_by_id = {mid: code for mid, code in rows}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "流水台账"
+    ws.append([
+        "流水号", "时间", "方向", "业务类型", "物料编码", "物资名称",
+        "规格型号", "单位", "批次", "数量", "经办人", "部门",
+        "ERP状态", "来源单据", "备注",
+    ])
+    for mv in items:
+        ws.append([
+            mv.movement_no,
+            mv.occurred_at.strftime("%Y-%m-%d %H:%M") if mv.occurred_at else "",
+            _DIRECTION_LABEL.get(mv.direction, mv.direction),
+            _BIZ_LABEL.get(mv.business_type, mv.business_type),
+            code_by_id.get(mv.material_id) or "",
+            mv.material_name,
+            mv.spec or "",
+            mv.unit or "",
+            mv.lot_no or "",
+            float(mv.quantity),
+            mv.operator or "",
+            mv.dept_name or "",
+            "已录" if mv.erp_status == "entered" else "未录",
+            mv.ref_table or "",
+            mv.remark or "",
+        ])
+    buffer = BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue(), len(items), truncated
+
+
 # ── 物料主数据维护 ──
 
 

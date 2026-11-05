@@ -280,6 +280,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "hardware-stocktake", label: "五金盘点", path: "/warehouse/hardware/stocktake", group: "五金库" },
       { key: "hardware-plans", label: "五金采购计划", path: "/warehouse/hardware/plans", group: "五金库" },
       { key: "hardware-daily", label: "五金温湿度日检", path: "/warehouse/hardware/daily", group: "五金库" },
+      { key: "hardware-reports", label: "五金台账报表", path: "/warehouse/hardware/reports", group: "五金库" },
       { key: "system", label: "系统配置", path: "/warehouse/system", permissions: ["warehouse:system-config:read"], group: "系统" },
     ],
   },

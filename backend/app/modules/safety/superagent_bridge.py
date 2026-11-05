@@ -188,6 +188,27 @@ def register_superagent_bridge() -> None:
 
         source_registry.register(FireAlarmScanSource())
 
+    # R2 监护人持证扫描源（自有 kind：cron_scan 已被 R1 消防源占用）
+    if source_registry.get("guardian_cert_scan") is None:
+        from app.modules.safety.service.guardian_r2.scan_source import (
+            GuardianCertScanSource,
+        )
+
+        source_registry.register(GuardianCertScanSource())
+    # R2 成绩轮询源 + fetcher（bitable_poll 子类，翻译 _derived）
+    if source_registry.get("guardian_score_poll") is None:
+        from app.modules.safety.service.guardian_r2.score_source import (
+            GuardianScorePollSource,
+        )
+
+        source_registry.register(GuardianScorePollSource())
+    if get_bitable_fetcher("guardian_score_ledger") is None:
+        from app.modules.safety.service.guardian_r2.score_source import (
+            guardian_score_fetcher,
+        )
+
+        register_bitable_fetcher("guardian_score_ledger", guardian_score_fetcher)
+
     # R1 程序执行器 + P4 群卡 outbox sender（二期）
     from app.platform.superagent.executors import get_executor, register_executor
 
@@ -197,10 +218,39 @@ def register_superagent_bridge() -> None:
         )
 
         register_executor("alarm_hazard_create", alarm_hazard_create)
+    # R2 程序执行器（T04 起逐票注册：提醒 DM → 成绩映射 → 取消资格/恢复）
+    if get_executor("guardian_remind_dm") is None:
+        from app.modules.safety.service.guardian_r2.executor import (
+            guardian_remind_dm,
+        )
+
+        register_executor("guardian_remind_dm", guardian_remind_dm)
+    if get_executor("guardian_score_map") is None:
+        from app.modules.safety.service.guardian_r2.executor import (
+            guardian_score_map,
+        )
+
+        register_executor("guardian_score_map", guardian_score_map)
+    if get_executor("guardian_qualify_revoke") is None:
+        from app.modules.safety.service.guardian_r2.executor import (
+            guardian_qualify_revoke,
+        )
+
+        register_executor("guardian_qualify_revoke", guardian_qualify_revoke)
+    if get_executor("guardian_qualify_restore") is None:
+        from app.modules.safety.service.guardian_r2.executor import (
+            guardian_qualify_restore,
+        )
+
+        register_executor("guardian_qualify_restore", guardian_qualify_restore)
     from app.platform.superagent.effects import register_outbox_sender
 
     try:
         register_outbox_sender("feishu_card", _feishu_card_sender)
+    except ValueError:
+        pass  # 已注册（bootstrap 幂等）
+    try:
+        register_outbox_sender("feishu_dm_card", _feishu_dm_card_sender)
     except ValueError:
         pass  # 已注册（bootstrap 幂等）
 
@@ -226,6 +276,22 @@ async def _feishu_card_sender(channel: dict[str, Any], body: dict[str, Any]) -> 
         return False
 
 
+async def _feishu_dm_card_sender(channel: dict[str, Any], body: dict[str, Any]) -> bool:
+    """outbox 私信卡片发送（R2 监护人提醒；行内 open_id 唯一权威）。"""
+    from app.modules.safety.feishu.notification import send_user_card
+
+    try:
+        mid = await send_user_card(
+            str(channel.get("open_id") or ""),
+            title=str(body.get("title") or ""),
+            content=str(body.get("content") or ""),
+        )
+        return bool(mid)
+    except Exception:
+        logger.exception("feishu_dm_card 发送失败: open=%s", channel.get("open_id"))
+        return False
+
+
 async def _send_admin_dm(open_id: str, text: str) -> bool:
     """DM 发送（安全应用通知原语；失败返回 False 走 effects 退避重试）。"""
     from app.modules.safety.feishu.notification import send_user_card
@@ -242,11 +308,77 @@ async def _send_admin_dm(open_id: str, text: str) -> bool:
 
 
 async def bootstrap_superagent_policy_seed() -> None:
-    """R1 Policy 播种/升版（规则随代码部署生效；accept_mode 切换权留给人工）。"""
+    """safety 侧 Policy 播种/升版（规则随代码部署生效；accept_mode 切换权留给人工）。
+
+    Policy 全局单现行版本——必须**组合播种**（现行=R1+R2+五金 HW 三组合同版本），
+    只播子集会把其他模块规则从现行版本挤掉（版本哈希不同即升版覆盖）。
+    """
     try:
-        await ensure_r1_policy()
+        await ensure_guardian_r2_policy()
     except Exception:
-        logger.exception("Super-agent R1 Policy ensure 失败（忽略，可手动补）")
+        logger.exception("Super-agent safety Policy ensure 失败（忽略，可手动补）")
+
+
+async def ensure_guardian_r2_policy(session: AsyncSession | None = None) -> str | None:
+    """幂等确保现行 Policy 为 R1+R2 组合规则集（沿用现行 accept_mode/admission）。
+
+    - 无 Policy：播种组合规则 + observe
+    - 内容不同：apply_new_policy 升版——沿用现行 accept_mode 与 admission
+      （模式切换是人工权限，部署不得覆盖）
+    - ensure_r1_policy 保留给 R1 replay 脚本隔离使用（会播 r1-only 版本，
+      生产 bootstrap 不再调用它）
+    """
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.alarm_hazard_r1.rule import r1_fire_rule
+    from app.modules.safety.service.guardian_r2.rule import (
+        guardian_remind_rule,
+        guardian_restore_rule,
+        guardian_revoke_rule,
+        guardian_score_map_rule,
+    )
+    from app.platform.superagent.policy import (
+        apply_new_policy,
+        get_current_policy,
+        policy_version_hash,
+    )
+
+    own_session = session is None
+    ses = session or async_session_factory()
+    try:
+        rules = [
+            r1_fire_rule(),
+            guardian_remind_rule(),
+            guardian_revoke_rule(),
+            guardian_restore_rule(),
+            guardian_score_map_rule(),
+        ]
+        # 五金库二期 M6（2026-11-05）：HW 规则并入组合（全局单 Policy 版本，
+        # 单播会把其他模块规则挤掉——此处是三组合唯一会合点）
+        from app.modules.warehouse.hardware.superagent.rule import (
+            hardware_alert_rules,
+        )
+
+        rules.extend(hardware_alert_rules())
+        current = await get_current_policy(ses)
+        mode = current.accept_mode if current is not None else "observe"
+        admission = (current.admission if current is not None else {}) or {}
+        if current is not None and current.version_hash == policy_version_hash(
+            rules, mode, admission,
+        ):
+            return current.version_hash
+        policy, _ = await apply_new_policy(
+            ses, rules=rules, accept_mode=mode, admission=admission,
+        )
+        if own_session:
+            await ses.commit()
+        logger.info(
+            "Super-agent safety Policy（R1+R2）已就绪（%s, mode=%s）",
+            policy.version_hash[:12], mode,
+        )
+        return policy.version_hash
+    finally:
+        if own_session:
+            await ses.close()
 
 
 async def ensure_r1_policy(session: AsyncSession | None = None) -> str | None:

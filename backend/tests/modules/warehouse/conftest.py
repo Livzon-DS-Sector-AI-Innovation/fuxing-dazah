@@ -216,46 +216,63 @@ async def _hide_backfilled_mirror_rows(db_session: AsyncSession) -> AsyncIterato
     - 正常回滚 → live 数据原样；
     - 端点显式 commit 泄漏（reconciliation run 先例）→ teardown 用新会话
       按签名补偿复活并提交，live 数据无净变更。
+
+    大范围签名 UPDATE 与常驻 dev 后端并写共享库会间歇死锁（2026-11-05
+    五金库二期全量回归实测两连接互等）——SET 失败回滚事务后重试一次。
     """
     from sqlalchemy import update
 
     from app.modules.warehouse.models import WarehouseMovement, WarehouseStock
 
-    await db_session.execute(
-        update(WarehouseMovement)
-        .where(
-            WarehouseMovement.movement_no.like("RCPT-%")
-            | WarehouseMovement.movement_no.like("OTB-%")
-        )
-        .values(is_deleted=True)
-    )
-    await db_session.execute(
-        update(WarehouseStock)
-        .where(WarehouseStock.location_code == "RECON-IMPORT")
-        .values(is_deleted=True)
-    )
+    for attempt in range(2):
+        try:
+            await db_session.execute(
+                update(WarehouseMovement)
+                .where(
+                    WarehouseMovement.movement_no.like("RCPT-%")
+                    | WarehouseMovement.movement_no.like("OTB-%")
+                )
+                .values(is_deleted=True)
+            )
+            await db_session.execute(
+                update(WarehouseStock)
+                .where(WarehouseStock.location_code == "RECON-IMPORT")
+                .values(is_deleted=True)
+            )
+            break
+        except Exception:
+            if attempt:
+                raise
+            await db_session.rollback()  # 死锁后事务已 abort，回滚重试一次
     yield
     # 补偿（按回灌签名复活；正常回滚时为空操作。签名行若被真实业务刻意
     # 软删会被测试运行复活——回灌行不属本地操作域，可接受）。
     # 用测试专用 NullPool 工厂——全局池连接跨测试事件循环复用会炸
     from tests.conftest import _test_session_factory
 
-    async with _test_session_factory() as heal:
-        await heal.execute(
-            update(WarehouseMovement)
-            .where(
-                WarehouseMovement.is_deleted.is_(True),
-                WarehouseMovement.movement_no.like("RCPT-%")
-                | WarehouseMovement.movement_no.like("OTB-%"),
-            )
-            .values(is_deleted=False)
-        )
-        await heal.execute(
-            update(WarehouseStock)
-            .where(
-                WarehouseStock.is_deleted.is_(True),
-                WarehouseStock.location_code == "RECON-IMPORT",
-            )
-            .values(is_deleted=False)
-        )
+    for attempt in range(2):
+        try:
+            async with _test_session_factory() as heal:
+                await heal.execute(
+                    update(WarehouseMovement)
+                    .where(
+                        WarehouseMovement.is_deleted.is_(True),
+                        WarehouseMovement.movement_no.like("RCPT-%")
+                        | WarehouseMovement.movement_no.like("OTB-%"),
+                    )
+                    .values(is_deleted=False)
+                )
+                await heal.execute(
+                    update(WarehouseStock)
+                    .where(
+                        WarehouseStock.is_deleted.is_(True),
+                        WarehouseStock.location_code == "RECON-IMPORT",
+                    )
+                    .values(is_deleted=False)
+                )
+                await heal.commit()
+            break
+        except Exception:
+            if attempt:
+                raise  # 共享库死锁间歇（同 setup 注记）；重试一次仍败才上抛
         await heal.commit()

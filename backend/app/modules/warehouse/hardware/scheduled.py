@@ -217,6 +217,15 @@ _HARDWARE_TASKS = (
 
 
 def register_hardware_tasks(registry) -> None:
-    """main.py lifespan 一行注册（safety 批量注册同款）。"""
+    """main.py lifespan 一行注册（safety 批量注册同款）。
+
+    M6 起一并挂 superagent 桥（kind/executor 注册幂等；SUPERAGENT_ENABLED
+    总开关与 per-source enabled 沿用底座闸，默认 false）。
+    """
+    from app.modules.warehouse.hardware.superagent.bridge import (
+        register_hardware_superagent,
+    )
+
+    register_hardware_superagent()
     for task in _HARDWARE_TASKS:
         registry.register_task(task)

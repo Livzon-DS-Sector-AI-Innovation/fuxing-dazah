@@ -1066,3 +1066,35 @@ async def list_env_logs(
     return success_response([
         EnvLogResponse.model_validate(l).model_dump(mode="json") for l in logs
     ])
+
+
+# ── 报表完善（二期 M6：ERP 对账 / direct 明细 / 全量台账导出）──
+
+
+@router.get("/movements/export", summary="全量流水台账导出 Excel（5000 行封顶）")
+async def export_movements(
+    direction: str | None = Query(default=None),
+    business_type: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    dept_name: str | None = Query(default=None),
+    erp_status: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:report:read")),
+):
+    from datetime import datetime as _dt
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    xlsx, rows, truncated = await service.export_movements_excel(
+        db,
+        direction=direction, business_type=business_type, keyword=keyword,
+        dept_name=dept_name, erp_status=erp_status,
+    )
+    logger.info("五金流水台账导出: %d 行%s（by %s）", rows, "（截断）" if truncated else "", user.id)
+    filename = f"五金库流水台账_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )

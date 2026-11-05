@@ -238,6 +238,16 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule=None,
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
+    # ── 五金库二期 M6（superagent hardware_digest_push 执行器）──
+    PushTaskInfo(
+        task_name="hardware_digest",
+        scene="hardware_digest",
+        label="五金库日速递",
+        description="superagent 日速递：入库/出库/预警/待办数字（流水聚合）+AI 总结（事件触发）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
 )
 
 PUSH_REGISTRY: dict[str, PushTaskInfo] = {t.task_name: t for t in _TASKS}

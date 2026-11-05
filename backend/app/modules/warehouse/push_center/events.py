@@ -425,3 +425,28 @@ def render_hardware_env_remind_card(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 register_event_renderer("hardware_env_remind", render_hardware_env_remind_card)
+
+
+def render_hardware_digest_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """五金库日速递卡（数字全流水聚合；AI 总结仅叙述文本）。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    summary = str(payload.get("ai_summary") or "").strip()
+    lines = [
+        f"**{payload.get('date', '-')} 五金库日报**",
+        "",
+        f"- 入库单：{payload.get('receipts_today', 0)} 张",
+        f"- 发料出库：{payload.get('outbound_today', 0)} 笔 / {payload.get('outbound_qty_today', 0)} 件",
+        f"- 待发料：{payload.get('to_issue', 0)} 单 ｜ 紧急未补：{payload.get('urgent_overdue', 0)} 单",
+        f"- 待确认草稿：{payload.get('draft_backlog', 0)} 张 ｜ 低库存物料：{payload.get('low_stock_count', 0)} 项",
+    ]
+    if summary:
+        lines += ["", f"> {summary}"]
+    return build_card(
+        title="五金库日速递",
+        template="blue",
+        elements=[{"tag": "markdown", "content": "\n".join(lines)}],
+    )
+
+
+register_event_renderer("hardware_digest", render_hardware_digest_card)
