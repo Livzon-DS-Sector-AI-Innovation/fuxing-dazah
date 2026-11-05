@@ -140,11 +140,13 @@ class _TaskCore:
         name: str,
         sop_no: str | None = None,
         doc_item_ids: set[uuid.UUID] | None = None,
+        sop_pattern: str | None = None,
     ) -> QualityTestResult | None:
         """按项目名匹配结果行：归一化精确 → 去「杂质」前缀精确 → 包含（唯一才返回）。
 
-        doc_item_ids（表号→标准文档的项目行集合）提供时优先在该集合限定的行池内匹配，
-        其次 sop_no 行池，均未命中再回落全量名匹配。
+        行池优先顺序：doc_item_ids（表号→标准文档的项目行集合）→ sop_no 精确 →
+        sop_pattern（表号数字段匹配项目行 sop_no，如 EX-HA-5246-002 ↔ SOP.03.5246），
+        均未命中再回落全量名匹配。
         """
         if doc_item_ids:
             pool = [r for r in rows if r.standard_item_id in doc_item_ids]
@@ -152,6 +154,10 @@ class _TaskCore:
                 pool = rows
         elif sop_no:
             pool = [r for r in rows if r.sop_no == sop_no]
+            if not pool:
+                pool = rows
+        elif sop_pattern:
+            pool = [r for r in rows if r.sop_no and sop_pattern in r.sop_no]
             if not pool:
                 pool = rows
         else:

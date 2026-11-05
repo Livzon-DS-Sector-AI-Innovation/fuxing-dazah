@@ -195,3 +195,23 @@ def test_extract_peak_table_from_markdown() -> None:
     assert [p["area"] for p in peaks] == [1234567.89, 18888.5, 100.0]
     # 无表格时返回空
     assert extract_peak_table("纯文本没有表格") == []
+
+
+def test_match_task_row_by_sop_pattern() -> None:
+    """表号数字段 ↔ 项目行 sop_no 自动关联：EX-HA-5246-002 优先匹配 SOP.03.5246 行池。"""
+    from app.modules.quality.models import QualityTestResult
+    from app.modules.quality.service.task_core import _TaskCore
+
+    rows = [
+        QualityTestResult(item_name="万古霉素B", sop_no="SOP.03.5246", judge_mode="auto"),
+        QualityTestResult(item_name="单去氯万古霉素", sop_no="SOP.03.5230", judge_mode="auto"),
+    ]
+    # 无 pattern：全量名匹配
+    hit = _TaskCore._match_task_row(rows, "万古霉素B", None, None)
+    assert hit is not None and hit.item_name == "万古霉素B"
+    # 带 pattern：限定 SOP.03.5246 池（无该池行时回落全量）
+    hit2 = _TaskCore._match_task_row(rows, "万古霉素B", None, None, "5246")
+    assert hit2 is not None and hit2.item_name == "万古霉素B"
+    # pattern 不含目标行：池空 → 回落全量仍可匹配
+    hit3 = _TaskCore._match_task_row(rows, "单去氯万古霉素", None, None, "9999")
+    assert hit3 is not None and hit3.item_name == "单去氯万古霉素"

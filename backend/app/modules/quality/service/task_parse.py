@@ -1,6 +1,7 @@
 """Quality 业务逻辑编排。"""
 
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -70,6 +71,7 @@ class _TaskParse(_TaskCore):
         record_id: uuid.UUID,
         sop_no: str | None = None,
         doc_item_ids: set[uuid.UUID] | None = None,
+        sop_pattern: str | None = None,
         filled_by: uuid.UUID | None = None,
     ) -> tuple[list[str], list[str]]:
         """候选结果按项目名匹配填入任务行（SOP 匹配键；判定以任务行标准快照为准）。
@@ -83,7 +85,7 @@ class _TaskParse(_TaskCore):
         filled_names: list[str] = []
         unmatched: list[str] = []
         for name, value in candidates:
-            row = _TaskParse._match_task_row(rows, name, sop_no, doc_item_ids)
+            row = _TaskParse._match_task_row(rows, name, sop_no, doc_item_ids, sop_pattern)
             if row is None or row.judge_mode != "auto":
                 unmatched.append(name)
                 continue
@@ -321,8 +323,12 @@ class _TaskParse(_TaskCore):
             mapped_doc = await get_standard_document_by_file_no(db, sop_no)
             if mapped_doc:
                 doc_item_ids = {it.id for it in await list_standard_items(db, mapped_doc.id)}
+        pattern = None
+        if parsed.form_id:
+            m = re.search(r"EX-[A-Z]+-(\d+)-", parsed.form_id)
+            pattern = m.group(1) if m else None
         filled, unmatched = await _TaskParse._fill_candidates(
-            db, task, candidates, record_id, sop_no, doc_item_ids, filled_by=filled_by,
+            db, task, candidates, record_id, sop_no, doc_item_ids, pattern, filled_by=filled_by,
         )
         appended: list[str] = []
         appended_orig: set[str] = set()
