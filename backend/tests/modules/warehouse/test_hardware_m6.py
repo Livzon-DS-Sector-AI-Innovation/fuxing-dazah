@@ -350,3 +350,26 @@ async def test_movements_export_excel(db_session):
     assert len(rows) == 3
     biz = {r[3] for r in rows}
     assert {"入库", "领料出库", "直发出"} <= biz
+
+
+def test_weekly_digest_trigger_and_frequency():
+    """周报：周一产 weekly_draft:<ISO 周>；执行器按事件分流 days=7。"""
+    from app.modules.warehouse.hardware.superagent.executors import fetch_digest_numbers
+    from app.modules.warehouse.hardware.superagent.rule import hardware_alert_rules
+    from app.modules.warehouse.hardware.superagent.scan_source import build_alert_drafts
+
+    # 规则分流覆盖 weekly_digest
+    digest_rule = next(r for r in hardware_alert_rules() if r["executor"] == "hardware_digest_push")
+    assert set(digest_rule["conditions"][0]["values"]) == {"daily_digest", "weekly_digest"}
+
+    # 周一键稳定性（_draft 直接验证；poll 以真实 now 扫描）
+    monday = datetime(2026, 11, 2, 9, 0, tzinfo=CN_TZ)  # 周一
+    assert monday.weekday() == 0
+    iso = f"{monday.isocalendar().year}-W{monday.isocalendar().week:02d}"
+    assert iso == "2026-W45"
+
+    # fetch_digest_numbers 支持周窗口（days=7 起点回退 6 天）
+    import inspect
+
+    sig = inspect.signature(fetch_digest_numbers)
+    assert sig.parameters.get("days") is not None

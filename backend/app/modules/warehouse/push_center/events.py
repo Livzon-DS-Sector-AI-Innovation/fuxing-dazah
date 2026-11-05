@@ -432,8 +432,9 @@ def render_hardware_digest_card(payload: dict[str, Any]) -> dict[str, Any]:
     from app.modules.warehouse.agent.cards import build_card
 
     summary = str(payload.get("ai_summary") or "").strip()
+    frequency = str(payload.get("frequency") or "日报")
     lines = [
-        f"**{payload.get('date', '-')} 五金库日报**",
+        f"**{payload.get('date', '-')} 五金库{frequency}**",
         "",
         f"- 入库单：{payload.get('receipts_today', 0)} 张",
         f"- 发料出库：{payload.get('outbound_today', 0)} 笔 / {payload.get('outbound_qty_today', 0)} 件",

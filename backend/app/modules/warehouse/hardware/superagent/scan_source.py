@@ -234,6 +234,11 @@ async def build_alert_drafts(
     # ── 定时触发：日速递（每日一轮，执行器聚数字）──
     drafts.append(_draft("daily_digest", f"daily_digest:{today}", {"date": today}))
 
+    # ── 定时触发：周速递（周一一轮，ISO 周键幂等）──
+    if now.weekday() == 0:
+        iso = f"{now.isocalendar().year}-W{now.isocalendar().week:02d}"
+        drafts.append(_draft("weekly_digest", f"weekly_digest:{iso}", {"week": iso}))
+
     # ── 定时触发：25 日后首轮计划草案（月键幂等）──
     if now.day >= 25:
         plan_month = _next_month_key(now)

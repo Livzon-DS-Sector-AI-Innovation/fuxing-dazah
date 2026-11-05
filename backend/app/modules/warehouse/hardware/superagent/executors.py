@@ -150,8 +150,15 @@ async def hardware_urge(task_dict: dict[str, Any], inputs: list[dict[str, Any]])
     return Report(kind="ready", end_task=True, output={"event_type": event_type})
 
 
-async def fetch_digest_numbers(session: Any, *, now: datetime | None = None) -> dict[str, Any]:
-    """日速递结构化数字（全部 SQL 聚合；数字永不由 LLM 生成）。"""
+async def fetch_digest_numbers(
+    session: Any, *, now: datetime | None = None, days: int = 1
+) -> dict[str, Any]:
+    """日/周速递结构化数字（全部 SQL 聚合；数字永不由 LLM 生成）。
+
+    days=1 日报 / days=7 周报（任务书「日/周报速递格」）。
+    """
+    from datetime import timedelta as _td
+
     from app.modules.warehouse.hardware.models import (
         HardwareMaterial,
         HardwareReceipt,
@@ -161,7 +168,7 @@ async def fetch_digest_numbers(session: Any, *, now: datetime | None = None) -> 
     )
 
     now = now or _now()
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0) - _td(days=days - 1)
 
     receipts_today = await session.scalar(
         select(func.count()).select_from(HardwareReceipt).where(
@@ -255,6 +262,7 @@ async def fetch_digest_numbers(session: Any, *, now: datetime | None = None) -> 
     )
     return {
         "date": now.strftime("%Y-%m-%d"),
+        "days": days,
         "receipts_today": int(receipts_today or 0),
         "outbound_today": int(outbound_today or 0),
         "outbound_qty_today": float(outbound_qty_today or 0),
@@ -268,7 +276,6 @@ async def fetch_digest_numbers(session: Any, *, now: datetime | None = None) -> 
 async def _digest_ai_summary(numbers: dict[str, Any]) -> str | None:
     """AI 总结文本（hardware_digest_summary 场景；失败/停用返回 None 不阻塞）。"""
     from app.modules.warehouse.ai_audit.context import warehouse_audit_scope
-    from app.modules.warehouse.hardware.superagent.executors import _assistant_text
 
     prompt = (
         "你是五金仓库管理助理。以下是今日运营数字（系统流水聚合，不可更改）。"
@@ -311,11 +318,18 @@ async def hardware_digest_push(
     from app.modules.warehouse.push_center.events import fire_push_event
 
     async with async_session_factory() as session:
-        numbers = await fetch_digest_numbers(session)
+        payload = await _origin_payload(session, task_dict)
+        event_type = str(payload.get("event_type") or "daily_digest")
+        days = 7 if event_type == "weekly_digest" else 1
+        numbers = await fetch_digest_numbers(session, days=days)
         summary = await _digest_ai_summary(numbers)
         try:
             await fire_push_event(
-                session, "hardware_digest", {**numbers, "ai_summary": summary},
+                session, "hardware_digest", {
+                    **numbers,
+                    "frequency": "周报" if days == 7 else "日报",
+                    "ai_summary": summary,
+                },
             )
             await session.commit()
         except Exception:  # noqa: BLE001

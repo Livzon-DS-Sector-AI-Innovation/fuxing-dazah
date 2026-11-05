@@ -36,7 +36,8 @@ def hardware_alert_rules() -> list[dict[str, Any]]:
             "source": HARDWARE_ALERT_SOURCE_NAME,
             "executor": "hardware_digest_push",
             "conditions": [
-                {"field": "payload.event_type", "op": "in", "values": ["daily_digest"]},
+                {"field": "payload.event_type", "op": "in",
+                 "values": ["daily_digest", "weekly_digest"]},
             ],
         },
         {

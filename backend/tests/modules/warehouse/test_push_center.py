@@ -179,9 +179,10 @@ class TestPushRegistry:
             "hardware_direct_pickup",
             "hardware_receipt_rejected",
             "hardware_requisition_rejected",
-            # 五金库二期 M5（2026-11-05）
+            # 五金库二期 M5+M6（2026-11-05）
             "hardware_stale_list",
             "hardware_env_remind",
+            "hardware_digest",
             # V3.0 二期 P1（缺口补齐，1 个定时型）
             "low_stock_alert",
         }

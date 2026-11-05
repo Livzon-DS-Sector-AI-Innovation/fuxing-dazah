@@ -111,6 +111,9 @@ async def test_list_ai_scenarios(
         "finished_receipt_recognition",
         # 五金库送货单识别（M2，2026-11-04 设计）
         "hardware_receipt_recognition",
+        # 五金库二期 M5/M6（2026-11-05：计划用量注释+速递总结）
+        "hardware_plan_annotation",
+        "hardware_digest_summary",
     }
     assert all(s["enabled"] is True for s in scenarios)
 
