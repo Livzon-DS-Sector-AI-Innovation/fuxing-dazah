@@ -67,3 +67,57 @@ async def client() -> AsyncIterator[AsyncClient]:
             yield ac
         app.dependency_overrides.clear()
         await session.rollback()
+
+
+@pytest.fixture(autouse=True)
+def regulation_push_isolated(monkeypatch: pytest.MonkeyPatch):
+    """法规收录推送隔离（autouse）：默认钉死 PushNotifier 的真实投递。
+
+    误发事故教训（2026-11-04）：推送 V1.2 主路径并入安全速递后，任何走到
+    promote 的测试都会把测试样例数据（《危险化学品安全管理条例》等）真发到
+    安全AI创新交流群，每跑一轮测试重发一次。默认全局 no-op（upsert/
+    群卡/私发），需要断言推送行为的测试自行覆写本桩（如 push_off 与
+    push_notifier 命名空间单测各自的 monkeypatch，后设优先）。
+    """
+    from app.modules.safety.regulation_ingest import push_notifier as _pn
+
+    async def _noop_upsert(report_date, key, cell, **kwargs):
+        return True
+
+    async def _noop_card(**kwargs):
+        return "test-msg-id"
+
+    monkeypatch.setattr(_pn, "upsert_daily_digest", _noop_upsert)
+    monkeypatch.setattr(_pn, "send_group_card", _noop_card)
+    monkeypatch.setattr(_pn, "send_user_card", _noop_card)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def warehouse_push_isolated(monkeypatch: pytest.MonkeyPatch):
+    """仓储飞书推送隔离（autouse）：钉死传输总闸 _send_create 的真实投递。
+
+    误发事故教训（2026-11-05）：五金库 direct 领取卡等事件推送的发送层
+    在测试里无桩，跑五金库测试时每轮把「测试供应商/发酵」样例卡真发到
+    WAREHOUSE_TEST_CHAT_ID 群（push_tasks 无 DB 行的任务回退注册表默认
+    enabled=True + env 目标；db_session rollback 后库里无痕但飞书收不回）。
+
+    隔离层级必须钉在 **_send_create（唯一网络出口）**而非
+    send_card_to_target/send_card：send_card / send_card_to_user /
+    send_card_to_target / send_text 全部漏斗到 _send_create——钉传输层
+    既保证零触网，又不劫持测试在这些业务层自行 monkeypatch 的采集桩
+    （fixture 先装、测试体内后装，后设优先；express_notify 采 send_card、
+    picking_supplier 采 _send_create、push_center 失败注入 send_card
+    三族因此全部兼容，2026-11-05 二期验收实测）。
+    """
+    from app.modules.warehouse.feishu import notification as _wn
+
+    async def _dry_run_create(payload):
+        _wn.logger.info(
+            "[test-stub] 仓库飞书传输隔离: receive_id=%s msg_type=%s",
+            payload.get("receive_id"), payload.get("msg_type"),
+        )
+        return _wn.DRY_RUN_MESSAGE_ID
+
+    monkeypatch.setattr(_wn, "_send_create", _dry_run_create)
+    yield
