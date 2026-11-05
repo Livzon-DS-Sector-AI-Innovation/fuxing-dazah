@@ -215,3 +215,23 @@ def test_match_task_row_by_sop_pattern() -> None:
     # pattern 不含目标行：池空 → 回落全量仍可匹配
     hit3 = _TaskCore._match_task_row(rows, "单去氯万古霉素", None, None, "9999")
     assert hit3 is not None and hit3.item_name == "单去氯万古霉素"
+
+
+def test_any_unknown_rule_max_of_others() -> None:
+    """任何未知杂质 = 排除清单外其余组分（含字段自身）的最大值。"""
+    from app.modules.quality.service.task_parse import _TaskParse
+
+    rule = {"exclude": ["万古霉素B", "杂质A", "杂质B", "杂质C", "杂质D", "总杂质"]}
+    candidates = [
+        ("Vancomycin B％", 95.6), ("杂质RS1％", 0.21), ("杂质RS2％", 0.27),
+        ("杂质RS3％", 0.59), ("杂质A％", 0.62), ("杂质B1％", 0.31), ("杂质C％", 0.079),
+        ("总杂质％", 4.4), ("任何未知杂质％", 0.29),
+    ]
+    out = _TaskParse._apply_any_unknown_rule(candidates, rule)
+    by_name = {n: v for n, v in out}
+    assert by_name["任何未知杂质"] == 0.59
+    # 排除项原样保留
+    assert by_name["杂质A％"] == 0.62 and by_name["总杂质％"] == 4.4
+    # 空池（全被排除）时原样返回
+    only_excluded = [("杂质A％", 1.0), ("总杂质％", 2.0)]
+    assert _TaskParse._apply_any_unknown_rule(only_excluded, rule) == only_excluded

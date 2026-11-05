@@ -141,6 +141,7 @@ class _TaskParse(_TaskCore):
                 record_id = await _TaskParse._persist_generic_record(db, parsed, filename, cfg.sop_no)
                 filled, appended, remaining = await _TaskParse._fill_generic_into_task(
                     db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,
+                    any_unknown_rule=(cfg.config or {}).get("any_unknown"),
                 )
                 detail = _TaskParse._to_detail(task, await list_test_results(db, task_id))
                 return detail, filled + appended, remaining
@@ -308,6 +309,7 @@ class _TaskParse(_TaskCore):
         record_id: uuid.UUID,
         sop_no: str | None,
         filled_by: uuid.UUID | None = None,
+        any_unknown_rule: dict[str, Any] | None = None,
     ) -> tuple[list[str], list[str], list[str]]:
         """通用解析填入任务：按项目名匹配 + 未匹配组分自动追加（限度取计算表限度列，如 RS1-7）。
 
@@ -318,6 +320,8 @@ class _TaskParse(_TaskCore):
             for c in parsed.components
             if c.report_value is not None
         ]
+        if any_unknown_rule:
+            candidates = _TaskParse._apply_any_unknown_rule(candidates, any_unknown_rule)
         doc_item_ids: set[uuid.UUID] | None = None
         if sop_no:
             mapped_doc = await get_standard_document_by_file_no(db, sop_no)
@@ -408,6 +412,7 @@ class _TaskParse(_TaskCore):
         if task and task.status == "in_progress":
             filled, appended, remaining = await _TaskParse._fill_generic_into_task(
                 db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,
+                any_unknown_rule=(cfg.config or {}).get("any_unknown"),
             )
             task_link = {
                 "task_id": str(task.id),
@@ -435,5 +440,27 @@ class _TaskParse(_TaskCore):
             rec.all_pass = all(verdicts)
             await db.flush()
         return {"parse": parsed, "record_id": record_id, "task_link": task_link}
+
+    @staticmethod
+    def _apply_any_unknown_rule(
+        candidates: list[tuple[str, float]], rule: dict[str, Any],
+    ) -> list[tuple[str, float]]:
+        """任何未知杂质规则（仅解析路径）：除排除清单外的其余组分（含「任何未知杂质」字段自身）取最大值。
+
+        rule = {"exclude": ["万古霉素B", "杂质A", ...]}；排除按归一化名精确或前缀匹配
+        （「杂质B」前缀覆盖 杂质B1/B2/B(B1+B2)）。
+        """
+        exclude = {_TaskCore._norm_name(str(n)) for n in rule.get("exclude", [])}
+
+        def excluded(norm: str) -> bool:
+            return any(norm == e or norm.startswith(e) for e in exclude)
+
+        pool = [v for name, v in candidates if not excluded(_TaskCore._norm_name(name))]
+        if not pool:
+            return candidates
+        value = round(max(pool), 2)
+        out = [(name, v) for name, v in candidates if _TaskCore._norm_name(name) != "任何未知杂质"]
+        out.append(("任何未知杂质", value))
+        return out
 
     # ── 追加行 ──
