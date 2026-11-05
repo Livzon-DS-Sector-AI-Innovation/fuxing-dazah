@@ -2,21 +2,127 @@
 
 import { useState } from 'react'
 import { usePermission } from '@/hooks/usePermission'
-import { Typography, Divider, Empty, Button, Space, Table, Tag } from 'antd'
+import { Typography, Divider, Empty, Button, Space, Table, Tag, Modal, InputNumber, App } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { LcUploader, LcReportView } from '@/components/quality'
+import { confirmTaskResult } from '@/actions/quality'
 import type { UploadLcResponse } from '@/types/quality'
 
 const { Title, Paragraph } = Typography
+
+interface ConfirmItem {
+  result_id: string
+  item_name: string
+  result_value: number | null
+  is_pass: boolean | null
+  draft: number | null
+  done: boolean
+}
 
 export default function QualityPage() {
   const { hasPermission } = usePermission()
   const canUpload = hasPermission('quality:lc:upload')
   const [result, setResult] = useState<UploadLcResponse | null>(null)
+  const [confirmItems, setConfirmItems] = useState<ConfirmItem[]>([])
+  const [confirming, setConfirming] = useState(false)
+  const { message } = App.useApp()
+  const router = useRouter()
+
+  const onUploadResult = (r: UploadLcResponse) => {
+    setResult(r)
+    const items = r.task_link?.items
+    if (items && items.length) {
+      setConfirmItems(items.map((it) => ({
+        result_id: it.result_id, item_name: it.item_name,
+        result_value: it.result_value, is_pass: it.is_pass,
+        draft: it.result_value, done: false,
+      })))
+    } else {
+      setConfirmItems([])
+    }
+  }
+
+  const doConfirm = async (item: ConfirmItem) => {
+    if (!result?.task_link?.task_id) return
+    await confirmTaskResult(result.task_link.task_id, item.result_id, item.draft ?? undefined)
+    setConfirmItems((prev) => prev.map((x) => (x.result_id === item.result_id ? { ...x, done: true } : x)))
+  }
+
+  const confirmAllAndEnter = async () => {
+    if (!result?.task_link?.task_id) return
+    setConfirming(true)
+    try {
+      for (const it of confirmItems) {
+        if (!it.done) await doConfirm(it)
+      }
+      message.success('已全部确认归入')
+      setConfirmItems([])
+      router.push(`/quality/task/${result.task_link.task_id}`)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '归入失败')
+    } finally {
+      setConfirming(false)
+    }
+  }
 
   return (
     <div>
+      <Modal
+        title="逐项确认归入检验填报"
+        open={confirmItems.length > 0}
+        onCancel={() => { setConfirmItems([]); if (result?.task_link?.task_id) router.push(`/quality/task/${result.task_link.task_id}`) }}
+        footer={[
+          <Button key="later" onClick={() => { setConfirmItems([]); if (result?.task_link?.task_id) router.push(`/quality/task/${result.task_link.task_id}`) }}>
+            稍后到任务里确认
+          </Button>,
+          <Button key="ok" type="primary" loading={confirming} onClick={confirmAllAndEnter}
+            disabled={confirmItems.every((x) => x.done)}>
+            全部归入并进入任务
+          </Button>,
+        ]}
+      >
+        <Paragraph type="secondary">
+          解析值已暂存任务（待确认）。可逐项修正数值后确认归入（按标准限度重新判定），或全部归入后进入任务继续填报。
+        </Paragraph>
+        <Table
+          size="small"
+          rowKey="result_id"
+          pagination={false}
+          dataSource={confirmItems}
+          columns={[
+            { title: '项目', dataIndex: 'item_name', key: 'item_name', width: 180 },
+            {
+              title: '数值（可改）', key: 'value', width: 150,
+              render: (_: unknown, it: ConfirmItem) => (
+                <InputNumber size="small" precision={2} value={it.draft}
+                  onChange={(v) => setConfirmItems((prev) => prev.map((x) => (x.result_id === it.result_id ? { ...x, draft: v === null ? null : Number(v) } : x)))}
+                  style={{ width: '100%' }} />
+              ),
+            },
+            {
+              title: '解析判定', key: 'judge', width: 90,
+              render: (_: unknown, it: ConfirmItem) => it.is_pass === null ? <Tag>未判定</Tag>
+                : it.is_pass ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
+            },
+            {
+              title: '操作', key: 'actions', width: 100,
+              render: (_: unknown, it: ConfirmItem) => it.done
+                ? <Tag color="green">已归入</Tag>
+                : (
+                  <Button size="small" type="primary"
+                    onClick={async () => {
+                      try { await doConfirm(it); message.success('已归入') }
+                      catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '确认失败') }
+                    }}>
+                    确认归入
+                  </Button>
+                ),
+            },
+          ]}
+        />
+      </Modal>
       <Title level={3} style={{ marginBottom: 4 }}>
         <ExperimentOutlined /> 液相计算表解析
       </Title>
@@ -25,7 +131,7 @@ export default function QualityPage() {
       </Paragraph>
 
       {canUpload ? (
-        <LcUploader onResult={setResult} />
+        <LcUploader onResult={onUploadResult} />
       ) : (
         <Paragraph type="secondary">没有上传液相计算表的权限</Paragraph>
       )}

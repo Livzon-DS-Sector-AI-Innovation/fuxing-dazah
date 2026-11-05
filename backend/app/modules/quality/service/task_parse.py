@@ -159,7 +159,7 @@ class _TaskParse(_TaskCore):
                 parsed = lc_template_parser.parse_with_config(file_bytes, filename, cfg.config, table_no)
                 parsed.product_name = cfg.product_name or parsed.product_name
                 record_id = await _TaskParse._persist_generic_record(db, parsed, filename, cfg.sop_no)
-                filled, appended, remaining = await _TaskParse._fill_generic_into_task(
+                filled, appended, remaining, _items = await _TaskParse._fill_generic_into_task(
                     db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,
                     any_unknown_rule=(cfg.config or {}).get("any_unknown"),
                 )
@@ -329,10 +329,11 @@ class _TaskParse(_TaskCore):
         sop_no: str | None,
         filled_by: uuid.UUID | None = None,
         any_unknown_rule: dict[str, Any] | None = None,
-    ) -> tuple[list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[dict[str, Any]]]:
         """通用解析填入任务：按项目名匹配 + 未匹配组分自动追加（限度取计算表限度列，如 RS1-7）。
 
-        返回 (filled_names, appended_names, remaining_unmatched)。
+        返回 (filled_names, appended_names, remaining_unmatched, confirm_items)；
+        confirm_items 供前端逐项确认弹窗使用（result_id/item_name/result_value/is_pass）。
         """
         candidates = [
             (c.name, c.report_value)
@@ -401,7 +402,19 @@ class _TaskParse(_TaskCore):
             if c.report_value is None and c.name
         ]
         remaining.extend(undetected)
-        return filled, appended, remaining
+        # 本次填入的行（含追加），供前端逐项确认弹窗使用
+        rows_after = await list_test_results(db, task.id)
+        items = [
+            {
+                "result_id": str(r.id),
+                "item_name": r.item_name,
+                "result_value": r.result_value,
+                "is_pass": r.is_pass,
+            }
+            for r in rows_after
+            if r.inspection_record_id == record_id and r.pending_confirm
+        ]
+        return filled, appended, remaining, items
 
     @staticmethod
     async def parse_lc_generic(
@@ -451,7 +464,7 @@ class _TaskParse(_TaskCore):
             if candidates:
                 task = max(candidates, key=lambda t: len(t.batch_number))
         if task and task.status == "in_progress":
-            filled, appended, remaining = await _TaskParse._fill_generic_into_task(
+            filled, appended, remaining, items = await _TaskParse._fill_generic_into_task(
                 db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,
                 any_unknown_rule=(cfg.config or {}).get("any_unknown"),
             )
@@ -460,6 +473,7 @@ class _TaskParse(_TaskCore):
                 "filled": filled,
                 "appended": appended,
                 "unmatched": remaining,
+                "items": items,
             }
         # 判定结论回写 InspectionRecord.all_pass（此前恒 True，超限批次也被统计为合格）：
         # 任务行判定结果 ∪ 组分自带限度判定；两者皆无判定时不改写（保留默认 True）

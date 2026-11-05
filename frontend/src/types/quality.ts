@@ -85,6 +85,7 @@ export interface UploadLcResponse {
     task_id: string
     filled: string[]
     unmatched: string[]
+    items?: { result_id: string; item_name: string; result_value: number | null; is_pass: boolean | null }[]
   } | null
   components?: {
     name: string
