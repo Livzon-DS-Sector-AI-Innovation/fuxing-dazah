@@ -68,6 +68,15 @@ _SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
         "text",
         "system",
     ),
+    # 五金库三期 M7（L1 vision）：实物照片初筛——破损/锈蚀/渗漏/受潮
+    # advisory 标记落入库行（只标记不拦截不代改，MSDS 审核模式红线）；
+    # LLM 失败/停用=无标记不阻塞入库（plan_annotation 同款降级）。
+    "hardware_photo_screening": (
+        "五金库实物照片初筛",
+        "入库实物照片 vision 初筛（破损/锈蚀/渗漏/受潮 advisory 标记，只标记不拦截）",
+        "vision",
+        "mixed",
+    ),
 }
 
 

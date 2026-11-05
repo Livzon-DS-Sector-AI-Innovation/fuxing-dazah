@@ -81,6 +81,20 @@ MOVEMENT_BUSINESS_TYPES = (
 )
 ERP_STATUSES = ("pending", "entered")
 
+# ── 三期（设计 §十一 三期）──
+# 报废条件四选一（制度 5.6）
+SCRAP_REASONS = ("expired", "damaged", "obsolete", "appraisal")
+SCRAP_STATUSES = (
+    "draft",         # 发起草稿（不动账）
+    "pending_dept",  # 已提交，待部门主管确认
+    "pending_final", # 部门主管已确认，待仓储负责人终审
+    "approved",      # 终审通过=销账（唯一动账点）
+    "rejected",      # 驳回（任一步可驳，零动账）
+    "cancelled",     # 发起人撤回
+)
+# OCR↔ERP 并存对账状态（M8：erp_import 单匹配轴，独立于 status）
+RECONCILE_STATUSES = ("none", "unmatched", "matched", "verified", "discrepancy")
+
 # 月需求 5 部门（清单列头；monthly_demands JSON 的键域）
 DEMAND_DEPARTMENTS = ("发酵", "提炼一期", "提炼二期", "精制机修", "动力机修")
 
@@ -275,6 +289,25 @@ class HardwareReceipt(BaseModel):
     accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="确认入账时间"
     )
+    reconcile_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="none", server_default="none",
+        comment="OCR↔ERP 并存对账状态（M8）：none/unmatched/matched/verified/"
+                "discrepancy（独立于 status 的匹配轴）",
+    )
+    matched_receipt_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_receipts.id"),
+        comment="对账匹配对另一端单据 id（erp↔ocr 双向互指；无匹配=NULL）",
+    )
+    auto_accepted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="M9 自动入账标记（direct 高置信；默认全 false）",
+    )
+    auto_accept_snapshot: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="自动入账触发快照 {switch_source, threshold, row_scores[],"
+                " screening_flagged, decision, evaluated_at}",
+    )
     remark: Mapped[str | None] = mapped_column(Text, comment="备注")
 
 
@@ -335,6 +368,11 @@ class HardwareReceiptItem(BaseModel):
     )
     unit_price: Mapped[Decimal | None] = mapped_column(
         Numeric(18, 4), comment="行单价（回写主数据最近单价）"
+    )
+    photo_screening: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="实物照片初筛结论 {flagged, findings[], screened_at, scenario}"
+                "（M7 advisory 只标记，不拦截不代改；NULL=未初筛）",
     )
 
 
@@ -849,4 +887,126 @@ class HardwareEnvLog(BaseModel):
     checked_by: Mapped[str | None] = mapped_column(String(100), comment="检查人")
     abnormal_note: Mapped[str | None] = mapped_column(
         String(500), comment="异常说明"
+    )
+
+
+# ── 三期表（设计 §十一 三期 M7/M8/M9）──
+
+
+class HardwareScrap(BaseModel):
+    """五金库报废单（三期 M7，制度 5.6 四条件）：发起 → 部门主管确认 →
+    仓储负责人终审 → approved 即销账（唯一动账点）；任一步驳回零动账。
+
+    审批复用 ApprovalChannel（feishu definition key 配置化，未配置自动
+    manual 两步系统内确认）；销账 FIFO/指定批次扣 remaining + scrap 流水。
+    """
+
+    __tablename__ = "hardware_scraps"
+    __table_args__ = (
+        Index(
+            "uq_hardware_scraps_no",
+            "scrap_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        CheckConstraint(
+            "scrap_reason IN ('expired', 'damaged', 'obsolete', 'appraisal')",
+            name="ck_hardware_scraps_reason",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'pending_dept', 'pending_final', 'approved',"
+            " 'rejected', 'cancelled')",
+            name="ck_hardware_scraps_status",
+        ),
+        Index("ix_hardware_scraps_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    scrap_no: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="报废单号 WJK-BF-YYMMDD-序号"
+    )
+    dept_name: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="发起部门（使用部门或仓储部）"
+    )
+    requested_by: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="发起人"
+    )
+    requested_by_open_id: Mapped[str | None] = mapped_column(
+        String(100), comment="发起人飞书 open_id"
+    )
+    scrap_reason: Mapped[str] = mapped_column(
+        String(20), nullable=False,
+        comment="报废条件（制度5.6）：expired 超有效期/damaged 破损污染变质/"
+                "obsolete 工艺淘汰/appraisal 技术鉴定失效",
+    )
+    reason_note: Mapped[str | None] = mapped_column(String(500), comment="报废原因说明")
+    attachments: Mapped[list[Any] | None] = mapped_column(
+        JSONB, comment="留证照片 file tokens"
+    )
+    approval_channel: Mapped[str | None] = mapped_column(
+        String(10), comment="审批通道：feishu / manual（两步系统内确认）"
+    )
+    approval_instance_code: Mapped[str | None] = mapped_column(
+        String(100), comment="飞书审批实例 code（feishu 通道）"
+    )
+    approval_status: Mapped[str | None] = mapped_column(
+        String(20), comment="审批结果映射：approved/rejected/cancelled"
+    )
+    dept_confirmed_by: Mapped[str | None] = mapped_column(
+        String(100), comment="①部门主管确认"
+    )
+    dept_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[str | None] = mapped_column(
+        String(100), comment="②仓储负责人终审（通过即销账）"
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejected_by: Mapped[str | None] = mapped_column(String(100), comment="驳回人")
+    rejected_reason: Mapped[str | None] = mapped_column(String(500))
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft", server_default="draft",
+        comment="draft/pending_dept/pending_final/approved/rejected/cancelled",
+    )
+    scrapped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="销账时间"
+    )
+    lot_allocations: Mapped[list[Any] | None] = mapped_column(
+        JSONB, comment="销账批次扣减结果 [{material, lot_no, mode: preferred/fifo, qty}]"
+    )
+    remark: Mapped[str | None] = mapped_column(Text)
+
+
+class HardwareScrapItem(BaseModel):
+    """报废明细行：物料+数量+可选指定批次（空=FIFO 自动扣，M7 拍板）。"""
+
+    __tablename__ = "hardware_scrap_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_hardware_scrap_items_qty"),
+        Index("ix_hardware_scrap_items_scrap", "scrap_id"),
+        Index("ix_hardware_scrap_items_material", "material_id"),
+        {"schema": "warehouse"},
+    )
+
+    scrap_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_scraps.id"),
+        nullable=False,
+    )
+    material_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_materials.id"),
+        nullable=False,
+        comment="报废必选主数据（仅 stocked 有批次可报废）",
+    )
+    quantity: Mapped[Decimal] = mapped_column(_QTY, nullable=False, comment="报废数量（>0）")
+    preferred_lot_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_receipt_items.id"),
+        comment="指定批次（可选；空=FIFO 自动扣）",
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False, comment="品名快照")
+    spec: Mapped[str | None] = mapped_column(String(200), comment="规格快照")
+    unit: Mapped[str | None] = mapped_column(String(20), comment="单位快照")
+    unit_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), comment="单价快照（报废金额核算）"
     )

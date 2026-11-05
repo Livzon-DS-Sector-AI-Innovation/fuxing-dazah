@@ -150,6 +150,16 @@ class Settings(BaseSettings):
     HARDWARE_APPROVAL_CHANNEL: str = "manual"
     HARDWARE_APPROVAL_CODE: str = ""
     HARDWARE_APPROVAL_USER_KEY: str = "user_id"
+    # 五金库报废审批通道（M7，制度 5.6 定稿后切 feishu）：feishu=对接「五金库
+    # 报废申请」定义（需配 HARDWARE_SCRAP_APPROVAL_CODE，未配置自动落 manual
+    # 两步系统内确认：部门主管确认→仓储负责人终审）。
+    HARDWARE_SCRAP_APPROVAL_CHANNEL: str = "manual"
+    HARDWARE_SCRAP_APPROVAL_CODE: str = ""
+    # 五金库 direct 类高置信自动入账（M9 observe→auto 阶段1，默认关；§9.3
+    # 红线：仅 direct 类、全部行置信≥阈值、无照片初筛异常标记才自动 accepted；
+    # stocked 类永不自动。env/runtime 双通道——runtime_configs 键优先）。
+    HARDWARE_OCR_AUTO_DIRECT_ENABLED: bool = False
+    HARDWARE_OCR_AUTO_DIRECT_MIN_CONFIDENCE: float = 0.9
     # 仓库机器人 open_id（部署身份：gateway 去重排除自身消息；未配置回退 gateway 代码常量）
     WAREHOUSE_FEISHU_BOT_OPEN_ID: str = ""
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）

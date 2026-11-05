@@ -201,6 +201,7 @@ class ReceiptItemResponse(BaseModel):
     match_confidence: str | None
     match_score: Decimal | None
     unit_price: Decimal | None
+    photo_screening: dict[str, Any] | None = None  # M7 实物照片初筛（advisory）
 
 
 class ReceiptResponse(BaseModel):
@@ -221,6 +222,11 @@ class ReceiptResponse(BaseModel):
     inspect_checklist: dict[str, Any] | None
     attachments: list[Any] | None
     accepted_at: datetime | None
+    erp_imported_at: datetime | None = None
+    reconcile_status: str = "none"  # M8 对账轴
+    matched_receipt_id: StrUUID | None = None
+    auto_accepted: bool = False  # M9 自动入账标记
+    auto_accept_snapshot: dict[str, Any] | None = None
     remark: str | None
     created_at: datetime
     items: list[ReceiptItemResponse] = []
@@ -537,3 +543,84 @@ class EnvLogResponse(BaseModel):
     humidity: Decimal | None
     checked_by: str | None
     abnormal_note: str | None
+
+
+# ── 报废（三期 M7）──
+
+
+class ScrapItemIn(BaseModel):
+    material_id: StrUUID
+    quantity: Decimal = Field(..., gt=0)
+    preferred_lot_id: StrUUID | None = Field(
+        default=None, description="指定批次（可选；空=FIFO 自动扣）"
+    )
+
+
+class ScrapCreate(BaseModel):
+    dept_name: str = Field(..., min_length=1, max_length=100)
+    requested_by: str = Field(..., min_length=1, max_length=100)
+    requested_by_open_id: str | None = Field(default=None, max_length=100)
+    scrap_reason: str = Field(
+        ..., description="报废条件（制度5.6）：expired/damaged/obsolete/appraisal"
+    )
+    reason_note: str | None = Field(default=None, max_length=500)
+    attachments: list[dict[str, Any]] | None = None
+    remark: str | None = None
+    items: list[ScrapItemIn] = Field(..., min_length=1)
+
+
+class ScrapDeptConfirm(BaseModel):
+    confirmed_by: str = Field(..., min_length=1, max_length=100)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ScrapApprove(BaseModel):
+    approved_by: str = Field(..., min_length=1, max_length=100)
+
+
+class ScrapReject(BaseModel):
+    rejected_by: str = Field(..., min_length=1, max_length=100)
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class ScrapItemResponse(BaseModel):
+    id: StrUUID
+    material_id: StrUUID
+    quantity: Decimal
+    preferred_lot_id: StrUUID | None
+    name: str
+    spec: str | None
+    unit: str | None
+    unit_price: Decimal | None
+
+
+class ScrapResponse(BaseModel):
+    id: StrUUID
+    scrap_no: str
+    dept_name: str
+    requested_by: str
+    scrap_reason: str
+    reason_note: str | None
+    attachments: list[dict[str, Any]] | None
+    approval_channel: str | None
+    approval_instance_code: str | None
+    approval_status: str | None
+    dept_confirmed_by: str | None
+    dept_confirmed_at: datetime | None
+    approved_by: str | None
+    approved_at: datetime | None
+    rejected_by: str | None
+    rejected_reason: str | None
+    status: str
+    scrapped_at: datetime | None
+    lot_allocations: list[dict[str, Any]] | None
+    remark: str | None
+    created_at: datetime
+    items: list[ScrapItemResponse] = Field(default_factory=list)
+
+
+class PhotoScreeningBody(BaseModel):
+    """实物照片初筛请求（Web 工作台/agent 两入口同构）。"""
+
+    photos: list[dict[str, Any]] = Field(..., min_length=1)
+    operator: str | None = Field(default=None, max_length=100)

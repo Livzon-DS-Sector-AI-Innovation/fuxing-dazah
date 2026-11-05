@@ -156,6 +156,18 @@ export interface HardwareReceiptItemRecord {
   match_confidence?: string | null
   match_score?: number | null
   unit_price?: number | null
+  photo_screening?: HardwarePhotoScreening | null
+}
+
+/** M7 实物照片初筛结论（advisory 只标记不拦截） */
+export interface HardwarePhotoScreening {
+  flagged: boolean
+  findings: Array<{ type: string; severity: 'low' | 'mid' | 'high'; note: string }>
+  overall?: string | null
+  screened_at: string
+  screened_by?: string
+  scenario: string
+  photos?: Array<string | null>
 }
 
 export interface HardwareReceiptRecord {
@@ -172,7 +184,14 @@ export interface HardwareReceiptRecord {
   inspected_by_dept: string | null
   rejected_reason: string | null
   erp_doc_no: string | null
+  erp_imported_at?: string | null
   accepted_at: string | null
+  /** M8 对账轴：none/unmatched/matched/verified/discrepancy */
+  reconcile_status?: string
+  matched_receipt_id?: string | null
+  /** M9 自动入账标记（direct 高置信） */
+  auto_accepted?: boolean
+  auto_accept_snapshot?: Record<string, unknown> | null
   remark?: string | null
   created_at: string
   items: HardwareReceiptItemRecord[]
@@ -455,4 +474,121 @@ export interface HardwareEnvLogRecord {
   humidity: number | null
   checked_by: string | null
   abnormal_note: string | null
+}
+
+
+// ── 报废（三期 M7）──
+
+export type HardwareScrapReason = 'expired' | 'damaged' | 'obsolete' | 'appraisal'
+export type HardwareScrapStatus =
+  | 'draft'
+  | 'pending_dept'
+  | 'pending_final'
+  | 'approved'
+  | 'rejected'
+  | 'cancelled'
+
+export const HARDWARE_SCRAP_REASON_LABEL: Record<HardwareScrapReason, string> = {
+  expired: '超有效期',
+  damaged: '破损污染变质',
+  obsolete: '工艺淘汰',
+  appraisal: '技术鉴定失效',
+}
+
+export const HARDWARE_SCRAP_STATUS_LABEL: Record<HardwareScrapStatus, string> = {
+  draft: '草稿',
+  pending_dept: '待部门主管确认',
+  pending_final: '待仓储负责人终审',
+  approved: '已销账',
+  rejected: '已驳回',
+  cancelled: '已撤回',
+}
+
+export interface HardwareScrapItemRecord {
+  id: string
+  material_id: string
+  quantity: number
+  preferred_lot_id: string | null
+  name: string
+  spec: string | null
+  unit: string | null
+  unit_price: number | null
+}
+
+export interface HardwareScrapRecord {
+  id: string
+  scrap_no: string
+  dept_name: string
+  requested_by: string
+  scrap_reason: HardwareScrapReason
+  reason_note: string | null
+  attachments: Array<Record<string, unknown>> | null
+  approval_channel: string | null
+  approval_status: string | null
+  dept_confirmed_by: string | null
+  dept_confirmed_at: string | null
+  approved_by: string | null
+  approved_at: string | null
+  rejected_by: string | null
+  rejected_reason: string | null
+  status: HardwareScrapStatus
+  scrapped_at: string | null
+  lot_allocations: Array<Record<string, unknown>> | null
+  remark: string | null
+  created_at: string
+  items?: HardwareScrapItemRecord[]
+}
+
+export interface HardwareScrapCreateInput {
+  dept_name: string
+  requested_by: string
+  scrap_reason: HardwareScrapReason
+  reason_note?: string
+  remark?: string
+  items: Array<{ material_id: string; quantity: number; preferred_lot_id?: string }>
+}
+
+// ── ERP 导入与对账（三期 M8）──
+
+export interface HardwareErpImportResult {
+  created: number
+  skipped: number
+  auto_accepted?: number
+  reconcile?: { matched: number; unmatched: number }
+  receipts: Array<{
+    receipt_id: string
+    receipt_no: string
+    erp_doc_no: string
+    mode: HardwareManagedClass
+    rows: number
+    matched_stocked: number
+    matched_direct: number
+    unmatched: number
+    reconcile_status?: string
+    auto_accepted?: boolean
+  }>
+}
+
+export interface HardwareReconcileDiffs {
+  erp_only: HardwareReconcileHead[]
+  ocr_only: HardwareReconcileHead[]
+}
+
+export interface HardwareReconcileHead {
+  receipt_id: string
+  receipt_no: string
+  erp_doc_no: string | null
+  supplier_name: string | null
+  arrived_at: string | null
+  status: HardwareReceiptStatus
+  mode: HardwareManagedClass
+  reconcile_status: string
+}
+
+export const HARDWARE_RECONCILE_STATUS_LABEL: Record<string, string> = {
+  none: '未核对',
+  unmatched: '未匹配',
+  matched: '已匹配',
+  verified: '核对通过',
+  discrepancy: '差异',
 }

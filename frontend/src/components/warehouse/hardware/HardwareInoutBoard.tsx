@@ -23,7 +23,7 @@ import {
   Upload,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { CameraOutlined, CheckOutlined, CloseOutlined, SearchOutlined } from '@ant-design/icons'
+import { CameraOutlined, CheckOutlined, CloseOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   acceptHardwareReceiptClient,
@@ -37,6 +37,8 @@ import {
   issueHardwareRequisitionClient,
   markHardwareMovementsEnteredClient,
   rejectHardwareReceiptClient,
+  importHardwareErpFile,
+  photoScreenHardwareReceiptClient,
 } from '@/lib/api/warehouse-hardware'
 import {
   HARDWARE_MOVEMENT_BIZ_LABEL,
@@ -244,6 +246,27 @@ function InboundPanel() {
                   </Button>
                 </Upload>
                 <Button onClick={() => setManualOpen(true)}>手动登记</Button>
+                <Upload
+                  accept=".xlsx,.csv"
+                  showUploadList={false}
+                  beforeUpload={async (file) => {
+                    try {
+                      const result = await importHardwareErpFile(file)
+                      message.success(
+                        `ERP 导入完成：新增 ${result.created} 单 / 去重跳过 ${result.skipped} 单`
+                        + (result.auto_accepted ? ` / 自动入账 ${result.auto_accepted} 单` : '')
+                        + `（对账匹配 ${result.reconcile?.matched ?? 0}）——请到列表核对确认`,
+                      )
+                      setStatusFilter('draft')
+                      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
+                    } catch (e) {
+                      message.error(e instanceof Error ? e.message : 'ERP 导入失败')
+                    }
+                    return false
+                  }}
+                >
+                  <Button icon={<UploadOutlined />}>ERP 导入</Button>
+                </Upload>
               </>
             )}
           </>
@@ -402,6 +425,7 @@ function ReceiptConfirmModal({
   const [form] = Form.useForm()
   const [rows, setRows] = useState<HardwareReceiptRecord['items']>([])
   const [submitting, setSubmitting] = useState(false)
+  const [screeningBusy, setScreeningBusy] = useState(false)
 
   useEffect(() => {
     if (receipt) {
@@ -424,6 +448,41 @@ function ReceiptConfirmModal({
     (r) => r.match_score != null && Number(r.match_score) < 75 && r.material_id,
   )
   const hasUnmatched = rows.some((r) => !r.material_id && receipt.mode === 'stocked')
+
+  // M7 实物照片初筛：上传→vision 标记落行（advisory 只标记，不拦截确认）
+  const runScreening = async (file: File) => {
+    setScreeningBusy(true)
+    try {
+      const image_b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+        reader.onerror = () => reject(new Error('图片读取失败'))
+        reader.readAsDataURL(file)
+      })
+      const summary = await photoScreenHardwareReceiptClient(
+        receipt.id,
+        [{ image_b64, content_type: file.type || 'image/jpeg' }],
+      )
+      if (summary.screened) {
+        message.success(`初筛完成：${summary.flagged_rows} 行存在异常标记（仅供参考，不拦截确认）`)
+      } else {
+        message.info(
+          summary.reason === 'scenario_disabled'
+            ? '初筛场景已停用（不影响入库）'
+            : '初筛未产出结论（LLM 失败不阻塞，可直接确认）',
+        )
+      }
+      const fresh = await fetchHardwareReceiptsClient({
+        keyword: receipt.receipt_no, status: 'draft', pageSize: 5,
+      })
+      const hit = fresh.items.find((x) => x.id === receipt.id)
+      if (hit) setRows(hit.items.map((i) => ({ ...i })))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '初筛失败（不影响入库）')
+    } finally {
+      setScreeningBusy(false)
+    }
+  }
 
   const onSubmit = async () => {
     const values = await form.validateFields()
@@ -486,6 +545,21 @@ function ReceiptConfirmModal({
           <Input placeholder="姓名或 open_id" />
         </Form.Item>
       </Form>
+      <div className="mb-3 flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
+        <Upload
+          accept="image/jpeg,image/png"
+          showUploadList={false}
+          beforeUpload={(file) => {
+            void runScreening(file)
+            return false
+          }}
+        >
+          <Button size="small" icon={<CameraOutlined />} loading={screeningBusy}>
+            实物照片初筛
+          </Button>
+        </Upload>
+        <span>破损/锈蚀/渗漏/受潮 AI 辅助标记——只标记不拦截不代改，处置由仓管员决定。</span>
+      </div>
       <Table
         size="small"
         rowKey="id"
@@ -495,7 +569,16 @@ function ReceiptConfirmModal({
           {
             title: '品名（OCR）',
             width: 160,
-            render: (_: unknown, r) => r.name,
+            render: (_: unknown, r) => (
+              <Space direction="vertical" size={0}>
+                <span>{r.name}</span>
+                {r.photo_screening?.flagged && (
+                  <Tag color="red">
+                    ⚠ {r.photo_screening.findings.map((f) => `${f.type}(${f.severity})`).join('、')}
+                  </Tag>
+                )}
+              </Space>
+            ),
           },
           { title: '规格', dataIndex: 'spec', width: 110, render: (v) => v || '-' },
           { title: '数量', dataIndex: 'quantity', width: 80, align: 'right' },

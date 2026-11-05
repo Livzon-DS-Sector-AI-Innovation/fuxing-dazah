@@ -27,6 +27,10 @@ import type {
   HardwarePlanRecord,
   HardwarePlanItemRecord,
   HardwareEnvLogRecord,
+  HardwareScrapRecord,
+  HardwareScrapCreateInput,
+  HardwareErpImportResult,
+  HardwareReconcileDiffs,
 } from '@/types/warehouse-hardware'
 
 const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -430,4 +434,122 @@ export function hardwareMovementsExportUrl(params: {
   if (params.erp_status) sp.set('erp_status', params.erp_status)
   const qs = sp.toString()
   return `${CLIENT_API}${BASE}/movements/export${qs ? `?${qs}` : ''}`
+}
+
+// ── 报废（三期 M7）──
+
+export async function fetchHardwareScrapsClient(
+  params: { status?: string; scrap_reason?: string; page?: number; pageSize?: number } = {},
+): Promise<PaginatedCompat<HardwareScrapRecord>> {
+  const sp = new URLSearchParams()
+  if (params.status) sp.set('status', params.status)
+  if (params.scrap_reason) sp.set('scrap_reason', params.scrap_reason)
+  sp.set('page', String(params.page ?? 1))
+  sp.set('page_size', String(params.pageSize ?? 20))
+  return apiFetchPaginated<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps?${sp.toString()}`)
+}
+
+export async function fetchHardwareScrapClient(id: string): Promise<HardwareScrapRecord> {
+  return apiGet<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}`)
+}
+
+export async function createHardwareScrapClient(
+  payload: HardwareScrapCreateInput,
+): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps`, payload)
+}
+
+export async function submitHardwareScrapClient(id: string): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/submit`, {})
+}
+
+export async function deptConfirmHardwareScrapClient(
+  id: string,
+  confirmedBy: string,
+  note?: string,
+): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/dept-confirm`, {
+    confirmed_by: confirmedBy,
+    note,
+  })
+}
+
+export async function approveHardwareScrapClient(
+  id: string,
+  approvedBy: string,
+): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/approve`, {
+    approved_by: approvedBy,
+  })
+}
+
+export async function rejectHardwareScrapClient(
+  id: string,
+  rejectedBy: string,
+  reason: string,
+): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/reject`, {
+    rejected_by: rejectedBy,
+    reason,
+  })
+}
+
+export async function cancelHardwareScrapClient(id: string): Promise<HardwareScrapRecord> {
+  return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/cancel`, {})
+}
+
+// ── 实物照片初筛（三期 M7，advisory 只标记）──
+
+export async function photoScreenHardwareReceiptClient(
+  receiptId: string,
+  photos: Array<{ file_token?: string; image_b64: string; content_type?: string }>,
+  operator?: string,
+): Promise<{ screened: boolean; reason?: string; flagged_rows: number; rows: unknown[] }> {
+  return apiPost(`${CLIENT_API}${BASE}/receipts/${receiptId}/photo-screening`, {
+    photos,
+    operator,
+  })
+}
+
+// ── ERP 导入与并存对账（三期 M8）──
+
+export async function importHardwareErpFile(file: File): Promise<HardwareErpImportResult> {
+  const form = new FormData()
+  form.append('file', file)
+  const base = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+  const resp = await fetch(`${base}${BASE}/erp/import`, {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+  })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new Error(body?.message || body?.detail || `ERP 导入失败 (${resp.status})`)
+  }
+  const json = await resp.json()
+  return (json as { data?: HardwareErpImportResult })?.data ?? (json as HardwareErpImportResult)
+}
+
+export async function fetchHardwareErpReceiptsClient(
+  params: { reconcile_status?: string; page?: number; pageSize?: number } = {},
+): Promise<PaginatedCompat<HardwareReceiptRecord>> {
+  const sp = new URLSearchParams()
+  if (params.reconcile_status) sp.set('reconcile_status', params.reconcile_status)
+  sp.set('page', String(params.page ?? 1))
+  sp.set('page_size', String(params.pageSize ?? 20))
+  return apiFetchPaginated<HardwareReceiptRecord>(
+    `${CLIENT_API}${BASE}/erp/receipts?${sp.toString()}`,
+  )
+}
+
+export async function fetchHardwareReconcileDiffsClient(
+  days = 30,
+): Promise<HardwareReconcileDiffs> {
+  return apiGet<HardwareReconcileDiffs>(`${CLIENT_API}${BASE}/erp/reconcile-diffs?days=${days}`)
+}
+
+export async function reconcileHardwareReceiptClient(
+  receiptId: string,
+): Promise<{ receipt_id: string; reconcile_status: string }> {
+  return apiPost(`${CLIENT_API}${BASE}/receipts/${receiptId}/reconcile`, {})
 }

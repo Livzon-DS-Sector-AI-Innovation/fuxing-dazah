@@ -27,7 +27,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.modules.warehouse.hardware.models import HardwareMaterial, HardwareRequisition
+from app.modules.warehouse.hardware.models import (
+    HardwareMaterial,
+    HardwareRequisition,
+    HardwareScrap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +201,105 @@ def feishu_channel_configured() -> bool:
         str(getattr(settings, "HARDWARE_APPROVAL_CHANNEL", "") or "").lower() == "feishu"
         and str(getattr(settings, "HARDWARE_APPROVAL_CODE", "") or "").strip()
     )
+
+
+# ── 报废审批（三期 M7：复用双通道抽象，新 definition key 配置化；不改领料语义）──
+
+
+class _ScrapManualApprovalChannel(ManualApprovalChannel):
+    """报废 manual 通道：两步系统内确认的载体标记（dept_confirm→final_approve
+    由人操作直写状态机，submit 只登记通道）。"""
+
+    name = "manual"
+
+    async def submit_scrap(
+        self, db: AsyncSession, scrap: HardwareScrap, items: list[dict[str, Any]]
+    ) -> str:
+        scrap.approval_channel = "manual"
+        scrap.approval_status = "pending"
+        await db.flush()
+        return f"manual:{scrap.scrap_no}"
+
+
+class _ScrapFeishuApprovalChannel(FeishuApprovalChannel):
+    """报废 feishu 通道：definition key 独立配置（HARDWARE_SCRAP_APPROVAL_CODE），
+    表单照领料同构（部门/发起人/原因/明细汇总/单号回溯键）。制度定稿业务部门
+    建好定义后只改配置切换，代码零改动。"""
+
+    name = "feishu"
+
+    def __init__(self, approval_code: str) -> None:
+        super().__init__(approval_code)
+
+    async def submit_scrap(
+        self, db: AsyncSession, scrap: HardwareScrap, items: list[dict[str, Any]]
+    ) -> str:
+        from app.platform.integrations.feishu.approval import (
+            ApprovalAPIError,
+            create_instance,
+        )
+
+        app_id, app_secret = self._credentials()
+        if not app_id or not app_secret:
+            raise ApprovalChannelError("safety 应用审批凭证未配置（SAFETY_FEISHU_APP_ID/SECRET）")
+
+        from app.modules.warehouse.hardware.scrap import SCRAP_REASON_LABELS
+
+        form = [
+            {"id": "widget1", "type": "input", "value": scrap.dept_name},  # 发起部门
+            {"id": "widget2", "type": "input", "value": scrap.requested_by},  # 发起人
+            {
+                "id": "widget3",
+                "type": "textarea",
+                "value": (
+                    f"{SCRAP_REASON_LABELS.get(scrap.scrap_reason, scrap.scrap_reason)}"
+                    f"：{scrap.reason_note or '-'}"
+                ),
+            },  # 报废条件+说明
+            # 物料明细（多行控件以 markdown 汇总；定义建好后按实际控件 id 调整）
+            {
+                "id": "widget4",
+                "type": "textarea",
+                "value": "\n".join(
+                    f"{it['material_name']} {it.get('spec') or ''} × {it['quantity']}"
+                    f" {it.get('unit') or ''}"
+                    for it in items
+                ),
+            },
+            {"id": "widget5", "type": "input", "value": scrap.scrap_no},  # 单号回溯键
+        ]
+        # uuid 幂等：scrap.id 派生（重试不重单）
+        idempotency = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"hardware-scrap:{scrap.id}"))
+        try:
+            instance_code = await create_instance(
+                self.approval_code,
+                scrap.requested_by_open_id or "",
+                form,
+                app_id=app_id,
+                app_secret=app_secret,
+                uuid_idempotency=idempotency,
+            )
+        except ApprovalAPIError as exc:
+            raise ApprovalChannelError(f"飞书报废审批实例创建失败: {exc}") from exc
+        scrap.approval_channel = "feishu"
+        scrap.approval_instance_code = instance_code
+        scrap.approval_status = "pending"
+        await db.flush()
+        return instance_code
+
+
+def get_scrap_approval_channel() -> _ScrapManualApprovalChannel | _ScrapFeishuApprovalChannel:
+    """报废审批通道工厂：HARDWARE_SCRAP_APPROVAL_CHANNEL=feishu 且
+    HARDWARE_SCRAP_APPROVAL_CODE 已配置 → feishu；否则 manual 两步
+    （业务部门建好定义+配置 code 后自动切换）。"""
+    settings = get_settings()
+    channel = str(
+        getattr(settings, "HARDWARE_SCRAP_APPROVAL_CHANNEL", "manual") or "manual"
+    ).lower()
+    code = str(getattr(settings, "HARDWARE_SCRAP_APPROVAL_CODE", "") or "").strip()
+    if channel == "feishu" and code:
+        return _ScrapFeishuApprovalChannel(code)
+    return _ScrapManualApprovalChannel()
 
 
 # ── 提交编排（API 层 submit 后调用；通道失败自动落 manual 兜底）──

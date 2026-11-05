@@ -33,6 +33,7 @@ from app.modules.warehouse.hardware.schemas import (
     PlanItemResponse,
     PlanItemUpdate,
     PlanResponse,
+    PhotoScreeningBody,
     ReceiptAccept,
     ReceiptCreate,
     ReceiptReject,
@@ -47,6 +48,11 @@ from app.modules.warehouse.hardware.schemas import (
     ReturnReject,
     ReturnResponse,
     ReturnSign,
+    ScrapApprove,
+    ScrapCreate,
+    ScrapDeptConfirm,
+    ScrapReject,
+    ScrapResponse,
     StockRowResponse,
     StocktakeConfirm,
     StocktakeCreate,
@@ -56,6 +62,7 @@ from app.modules.warehouse.hardware.schemas import (
     StocktakeReview,
 )
 from app.modules.warehouse.hardware import planning as planning_service
+from app.modules.warehouse.hardware import scrap as scrap_service
 from app.modules.warehouse.hardware import stocktake as stocktake_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
@@ -1098,3 +1105,230 @@ async def export_movements(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
+
+
+# ── 报废（三期 M7）──
+
+
+def _scrap_response(s: Any, *, items: list[Any] | None = None) -> dict[str, Any]:
+    data = ScrapResponse.model_validate(s).model_dump(mode="json")
+    if items is not None:
+        data["items"] = [
+            ScrapItemResponse.model_validate(i).model_dump(mode="json") for i in items
+        ]
+    return data
+
+
+@router.get("/scraps", summary="报废单分页列表")
+async def list_scraps(
+    status: str | None = Query(default=None),
+    scrap_reason: str | None = Query(default=None),
+    dept_name: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:read")),
+) -> JSONResponse:
+    items, total = await scrap_service.list_scraps(
+        db, status=status, scrap_reason=scrap_reason, dept_name=dept_name,
+        page=page, page_size=page_size,
+    )
+    return paginated_response(
+        [_scrap_response(s) for s in items], total=total, page=page, page_size=page_size
+    )
+
+
+@router.post("/scraps", status_code=201, summary="发起报废（四条件单选+留证照片+明细行）")
+async def create_scrap(
+    payload: ScrapCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.create_scrap(
+        db,
+        dept_name=payload.dept_name,
+        requested_by=payload.requested_by,
+        requested_by_open_id=payload.requested_by_open_id,
+        scrap_reason=payload.scrap_reason,
+        reason_note=payload.reason_note,
+        items=[i.model_dump() for i in payload.items],
+        attachments=payload.attachments,
+        remark=payload.remark,
+        user=user,
+    )
+    items = await scrap_service.list_scrap_items(db, scrap.id)
+    return success_response(_scrap_response(scrap, items=items), status_code=201)
+
+
+@router.get("/scraps/{scrap_id}", summary="报废单详情（含明细行）")
+async def get_scrap(
+    scrap_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:read")),
+) -> JSONResponse:
+    scrap = await scrap_service.get_scrap(db, scrap_id)
+    items = await scrap_service.list_scrap_items(db, scrap_id)
+    return success_response(_scrap_response(scrap, items=items))
+
+
+@router.post("/scraps/{scrap_id}/submit", summary="提交报废审批（未配置 feishu=manual 两步）")
+async def submit_scrap(
+    scrap_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.submit_scrap(db, scrap_id, user=user)
+    return success_response(_scrap_response(scrap))
+
+
+@router.post("/scraps/{scrap_id}/dept-confirm", summary="①部门主管确认（manual 第一步）")
+async def dept_confirm_scrap(
+    scrap_id: UUID,
+    payload: ScrapDeptConfirm,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.dept_confirm_scrap(
+        db, scrap_id, confirmed_by=payload.confirmed_by, note=payload.note
+    )
+    return success_response(_scrap_response(scrap))
+
+
+@router.post("/scraps/{scrap_id}/approve", summary="②仓储负责人终审（通过即销账，唯一动账点）")
+async def final_approve_scrap(
+    scrap_id: UUID,
+    payload: ScrapApprove,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.final_approve_scrap(
+        db, scrap_id, approved_by=payload.approved_by, user=user
+    )
+    return success_response(_scrap_response(scrap))
+
+
+@router.post("/scraps/{scrap_id}/reject", summary="驳回报废（任一步可驳，零动账）")
+async def reject_scrap(
+    scrap_id: UUID,
+    payload: ScrapReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.reject_scrap(
+        db, scrap_id, rejected_by=payload.rejected_by, reason=payload.reason
+    )
+    return success_response(_scrap_response(scrap))
+
+
+@router.post("/scraps/{scrap_id}/cancel", summary="撤回报废（approved 前可撤，零动账）")
+async def cancel_scrap(
+    scrap_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:scrap:manage")),
+) -> JSONResponse:
+    scrap = await scrap_service.cancel_scrap(db, scrap_id)
+    return success_response(_scrap_response(scrap))
+
+
+# ── 实物照片初筛（三期 M7，advisory 只标记）──
+
+
+@router.post(
+    "/receipts/{receipt_id}/photo-screening",
+    summary="实物照片初筛（破损/锈蚀/渗漏/受潮 advisory 标记，只标记不拦截）",
+)
+async def photo_screening(
+    receipt_id: UUID,
+    payload: PhotoScreeningBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:inbound:confirm")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import photo_screening as screening_service
+
+    summary = await screening_service.screen_receipt_photos(
+        db, receipt_id,
+        photos=payload.photos,
+        operator=user.display_name if hasattr(user, "display_name") else payload.operator,
+    )
+    return success_response(summary)
+
+
+# ── ERP 导入与并存对账（三期 M8）──
+
+
+@router.post("/erp/import", status_code=201, summary="ERP 导出文件上传导入（A 档，erp_doc_no 幂等）")
+async def import_erp_file(
+    file: UploadFile = File(..., description="ERP 入库导出文件（xlsx/csv）"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:erp:import")),
+) -> JSONResponse:
+    import os
+    import tempfile
+
+    from app.modules.warehouse.hardware.erp_import import import_erp_file as do_import
+
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    if suffix not in (".xlsx", ".xlsm", ".csv"):
+        raise HTTPException(status_code=422, detail="仅支持 xlsx/csv 文件")
+    content = await file.read()
+    operator = user.display_name if hasattr(user, "display_name") else None
+    try:
+        result = await do_import(
+            db, data=content, filename=file.filename or "erp.xlsx", operator=operator
+        )
+    except service.HardwareError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    logger.info("ERP 文件导入: %s 单=%d skip=%d（by %s）", file.filename, result["created"], result["skipped"], user.id)
+    return success_response(result, status_code=201)
+
+
+@router.get("/erp/receipts", summary="erp_import 单列表（匹配状态筛选）")
+async def list_erp_receipts(
+    reconcile_status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:erp:read")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import erp_reconcile
+
+    items, total = await erp_reconcile.list_erp_receipts(
+        db, reconcile_status=reconcile_status, page=page, page_size=page_size
+    )
+    data = [
+        ReceiptResponse.model_validate(
+            await _receipt_with_items(db, r)
+        ).model_dump(mode="json")
+        for r in items
+    ]
+    return paginated_response(data, page, page_size, total)
+
+
+@router.get("/erp/reconcile-diffs", summary="OCR↔ERP 差异清单（两栏：erp有ocr无/ocr有erp无）")
+async def list_reconcile_diffs(
+    days: int = Query(default=30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:erp:read")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import erp_reconcile
+
+    diffs = await erp_reconcile.list_reconcile_diffs(db, days=days)
+    return success_response(diffs)
+
+
+@router.post(
+    "/receipts/{receipt_id}/reconcile",
+    summary="手动触发对账匹配（单号重试；幂等）",
+)
+async def reconcile_receipt(
+    receipt_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:erp:read")),
+) -> JSONResponse:
+    from app.modules.warehouse.hardware import erp_reconcile
+
+    receipt = await service.get_receipt(db, receipt_id)
+    status = await erp_reconcile.match_erp_receipt(db, receipt)
+    return success_response({"receipt_id": str(receipt.id), "reconcile_status": status})
