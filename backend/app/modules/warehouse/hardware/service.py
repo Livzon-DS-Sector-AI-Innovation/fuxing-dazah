@@ -73,15 +73,22 @@ class HardwareError(HTTPException):
 # ── 单号：WJK-XX-YYMMDD-NNN 计数式 ──
 
 
-async def generate_doc_no(db: AsyncSession, model: type, prefix: str) -> str:
-    """按当日同前缀计数生成连续单号（仿 safety _gen_hazard_no 模式）。"""
-    column = (
-        model.receipt_no
-        if model is HardwareReceipt
-        else model.req_no
-        if model is HardwareRequisition
-        else model.movement_no
-    )
+async def generate_doc_no(
+    db: AsyncSession, model: type, prefix: str, *, column: Any = None
+) -> str:
+    """按当日同前缀计数生成连续单号（仿 safety _gen_hazard_no 模式）。
+
+    column 缺省按模型三分支（一期三表）；二期表显式传列（如
+    HardwareStocktake.take_no / HardwareReturn.return_no）。
+    """
+    if column is None:
+        column = (
+            model.receipt_no
+            if model is HardwareReceipt
+            else model.req_no
+            if model is HardwareRequisition
+            else model.movement_no
+        )
     head = f"{prefix}-{_now().strftime('%y%m%d')}-"
     count = await db.scalar(
         select(func.count()).select_from(model).where(column.like(f"{head}%"))

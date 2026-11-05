@@ -277,6 +277,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "hardware", label: "五金库", path: "/warehouse/hardware", group: "五金库" },
       { key: "hardware-inout", label: "五金出入库", path: "/warehouse/hardware/inout", group: "五金库" },
       { key: "hardware-requisitions", label: "五金领用", path: "/warehouse/hardware/requisitions", group: "五金库" },
+      { key: "hardware-stocktake", label: "五金盘点", path: "/warehouse/hardware/stocktake", group: "五金库" },
       { key: "system", label: "系统配置", path: "/warehouse/system", permissions: ["warehouse:system-config:read"], group: "系统" },
     ],
   },

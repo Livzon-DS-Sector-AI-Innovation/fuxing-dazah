@@ -333,4 +333,28 @@ PERMISSIONS: list[PermissionDef] = [
         action="read",
         description="五金库出入库流水/ERP 对账清单/部门直发明细",
     ),
+    PermissionDef(
+        code="warehouse:hardware:stocktake:read",
+        name="查看五金库盘点",
+        module="warehouse",
+        resource="hardware",
+        action="read",
+        description="五金库盘点单/差异表查看与导出（财务监盘）",
+    ),
+    PermissionDef(
+        code="warehouse:hardware:stocktake:manage",
+        name="五金库盘点管理",
+        module="warehouse",
+        resource="hardware",
+        action="manage",
+        description="盘点单生成/实盘直填/差异复核/确认入账（Web 确认门）",
+    ),
+    PermissionDef(
+        code="warehouse:hardware:return:manage",
+        name="五金库退库管理",
+        module="warehouse",
+        resource="hardware",
+        action="manage",
+        description="退库单登记/负责人签收/仓管员验收批次回加/不合格拒退",
+    ),
 ]

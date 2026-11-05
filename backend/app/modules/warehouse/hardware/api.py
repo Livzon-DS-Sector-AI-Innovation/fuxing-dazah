@@ -36,8 +36,20 @@ from app.modules.warehouse.hardware.schemas import (
     RequisitionIssue,
     RequisitionReject,
     RequisitionResponse,
+    ReturnAcceptBody,
+    ReturnCreate,
+    ReturnReject,
+    ReturnResponse,
+    ReturnSign,
     StockRowResponse,
+    StocktakeConfirm,
+    StocktakeCreate,
+    StocktakeItemFill,
+    StocktakeItemResponse,
+    StocktakeResponse,
+    StocktakeReview,
 )
+from app.modules.warehouse.hardware import stocktake as stocktake_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
@@ -703,3 +715,223 @@ async def mark_movements_entered(
         erp_operator=payload.erp_operator, user=user,
     )
     return success_response({"marked": count})
+
+
+# ── 盘点（二期 M4：闭环=生成→实盘直填→差异表→人确认→ADJ 入账）──
+
+
+def _stocktake_response(t: Any) -> dict[str, Any]:
+    return StocktakeResponse.model_validate(t).model_dump(mode="json")
+
+
+@router.get("/stocktakes", summary="盘点单分页列表")
+async def list_stocktakes(
+    status: str | None = Query(default=None),
+    take_type: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:read")),
+) -> JSONResponse:
+    items, total = await stocktake_service.list_stocktakes(
+        db, status=status, take_type=take_type, page=page, page_size=page_size
+    )
+    return paginated_response(
+        [_stocktake_response(t) for t in items], total=total, page=page, page_size=page_size
+    )
+
+
+@router.post("/stocktakes", status_code=201, summary="生成盘点单（book 快照自当前批次余额）")
+async def create_stocktake(
+    payload: StocktakeCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:manage")),
+) -> JSONResponse:
+    creator = getattr(user, "display_name", None) or str(user.id)
+    take = await stocktake_service.create_stocktake(
+        db, take_type=payload.take_type, creator=creator, note=payload.note, user=user
+    )
+    return success_response(_stocktake_response(take))
+
+
+@router.get("/stocktakes/{stocktake_id}", summary="盘点单详情（含明细行）")
+async def get_stocktake(
+    stocktake_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:read")),
+) -> JSONResponse:
+    take = await stocktake_service.get_stocktake(db, stocktake_id)
+    items = await stocktake_service.list_stocktake_items(db, stocktake_id)
+    return success_response({
+        **_stocktake_response(take),
+        "items": [
+            StocktakeItemResponse.model_validate(i).model_dump(mode="json") for i in items
+        ],
+    })
+
+
+@router.put(
+    "/stocktakes/{stocktake_id}/items/{item_id}",
+    summary="实盘直填（手机；填数即算差异）",
+)
+async def fill_stocktake_item(
+    stocktake_id: UUID,
+    item_id: UUID,
+    payload: StocktakeItemFill,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:manage")),
+) -> JSONResponse:
+    item = await stocktake_service.fill_stocktake_item(
+        db, stocktake_id, item_id,
+        actual_qty=payload.actual_qty, explanation=payload.explanation,
+    )
+    return success_response(StocktakeItemResponse.model_validate(item).model_dump(mode="json"))
+
+
+@router.get("/stocktakes/{stocktake_id}/export", summary="差异表导出 Excel（报财务）")
+async def export_stocktake(
+    stocktake_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:read")),
+):
+    from datetime import datetime as _dt
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    xlsx = await stocktake_service.export_stocktake_excel(db, stocktake_id)
+    take = await stocktake_service.get_stocktake(db, stocktake_id)
+    filename = f"五金库盘点差异表_{take.take_no}_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.post("/stocktakes/{stocktake_id}/review", summary="差异复核（全行盘完才可）")
+async def review_stocktake(
+    stocktake_id: UUID,
+    payload: StocktakeReview,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:manage")),
+) -> JSONResponse:
+    take = await stocktake_service.review_stocktake(
+        db, stocktake_id, explained_by=payload.explained_by, note=payload.note
+    )
+    return success_response(_stocktake_response(take))
+
+
+@router.post(
+    "/stocktakes/{stocktake_id}/confirm",
+    summary="确认入账（Web 确认门：人确认才 ADJ 入账）",
+)
+async def confirm_stocktake(
+    stocktake_id: UUID,
+    payload: StocktakeConfirm,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:manage")),
+) -> JSONResponse:
+    take = await stocktake_service.confirm_stocktake(
+        db, stocktake_id, confirmed_by=payload.confirmed_by
+    )
+    return success_response(_stocktake_response(take))
+
+
+@router.post("/stocktakes/{stocktake_id}/cancel", summary="作废盘点单（确认前）")
+async def cancel_stocktake(
+    stocktake_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:stocktake:manage")),
+) -> JSONResponse:
+    take = await stocktake_service.cancel_stocktake(db, stocktake_id)
+    return success_response(_stocktake_response(take))
+
+
+# ── 退库（二期 M4：负责人签→仓管员验收→批次回加）──
+
+
+def _return_response(r: Any) -> dict[str, Any]:
+    return ReturnResponse.model_validate(r).model_dump(mode="json")
+
+
+@router.get("/returns", summary="退库单分页列表")
+async def list_returns(
+    status: str | None = Query(default=None),
+    dept_name: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    items, total = await stocktake_service.list_returns(
+        db, status=status, dept_name=dept_name, page=page, page_size=page_size
+    )
+    return paginated_response(
+        [_return_response(r) for r in items], total=total, page=page, page_size=page_size
+    )
+
+
+@router.post("/returns", status_code=201, summary="登记退库单（草稿，仅 stocked）")
+async def create_return(
+    payload: ReturnCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    ret = await stocktake_service.create_return(
+        db,
+        dept_name=payload.dept_name,
+        returned_by=payload.returned_by,
+        returned_by_open_id=payload.returned_by_open_id,
+        items=[i.model_dump() for i in payload.items],
+        remark=payload.remark,
+    )
+    return success_response(_return_response(ret))
+
+
+@router.get("/returns/{return_id}", summary="退库单详情")
+async def get_return(
+    return_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    ret = await stocktake_service.get_return(db, return_id)
+    return success_response(_return_response(ret))
+
+
+@router.post("/returns/{return_id}/sign", summary="部门负责人签收")
+async def sign_return(
+    return_id: UUID,
+    payload: ReturnSign,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    ret = await stocktake_service.sign_return(db, return_id, leader=payload.leader)
+    return success_response(_return_response(ret))
+
+
+@router.post(
+    "/returns/{return_id}/accept",
+    summary="仓管员验收（批次回加：原 lot 优先，无则新建 return 批次）",
+)
+async def accept_return(
+    return_id: UUID,
+    payload: ReturnAcceptBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    ret = await stocktake_service.accept_return(
+        db, return_id, accepted_by=payload.accepted_by
+    )
+    return success_response(_return_response(ret))
+
+
+@router.post("/returns/{return_id}/reject", summary="不合格拒退（留证不动账）")
+async def reject_return(
+    return_id: UUID,
+    payload: ReturnReject,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:return:manage")),
+) -> JSONResponse:
+    ret = await stocktake_service.reject_return(db, return_id, reason=payload.reason)
+    return success_response(_return_response(ret))

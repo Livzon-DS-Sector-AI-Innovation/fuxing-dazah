@@ -2,3 +2,5 @@
 export { HardwareStockTable } from './HardwareStockTable'
 export { HardwareInoutBoard } from './HardwareInoutBoard'
 export { HardwareRequisitions } from './HardwareRequisitions'
+export { HardwareStocktakeBoard } from './HardwareStocktakeBoard'
+export { HardwareReturnPanel } from './HardwareReturnPanel'

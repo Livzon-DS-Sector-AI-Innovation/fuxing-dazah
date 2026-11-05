@@ -11,13 +11,16 @@ from pydantic import BaseModel, Field, field_validator
 StrUUID = str
 
 ManagedClass = Literal["stocked", "direct"]
-ReceiptSource = Literal["ocr", "manual", "erp_import"]
+ReceiptSource = Literal["ocr", "manual", "erp_import", "stocktake", "return"]
 ReceiptStatus = Literal["draft", "accepted", "rejected"]
 RequisitionType = Literal["normal", "urgent", "excess"]
 RequisitionStatus = Literal[
     "draft", "pending", "approved", "issued", "rejected", "cancelled", "overdue_unpatched"
 ]
 MovementDirection = Literal["inbound", "outbound", "adjust"]
+StocktakeType = Literal["monthly", "annual", "special", "calibration"]
+StocktakeStatus = Literal["draft", "counting", "reviewed", "confirmed", "cancelled"]
+ReturnStatus = Literal["draft", "accepted", "rejected"]
 
 
 # ── 物料主数据 ──
@@ -357,3 +360,111 @@ class CodeBackfillStatsResponse(BaseModel):
     backfilled: int
     new_materials: int
     errors: list[str] = Field(default_factory=list)
+
+
+# ── 盘点（二期 M4）──
+
+
+class StocktakeCreate(BaseModel):
+    take_type: StocktakeType = Field(default="monthly", description="calibration=期初校准（P4）")
+    note: str | None = None
+
+
+class StocktakeItemFill(BaseModel):
+    """手机实盘直填：填数即算差异。"""
+
+    actual_qty: Decimal = Field(..., ge=0)
+    explanation: str | None = Field(default=None, max_length=500)
+
+
+class StocktakeReview(BaseModel):
+    explained_by: str = Field(..., min_length=1, max_length=100)
+    note: str | None = None
+
+
+class StocktakeConfirm(BaseModel):
+    """Web 确认门：人确认才入账（AI 永不自动动账红线）。"""
+
+    confirmed_by: str = Field(..., min_length=1, max_length=100)
+
+
+class StocktakeItemResponse(BaseModel):
+    id: StrUUID
+    material_id: StrUUID
+    code: str | None
+    name: str
+    spec: str | None
+    unit: str | None
+    unit_price: Decimal | None
+    book_qty: Decimal
+    actual_qty: Decimal | None
+    diff_qty: Decimal | None
+    diff_amount: Decimal | None
+    explanation: str | None
+
+
+class StocktakeResponse(BaseModel):
+    id: StrUUID
+    take_no: str
+    take_type: str
+    status: str
+    snapshot_at: datetime | None
+    summary_note: str | None
+    diff_surplus_items: int | None
+    diff_deficit_items: int | None
+    diff_total_amount: Decimal | None
+    explained_by: str | None
+    explained_at: datetime | None
+    confirmed_by: str | None
+    confirmed_at: datetime | None
+    remark: str | None
+    created_at: datetime
+
+
+# ── 退库（二期 M4）──
+
+
+class ReturnItemIn(BaseModel):
+    material_id: StrUUID
+    quantity: Decimal = Field(..., gt=0)
+    preferred_lot_id: StrUUID | None = Field(
+        default=None, description="优先回原批次；无效则新建 return 批次"
+    )
+
+
+class ReturnCreate(BaseModel):
+    dept_name: str = Field(..., min_length=1, max_length=100)
+    returned_by: str = Field(..., min_length=1, max_length=100)
+    returned_by_open_id: str | None = Field(default=None, max_length=100)
+    remark: str | None = None
+    items: list[ReturnItemIn] = Field(..., min_length=1)
+
+
+class ReturnSign(BaseModel):
+    leader: str = Field(..., min_length=1, max_length=100)
+
+
+class ReturnAcceptBody(BaseModel):
+    accepted_by: str = Field(..., min_length=1, max_length=100)
+
+
+class ReturnReject(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class ReturnResponse(BaseModel):
+    id: StrUUID
+    return_no: str
+    dept_name: str
+    returned_by: str
+    items: list[dict[str, Any]]
+    leader_signed: bool
+    leader_signed_by: str | None
+    leader_signed_at: datetime | None
+    status: str
+    accepted_by: str | None
+    accepted_at: datetime | None
+    rejected_reason: str | None
+    lot_adjustments: list[dict[str, Any]] | None
+    remark: str | None
+    created_at: datetime

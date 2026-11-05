@@ -48,9 +48,10 @@ import {
   type HardwareRequisitionRecord,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
+import { HardwareReturnPanel } from './HardwareReturnPanel'
 import { PageHeader, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
 
-type TabKey = 'inbound' | 'issue' | 'movements'
+type TabKey = 'inbound' | 'issue' | 'returns' | 'movements'
 
 export function HardwareInoutBoard() {
   const [tab, setTab] = useState<TabKey>('inbound')
@@ -59,7 +60,7 @@ export function HardwareInoutBoard() {
       <PageHeader
         breadcrumb={['仓储管理', '五金库', '出入库工作台']}
         title="五金出入库工作台"
-        description="入库台（拍照 OCR / 手动登记）· 发料台（待发料 FIFO 实扣）· 流水与 ERP 标记"
+        description="入库台（拍照 OCR / 手动登记）· 发料台（待发料 FIFO 实扣）· 退库 · 流水与 ERP 标记"
       />
       <Segmented
         value={tab}
@@ -67,11 +68,13 @@ export function HardwareInoutBoard() {
         options={[
           { value: 'inbound', label: '入库台' },
           { value: 'issue', label: '发料台' },
+          { value: 'returns', label: '退库' },
           { value: 'movements', label: '流水台账' },
         ]}
       />
       {tab === 'inbound' && <InboundPanel />}
       {tab === 'issue' && <IssuePanel />}
+      {tab === 'returns' && <HardwareReturnPanel />}
       {tab === 'movements' && <MovementsPanel />}
     </div>
   )

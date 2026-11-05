@@ -1,8 +1,9 @@
-"""五金库 ORM 模型（一期 7 张核心表，设计文档 §二）。
+"""五金库 ORM 模型（一期 7 张核心表 + 二期 5 张表，设计文档 §二/§2.6）。
 
 schema=warehouse、表名前缀 hardware_。数量精度统一 Numeric(18,3)；
 时区 Asia/Shanghai（DateTime(timezone=True)）；movement.quantity 恒正、
-direction 表方向。库存变动收口：只随入库单 accepted 与出库单 issued。
+direction 表方向。库存变动收口：只随入库单 accepted 与出库单 issued；
+盘点调整（stocktake_adj）/退库（return_in）以独立单据类型另列（二期）。
 
 ⚠️ 本文件是 warehouse 模块的子包 models，warehouse 顶层 models.py 不会
 带出这些表——backend/alembic/env.py 模型发现清单已显式 import。
@@ -52,7 +53,9 @@ HARDWARE_CATEGORIES = (
     "其他",
 )
 MANAGED_CLASSES = ("stocked", "direct")  # 共用类（清单内，占库存）/ 车间单独需求类（不占库存）
-RECEIPT_SOURCES = ("ocr", "manual", "erp_import")  # ERP 变故后主通道=ocr（口径13）
+# ERP 变故后主通道=ocr（口径13）；stocktake/return=二期系统单据载体（盘点盘盈
+# 入账批次、退库回加批次——独立单据类型另列，不冒充采购入库）
+RECEIPT_SOURCES = ("ocr", "manual", "erp_import", "stocktake", "return")
 RECEIPT_STATUSES = ("draft", "accepted", "rejected")
 MATCH_METHODS = ("erp_code", "name_spec", "synonym", "manual", "unmatched")
 REQUISITION_TYPES = ("normal", "urgent", "excess")
@@ -537,3 +540,184 @@ class HardwareMovement(BaseModel):
     erp_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     erp_operator: Mapped[str | None] = mapped_column(String(100))
     remark: Mapped[str | None] = mapped_column(String(500))
+
+
+# ── 二期表（设计 §2.6）──
+
+STOCKTAKE_TYPES = ("monthly", "annual", "special", "calibration")
+STOCKTAKE_STATUSES = ("draft", "counting", "reviewed", "confirmed", "cancelled")
+RETURN_STATUSES = ("draft", "accepted", "rejected")
+
+
+class HardwareStocktake(BaseModel):
+    """五金库盘点单（设计 §2.6）：book 快照 vs 实盘直填 → 差异 → 人确认才入账。
+
+    状态机：draft（生成=快照）→ counting（首行实盘）→ reviewed（差异说明齐、
+    待负责人确认）→ confirmed（ADJ 入账，唯一动账点）/ cancelled（确认前作废）。
+    take_type=calibration 为期初校准（P4：零库存起步后首次全面盘盈入账）。
+    """
+
+    __tablename__ = "hardware_stocktakes"
+    __table_args__ = (
+        Index(
+            "uq_hardware_stocktakes_no",
+            "take_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        CheckConstraint(
+            "take_type IN ('monthly', 'annual', 'special', 'calibration')",
+            name="ck_hardware_stocktakes_type",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'counting', 'reviewed', 'confirmed', 'cancelled')",
+            name="ck_hardware_stocktakes_status",
+        ),
+        Index("ix_hardware_stocktakes_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    take_no: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="盘点单号 WJK-PD-YYMMDD-序号"
+    )
+    take_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="monthly", server_default="monthly",
+        comment="monthly 月度/annual 年度/special 专项/calibration 期初校准（P4）",
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft", server_default="draft",
+        comment="draft 快照/counting 实盘/reviewed 待确认/confirmed 已入账/cancelled",
+    )
+    snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="book 快照时间"
+    )
+    summary_note: Mapped[str | None] = mapped_column(
+        Text, comment="盘点总结说明（差异汇总口径）"
+    )
+    diff_surplus_items: Mapped[int | None] = mapped_column(
+        Integer, comment="盘盈行数（确认时回写）"
+    )
+    diff_deficit_items: Mapped[int | None] = mapped_column(
+        Integer, comment="盘亏行数（确认时回写）"
+    )
+    diff_total_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2), comment="差异金额合计（确认时回写）"
+    )
+    explained_by: Mapped[str | None] = mapped_column(
+        String(100), comment="差异说明填写人"
+    )
+    explained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_by: Mapped[str | None] = mapped_column(
+        String(100), comment="确认人（Web 确认门，人确认才入账）"
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    remark: Mapped[str | None] = mapped_column(Text)
+
+
+class HardwareStocktakeItem(BaseModel):
+    """盘点明细行：每 active stocked 物料一行（book/actual/diff 快照冗余主数据）。"""
+
+    __tablename__ = "hardware_stocktake_items"
+    __table_args__ = (
+        CheckConstraint("book_qty >= 0", name="ck_hardware_stocktake_items_book"),
+        CheckConstraint(
+            "actual_qty IS NULL OR actual_qty >= 0",
+            name="ck_hardware_stocktake_items_actual",
+        ),
+        Index("ix_hardware_stocktake_items_take", "stocktake_id"),
+        Index("ix_hardware_stocktake_items_material", "material_id"),
+        {"schema": "warehouse"},
+    )
+
+    stocktake_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_stocktakes.id"),
+        nullable=False,
+    )
+    material_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.hardware_materials.id"),
+        nullable=False,
+    )
+    code: Mapped[str | None] = mapped_column(String(50), comment="物料编码快照")
+    name: Mapped[str] = mapped_column(String(200), nullable=False, comment="品名快照")
+    spec: Mapped[str | None] = mapped_column(String(200), comment="规格快照")
+    unit: Mapped[str | None] = mapped_column(String(20), comment="单位快照")
+    unit_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), comment="单价快照（差异金额=unit_price×差异）"
+    )
+    book_qty: Mapped[Decimal] = mapped_column(
+        _QTY, nullable=False, comment="账存（生成时 Σ accepted 批次余额）"
+    )
+    actual_qty: Mapped[Decimal | None] = mapped_column(
+        _QTY, comment="实盘（NULL=未盘）"
+    )
+    diff_qty: Mapped[Decimal | None] = mapped_column(
+        _QTY, comment="差异=实盘−账存（实盘后算）"
+    )
+    diff_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), comment="差异金额=unit_price×差异（单价 NULL 则 NULL）"
+    )
+    explanation: Mapped[str | None] = mapped_column(
+        String(500), comment="差异说明（行级）"
+    )
+
+
+class HardwareReturn(BaseModel):
+    """五金库退库单（设计 §2.6）：退库人 → 部门负责人签 → 仓管员验收（不合格拒退）。
+
+    明细=行式 JSON items（[{material 快照, qty, preferred_lot_id}]）——退库单
+    行数少（单部门少量物料），不建子表。accepted 时批次回加（优先回原 lot 增
+    remaining；原 lot 不存在则新建 return 来源批次）+ return_in 流水。
+    """
+
+    __tablename__ = "hardware_returns"
+    __table_args__ = (
+        Index(
+            "uq_hardware_returns_no",
+            "return_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'accepted', 'rejected')",
+            name="ck_hardware_returns_status",
+        ),
+        Index("ix_hardware_returns_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    return_no: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="退库单号 WJK-TK-YYMMDD-序号"
+    )
+    dept_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="退库部门")
+    returned_by: Mapped[str] = mapped_column(String(100), nullable=False, comment="退库人")
+    returned_by_open_id: Mapped[str | None] = mapped_column(
+        String(100), comment="退库人飞书 open_id"
+    )
+    items: Mapped[list[Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="明细行：[{material_id, code, name, spec, unit, quantity,"
+                " preferred_lot_id}]（仅 stocked）",
+    )
+    leader_signed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="部门负责人已签",
+    )
+    leader_signed_by: Mapped[str | None] = mapped_column(String(100), comment="签收负责人")
+    leader_signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft", server_default="draft",
+        comment="draft 待验收 / accepted 已回加 / rejected 拒退",
+    )
+    accepted_by: Mapped[str | None] = mapped_column(String(100), comment="验收仓管员")
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejected_reason: Mapped[str | None] = mapped_column(
+        String(500), comment="不合格拒退原因（留证）"
+    )
+    lot_adjustments: Mapped[list[Any] | None] = mapped_column(
+        JSONB, comment="批次回加结果 [{material, lot_no, mode: preferred/new, qty}]"
+    )
+    remark: Mapped[str | None] = mapped_column(Text)

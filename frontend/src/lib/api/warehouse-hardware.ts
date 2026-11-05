@@ -2,7 +2,7 @@
 // 双基址模式照抄 lib/api/warehouse.ts：SERVER_API 供 Server Actions/Server
 // Component，CLIENT_API 供 'use client' 组件直连。
 
-import { apiGet, apiFetchPaginated, apiPost } from '@/lib/http-client'
+import { apiGet, apiFetchPaginated, apiPost, apiPut } from '@/lib/http-client'
 import type {
   HardwareStockRow,
   HardwareStockFilter,
@@ -21,6 +21,9 @@ import type {
   HardwareRequisitionIssueInput,
   HardwareLocationRecord,
   HardwareImportStats,
+  HardwareStocktakeRecord,
+  HardwareStocktakeItemRecord,
+  HardwareReturnRecord,
 } from '@/types/warehouse-hardware'
 
 const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -230,4 +233,122 @@ interface PaginatedCompat<T> {
   total: number
   page: number
   page_size: number
+}
+
+
+// ── 盘点（二期 M4）──
+
+export interface HardwareStocktakeFilter {
+  status?: string
+  take_type?: string
+  page?: number
+  pageSize?: number
+}
+
+export async function fetchHardwareStocktakesClient(
+  params: HardwareStocktakeFilter = {},
+): Promise<PaginatedCompat<HardwareStocktakeRecord>> {
+  const sp = new URLSearchParams()
+  if (params.status) sp.set('status', params.status)
+  if (params.take_type) sp.set('take_type', params.take_type)
+  sp.set('page', String(params.page ?? 1))
+  sp.set('page_size', String(params.pageSize ?? 20))
+  return apiFetchPaginated<HardwareStocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes?${sp.toString()}`)
+}
+
+export async function fetchHardwareStocktakeClient(id: string): Promise<HardwareStocktakeRecord> {
+  return apiGet<HardwareStocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes/${id}`)
+}
+
+export async function createHardwareStocktakeClient(
+  takeType: string, note?: string,
+): Promise<HardwareStocktakeRecord> {
+  return apiPost<HardwareStocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes`, {
+    take_type: takeType,
+    note,
+  })
+}
+
+export async function fillHardwareStocktakeItemClient(
+  takeId: string, itemId: string, actualQty: number, explanation?: string,
+): Promise<HardwareStocktakeItemRecord> {
+  return apiPut<HardwareStocktakeItemRecord>(
+    `${CLIENT_API}${BASE}/stocktakes/${takeId}/items/${itemId}`,
+    { actual_qty: actualQty, explanation },
+  )
+}
+
+export async function reviewHardwareStocktakeClient(
+  takeId: string, explainedBy: string, note?: string,
+): Promise<HardwareStocktakeRecord> {
+  return apiPost<HardwareStocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes/${takeId}/review`, {
+    explained_by: explainedBy,
+    note,
+  })
+}
+
+export async function confirmHardwareStocktakeClient(
+  takeId: string, confirmedBy: string,
+): Promise<HardwareStocktakeRecord> {
+  return apiPost<HardwareStocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes/${takeId}/confirm`, {
+    confirmed_by: confirmedBy,
+  })
+}
+
+export async function cancelHardwareStocktakeClient(id: string): Promise<HardwareStocktakeRecord> {
+  return apiPost<HardwareStocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes/${id}/cancel`, {})
+}
+
+export function hardwareStocktakeExportUrl(takeId: string): string {
+  return `${CLIENT_API}${BASE}/stocktakes/${takeId}/export`
+}
+
+// ── 退库（二期 M4）──
+
+export async function fetchHardwareReturnsClient(
+  params: { status?: string; dept_name?: string; page?: number; pageSize?: number } = {},
+): Promise<PaginatedCompat<HardwareReturnRecord>> {
+  const sp = new URLSearchParams()
+  if (params.status) sp.set('status', params.status)
+  if (params.dept_name) sp.set('dept_name', params.dept_name)
+  sp.set('page', String(params.page ?? 1))
+  sp.set('page_size', String(params.pageSize ?? 20))
+  return apiFetchPaginated<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns?${sp.toString()}`)
+}
+
+export interface HardwareReturnCreateInput {
+  dept_name: string
+  returned_by: string
+  remark?: string
+  items: Array<{
+    material_id: string
+    quantity: number
+    preferred_lot_id?: string
+  }>
+}
+
+export async function createHardwareReturnClient(
+  payload: HardwareReturnCreateInput,
+): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns`, payload)
+}
+
+export async function signHardwareReturnClient(
+  id: string, leader: string,
+): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/sign`, { leader })
+}
+
+export async function acceptHardwareReturnClient(
+  id: string, acceptedBy: string,
+): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/accept`, {
+    accepted_by: acceptedBy,
+  })
+}
+
+export async function rejectHardwareReturnClient(
+  id: string, reason: string,
+): Promise<HardwareReturnRecord> {
+  return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/reject`, { reason })
 }

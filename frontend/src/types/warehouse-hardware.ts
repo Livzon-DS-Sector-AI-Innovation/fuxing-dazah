@@ -1,7 +1,7 @@
 // 五金库类型定义（后端 backend/app/modules/warehouse/hardware/schemas.py 镜像）
 
 export type HardwareManagedClass = 'stocked' | 'direct'
-export type HardwareReceiptSource = 'ocr' | 'manual' | 'erp_import'
+export type HardwareReceiptSource = 'ocr' | 'manual' | 'erp_import' | 'stocktake' | 'return'
 export type HardwareReceiptStatus = 'draft' | 'accepted' | 'rejected'
 export type HardwareRequisitionType = 'normal' | 'urgent' | 'excess'
 export type HardwareRequisitionStatus =
@@ -23,6 +23,8 @@ export const HARDWARE_RECEIPT_SOURCE_LABEL: Record<HardwareReceiptSource, string
   ocr: '拍照OCR',
   manual: '手动登记',
   erp_import: 'ERP导入',
+  stocktake: '盘点盘盈',
+  return: '退库回加',
 }
 
 export const HARDWARE_RECEIPT_STATUS_LABEL: Record<HardwareReceiptStatus, string> = {
@@ -308,4 +310,107 @@ export interface HardwareImportStats {
   updated: number
   skipped: number
   errors: string[]
+}
+
+
+// ── 盘点（二期 M4）──
+
+export type HardwareStocktakeType = 'monthly' | 'annual' | 'special' | 'calibration'
+export type HardwareStocktakeStatus =
+  | 'draft'
+  | 'counting'
+  | 'reviewed'
+  | 'confirmed'
+  | 'cancelled'
+
+export const HARDWARE_STOCKTAKE_TYPE_LABEL: Record<HardwareStocktakeType, string> = {
+  monthly: '月度盘点',
+  annual: '年度盘点',
+  special: '专项盘点',
+  calibration: '期初校准',
+}
+
+export const HARDWARE_STOCKTAKE_STATUS_LABEL: Record<HardwareStocktakeStatus, string> = {
+  draft: '待实盘',
+  counting: '实盘中',
+  reviewed: '待确认',
+  confirmed: '已入账',
+  cancelled: '已作废',
+}
+
+export interface HardwareStocktakeItemRecord {
+  id: string
+  material_id: string
+  code: string | null
+  name: string
+  spec: string | null
+  unit: string | null
+  unit_price: number | null
+  book_qty: number
+  actual_qty: number | null
+  diff_qty: number | null
+  diff_amount: number | null
+  explanation: string | null
+}
+
+export interface HardwareStocktakeRecord {
+  id: string
+  take_no: string
+  take_type: HardwareStocktakeType
+  status: HardwareStocktakeStatus
+  snapshot_at: string | null
+  summary_note: string | null
+  diff_surplus_items: number | null
+  diff_deficit_items: number | null
+  diff_total_amount: number | null
+  explained_by: string | null
+  explained_at: string | null
+  confirmed_by: string | null
+  confirmed_at: string | null
+  remark: string | null
+  created_at: string
+  items?: HardwareStocktakeItemRecord[]
+}
+
+// ── 退库（二期 M4）──
+
+export type HardwareReturnStatus = 'draft' | 'accepted' | 'rejected'
+
+export const HARDWARE_RETURN_STATUS_LABEL: Record<HardwareReturnStatus, string> = {
+  draft: '待验收',
+  accepted: '已回加',
+  rejected: '已拒退',
+}
+
+export interface HardwareReturnItemRecord {
+  material_id: string
+  code: string | null
+  name: string
+  spec: string | null
+  unit: string | null
+  quantity: string
+  preferred_lot_id: string | null
+}
+
+export interface HardwareReturnRecord {
+  id: string
+  return_no: string
+  dept_name: string
+  returned_by: string
+  items: HardwareReturnItemRecord[]
+  leader_signed: boolean
+  leader_signed_by: string | null
+  leader_signed_at: string | null
+  status: HardwareReturnStatus
+  accepted_by: string | null
+  accepted_at: string | null
+  rejected_reason: string | null
+  lot_adjustments: Array<{
+    material: string
+    lot_no: string | null
+    mode: 'preferred' | 'new'
+    qty: number
+  }> | null
+  remark: string | null
+  created_at: string
 }
