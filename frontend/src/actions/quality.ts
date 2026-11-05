@@ -2107,9 +2107,10 @@ export async function submitCalcFill(taskId: string, input: {
 }
 
 /** 确认解析自动填入的结果（正式归入；确认后参与自动流转）。 */
-export async function confirmTaskResult(taskId: string, resultId: string): Promise<{ message: string }> {
+export async function confirmTaskResult(taskId: string, resultId: string, value?: number): Promise<{ message: string }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/results/${resultId}/confirm`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(value !== undefined ? { result_value: value } : {}),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))

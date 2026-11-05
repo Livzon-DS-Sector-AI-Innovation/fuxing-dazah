@@ -86,6 +86,9 @@ export default function TaskDetail({ id }: { id: string }) {
   // 在线计算表：免 Excel 直接填计算后数值（表号合并规则由后端计算）
   const [calcOpen, setCalcOpen] = useState(false)
   const [chromaOpen, setChromaOpen] = useState(false)
+  // 解析结果确认弹窗（可先修正数值）
+  const [confirmRow, setConfirmRow] = useState<TestResultItem | null>(null)
+  const [confirmValue, setConfirmValue] = useState<number | null>(null)
   const [calcSaving, setCalcSaving] = useState(false)
   const [calcTableNo, setCalcTableNo] = useState<string | undefined>()
   const [calcDate, setCalcDate] = useState<Dayjs | null>(dayjs())
@@ -544,15 +547,10 @@ export default function TaskDetail({ id }: { id: string }) {
       render: (_: unknown, row: TestResultItem) => editable ? (
         <Space size={4}>
           {row.pending_confirm && (
-            <Popconfirm
-              title={`确认归入：${row.item_name} ${row.result_value ?? ''}（${row.is_pass ? '合格' : '不合格'}）`}
-              onConfirm={async () => {
-                try { await confirmTaskResult(id, row.id); message.success('已确认归入'); loadDetail() }
-                catch (err: unknown) { message.error((err instanceof Error ? err.message : String(err)) || '确认失败') }
-              }}
-            >
-              <Button size="small" type="primary">确认</Button>
-            </Popconfirm>
+            <Button size="small" type="primary" onClick={() => {
+              setConfirmRow(row)
+              setConfirmValue(row.result_value)
+            }}>确认</Button>
           )}
           <Popconfirm title="确认删除该行?" onConfirm={() => handleDeleteRow(row.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
@@ -1021,6 +1019,44 @@ export default function TaskDetail({ id }: { id: string }) {
         onClose={() => setChromaOpen(false)}
         onFilled={loadDetail}
       />
+
+      <Modal
+        title="确认解析结果归入"
+        open={!!confirmRow}
+        onCancel={() => setConfirmRow(null)}
+        onOk={async () => {
+          if (!confirmRow) return
+          try {
+            await confirmTaskResult(id, confirmRow.id, confirmValue ?? undefined)
+            message.success('已确认归入')
+            setConfirmRow(null)
+            loadDetail()
+          } catch (err: unknown) {
+            message.error((err instanceof Error ? err.message : String(err)) || '确认失败')
+          }
+        }}
+        okText="确认归入"
+      >
+        {confirmRow && (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Typography.Text>
+              子项目：<b>{confirmRow.item_name}</b>　合格标准：{confirmRow.standard_text || '-'}
+            </Typography.Text>
+            <Space>
+              <Typography.Text>数值（可修正，确认后按标准限度重新判定）：</Typography.Text>
+              <InputNumber
+                value={confirmValue}
+                precision={2}
+                style={{ width: 140 }}
+                onChange={(v) => setConfirmValue(v === null ? null : Number(v))}
+              />
+            </Space>
+            <Typography.Text type="secondary">
+              原解析值 {confirmRow.result_value ?? '-'}（{confirmRow.is_pass ? '合格' : '不合格'}）；修改数值将按合格标准重新判定。
+            </Typography.Text>
+          </Space>
+        )}
+      </Modal>
 
       <CoaPreviewModal
         open={!!coaPreviewId}

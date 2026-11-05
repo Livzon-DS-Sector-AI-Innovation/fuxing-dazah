@@ -32,15 +32,22 @@ export default function QualityPage() {
 
       {result && result.record_id && (
         <Space style={{ marginTop: 12 }}>
-          <Link href={`/quality/history/${result.record_id}`}>
-            <Button type="primary" icon={<FileTextOutlined />}>
-              生成报告单
-            </Button>
-          </Link>
+          {result.task_link?.task_id && (
+            <Link href={`/quality/task/${result.task_link.task_id}`}>
+              <Button type="primary" icon={<FileTextOutlined />}>
+                去任务填报
+              </Button>
+            </Link>
+          )}
           <Link href="/quality/history">
             <Button icon={<HistoryOutlined />}>历史记录</Button>
           </Link>
         </Space>
+      )}
+      {result && result.record_id && !result.task_link?.task_id && (
+        <Paragraph type="secondary" style={{ marginTop: 12 }}>
+          报告单在任务填报完成并复核通过后生成（含全部检验项目），请先在「检验填报」页建任务并上传计算表填入。
+        </Paragraph>
       )}
 
       {result && (

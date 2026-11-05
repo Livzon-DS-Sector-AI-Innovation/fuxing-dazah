@@ -148,6 +148,12 @@ class TestResultOut(BaseModel):
     pending_confirm: bool = False
 
 
+class ConfirmResultIn(BaseModel):
+    """确认解析结果入参：可选修改数值（重新按标准限度判定）。"""
+
+    result_value: float | None = Field(default=None, description="人工修正后的数值；缺省按解析原值归入")
+
+
 class TestTaskListItem(BaseModel):
     """任务列表项（含进度统计）。"""
 

@@ -115,13 +115,9 @@ class _TaskParse(_TaskCore):
             from app.modules.quality.feishu.message import send_chat_text
             from app.modules.quality.service.helpers import spawn_background
 
-            lines = "\n".join(
-                f"- {u.get('result_text')} {u.get('result_value')}"
-                for u in fails
-            )
             text = (
                 f"液相解析超限提醒：任务 {task.batch_number} 有 {len(fails)} 项超限，"
-                f"已暂存待人工确认，请进任务详情核对：\n{lines}"
+                f"已暂存待人工确认，请进任务详情核对处理"
             )
 
             async def _notify_fails() -> None:
