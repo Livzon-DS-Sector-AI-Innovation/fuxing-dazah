@@ -390,3 +390,80 @@ class TestStandardNumberVariants:
             "GB∕T 38429.2-2019 第5.1条",
         ):
             assert has_citation(text), text
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5b. 验收修复（M1/M2）：占位实质引用 + 条号同源约束
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestAcceptanceHardening:
+    """2026-11-06 外部验收 M1/M2：收紧「任一命中」误判。
+
+    - M1：占位变体里的书名号若只命中法规名（无条号/引文/标准号）→ 不算实质引用，
+      不能让「知识库中无《X》相应条文」凭 X 在 chunks 里而放行写回；
+    - M2：条号命中必须与同单元法规名/标准号落在同一条证据里，且不允许跨条目
+      借用无关数字（如证据里的「5次」「20人」）。
+    """
+
+    def _ev(self) -> CitationEvidence:
+        return CitationEvidence(
+            entries=(
+                EvidenceEntry(
+                    doc_name="危险化学品安全管理条例",
+                    source_article="第二十条",
+                    chunk_text="第二十条 生产、储存危险化学品的单位，应当具备下列条件。",
+                ),
+                EvidenceEntry(
+                    doc_name="生产安全事故应急演练基本规范",
+                    source_article="",
+                    chunk_text="每年至少开展5次应急演练，20人以上参加。",
+                ),
+            )
+        )
+
+    def test_fabricated_doc_plus_common_number_not_verified(self) -> None:
+        report = verify_citations("《虚构法规》第5条：'应落实安全措施'", self._ev())
+        assert not report.has_verified
+
+    def test_fabricated_doc_plus_matched_article_number_not_verified(self) -> None:
+        # 证据 B 内有「20人」「5次」，不得被《虚构法规》第X条跨条目借用
+        assert not verify_citations("《虚构法规》第二十条", self._ev()).has_verified
+        assert not verify_citations("《虚构法规》第五条", self._ev()).has_verified
+
+    def test_doc_provenance_suffices_for_article_not_in_chunks(self) -> None:
+        # 法规名命中本轮 chunks（同法规其它条文）即来源可追溯；条号精确性由
+        # 规则 warning/replay 观测，不与「来源可验证」混为一谈（M2 边界）。
+        assert verify_citations(
+            "《危险化学品安全管理条例》第五条", self._ev()
+        ).has_verified
+
+    def test_doc_and_article_same_entry_verified(self) -> None:
+        report = verify_citations("《危险化学品安全管理条例》第二十条", self._ev())
+        assert report.has_verified
+
+    def test_article_from_source_article_field_verified(self) -> None:
+        ev = CitationEvidence(
+            entries=(
+                EvidenceEntry(
+                    doc_name="某条例", source_article="第五条", chunk_text="应当落实安全措施。"
+                ),
+            )
+        )
+        assert verify_citations("《某条例》第5条", ev).has_verified
+
+    def test_placeholder_doc_only_unit_is_not_substantive(self) -> None:
+        report = verify_citations(
+            "知识库中无《危险化学品安全管理条例》相应条文，待人工补充", self._ev()
+        )
+        # 旧口径仍会因书名号命中而 has_verified，但没有实质引用（无条号/引文/标准号）
+        assert report.has_verified
+        assert report.has_substantive_verified is False
+
+    def test_note_with_real_article_citation_is_substantive(self) -> None:
+        basis = (
+            "知识库中无直接规定点检周期的条文；"
+            "《危险化学品安全管理条例》第二十条：'应当具备下列条件'"
+        )
+        report = verify_citations(basis, self._ev())
+        assert report.has_substantive_verified is True

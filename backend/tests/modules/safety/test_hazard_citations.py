@@ -23,6 +23,7 @@ import pytest
 
 from app.modules.safety.ai_hazard_identification.citation_evidence import (
     CitationEvidence,
+    EvidenceEntry,
 )
 from app.modules.safety.ai_hazard_identification.citations import (
     CITATION_RE,
@@ -596,3 +597,26 @@ class TestRuleEngineCitationEvidence:
             _basis_output(VERBATIM_BASIS, level="major"),
         )
         assert any("未引用《重大隐患判定标准》" in w for w in result.warnings)
+
+
+def test_placeholder_variant_with_doc_only_verified_is_error() -> None:
+    """M1：占位变体里的书名号命中 chunks 但无实质引用 → 仍是占位 error。"""
+    evidence = CitationEvidence(
+        entries=(
+            EvidenceEntry(
+                doc_name="化工和危险化学品生产经营单位重大生产安全事故隐患判定标准",
+                source_article="第10条",
+                chunk_text="爆炸危险场所未按国家标准安装使用防爆电气设备。",
+            ),
+        )
+    )
+    result = RuleEngine().validate(
+        make_input(),
+        _basis_output(
+            "知识库中无《化工和危险化学品生产经营单位重大生产安全事故隐患判定标准》"
+            "相应条文，待人工补充"
+        ),
+        citation_evidence=evidence,
+    )
+    assert not result.is_valid
+    assert any("占位" in e for e in result.errors)

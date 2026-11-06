@@ -77,7 +77,14 @@ def _healthy_context() -> KnowledgeContext:
                 "第二十条 生产、储存危险化学品的单位，应当具备下列条件："
                 "有符合国家标准、行业标准的经营场所……GB 30871-2022 第5.1条"
             ),
-        )
+        ),
+        # M2 同条目语义对齐：VERIFIED_BASIS 的「标准号+第5.2条+引文」需同条可验证
+        SimpleNamespace(
+            chunk_id="chunk-2",
+            source_doc="GB 30871-2022 化学品生产单位特殊作业安全规范",
+            source_article="第5.2条",
+            chunk_text="5.2 高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用。",
+        ),
     ]
     return KnowledgeContext(
         chunks=healthy_chunks,
@@ -1549,7 +1556,7 @@ class TestIdentifyOneCitationStrict:
         # 插件收到证据（本轮 chunks）
         evidence = holder.plugin_evidence[0]
         assert evidence is not None
-        assert evidence.chunk_ids == ("chunk-1",)
+        assert evidence.chunk_ids == ("chunk-1", "chunk-2")
         # 失败也回写引用质量维度（可观测）
         assert holder.audit_marks, "失败路径也应回写审计 extra"
         mark = holder.audit_marks[-1]
@@ -1572,7 +1579,7 @@ class TestIdentifyOneCitationStrict:
         assert mark["citation_source"] == "chunks"
         assert mark["citation_total"] == mark["citation_verified"] == 1
         assert mark["citation_verified_all"] is True
-        assert mark["citation_chunk_ids"] == ["chunk-1"]
+        assert mark["citation_chunk_ids"] == ["chunk-1", "chunk-2"]
 
     async def test_switch_off_preserves_legacy_behavior(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1965,3 +1972,50 @@ class TestRunRoundRagBreakerConcurrency:
         assert len(env.identify_calls) == 5
         # 非 infra 失败照常进失败账本（占位文案记录）
         assert [call[0] for call in env.ledger.failure_calls] == ["rec-3"]
+
+
+class TestEnsureOutputAcceptanceHardening:
+    """2026-11-06 外部验收 M1：占位变体 + 同名法规不得凭书名号放行。"""
+
+    def test_placeholder_with_doc_only_verified_is_placeholder_basis(self) -> None:
+        from app.modules.safety.ai_hazard_identification.citation_evidence import (
+            CitationEvidence,
+            EvidenceEntry,
+        )
+
+        evidence = CitationEvidence(
+            entries=(
+                EvidenceEntry(
+                    doc_name="危险化学品安全管理条例",
+                    source_article="第二十条",
+                    chunk_text="第二十条 生产、储存危险化学品的单位，应当具备下列条件。",
+                ),
+            )
+        )
+        with pytest.raises(QualityGateError) as exc_info:
+            quality_gate.ensure_output(
+                {
+                    "major_hazard_basis": (
+                        "知识库中无《危险化学品安全管理条例》相应条文，待人工补充"
+                    )
+                },
+                evidence=evidence,
+            )
+        assert exc_info.value.category == quality_gate.PLACEHOLDER_BASIS
+
+    async def test_enum_validation_failure_still_records_citation_audit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """M4：`_validate` 枚举失败分支也必须回写引用质量审计 extra。"""
+        holder = _Holder()
+        _wire_identify(monkeypatch, holder)
+
+        def fake_validate(result: dict[str, Any]) -> None:
+            raise ValueError("非法枚举值")
+
+        monkeypatch.setattr(ai_analysis, "_validate", fake_validate)
+        with pytest.raises(ValueError):
+            await ai_analysis._identify_one(object(), _view(), round_id="R-1")
+
+        assert holder.audit_marks, "枚举失败路径漏写 citation 审计 extra"
+        assert "citation_total" in holder.audit_marks[-1]

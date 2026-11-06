@@ -154,6 +154,15 @@ class CitationUnit:
     articles: tuple[str, ...] = ()
     quotes: tuple[str, ...] = ()
 
+    @property
+    def is_substantive(self) -> bool:
+        """是否有可溯源到条款/标准号/原文的实质引用（仅法规名不算）。
+
+        M1 验收修复：占位变体「知识库中无《X》相应条文」里的书名号只是
+        法规名，不能作为放行写回的实质引用凭据。
+        """
+        return bool(self.standards or self.articles or self.quotes)
+
 
 @dataclass(frozen=True)
 class CitationReport:
@@ -174,6 +183,20 @@ class CitationReport:
     @property
     def has_verified(self) -> bool:
         return self.verified_units > 0
+
+    @property
+    def substantive_verified_units(self) -> int:
+        """可验证且属于实质引用（条号/引文/标准号）的单元数（M1）。"""
+        return sum(
+            1
+            for unit, hit in zip(self.units, self.unit_hits)
+            if hit and unit.is_substantive
+        )
+
+    @property
+    def has_substantive_verified(self) -> bool:
+        """是否存在实质可验证引用（占位变体放行/分类的严格门槛）。"""
+        return self.substantive_verified_units > 0
 
     @property
     def all_verified(self) -> bool:
@@ -385,68 +408,140 @@ def extract_citation_units(text: str) -> tuple[CitationUnit, ...]:
 _QUOTE_SIMILARITY_THRESHOLD = 0.7
 
 
-def _evidence_blobs(evidence: CitationEvidence) -> tuple[tuple[str, str], ...]:
-    """（归一化全文, 标准号键文本）二元组列表。"""
-    blobs: list[tuple[str, str]] = []
+def _evidence_blobs(
+    evidence: CitationEvidence,
+) -> tuple[tuple[str, str, str], ...]:
+    """（归一化全文, 标准号键文本, 原始 chunk 正文）三元组列表。
+
+    第三个元素保留 chunk 原文（未归一化空白），用于识别 markdown 渲染里
+    「条号在 chunk 开头」的写法（如 ``5.3.3 管道穿防火堤…``），同时避免把
+    正文中的普通数字误当成条号（M2 验收修复）。
+    """
+    blobs: list[tuple[str, str, str]] = []
     for entry in evidence.entries:
         # 标题行里书名号可能再套书名号（历史真实样本），归一化时统一去除
         raw = f"{entry.doc_name} {entry.source_article} {entry.chunk_text}"
-        blobs.append((_normalize(raw), _standard_key(raw)))
+        blobs.append((_normalize(raw), _standard_key(raw), entry.chunk_text or ""))
     return tuple(blobs)
 
 
-def _doc_hit(reference: str, blobs: tuple[tuple[str, str], ...]) -> bool:
+def _reference_hit(reference: str, blob_text: str, blob_key: str) -> bool:
+    """单个引用标识（法规名/标准号）是否命中单条证据。"""
     normalized = _normalize(reference)
     if not normalized:
         return False
+    if normalized in blob_text:
+        return True
     key = _standard_key(reference)
-    for blob_text, blob_key in blobs:
-        if normalized in blob_text:
-            return True
-        # 标准号键：≥6 字符避免 "GB1" 之类短键误命中
-        if len(key) >= 6 and key in blob_key:
+    # 标准号键：≥6 字符避免 "GB1" 之类短键误命中
+    return len(key) >= 6 and key in blob_key
+
+
+_ARTICLE_STRICT_RE = re.compile(
+    r"第\s*([一二三四五六七八九十百千零〇两\d]+(?:\.\d+)*)\s*[条章节]"
+)
+
+
+def _article_pattern_hit(number: str, blob_text: str) -> bool:
+    """证据文本中的「第X条」与条号数字是否一致（中文数字归一后比较）。"""
+    for match in _ARTICLE_STRICT_RE.finditer(blob_text):
+        raw = match.group(1)
+        normalized = (
+            raw if re.fullmatch(r"[\d.]+", raw) else _cn_number_to_int(raw)
+        )
+        if normalized is not None and str(normalized) == number:
             return True
     return False
 
 
-def _article_hit(article: str, blobs: tuple[tuple[str, str], ...]) -> bool:
+def _article_leading_hit(number: str, raw_chunk: str) -> bool:
+    """条号出现在 chunk 正文开头（markdown 渲染 ``5.3.3 正文…`` 的历史形态）。"""
+    text = (raw_chunk or "").lstrip()
+    if not text.startswith(number):
+        return False
+    tail = text[len(number):]
+    return not tail or not (tail[0].isdigit() or tail[0] == ".")
+
+
+def _article_hit_in_entry(
+    article: str,
+    blob_text: str,
+    raw_chunk: str,
+    *,
+    quote_ok: bool,
+    has_identifiers: bool,
+) -> bool:
     number = _article_number(article)
     if not number:
         return False
-    pattern = re.compile(rf"(?<![\d.]){re.escape(number)}(?![\d.])")
-    return any(pattern.search(blob_text) for blob_text, _ in blobs)
+    if _article_pattern_hit(number, blob_text):
+        return True
+    # markdown 渲染历史形态：条号在正文开头（``5.3.3 正文…``）。仅当同条目
+    # 法规名/标准号已命中或引文已可证实时放行，防止正文普通数字（「5次」）
+    # 被当作条号（M2）。
+    if (has_identifiers or quote_ok) and _article_leading_hit(number, raw_chunk):
+        return True
+    return False
 
 
-def _quote_hit(quote: str, blobs: tuple[tuple[str, str], ...]) -> bool:
+_QUOTE_COVERAGE_THRESHOLD = 0.8
+
+
+def _quote_hit_in_entry(quote: str, blob_text: str) -> bool:
     normalized = _normalize(quote)
     if len(normalized) < 4:
         return False
-    for blob_text, _ in blobs:
-        if normalized in blob_text:
-            return True
+    if normalized in blob_text:
+        return True
+    matcher = difflib.SequenceMatcher(None, normalized, blob_text, autojunk=False)
+    blocks = matcher.get_matching_blocks()
     # 容许 OCR 断行/省略号/标点差异：最长公共子串占引文长度 ≥ 阈值
-    for blob_text, _ in blobs:
-        matcher = difflib.SequenceMatcher(None, normalized, blob_text, autojunk=False)
-        longest = max(
-            (block.size for block in matcher.get_matching_blocks()),
-            default=0,
+    longest = max((block.size for block in blocks), default=0)
+    if longest / len(normalized) >= _QUOTE_SIMILARITY_THRESHOLD:
+        return True
+    # 密集标点/断行差异会把最长连续块切碎，再按「总匹配字符占比」兜底
+    coverage = sum(block.size for block in blocks) / len(normalized)
+    return coverage >= _QUOTE_COVERAGE_THRESHOLD
+
+
+def _entry_hit(unit: CitationUnit, blob: tuple[str, str, str]) -> bool:
+    """单个引用单元 vs 单条证据。
+
+    M2 验收修复后的口径（与 spec「条目级硬约束」对齐）：
+    1. 单元声明了法规名/标准号时，**至少一个标识在该条证据命中**才算可验证；
+       —— 编造的法规名/标准号不再能靠「正文里恰好有类似数字」通过；
+       —— 实践中检索 chunk 的正文可能不包含被引条号（只检索到同法规其它条文），
+          因此标识命中即视为来源可追溯（条号精确性由规则 warning/replay 观测，
+          不与来源可验证混为一谈）。
+    2. 单元没有法规名/标准号（纯条号/引文）时：条号需「第X条」结构或正文
+       开头条号 + 引文可证实；引文需命中。
+    """
+    blob_text, blob_key, raw_chunk = blob
+    identifiers = (*unit.docs, *unit.standards)
+    if identifiers:
+        return any(
+            _reference_hit(ref, blob_text, blob_key) for ref in identifiers
         )
-        if longest / len(normalized) >= _QUOTE_SIMILARITY_THRESHOLD:
-            return True
+
+    quote_ok = any(_quote_hit_in_entry(quote, blob_text) for quote in unit.quotes)
+    if unit.articles:
+        return any(
+            _article_hit_in_entry(
+                article,
+                blob_text,
+                raw_chunk,
+                quote_ok=quote_ok,
+                has_identifiers=False,
+            )
+            for article in unit.articles
+        )
+    if unit.quotes:
+        return quote_ok
     return False
 
 
-def _unit_hit(unit: CitationUnit, blobs: tuple[tuple[str, str], ...]) -> bool:
-    for reference in (*unit.docs, *unit.standards):
-        if _doc_hit(reference, blobs):
-            return True
-    for article in unit.articles:
-        if _article_hit(article, blobs):
-            return True
-    for quote in unit.quotes:
-        if _quote_hit(quote, blobs):
-            return True
-    return False
+def _unit_hit(unit: CitationUnit, blobs: tuple[tuple[str, str, str], ...]) -> bool:
+    return any(_entry_hit(unit, blob) for blob in blobs)
 
 
 def verify_citations(text: str, evidence: CitationEvidence) -> CitationReport:

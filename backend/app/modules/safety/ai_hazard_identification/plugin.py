@@ -313,7 +313,7 @@ class AIHazardIdentifier:
         分类口径（spec §C2 / ticket 03）：
         - 无证据（report=None）→ ``validation_failed``（旧分类，零行为变化）；
         - basis 为空 → ``empty_basis``；
-        - 纯占位变体（含占位注记且零可验证）→ ``placeholder_basis``；
+        - 纯占位变体（含占位注记且无实质可验证引用）→ ``placeholder_basis``；
         - ``total_units == 0``（无任何引用单元）→ ``no_citation``；
         - 有引用单元但零可验证 → ``invalid_citation``；
         - 其它（引用可验证但字段级规则失败）→ ``validation_failed``。
@@ -325,7 +325,7 @@ class AIHazardIdentifier:
         basis = output.major_hazard_basis or ""
         if not basis.strip():
             return "empty_basis"
-        if report.placeholder_note and not report.has_verified:
+        if report.placeholder_note and not report.has_substantive_verified:
             return "placeholder_basis"
         if not report.has_verified:
             return "no_citation" if report.total_units == 0 else "invalid_citation"

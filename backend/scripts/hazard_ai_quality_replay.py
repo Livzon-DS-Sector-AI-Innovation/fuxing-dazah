@@ -527,18 +527,14 @@ def _select_window_rows(
 def _is_label_correction(metrics: dict[str, Any]) -> bool:
     """被拒记录是否属已知 ground truth 标签缺陷（truth=success 但依据零可验证/纯占位）。
 
-    判定依据：
-    - 命中占位文案（含 P0-A 精确口径漏掉的变体）且无可验证引用 → 历史标签缺陷
+    判定依据（M3 验收修复，避免「零可验证即自证为标签修正」）：
+    - **仅占位变体**（含 P0-A 精确口径漏掉的变体）→ 历史标签缺陷
       （如 ``recvzYTsyC94kz``：basis 为「知识库中无《…》相应条文，待人工补充」）；
-    - 有证据但依据非空且零条引用可验证 → 同上（GT 把不可溯源依据标成 success）。
-    空依据 / 无证据时不归入标签修正，按真误拒统计。
+    - 其它「非空依据 + 零可验证」的拒绝一律计真误拒（genuine）——它们可能是
+      匹配算法误杀/阈值问题，不能自证为标签问题。
+    空依据 / 无证据同样按真误拒统计。
     """
-    report = metrics.get("citation_report")
-    if metrics.get("placeholder_variant"):
-        return report is None or not report.has_verified
-    if report is None:
-        return False
-    return not report.has_verified and not metrics.get("basis_empty", False)
+    return bool(metrics.get("placeholder_variant"))
 
 
 def compare_ground_truth(

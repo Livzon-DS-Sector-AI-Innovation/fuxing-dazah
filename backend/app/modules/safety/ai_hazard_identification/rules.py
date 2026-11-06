@@ -328,7 +328,8 @@ class RuleEngine:
             )
 
         if is_placeholder_variant(basis):
-            if report.has_verified:
+            # M1 验收修复：仅书名号命中不算实质引用，需条号/引文/标准号可验证才放行
+            if report.has_substantive_verified:
                 warnings.append(PLACEHOLDER_BASIS_WARNING)
             else:
                 errors.append(PLACEHOLDER_BASIS_ERROR)

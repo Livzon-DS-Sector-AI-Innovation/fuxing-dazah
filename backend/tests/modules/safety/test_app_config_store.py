@@ -32,12 +32,11 @@ class TestRegistry:
         # 库存 sheet 源（SOURCE 开关 + revision 状态）；+2：督办通报值守轮询
         # （④ 开关 + 间隔）；+1：督办通报「推送到群」目标群
         assert len(registry.REGISTRY) == 123  # 2026-11-04 +3：RAG 探活（开关/间隔/重提醒）+1：②-b 已关闭自动通过 +1：guardian_r2 DM；2026-11-05 +1：视觉 json mode 灰度（A2）；2026-11-06 +1：点检AI审核开关（77464b0f 已提交）+1：C2 判定依据引用强约束（P0-C）
-        # F4 提交卫生说明（bfb3f54d 混入他人 WIP）：121 依赖 5 个**非 P0** WIP 键
-        # （SAFETY_RAG_HEALTH_ENABLED / _INTERVAL_SECONDS / _ALERT_REPEAT_HOURS、
-        #  SAFETY_HAZARD_REVIEW_AUTOPASS_ENABLED、SAFETY_GUARDIAN_R2_DM_ENABLED），
-        # 其 reader 仍在他人未提交文件（rag_health.py / review.py / config.py /
-        # guardian_r2/）中；P0-A 本窗口只新增视觉 json mode 1 键，
-        # 若剔除 5 个 WIP 键则本断言应为 **116**。WIP 作者合入前不要单独改回 116。
+        # F4 提交卫生说明（bfb3f54d 混入他人 WIP）：本断言现为 123——
+        # 在历史 121 口径上，2026-11-06 又提交了 2 个新键：点检AI审核开关
+        # （77464b0f）、C2 判定依据引用强约束（176af8e0）。其中 5 个早期非 P0
+        # 键的 reader 仍可能在他人未提交文件（rag_health.py / review.py /
+        # config.py / guardian_r2/）中；新增/删除键时同步更新本断言与 iter 断言。
         assert len(registry.iter_items()) == 123  # 与 REGISTRY 同步
 
     def test_unknown_key_raises(self):

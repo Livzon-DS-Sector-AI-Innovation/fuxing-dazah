@@ -134,14 +134,17 @@ def ensure_output(
         raise QualityGateError(EMPTY_BASIS, "判定依据为空，不写回")
 
     report = verify_citations(text, evidence) if evidence is not None else None
-    has_verified = report is not None and report.has_verified
 
-    # 占位：开关开时识别变体且「有可验证引用则放行」；开关关时严格回退 P0-A
-    # 精确标记口径（历史 140 条成功样本 13 条「注记+真实引用」属可接受形态）。
+    # 占位：开关开时识别变体，且必须存在**实质可验证引用**（条号/引文/标准号，
+    # 仅书名号不够）才放行；开关关时严格回退 P0-A 精确标记口径。
+    # M1 验收修复：「知识库中无《X》相应条文」里的 X 命中 chunks 时不再放行。
     placeholder_hit = (
         is_placeholder_variant(text) if evidence is not None else is_placeholder_basis(text)
     )
-    if placeholder_hit and not has_verified:
+    substantive_verified = (
+        report.has_substantive_verified if report is not None else False
+    )
+    if placeholder_hit and not substantive_verified:
         raise QualityGateError(
             PLACEHOLDER_BASIS, f"判定依据命中占位文案: {text[:80]}"
         )

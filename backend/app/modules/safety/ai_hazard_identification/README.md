@@ -209,8 +209,8 @@ POST /api/v1/safety/hazards/{id}/ai/run/1
 |------|------|------|
 | `schemas.py` | 197 | 输入/输出 Pydantic 模型 |
 | `prompts.py` | 443 | Prompt 模板 + 规则文本 + DB 种子 |
-| `rules.py` | 402 | 规则引擎 + 自动修正 |
+| `rules.py` | 405 | 规则引擎 + 自动修正 |
 | `plugin.py` | 520 | 核心引擎（四阶段流程） |
-| `citations.py` | 127 | 引用/占位判定纯函数（唯一事实源） |
-| `citation_evidence.py` | 476 | 引用来源可验证纯函数（C2，零 IO） |
+| `citations.py` | 135 | 引用/占位判定纯函数（唯一事实源） |
+| `citation_evidence.py` | 565 | 引用来源可验证纯函数（C2，零 IO） |
 | `tests/test_plugin.py` | 615 | 44 个测试（6 组） |

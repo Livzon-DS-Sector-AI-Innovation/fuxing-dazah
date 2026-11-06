@@ -932,3 +932,26 @@ def test_cli_legacy_gate_flag(
     payload = json.loads(capsys.readouterr().out)
     assert payload["legacy_gate"] is False
     assert payload["citation"]["calls_with_evidence"] == 1
+
+
+def test_label_correction_only_for_placeholder_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M3：非占位的『非空依据+零可验证』拒绝必须计真误拒，不能自证为标签修正。"""
+    truth_file = _write_truth(
+        tmp_path, [{"record_id": "rec_unverified", "status": "success"}]
+    )
+    monkeypatch.setattr(replay, "GROUND_TRUTH_FILE", truth_file)
+    rows = [
+        _row(
+            output=FABRICATED_CITATION,
+            record_id="rec_unverified",
+            input_text=_audit_input(),
+        )
+    ]
+    result = replay.compare_ground_truth(rows)
+    assert result is not None
+    assert result["wrong_reject"] == 1
+    assert result["wrong_reject_label_correction"] == 0
+    assert result["wrong_reject_genuine"] == 1
+    assert result["wrong_reject_label_correction_ids"] == []

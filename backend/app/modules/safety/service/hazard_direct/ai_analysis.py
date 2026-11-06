@@ -303,8 +303,9 @@ async def _identify_one(
         },
     }
     # ── 4. 枚举校验 → 输出质量闸门（写回前最后一道）──
-    _validate(result)
+    # M4 验收修复：_validate 枚举失败也必须回写引用质量审计 extra（失败可观测）。
     try:
+        _validate(result)
         quality_gate.ensure_output(result, evidence=citation_evidence)
     finally:
         await _record_citation_quality(
