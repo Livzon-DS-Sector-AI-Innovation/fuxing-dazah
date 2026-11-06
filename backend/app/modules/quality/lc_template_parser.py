@@ -228,9 +228,19 @@ def _apply_merges(
 
 
 def parse_with_config(
-    file_bytes: bytes, filename: str, config: dict[str, Any], form_id: str
+    file_bytes: bytes,
+    filename: str,
+    config: dict[str, Any],
+    form_id: str,
+    get: CellGetter | None = None,
+    max_row: int | None = None,
+    max_col: int | None = None,
 ) -> GenericLcParse:
-    get, max_row, max_col = open_sheet(file_bytes, filename)
+    """get/max_row/max_col 提供时跳过文件重开（批量版式搜索场景）。"""
+    if get is None or max_row is None or max_col is None:
+        get, max_row, max_col = open_sheet(file_bytes, filename)
+    # 防御：部分文件带巨量空行格式（max_row 撑到百万级），真实计算表 ≤ 500 行
+    max_row = min(max_row, 1000)
     result = GenericLcParse(
         product_name=config.get("product_name", ""),
         batch_number=find_batch(get, max_row, max_col, config.get("batch_label", "批号")),
