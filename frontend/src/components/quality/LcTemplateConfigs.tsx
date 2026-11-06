@@ -39,7 +39,7 @@ export default function LcTemplateConfigs() {
   const [autoOpen, setAutoOpen] = useState(false)
   const [autoDetecting, setAutoDetecting] = useState(false)
   const [autoPassword, setAutoPassword] = useState('zlkz6941')
-  const [autoDetect, setAutoDetect] = useState<{ table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; samples: { name: string; value: number | null }[] }[] } | null>(null)
+  const [autoDetect, setAutoDetect] = useState<{ table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; blank?: boolean; name_shift: number; value_shift: number; step: number | null; samples: { name: string; value: number | null }[] }[] } | null>(null)
   const [autoPick, setAutoPick] = useState<string | null>(null)
   const [autoCreating, setAutoCreating] = useState(false)
 
@@ -279,6 +279,7 @@ export default function LcTemplateConfigs() {
                       <Radio key={c.template_table_no} value={c.template_table_no} style={{ width: '100%' }}>
                         <Text strong>{c.template_table_no}</Text>
                         <Text type="secondary">　{c.product_name || '（无产品名）'}　提取到 {c.value_count}/{c.component_count} 个有效值</Text>
+                        {c.blank && <Tag color="orange" style={{ marginLeft: 8 }}>空白模板（按版式匹配）</Tag>}
                         <div style={{ paddingLeft: 24 }}>
                           <Text type="secondary" style={{ fontSize: 12 }}>
                             样例：{(c.samples || []).map((s) => `${s.name}=${s.value}`).join('，')}

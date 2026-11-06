@@ -2108,7 +2108,7 @@ export async function submitCalcFill(taskId: string, input: {
 
 /** 傻瓜式维护：上传计算表自动识别同版式模板（返回候选，无需会写 JSON）。 */
 export async function autoDetectTemplate(file: File, password?: string): Promise<{
-  data: { table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; samples: { name: string; value: number | null }[] }[] }
+  data: { table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; blank?: boolean; name_shift: number; value_shift: number; step: number | null; samples: { name: string; value: number | null }[] }[] }
 }> {
   const form = new FormData()
   form.append('file', file)

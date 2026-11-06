@@ -236,7 +236,7 @@ async def auto_detect_template_endpoint(
     from app.modules.quality.lc_template_parser import (
         decrypt_office_file,
         detect_table_no,
-        open_sheet,
+        open_sheet_cached,
         parse_with_config,
     )
     from app.modules.quality.repository import list_lc_template_configs
@@ -253,7 +253,7 @@ async def auto_detect_template_endpoint(
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
     try:
-        get, max_row, max_col = open_sheet(data, filename)
+        get, max_row, max_col = open_sheet_cached(data, filename)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     table_no = detect_table_no(get, max_row, max_col)
@@ -269,7 +269,7 @@ async def auto_detect_template_endpoint(
     for cfg in trial_cfgs:
         same_family = bool(family_cfgs) and cfg in family_cfgs
         combos = shifts if same_family else [(0, 0, None)]
-        best: tuple[int, int, int, int | None, Any] | None = None
+        best: tuple[tuple[int, int], int, int, int | None, Any] | None = None
         for dn, dv, step in combos:
             try:
                 parsed = parse_with_config(
@@ -278,28 +278,36 @@ async def auto_detect_template_endpoint(
                 )
             except Exception:  # noqa: BLE001 — 版式不符直接跳过
                 continue
-            n = len([c for c in parsed.components if c.report_value is not None])
-            if n >= 3 and (best is None or n > best[0]):
-                best = (n, dn, dv, step, parsed)
+            value_n = len([c for c in parsed.components if c.report_value is not None])
+            # 有值候选永远优先（rank=1）；空白模板（公式未填值）按标签行数匹配版式（rank=0）
+            if value_n >= 3:
+                rank = (1, value_n)
+            elif len(parsed.components) >= 10:
+                rank = (0, len(parsed.components))
+            else:
+                continue
+            if best is None or rank > best[0]:
+                best = (rank, dn, dv, step, parsed)
         if best is None:
             continue
-        value_count, dn, dv, step, parsed = best
+        _rank, dn, dv, step, parsed = best
         values = [c for c in parsed.components if c.report_value is not None]
         candidates.append({
             "template_table_no": cfg.table_no,
             "product_name": cfg.product_name or "",
             "description": cfg.description or "",
             "component_count": len(parsed.components),
-            "value_count": value_count,
+            "value_count": len(values),
+            "blank": len(values) == 0,
             "name_shift": dn,
             "value_shift": dv,
             "step": step,
             "samples": [
                 {"name": c.name, "value": c.report_value}
-                for c in values[:8]
+                for c in (values or parsed.components)[:8]
             ],
         })
-    candidates.sort(key=lambda x: x["value_count"], reverse=True)
+    candidates.sort(key=lambda x: (x["blank"], -x["value_count"]))
     return success_response(data={"table_no": table_no, "candidates": candidates})
 
 

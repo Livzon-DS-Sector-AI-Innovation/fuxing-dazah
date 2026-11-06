@@ -162,6 +162,43 @@ def open_sheet(
     return get_xlsx, ws.max_row, ws.max_column
 
 
+def open_sheet_cached(
+    file_bytes: bytes, filename: str, max_row: int = 1000, max_col: int = 100
+) -> tuple[CellGetter, int, int]:
+    """版式搜索专用：取值区域一次性读入内存（list 索引 + 合并格锚点映射）。
+
+    部分文件带万级行列格式（如 66 行 × 16372 列），openpyxl 逐格访问每次 parse 秒级；
+    缓存后为 list 下标毫秒级。xls（xlrd）本身是数组读取，直接透传。
+    """
+    if filename.lower().endswith(".xls"):
+        return open_sheet(file_bytes, filename)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    ws = active_sheet(wb)
+    mr = min(ws.max_row or 1, max_row)
+    mc = min(ws.max_column or 1, max_col)
+    grid = [
+        list(row)
+        for row in ws.iter_rows(min_row=1, max_row=mr, max_col=mc, values_only=True)
+    ]
+    anchors: dict[tuple[int, int], tuple[int, int]] = {}
+    for rng in ws.merged_cells.ranges:
+        anchor = (rng.min_row, rng.min_col)
+        for rr in range(rng.min_row, min(rng.max_row, mr) + 1):
+            for cc in range(rng.min_col, min(rng.max_col, mc) + 1):
+                anchors[(rr, cc)] = anchor
+
+    def get(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > mr or c > mc:
+            return None
+        ar, ac = anchors.get((r, c), (r, c))
+        row = grid[ar - 1] if ar - 1 < len(grid) else []
+        return row[ac - 1] if ac - 1 < len(row) else None
+
+    return get, mr, mc
+
+
 def detect_table_no(get: CellGetter, max_row: int, max_col: int) -> str | None:
     """标题单元格（前 5 行）中提取表号 EX-xx-xxxx-vvv。"""
     for r in range(1, min(6, max_row + 1)):
@@ -239,8 +276,10 @@ def parse_with_config(
     """get/max_row/max_col 提供时跳过文件重开（批量版式搜索场景）。"""
     if get is None or max_row is None or max_col is None:
         get, max_row, max_col = open_sheet(file_bytes, filename)
-    # 防御：部分文件带巨量空行格式（max_row 撑到百万级），真实计算表 ≤ 500 行
+    # 防御：部分文件带巨量空行/空列格式（行撑到百万级、列撑到 1.6 万列），
+    # 真实计算表 ≤ 500 行 × 30 列，超出的直接截断（不影响取值位置）
     max_row = min(max_row, 1000)
+    max_col = min(max_col, 100)
     result = GenericLcParse(
         product_name=config.get("product_name", ""),
         batch_number=find_batch(get, max_row, max_col, config.get("batch_label", "批号")),
