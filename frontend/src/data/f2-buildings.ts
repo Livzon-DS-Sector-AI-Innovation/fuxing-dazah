@@ -1,14 +1,22 @@
 /**
- * 厂区风险分区 · 建筑级两级模型配置（2026-10 分区大改，用户拍板定案）。
+ * 厂区风险分区 · 建筑级两级模型配置（2026-10 分区大改；2026-11-06 足迹合并修订）。
  *
- * 权威方案：飞书「分区大改方案 · 建筑级」章节（本地同版备份
- * .scratch/f2-facility-map/分区大改-建筑级方案.md，33 栋建筑表）。
- * 模型：33 栋建筑（图上唯一编号 1-33，一建筑一号）+ 建筑内子单元
- * （产线/部门/回收单元）；旧 64 分区按收编映射归并，几何沿用同轮廓
- * 分组合成（FacilityMapCard）。34 提三图上无轮廓，本期不做。
+ * 权威方案：飞书「建筑级编号对照表」（本地同版备份
+ * .scratch/f2-facility-map/分区大改-建筑级方案.md）。
+ * 模型：25 栋建筑（图上唯一编号 1-25，一建筑一号）+ 建筑内子单元
+ * （产线/部门/回收单元，表格 └ 行、图上随母建筑小号标注）；旧 64 分区按
+ * 收编映射归并。26 提三图上无轮廓，本期不做。
  *
- * 雷帕特例（拍板）：dist29 的平台几何画在 2 号楼共用轮廓组——29 的
- * 数据/落点/弹窗归 1 号楼，渲染不单独画轮廓（组内多数归属，见卡片端）。
+ * 2026-11-06 足迹合并（用户拍板「同建筑不能有多个标号」）：平台对同一栋
+ * 楼的多次描绘/强重叠轮廓（嵌套≥60% 或互叠≥45%）合并为一栋，被并楼宇转
+ * └ 子单元行。33→25 迁移对照：旧1→1，旧2+3→2，旧4+5→3，旧6+9→4，
+ * 旧7+10+11→5，旧12+8→6，旧18+31→7，旧19+20→8，旧13→9，旧14→10，
+ * 旧15→11，旧16→12，旧17→13，旧21→14，旧22→15，旧23→16，旧24→17，
+ * 旧25→18，旧26→19，旧27→20，旧28→21，旧29→22，旧30→23，旧32→24，
+ * 旧33→25。
+ *
+ * 雷帕特例（拍板）：dist29 的平台几何画在旧 2 号楼共用轮廓组——29 的
+ * 数据/落点/弹窗归 1 号楼（车间一），渲染不单独画轮廓。
  */
 
 /** 色系族 key（按主责部门归并 11 族；当日有落点用各族 active 色） */
@@ -93,7 +101,7 @@ export interface BuildingSubunit {
 }
 
 export interface BuildingDef {
-  /** 图上唯一编号 1-33 */
+  /** 图上唯一编号 1-25 */
   id: number
   /** 建筑名称；null=待业务部门命名 */
   name: string | null
@@ -107,155 +115,119 @@ export interface BuildingDef {
   family: BuildingFamilyKey
 }
 
-/** 33 栋建筑定案表（编号/名称/收编/子单元/责任部门/产线明细） */
+/** 25 栋建筑定案表（编号/名称/收编/子单元/责任部门/产线明细；空名待业务部门确认） */
 export const BUILDINGS: BuildingDef[] = [
   {
     id: 1,
     name: '车间一',
     distIds: ['1', '11', '29'],
-    // 29=提四雷帕：几何在 2 号楼共用轮廓组（数据归本楼、不单独画轮廓）
+    // 29=提四雷帕：几何在旧 2 号楼共用轮廓组（数据归本楼、不单独画轮廓）
     subunits: [{ name: '异丙醇回收', distIds: ['27'], dept: '提炼工程四部' }],
     depts: ['提炼工程五部'],
-    lines: '达托（一楼/二楼结晶）、达巴（三楼制备/粗提/合成）、雷帕/子囊（四楼）；中控室、制水岗在本楼',
+    lines: '达托（一楼/二楼结晶）、达巴（三楼制备/粗提/合成）、雷帕/子囊（四楼，拍板归本楼）；中控室、制水岗在本楼',
     family: 'refining5',
   },
   {
     id: 2,
-    name: null,
-    distIds: ['9', '21', '22', '23', '24'],
-    subunits: [],
-    depts: ['提炼工程四部', '提炼工程五部'],
-    lines: '达托新线（五部）、雷帕/子囊、氟雷/艾默共线（合成/精制）、莫西（疑共线）、阿福（四部）',
+    name: '车间二',
+    distIds: ['9', '21', '22', '23', '24', '10', '4'],
+    subunits: [{ name: '乙腈回收＋丙醇回收', distIds: ['28', '25'], dept: '提炼工程四部' }],
+    depts: ['提炼工程四部', '提炼工程五部', '提炼工程六部'],
+    lines: '两栋连体：达托新线楼（五部；雷帕/子囊、氟雷/艾默共线、莫西、阿福＝四部）＋达巴新线＋非达楼（五部）＋替考楼（六部，四楼防火三洁净区）',
     family: 'refiningShared',
   },
   {
     id: 3,
     name: null,
-    distIds: ['10', '4'],
-    subunits: [{ name: '乙腈回收＋丙醇回收', distIds: ['28', '25'], dept: '提炼工程四部' }],
-    depts: ['提炼工程五部', '提炼工程六部'],
-    lines: '达巴新线＋非达（制备/合成/层析，五部）、替考（粗提/层析/精制/纯化，四楼防火三洁净区，六部）',
-    family: 'refiningShared',
+    distIds: ['7', '20'],
+    subunits: [{ name: '乙醇回收', distIds: ['26'], dept: '提炼工程四部' }],
+    depts: ['提炼工程四部'],
+    lines: '米尔贝肟（二楼合成、三楼层析＋合成、粗提/精制/高规）＋塞拉；米贝＝精制段（同楼）',
+    family: 'refining4',
   },
   {
     id: 4,
     name: null,
-    distIds: ['7'],
-    subunits: [{ name: '乙醇回收', distIds: ['26'], dept: '提炼工程四部' }],
-    depts: ['提炼工程四部'],
-    lines: '米尔贝肟（二楼合成、三楼层析＋合成、粗提/精制/高规）＋塞拉',
-    family: 'refining4',
+    distIds: ['53', '63', '54', '60'],
+    subunits: [],
+    depts: ['提炼工程一部', '提炼工程二部'],
+    lines: '万古A线离交/精制（一部）；庆大（二楼）、多黏（四楼）＝二部产线（跨部门）',
+    family: 'refining1',
   },
   {
     id: 5,
     name: null,
-    distIds: ['20'],
+    distIds: ['61', '65', '64', '67', '41'],
     subunits: [],
-    depts: ['提炼工程四部'],
-    lines: '米贝（米尔贝肟精制段/高规）',
-    family: 'refining4',
+    depts: ['提炼工程一部', '提炼技术精进中心'],
+    lines: '万古B线离交/精制/纯化、成盐；提炼技术精进中心在楼内',
+    family: 'refining1',
   },
   {
     id: 6,
     name: null,
-    distIds: ['53'],
+    distIds: ['75', '72', '66', '59', '56', '55', '62'],
     subunits: [],
-    depts: ['提炼工程一部'],
-    lines: '万古A线离交',
-    family: 'refining1',
+    depts: ['提炼工程二部', '提炼工程一部'],
+    lines: '妥布粗提/精制、庆大/磺黏共线粗提、黏干/阿卡、酸化过滤（二部）；万古C线离交（一部，平台几何在本楼内待核）',
+    family: 'refining2',
   },
   {
     id: 7,
     name: null,
-    distIds: ['61'],
+    distIds: ['6', '5', '31'],
     subunits: [],
-    depts: ['提炼工程一部'],
-    lines: '万古B线离交',
-    family: 'refining1',
+    depts: ['质量控制部（QC部）', '检测组', '菌种中心', '行政后勤部'],
+    lines: 'QC（试剂间）、检测组、菌种中心；办公室在楼内（行政后勤部）',
+    family: 'quality',
   },
   {
     id: 8,
     name: null,
-    distIds: ['62'],
+    distIds: ['38', '43', '44'],
     subunits: [],
-    depts: ['提炼工程一部'],
-    lines: '万古C线离交',
-    family: 'refining1',
+    depts: ['仓储部'],
+    lines: '原辅料库＋成品包材库（同楼）、仓储部成品仓',
+    family: 'warehouse',
   },
   {
     id: 9,
-    name: null,
-    distIds: ['63', '54', '60'],
-    subunits: [],
-    depts: ['提炼工程一部', '提炼工程二部'],
-    lines: '万古A线精制（一部）、庆大（二楼与磺黏共线粗提）、多黏（四楼）——二部产线在提一建筑（跨建筑实证）',
-    family: 'refining1',
-  },
-  {
-    id: 10,
-    name: null,
-    distIds: ['65', '64', '41'],
-    subunits: [],
-    depts: ['提炼工程一部', '提炼技术精进中心'],
-    lines: '万古B线精制/纯化（一部）、提炼技术精进中心（楼内研发）',
-    family: 'refining1',
-  },
-  {
-    id: 11,
-    name: null,
-    distIds: ['67'],
-    subunits: [],
-    depts: ['提炼工程一部'],
-    lines: '万古成盐',
-    family: 'refining1',
-  },
-  {
-    id: 12,
-    name: null,
-    distIds: ['75', '72', '66', '59', '56', '55'],
-    subunits: [],
-    depts: ['提炼工程二部'],
-    lines: '妥布粗提/精制、庆大/磺黏共线粗提、黏干/阿卡粗提＋浓缩、酸化过滤（66 C线精制几何在此楼）',
-    family: 'refining2',
-  },
-  {
-    id: 13,
     name: '罐区',
     distIds: ['9001'],
     subunits: [],
     depts: ['提炼工程四部'],
-    lines: '溶媒回收罐区（溶剂储罐 1#-22#、槽车卸车点）',
+    lines: '溶媒回收罐区（溶剂储罐1#-22#、槽车卸车点、新罐区/旧罐区）',
     family: 'refining4',
   },
   {
-    id: 14,
+    id: 10,
     name: '接罐站',
     distIds: ['48'],
     subunits: [],
     depts: ['提炼工程一部', '提炼工程二部', '提炼工程五部'],
-    lines: '万古B/C线接罐站、达托离交接罐站、提二接罐站（共用，无专属岗位，按所属产线分属各部门）',
+    lines: '万古b/c线接罐站、达托离交接罐站（一二楼）、提二接罐站',
     family: 'refiningShared',
   },
   {
-    id: 15,
+    id: 11,
     name: '发酵车间',
     distIds: ['12', '14', '15', '16', '17', '19'],
     subunits: [],
     depts: ['发酵工程部'],
-    lines: '发酵一部/二部/工程部（万古线罐 301-325/401-402）；消毒/值班/工艺/化验/配料/机修',
+    lines: '发酵一部（101-112三楼/201-213二楼）、发酵工程部（301-325/401-402·万古线）；配料/消毒/机修/化验/工艺/值班',
     family: 'fermentation',
   },
   {
-    id: 16,
+    id: 12,
     name: null,
     distIds: ['73', '70', '69', '68'],
     subunits: [{ name: '半合成工程中心', distIds: ['30'], dept: '提炼半合成工程中心' }],
     depts: ['精制工程一部'],
-    lines: '1#/2#/3#冻干线（含3#无菌线）、喷雾塔（四楼）、制水',
+    lines: '1#/2#/3#冻干线（含3#无菌线）、喷雾塔（四楼）',
     family: 'finishing',
   },
   {
-    id: 17,
+    id: 13,
     name: null,
     distIds: ['74', '71'],
     subunits: [],
@@ -264,43 +236,16 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'finishing',
   },
   {
-    id: 18,
-    name: null,
-    distIds: ['6', '5'],
-    subunits: [],
-    depts: ['质量控制部'],
-    lines: 'QC（试剂间）、检测组、菌种中心（三单位同楼）',
-    family: 'quality',
-  },
-  {
-    id: 19,
-    name: null,
-    distIds: ['38', '43'],
-    subunits: [],
-    depts: ['仓储部'],
-    lines: '原辅料库＋成品包材库（同楼）',
-    family: 'warehouse',
-  },
-  {
-    id: 20,
-    name: '仓储部',
-    distIds: ['44'],
-    subunits: [],
-    depts: ['仓储部'],
-    lines: '成品（桶装溶剂/成品）',
-    family: 'warehouse',
-  },
-  {
-    id: 21,
+    id: 14,
     name: '危化品库',
     distIds: ['37'],
     subunits: [],
     depts: ['仓储部'],
-    lines: '危化品仓（五金劳保库图上无、归属待定；危废库=危库二/三属仓储，图上无建筑待建模）',
+    lines: '危化品（三楼?）；危废库（危库二/三）属仓储、待建模',
     family: 'warehouse',
   },
   {
-    id: 22,
+    id: 15,
     name: '环保水处理',
     distIds: ['2'],
     subunits: [],
@@ -309,7 +254,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'env',
   },
   {
-    id: 23,
+    id: 16,
     name: '环保RTO',
     distIds: ['3'],
     subunits: [],
@@ -318,7 +263,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'env',
   },
   {
-    id: 24,
+    id: 17,
     name: '环保固废',
     distIds: ['51'],
     subunits: [],
@@ -327,7 +272,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'env',
   },
   {
-    id: 25,
+    id: 18,
     name: '环保化验室',
     distIds: ['50'],
     subunits: [],
@@ -336,7 +281,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'env',
   },
   {
-    id: 26,
+    id: 19,
     name: '环保水热矿化',
     distIds: ['52'],
     subunits: [],
@@ -345,25 +290,25 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'env',
   },
   {
-    id: 27,
+    id: 20,
     name: '空冷班组（动力）',
     distIds: ['76'],
     subunits: [],
     depts: ['动力部'],
-    lines: '动力车间、空压站、综合泵房、冷却塔、制水',
+    lines: '动力车间、新动力车间、综合泵房、空压站、冷却塔、制水',
     family: 'utility',
   },
   {
-    id: 28,
+    id: 21,
     name: '消防控制室',
     distIds: ['77'],
     subunits: [],
     depts: ['安全工程中心'],
-    lines: '消控室（仅消防；「中控室」=1号楼五部中控，严格区分）',
+    lines: '消控室（仅消防；「中控室」＝1 号楼车间一中控）',
     family: 'utility',
   },
   {
-    id: 29,
+    id: 22,
     name: '配电房',
     distIds: ['45'],
     subunits: [],
@@ -372,7 +317,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'utility',
   },
   {
-    id: 30,
+    id: 23,
     name: '仪表',
     distIds: ['47'],
     subunits: [],
@@ -381,16 +326,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'utility',
   },
   {
-    id: 31,
-    name: '办公室',
-    distIds: ['31'],
-    subunits: [],
-    depts: ['行政后勤部'],
-    lines: '行政办公（含职能部门）',
-    family: 'utility',
-  },
-  {
-    id: 32,
+    id: 24,
     name: '食堂',
     distIds: ['33'],
     subunits: [],
@@ -399,7 +335,7 @@ export const BUILDINGS: BuildingDef[] = [
     family: 'utility',
   },
   {
-    id: 33,
+    id: 25,
     name: '配酸碱配制',
     distIds: ['49'],
     subunits: [],

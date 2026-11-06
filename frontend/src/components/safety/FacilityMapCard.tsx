@@ -165,11 +165,18 @@ const GEOM_GROUPS: RenderedDistrict[][] = (() => {
   return [...byKey.values()]
 })()
 
+/** 子单元分区 id 集合（片级浅化+小号标注判定） */
+const SUBUNIT_DISTS: ReadonlySet<string> = new Set(
+  BUILDINGS.flatMap(b => b.subunits.flatMap(su => su.distIds)),
+)
+
 interface BuildingPiece {
   /** 一片轮廓=该建筑名下一个同轮廓组的代表 rail 集（各 rail 同形状只画一次） */
   shapes: string[]
   /** shapes 解析后的坐标（标注落点「须在自身多边形内」判定用） */
   polys: [number, number][][]
+  /** 子单元片：组内成员全部是子单元分区（浅色填充+小号标注） */
+  subunit: boolean
   anchor: [number, number]
   bbox: [number, number, number, number]
 }
@@ -186,6 +193,15 @@ function pointInPolys(polys: [number, number][][], x: number, y: number): boolea
     if (inside) return true
   }
   return false
+}
+
+/** 十六进制色向白混合（子单元片浅化用） */
+function mixWhite(hex: string, t: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  const r = Math.round(((n >> 16) & 0xff) + (255 - ((n >> 16) & 0xff)) * t)
+  const g = Math.round(((n >> 8) & 0xff) + (255 - ((n >> 8) & 0xff)) * t)
+  const b = Math.round((n & 0xff) + (255 - (n & 0xff)) * t)
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`
 }
 
 interface BuildingGeo {
@@ -222,9 +238,13 @@ const BUILDING_GEOS: BuildingGeo[] = (() => {
         return [Number(x), Number(y)] as [number, number]
       }),
     )
+    const subunit = group.every(r => SUBUNIT_DISTS.has(r.dist.distId))
     const list = byBuilding.get(owner)
-    if (list) list.push({ shapes: rep.shapes, polys, anchor: rep.anchor, bbox: rep.bbox })
-    else byBuilding.set(owner, [{ shapes: rep.shapes, polys, anchor: rep.anchor, bbox: rep.bbox }])
+    if (list) list.push({ shapes: rep.shapes, polys, subunit, anchor: rep.anchor, bbox: rep.bbox })
+    else
+      byBuilding.set(owner, [
+        { shapes: rep.shapes, polys, subunit, anchor: rep.anchor, bbox: rep.bbox },
+      ])
   }
   return BUILDINGS.map(def => {
     const pieces = (byBuilding.get(def.id) ?? []).sort(
@@ -947,13 +967,12 @@ export function FacilityMapCard() {
     }
   }
 
-  // 编号/名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让（v2，修同心轮廓
-  // 叠号）：先占位全部落点徽标矩形，再按轮廓片面积降序放标签；候选点=锚点
-  // +自身多边形内 5×5 网格点（按离锚点距离排序），逐点试放至无碰撞——
-  // 同心/嵌套轮廓（米尔贝×米贝、车间二两栋等锚点重合）会各自落到不同角；
-  // 文本宽度不够「编号+名称」时降级为仅编号（每栋至少有号），全碰撞才跳过
+  // 编号/名称标注：字号按 1/zoom 保持屏幕 13px。一栋一号（v3，2026-11-06
+  // 足迹合并拍板）：主片放全尺寸「编号+名称」（宽度不够降级仅编号），子单
+  // 元片放小灰号（母建筑编号，视觉从属）；候选点=锚点+自身多边形内 5×5 网
+  // 格（按离锚点距离排序），逐点试放至无碰撞；主标按面积降序先占位
   const labels = useMemo<
-    { id: number; text: string; x: number; y: number }[]
+    { id: number; text: string; x: number; y: number; small: boolean }[]
   >(() => {
     const fs = 13 / zoom
     const placed: { x1: number; y1: number; x2: number; y2: number }[] = []
@@ -979,10 +998,17 @@ export function FacilityMapCard() {
       const full = b.def.name ? `${b.def.id} ${b.def.name}` : `${b.def.id}`
       return geo.pieces
         .map((piece, i) => {
-          // 宽度不够全称时降级为仅编号（编号必须可见）
-          const text = piece.bbox[2] >= full.length * fs * 0.85 ? full : `${b.def.id}`
-          // 候选点：锚点 + bbox 内 5×5 网格中落在自身多边形内的点
-          const pts: [number, number][] = [piece.anchor]
+          const main = i === 0
+          // 非主片的同楼重复轮廓（足迹合并产物）不标号；只有子单元片放小灰号
+          if (!main && !piece.subunit) return null
+          const raw = main ? full : `${b.def.id}`
+          // 宽度不够时降级为仅编号（编号必须可见）
+          const text = piece.bbox[2] >= raw.length * fs * 0.85 ? raw : `${b.def.id}`
+          // 候选点：锚点（须在自身多边形内——多 rail 建筑合并包围盒中点可能在
+          // 两块之间的空地，如环保RTO）+ bbox 内 5×5 网格中落在自身多边形内的点
+          const pts: [number, number][] = pointInPolys(piece.polys, piece.anchor[0], piece.anchor[1])
+            ? [piece.anchor]
+            : []
           const [bx, by, bw, bh] = piece.bbox
           for (let gx = 0; gx < 5; gx++) {
             for (let gy = 0; gy < 5; gy++) {
@@ -998,19 +1024,24 @@ export function FacilityMapCard() {
             geo,
             piece,
             text,
-            main: i === 0,
+            main,
+            small: !main,
             area: bw * bh,
             pts,
-            w: text.length * fs * 0.95,
-            h: fs * 1.3,
+            w: text.length * fs * (main ? 0.95 : 0.7),
+            h: fs * (main ? 1.3 : 1.0),
           }
         })
-    }).sort((a, b) => b.area - a.area)
-    const out: { id: number; text: string; x: number; y: number }[] = []
+        .filter((x): x is NonNullable<typeof x> => x !== null)
+    }).sort((a, b) => Number(a.small) - Number(b.small) || b.area - a.area)
+    const out: { id: number; text: string; x: number; y: number; small: boolean }[] = []
     for (const item of cands) {
-      let done: { x: number; y: number } | null = null
+      // 用旗标而非可空对象：闭包内赋值不参与 TS 收窄，可空对象会被收窄成
+      // never（tsc 2339 报错根因）
+      let settled = false
+      let doneAt: [number, number] = [0, 0]
       const tryPt = (x: number, y: number) => {
-        if (done) return
+        if (settled) return
         const rect = {
           x1: x - item.w / 2,
           y1: y - item.h / 2,
@@ -1019,16 +1050,18 @@ export function FacilityMapCard() {
         }
         if (!hits(rect)) {
           placed.push(rect)
-          done = { x, y }
+          settled = true
+          doneAt = [x, y]
         }
       }
       for (const [x, y] of item.pts) tryPt(x, y)
       // 兜底：自身多边形内全碰撞（极端嵌套），锚点上下外扩再试两次
-      if (!done) {
+      if (!settled) {
         tryPt(item.piece.anchor[0], item.piece.anchor[1] + item.h * 1.5)
         tryPt(item.piece.anchor[0], item.piece.anchor[1] - item.h * 1.5)
       }
-      if (done) out.push({ id: item.geo.id, text: item.text, x: done.x, y: done.y })
+      if (settled)
+        out.push({ id: item.geo.id, text: item.text, x: doneAt[0], y: doneAt[1], small: item.small })
     }
     return out
   }, [zoom, buildings, buildingById])
@@ -1036,7 +1069,7 @@ export function FacilityMapCard() {
   return (
     <SectionCard
       title="厂区风险分区 · 当日分布"
-      description={`33 栋建筑两级模型（建筑级视图，分区大改 2026-10）· ${data?.date ?? '—'} 作业票/关键风险/超储/隐患（新增+未整改）/消防设施到期与消防/中控报警按建筑落点 · 滚轮缩放 / 拖动平移`}
+      description={`25 栋建筑两级模型（足迹合并修订 2026-11）· ${data?.date ?? '—'} 作业票/关键风险/超储/隐患（新增+未整改）/消防设施到期与消防/中控报警按建筑落点 · 滚轮缩放 / 拖动平移`}
     >
       {isError ? (
         <EmptyGuide
@@ -1125,7 +1158,13 @@ export function FacilityMapCard() {
                           <polygon
                             key={`${pi}-${i}`}
                             points={points}
-                            fill={active ? fam.fillActive : fam.fillBase}
+                            fill={
+                              piece.subunit
+                                ? mixWhite(active ? fam.fillActive : fam.fillBase, 0.45)
+                                : active
+                                  ? fam.fillActive
+                                  : fam.fillBase
+                            }
                             stroke={active ? fam.strokeActive : fam.strokeBase}
                             strokeWidth={active ? 1.4 : 1}
                           />
@@ -1136,15 +1175,15 @@ export function FacilityMapCard() {
                 })}
                 {labels.map(l => (
                   <text
-                    key={`lb-${l.id}-${l.x.toFixed(1)}-${l.y.toFixed(1)}`}
-                    data-testid={`building-label-${l.id}`}
+                    key={`lb-${l.id}-${l.small ? 's' : 'm'}-${l.x.toFixed(1)}-${l.y.toFixed(1)}`}
+                    data-testid={`building-label-${l.id}${l.small ? '-sub' : ''}`}
                     x={l.x}
                     y={l.y}
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    fontSize={13 / zoom}
-                    fontWeight={500}
-                    fill={LABEL_FILL}
+                    fontSize={(l.small ? 10 : 13) / zoom}
+                    fontWeight={l.small ? 500 : 600}
+                    fill={l.small ? '#98a2b3' : LABEL_FILL}
                     stroke="#ffffff"
                     strokeWidth={3 / zoom}
                     strokeLinejoin="round"

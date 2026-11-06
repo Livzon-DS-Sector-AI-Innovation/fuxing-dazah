@@ -203,15 +203,15 @@ describe('FacilityMapCard · 建筑级视图', () => {
     renderWithQuery(<FacilityMapCard />)
     const groups = await screen.findAllByTestId(/^building-poly-/)
     expect(groups).toHaveLength(BUILDINGS.length)
-    expect(BUILDINGS).toHaveLength(33)
+    expect(BUILDINGS).toHaveLength(25)
     // 同轮廓组合成：多分区共用轮廓画一次（29 所在组 6 成员仅 1 片轮廓）
     const polys = document.querySelectorAll('[data-testid^="building-poly-"] polygon')
     expect(polys.length).toBe(EXPECTED_POLYS)
     expect(EXPECTED_POLYS).toBeLessThan(RAIL_COUNT)
-    // 2 号楼：9/21/22/23/24/29 六分区共用轮廓 → 一片轮廓
+    // 2 号楼（车间二，足迹合并）：旧2轮廓（rep=29 两条 rail）+ 旧3轮廓 + 子单元轮廓 → 4 多边形
     expect(
       document.querySelectorAll('[data-testid="building-poly-2"] polygon').length,
-    ).toBe(1)
+    ).toBe(4)
     // 1 号楼：达托/达巴共用轮廓一片 + 异丙醇回收(27) 一片；29 不贡献轮廓
     expect(
       document.querySelectorAll('[data-testid="building-poly-1"] polygon').length,
@@ -225,14 +225,14 @@ describe('FacilityMapCard · 建筑级视图', () => {
     expect(badge.textContent).toContain('储1')
   })
 
-  it('点击 28 号楼弹出建筑信息头与七路明细', async () => {
+  it('点击 21 号楼（消防控制室）弹出建筑信息头与七路明细', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
-    await screen.findByTestId('building-badge-28')
-    await user.click(screen.getByTestId('building-poly-28'))
+    await screen.findByTestId('building-badge-21')
+    await user.click(screen.getByTestId('building-poly-21'))
     const modal = await screen.findByRole('dialog')
     // 建筑信息头：编号+名称+责任部门+产线明细
-    expect(modal.textContent).toContain('28 消防控制室')
+    expect(modal.textContent).toContain('21 消防控制室')
     expect(modal.textContent).toContain('责任部门：安全工程中心')
     expect(modal.textContent).toContain('消控室（仅消防')
     // 明细
@@ -271,13 +271,13 @@ describe('FacilityMapCard · 建筑级视图', () => {
     expect(modal.textContent).toContain('今日报警 2 条')
   })
 
-  it('点击 3 号楼：子单元「乙腈回收＋丙醇回收」在信息头展示', async () => {
+  it('点击 2 号楼（车间二）：子单元「乙腈回收＋丙醇回收」在信息头展示', async () => {
     const user = userEvent.setup()
     renderWithQuery(<FacilityMapCard />)
     await screen.findAllByTestId(/^building-poly-/)
-    await user.click(screen.getByTestId('building-poly-3'))
+    await user.click(screen.getByTestId('building-poly-2'))
     const modal = await screen.findByRole('dialog')
-    expect(modal.textContent).toContain('3 待命名')
+    expect(modal.textContent).toContain('2 车间二')
     expect(modal.textContent).toContain('└ 子单元：乙腈回收＋丙醇回收（提炼工程四部）')
     expect(modal.textContent).toContain('替考')
   })
@@ -297,7 +297,7 @@ describe('FacilityMapCard · 建筑级视图', () => {
   it('按压带轻微抖动（<4px）仍是点击，弹出明细 Modal', async () => {
     renderWithQuery(<FacilityMapCard />)
     await screen.findAllByTestId(/^building-poly-/)
-    const poly = screen.getByTestId('building-poly-28')
+    const poly = screen.getByTestId('building-poly-21')
     // pointer 事件挂在 svg 上，从 polygon 冒泡；抖动 3px 未过拖动阈值
     fireEvent.pointerDown(poly, { button: 0, pointerId: 1 })
     fireEvent.pointerMove(poly, { pointerId: 1, clientX: 2, clientY: 1 })
@@ -310,7 +310,7 @@ describe('FacilityMapCard · 建筑级视图', () => {
   it('拖动平移后的松手不当作建筑点击（不弹 Modal）', async () => {
     renderWithQuery(<FacilityMapCard />)
     await screen.findAllByTestId(/^building-poly-/)
-    const poly = screen.getByTestId('building-poly-28')
+    const poly = screen.getByTestId('building-poly-21')
     fireEvent.pointerDown(poly, { button: 0, pointerId: 1 })
     fireEvent.pointerMove(poly, { pointerId: 1, clientX: 12, clientY: 3 }) // 15px 越过阈值
     fireEvent.pointerUp(poly, { pointerId: 1 })
@@ -367,8 +367,9 @@ describe('FacilityMapCard · 建筑级视图', () => {
     const labels = await screen.findAllByTestId(/^building-label-/)
     // 标注文本都是合法建筑标注（编号 或 编号+名称）
     const valid = new Set(
-      BUILDINGS.map(b => (b.name ? `${b.id} ${b.name}` : `${b.id}`)),
+      BUILDINGS.flatMap(b => (b.name ? [`${b.id}`, `${b.id} ${b.name}`] : [`${b.id}`])),
     )
+    // 子单元小号与宽度降级的标注都是纯编号——纯编号恒合法
     for (const l of labels) {
       expect(valid.has(l.textContent ?? '')).toBe(true)
     }

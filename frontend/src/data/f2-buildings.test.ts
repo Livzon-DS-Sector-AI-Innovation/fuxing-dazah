@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import asset from '@/data/tiji-risk-districts.json'
 import { BUILDINGS, BUILDING_FAMILIES, DIST_TO_BUILDING } from './f2-buildings'
 
-// 资产分区（64 平台分区 + 本地补建罐区 9001）必须被 33 栋建筑全部收编，
+// 资产分区（64 平台分区 + 本地补建罐区 9001）必须被 25 栋建筑全部收编，
 // 每个分区恰归一栋（含子单元）——丢区或双归属都会让落点数据丢失/重复
 describe('f2-buildings 建筑级配置自洽', () => {
-  it('33 栋、编号 1-33 连续唯一', () => {
-    expect(BUILDINGS).toHaveLength(33)
+  it('25 栋、编号 1-25 连续唯一（2026-11-06 足迹合并：33→25）', () => {
+    expect(BUILDINGS).toHaveLength(25)
     expect(BUILDINGS.map(b => b.id)).toEqual(
-      Array.from({ length: 33 }, (_, i) => i + 1),
+      Array.from({ length: 25 }, (_, i) => i + 1),
     )
   })
 
@@ -37,12 +37,34 @@ describe('f2-buildings 建筑级配置自洽', () => {
     expect(BUILDINGS.find(b => b.id === 1)!.distIds).toContain('29')
   })
 
-  it('五个子单元归属正确（27→1 / 28+25→3 / 26→4 / 30→16）', () => {
+  it('2026-11-06 足迹合并迁移钉（旧号→新号）', () => {
+    // 旧2+旧3→2（车间二两栋连体）；旧4+旧5→3（米尔贝+米贝同楼）
+    expect(DIST_TO_BUILDING.get('9')).toBe(2)
+    expect(DIST_TO_BUILDING.get('10')).toBe(2)
+    expect(DIST_TO_BUILDING.get('4')).toBe(2)
+    expect(DIST_TO_BUILDING.get('20')).toBe(3)
+    expect(DIST_TO_BUILDING.get('7')).toBe(3)
+    // 旧6+旧9→4（提一A楼）；旧7+旧10+旧11→5（提一B楼）；旧12+旧8→6（提二楼）
+    expect(DIST_TO_BUILDING.get('53')).toBe(4)
+    expect(DIST_TO_BUILDING.get('63')).toBe(4)
+    expect(DIST_TO_BUILDING.get('61')).toBe(5)
+    expect(DIST_TO_BUILDING.get('67')).toBe(5)
+    expect(DIST_TO_BUILDING.get('41')).toBe(5)
+    expect(DIST_TO_BUILDING.get('75')).toBe(6)
+    expect(DIST_TO_BUILDING.get('62')).toBe(6)
+    // 旧18+旧31→7（研发/QC楼）；旧19+旧20→8（仓储楼）
+    expect(DIST_TO_BUILDING.get('6')).toBe(7)
+    expect(DIST_TO_BUILDING.get('31')).toBe(7)
+    expect(DIST_TO_BUILDING.get('43')).toBe(8)
+    expect(DIST_TO_BUILDING.get('44')).toBe(8)
+  })
+
+  it('五个子单元归属正确（27→1 / 28+25→2 / 26→3 / 30→12）', () => {
     expect(DIST_TO_BUILDING.get('27')).toBe(1)
-    expect(DIST_TO_BUILDING.get('28')).toBe(3)
-    expect(DIST_TO_BUILDING.get('25')).toBe(3)
-    expect(DIST_TO_BUILDING.get('26')).toBe(4)
-    expect(DIST_TO_BUILDING.get('30')).toBe(16)
+    expect(DIST_TO_BUILDING.get('28')).toBe(2)
+    expect(DIST_TO_BUILDING.get('25')).toBe(2)
+    expect(DIST_TO_BUILDING.get('26')).toBe(3)
+    expect(DIST_TO_BUILDING.get('30')).toBe(12)
   })
 
   it('每栋必有责任部门、产线明细与已定义色系族', () => {
