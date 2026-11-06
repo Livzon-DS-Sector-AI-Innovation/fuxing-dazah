@@ -277,7 +277,6 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "lc-parser", label: "液相解析", path: "/quality", permissions: ["quality:lc:read"] },
           { key: "quality-task", label: "检验填报", path: "/quality/task", permissions: ["quality:task:read"] },
           { key: "quality-board", label: "任务看板", path: "/quality/board", permissions: ["quality:task:read"] },
-          { key: "lc-history", label: "检验历史", path: "/quality/history", permissions: ["quality:lc:read"] },
           { key: "quality-summary", label: "汇总统计", path: "/quality/summary", permissions: ["quality:report:read"] },
           { key: "quality-standards", label: "产品标准", path: "/quality/standards", permissions: ["quality:task:read"] },
           { key: "quality-templates", label: "报告模板", path: "/quality/templates", permissions: ["quality:report:read"] },

@@ -2,11 +2,11 @@
 
 import { useState } from 'react'
 import { usePermission } from '@/hooks/usePermission'
-import { Typography, Divider, Empty, Button, Space, Table, Tag, Modal, InputNumber, App } from 'antd'
+import { Typography, Divider, Empty, Button, Space, Table, Tag, Modal, InputNumber, App, Tabs } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { LcUploader, LcReportView } from '@/components/quality'
+import { LcUploader, LcReportView, LcHistoryList } from '@/components/quality'
 import { confirmTaskResult } from '@/actions/quality'
 import type { UploadLcResponse } from '@/types/quality'
 
@@ -27,6 +27,7 @@ export default function QualityPage() {
   const [result, setResult] = useState<UploadLcResponse | null>(null)
   const [confirmItems, setConfirmItems] = useState<ConfirmItem[]>([])
   const [confirming, setConfirming] = useState(false)
+  const [activeTab, setActiveTab] = useState('parse')
   const { message } = App.useApp()
   const router = useRouter()
 
@@ -123,6 +124,15 @@ export default function QualityPage() {
           ]}
         />
       </Modal>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: 'parse',
+            label: '液相解析',
+            children: (
+              <>
       <Title level={3} style={{ marginBottom: 4 }}>
         <ExperimentOutlined /> 液相计算表解析
       </Title>
@@ -143,9 +153,7 @@ export default function QualityPage() {
               去任务确认归入（已自动填入待确认）
             </Button>
           </Link>
-          <Link href="/quality/history">
-            <Button icon={<HistoryOutlined />}>历史记录</Button>
-          </Link>
+          <Button icon={<HistoryOutlined />} onClick={() => setActiveTab('history')}>历史记录</Button>
         </Space>
       )}
       {result && result.record_id && !result.task_link?.task_id && (
@@ -155,9 +163,7 @@ export default function QualityPage() {
               去检验填报建任务归入
             </Button>
           </Link>
-          <Link href="/quality/history">
-            <Button icon={<HistoryOutlined />}>历史记录</Button>
-          </Link>
+          <Button icon={<HistoryOutlined />} onClick={() => setActiveTab('history')}>历史记录</Button>
         </Space>
       )}
       {result && result.record_id && !result.task_link?.task_id && (
@@ -197,7 +203,16 @@ export default function QualityPage() {
           <Empty description="请上传液相计算表 Excel 文件开始解析" />
         </div>
       )}
-
+              </>
+            ),
+          },
+          {
+            key: 'history',
+            label: '检验历史',
+            children: <LcHistoryList />,
+          },
+        ]}
+      />
     </div>
   )
 }
