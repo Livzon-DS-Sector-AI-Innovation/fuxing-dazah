@@ -27,7 +27,7 @@ def hardware_alert_rules() -> list[dict[str, Any]]:
             "source": HARDWARE_ALERT_SOURCE_NAME,
             "executor": "hardware_urge",
             "conditions": [
-                {"field": "payload.event_type", "op": "in", "values": list(URGE_EVENT_TYPES)},
+                {"field": "event_type", "op": "in", "values": list(URGE_EVENT_TYPES)},
             ],
         },
         {
@@ -36,7 +36,7 @@ def hardware_alert_rules() -> list[dict[str, Any]]:
             "source": HARDWARE_ALERT_SOURCE_NAME,
             "executor": "hardware_digest_push",
             "conditions": [
-                {"field": "payload.event_type", "op": "in",
+                {"field": "event_type", "op": "in",
                  "values": ["daily_digest", "weekly_digest"]},
             ],
         },
@@ -46,7 +46,7 @@ def hardware_alert_rules() -> list[dict[str, Any]]:
             "source": HARDWARE_ALERT_SOURCE_NAME,
             "executor": "hardware_plan_draft",
             "conditions": [
-                {"field": "payload.event_type", "op": "in", "values": ["plan_draft"]},
+                {"field": "event_type", "op": "in", "values": ["plan_draft"]},
             ],
         },
     ]

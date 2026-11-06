@@ -140,7 +140,10 @@ async def hardware_urge(task_dict: dict[str, Any], inputs: list[dict[str, Any]])
         await enqueue_outbox_message(
             session,
             conversation=f"hw_urge:{external_id}",
-            channel={"type": "feishu_card", "chat_id": chat_id},
+            # 仓储凭证独立通道：feishu_card 全局 sender 走 safety 应用，
+            # 但催办群（WAREHOUSE_TEST/HARDWARE_ALERT_CHAT）只有仓储机器
+            # 人在群（2026-11-06 启用验证实测 230002 Bot NOT in chat）
+            channel={"type": "warehouse_feishu_card", "chat_id": chat_id},
             purpose="hardware_urge",
             task_id=task_id,
             body=_build_urge_body(payload),

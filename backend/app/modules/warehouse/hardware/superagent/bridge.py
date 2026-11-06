@@ -37,4 +37,37 @@ def register_hardware_superagent() -> None:
     ):
         if get_executor(name) is None:
             register_executor(name, fn)
+
+    # 仓储凭证卡片通道：feishu_card 全局 sender 走 safety 应用，但五金催办
+    # 群（WAREHOUSE_HARDWARE_ALERT_CHAT_ID/WAREHOUSE_TEST_CHAT_ID）只有仓储
+    # 机器人在群（2026-11-06 启用验证实测 230002 Bot NOT in chat）——独立
+    # 通道类型走仓储凭证发送。
+    from app.platform.superagent.effects import register_outbox_sender
+
+    async def _warehouse_card_sender(channel: dict, body: dict) -> bool:
+        from app.modules.warehouse.feishu.notification import send_card_to_target
+
+        card = {
+            "schema": "2.0",
+            "header": {
+                "title": {"tag": "plain_text", "content": str(body.get("title") or "五金库通知")},
+                "template": "red",
+            },
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": str(body.get("content") or "")}
+                ]
+            },
+        }
+        try:
+            mid = await send_card_to_target(str(channel.get("chat_id") or ""), card)
+            return bool(mid)
+        except Exception:
+            logger.exception("warehouse_feishu_card 发送失败: chat=%s", channel.get("chat_id"))
+            return False
+
+    try:
+        register_outbox_sender("warehouse_feishu_card", _warehouse_card_sender)
+    except ValueError:
+        pass  # 已注册（进程内幂等；reload 换血后重注册）
     logger.info("五金库 superagent 桥已注册（hardware_alert_scan + 3 executors）")
