@@ -244,6 +244,154 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator * 100, 1) if denominator else 0.0
 
 
+# ═══════════════════════════════════════════════════════════════
+# P1-1 R5：检索维度聚合 + P0-C 基线对照
+# ═══════════════════════════════════════════════════════════════
+
+# P0-C 验收修复基线（2026-11-06，evidence/acceptance-fix.md：30d replay / 505 calls）
+P0C_BASELINE: dict[str, Any] = {
+    "window": "30d / 505 calls（2026-11-06 P0-C 验收修复）",
+    "calls": 505,
+    "json_valid_after_rate": 97.0,
+    "gate_pass_calls": 266,
+    "gate_fail_calls": 224,
+    "unit_verified_rate": 95.7,       # 507/530
+    "rerun_records": 140,
+    "rerun_gate_pass_records": 139,
+}
+# 引用单元可验证率硬底线（P1-1 spec：不回退 P0-C 基线 → ≥95%）
+UNIT_VERIFIED_FLOOR = 95.0
+
+
+def _extra_dict(row: dict[str, Any]) -> dict[str, Any]:
+    """审计行 extra（dict 或 JSON 字符串）→ dict；坏值返回空 dict。"""
+    extra = row.get("extra")
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return extra if isinstance(extra, dict) else {}
+
+
+def summarize_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """从审计 extra 聚合检索维度（老行无字段优雅降级，不计分母）。"""
+    calls_with_meta = 0
+    multi_query_calls = 0
+    rewrite_hit_calls = 0
+    count_sum = 0
+    docs: Counter[str] = Counter()
+    for row in rows:
+        extra = _extra_dict(row)
+        if "multi_query_count" not in extra:
+            continue
+        calls_with_meta += 1
+        count = int(extra.get("multi_query_count") or 0)
+        count_sum += count
+        if count > 1:
+            multi_query_calls += 1
+        if extra.get("rewrite_hit"):
+            rewrite_hit_calls += 1
+        for doc in extra.get("retrieval_docs") or []:
+            if doc:
+                docs[str(doc)] += 1
+    return {
+        "calls_with_meta": calls_with_meta,
+        "multi_query_calls": multi_query_calls,
+        "rewrite_hit_calls": rewrite_hit_calls,
+        "avg_multi_query_count": (
+            round(count_sum / calls_with_meta, 2) if calls_with_meta else 0.0
+        ),
+        "top_docs": docs.most_common(10),
+    }
+
+
+def baseline_comparison(stats: dict[str, Any]) -> list[dict[str, Any]]:
+    """当前指标 vs P0-C 基线（率值方向性对照；单元可验证率带 95% 硬底线）。"""
+    totals = stats.get("totals", {})
+    citation = stats.get("citation") or {}
+    rerun = stats.get("rerun_records") or {}
+
+    def _item(
+        metric: str, baseline: float, current: float, floor: float | None = None
+    ) -> dict[str, Any]:
+        threshold = floor if floor is not None else baseline
+        return {
+            "metric": metric,
+            "baseline": baseline,
+            "current": current,
+            "floor": floor,
+            "ok": bool(current >= threshold),
+        }
+
+    items = [
+        _item(
+            "JSON 修复后合法率",
+            P0C_BASELINE["json_valid_after_rate"],
+            float(totals.get("json_valid_after_rate") or 0.0),
+        ),
+        _item(
+            "引用单元可验证率",
+            P0C_BASELINE["unit_verified_rate"],
+            float(citation.get("unit_verified_rate") or 0.0),
+            floor=UNIT_VERIFIED_FLOOR,
+        ),
+    ]
+    # 重跑窗口记录级：窗口与基线同量（140 条）才可比，否则标记不可比
+    same_window = rerun.get("records") == P0C_BASELINE["rerun_records"]
+    items.append(
+        {
+            "metric": "重跑窗口闸门通过记录",
+            "baseline": P0C_BASELINE["rerun_gate_pass_records"],
+            "current": rerun.get("gate_pass_records") or 0,
+            "floor": None,
+            "ok": (
+                bool(
+                    (rerun.get("gate_pass_records") or 0)
+                    >= P0C_BASELINE["rerun_gate_pass_records"]
+                )
+                if same_window
+                else None
+            ),
+        }
+    )
+    # 闸门通过数：窗口调用量与基线同量（505 calls）才可比
+    same_calls_window = totals.get("calls") == P0C_BASELINE["calls"]
+    items.append(
+        {
+            "metric": "闸门通过调用",
+            "baseline": P0C_BASELINE["gate_pass_calls"],
+            "current": totals.get("gate_pass_calls") or 0,
+            "floor": None,
+            "ok": (
+                bool(
+                    (totals.get("gate_pass_calls") or 0)
+                    >= P0C_BASELINE["gate_pass_calls"]
+                )
+                if same_calls_window
+                else None
+            ),
+        }
+    )
+    # GT genuine 误拒/误收：硬底线 0（有 GT 对照数据才可比）
+    truth = stats.get("ground_truth") or {}
+    if truth:
+        items.append(
+            {
+                "metric": "GT genuine 误拒/误收",
+                "baseline": 0,
+                "current": int(truth.get("wrong_reject_genuine") or 0)
+                + int(truth.get("wrong_accept_genuine") or 0),
+                "floor": None,
+                "ok": bool(
+                    not (truth.get("wrong_reject_genuine") or 0)
+                    and not (truth.get("wrong_accept_genuine") or 0)
+                ),
+            }
+        )
+    return items
+
+
 def analyze_rows(
     rows: list[dict[str, Any]], *, legacy_gate: bool = False
 ) -> dict[str, Any]:
@@ -402,6 +550,7 @@ def analyze_rows(
         "legacy_gate": legacy_gate,
         "vision": _chain_summary(rows, vision=True, legacy_gate=legacy_gate),
         "text": _chain_summary(rows, vision=False, legacy_gate=legacy_gate),
+        "retrieval": summarize_retrieval(rows),
         "repair_stages": dict(stage_counter),
         "gate_categories": dict(gate_categories),
         "by_day": {day: dict(slot) for day, slot in sorted(by_day.items())},
@@ -931,6 +1080,49 @@ def render_markdown(stats: dict[str, Any], *, days: int) -> str:
         f" = 占位变体（含精确）/ 有证据调用 = {citation['placeholder_variant_rate']}%",
         f"- 闸门 invalid_citation 分类："
         f"{stats['gate_categories'].get('invalid_citation', 0)}",
+        "",
+    ]
+    retrieval = stats.get("retrieval") or {
+        "calls_with_meta": 0,
+        "multi_query_calls": 0,
+        "rewrite_hit_calls": 0,
+        "avg_multi_query_count": 0.0,
+        "top_docs": [],
+    }
+    retrieval_rate = _rate(retrieval["calls_with_meta"], totals["calls"])
+    lines += [
+        "## 检索维度（P1-1，审计 extra；老数据无字段优雅降级）",
+        "",
+        f"- 有检索维度调用：{retrieval['calls_with_meta']} / {totals['calls']}"
+        f"（{retrieval_rate}%）",
+        f"- 多路调用（multi_query_count>1）：{retrieval['multi_query_calls']}"
+        f"（平均路数 {retrieval['avg_multi_query_count']}）",
+        f"- 清洗生效调用（rewrite_hit）：{retrieval['rewrite_hit_calls']}",
+        "- Top 命中文档："
+        + (", ".join(f"{doc}×{n}" for doc, n in retrieval["top_docs"][:5]) or "(无)"),
+        "",
+        "## P0-C 基线对照",
+        "",
+        f"> 基线口径：{P0C_BASELINE['window']}；窗口不同时仅方向性参考，",
+        f"> 「重跑窗口记录级」窗口同量（{P0C_BASELINE['rerun_records']} 条）才可比。",
+        "",
+        "| 指标 | P0-C 基线 | 本次 | 硬底线 | 结论 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in baseline_comparison(stats):
+        floor_text = f"{item['floor']}%" if item["floor"] is not None else "—"
+        if item["ok"] is None:
+            verdict = "—（窗口不同不比）"
+        else:
+            verdict = "✅ 不回退" if item["ok"] else "⚠️ 回退"
+        current_text = (
+            f"{item['current']}%" if isinstance(item["current"], float) else item["current"]
+        )
+        lines.append(
+            f"| {item['metric']} | {item['baseline']} | {current_text} "
+            f"| {floor_text} | {verdict} |"
+        )
+    lines += [
         "",
         "## 重跑窗口（按记录聚合；最高调用日）",
         "",

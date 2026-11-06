@@ -313,9 +313,11 @@ def _view() -> bitable_repo.HazardView:
 def _wire_identify(monkeypatch: pytest.MonkeyPatch, holder: _Holder) -> None:
     """接线 _identify_one 的全部外部边界：DB session / RAG / Bitable / AI / 审计。"""
 
-    async def fake_load_context(session: Any, description: str) -> KnowledgeContext | None:
+    async def fake_load_context(
+        session: Any, description: str
+    ) -> tuple[KnowledgeContext | None, Any]:
         holder.loaded_description = description
-        return holder.context
+        return holder.context, None
 
     monkeypatch.setattr(ai_analysis, "_load_knowledge_context", fake_load_context)
 

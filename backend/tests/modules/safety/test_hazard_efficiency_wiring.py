@@ -133,9 +133,9 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
 
     async def fake_load_context(
         session: Any, description: str
-    ) -> KnowledgeContext | None:
+    ) -> tuple[KnowledgeContext | None, Any]:
         holder.description = description
-        return holder.context
+        return holder.context, None
 
     monkeypatch.setattr(ai_analysis, "_load_knowledge_context", fake_load_context)
 

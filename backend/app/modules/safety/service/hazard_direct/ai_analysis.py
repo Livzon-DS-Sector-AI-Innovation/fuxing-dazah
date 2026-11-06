@@ -75,6 +75,7 @@ from app.modules.safety.service.hazard_direct.round_result import RoundResult
 
 if TYPE_CHECKING:
     from app.modules.safety.knowledge.retriever import KnowledgeContext
+    from app.modules.safety.service.hazard_direct.retrieval_query import RetrievalMeta
 
 logger = logging.getLogger(__name__)
 
@@ -134,26 +135,78 @@ _INFRA_FAILURE_CATEGORIES = AI_INFRA_CATEGORIES | RAG_INFRA_CATEGORIES
 
 async def _load_knowledge_context(
     session: Any, description: str
-) -> KnowledgeContext | None:
+) -> tuple[KnowledgeContext | None, RetrievalMeta | None]:
     """RAG 法规检索（知识库仍在平台数据库，与隐患记录无关）。
 
-    返回完整 ``KnowledgeContext``（chunks/degradation/markdown）而非仅
-    markdown —— 调用方先做 RAG 预检（降级/零召回不调 AI），再把
-    ``context.markdown`` 注入 prompt。检索异常 → None（由质量闸门判失败）。
+    P1-1 R1 多路检索：开关开（默认）→ ``build_retrieval_queries`` 产出
+    清洗主路 + 关键词路（+ 可选 LLM 改写路），逐路 ``retrieve``（每路
+    CANDIDATES 候选）后客户端 RRF 合并取 TOP_K；主路 degradation 决定
+    合并结果（闸门输入语义不变），辅路异常只降辅路贡献。开关关 → 原单路
+    路径（描述原文 + TOP_K，热回滚）。
+
+    返回 ``(context, meta)``：context 供 RAG 预检与 prompt 注入（检索异常
+    → ``(None, None)``，由质量闸门判失败）；meta 为检索可观测维度
+    （``retrieval_query.RetrievalMeta``，审计 extra 用）。
     """
+    from app.modules.safety.service.hazard_direct import retrieval_query
+
     try:
         from app.modules.safety.knowledge.retriever import SafetyKnowledgeRetriever
 
         retriever = SafetyKnowledgeRetriever(session)
-        context = await retriever.retrieve(description=description, target_chunks=8)
-        logger.info(
-            "① RAG 检索完成: chunks=%d degradation=%s len=%d",
-            len(context.chunks), context.degradation, len(context.markdown),
+
+        if not retrieval_query.multi_query_enabled():
+            context = await retriever.retrieve(
+                description=description,
+                target_chunks=retrieval_query.retrieval_top_k(),
+            )
+            logger.info(
+                "① RAG 检索完成: chunks=%d degradation=%s len=%d",
+                len(context.chunks), context.degradation, len(context.markdown),
+            )
+            return context, retrieval_query.single_route_meta(description, context)
+
+        plan = retrieval_query.build_retrieval_queries(description)
+        queries = list(plan.queries) or [description]
+        if retrieval_query.llm_rewrite_enabled():
+            rewritten = await retrieval_query.llm_rewrite_query(plan.primary)
+            if rewritten and rewritten not in queries:
+                queries.append(rewritten)
+
+        contexts: list[KnowledgeContext] = []
+        for index, query in enumerate(queries):
+            try:
+                contexts.append(
+                    await retriever.retrieve(
+                        description=query,
+                        target_chunks=retrieval_query.retrieval_candidates(),
+                    )
+                )
+            except Exception:
+                if index == 0:
+                    raise  # 主路失败 = 整体检索失败（外层收敛 None，闸门判失败）
+                logger.warning(
+                    "① 辅路检索失败（跳过该路，不影响主路）: query=%r",
+                    query[:60], exc_info=True,
+                )
+        if not contexts:
+            return None, None
+
+        merged = retrieval_query.merge_route_contexts(
+            contexts, top_k=retrieval_query.retrieval_top_k()
         )
-        return context
+        meta = retrieval_query.build_retrieval_meta(
+            plan, merged, queries=tuple(queries)
+        )
+        logger.info(
+            "① RAG 多路检索完成: routes=%d/%d chunks=%d degradation=%s len=%d",
+            len(contexts), len(queries), len(merged.chunks),
+            merged.degradation, len(merged.markdown),
+        )
+        return merged, meta
     except Exception:
         logger.warning("① RAG 法规检索失败", exc_info=True)
-        return None
+        return None, None
 
 
 def _build_advice_text(output: dict[str, Any]) -> str:
@@ -169,7 +222,9 @@ def _build_advice_text(output: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-async def _load_context_for_view(view: bitable_repo.HazardView) -> KnowledgeContext | None:
+async def _load_context_for_view(
+    view: bitable_repo.HazardView,
+) -> tuple[KnowledgeContext | None, RetrievalMeta | None]:
     """用独立 session 做 RAG 检索（异常已在 _load_knowledge_context 内收敛为 None）。"""
     from app.core.database import async_session_factory
 
@@ -178,20 +233,29 @@ async def _load_context_for_view(view: bitable_repo.HazardView) -> KnowledgeCont
 
 
 async def _record_citation_quality(
-    plugin: Any, evidence: Any, *, strict: bool
+    plugin: Any,
+    evidence: Any,
+    *,
+    strict: bool,
+    retrieval_meta: Any = None,
 ) -> None:
-    """把引用质量维度合并进最近一次 AI 审计行 extra（C2，best-effort）。
+    """把引用质量 + 检索维度合并进最近一次 AI 审计行 extra（C2/R5，best-effort）。
 
     - 无审计行 / 无报告时 mark_audit_extra 内部 no-op；
+    - ``retrieval_meta``（``retrieval_query.RetrievalMeta``）非空时并入
+      检索可观测字段（retrieval_query/multi_query_count/rewrite_hit/docs）；
     - 任何异常只告警，绝不影响识别/写回业务。
     """
     try:
         from app.modules.safety.ai_audit import audited_client
+        from app.modules.safety.service.hazard_direct import retrieval_query
 
         report = getattr(plugin, "last_citation_report", None)
-        await audited_client.mark_audit_extra(
-            quality_gate.citation_audit_fields(report, evidence, strict=strict)
+        fields: dict[str, Any] = quality_gate.citation_audit_fields(
+            report, evidence, strict=strict
         )
+        fields.update(retrieval_query.retrieval_audit_fields(retrieval_meta))
+        await audited_client.mark_audit_extra(fields)
     except Exception:  # noqa: BLE001 — 审计质量维度失败不影响业务
         logger.warning("引用质量维度审计回写失败（不影响业务）", exc_info=True)
 
@@ -219,8 +283,19 @@ async def _identify_one(
     from app.modules.safety.service.config import get_ai_service
 
     # ── 1. RAG 预检：失败即抛，不建客户端、不调 AI、不下载 ──
-    knowledge_context = await _load_context_for_view(view)
-    quality_gate.ensure_knowledge(knowledge_context)
+    # R5：预检失败发生在 ai_audit_scope 之前（无审计行可挂检索维度），
+    # 检索 query/docs 维度进 warning 日志兜底，保证失败记录仍可按检索归因。
+    knowledge_context, retrieval_meta = await _load_context_for_view(view)
+    try:
+        quality_gate.ensure_knowledge(knowledge_context)
+    except quality_gate.QualityGateError:
+        if retrieval_meta is not None:
+            logger.warning(
+                "① RAG 预检失败（检索维度归因）: queries=%s rewrite_hit=%s docs=%s",
+                list(retrieval_meta.queries), retrieval_meta.rewrite_hit,
+                list(retrieval_meta.docs[:5]),
+            )
+        raise
     assert knowledge_context is not None  # ensure_knowledge 已排除 None（供 mypy 收窄）
     knowledge_text = knowledge_context.markdown or None
 
@@ -283,9 +358,12 @@ async def _identify_one(
         try:
             output = await plugin.identify(input_data)
         except Exception:
-            # 失败也留引用质量观测（否则无法定位失败记录的依据来源）
+            # 失败也留引用质量+检索维度观测（否则无法定位失败记录的依据来源）
             await _record_citation_quality(
-                plugin, citation_evidence, strict=citation_strict
+                plugin,
+                citation_evidence,
+                strict=citation_strict,
+                retrieval_meta=retrieval_meta,
             )
             raise
 
@@ -309,7 +387,10 @@ async def _identify_one(
         quality_gate.ensure_output(result, evidence=citation_evidence)
     finally:
         await _record_citation_quality(
-            plugin, citation_evidence, strict=citation_strict
+            plugin,
+            citation_evidence,
+            strict=citation_strict,
+            retrieval_meta=retrieval_meta,
         )
     return result
 

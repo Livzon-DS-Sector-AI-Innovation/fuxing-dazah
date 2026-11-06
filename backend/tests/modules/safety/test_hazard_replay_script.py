@@ -55,10 +55,13 @@ def _row(
     degradation: str | None = "ragplus",
     input_text: str | None = None,
     round_id: str | None = None,
+    retrieval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     extra: dict[str, Any] = {"bitable_record_id": record_id}
     if round_id is not None:
         extra["round_id"] = round_id
+    if retrieval is not None:
+        extra.update(retrieval)
     return {
         "created_at": f"{day} 00:00:00",
         "input_text": (
@@ -284,6 +287,87 @@ def test_rule_regression_missing_ground_truth_returns_none(
     """T1⑤：ground truth 不入库、缺失时规则回归对照跳过（不报错、不依赖 /tmp）。"""
     monkeypatch.setattr(replay, "GROUND_TRUTH_FILE", tmp_path / "nope.jsonl")
     assert replay.rule_regression_from_ground_truth() is None
+
+
+# ═══════════════════════════════════════════════════════════════
+# P1-1 R5：检索维度聚合 + P0-C 基线对照
+# ═══════════════════════════════════════════════════════════════
+
+
+def test_analyze_rows_summarizes_retrieval_dimension() -> None:
+    rows = [
+        _row(
+            output=GOOD,
+            record_id="rec1",
+            retrieval={
+                "retrieval_query": "罐区动火未办票",
+                "retrieval_queries": ["罐区动火未办票", "罐区 动火作业 作业票"],
+                "multi_query_count": 2,
+                "rewrite_hit": True,
+                "retrieval_docs": ["《GB 30871》", "《动火制度》"],
+            },
+        ),
+        _row(
+            output=GOOD,
+            record_id="rec2",
+            retrieval={
+                "retrieval_query": "灭火器过期",
+                "retrieval_queries": ["灭火器过期"],
+                "multi_query_count": 1,
+                "rewrite_hit": False,
+                "retrieval_docs": ["《消防法》"],
+            },
+        ),
+        _row(output=GOOD, record_id="rec3"),  # 老行：无检索维度 → 优雅降级
+    ]
+    stats = replay.analyze_rows(rows)
+    retrieval = stats["retrieval"]
+    assert retrieval["calls_with_meta"] == 2
+    assert retrieval["multi_query_calls"] == 1
+    assert retrieval["rewrite_hit_calls"] == 1
+    assert retrieval["avg_multi_query_count"] == 1.5
+    assert retrieval["top_docs"][0] == ("《GB 30871》", 1)
+
+
+def test_analyze_rows_retrieval_dimension_empty_for_old_rows_only() -> None:
+    stats = replay.analyze_rows([_row(output=GOOD), _row(output=TRAILING, record_id="rec2")])
+    assert stats["retrieval"]["calls_with_meta"] == 0
+    assert stats["retrieval"]["top_docs"] == []
+
+
+def test_baseline_comparison_flags_regression() -> None:
+    stats = replay.analyze_rows([_row(output=GOOD), _row(output=TRAILING, record_id="rec2")])
+    comparison = replay.baseline_comparison(stats)
+    by_metric = {item["metric"]: item for item in comparison}
+    # 单元级可验证率硬底线 ≥95%
+    unit = by_metric["引用单元可验证率"]
+    assert unit["baseline"] == 95.7
+    assert unit["floor"] == 95.0
+    assert unit["ok"] is (unit["current"] >= 95.0)
+    # JSON 修复后合法率方向性对照
+    assert by_metric["JSON 修复后合法率"]["baseline"] == 97.0
+
+
+def test_render_markdown_contains_retrieval_and_baseline() -> None:
+    rows = [
+        _row(
+            output=GOOD,
+            record_id="rec1",
+            retrieval={
+                "retrieval_query": "罐区动火未办票",
+                "retrieval_queries": ["罐区动火未办票", "罐区 动火作业 作业票"],
+                "multi_query_count": 2,
+                "rewrite_hit": True,
+                "retrieval_docs": ["《GB 30871》"],
+            },
+        ),
+        _row(output=TRAILING, record_id="rec2"),
+    ]
+    stats = replay.analyze_rows(rows)
+    markdown = replay.render_markdown(stats, days=30)
+    assert "检索维度（P1-1" in markdown
+    assert "P0-C 基线对照" in markdown
+    assert "《GB 30871》" in markdown
 
 
 # ═══════════════════════════════════════════════════════════════

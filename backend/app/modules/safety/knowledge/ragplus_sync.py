@@ -129,6 +129,20 @@ async def upsert_ragplus_map(
 # ═══════════════════════════════════════════════════════════════
 
 
+async def _invalidate_rag_cache() -> None:
+    """KB 变更成功后失效 RAG/Chat 检索缓存（P1-1 R4，best-effort）。
+
+    epoch 递增 → 旧缓存 key 即时不可达；失败只告警，不影响入库/归档结果。
+    归档（不在检索名单）也失效：epoch 递增代价仅一次缓存重建，宁可多失效。
+    """
+    try:
+        from app.modules.safety.knowledge.cache import invalidate_knowledge_cache
+
+        await invalidate_knowledge_cache()
+    except Exception:  # noqa: BLE001 — 缓存失效失败不影响业务
+        logger.warning("知识库缓存失效失败（不影响入库/归档结果）", exc_info=True)
+
+
 async def upload_document_to_ragplus(
     *,
     domain: str,
@@ -218,6 +232,7 @@ async def upload_document_to_ragplus(
         if own_session:
             await sess.commit()
         if ok:
+            await _invalidate_rag_cache()
             logger.info(
                 "ragplus 增量入库完成：%s/%s → %s doc=%s",
                 domain,
@@ -337,6 +352,7 @@ async def archive_document_to_ragplus(
         )
         if own_session:
             await sess.commit()
+        await _invalidate_rag_cache()
         logger.info(
             "ragplus 归档完成：%s/%s → %s",
             domain,

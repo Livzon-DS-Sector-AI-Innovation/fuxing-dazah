@@ -162,6 +162,24 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "默认开、热生效；关 = 回退 P0-A 旧行为）",
     ),
     _flag(
+        "SAFETY_HAZARD_MULTI_QUERY_ENABLED", True,
+        "① 检索多路查询开关（P1-1 R1：开 = 清洗主路+关键词路逐路检索后 RRF "
+        "合并；关 = 原单路路径，热回滚；默认开）",
+    ),
+    ConfigItem(
+        "SAFETY_HAZARD_RETRIEVAL_TOP_K", "direct_gate", "int", 8,
+        "① 检索最终注入 chunk 数（多路合并后取数；默认 8 与历史硬编码一致）",
+    ),
+    ConfigItem(
+        "SAFETY_HAZARD_RETRIEVAL_CANDIDATES", "direct_gate", "int", 12,
+        "① 检索每路候选数（RRF 合并前；默认 12，设计 §C11）",
+    ),
+    _flag(
+        "SAFETY_HAZARD_QUERY_LLM_REWRITE_ENABLED", False,
+        "① 检索 LLM 改写路开关（P1-1：开 = 轻量 LLM 改写主路追加为一路，"
+        "失败自动降级规则路；默认关）",
+    ),
+    _flag(
         "SAFETY_SUPERVISION_NOTIFICATION_ENABLED", False,
         "督办等级通知开关（hazard_supervision）",
     ),

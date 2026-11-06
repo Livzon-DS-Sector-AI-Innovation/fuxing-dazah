@@ -215,6 +215,134 @@ class TestArchiveDocument:
         assert row.status == "deleted"
 
 
+class TestCacheInvalidationOnIngest:
+    """KB 变更联动缓存失效（P1-1 R4）：入库/归档成功 → epoch 递增；失败不失效。"""
+
+    @staticmethod
+    def _invalidation_spy(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """替换 cache.invalidate_knowledge_cache 为计数探针（延迟 import 在调用时解析）。"""
+        calls: list[str] = []
+
+        async def _spy() -> None:
+            calls.append("invalidated")
+
+        monkeypatch.setattr(
+            "app.modules.safety.knowledge.cache.invalidate_knowledge_cache", _spy
+        )
+        return calls
+
+    async def test_upload_success_invalidates_cache(self, db_session, monkeypatch) -> None:
+        calls = self._invalidation_spy(monkeypatch)
+        ok = await ragplus_sync.upload_document_to_ragplus(
+            domain="regulation",
+            biz_key="rec-inv-1",
+            title="新法规",
+            file_name="new.pdf",
+            blob=b"%PDF",
+            admin=_fake_admin(),
+            session=db_session,
+        )
+        assert ok is True
+        assert calls == ["invalidated"]
+
+    async def test_upload_parse_failure_skips_invalidation(
+        self, db_session, monkeypatch
+    ) -> None:
+        calls = self._invalidation_spy(monkeypatch)
+        admin = _fake_admin()
+        admin.wait_documents_ready = AsyncMock(
+            return_value={11: {"status": "FAIL", "fail_reason": "解析失败", "chunk_count": 0}}
+        )
+        ok = await ragplus_sync.upload_document_to_ragplus(
+            domain="regulation",
+            biz_key="rec-inv-2",
+            title="坏文档",
+            file_name="bad.pdf",
+            blob=b"%PDF",
+            admin=admin,
+            session=db_session,
+        )
+        assert ok is False
+        assert calls == []
+
+    async def test_upload_exception_skips_invalidation(
+        self, db_session, monkeypatch
+    ) -> None:
+        calls = self._invalidation_spy(monkeypatch)
+        admin = _fake_admin()
+        admin.upload_document = AsyncMock(side_effect=RuntimeError("引擎不可用"))
+        ok = await ragplus_sync.upload_document_to_ragplus(
+            domain="regulation",
+            biz_key="rec-inv-3",
+            title="新法规",
+            file_name="new.pdf",
+            blob=b"%PDF",
+            admin=admin,
+            session=db_session,
+        )
+        assert ok is False
+        assert calls == []
+
+    async def test_invalidate_failure_does_not_break_upload(
+        self, db_session, monkeypatch
+    ) -> None:
+        async def _boom() -> None:
+            raise RuntimeError("redis 不可用")
+
+        monkeypatch.setattr(
+            "app.modules.safety.knowledge.cache.invalidate_knowledge_cache", _boom
+        )
+        ok = await ragplus_sync.upload_document_to_ragplus(
+            domain="regulation",
+            biz_key="rec-inv-4",
+            title="新法规",
+            file_name="new.pdf",
+            blob=b"%PDF",
+            admin=_fake_admin(),
+            session=db_session,
+        )
+        assert ok is True  # 缓存失效失败不影响入库结果（best-effort）
+        row = await _get_map(db_session, "regulation", "rec-inv-4")
+        assert row.status == "active"
+
+    async def test_archive_success_invalidates_cache(
+        self, db_session, monkeypatch
+    ) -> None:
+        calls = self._invalidation_spy(monkeypatch)
+        ok = await ragplus_sync.archive_document_to_ragplus(
+            domain="regulation",
+            biz_key="rec-inv-5",
+            title="废止法规",
+            file_name="old.pdf",
+            blob=None,
+            admin=_fake_admin(),
+            session=db_session,
+        )
+        assert ok is True
+        assert calls == ["invalidated"]
+
+    async def test_invalidate_knowledge_cache_advances_epoch(
+        self, monkeypatch
+    ) -> None:
+        """spy 上一层的补底：``invalidate_knowledge_cache`` 本身必须递增 epoch。"""
+        from app.modules.safety.knowledge import cache as knowledge_cache
+
+        kv: dict[str, str] = {knowledge_cache.EPOCH_KEY: "4"}
+        monkeypatch.setattr(knowledge_cache, "_redis_available", True)
+
+        async def fake_kv_get(key: str) -> str | None:
+            return kv.get(key)
+
+        async def fake_kv_set(key: str, value: str, ex: int = 3600) -> None:
+            kv[key] = value
+
+        monkeypatch.setattr(knowledge_cache, "_kv_get", fake_kv_get)
+        monkeypatch.setattr(knowledge_cache, "_kv_set", fake_kv_set)
+
+        await knowledge_cache.invalidate_knowledge_cache()
+        assert kv[knowledge_cache.EPOCH_KEY] == "5"  # epoch 4 → 5
+
+
 class TestScheduleFromAttachment:
     async def test_schedule_upload_reads_blob_and_uploads(
         self,
