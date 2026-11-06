@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
+from app.modules.safety.business_agent.citations import order_sources_for_answer
 from app.modules.safety.business_agent.schemas import (
     AgentChatRequest,
     PendingActionData,
@@ -275,7 +276,11 @@ async def agent_chat(
         "answer": _strip_reference_section(result["answer"]),
         "pending_action_id": pending_action_id,
         "pending_action": result["pending_action"].model_dump() if result["pending_action"] else None,
-        "sources": result.get("sources") or [],
+        # 按正文 [N] 标题锚定重排并附 cite_no（多轮检索重编号场景下
+        # 前端徽标与正文编号对齐；2026-11-06 阻火器引用事故）
+        "sources": order_sources_for_answer(
+            _strip_reference_section(result["answer"]), result.get("sources"),
+        ),
     })
 
 
@@ -347,7 +352,9 @@ async def agent_chat_stream(
                 yield _sse("message", _next(
                     session_id=str(session.id),
                     answer=_strip_reference_section(result["answer"]),
-                    sources=result.get("sources") or [],
+                    sources=order_sources_for_answer(
+                        _strip_reference_section(result["answer"]), result.get("sources"),
+                    ),
                 ))
         except Exception as exc:  # noqa: BLE001 — SSE 流内异常转 error 事件，不断流
             logger.exception("agent_chat_stream 执行失败")

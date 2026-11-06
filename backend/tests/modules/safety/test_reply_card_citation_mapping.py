@@ -80,3 +80,70 @@ def test_system_prompt_anchors_numbering() -> None:
     # 区块外标准（引用清单中提及的 SH/T 等）不得标 [N]
     assert "规范性引用" in SYSTEM_PROMPT
     assert "区块之外的任何标准" in SYSTEM_PROMPT
+
+
+# ── 2026-11-06 阻火器引用事故（多调用编号冲突 + 截断丢 sources + 标题前缀错位）──
+
+
+# 模拟两次 knowledge_search 合并后的 sources（顺序=调用顺序：call_01 幸存者在前）
+_INCIDENT_SOURCES = [
+    {"doc_title": "GB50160-2008_石油化工企业设计防火标准",
+     "feishu_url": "https://feishu.example/gb50160"},
+    {"doc_title": "GBT20801.6-2006《压力管道规范 工业管道 第6部分安全防护》",
+     "feishu_url": "https://feishu.example/20801"},
+    {"doc_title": "阻火器-gb5908", "feishu_url": "https://feishu.example/gb5908"},
+    {"doc_title": "油品罐区安全管理规范（征求意见稿）", "feishu_url": ""},
+]
+
+# 模型合并转述后全局重编号（[1]-[3] 来自 call_00、[4] 是 call_01 的 [1] 重编）
+_INCIDENT_ANSWER = (
+    "| 《压力管道规范 工业管道 第6部分 安全防护》GB/T 20801.6-2006 [1] | 5.1.1 | … |\n"
+    "| 同上 [1] | 5.1.2 | … |\n"
+    "| 《阻火器》GB 5908（知识库中为草案/报批稿文本）[2] | 4.3 | … |\n"
+    "| 《油品罐区安全管理规范（征求意见稿）》[3] | — | … |\n"
+    "| 《石油化工企业设计防火标准》GB 50160-2008 [4] | — | 未收录正文 |"
+)
+
+
+def test_multi_call_renumbered_citations_anchor_by_title() -> None:
+    """事故主场景：模型跨两次检索全局重编号后，参考栏按文档名锚定仍正确。"""
+    card = _build_reply_card(_INCIDENT_ANSWER, _INCIDENT_SOURCES)
+    md = _card_markdown(card)
+    # [1] → 压力管道规范（不是位置映射的 GB50160！）
+    assert "**[1] GBT20801.6-2006《压力管道规范 工业管道 第6部分安全防护》**" in md
+    assert "href='https://feishu.example/20801'" in md
+    # [4] → GB50160（标题带前缀也能锚定），且带链接
+    assert "**[4] GB50160-2008_石油化工企业设计防火标准**" in md
+    assert "href='https://feishu.example/gb50160'" in md
+    # [2] 无年份标准号；[3] 无 URL 不渲染链接
+    assert "**[2] 阻火器-gb5908**" in md
+    assert "href='https://feishu.example/gb5908'" in md
+    assert "**[3] 油品罐区安全管理规范（征求意见稿）**" in md
+    # 参考栏按编号升序
+    assert md.index("**[1]") < md.index("**[2]") < md.index("**[3]") < md.index("**[4]")
+
+
+def test_bare_number_with_multi_sources_not_mapped() -> None:
+    """多 sources 时正文裸 [N]（无文档名）无法锚定 → 宁缺毋错不进参考栏。"""
+    answer = "根据第 5.1.1 条 [1] 与第 4.3 条 [2] 的要求执行。"
+    card = _build_reply_card(answer, _INCIDENT_SOURCES)
+    assert "参考法规" not in _card_markdown(card)
+
+
+def test_single_source_bare_citation_fallback() -> None:
+    """仅 1 篇 source 时编号无歧义，正文裸 [1] 按位置映射兜底。"""
+    single = [{"doc_title": "石油化工企业设计防火标准", "feishu_url": "https://x/1"}]
+    card = _build_reply_card("依据第 5.1.1 条 [1] 的要求。", single)
+    md = _card_markdown(card)
+    assert "**[1] 石油化工企业设计防火标准**" in md
+    assert "href='https://x/1'" in md
+
+
+def test_order_sources_for_answer_cite_no() -> None:
+    """Web API 用的 order_sources_for_answer：按正文编号重排并附 cite_no。"""
+    from app.modules.safety.business_agent.citations import order_sources_for_answer
+
+    ordered = order_sources_for_answer(_INCIDENT_ANSWER, _INCIDENT_SOURCES)
+    assert [s.get("cite_no") for s in ordered] == [1, 2, 3, 4]
+    assert ordered[0]["doc_title"].startswith("GBT20801.6")
+    assert ordered[3]["doc_title"].startswith("GB50160")

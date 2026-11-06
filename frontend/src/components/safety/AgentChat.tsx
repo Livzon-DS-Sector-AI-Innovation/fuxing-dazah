@@ -490,7 +490,7 @@ export default function AgentChat() {
                       lineHeight: '18px',
                     }}
                   >
-                    {i + 1}
+                    {s.cite_no ?? i + 1}
                   </span>
                   {s.doc_title}
                 </span>

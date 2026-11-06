@@ -250,6 +250,38 @@ async def _build_sources(
             if url and row.title not in title_url_map:
                 title_url_map[row.title] = url
 
+        # ── Pass 2b: 归一化匹配兜底 ──
+        # ragplus 文档名常带标准号前缀（GB50160-2008_石油化工企业设计防火标准），
+        # 与表标题（石油化工企业设计防火标准）全等失配 → feishu_url 回填为空
+        # （2026-11-06 阻火器引用事故第三层根因）。两轮：全等 → 名称互含。
+        from app.modules.safety.knowledge.title_match import titles_match
+
+        remaining = {t for t in orphan_titles if t not in title_url_map}
+        if remaining:
+            stmt2 = select(
+                SafetyKnowledgeArticle.title,
+                SafetyKnowledgeArticle.feishu_record_id,
+                SafetyKnowledgeArticle.feishu_table_id,
+                SafetyKnowledgeArticle.feishu_shared_url,
+            ).where(SafetyKnowledgeArticle.feishu_record_id.isnot(None))
+            pool = (await db.execute(stmt2)).all()
+            for title in remaining:
+                for containment in (False, True):
+                    hit = next(
+                        (
+                            row for row in pool
+                            if titles_match(title, row.title, containment=containment)
+                        ),
+                        None,
+                    )
+                    if hit:
+                        url = hit.feishu_shared_url or _build_bitable_url(
+                            hit.feishu_record_id or "", hit.feishu_table_id
+                        )
+                        if url:
+                            title_url_map[title] = url
+                        break
+
     # ── Assemble source list ──
     sources = []
     for key, doc in doc_groups.items():

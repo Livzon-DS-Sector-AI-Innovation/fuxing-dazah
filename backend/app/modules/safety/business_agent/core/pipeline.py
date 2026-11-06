@@ -145,15 +145,41 @@ def _serialized_len(obj: Any) -> int:
         return _TOOL_RESULT_MAX_BYTES * 8
 
 
+def _slim_sources(sources: list) -> list:
+    """sources 条目瘦身：chunk_text 截 120 字，其余字段（doc_title/
+    feishu_url/article_ref/doc_category）原样保留——卡片参考栏只用这些键。"""
+    slim: list[Any] = []
+    for s in sources:
+        if isinstance(s, dict):
+            item = dict(s)
+            ct = item.get("chunk_text")
+            if isinstance(ct, str) and len(ct) > 120:
+                item["chunk_text"] = ct[:120] + "…"
+            slim.append(item)
+        else:
+            slim.append(s)
+    return slim
+
+
 def _truncate_tool_result(data: dict) -> dict:
     """工具结果超 4KB 时截断给模型的内容。
 
+    - ``sources`` 字段先瘦身（截 chunk_text）：它是卡片「参考法规」栏的
+      唯一数据源（executor._extract_knowledge_sources 读的就是本函数的
+      截断产物），2026-11-06 事故中整体预览路径把它整个丢掉、列表路径
+      把 6 条截剩 1 条，导致参考栏缺失且无原文链接。
     - 列表字段（取序列化后最大者）：二分保留前 M 条 + 「共 N 条，已显示前 M 条」提示，
       保持原有 dict 结构（模型可继续按字段消费）。
-    - 无列表可截或单条仍超限：整体降级为截断预览（preview + 截断提示）。
+    - 无列表可截或单条仍超限：整体降级为截断预览（preview + 截断提示），
+      预览仍附带瘦身后的 sources。
     """
     if _serialized_len(data) <= _TOOL_RESULT_MAX_BYTES:
         return data
+
+    if isinstance(data.get("sources"), list):
+        data = {**data, "sources": _slim_sources(data["sources"])}
+        if _serialized_len(data) <= _TOOL_RESULT_MAX_BYTES:
+            return data
 
     list_fields = [
         (k, v) for k, v in data.items() if isinstance(v, list) and len(v) > 1
@@ -179,12 +205,19 @@ def _truncate_tool_result(data: dict) -> dict:
             return trimmed
 
     payload = json.dumps(data, ensure_ascii=False, default=str)
-    keep = max(0, _TOOL_RESULT_MAX_BYTES - 200)
-    return {
+    # 按字节截预览（原实现按字符切片，中文 payload 可达字节预算 3 倍）
+    budget = max(0, _TOOL_RESULT_MAX_BYTES - 200)
+    out: dict[str, Any] = {
         "truncated": True,
         "truncation_notice": "工具结果过长，已整体截断为预览",
-        "preview": payload[:keep],
     }
+    # 预览路径也保住 sources（参考栏数据源），并从 preview 预算中扣除其体积
+    if isinstance(data.get("sources"), list) and data["sources"]:
+        slim = _slim_sources(data["sources"])
+        out["sources"] = slim
+        budget = max(0, budget - _serialized_len(slim))
+    out["preview"] = payload.encode("utf-8")[:budget].decode("utf-8", errors="ignore")
+    return out
 
 
 def _check_banned_output(tool_name: str, data: Any) -> list[str]:

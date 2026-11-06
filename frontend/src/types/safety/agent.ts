@@ -21,6 +21,8 @@ export interface AgentChatSource {
   chunk_text: string
   doc_category: string
   feishu_url: string
+  /** 正文 [N] 标题锚定出的引用编号（未匹配到正文引用时缺省，徽标回退列表序号） */
+  cite_no?: number
 }
 
 /** POST /safety/agent/chat 的响应 data */

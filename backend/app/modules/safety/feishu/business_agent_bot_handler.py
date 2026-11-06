@@ -309,39 +309,23 @@ def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) 
     """构建普通回复卡片，底部附加「📚 参考法规」链接列表。
 
     1. 剥离模型自生成的参考区块
-    2. 提取正文中 [N] 引用 → 列出对应文档
-    3. 编号契约：正文 [N] 必须对应 sources[N-1]（RAG 管线锚定的编号），
-       此处**只映射、不重编号**——2026-10-30 事故根因即「按正文出现顺序
-       重排编号」把正文编号与 sources 顺序的对应关系打断，参考栏列出
-       了完全无关的文档。正文编号与 sources 顺序由 SYSTEM_PROMPT/
-       工具 docstring 双重锚定，两端一致后重编号只会制造错位。
-    """
-    import re
+    2. 编号解析（2026-11-06 升级为标题锚定，见 business_agent/citations.py）：
+       正文 [N] 按其紧邻的文档名（归一化标题匹配）解析到具体文档；
+       仅当 sources 去重后只剩 1 篇时才用位置映射兜底裸 [1]。
+    3. 渲染沿用正文编号，不重编号。
 
+    历史：2026-10-30 事故（单次检索内重编号）催生「[N]=sources[N-1]
+    位置契约」；2026-11-06 阻火器事故暴露该契约在「一轮并行多次
+    knowledge_search」下必然错位——各次检索独立编号，模型合并转述
+    只能全局重编号，位置映射无从对齐，遂升级为标题锚定。
+    """
     answer_text = _strip_trailing_references(answer.strip())
 
-    # ── 参考法规：去重 + 按正文 [N] 原编号映射 ──
+    # ── 参考法规：标题锚定解析正文 [N]（共享实现见 business_agent/citations.py）──
     if sources:
-        # 按 doc_title 去重
-        seen: set[str] = set()
-        unique_sources: list[dict[str, Any]] = []
-        for s in sources:
-            title = s.get("doc_title", "未知文档")
-            if title not in seen:
-                seen.add(title)
-                unique_sources.append(s)
+        from app.modules.safety.business_agent.citations import resolve_citations
 
-        # 提取正文中引用的 [N] 编号（1-based，对应 source 位置）
-        cited_old: set[int] = set()
-        for m in re.finditer(r"\[(\d+)\]", answer_text):
-            n = int(m.group(1))
-            if 1 <= n <= len(unique_sources):
-                cited_old.add(n)
-
-        # 仅保留被引用的 source，按原编号升序展示（编号与正文一致）
-        cited_sources = [
-            (n, unique_sources[n - 1]) for n in sorted(cited_old)
-        ]
+        cited_sources = resolve_citations(answer_text, sources)
     else:
         cited_sources = []
 
