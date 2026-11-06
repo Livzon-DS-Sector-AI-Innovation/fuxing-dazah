@@ -2,7 +2,7 @@
 
 import { useEffect, useState, use } from 'react'
 import { Spin, App, Button, Space, Card, Descriptions, Table, Typography, Tag } from 'antd'
-import { ArrowLeftOutlined, FileTextOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { LcReportView } from '@/components/quality'
 import type { InspectionRecordDetail } from '@/types/quality'
@@ -28,11 +28,10 @@ export default function RecordDetailPage({ params }: { params: Promise<{ id: str
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => router.back()}>返回</Button>
-        <Button type="primary" icon={<FileTextOutlined />}
-          onClick={() => router.push(`/quality/report?recordId=${id}`)}>
-          生成报告单
-        </Button>
       </Space>
+      <Typography.Paragraph type="secondary">
+        报告单在检验任务填报完成并复核通过后生成（含全部检验项目），本页仅展示解析留痕。
+      </Typography.Paragraph>
       {detail && detail.source === 'calc_form' && detail.raw_data && (
         <Card size="small" title={<span>在线计算表提交快照 <Tag color="blue">calc_form</Tag></span>} style={{ marginBottom: 16 }}>
           <Descriptions size="small" column={3} style={{ marginBottom: 8 }}>

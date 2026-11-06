@@ -85,6 +85,7 @@ export interface UploadLcResponse {
     task_id: string
     filled: string[]
     unmatched: string[]
+    items?: { result_id: string; item_name: string; result_value: number | null; is_pass: boolean | null }[]
   } | null
   components?: {
     name: string
@@ -227,6 +228,7 @@ export interface TestResultItem {
   judge_mode: 'auto' | 'manual'
   source: 'manual' | 'parse'
   filled_at: string | null
+  pending_confirm: boolean
 }
 
 export interface TestTaskListItem {
@@ -863,6 +865,11 @@ export interface EnvPlan {
   frequency: 'weekly' | 'monthly' | null
   completed: boolean
   completed_at: string | null
+}
+
+export interface ChromatogramPeak {
+  name: string
+  area: number | null
 }
 
 export interface BatchRelease {

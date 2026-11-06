@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { usePermission } from '@/hooks/usePermission'
-import { Card, Table, Button, Space, App, Modal, Form, Input, Popconfirm, Tag, Typography } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Space, App, Modal, Form, Input, Popconfirm, Tag, Typography, Upload, Radio } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ExperimentOutlined, ThunderboltOutlined, InboxOutlined } from '@ant-design/icons'
 import type { LcTemplateConfig } from '@/types/quality'
 import {
   fetchLcTemplateConfigs,
@@ -11,6 +11,8 @@ import {
   updateLcTemplateConfig,
   deleteLcTemplateConfig,
   testCalc,
+  autoDetectTemplate,
+  autoCreateTemplate,
 } from '@/actions/quality'
 import { CalcForm } from '@/components/quality'
 
@@ -33,6 +35,45 @@ export default function LcTemplateConfigs() {
   const [testSection, setTestSection] = useState(0)
   const [testInputs, setTestInputs] = useState<Record<string, number | undefined>>({})
   const [testResult, setTestResult] = useState<{ items: { label: string; std_name: string; value: number | null; nd?: boolean; detail?: string }[] } | null>(null)
+  // 傻瓜式维护：上传文件自动识别同版式
+  const [autoOpen, setAutoOpen] = useState(false)
+  const [autoDetecting, setAutoDetecting] = useState(false)
+  const [autoPassword, setAutoPassword] = useState('zlkz6941')
+  const [autoDetect, setAutoDetect] = useState<{ table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; blank?: boolean; name_shift: number; value_shift: number; step: number | null; samples: { name: string; value: number | null }[] }[] } | null>(null)
+  const [autoPick, setAutoPick] = useState<string | null>(null)
+  const [autoCreating, setAutoCreating] = useState(false)
+
+  const onAutoUpload = async (file: File) => {
+    setAutoDetecting(true)
+    setAutoDetect(null)
+    setAutoPick(null)
+    try {
+      const res = await autoDetectTemplate(file, autoPassword || undefined)
+      setAutoDetect(res.data)
+      if (res.data.candidates.length) setAutoPick(res.data.candidates[0].template_table_no)
+      if (!res.data.candidates.length) message.warning('未找到同版式模板（全新版式请联系管理员配置）')
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '自动识别失败')
+    } finally {
+      setAutoDetecting(false)
+    }
+    return false
+  }
+
+  const onAutoCreate = async () => {
+    if (!autoDetect?.table_no || !autoPick) return
+    setAutoCreating(true)
+    try {
+      await autoCreateTemplate(autoDetect.table_no, autoPick)
+      message.success(`配置 ${autoDetect.table_no} 已生成，可用「测试计算」验证后启用`)
+      setAutoOpen(false)
+      load()
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '生成配置失败')
+    } finally {
+      setAutoCreating(false)
+    }
+  }
 
   const openTest = (r: LcTemplateConfig) => {
     setTestCfg(r)
@@ -177,7 +218,12 @@ export default function LcTemplateConfigs() {
     <Card
       size="small"
       title="液相计算表模板配置（表号 取值位置）"
-      extra={canManage ? <Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新增配置</Button> : null}
+      extra={canManage ? (
+        <Space>
+          <Button size="small" icon={<ThunderboltOutlined />} onClick={() => { setAutoOpen(true); setAutoDetect(null); setAutoPick(null) }}>上传文件自动生成</Button>
+          <Button size="small" icon={<PlusOutlined />} onClick={openCreate}>新增配置</Button>
+        </Space>
+      ) : null}
     >
       <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
         表号来自计算表标题（如 EX-HA-5246-001）；新增产品线时在此登记表号与取值区块。
@@ -191,6 +237,63 @@ export default function LcTemplateConfigs() {
         scroll={{ x: 720 }}
         pagination={false}
       />
+
+      <Modal
+        title="傻瓜式维护：上传计算表自动生成配置"
+        open={autoOpen}
+        onCancel={() => setAutoOpen(false)}
+        footer={autoDetect?.candidates.length ? [
+          <Button key="cancel" onClick={() => setAutoOpen(false)}>取消</Button>,
+          <Button key="ok" type="primary" loading={autoCreating} onClick={onAutoCreate}>生成配置</Button>,
+        ] : null}
+        width={720}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Upload.Dragger
+            accept=".xlsx,.xls"
+            showUploadList={false}
+            beforeUpload={onAutoUpload}
+            disabled={autoDetecting}
+          >
+            <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+            <p className="ant-upload-text">点击或拖拽计算表文件到此区域</p>
+            <p className="ant-upload-hint">系统自动识别表号并匹配同版式模板，无需编写任何配置（JSON）</p>
+          </Upload.Dragger>
+          <Space>
+            <Text type="secondary">文件密码（默认实验室通行密码，可清空）：</Text>
+            <Input.Password size="small" style={{ width: 200 }} value={autoPassword}
+              onChange={(e) => setAutoPassword(e.target.value)} autoComplete="new-password" />
+          </Space>
+          {autoDetecting && <Text type="secondary">正在识别版式…</Text>}
+          {autoDetect && (
+            <>
+              <Text>识别表号：<Tag color="blue">{autoDetect.table_no}</Tag>
+                {autoDetect.candidates.length
+                  ? `共 ${autoDetect.candidates.length} 个同版式候选，选择其一生成：`
+                  : '（无同版式候选，全新版式请联系管理员配置）'}
+              </Text>
+              {autoDetect.candidates.length > 0 && (
+                <Radio.Group value={autoPick} onChange={(e) => setAutoPick(e.target.value)} style={{ width: '100%' }}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {autoDetect.candidates.map((c) => (
+                      <Radio key={c.template_table_no} value={c.template_table_no} style={{ width: '100%' }}>
+                        <Text strong>{c.template_table_no}</Text>
+                        <Text type="secondary">　{c.product_name || '（无产品名）'}　提取到 {c.value_count}/{c.component_count} 个有效值</Text>
+                        {c.blank && <Tag color="orange" style={{ marginLeft: 8 }}>空白模板（按版式匹配）</Tag>}
+                        <div style={{ paddingLeft: 24 }}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            样例：{(c.samples || []).map((s) => `${s.name}=${s.value}`).join('，')}
+                          </Text>
+                        </div>
+                      </Radio>
+                    ))}
+                  </Space>
+                </Radio.Group>
+              )}
+            </>
+          )}
+        </Space>
+      </Modal>
 
       <Modal
         title={`测试计算 ${testCfg ? testCfg.table_no : ''}（不落库，仅验证计算规则）`}

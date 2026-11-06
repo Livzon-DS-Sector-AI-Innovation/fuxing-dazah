@@ -26,7 +26,7 @@ EXT_CFG = {
 }
 
 
-def test_normalization_math():
+def test_normalization_math() -> None:
     # 主峰 1,000,000；总峰 1,010,000 → At=10,000；分母 = 25×1e6+1e4
     inputs = {
         "total_peak_1": 1010000, "main_peak_1": 1000000,
@@ -51,14 +51,14 @@ def test_normalization_math():
     assert abs(by_name["总杂质"]["value"] - by_name["杂质F"]["value"]) < 1e-9
 
 
-def test_normalization_missing_main_peak_skipped():
+def test_normalization_missing_main_peak_skipped() -> None:
     result = calc_engine.compute_normalization(NORM_CFG, {"total_peak_1": 1010000, "main_peak_1": ""})
     assert result["denom"] == [None, None]
     by_name = {i["std_name"]: i for i in result["items"]}
     assert by_name["万古霉素B"]["value"] is None
 
 
-def test_external_std_math_and_rsd():
+def test_external_std_math_and_rsd() -> None:
     inputs = {
         "乙醛_std_mass": 50, "乙醛_std_vol": 10, "乙醛_std_purity": 0.99,
         "乙醛_std_area_1": 1000, "乙醛_std_area_2": 1010, "乙醛_std_area_3": 990,
@@ -75,7 +75,7 @@ def test_external_std_math_and_rsd():
     assert abs((item["std_rsd"] or 0) - 0.79) < 0.01
 
 
-def test_external_std_content_math():
+def test_external_std_content_math() -> None:
     cfg = {"mode": "external_std_content", "samples": 3, "main_std_name": "含量"}
     # 达托霉素公式：含量% = 标准1质量×标准品含量×样面积/样质量/标准1平均面积/(1-水分%)×100
     inputs = {
@@ -98,7 +98,7 @@ def test_external_std_content_math():
     assert item["std_rsd"] is not None and item["std_rsd"] < 0.2
 
 
-def test_content_multi_math():
+def test_content_multi_math() -> None:
     cfg = {
         "mode": "external_std_content_multi", "samples": 3,
         "components": [
@@ -137,7 +137,7 @@ def test_content_multi_math():
     ) < 1e-9
 
 
-def test_impurity_vs_std_math():
+def test_impurity_vs_std_math() -> None:
     cfg = {
         "mode": "impurity_vs_std", "samples": 2,
         "components": [{"key": "A3", "label": "A3", "std_name": "A3"}, {"key": "A4", "label": "A4", "std_name": "A4"}],
@@ -166,7 +166,7 @@ def test_impurity_vs_std_math():
     assert abs(by_name["总杂"]["value"] - (t1 + t2) / std_c * 100 / 2) < 1e-9
 
 
-def test_impurity_std_ratio_math():
+def test_impurity_std_ratio_math() -> None:
     cfg = {
         "mode": "impurity_std_ratio", "samples": 2,
         "std_vol": 50, "sample_vol": 50, "std_dilution": 10, "sample_dilution": 5,
@@ -204,7 +204,7 @@ def test_impurity_std_ratio_math():
     assert abs(by_name["总杂质"]["value"] - (t1 + t2) / 2) < 1e-12
 
 
-def test_std_curve_math():
+def test_std_curve_math() -> None:
     import math
 
     cfg = {
@@ -234,7 +234,7 @@ def test_std_curve_math():
     assert result["items"][1]["value"] is None
 
 
-def test_group_rrf_math():
+def test_group_rrf_math() -> None:
     cfg = {
         "mode": "group_rrf", "rrf": 0.83,
         "rrf_group": ["S3"],
@@ -260,7 +260,7 @@ def test_group_rrf_math():
     assert abs(by_name["A2系"]["value"] - 900000 / denom * 100) < 1e-9
 
 
-def test_impurity_rrf_std_math():
+def test_impurity_rrf_std_math() -> None:
     cfg = {
         "mode": "impurity_rrf_std", "samples": 2,
         "items": [

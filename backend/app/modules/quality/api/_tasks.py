@@ -37,6 +37,7 @@ from app.modules.quality.repository import (
 )
 from app.modules.quality.schemas import (
     CalcFormSubmit,
+    ConfirmResultIn,
     TaskAssignmentsSave,
     TestResultCreate,
     TestResultsUpdate,
@@ -220,6 +221,47 @@ async def test_calc_endpoint(
     else:
         computed = calc_engine.compute_normalization(calc_cfg, payload.inputs)
     return success_response(data=computed)
+
+
+@router.post("/tasks/{task_id}/results/{result_id}/confirm", summary="确认解析自动填入的结果（正式归入，可先修正数值）")
+async def confirm_parsed_result_endpoint(
+    task_id: uuid.UUID,
+    result_id: uuid.UUID,
+    payload: ConfirmResultIn | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:fill")),
+) -> JSONResponse:
+    """解析填入的值（合格与否）需人工确认后正式归入；确认后参与自动流转。
+
+    payload.result_value 提供时按标准限度重新判定后归入（人工修正口径）。
+    """
+    from app.modules.quality.repository import list_test_results
+    from app.modules.quality.service.task_core import _TaskCore
+    from app.modules.quality.service.task_lifecycle import _TaskLifecycle
+
+    row = next(
+        (r for r in await list_test_results(db, task_id) if r.id == result_id), None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="结果行不存在")
+    if not row.pending_confirm:
+        raise HTTPException(status_code=409, detail="该行无需确认")
+    if payload is not None and payload.result_value is not None:
+        verdict = _TaskCore._judge_value(
+            row.operator, row.limit_min, row.limit_max, payload.result_value,
+        )
+        if verdict is None:
+            raise HTTPException(status_code=400, detail="该行标准限度结构不足，无法自动判定，请直接在表格中编辑该行")
+        row.result_value = payload.result_value
+        row.result_text = str(payload.result_value)
+        row.is_pass = verdict
+    row.pending_confirm = False
+    row.filled_by = _user.id
+    await db.flush()
+    detail = await test_task_service.get_task_detail(db, task_id)
+    # 确认后若全部行已判定且无待确认，自动流转待复核
+    await _TaskLifecycle.auto_advance_pending_review(db, task_id)
+    return success_response(data={"message": "已确认归入", "detail": detail})
 
 
 @router.post("/tasks/{task_id}/calc-fill", summary="在线计算表填报（免 Excel：数值+表号合并规则→判定填入）")
