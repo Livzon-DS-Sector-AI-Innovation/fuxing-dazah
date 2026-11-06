@@ -341,20 +341,23 @@ class SubsidyPlanBuilder:
         *,
         guardian_departments: dict[str, str] | None = None,
         uncertified_level: str | None = None,
+        revoked: dict[str, str] | None = None,
     ) -> SubsidyPlan:
-        """按设计 3.2 顺序执行：部门 → 月份 → 作废 → 结束时间 → 无监护人 → 证书 → 类型 → 记录。
+        """按设计 3.2 顺序执行：部门 → 月份 → 作废 → 结束时间 → 无监护人 → 资格 → 证书 → 类型 → 记录。
 
-        关键语义（P-2/P-3 审查修复 + 2026-10 制度调整）：
+        关键语义（P-2/P-3 审查修复 + 2026-10 制度调整 + 2026-11-04 R2 资格联动）：
         - **部门归集维度**（``guardian_departments`` 非 None 时）：按**监护人所在部门**
           匹配关键词并归集（补贴在监护人部门申报）；映射查无此人回退申请单位
           （计入 ``department_fallbacks``）。传 None 维持旧的申请单位口径。
         - **skipped 域内口径**：仅在「目标部门」域内判定跳过；非目标部门/
           非目标月票直接忽略，不进入 skipped / unmatched / 预览统计。
+        - **资格取消剔除**（``revoked``，R2 拍板⑦）：监护人监护资格已取消
+          （逾期未复审/考核不合格）→ 票跳过并注明原因（links 权威名单注入）。
         - **无证默认级别**（``uncertified_level``，如 "A证"）：证书未匹配的监护人
           **计入** records（按该级别算金额），同时仍进 ``unmatched`` 待核对名单
-          （透明展示）；传 None 维持旧的不计入口径。
+          （透明展示）；传 None 维持旧的不计入口径（2026-11-04 拍板⑥收紧为默认不计）。
         - **按次/块/罐票种缺 end_time 不跳过**：``PER_OCCURRENCE_TYPES``
-          （临时用电、抽堵盲板）end_time 为 None 时以 ``start_time`` 兜底
+          （临时用电、抽堵盲板）end_time 为 None 时以 start_time 兜底
           （按次计费，时长不影响金额）；仍缺 start_time 则跳过（无时间基线）。
         - ``domain_tickets`` = 目标部门 + 目标月命中且非作废的票数
           （不含缺开始时间/域外票；含待核对/无监护人/缺结束时间等）。
@@ -416,6 +419,14 @@ class SubsidyPlanBuilder:
             # 6. 无监护人跳过
             if not guardian_key:
                 skipped.append(SkippedTicket(ticket.ticket_no, ticket.ticket_type, _REASON_NO_GUARDIAN))
+                continue
+
+            # 6.5 资格取消剔除（R2 拍板⑦：取消资格即停止发放）
+            if revoked and guardian_key in revoked:
+                skipped.append(SkippedTicket(
+                    ticket.ticket_no, ticket.ticket_type,
+                    f"监护资格已取消（{revoked[guardian_key]}）",
+                ))
                 continue
 
             # 7. 证书匹配（未匹配 → 待核对；给了 uncertified_level 则按默认级别计入）

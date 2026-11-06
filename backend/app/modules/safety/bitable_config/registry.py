@@ -1196,6 +1196,24 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             KindInfo(kind="capa", label="CAPA 措施跟踪表"),
         ),
     ),
+    # ── guardian_score 监护人考核成绩（R2 成绩映射源）─────────────
+    DomainInfo(
+        key="guardian_score",
+        label="监护人考核成绩",
+        purpose="R2 监护人资格追踪成绩源（理论考试分数表，只读轮询；成绩映射写回持证表）",
+        subscribe="record",
+        kinds=(
+            KindInfo(
+                kind="score",
+                label="理论考试分数表",
+                default_connection=DefaultConnection(
+                    app_token="OKxib32E5apWgUs0dYBcObH4nNe",
+                    table_id="tblJ7mW0OrgxwXfA",
+                    note="监护人A/B证理论考试分数汇总表（2026-11-04 实测接入）",
+                ),
+            ),
+        ),
+    ),
 )
 
 # 构造时断言：域 key 唯一（重复 key 会在 dict 推导时静默覆盖，故显式校验）
@@ -1250,7 +1268,7 @@ def get_domain(key: str) -> DomainInfo:
 
 
 def iter_connection_kinds() -> Iterator[tuple[DomainInfo, KindInfo]]:
-    """遍历全部 (域, kind) 连接行（共 24 行），供 migration 播种与断言测试使用。"""
+    """遍历全部 (域, kind) 连接行，供 migration 播种与断言测试使用。"""
     for domain in _DOMAINS:
         for kind in domain.kinds:
             if kind.default_connection is not None:
@@ -1258,7 +1276,7 @@ def iter_connection_kinds() -> Iterator[tuple[DomainInfo, KindInfo]]:
 
 
 def iter_mapping_kinds() -> Iterator[tuple[DomainInfo, KindInfo]]:
-    """遍历全部 (域, kind) 映射行（共 24 行，每 kind 一行）。"""
+    """遍历全部 (域, kind) 映射行（每 kind 一行）。"""
     for domain in _DOMAINS:
         for kind in domain.kinds:
             if kind.default_mappings:

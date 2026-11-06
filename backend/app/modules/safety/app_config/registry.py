@@ -157,6 +157,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "端点 400 不支持时自动去参重试一次；默认关，热生效）",
     ),
     _flag(
+        "SAFETY_HAZARD_CITATION_STRICT_ENABLED", True,
+        "① 隐患判定依据引用强约束（P0-C C2：引用必须能在本轮检索 chunks 验证；"
+        "默认开、热生效；关 = 回退 P0-A 旧行为）",
+    ),
+    _flag(
         "SAFETY_SUPERVISION_NOTIFICATION_ENABLED", False,
         "督办等级通知开关（hazard_supervision）",
     ),
@@ -167,6 +172,10 @@ _ITEMS: tuple[ConfigItem, ...] = (
     _flag(
         "SAFETY_FIRE_INSPECTION_PDF_ENABLED", False,
         "消防点检 PDF 归档开关（调度任务）",
+    ),
+    _flag(
+        "SAFETY_FIRE_INSPECTION_AUDIT_ENABLED", False,
+        "消防点检 AI 审核轮询开关（签字完备性+设备编号照片比对，写回审核结果/审核说明）",
     ),
     _flag(
         "SAFETY_FIRE_ALARM_DAILY_DM_ENABLED", False,

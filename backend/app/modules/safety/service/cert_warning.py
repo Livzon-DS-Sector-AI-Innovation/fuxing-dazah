@@ -49,11 +49,12 @@ class CertWarningEngine:
         (-9999, "overdue"),      # <0
     ]
 
-    # 监护人证复审/换证周期常量（待 Bitable 字段结构确认后校准，见 _guardian_node TODO）
+    # 监护人证复审/换证周期常量（2026-11-04 拍板①校准：年审+三年换证；
+    # 与 guardian_r2.node_engine.PERIOD_YEARS 同源口径）
     _GUARDIAN_PERIODS: dict[str, timedelta] = {
-        "first_review": timedelta(days=365 * 3),   # 占位：3 年
-        "second_review": timedelta(days=365 * 6),  # 占位：6 年
-        "renew": timedelta(days=365 * 6),          # 占位：6 年
+        "first_review": timedelta(days=365 * 1),   # 第一次复审：取证 + 1 年
+        "second_review": timedelta(days=365 * 2),  # 第二次复审：取证 + 2 年
+        "renew": timedelta(days=365 * 3),          # 应换证：取证 + 3 年
     }
 
     @staticmethod
@@ -156,9 +157,8 @@ class CertWarningEngine:
         # 基线：issue_date（若字段全空）
         issue = record.issue_date
         if issue is not None:
-            # TODO(字段确认后补)：若 Bitable 只给 issue_date + 周期常量，
-            #   需在此用 _GUARDIAN_PERIODS 推导 first/second/renew
-            #   （当前先直接读 Bitable 的 first/second/should_renew 字段）
+            # 周期已拍板①校准（1/2/3 年）；当前直接读 Bitable 的
+            # first/second/should_renew 显式列，不在此推导。
             pass
 
         # 候选节点列表

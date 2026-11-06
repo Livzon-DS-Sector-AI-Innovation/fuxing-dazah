@@ -64,7 +64,10 @@ logger = logging.getLogger(__name__)
 # B 证折算系数与 Agent 生成工具一致（subsidy_tools._B_CERT_RATE）
 _B_CERT_RATE = 0.5
 # 无证/未登级别暂计口径（与 subsidy_tools/_UNCERTIFIED_LEVEL 一致）
-_UNCERTIFIED_LEVEL = "A证"
+# 平台票路线「无证」不暂计（2026-11-04 拍板⑥）；台账路线「未登级别」
+# 仍 A 证暂计（数据完整性≠资格）
+_UNCERTIFIED_LEVEL = None
+_LEDGER_UNCERTIFIED_LEVEL = "A证"
 
 # 数据源标签（摘要卡话术与 payload 记录用）
 SOURCE_LEDGER = "dept_ledger"
@@ -184,6 +187,8 @@ def build_monthly_excel(
     source: Any,
     year: int,
     month: int,
+    *,
+    revoked: dict[str, str] | None = None,
 ) -> tuple[bytes, str, dict[str, Any]] | None:
     """单部门台账行 → (Excel 字节, 文件名, 摘要)；无计入记录返回 None（跳过不空发）。
 
@@ -191,7 +196,8 @@ def build_monthly_excel(
     calculate → export_excel(review_notes) → b_cert_adjusted_total。
     """
     plan = build_ledger_plan(
-        source, source_rows, year, month, uncertified_level=_UNCERTIFIED_LEVEL
+        source, source_rows, year, month,
+        uncertified_level=_LEDGER_UNCERTIFIED_LEVEL, revoked=revoked,
     )
     if plan.matched_tickets == 0:
         return None
@@ -284,13 +290,16 @@ async def build_platform_payloads(
 
     tickets = await _fetch_platform_tickets(year, month)
     async with async_session_factory() as db:
+        from app.modules.safety.service.guardian_r2.links import revoked_name_map
+
         cert_map = await build_certificate_map(db)
         guardian_depts = await build_guardian_department_map(db)
+        revoked = await revoked_name_map(db)
 
     plan_all = SubsidyPlanBuilder.build(
         tickets, cert_map, "", year, month,
         guardian_departments=guardian_depts,
-        uncertified_level=_UNCERTIFIED_LEVEL,
+        uncertified_level=_UNCERTIFIED_LEVEL, revoked=revoked,
     )
     targets = sorted(
         d for d in plan_all.departments
@@ -303,7 +312,7 @@ async def build_platform_payloads(
         plan = SubsidyPlanBuilder.build(
             tickets, cert_map, dept, year, month,
             guardian_departments=guardian_depts,
-            uncertified_level=_UNCERTIFIED_LEVEL,
+            uncertified_level=_UNCERTIFIED_LEVEL, revoked=revoked,
         )
         built = build_platform_excel(plan, dept, year, month)
         if built is None:
@@ -345,11 +354,17 @@ async def run_monthly_subsidy_dispatch(
         year, month = previous_month()
 
     # ── ① 构建阶段：台账三部门 + 平台票其余部门（失败上抛 → 尚未发件，重试安全）──
+    from app.core.database import async_session_factory
+    from app.modules.safety.service.guardian_r2.links import revoked_name_map
+
+    async with async_session_factory() as db:
+        revoked = await revoked_name_map(db)
+
     payloads: list[DeptPayload] = []
     skipped_empty = 0
     for source in LEDGER_SOURCES:
         rows = await fetch_ledger_rows(source, year=year, month=month)
-        built = build_monthly_excel(rows, source, year, month)
+        built = build_monthly_excel(rows, source, year, month, revoked=revoked)
         if built is None:
             skipped_empty += 1
             logger.info("%s %d-%02d 无计入记录，跳过月报", source.department, year, month)

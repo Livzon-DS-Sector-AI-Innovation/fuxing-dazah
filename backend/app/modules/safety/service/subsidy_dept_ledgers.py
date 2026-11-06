@@ -71,7 +71,7 @@ _OP_TYPE_ALIAS: dict[str, str] = {
 
 _LEVEL_A = "A证"
 _LEVEL_B = "B证"
-_UNCERTIFIED_LEVEL = "A证"  # 与 subsidy_tools._UNCERTIFIED_LEVEL 口径一致
+_UNCERTIFIED_LEVEL = "A证"  # 台账「未登级别」按 A 证暂计（非资格问题，见 build() 注）
 
 # 布局常量：开始/结束为独立 datetime 列（五部）｜日期列+时间段文本（四/六部）
 _LAYOUT_START_END = "start_end"
@@ -501,11 +501,14 @@ def build_ledger_plan(
     month: int,
     *,
     uncertified_level: str | None = _UNCERTIFIED_LEVEL,
+    revoked: dict[str, str] | None = None,
 ) -> SubsidyPlan:
     """台账行 → SubsidyPlan（纯函数，布局差异已抹平）。
 
     - **级别只认台账登记**（同名多行以最后一次登记为准；六部无级别列 →
       全员进待核对，按 ``uncertified_level`` 暂计，None 则不计入）；
+    - **资格取消剔除**（``revoked``，2026-11-04 R2 拍板⑦）：监护人监护资格
+      已取消（逾期未复审/考核不合格）→ 行跳过并注明原因；
     - **同日重叠去重**：与平台源同规则（连通分量保留补贴最高一行）；
     - 跳过原因与平台源对齐：缺少开始时间 / 缺少结束时间（按次类型兜底除外）/
       无监护人 / 未知作业类型 / 时间段无法解析；行标识 = "MM-DD 姓名"。
@@ -566,6 +569,14 @@ def build_ledger_plan(
             continue
         if not _known_op_type(op_label):
             skipped.append(SkippedTicket(row_id, op_label or "?", "未知作业类型"))
+            continue
+
+        # 资格取消剔除（R2 拍板⑦：取消资格即停止发放；links 权威名单注入）
+        if revoked and raw.guardian_name in revoked:
+            skipped.append(SkippedTicket(
+                row_id, op_label or "?",
+                f"监护资格已取消（{revoked[raw.guardian_name]}）",
+            ))
             continue
 
         level = sheet_level_map.get(raw.guardian_name)

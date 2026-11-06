@@ -54,7 +54,10 @@ _B_CERT_RATE = 0.5
 
 # 无证监护人默认级别（2026-10 制度调整：证书台账未匹配者暂按 A 证计入，
 # 待各部门核对台账修正后自动回归真实级别；None 恢复旧「不计入」口径）
-_UNCERTIFIED_LEVEL = "A证"
+# 平台票路线「无证」不暂计（2026-11-04 拍板⑥）；台账路线「未登级别」
+# 仍 A 证暂计（数据完整性≠资格，六部台账无级别列）
+_UNCERTIFIED_LEVEL = None
+_LEDGER_UNCERTIFIED_LEVEL = "A证"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -134,10 +137,13 @@ async def _build_plan(
     """证书 + 监护人部门映射查询，纯函数整理（is_void/缺时间/部门/监护人/证书/类型规则全在 builder）。
 
     部门归集按**监护人所在部门**（identity 库飞书同步数据上溯到统计部门层级），
-    查无此人回退申请单位；无证监护人按 ``_UNCERTIFIED_LEVEL``（A证）暂计。
+    查无此人回退申请单位；无证监护人不计入金额（拍板⑥收紧，仍进待核对）。
     """
+    from app.modules.safety.service.guardian_r2.links import revoked_name_map
+
     cert_map = await build_certificate_map(db)
     guardian_depts = await build_guardian_department_map(db)
+    revoked = await revoked_name_map(db)
     return SubsidyPlanBuilder.build(
         tickets,
         cert_map,
@@ -146,6 +152,7 @@ async def _build_plan(
         month,
         guardian_departments=guardian_depts,
         uncertified_level=_UNCERTIFIED_LEVEL,
+        revoked=revoked,
     )
 
 
@@ -205,7 +212,13 @@ async def _resolve_plan(
                 "error_type": "ledger_fetch_error",
                 "detail": str(exc),
             }, {}
-        plan = build_ledger_plan(source, rows, year, month, uncertified_level=_UNCERTIFIED_LEVEL)
+        from app.modules.safety.service.guardian_r2.links import revoked_name_map
+
+        revoked = await revoked_name_map(db)
+        plan = build_ledger_plan(
+            source, rows, year, month,
+            uncertified_level=_LEDGER_UNCERTIFIED_LEVEL, revoked=revoked,
+        )
         meta = {
             "source": source,
             "departments": [source.department],

@@ -241,15 +241,15 @@ async def test_platform_payloads_exclude_ledger_depts(monkeypatch: pytest.Monkey
     payloads, skipped = await build_platform_payloads(2026, 10)
 
     depts = [p.department for p in payloads]
-    assert depts == ["发酵工程部", "提炼工程一部"]  # sorted（码序：发<提）；四部被排除
-    assert skipped == 1  # 提炼二部 9 月票 → 10 月空跳
+    # 2026-11-04 拍板⑥后：李四无证不计入 → 提炼工程一部无计入记录 → 不出月报
+    # （过渡期现象；R2 成绩映射取证自动进名单后收敛）
+    assert depts == ["发酵工程部"]
+    assert skipped == 2  # 提炼二部 9 月票 + 提炼工程一部纯无证 → 空跳
     assert all(p.source == SOURCE_PLATFORM for p in payloads)
     assert all(p.file_name.endswith(".xlsx") for p in payloads)
     by_dept = {p.department: p.summary for p in payloads}
     assert by_dept["发酵工程部"]["matched"] == 1
     assert by_dept["发酵工程部"]["amount"] > 0
-    # 无证书的李四 → 待核对按 A 证暂计
-    assert by_dept["提炼工程一部"]["unmatched_people"] == 1
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -36,6 +36,8 @@ subsidy_router = APIRouter()
 
 # 与月报私发/Agent 工具同口径
 _B_CERT_RATE = 0.5
+# 台账路线「未登级别」仍按 A 证暂计（级别登记是数据完整性问题而非资格问题，
+# 六部台账整表无级别列；2026-11-04 R2 拍板⑥只收紧平台票「无证」口径）
 _UNCERTIFIED_LEVEL = "A证"
 
 
@@ -95,7 +97,13 @@ async def get_guardian_subsidy_summary(
         logger.exception("监护台账拉取失败: dept=%s %d-%02d", department, year, month)
         return ApiResponse(code=502, message=f"{department}监护台账拉取失败，请稍后重试。")
 
-    plan = build_ledger_plan(source, rows, year, month, uncertified_level=_UNCERTIFIED_LEVEL)
+    from app.modules.safety.service.guardian_r2.links import revoked_name_map
+
+    revoked = await revoked_name_map(db)
+    plan = build_ledger_plan(
+        source, rows, year, month,
+        uncertified_level=_UNCERTIFIED_LEVEL, revoked=revoked,
+    )
     result = SubsidyService.calculate(plan.records, year=year, month=month)
     return ApiResponse(data={
         "department": department,
