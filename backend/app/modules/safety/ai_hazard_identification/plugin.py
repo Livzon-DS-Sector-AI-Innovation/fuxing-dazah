@@ -32,6 +32,11 @@ import time
 from contextlib import AbstractContextManager
 from typing import Any
 
+from app.modules.safety.ai_hazard_identification.citation_evidence import (
+    CitationEvidence,
+    CitationReport,
+    verify_citations,
+)
 from app.modules.safety.ai_hazard_identification.prompts import (
     SYSTEM_ROLE,
     build_context_text,
@@ -138,6 +143,9 @@ class AIHazardIdentifier:
         ai_service: AI 服务实例（已配置 API key / base_url / model）
         config: 插件运行时配置（可选，使用默认值）
         knowledge_context: 法规知识库上下文文本（可选，注入到 prompt 中）
+        citation_evidence: 本轮检索证据（可选，C2 引用强约束）。``None`` 表示
+            不做引用来源校验，行为与 P0-A 完全一致；非 ``None`` 时给规则校验
+            注入证据（零可验证 → 错误反馈重试一次 → 仍失败按分类抛错）。
 
     Example:
         >>> ai_service = AIService(api_key="sk-xxx", model="deepseek-flash")
@@ -153,11 +161,16 @@ class AIHazardIdentifier:
         ai_service: Any,  # AIService from app.platform.integrations.ai.client
         config: PluginConfig | None = None,
         knowledge_context: str | None = None,
+        citation_evidence: CitationEvidence | None = None,
     ):
         self.ai_service = ai_service
         self.config = config or PluginConfig()
         self.rule_engine = RuleEngine()
         self.knowledge_context = knowledge_context
+        # C2：本轮检索证据；None = 不做引用来源强校验（旧调用方零行为变化）
+        self.citation_evidence = citation_evidence
+        # C2：每次规则校验后的引用报告（供 T4 审计 extra 读取；None = 未启用校验）
+        self.last_citation_report: CitationReport | None = None
 
     # ── 公共 API ──
 
@@ -177,6 +190,8 @@ class AIHazardIdentifier:
             IdentificationError: 识别失败（AI 调用失败或输出不合法）
         """
         start_time = time.monotonic()
+        # C2：每次识别重置引用报告，失败/异常路径不残留上一条记录的结果
+        self.last_citation_report = None
 
         # ── 阶段一：输入预处理 ──
         logger.info("阶段一：输入预处理 — hazard_no=%s", input_data.hazard_no)
@@ -198,8 +213,11 @@ class AIHazardIdentifier:
         logger.info("阶段三：解析输出并规则验证")
         output = auto_correct(self._parse_output(raw_output))
 
-        # 规则验证
-        validation = self.rule_engine.validate(input_data, output)
+        # 规则验证（C2：有证据时同时做引用来源强校验）
+        validation = self.rule_engine.validate(
+            input_data, output, citation_evidence=self.citation_evidence
+        )
+        self._refresh_citation_report(output)
         if not validation.is_valid:
             error_detail = "; ".join(validation.errors)
             if self.config.strict_mode:
@@ -216,14 +234,19 @@ class AIHazardIdentifier:
                         previous_output=raw_output,
                     )
                 output = auto_correct(self._parse_output(retry_raw))
-                retry_validation = self.rule_engine.validate(input_data, output)
+                retry_validation = self.rule_engine.validate(
+                    input_data, output, citation_evidence=self.citation_evidence
+                )
+                self._refresh_citation_report(output)
                 if not retry_validation.is_valid:
                     retry_detail = "; ".join(retry_validation.errors)
+                    # C2：按最后一次引用报告分类失败（无证据时保持旧 classification）
+                    category = self._classify_validation_failure(output)
                     raise IdentificationError(
                         "AI 输出验证失败（已带错误反馈重试一次）: "
                         f"{retry_detail}\n"
                         f"首次校验错误: {error_detail}",
-                        category="validation_failed",
+                        category=category,
                     )
             else:
                 logger.warning("AI 输出验证失败（非严格模式，继续返回）: %s", error_detail)
@@ -265,6 +288,48 @@ class AIHazardIdentifier:
         return results
 
     # ── 内部方法 ──
+
+    def _refresh_citation_report(
+        self, output: HazardIdentificationOutput
+    ) -> CitationReport | None:
+        """每次规则校验后刷新引用报告（首次/重试/成功/失败路径统一调用）。
+
+        无证据时保持 ``None``（旧调用方语义）；有证据时用纯函数复算一次
+        （与 RuleEngine 内部复算同源、开销可忽略），供 T4 审计 extra 读取。
+        """
+        if self.citation_evidence is None:
+            self.last_citation_report = None
+        else:
+            self.last_citation_report = verify_citations(
+                output.major_hazard_basis or "", self.citation_evidence
+            )
+        return self.last_citation_report
+
+    def _classify_validation_failure(
+        self, output: HazardIdentificationOutput
+    ) -> str:
+        """规则校验（已带反馈重试一次仍失败）→ C2 结构化失败分类。
+
+        分类口径（spec §C2 / ticket 03）：
+        - 无证据（report=None）→ ``validation_failed``（旧分类，零行为变化）；
+        - basis 为空 → ``empty_basis``；
+        - 纯占位变体（含占位注记且零可验证）→ ``placeholder_basis``；
+        - ``total_units == 0``（无任何引用单元）→ ``no_citation``；
+        - 有引用单元但零可验证 → ``invalid_citation``；
+        - 其它（引用可验证但字段级规则失败）→ ``validation_failed``。
+        """
+        report = self.last_citation_report
+        if report is None:
+            return "validation_failed"
+
+        basis = output.major_hazard_basis or ""
+        if not basis.strip():
+            return "empty_basis"
+        if report.placeholder_note and not report.has_verified:
+            return "placeholder_basis"
+        if not report.has_verified:
+            return "no_citation" if report.total_units == 0 else "invalid_citation"
+        return "validation_failed"
 
     async def _call_ai(
         self,

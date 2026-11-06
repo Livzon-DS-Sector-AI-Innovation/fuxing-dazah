@@ -13,11 +13,15 @@
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.modules.safety.ai_audit.context import ai_audit_scope, current_audit_ctx
+from app.modules.safety.ai_hazard_identification.citation_evidence import (
+    CitationEvidence,
+)
 from app.modules.safety.ai_hazard_identification.plugin import (
     AIHazardIdentifier,
     IdentificationError,
@@ -302,7 +306,8 @@ class TestAttemptNoAudit:
         ):
             output = await plugin.identify(make_input())
             # 嵌套作用域退出后，外层 extra 不应被 attempt_no 污染
-            outer_extra_after = current_audit_ctx().extra
+            _ctx = current_audit_ctx()
+            outer_extra_after = _ctx.extra if _ctx is not None else None
 
         assert output.major_hazard_basis == VALID_BASIS
         assert ai.call_count == 2
@@ -361,3 +366,233 @@ class TestIdentificationErrorCategory:
         # 异常链保留 cause 供上层沿链分类/排查
         assert isinstance(err.__cause__, AIOutputError)
         assert ai.call_count == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. C2 识别侧引用强校验（S4）：插件注入证据 + 严格重试 + 失败分类
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 口径（ticket 03 / spec §C2）：
+# - 无证据（citation_evidence=None）→ 行为与现状完全一致，last_citation_report 恒为 None；
+# - 有证据：首轮零可验证 → 带错误反馈（含不可验证引用摘要）重试一次 → 仍失败按
+#   empty_basis / placeholder_basis / no_citation / invalid_citation / validation_failed 分类抛错；
+# - 每次规则校验（首次/重试/成功/失败）后更新 last_citation_report。
+
+CITATION_CHUNKS = [
+    SimpleNamespace(
+        chunk_id="ret-c1",
+        source_doc="GB 30871-2022 化学品生产单位特殊作业安全规范",
+        source_article="第5.2条",
+        chunk_text="5.2 高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用。",
+    ),
+]
+CITATION_EVIDENCE = CitationEvidence.from_chunks(CITATION_CHUNKS)
+
+VERBATIM_BASIS = (
+    "GB 30871-2022 第5.2条：'高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用'"
+)
+FABRICATED_BASIS = (
+    "GB 99999-2024 第1.1条：'企业必须每年开展两次全员安全培训并考核'；"
+    "《虚构的安全管理条例》第三条：'所有人员必须持证上岗'"
+)
+PARTIAL_BASIS = f"{VERBATIM_BASIS}；GB 99999-2024 第1.1条：'编造的条文内容'"
+VARIANT_PLACEHOLDER_BASIS = "知识库中无《重大隐患判定标准（试行）》相应条文，待人工补充"
+
+CITED_OUTPUT: dict[str, Any] = {**VALID_OUTPUT, "major_hazard_basis": VERBATIM_BASIS}
+FABRICATED_OUTPUT: dict[str, Any] = {
+    **VALID_OUTPUT,
+    "major_hazard_basis": FABRICATED_BASIS,
+}
+PARTIAL_OUTPUT: dict[str, Any] = {**VALID_OUTPUT, "major_hazard_basis": PARTIAL_BASIS}
+PLACEHOLDER_OUTPUT: dict[str, Any] = {
+    **VALID_OUTPUT,
+    "major_hazard_basis": VARIANT_PLACEHOLDER_BASIS,
+}
+EMPTY_BASIS_OUTPUT: dict[str, Any] = {**VALID_OUTPUT, "major_hazard_basis": ""}
+
+
+def _make_strict_plugin(
+    ai: FakeAIService,
+    *,
+    evidence: CitationEvidence | None = CITATION_EVIDENCE,
+) -> AIHazardIdentifier:
+    return AIHazardIdentifier(
+        ai,
+        PluginConfig(strict_mode=True),
+        citation_evidence=evidence,
+    )
+
+
+class TestCitationStrictRetry:
+    """S4：严格模式下引用不可验证 → 反馈重试一次 → 分类抛错。"""
+
+    @pytest.mark.asyncio
+    async def test_first_fabricated_then_verbatim_succeeds(self) -> None:
+        """假 AI 首次编造引用、二次逐字 chunks 引用 → 成功且 attempt_no=2 审计正确。"""
+        ai = FakeAIService([FABRICATED_OUTPUT, CITED_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        with ai_audit_scope(
+            scenario="hazard_identification",
+            extra={"round_id": "20261106120000-abcd"},
+        ):
+            output = await plugin.identify(make_input())
+            _ctx = current_audit_ctx()
+            outer_extra_after = _ctx.extra if _ctx is not None else None
+
+        assert ai.call_count == 2, "引用零可验证应刚好重试一次"
+        assert output.major_hazard_basis == VERBATIM_BASIS
+        assert ai.calls[0]["audit_extra"] == {
+            "round_id": "20261106120000-abcd",
+            "attempt_no": 1,
+        }
+        assert ai.calls[1]["audit_extra"] == {
+            "round_id": "20261106120000-abcd",
+            "attempt_no": 2,
+        }
+        assert outer_extra_after == {"round_id": "20261106120000-abcd"}
+
+        # 重试反馈包含不可验证引用摘要（帮助模型改正），且仍要求只输出 JSON
+        feedback = _last_user_content(ai.calls[1])
+        assert "GB 99999-2024" in feedback
+        assert "无法在本轮检索到的法规条款中验证" in feedback
+        assert "只输出 JSON" in feedback
+
+        # last_citation_report 更新为「重试后（成功）」的校验结果
+        report = plugin.last_citation_report
+        assert report is not None
+        assert report.has_verified is True
+        assert report.total_units == 1
+
+    @pytest.mark.asyncio
+    async def test_both_fabricated_raises_invalid_citation(self) -> None:
+        """两次都不可验证 → invalid_citation，错误与反馈均含不可验证线索。"""
+        ai = FakeAIService([FABRICATED_OUTPUT, FABRICATED_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        with pytest.raises(IdentificationError) as exc_info:
+            await plugin.identify(make_input())
+
+        assert ai.call_count == 2
+        err = exc_info.value
+        assert err.category == "invalid_citation"
+        assert "GB 99999-2024" in str(err)
+        assert "只输出 JSON" in _last_user_content(ai.calls[1])
+        assert "GB 99999-2024" in _last_user_content(ai.calls[1])
+
+        report = plugin.last_citation_report
+        assert report is not None
+        assert report.total_units == 2
+        assert report.has_verified is False
+
+    @pytest.mark.asyncio
+    async def test_placeholder_variant_raises_placeholder_basis(self) -> None:
+        ai = FakeAIService([PLACEHOLDER_OUTPUT, PLACEHOLDER_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        with pytest.raises(IdentificationError) as exc_info:
+            await plugin.identify(make_input())
+
+        assert ai.call_count == 2
+        assert exc_info.value.category == "placeholder_basis"
+        assert "占位" in str(exc_info.value)
+        assert plugin.last_citation_report is not None
+        assert plugin.last_citation_report.placeholder_note is True
+
+    @pytest.mark.asyncio
+    async def test_empty_basis_raises_empty_basis(self) -> None:
+        ai = FakeAIService([EMPTY_BASIS_OUTPUT, EMPTY_BASIS_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        with pytest.raises(IdentificationError) as exc_info:
+            await plugin.identify(make_input())
+
+        assert ai.call_count == 2
+        assert exc_info.value.category == "empty_basis"
+        assert plugin.last_citation_report is not None
+        assert plugin.last_citation_report.total_units == 0
+
+    @pytest.mark.asyncio
+    async def test_no_citation_basis_raises_no_citation(self) -> None:
+        """有引用格式但 total_units==0（纯泛化表述）→ no_citation（区别于 invalid_citation）。"""
+        ai = FakeAIService([INVALID_BASIS_OUTPUT, INVALID_BASIS_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        with pytest.raises(IdentificationError) as exc_info:
+            await plugin.identify(make_input())
+
+        assert ai.call_count == 2
+        assert exc_info.value.category == "no_citation"
+        assert plugin.last_citation_report is not None
+        assert plugin.last_citation_report.total_units == 0
+
+
+class TestCitationStrictSuccessPaths:
+    """S4：可验证/部分可验证的成功路径与 last_citation_report 暴露。"""
+
+    @pytest.mark.asyncio
+    async def test_verbatim_citation_passes_without_retry(self) -> None:
+        ai = FakeAIService([CITED_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        output = await plugin.identify(make_input())
+
+        assert ai.call_count == 1
+        assert output.major_hazard_basis == VERBATIM_BASIS
+        report = plugin.last_citation_report
+        assert report is not None
+        assert report.has_verified is True
+        assert report.all_verified is True
+
+    @pytest.mark.asyncio
+    async def test_partial_unverified_does_not_retry(self) -> None:
+        """部分不可验证只是 warning：不重试、不阻断（避免 +37% 调用成本）。"""
+        ai = FakeAIService([PARTIAL_OUTPUT])
+        plugin = _make_strict_plugin(ai)
+
+        await plugin.identify(make_input())
+
+        assert ai.call_count == 1
+        report = plugin.last_citation_report
+        assert report is not None
+        assert report.has_verified is True
+        assert report.all_verified is False
+
+    @pytest.mark.asyncio
+    async def test_non_strict_updates_report_without_raising(self) -> None:
+        ai = FakeAIService([FABRICATED_OUTPUT])
+        plugin = AIHazardIdentifier(
+            ai,
+            PluginConfig(strict_mode=False),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+
+        output = await plugin.identify(make_input())
+
+        assert ai.call_count == 1
+        assert output.major_hazard_basis == FABRICATED_BASIS
+        report = plugin.last_citation_report
+        assert report is not None
+        assert report.has_verified is False
+
+
+class TestCitationEvidenceBackwardCompat:
+    """S4：不传 citation_evidence 的旧调用方零行为变化。"""
+
+    @pytest.mark.asyncio
+    async def test_without_evidence_keeps_legacy_behavior(self) -> None:
+        """无证据时编造引用仍按旧口径通过（格式合法），last_citation_report 为 None。"""
+        ai = FakeAIService([FABRICATED_OUTPUT])
+        plugin = AIHazardIdentifier(ai, PluginConfig(strict_mode=True))
+
+        output = await plugin.identify(make_input())
+
+        assert ai.call_count == 1
+        assert output.major_hazard_basis == FABRICATED_BASIS
+        assert plugin.last_citation_report is None
+
+    @pytest.mark.asyncio
+    async def test_default_constructor_has_no_citation_evidence(self) -> None:
+        plugin = AIHazardIdentifier(FakeAIService([VALID_OUTPUT]))
+        assert plugin.citation_evidence is None
+        assert plugin.last_citation_report is None

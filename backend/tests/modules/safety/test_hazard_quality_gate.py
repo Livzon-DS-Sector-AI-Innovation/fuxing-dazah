@@ -16,6 +16,7 @@ audit scope），不连真实网络/DB/Redis/Bitable。
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from contextlib import asynccontextmanager, contextmanager
 from types import SimpleNamespace
@@ -23,6 +24,9 @@ from typing import Any
 
 import pytest
 
+from app.modules.safety.ai_hazard_identification.citation_evidence import (
+    CitationEvidence,
+)
 from app.modules.safety.ai_hazard_identification.schemas import (
     DefectSubstanceEnum,
     HazardCategoryEnum,
@@ -62,10 +66,26 @@ def _ragplus_search_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _healthy_context() -> KnowledgeContext:
+    # C2：chunk 需为真实可匹配形态（GOOD_BASIS 的法规名/条号/标准号可命中）；
+    # list[Any] 避免 mypy 把测试载荷当成 RetrievalResult 结构检查。
+    healthy_chunks: list[Any] = [
+        SimpleNamespace(
+            chunk_id="chunk-1",
+            source_doc="危险化学品安全管理条例",
+            source_article="第二十条",
+            chunk_text=(
+                "第二十条 生产、储存危险化学品的单位，应当具备下列条件："
+                "有符合国家标准、行业标准的经营场所……GB 30871-2022 第5.1条"
+            ),
+        )
+    ]
     return KnowledgeContext(
-        chunks=[object()],  # type: ignore[list-item]
+        chunks=healthy_chunks,
         degradation="ragplus",
-        markdown="【法规】《危险化学品安全管理条例》第二十条……",
+        markdown=(
+            "## 相关法规条款\n\n[1] 《危险化学品安全管理条例》 第二十条\n"
+            "第二十条 生产、储存危险化学品的单位，应当具备下列条件……"
+        ),
     )
 
 
@@ -248,6 +268,10 @@ class _Holder:
         self.plugins: list[Any] = []
         self.inputs: list[Any] = []
         self.audit_scopes: list[dict[str, Any]] = []
+        # C2：插件收到的证据 / 插件报告 / 审计 extra 回写捕获
+        self.plugin_evidence: list[Any] = []
+        self.citation_report: Any = None
+        self.audit_marks: list[dict[str, Any]] = []
 
 
 def _good_output(**overrides: Any) -> SimpleNamespace:
@@ -326,10 +350,15 @@ def _wire_identify(monkeypatch: pytest.MonkeyPatch, holder: _Holder) -> None:
             ai_service: Any,
             plugin_config: Any = None,
             knowledge_context: str | None = None,
+            citation_evidence: Any = None,
+            **kwargs: Any,
         ) -> None:
             self.ai_service = ai_service
             self.config = plugin_config
             self.knowledge_context = knowledge_context
+            self.citation_evidence = citation_evidence
+            self.last_citation_report = holder.citation_report
+            holder.plugin_evidence.append(citation_evidence)
             holder.plugins.append(self)
 
         async def identify(self, input_data: Any) -> Any:
@@ -358,6 +387,15 @@ def _wire_identify(monkeypatch: pytest.MonkeyPatch, holder: _Holder) -> None:
         yield SimpleNamespace(**kwargs)
 
     monkeypatch.setattr(ai_audit, "ai_audit_scope", fake_audit_scope)
+
+    from app.modules.safety.ai_audit import audited_client
+
+    async def fake_mark_audit_extra(fields: dict[str, Any]) -> None:
+        holder.audit_marks.append(dict(fields))
+
+    monkeypatch.setattr(
+        audited_client, "mark_audit_extra", fake_mark_audit_extra
+    )
 
 
 class TestIdentifyOneRagPrecheck:
@@ -644,6 +682,8 @@ class _FakeLedger:
         self.should_retry_calls: list[tuple[str, int]] = []
         self.infra_alert_results: list[bool] = []
         self.infra_alert_calls: list[tuple[int, int]] = []
+        # T6：告警去重 key（None = 既有单条 infra 告警；熔断告警用独立 key）
+        self.infra_alert_keys: list[str | None] = []
 
     async def next_round_seq(self) -> int:
         return self.round_seq
@@ -677,12 +717,60 @@ class _FakeLedger:
         return list(self.dead_letters)
 
     async def should_emit_infra_alert(
-        self, round_seq: int, interval_seconds: int = 1800
+        self,
+        round_seq: int,
+        interval_seconds: int = 1800,
+        *,
+        key: str | None = None,
     ) -> bool:
         self.infra_alert_calls.append((round_seq, interval_seconds))
+        self.infra_alert_keys.append(key)
         if self.infra_alert_results:
             return self.infra_alert_results.pop(0)
         return True
+
+
+class _YieldingLedger(_FakeLedger):
+    """每个 await 点真实让出事件循环（复现生产并发下 `asyncio.gather` 的 worker 交错）。
+
+    T6-fix：原 `_FakeLedger` 的 async 方法没有真实挂起点，worker 会「伪串行」逐个
+    执行完，暴露不出「所有 worker 先全部通过入口检查」的竞态。这里让每个账本
+    调用 `sleep(0)`，使 worker 像生产 async IO 一样先全部通过入口、再各自交错推进。
+    """
+
+    async def next_round_seq(self) -> int:
+        await asyncio.sleep(0)
+        return await super().next_round_seq()
+
+    async def should_retry(self, record_id: str, round_seq: int) -> bool:
+        await asyncio.sleep(0)
+        return await super().should_retry(record_id, round_seq)
+
+    async def record_failure(
+        self, record_id: str, round_seq: int, category: str, reason: str
+    ) -> failure_ledger.FailureState:
+        await asyncio.sleep(0)
+        return await super().record_failure(record_id, round_seq, category, reason)
+
+    async def record_success(self, record_id: str) -> None:
+        await asyncio.sleep(0)
+        await super().record_success(record_id)
+
+    async def list_dead_letters(self, limit: int = 100) -> list[dict[str, Any]]:
+        await asyncio.sleep(0)
+        return await super().list_dead_letters(limit=limit)
+
+    async def should_emit_infra_alert(
+        self,
+        round_seq: int,
+        interval_seconds: int = 1800,
+        *,
+        key: str | None = None,
+    ) -> bool:
+        await asyncio.sleep(0)
+        return await super().should_emit_infra_alert(
+            round_seq, interval_seconds, key=key
+        )
 
 
 def _raw_record(record_id: str) -> dict[str, Any]:
@@ -727,7 +815,14 @@ async def _wire_round(
     env: _RoundEnv,
     *,
     records: list[dict[str, Any]],
+    yield_points: bool = False,
 ) -> None:
+    """接线一轮所需的全部 fake。
+
+    ``yield_points=True``：所有 fake await 点插入 ``asyncio.sleep(0)`` 真实让出
+    事件循环，复现生产并发下 `asyncio.gather` 的 worker 交错（T6-fix 并发用例）。
+    """
+
     async def fake_search(
         client: Any, *, limit: int | None = None, keep: Any = None
     ) -> list[dict[str, Any]]:
@@ -739,6 +834,8 @@ async def _wire_round(
 
     @asynccontextmanager
     async def fake_record_lock(record_id: str) -> Any:
+        if yield_points:
+            await asyncio.sleep(0)
         yield True
 
     monkeypatch.setattr(bitable_repo, "record_lock", fake_record_lock)
@@ -751,6 +848,8 @@ async def _wire_round(
         output: dict[str, Any],
         supervision_label: str | None = None,
     ) -> bool:
+        if yield_points:
+            await asyncio.sleep(0)
         env.written.append((record_id, output))
         return env.write_ok
 
@@ -761,6 +860,8 @@ async def _wire_round(
         client: Any, view: Any, *, round_id: str | None = None
     ) -> dict[str, Any]:
         env.identify_calls.append((view.record_id, round_id))
+        if yield_points:
+            await asyncio.sleep(0)
         return await env.identify_impl(view)
 
     monkeypatch.setattr(ai_analysis, "_identify_one", fake_identify_one)
@@ -1208,3 +1309,659 @@ class TestFailureCategories:
     def test_other_exception_is_api_error(self) -> None:
         assert ai_analysis._categorize_failure(RuntimeError("timeout")) == "api_error"
 
+
+
+# ═══════════════════════════════════════════════════════════════
+# C2 引用来源强约束：闸门语义 / 开关 / 审计字段（S5 纯函数部分）
+# 2026-11-06 P0-C（spec §C2）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _citation_evidence() -> CitationEvidence:
+    return CitationEvidence.from_chunks(
+        [
+            SimpleNamespace(
+                chunk_id="c1",
+                source_doc="GB 30871-2022 化学品生产单位特殊作业安全规范",
+                source_article="第5.2条",
+                chunk_text="5.2 高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用。",
+            )
+        ]
+    )
+
+
+VERIFIED_BASIS = (
+    "GB 30871-2022 第5.2条：'高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用'"
+)
+UNVERIFIED_BASIS = "GB 99999-2024 第1.1条：'企业必须每年开展两次全员安全培训并考核'"
+PLACEHOLDER_NOTE_WITH_CITATION = (
+    "知识库中无直接规定点检周期的条文，点检频次依据企业检查表执行；"
+    + VERIFIED_BASIS
+)
+
+
+class TestEnsureOutputCitationEvidence:
+    """``ensure_output(output, evidence=...)``：条目级硬约束 + 占位变体 + 新分类。"""
+
+    def test_verified_citation_passes(self) -> None:
+        evidence = _citation_evidence()
+        quality_gate.ensure_output(
+            {"major_hazard_basis": VERIFIED_BASIS}, evidence=evidence
+        )
+
+    def test_zero_verified_citation_is_invalid_citation(self) -> None:
+        evidence = _citation_evidence()
+        with pytest.raises(QualityGateError) as exc_info:
+            quality_gate.ensure_output(
+                {"major_hazard_basis": UNVERIFIED_BASIS}, evidence=evidence
+            )
+        assert exc_info.value.category == quality_gate.INVALID_CITATION
+
+    def test_partial_verified_citation_passes(self) -> None:
+        evidence = _citation_evidence()
+        quality_gate.ensure_output(
+            {"major_hazard_basis": f"{UNVERIFIED_BASIS}；{VERIFIED_BASIS}"},
+            evidence=evidence,
+        )
+
+    def test_placeholder_variant_without_verified_is_placeholder_basis(self) -> None:
+        evidence = _citation_evidence()
+        with pytest.raises(QualityGateError) as exc_info:
+            quality_gate.ensure_output(
+                {
+                    "major_hazard_basis": (
+                        "知识库中无《重大隐患判定标准（试行）》相应条文，待人工补充"
+                    )
+                },
+                evidence=evidence,
+            )
+        assert exc_info.value.category == quality_gate.PLACEHOLDER_BASIS
+
+    def test_placeholder_note_with_verified_citation_passes(self) -> None:
+        evidence = _citation_evidence()
+        quality_gate.ensure_output(
+            {"major_hazard_basis": PLACEHOLDER_NOTE_WITH_CITATION}, evidence=evidence
+        )
+
+    def test_legacy_placeholder_still_rejected(self) -> None:
+        evidence = _citation_evidence()
+        with pytest.raises(QualityGateError) as exc_info:
+            quality_gate.ensure_output(
+                {"major_hazard_basis": "知识库中无相应条文，待人工补充"},
+                evidence=evidence,
+            )
+        assert exc_info.value.category == quality_gate.PLACEHOLDER_BASIS
+
+    def test_no_citation_text_is_no_citation(self) -> None:
+        evidence = _citation_evidence()
+        with pytest.raises(QualityGateError) as exc_info:
+            quality_gate.ensure_output(
+                {"major_hazard_basis": "现场检查发现该处问题较为严重，需要立即整改处理"},
+                evidence=evidence,
+            )
+        assert exc_info.value.category == quality_gate.NO_CITATION
+
+    def test_without_evidence_legacy_behavior_preserved(self) -> None:
+        """evidence=None（其它调用方/旧行为）：不做 invalid_citation 判定。"""
+        quality_gate.ensure_output({"major_hazard_basis": UNVERIFIED_BASIS})
+        # 旧口径的占位/无引用分类不变
+        with pytest.raises(QualityGateError) as exc_info:
+            quality_gate.ensure_output(
+                {"major_hazard_basis": "知识库中无相应条文，待人工补充"}
+            )
+        assert exc_info.value.category == quality_gate.PLACEHOLDER_BASIS
+        with pytest.raises(QualityGateError) as no_cite:
+            quality_gate.ensure_output(
+                {"major_hazard_basis": "现场检查发现该处问题较为严重，需要立即整改处理"}
+            )
+        assert no_cite.value.category == quality_gate.NO_CITATION
+
+
+    def test_switch_off_variant_not_blocked_legacy(self) -> None:
+        """开关关（evidence=None）：严格回退 P0-A 精确占位口径，变体不拦截。"""
+        quality_gate.ensure_output(
+            {"major_hazard_basis": "知识库中无《重大隐患判定标准（试行）》相应条文，待人工补充"}
+        )
+
+
+class TestCitationStrictEnabled:
+    """开关：默认开、可 DB/env 热关、store 异常 fail-open。"""
+
+    def test_default_enabled_when_store_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.safety.app_config.store import store as config_store
+
+        monkeypatch.setattr(
+            config_store, "get_bool", lambda key, default=None: default
+        )
+        assert quality_gate.citation_strict_enabled() is True
+
+    def test_disabled_by_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.safety.app_config.store import store as config_store
+
+        monkeypatch.setattr(
+            config_store, "get_bool", lambda key, default=None: False
+        )
+        assert quality_gate.citation_strict_enabled() is False
+
+    def test_store_error_fails_open(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.modules.safety.app_config.store import store as config_store
+
+        def _boom(key: str, default: object = None) -> bool:
+            raise RuntimeError("store down")
+
+        monkeypatch.setattr(config_store, "get_bool", _boom)
+        assert quality_gate.citation_strict_enabled() is True
+
+
+class TestCitationAuditFields:
+    """审计 extra 维度映射（S6 纯函数部分）：只记质量维度，无 DDL。"""
+
+    def test_verified_report_fields(self) -> None:
+        from app.modules.safety.ai_hazard_identification.citation_evidence import (
+            verify_citations,
+        )
+
+        evidence = _citation_evidence()
+        report = verify_citations(VERIFIED_BASIS, evidence)
+        fields = quality_gate.citation_audit_fields(
+            report, evidence, strict=True
+        )
+        assert fields == {
+            "citation_strict": True,
+            "citation_source": "chunks",
+            "citation_total": 1,
+            "citation_verified": 1,
+            "citation_verified_all": True,
+            "citation_unverified": [],
+            "citation_chunk_ids": ["c1"],
+            "citation_placeholder_note": False,
+        }
+
+    def test_zero_verified_report_fields(self) -> None:
+        from app.modules.safety.ai_hazard_identification.citation_evidence import (
+            verify_citations,
+        )
+
+        evidence = _citation_evidence()
+        report = verify_citations(UNVERIFIED_BASIS, evidence)
+        fields = quality_gate.citation_audit_fields(report, evidence, strict=True)
+        assert fields["citation_total"] == 1
+        assert fields["citation_verified"] == 0
+        assert fields["citation_verified_all"] is False
+        assert fields["citation_unverified"] == [UNVERIFIED_BASIS]
+
+    def test_no_evidence_fields(self) -> None:
+        fields = quality_gate.citation_audit_fields(None, None, strict=False)
+        assert fields["citation_strict"] is False
+        assert fields["citation_source"] == "none"
+        assert fields["citation_total"] == 0
+        assert fields["citation_chunk_ids"] == []
+
+
+class TestCitationStrictRegistryKey:
+    """app_config registry：开关默认 true、热生效（非 restart_required）。"""
+
+    def test_registry_key_registered(self) -> None:
+        from app.modules.safety.app_config import registry
+
+        item = registry.get_item("SAFETY_HAZARD_CITATION_STRICT_ENABLED")
+        assert item.default is True
+        assert item.type == "bool"
+        assert item.restart_required is False
+
+
+# ═══════════════════════════════════════════════════════════════
+# C2 引用来源强约束：_identify_one 接线（S5 集成部分）
+# 2026-11-06 P0-C（spec §C2）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _citation_report_for(basis: str) -> Any:
+    """用 _healthy_context 的 chunks 构造与真实链路一致的引用报告。"""
+    from app.modules.safety.ai_hazard_identification.citation_evidence import (
+        CitationEvidence,
+        verify_citations,
+    )
+
+    evidence = CitationEvidence.from_chunks(_healthy_context().chunks)
+    return verify_citations(basis, evidence)
+
+
+class TestIdentifyOneCitationStrict:
+    async def test_unverified_citation_rejected_invalid_citation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        holder = _Holder()
+        holder.output = _good_output(major_hazard_basis=UNVERIFIED_BASIS)
+        holder.citation_report = _citation_report_for(UNVERIFIED_BASIS)
+        _wire_identify(monkeypatch, holder)
+
+        with pytest.raises(QualityGateError) as exc_info:
+            await ai_analysis._identify_one(object(), _view(), round_id="R-1")
+
+        assert exc_info.value.category == quality_gate.INVALID_CITATION
+        # 插件收到证据（本轮 chunks）
+        evidence = holder.plugin_evidence[0]
+        assert evidence is not None
+        assert evidence.chunk_ids == ("chunk-1",)
+        # 失败也回写引用质量维度（可观测）
+        assert holder.audit_marks, "失败路径也应回写审计 extra"
+        mark = holder.audit_marks[-1]
+        assert mark["citation_strict"] is True
+        assert mark["citation_source"] == "chunks"
+        assert mark["citation_verified"] == 0
+        assert mark["citation_total"] == 1
+
+    async def test_verified_citation_passes_and_audit_marked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        holder = _Holder()
+        holder.citation_report = _citation_report_for(GOOD_BASIS)
+        _wire_identify(monkeypatch, holder)
+
+        result = await ai_analysis._identify_one(object(), _view(), round_id="R-1")
+
+        assert result["major_hazard_basis"] == GOOD_BASIS
+        mark = holder.audit_marks[-1]
+        assert mark["citation_source"] == "chunks"
+        assert mark["citation_total"] == mark["citation_verified"] == 1
+        assert mark["citation_verified_all"] is True
+        assert mark["citation_chunk_ids"] == ["chunk-1"]
+
+    async def test_switch_off_preserves_legacy_behavior(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            quality_gate, "citation_strict_enabled", lambda: False
+        )
+        holder = _Holder()
+        holder.output = _good_output(major_hazard_basis=UNVERIFIED_BASIS)
+        _wire_identify(monkeypatch, holder)
+
+        result = await ai_analysis._identify_one(object(), _view(), round_id="R-1")
+
+        # 开关关：不构造证据、不做 invalid_citation 判定（回退 P0-A 旧行为）
+        assert holder.plugin_evidence[0] is None
+        assert result["major_hazard_basis"] == UNVERIFIED_BASIS
+        mark = holder.audit_marks[-1]
+        assert mark["citation_strict"] is False
+        assert mark["citation_source"] == "none"
+
+    async def test_placeholder_note_with_verified_citation_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        basis = PLACEHOLDER_NOTE_WITH_CITATION
+        holder = _Holder()
+        holder.output = _good_output(major_hazard_basis=basis)
+        holder.citation_report = _citation_report_for(basis)
+        _wire_identify(monkeypatch, holder)
+
+        result = await ai_analysis._identify_one(object(), _view(), round_id="R-1")
+        assert result["major_hazard_basis"] == basis
+
+
+class TestRunRoundInvalidCitation:
+    async def test_invalid_citation_category_reaches_ledger_and_alert(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = _make_env()
+
+        async def fail_identify(view: Any) -> dict[str, Any]:
+            raise QualityGateError(
+                quality_gate.INVALID_CITATION, "引用无法在本轮 chunks 验证"
+            )
+
+        env.identify_impl = fail_identify
+        await _wire_round(monkeypatch, env, records=[_raw_record("rec-1")])
+        monkeypatch.setattr(hazard_config, "alert_min_failures", lambda: 1)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=True)
+
+        assert result.failed == 1
+        assert env.written == []  # 零可验证 → 不写回
+        assert result.failures[0]["category"] == "invalid_citation"
+        assert env.ledger.failure_calls[0][2] == "invalid_citation"
+        assert "invalid_citation=1" in env.notify_failures[0]["error"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# C5(F9) RAG 全局降级短路熔断（T6 / S8）
+# ═══════════════════════════════════════════════════════════════
+#
+# 语义（ticket 06 / spec §C5）：
+# - 连续 RAG_BREAKER_CONSECUTIVE_FAILURES(3) 条 retrieval_degraded → 熔断本轮剩余：
+#   worker 入口直接计入 deferred 并跳过（不检索/不调 AI/不写回），不计 attempts、
+#   不进死信；
+# - RoundResult.breaker_tripped=True（as_dict 同步）、轮末 warning + 只发一次告警；
+# - 成功 / 非 retrieval_degraded 失败重置连续计数；未达阈值不熔断；
+# - 只影响本轮，下一次调用从 0 重新计数。
+
+
+class TestRunRoundRagBreaker:
+    async def test_three_consecutive_retrieval_degraded_trips_breaker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = _make_env()
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert ai_analysis.RAG_BREAKER_CONSECUTIVE_FAILURES == 3
+        assert result.total == 5
+        assert result.failed == 3
+        assert result.infra_failed == 3
+        assert result.deferred == 2  # 熔断后剩余 2 条在 worker 入口计入 deferred
+        assert result.succeeded == 0
+        assert result.breaker_tripped is True
+        assert result.as_dict()["breaker_tripped"] is True
+        # 熔断后剩余记录未进入 _identify_one（不检索、不调 AI）
+        assert [record_id for record_id, _ in env.identify_calls] == [
+            "rec-1",
+            "rec-2",
+            "rec-3",
+        ]
+        # 熔断跳过的记录也不进 failure_ledger 检索（不计 attempts/退避）
+        assert len(env.ledger.should_retry_calls) == 3
+        assert env.ledger.failure_calls == []
+        assert env.ledger.dead_letters == []
+        assert env.written == []
+
+    async def test_below_threshold_does_not_trip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = _make_env()
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        await _wire_round(
+            monkeypatch, env, records=[_raw_record("rec-1"), _raw_record("rec-2")]
+        )
+
+        result = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert result.failed == 2
+        assert result.deferred == 0
+        assert result.breaker_tripped is False
+        assert len(env.identify_calls) == 2
+
+    async def test_mixed_non_infra_failure_resets_consecutive_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """混合失败（含非 infra 失败）打断连续性 → 不熔断。"""
+        env = _make_env()
+
+        async def mixed_failure(view: Any) -> dict[str, Any]:
+            if view.record_id == "rec-3":
+                raise QualityGateError("placeholder_basis", "命中占位文案")
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = mixed_failure
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert result.breaker_tripped is False
+        assert result.failed == 5
+        assert result.deferred == 0
+        assert len(env.identify_calls) == 5
+        # 非 infra 失败照常进失败账本（计 attempts）；infra 失败不进
+        assert [call[0] for call in env.ledger.failure_calls] == ["rec-3"]
+
+    async def test_success_resets_consecutive_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = _make_env()
+
+        async def sometimes_ok(view: Any) -> dict[str, Any]:
+            if view.record_id == "rec-3":
+                return _identified_output()
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = sometimes_ok
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert result.breaker_tripped is False
+        assert result.succeeded == 1
+        assert result.failed == 4
+        assert result.deferred == 0
+        assert [record_id for record_id, _ in env.written] == ["rec-3"]
+        assert env.ledger.success_ids == ["rec-3"]
+
+    async def test_breaker_keeps_earlier_success_writeback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """已成功记录照常写回：熔断只跳过之后的剩余记录。"""
+        env = _make_env()
+
+        async def first_ok_then_rag_down(view: Any) -> dict[str, Any]:
+            if view.record_id == "rec-1":
+                return _identified_output()
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = first_ok_then_rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert result.succeeded == 1
+        assert result.failed == 3
+        assert result.deferred == 1
+        assert result.breaker_tripped is True
+        assert [record_id for record_id, _ in env.written] == ["rec-1"]
+        assert len(env.identify_calls) == 4  # rec-1 成功 + rec-2/3/4 降级
+
+    async def test_breaker_alert_emitted_once_with_reason_and_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """熔断告警：即使单条 infra 告警阈值=1 也只发一次，文案含原因+分类计数。"""
+        env = _make_env()
+        monkeypatch.setattr(hazard_config, "alert_min_failures", lambda: 1)
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+        env.ledger.infra_alert_results = [True, False]  # 第 1 轮放行、第 2 轮窗口内去重
+
+        first = await ai_analysis.run_ai_analysis_round(notify=True)
+        second = await ai_analysis.run_ai_analysis_round(notify=True)
+
+        assert first.breaker_tripped is True
+        assert second.breaker_tripped is True
+        assert len(env.notify_failures) == 1
+        assert "RAG 全局降级熔断" in env.notify_failures[0]["error"]
+        assert "retrieval_degraded=3" in env.notify_failures[0]["error"]
+        assert len(env.notify_failures[0]["failures"]) == 3
+        # 熔断告警走独立去重 key（与单条 RAG infra 告警互不吞并、不双发）
+        assert env.ledger.infra_alert_keys == [
+            failure_ledger.RAG_BREAKER_ALERT_KEY,
+            failure_ledger.RAG_BREAKER_ALERT_KEY,
+        ]
+        # 不进失败账本 / 不进死信
+        assert env.ledger.failure_calls == []
+
+    async def test_breaker_alert_not_gated_by_single_failure_threshold(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """全局熔断是轮级事件：失败条数 < alert_min_failures 也要告警（仅受 Redis 去重）。"""
+        env = _make_env()
+        monkeypatch.setattr(hazard_config, "alert_min_failures", lambda: 10)
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=True)
+
+        assert result.breaker_tripped is True
+        assert len(env.notify_failures) == 1
+        assert "RAG 全局降级熔断" in env.notify_failures[0]["error"]
+
+    async def test_breaker_log_contains_reason_and_failure_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env = _make_env()
+        warnings: list[str] = []
+
+        def record_warning(msg: str, *args: Any, **kwargs: Any) -> None:
+            warnings.append(str(msg) % args if args else str(msg))
+
+        monkeypatch.setattr(ai_analysis.logger, "warning", record_warning)
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        await ai_analysis.run_ai_analysis_round(notify=False)
+
+        breaker_logs = [w for w in warnings if "RAG 全局降级熔断本轮" in w]
+        assert breaker_logs, f"缺少熔断日志: {warnings}"
+        joined = "\n".join(breaker_logs)
+        assert "retrieval_degraded" in joined
+        assert "failed=3" in joined
+
+    async def test_next_round_starts_count_from_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """只影响本轮：下一轮调用重新计数（2 条降级 < 阈值 → 不熔断）。"""
+        env = _make_env()
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records)
+
+        first = await ai_analysis.run_ai_analysis_round(notify=False)
+        assert first.breaker_tripped is True
+
+        async def fake_search_two(
+            client: Any, *, limit: int | None = None, keep: Any = None
+        ) -> list[dict[str, Any]]:
+            return [_raw_record("rec-a"), _raw_record("rec-b")]
+
+        monkeypatch.setattr(bitable_repo, "search_pending_ai", fake_search_two)
+        env.identify_calls.clear()
+
+        second = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert second.breaker_tripped is False
+        assert second.failed == 2
+        assert second.deferred == 0
+        assert [record_id for record_id, _ in env.identify_calls] == ["rec-a", "rec-b"]
+
+
+class TestRoundResultBreakerFlag:
+    def test_breaker_flag_defaults_false_and_in_as_dict(self) -> None:
+        from app.modules.safety.service.hazard_direct.round_result import RoundResult
+
+        result = RoundResult()
+        assert result.breaker_tripped is False
+        assert result.as_dict()["breaker_tripped"] is False
+
+        result.breaker_tripped = True
+        assert result.as_dict()["breaker_tripped"] is True
+
+
+# ═══════════════════════════════════════════════════════════════
+# T6-fix：并发下的熔断短路（真实 await 边界）
+# ═══════════════════════════════════════════════════════════════
+#
+# 生产链路 `asyncio.gather(*(_worker(rec) for rec in records))` 一次性调度全部
+# worker：每个 worker 先跑到第一个真实 await 才让出，因此「worker 入口」的熔断
+# 检查在并发下必然全部先通过（入口检查只能兜住下一轮/后续调度）。必须在
+# semaphore 内、真正调 `_identify_one` 之前再检查一次，降级期间排队/在途的
+# 记录才能短路（不调 AI、计 deferred）。以下用例所有 fake await 点都有真实
+# `asyncio.sleep(0)`，否则测试桩会伪串行执行而掩盖该竞态。
+
+
+class TestRunRoundRagBreakerConcurrency:
+    async def test_concurrent_workers_short_circuit_before_identify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """真实 yield 下 5 条连续 retrieval_degraded：只前 3 条进入 _identify_one。"""
+        env = _make_env()
+        env.ledger = _YieldingLedger()
+        monkeypatch.setattr(hazard_config, "alert_min_failures", lambda: 1)
+
+        async def rag_down(view: Any) -> dict[str, Any]:
+            await asyncio.sleep(0)  # 模拟真实 RAG/AI 网络 await，worker 交错推进
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = rag_down
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records, yield_points=True)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=True)
+
+        assert result.breaker_tripped is True
+        assert result.failed == 3
+        assert result.infra_failed == 3
+        assert result.succeeded == 0
+        # 关键：后 2 条在 semaphore 内第二次检查处短路，不进入 _identify_one
+        assert [record_id for record_id, _ in env.identify_calls] == [
+            "rec-1",
+            "rec-2",
+            "rec-3",
+        ]
+        assert result.deferred == 2
+        assert env.written == []
+        assert env.ledger.failure_calls == []  # 不计 attempts / 不进死信
+        # 告警只 1 次：熔断告警合并替代 5 条单条 infra 告警
+        assert len(env.notify_failures) == 1
+        assert "RAG 全局降级熔断" in env.notify_failures[0]["error"]
+        assert "retrieval_degraded=3" in env.notify_failures[0]["error"]
+
+    async def test_concurrent_mixed_failure_does_not_trip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """真实 yield 下混合失败打断连续性 → 不熔断、5 条全部处理。"""
+        env = _make_env()
+        env.ledger = _YieldingLedger()
+
+        async def mixed_failure(view: Any) -> dict[str, Any]:
+            await asyncio.sleep(0)
+            if view.record_id == "rec-3":
+                raise QualityGateError("placeholder_basis", "命中占位文案")
+            raise QualityGateError("retrieval_degraded", "RAG 检索降级")
+
+        env.identify_impl = mixed_failure
+        records = [_raw_record(f"rec-{i}") for i in range(1, 6)]
+        await _wire_round(monkeypatch, env, records=records, yield_points=True)
+
+        result = await ai_analysis.run_ai_analysis_round(notify=False)
+
+        assert result.breaker_tripped is False
+        assert result.failed == 5
+        assert result.deferred == 0
+        assert len(env.identify_calls) == 5
+        # 非 infra 失败照常进失败账本（占位文案记录）
+        assert [call[0] for call in env.ledger.failure_calls] == ["rec-3"]

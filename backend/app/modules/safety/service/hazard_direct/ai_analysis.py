@@ -31,6 +31,22 @@ F2 队列饥饿修复（2026-11-05）：
 - 取数改为「全量取 + 逐条预过滤」：死信/退避记录不占 ``batch_limit`` 窗口，
   仅可执行记录进入本轮处理；死信 ≥ 窗口时输出高水位 warning。
 
+C2 引用来源强约束（2026-11-06，P0-C）：
+- 开关 ``SAFETY_HAZARD_CITATION_STRICT_ENABLED``（默认开、热生效）开启时，用本轮
+  RAG chunks 构造 ``CitationEvidence`` 传给插件与输出质量闸门；
+- 插件零可验证引用 → 分类 ``invalid_citation``（失败账本/告警可聚合）；
+- 闸门兜底：零可验证 → 不写回；
+- 识别成功/失败都把引用质量维度（来源/总数/可验证数/不可验证清单/chunk_ids）
+  合并进最近一次 AI 审计行 ``extra``（无审计行 no-op，失败不影响业务）。
+
+C5(F9) RAG 全局降级短路熔断（2026-11-06，P0-C）：
+- 本轮连续 ``RAG_BREAKER_CONSECUTIVE_FAILURES``(3) 条记录因 ``retrieval_degraded``
+  失败 → 熔断本轮剩余：worker 入口直接计入 ``deferred`` 并跳过（不检索、不调 AI、
+  不计 attempts、不进死信）；
+- 轮末打一条 warning（含熔断原因与失败计数）+ 只发一次告警（独立 Redis 去重
+  key），``RoundResult.breaker_tripped`` 标记供调度/告警观察；
+- 只影响本轮：下一次调用从 0 重新计数，RAG 恢复后自动恢复正常。
+
 编号：若「隐患编号」为空或以 ERROR: 开头 → 重新分配 HZ-YYYYMMDD-NNN 并覆盖。
 """
 
@@ -52,6 +68,7 @@ from app.modules.safety.service.hazard_direct.alert import notify_admin, notify_
 from app.modules.safety.service.hazard_direct.failure_ledger import (
     AI_INFRA_ALERT_KEY,
     DEAD_LETTERS_KEY,
+    RAG_BREAKER_ALERT_KEY,
     format_dead_letter_lines,
 )
 from app.modules.safety.service.hazard_direct.round_result import RoundResult
@@ -91,6 +108,12 @@ class _WritebackError(Exception):
 # 不累计 attempts、不进死信 —— RAG 恢复后记录仍在轮询队列、无退避可直接重试。
 # 注：no_chunks 属数据性零召回（R1-3），按记录级失败计 attempts/死信，不在此集合。
 RAG_INFRA_CATEGORIES = frozenset({quality_gate.RETRIEVAL_DEGRADED})
+
+# C5(F9) RAG 全局降级短路熔断：本轮连续 N 条 retrieval_degraded 失败 → 熔断本轮
+# 剩余记录（worker 入口直接计入 deferred，不检索/不调 AI、不计 attempts/不进死信）。
+# 只影响本轮：下一次调用从 0 重新计数，RAG 恢复后自动恢复正常。
+RAG_BREAKER_CONSECUTIVE_FAILURES = 3
+# 熔断告警去重 key 常量收归 failure_ledger（与 INFRA/AI_INFRA 同区），此处 import。
 
 # AI 基础设施失败分类：AI 端点欠费/鉴权/服务端/超时/连接/配置异常。
 # 与 RAG infra 同语义：**不计 attempts、不进死信、不占退避**（F1）。
@@ -154,6 +177,25 @@ async def _load_context_for_view(view: bitable_repo.HazardView) -> KnowledgeCont
         return await _load_knowledge_context(session, view.description)
 
 
+async def _record_citation_quality(
+    plugin: Any, evidence: Any, *, strict: bool
+) -> None:
+    """把引用质量维度合并进最近一次 AI 审计行 extra（C2，best-effort）。
+
+    - 无审计行 / 无报告时 mark_audit_extra 内部 no-op；
+    - 任何异常只告警，绝不影响识别/写回业务。
+    """
+    try:
+        from app.modules.safety.ai_audit import audited_client
+
+        report = getattr(plugin, "last_citation_report", None)
+        await audited_client.mark_audit_extra(
+            quality_gate.citation_audit_fields(report, evidence, strict=strict)
+        )
+    except Exception:  # noqa: BLE001 — 审计质量维度失败不影响业务
+        logger.warning("引用质量维度审计回写失败（不影响业务）", exc_info=True)
+
+
 async def _identify_one(
     client: Any, view: bitable_repo.HazardView, *, round_id: str | None = None
 ) -> dict[str, Any]:
@@ -163,12 +205,16 @@ async def _identify_one(
     1. RAG 预检 —— 降级/零召回直接抛 ``QualityGateError``，**不建 AI 客户端、不调 AI**；
     2. 只下载缺陷图（① 不用整改后图，下载量 -44%），图片编码放线程；
     3. AI 客户端用进程级单例（不再逐条 close），strict_mode=True；
-    4. 输出枚举校验后走输出质量闸门（空依据/占位/无引用 → 失败不写回）。
+    4. 输出枚举校验后走输出质量闸门（空依据/占位/无引用/引用零可验证
+       ``invalid_citation`` → 失败不写回）。
     """
     from app.modules.safety.ai_hazard_identification import (
         AIHazardIdentifier,
         HazardIdentificationInput,
         PluginConfig,
+    )
+    from app.modules.safety.ai_hazard_identification.citation_evidence import (
+        CitationEvidence,
     )
     from app.modules.safety.service.config import get_ai_service
 
@@ -177,6 +223,15 @@ async def _identify_one(
     quality_gate.ensure_knowledge(knowledge_context)
     assert knowledge_context is not None  # ensure_knowledge 已排除 None（供 mypy 收窄）
     knowledge_text = knowledge_context.markdown or None
+
+    # C2 引用来源强约束：开关开 → 用本轮 chunks 构造证据（零可验证不写回）；
+    # 开关关 → evidence=None，插件/闸门回退 P0-A 旧行为（可热回滚）。
+    citation_strict = quality_gate.citation_strict_enabled()
+    citation_evidence = (
+        CitationEvidence.from_chunks(knowledge_context.chunks)
+        if citation_strict
+        else None
+    )
 
     # ── 2. 只下缺陷图；图片编码/落盘走线程，不阻塞事件循环 ──
     photos = await bitable_repo.download_photos(
@@ -220,9 +275,19 @@ async def _identify_one(
         },
     ):
         plugin = AIHazardIdentifier(
-            ai_service, plugin_config, knowledge_context=knowledge_text
+            ai_service,
+            plugin_config,
+            knowledge_context=knowledge_text,
+            citation_evidence=citation_evidence,
         )
-        output = await plugin.identify(input_data)
+        try:
+            output = await plugin.identify(input_data)
+        except Exception:
+            # 失败也留引用质量观测（否则无法定位失败记录的依据来源）
+            await _record_citation_quality(
+                plugin, citation_evidence, strict=citation_strict
+            )
+            raise
 
     result = {
         "key_defect": output.key_defect,
@@ -239,7 +304,12 @@ async def _identify_one(
     }
     # ── 4. 枚举校验 → 输出质量闸门（写回前最后一道）──
     _validate(result)
-    quality_gate.ensure_output(result)
+    try:
+        quality_gate.ensure_output(result, evidence=citation_evidence)
+    finally:
+        await _record_citation_quality(
+            plugin, citation_evidence, strict=citation_strict
+        )
     return result
 
 
@@ -459,9 +529,28 @@ async def run_ai_analysis_round(
     rag_infra_failures: list[dict[str, str]] = []
     ai_infra_failures: list[dict[str, str]] = []
 
+    # C5(F9) RAG 全局降级熔断状态（仅本轮有效）：连续 retrieval_degraded 计数、
+    # 是否已熔断、熔断后在 worker 入口跳过的记录数（计入 deferred）。
+    rag_consecutive_failures = 0
+    rag_breaker_tripped = False
+    rag_breaker_skipped = 0
+
     async def _worker(record: dict[str, Any]) -> None:
+        nonlocal rag_consecutive_failures, rag_breaker_tripped
+        nonlocal rag_breaker_skipped
         record_id = record.get("record_id", "")
         if not record_id:
+            return
+        # C5(F9)：RAG 全局降级已熔断 → 本轮剩余记录在入口直接跳过：
+        # 不检索、不调 AI、不计 attempts、不进死信（恢复后下一轮自动重试）。
+        if rag_breaker_tripped:
+            rag_breaker_skipped += 1
+            result.deferred += 1
+            logger.info(
+                "① RAG 全局降级已熔断本轮，跳过剩余记录（不检索/不调 AI）: "
+                "record_id=%s",
+                record_id,
+            )
             return
         # 失败治理：未到重试轮次 / 已死信 → 不烧 AI（deferred），不计失败
         if not await failure_ledger.should_retry(record_id, round_seq):
@@ -475,6 +564,19 @@ async def run_ai_analysis_round(
                 return
             try:
                 async with semaphore:
+                    # C5(F9) 并发短路（T6-fix）：gather 一次性调度全部 worker，而
+                    # 入口检查在各 worker 首个真实 await 之前，并发下必然全部先
+                    # 通过；因此真正检索/调 AI 前（已历经 should_retry/record_lock
+                    # 等 await）必须再检查一次，降级期间排队/在途记录才能短路。
+                    if rag_breaker_tripped:
+                        rag_breaker_skipped += 1
+                        result.deferred += 1
+                        logger.info(
+                            "① RAG 全局降级已熔断本轮，跳过排队记录"
+                            "（不检索/不调 AI）: record_id=%s",
+                            record_id,
+                        )
+                        return
                     view = bitable_repo.to_view(record)
                     output = await _identify_one(client, view, round_id=round_id)
 
@@ -498,6 +600,9 @@ async def run_ai_analysis_round(
 
                 await failure_ledger.record_success(record_id)
                 result.succeeded += 1
+                # C5(F9)：成功记录打断 RAG 连续失败计数（已熔断后保留计数供轮末日志）
+                if not rag_breaker_tripped:
+                    rag_consecutive_failures = 0
                 logger.info(
                     "① 完成: record_id=%s 分类=%s 级别=%s 类别=%s round_id=%s",
                     record_id, output.get("hazard_type"),
@@ -559,17 +664,49 @@ async def run_ai_analysis_round(
                         record_id, category,
                     )
 
+                # C5(F9)：连续 retrieval_degraded 计数（成功/其它失败分类重置）；
+                # 达到阈值 → 熔断本轮剩余记录（已在执行中的任务不取消，只跳过后继）。
+                if category == quality_gate.RETRIEVAL_DEGRADED:
+                    rag_consecutive_failures += 1
+                    if (
+                        not rag_breaker_tripped
+                        and rag_consecutive_failures
+                        >= RAG_BREAKER_CONSECUTIVE_FAILURES
+                    ):
+                        rag_breaker_tripped = True
+                        result.breaker_tripped = True
+                        logger.warning(
+                            "① RAG 全局降级熔断本轮：连续 %d 条 retrieval_degraded "
+                            "失败（本轮 failed=%d）→ 跳过剩余记录（不检索/不调 AI、"
+                            "不计 attempts/不进死信），RAG 恢复后下一轮自动重试",
+                            rag_consecutive_failures, result.failed,
+                        )
+                else:
+                    # 已熔断后保留计数（供轮末日志/告警展示本次连续降级规模）
+                    if not rag_breaker_tripped:
+                        rag_consecutive_failures = 0
+
     await asyncio.gather(*(_worker(rec) for rec in records))
 
+    result.breaker_tripped = rag_breaker_tripped
     dead_letters = await failure_ledger.list_dead_letters(limit=100)
     logger.info(
         "① 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d 延后=%d 新增失败=%d "
-        "新死信=%d 累计死信=%d 基础设施失败(RAG=%d/AI=%d) round_id=%s",
+        "新死信=%d 累计死信=%d 基础设施失败(RAG=%d/AI=%d) 熔断=%s round_id=%s",
         result.total, result.succeeded, result.failed, result.skipped,
         result.deferred, len(new_failures), len(new_dead_letters),
         len(dead_letters), len(rag_infra_failures), len(ai_infra_failures),
-        round_id,
+        "是" if rag_breaker_tripped else "否", round_id,
     )
+    # C5(F9) 熔断轮：轮末单条 warning（含熔断原因与失败计数），便于日志排查。
+    if rag_breaker_tripped:
+        logger.warning(
+            "① RAG 全局降级熔断本轮：连续 %d 条 retrieval_degraded 失败（failed=%d），"
+            "跳过剩余 %d 条（deferred=%d，不检索/不调 AI、不计 attempts/不进死信）；"
+            "仅影响本轮，RAG 恢复后下一轮自动重试 round_id=%s",
+            rag_consecutive_failures, result.failed, rag_breaker_skipped,
+            result.deferred, round_id,
+        )
     # F8 死信可观测：轮末打印 top-N 明细（不再只有累计数量），人工排查无需进 Redis。
     for dead_letter_line in format_dead_letter_lines(dead_letters, limit=10):
         logger.info("① 死信明细: %s", dead_letter_line)
@@ -586,9 +723,28 @@ async def run_ai_analysis_round(
             await notify_admin(
                 "⚠️ 隐患AI识别死信告警", _format_dead_letter_alert(new_dead_letters)
             )
-        # RAG 基础设施失败：不累计 attempts/不进死信，但降级期间仍需可观测；
-        # 用 Redis SET NX EX 去重（默认 30 分钟窗口），避免每轮刷屏。
-        if (
+        # C5(F9) RAG 全局降级熔断：轮级事件优先——只发一次熔断告警（独立去重
+        # key），文案含熔断原因 + 分类计数；该告警取代同轮常规单条 RAG infra
+        # 告警，避免故障期间一轮双发（仍然 30 分钟窗口内只报一次）。
+        if rag_breaker_tripped:
+            if await failure_ledger.should_emit_infra_alert(
+                round_seq, key=RAG_BREAKER_ALERT_KEY
+            ):
+                await notify_failures(
+                    result.job_label,
+                    failures=rag_infra_failures,
+                    total=result.total,
+                    error=(
+                        f"RAG 全局降级熔断本轮：连续 {rag_consecutive_failures} 条 "
+                        f"retrieval_degraded 失败（本轮 failed={result.failed}，"
+                        f"跳过剩余 {rag_breaker_skipped} 条）；不累计 attempts、"
+                        "不进死信，RAG 恢复后下一轮自动重试（30 分钟内只告警一次）："
+                        + _format_category_counts(rag_infra_failures)
+                    ),
+                )
+        # RAG 基础设施失败（未熔断的零散降级）：不累计 attempts/不进死信，但降级
+        # 期间仍需可观测；用 Redis SET NX EX 去重（默认 30 分钟窗口），避免刷屏。
+        elif (
             rag_infra_failures
             and len(rag_infra_failures) >= config.alert_min_failures()
             and await failure_ledger.should_emit_infra_alert(round_seq)

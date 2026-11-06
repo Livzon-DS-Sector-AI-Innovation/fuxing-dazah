@@ -46,6 +46,8 @@ INFRA_ALERT_KEY = "safety:hazard:ai:infra_alert_at"
 # AI 基础设施失败（欠费/鉴权/服务端/超时/连接/配置）告警独立去重 key：
 # 与 RAG infra 互不吞并，两路故障可各自告警一次（F1-3）。
 AI_INFRA_ALERT_KEY = "safety:hazard:ai:ai_infra_alert_at"
+# RAG 全局降级短路熔断（C5/F9）告警独立去重 key：与上面两路互不吞并。
+RAG_BREAKER_ALERT_KEY = "safety:hazard:ai:rag_breaker_alert_at"
 
 # 进程内轮次序号（B7-1 / F6）：Redis 故障期间本地自增，恢复后仍不回退。
 _LAST_SEQ = 0

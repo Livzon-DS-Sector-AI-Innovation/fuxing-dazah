@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.modules.safety.ai_hazard_identification.prompts import (
+    CRITICAL_CONSTRAINTS,
     FEWSHOT_EXAMPLES,
     OUTPUT_FORMAT,
     SYSTEM_ROLE,
@@ -102,6 +103,26 @@ class TestSchemas:
         with pytest.raises(ValueError):
             HazardIdentificationOutput(**{**VALID_OUTPUT_DICT, "hazard_type": "invalid_type"})
 
+    def test_major_hazard_basis_allows_empty_string(self):
+        """通用判定依据：知识库无对应条文时允许空串（交质量闸门判 empty_basis）。"""
+        output = HazardIdentificationOutput(
+            **{**VALID_OUTPUT_DICT, "major_hazard_basis": ""}
+        )
+        assert output.major_hazard_basis == ""
+
+    def test_major_hazard_basis_field_general_semantics(self):
+        """major_hazard_basis 字段说明为通用判定依据口径，min_length=0（允许空串）。"""
+        field = HazardIdentificationOutput.model_fields["major_hazard_basis"]
+        description = field.description or ""
+        assert "通用判定依据" in description, (
+            f"字段说明应为通用判定依据语义，实际: {description}"
+        )
+        assert "知识库" in description, "字段说明应交代引用来源（本轮法规知识库）"
+        min_lengths = [getattr(meta, "min_length", None) for meta in field.metadata]
+        assert 0 in min_lengths, (
+            f"min_length 应为 0（允许空串交由质量闸门处理），实际 metadata={field.metadata}"
+        )
+
     def test_plugin_config_defaults(self):
         """默认配置应合理。"""
         config = PluginConfig()
@@ -131,6 +152,36 @@ class TestPrompts:
         assert "停产整改判断" in WORK_RULES
         assert "全厂停产或全车间停产" in WORK_RULES
         assert "局部停产" in WORK_RULES
+
+    def test_work_rules_basis_is_general_not_major_only(self):
+        """§5 判定依据引用规则：通用判定依据 + 逐字来源强约束 + 空串口径。"""
+        assert "通用判定依据" in WORK_RULES
+        assert "逐字来自" in WORK_RULES
+        assert "空字符串" in WORK_RULES
+        assert "不得编造" in WORK_RULES
+        assert "不得凭训练记忆" in WORK_RULES
+        assert "《法规/标准名称》第X条" in WORK_RULES
+        # 级别一致性：major 引重大判定标准，非 major 不得强行引用；①停产判断仍最高权威
+        assert "重大隐患判定标准" in WORK_RULES
+        assert "不得仅因" in WORK_RULES
+        assert "①停产整改判断" in WORK_RULES
+
+    def test_critical_constraints_synced_to_general_basis(self):
+        """CRITICAL_CONSTRAINTS 第 2/5 条同步通用判定依据语义。"""
+        assert "通用判定依据" in CRITICAL_CONSTRAINTS
+        assert "逐字" in CRITICAL_CONSTRAINTS
+        assert "空字符串" in CRITICAL_CONSTRAINTS
+        assert "占位" in CRITICAL_CONSTRAINTS
+        assert "不得编造" in CRITICAL_CONSTRAINTS
+
+    def test_output_format_basis_general_semantics(self):
+        """OUTPUT_FORMAT 的 major_hazard_basis 描述同步通用口径。"""
+        start = OUTPUT_FORMAT.index('"major_hazard_basis"')
+        line = OUTPUT_FORMAT[start:OUTPUT_FORMAT.index("\n", start)]
+        assert "通用判定依据" in line
+        assert "《法规/标准名称》第X条" in line
+        assert "空字符串" in line
+        assert "重大隐患判定标准" in line
 
     def test_output_format_is_valid_json_template(self):
         # 输出格式应该是一个描述（不是 JSON，因为在 Python 字符串里）
@@ -190,6 +241,20 @@ class TestPrompts:
         assert "无需设备断电" in ex1["output"]["rectification_suggestion"]["corrective"] or \
                "无需断电" in ex1["output"]["rectification_suggestion"]["corrective"], \
             "示例1的整改措施应明确标注加装堵头无需断电"
+
+    def test_fewshot_example1_basis_consistent_with_general_level(self):
+        """示例1（general）：依据含重大标准对照说明 + 通用标准条款 + 停产判断说明。"""
+        output = FEWSHOT_EXAMPLES[0]["output"]
+        basis = output["major_hazard_basis"]
+        assert output["hazard_level"] == "general"
+        # 保留《重大隐患判定标准》第十条的对照说明（说明为何不构成重大隐患）
+        assert "重大生产安全事故隐患判定标准》第十条" in basis
+        assert "对照" in basis
+        # 通用判定依据：引用 GB 3836.1-2010 通用条款支撑「物」的缺陷判定
+        assert "GB 3836.1-2010" in basis
+        # 停产判断优先：无需停产 → 按①判定为一般隐患（级别自洽）
+        assert "加装堵头无需停产" in basis
+        assert "按①停产整改判断定为一般隐患" in basis
 
     def test_build_context_text(self):
         text = build_context_text(
@@ -264,7 +329,7 @@ class TestRuleEngine:
         assert len([e for e in result.errors if "不能为空" in e]) == 2
 
     def test_basis_too_short_detected(self):
-        # 5-19 字的依据（通过 Pydantic min_length=5，但触发 RuleEngine <20 检查）
+        # 11 字的依据（schema min_length=0 允许空/短串，但触发 RuleEngine <20 检查）
         output = make_output(major_hazard_basis="这是一个很短的依据文本")
         result = self.engine.validate(make_input(), output)
         assert not result.is_valid
@@ -481,7 +546,14 @@ class TestQualityBenchmarks:
                 corrective="对该电箱未封堵的引入口加装防爆堵头（安装堵头无需设备断电，可直接在线操作），使用防爆吸尘器清理箱内积尘，3个工作日内完成",
                 preventive="修订防爆电气设备巡检制度，将引入口封堵状态纳入每周例行检查项，建立防爆设备全生命周期台账",
             ),
-            major_hazard_basis="《化工和危险化学品生产经营单位重大生产安全事故隐患判定标准》第十条：爆炸危险场所未按国家标准安装使用防爆电气设备；GB 3836.1-2010 第15章：电气设备引入装置的密封要求",
+            major_hazard_basis=(
+                "《化工和危险化学品生产经营单位重大生产安全事故隐患判定标准》第十条："
+                "'爆炸危险场所未按国家标准安装使用防爆电气设备'（对照说明：本隐患为备用引入口"
+                "堵头缺失，属局部防护缺陷，不构成该条对应的整体性重大隐患）；"
+                "GB 3836.1-2010 第15章：'电气设备引入装置的密封要求，所有不装电缆的引入口"
+                "应使用与防爆型式相适应的堵头封堵'。本隐患加装堵头无需停产，按①停产整改判断"
+                "定为一般隐患"
+            ),
             defect_substance="substantive",
             defect_substance_reasoning="防爆引入口未封堵可直接导致粉尘进入电箱引发爆炸（1步物理必然），推断链短且每步为物理必然，属实质缺陷",
         )

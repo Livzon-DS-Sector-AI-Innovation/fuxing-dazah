@@ -51,8 +51,20 @@ def _ragplus_search_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _healthy_context() -> KnowledgeContext:
+    # C2：chunk 需为真实可匹配形态（GOOD_BASIS 的法规名/条号/标准号可命中）
+    healthy_chunks: list[Any] = [
+        SimpleNamespace(
+            chunk_id="chunk-1",
+            source_doc="危险化学品安全管理条例",
+            source_article="第二十条",
+            chunk_text=(
+                "第二十条 生产、储存危险化学品的单位，应当具备下列条件："
+                "有符合国家标准、行业标准的经营场所……GB 30871-2022 第5.1条"
+            ),
+        )
+    ]
     return KnowledgeContext(
-        chunks=[object()],  # type: ignore[list-item]
+        chunks=healthy_chunks,
         degradation="ragplus",
         markdown="【法规】《危险化学品安全管理条例》第二十条……",
     )
@@ -143,10 +155,14 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
             ai_service: Any,
             plugin_config: Any = None,
             knowledge_context: str | None = None,
+            citation_evidence: Any = None,
+            **kwargs: Any,
         ) -> None:
             self.ai_service = ai_service
             self.config = plugin_config
             self.knowledge_context = knowledge_context
+            self.citation_evidence = citation_evidence
+            self.last_citation_report = None
             holder.plugins.append(self)
 
         async def identify(self, input_data: Any) -> Any:

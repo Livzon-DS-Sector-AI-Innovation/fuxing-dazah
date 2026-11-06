@@ -17,8 +17,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from app.modules.safety.ai_hazard_identification.citation_evidence import (
+    CitationEvidence,
+)
 from app.modules.safety.ai_hazard_identification.citations import (
     CITATION_RE,
     PLACEHOLDER_BASIS_MARKERS,
@@ -331,3 +336,263 @@ def test_fixture_enums_are_canonical() -> None:
     assert output.hazard_type == HazardTypeEnum.UNSAFE_CONDITION
     assert output.hazard_category == HazardCategoryEnum.INSTRUMENT_ELECTRICAL
     assert output.hazard_level == HazardLevelEnum.MAJOR
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. C2 识别侧引用强校验（S3）：RuleEngine.validate(..., citation_evidence=)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# 口径（ticket 03 / spec §C2）：
+# - 证据为 None → 行为/文案与现状完全一致（旧调用方兼容）；
+# - 证据非空时：零可验证 → error；部分不可验证 → warning（不阻断）；
+#   纯占位变体 → error；含占位注记但有可验证引用 → warning（不阻断）；
+#   total_units==0 保留既有「必须引用」error，不新造文案但占位判断照常；
+# - major 级别无重大标准特征 → warning（不阻断，C1 规则层口径）。
+
+CITATION_CHUNKS = [
+    SimpleNamespace(
+        chunk_id="cit-c1",
+        source_doc="GB 30871-2022 化学品生产单位特殊作业安全规范",
+        source_article="第5.2条",
+        chunk_text="5.2 高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用。",
+    ),
+    SimpleNamespace(
+        chunk_id="cit-c2",
+        source_doc="化工和危险化学品生产经营单位重大生产安全事故隐患判定标准",
+        source_article="第10条",
+        chunk_text="爆炸危险场所未按国家标准安装使用防爆电气设备。",
+    ),
+    SimpleNamespace(
+        chunk_id="cit-c3",
+        source_doc="GB/T 30000.31-2023 化学品作业场所警示性标志",
+        source_article="第5.1条",
+        chunk_text="化学品作业场所警示性标志正文应使用简洁、明了、易于理解、规范的中文表述。",
+    ),
+]
+
+CITATION_EVIDENCE = CitationEvidence.from_chunks(CITATION_CHUNKS)
+
+# 逐字来自 cit-c1 的证据（标准号 + 条号 + 引文全部可验证）
+VERBATIM_BASIS = (
+    "GB 30871-2022 第5.2条：'高处作业人员应正确佩戴符合国家标准的安全带，安全带应高挂低用'"
+)
+# 两条引用均不在本轮 chunks 中（零可验证）
+FABRICATED_BASIS = (
+    "GB 99999-2024 第1.1条：'企业必须每年开展两次全员安全培训并考核'；"
+    "《虚构的安全管理条例》第三条：'所有人员必须持证上岗'"
+)
+# 占位变体：P0-A 精确子串口径漏判、C2 纳入占位判定
+VARIANT_PLACEHOLDER_BASIS = "知识库中无《重大隐患判定标准（试行）》相应条文，待人工补充"
+# 旧精确口径占位（无引用 → total_units == 0）
+LEGACY_PLACEHOLDER_BASIS = "知识库中无相应条文，待人工补充"
+# 无任何引用格式 → total_units == 0，保留既有「必须引用」error
+NO_CITATION_BASIS = "现场检查发现该处隐患问题较为严重，需要立即安排人员进行整改处理并复查确认"
+
+
+def _basis_output(
+    basis: str, level: str = "general"
+) -> HazardIdentificationOutput:
+    """带指定判定依据与级别的合法输出（大部分校验通过，隔离引用维度）。"""
+    return make_output(hazard_level=level, major_hazard_basis=basis)
+
+
+def _has_unverified_error(result: object) -> bool:
+    errors = getattr(result, "errors")
+    return any("无法在本轮检索到的法规条款中验证" in e for e in errors)
+
+
+class TestRuleEngineCitationEvidence:
+    """S3：引用证据接入 RuleEngine（表驱动 + 边界）。"""
+
+    def setup_method(self) -> None:
+        self.engine = RuleEngine()
+
+    # ── evidence=None 旧行为 ──
+
+    @pytest.mark.parametrize(
+        "basis",
+        [
+            VERBATIM_BASIS,
+            FABRICATED_BASIS,
+            NO_CITATION_BASIS,
+            VARIANT_PLACEHOLDER_BASIS,
+            LEGACY_PLACEHOLDER_BASIS,
+        ],
+    )
+    def test_evidence_none_keeps_legacy_errors(self, basis: str) -> None:
+        """不传证据 / 显式 None：errors 与现状完全一致（C2 新校验不生效）。"""
+        legacy = self.engine.validate(make_input(), _basis_output(basis))
+        explicit_none = self.engine.validate(
+            make_input(), _basis_output(basis), citation_evidence=None
+        )
+        assert legacy.errors == explicit_none.errors
+        # 旧口径：格式合法即通过（即使引用是编造的），不出现 C2 新 error 文案
+        assert not _has_unverified_error(legacy)
+
+    def test_zero_units_keeps_existing_required_citation_error(self) -> None:
+        """evidence 非空但 total_units==0：保留既有「必须引用」error，不新造文案。"""
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(NO_CITATION_BASIS),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert not result.is_valid
+        assert any("必须引用具体法规/标准名称" in e for e in result.errors)
+        assert not _has_unverified_error(result)
+
+    # ── 逐字引用通过 ──
+
+    def test_verbatim_citation_from_chunks_passes(self) -> None:
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(VERBATIM_BASIS),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert result.is_valid, result.errors
+        assert result.errors == []
+        assert not any("部分引用无法在本轮检索到的法规条款中验证" in w for w in result.warnings)
+
+    def test_empty_evidence_collection_is_zero_verified(self) -> None:
+        """证据非 None 但为空集合：视为零可验证（严格口径，由调用方决定是否传证据）。"""
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(VERBATIM_BASIS),
+            citation_evidence=CitationEvidence(),
+        )
+        assert not result.is_valid
+        assert _has_unverified_error(result)
+
+    # ── 零可验证 error ──
+
+    def test_zero_verified_citation_is_error_with_unverified_summary(self) -> None:
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(FABRICATED_BASIS),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert not result.is_valid
+        joined = "\n".join(result.errors)
+        assert "无法在本轮检索到的法规条款中验证（疑似凭记忆编造）" in joined
+        # 不可验证引用摘要（帮助错误反馈/审计定位）
+        assert "GB 99999-2024" in joined
+        # 同一依据在无证据旧路径下不报 C2 error
+        legacy = self.engine.validate(make_input(), _basis_output(FABRICATED_BASIS))
+        assert legacy.is_valid
+
+    # ── 部分不可验证 → warning，不阻断 ──
+
+    def test_partial_verified_is_warning_not_error(self) -> None:
+        partial_basis = f"{VERBATIM_BASIS}；GB 99999-2024 第1.1条：'编造的条文内容'"
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(partial_basis),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert result.is_valid, result.errors
+        assert any(
+            "部分引用无法在本轮检索到的法规条款中验证" in w for w in result.warnings
+        )
+        assert "GB 99999-2024" in "\n".join(result.warnings)
+        assert not _has_unverified_error(result)
+
+    # ── 中文条号 / 标准号书写变体命中 ──
+
+    @pytest.mark.parametrize(
+        "basis",
+        [
+            # 标准号变体：无斜杠 / 不同空格写法 → 归一化后命中 cit-c3
+            "GBT30000.31-2023 第5.1条：'化学品作业场所警示性标志正文应使用简洁、明了、易"
+            "于理解、规范的中文表述'",
+            # 中文条号变体：第十条 → 10，命中 cit-c2 的 source_article 第10条
+            "化工和危险化学品生产经营单位重大生产安全事故隐患判定标准 第十条："
+            "'爆炸危险场所未按国家标准安装使用防爆电气设备'",
+            # 书名号包裹完整标准名 → 归一化子串命中 cit-c1
+            "《GB 30871-2022 化学品生产单位特殊作业安全规范》第五条："
+            "'高处作业人员应正确佩戴符合国家标准的安全带'",
+        ],
+    )
+    def test_chinese_article_and_standard_variants_hit(self, basis: str) -> None:
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(basis, level="major"),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert result.is_valid, result.errors
+        assert not _has_unverified_error(result)
+
+    # ── 占位变体 / 占位注记 ──
+
+    def test_pure_placeholder_variant_is_error(self) -> None:
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(VARIANT_PLACEHOLDER_BASIS),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert not result.is_valid
+        joined = "\n".join(result.errors)
+        assert "占位" in joined
+        assert "无法在本轮检索到的法规条款中验证" in joined
+
+    def test_legacy_placeholder_errors_even_when_zero_units(self) -> None:
+        """total_units==0 不阻断占位判断：既有「必须引用」+ 占位 error 同时存在。"""
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(LEGACY_PLACEHOLDER_BASIS),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert not result.is_valid
+        assert any("必须引用具体法规/标准名称" in e for e in result.errors)
+        assert any("占位" in e for e in result.errors)
+        assert not _has_unverified_error(result)
+
+    def test_placeholder_note_with_verified_citation_passes_with_warning(self) -> None:
+        """含占位注记但整体有可验证引用：可接受的补充说明，warning 不阻断。"""
+        basis = f"{VERBATIM_BASIS}；{VARIANT_PLACEHOLDER_BASIS}"
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(basis),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert result.is_valid, result.errors
+        assert any("占位" in w and "补充说明" in w for w in result.warnings)
+        assert not any("占位" in e for e in result.errors)
+
+    # ── major 级别无重大标准特征 → warning（C1 规则层口径） ──
+
+    def test_major_without_major_standard_feature_warns(self) -> None:
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(VERBATIM_BASIS, level="major"),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert result.is_valid
+        assert any("未引用《重大隐患判定标准》" in w for w in result.warnings)
+
+    def test_major_with_major_standard_feature_no_warning(self) -> None:
+        basis = (
+            "化工和危险化学品生产经营单位重大生产安全事故隐患判定标准 第十条："
+            "'爆炸危险场所未按国家标准安装使用防爆电气设备'"
+        )
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(basis, level="major"),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert result.is_valid
+        assert not any("未引用《重大隐患判定标准》" in w for w in result.warnings)
+
+    def test_non_major_skips_major_standard_warning(self) -> None:
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(VERBATIM_BASIS, level="general"),
+            citation_evidence=CITATION_EVIDENCE,
+        )
+        assert not any("未引用《重大隐患判定标准》" in w for w in result.warnings)
+
+    def test_major_standard_warning_applies_without_evidence(self) -> None:
+        """major 级别口径是 C1 语义规则，不依赖引用证据（其它调用方同样受益）。"""
+        result = self.engine.validate(
+            make_input(),
+            _basis_output(VERBATIM_BASIS, level="major"),
+        )
+        assert any("未引用《重大隐患判定标准》" in w for w in result.warnings)

@@ -132,10 +132,14 @@ class HazardIdentificationOutput(BaseModel):
         ..., description="整改建议（AI）— 三分级"
     )
 
-    # ── 判定依据 ──
+    # ── 判定依据（通用：非「重大隐患专属」；允许空串，交由质量闸门判 empty_basis）──
     major_hazard_basis: str = Field(
-        ..., min_length=5,
-        description="隐患判定依据（AI）— 引用具体法规标准条文"
+        ..., min_length=0,
+        description=(
+            "隐患判定依据（AI，通用判定依据）— 承载支撑本次判定结论（描述/分类/级别）"
+            "的法规条款；major 级别应引用《重大隐患判定标准》对应条款，非 major 不得强行引用；"
+            "引用须逐字来自本轮注入的法规知识库；知识库无对应条文时为空字符串"
+        ),
     )
 
     # ── 缺陷实质评估（v2：控制过度推断）──

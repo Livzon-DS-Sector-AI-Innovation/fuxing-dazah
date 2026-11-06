@@ -13,7 +13,7 @@ ai_hazard_identification/
 ├── schemas.py       # Pydantic v2 数据模型（输入/输出/配置）
 ├── README.md        # 本文档
 └── tests/
-    ├── test_plugin.py   # 35 个测试用例
+    ├── test_plugin.py   # 44 个测试用例
     └── fixtures/        # 测试图片（待添加）
 ```
 
@@ -52,7 +52,7 @@ print(result.hazard_type)         # unsafe_condition
 print(result.hazard_category)     # instrument_electrical
 print(result.hazard_level)        # major
 print(result.rectification_suggestion.immediate)  # 立即措施
-print(result.major_hazard_basis)  # 判定依据（含法规引用）
+print(result.major_hazard_basis)  # 通用判定依据（引用本轮知识库条文；无对应条文时为空字符串）
 ```
 
 ### 运行测试
@@ -70,7 +70,16 @@ uv run pytest app/modules/safety/ai_hazard_identification/tests/ -v
 | 3 | `hazard_category` | 枚举 (13值) | `instrument_electrical` (仪表+电气) |
 | 4 | `hazard_level` | 枚举 (3值) | `major` (重大隐患) |
 | 5 | `rectification_suggestion` | 对象 (3层) | `{immediate, short_term, long_term}` |
-| 6 | `major_hazard_basis` | 文本 | "《化工和危险化学品...》第十条...GB 3836.1-2010 第15章..." |
+| 6 | `major_hazard_basis` | 文本 | 通用判定依据（非重大专属）：引用支撑本次结论的法规条款；major 级别应引用《重大隐患判定标准》对应条款，非重大不得强行引用；无对应条文时为空字符串 |
+
+### 判定依据（`major_hazard_basis`）口径
+
+`major_hazard_basis` 是**通用判定依据**，承载支撑本次识别结论（描述/分类/级别）的法规/标准条款，**不是「重大隐患专属依据」**，general / serious / major 三个级别都要填写：
+
+- **级别一致性**：`hazard_level=major` 时应引用《重大隐患判定标准（试行）》对应条款；非 major 引用支撑该级别判定的标准条款即可，不得为凑条款强行引用重大标准；隐患级别仍以「①停产整改判断」为最高权威。
+- **来源约束**：引用必须逐字来自本轮注入的「法规知识库」检索片段，不得凭训练记忆引用知识库中未出现的法规名/条号，不得概括/改写/编造。
+- **格式**：`《法规/标准名称》第X条：'条文原文'`（标准号写法如 `GB 30871-2022 第5.1条：'……'` 可容忍）。
+- **无对应条文**：知识库确无对应条文时输出**空字符串**，不写占位文案进表；由质量闸门按 `empty_basis` 拦截转人工（插件 schema 已放宽为 `min_length=0`）。
 
 ### 枚举值速查
 
@@ -198,8 +207,10 @@ POST /api/v1/safety/hazards/{id}/ai/run/1
 
 | 文件 | 行数 | 用途 |
 |------|------|------|
-| `schemas.py` | 158 | 输入/输出 Pydantic 模型 |
-| `prompts.py` | 236 | Prompt 模板 + 规则文本 + DB 种子 |
-| `rules.py` | 270 | 规则引擎 + 自动修正 |
-| `plugin.py` | 217 | 核心引擎（四阶段流程） |
-| `tests/test_plugin.py` | 358 | 35 个测试（6 组） |
+| `schemas.py` | 197 | 输入/输出 Pydantic 模型 |
+| `prompts.py` | 443 | Prompt 模板 + 规则文本 + DB 种子 |
+| `rules.py` | 402 | 规则引擎 + 自动修正 |
+| `plugin.py` | 520 | 核心引擎（四阶段流程） |
+| `citations.py` | 127 | 引用/占位判定纯函数（唯一事实源） |
+| `citation_evidence.py` | 476 | 引用来源可验证纯函数（C2，零 IO） |
+| `tests/test_plugin.py` | 615 | 44 个测试（6 组） |

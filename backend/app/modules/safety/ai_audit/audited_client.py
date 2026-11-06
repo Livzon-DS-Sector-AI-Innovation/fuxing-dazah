@@ -946,17 +946,11 @@ async def _write_audit(
         logger.exception("AI 调用审计写入失败（不影响业务）")
 
 
-async def _mark_parse_outcome(
-    *,
-    json_valid: bool,
-    json_repaired: bool,
-    stages: tuple[str, ...] | list[str],
-    parse_attempts: int,
-) -> None:
-    """把 JSON 质量维度合并写回最近一次审计行的 ``extra``（A1/A7）。
+async def mark_audit_extra(fields: dict[str, Any]) -> None:
+    """把质量维度合并写回最近一次审计行的 ``extra``（通用版，A1/C2 复用）。
 
     独立 session + JSONB 合并，任何异常只记日志、绝不影响业务；无审计行
-    （如测试 fake 掉 ``_write_audit``）时 no-op。
+    （如测试 fake 掉 ``_write_audit``）或 ``fields`` 为空时 no-op。
 
     合并式（B0）：``(CASE WHEN jsonb_typeof(extra)='object' THEN extra
     ELSE cast({}, JSONB) END) || patch``。不能直接写
@@ -969,14 +963,9 @@ async def _mark_parse_outcome(
     对象起始值保留原有键。
     """
     row_id = _last_audit_row_id.get()
-    if row_id is None:
+    if row_id is None or not fields:
         return
-    patch = {
-        "json_valid": bool(json_valid),
-        "json_repaired": bool(json_repaired),
-        "repair_stages": [str(stage) for stage in stages],
-        "parse_attempts": int(parse_attempts),
-    }
+    patch = dict(fields)
     try:
         from sqlalchemy import case, cast, func, update
         from sqlalchemy.dialects.postgresql import JSONB
@@ -1000,7 +989,30 @@ async def _mark_parse_outcome(
             await session.execute(stmt)
             await session.commit()
     except Exception:  # noqa: BLE001 — 质量维度回写失败永不影响业务
-        logger.exception("AI 审计解析质量维度回写失败（不影响业务）")
+        logger.exception("AI 审计质量维度回写失败（不影响业务）")
+
+
+async def _mark_parse_outcome(
+    *,
+    json_valid: bool,
+    json_repaired: bool,
+    stages: tuple[str, ...] | list[str],
+    parse_attempts: int,
+) -> None:
+    """把 JSON 质量维度合并写回最近一次审计行的 ``extra``（A1/A7）。
+
+    委托通用 ``mark_audit_extra``（B0 合并式不变）；无审计行时 no-op。
+    """
+    if _last_audit_row_id.get() is None:
+        return
+    await mark_audit_extra(
+        {
+            "json_valid": bool(json_valid),
+            "json_repaired": bool(json_repaired),
+            "repair_stages": [str(stage) for stage in stages],
+            "parse_attempts": int(parse_attempts),
+        }
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

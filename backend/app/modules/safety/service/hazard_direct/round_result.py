@@ -29,6 +29,9 @@ class RoundResult:
     infra_failed: int = 0
     # 基础设施失败明细：{"record_id", "category", "reason"}，供调度/告警按类聚合
     infra_failures: list[dict[str, str]] = field(default_factory=list)
+    # C5(F9) RAG 全局降级短路熔断：本轮连续 retrieval_degraded 达阈值后跳过剩余
+    # 记录（仅影响本轮，下一轮重新计数）；调度/告警可据此观察本轮降级范围。
+    breaker_tripped: bool = False
 
     @property
     def non_infra_failed(self) -> int:
@@ -45,4 +48,5 @@ class RoundResult:
             "failures": self.failures,
             "infra_failed": self.infra_failed,
             "non_infra_failed": self.non_infra_failed,
+            "breaker_tripped": self.breaker_tripped,
         }

@@ -5,6 +5,11 @@
 2. 分类-类别-级别之间存在逻辑一致性
 3. 整改建议格式完整
 4. 判定依据包含真实引用
+
+C2 引用来源强约束（2026-11-06）：`validate(..., citation_evidence=...)` 拿到
+本轮检索证据时，额外校验「判定依据的引用能否在本轮 chunks 中找到出处」：
+零可验证 / 纯占位变体 → error（触发 A4 带错误反馈重试一次）；部分不可验证 /
+占位注记（但整体有可验证引用） → warning 不阻断；无证据时行为与现状完全一致。
 """
 
 from __future__ import annotations
@@ -12,7 +17,14 @@ from __future__ import annotations
 import logging
 import re
 
-from app.modules.safety.ai_hazard_identification.citations import has_citation
+from app.modules.safety.ai_hazard_identification.citation_evidence import (
+    CitationEvidence,
+    verify_citations,
+)
+from app.modules.safety.ai_hazard_identification.citations import (
+    has_citation,
+    is_placeholder_variant,
+)
 from app.modules.safety.ai_hazard_identification.schemas import (
     HazardCategoryEnum,
     HazardIdentificationInput,
@@ -24,6 +36,48 @@ from app.modules.safety.ai_hazard_identification.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── C2 引用强约束文案（重试反馈会原样回灌给 AI，勿随意改） ──
+# 零可验证：疑似凭记忆编造 → error（strict 模式下触发反馈重试）
+CITATION_UNVERIFIED_ERROR = (
+    "判定依据的引用无法在本轮检索到的法规条款中验证（疑似凭记忆编造）："
+    "{unverified}。请只引用本轮知识库片段中出现的法规名/条号/条文原文"
+)
+# 部分不可验证：可接受但建议修正 → warning（不触发重试，避免调用成本翻倍）
+CITATION_UNVERIFIED_WARNING = (
+    "判定依据部分引用无法在本轮检索到的法规条款中验证（可接受，建议修正）："
+    "{unverified}"
+)
+# 纯占位变体（含注记且无任何可验证引用）→ error
+PLACEHOLDER_BASIS_ERROR = (
+    "判定依据包含「知识库中无相应条文」类占位文案，不得写入台账；"
+    "知识库确无对应条文时应输出空字符串"
+)
+# 含占位注记但整体有可验证引用 → warning（可接受的补充说明）
+PLACEHOLDER_BASIS_WARNING = (
+    "判定依据含「知识库无相应条文」类占位注记，但同时包含可验证引用，"
+    "属可接受的补充说明（不阻断）"
+)
+# C1：major 级别建议引用重大隐患判定标准 → warning（不阻断）
+MAJOR_STANDARD_WARNING = (
+    "隐患级别判定为重大，但判定依据未引用《重大隐患判定标准》对应条款"
+    "（如重大生产安全事故隐患判定标准/AQ 3067/重大火灾隐患判定），"
+    "建议补充重大标准依据（不阻断）"
+)
+# 重大标准特征：重大〔…〕隐患〔…〕判定标准 / 重大火灾隐患判定 / AQ 3067
+_MAJOR_STANDARD_PATTERN = re.compile(
+    r"重大[^，。；\n]{0,20}(?:隐患|火灾隐患)[^，。；\n]{0,10}判定标准"
+    r"|重大火灾隐患判定"
+    r"|AQ\s*3067",
+    re.IGNORECASE,
+)
+
+
+def _unverified_summary(unverified: tuple[str, ...]) -> str:
+    """不可验证引用摘要（最多 5 条、每条 ≤80 字，由 CitationReport 保证）。"""
+    if not unverified:
+        return "（无）"
+    return "；".join(unverified)
 
 
 def _enum_value(val: object) -> str:
@@ -91,8 +145,17 @@ class RuleEngine:
         self,
         input_data: HazardIdentificationInput,
         output: HazardIdentificationOutput,
+        *,
+        citation_evidence: CitationEvidence | None = None,
     ) -> ValidationResult:
         """对 AI 输出执行全量规则验证。
+
+        Args:
+            input_data: 标准化输入
+            output: AI 输出
+            citation_evidence: 本轮检索证据。``None``（默认）表示不做引用来源
+                校验，行为与 P0-A 完全一致；非 ``None`` 时启用 C2 引用强约束
+                （零可验证 → error / 部分不可验证 → warning）。
 
         Returns:
             ValidationResult with is_valid, errors, warnings
@@ -109,8 +172,10 @@ class RuleEngine:
         # 3. 整改建议格式
         self._validate_rectification(output.rectification_suggestion, errors, warnings)
 
-        # 4. 判定依据引用
-        self._validate_basis(output.major_hazard_basis, errors, warnings)
+        # 4. 判定依据引用（C2：可带本轮检索证据做强校验）
+        self._validate_basis(
+            output, errors, warnings, citation_evidence=citation_evidence
+        )
 
         # 5. 分类-类别逻辑一致性（WARNING 级别，不阻塞）
         self._check_consistency(output, warnings)
@@ -193,11 +258,23 @@ class RuleEngine:
 
     def _validate_basis(
         self,
-        basis: str,
+        output: HazardIdentificationOutput,
         errors: list[str],
         warnings: list[str],
+        *,
+        citation_evidence: CitationEvidence | None = None,
     ) -> None:
-        """验证判定依据引用质量（引用判定与 A3 质量闸门同源）。"""
+        """验证判定依据引用质量（引用判定与 A3 质量闸门同源）。
+
+        ``citation_evidence`` 非 ``None`` 时叠加 C2 引用来源强校验：
+        - ``total_units == 0``：保留既有「必须引用」error（不新造文案），
+          但占位判断照常执行（纯占位变体仍需 error）；
+        - 零可验证：新增 error（疑似凭记忆编造 + 不可验证引用摘要）；
+        - 部分不可验证：warning 不阻断；
+        - 占位注记：无 verified → error；有 verified → warning（可接受补充说明）。
+        """
+        basis = output.major_hazard_basis or ""
+
         if len(basis) < 20:
             errors.append(f"隐患判定依据过短（{len(basis)}字），必须包含具体法规引用")
 
@@ -215,6 +292,46 @@ class RuleEngine:
         )
         if not has_article_ref:
             warnings.append("判定依据建议包含具体条文编号（如'第X条'）")
+
+        if citation_evidence is not None:
+            self._validate_basis_citations(basis, errors, warnings, citation_evidence)
+
+        # C1：major 级别建议引用重大隐患判定标准（warning，不阻断）
+        if _enum_value(output.hazard_level) == HazardLevelEnum.MAJOR.value:
+            if not _MAJOR_STANDARD_PATTERN.search(basis):
+                warnings.append(MAJOR_STANDARD_WARNING)
+
+    def _validate_basis_citations(
+        self,
+        basis: str,
+        errors: list[str],
+        warnings: list[str],
+        citation_evidence: CitationEvidence,
+    ) -> None:
+        """C2 引用来源强校验（纯函数 verify_citations 判定，开销可忽略）。"""
+        report = verify_citations(basis, citation_evidence)
+
+        if report.total_units == 0:
+            # 无引用单元：既有「必须引用」error 已覆盖，不新造文案
+            pass
+        elif not report.has_verified:
+            errors.append(
+                CITATION_UNVERIFIED_ERROR.format(
+                    unverified=_unverified_summary(report.unverified_texts)
+                )
+            )
+        elif not report.all_verified:
+            warnings.append(
+                CITATION_UNVERIFIED_WARNING.format(
+                    unverified=_unverified_summary(report.unverified_texts)
+                )
+            )
+
+        if is_placeholder_variant(basis):
+            if report.has_verified:
+                warnings.append(PLACEHOLDER_BASIS_WARNING)
+            else:
+                errors.append(PLACEHOLDER_BASIS_ERROR)
 
     def _check_consistency(
         self,
