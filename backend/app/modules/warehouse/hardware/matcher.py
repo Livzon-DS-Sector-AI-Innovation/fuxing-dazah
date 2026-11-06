@@ -164,9 +164,13 @@ def match_one(
 
     # L2 名称+规格
     if name_n:
+        q_cats = _category_set(name)
         best: tuple[Decimal, MaterialLike] | None = None
         for m in pool:
             m_name = normalize_name(m.name)
+            m_cats = _category_set(m.name)
+            if q_cats and m_cats and not (q_cats & m_cats):
+                continue  # 品类词护栏：跨品类不模糊吸附
             m_spec = normalize_spec(m.spec)
             score = _score_name_spec(name_n, spec_n, m_name, m_spec)
             if score is not None and (best is None or score > best[0]):
@@ -177,16 +181,39 @@ def match_one(
         if best is not None and best[0] >= SCORE_SIMILARITY_BASE:
             return MatchResult(best[1], METHOD_NAME_SPEC, best[0])
 
-        # L3 同义词展开（名称侧替换后再打一轮）
+        # L3 同义词展开（名称侧替换后再打一轮；q_cats 已含别名归一，护栏沿用）
         for candidate in expand_synonyms(name_n)[1:]:
             for m in pool:
                 m_name = normalize_name(m.name)
+                m_cats = _category_set(m.name)
+                if q_cats and m_cats and not (q_cats & m_cats):
+                    continue
                 m_spec = normalize_spec(m.spec)
                 score = _score_name_spec(candidate, spec_n, m_name, m_spec)
                 if score is not None and score >= SCORE_SYNONYM:
                     return MatchResult(m, METHOD_SYNONYM, min(score, Decimal("88")))
 
     return MatchResult(None, METHOD_UNMATCHED, Decimal("0"))
+
+
+# 品类词护栏（2026-11-06 真库演练实测）：止回阀→截止阀 一字之差跨品类
+# 误配 stocked（清单无止回阀、有 14 个截止阀，相似度 85 直接吸附）。
+# 阀/管件族品类词两侧都识别到且不相交 → 不许 L2/L3 模糊吸附。
+_PART_CATEGORY_WORDS = (
+    "球阀", "闸阀", "止回阀", "截止阀", "法兰", "弯头", "三通", "四通",
+    "变径", "直接头", "活接", "轴承", "垫片", "UPVC管",
+)
+
+
+def _category_set(text: str | None) -> set[str]:
+    """文本命中的品类词集合（含同义词别名归一——单向阀→止回阀）。"""
+    if not text:
+        return set()
+    cats = {w for w in _PART_CATEGORY_WORDS if w in text}
+    for src, dst in _SYNONYMS.items():
+        if src in text:
+            cats.add(dst)
+    return cats
 
 
 def _skeleton(name: str) -> str:
