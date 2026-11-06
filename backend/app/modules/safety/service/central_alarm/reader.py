@@ -30,7 +30,10 @@ from app.modules.safety.service.bitable_direct import reader as bd_reader
 
 _TIME_FIELD = "日期"
 
-_DEFAULT_CONCURRENCY = 10
+# 2026-11-06 限流收口：预热轮每 120s force 刷 overview 带动 14 表 × 翻页
+# 并发起跑，10 并发时同秒请求量曾撞飞书 99991400 频率限制（连累 goals 等
+# 同批 base 的采集一起降级）。收敛到 4，单轮总时长仍在可接受范围。
+_DEFAULT_CONCURRENCY = 4
 
 # 窗口缓存条目上限：窗口键随台账查询范围增长（自然日/周/滚动键全天稳定，
 # 台账页任意范围键低频），超限淘汰最旧，防长驻进程缓慢膨胀
@@ -180,7 +183,7 @@ class CentralAlarmBitableReader:
         table_ids: list[str] | None = None,
         name_map: dict[str, str] | None = None,
         page_size: int = 500,
-        concurrency: int = 10,
+        concurrency: int = 4,
     ) -> None:
         self._client = client
         self._table_ids = table_ids

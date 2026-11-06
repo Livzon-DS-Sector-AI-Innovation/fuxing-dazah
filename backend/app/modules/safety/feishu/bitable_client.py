@@ -4,6 +4,7 @@
 提供记录 CRUD、附件下载等基础操作。
 """
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -42,6 +43,13 @@ TOKEN_INVALID_ERROR_CODES: frozenset[int] = frozenset({
     99991666,
     99991668,
 })
+
+# 飞书开放平台频率限制错误码（request trigger frequency limit）。
+# 多任务+预热+用户请求同秒并发打同一批 base 时突发命中；短退避重试可当场吸收。
+BITABLE_ERR_RATE_LIMITED = 99991400
+
+# 限流退避序列（秒）：首错等 1s 重试，再错等 2s 重试，仍错按原失败处理。
+_RATE_LIMIT_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0)
 
 
 class _BitableTokenInvalidError(RuntimeError):
@@ -184,7 +192,13 @@ class SafetyBitableClient:
         self,
         call: Callable[[str], Awaitable[dict[str, Any]]],
     ) -> dict[str, Any]:
-        """执行一次 JSON API 调用；飞书返回 token 失效码时清缓存、重取、重试一次。"""
+        """执行一次 JSON API 调用；飞书返回 token 失效码时清缓存、重取、重试一次。
+
+        另：返回频率限制码（99991400）时按短退避序列重试（1s/2s 两次）——
+        定时任务+预热+用户请求同秒并发打同一批 base 时会突发限流，短退避
+        大多能当场吸收；重试仍失败则把最后一次响应交回调用方按原口径处理
+        （strict 抛 BitableQueryError / 非strict 吞成空结果）。
+        """
         token = await self._token()
         data = await call(token)
         code = _coerce_error_code(data.get("code"))
@@ -192,6 +206,17 @@ class SafetyBitableClient:
             logger.warning("Bitable token 失效(code=%s)，清空缓存后重试一次", code)
             invalidate_safety_tenant_token()
             data = await call(await self._token())
+            code = _coerce_error_code(data.get("code"))
+        # 限流退避重试放在 token 重试之后：token 失效与限流同现时先修 token
+        for backoff in _RATE_LIMIT_BACKOFF_SECONDS:
+            if code is None or code != BITABLE_ERR_RATE_LIMITED:
+                return data
+            logger.warning(
+                "Bitable 请求限流(code=%s)，%.1fs 后重试", code, backoff,
+            )
+            await asyncio.sleep(backoff)
+            data = await call(await self._token())
+            code = _coerce_error_code(data.get("code"))
         return data
 
     async def _resolve_app_token(self, token: str) -> str:
