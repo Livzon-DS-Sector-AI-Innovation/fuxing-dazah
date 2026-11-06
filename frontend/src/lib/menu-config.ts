@@ -121,6 +121,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "risk-grading", label: "风险分级管控", path: "/safety/hazard-identification/ledger", group: "风险管控" },
       // ── 隐患治理 ──
       { key: "hazard-ledger", label: "隐患排查与治理", path: "/safety/hazard-ledger", group: "隐患治理" },
+      { key: "ai-quality", label: "AI 识别质量", path: "/safety/ai-quality", group: "隐患治理" },
       // ── 人员管理 ──
       { key: "cert-warnings", label: "人员准入与资质", path: "/safety/cert-warnings", group: "人员管理" },
       { key: "training-behavior", label: "教育培训与行为管控", path: "/safety/training-behavior", group: "人员管理" },
