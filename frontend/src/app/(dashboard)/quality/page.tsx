@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import { usePermission } from '@/hooks/usePermission'
-import { Typography, Divider, Empty, Button, Space, Table, Tag, Modal, InputNumber, App, Tabs } from 'antd'
+import { Typography, Divider, Empty, Button, Space, Table, Tag, Modal, InputNumber, App, Tabs, Skeleton } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -209,7 +209,11 @@ export default function QualityPage() {
           {
             key: 'history',
             label: '检验历史',
-            children: <LcHistoryList />,
+            children: (
+              <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
+                <LcHistoryList />
+              </Suspense>
+            ),
           },
         ]}
       />
