@@ -168,8 +168,24 @@ const GEOM_GROUPS: RenderedDistrict[][] = (() => {
 interface BuildingPiece {
   /** 一片轮廓=该建筑名下一个同轮廓组的代表 rail 集（各 rail 同形状只画一次） */
   shapes: string[]
+  /** shapes 解析后的坐标（标注落点「须在自身多边形内」判定用） */
+  polys: [number, number][][]
   anchor: [number, number]
   bbox: [number, number, number, number]
+}
+
+/** 点是否落在任一多边形内（射线法；标注候选点过滤用） */
+function pointInPolys(polys: [number, number][][], x: number, y: number): boolean {
+  for (const poly of polys) {
+    let inside = false
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i][0], yi = poly[i][1]
+      const xj = poly[j][0], yj = poly[j][1]
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
+    }
+    if (inside) return true
+  }
+  return false
 }
 
 interface BuildingGeo {
@@ -200,9 +216,15 @@ const BUILDING_GEOS: BuildingGeo[] = (() => {
     }
     const rep =
       group.find(r => DIST_TO_BUILDING.get(r.dist.distId) === owner) ?? group[0]
+    const polys = rep.shapes.map(s =>
+      s.split(' ').map(p => {
+        const [x, y] = p.split(',')
+        return [Number(x), Number(y)] as [number, number]
+      }),
+    )
     const list = byBuilding.get(owner)
-    if (list) list.push({ shapes: rep.shapes, anchor: rep.anchor, bbox: rep.bbox })
-    else byBuilding.set(owner, [{ shapes: rep.shapes, anchor: rep.anchor, bbox: rep.bbox }])
+    if (list) list.push({ shapes: rep.shapes, polys, anchor: rep.anchor, bbox: rep.bbox })
+    else byBuilding.set(owner, [{ shapes: rep.shapes, polys, anchor: rep.anchor, bbox: rep.bbox }])
   }
   return BUILDINGS.map(def => {
     const pieces = (byBuilding.get(def.id) ?? []).sort(
@@ -925,11 +947,11 @@ export function FacilityMapCard() {
     }
   }
 
-  // 编号/名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让：先占位全部落点
-  // 徽标矩形（每建筑一枚、挂主片锚点），再按轮廓片面积降序放标签；母建筑
-  // 多片轮廓各自尝试放同号标注（放得下才显示，放大后逐级显现）；每个标签
-  // 依次尝试首选位（有落点主片=徽标下方、其余=质心下方）与备选位（质心
-  // 上方），全碰撞才跳过
+  // 编号/名称标注：字号按 1/zoom 保持屏幕 13px。贪心避让（v2，修同心轮廓
+  // 叠号）：先占位全部落点徽标矩形，再按轮廓片面积降序放标签；候选点=锚点
+  // +自身多边形内 5×5 网格点（按离锚点距离排序），逐点试放至无碰撞——
+  // 同心/嵌套轮廓（米尔贝×米贝、车间二两栋等锚点重合）会各自落到不同角；
+  // 文本宽度不够「编号+名称」时降级为仅编号（每栋至少有号），全碰撞才跳过
   const labels = useMemo<
     { id: number; text: string; x: number; y: number }[]
   >(() => {
@@ -954,45 +976,59 @@ export function FacilityMapCard() {
     const cands = BUILDING_GEOS.flatMap(geo => {
       const b = buildingById.get(geo.id)
       if (!b) return []
-      const text = b.def.name ? `${b.def.id} ${b.def.name}` : `${b.def.id}`
+      const full = b.def.name ? `${b.def.id} ${b.def.name}` : `${b.def.id}`
       return geo.pieces
-        .filter(p => p.bbox[2] >= text.length * fs * 0.85)
-        .map((piece, i) => ({
-          geo,
-          piece,
-          text,
-          main: i === 0,
-          area: piece.bbox[2] * piece.bbox[3],
-        }))
+        .map((piece, i) => {
+          // 宽度不够全称时降级为仅编号（编号必须可见）
+          const text = piece.bbox[2] >= full.length * fs * 0.85 ? full : `${b.def.id}`
+          // 候选点：锚点 + bbox 内 5×5 网格中落在自身多边形内的点
+          const pts: [number, number][] = [piece.anchor]
+          const [bx, by, bw, bh] = piece.bbox
+          for (let gx = 0; gx < 5; gx++) {
+            for (let gy = 0; gy < 5; gy++) {
+              const x = bx + (bw * (gx + 0.5)) / 5
+              const y = by + (bh * (gy + 0.5)) / 5
+              if (pointInPolys(piece.polys, x, y)) pts.push([x, y])
+            }
+          }
+          const d2 = (p: [number, number]) =>
+            (p[0] - piece.anchor[0]) ** 2 + (p[1] - piece.anchor[1]) ** 2
+          pts.sort((p, q) => d2(p) - d2(q))
+          return {
+            geo,
+            piece,
+            text,
+            main: i === 0,
+            area: bw * bh,
+            pts,
+            w: text.length * fs * 0.95,
+            h: fs * 1.3,
+          }
+        })
     }).sort((a, b) => b.area - a.area)
     const out: { id: number; text: string; x: number; y: number }[] = []
     for (const item of cands) {
-      const w = item.text.length * fs * 0.95
-      const h = fs * 1.3
-      const pinned = item.main && (buildingById.get(item.geo.id)?.hasPin ?? false)
-      let settled: number | null = null
-      for (const dy of pinned ? [24] : [5, -16]) {
-        const cy = item.piece.anchor[1] + dy / zoom
+      let done: { x: number; y: number } | null = null
+      const tryPt = (x: number, y: number) => {
+        if (done) return
         const rect = {
-          x1: item.piece.anchor[0] - w / 2,
-          y1: cy - h / 2,
-          x2: item.piece.anchor[0] + w / 2,
-          y2: cy + h / 2,
+          x1: x - item.w / 2,
+          y1: y - item.h / 2,
+          x2: x + item.w / 2,
+          y2: y + item.h / 2,
         }
         if (!hits(rect)) {
-          settled = dy
           placed.push(rect)
-          break
+          done = { x, y }
         }
       }
-      if (settled !== null) {
-        out.push({
-          id: item.geo.id,
-          text: item.text,
-          x: item.piece.anchor[0],
-          y: item.piece.anchor[1] + settled / zoom,
-        })
+      for (const [x, y] of item.pts) tryPt(x, y)
+      // 兜底：自身多边形内全碰撞（极端嵌套），锚点上下外扩再试两次
+      if (!done) {
+        tryPt(item.piece.anchor[0], item.piece.anchor[1] + item.h * 1.5)
+        tryPt(item.piece.anchor[0], item.piece.anchor[1] - item.h * 1.5)
       }
+      if (done) out.push({ id: item.geo.id, text: item.text, x: done.x, y: done.y })
     }
     return out
   }, [zoom, buildings, buildingById])
