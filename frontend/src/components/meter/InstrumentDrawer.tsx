@@ -22,6 +22,8 @@ export function InstrumentDrawer({ open, record, onClose }: Props) {
   useEffect(() => {
     if (open) {
       if (record) {
+        // 清掉上一条记录遗留的字段值与校验状态，避免跨记录串数据
+        form.resetFields()
         form.setFieldsValue({
           asset_number: record.asset_number,
           instrument_name: record.instrument_name,
@@ -39,6 +41,7 @@ export function InstrumentDrawer({ open, record, onClose }: Props) {
           next_calibration_date: record.next_calibration_date ? dayjs(record.next_calibration_date) : null,
           calibration_unit: record.calibration_unit,
           calibration_result: record.calibration_result,
+          remark: record.remark,
         })
       } else {
         form.resetFields()
@@ -50,10 +53,20 @@ export function InstrumentDrawer({ open, record, onClose }: Props) {
     try {
       const values = await form.validateFields()
       setLoading(true)
+      const nextDate = values.next_calibration_date?.format('YYYY-MM-DD') ?? null
       const data: InstrumentCreate | InstrumentUpdate = {
         ...values,
         calibration_date: values.calibration_date?.format('YYYY-MM-DD') ?? null,
-        next_calibration_date: values.next_calibration_date?.format('YYYY-MM-DD') ?? null,
+        next_calibration_date: nextDate,
+      }
+      // 只有「原来就没有下次日期、本次改了检定日期/周期」时才省略该键，
+      // 让后端自动推算；其余情况显式提交（null = 清空），避免把用户之前
+      // 主动清空的日期在无关编辑时又算回来
+      const scheduleChanged =
+        (values.calibration_date?.format('YYYY-MM-DD') ?? null) !== (record?.calibration_date ?? null) ||
+        (values.calibration_cycle_months ?? null) !== (record?.calibration_cycle_months ?? null)
+      if (isEdit && !nextDate && !record?.next_calibration_date && scheduleChanged) {
+        delete (data as Record<string, unknown>).next_calibration_date
       }
       if (isEdit) {
         await updateInstrument(record!.id, data as InstrumentUpdate)

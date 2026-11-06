@@ -197,6 +197,9 @@ async def extract_date(
         return success_response(
             ExtractDateResponse(**ai_result).model_dump(mode="json")
         )
+    except NotFoundException:
+        # 报告不存在等业务 404 交给全局 AppException 处理器，不能吞成 500
+        raise
     except Exception:
         logger.exception("extract_date 未捕获异常")
         return JSONResponse(

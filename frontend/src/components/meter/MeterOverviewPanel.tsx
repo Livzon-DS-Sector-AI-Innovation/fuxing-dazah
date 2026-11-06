@@ -74,6 +74,8 @@ export function MeterOverviewPanel() {
               <div className={styles.dueRow}><span className={styles.dueLabel}>未来 30 天</span><strong className={`${styles.dueValue} ${stats.due_30d ? styles.warning : ''}`}>{stats.due_30d}<small>台</small></strong></div>
               <div className={styles.dueRow}><span className={styles.dueLabel}>未来 90 天</span><strong className={styles.dueValue}>{stats.due_90d}<small>台</small></strong></div>
             </div>
+            {/* 口径注解：总览到期窗口含计量室器具（台账盯梢），提醒推送不含——两边数字会有差 */}
+            <p className={styles.panelSub} style={{ margin: '0 22px 16px' }}>到期统计含检定/检测单位为「计量室」的器具（仅台账盯梢，不推送提醒），不含已停用器具</p>
           </div>
         </section>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Button type="link" href="/meter/departments" icon={<ClockCircleOutlined />}>管理部门提醒规则</Button></div>

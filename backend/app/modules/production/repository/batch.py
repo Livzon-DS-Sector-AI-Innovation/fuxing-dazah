@@ -26,6 +26,7 @@ __all__ = [
     "get_parent_links",
     "batch_has_history",
     "list_batches",
+    "list_recent_batches_by_routes",
     "list_active_batches_by_route",
     "list_batches_started_within",
     "list_descendant_batch_ids",
@@ -144,6 +145,27 @@ async def list_batches(
         .limit(page_size)
     )
     return list((await db.execute(stmt)).scalars()), total
+
+
+async def list_recent_batches_by_routes(
+    db: AsyncSession, route_ids: set[uuid.UUID], *, limit: int = 500,
+) -> list[Batch]:
+    """作用域路线内最新 N 个未删批次：数据汇总默认窗口的候选批次。
+
+    必须限定路线——全系统取最新 N 个时，无关产品的批次会把前身路线的
+    历史批次挤出窗口，血缘合并结果凭空清空。
+    """
+    if not route_ids:
+        return []
+    stmt = (
+        select(Batch)
+        .where(Batch.route_id.in_(route_ids), Batch.is_deleted == False)  # noqa: E712
+        # id 兜底：同一事务批量生成的批次 created_at 相同，没有次级排序时
+        # 500 条窗口的截断边界不稳定，汇总行会在刷新间闪烁
+        .order_by(Batch.created_at.desc(), Batch.id.desc())
+        .limit(limit)
+    )
+    return list((await db.execute(stmt)).scalars())
 
 
 async def count_unfinished_batches(db: AsyncSession, product_id: uuid.UUID) -> int:

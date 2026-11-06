@@ -143,7 +143,9 @@ async def export_instruments(
     import csv
     import io
 
-    # 导出全量数据（最多 20000 条），绕过 page_size 上限
+    # 导出全量数据（最多 20000 条），绕过 page_size 上限；
+    # page 一并重置为 1，避免直接调 API 方带着翻页状态导出偏移数据
+    object.__setattr__(filters, 'page', 1)
     object.__setattr__(filters, 'page_size', 20000)
     records, _ = await service.list_instruments(db, filters)
 
@@ -188,7 +190,8 @@ async def export_instruments_excel(
         PatternFill,
     )
 
-    # 导出全量数据，绕过 page_size 上限
+    # 导出全量数据，绕过 page_size 上限；page 重置为 1 防偏移
+    object.__setattr__(filters, 'page', 1)
     object.__setattr__(filters, 'page_size', 100000)
     records, _ = await service.list_instruments(db, filters)
 
