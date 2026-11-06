@@ -557,6 +557,11 @@ async def accept_receipt(
     receipt = await _load_receipt(db, receipt_id)
     if receipt.status != "draft":
         raise HardwareError(f"入库单状态 {receipt.status} 不可确认（仅 draft 可确认入账）")
+    # direct 单确认前必须已指定直发车间（草稿阶段允许空——OCR 识别不到
+    # 部门线索是常态；校验放确认门而非建单：schema 层强制会让真机拍照
+    # 建草稿直接失败，2026-11-06 四张真实送货单冒烟实测）
+    if receipt.mode == "direct" and not (receipt.target_dept or "").strip():
+        raise HardwareError("direct 车间单独需求类确认入账前须指定直发车间 target_dept")
     if receipt.source == "erp_import" and receipt.reconcile_status == "verified":
         raise HardwareError(
             f"ERP 单 {receipt.receipt_no} 已与 OCR 单对账核对通过（verified），"

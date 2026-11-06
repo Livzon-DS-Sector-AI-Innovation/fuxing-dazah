@@ -6,7 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 StrUUID = str
 
@@ -156,18 +156,15 @@ class ReceiptCreate(BaseModel):
     supplier_name: str | None = Field(default=None, max_length=200)
     delivery_note_no: str | None = Field(default=None, max_length=100)
     arrived_at: datetime | None = None
-    target_dept: str | None = Field(default=None, max_length=100, description="direct 直发车间")
+    target_dept: str | None = Field(
+        default=None,
+        max_length=100,
+        description="direct 直发车间（草稿可空——OCR 识别不到部门线索时由仓管员确认时补；accept 侧强制）",
+    )
     erp_doc_no: str | None = Field(default=None, max_length=100)
     remark: str | None = None
     attachments: list[dict[str, Any]] | None = None
     items: list[ReceiptItemIn] = Field(..., min_length=1)
-
-    @field_validator("target_dept")
-    @classmethod
-    def _target_dept_required_for_direct(cls, v, info):
-        if info.data.get("mode") == "direct" and not v:
-            raise ValueError("direct 车间单独需求类必须指定直发车间 target_dept")
-        return v
 
 
 class ReceiptAccept(BaseModel):

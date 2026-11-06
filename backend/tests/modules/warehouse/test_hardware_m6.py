@@ -14,7 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.modules.warehouse.hardware import service as hw
 from app.modules.warehouse.hardware import planning as pl
@@ -22,6 +22,7 @@ from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
     HardwareMovement,
     HardwareReceipt,
+    HardwareReceiptItem,
     HardwareRequisition,
 )
 from app.platform.superagent.models import AgentSource
@@ -115,6 +116,18 @@ async def test_alert_scan_five_event_types(db_session):
     )
     db_session.add(req)
     # ③ OCR 草稿积压：6 张 draft（阈值 5）
+    # 封闭性：草稿积压是全局计数断言 ==6——共享开发库存在他轮冒烟/真机
+    # 草稿（2026-11-06 四张真实送货单冒烟实测 +4 即炸）；事务内清 draft
+    # 基线（先删明细子行再删头，外键），随回滚还原真机数据。
+    draft_ids = select(HardwareReceipt.id).where(HardwareReceipt.status == "draft")
+    await db_session.execute(
+        delete(HardwareReceiptItem).where(
+            HardwareReceiptItem.receipt_id.in_(draft_ids)
+        )
+    )
+    await db_session.execute(
+        delete(HardwareReceipt).where(HardwareReceipt.status == "draft")
+    )
     for _ in range(6):
         db_session.add(HardwareReceipt(
             receipt_no=f"WJK-RK-T-{uuid4().hex[:8].upper()}", source="ocr",

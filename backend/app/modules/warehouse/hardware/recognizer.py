@@ -135,11 +135,13 @@ async def recognize_hardware_receipt(
     image_b64: str, content_type: str = "image/jpeg"
 ) -> HardwareRecognizedReceipt:
     """五金送货单识别（重试框架复用原辅料管线）。"""
-    from app.modules.warehouse.agent.llm_client import get_llm_client
+    from app.modules.warehouse.agent.llm_client import (
+        WarehouseLLMError,
+        get_llm_client,
+    )
     from app.modules.warehouse.agent.pipeline.recognizer import (
         required_all_missing_for,
     )
-    from app.modules.warehouse.agent.errors import WarehouseLLMError
 
     set_audit_resource("hardware_receipt_parse")
     async with get_llm_client() as client:

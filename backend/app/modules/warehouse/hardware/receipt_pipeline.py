@@ -182,7 +182,16 @@ async def build_ocr_draft(
 
 
 def _guess_dept(remark: str | None) -> str | None:
-    """从备注猜直发车间（发酵/提炼一期/提炼二期/精制机修/动力机修）。"""
+    """从备注猜直发车间。
+
+    两级：①台账五部门桶名（发酵/提炼一期/…）子串优先——与月度需求列对齐；
+    ②真实组织名捕获——送货单备注里常见「提五机修/环保工程中心/电工班组」
+    这类全称或简称，按组织后缀正则截取原样返回（target_dept 是自由文本
+    展示列，不强制枚举）。识别不到返回 None，由仓管员确认时补（accept
+    侧强制非空，schema 建单不再拦截）。
+    """
+    import re
+
     from app.modules.warehouse.hardware.models import DEMAND_DEPARTMENTS
 
     if not remark:
@@ -190,4 +199,8 @@ def _guess_dept(remark: str | None) -> str | None:
     for dept in DEMAND_DEPARTMENTS:
         if dept in remark:
             return dept
-    return None
+    m = re.search(
+        r"[\u4e00-\u9fa5]{2,12}?(?:工程[一二三四五六七八]部|部|车间|机修|班组|中心)",
+        remark,
+    )
+    return m.group(0) if m else None
