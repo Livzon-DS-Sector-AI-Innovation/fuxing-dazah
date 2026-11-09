@@ -49,6 +49,7 @@ __all__ = [
     "hazard_cross_check",
     "hazard_propose_writeback",
     "review_hazard_exceptions",
+    "hazard_execute_review_writeback",
 ]
 
 
@@ -149,8 +150,12 @@ async def review_hazard_exceptions(
     limit: int = 10,
     record_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """触发例外复核（observe）：捞取死信/人工指定记录，多步补检产出结构化
-    复核报告。**observe 期不写回任何表格列**，报告仅作人工复核的候选证据。
+    """触发例外复核：捞取死信/人工指定记录，多步补检产出结构化复核报告。
+
+    档位随 ``SAFETY_HAZARD_REVIEW_MODE``：observe（默认）不写回任何表格列，
+    报告仅候选证据；auto 批对 rescued+adopt_ai+general/serious 直接写回
+    **AI 列**（人工列绝写），major/escalate 标待人工确认（经
+    hazard_execute_review_writeback 确认流执行）。
 
     Args:
         limit: 本次复核条数上限（受每日总上限约束，默认 20/日）
@@ -190,8 +195,7 @@ async def review_hazard_exceptions(
         except Exception:  # noqa: BLE001 — 发卡失败不阻断复核
             logger.exception("例外复核卡片发送失败（不影响复核结果）")
             card_note = "复核报告卡发送失败，报告见摘要与看板"
-    return {
-        "observe": "no_writeback",
+    payload: dict[str, Any] = {
         "reviewed": result.reviewed,
         "skipped": result.skipped,
         "rescued": result.rescued,
@@ -199,3 +203,37 @@ async def review_hazard_exceptions(
         "card": card_note,
         "items": [r.summary() for r in result.reports],
     }
+    # P2-1：observe 批返回体与 P1-3 逐字节一致（observe=no_writeback）；
+    # auto 批（有写回活动）改标 auto 并附写回统计——不再误标「不写回」。
+    if result.has_writeback_activity:
+        payload["mode"] = "auto"
+        payload["writeback"] = "enabled"
+        payload["writeback_success"] = result.writeback_success
+        payload["writeback_failed"] = result.writeback_failed
+        payload["pending_confirm"] = result.pending_confirm
+    else:
+        payload["observe"] = "no_writeback"
+    return payload
+
+
+# ── 写工具（P2-1 F3：requires_approval → PendingAction 确认流）────────────
+
+
+async def hazard_execute_review_writeback(
+    ctx: RunContext[SafetyDeps], record_id: str
+) -> dict[str, Any]:
+    """执行例外复核写回：把某条复核报告的 AI 结论写入登记表 **AI 六列**
+    （重大隐患 major / escalate 分歧确认后调用，或人工点名采纳 AI 结论）。
+
+    经人工确认（PendingAction）后执行；执行期再过全套闸门——占位/引用
+    不可验证不写、AI 列写前回读冲突放弃、人工列绝写（白名单恰 AI 六列）。
+    写回成功同时清除该记录的死信。
+
+    Args:
+        record_id: 隐患登记表记录 ID（须已有复核报告）
+    """
+    from app.modules.safety.service.hazard_direct.exception_writeback import (
+        execute_writeback_for_record,
+    )
+
+    return await execute_writeback_for_record(record_id)

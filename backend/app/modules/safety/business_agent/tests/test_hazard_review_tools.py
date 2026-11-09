@@ -301,3 +301,183 @@ async def test_ba_cross_check_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     by_field = {d["field"]: d for d in result["diff"]}
     assert by_field["hazard_level"]["agree"] is False
     assert result["citation_verified"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P2-1 T3 —— hazard_execute_review_writeback 写工具（requires_approval 确认流）
+# ═══════════════════════════════════════════════════════════════════════════
+
+EXEC_TOOL = "hazard_execute_review_writeback"
+
+
+def test_execute_writeback_tool_registered_as_write() -> None:
+    assert registry.TOOL_KIND.get(EXEC_TOOL) is True, "必须是写工具（确认流）"
+
+
+def test_execute_writeback_creator_only() -> None:
+    assert permissions.check("creator", EXEC_TOOL) is True
+    assert permissions.check("manager", EXEC_TOOL) is False, "确认人=creator（P2-1 F3）"
+    assert permissions.check("viewer", EXEC_TOOL) is False
+
+
+def test_execute_writeback_in_hazard_review_group() -> None:
+    group = tool_selector.TOOL_GROUPS.get("hazard_review")
+    assert group is not None and EXEC_TOOL in group
+
+
+async def test_execute_writeback_tool_runs_with_fake_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.safety.service.hazard_direct import exception_writeback as wb
+
+    calls: list[str] = []
+
+    async def fake_for_record(record_id: str, *, redis: Any = None) -> dict[str, Any]:
+        calls.append(record_id)
+        return {
+            "record_id": record_id,
+            "status": "success",
+            "written_fields": ["隐患级别（AI）"],
+            "note": "已写回 AI 列并清除死信",
+        }
+
+    monkeypatch.setattr(wb, "execute_writeback_for_record", fake_for_record)
+    result = await hazard_review_tools.hazard_execute_review_writeback(
+        _FakeCtx(),  # type: ignore[arg-type]
+        record_id="recM1",
+    )
+    assert calls == ["recM1"]
+    assert result["status"] == "success"
+
+
+async def test_execute_writeback_tool_report_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.modules.safety.service.hazard_direct import exception_writeback as wb
+
+    async def fake_for_record(record_id: str, *, redis: Any = None) -> dict[str, Any]:
+        return {"error": f"未找到复核报告: {record_id}", "record_id": record_id}
+
+    monkeypatch.setattr(wb, "execute_writeback_for_record", fake_for_record)
+    result = await hazard_review_tools.hazard_execute_review_writeback(
+        _FakeCtx(),  # type: ignore[arg-type]
+        record_id="recNone",
+    )
+    assert "error" in result
+
+
+async def test_execute_writeback_for_record_service_fake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """服务层 helper：装 Redis 报告 → execute_writeback（全 fake）。"""
+    from app.modules.safety.service.hazard_direct import exception_writeback as wb
+    from tests.modules.safety.test_hazard_exception_reviewer import FakeRedis
+    from tests.modules.safety.test_hazard_exception_writeback import (
+        FakeReader,
+        FakeWriter,
+    )
+    from tests.modules.safety.test_hazard_exception_writeback import (
+        _report as _wb_report,
+    )
+
+    report = _wb_report(record_id="recS1")
+    report.writeback = "pending_confirm"
+    redis = FakeRedis()
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        REVIEWS_KEY,
+    )
+
+    redis.store[REVIEWS_KEY] = {
+        "recS1": report.model_dump_json()
+    }
+
+    monkeypatch.setattr(
+        "app.modules.safety.service.hazard_direct.exception_reviewer.review_redis_client",
+        lambda: redis,
+    )
+    monkeypatch.setattr(
+        wb,
+        "build_default_writeback_deps",
+        lambda: wb.WritebackDeps(reader=FakeReader(), writer=FakeWriter(), redis=redis),
+    )
+    out = await wb.execute_writeback_for_record("recS1")
+    assert out["status"] == "success"
+    assert "隐患判定依据（AI）" in out["written_fields"]
+
+
+async def test_execute_writeback_for_record_missing_report() -> None:
+    from app.modules.safety.service.hazard_direct import exception_writeback as wb
+    from tests.modules.safety.test_hazard_exception_reviewer import FakeRedis
+
+    out = await wb.execute_writeback_for_record("rec404", redis=FakeRedis())
+    assert "error" in out
+    assert out["record_id"] == "rec404"
+
+
+async def test_entry_tool_auto_payload_marks_auto_not_observe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """auto 批入口返回体：mode=auto 且不再误标 observe=no_writeback。"""
+    import json as _json
+
+    from app.modules.safety.service.hazard_direct import exception_reviewer
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        ReviewDeps,
+    )
+    from tests.modules.safety.test_hazard_exception_auto import _auto_model
+    from tests.modules.safety.test_hazard_exception_reviewer import FakeRedis
+    from tests.modules.safety.test_hazard_exception_reviewer_runner import (
+        FakeRecordReader,
+        FakeSearcher,
+    )
+    from tests.modules.safety.test_hazard_exception_writeback import FakeWriter
+
+    redis = FakeRedis()
+    redis.store[exception_reviewer.REVIEWS_KEY] = {}
+    redis.store["safety:hazard:ai:dead_letters"] = {
+        "recDeadA": _json.dumps({"record_id": "recDeadA", "dead": True})
+    }
+    fields = {
+        "隐患描述": "栏杆缺失",
+        "隐患级别（AI）": None,
+        "隐患分类（AI）": None,
+        "隐患类别（AI）": None,
+        "隐患描述（AI）": None,
+        "隐患判定依据（AI）": None,
+        "整改建议（AI）": None,
+    }
+
+    def _fake_builder(db: Any = None) -> ReviewDeps:
+        return ReviewDeps(
+            reader=FakeRecordReader(fields={"recDeadA": fields}),
+            searcher=FakeSearcher(),
+            model_factory=_auto_model,
+            redis=redis,
+            mode="auto",
+            writer=FakeWriter(),
+        )
+
+    monkeypatch.setattr(hazard_review_tools, "_build_default_review_deps", _fake_builder)
+    summary = await hazard_review_tools.review_hazard_exceptions(
+        _FakeCtx(),  # type: ignore[arg-type]
+        limit=5,
+        record_ids=None,
+    )
+    assert summary["mode"] == "auto"
+    assert "observe" not in summary
+    assert summary["writeback"] == "enabled"
+    assert summary["writeback_success"] == 1
+
+
+def test_confirm_card_summary_restates_writeback_plan() -> None:
+    """确认卡复述方案（D5/US3）：字段面+效果，不含「不写回」误标。"""
+    from app.modules.safety.business_agent.executor import _format_tool_summary
+
+    text = _format_tool_summary(
+        "hazard_execute_review_writeback", {"record_id": "recM1"}
+    )
+    assert "recM1" in text
+    assert "AI 六列" in text
+    assert "人工列绝写" in text
+    assert "死信" in text
+    assert "新值详情见本会话复核报告卡" in text

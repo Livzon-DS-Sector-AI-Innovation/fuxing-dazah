@@ -155,6 +155,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "hazard_view_images", "hazard_search_regulations",
         "hazard_get_record_context", "hazard_cross_check",
         "hazard_propose_writeback", "review_hazard_exceptions",
+        "hazard_execute_review_writeback",
     ],
 }
 

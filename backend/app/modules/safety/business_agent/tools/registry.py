@@ -51,6 +51,7 @@ from app.modules.safety.business_agent.tools.hazard_id_action_tools import (
 # ── 例外复核员（P1-3：observe 五工具+入口，全部只读，按需挂载）──
 from app.modules.safety.business_agent.tools.hazard_review_tools import (
     hazard_cross_check,
+    hazard_execute_review_writeback,
     hazard_get_record_context,
     hazard_propose_writeback,
     hazard_search_regulations,
@@ -346,6 +347,8 @@ TOOL_KIND: dict[str, bool] = {
     "hazard_cross_check": False,
     "hazard_propose_writeback": False,
     "review_hazard_exceptions": False,
+    # 例外复核写回（P2-1 auto/确认流）：AI 六列，需用户确认（仅 creator）
+    "hazard_execute_review_writeback": True,
     # 运维触发执行面（agent-action-p3：手动同步/跑审核，仅创建者，需用户确认）
     "sync_domain_data": True,
     "run_workticket_review": True,
@@ -481,6 +484,8 @@ def _all_write_funcs() -> list[Callable[..., Any]]:
         freeze_standard_check,
         scan_chemical_inventory,
         reseed_daily_digest,
+        # 例外复核写回（P2-1：requires_approval 确认流，creator-only）
+        hazard_execute_review_writeback,
     ] + _OFFICE_WRITE_FUNCS
 
 

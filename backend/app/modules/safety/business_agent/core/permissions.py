@@ -91,6 +91,8 @@ TOOL_HAZARD_GET_RECORD_CONTEXT = "hazard_get_record_context"
 TOOL_HAZARD_CROSS_CHECK = "hazard_cross_check"
 TOOL_HAZARD_PROPOSE_WRITEBACK = "hazard_propose_writeback"
 TOOL_REVIEW_HAZARD_EXCEPTIONS = "review_hazard_exceptions"
+# 例外复核写回（P2-1：AI 六列，PendingAction 确认流，仅 creator）
+TOOL_EXECUTE_HAZARD_REVIEW_WRITEBACK = "hazard_execute_review_writeback"
 # 写入
 TOOL_GENERATE_DRILL_PLAN = "generate_drill_plan"
 TOOL_SYNC_DRILL_TO_FEISHU = "sync_drill_plan_to_feishu"
@@ -419,7 +421,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _HAZARD_ID_WRITE_TOOLS
     | _OPS_WRITE_TOOLS
     | _HAZARD_REVIEW_TOOLS
-    | {TOOL_REVIEW_HAZARD_EXCEPTIONS},
+    | {TOOL_REVIEW_HAZARD_EXCEPTIONS, TOOL_EXECUTE_HAZARD_REVIEW_WRITEBACK},
     ROLE_MANAGER: _READ_TOOLS
     | {
         TOOL_GENERATE_DRILL_PLAN,

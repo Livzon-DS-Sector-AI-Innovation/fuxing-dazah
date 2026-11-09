@@ -954,6 +954,18 @@ def _format_tool_summary(tool_name: str, args: dict) -> str:
     if tool_name in _OFFICE_WRITE_TOOL_NAMES:
         return _format_office_summary(tool_name, args)
 
+    # ── 例外复核写回（P2-1 F3）：确认卡复述方案（字段面+效果；
+    #    具体新值见同会话复核报告卡——同步格式化器不读 Redis）──
+    if tool_name == "hazard_execute_review_writeback":
+        record_id = str(args.get("record_id") or "")
+        return (
+            f"将对隐患记录 **{record_id}** 执行例外复核写回：把该记录最新复核"
+            "报告的 AI 结论（隐患级别/隐患分类/隐患判定依据/整改建议，限 AI "
+            "六列白名单——人工列绝写）写入 AI 列，写回成功同时清除其死信；"
+            "执行期再过占位/引用闸门与 CAS 写前回读，冲突即放弃。"
+            "新值详情见本会话复核报告卡。"
+        )
+
     # ── 通用格式 ──
     is_write = TOOL_KIND.get(tool_name, True)
     verb = "写入" if is_write else "操作"
