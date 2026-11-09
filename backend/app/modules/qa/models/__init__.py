@@ -9,6 +9,19 @@ from app.modules.qa.models.ai import (
     DocumentRelationSuggestion,
     MasterObjectProposal,
 )
+from app.modules.qa.models.apr import (
+    AprAnnualReview,
+    AprBatch,
+    AprDataKind,
+    AprItem,
+    AprItemCategory,
+    AprNdPolicy,
+    AprProduct,
+    AprReviewStatus,
+    AprSection,
+    AprValue,
+    AprValueType,
+)
 from app.modules.qa.models.deviation import (
     Capa,
     CapaAction,
@@ -60,6 +73,17 @@ from app.modules.qa.models.processing import (
 )
 
 __all__ = [
+    "AprDataKind",
+    "AprItemCategory",
+    "AprNdPolicy",
+    "AprValueType",
+    "AprReviewStatus",
+    "AprProduct",
+    "AprSection",
+    "AprItem",
+    "AprBatch",
+    "AprValue",
+    "AprAnnualReview",
     "MasterObjectType",
     "RecordStatus",
     "MasterObject",

@@ -21,6 +21,8 @@ from app.modules.equipment.schemas import (
     EquipmentSparePartCreate,
     EquipmentSparePartResponse,
     OutboundTransactionResponse,
+    SparePartBatchDeleteRequest,
+    SparePartBatchDeleteResult,
     SparePartCreate,
     SparePartResponse,
     SparePartUpdate,
@@ -166,6 +168,26 @@ async def import_spare_parts(
     except ValueError as e:
         logger.warning("备件 Excel 导入失败: %s", e)
         return JSONResponse(status_code=400, content={"message": str(e)})
+
+
+@router.post("/batch-delete", summary="批量删除备件")
+async def batch_delete_spare_parts(
+    data: SparePartBatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:delete"),
+    ),
+) -> JSONResponse:
+    """批量删除备件（软删）：守卫逐件判定——库存未归零/无部门权限/不存在的
+    逐条返回原因，其余照常删除，互不影响。"""
+    deleted_ids, failures = await service.batch_delete_spare_parts(
+        db, data.spare_part_ids, ctx,
+    )
+    return success_response(data=SparePartBatchDeleteResult(
+        deleted_ids=deleted_ids,
+        deleted_count=len(deleted_ids),
+        failures=failures,
+    ).model_dump(mode="json"))
 
 
 @router.get("/{spare_part_id}/equipments", summary="查看备件关联的设备")

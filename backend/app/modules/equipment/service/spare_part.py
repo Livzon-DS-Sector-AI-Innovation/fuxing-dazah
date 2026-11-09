@@ -195,6 +195,77 @@ async def delete_spare_part(
     return await repo.delete_spare_part(db, spare_part_id)
 
 
+async def batch_delete_spare_parts(
+    db: AsyncSession,
+    spare_part_ids: list[uuid.UUID],
+    ctx: EquipmentAccessContext,
+) -> tuple[list[uuid.UUID], list[dict[str, Any]]]:
+    """批量删除备件：与单删同款守卫逐件判定，可删即删，不可删收集原因返回。
+
+    校验与写入在同一事务内完成：库存行锁从校验持有到提交，
+    与单删一致地挡住「读到 0 与软删之间」的并发入库。
+    个别项守卫不过不影响其余项；全部不过则不动任何数据。
+    返回 (已删除 id 列表, 失败明细列表)，不返回 ORM 对象——
+    flush 后软删行再走 Out schema 序列化会踩 MissingGreenlet。
+    """
+    failures: list[dict[str, Any]] = []
+    deletable: list[tuple[SparePart, SparePartStock | None]] = []
+    seen: set[uuid.UUID] = set()
+
+    for spare_part_id in spare_part_ids:
+        if spare_part_id in seen:
+            continue
+        seen.add(spare_part_id)
+
+        spare_part = await repo.get_spare_part_by_id(db, spare_part_id)
+        if not spare_part:
+            failures.append({
+                "id": spare_part_id, "code": None, "name": None,
+                "reason": "备件不存在或已删除",
+            })
+            continue
+
+        try:
+            await verify_write_ownership(
+                ctx, spare_part, "department_id", "department_id",
+            )
+        except ForbiddenException:
+            failures.append({
+                "id": spare_part_id, "code": spare_part.code,
+                "name": spare_part.name, "reason": "无权删除其他部门的备件",
+            })
+            continue
+
+        stock = await repo.get_stock_by_spare_part_id(
+            db, spare_part_id, for_update=True,
+        )
+        if stock and stock.current_qty > 0:
+            failures.append({
+                "id": spare_part_id, "code": spare_part.code,
+                "name": spare_part.name,
+                "reason": (
+                    f"库存 {stock.current_qty} "
+                    f"{spare_part.unit or ''}未归零，请先盘点归零或出库"
+                ),
+            })
+            continue
+
+        deletable.append((spare_part, stock))
+
+    deleted_ids: list[uuid.UUID] = []
+    for spare_part, stock in deletable:
+        await repo.delete_equipment_spare_parts_by_spare_part(db, spare_part.id)
+        if stock:
+            stock.is_deleted = True
+        await repo.delete_spare_part(db, spare_part.id)
+        deleted_ids.append(spare_part.id)
+
+    if deleted_ids:
+        await db.flush()
+
+    return deleted_ids, failures
+
+
 async def update_stock_settings(
     db: AsyncSession,
     spare_part_id: uuid.UUID,

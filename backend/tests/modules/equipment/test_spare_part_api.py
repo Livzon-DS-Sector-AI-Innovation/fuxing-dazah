@@ -1086,6 +1086,118 @@ class TestDeleteGuardApi:
         assert del_res2.status_code == 200
 
 
+# ==================== 批量删除 ====================
+
+
+class TestBatchDeleteApi:
+    """POST /spare-parts/batch-delete 逐件守卫：可删即删，不可删返回原因。"""
+
+    async def _create_part(
+        self, client: AsyncClient, *, initial_qty: int = 0, name: str = "批量删除备件",
+    ) -> str:
+        """创建一个备件并返回 id。"""
+        res = await client.post("/api/v1/equipment/spare-parts/", json={
+            "code": f"SP-BD-{_rand_suffix()}", "name": name, "unit": "个",
+            "initial_qty": initial_qty,
+        })
+        assert res.status_code == 200
+        return res.json()["data"]["id"]
+
+    async def _batch_delete(self, client: AsyncClient, ids: list):
+        res = await client.post(
+            "/api/v1/equipment/spare-parts/batch-delete",
+            json={"spare_part_ids": ids},
+        )
+        assert res.status_code == 200
+        return res.json()["data"]
+
+    async def test_batch_delete_all_deletable(self, client: AsyncClient) -> None:
+        """全部库存为零时整批删除成功。"""
+        ids = [await self._create_part(client) for _ in range(3)]
+        data = await self._batch_delete(client, ids)
+
+        assert data["deleted_count"] == 3
+        assert sorted(data["deleted_ids"]) == sorted(ids)
+        assert data["failures"] == []
+        for sp_id in ids:
+            detail = await client.get(f"/api/v1/equipment/spare-parts/{sp_id}")
+            assert detail.status_code == 404
+
+    async def test_batch_delete_skips_positive_stock(
+        self, client: AsyncClient
+    ) -> None:
+        """库存未归零的逐条返回原因，不影响其余项删除。"""
+        ok_id = await self._create_part(client, name="零库存备件")
+        stocked_id = await self._create_part(
+            client, initial_qty=4, name="有库存备件",
+        )
+
+        data = await self._batch_delete(client, [ok_id, stocked_id])
+
+        assert data["deleted_count"] == 1
+        assert data["deleted_ids"] == [ok_id]
+        assert len(data["failures"]) == 1
+        failure = data["failures"][0]
+        assert failure["id"] == stocked_id
+        assert failure["code"] is not None
+        assert "盘点归零" in failure["reason"]
+        # 有库存的保留原样
+        detail = await client.get(f"/api/v1/equipment/spare-parts/{stocked_id}")
+        assert detail.status_code == 200
+
+    async def test_batch_delete_mixed_with_nonexistent(
+        self, client: AsyncClient
+    ) -> None:
+        """混入不存在的 id 记为失败，不影响其余项。"""
+        ok_id = await self._create_part(client)
+        ghost_id = str(uuid.uuid4())
+
+        data = await self._batch_delete(client, [ok_id, ghost_id])
+
+        assert data["deleted_count"] == 1
+        assert data["deleted_ids"] == [ok_id]
+        assert len(data["failures"]) == 1
+        assert data["failures"][0]["id"] == ghost_id
+        assert "不存在" in data["failures"][0]["reason"]
+
+    async def test_batch_delete_dedupes_ids(self, client: AsyncClient) -> None:
+        """重复 id 只删一次。"""
+        sp_id = await self._create_part(client)
+
+        data = await self._batch_delete(client, [sp_id, sp_id])
+
+        assert data["deleted_count"] == 1
+        assert data["deleted_ids"] == [sp_id]
+
+    async def test_batch_delete_empty_ids_returns_422(
+        self, client: AsyncClient
+    ) -> None:
+        """空列表返回 422 校验错误。"""
+        res = await client.post(
+            "/api/v1/equipment/spare-parts/batch-delete",
+            json={"spare_part_ids": []},
+        )
+        assert res.status_code == 422
+
+    async def test_batch_delete_stocks_zeroed_later(
+        self, client: AsyncClient
+    ) -> None:
+        """上一批被跳过的备件归零后可再次批量删除。"""
+        stocked_id = await self._create_part(
+            client, initial_qty=2, name="二次删除备件",
+        )
+        first = await self._batch_delete(client, [stocked_id])
+        assert first["deleted_count"] == 0
+
+        await client.post(
+            f"/api/v1/equipment/spare-parts/{stocked_id}/stock/adjust",
+            json={"new_qty": 0},
+        )
+        second = await self._batch_delete(client, [stocked_id])
+        assert second["deleted_count"] == 1
+        assert second["failures"] == []
+
+
 # ==================== 流水筛选 ====================
 
 

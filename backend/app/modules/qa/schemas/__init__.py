@@ -10,6 +10,21 @@ from app.modules.qa.schemas.ai import (
     MasterObjectProposalApproveRequest,
     MasterObjectProposalOut,
 )
+from app.modules.qa.schemas.apr import (
+    AprBatchCreate,
+    AprBatchUpdate,
+    AprBatchValuesIn,
+    AprItemCreate,
+    AprItemDraft,
+    AprItemsBulkCreate,
+    AprItemUpdate,
+    AprProductCreate,
+    AprProductUpdate,
+    AprSectionCreate,
+    AprSectionUpdate,
+    AprValueIn,
+    TrendPointStatus,
+)
 from app.modules.qa.schemas.deviation import (
     CapaActionIn,
     CapaActionPatch,
@@ -72,6 +87,19 @@ from app.modules.qa.schemas.processing import (
 )
 
 __all__ = [
+    "AprProductCreate",
+    "AprProductUpdate",
+    "AprSectionCreate",
+    "AprSectionUpdate",
+    "AprItemCreate",
+    "AprItemDraft",
+    "AprItemsBulkCreate",
+    "AprItemUpdate",
+    "AprBatchCreate",
+    "AprBatchUpdate",
+    "AprValueIn",
+    "AprBatchValuesIn",
+    "TrendPointStatus",
     "AliasIn",
     "SourceLinkIn",
     "MasterObjectCreate",

@@ -39,4 +39,12 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("qa:capa:read", "查看 CAPA 台账", "qa", "capa", "read"),
     PermissionDef("qa:capa:create", "发起 CAPA", "qa", "capa", "create"),
     PermissionDef("qa:capa:update", "编辑与推进 CAPA", "qa", "capa", "update"),
+    # ── 年度产品审核（APR）数据管理 ──
+    # 读取单独成码（同偏差）：数据相关方可只授 APR 可见而不开放知识库；
+    # 模块通配读码 qa:*:read 同样放行 APR 读取。
+    PermissionDef("qa:apr:read", "查看 APR 数据与汇总", "qa", "apr", "read"),
+    PermissionDef("qa:apr:manage", "配置 APR 产品与模板", "qa", "apr", "manage"),
+    PermissionDef("qa:apr:enter", "录入 APR 批次数据", "qa", "apr", "enter"),
+    PermissionDef("qa:apr:export", "导出 APR 汇总表", "qa", "apr", "export"),
+    PermissionDef("qa:apr:lock", "锁定/解锁 APR 年度", "qa", "apr", "lock"),
 ]

@@ -1,4 +1,5 @@
 .claude
+.agents
 .mcp.json
 .DS_Store
 .pnpm-store

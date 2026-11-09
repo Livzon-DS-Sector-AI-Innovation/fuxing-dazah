@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
+import type { Key } from 'react'
 import { App, Table, Button, Space, Input, Tag, Select, Dropdown, Progress } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, ImportOutlined,
@@ -9,9 +10,9 @@ import {
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import type { MenuProps } from 'antd'
-import { SparePart } from '@/types/equipment'
+import { SparePart, SparePartBatchDeleteFailure } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
-import { deleteSparePart, updateSparePart } from '@/actions/equipment'
+import { batchDeleteSpareParts, deleteSparePart, updateSparePart } from '@/actions/equipment'
 import { linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
 import { usePermission } from '@/hooks/usePermission'
 
@@ -34,6 +35,11 @@ export function SparePartTable({ onRefresh, onImportClick, onViewTransactions }:
   } = useEquipmentStore()
   const { hasPermission } = usePermission()
   const canUpdate = hasPermission('equipment:spare_part:update')
+  const canDelete = hasPermission('equipment:spare_part:delete')
+
+  // 多选：仅当前页范围（翻页/改筛选即失效），减少误删范围
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
+  const clearSelection = useCallback(() => setSelectedRowKeys([]), [])
 
   const handleDelete = useCallback((record: SparePart) => {
     modal.confirm({
@@ -56,6 +62,65 @@ export function SparePartTable({ onRefresh, onImportClick, onViewTransactions }:
     message.success(next ? '已启用' : '已停用')
     onRefresh?.()
   }, [message, onRefresh])
+
+  const showBatchFailures = useCallback((failures: SparePartBatchDeleteFailure[]) => {
+    modal.warning({
+      title: `${failures.length} 个备件未删除`,
+      content: (
+        <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+          {failures.map(f => (
+            <div key={f.id} style={{ fontSize: 13, lineHeight: '22px' }}>
+              <span style={{ fontFamily: '"SF Mono", "Fira Code", monospace', fontSize: 12, color: 'var(--color-slate)' }}>
+                {f.code ?? f.id}
+              </span>{' '}
+              {f.name}
+              <span style={{ color: 'var(--color-stone)' }}> — {f.reason}</span>
+            </div>
+          ))}
+        </div>
+      ),
+      okText: '知道了',
+    })
+  }, [modal])
+
+  const handleBatchDelete = useCallback(() => {
+    const rows = spareParts.filter(p => selectedRowKeys.includes(p.id))
+    if (rows.length === 0) return
+    // 本地快照预判：库存未归零的会被服务端守卫拦下，确认框提前告知；
+    // 实际删谁仍以服务端锁定后的判定为准
+    const blocked = rows.filter(p => p.current_qty > 0)
+    modal.confirm({
+      title: `删除所选 ${rows.length} 个备件？`,
+      content: (
+        <div>
+          {blocked.length > 0 && (
+            <div style={{ marginBottom: 4 }}>
+              其中 <b>{blocked.length}</b> 个库存未归零将被跳过（
+              {blocked.map(b => b.code).join('、')}）
+            </div>
+          )}
+          <div>将删除库存为零的备件并解除其设备关联，此操作不可撤销。</div>
+        </div>
+      ),
+      okText: '确认删除', cancelText: '取消', okButtonProps: { danger: true },
+      onOk: async () => {
+        const result = await batchDeleteSpareParts(selectedRowKeys as string[])
+        if (!result.success) { message.error(result.error); return }
+        const { deleted_count: deletedCount, failures } =
+          result.data ?? { deleted_count: 0, failures: [] as SparePartBatchDeleteFailure[] }
+        setSelectedRowKeys([])
+        if (deletedCount > 0) message.success(`已删除 ${deletedCount} 个备件`)
+        if (failures.length > 0) showBatchFailures(failures)
+        // 整页删空后当前页可能越界：回退到最后一个有效页（改页码经页面级 effect 重新拉取）
+        const maxPage = Math.max(1, Math.ceil((sparePartTotal - deletedCount) / sparePartPageSize))
+        if (sparePartPage > maxPage) setSparePartPage(maxPage)
+        else onRefresh?.()
+      },
+    })
+  }, [
+    spareParts, selectedRowKeys, modal, message, showBatchFailures,
+    sparePartTotal, sparePartPageSize, sparePartPage, setSparePartPage, onRefresh,
+  ])
 
   const columns: ColumnsType<SparePart> = [
     { title: '编码', dataIndex: 'code', key: 'code', width: 120,
@@ -177,14 +242,14 @@ export function SparePartTable({ onRefresh, onImportClick, onViewTransactions }:
             allowClear
             style={{ width: 240 }}
             value={sparePartKeyword || undefined}
-            onSearch={v => setSparePartKeyword(v)}
+            onSearch={v => { clearSelection(); setSparePartKeyword(v) }}
           />
           <Select
             placeholder="全部状态"
             allowClear
             style={{ width: 100 }}
             value={sparePartStatusFilter}
-            onChange={v => setSparePartStatusFilter(v)}
+            onChange={v => { clearSelection(); setSparePartStatusFilter(v) }}
             options={[
               { label: '启用', value: 'active' },
               { label: '停用', value: 'inactive' },
@@ -195,11 +260,21 @@ export function SparePartTable({ onRefresh, onImportClick, onViewTransactions }:
             allowClear
             style={{ width: 110 }}
             value={sparePartLowStockFilter}
-            onChange={v => setSparePartLowStockFilter(v)}
+            onChange={v => { clearSelection(); setSparePartLowStockFilter(v) }}
             options={[{ label: '低于安全线', value: 'low' }]}
           />
         </Space>
         <Space>
+          {canDelete && (
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selectedRowKeys.length === 0}
+              onClick={handleBatchDelete}
+            >
+              删除所选{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
+            </Button>
+          )}
           {onImportClick && hasPermission('equipment:spare_part:update') && hasPermission('equipment:spare_part:create') && (
             <Button icon={<ImportOutlined />} onClick={onImportClick}>导入</Button>
           )}
@@ -219,6 +294,10 @@ export function SparePartTable({ onRefresh, onImportClick, onViewTransactions }:
         size="small"
         loading={sparePartLoading}
         scroll={{ x: 'max-content' }}
+        rowSelection={canDelete ? {
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+        } : undefined}
         pagination={{
           current: sparePartPage,
           pageSize: sparePartPageSize,
@@ -227,6 +306,7 @@ export function SparePartTable({ onRefresh, onImportClick, onViewTransactions }:
           showQuickJumper: true,
           showTotal: t => `共 ${t} 条`,
           onChange: (p, s) => {
+            clearSelection()
             if (s !== sparePartPageSize) { setSparePartPageSize(s) } else { setSparePartPage(p) }
           },
         }}

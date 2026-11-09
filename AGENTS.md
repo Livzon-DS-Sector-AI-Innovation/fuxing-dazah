@@ -1,2 +1,4 @@
 阅读同目录下的CLAUDE.md
 阅读同目录下的CLAUDE.local.md
+阅读backend目录下的AGENTS.md
+阅读frontend目录下的AGENTS.md

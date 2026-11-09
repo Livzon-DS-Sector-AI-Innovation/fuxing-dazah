@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.modules.qa import file_service as file_service
 from app.modules.qa.service import ai_analysis as ai_analysis
+from app.modules.qa.service import apr as apr
 from app.modules.qa.service import deviation_ai as deviation_ai
 from app.modules.qa.service._shared import (
     _actor_id,
@@ -165,5 +166,6 @@ __all__ = [
     "capa_detail",
     "ai_analysis",
     "deviation_ai",
+    "apr",
     "file_service",
 ]

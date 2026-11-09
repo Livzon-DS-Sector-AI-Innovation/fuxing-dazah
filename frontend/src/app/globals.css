@@ -19,6 +19,11 @@
   --color-brand-navy: #0a1530;
   --color-brand-navy-deep: #070f24;
   --color-brand-navy-mid: #1a2a52;
+  /* 主色浅底（antd colorPrimaryBg）与链接/强调色 */
+  --color-primary-bg: #ede9f8;
+  --color-link-blue: #0075de;
+  --color-brand-teal: #2a9d99;
+  --color-brand-purple: #7b3ff2;
 
   /* Surface */
   --color-canvas: #ffffff;
@@ -27,6 +32,19 @@
   --color-hairline: #e5e3df;
   --color-hairline-soft: #ede9e4;
   --color-hairline-strong: #c8c4be;
+  /* Pastel tints（DESIGN.md card-tint-*，状态/分类 pill 的底色） */
+  --color-tint-rose: #fde0ec;
+  --color-tint-peach: #ffe8d4;
+  --color-tint-gray: #f0eeec;
+  --color-tint-mint: #d9f3e1;
+  --color-tint-sky: #dcecfa;
+  --color-tint-lavender: #e6e0f5;
+  /* tint 加深一档：盖章/卡片需要比底色更实的一条轮廓线 */
+  --color-tint-rose-deep: #f3b6bb;
+  --color-tint-peach-deep: #f4cba6;
+  --color-tint-mint-deep: #b3e3c3;
+  /* 深一档的成功文字色：浅 mint 底上 --color-success 对比度不够 */
+  --color-success-deep: #12812a;
 
   /* Text */
   --color-ink-deep: #000000;
@@ -95,12 +113,26 @@
   --color-brand-navy: var(--color-brand-navy);
   --color-brand-navy-deep: var(--color-brand-navy-deep);
   --color-brand-navy-mid: var(--color-brand-navy-mid);
+  --color-primary-bg: var(--color-primary-bg);
+  --color-link-blue: var(--color-link-blue);
+  --color-brand-teal: var(--color-brand-teal);
+  --color-brand-purple: var(--color-brand-purple);
   --color-canvas: var(--color-canvas);
   --color-surface: var(--color-surface);
   --color-surface-soft: var(--color-surface-soft);
   --color-hairline: var(--color-hairline);
   --color-hairline-soft: var(--color-hairline-soft);
   --color-hairline-strong: var(--color-hairline-strong);
+  --color-tint-rose: var(--color-tint-rose);
+  --color-tint-peach: var(--color-tint-peach);
+  --color-tint-gray: var(--color-tint-gray);
+  --color-tint-mint: var(--color-tint-mint);
+  --color-tint-sky: var(--color-tint-sky);
+  --color-tint-lavender: var(--color-tint-lavender);
+  --color-tint-rose-deep: var(--color-tint-rose-deep);
+  --color-tint-peach-deep: var(--color-tint-peach-deep);
+  --color-tint-mint-deep: var(--color-tint-mint-deep);
+  --color-success-deep: var(--color-success-deep);
   --color-ink-deep: var(--color-ink-deep);
   --color-ink: var(--color-ink);
   --color-charcoal: var(--color-charcoal);

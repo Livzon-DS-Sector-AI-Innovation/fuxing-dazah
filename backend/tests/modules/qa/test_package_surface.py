@@ -37,8 +37,10 @@ def test_api_and_scheduler_service_references_resolve() -> None:
     missing: list[str] = []
     for source in sources:
         text = source.read_text()
-        # deviations.py 以 `from app.modules.qa.service import deviation as service` 引用子模块
-        target = deviation if source.name == "deviations.py" else qa_service
+        # deviations.py / apr.py 以 `from app.modules.qa.service import <子模块> as service`
+        # 引用子模块，此时 service.X 解析到子模块而不是包。
+        submodule_aliases = {"deviations.py": deviation, "apr.py": qa_service.apr}
+        target = submodule_aliases.get(source.name, qa_service)
         for name in sorted(set(re.findall(r"\bservice\.(\w+)", text))):
             if not hasattr(target, name):
                 missing.append(f"{source.name}: service.{name}")
@@ -61,8 +63,12 @@ def test_subpackages_reexport_all_public_definitions() -> None:
         for sub in sorted((QA_ROOT / pkg_name).glob("*.py")):
             if sub.name.startswith("_"):
                 continue
-            if pkg_name == "service" and sub.name in ("ai_analysis.py", "deviation_ai.py"):
-                # AI 分析/偏差 AI 辅助以整模块暴露（service.X），不逐名 re-export
+            if sub.name == "apr.py" or (
+                pkg_name == "service"
+                and sub.name in ("ai_analysis.py", "deviation_ai.py")
+            ):
+                # APR 与 AI 分析/偏差 AI 辅助以整模块暴露（service.apr.X 等），
+                # 不逐名 re-export；只要子模块本身可达即可。
                 assert hasattr(module, sub.stem)
                 continue
             for name in _public_defs(sub):

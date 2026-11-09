@@ -29,22 +29,38 @@ export const pill = (color: string, bg: string): CSSProperties => ({
 })
 
 export const PILL = {
-  success: pill('#1aae39', '#d9f3e1'),
-  warning: pill('#dd5b00', '#ffe8d4'),
-  error: pill('#e03131', '#fde0ec'),
-  info: pill('#0075de', '#dcecfa'),
-  purple: pill('#5645d4', '#e6e0f5'),
-  neutral: pill('#5d5b54', '#f0eeec'),
-  muted: pill('#a4a097', '#f0eeec'),
+  success: pill('var(--color-success)', 'var(--color-tint-mint)'),
+  warning: pill('var(--color-warning)', 'var(--color-tint-peach)'),
+  error: pill('var(--color-error)', 'var(--color-tint-rose)'),
+  info: pill('var(--color-link-blue)', 'var(--color-tint-sky)'),
+  purple: pill('var(--color-primary)', 'var(--color-tint-lavender)'),
+  neutral: pill('var(--color-slate)', 'var(--color-tint-gray)'),
+  muted: pill('var(--color-stone)', 'var(--color-tint-gray)'),
 }
 
-export const cardStyle: CSSProperties = { borderRadius: 12, border: '1px solid #e5e3df' }
+export const cardStyle: CSSProperties = { borderRadius: 12, border: '1px solid var(--color-hairline)' }
+/**
+ * QA 页面画布。外层 main 已给 16px 内衬，页面不再叠 padding（否则四周变成 40px），
+ * 只限制最大宽度并留底部空白，与偏差/CAPA 台账一致。
+ */
+export const qaPageStyle: CSSProperties = { maxWidth: 1480, margin: '0 auto', paddingBottom: 36 }
+/** 列很多的数据页（如年度汇总矩阵）放宽到 1680，尽量少的横向滚动；其余页面仍用 1480。 */
+export const qaWidePageStyle: CSSProperties = { ...qaPageStyle, maxWidth: 1680 }
+/** 卡片内筛选条：横向 12px 与表头/单元格左缩进对齐，纵向 10px 让 44px 控件不显得松散。 */
+export const filterBarStyle: CSSProperties = {
+  background: 'var(--color-canvas)',
+  padding: '10px 12px',
+  display: 'flex',
+  gap: 12,
+  flexWrap: 'wrap',
+  alignItems: 'center',
+}
 /** 卡片头与内容使用同一内边距，右上角按钮才有上下呼吸空间且与正文左对齐。 */
 export const cardStyles: { header: CSSProperties; body: CSSProperties } = {
   header: { padding: '8px 20px', minHeight: 52 },
   body: { padding: 20 },
 }
-export const subtleText: CSSProperties = { color: '#787671', fontSize: 12 }
+export const subtleText: CSSProperties = { color: 'var(--color-steel)', fontSize: 12 }
 export const tabularNums: CSSProperties = { fontVariantNumeric: 'tabular-nums' }
 
 /** 图片瓦片角标按钮（删除/下载）：半透明黑底圆形，压在缩略图上方。 */
@@ -61,7 +77,7 @@ export const photoOverlayButtonStyle: CSSProperties = {
   border: 'none',
   padding: 0,
   background: 'rgba(0, 0, 0, 0.6)',
-  color: '#fff',
+  color: 'var(--color-canvas)',
   cursor: 'pointer',
   zIndex: 2,
 }
@@ -70,8 +86,8 @@ export const photoOverlayButtonStyle: CSSProperties = {
 export function EmptyState({ title, hint, action }: { title: string; hint?: string; action?: ReactNode }) {
   return (
     <div style={{ padding: '28px 16px', textAlign: 'center' }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: '#37352f' }}>{title}</div>
-      {hint && <div style={{ marginTop: 4, fontSize: 13, color: '#787671' }}>{hint}</div>}
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-charcoal)' }}>{title}</div>
+      {hint && <div style={{ marginTop: 4, fontSize: 13, color: 'var(--color-steel)' }}>{hint}</div>}
       {action && <div style={{ marginTop: 12 }}>{action}</div>}
     </div>
   )
@@ -134,7 +150,7 @@ export function DueDateCell({
   closed: boolean
 }) {
   if (closed || daysRemaining === null) return <span style={tabularNums}>{fmtDate(dueDate)}</span>
-  const color = isOverdue ? '#e03131' : daysRemaining <= 7 ? '#dd5b00' : '#787671'
+  const color = isOverdue ? 'var(--color-error)' : daysRemaining <= 7 ? 'var(--color-warning)' : 'var(--color-steel)'
   const hint = isOverdue ? `超期 ${Math.abs(daysRemaining)} 天` : `剩 ${daysRemaining} 天`
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
@@ -171,8 +187,8 @@ export function Field({ label, children, span = 1 }: { label: ReactNode; childre
   const empty = children === null || children === undefined || children === ''
   return (
     <div style={{ gridColumn: `span ${span}` }}>
-      <div style={{ fontSize: 12, color: '#787671', marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 14, color: empty ? '#a4a097' : '#1a1a1a', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      <div style={{ fontSize: 12, color: 'var(--color-steel)', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, color: empty ? 'var(--color-stone)' : 'var(--color-ink)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
         {empty ? '未填写' : children}
       </div>
     </div>
