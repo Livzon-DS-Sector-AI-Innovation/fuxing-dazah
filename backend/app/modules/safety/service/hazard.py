@@ -18,10 +18,22 @@ from app.modules.safety.models import HazardReport
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.schemas import HazardReportCreate, HazardReportUpdate
 from app.modules.safety.service._helpers import audit_log
+from app.modules.safety.service.hazard_direct.field_authority import (
+    normalize_level_manual,
+)
 from app.modules.safety.vision.utils import filter_relevant_images, resolve_photo_urls
 from app.platform.integrations.ai.client import AIOutputError, AIService
 
 logger = logging.getLogger(__name__)
+
+
+def _display_level_code(hazard: HazardReport) -> str | None:
+    """通知卡展示等级：人工优先（P1-2/D4）。
+
+    ``hazard_level`` 是 AI 列（DB 存 AI 判定值）；人工改判后通知卡不得再展示
+    旧 AI 值——先取人工列（历史存量可能中英文/多值，统一归一），空则回退 AI。
+    """
+    return normalize_level_manual(hazard.hazard_level_manual) or hazard.hazard_level
 
 # ── 模块级辅助函数 ──
 
@@ -1095,9 +1107,11 @@ async def _build_verify_card_content(
     ) if hazard.feishu_record_id else ""
 
     reply_text = hazard.rectification_reply or "-"
-    level_emoji = {"general": "🟢", "serious": "🟠", "major": "🔴"}.get(hazard.hazard_level, "⚪")
+    # 展示等级人工优先（P1-2/D4，见 _display_level_code）
+    _lvl = _display_level_code(hazard)
+    level_emoji = {"general": "🟢", "serious": "🟠", "major": "🔴"}.get(_lvl, "⚪")
     level_label = {"general": "一般隐患", "serious": "较大隐患", "major": "重大隐患"}.get(
-        hazard.hazard_level, hazard.hazard_level or "-"
+        _lvl, hazard.hazard_level_manual or hazard.hazard_level or "-"
     )
 
     content = (
@@ -1431,9 +1445,11 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
             f"?table={bitable_table_id}&record={hazard.feishu_record_id}"
         ) if hazard.feishu_record_id else ""
 
-        level_emoji = {"general": "\U0001f7e2", "serious": "\U0001f7e0", "major": "\U0001f534"}.get(hazard.hazard_level, "⚪")
+        # 展示等级人工优先（P1-2/D4，见 _display_level_code）
+        _lvl = _display_level_code(hazard)
+        level_emoji = {"general": "\U0001f7e2", "serious": "\U0001f7e0", "major": "\U0001f534"}.get(_lvl, "⚪")
         level_label = {"general": "一般隐患", "serious": "较大隐患", "major": "重大隐患"}.get(
-            hazard.hazard_level, hazard.hazard_level or "-"
+            _lvl, hazard.hazard_level_manual or hazard.hazard_level or "-"
         )
         responsible = hazard.rectification_responsible_person_name or "-"
         deadline = hazard.deadline.strftime("%Y-%m-%d") if hazard.deadline else "待指定"

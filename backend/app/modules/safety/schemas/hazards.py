@@ -11,20 +11,20 @@ from app.modules.safety.schemas.enums import (
     HazardLevel,
     HazardType,
 )
-
-# 人工等级中文 → 平台英文枚举。前端/Agent 可能传中文标签，DB 统一存英文
-# （与 Bitable 事件链路、差异同步、HAZARD_LEVEL_REVERSE 回写口径一致），
-# 读取端的中文兼容判断（hazard_supervision）保留用于历史存量。
-_HAZARD_LEVEL_MANUAL_MAP = {
-    "一般隐患": "general",
-    "较大隐患": "serious",
-    "重大隐患": "major",
-}
+from app.modules.safety.service.hazard_direct.field_authority import (
+    normalize_level_manual,
+)
 
 
 def _normalize_hazard_level_manual(v: str | None) -> str | None:
+    """人工等级写入归一（存储侧收口，T01/D2）。
+
+    中文/英文/多选拼接串（直读历史「较大隐患, 一般隐患」）→ EN 单值、
+    多值取最高严重度；未知值原样透传（历史行为，不静默丢弃）。
+    CN↔EN 映射唯一事实源见 field_authority.HAZARD_LEVEL_MAP。
+    """
     if isinstance(v, str):
-        return _HAZARD_LEVEL_MANUAL_MAP.get(v.strip(), v.strip()) or None
+        return normalize_level_manual(v) or (v.strip() or None)
     return v
 
 

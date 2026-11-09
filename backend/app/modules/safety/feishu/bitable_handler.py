@@ -22,6 +22,27 @@ from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.dept_config import DEPARTMENT_CONFIG
 from app.modules.safety.feishu.event_client import on_event
 from app.modules.safety.schemas.enums import HazardCategory, HazardLevel, HazardType
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_CATEGORY_MAP as HAZARD_CATEGORY_MAP,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_CATEGORY_REVERSE as HAZARD_CATEGORY_REVERSE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_LEVEL_MAP as HAZARD_LEVEL_MAP,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_LEVEL_REVERSE as HAZARD_LEVEL_REVERSE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_TYPE_MAP as HAZARD_TYPE_MAP,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_TYPE_REVERSE as HAZARD_TYPE_REVERSE,
+)
+from app.modules.safety.service.hazard_direct.field_authority import (
+    normalize_level_manual,
+)
 
 # 通知和卡片函数已从 bitable_handler 断开，Bitable 为唯一数据源
 
@@ -99,35 +120,10 @@ ONE_WAY_FIELDS: set[str] = {"目前进展"}
 ATTACHMENT_FIELDS: set[str] = {"缺陷图片", "整改后图片"}
 
 # ── Bitable 值 → 模型值 的类型转换映射 ──
-# 隐患分类
-HAZARD_TYPE_MAP: dict[str, str] = {
-    "人的不安全行为":   "unsafe_action",
-    "物的不安全状态":   "unsafe_condition",
-    "环境的不安全因素":  "environmental",
-    "管理的缺陷":       "management_defect",
-}
-# 隐患类别（13种）
-HAZARD_CATEGORY_MAP: dict[str, str] = {
-    "设备设施":           "equipment",
-    "危化储存":           "hazardous_storage",
-    "应急管理":           "emergency_mgmt",
-    "仪表+电气":          "instrument_electrical",
-    "防雷防静电":         "lightning_antistatic",
-    "职业健康+劳保防护":   "occupational_health",
-    "三违作业":           "violation_operation",
-    "6S":                "six_s",
-    "标签标识":           "label_signage",
-    "工艺管理":           "process_mgmt",
-    "承包商缺陷":         "contractor_defect",
-    "内页资料":           "documentation",
-    "特殊作业":           "special_operation",
-}
-# 隐患级别
-HAZARD_LEVEL_MAP: dict[str, str] = {
-    "一般隐患": "general",
-    "较大隐患": "serious",
-    "重大隐患": "major",
-}
+# 隐患分类/类别/级别 的 CN↔EN 映射唯一事实源在 hazard_direct/field_authority
+# （T01/D2 单一事实源），此处 re-export 保持既有 import 路径兼容：
+#   HAZARD_TYPE_MAP / HAZARD_CATEGORY_MAP / HAZARD_LEVEL_MAP
+#   HAZARD_TYPE_REVERSE / HAZARD_CATEGORY_REVERSE / HAZARD_LEVEL_REVERSE
 # 整改状态（Bitable → 平台单向同步）
 _RECTIFICATION_STATUS_MAP: dict[str, str] = {
     "已关闭": "closed",
@@ -150,10 +146,7 @@ SUPERVISION_LEVEL_MAP: dict[str, str] = {
 }
 SUPERVISION_LEVEL_REVERSE = {v: k for k, v in SUPERVISION_LEVEL_MAP.items()}
 
-# 反向映射
-HAZARD_TYPE_REVERSE = {v: k for k, v in HAZARD_TYPE_MAP.items()}
-HAZARD_CATEGORY_REVERSE = {v: k for k, v in HAZARD_CATEGORY_MAP.items()}
-HAZARD_LEVEL_REVERSE = {v: k for k, v in HAZARD_LEVEL_MAP.items()}
+# 反向映射（隐患三族的 *_REVERSE 已随事实源 re-export，见上；此处仅审批域本地派生）
 APPROVAL_STATUS_REVERSE = {v: k for k, v in APPROVAL_STATUS_MAP.items()}
 
 
@@ -417,7 +410,7 @@ def _map_bitable_fields(bitable_fields: dict[str, Any]) -> dict[str, Any]:
             elif info["id"]:
                 result[en_name] = info["id"]
         elif en_name in ("inspection_category", "hazard_category", "hazard_type",
-                         "hazard_level",
+                         "hazard_level", "hazard_level_manual",
                          "inspector_department", "department",
                          "rectification_status", "supervision_level",
                          "verify_level_1_status", "verify_level_2_status", "verify_level_3_status"):
@@ -438,9 +431,12 @@ def _map_bitable_fields(bitable_fields: dict[str, Any]) -> dict[str, Any]:
                 if mapped in HazardLevel.__members__:
                     result[en_name] = mapped
             elif en_name == "hazard_level_manual":
-                mapped = HAZARD_LEVEL_MAP.get(val, "general")
-                if mapped in HazardLevel.__members__:
-                    result[en_name] = mapped
+                # 人工级别是多选列（历史值可能「较大隐患, 一般隐患」）：
+                # 入口归一取最高严重度（中英文互通），未知值不落默认
+                # （此前不在本分支，中文原样透传 DB、多值永不归一——T01/D2 修复）
+                norm = normalize_level_manual(val)
+                if norm:
+                    result[en_name] = norm
             elif en_name == "rectification_status":
                 # 先尝试用选项缓存解析 ID → 名称（整改状态可能是选项 ID），
                 # 避免「整改中」被误映射为默认 pending

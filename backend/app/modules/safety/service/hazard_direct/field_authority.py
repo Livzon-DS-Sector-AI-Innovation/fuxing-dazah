@@ -66,6 +66,45 @@ F_SUPERVISION = "督办等级"
 F_SCORE = "评分结果"
 F_SCORING_NOTE = "评分说明"
 
+# ═══════════════════════════════════════════════════════════════
+# 等级/分类/类别 CN↔EN 枚举映射（T01/D2 单一事实源）
+#
+# 全仓库此前 8 处独立定义（bitable_handler / bitable_config registry /
+# schemas/hazards / hazard_supervision / ai_analysis 等），漂移无护栏。
+# 现在唯一事实源在此（纯常量，保持本模块顶层 stdlib-only），
+# feishu/bitable_handler 原名 re-export 兼容既有 import；其余副本派生。
+# ═══════════════════════════════════════════════════════════════
+
+HAZARD_LEVEL_MAP: dict[str, str] = {
+    "一般隐患": "general",
+    "较大隐患": "serious",
+    "重大隐患": "major",
+}
+HAZARD_TYPE_MAP: dict[str, str] = {
+    "人的不安全行为": "unsafe_action",
+    "物的不安全状态": "unsafe_condition",
+    "环境的不安全因素": "environmental",
+    "管理的缺陷": "management_defect",
+}
+HAZARD_CATEGORY_MAP: dict[str, str] = {
+    "设备设施": "equipment",
+    "危化储存": "hazardous_storage",
+    "应急管理": "emergency_mgmt",
+    "仪表+电气": "instrument_electrical",
+    "防雷防静电": "lightning_antistatic",
+    "职业健康+劳保防护": "occupational_health",
+    "三违作业": "violation_operation",
+    "6S": "six_s",
+    "标签标识": "label_signage",
+    "工艺管理": "process_mgmt",
+    "承包商缺陷": "contractor_defect",
+    "内页资料": "documentation",
+    "特殊作业": "special_operation",
+}
+HAZARD_LEVEL_REVERSE: dict[str, str] = {v: k for k, v in HAZARD_LEVEL_MAP.items()}
+HAZARD_TYPE_REVERSE: dict[str, str] = {v: k for k, v in HAZARD_TYPE_MAP.items()}
+HAZARD_CATEGORY_REVERSE: dict[str, str] = {v: k for k, v in HAZARD_CATEGORY_MAP.items()}
+
 # ── 督办等级回退期告警节流（秒）──
 SUPERVISION_FALLBACK_WARN_INTERVAL_SECONDS = 300.0
 
@@ -439,29 +478,14 @@ def assert_no_human_fields(fields: Iterable[str]) -> None:
 
 
 def _level_maps() -> tuple[dict[str, str], frozenset[str]]:
-    from app.modules.safety.feishu.bitable_handler import (
-        HAZARD_LEVEL_MAP,
-        HAZARD_LEVEL_REVERSE,
-    )
-
     return HAZARD_LEVEL_MAP, frozenset(HAZARD_LEVEL_REVERSE)
 
 
 def _type_maps() -> tuple[dict[str, str], frozenset[str]]:
-    from app.modules.safety.feishu.bitable_handler import (
-        HAZARD_TYPE_MAP,
-        HAZARD_TYPE_REVERSE,
-    )
-
     return HAZARD_TYPE_MAP, frozenset(HAZARD_TYPE_REVERSE)
 
 
 def _category_maps() -> tuple[dict[str, str], frozenset[str]]:
-    from app.modules.safety.feishu.bitable_handler import (
-        HAZARD_CATEGORY_MAP,
-        HAZARD_CATEGORY_REVERSE,
-    )
-
     return HAZARD_CATEGORY_MAP, frozenset(HAZARD_CATEGORY_REVERSE)
 
 

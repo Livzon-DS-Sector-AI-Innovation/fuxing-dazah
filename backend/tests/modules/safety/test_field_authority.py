@@ -208,3 +208,72 @@ def test_unknown_manual_level_does_not_fall_back_to_ai() -> None:
     got = fa.resolve_effective("未知级别", "general", "level")
     assert got.source == "human"
     assert got.value is None
+
+
+# ── T01(D2) 枚举单一事实源：CN↔EN 映射只在 field_authority，其余派生 ─────
+
+
+def test_level_type_category_maps_live_in_field_authority() -> None:
+    """值集为设计文档 §1.1 已知业务事实（3 级/4 分类/13 类别），独立于实现。"""
+    assert fa.HAZARD_LEVEL_MAP == {
+        "一般隐患": "general",
+        "较大隐患": "serious",
+        "重大隐患": "major",
+    }
+    assert set(fa.HAZARD_TYPE_MAP.values()) == {
+        "unsafe_action",
+        "unsafe_condition",
+        "environmental",
+        "management_defect",
+    }
+    assert len(fa.HAZARD_CATEGORY_MAP) == 13
+    assert fa.HAZARD_LEVEL_REVERSE == {v: k for k, v in fa.HAZARD_LEVEL_MAP.items()}
+    assert fa.HAZARD_TYPE_REVERSE == {v: k for k, v in fa.HAZARD_TYPE_MAP.items()}
+    assert fa.HAZARD_CATEGORY_REVERSE == {v: k for k, v in fa.HAZARD_CATEGORY_MAP.items()}
+
+
+def test_bitable_handler_maps_are_reexports_of_source() -> None:
+    """feishu 侧六名字典必须 re-export 同一对象（import 路径兼容，值不漂移）。"""
+    from app.modules.safety.feishu import bitable_handler as bh
+
+    assert bh.HAZARD_LEVEL_MAP is fa.HAZARD_LEVEL_MAP
+    assert bh.HAZARD_TYPE_MAP is fa.HAZARD_TYPE_MAP
+    assert bh.HAZARD_CATEGORY_MAP is fa.HAZARD_CATEGORY_MAP
+    assert bh.HAZARD_LEVEL_REVERSE is fa.HAZARD_LEVEL_REVERSE
+    assert bh.HAZARD_TYPE_REVERSE is fa.HAZARD_TYPE_REVERSE
+    assert bh.HAZARD_CATEGORY_REVERSE is fa.HAZARD_CATEGORY_REVERSE
+
+
+def test_registry_value_maps_match_source() -> None:
+    """bitable_config 注册表的等级/分类/类别 value_map 必须与事实源同值。"""
+    from app.modules.safety.bitable_config import registry
+
+    wanted = {"隐患级别", "隐患分类（AI）", "隐患类别（AI）"}
+    maps: dict[str, dict] = {}
+    for domain in registry._DOMAINS:
+        for kind in domain.kinds:
+            for m in kind.default_mappings:
+                if m["source_field"] in wanted:
+                    maps[m["source_field"]] = m["value_map"]
+    assert maps["隐患级别"] == dict(fa.HAZARD_LEVEL_MAP)
+    assert maps["隐患分类（AI）"] == dict(fa.HAZARD_TYPE_MAP)
+    assert maps["隐患类别（AI）"] == dict(fa.HAZARD_CATEGORY_MAP)
+
+
+def test_ai_analysis_valid_sets_match_source() -> None:
+    """① 识别输出的合法值集必须从事实源派生（不能手抄漂移）。"""
+    from app.modules.safety.service.hazard_direct import ai_analysis
+
+    assert set(ai_analysis.VALID_LEVELS) == set(fa.HAZARD_LEVEL_MAP.values())
+    assert set(ai_analysis.VALID_TYPES) == set(fa.HAZARD_TYPE_MAP.values())
+    assert set(ai_analysis.VALID_CATEGORIES) == set(fa.HAZARD_CATEGORY_MAP.values())
+
+
+def test_supervision_display_cn_aligned_with_source() -> None:
+    """督办展示用 EN→短中文 缩写表，键集必须与事实源值集对齐。"""
+    from app.modules.safety.service.hazard_supervision import HAZARD_LEVEL_CN
+
+    assert HAZARD_LEVEL_CN == {"general": "一般", "serious": "较大", "major": "重大"}
+    assert set(HAZARD_LEVEL_CN) == set(fa.HAZARD_LEVEL_MAP.values())
+
+

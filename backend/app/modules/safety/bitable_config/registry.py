@@ -25,6 +25,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_CATEGORY_MAP,
+    HAZARD_LEVEL_MAP,
+    HAZARD_TYPE_MAP,
+)
+
 # 字段类型语义对齐 app/modules/safety/audit/parser.py（text/person/multi_select/
 # single_select/attachment/datetime/enum/combined_text）
 FieldType = Literal[
@@ -124,30 +130,12 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                     _m("整改责任人", "rectification_responsible_person_name", "person"),
                     _m("隐患分类（AI）", "hazard_type", "enum",
                        default_value="unsafe_condition",
-                       value_map={
-                           "人的不安全行为": "unsafe_action",
-                           "物的不安全状态": "unsafe_condition",
-                           "环境的不安全因素": "environmental",
-                           "管理的缺陷": "management_defect",
-                       }),
+                       # CN↔EN 映射唯一事实源见 field_authority（T01/D2，防手抄漂移）
+                       value_map=dict(HAZARD_TYPE_MAP)),
                     _m("隐患类别（AI）", "hazard_category", "enum",
-                       value_map={
-                           "设备设施": "equipment",
-                           "危化储存": "hazardous_storage",
-                           "应急管理": "emergency_mgmt",
-                           "仪表+电气": "instrument_electrical",
-                           "防雷防静电": "lightning_antistatic",
-                           "职业健康+劳保防护": "occupational_health",
-                           "三违作业": "violation_operation",
-                           "6S": "six_s",
-                           "标签标识": "label_signage",
-                           "工艺管理": "process_mgmt",
-                           "承包商缺陷": "contractor_defect",
-                           "内页资料": "documentation",
-                           "特殊作业": "special_operation",
-                       }),
+                       value_map=dict(HAZARD_CATEGORY_MAP)),
                     _m("隐患级别", "hazard_level_manual", "enum",
-                       value_map={"一般隐患": "general", "较大隐患": "serious", "重大隐患": "major"}),
+                       value_map=dict(HAZARD_LEVEL_MAP)),
                     _m("隐患描述（AI）", "key_defect", "text"),
                     _m("隐患判定依据（AI）", "major_hazard_basis", "text"),
                     _m("缺陷图片", "defect_photos", "attachment"),

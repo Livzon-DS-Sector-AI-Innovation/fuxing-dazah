@@ -97,9 +97,12 @@ async def _review_one(client: Any, view: bitable_repo.HazardView) -> dict[str, A
         original_description=view.description or "",
         original_defect_photos=defect_uris,
         key_defect=bitable_repo.f_text(view.raw, bitable_repo.F_DESC_AI),
-        hazard_type=bitable_repo.f_select(view.raw, bitable_repo.F_TYPE_AI),
-        hazard_category=bitable_repo.f_select(view.raw, bitable_repo.F_CATEGORY_AI),
-        hazard_level=bitable_repo.f_select(view.raw, bitable_repo.F_LEVEL_AI),
+        # 读口径（P1-2/D4）：初审输入 = effective_*（人工优先、AI fallback，EN 码，
+        # 与 ⑤ 评分及插件 few-shot 的枚举格式对齐）；此前直读 AI 原始列（中文原值），
+        # 人工改判后初审仍看 AI 旧值。
+        hazard_type=view.effective_type,
+        hazard_category=view.effective_category,
+        hazard_level=view.effective_level,
         ai_rectification_suggestion={"raw": advice} if advice else None,
         rectification_reply=view.rectify_reply,
         rectification_photos=rectify_uris,

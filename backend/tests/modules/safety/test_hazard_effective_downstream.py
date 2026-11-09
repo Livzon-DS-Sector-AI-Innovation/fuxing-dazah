@@ -35,6 +35,7 @@ def _view(
     ai_type: object = None,
     manual_category: object = None,
     ai_category: object = None,
+    reply: object = None,
 ) -> bitable_repo.HazardView:
     fields: dict[str, object] = {
         bitable_repo.F_NO: f"HZ-{no}",
@@ -42,6 +43,8 @@ def _view(
         bitable_repo.F_DATE: _CHECK_MS,
         bitable_repo.F_RECTIFY_STATUS: "未关闭",
     }
+    if reply is not None:
+        fields[bitable_repo.F_RECTIFY_REPLY] = reply
     if manual_level is not None:
         fields[bitable_repo.F_LEVEL_MANUAL] = manual_level
     if ai_level is not None:
@@ -190,3 +193,172 @@ class TestQueryHazardsEffectiveItems:
         assert "hazard_level" not in item
         assert "hazard_level_source" not in item
         assert "ai_hazard_level" not in item
+
+
+# ═══════════════════════════════════════════════════════════════
+# P1-2/D4：② 初审输入走 effective（人工改判后初审不再读 AI 旧值）
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestReviewInputEffective:
+    async def test_review_input_uses_effective_values(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """人工=较大/AI=一般 → 初审输入 serious（人工权威）；AI 列旧值不再进入初审。"""
+        from app.modules.safety.service.hazard_direct import review
+
+        async def fake_download_photos(client, fields, *, record_id, **kw):
+            return {"defect": [], "rectification": []}
+
+        monkeypatch.setattr(bitable_repo, "download_photos", fake_download_photos)
+        monkeypatch.setattr(
+            bitable_repo, "photos_to_data_uris", lambda paths: ["x"] if paths else []
+        )
+        monkeypatch.setattr(
+            review,
+            "_load_knowledge_context",
+            lambda *a, **kw: _async_none(),
+        )
+
+        class _FakeAIService:
+            async def close(self) -> None:
+                return None
+
+        import app.modules.safety.service.config as service_config
+
+        monkeypatch.setattr(
+            service_config,
+            "create_ai_service",
+            lambda config_type="text": _FakeAIService(),
+        )
+
+        captured: dict[str, Any] = {}
+
+        class _FakeReviewer:
+            def __init__(self, ai_service, plugin_config, knowledge_context=None):
+                pass
+
+            async def review(self, input_data):
+                captured.update(
+                    hazard_type=input_data.hazard_type,
+                    hazard_category=input_data.hazard_category,
+                    hazard_level=input_data.hazard_level,
+                )
+                level = SimpleNamespace(value="medium")
+                return SimpleNamespace(
+                    defect_reassessment="已消除",
+                    defect_reassessment_level="medium",
+                    photo_match_analysis="一致",
+                    photo_match_level=level,
+                    measure_quality_assessment="有效",
+                    measure_quality_level=level,
+                    standard_compliance="符合",
+                    standard_compliance_level=level,
+                    review_conclusion=SimpleNamespace(value="已通过"),
+                    review_comments="ok",
+                    confidence=0.9,
+                    reasoning="r",
+                )
+
+        import app.modules.safety.ai_rectification_review as rectification_review
+
+        monkeypatch.setattr(rectification_review, "AIRectificationReviewer", _FakeReviewer)
+
+        view = _view(
+            "R1",
+            reply="已更换爆破片并引出室外",
+            manual_level="较大隐患",
+            ai_level="一般隐患",
+            manual_type="管理的缺陷",
+            ai_type="物的不安全状态",
+            manual_category="应急管理",
+            ai_category="设备设施",
+        )
+        await review._review_one(object(), view)
+        assert captured["hazard_level"] == "serious"
+        assert captured["hazard_type"] == "management_defect"
+        assert captured["hazard_category"] == "emergency_mgmt"
+
+    async def test_review_input_falls_back_to_ai_when_manual_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """人工未填 → AI 值进入初审（effective fallback 语义不变）。"""
+        from app.modules.safety.service.hazard_direct import review
+
+        async def fake_download_photos(client, fields, *, record_id, **kw):
+            return {"defect": [], "rectification": []}
+
+        monkeypatch.setattr(bitable_repo, "download_photos", fake_download_photos)
+        monkeypatch.setattr(
+            bitable_repo, "photos_to_data_uris", lambda paths: ["x"] if paths else []
+        )
+        monkeypatch.setattr(
+            review, "_load_knowledge_context", lambda *a, **kw: _async_none()
+        )
+
+        class _FakeAIService:
+            async def close(self) -> None:
+                return None
+
+        import app.modules.safety.service.config as service_config
+
+        monkeypatch.setattr(
+            service_config, "create_ai_service", lambda config_type="text": _FakeAIService()
+        )
+
+        captured: dict[str, Any] = {}
+
+        class _FakeReviewer:
+            def __init__(self, ai_service, plugin_config, knowledge_context=None):
+                pass
+
+            async def review(self, input_data):
+                captured["hazard_level"] = input_data.hazard_level
+                level = SimpleNamespace(value="medium")
+                return SimpleNamespace(
+                    defect_reassessment="已消除",
+                    defect_reassessment_level="medium",
+                    photo_match_analysis="一致",
+                    photo_match_level=level,
+                    measure_quality_assessment="有效",
+                    measure_quality_level=level,
+                    standard_compliance="符合",
+                    standard_compliance_level=level,
+                    review_conclusion=SimpleNamespace(value="已通过"),
+                    review_comments="ok",
+                    confidence=0.9,
+                    reasoning="r",
+                )
+
+        import app.modules.safety.ai_rectification_review as rectification_review
+
+        monkeypatch.setattr(rectification_review, "AIRectificationReviewer", _FakeReviewer)
+
+        view = _view("R2", reply="已完成整改", ai_level="重大隐患")
+        await review._review_one(object(), view)
+        assert captured["hazard_level"] == "major"
+
+
+async def _async_none() -> None:
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# P1-2/D4：复核通知卡等级人工优先（hazard_level 为 AI 列）
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestVerifyCardManualFirstLevel:
+    async def test_card_level_is_manual_first(self) -> None:
+        from app.modules.safety.models import HazardReport
+        from app.modules.safety.service.hazard import _build_verify_card_content
+
+        hazard = HazardReport(
+            hazard_no="HZ-D4-1",
+            description="复核卡测试",
+            hazard_level="general",  # AI 旧值：一般
+            hazard_level_manual="major",  # 人工改判：重大
+        )
+        _, content, _ = await _build_verify_card_content(hazard, 1, skip_photos=True)
+        assert "重大隐患" in content
+        assert "一般隐患" not in content

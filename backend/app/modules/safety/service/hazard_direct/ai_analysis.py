@@ -71,6 +71,11 @@ from app.modules.safety.service.hazard_direct.failure_ledger import (
     RAG_BREAKER_ALERT_KEY,
     format_dead_letter_lines,
 )
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_CATEGORY_MAP,
+    HAZARD_LEVEL_MAP,
+    HAZARD_TYPE_MAP,
+)
 from app.modules.safety.service.hazard_direct.round_result import RoundResult
 
 if TYPE_CHECKING:
@@ -86,19 +91,10 @@ _WRITE_LOCK = bitable_repo.WRITE_LOCK
 # 死信上限（只在告警文案展示，模块级常量避免把 failure_ledger 模块整体替换后失联）
 _MAX_ATTEMPTS = failure_ledger.MAX_ATTEMPTS
 
-VALID_TYPES = {
-    "unsafe_action",
-    "unsafe_condition",
-    "environmental",
-    "management_defect",
-}
-VALID_LEVELS = {"general", "serious", "major"}
-VALID_CATEGORIES = {
-    "equipment", "hazardous_storage", "emergency_mgmt", "instrument_electrical",
-    "lightning_antistatic", "occupational_health", "violation_operation", "six_s",
-    "label_signage", "process_mgmt", "contractor_defect", "documentation",
-    "special_operation",
-}
+# AI 输出合法值集从字段权威单一事实源派生（T01/D2，防手抄漂移）
+VALID_TYPES = frozenset(HAZARD_TYPE_MAP.values())
+VALID_LEVELS = frozenset(HAZARD_LEVEL_MAP.values())
+VALID_CATEGORIES = frozenset(HAZARD_CATEGORY_MAP.values())
 
 
 class _WritebackError(Exception):

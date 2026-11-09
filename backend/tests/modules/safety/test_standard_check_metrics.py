@@ -109,9 +109,11 @@ class FakeHazardClient:
 
 def _hz(no: str, *, level: str = "一般", status: str = "已关闭",
         done: date | None = None, deadline: date | None = None,
-        checked: date | None = None) -> dict:
+        checked: date | None = None, ai_level: str | None = None) -> dict:
     fields = {hz_repo.F_NO: no, hz_repo.F_LEVEL_MANUAL: level,
               hz_repo.F_RECTIFY_STATUS: status}
+    if ai_level is not None:
+        fields[hz_repo.F_LEVEL_AI] = ai_level
     for name, d in ((hz_repo.F_RECTIFY_DONE_AT, done),
                     (hz_repo.F_DEADLINE, deadline),
                     (hz_repo.F_DATE, checked)):
@@ -151,6 +153,21 @@ class TestHazardMetrics:
         assert out.value == 50.0
         empty = await m.compute(Q4, Ctx(opener=lambda d, k: FakeHazardClient([_hz("G1")])))
         assert empty.no_data_reason
+
+    async def test_major_close_rate_effective_level(self) -> None:
+        """P1-2/D4：重大口径走 effective（人工空+AI=重大 计入；人工较小压过 AI 重大）。"""
+        items = [
+            # 人工漏填级别、AI 判重大 → effective=major，计入（此前漏计）
+            _hz("A1", level="", status="已关闭", ai_level="重大隐患"),
+            # 人工=较大、AI=重大 → 人工权威 effective=serious，不计
+            _hz("A2", level="较大隐患", status="已关闭", ai_level="重大隐患"),
+            # 双空 → 不计
+            _hz("A3", level="", status="整改中"),
+        ]
+        m = get_metric("hazard.major_close_rate")
+        out = await m.compute(Q4, Ctx(opener=lambda d, k: FakeHazardClient(items)))
+        assert out.value == 100.0
+        assert "重大级 1 条" in out.evidence[0]["title"]
 
     async def test_register_count(self) -> None:
         items = [

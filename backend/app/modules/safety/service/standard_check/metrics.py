@@ -30,6 +30,7 @@ from app.modules.safety.service.bitable_direct import reader as bd_reader
 from app.modules.safety.service.bitable_direct.errors import BitableConfigError
 from app.modules.safety.service.contractor_admission_direct import reader as ca_reader
 from app.modules.safety.service.hazard_direct import bitable_repo as hz_repo
+from app.modules.safety.service.hazard_direct.field_authority import resolve_effective
 from app.modules.safety.service.hazard_id_direct import reader as hi_reader
 from app.modules.safety.service.oh_direct import ledger as oh_ledger
 from app.modules.safety.service.standard_check.engine import (
@@ -143,6 +144,7 @@ register(
 _HAZARD_FIELDS = (
     hz_repo.F_NO, hz_repo.F_DESC, hz_repo.F_DATE, hz_repo.F_DEADLINE,
     hz_repo.F_RECTIFY_DONE_AT, hz_repo.F_RECTIFY_STATUS, hz_repo.F_LEVEL_MANUAL,
+    hz_repo.F_LEVEL_AI,  # 重大口径走 effective（P1-2/D4）：人工空+AI=重大 也计入
 )
 
 
@@ -223,8 +225,15 @@ async def _hazard_major_close_rate(
     rows = await _fetch_hazards(ctx)
     if rows is None:
         return MetricOutcome(no_data_reason="hazard 域未接入")
+    # 重大口径 = effective_level=="major"（人工优先、AI fallback，P1-2/D4）：
+    # 此前只认人工列+子串包含，人工漏填级别而 AI 判重大的记录被漏计。
     majors = [
-        r for r in rows if "重大" in _select(r, hz_repo.F_LEVEL_MANUAL)
+        r
+        for r in rows
+        if resolve_effective(
+            _select(r, hz_repo.F_LEVEL_MANUAL), _select(r, hz_repo.F_LEVEL_AI), "level"
+        ).value
+        == "major"
     ]
     if not majors:
         return MetricOutcome(no_data_reason="无重大级隐患记录")

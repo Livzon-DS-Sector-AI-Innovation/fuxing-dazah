@@ -28,6 +28,10 @@ from app.modules.safety.app_config.store import store as _app_config_store
 from app.modules.safety.bitable_config.store import store
 from app.modules.safety.feishu.notification import send_group_card, send_user_card
 from app.modules.safety.models import HazardReport
+from app.modules.safety.service.hazard_direct.field_authority import (
+    HAZARD_LEVEL_REVERSE,
+    normalize_level_manual,
+)
 from app.modules.safety.service.responsible_mapping import effective_responsible_person
 
 logger = logging.getLogger(__name__)
@@ -61,12 +65,9 @@ LEVEL_EMOJI = {
     "红色预警": "🔴",
     "一般预警": "🟡",
 }
-# 隐患等级英文 → 中文
-HAZARD_LEVEL_CN = {
-    "general": "一般",
-    "serious": "较大",
-    "major": "重大",
-}
+# 隐患等级英文 → 中文短标签：从字段权威单一事实源派生
+# （「一般隐患」[:2] →「一般」，与 HAZARD_LEVEL_MAP 值集对齐，T01/D2）
+HAZARD_LEVEL_CN = {en: cn[:2] for en, cn in HAZARD_LEVEL_REVERSE.items()}
 # 部门名称标准化 — 仅处理缩写展开（纯字符串替换，不做组织归属推断）
 # 组织归属推断由责任人反查 identity.users 完成（数据修复脚本）
 DEPT_NORMALIZE: dict[str, str] = {
@@ -98,9 +99,11 @@ def calculate_supervision_level(hazard: HazardReport) -> str:
         return "closed"
 
     # 规则 1：隐患等级（人工）为较大/重大 → 红色预警
-    # 督办判定只取 hazard_level_manual（人工），忽略 AI 判定的 hazard_level
-    # DB 兼容英文（serious/major）与中文（较大隐患/重大隐患）两种存储值
-    if hazard.hazard_level_manual in ("serious", "major", "较大隐患", "重大隐患"):
+    # 督办判定只取 hazard_level_manual（人工），忽略 AI 判定的 hazard_level；
+    # 入口统一归一（多选拼接串/中英文 → EN 单值，多值取最高严重度——
+    # 直读模式人工级别是原始多选串，此前元组硬编码不命中多值 → 漏红警，T01/D2 修复）
+    level = normalize_level_manual(hazard.hazard_level_manual)
+    if level in ("serious", "major"):
         return "红色预警"
 
     # 规则 2-3：按存在天数分级（以检查日期 discovered_at 起算）

@@ -60,7 +60,16 @@ class SafetyRepository:
         date_from: datetime | None = None,
         date_to: datetime | None = None,
     ) -> tuple[list[HazardReport], int]:
-        """获取隐患列表"""
+        """获取隐患列表。
+
+        口径说明（P1-2/D4 摸底缺口 C，拍板 won't-fix）：以下 hazard_type/level/
+        category 筛选用的是镜像 DB 的 AI 列（``hazard_type`` 等），**不含
+        effective（人工优先）逻辑**——本路径仅在 direct 直读关闭的镜像降级模式
+        生效，而镜像链已冻结走向退役（旧事件通道 ``event_sync_enabled=false``），
+        不再投入改造；direct 模式的 effective 筛选见
+        ``hazard_direct/page_query._matches``。缺口台账见
+        ``docs/GOVERNANCE-隐患登记表字段处置清单-20261106.md`` §四。
+        """
         query = select(HazardReport).where(HazardReport.is_deleted.is_(False))
 
         if status:
