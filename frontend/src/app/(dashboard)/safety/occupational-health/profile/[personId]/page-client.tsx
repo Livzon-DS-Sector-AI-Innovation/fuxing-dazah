@@ -32,6 +32,8 @@ import { fetchOhPersonProfile } from '@/lib/api/safety/occupational-health'
 import type {
   OhFollowup,
   OhHealthExam,
+  OhLaborPpe,
+  OhLaborPpeItem,
   OhPerson,
   OhPersonProfile,
   OhPlatformIdentity,
@@ -575,9 +577,89 @@ export default function OccupationalHealthProfileClient({ personId }: { personId
                   locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无异常随访" /> }} />
               ),
             },
+            {
+              key: 'laborPpe',
+              label: `应配劳保 (${profile.labor_ppe ? profile.labor_ppe.items.length : '—'})`,
+              children: <LaborPpeSection laborPpe={profile.labor_ppe} />,
+            },
           ]}
         />
       </SectionCard>
     </div>
+  )
+}
+
+// ── 应配劳保（第 7 源）区块：三级匹配链口径标注 + 配备清单 ──
+
+const LABOR_MATCH_UI: Record<string, { label: string; color: string }> = {
+  position: { label: '岗位级匹配', color: 'green' },
+  dept: { label: '按部门展示', color: 'blue' },
+  none: { label: '未匹配', color: 'default' },
+}
+
+function LaborPpeSection({ laborPpe }: { laborPpe?: OhLaborPpe | null }) {
+  if (laborPpe === null || laborPpe === undefined) {
+    return (
+      <EmptyGuide
+        compact
+        title="应配劳保源不可用"
+        description="劳保配备标准表直读失败或未接入，其余档案区块不受影响"
+      />
+    )
+  }
+  const ui = LABOR_MATCH_UI[laborPpe.match_level] ?? LABOR_MATCH_UI.none
+  const columns: ColumnsType<OhLaborPpeItem> = [
+    {
+      title: '劳保用品', dataIndex: 'name', key: 'name', width: 150,
+      render: (v: string) => <span style={{ fontWeight: 500, fontSize: 13 }}>{v}</span>,
+    },
+    { title: '型号', dataIndex: 'model', key: 'model', width: 180, ellipsis: true, render: (v: string) => v || '-' },
+    { title: '防护类型', dataIndex: 'protection_type', key: 'protection_type', width: 110, render: (v: string) => v || '-' },
+    { title: '周期', dataIndex: 'cycle', key: 'cycle', width: 90, render: (v: string) => v || '-' },
+    {
+      title: '配备', dataIndex: 'provision', key: 'provision', width: 80,
+      render: (v: string) => v
+        ? <Tag style={{ marginInlineEnd: 0 }} color={v === '个人' ? 'green' : 'blue'}>{v}</Tag>
+        : <span style={{ color: UI.muted }}>-</span>,
+    },
+    { title: '关联危害因素', dataIndex: 'monitor_item', key: 'monitor_item', width: 140, ellipsis: true, render: (v: string) => v || '-' },
+    {
+      title: '检测报告', dataIndex: 'has_report', key: 'has_report', width: 90,
+      render: (v: boolean) => v
+        ? <Tag style={{ marginInlineEnd: 0 }} color="green">有</Tag>
+        : <Tag style={{ marginInlineEnd: 0 }} color="orange">目录缺</Tag>,
+    },
+    {
+      title: '有效期', dataIndex: 'lifespan_years', key: 'lifespan_years', width: 80,
+      render: (v: number | null) => (v != null ? `${v} 年` : '-'),
+    },
+  ]
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <Tag color={ui.color} style={{ marginInlineEnd: 0 }}>{ui.label}</Tag>
+        <span style={{ fontSize: 12, color: UI.steel }}>{laborPpe.match_note}</span>
+        {(laborPpe.department || laborPpe.position) && (
+          <span style={{ fontSize: 12, color: UI.muted }}>
+            匹配口径：{[laborPpe.department, laborPpe.position].filter(Boolean).join(' / ')}
+          </span>
+        )}
+      </div>
+      <Table<OhLaborPpeItem>
+        rowKey="source_record_id"
+        size="small"
+        columns={columns}
+        dataSource={laborPpe.items}
+        pagination={laborPpe.items.length > 10 ? { pageSize: 10 } : false}
+        locale={{
+          emptyText: (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="该部门暂无劳保配备标准行（职能部门或未维护）"
+            />
+          ),
+        }}
+      />
+    </>
   )
 }

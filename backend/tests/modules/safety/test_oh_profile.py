@@ -195,8 +195,8 @@ async def test_profile_aggregates_six_sources(
     assert [v["record_id"] for v in profile["violations"]] == ["vProf1", "vProf2"]
     assert {v["match_basis"] for v in profile["violations"]} == {"open_id", "name"}
     assert profile["match_notes"] == {
-        "trainings": "name", "violations": "mixed",
-    }
+        "trainings": "name", "violations": "mixed", "labor": "none",
+    }  # labor=none：labor_ledger_quiet 静默桩默认开关关
     # 平台身份卡第 6 源：替身默认 unmatched 信封原样透传
     assert profile["platform"]["status"] == "unmatched"
     assert profile["platform"]["person"] is None
@@ -390,3 +390,149 @@ def test_violation_kind_maps_person_open_id() -> None:
     )
     assert row2["person_name"] == "无ID丁"
     assert row2["person_open_id"] is None
+
+
+# ── 第 7 源：应配劳保（三级匹配链 position > dept > none）──
+
+
+from app.modules.safety.service.labor_supply import ledger as ls_ledger  # noqa: E402
+from app.modules.safety.service.labor_supply.reader import (  # noqa: E402
+    LaborProductView,
+    PositionStandardView,
+)
+
+
+@pytest.fixture(autouse=True)
+def labor_ledger_quiet(monkeypatch: pytest.MonkeyPatch):
+    """第 7 源静默桩（autouse）：默认开关关，既有测试的 errors/match_notes
+    精确断言不受影响；第 7 源测试自行覆写 enabled/fetch_*。"""
+    monkeypatch.setattr(ls_ledger, "enabled", lambda: False)
+
+
+def _std(**kw) -> PositionStandardView:
+    base = dict(
+        record_id="recStd1", department="提炼一部", position="配料工",
+        unit_workshop="三车间", name="防尘口罩", model="3M 9502+基础款",
+        category="口罩", protection_type="呼吸防护", cycle="按需",
+        provision="个人", monitor_item="其他粉尘（总尘）", sample_point="配料间",
+    )
+    base.update(kw)
+    return PositionStandardView(**base)
+
+
+def _prod(**kw) -> LaborProductView:
+    base = dict(
+        record_id="recProd1", name="防尘口罩", model="3M 9502+基础款",
+        category="口罩", protection_type="呼吸防护", unit="个", vendor="3M",
+        lifespan_years=2.5,
+        report_attachments=[{"file_token": "f1", "name": "r.pdf", "size": 1}],
+        manual_attachments=[],
+    )
+    base.update(kw)
+    return LaborProductView(**base)
+
+
+def _labor_on(monkeypatch, standards, products):
+    monkeypatch.setattr(ls_ledger, "enabled", lambda: True)
+
+    async def _s(*a, **kw):
+        return standards
+
+    async def _p(*a, **kw):
+        return products
+
+    monkeypatch.setattr(ls_ledger, "fetch_position_standards", _s)
+    monkeypatch.setattr(ls_ledger, "fetch_products", _p)
+
+
+async def test_labor_ppe_position_level_match(
+    db_session, vio_rows, mirror_mode, monkeypatch
+) -> None:
+    person = await _seed(db_session)
+    person.position = "配料工"
+    await db_session.flush()
+    _labor_on(
+        monkeypatch,
+        standards=[
+            _std(),  # 岗位级命中
+            _std(record_id="recStd2", position="", name="防化手套"),  # 同部门无岗位
+            _std(record_id="recStd3", department="发酵工程部", name="耳塞"),  # 他部门
+        ],
+        products=[_prod()],
+    )
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    labor = profile["labor_ppe"]
+    assert labor["match_level"] == "position"
+    assert len(labor["items"]) == 1
+    item = labor["items"][0]
+    assert item["name"] == "防尘口罩"
+    assert item["cycle"] == "按需"
+    assert item["has_report"] is True          # 目录 join：检测报告有无
+    assert item["lifespan_years"] == 2.5       # 目录 join：有效期
+    assert item["source_record_id"] == "recStd1"
+
+
+async def test_labor_ppe_dept_level_fallback(
+    db_session, vio_rows, mirror_mode, monkeypatch
+) -> None:
+    person = await _seed(db_session)
+    person.position = "不存在工种"
+    await db_session.flush()
+    _labor_on(
+        monkeypatch,
+        standards=[
+            _std(),
+            _std(record_id="recStd2", position="", name="防化手套"),
+            _std(record_id="recStd3", department="发酵工程部", name="耳塞"),
+        ],
+        products=[_prod()],
+    )
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    labor = profile["labor_ppe"]
+    assert labor["match_level"] == "dept"
+    assert {i["name"] for i in labor["items"]} == {"防尘口罩", "防化手套"}
+    assert "部门" in labor["match_note"]
+
+
+async def test_labor_ppe_none_state(
+    db_session, vio_rows, mirror_mode, monkeypatch
+) -> None:
+    person = await _seed(db_session)  # 提炼一部，但部门名对不上任何配备行
+    _labor_on(
+        monkeypatch,
+        standards=[_std(department="发酵工程部")],
+        products=[_prod()],
+    )
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    labor = profile["labor_ppe"]
+    assert labor["match_level"] == "none"
+    assert labor["items"] == []
+    assert profile["errors"] == []  # 空态不是错误
+
+
+async def test_labor_ppe_source_failure_degrades(
+    db_session, vio_rows, mirror_mode, monkeypatch
+) -> None:
+    person = await _seed(db_session)
+    monkeypatch.setattr(ls_ledger, "enabled", lambda: True)
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("bitable down")
+
+    monkeypatch.setattr(ls_ledger, "fetch_position_standards", _boom)
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    assert profile["labor_ppe"] is None
+    assert any(e.startswith("labor_ppe:") for e in profile["errors"])
+    assert len(profile["exams"]) == 1  # 其余区块不受影响
+
+
+async def test_labor_ppe_gate_off_quiet(
+    db_session, vio_rows, mirror_mode
+) -> None:
+    """开关关（labor_ledger_quiet 默认）：信封 none+未启用标注，不进 errors。"""
+    person = await _seed(db_session)
+    profile = await OhProfileService(db_session).build_profile(str(person.id))
+    labor = profile["labor_ppe"]
+    assert labor["match_level"] == "none"
+    assert "未启用" in labor["match_note"]
+    assert profile["errors"] == []

@@ -33,6 +33,7 @@ from app.modules.safety.api.key_risk_operation_reports import (
     key_risk_operation_reports_router,
 )
 from app.modules.safety.api.knowledge import knowledge_router
+from app.modules.safety.api.labor_supply import labor_supply_router
 from app.modules.safety.api.msds import msds_router
 from app.modules.safety.api.oh_exam_applications import oh_exam_applications_router
 from app.modules.safety.api.oh_followups import oh_followups_router
@@ -89,6 +90,7 @@ router.include_router(hazards_router)
 router.include_router(info_query_router)
 router.include_router(key_risk_operation_reports_router)
 router.include_router(knowledge_router)
+router.include_router(labor_supply_router)
 router.include_router(graph_router)
 router.include_router(msds_router)
 router.include_router(oh_health_exams_router)

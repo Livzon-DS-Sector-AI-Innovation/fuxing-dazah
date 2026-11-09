@@ -1,6 +1,6 @@
 'use client'
 
-// 职业健康管理 — 6 Tab 页面（Client 壳）
+// 职业健康管理 — 7 Tab 页面（Client 壳）
 //
 // 页级 PageHeader（ui-kit）+ Tabs；各 Tab 内区块用 SectionCard、统计行用 StatCard（见各 Panel）。
 // 跨 Tab 联动：人员台账「体检记录」链接 → handleViewExams(personName)
@@ -16,6 +16,7 @@ import {
   OhExamsPanel,
   OhFollowupsPanel,
   OhHazardFactorsPanel,
+  OhLaborSupplyPanel,
   OhPersonsPanel,
   OhPositionsPanel,
 } from '@/components/safety'
@@ -54,6 +55,7 @@ export default function OccupationalHealthClient() {
           },
           { key: 'positions', label: '岗位危害', children: <OhPositionsPanel /> },
           { key: 'hazardFactors', label: '危害因素PPE', children: <OhHazardFactorsPanel /> },
+          { key: 'laborSupply', label: '劳保用品', children: <OhLaborSupplyPanel /> },
           { key: 'applications', label: '转岗离岗申请', children: <OhApplicationsPanel /> },
           { key: 'followups', label: '异常随访', children: <OhFollowupsPanel /> },
         ]}

@@ -1298,6 +1298,7 @@ async def query_oh(
     keyword: str = "",
     status: str = "",
     category: str = "",
+    protection_type: str = "",
     person_id: str = "",
     due_order: bool = False,
     transfer_type: str = "",
@@ -1310,13 +1311,16 @@ async def query_oh(
         entity: positions=岗位危害台账 / hazard_factors=PPE 映射字典 /
             followups=异常随访闭环 / applications=转岗离岗申请 /
             monitors=职业危害因素监测 /
+            labor=劳保用品产品目录（名称/型号/防护类型/厂家，含检测报告有无） /
             hazard_enums=危害因素标准字典（42 项，无其他参数）
         department: 部门（positions）
         hazard_factors_status: 登记状态 filled/empty/inferred（positions）
         keyword: 关键词（hazard_factors 按名称；applications 按编号/姓名/部门；
-            monitors 按监测编号/场所/位置）
+            monitors 按监测编号/场所/位置；labor 按名称/型号/厂家/防护类型）
+        protection_type: 防护类型精确（labor：呼吸防护/手部防护/足部防护…九类）
+        category: 随访指标类别 lab/vision/hearing/physique/other（followups）；
+            labor 按类别精确（手套/劳保鞋/口罩…）
         status: followups: open/followed/closed/expired；applications: 已通过/审批中等
-        category: 随访指标类别 lab/vision/hearing/physique/other（followups）
         person_id: 人员 ID（UUID，followups 只看某人）
         due_order: 到期优先排序（followups）
         transfer_type: transfer=转岗 / post_employment=离岗（applications）
@@ -1333,6 +1337,7 @@ async def query_oh(
     keyword = keyword or None
     status = status or None
     category = category or None
+    protection_type = protection_type or None
     person_id = person_id or None
     transfer_type = transfer_type or None
     detection_type = detection_type or None
@@ -1363,12 +1368,67 @@ async def query_oh(
         )
     if entity == "hazard_enums":
         return await _query_oh_hazard_enums_impl(ctx)
+    if entity == "labor":
+        return await _query_oh_labor_impl(
+            ctx, keyword=keyword, category=category,
+            protection_type=protection_type,
+            limit=30 if limit is None else limit,
+        )
     return {
         "error": (
             f"未知 entity={entity!r}，可选：positions / hazard_factors / "
-            f"followups / applications / monitors / hazard_enums"
+            f"followups / applications / monitors / labor / hazard_enums"
         )
     }
+
+
+async def _query_oh_labor_impl(
+    ctx: RunContext[SafetyDeps],
+    *,
+    keyword: str | None = None,
+    category: str | None = None,
+    protection_type: str | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
+    """查询劳保用品产品目录（labor_supply 直读；开关独立于 OH 直读闸）。
+
+    Args:
+        keyword: 名称/型号/厂家/防护类型包含匹配
+        category: 类别精确（手套/劳保鞋/口罩…）
+        protection_type: 防护类型精确（呼吸防护/手部防护…九类）
+        limit: 返回条数上限（默认 30；目录全量 102 项）
+
+    Returns:
+        dict: {"items": [{name, model, category, protection_type, unit, vendor,
+        lifespan_years, has_report}], "total": int, "message"?: str}
+        （total=过滤后总数，截断前口径）
+    """
+    from app.modules.safety.service.labor_supply import ledger as ls_ledger
+    from app.modules.safety.service.labor_supply.reader import filter_products
+
+    if not ls_ledger.enabled():
+        return {"items": [], "total": 0, "message": "劳保直读未启用（SAFETY_LABOR_SUPPLY_DIRECT_ENABLED）"}
+    try:
+        views = await ls_ledger.fetch_products()
+    except Exception:
+        return {"items": [], "total": 0, "message": "劳保用品目录暂不可用（直读失败），请稍后重试"}
+    hits = filter_products(
+        views, keyword=keyword, category=category, protection_type=protection_type
+    )
+    items = [
+        {
+            "name": v.name,
+            "model": v.model,
+            "category": v.category,
+            "protection_type": v.protection_type,
+            "unit": v.unit,
+            "vendor": v.vendor,
+            "lifespan_years": v.lifespan_years,
+            "has_report": v.has_report,
+        }
+        for v in hits[:limit]
+    ]
+    return {"items": items, "total": len(hits)}
 
 
 async def _query_oh_monitors_impl(

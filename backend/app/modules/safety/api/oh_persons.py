@@ -26,6 +26,7 @@ from app.modules.safety.schemas import (
     OhProfileViolationOut,
     OhTrainingAttendeeOut,
 )
+from app.modules.safety.schemas.oh_persons import OhLaborPpeOut
 from app.modules.safety.service import OhPersonService, OhProfileService
 
 oh_persons_router = APIRouter()
@@ -134,6 +135,11 @@ async def get_oh_person_profile(
         platform=(
             OhPlatformIdentity.model_validate(profile["platform"])
             if profile.get("platform") is not None
+            else None
+        ),
+        labor_ppe=(
+            OhLaborPpeOut.model_validate(profile["labor_ppe"])
+            if profile.get("labor_ppe") is not None
             else None
         ),
         match_notes=profile["match_notes"],

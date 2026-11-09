@@ -222,8 +222,34 @@ class OhPlatformIdentity(BaseModel):
     message: str | None = Field(None, description="降级/未匹配提示")
 
 
+class OhLaborPpeItemOut(BaseModel):
+    """应配劳保条目（配备标准行 × 产品目录 join）"""
+
+    name: str = Field(..., description="劳保用品名称")
+    model: str = Field("", description="型号")
+    category: str = Field("", description="类别")
+    protection_type: str = Field("", description="防护类型")
+    cycle: str = Field("", description="配备周期（按需/3月/2月/一次性使用/2.5年）")
+    provision: str = Field("", description="配备情况（个人/岗位）")
+    monitor_item: str = Field("", description="关联检测项目（危害因素）")
+    unit_workshop: str = Field("", description="单元/车间")
+    lifespan_years: float | None = Field(None, description="有效期/年（目录 join）")
+    has_report: bool = Field(False, description="目录中是否有检测报告")
+    source_record_id: str = Field("", description="配备标准行 record_id")
+
+
+class OhLaborPpeOut(BaseModel):
+    """第 7 源信封（三级匹配链：position > dept > none）"""
+
+    match_level: str = Field(..., description="position | dept | none")
+    department: str = Field("", description="匹配用部门")
+    position: str = Field("", description="匹配用岗位")
+    items: list[OhLaborPpeItemOut] = Field(default_factory=list)
+    match_note: str = Field("", description="匹配口径说明")
+
+
 class OhPersonProfile(BaseModel):
-    """个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 + 平台身份"""
+    """个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 + 平台身份 + 应配劳保"""
 
     person: OhPersonResponse
     exams: list[Any] = Field(default_factory=list, description="体检记录链（OhHealthExamResponse）")
@@ -240,7 +266,10 @@ class OhPersonProfile(BaseModel):
     platform: OhPlatformIdentity | None = Field(
         None, description="3.x 平台身份卡（第 6 源；None=采集异常降级，见 errors）"
     )
+    labor_ppe: OhLaborPpeOut | None = Field(
+        None, description="应配劳保（第 7 源；None=采集异常降级，见 errors）"
+    )
     match_notes: dict[str, str | None] = Field(
-        default_factory=dict, description="匹配口径标注: trainings/violations"
+        default_factory=dict, description="匹配口径标注: trainings/violations/labor"
     )
     errors: list[str] = Field(default_factory=list, description="降级源标注")

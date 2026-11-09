@@ -53,6 +53,7 @@ export { default as OhApplicationsPanel } from './OhApplicationsPanel'
 export { default as OhApplicationDrawer } from './OhApplicationDrawer'
 export { default as OhTransferDiffCard } from './OhTransferDiffCard'
 export { default as OhFollowupsPanel } from './OhFollowupsPanel'
+export { default as OhLaborSupplyPanel } from './OhLaborSupplyPanel'
 
 // ── 持证到期预警（Cert Warning）──
 export { default as CertWarningPanel } from './CertWarningPanel'

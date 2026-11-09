@@ -183,6 +183,81 @@ class OhProfileService:
             person
         )
 
+    async def _get_labor_ppe(self, person: Any) -> dict[str, Any] | None:
+        """第 7 源：应配劳保（labor_supply 直读，duck-type person，模式无关）。
+
+        三级匹配链（岗名精确交集实测仅 13/280，部门交集 15/15——部门级是主承重）：
+        1. position：部门+岗位/工种 精确匹配配备行；
+        2. dept：同部门全部配备行（match_note 标注按部门）；
+        3. none：部门也对不上（职能部门等）→ 空清单 + 说明，非错误。
+        开关关 → none + 未启用标注（非错误）；源异常向上抛由 build_profile
+        降级进 errors。条目 join 产品目录补有效期/检测报告有无。
+        """
+        from app.modules.safety.service.labor_supply import ledger as ls_ledger
+
+        def _ppe_envelope(
+            level: str, dept: str, pos: str, items: list[dict[str, Any]], note: str
+        ) -> dict[str, Any]:
+            return {
+                "match_level": level,
+                "department": dept,
+                "position": pos,
+                "items": items,
+                "match_note": note,
+            }
+
+        if not ls_ledger.enabled():
+            return _ppe_envelope("none", "", "", [], "劳保直读未启用（SAFETY_LABOR_SUPPLY_DIRECT_ENABLED）")
+
+        if hasattr(person, "mapped"):
+            dept = str(person.mapped.get("department") or "").strip()
+            pos = str(person.mapped.get("position") or "").strip()
+        else:
+            dept = str(getattr(person, "department", None) or "").strip()
+            pos = str(getattr(person, "position", None) or "").strip()
+
+        standards = await ls_ledger.fetch_position_standards()
+        products = {
+            p.name: p for p in await ls_ledger.fetch_products()
+        }
+
+        def _join(std) -> dict[str, Any]:  # PositionStandardView → 条目
+            prod = products.get(std.name)
+            return {
+                "name": std.name,
+                "model": std.model or (prod.model if prod else ""),
+                "category": std.category or (prod.category if prod else ""),
+                "protection_type": std.protection_type
+                or (prod.protection_type if prod else ""),
+                "cycle": std.cycle,
+                "provision": std.provision,
+                "monitor_item": std.monitor_item,
+                "unit_workshop": std.unit_workshop,
+                "lifespan_years": prod.lifespan_years if prod else None,
+                "has_report": bool(prod and prod.has_report),
+                "source_record_id": std.record_id,
+            }
+
+        if dept:
+            dept_rows = [s for s in standards if s.department == dept]
+            if pos:
+                hits = [s for s in dept_rows if s.position == pos]
+                if hits:
+                    return _ppe_envelope(
+                        "position", dept, pos,
+                        [_join(s) for s in hits], "按部门+岗位精确匹配",
+                    )
+            if dept_rows:
+                return _ppe_envelope(
+                    "dept", dept, pos,
+                    [_join(s) for s in dept_rows],
+                    "岗位未精确匹配，按部门展示全部配备标准",
+                )
+        return _ppe_envelope(
+            "none", dept, pos, [],
+            "该部门暂无劳保配备标准行（职能部门或未维护）",
+        )
+
     # ── 聚合入口 ──
 
     async def build_profile(self, person_ref: str) -> dict[str, Any] | None:
@@ -207,8 +282,12 @@ class OhProfileService:
         db_task = self._get_db_sources(person, direct=direct)
         violation_task = self._get_violations(person)
         platform_task = self._get_platform_identity(person)
-        (db_result, violation_result, platform_result) = await asyncio.gather(
-            db_task, violation_task, platform_task, return_exceptions=True
+        labor_task = self._get_labor_ppe(person)
+        (db_result, violation_result, platform_result, labor_result) = (
+            await asyncio.gather(
+                db_task, violation_task, platform_task, labor_task,
+                return_exceptions=True,
+            )
         )
 
         errors: list[str] = []
@@ -245,6 +324,16 @@ class OhProfileService:
         else:
             platform = platform_result
 
+        labor_ppe: dict[str, Any] | None
+        if isinstance(labor_result, Exception):
+            logger.warning(
+                "档案应配劳保源采集失败 person=%s", person.id, exc_info=labor_result
+            )
+            errors.append(f"labor_ppe: {labor_result.__class__.__name__}")
+            labor_ppe = None
+        else:
+            labor_ppe = labor_result
+
         return {
             "person": person,
             "exams": exams,
@@ -253,9 +342,11 @@ class OhProfileService:
             "trainings": trainings,
             "violations": violations,
             "platform": platform,
+            "labor_ppe": labor_ppe,
             "match_notes": {
                 "trainings": "name",
                 "violations": violation_basis,
+                "labor": labor_ppe["match_level"] if labor_ppe else None,
             },
             "errors": errors,
         }

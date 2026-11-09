@@ -13,6 +13,8 @@
 
 // ── 枚举 ──
 
+import type { OhLaborPpe } from './labor-supply'
+
 export enum OhExamType {
   PRE_EMPLOYMENT = 'pre_employment',
   PERIODIC = 'periodic',
@@ -588,7 +590,7 @@ export interface OhPlatformIdentity {
   message?: string | null
 }
 
-/** 个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 + 平台身份 */
+/** 个人完整档案：人员 + 体检 + 随访 + 转岗申请 + 培训参训 + 违章 + 平台身份 + 应配劳保 */
 export interface OhPersonProfile {
   person: OhPerson
   exams: OhHealthExam[]
@@ -597,6 +599,7 @@ export interface OhPersonProfile {
   trainings: OhTrainingAttendee[]
   violations: OhProfileViolation[] | null // null=源未接入/失败降级
   platform?: OhPlatformIdentity | null // 3.x 平台身份卡（第 6 源）
-  match_notes: { trainings?: string | null; violations?: string | null }
+  labor_ppe?: OhLaborPpe | null // 应配劳保（第 7 源；null=采集失败降级）
+  match_notes: { trainings?: string | null; violations?: string | null; labor?: string | null }
   errors: string[]
 }

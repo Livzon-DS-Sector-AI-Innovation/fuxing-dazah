@@ -1202,6 +1202,79 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
+    # ── labor_supply 劳保用品（职业健康劳保四表，纯只读直读；
+    #    无事件订阅/无镜像/无定时任务，2026-11-09 实测接入。dept5/sds_ppe
+    #    一期只注册连接不消费——接入消费时页面零改码）──
+    DomainInfo(
+        key="labor_supply",
+        label="劳保用品",
+        purpose="劳保用品产品目录+岗位配备标准直读（OH 劳保 Tab/档案应配劳保/agent query_oh(labor)）",
+        subscribe="record",
+        kinds=(
+            KindInfo(
+                kind="product",
+                label="劳保用品汇总表",
+                default_connection=DefaultConnection(
+                    app_token="T18sbkFCFaOllSsv1G7cuvMhnUd",
+                    table_id="tblSlz28xWawa4Fz",
+                    note="劳保用品产品目录（102 行，9 大防护类型）",
+                ),
+                default_mappings=(
+                    # ← service/labor_supply/reader.py to_view
+                    _m("劳保用品名称", "name", "single_select"),
+                    _m("型号", "model", "single_select"),
+                    _m("类别", "category", "single_select"),
+                    _m("防护类型", "protection_type", "single_select"),
+                    _m("单位", "unit", "text"),
+                    _m("厂家", "vendor", "text"),
+                    _m("有效期/年", "lifespan_years", "number"),
+                    _m("检测报告", "report_attachments", "attachment"),
+                    _m("说明书/产品介绍", "manual_attachments", "attachment"),
+                ),
+            ),
+            KindInfo(
+                kind="position_map",
+                label="岗位对应劳保用品表",
+                default_connection=DefaultConnection(
+                    app_token="T18sbkFCFaOllSsv1G7cuvMhnUd",
+                    table_id="tbl3qLSY4L0HfDHn",
+                    note="岗位/部门劳保配备标准（969 行混合表，消费 254 行配备行）",
+                ),
+                default_mappings=(
+                    # ← service/labor_supply/reader.py to_standard_view
+                    _m("部门", "department", "single_select"),
+                    _m("岗位/工种", "position", "text"),
+                    _m("单元/车间", "unit_workshop", "text"),
+                    _m("劳保用品名称", "ppe_name", "single_select"),
+                    _m("型号", "model", "single_select"),
+                    _m("类别", "category", "single_select"),
+                    _m("防护类型", "protection_type", "text"),
+                    _m("周期", "cycle", "single_select"),
+                    _m("配备情况", "provision", "single_select"),
+                    _m("检测项目", "monitor_item", "text"),
+                    _m("采样点位/对象", "sample_point", "text"),
+                ),
+            ),
+            KindInfo(
+                kind="dept5",
+                label="提炼工程五部库存台账表",
+                default_connection=DefaultConnection(
+                    app_token="T18sbkFCFaOllSsv1G7cuvMhnUd",
+                    table_id="tblRDzY1v3U7gSx0",
+                    note="五部劳保库存台账（入库/领用/报废/有效期自动预警；一期只注册不消费）",
+                ),
+            ),
+            KindInfo(
+                kind="sds_ppe",
+                label="危险化学品SDS个体防护表",
+                default_connection=DefaultConnection(
+                    app_token="T18sbkFCFaOllSsv1G7cuvMhnUd",
+                    table_id="tblk4HJEkwA6PbII",
+                    note="27 种化学品 SDS 个体防护（呼吸/手/眼镜/身体防护；一期只注册不消费）",
+                ),
+            ),
+        ),
+    ),
 )
 
 # 构造时断言：域 key 唯一（重复 key 会在 dict 推导时静默覆盖，故显式校验）
