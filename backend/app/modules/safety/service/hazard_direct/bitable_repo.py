@@ -342,6 +342,8 @@ class HazardView:
     effective_category: str | None = None
     effective_category_source: str | None = None
     effective_category_mismatch: bool = False
+    # D3 差异可视化：三维 {manual_raw, ai_raw, effective, source, mismatch}（fa.build_ai_vs_manual）
+    ai_vs_manual: dict[str, Any] | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -424,6 +426,15 @@ def to_view(record: dict[str, Any]) -> HazardView:
         effective_category=category_eff.value,
         effective_category_source=category_eff.source,
         effective_category_mismatch=category_eff.mismatch,
+        # D3 差异可视化：与 effective 同源（同一组 raw 值），详情 Drawer 出参
+        ai_vs_manual=fa.build_ai_vs_manual(
+            manual_level_raw,
+            ai_level_raw,
+            manual_type_raw,
+            ai_type_raw,
+            manual_category_raw,
+            ai_category_raw,
+        ),
         raw=fields,
     )
 

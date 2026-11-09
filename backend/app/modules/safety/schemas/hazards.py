@@ -198,6 +198,22 @@ class HazardReportResponse(HazardReportBase):
     effective_category_mismatch: bool | None = Field(
         None, description="人工与 AI 类别是否不一致"
     )
+    # ── 人工原文（D3 差异可视化：Drawer 对照展示）──
+    hazard_type_manual: str | None = Field(
+        None, description="隐患分类（人工原文，Bitable 原值）"
+    )
+    hazard_category_manual: str | None = Field(
+        None, description="隐患类别（人工原文，Bitable 原值）"
+    )
+    # ── AI vs 人工差异结构（P1-2/D3）：三维 {manual_raw, ai_raw, effective, source, mismatch} ──
+    # 权威口径=effective_*；本结构仅供详情对照展示（附「以人工为准」标注），不进筛选/统计。
+    ai_vs_manual: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "等级/分类/类别三维 AI vs 人工差异："
+            "{level|type|category: {manual_raw, ai_raw, effective, source, mismatch}}"
+        ),
+    )
 
     class Config:
         from_attributes = True

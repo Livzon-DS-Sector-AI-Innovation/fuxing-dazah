@@ -8,6 +8,8 @@ export interface HazardReport {
   hazard_type: HazardType
   hazard_level: HazardLevel
   hazard_level_manual?: string | null  // 人工等级（DB 兼容英文 general/serious/major 与中文 一般隐患/较大隐患/重大隐患）
+  hazard_type_manual?: string | null  // 人工分类原文（Bitable 原值；D3 差异对照）
+  hazard_category_manual?: string | null  // 人工类别原文（Bitable 原值；D3 差异对照）
   hazard_category?: HazardCategory
   description: string
   discovered_by?: string
@@ -76,6 +78,23 @@ export interface HazardReport {
   effective_category?: HazardCategory | null
   effective_category_source?: 'human' | 'ai' | null
   effective_category_mismatch?: boolean | null
+  // ── AI vs 人工差异结构（P1-2/D3）：详情 Drawer 对照展示；权威口径仍=effective_* ──
+  ai_vs_manual?: AiVsManual | null
+}
+
+// D3 差异可视化：三维 {manual_raw, ai_raw, effective, source, mismatch}（后端 fa.build_ai_vs_manual 同构）
+export interface AiVsManualItem {
+  manual_raw: string | null  // 人工原文（多选拼串）
+  ai_raw: string | null  // AI 原文
+  effective: string | null  // EN 枚举码（人工优先归一）
+  source: 'human' | 'ai' | null
+  mismatch: boolean  // 双方均有值且不等
+}
+
+export interface AiVsManual {
+  level: AiVsManualItem
+  type: AiVsManualItem
+  category: AiVsManualItem
 }
 
 export interface HazardReportFormData {

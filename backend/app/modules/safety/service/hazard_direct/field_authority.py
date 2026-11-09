@@ -663,6 +663,51 @@ def resolve_effective(manual: object, ai: object, semantic: str) -> EffectiveVal
     return EffectiveValue(value=None, source=None, mismatch=False)
 
 
+# ai_vs_manual 单语义差异项的值类型（P1-2/D3 差异可视化出参）
+AiVsManualItem = dict[str, "str | None | bool"]
+
+
+def build_ai_vs_manual(
+    manual_level: object,
+    ai_level: object,
+    manual_type: object,
+    ai_type: object,
+    manual_category: object,
+    ai_category: object,
+) -> dict[str, AiVsManualItem]:
+    """构建等级/分类/类别三维「AI vs 人工」差异结构（D3 差异可视化）。
+
+    每维：``{manual_raw, ai_raw, effective, source, mismatch}``——
+    raw 为 Bitable 原文（前端直接展示），effective/source/mismatch 语义与
+    ``resolve_effective`` 一致（人工优先、AI fallback、人工无法归一不回退）。
+    纯函数只依赖原始值，供 to_view / 接口出参 / 前端 Drawer 共用同一事实。
+    """
+    pairs = (
+        ("level", manual_level, ai_level),
+        ("type", manual_type, ai_type),
+        ("category", manual_category, ai_category),
+    )
+    result: dict[str, AiVsManualItem] = {}
+    for semantic, manual, ai in pairs:
+        eff = resolve_effective(manual, ai, semantic)
+        result[semantic] = {
+            "manual_raw": _raw_text(manual),
+            "ai_raw": _raw_text(ai),
+            "effective": eff.value,
+            "source": eff.source,
+            "mismatch": eff.mismatch,
+        }
+    return result
+
+
+def _raw_text(raw: object) -> str | None:
+    """原始值 → 展示文本（list 多选拼串 / None 保持 None / 其余 str()）。"""
+    tokens = _tokens(raw)
+    if not tokens:
+        return None
+    return ", ".join(tokens)
+
+
 # ═══════════════════════════════════════════════════════════════
 # B3 督办单写者守卫
 # ═══════════════════════════════════════════════════════════════

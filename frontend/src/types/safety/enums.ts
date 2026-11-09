@@ -27,15 +27,32 @@ export const HAZARD_LEVEL_OPTIONS = [
 ]
 
 // 隐患等级兼容中文与英文存储值（历史人工录入/Bitable 混存），统一归一到英文枚举值。
+// 多选拼接串（如「较大隐患, 一般隐患」，与后端 field_authority.normalize_level_manual
+// 同口径）按最高严重度取值（重大>较大>一般，安全侧升级）。
 // 返回 '' 表示空值；未识别的值原样返回，由调用方回退显示原文。
 export function normalizeHazardLevel(value: string | null | undefined): string {
   if (!value) return ''
-  switch (value) {
-    case '一般隐患': return HazardLevel.GENERAL
-    case '较大隐患': return HazardLevel.SERIOUS
-    case '重大隐患': return HazardLevel.MAJOR
-    default: return value
+  const tokens = value.split(/[,，、;；/]+/).map((t) => t.trim()).filter(Boolean)
+  if (tokens.length === 0) return ''
+  const rank: Record<string, number> = {
+    [HazardLevel.GENERAL]: 1,
+    [HazardLevel.SERIOUS]: 2,
+    [HazardLevel.MAJOR]: 3,
   }
+  const mapped = tokens.map((t) => {
+    switch (t) {
+      case '一般隐患': return HazardLevel.GENERAL
+      case '较大隐患': return HazardLevel.SERIOUS
+      case '重大隐患': return HazardLevel.MAJOR
+      default: return t
+    }
+  })
+  const known = mapped.filter((t) => t in rank)
+  if (known.length > 0) {
+    // 多值取最高严重度（安全侧升级，与后端归一同口径）
+    return known.reduce((a, b) => (rank[a] >= rank[b] ? a : b))
+  }
+  return value
 }
 
 // 督办等级（后端 calculate_supervision_level 返回中文值：红色预警/一般预警/closed）

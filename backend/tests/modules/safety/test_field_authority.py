@@ -332,3 +332,51 @@ def test_deprecated_fields_snapshot() -> None:
     )
 
 
+# ── T05(D3) ai_vs_manual 差异结构：纯函数（等级/分类/类别三维） ──
+
+
+def test_build_ai_vs_manual_all_three_semantics() -> None:
+    got = fa.build_ai_vs_manual(
+        manual_level="较大隐患",
+        ai_level="一般隐患",
+        manual_type="管理的缺陷",
+        ai_type="管理的缺陷",
+        manual_category=None,
+        ai_category="设备设施",
+    )
+    assert got["level"] == {
+        "manual_raw": "较大隐患",
+        "ai_raw": "一般隐患",
+        "effective": "serious",
+        "source": "human",
+        "mismatch": True,
+    }
+    assert got["type"]["mismatch"] is False
+    # 人工类别空 → fallback AI，source=ai
+    assert got["category"] == {
+        "manual_raw": None,
+        "ai_raw": "设备设施",
+        "effective": "equipment",
+        "source": "ai",
+        "mismatch": False,
+    }
+
+
+def test_build_ai_vs_manual_both_empty() -> None:
+    got = fa.build_ai_vs_manual(None, None, None, None, None, None)
+    for sem in ("level", "type", "category"):
+        assert got[sem] == {
+            "manual_raw": None,
+            "ai_raw": None,
+            "effective": None,
+            "source": None,
+            "mismatch": False,
+        }
+
+
+def test_build_ai_vs_manual_manual_unmappable_keeps_human_source() -> None:
+    """人工列有值但无法归一：source=human、effective=None、不回退 AI（口径一致）。"""
+    got = fa.build_ai_vs_manual("未知级别", "general", None, None, None, None)
+    assert got["level"]["source"] == "human"
+    assert got["level"]["effective"] is None
+    assert got["level"]["mismatch"] is False

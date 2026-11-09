@@ -249,3 +249,48 @@ def test_to_view_unmappable_manual_type_does_not_fall_back_to_ai() -> None:
     assert view.effective_type is None
     assert view.effective_type_source == "human"
     assert view.effective_type_mismatch is False
+
+
+def test_to_view_builds_ai_vs_manual_and_manual_raws() -> None:
+    """P1-2/D3：to_view 装配 ai_vs_manual 三维差异 + 人工分类/类别原文（API 出参源）。"""
+    view = bitable_repo.to_view(
+        _record(
+            **{
+                bitable_repo.F_LEVEL_MANUAL: ["较大隐患"],
+                bitable_repo.F_LEVEL_AI: "一般隐患",
+                bitable_repo.F_TYPE_MANUAL: "管理的缺陷",
+                bitable_repo.F_TYPE_AI: "物的不安全状态",
+                bitable_repo.F_CATEGORY_AI: "设备设施",
+            }
+        )
+    )
+    assert view.hazard_type_manual == "管理的缺陷"
+    assert view.hazard_category_manual is None
+    assert view.ai_vs_manual == {
+        "level": {
+            "manual_raw": "较大隐患",
+            "ai_raw": "一般隐患",
+            "effective": "serious",
+            "source": "human",
+            "mismatch": True,
+        },
+        "type": {
+            "manual_raw": "管理的缺陷",
+            "ai_raw": "物的不安全状态",
+            "effective": "management_defect",
+            "source": "human",
+            "mismatch": True,
+        },
+        "category": {
+            "manual_raw": None,
+            "ai_raw": "设备设施",
+            "effective": "equipment",
+            "source": "ai",
+            "mismatch": False,
+        },
+    }
+    # API 契约：Response 可从 view 读出三字段（from_attributes）
+    resp = HazardReportResponse.model_validate(view)
+    assert resp.ai_vs_manual == view.ai_vs_manual
+    assert resp.hazard_type_manual == "管理的缺陷"
+    assert resp.hazard_category_manual is None

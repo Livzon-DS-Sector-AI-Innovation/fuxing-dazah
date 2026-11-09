@@ -8,6 +8,7 @@ import {
   Space,
   Popover,
   Tooltip,
+  Drawer,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -20,6 +21,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { fetchHazards, fetchHazardStats } from '@/lib/api/safety/hazard'
 import type {
+  AiVsManualItem,
   HazardReport,
 } from '@/types/safety'
 import {
@@ -200,6 +202,67 @@ function effectiveLabel(field: EffectiveFieldKey, value: string | null): string 
   return options.find((o) => o.value === value)?.label ?? value
 }
 
+/** D3 差异 Drawer 单行：人工 / AI / 权威结论（以人工为准）三栏对照。 */
+function AiVsManualDiffRow({
+  label,
+  item,
+  field,
+}: {
+  label: string
+  item: AiVsManualItem
+  field: EffectiveFieldKey
+}) {
+  const effLabel = effectiveLabel(field, item.effective)
+  return (
+    <div
+      data-testid={`diff-row-${field}`}
+      style={{
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        padding: '6px 0',
+        borderBottom: '1px dashed #e8e6e3',
+        fontSize: 12,
+      }}
+    >
+      <span style={{ width: 48, color: '#787671', flexShrink: 0 }}>{label}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        人工：
+        {item.manual_raw ?? <span style={{ color: '#a4a097' }}>未填</span>}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        AI：
+        {item.ai_raw ?? <span style={{ color: '#a4a097' }}>未识别</span>}
+      </span>
+      <span style={{ flexShrink: 0, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        {item.mismatch ? (
+          <span data-testid={`diff-mismatch-${field}`} style={{ color: '#e03131' }}>
+            ● 不一致
+          </span>
+        ) : (
+          <span style={{ color: '#5b8c4a' }}>● 一致</span>
+        )}
+        <span style={{ color: '#3d3a35' }}>权威：{effLabel ?? '-'}</span>
+        {item.source === 'ai' && (
+          <span
+            style={{
+              fontSize: 10,
+              lineHeight: '16px',
+              padding: '0 4px',
+              borderRadius: 4,
+              background: '#f0eeec',
+              color: '#787671',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            AI建议（人工未填）
+          </span>
+        )}
+      </span>
+    </div>
+  )
+}
+
 /** 三列共用渲染：StatusTag +（source=ai）「AI建议」徽标 +（mismatch）Tooltip 展示 AI 建议差异。 */
 function renderEffectiveStatus(record: HazardReport, field: EffectiveFieldKey) {
   const cell = resolveEffectiveCell(record, field)
@@ -278,6 +341,8 @@ export default function HazardLedgerPage() {
 
   // ── 排序状态 ──
   const [sortField, setSortField] = useState<string | undefined>()
+  // D3 差异详情 Drawer：行点击打开（行内数据渲染，不发新请求）
+  const [detailRecord, setDetailRecord] = useState<HazardReport | null>(null)
   const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | undefined>()
 
   // ── 筛选弹出框状态 ──
@@ -1083,6 +1148,10 @@ export default function HazardLedgerPage() {
           size="small"
           loading={isLoading}
           scroll={{ x: 'max-content' }}
+          onRow={(record) => ({
+            onClick: () => setDetailRecord(record),
+            style: { cursor: 'pointer' },
+          })}
           locale={{
             emptyText: (
               <EmptyGuide
@@ -1106,6 +1175,55 @@ export default function HazardLedgerPage() {
           }}
         />
       </SectionCard>
+
+      {/* ── D3 差异详情 Drawer：行点击打开，行内数据渲染（不加新端点） ── */}
+      <Drawer
+        title={`隐患差异详情 ${detailRecord?.hazard_no ?? ''}`}
+        open={detailRecord !== null}
+        onClose={() => setDetailRecord(null)}
+        size="large"
+      >
+        {detailRecord && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {detailRecord.ai_vs_manual && (
+              <div>
+                <div
+                  data-testid="ai-vs-manual-banner"
+                  style={{
+                    background: '#fef7d6', // DESIGN token: card-tint-yellow
+                    border: '1px solid #f9e79f', // DESIGN token: card-tint-yellow-bold
+                    borderRadius: 6,
+                    padding: '8px 10px',
+                    fontSize: 12,
+                    color: '#8d6118',
+                    marginBottom: 4,
+                  }}
+                >
+                  <strong>以人工为准</strong> —— AI 识别结果仅为候选证据，权威口径取人工优先（effective）
+                </div>
+                <AiVsManualDiffRow label="等级" field="hazard_level" item={detailRecord.ai_vs_manual.level} />
+                <AiVsManualDiffRow label="分类" field="hazard_type" item={detailRecord.ai_vs_manual.type} />
+                <AiVsManualDiffRow label="类别" field="hazard_category" item={detailRecord.ai_vs_manual.category} />
+              </div>
+            )}
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>AI 识别（候选证据）</div>
+              <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>隐患描述（AI）：{detailRecord.key_defect ?? <span style={{ color: '#a4a097' }}>未识别</span>}</div>
+                <div>判定依据（AI）：{detailRecord.major_hazard_basis ?? <span style={{ color: '#a4a097' }}>无</span>}</div>
+                <div>整改建议（AI）：{detailRecord.corrective_preventive_measures ?? <span style={{ color: '#a4a097' }}>无</span>}</div>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>人工结论（权威）</div>
+              <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>隐患描述：{detailRecord.description ?? '-'}</div>
+                <div>纠正预防措施：{detailRecord.rectification_reply ?? <span style={{ color: '#a4a097' }}>未填</span>}</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Drawer>
 
     </div>
   )

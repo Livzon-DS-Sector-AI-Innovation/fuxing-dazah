@@ -355,3 +355,94 @@ describe('HazardLedgerPage 三列字段口径（P0-B / B6）', () => {
     await waitFor(() => expect(hazardNoOrder()).toEqual(['HZ-A', 'HZ-B']))
   })
 })
+
+// ═══════════════════════════════════════════════════════════════
+// P1-2/D3：行点击差异详情 Drawer（三维 diff + 以人工为准 + AI/人工对照）
+// ═══════════════════════════════════════════════════════════════
+
+describe('HazardLedgerPage 差异详情 Drawer（P1-2 / D3）', () => {
+  it('行点击打开 Drawer：以人工为准标注 + 三维 diff（不一致/一致/AI建议）', async () => {
+    mockList([
+      makeHazard({
+        id: 'recD3',
+        hazard_no: 'HZ-D3-1',
+        hazard_level_manual: '较大隐患',
+        hazard_type_manual: '管理的缺陷',
+        description: '人工描述原文-D3',
+        key_defect: 'AI 关键缺陷-D3',
+        major_hazard_basis: '《某法规》第1条：原文-D3',
+        corrective_preventive_measures: 'AI 整改建议-D3',
+        rectification_reply: '人工纠正措施-D3',
+        effective_level: HazardLevel.SERIOUS,
+        effective_level_source: 'human',
+        effective_level_mismatch: true,
+        effective_type: HazardType.MANAGEMENT_DEFECT,
+        effective_type_source: 'human',
+        effective_type_mismatch: false,
+        effective_category: HazardCategory.EQUIPMENT,
+        effective_category_source: 'ai',
+        effective_category_mismatch: false,
+        ai_vs_manual: {
+          level: {
+            manual_raw: '较大隐患',
+            ai_raw: '一般隐患',
+            effective: 'serious',
+            source: 'human',
+            mismatch: true,
+          },
+          type: {
+            manual_raw: '管理的缺陷',
+            ai_raw: '管理的缺陷',
+            effective: 'management_defect',
+            source: 'human',
+            mismatch: false,
+          },
+          category: {
+            manual_raw: null,
+            ai_raw: '设备设施',
+            effective: 'equipment',
+            source: 'ai',
+            mismatch: false,
+          },
+        },
+      }),
+    ])
+    renderWithQuery(<HazardLedgerPage />)
+    await screen.findByText('HZ-D3-1')
+    await userEvent.click(screen.getByText('HZ-D3-1'))
+
+    // 固定标注 + Drawer 标题
+    expect(await screen.findByText('以人工为准')).toBeTruthy()
+    expect(screen.getByText(/AI 识别结果仅为候选证据/)).toBeTruthy()
+
+    // 三维 diff 行：等级不一致 / 分类一致 / 类别 AI 建议（人工未填）
+    const levelRow = screen.getByTestId('diff-row-hazard_level')
+    expect(levelRow.textContent).toContain('较大隐患')
+    expect(levelRow.textContent).toContain('一般隐患')
+    expect(screen.getByTestId('diff-mismatch-hazard_level').textContent).toContain('不一致')
+    expect(screen.getByTestId('diff-row-hazard_type').textContent).toContain('一致')
+    const catRow = screen.getByTestId('diff-row-hazard_category')
+    expect(catRow.textContent).toContain('未填')
+    expect(catRow.textContent).toContain('设备设施')
+
+    // AI / 人工对照区（Drawer 独有文案）
+    expect(screen.getByText(/AI 关键缺陷-D3/)).toBeTruthy()
+    expect(screen.getByText(/《某法规》第1条：原文-D3/)).toBeTruthy()
+    expect(screen.getByText(/AI 整改建议-D3/)).toBeTruthy()
+    // 描述同时出现在表格列与 Drawer → 多命中取全部
+    expect(screen.getAllByText(/人工描述原文-D3/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/人工纠正措施-D3/)).toBeTruthy()
+  })
+
+  it('无 ai_vs_manual（mirror 回退）时 Drawer 仍可打开并显示对照区，不显示 diff 区', async () => {
+    mockList([
+      makeHazard({ id: 'recD4', hazard_no: 'HZ-D4-1', description: '镜像描述-D4' }),
+    ])
+    renderWithQuery(<HazardLedgerPage />)
+    await screen.findByText('HZ-D4-1')
+    await userEvent.click(screen.getByText('HZ-D4-1'))
+    // Drawer 独有锚点（区分表格内同文本）：对照区标题
+    expect(await screen.findByText('人工结论（权威）')).toBeTruthy()
+    expect(screen.queryByTestId('diff-row-hazard_level')).toBeNull()
+  })
+})
