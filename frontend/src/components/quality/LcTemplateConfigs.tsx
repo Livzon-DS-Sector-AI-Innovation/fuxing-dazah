@@ -35,7 +35,7 @@ export default function LcTemplateConfigs() {
   const [testSection, setTestSection] = useState(0)
   const [testInputs, setTestInputs] = useState<Record<string, number | undefined>>({})
   const [testResult, setTestResult] = useState<{ items: { label: string; std_name: string; value: number | null; nd?: boolean; detail?: string }[] } | null>(null)
-  // 傻瓜式维护：上传文件自动识别同版式
+  // 简易维护：上传文件自动识别同版式
   const [autoOpen, setAutoOpen] = useState(false)
   const [autoDetecting, setAutoDetecting] = useState(false)
   const [autoPassword, setAutoPassword] = useState('zlkz6941')
@@ -239,7 +239,7 @@ export default function LcTemplateConfigs() {
       />
 
       <Modal
-        title="傻瓜式维护：上传计算表自动生成配置"
+        title="简易维护：上传计算表自动生成配置"
         open={autoOpen}
         onCancel={() => setAutoOpen(false)}
         footer={autoDetect?.candidates.length ? [

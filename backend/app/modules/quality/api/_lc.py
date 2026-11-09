@@ -220,7 +220,7 @@ def _shifted_config(cfg: dict[str, Any], dn: int, dv: int, step: int | None = No
     return c
 
 
-@router.post("/lc/templates/auto-detect", summary="傻瓜式维护：上传文件自动识别同版式模板（无需会写 JSON）")
+@router.post("/lc/templates/auto-detect", summary="简易维护：上传文件自动识别同版式模板（无需会写 JSON）")
 async def auto_detect_template_endpoint(
     file: UploadFile = File(...),
     password: str | None = Form(default=None, description="文件密码（加密计算表用）"),
@@ -229,7 +229,7 @@ async def auto_detect_template_endpoint(
 ) -> JSONResponse:
     """把上传的计算表和库里全部配置逐一「试版式」：能提取出≥3个有效值的即视为同版式候选。
 
-    返回 table_no 与候选列表（含提取组分样例），供前端傻瓜式确认生成。
+    返回 table_no 与候选列表（含提取组分样例），供前端简易确认生成。
     """
     from pathlib import Path as _Path
 
@@ -311,7 +311,7 @@ async def auto_detect_template_endpoint(
     return success_response(data={"table_no": table_no, "candidates": candidates})
 
 
-@router.post("/lc/templates/auto-create", summary="傻瓜式维护：按同版式模板一键生成新表号配置")
+@router.post("/lc/templates/auto-create", summary="简易维护：按同版式模板一键生成新表号配置")
 async def auto_create_template_endpoint(
     payload: dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
