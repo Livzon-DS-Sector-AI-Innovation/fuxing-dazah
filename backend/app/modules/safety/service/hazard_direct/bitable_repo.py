@@ -41,7 +41,7 @@ from app.modules.safety.service.bitable_direct import fields as bd_fields
 from app.modules.safety.service.bitable_direct import filters as bd_filters
 from app.modules.safety.service.bitable_direct import locks as bd_locks
 from app.modules.safety.service.bitable_direct import writer as bd_writer
-from app.modules.safety.service.hazard_direct import config
+from app.modules.safety.service.hazard_direct import config, writeback_trace
 from app.modules.safety.service.hazard_direct import field_authority as fa
 from app.modules.safety.service.hazard_direct.field_authority import (
     F_ADVICE_AI as F_ADVICE_AI,
@@ -959,7 +959,8 @@ async def write_ai_analysis(
     D5 CAS：传 ``snapshot_fields``（轮询取数时的 fields）时写前回读比对
     目标列，被并发修改抛 ``WriteConflictError``（整条跳过零 PUT）。
 
-    只写多维表格，不写数据库。
+    只写多维表格；P2-2 留痕开关开时旁挂 agent_triggers 留痕行
+    （thread_key=bitable:hazard:<record_id>，成败终态；关=零 DB 写）。
     """
     writeback: dict[str, Any] = {}
     if hazard_no:
@@ -999,20 +1000,41 @@ async def write_ai_analysis(
         return False
     # B1 写白名单钉子：AI 写路径不得写人工列/白名单外字段（越权即抛，不发起写入）
     fa.assert_write_allowed("ai_analysis", writeback)
+    trace_fields = sorted(writeback)
     # D5 CAS：写前回读，目标列已被并发修改 → 整条跳过（WriteConflictError）
     if snapshot_fields is not None:
-        await cas_guard(
-            client,
-            record_id,
-            snapshot_fields=snapshot_fields,
-            targets={k: _CAS_KINDS[k] for k in writeback},
-        )
+        try:
+            await cas_guard(
+                client,
+                record_id,
+                snapshot_fields=snapshot_fields,
+                targets={k: _CAS_KINDS[k] for k in writeback},
+            )
+        except WriteConflictError:
+            await writeback_trace.record_writeback(
+                writer=writeback_trace.WRITER_AI_ANALYSIS,
+                record_id=record_id,
+                fields=trace_fields,
+                applied=False,
+                note="WriteConflictError",
+                hazard_no=hazard_no or "",
+            )
+            raise
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
         interval_seconds=0.0,
     )
-    return result.written > 0
+    applied = result.written > 0
+    await writeback_trace.record_writeback(
+        writer=writeback_trace.WRITER_AI_ANALYSIS,
+        record_id=record_id,
+        fields=trace_fields,
+        applied=applied,
+        note="" if applied else f"failed={result.failed}",
+        hazard_no=hazard_no or "",
+    )
+    return applied
 
 
 async def write_scoring(
@@ -1028,8 +1050,8 @@ async def write_scoring(
     D5 CAS：传 ``snapshot_fields``（判据查询时的 fields）时写前回读——
     判据保证快照评分结果为空，窗口内人工已填评分则回读非空 → 冲突跳过。
 
-    只写多维表格，不写数据库。数字字段直传 float（format_write_value
-    仅对多选整形，其余类型原样）。
+    只写多维表格；P2-2 留痕开关开时旁挂 agent_triggers 留痕行（关=零 DB 写）。
+    数字字段直传 float（format_write_value 仅对多选整形，其余类型原样）。
     """
     writeback: dict[str, Any] = {
         F_SCORE: round(float(total), 1),
@@ -1037,20 +1059,39 @@ async def write_scoring(
     }
     # B1 写白名单钉子：⑤ 只允许写评分 2 列（不碰人工列）
     fa.assert_write_allowed("scoring", writeback)
+    trace_fields = sorted(writeback)
     # D5 CAS：写前回读（评分结果被人工并发填值 → WriteConflictError 零 PUT）
     if snapshot_fields is not None:
-        await cas_guard(
-            client,
-            record_id,
-            snapshot_fields=snapshot_fields,
-            targets={k: _CAS_KINDS[k] for k in writeback},
-        )
+        try:
+            await cas_guard(
+                client,
+                record_id,
+                snapshot_fields=snapshot_fields,
+                targets={k: _CAS_KINDS[k] for k in writeback},
+            )
+        except WriteConflictError:
+            await writeback_trace.record_writeback(
+                writer=writeback_trace.WRITER_SCORING,
+                record_id=record_id,
+                fields=trace_fields,
+                applied=False,
+                note="WriteConflictError",
+            )
+            raise
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
         interval_seconds=0.0,
     )
-    return result.written > 0
+    applied = result.written > 0
+    await writeback_trace.record_writeback(
+        writer=writeback_trace.WRITER_SCORING,
+        record_id=record_id,
+        fields=trace_fields,
+        applied=applied,
+        note="" if applied else f"failed={result.failed}",
+    )
+    return applied
 
 
 async def write_review(
@@ -1063,6 +1104,7 @@ async def write_review(
     """② 写回 AI 初审结果（结论 + 说明）。
 
     conclusion 必须是「AI初审结果」字段的既有选项之一；未知结论由调用方拦截，不写。
+    P2-2 留痕开关开时旁挂 agent_triggers 留痕行（关=零 DB 写）。
     """
     writeback: dict[str, Any] = {F_REVIEW_RESULT: conclusion, F_REVIEW_NOTE: summary}
     # B1 写白名单钉子：② 只允许写 AI 初审 2 列（不碰人工列）
@@ -1072,7 +1114,15 @@ async def write_review(
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
         interval_seconds=0.0,
     )
-    return result.written > 0
+    applied = result.written > 0
+    await writeback_trace.record_writeback(
+        writer=writeback_trace.WRITER_REVIEW,
+        record_id=record_id,
+        fields=sorted(writeback),
+        applied=applied,
+        note="" if applied else f"failed={result.failed}",
+    )
+    return applied
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -152,6 +152,12 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "留痕行（关 = 零旁挂零行为变化；开 = 仅增留痕数据，交互不变）",
     ),
     _flag(
+        "SAFETY_HAZARD_WRITEBACK_TRACE_ENABLED", False,
+        "①②⑤/P2-1 写回 Thread 留痕 + 危险源辨识收编留痕（P2-2：写回动作旁挂"
+        "落 agent_triggers，thread_key=bitable:hazard:<record_id> 按记录聚合；"
+        "关 = 零 DB 写零行为变化）",
+    ),
+    _flag(
         "SAFETY_AI_VISION_JSON_MODE_ENABLED", False,
         "视觉 AI 调用 response_format=json_object 灰度（A2：开 = 请求体带 json mode；"
         "端点 400 不支持时自动去参重试一次；默认关，热生效）",

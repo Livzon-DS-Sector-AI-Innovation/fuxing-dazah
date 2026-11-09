@@ -167,7 +167,11 @@ def _cas_conflicts(
 async def _write_writeback_audit(
     report: ExceptionReviewReport, outcome: WritebackOutcome
 ) -> None:
-    """写回留痕（ai_call_audits 一行；失败不影响写回结果）。"""
+    """写回留痕（ai_call_audits 一行 + P2-2 Thread 留痕；失败不影响写回结果）。
+
+    Thread 留痕（writeback_trace）：全部终态路径都过本漏斗，一处挂载；
+    gate_blocked=判据性拦截零写入，不留 Thread 行。
+    """
     try:
         from app.modules.safety.ai_audit.audited_client import write_audit_record
 
@@ -187,6 +191,19 @@ async def _write_writeback_audit(
         )
     except Exception:  # noqa: BLE001
         logger.warning("写回审计写入失败", exc_info=True)
+    try:
+        if outcome.status in (WB_SUCCESS, WB_FAILED, WB_CAS_CONFLICT):
+            from app.modules.safety.service.hazard_direct import writeback_trace
+
+            await writeback_trace.record_writeback(
+                writer=writeback_trace.WRITER_EXCEPTION_REVIEW,
+                record_id=report.record_id,
+                fields=outcome.written_fields or sorted(build_writeback_fields(report)),
+                applied=outcome.status == WB_SUCCESS,
+                note=outcome.note,
+            )
+    except Exception:  # noqa: BLE001 — Thread 留痕失败不影响写回结果
+        logger.warning("写回 Thread 留痕失败", exc_info=True)
 
 
 def _finalize(
