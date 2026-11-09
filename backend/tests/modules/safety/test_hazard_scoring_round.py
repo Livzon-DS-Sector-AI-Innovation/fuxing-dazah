@@ -149,7 +149,9 @@ class TestRunScoringRound:
     async def test_success_writes_two_columns(self, monkeypatch):
         written: list[tuple[str, dict[str, Any]]] = []
 
-        async def fake_write(client, record_id, *, total, note):
+        async def fake_write(
+            client, record_id, *, total, note, snapshot_fields=None
+        ):
             written.append((record_id, {"total": total, "note": note}))
             return True
 
@@ -176,7 +178,9 @@ class TestRunScoringRound:
     async def test_failure_writes_nothing_and_records_reason(self, monkeypatch):
         written: list[tuple[str, dict[str, Any]]] = []
 
-        async def fake_write(client, record_id, *, total, note):
+        async def fake_write(
+            client, record_id, *, total, note, snapshot_fields=None
+        ):
             written.append((record_id, {"total": total, "note": note}))
             return True
 

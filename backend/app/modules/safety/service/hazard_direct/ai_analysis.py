@@ -672,6 +672,8 @@ async def run_ai_analysis_round(
                         hazard_no=hazard_no,
                         output={**output, "advice_text": _build_advice_text(output)},
                         supervision_label=_supervision_label(view),
+                        # D5 CAS：写前回读，目标列窗口内被改 → WriteConflictError
+                        snapshot_fields=record.get("fields") or {},
                     )
                     if not ok:
                         raise _WritebackError("写回 Bitable 返回 False")
@@ -687,6 +689,11 @@ async def run_ai_analysis_round(
                     output.get("hazard_level"), output.get("hazard_category"),
                     round_id,
                 )
+            except bitable_repo.WriteConflictError as exc:
+                # D5 CAS：目标列被并发修改 → 跳过（零 PUT）。非失败：不烧 attempts、
+                # 不进死信；下轮取到新快照后按新值计算，自然收敛。
+                result.conflicts += 1
+                logger.warning("① 写回冲突跳过: %s", exc)
             except Exception as exc:
                 category = _categorize_failure(exc)
                 reason = f"{type(exc).__name__}: {exc}"[:200]

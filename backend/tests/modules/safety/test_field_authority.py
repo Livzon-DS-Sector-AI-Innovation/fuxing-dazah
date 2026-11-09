@@ -180,13 +180,18 @@ def test_supervision_write_allowed_reads_live_config(
 
 
 def test_human_rules_use_human_first_read_policy() -> None:
-    """人工列不得被登记为 AI_ONLY 读策略（否则矩阵自相矛盾）。"""
+    """人工列不得被登记为 AI_ONLY 读策略（否则矩阵自相矛盾）。
+
+    P1-2/D1 例外：显式停用的无消费人工列允许 DEPRECATED（处置清单拍板，
+    名单由 test_deprecated_fields_snapshot 快照锁定）。
+    """
     human_rules = [r for r in fa.FIELD_RULES if r.owner is fa.FieldOwner.HUMAN]
     assert human_rules, "矩阵应包含人工列"
     bad = [
         r.field
         for r in human_rules
-        if r.read_policy is not fa.ReadPolicy.HUMAN_FIRST_AI_FALLBACK
+        if r.read_policy
+        not in (fa.ReadPolicy.HUMAN_FIRST_AI_FALLBACK, fa.ReadPolicy.DEPRECATED)
     ]
     assert bad == []
 
@@ -275,5 +280,55 @@ def test_supervision_display_cn_aligned_with_source() -> None:
 
     assert HAZARD_LEVEL_CN == {"general": "一般", "serious": "较大", "major": "重大"}
     assert set(HAZARD_LEVEL_CN) == set(fa.HAZARD_LEVEL_MAP.values())
+
+
+# ── T03(D1) 遗留字段生命周期登记：7 个无消费人工列=停用、重复标签=废弃 ──
+
+_UNCONSUMED_HUMAN_FIELDS = (
+    "检查人员状态",
+    "安全办人员状态",
+    "安全经理确认",
+    "安全总监确认",
+    "检查级别",
+    "检查人员身份",
+    "重点缺陷",
+)
+
+
+def test_unconsumed_human_columns_registered_deprecated() -> None:
+    """C5 7 个无消费人工列：owner=HUMAN + 读口径 DEPRECATED（处置=停用）。"""
+    for name in _UNCONSUMED_HUMAN_FIELDS:
+        rule = fa.rule_of(name)
+        assert rule is not None, f"{name} 未登记"
+        assert rule.owner is fa.FieldOwner.HUMAN, name
+        assert rule.read_policy is fa.ReadPolicy.DEPRECATED, name
+        assert "停用" in rule.note, name
+
+
+def test_duplicate_tag_disposition_documented() -> None:
+    """重复标签（AI）：写入方已查明=非本系统代码；处置=废弃待删（先核实飞书自动化）。"""
+    rule = fa.rule_of("重复标签（AI）")
+    assert rule is not None
+    assert rule.owner is fa.FieldOwner.AI
+    assert "废弃" in rule.note
+    assert rule.writers == frozenset()  # 白名单禁止任何写链写入
+
+
+def test_deprecated_fields_snapshot() -> None:
+    """DEPRECATED 全集快照：AI审核* 5 + 重复标签 1 + 无消费人工列 7（增删列须显式更新本测试）。"""
+    deprecated = sorted(
+        r.field for r in fa.FIELD_RULES if r.read_policy is fa.ReadPolicy.DEPRECATED
+    )
+    assert deprecated == sorted(
+        (
+            "AI审核结论",
+            "AI审核理由",
+            "AI发现问题",
+            "AI补充建议",
+            "AI审核时间",
+            "重复标签（AI）",
+            *_UNCONSUMED_HUMAN_FIELDS,
+        )
+    )
 
 

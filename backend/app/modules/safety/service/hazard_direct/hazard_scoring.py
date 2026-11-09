@@ -150,7 +150,12 @@ async def run_scoring_round(
 
                 async with write_lock:
                     ok = await bitable_repo.write_scoring(
-                        client, record_id, total=total, note=note
+                        client,
+                        record_id,
+                        total=total,
+                        note=note,
+                        # D5 CAS：判据保证快照评分结果为空；窗口内人工已填 → 冲突跳过
+                        snapshot_fields=record.get("fields") or {},
                     )
                     if not ok:
                         raise RuntimeError("写回 Bitable 返回 False")
@@ -160,6 +165,10 @@ async def run_scoring_round(
                     "⑤ 完成: record_id=%s score=%s band=%s hit=%s",
                     record_id, total, output.band.value, output.major_hazard.hit,
                 )
+            except bitable_repo.WriteConflictError as exc:
+                # D5 CAS：评分列被人工并发填写 → 跳过（零 PUT，非失败不计告警）
+                result.conflicts += 1
+                logger.warning("⑤ 写回冲突跳过: %s", exc)
             except Exception as exc:
                 result.failed += 1
                 result.failures.append(
@@ -170,8 +179,9 @@ async def run_scoring_round(
     await asyncio.gather(*(_worker(rec) for rec in records))
 
     logger.info(
-        "⑤ 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d",
+        "⑤ 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d 冲突=%d",
         result.total, result.succeeded, result.failed, result.skipped,
+        result.conflicts,
     )
     if notify and len(result.failures) >= config.alert_min_failures():
         await notify_failures(

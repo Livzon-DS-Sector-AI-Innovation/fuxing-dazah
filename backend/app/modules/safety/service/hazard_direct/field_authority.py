@@ -362,16 +362,89 @@ FIELD_RULES: tuple[FieldRule, ...] = (
         "AI审核结论",
         FieldOwner.AI,
         read_policy=ReadPolicy.DEPRECATED,
-        note="历史遗留，无写入代码（P1 清理）",
+        note="历史遗留，无写入代码；处置=待删（建议先导出 36 条存量，见处置清单）",
     ),
-    FieldRule("AI审核理由", FieldOwner.AI, read_policy=ReadPolicy.DEPRECATED),
-    FieldRule("AI发现问题", FieldOwner.AI, read_policy=ReadPolicy.DEPRECATED),
-    FieldRule("AI补充建议", FieldOwner.AI, read_policy=ReadPolicy.DEPRECATED),
-    FieldRule("AI审核时间", FieldOwner.AI, read_policy=ReadPolicy.DEPRECATED),
+    FieldRule(
+        "AI审核理由",
+        FieldOwner.AI,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="历史遗留，无写入代码；处置=待删",
+    ),
+    FieldRule(
+        "AI发现问题",
+        FieldOwner.AI,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="历史遗留，无写入代码；处置=待删",
+    ),
+    FieldRule(
+        "AI补充建议",
+        FieldOwner.AI,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="历史遗留，无写入代码；处置=待删",
+    ),
+    FieldRule(
+        "AI审核时间",
+        FieldOwner.AI,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="历史遗留，无写入代码；处置=待删",
+    ),
     FieldRule(
         "重复标签（AI）",
         FieldOwner.AI,
-        note="写入方不明（疑飞书自动化），P1 治理",
+        read_policy=ReadPolicy.DEPRECATED,
+        note=(
+            "写入方已查明=非本系统代码（全仓库零写入零读取，疑飞书自动化/第三方）；"
+            "处置=废弃待删（先在飞书后台核实自动化后删列，见处置清单）"
+        ),
+    ),
+    # ── C5 无消费人工列（P1-2/D1 拍板：全部停用；前后端零代码消费）──
+    FieldRule(
+        "检查人员状态",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="无代码消费（设计文档 C5）；处置=停用（处置清单逐列标注）",
+    ),
+    FieldRule(
+        "安全办人员状态",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="无代码消费（设计文档 C5）；处置=停用",
+    ),
+    FieldRule(
+        "安全经理确认",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="无代码消费（设计文档 C5）；处置=停用",
+    ),
+    FieldRule(
+        "安全总监确认",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="无代码消费（设计文档 C5）；处置=停用",
+    ),
+    FieldRule(
+        "检查级别",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note=(
+            "无代码消费（设计文档 C5；注意与重度消费的「检查类别」是两个字段）；"
+            "处置=停用（后续如需接入台账筛选属新特性）"
+        ),
+    ),
+    FieldRule(
+        "检查人员身份",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note="无代码消费（设计文档 C5）；处置=停用",
+    ),
+    FieldRule(
+        "重点缺陷",
+        FieldOwner.HUMAN,
+        read_policy=ReadPolicy.DEPRECATED,
+        note=(
+            "Bitable「重点缺陷」列无代码消费（平台 key_defect 实际来源是"
+            "「隐患描述（AI）」，同名概念非该列读写）；处置=停用"
+        ),
     ),
 )
 

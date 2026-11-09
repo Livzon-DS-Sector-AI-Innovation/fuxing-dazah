@@ -280,6 +280,7 @@ async def _wire_round(
         hazard_no: str | None,
         output: dict[str, Any],
         supervision_label: str | None = None,
+        snapshot_fields: dict[str, Any] | None = None,
     ) -> bool:
         env.written.append((record_id, output))
         return env.write_ok

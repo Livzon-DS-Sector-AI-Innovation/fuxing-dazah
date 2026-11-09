@@ -41,6 +41,8 @@ class SupervisionRoundResult:
     changed: int = 0
     unchanged: int = 0
     failed: int = 0
+    # D5 CAS：写前回读发现目标列被并发修改而跳过的条数（非失败，不计告警）
+    conflicts: int = 0
     failures: list[dict[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -50,6 +52,7 @@ class SupervisionRoundResult:
             "changed": self.changed,
             "unchanged": self.unchanged,
             "failed": self.failed,
+            "conflicts": self.conflicts,
             "failures": self.failures,
         }
 
@@ -144,11 +147,17 @@ async def run_supervision_round(
                     record_id, current or "(空)", label,
                 )
                 return
-            await writeback_supervision_label(client, record_id, label)
+            await writeback_supervision_label(
+                client, record_id, label, snapshot_label=current
+            )
             result.changed += 1
             logger.info(
                 "③ 督办等级更新: record_id=%s %s → %s", record_id, current or "(空)", label
             )
+        except bitable_repo.WriteConflictError as exc:
+            # D5 CAS：督办等级窗口内被并发改写 → 跳过（下轮按新快照收敛），不计失败
+            result.conflicts += 1
+            logger.warning("③ 写回冲突跳过: %s", exc)
         except Exception as exc:
             result.failed += 1
             result.failures.append(
@@ -159,8 +168,8 @@ async def run_supervision_round(
     await asyncio.gather(*(_worker(rec) for rec in records))
 
     logger.info(
-        "③ 本轮结束: 总数=%d 变更=%d 未变=%d 失败=%d",
-        result.total, result.changed, result.unchanged, result.failed,
+        "③ 本轮结束: 总数=%d 变更=%d 未变=%d 失败=%d 冲突=%d",
+        result.total, result.changed, result.unchanged, result.failed, result.conflicts,
     )
     if notify and result.failures:
         from app.modules.safety.service.hazard_direct import config
@@ -173,10 +182,18 @@ async def run_supervision_round(
     return result
 
 
-async def writeback_supervision_label(client: Any, record_id: str, label: str) -> None:
+async def writeback_supervision_label(
+    client: Any,
+    record_id: str,
+    label: str,
+    *,
+    snapshot_label: str | None = None,
+) -> None:
     """写回督办等级（锁内格式化+更新+0.5s 串行）——整轮版与 superagent 单记录版共用。
 
     ③ 是「督办等级」唯一写者（B3）：写前经 field_authority 白名单断言（B1）。
+    D5 CAS：传 ``snapshot_label``（取数时的督办等级现值）则写前回读比对，
+    窗口内被并发改写 → ``WriteConflictError``（整条跳过零 PUT）。
     """
     from app.modules.safety.feishu.bitable_handler import (
         _format_bitable_select_value,
@@ -190,6 +207,14 @@ async def writeback_supervision_label(client: Any, record_id: str, label: str) -
     }
     fa.assert_write_allowed(fa.WRITER_SUPERVISION, writeback)
     async with _WRITE_LOCK:
+        if snapshot_label is not None:
+            # D5 CAS：复用 bitable_repo.cas_guard（回读异常/空 fail-open，冲突抛错零 PUT）
+            await bitable_repo.cas_guard(
+                client,
+                record_id,
+                snapshot_fields={bitable_repo.F_SUPERVISION: snapshot_label},
+                targets={bitable_repo.F_SUPERVISION: "select"},
+            )
         ok = await client.update_record(record_id, writeback)
         if not ok:
             raise RuntimeError("写回 Bitable 返回 False")
@@ -218,7 +243,7 @@ async def run_supervision_for_record(record: dict[str, Any]) -> dict[str, Any]:
     from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 
     client = SafetyBitableClient()
-    await writeback_supervision_label(client, record_id, label)
+    await writeback_supervision_label(client, record_id, label, snapshot_label=current)
     logger.info(
         "③ [superagent] 督办等级更新: record_id=%s %s → %s",
         record_id, current or "(空)", label,

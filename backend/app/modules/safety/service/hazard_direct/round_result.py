@@ -32,6 +32,9 @@ class RoundResult:
     # C5(F9) RAG 全局降级短路熔断：本轮连续 retrieval_degraded 达阈值后跳过剩余
     # 记录（仅影响本轮，下一轮重新计数）；调度/告警可据此观察本轮降级范围。
     breaker_tripped: bool = False
+    # D5 CAS：写前回读发现目标列被并发修改而跳过的条数（非失败：不计 attempts、
+    # 不进死信、不触发告警；下轮判据基于新快照自然收敛）。
+    conflicts: int = 0
 
     @property
     def non_infra_failed(self) -> int:
@@ -49,4 +52,5 @@ class RoundResult:
             "infra_failed": self.infra_failed,
             "non_infra_failed": self.non_infra_failed,
             "breaker_tripped": self.breaker_tripped,
+            "conflicts": self.conflicts,
         }

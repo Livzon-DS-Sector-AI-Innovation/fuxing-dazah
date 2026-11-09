@@ -842,6 +842,93 @@ def _warn_supervision_fallback(record_id: str) -> None:
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+# D5 写回护栏 CAS：写前回读，目标列仍等于计算快照才写
+# ═══════════════════════════════════════════════════════════════
+
+
+class WriteConflictError(Exception):
+    """D5 CAS：写前回读发现目标列已被并发修改（整条跳过、零 PUT、不计失败）。
+
+    竞态窗口=「轮询取数快照 → 计算（AI 秒~分钟级）→ 拿锁 PUT」；窗口内人工
+    或他链改写目标列时，本写链的值基于旧快照，写入即覆盖（lost update）。
+    冲突不重试不告警推送：下一轮判据基于新快照自然收敛。
+    """
+
+    def __init__(self, record_id: str, changed_fields: list[str]) -> None:
+        self.record_id = record_id
+        self.changed_fields = changed_fields
+        super().__init__(
+            f"写回冲突跳过（目标列已被并发修改）: record_id={record_id} "
+            f"changed={changed_fields}"
+        )
+
+
+def cas_field_conflicts(
+    snapshot_fields: dict[str, Any],
+    current_fields: dict[str, Any],
+    targets: dict[str, str],
+) -> list[str]:
+    """CAS 纯比对：目标列「计算快照现值 vs 写前回读现值」（同口径格式化）。
+
+    targets: 字段名 → 解析口径（"select" / "text" / "number"）。
+    多选 list 与逗号串、富文本数组与纯文本等同值格式视为相等（只比语义值）。
+    """
+    changed: list[str] = []
+    for name, kind in targets.items():
+        if kind == "select":
+            equal = f_select(snapshot_fields, name) == f_select(current_fields, name)
+        elif kind == "number":
+            equal = f_number(snapshot_fields, name) == f_number(current_fields, name)
+        else:
+            equal = f_text(snapshot_fields, name) == f_text(current_fields, name)
+        if not equal:
+            changed.append(name)
+    return changed
+
+
+async def cas_guard(
+    client: SafetyBitableClient,
+    record_id: str,
+    *,
+    snapshot_fields: dict[str, Any],
+    targets: dict[str, str],
+) -> None:
+    """写前回读校验；目标列已变抛 ``WriteConflictError``。
+
+    fail-open：回读异常或空 dict（``get_record`` 失败语义）时放行写入——
+    CAS 防「竞态覆盖」不防「读故障」，读故障不应阻断写链退回旧覆盖行为。
+    """
+    try:
+        current = await client.get_record(record_id)
+    except Exception:
+        logger.warning(
+            "CAS 写前回读异常，放行写入（fail-open）: record_id=%s", record_id, exc_info=True
+        )
+        return
+    if not current:
+        return
+    changed = cas_field_conflicts(snapshot_fields, current, targets)
+    if changed:
+        raise WriteConflictError(record_id, changed)
+
+
+# CAS 比对口径：写链全部可写列 → 解析方式（select=单/多选，text=文本，number=数字）
+_CAS_KINDS: dict[str, str] = {
+    F_NO: "text",
+    F_TYPE_AI: "select",
+    F_LEVEL_AI: "select",
+    F_CATEGORY_AI: "select",
+    F_DESC_AI: "text",
+    F_BASIS_AI: "text",
+    F_ADVICE_AI: "text",
+    F_SUPERVISION: "select",
+    F_SCORE: "number",
+    F_SCORING_NOTE: "text",
+}
+
+
+
 async def write_ai_analysis(
     client: SafetyBitableClient,
     record_id: str,
@@ -849,6 +936,7 @@ async def write_ai_analysis(
     hazard_no: str | None,
     output: dict[str, Any],
     supervision_label: str | None = None,
+    snapshot_fields: dict[str, Any] | None = None,
 ) -> bool:
     """① 写回 AI 识别结果（6 个 AI 列 + 隐患编号 + 条件性督办等级）。
 
@@ -857,6 +945,8 @@ async def write_ai_analysis(
     B3 督办单写者守卫：``supervision_label`` 仍由 ① 计算，但只有 ③ 督办轮询
     未开启时才回退写「督办等级」（保留兜底 + ≥300s 节流告警）；③ 开启时
     ① 只算不写（debug 日志可辨识）。
+    D5 CAS：传 ``snapshot_fields``（轮询取数时的 fields）时写前回读比对
+    目标列，被并发修改抛 ``WriteConflictError``（整条跳过零 PUT）。
 
     只写多维表格，不写数据库。
     """
@@ -898,6 +988,14 @@ async def write_ai_analysis(
         return False
     # B1 写白名单钉子：AI 写路径不得写人工列/白名单外字段（越权即抛，不发起写入）
     fa.assert_write_allowed("ai_analysis", writeback)
+    # D5 CAS：写前回读，目标列已被并发修改 → 整条跳过（WriteConflictError）
+    if snapshot_fields is not None:
+        await cas_guard(
+            client,
+            record_id,
+            snapshot_fields=snapshot_fields,
+            targets={k: _CAS_KINDS[k] for k in writeback},
+        )
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
@@ -912,8 +1010,12 @@ async def write_scoring(
     *,
     total: float,
     note: str,
+    snapshot_fields: dict[str, Any] | None = None,
 ) -> bool:
     """⑤ 写回评分结果（2 列：评分结果=数字、评分说明=文本）。
+
+    D5 CAS：传 ``snapshot_fields``（判据查询时的 fields）时写前回读——
+    判据保证快照评分结果为空，窗口内人工已填评分则回读非空 → 冲突跳过。
 
     只写多维表格，不写数据库。数字字段直传 float（format_write_value
     仅对多选整形，其余类型原样）。
@@ -924,6 +1026,14 @@ async def write_scoring(
     }
     # B1 写白名单钉子：⑤ 只允许写评分 2 列（不碰人工列）
     fa.assert_write_allowed("scoring", writeback)
+    # D5 CAS：写前回读（评分结果被人工并发填值 → WriteConflictError 零 PUT）
+    if snapshot_fields is not None:
+        await cas_guard(
+            client,
+            record_id,
+            snapshot_fields=snapshot_fields,
+            targets={k: _CAS_KINDS[k] for k in writeback},
+        )
     result = await bd_writer.write_serial(
         client,
         [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],

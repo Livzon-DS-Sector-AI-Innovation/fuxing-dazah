@@ -201,7 +201,14 @@ class TestRunScoringRoundLevelSource:
     async def _run(self, monkeypatch: pytest.MonkeyPatch, record: dict[str, Any]) -> str:
         written: list[dict[str, Any]] = []
 
-        async def fake_write(client: Any, record_id: str, *, total: float, note: str) -> bool:
+        async def fake_write(
+            client: Any,
+            record_id: str,
+            *,
+            total: float,
+            note: str,
+            snapshot_fields: dict[str, Any] | None = None,
+        ) -> bool:
             written.append({"record_id": record_id, "total": total, "note": note})
             return True
 

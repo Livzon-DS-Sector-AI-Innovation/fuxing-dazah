@@ -856,6 +856,7 @@ async def _wire_round(
         hazard_no: str | None,
         output: dict[str, Any],
         supervision_label: str | None = None,
+        snapshot_fields: dict[str, Any] | None = None,
     ) -> bool:
         if yield_points:
             await asyncio.sleep(0)
