@@ -174,6 +174,18 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_HAZARD_RETRIEVAL_CANDIDATES", "direct_gate", "int", 12,
         "① 检索每路候选数（RRF 合并前；默认 12，设计 §C11）",
     ),
+    ConfigItem(
+        "SAFETY_HAZARD_REVIEW_LLM_LIMIT", "direct_gate", "int", 3,
+        "P1-3 例外复核：单条复核 LLM 调用上限（默认 3；超限截断为 insufficient）",
+    ),
+    ConfigItem(
+        "SAFETY_HAZARD_REVIEW_TOOL_LIMIT", "direct_gate", "int", 8,
+        "P1-3 例外复核：单条复核工具调用上限（默认 8）",
+    ),
+    ConfigItem(
+        "SAFETY_HAZARD_REVIEW_DAILY_LIMIT", "direct_gate", "int", 20,
+        "P1-3 例外复核：每日复核条数上限（定时/指令合计；超限停止并汇总）",
+    ),
     _flag(
         "SAFETY_HAZARD_QUERY_LLM_REWRITE_ENABLED", False,
         "① 检索 LLM 改写路开关（P1-1：开 = 轻量 LLM 改写主路追加为一路，"

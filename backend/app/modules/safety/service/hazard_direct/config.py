@@ -10,7 +10,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.modules.safety.service.bitable_direct import gates
+
+if TYPE_CHECKING:
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        ReviewBudget,
+    )
 
 _DOMAIN = gates.DOMAIN_HAZARD
 
@@ -169,6 +176,24 @@ def write_concurrency() -> int:
 def record_lock_ttl() -> int:
     """per-record 处理锁 TTL（秒，默认 600）。"""
     return _int("SAFETY_HAZARD_POLL_LOCK_TTL", 600)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 例外复核员（P1-3 observe）
+# ═══════════════════════════════════════════════════════════════
+
+
+def review_budget() -> ReviewBudget:
+    """复核成本护栏上限（拍板⑥：单条 LLM≤3 / 工具≤8，每日≤20；app_config 可调）。"""
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        ReviewBudget,
+    )
+
+    return ReviewBudget(
+        llm_call_limit=_int("SAFETY_HAZARD_REVIEW_LLM_LIMIT", 3, minimum=1),
+        tool_call_limit=_int("SAFETY_HAZARD_REVIEW_TOOL_LIMIT", 8, minimum=1),
+        daily_limit=_int("SAFETY_HAZARD_REVIEW_DAILY_LIMIT", 20, minimum=1),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

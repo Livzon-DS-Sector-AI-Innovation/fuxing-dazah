@@ -31,6 +31,8 @@ from dataclasses import dataclass
 # 兼容层：service/ai_config.py 从此 re-export（外部 import 契约不变）。
 _AI_SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "hazard_identification": ("隐患识别", "隐患登记后 AI 识别、分类并给出整改建议", "text", "mixed"),
+    # P1-3 例外复核员（observe：多步补检死信/点名记录，不写回）
+    "hazard_exception_review": ("隐患例外复核", "例外复核员多步补检（observe，不写回）", "text", "feishu"),
     "hazard_id_bitable": ("危险源辨识", "危险源辨识 Bitable 事件流驱动的 7 步 AI 辨识", "text", "feishu"),
     "rectification_review": ("整改初审", "隐患整改方案与证据的 AI 初审", "text", "mixed"),
     "agent_chat": ("助手对话", "安全 AI 助手多轮对话", "text", "feishu"),
