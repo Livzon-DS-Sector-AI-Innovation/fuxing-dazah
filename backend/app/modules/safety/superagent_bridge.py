@@ -259,6 +259,14 @@ def register_superagent_bridge() -> None:
 
     set_dm_sender(_send_admin_dm)
 
+    # P2-2 G3：危险源辨识重放执行器（协议收编；同步留痕模式不依赖它）
+    if get_executor("hazard_id_script") is None:
+        from app.modules.safety.ai_hazard_identification.superagent_trace import (
+            register_hazard_id_executor,
+        )
+
+        register_hazard_id_executor()
+
 
 async def _feishu_card_sender(channel: dict[str, Any], body: dict[str, Any]) -> bool:
     """outbox 卡片发送（行内 chat_id 唯一权威；失败 False 走退避重试）。"""

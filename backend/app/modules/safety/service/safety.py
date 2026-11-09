@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
+from app.modules.safety.ai_hazard_identification import superagent_trace
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.service._helpers import audit_log
 from app.platform.integrations.ai.client import AIService
@@ -631,7 +632,7 @@ class SafetyService:
 
                 orchestrator = HazardIdentificationOrchestrator(
                     ai_service,
-                    session=self.db,
+                    session=self.session,
                     config=PluginConfig(temperature=0.05),
                 )
                 plugin_update = await orchestrator.run_script(item, script_number)
@@ -644,14 +645,26 @@ class SafetyService:
                     if fj_label:
                         update_data["inherent_risk_level_fj"] = fj_label
 
+                # P2-2 G3：脚本执行成功 → Report(waiting) 留痕（开关关=零写）
+                await superagent_trace.record_orm_script_run(
+                    item=item, script_no=script_number, ok=True, session=self.session,
+                )
             except OrchestratorError as e:
                 logger.error("脚本 %d Orchestrator 执行失败: %s", script_number, e)
                 update_data[f"script{script_number}_review_status"] = "rejected"
                 update_data["ai_error_message"] = str(e)
+                await superagent_trace.record_orm_script_run(
+                    item=item, script_no=script_number, ok=False,
+                    error=str(e), session=self.session,
+                )
             except Exception as e:
                 logger.error("脚本 %d 执行异常: %s", script_number, e)
                 update_data[f"script{script_number}_review_status"] = "rejected"
                 update_data["ai_error_message"] = f"AI 服务调用失败：{e}"
+                await superagent_trace.record_orm_script_run(
+                    item=item, script_no=script_number, ok=False,
+                    error=str(e), session=self.session,
+                )
             finally:
                 await ai_service.close()
 
@@ -785,6 +798,15 @@ class SafetyService:
         elif action == "rejected":
             # 驳回：回退到之前节点，允许重新生成
             update_data["ai_node_progress"] = current_node
+
+        # P2-2 G3：人工审核动作留痕（脚本7 通过=end_task；开关关=零写）
+        await superagent_trace.record_orm_review(
+            item=item,
+            script_no=script_number,
+            action=action,
+            completed=(action == "approved" and script_number == 7),
+            session=self.session,
+        )
 
         result = await self.repo.update_hazard_identification(hid, update_data)
         return result

@@ -27,6 +27,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.modules.safety.ai_audit import ai_audit_scope
+from app.modules.safety.ai_hazard_identification import superagent_trace
 from app.modules.safety.bitable_config.store import ConnectionView, store
 from app.modules.safety.feishu.event_client import on_event
 from app.modules.safety.service.hazard_identification_bitable import _NODE_TO_SCRIPT
@@ -178,6 +179,18 @@ async def advance_bitable_record(
         logger.warning("危险源辨识 Bitable 记录读取为空: record_id=%s", record_id)
         return {"status": "noop", "reason": "empty_record", "message": "Bitable 记录读取为空"}
 
+    # P2-2 G3：脚本执行留痕（Executor 协议收编）——默认生产 service 时包
+    # traced runner；注入 fake service 的测试路径不触 DB（开关关=纯透传）。
+    # 防重复嵌套：已包过（长生命周期 service 复用场景）不再包第二层。
+    if (
+        service is not None
+        and getattr(service, "run_script", None) is not None
+        and not getattr(service.run_script, "_hazard_id_traced", False)
+    ):
+        service.run_script = superagent_trace.traced_run_script(
+            record_id=record_id, runner=service.run_script
+        )
+
     # 状态级去重（60s）：同一节点+同一审核指纹重复投递 → 丢弃。
     # 审核指纹加入 key：审核驱动下脚本产出后节点不变，若人工在 60s 内审核通过，
     # 审核状态变化 → 指纹变化 → 去重键变化，保证「审核通过」事件不被误去重（否则对账永不触发）。
@@ -208,6 +221,10 @@ async def advance_bitable_record(
             # 无回写（未达触发条件/附件缺失/AI 失败）→ 仅镜像当前状态，不动 Bitable
             await mirror(record_id, fields)
             if node == "AI 流程结束":
+                # P2-2 G3：全流程完成 → end_task 留痕（开关关=零写）
+                await superagent_trace.record_flow_completed(
+                    record_key=record_id, flow="bitable"
+                )
                 return {"status": "noop", "reason": "completed", "message": "AI 流程已结束，无脚本可执行"}
             return {
                 "status": "noop",
