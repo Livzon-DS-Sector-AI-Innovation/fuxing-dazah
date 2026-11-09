@@ -164,10 +164,51 @@ async def build_exception_review_dashboard(
         reviewed_count=len(reports),
         rescued_count=sum(1 for r in reports if r.rescued),
     )
+    # ── P2-1 auto 维度（observe 批全为 0；既有键语义不变，向后兼容加键）──
+    writeback_success = sum(1 for r in reports if r.writeback == "success")
+    writeback_failed = sum(1 for r in reports if r.writeback == "failed")
+    pending_confirm = sum(1 for r in reports if r.writeback == "pending_confirm")
+    cas_conflict = sum(1 for r in reports if r.writeback == "cas_conflict")
+    # 人工复核率（Q9A）：分子=需人工介入（确认等待+CAS 冲突+写失败），分母=已复核
+    manual_needed = pending_confirm + cas_conflict + writeback_failed
+    metrics.update(
+        {
+            "writeback_success": writeback_success,
+            "writeback_failed": writeback_failed,
+            "pending_confirm": pending_confirm,
+            "cas_conflict": cas_conflict,
+            "human_override_count": sum(1 for r in reports if r.human_feedback),
+            "manual_review_rate": (
+                round(manual_needed / len(reports), 4) if reports else 0.0
+            ),
+            "effective_rescued_rate": (
+                round(
+                    sum(1 for r in reports if r.effective_rescued) / len(reports), 4
+                )
+                if reports
+                else 0.0
+            ),
+        }
+    )
+    # auto 升格达标提示（Q1C：近 14 天 effective_rescued 率≥60% 且样本≥10；
+    # 只提示不强制——auto 开关永远人工开）
+    hint_cutoff = now - timedelta(days=14)
+    recent = [r for r in reports if r.observed_at >= hint_cutoff]
+    rescued_rate_14d = (
+        round(sum(1 for r in recent if r.effective_rescued) / len(recent), 4)
+        if recent
+        else 0.0
+    )
+    auto_hint = {
+        "eligible": len(recent) >= 10 and rescued_rate_14d >= 0.6,
+        "rescued_rate_14d": rescued_rate_14d,
+        "samples_14d": len(recent),
+    }
     return {
         "window": {"days": days, "from": cutoff.isoformat(), "to": now.isoformat()},
         "reviews_available": reviews_available,
         "metrics": metrics,
+        "auto_hint": auto_hint,
         "dead_letters": await _dead_letter_watermark(redis),
         "items": [r.summary() for r in reports[:50]],
     }

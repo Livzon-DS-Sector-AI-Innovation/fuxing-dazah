@@ -126,6 +126,16 @@ const REVIEW_ACTION_LABELS: Record<string, string> = {
   insufficient: '证据不足',
 }
 
+/** 写回状态 → 中文（P2-1 writeback 值） */
+const WRITEBACK_LABELS: Record<string, string> = {
+  not_attempted: '未写回',
+  pending_confirm: '待人工确认',
+  success: '已写回',
+  failed: '写回失败',
+  cas_conflict: '冲突放弃',
+  gate_blocked: '闸门拦截',
+}
+
 function fmtIsoWhen(iso: string | undefined): string {
   if (!iso) return '—'
   const ts = Date.parse(iso)
@@ -151,11 +161,37 @@ const REVIEW_COLUMNS: ColumnsType<ExceptionReviewItem> = [
   },
   {
     title: 'rescued',
-    dataIndex: 'rescued',
-    key: 'rescued',
-    width: 90,
-    render: (v: boolean) =>
-      v ? <StatusTag tone="ok" label="rescued" /> : <StatusTag tone="default" label="—" />,
+    dataIndex: 'effective_rescued',
+    key: 'effective_rescued',
+    width: 110,
+    render: (v: boolean, row: ExceptionReviewItem) =>
+      row.human_feedback ? (
+        <StatusTag
+          tone={v ? 'ok' : 'warn'}
+          label={v ? 'rescued·人工' : '人工否决'}
+        />
+      ) : v ? (
+        <StatusTag tone="ok" label="rescued" />
+      ) : (
+        <StatusTag tone="default" label="—" />
+      ),
+  },
+  {
+    title: '写回状态',
+    dataIndex: 'writeback',
+    key: 'writeback',
+    width: 110,
+    render: (v: string) => {
+      const label = WRITEBACK_LABELS[v] ?? v
+      if (v === 'success') return <StatusTag tone="ok" label={label} />
+      if (v === 'pending_confirm' || v === 'failed') {
+        return <StatusTag tone="warn" label={label} />
+      }
+      if (v === 'cas_conflict' || v === 'gate_blocked') {
+        return <StatusTag tone="danger" label={label} />
+      }
+      return <StatusTag tone="default" label={label} />
+    },
   },
   {
     title: '建议动作',
@@ -194,7 +230,7 @@ function ExceptionReviewTab({ days }: { days: WindowOption }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
         <StatCard
           label="已分析条数（窗口）"
           value={m ? m.analyzed_count : '—'}
@@ -215,11 +251,31 @@ function ExceptionReviewTab({ days }: { days: WindowOption }) {
           sub="复核条数 / 已分析条数（P1 目标 <8%）"
         />
         <StatCard
-          label="rescued 率"
-          value={m ? fmtRate(m.rescued_rate * 100) : '—'}
+          label="rescued 率（有效口径）"
+          value={m ? fmtRate(m.effective_rescued_rate * 100) : '—'}
           tone="ok"
           loading={isLoading}
-          sub={`rescued ${m?.rescued ?? 0} / ${m?.reviewed ?? 0}（P1 目标 ≥60%）`}
+          sub={`人工改判 ${m?.human_override_count ?? 0} 条后（升格门槛 ≥60%）`}
+        />
+        <StatCard
+          label="写回成功"
+          value={m ? m.writeback_success : '—'}
+          tone={m && m.writeback_failed > 0 ? 'warn' : 'ok'}
+          loading={isLoading}
+          sub={`auto 直写；失败 ${m?.writeback_failed ?? 0} 条`}
+        />
+        <StatCard
+          label="待人工确认"
+          value={m ? m.pending_confirm : '—'}
+          tone={m && m.pending_confirm > 0 ? 'warn' : 'default'}
+          loading={isLoading}
+          sub="major/escalate——会话点名复核后确认"
+        />
+        <StatCard
+          label="人工复核率"
+          value={m ? fmtRate(m.manual_review_rate * 100) : '—'}
+          loading={isLoading}
+          sub="（待确认+冲突+失败）/ 复核数（P2 目标 <10%）"
         />
         <StatCard
           label="死信水位（当前）"
@@ -236,11 +292,36 @@ function ExceptionReviewTab({ days }: { days: WindowOption }) {
         />
       </div>
 
+      {data?.auto_hint && (
+        <div
+          className={
+            data.auto_hint.eligible
+              ? 'rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800'
+              : 'rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600'
+          }
+        >
+          {data.auto_hint.eligible ? (
+            <>
+              🟢 auto 升格达标提示：近 14 天有效 rescued 率{' '}
+              {fmtRate(data.auto_hint.rescued_rate_14d * 100)}（样本{' '}
+              {data.auto_hint.samples_14d} 条 ≥10）——可人工开启 auto
+              （app_config `SAFETY_HAZARD_REVIEW_MODE=auto`，默认 observe）
+            </>
+          ) : (
+            <>
+              ⚪ 当前 observe · 未开 auto。升格参考：近 14 天有效 rescued 率{' '}
+              {fmtRate(data.auto_hint.rescued_rate_14d * 100)}（样本{' '}
+              {data.auto_hint.samples_14d}/10 条，门槛 ≥60%）
+            </>
+          )}
+        </div>
+      )}
+
       {!data?.reviews_available && (
         <EmptyGuide compact title="复核报告存储读取失败，指标按零降级" />
       )}
 
-      <SectionCard title="复核清单（observe · 不写回，仅候选证据）">
+      <SectionCard title="复核清单（人工列唯一权威；auto 仅写 AI 列）">
         {data && data.items.length > 0 ? (
           <Table<ExceptionReviewItem>
             size="small"

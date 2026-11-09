@@ -111,7 +111,8 @@ export interface HazardQualityDashboard {
 
 // ── P1-3 例外复核 Tab（observe 口径）──────────────────────────────
 
-/** 例外复核指标（exception_reviewer.summarize_exception_metrics 同构） */
+/** 例外复核指标（exception_reviewer.summarize_exception_metrics 同构；
+ *  P2-1 追加 auto 维度与 effective 口径键） */
 export interface ExceptionReviewMetrics {
   exception_count: number
   analyzed_count: number
@@ -119,6 +120,24 @@ export interface ExceptionReviewMetrics {
   reviewed: number
   rescued: number
   rescued_rate: number
+  /** P2-1 auto：写回成功 / 失败 / 待人工确认 / CAS 冲突 条数 */
+  writeback_success: number
+  writeback_failed: number
+  pending_confirm: number
+  cas_conflict: number
+  /** 人工复核率 =（待确认+冲突+失败）/ 已复核（Q9A 口径） */
+  manual_review_rate: number
+  /** rescued 人工改判条数（human_feedback 非空） */
+  human_override_count: number
+  /** effective_rescued 率（人工>程序口径） */
+  effective_rescued_rate: number
+}
+
+/** auto 升格达标提示（Q1C：近 14 天 effective 率≥60% 且样本≥10；只提示不强制） */
+export interface ExceptionReviewAutoHint {
+  eligible: boolean
+  rescued_rate_14d: number
+  samples_14d: number
 }
 
 /** 例外复核清单行 */
@@ -127,18 +146,25 @@ export interface ExceptionReviewItem {
   source: string
   label: string
   rescued: boolean
+  /** P2-1：人工>程序 的有效 rescued 口径 */
+  effective_rescued: boolean
   action: string
   ai_basis: string
   observed_at: string
   note: string
+  /** P2-1：写回状态 not_attempted/pending_confirm/success/failed/cas_conflict/gate_blocked */
+  writeback: string
+  /** 人工反馈：''/useful/useless */
+  human_feedback: string
 }
 
-/** GET /hazard-quality/exception-reviews 响应 data（P1-3 observe） */
+/** GET /hazard-quality/exception-reviews 响应 data（P1-3 observe + P2-1 auto 维度） */
 export interface ExceptionReviewDashboard {
   window: HazardQualityWindow
   /** false = Redis 报告读取失败，指标按零降级展示 */
   reviews_available: boolean
   metrics: ExceptionReviewMetrics
+  auto_hint: ExceptionReviewAutoHint
   dead_letters: HazardDeadLetterWatermark
   items: ExceptionReviewItem[]
 }

@@ -99,11 +99,12 @@ def test_card_payload_observe_annotations() -> None:
     text = json.dumps(card, ensure_ascii=False)
     # observe·不写回标注（标题或正文显式出现）
     assert "observe" in text and "不写回" in text
-    # 按钮：收到 / 忽略（无确认执行语义）
+    # 按钮：收到 / 忽略 / 有用 / 没用（P2-1 反馈键；无确认执行语义）
     buttons_text = json.dumps(
         card.get("body", {}).get("elements", []), ensure_ascii=False
     )
     assert "收到" in buttons_text and "忽略" in buttons_text
+    assert "有用" in buttons_text and "没用" in buttons_text
     assert "确认执行" not in buttons_text
 
 
@@ -115,9 +116,10 @@ def test_card_payload_button_values_carry_scope_and_record() -> None:
 
     card = build_exception_review_card(_report("recX"))
     values = extract_button_values(card)
-    assert len(values) == 2
+    # P2-1 F4：2→4（ack/dismiss + useful/useless 人工改判键）
+    assert len(values) == 4
     actions = {v.get("action") for v in values}
-    assert actions == {"ack", "dismiss"}
+    assert actions == {"ack", "dismiss", "useful", "useless"}
     for value in values:
         assert value.get("scope") == "hazard_exception_review"
         assert value.get("record_id") == "recX"
@@ -352,3 +354,122 @@ def test_review_budget_defaults() -> None:
     assert budget.llm_call_limit == 3
     assert budget.tool_call_limit == 8
     assert budget.daily_limit == 20
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P2-1 T5 —— 看板 auto 维度：写回计数 / 人工复核率 / 改判数 / auto_hint
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def test_exception_dashboard_auto_metrics_and_manual_review_rate() -> None:
+    from app.modules.safety.service.hazard_direct.quality_dashboard import (
+        build_exception_review_dashboard,
+    )
+
+    base = datetime.now(UTC)
+    reports = [
+        _report("recA", rescued=True, observed_at=base),  # success
+        _report("recB", rescued=False, observed_at=base),  # failed
+        _report("recC", rescued=True, observed_at=base),  # pending_confirm
+        _report("recD", rescued=True, observed_at=base),  # cas_conflict
+    ]
+    reports[0].writeback = "success"
+    reports[1].writeback = "failed"
+    reports[2].writeback = "pending_confirm"
+    reports[3].writeback = "cas_conflict"
+    reports[0].human_feedback = "useless"  # 人工改判（改判数+1，effective=False）
+
+    data = await build_exception_review_dashboard(
+        FakeCountDB(analyzed=100), days=30, redis=FakeReviewsRedis(reports)
+    )
+    m = data["metrics"]
+    assert m["writeback_success"] == 1
+    assert m["writeback_failed"] == 1
+    assert m["pending_confirm"] == 1
+    assert m["cas_conflict"] == 1
+    assert m["human_override_count"] == 1
+    # 人工复核率（Q9A）：(pending+cas+failed)/reviewed = 3/4
+    assert m["manual_review_rate"] == 0.75
+    # effective 口径：程序 rescued 3，人工 useless 改判 -1 → 2/4
+    assert m["effective_rescued_rate"] == 0.5
+    # 明细行带写回状态/反馈键
+    row = next(i for i in data["items"] if i["record_id"] == "recA")
+    assert row["writeback"] == "success"
+    assert row["human_feedback"] == "useless"
+    assert row["effective_rescued"] is False
+
+
+async def test_exception_dashboard_auto_hint_eligibility() -> None:
+    from app.modules.safety.service.hazard_direct.quality_dashboard import (
+        build_exception_review_dashboard,
+    )
+
+    base = datetime.now(UTC)
+    # 10 条近 14 天报告，7 条 effective rescued（70% ≥ 60%，样本 10 ≥ 10）→ 达标
+    reports = [
+        _report(f"rec{i}", rescued=(i < 7), observed_at=base - timedelta(days=1))
+        for i in range(10)
+    ]
+    data = await build_exception_review_dashboard(
+        FakeCountDB(analyzed=100), days=30, redis=FakeReviewsRedis(reports)
+    )
+    hint = data["auto_hint"]
+    assert hint["samples_14d"] == 10
+    assert hint["rescued_rate_14d"] == 0.7
+    assert hint["eligible"] is True
+
+    # 样本不足（9 条）→ 不达标（只提示不强制，Q1C）
+    fewer = reports[:9]
+    data2 = await build_exception_review_dashboard(
+        FakeCountDB(analyzed=100), days=30, redis=FakeReviewsRedis(fewer)
+    )
+    assert data2["auto_hint"]["eligible"] is False
+
+    # 14 天窗口外样本不计入 hint 统计
+    old = _report("recOld", rescued=True, observed_at=base - timedelta(days=20))
+    data3 = await build_exception_review_dashboard(
+        FakeCountDB(analyzed=100), days=30, redis=FakeReviewsRedis([old])
+    )
+    assert data3["auto_hint"]["samples_14d"] == 0
+    assert data3["auto_hint"]["eligible"] is False
+
+
+# ── P2-1 审查修复：结果卡 / auto 单卡文案 ─────────────────────────────────
+
+
+def test_writeback_result_card_lists_touched_reports_only() -> None:
+    from app.modules.safety.feishu.exception_review_card import (
+        build_writeback_result_card,
+    )
+
+    touched = _report("recA")
+    touched.writeback = "success"
+    untouched = _report("recB")  # not_attempted → 不进结果卡
+    pending = _report("recC")
+    pending.writeback = "pending_confirm"
+    card = build_writeback_result_card([touched, untouched, pending])
+    text = json.dumps(card, ensure_ascii=False)
+    assert "recA" in text and "recC" in text
+    assert "recB" not in text
+    assert "已写回" in text and "待人工确认" in text
+    assert "auto 写回结果" in text
+
+
+def test_single_card_auto_batch_copy_switches_off_observe_claim() -> None:
+    """auto 批（writeback 已触达）单卡不再声明「不写回」，标题带状态。"""
+    from app.modules.safety.feishu.exception_review_card import (
+        build_exception_review_card,
+    )
+
+    report = _report("recA")
+    report.writeback = "success"
+    card = build_exception_review_card(report)
+    text = json.dumps(card, ensure_ascii=False)
+    assert "auto · 已写回 AI 列" in text
+    assert "写回状态：已写回" in text
+    assert "不写回任何表格列" not in text
+    # observe 批（not_attempted）保持 P1-3 原文案
+    observe_card = build_exception_review_card(_report("recO"))
+    observe_text = json.dumps(observe_card, ensure_ascii=False)
+    assert "observe · 不写回" in observe_text
+    assert "写回状态" not in observe_text
