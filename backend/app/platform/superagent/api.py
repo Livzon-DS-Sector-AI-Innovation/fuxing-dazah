@@ -34,10 +34,11 @@ def _disposition_filter(disposition: str | None):
     )
 
 
-@router.get("/triggers", summary="Trigger 列表（可按处置步骤过滤）")
+@router.get("/triggers", summary="Trigger 列表（可按处置步骤/Thread 过滤）")
 async def list_triggers(
     disposition: str | None = None,
     source_name: str | None = None,
+    thread_key: str | None = None,
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
@@ -52,6 +53,8 @@ async def list_triggers(
         base = base.where(cond)
     if source_name:
         base = base.where(AgentSource.name == source_name)
+    if thread_key:
+        base = base.where(AgentTrigger.thread_key == thread_key)
     base = base.order_by(AgentTrigger.received_at.desc()).limit(limit).offset(offset)
 
     rows = (await db.execute(base)).all()
@@ -345,6 +348,79 @@ async def list_threads(
         }
         for row in rows
     ])
+
+
+@router.get(
+    "/threads/{thread_key}/history",
+    summary="Thread 历史（按记录聚合 triggers + tasks，时间正序）",
+)
+async def get_thread_history(
+    thread_key: str,
+    db: AsyncSession = Depends(get_db),
+    _user: Any = RequireUser,
+) -> JSONResponse:
+    from app.core.exceptions import NotFoundException
+    from app.platform.superagent.models import AgentTask, AgentTaskSubscription
+
+    thread = (
+        await db.execute(
+            select(AgentThread).where(AgentThread.thread_key == thread_key)
+        )
+    ).scalar_one_or_none()
+    if thread is None:
+        raise NotFoundException("Thread 不存在")
+
+    triggers = (
+        await db.execute(
+            select(AgentTrigger).where(AgentTrigger.thread_key == thread_key)
+            .order_by(AgentTrigger.received_at.asc())
+        )
+    ).scalars().all()
+    tasks = (
+        await db.execute(
+            select(AgentTask)
+            .join(AgentTaskSubscription, AgentTaskSubscription.task_id == AgentTask.id)
+            .where(AgentTaskSubscription.thread_key == thread_key)
+            .order_by(AgentTask.created_at.asc())
+        )
+    ).scalars().all()
+    return success_response(data={
+        "thread": {
+            "thread_key": thread.thread_key,
+            "label": thread.label,
+            "url": thread.url,
+            "meta": thread.meta,
+            "last_trigger_at": thread.last_trigger_at.isoformat()
+            if thread.last_trigger_at
+            else None,
+        },
+        "triggers": [
+            {
+                "id": str(t.id),
+                "external_id": t.external_id,
+                "actor": t.actor,
+                "human": t.human,
+                "payload": t.payload,
+                "disposition": t.disposition or [],
+                "received_at": t.received_at.isoformat() if t.received_at else None,
+            }
+            for t in triggers
+        ],
+        "tasks": [
+            {
+                "id": str(t.id),
+                "short_name": t.short_name,
+                "title": t.title,
+                "executor": t.executor,
+                "status": t.status,
+                "outcome": t.outcome,
+                "stage_facts": t.stage_facts or {},
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "ended_at": t.ended_at.isoformat() if t.ended_at else None,
+            }
+            for t in tasks
+        ],
+    })
 
 
 @router.get("/decisions", summary="研判决策列表（observe 回放数据源）")

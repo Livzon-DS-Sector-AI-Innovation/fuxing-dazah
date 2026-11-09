@@ -559,3 +559,84 @@ class TestReviewScoringHooks:
 # REST 查询端点（C2：thread_key 过滤 + history 聚合）
 # ═══════════════════════════════════════════════════════════════
 
+
+class TestThreadEndpoints:
+    async def test_triggers_thread_key_filter(self, client, db_session, monkeypatch):
+        _on(monkeypatch)
+        await writeback_trace.record_writeback(
+            session=db_session,
+            writer=writeback_trace.WRITER_AI_ANALYSIS,
+            record_id="recE1",
+            fields=["隐患分类（AI）"],
+            applied=True,
+        )
+        await writeback_trace.record_writeback(
+            session=db_session,
+            writer=writeback_trace.WRITER_REVIEW,
+            record_id="recE2",
+            fields=["AI初审结果"],
+            applied=True,
+        )
+        await db_session.commit()  # client 与 db_session 跨连接，须 commit
+
+        resp = await client.get(
+            "/api/v1/platform/superagent/triggers",
+            params={"thread_key": "bitable:hazard:recE1"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert len(data) == 1
+        assert data[0]["thread_key"] == "bitable:hazard:recE1"
+        assert data[0]["payload"]["writer"] == "ai_analysis"
+
+    async def test_thread_history_aggregates(self, client, db_session, monkeypatch):
+        from app.platform.superagent.models import (
+            AgentTask,
+            AgentTaskSubscription,
+        )
+
+        _on(monkeypatch)
+        await writeback_trace.record_writeback(
+            session=db_session,
+            writer=writeback_trace.WRITER_AI_ANALYSIS,
+            record_id="recE1",
+            fields=["隐患分类（AI）"],
+            applied=True,
+        )
+        task = AgentTask(
+            short_name="hz-thread-test:recE1",
+            title="危险源辨识 recE1",
+            executor="hazard_id_script",
+            mandate={"policy_version": "seed"},
+            stage_facts={
+                "latest_report": "waiting",
+                "reports": [{"kind": "waiting", "script": 2}],
+            },
+        )
+        db_session.add(task)
+        await db_session.flush()
+        db_session.add(
+            AgentTaskSubscription(
+                task_id=task.id, thread_key="bitable:hazard:recE1"
+            )
+        )
+        await db_session.commit()
+
+        resp = await client.get(
+            "/api/v1/platform/superagent/threads/bitable:hazard:recE1/history"
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["thread"]["thread_key"] == "bitable:hazard:recE1"
+        assert len(data["triggers"]) == 1
+        assert data["triggers"][0]["payload"]["writer"] == "ai_analysis"
+        assert len(data["tasks"]) == 1
+        assert data["tasks"][0]["executor"] == "hazard_id_script"
+        assert data["tasks"][0]["stage_facts"]["latest_report"] == "waiting"
+
+    async def test_thread_history_unknown_404(self, client):
+        resp = await client.get(
+            "/api/v1/platform/superagent/threads/bitable:hazard:nope/history"
+        )
+        assert resp.status_code == 404
+
