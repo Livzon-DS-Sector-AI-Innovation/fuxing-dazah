@@ -38,11 +38,11 @@ from app.modules.safety.ai_hazard_identification.citation_evidence import (
     verify_citations,
 )
 from app.modules.safety.ai_hazard_identification.prompts import (
-    SYSTEM_ROLE,
     build_context_text,
     build_full_prompt,
     build_vision_context_text,
     get_expected_keys,
+    system_role,
 )
 from app.modules.safety.ai_hazard_identification.rules import (
     KEY_DEFECT_MAX_LENGTH,
@@ -377,7 +377,7 @@ class AIHazardIdentifier:
         expected_keys = get_expected_keys()
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_ROLE},
+            {"role": "system", "content": system_role()},
             {"role": "user", "content": prompt},
         ]
         if retry_errors:

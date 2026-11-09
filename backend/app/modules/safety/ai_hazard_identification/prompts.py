@@ -2,9 +2,60 @@
 
 所有规则严格对应《AI隐患识别工作流设计方案》第三章至第五章。
 支持 DB 动态配置，此处为硬编码 fallback（保证离线可用）。
+
+P1-3 E4 skills 化：软性块（角色/工作规则/缺陷实质规则/文本·视觉模板/
+few-shot）优先读 ``prompt_skills/*.md``（mtime 热缓存，安全管理员可改），
+本文件常量为**兜底**（md 缺失/损坏即回滚到本行为）；硬护栏
+（``CRITICAL_CONSTRAINTS`` / ``OUTPUT_FORMAT``）与引用强校验**留在代码**，
+md 不可覆盖。组装结果与迁移前逐字节一致（golden 快照锁定，
+tests/fixtures/hazard_prompt_golden）。
 """
 
 from __future__ import annotations
+
+from app.modules.safety.ai_hazard_identification.prompt_loader import (
+    load_fewshot,
+    load_text_block,
+)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# skills 化读取口（md 优先，下方常量为兜底；getter 每次调用读缓存）
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def system_role() -> str:
+    return load_text_block("system-role", fallback=SYSTEM_ROLE)
+
+
+def work_rules() -> str:
+    return load_text_block("work-rules", fallback=WORK_RULES)
+
+
+def defect_substance_rules() -> str:
+    return load_text_block("defect-substance-rules", fallback=DEFECT_SUBSTANCE_RULES)
+
+
+def text_prompt_template() -> str:
+    return load_text_block("text-template", fallback=TEXT_PROMPT_TEMPLATE)
+
+
+def vision_prompt_template() -> str:
+    return load_text_block("vision-template", fallback=VISION_PROMPT_TEMPLATE)
+
+
+def fewshot_marker() -> str:
+    return fewshot_pair()[0]
+
+
+def fewshot_examples() -> list[dict]:
+    return fewshot_pair()[1]
+
+
+def fewshot_pair() -> tuple[str, list[dict]]:
+    """（marker, examples）成对读取（单 md 文件，拍板⑤不单独拆文件）。"""
+    return load_fewshot(
+        fallback_marker=FEWSHOT_MARKER, fallback_examples=FEWSHOT_EXAMPLES
+    )
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 系统角色定义
@@ -357,22 +408,24 @@ def build_full_prompt(
     Returns:
         完整 prompt 字符串
     """
-    template = VISION_PROMPT_TEMPLATE if vision_mode else TEXT_PROMPT_TEMPLATE
+    template = vision_prompt_template() if vision_mode else text_prompt_template()
+    rules = work_rules()
+    defect_rules = defect_substance_rules()
 
     prompt = template.format(
         context=context,
-        work_rules=WORK_RULES,
-        defect_substance_rules=DEFECT_SUBSTANCE_RULES,
+        work_rules=rules,
+        defect_substance_rules=defect_rules,
         output_format=OUTPUT_FORMAT,
     )
 
-    # 注入知识库上下文（在 WORK_RULES 之前）
+    # 注入知识库上下文（在 work_rules 之前）
     if knowledge_context:
         # 找到 work_rules 在 prompt 中的位置，在其之前插入知识上下文
         knowledge_block = knowledge_context + "\n\n---\n\n"
         prompt = prompt.replace(
-            WORK_RULES,
-            knowledge_block + WORK_RULES,
+            rules,
+            knowledge_block + rules,
             1,
         )
 
@@ -380,8 +433,8 @@ def build_full_prompt(
     prompt += "\n\n" + CRITICAL_CONSTRAINTS
 
     if include_fewshot:
-        prompt += "\n\n" + FEWSHOT_MARKER
-        for i, ex in enumerate(FEWSHOT_EXAMPLES, 1):
+        prompt += "\n\n" + fewshot_marker()
+        for i, ex in enumerate(fewshot_examples(), 1):
             import json as _json
             prompt += f"\n\n**示例{i}**\n"
             prompt += f"输入描述：{ex['input']}\n"

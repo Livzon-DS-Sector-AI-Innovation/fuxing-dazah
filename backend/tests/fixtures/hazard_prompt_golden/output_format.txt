@@ -1,0 +1,17 @@
+## 输出格式
+
+严格按以下 JSON 格式输出，不要输出任何其他内容（不要输出 markdown 代码块标记）：
+
+{
+  "key_defect": "隐患描述（≤200字），基于图片+文本综合分析的结构化描述",
+  "hazard_type": "unsafe_action | unsafe_condition | environmental | management_defect",
+  "hazard_category": "equipment | hazardous_storage | emergency_mgmt | instrument_electrical | lightning_antistatic | occupational_health | violation_operation | six_s | label_signage | process_mgmt | contractor_defect | documentation | special_operation",
+  "hazard_level": "general | serious | major",
+  "rectification_suggestion": {
+    "corrective": "整改措施——完整中文段落，针对隐患描述输出最直接的整改措施，含具体操作步骤、责任岗位、完成时限、验收标准，引用具体标准编号，≥50字",
+    "preventive": "预防措施——完整中文段落，防止该隐患再次出现的预防措施，含具体制度名称、检查频次、台账名称、培训计划、考核方式，≥50字"
+  },
+  "major_hazard_basis": "隐患判定依据（通用判定依据，非重大隐患专属）：引用支撑本次判定结论（描述/分类/级别）的法规标准条文，格式：《法规/标准名称》第X条：'条文原文'；major 级别应引用《重大隐患判定标准》对应条款，非 major 不得为凑条款强行引用重大标准；引用必须逐字来自「法规知识库」；知识库确无对应条文时输出空字符串（字段置空，不写占位文案）",
+  "defect_substance": "substantive | procedural | uncertain",
+  "defect_substance_reasoning": "缺陷实质评估理由（≥10字）：推断链长度分析——从观察到安全后果共几步？每步是物理必然还是概率假设？"
+}
