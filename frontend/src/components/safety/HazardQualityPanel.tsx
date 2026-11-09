@@ -6,11 +6,15 @@
 // + 失败分类与修复阶段 + 检索维度（P1-1 多路观测）+ 死信水位。
 
 import { useMemo, useState } from 'react'
-import { Segmented, Table } from 'antd'
+import { Segmented, Table, Tabs } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
-import { fetchHazardQualityDashboard } from '@/lib/api/safety/hazard-quality'
+import {
+  fetchExceptionReviewDashboard,
+  fetchHazardQualityDashboard,
+} from '@/lib/api/safety/hazard-quality'
 import type {
+  ExceptionReviewItem,
   HazardDeadLetterItem,
   HazardQualityBaselineItem,
   HazardQualityDashboard,
@@ -101,6 +105,163 @@ const DEAD_COLUMNS: ColumnsType<HazardDeadLetterItem> = [
   { title: '死信时间', dataIndex: 'dead_at', key: 'dead_at', width: 170, render: fmtWhen },
 ]
 
+/** 例外标签 → 中文（exception_reviewer.ExceptionLabel 值） */
+const EXCEPTION_LABELS: Record<string, string> = {
+  rag_degraded: 'RAG 降级',
+  no_chunks: '检索零召回',
+  basis_missing: '依据空/占位',
+  citation_unverified: '引用不可验证',
+  json_invalid: 'JSON 持续非法',
+  validation_failed: '校验失败',
+  writeback_error: '写回失败',
+  manual_pick: '人工指定',
+  other: '其他',
+}
+
+/** 建议动作 → 中文（ProposedAction 值） */
+const REVIEW_ACTION_LABELS: Record<string, string> = {
+  adopt_ai: '建议采纳 AI',
+  keep_manual: '维持人工',
+  escalate: '分歧提请专审',
+  insufficient: '证据不足',
+}
+
+function fmtIsoWhen(iso: string | undefined): string {
+  if (!iso) return '—'
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return iso
+  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
+}
+
+const REVIEW_COLUMNS: ColumnsType<ExceptionReviewItem> = [
+  { title: '记录', dataIndex: 'record_id', key: 'record_id', ellipsis: true },
+  {
+    title: '例外类型',
+    dataIndex: 'label',
+    key: 'label',
+    width: 120,
+    render: (v: string) => EXCEPTION_LABELS[v] ?? v,
+  },
+  {
+    title: '来源',
+    dataIndex: 'source',
+    key: 'source',
+    width: 90,
+    render: (v: string) => (v === 'dead_letter' ? '死信' : '点名'),
+  },
+  {
+    title: 'rescued',
+    dataIndex: 'rescued',
+    key: 'rescued',
+    width: 90,
+    render: (v: boolean) =>
+      v ? <StatusTag tone="ok" label="rescued" /> : <StatusTag tone="default" label="—" />,
+  },
+  {
+    title: '建议动作',
+    dataIndex: 'action',
+    key: 'action',
+    width: 120,
+    render: (v: string) => REVIEW_ACTION_LABELS[v] ?? v,
+  },
+  { title: 'AI 新结论依据', dataIndex: 'ai_basis', key: 'ai_basis', ellipsis: true },
+  {
+    title: '复核时间',
+    dataIndex: 'observed_at',
+    key: 'observed_at',
+    width: 170,
+    render: (v: string) => fmtIsoWhen(v),
+  },
+]
+
+/** 例外复核 Tab 内容（P1-3 observe：指标 + 复核清单；不写回口径） */
+function ExceptionReviewTab({ days }: { days: WindowOption }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['hazard-exception-reviews', days],
+    queryFn: () => fetchExceptionReviewDashboard(days),
+    staleTime: 60_000,
+  })
+  const m = data?.metrics
+
+  if (error) {
+    return (
+      <EmptyGuide
+        title="例外复核数据加载失败"
+        description={error instanceof Error ? error.message : String(error)}
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <StatCard
+          label="已分析条数（窗口）"
+          value={m ? m.analyzed_count : '—'}
+          loading={isLoading}
+          sub="① 主链 AI 调用记录数"
+        />
+        <StatCard
+          label="复核条数（窗口）"
+          value={m ? m.reviewed : '—'}
+          loading={isLoading}
+          sub="被复核的例外记录"
+        />
+        <StatCard
+          label="例外率"
+          value={m ? fmtRate(m.exception_rate * 100) : '—'}
+          tone="warn"
+          loading={isLoading}
+          sub="复核条数 / 已分析条数（P1 目标 <8%）"
+        />
+        <StatCard
+          label="rescued 率"
+          value={m ? fmtRate(m.rescued_rate * 100) : '—'}
+          tone="ok"
+          loading={isLoading}
+          sub={`rescued ${m?.rescued ?? 0} / ${m?.reviewed ?? 0}（P1 目标 ≥60%）`}
+        />
+        <StatCard
+          label="死信水位（当前）"
+          value={data?.dead_letters.count == null ? '未知' : data.dead_letters.count}
+          tone={
+            data?.dead_letters.count == null
+              ? 'warn'
+              : data.dead_letters.count > 0
+                ? 'danger'
+                : 'ok'
+          }
+          loading={isLoading}
+          sub="复核捞取的候补池"
+        />
+      </div>
+
+      {!data?.reviews_available && (
+        <EmptyGuide compact title="复核报告存储读取失败，指标按零降级" />
+      )}
+
+      <SectionCard title="复核清单（observe · 不写回，仅候选证据）">
+        {data && data.items.length > 0 ? (
+          <Table<ExceptionReviewItem>
+            size="small"
+            rowKey="record_id"
+            columns={REVIEW_COLUMNS}
+            dataSource={data.items}
+            loading={isLoading}
+            pagination={false}
+          />
+        ) : (
+          <EmptyGuide
+            compact
+            title="窗口内暂无复核记录"
+            description="安全管理员可 @安全AI助手 说「复核死信」触发（observe，不写回）"
+          />
+        )}
+      </SectionCard>
+    </div>
+  )
+}
+
 export default function HazardQualityPanel() {
   const [days, setDays] = useState<WindowOption>(30)
   const { data, isLoading, error } = useQuery({
@@ -134,19 +295,27 @@ export default function HazardQualityPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <Segmented
-          value={days}
-          onChange={(v) => setDays(v as WindowOption)}
-          options={[
-            { value: 30, label: '近 30 天' },
-            { value: 7, label: '近 7 天' },
-          ]}
-        />
-        <span className="text-xs text-neutral-500">
-          {data ? `${data.totals.calls} 次调用 · 实时聚合（与 replay 同口径）` : '实时聚合只读'}
-        </span>
-      </div>
+      <Tabs
+        defaultActiveKey="overview"
+        items={[
+          {
+            key: 'overview',
+            label: '总览',
+            children: (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Segmented
+                    value={days}
+                    onChange={(v) => setDays(v as WindowOption)}
+                    options={[
+                      { value: 30, label: '近 30 天' },
+                      { value: 7, label: '近 7 天' },
+                    ]}
+                  />
+                  <span className="text-xs text-neutral-500">
+                    {data ? `${data.totals.calls} 次调用 · 实时聚合（与 replay 同口径）` : '实时聚合只读'}
+                  </span>
+                </div>
 
       {/* KPI 行：JSON/闸门/引用/占位 + 多路观测 + 死信水位 */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -272,22 +441,32 @@ export default function HazardQualityPanel() {
         </SectionCard>
       </div>
 
-      {/* 死信清单 */}
-      <SectionCard title="死信清单（第 5 次失败进入，需人工处置）">
-        {deadCount == null ? (
-          <EmptyGuide compact title="死信账本读取失败，水位未知" />
-        ) : data && data.dead_letters.items.length > 0 ? (
-          <Table<HazardDeadLetterItem>
-            size="small"
-            rowKey="record_id"
-            columns={DEAD_COLUMNS}
-            dataSource={data.dead_letters.items}
-            pagination={false}
-          />
-        ) : (
-          <EmptyGuide compact title="当前无死信" />
-        )}
-      </SectionCard>
+        {/* 死信清单 */}
+        <SectionCard title="死信清单（第 5 次失败进入，需人工处置）">
+          {deadCount == null ? (
+            <EmptyGuide compact title="死信账本读取失败，水位未知" />
+          ) : data && data.dead_letters.items.length > 0 ? (
+            <Table<HazardDeadLetterItem>
+              size="small"
+              rowKey="record_id"
+              columns={DEAD_COLUMNS}
+              dataSource={data.dead_letters.items}
+              pagination={false}
+            />
+          ) : (
+            <EmptyGuide compact title="当前无死信" />
+          )}
+        </SectionCard>
+              </div>
+            ),
+          },
+          {
+            key: 'exception_reviews',
+            label: '例外复核',
+            children: <ExceptionReviewTab days={days} />,
+          },
+        ]}
+      />
     </div>
   )
 }

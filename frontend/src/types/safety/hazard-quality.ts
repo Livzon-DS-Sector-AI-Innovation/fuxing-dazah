@@ -108,3 +108,37 @@ export interface HazardQualityDashboard {
   baseline: HazardQualityBaselineItem[]
   dead_letters: HazardDeadLetterWatermark
 }
+
+// ── P1-3 例外复核 Tab（observe 口径）──────────────────────────────
+
+/** 例外复核指标（exception_reviewer.summarize_exception_metrics 同构） */
+export interface ExceptionReviewMetrics {
+  exception_count: number
+  analyzed_count: number
+  exception_rate: number
+  reviewed: number
+  rescued: number
+  rescued_rate: number
+}
+
+/** 例外复核清单行 */
+export interface ExceptionReviewItem {
+  record_id: string
+  source: string
+  label: string
+  rescued: boolean
+  action: string
+  ai_basis: string
+  observed_at: string
+  note: string
+}
+
+/** GET /hazard-quality/exception-reviews 响应 data（P1-3 observe） */
+export interface ExceptionReviewDashboard {
+  window: HazardQualityWindow
+  /** false = Redis 报告读取失败，指标按零降级展示 */
+  reviews_available: boolean
+  metrics: ExceptionReviewMetrics
+  dead_letters: HazardDeadLetterWatermark
+  items: ExceptionReviewItem[]
+}

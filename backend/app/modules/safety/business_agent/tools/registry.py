@@ -48,6 +48,16 @@ from app.modules.safety.business_agent.tools.hazard_id_action_tools import (
     submit_hazard_identification,
 )
 
+# ── 例外复核员（P1-3：observe 五工具+入口，全部只读，按需挂载）──
+from app.modules.safety.business_agent.tools.hazard_review_tools import (
+    hazard_cross_check,
+    hazard_get_record_context,
+    hazard_propose_writeback,
+    hazard_search_regulations,
+    hazard_view_images,
+    review_hazard_exceptions,
+)
+
 # ── 知识库 AI 生产执行面（agent-action-p3：卡片/PPT/摘要，按需挂载）──
 from app.modules.safety.business_agent.tools.knowledge_action_tools import (
     generate_knowledge_card,
@@ -329,6 +339,13 @@ TOOL_KIND: dict[str, bool] = {
     # 危险源辨识流转执行面（agent-action-p3：提交/补触发，仅创建者，需用户确认）
     "submit_hazard_identification": True,
     "retry_hazard_identification_node": True,
+    # 例外复核员（P1-3 observe）：全组只读——propose 仅产出结构化建议无写路径
+    "hazard_view_images": False,
+    "hazard_search_regulations": False,
+    "hazard_get_record_context": False,
+    "hazard_cross_check": False,
+    "hazard_propose_writeback": False,
+    "review_hazard_exceptions": False,
     # 运维触发执行面（agent-action-p3：手动同步/跑审核，仅创建者，需用户确认）
     "sync_domain_data": True,
     "run_workticket_review": True,
@@ -411,6 +428,13 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
     query_overview,
     query_chemical_trend,
     query_special_operation_reports,
+    # 例外复核员（P1-3 observe，全只读）
+    hazard_view_images,
+    hazard_search_regulations,
+    hazard_get_record_context,
+    hazard_cross_check,
+    hazard_propose_writeback,
+    review_hazard_exceptions,
 ] + _OFFICE_READ_FUNCS
 
 

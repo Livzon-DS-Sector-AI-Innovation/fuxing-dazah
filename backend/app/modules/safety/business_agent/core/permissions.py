@@ -83,6 +83,14 @@ TOOL_QUERY_TRAINING_BEHAVIOR = "query_training_behavior"
 TOOL_QUERY_VISITOR_INSURANCE = "query_visitor_insurance"
 TOOL_QUERY_OVERVIEW = "query_overview"
 TOOL_QUERY_CHEMICAL_TREND = "query_chemical_trend"
+# 例外复核员（P1-3 observe）：五工具只读（manager+）；入口工具触发 AI 复核
+# 成本，仅 creator（安全管理员专属动作）
+TOOL_HAZARD_VIEW_IMAGES = "hazard_view_images"
+TOOL_HAZARD_SEARCH_REGULATIONS = "hazard_search_regulations"
+TOOL_HAZARD_GET_RECORD_CONTEXT = "hazard_get_record_context"
+TOOL_HAZARD_CROSS_CHECK = "hazard_cross_check"
+TOOL_HAZARD_PROPOSE_WRITEBACK = "hazard_propose_writeback"
+TOOL_REVIEW_HAZARD_EXCEPTIONS = "review_hazard_exceptions"
 # 写入
 TOOL_GENERATE_DRILL_PLAN = "generate_drill_plan"
 TOOL_SYNC_DRILL_TO_FEISHU = "sync_drill_plan_to_feishu"
@@ -247,6 +255,18 @@ _READ_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# 例外复核员只读工具集（P1-3 observe）：manager+creator 可用；viewer 不开放
+# （复核动作属安全管理员域，非普通查询）
+_HAZARD_REVIEW_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_HAZARD_VIEW_IMAGES,
+        TOOL_HAZARD_SEARCH_REGULATIONS,
+        TOOL_HAZARD_GET_RECORD_CONTEXT,
+        TOOL_HAZARD_CROSS_CHECK,
+        TOOL_HAZARD_PROPOSE_WRITEBACK,
+    }
+)
+
 # 职业健康只读工具集合（敏感健康信息，全角色可查；不含写工具）
 _OH_READ_TOOLS: frozenset[str] = frozenset(
     {
@@ -397,7 +417,9 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _TELEMETRY_ACTION_WRITE_TOOLS
     | _KNOWLEDGE_GENERATION_WRITE_TOOLS
     | _HAZARD_ID_WRITE_TOOLS
-    | _OPS_WRITE_TOOLS,
+    | _OPS_WRITE_TOOLS
+    | _HAZARD_REVIEW_TOOLS
+    | {TOOL_REVIEW_HAZARD_EXCEPTIONS},
     ROLE_MANAGER: _READ_TOOLS
     | {
         TOOL_GENERATE_DRILL_PLAN,
@@ -421,7 +443,8 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | _HAZARD_ACTION_WRITE_TOOLS
     | _DRILL_ACTION_WRITE_TOOLS
     | _TELEMETRY_ACTION_WRITE_TOOLS
-    | _KNOWLEDGE_GENERATION_WRITE_TOOLS,
+    | _KNOWLEDGE_GENERATION_WRITE_TOOLS
+    | _HAZARD_REVIEW_TOOLS,
     # 查询对全员开放；危化品写入工具对全员可见但工具内强制「仅限本部门」
     # （创建者除外，见 write_tools.update_chemical_inventory）
     ROLE_VIEWER: _READ_TOOLS | OFFICE_READ_TOOLS | _OH_READ_TOOLS

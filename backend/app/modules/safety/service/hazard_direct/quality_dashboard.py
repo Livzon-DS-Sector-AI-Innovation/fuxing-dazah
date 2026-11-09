@@ -100,3 +100,83 @@ async def _dead_letter_watermark(redis: RedisLike | None) -> dict[str, Any]:
         logger.warning("质量看板死信水位读取失败，降级为未知", exc_info=True)
         return {"count": None, "items": []}
     return {"count": len(items), "items": items}
+
+
+async def build_exception_review_dashboard(
+    db: AsyncSession, *, days: int = 30, redis: RedisLike | None = None
+) -> dict[str, Any]:
+    """例外复核 Tab（P1-3 E5，只读；不影响 P1-4 既有 dashboard 端点）。
+
+    数据源：``ai_call_audits`` 窗口计数（已分析条数，口径=①场景非空输出行）
+    + ``exception_reviewer`` Redis 报告 hash（窗口内复核报告）。
+
+    口径说明（observe）：
+    - ``exception_rate`` = 窗口内复核报告数 / 已分析条数（例外条数以「被
+      复核的例外」计——失败账本不保留窗口化历史，这是当前可观测的诚实口径）；
+    - ``rescued_rate`` = rescued 报告数 / 窗口内复核报告数（程序判定口径）；
+    - ``dead_letters`` 复用既有水位函数（当前值，非窗口聚合）。
+    """
+    from sqlalchemy import func
+
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        REVIEWS_KEY,
+        ExceptionReviewReport,
+        summarize_exception_metrics,
+    )
+
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=days)
+    count_stmt = (
+        select(func.count())
+        .select_from(AICallAudit)
+        .where(
+            AICallAudit.scenario == SCENARIO,
+            AICallAudit.output_text.is_not(None),
+            AICallAudit.created_at >= cutoff,
+        )
+    )
+    result = await db.execute(count_stmt)
+    analyzed = int(result.scalar_one_or_none() or 0)
+
+    reviews_available = True
+    reports: list[ExceptionReviewReport] = []
+    try:
+        client = redis if redis is not None else _default_review_redis()
+        raw = await client.hgetall(REVIEWS_KEY)
+        for record_id, payload in (raw or {}).items():
+            try:
+                if isinstance(payload, bytes):
+                    payload = payload.decode("utf-8", errors="replace")
+                report = ExceptionReviewReport.model_validate_json(payload)
+            except Exception:  # noqa: BLE001 — 单条脏数据跳过
+                logger.warning("例外复核报告解析失败: field=%s", record_id)
+                continue
+            if report.observed_at >= cutoff:
+                reports.append(report)
+    except Exception:
+        logger.warning("例外复核报告 Redis 读取失败，降级为空", exc_info=True)
+        reviews_available = False
+
+    reports.sort(key=lambda r: r.observed_at, reverse=True)
+    metrics = summarize_exception_metrics(
+        exception_count=len(reports),
+        analyzed_count=analyzed,
+        reviewed_count=len(reports),
+        rescued_count=sum(1 for r in reports if r.rescued),
+    )
+    return {
+        "window": {"days": days, "from": cutoff.isoformat(), "to": now.isoformat()},
+        "reviews_available": reviews_available,
+        "metrics": metrics,
+        "dead_letters": await _dead_letter_watermark(redis),
+        "items": [r.summary() for r in reports[:50]],
+    }
+
+
+def _default_review_redis() -> RedisLike:
+    """默认 Redis 客户端（复用 exception_reviewer 的解析口；测试注入 fake）。"""
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        review_redis_client,
+    )
+
+    return review_redis_client()

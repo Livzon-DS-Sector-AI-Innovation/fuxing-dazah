@@ -224,6 +224,16 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "description": "17点特殊作业日报(含新增计划外作业对比总结)+推送（失败自动重试，补发窗口至 23:30）；"
                        "主目标群发独立速递卡；「特殊作业报备及日报表群」收纳为特殊作业速递卡晚报格子",
     },
+    # ── 隐患例外复核（P1-3 observe，每日 09:00；默认关，DB 配置覆写开启）──
+    {
+        "name": "隐患例外复核",
+        "hour": 9, "minute": 0,
+        "enabled": False,
+        "retry_until_hour": 11, "retry_until_minute": 0,
+        "description": "P1-3 例外复核员（observe）：每日 09:00 捞取死信多步补检，"
+                       "复核报告确认卡推送目标群+看板留痕；不写回任何表格列。"
+                       "默认关（灰度后经任务配置开启）；护栏 3/8/20 走应用配置",
+    },
     # ── 作业票审核（每日 10:00，审核昨日票）──
     {
         "name": "作业票审核",
@@ -633,6 +643,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             await _run_chemical_inventory_nightly_snapshot()
         elif job_name == "外来人员保险预警":
             await _run_visitor_insurance_warning(chat_id=chat_id)
+        elif job_name == "隐患例外复核":
+            await _run_exception_review(chat_id=chat_id)
         elif job_name == "法规收录对账巡检":
             await _run_regulation_ingest_reconcile()
         elif job_name == "设施校验任务派发":
@@ -663,6 +675,16 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
         if attempt_count >= ALERT_AFTER_FAILURES:
             await _maybe_send_failure_alert(job_name, attempt_count)
         raise
+
+
+async def _run_exception_review(chat_id: str | None = None) -> None:
+    """每日 09:00 例外复核（P1-3 observe，默认关；任务体在 service 层）。"""
+    from app.modules.safety.service.hazard_direct.exception_reviewer import (
+        run_scheduled_review,
+    )
+
+    summary = await run_scheduled_review(chat_id=chat_id)
+    logger.info("例外复核定时任务完成: %s", summary)
 
 
 async def _run_regulation_ingest_reconcile() -> None:

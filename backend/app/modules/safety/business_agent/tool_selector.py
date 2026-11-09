@@ -150,6 +150,12 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "visitor_insurance": ["query_visitor_insurance"],
     # 总览聚合域（agent-query-p1：驾驶舱 KPI 一句话总览，按需挂载）
     "overview": ["query_overview"],
+    # 例外复核员域（P1-3 observe：死信/点名复核，五工具+入口全只读）
+    "hazard_review": [
+        "hazard_view_images", "hazard_search_regulations",
+        "hazard_get_record_context", "hazard_cross_check",
+        "hazard_propose_writeback", "review_hazard_exceptions",
+    ],
 }
 
 # ── 意图关键词（中文）─────────────────────────────────────────────
@@ -265,6 +271,8 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     "visitor_insurance": ["外来人员", "保险", "报备", "访客"],
     # 总览聚合域（agent-query-p1）
     "overview": ["总览", "整体情况", "概况", "安全状况"],
+    # 例外复核员域（P1-3 observe）：死信捞取/点名复核话术
+    "hazard_review": ["复核死信", "例外复核", "死信复核", "复核一下", "抽检识别", "识别失败"],
 }
 
 # ── 始终激活的工具（基础能力，任何意图都带）────────────────────
