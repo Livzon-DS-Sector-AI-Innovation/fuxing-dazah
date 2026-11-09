@@ -136,6 +136,7 @@ WRITER_AI_ANALYSIS = "ai_analysis"  # ① 隐患 AI 识别轮询
 WRITER_REVIEW = "review"  # ② AI 整改初审
 WRITER_SCORING = "scoring"  # ⑤ AI 评分
 WRITER_SUPERVISION = "supervision"  # ③ 督办等级计算
+WRITER_EXCEPTION_REVIEW = "exception_reviewer"  # P2-1 例外复核写回（仅 AI 六列）
 WRITER_SYSTEM = "system"  # 系统规则（编号分配等）
 WRITER_LEGACY_EVENT = "legacy_event"  # 旧事件通道（已废弃，B5 拒写）
 
@@ -272,40 +273,40 @@ FIELD_RULES: tuple[FieldRule, ...] = (
         F_DESC_AI,
         FieldOwner.AI,
         semantic="key_defect",
-        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_LEGACY_EVENT}),
+        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_EXCEPTION_REVIEW, WRITER_LEGACY_EVENT}),
     ),
     FieldRule(
         F_LEVEL_AI,
         FieldOwner.AI,
         semantic="level",
         read_policy=ReadPolicy.AI_ONLY,
-        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_LEGACY_EVENT}),
+        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_EXCEPTION_REVIEW, WRITER_LEGACY_EVENT}),
     ),
     FieldRule(
         F_TYPE_AI,
         FieldOwner.AI,
         semantic="type",
         read_policy=ReadPolicy.AI_ONLY,
-        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_LEGACY_EVENT}),
+        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_EXCEPTION_REVIEW, WRITER_LEGACY_EVENT}),
     ),
     FieldRule(
         F_CATEGORY_AI,
         FieldOwner.AI,
         semantic="category",
         read_policy=ReadPolicy.AI_ONLY,
-        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_LEGACY_EVENT}),
+        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_EXCEPTION_REVIEW, WRITER_LEGACY_EVENT}),
     ),
     FieldRule(
         F_BASIS_AI,
         FieldOwner.AI,
         semantic="basis",
-        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_LEGACY_EVENT}),
+        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_EXCEPTION_REVIEW, WRITER_LEGACY_EVENT}),
     ),
     FieldRule(
         F_ADVICE_AI,
         FieldOwner.AI,
         semantic="advice",
-        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_LEGACY_EVENT}),
+        writers=frozenset({WRITER_AI_ANALYSIS, WRITER_EXCEPTION_REVIEW, WRITER_LEGACY_EVENT}),
     ),
     FieldRule(
         F_REVIEW_RESULT,

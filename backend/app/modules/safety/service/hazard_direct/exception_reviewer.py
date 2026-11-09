@@ -243,11 +243,27 @@ class ExceptionReviewReport(BaseModel):
     observed_at: datetime
     reviewer_prompt_version: str = ""
     round_note: str = ""  # 预算截断/降级等备注
+    # ── P2-1 扩展（全默认值，旧报告 JSON 向后兼容）──
+    ai_snapshot: dict[str, Any] = Field(default_factory=dict)  # 复核时 AI 六列原始值（CAS 基准）
+    writeback: str = "not_attempted"  # not_attempted/pending_confirm/success/failed/cas_conflict/gate_blocked
+    writeback_at: datetime | None = None
+    writeback_note: str = ""
+    human_feedback: str = ""  # ""/useful/useless（人工改判，P2-1 拍板⑨）
+    human_feedback_at: datetime | None = None
 
     @field_validator("exception_label", mode="before")
     @classmethod
     def _coerce_label(cls, value: Any) -> ExceptionLabel:
         return _validate_label(value)
+
+    @property
+    def effective_rescued(self) -> bool:
+        """rescued 有效口径：人工改判优先于程序判定（P2-1 F4）。"""
+        if self.human_feedback == "useful":
+            return True
+        if self.human_feedback == "useless":
+            return False
+        return self.rescued
 
     def summary(self) -> dict[str, Any]:
         """清单摘要行（入口工具/看板 Tab 共用口径）。"""
@@ -256,10 +272,13 @@ class ExceptionReviewReport(BaseModel):
             "source": str(self.review_source.value),
             "label": str(self.exception_label.value),
             "rescued": self.rescued,
+            "effective_rescued": self.effective_rescued,
             "action": str(self.proposed_action.value),
             "ai_basis": self.ai_conclusion.major_hazard_basis[:160],
             "observed_at": self.observed_at.isoformat(),
             "note": self.round_note,
+            "writeback": self.writeback,
+            "human_feedback": self.human_feedback,
         }
 
 
@@ -340,6 +359,9 @@ class ReviewDeps:
     model_factory: Callable[[], Any]  # → pydantic-ai Model
     redis: RedisLike | None = None
     budget: ReviewBudget = field(default_factory=ReviewBudget)
+    # P2-1 auto：observe|auto（非法值按 observe；app_config SAFETY_HAZARD_REVIEW_MODE）
+    mode: str = "observe"
+    writer: Any = None  # Bitable 写端（auto 直写用；None=执行时惰性建默认客户端）
 
 
 # ── 复核员 prompt（E4 skills 化：md 优先，本常量为离线兜底）────────────────
@@ -429,6 +451,16 @@ _AI_FIELDS = {
     "hazard_category": "隐患类别（AI）",
 }
 
+# P2-1：写回目标 AI 六列（field_authority exception_reviewer 白名单同源语义）
+AI_SNAPSHOT_FIELDS = (
+    "隐患描述（AI）",
+    "隐患级别（AI）",
+    "隐患分类（AI）",
+    "隐患类别（AI）",
+    "隐患判定依据（AI）",
+    "整改建议（AI）",
+)
+
 
 def _cell_text(fields: dict[str, Any], name: str) -> str:
     """Bitable 单元格文本化（select/text 兼容；与 bitable_repo.f_* 同语义的
@@ -487,6 +519,8 @@ async def fetch_record_context(
         "manual_conclusion": manual,
         "ai_conclusion": ai,
         "failure": failure,
+        # P2-1：AI 六列原始 Bitable 值（CAS 写前回读基准；不文本化保语义）
+        "ai_snapshot": {name: fields.get(name) for name in AI_SNAPSHOT_FIELDS},
     }
 
 
@@ -619,6 +653,19 @@ class ReviewRunResult:
     rescued: int = 0
     skipped: int = 0  # 因每日上限未复核
     stopped_reason: str = ""
+    # P2-1 auto 维度（observe 批恒 0）
+    writeback_success: int = 0
+    writeback_failed: int = 0
+    pending_confirm: int = 0
+
+    @property
+    def has_writeback_activity(self) -> bool:
+        """本批是否发生 auto 分级处置（卡片文案/入口返回体切换口径）。"""
+        return bool(
+            self.writeback_success
+            or self.writeback_failed
+            or self.pending_confirm
+        )
 
 
 async def _check_daily_budget(
@@ -638,10 +685,10 @@ async def _check_daily_budget(
         return True
 
 
-async def _save_report(
+async def save_report(
     report: ExceptionReviewReport, redis: RedisLike | None
 ) -> None:
-    """报告落 Redis hash（TTL 30 天；写失败只告警不阻断）。"""
+    """报告落 Redis hash（TTL 30 天；写失败只告警不阻断；写回/反馈路径共用）。"""
     if redis is None:
         return
     try:
@@ -655,6 +702,57 @@ async def _save_report(
             report.record_id,
             exc_info=True,
         )
+
+
+async def load_report(
+    record_id: str, redis: RedisLike | None
+) -> ExceptionReviewReport | None:
+    """按 record_id 装载最新报告（缺失/脏数据返回 None；反馈/写回入口共用）。"""
+    try:
+        raw = await redis.hget(REVIEWS_KEY, record_id)
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        return ExceptionReviewReport.model_validate_json(raw)
+    except Exception:  # noqa: BLE001
+        logger.warning("复核报告装载失败: record_id=%s", record_id, exc_info=True)
+        return None
+
+
+# 兼容旧名（runner 内部调用点保留私有别名）
+_save_report = save_report
+
+
+_VALID_FEEDBACK = ("useful", "useless")
+
+
+async def record_human_feedback(
+    record_id: str, feedback: str, *, redis: RedisLike | None = None
+) -> bool:
+    """rescued 人工改判（F4，Q6B）：useful/useless 回写 Redis 报告。
+
+    - 人工改判优先于程序判定（``effective_rescued``）；可反复切换；
+    - 报告缺失/解析失败返回 False（不抛）；非法 feedback 值 ValueError；
+    - TTL 30 天窗口外的报告随 hash 过期自然消失（改判入口即失效）。
+    """
+    if feedback not in _VALID_FEEDBACK:
+        raise ValueError(f"非法人工反馈: {feedback!r}，允许 {_VALID_FEEDBACK}")
+    client = redis if redis is not None else review_redis_client()
+    try:
+        report = await load_report(record_id, client)
+        if report is None:
+            return False
+        report.human_feedback = feedback
+        report.human_feedback_at = _now_utc()
+        await client.hset(REVIEWS_KEY, record_id, report.model_dump_json())
+        await client.expire(REVIEWS_KEY, REVIEWS_TTL_SECONDS)
+        return True
+    except Exception:  # noqa: BLE001 — Redis 抖动不炸回调
+        logger.warning(
+            "人工反馈回写失败: record_id=%s", record_id, exc_info=True
+        )
+        return False
 
 
 async def _write_review_audit(
@@ -834,6 +932,7 @@ async def review_single(
             rescued=rescued,
             observed_at=_now_utc(),
             reviewer_prompt_version=reviewer_prompt_version(),
+            ai_snapshot=dict(context.get("ai_snapshot") or {}),
         )
         await _save_report(report, deps.redis)
         await _write_review_audit(
@@ -881,6 +980,22 @@ async def run_exception_review(
         result.reviewed += 1
         if report.rescued:
             result.rescued += 1
+    # P2-1 auto 分级处置（F2）：observe 档整体跳过（行为与 P1-3 一致）。
+    # rescued 计数口径维持程序判定（P1-3 语义）；auto 分级用 effective 口径。
+    if getattr(deps, "mode", "observe") == "auto":
+        from app.modules.safety.service.hazard_direct.exception_writeback import (
+            auto_writeback_pass,
+        )
+
+        counts = await auto_writeback_pass(
+            result.reports,
+            reader=deps.reader,
+            writer=getattr(deps, "writer", None),
+            redis=deps.redis,
+        )
+        result.writeback_success = counts["success"]
+        result.writeback_failed = counts["failed"]
+        result.pending_confirm = counts["pending_confirm"]
     return result
 
 
@@ -963,12 +1078,15 @@ def _review_budget() -> ReviewBudget:
 
 def build_default_review_deps(db: Any = None) -> ReviewDeps:
     """默认复核依赖（真实链路）；测试 monkeypatch 本函数注入全 fake。"""
+    from app.modules.safety.service.hazard_direct.config import review_mode
+
     return ReviewDeps(
         reader=BitableRecordReader(),
         searcher=RetrieverSearcher(db),
         model_factory=_reviewer_model_factory,
         redis=review_redis_client(),  # 真客户端：每日护栏/报告落盘/看板数据链
         budget=_review_budget(),
+        mode=review_mode(),  # P2-1：observe|auto（默认 observe，app_config 可调）
     )
 
 
@@ -1007,5 +1125,8 @@ async def run_scheduled_review(chat_id: str | None) -> dict[str, Any]:
         "reviewed": result.reviewed,
         "skipped": result.skipped,
         "rescued": result.rescued,
+        "writeback_success": result.writeback_success,
+        "writeback_failed": result.writeback_failed,
+        "pending_confirm": result.pending_confirm,
         "card_sent": card_sent,
     }

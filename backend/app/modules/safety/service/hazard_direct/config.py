@@ -24,6 +24,7 @@ _DOMAIN = gates.DOMAIN_HAZARD
 # 兼容私有调用：转发底座实现，不保留第二份布尔/整数解析逻辑。
 _flag = gates.flag
 _int = gates.int_env
+domain_env = gates.domain_env
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -194,6 +195,23 @@ def review_budget() -> ReviewBudget:
         tool_call_limit=_int("SAFETY_HAZARD_REVIEW_TOOL_LIMIT", 8, minimum=1),
         daily_limit=_int("SAFETY_HAZARD_REVIEW_DAILY_LIMIT", 20, minimum=1),
     )
+
+
+# P2-1 auto 档位（Q5B：app_config 独立闸，不挂全局 SuperAgent Policy——
+# AgentPolicy.accept_mode 为全局单值，挂上去开 auto 会连带 R1/R2/HW 全部升 auto）
+_REVIEW_MODES = ("observe", "auto")
+
+
+def review_mode() -> str:
+    """例外复核运行档位：observe（默认，零写回）| auto（分级写回）。
+
+    非法值回落 observe（与 gates.flag「宁回退不错当」哲学一致）。
+    """
+    from app.modules.safety.app_config.store import store as app_config_store
+
+    raw = app_config_store.get_raw(domain_env(_DOMAIN, "REVIEW_MODE"))
+    value = (raw or "").strip().lower()
+    return value if value in _REVIEW_MODES else "observe"
 
 
 # ═══════════════════════════════════════════════════════════════
