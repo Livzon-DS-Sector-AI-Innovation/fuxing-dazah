@@ -15,7 +15,10 @@ test_package_surface 兜底。
 
 from app.modules.qa.service.apr.analysis import (
     MIN_STATS_SAMPLES,
+    build_trend_points,
     classify_point,
+    compute_column_stats,
+    get_cpk_level,
     summary,
     trend,
 )
@@ -31,10 +34,17 @@ from app.modules.qa.service.apr.excel_import import (
     build_import_template,
     import_section_values,
 )
-from app.modules.qa.service.apr.export import build_export_workbook
+from app.modules.qa.service.apr.export import (
+    build_export_workbook,
+    build_section_export,
+)
 from app.modules.qa.service.apr.lock import (
     list_annual_reviews,
     set_annual_review_lock,
+)
+from app.modules.qa.service.apr.report import (
+    build_report_rows,
+    build_section_report,
 )
 from app.modules.qa.service.apr.template import (
     bulk_create_items,
@@ -57,8 +67,13 @@ __all__ = [
     "batch_values",
     "build_export_workbook",
     "build_import_template",
+    "build_report_rows",
+    "build_section_export",
+    "build_section_report",
     "bulk_create_items",
+    "build_trend_points",
     "classify_point",
+    "compute_column_stats",
     "copy_template",
     "create_batch",
     "create_item",
@@ -68,6 +83,7 @@ __all__ = [
     "delete_item",
     "delete_product",
     "delete_section",
+    "get_cpk_level",
     "import_section_values",
     "list_annual_reviews",
     "list_batches",

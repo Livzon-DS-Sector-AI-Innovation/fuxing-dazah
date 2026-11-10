@@ -25,6 +25,83 @@ from app.modules.qa.service.apr.common import (
 MIN_STATS_SAMPLES = 2
 
 
+def get_cpk_level(cpk: float) -> str:
+    """CPK 分级（对齐年度回顾工具 qa_year_review：特优/优/良/一般/差）。"""
+    if cpk >= 3:
+        return "特优"
+    if cpk >= 1.33:
+        return "优"
+    if cpk >= 1.0:
+        return "良"
+    if cpk >= 0.6:
+        return "一般"
+    return "差"
+
+
+def compute_column_stats(
+    values: list[float],
+    *,
+    spec_min: float | None = None,
+    spec_max: float | None = None,
+) -> dict[str, Any]:
+    """单列完整统计（趋势/汇总/报告共用源；qa_year_review 同口径）。
+
+    基础量 count/mean/max/min 恒有；样本 ≥2 补 σ 与 ±3σ/±4σ；CPK 家族
+    需 σ>0 且至少一个标准限：单上限只算 CPKu、单下限只算 CPKl（CPK=该值），
+    双限另有 T/U/ca/cp 与警告限（U±0.5·T/2）/行动限（U±0.8·T/2）。
+    全同值（σ=0）CPK 无意义不输出。
+    """
+    if not values:
+        return {"count": 0}
+    mean = statistics.fmean(values)
+    stats: dict[str, Any] = {
+        "count": len(values),
+        "mean": mean,
+        "max": max(values),
+        "min": min(values),
+    }
+    if len(values) < MIN_STATS_SAMPLES:
+        return stats
+    stdev = statistics.stdev(values)
+    stats.update(
+        {
+            "stdev": stdev,
+            "plus3s": mean + 3 * stdev,
+            "minus3s": mean - 3 * stdev,
+            "plus4s": mean + 4 * stdev,
+            "minus4s": mean - 4 * stdev,
+        }
+    )
+    if stdev <= 0 or (spec_min is None and spec_max is None):
+        return stats
+    if spec_max is not None:
+        stats["cpku"] = abs(spec_max - mean) / (3 * stdev)
+    if spec_min is not None:
+        stats["cpkl"] = abs(mean - spec_min) / (3 * stdev)
+    if "cpku" in stats and "cpkl" in stats:
+        cpk = min(stats["cpku"], stats["cpkl"])
+    else:
+        cpk = stats["cpku"] if "cpku" in stats else stats["cpkl"]
+    stats["cpk"] = cpk
+    stats["cpk_level"] = get_cpk_level(cpk)
+    if spec_min is not None and spec_max is not None:
+        tolerance = spec_max - spec_min
+        center = (spec_max + spec_min) / 2
+        stats.update(
+            {
+                "tolerance": tolerance,
+                "spec_center": center,
+                "ca": (mean - center) / (tolerance / 2),
+                "cp": tolerance / (6 * stdev),
+                "warn_max": center + 0.5 * tolerance / 2,
+                "warn_min": center - 0.5 * tolerance / 2,
+                "action_max": center + 0.8 * tolerance / 2,
+                "action_min": center - 0.8 * tolerance / 2,
+            }
+        )
+    return stats
+
+
 def classify_point(
     value: float,
     *,
@@ -45,37 +122,39 @@ def classify_point(
     return "normal"
 
 
-async def trend(
-    db: AsyncSession, item_id: uuid.UUID, *, year: int | None = None
-) -> dict[str, Any]:
-    item = await _get_item_or_404(db, item_id)
-    if not item.trend_enabled:
-        raise AppException(status_code=422, message="该列未启用趋势分析。")
-    if item.value_type != AprValueType.NUMBER.value:
-        raise AppException(status_code=422, message="文字型列不支持趋势分析。")
-    section = await _get_section_or_404(db, item.section_id)
-    product = await _get_product_or_404(db, section.product_id)
-    series = await repo.load_numeric_series(db, item_id, year=year)
-    points = []
+def build_trend_points(
+    series: list[Any],
+    *,
+    nd_policy: str,
+    spec_min: float | None,
+    spec_max: float | None,
+    oot_min: float | None,
+    oot_max: float | None,
+) -> tuple[list[dict[str, Any]], list[float], int]:
+    """把 load_numeric_series 行集转成（趋势点, 值样本, ND 批数）。
+
+    页面趋势接口与 Word 报告图共用本函数（单一数据管线，两边数据恒一致）：
+    文字结果行（未检出等）exclude 口径不进点不进样本、zero 口径按 0 计入；
+    OOS/OOT 判定 ND 一律不参与（按 0 判会在设预警下限的列误报）。
+    """
+    points: list[dict[str, Any]] = []
     values: list[float] = []
     nd_count = 0
     for batch_id, batch_no, seq, batch_year, row_seq, value, text in series:
         is_nd = value is None
         if is_nd:
-            # 文字结果行（未检出等）：exclude 口径不进样本，zero 口径按 0
-            # 计入；OOS/OOT 判定一律不参与（按 0 判会在设预警下限的列误报）。
             nd_count += 1
-            if item.nd_policy == AprNdPolicy.EXCLUDE.value:
+            if nd_policy == AprNdPolicy.EXCLUDE.value:
                 continue
             value = 0.0
             status = "normal"
         else:
             status = classify_point(
                 value,
-                spec_min=item.spec_min,
-                spec_max=item.spec_max,
-                oot_min=item.oot_min,
-                oot_max=item.oot_max,
+                spec_min=spec_min,
+                spec_max=spec_max,
+                oot_min=oot_min,
+                oot_max=oot_max,
             )
         values.append(value)
         points.append(
@@ -91,22 +170,33 @@ async def trend(
                 "status": status,
             }
         )
-    stats: dict[str, Any] = {"count": len(values)}
+    return points, values, nd_count
+
+
+async def trend(
+    db: AsyncSession, item_id: uuid.UUID, *, year: int | None = None
+) -> dict[str, Any]:
+    item = await _get_item_or_404(db, item_id)
+    if not item.trend_enabled:
+        raise AppException(status_code=422, message="该列未启用趋势分析。")
+    if item.value_type != AprValueType.NUMBER.value:
+        raise AppException(status_code=422, message="文字型列不支持趋势分析。")
+    section = await _get_section_or_404(db, item.section_id)
+    product = await _get_product_or_404(db, section.product_id)
+    series = await repo.load_numeric_series(db, item_id, year=year)
+    points, values, nd_count = build_trend_points(
+        series,
+        nd_policy=item.nd_policy,
+        spec_min=item.spec_min,
+        spec_max=item.spec_max,
+        oot_min=item.oot_min,
+        oot_max=item.oot_max,
+    )
+    stats: dict[str, Any] = compute_column_stats(
+        values, spec_min=item.spec_min, spec_max=item.spec_max
+    )
     if nd_count:
         stats["nd_count"] = nd_count
-    if len(values) >= MIN_STATS_SAMPLES:
-        mean = statistics.fmean(values)
-        stdev = statistics.stdev(values)
-        stats.update(
-            {
-                "mean": mean,
-                "stdev": stdev,
-                "plus3s": mean + 3 * stdev,
-                "minus3s": mean - 3 * stdev,
-                "max": max(values),
-                "min": min(values),
-            }
-        )
     return {
         "item": _item_dict(item),
         "section": _section_dict(section),
@@ -115,20 +205,6 @@ async def trend(
         "points": points,
         "stats": stats,
     }
-
-
-def _numeric_stats(values: list[float]) -> dict[str, Any]:
-    if not values:
-        return {"count": 0}
-    stats: dict[str, Any] = {
-        "count": len(values),
-        "mean": statistics.fmean(values),
-        "max": max(values),
-        "min": min(values),
-    }
-    if len(values) >= MIN_STATS_SAMPLES:
-        stats["stdev"] = statistics.stdev(values)
-    return stats
 
 
 async def summary(
@@ -222,7 +298,9 @@ async def summary(
                     if i.nd_policy == AprNdPolicy.ZERO.value:
                         nums.append(0.0)
             if nums or nd_count:
-                stats = _numeric_stats(nums)
+                stats = compute_column_stats(
+                    nums, spec_min=i.spec_min, spec_max=i.spec_max
+                )
                 if nd_count:
                     stats["nd_count"] = nd_count
                 column_stats[str(i.id)] = stats

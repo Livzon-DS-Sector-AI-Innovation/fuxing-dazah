@@ -13,7 +13,14 @@ import {
   Tooltip,
 } from 'antd'
 import type { ColumnsType, ColumnType } from 'antd/es/table'
-import { DownloadOutlined, LineChartOutlined, LockOutlined, UnlockOutlined } from '@ant-design/icons'
+import clsx from 'clsx'
+import {
+  DownloadOutlined,
+  FileWordOutlined,
+  LineChartOutlined,
+  LockOutlined,
+  UnlockOutlined,
+} from '@ant-design/icons'
 import {
   actionError,
   EmptyState,
@@ -21,10 +28,22 @@ import {
 } from '@/components/qa/deviation/shared'
 import { PageHeading } from '@/components/shared/PageHeading'
 import { usePermission } from '@/hooks/usePermission'
-import { AprTrendChart } from './AprTrendChart'
+import { AprTrendModal } from './AprTrendModal'
 import { lockAprYear } from '@/actions/qa-apr'
-import { aprSummaryExportUrl, fetchAprProducts, fetchAprSummary, fetchAprTrend } from '@/lib/api/qa-apr'
-import type { AprItem, AprSummary, AprSummaryRow, AprSummarySection } from '@/types/qa-apr'
+import {
+  aprSectionExportUrl,
+  aprSectionReportUrl,
+  fetchAprProducts,
+  fetchAprSummary,
+  fetchAprTrend,
+} from '@/lib/api/qa-apr'
+import type {
+  AprItem,
+  AprSummary,
+  AprSummaryRow,
+  AprSummarySection,
+  AprTrendStats,
+} from '@/types/qa-apr'
 import {
   AprChromeStyles,
   AprMeta,
@@ -42,6 +61,10 @@ type ExceptionKind = 'oos' | 'oot'
 /** 结论条里直接列出的越界项上限，超出部分指向下方各段明细。 */
 const MAX_EXCEPTION_ROWS = 12
 
+/** 长表在表内滚动，表头与列统计始终留在视野里；短表不嵌套滚动。 */
+const TABLE_SCROLL_Y = 'max(280px, calc(100vh - 460px))'
+const TABLE_INNER_SCROLL_MIN_ROWS = 12
+
 interface AprException {
   key: string
   sectionId: string
@@ -54,71 +77,122 @@ interface AprException {
   status: ExceptionKind
 }
 
+/** 表尾统计行清单（对齐年度回顾工具 qa_year_review 的 22 项）：
+ * item=列定义自身限度（标准限），stats=查询时统计量；未检出行条件追加。 */
+const STAT_FOOTER_ROWS: { label: string; source: 'item' | 'stats'; key: string }[] = [
+  { label: '标准上限(USL)', source: 'item', key: 'spec_max' },
+  { label: '标准下限(LSL)', source: 'item', key: 'spec_min' },
+  { label: '平均值', source: 'stats', key: 'mean' },
+  { label: '最大值', source: 'stats', key: 'max' },
+  { label: '最小值', source: 'stats', key: 'min' },
+  { label: 'STDEVA', source: 'stats', key: 'stdev' },
+  { label: '+3σ', source: 'stats', key: 'plus3s' },
+  { label: '-3σ', source: 'stats', key: 'minus3s' },
+  { label: '+4σ', source: 'stats', key: 'plus4s' },
+  { label: '-4σ', source: 'stats', key: 'minus4s' },
+  { label: '规格公差(T)', source: 'stats', key: 'tolerance' },
+  { label: '规格中心值(U)', source: 'stats', key: 'spec_center' },
+  { label: '制程准确度(ca)', source: 'stats', key: 'ca' },
+  { label: '制程精密度(cp)', source: 'stats', key: 'cp' },
+  { label: '制程能力(CPKu)', source: 'stats', key: 'cpku' },
+  { label: '制程能力(CPKl)', source: 'stats', key: 'cpkl' },
+  { label: '制程能力(CPK)', source: 'stats', key: 'cpk' },
+  { label: 'CPK级别', source: 'stats', key: 'cpk_level' },
+  { label: '警告限上限', source: 'stats', key: 'warn_max' },
+  { label: '警告限下限', source: 'stats', key: 'warn_min' },
+  { label: '行动限上限', source: 'stats', key: 'action_max' },
+  { label: '行动限下限', source: 'stats', key: 'action_min' },
+]
+
+/** 录入框是单行 Input；Excel 导入或粘贴可能带入内部换行，汇总矩阵按单行显示。 */
+function toSingleLine(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, '')
+}
+
 /** 相邻同 group_name 的列聚合成一级表头（columnGroup）。 */
 function buildItemColumns(
   items: AprItem[],
   onTrend: (item: AprItem) => void,
 ): ColumnsType<AprSummaryRow> {
-  const leaf = (item: AprItem): ColumnType<AprSummaryRow> => ({
-    key: item.id,
-    title: (
-      <div style={{ lineHeight: 1.35 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 4 }}>
-          <span style={{ whiteSpace: 'normal' }}>
-            {item.name_cn}
-            {item.code.endsWith('#min') ? ' MIN' : item.code.endsWith('#max') ? ' MAX' : ''}
+  const leaf = (item: AprItem, groupStart: boolean): ColumnType<AprSummaryRow> => {
+    const numeric = item.value_type === 'number'
+    return {
+      key: item.id,
+      title: (
+        <div className={AprChromeStyles.colHead}>
+          <div className={AprChromeStyles.colNameRow}>
+            <span className={AprChromeStyles.colName}>
+              {item.name_cn}
+              {item.code.endsWith('#min') ? ' MIN' : item.code.endsWith('#max') ? ' MAX' : ''}
+            </span>
+            {item.trend_enabled && numeric && (
+              <Tooltip title={`看 ${item.name_cn} 随批次的走势`}>
+                <button
+                  type="button"
+                  className={AprChromeStyles.trendButton}
+                  aria-label={`看 ${item.name_cn} 的趋势`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onTrend(item)
+                  }}
+                >
+                  <LineChartOutlined />
+                </button>
+              </Tooltip>
+            )}
+          </div>
+          <div
+            className={AprChromeStyles.colSpec}
+            title={item.spec_text || item.unit || undefined}
+          >
+            {item.spec_text || (item.unit ?? '')}
+          </div>
+        </div>
+      ),
+      width: 128,
+      // 汇总矩阵按列读：文字判定与数值都居中，纵向扫列时不会左右跳。
+      align: 'center',
+      // 组界只画在组与组之间；第一组紧贴冻结批号列，加线会和冻结列阴影叠成双线。
+      onHeaderCell: () => (groupStart ? { className: AprChromeStyles.groupStart } : {}),
+      onCell: () => (groupStart ? { className: AprChromeStyles.groupStart } : {}),
+      render: (_v, row) => {
+        const cell = row.cells[item.id]
+        if (!cell || (cell.num === null && !cell.text)) {
+          return <span className={AprChromeStyles.cellEmpty}>—</span>
+        }
+        if (cell.num != null) {
+          return <AprValue value={cell.num} status={cell.status} />
+        }
+        const text = toSingleLine(cell.text ?? '')
+        return (
+          <span className={AprChromeStyles.textValue} title={text}>
+            {text}
           </span>
-          {item.trend_enabled && item.value_type === 'number' && (
-            <Tooltip title={`看 ${item.name_cn} 随批次的走势`}>
-              <button
-                type="button"
-                className={AprChromeStyles.trendButton}
-                aria-label={`看 ${item.name_cn} 的趋势`}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onTrend(item)
-                }}
-              >
-                <LineChartOutlined />
-              </button>
-            </Tooltip>
-          )}
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--color-steel)', whiteSpace: 'normal' }}>
-          {item.spec_text || (item.unit ?? '')}
-        </div>
-      </div>
-    ),
-    width: 128,
-    align: 'right',
-    render: (_v, row) => {
-      const cell = row.cells[item.id]
-      if (!cell || (cell.num === null && !cell.text)) {
-        return <span style={{ color: 'var(--color-hairline-strong)' }}>—</span>
-      }
-      return (
-        <AprValue
-          value={cell.num ?? cell.text ?? ''}
-          status={cell.status}
-          unit={cell.num != null ? item.unit : null}
-        />
-      )
-    },
-  })
+        )
+      },
+    }
+  }
 
   const columns: ColumnsType<AprSummaryRow> = []
   let i = 0
   while (i < items.length) {
     const group = items[i].group_name
     if (group) {
+      const groupStart = i > 0
       let j = i
       while (j < items.length && items[j].group_name === group) j++
       // 单列组也保留组名：分组是模板里的结构，不能因为只有一列就被铺平
-      columns.push({ title: group, children: items.slice(i, j).map(leaf) })
+      columns.push({
+        title: group,
+        onHeaderCell: () => ({
+          className: clsx(AprChromeStyles.groupHeadCell, groupStart && AprChromeStyles.groupStart),
+        }),
+        children: items.slice(i, j).map((item, index) => leaf(item, groupStart && index === 0)),
+      })
       i = j
       continue
     }
-    columns.push(leaf(items[i]))
+    columns.push(leaf(items[i], false))
     i++
   }
   return columns
@@ -133,7 +207,14 @@ function SectionTable({
 }) {
   const baseColumns: ColumnsType<AprSummaryRow> = [
     // 序号只是行号：seq 仅用于排序（含导出），不在矩阵里露出，避免和行号混成两种口径。
-    { title: '序号', key: 'row_index', width: 58, render: (_v, _row, index) => index + 1 },
+    {
+      title: '序号',
+      key: 'row_index',
+      width: 58,
+      fixed: 'left',
+      align: 'center',
+      render: (_v, _row, index) => <span className={AprChromeStyles.rowIndex}>{index + 1}</span>,
+    },
     {
       title: '批号',
       dataIndex: 'batch_no',
@@ -147,26 +228,23 @@ function SectionTable({
       title: '行',
       key: 'row_label',
       width: 78,
+      fixed: 'left',
+      align: 'center',
       render: (_v, row) => row.row_label || `第 ${row.row_seq} 行`,
     })
   }
   const columns: ColumnsType<AprSummaryRow> = [...baseColumns, ...buildItemColumns(section.items, onTrend)]
   // 显式给出矩阵宽度：列多时横向滚动，列少时由 min-width:100% 撑满，避免 'max-content' 多出一条细滚动条。
   const scrollX = (section.multi_row ? 292 : 214) + section.items.length * 128
+  const scrollY =
+    section.rows.length > TABLE_INNER_SCROLL_MIN_ROWS ? TABLE_SCROLL_Y : undefined
+  const labelSpan = section.multi_row ? 3 : 2
 
-  const statsOf = (item: AprItem, key: 'mean' | 'max' | 'min' | 'stdev') => {
-    const stats = section.column_stats[item.id]
-    const value = stats?.[key]
-    return value === undefined ? '' : Number(value).toFixed(4).replace(/\.?0+$/, '')
-  }
-
-  const statLabelStyle = {
-    display: 'block',
-    textAlign: 'right' as const,
-    fontSize: 11,
-    fontWeight: 600,
-    color: 'var(--color-steel)',
-    whiteSpace: 'nowrap' as const,
+  // 统计值按列精度展示（空=2）；不适用（单限缺对侧/文字列）显示 N/A；CPK级别等文字原样透出
+  const fmtStat = (item: AprItem, value: number | string | null | undefined) => {
+    if (value === null || value === undefined || value === '') return 'N/A'
+    if (typeof value === 'string') return value
+    return value.toFixed(item.stat_precision ?? 2)
   }
 
   return (
@@ -177,7 +255,7 @@ function SectionTable({
       dataSource={section.rows}
       pagination={false}
       tableLayout="fixed"
-      scroll={{ x: scrollX }}
+      scroll={{ x: scrollX, y: scrollY }}
       locale={{
         emptyText: (
           <EmptyState
@@ -189,43 +267,49 @@ function SectionTable({
       summary={() => {
         const numericItems = section.items.filter((i) => section.column_stats[i.id])
         if (numericItems.length === 0) return null
-        const statRow = (label: string, key: 'mean' | 'max' | 'min' | 'stdev') => (
-          <Table.Summary.Row key={key}>
-            <Table.Summary.Cell index={0} colSpan={section.multi_row ? 3 : 2}>
-              <span style={statLabelStyle}>{label}</span>
-            </Table.Summary.Cell>
-            {section.items.map((item) => {
-              const value = section.column_stats[item.id] ? statsOf(item, key) : ''
-              return (
-                <Table.Summary.Cell key={item.id} index={0} align="right">
-                  <span className={AprChromeStyles.num} style={{ fontSize: 12, color: 'var(--color-slate)' }}>
-                    {value}
-                    {value && item.unit ? (
-                      <span className={AprChromeStyles.unit}>{item.unit}</span>
-                    ) : null}
-                  </span>
-                </Table.Summary.Cell>
-              )
-            })}
-          </Table.Summary.Row>
-        )
         // 未检出批次行：口径透明（zero 已按 0 进上面统计，exclude 只计未进样本的批数）
         const ndOf = (item: AprItem) => section.column_stats[item.id]?.nd_count ?? 0
         const hasNd = numericItems.some((i) => ndOf(i) > 0)
         return (
-          <Table.Summary>
-            {statRow('平均值', 'mean')}
-            {statRow('最大值', 'max')}
-            {statRow('最小值', 'min')}
-            {statRow('σ', 'stdev')}
+          <Table.Summary fixed={!!scrollY}>
+            {STAT_FOOTER_ROWS.map(({ label, source, key }) => (
+              <Table.Summary.Row key={label}>
+                <Table.Summary.Cell index={0} colSpan={labelSpan}>
+                  <span className={AprChromeStyles.statLabel}>{label}</span>
+                </Table.Summary.Cell>
+                {section.items.map((item, index) => {
+                  const value =
+                    source === 'item'
+                      ? item[key as 'spec_min' | 'spec_max']
+                      : section.column_stats[item.id]?.[key as keyof AprTrendStats]
+                  const display = fmtStat(item, value)
+                  return (
+                    <Table.Summary.Cell
+                      key={item.id}
+                      index={labelSpan + index}
+                      // 与数据列同轴居中；N/A 和数值都落在列中心。
+                      align="center"
+                    >
+                      <span className={clsx(AprChromeStyles.num, AprChromeStyles.statValue)}>
+                        {display}
+                      </span>
+                    </Table.Summary.Cell>
+                  )
+                })}
+              </Table.Summary.Row>
+            ))}
             {hasNd && (
               <Table.Summary.Row key="nd">
-                <Table.Summary.Cell index={0} colSpan={section.multi_row ? 3 : 2}>
-                  <span style={statLabelStyle}>未检出</span>
+                <Table.Summary.Cell index={0} colSpan={labelSpan}>
+                  <span className={AprChromeStyles.statLabel}>未检出</span>
                 </Table.Summary.Cell>
-                {section.items.map((item) => (
-                  <Table.Summary.Cell key={item.id} index={0} align="right">
-                    <span style={{ fontSize: 12, color: 'var(--color-steel)' }}>
+                {section.items.map((item, index) => (
+                  <Table.Summary.Cell
+                    key={item.id}
+                    index={labelSpan + index}
+                    align="right"
+                  >
+                    <span className={AprChromeStyles.statNote}>
                       {ndOf(item) > 0 ? `${ndOf(item)} 批` : ''}
                     </span>
                   </Table.Summary.Cell>
@@ -267,7 +351,15 @@ function collectExceptions(summary: AprSummary | null): AprException[] {
   return list.sort((a, b) => (a.status === b.status ? 0 : a.status === 'oos' ? -1 : 1))
 }
 
-function AprExceptions({ exceptions, flush = false }: { exceptions: AprException[]; flush?: boolean }) {
+function AprExceptions({
+  exceptions,
+  rowCount,
+  flush = false,
+}: {
+  exceptions: AprException[]
+  rowCount: number
+  flush?: boolean
+}) {
   const oos = exceptions.filter((e) => e.status === 'oos').length
   const oot = exceptions.length - oos
   const box = flush
@@ -276,15 +368,14 @@ function AprExceptions({ exceptions, flush = false }: { exceptions: AprException
 
   if (exceptions.length === 0) {
     return (
-      <div className={`${box} ${flush ? '' : AprChromeStyles.exceptionsClean}`}>
-        <div className={AprChromeStyles.exceptionsHead}>
-          <span className={AprChromeStyles.count}>
-            <span className={`${AprChromeStyles.countValue} ${AprChromeStyles.countValueClean}`}>0</span>
-            <span className={AprChromeStyles.countLabel}>越界项</span>
+      <div className={box}>
+        <div className={AprChromeStyles.conclusion}>
+          <span className={AprChromeStyles.conclusionCheck} aria-hidden="true">
+            ✓
           </span>
-          <span className={AprChromeStyles.exceptionsNote}>
-            本年度已录入的批值与标准限度、OOT 预警限全部相符，可以直接定稿。
-          </span>
+          <p className={AprChromeStyles.conclusionText}>
+            本年度 {rowCount} 行批值未发现 OOS 超标或 OOT 预警，可以直接定稿。
+          </p>
         </div>
       </div>
     )
@@ -429,33 +520,7 @@ export function AprSummaryPage() {
     <div style={qaWidePageStyle}>
       <PageHeading
         title="汇总分析"
-        subtitle="年度回顾表：批次为行、质量属性为列，附均值与 σ，越界项单独列出。定稿后锁定并导出 Excel。"
-        actions={
-          productId && (canLock || canExport) ? (
-            <Space size={6}>
-              {canLock && (
-                <Tooltip title={summary?.locked ? '解除锁定后可继续修改' : '定稿后冻结该年度数据'}>
-                  <Button
-                    icon={summary?.locked ? <UnlockOutlined /> : <LockOutlined />}
-                    onClick={() => handleLockToggle(!summary?.locked)}
-                    loading={locking}
-                  >
-                    {summary?.locked ? '解锁年度' : '锁定年度'}
-                  </Button>
-                </Tooltip>
-              )}
-              {canExport && (
-                <Button
-                  type="primary"
-                  href={aprSummaryExportUrl(productId, year)}
-                  icon={<DownloadOutlined />}
-                >
-                  导出 Excel
-                </Button>
-              )}
-            </Space>
-          ) : undefined
-        }
+        subtitle="年度回顾表：批次为行、质量属性为列，表尾全量统计（±3σ/±4σ/CPK/警告与行动限），越界项单独列出；Excel 与 Word 报告按模板段导出。"
       />
 
       <AprScopeBar
@@ -494,6 +559,18 @@ export function AprSummaryPage() {
                 { value: 'inspection', label: '检验' },
               ]}
             />
+            {productId && canLock && (
+              <Tooltip title={summary?.locked ? '解除锁定后可继续修改' : '定稿后冻结该年度数据'}>
+                <Button
+                  size="small"
+                  icon={summary?.locked ? <UnlockOutlined /> : <LockOutlined />}
+                  onClick={() => handleLockToggle(!summary?.locked)}
+                  loading={locking}
+                >
+                  {summary?.locked ? '解锁年度' : '锁定年度'}
+                </Button>
+              </Tooltip>
+            )}
             {summary?.locked ? (
               <AprStamp tone="locked" icon={<LockOutlined />}>
                 已定稿
@@ -557,10 +634,10 @@ export function AprSummaryPage() {
               />
             }
             footer={
-              <span>点列头上的「趋势」查看单指标随批次的走势；越界值带语义色，OOS 红、OOT 橙。</span>
+              <span>列头「趋势」看单指标随批次的走势；越界值带语义色，OOS 红、OOT 橙。</span>
             }
           >
-            <AprExceptions exceptions={exceptions} flush />
+            <AprExceptions exceptions={exceptions} rowCount={batchCount} flush />
           </AprSheet>
 
           {sections.map((section) => (
@@ -578,10 +655,29 @@ export function AprSummaryPage() {
                     ]}
                   />
                 }
-                footer={
-                  <span>
-                    数值列下方为列统计（平均 / 最大 / 最小 / σ）；越界值带语义色并标在「年度结论」里。
-                  </span>
+                actions={
+                  canExport ? (
+                    <Space size={6}>
+                      <Tooltip title={`下载 ${section.name} ${year} 汇总（模板数据 + 全量统计）`}>
+                        <Button
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          href={aprSectionExportUrl(section.id, year)}
+                        >
+                          导出 Excel
+                        </Button>
+                      </Tooltip>
+                      <Tooltip title={`下载 ${section.name} ${year} 年度回顾 Word 报告（趋势图 + CPK 结论）`}>
+                        <Button
+                          size="small"
+                          icon={<FileWordOutlined />}
+                          href={aprSectionReportUrl(section.id, year)}
+                        >
+                          导出报告
+                        </Button>
+                      </Tooltip>
+                    </Space>
+                  ) : undefined
                 }
               >
                 <SectionTable section={section} onTrend={setTrendItem} />
@@ -589,46 +685,25 @@ export function AprSummaryPage() {
             </div>
           ))}
 
-          {trendItem ? (
-            <AprSheet
-              title={`趋势：${trendItem.name_cn}`}
-              meta={
-                <AprMeta
-                  items={[
-                    trendItem.unit,
-                    trendItem.spec_text ? `标准 ${trendItem.spec_text}` : false,
-                    trendItem.oot_min != null || trendItem.oot_max != null ? '含 OOT 预警限' : false,
-                  ]}
-                />
-              }
-              bleed={false}
-              actions={
-                <AprSegmented
-                  ariaLabel="趋势范围"
-                  value={trendScope}
-                  onChange={setTrendScope}
-                  options={[
-                    { value: 'year', label: `${year} 年` },
-                    { value: 'all', label: '跨年' },
-                  ]}
-                />
-              }
-            >
-              <AprTrendChart
-                trend={trendQuery.data ?? null}
-                loading={trendQuery.isLoading}
-                error={
-                  trendQuery.isError
-                    ? trendQuery.error instanceof Error
-                      ? trendQuery.error.message
-                      : '趋势加载失败'
-                    : null
-                }
-              />
-            </AprSheet>
-          ) : null}
         </>
       )}
+
+      <AprTrendModal
+        item={trendItem}
+        year={year}
+        scope={trendScope}
+        onScopeChange={setTrendScope}
+        onClose={() => setTrendItem(null)}
+        trend={trendQuery.data ?? null}
+        loading={trendQuery.isLoading}
+        error={
+          trendQuery.isError
+            ? trendQuery.error instanceof Error
+              ? trendQuery.error.message
+              : '趋势加载失败'
+            : null
+        }
+      />
     </div>
   )
 }

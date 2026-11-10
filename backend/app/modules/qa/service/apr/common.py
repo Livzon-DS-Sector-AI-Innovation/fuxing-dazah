@@ -159,6 +159,7 @@ def _item_dict(row: AprItem) -> dict[str, Any]:
         "oot_max": row.oot_max,
         "nd_policy": row.nd_policy,
         "quick_values": list(row.quick_values or []),
+        "stat_precision": row.stat_precision,
         "trend_enabled": row.trend_enabled,
         "required": row.required,
         "is_active": row.is_active,
@@ -189,3 +190,8 @@ def _display_name(name_cn: str, code: str) -> str:
     if code.endswith("#max"):
         return f"{name_cn} MAX"
     return name_cn
+
+
+def _item_precision(item: dict[str, Any]) -> int:
+    """列级统计精度；空 = 2（0 是合法精度，不能用 or 短路）。"""
+    return 2 if item.get("stat_precision") is None else int(item["stat_precision"])

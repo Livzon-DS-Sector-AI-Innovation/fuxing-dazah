@@ -19,6 +19,7 @@ from sqlalchemy import (
     Float,
     Index,
     Integer,
+    SmallInteger,
     String,
     Uuid,
     text,
@@ -204,6 +205,10 @@ class AprItem(BaseModel):
             "oot_min IS NULL OR oot_max IS NULL OR oot_min <= oot_max",
             name="ck_qa_apr_items_oot_range",
         ),
+        CheckConstraint(
+            "stat_precision IS NULL OR stat_precision BETWEEN 0 AND 6",
+            name="ck_qa_apr_items_stat_precision",
+        ),
         Index(
             "uq_qa_apr_items_section_code",
             "section_id",
@@ -275,6 +280,11 @@ class AprItem(BaseModel):
         default=lambda: ["未检出", "<1"],
         server_default=text("""'["未检出","<1"]'::jsonb"""),
         comment="数值列允许录入的文字结果（录入页快捷按钮）；非白名单文字拒绝保存",
+    )
+    stat_precision: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="统计数值精度（小数位）；空=2，汇总表尾/导出/报告格式化用",
     )
     trend_enabled: Mapped[bool] = mapped_column(
         Boolean,

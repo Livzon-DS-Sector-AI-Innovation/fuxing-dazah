@@ -204,6 +204,7 @@ class AprItemBase(BaseModel):
     oot_max: float | None = None
     nd_policy: AprNdPolicy = AprNdPolicy.ZERO
     quick_values: list[str] = Field(default_factory=lambda: ["未检出", "<1"])
+    stat_precision: int | None = Field(default=None, ge=0, le=6)
     trend_enabled: bool = True
     required: bool = False
     sort_order: int | None = None
@@ -273,6 +274,7 @@ class AprItemUpdate(BaseModel):
     oot_max: float | None = None
     nd_policy: AprNdPolicy | None = None
     quick_values: list[str] | None = None
+    stat_precision: int | None = Field(default=None, ge=0, le=6)
     trend_enabled: bool | None = None
     required: bool | None = None
     is_active: bool | None = None

@@ -46,6 +46,7 @@ interface ItemFormValues {
   oot_max?: number | null
   nd_policy: AprNdPolicy
   quick_values: string[]
+  stat_precision?: number | null
   trend_enabled: boolean
   required: boolean
   is_active: boolean
@@ -94,6 +95,7 @@ export function AprItemModal({ section, item, groups, defaultGroup, onClose, onS
         oot_max: item.oot_max,
         nd_policy: item.nd_policy,
         quick_values: item.quick_values,
+        stat_precision: item.stat_precision,
         trend_enabled: item.trend_enabled,
         required: item.required,
         is_active: item.is_active,
@@ -115,6 +117,7 @@ export function AprItemModal({ section, item, groups, defaultGroup, onClose, onS
         oot_max: null,
         nd_policy: 'zero',
         quick_values: ['未检出', '<1'],
+        stat_precision: null,
         trend_enabled: true,
         required: true,
         is_active: true,
@@ -171,6 +174,7 @@ export function AprItemModal({ section, item, groups, defaultGroup, onClose, onS
       oot_max: isNumberValue ? values.oot_max ?? null : null,
       nd_policy: isNumberValue ? values.nd_policy : undefined,
       quick_values: isNumberValue ? values.quick_values : undefined,
+      stat_precision: isNumberValue ? (values.stat_precision ?? null) : null,
       trend_enabled: isNumberValue ? Boolean(values.trend_enabled) : false,
       required: Boolean(values.required),
       // 编码留空时：新增由后端生成，编辑保持原编码不变
@@ -348,7 +352,7 @@ export function AprItemModal({ section, item, groups, defaultGroup, onClose, onS
                 <InputNumber style={{ width: '100%' }} placeholder="可不填" />
               </Form.Item>
             </div>
-            <div className="grid grid-cols-2 gap-x-4">
+            <div className="grid grid-cols-3 gap-x-4">
               <Form.Item
                 name="nd_policy"
                 label="未检出统计口径"
@@ -373,6 +377,20 @@ export function AprItemModal({ section, item, groups, defaultGroup, onClose, onS
                   maxCount={4}
                   tokenSeparators={[',', '，']}
                   placeholder="如 未检出、<0.5"
+                />
+              </Form.Item>
+              <Form.Item
+                name="stat_precision"
+                label="统计精度（位）"
+                style={ITEM_STYLE}
+                tooltip="汇总表尾统计值、导出 Excel 与年度回顾报告的小数位；留空按 2 位"
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  min={0}
+                  max={6}
+                  precision={0}
+                  placeholder="默认 2"
                 />
               </Form.Item>
             </div>

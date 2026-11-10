@@ -395,7 +395,60 @@ async def summary_export(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": (
-                f"attachment; filename=\"apr-summary.xlsx\"; filename*=UTF-8''{encoded}"
+                f'attachment; filename="apr-summary.xlsx"; filename*=UTF-8\'\'{encoded}'
+            )
+        },
+    )
+
+
+@router.get(
+    "/apr/sections/{section_id}/export",
+    summary="导出段级汇总 Excel（该段模板数据+全量统计）",
+)
+async def section_export(
+    section_id: uuid.UUID,
+    user: User = Depends(_apr_export),
+    db: AsyncSession = Depends(get_db),
+    year: int = Query(ge=2000, le=2100),
+) -> StreamingResponse:
+    wb, filename = await service.build_section_export(db, section_id, year=year)
+    buf = io.BytesIO()
+    wb.save(buf)
+    encoded = quote(filename)
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="apr-section-summary.xlsx"; '
+                f"filename*=UTF-8''{encoded}"
+            )
+        },
+    )
+
+
+@router.get(
+    "/apr/sections/{section_id}/report",
+    summary="导出段级年度回顾 Word 报告（趋势图+CPK 结论）",
+)
+async def section_report(
+    section_id: uuid.UUID,
+    user: User = Depends(_apr_export),
+    db: AsyncSession = Depends(get_db),
+    year: int = Query(ge=2000, le=2100),
+) -> StreamingResponse:
+    content, filename = await service.build_section_report(db, section_id, year=year)
+    encoded = quote(filename)
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument"
+            ".wordprocessingml.document"
+        ),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="apr-report.docx"; '
+                f"filename*=UTF-8''{encoded}"
             )
         },
     )

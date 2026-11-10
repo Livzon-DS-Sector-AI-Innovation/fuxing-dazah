@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
-from app.modules.qa.service.apr.common import _display_name
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.exceptions import AppException
+from app.modules.qa.service.apr.analysis import summary
+from app.modules.qa.service.apr.common import (
+    _display_name,
+    _get_section_or_404,
+    _item_precision,
+)
 
 
 def _excel_sheet_name(section_name: str, market: str | None, used: set[str]) -> str:
@@ -26,6 +35,59 @@ def _item_display_name(item: dict[str, Any]) -> str:
     return _display_name(str(item["name_cn"]), item["code"])
 
 
+# 表尾统计行清单（对齐年度回顾工具 qa_year_review 的 STAT_KEYS_CN 22 项）：
+# (标签, 取值来源, 键)。item=列定义自身属性（标准限），stats=查询时统计量；
+# 未检出透明行（nd_count）在任一列存在 ND 时追加。
+_STAT_ROWS: list[tuple[str, str, str]] = [
+    ("标准上限(USL)", "item", "spec_max"),
+    ("标准下限(LSL)", "item", "spec_min"),
+    ("平均值", "stats", "mean"),
+    ("最大值", "stats", "max"),
+    ("最小值", "stats", "min"),
+    ("STDEVA", "stats", "stdev"),
+    ("+3σ", "stats", "plus3s"),
+    ("-3σ", "stats", "minus3s"),
+    ("+4σ", "stats", "plus4s"),
+    ("-4σ", "stats", "minus4s"),
+    ("规格公差(T)", "stats", "tolerance"),
+    ("规格中心值(U)", "stats", "spec_center"),
+    ("制程准确度(ca)", "stats", "ca"),
+    ("制程精密度(cp)", "stats", "cp"),
+    ("制程能力(CPKu)", "stats", "cpku"),
+    ("制程能力(CPKl)", "stats", "cpkl"),
+    ("制程能力(CPK)", "stats", "cpk"),
+    ("CPK级别", "stats", "cpk_level"),
+    ("警告限上限", "stats", "warn_max"),
+    ("警告限下限", "stats", "warn_min"),
+    ("行动限上限", "stats", "action_max"),
+    ("行动限下限", "stats", "action_min"),
+]
+
+
+async def build_section_export(
+    db: AsyncSession, section_id: uuid.UUID, *, year: int
+) -> tuple[Any, str]:
+    """段级汇总导出：该段一个 sheet（模板数据矩阵+全量统计表尾）。
+
+    汇总仍走 summary（查询时统计）；按段过滤 sections 后复用整本渲染器。
+    """
+    section = await _get_section_or_404(db, section_id)
+    data = await summary(db, section.product_id, year=year)
+    data["sections"] = [
+        s for s in data["sections"] if s["id"] == str(section_id)
+    ]
+    if not data["sections"]:
+        raise AppException(
+            status_code=422,
+            message=(
+                f"模板段「{section.name}」在 {year} 年度还没有可导出的批次数据。"
+            ),
+        )
+    wb = build_export_workbook(data)
+    filename = f"{data['product']['name']}{section.name}{year}年度审核汇总.xlsx"
+    return wb, filename
+
+
 def build_export_workbook(
     summary_data: dict[str, Any],
 ) -> Any:
@@ -38,8 +100,6 @@ def build_export_workbook(
     from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
 
-    product = summary_data["product"]
-    year = summary_data["year"]
     wb = openpyxl.Workbook()
     default_sheet = wb.active
     if default_sheet is not None:
@@ -57,17 +117,8 @@ def build_export_workbook(
         data_col_offset = 3 if section["multi_row"] else 2
         n_cols = data_col_offset + len(items)
 
-        # r1 标题
-        title = (
-            f"年度产品审核/ANNUAL PRODUCT REVIEW——{product['name']}"
-            f"（{product['code']}）{year} · {section['name']}"
-        )
-        ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=13)
-        ws.merge_cells(
-            start_row=1, start_column=1, end_row=1, end_column=max(n_cols, 2)
-        )
-        # r2 分组（相邻同组合并）
-        group_row = 2
+        # r1 分组（相邻同组合并）；无大标题行——产品/年度信息在文件名里
+        group_row = 1
         col = data_col_offset + 1
         while col <= n_cols:
             group = items[col - data_col_offset - 1]["group_name"]
@@ -88,25 +139,25 @@ def build_export_workbook(
                     end_column=end,
                 )
             col = end + 1
-        # r3 列名 / r4 标准
-        ws.cell(row=3, column=1, value="序号").font = bold
-        ws.cell(row=3, column=2, value="批号").font = bold
+        # r2 列名 / r3 标准
+        ws.cell(row=2, column=1, value="序号").font = bold
+        ws.cell(row=2, column=2, value="批号").font = bold
         if section["multi_row"]:
-            ws.cell(row=3, column=3, value="行标签").font = bold
+            ws.cell(row=2, column=3, value="行标签").font = bold
         for idx, item in enumerate(items):
             name_cell = ws.cell(
-                row=3, column=data_col_offset + 1 + idx, value=_item_display_name(item)
+                row=2, column=data_col_offset + 1 + idx, value=_item_display_name(item)
             )
             name_cell.font = bold
             name_cell.alignment = center
             ws.cell(
-                row=4,
+                row=3,
                 column=data_col_offset + 1 + idx,
                 value=item["spec_text"] or "",
             ).alignment = center
         # 数据行
         for ridx, row in enumerate(section["rows"], start=1):
-            excel_row = 4 + ridx
+            excel_row = 3 + ridx
             ws.cell(row=excel_row, column=1, value=ridx)
             ws.cell(row=excel_row, column=2, value=row["batch_no"])
             col_cursor = data_col_offset + 1
@@ -123,28 +174,35 @@ def build_export_workbook(
                     )
                 ws.cell(row=excel_row, column=col_cursor, value=value)
                 col_cursor += 1
-        # 表尾统计（仅数值列）
+        # 表尾统计：仅数值列；数值按列精度圆整，CPK级别为文字；
+        # 不适用的统计显示 N/A（单限缺对侧、文字列无统计）；
+        # 任一列存在未检出时追加透明行（口径 zero 已按 0 进统计，无 ND 留空——批数不是统计量）。
         stats_by_id = section["column_stats"]
-        stat_rows = [
-            ("平均值", "mean"),
-            ("最大值", "max"),
-            ("最小值", "min"),
-            ("STDEV", "stdev"),
-        ]
-        base_row = 4 + len(section["rows"]) + 1
-        for offset, (label, key) in enumerate(stat_rows):
+        base_row = 3 + len(section["rows"]) + 1
+        footer_rows: list[tuple[str, str, str]] = list(_STAT_ROWS)
+        if any(s.get("nd_count") for s in stats_by_id.values()):
+            footer_rows.append(("未检出", "stats", "nd_count"))
+        for offset, (label, source, key) in enumerate(footer_rows):
             row_idx = base_row + offset
             ws.cell(row=row_idx, column=1, value=label).font = bold
             for idx, item in enumerate(items):
                 stats = stats_by_id.get(item["id"])
-                if stats:
-                    ws.cell(
-                        row=row_idx,
-                        column=data_col_offset + 1 + idx,
-                        value=round(stats[key], 6)
-                        if stats.get(key) is not None
-                        else "",
+                if source == "item":
+                    value = item.get(key)
+                elif stats is None:
+                    value = None
+                else:
+                    value = stats.get(key)
+                # 未检出行空=无 ND；统计行空=不适用，显示 N/A
+                empty_display = "" if key == "nd_count" else "N/A"
+                cell_value: Any = empty_display
+                if value is not None:
+                    cell_value = (
+                        value
+                        if isinstance(value, str)
+                        else round(value, _item_precision(item))
                     )
+                ws.cell(row=row_idx, column=data_col_offset + 1 + idx, value=cell_value)
         # 列宽
         ws.column_dimensions["A"].width = 8
         ws.column_dimensions["B"].width = 20

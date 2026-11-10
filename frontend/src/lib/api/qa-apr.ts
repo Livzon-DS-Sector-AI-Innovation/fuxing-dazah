@@ -68,14 +68,19 @@ export async function fetchAprAnnualReviews(productId: string): Promise<AprAnnua
   return apiGet<AprAnnualReview[]>(`${APR_BASE}/annual-reviews${qs({ product_id: productId })}`)
 }
 
-/** 汇总导出直链（浏览器同源 cookie 鉴权，供 <a download> 使用）。 */
-export function aprSummaryExportUrl(productId: string, year: number): string {
-  return `${APR_BASE}/summary/export${qs({ product_id: productId, year })}`
+/** 段级汇总导出直链（该段模板数据+全量统计，浏览器同源 cookie 鉴权）。 */
+export function aprSectionExportUrl(sectionId: string, year: number): string {
+  return `${APR_BASE}/sections/${sectionId}/export${qs({ year })}`
 }
 
 /** 录入导入模板直链（同上，<a download> 下载）。 */
 export function aprImportTemplateUrl(sectionId: string, year: number): string {
   return `${APR_BASE}/sections/${sectionId}/import-template${qs({ year })}`
+}
+
+/** 段级年度回顾 Word 报告直链（趋势图+CPK 结论）。 */
+export function aprSectionReportUrl(sectionId: string, year: number): string {
+  return `${APR_BASE}/sections/${sectionId}/report${qs({ year })}`
 }
 
 /** Excel 批量导入录入值。客户端直传 FormData（Server Action 有 1MB body 限制）。 */

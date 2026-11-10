@@ -39,6 +39,8 @@ export interface AprItem {
   nd_policy: AprNdPolicy
   /** 数值列允许录入的文字结果（录入页快捷按钮，同时是保存白名单）。 */
   quick_values: string[]
+  /** 统计数值精度（小数位）；空 = 2，汇总表尾/导出/报告格式化用。 */
+  stat_precision: number | null
   trend_enabled: boolean
   required: boolean
   is_active: boolean
@@ -110,8 +112,23 @@ export interface AprTrendStats {
   stdev?: number
   plus3s?: number
   minus3s?: number
+  plus4s?: number
+  minus4s?: number
   max?: number
   min?: number
+  /** 以下 CPK 家族与警告/行动限对齐年度回顾工具 qa_year_review；单限列只出单侧。 */
+  tolerance?: number
+  spec_center?: number
+  ca?: number
+  cp?: number
+  cpku?: number
+  cpkl?: number
+  cpk?: number
+  cpk_level?: string
+  warn_max?: number
+  warn_min?: number
+  action_max?: number
+  action_min?: number
 }
 
 export interface AprTrend {
@@ -227,6 +244,7 @@ export interface AprItemInput {
   oot_max?: number | null
   nd_policy?: AprNdPolicy
   quick_values?: string[]
+  stat_precision?: number | null
   trend_enabled?: boolean
   required?: boolean
   is_active?: boolean
