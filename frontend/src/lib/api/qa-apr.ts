@@ -6,6 +6,8 @@ import type {
   AprBatch,
   AprBatchValuesPayload,
   AprDataKind,
+  AprImportMode,
+  AprImportResult,
   AprProduct,
   AprSection,
   AprSummary,
@@ -69,4 +71,30 @@ export async function fetchAprAnnualReviews(productId: string): Promise<AprAnnua
 /** 汇总导出直链（浏览器同源 cookie 鉴权，供 <a download> 使用）。 */
 export function aprSummaryExportUrl(productId: string, year: number): string {
   return `${APR_BASE}/summary/export${qs({ product_id: productId, year })}`
+}
+
+/** 录入导入模板直链（同上，<a download> 下载）。 */
+export function aprImportTemplateUrl(sectionId: string, year: number): string {
+  return `${APR_BASE}/sections/${sectionId}/import-template${qs({ year })}`
+}
+
+/** Excel 批量导入录入值。客户端直传 FormData（Server Action 有 1MB body 限制）。 */
+export async function importAprSectionValues(
+  sectionId: string,
+  year: number,
+  mode: AprImportMode,
+  file: File
+): Promise<AprImportResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await fetch(
+    `${APR_BASE}/sections/${sectionId}/values/import${qs({ year, mode })}`,
+    { method: 'POST', body: formData, credentials: 'include' }
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: `导入失败: ${res.status}` }))
+    throw new Error(err.message || `导入失败: ${res.status}`)
+  }
+  const json = await res.json()
+  return json.data ?? json
 }

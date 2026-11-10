@@ -1,4 +1,4 @@
-"""QA 年度产品审核（APR）请求模型。
+"""QA 年度产品审核（PQR）请求模型。
 
 响应用惯例由 service 构造 dict 返回（同偏差管理），这里只声明请求体。
 """
@@ -48,7 +48,7 @@ def _normalize_quick_values(values: list[str] | None) -> list[str] | None:
 
 
 class AprProductCreate(BaseModel):
-    """新增 APR 产品。
+    """新增 PQR 产品。
 
     短码统一转大写（批号前缀与导出识别口径），短码与名称均要求唯一。
     """
@@ -83,7 +83,7 @@ class AprProductCreate(BaseModel):
 
 
 class AprProductUpdate(BaseModel):
-    """编辑 APR 产品；未传字段不改。"""
+    """编辑 PQR 产品；未传字段不改。"""
 
     code: str | None = Field(default=None, min_length=1, max_length=32)
     name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -385,6 +385,31 @@ class AprBatchValuesIn(BaseModel):
     """整批一屏批量保存：全量替换该批次现有值（硬删+插入）。"""
 
     values: list[AprValueIn] = Field(min_length=0, max_length=2000)
+
+
+AprImportMode = Literal["merge", "replace"]
+
+
+class AprImportCellError(BaseModel):
+    """Excel 导入错误定位：row=工作簿行号，0 表示文件级（打不开/无表头等）。"""
+
+    row: int = Field(ge=0)
+    column: str | None = None
+    message: str
+
+
+class AprImportResult(BaseModel):
+    """Excel 导入结果：全部校验通过才写入（ok=false 时零落库）。"""
+
+    ok: bool
+    mode: AprImportMode
+    batches: int = Field(default=0, ge=0)
+    cells: int = Field(default=0, ge=0)
+    registered: int = Field(
+        default=0, ge=0, description="文件中未登记、本次自动创建的批次数"
+    )
+    errors: list[AprImportCellError] = Field(default_factory=list, max_length=100)
+    total_errors: int = Field(default=0, ge=0)
 
 
 TrendPointStatus = Literal["normal", "oot", "oos"]

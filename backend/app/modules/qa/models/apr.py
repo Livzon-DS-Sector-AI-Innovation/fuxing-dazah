@@ -1,4 +1,4 @@
-"""QA 年度产品审核（APR）数据集中管理 ORM 模型。
+"""QA 年度产品审核（PQR）数据集中管理 ORM 模型。
 
 抽象自各产品年终 Excel（附件4 生产数据汇总 / 附件6、7 检验结果汇总）：
 产品 → 模板段（对应 sheet 或横向块）→ 列定义（工艺参数/检验项目+标准限）
@@ -74,7 +74,7 @@ def _enum_sql_list(values: type[enum.StrEnum]) -> str:
 
 
 class AprProduct(BaseModel):
-    """APR 产品目录：一个产品一套模板，年年复用。
+    """PQR 产品目录：一个产品一套模板，年年复用。
 
     短码与名称均唯一（仅约束未删除行，删掉后可重新启用同名/同码）。
     短码在 schema 层统一转大写后落库，避免 ``dt``/``DT`` 并存。
@@ -116,7 +116,7 @@ class AprProduct(BaseModel):
 
 
 class AprSection(BaseModel):
-    """APR 模板段：对应 Excel 一个 sheet 或 sheet 内一个横向块。
+    """PQR 模板段：对应 Excel 一个 sheet 或 sheet 内一个横向块。
 
     单卡「发酵生产」左右两块 = 两个段；DT 三个药典 = 三个段（market 各异）。
     段名在同一产品内唯一（不同产品可同名，如各自的「成品检验-USP」）。
@@ -176,7 +176,7 @@ class AprSection(BaseModel):
 
 
 class AprItem(BaseModel):
-    """APR 列定义：工艺参数/检验项目及其标准限。
+    """PQR 列定义：工艺参数/检验项目及其标准限。
 
     不可硬删只能停用（is_active），保证历史值可解释；MIN/MAX 子列建模为
     同名成对 item（code 带 ``#min``/``#max`` 后缀），录入界面渲染成双格。
@@ -306,7 +306,7 @@ class AprItem(BaseModel):
 
 
 class AprBatch(BaseModel):
-    """APR 批次登记：粒度 =（产品，段，批号，年度）。
+    """PQR 批次登记：粒度 =（产品，段，批号，年度）。
 
     同一成品批在三个市场段各自登记（贴合 Excel 形态）；生产链各段批号
     天然不同、各自登记；parent_batch_id 留批次血缘后手。
@@ -353,7 +353,7 @@ class AprBatch(BaseModel):
 
 
 class AprValue(BaseModel):
-    """APR 值：批次 × 列定义 × 行号。数值走 value_num，文字判定/半定量走 value_text。
+    """PQR 值：批次 × 列定义 × 行号。数值走 value_num，文字判定/半定量走 value_text。
 
     保存为硬删+批量插入（网格单元格非审计对象），软删列仅备用。
     """
@@ -401,7 +401,7 @@ class AprValue(BaseModel):
 
 
 class AprAnnualReview(BaseModel):
-    """APR 年度锁定：产品×年度定稿后冻结数据，录入/修改按此拦截。"""
+    """PQR 年度锁定：产品×年度定稿后冻结数据，录入/修改按此拦截。"""
 
     __tablename__ = "apr_annual_reviews"
     __table_args__ = (

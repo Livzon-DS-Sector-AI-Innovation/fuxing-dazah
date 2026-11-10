@@ -37,7 +37,7 @@ router.include_router(ai_analysis_router)
 router.include_router(files_router)
 # 偏差管理（偏差 + CAPA）
 router.include_router(deviations_router)
-# 年度产品审核（APR）数据管理
+# 年度产品审核（PQR）数据管理
 router.include_router(apr_router)
 # 检索与审计
 router.include_router(search_router)

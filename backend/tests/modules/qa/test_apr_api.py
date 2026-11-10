@@ -1,4 +1,4 @@
-"""QA 年度产品审核（APR）API 测试：配置/录入/锁定/趋势/汇总/导出。
+"""QA 年度产品审核（PQR）API 测试：配置/录入/锁定/趋势/汇总/导出。
 
 沿用 test_deviation_api 的模式：手工覆盖 get_db / get_current_user 并
 patch 权限集合，整条用例共用一个最终回滚的会话。产品短码加随机前缀，
@@ -157,7 +157,7 @@ async def test_read_requires_permission() -> None:
 
 
 async def test_wildcard_read_grants_list() -> None:
-    """模块通配读码 qa:*:read 放行 APR 读取。"""
+    """模块通配读码 qa:*:read 放行 PQR 读取。"""
     async with _client(WILDCARD_READ) as (ac, _):
         resp = await ac.get("/api/v1/qa/apr/products")
         assert resp.status_code == 200
@@ -165,7 +165,7 @@ async def test_wildcard_read_grants_list() -> None:
 
 
 async def test_write_codes_imply_read() -> None:
-    """enter/manage 写权限隐含 APR 读取（否则按码配权会菜单可见但整页 403）。"""
+    """enter/manage 写权限隐含 PQR 读取（否则按码配权会菜单可见但整页 403）。"""
     async with _client({"qa:apr:enter"}) as (ac, _):
         resp = await ac.get("/api/v1/qa/apr/products")
         assert resp.status_code == 200

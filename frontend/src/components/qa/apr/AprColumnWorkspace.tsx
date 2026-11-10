@@ -348,7 +348,7 @@ export function AprColumnWorkspace({
     {
       title: '值类型',
       key: 'value_type',
-      width: 88,
+      width: 150,
       render: (_, item) =>
         item.value_type === 'number' ? (
           <span className="text-[12px]">

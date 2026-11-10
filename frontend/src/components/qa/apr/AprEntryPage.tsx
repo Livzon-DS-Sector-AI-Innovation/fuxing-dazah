@@ -39,6 +39,7 @@ import {
   AprYearField,
 } from './AprChrome'
 import { confirmAsync, DANGER_OK_PROPS, DATA_KIND_LABEL } from './AprConfigShared'
+import { AprImportModal } from './AprImportModal'
 
 // ═════════════════════════ 工具 ═════════════════════════
 
@@ -220,6 +221,7 @@ export function AprEntryPage() {
   const [registerOpen, setRegisterOpen] = useState(false)
   const [registerSaving, setRegisterSaving] = useState(false)
   const [registerForm] = Form.useForm()
+  const [importOpen, setImportOpen] = useState(false)
 
   /** 把局部改动合并进当前查询串；空值即删除该参数。 */
   const syncUrl = (patch: Record<string, string | null>) => {
@@ -270,6 +272,9 @@ export function AprEntryPage() {
   const locked = summaryQuery.data?.locked === true
   const items = sectionPayload?.items ?? []
   const multiRow = sectionPayload?.multi_row ?? currentSection?.multi_row ?? false
+  // summary 只携带已登记批次的段：列已配好但该年度还没有批次时段不在 payload 里，
+  // 空态要靠 sections 接口的列定义区分「没列」和「没批次」，别误报没列。
+  const sectionHasActiveItems = currentSection?.items?.some((i) => i.is_active) ?? false
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['qa', 'apr', 'summary'] })
@@ -1016,6 +1021,11 @@ export function AprEntryPage() {
             {currentSection?.multi_row && <AprStamp tone="warn">一批多行</AprStamp>}
             {locked && <AprStamp tone="locked">年度已定稿</AprStamp>}
             {canEnter && (
+              <Button disabled={!activeSectionId || locked} onClick={() => setImportOpen(true)}>
+                导入 Excel
+              </Button>
+            )}
+            {canEnter && (
               <Button type="primary" disabled={!activeSectionId || locked} onClick={() => setRegisterOpen(true)}>
                 登记批次
               </Button>
@@ -1056,7 +1066,7 @@ export function AprEntryPage() {
                 title="先选产品与模板段"
                 hint="批次按模板段归档；选好段之后这里会列出该年度的批号。"
               />
-            ) : items.length === 0 ? (
+            ) : items.length === 0 && !sectionHasActiveItems ? (
               <EmptyState
                 title="这个段还没有列定义"
                 hint="先到「模板配置」里给这个段添加质量属性与标准限度，录入矩阵会按列定义生成。"
@@ -1127,6 +1137,15 @@ export function AprEntryPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <AprImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={invalidate}
+        sectionId={activeSectionId}
+        sectionName={currentSection?.name ?? null}
+        year={year}
+      />
     </div>
   )
 }

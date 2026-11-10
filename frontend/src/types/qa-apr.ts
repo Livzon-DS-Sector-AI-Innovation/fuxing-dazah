@@ -1,4 +1,4 @@
-// QA 年度产品审核（APR）类型，对应后端 app/modules/qa/*_apr（/api/v1/qa/apr）。
+// QA 年度产品审核（PQR）类型，对应后端 app/modules/qa/*_apr（/api/v1/qa/apr）。
 
 export type AprDataKind = 'production' | 'inspection'
 export type AprItemCategory = 'cpp' | 'ipc' | 'test' | 'info'
@@ -156,6 +156,29 @@ export interface AprSummary {
   locked: boolean
   batch_years: number[]
   sections: AprSummarySection[]
+}
+
+// ── Excel 批量导入 ──
+
+export type AprImportMode = 'merge' | 'replace'
+
+/** 导入错误定位：row=工作簿行号，0 表示文件级错误。 */
+export interface AprImportCellError {
+  row: number
+  column: string | null
+  message: string
+}
+
+/** 全部校验通过才写入；ok=false 时零落库。 */
+export interface AprImportResult {
+  ok: boolean
+  mode: AprImportMode
+  batches: number
+  cells: number
+  /** 文件中未登记、本次自动创建的批次数。 */
+  registered: number
+  errors: AprImportCellError[]
+  total_errors: number
 }
 
 export interface AprAnnualReview {

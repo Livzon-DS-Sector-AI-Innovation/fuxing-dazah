@@ -1,4 +1,4 @@
-"""QA 年度产品审核（APR）数据访问层：只负责 SQL，校验/审计由 service 编排。"""
+"""QA 年度产品审核（PQR）数据访问层：只负责 SQL，校验/审计由 service 编排。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, insert, or_, select
+from sqlalchemy import delete, func, insert, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -375,6 +375,52 @@ async def replace_batch_values(
     return len(payload)
 
 
+async def merge_batch_values(
+    db: AsyncSession,
+    batch_id: uuid.UUID,
+    rows: Sequence[dict[str, Any]],
+    *,
+    actor_id: uuid.UUID | None,
+) -> int:
+    """增量合并（Excel 导入 merge 模式）：只重写本次写入的 (item_id, row_seq)
+    对，文件里空白的格保留系统已有值；行标签/备注未随文件给出时沿用旧值。"""
+    if not rows:
+        return 0
+    existing = await db.execute(
+        select(
+            AprValue.item_id, AprValue.row_seq, AprValue.row_label, AprValue.remark
+        ).where(AprValue.batch_id == batch_id, AprValue.is_deleted.is_(False))
+    )
+    kept = {
+        (item_id, row_seq): (label, remark)
+        for item_id, row_seq, label, remark in existing
+    }
+    keys = [(row["item_id"], row["row_seq"]) for row in rows]
+    await db.execute(
+        delete(AprValue).where(
+            AprValue.batch_id == batch_id,
+            tuple_(AprValue.item_id, AprValue.row_seq).in_(keys),
+        )
+    )
+    payload = []
+    for row in rows:
+        label, remark = kept.get((row["item_id"], row["row_seq"]), (None, None))
+        payload.append(
+            {
+                **row,
+                "row_label": row["row_label"]
+                if row["row_label"] is not None
+                else label,
+                "remark": row["remark"] if row["remark"] is not None else remark,
+                "batch_id": batch_id,
+                "created_by": actor_id,
+                "updated_by": actor_id,
+            }
+        )
+    await db.execute(insert(AprValue), payload)
+    return len(payload)
+
+
 async def delete_values_of_batch(db: AsyncSession, batch_id: uuid.UUID) -> None:
     await db.execute(delete(AprValue).where(AprValue.batch_id == batch_id))
 
@@ -441,7 +487,9 @@ async def load_numeric_series(
         .where(*conditions)
         # row_seq 兜底同批次多行（multi_row）的稳定顺序
         .order_by(
-            AprBatch.year, AprBatch.seq.nulls_last(), AprBatch.created_at,
+            AprBatch.year,
+            AprBatch.seq.nulls_last(),
+            AprBatch.created_at,
             AprValue.row_seq,
         )
     )

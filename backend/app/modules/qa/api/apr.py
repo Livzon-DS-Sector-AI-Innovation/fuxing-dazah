@@ -1,6 +1,6 @@
-"""QA 年度产品审核（APR）HTTP API：产品/模板配置、批次录入、趋势、汇总、锁定。
+"""QA 年度产品审核（PQR）HTTP API：产品/模板配置、批次录入、趋势、汇总、锁定。
 
-挂在 QA 模块路由下（``/api/v1/qa/apr``）。读取放行 APR 专用读码或模块
+挂在 QA 模块路由下（``/api/v1/qa/apr``）。读取放行 PQR 专用读码或模块
 通配读码 ``qa:*:read``；配置/录入/导出/锁定各自独立权限。
 """
 
@@ -11,16 +11,18 @@ import uuid
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, File, Path, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import AppException
 from app.core.response import paginated_response, success_response
 from app.modules.qa.schemas import (
     AprBatchCreate,
     AprBatchUpdate,
     AprBatchValuesIn,
+    AprImportResult,
     AprItemCreate,
     AprItemsBulkCreate,
     AprItemUpdate,
@@ -49,7 +51,7 @@ _apr_lock = require_permission("qa:apr:lock")
 # ───────────────────────── 产品 ─────────────────────────
 
 
-@router.get("/apr/products", summary="APR 产品列表")
+@router.get("/apr/products", summary="PQR 产品列表")
 async def list_products(
     user: User = Depends(_apr_read),
     db: AsyncSession = Depends(get_db),
@@ -60,7 +62,7 @@ async def list_products(
     )
 
 
-@router.post("/apr/products", summary="新增 APR 产品", status_code=201)
+@router.post("/apr/products", summary="新增 PQR 产品", status_code=201)
 async def create_product(
     payload: AprProductCreate,
     user: User = Depends(_apr_manage),
@@ -71,7 +73,7 @@ async def create_product(
     )
 
 
-@router.patch("/apr/products/{product_id}", summary="编辑 APR 产品")
+@router.patch("/apr/products/{product_id}", summary="编辑 PQR 产品")
 async def update_product(
     payload: AprProductUpdate,
     product_id: uuid.UUID,
@@ -83,7 +85,7 @@ async def update_product(
     )
 
 
-@router.delete("/apr/products/{product_id}", summary="删除 APR 产品")
+@router.delete("/apr/products/{product_id}", summary="删除 PQR 产品")
 async def delete_product(
     product_id: uuid.UUID,
     user: User = Depends(_apr_manage),
@@ -281,6 +283,67 @@ async def save_batch_values(
     return success_response(
         data=await service.save_batch_values(db, batch_id, payload, user)
     )
+
+
+@router.get(
+    "/apr/sections/{section_id}/import-template", summary="下载录入导入模板（xlsx）"
+)
+async def import_template(
+    section_id: uuid.UUID,
+    user: User = Depends(_apr_enter),
+    db: AsyncSession = Depends(get_db),
+    year: int = Query(ge=2000, le=2100),
+) -> StreamingResponse:
+    wb, base_name = await service.build_import_template(db, section_id, year)
+    buf = io.BytesIO()
+    wb.save(buf)
+    encoded = quote(f"{base_name}.xlsx")
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="apr-import-template.xlsx"; '
+                f"filename*=UTF-8''{encoded}"
+            )
+        },
+    )
+
+
+@router.post("/apr/sections/{section_id}/values/import", summary="Excel 批量导入录入值")
+async def import_values(
+    section_id: uuid.UUID,
+    user: User = Depends(_apr_enter),
+    db: AsyncSession = Depends(get_db),
+    year: int = Query(ge=2000, le=2100),
+    mode: Literal["merge", "replace"] = Query(
+        default="merge",
+        description="merge=非空覆盖（空白格保留旧值）；replace=整批替换",
+    ),
+    file: UploadFile = File(description="按模板填写的 xlsx 文件"),
+) -> Any:
+    filename = file.filename or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext != "xlsx":
+        raise AppException(
+            status_code=400,
+            message="仅支持 .xlsx 文件，请用 Excel 另存为 .xlsx 后重试。",
+        )
+    content = await file.read()
+    if not content:
+        raise AppException(status_code=400, message="文件内容为空。")
+    from app.core.config import get_settings
+
+    max_size = get_settings().MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(content) > max_size:
+        raise AppException(
+            status_code=400,
+            message=f"文件大小超过 {get_settings().MAX_UPLOAD_SIZE_MB}MB 限制。",
+        )
+    result = await service.import_section_values(
+        db, section_id, year=year, mode=mode, file_bytes=content, user=user
+    )
+    return success_response(data=AprImportResult(**result).model_dump(mode="json"))
 
 
 # ───────────────────────── 趋势与汇总 ─────────────────────────
