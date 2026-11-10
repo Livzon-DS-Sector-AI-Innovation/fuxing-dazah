@@ -135,17 +135,38 @@ def test_loader_corrupt_frontmatter_falls_back(tmp_path: Path) -> None:
 
 
 def test_loader_fewshot_pair() -> None:
-    """成对加载：单 md 文件拆出 marker 与 5 个示例（分隔标记缺失回落）。"""
+    """成对加载：单 md 文件拆出 marker 与 3 个示例（分隔标记缺失回落）。"""
     from app.modules.safety.ai_hazard_identification.prompt_loader import load_fewshot
 
     marker, examples = load_fewshot(
         fallback_marker="FB_MARKER", fallback_examples=[]
     )
     assert marker == _golden("fewshot_marker")
-    assert isinstance(examples, list) and len(examples) == 5
+    # P2-3 T03：fewshot 5→3 例（保 1/4/5，用户拍板有意压缩）
+    assert isinstance(examples, list) and len(examples) == 3
     # 分隔标记缺失 → 整体回落
     degraded = load_fewshot(fallback_marker="FB_MARKER", fallback_examples=[1])
     assert degraded == ("FB_MARKER", [1]) or degraded[0] == _golden("fewshot_marker")
+
+
+def test_fewshot_kept_examples_p23() -> None:
+    """P2-3 有意压缩：保留例 1/4/5（例内文本零改动），删例 2/3。
+
+    - 例 4/5 是 defect_substance 字段仅有的两个展示（v2 核心），必须保留；
+    - 保留例的输出 dict 与压缩前逐字节一致（例内文本零改动）；
+    - md 兜底常量与 md 文件同步（删 md 即回滚到同一 3 例集合）。
+    """
+    kept_inputs = [ex["input"] for ex in prompts.fewshot_examples()]
+    assert kept_inputs == [
+        "防爆电箱接线口未使用防爆堵头封堵，箱体内部积尘严重",
+        "一级动火作业票（编号DH-2026-0612）中，现场监护人、动火负责人签章栏空白，审批时间与实际作业时间不一致",
+        "车间操作规程现场放置的为打印版本，非正式签发版本，未加盖签发章",
+    ]
+    # 例内文本零改动：兜底常量与 md 读出完全一致
+    assert prompts.fewshot_pair()[1] == prompts.FEWSHOT_EXAMPLES
+    # defect_substance 展示仍在（例 4 substantive / 例 5 procedural；例 1 旧格式无该字段）
+    substances = [ex["output"].get("defect_substance") for ex in prompts.fewshot_examples()]
+    assert substances == [None, "substantive", "procedural"]
 
 
 def test_loader_mtime_cache(monkeypatch: pytest.MonkeyPatch) -> None:

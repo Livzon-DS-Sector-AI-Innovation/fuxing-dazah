@@ -178,6 +178,12 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "关 = 回退全量下载；默认开、热生效）",
     ),
     ConfigItem(
+        "SAFETY_HAZARD_KNOWLEDGE_CONTEXT_MAX_CHARS", "direct_gate", "int", 200,
+        "① 知识注入段 per-chunk 截断上限（P2-3 E19：句子边界截断、条号行优先；"
+        "0 = 关闭截断原样注入；默认 200=离线四象限度量拍板（-30.6% 冲刺达成）、热生效）",
+        minimum=0,
+    ),
+    ConfigItem(
         "SAFETY_HAZARD_RETRIEVAL_TOP_K", "direct_gate", "int", 8,
         "① 检索最终注入 chunk 数（多路合并后取数；默认 8 与历史硬编码一致）",
     ),

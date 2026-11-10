@@ -61,6 +61,7 @@ from typing import TYPE_CHECKING, Any
 from app.modules.safety.service.hazard_direct import (
     bitable_repo,
     config,
+    context_compression,
     failure_ledger,
     quality_gate,
 )
@@ -293,7 +294,9 @@ async def _identify_one(
             )
         raise
     assert knowledge_context is not None  # ensure_knowledge 已排除 None（供 mypy 收窄）
-    knowledge_text = knowledge_context.markdown or None
+    # P2-3 E19：注入前按 per-chunk 句子边界截断（0=off 原样透传）；chunks 与
+    # CitationEvidence 不动——引用证据仍从完整 chunks 构建，判定/闸门语义零变化。
+    knowledge_text = context_compression.injection_markdown(knowledge_context) or None
 
     # C2 引用来源强约束：开关开 → 用本轮 chunks 构造证据（零可验证不写回）；
     # 开关关 → evidence=None，插件/闸门回退 P0-A 旧行为（可热回滚）。
