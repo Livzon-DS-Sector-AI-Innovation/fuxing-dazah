@@ -504,6 +504,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_HAZARD_ALERT_AFTER_ROUNDS", "poll_param", "int", 3,
         "连续失败轮数达到该值推送告警",
     ),
+    ConfigItem(
+        "SAFETY_HAZARD_STALE_RERUN_MAX", "poll_param", "int", 20,
+        "stale 按需重算单次上限（0=关；--limit 只能更低不能更高）",
+        minimum=0,
+    ),
 
     # ══════════════════════════════════════════════════════════
     # 作业票平台凭证（credential）— 展示/审计脱敏

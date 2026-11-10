@@ -41,7 +41,11 @@ from app.modules.safety.service.bitable_direct import fields as bd_fields
 from app.modules.safety.service.bitable_direct import filters as bd_filters
 from app.modules.safety.service.bitable_direct import locks as bd_locks
 from app.modules.safety.service.bitable_direct import writer as bd_writer
-from app.modules.safety.service.hazard_direct import config, writeback_trace
+from app.modules.safety.service.hazard_direct import (
+    config,
+    stale_state,
+    writeback_trace,
+)
 from app.modules.safety.service.hazard_direct import field_authority as fa
 from app.modules.safety.service.hazard_direct.field_authority import (
     F_ADVICE_AI as F_ADVICE_AI,
@@ -961,6 +965,8 @@ async def write_ai_analysis(
 
     只写多维表格；P2-2 留痕开关开时旁挂 agent_triggers 留痕行
     （thread_key=bitable:hazard:<record_id>，成败终态；关=零 DB 写）。
+    P3-1 双指纹基线：成功写回后落 stale 判定锚点（stale_state，fail-open；
+    无 ``snapshot_fields`` 的调用方跳过，不影响既有语义）。
     """
     writeback: dict[str, Any] = {}
     if hazard_no:
@@ -1034,6 +1040,12 @@ async def write_ai_analysis(
         note="" if applied else f"failed={result.failed}",
         hazard_no=hazard_no or "",
     )
+    if applied:
+        # P3-1 双指纹基线（C7）：成功写回即刷新 stale 判定锚点——重算成功后
+        # 基线自动追平，stale 自愈。fail-open：基线失败绝不拖垮写回。
+        await stale_state.record_fingerprint(
+            record_id, snapshot_fields=snapshot_fields, writeback=writeback
+        )
     return applied
 
 

@@ -22,6 +22,36 @@ from sqlalchemy.ext.asyncio import (
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.main import app
+from app.modules.safety.service.hazard_direct import stale_state
+
+
+class _MemoryRedis:
+    """进程内假件：承接 stale_state 默认 Redis 路径（get/set 即可）。"""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, key: str):
+        return self.store.get(key)
+
+    async def set(self, key: str, value: str, *, ex=None, nx=False):
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        return True
+
+
+@pytest.fixture(autouse=True)
+def stale_state_redis_stub(monkeypatch: pytest.MonkeyPatch):
+    """stale_state 默认 Redis 换内存假件（autouse）。
+
+    write_ai_analysis 成功路径旁挂指纹基线（P3-1）：不注入显式 redis 的既有
+    测试会经 ``_get_redis`` 触到本地 dev Redis 真写——测试真写事故教训的
+    防御层。显式注入 ``redis=`` 的测试不受影响。
+    """
+    fake = _MemoryRedis()
+    monkeypatch.setattr(stale_state, "_get_redis", lambda: fake)
+    yield fake
 
 
 @pytest.fixture

@@ -39,11 +39,12 @@ TRACE_SOURCE_NAME = "safety.hazard.writeback_trace"
 TRACE_SOURCE_KIND = "safety_writeback_trace"
 THREAD_PREFIX = "bitable:hazard"
 
-# 写链标识（payload.writer 合法值；①=识别主链 / P2-1=例外复核 / ②=初审 / ⑤=评分）
+# 写链标识（payload.writer 合法值；①=识别主链 / P2-1=例外复核 / ②=初审 / ⑤=评分 / P3-1=stale 重算）
 WRITER_AI_ANALYSIS = "ai_analysis"
 WRITER_EXCEPTION_REVIEW = "exception_review"
 WRITER_REVIEW = "review"
 WRITER_SCORING = "scoring"
+WRITER_AI_RERUN = "ai_rerun"
 
 
 def trace_enabled() -> bool:
