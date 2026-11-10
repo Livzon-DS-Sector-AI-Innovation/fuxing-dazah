@@ -567,6 +567,45 @@ async def search_regulation_chunks(
     ]
 
 
+def build_search_regulations_tool(
+    searcher: RegulationSearcher,
+    *,
+    searched_entries: list[dict[str, Any]],
+    seen_chunk_ids: set[str],
+) -> Any:
+    """search_regulations 工具（P2-4 工厂化，供 runner 与单测共用）。
+
+    注入面/证据面分离：返回给 LLM 的 chunk_text 走压缩器截断
+    （``context_compression.truncate_chunk_text``，引用句永不丢、0=off 原样）；
+    ``searched_entries`` 累积**全量** chunk——rescued/cross_check 的引用
+    验证吃全量证据，语义零变化（模型只见子集、引用取自子集、对全量
+    证据验证必含，安全方向）。
+    """
+    from app.modules.safety.service.hazard_direct import context_compression
+
+    async def search_regulations(query: str) -> list[dict[str, Any]]:
+        chunks = await search_regulation_chunks(searcher, query)
+        for chunk in chunks:
+            cid = chunk.get("chunk_id") or (
+                f"{chunk.get('source_doc')}:{chunk.get('source_article')}"
+            )
+            if cid in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(cid)
+            searched_entries.append(chunk)
+        return [
+            {
+                **chunk,
+                "chunk_text": context_compression.truncate_chunk_text(
+                    chunk["chunk_text"]
+                ),
+            }
+            for chunk in chunks
+        ]
+
+    return search_regulations
+
+
 def cross_check_conclusion(
     *,
     ai_conclusion: dict[str, Any],
@@ -838,15 +877,11 @@ async def review_single(
                 binaries.append(BinaryContent(parsed[0], media_type=parsed[1]))
         return binaries
 
-    async def search_regulations(query: str) -> list[dict[str, Any]]:
-        chunks = await search_regulation_chunks(deps.searcher, query)
-        for chunk in chunks:
-            cid = chunk.get("chunk_id") or f"{chunk.get('source_doc')}:{chunk.get('source_article')}"
-            if cid in seen_chunk_ids:
-                continue
-            seen_chunk_ids.add(cid)
-            searched_entries.append(chunk)
-        return chunks
+    search_regulations = build_search_regulations_tool(
+        deps.searcher,
+        searched_entries=searched_entries,
+        seen_chunk_ids=seen_chunk_ids,
+    )
 
     async def cross_check(ai_conclusion: dict[str, Any]) -> dict[str, Any]:
         merged = {

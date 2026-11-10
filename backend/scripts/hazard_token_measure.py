@@ -1,12 +1,18 @@
-"""P2-3 T04 —— ①主链单条 token 双层度量（离线层，四象限对比）。
+"""①②/复核员知识注入 token 离线度量（P2-3 四象限 + P2-4 三链扩展）。
 
 对同一批真实隐患描述（默认取 P1-1 评测快照 snapshot.jsonl），逐条做真实
-检索（只读 ragplus），组装四象限完整 prompt 并用 tiktoken 精确计量：
+检索（只读 ragplus），组装 prompt 并用 tiktoken 精确计量：
 
+- ``--chain identify``（默认，P2-3 四象限）：
     A 旧fewshot + 全量知识   ≡ P2-3 前线上行为（基线）
     B 旧fewshot + 截断知识   （隔离：检索截断的节省）
     C 新fewshot + 全量知识   （隔离：fewshot 压缩的节省）
     D 新fewshot + 截断知识   ≡ P2-3 后默认行为
+- ``--chain review``（P2-4）：② 初审 plugin prompt（build_full_prompt 直接
+  复用 plugin 组装函数，parity 内在），全量知识 vs 截断知识两象限；
+- ``--chain reviewer``（P2-4）：例外复核员注入面——instructions 常量 +
+  search_regulations 工具结果 JSON（pydantic-ai 工具返回序列化近似），
+  全量 chunk_text vs 截断两象限。
 
 旧 fewshot 从 git HEAD 的 prompt_skills/fewshot.md 读回（本脚本在压缩提交
 前后均可复现历史口径）。图片 data URI 不计入（本次优化不改图片路径）。
@@ -16,6 +22,10 @@
     .venv/bin/python scripts/hazard_token_measure.py \
         --snapshot ../.scratch/hazard-retrieval-quality/eval/snapshot.jsonl \
         --limit 30 --out ../.scratch/hazard-cost-p23/evidence/token-offline.md
+    .venv/bin/python scripts/hazard_token_measure.py --chain review \
+        --out ../.scratch/hazard-p2-closeout/evidence/token-review-offline.md
+    .venv/bin/python scripts/hazard_token_measure.py --chain reviewer \
+        --out ../.scratch/hazard-p2-closeout/evidence/token-reviewer-offline.md
 """
 
 from __future__ import annotations
@@ -113,8 +123,121 @@ async def _retrieve(description: str) -> Any:
         return context
 
 
+# ── P2-4：② 初审 / 例外复核员 两链离线度量 ──────────────────────
+
+
+def _chunk_dicts(context: Any, *, truncate: bool) -> str:
+    """复核员 search_regulations 工具结果 JSON（pydantic-ai 序列化近似）。"""
+    chunks = [
+        {
+            "source_doc": getattr(c, "source_doc", ""),
+            "source_article": getattr(c, "source_article", ""),
+            "chunk_text": (
+                context_compression.truncate_chunk_text(getattr(c, "chunk_text", ""))
+                if truncate
+                else getattr(c, "chunk_text", "")
+            ),
+            "chunk_id": getattr(c, "chunk_id", ""),
+        }
+        for c in (context.chunks or [])
+    ]
+    return json.dumps(chunks, ensure_ascii=False)
+
+
+async def _run_chain(descriptions: list[str], args: argparse.Namespace) -> str:
+    """②/reviewer 两象限（全量 vs 截断）离线度量，返回 Markdown 报告。"""
+    is_review = args.chain == "review"
+    rows: list[dict[str, int]] = []
+    knowledge_chars: list[int] = []
+    instructions = ""
+    if not is_review:
+        from app.modules.safety.service.hazard_direct.exception_reviewer import (
+            reviewer_prompt,
+        )
+
+        instructions = reviewer_prompt()
+
+    for i, desc in enumerate(descriptions, 1):
+        context = await _retrieve(desc)
+        full_md = context.markdown or ""
+        compressed = context_compression.compress_knowledge_context(
+            context, max_chunk_chars=args.max_chars
+        )
+        knowledge_chars.append(len(full_md))
+        if is_review:
+            from app.modules.safety.ai_rectification_review import prompts as rv_prompts
+
+            # 复用 plugin 自己的组装函数（parity 内在：review.py → plugin.review
+            # → build_full_prompt，本脚本同函数同参数形态）。快照只有描述字段，
+            # 其余输入用典型常量（不影响 full vs trunc 的差值口径）。
+            ctx_text = rv_prompts.build_context_text(original_description=desc)
+            reply = rv_prompts.build_reply_context_text(
+                rectification_reply="已按整改建议完成整改，附整改后照片。"
+            )
+            full = rv_prompts.build_full_prompt(
+                ctx_text, reply, include_fewshot=True, knowledge_context=full_md
+            )
+            trunc = rv_prompts.build_full_prompt(
+                ctx_text, reply, include_fewshot=True, knowledge_context=compressed
+            )
+        else:
+            full = instructions + "\n" + _chunk_dicts(context, truncate=False)
+            trunc = instructions + "\n" + _chunk_dicts(context, truncate=True)
+        tokens = {
+            "full": _estimate_tokens(full),
+            "trunc": _estimate_tokens(trunc),
+            "knowledge_chunks": len(context.chunks or []),
+        }
+        rows.append(tokens)
+        print(f"[{i}/{len(descriptions)}] {desc[:24]}… full={tokens['full']} "
+              f"trunc={tokens['trunc']}")
+
+    full_mean = statistics.mean(r["full"] for r in rows)
+    trunc_mean = statistics.mean(r["trunc"] for r in rows)
+    full_p50 = statistics.median(r["full"] for r in rows)
+    trunc_p50 = statistics.median(r["trunc"] for r in rows)
+    title = (
+        "② 初审（rectification_review plugin prompt，不含图片）"
+        if is_review
+        else "例外复核员（instructions 常量 + search 工具结果 JSON 近似）"
+    )
+    lines = [
+        f"# P2-4 离线 token 两象限度量（{title}）",
+        "",
+        f"- 样本：{len(rows)} 条真实隐患描述（真实 ragplus 检索，"
+        f"知识段字符 p50={statistics.median(knowledge_chars):.0f}）",
+        f"- 截断上限：{args.max_chars} 字/chunk（SAFETY_HAZARD_KNOWLEDGE_CONTEXT_MAX_CHARS）",
+        "- 计量：tiktoken（estimate_tokens）",
+        "",
+        "| 象限 | 均值 tokens | p50 tokens | 相对全量降幅 |",
+        "|---|---|---|---|",
+        f"| 全量知识（P2-4 前行为） | {full_mean:.0f} | {full_p50:.0f} | — |",
+        f"| 截断知识（新默认） | {trunc_mean:.0f} | {trunc_p50:.0f} "
+        f"| **-{(1 - trunc_mean / full_mean) * 100:.1f}%** |",
+        "",
+    ]
+    if is_review:
+        lines += [
+            "说明：快照仅含描述字段，其余输入用典型常量——绝对值低于真机"
+            " avg_in（含更全上下文与图片标记），降幅百分比为本次度量主口径；"
+            "真机层对比见 token-realtime.md（dev ②轮询活跃，接入后自然产生）。",
+        ]
+    else:
+        lines += [
+            "说明：复核员为 agent 多轮工具调用，本度量只计「instructions + 一次"
+            " search 工具结果」的注入面；每次 search 的节省 × 实际调用次数即"
+            "单条记录总节省。真机层以 ai_call_audits（hazard_exception_review）"
+            "接入后自然数据对照。",
+        ]
+    return "\n".join(lines)
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--chain", choices=["identify", "review", "reviewer"], default="identify",
+        help="度量链（identify=P2-3 四象限；review/reviewer=P2-4 两象限）",
+    )
     parser.add_argument("--snapshot", required=True, help="评测快照 jsonl（真实描述源）")
     parser.add_argument("--limit", type=int, default=30, help="样本条数（默认 30）")
     parser.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS,
@@ -133,6 +256,17 @@ async def main() -> int:
     if not descriptions:
         print("快照无可用描述", file=sys.stderr)
         return 1
+
+    if args.chain != "identify":
+        report = await _run_chain(descriptions, args)
+        if args.out:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(report, encoding="utf-8")
+            print(f"报告已写入 {out_path.resolve()}")
+        else:
+            print(report)
+        return 0
 
     old_fewshot = _load_old_fewshot()
     new_fewshot = prompts.fewshot_pair()

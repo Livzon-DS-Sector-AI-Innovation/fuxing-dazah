@@ -51,18 +51,25 @@ class ReviewRoundResult:
             "failed": self.failed,
             "skipped": self.skipped,
             "no_conclusion": self.no_conclusion,
+            "autopassed": self.autopassed,
+            "overridden": self.overridden,
             "failures": self.failures,
         }
 
 
 async def _load_knowledge_context(session: Any, description: str) -> str | None:
-    """RAG 法规检索（知识库仍在平台数据库）。"""
+    """RAG 法规检索（知识库仍在平台数据库）。
+
+    P2-4 起注入面走压缩器（与①同一 ``SAFETY_HAZARD_KNOWLEDGE_CONTEXT_MAX_CHARS``
+    档位，0=off 原样透传）——判定语义零变化，只省 token。
+    """
     try:
         from app.modules.safety.knowledge.retriever import SafetyKnowledgeRetriever
+        from app.modules.safety.service.hazard_direct import context_compression
 
         retriever = SafetyKnowledgeRetriever(session)
         context = await retriever.retrieve(description=description, target_chunks=8)
-        return retriever.build_injection_context(context)
+        return context_compression.injection_markdown(context)
     except Exception:
         logger.warning("② RAG 法规检索失败，继续不使用知识增强", exc_info=True)
         return None

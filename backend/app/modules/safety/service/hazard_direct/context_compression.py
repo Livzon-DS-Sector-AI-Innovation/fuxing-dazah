@@ -13,8 +13,10 @@
 - chunks 集合与 ``CitationEvidence`` 不动：本模块只产注入文本，不改检索结果
   对象，质量闸门/引用校验输入语义零变化。
 
-仅 ① 识别主链接入（``ai_analysis._identify_one``）；② 初审与例外复核员共享
-本压缩器但暂不接入（spec 范围决策）。
+接入面（P2-4 起）：① 识别主链 ``ai_analysis._identify_one``（整段重建）；
+② 初审 ``review._load_knowledge_context``（整段重建）；例外复核员
+``exception_reviewer`` 的 search_regulations 工具（``truncate_chunk_text``
+单 chunk 截断——LLM 注入面截断、``searched_entries`` 证据面全量）。
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ __all__ = [
     "compress_knowledge_context",
     "injection_markdown",
     "knowledge_context_max_chars",
+    "truncate_chunk_text",
 ]
 
 # 句末边界：中文句读 + 换行（句子在此处完整结束，截断不会切半个句子）
@@ -121,3 +124,14 @@ def injection_markdown(context: KnowledgeContext) -> str:
     return compress_knowledge_context(
         context, max_chunk_chars=knowledge_context_max_chars()
     )
+
+
+def truncate_chunk_text(text: str, *, max_chunk_chars: int | None = None) -> str:
+    """单 chunk 正文截断（P2-4：复核员 search_regulations 工具注入面复用）。
+
+    与 ``injection_markdown`` 同一截断语义/同一配置键（0=off 原样返回）；
+    只影响注入给模型的文本，不动检索结果对象与引用证据。
+    """
+    if max_chunk_chars is None:
+        max_chunk_chars = knowledge_context_max_chars()
+    return _truncate_body(text, max_chunk_chars)
