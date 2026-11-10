@@ -59,10 +59,10 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['created_by'], ['identity.users.id'], ),
     sa.ForeignKeyConstraint(['updated_by'], ['identity.users.id'], ),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('employee_number'),
     schema='hr'
     )
     op.create_index('ix_training_roster_profiles_department', 'training_roster_profiles', ['department'], unique=False, schema='hr')
+    # 工号唯一：唯一索引承载（与 ORM 一致，不叠 UniqueConstraint）
     op.create_index('ix_training_roster_profiles_employee_number', 'training_roster_profiles', ['employee_number'], unique=True, schema='hr')
 
     # 存量回填：当前有效员工按白名单字段复制初值进入名单

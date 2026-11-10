@@ -248,6 +248,7 @@ export default function TrainingRosterClient() {
       if (seq !== seqRef.current) return
       setRows(res.data || [])
       setTotal(res.meta?.total || 0)
+      setScopedDepartments(res.meta?.scoped_departments ?? null)
     } catch (err) {
       if (seq === seqRef.current) message.error(err instanceof Error ? err.message : '加载失败')
     } finally {
@@ -255,23 +256,11 @@ export default function TrainingRosterClient() {
     }
   }, [message])
 
-  // 初次加载：effect 内全部 setState 都在 await 之后（loading 初值即 true）
+  // 初次加载也走 load 的 seqRef 序号协议：与快速切部门/搜索的请求统一竞态，
+  // 旧的未过滤响应不会再覆盖新筛选结果（loading 初值即 true，effect 内无同步 setState）
   useEffect(() => {
+    void load(1, 20, '', '')
     let cancelled = false
-    void (async () => {
-      try {
-        const res = await fetchTrainingRoster({ page: 1, page_size: 20 })
-        if (!cancelled) {
-          setRows(res.data || [])
-          setTotal(res.meta?.total || 0)
-          setScopedDepartments(res.meta?.scoped_departments ?? null)
-        }
-      } catch {
-        if (!cancelled) message.error('加载培训人员名单失败')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
     void fetchDepartmentsAction({ page_size: 100 })
       .then(d => { if (!cancelled) setDepartments(d.data || []) })
       .catch(() => { if (!cancelled) setDepartments([]) })
@@ -279,7 +268,7 @@ export default function TrainingRosterClient() {
       .then(r => { if (!cancelled) setPositions(r.map(p => ({ name: p.name, department: p.department }))) })
       .catch(() => { if (!cancelled) setPositions([]) })
     return () => { cancelled = true }
-  }, [message])
+  }, [load])
 
   const handleSearch = useCallback((value: string) => {
     setKeyword(value)

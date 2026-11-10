@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
-import { fetchTrainingRoster, fetchPrejobTrainingPlan, type TrainingRosterRow } from '@/actions/hr'
+import { fetchAllTrainingRoster, fetchPrejobTrainingPlan, type TrainingRosterRow } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 
 export default function PreJobPlanClient() {
@@ -15,7 +15,7 @@ export default function PreJobPlanClient() {
 
   useEffect(() => {
     setLoading(true)
-    fetchTrainingRoster({ page_size: 200 })
+    fetchAllTrainingRoster()
       .then((res) => {
         setEmployees(res.data || [])
       })

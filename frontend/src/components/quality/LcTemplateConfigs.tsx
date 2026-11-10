@@ -38,7 +38,7 @@ export default function LcTemplateConfigs() {
   // 简易维护：上传文件自动识别同版式
   const [autoOpen, setAutoOpen] = useState(false)
   const [autoDetecting, setAutoDetecting] = useState(false)
-  const [autoPassword, setAutoPassword] = useState('zlkz6941')
+  const [autoPassword, setAutoPassword] = useState('')
   const [autoDetect, setAutoDetect] = useState<{ table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; blank?: boolean; name_shift: number; value_shift: number; step: number | null; samples: { name: string; value: number | null }[] }[] } | null>(null)
   const [autoPick, setAutoPick] = useState<string | null>(null)
   const [autoCreating, setAutoCreating] = useState(false)
@@ -62,9 +62,15 @@ export default function LcTemplateConfigs() {
 
   const onAutoCreate = async () => {
     if (!autoDetect?.table_no || !autoPick) return
+    const picked = autoDetect.candidates.find(c => c.template_table_no === autoPick)
     setAutoCreating(true)
     try {
-      await autoCreateTemplate(autoDetect.table_no, autoPick)
+      // 版式偏移随候选一起传给后端，偏移版式才能生成正确的取值配置
+      await autoCreateTemplate(autoDetect.table_no, autoPick, picked ? {
+        name_shift: picked.name_shift,
+        value_shift: picked.value_shift,
+        step: picked.step ?? undefined,
+      } : undefined)
       message.success(`配置 ${autoDetect.table_no} 已生成，可用「测试计算」验证后启用`)
       setAutoOpen(false)
       load()
@@ -260,7 +266,7 @@ export default function LcTemplateConfigs() {
             <p className="ant-upload-hint">系统自动识别表号并匹配同版式模板，无需编写任何配置（JSON）</p>
           </Upload.Dragger>
           <Space>
-            <Text type="secondary">文件密码（默认实验室通行密码，可清空）：</Text>
+            <Text type="secondary">文件密码（加密计算表需填写，不保存）：</Text>
             <Input.Password size="small" style={{ width: 200 }} value={autoPassword}
               onChange={(e) => setAutoPassword(e.target.value)} autoComplete="new-password" />
           </Space>

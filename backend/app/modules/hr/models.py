@@ -374,7 +374,7 @@ class TrainingRosterProfile(BaseModel):
 
     __tablename__ = "training_roster_profiles"
     __table_args__ = (
-        UniqueConstraint("employee_number"),
+        # 工号唯一：仅建唯一索引（与迁移一致，勿再叠 UniqueConstraint）
         Index("ix_training_roster_profiles_employee_number", "employee_number", unique=True),
         Index("ix_training_roster_profiles_department", "department"),
         {"schema": "hr"},
@@ -392,6 +392,8 @@ class TrainingRosterProfile(BaseModel):
     job_category: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="岗位类别")
     level: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="级别")
     concurrent_departments: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="兼任部门")
+    variety: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="品种")
+    concurrent_variety: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="兼任品种")
 
     # ─── 教育与用工（白名单镜像） ───
     education: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="学历")

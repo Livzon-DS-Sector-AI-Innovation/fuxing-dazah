@@ -205,6 +205,11 @@ async def _run_ws() -> None:
 
 async def start_ws() -> None:
     global _stop, _ws_task
+    # 未配置则跳过（守卫必须保留）：否则 _run_ws 取 URL 失败进入 10s 重试，
+    # 每轮刷一条 ERROR 日志。凭证来自环境变量，重启才会变化，跳过一次即可。
+    if not feishu_configured():
+        logger.info("质量模块飞书未配置（QUALITY_FEISHU_APP_ID/SECRET），跳过 WS 事件监听")
+        return
     if _ws_task and not _ws_task.done():
         return
     _stop = asyncio.Event()

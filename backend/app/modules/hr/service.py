@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy import update as _update_stmt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
@@ -100,7 +100,24 @@ class EmployeeService:
             raise NotFoundException("员工", employee_number)
         return employee
 
+    async def _ensure_employees_writable(self) -> None:
+        """员工档案同步启用期间档案为只读镜像（后端守卫：防止绕过前端隐藏直接调 API）。
+
+        经 API 手工新建的员工没有 feishu_record_id，永远不会被同步管理，
+        其编辑结果也会被下一轮对账覆盖，因此创建/更新/删除一律拒绝。
+        """
+        from app.modules.hr.employee_sync.config import load_config
+
+        cfg = await load_config(self.repo.session)
+        if cfg.is_ready:
+            raise AppException(
+                status_code=409,
+                detail="员工档案同步已启用：档案由飞书多维表格单向维护，"
+                       "请在源数据表中新增/修改/删除后等待同步",
+            )
+
     async def create_employee(self, data: EmployeeCreate) -> Employee:
+        await self._ensure_employees_writable()
         existing = await self.repo.get_by_employee_number(
             data.employee_number, include_deleted=True
         )
@@ -581,6 +598,7 @@ class EmployeeService:
         return result
 
     async def update_employee(self, employee_id: UUID, data: EmployeeUpdate) -> Employee:
+        await self._ensure_employees_writable()
         employee = await self.get_employee(employee_id)
         update_data = data.model_dump(exclude_unset=True)
 
@@ -593,9 +611,25 @@ class EmployeeService:
             setattr(employee, field, value)
 
         result = await self.repo.update(employee)
+
+        # 人员状态随总表同步到培训名单（病产假统计/SOP选人/通知名单都走名单口径，
+        # 同步未启用时定时对账不会兜底，必须在状态变更处即时同步）
+        if "status" in update_data:
+            from sqlalchemy import update as _update
+
+            from app.modules.hr.models import TrainingRosterProfile
+            await self.repo.session.execute(
+                _update(TrainingRosterProfile)
+                .where(
+                    TrainingRosterProfile.employee_number == employee.employee_number,
+                    TrainingRosterProfile.is_deleted.is_(False),
+                )
+                .values(status=employee.status)
+            )
         return result
 
     async def delete_employee(self, employee_id: UUID) -> None:
+        await self._ensure_employees_writable()
         employee = await self.repo.get_by_id(employee_id)
         if not employee:
             raise NotFoundException("员工", str(employee_id))
@@ -719,13 +753,17 @@ class EmployeeService:
             result["confirmer"] = raw.strip()
         return result
 
-    async def upload_annual_plan(self, file_bytes: bytes) -> dict:
+    async def upload_annual_plan(
+        self, file_bytes: bytes, *, allowed_departments: set[str] | None = None,
+    ) -> dict:
         """从 Excel 批量导入年度培训计划，按年度+部门自动分类。
 
         支持两种 Excel 格式：
         1. 系统导出格式：标题行 → 部门行 → 表头行 → 数据行
         2. 自定义格式：第一行直接为表头，需包含「年度」「部门」列
 
+        allowed_departments 非 None 时行级过滤：仅接受授权部门（及全员可见的
+        「厂级」）的数据行，越权行计入 errors 跳过。
         每行使用独立 SAVEPOINT，单行失败不影响其他行。
         """
         from io import BytesIO
@@ -840,6 +878,14 @@ class EmployeeService:
             year = data.get("year") or plan_year or date.today().year
             if not dept:
                 errors.append(f"第{row_idx}行: 缺少部门")
+                continue
+            # 行级数据范围：受限用户仅可导入授权部门（「厂级」培训全员可见可操作）
+            if (
+                allowed_departments is not None
+                and dept != "厂级"
+                and dept not in allowed_departments
+            ):
+                errors.append(f"第{row_idx}行: 部门「{dept}」不在授权范围内，已跳过")
                 continue
 
             item_data = {k: v for k, v in data.items() if k not in skip_fields}

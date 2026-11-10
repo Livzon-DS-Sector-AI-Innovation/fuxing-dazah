@@ -14,7 +14,6 @@ export async function saveEmployeeSyncConfig(input: {
   enabled: boolean
   app_token: string
   source_table_id: string
-  training_table_id?: string | null
 }): Promise<{ data: EmployeeSyncConfig; message: string }> {
   const res = await fetchHrApi<{ data: EmployeeSyncConfig; message: string }>(
     '/hr/employee-sync/config',
@@ -83,6 +82,24 @@ export async function fetchTrainingRoster(params?: {
   return fetchHrApi(`/hr/employee-sync/training-roster?${qs.toString()}`, {
     errorMessage: '加载培训人员名单失败',
   })
+}
+
+/** 取全量名单（自动翻页）：选人/通知/统计等无翻页 UI 的场景必须用它，防止超过单页上限时静默漏人。 */
+export async function fetchAllTrainingRoster(params?: {
+  department?: string
+  keyword?: string
+}): Promise<{ data: TrainingRosterRow[]; scoped_departments: string[] | null }> {
+  const pageSize = 500
+  const rows: TrainingRosterRow[] = []
+  let scoped: string[] | null = null
+  for (let page = 1; ; page += 1) {
+    const res = await fetchTrainingRoster({ ...params, page, page_size: pageSize })
+    rows.push(...(res.data || []))
+    scoped = res.meta?.scoped_departments ?? null
+    const total = res.meta?.total ?? 0
+    if (!(res.data || []).length || rows.length >= total) break
+  }
+  return { data: rows, scoped_departments: scoped }
 }
 
 export async function updateTrainingRosterEntry(

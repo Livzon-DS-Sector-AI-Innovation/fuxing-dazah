@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache'
 import {
   OnboardingRecordListResponse,
   DepartureRecordListResponse,
-  OnboardingEvaluationData,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload, fetchHrText } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -113,19 +112,6 @@ export async function fetchPrejobTrainingPlan(
     errorMessage: '生成岗前培训计划失败',
   })
   return { base64, filename: filename || `7.4岗前培训计划_${employeeName}.xlsx` }
-}
-
-/** 7.12 员工上岗评估表（xlsx） */
-export async function generateOnboardingEvaluation(
-  data: OnboardingEvaluationData
-): Promise<{ base64: string; filename: string }> {
-  const { base64, filename } = await fetchHrDownload('/hr/onboarding-evaluation', {
-    method: 'POST',
-    body: JSON.stringify(data),
-    errorMessage: '生成员工上岗评估表失败',
-  })
-  const safeDate = data.approval_date || 'nodate'
-  return { base64, filename: filename || `7.12员工上岗评估表_${safeDate}.xlsx` }
 }
 
 // ─── 岗前培训文档（POST 带培训明细，返回 docx） ───

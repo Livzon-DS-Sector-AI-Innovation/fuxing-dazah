@@ -957,31 +957,6 @@ export interface TrainingNotificationData {
   issue_date?: string
 }
 
-export interface OnboardingEvaluationData {
-  employee_name: string
-  employee_number?: string
-  gender?: string
-  department_position?: string
-  hire_date?: string
-  training_period?: string
-  regularization_date?: string
-  assessment_contents?: string[]
-  comprehensive_comment?: string
-  is_qualified?: boolean
-  assigned_position?: string
-  assessment_method?: string
-  dept_manager_signature?: string
-  signature_date?: string
-  remarks?: string
-  dept_manager_agree?: boolean
-  hr_manager_agree?: boolean
-  qa_manager_agree?: boolean
-  dept_manager?: string
-  hr_manager?: string
-  qa_manager?: string
-  approval_date?: string
-}
-
 export interface TrainingLedgerPageRecord {
   id: string
   employee_number: string

@@ -16,14 +16,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.hr.employee_sync import bitable_client as bitable
 from app.modules.hr.employee_sync.config import (
+    KEY_APP_TOKEN,
+    KEY_ENABLED,
     KEY_LAST_STATS,
     KEY_LAST_SYNC_AT,
+    KEY_SOURCE_TABLE_ID,
+    KEY_SOURCE_TABLE_NAME,
     TRAINING_ROSTER_FIELDS,
     EmployeeSyncConfig,
     load_config,
     save_config_values,
 )
 from app.modules.hr.employee_sync.mapping import (
+    COLUMN_MAP,
     build_option_maps,
     convert_source_fields,
     normalize_cell,
@@ -43,16 +48,44 @@ class SyncInProgressError(Exception):
     """已有一次同步正在执行（手动同步与定时对账共用一把锁）。"""
 
 
+def config_payload(cfg: EmployeeSyncConfig) -> dict[str, Any]:
+    """同步配置的前端展示形态（GET /config 与保存后回显共用）。"""
+    return {
+        "enabled": cfg.enabled,
+        "app_token": cfg.app_token,
+        "source_table_id": cfg.source_table_id,
+        "source_table_name": cfg.source_table_name,
+        "is_ready": cfg.is_ready,
+        "last_sync_at": cfg.last_sync_at or None,
+        "last_stats": cfg.last_stats or None,
+    }
+
+
+def _column_report(field_names: list[str]) -> dict[str, Any]:
+    """源表列 ↔ 系统字段的匹配结果（保存配置时反馈给前端）。"""
+    mapped = [c for c in field_names if c in COLUMN_MAP]
+    ignored = [c for c in field_names if c not in COLUMN_MAP]
+    return {
+        "mapped": mapped,
+        "ignored": ignored,
+        "has_employee_number": "工号" in mapped,
+        "mapped_count": len(mapped),
+    }
+
+
 def _ensure_required(data: dict[str, Any]) -> None:
-    """NOT NULL 字段兜底（与 Excel 上传语义一致：缺失/置空 → 默认值）。"""
+    """NOT NULL 字段兜底（与 Excel 上传语义一致：缺失/置空 → 默认值）。
+
+    注意：hire_date 可空，不做兜底——today 兜底只应作用于新建分支
+    （repository.upsert_from_bitable 的 insert 侧），否则源表无该列/单元格
+    为空时，每轮对账都会把存量员工的入职日期刷成当天。
+    """
     if not data.get("department"):
         data["department"] = "未分类"
     if not data.get("position"):
         data["position"] = ""
     if not data.get("name"):
         data["name"] = ""
-    if not data.get("hire_date"):
-        data["hire_date"] = date.today()
 
 
 class EmployeeSyncService:
@@ -79,6 +112,90 @@ class EmployeeSyncService:
             await redis_client.delete(_LOCK_KEY)
         except Exception:  # noqa: BLE001
             pass
+
+    # ── 绑定配置保存（校验连通 + 事件订阅 + 列匹配报告） ──
+
+    async def save_binding_config(
+        self, *, enabled: bool, app_token: str, source_table_id: str,
+    ) -> dict[str, Any]:
+        """保存绑定配置：连通性校验、列匹配报告、事件订阅（增强，失败降级对账）。
+
+        app_token / source_table_id 需先经 routes 层清洗（容忍粘贴完整链接）。
+        校验失败抛 ValueError（路由层转 400）；返回前端展示 payload。
+        """
+        from app.core.config import get_settings
+
+        if enabled and (not app_token or not source_table_id):
+            raise ValueError("启用同步前必须填写 app_token 和源数据表 table_id")
+
+        table_name = ""
+        column_report: dict[str, Any] = {
+            "mapped": [], "ignored": [], "has_employee_number": False, "mapped_count": 0,
+        }
+        subscribe_warning = ""
+        if app_token and source_table_id:
+            try:
+                tables = await bitable.list_tables(app_token)
+                if not tables:
+                    raise ValueError(
+                        "应用已是该 Base 协作者，但读不到任何数据表（RolePermNotAllow）。"
+                        "多半是 Base 开启了「高级权限」：请在 右上角「···」→ 高级权限 → "
+                        f"协作者管理中，为应用 {bitable.active_app_id()} 授予数据表权限"
+                        "（可编辑或可管理）；否则请把应用的文档权限改为「可编辑」。",
+                    )
+                matched = next(
+                    (t for t in tables if str(t.get("table_id")) == source_table_id), None,
+                )
+                if matched is None:
+                    available = "、".join(
+                        f"{t.get('name')}({t.get('table_id')})" for t in tables[:10]
+                    )
+                    raise ValueError(
+                        f"Base 中不存在数据表 {source_table_id}。Base 内可用的数据表：{available}",
+                    )
+                table_name = str(matched.get("name") or "")
+                fields = await bitable.list_fields(app_token, source_table_id)
+                column_report = _column_report(
+                    [str(f.get("field_name") or "") for f in fields],
+                )
+            except ValueError:
+                raise
+            except bitable.BitableAPIError as exc:
+                raise ValueError(
+                    f"连接飞书多维表格失败：{exc}。"
+                    f"请确认该 Base 已共享给应用「{bitable.active_app_id()}」"
+                    f"（多维表格右上角「···」→ 添加文档应用，权限选可编辑）。",
+                ) from exc
+
+            # 事件订阅（增强能力）：走当前环境全局应用；无授权时降级 5 分钟对账，不阻断保存
+            try:
+                await bitable.subscribe_bitable(app_token)
+            except bitable.BitableAPIError as exc:
+                global_app = get_settings().FEISHU_APP_ID or "未配置"
+                text = str(exc)
+                if "scopes is required" in text or "99991672" in text:
+                    hint = (
+                        f"当前环境全局应用「{global_app}」尚未开通订阅权限（scope），"
+                        "按错误信息中的链接申请开通，并把 Base 共享给它后重新保存即可。"
+                    )
+                else:
+                    hint = f"如需实时同步，请把 Base 也共享给当前环境的全局应用「{global_app}」。"
+                subscribe_warning = f"实时事件订阅失败（已降级为 5 分钟对账模式）：{exc}。{hint}"
+                logger.warning("员工档案同步事件订阅失败: %s", exc)
+
+        await save_config_values(self.session, {
+            KEY_ENABLED: "true" if enabled else "false",
+            KEY_APP_TOKEN: app_token,
+            KEY_SOURCE_TABLE_ID: source_table_id,
+            KEY_SOURCE_TABLE_NAME: table_name,
+        })
+        await self.session.commit()
+
+        cfg = await load_config(self.session)
+        data = config_payload(cfg)
+        data["column_report"] = column_report
+        data["subscribe_warning"] = subscribe_warning or None
+        return data
 
     # ── 全量对账：源表 → 本地 ──
 

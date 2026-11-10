@@ -513,3 +513,175 @@ class TestEventRouting:
         repo = EmployeeRepository(db_session)
         row = await repo.get_by_employee_number(number)
         assert row is not None and row.department == "工程部"
+
+
+# ─── 品种列（签到表品种筛选链路） ───
+
+
+class TestRosterVariety:
+    """修复：TrainingRosterProfile 曾缺 variety/concurrent_variety 映射，
+    employee-varieties 500、名单编辑品种静默丢失、输出恒 None。"""
+
+    async def test_variety_in_roster_output_and_editable(self, db_session: AsyncSession) -> None:
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="赵一", employee_number=number, department="质控部", position="QC",
+            status="在职", hire_date=date(2024, 1, 1), variety="胶囊、颗粒",
+        ))
+        await db_session.flush()
+
+        service = sync_service.EmployeeSyncService(db_session)
+        await service.sync_roster_membership()
+        rows, total = await service.training_roster(keyword=number)
+        assert total == 1
+        assert rows[0]["variety"] == "胶囊、颗粒"
+
+        # 名单编辑品种落库（修复前 setattr 到未映射属性，静默不落库）
+        await service.update_roster_entry(
+            number, {"variety": "原料药", "concurrent_variety": "片剂"},
+        )
+        db_session.expire_all()
+        rows2, _total = await service.training_roster(keyword=number)
+        assert rows2[0]["variety"] == "原料药"
+        assert rows2[0]["concurrent_variety"] == "片剂"
+
+    async def test_employee_varieties_endpoint(self, db_session: AsyncSession, client) -> None:
+        dept = f"质控{_rand()}"
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="钱二", employee_number=number, department=dept, position="QC",
+            status="在职", hire_date=date(2024, 1, 1), variety="胶囊、颗粒",
+        ))
+        await db_session.flush()
+        await sync_service.EmployeeSyncService(db_session).sync_roster_membership()
+
+        res = await client.get(
+            "/api/v1/hr/employee-varieties", params={"department": dept},
+        )
+        assert res.status_code == 200  # 修复前：select 未映射列必 500
+        assert res.json()["data"] == sorted(["胶囊", "颗粒"])
+
+
+# ─── 同步启用期间的只读守卫 ───
+
+
+class TestEmployeeReadOnlyGuard:
+    """修复：同步启用后 create/update/delete 必须后端拦截（前端隐藏不是守卫）。"""
+
+    async def test_writes_blocked_when_sync_ready(self, db_session: AsyncSession) -> None:
+        from app.core.exceptions import AppException
+        from app.modules.hr.schemas import EmployeeCreate, EmployeeUpdate
+        from app.modules.hr.service import EmployeeService
+
+        await _write_config(db_session)  # enabled=true → is_ready
+        svc = EmployeeService(db_session)
+        number = f"E{_rand()}"
+
+        with pytest.raises(AppException) as ei:
+            await svc.create_employee(EmployeeCreate(
+                employee_number=number, name="守卫甲",
+                department="测试部", position="QC", hire_date=date(2024, 1, 1),
+            ))
+        assert ei.value.status_code == 409
+
+        # 先关同步建出员工，再开同步验证 update/delete 同样被拦
+        await sync_config.save_config_values(
+            db_session, {sync_config.KEY_ENABLED: "false"},
+        )
+        employee = await svc.create_employee(EmployeeCreate(
+            employee_number=number, name="守卫甲",
+            department="测试部", position="QC", hire_date=date(2024, 1, 1),
+        ))
+        await _write_config(db_session)
+        with pytest.raises(AppException):
+            await svc.update_employee(employee.id, EmployeeUpdate(status="离职"))
+        with pytest.raises(AppException):
+            await svc.delete_employee(employee.id)
+
+
+# ─── 手工改状态 → 名单即时跟随 ───
+
+
+class TestManualStatusSync:
+    """修复：update_employee 改状态后名单 status 必须即时同步（对账 5 分钟兜底不够）。"""
+
+    async def test_update_employee_status_syncs_roster(self, db_session: AsyncSession) -> None:
+        from app.modules.hr.schemas import EmployeeUpdate
+        from app.modules.hr.service import EmployeeService
+
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="孙三", employee_number=number, department="测试部", position="QC",
+            status="在职", hire_date=date(2024, 1, 1),
+        ))
+        await db_session.flush()
+        await sync_service.EmployeeSyncService(db_session).sync_roster_membership()
+
+        repo = EmployeeRepository(db_session)
+        employee = await repo.get_by_employee_number(number)
+        await EmployeeService(db_session).update_employee(
+            employee.id, EmployeeUpdate(status="产假"),
+        )
+
+        rows, _total = await sync_service.EmployeeSyncService(db_session).training_roster(
+            keyword=number,
+        )
+        assert rows[0]["status"] == "产假"
+
+
+# ─── 源表改工号：record_id 归属迁移 ───
+
+
+class TestRecordIdMigration:
+    """修复：record_id 无唯一约束，源表改工号会遗留重复行且旧行永不被清理。"""
+
+    async def test_record_id_moves_to_new_number(self, db_session: AsyncSession) -> None:
+        repo = EmployeeRepository(db_session)
+        number_a, number_b = f"A{_rand()}", f"B{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="甲", employee_number=number_a, department="测试部", position="QC",
+            status="在职", hire_date=date(2024, 1, 1), feishu_record_id="rec_x",
+        ))
+        await db_session.flush()
+
+        # 源表把该行工号从 A 改为 B：同一 record_id 现在对应新工号
+        emp_b, is_new = await repo.upsert_from_bitable(
+            convert_source_fields({"工号": number_b, "姓名": "乙"}, reset_missing=False),
+            "rec_x",
+        )
+        assert is_new is True
+
+        stale = await repo.get_by_employee_number(number_a, include_deleted=True)
+        assert stale.is_deleted is True          # 旧行按删除处理，不再悬挂
+        assert stale.feishu_record_id is None    # record_id 归属已迁移
+        got = await repo.get_by_feishu_record_id("rec_x")
+        assert got is not None and got.id == emp_b.id
+
+
+# ─── hire_date 兜底只作用于新建分支 ───
+
+
+class TestHireDateNotResetToToday:
+    """修复：_ensure_required 曾对缺失 hire_date 填 today，每轮对账把存量员工
+    入职日期刷成当天；修复后源表缺失保留本地值（列 NOT NULL），新建行走 insert 兜底。"""
+
+    async def test_reconcile_missing_hire_date_not_today(
+        self, db_session: AsyncSession, monkeypatch, _no_lock,
+    ) -> None:
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="李九", employee_number=number, department="测试部", position="QC",
+            status="在职", hire_date=date(2020, 5, 1), feishu_record_id="rec_hd",
+        ))
+        await db_session.flush()
+        await _write_config(db_session)
+
+        # 源表整行无「入职日期」列
+        _mock_bitable(monkeypatch, source_records=[{
+            "record_id": "rec_hd", "fields": {"工号": number, "姓名": "李九"},
+        }])
+        await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        employee = await EmployeeRepository(db_session).get_by_employee_number(number)
+        assert employee.hire_date == date(2020, 5, 1)  # 保留本地值，不刷成当天

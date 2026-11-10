@@ -2123,11 +2123,15 @@ export async function autoDetectTemplate(file: File, password?: string): Promise
   return res.json()
 }
 
-/** 简易维护：按同版式模板一键生成新表号配置。 */
-export async function autoCreateTemplate(table_no: string, template_table_no: string): Promise<{ message: string; data: { id: string; table_no: string } }> {
+/** 简易维护：按同版式模板一键生成新表号配置（shifts 为版式列偏移，随候选回传）。 */
+export async function autoCreateTemplate(
+  table_no: string,
+  template_table_no: string,
+  shifts?: { name_shift?: number; value_shift?: number; step?: number },
+): Promise<{ message: string; data: { id: string; table_no: string } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates/auto-create`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ table_no, template_table_no }),
+    body: JSON.stringify({ table_no, template_table_no, ...shifts }),
   })
   if (!res.ok) {
     const err: ApiErrorBody = await res.json().catch(() => ({}))

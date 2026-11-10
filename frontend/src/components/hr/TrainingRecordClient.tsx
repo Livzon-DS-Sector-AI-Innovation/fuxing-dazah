@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space, Spin } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
-import { fetchTrainingRoster, fetchOnboardingTrainingRecord, fetchEmployeeByNumberAction, type TrainingRosterRow } from '@/actions/hr'
+import { fetchAllTrainingRoster, fetchOnboardingTrainingRecord, fetchEmployeeByNumberAction, type TrainingRosterRow } from '@/actions/hr'
 import type { Employee } from '@/types/hr'
 import { downloadBase64File } from '@/lib/hr'
 
@@ -19,7 +19,7 @@ export default function TrainingRecordClient() {
 
   useEffect(() => {
     setLoading(true)
-    fetchTrainingRoster({ page_size: 200 })
+    fetchAllTrainingRoster()
       .then((res) => {
         // eslint-disable-next-line no-console
         console.log('fetchEmployees success:', res)

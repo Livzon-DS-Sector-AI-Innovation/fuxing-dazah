@@ -329,6 +329,49 @@ class _TaskLifecycle(_TaskCore):
             logger.exception("待复核提醒推送失败")
         return True
 
+    # ── 解析待确认结果的确认归入 ──
+
+    async def confirm_parsed_result(
+        self,
+        db: AsyncSession,
+        task_id: uuid.UUID,
+        result_id: uuid.UUID,
+        result_value: float | None = None,
+        filled_by: uuid.UUID | None = None,
+    ) -> TestTaskDetail | None:
+        """确认解析自动填入的结果（正式归入，可先修正数值）；确认后参与自动流转。
+
+        result_value 提供时按标准限度重新判定后归入（人工修正口径）；
+        该行标准限度结构不足时抛 400。返回确认后的任务详情。
+        """
+        rows = await list_test_results(db, task_id)
+        row = next((r for r in rows if r.id == result_id), None)
+        if row is None:
+            raise AppException(status_code=404, detail="结果行不存在")
+        if not row.pending_confirm:
+            raise AppException(status_code=409, detail="该行无需确认")
+        if result_value is not None:
+            verdict = _TaskCore._judge_value(
+                row.operator, row.limit_min, row.limit_max, result_value,
+            )
+            if verdict is None:
+                raise AppException(
+                    status_code=400,
+                    detail="该行标准限度结构不足，无法自动判定，请直接在表格中编辑该行",
+                )
+            row.result_value = result_value
+            row.result_text = str(result_value)
+            row.is_pass = verdict
+        row.pending_confirm = False
+        row.filled_by = filled_by
+        await db.flush()
+        from app.modules.quality.service.task_reports import _TaskReports
+
+        detail = await _TaskReports.get_task_detail(db, task_id)
+        # 确认后若全部行已判定且无待确认，自动流转待复核
+        await _TaskLifecycle.auto_advance_pending_review(db, task_id)
+        return detail
+
     # ── 双人复核 ──
 
     REVIEW_REQUIRED_COUNT = 2

@@ -329,31 +329,6 @@ class TrainingEvaluationInput(BaseModel):
     department: str | None = Field(None, max_length=64, description="培训部门")
 
 
-class OnboardingEvaluationInput(BaseModel):
-    employee_name: str = Field(..., max_length=64, description="员工姓名")
-    employee_number: str | None = Field(None, max_length=32, description="工作卡号")
-    gender: str | None = Field(None, max_length=8, description="性别")
-    department_position: str | None = Field(None, max_length=128, description="所在部门/岗位")
-    hire_date: date | None = Field(None, description="入厂时间")
-    training_period: str | None = Field(None, max_length=64, description="培训/考核期")
-    regularization_date: date | None = Field(None, description="转正时间")
-    assessment_contents: list[str] = Field(default_factory=list, description="上岗培训期内考核内容")
-    comprehensive_comment: str | None = Field(None, max_length=1024, description="培训/考核期综合评语")
-    is_qualified: bool | None = Field(None, description="是否同意上岗")
-    assigned_position: str | None = Field(None, max_length=64, description="担任岗位")
-    assessment_method: str | None = Field(None, max_length=32, description="考核方式")
-    dept_manager_signature: str | None = Field(None, max_length=64, description="部门负责人签名")
-    signature_date: date | None = Field(None, description="签名日期")
-    remarks: str | None = Field(None, max_length=512, description="备注")
-    dept_manager_agree: bool | None = Field(None, description="部门负责人是否同意")
-    hr_manager_agree: bool | None = Field(None, description="人事行政部负责人是否同意")
-    qa_manager_agree: bool | None = Field(None, description="质量管理负责人是否同意")
-    dept_manager: str | None = Field(None, max_length=64, description="部门负责人")
-    hr_manager: str | None = Field(None, max_length=64, description="人事行政部负责人")
-    qa_manager: str | None = Field(None, max_length=64, description="质量管理负责人")
-    approval_date: date | None = Field(None, description="审批日期")
-
-
 # ─── OffboardingRecord Schemas ───
 
 class OffboardingRecordBase(BaseModel):

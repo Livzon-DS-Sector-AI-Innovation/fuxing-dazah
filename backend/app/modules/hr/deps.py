@@ -208,6 +208,7 @@ def _resource_for_path(path: str, method: str) -> str | None:
 
     用于数据范围按 resource 计算：只有拥有该 resource 权限的角色参与范围合并，
     避免用户凭其他资源的 data_scope=all 角色在整个 HR 模块被抬权。
+    规则值也可用 {"resource": "..."} 显式指定（不设权限码、仅约束范围计算）。
     """
     for pattern, val in _HR_PATH_PERMISSIONS:
         if re.search(pattern, path):
@@ -216,6 +217,8 @@ def _resource_for_path(path: str, method: str) -> str | None:
                 code = code[0]
             if code and ":" in code:
                 return code.split(":")[1]
+            if isinstance(val, dict) and val.get("resource"):
+                return str(val["resource"])
             return None
     return None
 
@@ -286,13 +289,13 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 员工档案
     (r"/employees/export", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
-            (r"/employees/.*/onboarding-training-record", "hr:training:document"),
+    (r"/employees/.*/onboarding-training-record", "hr:training:document"),
     (r"/employees/.*/prejob-training-plan", "hr:training:document"),
     (r"/employees/.*/training-registration", "hr:profile:export"),
-    # 待培训人员/培训记录导出属培训域：档案或培训任一读权限即可（纯培训管理员不被挡）
-    (r"/employees/training-candidates", None),
+    # 待培训人员属培训域：不设权限码（任意 hr: 权限可过门禁，纯培训管理员可用），
+    # 但数据范围按 training resource 计算（None 会让全模块角色最宽范围合并 → 越权看全公司）
+    (r"/employees/training-candidates", {"resource": "training"}),
     (r"/employees/.*/training-record", "hr:training:document"),
-    (r"/employees/.*/onboarding-training-record", "hr:training:document"),
     (r"/employees/.*/work-permit", "hr:training:document"),
     (r"/employees", {"GET": "hr:profile:read", "POST": "hr:profile:create",
                      "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
@@ -394,7 +397,6 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/training-notification/generate-assessment", "hr:training:manage"),
     (r"/training-notification/export-", "hr:training:export"),
     (r"/training-notification", "hr:training:document"),
-    (r"/onboarding-evaluation", "hr:training:document"),
     (r"/training-evaluations/export-admin", "hr:training:export"),
     (r"/training-evaluations", "hr:training:document"),
     (r"/training-evaluation", "hr:training:document"),

@@ -84,6 +84,24 @@ def _grant_hr_permissions() -> Iterator[None]:
         yield
 
 
+# ── 员工档案同步：测试内一律呈现「未启用」 ──
+
+
+@pytest.fixture(autouse=True)
+async def _employee_sync_disabled(db_session: AsyncSession) -> AsyncIterator[None]:
+    """共享测试库可能残留 enabled=true（本地联调真开过同步），
+    同步只读守卫会挡住所有走 create/update/delete 的用例。
+    在测试事务内写 disabled，回滚后不影响库里的真实配置；
+    需要同步就绪的用例（test_employee_sync）自行再写 _write_config。"""
+    from app.modules.hr.employee_sync import config as sync_config
+
+    await sync_config.save_config_values(
+        db_session, {sync_config.KEY_ENABLED: "false"},
+    )
+    await db_session.flush()
+    yield
+
+
 # ── 数据库 session（复用根 conftest 的 NullPool engine） ──
 
 @pytest.fixture

@@ -33,9 +33,6 @@ from app.modules.hr.job_requirement_routes import router as job_requirement_rout
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
 )
-from app.modules.hr.onboarding_evaluation_document_generator import (
-    generate_onboarding_evaluation,
-)
 from app.modules.hr.prejob_document_generator import generate_prejob_training_plan
 from app.modules.hr.repository import PerformanceEvaluationRepository
 from app.modules.hr.schemas import (
@@ -58,7 +55,6 @@ from app.modules.hr.schemas import (
     OffboardingRecordCreate,
     OffboardingRecordResponse,
     OffboardingRecordUpdate,
-    OnboardingEvaluationInput,
     OnboardingRecordResponse,
     PerformanceCategoryCreate,
     PerformanceCategoryUpdate,
@@ -1508,41 +1504,6 @@ async def export_prejob_training_plan(
     )
 
 
-@router.get(
-    "/employees/{employee_id}/onboarding-evaluation",
-    summary="导出员工上岗评估表",
-)
-async def export_onboarding_evaluation_by_employee(
-    employee_id: UUID,
-    service: EmployeeService = Depends(get_employee_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """根据员工档案预填基本信息并导出上岗评估表 Excel 文档。"""
-    employee = await service.get_employee(employee_id)
-    hr_scope.ensure_can_access_employee(employee)
-
-    payload = OnboardingEvaluationInput(
-        employee_name=employee.name or "",
-        employee_number=employee.employee_number or None,
-        gender=employee.gender or None,
-        department_position=f"{employee.department or ''}/{employee.position or ''}",
-        hire_date=employee.hire_date,
-    )
-    buffer: BytesIO = generate_onboarding_evaluation(payload)
-
-    def _iterfile():
-        buffer.seek(0)
-        yield buffer.read()
-
-    safe_date = str(employee.hire_date).replace("-", "") if employee.hire_date else "nodate"
-    filename = f"onboarding_evaluation_{employee.employee_number}_{safe_date}.xlsx"
-    return StreamingResponse(
-        _iterfile(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
 
 
 @router.get("/employee-varieties", summary="获取部门品种列表（去重）")
@@ -1998,26 +1959,6 @@ async def export_training_evaluation(
         headers={
             "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=utf-8''{quote('培训效果评估表_' + safe_date + '.docx')}"
         },
-    )
-
-
-@router.post("/onboarding-evaluation", summary="生成员工上岗评估表")
-async def export_onboarding_evaluation(
-    payload: OnboardingEvaluationInput,
-):
-    """根据填写的评估信息自动生成员工上岗评估表 Excel 文档。"""
-    buffer: BytesIO = generate_onboarding_evaluation(payload)
-
-    def _iterfile():
-        buffer.seek(0)
-        yield buffer.read()
-
-    safe_date = str(payload.evaluation_date).replace("-", "") if payload.evaluation_date else "nodate"
-    filename = f"onboarding_evaluation_{safe_date}.xlsx"
-    return StreamingResponse(
-        _iterfile(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -4443,7 +4384,12 @@ async def list_annual_training_plans(
 async def create_annual_training_plan(
     payload: AnnualTrainingPlanCreate,
     service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    # 数据范围：受限用户仅可为本部门（或全员可见的「厂级」）建计划；self_only 无部门数据可写
+    hr_scope.ensure_dept_writable(
+        [payload.department if payload.department != "厂级" else None]
+    )
     plan = await service.create_plan(payload)
     return success_response(
         data=AnnualTrainingPlanResponse.model_validate(plan).model_dump(mode="json"),
