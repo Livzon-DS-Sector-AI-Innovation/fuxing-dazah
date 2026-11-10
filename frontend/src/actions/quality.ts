@@ -43,6 +43,7 @@ import type {
   EnvRecord,
   EnvTrend,
   EnvPlan,
+  ChromatogramPeak,
   QualityAlerts,
   StocktakeItem,
   MonthlyReportItem,
@@ -2102,6 +2103,64 @@ export async function submitCalcFill(taskId: string, input: {
     throw new Error(err.detail || '计算表提交失败')
   }
   revalidatePath(`/quality/task/${taskId}`)
+  return res.json()
+}
+
+/** 简易维护：上传计算表自动识别同版式模板（返回候选，无需会写 JSON）。 */
+export async function autoDetectTemplate(file: File, password?: string): Promise<{
+  data: { table_no: string; candidates: { template_table_no: string; product_name: string; description: string; component_count: number; value_count: number; blank?: boolean; name_shift: number; value_shift: number; step: number | null; samples: { name: string; value: number | null }[] }[] }
+}> {
+  const form = new FormData()
+  form.append('file', file)
+  if (password) form.append('password', password)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates/auto-detect`, {
+    method: 'POST', headers: await _authHeaders(), body: form,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '自动识别失败')
+  }
+  return res.json()
+}
+
+/** 简易维护：按同版式模板一键生成新表号配置。 */
+export async function autoCreateTemplate(table_no: string, template_table_no: string): Promise<{ message: string; data: { id: string; table_no: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/lc/templates/auto-create`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ table_no, template_table_no }),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '生成配置失败')
+  }
+  return res.json()
+}
+
+/** 确认解析自动填入的结果（正式归入；确认后参与自动流转）。 */
+export async function confirmTaskResult(taskId: string, resultId: string, value?: number): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/results/${resultId}/confirm`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(value !== undefined ? { result_value: value } : {}),
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '确认失败')
+  }
+  revalidatePath(`/quality/task/${taskId}`)
+  return res.json()
+}
+
+/** 图谱截图/PDF 解析（MinerU VLM，仅预览：返回峰表草稿，不落库）。 */
+export async function parseChromatogram(file: File): Promise<{ data: { filename: string; peaks: ChromatogramPeak[]; markdown_preview: string } }> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/chromatograms/parse`, {
+    method: 'POST', headers: await _authHeaders(), body: form,
+  })
+  if (!res.ok) {
+    const err: ApiErrorBody = await res.json().catch(() => ({}))
+    throw new Error(err.detail || '图谱解析失败')
+  }
   return res.json()
 }
 

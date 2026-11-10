@@ -8,7 +8,7 @@ import {
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
   PlusOutlined, DeleteOutlined, RedoOutlined, UploadOutlined, FileTextOutlined,
-  HistoryOutlined, DownloadOutlined, EyeOutlined, InboxOutlined, CalculatorOutlined,
+  HistoryOutlined, DownloadOutlined, EyeOutlined, InboxOutlined, CalculatorOutlined, FileImageOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -24,11 +24,12 @@ import {
   fetchTaskReviews, approveTaskReview,
   fetchTaskReports,
   fetchTaskHandover,
+  confirmTaskResult,
   createRetainedSample,
   fetchLcTemplateConfigs,
   submitCalcFill,
 } from '@/actions/quality'
-import { CoaPreviewModal, CalcForm } from '@/components/quality'
+import { CoaPreviewModal, CalcForm, ChromatogramModal } from '@/components/quality'
 
 const { Text } = Typography
 
@@ -84,6 +85,10 @@ export default function TaskDetail({ id }: { id: string }) {
   const [retainForm] = Form.useForm()
   // 在线计算表：免 Excel 直接填计算后数值（表号合并规则由后端计算）
   const [calcOpen, setCalcOpen] = useState(false)
+  const [chromaOpen, setChromaOpen] = useState(false)
+  // 解析结果确认弹窗（可先修正数值）
+  const [confirmRow, setConfirmRow] = useState<TestResultItem | null>(null)
+  const [confirmValue, setConfirmValue] = useState<number | null>(null)
   const [calcSaving, setCalcSaving] = useState(false)
   const [calcTableNo, setCalcTableNo] = useState<string | undefined>()
   const [calcDate, setCalcDate] = useState<Dayjs | null>(dayjs())
@@ -530,17 +535,27 @@ export default function TaskDetail({ id }: { id: string }) {
     { title: '备注', dataIndex: 'remark', key: 'remark', width: 140, ellipsis: true, render: (v: string | null) => v || '-' },
     { title: '填报', key: 'fill', width: 280, render: (_: unknown, row: TestResultItem) => renderFillCell(row) },
     {
-      title: '已判定', dataIndex: 'is_pass', key: 'is_pass', width: 80,
-      render: (v: boolean | null) => v === null
-        ? <Tag>未填</Tag>
-        : v ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
+      title: '已判定', dataIndex: 'is_pass', key: 'is_pass', width: 110,
+      render: (v: boolean | null, row: TestResultItem) => row.pending_confirm
+        ? <Tag color="orange">待确认</Tag>
+        : v === null
+          ? <Tag>未填</Tag>
+          : v ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
     },
     {
-      title: '操作', key: 'actions', width: 80,
+      title: '操作', key: 'actions', width: 130,
       render: (_: unknown, row: TestResultItem) => editable ? (
-        <Popconfirm title="确认删除该行?" onConfirm={() => handleDeleteRow(row.id)}>
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
+        <Space size={4}>
+          {row.pending_confirm && (
+            <Button size="small" type="primary" onClick={() => {
+              setConfirmRow(row)
+              setConfirmValue(row.result_value)
+            }}>确认</Button>
+          )}
+          <Popconfirm title="确认删除该行?" onConfirm={() => handleDeleteRow(row.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
       ) : null,
     },
   ]
@@ -561,6 +576,9 @@ export default function TaskDetail({ id }: { id: string }) {
         )}
         {canFill && detail.status === 'in_progress' && (
           <Button icon={<CalculatorOutlined />} onClick={openCalc}>在线计算表</Button>
+        )}
+        {canFill && detail.status === 'in_progress' && (
+          <Button icon={<FileImageOutlined />} onClick={() => setChromaOpen(true)}>图谱解析</Button>
         )}
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} disabled={!editable}>保存</Button>
         {detail.status === 'in_progress' && (
@@ -632,7 +650,7 @@ export default function TaskDetail({ id }: { id: string }) {
             <Tag color={displayStatus.color}>{displayStatus.label}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="进度">
-            {detail.results.filter((r) => r.is_pass !== null).length}/{detail.results.length} 项已判定
+            {detail.results.filter((r) => r.is_pass !== null && !r.pending_confirm).length}/{detail.results.length} 项已判定
           </Descriptions.Item>
         </Descriptions>
       </Card>
@@ -993,6 +1011,52 @@ export default function TaskDetail({ id }: { id: string }) {
         )}
       </Modal>
 
+
+      <ChromatogramModal
+        open={chromaOpen}
+        taskId={id}
+        title={`图谱解析${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
+        onClose={() => setChromaOpen(false)}
+        onFilled={loadDetail}
+      />
+
+      <Modal
+        title="确认解析结果归入"
+        open={!!confirmRow}
+        onCancel={() => setConfirmRow(null)}
+        onOk={async () => {
+          if (!confirmRow) return
+          try {
+            await confirmTaskResult(id, confirmRow.id, confirmValue ?? undefined)
+            message.success('已确认归入')
+            setConfirmRow(null)
+            loadDetail()
+          } catch (err: unknown) {
+            message.error((err instanceof Error ? err.message : String(err)) || '确认失败')
+          }
+        }}
+        okText="确认归入"
+      >
+        {confirmRow && (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Typography.Text>
+              子项目：<b>{confirmRow.item_name}</b>　合格标准：{confirmRow.standard_text || '-'}
+            </Typography.Text>
+            <Space>
+              <Typography.Text>数值（可修正，确认后按标准限度重新判定）：</Typography.Text>
+              <InputNumber
+                value={confirmValue}
+                precision={2}
+                style={{ width: 140 }}
+                onChange={(v) => setConfirmValue(v === null ? null : Number(v))}
+              />
+            </Space>
+            <Typography.Text type="secondary">
+              原解析值 {confirmRow.result_value ?? '-'}（{confirmRow.is_pass ? '合格' : '不合格'}）；修改数值将按合格标准重新判定。
+            </Typography.Text>
+          </Space>
+        )}
+      </Modal>
 
       <CoaPreviewModal
         open={!!coaPreviewId}

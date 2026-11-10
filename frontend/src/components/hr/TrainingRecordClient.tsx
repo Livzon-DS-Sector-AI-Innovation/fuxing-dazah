@@ -3,20 +3,23 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space, Spin } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
-import { Employee } from '@/types/hr'
-import { fetchEmployeesAction, fetchOnboardingTrainingRecord } from '@/actions/hr'
+import { fetchTrainingRoster, fetchOnboardingTrainingRecord, fetchEmployeeByNumberAction, type TrainingRosterRow } from '@/actions/hr'
+import type { Employee } from '@/types/hr'
 import { downloadBase64File } from '@/lib/hr'
 
 export default function TrainingRecordClient() {
   const { message } = App.useApp()
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<TrainingRosterRow[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
+  // 文档预览需要性别等名单未收录字段：选中后按工号取档案全量（文档保留全量的既定决策）
+  const [employeeDetail, setEmployeeDetail] = useState<Employee | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
   const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     setLoading(true)
-    fetchEmployeesAction({ page_size: 200 })
+    fetchTrainingRoster({ page_size: 200 })
       .then((res) => {
         // eslint-disable-next-line no-console
         console.log('fetchEmployees success:', res)
@@ -32,7 +35,23 @@ export default function TrainingRecordClient() {
       })
   }, [])
 
-  const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId)
+  const selectedEmployee = employees.find((e) => e.employee_number === selectedEmployeeId)
+
+  const handleSelect = (value: string | null) => {
+    setSelectedEmployeeId(value)
+    if (!value) {
+      setEmployeeDetail(null)
+      return
+    }
+    setDetailLoading(true)
+    fetchEmployeeByNumberAction(value)
+      .then((res) => setEmployeeDetail(res.data ?? null))
+      .catch((err) => {
+        message.error('加载员工详情失败: ' + (err.message || '未知错误'))
+        setEmployeeDetail(null)
+      })
+      .finally(() => setDetailLoading(false))
+  }
 
   const handleExport = async () => {
     if (!selectedEmployee) {
@@ -41,7 +60,7 @@ export default function TrainingRecordClient() {
     }
     setDownloading(true)
     try {
-      const r = await fetchOnboardingTrainingRecord(selectedEmployee.id, selectedEmployee.name)
+      const r = await fetchOnboardingTrainingRecord(selectedEmployee.employee_number, selectedEmployee.name)
       downloadBase64File(r.base64, r.filename)
       message.success('培训记录已导出')
     } catch (err: any) {
@@ -68,9 +87,9 @@ export default function TrainingRecordClient() {
             showSearch
             placeholder="选择员工"
             value={selectedEmployeeId || undefined}
-            onChange={(value) => setSelectedEmployeeId(value)}
+            onChange={(value) => handleSelect(value ?? null)}
             options={employees.map((e) => ({
-              value: e.id,
+              value: e.employee_number,
               label: `${e.employee_number} - ${e.name} (${e.department})` }))}
             filterOption={(input, option) =>
               (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
@@ -96,7 +115,11 @@ export default function TrainingRecordClient() {
       </Card>
 
       {/* 打印预览区 */}
-      {selectedEmployee && (
+      {detailLoading ? (
+        <div className="flex justify-center py-16">
+          <Spin />
+        </div>
+      ) : employeeDetail && (
         <div id="print-area" className="print-area">
           <Card
             title={
@@ -116,21 +139,21 @@ export default function TrainingRecordClient() {
                 <tbody>
                   <tr className="border border-gray-300">
                     <td className="border border-gray-300 px-3 py-2 w-24 bg-gray-50">姓　　名</td>
-                    <td className="border border-gray-300 px-3 py-2 w-32">{selectedEmployee.name}</td>
+                    <td className="border border-gray-300 px-3 py-2 w-32">{employeeDetail.name}</td>
                     <td className="border border-gray-300 px-3 py-2 w-24 bg-gray-50">性　别</td>
-                    <td className="border border-gray-300 px-3 py-2 w-32">{selectedEmployee.gender || ''}</td>
+                    <td className="border border-gray-300 px-3 py-2 w-32">{employeeDetail.gender || ''}</td>
                     <td className="border border-gray-300 px-3 py-2 w-24 bg-gray-50">工作卡号</td>
-                    <td className="border border-gray-300 px-3 py-2">{selectedEmployee.employee_number}</td>
+                    <td className="border border-gray-300 px-3 py-2">{employeeDetail.employee_number}</td>
                   </tr>
                   <tr className="border border-gray-300">
                     <td className="border border-gray-300 px-3 py-2 bg-gray-50">部　　门</td>
-                    <td className="border border-gray-300 px-3 py-2">{selectedEmployee.department}</td>
+                    <td className="border border-gray-300 px-3 py-2">{employeeDetail.department}</td>
                     <td className="border border-gray-300 px-3 py-2 bg-gray-50">拟定岗位</td>
-                    <td className="border border-gray-300 px-3 py-2" colSpan={3}>{selectedEmployee.position}</td>
+                    <td className="border border-gray-300 px-3 py-2" colSpan={3}>{employeeDetail.position}</td>
                   </tr>
                   <tr className="border border-gray-300">
                     <td className="border border-gray-300 px-3 py-2 bg-gray-50">报到日期</td>
-                    <td className="border border-gray-300 px-3 py-2">{selectedEmployee.hire_date || ''}</td>
+                    <td className="border border-gray-300 px-3 py-2">{employeeDetail.hire_date || ''}</td>
                     <td className="border border-gray-300 px-3 py-2 bg-gray-50">转正日期</td>
                     <td className="border border-gray-300 px-3 py-2" colSpan={3}></td>
                   </tr>
@@ -235,7 +258,7 @@ export default function TrainingRecordClient() {
         </div>
       )}
 
-      {!selectedEmployee && (
+      {!employeeDetail && !detailLoading && (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <FileTextOutlined className="text-5xl mb-4" />
           <p>请在上方选择员工以生成入职培训记录</p>

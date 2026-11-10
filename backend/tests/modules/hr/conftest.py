@@ -88,10 +88,23 @@ def _grant_hr_permissions() -> Iterator[None]:
 
 @pytest.fixture
 async def db_session() -> AsyncIterator[AsyncSession]:
-    """提供回滚式 AsyncSession，每个测试结束后自动回滚。"""
+    """提供回滚式 AsyncSession，每个测试结束后自动回滚。
+
+    路由处理器会在请求内 commit（生产行为正确）；测试若不屏蔽，commit 会
+    把测试数据永久写入共享库（历史泄漏来源：分类清单 258 条等）。此处把
+    commit 替换为 flush：功能语义不变（数据在同一事务内可见），teardown
+    rollback 统一清理。需要真实 commit 的测试自行用独立 session factory。
+    """
+    from unittest.mock import AsyncMock
+
     async with _test_session_factory() as session:
-        yield session
-        await session.rollback()
+        original_commit = session.commit
+        session.commit = AsyncMock(side_effect=session.flush)  # type: ignore[method-assign]
+        try:
+            yield session
+        finally:
+            session.commit = original_commit  # type: ignore[method-assign]
+            await session.rollback()
 
 
 # ── 测试用户（API 测试用） ──

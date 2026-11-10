@@ -5,6 +5,9 @@
 
 import uuid
 from datetime import timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as _app_today
 from app.modules.quality.api._env import _env_judge
@@ -28,7 +31,7 @@ def _rand_no() -> str:
     return f"P-{uuid.uuid4().hex[:6].upper()}"
 
 
-def _point(**kw) -> dict:
+def _point(**kw: Any) -> dict:
     base = {
         "room": "灌装间",
         "point_no": _rand_no(),
@@ -41,7 +44,7 @@ def _point(**kw) -> dict:
     return base
 
 
-def test_env_judge_rules():
+def test_env_judge_rules() -> None:
     # 超行动限 / 超警戒限 / 合格 / 无值
     assert _env_judge(15, 5, 10) == "action"
     assert _env_judge(7, 5, 10) == "alert"
@@ -53,7 +56,7 @@ def test_env_judge_rules():
     assert _env_judge(10, 5, 10) == "alert"
 
 
-async def test_env_point_crud(db_session):
+async def test_env_point_crud(db_session: AsyncSession) -> None:
     point = await create_env_point(db_session, _point())
     got = await get_env_point(db_session, point.id)
     assert got is not None and got.point_no == point.point_no and got.status == "active"
@@ -72,7 +75,7 @@ async def test_env_point_crud(db_session):
     assert await get_env_point(db_session, point.id) is None
 
 
-async def test_env_record_fill_and_list(db_session):
+async def test_env_record_fill_and_list(db_session: AsyncSession) -> None:
     point = await create_env_point(db_session, _point())
     rec = await create_env_record(db_session, {
         "point_id": point.id,
@@ -99,7 +102,7 @@ async def test_env_record_fill_and_list(db_session):
     assert await list_env_records(db_session, point_id=point.id) == []
 
 
-async def test_env_missed_points(db_session):
+async def test_env_missed_points(db_session: AsyncSession) -> None:
     today = _app_today()
     # 每周点位：本周无记录 → 欠账
     weekly_no_record = await create_env_point(db_session, _point(frequency="weekly"))
@@ -133,7 +136,7 @@ async def test_env_missed_points(db_session):
     assert stale["last_date"] == (today - timedelta(days=40)).isoformat()
 
 
-async def test_env_plans_generate_and_complete(db_session) -> None:
+async def test_env_plans_generate_and_complete(db_session: AsyncSession) -> None:
     today = _app_today()
     # 每周点位：本周期无记录 → 生成计划
     weekly_due = await create_env_point(db_session, _point(frequency="weekly"))
@@ -172,7 +175,7 @@ async def test_env_plans_generate_and_complete(db_session) -> None:
     assert by_no[weekly_due.point_no]["completed_at"] == today.isoformat()
 
 
-async def test_env_record_handle_closure(db_session):
+async def test_env_record_handle_closure(db_session: AsyncSession) -> None:
     point = await create_env_point(db_session, _point())
     rec = await create_env_record(db_session, {
         "point_id": point.id, "record_date": "2026-10-22",

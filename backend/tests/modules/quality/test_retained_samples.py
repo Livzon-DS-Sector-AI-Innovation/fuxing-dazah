@@ -5,6 +5,9 @@
 
 import uuid
 from datetime import timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as _app_today
 from app.modules.quality.repository import (
@@ -22,7 +25,7 @@ def _due(offset_days: int) -> str:
     return (_app_today() + timedelta(days=offset_days)).isoformat()
 
 
-def _sample(**kw) -> dict:
+def _sample(**kw: Any) -> dict:
     base = {
         "source_type": "product",
         "batch_no": f"HAF{uuid.uuid4().hex[:6].upper()}",
@@ -36,7 +39,7 @@ def _sample(**kw) -> dict:
     return base
 
 
-async def test_retained_sample_crud(db_session):
+async def test_retained_sample_crud(db_session: AsyncSession) -> None:
     rec = await create_retained_sample(db_session, _sample())
     got = await get_retained_sample(db_session, rec.id)
     assert got is not None and got.batch_no == rec.batch_no
@@ -65,7 +68,7 @@ async def test_retained_sample_crud(db_session):
     assert await delete_retained_sample(db_session, rec.id) is False
 
 
-async def test_retained_destroy_alerts(db_session):
+async def test_retained_destroy_alerts(db_session: AsyncSession) -> None:
     # 已过期 / 30 天内到期 / 无到期日 / 已销毁 / 远期：只有前两类提醒
     await create_retained_sample(db_session, _sample(batch_no="EXPIRED01", destroy_due_date=_due(-1)))
     await create_retained_sample(db_session, _sample(batch_no="SOON01", destroy_due_date=_due(10)))

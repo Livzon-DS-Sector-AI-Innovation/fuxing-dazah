@@ -7,6 +7,7 @@ import {
   BookOutlined,
   RobotOutlined,
   CalendarOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import Link from 'next/link'
 
@@ -38,6 +39,13 @@ const modules = [
     desc: '查看员工培训台账，预填员工基本信息，支持导出',
     icon: <BookOutlined className="text-2xl text-[var(--color-primary)]" />,
     path: '/hr/training/ledger',
+  },
+  {
+    key: 'personnel',
+    title: '培训人员名单',
+    desc: '脱敏版员工名册（不含身份证/学校/专业/联系方式等个人信息），供培训组织使用',
+    icon: <TeamOutlined className="text-2xl text-[var(--color-primary)]" />,
+    path: '/hr/training/personnel',
   },
   {
     key: 'ai-exam',

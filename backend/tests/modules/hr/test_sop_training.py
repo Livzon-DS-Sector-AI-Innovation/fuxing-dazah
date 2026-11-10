@@ -173,10 +173,17 @@ class TestSopRegisterFlow:
     async def test_classifications_and_personnel(self, db_session, client):
         """部门自定义分类选项 + 按分类拉取人员（选项 = 当前用户的清单 ∪ 标签）"""
         from datetime import date as _date
-        from app.modules.hr.models import Employee, EmployeeClassification, EmployeeTag
+        from app.modules.hr.models import (
+            Employee, EmployeeClassification, EmployeeTag, TrainingRosterProfile,
+        )
         db_session.add(Employee(
             employee_number="SOP001", name="员工甲", department="甲部门",
             position="操作工", status="在职", hire_date=_date.today(),
+        ))
+        # 分类人员口径 = 培训人员名单（脱敏独立数据集），需同时存在名单行
+        db_session.add(TrainingRosterProfile(
+            employee_number="SOP001", name="员工甲", department="甲部门",
+            position="操作工", status="在职",
         ))
         # 当前用户（HR测试员）建的清单 + 打的标签
         db_session.add(EmployeeClassification(name="新员工", created_by="HR测试员"))
@@ -257,9 +264,11 @@ class TestMaterialsHelpers:
             ("产假乙", f"M{_rand()}", "产假"),
             ("在职丙", f"Z{_rand()}", "在职"),
         ]:
-            emp = hr_models.Employee(name=name, employee_number=no, department=dept,
-                                     position="工程师", status=status, hire_date=_date(2020, 1, 1))
-            db_session.add(emp)
+            # 统计口径 = 培训人员名单（脱敏独立数据集）
+            db_session.add(hr_models.TrainingRosterProfile(
+                name=name, employee_number=no, department=dept,
+                position="工程师", status=status,
+            ))
         await db_session.flush()
         sick, maternity = await _query_leave_counts(db_session, dept)
         assert sick == 1
@@ -314,22 +323,24 @@ class TestMaterialsHelpers:
             ("病假乙", f"B{_rand()}", "病假"),
             ("产假丙", f"M{_rand()}", "产假"),
         ]:
-            emp = hr_models.Employee(name=name, employee_number=no, department=dept,
-                                     position="工程师", status=status, hire_date=_date(2020, 1, 1))
-            db_session.add(emp)
+            # 人员口径 = 培训人员名单（脱敏独立数据集）
+            db_session.add(hr_models.TrainingRosterProfile(
+                name=name, employee_number=no, department=dept,
+                position="工程师", status=status,
+            ))
             await db_session.flush()
             db_session.add(hr_models.EmployeeTag(employee_number=no, tag_name=tag, created_by="tester"))
         await db_session.flush()
 
         result = (await db_session.execute(
             sa_text("""
-                SELECT e.name FROM hr.employees e
-                JOIN hr.employee_tags t ON t.employee_number = e.employee_number
-                WHERE t.is_deleted = false AND e.is_deleted = false
+                SELECT p.name FROM hr.training_roster_profiles p
+                JOIN hr.employee_tags t ON t.employee_number = p.employee_number
+                WHERE t.is_deleted = false AND p.is_deleted = false
                   AND t.tag_name = :tag
-                  AND (e.department = :dept OR e.actual_department = :dept)
-                  AND e.status NOT IN ('离职', '待审批', '病假', '产假')
-                ORDER BY e.employee_number
+                  AND (p.department = :dept OR p.actual_department = :dept)
+                  AND p.status NOT IN ('离职', '待审批', '病假', '产假')
+                ORDER BY p.employee_number
             """),
             {"dept": dept, "tag": tag},
         )).fetchall()

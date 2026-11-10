@@ -2,6 +2,10 @@
 
 import uuid
 
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.quality.models import QualityTestTask
 from app.modules.quality.repository import (
     create_test_results,
     create_test_task,
@@ -13,7 +17,7 @@ def _rand_batch() -> str:
     return f"HAS{uuid.uuid4().hex[:6].upper()}"
 
 
-async def _make_task(db, product: str, batch: str, status: str, filled: bool):
+async def _make_task(db: AsyncSession, product: str, batch: str, status: str, filled: bool) -> QualityTestTask:
     task = await create_test_task(
         db,
         product_name=product,
@@ -38,7 +42,7 @@ async def _make_task(db, product: str, batch: str, status: str, filled: bool):
     return task
 
 
-async def test_summary_counts_completed_and_in_progress(db_session):
+async def test_summary_counts_completed_and_in_progress(db_session: AsyncSession) -> None:
     product = f"汇总测试{uuid.uuid4().hex[:4]}"
     await _make_task(db_session, product, _rand_batch(), "completed", filled=True)
     await _make_task(db_session, product, _rand_batch(), "pending_review", filled=False)
@@ -54,14 +58,14 @@ async def test_summary_counts_completed_and_in_progress(db_session):
     assert s["products"][0]["in_progress"] == 2
 
 
-async def test_task_create_requires_auth(client):
+async def test_task_create_requires_auth(client: AsyncClient) -> None:
     res = await client.post("/api/v1/quality/tasks", json={
         "product_name": "X", "batch_number": "Y",
     })
     assert res.status_code == 401
 
 
-async def test_attachment_delete_requires_auth(client):
+async def test_attachment_delete_requires_auth(client: AsyncClient) -> None:
     res = await client.delete(
         "/api/v1/quality/tasks/00000000-0000-0000-0000-000000000000/attachments/"
         "00000000-0000-0000-0000-000000000000"

@@ -91,24 +91,6 @@ export async function sendDepartureCertificate(id: string, formData: FormData) {
   })
 }
 
-// ─── 入职/离职审批 ───
-
-export async function fetchOnboardingApplications(): Promise<{ data: unknown[] }> {
-  return fetchHrApi('/hr/onboarding-applications', { errorMessage: '获取入职申请失败' })
-}
-
-export async function fetchOffboardingApplications(): Promise<{ data: unknown[] }> {
-  return fetchHrApi('/hr/offboarding-applications', { errorMessage: '获取离职申请失败' })
-}
-
-export async function approveApplication(type: 'onboarding' | 'offboarding', appId: string, status: string) {
-  return fetchHrApi(`/hr/${type}-applications/${appId}/approve`, {
-    method: 'PUT',
-    body: JSON.stringify({ status }),
-    errorMessage: '操作失败',
-  })
-}
-
 // ─── 入职台账导出（下载类，返回 base64 由客户端落地） ───
 
 /** 7.3 新员工入职培训记录（docx） */

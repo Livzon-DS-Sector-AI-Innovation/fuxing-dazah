@@ -372,6 +372,7 @@ async def update_test_results_fill(
             row.inspection_record_id = u["inspection_record_id"]
         row.filled_by = u["filled_by"]
         row.filled_at = u["filled_at"]
+        row.pending_confirm = bool(u.get("pending_confirm", False))
     await db.flush()
     stmt = select(QualityTestResult).where(QualityTestResult.id.in_(ids))
     return list((await db.execute(stmt)).scalars())
