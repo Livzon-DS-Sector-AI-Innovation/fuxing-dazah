@@ -324,7 +324,7 @@ export const moduleMenus: ModuleMenu[] = [
     children: [
       { key: "dashboard", label: "📊 人事看板", path: "/hr/dashboard" },
       { key: "departments", label: "部门管理", path: "/hr/departments" },
-      { key: "profile", label: "员工档案", path: "/hr/profile" },
+      { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
       { key: "onboarding", label: "入职台账", path: "/hr/onboarding" },
       { key: "departure", label: "离职台账", path: "/hr/departure" },
@@ -341,6 +341,7 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "training-ai-exam", label: "AI 出题", path: "/hr/training/ai-exam", permissions: ["hr:training:exam"] },
           { key: "training-annual-plan", label: "年度培训计划", path: "/hr/training/annual-plan" },
           { key: "training-ledger", label: "培训台账", path: "/hr/training/ledger" },
+          { key: "training-personnel", label: "培训人员名单", path: "/hr/training/personnel" },
           { key: "training-question-bank", label: "题库大全", path: "/hr/training/question-bank", permissions: ["hr:training:questionbank"] },
           { key: "training-qa-assessments", label: "问答考核历史", path: "/hr/training/qa-assessments", permissions: ["hr:training:assessment"] },
           { key: "trainers", label: "内训师管理", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },

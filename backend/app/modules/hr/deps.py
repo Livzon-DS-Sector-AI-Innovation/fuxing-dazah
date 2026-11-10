@@ -69,6 +69,19 @@ class HrAccessContext:
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
 
+    def ensure_can_access_department(self, department: str | None) -> None:
+        """校验单条按部门归属的记录是否在数据范围内（入职台账等无员工行的表），越界抛 403。"""
+        if self.is_unrestricted:
+            return
+        if self.data_scope == "self_only":
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        dept = department or ""
+        if self.scoped_departments:
+            if dept not in self.scoped_departments:
+                raise ForbiddenException(f"数据范围限制：仅可操作授权部门记录（{dept}）")
+        elif dept != self.department:
+            raise ForbiddenException("数据范围限制：仅可操作本部门记录")
+
     def apply_list_scope(self, stmt, employee):
         """对关联了员工表的列表查询施加数据范围过滤。
 
@@ -272,15 +285,15 @@ async def get_hr_scope(
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 员工档案
     (r"/employees/export", "hr:profile:export"),
-    (r"/employees/upload", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
-    (r"/employees/batch-regularize", "hr:profile:update"),
-    (r"/employees/.*/probation-extensions", "hr:profile:read"),
-    (r"/employees/.*/onboarding-training-record", "hr:training:document"),
+            (r"/employees/.*/onboarding-training-record", "hr:training:document"),
     (r"/employees/.*/prejob-training-plan", "hr:training:document"),
     (r"/employees/.*/training-registration", "hr:profile:export"),
-    (r"/employees/training-candidates", "hr:profile:read"),
-    (r"/employees/probation-expiring", "hr:profile:read"),
+    # 待培训人员/培训记录导出属培训域：档案或培训任一读权限即可（纯培训管理员不被挡）
+    (r"/employees/training-candidates", None),
+    (r"/employees/.*/training-record", "hr:training:document"),
+    (r"/employees/.*/onboarding-training-record", "hr:training:document"),
+    (r"/employees/.*/work-permit", "hr:training:document"),
     (r"/employees", {"GET": "hr:profile:read", "POST": "hr:profile:create",
                      "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
     # 花名册

@@ -65,15 +65,6 @@ export async function deleteEmployee(id: string) {
   return res
 }
 
-/** 批量导入员工（Excel 上传） */
-export async function uploadEmployees(formData: FormData): Promise<{ code: number; message: string; data: { created: number; updated: number; errors?: string[] } }> {
-  return fetchHrApi('/hr/employees/upload', {
-    method: 'POST',
-    body: formData,
-    errorMessage: '上传失败',
-  })
-}
-
 /** 导出员工档案（Excel），列头与导入模板一致 */
 export async function exportEmployees(): Promise<{ base64: string; filename: string }> {
   const { base64, filename } = await fetchHrDownload('/hr/employees/export', {
@@ -82,26 +73,7 @@ export async function exportEmployees(): Promise<{ base64: string; filename: str
   return { base64, filename: filename || `员工档案_${new Date().toISOString().slice(0, 10)}.xlsx` }
 }
 
-/** 试用期到期预警列表 */
-export async function fetchProbationExpiring(params?: { days?: number; department?: string }): Promise<{ data: any[] }> {
-  const qs = buildQueryString({ days: params?.days ?? 0, department: params?.department })
-  return fetchHrApi(`/hr/employees/probation-expiring${qs}`, { errorMessage: '加载失败' })
-}
-
-/** 批量转正 */
-export async function batchRegularizeEmployees(ids: string[]): Promise<{ code: number; message: string; data?: { count?: number } }> {
-  return fetchHrApi('/hr/employees/batch-regularize', {
-    method: 'PUT',
-    body: JSON.stringify(ids),
-    errorMessage: '操作失败',
-  })
-}
-
 /** 试用期延期记录 */
-export async function fetchProbationExtensions(id: string): Promise<{ data: unknown[] }> {
-  return fetchHrApi(`/hr/employees/${id}/probation-extensions`, { errorMessage: '获取延期记录失败' })
-}
-
 /** 待培训员工（岗前培训候选人） */
 export async function fetchTrainingCandidates(keyword?: string): Promise<{ data: unknown[] }> {
   const qs = buildQueryString({ keyword })

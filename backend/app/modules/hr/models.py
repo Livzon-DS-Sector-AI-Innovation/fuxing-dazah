@@ -364,6 +364,61 @@ class Employee(BaseModel):
         return round(delta.days / 365.25, 1)
 
 
+class TrainingRosterProfile(BaseModel):
+    """培训人员名单（脱敏独立数据集）。
+
+    人员增减跟随员工档案同步（新增复制初值、离职/删除移除），
+    字段值由培训管理独立维护，不被总表覆盖；只含白名单字段，
+    敏感个人信息（身份证/学校/专业/出生/联系方式等）一律不存在。
+    """
+
+    __tablename__ = "training_roster_profiles"
+    __table_args__ = (
+        UniqueConstraint("employee_number"),
+        Index("ix_training_roster_profiles_employee_number", "employee_number", unique=True),
+        Index("ix_training_roster_profiles_department", "department"),
+        {"schema": "hr"},
+    )
+
+    employee_number: Mapped[str] = mapped_column(String(32), nullable=False, comment="工号（关联键）")
+
+    # ─── 基本信息（白名单镜像） ───
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="姓名")
+    department: Mapped[str] = mapped_column(String(64), nullable=False, comment="体现部门")
+    actual_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="实际部门")
+    team: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="班组")
+    position: Mapped[str] = mapped_column(String(64), nullable=False, comment="职位")
+    duty: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="职务")
+    job_category: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="岗位类别")
+    level: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="级别")
+    concurrent_departments: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="兼任部门")
+
+    # ─── 教育与用工（白名单镜像） ───
+    education: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="学历")
+    graduation_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="毕业时间")
+    status_category: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="用工性质")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="在职", server_default="在职", comment="人员状态",
+    )
+
+    # ─── 日期（白名单镜像） ───
+    work_start_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="参加工作时间")
+    factory_entry_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="进厂时间")
+    livo_entry_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="入丽珠时间")
+    hire_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="入职日期")
+    departure_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="离职时间")
+
+    # ─── 培训信息 ───
+    certificates: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="证书")
+    qualifications: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, comment="职称／职业资格（多选）")
+    training_id: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="培训档案编号")
+    dept_head_trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="部门负责人/一级培训师")
+    safety_training_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="入职安全培训日期")
+    safety_training_score: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="入职安全培训成绩")
+    culture_training_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="企业文化培训日期")
+    gmp_training_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="GMP基础培训时间")
+
+
 class OffboardingRecord(BaseModel):
     __tablename__ = "offboarding_records"
     __table_args__ = (

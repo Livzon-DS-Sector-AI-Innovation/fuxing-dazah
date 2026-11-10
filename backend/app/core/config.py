@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     HR_TITLE_REVIEW_FEISHU_APP_SECRET: str = ""
     HR_TITLE_REVIEW_FEISHU_WS_ENABLED: bool = False
 
+    # 员工档案多维表格同步：独立应用凭证（bitable 读写；缺省回落全局应用）。
+    # 多环境共用一个应用时可让本地与服务器共用同一份 Base 授权，
+    # 实时事件订阅仍走各环境自己的全局应用（无授权时自动降级 5 分钟对账）。
+    HR_EMPLOYEE_SYNC_FEISHU_APP_ID: str = ""
+    HR_EMPLOYEE_SYNC_FEISHU_APP_SECRET: str = ""
+
     # HR 飞书日历 ID（primary=主日历，或指定团队日历 ID）
     HR_FEISHU_CALENDAR_ID: str = "primary"
     # 职称评审定时对账开关（默认开启；关闭后仅保留手动「同步」按钮）

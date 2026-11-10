@@ -31,7 +31,7 @@ import dayjs from 'dayjs'
 import { Employee, TrainingLedgerRecord } from '@/types/hr'
 import {
   fetchEmployeeByNumberAction,
-  fetchEmployeesAction,
+  fetchTrainingRoster,
   fetchTrainingLedgers,
   fetchTrainingLedgersAdmin,
   batchUpdateScores,
@@ -116,7 +116,7 @@ export default function TrainingLedgerClient({
     if (!keyword || keyword.length < 1) { setSearchOptions([]); return }
     setSearching(true)
     try {
-      const res = await fetchEmployeesAction({ keyword, page_size: 20 })
+      const res = await fetchTrainingRoster({ keyword, page_size: 20 })
       const emps = res.data || []
       setSearchOptions(emps.map((e: any) => ({
         value: e.employee_number,

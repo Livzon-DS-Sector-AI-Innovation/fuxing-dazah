@@ -83,12 +83,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # ── 业务模块注册飞书事件回调（注册制分发，须在 WS 启动前完成）──
     from app.modules.equipment.feishu.callbacks import register_feishu_callbacks
+    from app.modules.hr.employee_sync.handler import (
+        register_feishu_callbacks as register_employee_sync_callbacks,
+    )
     from app.modules.hr.title_review.bitable_handler import (
         register_feishu_callbacks as register_hr_feishu_callbacks,
     )
 
     register_feishu_callbacks()
     register_hr_feishu_callbacks()
+    register_employee_sync_callbacks()
 
     # ── 平台级飞书 WebSocket 长连接 ──
     if settings.FEISHU_WS_ENABLED:
@@ -196,6 +200,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
         scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
+
+    # 员工档案多维表格同步：任务内部读 DB 配置决定是否执行（无需 env 开关）
+    from app.modules.hr.employee_sync.scheduled import EMPLOYEE_SYNC_TASK
+
+    scheduler_registry.register_task(EMPLOYEE_SYNC_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 

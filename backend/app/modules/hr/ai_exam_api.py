@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.hr.ai_exam_schemas import ExamExportRequest
-from app.modules.hr.ai_exam_service import export_exam, generate_exam, generate_qa_via_ai
+from app.modules.hr.ai_exam_service import (
+    export_exam,
+    generate_exam,
+    generate_qa_via_ai,
+)
 from app.modules.hr.deps import require_hr_basic
 
 router = APIRouter(prefix="/exam", tags=["AI 出题"], dependencies=[Depends(require_hr_basic)])
@@ -44,7 +48,10 @@ async def api_generate_exam(
     except Exception as e:
         raise HTTPException(500, f"AI 出题失败: {e}")
     # 写入共享题库（AI生成来源）；题库写入失败不连累出题结果
-    from app.modules.hr.ai_exam_service import EXAM_QUESTION_KEYS, save_questions_to_bank
+    from app.modules.hr.ai_exam_service import (
+        EXAM_QUESTION_KEYS,
+        save_questions_to_bank,
+    )
 
     questions: list[dict] = []
     for key in EXAM_QUESTION_KEYS:
