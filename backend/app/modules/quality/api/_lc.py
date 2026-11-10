@@ -1,11 +1,13 @@
 """lc API 路由（api.py 拆分）。"""
 
 import uuid
+from typing import Any
 
 from fastapi import (
     Body,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -48,6 +50,7 @@ from app.platform.permission.deps import require_permission
 @router.post("/lc/upload", response_model=UploadLcResponse, summary="上传液相计算表并解析")
 async def upload_lc_excel(
     file: UploadFile = File(...),
+    password: str | None = Form(default=None, description="文件密码（加密计算表用；仅内存解密，不落库）"),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:lc:upload")),
 ) -> UploadLcResponse:
@@ -59,6 +62,13 @@ async def upload_lc_excel(
         raise HTTPException(status_code=400, detail="文件为空")
     if len(file_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件超过 10MB")
+    if password:
+        from app.modules.quality.lc_template_parser import decrypt_office_file
+
+        try:
+            file_bytes = decrypt_office_file(file_bytes, password)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
     try:
         # 优先模板配置驱动的通用解析（表号识别）；无匹配配置回落到旧解析器
         generic = await test_task_service.parse_lc_generic(db, file_bytes, filename, filled_by=_user.id)
@@ -79,6 +89,16 @@ async def upload_lc_excel(
                 ],
             )
             return result
+        # 回落旧解析器前先确认：识别出表号但无配置 → 明确报错，而非旧万古霉素解析器乱读
+        from app.modules.quality.lc_template_parser import detect_table_no, open_sheet
+
+        get, max_row, max_col = open_sheet(file_bytes, filename)
+        table_no = detect_table_no(get, max_row, max_col)
+        if table_no:
+            raise HTTPException(
+                status_code=422,
+                detail=f"表号 {table_no} 未配置计算规则，暂不支持解析（可在「报告模板→计算表取值配置」添加，或使用在线计算表）",
+            )
         result = await lc_report_service.parse_and_validate(file_bytes, filename, db=db)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"无法解析：{e}") from e
@@ -158,6 +178,68 @@ async def delete_lc_record(
 
 
 # ─── 液相计算表模板配置维护（表号 → 取值配置）───
+
+
+@router.post("/lc/templates/auto-detect", summary="简易维护：上传文件自动识别同版式模板（无需会写 JSON）")
+async def auto_detect_template_endpoint(
+    file: UploadFile = File(...),
+    password: str | None = Form(default=None, description="文件密码（加密计算表用）"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    """上传计算表自动匹配同版式模板：版式搜索/候选打分在 service 层。"""
+    from pathlib import Path as _Path
+
+    from app.modules.quality.lc_template_parser import decrypt_office_file
+    from app.modules.quality.service.lc_templates import auto_detect_templates
+
+    filename = file.filename or "calc.xlsx"
+    if _Path(filename).suffix.lower() not in (".xlsx", ".xls"):
+        raise HTTPException(status_code=422, detail="仅支持 .xlsx/.xls")
+    data = await file.read()
+    if not data or len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="文件为空或超过 10MB")
+    if password:
+        try:
+            data = decrypt_office_file(data, password)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    try:
+        result = await auto_detect_templates(db, data, filename)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return success_response(data=result)
+
+
+@router.post("/lc/templates/auto-create", summary="简易维护：按同版式模板一键生成新表号配置")
+async def auto_create_template_endpoint(
+    payload: dict[str, Any] = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+) -> JSONResponse:
+    """复制模板配置生成新表号配置（不改 JSON）；偏移参数随 auto-detect 候选回传。"""
+    from app.modules.quality.service.lc_templates import (
+        TemplateConfigExistsError,
+        TemplateConfigNotFoundError,
+        auto_create_from_template,
+    )
+
+    try:
+        data = await auto_create_from_template(
+            db,
+            table_no=str(payload.get("table_no") or "").strip(),
+            template_no=str(payload.get("template_table_no") or "").strip(),
+            name_shift=int(payload.get("name_shift") or 0),
+            value_shift=int(payload.get("value_shift") or 0),
+            step=payload.get("step"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except TemplateConfigExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except TemplateConfigNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return success_response(data=data, message="配置已生成", status_code=201)
 
 
 @router.get("/lc/templates", summary="液相计算表模板配置列表")

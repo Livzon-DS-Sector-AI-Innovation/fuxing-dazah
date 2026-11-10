@@ -88,28 +88,62 @@ def _parse_value(v: Any) -> float | None:
         return None
 
 
+def _open_xls(file_bytes: bytes) -> tuple[CellGetter, int, int]:
+    """旧版 .xls：xlrd 读取（无 py.typed，导入点局部 ignore）。"""
+    import xlrd  # type: ignore[import-untyped]
+
+    book = xlrd.open_workbook(file_contents=file_bytes)
+    sh = book.sheet_by_index(0)
+
+    def get_xls(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > sh.nrows or c > sh.ncols:
+            return None
+        return sh.cell_value(r - 1, c - 1)
+
+    return get_xls, sh.nrows, sh.ncols
+
+
+def decrypt_office_file(file_bytes: bytes, password: str) -> bytes:
+    """解密 Excel 密码保护文件（CDFV2/OLE 容器，openpyxl 无法直接读取）。
+
+    密码仅内存使用、不落库；解密后字节仅用于本次解析，原件仍按加密态归档留痕。
+    失败抛 ValueError（端点转 422 友好提示）。
+    """
+    import msoffcrypto  # type: ignore[import-untyped]
+
+    try:
+        office = msoffcrypto.OfficeFile(BytesIO(file_bytes))
+        office.load_key(password=password)
+        decrypted = BytesIO()
+        office.decrypt(decrypted)
+        return decrypted.getvalue()
+    except Exception:
+        raise ValueError("文件解密失败：密码不正确或文件已损坏") from None
+
+
 def open_sheet(
     file_bytes: bytes, filename: str
 ) -> tuple[CellGetter, int, int]:
-    """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。"""
+    """返回 (getter(r, c), max_row, max_col)。xlsx 用 openpyxl（缓存值），xls 用 xlrd。
+
+    xlsx 扩展名但内容不是 zip（旧版 xls 改扩展名/损坏）时先尝试 xlrd 兜底，
+    仍失败则抛 ValueError（端点转为 422 友好提示，而非 500）。
+    """
     if filename.lower().endswith(".xls"):
-        # xlrd 未提供 py.typed 且无第三方 stubs；mypy overrides 不可改
-        # （配置在 pyproject.toml，属本次任务禁改范围）
-        import xlrd  # type: ignore[import-untyped]
-
-        book = xlrd.open_workbook(file_contents=file_bytes)
-        sh = book.sheet_by_index(0)
-
-        def get_xls(r: int, c: int) -> Any:
-            if r < 1 or c < 1 or r > sh.nrows or c > sh.ncols:
-                return None
-            return sh.cell_value(r - 1, c - 1)
-
-        return get_xls, sh.nrows, sh.ncols
+        return _open_xls(file_bytes)
 
     from openpyxl import load_workbook
 
-    wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    try:
+        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    except Exception:
+        try:
+            return _open_xls(file_bytes)
+        except Exception:
+            raise ValueError(
+                "无法读取该文件：文件可能已加密（请在解析时填写文件密码）或格式损坏；"
+                "旧版 .xls 请用 Excel 另存为 .xlsx 后重试"
+            ) from None
     ws = active_sheet(wb)
     # 合并单元格映射：非锚点格读锚点值（报告值常一格跨多行，如 M22:M25）
     merge_anchor: dict[tuple[int, int], tuple[int, int]] = {}
@@ -128,6 +162,43 @@ def open_sheet(
     return get_xlsx, ws.max_row, ws.max_column
 
 
+def open_sheet_cached(
+    file_bytes: bytes, filename: str, max_row: int = 1000, max_col: int = 100
+) -> tuple[CellGetter, int, int]:
+    """版式搜索专用：取值区域一次性读入内存（list 索引 + 合并格锚点映射）。
+
+    部分文件带万级行列格式（如 66 行 × 16372 列），openpyxl 逐格访问每次 parse 秒级；
+    缓存后为 list 下标毫秒级。xls（xlrd）本身是数组读取，直接透传。
+    """
+    if filename.lower().endswith(".xls"):
+        return open_sheet(file_bytes, filename)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(file_bytes), data_only=True)
+    ws = active_sheet(wb)
+    mr = min(ws.max_row or 1, max_row)
+    mc = min(ws.max_column or 1, max_col)
+    grid = [
+        list(row)
+        for row in ws.iter_rows(min_row=1, max_row=mr, max_col=mc, values_only=True)
+    ]
+    anchors: dict[tuple[int, int], tuple[int, int]] = {}
+    for rng in ws.merged_cells.ranges:
+        anchor = (rng.min_row, rng.min_col)
+        for rr in range(rng.min_row, min(rng.max_row, mr) + 1):
+            for cc in range(rng.min_col, min(rng.max_col, mc) + 1):
+                anchors[(rr, cc)] = anchor
+
+    def get(r: int, c: int) -> Any:
+        if r < 1 or c < 1 or r > mr or c > mc:
+            return None
+        ar, ac = anchors.get((r, c), (r, c))
+        row = grid[ar - 1] if ar - 1 < len(grid) else []
+        return row[ac - 1] if ac - 1 < len(row) else None
+
+    return get, mr, mc
+
+
 def detect_table_no(get: CellGetter, max_row: int, max_col: int) -> str | None:
     """标题单元格（前 5 行）中提取表号 EX-xx-xxxx-vvv。"""
     for r in range(1, min(6, max_row + 1)):
@@ -141,17 +212,23 @@ def detect_table_no(get: CellGetter, max_row: int, max_col: int) -> str | None:
 
 
 def find_batch(get: CellGetter, max_row: int, max_col: int, label: str = "批号") -> str:
-    """定位「批号」标签：值在同格冒号后，或标签右侧一格。"""
+    """定位「批号」标签：值在同格冒号后、标签右侧一格，或标签与值分列较远（同行扫首个非标签值）。"""
     for r in range(1, min(15, max_row + 1)):
-        for c in range(1, min(8, max_col + 1)):
+        for c in range(1, max_col + 1):
             v = get(r, c)
             if v and isinstance(v, str) and label in v:
                 rest = v.replace(label, "").strip().lstrip("：:").strip()
                 if rest:
                     return rest
                 nxt = get(r, c + 1)
-                if nxt is not None and str(nxt).strip():
+                if nxt is not None and str(nxt).strip() and label not in str(nxt):
                     return str(nxt).strip()
+                for cc in range(1, max_col + 1):
+                    if cc == c:
+                        continue
+                    w = get(r, cc)
+                    if w is not None and str(w).strip() and label not in str(w):
+                        return str(w).strip()
     return ""
 
 
@@ -188,9 +265,21 @@ def _apply_merges(
 
 
 def parse_with_config(
-    file_bytes: bytes, filename: str, config: dict[str, Any], form_id: str
+    file_bytes: bytes,
+    filename: str,
+    config: dict[str, Any],
+    form_id: str,
+    get: CellGetter | None = None,
+    max_row: int | None = None,
+    max_col: int | None = None,
 ) -> GenericLcParse:
-    get, max_row, max_col = open_sheet(file_bytes, filename)
+    """get/max_row/max_col 提供时跳过文件重开（批量版式搜索场景）。"""
+    if get is None or max_row is None or max_col is None:
+        get, max_row, max_col = open_sheet(file_bytes, filename)
+    # 防御：部分文件带巨量空行/空列格式（行撑到百万级、列撑到 1.6 万列），
+    # 真实计算表 ≤ 500 行 × 30 列，超出的直接截断（不影响取值位置）
+    max_row = min(max_row, 1000)
+    max_col = min(max_col, 100)
     result = GenericLcParse(
         product_name=config.get("product_name", ""),
         batch_number=find_batch(get, max_row, max_col, config.get("batch_label", "批号")),

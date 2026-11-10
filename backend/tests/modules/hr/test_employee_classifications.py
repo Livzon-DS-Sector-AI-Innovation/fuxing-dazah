@@ -57,12 +57,17 @@ class TestEmployeeClassifications:
         """点击分类可查看分类下收纳的具体人员"""
         from datetime import date as _date
 
-        from app.modules.hr.models import Employee, EmployeeTag
+        from app.modules.hr.models import Employee, EmployeeTag, TrainingRosterProfile
         name = f"查看人员{uuid4().hex[:4]}"
         emp_no = f"SOP{uuid4().hex[:6].upper()}"
         db_session.add(Employee(
             employee_number=emp_no, name="员工甲", department="甲部门",
             position="操作工", status="在职", hire_date=_date.today(),
+        ))
+        # 分类人员口径 = 培训人员名单（脱敏独立数据集）
+        db_session.add(TrainingRosterProfile(
+            employee_number=emp_no, name="员工甲", department="甲部门",
+            position="操作工", status="在职",
         ))
         db_session.add(EmployeeTag(employee_number=emp_no, tag_name=name, created_by="HR测试员"))
         await db_session.flush()

@@ -1,6 +1,7 @@
 """Quality 业务逻辑编排。"""
 
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +17,7 @@ from app.modules.quality.repository import (
     create_inspection_record,
     create_test_results,
     get_inspection_by_batch,
+    get_inspection_record,
     get_lc_template_by_table_no,
     get_standard_document_by_file_no,
     get_test_task,
@@ -69,6 +71,7 @@ class _TaskParse(_TaskCore):
         record_id: uuid.UUID,
         sop_no: str | None = None,
         doc_item_ids: set[uuid.UUID] | None = None,
+        sop_pattern: str | None = None,
         filled_by: uuid.UUID | None = None,
     ) -> tuple[list[str], list[str]]:
         """候选结果按项目名匹配填入任务行（SOP 匹配键；判定以任务行标准快照为准）。
@@ -82,7 +85,7 @@ class _TaskParse(_TaskCore):
         filled_names: list[str] = []
         unmatched: list[str] = []
         for name, value in candidates:
-            row = _TaskParse._match_task_row(rows, name, sop_no, doc_item_ids)
+            row = _TaskParse._match_task_row(rows, name, sop_no, doc_item_ids, sop_pattern)
             if row is None or row.judge_mode != "auto":
                 unmatched.append(name)
                 continue
@@ -100,10 +103,31 @@ class _TaskParse(_TaskCore):
                 "inspection_record_id": record_id,
                 "filled_by": filled_by,
                 "filled_at": now,
+                "pending_confirm": True,
             })
             filled_names.append(row.item_name)
         if updates:
             await update_test_results_fill(db, updates)
+        # 解析超限直接提醒：暂存待确认 + 飞书群通知
+        fails = [u for u in updates if u.get("is_pass") is False]
+        if fails:
+            from app.modules.quality.feishu.client import QUALITY_FEISHU_CHAT_IDS
+            from app.modules.quality.feishu.message import send_chat_text
+            from app.modules.quality.service.helpers import spawn_background
+
+            text = (
+                f"液相解析超限提醒：任务 {task.batch_number} 有 {len(fails)} 项超限，"
+                f"已暂存待人工确认，请进任务详情核对处理"
+            )
+
+            async def _notify_fails() -> None:
+                for chat_id in QUALITY_FEISHU_CHAT_IDS:
+                    try:
+                        await send_chat_text(chat_id, text)
+                    except Exception:  # noqa: BLE001 — 单个群失败不阻断填入
+                        logger.warning("超限提醒发送失败 chat=%s", chat_id)
+
+            spawn_background(_notify_fails())
         # 全部判定完成后自动进入待复核
         await _TaskLifecycle.auto_advance_pending_review(db, task.id)
         return filled_names, unmatched
@@ -116,12 +140,35 @@ class _TaskParse(_TaskCore):
         filename: str,
         filled_by: uuid.UUID | None = None,
     ) -> tuple[TestTaskDetail, list[str], list[str]]:
-        """上传液相计算表：解析并持久化检验记录，按项目名映射填入任务结果行。"""
+        """上传液相计算表解析并填入任务：优先模板配置驱动的通用解析（值准确 + 未匹配组分自动追加），
+        无表号/无配置时回落旧万古霉素解析器。"""
         task = await get_test_task(db, task_id)
         if not task:
             raise AppException(status_code=404, detail="检验任务不存在")
         if task.status != "in_progress":
             raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可解析填入")
+        # 优先通用解析（与解析页 LcUploader 同链路，保证两边行为一致）
+        try:
+            get, max_row, max_col = lc_template_parser.open_sheet(file_bytes, filename)
+        except ValueError:
+            get = None
+        table_no = lc_template_parser.detect_table_no(get, max_row, max_col) if get else None
+        if table_no:
+            cfg = await get_lc_template_by_table_no(db, table_no)
+            if cfg:
+                parsed = lc_template_parser.parse_with_config(file_bytes, filename, cfg.config, table_no)
+                parsed.product_name = cfg.product_name or parsed.product_name
+                record_id = await _TaskParse._persist_generic_record(db, parsed, filename, cfg.sop_no)
+                filled, appended, remaining, _items = await _TaskParse._fill_generic_into_task(
+                    db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,
+                    any_unknown_rule=(cfg.config or {}).get("any_unknown"),
+                )
+                detail = _TaskParse._to_detail(task, await list_test_results(db, task_id))
+                return detail, filled + appended, remaining
+            raise AppException(
+                status_code=422,
+                detail=f"表号 {table_no} 未配置计算规则，暂不支持解析（可联系管理员配置，或使用在线计算表）",
+            )
         try:
             uploaded = await lc_report_service.parse_and_validate(file_bytes, filename, db=db)
         except ValueError as e:
@@ -225,6 +272,151 @@ class _TaskParse(_TaskCore):
     # ── 模板配置驱动的通用解析 ──
 
     @staticmethod
+    async def _persist_generic_record(
+        db: AsyncSession,
+        parsed: "lc_template_parser.GenericLcParse",
+        filename: str,
+        sop_no: str | None,
+    ) -> uuid.UUID:
+        """通用解析结果持久化到检验记录（同批已有则更新 raw_data 留痕），返回 record_id。"""
+        raw_data = {
+            "generic": True,
+            "table_no": parsed.form_id,
+            "sop_no": sop_no,
+            "product_name": parsed.product_name,
+            "batch_number": parsed.batch_number,
+            "form_id": parsed.form_id,
+            "components": [
+                {"name": c.name, "first": c.first, "second": c.second, "report_value": c.report_value}
+                for c in parsed.components
+            ],
+        }
+        existing = await get_inspection_by_batch(db, parsed.product_name, parsed.batch_number)
+        if existing:
+            existing.form_id = parsed.form_id or None
+            existing.raw_data = raw_data
+            existing.excel_filename = filename
+            await db.flush()
+            return existing.id
+        record = await create_inspection_record(
+            db=db,
+            product_name=parsed.product_name,
+            batch_number=parsed.batch_number,
+            form_id=parsed.form_id or None,
+            standard_type=None,
+            total_peak_area_a_first=None,
+            total_peak_area_a_second=None,
+            main_peak_area_a_first=None,
+            main_peak_area_a_second=None,
+            total_impurity_area_first=None,
+            total_impurity_area_second=None,
+            any_unknown_impurity_first=None,
+            any_unknown_impurity_second=None,
+            main_peak_area_b_first=None,
+            main_peak_area_b_second=None,
+            all_pass=True,
+            raw_data=raw_data,
+            excel_filename=filename,
+        )
+        return record.id
+
+    @staticmethod
+    async def _fill_generic_into_task(
+        db: AsyncSession,
+        task: QualityTestTask,
+        parsed: "lc_template_parser.GenericLcParse",
+        record_id: uuid.UUID,
+        sop_no: str | None,
+        filled_by: uuid.UUID | None = None,
+        any_unknown_rule: dict[str, Any] | None = None,
+    ) -> tuple[list[str], list[str], list[str], list[dict[str, Any]]]:
+        """通用解析填入任务：按项目名匹配 + 未匹配组分自动追加（限度取计算表限度列，如 RS1-7）。
+
+        返回 (filled_names, appended_names, remaining_unmatched, confirm_items)；
+        confirm_items 供前端逐项确认弹窗使用（result_id/item_name/result_value/is_pass）。
+        """
+        candidates = [
+            (c.name, c.report_value)
+            for c in parsed.components
+            if c.report_value is not None
+        ]
+        if any_unknown_rule:
+            candidates = _TaskParse._apply_any_unknown_rule(candidates, any_unknown_rule)
+        doc_item_ids: set[uuid.UUID] | None = None
+        if sop_no:
+            mapped_doc = await get_standard_document_by_file_no(db, sop_no)
+            if mapped_doc:
+                doc_item_ids = {it.id for it in await list_standard_items(db, mapped_doc.id)}
+        pattern = None
+        if parsed.form_id:
+            m = re.search(r"EX-[A-Z]+-(\d+)-", parsed.form_id)
+            pattern = m.group(1) if m else None
+        filled, unmatched = await _TaskParse._fill_candidates(
+            db, task, candidates, record_id, sop_no, doc_item_ids, pattern, filled_by=filled_by,
+        )
+        appended: list[str] = []
+        appended_orig: set[str] = set()
+        rows = await list_test_results(db, task.id)
+        existing_names = {_TaskParse._norm_name(r.item_name) for r in rows}
+        next_seq = max((r.seq or 0 for r in rows), default=0) + 1
+        for c in parsed.components:
+            if c.report_value is None or c.limit is None or c.name in set(filled):
+                continue
+            name = c.name.rstrip("％%").strip()
+            norm = _TaskParse._norm_name(name)
+            if norm in existing_names:
+                continue
+            op = "≥" if ("万古霉素" in name or "vancomycin" in name.lower()) else "≤"
+            verdict = _TaskParse._judge_value(
+                op, c.limit if op == "≥" else None, None if op == "≥" else c.limit, c.report_value
+            )
+            await create_test_results(db, task.id, [{
+                "standard_item_id": None,
+                "seq": next_seq,
+                "category": None,
+                "item_name": name,
+                "sop_no": None,
+                "standard_text": f"{op}{c.limit}%",
+                "operator": op,
+                "limit_min": c.limit if op == "≥" else None,
+                "limit_max": None if op == "≥" else c.limit,
+                "method_source": None,
+                "remark": None,
+                "judge_mode": "auto",
+                "source": "parse",
+                "result_text": str(c.report_value),
+                "result_value": c.report_value,
+                "is_pass": verdict,
+                "inspection_record_id": record_id,
+                "filled_at": datetime.now(UTC),
+                "pending_confirm": True,
+            }])
+            next_seq += 1
+            existing_names.add(norm)
+            appended.append(name)
+            appended_orig.add(c.name)
+        remaining = [u for u in unmatched if u not in appended_orig]
+        # 「未检出」组分（report_value=None）既不在 filled 也不在 unmatched——追加到 unmatched 保证可追溯
+        undetected = [
+            f"{c.name}（未检出）" for c in parsed.components
+            if c.report_value is None and c.name
+        ]
+        remaining.extend(undetected)
+        # 本次填入的行（含追加），供前端逐项确认弹窗使用
+        rows_after = await list_test_results(db, task.id)
+        items = [
+            {
+                "result_id": str(r.id),
+                "item_name": r.item_name,
+                "result_value": r.result_value,
+                "is_pass": r.is_pass,
+            }
+            for r in rows_after
+            if r.inspection_record_id == record_id and r.pending_confirm
+        ]
+        return filled, appended, remaining, items
+
+    @staticmethod
     async def parse_lc_generic(
         db: AsyncSession,
         file_bytes: bytes,
@@ -246,120 +438,42 @@ class _TaskParse(_TaskCore):
         parsed = lc_template_parser.parse_with_config(file_bytes, filename, cfg.config, table_no)
         # 产品名以模板配置表为准（与标准库一致，任务按此关联）
         parsed.product_name = cfg.product_name or parsed.product_name
-        raw_data = {
-            "generic": True,
-            "table_no": table_no,
-            "sop_no": cfg.sop_no,
-            "product_name": parsed.product_name,
-            "batch_number": parsed.batch_number,
-            "form_id": parsed.form_id,
-            "components": [
-                {"name": c.name, "first": c.first, "second": c.second, "report_value": c.report_value}
-                for c in parsed.components
-            ],
-        }
-        existing = await get_inspection_by_batch(db, parsed.product_name, parsed.batch_number)
-        if existing:
-            existing.form_id = parsed.form_id or None
-            existing.raw_data = raw_data
-            existing.excel_filename = filename
-            await db.flush()
-            record_id = existing.id
-            rec = existing
-        else:
-            record = await create_inspection_record(
-                db=db,
-                product_name=parsed.product_name,
-                batch_number=parsed.batch_number,
-                form_id=parsed.form_id or None,
-                standard_type=None,
-                total_peak_area_a_first=None,
-                total_peak_area_a_second=None,
-                main_peak_area_a_first=None,
-                main_peak_area_a_second=None,
-                total_impurity_area_first=None,
-                total_impurity_area_second=None,
-                any_unknown_impurity_first=None,
-                any_unknown_impurity_second=None,
-                main_peak_area_b_first=None,
-                main_peak_area_b_second=None,
-                all_pass=True,
-                raw_data=raw_data,
-                excel_filename=filename,
-            )
-            record_id = record.id
-            rec = record
+        record_id = await _TaskParse._persist_generic_record(db, parsed, filename, cfg.sop_no)
+        rec = await get_inspection_record(db, record_id)
         task_link = None
         task = await get_test_task_by_batch(db, parsed.product_name, parsed.batch_number)
-        if task and task.status == "in_progress":
-            candidates = [
-                (c.name, c.report_value)
-                for c in parsed.components
-                if c.report_value is not None
-            ]
-            # 表号↔标准文档映射：sop_no 为文档 file_no 时，解析出该文档项目行集合用于行池限定
-            doc_item_ids: set[uuid.UUID] | None = None
-            if cfg.sop_no:
-                mapped_doc = await get_standard_document_by_file_no(db, cfg.sop_no)
-                if mapped_doc:
-                    doc_item_ids = {it.id for it in await list_standard_items(db, mapped_doc.id)}
-            filled, unmatched = await _TaskParse._fill_candidates(
-                db, task, candidates, record_id, cfg.sop_no, doc_item_ids, filled_by=filled_by
-            )
-            # 未匹配组分自动追加为任务行（限度取计算表自带限度列，如 RS1-7）
-            appended: list[str] = []
-            appended_orig: set[str] = set()
-            rows = await list_test_results(db, task.id)
-            existing_names = {_TaskParse._norm_name(r.item_name) for r in rows}
-            next_seq = max((r.seq or 0 for r in rows), default=0) + 1
-            for c in parsed.components:
-                if c.report_value is None or c.limit is None or c.name in set(filled):
-                    continue
-                name = c.name.rstrip("％%").strip()
-                norm = _TaskParse._norm_name(name)
-                if norm in existing_names:
-                    continue
-                op = "≥" if ("万古霉素" in name or "vancomycin" in name.lower()) else "≤"
-                verdict = _TaskParse._judge_value(
-                    op, c.limit if op == "≥" else None, None if op == "≥" else c.limit, c.report_value
+        if task is None and parsed.batch_number and len(parsed.batch_number) >= 6:
+            # 稳定性试验表批号带试验条件后缀（如 HAF2504009A长期试验18个月）：
+            # 任务批号为解析批号前缀时回退关联（取最长匹配，最具体）
+            from sqlalchemy import select as _select
+
+            head = parsed.batch_number[:6]
+            rows = (await db.execute(
+                _select(QualityTestTask).where(
+                    QualityTestTask.is_deleted == False,  # noqa: E712
+                    QualityTestTask.status == "in_progress",
+                    QualityTestTask.batch_number.startswith(head),
                 )
-                await create_test_results(db, task.id, [{
-                    "standard_item_id": None,
-                    "seq": next_seq,
-                    "category": None,
-                    "item_name": name,
-                    "sop_no": None,
-                    "standard_text": f"{op}{c.limit}%",
-                    "operator": op,
-                    "limit_min": c.limit if op == "≥" else None,
-                    "limit_max": None if op == "≥" else c.limit,
-                    "method_source": None,
-                    "remark": None,
-                    "judge_mode": "auto",
-                    "source": "parse",
-                    "result_text": str(c.report_value),
-                    "result_value": c.report_value,
-                    "is_pass": verdict,
-                    "inspection_record_id": record_id,
-                    "filled_at": datetime.now(UTC),
-                }])
-                next_seq += 1
-                existing_names.add(norm)
-                appended.append(name)
-                appended_orig.add(c.name)
-            remaining = [u for u in unmatched if u not in appended_orig]
-            # 「未检出」组分（report_value=None）既不在 filled 也不在 unmatched，
-            # 此前完全不可见——追加到 unmatched 保证响应中可追溯
-            undetected = [
-                f"{c.name}（未检出）" for c in parsed.components
-                if c.report_value is None and c.name
+            )).scalars()
+            pb = parsed.batch_number
+            candidates = [
+                t for t in rows
+                if pb.startswith(t.batch_number)
+                and _TaskCore._norm_name(t.product_name) == _TaskCore._norm_name(parsed.product_name)
             ]
-            remaining.extend(undetected)
+            if candidates:
+                task = max(candidates, key=lambda t: len(t.batch_number))
+        if task and task.status == "in_progress":
+            filled, appended, remaining, items = await _TaskParse._fill_generic_into_task(
+                db, task, parsed, record_id, cfg.sop_no, filled_by=filled_by,
+                any_unknown_rule=(cfg.config or {}).get("any_unknown"),
+            )
             task_link = {
                 "task_id": str(task.id),
                 "filled": filled,
                 "appended": appended,
                 "unmatched": remaining,
+                "items": items,
             }
         # 判定结论回写 InspectionRecord.all_pass（此前恒 True，超限批次也被统计为合格）：
         # 任务行判定结果 ∪ 组分自带限度判定；两者皆无判定时不改写（保留默认 True）
@@ -377,9 +491,31 @@ class _TaskParse(_TaskCore):
                     op, c.limit if op == "≥" else None,
                     None if op == "≥" else c.limit, c.report_value,
                 ))
-        if verdicts:
+        if verdicts and rec is not None:
             rec.all_pass = all(verdicts)
             await db.flush()
         return {"parse": parsed, "record_id": record_id, "task_link": task_link}
+
+    @staticmethod
+    def _apply_any_unknown_rule(
+        candidates: list[tuple[str, float]], rule: dict[str, Any],
+    ) -> list[tuple[str, float]]:
+        """任何未知杂质规则（仅解析路径）：除排除清单外的其余组分（含「任何未知杂质」字段自身）取最大值。
+
+        rule = {"exclude": ["万古霉素B", "杂质A", ...]}；排除按归一化名精确或前缀匹配
+        （「杂质B」前缀覆盖 杂质B1/B2/B(B1+B2)）。
+        """
+        exclude = {_TaskCore._norm_name(str(n)) for n in rule.get("exclude", [])}
+
+        def excluded(norm: str) -> bool:
+            return any(norm == e or norm.startswith(e) for e in exclude)
+
+        pool = [v for name, v in candidates if not excluded(_TaskCore._norm_name(name))]
+        if not pool:
+            return candidates
+        value = round(max(pool), 2)
+        out = [(name, v) for name, v in candidates if _TaskCore._norm_name(name) != "任何未知杂质"]
+        out.append(("任何未知杂质", value))
+        return out
 
     # ── 追加行 ──

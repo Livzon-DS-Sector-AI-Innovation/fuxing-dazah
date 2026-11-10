@@ -120,6 +120,7 @@ async def upload_candidates(
 async def download_candidate_template():
     """下载候选人批量导入 Excel 模板"""
     from io import BytesIO
+
     from openpyxl import Workbook
 
     wb = Workbook()

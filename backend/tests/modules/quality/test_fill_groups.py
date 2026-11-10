@@ -7,8 +7,8 @@ from app.modules.quality.feishu.fill_service import _unfilled_groups
 from app.modules.quality.models import QualityTestResult
 
 
-def _row(item_name: str, sop_no: str, *, is_pass=None, judge_mode="auto",
-         standard_text="≤3.0%", operator="≤", limit_max=3.0) -> QualityTestResult:
+def _row(item_name: str, sop_no: str, *, is_pass: bool | None = None, judge_mode: str = "auto",
+         standard_text: str = "≤3.0%", operator: str | None = "≤", limit_max: float = 3.0) -> QualityTestResult:
     r = QualityTestResult(
         task_id=uuid.uuid4(), item_name=item_name, sop_no=sop_no, standard_text=standard_text,
     )
@@ -27,7 +27,7 @@ def _flatten(groups: tuple[list[dict], list[dict]]) -> list[dict]:
     return bio + chem
 
 
-def test_same_sop_merged_into_one_entry():
+def test_same_sop_merged_into_one_entry() -> None:
     rows = [_row("水分", "SOP.03.1111"), _row("干燥失重", "SOP.03.1111")]
     out = _flatten(_unfilled_groups(rows))
     assert len(out) == 1
@@ -37,13 +37,13 @@ def test_same_sop_merged_into_one_entry():
     assert len(ids) == 2
 
 
-def test_different_sop_stay_separate():
+def test_different_sop_stay_separate() -> None:
     rows = [_row("水分", "SOP.03.1111"), _row("酸度", "SOP.03.2222")]
     out = _flatten(_unfilled_groups(rows))
     assert len(out) == 2
 
 
-def test_excludes_filled_manual_lc_and_defaults():
+def test_excludes_filled_manual_lc_and_defaults() -> None:
     rows = [
         _row("水分", "SOP.03.1111", is_pass=True),            # 已填 → 排除
         _row("性状", "SOP.03.3333", judge_mode="manual"),     # 文字型 → 排除
@@ -56,14 +56,14 @@ def test_excludes_filled_manual_lc_and_defaults():
     assert "酸度" in out[0]["label"]
 
 
-def test_bio_chem_split():
+def test_bio_chem_split() -> None:
     rows = [_row("需氧菌总数", "SOP.03.1111"), _row("水分", "SOP.03.2222")]
     bio, chem = _unfilled_groups(rows)
     assert len(bio) == 1 and "需氧菌总数" in bio[0]["label"]
     assert len(chem) == 1 and "水分" in chem[0]["label"]
 
 
-def test_rows_without_sop_stay_individual():
+def test_rows_without_sop_stay_individual() -> None:
     rows = [_row("水分", ""), _row("酸度", "")]
     out = _flatten(_unfilled_groups(rows))
     assert len(out) == 2

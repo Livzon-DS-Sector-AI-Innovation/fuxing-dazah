@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton, Tag, theme } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons'
-import type { ReportRecord, TemplateNode } from '@/types/quality'
-import { fetchReportRecords, downloadReportFile, generateReport, fetchTemplates } from '@/actions/quality'
+import type { ReportRecord } from '@/types/quality'
+import { fetchReportRecords, downloadReportFile } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 import { usePermission } from '@/hooks/usePermission'
 import { REPORT_AUDIT_META } from '@/types/quality'
@@ -26,7 +26,6 @@ export default function ReportPage() {
 function ReportPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const recordId = searchParams.get('recordId')
   const { message } = App.useApp()
   const { token } = theme.useToken()
   const { hasPermission } = usePermission()
@@ -48,11 +47,6 @@ function ReportPageInner() {
   )
   const [consistency, setConsistency] = useState<{ parsed_mismatches: { item_name: string; report_value: number; parsed_value: number }[]; standard_drifts: { item_name: string; snapshot_text: string | null; current_text: string | null }[] } | null>(null)
 
-  // 从检验历史详情跳转：?recordId= 打开生成报告单弹窗（此前为死链）
-  const [genOpen, setGenOpen] = useState(false)
-  const [genTemplates, setGenTemplates] = useState<{ label: string; value: string }[]>([])
-  const [genTemplate, setGenTemplate] = useState<string>()
-  const [generating, setGenerating] = useState(false)
 
   // 在线预览
   const [previewId, setPreviewId] = useState<string | null>(null)
@@ -70,29 +64,6 @@ function ReportPageInner() {
 
   useEffect(() => { (async () => { await load(page) })() }, [page, load])
 
-  const openGenModal = useCallback(async () => {
-    setGenOpen(true)
-    try {
-      const tpls = await fetchTemplates()
-      const files: { label: string; value: string }[] = []
-      const walk = (nodes: TemplateNode[], prefix = '') => {
-        for (const n of nodes || []) {
-          if (n.children) walk(n.children, `${prefix}${n.name}/`)
-          // 文件节点字段是 filename（name 仅文件夹有）——此前取 n.name 恒为 undefined
-          else files.push({ label: `${prefix}${n.filename ?? ''}`, value: `${prefix}${n.filename ?? ''}` })
-        }
-      }
-      walk(tpls)
-      setGenTemplates(files)
-      setGenTemplate(files[0]?.value)
-    } catch {
-      message.error('模板列表加载失败')
-    }
-  }, [message])
-
-  useEffect(() => {
-    (async () => { if (recordId) await openGenModal() })()
-  }, [recordId, openGenModal])
 
   const handleAudit = async (action: 'approve' | 'reject') => {
     if (!auditTarget) return
@@ -110,34 +81,6 @@ function ReportPageInner() {
     }
   }
 
-  const handleGenerate = async () => {
-    if (!recordId || !genTemplate) {
-      message.warning('请选择模板')
-      return
-    }
-    setGenerating(true)
-    try {
-      const { filename, base64 } = await generateReport(recordId, genTemplate)
-      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
-      const blob = new Blob([bytes], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
-      message.success('报告单已生成')
-      setGenOpen(false)
-      setPage(1)
-      load(1)
-    } catch (err: unknown) {
-      message.error((err instanceof Error ? err.message : String(err)) || '生成报告单失败')
-    } finally {
-      setGenerating(false)
-    }
-  }
 
   const handleDownload = async (r: ReportRecord) => {
     try {
@@ -244,25 +187,6 @@ function ReportPageInner() {
         pagination={{ current: page, pageSize: 20, total, onChange: (p) => setPage(p) }}
         size="small" />
 
-      <Modal
-        title="生成报告单"
-        open={genOpen}
-        onCancel={() => setGenOpen(false)}
-        onOk={handleGenerate}
-        confirmLoading={generating}
-        okText="生成并下载"
-        cancelText="取消"
-      >
-        <Select
-          style={{ width: '100%' }}
-          placeholder="选择 COA 模板"
-          value={genTemplate}
-          onChange={setGenTemplate}
-          options={genTemplates}
-          showSearch
-          optionFilterProp="label"
-        />
-      </Modal>
 
       <Modal
         title={`报告单审核（${auditTarget?.serial_no ?? ''}｜批号 ${auditTarget?.batch_number ?? ''}）`}

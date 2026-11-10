@@ -3,13 +3,13 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { fetchDepartmentsAction, fetchEmployeesAction, createTrainingLedgerPage } from '@/actions/hr'
+import { fetchDepartmentsAction, createTrainingLedgerPage, fetchTrainingRoster, type TrainingRosterRow } from '@/actions/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const [departments, setDepartments] = useState<string[]>([])
-  const [employees, setEmployees] = useState<any[]>([])
+  const [employees, setEmployees] = useState<TrainingRosterRow[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedDept, setSelectedDept] = useState<string | null>(null)
@@ -30,7 +30,7 @@ export default function TrainingLedgerNewClient() {
     form.setFieldValue('employee_number', undefined)
     setEmployees([])
     if (!dept) return
-    fetchEmployeesAction({ department: dept, page_size: 100 })
+    fetchTrainingRoster({ department: dept, page_size: 100 })
       .then((res) => {
         setEmployees(res.data || [])
       })

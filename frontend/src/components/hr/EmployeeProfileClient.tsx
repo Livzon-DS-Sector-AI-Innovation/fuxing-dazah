@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { App, Button, Tabs, Upload } from 'antd'
-import { UploadOutlined } from '@ant-design/icons'
-import { fetchEmployeesAction, fetchDepartmentsAction, uploadEmployees, exportEmployees } from '@/actions/hr'
-import { Employee, Department } from '@/types/hr'
+import { App, Alert, Button, Tabs } from 'antd'
+import { LinkOutlined, SyncOutlined } from '@ant-design/icons'
+import { fetchEmployeesAction, fetchDepartmentsAction, exportEmployees, triggerEmployeeSync } from '@/actions/hr'
+import { Employee, Department, EmployeeSyncBanner } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import { downloadBase64File } from '@/lib/hr'
 import EmployeeTable from './EmployeeTable'
@@ -14,6 +14,8 @@ interface EmployeeProfileClientProps {
   initialEmployees: Employee[]
   initialTotal: number
   initialDepartment?: string
+  /** 多维表格同步启用时传入：页面转只读展示 */
+  syncInfo?: EmployeeSyncBanner
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -30,8 +32,9 @@ function useDebounce<T>(value: T, delay: number): T {
 export default function EmployeeProfileClient({
   initialEmployees,
   initialTotal,
-  initialDepartment }: EmployeeProfileClientProps) {
-  const { message, modal } = App.useApp()
+  initialDepartment,
+  syncInfo }: EmployeeProfileClientProps) {
+  const { message } = App.useApp()
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees)
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
@@ -41,6 +44,7 @@ export default function EmployeeProfileClient({
   const [activeTab, setActiveTab] = useState('all')
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const seqRef = useRef(0)
 
   const { searchKeyword, filterStatus } = useHrStore()
@@ -112,6 +116,22 @@ export default function EmployeeProfileClient({
     }
   }
 
+  const handleSyncNow = async () => {
+    setSyncing(true)
+    try {
+      const d = await triggerEmployeeSync()
+      const s = d.data || {}
+      message.success(
+        `同步完成：新增 ${s.created ?? 0}，更新 ${s.updated ?? 0}，删除 ${s.deleted ?? 0}`,
+      )
+      handleRefresh()
+    } catch (err: any) {
+      message.error(err.message || '同步失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const handleEdit = (employee: Employee) => {
     setEditingEmployee(employee)
     setFormOpen(true)
@@ -149,6 +169,10 @@ export default function EmployeeProfileClient({
     [departments]
   )
 
+  const bitableUrl = syncInfo?.app_token
+    ? `https://feishu.cn/base/${syncInfo.app_token}${syncInfo.source_table_id ? `?table=${syncInfo.source_table_id}` : ''}`
+    : null
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -156,32 +180,30 @@ export default function EmployeeProfileClient({
           员工档案
         </h1>
         <div className="flex gap-2">
-          <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={async (file) => {
-            const fd = new FormData(); fd.append('file', file as File)
-            try {
-              const d = await uploadEmployees(fd)
-              const { created, updated, errors } = d.data
-              if (errors && errors.length > 0) {
-                modal.warning({
-                  title: `上传完成：新增${created}，更新${updated}，但有${errors.length}行出错`,
-                  content: <ul style={{maxHeight:300, overflow:'auto', paddingLeft:18}}>{errors.map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>,
-                  width: 500,
-                })
-              } else {
-                message.success(`上传完成：新增${created}，更新${updated}`)
-              }
-              handleRefresh()
-            } catch (err: any) {
-              message.error(err.message || '上传失败')
-            }
-            return false
-          }}>
-            <Button icon={<UploadOutlined />}>上传人员名单</Button>
-          </Upload>
+          {syncInfo && (
+            <>
+              <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSyncNow}>
+                立即同步
+              </Button>
+              {bitableUrl && (
+                <Button icon={<LinkOutlined />} href={bitableUrl} target="_blank">
+                  在飞书打开
+                </Button>
+              )}
+            </>
+          )}
           <Button onClick={handleExport}>导出Excel</Button>
         </div>
       </div>
 
+      {syncInfo && (
+        <Alert
+          type="info"
+          showIcon
+          message="数据来源：飞书多维表格（单向同步）"
+          description={`档案在飞书多维表格中维护，此处为只读展示（实时同步 + 每 5 分钟对账）；上次同步：${syncInfo.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'}。`}
+        />
+      )}
 
       <Tabs activeKey={activeTab} onChange={handleTabChange} type="card"
         items={tabItems.map((dept) => ({
@@ -196,17 +218,20 @@ export default function EmployeeProfileClient({
               onPageChange={handlePageChange}
               onRefresh={handleRefresh}
               onEdit={handleEdit}
+              syncMode={Boolean(syncInfo)}
             />
           ) : null,
         }))}
       />
 
-      <EmployeeForm
-        open={formOpen}
-        employee={editingEmployee}
-        onClose={() => setFormOpen(false)}
-        onSuccess={handleFormSuccess}
-      />
+      {!syncInfo && (
+        <EmployeeForm
+          open={formOpen}
+          employee={editingEmployee}
+          onClose={() => setFormOpen(false)}
+          onSuccess={handleFormSuccess}
+        />
+      )}
 
     </div>
   )

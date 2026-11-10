@@ -6,9 +6,10 @@ from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
+from sqlalchemy import update as _update_stmt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
@@ -99,7 +100,24 @@ class EmployeeService:
             raise NotFoundException("员工", employee_number)
         return employee
 
+    async def _ensure_employees_writable(self) -> None:
+        """员工档案同步启用期间档案为只读镜像（后端守卫：防止绕过前端隐藏直接调 API）。
+
+        经 API 手工新建的员工没有 feishu_record_id，永远不会被同步管理，
+        其编辑结果也会被下一轮对账覆盖，因此创建/更新/删除一律拒绝。
+        """
+        from app.modules.hr.employee_sync.config import load_config
+
+        cfg = await load_config(self.repo.session)
+        if cfg.is_ready:
+            raise AppException(
+                status_code=409,
+                detail="员工档案同步已启用：档案由飞书多维表格单向维护，"
+                       "请在源数据表中新增/修改/删除后等待同步",
+            )
+
     async def create_employee(self, data: EmployeeCreate) -> Employee:
+        await self._ensure_employees_writable()
         existing = await self.repo.get_by_employee_number(
             data.employee_number, include_deleted=True
         )
@@ -119,7 +137,31 @@ class EmployeeService:
         # 自动根据岗位创建培训台账
         await self._sync_employee_training(result)
 
+        # 同步进入培训人员名单（复制白名单初值；手动新建的员工也进名单）
+        await self._ensure_roster_for_new_employee(result)
+
         return result
+
+    async def _ensure_roster_for_new_employee(self, employee: Employee) -> None:
+        """新员工进入培训名单（软删同工号行复活并刷新初值，避免唯一约束冲突）。"""
+        from sqlalchemy import select as _select
+
+        from app.modules.hr.employee_sync.config import TRAINING_ROSTER_FIELDS
+        from app.modules.hr.models import TrainingRosterProfile
+        existing_profile = (await self.repo.session.execute(
+            _select(TrainingRosterProfile).where(
+                TrainingRosterProfile.employee_number == employee.employee_number,
+            )
+        )).scalar_one_or_none()
+        profile = existing_profile or TrainingRosterProfile(
+            employee_number=employee.employee_number,
+        )
+        for _label, attr in TRAINING_ROSTER_FIELDS.items():
+            setattr(profile, attr, getattr(employee, attr, None))
+        profile.is_deleted = False  # 历史软删行复活并刷新初值（工号重现=重新进入名单）
+        if existing_profile is None:
+            self.repo.session.add(profile)
+        await self.repo.session.flush()
 
     async def _sync_employee_training(self, employee: Employee) -> None:
         """为新员工自动创建培训台账页面和岗位关联的培训记录。"""
@@ -353,143 +395,6 @@ class EmployeeService:
                     continue
         return None
 
-    async def upload_employees(
-        self, file_bytes: bytes, allowed_departments: set[str] | None = None
-    ) -> dict:
-        """从 Excel 文件批量导入员工，按工号 upsert。返回 {created, updated, skipped, errors}。
-
-        每行使用独立的 SQL savepoint，单行失败通过 ROLLBACK TO SAVEPOINT 恢复事务，
-        确保失败行不影响其他行。allowed_departments 非空时仅导入该范围内的部门行。
-        """
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            raise ValueError("文件为空")
-
-        header = [str(c).strip() if c else "" for c in rows[0]]
-        # 建立列索引
-        col_map: dict[int, str] = {}
-        for idx, col_name in enumerate(header):
-            field = self._UPLOAD_COLUMN_MAP.get(col_name)
-            if field:
-                col_map[idx] = field
-
-        if "employee_number" not in col_map.values():
-            raise ValueError("缺少「工号」列，无法导入")
-
-        created = 0
-        updated = 0
-        skipped = 0
-        errors: list[str] = []
-
-        # 获取底层连接，用于手动管理 savepoint
-        conn = await self.repo.session.connection()
-        sp_id = 0
-
-        for row_idx, row in enumerate(rows[1:], start=2):
-            if all(c is None for c in row):
-                continue
-
-            sp_id += 1
-            sp_name = f"row_{sp_id}"
-
-            try:
-                await conn.execute(text(f"SAVEPOINT {sp_name}"))
-
-                data: dict = {}
-                for col_idx, field_name in col_map.items():
-                    val = row[col_idx] if col_idx < len(row) else None
-                    if val is None or (isinstance(val, str) and val.strip() == ""):
-                        continue
-                    if isinstance(val, str):
-                        val = val.strip()
-                    if field_name in self._DATE_FIELDS:
-                        parsed = self._parse_date_value(val)
-                        if parsed is None:
-                            continue
-                        val = parsed
-                    elif field_name in self._INT_FIELDS:
-                        try:
-                            val = int(float(str(val)))
-                        except (ValueError, TypeError):
-                            continue
-                    elif field_name == "qualifications":
-                        vals = [v.strip() for v in str(val).split(",") if v.strip()]
-                        import json as _json
-                        val = _json.dumps(vals, ensure_ascii=False)
-                    elif field_name == "_birth_date":
-                        # 出生年月：datetime 对象 → 拆分为 birth_year / birth_month / birth_day
-                        if isinstance(val, (int, float)):
-                            parsed_date = self._parse_date_value(val)
-                        else:
-                            parsed_date = self._parse_date_value(str(val))
-                        if parsed_date:
-                            data["birth_year"] = parsed_date.year
-                            data["birth_month"] = parsed_date.month
-                            data["birth_day"] = parsed_date.day
-                        continue  # 不把 _birth_date 本身写入 data
-                    elif field_name == "status":
-                        # 规范化人员状态：'—'/空/未知值 → 不写入（更新保留原状态，
-                        # 新员工由 upsert INSERT 分支默认「在职」）
-                        val_str = str(val).strip()
-                        if val_str in ("—", "——", "-", "", "无"):
-                            continue
-                        if val_str in ("在职", "离职", "待审批", "病假", "产假", "产假复岗"):
-                            val = val_str
-                        else:
-                            continue
-                    data[field_name] = val
-
-                data.setdefault("position", "")
-                data.setdefault("department", "未分类")
-                data.setdefault("name", "")
-
-                if "employee_number" not in data:
-                    raise ValueError("缺少工号")
-
-                if "hire_date" not in data:
-                    data["hire_date"] = date.today()
-                # 状态列缺失/为空时不再默认「在职」：已有员工保留原状态（病假/产假不被覆盖），
-                # 新员工由 upsert INSERT 分支默认「在职」
-
-                # ── Excel 没有的字段全部置空，确保完全以 Excel 为准 ──
-                for field in self._EXCEL_RESETTABLE_FIELDS:
-                    if field not in data:
-                        data[field] = None
-
-                # 数据范围受限时仅导入授权部门行
-                if (
-                    allowed_departments is not None
-                    and data.get("department") not in allowed_departments
-                ):
-                    skipped += 1
-                    await conn.execute(text(f"RELEASE SAVEPOINT {sp_name}"))
-                    continue
-
-                is_new = await self.repo.upsert_by_employee_number(data)
-                if is_new:
-                    created += 1
-                else:
-                    updated += 1
-
-                await conn.execute(text(f"RELEASE SAVEPOINT {sp_name}"))
-            except Exception as e:
-                # ROLLBACK TO SAVEPOINT 是 Postgres 恢复事务的唯一方式
-                await conn.execute(text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
-                await conn.execute(text(f"RELEASE SAVEPOINT {sp_name}"))
-                errors.append(f"第{row_idx}行: {e}")
-
-        # ── 上传完成后自动同步部门表 ──
-        if created > 0 or updated > 0:
-            await self._sync_departments_from_employees()
-
-        return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
-
     async def upload_trainers(self, file_bytes: bytes, allowed_departments: set[str] | None = None) -> dict:
         """上传内训师 Excel，按姓名+部门 upsert。allowed_departments 非空时仅导入该范围内的部门。"""
         from io import BytesIO
@@ -693,6 +598,7 @@ class EmployeeService:
         return result
 
     async def update_employee(self, employee_id: UUID, data: EmployeeUpdate) -> Employee:
+        await self._ensure_employees_writable()
         employee = await self.get_employee(employee_id)
         update_data = data.model_dump(exclude_unset=True)
 
@@ -705,14 +611,42 @@ class EmployeeService:
             setattr(employee, field, value)
 
         result = await self.repo.update(employee)
+
+        # 人员状态随总表同步到培训名单（病产假统计/SOP选人/通知名单都走名单口径，
+        # 同步未启用时定时对账不会兜底，必须在状态变更处即时同步）
+        if "status" in update_data:
+            from sqlalchemy import update as _update
+
+            from app.modules.hr.models import TrainingRosterProfile
+            await self.repo.session.execute(
+                _update(TrainingRosterProfile)
+                .where(
+                    TrainingRosterProfile.employee_number == employee.employee_number,
+                    TrainingRosterProfile.is_deleted.is_(False),
+                )
+                .values(status=employee.status)
+            )
         return result
 
     async def delete_employee(self, employee_id: UUID) -> None:
+        await self._ensure_employees_writable()
         employee = await self.repo.get_by_id(employee_id)
         if not employee:
             raise NotFoundException("员工", str(employee_id))
         employee.is_deleted = True
         await self.repo.update(employee)
+        # 培训名单同步移出（人员增减语义；不等定时对账兜底）
+        from sqlalchemy import update as _update
+
+        from app.modules.hr.models import TrainingRosterProfile
+        await self.repo.session.execute(
+            _update(TrainingRosterProfile)
+            .where(
+                TrainingRosterProfile.employee_number == employee.employee_number,
+                TrainingRosterProfile.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
 
     async def list_employees(
         self,
@@ -819,13 +753,17 @@ class EmployeeService:
             result["confirmer"] = raw.strip()
         return result
 
-    async def upload_annual_plan(self, file_bytes: bytes) -> dict:
+    async def upload_annual_plan(
+        self, file_bytes: bytes, *, allowed_departments: set[str] | None = None,
+    ) -> dict:
         """从 Excel 批量导入年度培训计划，按年度+部门自动分类。
 
         支持两种 Excel 格式：
         1. 系统导出格式：标题行 → 部门行 → 表头行 → 数据行
         2. 自定义格式：第一行直接为表头，需包含「年度」「部门」列
 
+        allowed_departments 非 None 时行级过滤：仅接受授权部门（及全员可见的
+        「厂级」）的数据行，越权行计入 errors 跳过。
         每行使用独立 SAVEPOINT，单行失败不影响其他行。
         """
         from io import BytesIO
@@ -940,6 +878,14 @@ class EmployeeService:
             year = data.get("year") or plan_year or date.today().year
             if not dept:
                 errors.append(f"第{row_idx}行: 缺少部门")
+                continue
+            # 行级数据范围：受限用户仅可导入授权部门（「厂级」培训全员可见可操作）
+            if (
+                allowed_departments is not None
+                and dept != "厂级"
+                and dept not in allowed_departments
+            ):
+                errors.append(f"第{row_idx}行: 部门「{dept}」不在授权范围内，已跳过")
                 continue
 
             item_data = {k: v for k, v in data.items() if k not in skip_fields}
@@ -1452,7 +1398,24 @@ class AnnualTrainingPlanService:
         return await self.repo.update(plan)
 
     async def delete_plan(self, plan_id: UUID) -> None:
-        await self.repo.session.execute(text("DELETE FROM hr.annual_training_plans WHERE id = :id"), {"id": plan_id})
+        """软删计划（先软删其明细；原硬删在有明细时触发 FK 违规 500）。"""
+        from app.modules.hr.models import AnnualTrainingPlanItem
+        await self.repo.session.execute(
+            _update_stmt(AnnualTrainingPlanItem)
+            .where(
+                AnnualTrainingPlanItem.plan_id == plan_id,
+                AnnualTrainingPlanItem.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
+        await self.repo.session.execute(
+            _update_stmt(AnnualTrainingPlan)
+            .where(
+                AnnualTrainingPlan.id == plan_id,
+                AnnualTrainingPlan.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
 
     async def list_plans(
         self,
@@ -1787,6 +1750,28 @@ class CandidateService:
         )
         self.repo.session.add(onboarding)
         await self.repo.session.flush()
+
+        # 与 create_employee 副作用对齐：同步建员工档案 + 培训台账页 +
+        # 培训名单行，否则招聘入职者游离于培训名单/台账体系外
+        #（HR 后续在员工总台账正式建档时可按工号合并）
+        employee = Employee(
+            employee_number=emp_no,
+            name=c.name or "",
+            department=c.department or "未分配",
+            position=c.position or "未分配",
+            hire_date=date_type.today(),
+            phone=c.phone,
+            email=c.email,
+            education=c.education,
+            school=c.school,
+            major=c.major,
+            status="在职",
+        )
+        self.repo.session.add(employee)
+        await self.repo.session.flush()
+        employee_service = EmployeeService(self.repo.session)
+        await employee_service._sync_employee_training(employee)
+        await employee_service._ensure_roster_for_new_employee(employee)
 
         # 自动创建入职子任务
         task_types = [

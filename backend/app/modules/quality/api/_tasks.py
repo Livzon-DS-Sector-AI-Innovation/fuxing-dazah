@@ -37,6 +37,7 @@ from app.modules.quality.repository import (
 )
 from app.modules.quality.schemas import (
     CalcFormSubmit,
+    ConfirmResultIn,
     TaskAssignmentsSave,
     TestResultCreate,
     TestResultsUpdate,
@@ -220,6 +221,26 @@ async def test_calc_endpoint(
     else:
         computed = calc_engine.compute_normalization(calc_cfg, payload.inputs)
     return success_response(data=computed)
+
+
+@router.post("/tasks/{task_id}/results/{result_id}/confirm", summary="确认解析自动填入的结果（正式归入，可先修正数值）")
+async def confirm_parsed_result_endpoint(
+    task_id: uuid.UUID,
+    result_id: uuid.UUID,
+    payload: ConfirmResultIn | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:fill")),
+) -> JSONResponse:
+    """解析填入的值（合格与否）需人工确认后正式归入；确认后参与自动流转。
+
+    payload.result_value 提供时按标准限度重新判定后归入（人工修正口径）。
+    """
+    detail = await test_task_service.confirm_parsed_result(
+        db, task_id, result_id,
+        result_value=payload.result_value if payload is not None else None,
+        filled_by=_user.id,
+    )
+    return success_response(data={"message": "已确认归入", "detail": detail})
 
 
 @router.post("/tasks/{task_id}/calc-fill", summary="在线计算表填报（免 Excel：数值+表号合并规则→判定填入）")

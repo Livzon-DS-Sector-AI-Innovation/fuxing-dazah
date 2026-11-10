@@ -957,31 +957,6 @@ export interface TrainingNotificationData {
   issue_date?: string
 }
 
-export interface OnboardingEvaluationData {
-  employee_name: string
-  employee_number?: string
-  gender?: string
-  department_position?: string
-  hire_date?: string
-  training_period?: string
-  regularization_date?: string
-  assessment_contents?: string[]
-  comprehensive_comment?: string
-  is_qualified?: boolean
-  assigned_position?: string
-  assessment_method?: string
-  dept_manager_signature?: string
-  signature_date?: string
-  remarks?: string
-  dept_manager_agree?: boolean
-  hr_manager_agree?: boolean
-  qa_manager_agree?: boolean
-  dept_manager?: string
-  hr_manager?: string
-  qa_manager?: string
-  approval_date?: string
-}
-
 export interface TrainingLedgerPageRecord {
   id: string
   employee_number: string
@@ -1249,4 +1224,46 @@ export interface IncidentRecord {
   description: string | null
   status: string
   remark: string | null
+}
+
+// ─── 员工档案多维表格同步 ───
+
+export interface EmployeeSyncStats {
+  created?: number
+  updated?: number
+  deleted?: number
+  total?: number
+  errors?: string[]
+  copy_created?: number
+  copy_updated?: number
+  copy_deleted?: number
+  skipped?: string
+  rebuilt?: number
+  removed?: number
+}
+
+export interface EmployeeSyncColumnReport {
+  mapped: string[]
+  ignored: string[]
+  has_employee_number: boolean
+  mapped_count: number
+}
+
+export interface EmployeeSyncConfig {
+  enabled: boolean
+  app_token: string
+  source_table_id: string
+  source_table_name: string
+  is_ready: boolean
+  last_sync_at: string | null
+  last_stats: EmployeeSyncStats | null
+  column_report?: EmployeeSyncColumnReport
+  subscribe_warning?: string | null
+}
+
+/** 员工档案页所需的同步状态精简形态（服务端注入） */
+export interface EmployeeSyncBanner {
+  app_token: string
+  source_table_id: string
+  last_sync_at: string | null
 }

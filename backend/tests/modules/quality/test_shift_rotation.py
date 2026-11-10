@@ -11,7 +11,7 @@ def _teams(*names: str) -> list[dict]:
 
 
 class TestCustomTeamOrder:
-    def test_slides_along_custom_order(self):
+    def test_slides_along_custom_order(self) -> None:
         """轮换按自定义顺序滑窗：每 3 天滑一位，当班 2 个班。"""
         teams = _teams("甲班", "乙班", "丙班")
         order = ["丙班", "甲班", "乙班"]
@@ -26,7 +26,7 @@ class TestCustomTeamOrder:
             duty = shift_duty_teams(teams, "2026-10-26", 3, 2, on_date, order)
             assert [t["name"] for t in duty] == expected, on_date
 
-    def test_unlisted_teams_not_rotated(self):
+    def test_unlisted_teams_not_rotated(self) -> None:
         """未勾选的班组不参与轮换。"""
         teams = _teams("甲班", "乙班", "丙班")
         duty = shift_duty_teams(teams, "2026-10-26", 3, 1, "2026-10-26", ["甲班", "丙班"])
@@ -34,27 +34,27 @@ class TestCustomTeamOrder:
         duty = shift_duty_teams(teams, "2026-10-26", 3, 1, "2026-10-29", ["甲班", "丙班"])
         assert [t["name"] for t in duty] == ["丙班"]
 
-    def test_missing_names_skipped(self):
+    def test_missing_names_skipped(self) -> None:
         """顺序里不存在的班组名自动跳过。"""
         teams = _teams("甲班", "乙班")
         duty = shift_duty_teams(teams, "2026-10-26", 3, 2, "2026-10-26", ["甲班", "丁班", "乙班"])
         assert [t["name"] for t in duty] == ["甲班", "乙班"]
 
-    def test_before_start_date_is_first_slot(self):
+    def test_before_start_date_is_first_slot(self) -> None:
         teams = _teams("甲班", "乙班", "丙班")
         duty = shift_duty_teams(teams, "2026-10-26", 3, 2, "2026-10-20", ["甲班", "乙班", "丙班"])
         assert [t["name"] for t in duty] == ["甲班", "乙班"]
 
-    def test_empty_teams(self):
+    def test_empty_teams(self) -> None:
         assert shift_duty_teams([], "2026-10-26", 3, 2, "2026-10-26", ["甲班"]) == []
 
-    def test_all_names_missing_returns_empty(self):
+    def test_all_names_missing_returns_empty(self) -> None:
         teams = _teams("甲班")
         assert shift_duty_teams(teams, "2026-10-26", 3, 2, "2026-10-26", ["丁班"]) == []
 
 
 class TestLegacySlidingWindow:
-    def test_slides_by_creation_order(self):
+    def test_slides_by_creation_order(self) -> None:
         """不设轮换顺序时按创建顺序滑窗（旧行为）。"""
         teams = _teams("甲班", "乙班", "丙班")
         cases = {
@@ -67,7 +67,7 @@ class TestLegacySlidingWindow:
             duty = shift_duty_teams(teams, "2026-10-26", 3, 2, on_date, None)
             assert [t["name"] for t in duty] == expected, on_date
 
-    def test_empty_order_falls_back(self):
+    def test_empty_order_falls_back(self) -> None:
         teams = _teams("甲班", "乙班", "丙班")
         duty = shift_duty_teams(teams, "2026-10-26", 3, 2, "2026-10-29", [])
         assert [t["name"] for t in duty] == ["乙班", "丙班"]
@@ -99,17 +99,17 @@ class TestFilterBoardByGroups:
             },
         ]
 
-    def test_keeps_only_own_group_sops_and_assignments(self):
+    def test_keeps_only_own_group_sops_and_assignments(self) -> None:
         items = filter_board_by_groups(self._items(), {"仪器组"}, MAPPING)
         assert [i["plan_id"] for i in items] == [1]
         assert [s["sop_no"] for s in items[0]["sops"]] == ["SOP.03.001"]
         assert [a["sop_no"] for a in items[0]["assignments"]] == ["SOP.03.001"]
 
-    def test_plan_without_visible_sops_dropped(self):
+    def test_plan_without_visible_sops_dropped(self) -> None:
         items = filter_board_by_groups(self._items(), {"生物组"}, MAPPING)
         assert [i["plan_id"] for i in items] == [2]
 
-    def test_unmatched_items_fall_back_to_lc_group(self):
+    def test_unmatched_items_fall_back_to_lc_group(self) -> None:
         """未命中关键词的项目回退理化组，只有理化组成员可见。"""
         items = filter_board_by_groups(self._items(), {"理化组"}, MAPPING)
         assert [i["plan_id"] for i in items] == [1, 3]

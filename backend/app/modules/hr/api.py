@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,14 +26,12 @@ from app.modules.hr.deps import (
     require_hr_basic,
 )
 from app.modules.hr.document_generator import generate_onboarding_training_record
+from app.modules.hr.employee_sync.routes import router as employee_sync_router
 from app.modules.hr.evaluation_document_generator import generate_training_evaluation
 from app.modules.hr.interview_routes import router as interview_router
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
-)
-from app.modules.hr.onboarding_evaluation_document_generator import (
-    generate_onboarding_evaluation,
 )
 from app.modules.hr.prejob_document_generator import generate_prejob_training_plan
 from app.modules.hr.repository import PerformanceEvaluationRepository
@@ -57,7 +55,6 @@ from app.modules.hr.schemas import (
     OffboardingRecordCreate,
     OffboardingRecordResponse,
     OffboardingRecordUpdate,
-    OnboardingEvaluationInput,
     OnboardingRecordResponse,
     PerformanceCategoryCreate,
     PerformanceCategoryUpdate,
@@ -117,6 +114,7 @@ router.include_router(job_requirement_router)
 router.include_router(analysis_router)
 router.include_router(sop_training_router)
 router.include_router(title_review_router)
+router.include_router(employee_sync_router)
 
 
 def get_employee_service(session: AsyncSession = Depends(get_db)) -> EmployeeService:
@@ -177,15 +175,42 @@ def get_annual_training_plan_item_service(
     return AnnualTrainingPlanItemService(session)
 
 
+async def _ensure_annual_plan_in_scope(
+    plan_id: UUID, hr_scope: HrAccessContext, session: AsyncSession,
+):
+    """年度计划数据范围校验：受限用户仅可访问授权部门的计划，越界 403。"""
+    if hr_scope.is_unrestricted:
+        return None
+    row = (await session.execute(
+        text("SELECT department FROM hr.annual_training_plans WHERE id = :id AND is_deleted = false"),
+        {"id": plan_id},
+    )).fetchone()
+    if row is None:
+        raise HTTPException(404, "年度培训计划不存在")
+    if row[0] not in hr_scope.scoped_departments:
+        raise HTTPException(403, f"数据范围限制：仅可操作授权部门的计划（{row[0]}）")
+    return None
+
+
 async def _ensure_ledger_access(record, hr_scope: HrAccessContext, session: AsyncSession) -> None:
-    """按台账工号反查员工并校验数据范围，越界抛 403。"""
+    """按台账工号反查培训名单行并校验数据范围，越界抛 403。
+
+    人员口径 = 培训人员名单（体现/实际部门任一在授权范围内即可）。
+    """
     if hr_scope.is_unrestricted:
         return
-    from app.modules.hr.repository import EmployeeRepository
-    emp = await EmployeeRepository(session).get_by_employee_number(record.employee_number)
-    if emp is None:
-        raise ForbiddenException("数据范围限制：无法确认该记录所属员工")
-    hr_scope.ensure_can_access_employee(emp)
+    from sqlalchemy import text as _text
+    row = (await session.execute(
+        _text(
+            "SELECT department, actual_department FROM hr.training_roster_profiles "
+            "WHERE employee_number = :no AND is_deleted = false LIMIT 1"
+        ),
+        {"no": record.employee_number},
+    )).fetchone()
+    if row is None:
+        raise ForbiddenException("数据范围限制：无法确认该记录所属人员（不在培训名单中）")
+    if not any(d and d in hr_scope.scoped_departments for d in (row[0], row[1])):
+        raise ForbiddenException(f"数据范围限制：仅可操作授权部门记录（{row[0]}）")
 
 
 def _ensure_qa_assessment_access(hr_scope: HrAccessContext, department: str | None) -> None:
@@ -267,24 +292,6 @@ async def create_employee(
         message="员工创建成功",
         status_code=201,
     )
-
-
-@router.post("/employees/upload", summary="上传人员名单")
-async def upload_employees(
-    file: UploadFile,
-    service: EmployeeService = Depends(get_employee_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """上传 Excel 人员名单，按工号自动新增或更新（受限用户仅可操作授权部门行）。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
-    try:
-        content = await file.read()
-        allowed_departments = None if hr_scope.is_unrestricted else set(hr_scope.scoped_departments)
-        result = await service.upload_employees(content, allowed_departments=allowed_departments)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
 
 
 @router.get("/roster", summary="下载花名册")
@@ -1239,9 +1246,11 @@ async def export_onboarding_training_record_with_items(
     employee_number: str,
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """根据员工工号和前端选中的培训项，生成入职培训记录 Word 文档。"""
     employee = await service.get_employee_by_number(employee_number)
+    hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
     try:
         buffer: BytesIO = generate_onboarding_training_record(employee, training_items=items)
@@ -1268,11 +1277,14 @@ async def export_training_record(
     employee_number: str,
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """根据员工工号和培训项，生成新员工培训记录 Word 文档。"""
     from app.modules.hr.training_record_generator import generate_training_record
 
+
     employee = await service.get_employee_by_number(employee_number)
+    hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
     try:
         buffer: BytesIO = generate_training_record(employee, training_items=items)
@@ -1383,13 +1395,22 @@ async def _sync_prejob_plan_to_ledger(
     summary="导出员工岗前培训计划",
 )
 async def export_prejob_training_plan(
-    employee_id: UUID,
+    employee_id: str,
     payload: PrejobTrainingItems | None = None,
     service: EmployeeService = Depends(get_employee_service),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    employee = await service.get_employee(employee_id)
+    # 兼容 UUID（旧入口）与工号（培训名单选人）：统一解析为员工 UUID
+    try:
+        emp_uuid = UUID(employee_id)
+    except (TypeError, ValueError):
+        from app.modules.hr.repository import EmployeeRepository
+        by_number = await EmployeeRepository(session).get_by_employee_number(employee_id)
+        if by_number is None:
+            raise HTTPException(404, f"员工不存在：{employee_id}")
+        emp_uuid = by_number.id
+    employee = await service.get_employee(emp_uuid)
     hr_scope.ensure_can_access_employee(employee)
     """根据入职台账数据生成并下载岗前培训计划 Word 文档。
 
@@ -1399,10 +1420,10 @@ async def export_prejob_training_plan(
     """
     from app.modules.hr.models import OnboardingRecord, PositionTraining
 
-    # 优先查入职台账
+    # 优先查入职台账（按工号；兼容旧 UUID 入参）
     record = (await session.execute(
         select(OnboardingRecord).where(
-            OnboardingRecord.id == employee_id,
+            OnboardingRecord.employee_number == employee.employee_number,
             OnboardingRecord.is_deleted == False,
         )
     )).scalar_one_or_none()
@@ -1483,41 +1504,6 @@ async def export_prejob_training_plan(
     )
 
 
-@router.get(
-    "/employees/{employee_id}/onboarding-evaluation",
-    summary="导出员工上岗评估表",
-)
-async def export_onboarding_evaluation_by_employee(
-    employee_id: UUID,
-    service: EmployeeService = Depends(get_employee_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """根据员工档案预填基本信息并导出上岗评估表 Excel 文档。"""
-    employee = await service.get_employee(employee_id)
-    hr_scope.ensure_can_access_employee(employee)
-
-    payload = OnboardingEvaluationInput(
-        employee_name=employee.name or "",
-        employee_number=employee.employee_number or None,
-        gender=employee.gender or None,
-        department_position=f"{employee.department or ''}/{employee.position or ''}",
-        hire_date=employee.hire_date,
-    )
-    buffer: BytesIO = generate_onboarding_evaluation(payload)
-
-    def _iterfile():
-        buffer.seek(0)
-        yield buffer.read()
-
-    safe_date = str(employee.hire_date).replace("-", "") if employee.hire_date else "nodate"
-    filename = f"onboarding_evaluation_{employee.employee_number}_{safe_date}.xlsx"
-    return StreamingResponse(
-        _iterfile(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
 
 
 @router.get("/employee-varieties", summary="获取部门品种列表（去重）")
@@ -1525,17 +1511,20 @@ async def list_employee_varieties(
     department: str = Query(...),
     session: AsyncSession = Depends(get_db),
 ):
-    """获取指定部门（含兼任部门）在职员工的品种列表（去重），用于签到表二级筛选。"""
-    from app.modules.hr.models import Employee
+    """获取指定部门（含兼任部门）名单人员的品种列表（去重），用于签到表二级筛选。
+
+    人员口径 = 培训人员名单（脱敏独立数据集）。
+    """
+    from app.modules.hr.models import TrainingRosterProfile
     # 签到表人员口径：仅体现部门+兼任部门，不引入「未分类」人员
     rows = (await session.execute(
-        select(Employee.variety, Employee.concurrent_variety)
+        select(TrainingRosterProfile.variety, TrainingRosterProfile.concurrent_variety)
         .where(
-            Employee.is_deleted == False,
-            Employee.status == '在职',
+            TrainingRosterProfile.is_deleted == False,
+            TrainingRosterProfile.status == '在职',
             or_(
-                Employee.department == department,
-                Employee.concurrent_departments.ilike(f"%{department}%"),
+                TrainingRosterProfile.department == department,
+                TrainingRosterProfile.concurrent_departments.ilike(f"%{department}%"),
             ),
         )
     )).all()
@@ -1552,12 +1541,15 @@ async def list_employee_varieties(
 
 
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
-    """统计部门病假/产假人数（无则 0），供通知/签到表人数栏展示。"""
+    """统计部门病假/产假人数（无则 0），供通知/签到表人数栏展示。
+
+    人员口径 = 培训人员名单（脱敏独立数据集）。
+    """
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
-                "SELECT status, count(*) FROM hr.employees "
+                "SELECT status, count(*) FROM hr.training_roster_profiles "
                 "WHERE department = :dept AND is_deleted = false "
                 "AND status IN ('病假', '产假') GROUP BY status"
             ),
@@ -1858,7 +1850,7 @@ async def export_training_evaluation_admin(
     if department and training_subject:
         if department and training_subject:
             scores_result = await session.execute(
-                text("SELECT tl.assessment_result FROM hr.training_ledgers tl JOIN hr.employees e ON tl.employee_number = e.employee_number AND e.is_deleted = false WHERE tl.is_deleted = false AND e.department = :dept AND tl.training_subject ILIKE :subj AND tl.assessment_result IS NOT NULL AND tl.assessment_result != ''"),
+                text("SELECT tl.assessment_result FROM hr.training_ledgers tl JOIN hr.training_roster_profiles p ON tl.employee_number = p.employee_number AND p.is_deleted = false WHERE tl.is_deleted = false AND p.department = :dept AND tl.training_subject ILIKE :subj AND tl.assessment_result IS NOT NULL AND tl.assessment_result != ''"),
                 {"dept": department, "subj": f"%{training_subject}%"},
             )
             scores = [row[0] for row in scores_result.fetchall() if row[0]]
@@ -1883,7 +1875,7 @@ async def export_training_evaluation_admin(
     trainee_names: list[str] = []
     if department and training_subject:
         names_result = await session.execute(
-            text("SELECT e.name FROM hr.training_ledgers tl JOIN hr.employees e ON tl.employee_number = e.employee_number AND e.is_deleted = false WHERE tl.is_deleted = false AND e.department = :dept AND tl.training_subject ILIKE :subj"),
+            text("SELECT p.name FROM hr.training_ledgers tl JOIN hr.training_roster_profiles p ON tl.employee_number = p.employee_number AND p.is_deleted = false WHERE tl.is_deleted = false AND p.department = :dept AND tl.training_subject ILIKE :subj"),
             {"dept": department, "subj": f"%{training_subject}%"},
         )
         trainee_names = list(dict.fromkeys(row[0] for row in names_result.fetchall() if row[0]))
@@ -1894,7 +1886,7 @@ async def export_training_evaluation_admin(
     sick_count = maternity_count = 0
     if department:
         emp_count = (await session.execute(
-            text("SELECT count(*) FROM hr.employees WHERE department = :dept AND is_deleted = false AND status = '在职'"),
+            text("SELECT count(*) FROM hr.training_roster_profiles WHERE department = :dept AND is_deleted = false AND status = '在职'"),
             {"dept": department},
         )).scalar()
         sick_count, maternity_count = await _query_leave_counts(session, department)
@@ -1967,26 +1959,6 @@ async def export_training_evaluation(
         headers={
             "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=utf-8''{quote('培训效果评估表_' + safe_date + '.docx')}"
         },
-    )
-
-
-@router.post("/onboarding-evaluation", summary="生成员工上岗评估表")
-async def export_onboarding_evaluation(
-    payload: OnboardingEvaluationInput,
-):
-    """根据填写的评估信息自动生成员工上岗评估表 Excel 文档。"""
-    buffer: BytesIO = generate_onboarding_evaluation(payload)
-
-    def _iterfile():
-        buffer.seek(0)
-        yield buffer.read()
-
-    safe_date = str(payload.evaluation_date).replace("-", "") if payload.evaluation_date else "nodate"
-    filename = f"onboarding_evaluation_{safe_date}.xlsx"
-    return StreamingResponse(
-        _iterfile(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -2593,8 +2565,10 @@ async def list_onboarding_records(
 async def get_onboarding_record(
     record_id: UUID,
     service: OnboardingRecordService = Depends(get_onboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     record = await service.get_record(record_id)
+    hr_scope.ensure_can_access_department(record.department)
     return success_response(
         data=OnboardingRecordResponse.model_validate(record).model_dump(mode="json"),
     )
@@ -2604,7 +2578,10 @@ async def get_onboarding_record(
 async def delete_onboarding_record(
     record_id: UUID,
     service: OnboardingRecordService = Depends(get_onboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    hr_scope.ensure_can_access_department(record.department)
     await service.delete_record(record_id)
     return success_response(message="删除成功")
 
@@ -2828,18 +2805,22 @@ async def list_training_ledgers(
             sort_order="asc",
         )
     else:
-        # 数据范围受限：join 员工表强制收敛到本部门/本人，查别部门工号返回空
-        from app.modules.hr.models import Employee, OnboardingRecord, TrainingLedger
+        # 数据范围受限：join 培训名单强制收敛到本部门/本人，查别部门工号返回空
+        from app.modules.hr.models import (
+            OnboardingRecord,
+            TrainingLedger,
+            TrainingRosterProfile,
+        )
         departed_subq = select(OnboardingRecord.employee_number).where(
             OnboardingRecord.is_deleted == False, OnboardingRecord.is_employed == "否")
         stmt = (select(TrainingLedger)
-            .join(Employee, TrainingLedger.employee_number == Employee.employee_number)
-            .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False,
+            .join(TrainingRosterProfile, TrainingLedger.employee_number == TrainingRosterProfile.employee_number)
+            .where(TrainingLedger.is_deleted == False, TrainingRosterProfile.is_deleted == False,
                    TrainingLedger.employee_number.not_in(departed_subq)))
         if employee_number: stmt = stmt.where(TrainingLedger.employee_number == employee_number)
         if date_from: stmt = stmt.where(TrainingLedger.training_date >= date_from)
         if date_to: stmt = stmt.where(TrainingLedger.training_date <= date_to)
-        stmt = hr_scope.apply_list_scope(stmt, Employee)
+        stmt = hr_scope.apply_list_scope(stmt, TrainingRosterProfile)
         total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
         records = list((await session.execute(
             stmt.order_by(TrainingLedger.training_date.asc())
@@ -3142,11 +3123,11 @@ async def export_training_ledger(
 
 @router.get("/training-ledgers/admin", summary="管理员培训台账总览")
 async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
-    from app.modules.hr.models import Employee, TrainingLedger
-    cols = (TrainingLedger.id, TrainingLedger.employee_number, Employee.name.label("employee_name"), TrainingLedger.training_subject, TrainingLedger.training_date, TrainingLedger.training_method, TrainingLedger.trainer, TrainingLedger.assessment_result, Employee.department)
-    stmt = select(*cols).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
-    if hr_scope.is_unrestricted and department: stmt = stmt.where(Employee.department == department)
-    stmt = hr_scope.apply_list_scope(stmt, Employee)
+    from app.modules.hr.models import TrainingLedger, TrainingRosterProfile
+    cols = (TrainingLedger.id, TrainingLedger.employee_number, TrainingRosterProfile.name.label("employee_name"), TrainingLedger.training_subject, TrainingLedger.training_date, TrainingLedger.training_method, TrainingLedger.trainer, TrainingLedger.assessment_result, TrainingRosterProfile.department)
+    stmt = select(*cols).join(TrainingRosterProfile, TrainingLedger.employee_number == TrainingRosterProfile.employee_number).where(TrainingLedger.is_deleted == False, TrainingRosterProfile.is_deleted == False)
+    if hr_scope.is_unrestricted and department: stmt = stmt.where(TrainingRosterProfile.department == department)
+    stmt = hr_scope.apply_list_scope(stmt, TrainingRosterProfile)
     if training_subject: stmt = stmt.where(TrainingLedger.training_subject.ilike(f"%{training_subject}%"))
     if date_from: stmt = stmt.where(TrainingLedger.training_date >= date_from)
     if date_to: stmt = stmt.where(TrainingLedger.training_date <= date_to)
@@ -3157,34 +3138,34 @@ async def ledger_admin(department: str | None = Query(None), training_subject: s
 
 @router.get("/training-ledgers/admin/departments", summary="台账中的部门列表")
 async def ledger_admin_departments(session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
-    from app.modules.hr.models import Employee, TrainingLedger
-    stmt = (select(Employee.department).select_from(TrainingLedger)
-        .join(Employee, TrainingLedger.employee_number == Employee.employee_number)
-        .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False))
+    from app.modules.hr.models import TrainingLedger, TrainingRosterProfile
+    stmt = (select(TrainingRosterProfile.department).select_from(TrainingLedger)
+        .join(TrainingRosterProfile, TrainingLedger.employee_number == TrainingRosterProfile.employee_number)
+        .where(TrainingLedger.is_deleted == False, TrainingRosterProfile.is_deleted == False))
     # 数据范围受限角色的下拉框只给本部门/本人
-    stmt = hr_scope.apply_list_scope(stmt, Employee)
-    r = (await session.execute(stmt.distinct().order_by(Employee.department))).all()
+    stmt = hr_scope.apply_list_scope(stmt, TrainingRosterProfile)
+    r = (await session.execute(stmt.distinct().order_by(TrainingRosterProfile.department))).all()
     return success_response(data=[d[0] for d in r if d[0]])
 
 
 @router.get("/training-ledgers/admin/subjects", summary="台账中的培训内容列表")
 async def ledger_admin_subjects(department: str | None = Query(None), session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
-    from app.modules.hr.models import Employee, TrainingLedger
+    from app.modules.hr.models import TrainingLedger, TrainingRosterProfile
     stmt = (select(TrainingLedger.training_subject).select_from(TrainingLedger)
-        .join(Employee, TrainingLedger.employee_number == Employee.employee_number)
-        .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False))
-    if hr_scope.is_unrestricted and department: stmt = stmt.where(Employee.department == department)
-    stmt = hr_scope.apply_list_scope(stmt, Employee)
+        .join(TrainingRosterProfile, TrainingLedger.employee_number == TrainingRosterProfile.employee_number)
+        .where(TrainingLedger.is_deleted == False, TrainingRosterProfile.is_deleted == False))
+    if hr_scope.is_unrestricted and department: stmt = stmt.where(TrainingRosterProfile.department == department)
+    stmt = hr_scope.apply_list_scope(stmt, TrainingRosterProfile)
     r = (await session.execute(stmt.distinct().order_by(TrainingLedger.training_subject))).all()
     return success_response(data=[s[0] for s in r if s[0]])
 
 
 @router.get("/training-ledgers/admin/stats", summary="培训台账统计")
 async def ledger_admin_stats(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
-    from app.modules.hr.models import Employee, TrainingLedger
-    base = select(TrainingLedger.assessment_result).select_from(TrainingLedger).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
-    if hr_scope.is_unrestricted and department: base = base.where(Employee.department == department)
-    base = hr_scope.apply_list_scope(base, Employee)
+    from app.modules.hr.models import TrainingLedger, TrainingRosterProfile
+    base = select(TrainingLedger.assessment_result).select_from(TrainingLedger).join(TrainingRosterProfile, TrainingLedger.employee_number == TrainingRosterProfile.employee_number).where(TrainingLedger.is_deleted == False, TrainingRosterProfile.is_deleted == False)
+    if hr_scope.is_unrestricted and department: base = base.where(TrainingRosterProfile.department == department)
+    base = hr_scope.apply_list_scope(base, TrainingRosterProfile)
     if training_subject: base = base.where(TrainingLedger.training_subject == training_subject)
     if date_from: base = base.where(TrainingLedger.training_date >= date_from)
     if date_to: base = base.where(TrainingLedger.training_date <= date_to)
@@ -3323,9 +3304,12 @@ class QaAssessmentCreateBody(BaseModel):
 async def create_qa_assessment(
     payload: QaAssessmentCreateBody,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """创建问答考核场次，含选题快照和受训人员名单。"""
+    """创建问答考核场次，含选题快照和受训人员名单（受限用户仅可建授权部门场次）。"""
     import json
+
+    _ensure_qa_assessment_access(hr_scope, payload.department)
 
     total_score = sum((q.get("score", 10) or 10) for q in (payload.questions or []))
     if total_score == 0 and payload.full_score:
@@ -3465,6 +3449,24 @@ async def save_qa_scores(
     import json as _json
     from datetime import date as _date
 
+    # 受限用户：逐条校验工号对应名单行的部门在授权范围内（防向其他部门人员插台账）
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+        for s in payload.scores:
+            emp_no = str(s.get("employee_number") or "").strip()
+            if not emp_no:
+                continue
+            dept_row = (await session.execute(
+                text("SELECT department, actual_department FROM hr.training_roster_profiles "
+                     "WHERE employee_number = :no AND is_deleted = false LIMIT 1"),
+                {"no": emp_no},
+            )).fetchone()
+            if dept_row is None:
+                raise HTTPException(400, f"工号 {emp_no} 不在培训人员名单中，无法保存成绩")
+            if not any(d and d in hr_scope.scoped_departments for d in dept_row):
+                raise HTTPException(403, f"数据范围限制：工号 {emp_no}（{dept_row[0]}）不在授权部门内")
+
     def _d(v: str | None):
         if not v:
             return None
@@ -3554,7 +3556,7 @@ async def save_qa_scores(
             # 没工号时从员工表反查（同名多人时不做猜测，跳过该行）
             if not emp_no:
                 emp_rows = (await session.execute(
-                    text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false"),
+                    text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false"),
                     {"nm": name},
                 )).fetchall()
                 if len(emp_rows) == 1 and emp_rows[0][0]:
@@ -3695,7 +3697,7 @@ async def random_qa_scores(
         # 查找工号
         emp_no = ""
         emp = (await session.execute(
-            text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+            text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number LIMIT 1"),
             {"nm": name},
         )).fetchone()
         if emp:
@@ -3715,7 +3717,7 @@ async def random_qa_scores(
     # 写入数据库
     for s in scores:
         existing = (await session.execute(
-            text("SELECT id FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm"),
+            text("SELECT id FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm AND is_deleted = false"),
             {"aid": str(assessment_id), "nm": s["employee_name"]},
         )).fetchone()
         if existing:
@@ -3771,7 +3773,7 @@ async def sync_qa_to_ledger(
         # 反查工号（同名多人时不做猜测）
         if not emp_no:
             emp_rows = (await session.execute(
-                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false"),
+                text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false"),
                 {"nm": name},
             )).fetchall()
             if len(emp_rows) == 1 and emp_rows[0][0]:
@@ -3847,9 +3849,12 @@ class QaRecordExportRequest(BaseModel):
 async def export_training_qa_record_with_scores(
     body: QaRecordExportRequest,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """导出含学员错题记录和评分的完整问答实操记录表。"""
     import json as _json
+
+    _ensure_qa_assessment_access(hr_scope, body.training_department or None)
 
     from app.modules.hr.qa_record_generator import generate_qa_record
 
@@ -3954,9 +3959,16 @@ async def export_training_qa_record_with_scores(
 
 
 @router.post("/training-notification/export-score-report", summary="导出成绩单")
-async def export_score_report(body: QaRecordExportRequest, session: AsyncSession = Depends(get_db)):
+async def export_score_report(
+    body: QaRecordExportRequest,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     """导出考核成绩单，同时自动录入培训台账。"""
     import json as _json
+
+    # 自动写台账属于跨部门写操作，按部门授权校验
+    _ensure_qa_assessment_access(hr_scope, body.training_department or None)
 
     from app.modules.hr.score_report_generator import generate_score_report
 
@@ -3970,11 +3982,11 @@ async def export_score_report(body: QaRecordExportRequest, session: AsyncSession
         score = s.get("total_score", 0)
         if not name:
             continue
-        # 查找该员工的工号（与其他成绩路径统一走 hr.employees）；
+        # 查找该人员的工号（与其他成绩路径统一走培训人员名单）；
         # 同名多人时优先在职、按工号确定序，避免成绩挂到错误员工名下
         emp_row = (await session.execute(
             text(
-                "SELECT employee_number FROM hr.employees WHERE name = :n AND is_deleted = false "
+                "SELECT employee_number FROM hr.training_roster_profiles WHERE name = :n AND is_deleted = false "
                 "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number LIMIT 1"
             ),
             {"n": name},
@@ -4140,7 +4152,7 @@ async def export_qa_evaluation(
 
     # 应到人数 = 部门总人数
     dept_count = (await session.execute(
-        text("SELECT count(*) FROM hr.employees WHERE department = :d AND is_deleted = false"),
+        text("SELECT count(*) FROM hr.training_roster_profiles WHERE department = :d AND is_deleted = false AND status = '在职'"),
         {"d": row[1] or ""},
     )).scalar()
     expected = dept_count if dept_count else None
@@ -4215,7 +4227,7 @@ async def export_qa_scores(
         # 没工号时从员工表反查
         if not emp_no:
             emp = (await session.execute(
-                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+                text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number LIMIT 1"),
                 {"nm": name},
             )).fetchone()
             if emp and emp[0]:
@@ -4301,13 +4313,15 @@ async def delete_training_ledger(
 async def upload_annual_training_plan(
     file: UploadFile,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """上传 Excel 年度培训计划，按年度+部门自动分类为计划项。"""
+    """上传 Excel 年度培训计划，按年度+部门自动分类为计划项。受限用户仅可导入授权部门行。"""
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
     try:
         content = await file.read()
-        result = await service.upload_annual_plan(content)
+        result = await service.upload_annual_plan(content, allowed_departments=allowed)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return success_response(
@@ -4370,7 +4384,12 @@ async def list_annual_training_plans(
 async def create_annual_training_plan(
     payload: AnnualTrainingPlanCreate,
     service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    # 数据范围：受限用户仅可为本部门（或全员可见的「厂级」）建计划；self_only 无部门数据可写
+    hr_scope.ensure_dept_writable(
+        [payload.department if payload.department != "厂级" else None]
+    )
     plan = await service.create_plan(payload)
     return success_response(
         data=AnnualTrainingPlanResponse.model_validate(plan).model_dump(mode="json"),
@@ -4383,7 +4402,10 @@ async def create_annual_training_plan(
 async def get_annual_training_plan(
     plan_id: UUID,
     service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     plan = await service.get_plan(plan_id)
     return success_response(
         data=AnnualTrainingPlanResponse.model_validate(plan).model_dump(mode="json"),
@@ -4395,7 +4417,10 @@ async def update_annual_training_plan(
     plan_id: UUID,
     payload: AnnualTrainingPlanUpdate,
     service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     plan = await service.update_plan(plan_id, payload)
     return success_response(
         data=AnnualTrainingPlanResponse.model_validate(plan).model_dump(mode="json"),
@@ -4407,7 +4432,10 @@ async def update_annual_training_plan(
 async def delete_annual_training_plan(
     plan_id: UUID,
     service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     await service.delete_plan(plan_id)
     return success_response(message="年度培训计划删除成功")
 
@@ -4476,7 +4504,10 @@ async def list_all_annual_plan_items(
 async def list_annual_training_plan_items(
     plan_id: UUID,
     service: AnnualTrainingPlanItemService = Depends(get_annual_training_plan_item_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     items = await service.list_items(plan_id)
     data = [
         AnnualTrainingPlanItemResponse.model_validate(i).model_dump(mode="json")
@@ -4504,17 +4535,20 @@ async def create_annual_training_plan_item(
     plan_id: UUID,
     payload: CreatePlanItemBody,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from datetime import date as dt_date
 
     from app.modules.hr.models import AnnualTrainingPlanItem
 
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     item = AnnualTrainingPlanItem(plan_id=plan_id, **payload.model_dump(exclude_none=True))
     if payload.confirm_date:
         try:
             item.confirm_date = dt_date.fromisoformat(payload.confirm_date)
         except ValueError:
-            pass
+            # 非法日期直接 400，不留脏值到 flush 时炸库
+            raise HTTPException(400, f"确认日期格式不正确：{payload.confirm_date}")
     session.add(item)
     await session.flush()
     return success_response(
@@ -4529,8 +4563,10 @@ async def delete_annual_training_plan_item(
     plan_id: UUID,
     item_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """软删除一条年度计划明细。"""
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     from app.modules.hr.models import AnnualTrainingPlanItem
     item = (await session.execute(
         select(AnnualTrainingPlanItem).where(
@@ -4552,7 +4588,10 @@ async def batch_update_annual_training_plan_items(
     plan_id: UUID,
     payload: AnnualTrainingPlanItemBatchUpdate,
     service: AnnualTrainingPlanItemService = Depends(get_annual_training_plan_item_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     items = await service.batch_update_items(plan_id, payload)
     data = [
         AnnualTrainingPlanItemResponse.model_validate(i).model_dump(mode="json")
@@ -4676,18 +4715,27 @@ def _generate_annual_plan_excel(plan: dict, items: list[dict]) -> BytesIO:
 async def complete_plan_by_content(
     payload: dict = None,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """根据培训内容标记所有匹配的年度计划明细为已完成。"""
-    from app.modules.hr.models import AnnualTrainingPlanItem
+    """根据培训内容标记匹配的年度计划明细为已完成（受限用户仅其授权部门）。"""
+    from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
     content = payload.get("content", "") if payload else ""
     if not content:
         raise HTTPException(400, "缺少培训内容")
-    items = (await session.execute(
-        select(AnnualTrainingPlanItem).where(
+    stmt = (
+        select(AnnualTrainingPlanItem)
+        .join(AnnualTrainingPlan, AnnualTrainingPlanItem.plan_id == AnnualTrainingPlan.id)
+        .where(
             AnnualTrainingPlanItem.content_and_textbook == content,
             AnnualTrainingPlanItem.is_deleted == False,
+            AnnualTrainingPlan.is_deleted == False,
         )
-    )).scalars().all()
+    )
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+        stmt = stmt.where(AnnualTrainingPlan.department.in_(hr_scope.scoped_departments))
+    items = (await session.execute(stmt)).scalars().all()
     for item in items:
         item.tracking_status = "完成"
     await session.flush()
@@ -4699,8 +4747,11 @@ async def export_annual_training_plan(
     plan_id: UUID,
     plan_service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
     item_service: AnnualTrainingPlanItemService = Depends(get_annual_training_plan_item_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """根据年度计划数据生成并导出Excel文件（7.7年度培训计划格式）。"""
+    await _ensure_annual_plan_in_scope(plan_id, hr_scope, session)
     plan = await plan_service.get_plan(plan_id)
     items = await item_service.list_items(plan_id)
 
@@ -5586,11 +5637,12 @@ async def list_classification_members(
         raise HTTPException(404, "分类不存在")
     rows = (await session.execute(
         text("""
-            SELECT e.name, e.employee_number, e.department, e.position
+            SELECT p.name, p.employee_number, p.department, p.position
             FROM hr.employee_tags t
-            JOIN hr.employees e ON e.employee_number = t.employee_number AND e.is_deleted = false
+            JOIN hr.training_roster_profiles p
+              ON p.employee_number = t.employee_number AND p.is_deleted = false
             WHERE t.tag_name = :tn AND t.created_by = :cb AND t.is_deleted = false
-            ORDER BY e.department, e.employee_number
+            ORDER BY p.department, p.employee_number
         """),
         {"tn": c.name, "cb": creator},
     )).fetchall()
@@ -5668,7 +5720,8 @@ async def create_transfer(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """新增员工异动记录（受限用户仅可操作授权范围内员工）。"""
-    from app.modules.hr.models import Employee as EmpModel, TransferRecord
+    from app.modules.hr.models import Employee as EmpModel
+    from app.modules.hr.models import TransferRecord
     emp = (await session.execute(
         select(EmpModel).where(
             EmpModel.id == payload.employee_id,

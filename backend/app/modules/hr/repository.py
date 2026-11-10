@@ -58,6 +58,93 @@ class EmployeeRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_feishu_record_id(self, record_id: str) -> Employee | None:
+        """按飞书多维表格 record_id 查未删除员工（事件路由用）。
+
+        record_id 无唯一约束：源表改工号会遗留同 record_id 多行，取最新一行
+        避免 MultipleResultsFound；历史脏行由 upsert_from_bitable 的归属收敛清理。
+        """
+        result = await self.session.execute(
+            select(Employee)
+            .where(
+                Employee.feishu_record_id == record_id,
+                Employee.is_deleted.is_(False),
+            )
+            .order_by(Employee.updated_at.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def upsert_from_bitable(
+        self, data: dict, record_id: str
+    ) -> tuple[Employee, bool]:
+        """飞书多维表格同步专用 upsert，按工号匹配（含软删除行并复活）。
+
+        与 upsert_by_employee_number 的差异：
+        - 匹配范围含软删除行：工号在飞书表中重现视为有效数据，复活该行
+          （避免软删→重加触发 employee_number 唯一约束）；
+        - 同步写入 feishu_record_id / feishu_synced_at；
+        - 源表改工号时 record_id 归属随之迁移：仍持有该 record_id 的旧工号行
+          视为源表身份已被顶替，按删除处理（否则旧行永不被清理且 record_id 重复）；
+        - "以表为准"（对账，缺列补 None）还是"增量补丁"（事件）由调用方
+          在 data 中体现（见 employee_sync.mapping.convert_source_fields）。
+        返回 (员工对象, 是否新建)。
+        """
+        employee_number = str(data.get("employee_number") or "").strip()
+        if not employee_number:
+            raise ValueError("记录缺少工号，无法同步")
+
+        # record_id 归属迁移：清掉仍挂着该 record_id 的其他工号行
+        stale_rows = (await self.session.execute(
+            select(Employee).where(
+                Employee.feishu_record_id == record_id,
+                Employee.employee_number != employee_number,
+                Employee.is_deleted.is_(False),
+            )
+        )).scalars().all()
+        for stale in stale_rows:
+            stale.is_deleted = True
+            stale.feishu_record_id = None
+
+        existing = await self.get_by_employee_number(employee_number, include_deleted=True)
+        today = date.today()
+        if existing is not None:
+            # hire_date 列 NOT NULL：源表缺失（对账 reset_missing 置 None）时保留
+            # 本地值——既不能写 None（库拒绝），更不能刷成当天（司龄/转正失真）
+            if data.get("hire_date") is None:
+                data.pop("hire_date", None)
+            for key, value in data.items():
+                if key in ("id", "employee_number", "created_at"):
+                    continue
+                setattr(existing, key, value)
+            existing.is_deleted = False
+            existing.feishu_record_id = record_id
+            existing.feishu_synced_at = today
+            await self.session.flush()
+            return existing, False
+
+        insert_data = {k: v for k, v in data.items() if v is not None}
+        insert_data.setdefault("department", "未分类")
+        insert_data.setdefault("position", "")
+        insert_data.setdefault("name", "")
+        insert_data.setdefault("hire_date", today)
+        insert_data.setdefault("status", "在职")
+        employee = Employee(**insert_data)
+        employee.feishu_record_id = record_id
+        employee.feishu_synced_at = today
+        self.session.add(employee)
+        await self.session.flush()  # INSERT 走 RETURNING，id/时间戳已回填
+        return employee, True
+
+    async def soft_delete_by_feishu_record_id(self, record_id: str) -> bool:
+        """按 record_id 软删除本地员工（飞书侧删行）。返回是否有行被删除。"""
+        employee = await self.get_by_feishu_record_id(record_id)
+        if employee is None:
+            return False
+        employee.is_deleted = True
+        await self.session.flush()
+        return True
+
     async def list_employees(
         self,
         *,
@@ -803,10 +890,14 @@ class TrainingLedgerPageRepository:
         return result.scalar_one_or_none()
 
     async def list_pages_with_department(self) -> list[tuple[TrainingLedgerPage, str | None]]:
-        """List all training ledger pages joined with employee department."""
+        """List all training ledger pages joined with roster department（培训名单口径）."""
+        from app.modules.hr.models import TrainingRosterProfile
         result = await self.session.execute(
-            select(TrainingLedgerPage, Employee.department)
-            .outerjoin(Employee, TrainingLedgerPage.employee_number == Employee.employee_number)
+            select(TrainingLedgerPage, TrainingRosterProfile.department)
+            .outerjoin(
+                TrainingRosterProfile,
+                TrainingLedgerPage.employee_number == TrainingRosterProfile.employee_number,
+            )
             .where(TrainingLedgerPage.is_deleted.is_(False))
         )
         return [(row[0], row[1]) for row in result.all()]

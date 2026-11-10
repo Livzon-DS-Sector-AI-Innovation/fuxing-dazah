@@ -5,7 +5,7 @@ import { App, Button, Card, Form, Select, Table, Popconfirm, Typography } from '
 import { PlusOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { fetchUserDeptAccess, createUserDeptAccess, deleteUserDeptAccess, fetchTrainingAdmins, fetchHrDepartments } from '@/actions/hr'
 
-const { Title } = Typography
+const { Title, Paragraph } = Typography
 
 interface UserDeptAccessRecord {
   id: string
@@ -98,6 +98,9 @@ export default function UserDeptAccessClient() {
         </Button>
       }
     >
+      <Paragraph type="secondary" className="!mb-4 text-[13px]">
+        为培训管理员等用户授予指定部门的数据范围：作用范围包括培训人员名单、SOP培训二级表及员工档案（无档案读取权限者不可见档案，但仍受此范围约束）。
+      </Paragraph>
       <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
         <Form.Item
           name="user_id"

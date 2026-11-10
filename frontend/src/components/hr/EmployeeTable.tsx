@@ -1,15 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline, message, Popconfirm, Checkbox } from 'antd'
-import { SearchOutlined, EditOutlined, EyeOutlined, SwapOutlined, PlusOutlined, CloseOutlined, TagsOutlined, DeleteOutlined } from '@ant-design/icons'
+import { useState, useEffect, useRef } from 'react'
+import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline } from 'antd'
+import { EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
 import {
   fetchPositions, fetchDepartmentsAction, fetchTransfers, createTransfer,
-  saveEmployeeTag, fetchEmployeeTagsByEmployee,
-  fetchEmployeeClassifications, createEmployeeClassification, deleteEmployeeClassification,
-  fetchClassificationMembers, removeClassificationMembers,
 } from '@/actions/hr'
 import { useHrStore } from '@/stores/hr'
 import { usePermission } from '@/hooks/usePermission'
@@ -24,6 +21,8 @@ interface EmployeeTableProps {
   onRefresh: () => void
   onEdit: (employee: Employee) => void
   loading?: boolean
+  /** 多维表格同步模式：档案在飞书维护，隐藏会改写档案的编辑/异动入口 */
+  syncMode?: boolean
 }
 
 const statusColorMap: Record<string, string> = {
@@ -43,111 +42,15 @@ export default function EmployeeTable({
   onPageChange,
   onRefresh,
   onEdit,
-  loading = false }: EmployeeTableProps) {
+  loading = false,
+  syncMode = false }: EmployeeTableProps) {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   // 员工档案基础信息不开放给培训管理员等无档案编辑权限的角色
   const canEditProfile = hasPermission('hr:profile:update')
   const canTransfer = hasPermission('hr:profile:transfer')
-  const canManageClassification = hasPermission('hr:training:manage')
 
-  // ─── 分类管理 Modal ───
-  const [classModalOpen, setClassModalOpen] = useState(false)
-  const [classList, setClassList] = useState<{ id: string; name: string; count: number }[]>([])
-  const [classOptions, setClassOptions] = useState<{ label: string; value: string }[]>([])
-  const [newClassName, setNewClassName] = useState('')
-  const [classSaving, setClassSaving] = useState(false)
 
-  const loadClassifications = useCallback(async () => {
-    try {
-      const r = await fetchEmployeeClassifications()
-      setClassList(r.data || [])
-      // 同步更新下拉选项，分类增删后所有行的下拉立即刷新
-      setClassOptions((r.data || []).map(c => ({ label: `${c.name}（${c.count}人）`, value: c.name })))
-    } catch { setClassList([]) }
-  }, [])
-
-  useEffect(() => {
-    loadClassifications()
-  }, [loadClassifications])
-
-  const openClassModal = () => {
-    setNewClassName('')
-    setClassModalOpen(true)
-    loadClassifications()
-  }
-
-  const handleAddClassification = async () => {
-    const name = newClassName.trim()
-    if (!name) return
-    setClassSaving(true)
-    try {
-      await createEmployeeClassification(name)
-      setNewClassName('')
-      message.success('分类已新增')
-      loadClassifications()
-    } catch (e: any) { message.error(e.message || '新增失败') }
-    finally { setClassSaving(false) }
-  }
-
-  const handleDeleteClassification = async (id: string, name: string) => {
-    try {
-      await deleteEmployeeClassification(id)
-      message.success(`分类「${name}」已删除`)
-      if (expandedId === id) setExpandedId(null)
-      loadClassifications()
-    } catch (e: any) { message.error(e.message || '删除失败') }
-  }
-
-  // ─── 查看/管理分类下的人员 ───
-  const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [members, setMembers] = useState<{ name: string; employee_number: string; department: string; position: string }[]>([])
-  const [membersLoading, setMembersLoading] = useState(false)
-  const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set())
-  const [removing, setRemoving] = useState(false)
-
-  const fetchMembers = async (id: string) => {
-    setMembersLoading(true)
-    try {
-      const r = await fetchClassificationMembers(id)
-      setMembers(r.data || [])
-    } catch (e: any) {
-      message.error(e.message || '获取人员失败')
-      setMembers([])
-    } finally { setMembersLoading(false) }
-  }
-
-  const toggleMembers = async (id: string) => {
-    if (expandedId === id) {
-      setExpandedId(null)
-      setSelectedMembers(new Set())
-      return
-    }
-    setExpandedId(id)
-    setSelectedMembers(new Set())
-    await fetchMembers(id)
-  }
-
-  const handleRemoveSelectedMembers = async () => {
-    if (!expandedId || selectedMembers.size === 0) return
-    setRemoving(true)
-    try {
-      const res = await removeClassificationMembers(expandedId, Array.from(selectedMembers))
-      message.success(res.message || '已移除')
-      setSelectedMembers(new Set())
-      await fetchMembers(expandedId)
-      loadClassifications()
-    } catch (e: any) { message.error(e.message || '移除失败') }
-    finally { setRemoving(false) }
-  }
-
-  const toggleMemberSelected = (en: string) => {
-    setSelectedMembers((prev) => {
-      const next = new Set(prev)
-      next.has(en) ? next.delete(en) : next.add(en)
-      return next
-    })
-  }
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailEmp, setDetailEmp] = useState<Employee | null>(null)
   const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
@@ -288,16 +191,6 @@ export default function EmployeeTable({
       width: 100,
       render: (v: string) => v || '-' },
     {
-      title: '分类标签',
-      key: 'tags',
-      width: 200,
-      render: (_: any, record: Employee) => (
-        <TagCell employeeNumber={record.employee_number} employeeName={record.name}
-          disabled={!canManageClassification} options={classOptions}
-          onChanged={loadClassifications} />
-      ),
-    },
-    {
       title: '性别',
       dataIndex: 'gender',
       key: 'gender',
@@ -394,7 +287,7 @@ export default function EmployeeTable({
           >
             详情
           </Button>
-          {canEditProfile && (
+          {canEditProfile && !syncMode && (
             <Button
               type="text"
               size="small"
@@ -404,7 +297,7 @@ export default function EmployeeTable({
               编辑
             </Button>
           )}
-          {canTransfer && (
+          {canTransfer && !syncMode && (
             <Button type="text" size="small" icon={<SwapOutlined />}
               onClick={() => handleOpenTransfers(record)}>
               异动
@@ -415,7 +308,7 @@ export default function EmployeeTable({
   ]
 
   // Hide columns where ALL rows have empty values (except key & important columns)
-  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'actual_department', 'position', 'concurrent_departments', 'variety', 'tags'])
+  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'actual_department', 'position', 'concurrent_departments', 'variety'])
   const columns = allColumns.filter(col => {
     if (alwaysShow.has(col.key as string)) return true
     return employees.some((emp: any) => {
@@ -454,9 +347,6 @@ export default function EmployeeTable({
             { value: '产假复岗', label: '产假复岗' },
           ]}
         />
-        {canManageClassification && (
-          <Button icon={<TagsOutlined />} onClick={openClassModal}>分类管理</Button>
-        )}
       </div>
 
       <Table
@@ -544,160 +434,7 @@ export default function EmployeeTable({
         </div>
       </Modal>
 
-      <Modal title="分类管理" open={classModalOpen} onCancel={() => setClassModalOpen(false)} footer={null} width={480}>
-        <div className="space-y-3 mt-2">
-          <Space.Compact style={{ width: '100%' }}>
-            <Input value={newClassName} onChange={(e) => setNewClassName(e.target.value)}
-              onPressEnter={handleAddClassification} />
-            <Button type="primary" icon={<PlusOutlined />} loading={classSaving}
-              onClick={handleAddClassification}>新增分类</Button>
-          </Space.Compact>
-          {classList.length === 0 ? (
-            <p className="text-[var(--color-stone)] text-[13px]">还没有分类，先新增一个，再在员工档案里用下拉选择分类</p>
-          ) : (
-            <div className="space-y-2">
-              {classList.map((c) => (
-                <div key={c.id}>
-                  <div className="flex justify-between items-center rounded-[var(--rounded-sm)] bg-[var(--color-surface)] px-3 py-2 cursor-pointer"
-                    onClick={() => toggleMembers(c.id)}>
-                    <span>{c.name}<span className="text-[var(--color-stone)] text-[12px] ml-2">{c.count}人</span></span>
-                    <Space size={4}>
-                      <Button type="link" size="small" onClick={(e) => { e.stopPropagation(); toggleMembers(c.id) }}>
-                        {expandedId === c.id ? '收起' : '查看人员'}
-                      </Button>
-                      <Popconfirm title={`删除分类「${c.name}」？该分类下所有员工会解除分类`} onConfirm={() => handleDeleteClassification(c.id, c.name)}>
-                        <Button type="text" size="small" danger icon={<DeleteOutlined />}
-                          onClick={(e) => e.stopPropagation()} />
-                      </Popconfirm>
-                    </Space>
-                  </div>
-                  {expandedId === c.id && (
-                    <div className="mt-1 rounded-[var(--rounded-sm)] border border-[var(--color-hairline)] p-2 space-y-1">
-                      {membersLoading ? (
-                        <p className="text-[var(--color-stone)] text-[13px]">加载中...</p>
-                      ) : members.length === 0 ? (
-                        <p className="text-[var(--color-stone)] text-[13px]">该分类下暂无人员</p>
-                      ) : (
-                        <>
-                          <div className="flex justify-between items-center pb-1 border-b border-[var(--color-hairline)]">
-                            <Checkbox
-                              checked={selectedMembers.size > 0 && selectedMembers.size === members.length}
-                              indeterminate={selectedMembers.size > 0 && selectedMembers.size < members.length}
-                              onChange={(e) => setSelectedMembers(e.target.checked ? new Set(members.map(m => m.employee_number)) : new Set())}>
-                              全选
-                            </Checkbox>
-                            <Button type="link" size="small" danger loading={removing}
-                              disabled={selectedMembers.size === 0}
-                              onClick={handleRemoveSelectedMembers}>
-                              移除所选（{selectedMembers.size}）
-                            </Button>
-                          </div>
-                          {members.map((m) => (
-                            <div key={m.employee_number} className="text-[13px] flex gap-2 items-center">
-                              <Checkbox checked={selectedMembers.has(m.employee_number)}
-                                onChange={() => toggleMemberSelected(m.employee_number)} />
-                              <span className="font-medium">{m.name}</span>
-                              <span className="text-[var(--color-stone)]">{m.employee_number}</span>
-                              <span className="text-[var(--color-steel)]">{m.department}{m.position ? ` / ${m.position}` : ''}</span>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Modal>
 
-    </div>
-  )
-}
-
-// ─── 内联分类下拉单元格 ───
-
-function TagCell({ employeeNumber, employeeName, disabled, options, onChanged }: {
-  employeeNumber: string
-  employeeName: string
-  disabled?: boolean
-  options: { label: string; value: string }[]
-  onChanged?: () => void
-}) {
-  const [tags, setTags] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    fetchEmployeeTagsByEmployee(employeeNumber).then(r => {
-      setTags((r.data || []).map(t => t.tag_name))
-    }).catch(() => {}).finally(() => setLoading(false))
-  }, [employeeNumber])
-
-  // 分类清单 + 员工已有分类（并集）作为下拉选项
-  const mergedOptions = [...options]
-  for (const t of tags) {
-    if (!mergedOptions.some(o => o.value === t)) {
-      mergedOptions.push({ label: t, value: t })
-    }
-  }
-
-  const handleChange = async (vals: string[]) => {
-    const prev = tags
-    setTags(vals)
-    const added = vals.filter(t => !prev.includes(t))
-    const removed = prev.filter(t => !vals.includes(t))
-    try {
-      for (const t of added) {
-        await saveEmployeeTag({ employee_number: employeeNumber, tag_name: t, action: 'add' })
-      }
-      for (const t of removed) {
-        await saveEmployeeTag({ employee_number: employeeNumber, tag_name: t, action: 'remove' })
-      }
-      // 分类人数变化后刷新选项上的（N人）计数
-      onChanged?.()
-    } catch (e: any) {
-      // 失败回滚乐观更新并提示，避免界面与实际数据分叉
-      setTags(prev)
-      message.error(e?.message || '标签保存失败，已还原')
-    }
-  }
-
-  const [editing, setEditing] = useState(false)
-
-  return (
-    <div onClick={e => e.stopPropagation()} style={{ minWidth: 120 }}>
-      {editing ? (
-        <Select
-          mode="multiple"
-          size="small"
-          autoFocus
-          style={{ width: '100%' }}
-          placeholder="选择分类"
-          value={tags}
-          options={mergedOptions}
-          onChange={handleChange}
-          loading={loading}
-          disabled={disabled}
-          maxTagCount={2}
-          onBlur={() => setEditing(false)}
-          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-        />
-      ) : (
-        <div
-          className="flex flex-wrap gap-0.5 cursor-pointer min-h-[22px] items-center"
-          onClick={() => { if (!disabled) setEditing(true) }}
-        >
-          {tags.length === 0 ? (
-            <span className="text-gray-300 text-xs">+选择分类</span>
-          ) : (
-            <>
-              {tags.slice(0, 3).map(t => <Tag key={t} color="blue" style={{ fontSize: 11, margin: 0 }}>{t}</Tag>)}
-              {tags.length > 3 && <span className="text-[11px] text-[var(--color-stone)]">+{tags.length - 3}</span>}
-            </>
-          )}
-        </div>
-      )}
     </div>
   )
 }

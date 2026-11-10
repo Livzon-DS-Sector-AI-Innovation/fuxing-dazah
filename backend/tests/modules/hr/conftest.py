@@ -84,14 +84,45 @@ def _grant_hr_permissions() -> Iterator[None]:
         yield
 
 
+# ── 员工档案同步：测试内一律呈现「未启用」 ──
+
+
+@pytest.fixture(autouse=True)
+async def _employee_sync_disabled(db_session: AsyncSession) -> AsyncIterator[None]:
+    """共享测试库可能残留 enabled=true（本地联调真开过同步），
+    同步只读守卫会挡住所有走 create/update/delete 的用例。
+    在测试事务内写 disabled，回滚后不影响库里的真实配置；
+    需要同步就绪的用例（test_employee_sync）自行再写 _write_config。"""
+    from app.modules.hr.employee_sync import config as sync_config
+
+    await sync_config.save_config_values(
+        db_session, {sync_config.KEY_ENABLED: "false"},
+    )
+    await db_session.flush()
+    yield
+
+
 # ── 数据库 session（复用根 conftest 的 NullPool engine） ──
 
 @pytest.fixture
 async def db_session() -> AsyncIterator[AsyncSession]:
-    """提供回滚式 AsyncSession，每个测试结束后自动回滚。"""
+    """提供回滚式 AsyncSession，每个测试结束后自动回滚。
+
+    路由处理器会在请求内 commit（生产行为正确）；测试若不屏蔽，commit 会
+    把测试数据永久写入共享库（历史泄漏来源：分类清单 258 条等）。此处把
+    commit 替换为 flush：功能语义不变（数据在同一事务内可见），teardown
+    rollback 统一清理。需要真实 commit 的测试自行用独立 session factory。
+    """
+    from unittest.mock import AsyncMock
+
     async with _test_session_factory() as session:
-        yield session
-        await session.rollback()
+        original_commit = session.commit
+        session.commit = AsyncMock(side_effect=session.flush)  # type: ignore[method-assign]
+        try:
+            yield session
+        finally:
+            session.commit = original_commit  # type: ignore[method-assign]
+            await session.rollback()
 
 
 # ── 测试用户（API 测试用） ──

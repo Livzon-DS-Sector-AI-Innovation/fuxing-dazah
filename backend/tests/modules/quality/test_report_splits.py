@@ -5,6 +5,8 @@
 
 import uuid
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.modules.quality.models import QualityStandardDocument
 from app.modules.quality.repository import (
     create_standard_item,
@@ -24,7 +26,7 @@ def _rand_batch() -> str:
     return f"HAF{uuid.uuid4().hex[:8].upper()}"
 
 
-async def _make_doc(db, code: str, template: str) -> QualityStandardDocument:
+async def _make_doc(db: AsyncSession, code: str, template: str) -> QualityStandardDocument:
     """建文档并按新式绑定表绑模板（legacy template_path 列已退役，不再兜底）。"""
     from app.modules.quality.models import CoaTemplateBinding
 
@@ -44,7 +46,7 @@ async def _make_doc(db, code: str, template: str) -> QualityStandardDocument:
     return doc
 
 
-async def _make_task(db, doc: QualityStandardDocument, batch: str | None = None) -> object:
+async def _make_task(db: AsyncSession, doc: QualityStandardDocument, batch: str | None = None) -> object:
     task = await create_test_task(
         db,
         product_name=doc.product_name,
@@ -60,7 +62,7 @@ async def _make_task(db, doc: QualityStandardDocument, batch: str | None = None)
     return task
 
 
-async def test_splits_assign_rows_to_their_docs(db_session):
+async def test_splits_assign_rows_to_their_docs(db_session: AsyncSession) -> None:
     doc_a = await _make_doc(db_session, "HAF", "tpl-a.docx")
     doc_b = await _make_doc(db_session, "HAF", "tpl-b.docx")
     item_a = await create_standard_item(db_session, doc_a.id, {
@@ -111,7 +113,7 @@ async def test_splits_assign_rows_to_their_docs(db_session):
     assert serials == [serials[0], serials[0] + 1]
 
 
-async def test_splits_reject_unfilled(db_session):
+async def test_splits_reject_unfilled(db_session: AsyncSession) -> None:
     import pytest
 
     from app.core.exceptions import AppException
@@ -126,7 +128,7 @@ async def test_splits_reject_unfilled(db_session):
         await TestTaskService.build_task_report_splits(db_session, task.id)
 
 
-async def test_splits_require_template(db_session):
+async def test_splits_require_template(db_session: AsyncSession) -> None:
     import pytest
 
     from app.core.exceptions import AppException
@@ -146,7 +148,7 @@ async def test_splits_require_template(db_session):
         await TestTaskService.build_task_report_splits(db_session, task.id)
 
 
-async def test_splits_skip_doc_without_rows(db_session):
+async def test_splits_skip_doc_without_rows(db_session: AsyncSession) -> None:
     """空行标准文件不生成 COA（此前会产出「全合格」空报告单），跳过并列名。"""
 
 
@@ -184,7 +186,7 @@ async def test_splits_skip_doc_without_rows(db_session):
     assert splits[0]["skipped_file_nos"] == [doc_a.file_no]
 
 
-async def test_splits_all_docs_empty_rejected(db_session):
+async def test_splits_all_docs_empty_rejected(db_session: AsyncSession) -> None:
     """全部标准文件都无结果行时直接报错，不产出空 COA。"""
     import pytest
 
@@ -208,7 +210,7 @@ async def test_splits_all_docs_empty_rejected(db_session):
     assert "无结果行" in exc_info.value.detail
 
 
-async def test_splits_snapshot_doc_with_all_rows_deduped_still_skipped_listed(db_session):
+async def test_splits_snapshot_doc_with_all_rows_deduped_still_skipped_listed(db_session: AsyncSession) -> None:
     """建任务快照文档全集冗余存储：文档 B 的项目行全部被 (sop_no,item_name)
     去重吞掉时，仍应在 skipped 提示中可见，而不是静默消失。"""
     from app.modules.quality.repository import get_test_task

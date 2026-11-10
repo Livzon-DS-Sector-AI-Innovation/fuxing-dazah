@@ -69,6 +69,19 @@ class HrAccessContext:
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
 
+    def ensure_can_access_department(self, department: str | None) -> None:
+        """校验单条按部门归属的记录是否在数据范围内（入职台账等无员工行的表），越界抛 403。"""
+        if self.is_unrestricted:
+            return
+        if self.data_scope == "self_only":
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        dept = department or ""
+        if self.scoped_departments:
+            if dept not in self.scoped_departments:
+                raise ForbiddenException(f"数据范围限制：仅可操作授权部门记录（{dept}）")
+        elif dept != self.department:
+            raise ForbiddenException("数据范围限制：仅可操作本部门记录")
+
     def apply_list_scope(self, stmt, employee):
         """对关联了员工表的列表查询施加数据范围过滤。
 
@@ -195,6 +208,7 @@ def _resource_for_path(path: str, method: str) -> str | None:
 
     用于数据范围按 resource 计算：只有拥有该 resource 权限的角色参与范围合并，
     避免用户凭其他资源的 data_scope=all 角色在整个 HR 模块被抬权。
+    规则值也可用 {"resource": "..."} 显式指定（不设权限码、仅约束范围计算）。
     """
     for pattern, val in _HR_PATH_PERMISSIONS:
         if re.search(pattern, path):
@@ -203,6 +217,8 @@ def _resource_for_path(path: str, method: str) -> str | None:
                 code = code[0]
             if code and ":" in code:
                 return code.split(":")[1]
+            if isinstance(val, dict) and val.get("resource"):
+                return str(val["resource"])
             return None
     return None
 
@@ -272,15 +288,15 @@ async def get_hr_scope(
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 员工档案
     (r"/employees/export", "hr:profile:export"),
-    (r"/employees/upload", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
-    (r"/employees/batch-regularize", "hr:profile:update"),
-    (r"/employees/.*/probation-extensions", "hr:profile:read"),
     (r"/employees/.*/onboarding-training-record", "hr:training:document"),
     (r"/employees/.*/prejob-training-plan", "hr:training:document"),
     (r"/employees/.*/training-registration", "hr:profile:export"),
-    (r"/employees/training-candidates", "hr:profile:read"),
-    (r"/employees/probation-expiring", "hr:profile:read"),
+    # 待培训人员属培训域：不设权限码（任意 hr: 权限可过门禁，纯培训管理员可用），
+    # 但数据范围按 training resource 计算（None 会让全模块角色最宽范围合并 → 越权看全公司）
+    (r"/employees/training-candidates", {"resource": "training"}),
+    (r"/employees/.*/training-record", "hr:training:document"),
+    (r"/employees/.*/work-permit", "hr:training:document"),
     (r"/employees", {"GET": "hr:profile:read", "POST": "hr:profile:create",
                      "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
     # 花名册
@@ -381,7 +397,6 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/training-notification/generate-assessment", "hr:training:manage"),
     (r"/training-notification/export-", "hr:training:export"),
     (r"/training-notification", "hr:training:document"),
-    (r"/onboarding-evaluation", "hr:training:document"),
     (r"/training-evaluations/export-admin", "hr:training:export"),
     (r"/training-evaluations", "hr:training:document"),
     (r"/training-evaluation", "hr:training:document"),

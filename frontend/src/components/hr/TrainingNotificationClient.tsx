@@ -33,7 +33,7 @@ import {
 import dayjs from 'dayjs'
 import {
   fetchDepartmentsAction,
-  fetchEmployeesAction,
+  fetchAllTrainingRoster,
   fetchEmployeeVarieties,
   fetchTrainingLedgerPages,
   generateTrainingNotification,
@@ -184,7 +184,7 @@ export default function TrainingNotificationClient() {
     if (dept) {
       const deptName = decodeURIComponent(dept)
       setTrainerDept(deptName)
-      fetchEmployeesAction({ department: deptName, page_size: 200 }).then(res => {
+      fetchAllTrainingRoster({ department: deptName }).then(res => {
         const emps = (res.data || []).map((e: any) => ({
           value: e.name, label: `${e.name} - ${e.department || deptName} (${e.employee_number})`,
           employee_number: e.employee_number,
@@ -232,7 +232,7 @@ export default function TrainingNotificationClient() {
     const deptMap: Record<string, string> = {}
     for (const dept of depts) {
       try {
-        const res = await fetchEmployeesAction({ department: dept, page_size: 200 })
+        const res = await fetchAllTrainingRoster({ department: dept })
         // 病假/产假员工自动过滤，不进入出席名单
         const activeList = (res.data || []).filter((e: any) => e.status !== '病假' && e.status !== '产假')
         allFull.push(...activeList)
@@ -676,7 +676,7 @@ export default function TrainingNotificationClient() {
                   if (!dept) return
                   // 自动加载该部门员工作为受训人员
                   try {
-                    const res = await fetchEmployeesAction({ department: dept, page_size: 200 })
+                    const res = await fetchAllTrainingRoster({ department: dept })
                     const emps = (res.data || []).map((e: any) => ({
                       value: e.name, label: `${e.name} - ${e.department || dept} (${e.employee_number})`,
                       employee_number: e.employee_number,
