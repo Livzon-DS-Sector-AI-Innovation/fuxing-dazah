@@ -363,31 +363,31 @@ FIELD_RULES: tuple[FieldRule, ...] = (
         "AI审核结论",
         FieldOwner.AI,
         read_policy=ReadPolicy.DEPRECATED,
-        note="历史遗留，无写入代码；处置=待删（建议先导出 36 条存量，见处置清单）",
+        note="历史遗留，无写入代码；已删列（2026-11-10 GOVERNANCE 执行，36 条存量导出留档 .scratch/hazard-p2-closeout/evidence/governance/）",
     ),
     FieldRule(
         "AI审核理由",
         FieldOwner.AI,
         read_policy=ReadPolicy.DEPRECATED,
-        note="历史遗留，无写入代码；处置=待删",
+        note="历史遗留，无写入代码；已删列（2026-11-10 GOVERNANCE 执行）",
     ),
     FieldRule(
         "AI发现问题",
         FieldOwner.AI,
         read_policy=ReadPolicy.DEPRECATED,
-        note="历史遗留，无写入代码；处置=待删",
+        note="历史遗留，无写入代码；已删列（2026-11-10 GOVERNANCE 执行）",
     ),
     FieldRule(
         "AI补充建议",
         FieldOwner.AI,
         read_policy=ReadPolicy.DEPRECATED,
-        note="历史遗留，无写入代码；处置=待删",
+        note="历史遗留，无写入代码；已删列（2026-11-10 GOVERNANCE 执行）",
     ),
     FieldRule(
         "AI审核时间",
         FieldOwner.AI,
         read_policy=ReadPolicy.DEPRECATED,
-        note="历史遗留，无写入代码；处置=待删",
+        note="历史遗留，无写入代码；已删列（2026-11-10 GOVERNANCE 执行）",
     ),
     FieldRule(
         "重复标签（AI）",
@@ -395,7 +395,7 @@ FIELD_RULES: tuple[FieldRule, ...] = (
         read_policy=ReadPolicy.DEPRECATED,
         note=(
             "写入方已查明=非本系统代码（全仓库零写入零读取，疑飞书自动化/第三方）；"
-            "处置=废弃待删（先在飞书后台核实自动化后删列，见处置清单）"
+            "已删列（2026-11-10 GOVERNANCE 执行，2497 条存量导出留档；若自动化仍存活可能重建列，复核见 evidence）"
         ),
     ),
     # ── C5 无消费人工列（P1-2/D1 拍板：全部停用；前后端零代码消费）──
@@ -467,6 +467,8 @@ def _build_indexes() -> tuple[
 _BY_FIELD, _AUTHORITATIVE, _WRITER_FIELDS = _build_indexes()
 
 _LEVEL_RANK = {"general": 1, "serious": 2, "major": 3}
+# 公开别名（P2-4：hazard_field_metrics 复用同一级别序，单一事实源）
+LEVEL_RANK: dict[str, int] = _LEVEL_RANK
 _EFFECTIVE_SEMANTICS = frozenset({"level", "type", "category"})
 
 _SPLIT_RE = re.compile(r"[,，、;；/]+")

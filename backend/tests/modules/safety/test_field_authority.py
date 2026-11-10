@@ -306,11 +306,11 @@ def test_unconsumed_human_columns_registered_deprecated() -> None:
 
 
 def test_duplicate_tag_disposition_documented() -> None:
-    """重复标签（AI）：写入方已查明=非本系统代码；处置=废弃待删（先核实飞书自动化）。"""
+    """重复标签（AI）：写入方已查明=非本系统代码；已删列（2026-11-10 GOVERNANCE 执行）。"""
     rule = fa.rule_of("重复标签（AI）")
     assert rule is not None
     assert rule.owner is fa.FieldOwner.AI
-    assert "废弃" in rule.note
+    assert "已删列" in rule.note
     assert rule.writers == frozenset()  # 白名单禁止任何写链写入
 
 
