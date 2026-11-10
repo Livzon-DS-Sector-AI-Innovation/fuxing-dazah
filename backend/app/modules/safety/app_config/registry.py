@@ -172,6 +172,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "① 检索多路查询开关（P1-1 R1：开 = 清洗主路+关键词路逐路检索后 RRF "
         "合并；关 = 原单路路径，热回滚；默认开）",
     ),
+    _flag(
+        "SAFETY_HAZARD_ATTACHMENT_CACHE_ENABLED", True,
+        "①②复核员附件缓存（P2-3 E17：下载前按确定性键探测统一存储，命中零下载；"
+        "关 = 回退全量下载；默认开、热生效）",
+    ),
     ConfigItem(
         "SAFETY_HAZARD_RETRIEVAL_TOP_K", "direct_gate", "int", 8,
         "① 检索最终注入 chunk 数（多路合并后取数；默认 8 与历史硬编码一致）",

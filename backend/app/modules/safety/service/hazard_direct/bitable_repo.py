@@ -1163,6 +1163,61 @@ async def _field_id_of(client: SafetyBitableClient, field_name: str) -> str:
     return value
 
 
+# P2-3 附件缓存开关（默认开；probe 异常一律视为 miss 不影响业务）
+_ATTACHMENT_CACHE_KEY = "SAFETY_HAZARD_ATTACHMENT_CACHE_ENABLED"
+
+
+def _attachment_cache_enabled() -> bool:
+    """附件缓存开关（app_config 热生效，env 可应急覆盖）。"""
+    from app.modules.safety.app_config.store import store as config_store
+
+    return bool(config_store.get_bool(_ATTACHMENT_CACHE_KEY, True))
+
+
+def _attachment_store_name(record_id: str, file_token: str, file_name: str) -> str:
+    """确定性存储键名（探侧候选与 store_bytes 落盘调用点共用，防键型漂移）。
+
+    注意返回**未清洗**名——store_bytes 内部会再过 safe_filename；
+    探侧候选需自行先 safe_filename 再拼前缀。
+    """
+    safe_name = file_name.replace("\\", "/").split("/")[-1]
+    return f"direct_{record_id}_{file_token[:12]}_{safe_name}"
+
+
+def _cached_attachment_candidates(record_id: str, file_token: str, file_name: str) -> list[str]:
+    """确定性存储键的本地/MinIO 双形态候选（与 store_bytes 落盘键同源）。
+
+    store_bytes 本地模式返回 ``safety/hazard/<name>``，MinIO 模式返回
+    ``hazard/<name>``；<name> = safe_filename(直接键名)。两种部署形态都可能
+    持有存量，逐一探测。MinIO 部署下本地形态候选是一次内网 miss 往返 +
+    exists 走整对象 GET（storage 无 HEAD 语义的既有欠账）——「零下载」指
+    不再从飞书下载，MinIO 内网流量为额外成本。
+    """
+    from app.modules.safety.attachment_store import safe_filename
+
+    name = safe_filename(_attachment_store_name(record_id, file_token, file_name))
+    return [f"safety/hazard/{name}", f"hazard/{name}"]
+
+
+def _probe_cached_attachment(record_id: str, file_token: str, file_name: str) -> str | None:
+    """探测统一附件存储是否已有该附件；命中返回存量标识，全部未命中返回 None。
+
+    单个候选探测异常只告警并继续下一个候选（fail-open，缓存故障不影响下载）。
+    """
+    from app.modules.safety.attachment_store import exists as store_exists
+
+    for candidate in _cached_attachment_candidates(record_id, file_token, file_name):
+        try:
+            if store_exists(candidate):
+                return candidate
+        except Exception:
+            logger.warning(
+                "附件缓存探测异常（跳过该候选继续）: record_id=%s candidate=%s",
+                record_id, candidate, exc_info=True,
+            )
+    return None
+
+
 async def download_photos(
     client: SafetyBitableClient,
     fields: dict[str, Any],
@@ -1183,6 +1238,12 @@ async def download_photos(
     15 秒 ``ReadTimeout``（实测 18 条并发 3 → 7 条超时失败）。
 
     三级回退：预签名 url → tmp_url → file_token + extra（Drive API）。
+
+    P2-3 附件缓存（E17）：下载前按确定性存储键探测统一附件存储
+    （本地/MinIO 双形态候选），命中直接复用——同一附件被 ①识别重试、
+    ②初审、例外复核员再次处理时零网络下载。飞书 file_token 内容不可变、
+    重传即新 token，无需失效口径。开关
+    ``SAFETY_HAZARD_ATTACHMENT_CACHE_ENABLED``（默认开）可热关回退全量下载。
     """
     from app.modules.safety.attachment_store import store_bytes
 
@@ -1192,11 +1253,19 @@ async def download_photos(
     if include_rectification:
         targets.append((F_PHOTO_RECTIFY, "rectification"))
 
+    cache_enabled = _attachment_cache_enabled()
     for field_name, key in targets:
         for att in f_attachments(fields, field_name):
             file_token = str(att.get("file_token") or "")
             file_name = str(att.get("name") or "unknown")
             data: bytes | None = None
+
+            # 策略 0（P2-3）：确定性键探测统一存储，命中零下载
+            if cache_enabled and file_token:
+                cached = _probe_cached_attachment(record_id, file_token, file_name)
+                if cached is not None:
+                    saved[key].append(cached)
+                    continue
 
             # 策略 1/2：预签名 url → tmp_url
             for url in (att.get("url"), att.get("tmp_url")):
@@ -1236,12 +1305,12 @@ async def download_photos(
                 continue
 
             try:
-                safe_name = file_name.replace("\\", "/").split("/")[-1]
-                # 图片编码/落盘是同步 CPU/IO，放线程跑避免阻塞事件循环（A6）
+                # 图片编码/落盘是同步 CPU/IO，放线程跑避免阻塞事件循环（A6）；
+                # 键名与缓存探侧共用 _attachment_store_name（P2-3 单源）
                 stored = await asyncio.to_thread(
                     store_bytes,
                     "hazard",
-                    f"direct_{record_id}_{file_token[:12]}_{safe_name}",
+                    _attachment_store_name(record_id, file_token, file_name),
                     data,
                     content_type=str(att.get("type") or "application/octet-stream"),
                 )
