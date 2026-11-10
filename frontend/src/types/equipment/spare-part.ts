@@ -158,3 +158,17 @@ export interface LinkEquipmentInput {
   equipment_id: string
   quantity: number
 }
+
+// ==================== 批量删除 ====================
+export interface SparePartBatchDeleteFailure {
+  id: string
+  code: string | null
+  name: string | null
+  reason: string
+}
+
+export interface SparePartBatchDeleteResult {
+  deleted_ids: string[]
+  deleted_count: number
+  failures: SparePartBatchDeleteFailure[]
+}

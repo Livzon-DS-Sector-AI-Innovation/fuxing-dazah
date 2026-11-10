@@ -300,6 +300,19 @@ export const moduleMenus: ModuleMenu[] = [
       // 偏差/CAPA 有独立读码，持模块通配读码的 QA 人员同样可见。
       { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:deviation:read", "qa:*:read"] },
       { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:capa:read", "qa:*:read"] },
+      // 年度产品回顾（PQR）：一级分组 + 三个二级入口，各按权限显隐。
+      // 可见性口径 = 「读得动该页」：enter/manage 权限在后端隐含 PQR 读取，
+      // 纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）。
+      {
+        key: "apr",
+        label: "年度产品回顾",
+        path: "/qa/apr",
+        children: [
+          { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:apr:enter", "qa:apr:read", "qa:*:read"] },
+          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:apr:read", "qa:*:read"] },
+          { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
+        ],
+      },
       { key: "audit", label: "审计日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
     ],
   },

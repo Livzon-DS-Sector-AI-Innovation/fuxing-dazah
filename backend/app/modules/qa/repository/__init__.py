@@ -1,5 +1,6 @@
 """QA 模块数据访问层：按域拆分，本文件全量 re-export。"""
 
+from app.modules.qa.repository import apr as apr
 from app.modules.qa.repository.ai import (
     get_ai_run,
     get_latest_ai_run,
@@ -62,6 +63,7 @@ from app.modules.qa.repository.processing import (
 )
 
 __all__ = [
+    "apr",
     "REPEAT_WINDOW",
     "DOCUMENT_SORT_COLUMNS",
     "get_master",

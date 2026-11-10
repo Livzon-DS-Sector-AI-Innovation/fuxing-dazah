@@ -1,0 +1,1294 @@
+/* 年度产品回顾（PQR）三个页面共用的版面语言。
+   术语：册条（scopeBar）= 页面范围与主操作；sheet = 一页记录；戳（stamp）= 年度状态。
+   仅使用 DESIGN.md 的 token，不引入新色值。 */
+
+/* ── 册条 ───────────────────────────────────────────────────────────── */
+
+.scopeBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: var(--color-surface);
+  margin-bottom: 8px;
+}
+
+.scopeCluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.scopeTail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+/* ── 元信息：用 1px 竖线分隔同类事实，不用「·」串起来 ───────────────── */
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  margin-top: 2px;
+}
+
+.metaItem {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-steel);
+}
+
+.metaItem:not(:first-child) {
+  padding-left: 10px;
+  border-left: 1px solid var(--color-hairline);
+}
+
+/* ── 年度戳：定稿状态用纸面盖章的语言，不靠颜色渐变 ───────────────── */
+
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.stampLocked {
+  color: var(--color-error);
+  background: var(--color-tint-rose);
+  border-color: var(--color-tint-rose-deep);
+}
+
+.stampOpen {
+  color: var(--color-success-deep);
+  background: var(--color-tint-mint);
+  border-color: var(--color-tint-mint-deep);
+}
+
+.stampWarn {
+  color: var(--color-warning);
+  background: var(--color-tint-peach);
+  border-color: var(--color-tint-peach-deep);
+}
+
+.stampNeutral {
+  color: var(--color-slate);
+  background: var(--color-tint-gray);
+  border-color: var(--color-hairline);
+}
+
+/* ── 年度字段（录入页可改年度）────────────────────────────────────── */
+
+.yearField {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  /* 与同一行的 antd 控件等高：DESIGN.md 的输入高度是 44px */
+  padding: 0 12px 0 14px;
+  height: 44px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: 8px;
+  background: var(--color-canvas);
+  cursor: text;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.yearFieldLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-steel);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* 内层 InputNumber 完全透明：边框、底色、圆角、聚焦环都归外层票据所有。
+   antd 的 borderless 变体在 focus 时仍会加 ring，这里连 ring 一起清掉。 */
+.yearField :global(.ant-input-number),
+.yearField :global(.ant-input-number:hover),
+.yearField :global(.ant-input-number-focused),
+.yearField :global(.ant-input-number-status-error) {
+  width: 60px;
+  height: 24px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  /* antd v6 的聚焦态用 outline 而不是 border，不清掉就是双层框 */
+  outline: none;
+}
+
+.yearField :global(.ant-input-number-input) {
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-ink);
+}
+
+.yearField :global(.ant-input-number-handler-wrap) {
+  display: none;
+}
+
+.yearField:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-bg);
+}
+
+/* ── 年度页签（汇总页在已有年度间切换）────────────────────────────── */
+
+.yearTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 9999px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+}
+
+.yearTab {
+  padding: 2px 11px;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.yearTab:hover {
+  background: var(--color-tint-gray);
+  color: var(--color-charcoal);
+}
+
+.yearTabActive,
+.yearTabActive:hover {
+  background: var(--color-ink-deep);
+  border-color: var(--color-ink-deep);
+  color: var(--color-on-dark);
+}
+
+.yearTab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ── 下划线分段（数据类型 / 趋势范围）───────────────────────────────── */
+
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.segOption {
+  position: relative;
+  padding: 4px 10px 6px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.segOption:hover {
+  color: var(--color-ink);
+}
+
+.segOptionActive,
+.segOptionActive:hover {
+  color: var(--color-ink);
+  font-weight: 600;
+  border-bottom-color: var(--color-ink);
+}
+
+.segOption:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.segCount {
+  margin-left: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-stone);
+}
+
+/* ── sheet：一页记录 ────────────────────────────────────────────────── */
+
+.sheet {
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.sheetHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px 10px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.sheetTitleWrap {
+  min-width: 0;
+}
+
+.sheetTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+
+.sheetActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.sheetToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+}
+
+.sheetBody {
+  padding: 14px;
+}
+
+.sheetBodyBleed {
+  padding: 0;
+}
+
+.sheetFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  padding: 7px 14px;
+  border-top: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-steel);
+}
+
+/* sheet 内的表格：页眉压小、行距收紧，数字列等宽 */
+.sheet :global(.ant-table-thead > tr > th) {
+  background: var(--color-surface-soft) !important;
+  color: var(--color-steel) !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-hairline-strong) !important;
+}
+
+.sheet :global(.ant-table-thead > tr > th)::before {
+  display: none !important;
+}
+
+.sheet :global(.ant-table-summary > tr > td) {
+  background: var(--color-surface-soft);
+  border-top: 1px solid var(--color-hairline-strong);
+  border-bottom: none;
+  /* 统计行是表脚，必须和数据行一样紧，antd 默认 16px 内衬会把表脚拉成一排大格子 */
+  padding: 3px 12px !important;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.sheet :global(.ant-table-tbody > tr:last-child > td) {
+  border-bottom: none;
+}
+
+/* ── 汇总矩阵：表内滚动，表头固定，前两列冻结 ──────────────────────── */
+
+.sheet :global(.ant-table-body) {
+  scrollbar-width: thin;
+}
+
+.sheet :global(.ant-table-body)::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.sheet :global(.ant-table-body)::-webkit-scrollbar-thumb {
+  background: var(--color-hairline-strong);
+  border-radius: 9999px;
+}
+
+.sheet :global(.ant-table-body)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 冻结列必须有实底，否则横向滚动时数据会从下面透出来。 */
+.sheet :global(.ant-table-tbody > tr > .ant-table-cell-fix-start) {
+  background: var(--color-canvas);
+}
+
+.sheet :global(.ant-table-tbody > tr:hover > .ant-table-cell-fix-start) {
+  background: var(--color-surface-soft);
+}
+
+/* 行悬停只染数据行，统计行保持安静。 */
+.sheet :global(.ant-table-tbody > tr.ant-table-row:hover > td) {
+  background: var(--color-surface-soft);
+}
+
+.colHead {
+  line-height: 1.35;
+}
+
+.colNameRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+}
+
+.colName {
+  display: block;
+  white-space: normal;
+  text-wrap: balance;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-charcoal);
+}
+
+.colSpec {
+  /* 长限度最多占两行，悬停看全文：否则一条几十字的限度会把整行表头拉到五行高。 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--color-steel);
+  white-space: normal;
+  text-wrap: balance;
+  text-align: center;
+}
+
+/* 组名行：读作册页的分栏标签，白底小字，不和数据行抢底色。
+   选择器带上 .sheet 与 thead，压过上面那条表头通用规则。 */
+.sheet :global(.ant-table-thead) > tr > th.groupHeadCell {
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  color: var(--color-slate) !important;
+  background: var(--color-canvas) !important;
+  border-bottom: 1px solid var(--color-hairline) !important;
+  text-align: left !important;
+}
+
+/* 组界只画在组与组之间，像账页的分栏线。 */
+.groupStart {
+  border-inline-start: 1px solid var(--color-hairline) !important;
+}
+
+/* 文字结果是判定，不抢数值；录入框是单行，内部换行属导入残留，按单行显示。 */
+.textValue {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-charcoal);
+}
+
+.cellEmpty {
+  color: var(--color-muted);
+}
+
+/* ── 列统计：固定在表体底部的一截表脚 ──────────────────────────────── */
+
+.statLabel {
+  display: block;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--color-steel);
+  white-space: nowrap;
+}
+
+.statValue {
+  font-size: 12px;
+  color: var(--color-charcoal);
+}
+
+.statNote {
+  font-size: 11px;
+  color: var(--color-steel);
+}
+
+/* 固定表脚与数据区之间一道重线：以下是统计，不是批值。 */
+.sheet :global(.ant-table-summary) {
+  box-shadow: inset 0 1px 0 var(--color-hairline-strong);
+}
+
+/* ── 年度结论：无越界时只留一句话 ───────────────────────────────────── */
+
+.conclusion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 13px 14px;
+}
+
+.conclusionCheck {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  background: var(--color-tint-mint);
+  border: 1px solid var(--color-tint-mint-deep);
+  color: var(--color-success-deep);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.conclusionText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--color-ink);
+}
+
+/* ── 录入矩阵：账页式排版（AprEntryPage 行内编辑表格） ────────────────
+   横线承担分行，竖线只标组界；数字列右对齐，表头名称深、限度浅。 */
+
+/* 冻结列的分界线：批号列右侧、操作列左侧各一道 */
+.matrix :global(.ant-table-cell-fix-start-shadow) {
+  border-inline-end: 1px solid var(--color-hairline-strong);
+}
+
+.matrix :global(.ant-table-cell-fix-end) {
+  border-inline-start: 1px solid var(--color-hairline-strong);
+}
+
+/* 分组结构线：只画在每组第一列的左侧（表头两行与表体对齐） */
+.matrix .groupStart {
+  border-inline-start: 1px solid var(--color-hairline);
+}
+
+/* 组名行：像册页分组标签，白底小字，不和数据行抢底色 */
+.matrix :global(.ant-table-thead > tr:not(:last-child) > th) {
+  padding: 3px 8px !important;
+  font-size: 11px !important;
+  line-height: 18px;
+  letter-spacing: 0.04em;
+  color: var(--color-slate) !important;
+  background: var(--color-canvas) !important;
+  border-bottom: 1px solid var(--color-hairline) !important;
+}
+
+/* 指标行：名称用深色，限度保持浅色小字 */
+.matrix :global(.ant-table-thead > tr:last-child > th) {
+  color: var(--color-charcoal) !important;
+}
+
+/* 悬停提示这格可编辑 */
+.matrix :global(tbody td):hover {
+  background: rgba(15, 15, 15, 0.02);
+}
+
+/* 录入矩阵里的所有可编辑格：值居中，和居中的列头对齐 */
+.matrix :global(tbody td input) {
+  text-align: center;
+}
+
+/* 列多时横向滚动条压细，别像系统默认控件一样抢眼 */
+.matrix :global(.ant-table-content) {
+  scrollbar-width: thin;
+}
+
+.matrix :global(.ant-table-content)::-webkit-scrollbar {
+  height: 8px;
+}
+
+.matrix :global(.ant-table-content)::-webkit-scrollbar-thumb {
+  background: var(--color-hairline-strong);
+  border-radius: 9999px;
+}
+
+.matrix :global(.ant-table-content)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 有未保存编辑的格子：淡琥珀底，与操作列的「保存」呼应；压过 hover/focus */
+.cellDirty {
+  background: rgba(212, 154, 2, 0.09) !important;
+}
+
+/* 一批多行时，每批首行画一道重一点的横向规则线，让行分组像账页一样可读 */
+.matrix tbody tr.batchStart:not(:first-child) > td {
+  border-top: 1px solid var(--color-hairline-strong);
+}
+
+/* 批次号前的铅笔点：这一批有未保存的改动 */
+.batchDirty::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 9999px;
+  background: var(--color-warning);
+  vertical-align: 1px;
+}
+
+/* 表脚图例：解释表格里出现的三种标记 */
+.legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.legendDirty,
+.legendOos,
+.legendOot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legendDirty::before,
+.legendOos::before,
+.legendOot::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.legendDirty::before {
+  background: rgba(212, 154, 2, 0.45);
+}
+
+.legendOos::before {
+  background: var(--color-error);
+}
+
+.legendOot::before {
+  background: var(--color-warning);
+}
+
+/* ── 数字排版 ───────────────────────────────────────────────────────── */
+
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* 数值后方的小号单位：提醒 % / ppm 等口径，不抢数值本身 */
+.unit {
+  margin-left: 2px;
+  font-size: 11px;
+  color: var(--color-steel);
+}
+
+.batchNo {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-ink);
+  letter-spacing: 0.01em;
+}
+
+.rowIndex {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--color-stone);
+}
+
+.violation {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 64px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.violation::before {
+  content: '';
+  width: 2px;
+  height: 11px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.violationOos {
+  color: var(--color-error);
+  background: var(--color-tint-rose);
+}
+
+.violationOot {
+  color: var(--color-warning);
+  background: var(--color-tint-peach);
+}
+
+/* ── 越界清单：汇总页唯一的强调元素 ─────────────────────────────────── */
+
+.exceptions {
+  margin-top: 14px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.exceptionsHead {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+}
+
+.count {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.countValue {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.countValueOos {
+  color: var(--color-error);
+}
+
+.countValueOot {
+  color: var(--color-warning);
+}
+
+.countValueClean {
+  color: var(--color-success-deep);
+}
+
+.countLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-steel);
+  letter-spacing: 0.02em;
+}
+
+.exceptionsNote {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-steel);
+}
+
+.exceptionsList {
+  max-height: 336px;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-hairline);
+  scrollbar-width: thin;
+}
+
+.exceptionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr) 88px 76px;
+  gap: 12px;
+  align-items: center;
+  padding: 5px 14px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-charcoal);
+  border-top: 1px solid var(--color-hairline-soft);
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.exceptionRow:first-child {
+  border-top: none;
+}
+
+.exceptionRow:hover {
+  background: var(--color-surface-soft);
+}
+
+.exceptionRow:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.exceptionSection {
+  color: var(--color-steel);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exceptionValue {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-weight: 600;
+}
+
+/* ── 录入抽屉内的记录页 ─────────────────────────────────────────────── */
+
+.formSheet {
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.formSheetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  background: var(--color-surface-soft);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.formGroup {
+  padding: 7px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-steel);
+  letter-spacing: 0.02em;
+  background: var(--color-canvas);
+}
+
+.formRow {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.05fr) 200px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 10px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.formRowLabel {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--color-ink);
+}
+
+.formRowMeta {
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--color-steel);
+}
+
+.formRowSpec {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-slate);
+  font-variant-numeric: tabular-nums;
+}
+
+.formRowError {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--color-error);
+}
+
+/* 数值输入框尾部的「未检出」快捷填写：一点落文字结果，省得手打 */
+.ndQuick {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--color-steel);
+}
+
+.ndQuick:hover {
+  color: var(--color-primary);
+}
+
+.progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-steel);
+}
+
+.progressBar {
+  position: relative;
+  width: 72px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--color-hairline);
+  overflow: hidden;
+}
+
+.progressFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--color-primary);
+  border-radius: 9999px;
+  transition: width 150ms ease;
+}
+
+/* ── 动效：只在越界清单出现时演一次 ─────────────────────────────────── */
+
+@media (prefers-reduced-motion: no-preference) {
+  .exceptions {
+    animation: aprReveal 180ms ease-out both;
+  }
+
+  @keyframes aprReveal {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+/* ── 窄屏：册条堆叠、异常行改两行 ───────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .scopeTail {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .exceptionRow {
+    grid-template-columns: minmax(0, 1fr) 76px 78px;
+    row-gap: 2px;
+  }
+
+  .exceptionSection {
+    grid-column: 1 / -1;
+  }
+
+  .formRow {
+    grid-template-columns: minmax(0, 1fr) 168px;
+  }
+
+  .formRowSpec {
+    display: none;
+  }
+}
+
+/* 嵌在 sheet 里时去掉自己的边框与留白，读作这张 sheet 的结论条 */
+.exceptionsFlush {
+  margin-top: 0;
+  border: none;
+  border-radius: 0;
+}
+
+/* 列头里的趋势入口：图标按钮，避免每个数值列头多三行文字 */
+.trendButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-stone);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.trendButton:hover {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.trendButton:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* 越界清单超出可显示条数时的提示行 */
+.exceptionsMore {
+  padding: 6px 14px 7px;
+  border-top: 1px solid var(--color-hairline-soft);
+  font-size: 12px;
+  color: var(--color-steel);
+  background: var(--color-surface-soft);
+}
+
+/* ── 趋势弹窗与图例 ─────────────────────────────────────────────────── */
+
+.trendTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trendTitle :global(.anticon) {
+  color: var(--color-primary);
+}
+
+.trendToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-hairline);
+  margin-bottom: 10px;
+}
+
+.trendMeta {
+  margin-bottom: 2px;
+}
+
+/* 图例：数据状态用线/点，参考线用线型，不只靠颜色区分。 */
+.chartLegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin: 2px 0 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-slate);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.legendDot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--color-canvas);
+}
+
+.legendLine {
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+/* 正常值既是线也是点：线样中间叠一个点，和 OOT/OOS 的单点区分开。 */
+.legendLine::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: inherit;
+  border: 1.5px solid var(--color-canvas);
+  transform: translate(-50%, -50%);
+}
+
+.legendRule {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 0;
+  border-top-width: 1px;
+}
+
+.trendHint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-steel);
+}
+
+/* ── 产品目录（配置页左栏）─────────────────────────────────────────────
+   像一本书的目录页：层级靠缩进和规则线表达，整块底色只留给「正在编辑的段」。
+   产品行选中不填色，只加一道 2px 书脊和加重的名称。 */
+
+.railBody {
+  padding: 6px 8px 8px;
+}
+
+.railGroup + .railGroup {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.railProduct {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 4px;
+  border-left: 2px solid transparent;
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.railProduct:hover {
+  background: var(--color-surface);
+}
+
+.railProduct:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.railProductActive {
+  border-left-color: var(--color-primary);
+}
+
+.railCode {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: 0.04em;
+}
+
+.railName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--color-charcoal);
+}
+
+.railNameActive {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.railNameOff {
+  color: var(--color-stone);
+}
+
+.railCount {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-steel);
+  white-space: nowrap;
+}
+
+.railFlag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--color-tint-gray);
+  color: var(--color-stone);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.railTag {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--color-tint-gray);
+  color: var(--color-slate);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/* 行尾的 ⋮：不占视觉重量，悬停或键盘聚焦时才出现 */
+.railMore {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-stone);
+  font-size: 12px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.railProduct:hover .railMore,
+.railSection:hover .railMore,
+.railMore:focus-visible {
+  opacity: 1;
+}
+
+.railMore:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--color-charcoal);
+}
+
+@media (hover: none) {
+  .railMore {
+    opacity: 1;
+  }
+}
+
+/* 缩进把段名对到产品名下面，读起来是「这本册里的几章」 */
+.railSections {
+  padding: 0 0 6px 24px;
+}
+
+.railSection {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.railSection:hover {
+  background: var(--color-surface);
+}
+
+.railSection:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+/* 全栏唯一的填充色，含义明确：这就是右栏正在编辑的那一段 */
+.railSectionActive,
+.railSectionActive:hover {
+  background: var(--color-primary-bg);
+}
+
+.railDot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+}
+
+.railSectionName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--color-charcoal);
+}
+
+.railSectionNameActive {
+  color: var(--color-primary-pressed);
+  font-weight: 500;
+}
+
+.railEmpty {
+  padding: 7px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--color-stone);
+}
+
+.railAdd {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 8px 5px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.railAdd:hover {
+  background: var(--color-primary-bg);
+}
+
+.railAdd:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}

@@ -37,8 +37,10 @@ def test_api_and_scheduler_service_references_resolve() -> None:
     missing: list[str] = []
     for source in sources:
         text = source.read_text()
-        # deviations.py 以 `from app.modules.qa.service import deviation as service` 引用子模块
-        target = deviation if source.name == "deviations.py" else qa_service
+        # deviations.py / apr.py 以 `from app.modules.qa.service import <子模块> as service`
+        # 引用子模块，此时 service.X 解析到子模块而不是包。
+        submodule_aliases = {"deviations.py": deviation, "apr.py": qa_service.apr}
+        target = submodule_aliases.get(source.name, qa_service)
         for name in sorted(set(re.findall(r"\bservice\.(\w+)", text))):
             if not hasattr(target, name):
                 missing.append(f"{source.name}: service.{name}")
@@ -61,11 +63,31 @@ def test_subpackages_reexport_all_public_definitions() -> None:
         for sub in sorted((QA_ROOT / pkg_name).glob("*.py")):
             if sub.name.startswith("_"):
                 continue
-            if pkg_name == "service" and sub.name in ("ai_analysis.py", "deviation_ai.py"):
-                # AI 分析/偏差 AI 辅助以整模块暴露（service.X），不逐名 re-export
+            if sub.name == "apr.py" or (
+                pkg_name == "service"
+                and sub.name in ("ai_analysis.py", "deviation_ai.py")
+            ):
+                # schemas/repository 的 apr.py 以整模块引用（service 里
+                # ``import ...repository.apr as repo`` / ``schemas.apr import X``），
+                # 不逐名 re-export；只要子模块本身可达即可。service 侧的
+                # apr 已拆成 apr/ 子包，导入面由下方专项测试兜底。
                 assert hasattr(module, sub.stem)
                 continue
             for name in _public_defs(sub):
                 if not hasattr(module, name):
                     missing.append(f"{pkg_name}/{sub.name}: {name}")
     assert not missing, f"__init__ 漏导出: {missing}"
+
+
+def test_apr_subpackage_reexports_all_public_definitions() -> None:
+    """apr/ 子包按域拆分（common/template/entry/…）后，子模块的公开定义
+    必须全部在 apr/__init__ re-export——api 层仍以 service.apr.X 调用。"""
+    apr_pkg = QA_ROOT / "service" / "apr"
+    missing: list[str] = []
+    for sub in sorted(apr_pkg.glob("*.py")):
+        if sub.name.startswith("_"):
+            continue
+        for name in _public_defs(sub):
+            if not hasattr(qa_service.apr, name):
+                missing.append(f"apr/{sub.name}: {name}")
+    assert not missing, f"apr 子包漏导出: {missing}"

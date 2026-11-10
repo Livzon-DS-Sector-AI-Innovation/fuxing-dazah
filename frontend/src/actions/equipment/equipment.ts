@@ -7,6 +7,7 @@ import {
   CreateFailureCodeInput, UpdateFailureCodeInput,
   CreateWorkOrderInput, UpdateWorkOrderInput, AssignWorkOrderInput, CompleteWorkOrderInput, VerifyWorkOrderInput,
   CreateSparePartInput, UpdateSparePartInput, StockSettingsInput, StockInboundInput, StockOutboundInput, StockAdjustInput, LinkEquipmentInput,
+  SparePartBatchDeleteResult,
   CreateMaintenancePlanInput, UpdateMaintenancePlanInput,
   CreateInspectionTemplateInput, UpdateInspectionTemplateInput,
   CreateInspectionTemplateItemInput, UpdateInspectionTemplateItemInput,
@@ -278,6 +279,15 @@ export async function deleteSparePart(id: string): Promise<ActionResult> {
   return result
 }
 
+export async function batchDeleteSpareParts(ids: string[]): Promise<ActionResult<SparePartBatchDeleteResult>> {
+  const result = await actionFetch<SparePartBatchDeleteResult>(`${API_BASE_URL}/api/v1/equipment/spare-parts/batch-delete`, {
+    method: 'POST',
+    body: JSON.stringify({ spare_part_ids: ids }),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
 export interface StockMutationResult {
   current_qty: number
   safety_qty: number
@@ -452,7 +462,7 @@ export async function uploadWorkOrderImages(workOrderId: string, formData: FormD
     })
     if (!response.ok) {
       const err = await response.json().catch(() => ({}))
-      return { success: false, error: (err as any).message || '上传失败' }
+      return { success: false, error: (err as { message?: string }).message || '上传失败' }
     }
     revalidatePath('/equipment')
     const json = await response.json()
@@ -522,7 +532,8 @@ export async function importEquipments(formData: FormData): Promise<ActionResult
   try {
     const authHeaders = await getAuthHeaders()
     // 文件上传不能设 Content-Type，fetch 会自动加 multipart/form-data + boundary
-    const { 'Content-Type': _ct, ...uploadHeaders } = authHeaders
+    const uploadHeaders = { ...authHeaders }
+    delete uploadHeaders['Content-Type']
     const res = await fetch(`${API_BASE_URL}/api/v1/equipment/equipments/import`, {
       method: 'POST',
       headers: uploadHeaders,
@@ -530,7 +541,7 @@ export async function importEquipments(formData: FormData): Promise<ActionResult
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      return { success: false, error: (err as any).message || '导入失败' }
+      return { success: false, error: (err as { message?: string }).message || '导入失败' }
     }
     const json = await res.json()
     const data = (json.data ?? json) as ImportResult
@@ -560,7 +571,8 @@ export async function downloadSparePartImportTemplate(): Promise<ActionResult<st
 export async function importSpareParts(formData: FormData): Promise<ActionResult<ImportResult>> {
   try {
     const authHeaders = await getAuthHeaders()
-    const { 'Content-Type': _ct, ...uploadHeaders } = authHeaders
+    const uploadHeaders = { ...authHeaders }
+    delete uploadHeaders['Content-Type']
     const res = await fetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/import`, {
       method: 'POST',
       headers: uploadHeaders,
@@ -568,7 +580,7 @@ export async function importSpareParts(formData: FormData): Promise<ActionResult
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      return { success: false, error: (err as any).message || '导入失败' }
+      return { success: false, error: (err as { message?: string }).message || '导入失败' }
     }
     const json = await res.json()
     const data = (json.data ?? json) as ImportResult

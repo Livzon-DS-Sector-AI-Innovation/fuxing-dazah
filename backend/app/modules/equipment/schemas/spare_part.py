@@ -209,6 +209,32 @@ class OutboundTransactionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ==================== 批量删除 ====================
+class SparePartBatchDeleteRequest(BaseModel):
+    """批量删除备件请求"""
+
+    spare_part_ids: list[uuid.UUID] = Field(
+        ..., min_length=1, max_length=200, description="待删除备件 ID 列表",
+    )
+
+
+class SparePartBatchDeleteFailure(BaseModel):
+    """单个删除失败明细"""
+
+    id: uuid.UUID
+    code: str | None = None
+    name: str | None = None
+    reason: str
+
+
+class SparePartBatchDeleteResult(BaseModel):
+    """批量删除结果：可删即删，不可删的逐条返回原因"""
+
+    deleted_ids: list[uuid.UUID]
+    deleted_count: int
+    failures: list[SparePartBatchDeleteFailure]
+
+
 # ==================== 设备备件消耗历史 ====================
 class EquipmentConsumptionRecord(BaseModel):
     """设备备件消耗记录"""

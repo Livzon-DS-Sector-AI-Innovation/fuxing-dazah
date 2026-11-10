@@ -15,6 +15,7 @@ services:
       - ./app:/app/app
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini:ro
+      - ./assets:/app/assets:ro
       - ./logs:/app/logs
       - ./uploads:/app/uploads
     command: >
