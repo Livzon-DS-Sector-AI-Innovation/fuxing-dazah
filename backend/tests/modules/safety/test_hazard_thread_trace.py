@@ -1,4 +1,4 @@
-"""P2-2 G1/G2 —— ①②⑤/P2-1 写回 Thread 留痕（writeback_trace）测试。
+"""P2-2 G1/G2 + P3-3 G2 —— ①②⑤/P2-1 写回与③督办卡 Thread 留痕测试。
 
 形态与 audit_trail 同构：开关关=零旁挂零行为；开=仅增 agent_triggers 留痕行
 （thread_key=bitable:hazard:<record_id>，按记录聚合 ①②③⑤ 全历史的数据面）。
@@ -528,6 +528,35 @@ class TestReviewScoringHooks:
         assert ok is False
         assert capture.calls[0]["applied"] is False
 
+    async def test_review_writer_param_distinguishes_rule_paths(
+        self, capture: _Capture
+    ):
+        """P3-3 G1 预埋 seam：write_review 的 writer 参数透传留痕——②-b/②-c
+        （review.py WIP 落库后）传 ai_autopass/ai_rewrite 与 ②主链 review
+        区分；不传默认 review（现行为零变化）。"""
+        from app.modules.safety.service.hazard_direct import bitable_repo
+
+        # 枚举契约钉（spec 字面量）
+        assert writeback_trace.WRITER_AI_AUTOPASS == "ai_autopass"
+        assert writeback_trace.WRITER_AI_REWRITE == "ai_rewrite"
+
+        await bitable_repo.write_review(
+            _FakeBClient(), "recR3", conclusion="已通过", summary="自动通过说明"
+        )
+        await bitable_repo.write_review(
+            _FakeBClient(), "recR4", conclusion="已通过", summary="跟随改写说明",
+            writer=writeback_trace.WRITER_AI_REWRITE,
+        )
+        await bitable_repo.write_review(
+            _FakeBClient(), "recR5", conclusion="已通过", summary="autopass",
+            writer=writeback_trace.WRITER_AI_AUTOPASS,
+        )
+        assert [(c["record_id"], c["writer"]) for c in capture.calls] == [
+            ("recR3", "review"),      # 默认=②主链（回归不变）
+            ("recR4", "ai_rewrite"),  # ②-c 跟随改写
+            ("recR5", "ai_autopass"), # ②-b 自动通过
+        ]
+
     async def test_scoring_success_traces_applied(self, capture: _Capture):
         from app.modules.safety.service.hazard_direct import bitable_repo
 
@@ -641,4 +670,117 @@ class TestThreadEndpoints:
             "/api/v1/platform/superagent/threads/bitable:hazard:nope/history"
         )
         assert resp.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════
+# G2（P3-3）——③督办催办卡挂同一 Thread（writer=dunning，每卡一行）
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestDunningCardsThreadTrace:
+    """send_urge_cards：卡发送成功→agent_triggers 落一行（与①②⑤同 Thread）。
+
+    粒度与 audit_trail.record_dunning_card_sent 同构：每卡一行（per 收件人）；
+    skipped/failed 不留痕（判据性跳过设计内）；trace 关=零行。
+    """
+
+    @staticmethod
+    def _person(name: str) -> Any:
+        from types import SimpleNamespace
+
+        # id_scope=safety + open_id：直取链，不触发 mention 换算
+        return SimpleNamespace(
+            name=name, user_id=f"u_{name}", open_id=f"ou_{name}", id_scope="safety",
+        )
+
+    @staticmethod
+    async def _dunning_rows() -> list[AgentTrigger]:
+        async with _test_session_factory() as s:
+            return (
+                (
+                    await s.execute(
+                        select(AgentTrigger).where(
+                            AgentTrigger.external_id.like("writeback:dunning:%")
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+    async def _run_send(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """桩掉收件人解析/发卡/卡片构建，驱动 send_urge_cards 真链。"""
+        from app.modules.safety.feishu import mention, notification, progress_card
+        from app.modules.safety.service.hazard_direct import progress_dunning
+        from tests.conftest import _test_session_factory
+
+        view = progress_dunning.bitable_repo.HazardView(
+            record_id="recD1", hazard_no="YJ-2026-D01",
+            description="未按期更新整改进展",
+        )
+        persons = [self._person("张三"), self._person("李四"), self._person("王五")]
+
+        async def _fake_resolve(views):
+            return [(view, "责任人", persons[0]),
+                    (view, "部门主管", persons[1]),
+                    (view, "监护人", persons[2])]
+
+        async def _fake_send(**kwargs):
+            # 收件人走 user_id 优先链（u_王五发送失败→skipped 不留痕）
+            return kwargs.get("open_id") != "u_王五"
+
+        monkeypatch.setattr(progress_dunning, "resolve_dunning_recipients", _fake_resolve)
+        monkeypatch.setattr(notification, "send_user_card", _fake_send)
+        monkeypatch.setattr(
+            progress_card, "build_progress_card", lambda v, m: ("", []),
+        )
+        monkeypatch.setattr(
+            mention, "resolve_open_ids", lambda names: {},
+        )
+        # 自管短会话钉测试库（autouse Noop 桩恢复为测试工厂）
+        import app.core.database as core_db
+
+        monkeypatch.setattr(core_db, "async_session_factory", _test_session_factory)
+        # audit_trail 旁挂关闭（防 Noop 会话把失败计入 errors）
+        monkeypatch.setenv("SAFETY_HAZARD_AUDIT_TRAIL_ENABLED", "false")
+
+        stats, _plan, sent_plan, failed_plan = await progress_dunning.send_urge_cards(
+            [view]
+        )
+        return {"stats": stats, "sent_plan": sent_plan, "failed_plan": failed_plan}
+
+    async def test_sent_cards_leave_dunning_rows_per_card(self, monkeypatch):
+        _on(monkeypatch)
+        out = await self._run_send(monkeypatch)
+
+        # 业务面：2 发送成功 + 1 跳过（失败）
+        assert out["stats"]["sent"] == 2
+        assert out["stats"]["skipped"] == 1
+
+        # 留痕面：每张成功卡一行（王五不留痕）；与①②⑤同 thread_key
+        rows = await self._dunning_rows()
+        assert len(rows) == 2
+        assert {r.thread_key for r in rows} == {"bitable:hazard:recD1"}
+        assert all(
+            r.external_id.startswith("writeback:dunning:recD1:") for r in rows
+        )
+        payload_notes = sorted(r.payload["note"] for r in rows)
+        assert payload_notes == ["张三(责任人)", "李四(部门主管)"]
+        for r in rows:
+            assert r.payload["writer"] == "dunning"
+            assert r.payload["record_id"] == "recD1"
+            assert r.payload["hazard_no"] == "YJ-2026-D01"
+            assert r.payload["fields"] == ["督办催办卡"]
+            assert r.actor == {"id": "dunning", "type": "ai_pipeline"}
+            assert r.human is False
+            assert any(s.get("step") == "applied" for s in (r.disposition or []))
+
+    async def test_switch_off_zero_dunning_rows(self, monkeypatch):
+        _off(monkeypatch)
+        out = await self._run_send(monkeypatch)
+
+        # 业务面照常发送（留痕开关不影响催办）
+        assert out["stats"]["sent"] == 2
+
+        assert await self._dunning_rows() == []
 

@@ -1112,11 +1112,14 @@ async def write_review(
     *,
     conclusion: str,
     summary: str,
+    writer: str = writeback_trace.WRITER_REVIEW,
 ) -> bool:
     """② 写回 AI 初审结果（结论 + 说明）。
 
     conclusion 必须是「AI初审结果」字段的既有选项之一；未知结论由调用方拦截，不写。
     P2-2 留痕开关开时旁挂 agent_triggers 留痕行（关=零 DB 写）。
+    P3-3 G1：``writer`` 预埋区分——②-b/②-c 规则性写回传
+    ``writeback_trace.WRITER_AI_AUTOPASS``/``WRITER_AI_REWRITE``，默认 ②主链。
     """
     writeback: dict[str, Any] = {F_REVIEW_RESULT: conclusion, F_REVIEW_NOTE: summary}
     # B1 写白名单钉子：② 只允许写 AI 初审 2 列（不碰人工列）
@@ -1128,7 +1131,7 @@ async def write_review(
     )
     applied = result.written > 0
     await writeback_trace.record_writeback(
-        writer=writeback_trace.WRITER_REVIEW,
+        writer=writer,
         record_id=record_id,
         fields=sorted(writeback),
         applied=applied,

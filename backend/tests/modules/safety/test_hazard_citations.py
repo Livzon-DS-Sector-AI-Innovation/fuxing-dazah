@@ -620,3 +620,27 @@ def test_placeholder_variant_with_doc_only_verified_is_error() -> None:
     )
     assert not result.is_valid
     assert any("占位" in e for e in result.errors)
+
+
+class TestCleanRagplusDocName:
+    """P3-3 G3：引用字段后缀剥离——md 漏剥坐实修复（GB30871 OCR 入库件）。"""
+
+    def test_md_suffix_stripped(self) -> None:
+        from app.modules.safety.knowledge.retriever import _clean_ragplus_doc_name
+
+        # P3-2 G4 实样：引擎返回 GB30871 OCR 入库件带 .md 后缀
+        assert (
+            _clean_ragplus_doc_name(
+                "GB 30871-2022 危险化学品企业特殊作业安全规范.md"
+            )
+            == "GB 30871-2022 危险化学品企业特殊作业安全规范"
+        )
+
+    def test_known_suffixes_regression(self) -> None:
+        from app.modules.safety.knowledge.retriever import _clean_ragplus_doc_name
+
+        # 既有后缀回归 + 大小写不敏感 + 无后缀原样
+        assert _clean_ragplus_doc_name("XX法.pdf") == "XX法"
+        assert _clean_ragplus_doc_name("XX条例.DOCX") == "XX条例"
+        assert _clean_ragplus_doc_name("XX目录.xlsx") == "XX目录"
+        assert _clean_ragplus_doc_name("XX规范") == "XX规范"

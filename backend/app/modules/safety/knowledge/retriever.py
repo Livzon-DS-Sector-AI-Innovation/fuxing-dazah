@@ -1280,10 +1280,13 @@ def _ragplus_hit_to_result(hit: RagplusHit) -> RetrievalResult:
 
 
 def _clean_ragplus_doc_name(name: str) -> str:
-    """引用字段只要法规名：去掉 ragplus 文档名的常见文件后缀。"""
+    """引用字段只要法规名：去掉 ragplus 文档名的常见文件后缀。
+
+    md 为 P3-3 补：GB30871 等 OCR 入库件引擎名带 .md（引用列曾漏剥）。
+    """
     import re
 
-    return re.sub(r"\.(pdf|docx?|xlsx?)$", "", name.strip(), flags=re.IGNORECASE)
+    return re.sub(r"\.(pdf|docx?|xlsx?|md)$", "", name.strip(), flags=re.IGNORECASE)
 
 
 def _ragplus_hit_ref(hit: RagplusHit) -> str:

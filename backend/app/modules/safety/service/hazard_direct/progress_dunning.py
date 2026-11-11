@@ -29,12 +29,16 @@ from app.modules.safety.service.hazard_direct import (
     bitable_repo,
     bulletin,
     progress_track,
+    writeback_trace,
 )
 
 logger = logging.getLogger(__name__)
 
 # 部门字段多值分隔符（一格填多个部门，如「设备工程部, 项目部」）
 _DEPT_SPLIT = re.compile(r"[,，、;；/|]+")
+
+# P3-3 G2 留痕 payload.fields 标识（卡动作非 Bitable 列，语义=「写了什么」）
+_DUNNING_TRACE_FIELD = "督办催办卡"
 
 
 async def _fetch_dunning_targets(client: Any) -> list[bitable_repo.HazardView]:
@@ -335,6 +339,17 @@ async def send_urge_cards(
                         view.record_id, person.name, role, id_type,
                     )
                     await _audit_sent(view, role, person, receive_id, id_type)
+                    # P3-3 G2：卡发送也挂同一 Thread 留痕（每卡一行，与①②⑤
+                    # 同 thread_key 聚合；skipped/failed 不留痕）。开关关/留痕
+                    # 异常均在 record_writeback 内吞掉，不拖垮催办。
+                    await writeback_trace.record_writeback(
+                        writer=writeback_trace.WRITER_DUNNING,
+                        record_id=view.record_id,
+                        fields=[_DUNNING_TRACE_FIELD],
+                        applied=True,
+                        note=f"{person.name}({role})",
+                        hazard_no=view.hazard_no,
+                    )
                 else:
                     stats["skipped"] += 1
                     failed_plan.append((view, role, person))

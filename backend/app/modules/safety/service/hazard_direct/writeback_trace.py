@@ -45,6 +45,16 @@ WRITER_EXCEPTION_REVIEW = "exception_review"
 WRITER_REVIEW = "review"
 WRITER_SCORING = "scoring"
 WRITER_AI_RERUN = "ai_rerun"
+# P3-3 G2：③督办催办卡发送（非 Bitable 写回，卡动作同 Thread 留痕）——
+# 与 audit_query 既有 kind="dunning" 词汇对齐；区别于 field_authority 的
+# supervision（督办等级列写者）。
+WRITER_DUNNING = "dunning"
+# P3-3 G1 预埋：②-b 已关闭自动通过 / ②-c 已关闭跟随改写（规则性写回）。
+# 调用点在 review.py 的 WIP ②-b/②-c 段（落库后经 write_review(writer=…)
+# 传入，两行补丁见设计文档附录 B）；落库前二者经默认值留 writer="review"
+# 行（有行、缺区分——比「无审计行」安全）。
+WRITER_AI_AUTOPASS = "ai_autopass"
+WRITER_AI_REWRITE = "ai_rewrite"
 
 
 def trace_enabled() -> bool:
