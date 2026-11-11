@@ -14,6 +14,12 @@ from app.modules.safety.business_agent.tools.office_tools.office_read_tools impo
 from app.modules.safety.business_agent.tools.office_tools.office_scenarios import (
     build_report_docx_blocks,
 )
+from app.modules.safety.business_agent.tools.office_tools.invitation_tools import (
+    patch_invitation_html,
+    read_invitation,
+    rollback_invitation,
+    update_invitation,
+)
 from app.modules.safety.business_agent.tools.office_tools.office_write_tools import (
     office_create_base,
     office_create_docx,
@@ -27,6 +33,10 @@ from app.modules.safety.business_agent.tools.office_tools.office_write_tools imp
 )
 
 __all__ = [
+    "read_invitation",
+    "update_invitation",
+    "patch_invitation_html",
+    "rollback_invitation",
     "office_search_files",
     "office_read_docx",
     "office_read_sheet",

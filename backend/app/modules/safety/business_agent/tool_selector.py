@@ -97,6 +97,8 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "office_create_docx", "office_create_sheet", "office_write_sheet",
         "office_create_base", "office_create_slides", "office_generate_docx_pdf",
         "office_upload_file", "office_set_permission", "rollback_office_file",
+        # 宣传函（运动会邀请函）：查看/修改/补丁/回滚，creator 专属
+        "read_invitation", "update_invitation", "patch_invitation_html", "rollback_invitation",
     ],
     "urs": [
         "query_urs_records", "query_urs_review_detail",
@@ -150,7 +152,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "visitor_insurance": ["query_visitor_insurance"],
     # 总览聚合域（agent-query-p1：驾驶舱 KPI 一句话总览，按需挂载）
     "overview": ["query_overview"],
-    # 例外复核员域（P1-3 observe：死信/点名复核，五工具+入口全只读）
+    # 例外复核员域（P1-3 observe 五工具+入口只读；P2-1 追加写回确认工具）
     "hazard_review": [
         "hazard_view_images", "hazard_search_regulations",
         "hazard_get_record_context", "hazard_cross_check",
@@ -277,7 +279,7 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
 }
 
 # ── 始终激活的工具（基础能力，任何意图都带）────────────────────
-_ALWAYS_INCLUDE = {"knowledge_search"}
+_ALWAYS_INCLUDE = {"knowledge_search", "read_invitation"}
 
 
 # ── 核心兜底集（1-D：置信不足/无匹配时挂载，永不回退全量）─────────
@@ -430,14 +432,23 @@ _OFFICE_TOKEN_REFERENCE_RE = re.compile(
 )
 
 
+# 宣传函语义触发词（invitation 工具组：链接之外的显式意图，2026-11-04）
+_INVITATION_KEYWORD_RE = re.compile(
+    r"邀请函|宣传函|会徽|报名二维码|倒计时.{0,6}(改|调整|更新)|运动会.{0,6}(页面|h5|H5)"
+)
+
+
 def has_office_reference(user_message: str) -> bool:
-    """检测消息中是否包含飞书办公链接或显式文件 token。
+    """检测消息中是否包含飞书办公链接/文件 token/宣传函意图。
 
     命中时路由挂 office 域全量读写工具（1-D：不再回退全量 Agent）。
+    2026-11-04：加宣传函关键词触发（邀请函/宣传函/会徽等）——这些话术
+    带不带链接都应挂 office 域（invitation 工具在其中）。
     """
     if not user_message:
         return False
     return bool(
         _OFFICE_LINK_RE.search(user_message)
         or _OFFICE_TOKEN_REFERENCE_RE.search(user_message)
+        or _INVITATION_KEYWORD_RE.search(user_message)
     )

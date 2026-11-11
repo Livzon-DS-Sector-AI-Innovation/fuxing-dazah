@@ -170,6 +170,17 @@ TOOL_OFFICE_READ_DRIVE_FILE = "office_read_drive_file"
 TOOL_OFFICE_CREATE_DOCX = "office_create_docx"
 TOOL_OFFICE_CREATE_SHEET = "office_create_sheet"
 TOOL_OFFICE_WRITE_SHEET = "office_write_sheet"
+
+# ── 宣传函（运动会邀请函，GitHub Pages）——仅 creator ──
+TOOL_READ_INVITATION = "read_invitation"
+TOOL_UPDATE_INVITATION = "update_invitation"
+TOOL_PATCH_INVITATION_HTML = "patch_invitation_html"
+TOOL_ROLLBACK_INVITATION = "rollback_invitation"
+_INVITATION_WRITE_TOOLS = frozenset({
+    TOOL_UPDATE_INVITATION,
+    TOOL_PATCH_INVITATION_HTML,
+    TOOL_ROLLBACK_INVITATION,
+})
 TOOL_OFFICE_CREATE_BASE = "office_create_base"
 TOOL_OFFICE_CREATE_SLIDES = "office_create_slides"
 TOOL_OFFICE_GENERATE_DOCX_PDF = "office_generate_docx_pdf"
@@ -220,6 +231,7 @@ _READ_TOOLS: frozenset[str] = frozenset(
         TOOL_QUERY_MSDS,
         TOOL_QUERY_REGULATION_CRAWL_STATUS,
         TOOL_QUERY_AI_CONFIG,
+        TOOL_READ_INVITATION,
         TOOL_QUERY_SCHEDULER_TASKS,
         TOOL_QUERY_BITABLE_CONFIG,
         TOOL_QUERY_STANDARD_COMPLIANCE,
@@ -405,6 +417,7 @@ ROLE_TOOL_POLICY: dict[str, frozenset[str]] = {
     | OFFICE_READ_TOOLS
     | OFFICE_WRITE_TOOLS
     | OFFICE_DANGEROUS_TOOLS
+    | _INVITATION_WRITE_TOOLS
     | _OH_READ_TOOLS
     | _OH_WRITE_TOOLS_DEPT_LEADER
     | {TOOL_OVERRIDE_OH_CONCLUSION}

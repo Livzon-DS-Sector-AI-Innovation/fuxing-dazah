@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ c.页头.主题前 }} · {{ c.页头.主题后 }} — 第十七届职工趣味运动会{{ c.页头.页面类型 }}</title>
+<meta name="description" content="{{ c.meta描述 }}">
+<style>
+  :root {
+    --ink: #22304a;
+    --ink-soft: #5a6b86;
+    --red: #e2482f;
+    --red-deep: #c23520;
+    --orange: #ff8a2a;
+    --gold: #e6a417;
+    --blue: #1f5fd0;
+    --paper: #fffdf6;
+    --paper-deep: #fff6e6;
+    --night1: #0e2a5c;
+    --night2: #123f86;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(1000px 420px at 85% -80px, rgba(255, 138, 42, .30), transparent 62%),
+      radial-gradient(900px 400px at -10% 20%, rgba(64, 156, 255, .22), transparent 60%),
+      linear-gradient(180deg, var(--night1), var(--night2) 52%, #0c2c60);
+    min-height: 100vh;
+    padding: 26px 12px 46px;
+  }
+
+  /* ===== 页面装饰：光带 / 速度线 / 漂浮元素 ===== */
+  .streaks {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  }
+  .streaks i {
+    position: absolute; height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, rgba(255, 176, 88, .55), transparent);
+    animation: shoot 6s linear infinite;
+  }
+  .streaks i:nth-child(1) { top: 14%; left: -30%; width: 34%; animation-delay: 0s; }
+  .streaks i:nth-child(2) { top: 30%; left: -34%; width: 40%; animation-delay: 2.2s; }
+  .streaks i:nth-child(3) { top: 52%; left: -28%; width: 30%; animation-delay: 3.6s; }
+  .streaks i:nth-child(4) { top: 72%; left: -36%; width: 38%; animation-delay: 1.2s; }
+  @keyframes shoot {
+    from { transform: translateX(0); opacity: 0; }
+    12%  { opacity: .9; }
+    to   { transform: translateX(calc(100vw + 60%)); opacity: 0; }
+  }
+  .float-emoji {
+    position: fixed; z-index: 0; pointer-events: none; opacity: .8;
+    animation: bob 5.2s ease-in-out infinite; transform-origin: center;
+  }
+  .float-emoji.e1 { top: 42px; left: calc(50% - 236px); font-size: 30px; animation-delay: .2s; }
+  .float-emoji.e2 { top: 96px; right: calc(50% - 244px); font-size: 26px; animation-delay: 1.5s; }
+  @media (max-width: 560px) {
+    .float-emoji.e1 { left: 12px; top: 30px; font-size: 24px; }
+    .float-emoji.e2 { right: 10px; top: 76px; font-size: 21px; }
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0) rotate(-6deg); }
+    50% { transform: translateY(-10px) rotate(8deg); }
+  }
+  /* 底部跑道 */
+  .track {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 64px; z-index: 0; pointer-events: none;
+    background:
+      repeating-linear-gradient(-58deg, rgba(255,255,255,.16) 0 3px, transparent 3px 46px),
+      linear-gradient(180deg, rgba(226, 72, 47, 0), rgba(226, 72, 47, .82));
+  }
+  .track::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: repeating-linear-gradient(90deg, #ffd76e 0 26px, transparent 26px 52px);
+    opacity: .85;
+  }
+
+  /* ===== 邀请函卡片 ===== */
+  .card {
+    position: relative; z-index: 1;
+    max-width: 460px; margin: 0 auto;
+    background:
+      radial-gradient(520px 240px at 90% -50px, rgba(255, 170, 90, .30), transparent 70%),
+      linear-gradient(180deg, #ffffff, var(--paper) 46%, var(--paper-deep));
+    border: 1px solid rgba(226, 72, 47, .30);
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(5, 14, 38, .55), 0 0 0 6px rgba(255, 255, 255, .07);
+    padding: 30px clamp(18px, 5.5vw, 26px) 34px;
+    overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; inset: 9px;
+    border: 1px solid rgba(226, 72, 47, .32);
+    border-radius: 12px; pointer-events: none;
+  }
+  .card::after {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+    background: linear-gradient(90deg, var(--blue), var(--orange), var(--red), var(--orange), var(--blue));
+  }
+
+  header.hero { text-align: center; padding: 6px 0 4px; }
+  .hero-sub {
+    display: inline-flex; align-items: center; gap: clamp(6px, 2.2vw, 10px);
+    font-size: clamp(11.5px, 3.4vw, 13px); letter-spacing: 2px; color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .hero-sub::before, .hero-sub::after {
+    content: ""; width: clamp(18px, 6vw, 30px); height: 1px;
+    background: linear-gradient(90deg, transparent, var(--red));
+  }
+  .hero-sub::after { background: linear-gradient(90deg, var(--red), transparent); }
+  .hero-title {
+    margin-top: clamp(10px, 3.2vw, 14px);
+    font-size: clamp(26px, 8.4vw, 34px); line-height: 1.3; font-weight: 800;
+    letter-spacing: clamp(1px, 0.45vw, 2px);
+    color: var(--ink);
+    text-wrap: balance; word-break: keep-all;
+  }
+  .hero-title .accent { color: var(--red-deep); }
+  .seal {
+    display: inline-block; vertical-align: clamp(7px, 2.8vw, 12px);
+    margin-right: clamp(8px, 3vw, 12px); padding: clamp(4px, 1.2vw, 5px);
+    background: linear-gradient(160deg, #ff5a3c, #d1351d);
+    color: #fff7ee; border-radius: 8px;
+    font-size: clamp(13px, 4vw, 16px); line-height: 1.08; letter-spacing: 1px;
+    writing-mode: vertical-rl;
+    box-shadow: inset 0 0 0 1.5px rgba(255, 246, 235, .78), 0 2px 6px rgba(193, 53, 29, .4);
+    transform: rotate(-3deg);
+  }
+  .invite-word { display: none; }
+  .hero-note { margin-top: clamp(10px, 3vw, 12px); font-size: clamp(13.5px, 4vw, 15px); letter-spacing: clamp(2px, 0.8vw, 3px); color: var(--ink-soft); }
+
+  /* 报名入口：整卡可点，直达报名表 */
+  a.qr-box {
+    display: block; margin: 16px 4px 0; padding: 16px 18px 18px;
+    background: linear-gradient(165deg, #1c3b74, #0f2a5c);
+    border-radius: 14px; text-decoration: none;
+    box-shadow: inset 0 0 0 1.5px rgba(255, 215, 110, .3), 0 5px 14px rgba(8, 18, 42, .3);
+    transition: transform .2s ease, box-shadow .2s ease;
+  }
+  a.qr-box:hover {
+    transform: translateY(-2px);
+    box-shadow: inset 0 0 0 1.5px rgba(255, 215, 110, .5), 0 8px 20px rgba(8, 18, 42, .4);
+  }
+  a.qr-box:active { transform: translateY(0); }
+  .qr-text { display: flex; flex-direction: column; gap: 6px; text-align: center; }
+  .qr-text .t1 { font-size: 18px; font-weight: 800; letter-spacing: 3px; color: #ffd76e; }
+  .qr-text .t2 { font-size: 13px; line-height: 1.7; color: #eaf1ff; }
+  .qr-text .t3 { font-size: 11.5px; letter-spacing: 1px; color: rgba(234, 241, 255, .6); }
+  .qr-btn {
+    display: block; margin-top: 13px; padding: 12px 0;
+    background: linear-gradient(160deg, #ffd76e, #e6a417);
+    color: #14264d; text-align: center;
+    font-size: 15.5px; font-weight: 800; letter-spacing: 5px; text-indent: 5px;
+    border-radius: 999px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .28);
+    animation: qr-glow 2.4s ease-in-out infinite;
+  }
+  @keyframes qr-glow {
+    0%, 100% { box-shadow: 0 4px 12px rgba(0, 0, 0, .28); }
+    50% { box-shadow: 0 4px 22px rgba(255, 215, 110, .6); }
+  }
+
+  /* 倒计时 */
+  .countdown {
+    display: flex; align-items: center; justify-content: center; gap: clamp(5px, 1.8vw, 8px);
+    margin: clamp(14px, 4vw, 18px) auto 2px;
+  }
+  .cd-cell {
+    min-width: clamp(45px, 13vw, 52px); padding: 8px 5px 7px; text-align: center;
+    background: linear-gradient(180deg, #22355c, #16274a);
+    border-radius: 10px; color: #ffd76e;
+    box-shadow: inset 0 0 0 1px rgba(255, 215, 110, .28), 0 3px 8px rgba(8, 18, 42, .35);
+  }
+  .cd-cell b { display: block; font-size: clamp(19px, 5.7vw, 22px); font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .cd-cell span { display: block; margin-top: 3px; font-size: 10.5px; letter-spacing: 2px; color: rgba(255, 236, 190, .8); }
+  .cd-sep { font-size: clamp(17px, 5vw, 20px); font-weight: 800; color: rgba(255, 215, 110, .9); }
+  .cd-label { text-align: center; margin-top: 8px; font-size: 12.5px; letter-spacing: clamp(2px, 0.8vw, 3px); color: var(--ink-soft); }
+
+  .divider {
+    display: flex; align-items: center; gap: 12px;
+    margin: 24px 8px 20px; color: var(--red);
+  }
+  .divider::before, .divider::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(226, 72, 47, .6));
+  }
+  .divider::after { background: linear-gradient(90deg, rgba(226, 72, 47, .6), transparent); }
+  .divider .diamond { width: 9px; height: 9px; background: var(--red); transform: rotate(45deg); }
+
+  /* 基本信息条 */
+  .meta { display: grid; gap: 11px; padding: 0 6px; }
+  .meta-row {
+    display: flex; align-items: center; gap: clamp(11px, 3.6vw, 14px);
+    background: rgba(255, 253, 246, .92);
+    border: 1px solid rgba(226, 72, 47, .26);
+    border-radius: 12px; padding: clamp(10px, 3vw, 12px) clamp(12px, 4.2vw, 16px);
+  }
+  .meta-row .ico {
+    flex: none; width: clamp(33px, 10vw, 38px); height: clamp(33px, 10vw, 38px); border-radius: 50%;
+    display: grid; place-items: center;
+    background: linear-gradient(160deg, #ffb35c, #f2703a);
+    color: #fff7ee; font-size: clamp(16px, 4.8vw, 18px);
+  }
+  .meta-row.alt .ico { background: linear-gradient(160deg, #5d9bff, #1f5fd0); }
+  .meta-text { display: flex; flex-direction: column; gap: 3px; }
+  .meta-row .lbl { font-size: clamp(12.5px, 3.6vw, 13.5px); color: var(--ink-soft); letter-spacing: clamp(1px, 0.5vw, 2px); }
+  .meta-row .val { font-size: clamp(14px, 4vw, 15px); font-weight: 700; color: var(--red-deep); letter-spacing: .3px; }
+  .meta-row .val.plain { color: var(--ink); }
+
+  .notice {
+    margin: 16px 4px 0; padding: 12px 15px;
+    border: 1px dashed rgba(31, 95, 208, .55);
+    border-radius: 12px; background: rgba(31, 95, 208, .06);
+    font-size: clamp(12px, 3.5vw, 13px); line-height: 1.75; color: #28518f;
+  }
+  .notice b { letter-spacing: 1px; }
+
+  section { margin-top: 6px; }
+  h2.sec {
+    display: flex; align-items: baseline; gap: 10px;
+    margin: clamp(20px, 6vw, 24px) 4px 14px; font-size: clamp(19px, 5.8vw, 22px); letter-spacing: clamp(2px, 0.8vw, 3px); color: var(--ink);
+  }
+  h2.sec .tag { font-size: 11.5px; letter-spacing: 3px; color: var(--red); font-weight: 700; }
+
+  /* 流程时间轴（按天分组） */
+  .day-label {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin: 10px 2px 10px; font-size: clamp(14px, 4.1vw, 15px); font-weight: 800; letter-spacing: 2px; color: var(--ink);
+  }
+  .day-label .badge {
+    white-space: nowrap; padding: 3px 12px; border-radius: 999px; color: #fff7ee; font-size: 13.5px;
+    background: linear-gradient(160deg, #ff8a2a, #e2482f);
+    box-shadow: 0 2px 6px rgba(226, 72, 47, .3);
+  }
+  .day-label.eve .badge { background: linear-gradient(160deg, #5d9bff, #1f5fd0); box-shadow: 0 2px 6px rgba(31, 95, 208, .3); }
+  .day-label .dt { white-space: nowrap; }
+  .day-label::after { content: ""; width: 40px; height: 1px; background: linear-gradient(90deg, rgba(226,72,47,.5), transparent); }
+  .day-label.eve::after { background: linear-gradient(90deg, rgba(31,95,208,.5), transparent); }
+
+  .timeline { position: relative; margin: 2px 10px 0 16px; padding-left: 24px; }
+  .timeline::before {
+    content: ""; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px;
+    background: linear-gradient(180deg, rgba(226,72,47,.18), rgba(226,72,47,.65), rgba(226,72,47,.18));
+  }
+  .tl-item { position: relative; padding: 0 0 14px 8px; }
+  .tl-item:last-child { padding-bottom: 2px; }
+  .tl-item::before {
+    content: ""; position: absolute; left: -24px; top: 6px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #ffc07a, #f2652f);
+    box-shadow: 0 0 0 3px rgba(242, 101, 47, .16);
+  }
+  .tl-item .t { font-size: 14.5px; font-weight: 700; color: var(--red-deep); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+  .tl-item .e { font-size: clamp(15px, 4.3vw, 16px); margin-top: 2px; letter-spacing: 1px; }
+  .tl-item .d { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+
+  /* 比赛项目：类别行 + 项目胶囊 */
+  .ev-sec { display: grid; gap: 11px; }
+  .ev-row {
+    background: rgba(255, 253, 246, .94);
+    border: 1px solid rgba(226, 72, 47, .26);
+    border-radius: 14px; padding: 13px 15px;
+    box-shadow: 0 3px 10px rgba(160, 40, 20, .07);
+  }
+  .ev-head { display: flex; align-items: center; gap: 9px; }
+  .ev-head .n {
+    flex: none; width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center; font-size: 13px; font-weight: 800; color: #fff7ee;
+    background: linear-gradient(160deg, #ff8a2a, #e2482f);
+  }
+  .ev-row.perf .ev-head .n { background: linear-gradient(160deg, #5d9bff, #1f5fd0); }
+  .ev-head h3 { font-size: clamp(15px, 4.4vw, 16.5px); letter-spacing: 1px; color: var(--ink); }
+  .ev-head .who {
+    margin-left: auto; font-size: clamp(10.5px, 3vw, 11.5px); letter-spacing: 1px; color: var(--red-deep);
+    background: rgba(226, 72, 47, .08); border: 1px solid rgba(226, 72, 47, .22);
+    padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .ev-row.perf .ev-head .who { color: #1f5fd0; background: rgba(31, 95, 208, .07); border-color: rgba(31, 95, 208, .25); }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: clamp(12px, 3.5vw, 13px); letter-spacing: .5px; color: var(--ink);
+    background: #fff; border: 1px solid rgba(226, 72, 47, .22);
+    border-radius: 999px; padding: 4px 11px; line-height: 1.4;
+  }
+  .chip em { font-style: normal; font-size: 14px; }
+
+  /* 积分规则：表格 */
+  .pt-wrap {
+    background: rgba(255, 253, 246, .94);
+    border: 1px solid rgba(226, 72, 47, .26);
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 3px 10px rgba(160, 40, 20, .07);
+  }
+  table.pt-tbl { width: 100%; border-collapse: collapse; }
+  .pt-tbl th {
+    font-size: 12px; letter-spacing: clamp(1px, 0.5vw, 2px); font-weight: 700; color: var(--ink-soft);
+    background: rgba(226, 72, 47, .07); padding: clamp(8px, 2.4vw, 9px) 4px;
+  }
+  .pt-tbl th:first-child { text-align: left; padding-left: clamp(12px, 3.6vw, 15px); }
+  .pt-tbl td { padding: clamp(9px, 2.8vw, 11px) 4px; text-align: center; font-size: clamp(13px, 3.7vw, 14px); font-variant-numeric: tabular-nums; }
+  .pt-tbl td:first-child {
+    text-align: left; padding-left: clamp(12px, 3.6vw, 15px);
+    font-size: clamp(13px, 3.7vw, 14px); font-weight: 800; letter-spacing: 1px; color: var(--ink);
+  }
+  .pt-tbl td + td { border-left: 1px dashed rgba(226, 72, 47, .16); }
+  .pt-tbl tr + tr td { border-top: 1px solid rgba(226, 72, 47, .1); }
+  .pt-tbl .num { font-weight: 800; color: var(--red-deep); font-size: clamp(14.5px, 4.2vw, 16px); }
+  .pt-tbl .oth { font-size: clamp(11.5px, 3.3vw, 12.5px); color: var(--ink-soft); line-height: 1.5; }
+  .pt-note { margin-top: 11px; font-size: clamp(11.5px, 3.3vw, 12.5px); line-height: 1.75; color: var(--ink-soft); padding: 0 6px; }
+  .pt-note b { color: var(--red-deep); }
+
+  /* 奖品 */
+  .prize-list { display: grid; gap: 10px; }
+  .prize {
+    display: flex; align-items: center; gap: clamp(10px, 3vw, 13px);
+    background: rgba(255, 253, 246, .94);
+    border: 1px solid rgba(230, 164, 23, .38);
+    border-radius: 12px; padding: clamp(10px, 3vw, 11px) clamp(12px, 3.6vw, 15px);
+  }
+  .prize .grade {
+    flex: none; width: clamp(66px, 18.5vw, 76px); text-align: center;
+    font-size: clamp(11.5px, 3.3vw, 12.5px); font-weight: 800; letter-spacing: 0.5px; white-space: nowrap;
+    color: #fff7ee; background: linear-gradient(160deg, #ff9d3c, #e07a12);
+    border-radius: 8px; padding: 7px 0;
+  }
+  .prize.top .grade { background: linear-gradient(160deg, #ff5a3c, #c23520); }
+  .prize .name { font-size: clamp(15px, 4.4vw, 16.5px); font-weight: 700; letter-spacing: 1px; color: var(--ink); }
+  .prize .name small { display: block; margin-top: 3px; font-size: clamp(11.5px, 3.3vw, 12.5px); font-weight: 400; color: var(--ink-soft); letter-spacing: .5px; }
+
+  /* 奖项设置：整块红底喜庆面板 */
+  section.prizes {
+    margin: clamp(20px, 6vw, 24px) 2px 6px; padding: 2px clamp(10px, 3vw, 13px) clamp(14px, 4vw, 16px);
+    background: linear-gradient(168deg, #e2482f, #c23520 58%, #a62612);
+    border-radius: 18px;
+    box-shadow:
+      inset 0 0 0 1.5px rgba(255, 215, 110, .40),
+      inset 0 -18px 30px rgba(122, 22, 8, .28),
+      0 8px 20px rgba(160, 40, 20, .28);
+  }
+  section.prizes h2.sec { color: #fff7ee; text-shadow: 0 1px 3px rgba(122, 22, 8, .45); }
+  section.prizes h2.sec .tag { color: #ffd76e; }
+  section.prizes .prize {
+    background: rgba(255, 247, 238, .14);
+    border-color: rgba(255, 215, 110, .42);
+    box-shadow: 0 2px 8px rgba(122, 22, 8, .18);
+  }
+  section.prizes .prize .name { color: #fff7ee; }
+  section.prizes .prize .name small { color: rgba(255, 236, 190, .92); }
+  section.prizes .prize .grade {
+    color: #8a2210;
+    background: linear-gradient(160deg, #ffe9b8, #ffd76e 45%, #e6a417);
+    box-shadow: 0 2px 6px rgba(122, 22, 8, .3);
+  }
+  section.prizes .prize.top .grade {
+    background: linear-gradient(160deg, #fff7e0, #ffe08a 45%, #f0b429);
+    box-shadow: 0 0 0 1.5px rgba(255, 247, 224, .55), 0 2px 6px rgba(122, 22, 8, .3);
+  }
+
+  /* 赛区组成：单列紧凑清单 */
+  .zone-list {
+    background: rgba(255, 253, 246, .94);
+    border: 1px solid rgba(226, 72, 47, .24);
+    border-radius: 14px;
+    padding: 4px 14px;
+    box-shadow: 0 3px 10px rgba(160, 40, 20, .06);
+  }
+  .zrow { display: flex; align-items: flex-start; gap: 10px; padding: 8.5px 0; }
+  .zrow + .zrow { border-top: 1px dashed rgba(226, 72, 47, .16); }
+  .zrow .zb {
+    flex: none; width: 21px; height: 21px; border-radius: 50%;
+    display: grid; place-items: center; margin-top: 1px;
+    font-size: 11px; font-weight: 800; color: #fff7ee;
+    background: linear-gradient(160deg, #ff8a2a, #e2482f);
+  }
+  .zrow:nth-child(even) .zb { background: linear-gradient(160deg, #5d9bff, #1f5fd0); }
+  .zrow b { flex: none; width: clamp(58px, 16.5vw, 62px); font-size: 13px; letter-spacing: .5px; color: var(--ink); line-height: 1.6; }
+  .zrow .zd { flex: 1; font-size: 12.5px; line-height: 1.7; color: var(--ink-soft); }
+  .zrow .zd .dn { font-style: normal; white-space: nowrap; }
+
+    /* 助威小游戏 */
+  .cheer { text-align: center; }
+  .cheer-intro { font-size: 14px; color: var(--ink-soft); letter-spacing: 1px; }
+  .cheer-card {
+    margin: 16px auto 4px; max-width: 320px; min-height: 118px;
+    border-radius: 16px; padding: 18px 16px;
+    background: linear-gradient(165deg, #1c3b74, #0f2a5c);
+    box-shadow: inset 0 0 0 1.5px rgba(255, 215, 110, .35), 0 6px 18px rgba(8, 18, 42, .35);
+    display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    transition: transform .25s ease;
+  }
+  .cheer-card.flip { transform: rotateY(10deg) scale(1.03); }
+  .cheer-card .zone { font-size: clamp(21px, 6.2vw, 24px); font-weight: 800; letter-spacing: 4px; color: #ffd76e; }
+  .cheer-card .slogan { font-size: 15.5px; letter-spacing: 2px; color: #eaf1ff; }
+  .cheer-card .hint { font-size: 12px; letter-spacing: 2px; color: rgba(234, 241, 255, .65); }
+  .cheer-btn {
+    margin-top: 14px; padding: clamp(11px, 3vw, 12px) clamp(26px, 8vw, 34px); font-family: inherit;
+    font-size: clamp(15px, 4.4vw, 16.5px); letter-spacing: 4px; text-indent: 4px;
+    color: #fff7ee; background: linear-gradient(160deg, #ff8a2a, #e2482f);
+    border: none; border-radius: 999px; cursor: pointer;
+    box-shadow: 0 5px 14px rgba(226, 72, 47, .42);
+    transition: transform .2s ease;
+  }
+  .cheer-btn:hover { transform: translateY(-2px); }
+  .cheer-btn:disabled { opacity: .65; }
+  .cheer-note { margin-top: 11px; font-size: 12.5px; letter-spacing: 1px; color: var(--ink-soft); }
+
+  /* 尾部 */
+  .footer-logo {
+    display: block; width: 96px; height: 96px;
+    margin: 0 auto 10px; border-radius: 50%;
+    box-shadow: 0 4px 14px rgba(8, 18, 42, .3), 0 0 0 3px rgba(255, 255, 255, .55);
+  }
+  footer { text-align: center; margin-top: 26px; }
+  footer { text-align: center; margin-top: 28px; }
+  .footer-motto { font-size: clamp(18px, 5.4vw, 20px); font-weight: 700; letter-spacing: 4px; color: var(--ink); }
+  .org { margin-top: 15px; font-size: clamp(13.5px, 4vw, 14.5px); letter-spacing: clamp(2px, 0.8vw, 3px); color: var(--ink-soft); line-height: 1.9; }
+
+  /* 窄屏微调（≤400px 通用手机） */
+  @media (max-width: 400px) {
+    .day-label { flex-wrap: wrap; }
+    .day-label .dt { white-space: normal; }
+    .day-label::after { display: none; }
+    .pt-tbl td:first-child, .pt-tbl th:first-child { padding-left: 11px; }
+    .hero-note, .cd-label { letter-spacing: 2px; }
+    .org { letter-spacing: 2px; }
+  }
+
+  /* 入场动画 */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+  .reveal.on { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .streaks, .float-emoji { animation: none; }
+    .cheer-card, .cheer-btn { transition: none; }
+    a.qr-box, a.qr-box:hover { transform: none; transition: none; }
+    .qr-btn { animation: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="streaks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="float-emoji e1" aria-hidden="true">🏅</div>
+  <div class="float-emoji e2" aria-hidden="true">🏃</div>
+  <div class="track" aria-hidden="true"></div>
+
+  <main class="card">
+    <header class="hero">
+      <span class="hero-sub">{{ c.页头.公司副标 }}</span>
+      <h1 class="hero-title"><span class="seal">{{ c.页头.印章 }}</span>{{ c.页头.主题前 }}<span class="accent"> · </span><span class="accent">{{ c.页头.主题后 }}</span></h1>
+      <p class="hero-note">{{ c.页头.口号 | replace("
+", "<br>") }}</p>
+
+      <div class="countdown" role="timer" aria-label="距离开幕倒计时">
+        <div class="cd-cell"><b id="cdD">--</b><span>天</span></div>
+        <span class="cd-sep">:</span>
+        <div class="cd-cell"><b id="cdH">--</b><span>时</span></div>
+        <span class="cd-sep">:</span>
+        <div class="cd-cell"><b id="cdM">--</b><span>分</span></div>
+        <span class="cd-sep">:</span>
+        <div class="cd-cell"><b id="cdS">--</b><span>秒</span></div>
+      </div>
+      <p class="cd-label">距离开幕还有</p>
+    </header>
+
+    <div class="divider" aria-hidden="true"><span class="diamond"></span></div>
+
+    <div class="meta">
+      {% for m in c.信息条 %}
+      <div class="meta-row{{ ' alt' if loop.index == 2 else '' }}">
+        <span class="ico" aria-hidden="true">{{ m.图标 }}</span>
+        <span class="meta-text">
+          <span class="lbl">{{ m.标签 }}</span>
+          <span class="val{{ ' plain' if loop.index != 1 else '' }}">{{ m.值 | join('<br>') | safe }}</span>
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <a class="qr-box" href="{{ c.报名.链接 }}" target="_blank" rel="noopener">
+      <span class="qr-text">
+        <span class="t1">{{ c.报名.标题 }}</span>
+        <span class="t2">{{ c.报名.说明 }}</span>
+        <span class="t3">{{ c.报名.提示 }}</span>
+        <span class="qr-btn">{{ c.报名.按钮 }}</span>
+      </span>
+    </a>
+
+    <p class="notice"><b>温馨提示：</b>{{ c.温馨提示 }}</p>
+
+    <section class="reveal">
+      <h2 class="sec">活动流程 <span class="tag">SCHEDULE</span></h2>
+
+      {% for day in c.流程 %}
+      <div class="day-label{{ ' eve' if day.夜间场 else '' }}"><span class="badge">{{ day.日期 }}</span><span class="dt">{{ day.主题 }}</span></div>
+      <div class="timeline">
+        {% for it in day.条目 %}
+        <div class="tl-item"><div class="t">{{ it.时间 }}</div><div class="e">{{ it.事项 }}</div><div class="d">{{ it.备注 }}</div></div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </section>
+
+    <section class="reveal">
+      <h2 class="sec">比赛项目 <span class="tag">EVENTS</span></h2>
+      <div class="ev-sec">
+      {% for g in c.项目 %}
+      <div class="ev-row{{ ' perf' if g.强调 else '' }}">
+        <div class="ev-head"><h3>{{ g.名称 }}</h3><span class="who">{{ g.标签 }}</span></div>
+        <div class="chips">
+          {% for e in g.条目 %}
+          <span class="chip"><em>{{ e.图标 }}</em>{{ e.文字 }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    </section>
+    <section class="reveal prizes">
+      <h2 class="sec">奖项设置 <span class="tag">PRIZES</span></h2>
+      <div class="prize-list">
+      {% for p in c.奖项 %}
+      <div class="prize{{ ' top' if p.置顶 else '' }}">
+        <span class="grade">{{ p.徽章 }}</span>
+        <span class="name">{{ p.标题 }}<small>{{ p.明细 }}</small></span>
+      </div>
+      {% endfor %}
+    </div>
+    </section>
+
+    <section class="reveal">
+      <h2 class="sec">赛区组成 <span class="tag">ZONES</span></h2>
+      <div class="zone-list">
+      {% for z in c.赛区 %}
+      <div class="zrow"><span class="zb">{{ z.编号 }}</span><b>{{ z.名称 }}</b><span class="zd">{% for d in z.部门.split('、') %}<i class="dn">{{ d }}</i>{% if not loop.last %}、{% endif %}{% endfor %}</span></div>
+      {% endfor %}
+    </div>
+    </section>
+
+    <section class="reveal">
+      <h2 class="sec">积分规则 <span class="tag">POINTS</span></h2>
+      <div class="pt-wrap">
+        <table class="pt-tbl">
+          <thead>
+            <tr>{% for h in c.积分.表头 %}<th>{{ h }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody>
+            {% for row in c.积分.行 %}
+            <tr><td>{{ row.赛制 }}</td>{% for f in row.分数 %}<td class="num">{{ f }}</td>{% endfor %}<td class="oth">{{ row.其他 | replace('\n', '<br>') | safe }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="pt-note"><b>赛区总积分 = 个人赛 + 团体赛</b>，按总积分评选赛区团体奖；积分相同时，以十人团体赛名次靠前者列前；混合组队所得积分，涉及的赛区均可计算。</p>
+    </section>
+
+
+    <section class="cheer reveal">
+      <h2 class="sec" style="justify-content:center;">为赛区助威 <span class="tag">CHEER</span></h2>
+      <p class="cheer-intro">{{ c.助威.引导 }}</p>
+      <div class="cheer-card" id="cheerCard" aria-live="polite">
+        <div class="zone" id="cheerZone">{{ c.助威.初始.区 }}</div>
+        <div class="slogan" id="cheerSlogan">{{ c.助威.初始.口号 }}</div>
+        <div class="hint" id="cheerHint">{{ c.助威.初始.提示 }}</div>
+      </div>
+      <button class="cheer-btn" id="cheerBtn" type="button">{{ c.助威.按钮 }}</button>
+    </section>
+
+    <footer class="reveal">
+      <img class="footer-logo" src="{{ logo_uri }}" alt="第十七届职工运动会会徽">
+      <p class="footer-motto">{{ c.尾部.主题 }}</p>
+      <p class="org">{{ c.尾部.落款 | join("<br>") | safe }}</p>
+    </footer>
+  </main>
+
+<script>
+(function () {
+  // ===== 滚动渐显（带兜底：老内核 webview 中 IO 可能不触发，超时强制显示） =====
+  var els = document.querySelectorAll('.reveal');
+  var revealAll = function () { els.forEach(function (el) { el.classList.add('on'); }); };
+  if (!('IntersectionObserver' in window)) {
+    revealAll();
+  } else {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { en.target.classList.add('on'); io.unobserve(en.target); }
+      });
+    }, { threshold: 0.08 });
+    els.forEach(function (el) { io.observe(el); });
+    setTimeout(function () {
+      document.querySelectorAll('.reveal:not(.on)').forEach(function (el) { el.classList.add('on'); });
+    }, 2600);
+  }
+
+  // ===== 开幕倒计时：{{ c.页头.倒计时目标 }}（北京时间） =====
+  var OPENING = new Date('{{ c.页头.倒计时目标 }}').getTime();
+  var cdD = document.getElementById('cdD'),
+      cdH = document.getElementById('cdH'),
+      cdM = document.getElementById('cdM'),
+      cdS = document.getElementById('cdS');
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function tick() {
+    var diff = OPENING - Date.now();
+    if (diff <= 0) {
+      cdD.textContent = '0'; cdH.textContent = cdM.textContent = cdS.textContent = '00';
+      return;
+    }
+    var s = Math.floor(diff / 1000);
+    cdD.textContent = Math.floor(s / 86400);
+    cdH.textContent = pad(Math.floor(s % 86400 / 3600));
+    cdM.textContent = pad(Math.floor(s % 3600 / 60));
+    cdS.textContent = pad(s % 60);
+    setTimeout(tick, 1000);
+  }
+  tick();
+
+  // ===== 为赛区助威：随机助威卡 =====
+  var ZONES = {{ c.助威.赛区口号 | tojson }};
+  var zoneEl = document.getElementById('cheerZone'),
+      sloganEl = document.getElementById('cheerSlogan'),
+      hintEl = document.getElementById('cheerHint'),
+      btn = document.getElementById('cheerBtn'),
+      card = document.getElementById('cheerCard'),
+      lastIdx = -1;
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
+    card.classList.add('flip');
+    var idx = Math.floor(Math.random() * ZONES.length);
+    if (ZONES.length > 1) { while (idx === lastIdx) idx = Math.floor(Math.random() * ZONES.length); }
+    lastIdx = idx;
+    setTimeout(function () {
+      zoneEl.textContent = ZONES[idx][0];
+      sloganEl.textContent = ZONES[idx][1];
+      hintEl.textContent = '{{ c.助威.抽中提示 }}';
+      card.classList.remove('flip');
+      btn.disabled = false;
+      btn.textContent = '{{ c.助威.按钮再抽 }}';
+    }, 260);
+  });
+})();
+</script>
+</body>
+</html>

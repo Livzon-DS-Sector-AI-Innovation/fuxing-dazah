@@ -40,6 +40,7 @@ from app.modules.safety.business_agent.session_store import (
     set_card_message_id,
     update_session_history,
 )
+from app.modules.safety.feishu.client import download_message_image, sniff_image_mime
 from app.modules.safety.feishu.chat_sender import send_file_to_chat
 from app.modules.safety.feishu.client import (
     get_safety_feishu_client,
@@ -64,6 +65,10 @@ from app.modules.safety.service.oh_archive import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# 单张图片大小上限（多模态输入防滥用）
+_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 
 _CARD_TITLE = "🤖 安全助手"
 
@@ -956,6 +961,55 @@ def _extract_text_query(message: dict[str, Any]) -> str | None:
     return query or None
 
 
+def _extract_post_content(message: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """从飞书 post 富文本消息提取 (文字, 图片file_key列表)。
+
+    2026-11-04 识图支持：img 段不再忽略，返回 file_key 供下载识图；
+    文字与图片都为空时返回 (None, [])。
+    """
+    content_str = message.get("content", "{}")
+    try:
+        content = json.loads(content_str)
+    except json.JSONDecodeError:
+        return None, []
+    if not isinstance(content, dict):
+        return None, []
+    # 新格式：顶层 "content" 键直接是段落列表；老格式：locale 值内层
+    if isinstance(content.get("content"), list):
+        body: Any = content["content"]
+    else:
+        body = None
+        for value in content.values():
+            if isinstance(value, dict) and isinstance(value.get("content"), list):
+                body = value["content"]
+                break
+    if not isinstance(body, list):
+        return None, []
+    texts: list[str] = []
+    image_keys: list[str] = []
+    for para in body:
+        if not isinstance(para, list):
+            continue
+        for seg in para:
+            if not isinstance(seg, dict):
+                continue
+            tag = seg.get("tag")
+            if tag == "text":
+                t = (seg.get("text") or "").strip()
+                if t:
+                    texts.append(t)
+            elif tag == "a":
+                t = (seg.get("text") or "").strip()
+                if t:
+                    texts.append(t)
+            elif tag == "img":
+                key = seg.get("image_key")
+                if key:
+                    image_keys.append(key)
+    query = "\n".join(texts).strip() or None
+    return query, image_keys
+
+
 def _extract_post_query(message: dict[str, Any]) -> str | None:
     """从飞书 post 富文本消息中提取文字查询（2026-09-23 文图混合支持）。
 
@@ -1269,6 +1323,7 @@ async def handle_message(event_data: dict[str, Any]) -> None:
         message = event_data.get("message", {})
         chat_id = message.get("chat_id", "")
         message_type = message.get("message_type", "")
+        images: list[tuple[bytes, str]] = []
         if not chat_id:
             return
 
@@ -1312,6 +1367,31 @@ async def handle_message(event_data: dict[str, Any]) -> None:
                 _sender_open_id(event_data), _sender_user_id(event_data),
             )
             return
+        elif message_type == "image":
+            # ── 识图链路（2026-11-04）：图片下载后作为多模态消息传给 Agent 模型 ──
+            try:
+                img_content = json.loads(message.get("content", "{}"))
+                image_key = img_content.get("image_key", "")
+            except json.JSONDecodeError:
+                image_key = ""
+            if not image_key:
+                return
+            message_id = message.get("message_id", "")
+            try:
+                image_bytes = await download_message_image(message_id, image_key)
+            except RuntimeError as exc:
+                logger.warning("识图链路图片下载失败: %s", exc)
+                await _send_text_to_chat(
+                    chat_id, "图片下载失败，请重新发送或改用文字描述。",
+                )
+                return
+            if len(image_bytes) > _IMAGE_MAX_BYTES:
+                await _send_text_to_chat(
+                    chat_id, "图片超过 4MB，无法识别；请压缩后重发或改用文字描述。",
+                )
+                return
+            query = "（用户发来一张图片，请查看图片内容并结合上下文回应）"
+            images = [(image_bytes, sniff_image_mime(image_bytes))]
         elif message_type == "text":
             query = _extract_text_query(message)
             if query is None:
@@ -1329,24 +1409,40 @@ async def handle_message(event_data: dict[str, Any]) -> None:
                 if await _try_oh_archive_reply(chat_id, query):
                     return
         elif message_type == "post":
-            # post 富文本（文图混合等，2026-09-23）：提取文字进对话链路；
-            # 无有效文字（纯图/纯表情）回复引导——此前 post 被类型路由静默丢弃
-            query = _extract_post_query(message)
+            # post 富文本（文图混合）：文字段进对话链路；img 段下载后走识图
+            # （2026-11-04 识图支持，此前 img 段被忽略/纯图回引导话术）
+            query, post_image_keys = _extract_post_content(message)
+            if query is None and not post_image_keys:
+                return  # 纯表情等无实质内容
+            images = []
+            if post_image_keys:
+                message_id = message.get("message_id", "")
+                for key in post_image_keys[:4]:  # 单条消息最多识 4 张，防滥用
+                    try:
+                        image_bytes = await download_message_image(message_id, key)
+                    except RuntimeError as exc:
+                        logger.warning("识图链路图片下载失败: %s", exc)
+                        continue
+                    if len(image_bytes) > _IMAGE_MAX_BYTES:
+                        continue
+                    images.append((image_bytes, sniff_image_mime(image_bytes)))
+                if not images and query is None:
+                    await _send_text_to_chat(
+                        chat_id, "图片下载失败，请重新发送或改用文字描述。",
+                    )
+                    return
             if query is None:
-                await _send_text_to_chat(
-                    chat_id,
-                    "已收到富文本/图片消息。安全助手目前支持文字提问与文件"
-                    "（Excel/CSV/JSON/文档）上传，图片内容暂无法识别，"
-                    "请改用文字描述你的问题。",
-                )
-                return
+                query = "（用户发来图片，请查看图片内容并结合上下文回应）"
             if message.get("chat_type") == "p2p":
                 if await _try_oh_archive_reply(chat_id, query):
                     return
         else:
             return
 
-        logger.info("安全助手: chat_id=%s query=%s", chat_id, query[:100])
+        # ── 识图直传（2026-11-05 定案）：deepseek-flash（dpv4）自带多模态
+        #    （实测 image_url 200 + 正确识图），图片经 sniff_image_mime 标注
+        #    真实格式后随 run_turn 直传主模型，无需 vision profile 转写绕路 ──
+        logger.info("安全助手: chat_id=%s query=%s images=%d", chat_id, query[:100], len(images))
 
         # ── 表情回应：让用户知道 Agent 已收到消息 ──
         message_id = message.get("message_id", "")
@@ -1393,7 +1489,7 @@ async def handle_message(event_data: dict[str, Any]) -> None:
                 history = session.message_history if isinstance(session.message_history, list) else None
 
                 # 执行
-                result = await run_turn(query, deps, message_history=history)
+                result = await run_turn(query, deps, message_history=history, images=images)
 
                 # 持久化
                 pending_action_id = None

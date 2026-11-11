@@ -66,6 +66,14 @@ from app.modules.safety.business_agent.tools.knowledge_action_tools import (
     generate_knowledge_summary,
 )
 
+# ── 宣传函（invitation_*，office 包）──
+from app.modules.safety.business_agent.tools.office_tools import (
+    patch_invitation_html,
+    read_invitation,
+    rollback_invitation,
+    update_invitation,
+)
+
 # ── 办公（office_*）──
 from app.modules.safety.business_agent.tools.office_tools import (
     office_create_base,
@@ -369,6 +377,10 @@ TOOL_KIND: dict[str, bool] = {
     "office_create_docx": True,
     "office_create_sheet": True,
     "office_write_sheet": True,
+    "read_invitation": False,
+    "update_invitation": True,
+    "patch_invitation_html": True,
+    "rollback_invitation": True,
     "office_create_base": True,
     "office_create_slides": True,
     "office_generate_docx_pdf": True,
@@ -431,14 +443,15 @@ def _all_read_funcs() -> list[Callable[..., Any]]:
     query_overview,
     query_chemical_trend,
     query_special_operation_reports,
-    # 例外复核员（P1-3 observe，全只读）
-    hazard_view_images,
-    hazard_search_regulations,
-    hazard_get_record_context,
-    hazard_cross_check,
-    hazard_propose_writeback,
-    review_hazard_exceptions,
-] + _OFFICE_READ_FUNCS
+        read_invitation,
+        # 例外复核员（P1-3 observe，全只读）
+        hazard_view_images,
+        hazard_search_regulations,
+        hazard_get_record_context,
+        hazard_cross_check,
+        hazard_propose_writeback,
+        review_hazard_exceptions,
+    ] + _OFFICE_READ_FUNCS
 
 
 def _all_write_funcs() -> list[Callable[..., Any]]:
@@ -486,7 +499,11 @@ def _all_write_funcs() -> list[Callable[..., Any]]:
         reseed_daily_digest,
         # 例外复核写回（P2-1：requires_approval 确认流，creator-only）
         hazard_execute_review_writeback,
-    ] + _OFFICE_WRITE_FUNCS
+    ] + _OFFICE_WRITE_FUNCS + [
+        update_invitation,
+        patch_invitation_html,
+        rollback_invitation,
+    ]
 
 
 def _wrap_tool(func: Callable[..., Any], tool_name: str) -> Callable[..., Any]:

@@ -24,10 +24,12 @@ import uuid
 from typing import TYPE_CHECKING
 
 from pydantic_ai import (
+    BinaryContent,
     DeferredToolRequests,
     DeferredToolResults,
     ModelMessagesTypeAdapter,
     ToolDenied,
+    UserPromptPart,  # 仅历史读取用（1249/1258）；prompt 构建禁止嵌套，见 848 注释
 )
 from pydantic_ai.messages import ModelMessage
 
@@ -70,6 +72,7 @@ async def run_turn(
     deps: SafetyDeps,
     *,
     message_history: list[ModelMessage] | None = None,
+    images: list[tuple[bytes, str]] | None = None,
 ) -> dict:
     """执行一个对话回合（2-F：轮内事件批量收口——seq 内存分配 + 尾部一次 flush）。
 
@@ -83,6 +86,7 @@ async def run_turn(
     try:
         return await _run_turn_impl(
             user_message, deps, message_history=message_history,
+            images=images,
         )
     finally:
         await _events_mod.end_turn_event_batch()
@@ -93,6 +97,7 @@ async def _run_turn_impl(
     deps: SafetyDeps,
     *,
     message_history: list[ModelMessage] | None = None,
+    images: list[tuple[bytes, str]] | None = None,
 ) -> dict:
     """执行一个对话回合。
 
@@ -209,6 +214,7 @@ async def _run_turn_impl(
                     user_message, deps,
                     message_history=message_history,
                     routed_tool_names=routed_tools,
+                    images=images,
                 ),
                 timeout=_turn_timeout,
             )
@@ -769,6 +775,7 @@ async def _agent_run(
     deferred_tool_results: DeferredToolResults | None = None,
     resume_tool_names: list[str] | None = None,
     routed_tool_names: list[str] | None = None,
+    images: list[tuple[bytes, str]] | None = None,
 ):
     """统一的 agent.run() 调用包装。"""
     # S3 事件流：读历史优先从事件表 derive（derive_messages），回退旧 message_history。
@@ -837,8 +844,22 @@ async def _agent_run(
 
     agent = get_agent_for_tools(selected_tools)
 
+    # 多模态：携带图片时把首参升级为扁平 parts 列表（文本 + BinaryContent）。
+    # ⚠️ 不能包成 [UserPromptPart(...)]——run() 会把 Sequence 再包一层
+    # UserPromptPart，嵌套结构在 OpenAI 兼容序列化时触发 pydantic-core
+    # "Expected code to be unreachable" AssertionError（2026-11-05 识图
+    # 线上事故根因）。无图保持纯文本路径不变。
+    prompt: Any = effective_message
+    if images:
+        parts: list[Any] = []
+        if effective_message:
+            parts.append(effective_message)
+        for data, media_type in images:
+            parts.append(BinaryContent(data=data, media_type=media_type))
+        prompt = parts
+
     return await agent.run(
-        effective_message,
+        prompt,
         deps=deps,
         message_history=message_history or [],
         deferred_tool_results=deferred_tool_results,
@@ -853,6 +874,15 @@ def _serialize_messages(result) -> list[dict]:
     """
     try:
         msgs = result.all_messages()
+        # 图片仅当轮生效：序列化前剥离二进制内容，替换为占位文本
+        for msg in msgs:
+            for part in getattr(msg, "parts", []) or []:
+                content = getattr(part, "content", None)
+                if isinstance(content, list):
+                    part.content = [
+                        "[图片]" if isinstance(item, BinaryContent) else item
+                        for item in content
+                    ]
         json_str = ModelMessagesTypeAdapter.dump_json(msgs)
         return json.loads(json_str)
     except Exception:
