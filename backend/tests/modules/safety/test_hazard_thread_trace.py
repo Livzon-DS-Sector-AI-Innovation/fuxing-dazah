@@ -95,6 +95,10 @@ async def _rows(session: Any) -> list[AgentTrigger]:
 class TestRecordWriteback:
     async def test_switch_off_zero_write(self, db_session, monkeypatch):
         _off(monkeypatch)
+        # 快照断言（P3-4）：共享 dev 库与活服务①②⑤并发写回竞速时，「全表空」
+        # 断言会假红——改抓调用前 external_id 集合，断言调用后集合不变，
+        # 语义仍是开关关=本次调用零旁挂。
+        before = {r.external_id for r in await _rows(db_session)}
         ok = await writeback_trace.record_writeback(
             session=db_session,
             writer=writeback_trace.WRITER_AI_ANALYSIS,
@@ -103,7 +107,7 @@ class TestRecordWriteback:
             applied=True,
         )
         assert ok is False
-        assert await _rows(db_session) == []
+        assert {r.external_id for r in await _rows(db_session)} == before
 
     async def test_switch_on_stores_trigger_row(self, db_session, monkeypatch):
         _on(monkeypatch)
@@ -777,10 +781,13 @@ class TestDunningCardsThreadTrace:
 
     async def test_switch_off_zero_dunning_rows(self, monkeypatch):
         _off(monkeypatch)
+        # 快照断言（P3-4）：与 test_switch_off_zero_write 同根因同修法
+        # （全表空断言在活服务并发写回下假红，改断言集合不变）。
+        before = {r.external_id for r in await self._dunning_rows()}
         out = await self._run_send(monkeypatch)
 
         # 业务面照常发送（留痕开关不影响催办）
         assert out["stats"]["sent"] == 2
 
-        assert await self._dunning_rows() == []
+        assert {r.external_id for r in await self._dunning_rows()} == before
 
