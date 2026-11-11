@@ -870,6 +870,8 @@ export interface EnvPlan {
 export interface ChromatogramPeak {
   name: string
   area: number | null
+  /** 保留时间（分钟，供主峰核对；峰表没有该列时为 null） */
+  rt?: number | null
 }
 
 export interface BatchRelease {

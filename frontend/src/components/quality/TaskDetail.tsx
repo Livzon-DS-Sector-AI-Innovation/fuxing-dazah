@@ -1018,6 +1018,12 @@ export default function TaskDetail({ id }: { id: string }) {
         title={`图谱解析${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
         onClose={() => setChromaOpen(false)}
         onFilled={loadDetail}
+        onPrefill={(inputs, tableNo) => {
+          // 图谱映射的引擎 inputs 灌进在线计算表，检验员核对实时百分比后自行提交
+          setCalcTableNo(tableNo)
+          setCalcInputs(inputs)
+          setCalcOpen(true)
+        }}
       />
 
       <Modal
