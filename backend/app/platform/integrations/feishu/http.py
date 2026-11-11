@@ -51,6 +51,21 @@ def _get_http_client() -> httpx.AsyncClient:
     return client
 
 
+def _reset_http_client() -> None:
+    """丢弃当前事件循环的共享客户端（连接池僵死自愈）。
+
+    笔记本休眠唤醒/网络切换后，池内 TCP 连接可能全部失效（表现为
+    ConnectError/PoolTimeout 连发）。关闭旧客户端让下次请求重建全新连接池。
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    client = _client_cache.pop(loop, None)
+    if client is not None and not client.is_closed:
+        loop.create_task(client.aclose())  # 后台关闭，不阻塞重试路径
+
+
 async def get_tenant_token(
     app_id: str | None = None, app_secret: str | None = None
 ) -> str:
@@ -83,7 +98,7 @@ async def feishu_request(
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
-    attempts: int = 2,
+    attempts: int = 3,
     timeout: float = 30,
     check_code: bool = True,
 ) -> dict[str, Any]:
@@ -91,6 +106,8 @@ async def feishu_request(
 
     - 429/5xx：按传输失败重试
     - 非 JSON 响应体（网关 HTML 等）：解析异常同样重试
+    - 传输层异常（连接池僵死等）重试前重建连接池
+    - 退避间隔 1s / 3s（覆盖休眠唤醒后网络栈短暂未就绪的窗口）
     - check_code=True 时校验返回体 code==0，否则抛 FeishuAPIError
     """
     last_exc: Exception | None = None
@@ -109,8 +126,13 @@ async def feishu_request(
         except Exception as exc:  # noqa: BLE001 — 传输/解析/限流统一重试
             last_exc = exc
             if attempt < attempts - 1:
-                logger.warning("飞书请求失败重试: %s %s %s", method, url, type(exc).__name__)
-                await asyncio.sleep(1)
+                if isinstance(exc, httpx.TransportError):
+                    _reset_http_client()
+                logger.warning(
+                    "飞书请求失败重试(%d/%d): %s %s %s",
+                    attempt + 1, attempts, method, url, type(exc).__name__,
+                )
+                await asyncio.sleep(1 + attempt * 2)
             continue
         if check_code and data.get("code") != 0:
             raise FeishuAPIError(
