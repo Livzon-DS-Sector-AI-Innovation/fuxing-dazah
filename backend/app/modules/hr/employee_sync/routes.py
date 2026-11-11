@@ -7,7 +7,7 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,6 +114,68 @@ async def get_training_roster(
         "total": total, "page": page, "page_size": page_size,
         "scoped_departments": sorted(scoped) if scoped is not None else None,
     })
+
+
+@router.get("/training-roster/export", summary="培训人员名单导出（xlsx，含报表用职级）")
+async def export_training_roster(
+    department: str | None = None,
+    keyword: str | None = None,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+    _ctx: HrAccessContext = Depends(require_hr_basic),
+) -> StreamingResponse:
+    """导出当前筛选范围的全量名单（数据范围与列表接口一致）。"""
+    from io import BytesIO
+    from urllib.parse import quote
+
+    from openpyxl import Workbook
+
+    from app.modules.hr.employee_sync.config import TRAINING_ROSTER_FIELDS
+    from app.modules.hr.employee_sync.report_level import (
+        REPORT_LEVEL_FIELD,
+        REPORT_LEVEL_LABEL,
+    )
+
+    service = EmployeeSyncService(session)
+    scoped = None if hr_scope.is_unrestricted else set(hr_scope.scoped_departments)
+    rows, _total = await service.training_roster(
+        department=department, keyword=keyword,
+        page=1, page_size=1_000_000,  # 导出全量，不受列表分页上限约束
+        scoped_departments=scoped,
+    )
+
+    # 列 = 白名单列 + 「报表用职级」（紧跟「职务」列，与前端列序一致）
+    columns: list[tuple[str, str]] = []
+    for label, attr in TRAINING_ROSTER_FIELDS.items():
+        columns.append((label, attr))
+        if attr == "duty":
+            columns.append((REPORT_LEVEL_LABEL, REPORT_LEVEL_FIELD))
+
+    def _cell(value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple)):
+            return "、".join(str(v) for v in value if v is not None)
+        return str(value)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "培训人员名单"
+    ws.append([label for label, _attr in columns])
+    for row in rows:
+        ws.append([_cell(row.get(attr)) for _label, attr in columns])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from datetime import date as _date
+
+    filename = f"培训人员名单_{_date.today().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
+    )
 
 
 class TrainingRosterUpdateInput(BaseModel):

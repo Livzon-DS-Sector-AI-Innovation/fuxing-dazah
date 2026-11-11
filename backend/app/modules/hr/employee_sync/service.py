@@ -33,6 +33,10 @@ from app.modules.hr.employee_sync.mapping import (
     convert_source_fields,
     normalize_cell,
 )
+from app.modules.hr.employee_sync.report_level import (
+    REPORT_LEVEL_FIELD,
+    compute_report_level,
+)
 from app.modules.hr.models import Employee, TrainingRosterProfile
 from app.modules.hr.repository import EmployeeRepository
 from app.modules.hr.service import EmployeeService
@@ -429,6 +433,11 @@ class EmployeeSyncService:
             row: dict[str, Any] = {}
             for _label, attr in TRAINING_ROSTER_FIELDS.items():
                 row[attr] = getattr(profile, attr, None)
+            # 报表用职级：按职级+岗位类别+职务即时计算
+            #（原始「级别」不在脱敏白名单内，不外显）
+            row[REPORT_LEVEL_FIELD] = compute_report_level(
+                profile.level, profile.duty, profile.job_category,
+            )
             rows.append(row)
         return rows, total
 

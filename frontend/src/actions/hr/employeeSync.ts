@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import type { EmployeeSyncConfig, EmployeeSyncStats } from '@/types/hr'
-import { fetchHrApi } from './_helpers'
+import { fetchHrApi, fetchHrDownload } from './_helpers'
 
 // ─── 员工档案多维表格同步 ───
 
@@ -45,6 +45,8 @@ export interface TrainingRosterRow {
   team?: string | null
   position: string
   duty?: string | null
+  /** 报表用职级：后端按职级（S13及以上）+职务自动计算 */
+  report_level?: string | null
   job_category?: string | null
   variety?: string | null
   concurrent_departments?: string | null
@@ -116,4 +118,20 @@ export async function updateTrainingRosterEntry(
   )
   revalidatePath('/hr/training/personnel')
   return res
+}
+
+/** 导出培训人员名单 Excel（含报表用职级列，按当前筛选范围导出全量）。
+ * 只负责取数：返回 base64 + 文件名，文件落地由客户端组件调 downloadBase64File 完成
+ * （'use server' 环境无 window，不能在这里触发浏览器下载）。 */
+export async function exportTrainingRoster(params?: {
+  department?: string
+  keyword?: string
+}): Promise<{ base64: string; filename: string | null }> {
+  const qs = new URLSearchParams()
+  if (params?.department) qs.set('department', params.department)
+  if (params?.keyword) qs.set('keyword', params.keyword)
+  return fetchHrDownload(
+    `/hr/employee-sync/training-roster/export?${qs.toString()}`,
+    { errorMessage: '下载培训人员名单失败' },
+  )
 }

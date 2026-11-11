@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, App, Button, Checkbox, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag,
 } from 'antd'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TagsOutlined } from '@ant-design/icons'
+import { DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TagsOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import {
@@ -16,12 +16,14 @@ import {
   fetchEmployeeClassifications,
   fetchEmployeeTagsByEmployee,
   fetchTrainingRoster,
+  exportTrainingRoster,
   removeClassificationMembers,
   saveEmployeeTag,
   updateTrainingRosterEntry,
 } from '@/actions/hr'
 import type { TrainingRosterRow } from '@/actions/hr/employeeSync'
 import { usePermission } from '@/hooks/usePermission'
+import { downloadBase64File } from '@/lib/hr'
 import type { Department } from '@/types/hr'
 
 /** 固定选项（口径与员工档案表单一致） */
@@ -291,6 +293,26 @@ export default function TrainingRosterClient() {
     void load(p, ps, keyword, tabDepartment)
   }, [keyword, load, tabDepartment])
 
+  // ── 名单下载（按当前搜索/部门筛选导出全量） ──
+
+  const [exporting, setExporting] = useState(false)
+  const handleDownload = useCallback(async () => {
+    setExporting(true)
+    try {
+      // server action 只取数；window 触发下载必须在客户端做
+      const { base64, filename } = await exportTrainingRoster({
+        keyword: keyword || undefined,
+        department: tabDepartment || undefined,
+      })
+      downloadBase64File(base64, filename || '培训人员名单.xlsx')
+      message.success('名单已下载')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '下载失败')
+    } finally {
+      setExporting(false)
+    }
+  }, [keyword, message, tabDepartment])
+
   // ── 编辑弹窗 ──
 
   const openEdit = useCallback((row: TrainingRosterRow) => {
@@ -365,6 +387,10 @@ export default function TrainingRosterClient() {
       { title: '班组', dataIndex: 'team', key: 'team', width: 90 },
       { title: '职位', dataIndex: 'position', key: 'position', width: 110 },
       { title: '职务', dataIndex: 'duty', key: 'duty', width: 90 },
+      {
+        title: '报表用职级', dataIndex: 'report_level', key: 'report_level', width: 120,
+        render: (v: string | null | undefined) => v || '其他人员',
+      },
       { title: '岗位类别', dataIndex: 'job_category', key: 'job_category', width: 100 },
       { title: '品种', dataIndex: 'variety', key: 'variety', width: 90, render: (v: string | null) => v || '-' },
       { title: '兼任品种', dataIndex: 'concurrent_variety', key: 'concurrent_variety', width: 110, ellipsis: true, render: (v: string | null) => v || '-' },
@@ -420,6 +446,13 @@ export default function TrainingRosterClient() {
             <Button icon={<TagsOutlined />} onClick={openClassModal}>分类管理</Button>
           )}
           <Button
+            icon={<DownloadOutlined />}
+            onClick={() => { void handleDownload() }}
+            loading={exporting}
+          >
+            下载名单
+          </Button>
+          <Button
             icon={<ReloadOutlined />}
             onClick={() => load(page, pageSize, keyword, tabDepartment)}
             loading={loading}
@@ -459,7 +492,7 @@ export default function TrainingRosterClient() {
               columns={columns}
               dataSource={rows}
               loading={loading}
-              scroll={{ x: 2500 }}
+              scroll={{ x: 2620 }}
               pagination={{
                 current: page,
                 pageSize,
