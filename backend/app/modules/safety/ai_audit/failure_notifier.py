@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.core.redis import cache_get, cache_set
 
@@ -51,6 +51,7 @@ SCENARIO_LABELS: dict[str, str] = {
     "sop_generation": "操规AI补全",
     "sop_review": "操规AI审核",
     "contractor_admission_review": "相关方准入审核",
+    "central_alarm_analysis": "中控报警分析",
     "unknown": "未知场景",
 }
 
@@ -114,7 +115,10 @@ async def notify_ai_failure(
         from app.modules.safety.feishu.notification import send_user_card
 
         label = _scenario_label(scenario)
-        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        # 展示时区=北京时间（UTC+8）；告警受众为厂内用户，UTC 直读易误判时刻
+        now = (datetime.now(UTC) + timedelta(hours=8)).strftime(
+            "%Y-%m-%d %H:%M:%S 北京时间(UTC+8)"
+        )
         error_text = error or "（无错误详情）"
         trace_text = trace_id or "（无）"
         channel_text = channel or "（无）"
