@@ -1611,12 +1611,13 @@ class CandidateService:
             raise NotFoundException("候选人", str(candidate_id))
         return c
 
-    async def create(self, data: CandidateCreate) -> Candidate:
+    async def create(self, data: CandidateCreate, operator: str | None = None) -> Candidate:
         c = Candidate(**data.model_dump())
         result = await self.repo.create(c)
         # 记录初始状态
         self.repo.session.add(CandidateStatusLog(
-            candidate_id=result.id, from_status=None, to_status=result.status, remark="创建候选人"
+            candidate_id=result.id, from_status=None, to_status=result.status,
+            remark="创建候选人", operator=operator,
         ))
         await self.repo.session.flush()
         return result
@@ -1629,6 +1630,8 @@ class CandidateService:
 
     async def delete(self, candidate_id: UUID) -> None:
         c = await self.get(candidate_id)
+        if c.status == "已入职":
+            raise ValueError("已入职候选人不可删除（已生成员工档案与入职记录），如需处理请走离职流程")
         await self.repo.soft_delete(c.id)
 
     # ─── Excel 批量导入 ───
@@ -1656,7 +1659,7 @@ class CandidateService:
     _CANDIDATE_DATE_FIELDS: set[str] = {"graduation_date"}
     _CANDIDATE_INT_FIELDS: set[str] = {"work_years"}
 
-    async def upload_candidates(self, file_bytes: bytes) -> dict:
+    async def upload_candidates(self, file_bytes: bytes, operator: str | None = None) -> dict:
         """从 Excel 批量导入候选人，按姓名+手机/邮箱 upsert。"""
         from io import BytesIO
 
@@ -1707,7 +1710,7 @@ class CandidateService:
                         name = str(val)
                         continue  # name 单独传参，不写入 data（否则 Candidate(name=name, **data) 会重复传参）
                     elif field_name == "phone":
-                        phone = str(val)
+                        phone = self._normalize_phone(val)
                     elif field_name == "email":
                         email = str(val)
                     if field_name in self._CANDIDATE_DATE_FIELDS:
@@ -1733,7 +1736,8 @@ class CandidateService:
                     created += 1
                     # 新候选人记录初始状态日志（与手工创建行为一致）
                     self.repo.session.add(CandidateStatusLog(
-                        candidate_id=obj.id, from_status=None, to_status=obj.status, remark="Excel 导入"
+                        candidate_id=obj.id, from_status=None, to_status=obj.status,
+                        remark="Excel 导入", operator=operator,
                     ))
                 else:
                     updated += 1
@@ -1747,6 +1751,15 @@ class CandidateService:
                 errors.append(f"第{row_idx}行: {e}")
 
         return {"created": created, "updated": updated, "errors": errors}
+
+    @staticmethod
+    def _normalize_phone(val) -> str:
+        """Excel 数字单元格的手机号读出来是 13800000000.0，归一为纯数字串。"""
+        if isinstance(val, float) and val == int(val):
+            return str(int(val))
+        if isinstance(val, int):
+            return str(val)
+        return str(val).strip()
 
     @staticmethod
     def _parse_date_value(val) -> date | None:
@@ -1773,7 +1786,10 @@ class CandidateService:
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         return None
 
-    async def transition_status(self, candidate_id: UUID, new_status: str, remark: str | None = None) -> Candidate:
+    async def transition_status(
+        self, candidate_id: UUID, new_status: str, remark: str | None = None,
+        operator: str | None = None,
+    ) -> Candidate:
         c = await self.get(candidate_id)
         allowed = _CANDIDATE_TRANSITIONS.get(c.status, set())
         if new_status not in allowed:
@@ -1782,7 +1798,8 @@ class CandidateService:
         c.status = new_status
         result = await self.repo.update(c)
         self.repo.session.add(CandidateStatusLog(
-            candidate_id=result.id, from_status=old_status, to_status=new_status, remark=remark
+            candidate_id=result.id, from_status=old_status, to_status=new_status,
+            remark=remark, operator=operator,
         ))
         await self.repo.session.flush()
         return result
@@ -1790,7 +1807,7 @@ class CandidateService:
     async def get_status_logs(self, candidate_id: UUID) -> list[CandidateStatusLog]:
         return await self.log_repo.list_by_candidate(candidate_id)
 
-    async def onboard(self, candidate_id: UUID) -> tuple[Candidate, OnboardingRecord, str]:
+    async def onboard(self, candidate_id: UUID, operator: str | None = None) -> tuple[Candidate, OnboardingRecord, str]:
         """候选人入职：校验状态、生成工号、创建入职记录、更新岗位需求 hired_count。"""
         import uuid as _uuid
         from datetime import date as date_type
@@ -1865,8 +1882,13 @@ class CandidateService:
             self.repo.session.add(task)
         await self.repo.session.flush()
 
-        # 更新候选人状态
+        # 更新候选人状态（update() 不写状态日志，此处显式补记，
+        # 供月度入职统计与招聘周期计算取事件时间）
         await self.update(candidate_id, CandidateUpdate(status="已入职", offer_status="已接受"))
+        self.repo.session.add(CandidateStatusLog(
+            candidate_id=candidate_id, from_status="待入职审批", to_status="已入职",
+            remark=f"一键入职，工号 {emp_no}", operator=operator,
+        ))
 
         # 更新岗位需求 hired_count
         if c.job_requirement_id:
@@ -1928,9 +1950,20 @@ class InterviewService:
         old_location = iv.location
         old_interviewer = iv.interviewer
 
-        for k, v in data.model_dump(exclude_unset=True).items():
+        for k, v in data.model_dump(exclude={"create_calendar_event"}, exclude_unset=True).items():
             setattr(iv, k, v)
         result = await self.repo.update(iv)
+
+        # 此前创建日历失败的记录（calendar_event_id 为空）：更新时显式
+        # 勾选 create_calendar_event 补建，否则一次失败后永远没有日程
+        if data.create_calendar_event and not result.calendar_event_id and result.interview_date:
+            try:
+                event_id = await self._create_calendar_event(result)
+                if event_id:
+                    result.calendar_event_id = event_id
+                    result = await self.repo.update(result)
+            except Exception as e:
+                logger.warning("补建日历事件失败（面试已更新）: %s", e)
 
         if result.calendar_event_id and (
             old_date != result.interview_date
@@ -1950,6 +1983,25 @@ class InterviewService:
                 logger.warning("同步日历事件失败（面试已更新）: %s", e)
 
         return result
+
+    async def _create_calendar_event(self, interview: Interview) -> str | None:
+        """为面试记录创建飞书日历日程，返回 event_id（失败抛异常由调用方降级）。"""
+        candidate_repo = CandidateRepository(self.repo.session)
+        candidate = await candidate_repo.get_by_id(interview.candidate_id)
+        candidate_name = candidate.name if candidate else "候选人"
+        position = candidate.position if candidate else ""
+
+        from app.modules.hr.feishu_calendar import FeishuCalendarService
+        calendar = FeishuCalendarService()
+        return await calendar.create_interview_event(
+            interview_id=interview.id,
+            candidate_name=candidate_name,
+            position=position,
+            interview_date_val=interview.interview_date,
+            interviewer_name=interview.interviewer or "未指定",
+            location=interview.location or "未指定",
+            interview_type=interview.interview_type,
+        )
 
     async def delete(self, interview_id: UUID) -> None:
         iv = await self.get(interview_id)
@@ -2007,6 +2059,7 @@ class AiEvaluationService:
 
         # 调用LLM评估
         from app.modules.hr.ai_service import AiChatService
+        from app.modules.hr.config import HR_AI_MODEL
         prompt = self._build_evaluation_prompt(jd_text, resume_text, interview.transcript_text)
         result = await AiChatService.call_json(prompt)
 
@@ -2032,7 +2085,7 @@ class AiEvaluationService:
             risk_flags=result.get("risk_flags"),
             jd_text_snapshot=jd_text,
             transcript_snapshot=interview.transcript_text,
-            model_version="deepseek-v3",
+            model_version=HR_AI_MODEL,
         )
         eval_obj = await self.repo.create(eval_obj)
 
@@ -2109,7 +2162,10 @@ class CandidateReviewService:
             })
         return result
 
-    async def push(self, candidate_id: UUID, pushed_by: str, push_note: str | None = None, reviewer: str | None = None) -> CandidateReview:
+    async def push(
+        self, candidate_id: UUID, pushed_by: str, push_note: str | None = None,
+        reviewer: str | None = None, operator: str | None = None,
+    ) -> CandidateReview:
         c = await self.candidate_repo.get_by_id(candidate_id)
         if not c:
             raise NotFoundException("候选人", str(candidate_id))
@@ -2122,8 +2178,9 @@ class CandidateReviewService:
         if not final_reviewer:
             raise ValueError("请填写审核人姓名，或为岗位需求设置负责人")
 
-        # 候选人状态前置校验：已入职/已录用/已拒绝 不可推送审核
-        if c.status in ("已录用", "已入职", "已拒绝"):
+        # 状态机校验：走 _CANDIDATE_TRANSITIONS，防止「已面试/录用中」等
+        # 后段状态直接回推部门审核（旧逻辑只挡了三个终态）
+        if "待部门审核" not in _CANDIDATE_TRANSITIONS.get(c.status, set()):
             raise ValueError(f"候选人状态为「{c.status}」，无法推送审核")
 
         rv = CandidateReview(
@@ -2145,6 +2202,7 @@ class CandidateReviewService:
             from_status=old_status,
             to_status="待部门审核",
             remark=f"推送至{final_reviewer}审核",
+            operator=operator or pushed_by,
         ))
 
         # 发送飞书消息卡片给审核人
@@ -2161,7 +2219,10 @@ class CandidateReviewService:
             raise ValueError("该审核已处理")
         return rv.id
 
-    async def decide(self, review_id: UUID, decision: str, review_comment: str | None = None) -> CandidateReview:
+    async def decide(
+        self, review_id: UUID, decision: str, review_comment: str | None = None,
+        operator: str | None = None,
+    ) -> CandidateReview:
         rv = await self.repo.get_by_id(review_id)
         if not rv:
             raise NotFoundException("审核记录", str(review_id))
@@ -2200,6 +2261,7 @@ class CandidateReviewService:
                 from_status=old_status,
                 to_status=new_status,
                 remark=f"审核人{decision}" + (f"：{review_comment}" if review_comment else ""),
+                operator=operator or rv.reviewer,
             ))
 
         # 通知HR审核结果
@@ -2216,7 +2278,10 @@ class CandidateReviewService:
         except Exception as e:
             logger.warning(f"发送飞书审核卡片失败: {e}")
 
-    async def push_onboarding(self, candidate_id: UUID, pushed_by: str, push_note: str | None = None) -> CandidateReview:
+    async def push_onboarding(
+        self, candidate_id: UUID, pushed_by: str, push_note: str | None = None,
+        reviewer: str | None = None, operator: str | None = None,
+    ) -> CandidateReview:
         """发起入职审批"""
         c = await self.candidate_repo.get_by_id(candidate_id)
         if not c:
@@ -2224,18 +2289,21 @@ class CandidateReviewService:
         if c.status != "已录用":
             raise ValueError(f"候选人状态必须为「已录用」才能发起入职审批，当前状态：「{c.status}」")
 
-        reviewer = pushed_by  # 入职审批由发起人自行指定审批人，或使用部门负责人
-        if c.job_requirement_id:
+        # 审批人优先级：显式指定 > 岗位负责人 > 发起人
+        final_reviewer = reviewer
+        if not final_reviewer and c.job_requirement_id:
             jd = await self.jd_repo.get_by_id(c.job_requirement_id)
             if jd and jd.owner:
-                reviewer = jd.owner
+                final_reviewer = jd.owner
+        if not final_reviewer:
+            final_reviewer = pushed_by
 
         rv = CandidateReview(
             candidate_id=candidate_id,
             job_requirement_id=c.job_requirement_id,
             pushed_by=pushed_by,
             push_note=push_note,
-            reviewer=reviewer,
+            reviewer=final_reviewer,
             status="待审核",
             review_type="入职审批",
         )
@@ -2248,7 +2316,8 @@ class CandidateReviewService:
             candidate_id=candidate_id,
             from_status=old_status,
             to_status="待入职审批",
-            remark=f"发起入职审批，审批人：{reviewer}",
+            remark=f"发起入职审批，审批人：{final_reviewer}",
+            operator=operator or pushed_by,
         ))
 
         # 通知审批人（与部门审核 push 行为一致）
@@ -2711,6 +2780,7 @@ class CandidateAnalysisService:
         resume_text = "\n".join(resume_parts)
 
         from app.modules.hr.ai_service import AiChatService
+        from app.modules.hr.config import HR_AI_MODEL
 
         prompt = _ANALYSIS_PROMPT_TEMPLATE.format(
             resume_text=resume_text,
@@ -2740,7 +2810,7 @@ class CandidateAnalysisService:
                 interview_suggestions=result.get("interview_suggestions"),
                 training_suggestions=result.get("training_suggestions"),
                 raw_text=str(result.get("summary") or ""),
-                model_version="deepseek-chat",
+                model_version=HR_AI_MODEL,
                 generated_at=_dt.now().astimezone(),
             )
         )

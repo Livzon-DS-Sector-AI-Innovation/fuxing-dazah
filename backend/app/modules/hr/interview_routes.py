@@ -51,8 +51,22 @@ async def get_interview(interview_id: UUID, service: InterviewService = Depends(
 
 @router.put("/interviews/{interview_id}", summary="更新面试")
 async def update_interview(interview_id: UUID, payload: InterviewUpdate, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
+    old = await service.get(interview_id)
+    # 先快照旧值：service.update 后 old 与 result 是同一 ORM 实例（身份映射），
+    # 事后比较会变成「新值 vs 新值」恒相等
+    old_transcript = (old.transcript_text or "").strip()
+    old_notes = (old.notes or "").strip()
     r = await service.update(interview_id, payload)
-    await _auto_generate_analysis(service, r)
+    # 仅在逐字稿/备注实际变化时才触发 AI 报告重生成——
+    # 否则改个面试状态也会同步烧一次 LLM 调用
+    fields = payload.model_dump(exclude_unset=True)
+    content_changed = any(
+        (fields.get(f) or "").strip() != old_value
+        for f, old_value in (("transcript_text", old_transcript), ("notes", old_notes))
+        if f in fields
+    )
+    if content_changed:
+        await _auto_generate_analysis(service, r)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"), message="已更新")
 
 
@@ -97,7 +111,9 @@ async def _auto_generate_analysis(service: InterviewService, interview) -> None:
             return
         from app.modules.hr.service import CandidateAnalysisService
 
-        analysis = CandidateAnalysisService(service.session)
+        # InterviewService 只有 repo.session 属性——此前误用 service.session，
+        # 每次自动生成都 AttributeError 静默失败，从未真正执行过
+        analysis = CandidateAnalysisService(service.repo.session)
         await analysis.generate(interview.candidate_id, interview.id)
     except Exception:
         # AI 生成失败不阻断面试保存，但记录日志便于排障

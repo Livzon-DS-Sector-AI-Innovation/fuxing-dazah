@@ -17,6 +17,7 @@ class AiChatService:
         self.client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url="https://api.deepseek.com/v1",
+            timeout=120.0,
         )
         self.model = model
 
@@ -71,7 +72,8 @@ class AiChatService:
             from app.modules.hr.config import HR_AI_API_KEY
 
             api_key = HR_AI_API_KEY
-        client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+        # 非流式调用挂在请求线程上（评估/分析报告），超时兜底防止 LLM 挂起拖死请求
+        client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1", timeout=90.0)
         from app.modules.hr.config import HR_AI_MODEL
         model = model or HR_AI_MODEL or "deepseek-chat"
         messages: list[dict[str, str]] = []
