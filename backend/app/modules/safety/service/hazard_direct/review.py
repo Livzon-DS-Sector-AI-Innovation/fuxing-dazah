@@ -1,9 +1,21 @@
 """② AI整改审核轮询 — 直读多维表格，不落库。
 
-链路：
+链路（主分支）：
     search(纠正预防措施非空 AND AI初审结果空 AND 整改状态 isNot 已关闭)
       → per-record 锁 → 下载缺陷图 + 整改后图 → 视觉AI 对比 + RAG
       → 结构化输出 → 写回「AI初审结果」+「AI初审说明」
+
+链路（②-b 已关闭自动通过，2026-11-04 拍板：已关闭即通过）：
+    search(AI初审结果空 AND 整改状态 is 已关闭)
+      → per-record 锁 → 规则性写回「已通过 + 自动通过说明」（不烧 AI）
+    兜两处漏：回复与关闭同窗口填写的竞速记录（5 分钟轮询没赶上就被
+    旧判据永久排除）+ 历史存量（2026-11-04 时点 1127 条）。说明文案
+    显式标注「未走AI初审」，与 AI 结论可区分。
+
+链路（②-c 已关闭跟随改写，2026-11-05 拍板：人工关闭优先、AI 结论单向跟随）：
+    search(AI初审结果 is 未通过/无需整改 AND 整改状态 is 已关闭)
+      → per-record 锁 → 规则性改写「已通过 + 改写说明」（不烧 AI）
+    改写说明保留原结论与原说明摘要（可审计）；已通过+关闭不命中不重写。
 
 闸门说明（重要）：多维表格「整改状态」**不会自动变成整改中**（无自动化），
 因此不能用 `整改状态 is 整改中` 作判据；改用「已填整改回复 + 未初审 + 未关闭」，
@@ -19,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from app.modules.safety.service.hazard_direct import bitable_repo, config
@@ -29,6 +42,17 @@ logger = logging.getLogger(__name__)
 # 进程级写回锁：①②③⑤ 共用 bitable_repo.WRITE_LOCK（2026-11-05 P0-B/B4：
 # 自建独立锁会让 ② 与 ①/⑤ 并发写 Bitable，单表写不支持并发）。
 _WRITE_LOCK = bitable_repo.WRITE_LOCK
+
+# ②-b 自动通过说明（与 AI 初审结论可区分的固定文案）
+AUTOPASS_NOTE = "整改已关闭，按「已关闭即通过」规则自动补录通过（未走AI初审）。"
+
+# ②-c 跟随改写说明模板（保留原结论与原因摘要，可审计）
+OVERRIDE_NOTE_TEMPLATE = (
+    "整改状态已被人工置为已关闭，按「已关闭即通过」规则跟随人工将AI初审结论"
+    "「{original}」改写为已通过（{date}）。\n原AI初审说明：{original_note}"
+)
+# 原说明摘要截断长度（防超长原因刷爆字段）
+_OVERRIDE_NOTE_LIMIT = 200
 
 
 @dataclass
@@ -41,6 +65,8 @@ class ReviewRoundResult:
     failed: int = 0
     skipped: int = 0
     no_conclusion: int = 0
+    autopassed: int = 0
+    overridden: int = 0
     failures: list[dict[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -174,13 +200,12 @@ async def run_review_round(
     client = SafetyBitableClient()
     records = await bitable_repo.search_pending_review(client, limit=limit)
     result.total = len(records)
-    if not records:
-        logger.info("② 无待审核记录")
-        return result
 
-    logger.info("② 待审核 %d 条（判据: 已填回复 + 未初审 + 未关闭）", len(records))
     write_lock = _WRITE_LOCK
     semaphore = asyncio.Semaphore(config.write_concurrency())
+
+    if not records:
+        logger.info("② 无待审核记录")
 
     async def _worker(record: dict[str, Any]) -> None:
         record_id = record.get("record_id", "")
@@ -229,9 +254,110 @@ async def run_review_round(
 
     await asyncio.gather(*(_worker(rec) for rec in records))
 
+    # ── ②-b 已关闭自动通过（规则性写回，不烧 AI）─────────────────
+    if config.review_autopass_enabled():
+        auto_records = await bitable_repo.search_autopass_review(client, limit=limit)
+        if auto_records:
+            logger.info(
+                "② 自动通过待补 %d 条（判据: 未初审 + 已关闭）", len(auto_records),
+            )
+        result.total += len(auto_records)
+        for record in auto_records:
+            record_id = record.get("record_id", "")
+            if not record_id:
+                continue
+            async with bitable_repo.record_lock(record_id) as acquired:
+                if not acquired:
+                    result.skipped += 1
+                    logger.info(
+                        "② 自动通过跳过（记录锁被占用）: record_id=%s", record_id
+                    )
+                    continue
+                try:
+                    async with write_lock:
+                        ok = await bitable_repo.write_review(
+                            client,
+                            record_id,
+                            conclusion="已通过",
+                            summary=AUTOPASS_NOTE,
+                        )
+                        if not ok:
+                            raise RuntimeError("写回 Bitable 返回 False")
+                    result.succeeded += 1
+                    result.autopassed += 1
+                    logger.info("② 自动通过: record_id=%s", record_id)
+                except Exception as exc:
+                    result.failed += 1
+                    result.failures.append(
+                        {
+                            "record_id": record_id,
+                            "reason": f"自动通过 {type(exc).__name__}: {exc}"[:200],
+                        }
+                    )
+                    logger.exception(
+                        "② 自动通过写回失败（下轮自动重试）: record_id=%s", record_id
+                    )
+
+    # ── ②-c 已关闭跟随改写（人工关闭优先，AI 结论单向跟随；规则性写回，不烧 AI）──
+    if config.review_autopass_enabled():
+        override_records = await bitable_repo.search_override_review(client, limit=limit)
+        if override_records:
+            logger.info(
+                "② 跟随改写待补 %d 条（判据: AI初审=未通过/无需整改 + 已关闭）",
+                len(override_records),
+            )
+        result.total += len(override_records)
+        for record in override_records:
+            record_id = record.get("record_id", "")
+            if not record_id:
+                continue
+            async with bitable_repo.record_lock(record_id) as acquired:
+                if not acquired:
+                    result.skipped += 1
+                    logger.info(
+                        "② 跟随改写跳过（记录锁被占用）: record_id=%s", record_id
+                    )
+                    continue
+                try:
+                    original = bitable_repo.f_select(record.get("fields", {}), bitable_repo.F_REVIEW_RESULT) or "未通过"
+                    original_note = (
+                        bitable_repo.f_text(record.get("fields", {}), bitable_repo.F_REVIEW_NOTE) or ""
+                    )
+                    note = OVERRIDE_NOTE_TEMPLATE.format(
+                        original=original,
+                        date=datetime.now().strftime("%Y-%m-%d"),
+                        original_note=original_note[:_OVERRIDE_NOTE_LIMIT],
+                    )
+                    async with write_lock:
+                        ok = await bitable_repo.write_review(
+                            client,
+                            record_id,
+                            conclusion="已通过",
+                            summary=note,
+                        )
+                        if not ok:
+                            raise RuntimeError("写回 Bitable 返回 False")
+                    result.succeeded += 1
+                    result.overridden += 1
+                    logger.info(
+                        "② 跟随改写: record_id=%s %s→已通过", record_id, original
+                    )
+                except Exception as exc:
+                    result.failed += 1
+                    result.failures.append(
+                        {
+                            "record_id": record_id,
+                            "reason": f"跟随改写 {type(exc).__name__}: {exc}"[:200],
+                        }
+                    )
+                    logger.exception(
+                        "② 跟随改写写回失败（下轮自动重试）: record_id=%s", record_id
+                    )
+
     logger.info(
-        "② 本轮结束: 总数=%d 成功=%d 失败=%d 跳过=%d 无结论=%d",
-        result.total, result.succeeded, result.failed, result.skipped, result.no_conclusion,
+        "② 本轮结束: 总数=%d 成功=%d（自动通过=%d 跟随改写=%d）失败=%d 跳过=%d 无结论=%d",
+        result.total, result.succeeded, result.autopassed, result.overridden,
+        result.failed, result.skipped, result.no_conclusion,
     )
     if notify and len(result.failures) >= config.alert_min_failures():
         await notify_failures(

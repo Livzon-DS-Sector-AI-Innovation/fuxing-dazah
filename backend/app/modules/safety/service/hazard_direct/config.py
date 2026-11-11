@@ -51,6 +51,17 @@ def review_poll_enabled() -> bool:
     )
 
 
+def review_autopass_enabled() -> bool:
+    """②-b 已关闭自动通过（2026-11-04 拍板：已关闭即通过）。
+
+    规则性写回不烧 AI；默认开（这是已定的业务规则），可单独关闭回退
+    「已关闭不初审、留空」的旧行为。
+    """
+    return direct_poll_enabled() and _flag(
+        gates.domain_env(_DOMAIN, "REVIEW_AUTOPASS_ENABLED"), True
+    )
+
+
 def supervision_poll_enabled() -> bool:
     """③ 督办等级计算轮询（读多维表格 → 算 → 只回写多维表格）。"""
     return direct_poll_enabled() and _flag(
