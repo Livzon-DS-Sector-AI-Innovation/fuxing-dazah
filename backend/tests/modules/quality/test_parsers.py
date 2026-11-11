@@ -178,6 +178,30 @@ def test_parse_lc_excel_rejects_garbage() -> None:
         parse_lc_excel(b"not an excel file", "bad.xlsx")
 
 
+def test_detect_standard_type_variants() -> None:
+    """标题识别药典标准类型：EP/CP 回退 USR 万古霉素版式解析，但标准类型需正确落库。"""
+    from app.modules.quality.excel_parser import detect_standard_type
+
+    assert detect_standard_type("盐酸万古霉素USP含量与有关物质计算表") == "USP"
+    assert detect_standard_type("盐酸万古霉素EP含量与有关物质计算表") == "EP"
+    assert detect_standard_type("盐酸万古霉素Ph.Eur含量与有关物质计算表") == "EP"
+    assert detect_standard_type("盐酸万古霉素（欧洲药典）计算表") == "EP"
+    assert detect_standard_type("盐酸万古霉素CP含量与有关物质计算表") == "CP"
+    assert detect_standard_type("盐酸万古霉素中国药典计算表") == "CP"
+    # 无法识别 → 空串（列表/汇总显示 '-'）
+    assert detect_standard_type("某产品含量与有关物质计算表") == ""
+
+
+def test_usr_parser_title_fields_ep_cp() -> None:
+    """EP/CP 标题的产品名截取：不再把 EP/CP 记录落成空标准。"""
+    from app.modules.quality.excel_parser import _UsrVancomycinParser
+
+    p = _UsrVancomycinParser()
+    assert p._extract_product_name("盐酸万古霉素EP含量与有关物质计算表") == "盐酸万古霉素"
+    assert p._extract_product_name("盐酸万古霉素CP含量与有关物质计算表") == "盐酸万古霉素"
+    assert p._extract_product_name("盐酸万古霉素USP含量与有关物质计算表") == "盐酸万古霉素"
+
+
 def test_extract_peak_table_from_markdown() -> None:
     """图谱 Markdown 峰表提取：面积列优先、两位小数、非数据行跳过。"""
     from app.modules.quality.service.chromatogram import extract_peak_table
