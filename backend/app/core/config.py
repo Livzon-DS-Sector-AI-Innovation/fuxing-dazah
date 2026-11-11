@@ -56,19 +56,22 @@ class Settings(BaseSettings):
     # Feishu WebSocket 长连接（接收消息/事件推送）
     FEISHU_WS_ENABLED: bool = True
 
+    # HR 专属飞书应用凭证：员工档案 bitable 同步与职称评审审批同步共用
+    # 同一应用时只需配这一对，下面两对专用变量留空自动回填本值。
+    HR_FEISHU_APP_ID: str = ""
+    HR_FEISHU_APP_SECRET: str = ""
+
     # 职称评审：独立飞书应用凭证（审批同步用：approval:approval:readonly / approval:definition；
-    # 缺省回落全局应用）。多维表格读写与通知卡片始终使用全局应用。
+    # 缺省回落 HR_FEISHU_* → 全局应用）。多维表格读写与通知卡片始终使用全局应用。
     HR_TITLE_REVIEW_FEISHU_APP_ID: str = ""
     HR_TITLE_REVIEW_FEISHU_APP_SECRET: str = ""
     HR_TITLE_REVIEW_FEISHU_WS_ENABLED: bool = False
 
-    # 员工档案多维表格同步：独立应用凭证（bitable 读写；缺省回落全局应用）。
+    # 员工档案多维表格同步：独立应用凭证（bitable 读写；缺省回落 HR_FEISHU_* → 全局应用）。
     # 多环境共用一个应用时可让本地与服务器共用同一份 Base 授权。
     HR_EMPLOYEE_SYNC_FEISHU_APP_ID: str = ""
     HR_EMPLOYEE_SYNC_FEISHU_APP_SECRET: str = ""
 
-    # HR 飞书日历 ID（primary=主日历，或指定团队日历 ID）
-    HR_FEISHU_CALENDAR_ID: str = "primary"
     # 职称评审定时对账开关（默认开启；关闭后仅保留手动「同步」按钮）
     HR_TITLE_REVIEW_SYNC_ENABLED: bool = True
 
@@ -87,9 +90,25 @@ class Settings(BaseSettings):
         if not self.HR_AI_API_KEY and self.HR_DEEPSEEK_API_KEY:
             self.HR_AI_API_KEY = self.HR_DEEPSEEK_API_KEY
         return self
-    HR_AI_SYSTEM_PROMPT: str = ""
     # 绩效飞书通知开关（自评/领导评分提交后通知，默认关闭）
     HR_PERFORMANCE_NOTIFY: bool = False
+
+    @model_validator(mode="after")
+    def _hr_feishu_creds_fallback(self) -> "Settings":
+        """HR 专属凭证统一配置：专用变量留空时回填 HR_FEISHU_*。
+
+        职称评审与员工档案同步通常共用同一个 HR 飞书应用，.env 里
+        重复写两遍同一对值容易漏改一处处；旧环境（如服务器
+        .env.production）直接配专用变量的继续生效，不受影响。
+        """
+        if self.HR_FEISHU_APP_ID:
+            if not self.HR_TITLE_REVIEW_FEISHU_APP_ID:
+                self.HR_TITLE_REVIEW_FEISHU_APP_ID = self.HR_FEISHU_APP_ID
+                self.HR_TITLE_REVIEW_FEISHU_APP_SECRET = self.HR_FEISHU_APP_SECRET
+            if not self.HR_EMPLOYEE_SYNC_FEISHU_APP_ID:
+                self.HR_EMPLOYEE_SYNC_FEISHU_APP_ID = self.HR_FEISHU_APP_ID
+                self.HR_EMPLOYEE_SYNC_FEISHU_APP_SECRET = self.HR_FEISHU_APP_SECRET
+        return self
 
     # Feishu 安全模块机器人（独立应用凭证）
     SAFETY_FEISHU_APP_ID: str = ""
