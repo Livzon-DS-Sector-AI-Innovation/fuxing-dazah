@@ -23,6 +23,7 @@ from lark_oapi.api.calendar.v4 import (
 )
 
 from app.core.config import get_settings
+from app.modules.hr.config import HR_FEISHU_CALENDAR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class FeishuCalendarService:
             .app_type(lark.AppType.SELF)
             .build()
         )
-        self._calendar_id = settings.HR_FEISHU_CALENDAR_ID
+        self._calendar_id = HR_FEISHU_CALENDAR_ID
 
     async def create_interview_event(
         self,
