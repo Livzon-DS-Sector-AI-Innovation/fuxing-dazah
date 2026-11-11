@@ -2,6 +2,7 @@
 
 import os
 from uuid import UUID, uuid4
+from zipfile import BadZipFile
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -18,12 +19,16 @@ from app.modules.hr.schemas import (
     CandidateStatusTransition,
     CandidateUpdate,
     DecideReviewRequest,
+    OnboardingTaskUpdate,
     PushReviewRequest,
 )
 from app.modules.hr.service import CandidateAnalysisService, CandidateService
 from app.shared.schemas import PageParams
 
 router = APIRouter(tags=["HR-候选人"])
+
+# 简历 PDF 大小上限：整个文件进内存 + pdfplumber 解析，无限制会被超大文件拖垮
+_RESUME_MAX_BYTES = 10 * 1024 * 1024
 
 
 def get_service(session: AsyncSession = Depends(get_db)) -> CandidateService:
@@ -47,6 +52,8 @@ async def parse_cv(file: UploadFile = Form(..., alias="resume")):
     content = bytes(await file.read())
     if not content:
         raise HTTPException(400, "文件内容为空")
+    if len(content) > _RESUME_MAX_BYTES:
+        raise HTTPException(400, "简历文件过大（上限 10MB），请压缩或拆分后重试")
     # 文件名白名单化：只保留纯文件名，防止 ../ 路径穿越
     safe_name = os.path.basename(file.filename).replace("\\", "_").replace("/", "_")
     if not safe_name or safe_name in (".", ".."):
@@ -55,7 +62,8 @@ async def parse_cv(file: UploadFile = Form(..., alias="resume")):
     try:
         r = parse_resume_pdf(content)
     except Exception as e:
-        raise HTTPException(400, f"简历解析失败（文件损坏或格式不支持）: {e}") from e
+        # 固定文案：不把内部异常细节回传客户端
+        raise HTTPException(400, "简历解析失败：文件损坏、加密或非标准 PDF") from e
     # 文件名加 uuid 前缀，避免同名简历互相覆盖
     object_key = f"resumes/{uuid4().hex[:8]}_{safe_name}"
     if is_enabled():
@@ -101,15 +109,23 @@ async def list_candidates(
 async def upload_candidates(
     file: UploadFile,
     service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel 文件批量导入候选人，按姓名+手机/邮箱自动去重新增或更新。"""
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    # openpyxl 只支持 .xlsx；.xls 走 openpyxl 会抛 InvalidFileException（非
+    # ValueError 子类），旧代码放行 .xls 必然 500
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式（.xls 旧格式请先用 Excel 另存为 .xlsx）")
+    from openpyxl.utils.exceptions import InvalidFileException
     try:
         content = await file.read()
-        result = await service.upload_candidates(content)
+        result = await service.upload_candidates(content, operator=hr_scope.user.name)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except (InvalidFileException, BadZipFile) as e:
+        # openpyxl 对损坏文件抛 InvalidFileException / BadZipFile（都不是
+        # ValueError 子类），同样转 400 而不是 500
+        raise HTTPException(400, "文件不是有效的 .xlsx（可能已损坏或实际为其他格式）") from e
     return success_response(
         data=result,
         message=f"新增 {result['created']}，更新 {result['updated']}"
@@ -142,8 +158,9 @@ async def download_candidate_template():
 async def create_candidate(
     payload: CandidateCreate,
     service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    r = await service.create(payload)
+    r = await service.create(payload, operator=hr_scope.user.name)
     return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"), message="创建成功", status_code=201)
 
 
@@ -188,7 +205,10 @@ async def update_candidate(cid: UUID, payload: CandidateUpdate, service: Candida
 
 @router.delete("/candidates/{cid}", summary="删除候选人")
 async def delete_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
-    await service.delete(cid)
+    try:
+        await service.delete(cid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return success_response(message="已删除")
 
 
@@ -198,11 +218,15 @@ async def push_review(
     payload: PushReviewRequest,
     service: CandidateService = Depends(get_service),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
-        r = await rv_service.push(cid, payload.pushed_by or "HR", payload.push_note, payload.reviewer)
+        r = await rv_service.push(
+            cid, payload.pushed_by or "HR", payload.push_note, payload.reviewer,
+            operator=hr_scope.user.name,
+        )
         return success_response(data={"id": str(r.id), "status": r.status}, message="已推送至用人部门审核")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -210,7 +234,7 @@ async def push_review(
 
 @router.get("/recruitment/stats", summary="招聘统计概览")
 async def recruitment_stats(session: AsyncSession = Depends(get_db)):
-    from app.modules.hr.models import Candidate
+    from app.modules.hr.models import Candidate, CandidateStatusLog
     from app.modules.hr.repository import CandidateRepository, JobRequirementRepository
 
     candidate_repo = CandidateRepository(session)
@@ -224,24 +248,61 @@ async def recruitment_stats(session: AsyncSession = Depends(get_db)):
     statuses = ["待筛选", "已筛选", "待部门审核", "面试中", "已面试", "录用中", "已录用", "待入职审批", "已入职", "已拒绝"]
     funnel = [{"status": s, "count": status_counts.get(s, 0)} for s in statuses]
 
-    # 转化率：相邻阶段之间
-    rates = []
-    for i in range(len(statuses) - 1):
-        this_count = status_counts.get(statuses[i], 0)
-        next_count = status_counts.get(statuses[i + 1], 0)
-        rate = round(next_count / this_count * 100, 1) if this_count > 0 else 0
-        rates.append({"from": statuses[i], "to": statuses[i + 1], "rate": rate})
-
-    # 平均招聘周期（从创建到入职的天数，仅统计已入职）
-    cycle_days = None
+    # 转化率：基于状态日志事件流的「曾到达」口径（存量口径在人员向下游流动后
+    # 分母会失真，相邻相比可能 >100%）。日志 UNION 当前状态兜底历史数据。
     from sqlalchemy import func as sa_func
+
+    pipeline = ["待筛选", "已筛选", "待部门审核", "面试中", "已面试", "录用中", "已录用", "待入职审批", "已入职"]
+    log_reach = select(
+        CandidateStatusLog.to_status.label("st"),
+        CandidateStatusLog.candidate_id.label("cid"),
+    ).where(
+        CandidateStatusLog.to_status.in_(pipeline),
+        CandidateStatusLog.is_deleted == False,  # noqa: E712
+    )
+    cur_reach = select(
+        Candidate.status.label("st"),
+        Candidate.id.label("cid"),
+    ).where(
+        Candidate.status.in_(pipeline),
+        Candidate.is_deleted == False,  # noqa: E712
+    )
+    reached_query = log_reach.union(cur_reach)
+    reached_rows = (await session.execute(
+        select(reached_query.c.st, sa_func.count(sa_func.distinct(reached_query.c.cid)))
+        .group_by(reached_query.c.st)
+    )).all()
+    reached = {row[0]: row[1] for row in reached_rows}
+
+    rates = []
+    for i in range(len(pipeline) - 1):
+        this_count = reached.get(pipeline[i], 0)
+        next_count = reached.get(pipeline[i + 1], 0)
+        rate = round(next_count / this_count * 100, 1) if this_count > 0 else 0
+        rates.append({"from": pipeline[i], "to": pipeline[i + 1], "rate": rate})
+
+    # 平均招聘周期：创建 → 状态日志的「已入职」事件时间（updated_at 会被
+    # 改备注/AI 回写等任意编辑刷新，口径失真；无日志的历史数据回退 updated_at）
+    hired_at_sq = (
+        select(
+            CandidateStatusLog.candidate_id,
+            sa_func.min(CandidateStatusLog.created_at).label("hired_at"),
+        ).where(
+            CandidateStatusLog.to_status == "已入职",
+            CandidateStatusLog.is_deleted == False,  # noqa: E712
+        ).group_by(CandidateStatusLog.candidate_id)
+    ).subquery()
     cycle_result = (await session.execute(
         select(sa_func.avg(
-            sa_func.extract('epoch', Candidate.updated_at - Candidate.created_at) / 86400
-        )).where(Candidate.status == "已入职", Candidate.is_deleted == False)  # noqa: E712
+            sa_func.extract(
+                "epoch",
+                sa_func.coalesce(hired_at_sq.c.hired_at, Candidate.updated_at) - Candidate.created_at,
+            ) / 86400
+        ))
+        .join(hired_at_sq, hired_at_sq.c.candidate_id == Candidate.id, isouter=True)
+        .where(Candidate.status == "已入职", Candidate.is_deleted == False)  # noqa: E712
     )).scalar()
-    if cycle_result:
-        cycle_days = round(float(cycle_result), 1)
+    cycle_days = round(float(cycle_result), 1) if cycle_result else None
 
     # 各岗位招聘进度
     jd_list = await jd_repo.list_all(status=None)
@@ -279,10 +340,11 @@ async def recruitment_stats(session: AsyncSession = Depends(get_db)):
 async def onboard_candidate(
     cid: UUID,
     service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.service import NotFoundException
     try:
-        _, onboarding, emp_no = await service.onboard(cid)
+        _, onboarding, emp_no = await service.onboard(cid, operator=hr_scope.user.name)
         await service.repo.session.commit()
         return success_response(data={"id": str(onboarding.id), "employee_number": emp_no}, message="入职成功")
     except NotFoundException as e:
@@ -315,7 +377,10 @@ async def decide_review(
         is_manager = "hr:recruitment:manage" in perms
         if not is_manager and rv and rv.reviewer and rv.reviewer != hr_scope.user.name:
             raise HTTPException(403, f"该审核由 {rv.reviewer} 负责，您无权操作")
-        r = await rv_service.decide(review_id, payload.decision, payload.review_comment)
+        r = await rv_service.decide(
+            review_id, payload.decision, payload.review_comment,
+            operator=hr_scope.user.name,
+        )
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="审核完成")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -336,7 +401,10 @@ async def push_onboarding_review(
         pushed_by = payload.pushed_by
         if not pushed_by or pushed_by == "HR":
             pushed_by = hr_scope.user.name or "HR"
-        r = await rv_service.push_onboarding(cid, pushed_by, payload.push_note)
+        r = await rv_service.push_onboarding(
+            cid, pushed_by, payload.push_note,
+            reviewer=payload.reviewer, operator=hr_scope.user.name,
+        )
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="入职审批已发起")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -357,19 +425,28 @@ async def get_onboarding_tasks(
 async def update_onboarding_task(
     cid: UUID,
     task_id: UUID,
-    payload: dict,
+    payload: OnboardingTaskUpdate,
     session: AsyncSession = Depends(get_db),
 ):
     from app.modules.hr.schemas import OnboardingTaskResponse
     from app.modules.hr.service import OnboardingTaskService
-    task = await OnboardingTaskService(session).update(task_id, payload, cid)
+    task = await OnboardingTaskService(session).update(
+        task_id, payload.model_dump(exclude_unset=True), cid,
+    )
     return success_response(data=OnboardingTaskResponse.model_validate(task).model_dump(mode="json"), message="任务已更新")
 
 
 @router.put("/candidates/{cid}/status", summary="候选人状态流转")
-async def transition_status(cid: UUID, payload: CandidateStatusTransition, service: CandidateService = Depends(get_service)):
+async def transition_status(
+    cid: UUID,
+    payload: CandidateStatusTransition,
+    service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     try:
-        r = await service.transition_status(cid, payload.status, payload.remark)
+        r = await service.transition_status(
+            cid, payload.status, payload.remark, operator=hr_scope.user.name,
+        )
         return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"), message=f"状态已变更为「{payload.status}」")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -440,6 +517,13 @@ async def send_offer(
     from app.modules.hr.models import EmailLog
     from app.modules.hr.offer_generator import generate_offer_pdf
 
+    # 前置校验：候选人须进入录用阶段才能发 Offer（待筛选/面试中直接发不合流程）
+    candidate = await service.get(cid)
+    if candidate.status not in ("已面试", "录用中", "已录用", "待入职审批"):
+        raise HTTPException(400, f"候选人状态为「{candidate.status}」，至少需通过面试（已面试）后才能发送 Offer")
+    if "@" not in candidate_email or "." not in candidate_email.rsplit("@", 1)[-1]:
+        raise HTTPException(400, "收件邮箱格式不正确")
+
     n = candidate_name or "候选人"
     pdf_buf = generate_offer_pdf(
         name=n, department=department, position=position,
@@ -467,7 +551,7 @@ async def send_offer(
         await service.update(cid, CandidateUpdate(offer_status="已发送", offer_sent_at=date_type.today()))
     await session.commit()
     if st == "failed":
-        raise HTTPException(500, f"发送失败: {err}")
+        raise HTTPException(500, f"Offer 邮件发送失败（请检查 SMTP 配置与收件地址）: {err}")
     return success_response(message="Offer已发送")
 
 

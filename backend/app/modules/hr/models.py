@@ -1210,6 +1210,58 @@ class TransferRecord(BaseModel):
 # ─── 招聘：岗位需求 ───
 
 
+class ResumeScreeningResult(BaseModel):
+    """AI 简历筛选结果：按岗位要求对 PDF 简历全文打分排名，辅助初筛过滤。
+
+    报告结构对齐培训管理的《岗位适配度分析+复试推荐意见》范例：
+    优势分析 / 核心硬伤（分节论述）+ 按岗位定制的胜任度打分表 + 最终推荐意见。
+    """
+
+    __tablename__ = "resume_screening_results"
+    __table_args__ = (
+        Index("ix_rsr_job_requirement", "job_requirement_id"),
+        Index("ix_rsr_total_score", "total_score"),
+        {"schema": "hr"},
+    )
+
+    job_requirement_id: Mapped[UUID] = mapped_column(nullable=False, comment="筛选时依据的岗位需求")
+    # JD 快照：岗位要求后续被编辑也不影响历史筛选结果的解读
+    jd_snapshot: Mapped[str] = mapped_column(Text, nullable=False, comment="筛选时的岗位要求文本快照")
+    file_name: Mapped[str] = mapped_column(String(256), nullable=False, comment="简历文件名")
+    resume_file_path: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="简历 PDF 存储路径（转候选人时挂到 resume_url）",
+    )
+    candidate_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="AI 从简历中识别的姓名",
+    )
+
+    total_score: Mapped[int] = mapped_column(Integer, nullable=False, comment="综合胜任度总分 0-100")
+    recommendation: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="推荐档位：推荐/待定/不推荐",
+    )
+    # ── 适配度分析报告 ──
+    advantages: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, comment="优势分析：[{title, detail}]",
+    )
+    flaws: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, comment="核心硬伤：[{title, detail}]",
+    )
+    score_table: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, comment="胜任度打分表：[{dimension, score, comment}]（维度按岗位定制）",
+    )
+    final_verdict: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="最终推荐意见结论（一句话）",
+    )
+    final_reasons: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True, comment="最终推荐意见支撑理由：[string]",
+    )
+    resume_excerpt: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="简历全文开头摘录（回看/复筛用）",
+    )
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="AI 模型版本")
+    created_by_name: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="筛选操作人")
+
+
 class JobRequirement(BaseModel):
     __tablename__ = "job_requirements"
     __table_args__ = (
@@ -1253,7 +1305,7 @@ class Candidate(BaseModel):
     major: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="专业")
     graduation_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="毕业时间")
     resume_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="简历文件路径")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="待筛选", server_default="待筛选", comment="状态: 待筛选/已筛选/面试中/已面试/录用中/已录用/已拒绝")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="待筛选", server_default="待筛选", comment="状态: 待筛选/已筛选/待部门审核/面试中/已面试/录用中/已录用/待入职审批/已入职/已拒绝")
     recommendation_level: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="推荐等级")
     match_report: Mapped[str | None] = mapped_column(Text, nullable=True, comment="匹配报告")
     job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")

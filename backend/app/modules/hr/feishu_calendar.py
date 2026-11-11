@@ -14,12 +14,10 @@ import lark_oapi as lark
 from lark_oapi.api.calendar.v4 import (
     CalendarEvent,
     CreateCalendarEventRequest,
-    CreateCalendarEventRequestBody,
     DeleteCalendarEventRequest,
     EventOrganizer,
     EventTime,
     PatchCalendarEventRequest,
-    PatchCalendarEventRequestBody,
 )
 
 from app.core.config import get_settings
@@ -106,14 +104,13 @@ class FeishuCalendarService:
             .build()
         )
 
+        # 本仓 lark_oapi 版本的 request_body 直接收 CalendarEvent（无 *RequestBody 包装类，
+        # 旧代码导入的 CreateCalendarEventRequestBody 在该版本不存在 → ImportError，
+        # 惰性导入使日程同步一直静默失败）
         request = (
             CreateCalendarEventRequest.builder()
             .calendar_id(self._calendar_id)
-            .request_body(
-                CreateCalendarEventRequestBody.builder()
-                .event(event)
-                .build()
-            )
+            .request_body(event)
             .build()
         )
 
@@ -175,11 +172,7 @@ class FeishuCalendarService:
             PatchCalendarEventRequest.builder()
             .calendar_id(self._calendar_id)
             .event_id(event_id)
-            .request_body(
-                PatchCalendarEventRequestBody.builder()
-                .event(event_builder.build())
-                .build()
-            )
+            .request_body(event_builder.build())
             .build()
         )
 

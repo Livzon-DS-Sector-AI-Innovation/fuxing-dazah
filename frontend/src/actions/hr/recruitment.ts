@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import {
+  Candidate,
   CandidateCreateInput,
   CandidateUpdateInput,
   CandidateStatusTransition,
@@ -21,6 +22,77 @@ export async function parseResumeAction(formData: FormData) {
     body: formData,
     errorMessage: '简历解析失败',
   })
+}
+
+// ─── AI 简历筛选 ───
+
+/** 分析报告小节（优势/硬伤），结构对齐《岗位适配度分析+复试推荐意见》范例 */
+export interface ScreeningSection {
+  title: string
+  detail: string
+}
+
+/** 胜任度打分表行（维度按岗位定制） */
+export interface ScreeningScoreRow {
+  dimension: string
+  score: number
+  comment: string
+}
+
+export interface ResumeScreeningResultItem {
+  id: string
+  job_requirement_id: string
+  jd_snapshot: string
+  file_name: string
+  candidate_name: string | null
+  total_score: number
+  recommendation: '推荐' | '待定' | '不推荐'
+  advantages: ScreeningSection[]
+  flaws: ScreeningSection[]
+  score_table: ScreeningScoreRow[]
+  final_verdict: string | null
+  final_reasons: string[]
+  model_version: string | null
+  created_by_name: string | null
+  created_at: string | null
+}
+
+/** AI 筛选一份简历（前端逐份调用展示进度）。 */
+export async function screenResumeAction(
+  jdId: string,
+  file: File,
+): Promise<{ data: ResumeScreeningResultItem }> {
+  const formData = new FormData()
+  formData.append('file', file)
+  return fetchHrApi(`/hr/resume-screening/${jdId}`, {
+    method: 'POST',
+    body: formData,
+    errorMessage: `「${file.name}」筛选失败`,
+  })
+}
+
+export async function fetchScreeningResults(
+  jdId: string,
+): Promise<{ data: ResumeScreeningResultItem[] }> {
+  return fetchHrApi(`/hr/resume-screening?job_requirement_id=${jdId}`, {
+    errorMessage: '获取筛选结果失败',
+  })
+}
+
+export async function convertScreeningResult(
+  id: string,
+): Promise<{ data: Candidate; message: string }> {
+  const res = await fetchHrApi<{ data: Candidate; message: string }>(`/hr/resume-screening/${id}/convert`, {
+    method: 'POST',
+    errorMessage: '转为候选人失败',
+  })
+  revalidatePath('/hr/recruitment')
+  return res
+}
+
+export async function deleteScreeningResult(id: string): Promise<void> {
+  await fetchHrApi(`/hr/resume-screening/${id}`, { method: 'DELETE', errorMessage: '删除失败' })
+  revalidatePath('/hr/recruitment')
 }
 
 export async function updateCandidateAction(id: string, data: Record<string, unknown>): Promise<void> {

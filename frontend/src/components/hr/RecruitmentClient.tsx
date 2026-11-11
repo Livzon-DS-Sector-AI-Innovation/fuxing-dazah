@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Tag, Upload } from 'antd'
-import { PlusOutlined, UploadOutlined, SendOutlined, DownloadOutlined, DownOutlined, RightOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, SendOutlined, DownloadOutlined, DownOutlined, RightOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
   createCandidate, deleteCandidate,
@@ -15,6 +15,7 @@ import {
   fetchEmployeesAction,
 } from '@/actions/hr'
 import type { Candidate, JobRequirement, RecruitmentStats } from '@/types/hr'
+import ResumeScreeningPanel from './ResumeScreeningPanel'
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
 const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
@@ -53,7 +54,7 @@ export default function RecruitmentClient() {
   const [offerSending, setOfferSending] = useState(false)
 
   // 待我审核
-  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats'>('jobs')
+  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening'>('jobs')
   const [pendingReviews, setPendingReviews] = useState<any[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
 
@@ -297,6 +298,7 @@ export default function RecruitmentClient() {
             待我审核 {pendingReviews.length > 0 && `(${pendingReviews.length})`}
           </Button>
           <Button type={activeTab === 'jobs' ? 'primary' : 'default'} onClick={() => setActiveTab('jobs')}>岗位招聘</Button>
+          <Button type={activeTab === 'screening' ? 'primary' : 'default'} onClick={() => setActiveTab('screening')} icon={<FileSearchOutlined />}>AI 筛简历</Button>
           <Button type={activeTab === 'stats' ? 'primary' : 'default'} onClick={() => { setActiveTab('stats'); loadStats() }}>数据分析</Button>
           {activeTab === 'jobs' && <>
             <Button icon={<DownloadOutlined />} onClick={async () => {
@@ -324,6 +326,8 @@ export default function RecruitmentClient() {
           </>}
         </div>
       </div>
+
+      {activeTab === 'screening' && <ResumeScreeningPanel />}
 
       {activeTab === 'reviews' && (
         <Card title="待我审核的候选人" loading={reviewsLoading}>

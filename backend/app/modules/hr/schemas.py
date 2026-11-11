@@ -926,6 +926,7 @@ class JobRequirementResponse(BaseModel):
     headcount: int
     hired_count: int
     requirements: str | None = None
+    duties: str | None = None
     status: str
     urgency: str | None = None
     owner: str | None = None
@@ -1044,6 +1045,7 @@ class InterviewUpdate(BaseModel):
     status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
     transcript_text: str | None = None
     notes: str | None = None
+    create_calendar_event: bool = Field(default=False, description="为尚未创建日历的面试补建日程（已有日程则忽略）")
     # calendar_event_id 为服务端日历集成内部字段，只读（响应专用），不接受客户端写入
 
 
