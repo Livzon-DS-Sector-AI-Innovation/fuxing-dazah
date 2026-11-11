@@ -68,7 +68,9 @@ def _on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SAFETY_HAZARD_WRITEBACK_TRACE_ENABLED", raising=False)
+    # 显式钉 env=false（env 优先于 DB 行）：开发库开关常开后（P3-2 trace 常开），
+    # 仅删 env 会穿透到 DB 现值=true 致「零写」断言假红——与 _on 对称钉住。
+    monkeypatch.setenv("SAFETY_HAZARD_WRITEBACK_TRACE_ENABLED", "false")
 
 
 async def _rows(session: Any) -> list[AgentTrigger]:
