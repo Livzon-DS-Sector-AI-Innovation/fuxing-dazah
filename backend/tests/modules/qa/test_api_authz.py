@@ -116,7 +116,7 @@ class TestQaAuthz:
         assert forbidden.status_code == 403
 
     async def test_read_code_does_not_grant_audit(self) -> None:
-        """仅持 qa:*:read：审计日志仍 403，需独立的 qa:audit:read。"""
+        """仅持 qa:*:read：操作日志仍 403，需独立的 qa:audit:read。"""
         async with _test_session_factory() as session:
             test_user = await _ensure_test_user(session)
 
@@ -139,7 +139,7 @@ class TestQaAuthz:
                 async with AsyncClient(
                     transport=transport, base_url="http://test"
                 ) as ac:
-                    resp = await ac.get("/api/v1/qa/audit-logs")
+                    resp = await ac.get("/api/v1/qa/operation-logs")
             fastapi_app.dependency_overrides.clear()
             await session.rollback()
         assert resp.status_code == 403

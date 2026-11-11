@@ -32,7 +32,6 @@ import { actionError, PILL } from '@/components/qa/deviation/shared'
 import { createAprItem, deleteAprItem, updateAprItem } from '@/actions/qa-apr'
 import type { AprItem, AprProduct, AprSection } from '@/types/qa-apr'
 import { AprMeta, AprSheet } from './AprChrome'
-import { AprBulkPasteModal } from './AprBulkPasteModal'
 import { AprItemModal } from './AprItemModal'
 import {
   CATEGORY_LABEL,
@@ -84,7 +83,6 @@ export function AprColumnWorkspace({
   const [keyword, setKeyword] = useState('')
   const [filter, setFilter] = useState<ItemFilter>('all')
   const [itemModal, setItemModal] = useState<{ item: AprItem | null } | null>(null)
-  const [bulkOpen, setBulkOpen] = useState(false)
   const [busyItemId, setBusyItemId] = useState<string | null>(null)
 
   const items = useMemo(() => section?.items ?? [], [section])
@@ -520,9 +518,6 @@ export function AprColumnWorkspace({
               placeholder="搜索列名称或分组"
               style={{ width: 190 }}
             />
-            <Button size="small" onClick={() => setBulkOpen(true)}>
-              批量粘贴
-            </Button>
             <Button
               size="small"
               type="primary"
@@ -570,9 +565,6 @@ export function AprColumnWorkspace({
               >
                 {items.length === 0 ? (
                   <Space wrap>
-                    <Button size="small" onClick={() => setBulkOpen(true)}>
-                      从 Excel 批量粘贴
-                    </Button>
                     <Button
                       size="small"
                       type="primary"
@@ -601,13 +593,6 @@ export function AprColumnWorkspace({
           defaultGroup={items.length > 0 ? items[items.length - 1].group_name : null}
           onClose={() => setItemModal(null)}
           onSaved={onChanged}
-        />
-      )}
-      {bulkOpen && (
-        <AprBulkPasteModal
-          section={section}
-          onClose={() => setBulkOpen(false)}
-          onImported={onChanged}
         />
       )}
     </AprSheet>

@@ -5,6 +5,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import type { Dayjs } from 'dayjs'
 import {
   Alert,
   App,
@@ -12,6 +13,7 @@ import {
   Card,
   Checkbox,
   Col,
+  DatePicker,
   Descriptions,
   Divider,
   Drawer,
@@ -57,7 +59,7 @@ import { PageHeading } from '@/components/shared/PageHeading'
 import { QaMarkdownPreview } from './QaMarkdownPreview'
 import { usePermission } from '@/hooks/usePermission'
 import {
-  fetchQaAuditLogs,
+  fetchQaOperationLogs,
   fetchQaAiAnalysis,
   fetchQaMasterObjectProposals,
   fetchQaDepartments,
@@ -96,8 +98,11 @@ import {
   updateQaVersionRelations,
   uploadQaVersion,
 } from '@/actions/qa'
+import { fetchAprProducts } from '@/lib/api/qa-apr'
+import type { AprProduct } from '@/types/qa-apr'
 import type {
-  QaAuditLog,
+  QaOperationLog,
+  QaOperationLogCell,
   QaAiAnalysisRun,
   QaAiObservation,
   QaAiRelationSuggestion,
@@ -387,14 +392,14 @@ function qaSourceOptionLabel(source: QaSourceReference): string {
 }
 
 function PageIntro({ view }: { view: QaView }) {
-  const title = view === 'home' ? 'QA' : view === 'master-data' ? '质量主数据' : view === 'documents' ? '批准文件台账' : 'QA 审计日志'
+  const title = view === 'home' ? 'QA' : view === 'master-data' ? '质量主数据' : view === 'documents' ? '批准文件台账' : 'QA 操作日志'
   const subtitle = view === 'home'
     ? '集中管理已批准质量文件、质量主数据及其可追溯关系。'
     : view === 'master-data'
       ? 'QA 自有的稳定业务身份；可在登记时关联生产、设备及飞书组织数据。'
       : view === 'documents'
         ? '仅登记外部正式流程已经批准的文件；本模块不替代审批或电子签名。'
-        : '记录 QA 写操作、版本切换、文件访问及正文解析结果。'
+        : '谁在何时改了什么、变更前后的值；当前覆盖 PQR 数据录入。'
   return <PageHeading title={title} subtitle={subtitle} />
 }
 
@@ -2992,83 +2997,149 @@ function QaAiAnalysisModal({ open, version, onClose, onConfirmed }: { open: bool
 }
 
 // ─────────────────────────────────────────────────────────────
-// 审计日志
+// 操作日志（PQR 数据变更）
 // ─────────────────────────────────────────────────────────────
+
+/** 动作显示名：当前来源（PQR）的动作词表；未知动作回退原码。 */
+const OPERATION_ACTION_META: Partial<Record<string, { label: string; color: string }>> = {
+  values_saved: { label: '保存', color: 'blue' },
+  values_imported: { label: '导入', color: 'purple' },
+  batch_deleted: { label: '删除批次', color: 'red' },
+}
+
+function formatOperationCell(cell: QaOperationLogCell | null | undefined): string {
+  if (!cell) return '（空）'
+  const parts: string[] = []
+  if (cell.值 !== undefined && cell.值 !== null) parts.push(`值：${String(cell.值)}`)
+  if (cell.行标签) parts.push(`行标签：${cell.行标签}`)
+  if (cell.备注) parts.push(`备注：${cell.备注}`)
+  return parts.length > 0 ? parts.join('；') : '（空）'
+}
+
+/** 删除批次汇总的 old_value 形状：{ 值数量: N }，与逐格快照不同构。 */
+function deletedValueCount(log: QaOperationLog): number {
+  const raw = log.old_value as Record<string, unknown> | null | undefined
+  const count = raw?.值数量
+  return typeof count === 'number' ? count : 0
+}
 
 function QaAudit() {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   const canRead = hasPermission('qa:audit:read')
-  const [action, setAction] = useState<string | undefined>()
-  const [objectType, setObjectType] = useState<string | undefined>()
-  const [actor, setActor] = useState('')
+  const [resourceType, setResourceType] = useState<string | undefined>()
+  const [productId, setProductId] = useState<string | undefined>()
+  const [year, setYear] = useState<number | undefined>()
+  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
+  const [products, setProducts] = useState<AprProduct[]>([])
   const [page, setPage] = useState(1)
-  const [rows, setRows] = useState<QaAuditLog[]>([])
+  const [rows, setRows] = useState<QaOperationLog[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [detail, setDetail] = useState<QaAuditLog | null>(null)
+  const [detail, setDetail] = useState<QaOperationLog | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
-  // actor 只是输入框的值，不进 load 的依赖——否则每敲一个字都会打一次接口。
-  // 真正发请求时（筛选/回车）从 ref 取最新值。
-  const actorRef = useRef(actor)
-  useEffect(() => { actorRef.current = actor }, [actor])
+
+  // 产品筛选项一次加载，失败不打扰（筛选用批号/名称仍可从行内读出）。
+  useEffect(() => {
+    if (!canRead) return
+    let cancelled = false
+    fetchAprProducts()
+      .then((data) => { if (!cancelled) setProducts(data) })
+      .catch(() => { /* 下拉为空时用户仍可按时间/年度筛 */ })
+    return () => { cancelled = true }
+  }, [canRead])
 
   const load = useCallback(async () => {
     if (!canRead) return
     setLoading(true)
     try {
-      const result = await fetchQaAuditLogs({ action, object_type: objectType, actor_id: actorRef.current.trim() || undefined, page, page_size: 50 })
+      const result = await fetchQaOperationLogs({
+        resource_type: resourceType,
+        product_id: productId,
+        year,
+        from: range?.[0]?.format('YYYY-MM-DD') || undefined,
+        to: range?.[1]?.format('YYYY-MM-DDT23:59:59') || undefined,
+        page,
+        page_size: 50,
+      })
       setRows(result.items)
       setTotal(result.total)
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '加载审计日志失败')
+      message.error(error instanceof Error ? error.message : '加载操作日志失败')
     } finally { setLoading(false) }
-  }, [action, canRead, message, objectType, page])
+  }, [canRead, message, page, productId, range, resourceType, year])
 
   // page 与 reloadKey 一起作为触发源：setPage(1) 与 setReloadKey 在同一次批更新里生效，
   // effect 只跑一次且读到新 page，不会再出现「点了筛选却请求旧页码」的并发覆盖。
   useEffect(() => { void load() }, [load, reloadKey])
 
   if (!canRead) {
-    return <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="需要 qa:audit:read 权限才能查看审计日志" /></Card>
+    return <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="需要 qa:audit:read 权限才能查看操作日志" /></Card>
   }
 
-  const columns: ColumnsType<QaAuditLog> = [
+  const columns: ColumnsType<QaOperationLog> = [
     { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 180, render: (value: string) => formatDate(value) },
-    { title: '操作者', key: 'actor', width: 150, render: (_, row) => row.actor_name || row.actor_id || '—' },
-    { title: '动作', dataIndex: 'action', key: 'action', width: 180, render: (value: string) => <Tag color="blue">{value}</Tag> },
-    { title: '对象', key: 'object', width: 220, render: (_, row) => `${row.object_type || '—'} / ${row.object_id || '—'}` },
-    { title: '文件哈希', dataIndex: 'file_sha256', key: 'hash', width: 180, render: (value: string | null | undefined) => value ? `${value.slice(0, 16)}…` : '—' },
+    { title: '操作人', key: 'actor', width: 130, render: (_, row) => row.actor_name || row.actor_id || '—' },
+    { title: '来源', key: 'source', width: 120, render: (_, row) => row.source_label || row.resource_type || '—' },
+    { title: '操作', dataIndex: 'action', key: 'action', width: 100, render: (value: string) => <Tag color={OPERATION_ACTION_META[value]?.color}>{OPERATION_ACTION_META[value]?.label ?? value}</Tag> },
+    { title: '产品', key: 'product', width: 170, render: (_, row) => row.extra.product_name || '—' },
+    { title: '年度/批号', key: 'batch', width: 140, render: (_, row) => `${row.extra.year ?? '—'} / ${row.extra.batch_no || '—'}` },
+    { title: '段', key: 'section', width: 140, render: (_, row) => row.extra.section_name || '—', ellipsis: true },
+    {
+      title: '变更数', key: 'changed', width: 90, align: 'right',
+      render: (_, row) => row.action === 'batch_deleted' ? `${deletedValueCount(row)} 条值` : (row.extra.changed ?? Object.keys(row.new_value || {}).length),
+    },
     { title: '详情', key: 'detail', width: 80, render: (_, row) => <Button type="link" size="small" onClick={() => setDetail(row)}>查看</Button> },
   ]
+
+  const detailCells = detail
+    ? Array.from(new Set([...Object.keys(detail.old_value || {}), ...Object.keys(detail.new_value || {})]))
+    : []
 
   return (
     <>
       <Card variant="borderless">
         <Space wrap style={{ marginBottom: 16 }}>
-          <Select allowClear value={action} onChange={(value) => { setAction(value); setPage(1) }} placeholder="动作" style={{ width: 220 }} options={[{ value: 'create', label: '创建' }, { value: 'update', label: '更新' }, { value: 'deactivate', label: '停用' }, { value: 'make_current', label: '设为当前' }, { value: 'version_create', label: '版本上传' }, { value: 'preview', label: '文件预览' }, { value: 'download', label: '文件下载' }, { value: 'extraction_complete', label: '正文解析完成' }, { value: 'extraction_failed', label: '正文解析失败' }, { value: 'extraction_retry', label: '正文解析重试' }, { value: 'ai_analysis_requested', label: 'AI 分析请求' }, { value: 'ai_analysis_retry_requested', label: 'AI 分析重试' }, { value: 'ai_analysis_completed', label: 'AI 分析完成' }, { value: 'ai_analysis_partial', label: 'AI 分析部分完成' }, { value: 'ai_analysis_failed', label: 'AI 分析失败' }, { value: 'ai_analysis_stale', label: 'AI 分析过期' }, { value: 'ai_relations_confirmed', label: 'AI 关联确认' }, { value: 'ai_proposal_approved', label: 'AI 提案审批' }, { value: 'ai_proposal_conflict', label: 'AI 提案冲突' }, { value: 'ai_proposal_stale', label: 'AI 提案过期' }]} />
-          <Select allowClear value={objectType} onChange={(value) => { setObjectType(value); setPage(1) }} placeholder="对象类型" style={{ width: 220 }} options={[{ value: 'qa.master_object', label: '主数据' }, { value: 'qa.document', label: '文件台账' }, { value: 'qa.document_version', label: '文件版本' }, { value: 'qa.document_file', label: '文件' }, { value: 'qa.document_ai_analysis_run', label: 'AI 分析运行' }, { value: 'qa.master_object_proposal', label: '主数据提案' }]} />
-          <Input value={actor} onChange={(event) => setActor(event.target.value)} onPressEnter={() => { setPage(1); setReloadKey((value) => value + 1) }} placeholder="操作者 ID" style={{ width: 190 }} allowClear />
+          {/* 来源选项与后端 service.OPERATION_LOG_SOURCES 注册表同口径；新域接入时同步加项 */}
+          <Select allowClear value={resourceType} onChange={(value) => { setResourceType(value); setPage(1) }} placeholder="来源" style={{ width: 150 }} options={[{ value: 'qa.apr_batch', label: 'PQR 数据录入' }]} />
+          <Select allowClear value={productId} onChange={(value) => { setProductId(value); setPage(1) }} placeholder="产品（PQR）" style={{ width: 200 }} showSearch optionFilterProp="label" options={products.map((p) => ({ value: p.id, label: p.name }))} />
+          <Select allowClear value={year} onChange={(value) => { setYear(value); setPage(1) }} placeholder="年度" style={{ width: 110 }} options={Array.from({ length: 8 }, (_, i) => new Date().getFullYear() - i).map((y) => ({ value: y, label: String(y) }))} />
+          <DatePicker.RangePicker value={range} onChange={(value) => { setRange(value as [Dayjs | null, Dayjs | null] | null); setPage(1) }} placeholder={['开始日期', '结束日期']} />
           <Button type="primary" icon={<SearchOutlined />} onClick={() => { setPage(1); setReloadKey((value) => value + 1) }}>筛选</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { void load() }}>刷新</Button>
         </Space>
-        <Table<QaAuditLog> rowKey="id" loading={loading} columns={columns} dataSource={rows} scroll={{ x: 980 }} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无审计记录" /> }} />
+        <Table<QaOperationLog> rowKey="id" loading={loading} columns={columns} dataSource={rows} scroll={{ x: 1080 }} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无操作记录" /> }} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}><Pagination current={page} pageSize={50} total={total} showSizeChanger={false} onChange={setPage} showTotal={(value) => `共 ${value} 条`} /></div>
       </Card>
-      <Drawer title="审计详情" open={!!detail} onClose={() => setDetail(null)} size={560}>
+      <Drawer title="变更详情" open={!!detail} onClose={() => setDetail(null)} size={560}>
         {detail && <>
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="时间">{formatDate(detail.created_at)}</Descriptions.Item>
-            <Descriptions.Item label="操作者">{detail.actor_name || detail.actor_id || '—'}</Descriptions.Item>
-            <Descriptions.Item label="动作">{detail.action}</Descriptions.Item>
-            <Descriptions.Item label="对象">{detail.object_type || '—'} / {detail.object_id || '—'}</Descriptions.Item>
-            <Descriptions.Item label="文件 SHA-256">{detail.file_sha256 || '—'}</Descriptions.Item>
-            <Descriptions.Item label="来源 IP">{detail.ip_address || '—'}</Descriptions.Item>
+            <Descriptions.Item label="操作人">{detail.actor_name || detail.actor_id || '—'}</Descriptions.Item>
+            <Descriptions.Item label="操作">{OPERATION_ACTION_META[detail.action]?.label ?? detail.action}{detail.extra.source === 'import' ? `（${detail.extra.mode === 'merge' ? '合并' : '整批替换'}）` : ''}</Descriptions.Item>
+            <Descriptions.Item label="定位">{`${detail.extra.product_name || '—'} ${detail.extra.year ?? ''} 年 批号 ${detail.extra.batch_no || '—'} / ${detail.extra.section_name || '—'}`}</Descriptions.Item>
           </Descriptions>
-          <Divider plain>变更前</Divider>
-          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f6f5f4', padding: 12, borderRadius: 8, fontSize: 12 }}>{JSON.stringify(detail.before_value || {}, null, 2)}</pre>
-          <Divider plain>变更后 / 附加信息</Divider>
-          <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f6f5f4', padding: 12, borderRadius: 8, fontSize: 12 }}>{JSON.stringify(detail.after_value || detail.metadata || {}, null, 2)}</pre>
+          {detail.action === 'batch_deleted' ? (
+            <>
+              <Divider plain>删除汇总</Divider>
+              <Typography.Text type="secondary">该批次及其 {deletedValueCount(detail)} 条录入值已被删除（值级联硬删，无逐格明细）。</Typography.Text>
+            </>
+          ) : (
+            <>
+              <Divider plain>逐格变更</Divider>
+              <Table
+                rowKey={(key: string) => key}
+                size="small"
+                pagination={false}
+                dataSource={detailCells}
+                columns={[
+                  { title: '数据', width: 150, render: (key: string) => key },
+                  { title: '变更前', render: (key: string) => formatOperationCell(detail.old_value?.[key]) },
+                  { title: '变更后', render: (key: string) => formatOperationCell(detail.new_value?.[key]) },
+                ]}
+              />
+            </>
+          )}
         </>}
       </Drawer>
     </>

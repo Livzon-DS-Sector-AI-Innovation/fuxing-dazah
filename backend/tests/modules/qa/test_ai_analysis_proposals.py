@@ -135,12 +135,8 @@ def approve_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         _version_id: uuid.UUID,
         master_object_ids: list[uuid.UUID],
         _user: User | None,
-        *,
-        audit: bool = True,
     ) -> list[Any]:
-        link_calls.append(
-            {"version_id": _version_id, "ids": list(master_object_ids), "audit": audit}
-        )
+        link_calls.append({"version_id": _version_id, "ids": list(master_object_ids)})
         return []
 
     monkeypatch.setattr(ai_analysis, "get_ai_run", _fake_get_ai_run)
@@ -149,7 +145,6 @@ def approve_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(ai_analysis, "_analysis_stale_reason", _fake_stale_reason)
     monkeypatch.setattr(ai_analysis, "_catalog", _fake_catalog)
     monkeypatch.setattr(ai_analysis, "_actor_id", lambda _user: uuid.uuid4())
-    monkeypatch.setattr(ai_analysis, "_audit", _noop_audit)
     monkeypatch.setattr(service, "_get_version_with_document_lock", _fake_version_lock)
     monkeypatch.setattr(service, "create_master", _fake_create_master)
     monkeypatch.setattr(service, "set_relations_append", _fake_link)
@@ -162,9 +157,6 @@ def approve_context(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "catalog_after": "catalog-after-approve",
     }
 
-
-async def _noop_audit(_db: Any, **_kwargs: Any) -> None:
-    return None
 
 
 def _db_for(proposal: Any, run: Any) -> _FakeDb:
@@ -182,7 +174,7 @@ def _db_for(proposal: Any, run: Any) -> _FakeDb:
 async def test_approve_proposal_auto_links_document(
     approve_context: dict[str, Any],
 ) -> None:
-    """审批通过即在来源版本上追加文件关联，且不写独立审计。"""
+    """审批通过即在来源版本上追加文件关联。"""
     db = _db_for(approve_context["proposal"], approve_context["run"])
     approved, skipped = await ai_analysis.approve_proposal(
         db, approve_context["proposal"].id, None, None
@@ -194,7 +186,6 @@ async def test_approve_proposal_auto_links_document(
         {
             "version_id": approve_context["version_id"],
             "ids": [approve_context["master_id"]],
-            "audit": False,
         }
     ]
 
@@ -211,8 +202,6 @@ async def test_approve_proposal_auto_link_failure_does_not_block(
         _version_id: uuid.UUID,
         _master_object_ids: list[uuid.UUID],
         _user: User | None,
-        *,
-        audit: bool = True,
     ) -> list[Any]:
         raise AppException(status_code=409, message="文件版本锁定后不能修改关联")
 

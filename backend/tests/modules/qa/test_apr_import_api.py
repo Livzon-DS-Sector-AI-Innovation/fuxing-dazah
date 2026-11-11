@@ -577,3 +577,67 @@ async def test_import_bad_file_and_extension() -> None:
         resp = await _import(ac, section["id"], b"x", filename="data.csv")
         assert resp.status_code == 400
         assert "xlsx" in resp.json()["message"]
+
+
+# ───────────────────────── 操作日志（导入留痕） ─────────────────────────
+
+
+async def test_merge_import_records_value_changes() -> None:
+    """merge 导入也逐格留痕：改的格记前后值，未触及的格不参与。
+
+    文件不带的备注由 merge 保留在库里，日志的「变更后」也必须体现保留值；
+    原值重导没有实际变化，不产生日志。
+    """
+    perms = MANAGE | ENTER | {"qa:audit:read"}
+    async with _client(perms) as (ac, _):
+        product = await _mk_product(ac)
+        section = await _mk_section(ac, product["id"])
+        item = await _mk_item(ac, section["id"])
+        item2 = await _mk_item(ac, section["id"], name_cn="水分")
+        batch = await _mk_batch(ac, section["id"], batch_no="MG2509001")
+        resp = await ac.put(
+            f"/api/v1/qa/apr/batches/{batch['id']}/values",
+            json={
+                "values": [
+                    {"item_id": item["id"], "value_num": 4.3, "remark": "复测"},
+                    {"item_id": item2["id"], "value_num": 5.1},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+
+        # 原值重导：库内备注保留，实际无变化，不产生日志
+        content = _xlsx(
+            [["批号", "酸碱度"], ["MG2509001", 4.3]],
+        )
+        resp = await _import(ac, section["id"], content, mode="merge")
+        assert resp.status_code == 200, resp.text
+        resp = await ac.get(
+            "/api/v1/qa/operation-logs",
+            params={"product_id": product["id"], "page_size": 10},
+        )
+        assert [r for r in resp.json()["data"] if r["action"] == "values_imported"] == []
+
+        # merge 导入：只改「酸碱度」，水分列不在文件里应保留且不进日志
+        content = _xlsx(
+            [["批号", "酸碱度"], ["MG2509001", 4.4]],
+        )
+        resp = await _import(ac, section["id"], content, mode="merge")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["ok"] is True
+
+        resp = await ac.get(
+            "/api/v1/qa/operation-logs",
+            params={"product_id": product["id"], "page_size": 10},
+        )
+        rows = resp.json()["data"]
+        imported = [r for r in rows if r["action"] == "values_imported"]
+        assert len(imported) == 1
+        assert imported[0]["extra"]["source"] == "import"
+        assert imported[0]["extra"]["mode"] == "merge"
+        assert imported[0]["old_value"] == {"酸碱度": {"值": 4.3, "备注": "复测"}}
+        assert imported[0]["new_value"] == {"酸碱度": {"值": 4.4, "备注": "复测"}}
+
+        # merge 语义：未写入的水分列仍在库里
+        values = await _values(ac, batch["id"])
+        assert values[(item2["id"], 1)]["value_num"] == 5.1

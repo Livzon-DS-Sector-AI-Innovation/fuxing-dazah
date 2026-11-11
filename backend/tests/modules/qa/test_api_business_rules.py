@@ -596,50 +596,6 @@ async def test_search_requires_query_and_hides_inactive_by_default() -> None:
         assert any(hit["id"] == master["id"] for hit in visible)
 
 
-# ───────────────────────── 审计留痕 ─────────────────────────
-
-
-async def test_file_preview_and_download_leave_audit_trail() -> None:
-    """受控文件的每次预览和下载都写入审计日志，且可按条件追溯。
-
-    审计是受控文件「谁看过、谁拿走过」的合规底账：动作与资源要能
-    双向过滤，否则事后查证只能翻全量日志。
-    """
-    tag = uuid.uuid4().hex[:6].upper()
-    async with _client() as (ac, _, _storage):
-        _, document_id = await _make_type_and_document(ac, tag)
-        version = _data(await _upload_version(ac, document_id, "V1"))
-        file_id = version["file"]["id"]
-
-        preview = await ac.get(f"{BASE}/document-files/{file_id}/content")
-        assert preview.status_code == 200
-        download = await ac.get(
-            f"{BASE}/document-files/{file_id}/content", params={"download": True}
-        )
-        assert download.status_code == 200
-
-        by_resource = (
-            await ac.get(
-                f"{BASE}/audit-logs",
-                params={"resource_type": "document_file", "resource_id": file_id},
-            )
-        ).json()
-        actions = [row["action"] for row in by_resource["data"]]
-        assert sorted(actions) == ["download", "preview"]
-
-        downloads_only = (
-            await ac.get(
-                f"{BASE}/audit-logs",
-                params={
-                    "action": "download",
-                    "resource_type": "document_file",
-                    "resource_id": file_id,
-                },
-            )
-        ).json()
-        assert [row["action"] for row in downloads_only["data"]] == ["download"]
-
-
 # ───────────────────────── AI 分析与提案 ─────────────────────────
 
 

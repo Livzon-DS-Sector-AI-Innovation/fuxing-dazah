@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -59,10 +60,13 @@ async def list_audit_logs(
     page: int = 1,
     page_size: int = 50,
     resource_type: str | None = None,
+    resource_types: Sequence[str] | None = None,
     resource_type_prefix: str | None = None,
     user_id: uuid.UUID | None = None,
     action: str | None = None,
+    actions: Sequence[str] | None = None,
     resource_id: uuid.UUID | None = None,
+    extra_equals: dict[str, str] | None = None,
     start_at: datetime | None = None,
     end_at: datetime | None = None,
 ) -> tuple[list[AuditLog], int]:
@@ -73,7 +77,10 @@ async def list_audit_logs(
     与索引约定，审计表结构变更时会同步炸掉所有调用方）。
 
     返回的是审计模块自己的 ORM 行，调用方只应读取字段，不要再做持久化。
-    ``resource_type_prefix`` 用于按资源域前缀取子集（例如 ``"qa"``）。
+    ``resource_type_prefix`` 用于按资源域前缀取子集（例如 ``"qa"``）；
+    ``resource_types``/``actions`` 是序列版精确匹配（IN 语义）；
+    ``extra_equals`` 按 extra JSON 顶层字符串键值精确过滤
+    （如 ``{"product_id": "..."}``）。
     """
     conditions: list[ColumnElement[bool]] = []
     if resource_type_prefix:
@@ -84,12 +91,21 @@ async def list_audit_logs(
         )
     if resource_type:
         conditions.append(AuditLog.resource_type == resource_type)
+    if resource_types:
+        conditions.append(AuditLog.resource_type.in_(resource_types))
     if user_id:
         conditions.append(AuditLog.user_id == user_id)
     if action:
         conditions.append(AuditLog.action == action)
+    if actions:
+        conditions.append(AuditLog.action.in_(actions))
     if resource_id:
         conditions.append(AuditLog.resource_id == resource_id)
+    if extra_equals:
+        for key, value in extra_equals.items():
+            conditions.append(
+                AuditLog.extra[key].as_string() == value,
+            )
     if start_at:
         conditions.append(AuditLog.created_at >= start_at)
     if end_at:

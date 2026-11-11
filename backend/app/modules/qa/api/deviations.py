@@ -196,14 +196,6 @@ async def download_attachment(
         db, deviation_id, attachment_id
     )
     # 批记录复印件/COA 等证据的预览与下载要留审计痕迹（与 files.py 同口径）。
-    await service._audit(
-        db,
-        action="download" if download else "preview",
-        user=user,
-        resource_type="deviation_attachment",
-        resource_id=attachment.id,
-        extra={"deviation_id": str(deviation_id)},
-    )
     # PDF 与图片可内联预览，其余一律下载；inline_media_type 已排除 HTML/SVG。
     inline = file_service.inline_media_type(mime)
     disposition = "inline" if inline and not download else "attachment"

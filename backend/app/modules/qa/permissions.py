@@ -29,7 +29,7 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("qa:version:disable", "停用 QA 文件版本", "qa", "version", "disable"),
     PermissionDef("qa:relation:manage", "维护 QA 文件关联", "qa", "relation", "manage"),
     PermissionDef("qa:config:manage", "维护 QA 文件类型", "qa", "config", "manage"),
-    PermissionDef("qa:audit:read", "查看 QA 审计日志", "qa", "audit", "read"),
+    PermissionDef("qa:audit:read", "查看 QA 操作日志", "qa", "audit", "read"),
     # ── 偏差管理 / CAPA ──
     # 偏差读取单独成码：发生部门人员可只授偏差可见而不开放知识库；
     # 模块通配读码 qa:*:read 同样放行偏差/CAPA 读取。

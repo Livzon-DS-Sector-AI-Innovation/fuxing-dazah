@@ -12,7 +12,6 @@ from app.core.exceptions import (
 from app.modules.qa import (
     file_service as file_service,  # 显式再导出，供 api 层与测试补丁使用
 )
-from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
@@ -35,30 +34,6 @@ def _require_text(value: Any, label: str) -> str:
 
 def _actor_id(user: User | None) -> uuid.UUID | None:
     return user.id if user is not None else None
-
-
-async def _audit(
-    db: AsyncSession,
-    *,
-    action: str,
-    user: User | None,
-    resource_type: str,
-    resource_id: uuid.UUID | None,
-    old_value: dict[str, Any] | None = None,
-    new_value: dict[str, Any] | None = None,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    await record_audit_log(
-        db,
-        action=action,
-        user=user,
-        user_id=_actor_id(user),
-        resource_type=f"qa.{resource_type}",
-        resource_id=resource_id,
-        old_value=old_value,
-        new_value=new_value,
-        extra=extra,
-    )
 
 
 async def _validate_department(

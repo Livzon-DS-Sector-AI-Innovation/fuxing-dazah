@@ -33,7 +33,6 @@ from app.modules.qa.repository import (
 )
 from app.modules.qa.service._shared import (
     _actor_id,
-    _audit,
     _require_text,
     _resolve_department_patch,
     _validate_department,
@@ -274,14 +273,6 @@ async def create_master(
             )
         )
     await db.flush()
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="master_object",
-        resource_id=obj.id,
-        new_value={"object_type": object_type, "code": code, "name": name},
-    )
     return obj
 
 
@@ -291,12 +282,6 @@ async def update_master(
     obj = await get_master(db, object_id)
     if obj is None:
         raise NotFoundException("QA主数据", str(object_id))
-    old = {
-        "name": obj.name,
-        "status": obj.status,
-        "responsible_department_id": obj.responsible_department_id,
-        "region_parent_id": str(obj.region_parent_id) if obj.region_parent_id else None,
-    }
     aliases = payload.aliases if "aliases" in payload.model_fields_set else None
     sources = payload.sources if "sources" in payload.model_fields_set else None
     data = payload.model_dump(exclude_unset=True, exclude={"aliases", "sources"})
@@ -348,15 +333,6 @@ async def update_master(
         )
     if sources is not None:
         await replace_master_sources(db, object_id, sources, user)
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="master_object",
-        resource_id=obj.id,
-        old_value=old,
-        new_value={"name": obj.name, "status": obj.status},
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_master(db, object_id) or obj
 
@@ -369,19 +345,9 @@ async def set_master_status(
     obj = await get_master(db, object_id)
     if obj is None:
         raise NotFoundException("QA主数据", str(object_id))
-    old = obj.status
     obj.status = status
     obj.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="activate" if status == "active" else "deactivate",
-        user=user,
-        resource_type="master_object",
-        resource_id=obj.id,
-        old_value={"status": old},
-        new_value={"status": status},
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_master(db, object_id) or obj
 
@@ -410,14 +376,6 @@ async def add_master_aliases(
         db.add(row)
         created.append(row)
     await db.flush()
-    await _audit(
-        db,
-        action="alias_add",
-        user=user,
-        resource_type="master_object",
-        resource_id=object_id,
-        new_value={"aliases": list(aliases)},
-    )
     return created
 
 
@@ -436,14 +394,6 @@ async def replace_master_aliases(
         old.updated_by = _actor_id(user)
     await db.flush()
     rows = await add_master_aliases(db, object_id, aliases, user)
-    await _audit(
-        db,
-        action="aliases_replace",
-        user=user,
-        resource_type="master_object",
-        resource_id=object_id,
-        new_value={"aliases": list(aliases)},
-    )
     return rows
 
 
@@ -495,13 +445,6 @@ async def add_master_sources(
         db.add(row)
         created.append(row)
     await db.flush()
-    await _audit(
-        db,
-        action="source_add",
-        user=user,
-        resource_type="master_object",
-        resource_id=object_id,
-    )
     return created
 
 
@@ -520,14 +463,6 @@ async def replace_master_sources(
         old.updated_by = _actor_id(user)
     await db.flush()
     rows = await add_master_sources(db, object_id, source_inputs, user)
-    await _audit(
-        db,
-        action="sources_replace",
-        user=user,
-        resource_type="master_object",
-        resource_id=object_id,
-        new_value={"source_count": len(rows)},
-    )
     return rows
 
 

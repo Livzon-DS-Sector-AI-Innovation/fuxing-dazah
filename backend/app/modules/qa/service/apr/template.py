@@ -23,7 +23,6 @@ from app.modules.qa.schemas.apr import (
 )
 from app.modules.qa.service.apr.common import (
     _actor_id,
-    _audit,
     _get_item_or_404,
     _get_product_or_404,
     _get_section_or_404,
@@ -133,14 +132,6 @@ async def create_product(
                 exc, code=payload.code, name=payload.name
             ),
         ) from None
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="apr_product",
-        resource_id=row.id,
-        new_value=_product_dict(row),
-    )
     return _product_dict(row)
 
 
@@ -151,7 +142,6 @@ async def update_product(
     user: User | None,
 ) -> dict[str, Any]:
     row = await _get_product_or_404(db, product_id)
-    old = _product_dict(row)
     data = payload.model_dump(exclude_unset=True)
     await _ensure_product_unique(
         db,
@@ -173,15 +163,6 @@ async def update_product(
             status_code=409,
             message=_product_conflict_message(exc, code=new_code, name=new_name),
         ) from None
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="apr_product",
-        resource_id=row.id,
-        old_value=old,
-        new_value=_product_dict(row),
-    )
     return _product_dict(row)
 
 
@@ -197,15 +178,6 @@ async def delete_product(
     row.is_deleted = True
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="delete",
-        user=user,
-        resource_type="apr_product",
-        resource_id=row.id,
-        old_value=_product_dict(row),
-    )
-
 
 def _section_conflict_message(exc: IntegrityError, *, name: str) -> str:
     """段名唯一索引冲突 → 409 文案（同产品下段名唯一）。"""
@@ -268,14 +240,6 @@ async def create_section(
             status_code=409,
             message=_section_conflict_message(exc, name=payload.name),
         ) from None
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="apr_section",
-        resource_id=row.id,
-        new_value=_section_dict(row),
-    )
     return _section_dict(row)
 
 
@@ -286,7 +250,6 @@ async def update_section(
     user: User | None,
 ) -> dict[str, Any]:
     row = await _get_section_or_404(db, section_id)
-    old = _section_dict(row)
     data = payload.model_dump(exclude_unset=True)
     if data.get("name") not in (None, row.name):
         await _ensure_section_name_unique(
@@ -325,15 +288,6 @@ async def update_section(
             status_code=409,
             message=_section_conflict_message(exc, name=data.get("name") or row.name),
         ) from None
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="apr_section",
-        resource_id=row.id,
-        old_value=old,
-        new_value=_section_dict(row),
-    )
     return _section_dict(row)
 
 
@@ -353,15 +307,6 @@ async def delete_section(
     row.is_deleted = True
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="delete",
-        user=user,
-        resource_type="apr_section",
-        resource_id=row.id,
-        old_value=_section_dict(row),
-    )
-
 
 async def _generate_item_code(db: AsyncSession, section_id: uuid.UUID) -> str:
     """code 未传时生成段内唯一短码。"""
@@ -420,14 +365,6 @@ async def create_item(
     )
     db.add(row)
     await db.flush()
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="apr_item",
-        resource_id=row.id,
-        new_value=_item_dict(row),
-    )
     return _item_dict(row)
 
 
@@ -474,18 +411,6 @@ async def bulk_create_items(
         rows.append(row)
 
     await db.flush()
-    await _audit(
-        db,
-        action="bulk_create",
-        user=user,
-        resource_type="apr_item",
-        resource_id=section_id,
-        new_value={
-            "section_id": str(section_id),
-            "count": len(rows),
-            "codes": [row.code for row in rows],
-        },
-    )
     return {
         "section_id": str(section_id),
         "count": len(rows),
@@ -500,7 +425,6 @@ async def update_item(
     user: User | None,
 ) -> dict[str, Any]:
     row = await _get_item_or_404(db, item_id)
-    old = _item_dict(row)
     data = payload.model_dump(exclude_unset=True)
     if "code" in data and data["code"] and data["code"] != row.code:
         existing = await repo.find_item_by_code(db, row.section_id, data["code"])
@@ -549,15 +473,6 @@ async def update_item(
         setattr(row, field, value)
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="apr_item",
-        resource_id=row.id,
-        old_value=old,
-        new_value=_item_dict(row),
-    )
     return _item_dict(row)
 
 
@@ -570,27 +485,10 @@ async def delete_item(
         row.is_active = False
         row.updated_by = _actor_id(user)
         await db.flush()
-        await _audit(
-            db,
-            action="deactivate",
-            user=user,
-            resource_type="apr_item",
-            resource_id=row.id,
-            old_value={"is_active": True},
-            new_value={"is_active": False},
-        )
         return _item_dict(row)
     row.is_deleted = True
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="delete",
-        user=user,
-        resource_type="apr_item",
-        resource_id=row.id,
-        old_value=_item_dict(row),
-    )
     return _item_dict(row)
 
 
@@ -663,18 +561,6 @@ async def copy_template(
             )
             copied_items += 1
     await db.flush()
-    await _audit(
-        db,
-        action="copy_template",
-        user=user,
-        resource_type="apr_product",
-        resource_id=product_id,
-        extra={
-            "source_product_id": str(source_product_id),
-            "sections": copied_sections,
-            "items": copied_items,
-        },
-    )
     return {
         "product_id": str(product_id),
         "source_product_id": str(source_product_id),

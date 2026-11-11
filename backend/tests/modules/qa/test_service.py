@@ -106,7 +106,6 @@ async def test_create_master_normalizes_identity_and_snapshots_relations(
     monkeypatch.setattr(master_service, "_validate_region_parent", _async_noop)
     monkeypatch.setattr(master_service, "_validate_department", _department_ok)
     monkeypatch.setattr(master_service, "_get_external_source", _source_ok)
-    monkeypatch.setattr(master_service, "_audit", _async_noop)
 
     source_id = uuid.uuid4()
     payload = MasterObjectCreate(
@@ -145,7 +144,6 @@ async def test_create_master_rejects_duplicate_source_in_payload(
     monkeypatch.setattr(master_service, "_validate_region_parent", _async_noop)
     monkeypatch.setattr(master_service, "_validate_department", _department_ok)
     monkeypatch.setattr(master_service, "_get_external_source", _source_ok)
-    monkeypatch.setattr(master_service, "_audit", _async_noop)
     source_id = uuid.uuid4()
     payload = MasterObjectCreate(
         object_type="EQUIPMENT",
@@ -340,7 +338,6 @@ async def test_create_version_requires_external_approval_and_cleans_failed_stora
         return _stored_file()
 
     monkeypatch.setattr(version_service, "_next_version_sequence", _sequence_one)
-    monkeypatch.setattr(version_service, "_audit", _async_noop)
     monkeypatch.setattr(version_service.file_service, "store_file", _store_and_record)
 
     with pytest.raises(AppException) as error:
@@ -414,7 +411,6 @@ async def test_relations_reject_inactive_master_and_soft_delete_old_links(
     inactive.id = uuid.uuid4()
     monkeypatch.setattr(version_service, "get_version", _returning(version))
     monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(version))
-    monkeypatch.setattr(version_service, "_audit", _async_noop)
     monkeypatch.setattr(version_service, "get_master", _returning(active))
     db = _FakeDb([_Result(rows=[old_link])])
 
@@ -449,7 +445,6 @@ async def test_relations_allow_current_version_but_freeze_history(
         status="active",
     )
     active.id = uuid.uuid4()
-    monkeypatch.setattr(version_service, "_audit", _async_noop)
     monkeypatch.setattr(version_service, "get_master", _returning(active))
 
     current = _version(status=VersionStatus.CURRENT.value)
@@ -495,7 +490,6 @@ async def test_relations_append_keeps_existing_links_by_default(
         status="active",
     )
     approved.id = uuid.uuid4()
-    monkeypatch.setattr(version_service, "_audit", _async_noop)
     monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(version))
     db = _FakeDb([_Result(rows=[kept_link]), _Result(rows=[approved])])
 
@@ -533,7 +527,6 @@ async def test_relations_append_prunes_missing_only_when_explicit(
         status="active",
     )
     kept.id = uuid.uuid4()
-    monkeypatch.setattr(version_service, "_audit", _async_noop)
     monkeypatch.setattr(version_service, "_get_version_with_document_lock", _returning(version))
     db = _FakeDb([_Result(rows=[removed_link]), _Result(rows=[kept])])
 
@@ -562,7 +555,6 @@ async def test_make_current_moves_previous_to_history_and_locks_versions(
         version_service, "get_version", _returning_sequence([target, previous, target])
     )
     monkeypatch.setattr(version_service, "get_file_for_version", _returning(file_row))
-    monkeypatch.setattr(version_service, "_audit", _async_noop)
     db = _FakeDb([_Result(scalar=document)])
 
     result = await version_service.make_current(cast(AsyncSession, db), document.id, target.id)

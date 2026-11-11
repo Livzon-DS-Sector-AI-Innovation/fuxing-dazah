@@ -302,18 +302,19 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:capa:read", "qa:*:read"] },
       // 年度产品回顾（PQR）：一级分组 + 三个二级入口，各按权限显隐。
       // 可见性口径 = 「读得动该页」：enter/manage 权限在后端隐含 PQR 读取，
-      // 纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）。
+      // 纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）；
+      // 汇总分析同样放行 enter，与后端读放行同口径（纯 enter 角色也能看到汇总入口）。
       {
         key: "apr",
         label: "年度产品回顾",
         path: "/qa/apr",
         children: [
           { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:apr:enter", "qa:apr:read", "qa:*:read"] },
-          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:apr:read", "qa:*:read"] },
+          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:apr:read", "qa:*:read", "qa:apr:enter"] },
           { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
         ],
       },
-      { key: "audit", label: "审计日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
+      { key: "audit", label: "操作日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
     ],
   },
   {

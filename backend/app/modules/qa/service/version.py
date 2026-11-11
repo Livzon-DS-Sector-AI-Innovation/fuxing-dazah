@@ -38,7 +38,6 @@ from app.modules.qa.repository import (
 )
 from app.modules.qa.service._shared import (
     _actor_id,
-    _audit,
 )
 from app.platform.identity.models import User
 
@@ -131,20 +130,6 @@ async def create_version(
         )
         db.add(file_row)
         await db.flush()
-        await _audit(
-            db,
-            action="version_create",
-            user=user,
-            resource_type="document_version",
-            resource_id=version.id,
-            new_value={
-                "document_id": str(document_id),
-                "version_label": label,
-                "approved_declared": True,
-                "sha256": stored.sha256,
-                "size_bytes": stored.size_bytes,
-            },
-        )
         return version
     except Exception:
         # session 会在外层 rollback；对象存储不参加 DB 事务，必须显式清理。
@@ -233,18 +218,6 @@ async def set_relations(
         db.add(row)
         result.append(row)
     await db.flush()
-    await _audit(
-        db,
-        action="relations_update",
-        user=user,
-        resource_type="document_version",
-        resource_id=version_id,
-        old_value={"count": len(old_rows)},
-        new_value={
-            "count": len(result),
-            "master_object_ids": [str(o.id) for o, _ in valid],
-        },
-    )
     return result
 
 
@@ -254,7 +227,6 @@ async def set_relations_append(
     master_object_ids: Sequence[uuid.UUID],
     user: User | None = None,
     *,
-    audit: bool = True,
     prune_missing: bool = False,
 ) -> list[DocumentMasterLink]:
     """以追加语义写入关联：只新增传入对象，默认保留全部既有关系。
@@ -263,8 +235,7 @@ async def set_relations_append(
     current + additions - explicit removals，再以 ``prune_missing=True``
     显式表达删除，因而不会因候选列表不完整而隐式删除既有关系。提案
     审批通过的自动关联是同一人工决定的附属动作，只传新增对象、默认
-    不清理既有关系；经 ``audit=False`` 跳过独立审计，只在提案审批的
-    审计记录里体现。
+    不清理既有关系。
     """
 
     version = await _get_version_with_document_lock(db, version_id)
@@ -342,20 +313,6 @@ async def set_relations_append(
     order = {object_id: index for index, object_id in enumerate(requested_ids)}
     result.sort(key=lambda row: order.get(row.master_object_id, len(order)))
     await db.flush()
-    if audit:
-        await _audit(
-            db,
-            action="relations_update",
-            user=user,
-            resource_type="document_version",
-            resource_id=version_id,
-            old_value={"count": len(existing_rows)},
-            new_value={
-                "count": len(result),
-                "master_object_ids": [str(item) for item in requested_ids],
-                "append_semantics": True,
-            },
-        )
     return result
 
 
@@ -439,15 +396,6 @@ async def make_current(
     document.current_version_id = version.id
     document.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="make_current",
-        user=user,
-        resource_type="document_version",
-        resource_id=version.id,
-        old_value={"current_version_id": str(previous_id) if previous_id else None},
-        new_value={"current_version_id": str(version.id), "sha256": file_row.sha256},
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_version(db, version_id) or version
 
@@ -465,13 +413,6 @@ async def disable_version(
     version.status = VersionStatus.INACTIVE.value
     version.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="disable",
-        user=user,
-        resource_type="document_version",
-        resource_id=version.id,
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_version(db, version_id) or version
 
@@ -493,14 +434,6 @@ async def activate_version(
     )
     version.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="activate",
-        user=user,
-        resource_type="document_version",
-        resource_id=version.id,
-        new_value={"status": version.status},
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_version(db, version_id) or version
 

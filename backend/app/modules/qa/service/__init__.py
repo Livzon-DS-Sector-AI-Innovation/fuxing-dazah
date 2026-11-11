@@ -12,7 +12,6 @@ from app.modules.qa.service import apr as apr
 from app.modules.qa.service import deviation_ai as deviation_ai
 from app.modules.qa.service._shared import (
     _actor_id,
-    _audit,
     _require_text,
     _resolve_department_patch,
     _validate_department,
@@ -20,7 +19,8 @@ from app.modules.qa.service._shared import (
     normalize_text,
 )
 from app.modules.qa.service.audit import (
-    list_audit_logs,
+    OPERATION_LOG_SOURCES,
+    list_operation_logs,
 )
 from app.modules.qa.service.deviation import (
     ATTACHMENT_MAX_SIZE,
@@ -100,7 +100,6 @@ __all__ = [
     "normalize_text",
     "_require_text",
     "_actor_id",
-    "_audit",
     "_validate_department",
     "_resolve_department_patch",
     "create_master",
@@ -136,7 +135,8 @@ __all__ = [
     "retry_extraction",
     "document_processing_results",
     "search",
-    "list_audit_logs",
+    "OPERATION_LOG_SOURCES",
+    "list_operation_logs",
     "CLOSE_WINDOW_DAYS",
     "DEVIATION_STATUS_LABELS",
     "CAPA_STATUS_LABELS",

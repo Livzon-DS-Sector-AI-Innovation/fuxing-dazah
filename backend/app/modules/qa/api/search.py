@@ -1,4 +1,4 @@
-"""QA 检索与审计日志端点。"""
+"""QA 检索与操作日志端点。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import AppException
 from app.core.response import paginated_response
 from app.modules.qa import service
 from app.modules.qa.api._deps import (
@@ -42,27 +43,46 @@ async def search_qa(
     return paginated_response(items, page, page_size, total)
 
 
-@router.get("/audit-logs", summary="QA审计日志")
-async def get_qa_audit_logs(
+@router.get("/operation-logs", summary="QA操作日志")
+async def get_qa_operation_logs(
     user: User = Depends(audit_read),
     db: AsyncSession = Depends(get_db),
-    action: str | None = None,
     resource_type: str | None = None,
-    resource_id: uuid.UUID | None = None,
+    product_id: uuid.UUID | None = None,
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    batch_id: uuid.UUID | None = None,
     actor_id: uuid.UUID | None = Query(default=None, alias="user_id"),
     start_at: datetime | None = Query(default=None, alias="from"),
     end_at: datetime | None = Query(default=None, alias="to"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> Any:
-    logs, total = await service.list_audit_logs(
+    """QA 操作日志：时间、操作人、变更前后值。
+
+    读取范围由 service 的来源注册表决定（当前覆盖 PQR 数据录入，
+    旧版杂项审计事件不在此列）。product_id/year/batch_id 是 PQR
+    来源的定位字段过滤；每个来源域自带 extra 定位上下文。
+    """
+    if resource_type is not None and resource_type not in (
+        service.OPERATION_LOG_SOURCES
+    ):
+        raise AppException(
+            status_code=422, message=f"未知的操作日志来源类型：{resource_type}"
+        )
+    extra_equals: dict[str, str] = {}
+    if product_id is not None:
+        extra_equals["product_id"] = str(product_id)
+    if year is not None:
+        extra_equals["year"] = str(year)
+    if batch_id is not None:
+        extra_equals["batch_id"] = str(batch_id)
+    logs, total = await service.list_operation_logs(
         db,
         page=page,
         page_size=page_size,
-        user_id=actor_id,
-        action=action,
         resource_type=resource_type,
-        resource_id=resource_id,
+        extra_equals=extra_equals or None,
+        user_id=actor_id,
         start_at=start_at,
         end_at=end_at,
     )
@@ -73,22 +93,17 @@ async def get_qa_audit_logs(
     data = [
         {
             "id": log.id,
-            "user_id": log.user_id,
+            "created_at": log.created_at,
             "actor_id": log.user_id,
             "actor_name": names.get(log.user_id),
-            "action": log.action,
             "resource_type": log.resource_type,
-            "resource_id": log.resource_id,
-            "object_type": log.resource_type,
-            "object_id": log.resource_id,
+            "source_label": service.OPERATION_LOG_SOURCES.get(
+                str(log.resource_type), ("—", ())
+            )[0],
+            "action": log.action,
             "old_value": log.old_value,
             "new_value": log.new_value,
-            "before_value": log.old_value,
-            "after_value": log.new_value,
-            "extra": log.extra,
-            "metadata": log.extra,
-            "created_at": log.created_at,
-            "file_sha256": (log.extra or {}).get("sha256") if log.extra else None,
+            "extra": log.extra or {},
         }
         for log in logs
     ]

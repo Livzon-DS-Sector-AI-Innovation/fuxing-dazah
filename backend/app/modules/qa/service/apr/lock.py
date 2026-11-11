@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException
 from app.modules.qa.models import AprAnnualReview
 from app.modules.qa.repository import apr as repo
-from app.modules.qa.service.apr.common import _actor_id, _audit, _get_product_or_404
+from app.modules.qa.service.apr.common import _actor_id, _get_product_or_404
 from app.platform.identity.models import User
 
 
@@ -69,12 +69,4 @@ async def set_annual_review_lock(
     repo.touch_lock_state(review, locked=locked, actor_id=_actor_id(user))
     review.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="lock" if locked else "unlock",
-        user=user,
-        resource_type="apr_annual_review",
-        resource_id=review.id,
-        extra={"product": product.name, "year": year},
-    )
     return _review_dict(review)

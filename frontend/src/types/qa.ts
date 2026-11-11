@@ -369,22 +369,44 @@ export interface QaSearchResult {
   is_active?: boolean
 }
 
-export interface QaAuditLog {
+/** PQR 单元格快照：键固定为 值/备注/行标签，只含有内容的部分。 */
+export interface QaOperationLogCell {
+  值?: string | number | null
+  备注?: string | null
+  行标签?: string | null
+}
+
+/** PQR 操作日志记录定位上下文（产品/年度/批号/段）。 */
+export interface QaOperationLogExtra {
+  product_id?: string
+  product_name?: string
+  year?: number
+  batch_no?: string
+  batch_id?: string
+  section_id?: string
+  section_name?: string
+  source?: 'entry' | 'import'
+  mode?: 'replace' | 'merge'
+  changed?: number
+}
+
+/**
+ * QA 操作日志（通用读模型）：读取范围由后端来源注册表决定，
+ * 当前登记的来源只有 PQR 数据录入。每次保存一条，
+ * old_value/new_value 键为「列名（第N行）」，值为变更前/后快照。
+ */
+export interface QaOperationLog {
   id: string
-  action: string
-  object_type?: string | null
-  object_id?: string | null
-  resource_type?: string | null
-  resource_id?: string | null
-  user_id?: string | null
+  created_at: string
   actor_id?: string | null
   actor_name?: string | null
-  created_at: string
-  before_value?: Record<string, unknown> | null
-  after_value?: Record<string, unknown> | null
-  metadata?: Record<string, unknown> | null
-  file_sha256?: string | null
-  ip_address?: string | null
+  resource_type?: string | null
+  /** 来源域显示名（如「PQR 数据录入」），由后端注册表解析。 */
+  source_label?: string | null
+  action: string
+  old_value: Record<string, QaOperationLogCell> | null
+  new_value: Record<string, QaOperationLogCell> | null
+  extra: QaOperationLogExtra
 }
 
 export interface QaPage<T> {

@@ -49,7 +49,6 @@ from app.modules.qa.schemas import (
     DeviationUpdate,
     HypothesisTestIn,
 )
-from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
@@ -113,29 +112,6 @@ def _actor_id(user: User | None) -> uuid.UUID | None:
 def _actor_name(user: User | None) -> str | None:
     return getattr(user, "name", None) if user is not None else None
 
-
-async def _audit(
-    db: AsyncSession,
-    *,
-    action: str,
-    user: User | None,
-    resource_type: str,
-    resource_id: uuid.UUID | None,
-    old_value: dict[str, Any] | None = None,
-    new_value: dict[str, Any] | None = None,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    await record_audit_log(
-        db,
-        action=action,
-        user=user,
-        user_id=_actor_id(user),
-        resource_type=f"qa.{resource_type}",
-        resource_id=resource_id,
-        old_value=old_value,
-        new_value=new_value,
-        extra=extra,
-    )
 
 
 def validate_transition(
@@ -345,14 +321,6 @@ async def create_deviation(
         from_status=None,
         to_status=DeviationStatus.DRAFT.value,
     )
-    await _audit(
-        db,
-        action="deviation.create",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        new_value={"deviation_no": deviation.deviation_no},
-    )
     await db.flush()
     return await _get_deviation(db, deviation.id)
 
@@ -437,14 +405,6 @@ async def update_deviation(
         )
     deviation.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="deviation.update",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        extra={"fields": sorted(payload.model_dump(exclude_unset=True).keys())},
-    )
     return await _get_deviation(db, deviation.id)
 
 
@@ -534,15 +494,6 @@ async def transition_deviation(
         to_status=target.value,
         comment=payload.comment,
     )
-    await _audit(
-        db,
-        action=f"deviation.{payload.action}",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        old_value={"status": old_status},
-        new_value={"status": target.value},
-    )
     await db.flush()
     return await _get_deviation(db, deviation.id)
 
@@ -570,18 +521,6 @@ async def extend_deviation(
         to_status=deviation.status,
         comment=f"关闭期限 {old_due.isoformat()} → {payload.new_due_date.isoformat()}：{payload.reason}",
     )
-    await _audit(
-        db,
-        action="deviation.extend",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        old_value={"due_date": old_due.isoformat()},
-        new_value={
-            "due_date": payload.new_due_date.isoformat(),
-            "reason": payload.reason,
-        },
-    )
     await db.flush()
     return await _get_deviation(db, deviation.id)
 
@@ -604,14 +543,6 @@ async def delete_deviation(
     attachments = await repo.get_attachments(db, deviation.id)
     for attachment in attachments:
         attachment.is_deleted = True
-    await _audit(
-        db,
-        action="deviation.delete",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        old_value={"deviation_no": deviation.deviation_no},
-    )
     await db.flush()
     # 行与对象一起清理，否则软删的附件文件会永久残留在存储里。
     for attachment in attachments:
@@ -681,14 +612,6 @@ async def add_attachment(
     except Exception:
         file_service.cleanup_stored_file(key)
         raise
-    await _audit(
-        db,
-        action="deviation.attachment.add",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        new_value={"file_name": safe_name, "sha256": attachment.sha256},
-    )
     # 重新查询以加载 server_default 的 created_at，避免序列化时懒加载。
     stored = await repo.get_attachment(db, deviation.id, attachment.id)
     assert stored is not None
@@ -723,15 +646,6 @@ async def delete_attachment(
     attachment.updated_by = _actor_id(user)
     await db.flush()
     await asyncio.to_thread(file_service.delete_file, attachment.storage_key)
-    await _audit(
-        db,
-        action="deviation.attachment.delete",
-        user=user,
-        resource_type="deviation",
-        resource_id=deviation.id,
-        old_value={"file_name": attachment.file_name},
-    )
-
 
 # ───────────────────────── 偏差：查询与序列化 ─────────────────────────
 
@@ -1043,14 +957,6 @@ async def create_capa(db: AsyncSession, payload: CapaCreate, user: User | None) 
     await _log_capa(
         db, capa, action="create", user=user, from_status=None, to_status=capa.status
     )
-    await _audit(
-        db,
-        action="capa.create",
-        user=user,
-        resource_type="capa",
-        resource_id=capa.id,
-        new_value={"capa_no": capa.capa_no, "deviation_no": deviation.deviation_no},
-    )
     await db.flush()
     return await _get_capa(db, capa.id)
 
@@ -1072,14 +978,6 @@ async def update_capa(
         await _replace_actions(db, capa.id, payload.actions or [], user)
     capa.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="capa.update",
-        user=user,
-        resource_type="capa",
-        resource_id=capa.id,
-        extra={"fields": sorted(payload.model_dump(exclude_unset=True).keys())},
-    )
     return await _get_capa(db, capa.id)
 
 
@@ -1104,14 +1002,6 @@ async def patch_capa_action(
         action.actual_date = app_time.today()
     action.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="capa.action.update",
-        user=user,
-        resource_type="capa",
-        resource_id=capa.id,
-        new_value={"action_id": str(action.id), "status": action.status},
-    )
     return await _get_capa(db, capa.id)
 
 
@@ -1177,15 +1067,6 @@ async def transition_capa(
         from_status=old_status,
         to_status=target.value,
         comment=payload.comment,
-    )
-    await _audit(
-        db,
-        action=f"capa.{payload.action}",
-        user=user,
-        resource_type="capa",
-        resource_id=capa.id,
-        old_value={"status": old_status},
-        new_value={"status": target.value},
     )
     await db.flush()
     return await _get_capa(db, capa.id)

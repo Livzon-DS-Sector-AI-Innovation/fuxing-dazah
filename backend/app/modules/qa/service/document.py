@@ -30,7 +30,6 @@ from app.modules.qa.repository import (
 )
 from app.modules.qa.service._shared import (
     _actor_id,
-    _audit,
     _require_text,
     _resolve_department_patch,
     _validate_department,
@@ -68,19 +67,6 @@ async def create_document_type(
     )
     db.add(row)
     await db.flush()
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="document_type",
-        resource_id=row.id,
-        new_value={
-            "code": row.code,
-            "name": row.name,
-            "description": row.description,
-            "ai_source_policy": row.ai_source_policy,
-        },
-    )
     return row
 
 
@@ -93,12 +79,6 @@ async def update_document_type(
     row = await get_document_type(db, type_id)
     if row is None:
         raise NotFoundException("文件类型", str(type_id))
-    old = {
-        "name": row.name,
-        "status": row.status,
-        "description": row.description,
-        "ai_source_policy": row.ai_source_policy,
-    }
     data = payload.model_dump(exclude_unset=True)
     if "name" in data:
         row.name = _require_text(data["name"], "文件类型名称")
@@ -111,20 +91,6 @@ async def update_document_type(
             setattr(row, key, data[key])
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="document_type",
-        resource_id=row.id,
-        old_value=old,
-        new_value={
-            "name": row.name,
-            "status": row.status,
-            "description": row.description,
-            "ai_source_policy": row.ai_source_policy,
-        },
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_document_type(db, type_id) or row
 
@@ -158,14 +124,6 @@ async def create_document(
     )
     db.add(row)
     await db.flush()
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="document",
-        resource_id=row.id,
-        new_value={"document_no": row.document_no, "title": row.title},
-    )
     return row
 
 
@@ -178,12 +136,6 @@ async def update_document(
     row = await get_document(db, document_id)
     if row is None:
         raise NotFoundException("质量文件", str(document_id))
-    old = {
-        "title": row.title,
-        "document_type_id": str(row.document_type_id),
-        "status": row.status,
-        "responsible_department_id": row.responsible_department_id,
-    }
     data = payload.model_dump(exclude_unset=True)
     if "title" in data:
         row.title = _require_text(data["title"], "文件标题")
@@ -208,15 +160,6 @@ async def update_document(
         )
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="document",
-        resource_id=row.id,
-        old_value=old,
-        new_value={"title": row.title, "status": row.status},
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_document(db, document_id) or row
 
@@ -229,19 +172,9 @@ async def set_document_status(
     row = await get_document(db, document_id)
     if row is None:
         raise NotFoundException("质量文件", str(document_id))
-    old = row.status
     row.status = status
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="activate" if status == "active" else "deactivate",
-        user=user,
-        resource_type="document",
-        resource_id=row.id,
-        old_value={"status": old},
-        new_value={"status": status},
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_document(db, document_id) or row
 

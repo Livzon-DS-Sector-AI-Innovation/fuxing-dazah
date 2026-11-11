@@ -22,13 +22,13 @@ from app.modules.qa.models import AprBatch, AprItem, AprValueType
 from app.modules.qa.repository import apr as repo
 from app.modules.qa.service.apr.common import (
     _actor_id,
-    _audit,
-    _batch_dict,
     _display_name,
     _ensure_year_open,
+    _get_product_or_404,
     _get_section_or_404,
     _normalize_quick_values,
     _quick_values_hint,
+    _record_value_changes,
 )
 from app.platform.identity.models import User
 
@@ -207,7 +207,7 @@ async def import_section_values(
     - merge：非空格写入、空白格保留系统已有值（repo.merge_batch_values）
     - replace：整批替换（同 save_batch_values 全量替换语义 + 必填校验）
     - 校验规则与行内保存同口径：quick_values 白名单、类型匹配、锁定拦截
-    - 文件中的新批号自动登记为该段批次（唯一守卫+审计同登记批次），
+    - 文件中的新批号自动登记为该段批次（唯一守卫同登记批次），
       结果 registered 字段透明报告新登记数
     """
     section = await _get_section_or_404(db, section_id)
@@ -507,7 +507,7 @@ async def import_section_values(
         prev_batch = bn
 
     # 批号查找 key 同样 NFKC 归一（与解析侧对称）；文件中的新批号自动登记为
-    # 该段批次（复用登记批次的唯一守卫与审计），结果里透明报告新登记数。
+    # 该段批次（复用登记批次的唯一守卫），结果里透明报告新登记数。
     registered = {
         _normalize_header_cell(b.batch_no): b
         for b in await repo.list_batches_of_section(db, section_id, year=year)
@@ -566,6 +566,8 @@ async def import_section_values(
     registered_new = 0
     batches_written = 0
     cells_written = 0
+    product = await _get_product_or_404(db, section.product_id)
+    items_all = {i.id: i for i in items}
     for batch, bn, values in write_ops:
         if batch is None:
             batch = AprBatch(
@@ -586,40 +588,45 @@ async def import_section_values(
                     status_code=409,
                     message=f"批号 {bn} 在该段 {year} 年度已登记",
                 ) from None
-            await _audit(
-                db,
-                action="create",
-                user=user,
-                resource_type="apr_batch",
-                resource_id=batch.id,
-                new_value=_batch_dict(batch),
-            )
             registered_new += 1
         if mode == "merge" and not values:
             continue  # 全空白批次：merge 无事可做
+        # 操作日志：写入前取旧值逐格 diff（merge 只看本次写入的格）。
+        old_values = await repo.list_values_of_batch(db, batch.id)
         if mode == "replace":
             count = await repo.replace_batch_values(
                 db, batch.id, values, actor_id=_actor_id(user)
             )
+            diff_rows = values
         else:
             count = await repo.merge_batch_values(
                 db, batch.id, values, actor_id=_actor_id(user)
             )
+            # merge 会保留文件未提供的备注/行标签：以写完后的库内值为准，
+            # 否则原值重导会被 diff 成「备注被清空」。
+            written = {(v["item_id"], v["row_seq"]) for v in values}
+            diff_rows = [
+                value
+                for value in await repo.list_values_of_batch(db, batch.id)
+                if (value.item_id, value.row_seq) in written
+            ]
+        recorded = await _record_value_changes(
+            db,
+            user=user,
+            batch=batch,
+            section=section,
+            product=product,
+            items_by_id=items_all,
+            old_values=old_values,
+            new_rows=diff_rows,
+            touched_only=mode == "merge",
+            source="import",
+            mode=mode,
+        )
+        if not recorded and count == 0:
+            continue  # 内容与现状完全一致的 merge：既没写值也没变更，不算事件
         batches_written += 1
         cells_written += count
-        await _audit(
-            db,
-            action="import_values",
-            user=user,
-            resource_type="apr_batch",
-            resource_id=batch.id,
-            extra={
-                "year": year,
-                "batch_no": batch.batch_no,
-                "mode": mode,
-                "values": count,
-            },
-        )
     return {
         "ok": True,
         "mode": mode,

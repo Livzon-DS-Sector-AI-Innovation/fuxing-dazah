@@ -1259,3 +1259,123 @@ async def test_item_limit_interval_validated() -> None:
             f"/api/v1/qa/apr/items/{item['id']}", json={"spec_min": 4.8}
         )
         assert resp.status_code == 422
+
+
+# ───────────────────────── 操作日志（PQR 值变更留痕） ─────────────────────────
+
+LOGS_URL = "/api/v1/qa/operation-logs"
+
+
+async def _operation_logs(
+    ac: AsyncClient, **params: Any
+) -> tuple[list[dict[str, Any]], int]:
+    """拉操作日志，返回 (当前页记录, 总数)；按 product_id 圈定本用例的数据。"""
+    resp = await ac.get(LOGS_URL, params=params)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    return body["data"], int(body["meta"]["total"])
+
+
+async def test_operation_logs_record_value_changes() -> None:
+    """值变更逐格留痕：首次保存记新增、改值记前后值、原样重存不记。"""
+    perms = MANAGE | ENTER | {"qa:audit:read"}
+    async with _client(perms) as (ac, _):
+        product = await _mk_product(ac)
+        section = await _mk_section(ac, product["id"])
+        item = await _mk_item(ac, section["id"])  # 数值列「酸碱度」
+        batch = await _mk_batch(ac, section["id"])
+
+        def _save(value_num: float, remark: str | None = None) -> Any:
+            return ac.put(
+                f"/api/v1/qa/apr/batches/{batch['id']}/values",
+                json={
+                    "values": [
+                        {
+                            "item_id": item["id"],
+                            "value_num": value_num,
+                            "remark": remark,
+                        }
+                    ]
+                },
+            )
+
+        assert (await _save(4.3)).status_code == 200
+        rows, total = await _operation_logs(
+            ac, product_id=product["id"], page_size=5
+        )
+        assert total == 1
+        first = rows[0]
+        assert first["action"] == "values_saved"
+        assert first["old_value"] == {"酸碱度": None}
+        assert first["new_value"] == {"酸碱度": {"值": 4.3}}
+        assert first["extra"]["product_name"] == product["name"]
+        assert first["extra"]["batch_no"] == batch["batch_no"]
+        assert first["extra"]["section_name"] == section["name"]
+        assert first["extra"]["source"] == "entry"
+        assert first["source_label"] == "PQR 数据录入"
+
+        # 原样重存：内容未变，不产生新记录
+        assert (await _save(4.3)).status_code == 200
+        _, total = await _operation_logs(ac, product_id=product["id"])
+        assert total == 1
+
+        # 改值 + 备注：记一条含前后快照（同事务 created_at 相同，按内容选记录不靠排序）
+        assert (await _save(4.5, remark="复测")).status_code == 200
+        rows, total = await _operation_logs(ac, product_id=product["id"])
+        assert total == 2
+        change = next(
+            r
+            for r in rows
+            if (r["new_value"] or {}).get("酸碱度", {}).get("备注") == "复测"
+        )
+        assert change["action"] == "values_saved"
+        assert change["old_value"] == {"酸碱度": {"值": 4.3}}
+        assert change["new_value"] == {"酸碱度": {"值": 4.5, "备注": "复测"}}
+
+        # 定位字段过滤：年度不匹配 → 空
+        _, total = await _operation_logs(
+            ac, product_id=product["id"], year=2020
+        )
+        assert total == 0
+
+
+async def test_operation_logs_batch_delete_summary() -> None:
+    """删除批次记一条汇总（值数量），不再逐格展开。"""
+    perms = MANAGE | ENTER | {"qa:audit:read"}
+    async with _client(perms) as (ac, _):
+        product = await _mk_product(ac)
+        section = await _mk_section(ac, product["id"])
+        item = await _mk_item(ac, section["id"])
+        item2 = await _mk_item(ac, section["id"], name_cn="水分")
+        batch = await _mk_batch(ac, section["id"])
+        resp = await ac.put(
+            f"/api/v1/qa/apr/batches/{batch['id']}/values",
+            json={
+                "values": [
+                    {"item_id": item["id"], "value_num": 4.3},
+                    {"item_id": item2["id"], "value_num": 5.1},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        resp = await ac.delete(f"/api/v1/qa/apr/batches/{batch['id']}")
+        assert resp.status_code == 200
+
+        rows, _ = await _operation_logs(ac, product_id=product["id"], page_size=10)
+        deleted = [r for r in rows if r["action"] == "batch_deleted"]
+        assert len(deleted) == 1
+        assert deleted[0]["old_value"] == {"值数量": 2}
+        assert deleted[0]["new_value"] is None
+        assert deleted[0]["extra"]["batch_no"] == batch["batch_no"]
+
+
+async def test_operation_logs_reject_unknown_source_and_legacy_isolated() -> None:
+    """未知来源类型 422；默认列表不包含旧版杂项审计事件。"""
+    perms = MANAGE | ENTER | {"qa:audit:read"}
+    async with _client(perms) as (ac, _):
+        resp = await ac.get(LOGS_URL, params={"resource_type": "qa.master_object"})
+        assert resp.status_code == 422
+
+        # 旧版审计（主数据 create 等）不在来源注册表词表内，读不到
+        rows, _ = await _operation_logs(ac, resource_type="qa.apr_batch")
+        assert all(r["resource_type"] == "qa.apr_batch" for r in rows)

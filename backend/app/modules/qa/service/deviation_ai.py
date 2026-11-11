@@ -27,7 +27,7 @@ from app.modules.qa.models import (
     MasterObjectType,
 )
 from app.modules.qa.schemas import DeviationAiAssistIn
-from app.modules.qa.service._shared import _audit, normalize_text
+from app.modules.qa.service._shared import normalize_text
 from app.modules.qa.service.ai_analysis import _catalog, _fuzzy_match
 from app.platform.identity.models import User
 from app.platform.integrations.ai.client import AIOutputError, AIService
@@ -399,18 +399,6 @@ async def ai_assist(
             raise NotFoundException("偏差", str(payload.deviation_id))
     handler = _HANDLERS[payload.kind]
     result = await handler(db, payload)
-    await _audit(
-        db,
-        action="deviation.ai_assist",
-        user=user,
-        resource_type="deviation",
-        resource_id=payload.deviation_id,
-        extra={
-            "kind": payload.kind,
-            "model": settings.QA_AI_MODEL,
-            "prompt_version": DEVIATION_AI_PROMPT_VERSION,
-        },
-    )
     return {
         "kind": payload.kind,
         "prompt_version": DEVIATION_AI_PROMPT_VERSION,

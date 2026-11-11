@@ -2,7 +2,7 @@
 
 import { apiFetchPaginated, apiGet } from '@/lib/http-client'
 import type {
-  QaAuditLog,
+  QaOperationLog,
   QaAiAnalysisRun,
   QaDepartmentReference,
   QaDocument,
@@ -244,25 +244,29 @@ export async function fetchQaSearch(params: {
   return asPage<QaSearchResult>(result) as QaSearchPage
 }
 
-export async function fetchQaAuditLogs(params: {
-  action?: string
-  object_type?: string
+export async function fetchQaOperationLogs(params: {
+  resource_type?: string
+  product_id?: string
+  year?: number
+  batch_id?: string
   actor_id?: string
   from?: string
   to?: string
   page?: number
   page_size?: number
-} = {}): Promise<QaPage<QaAuditLog>> {
+} = {}): Promise<QaPage<QaOperationLog>> {
   const query = qs({
-    action: params.action,
-    resource_type: params.object_type,
+    resource_type: params.resource_type,
+    product_id: params.product_id,
+    year: params.year,
+    batch_id: params.batch_id,
     user_id: params.actor_id,
     from: params.from,
     to: params.to,
     page: params.page ?? 1,
     page_size: params.page_size ?? 50,
   })
-  const result = await apiFetchPaginated<QaAuditLog>(`${QA_BASE}/audit-logs?${query}`)
+  const result = await apiFetchPaginated<QaOperationLog>(`${QA_BASE}/operation-logs?${query}`)
   return asPage(result)
 }
 

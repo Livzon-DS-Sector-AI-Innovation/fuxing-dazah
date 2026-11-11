@@ -42,7 +42,6 @@ from app.modules.qa.repository import (
 )
 from app.modules.qa.service._shared import (
     _actor_id,
-    _audit,
 )
 from app.platform.identity.models import User
 
@@ -511,28 +510,6 @@ async def process_file(
         else:
             file_row.retry_count = 0
         await db.flush()
-        await _audit(
-            db,
-            action=(
-                "extraction_failed"
-                if parsed.status == ExtractionRunStatus.FAILED.value
-                else "extraction_complete"
-            ),
-            user=None,
-            resource_type="document_file",
-            resource_id=file_row.id,
-            new_value={
-                "status": parsed.status,
-                "block_count": len(parsed.blocks),
-                "chunk_count": len(parsed.chunks),
-            },
-            extra={
-                "sha256": file_row.sha256,
-                "parser_version": parsed.parser_version,
-                "provider": extraction_run.provider,
-                "run_id": str(extraction_run.id),
-            },
-        )
         return file_row
     except asyncio.CancelledError:
         # 调度器超时/停机取消时，回滚本地未提交写入，但故意不清理
@@ -598,23 +575,6 @@ async def process_file(
                 extraction_row.lease_until = None
                 extraction_row.retry_count = next_retry
             await db.flush()
-            await _audit(
-                db,
-                action="extraction_failed",
-                user=None,
-                resource_type="document_file",
-                resource_id=claimed_file.id,
-                new_value={
-                    "status": claimed_file.extraction_status,
-                    "error": error_text,
-                },
-                extra={
-                    "retry_count": next_retry,
-                    "sha256": claimed_file.sha256,
-                    "parser_version": PARSER_VERSION,
-                    "run_id": str(extraction_run_id),
-                },
-            )
             await db.commit()
             return claimed_file
         except Exception:
@@ -670,13 +630,6 @@ async def retry_extraction(
     file_row.extraction_lease_until = None
     file_row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="extraction_retry",
-        user=user,
-        resource_type="document_file",
-        resource_id=file_id,
-    )
     # UPDATE 无 RETURNING：re-fetch 回填 updated_at，否则序列化时 MissingGreenlet
     return await get_file(db, file_id) or file_row
 

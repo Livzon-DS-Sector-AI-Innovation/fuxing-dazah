@@ -57,7 +57,7 @@ from app.modules.qa.repository import (
     list_masters,
     list_proposals,
 )
-from app.modules.qa.service._shared import _actor_id, _audit, normalize_text
+from app.modules.qa.service._shared import _actor_id, normalize_text
 from app.platform.identity.models import User
 from app.platform.integrations.ai.client import AIOutputError, AIService
 from app.platform.permission.deps import get_user_permissions
@@ -93,20 +93,6 @@ def _fingerprint(value: Any) -> str:
             value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
     ).hexdigest()
-
-
-def _analysis_audit_context(run: DocumentAIAnalysisRun) -> dict[str, Any]:
-    """供决策审计复用的运行元数据；不包含 prompt、正文或模型原始响应。"""
-
-    return {
-        "analysis_run_id": str(run.id),
-        "input_fingerprint": run.input_fingerprint,
-        "catalog_fingerprint": run.catalog_fingerprint,
-        "model": run.model,
-        "provider": run.provider,
-        "prompt_version": run.prompt_version,
-        "schema_version": run.schema_version,
-    }
 
 
 def _quote(content: str, mention: str, max_chars: int = 600) -> str:
@@ -438,18 +424,6 @@ async def create_analysis_run(
             latest.lease_until = None
             latest.finished_at = None
             await db.flush()
-            await _audit(
-                db,
-                action="ai_analysis_retry_requested",
-                user=user,
-                resource_type="document_ai_analysis_run",
-                resource_id=latest.id,
-                new_value={
-                    "status": latest.status,
-                    "retry_count": latest.retry_count,
-                },
-                extra={"input_fingerprint": latest.input_fingerprint},
-            )
             return latest
     if force:
         # 强制重跑不能让同一版本的旧结果继续可确认。除了最近一次运行，
@@ -494,22 +468,6 @@ async def create_analysis_run(
     )
     db.add(run)
     await db.flush()
-    await _audit(
-        db,
-        action="ai_analysis_requested",
-        user=user,
-        resource_type="document_ai_analysis_run",
-        resource_id=run.id,
-        new_value={"version_id": str(version_id), "status": run.status},
-        extra={
-            "sha256": file_row.sha256,
-            "input_fingerprint": input_fingerprint,
-            "catalog_fingerprint": catalog_fingerprint,
-            "model": run.model,
-            "prompt_version": run.prompt_version,
-            "schema_version": run.schema_version,
-        },
-    )
     return run
 
 
@@ -1271,28 +1229,6 @@ async def process_analysis_run(
         run.lease_until = None
         run.worker_token = None
         await db.flush()
-        await _audit(
-            db,
-            action="ai_analysis_completed"
-            if run.status == AIAnalysisStatus.READY.value
-            else "ai_analysis_partial",
-            user=None,
-            resource_type="document_ai_analysis_run",
-            resource_id=run.id,
-            new_value={
-                "status": run.status,
-                "entity_count": run.entity_count,
-                "suggestion_count": run.suggestion_count,
-                "proposal_count": run.proposal_count,
-            },
-            extra={
-                "input_fingerprint": run.input_fingerprint,
-                "catalog_fingerprint": run.catalog_fingerprint,
-                "model": run.model,
-                "prompt_version": run.prompt_version,
-                "schema_version": run.schema_version,
-            },
-        )
         return run
     except asyncio.CancelledError:
         # wait_for/服务停机取消时只回滚当前事务，保留已提交的 worker
@@ -1348,26 +1284,6 @@ async def process_analysis_run(
             claimed_run.lease_until = None
             claimed_run.worker_token = None
             await db.flush()
-            await _audit(
-                db,
-                action="ai_analysis_failed",
-                user=None,
-                resource_type="document_ai_analysis_run",
-                resource_id=claimed_run.id,
-                new_value={
-                    "status": claimed_run.status,
-                    "error": error_text,
-                    "retry_count": next_retry,
-                },
-                extra={
-                    "input_fingerprint": claimed_run.input_fingerprint,
-                    "catalog_fingerprint": claimed_run.catalog_fingerprint,
-                    "model": claimed_run.model,
-                    "prompt_version": claimed_run.prompt_version,
-                    "schema_version": claimed_run.schema_version,
-                    "retry_count": next_retry,
-                },
-            )
             await db.commit()
             return claimed_run
         except Exception:
@@ -1498,22 +1414,6 @@ async def _mark_analysis_stale(
         )
     )
     await db.flush()
-    await _audit(
-        db,
-        action="ai_analysis_stale",
-        user=user,
-        resource_type="document_ai_analysis_run",
-        resource_id=run.id,
-        new_value={"status": run.status, "reason": reason},
-        extra={
-            "input_fingerprint": run.input_fingerprint,
-            "catalog_fingerprint": run.catalog_fingerprint,
-            "model": run.model,
-            "prompt_version": run.prompt_version,
-            "schema_version": run.schema_version,
-        },
-    )
-
 
 async def analysis_to_dict(
     db: AsyncSession, run: DocumentAIAnalysisRun, *, user: User | None = None
@@ -1717,37 +1617,6 @@ async def confirm_relations(
     rows = await set_relations_append(
         db, locked_version.id, sorted(final_ids, key=str), user, prune_missing=True
     )
-    await _audit(
-        db,
-        action="ai_relations_confirmed",
-        user=user,
-        resource_type="document_ai_analysis_run",
-        resource_id=run.id,
-        old_value={"count": len(current_ids)},
-        new_value={
-            "count": len(rows),
-            "accepted_suggestion_count": len(accepted),
-            "rejected_suggestion_count": len(pending_suggestions) - len(accepted),
-            "manual_count": len(manual_master_object_ids),
-            "removed_count": len(remove_master_object_ids),
-        },
-        extra={
-            **_analysis_audit_context(run),
-            "version_id": str(locked_version.id),
-            "accepted_suggestion_ids": [str(item) for item in accepted_ids],
-            "rejected_suggestion_ids": [
-                str(item.id)
-                for item in pending_suggestions
-                if item.id not in accepted_ids
-            ],
-            "manual_master_object_ids": [
-                str(item) for item in manual_master_object_ids
-            ],
-            "remove_master_object_ids": [
-                str(item) for item in remove_master_object_ids
-            ],
-        },
-    )
     return rows
 
 
@@ -1852,15 +1721,6 @@ async def approve_proposal(
             raise AppException(status_code=409, message="该提案已经处理，不能重复审批")
         proposal.status = AIProposalStatus.STALE.value
         proposal.conflicts = [{"reason": "来源分析运行不存在"}]
-        await _audit(
-            db,
-            action="ai_proposal_stale",
-            user=user,
-            resource_type="master_object_proposal",
-            resource_id=proposal.id,
-            new_value={"status": proposal.status, "reason": "analysis_run_missing"},
-            extra={"analysis_run_id": str(proposal.analysis_run_id)},
-        )
         await db.commit()
         raise AppException(
             status_code=409, message="提案来源分析运行不存在，已标记过期"
@@ -1921,18 +1781,6 @@ async def approve_proposal(
     }:
         proposal.status = AIProposalStatus.STALE.value
         proposal.conflicts = [{"reason": f"来源分析状态为 {analysis_run.status}"}]
-        await _audit(
-            db,
-            action="ai_proposal_stale",
-            user=user,
-            resource_type="master_object_proposal",
-            resource_id=proposal.id,
-            new_value={
-                "status": proposal.status,
-                "reason": "analysis_run_not_publishable",
-            },
-            extra=_analysis_audit_context(analysis_run),
-        )
         await db.commit()
         raise AppException(status_code=409, message="提案来源已失效，不能审批")
     if analysis_run.source_policy != AIAuthorityPolicy.AUTHORITATIVE.value:
@@ -1993,15 +1841,6 @@ async def approve_proposal(
                 proposal.reviewed_by = _actor_id(user)
                 proposal.reviewed_at = datetime.now(UTC)
                 await db.flush()
-                await _audit(
-                    db,
-                    action="ai_proposal_conflict",
-                    user=user,
-                    resource_type="master_object_proposal",
-                    resource_id=proposal.id,
-                    new_value={"status": proposal.status, "reason": "code_conflict"},
-                    extra=_analysis_audit_context(analysis_run),
-                )
                 await db.commit()
                 raise AppException(
                     status_code=409, message="提案业务编码已被占用，已标记冲突"
@@ -2027,15 +1866,6 @@ async def approve_proposal(
             proposal.conflicts = [{"reason": "目标主数据不存在或已删除"}]
             proposal.reviewed_by = _actor_id(user)
             proposal.reviewed_at = datetime.now(UTC)
-            await _audit(
-                db,
-                action="ai_proposal_conflict",
-                user=user,
-                resource_type="master_object_proposal",
-                resource_id=proposal.id,
-                new_value={"status": proposal.status, "reason": "target_missing"},
-                extra=_analysis_audit_context(analysis_run),
-            )
             await db.commit()
             raise AppException(
                 status_code=409, message="目标主数据已不存在，提案已标记冲突"
@@ -2067,15 +1897,6 @@ async def approve_proposal(
             ]
             proposal.reviewed_by = _actor_id(user)
             proposal.reviewed_at = datetime.now(UTC)
-            await _audit(
-                db,
-                action="ai_proposal_conflict",
-                user=user,
-                resource_type="master_object_proposal",
-                resource_id=proposal.id,
-                new_value={"status": proposal.status, "reason": "base_version_changed"},
-                extra=_analysis_audit_context(analysis_run),
-            )
             await db.commit()
             raise AppException(
                 status_code=409, message="主数据已发生变化，提案已标记冲突"
@@ -2111,24 +1932,9 @@ async def approve_proposal(
             analysis_run.version_id,
             [proposal.target_master_object_id],
             user,
-            audit=False,
         )
     except AppException as exc:
         auto_link_skipped = str(exc.message)
-    await _audit(
-        db,
-        action="ai_proposal_approved",
-        user=user,
-        resource_type="master_object_proposal",
-        resource_id=proposal.id,
-        new_value={
-            "proposal_type": proposal.proposal_type,
-            "target_master_object_id": str(proposal.target_master_object_id)
-            if proposal.target_master_object_id
-            else None,
-        },
-        extra=_analysis_audit_context(analysis_run),
-    )
     return proposal, auto_link_skipped
 
 

@@ -71,18 +71,6 @@ async def get_file_processing_results(
         page_size=page_size,
         content_limit=content_limit,
     )
-    # 本端点能按页把整篇正文取走（content_limit 上限 2000），与 /content
-    # 预览/下载是同一份受保护内容；不写审计等于把下载审计整条绕过去。
-    from app.modules.qa.service import _audit
-
-    await _audit(
-        db,
-        action="view_processing_results",
-        user=user,
-        resource_type="document_file",
-        resource_id=file_id,
-        extra={"view": view, "page": page, "page_size": page_size},
-    )
     return success_response(
         DocumentProcessingResultOut.model_validate(data).model_dump(mode="json")
     )
@@ -174,14 +162,6 @@ async def get_file_artifact_content(
         raise NotFoundException("文件提取产物内容", str(artifact_id))
     data, stored_mime = content
     mime = artifact.mime_type or stored_mime
-    await service._audit(
-        db,
-        action="download" if download else "preview",
-        user=user,
-        resource_type="document_extraction_artifact",
-        resource_id=artifact.id,
-        extra={"file_id": str(file_id), "artifact_type": artifact.artifact_type},
-    )
     # 产物的 MIME 来自远端 ZIP 成员名，不能凭它决定是否 inline 渲染。
     inline_type = None if download else file_service.inline_media_type(mime)
     if inline_type:
@@ -221,16 +201,6 @@ async def get_file_content(
         raise NotFoundException("文件内容", str(file_id))
     data, stored_mime = content
     mime = row.mime_type or stored_mime
-    from app.modules.qa.service import _audit
-
-    await _audit(
-        db,
-        action="download" if download else "preview",
-        user=user,
-        resource_type="document_file",
-        resource_id=row.id,
-        extra={"sha256": row.sha256, "size_bytes": row.size_bytes},
-    )
     disposition = (
         "attachment"
         if download or row.extension.lower().lstrip(".") != "pdf"

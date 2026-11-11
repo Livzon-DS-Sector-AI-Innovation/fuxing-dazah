@@ -306,7 +306,7 @@ async def test_qa_knowledge_base_full_flow() -> None:
         _data(await ac.get(f"{BASE}/master-object-proposals"))
         _data(await ac.post(f"{BASE}/master-object-proposals/reject-all"))
 
-        # ── 检索 / 审计 ──
+        # ── 检索 / 操作日志 ──
         hits = _data(await ac.get(f"{BASE}/search", params={"q": tag}))
         assert any(hit.get("id") in {master_id, document_id} for hit in hits)
-        _data(await ac.get(f"{BASE}/audit-logs", params={"page_size": 5}))
+        _data(await ac.get(f"{BASE}/operation-logs", params={"page_size": 5}))

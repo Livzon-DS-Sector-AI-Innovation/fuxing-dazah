@@ -18,8 +18,8 @@ from app.modules.qa.schemas.apr import (
     AprBatchValuesIn,
 )
 from app.modules.qa.service.apr.common import (
+    APR_LOG_ACTION_BATCH_DELETED,
     _actor_id,
-    _audit,
     _batch_dict,
     _ensure_year_open,
     _get_batch_or_404,
@@ -29,8 +29,11 @@ from app.modules.qa.service.apr.common import (
     _normalize_quick_values,
     _product_dict,
     _quick_values_hint,
+    _record_value_changes,
     _section_dict,
+    _value_log_extra,
 )
+from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 
 
@@ -89,14 +92,6 @@ async def create_batch(
             status_code=409,
             message=f"批号 {payload.batch_no} 在该段 {payload.year} 年度已登记",
         ) from None
-    await _audit(
-        db,
-        action="create",
-        user=user,
-        resource_type="apr_batch",
-        resource_id=row.id,
-        new_value=_batch_dict(row),
-    )
     return _batch_dict(row)
 
 
@@ -108,7 +103,6 @@ async def update_batch(
 ) -> dict[str, Any]:
     row = await _get_batch_or_404(db, batch_id)
     await _ensure_year_open(db, row.product_id, row.year)
-    old = _batch_dict(row)
     data = payload.model_dump(exclude_unset=True)
     new_year = data.get("year", row.year)
     new_no = data.get("batch_no", row.batch_no)
@@ -126,15 +120,6 @@ async def update_batch(
         setattr(row, field, value)
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
-        db,
-        action="update",
-        user=user,
-        resource_type="apr_batch",
-        resource_id=row.id,
-        old_value=old,
-        new_value=_batch_dict(row),
-    )
     return _batch_dict(row)
 
 
@@ -143,17 +128,24 @@ async def delete_batch(
 ) -> None:
     row = await _get_batch_or_404(db, batch_id)
     await _ensure_year_open(db, row.product_id, row.year)
+    # 批次删除级联硬删全部录入值：操作日志记一条汇总（值随批次消失不留逐格明细）。
+    old_values = await repo.list_values_of_batch(db, batch_id)
+    section = await _get_section_or_404(db, row.section_id)
+    product = await _get_product_or_404(db, row.product_id)
     await repo.delete_values_of_batch(db, batch_id)
     row.is_deleted = True
     row.updated_by = _actor_id(user)
     await db.flush()
-    await _audit(
+    await record_audit_log(
         db,
-        action="delete",
+        action=APR_LOG_ACTION_BATCH_DELETED,
         user=user,
-        resource_type="apr_batch",
+        user_id=_actor_id(user),
+        resource_type="qa.apr_batch",
         resource_id=row.id,
-        old_value=_batch_dict(row),
+        old_value={"值数量": len(old_values)},
+        new_value=None,
+        extra=_value_log_extra(row, section, product, source="entry"),
     )
 
 
@@ -300,15 +292,24 @@ async def save_batch_values(
                 status_code=422,
                 message="以下必填项未填写：" + "、".join(missing),
             )
+    # 操作日志：替换前先取旧值做逐格 diff（含停用列——被清掉的旧值也要留痕）。
+    old_values = await repo.list_values_of_batch(db, batch_id)
+    items_all = {
+        i.id: i for i in await repo.list_items(db, batch.section_id, active_only=False)
+    }
     count = await repo.replace_batch_values(
         db, batch_id, rows, actor_id=_actor_id(user)
     )
-    await _audit(
+    await _record_value_changes(
         db,
-        action="save_values",
         user=user,
-        resource_type="apr_batch",
-        resource_id=batch_id,
-        extra={"year": batch.year, "batch_no": batch.batch_no, "values": count},
+        batch=batch,
+        section=section,
+        product=await _get_product_or_404(db, batch.product_id),
+        items_by_id=items_all,
+        old_values=old_values,
+        new_rows=rows,
+        touched_only=False,
+        source="entry",
     )
     return {"batch_id": str(batch_id), "saved": count}

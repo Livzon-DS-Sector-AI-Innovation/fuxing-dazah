@@ -402,8 +402,8 @@ class TestHypothesisAssist:
 
 
 @pytest.mark.parametrize("kind", ["describe", "m1e", "why", "hypothesis"])
-async def test_all_kinds_audited(kind: str) -> None:
-    """四种辅助都只产建议并记一条不含原文的审计（kind 留痕）。"""
+async def test_all_kinds_assist(kind: str) -> None:
+    """四种辅助都只产建议不落库（kind 随响应回显）。"""
     results = {
         "describe": _describe_result(),
         "m1e": {"checklists": {"personnel": ["问题？"]}},
