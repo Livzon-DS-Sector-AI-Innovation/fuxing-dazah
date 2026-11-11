@@ -282,6 +282,8 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "quality-templates", label: "报告模板", path: "/quality/templates", permissions: ["quality:report:read"] },
           { key: "quality-report", label: "报告单", path: "/quality/report", permissions: ["quality:report:read"] },
           { key: "quality-serial", label: "报告单流水", path: "/quality/serial", permissions: ["quality:report:read"] },
+          // 批放行：检验→报告链路末端，列表读口径与报告单一致（放行/退回操作按 task:review 在页内 gate）
+          { key: "quality-release", label: "批放行", path: "/quality/release", permissions: ["quality:report:read"] },
         ],
       },
     ],
