@@ -11,6 +11,7 @@
 保证与 HR 台账口径一致，避免飞书组织架构部门名与体现部门对不上的问题。
 """
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -26,6 +27,39 @@ from app.platform.permission.deps import require_permission, require_user
 from app.platform.permission.repository import PermissionRepository
 
 _perm_repo = PermissionRepository()
+_logger = logging.getLogger(__name__)
+
+
+async def _resolve_own_department(db: AsyncSession, user: User) -> str | None:
+    """解析登录人的体现部门：飞书部门为主（取叶子部门名），无飞书部门时
+    按工号反查员工档案兜底（与 HR 台账口径一致）。解析失败返回 None。"""
+    if user.department:
+        return user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
+    if user.employee_no:
+        from app.modules.hr.repository import EmployeeRepository
+        emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
+        if emp:
+            return emp.department
+    return None
+
+
+async def _resolve_scoped_departments(
+    db: AsyncSession, user: User, department: str | None,
+) -> frozenset[str]:
+    """多部门数据范围：本人部门 + user_department_access 授权部门合并。"""
+    from app.modules.hr.models import HrUserDepartmentAccess
+
+    dept_set: set[str] = set()
+    if department:
+        dept_set.add(department)
+    extra_depts = (await db.execute(
+        select(HrUserDepartmentAccess.department).where(
+            HrUserDepartmentAccess.user_id == user.id,
+            HrUserDepartmentAccess.is_deleted == False,  # noqa: E712
+        )
+    )).scalars().all()
+    dept_set.update(extra_depts)
+    return frozenset(dept_set)
 
 
 @dataclass
@@ -164,33 +198,15 @@ def require_hr_access(*codes: str):
         scope = await _perm_repo.get_effective_data_scope(
             db, user.id, "hr", resource=_resource,
         )
-        department: str | None = None
-        if scope != "all":
-            # 飞书部门为主（权限管理体现的部门），取叶子部门名
-            if user.department:
-                department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
-            # 飞书无部门时兜底查员工档案
-            if not department and user.employee_no:
-                from app.modules.hr.repository import EmployeeRepository
-                emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
-                if emp:
-                    department = emp.department
-
-        # 计算多部门数据范围：员工档案部门 + user_department_access 合并
-        scoped_departments: frozenset[str] = frozenset()
-        if scope in ("department", "department_and_children"):
-            dept_set: set[str] = set()
-            if department:
-                dept_set.add(department)
-            from app.modules.hr.models import HrUserDepartmentAccess
-            extra_depts = (await db.execute(
-                select(HrUserDepartmentAccess.department).where(
-                    HrUserDepartmentAccess.user_id == user.id,
-                    HrUserDepartmentAccess.is_deleted == False,  # noqa: E712
-                )
-            )).scalars().all()
-            dept_set.update(extra_depts)
-            scoped_departments = frozenset(dept_set)
+        # 写接口不做 fail-closed：部门解析不出时交给 ensure_dept_writable 拒绝
+        department = (
+            await _resolve_own_department(db, user) if scope != "all" else None
+        )
+        scoped_departments = (
+            await _resolve_scoped_departments(db, user, department)
+            if scope in ("department", "department_and_children")
+            else frozenset()
+        )
 
         return HrAccessContext(
             user=user,
@@ -241,38 +257,19 @@ async def get_hr_scope(
         raise ForbiddenException("请先登录")
     resource = _resource_for_path(request.url.path, request.method)
     scope = await _perm_repo.get_effective_data_scope(db, user.id, "hr", resource=resource)
-    import logging
-    _log = logging.getLogger(__name__)
-    _log.info("get_hr_scope: user=%s path=%s method=%s resource=%s scope=%s", user.name, request.url.path, request.method, resource, scope)
+    # DEBUG 级：每个 HR 请求都会走到这里，INFO 会刷屏且把用户名写进日志
+    _logger.debug(
+        "get_hr_scope: user=%s path=%s method=%s resource=%s scope=%s",
+        user.name, request.url.path, request.method, resource, scope,
+    )
     department: str | None = None
-    if scope in ("department", "department_and_children"):
-        # 飞书部门为主（权限管理体现的部门），取叶子部门名
-        if user.department:
-            department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
-        # 飞书无部门时兜底查员工档案
-        if not department and user.employee_no:
-            from app.modules.hr.repository import EmployeeRepository
-            emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
-            if emp:
-                department = emp.department
-        if not department:
-            raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
-
-    # 计算多部门数据范围：飞书部门 + user_department_access 合并
     scoped_departments: frozenset[str] = frozenset()
     if scope in ("department", "department_and_children"):
-        dept_set: set[str] = set()
-        if department:
-            dept_set.add(department)
-        from app.modules.hr.models import HrUserDepartmentAccess
-        extra_depts = (await db.execute(
-            select(HrUserDepartmentAccess.department).where(
-                HrUserDepartmentAccess.user_id == user.id,
-                HrUserDepartmentAccess.is_deleted == False,  # noqa: E712
-            )
-        )).scalars().all()
-        dept_set.update(extra_depts)
-        scoped_departments = frozenset(dept_set)
+        department = await _resolve_own_department(db, user)
+        # 列表/导出口径 fail-closed：部门无法解析时 403，而不是放开成全公司数据
+        if not department:
+            raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
+        scoped_departments = await _resolve_scoped_departments(db, user, department)
 
     return HrAccessContext(
         user=user,
