@@ -34,7 +34,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from app.modules.safety.service.hazard_direct import bitable_repo, config
+from app.modules.safety.service.hazard_direct import (
+    bitable_repo,
+    config,
+    writeback_trace,
+)
 from app.modules.safety.service.hazard_direct.alert import notify_failures
 
 logger = logging.getLogger(__name__)
@@ -280,6 +284,7 @@ async def run_review_round(
                             record_id,
                             conclusion="已通过",
                             summary=AUTOPASS_NOTE,
+                            writer=writeback_trace.WRITER_AI_AUTOPASS,
                         )
                         if not ok:
                             raise RuntimeError("写回 Bitable 返回 False")
@@ -334,6 +339,7 @@ async def run_review_round(
                             record_id,
                             conclusion="已通过",
                             summary=note,
+                            writer=writeback_trace.WRITER_AI_REWRITE,
                         )
                         if not ok:
                             raise RuntimeError("写回 Bitable 返回 False")

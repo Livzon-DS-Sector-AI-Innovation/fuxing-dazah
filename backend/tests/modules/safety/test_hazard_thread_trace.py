@@ -7,12 +7,14 @@ DB 级测试走 _test_session_factory + purge；钩子接线用 capture 桩不�
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.modules.safety.service.hazard_direct import writeback_trace
 from app.platform.superagent.models import AgentSource, AgentTrigger
@@ -29,10 +31,19 @@ async def _purge_trace_rows():
     from tests.conftest import _test_session_factory
 
     async with _test_session_factory() as s:
+        # P3-8 收窄：只清本文件自有测试行（三族 record_id 约定 recT*/recE*/
+        # dunning recD*），活库 writeback 留痕行不再被跑批连带清除——此前
+        # 全库 like("writeback:%") 每次跑批清空活服务自然触发行（P3-6
+        # evidence 三轮闭环例证）。残余风险=活库 record_id 恰以 recT/recE
+        # 开头（低概率，定案可接受）。
         rows = (
             await s.execute(
                 select(AgentTrigger).where(
-                    AgentTrigger.external_id.like("writeback:%")
+                    or_(
+                        AgentTrigger.external_id.like("writeback:%:recT%"),
+                        AgentTrigger.external_id.like("writeback:%:recE%"),
+                        AgentTrigger.external_id.like("writeback:dunning:recD%"),
+                    )
                 )
             )
         ).scalars().all()
@@ -74,11 +85,13 @@ def _off(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _rows(session: Any) -> list[AgentTrigger]:
+    # P3-8 读口径同收窄：recT 族测试行（purge 同约定）——否则活库留痕行
+    # （活服务 ② 写回）会让下方绝对计数断言在收窄后假红。
     return (
         (
             await session.execute(
                 select(AgentTrigger).where(
-                    AgentTrigger.external_id.like("writeback:%")
+                    AgentTrigger.external_id.like("writeback:%:recT%")
                 )
             )
         )
@@ -233,7 +246,7 @@ class TestRecordWriteback:
             rows = (
                 await s.execute(
                     select(AgentTrigger).where(
-                        AgentTrigger.external_id.like("writeback:%")
+                        AgentTrigger.external_id.like("writeback:%:recT%")
                     )
                 )
             ).scalars().all()
@@ -591,6 +604,100 @@ class TestReviewScoringHooks:
 
 
 # ═══════════════════════════════════════════════════════════════
+# P3-8 调用侧——review.py ②-b/②-c 规则性写回的 writer 实参（附录 B）
+# ═══════════════════════════════════════════════════════════════
+
+
+@asynccontextmanager
+async def _always_record_lock():
+    yield True
+
+
+class TestReviewRulePathWriterArgs:
+    """run_review_round 规则性写回真把 writer 传进 write_review。
+
+    repo 层透传已由 ``test_review_writer_param_distinguishes_rule_paths``
+    （seam 预埋）钉住；这里钉**调用侧**——②-b 传 ``ai_autopass``、②-c 传
+    ``ai_rewrite``。补丁前两链走默认 ``review`` 与 ②主链不可区分（P3-6
+    活库 writeback:review 行例证）。行为面（结论/文案/不烧 AI/计数）由
+    test_hazard_review_autopass.py 覆盖，此处只补 writer 缺口不重复。
+    """
+
+    @staticmethod
+    def _common(monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.modules.safety.service.hazard_direct import bitable_repo, review
+
+        # 与 test_hazard_review_autopass._common 同配方：锁恒真 + 三检索
+        # 默认空 + 轮询入口客户端构造桩掉（各用例覆写需要的一支）。
+        monkeypatch.setattr(
+            bitable_repo, "record_lock", lambda rid: _always_record_lock()
+        )
+        monkeypatch.setattr(
+            bitable_repo, "search_pending_review", AsyncMock(return_value=[])
+        )
+        monkeypatch.setattr(
+            bitable_repo, "search_autopass_review", AsyncMock(return_value=[])
+        )
+        monkeypatch.setattr(
+            bitable_repo, "search_override_review", AsyncMock(return_value=[])
+        )
+        monkeypatch.setattr(review.config, "review_autopass_enabled", lambda: True)
+        monkeypatch.setattr(
+            "app.modules.safety.feishu.bitable_client.SafetyBitableClient",
+            lambda: object(),
+        )
+
+    async def test_autopass_passes_ai_autopass_writer(self, monkeypatch):
+        """②-b 自动通过 → write_review 收 writer=ai_autopass。"""
+        self._common(monkeypatch)
+        from app.modules.safety.service.hazard_direct import bitable_repo
+        from app.modules.safety.service.hazard_direct.review import run_review_round
+
+        monkeypatch.setattr(
+            bitable_repo,
+            "search_autopass_review",
+            AsyncMock(return_value=[{"record_id": "recT8", "fields": {}}]),
+        )
+        write = AsyncMock(return_value=True)
+        monkeypatch.setattr(bitable_repo, "write_review", write)
+
+        result = await run_review_round()
+
+        write.assert_awaited_once()
+        kw = write.await_args.kwargs
+        assert kw["writer"] == writeback_trace.WRITER_AI_AUTOPASS == "ai_autopass"
+        assert result.autopassed == 1
+
+    async def test_override_passes_ai_rewrite_writer(self, monkeypatch):
+        """②-c 跟随改写 → write_review 收 writer=ai_rewrite。"""
+        self._common(monkeypatch)
+        from app.modules.safety.service.hazard_direct import bitable_repo
+        from app.modules.safety.service.hazard_direct.review import run_review_round
+
+        monkeypatch.setattr(
+            bitable_repo,
+            "search_override_review",
+            AsyncMock(
+                return_value=[
+                    {
+                        "record_id": "recT9",
+                        "fields": {"AI初审结果": ["未通过"], "AI初审说明": "原说明"},
+                    }
+                ]
+            ),
+        )
+        write = AsyncMock(return_value=True)
+        monkeypatch.setattr(bitable_repo, "write_review", write)
+
+        result = await run_review_round()
+
+        write.assert_awaited_once()
+        kw = write.await_args.kwargs
+        assert kw["writer"] == writeback_trace.WRITER_AI_REWRITE == "ai_rewrite"
+        assert result.overridden == 1
+
+
+# ═══════════════════════════════════════════════════════════════
 # REST 查询端点（C2：thread_key 过滤 + history 聚合）
 # ═══════════════════════════════════════════════════════════════
 
@@ -699,12 +806,16 @@ class TestDunningCardsThreadTrace:
 
     @staticmethod
     async def _dunning_rows() -> list[AgentTrigger]:
+        # P3-8 读口径同收窄：只数本类自有 recD* 行（活库 dunning 留痕
+        # （如周三 10:00 催办批）不再让 len==2 绝对断言假红）。
         async with _test_session_factory() as s:
             return (
                 (
                     await s.execute(
                         select(AgentTrigger).where(
-                            AgentTrigger.external_id.like("writeback:dunning:%")
+                            AgentTrigger.external_id.like(
+                                "writeback:dunning:recD%"
+                            )
                         )
                     )
                 )
