@@ -51,6 +51,7 @@ from app.modules.warehouse.hardware.schemas import (
     ScrapApprove,
     ScrapCreate,
     ScrapDeptConfirm,
+    ScrapItemResponse,
     ScrapReject,
     ScrapResponse,
     StockRowResponse,
@@ -1154,7 +1155,6 @@ async def create_scrap(
         items=[i.model_dump() for i in payload.items],
         attachments=payload.attachments,
         remark=payload.remark,
-        user=user,
     )
     items = await scrap_service.list_scrap_items(db, scrap.id)
     return success_response(_scrap_response(scrap, items=items), status_code=201)

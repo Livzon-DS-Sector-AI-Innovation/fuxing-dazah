@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BeforeValidator
 
-StrUUID = str
+from pydantic import BaseModel, ConfigDict, Field
+
+StrUUID = Annotated[str, BeforeValidator(lambda v: str(v) if v is not None else v)]
+
+
+class ORMResponse(BaseModel):
+    """响应模型基类：允许从 ORM 对象直接 model_validate（from_attributes）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 ManagedClass = Literal["stocked", "direct"]
 ReceiptSource = Literal["ocr", "manual", "erp_import", "stocktake", "return"]
@@ -62,7 +71,7 @@ class MaterialUpdate(BaseModel):
     remark: str | None = None
 
 
-class MaterialResponse(BaseModel):
+class MaterialResponse(ORMResponse):
     id: StrUUID
     code: str | None
     name: str
@@ -84,7 +93,7 @@ class MaterialResponse(BaseModel):
     updated_at: datetime
 
 
-class StockRowResponse(BaseModel):
+class StockRowResponse(ORMResponse):
     """库存总览行：available 为主数，on_hand/reserved 明细展开（设计 §三）。"""
 
     material: MaterialResponse
@@ -95,7 +104,7 @@ class StockRowResponse(BaseModel):
     low_gap: Decimal = Field(description="缺口=safety_stock-available（正数预警）")
 
 
-class LotRowResponse(BaseModel):
+class LotRowResponse(ORMResponse):
     """物料批次（库存明细展开/FIFO 可视）。"""
 
     lot_id: StrUUID
@@ -108,7 +117,7 @@ class LotRowResponse(BaseModel):
     quantity: Decimal
 
 
-class MaterialStockDetailResponse(BaseModel):
+class MaterialStockDetailResponse(ORMResponse):
     stock: StockRowResponse
     lots: list[LotRowResponse]
     recent_movements: list[MovementResponse]
@@ -123,7 +132,7 @@ class LocationCreate(BaseModel):
     description: str | None = Field(default=None, max_length=200)
 
 
-class LocationResponse(BaseModel):
+class LocationResponse(ORMResponse):
     id: StrUUID
     code: str
     zone: str
@@ -182,7 +191,7 @@ class ReceiptReject(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
 
 
-class ReceiptItemResponse(BaseModel):
+class ReceiptItemResponse(ORMResponse):
     id: StrUUID
     material_id: StrUUID | None
     material_name: str | None = None
@@ -201,7 +210,7 @@ class ReceiptItemResponse(BaseModel):
     photo_screening: dict[str, Any] | None = None  # M7 实物照片初筛（advisory）
 
 
-class ReceiptResponse(BaseModel):
+class ReceiptResponse(ORMResponse):
     id: StrUUID
     receipt_no: str
     source: str
@@ -274,7 +283,7 @@ class RequisitionIssue(BaseModel):
     items: list[RequisitionIssueItem] = Field(..., min_length=1)
 
 
-class RequisitionItemResponse(BaseModel):
+class RequisitionItemResponse(ORMResponse):
     id: StrUUID
     material_id: StrUUID
     material_name: str
@@ -286,7 +295,7 @@ class RequisitionItemResponse(BaseModel):
     fifo_lot_allocations: list[Any] | None
 
 
-class RequisitionResponse(BaseModel):
+class RequisitionResponse(ORMResponse):
     id: StrUUID
     req_no: str
     dept_name: str
@@ -317,7 +326,7 @@ class RequisitionResponse(BaseModel):
 # ── 流水 ──
 
 
-class MovementResponse(BaseModel):
+class MovementResponse(ORMResponse):
     id: StrUUID
     movement_no: str
     direction: str
@@ -345,7 +354,7 @@ class MovementErpMark(BaseModel):
     erp_operator: str | None = Field(default=None, max_length=100)
 
 
-class ImportStatsResponse(BaseModel):
+class ImportStatsResponse(ORMResponse):
     """清单/编码表导入统计。"""
 
     total_rows: int
@@ -355,7 +364,7 @@ class ImportStatsResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
-class CodeBackfillStatsResponse(BaseModel):
+class CodeBackfillStatsResponse(ORMResponse):
     """编码表回填统计（P2 定案通道）。"""
 
     total_rows: int
@@ -391,7 +400,7 @@ class StocktakeConfirm(BaseModel):
     confirmed_by: str = Field(..., min_length=1, max_length=100)
 
 
-class StocktakeItemResponse(BaseModel):
+class StocktakeItemResponse(ORMResponse):
     id: StrUUID
     material_id: StrUUID
     code: str | None
@@ -406,7 +415,7 @@ class StocktakeItemResponse(BaseModel):
     explanation: str | None
 
 
-class StocktakeResponse(BaseModel):
+class StocktakeResponse(ORMResponse):
     id: StrUUID
     take_no: str
     take_type: str
@@ -455,7 +464,7 @@ class ReturnReject(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
 
 
-class ReturnResponse(BaseModel):
+class ReturnResponse(ORMResponse):
     id: StrUUID
     return_no: str
     dept_name: str
@@ -493,7 +502,7 @@ class PlanItemUpdate(BaseModel):
     ai_note: str | None = Field(default=None, max_length=500, description="采纳注释时可改写")
 
 
-class PlanItemResponse(BaseModel):
+class PlanItemResponse(ORMResponse):
     id: StrUUID
     material_id: StrUUID
     code: str | None
@@ -510,7 +519,7 @@ class PlanItemResponse(BaseModel):
     remark: str | None
 
 
-class PlanResponse(BaseModel):
+class PlanResponse(ORMResponse):
     id: StrUUID
     plan_month: str
     status: str
@@ -533,7 +542,7 @@ class EnvLogUpsert(BaseModel):
     abnormal_note: str | None = Field(default=None, max_length=500)
 
 
-class EnvLogResponse(BaseModel):
+class EnvLogResponse(ORMResponse):
     id: StrUUID
     log_date: date
     temperature: Decimal | None
@@ -580,7 +589,7 @@ class ScrapReject(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
 
 
-class ScrapItemResponse(BaseModel):
+class ScrapItemResponse(ORMResponse):
     id: StrUUID
     material_id: StrUUID
     quantity: Decimal
@@ -591,7 +600,7 @@ class ScrapItemResponse(BaseModel):
     unit_price: Decimal | None
 
 
-class ScrapResponse(BaseModel):
+class ScrapResponse(ORMResponse):
     id: StrUUID
     scrap_no: str
     dept_name: str

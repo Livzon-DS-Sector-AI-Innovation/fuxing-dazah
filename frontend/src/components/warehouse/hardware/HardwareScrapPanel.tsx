@@ -320,7 +320,7 @@ function ScrapCreateModal({
   const [rows, setRows] = useState<Array<{ material_id: string; name: string; quantity: number }>>([])
   const materials = useQuery({
     queryKey: ['hardware-materials-for-scrap'],
-    queryFn: () => fetchHardwareMaterialsClient('', 500),
+    queryFn: () => fetchHardwareMaterialsClient('', 200),
   })
 
   const createMut = useMutation({

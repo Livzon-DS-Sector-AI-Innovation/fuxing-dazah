@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
   // Next 16.2 的 matchWildcardDomain 里被显式判死，无效条目）。改动后必须完整
   // 重启 next dev——router-server 父进程持有启动时的 config 快照，Turbopack 热
   // 重启子进程不会重读（2026-10-14 实测踩坑）。IP 变了要同步改。
-  allowedDevOrigins: ['localhost', '127.0.0.1', '192.168.100.7', '192.168.100.9', '192.168.3.100'],
+  allowedDevOrigins: ['localhost', '127.0.0.1', '192.168.100.7', '192.168.100.9', '192.168.100.5', '192.168.3.100'],
 
   // 内部部署阶段：默认启用 sourcemap 方便定位错误；用 ENABLE_SOURCEMAPS=false 可关闭以加速构建/减小镜像
   productionBrowserSourceMaps: process.env.ENABLE_SOURCEMAPS !== 'false',
@@ -47,6 +47,11 @@ const nextConfig: NextConfig = {
       { source: '/safety/system/app-config', destination: '/safety/system?tab=app', statusCode: 301 },
       { source: '/safety/system/scheduled-tasks', destination: '/safety/system?tab=scheduler', statusCode: 301 },
       { source: '/safety/ai-audit', destination: '/safety/system?tab=ai-audits', statusCode: 301 },
+      // 五金库菜单改造（2026-11-06）：领用并入出入库 / 盘点+台账合并 / 温湿度日检下线
+      { source: '/warehouse/hardware/requisitions', destination: '/warehouse/hardware/inout?tab=requisition', statusCode: 301 },
+      { source: '/warehouse/hardware/stocktake', destination: '/warehouse/hardware/ledger?tab=stocktake', statusCode: 301 },
+      { source: '/warehouse/hardware/reports', destination: '/warehouse/hardware/ledger?tab=erp_in', statusCode: 301 },
+      { source: '/warehouse/hardware/daily', destination: '/warehouse/hardware', statusCode: 301 },
     ]
   },
 

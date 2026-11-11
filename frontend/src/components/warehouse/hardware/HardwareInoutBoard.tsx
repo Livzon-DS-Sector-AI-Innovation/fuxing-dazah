@@ -1,8 +1,9 @@
 'use client'
 
 // 五金库出入库工作台（M2）：入库台（拍照 OCR→草稿一屏确认→入账 /
-// manual 兜底登记 / direct 直发）+ 发料台（待发料+FIFO+实发确认）+
-// 流水台账。设计 §七。
+// manual 兜底登记 / direct 直发）+ 领用申请（原「五金领用」页并入，
+// 2026-11-06 菜单改造：申请→审批是出入库流程一环）+ 发料台（待发料+FIFO+实发确认）+
+// 退库 + 流水台账。设计 §七。
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
@@ -50,31 +51,51 @@ import {
   type HardwareRequisitionRecord,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
+import { HardwareRequisitions } from './HardwareRequisitions'
 import { HardwareReturnPanel } from './HardwareReturnPanel'
 import { PageHeader, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
 
-type TabKey = 'inbound' | 'issue' | 'returns' | 'movements'
+type TabKey = 'inbound' | 'requisition' | 'issue' | 'returns' | 'movements'
+
+const INOUT_TAB_KEYS: readonly TabKey[] = [
+  'inbound',
+  'requisition',
+  'issue',
+  'returns',
+  'movements',
+]
 
 export function HardwareInoutBoard() {
   const [tab, setTab] = useState<TabKey>('inbound')
+
+  // ?tab= 深链（/hardware/requisitions 301 跳转目标）：挂载后读一次，非法值回落默认
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab')
+    if (t && (INOUT_TAB_KEYS as readonly string[]).includes(t)) {
+      setTab(t as TabKey)
+    }
+  }, [])
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         breadcrumb={['仓储管理', '五金库', '出入库工作台']}
         title="五金出入库工作台"
-        description="入库台（拍照 OCR / 手动登记）· 发料台（待发料 FIFO 实扣）· 退库 · 流水与 ERP 标记"
+        description="入库台（拍照 OCR / 手动登记）· 领用申请（共用类审批预扣）· 发料台（待发料 FIFO 实扣）· 退库 · 流水与 ERP 标记"
       />
       <Segmented
         value={tab}
         onChange={(v) => setTab(v as TabKey)}
         options={[
           { value: 'inbound', label: '入库台' },
+          { value: 'requisition', label: '领用申请' },
           { value: 'issue', label: '发料台' },
           { value: 'returns', label: '退库' },
           { value: 'movements', label: '流水台账' },
         ]}
       />
       {tab === 'inbound' && <InboundPanel />}
+      {tab === 'requisition' && <HardwareRequisitions />}
       {tab === 'issue' && <IssuePanel />}
       {tab === 'returns' && <HardwareReturnPanel />}
       {tab === 'movements' && <MovementsPanel />}
@@ -314,6 +335,8 @@ function ManualReceiptModal({ open, onClose }: { open: boolean; onClose: () => v
     const values = await form.validateFields()
     setSaving(true)
     try {
+      // stocked 模式品名/单位可空——从选中物料主数据兜底（后端 ReceiptItemIn.name 必填）
+      const picked = (materialRes?.items ?? []).find((m) => m.id === values.material_id)
       await createHardwareReceiptClient({
         source: 'manual',
         mode,
@@ -324,9 +347,9 @@ function ManualReceiptModal({ open, onClose }: { open: boolean; onClose: () => v
         items: [
           {
             material_id: mode === 'stocked' ? values.material_id : undefined,
-            name: values.item_name,
-            spec: values.item_spec || undefined,
-            unit: values.item_unit,
+            name: values.item_name || picked?.name,
+            spec: values.item_spec || picked?.spec || undefined,
+            unit: values.item_unit || picked?.unit,
             quantity: values.quantity,
           },
         ],

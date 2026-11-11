@@ -21,3 +21,5 @@ export { FeedGroup, FeedRow } from '../ui-kit/FeedGroup'
 export { PageHeader } from '../ui-kit/PageHeader'
 export { DonutChart, RankBarChart, TrendAreaChart } from '../ui-kit/charts'
 export { TONE_STYLE, TONE_TAG_COLOR, TONE_HEX, type Tone } from '../ui-kit/tokens'
+// 五金库（系统原生仓储域）
+export { HardwareStockTable } from './hardware/HardwareStockTable'

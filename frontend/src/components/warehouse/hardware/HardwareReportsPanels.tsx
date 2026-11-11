@@ -1,7 +1,8 @@
 'use client'
 
-// 五金库报表（二期 M6）：ERP 对账（出库侧 erp_status 批量标记+月底未录清单）/
-// 部门 direct 直发明细 / 全量流水台账导出。设计 §十一 二期。
+// 五金库台账面板组（原二期 M6「五金台账报表」页拆面板化，2026-11-06 并入「盘点与台账」页）：
+// ERP 入库对账（erp_import 匹配+差异清单两栏）/ ERP 出库侧标记 / 部门 direct 直发明细 /
+// 全量流水台账导出。报废面板在 HardwareScrapPanel.tsx。
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type Key } from 'react'
@@ -9,7 +10,6 @@ import {
   App,
   Button,
   Input,
-  Segmented,
   Select,
   Space,
   Table,
@@ -35,44 +35,11 @@ import {
   type HardwareReceiptStatus,
   type HardwareReconcileDiffs,
 } from '@/types/warehouse-hardware'
-import { HardwareScrapPanel } from './HardwareScrapPanel'
 import { usePermission } from '@/hooks/usePermission'
-import { PageHeader } from '@/components/warehouse'
-
-type TabKey = 'erp_in' | 'erp' | 'scrap' | 'direct' | 'ledger'
-
-export function HardwareReportsBoard() {
-  const [tab, setTab] = useState<TabKey>('erp_in')
-  return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        breadcrumb={['仓储管理', '五金库', '台账报表']}
-        title="五金库台账报表"
-        description="ERP 入库对账（M8 自动匹配+差异清单）· 出库侧 ERP 标记 · 报废台账（M7）· 部门直发明细 · 流水台账导出"
-      />
-      <Segmented
-        value={tab}
-        onChange={(v) => setTab(v as TabKey)}
-        options={[
-          { value: 'erp_in', label: 'ERP 入库对账' },
-          { value: 'erp', label: 'ERP 出库侧标记' },
-          { value: 'scrap', label: '报废' },
-          { value: 'direct', label: '部门直发明细' },
-          { value: 'ledger', label: '流水台账' },
-        ]}
-      />
-      {tab === 'erp_in' && <ErpInboundReconcilePanel />}
-      {tab === 'erp' && <ErpReconcilePanel />}
-      {tab === 'scrap' && <HardwareScrapPanel />}
-      {tab === 'direct' && <DirectPanel />}
-      {tab === 'ledger' && <LedgerPanel />}
-    </div>
-  )
-}
 
 // ── ERP 入库对账（三期 M8）：erp_import 单列表+匹配状态+差异清单两栏+自动入账筛选 ──
 
-function ErpInboundReconcilePanel() {
+export function ErpInboundReconcilePanel() {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const [reconcileStatus, setReconcileStatus] = useState<string | undefined>(undefined)
@@ -266,7 +233,7 @@ function useMovementColumns() {
   ] as TableColumnsType<HardwareMovementRecord>
 }
 
-function ErpReconcilePanel() {
+export function ErpReconcilePanel() {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const [erpStatus, setErpStatus] = useState<string>('pending')
@@ -336,7 +303,7 @@ function ErpReconcilePanel() {
   )
 }
 
-function DirectPanel() {
+export function DirectPanel() {
   const [dept, setDept] = useState('')
   const list = useQuery({
     queryKey: ['hardware-direct-report', dept],
@@ -386,7 +353,7 @@ function DirectPanel() {
   )
 }
 
-function LedgerPanel() {
+export function LedgerPanel() {
   const [keyword, setKeyword] = useState('')
   const [biz, setBiz] = useState<string | undefined>(undefined)
   const list = useQuery({

@@ -535,7 +535,7 @@ function DeptStatsPanel() {
         direction: 'outbound',
         dept_name: dept,
         page: 1,
-        pageSize: 500,
+        pageSize: 200,
       }),
   })
 

@@ -252,7 +252,7 @@ function ReturnCreateModal({
 
   const materials = useQuery({
     queryKey: ['hardware-return-materials'],
-    queryFn: () => fetchHardwareMaterialsClient('', 500),
+    queryFn: () => fetchHardwareMaterialsClient('', 200),
     enabled: open,
   })
 

@@ -197,6 +197,9 @@ async def _run_scheduled_env_remind() -> None:
 
 HARDWARE_ENV_REMIND_TASK = TaskDefinition(
     name="warehouse.hardware_env_remind",
+    # 2026-11-06 菜单改造：温湿度日检页面下线（/warehouse/hardware/daily 301），
+    # 提醒卡片无落地页，任务随之停用；历史填报数据保留，恢复页面时改回 True 即可。
+    enabled=False,
     schedule=ScheduleConfig(
         strategy=ScheduleStrategy.FIXED_TIME,
         time_of_day="17:00",
