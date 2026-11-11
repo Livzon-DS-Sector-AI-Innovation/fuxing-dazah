@@ -1258,7 +1258,6 @@ export interface EmployeeSyncConfig {
   last_sync_at: string | null
   last_stats: EmployeeSyncStats | null
   column_report?: EmployeeSyncColumnReport
-  subscribe_warning?: string | null
 }
 
 /** 员工档案页所需的同步状态精简形态（服务端注入） */

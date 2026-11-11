@@ -66,7 +66,6 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
       const d = await saveEmployeeSyncConfig(values)
       setCfg(d.data)
       message.success('同步配置已保存')
-      if (d.data?.subscribe_warning) message.warning(d.data.subscribe_warning, 6)
       if (!d.data?.column_report?.has_employee_number) {
         message.warning('源表中未识别到「工号」列，同步将无法写入，请检查列名', 8)
       }
@@ -122,7 +121,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
             </div>
 
             <Paragraph type="secondary" className="!mb-0 text-sm text-[var(--color-steel)]">
-              绑定飞书多维表格后，员工档案以该表为唯一数据源单向同步（实时事件 + 每 5 分钟对账），
+              绑定飞书多维表格后，员工档案以该表为唯一数据源单向同步（每天凌晨 02:00 自动对账，可随时点「立即同步」），
               本页转为只读展示；培训管理所用的脱敏名单在系统内查看（培训管理 → 培训人员名单）。
             </Paragraph>
 

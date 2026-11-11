@@ -53,7 +53,7 @@ async def get_sync_config(
     return success_response(data=config_payload(cfg))
 
 
-@router.put("/config", summary="保存同步配置（校验连通 + 订阅事件 + 列匹配报告）")
+@router.put("/config", summary="保存同步配置（校验连通 + 列匹配报告）")
 async def save_sync_config(
     payload: EmployeeSyncConfigInput,
     session: AsyncSession = Depends(get_db),
