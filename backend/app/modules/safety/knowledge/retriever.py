@@ -1056,7 +1056,7 @@ class SafetyKnowledgeRetriever:
         degradation = report.degradation_level
 
         # ═══ Assemble KnowledgeContext ═══
-        markdown = self._build_markdown(report.results, graph_path)
+        markdown = self.build_markdown(report.results, graph_path)
 
         # 回填审计上下文（无上下文时静默忽略）——审计记录可回答
         # "这次调用检索降级到第几层、引用了哪些法规"
@@ -1129,7 +1129,7 @@ class SafetyKnowledgeRetriever:
             chunks=chunks,
             graph_path=None,
             article_ids=[],
-            markdown=self._build_markdown(chunks, None),
+            markdown=self.build_markdown(chunks, None),
             degradation="ragplus",
         )
 
@@ -1220,7 +1220,7 @@ class SafetyKnowledgeRetriever:
     # ── Internal ──
 
     @staticmethod
-    def _build_markdown(
+    def build_markdown(
         chunks: list[RetrievalResult],
         graph_path: str | None,
     ) -> str:
