@@ -16,6 +16,8 @@ import httpx
 from app.modules.safety.fire_inspection import bitable
 from app.modules.safety.fire_inspection.models import (
     Attachment,
+    DeviceSpec,
+    EXTINGUISHER_SPEC,
     InspectionRecord,
     parse_record,
 )
@@ -64,6 +66,8 @@ class RepoPort(Protocol):
 
     async def append(self, record_id: str, file_tokens: list[str]) -> None: ...
 
+    async def update_fields(self, record_id: str, field_values: dict[str, Any]) -> None: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -111,14 +115,18 @@ class BitableRepo:
             http=self._http,
         )
 
+    async def update_fields(self, record_id: str, field_values: dict[str, Any]) -> None:
+        await bitable.update_record_fields(
+            await self._token(), self._app_token, self._table_id,
+            record_id, field_values, http=self._http,
+        )
+
     async def aclose(self) -> None:
         await self._http.aclose()
 
 
-def default_repo() -> BitableRepo:
-    return BitableRepo(
-        bitable.fire_inspection_app_token(), bitable.fire_inspection_table_id()
-    )
+def default_repo(spec: DeviceSpec = EXTINGUISHER_SPEC) -> BitableRepo:
+    return BitableRepo(bitable.fire_inspection_app_token(), bitable.table_id_for_spec(spec))
 
 
 def _max_archive_seq(records: list[InspectionRecord]) -> int:
@@ -165,17 +173,19 @@ async def generate_and_backfill(
     record_ids: list[str] | None = None,
     *,
     repo: RepoPort | None = None,
+    spec: DeviceSpec = EXTINGUISHER_SPEC,
 ) -> BackfillResult:
     """扫描点检表，为缺档记录生成标准 PDF 并回填附件。
 
-    record_ids 给定时只在该范围内补档（仍只补空档）。
+    record_ids 给定时只在该范围内补档（仍只补空档）；spec 决定表坐标与
+    点检项清单（灭火器/消火栓）。
     """
     own_repo = repo is None
-    repo = repo or default_repo()
+    repo = repo or default_repo(spec)
     result = BackfillResult()
     try:
         raw_records = await repo.list_records()
-        records = [parse_record(raw) for raw in raw_records]
+        records = [parse_record(raw, spec) for raw in raw_records]
         by_id = {r.record_id: r for r in records}
         if record_ids:
             targets = [by_id[rid] for rid in record_ids if rid in by_id]

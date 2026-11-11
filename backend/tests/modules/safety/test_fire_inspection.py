@@ -37,11 +37,12 @@ def _raw_record(**overrides: Any) -> dict[str, Any]:
         "整改状态": "无需整改",
         "异常描述": "无异常",
         CONFIRM_LABEL: True,
-        "外壳、支座、压把是否腐蚀严重": True,
-        "封签、插销是否完好": True,
-        "喷嘴皮管是否破损、老化": True,
-        "压力表指针是否在绿色区域内": True,
-        "灭火器是否在设定位置（无遮挡、易启用）": True,
+        # 现表真机形状（2026-11-04 核实）：字段名带全角序号前缀、值为「是/否」单选
+        "（1）外壳、支座、压把是否完好无腐蚀": "是",
+        "（2）封签、插销是否完好": "是",
+        "（3）喷嘴皮管是否完好无破损、老化": "是",
+        "（4）压力表指针是否在绿色区域内": "是",
+        "（5）灭火器是否在设定位置（无遮挡、易启用）": "是",
         "整体照片": [{"file_token": "BW00", "name": "overall.jpeg", "size": 664706}],
         "关键部位照片": [{"file_token": "A8ZD", "name": "key.jpeg", "size": 635157}],
         "签字": [{"file_token": "PK1H", "name": "sign.png", "size": 12872}],
@@ -72,13 +73,36 @@ def test_parse_record_extracts_typed_fields() -> None:
     assert record.created_at.strftime("%Y-%m-%d %H:%M:%S") == "2026-09-15 16:22:59"
     # 五项检查，按样例顺序
     assert [name for name, _ in record.checks] == [
-        "外壳、支座、压把是否腐蚀严重",
-        "封签、插销是否完好",
-        "喷嘴皮管是否破损、老化",
-        "压力表指针是否在绿色区域内",
-        "灭火器是否在设定位置（无遮挡、易启用）",
+        "（1）外壳、支座、压把是否完好无腐蚀",
+        "（2）封签、插销是否完好",
+        "（3）喷嘴皮管是否完好无破损、老化",
+        "（4）压力表指针是否在绿色区域内",
+        "（5）灭火器是否在设定位置（无遮挡、易启用）",
     ]
     assert all(checked is True for _, checked in record.checks)
+
+
+def test_parse_check_values_across_yes_no_bool_and_missing() -> None:
+    """「是/否」单选必须按词表解析：bool("否") 为 True 会把真不符合判成符合
+    （2026-11-04 字段错位事故附带核实的事实）；旧表 checkbox 布尔形状兼容。"""
+    raw = _raw_record(
+        **{
+            "（1）外壳、支座、压把是否完好无腐蚀": "否",
+            "（2）封签、插销是否完好": False,
+            "（3）喷嘴皮管是否完好无破损、老化": True,
+            "（4）压力表指针是否在绿色区域内": "是",
+            "（5）灭火器是否在设定位置（无遮挡、易启用）": "乱值",
+        }
+    )
+    record = fi_models.parse_record(raw)
+
+    assert dict(record.checks) == {
+        "（1）外壳、支座、压把是否完好无腐蚀": False,
+        "（2）封签、插销是否完好": False,
+        "（3）喷嘴皮管是否完好无破损、老化": True,
+        "（4）压力表指针是否在绿色区域内": True,
+        "（5）灭火器是否在设定位置（无遮挡、易启用）": None,
+    }
     # 附件
     assert record.overall_photos[0].file_token == "BW00"
     assert record.key_photos[0].file_token == "A8ZD"
@@ -142,8 +166,8 @@ def test_render_tolerates_missing_fields_and_unchecked() -> None:
             "签字": [],
             "创建人": None,
             "创建时间": None,
-            "外壳、支座、压把是否腐蚀严重": False,
-            "封签、插销是否完好": None,
+            "（1）外壳、支座、压把是否完好无腐蚀": "否",
+            "（2）封签、插销是否完好": None,
             CONFIRM_LABEL: False,
         },
     )
@@ -156,8 +180,10 @@ def test_render_tolerates_missing_fields_and_unchecked() -> None:
 
     assert pages == 1
     assert "设备编号" in text
-    assert text.count("不符合") == 2
+    # 「否」→ 不符合 ×1；缺失（None）→「—」，绝不渲染成不符合（11-04 事故根因）
+    assert text.count("不符合") == 1
     assert text.count("符合") - text.count("不符合") == 3
+    assert "—" in text
     assert "未确认" in text
 
 
@@ -501,6 +527,51 @@ async def test_backfill_download_failure_fails_record_not_blank_archive() -> Non
     assert repo.uploaded == []
 
 
+# ── 双表：消火栓 spec（2026-11-10 接入）────────────────────────
+
+HYDRANT_CHECK_OVERRIDES: dict[str, Any] = {
+    "（1）箱框、面板、标识是否完好": "是",
+    "（2）消防水管道是否漏水；水阀及其接口是否完好": "否",
+    "（3）水枪头、水带是否齐全完好；软管卷盘是否完好": "是",
+    "（4）消火栓手动按钮红灯是否闪烁": "是",
+}
+
+
+def test_device_specs_cover_both_tables() -> None:
+    assert [s.kind for s in fi_models.ALL_SPECS] == ["extinguisher", "hydrant"]
+    keys = [s.table_config_key for s in fi_models.ALL_SPECS]
+    assert keys == ["SAFETY_FIRE_INSPECTION_TABLE_ID", "SAFETY_FIRE_INSPECTION_HYDRANT_TABLE_ID"]
+    assert len(fi_models.HYDRANT_SPEC.check_fields) == 4
+
+
+def test_parse_record_hydrant_spec_uses_hydrant_check_fields() -> None:
+    raw = _raw_record(**HYDRANT_CHECK_OVERRIDES)
+
+    record = fi_models.parse_record(raw, fi_models.HYDRANT_SPEC)
+
+    assert [name for name, _ in record.checks] == list(fi_models.HYDRANT_CHECK_FIELDS)
+    assert dict(record.checks)["（2）消防水管道是否漏水；水阀及其接口是否完好"] is False
+    # 默认 spec 仍是灭火器 5 项（既有调用兼容）
+    assert len(fi_models.parse_record(_raw_record()).checks) == 5
+
+
+async def test_backfill_hydrant_spec_renders_hydrant_items() -> None:
+    raw = _raw_record(**{"设备编号": "T2-3F-XHS-001", **HYDRANT_CHECK_OVERRIDES})
+    repo = FakeRepo([raw])
+
+    result = await fi_service.generate_and_backfill(repo=repo, spec=fi_models.HYDRANT_SPEC)
+
+    assert result.generated == ["rec28bKoY95n16"]
+    name, content = repo.uploaded[0]
+    assert "XHS-001" in name
+    assert content[:4] == b"%PDF"
+    with pdfplumber.open(BytesIO(content)) as pdf:
+        text = pdf.pages[0].extract_text() or ""
+    assert "消防水管道是否漏水" in text
+    assert "消火栓手动按钮红灯是否闪烁" in text
+    assert "封签、插销" not in text  # 灭火器点检项不得串进消火栓 PDF
+
+
 # ── 调度接入（票据 04）──
 
 
@@ -513,13 +584,15 @@ def test_backfill_gate_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fi_service.backfill_enabled() is False
 
 
-def test_scheduled_jobs_registers_backfill() -> None:
+def test_hourly_pdf_poll_task_registered_and_cron_retired() -> None:
+    """2026-11-10 拍板：每日 17:00 日批退役，改为每小时 interval 任务补档。"""
     from app.modules.safety import scheduler as fi_scheduler
+    from app.modules.safety import scheduled as fi_scheduled
 
-    jobs = {job["name"]: job for job in fi_scheduler.SCHEDULED_JOBS}
-    job = jobs["点检PDF归档"]
-    assert job["hour"] == 17
-    assert job["minute"] == 0
+    task_names = {t.name for t in fi_scheduled._SAFETY_TASKS}
+    assert "safety.fire_inspection_pdf_poll" in task_names
+    assert "safety.fire_inspection_audit_poll" in task_names
+    assert "点检PDF归档" not in {job["name"] for job in fi_scheduler.SCHEDULED_JOBS}
 
 
 async def test_runner_skips_when_gate_off(monkeypatch: pytest.MonkeyPatch) -> None:

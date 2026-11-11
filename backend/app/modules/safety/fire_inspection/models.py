@@ -27,15 +27,60 @@ FIELD_REPORTS = "巡检记录"
 FIELD_CREATED_BY = "创建人"
 FIELD_CREATED_AT = "创建时间"
 FIELD_CONFIRM = "本人确认已按要求完成该消防设施现场点检，所填点检结果及上传照片真实有效。"
+# AI 审核写回列（2026-11-05 建：审核结果单选 通过/不通过 + 审核说明文本）
+FIELD_AUDIT_RESULT = "审核结果"
+FIELD_AUDIT_NOTE = "审核说明"
 
-# 五个点检项目 checkbox，按归档样例行序
+# 点检项目字段，按表单行序（带全角序号前缀，与表内字段名逐字一致）。
+# 2026-11-04 事故教训：表字段改名（加序号前缀 + 第 1/3 项正向化 + checkbox
+# 改「是/否」单选）后代码常量未跟随，fields.get 全 None 被 PDF 渲染成
+# 「不符合」，11-01 起连续 86 条归档全错。字段名必须与表逐字对齐。
 CHECK_FIELDS: tuple[str, ...] = (
-    "外壳、支座、压把是否腐蚀严重",
-    "封签、插销是否完好",
-    "喷嘴皮管是否破损、老化",
-    "压力表指针是否在绿色区域内",
-    "灭火器是否在设定位置（无遮挡、易启用）",
+    "（1）外壳、支座、压把是否完好无腐蚀",
+    "（2）封签、插销是否完好",
+    "（3）喷嘴皮管是否完好无破损、老化",
+    "（4）压力表指针是否在绿色区域内",
+    "（5）灭火器是否在设定位置（无遮挡、易启用）",
 )
+# 消火栓表点检项（4 项，2026-11-10 接入；与灭火器表同 Base 克隆结构）
+HYDRANT_CHECK_FIELDS: tuple[str, ...] = (
+    "（1）箱框、面板、标识是否完好",
+    "（2）消防水管道是否漏水；水阀及其接口是否完好",
+    "（3）水枪头、水带是否齐全完好；软管卷盘是否完好",
+    "（4）消火栓手动按钮红灯是否闪烁",
+)
+
+
+@dataclass(frozen=True)
+class DeviceSpec:
+    """设备类型规格：表坐标 + 点检项清单，PDF 归档/AI 审核按 spec 双表并行。
+
+    两表为同 Base 克隆结构：共享字段名（设备编号/照片/签字/巡检记录
+    fldpZSHrTd 等），仅点检项与 table_id 不同。
+    """
+
+    kind: str  # 稳定标识（日志/测试）
+    label: str  # 中文名（日志/错误信息）
+    table_config_key: str  # app_config 键（表坐标可被 DB/env 覆盖）
+    table_default: str
+    check_fields: tuple[str, ...]
+
+
+EXTINGUISHER_SPEC = DeviceSpec(
+    kind="extinguisher",
+    label="灭火器",
+    table_config_key="SAFETY_FIRE_INSPECTION_TABLE_ID",
+    table_default="tblUB2sT3b3GBerU",
+    check_fields=CHECK_FIELDS,
+)
+HYDRANT_SPEC = DeviceSpec(
+    kind="hydrant",
+    label="消火栓",
+    table_config_key="SAFETY_FIRE_INSPECTION_HYDRANT_TABLE_ID",
+    table_default="tblQGM4mJsTPQCht",
+    check_fields=HYDRANT_CHECK_FIELDS,
+)
+ALL_SPECS: tuple[DeviceSpec, ...] = (EXTINGUISHER_SPEC, HYDRANT_SPEC)
 
 
 @dataclass(frozen=True)
@@ -67,6 +112,9 @@ class InspectionRecord:
     reports: tuple[Attachment, ...]
     created_by: str | None
     created_at: datetime | None
+    # AI 审核现状（空 = 未审，轮询待审队列的判定依据）
+    audit_result: str | None = None
+    audit_note: str | None = None
 
 
 def _text(fields: dict[str, Any], name: str) -> str | None:
@@ -131,13 +179,31 @@ def _attachments(value: Any) -> tuple[Attachment, ...]:
 
 
 def _checkbox(value: Any) -> bool | None:
+    """点检项取值：现表为「是/否」单选字符串，旧表为 checkbox 布尔。
+
+    未识别的值（含缺失）返回 None，由渲染层显示「—」，绝不猜成符合/不符合。
+    注意 bool("否") 为 True——字符串必须按词表显式解析。
+    """
     if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text in {"是", "true", "True", "TRUE", "1", "yes"}:
+            return True
+        if text in {"否", "false", "False", "FALSE", "0", "no"}:
+            return False
         return None
     return bool(value)
 
 
-def parse_record(raw: dict[str, Any]) -> InspectionRecord:
-    """解析 records/search 单条记录；容忍字段缺失。"""
+def parse_record(raw: dict[str, Any], spec: DeviceSpec = EXTINGUISHER_SPEC) -> InspectionRecord:
+    """解析 records/search 单条记录；容忍字段缺失。
+
+    点检项按 spec.check_fields 取值——两表项目清单不同，默认灭火器保持
+    既有调用兼容。
+    """
     fields = raw.get("fields") or {}
     return InspectionRecord(
         record_id=str(raw.get("record_id") or ""),
@@ -149,11 +215,13 @@ def parse_record(raw: dict[str, Any]) -> InspectionRecord:
         rectify_status=_text(fields, FIELD_RECTIFY),
         abnormal_desc=_text(fields, FIELD_ABNORMAL),
         confirmed=_checkbox(fields.get(FIELD_CONFIRM)),
-        checks=tuple((name, _checkbox(fields.get(name))) for name in CHECK_FIELDS),
+        checks=tuple((name, _checkbox(fields.get(name))) for name in spec.check_fields),
         overall_photos=_attachments(fields.get(FIELD_OVERALL_PHOTOS)),
         key_photos=_attachments(fields.get(FIELD_KEY_PHOTOS)),
         signatures=_attachments(fields.get(FIELD_SIGNATURES)),
         reports=_attachments(fields.get(FIELD_REPORTS)),
         created_by=_user_name(fields.get(FIELD_CREATED_BY)),
         created_at=_ms_to_dt(fields.get(FIELD_CREATED_AT)),
+        audit_result=_text(fields, FIELD_AUDIT_RESULT),
+        audit_note=_text(fields, FIELD_AUDIT_NOTE),
     )

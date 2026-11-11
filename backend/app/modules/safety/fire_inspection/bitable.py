@@ -36,6 +36,15 @@ def fire_inspection_table_id() -> str:
     )
 
 
+def table_id_for_spec(spec: Any) -> str:
+    """按 DeviceSpec 取表坐标（读取链 env > DB 活行 > spec 默认）。
+
+    灭火器/消火栓两表同 Base 克隆结构，「巡检记录」附件列 field_id 相同
+    （fldpZSHrTd），回填目标字段全局共用一键。
+    """
+    return _app_config_store.get_str(spec.table_config_key, spec.table_default)
+
+
 def fire_inspection_report_field_id() -> str:
     return _app_config_store.get_str(
         "SAFETY_FIRE_INSPECTION_REPORT_FIELD_ID", "fldpZSHrTd"
@@ -241,6 +250,28 @@ async def append_attachments(
             f"{_BASE_URL}/open-apis/base/v3/bases/{app_token}/tables/{table_id}/append_attachments",
             headers={"Authorization": f"Bearer {tenant_token}"},
             json=build_append_body(record_id, field_id, file_tokens),
+        )
+        ensure_ok(resp.json())
+
+
+async def update_record_fields(
+    tenant_token: str,
+    app_token: str,
+    table_id: str,
+    record_id: str,
+    field_values: dict[str, Any],
+    http: httpx.AsyncClient | None = None,
+) -> None:
+    """按字段名写回单条记录的部分字段（AI 审核结果落表用）。
+
+    fields key 必须是字段名——传 field_id 会报 1254045 FieldNameNotFound
+    （2026-11-04 清档事故实测）。
+    """
+    async with _own_client(http) as client:
+        resp = await client.put(
+            f"{_BASE_URL}/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/{record_id}",
+            headers={"Authorization": f"Bearer {tenant_token}"},
+            json={"fields": field_values},
         )
         ensure_ok(resp.json())
 

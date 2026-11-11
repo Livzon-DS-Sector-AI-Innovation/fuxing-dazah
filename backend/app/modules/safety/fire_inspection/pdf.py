@@ -131,7 +131,10 @@ def _check_section(record: InspectionRecord) -> list[Flowable]:
         [_label("点检内容"), _label("结果")],
     ]
     for name, checked in record.checks:
-        data.append([_value(name), _value("符合" if checked else "不符合")])
+        # None（字段缺失/未填）显示「—」：2026-11-04 事故中字段名错位致全表
+        # None 被兜进 else 渲染成「不符合」，86 条归档全错。
+        verdict = "—" if checked is None else ("符合" if checked else "不符合")
+        data.append([_value(name), _value(verdict)])
     table = Table(data, colWidths=[152 * mm, 24 * mm], repeatRows=1)
     table.setStyle(
         TableStyle(
