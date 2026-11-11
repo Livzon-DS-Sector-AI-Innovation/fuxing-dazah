@@ -59,14 +59,15 @@ def _page_break_paragraph():
 def generate_training_registration_sync(records: list[dict]) -> BytesIO:
     """生成个人培训登记表。records: 每名员工一个占位符字段 dict。"""
     doc = Document(str(find_hr_template("个人培训登记表.docx")))
-    if not doc.tables or not records:
-        return _save(doc)
 
-    # 移除 {#台账} / {/台账} 循环标记段落
+    # 移除 {#台账} / {/台账} 循环标记段落（空名单也要清，避免导出字面量）
     for paragraph in list(doc.paragraphs):
         text = paragraph.text.strip()
         if text in ("{#台账}", "{/台账}"):
             paragraph._element.getparent().remove(paragraph._element)
+
+    if not doc.tables or not records:
+        return _save(doc)
 
     # 先保留一份未填充的表格副本，再逐人克隆填充
     source_tbl = doc.tables[0]._tbl

@@ -134,13 +134,18 @@ async def _notify_training_admins(
             "header": {"title": {"tag": "plain_text", "content": "📋 新的SOP培训文件登记"}, "template": "blue"},
             "elements": elements,
         }
-        notified: list[str] = []
-        for name in admins:
+        import asyncio
+
+        async def _send_one(name: str) -> str | None:
             oid = await _lookup_open_id(name)
-            if oid:
-                await _send_card(oid, card)
-                notified.append(name)
-        return notified
+            if not oid:
+                return None
+            await _send_card(oid, card)
+            return name
+
+        # 并发发送，避免提交流程被多个外部请求串行阻塞
+        results = await asyncio.gather(*(_send_one(n) for n in admins))
+        return [n for n in results if n]
     except Exception:
         logger.exception("通知培训管理员失败: record_id=%s", getattr(record, "id", None))  # 记录失败，便于排查
         return []
@@ -280,7 +285,7 @@ async def create_sop_record(
         trainees=payload.get("trainees") or (f"「{initiator}」全体员工及相关部门培训师" if initiator else None),
         involved_departments=json.dumps(involved, ensure_ascii=False),
         change_note=payload.get("change_note"),
-        color=payload.get("color", "新增"),
+        color=payload.get("color") or "新增",
         # 状态由提交流程控制：创建一律草稿，不允许客户端直接指定状态绕过状态机
         status="草稿",
         initiator_department=initiator or None,
@@ -343,6 +348,10 @@ async def update_sop_record(
     r = await session.get(SopTrainingRecord, record_id)
     if not r or r.is_deleted:
         raise HTTPException(404, "记录不存在")
+    if "file_name" in payload and not str(payload.get("file_name") or "").strip():
+        raise HTTPException(400, "请填写文件名称")
+    if "color" in payload and not payload.get("color"):
+        payload.pop("color")
     # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
     if "year" in payload:
         year_val = str(payload["year"]).strip()
@@ -483,7 +492,10 @@ async def _records_by_ids(session: AsyncSession, ids: list[str]) -> dict[str, ob
     except ValueError:
         return {}
     rows = (await session.execute(
-        select(SopTrainingRecord).where(SopTrainingRecord.id.in_(uuids))
+        select(SopTrainingRecord).where(
+            SopTrainingRecord.id.in_(uuids),
+            SopTrainingRecord.is_deleted == False,  # noqa: E712
+        )
     )).scalars().all()
     return {str(r.id): r for r in rows}
 
@@ -555,6 +567,8 @@ async def update_sop_entry(
     if not e or e.is_deleted:
         raise HTTPException(404, "记录不存在")
     _ensure_entry_in_scope(hr_scope, e)
+    if "classification" in payload and len(str(payload.get("classification") or "")) > 64:
+        raise HTTPException(400, "分类名称过长（最多 64 字）")
     for key in ("classification", "trainer", "complete_time"):
         if key in payload:
             setattr(e, key, payload[key])
@@ -966,6 +980,13 @@ async def batch_generate_materials(
     from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 
     today = date.today()
+    # 培训方式在登记记录上（二级表无该列），取第一条有值的记录
+    method_val = ""
+    for e in rows:
+        rec = record_map.get(e.record_id or "")
+        if rec and rec.method:
+            method_val = rec.method
+            break
     # 该部门培训师
     trainer = next((e.trainer for e in rows if e.trainer), None) or await _lookup_level1_trainer(session, dept)
     # 分类人员并集（过滤病假/产假/离职/待审批）
@@ -1006,7 +1027,7 @@ async def batch_generate_materials(
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
             zf.writestr("培训登记表.docx", _generate_register_docx(
                 subject=subject, training_date=today, department=dept,
-                trainer=trainer or "", method=rows[0].method or "",
+                trainer=trainer or "", method=method_val,
                 trainee_names=names, sick=sick, maternity=maternity,
             ).getvalue())
             # 第四份文件：培训效果评估表（7.11 模板）
@@ -1020,7 +1041,7 @@ async def batch_generate_materials(
                 generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=dept,
                     trainer=trainer or None,
-                    training_method=(rows[0].method or None),
+                    training_method=(method_val or None),
                     trainee_names=names,
                     expected_count=len(names),
                 )).getvalue(),
@@ -1074,6 +1095,7 @@ async def sop_entry_classifications(
             WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.created_by = :creator
               AND (p.department = :dept OR p.actual_department = :dept)
+              AND p.status NOT IN ('离职', '待审批', '病假', '产假')
             GROUP BY t.tag_name
         """),
         {"dept": department, "creator": creator},
@@ -1109,19 +1131,21 @@ async def sop_entry_personnel(
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
         if department not in hr_scope.scoped_departments:
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    # 人员口径 = 培训人员名单（脱敏独立数据集，状态由培训管理独立维护）
+    # 人员口径 = 培训人员名单（脱敏独立数据集，状态由培训管理独立维护）；
+    # 与分类选项一致，只看本人打的标签，避免同名分类串到别人的测试数据
+    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
     rows = (await session.execute(
         text("""
             SELECT p.employee_number, p.name, p.position, p.status
             FROM hr.training_roster_profiles p
             JOIN hr.employee_tags t ON t.employee_number = p.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
-              AND t.tag_name = :tag
+              AND t.tag_name = :tag AND t.created_by = :creator
               AND (p.department = :dept OR p.actual_department = :dept)
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
             ORDER BY p.employee_number
         """),
-        {"dept": department, "tag": classification},
+        {"dept": department, "tag": classification, "creator": creator},
     )).fetchall()
     return success_response(data=[
         {"employee_number": r[0], "name": r[1], "position": r[2], "status": r[3]}

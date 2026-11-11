@@ -201,7 +201,7 @@ export default function EmployeeProfileClient({
           type="info"
           showIcon
           message="数据来源：飞书多维表格（单向同步）"
-          description={`档案在飞书多维表格中维护，此处为只读展示（实时同步 + 每 5 分钟对账）；上次同步：${syncInfo.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'}。`}
+          description={`档案在飞书多维表格中维护，此处为只读展示（每天凌晨 02:00 自动同步）；上次同步：${syncInfo.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'}。`}
         />
       )}
 

@@ -1,10 +1,10 @@
-"""员工档案多维表格同步测试：值转换、upsert 复活、白名单脱敏、事件路由、对账。
+"""员工档案多维表格同步测试：值转换、upsert 复活、白名单脱敏、全量对账。
 
-bitable API 全部 monkeypatch（不真连飞书）；Redis 锁/去重 monkeypatch 放行。
+bitable API 全部 monkeypatch（不真连飞书）；Redis 锁 monkeypatch 放行。
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.hr import models as hr_models
 from app.modules.hr.employee_sync import bitable_client as bc
 from app.modules.hr.employee_sync import config as sync_config
-from app.modules.hr.employee_sync import handler as sync_handler
+from app.modules.hr.employee_sync import scheduled
 from app.modules.hr.employee_sync import service as sync_service
 from app.modules.hr.employee_sync.mapping import convert_source_fields
 from app.modules.hr.repository import EmployeeRepository
@@ -245,11 +245,9 @@ def _mock_bitable(monkeypatch, *, source_records, source_fields=None):
 
 @pytest.fixture
 def _no_lock(monkeypatch):
-    """绕过 Redis 同步锁与去重。"""
+    """绕过 Redis 同步锁。"""
     monkeypatch.setattr(sync_service.EmployeeSyncService, "acquire_lock", AsyncMock(return_value=True))
     monkeypatch.setattr(sync_service.EmployeeSyncService, "release_lock", AsyncMock())
-    monkeypatch.setattr(sync_handler, "_redis_set", AsyncMock(return_value=True))
-    monkeypatch.setattr(sync_handler, "_redis_get", AsyncMock(return_value=None))
 
 
 class TestReconcile:
@@ -423,98 +421,6 @@ class TestRosterScope:
         await service.update_roster_entry(in_number, {"education": "本科"}, scoped_departments={dept_a})
 
 
-def _ready_config() -> sync_config.EmployeeSyncConfig:
-    return sync_config.EmployeeSyncConfig(
-        enabled=True, app_token="app_test_token", source_table_id="tbl_source",
-    )
-
-
-class TestEventRouting:
-    async def test_non_source_table_events_ignored(self, monkeypatch, _no_lock):
-        """同 Base 内脱敏表/其他表的事件一律忽略（防环 + 防误写）。"""
-        applied = AsyncMock()
-        monkeypatch.setattr(
-            sync_service.EmployeeSyncService, "apply_event_record", applied,
-        )
-        monkeypatch.setattr(
-            sync_handler, "load_config", AsyncMock(return_value=_ready_config()),
-        )
-        monkeypatch.setattr(
-            sync_handler, "_get_field_map", AsyncMock(return_value={}),
-        )
-        await sync_handler.handle_record_changed(
-            "app_test_token", "tbl_training",
-            [{"action": "record_added", "record_id": "rec_x", "after_value": {"工号": "E1"}}],
-        )
-        await sync_handler.handle_record_changed(
-            "other_token", "tbl_source",
-            [{"action": "record_added", "record_id": "rec_y", "after_value": {"工号": "E1"}}],
-        )
-        applied.assert_not_called()
-
-    async def test_source_table_event_applied(self, monkeypatch, _no_lock):
-        """源表事件正常分发给 service（field_id 经 field_map 转列名）。"""
-        applied = AsyncMock(return_value="applied")
-        monkeypatch.setattr(
-            sync_service.EmployeeSyncService, "apply_event_record", applied,
-        )
-        monkeypatch.setattr(
-            sync_handler, "load_config", AsyncMock(return_value=_ready_config()),
-        )
-        monkeypatch.setattr(
-            sync_handler, "_get_field_map", AsyncMock(return_value={"fld_1": "姓名"}),
-        )
-        await sync_handler.handle_record_changed(
-            "app_test_token", "tbl_source",
-            [{"action": "record_edited", "record_id": "rec_ok",
-              "after_value": {"fld_1": "张三"}}],
-        )
-        applied.assert_awaited_once()
-        args = applied.await_args.args
-        assert args[0] == "record_edited"
-        assert args[2] == {"姓名": "张三"}
-
-    async def test_deleted_event_soft_deletes_local(
-        self, db_session: AsyncSession,
-    ):
-        number = f"E{_rand()}"
-        employee = hr_models.Employee(
-            name="钱七", employee_number=number, department="测试部", position="QC",
-            status="在职", hire_date=date(2024, 1, 1), feishu_record_id="rec_del",
-        )
-        db_session.add(employee)
-        await db_session.flush()
-
-        service = sync_service.EmployeeSyncService(db_session)
-        result = await service.apply_event_record("record_deleted", "rec_del", {})
-        assert result == "deleted"
-
-        repo = EmployeeRepository(db_session)
-        assert await repo.get_by_employee_number(number) is None
-        hidden = await repo.get_by_employee_number(number, include_deleted=True)
-        assert hidden is not None and hidden.is_deleted is True
-
-    async def test_edited_without_number_patches_existing(
-        self, db_session: AsyncSession,
-    ):
-        """edited 事件只带变更字段（无工号）时按 record_id 定位本地行。"""
-        number = f"E{_rand()}"
-        db_session.add(hr_models.Employee(
-            name="孙八", employee_number=number, department="测试部", position="QC",
-            status="在职", hire_date=date(2024, 1, 1), feishu_record_id="rec_edit",
-        ))
-        await db_session.flush()
-
-        service = sync_service.EmployeeSyncService(db_session)
-        result = await service.apply_event_record(
-            "record_edited", "rec_edit", {"体现部门": "工程部"},
-        )
-        assert result == "applied"
-        repo = EmployeeRepository(db_session)
-        row = await repo.get_by_employee_number(number)
-        assert row is not None and row.department == "工程部"
-
-
 # ─── 品种列（签到表品种筛选链路） ───
 
 
@@ -658,6 +564,40 @@ class TestRecordIdMigration:
         assert got is not None and got.id == emp_b.id
 
 
+# ─── 每日一次守卫（调度器 last_run 不跨重启，靠 last_sync_at 去重） ───
+
+
+class TestSyncedTodayGuard:
+    def _cfg(self, last_sync_at: str) -> sync_config.EmployeeSyncConfig:
+        return sync_config.EmployeeSyncConfig(
+            enabled=True, app_token="app_test_token",
+            source_table_id="tbl_source", last_sync_at=last_sync_at,
+        )
+
+    def test_never_synced_runs(self):
+        assert scheduled._synced_today(self._cfg(""), datetime(2026, 11, 11, 9, 0)) is False
+
+    def test_invalid_last_sync_at_runs(self):
+        assert scheduled._synced_today(self._cfg("not-a-date"), datetime(2026, 11, 11, 9, 0)) is False
+
+    def test_synced_after_window_today_skips(self):
+        """今天 02:00 后已自动/手动同步过：重启触发立即跳过。"""
+        assert scheduled._synced_today(
+            self._cfg("2026-11-11T09:30:00"), datetime(2026, 11, 11, 14, 0),
+        ) is True
+
+    def test_manual_sync_before_window_today_runs(self):
+        """今天凌晨 02:00 前的手动同步不占用当天窗口：02:00 照常对账。"""
+        assert scheduled._synced_today(
+            self._cfg("2026-11-11T00:30:00"), datetime(2026, 11, 11, 2, 5),
+        ) is False
+
+    def test_yesterday_sync_runs(self):
+        assert scheduled._synced_today(
+            self._cfg("2026-11-10T23:00:00"), datetime(2026, 11, 11, 2, 5),
+        ) is False
+
+
 # ─── hire_date 兜底只作用于新建分支 ───
 
 
@@ -685,3 +625,46 @@ class TestHireDateNotResetToToday:
 
         employee = await EmployeeRepository(db_session).get_by_employee_number(number)
         assert employee.hire_date == date(2020, 5, 1)  # 保留本地值，不刷成当天
+
+
+class TestReconcileRowIsolation:
+    async def test_bad_row_does_not_abort_following_rows(
+        self, db_session: AsyncSession, monkeypatch, _no_lock,
+    ) -> None:
+        """单行 flush 失败只回滚本行，后续记录仍能落库。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        await _write_config(db_session)
+        bad_number, good_number = f"E{_rand()}", f"E{_rand()}"
+        _mock_bitable(monkeypatch, source_records=[
+            # 姓名超 varchar(64) → flush 失败
+            {"record_id": "rec_bad_long", "fields": {"工号": bad_number, "姓名": "x" * 200}},
+            {"record_id": "rec_good_after_bad", "fields": {
+                "工号": good_number, "姓名": "好人", "体现部门": "生产部", "职位": "操作工",
+            }},
+        ])
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+        assert any("工号" in e for e in stats["errors"])
+        row = await EmployeeRepository(db_session).get_by_employee_number(good_number)
+        assert row is not None and row.name == "好人"
+
+
+class TestBindingConfigGuard:
+    async def test_enable_rejects_table_without_employee_number(
+        self, db_session: AsyncSession, monkeypatch,
+    ) -> None:
+        async def _list_tables(app_token, **kwargs):
+            return [{"table_id": "tbl_source", "name": "员工档案"}]
+
+        async def _list_fields(app_token, table_id, **kwargs):
+            return [{"field_name": "姓名"}]
+
+        monkeypatch.setattr(sync_service.bitable, "list_tables", _list_tables)
+        monkeypatch.setattr(sync_service.bitable, "list_fields", _list_fields)
+
+        service = sync_service.EmployeeSyncService(db_session)
+        with pytest.raises(ValueError, match="工号"):
+            await service.save_binding_config(
+                enabled=True, app_token="app_test_token",
+                source_table_id="tbl_source",
+            )

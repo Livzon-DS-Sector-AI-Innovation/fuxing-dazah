@@ -73,16 +73,6 @@ def _parse_date_like(value: Any) -> date | None:
     return EmployeeService._parse_date_value(value)
 
 
-def normalize_event_value(value: Any) -> Any:
-    """事件 after_value 的复合值（附件/多选等）为 JSON 字符串，解析回 list/dict。"""
-    if isinstance(value, str) and value[:1] in ("[", "{"):
-        try:
-            return json.loads(value)
-        except (TypeError, ValueError):
-            return value
-    return value
-
-
 def _segment_text(value: list[Any]) -> str | None:
     """飞书文本字段的值是 segment 数组 [{"text": str, ...}, ...]，拼接为纯文本。"""
     parts: list[str] = []
@@ -160,7 +150,10 @@ def _convert_scalar(field_name: str, value: Any) -> Any:
     if field_name in _DATE_FIELDS:
         # 与 Excel 上传一致：无法解析的日期跳过，不清空本地值
         parsed = _parse_date_like(value)
-        return parsed if parsed else _SKIP
+        if not parsed:
+            return _SKIP
+        # 身份证有效期在库里是 varchar(32)，写 date 会被 asyncpg 拒绝
+        return parsed.isoformat() if field_name == "id_card_expiry" else parsed
     if field_name in _INT_FIELDS:
         try:
             return int(float(str(value)))
@@ -170,7 +163,7 @@ def _convert_scalar(field_name: str, value: Any) -> Any:
         if isinstance(value, list):
             items = [str(v).strip() for v in value if str(v).strip()]
             return items or None
-        # 事件值可能是 JSON 串（未经 normalize_event_value 的调用方容错）
+        # JSON 串容错（Excel 导入等外部来源可能给字符串化数组）
         if isinstance(value, str) and value[:1] == "[":
             try:
                 parsed = json.loads(value)
@@ -198,9 +191,8 @@ def convert_source_fields(
     """源表一行（中文列名 → 值）→ ORM 字段 dict。
 
     reset_missing=True（全量对账）：未出现的可重置列补 None，行级"以表为准"；
-    reset_missing=False（事件增量）：只更新出现的字段，不动其余数据。
-    option_maps 用于把拉取 API 返回的单选选项 ID 翻译为选项文本
-    （事件值本身就是文本，无需传入）。事件值应先经 normalize_event_value 处理。
+    reset_missing=False（增量）：只更新出现的字段，不动其余数据。
+    option_maps 用于把拉取 API 返回的单选选项 ID 翻译为选项文本。
     """
     data: dict[str, Any] = {}
     for col_name, raw_value in fields.items():

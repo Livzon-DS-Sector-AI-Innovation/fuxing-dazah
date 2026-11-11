@@ -189,21 +189,23 @@ class EmployeeService:
                 ),
             )
             pts = (await self.repo.session.execute(pt_q)).scalars().all()
-            for pt in pts:
-                exist_q = select(TrainingLedger).where(
+            existing_subjects = set((await self.repo.session.execute(
+                select(TrainingLedger.training_subject).where(
                     TrainingLedger.employee_number == employee.employee_number,
-                    TrainingLedger.training_subject == pt.training_category,
                     TrainingLedger.is_deleted == False,  # noqa: E712
                 )
-                ext = await self.repo.session.execute(exist_q)
-                if not ext.scalar_one_or_none():
-                    self.repo.session.add(TrainingLedger(
-                        employee_number=employee.employee_number,
-                        training_subject=pt.training_category,
-                        training_method=pt.training_method,
-                        trainer=pt.trainer,
-                        training_date=employee.hire_date or date.today(),
-                    ))
+            )).scalars().all())
+            for pt in pts:
+                if pt.training_category in existing_subjects:
+                    continue
+                existing_subjects.add(pt.training_category)
+                self.repo.session.add(TrainingLedger(
+                    employee_number=employee.employee_number,
+                    training_subject=pt.training_category,
+                    training_method=pt.training_method,
+                    trainer=pt.trainer,
+                    training_date=employee.hire_date or date.today(),
+                ))
 
     async def _create_onboarding_record(self, employee: Employee) -> None:
         """为新员工创建入职台账记录。"""
@@ -418,53 +420,64 @@ class EmployeeService:
             if h in col_name_map:
                 col_map[idx] = col_name_map[h]
 
-        from sqlalchemy import text as sql_text
-        conn = await self.repo.session.connection()
         created, updated, skipped, errors = 0, 0, 0, []
         for row_idx, row in enumerate(rows[1:], start=2):
-            if all(c is None for c in row): continue
-            sp_name = f"trainer_row_{row_idx}"
+            if all(c is None for c in row):
+                continue
+            outcome = ""
             try:
-                await conn.execute(sql_text(f"SAVEPOINT {sp_name}"))
-                data = {}
-                for ci, fn in col_map.items():
-                    v = row[ci] if ci < len(row) else None
-                    if v is None or (isinstance(v, str) and v.strip() == ""): continue
-                    if isinstance(v, str): v = v.strip()
-                    if fn in ("certification_date", "confirmation_date", "confirmation_reminder"):
-                        v = self._parse_date_value(v)
-                    data[fn] = v
-                if "name" not in data or "department" not in data:
-                    await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
-                    errors.append(f"第{row_idx}行: 缺少姓名或部门"); continue
-                if allowed_departments is not None and data.get("department") not in allowed_departments:
-                    await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
-                    skipped += 1
-                    continue
-
-                q = select(HrTrainer).where(
-                    HrTrainer.name == data["name"],
-                    HrTrainer.department == data["department"],
-                    HrTrainer.is_deleted == False)  # noqa: E712
-                r = await self.repo.session.execute(q)
-                existing = r.scalar_one_or_none()
-                if existing:
-                    for k, v in data.items(): setattr(existing, k, v)
-                    updated += 1
-                else:
-                    self.repo.session.add(HrTrainer(**data))
-                    created += 1
-                await self.repo.session.flush()
-                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
+                # SQLAlchemy 原生 SAVEPOINT：flush 失败只回滚本行，不毒化整个导入
+                async with self.repo.session.begin_nested():
+                    data = {}
+                    for ci, fn in col_map.items():
+                        v = row[ci] if ci < len(row) else None
+                        if v is None or (isinstance(v, str) and v.strip() == ""):
+                            continue
+                        if isinstance(v, str):
+                            v = v.strip()
+                        if fn in ("certification_date", "confirmation_date", "confirmation_reminder"):
+                            parsed = self._parse_date_value(v)
+                            if parsed is None:
+                                # 非空但无法解析：跳过该列，不能清空已有日期
+                                continue
+                            v = parsed
+                        data[fn] = v
+                    if "name" not in data or "department" not in data:
+                        outcome = "error_missing"
+                    elif allowed_departments is not None and data.get("department") not in allowed_departments:
+                        outcome = "skipped"
+                    else:
+                        q = select(HrTrainer).where(
+                            HrTrainer.name == data["name"],
+                            HrTrainer.department == data["department"],
+                            HrTrainer.is_deleted == False)  # noqa: E712
+                        r = await self.repo.session.execute(q)
+                        existing = r.scalar_one_or_none()
+                        if existing:
+                            for k, v in data.items():
+                                setattr(existing, k, v)
+                            outcome = "updated"
+                        else:
+                            self.repo.session.add(HrTrainer(**data))
+                            outcome = "created"
+                        await self.repo.session.flush()
             except Exception as e:
-                # 单行失败只回滚本行，不毒化整个导入事务
-                await conn.execute(sql_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
-                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                 errors.append(f"第{row_idx}行: {e}")
+                continue
+            if outcome == "updated":
+                updated += 1
+            elif outcome == "created":
+                created += 1
+            elif outcome == "skipped":
+                skipped += 1
+            elif outcome == "error_missing":
+                errors.append(f"第{row_idx}行: 缺少姓名或部门")
         return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
-    async def upload_sop_catalog(self, file_bytes: bytes) -> dict:
-        """上传 SOP 目录 Excel，按 SOP 编号 upsert。"""
+    async def upload_sop_catalog(
+        self, file_bytes: bytes, allowed_departments: set[str] | None = None,
+    ) -> dict:
+        """上传 SOP 目录 Excel，按 SOP 编号 + 部门 upsert。"""
         from io import BytesIO
 
         from openpyxl import load_workbook
@@ -485,84 +498,95 @@ class EmployeeService:
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
 
-        from sqlalchemy import text as sql_text
-        conn = await self.repo.session.connection()
         created, updated, errors = 0, 0, []
         for row_idx, row in enumerate(rows[1:], start=2):
-            if all(c is None for c in row): continue
-            sp_name = f"sop_row_{row_idx}"
+            if all(c is None for c in row):
+                continue
+            row_created = row_updated = 0
             try:
-                await conn.execute(sql_text(f"SAVEPOINT {sp_name}"))
-                data = {}
-                for ci, fn in col_map.items():
-                    v = row[ci] if ci < len(row) else None
-                    if v is None or (isinstance(v, str) and v.strip() == ""): continue
-                    if isinstance(v, str): v = v.strip()
-                    data[fn] = v
-                if "file_name" not in data:
-                    errors.append(f"第{row_idx}行: 缺少文件名称"); continue
+                # SQLAlchemy 原生 SAVEPOINT：flush 失败只回滚本行，不毒化整个导入
+                async with self.repo.session.begin_nested():
+                    data = {}
+                    for ci, fn in col_map.items():
+                        v = row[ci] if ci < len(row) else None
+                        if v is None or (isinstance(v, str) and v.strip() == ""):
+                            continue
+                        if isinstance(v, str):
+                            v = v.strip()
+                        data[fn] = v
+                    if "file_name" not in data:
+                        errors.append(f"第{row_idx}行: 缺少文件名称")
+                        continue
+                    # 行级数据范围：受限用户只导入授权部门
+                    if (
+                        allowed_departments is not None
+                        and data.get("department")
+                        and data["department"] not in allowed_departments
+                    ):
+                        continue
 
-                # 培训内容可能包含逗号分隔的多个条目，拆分为独立记录
-                raw_names = str(data["file_name"])
-                split_names = [n.strip() for n in raw_names.replace("，", ",").split(",") if n.strip()]
-                # 没有培训类别时，用拆分后的值作为类别
-                has_category = "category" in data
+                    # 培训内容可能包含逗号分隔的多个条目，拆分为独立记录
+                    raw_names = str(data["file_name"])
+                    split_names = [n.strip() for n in raw_names.replace("，", ",").split(",") if n.strip()]
+                    # 没有培训类别时，用拆分后的值作为类别
+                    has_category = "category" in data
 
-                for name in split_names:
-                    row_data = {**data, "file_name": name}
-                    if not has_category:
-                        row_data["category"] = name
-                    # 去重：有 SOP 编号按编号+文件名匹配，否则按部门+岗位+文件名匹配
-                    if row_data.get("sop_number"):
-                        q = select(SopCatalog).where(
-                            SopCatalog.sop_number == row_data["sop_number"],
-                            SopCatalog.file_name == name,
-                            SopCatalog.is_deleted == False)  # noqa: E712
-                    else:
-                        q = select(SopCatalog).where(
-                            SopCatalog.file_name == name,
-                            SopCatalog.department == row_data.get("department"),
-                            SopCatalog.position_name == row_data.get("position_name"),
-                            SopCatalog.is_deleted == False)  # noqa: E712
-                    r = await self.repo.session.execute(q)
-                    existing = r.scalar_one_or_none()
-                    if existing:
-                        for k, v in row_data.items():
-                            if v is not None:
-                                setattr(existing, k, v)
-                        updated += 1
-                    else:
-                        self.repo.session.add(SopCatalog(**row_data))
-                        created += 1
-                    await self.repo.session.flush()
-
-                    # 同步写入岗位培训关联表（用于入职培训自动匹配），同样去重
-                    if row_data.get("position_name") and row_data.get("department"):
-                        pt_category = row_data.get("category") or name
-                        pt_q = select(PositionTraining).where(
-                            PositionTraining.position_name == row_data["position_name"],
-                            PositionTraining.department == row_data["department"],
-                            PositionTraining.training_category == pt_category,
-                            PositionTraining.is_deleted == False)  # noqa: E712
-                        pt_r = await self.repo.session.execute(pt_q)
-                        pt_existing = pt_r.scalar_one_or_none()
-                        if pt_existing:
-                            pt_existing.file_name = name
-                            pt_existing.sop_number = row_data.get("sop_number")
-                            pt_existing.updated_at = func.now()
+                    for name in split_names:
+                        row_data = {**data, "file_name": name}
+                        if not has_category:
+                            row_data["category"] = name
+                        # 去重必须带部门：否则相同 SOP 编号会跨部门覆盖别人的目录行
+                        if row_data.get("sop_number"):
+                            q = select(SopCatalog).where(
+                                SopCatalog.sop_number == row_data["sop_number"],
+                                SopCatalog.file_name == name,
+                                SopCatalog.department == row_data.get("department"),
+                                SopCatalog.is_deleted == False)  # noqa: E712
                         else:
-                            self.repo.session.add(PositionTraining(
-                                position_name=row_data["position_name"],
-                                department=row_data["department"],
-                                training_category=pt_category,
-                                sop_number=row_data.get("sop_number"),
-                                file_name=name,
-                            ))
-                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
+                            q = select(SopCatalog).where(
+                                SopCatalog.file_name == name,
+                                SopCatalog.department == row_data.get("department"),
+                                SopCatalog.position_name == row_data.get("position_name"),
+                                SopCatalog.is_deleted == False)  # noqa: E712
+                        r = await self.repo.session.execute(q)
+                        existing = r.scalar_one_or_none()
+                        if existing:
+                            for k, v in row_data.items():
+                                if v is not None:
+                                    setattr(existing, k, v)
+                            row_updated += 1
+                        else:
+                            self.repo.session.add(SopCatalog(**row_data))
+                            row_created += 1
+
+                        # 同步写入岗位培训关联表（用于入职培训自动匹配），同样去重
+                        if row_data.get("position_name") and row_data.get("department"):
+                            pt_category = row_data.get("category") or name
+                            pt_q = select(PositionTraining).where(
+                                PositionTraining.position_name == row_data["position_name"],
+                                PositionTraining.department == row_data["department"],
+                                PositionTraining.training_category == pt_category,
+                                PositionTraining.is_deleted == False)  # noqa: E712
+                            pt_r = await self.repo.session.execute(pt_q)
+                            pt_existing = pt_r.scalar_one_or_none()
+                            if pt_existing:
+                                pt_existing.file_name = name
+                                pt_existing.sop_number = row_data.get("sop_number")
+                                pt_existing.updated_at = func.now()
+                            else:
+                                self.repo.session.add(PositionTraining(
+                                    position_name=row_data["position_name"],
+                                    department=row_data["department"],
+                                    training_category=pt_category,
+                                    sop_number=row_data.get("sop_number"),
+                                    file_name=name,
+                                ))
+                    await self.repo.session.flush()
             except Exception as e:
-                await conn.execute(sql_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
-                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                 errors.append(f"第{row_idx}行: {e}")
+                continue
+            created += row_created
+            updated += row_updated
         return {"created": created, "updated": updated, "errors": errors}
 
     async def _sync_departments_from_employees(self) -> int:
@@ -836,6 +860,7 @@ class EmployeeService:
 
             # ── 先解析数据（无 DB 操作），做预校验 ──
             data: dict = {}
+            parse_error = ""
             for ci, fn in col_map.items():
                 v = row[ci] if ci < len(row) else None
                 if v is None or (isinstance(v, str) and v.strip() == ""):
@@ -855,10 +880,12 @@ class EmployeeService:
 
                 if fn == "month" and isinstance(v, str) and len(v) > 16:
                     v = v[:16]
-                if fn == "year":
-                    v = int(float(str(v)))
-                if fn in ("trainee_count",):
-                    v = int(float(str(v)))
+                if fn in ("year", "trainee_count"):
+                    try:
+                        v = int(float(str(v)))
+                    except (ValueError, TypeError):
+                        parse_error = "年度格式不正确" if fn == "year" else "培训人数格式不正确"
+                        break
                 if fn in ("duration_hours", "training_hours"):
                     try:
                         s = str(v).strip().rstrip('hH小时课时')
@@ -872,6 +899,10 @@ class EmployeeService:
                     else:
                         continue
                 data[fn] = v
+
+            if parse_error:
+                errors.append(f"第{row_idx}行: {parse_error}")
+                continue
 
             # 预校验：必须有部门和有效数据
             dept = data.get("department", "") or plan_dept or ""
@@ -916,13 +947,22 @@ class EmployeeService:
                     plan_cache[cache_key] = plan
 
                 # 添加计划项（去重：同计划+同内容+同月份视为重复，跳过）
-                content = item_data.get("content_and_textbook") or ""
-                month_val = item_data.get("month") or ""
+                # 缺失值入库是 NULL，不能拿空串去比较，否则重传会不断新增重复行
+                content = item_data.get("content_and_textbook")
+                month_val = item_data.get("month")
+                content_cond = (
+                    AnnualTrainingPlanItem.content_and_textbook == content
+                    if content else AnnualTrainingPlanItem.content_and_textbook.is_(None)
+                )
+                month_cond = (
+                    AnnualTrainingPlanItem.month == month_val
+                    if month_val else AnnualTrainingPlanItem.month.is_(None)
+                )
                 existing_item = (await self.repo.session.execute(
                     select(AnnualTrainingPlanItem).where(
                         AnnualTrainingPlanItem.plan_id == plan.id,
-                        AnnualTrainingPlanItem.content_and_textbook == content,
-                        AnnualTrainingPlanItem.month == month_val,
+                        content_cond,
+                        month_cond,
                         AnnualTrainingPlanItem.is_deleted == False,  # noqa: E712
                     )
                 )).scalar_one_or_none()
@@ -1063,6 +1103,30 @@ class TeamService:
             page_size=page_size,
         )
 
+async def _sync_roster_status(
+    session: AsyncSession, employee_number: str | None, status: str,
+) -> None:
+    """离职/复职时同步培训名单状态（培训统计/SOP 选人读名单口径）。
+
+    名单字段独立维护，但 status 是动态事实，必须随总表即时更新；
+    否则在 02:00 对账前（或同步未启用时）离职者仍会出现在培训名单里。
+    """
+    if not employee_number:
+        return
+    from sqlalchemy import update as _update
+
+    from app.modules.hr.models import TrainingRosterProfile
+
+    await session.execute(
+        _update(TrainingRosterProfile)
+        .where(
+            TrainingRosterProfile.employee_number == employee_number,
+            TrainingRosterProfile.is_deleted.is_(False),
+        )
+        .values(status=status)
+    )
+
+
 class OffboardingRecordService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = OffboardingRecordRepository(session)
@@ -1085,6 +1149,9 @@ class OffboardingRecordService:
         # 自动将员工状态更新为离职
         employee.status = "离职"
         await self.employee_repo.update(employee)
+        await _sync_roster_status(
+            self.repo.session, employee.employee_number, "离职",
+        )
 
         return record
 
@@ -1107,6 +1174,9 @@ class OffboardingRecordService:
             if employee and employee.status == "离职":
                 employee.status = "在职"
                 await self.employee_repo.update(employee)
+                await _sync_roster_status(
+                    self.repo.session, employee.employee_number, "在职",
+                )
         await self.repo.session.execute(text("DELETE FROM hr.offboarding_records WHERE id = :id"), {"id": record_id})
 
     async def list_records(
@@ -1215,6 +1285,9 @@ class DepartureRecordService:
         if employee and employee.status != "离职":
             employee.status = "离职"
             await self.employee_repo.update(employee)
+            await _sync_roster_status(
+                self.repo.session, employee.employee_number, "离职",
+            )
 
         # 同步更新入职台账为不在职，确保所有列表过滤生效
         from app.modules.hr.models import OnboardingRecord
@@ -1257,6 +1330,9 @@ class DepartureRecordService:
         if employee and employee.status == "离职":
             employee.status = "在职"
             await self.employee_repo.update(employee)
+            await _sync_roster_status(
+                self.repo.session, employee.employee_number, "在职",
+            )
 
         await self.repo.session.execute(text("DELETE FROM hr.departure_records WHERE id = :id"), {"id": record_id})
 
@@ -1452,7 +1528,7 @@ class AnnualTrainingPlanItemService:
         # 删除旧明细
         await self.repo.delete_by_plan_id(plan_id)
 
-        # 创建新明细
+        # 创建新明细（统一 add 后一次 flush，避免 N 次往返）
         results: list[AnnualTrainingPlanItem] = []
         for idx, item_data in enumerate(data.items):
             item = AnnualTrainingPlanItem(
@@ -1460,8 +1536,10 @@ class AnnualTrainingPlanItemService:
                 sort_order=idx,
                 **item_data.model_dump(exclude={"sort_order"}),
             )
-            created = await self.repo.create(item)
-            results.append(created)
+            self.repo.session.add(item)
+            results.append(item)
+        if results:
+            await self.repo.session.flush()
         return results
 
 

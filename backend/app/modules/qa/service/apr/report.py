@@ -5,8 +5,9 @@
 - 文字项/恒值数值项走 t1 常数结论，变值数值项走 t2（均值+极值+趋势图+
   CPK 结论）；模板结论文案保持原样（列内出现 OOS/OOT 也照写，与既有
   手工流程一致，最终由 QA 人工签核把关）；
-- 趋势图版式（15×8.5cm/300dpi/线色线宽/右侧图例按限值排序/0.25磅边框/
-  批号自适应字号/%列精度+1）复刻其「趋势图格式要求」；中文回退到仓库
+- 趋势图版式（15×8.5cm/300dpi/线色线宽/右侧图例按限值排序/无边框/
+  批号自适应字号/%列精度+1）源自其「趋势图格式要求」（边框已按需求去除）；
+  中文回退到仓库
   自带 Noto Serif SC（服务器无宋体，assets/fonts 随代码打包）。
 """
 
@@ -221,7 +222,6 @@ def build_report_rows(
 def _render_trend_chart(png_path: Path, *, item: dict[str, Any]) -> None:
     """单列趋势图（版式复刻 qa_year_review charts.py）。"""
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
     from matplotlib.ticker import FuncFormatter
 
     name = _display_name(str(item["name_cn"]), str(item.get("code") or ""))
@@ -302,23 +302,6 @@ def _render_trend_chart(png_path: Path, *, item: dict[str, Any]) -> None:
         if isinstance(handle, Line2D):
             text.set_color(handle.get_color())
 
-    # 边框黑 0.25 磅：向内缩半个线宽，笔画中心压画布边界会被裁半条线
-    border_lw = 0.25
-    fig_w_in, fig_h_in = fig.get_size_inches()
-    dx = (border_lw / 72 / 2) / fig_w_in
-    dy = (border_lw / 72 / 2) / fig_h_in
-    fig.add_artist(
-        Rectangle(
-            (dx, dy),
-            1 - 2 * dx,
-            1 - 2 * dy,
-            transform=fig.transFigure,
-            fill=False,
-            edgecolor="black",
-            linewidth=border_lw,
-            zorder=10,
-        )
-    )
     # 批号宋体 9 号；批次数多到重叠时按绘图区宽度自适应缩小
     fig.canvas.draw()
     per_label_pt = ax.get_window_extent().width / fig.dpi * 72 / len(labels)

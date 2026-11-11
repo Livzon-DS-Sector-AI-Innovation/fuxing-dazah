@@ -1,13 +1,13 @@
 """员工档案多维表格同步服务。
 
-单向：飞书源表 → hr.employees（全量对账 + 事件增量）。
+单向：飞书源表 → hr.employees（每天定时全量对账 + 手动同步，无实时事件）。
 培训专用的脱敏名单不做数据复制——由 training_roster 按白名单字段
 直接从本地员工表输出（敏感字段在接口层即被过滤）。
 """
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -113,18 +113,16 @@ class EmployeeSyncService:
         except Exception:  # noqa: BLE001
             pass
 
-    # ── 绑定配置保存（校验连通 + 事件订阅 + 列匹配报告） ──
+    # ── 绑定配置保存（校验连通 + 列匹配报告） ──
 
     async def save_binding_config(
         self, *, enabled: bool, app_token: str, source_table_id: str,
     ) -> dict[str, Any]:
-        """保存绑定配置：连通性校验、列匹配报告、事件订阅（增强，失败降级对账）。
+        """保存绑定配置：连通性校验、列匹配报告。
 
         app_token / source_table_id 需先经 routes 层清洗（容忍粘贴完整链接）。
         校验失败抛 ValueError（路由层转 400）；返回前端展示 payload。
         """
-        from app.core.config import get_settings
-
         if enabled and (not app_token or not source_table_id):
             raise ValueError("启用同步前必须填写 app_token 和源数据表 table_id")
 
@@ -132,7 +130,6 @@ class EmployeeSyncService:
         column_report: dict[str, Any] = {
             "mapped": [], "ignored": [], "has_employee_number": False, "mapped_count": 0,
         }
-        subscribe_warning = ""
         if app_token and source_table_id:
             try:
                 tables = await bitable.list_tables(app_token)
@@ -158,6 +155,12 @@ class EmployeeSyncService:
                 column_report = _column_report(
                     [str(f.get("field_name") or "") for f in fields],
                 )
+                # 缺「工号」列时启用同步会导致下一轮全部记录被跳过，
+                # 而空远端集合会软删全员（培训名单也随之清空）
+                if enabled and not column_report.get("has_employee_number"):
+                    raise ValueError(
+                        "源数据表缺少「工号」列，无法启用同步（避免全量对账误删员工）",
+                    )
             except ValueError:
                 raise
             except bitable.BitableAPIError as exc:
@@ -166,22 +169,6 @@ class EmployeeSyncService:
                     f"请确认该 Base 已共享给应用「{bitable.active_app_id()}」"
                     f"（多维表格右上角「···」→ 添加文档应用，权限选可编辑）。",
                 ) from exc
-
-            # 事件订阅（增强能力）：走当前环境全局应用；无授权时降级 5 分钟对账，不阻断保存
-            try:
-                await bitable.subscribe_bitable(app_token)
-            except bitable.BitableAPIError as exc:
-                global_app = get_settings().FEISHU_APP_ID or "未配置"
-                text = str(exc)
-                if "scopes is required" in text or "99991672" in text:
-                    hint = (
-                        f"当前环境全局应用「{global_app}」尚未开通订阅权限（scope），"
-                        "按错误信息中的链接申请开通，并把 Base 共享给它后重新保存即可。"
-                    )
-                else:
-                    hint = f"如需实时同步，请把 Base 也共享给当前环境的全局应用「{global_app}」。"
-                subscribe_warning = f"实时事件订阅失败（已降级为 5 分钟对账模式）：{exc}。{hint}"
-                logger.warning("员工档案同步事件订阅失败: %s", exc)
 
         await save_config_values(self.session, {
             KEY_ENABLED: "true" if enabled else "false",
@@ -194,7 +181,6 @@ class EmployeeSyncService:
         cfg = await load_config(self.session)
         data = config_payload(cfg)
         data["column_report"] = column_report
-        data["subscribe_warning"] = subscribe_warning or None
         return data
 
     # ── 全量对账：源表 → 本地 ──
@@ -239,12 +225,14 @@ class EmployeeSyncService:
             fields = record.get("fields") or {}
             if not record_id:
                 continue
+            # record_id 先入集合：工号临时为空时该记录仍算「源表存在」，
+            # 不能把它当已删除而清掉本地员工/培训名单
+            remote_record_ids.add(record_id)
             employee_number = str(normalize_cell(fields.get("工号")) or "").strip()
             if not employee_number:
                 if len(errors) < _ERROR_CAP:
                     errors.append(f"记录 {record_id} 缺少「工号」列，已跳过")
                 continue
-            remote_record_ids.add(record_id)
             remote_numbers.add(employee_number)
 
             data = convert_source_fields(
@@ -252,10 +240,13 @@ class EmployeeSyncService:
             )
             _ensure_required(data)  # 与 Excel 上传一致：NOT NULL 字段兜底
             try:
-                employee, is_new = await self.repo.upsert_from_bitable(data, record_id)
+                # 行级 SAVEPOINT：单行 DB 错误只回滚本行，不毒化整轮同步
+                async with self.session.begin_nested():
+                    employee, is_new = await self.repo.upsert_from_bitable(data, record_id)
+                    if is_new:
+                        # 与手动新建员工一致：自动生成培训台账页与岗位培训记录
+                        await self.employee_service._sync_employee_training(employee)
                 if is_new:
-                    # 与手动新建员工一致：自动生成培训台账页与岗位培训记录
-                    await self.employee_service._sync_employee_training(employee)
                     created += 1
                 else:
                     updated += 1
@@ -307,6 +298,10 @@ class EmployeeSyncService:
         self, remote_record_ids: set[str], remote_numbers: set[str]
     ) -> int:
         """软删除飞书侧已不存在的同步员工（不动手动创建、从未同步过的行）。"""
+        # 防御：空/残缺拉取（权限、分页截断、绑定错表）不得清空全员
+        if not remote_record_ids and not remote_numbers:
+            logger.error("远端记录集合为空，跳过软删以保护本地员工与培训名单")
+            return 0
         result = await self.session.execute(
             select(Employee).where(
                 Employee.is_deleted.is_(False),
@@ -325,42 +320,6 @@ class EmployeeSyncService:
         if count:
             await self.session.flush()
         return count
-
-    # ── 事件增量应用（本地库） ──
-
-    async def apply_event_record(
-        self, action: str, record_id: str, fields: dict[str, Any],
-    ) -> str:
-        """应用单条记录事件，返回 applied|deleted|skipped。"""
-        data = convert_source_fields(fields, reset_missing=False)
-        employee_number = str(data.get("employee_number") or "").strip()
-
-        if action == "record_deleted":
-            if await self.repo.soft_delete_by_feishu_record_id(record_id):
-                await self._remove_roster_for_number(str(data.get("employee_number") or ""))
-                return "deleted"
-            return "skipped"
-
-        # edited 事件只带变更字段，可能不含工号：按 record_id 定位已有行
-        if not employee_number:
-            existing = await self.repo.get_by_feishu_record_id(record_id)
-            if existing is None:
-                return "skipped"  # 新行首事件必带全量字段；缺工号的孤儿事件由对账兜底
-            data.pop("employee_number", None)
-            for key, value in data.items():
-                setattr(existing, key, value)
-            existing.feishu_synced_at = date.today()
-            await self.session.flush()
-            await self._sync_roster_status(existing)
-            return "applied"
-
-        employee, is_new = await self.repo.upsert_from_bitable(data, record_id)
-        if is_new:
-            await self.employee_service._sync_employee_training(employee)
-            await self._ensure_roster_for_employee(employee)
-        else:
-            await self._sync_roster_status(employee)
-        return "applied"
 
     # ── 培训专用脱敏名单（独立数据集：人员随总表增减，字段独立维护） ──
 
@@ -404,47 +363,6 @@ class EmployeeSyncService:
         if added or removed or status_synced:
             await self.session.flush()
         return added, removed, status_synced
-
-    async def _sync_roster_status(self, employee: Employee) -> None:
-        """人员状态随总表同步（唯一随总表更新的名单字段）。"""
-        profile = (await self.session.execute(
-            select(TrainingRosterProfile).where(
-                TrainingRosterProfile.employee_number == employee.employee_number,
-                TrainingRosterProfile.is_deleted.is_(False),
-            )
-        )).scalar_one_or_none()
-        if profile is not None and profile.status != employee.status:
-            profile.status = employee.status
-            await self.session.flush()
-
-    async def _ensure_roster_for_employee(self, employee: Employee) -> None:
-        """单个员工进入名单（事件路径新建员工时调用）。"""
-        existing = (await self.session.execute(
-            select(TrainingRosterProfile).where(
-                TrainingRosterProfile.employee_number == employee.employee_number,
-            )
-        )).scalar_one_or_none()
-        if existing is None:
-            self.session.add(self._copy_roster_initial(
-                TrainingRosterProfile(), employee,
-            ))
-        elif existing.is_deleted:
-            self._copy_roster_initial(existing, employee)
-        await self.session.flush()
-
-    async def _remove_roster_for_number(self, employee_number: str) -> None:
-        """单个员工移出名单（事件路径删除员工时调用；工号未知时按 record_id 已删，跳过）。"""
-        if not employee_number:
-            return
-        profile = (await self.session.execute(
-            select(TrainingRosterProfile).where(
-                TrainingRosterProfile.employee_number == employee_number,
-                TrainingRosterProfile.is_deleted.is_(False),
-            )
-        )).scalar_one_or_none()
-        if profile is not None:
-            profile.is_deleted = True
-            await self.session.flush()
 
     def _copy_roster_initial(
         self, profile: TrainingRosterProfile, employee: Employee,
@@ -536,6 +454,14 @@ class EmployeeSyncService:
             for d in (profile.department, profile.actual_department) if d
         ):
             raise PermissionError(f"数据范围限制：仅可操作授权部门（{profile.department}）")
+        # 写入的新部门值也必须在授权范围内，防止把人员改到未授权部门
+        if scoped_departments is not None:
+            for key in ("department", "actual_department"):
+                new_val = data.get(key)
+                if new_val and new_val not in scoped_departments:
+                    raise PermissionError(
+                        f"数据范围限制：无权将人员调整到部门 '{new_val}'",
+                    )
         # status 随总表自动同步，不开放手动编辑（改了也会被下轮对账覆盖）
         allowed = set(TRAINING_ROSTER_FIELDS.values()) - {"employee_number", "status"}
         for key, value in data.items():

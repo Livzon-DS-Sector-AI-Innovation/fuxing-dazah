@@ -4,10 +4,6 @@
 本模块在调用点读取员工档案同步独立应用凭证（HR_EMPLOYEE_SYNC_FEISHU_*，
 缺省回落全局 FEISHU_*）传入平台适配器——多环境（本地/服务器）可共用
 同一个应用对 Base 的授权，避免"本地共享给测试应用、生产用不了"的问题。
-
-事件订阅例外：必须用各环境自己的全局应用订阅（平台 WS 事件长连接只挂
-全局 FEISHU_APP_ID，用独立应用订阅会把事件送到无人监听的端点，实时同步
-静默失效，只剩 5 分钟对账兜底）。
 """
 
 import re
@@ -22,7 +18,6 @@ __all__ = [
     "active_app_id",
     "clean_app_token",
     "clean_table_id",
-    "subscribe_bitable",
     "list_tables",
     "list_fields",
     "list_all_records",
@@ -69,21 +64,6 @@ def clean_table_id(value: str) -> str:
     if "/" in v:
         v = v.rsplit("/", 1)[-1]
     return v
-
-
-def _clean(value: str) -> str:
-    """record_id 等短标识：仅去空白、剥离查询串。"""
-    return value.strip().split("?", 1)[0]
-
-
-async def subscribe_bitable(app_token: str) -> None:
-    """订阅 Base 变更事件 —— 始终用全局应用（见模块 docstring）。"""
-    settings = get_settings()
-    await _pb.subscribe_bitable(
-        clean_app_token(app_token),
-        app_id=settings.FEISHU_APP_ID or None,
-        app_secret=settings.FEISHU_APP_SECRET or None,
-    )
 
 
 async def list_tables(app_token: str, *, page_size: int = 100) -> list[dict[str, Any]]:

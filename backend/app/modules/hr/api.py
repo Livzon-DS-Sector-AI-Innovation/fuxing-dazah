@@ -3,7 +3,7 @@ from datetime import date
 from io import BytesIO
 from typing import Any
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Body, Depends, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -27,7 +27,10 @@ from app.modules.hr.deps import (
 )
 from app.modules.hr.document_generator import generate_onboarding_training_record
 from app.modules.hr.employee_sync.routes import router as employee_sync_router
-from app.modules.hr.evaluation_document_generator import generate_training_evaluation
+from app.modules.hr.evaluation_document_generator import (
+    TrainingEvaluationInput,
+    generate_training_evaluation,
+)
 from app.modules.hr.interview_routes import router as interview_router
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.modules.hr.notification_document_generator import (
@@ -68,7 +71,6 @@ from app.modules.hr.schemas import (
     TeamUpdate,
     TrainerListResponse,
     TrainerResponse,
-    TrainingEvaluationInput,
     TrainingLedgerCreate,
     TrainingLedgerPageCreate,
     TrainingLedgerPageResponse,
@@ -192,25 +194,55 @@ async def _ensure_annual_plan_in_scope(
     return None
 
 
-async def _ensure_ledger_access(record, hr_scope: HrAccessContext, session: AsyncSession) -> None:
-    """按台账工号反查培训名单行并校验数据范围，越界抛 403。
+async def _ensure_ledger_employee_in_scope(
+    session: AsyncSession, hr_scope: HrAccessContext, employee_number: str,
+) -> None:
+    """按工号校验培训名单行的数据范围（self_only 按本人工号），越界抛 403。
 
     人员口径 = 培训人员名单（体现/实际部门任一在授权范围内即可）。
     """
     if hr_scope.is_unrestricted:
         return
+    if hr_scope.data_scope == "self_only":
+        if employee_number != hr_scope.employee_number:
+            raise ForbiddenException("数据范围限制：仅可访问本人记录")
+        return
+    if not hr_scope.scoped_departments:
+        raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
     from sqlalchemy import text as _text
     row = (await session.execute(
         _text(
             "SELECT department, actual_department FROM hr.training_roster_profiles "
             "WHERE employee_number = :no AND is_deleted = false LIMIT 1"
         ),
-        {"no": record.employee_number},
+        {"no": employee_number},
     )).fetchone()
     if row is None:
         raise ForbiddenException("数据范围限制：无法确认该记录所属人员（不在培训名单中）")
     if not any(d and d in hr_scope.scoped_departments for d in (row[0], row[1])):
         raise ForbiddenException(f"数据范围限制：仅可操作授权部门记录（{row[0]}）")
+
+
+async def _ensure_ledger_access(record, hr_scope: HrAccessContext, session: AsyncSession) -> None:
+    await _ensure_ledger_employee_in_scope(session, hr_scope, record.employee_number)
+
+
+def _normalize_qa_lines(full_score, excellent_line, pass_line) -> tuple[int, int]:
+    """把优秀/合格线收敛到 [1, 满分] 且合格线 < 优秀线。
+
+    题目分值之和可能不足 100（如 4 题 × 10 分），默认 90/80 会造成
+    “全对也不合格”，随机赋分还会因优秀线高于满分直接 400。
+    """
+    full = max(int(full_score or 0), 1)
+    el = int(excellent_line) if excellent_line is not None else round(full * 0.9)
+    pl = int(pass_line) if pass_line is not None else round(full * 0.8)
+    if el <= 0 or el > full:
+        el = max(1, round(full * 0.9))
+    if pl <= 0 or pl >= el:
+        pl = max(1, round(full * 0.8))
+    if pl >= el:
+        pl = max(1, el - 1)
+    return min(el, full), min(pl, max(full - 1, 1))
 
 
 def _ensure_qa_assessment_access(hr_scope: HrAccessContext, department: str | None) -> None:
@@ -1434,7 +1466,8 @@ async def export_prejob_training_plan(
         dept = record.department
         pos = record.position
     else:
-        person = await service.get_employee(employee_id)
+        # 入口可能是工号（非 UUID），这里必须用已解析并校验过范围的 employee
+        person = employee
         emp_no = person.employee_number
         dept = person.department
         pos = person.position
@@ -1550,7 +1583,8 @@ async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[i
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE department = :dept AND is_deleted = false "
+                "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                "AND is_deleted = false "
                 "AND status IN ('病假', '产假') GROUP BY status"
             ),
             {"dept": department},
@@ -1815,8 +1849,11 @@ async def export_training_evaluation_admin(
     qualified_count: int = Form(0),
     unqualified_count: int = Form(0),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """导出培训效果评估表，自动关联年度计划和台账成绩。"""
+    # 导出会带出员工姓名/成绩，按数据范围收敛部门参数
+    department = hr_scope.resolve_export_department(department or None) or ""
     from app.modules.hr.evaluation_document_generator import (
         TrainingEvaluationInput,
         generate_training_evaluation,
@@ -1886,7 +1923,9 @@ async def export_training_evaluation_admin(
     sick_count = maternity_count = 0
     if department:
         emp_count = (await session.execute(
-            text("SELECT count(*) FROM hr.training_roster_profiles WHERE department = :dept AND is_deleted = false AND status = '在职'"),
+            text("SELECT count(*) FROM hr.training_roster_profiles "
+                 "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                 "AND is_deleted = false AND status = '在职'"),
             {"dept": department},
         )).scalar()
         sick_count, maternity_count = await _query_leave_counts(session, department)
@@ -2258,8 +2297,10 @@ class PositionTrainingCreate(BaseModel):
 async def create_position_training(
     payload: PositionTrainingCreate,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """手动新建一条岗位培训关联记录。"""
+    hr_scope.ensure_dept_writable([payload.department])
     from app.modules.hr.models import PositionTraining, SopCatalog
 
     pt = PositionTraining(
@@ -2843,7 +2884,10 @@ async def list_training_ledgers(
 async def create_training_ledger(
     payload: TrainingLedgerCreate,
     service: TrainingLedgerService = Depends(get_training_ledger_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_ledger_employee_in_scope(session, hr_scope, payload.employee_number)
     record = await service.create_record(payload)
     return success_response(
         data=TrainingLedgerResponse.model_validate(record).model_dump(mode="json"),
@@ -2872,15 +2916,12 @@ async def batch_update_scores(
     for rec in body.records:
         if not hr_scope.is_unrestricted:
             row = (await session.execute(
-                text("SELECT department FROM hr.training_ledgers WHERE id = :id AND is_deleted = false"),
+                text("SELECT employee_number FROM hr.training_ledgers WHERE id = :id AND is_deleted = false"),
                 {"id": rec.id},
             )).fetchone()
             if not row:
                 continue
-            if not hr_scope.scoped_departments:
-                raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-            if row[0] not in hr_scope.scoped_departments:
-                raise ForbiddenException(f"数据范围限制：仅可操作授权部门记录（{row[0]}）")
+            await _ensure_ledger_employee_in_scope(session, hr_scope, row[0])
         result = await session.execute(
             text("UPDATE hr.training_ledgers SET assessment_result = :r, updated_at = now() WHERE id = :id AND is_deleted = false"),
             {"r": rec.assessment_result, "id": rec.id},
@@ -2922,7 +2963,10 @@ async def list_training_ledger_pages(
 async def create_training_ledger_page(
     payload: TrainingLedgerPageCreate,
     service: TrainingLedgerPageService = Depends(get_training_ledger_page_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    await _ensure_ledger_employee_in_scope(session, hr_scope, payload.employee_number)
     page = await service.create_page(payload)
     return success_response(
         data=TrainingLedgerPageResponse(
@@ -3176,8 +3220,13 @@ async def ledger_admin_stats(department: str | None = Query(None), training_subj
 
 def _parse_score(v: str | None) -> int:
     if not v: return 0
-    try: return int(float(v))
-    except: return 0
+    text = str(v).strip()
+    # 台账成绩是自由文本，等级文字与数字统一口径
+    if text in ("优秀", "优", "excellent"): return 90
+    if text in ("合格", "qualified", "pass"): return 80
+    if text in ("不合格", "unqualified", "fail"): return 0
+    try: return int(float(text))
+    except (ValueError, TypeError): return 0
 
 
 class AddQuestionItems(BaseModel):
@@ -3314,6 +3363,9 @@ async def create_qa_assessment(
     total_score = sum((q.get("score", 10) or 10) for q in (payload.questions or []))
     if total_score == 0 and payload.full_score:
         total_score = payload.full_score
+    excellent_line, pass_line = _normalize_qa_lines(
+        total_score, payload.excellent_line, payload.pass_line,
+    )
 
     def _date(v: str | None):
         if not v:
@@ -3335,7 +3387,7 @@ async def create_qa_assessment(
             "am": payload.assessment_method, "t": payload.trainer,
             "q": json.dumps(payload.questions, ensure_ascii=False) if payload.questions else None,
             "qc": payload.question_count,
-            "fs": total_score, "el": payload.excellent_line, "pl": payload.pass_line,
+            "fs": total_score, "el": excellent_line, "pl": pass_line,
             "tn": json.dumps(payload.trainee_names, ensure_ascii=False),
         },
     )
@@ -3449,23 +3501,31 @@ async def save_qa_scores(
     import json as _json
     from datetime import date as _date
 
-    # 受限用户：逐条校验工号对应名单行的部门在授权范围内（防向其他部门人员插台账）
+    score_emp_nos = [str(s.get("employee_number") or "").strip() for s in payload.scores]
+    score_emp_nos = [no for no in score_emp_nos if no]
+
+    # 受限用户：一次查询校验所有工号的名单部门（防向其他部门人员插台账）
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_departments:
-            raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
-        for s in payload.scores:
-            emp_no = str(s.get("employee_number") or "").strip()
-            if not emp_no:
-                continue
-            dept_row = (await session.execute(
-                text("SELECT department, actual_department FROM hr.training_roster_profiles "
-                     "WHERE employee_number = :no AND is_deleted = false LIMIT 1"),
-                {"no": emp_no},
-            )).fetchone()
-            if dept_row is None:
-                raise HTTPException(400, f"工号 {emp_no} 不在培训人员名单中，无法保存成绩")
-            if not any(d and d in hr_scope.scoped_departments for d in dept_row):
-                raise HTTPException(403, f"数据范围限制：工号 {emp_no}（{dept_row[0]}）不在授权部门内")
+        if hr_scope.data_scope == "self_only":
+            if any(no != hr_scope.employee_number for no in score_emp_nos):
+                raise HTTPException(403, "数据范围限制：仅可访问本人记录")
+        else:
+            if not hr_scope.scoped_departments:
+                raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+            if score_emp_nos:
+                roster_rows = (await session.execute(
+                    text("SELECT employee_number, department, actual_department "
+                         "FROM hr.training_roster_profiles "
+                         "WHERE employee_number = ANY(:nos) AND is_deleted = false"),
+                    {"nos": score_emp_nos},
+                )).fetchall()
+                roster_map = {r[0]: (r[1], r[2]) for r in roster_rows}
+                for no in score_emp_nos:
+                    dept_row = roster_map.get(no)
+                    if dept_row is None:
+                        raise HTTPException(400, f"工号 {no} 不在培训人员名单中，无法保存成绩")
+                    if not any(d and d in hr_scope.scoped_departments for d in dept_row):
+                        raise HTTPException(403, f"数据范围限制：工号 {no}（{dept_row[0]}）不在授权部门内")
 
     def _d(v: str | None):
         if not v:
@@ -3497,18 +3557,34 @@ async def save_qa_scores(
             {"d": _d(payload.assessed_date), "id": assessment_id},
         )
 
-    el = assess_row[2] or 90
-    pl = assess_row[3] or 80
+    el, pl = _normalize_qa_lines(full_score_val, assess_row[2] or 90, assess_row[3] or 80)
+    score_date = _d(payload.assessed_date)
+
+    # 一次载入已有成绩：有工号按工号匹配（同名不同人互不覆盖），无工号才按姓名
+    existing_rows = (await session.execute(
+        text("SELECT id, employee_number, employee_name FROM hr.qa_assessment_scores "
+             "WHERE assessment_id = :aid AND is_deleted = false"),
+        {"aid": assessment_id},
+    )).fetchall()
+    by_emp = {r[1]: r[0] for r in existing_rows if r[1]}
+    by_name: dict[str, list[tuple]] = {}
+    for r in existing_rows:
+        by_name.setdefault(r[2], []).append((r[0], r[1]))
+
+    score_updates: list[dict] = []
+    score_inserts: list[dict] = []
+    scored_rows: list[tuple[str, str, int]] = []
     for s in payload.scores:
-        name = s.get("employee_name", "")
+        name = str(s.get("employee_name") or "").strip()
         if not name:
             continue
-        wrong = s.get("wrong_questions") or []
+        emp_no = str(s.get("employee_number") or "").strip()
+        wrong = [i for i in (s.get("wrong_questions") or []) if isinstance(i, int)]
         # 根据实际题目分值计算总分
         if questions_data:
             deduction = sum(
                 (questions_data[i - 1].get("score", 10) if isinstance(questions_data[i - 1], dict) else 10)
-                for i in wrong if isinstance(i, int) and 1 <= i <= len(questions_data)
+                for i in wrong if 1 <= i <= len(questions_data)
             )
             score = max(0, full_score_val - deduction)
         else:
@@ -3516,78 +3592,111 @@ async def save_qa_scores(
             score = max(0, full_score_val - len(wrong) * int(per_q))
 
         grade = "优秀" if score >= el else ("合格" if score >= pl else "不合格")
-        wrong_sorted = sorted(wrong)
-        result_text = f"第{'、'.join(str(i) for i in wrong_sorted)}题错误" if wrong else "全对"
-        existing = (await session.execute(
-            text("SELECT id FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm AND is_deleted = false"),
-            {"aid": assessment_id, "nm": name},
-        )).first()
-        if existing:
-            await session.execute(
-                text("UPDATE hr.qa_assessment_scores SET wrong_questions=:wq, total_score=:ts, assessed_date=:ad, grade=:g, result_text=:rt WHERE id=:id"),
-                {"wq": _json.dumps(wrong), "ts": score, "ad": _d(payload.assessed_date), "g": grade, "rt": result_text, "id": existing[0]},
-            )
+        result_text = f"第{'、'.join(str(i) for i in sorted(wrong))}题错误" if wrong else "全对"
+        existing_id = by_emp.get(emp_no) if emp_no else None
+        if existing_id is None:
+            name_only = [rid for rid, en in by_name.get(name, []) if not en]
+            if len(name_only) == 1:
+                existing_id = name_only[0]
+        params = {
+            "en": emp_no, "wq": _json.dumps(wrong), "ts": score,
+            "g": grade, "rt": result_text, "ad": score_date, "nm": name,
+        }
+        if existing_id:
+            params.pop("nm", None)
+            params["id"] = existing_id
+            score_updates.append(params)
         else:
-            await session.execute(
-                text("INSERT INTO hr.qa_assessment_scores (assessment_id, employee_name, employee_number, wrong_questions, total_score, grade, result_text, assessed_date) VALUES (:aid, :nm, :en, :wq, :ts, :g, :rt, :ad)"),
-                {
-                    "aid": assessment_id, "nm": name,
-                    "en": s.get("employee_number", ""),
-                    "wq": _json.dumps(wrong), "ts": score,
-                    "g": grade, "rt": result_text,
-                    "ad": _d(payload.assessed_date),
-                },
-            )
+            sid = uuid4()
+            params.update({"sid": sid, "aid": assessment_id})
+            score_inserts.append(params)
+            if emp_no:
+                by_emp[emp_no] = sid
+        scored_rows.append((name, emp_no, score))
+
+    if score_updates:
+        await session.execute(
+            text("UPDATE hr.qa_assessment_scores SET wrong_questions=:wq, total_score=:ts, "
+                 "assessed_date=:ad, grade=:g, result_text=:rt, "
+                 "employee_number=COALESCE(NULLIF(:en,''), employee_number) WHERE id=:id"),
+            score_updates,
+        )
+    if score_inserts:
+        await session.execute(
+            text("INSERT INTO hr.qa_assessment_scores "
+                 "(id, assessment_id, employee_name, employee_number, wrong_questions, "
+                 " total_score, grade, result_text, assessed_date) "
+                 "VALUES (:sid, :aid, :nm, :en, :wq, :ts, :g, :rt, :ad)"),
+            score_inserts,
+        )
 
     await session.flush()
 
-    # 同步写入培训台账
+    # 同步写入培训台账（批量预载 + executemany，避免逐人往返）
     assessment = (await session.execute(
         text("SELECT subject, training_date, training_method, trainer FROM hr.qa_assessments WHERE id = :id"),
         {"id": assessment_id},
     )).fetchone()
     if assessment:
         subj, train_date, method, trainer = assessment
-        for s in payload.scores:
-            name = s.get("employee_name", "")
-            emp_no = s.get("employee_number", "")
-            if not name:
-                continue
-            # 没工号时从员工表反查（同名多人时不做猜测，跳过该行）
-            if not emp_no:
-                emp_rows = (await session.execute(
-                    text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false"),
-                    {"nm": name},
-                )).fetchall()
-                if len(emp_rows) == 1 and emp_rows[0][0]:
-                    emp_no = emp_rows[0][0]
-            if not emp_no:
-                continue
-            wrong = s.get("wrong_questions") or []
-            if questions_data:
-                deduction = sum(
-                    (questions_data[i - 1].get("score", 10) if isinstance(questions_data[i - 1], dict) else 10)
-                    for i in wrong if isinstance(i, int) and 1 <= i <= len(questions_data)
-                )
-                score = max(0, full_score_val - deduction)
+        ledger_date = score_date or train_date or _date.today()
+        missing_names = sorted({name for name, no, _ in scored_rows if not no})
+        name_to_no: dict[str, str] = {}
+        if missing_names:
+            roster_rows = (await session.execute(
+                text("SELECT name, employee_number FROM hr.training_roster_profiles "
+                     "WHERE name = ANY(:names) AND is_deleted = false "
+                     "AND (CAST(:dept AS VARCHAR) IS NULL OR department = :dept OR actual_department = :dept) "
+                     "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number"),
+                {"names": missing_names, "dept": assess_row[4] or None},
+            )).fetchall()
+            grouped: dict[str, list[str]] = {}
+            for nm, no in roster_rows:
+                if no:
+                    grouped.setdefault(nm, []).append(no)
+            # 同名多人时不做猜测，跳过该行
+            name_to_no = {nm: nos[0] for nm, nos in grouped.items() if len(nos) == 1}
+        resolved: dict[str, int] = {}
+        for name, emp_no, score in scored_rows:
+            emp_no = emp_no or name_to_no.get(name, "")
+            if emp_no:
+                resolved[emp_no] = score
+
+        existing_ledger: dict[str, object] = {}
+        if resolved:
+            ledger_rows = (await session.execute(
+                text("SELECT id, employee_number FROM hr.training_ledgers "
+                     "WHERE employee_number = ANY(:nos) AND training_date = :td "
+                     "AND training_subject = :ts AND is_deleted = false"),
+                {"nos": list(resolved), "td": ledger_date, "ts": subj},
+            )).fetchall()
+            existing_ledger = {r[1]: r[0] for r in ledger_rows}
+
+        ledger_updates: list[dict] = []
+        ledger_inserts: list[dict] = []
+        for emp_no, score in resolved.items():
+            if emp_no in existing_ledger:
+                ledger_updates.append({
+                    "ar": str(score), "tm": method, "t": trainer, "id": existing_ledger[emp_no],
+                })
             else:
-                per_q = full_score_val / max(len(questions_data) or 10, 1)
-                score = max(0, full_score_val - len(wrong) * int(per_q))
-            ledger_date = _d(payload.assessed_date) or train_date or _date.today()
-            exist = (await session.execute(
-                text("SELECT id FROM hr.training_ledgers WHERE employee_number = :en AND training_date = :td AND training_subject = :ts AND is_deleted = false"),
-                {"en": emp_no, "td": ledger_date, "ts": subj},
-            )).first()
-            if exist:
-                await session.execute(
-                    text("UPDATE hr.training_ledgers SET assessment_result = :ar, training_method = :tm, trainer = :t, updated_at = now() WHERE id = :id"),
-                    {"ar": str(score), "tm": method, "t": trainer, "id": exist[0]},
-                )
-            else:
-                await session.execute(
-                    text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, training_method, trainer, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
-                    {"en": emp_no, "td": ledger_date, "ts": subj, "tm": method, "t": trainer, "ar": str(score)},
-                )
+                ledger_inserts.append({
+                    "en": emp_no, "td": ledger_date, "ts": subj,
+                    "tm": method, "t": trainer, "ar": str(score),
+                })
+        if ledger_updates:
+            await session.execute(
+                text("UPDATE hr.training_ledgers SET assessment_result = :ar, training_method = :tm, "
+                     "trainer = :t, updated_at = now() WHERE id = :id"),
+                ledger_updates,
+            )
+        if ledger_inserts:
+            await session.execute(
+                text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, "
+                     "training_method, trainer, assessment_result, source_type) "
+                     "VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
+                ledger_inserts,
+            )
 
     await session.commit()
     return success_response(message="成绩保存成功，已同步培训台账")
@@ -3630,11 +3739,21 @@ async def random_qa_scores(
         raise HTTPException(400, "没有受训人员")
     if pass_ratio is not None and excellent_ratio + pass_ratio > 1:
         raise HTTPException(400, "优秀率与合格率之和不能超过 1")
-    # 区间边界校验：等级线不合法时扣分循环无法收敛，直接拒绝
-    if el <= pl or pl < 1 or el < 1:
-        raise HTTPException(400, f"优秀线/合格线配置不正确（优秀线 {el}，合格线 {pl}）")
-    if el > full_score_val:
-        raise HTTPException(400, f"优秀线 {el} 不能高于满分 {full_score_val}")
+    # 历史场次可能仍是 90/80 而满分不足 90，收敛后再生成
+    el, pl = _normalize_qa_lines(full_score_val, el, pl)
+    # 一次载入姓名→工号（限定本场次部门；同名多人不猜测）
+    roster_rows = (await session.execute(
+        text("SELECT name, employee_number FROM hr.training_roster_profiles "
+             "WHERE name = ANY(:names) AND is_deleted = false "
+             "AND (CAST(:dept AS VARCHAR) IS NULL OR department = :dept OR actual_department = :dept) "
+             "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number"),
+        {"names": unique_names, "dept": asmt[6] or None},
+    )).fetchall()
+    grouped: dict[str, list[str]] = {}
+    for nm, no in roster_rows:
+        if no:
+            grouped.setdefault(nm, []).append(no)
+    name_to_no = {nm: nos[0] for nm, nos in grouped.items() if len(nos) == 1}
     # 四舍五入分配人数：默认 0.3/0.7 在 7 人场次应为 2 优 5 合格，
     # 截断会把余量静默打成不合格
     excellent_count = int(total * excellent_ratio + 0.5)
@@ -3694,14 +3813,7 @@ async def random_qa_scores(
                 wrong = fallback_wrong
                 deduction = fallback_deduction
                 score = max(0, full_score_val - deduction)
-        # 查找工号
-        emp_no = ""
-        emp = (await session.execute(
-            text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number LIMIT 1"),
-            {"nm": name},
-        )).fetchone()
-        if emp:
-            emp_no = emp[0]
+        emp_no = name_to_no.get(name, "")
         wrong.sort()
         result_text = f"第{'、'.join(str(i) for i in wrong)}题错误" if wrong else "全对"
         scores.append({
@@ -3714,22 +3826,54 @@ async def random_qa_scores(
             "assessed_date": today,
         })
 
-    # 写入数据库
+    # 批量写入数据库（有工号按工号匹配，无工号才按姓名）
+    existing_rows = (await session.execute(
+        text("SELECT id, employee_number, employee_name FROM hr.qa_assessment_scores "
+             "WHERE assessment_id = :aid AND is_deleted = false"),
+        {"aid": assessment_id},
+    )).fetchall()
+    by_emp = {r[1]: r[0] for r in existing_rows if r[1]}
+    by_name: dict[str, list[tuple]] = {}
+    for r in existing_rows:
+        by_name.setdefault(r[2], []).append((r[0], r[1]))
+    updates: list[dict] = []
+    inserts: list[dict] = []
     for s in scores:
-        existing = (await session.execute(
-            text("SELECT id FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm AND is_deleted = false"),
-            {"aid": str(assessment_id), "nm": s["employee_name"]},
-        )).fetchone()
-        if existing:
-            await session.execute(
-                text("UPDATE hr.qa_assessment_scores SET wrong_questions = :wq, total_score = :ts, employee_number = :en, assessed_date = :ad, grade = :g, result_text = :rt WHERE id = :id"),
-                {"wq": json.dumps(s["wrong_questions"]), "ts": s["total_score"], "en": s["employee_number"], "ad": s["assessed_date"], "g": s["grade"], "rt": s["result_text"], "id": existing[0]},
-            )
+        emp_no = s["employee_number"]
+        existing_id = by_emp.get(emp_no) if emp_no else None
+        if existing_id is None:
+            name_only = [rid for rid, en in by_name.get(s["employee_name"], []) if not en]
+            if len(name_only) == 1:
+                existing_id = name_only[0]
+        params = {
+            "en": emp_no, "wq": json.dumps(s["wrong_questions"]),
+            "ts": s["total_score"], "g": s["grade"], "rt": s["result_text"],
+            "ad": s["assessed_date"], "nm": s["employee_name"],
+        }
+        if existing_id:
+            params.pop("nm", None)
+            params["id"] = existing_id
+            updates.append(params)
         else:
-            await session.execute(
-                text("INSERT INTO hr.qa_assessment_scores (assessment_id, employee_name, employee_number, wrong_questions, total_score, grade, result_text, assessed_date) VALUES (:aid, :nm, :en, :wq, :ts, :g, :rt, :ad)"),
-                {"aid": str(assessment_id), "nm": s["employee_name"], "en": s["employee_number"], "wq": json.dumps(s["wrong_questions"]), "ts": s["total_score"], "g": s["grade"], "rt": s["result_text"], "ad": s["assessed_date"]},
-            )
+            sid = uuid4()
+            params.update({"sid": sid, "aid": assessment_id})
+            inserts.append(params)
+            if emp_no:
+                by_emp[emp_no] = sid
+    if updates:
+        await session.execute(
+            text("UPDATE hr.qa_assessment_scores SET wrong_questions=:wq, total_score=:ts, "
+                 "employee_number=:en, assessed_date=:ad, grade=:g, result_text=:rt WHERE id=:id"),
+            updates,
+        )
+    if inserts:
+        await session.execute(
+            text("INSERT INTO hr.qa_assessment_scores "
+                 "(id, assessment_id, employee_name, employee_number, wrong_questions, "
+                 " total_score, grade, result_text, assessed_date) "
+                 "VALUES (:sid, :aid, :nm, :en, :wq, :ts, :g, :rt, :ad)"),
+            inserts,
+        )
     await session.commit()
     return success_response(data={"generated": len(scores), "scores": scores}, message=f"已随机生成 {len(scores)} 人成绩")
 
@@ -3765,51 +3909,87 @@ async def sync_qa_to_ledger(
         raise HTTPException(400, "该考核场次还没有成绩记录，请先保存成绩")
 
     synced = 0
-    skipped_exist = 0
+    updated = 0
     no_emp = 0
     no_emp_names: list[str] = []
 
+    missing_names = sorted({name for name, emp_no, _ in scores if not emp_no and name})
+    name_to_no: dict[str, str] = {}
+    if missing_names:
+        roster_rows = (await session.execute(
+            text("SELECT name, employee_number FROM hr.training_roster_profiles "
+                 "WHERE name = ANY(:names) AND is_deleted = false "
+                 "AND (CAST(:dept AS VARCHAR) IS NULL OR department = :dept OR actual_department = :dept) "
+                 "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number"),
+            {"names": missing_names, "dept": assess[4] or None},
+        )).fetchall()
+        grouped: dict[str, list[str]] = {}
+        for nm, no in roster_rows:
+            if no:
+                grouped.setdefault(nm, []).append(no)
+        # 同名多人时不做猜测
+        name_to_no = {nm: nos[0] for nm, nos in grouped.items() if len(nos) == 1}
+
+    resolved: dict[str, int] = {}
     for name, emp_no, score in scores:
-        # 反查工号（同名多人时不做猜测）
-        if not emp_no:
-            emp_rows = (await session.execute(
-                text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false"),
-                {"nm": name},
-            )).fetchall()
-            if len(emp_rows) == 1 and emp_rows[0][0]:
-                emp_no = emp_rows[0][0]
+        emp_no = emp_no or name_to_no.get(name, "")
         if not emp_no:
             no_emp += 1
             no_emp_names.append(name or "?")
             continue
+        resolved[emp_no] = score or 0
 
-        # 去重按 员工+科目+日期：同名科目不同场次的培训各建一条台账
-        exist = (await session.execute(
-            text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_subject = :ts AND training_date = :td AND is_deleted = false"),
-            {"en": emp_no, "ts": subj, "td": td},
-        )).fetchone()
-        if exist:
-            skipped_exist += 1
-            continue
+    existing_ledger: dict[str, object] = {}
+    if resolved:
+        ledger_rows = (await session.execute(
+            text("SELECT id, employee_number FROM hr.training_ledgers "
+                 "WHERE employee_number = ANY(:nos) AND training_date = :td "
+                 "AND training_subject = :ts AND is_deleted = false"),
+            {"nos": list(resolved), "td": td, "ts": subj},
+        )).fetchall()
+        existing_ledger = {r[1]: r[0] for r in ledger_rows}
 
+    ledger_updates: list[dict] = []
+    ledger_inserts: list[dict] = []
+    for emp_no, score in resolved.items():
+        if emp_no in existing_ledger:
+            ledger_updates.append({
+                "ar": str(score), "tm": method or "", "t": trainer or "",
+                "id": existing_ledger[emp_no],
+            })
+        else:
+            ledger_inserts.append({
+                "en": emp_no, "td": td, "ts": subj,
+                "tm": method or "", "t": trainer or "", "ar": str(score),
+            })
+    if ledger_updates:
         await session.execute(
-            text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, training_method, trainer, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
-            {"en": emp_no, "td": td, "ts": subj, "tm": method or "", "t": trainer or "", "ar": str(score or 0)},
+            text("UPDATE hr.training_ledgers SET assessment_result = :ar, "
+                 "training_method = :tm, trainer = :t, updated_at = now() WHERE id = :id"),
+            ledger_updates,
         )
-        synced += 1
+        updated = len(ledger_updates)
+    if ledger_inserts:
+        await session.execute(
+            text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, "
+                 "training_subject, training_method, trainer, assessment_result, source_type) "
+                 "VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
+            ledger_inserts,
+        )
+        synced = len(ledger_inserts)
 
     await session.commit()
 
     msg = f"已同步 {synced} 人到培训台账"
-    if skipped_exist:
-        msg += f"，{skipped_exist} 人已存在跳过"
+    if updated:
+        msg += f"，更新 {updated} 人已有成绩"
     if no_emp:
         msg += f"，{no_emp} 人缺工号未同步"
         if no_emp_names:
             msg += f"（{'、'.join(no_emp_names[:5])}{'...' if len(no_emp_names) > 5 else ''}）"
 
     return success_response(
-        data={"synced": synced, "skipped": skipped_exist, "no_emp": no_emp},
+        data={"synced": synced, "updated": updated, "skipped": 0, "no_emp": no_emp},
         message=msg,
     )
 
@@ -3938,6 +4118,10 @@ async def export_training_qa_record_with_scores(
                 )
         await session.commit()
     except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "问答记录落库失败，已回滚（文档仍返回）", exc_info=True,
+        )
         await session.rollback()
 
     buffer = generate_qa_record(
@@ -3976,37 +4160,65 @@ async def export_score_report(
     training_date_val = date.fromisoformat(body.training_date) if body.training_date else None
     scores = [{"name": s.get("name", ""), "department": body.training_department, "total_score": s.get("total_score", 0)} for s in scores_raw]
 
-    # 自动将成绩写入培训台账
-    for s in scores_raw:
-        name = s.get("name", "")
-        score = s.get("total_score", 0)
-        if not name:
-            continue
-        # 查找该人员的工号（与其他成绩路径统一走培训人员名单）；
-        # 同名多人时优先在职、按工号确定序，避免成绩挂到错误员工名下
-        emp_row = (await session.execute(
-            text(
-                "SELECT employee_number FROM hr.training_roster_profiles WHERE name = :n AND is_deleted = false "
-                "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number LIMIT 1"
-            ),
-            {"n": name},
-        )).fetchone()
-        emp_no = emp_row[0] if emp_row else None
-        if emp_no:
-            # 检查是否已有该场次培训记录，有则更新成绩（同名科目不同日期各建一条）
-            existing = (await session.execute(
-                text("SELECT id FROM hr.training_ledgers WHERE employee_number = :en AND training_subject = :subj AND training_date = :date AND is_deleted = false LIMIT 1"),
-                {"en": emp_no, "subj": body.training_content, "date": training_date_val},
-            )).fetchone()
-            if existing:
+    # 自动将成绩写入培训台账（批量预载；日期为空时跳过落库，保证文档仍可导出）
+    if training_date_val is not None:
+        missing_names = sorted({
+            s.get("name", "") for s in scores_raw
+            if s.get("name") and not s.get("employee_number")
+        })
+        name_to_no: dict[str, str] = {}
+        if missing_names:
+            roster_rows = (await session.execute(
+                text("SELECT name, employee_number FROM hr.training_roster_profiles "
+                     "WHERE name = ANY(:names) AND is_deleted = false "
+                     "AND (CAST(:dept AS VARCHAR) IS NULL OR department = :dept OR actual_department = :dept) "
+                     "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number"),
+                {"names": missing_names, "dept": body.training_department or None},
+            )).fetchall()
+            grouped: dict[str, list[str]] = {}
+            for nm, no in roster_rows:
+                if no:
+                    grouped.setdefault(nm, []).append(no)
+            name_to_no = {nm: nos[0] for nm, nos in grouped.items() if len(nos) == 1}
+
+        resolved: dict[str, str] = {}
+        for s in scores_raw:
+            name = s.get("name", "")
+            if not name:
+                continue
+            emp_no = str(s.get("employee_number") or "").strip() or name_to_no.get(name, "")
+            if emp_no:
+                resolved[emp_no] = str(s.get("total_score", 0))
+
+        if resolved:
+            ledger_rows = (await session.execute(
+                text("SELECT id, employee_number FROM hr.training_ledgers "
+                     "WHERE employee_number = ANY(:nos) AND training_subject = :subj "
+                     "AND training_date = :date AND is_deleted = false"),
+                {"nos": list(resolved), "subj": body.training_content, "date": training_date_val},
+            )).fetchall()
+            existing_ledger = {r[1]: r[0] for r in ledger_rows}
+            ledger_updates, ledger_inserts = [], []
+            for emp_no, score in resolved.items():
+                if emp_no in existing_ledger:
+                    ledger_updates.append({"r": score, "id": existing_ledger[emp_no]})
+                else:
+                    ledger_inserts.append({
+                        "en": emp_no, "subj": body.training_content,
+                        "date": training_date_val, "r": score,
+                    })
+            if ledger_updates:
                 await session.execute(
-                    text("UPDATE hr.training_ledgers SET assessment_result = :r, updated_at = now() WHERE id = :id"),
-                    {"r": str(score), "id": existing[0]},
+                    text("UPDATE hr.training_ledgers SET assessment_result = :r, "
+                         "updated_at = now() WHERE id = :id"),
+                    ledger_updates,
                 )
-            else:
+            if ledger_inserts:
                 await session.execute(
-                    text("INSERT INTO hr.training_ledgers (id, employee_number, training_subject, training_date, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :subj, :date, :r, 'manual')"),
-                    {"en": emp_no, "subj": body.training_content, "date": training_date_val, "r": str(score)},
+                    text("INSERT INTO hr.training_ledgers (id, employee_number, training_subject, "
+                         "training_date, assessment_result, source_type) "
+                         "VALUES (gen_random_uuid(), :en, :subj, :date, :r, 'manual')"),
+                    ledger_inserts,
                 )
     await session.commit()
 
@@ -4152,7 +4364,7 @@ async def export_qa_evaluation(
 
     # 应到人数 = 部门总人数
     dept_count = (await session.execute(
-        text("SELECT count(*) FROM hr.training_roster_profiles WHERE department = :d AND is_deleted = false AND status = '在职'"),
+        text("SELECT count(*) FROM hr.training_roster_profiles WHERE (department = :d OR (department = '未分类' AND actual_department = :d)) AND is_deleted = false AND status = '在职'"),
         {"d": row[1] or ""},
     )).scalar()
     expected = dept_count if dept_count else None
@@ -4222,26 +4434,60 @@ async def export_qa_scores(
         except: return None
 
     td = _d(train_date) or _date.today()
+    # 没工号时按本场次部门反查（同名多人不猜测）
+    missing_names = sorted({s[0] for s in scores if s[0] and not s[1]})
+    name_to_no: dict[str, str] = {}
+    if missing_names:
+        roster_rows = (await session.execute(
+            text("SELECT name, employee_number FROM hr.training_roster_profiles "
+                 "WHERE name = ANY(:names) AND is_deleted = false "
+                 "AND (CAST(:dept AS VARCHAR) IS NULL OR department = :dept OR actual_department = :dept) "
+                 "ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number"),
+            {"names": missing_names, "dept": dept or None},
+        )).fetchall()
+        grouped: dict[str, list[str]] = {}
+        for nm, no in roster_rows:
+            if no:
+                grouped.setdefault(nm, []).append(no)
+        name_to_no = {nm: nos[0] for nm, nos in grouped.items() if len(nos) == 1}
+
+    resolved: dict[str, int] = {}
     for s in scores:
-        name, emp_no, score = s[0], s[1], s[2] or 0
-        # 没工号时从员工表反查
-        if not emp_no:
-            emp = (await session.execute(
-                text("SELECT employee_number FROM hr.training_roster_profiles WHERE name = :nm AND is_deleted = false ORDER BY CASE WHEN status = '在职' THEN 0 ELSE 1 END, employee_number LIMIT 1"),
-                {"nm": name},
-            )).fetchone()
-            if emp and emp[0]:
-                emp_no = emp[0]
-        if not emp_no:
-            continue
-        exist = (await session.execute(
-            text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_date = :td AND training_subject = :ts AND is_deleted = false"),
-            {"en": emp_no, "td": td, "ts": subj},
-        )).first()
-        if not exist:
+        emp_no = s[1] or name_to_no.get(s[0], "")
+        if emp_no:
+            resolved[emp_no] = s[2] or 0
+    if resolved:
+        ledger_rows = (await session.execute(
+            text("SELECT id, employee_number FROM hr.training_ledgers "
+                 "WHERE employee_number = ANY(:nos) AND training_date = :td "
+                 "AND training_subject = :ts AND is_deleted = false"),
+            {"nos": list(resolved), "td": td, "ts": subj},
+        )).fetchall()
+        existing_ledger = {r[1]: r[0] for r in ledger_rows}
+        ledger_updates, ledger_inserts = [], []
+        for emp_no, score in resolved.items():
+            if emp_no in existing_ledger:
+                ledger_updates.append({
+                    "ar": str(score), "tm": method, "t": trainer,
+                    "id": existing_ledger[emp_no],
+                })
+            else:
+                ledger_inserts.append({
+                    "en": emp_no, "td": td, "ts": subj,
+                    "tm": method, "t": trainer, "ar": str(score),
+                })
+        if ledger_updates:
             await session.execute(
-                text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, training_method, trainer, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
-                {"en": emp_no, "td": td, "ts": subj, "tm": method, "t": trainer, "ar": str(score)},
+                text("UPDATE hr.training_ledgers SET assessment_result = :ar, "
+                     "training_method = :tm, trainer = :t, updated_at = now() WHERE id = :id"),
+                ledger_updates,
+            )
+        if ledger_inserts:
+            await session.execute(
+                text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, "
+                     "training_subject, training_method, trainer, assessment_result, source_type) "
+                     "VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
+                ledger_inserts,
             )
     await session.commit()
 
@@ -5223,13 +5469,17 @@ async def delete_sop_catalog_item(
 async def upload_sop_catalog(
     file: UploadFile,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """上传 Excel SOP 目录，按 SOP编号 自动新增或更新。"""
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    allowed = None if hr_scope.is_unrestricted else hr_scope.scoped_departments
+    if not hr_scope.is_unrestricted and not allowed:
+        raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
     try:
         content = await file.read()
-        result = await service.upload_sop_catalog(content)
+        result = await service.upload_sop_catalog(content, allowed_departments=allowed)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
@@ -5515,6 +5765,7 @@ async def save_employee_tag(
     action = payload.get("action", "add")
     if not emp_no or not tag_name:
         raise HTTPException(400, "员工工号和标签名不能为空")
+    await _ensure_ledger_employee_in_scope(session, hr_scope, emp_no)
     if action == "remove":
         # 删除该工号+标签的全部行（不限创建人）：转训自动打上的标签
         # 在员工档案中必须能被移除，否则删了又出现
@@ -5553,6 +5804,8 @@ async def get_employee_tags(
     )).scalars().first()
     if emp:
         hr_scope.ensure_can_access_employee(emp)
+    else:
+        await _ensure_ledger_employee_in_scope(session, hr_scope, employee_number)
     result = await session.execute(
         text("SELECT tag_name, created_by FROM hr.employee_tags WHERE employee_number = :en AND is_deleted = false"),
         {"en": employee_number},

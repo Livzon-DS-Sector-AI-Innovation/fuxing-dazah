@@ -896,7 +896,10 @@ class TrainingLedgerPageRepository:
             select(TrainingLedgerPage, TrainingRosterProfile.department)
             .outerjoin(
                 TrainingRosterProfile,
-                TrainingLedgerPage.employee_number == TrainingRosterProfile.employee_number,
+                and_(
+                    TrainingLedgerPage.employee_number == TrainingRosterProfile.employee_number,
+                    TrainingRosterProfile.is_deleted.is_(False),
+                ),
             )
             .where(TrainingLedgerPage.is_deleted.is_(False))
         )
@@ -942,8 +945,9 @@ class AnnualTrainingPlanRepository:
 
         if year is not None:
             stmt = stmt.where(AnnualTrainingPlan.year == year)
-        if departments:
+        if departments is not None:
             # 数据范围：授权部门 + 「厂级」（厂级培训所有部门可见）
+            # 空集合必须 fail-closed（in_([]) 生成恒假条件），不能退化为不过滤
             stmt = stmt.where(AnnualTrainingPlan.department.in_(departments))
         elif department:
             stmt = stmt.where(AnnualTrainingPlan.department.ilike(f"%{department}%"))
