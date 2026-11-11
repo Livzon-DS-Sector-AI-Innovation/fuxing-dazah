@@ -40,3 +40,9 @@ backend/scripts/tmp/
 /sports-invitation/
 /sports-meet-plugin/
 
+# 临时诊断探针 / 本地数据档案（不入库，2026-11-11 大扫除收口）
+tmp/
+frontend/scripts-tmp/
+frontend/scripts-tmp-geo-diag.js
+/五金库编码补全/
+
