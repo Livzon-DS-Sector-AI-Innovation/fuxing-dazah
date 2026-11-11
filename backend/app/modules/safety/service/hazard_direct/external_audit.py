@@ -27,6 +27,12 @@ in_progress、空/异常值从宽视为未关闭（字段默认值即未关闭�
 
 @ 提及直取记录「责任人」人员字段自带的 open_id（读取应用作用域，与卡片 @
 同源，无需 identity 解析——对齐 ``bulletin._harvest_person_ids`` 口径）。
+
+「未更新进展」追踪（2026-11-05）：外审源与隐患总表同口径执行进展更新追踪
+（``progress_track.compute_external_marks``，方案/进展列内容哈希 + Redis
+基线，7 天未更新或从未填写且超检查时间 7 天 → 标记），由
+``bulletin._load_external_sections`` 现算回填 ``progress_status``，明细行尾
+⚠️ 标注（本模块渲染，不拉数不落库）。
 """
 
 from __future__ import annotations
@@ -128,6 +134,9 @@ class ExternalAuditView:
     checked_at: date | None = None
     target_date: date | None = None
     responsible: list[tuple[str, str]] = field(default_factory=list)  # (姓名, open_id)
+    # 「未更新进展」标记（现算不落库，由调用方经 progress_track.compute_external_marks
+    # 回填；渲染时在明细行尾 ⚠️ 标注，口径对齐主表）
+    progress_status: str | None = None
 
 
 def to_view(
@@ -310,8 +319,15 @@ def build_external_section(
     明细按部门分组 @ 责任人；整改中与主表同口径不进明细不计数为未整改
     （仅收口行计数）；已关闭仅计数。检查/目标日期**不展示**（2026-10-29
     拍板，仅用于部门内排序与日期过滤），明细行只留 链接段。
+
+    「未更新进展」标记（2026-11-05，同主表口径）：``progress_status`` 已回填
+    「未更新进展」的明细行，描述行尾 ⚠️ 标注并计入 ``ext_marked``（标记由
+    调用方 ``progress_track.compute_external_marks`` 现算，渲染纯函数不拉数）。
     """
     from app.modules.safety.feishu import mention
+    from app.modules.safety.service.hazard_direct.progress_track import (
+        PROGRESS_STATUS_NOT_UPDATED,
+    )
 
     open_views = [v for v in views if not v.closed and not v.in_progress]
     ext_by_dept: dict[str, int] = defaultdict(int)
@@ -323,6 +339,10 @@ def build_external_section(
         "ext_doing": sum(1 for v in views if v.in_progress),
         "ext_depts": len(ext_by_dept),
         "ext_by_dept": dict(ext_by_dept),
+        "ext_marked": sum(
+            1 for v in open_views
+            if v.progress_status == PROGRESS_STATUS_NOT_UPDATED
+        ),
     }
 
     lines: list[str] = [
@@ -368,7 +388,11 @@ def build_external_section(
         lines.append(head)
 
         for idx, v in enumerate(items, 1):
-            lines.append(f"**{idx}.** {_flat(v.description)}")
+            no_progress_flag = (
+                "　⚠️**未更新进展**"
+                if v.progress_status == PROGRESS_STATUS_NOT_UPDATED else ""
+            )
+            lines.append(f"**{idx}.** {_flat(v.description)}{no_progress_flag}")
             if v.plan:
                 lines.append(f"{plan_label}：{_flat(v.plan)}")
             # 检查/目标日期不展示（2026-10-29 拍板）；检查日期仍用于上方排序

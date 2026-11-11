@@ -6,7 +6,9 @@
 
 「未更新进展」标记不再落库，改为调用 ``progress_track.compute_marks`` 现算
 （Redis 跟踪进展内容变化时间）；顶部速览行已删（2026-10-22 拍板），标记仅
-逐条 ⚠️ 展示。
+逐条 ⚠️ 展示。外审源节同口径追踪（2026-11-05）：
+``_load_external_sections`` 逐源调 ``progress_track.compute_external_marks``
+回填标记，外审明细行尾同样 ⚠️ 标注。
 
 详情开头（2026-10-22 拍板）：不再输出【隐患督办通报】标题/分隔线/📅 日期/
 速览行，直接从「📌 公司内检查未整改隐患」栏开始（速递格卡片自带标题与
@@ -142,6 +144,14 @@ async def _load_external_sections() -> list[dict[str, Any]]:
         if not views:
             continue  # 源缺席 / 空表：整节缺席（不出只有标题的空节）
 
+        # 未更新进展标记（与主表同口径现算，不落库；外审无平台库镜像，
+        # 冷启动基线=now，见 progress_track 模块 docstring）
+        ext_marks = await progress_track.compute_external_marks(
+            views, kind=spec.kind,
+        )
+        for v in views:
+            v.progress_status = ext_marks.get(v.record_id)
+
         conn = store.get_connection(external_audit.DOMAIN, spec.kind)
         app_token = conn.app_token if conn and conn.status != "disabled" else ""
         table_id = conn.table_id if conn and conn.status != "disabled" else ""
@@ -193,6 +203,7 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
                     "open": s["stats"]["ext_open"],
                     "closed": s["stats"]["ext_closed"],
                     "doing": s["stats"]["ext_doing"],
+                    "marked": s["stats"].get("ext_marked", 0),
                     "by_dept": s["stats"]["ext_by_dept"],
                 }
                 for s in ext_sections

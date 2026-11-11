@@ -67,7 +67,7 @@ async def _score_one(client: Any, view: bitable_repo.HazardView):
 
 
 def _build_note(
-    out: "HazardScoringOutput", total: float, level_source: str | None = None
+    out: HazardScoringOutput, total: float, level_source: str | None = None
 ) -> str:
     """评分说明固定格式（前端按「｜」切分取首段做 H/M/L 色点）。
 

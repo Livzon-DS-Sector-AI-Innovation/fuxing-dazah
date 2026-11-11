@@ -6,11 +6,16 @@
   路径 / 外审节渲染分支；
 - ``bulletin.build_bulletin`` 集成：外审节拼接位置 / stats 新键 / 早退分支 /
   外审源缺席时输出与现状**逐字节一致**（值守轮询误刷的回归锚）。
+
+「未更新进展」同主表口径追踪（2026-11-05）：
+- ``progress_track.compute_external_marks``：参与口径 / 空方案按检查时间
+  起算 / Redis 基线键按 kind 隔离且不回查平台库；
+- 渲染与集成：明细行尾 ⚠️ 标注 / ``ext_marked`` 统计 / 逐源 marked 计数。
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,6 +25,7 @@ from app.modules.safety.service.hazard_direct import (
     bitable_repo,
     bulletin,
     external_audit,
+    progress_track,
 )
 
 _BJ = timezone(timedelta(hours=8))
@@ -173,7 +179,7 @@ def test_section_groups_mentions_link_and_stats() -> None:
 
     assert stats == {
         "ext_open": 3, "ext_closed": 1, "ext_doing": 1, "ext_depts": 2,
-        "ext_by_dept": {"提炼工程二部": 1, "动力部": 2},
+        "ext_by_dept": {"提炼工程二部": 1, "动力部": 2}, "ext_marked": 0,
     }
     assert "管委会检查未整改隐患" in body
     assert "🔴 未关闭 **3** 条  ·  ✅ 已关闭 1 条  ·  涉及 **2** 个部门" in body
@@ -207,6 +213,117 @@ def test_section_all_closed_line_and_plain_dept_head() -> None:
     body = "\n".join(lines)
     assert "**提炼工程二部**" in body
     assert "<at" not in body
+
+
+# ── 未更新进展标记：compute_external_marks（同主表口径）────────
+
+
+async def test_compute_external_marks_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    """参与口径对齐主表：已关闭/整改中不参与；空方案按检查时间起算；
+    有方案走内容哈希基线（键空间按 extaudit:{kind} 隔离、不查平台库）。
+    """
+    now = datetime(2026, 11, 5, 6, 0, tzinfo=UTC)
+    since_by_rid: dict[str, datetime] = {}
+    scopes: list[str] = []
+    db_baselines: list[bool] = []
+
+    async def fake_since(
+        rid: str, text: str, base: datetime,
+        *, scope: str = "hazard", db_baseline: bool = True,
+    ) -> datetime:
+        scopes.append(scope)
+        db_baselines.append(db_baseline)
+        return since_by_rid.get(rid, base)
+
+    monkeypatch.setattr(progress_track, "_since_for", fake_since)
+    since_by_rid["rec_ext_1"] = now - timedelta(days=30)
+    since_by_rid["rec_ext_2"] = now - timedelta(days=2)
+
+    views = [
+        external_audit.to_view(_ext_record(1, plan="老方案")),   # 基线30天前→标记
+        external_audit.to_view(_ext_record(2, plan="新方案")),   # 基线2天前→不标记
+        external_audit.to_view(_ext_record(3, status=["已关闭"], plan="老方案")),
+        external_audit.to_view(_ext_record(4, status=["整改中"], plan="老方案")),
+        external_audit.to_view(_ext_record(5, checked_ms=_ms(2026, 10, 19))),
+        external_audit.to_view(_ext_record(6, checked_ms=_ms(2026, 11, 3))),
+        external_audit.to_view(_ext_record(7)),                 # 无检查时间→不标记
+    ]
+    marks = await progress_track.compute_external_marks(
+        views, kind="defect_summary", now=now,
+    )
+
+    assert marks == {
+        "rec_ext_1": progress_track.PROGRESS_STATUS_NOT_UPDATED,
+        "rec_ext_2": None,
+        "rec_ext_3": None,
+        "rec_ext_4": None,
+        "rec_ext_5": progress_track.PROGRESS_STATUS_NOT_UPDATED,
+        "rec_ext_6": None,
+        "rec_ext_7": None,
+    }
+    # 仅两条「有方案」记录走内容哈希基线；外审不回查平台库历史时间戳
+    assert scopes == ["extaudit:defect_summary"] * 2
+    assert db_baselines == [False, False]
+
+
+async def test_since_for_external_scope_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外审基线键带 kind 隔离（不与主表键空间互踩），且不回查平台库。"""
+    now = datetime(2026, 11, 5, tzinfo=UTC)
+
+    class _FakeRedis:
+        def __init__(self) -> None:
+            self.store: dict[str, str] = {}
+
+        async def get(self, key: str) -> str | None:
+            return self.store.get(key)
+
+        async def set(self, key: str, value: str, ex: int | None = None) -> None:
+            self.store[key] = value
+
+    fake = _FakeRedis()
+    monkeypatch.setattr(progress_track, "redis_client", fake)
+
+    async def fail_db(rid: str) -> datetime | None:
+        raise AssertionError("外审源不应回查平台库基线")
+
+    monkeypatch.setattr(progress_track, "_db_baseline", fail_db)
+
+    since = await progress_track._since_for(
+        "recX", "方案文本", now,
+        scope="extaudit:emergency_bureau", db_baseline=False,
+    )
+    assert since == now  # 外审无历史时间戳，冷启动基线=now（7 天宽限）
+    assert list(fake.store) == [
+        "safety:extaudit:emergency_bureau:progress:recX",
+    ]
+
+    # 换源（kind）重新起算，两键并存互不干扰；主表键空间不受影响
+    await progress_track._since_for(
+        "recX", "方案文本", now,
+        scope="extaudit:defect_summary", db_baseline=False,
+    )
+    assert len(fake.store) == 2
+
+
+def test_section_marks_flag_and_stats() -> None:
+    """标记回填后：明细行尾 ⚠️ 标注；ext_marked 只数未关闭明细项。"""
+    views = [
+        external_audit.to_view(_ext_record(1, dept=["提炼工程二部"], plan="旧方案")),
+        external_audit.to_view(_ext_record(2, dept=["提炼工程二部"])),
+        external_audit.to_view(_ext_record(3, status=["已关闭"], dept=["提炼工程二部"])),
+    ]
+    views[0].progress_status = progress_track.PROGRESS_STATUS_NOT_UPDATED
+    views[2].progress_status = progress_track.PROGRESS_STATUS_NOT_UPDATED  # 已关闭不计
+
+    lines, stats = external_audit.build_external_section(views)
+    body = "\n".join(lines)
+
+    assert stats["ext_marked"] == 1
+    assert "**1.** 外审缺陷#1 描述　⚠️**未更新进展**" in body
+    assert "**2.** 外审缺陷#2 描述" in body
+    assert body.count("未更新进展") == 1
 
 
 # ── build_bulletin 集成（既有接缝）──────────────────────────────
@@ -246,11 +363,17 @@ def _patch_render_deps(
     async def fake_marks(views: Any) -> dict[str, str]:
         return {}
 
+    async def fake_ext_marks(
+        views: Any, *, kind: str = "defect_summary",
+    ) -> dict[str, str]:
+        return {}
+
     async def fake_fallback(names: list[str]) -> dict[str, str]:
         return {n: f"ou_fb_{n}" for n in names}
 
     monkeypatch.setattr(bulletin, "_fetch_targets", fake_fetch)
     monkeypatch.setattr(progress_track, "compute_marks", fake_marks)
+    monkeypatch.setattr(progress_track, "compute_external_marks", fake_ext_marks)
     monkeypatch.setattr(bulletin, "_load_person_open_ids", fake_fallback)
     monkeypatch.setattr(
         responsible_mapping, "DEPARTMENT_RESPONSIBLE_OVERRIDE", {},
@@ -519,6 +642,36 @@ async def test_build_bulletin_two_external_sources(
         "未关闭 **2** 项 ｜ 🔴 红色预警 2（含管委会检查 1、重大隐患 1）"
         " · 🟡 一般预警 0"
     )
+
+
+async def test_build_bulletin_external_marks_rendered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """外审明细行 ⚠️ 未更新进展标注进通报；逐源 marked 计数入 stats。"""
+    _patch_render_deps(monkeypatch, [])
+    _stub_external(monkeypatch, [
+        _ext_record(
+            1, dept=["提炼工程二部"], plan="旧方案",
+            checked_ms=_ms(2026, 10, 19),
+        ),
+        _ext_record(2, dept=["提炼工程二部"], checked_ms=_ms(2026, 10, 19)),
+    ])
+
+    async def fake_ext_marks(
+        views: Any, *, kind: str = "defect_summary",
+    ) -> dict[str, str]:
+        return {
+            v.record_id: progress_track.PROGRESS_STATUS_NOT_UPDATED
+            for v in views if v.record_id == "rec_ext_1"
+        }
+
+    monkeypatch.setattr(progress_track, "compute_external_marks", fake_ext_marks)
+
+    content, stats = await bulletin.build_bulletin()
+
+    assert "外审缺陷#1 描述　⚠️**未更新进展**" in content
+    assert content.count("未更新进展") == 1
+    assert stats["ext_sources"]["管委会检查"]["marked"] == 1
 
 
 # ── all_clear_line：收口行分支 ──────────────────────────────────
