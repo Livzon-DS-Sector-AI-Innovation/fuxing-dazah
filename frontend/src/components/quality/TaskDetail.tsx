@@ -716,7 +716,7 @@ export default function TaskDetail({ id }: { id: string }) {
             </Upload>
           )}
           <Button size="small" icon={<HistoryOutlined />}
-            onClick={() => router.push(`/quality/history?batch_number=${encodeURIComponent(detail.batch_number)}`)}>
+            onClick={() => router.push(`/quality?tab=history&batch_number=${encodeURIComponent(detail.batch_number)}`)}>
             液相解析记录
           </Button>
           {detail.status === 'pending_review' && (

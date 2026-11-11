@@ -5,7 +5,7 @@ import { usePermission } from '@/hooks/usePermission'
 import { Typography, Divider, Empty, Button, Space, Table, Tag, Modal, InputNumber, App, Tabs, Skeleton } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { LcUploader, LcReportView, LcHistoryList } from '@/components/quality'
 import { confirmTaskResult } from '@/actions/quality'
 import type { UploadLcResponse } from '@/types/quality'
@@ -22,14 +22,28 @@ interface ConfirmItem {
 }
 
 export default function QualityPage() {
+  return (
+    <Suspense fallback={<Skeleton active paragraph={{ rows: 8 }} />}>
+      <QualityPageInner />
+    </Suspense>
+  )
+}
+
+function QualityPageInner() {
   const { hasPermission } = usePermission()
   const canUpload = hasPermission('quality:lc:upload')
   const [result, setResult] = useState<UploadLcResponse | null>(null)
   const [confirmItems, setConfirmItems] = useState<ConfirmItem[]>([])
   const [confirming, setConfirming] = useState(false)
-  const [activeTab, setActiveTab] = useState('parse')
+  // Tab 以 URL ?tab= 为准（任务详情「液相解析记录」深链直达检验历史）
+  const searchParams = useSearchParams()
+  const activeTab = searchParams.get('tab') === 'history' ? 'history' : 'parse'
   const { message } = App.useApp()
   const router = useRouter()
+
+  const switchTab = (key: string) => {
+    router.replace(key === 'history' ? '/quality?tab=history' : '/quality')
+  }
 
   const onUploadResult = (r: UploadLcResponse) => {
     setResult(r)
@@ -126,7 +140,7 @@ export default function QualityPage() {
       </Modal>
       <Tabs
         activeKey={activeTab}
-        onChange={setActiveTab}
+        onChange={switchTab}
         items={[
           {
             key: 'parse',
@@ -153,7 +167,7 @@ export default function QualityPage() {
               去任务确认归入（已自动填入待确认）
             </Button>
           </Link>
-          <Button icon={<HistoryOutlined />} onClick={() => setActiveTab('history')}>历史记录</Button>
+          <Button icon={<HistoryOutlined />} onClick={() => switchTab('history')}>历史记录</Button>
         </Space>
       )}
       {result && result.record_id && !result.task_link?.task_id && (
@@ -163,7 +177,7 @@ export default function QualityPage() {
               去检验填报建任务归入
             </Button>
           </Link>
-          <Button icon={<HistoryOutlined />} onClick={() => setActiveTab('history')}>历史记录</Button>
+          <Button icon={<HistoryOutlined />} onClick={() => switchTab('history')}>历史记录</Button>
         </Space>
       )}
       {result && result.record_id && !result.task_link?.task_id && (
