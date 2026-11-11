@@ -16,6 +16,7 @@ from app.core.response import ApiResponse
 from app.modules.safety.models import CentralAlarmRecord
 from app.modules.safety.schemas.central_alarm import (
     CentralAlarmDailyReportRequest,
+    CentralAlarmPeriodReportRequest,
     CentralAlarmStatsOut,
     CentralAlarmSyncResponse,
 )
@@ -168,6 +169,49 @@ async def generate_daily_report(
     service = CentralAlarmService(db)
     result = await service.generate_daily_report(
         target_date=data.target_date if data else None,
+        push=True, channel="web",
+    )
+    return ApiResponse(data=result.model_dump(mode="json"))
+
+
+# ── 周期报告（周报/月报）生成 ──
+
+
+@central_alarm_router.post(
+    "/central-alarms/weekly-report/generate",
+    response_model=ApiResponse,
+    summary="生成并推送中控报警周报",
+)
+async def generate_weekly_report(
+    data: CentralAlarmPeriodReportRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """生成上一完整自然周（周一~周日）中控报警分析报告并投安全速递总卡。
+
+    body {ref_date?} 可空（基准日=今天）；指标：报警总数/日均报警率/
+    高频报警点Top10/无效报警比例（+三项环比）+ AI 改进建议。
+    """
+    service = CentralAlarmService(db)
+    result = await service.generate_weekly_report(
+        ref_date=data.ref_date if data else None,
+        push=True, channel="web",
+    )
+    return ApiResponse(data=result.model_dump(mode="json"))
+
+
+@central_alarm_router.post(
+    "/central-alarms/monthly-report/generate",
+    response_model=ApiResponse,
+    summary="生成并推送中控报警月报",
+)
+async def generate_monthly_report(
+    data: CentralAlarmPeriodReportRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """生成上一完整自然月中控报警分析报告并投安全速递总卡（口径同周报）。"""
+    service = CentralAlarmService(db)
+    result = await service.generate_monthly_report(
+        ref_date=data.ref_date if data else None,
         push=True, channel="web",
     )
     return ApiResponse(data=result.model_dump(mode="json"))

@@ -3,6 +3,9 @@
 渲染每日分析总结（按车间分节 + 异常模式/设备热点 + AI 汇总 + 整改建议）。
 结构：今日研判 → 核心指标 → 报警类型/车间/异常模式/维度分布 → 重复高风险点
 → 明细（按车间）→ AI 汇总分析 → 整改建议 → 提示。
+
+周期报告（周报/月报，render_period_report）：核心指标+环比 → 高频报警点 Top10
+→ 分布 → 按日趋势 → AI 汇总/重点问题/改进建议。
 """
 
 from __future__ import annotations
@@ -11,7 +14,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.modules.safety.service.central_alarm.aggregator import CentralAlarmDailyAgg
+from app.modules.safety.service.central_alarm.aggregator import (
+    CentralAlarmDailyAgg,
+    CentralAlarmPeriodAgg,
+    period_kind_label,
+)
 
 DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
 _PATTERN_LABEL = {
@@ -133,6 +140,128 @@ def render_daily_report(
     lines.append("")
     lines.append("📎 **数据源**：飞书多维表格 · [中控报警统计](https://j0eukrlohu.feishu.cn/base/OdMRbCWr3aNEZKsFz94cAt12nzh)")
     return "\n".join(lines)
+
+
+def render_period_report(
+    agg: CentralAlarmPeriodAgg,
+    ai_summary: dict[str, Any] | None = None,
+) -> str:
+    """渲染周报/月报 Markdown（指标紧凑版，无逐条明细）。
+
+    Args:
+        agg: 周期聚合结果（kind=weekly/monthly）
+        ai_summary: 周期汇总 AI 结果
+            （{summary, key_issues, improvement_suggestions}），失败 None → 省略 AI 块
+    """
+    lines: list[str] = []
+    kind_label = period_kind_label(agg.kind)
+
+    lines.append(f"📊 **中控报警{kind_label}分析** · {agg.period_start.isoformat()} ~ {agg.period_end.isoformat()}")
+    lines.append(DIVIDER)
+    lines.append(f"统计区间：{agg.period_start.isoformat()} ~ {agg.period_end.isoformat()}（{agg.days} 天）")
+    lines.append("统计口径：高高压力 / 高高液位（不含泡碱操作）/ 回收车间高高温")
+    lines.append("")
+
+    # ── 核心指标（四指标 + 三项环比）──
+    lines.append("**📌 核心指标（含上期环比）**")
+    lines.append(
+        f"- 报警总数：**{agg.total} 起**{_delta(agg.total, _prev_val(agg, 'total'))}"
+    )
+    lines.append(
+        f"- 日均报警率：**{agg.daily_avg} 起/天**"
+        f"{_delta(agg.daily_avg, _prev_val(agg, 'daily_avg'))}"
+    )
+    ratio_text = (
+        f"{agg.false_alarm_ratio:.1%}" if agg.false_alarm_ratio is not None else "—"
+    )
+    prev_ratio = _prev_val(agg, "false_alarm_ratio")
+    prev_ratio_text = (
+        f"{prev_ratio:.1%}" if isinstance(prev_ratio, float) else "—"
+    )
+    lines.append(
+        f"- 无效报警比例（AI 判定误报）：**{ratio_text}**"
+        f"（已分析 {agg.analyzed_count}/{agg.total}，上期 {prev_ratio_text}）"
+    )
+    lines.append("")
+
+    # ── 高频报警点 Top10 ──
+    lines.append("**🔝 高频报警点 Top10**")
+    if agg.top_hotspots:
+        for i, (ws, post, atype, cnt) in enumerate(agg.top_hotspots, 1):
+            lines.append(f"{i}. **{ws} · {post}** · {atype}：**{cnt} 次**")
+    else:
+        lines.append("（本周期无报警记录）")
+
+    # ── 分布 ──
+    if agg.total:
+        lines.append("")
+        lines.append("**📈 分布**")
+        if agg.workshop_distribution:
+            lines.append("- 🏭 车间：" + _inline_dist(agg.workshop_distribution))
+        if agg.alarm_type_distribution:
+            lines.append("- 📈 报警类型：" + _inline_dist(agg.alarm_type_distribution))
+        if agg.pattern_distribution:
+            lines.append(
+                "- 🚨 异常模式：" + _inline_dist(agg.pattern_distribution, labeler=_PATTERN_LABEL)
+            )
+        if agg.dimension_distribution:
+            lines.append(
+                "- 🧭 维度：" + _inline_dist(agg.dimension_distribution, labeler=_DIMENSION_LABEL)
+            )
+        # 按日趋势（一行文本，缺日补 0）
+        if agg.daily_counts:
+            trend_parts: list[str] = []
+            for i in range(agg.days):
+                day = agg.period_start + timedelta(days=i)
+                trend_parts.append(f"{day.month}/{day.day} {agg.daily_counts.get(day, 0)}")
+            lines.append("- 📅 按日趋势：" + " · ".join(trend_parts))
+
+    # ── AI 汇总 / 重点问题 / 改进建议 ──
+    if ai_summary and ai_summary.get("summary"):
+        lines.append("")
+        lines.append("**🔍 周期研判**")
+        lines.append(str(ai_summary["summary"]))
+    key_issues = (ai_summary or {}).get("key_issues") or []
+    if key_issues:
+        lines.append("")
+        lines.append("**📌 重点问题**")
+        for i, issue in enumerate(key_issues, 1):
+            lines.append(f"{i}. {issue}")
+    suggestions = (ai_summary or {}).get("improvement_suggestions") or []
+    if suggestions:
+        lines.append("")
+        lines.append("**✅ 改进建议**")
+        for i, sug in enumerate(suggestions, 1):
+            lines.append(f"{i}. {sug}")
+
+    if agg.total == 0:
+        lines.append("")
+        lines.append("（本周期无「高高」类报警记录，运行平稳）")
+
+    lines.append("")
+    lines.append("📎 **数据源**：飞书多维表格 · [中控报警统计](https://j0eukrlohu.feishu.cn/base/OdMRbCWr3aNEZKsFz94cAt12nzh)")
+    return "\n".join(lines)
+
+
+def _prev_val(agg: CentralAlarmPeriodAgg, attr: str) -> Any:
+    """上一周期对比值（无 prev 返回 None；false_alarm_ratio 可能为 None=无留存）。"""
+    if agg.prev is None:
+        return None
+    return getattr(agg.prev, attr)
+
+
+def _delta(current: float, prev: float | None) -> str:
+    """环比后缀：`（上期 N，+12%）`；prev None → `（上期 —）`；零基期只报数值。"""
+    if prev is None:
+        return "（上期 —）"
+    if prev == 0:
+        return "（上期 0，持平）" if current == 0 else "（上期 0）"
+    pct = (current - prev) / prev * 100
+    if pct == 0:
+        return f"（上期 {prev:g}，持平）"
+    arrow = "↑" if pct > 0 else "↓"
+    sign = "+" if pct > 0 else ""
+    return f"（上期 {prev:g}，{arrow}{sign}{abs(pct):.0f}%）"
 
 
 def _build_overview(agg: CentralAlarmDailyAgg) -> str:

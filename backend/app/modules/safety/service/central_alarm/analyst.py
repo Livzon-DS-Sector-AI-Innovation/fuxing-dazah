@@ -30,12 +30,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.ai_audit import ai_audit_scope
 from app.modules.safety.models import CentralAlarmRecord
-from app.modules.safety.service.central_alarm.aggregator import CentralAlarmDailyAgg
+from app.modules.safety.service.central_alarm.aggregator import (
+    CentralAlarmDailyAgg,
+    CentralAlarmPeriodAgg,
+)
 from app.modules.safety.service.central_alarm.prompts import (
     EXPECTED_KEYS_DAILY_SUMMARY,
     EXPECTED_KEYS_PER_RECORD,
+    EXPECTED_KEYS_PERIOD_SUMMARY,
     build_daily_summary_messages,
     build_per_record_messages,
+    build_period_summary_messages,
 )
 from app.modules.safety.service.config import create_ai_service
 
@@ -48,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 # 逐条 AI 分析上限 + 并发限流（参照 fire_alarm / AIAnalyst）
 MAX_RECORDS_TO_ANALYZE = 50
+# 周期报告（周/月）补漏逐条分析上限：窗口比日报宽，覆盖月度体量
+MAX_RECORDS_TO_ANALYZE_PERIOD = 400
 MAX_CONCURRENCY = 3
 
 
@@ -215,8 +222,13 @@ class CentralAlarmAnalyst:
 
     async def analyze_per_records(
         self, records: list[CentralAlarmRecord], *, channel: str = "system",
+        max_records: int = MAX_RECORDS_TO_ANALYZE,
     ) -> dict[str, dict[str, str]]:
         """逐条 AI 分析并回写记录（历史上下文 + Semaphore 限流）。
+
+        Args:
+            max_records: 分析条数上限（默认日报口径 50；周期报告传
+                MAX_RECORDS_TO_ANALYZE_PERIOD=400）
 
         Returns:
             {"<record_id>": {alarm_type, equipment, pattern, dimension,
@@ -227,7 +239,7 @@ class CentralAlarmAnalyst:
         flush + commit 由调用方 service 统一处理（UPDATE 后 re-fetch 铁律）。
         """
         targets = [
-            r for r in records[:MAX_RECORDS_TO_ANALYZE]
+            r for r in records[:max_records]
             if getattr(r, "ai_analyzed_at", None) is None
         ]
         by_id = {str(r.id): r for r in targets}
@@ -313,6 +325,38 @@ class CentralAlarmAnalyst:
         except Exception:
             logger.warning("日报汇总 AI 分析失败")
             return None
+
+    async def analyze_period_summary(
+        self, agg: CentralAlarmPeriodAgg, *, channel: str = "system",
+    ) -> dict[str, Any] | None:
+        """周期（周报/月报）汇总 AI 分析；失败退避重试（共 3 次），仍失败返回 None。
+
+        重试理由（2026-11-10 真机预览实证）：汇总调用紧跟逐条分析（周 22+ 次/
+        月数百次 AI 调用）之后，偶发限流抖动；单独重跑同 payload 即成功。
+        """
+        ai = await self._get_ai()
+        messages = build_period_summary_messages(agg)
+        for attempt in range(3):
+            try:
+                with ai_audit_scope(
+                    scenario="central_alarm_analysis",
+                    resource_type="central_alarm_period_report",
+                    channel=channel,
+                ):
+                    result = await ai.chat_parsed(
+                        messages=messages,
+                        expected_keys=EXPECTED_KEYS_PERIOD_SUMMARY,
+                        temperature=0.3,
+                    )
+                return result if isinstance(result, dict) else None
+            except Exception as exc:
+                logger.warning(
+                    "周期汇总 AI 分析失败（kind=%s, 第 %d 次）: %r",
+                    agg.kind, attempt + 1, exc,
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1 + attempt)
+        return None
 
 
 def _normalize_pattern(raw: str) -> str | None:

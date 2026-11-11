@@ -59,11 +59,23 @@ class CentralAlarmDailyReportRequest(BaseModel):
     target_date: date | None = Field(None, description="目标日期，默认今天（北京时区）")
 
 
+class CentralAlarmPeriodReportRequest(BaseModel):
+    """周期报告（周报/月报）生成请求。
+
+    ref_date 所在周/月的上一完整自然周期为统计窗口；缺省今天（北京时间）。
+    """
+
+    ref_date: date | None = Field(None, description="基准日，默认今天（北京时区）")
+
+
 class CentralAlarmReportResponse(BaseModel):
-    """日报生成结果（不落库，前端弹窗展示）。"""
+    """日报/周报/月报生成结果（不落库，前端弹窗展示）。"""
 
     report_kind: str = "daily"
     target_date: date
+    # 周期报告（weekly/monthly）的统计窗口；日报为 None
+    period_start: date | None = None
+    period_end: date | None = None
     total: int = 0
     analyzed: int = 0
     markdown_report: str

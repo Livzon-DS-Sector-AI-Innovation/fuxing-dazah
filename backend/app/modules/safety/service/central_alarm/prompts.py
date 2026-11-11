@@ -13,7 +13,11 @@ import json
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from app.modules.safety.service.central_alarm.aggregator import CentralAlarmDailyAgg
+from app.modules.safety.service.central_alarm.aggregator import (
+    CentralAlarmDailyAgg,
+    CentralAlarmPeriodAgg,
+    period_kind_label,
+)
 
 if TYPE_CHECKING:
     from app.modules.safety.service.central_alarm.reader import (
@@ -26,6 +30,9 @@ EXPECTED_KEYS_PER_RECORD: list[str] = [
 ]
 EXPECTED_KEYS_DAILY_SUMMARY: list[str] = [
     "summary", "key_issues", "rectification_suggestions",
+]
+EXPECTED_KEYS_PERIOD_SUMMARY: list[str] = [
+    "summary", "key_issues", "improvement_suggestions",
 ]
 
 # ── STABLE system prompt（前缀缓存：system 稳定，动态数据放 user 末尾）──
@@ -57,6 +64,17 @@ _DAILY_SUMMARY_SYSTEM_PROMPT = """你是一名化工企业中控报警分析专�
 - key_issues: 1-3 条，突出共性与异常（重复报警、误报群、频发设备/岗位）。
 - rectification_suggestions: 1-3 条，针对共性问题给整改建议；每条建议必须包含涉及的车间/岗位/设备名称，指向具体对象。
 - 只基于给定数据，不编造。"""
+
+_PERIOD_SUMMARY_SYSTEM_PROMPT = """你是一名化工企业中控报警分析专家。输入为一个完整统计周期（周报/月报）的中控报警指标与高频点位数据，请生成周期分析报告的核心结论。
+
+## 输出 JSON 结构
+{"summary": "...", "key_issues": ["..."], "improvement_suggestions": ["..."]}
+
+## 要求
+- summary: 100-200 字，概括本周期报警态势：总量与环比趋势、车间/类型集中度、无效报警（误报）情况，并与上一周期对比。
+- key_issues: 2-4 条，突出高频报警点（点名车间·岗位·设备）、重复报警、误报集中等结构性问题；每条点名具体对象。
+- improvement_suggestions: 2-4 条改进意见，面向下一周期可执行：高频点整治（校准/检修/工艺参数复核）、误报治理（联锁值整定/变送器校验）、管理动作（点检频次/责任岗位）；每条必须包含涉及车间/岗位/设备与具体动作，不写空话。
+- 只基于给定数据，不编造；信息不足时如实说明。"""
 
 
 def build_per_record_messages(
@@ -104,6 +122,59 @@ def build_daily_summary_messages(
 请输出 JSON（不要输出其他内容）。"""
     return [
         {"role": "system", "content": _DAILY_SUMMARY_SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+def build_period_summary_messages(agg: CentralAlarmPeriodAgg) -> list[dict[str, str]]:
+    """构造周期（周报/月报）汇总 messages（system 稳定 + 指标 JSON 在 user）。"""
+    kind_label = period_kind_label(agg.kind)
+    ratio = (
+        f"{agg.false_alarm_ratio:.1%}"
+        if agg.false_alarm_ratio is not None else "无已分析记录"
+    )
+    coverage = (
+        f"{agg.analyzed_count}/{agg.total}"
+        if agg.total else "0/0"
+    )
+    prev_block: dict[str, str | float] = {"说明": "无上一周期数据"}
+    if agg.prev is not None:
+        prev_block = {
+            "报警总数": agg.prev.total,
+            "日均报警数": agg.prev.daily_avg,
+            "无效报警比例": (
+                f"{agg.prev.false_alarm_ratio:.1%}"
+                if agg.prev.false_alarm_ratio is not None else "无留存分析"
+            ),
+        }
+    stats = {
+        "报告类型": kind_label,
+        "统计区间": f"{agg.period_start.isoformat()} ~ {agg.period_end.isoformat()}（{agg.days} 天）",
+        "报警总数": agg.total,
+        "日均报警数": agg.daily_avg,
+        "无效报警比例": ratio,
+        "AI分析覆盖率": coverage,
+        "误报条数": agg.false_alarm_count,
+        "车间分布": agg.workshop_distribution,
+        "报警类型分布": agg.alarm_type_distribution,
+        "异常模式分布": agg.pattern_distribution,
+        "维度分布": agg.dimension_distribution,
+        "高频报警点Top10": [
+            f"{ws}·{post}·{atype}：{cnt} 次"
+            for ws, post, atype, cnt in agg.top_hotspots
+        ],
+        "按日报警数": {
+            d.isoformat(): n for d, n in sorted(agg.daily_counts.items())
+        },
+        "上一周期对比": prev_block,
+    }
+    user = f"""请基于以下中控报警{kind_label}统计数据（JSON）生成周期分析结论：
+
+{json.dumps(stats, ensure_ascii=False, indent=2)}
+
+请输出 JSON（不要输出其他内容）。"""
+    return [
+        {"role": "system", "content": _PERIOD_SUMMARY_SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
 

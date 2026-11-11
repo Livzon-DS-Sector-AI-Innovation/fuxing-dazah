@@ -20,12 +20,25 @@ from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import CentralAlarmRecord
 from app.modules.safety.schemas.central_alarm import CentralAlarmReportResponse
 from app.modules.safety.service.central_alarm import config as ca_config
-from app.modules.safety.service.central_alarm.analyst import CentralAlarmAnalyst
+from app.modules.safety.service.central_alarm.aggregator import (
+    aggregate_period,
+    period_kind_label,
+    period_window_utc,
+    prev_natural_month_range,
+    prev_natural_week_range,
+)
+from app.modules.safety.service.central_alarm.analyst import (
+    MAX_RECORDS_TO_ANALYZE_PERIOD,
+    CentralAlarmAnalyst,
+)
 from app.modules.safety.service.central_alarm.bitable_mapper import (
     derive_workshop_line,
     map_bitable_fields,
 )
-from app.modules.safety.service.central_alarm.renderer import render_daily_report
+from app.modules.safety.service.central_alarm.renderer import (
+    render_daily_report,
+    render_period_report,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -365,18 +378,11 @@ class CentralAlarmService:
             ).all()
         )
 
-    async def _get_records_by_week(
-        self, week_start: date, week_end: date,
+    async def _get_records_by_date_range(
+        self, range_start: date, range_end: date,
     ) -> list[CentralAlarmRecord]:
-        """按北京时间自然周窗口查询周报警记录（周一 00:00 ~ 周日 24:00 北京时间）。"""
-        utc_start = (
-            datetime.combine(week_start, time.min, tzinfo=UTC)
-            - timedelta(hours=8)
-        )
-        utc_end = (
-            datetime.combine(week_end + timedelta(days=1), time.min, tzinfo=UTC)
-            - timedelta(hours=8)
-        )
+        """按北京时间自然日区间查询记录（range_start 00:00 ~ range_end 次日 00:00，左闭右开）。"""
+        utc_start, utc_end = period_window_utc(range_start, range_end)
         return list(
             (
                 await self.session.scalars(
@@ -389,11 +395,17 @@ class CentralAlarmService:
             ).all()
         )
 
+    async def _get_records_by_week(
+        self, week_start: date, week_end: date,
+    ) -> list[CentralAlarmRecord]:
+        """按北京时间自然周窗口查询周报警记录（周一 00:00 ~ 周日 24:00 北京时间）。"""
+        return await self._get_records_by_date_range(week_start, week_end)
+
     async def get_week_records(
         self, week_start: date, week_end: date,
     ) -> list[CentralAlarmRecord]:
         """自然周窗口记录（公开只读入口，/safety/overview 报警分析镜像分支复用）。"""
-        return await self._get_records_by_week(week_start, week_end)
+        return await self._get_records_by_date_range(week_start, week_end)
 
 
     # ── 日报生成与推送 ──
@@ -604,6 +616,154 @@ class CentralAlarmService:
             )
         return out
 
+    # ── 周期报告（周报/月报）生成与推送 ──
+
+    async def generate_period_report(
+        self, kind: str, ref_date: date | None = None, *,
+        push: bool = True, channel: str = "web",
+    ) -> CentralAlarmReportResponse:
+        """生成上一完整自然周期（周报=上一自然周 / 月报=上一自然月）分析报告。
+
+        流程：窗口推导 → 双模式取数（直读 strict 窗口 / 镜像区间查询）→
+        三类「高高」筛选 → 环比窗口取数（失败降级无环比）→ 补漏逐条 AI
+        （周期上限 400）→ 周期聚合 → 周期汇总 AI → 渲染 → 推送。
+
+        推送收口：只投「安全速递」总卡格子 central_alarm_weekly/monthly
+        （目标群=安全AI创新交流群），不做独立群卡回退；push=False 供测试/预览。
+
+        Args:
+            kind: weekly / monthly
+            ref_date: 基准日（缺省今天·北京时间）；周期=ref_date 所在周/月的上一完整周期
+            push: 是否推送总卡
+            channel: 审计渠道（web/feishu/system）
+        """
+        if kind not in ("weekly", "monthly"):
+            raise ValueError(f"未知周期类型: {kind!r}（weekly/monthly）")
+        ref = ref_date or _bj_today()
+        if kind == "weekly":
+            period_start, period_end = prev_natural_week_range(ref)
+            prev_start, prev_end = prev_natural_week_range(period_start)
+        else:
+            period_start, period_end = prev_natural_month_range(ref)
+            prev_start, prev_end = prev_natural_month_range(period_start)
+        prev_days = (prev_end - prev_start).days + 1
+        utc_start, utc_end = period_window_utc(period_start, period_end)
+        prev_utc_start, prev_utc_end = period_window_utc(prev_start, prev_end)
+
+        direct = ca_config.direct_enabled()
+        prev_records: list[Any] = []
+        prev_available = True
+        if direct:
+            reader = self._direct_reader()
+            # 周期窗口 strict：单表失败上抛走调度补发，绝不静默缺车间（与日报同口径）
+            records = await reader.fetch_window_records(
+                start_utc=utc_start, end_utc=utc_end, strict=True,
+            )
+            # 历史上下文（辅助数据，非 strict：失败降级为无索引，不阻塞报告）
+            try:
+                from app.modules.safety.service.central_alarm.analyst import (
+                    HistoryIndex,
+                )
+
+                hist_records = await reader.fetch_window_records(
+                    start_utc=utc_start - timedelta(days=14), end_utc=utc_end,
+                )
+                self.analyst.history_index = HistoryIndex(hist_records)
+            except Exception:
+                logger.warning("周期报告历史索引构建失败，逐条分析退化为无历史上下文")
+                self.analyst.history_index = None
+            # 环比窗口（辅助数据，非 strict：失败降级为无环比）
+            try:
+                prev_records = list(await reader.fetch_window_records(
+                    start_utc=prev_utc_start, end_utc=prev_utc_end,
+                ))
+            except Exception:
+                logger.warning("周期报告环比窗口拉取失败，报告不带环比")
+                prev_available = False
+        else:
+            # 镜像分支显式清空直读索引（防残留索引接管，与日报同）
+            self.analyst.history_index = None
+            records = await self._get_records_by_date_range(period_start, period_end)
+            prev_records = await self._get_records_by_date_range(prev_start, prev_end)
+
+        records = _filter_high_high_alarms(records)
+        prev_records = _filter_high_high_alarms(prev_records)
+
+        # 补漏逐条 AI 分析（镜像复用日报已落库分析；直读全量内存分析）
+        per_results: dict[str, dict[str, str]] = {}
+        if records:
+            try:
+                per_results = await self.analyst.analyze_per_records(
+                    records, channel=channel,
+                    max_records=MAX_RECORDS_TO_ANALYZE_PERIOD,
+                )
+            except Exception:
+                logger.warning("周期报告逐条 AI 分析失败，跳过")
+            if not direct:
+                # UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
+                await self.session.flush()
+                record_ids = [r.id for r in records]
+                records = list(
+                    (
+                        await self.session.scalars(
+                            select(CentralAlarmRecord).where(
+                                CentralAlarmRecord.id.in_(record_ids)
+                            )
+                        )
+                    ).all()
+                )
+                await self.session.commit()
+
+        agg = aggregate_period(
+            records, kind=kind,
+            period_start=period_start, period_end=period_end,
+            prev_records=(prev_records if prev_available else None),
+            prev_days=prev_days,
+        )
+
+        # 周期汇总 AI（失败返回 None，renderer 省略 AI 块）
+        try:
+            ai_summary = await self.analyst.analyze_period_summary(agg, channel=channel)
+        except Exception:
+            logger.warning("周期报告汇总 AI 分析失败（kind=%s）", kind)
+            ai_summary = None
+
+        markdown = render_period_report(agg, ai_summary)
+
+        push_results: list[dict[str, Any]] = []
+        if push:
+            push_results = await self._upsert_period_digest_cell(agg, markdown)
+
+        return CentralAlarmReportResponse(
+            report_kind=kind,
+            target_date=period_end,
+            period_start=period_start,
+            period_end=period_end,
+            total=agg.total,
+            analyzed=len(per_results),
+            markdown_report=markdown,
+            push_results=push_results,
+            records_analyzed=[str(r.id) for r in agg.records if r.ai_analyzed_at],
+        )
+
+    async def generate_weekly_report(
+        self, ref_date: date | None = None, *,
+        push: bool = True, channel: str = "web",
+    ) -> CentralAlarmReportResponse:
+        """生成上一完整自然周周报（generate_period_report 薄封装）。"""
+        return await self.generate_period_report(
+            "weekly", ref_date, push=push, channel=channel,
+        )
+
+    async def generate_monthly_report(
+        self, ref_date: date | None = None, *,
+        push: bool = True, channel: str = "web",
+    ) -> CentralAlarmReportResponse:
+        """生成上一完整自然月月报（generate_period_report 薄封装）。"""
+        return await self.generate_period_report(
+            "monthly", ref_date, push=push, channel=channel,
+        )
+
     # ── 推送辅助 ──
 
     async def _upsert_digest_cell(
@@ -638,6 +798,72 @@ class CentralAlarmService:
         return [{"chat_id": digest_chat_id(), "success": ok}] + (
             [] if ok else [{"error": "安全速递总卡投递失败"}]
         )
+
+    async def _upsert_period_digest_cell(
+        self, agg: Any, markdown: str,
+    ) -> list[dict[str, Any]]:
+        """周期报告推送：安全速递总卡（主通道）+ 加发群追加投递（尽力而为）。
+
+        - 主通道：总卡格子 central_alarm_weekly / central_alarm_monthly（投递到
+          发送日总卡；失败计 error → 调度入口上抛走补发重试）
+        - 加发：二期安全群等同款速递格子卡（SAFETY_CENTRAL_ALARM_PERIOD_EXTRA_CHAT_ID，
+          off 停用；失败仅记录 best_effort error，不阻塞报告/不触发补发——
+          防重试时对加发群重复轰炸）
+        """
+        from app.modules.safety.feishu.daily_digest import (
+            DigestCell,
+            digest_chat_id,
+            send_digest_cell_card,
+            upsert_daily_digest,
+        )
+
+        kind_label = period_kind_label(agg.kind)
+        ratio_text = (
+            f"{agg.false_alarm_ratio:.0%}"
+            if agg.false_alarm_ratio is not None else "—"
+        )
+        zone = " ｜ ".join(
+            f"{ws} {cnt}次" for ws, _post, _atype, cnt in agg.top_hotspots[:3]
+        )[:100]
+        # 月报标题=YYYY/MM；周报=MM/DD~MM/DD（跨年区间补年份防歧义）
+        if agg.kind == "monthly":
+            range_label = agg.period_start.strftime("%Y/%m")
+        elif agg.period_start.year != agg.period_end.year:
+            range_label = (
+                f"{agg.period_start.strftime('%Y/%m/%d')}~{agg.period_end.strftime('%Y/%m/%d')}"
+            )
+        else:
+            range_label = (
+                f"{agg.period_start.strftime('%m/%d')}~{agg.period_end.strftime('%m/%d')}"
+            )
+        title = f"中控报警{kind_label} {range_label}"
+        cell = DigestCell(
+            tag_color="indigo",
+            tag_text="中控报警",
+            title=title,
+            stats=(
+                f"本期报警 **{agg.total}** 起 · 日均 {agg.daily_avg}"
+                f" · 无效报警 {ratio_text}"
+            ),
+            zone=zone,
+            detail=markdown,
+        )
+        results: list[dict[str, Any]] = []
+        ok = await upsert_daily_digest(_bj_today(), f"central_alarm_{agg.kind}", cell)
+        results.append({"chat_id": digest_chat_id(), "success": ok})
+        if not ok:
+            results.append({"error": "安全速递总卡投递失败"})
+
+        extra = _period_extra_chat_enabled()
+        if extra:
+            msg_id = await send_digest_cell_card(cell, chat_id=extra, title=title)
+            results.append({
+                "chat_id": extra,
+                "success": msg_id is not None,
+                "message_id": msg_id,
+                "best_effort": True,
+            })
+        return results
 
     async def _maybe_push(
         self, *, title: str, content: str, push: bool, chat_id: str | None = None,
@@ -690,6 +916,27 @@ class CentralAlarmService:
 def _bj_today() -> date:
     """北京时间今天（UTC+8）。"""
     return (datetime.now(UTC) + timedelta(hours=8)).date()
+
+
+# 周报/月报加发群（二期安全群）代码默认；env/DB 活行可改目标或置 off 停用
+_PERIOD_EXTRA_CHAT_DEFAULT = "oc_172403044d25ded2d8da2754add250ba"
+
+
+def _period_extra_chat_enabled() -> str | None:
+    """周期报告加发群生效 chat_id；off/空停用返回 None。
+
+    读取链：env > DB 活行（app_config，30s TTL）> 代码默认二期安全群
+    （与危化品日报加发 SAFETY_CHEMICAL_DAILY_EXTRA_CHAT_ID 同款语义）。
+    """
+    from app.modules.safety.app_config.store import store as _app_config_store
+
+    raw = _app_config_store.get_str(
+        "SAFETY_CENTRAL_ALARM_PERIOD_EXTRA_CHAT_ID", _PERIOD_EXTRA_CHAT_DEFAULT,
+    )
+    extra = (raw or "").strip()
+    if not extra or extra.lower() in ("off", "false", "none"):
+        return None
+    return extra
 
 
 def _count_by(records: list[CentralAlarmRecord], attr: str) -> dict[str, int]:
@@ -815,6 +1062,59 @@ async def run_daily_central_alarm_analysis(
         if failed_pushes:
             raise RuntimeError(f"中控报警日报推送失败: {failed_pushes}")
         return result
+
+
+async def run_period_central_alarm_analysis(
+    kind: str, ref_date: date | None = None,
+) -> CentralAlarmReportResponse:
+    """定时任务公共入口：生成并推送周报/月报到「安全速递」总卡。
+
+    - 独立 async_session_factory session，channel="system"，push=True
+    - 镜像模式生成前先 sync_from_bitable 兜底（与日报入口同）；直读跳过
+    - 推送通道收口总卡（无独立群卡）；投递失败上抛标 failed 走补发窗口重试
+    """
+    from app.core.database import async_session_factory
+
+    async with async_session_factory() as session:
+        service = CentralAlarmService(session)
+        if not ca_config.direct_enabled():
+            synced, soft_deleted = await service.sync_from_bitable()
+            if synced or soft_deleted:
+                await session.commit()
+                logger.info(
+                    "中控报警同步兜底: synced=%d soft_deleted=%d", synced, soft_deleted,
+                )
+        else:
+            logger.info("中控报警直读模式：跳过镜像同步兜底")
+        result = await service.generate_period_report(
+            kind, ref_date, push=True, channel="system",
+        )
+        if not ca_config.direct_enabled():
+            await session.commit()
+        failed_pushes = [
+            p for p in result.push_results
+            if not p.get("skipped") and not p.get("success")
+            and not p.get("best_effort")  # 加发群尽力而为：失败不触发补发（防重复轰炸）
+        ]
+        if failed_pushes:
+            raise RuntimeError(
+                f"中控报警{period_kind_label(kind)}推送失败: {failed_pushes}"
+            )
+        return result
+
+
+async def run_weekly_central_alarm_analysis(
+    ref_date: date | None = None,
+) -> CentralAlarmReportResponse:
+    """定时任务入口：中控报警周报（上一完整自然周）。"""
+    return await run_period_central_alarm_analysis("weekly", ref_date)
+
+
+async def run_monthly_central_alarm_analysis(
+    ref_date: date | None = None,
+) -> CentralAlarmReportResponse:
+    """定时任务入口：中控报警月报（上一完整自然月）。"""
+    return await run_period_central_alarm_analysis("monthly", ref_date)
 
 
 async def run_daily_central_alarm_dm(
