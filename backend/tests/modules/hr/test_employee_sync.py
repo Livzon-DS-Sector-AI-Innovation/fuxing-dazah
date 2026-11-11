@@ -625,3 +625,46 @@ class TestHireDateNotResetToToday:
 
         employee = await EmployeeRepository(db_session).get_by_employee_number(number)
         assert employee.hire_date == date(2020, 5, 1)  # 保留本地值，不刷成当天
+
+
+class TestReconcileRowIsolation:
+    async def test_bad_row_does_not_abort_following_rows(
+        self, db_session: AsyncSession, monkeypatch, _no_lock,
+    ) -> None:
+        """单行 flush 失败只回滚本行，后续记录仍能落库。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        await _write_config(db_session)
+        bad_number, good_number = f"E{_rand()}", f"E{_rand()}"
+        _mock_bitable(monkeypatch, source_records=[
+            # 姓名超 varchar(64) → flush 失败
+            {"record_id": "rec_bad_long", "fields": {"工号": bad_number, "姓名": "x" * 200}},
+            {"record_id": "rec_good_after_bad", "fields": {
+                "工号": good_number, "姓名": "好人", "体现部门": "生产部", "职位": "操作工",
+            }},
+        ])
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+        assert any("工号" in e for e in stats["errors"])
+        row = await EmployeeRepository(db_session).get_by_employee_number(good_number)
+        assert row is not None and row.name == "好人"
+
+
+class TestBindingConfigGuard:
+    async def test_enable_rejects_table_without_employee_number(
+        self, db_session: AsyncSession, monkeypatch,
+    ) -> None:
+        async def _list_tables(app_token, **kwargs):
+            return [{"table_id": "tbl_source", "name": "员工档案"}]
+
+        async def _list_fields(app_token, table_id, **kwargs):
+            return [{"field_name": "姓名"}]
+
+        monkeypatch.setattr(sync_service.bitable, "list_tables", _list_tables)
+        monkeypatch.setattr(sync_service.bitable, "list_fields", _list_fields)
+
+        service = sync_service.EmployeeSyncService(db_session)
+        with pytest.raises(ValueError, match="工号"):
+            await service.save_binding_config(
+                enabled=True, app_token="app_test_token",
+                source_table_id="tbl_source",
+            )

@@ -640,7 +640,7 @@ class TrainingLedgerCreate(TrainingLedgerBase):
 
 
 class TrainingLedgerUpdate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     employee_number: str | None = Field(None, max_length=32)
     training_date: date | None = Field(None)

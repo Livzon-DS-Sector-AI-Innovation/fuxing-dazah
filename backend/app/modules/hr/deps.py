@@ -346,7 +346,11 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/sop-training-entries/batch-transfer", {"POST": "hr:training:manage"}),
     (r"/sop-training-entries/batch-materials", {"POST": "hr:training:document"}),
     (r"/sop-training-records/.*/materials", {"POST": "hr:training:document"}),
-    (r"/sop-training-entries", {"PUT": "hr:training:manage", "POST": "hr:training:manage"}),
+    # GET 不设权限码，但数据范围必须按 training resource 计算：
+    # 否则会合并用户其他资源角色的最宽范围，越权看全公司
+    (r"/sop-training-entries", {"PUT": "hr:training:manage", "POST": "hr:training:manage",
+                                 "resource": "training"}),
+    (r"/employee-sync/training-roster", {"resource": "training"}),
     (r"/dept-training-personnel", {"GET": "hr:training:read", "POST": "hr:training:manage",
                                     "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # 入职管理

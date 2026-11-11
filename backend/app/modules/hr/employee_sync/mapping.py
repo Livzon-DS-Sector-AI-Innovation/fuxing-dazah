@@ -150,7 +150,10 @@ def _convert_scalar(field_name: str, value: Any) -> Any:
     if field_name in _DATE_FIELDS:
         # 与 Excel 上传一致：无法解析的日期跳过，不清空本地值
         parsed = _parse_date_like(value)
-        return parsed if parsed else _SKIP
+        if not parsed:
+            return _SKIP
+        # 身份证有效期在库里是 varchar(32)，写 date 会被 asyncpg 拒绝
+        return parsed.isoformat() if field_name == "id_card_expiry" else parsed
     if field_name in _INT_FIELDS:
         try:
             return int(float(str(value)))

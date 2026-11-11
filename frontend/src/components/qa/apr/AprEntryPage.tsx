@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Segmented,
   Select,
   Space,
   Table,
@@ -148,6 +149,17 @@ function buildEntryRows(
   })
 }
 
+/** 批次整组倒序：只把批次先后反过来，一批多行时行内仍保持 1→n（加行仍贴在组尾）。 */
+function reverseByBatch(rows: EntryRow[]): EntryRow[] {
+  const groups: EntryRow[][] = []
+  for (const row of rows) {
+    const group = groups[groups.length - 1]
+    if (group && group[0].batchId === row.batchId) group.push(row)
+    else groups.push([row])
+  }
+  return groups.reverse().flat()
+}
+
 function omitByPrefix<T>(record: Record<string, T>, prefix: string): Record<string, T> {
   const next: Record<string, T> = {}
   for (const [key, value] of Object.entries(record)) {
@@ -197,15 +209,23 @@ export function AprEntryPage() {
   // 写按钮按 enter 码显隐：只读用户看不到登记/保存/删除，不必靠后端 403 兜底
   const canEnter = hasPermission('qa:apr:enter')
   const searchParams = useSearchParams()
-  // 选择状态同步进 URL（?product=&section=&year=&keyword=），刷新/分享链接都能恢复现场；
-  // 懒初始化只在首帧读一次 URL，之后以本地 state 为准，变更时再写回。
-  const [productId, setProductId] = useState<string | null>(() => searchParams.get('product'))
-  const [sectionId, setSectionId] = useState<string | null>(() => searchParams.get('section'))
+  // 选择状态同步进 URL（?product=&section=&year=&keyword=），刷新/分享链接都能恢复现场。
+  // product/section 在 URL 里用直观字符不用 UUID：product=产品代码（全局唯一）、
+  // section=模板段名称（产品内唯一）；ID 只在内存流转，写 URL 时反查 code/name。
+  // URL 参数不能在首帧同步解析成 ID（列表是异步加载的，useEffect 镜像 state 又被
+  // eslint 禁），所以选择拆成两层：picked* 存显式切换的 ID，URL 字符在渲染时解析。
+  const productParam = searchParams.get('product')
+  const sectionParam = searchParams.get('section')
+  const [pickedProductId, setPickedProductId] = useState<string | null>(null)
+  const [pickedSectionId, setPickedSectionId] = useState<string | null>(null)
   const [year, setYear] = useState<number>(() => {
     const raw = Number(searchParams.get('year'))
     return Number.isInteger(raw) && raw >= 2000 && raw <= 2100 ? raw : new Date().getFullYear()
   })
   const [keyword, setKeyword] = useState(() => searchParams.get('keyword') ?? '')
+  // 降序显示（?desc=1）：新批次排最前，录入最新数据免滚到底部；只影响展示顺序，
+  // 不清行内编辑（格子键与顺序无关），所以切排序不走 guardDirty。
+  const [desc, setDesc] = useState(() => searchParams.get('desc') === '1')
 
   // 行内编辑态：edits 是格子覆盖层（未保存），labelEdits/extraRows/removedRows 同理；
   // 服务端值始终是底稿，渲染与保存时 edits 优先，避免把查询结果镜像进 state。
@@ -239,13 +259,14 @@ export function AprEntryPage() {
     queryFn: () => fetchAprProducts(true),
   })
   const products = productsQuery.data ?? []
-  // 进页默认选中：未选/URL 里的产品已删时回退到第一个启用产品（派生而非 state，
-  // 不写回 URL，用户显式切换时才同步链接）。
-  const activeProductId = products.some((p) => p.id === productId)
-    ? productId
-    : products.length > 0
-      ? products[0].id
-      : null
+  // 进页默认选中：显式切换 > URL 产品代码解析（产品已删/字符不存在则视为无效）>
+  // 第一个启用产品；派生而非 state，不写回 URL，用户显式切换时才同步链接。
+  const pickedProduct = products.some((p) => p.id === pickedProductId) ? pickedProductId : null
+  const urlProduct = productParam
+    ? products.find((p) => p.code === productParam) ?? null
+    : null
+  const activeProductId =
+    pickedProduct ?? urlProduct?.id ?? (products.length > 0 ? products[0].id : null)
 
   const sectionsQuery = useQuery({
     queryKey: ['qa', 'apr', 'sections', activeProductId],
@@ -253,11 +274,13 @@ export function AprEntryPage() {
     enabled: !!activeProductId,
   })
   const sections = sectionsQuery.data ?? []
-  const activeSectionId = sections.some((s) => s.id === sectionId)
-    ? sectionId
-    : sections.length > 0
-      ? sections[0].id
-      : null
+  // 段名在产品内唯一（uq_qa_apr_sections_product_name），可直接当 URL 标识解析
+  const pickedSection = sections.some((s) => s.id === pickedSectionId) ? pickedSectionId : null
+  const urlSection = sectionParam
+    ? sections.find((s) => s.name === sectionParam) ?? null
+    : null
+  const activeSectionId =
+    pickedSection ?? urlSection?.id ?? (sections.length > 0 ? sections[0].id : null)
   const currentSection = sections.find((s) => s.id === activeSectionId) ?? null
 
   // 矩阵数据直接用年终汇总接口（批次行 + 单元格值 + 列定义一次拿全；
@@ -286,9 +309,10 @@ export function AprEntryPage() {
   const entryRows = buildEntryRows(sectionPayload?.rows, extraRows)
 
   const keywordText = keyword.trim().toLowerCase()
+  const orderedRows = desc ? reverseByBatch(entryRows) : entryRows
   const visibleRows = keywordText
-    ? entryRows.filter((r) => r.batchNo.toLowerCase().includes(keywordText))
-    : entryRows
+    ? orderedRows.filter((r) => r.batchNo.toLowerCase().includes(keywordText))
+    : orderedRows
   const batchCount = new Set(entryRows.map((r) => r.batchId)).size
 
   /** 每批首行行号：操作列的批次级按钮（保存/加行/删除）挂在首行。 */
@@ -925,10 +949,13 @@ export function AprEntryPage() {
               value={activeProductId}
               onChange={(v) => {
                 guardDirty(() => {
-                  setProductId(v)
-                  setSectionId(null)
+                  setPickedProductId(v)
+                  setPickedSectionId(null)
                   clearAllEdits()
-                  syncUrl({ product: v, section: null })
+                  syncUrl({
+                    product: products.find((p) => p.id === v)?.code ?? null,
+                    section: null,
+                  })
                 })
               }}
               loading={productsQuery.isLoading}
@@ -940,9 +967,9 @@ export function AprEntryPage() {
               value={activeSectionId}
               onChange={(v) => {
                 guardDirty(() => {
-                  setSectionId(v)
+                  setPickedSectionId(v)
                   clearAllEdits()
-                  syncUrl({ section: v })
+                  syncUrl({ section: sections.find((s) => s.id === v)?.name ?? null })
                 })
               }}
               disabled={!activeProductId}
@@ -966,6 +993,20 @@ export function AprEntryPage() {
                 })
               }}
             />
+            <Tooltip title="降序：排序号新 / 最新登记的批次排最前，录入最新数据不用滚到表格底部">
+              <Segmented
+                value={desc ? 'desc' : 'asc'}
+                onChange={(v) => {
+                  const next = v === 'desc'
+                  setDesc(next)
+                  syncUrl({ desc: next ? '1' : null })
+                }}
+                options={[
+                  { value: 'asc', label: '升序' },
+                  { value: 'desc', label: '降序' },
+                ]}
+              />
+            </Tooltip>
             <Input.Search
               placeholder="按批号筛选"
               style={{ width: 200 }}

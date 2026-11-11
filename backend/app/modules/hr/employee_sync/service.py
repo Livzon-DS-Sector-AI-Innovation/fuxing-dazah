@@ -155,6 +155,12 @@ class EmployeeSyncService:
                 column_report = _column_report(
                     [str(f.get("field_name") or "") for f in fields],
                 )
+                # 缺「工号」列时启用同步会导致下一轮全部记录被跳过，
+                # 而空远端集合会软删全员（培训名单也随之清空）
+                if enabled and not column_report.get("has_employee_number"):
+                    raise ValueError(
+                        "源数据表缺少「工号」列，无法启用同步（避免全量对账误删员工）",
+                    )
             except ValueError:
                 raise
             except bitable.BitableAPIError as exc:
@@ -219,12 +225,14 @@ class EmployeeSyncService:
             fields = record.get("fields") or {}
             if not record_id:
                 continue
+            # record_id 先入集合：工号临时为空时该记录仍算「源表存在」，
+            # 不能把它当已删除而清掉本地员工/培训名单
+            remote_record_ids.add(record_id)
             employee_number = str(normalize_cell(fields.get("工号")) or "").strip()
             if not employee_number:
                 if len(errors) < _ERROR_CAP:
                     errors.append(f"记录 {record_id} 缺少「工号」列，已跳过")
                 continue
-            remote_record_ids.add(record_id)
             remote_numbers.add(employee_number)
 
             data = convert_source_fields(
@@ -232,10 +240,13 @@ class EmployeeSyncService:
             )
             _ensure_required(data)  # 与 Excel 上传一致：NOT NULL 字段兜底
             try:
-                employee, is_new = await self.repo.upsert_from_bitable(data, record_id)
+                # 行级 SAVEPOINT：单行 DB 错误只回滚本行，不毒化整轮同步
+                async with self.session.begin_nested():
+                    employee, is_new = await self.repo.upsert_from_bitable(data, record_id)
+                    if is_new:
+                        # 与手动新建员工一致：自动生成培训台账页与岗位培训记录
+                        await self.employee_service._sync_employee_training(employee)
                 if is_new:
-                    # 与手动新建员工一致：自动生成培训台账页与岗位培训记录
-                    await self.employee_service._sync_employee_training(employee)
                     created += 1
                 else:
                     updated += 1
@@ -287,6 +298,10 @@ class EmployeeSyncService:
         self, remote_record_ids: set[str], remote_numbers: set[str]
     ) -> int:
         """软删除飞书侧已不存在的同步员工（不动手动创建、从未同步过的行）。"""
+        # 防御：空/残缺拉取（权限、分页截断、绑定错表）不得清空全员
+        if not remote_record_ids and not remote_numbers:
+            logger.error("远端记录集合为空，跳过软删以保护本地员工与培训名单")
+            return 0
         result = await self.session.execute(
             select(Employee).where(
                 Employee.is_deleted.is_(False),
@@ -439,6 +454,14 @@ class EmployeeSyncService:
             for d in (profile.department, profile.actual_department) if d
         ):
             raise PermissionError(f"数据范围限制：仅可操作授权部门（{profile.department}）")
+        # 写入的新部门值也必须在授权范围内，防止把人员改到未授权部门
+        if scoped_departments is not None:
+            for key in ("department", "actual_department"):
+                new_val = data.get(key)
+                if new_val and new_val not in scoped_departments:
+                    raise PermissionError(
+                        f"数据范围限制：无权将人员调整到部门 '{new_val}'",
+                    )
         # status 随总表自动同步，不开放手动编辑（改了也会被下轮对账覆盖）
         allowed = set(TRAINING_ROSTER_FIELDS.values()) - {"employee_number", "status"}
         for key, value in data.items():
