@@ -221,6 +221,34 @@ def test_extract_peak_table_from_markdown() -> None:
     assert extract_peak_table("纯文本没有表格") == []
 
 
+def test_extract_peak_table_rt_and_raw_area_priority() -> None:
+    """峰表提取增强：保留时间列可选提取；面积优先原始面积列（避开仪器 %面积口径）。"""
+    from app.modules.quality.service.chromatogram import extract_peak_table
+
+    md = """# 图谱报告
+
+| 峰名 | 保留时间(min) | 面积 | %面积 |
+| --- | --- | --- | --- |
+| 万古霉素B | 12.345 | 1234567.891 | 98.52 |
+| 单去氯万古霉素 | 14.2 | 18888.5 | 1.48 |
+"""
+    peaks = extract_peak_table(md)
+    # 取原始面积列（1234567.89），不是 %面积列（98.52）——引擎需原始面积自行归一化
+    assert peaks[0]["area"] == 1234567.89
+    assert peaks[1]["area"] == 18888.5
+    assert peaks[0]["rt"] == 12.345
+    assert peaks[1]["rt"] == 14.2
+
+    # 只有 %面积列：回退取 % 列（既有行为）；无保留时间列 → rt None
+    md2 = """| 组分 | %面积 |
+| --- | --- |
+| 杂质F | 0.32 |
+"""
+    peaks2 = extract_peak_table(md2)
+    assert peaks2[0]["area"] == 0.32
+    assert peaks2[0]["rt"] is None
+
+
 def test_match_task_row_by_sop_pattern() -> None:
     """表号数字段 ↔ 项目行 sop_no 自动关联：EX-HA-5246-002 优先匹配 SOP.03.5246 行池。"""
     from app.modules.quality.models import QualityTestResult
