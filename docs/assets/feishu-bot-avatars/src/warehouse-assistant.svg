@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>仓储助手 · 飞书机器人头像</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFDFC2"/><stop offset="1" stop-color="#EFA96E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.6"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shell" x1="0.1" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.6" stop-color="#F4F9FF"/><stop offset="1" stop-color="#DCE7F4"/>
+    </linearGradient>
+    <linearGradient id="shellshade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.55" stop-color="#0E1B31" stop-opacity="0"/><stop offset="1" stop-color="#0E1B31" stop-opacity="0.10"/>
+    </linearGradient>
+    <linearGradient id="bodyg" x1="0.15" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#F8FBFF"/><stop offset="1" stop-color="#CBD9EB"/>
+    </linearGradient>
+    <linearGradient id="armg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EEF5FD"/><stop offset="1" stop-color="#D3E0EF"/>
+    </linearGradient>
+    <linearGradient id="visor" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#0A1526"/><stop offset="1" stop-color="#22395C"/>
+    </linearGradient>
+    <radialGradient id="eyeg" cx="0.36" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.5" stop-color="#E9F8FF"/><stop offset="1" stop-color="#86D0FF"/>
+    </radialGradient>
+    <linearGradient id="acc" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#FFB067"/><stop offset="1" stop-color="#F58C3C"/>
+    </linearGradient>
+    <linearGradient id="accdeep" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F58C3C"/><stop offset="1" stop-color="#B9571A"/>
+    </linearGradient>
+    <radialGradient id="propshadow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#0E1B31" stop-opacity="0.20"/><stop offset="1" stop-color="#0E1B31" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="256" cy="200" r="216" fill="url(#glow)"/>
+  <circle cx="256" cy="250" r="190" fill="none" stroke="#FFFFFF" stroke-opacity="0.15" stroke-width="16"/>
+  <g>
+  <!-- 肩/上身 -->
+  <rect x="140" y="342" width="232" height="120" rx="48" fill="url(#bodyg)"/>
+  <rect x="140" y="342" width="232" height="120" rx="48" fill="url(#shellshade)" opacity="0.55"/>
+  <!-- 颈 -->
+  <rect x="214" y="312" width="84" height="46" rx="14" fill="#DCE7F3"/>
+  <rect x="214" y="334" width="84" height="14" fill="#C4D3E4" opacity="0.9"/>
+  <!-- 手臂：从肩内侧伸向道具，末端被道具遮住，形成“捧着”的姿势 -->
+  <path d="M 166 362 L 206 394" stroke="url(#armg)" stroke-width="38" stroke-linecap="round"/>
+  <path d="M 346 362 L 306 394" stroke="url(#armg)" stroke-width="38" stroke-linecap="round"/>
+  <!-- 头 -->
+  <rect x="124" y="104" width="264" height="226" rx="80" fill="url(#shell)"/>
+  <rect x="124" y="104" width="264" height="226" rx="80" fill="url(#shellshade)" opacity="0.7"/>
+  <!-- 左右耳罩 -->
+  <circle cx="104" cy="216" r="31" fill="url(#acc)"/>
+  <circle cx="104" cy="216" r="31" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="3"/>
+  <circle cx="104" cy="216" r="12" fill="#B9571A"/>
+  <circle cx="104" cy="208" r="6.5" fill="#FFFFFF" opacity="0.32"/>
+  <circle cx="408" cy="216" r="31" fill="url(#acc)"/>
+  <circle cx="408" cy="216" r="31" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="3"/>
+  <circle cx="408" cy="216" r="12" fill="#B9571A"/>
+  <circle cx="408" cy="208" r="6.5" fill="#FFFFFF" opacity="0.32"/>
+  <!-- 下巴投影 -->
+  <ellipse cx="256" cy="344" rx="92" ry="16" fill="#0E1B31" opacity="0.10"/>
+  <!-- 面屏 -->
+  <rect x="168" y="152" width="176" height="132" rx="42" fill="url(#visor)"/>
+  <rect x="178" y="160" width="156" height="24" rx="12" fill="#FFFFFF" opacity="0.06"/>
+  <path d="M 168 152 L 262 152 L 196 284 L 168 284 Z" fill="#FFFFFF" opacity="0.035"/>
+  <rect x="168" y="152" width="176" height="132" rx="42" fill="none" stroke="#3E5C82" stroke-opacity="0.35" stroke-width="3"/>
+  <!-- 眼睛（发光圆眼 + 高光） -->
+  <circle cx="212" cy="214" r="27" fill="url(#eyeg)"/>
+  <circle cx="300" cy="214" r="27" fill="url(#eyeg)"/>
+  <circle cx="203" cy="203" r="6.5" fill="#FFFFFF" opacity="0.95"/>
+  <circle cx="291" cy="203" r="6.5" fill="#FFFFFF" opacity="0.95"/>
+  <!-- 微笑 -->
+  <path d="M 240 256 Q 256 268 272 256" fill="none" stroke="#63B9EC" stroke-width="8" stroke-linecap="round"/></g>
+  
+  <!-- 天线 -->
+  <rect x="247" y="62" width="18" height="52" rx="9" fill="#DCE7F3"/>
+  <rect x="243" y="102" width="26" height="12" rx="6" fill="#C4D3E4"/>
+  <circle cx="256" cy="54" r="19" fill="url(#acc)"/>
+  <circle cx="249" cy="47" r="6" fill="#FFFFFF" opacity="0.85"/>
+  <!-- 道具投影 -->
+  <ellipse cx="256" cy="440" rx="120" ry="46" fill="url(#propshadow)"/>
+  <!-- 纸箱 -->
+  <rect x="163" y="348" width="186" height="114" rx="13" fill="#C8813F"/>
+  <path d="M 163 361 Q 163 348 176 348 L 336 348 Q 349 348 349 361 L 349 378 L 163 378 Z" fill="#A95F29"/>
+  <rect x="243" y="348" width="26" height="114" fill="#F4E3CA"/>
+  <rect x="243" y="348" width="8" height="114" fill="#FFFFFF" opacity="0.30"/>
+  <rect x="184" y="392" width="52" height="38" rx="4" fill="#FFF7EA"/>
+  <rect x="197" y="400" width="3" height="22" fill="#0E1B31" opacity="0.7"/>
+  <rect x="203" y="400" width="2" height="22" fill="#0E1B31" opacity="0.7"/>
+  <rect x="208" y="400" width="4" height="22" fill="#0E1B31" opacity="0.7"/>
+  <rect x="215" y="400" width="2" height="22" fill="#0E1B31" opacity="0.7"/>
+  <rect x="220" y="400" width="3" height="22" fill="#0E1B31" opacity="0.7"/>
+</svg>
