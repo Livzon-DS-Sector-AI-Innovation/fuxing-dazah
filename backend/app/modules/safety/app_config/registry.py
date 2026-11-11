@@ -118,6 +118,13 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "中控报警日报推送群（空 = 不推送）",
     ),
     ConfigItem(
+        "SAFETY_CENTRAL_ALARM_PERIOD_EXTRA_CHAT_ID", "chat_id", "str",
+        "oc_172403044d25ded2d8da2754add250ba",
+        "中控报警周报/月报加发群（二期安全群）；总卡照投安全速递，加发同款"
+        "速递格子卡；off = 停用加发（2026-11-10 拉群需求）",
+        allow_off=True,
+    ),
+    ConfigItem(
         "SAFETY_CHEMICAL_INVENTORY_WEEKLY_CHAT_ID", "chat_id", "str", "",
         "危化品库存周报推送群（空 = 用调度任务 DB 目标/代码默认群）",
     ),
@@ -425,6 +432,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "SAFETY_EHS_CHANGE_DIRECT_ENABLED", False,
         "EHS 变更直读开关（仅 query_ehs_changes）",
     ),
+    _gate(
+        "SAFETY_LABOR_SUPPLY_DIRECT_ENABLED", True,
+        "劳保用品直读开关（OH 劳保 Tab/档案应配劳保/query_oh(entity=labor)；"
+        "无镜像回退路径，默认开，仅作下线闸）",
+    ),
     _ttl(
         "SAFETY_KEY_RISK_OP_DIRECT_CACHE_TTL_SECONDS",
         "关键风险作业直读视图进程内 TTL 缓存秒数（0 = 关）",
@@ -449,6 +461,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
     _ttl(
         "SAFETY_EHS_CHANGE_DIRECT_CACHE_TTL_SECONDS",
         "EHS 变更直读视图 TTL 缓存秒数（0 = 关）",
+        300,
+    ),
+    _ttl(
+        "SAFETY_LABOR_SUPPLY_DIRECT_CACHE_TTL_SECONDS",
+        "劳保用品直读视图 TTL 缓存秒数（0 = 关；目录 102 行+配备标准 254 行）",
         300,
     ),
     _ttl(
@@ -644,7 +661,12 @@ _ITEMS: tuple[ConfigItem, ...] = (
     ConfigItem(
         "SAFETY_FIRE_INSPECTION_TABLE_ID", "misc", "str",
         "tblUB2sT3b3GBerU",
-        "消防点检 Bitable table_id",
+        "消防点检 Bitable table_id（灭火器表）",
+    ),
+    ConfigItem(
+        "SAFETY_FIRE_INSPECTION_HYDRANT_TABLE_ID", "misc", "str",
+        "tblQGM4mJsTPQCht",
+        "消防点检 Bitable table_id（消火栓表，2026-11-10 接入）",
     ),
     ConfigItem(
         "SAFETY_FIRE_INSPECTION_REPORT_FIELD_ID", "misc", "str",

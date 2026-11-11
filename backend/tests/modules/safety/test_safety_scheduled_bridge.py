@@ -38,6 +38,9 @@ def test_register_safety_tasks_registers_all() -> None:
         "safety.tb_backflow",
         "safety.tb_retraining_due",
         "safety.dashboard_warmup",  # 2026-10-30 驾驶舱预热（原计数断言漏更，预存红）
+        "safety.rag_health_probe",  # 2026-11-04 RAG 知识层探活（欠费事故补丁）
+        "safety.fire_inspection_audit_poll",  # 2026-11-05 点检AI审核轮询
+        "safety.fire_inspection_pdf_poll",  # 2026-11-10 点检PDF小时批（日批退役）
     }
 
 

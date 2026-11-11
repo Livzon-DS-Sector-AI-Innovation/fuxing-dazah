@@ -376,6 +376,72 @@ HAZARD_SCORING_POLL_TASK = TaskDefinition(
 
 
 # ═══════════════════════════════════════════════════════════════
+# fire_inspection：点检记录 AI 审核（interval，默认 1 小时）
+#   签字完备性（纯规则）+ 设备编号照片比对（vision 模型）→ 写回
+#   「审核结果/审核说明」两列；只审结果为空的记录，infra 失败不写结果下轮重试。
+# ═══════════════════════════════════════════════════════════════
+
+
+_FIRE_AUDIT_INTERVAL = 3600  # 每小时一轮（点检记录低频写入，无需更密）
+
+
+async def _run_fire_inspection_audit_round() -> None:
+    from app.modules.safety.fire_inspection.audit import audit_enabled, run_audit_round
+    from app.modules.safety.fire_inspection.models import ALL_SPECS
+
+    if not audit_enabled():
+        return
+    # 双表（灭火器/消火栓）各跑一轮；单表失败不拦另一表，收尾统一抛错告警
+    infra_failures: list[str] = []
+    for spec in ALL_SPECS:
+        result = await run_audit_round(spec=spec)
+        logger.info(
+            "点检AI审核完成[%s]: audited=%d passed=%d failed_audit=%d infra_failed=%d",
+            spec.label, len(result.audited), len(result.passed),
+            len(result.failed_audit), len(result.infra_failed),
+        )
+        infra_failures.extend(
+            f"{spec.label} {rid}: {reason}" for rid, reason in result.infra_failed[:3]
+        )
+    if infra_failures:
+        raise RuntimeError(f"点检AI审核存在基础设施失败记录: {'; '.join(infra_failures)}")
+
+
+FIRE_INSPECTION_AUDIT_POLL_TASK = TaskDefinition(
+    name="safety.fire_inspection_audit_poll",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=_FIRE_AUDIT_INTERVAL,
+    ),
+    coro=_run_fire_inspection_audit_round,
+    # 派发器直跑（单条审核 ≤1 次模型调用，整轮分钟级），引擎超时给足
+    timeout_seconds=45 * 60,
+    module="safety",
+)
+
+
+# 点检 PDF 归档：2026-11-10 拍板由每日 17:00 日批改为小时批，与审核轮询
+# 同节奏（新记录最迟 1 小时内出档）；编排复用 scheduler 的双表归档实现。
+_FIRE_PDF_INTERVAL = 3600
+
+
+async def _run_fire_inspection_pdf_hourly() -> None:
+    from app.modules.safety.scheduler import _run_fire_inspection_pdf_backfill
+
+    await _run_fire_inspection_pdf_backfill()
+
+
+FIRE_INSPECTION_PDF_POLL_TASK = TaskDefinition(
+    name="safety.fire_inspection_pdf_poll",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=_FIRE_PDF_INTERVAL,
+    ),
+    coro=_run_fire_inspection_pdf_hourly,
+    timeout_seconds=45 * 60,
+    module="safety",
+)
+
+
+# ═══════════════════════════════════════════════════════════════
 # facilities-p2：锅炉群消息采集与判定（interval，默认 5 分钟）
 # ═══════════════════════════════════════════════════════════════
 
@@ -595,6 +661,43 @@ DASHBOARD_WARMUP_TASK = TaskDefinition(
     module="safety",
 )
 
+
+# ═══════════════════════════════════════════════════════════════
+# RAG 知识层健康探活（interval，默认 30 分钟；2026-11-04 欠费事故补丁）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _rag_health_interval() -> int:
+    from app.modules.safety.app_config.store import store
+
+    return store.get_int("SAFETY_RAG_HEALTH_INTERVAL_SECONDS", 1800, minimum=300)
+
+
+async def _run_rag_health_probe_task() -> None:
+    """单轮探活（开关在探活入口自查：SAFETY_RAG_HEALTH_ENABLED，DB 改 30s 生效）。"""
+    from app.modules.safety.app_config.store import store
+    from app.modules.safety.knowledge.rag_health import run_rag_health_probe
+
+    if not store.get_bool("SAFETY_RAG_HEALTH_ENABLED", default=False):
+        return
+    try:
+        await run_rag_health_probe()
+    except Exception:
+        # 探活自身异常只记日志（告警发送已内部兜底，这里防状态机外意外）
+        logger.exception("RAG 知识层探活任务异常")
+
+
+RAG_HEALTH_TASK = TaskDefinition(
+    name="safety.rag_health_probe",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        interval_seconds=_rag_health_interval(),
+    ),
+    coro=_run_rag_health_probe_task,
+    timeout_seconds=60,
+    module="safety",
+)
+
 _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     SAFETY_SCHEDULER_BRIDGE_TASK,
     HAZARD_AI_POLL_TASK,
@@ -602,10 +705,13 @@ _SAFETY_TASKS: tuple[TaskDefinition, ...] = (
     HAZARD_SUPERVISION_POLL_TASK,
     HAZARD_BULLETIN_WATCH_TASK,
     HAZARD_SCORING_POLL_TASK,
+    FIRE_INSPECTION_AUDIT_POLL_TASK,
+    FIRE_INSPECTION_PDF_POLL_TASK,
     TELEMETRY_COLLECT_TASK,
     TB_BACKFLOW_TASK,
     TB_RETRAINING_DUE_TASK,
     DASHBOARD_WARMUP_TASK,
+    RAG_HEALTH_TASK,
 )
 
 

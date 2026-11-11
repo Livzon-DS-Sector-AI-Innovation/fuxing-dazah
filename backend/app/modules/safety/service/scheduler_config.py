@@ -22,6 +22,8 @@ REPORT_TYPE_JOBS: frozenset[str] = frozenset({
     "作业票审核",
     "消防报警日报",
     "中控报警日报",
+    "中控报警周报",
+    "中控报警月报",
     "消防报警月报",
     "危化品库存周报",
     "危化品库存日报",
@@ -37,6 +39,10 @@ EFFECTIVE_TARGET_ENV: dict[str, str] = {
     "消防报警日报": "SAFETY_FIRE_ALARM_ANALYSIS_CHAT_ID",
     "消防报警月报": "SAFETY_FIRE_ALARM_ANALYSIS_CHAT_ID",
     "中控报警日报": "SAFETY_CENTRAL_ALARM_ANALYSIS_CHAT_ID",
+    # 周月报推送收口「安全速递」总卡（安全AI创新交流群），env 沿用日报目标
+    # （展示链用；实际发送目标由 daily_digest 内部决定，不读该 env）
+    "中控报警周报": "SAFETY_CENTRAL_ALARM_ANALYSIS_CHAT_ID",
+    "中控报警月报": "SAFETY_CENTRAL_ALARM_ANALYSIS_CHAT_ID",
     "危化品库存周报": "SAFETY_CHEMICAL_INVENTORY_WEEKLY_CHAT_ID",
     "危化品库存日报": "SAFETY_CHEMICAL_INVENTORY_DAILY_CHAT_ID",
 }

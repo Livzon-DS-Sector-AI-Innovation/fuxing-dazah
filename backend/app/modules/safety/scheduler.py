@@ -300,13 +300,29 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "提炼五部（蔡嘉旺）、提炼六部（陈美丽），一人一卡只含本部门所属车间报警，"
                        "当日无报警的部门不私发（开关 SAFETY_CENTRAL_ALARM_DAILY_DM_ENABLED，默认关闭）",
     },
-    # ── 点检PDF归档（每日 17:00，开关默认关）──
+    # ── 中控报警周报（每周一 08:40，报上一完整自然周；默认开）──
     {
-        "name": "点检PDF归档",
-        "hour": 17, "minute": 0,
-        "description": "扫描灭火器点检表缺档记录，自动生成标准归档 PDF 并回填巡检记录附件"
-                       "（仅缺失追加不覆盖；开关 SAFETY_FIRE_INSPECTION_PDF_ENABLED）",
+        "name": "中控报警周报",
+        "hour": 8, "minute": 40, "dow": 0,  # 每周一
+        # 补发窗口：当日 23:30 截止（失败自动重试）
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "description": "上一自然周（周一~周日）中控报警周报：报警总数/日均报警率/高频报警点Top10/"
+                       "无效报警比例（均含环比上周）+ AI 汇总与改进建议；只投「安全速递」总卡格子"
+                       " central_alarm_weekly（安全AI创新交流群），与 08:30 任务群错峰防 14 表并发限流",
     },
+    # ── 中控报警月报（每月 1 日 08:50，报上一完整自然月；默认开）──
+    {
+        "name": "中控报警月报",
+        "hour": 8, "minute": 50, "dom": 1,  # 每月 1 日
+        # 补发窗口：当日 23:30 截止（失败自动重试）
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "description": "上一自然月中控报警月报：报警总数/日均报警率/高频报警点Top10/无效报警比例"
+                       "（均含环比上月）+ AI 汇总与改进建议；只投「安全速递」总卡格子"
+                       " central_alarm_monthly（安全AI创新交流群），与周报错峰 10 分钟防限流",
+    },
+    # 点检PDF归档：每日 17:00 日批已于 2026-11-10 退役，改为每小时
+    # interval 任务 safety.fire_inspection_pdf_poll（见 scheduled.py），
+    # 编排复用 _run_fire_inspection_pdf_backfill（双表循环）。
     # ── 持证到期预警（每日 08:00，补发窗口 12:00）──
     {
         "name": "持证到期预警",
@@ -354,10 +370,11 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "保险已过期/3天内到期/在厂未填三类预警（无命中也照发），"
                        "投「安全速递」总卡格子（安全AI创新交流群；总卡关闭时发独立群卡）",
     },
-    # ── 法规收录对账巡检（每日 07:40，拉取 ragplus 契约③比对漏推补处理）──
+    # ── 法规收录对账巡检（每周一 09:30，拉取 ragplus 契约③比对漏推补处理；
+    #    周一 06:00 采集轮约 08:00 收轮推送，09:30 巡检兜住当轮漏推）──
     {
         "name": "法规收录对账巡检",
-        "hour": 7, "minute": 40,
+        "hour": 9, "minute": 30, "dow": 0,  # 周一
         "retry_until_hour": 12, "retry_until_minute": 0,
         "description": "拉取 ragplus 爬虫近期 runs 与本仓收录留痕比对，"
                        "漏推批次自动补处理（判定→写入→回执→推送），"
@@ -631,8 +648,10 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             await _run_central_alarm_daily_report(chat_id=chat_id)
         elif job_name == "中控报警日报私发":
             await _run_central_alarm_daily_dm()
-        elif job_name == "点检PDF归档":
-            await _run_fire_inspection_pdf_backfill()
+        elif job_name == "中控报警周报":
+            await _run_central_alarm_weekly_report()
+        elif job_name == "中控报警月报":
+            await _run_central_alarm_monthly_report()
         elif job_name == "持证到期预警":
             await _run_cert_warning_notification()
         elif job_name == "危化品库存周报":
@@ -688,7 +707,7 @@ async def _run_exception_review(chat_id: str | None = None) -> None:
 
 
 async def _run_regulation_ingest_reconcile() -> None:
-    """每日 07:40 法规收录对账巡检（ragplus 不可达=任务失败留痕，不静默）。"""
+    """每周一 09:30 法规收录对账巡检（ragplus 不可达=任务失败留痕，不静默）。"""
     from app.core.database import async_session_factory
     from app.modules.safety.regulation_ingest.reconcile import run_reconcile_patrol
 
@@ -1014,6 +1033,41 @@ async def _run_central_alarm_daily_report(chat_id: str | None = None) -> None:
         logger.exception("中控报警日报定时任务执行失败")
 
 
+async def _run_central_alarm_weekly_report() -> None:
+    """中控报警周报定时任务（每周一 08:40）：上一完整自然周分析 → 安全速递总卡。
+
+    复用 scheduler-ready 入口 run_weekly_central_alarm_analysis（独立 session、
+    channel=system）；推送收口总卡（无独立群卡），投递失败入口上抛 →
+    调度器标 failed 在补发窗口（23:30）内自动重试。
+    """
+    from app.modules.safety.service.central_alarm.service import (
+        run_weekly_central_alarm_analysis,
+    )
+
+    result = await run_weekly_central_alarm_analysis()
+    logger.info(
+        "  中控报警周报完成: %s ~ %s total=%d analyzed=%d",
+        result.period_start, result.period_end, result.total, result.analyzed,
+    )
+
+
+async def _run_central_alarm_monthly_report() -> None:
+    """中控报警月报定时任务（每月 1 日 08:50）：上一完整自然月分析 → 安全速递总卡。
+
+    编排同周报（run_monthly_central_alarm_analysis），与周报错峰 10 分钟
+    防 14 表并发拉取叠加触发飞书限流。
+    """
+    from app.modules.safety.service.central_alarm.service import (
+        run_monthly_central_alarm_analysis,
+    )
+
+    result = await run_monthly_central_alarm_analysis()
+    logger.info(
+        "  中控报警月报完成: %s ~ %s total=%d analyzed=%d",
+        result.period_start, result.period_end, result.total, result.analyzed,
+    )
+
+
 async def _run_central_alarm_daily_dm() -> None:
     """中控报警日报私发定时任务（每日 17:00）：部门过滤版日报 → 一人一卡 DM。
 
@@ -1165,12 +1219,16 @@ async def _run_visitor_insurance_warning(chat_id: str | None = None) -> None:
 
 
 async def _run_fire_inspection_pdf_backfill() -> None:
-    """点检 PDF 归档定时任务（每日 17:00）：为缺档记录生成标准 PDF 并回填附件。
+    """点检 PDF 归档编排：为缺档记录生成标准 PDF 并回填附件（每小时）。
 
-    开关 SAFETY_FIRE_INSPECTION_PDF_ENABLED 关闭时入口直接跳过（默认关）；
-    仅缺失追加，已有附件零改动；部分记录失败时抛错交给调度器失败告警链路，
-    已回填的记录次日天然幂等跳过。
+    2026-11-10 拍板由每日 17:00 日批改为小时批（interval 任务
+    safety.fire_inspection_pdf_poll 驱动，见 scheduled.py）：新记录最迟
+    1 小时内出档。开关 SAFETY_FIRE_INSPECTION_PDF_ENABLED 关闭时入口
+    直接跳过（默认关）；双表（灭火器/消火栓）各补一轮；仅缺失追加，
+    已有附件零改动；部分记录失败时抛错交给任务引擎失败告警链路，
+    已回填的记录下轮天然幂等跳过。
     """
+    from app.modules.safety.fire_inspection.models import ALL_SPECS
     from app.modules.safety.fire_inspection.service import (
         backfill_enabled,
         generate_and_backfill,
@@ -1180,14 +1238,18 @@ async def _run_fire_inspection_pdf_backfill() -> None:
         logger.info("点检PDF归档跳过（开关未启用）")
         return
 
-    result = await generate_and_backfill()
-    logger.info(
-        "点检PDF归档完成: generated=%s skipped=%s failed=%s",
-        result.generated, result.skipped, result.failed,
-    )
-    if result.failed:
-        failed_desc = "; ".join(f"{rid}: {reason}" for rid, reason in result.failed)
-        raise RuntimeError(f"点检PDF归档存在失败记录: {failed_desc}")
+    failures: list[str] = []
+    for spec in ALL_SPECS:
+        result = await generate_and_backfill(spec=spec)
+        logger.info(
+            "点检PDF归档完成[%s]: generated=%s skipped=%s failed=%s",
+            spec.label, result.generated, result.skipped, result.failed,
+        )
+        failures.extend(
+            f"{spec.label} {rid}: {reason}" for rid, reason in result.failed
+        )
+    if failures:
+        raise RuntimeError(f"点检PDF归档存在失败记录: {'; '.join(failures)}")
 
 
 def _build_personal_card(r: Any, res: Any) -> str:
