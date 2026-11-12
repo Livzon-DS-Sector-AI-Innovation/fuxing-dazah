@@ -1027,11 +1027,11 @@ class DepartmentService:
 
         from app.modules.hr.models import Employee
         for dept in departments:
+            # 人数不过滤状态：与看板部门分布同口径（仅软删不计）
             count = await self.repo.session.scalar(
                 select(func.count()).select_from(Employee).where(
                     Employee.department == dept.name,
                     Employee.is_deleted.is_(False),
-                    Employee.status != "离职",
                 )
             )
             dept.employee_count = count or 0

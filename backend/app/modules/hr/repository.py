@@ -193,9 +193,7 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.department.ilike(f"{department}%"))
         if status:
             stmt = stmt.where(Employee.status == status)
-        else:
-            # 默认排除待审批和离职员工，只有显式筛选时才显示
-            stmt = stmt.where(Employee.status != "待审批", Employee.status != "离职")
+        # 无显式状态筛选时不过滤状态：与源表全量对齐（仅软删不计，口径同看板）
         if keyword:
             stmt = stmt.where(
                 Employee.name.ilike(f"{keyword}%")
@@ -352,8 +350,7 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.department.ilike(f"{filters['department']}%"))
         if filters.get("status"):
             stmt = stmt.where(Employee.status == filters["status"])
-        else:
-            stmt = stmt.where(Employee.status.not_in(["待审批", "离职"]))
+        # 无显式状态筛选时不过滤状态（口径同列表/看板：与源表全量对齐）
         if filters.get("keyword"):
             stmt = stmt.where(
                 Employee.name.ilike(f"{filters['keyword']}%")
