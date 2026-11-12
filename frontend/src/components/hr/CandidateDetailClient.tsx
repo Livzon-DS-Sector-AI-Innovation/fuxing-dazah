@@ -668,29 +668,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           )}
         </Form>
       </Modal>
-
-      {/* 推送审核 Modal */}
-      <Modal title="推送候选人给用人部门" open={pushModalOpen} onCancel={() => setPushModalOpen(false)}
-        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送">
-        <Form form={pushForm} layout="vertical" className="mt-2">
-          <div className="text-sm text-gray-500 mb-3">
-            推送至「{candidate.department}」用人部门负责人
-          </div>
-          <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
-            <Select
-              showSearch
-              filterOption={false}
-              loading={reviewerSearching}
-              placeholder="搜索并选择员工（姓名），将发送飞书通知"
-              options={reviewerOptions}
-              onSearch={searchReviewerOptions}
-            />
-          </Form.Item>
-          <Form.Item name="push_note" label="推送备注（选填）">
-            <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 
@@ -756,6 +733,30 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         )}
       </div>
       <Tabs items={tabItems} onChange={key => { if (key === 'onboarding') loadOnboardingTasks() }} />
+
+      {/* 推送审核 Modal：置于组件顶层（Tabs 懒渲染未激活面板，
+          放在 interviewTab 内时从「基本信息」tab 点推送弹窗不会出现） */}
+      <Modal title="推送候选人给用人部门" open={pushModalOpen} onCancel={() => setPushModalOpen(false)}
+        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送">
+        <Form form={pushForm} layout="vertical" className="mt-2">
+          <div className="text-sm text-gray-500 mb-3">
+            推送至「{candidate.department}」用人部门负责人
+          </div>
+          <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              loading={reviewerSearching}
+              placeholder="搜索并选择员工（姓名），将发送飞书通知"
+              options={reviewerOptions}
+              onSearch={searchReviewerOptions}
+            />
+          </Form.Item>
+          <Form.Item name="push_note" label="推送备注（选填）">
+            <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }
