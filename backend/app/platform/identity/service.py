@@ -1,6 +1,7 @@
 import datetime
 import json
 import logging
+import uuid
 from typing import Any
 
 import jwt
@@ -103,6 +104,8 @@ class IdentityService:
         payload = {
             "sub": str(user.id),
             "open_id": user.feishu_open_id,
+            # jti: token 唯一标识，登出时写入吊销黑名单
+            "jti": str(uuid.uuid4()),
             "iat": datetime.datetime.now(tz=datetime.UTC),
             "exp": datetime.datetime.now(tz=datetime.UTC)
             + datetime.timedelta(seconds=self._settings.JWT_EXPIRE_SECONDS),
@@ -129,6 +132,7 @@ class IdentityService:
         payload = {
             "sub": str(target_user.id),
             "impersonated_by": str(admin_user.id),
+            "jti": str(uuid.uuid4()),
             "iat": datetime.datetime.now(tz=datetime.UTC),
             "exp": datetime.datetime.now(tz=datetime.UTC)
             + datetime.timedelta(seconds=self.IMPERSONATE_EXPIRE_SECONDS),

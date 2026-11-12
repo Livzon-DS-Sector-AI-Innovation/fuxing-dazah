@@ -14,6 +14,7 @@ from app.core.database import get_db
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.core.response import error_response, success_response
 from app.platform.identity.deps import CurrentUser
+from app.platform.identity.login_codes import exchange_login_code, issue_login_code
 from app.platform.identity.repository import DepartmentRepository, UserRepository
 from app.platform.identity.schemas import (
     DepartmentResponse,
@@ -95,20 +96,84 @@ async def sso_callback(
 
     try:
         token = await service.handle_callback(db, code)
-    except Exception as exc:
-        import logging
-
-        logger = logging.getLogger(__name__)
+    except Exception:
         logger.exception("Feishu callback failed")
+        # 不把内部异常细节拼进 URL（会展示在登录页）
         return RedirectResponse(
-            f"{settings.FRONTEND_URL}/login?error=auth_failed&detail={exc}",
+            f"{settings.FRONTEND_URL}/login?error=auth_failed",
+            status_code=302,
+        )
+
+    # JWT 不直接走 URL：先换一次性 code，前端再用 code 兑换 token
+    from redis.exceptions import RedisError
+
+    try:
+        login_code = await issue_login_code(token)
+    except RedisError:
+        logger.exception("Issue login code failed")
+        return RedirectResponse(
+            f"{settings.FRONTEND_URL}/login?error=login_unavailable",
             status_code=302,
         )
 
     return RedirectResponse(
-        f"{settings.FRONTEND_URL}/auth/callback?token={token}",
+        f"{settings.FRONTEND_URL}/auth/callback?code={login_code}",
         status_code=302,
     )
+
+
+@router.get("/exchange", summary="一次性 code 兑换登录 token")
+async def exchange_login_token(
+    code: str = Query(...),
+) -> JSONResponse:
+    """SSO 回调下发的一次性 code 兑换 JWT；code 120 秒过期、仅可使用一次。"""
+    from redis.exceptions import RedisError
+
+    try:
+        token = await exchange_login_code(code)
+    except RedisError:
+        logger.exception("Exchange login code failed")
+        return error_response(
+            message="登录服务暂不可用，请稍后重试", status_code=503,
+        )
+    if token is None:
+        return error_response(
+            message="登录凭证无效或已过期，请重新登录", status_code=400,
+        )
+    return success_response(data={"token": token})
+
+
+@router.post("/logout", summary="登出（吊销当前 token）")
+async def logout(
+    request: Request,
+    user: RequireUser = None,
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    """把当前 token（及代理 cookie）写入吊销黑名单，立即失效。"""
+    from app.platform.identity.token_blacklist import revoke_token
+
+    async def _revoke(raw_token: str | None) -> None:
+        if not raw_token:
+            return
+        try:
+            payload = jwt.decode(
+                raw_token, settings.SECRET_KEY, algorithms=["HS256"],
+                options={"verify_exp": False},  # 已过期的无需再吊销
+            )
+        except jwt.InvalidTokenError:
+            return
+        jti, exp = payload.get("jti"), payload.get("exp")
+        if jti and exp:
+            await revoke_token(str(jti), int(exp))
+
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else None
+    await _revoke(token)
+    await _revoke(request.cookies.get("auth_token"))
+    await _revoke(request.cookies.get("impersonate_token"))
+
+    logger.info("User logged out: %s(%s)", user.name, user.id)
+    return success_response(message="已登出")
 
 
 @user_router.get("/me", summary="获取当前用户信息")
@@ -177,6 +242,7 @@ def _build_department_tree(
 @dept_router.get("", summary="获取部门列表 / 组织架构树")
 async def list_departments(
     tree: bool = Query(False, description="是否返回树形结构"),
+    user: RequireUser = None,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """获取所有部门。传 ?tree=true 返回层级组织架构树。"""
@@ -195,6 +261,7 @@ async def list_departments(
 @dept_router.get("/{dept_id}", summary="获取部门详情")
 async def get_department(
     dept_id: str,
+    user: RequireUser = None,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """按 open_department_id 获取单个部门详情。"""
@@ -211,10 +278,11 @@ async def get_department(
 
 @personnel_router.get(
     "/by-feishu/{feishu_user_id}",
-    summary="根据飞书 user_id 查询用户信息（无需鉴权）",
+    summary="根据飞书 user_id 查询用户信息",
 )
 async def get_personnel_by_feishu_user_id(
     feishu_user_id: str,
+    user: RequireUser = None,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """通过飞书 user_id（union_id）精确查询用户姓名、工号、部门、岗位、手机号。"""
@@ -232,6 +300,7 @@ async def list_personnel(
     keyword: str | None = Query(None, description="按姓名搜索"),
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1),
+    user: RequireUser = None,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """分页获取所有人员名单，支持按部门和姓名筛选。"""
@@ -259,6 +328,7 @@ async def list_personnel(
 
 @sync_router.post("/departments", summary="触发飞书组织架构同步（异步）")
 async def trigger_sync_departments(
+    admin: RequireAdmin = None,
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     """POST 触发一次飞书组织架构同步，后台执行不阻塞，立即返回。"""
@@ -280,6 +350,7 @@ async def trigger_sync_departments(
 
 @sync_router.post("/members", summary="触发飞书成员同步（异步）")
 async def trigger_sync_members(
+    admin: RequireAdmin = None,
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     """POST 触发一次飞书成员同步，后台执行不阻塞，立即返回。"""
@@ -310,7 +381,6 @@ async def start_impersonate(
     admin: RequireAdmin,
     db: AsyncSession = Depends(get_db),
     service: IdentityService = Depends(get_identity_service),
-    settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     # 防嵌套代理
     existing = request.cookies.get("impersonate_token")
@@ -328,8 +398,10 @@ async def start_impersonate(
     if target is None:
         raise NotFoundException("用户", str(body.target_user_id))
 
-    # 不能代理管理员
-    if target.employee_no in settings.ADMIN_EMPLOYEE_NOS:
+    # 不能代理管理员（与运行时校验同口径：以角色为准，非 env 静态名单）
+    from app.platform.identity.deps import _has_manage_permission
+
+    if await _has_manage_permission(db, target):
         raise ForbiddenException("不能代理其他管理员")
 
     # 生成代理 token
@@ -366,8 +438,19 @@ async def start_impersonate(
 
 @impersonation_router.post("/stop", summary="退出代理模式")
 async def stop_impersonate(
+    request: Request,
     user: RequireUser,
+    service: IdentityService = Depends(get_identity_service),
 ) -> JSONResponse:
+    # 吊销代理 token（只删 cookie 的话 token 在剩余有效期内仍可用）
+    imp_token = request.cookies.get("impersonate_token")
+    if imp_token:
+        from app.platform.identity.token_blacklist import revoke_token
+
+        payload = service.decode_impersonate_jwt(imp_token)
+        jti, exp = (payload or {}).get("jti"), (payload or {}).get("exp")
+        if jti and exp:
+            await revoke_token(str(jti), int(exp))
     resp = success_response(message="已退出代理模式")
     resp.delete_cookie("impersonate_token", path="/")
     return resp
@@ -385,7 +468,6 @@ async def impersonation_status(
     user: RequireUser,
     db: AsyncSession = Depends(get_db),
     service: IdentityService = Depends(get_identity_service),
-    settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     imp_token = request.cookies.get("impersonate_token")
     if not imp_token:
@@ -412,8 +494,10 @@ async def impersonation_status(
     if admin is None or target is None:
         return _not_impersonating()
 
-    # 验证 JWT 中的管理员确实是管理员
-    if admin.employee_no not in settings.ADMIN_EMPLOYEE_NOS:
+    # 验证 JWT 中的管理员确实是管理员（与运行时校验同口径：以角色为准）
+    from app.platform.identity.deps import _has_manage_permission
+
+    if not await _has_manage_permission(db, admin):
         return _not_impersonating()
 
     exp_ts = payload.get("exp")

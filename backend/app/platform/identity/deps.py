@@ -9,10 +9,22 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.platform.identity.models import User
 from app.platform.identity.repository import UserRepository
+from app.platform.identity.token_blacklist import is_token_revoked
 
 logger = logging.getLogger(__name__)
 
 _user_repo = UserRepository()
+
+
+async def _has_manage_permission(db: AsyncSession, user: User) -> bool:
+    """是否拥有管理员权限（permission:role:manage，运行时以角色为准）。
+
+    局部导入避免与 permission.deps 的循环依赖。
+    """
+    from app.platform.permission.deps import get_user_permissions
+
+    perms = await get_user_permissions(str(user.id), db)
+    return "permission:role:manage" in perms
 
 
 async def get_current_user(
@@ -39,6 +51,11 @@ async def get_current_user(
     except jwt.InvalidTokenError:
         return None
 
+    # 已登出吊销的 token 视为未登录（无 jti 的历史 token 跳过检查）
+    jti = payload.get("jti")
+    if jti and await is_token_revoked(str(jti)):
+        return None
+
     open_id: str | None = payload.get("open_id")
     if not open_id:
         return None
@@ -60,6 +77,10 @@ async def get_current_user(
         # 无效或过期，忽略，返回真实用户
         return real_user
 
+    imp_jti = imp_payload.get("jti")
+    if imp_jti and await is_token_revoked(str(imp_jti)):
+        return real_user
+
     # ── 3. 验证代理合法性 ──
     impersonated_by = imp_payload.get("impersonated_by")
     target_user_id = imp_payload.get("sub")
@@ -71,8 +92,8 @@ async def get_current_user(
     if impersonated_by != str(real_user.id):
         return real_user
 
-    # 验证真实用户是管理员
-    if real_user.employee_no not in settings.ADMIN_EMPLOYEE_NOS:
+    # 验证真实用户是管理员（以角色为准，被撤权后代理立即失效）
+    if not await _has_manage_permission(db, real_user):
         return real_user
 
     # 查询目标用户
@@ -86,8 +107,8 @@ async def get_current_user(
     if target_user is None:
         return real_user
 
-    # 目标用户不能是管理员
-    if target_user.employee_no in settings.ADMIN_EMPLOYEE_NOS:
+    # 目标用户不能是管理员（同以角色为准）
+    if await _has_manage_permission(db, target_user):
         return real_user
 
     # ── 4. 切换到目标用户上下文 ──
