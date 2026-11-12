@@ -71,44 +71,31 @@ class EmployeeBase(BaseModel):
 
     # Department & job
     department: str = Field(..., max_length=64, description="体现部门")
-    actual_department: str | None = Field(None, max_length=64, description="实际部门")
-    team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="职位")
     job_category: str | None = Field(None, max_length=32, description="职类")
     level: str | None = Field(None, max_length=32, description="级别")
-    concurrent_departments: str | None = Field(None, max_length=256, description="兼任部门")
-    concurrent_variety: str | None = Field(None, max_length=256, description="兼任品种")
-    variety: str | None = Field(None, max_length=128, description="品种")
     certificates: str | None = Field(None, max_length=512, description="证书")
-
-    # Qualifications
-    qualifications: list[str] | None = Field(None, description="职称／职业资格")
-    qualification_type: str | None = Field(None, max_length=32, description="职称类型")
 
     # Personal
     gender: str | None = Field(None, max_length=8, description="性别")
     native_place: str | None = Field(None, max_length=64, description="籍贯")
-    political_status: str | None = Field(None, max_length=32, description="政治面貌")
+    ethnicity: str | None = Field(None, max_length=32, description="民族")
     marital_status: str | None = Field(None, max_length=16, description="婚姻状况")
     household_type: str | None = Field(None, max_length=16, description="户籍类型")
     status_category: str | None = Field(None, max_length=32, description="统计类别")
+    hr_analysis: str | None = Field(None, max_length=32, description="人力资源分析")
 
     # Birth
     birth_year: int | None = Field(None, description="出生年份")
     birth_month: int | None = Field(None, description="出生月份")
     birth_day: int | None = Field(None, description="出生日期")
-    age: int | None = Field(None, description="年龄")
 
     # Dates
     work_start_date: date | None = Field(None, description="参加工作时间")
-    factory_entry_date: date | None = Field(None, description="进厂时间")
-    livo_entry_date: date | None = Field(None, description="入丽珠时间")
     hire_date: date = Field(..., description="入职日期")
     graduation_date: date | None = Field(None, description="毕业时间")
 
     # Computed
-    work_years: int | None = Field(None, description="工作年限")
-    factory_tenure: str | None = Field(None, max_length=32, description="厂龄")
     company_tenure: str | None = Field(None, max_length=32, description="司龄")
 
     # Education
@@ -116,27 +103,20 @@ class EmployeeBase(BaseModel):
     classification: str | None = Field(None, max_length=16, description="分类")
     school: str | None = Field(None, max_length=128, description="毕业学校")
     major: str | None = Field(None, max_length=64, description="专业")
+    degree_type: str | None = Field(None, max_length=32, description="学位类型")
+    graduation_certificate: str | None = Field(None, max_length=256, description="毕业证书")
 
     # ID & address
     id_card: str | None = Field(None, max_length=18, description="身份证号")
     id_card_expiry: str | None = Field(None, max_length=32, description="身份证到期日")
-    id_card_address: str | None = Field(None, description="身份证地址|家庭地址")
     current_address: str | None = Field(None, description="现住址")
 
     # Contract
-    contract_type: str | None = Field(None, max_length=32, description="合同期限")
     contract_start_date: date | None = Field(None, description="合同开始日期")
     contract_end_date: date | None = Field(None, description="合同结束日期")
-    contract_start_2: date | None = Field(None, description="第二次合同起点")
-    contract_end_2: date | None = Field(None, description="第二次合同终止")
-    contract_start_3: date | None = Field(None, description="第三次合同起点")
-    contract_end_3: date | None = Field(None, description="第三次合同终止")
-    contract_start_4: date | None = Field(None, description="第四次合同起点")
-    contract_end_4: date | None = Field(None, description="第四次合同终止")
 
     # Contact
     phone: str | None = Field(None, max_length=32, description="手机")
-    email: str | None = Field(None, max_length=128, description="邮箱")
     emergency_contact_name: str | None = Field(
         None, max_length=64, description="紧急联系人姓名"
     )
@@ -147,27 +127,16 @@ class EmployeeBase(BaseModel):
         None, max_length=32, description="紧急联系人关系"
     )
 
-    # Banking & training
-    bank_account: str | None = Field(None, max_length=32, description="银行卡号")
-    training_id: str | None = Field(None, max_length=32, description="培训档案编号")
-
     # Other
-    transfer_history: str | None = Field(None, description="异动记录")
-    remarks: list[str] | None = Field(None, description="备注")
+    transfer_history: str | None = Field(None, description="任命与岗位调动")
     status: str = Field("待审批", max_length=16, description="状态")
     sort_order: int | None = Field(None, description="Excel行序号")
 
     # Excel 扩展字段
     duty: str | None = Field(None, max_length=64, description="职务")
-    dept_manager: str | None = Field(None, max_length=64, description="部门管理者")
-    additional_manager: str | None = Field(None, max_length=64, description="额外管理者")
     report_grade: str | None = Field(None, max_length=32, description="报表用职级")
-    dept_head_trainer: str | None = Field(None, max_length=64, description="部门负责人/一级培训师")
-    safety_training_date: date | None = Field(None, description="入职安全培训日期")
-    safety_training_score: str | None = Field(None, max_length=32, description="入职安全培训成绩")
-    culture_training_date: date | None = Field(None, description="企业文化培训日期")
-    gmp_training_date: date | None = Field(None, description="GMP基础培训时间")
     departure_date: date | None = Field(None, description="离职时间")
+    departure_reason: str | None = Field(None, max_length=64, description="离职原因")
 
 
 class EmployeeCreate(EmployeeBase):
@@ -181,56 +150,43 @@ class EmployeeUpdate(BaseModel):
     name: str | None = Field(None, max_length=64)
     domain_account: str | None = Field(None, max_length=64)
     department: str | None = Field(None, max_length=64)
-    team: str | None = Field(None, max_length=64)
     position: str | None = Field(None, max_length=64)
     job_category: str | None = Field(None, max_length=32)
     level: str | None = Field(None, max_length=32)
-    qualifications: list[str] | None = Field(None)
-    qualification_type: str | None = Field(None, max_length=32)
     gender: str | None = Field(None, max_length=8)
     native_place: str | None = Field(None, max_length=64)
-    political_status: str | None = Field(None, max_length=32)
+    ethnicity: str | None = Field(None, max_length=32)
     marital_status: str | None = Field(None, max_length=16)
     household_type: str | None = Field(None, max_length=16)
     status_category: str | None = Field(None, max_length=32)
+    hr_analysis: str | None = Field(None, max_length=32)
     birth_year: int | None = Field(None)
     birth_month: int | None = Field(None)
     birth_day: int | None = Field(None)
-    age: int | None = Field(None)
     work_start_date: date | None = Field(None)
-    factory_entry_date: date | None = Field(None)
-    livo_entry_date: date | None = Field(None)
     hire_date: date | None = Field(None)
     graduation_date: date | None = Field(None)
-    work_years: int | None = Field(None)
-    factory_tenure: str | None = Field(None, max_length=32)
     company_tenure: str | None = Field(None, max_length=32)
     education: str | None = Field(None, max_length=16)
     classification: str | None = Field(None, max_length=16)
     school: str | None = Field(None, max_length=128)
     major: str | None = Field(None, max_length=64)
+    degree_type: str | None = Field(None, max_length=32)
+    graduation_certificate: str | None = Field(None, max_length=256)
     id_card: str | None = Field(None, max_length=18)
     id_card_expiry: str | None = Field(None, max_length=32)
-    id_card_address: str | None = Field(None)
     current_address: str | None = Field(None)
-    contract_type: str | None = Field(None, max_length=32)
     contract_start_date: date | None = Field(None)
     contract_end_date: date | None = Field(None)
-    contract_start_2: date | None = Field(None)
-    contract_end_2: date | None = Field(None)
-    contract_start_3: date | None = Field(None)
-    contract_end_3: date | None = Field(None)
-    contract_start_4: date | None = Field(None)
-    contract_end_4: date | None = Field(None)
     phone: str | None = Field(None, max_length=32)
-    email: str | None = Field(None, max_length=128)
     emergency_contact_name: str | None = Field(None, max_length=64)
     emergency_contact_phone: str | None = Field(None, max_length=32)
     emergency_contact_relation: str | None = Field(None, max_length=32)
-    bank_account: str | None = Field(None, max_length=32)
-    training_id: str | None = Field(None, max_length=32)
-    transfer_history: str | None = Field(None)
-    remarks: list[str] | None = Field(None)
+    certificates: str | None = Field(None, max_length=512)
+    duty: str | None = Field(None, max_length=64)
+    report_grade: str | None = Field(None, max_length=32)
+    departure_date: date | None = Field(None)
+    departure_reason: str | None = Field(None, max_length=64)
     status: str | None = Field(None, max_length=16)
 
 
@@ -260,7 +216,7 @@ def mask_sensitive_fields(data: dict, has_sensitive: bool) -> dict:
     """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证/手写签名"""
     if has_sensitive:
         return data
-    for key in ("id_card", "id_card_address", "cert_sign_image"):
+    for key in ("id_card", "cert_sign_image"):
         if data.get(key):
             data[key] = "*" * len(str(data[key]))
     return data

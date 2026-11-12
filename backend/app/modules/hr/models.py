@@ -86,23 +86,11 @@ class Employee(BaseModel):
 
     # ─── Department & job ───
     department: Mapped[str] = mapped_column(String(64), nullable=False, comment="体现部门")
-    actual_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="实际部门")
-    team: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="班组")
     position: Mapped[str] = mapped_column(String(64), nullable=False, comment="职位")
     job_category: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="职类"
     )
     level: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="级别")
-    concurrent_departments: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, comment="兼任部门"
-    )
-    # ─── Qualifications ───
-    qualifications: Mapped[list[str] | None] = mapped_column(
-        JSON, nullable=True, comment="职称／职业资格（多选）"
-    )
-    qualification_type: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="职称类型"
-    )
 
     # ─── Personal info ───
     gender: Mapped[str | None] = mapped_column(
@@ -111,8 +99,8 @@ class Employee(BaseModel):
     native_place: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="籍贯"
     )
-    political_status: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="政治面貌"
+    ethnicity: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="民族"
     )
     marital_status: Mapped[str | None] = mapped_column(
         String(16), nullable=True, comment="婚姻状况"
@@ -122,6 +110,9 @@ class Employee(BaseModel):
     )
     status_category: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="统计类别"
+    )
+    hr_analysis: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="人力资源分析（生产辅助/后勤服务等）"
     )
 
     # ─── Birth date (split as in Feishu) ───
@@ -134,19 +125,10 @@ class Employee(BaseModel):
     birth_day: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="出生日期"
     )
-    age: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="年龄（飞书公式）"
-    )
 
     # ─── Dates ───
     work_start_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="参加工作时间"
-    )
-    factory_entry_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="进厂时间"
-    )
-    livo_entry_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="入丽珠时间"
     )
     hire_date: Mapped[date] = mapped_column(Date, nullable=False, comment="入职日期")
     graduation_date: Mapped[date | None] = mapped_column(
@@ -154,12 +136,6 @@ class Employee(BaseModel):
     )
 
     # ─── Computed tenure (read-only mirrors of Feishu formulas) ───
-    work_years: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="工作年限（飞书公式）"
-    )
-    factory_tenure: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="厂龄（飞书公式）"
-    )
     company_tenure: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="司龄（飞书公式）"
     )
@@ -177,8 +153,11 @@ class Employee(BaseModel):
     major: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="专业"
     )
-    variety: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="品种"
+    degree_type: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="学位类型"
+    )
+    graduation_certificate: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, comment="毕业证书"
     )
 
     # ─── ID & address ───
@@ -188,47 +167,20 @@ class Employee(BaseModel):
     id_card_expiry: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="身份证到期日"
     )
-    id_card_address: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="身份证地址|家庭地址"
-    )
     current_address: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="现住址"
     )
 
     # ─── Contract ───
-    contract_type: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="合同期限"
-    )
     contract_start_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="合同开始日期（第一次）"
     )
     contract_end_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="合同结束日期（第一次）"
     )
-    contract_start_2: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="第二次合同起点"
-    )
-    contract_end_2: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="第二次合同终止"
-    )
-    contract_start_3: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="第三次合同起点"
-    )
-    contract_end_3: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="第三次合同终止"
-    )
-    contract_start_4: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="第四次合同起点"
-    )
-    contract_end_4: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="第四次合同终止"
-    )
 
     # ─── Contact ───
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="手机")
-    email: Mapped[str | None] = mapped_column(
-        String(128), nullable=True, comment="邮箱"
-    )
     emergency_contact_name: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="紧急联系人姓名"
     )
@@ -239,20 +191,9 @@ class Employee(BaseModel):
         String(32), nullable=True, comment="紧急联系人关系"
     )
 
-    # ─── Banking & training ───
-    bank_account: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="银行卡号"
-    )
-    training_id: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="培训档案编号"
-    )
-
-    # ─── Work history & remarks ───
+    # ─── Work history ───
     transfer_history: Mapped[str | None] = mapped_column(
-        Text, nullable=True, comment="异动（含曾经工作部门、岗位)"
-    )
-    remarks: Mapped[list[str] | None] = mapped_column(
-        JSON, nullable=True, comment="备注（多选）"
+        Text, nullable=True, comment="任命与岗位调动"
     )
 
     # ─── Status ───
@@ -273,38 +214,17 @@ class Employee(BaseModel):
     duty: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="职务"
     )
-    dept_manager: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="部门管理者"
-    )
-    additional_manager: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="额外管理者"
-    )
     report_grade: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="报表用职级"
-    )
-    dept_head_trainer: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="部门负责人/一级培训师"
-    )
-    safety_training_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="入职安全培训日期"
-    )
-    safety_training_score: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="入职安全培训成绩"
-    )
-    culture_training_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="企业文化培训日期"
-    )
-    gmp_training_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="GMP基础培训时间"
     )
     departure_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="离职时间"
     )
+    departure_reason: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="离职原因"
+    )
     certificates: Mapped[str | None] = mapped_column(
         String(512), nullable=True, comment="证书"
-    )
-    concurrent_variety: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, comment="兼任品种"
     )
 
     # ─── Feishu sync metadata ───

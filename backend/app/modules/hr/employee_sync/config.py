@@ -61,6 +61,23 @@ TRAINING_ROSTER_FIELDS: dict[str, str] = {
     "GMP基础培训时间": "gmp_training_date",
 }
 
+# 名单初值复制字段 = 白名单 + level。level 不在 TRAINING_ROSTER_FIELDS（不外显），
+# 但 report_level 分级依赖它：新进名单若不复制，S/M 序列分级对新成员失效。
+ROSTER_INITIAL_FIELDS: tuple[str, ...] = (*TRAINING_ROSTER_FIELDS.values(), "level")
+
+# 「组织字段一次性刷新」的字段分桶（换数据源后对齐新档案，保留培训字段本地编辑）
+# - 刷新：组织/身份/教育等跟随档案的字段（actual_department/进厂/入丽珠时间
+#   在员工表已下线，名单侧保留各自独立的列与本地值）
+# - 仅空值补齐：档案有值但名单为空时补，不覆盖本地编辑
+# - 其余（实际部门/班组/品种/培训编号/一级培训师/4 个培训字段/资格等）一律保留名单本地值
+ROSTER_ORG_REFRESH_FIELDS: tuple[str, ...] = (
+    "name", "department", "position", "duty",
+    "job_category", "level", "education", "graduation_date", "status_category",
+    "work_start_date",
+    "hire_date", "departure_date",
+)
+ROSTER_FILL_IF_EMPTY_FIELDS: tuple[str, ...] = ("certificates",)
+
 
 @dataclass(frozen=True, slots=True)
 class EmployeeSyncConfig:

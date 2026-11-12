@@ -146,7 +146,7 @@ class EmployeeService:
         """新员工进入培训名单（软删同工号行复活并刷新初值，避免唯一约束冲突）。"""
         from sqlalchemy import select as _select
 
-        from app.modules.hr.employee_sync.config import TRAINING_ROSTER_FIELDS
+        from app.modules.hr.employee_sync.config import ROSTER_INITIAL_FIELDS
         from app.modules.hr.models import TrainingRosterProfile
         existing_profile = (await self.repo.session.execute(
             _select(TrainingRosterProfile).where(
@@ -156,8 +156,15 @@ class EmployeeService:
         profile = existing_profile or TrainingRosterProfile(
             employee_number=employee.employee_number,
         )
-        for _label, attr in TRAINING_ROSTER_FIELDS.items():
+        # 白名单 + level（level 不外显，但 report_level 分级依赖它）
+        for attr in ROSTER_INITIAL_FIELDS:
             setattr(profile, attr, getattr(employee, attr, None))
+        if not profile.department:
+            profile.department = "未分类"
+        if not profile.position:
+            profile.position = ""
+        if not profile.name:
+            profile.name = ""
         profile.is_deleted = False  # 历史软删行复活并刷新初值（工号重现=重新进入名单）
         if existing_profile is None:
             self.repo.session.add(profile)
@@ -215,13 +222,11 @@ class EmployeeService:
             name=employee.name,
             domain_account=employee.domain_account,
             department=employee.department,
-            team=employee.team,
             position=employee.position,
             job_category=employee.job_category,
             status_category=employee.status_category,
             is_employed="是",
             hire_date=employee.hire_date,
-            factory_entry_date=employee.factory_entry_date,
             education=employee.education,
             school=employee.school,
             major=employee.major,
@@ -236,22 +241,20 @@ class EmployeeService:
         "姓名": "name",
         "域账号": "domain_account",
         "体现部门": "department",
-        "部门": "actual_department",
-        "班组": "team",
+        # 新数据源只有一个「部门」概念：直接落体现部门（权限判定/培训名单
+        # NOT NULL/看板分组都吃 department）
+        "部门": "department",
         "职位": "position",
-        "岗位": "job_category",
+        # 新数据源「岗位」是岗位族（会计/采购/IT…），作为职位；职类由「职能分类」承载
+        "岗位": "position",
         "体现岗位": "position",
         "职务": "duty",
         "岗位类别": "job_category",
         "级别": "level",
         "职级": "level",
-        "兼任部门": "concurrent_departments",
-        "资格": "qualifications",
         "证书": "certificates",
-        "资格类型": "qualification_type",
         "性别": "gender",
         "籍贯": "native_place",
-        "政治面貌": "political_status",
         "婚姻状况": "marital_status",
         "户籍类型": "household_type",
         "用工性质": "status_category",
@@ -261,98 +264,83 @@ class EmployeeService:
         "出生月份": "birth_month",
         "出生日": "birth_day",
         "出生年月": "_birth_date",
-        "年龄": "age",
         "参加工作时间": "work_start_date",
-        "进厂时间": "factory_entry_date",
-        "进丽珠时间": "livo_entry_date",
         "入职日期": "hire_date",
         "毕业时间": "graduation_date",
-        "工龄": "work_years",
-        "厂龄": "factory_tenure",
         "公司工龄": "company_tenure",
         "学历": "education",
         "分类": "classification",
         "毕业学校": "school",
         "毕业院校": "school",
         "专业": "major",
-        "品种": "variety",
-        "兼任品种": "concurrent_variety",
         "身份证号": "id_card",
         "身份证号码": "id_card",
         "身份证有效期": "id_card_expiry",
-        "身份证地址": "id_card_address",
         "现居住地址": "current_address",
-        "合同类型": "contract_type",
         "合同开始日期": "contract_start_date",
         "合同结束日期": "contract_end_date",
-        "合同开始日期2": "contract_start_2",
-        "合同结束日期2": "contract_end_2",
-        "合同开始日期3": "contract_start_3",
-        "合同结束日期3": "contract_end_3",
-        "合同开始日期4": "contract_start_4",
-        "合同结束日期4": "contract_end_4",
         "手机": "phone",
-        "邮箱": "email",
         "紧急联系人": "emergency_contact_name",
         "紧急联系人电话": "emergency_contact_phone",
         "紧急联系人关系": "emergency_contact_relation",
-        "银行卡号": "bank_account",
-        "培训编号": "training_id",
         "调动历史": "transfer_history",
-        "备注": "remarks",
-        # Excel 扩展字段
-        "部门管理者": "dept_manager",
-        "额外管理者": "additional_manager",
         "报表用职级": "report_grade",
-        "部门负责人/一级培训师": "dept_head_trainer",
-        "入职安全培训日期": "safety_training_date",
-        "入职安全培训成绩": "safety_training_score",
-        "企业文化培训日期": "culture_training_date",
-        "GMP基础培训时间": "gmp_training_date",
         "离职时间": "departure_date",
+        # ── 新数据源（飞书「员工信息表」）列名别名；追加在末尾保证导出列头稳定 ──
+        "户口类型": "household_type",
+        "出生日期": "_birth_date",
+        "司龄": "company_tenure",
+        "学习形式": "classification",
+        "联系电话": "phone",
+        "居住地址": "current_address",
+        "紧急联系人-姓名": "emergency_contact_name",
+        "紧急联系人-联系电话": "emergency_contact_phone",
+        "紧急联系人-关系": "emergency_contact_relation",
+        "离职日期": "departure_date",
+        "任命与岗位调动": "transfer_history",
+        "岗位职级": "report_grade",
+        "职能分类": "job_category",
+        "员工账号": "feishu_open_id",
+        "民族": "ethnicity",
+        "离职原因": "departure_reason",
+        "学位类型": "degree_type",
+        "毕业证书": "graduation_certificate",
+        "人力资源分析": "hr_analysis",
     }
 
     # Excel 上传时，以下字段全部以 Excel 为准（Excel 中未出现的字段置空）
     _EXCEL_RESETTABLE_FIELDS: set[str] = {
-        "name", "domain_account", "department", "actual_department", "team", "position",
-        "job_category", "level", "concurrent_departments",
-        "qualifications", "qualification_type",
-        "gender", "native_place", "political_status", "marital_status",
+        "name", "domain_account", "department", "position",
+        "job_category", "level",
+        "gender", "native_place", "marital_status",
         "household_type", "status_category",
-        "birth_year", "birth_month", "birth_day", "age",
-        "work_start_date", "factory_entry_date", "livo_entry_date",
+        "birth_year", "birth_month", "birth_day",
+        "work_start_date",
         "hire_date", "graduation_date",
-        "work_years", "factory_tenure", "company_tenure",
-        "education", "classification", "school", "major", "variety",
-        "id_card", "id_card_expiry", "id_card_address", "current_address",
-        "contract_type", "contract_start_date", "contract_end_date",
-        "contract_start_2", "contract_end_2",
-        "contract_start_3", "contract_end_3",
-        "contract_start_4", "contract_end_4",
-        "phone", "email",
+        "company_tenure",
+        "education", "classification", "school", "major",
+        "id_card", "id_card_expiry", "current_address",
+        "contract_start_date", "contract_end_date",
+        "phone",
         "emergency_contact_name", "emergency_contact_phone",
         "emergency_contact_relation",
-        "bank_account", "training_id", "transfer_history", "remarks",
-        "certificates", "concurrent_variety",
-        # Excel 扩展字段
-        "duty", "dept_manager", "additional_manager", "report_grade",
-        "dept_head_trainer", "safety_training_date", "safety_training_score",
-        "culture_training_date", "gmp_training_date", "departure_date",
+        "transfer_history",
+        "certificates",
+        "duty", "report_grade", "departure_date",
+        # 新数据源字段
+        "ethnicity", "departure_reason", "degree_type",
+        "graduation_certificate", "hr_analysis",
     }
 
     _DATE_FIELDS: set[str] = {
-        "work_start_date", "factory_entry_date", "livo_entry_date",
+        "work_start_date",
         "hire_date", "graduation_date", "id_card_expiry",
         "contract_start_date", "contract_end_date",
-        "contract_start_2", "contract_end_2",
-        "contract_start_3", "contract_end_3",
-        "contract_start_4", "contract_end_4",
-        "safety_training_date", "culture_training_date",
-        "gmp_training_date", "departure_date",
+        "departure_date",
     }
 
     _INT_FIELDS: set[str] = {
-        "birth_year", "birth_month", "birth_day", "age", "work_years",
+        "birth_year", "birth_month", "birth_day",
     }
 
     # 常见日期格式（按优先级从高到低排序）
@@ -1837,7 +1825,6 @@ class CandidateService:
             position=c.position or "未分配",
             hire_date=date_type.today(),
             phone=c.phone,
-            email=c.email,
             education=c.education,
             school=c.school,
             major=c.major,

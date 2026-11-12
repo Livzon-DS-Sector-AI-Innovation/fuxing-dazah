@@ -83,8 +83,6 @@ const ALL_STAT_TYPES: StatTypeOption[] = [
   { id: 'position', title: '岗位分布', defaultType: 'bar', group: '人员结构', dataSource: 'position' },
   { id: 'job_category', title: '职类分布', defaultType: 'pie', group: '人员结构', dataSource: 'job_category' },
   { id: 'hr_analysis', title: '人力资源分析分布', defaultType: 'pie', group: '人员结构', dataSource: 'hr_analysis' },
-  { id: 'political_status', title: '政治面貌分布', defaultType: 'pie', group: '人员结构', dataSource: 'political_status' },
-  { id: 'contract_type', title: '合同类型分布', defaultType: 'pie', group: '人员结构', dataSource: 'contract_type' },
   { id: 'tenure', title: '司龄分布', defaultType: 'bar', group: '人员结构', dataSource: 'tenure' },
   { id: 'departure-type', title: '离职类型分布', defaultType: 'pie', group: '离职分析', dataSource: 'departure_type' },
   { id: 'departure-reason', title: '离职原因分布', defaultType: 'pie', group: '离职分析', dataSource: 'departure_reason' },
@@ -816,7 +814,7 @@ export default function DashboardClient() {
           <CountdownCard />
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <HeroStatCard title="目前在职人数" value={summary.total_employees} accent={T.success} />
+          <HeroStatCard title="人员总数" value={summary.total_employees} accent={T.success} />
         </Col>
         <Col xs={24} sm={12} md={6}>
           <DualStatCard items={[

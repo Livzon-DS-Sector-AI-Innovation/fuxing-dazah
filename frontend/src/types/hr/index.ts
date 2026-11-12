@@ -4,71 +4,44 @@ export interface Employee {
   name: string
   domain_account?: string
   department: string
-  actual_department?: string
-  team?: string
   position: string
   duty?: string
-  dept_manager?: string
-  additional_manager?: string
   report_grade?: string
-  dept_head_trainer?: string
   job_category?: string
-  concurrent_variety?: string
   certificates?: string
   level?: string
-  concurrent_departments?: string
-  qualifications?: string[]
-  qualification_type?: string
   gender?: string
   native_place?: string
-  political_status?: string
+  ethnicity?: string
   marital_status?: string
   household_type?: string
   status_category?: string
+  hr_analysis?: string
   birth_year?: number
   birth_month?: number
   birth_day?: number
-  age?: number
   work_start_date?: string
-  factory_entry_date?: string
-  livo_entry_date?: string
   hire_date: string
   graduation_date?: string
-  work_years?: number
   departure_date?: string
-  safety_training_date?: string
-  safety_training_score?: string
-  culture_training_date?: string
-  gmp_training_date?: string
-  factory_tenure?: string
+  departure_reason?: string
   company_tenure?: string
   education?: string
   classification?: string
   school?: string
   major?: string
-  variety?: string
+  degree_type?: string
+  graduation_certificate?: string
   id_card?: string
   id_card_expiry?: string
-  id_card_address?: string
   current_address?: string
-  contract_type?: string
   contract_start_date?: string
   contract_end_date?: string
-  contract_start_2?: string
-  contract_end_2?: string
-  contract_start_3?: string
-  contract_end_3?: string
-  contract_start_4?: string
-  contract_end_4?: string
   phone?: string
-  email?: string
   emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
-  bank_account?: string
-  training_id?: string
   transfer_history?: string
-  remarks?: string[]
   status: string
   feishu_record_id?: string
   feishu_synced_at?: string
@@ -85,54 +58,38 @@ export interface EmployeeCreateInput {
   name: string
   domain_account?: string
   department: string
-  team?: string
   position: string
   job_category?: string
   level?: string
-  concurrent_departments?: string
-  qualifications?: string[]
-  qualification_type?: string
   gender?: string
   native_place?: string
-  political_status?: string
+  ethnicity?: string
   marital_status?: string
   household_type?: string
   status_category?: string
+  hr_analysis?: string
   birth_year?: number
   birth_month?: number
   birth_day?: number
   work_start_date?: string
-  factory_entry_date?: string
-  livo_entry_date?: string
   hire_date: string
   graduation_date?: string
   education?: string
   classification?: string
   school?: string
   major?: string
-  variety?: string
+  degree_type?: string
+  graduation_certificate?: string
   id_card?: string
   id_card_expiry?: string
-  id_card_address?: string
   current_address?: string
-  contract_type?: string
   contract_start_date?: string
   contract_end_date?: string
-  contract_start_2?: string
-  contract_end_2?: string
-  contract_start_3?: string
-  contract_end_3?: string
-  contract_start_4?: string
-  contract_end_4?: string
   phone?: string
-  email?: string
   emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
-  bank_account?: string
-  training_id?: string
   transfer_history?: string
-  remarks?: string[]
   status?: string
 }
 
@@ -141,58 +98,43 @@ export interface EmployeeUpdateInput {
   name?: string
   domain_account?: string
   department?: string
-  team?: string
   position?: string
   job_category?: string
   level?: string
-  concurrent_departments?: string
-  qualifications?: string[]
-  qualification_type?: string
   gender?: string
   native_place?: string
-  political_status?: string
+  ethnicity?: string
   marital_status?: string
   household_type?: string
   status_category?: string
+  hr_analysis?: string
   birth_year?: number
   birth_month?: number
   birth_day?: number
   work_start_date?: string
-  factory_entry_date?: string
-  livo_entry_date?: string
   hire_date?: string
   graduation_date?: string
   education?: string
   classification?: string
   school?: string
   major?: string
-  variety?: string
+  degree_type?: string
+  graduation_certificate?: string
   id_card?: string
   id_card_expiry?: string
-  id_card_address?: string
   current_address?: string
-  contract_type?: string
   contract_start_date?: string
   contract_end_date?: string
-  contract_start_2?: string
-  contract_end_2?: string
-  contract_start_3?: string
-  contract_end_3?: string
-  contract_start_4?: string
-  contract_end_4?: string
   phone?: string
-  email?: string
   emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
-  bank_account?: string
-  training_id?: string
   transfer_history?: string
-  remarks?: string[]
   status?: string
   probation_end_date?: string | null
   regularization_date?: string
   departure_date?: string
+  departure_reason?: string
 }
 
 export interface EmployeeListResponse {

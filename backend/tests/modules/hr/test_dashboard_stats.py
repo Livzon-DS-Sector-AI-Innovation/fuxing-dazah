@@ -51,7 +51,11 @@ def _scoped_override(test_user, departments: frozenset[str]):
 async def test_kpi_counts_within_scoped_department(
     db_session: AsyncSession, client: AsyncClient, test_user,
 ):
-    """受限部门范围内：在职/本月入职/本月离职口径互不串数。"""
+    """受限部门范围内：总人数/本月入职/本月离职口径互不串数。
+
+    总人数与源数据表全量对齐：不做人员状态过滤（离职人员由人事在源表
+    删除后经同步移出），仅软删行不计入。
+    """
     dept = _rand("看板部")
     today = date.today()
     db_session.add_all([
@@ -59,9 +63,9 @@ async def test_kpi_counts_within_scoped_department(
         _mk_employee(department=dept, education="本科", hire_date=date(today.year - 3, 3, 1)),
         # 本月入职 · 在职 · 硕士
         _mk_employee(department=dept, education="硕士", hire_date=today),
-        # 去年入职 · 本月离职
+        # 去年入职 · 本月离职（仍在源表内 → 计入总人数）
         _mk_employee(
-            department=dept, status="离职",
+            department=dept, status="离职", education="本科",
             hire_date=date(today.year - 1, 6, 1), departure_date=today,
         ),
         # 软删员工不计入任何统计
@@ -76,7 +80,7 @@ async def test_kpi_counts_within_scoped_department(
         data = res.json()["data"]
         summary = data["summary"]
 
-        assert summary["total_employees"] == 2
+        assert summary["total_employees"] == 3
         assert summary["new_hires_this_month"] == 1
         assert summary["departures_this_month"] == 1
         # 今日入职/离职（软删员工不计入）
@@ -86,30 +90,30 @@ async def test_kpi_counts_within_scoped_department(
         assert summary["net_growth_this_month"] == 0
 
         edu = {d["name"]: d["value"] for d in data["education_distribution"]}
-        assert edu == {"本科": 1, "硕士": 1}
-        # 离职/软删员工不进部门在职分布
+        assert edu == {"本科": 2, "硕士": 1}
+        # 部门分布同样不做状态过滤，仅软删不计
         dept_dist = {d["name"]: d["value"] for d in data["department_distribution"]}
-        assert dept_dist == {dept: 2}
+        assert dept_dist == {dept: 3}
     finally:
         app.dependency_overrides.pop(get_hr_scope, None)
 
 
-async def test_unclassified_employee_counts_by_actual_department(
+async def test_unclassified_employee_counts_in_own_department_only(
     db_session: AsyncSession, client: AsyncClient, test_user,
 ):
-    """「未分类」员工按实际部门归属授权范围（与 apply_list_scope 语义一致）。"""
+    """「未分类」员工只归属未分类部门：授权其他部门看不到（新数据源无实际部门回落）。"""
     dept = _rand("归属部")
-    db_session.add(_mk_employee(department="未分类"))
-    emp = _mk_employee(department="未分类")
-    emp.actual_department = dept
-    db_session.add(emp)
+    db_session.add_all([
+        _mk_employee(department="未分类"),
+        _mk_employee(department="未分类"),
+    ])
     await db_session.flush()
 
     app.dependency_overrides[get_hr_scope] = _scoped_override(test_user, frozenset({dept}))
     try:
         res = await client.get("/api/v1/hr/dashboard/stats")
         assert res.status_code == 200, res.text
-        assert res.json()["data"]["summary"]["total_employees"] == 1
+        assert res.json()["data"]["summary"]["total_employees"] == 0
     finally:
         app.dependency_overrides.pop(get_hr_scope, None)
 

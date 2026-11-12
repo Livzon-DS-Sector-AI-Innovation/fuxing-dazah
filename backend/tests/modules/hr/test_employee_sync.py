@@ -86,20 +86,20 @@ class TestMapping:
         """培训日期列可能是 Excel 序列号（42671）；单选/日期可能是单元素数组包裹。"""
         data = convert_source_fields(
             {"工号": ["111000002"], "入职日期": [1477238400000],
-             "企业文化培训日期": 42671, "部门": ["optABC"]},
+             "毕业时间": 42671, "部门": ["optABC"]},
             reset_missing=False,
         )
         assert data["employee_number"] == "111000002"
         assert data["hire_date"] == date(2016, 10, 24)
-        assert data["culture_training_date"] == date(2016, 10, 28)
-        assert data["actual_department"] == "optABC"  # 无翻译表时原样保留
+        assert data["graduation_date"] == date(2016, 10, 28)
+        assert data["department"] == "optABC"  # 无翻译表时原样保留（部门→体现部门）
 
     def test_option_maps_translate_single_select_ids(self):
         maps = {"部门": {"optABC": "财务部"}}
         data = convert_source_fields(
             {"工号": "E1", "部门": ["optABC"]}, reset_missing=False, option_maps=maps,
         )
-        assert data["actual_department"] == "财务部"
+        assert data["department"] == "财务部"
 
     def test_birth_date_column_splits_to_ymd(self):
         """「出生年月」列（内部键 _birth_date）拆为年/月/日，本身不入 data。"""
@@ -115,11 +115,11 @@ class TestMapping:
     def test_event_style_values(self):
         # WS 事件值均为字符串：日期是毫秒串，多选是 JSON 串
         data = convert_source_fields(
-            {"工号": "E001", "入职日期": "1705276800000", "资格": '["药师","工程师"]'},
+            {"工号": "E001", "入职日期": "1705276800000", "司龄": "3年2个月"},
             reset_missing=False,
         )
         assert data["hire_date"] == date(2024, 1, 15)
-        assert data["qualifications"] == ["药师", "工程师"]
+        assert data["company_tenure"] == "3年2个月"
 
     def test_status_placeholder_skipped(self):
         data = convert_source_fields({"工号": "E001", "人员状态": "—"}, reset_missing=False)
@@ -203,8 +203,8 @@ class TestTrainingRoster:
             name="王五", employee_number=number, department="质控部", position="QC",
             status="在职", hire_date=date(2023, 6, 1),
             school="某大学", major="药学", id_card="440104199001010000",
-            phone="13800000000", bank_account="6222020000000000",
-            qualifications=["药师"], education="本科",
+            phone="13800000000",
+            education="本科",
         ))
         await db_session.flush()
 
@@ -217,10 +217,9 @@ class TestTrainingRoster:
         assert row["employee_number"] == number
         assert row["name"] == "王五"
         assert row["education"] == "本科"
-        assert row["qualifications"] == ["药师"]
         # 敏感字段绝不出接口（整个 key 不存在，而非置空）
-        for key in ("school", "major", "id_card", "phone", "bank_account",
-                    "birth_year", "political_status", "marital_status",
+        for key in ("school", "major", "id_card", "phone",
+                    "birth_year", "marital_status",
                     "emergency_contact_name", "native_place"):
             assert key not in row
 
@@ -430,14 +429,13 @@ class TestRosterVariety:
 
     async def test_variety_in_roster_output_and_editable(self, db_session: AsyncSession) -> None:
         number = f"E{_rand()}"
-        db_session.add(hr_models.Employee(
+        db_session.add(hr_models.TrainingRosterProfile(
             name="赵一", employee_number=number, department="质控部", position="QC",
-            status="在职", hire_date=date(2024, 1, 1), variety="胶囊、颗粒",
+            status="在职", variety="胶囊、颗粒",
         ))
         await db_session.flush()
 
         service = sync_service.EmployeeSyncService(db_session)
-        await service.sync_roster_membership()
         rows, total = await service.training_roster(keyword=number)
         assert total == 1
         assert rows[0]["variety"] == "胶囊、颗粒"
@@ -453,13 +451,11 @@ class TestRosterVariety:
 
     async def test_employee_varieties_endpoint(self, db_session: AsyncSession, client) -> None:
         dept = f"质控{_rand()}"
-        number = f"E{_rand()}"
-        db_session.add(hr_models.Employee(
-            name="钱二", employee_number=number, department=dept, position="QC",
-            status="在职", hire_date=date(2024, 1, 1), variety="胶囊、颗粒",
+        db_session.add(hr_models.TrainingRosterProfile(
+            name="钱二", employee_number=f"E{_rand()}", department=dept, position="QC",
+            status="在职", variety="胶囊、颗粒",
         ))
         await db_session.flush()
-        await sync_service.EmployeeSyncService(db_session).sync_roster_membership()
 
         res = await client.get(
             "/api/v1/hr/employee-varieties", params={"department": dept},
@@ -668,3 +664,290 @@ class TestBindingConfigGuard:
                 enabled=True, app_token="app_test_token",
                 source_table_id="tbl_source",
             )
+
+
+# ─── 新数据源（飞书「员工信息表」）列名适配 ───
+
+
+class TestNewSourceAliases:
+    """新数据源列名别名与语义变更：部门→体现部门、岗位→职位等。"""
+
+    def test_department_semantics_changed(self):
+        """源表「部门」直接落 department（体现部门），不再进 actual_department。"""
+        data = convert_source_fields(
+            {"工号": "E001", "部门": "财务部", "岗位": "会计", "职能分类": "职能"},
+            reset_missing=False,
+        )
+        assert data["department"] == "财务部"
+        assert data["position"] == "会计"
+        assert data["job_category"] == "职能"
+
+    def test_new_alias_columns(self):
+        data = convert_source_fields({
+            "工号": "E001", "户口类型": "城镇", "出生日期": 631152000000,  # 1990-01-01
+            "学习形式": "全日制", "联系电话": "13800000000", "居住地址": "某市某区",
+            "紧急联系人-姓名": "张三", "紧急联系人-联系电话": "13900000000",
+            "紧急联系人-关系": "配偶", "离职日期": 1705276800000,  # 2024-01-15
+            "任命与岗位调动": "2024 调岗", "岗位职级": "技术职级", "司龄": "3年",
+            "民族": "汉族", "离职原因": "个人原因",
+            "学位类型": "工学学士", "毕业证书": "证书编号X", "人力资源分析": "技术一线",
+        }, reset_missing=False)
+        assert data["household_type"] == "城镇"
+        assert data["birth_year"] == 1990 and data["birth_month"] == 1
+        assert data["classification"] == "全日制"
+        assert data["phone"] == "13800000000"
+        assert data["current_address"] == "某市某区"
+        assert data["emergency_contact_name"] == "张三"
+        assert data["emergency_contact_phone"] == "13900000000"
+        assert data["emergency_contact_relation"] == "配偶"
+        assert data["departure_date"] == date(2024, 1, 15)
+        assert data["transfer_history"] == "2024 调岗"
+        assert data["report_grade"] == "技术职级"
+        assert data["company_tenure"] == "3年"
+        assert data["ethnicity"] == "汉族"
+        assert data["departure_reason"] == "个人原因"
+        assert data["degree_type"] == "工学学士"
+        assert data["graduation_certificate"] == "证书编号X"
+        assert data["hr_analysis"] == "技术一线"
+
+    def test_derive_gender_birth_from_id_card(self):
+        """源表未提供 gender/出生日期时从身份证号派生（第17位奇偶、第7-14位）。"""
+        # 奇数位 → 男；偶数位 → 女
+        data = convert_source_fields({
+            "工号": "E001", "身份证号": "440104199001011234",
+        }, reset_missing=False)
+        assert data["gender"] == "男"  # 第17位 3 → 奇数
+        assert data["birth_year"] == 1990 and data["birth_month"] == 1
+        assert data["birth_day"] == 1
+
+        data = convert_source_fields({
+            "工号": "E002", "身份证号": "440104199202022345",
+        }, reset_missing=False)
+        assert data["gender"] == "女"  # 第17位 4 → 偶数
+        assert data["birth_year"] == 1992 and data["birth_month"] == 2
+        assert data["birth_day"] == 2
+
+    def test_derive_does_not_override_source_values(self):
+        """源表显式提供的 gender/出生日期优先，派生只补空。"""
+        data = convert_source_fields({
+            "工号": "E001", "身份证号": "440104199001011234",
+            "性别": "女",  # 与身份证奇偶（男）相反：以源表为准
+        }, reset_missing=False)
+        assert data["gender"] == "女"
+        # 出生日期列已给出时不覆盖
+        data = convert_source_fields({
+            "工号": "E002", "身份证号": "440104199202022345",
+            "出生日期": 631152000000,  # 1990-01-01，与身份证(1992-02-02)不同
+        }, reset_missing=False)
+        assert data["birth_year"] == 1990 and data["birth_month"] == 1
+
+    def test_derive_skips_invalid_id_card(self):
+        """15 位老证 / 短号不派生；18 位但日期段非法时只阻断出生派生。"""
+        for id_card in ("440104900101123", "123"):  # 15 位老证 / 短号
+            data = convert_source_fields({"工号": "E003", "身份证号": id_card},
+                                         reset_missing=False)
+            assert "gender" not in data
+            assert "birth_year" not in data
+        # 13 月非法：性别（第 17 位有效）仍派生，出生日期不派生
+        data = convert_source_fields({"工号": "E004", "身份证号": "440104199013011234"},
+                                     reset_missing=False)
+        assert data["gender"] == "男"
+        assert "birth_year" not in data
+
+    def test_employee_account_user_field_to_open_id(self):
+        """「员工账号」人员列取 users[].id 写 feishu_open_id（不是姓名拼接）。"""
+        data = convert_source_fields(
+            {"工号": "E001", "员工账号": {"users": [{"id": "ou_abc123", "name": "王五"}]}},
+            reset_missing=False,
+        )
+        assert data["feishu_open_id"] == "ou_abc123"
+
+    def test_option_id_translated_for_new_aliases(self):
+        maps = {"部门": {"optD": "财务部"}, "岗位职级": {"optG": "主操"}}
+        data = convert_source_fields(
+            {"工号": "E001", "部门": "optD", "岗位职级": "optG"},
+            reset_missing=False, option_maps=maps,
+        )
+        assert data["department"] == "财务部"
+        assert data["report_grade"] == "主操"
+
+    async def test_reconcile_new_source_columns(
+        self, db_session: AsyncSession, monkeypatch, _no_lock,
+    ):
+        """新数据源全链路：部门/岗位语义、员工账号 open_id、状态派生进名单。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        await _write_config(db_session)
+        number = f"E{_rand()}"
+        _mock_bitable(
+            monkeypatch,
+            source_records=[{
+                "record_id": "rec_new_src", "fields": {
+                    "工号": number, "姓名": "新源",
+                    "部门": ["optFIN"], "岗位": ["optACC"],
+                    "员工性质": ["optPROB"],
+                    "入职日期": 1705276800000,
+                    "员工账号": {"users": [{"id": "ou_new_src", "name": "新源"}]},
+                },
+            }],
+            source_fields=[
+                {"field_name": "部门", "property": {"options": [
+                    {"id": "optFIN", "name": "财务部"},
+                ]}},
+                {"field_name": "岗位", "property": {"options": [
+                    {"id": "optACC", "name": "会计"},
+                ]}},
+                {"field_name": "员工性质", "property": {"options": [
+                    {"id": "optPROB", "name": "试用期"},
+                ]}},
+            ],
+        )
+        await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        employee = await EmployeeRepository(db_session).get_by_employee_number(number)
+        assert employee.department == "财务部"
+        assert employee.position == "会计"
+        assert employee.status_category == "试用期"
+        assert employee.status == "试用期"  # 派生（源表无「人员状态」列）
+        assert employee.feishu_open_id == "ou_new_src"
+
+
+class TestStatusDerivation:
+    """源表无「人员状态」列时按离职日期/员工性质派生。"""
+
+    def test_departure_date_implies_left(self):
+        data = convert_source_fields(
+            {"工号": "E001", "离职日期": 1705276800000},
+            reset_missing=False, has_status_column=False,
+        )
+        assert data["status"] == "离职"
+
+    def test_probation_category_implies_probation(self):
+        for category in ("试用期", "实习转试用", "实习生"):
+            data = convert_source_fields(
+                {"工号": "E001", "员工性质": category},
+                reset_missing=False, has_status_column=False,
+            )
+            assert data["status"] == "试用期", category
+
+    def test_regular_employee_defaults_active(self):
+        data = convert_source_fields(
+            {"工号": "E001", "员工性质": "转正员工"},
+            reset_missing=False, has_status_column=False,
+        )
+        assert data["status"] == "在职"
+
+    def test_status_column_present_disables_derivation(self):
+        data = convert_source_fields(
+            {"工号": "E001", "人员状态": "产假", "离职日期": 1705276800000},
+            reset_missing=False, has_status_column=True,
+        )
+        assert data["status"] == "产假"
+
+    async def test_leave_status_protected_on_upsert(
+        self, db_session: AsyncSession,
+    ):
+        """本地病假/产假不被派生值覆盖；离职始终生效。"""
+        repo = EmployeeRepository(db_session)
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="护假", employee_number=number, department="测试部", position="QC",
+            status="病假", hire_date=date(2024, 1, 1),
+        ))
+        await db_session.flush()
+
+        await repo.upsert_from_bitable(
+            convert_source_fields(
+                {"工号": number, "员工性质": "转正员工"},
+                reset_missing=False, has_status_column=False,
+            ), "rec_leave_1",
+        )
+        employee = await repo.get_by_employee_number(number)
+        assert employee.status == "病假"
+
+        await repo.upsert_from_bitable(
+            convert_source_fields(
+                {"工号": number, "离职日期": 1705276800000},
+                reset_missing=False, has_status_column=False,
+            ), "rec_leave_2",
+        )
+        employee = await repo.get_by_employee_number(number)
+        assert employee.status == "离职"
+
+
+class TestRosterLevelCopy:
+    """修复：新进名单初值缺 level → report_level 的 S/M 分级对新成员失效。"""
+
+    async def test_initial_copy_includes_level(self, db_session: AsyncSession):
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="等 M", employee_number=number, department="测试部", position="QC",
+            status="在职", hire_date=date(2024, 1, 1), level="M2",
+        ))
+        await db_session.flush()
+
+        service = sync_service.EmployeeSyncService(db_session)
+        await service.sync_roster_membership()
+        rows, total = await service.training_roster(keyword=number)
+        assert total == 1
+        # level 不在输出白名单（key 不存在），但派生 report_level 已生效
+        assert "level" not in rows[0]
+        assert rows[0]["report_level"] == "经理级"  # M 序列保底（无 level 时为其他人员）
+
+    async def test_level_editable_via_update(self, db_session: AsyncSession):
+        number = f"E{_rand()}"
+        db_session.add(hr_models.TrainingRosterProfile(
+            name="可编", employee_number=number, department="测试部",
+            position="QC", status="在职",
+        ))
+        await db_session.flush()
+
+        service = sync_service.EmployeeSyncService(db_session)
+        await service.update_roster_entry(number, {"level": "M2"})
+        rows, _total = await service.training_roster(keyword=number)
+        assert rows[0]["report_level"] == "经理级"
+
+
+class TestRosterOrgRefresh:
+    """换数据源后的一次性名单对齐：刷新组织字段、保留培训字段、空值补齐。"""
+
+    async def test_refresh_org_fields(self, db_session: AsyncSession):
+        number = f"E{_rand()}"
+        db_session.add(hr_models.Employee(
+            name="新名", employee_number=number, department="新部门", position="新岗位",
+            status="在职", hire_date=date(2024, 1, 1), education="本科",
+            certificates="GMP 证书",
+        ))
+        db_session.add(hr_models.TrainingRosterProfile(
+            name="旧名", employee_number=number, department="旧部门",
+            position="旧岗位", status="在职", education="大专",
+            training_id="PX-001", dept_head_trainer="王培训",
+            safety_training_date=date(2024, 3, 1), variety="胶囊",
+        ))
+        await db_session.flush()
+
+        service = sync_service.EmployeeSyncService(db_session)
+
+        # dry_run 只统计不落库
+        preview = await service.refresh_roster_org_fields(dry_run=True)
+        assert preview["dry_run"] is True
+        rows, _total = await service.training_roster(keyword=number)
+        assert rows[0]["department"] == "旧部门"
+
+        result = await service.refresh_roster_org_fields(dry_run=False)
+        assert result["dry_run"] is False
+        assert result["changed"] >= 1
+        assert "department" in result["field_changes"]
+        assert "position" in result["field_changes"]
+
+        rows2, _total2 = await service.training_roster(keyword=number)
+        assert rows2[0]["name"] == "新名"
+        assert rows2[0]["department"] == "新部门"
+        assert rows2[0]["position"] == "新岗位"
+        assert rows2[0]["education"] == "本科"
+        # 培训字段与品种保留名单本地值
+        assert rows2[0]["training_id"] == "PX-001"
+        assert rows2[0]["dept_head_trainer"] == "王培训"
+        assert rows2[0]["safety_training_date"] == date(2024, 3, 1)
+        assert rows2[0]["variety"] == "胶囊"
+        # certificates 名单为空时从档案补齐
+        assert rows2[0]["certificates"] == "GMP 证书"

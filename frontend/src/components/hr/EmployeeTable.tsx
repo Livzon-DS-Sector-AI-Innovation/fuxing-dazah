@@ -144,6 +144,8 @@ export default function EmployeeTable({
     } catch (err: any) { message.error(err.message || '创建失败') }
   }
 
+  // 列集与源数据表（飞书「员工信息表」）保持一致；「状态」为系统按
+  // 离职日期/员工性质派生，源表本身无此列。源表没有的字段见详情弹窗「系统附加」。
   const allColumns: any[] = [
     {
       title: '工号',
@@ -158,38 +160,53 @@ export default function EmployeeTable({
       width: 90,
       fixed: 'left' as const },
     {
-      title: '体现部门',
+      title: '部门',
       dataIndex: 'department',
       key: 'department',
       width: 160 },
     {
-      title: '实际部门',
-      dataIndex: 'actual_department',
-      key: 'actual_department',
-      width: 140, ellipsis: true,
-      render: (v: string) => v || '-' },
-    {
-      title: '班组',
-      dataIndex: 'team',
-      key: 'team',
-      width: 100 },
-    {
-      title: '体现岗位',
+      title: '岗位',
       dataIndex: 'position',
       key: 'position',
-      width: 140 },
+      width: 120 },
     {
-      title: '兼任部门',
-      dataIndex: 'concurrent_departments',
-      key: 'concurrent_departments',
-      width: 130,
-      render: (v: string) => v || '-' },
+      title: '职务',
+      dataIndex: 'duty',
+      key: 'duty',
+      width: 130 },
     {
-      title: '兼任品种',
-      dataIndex: 'variety',
-      key: 'variety',
-      width: 100,
-      render: (v: string) => v || '-' },
+      title: '职能分类',
+      dataIndex: 'job_category',
+      key: 'job_category',
+      width: 100 },
+    {
+      title: '职级',
+      dataIndex: 'level',
+      key: 'level',
+      width: 80 },
+    {
+      title: '岗位职级',
+      dataIndex: 'report_grade',
+      key: 'report_grade',
+      width: 110 },
+    {
+      title: '员工性质',
+      dataIndex: 'status_category',
+      key: 'status_category',
+      width: 100 },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (status: string) => (
+        <Tag color={statusColorMap[status] || 'default'}>{status}</Tag>
+      ) },
+    {
+      title: '域账号',
+      dataIndex: 'domain_account',
+      key: 'domain_account',
+      width: 110 },
     {
       title: '性别',
       dataIndex: 'gender',
@@ -200,70 +217,53 @@ export default function EmployeeTable({
       dataIndex: 'computed_age',
       key: 'age',
       width: 70,
-      render: (_: unknown, record: Employee) => record.computed_age ?? record.age ?? '-',
+      render: (_: unknown, record: Employee) => record.computed_age ?? '-',
     },
     {
-      title: '学历',
-      dataIndex: 'education',
-      key: 'education',
+      title: '出生日期',
+      dataIndex: 'birth_year',
+      key: 'birth_date',
+      width: 110,
+      render: (_: unknown, r: Employee) => r.birth_year
+        ? `${r.birth_year}-${String(r.birth_month ?? 1).padStart(2, '0')}-${String(r.birth_day ?? 1).padStart(2, '0')}`
+        : '-' },
+    {
+      title: '民族',
+      dataIndex: 'ethnicity',
+      key: 'ethnicity',
       width: 80 },
-    {
-      title: '手机',
-      dataIndex: 'phone',
-      key: 'phone',
-      width: 130 },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 90,
-      render: (status: string) => (
-        <Tag color={statusColorMap[status] || 'default'}>{status}</Tag>
-      ) },
-    {
-      title: '入职日期',
-      dataIndex: 'hire_date',
-      key: 'hire_date',
-      width: 110 },
     {
       title: '籍贯',
       dataIndex: 'native_place',
       key: 'native_place',
       width: 100 },
     {
-      title: '政治面貌',
-      dataIndex: 'political_status',
-      key: 'political_status',
-      width: 100 },
-    {
       title: '婚姻状况',
       dataIndex: 'marital_status',
       key: 'marital_status',
-      width: 100 },
+      width: 90 },
     {
-      title: '合同期限',
-      dataIndex: 'contract_type',
-      key: 'contract_type',
-      width: 110 },
+      title: '户口类型',
+      dataIndex: 'household_type',
+      key: 'household_type',
+      width: 90 },
     {
-      title: '职称类型',
-      dataIndex: 'qualification_type',
-      key: 'qualification_type',
-      width: 100 },
-    {
-      title: '级别',
-      dataIndex: 'level',
-      key: 'level',
+      title: '学历',
+      dataIndex: 'education',
+      key: 'education',
       width: 80 },
     {
-      title: '司龄',
-      dataIndex: 'computed_tenure',
-      key: 'company_tenure',
-      width: 100,
-      render: (_: unknown, record: Employee) => record.computed_tenure ?? record.company_tenure ?? '-',
-    },
+      title: '学位类型',
+      dataIndex: 'degree_type',
+      key: 'degree_type',
+      width: 100 },
     {
-      title: '毕业学校',
+      title: '学习形式',
+      dataIndex: 'classification',
+      key: 'classification',
+      width: 90 },
+    {
+      title: '毕业院校',
       dataIndex: 'school',
       key: 'school',
       width: 150 },
@@ -272,6 +272,100 @@ export default function EmployeeTable({
       dataIndex: 'major',
       key: 'major',
       width: 120 },
+    {
+      title: '毕业时间',
+      dataIndex: 'graduation_date',
+      key: 'graduation_date',
+      width: 110 },
+    {
+      title: '人力资源分析',
+      dataIndex: 'hr_analysis',
+      key: 'hr_analysis',
+      width: 110 },
+    {
+      title: '联系电话',
+      dataIndex: 'phone',
+      key: 'phone',
+      width: 130 },
+    {
+      title: '居住地址',
+      dataIndex: 'current_address',
+      key: 'current_address',
+      width: 180, ellipsis: true },
+    {
+      title: '身份证号',
+      dataIndex: 'id_card',
+      key: 'id_card',
+      width: 170 },
+    {
+      title: '身份证有效期',
+      dataIndex: 'id_card_expiry',
+      key: 'id_card_expiry',
+      width: 120 },
+    {
+      title: '紧急联系人-姓名',
+      dataIndex: 'emergency_contact_name',
+      key: 'emergency_contact_name',
+      width: 130 },
+    {
+      title: '紧急联系人-联系电话',
+      dataIndex: 'emergency_contact_phone',
+      key: 'emergency_contact_phone',
+      width: 150 },
+    {
+      title: '紧急联系人-关系',
+      dataIndex: 'emergency_contact_relation',
+      key: 'emergency_contact_relation',
+      width: 130 },
+    {
+      title: '参加工作时间',
+      dataIndex: 'work_start_date',
+      key: 'work_start_date',
+      width: 120 },
+    {
+      title: '入职日期',
+      dataIndex: 'hire_date',
+      key: 'hire_date',
+      width: 110 },
+    {
+      title: '离职日期',
+      dataIndex: 'departure_date',
+      key: 'departure_date',
+      width: 110 },
+    {
+      title: '离职原因',
+      dataIndex: 'departure_reason',
+      key: 'departure_reason',
+      width: 110 },
+    {
+      title: '司龄',
+      dataIndex: 'computed_tenure',
+      key: 'company_tenure',
+      width: 100,
+      render: (_: unknown, record: Employee) => record.computed_tenure ?? record.company_tenure ?? '-',
+    },
+    {
+      title: '合同开始日期',
+      dataIndex: 'contract_start_date',
+      key: 'contract_start_date',
+      width: 120 },
+    {
+      title: '合同结束日期',
+      dataIndex: 'contract_end_date',
+      key: 'contract_end_date',
+      width: 120 },
+    {
+      title: '证书',
+      dataIndex: 'certificates',
+      key: 'certificates',
+      width: 150, ellipsis: true,
+      render: (v: string) => v || '-' },
+    {
+      title: '任命与岗位调动',
+      dataIndex: 'transfer_history',
+      key: 'transfer_history',
+      width: 200, ellipsis: true,
+      render: (v: string) => v || '-' },
     {
       title: '操作',
       key: 'action',
@@ -308,7 +402,7 @@ export default function EmployeeTable({
   ]
 
   // Hide columns where ALL rows have empty values (except key & important columns)
-  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'actual_department', 'position', 'concurrent_departments', 'variety'])
+  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'position', 'status'])
   const columns = allColumns.filter(col => {
     if (alwaysShow.has(col.key as string)) return true
     return employees.some((emp: any) => {
@@ -361,7 +455,7 @@ export default function EmployeeTable({
           showSizeChanger: true,
           showTotal: (t) => `共 ${t} 条`,
           onChange: onPageChange }}
-        scroll={{ x: 2200 }}
+        scroll={{ x: 4800 }}
         size="small"
       />
 

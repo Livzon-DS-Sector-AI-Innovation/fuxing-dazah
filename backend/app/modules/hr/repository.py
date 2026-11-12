@@ -36,6 +36,9 @@ from app.modules.hr.models import (
     TrainingLedgerPage,
 )
 
+# 本地维护的人员状态（源表无法表达）：同步派生值不得覆盖（离职除外）
+_LEAVE_STATUSES = {"病假", "产假", "产假复岗"}
+
 
 class EmployeeRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -116,6 +119,14 @@ class EmployeeRepository:
             for key, value in data.items():
                 if key in ("id", "employee_number", "created_at"):
                     continue
+                if (
+                    key == "status"
+                    and existing.status in _LEAVE_STATUSES
+                    and value in ("在职", "试用期")
+                ):
+                    # 病假/产假是本地维护的状态，源表派生值（在职/试用期）
+                    # 不得覆盖；离职始终生效（源表离职日期为权威事实）
+                    continue
                 setattr(existing, key, value)
             existing.is_deleted = False
             existing.feishu_record_id = record_id
@@ -151,13 +162,11 @@ class EmployeeRepository:
         department: str | None = None,
         status: str | None = None,
         keyword: str | None = None,
-        team: str | None = None,
         position: str | None = None,
         job_category: str | None = None,
         level: str | None = None,
         gender: str | None = None,
         education: str | None = None,
-        political_status: str | None = None,
         marital_status: str | None = None,
         status_category: str | None = None,
         age_min: int | None = None,
@@ -166,8 +175,6 @@ class EmployeeRepository:
         birth_year_max: int | None = None,
         hire_date_after: date | None = None,
         hire_date_before: date | None = None,
-        factory_entry_date_after: date | None = None,
-        factory_entry_date_before: date | None = None,
         work_start_date_after: date | None = None,
         work_start_date_before: date | None = None,
         include_uncategorized: bool = False,
@@ -181,19 +188,9 @@ class EmployeeRepository:
 
         if departments:
             # 多部门数据范围：SQL 层过滤（先过滤后分页，避免页内容稀疏/为空）
-            conds = [Employee.department.in_(departments)]
-            if include_uncategorized:
-                conds.append(and_(Employee.department == "未分类", Employee.actual_department.in_(departments)))
-            stmt = stmt.where(or_(*conds))
+            stmt = stmt.where(Employee.department.in_(departments))
         elif department:
-            # 体现部门 + 兼任部门；include_uncategorized 时额外纳入「未分类」人员按实际部门归属
-            conds = [
-                Employee.department.ilike(f"{department}%"),
-                Employee.concurrent_departments.ilike(f"%{department}%"),
-            ]
-            if include_uncategorized:
-                conds.append(and_(Employee.department == "未分类", Employee.actual_department.ilike(f"{department}%")))
-            stmt = stmt.where(or_(*conds))
+            stmt = stmt.where(Employee.department.ilike(f"{department}%"))
         if status:
             stmt = stmt.where(Employee.status == status)
         else:
@@ -204,8 +201,6 @@ class EmployeeRepository:
                 Employee.name.ilike(f"{keyword}%")
                 | Employee.employee_number.ilike(f"{keyword}%")
             )
-        if team:
-            stmt = stmt.where(Employee.team == team)
         if position:
             stmt = stmt.where(Employee.position.ilike(f"{position}%"))
         if job_category:
@@ -216,16 +211,15 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.gender == gender)
         if education:
             stmt = stmt.where(Employee.education == education)
-        if political_status:
-            stmt = stmt.where(Employee.political_status == political_status)
         if marital_status:
             stmt = stmt.where(Employee.marital_status == marital_status)
         if status_category:
             stmt = stmt.where(Employee.status_category == status_category)
+        # age 列已下线：年龄筛选换算为出生年份区间（近似年龄，与看板口径一致）
         if age_min is not None:
-            stmt = stmt.where(Employee.age >= age_min)
+            stmt = stmt.where(Employee.birth_year <= date.today().year - age_min)
         if age_max is not None:
-            stmt = stmt.where(Employee.age <= age_max)
+            stmt = stmt.where(Employee.birth_year >= date.today().year - age_max)
         if birth_year_min is not None:
             stmt = stmt.where(Employee.birth_year >= birth_year_min)
         if birth_year_max is not None:
@@ -234,10 +228,6 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.hire_date >= hire_date_after)
         if hire_date_before:
             stmt = stmt.where(Employee.hire_date <= hire_date_before)
-        if factory_entry_date_after:
-            stmt = stmt.where(Employee.factory_entry_date >= factory_entry_date_after)
-        if factory_entry_date_before:
-            stmt = stmt.where(Employee.factory_entry_date <= factory_entry_date_before)
         if work_start_date_after:
             stmt = stmt.where(Employee.work_start_date >= work_start_date_after)
         if work_start_date_before:
@@ -248,16 +238,8 @@ class EmployeeRepository:
         sort_column = getattr(Employee, sort_by, Employee.created_at)
         order_func = desc if sort_order == "desc" else asc
 
-        # 排序时，"未分类"部门的员工按实际部门作为二级排序，让同实际部门的人聚在一起
-        sort_expr = case(
-            (Employee.department == "未分类", Employee.actual_department),
-            else_=None,
-        )
         data_stmt = (
-            stmt.order_by(
-                order_func(sort_column),
-                asc(sort_expr),
-            )
+            stmt.order_by(order_func(sort_column))
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -377,8 +359,6 @@ class EmployeeRepository:
                 Employee.name.ilike(f"{filters['keyword']}%")
                 | Employee.employee_number.ilike(f"{filters['keyword']}%")
             )
-        if filters.get("team"):
-            stmt = stmt.where(Employee.team == filters["team"])
         if filters.get("position"):
             stmt = stmt.where(Employee.position.ilike(f"{filters['position']}%"))
         if filters.get("job_category"):
@@ -389,16 +369,15 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.gender == filters["gender"])
         if filters.get("education"):
             stmt = stmt.where(Employee.education == filters["education"])
-        if filters.get("political_status"):
-            stmt = stmt.where(Employee.political_status == filters["political_status"])
         if filters.get("marital_status"):
             stmt = stmt.where(Employee.marital_status == filters["marital_status"])
         if filters.get("status_category"):
             stmt = stmt.where(Employee.status_category == filters["status_category"])
+        # age 列已下线：年龄筛选换算为出生年份区间（近似年龄，与看板口径一致）
         if filters.get("age_min") is not None:
-            stmt = stmt.where(Employee.age >= filters["age_min"])
+            stmt = stmt.where(Employee.birth_year <= date.today().year - filters["age_min"])
         if filters.get("age_max") is not None:
-            stmt = stmt.where(Employee.age <= filters["age_max"])
+            stmt = stmt.where(Employee.birth_year >= date.today().year - filters["age_max"])
         if filters.get("birth_year_min") is not None:
             stmt = stmt.where(Employee.birth_year >= filters["birth_year_min"])
         if filters.get("birth_year_max") is not None:
@@ -407,14 +386,6 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.hire_date >= filters["hire_date_after"])
         if filters.get("hire_date_before"):
             stmt = stmt.where(Employee.hire_date <= filters["hire_date_before"])
-        if filters.get("factory_entry_date_after"):
-            stmt = stmt.where(
-                Employee.factory_entry_date >= filters["factory_entry_date_after"]
-            )
-        if filters.get("factory_entry_date_before"):
-            stmt = stmt.where(
-                Employee.factory_entry_date <= filters["factory_entry_date_before"]
-            )
         if filters.get("work_start_date_after"):
             stmt = stmt.where(
                 Employee.work_start_date >= filters["work_start_date_after"]

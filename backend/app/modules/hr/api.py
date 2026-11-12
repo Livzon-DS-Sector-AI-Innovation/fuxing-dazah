@@ -383,7 +383,7 @@ async def download_training_registration(
         records.append({
             "姓名": e.name or "",
             "性别": e.gender or "",
-            "体现部门": e.department or e.actual_department or "",
+            "体现部门": e.department or "",
             "体现岗位": e.position or e.job_category or "未设置",
             "学历": e.education or "",
             "毕业院校": e.school or "",
@@ -503,9 +503,10 @@ def _build_export_columns() -> list[tuple[str, str]]:
     seen: set[str] = set()
     columns: list[tuple[str, str]] = []
 
-    # 去重：同一 DB 字段有多个中文别名时，取第一个
+    # 去重：同一 DB 字段有多个中文别名时，取第一个；
+    # feishu_open_id 是同步元数据（「员工账号」列），不进导出
     for header, field in col_map.items():
-        if field in seen:
+        if field in seen or field == "feishu_open_id":
             continue
         seen.add(field)
         columns.append((header, field))
@@ -587,10 +588,6 @@ async def export_employees(
             # 特殊格式化
             if field_name == "id_card":
                 val = _mask_id_card(val)
-            elif field_name == "id_card_address":
-                val = _mask_id_card(val)
-            elif field_name in ("qualifications", "remarks"):
-                val = _fmt_list(val)
             elif field_name == "_birth_date":
                 # 出生年月：用 birth_year/birth_month/birth_day 拼装
                 year = getattr(emp, "birth_year", None)
@@ -624,7 +621,6 @@ async def get_dashboard_stats(
     """返回仪表盘所有统计数据：KPI汇总、学历分布、部门人数、入职统计、离职统计。"""
     from calendar import month_abbr
 
-    from sqlalchemy import and_ as sa_and
     from sqlalchemy import or_
 
     from app.modules.hr.models import Employee as EmpModel
@@ -641,10 +637,7 @@ async def get_dashboard_stats(
             return [EmpModel.employee_number == hr_scope.employee_number]
         if not hr_scope.scoped_departments:
             raise ForbiddenException("数据范围限制：无法确定您的授权部门，请联系管理员")
-        return [or_(
-            EmpModel.department.in_(hr_scope.scoped_departments),
-            sa_and(EmpModel.department == "未分类", EmpModel.actual_department.in_(hr_scope.scoped_departments)),
-        )]
+        return [EmpModel.department.in_(hr_scope.scoped_departments)]
 
     current_year = date.today().year
     current_month = date.today().month
@@ -661,7 +654,6 @@ async def get_dashboard_stats(
         select(func.count(EmpModel.id)).where(
             *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "在职",
         )
     )).scalar() or 0
 
@@ -707,7 +699,7 @@ async def get_dashboard_stats(
     # ── 学历分布 ──
     edu_rows = (await session.execute(
         select(EmpModel.education, func.count(EmpModel.id))
-        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .where(*_scoped(), EmpModel.is_deleted == False)  # noqa: E712
         .group_by(EmpModel.education)
     )).all()
     education_distribution = [
@@ -718,7 +710,7 @@ async def get_dashboard_stats(
     # ── 部门人数分布 ──
     dept_rows = (await session.execute(
         select(EmpModel.department, func.count(EmpModel.id))
-        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .where(*_scoped(), EmpModel.is_deleted == False)  # noqa: E712
         .group_by(EmpModel.department)
         .order_by(func.count(EmpModel.id).desc())
     )).all()
@@ -866,7 +858,7 @@ async def get_dashboard_stats(
         col = getattr(EmpModel, field_name)
         rows = (await session.execute(
             select(col, func.count(EmpModel.id))
-            .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+            .where(*_scoped(), EmpModel.is_deleted == False)  # noqa: E712
             .group_by(col)
             .order_by(func.count(EmpModel.id).desc())
         )).all()
@@ -882,7 +874,6 @@ async def get_dashboard_stats(
             select(func.count(EmpModel.id)).where(
                 *_scoped(),
                 EmpModel.is_deleted == False,  # noqa: E712
-                EmpModel.status == "在职",
                 EmpModel.birth_year > 0,
                 dynamic_age >= lo,
                 dynamic_age < hi,
@@ -904,7 +895,6 @@ async def get_dashboard_stats(
             select(func.count(EmpModel.id)).where(
                 *_scoped(),
                 EmpModel.is_deleted == False,  # noqa: E712
-                EmpModel.status == "在职",
                 EmpModel.hire_date > lo_date,
                 EmpModel.hire_date <= hi_date,
             )
@@ -915,9 +905,7 @@ async def get_dashboard_stats(
     level_distribution = await _query_distribution("level")
     position_distribution = await _query_distribution("position")
     job_category_distribution = await _query_distribution("job_category")
-    political_status_distribution = await _query_distribution("political_status")
     marital_status_distribution = await _query_distribution("marital_status")
-    contract_type_distribution = await _query_distribution("contract_type")
     household_type_distribution = await _query_distribution("household_type")
     hr_analysis_distribution = await _query_distribution("hr_analysis")
 
@@ -986,7 +974,7 @@ async def get_dashboard_stats(
     hire_rows = (await session.execute(
         select(EmpModel.hire_date).where(
             *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "在职", EmpModel.hire_date.is_not(None),
+            EmpModel.hire_date.is_not(None),
         )
     )).scalars().all()
     if hire_rows:
@@ -1056,7 +1044,6 @@ async def get_dashboard_stats(
         cnt = (await session.execute(
             select(func.count(EmpModel.id)).where(
                 *_scoped(), EmpModel.is_deleted == False,  # noqa: E712
-                EmpModel.status == "在职",
                 EmpModel.contract_end_date >= lo,
                 EmpModel.contract_end_date <= hi,
             )
@@ -1124,10 +1111,10 @@ async def get_dashboard_stats(
     )).all()
     position_departure_top = [{"name": r[0] or "未填写", "value": r[1]} for r in dep_pos_rows]
 
-    # 各部门离职率（2026 离职人数 / 当前部门在职人数，%）
+    # 各部门离职率（2026 离职人数 / 当前部门人数，%；分母为全体未软删人员，口径与总人数一致）
     dept_headcount_rows = (await session.execute(
         select(EmpModel.department, func.count(EmpModel.id))
-        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .where(*_scoped(), EmpModel.is_deleted == False)  # noqa: E712
         .group_by(EmpModel.department)
     )).all()
     dept_headcount = {r[0]: r[1] for r in dept_headcount_rows}
@@ -1186,7 +1173,6 @@ async def get_dashboard_stats(
         select(func.avg(current_year - EmpModel.birth_year)).where(
             *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "在职",
             EmpModel.birth_year > 0,
         )
     )).scalar()
@@ -1230,9 +1216,7 @@ async def get_dashboard_stats(
             "level": level_distribution,
             "position": position_distribution,
             "job_category": job_category_distribution,
-            "political_status": political_status_distribution,
             "marital_status": marital_status_distribution,
-            "contract_type": contract_type_distribution,
             "household_type": household_type_distribution,
             "hr_analysis": hr_analysis_distribution,
             "tenure": tenure_distribution,
@@ -2833,7 +2817,7 @@ async def preview_departure_certificate(
             if not id_number:
                 id_number = emp_row.id_card or ""
             if not entry_date:
-                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+                entry_date = emp_row.hire_date
 
     html = generate_termination_certificate_html(
         name=record.name or "", id_number=id_number or "",
@@ -2872,7 +2856,7 @@ async def send_departure_certificate(
             if not id_number:
                 id_number = emp_row.id_card or ""
             if not entry_date:
-                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+                entry_date = emp_row.hire_date
 
     pdf_buf = generate_termination_certificate_pdf(
         name=name, id_number=id_number or "",

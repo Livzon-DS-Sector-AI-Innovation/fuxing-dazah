@@ -18,50 +18,46 @@ function val(v: unknown): string {
 export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
   if (!employee) return null
 
+  // 分组与源数据表（飞书「员工信息表」）字段保持一致；「状态」为系统派生，
+  // 源表没有的字段归入「系统附加」（同步模式下为空，仅手动维护的员工有值）。
+  const birthText = employee.birth_year
+    ? `${employee.birth_year}-${String(employee.birth_month ?? 1).padStart(2, '0')}-${String(employee.birth_day ?? 1).padStart(2, '0')}`
+    : null
   const sections: [string, [string, unknown][]][] = [
     ['基本信息', [
-      ['域账号', employee.domain_account], ['性别', employee.gender], ['籍贯', employee.native_place],
-      ['政治面貌', employee.political_status], ['婚姻状况', employee.marital_status],
-      ['户籍类型', employee.household_type], ['身份证号', employee.id_card],
-      ['身份证到期', employee.id_card_expiry], ['身份证地址', employee.id_card_address],
-      ['现住址', employee.current_address], ['手机', employee.phone], ['邮箱', employee.email],
+      ['工号', employee.employee_number], ['姓名', employee.name],
+      ['部门', employee.department], ['岗位', employee.position],
+      ['职务', employee.duty], ['职能分类', employee.job_category],
+      ['职级', employee.level], ['岗位职级', employee.report_grade],
+      ['员工性质', employee.status_category], ['状态', employee.status],
+      ['域账号', employee.domain_account], ['人力资源分析', employee.hr_analysis],
     ]],
-    ['学历信息', [
-      ['学历', employee.education], ['全日制/非全日制', employee.classification as unknown],
-      ['毕业院校', employee.school], ['专业', employee.major], ['毕业时间', employee.graduation_date],
+    ['个人信息', [
+      ['性别', employee.gender], ['出生日期', birthText],
+      ['年龄', employee.computed_age], ['民族', employee.ethnicity],
+      ['籍贯', employee.native_place],
+      ['婚姻状况', employee.marital_status], ['户口类型', employee.household_type],
+      ['身份证号', employee.id_card], ['身份证有效期', employee.id_card_expiry],
     ]],
-    ['工作履历与职级', [
-      ['参加工作时间', employee.work_start_date], ['进厂时间', employee.factory_entry_date],
-      ['入丽珠时间', employee.livo_entry_date], ['离职时间', employee.departure_date as unknown],
-      ['职类', employee.job_category], ['级别', employee.level], ['职务', employee.duty as unknown],
-      ['报表用职级', employee.report_grade as unknown],
-      ['职称/职业资格', employee.qualifications],
-      ['职称类型', employee.qualification_type],
+    ['联系信息', [
+      ['联系电话', employee.phone], ['居住地址', employee.current_address],
+      ['紧急联系人-姓名', employee.emergency_contact_name],
+      ['紧急联系人-联系电话', employee.emergency_contact_phone],
+      ['紧急联系人-关系', employee.emergency_contact_relation],
     ]],
-    ['管理信息', [
-      ['部门管理者', employee.dept_manager as unknown], ['额外管理者', employee.additional_manager as unknown],
-      ['部门负责人/培训师', employee.dept_head_trainer as unknown], ['兼任品种', employee.concurrent_variety as unknown],
+    ['教育信息', [
+      ['学历', employee.education], ['学位类型', employee.degree_type],
+      ['学习形式', employee.classification], ['毕业院校', employee.school],
+      ['专业', employee.major], ['毕业时间', employee.graduation_date],
+      ['毕业证书', employee.graduation_certificate], ['证书', employee.certificates],
     ]],
-    ['合同信息', [
-      ['合同期限', employee.contract_type], ['合同1起', employee.contract_start_date], ['合同1止', employee.contract_end_date],
-      ['合同2起', employee.contract_start_2 as unknown], ['合同2止', employee.contract_end_2 as unknown],
-      ['合同3起', employee.contract_start_3 as unknown], ['合同3止', employee.contract_end_3 as unknown],
-      ['合同4起', employee.contract_start_4 as unknown], ['合同4止', employee.contract_end_4 as unknown],
-    ]],
-    ['紧急联系人', [
-      ['紧急联系人', employee.emergency_contact_name], ['紧急联系电话', employee.emergency_contact_phone],
-      ['与本人关系', employee.emergency_contact_relation],
-    ]],
-    ['培训记录', [
-      ['入职安全培训日期', employee.safety_training_date as unknown], ['安全培训成绩', employee.safety_training_score as unknown],
-      ['企业文化培训日期', employee.culture_training_date as unknown], ['GMP培训日期', employee.gmp_training_date as unknown],
-    ]],
-    ['其他信息', [
-      ['银行账号', employee.bank_account], ['员工性质', employee.status_category],
-      ['证书', employee.certificates as unknown],
-      ['工龄(年)', employee.work_years], ['厂龄', employee.factory_tenure], ['司龄', employee.computed_tenure ?? employee.company_tenure],
-      ['出生年', employee.birth_year], ['出生月', employee.birth_month], ['出生日', employee.birth_day],
-      ['动态年龄', employee.computed_age ?? employee.age ?? '-'],
+    ['工作与合同', [
+      ['参加工作时间', employee.work_start_date], ['入职日期', employee.hire_date],
+      ['离职日期', employee.departure_date], ['离职原因', employee.departure_reason],
+      ['司龄', employee.computed_tenure ?? employee.company_tenure],
+      ['任命与岗位调动', employee.transfer_history],
+      ['合同开始日期', employee.contract_start_date],
+      ['合同结束日期', employee.contract_end_date],
     ]],
   ]
 

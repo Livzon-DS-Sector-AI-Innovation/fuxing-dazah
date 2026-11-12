@@ -1,8 +1,8 @@
 """员工档案多维表格同步服务。
 
 单向：飞书源表 → hr.employees（每天定时全量对账 + 手动同步，无实时事件）。
-培训专用的脱敏名单不做数据复制——由 training_roster 按白名单字段
-直接从本地员工表输出（敏感字段在接口层即被过滤）。
+培训专用的脱敏名单是独立数据集 hr.training_roster_profiles：人员随总表增减、
+进名单时按白名单复制一次初值，此后除 status 外字段独立维护、不被同步覆盖。
 """
 
 import json
@@ -22,6 +22,9 @@ from app.modules.hr.employee_sync.config import (
     KEY_LAST_SYNC_AT,
     KEY_SOURCE_TABLE_ID,
     KEY_SOURCE_TABLE_NAME,
+    ROSTER_FILL_IF_EMPTY_FIELDS,
+    ROSTER_INITIAL_FIELDS,
+    ROSTER_ORG_REFRESH_FIELDS,
     TRAINING_ROSTER_FIELDS,
     EmployeeSyncConfig,
     load_config,
@@ -217,7 +220,12 @@ class EmployeeSyncService:
     async def _reconcile_source(self, cfg: EmployeeSyncConfig) -> dict[str, Any]:
         records = await bitable.list_all_records(cfg.app_token, cfg.source_table_id)
 
-        option_maps = await self._build_option_maps(cfg)
+        # schema 只拉一次：选项翻译表构建 + 「人员状态」列存在性判断共用
+        schema = await bitable.list_fields(cfg.app_token, cfg.source_table_id)
+        option_maps = await self._build_option_maps(cfg, schema)
+        has_status_column = any(
+            str(f.get("field_name") or "") == "人员状态" for f in schema
+        )
 
         created = updated = deleted = 0
         errors: list[str] = []
@@ -241,6 +249,7 @@ class EmployeeSyncService:
 
             data = convert_source_fields(
                 dict(fields), reset_missing=True, option_maps=option_maps,
+                has_status_column=has_status_column,
             )
             _ensure_required(data)  # 与 Excel 上传一致：NOT NULL 字段兜底
             try:
@@ -272,15 +281,16 @@ class EmployeeSyncService:
             "roster_status_synced": roster_status_synced,
         }
 
-    async def _build_option_maps(self, cfg: EmployeeSyncConfig) -> dict[str, dict[str, str]]:
+    async def _build_option_maps(
+        self, cfg: EmployeeSyncConfig, schema: list[dict[str, Any]],
+    ) -> dict[str, dict[str, str]]:
         """选项ID→选项名 翻译表：源表 schema 优先，再扫 Base 全表补齐。
 
         单选值可能是 lookup 引用（如「部门」引用其他表的选项），选项定义
         不在源表 schema 里，需跨表汇总；同名列以源表选项优先。
+        schema 为源表 list_fields 结果（调用方已拉取，避免重复请求）。
         """
-        maps = build_option_maps(
-            await bitable.list_fields(cfg.app_token, cfg.source_table_id)
-        )
+        maps = build_option_maps(schema)
         for table in await bitable.list_tables(cfg.app_token):
             table_id = str(table.get("table_id") or "")
             if not table_id or table_id == cfg.source_table_id:
@@ -371,12 +381,77 @@ class EmployeeSyncService:
     def _copy_roster_initial(
         self, profile: TrainingRosterProfile, employee: Employee,
     ) -> TrainingRosterProfile:
-        """从员工行复制名单初值（新进名单 / 复活时刷新）。"""
+        """从员工行复制名单初值（新进名单 / 复活时刷新）。
+
+        复制字段 = 白名单 + level（level 不外显，但 report_level 分级依赖它）。
+        """
         profile.employee_number = employee.employee_number
-        for _label, attr in TRAINING_ROSTER_FIELDS.items():
+        for attr in ROSTER_INITIAL_FIELDS:
             setattr(profile, attr, getattr(employee, attr, None))
+        # 名单侧 NOT NULL 兜底：员工行部门/职位/姓名缺失时不至于整轮同步崩掉
+        if not profile.department:
+            profile.department = "未分类"
+        if not profile.position:
+            profile.position = ""
+        if not profile.name:
+            profile.name = ""
         profile.is_deleted = False
         return profile
+
+    async def refresh_roster_org_fields(self, *, dry_run: bool = True) -> dict[str, Any]:
+        """换数据源后的一次性名单对齐：组织字段从员工档案刷新。
+
+        - 刷新 ROSTER_ORG_REFRESH_FIELDS（部门/职位/学历/日期等跟随档案）；
+        - certificates 仅在名单为空时补齐（不覆盖本地编辑；qualifications
+          员工表已随新数据源下线，名单侧保留本地值不补齐）；
+        - 品种/培训编号/一级培训师/4 个培训字段等一律保留名单本地值；
+        - status 不动（由每轮对账自动同步）。
+
+        dry_run=True 只统计不落库。返回 {total, changed, field_changes, dry_run}。
+        """
+        employees = (await self.session.execute(
+            select(Employee).where(Employee.is_deleted.is_(False))
+        )).scalars().all()
+        profiles = (await self.session.execute(
+            select(TrainingRosterProfile).where(
+                TrainingRosterProfile.is_deleted.is_(False)
+            )
+        )).scalars().all()
+        employee_by_number = {e.employee_number: e for e in employees}
+
+        field_changes: dict[str, int] = {}
+        changed_rows = 0
+        for profile in profiles:
+            employee = employee_by_number.get(profile.employee_number)
+            if employee is None:
+                continue
+            row_changed = False
+            for attr in ROSTER_ORG_REFRESH_FIELDS:
+                new_value = getattr(employee, attr, None)
+                if getattr(profile, attr, None) != new_value:
+                    if not dry_run:
+                        setattr(profile, attr, new_value)
+                    field_changes[attr] = field_changes.get(attr, 0) + 1
+                    row_changed = True
+            for attr in ROSTER_FILL_IF_EMPTY_FIELDS:
+                new_value = getattr(employee, attr, None)
+                if new_value and not getattr(profile, attr, None):
+                    if not dry_run:
+                        setattr(profile, attr, new_value)
+                    field_changes[attr] = field_changes.get(attr, 0) + 1
+                    row_changed = True
+            if row_changed:
+                changed_rows += 1
+        if not dry_run and (changed_rows or field_changes):
+            await self.session.flush()
+        return {
+            "total": len(profiles),
+            "changed": changed_rows,
+            "field_changes": dict(sorted(
+                field_changes.items(), key=lambda kv: -kv[1]
+            )),
+            "dry_run": dry_run,
+        }
 
     async def training_roster(
         self,
@@ -471,8 +546,11 @@ class EmployeeSyncService:
                     raise PermissionError(
                         f"数据范围限制：无权将人员调整到部门 '{new_val}'",
                     )
-        # status 随总表自动同步，不开放手动编辑（改了也会被下轮对账覆盖）
-        allowed = set(TRAINING_ROSTER_FIELDS.values()) - {"employee_number", "status"}
+        # status 随总表自动同步，不开放手动编辑（改了也会被下轮对账覆盖）；
+        # level 不在白名单（不外显）但允许编辑——report_level 分级输入
+        allowed = (
+            set(TRAINING_ROSTER_FIELDS.values()) | {"level"}
+        ) - {"employee_number", "status"}
         for key, value in data.items():
             if key in allowed:
                 setattr(profile, key, value)
