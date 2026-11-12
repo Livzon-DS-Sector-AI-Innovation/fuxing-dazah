@@ -67,6 +67,9 @@ export interface DimensionAssessmentItem {
 export interface ResumeScreeningResultItem {
   id: string
   job_requirement_id: string
+  /** 所属岗位（岗位已删时为空，前端回落 jd_snapshot） */
+  job_name: string | null
+  job_department: string | null
   /** 岗位侧候选人存量简历直接初筛时回链的候选人（上传初筛→转候选人为空） */
   candidate_id: string | null
   jd_snapshot: string
@@ -104,10 +107,20 @@ export async function screenResumeAction(
 }
 
 export async function fetchScreeningResults(
-  jdId: string,
+  jdId?: string,
 ): Promise<{ data: ResumeScreeningResultItem[] }> {
-  return fetchHrApi(`/hr/resume-screening?job_requirement_id=${jdId}`, {
+  const qs = jdId ? `?job_requirement_id=${jdId}` : ''
+  return fetchHrApi(`/hr/resume-screening${qs}`, {
     errorMessage: '获取筛选结果失败',
+  })
+}
+
+/** 查看筛选结果存档的简历原文（PDF base64，用于排名总览页内预览）。 */
+export async function fetchScreeningResumePreview(
+  resultId: string,
+): Promise<{ base64: string; filename: string | null }> {
+  return fetchHrDownload(`/hr/resume-screening/${resultId}/resume-preview`, {
+    errorMessage: '简历加载失败',
   })
 }
 

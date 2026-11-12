@@ -1,19 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
-  Alert, App, Button, Popconfirm, Progress, Select, Space, Table, Tag, Upload,
+  Alert, App, Button, Modal, Popconfirm, Select, Space, Table, Tag,
 } from 'antd'
-import { CopyOutlined, DeleteOutlined, FilePdfOutlined, ReloadOutlined, UploadOutlined, UserAddOutlined } from '@ant-design/icons'
+import { CopyOutlined, DeleteOutlined, EyeOutlined, FilePdfOutlined, ReloadOutlined, UserAddOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import {
   convertScreeningResult, deleteScreeningResult,
-  fetchJobRequirements, fetchScreeningResults, screenResumeAction,
+  fetchJobRequirements, fetchScreeningResults, fetchScreeningResumePreview,
   type CandidateProfile, type ResumeScreeningResultItem, type ScreeningSection,
 } from '@/actions/hr'
-
-/** 单批上限与后端一致：控制 AI 调用时长与成本 */
-const MAX_BATCH = 20
+import { base64ToObjectUrl } from '@/lib/hr'
 
 /** 配色对齐候选人列表（RecruitmentClient）：强烈推荐绿、推荐蓝 */
 const RECO_COLOR: Record<string, string> = {
@@ -36,23 +34,17 @@ function scoreColor(score: number): string {
   return '#ff4d4f'
 }
 
-/** 上传中单份文件的状态 */
-interface PendingFile {
-  uid: string
-  file: File
-  status: 'queued' | 'running' | 'done' | 'failed'
-  error?: string
-}
-
 export default function ResumeScreeningPanel() {
   const { message } = App.useApp()
   const [jobs, setJobs] = useState<{ id: string; position_name: string; department: string; status: string }[]>([])
   const [jdId, setJdId] = useState<string | null>(null)
   const [results, setResults] = useState<ResumeScreeningResultItem[]>([])
   const [loading, setLoading] = useState(false)
-  const [pending, setPending] = useState<PendingFile[]>([])
-  const [uploading, setUploading] = useState(false)
-  const runningRef = useRef(false)
+
+  // 简历原文预览：按筛选结果读存档 PDF，页内 Modal 内嵌展示
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewName, setPreviewName] = useState('')
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null)
 
   const loadJobs = useCallback(async () => {
     try {
@@ -61,10 +53,10 @@ export default function ResumeScreeningPanel() {
     } catch { setJobs([]) }
   }, [])
 
-  const loadResults = useCallback(async (id: string) => {
+  const loadResults = useCallback(async (id?: string) => {
     setLoading(true)
     try {
-      const r = await fetchScreeningResults(id)
+      const r = await fetchScreeningResults(id || undefined)
       setResults(r.data || [])
     } catch {
       setResults([])
@@ -76,67 +68,32 @@ export default function ResumeScreeningPanel() {
   }, [loadJobs])
 
   useEffect(() => {
-    if (jdId) void loadResults(jdId)
+    void loadResults(jdId || undefined)
   }, [jdId, loadResults])
 
-  // 逐份顺序处理：进度可见、失败不中断整批（结果列表最后统一刷新）
-  const runScreening = useCallback(async (items: PendingFile[], jd: string) => {
-    if (runningRef.current) return
-    runningRef.current = true
-    setUploading(true)
+  const openPreview = async (row: ResumeScreeningResultItem) => {
+    setPreviewLoading(row.id)
     try {
-      for (const item of items) {
-        if (item.status !== 'queued') continue
-        setPending(prev => prev.map(p => p.uid === item.uid ? { ...p, status: 'running' } : p))
-        try {
-          await screenResumeAction(jd, item.file)
-          setPending(prev => prev.map(p => p.uid === item.uid ? { ...p, status: 'done' } : p))
-        } catch (err) {
-          setPending(prev => prev.map(p => p.uid === item.uid
-            ? { ...p, status: 'failed', error: err instanceof Error ? err.message : '筛选失败' } : p))
-        }
-      }
-      await loadResults(jd)
-      message.success('本批筛选完成')
+      const { base64, filename } = await fetchScreeningResumePreview(row.id)
+      setPreviewUrl(base64ToObjectUrl(base64, 'application/pdf'))
+      setPreviewName(filename || row.file_name)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '简历加载失败')
     } finally {
-      runningRef.current = false
-      setUploading(false)
-      // 清掉已完成的，保留失败项便于重试
-      setPending(prev => prev.filter(p => p.status === 'failed'))
+      setPreviewLoading(null)
     }
-  }, [loadResults, message])
-
-  const handleFiles = (files: File[]) => {
-    if (!jdId) return
-    const pdfs = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'))
-    const skipped = files.length - pdfs.length
-    if (skipped > 0) message.warning(`已忽略 ${skipped} 个非 PDF 文件`)
-    const queuedCount = pending.filter(p => p.status === 'queued' || p.status === 'running').length
-    if (queuedCount + pdfs.length > MAX_BATCH) {
-      message.warning(`单批最多 ${MAX_BATCH} 份，请分批上传`)
-      pdfs.splice(Math.max(0, MAX_BATCH - queuedCount))
-    }
-    if (!pdfs.length) return
-    const items: PendingFile[] = pdfs.map(f => ({
-      uid: `${f.name}_${f.size}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      file: f, status: 'queued',
-    }))
-    setPending(prev => [...prev, ...items])
-    void runScreening(items, jdId)
   }
 
-  const retryFailed = () => {
-    if (!jdId) return
-    const retried = pending.map(p => p.status === 'failed' ? { ...p, status: 'queued' as const } : p)
-    setPending(retried)
-    void runScreening(retried, jdId)
+  const closePreview = () => {
+    if (previewUrl) window.URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null)
   }
 
   const handleConvert = async (row: ResumeScreeningResultItem) => {
     try {
       const r = await convertScreeningResult(row.id)
       message.success(`已转为候选人「${r.data.name}」并回填档案与推荐等级，可在「岗位招聘」中查看`)
-      if (jdId) await loadResults(jdId)
+      await loadResults(jdId || undefined)
     } catch (err) {
       message.error(err instanceof Error ? err.message : '转为候选人失败')
     }
@@ -146,7 +103,7 @@ export default function ResumeScreeningPanel() {
     try {
       await deleteScreeningResult(row.id)
       message.success('已删除')
-      if (jdId) await loadResults(jdId)
+      await loadResults(jdId || undefined)
     } catch (err) {
       message.error(err instanceof Error ? err.message : '删除失败')
     }
@@ -158,8 +115,26 @@ export default function ResumeScreeningPanel() {
       render: (_v, _r, i) => <span className="font-medium">{i + 1}</span>,
     },
     {
-      title: '姓名', key: 'name', width: 90,
-      render: (_v, r) => r.candidate_name || <span className="text-gray-400">未识别</span>,
+      title: '姓名', key: 'name', width: 110,
+      render: (_v, r) => {
+        const label = r.candidate_name || '未识别'
+        return (
+          <a
+            title="点击查看简历原文"
+            onClick={() => { void openPreview(r) }}
+            className={`inline-flex items-center gap-1 ${r.candidate_name ? '' : 'text-gray-400'}`}
+          >
+            {previewLoading === r.id ? '加载中…' : label}
+            <EyeOutlined className="text-xs opacity-60" />
+          </a>
+        )
+      },
+    },
+    {
+      title: '应聘岗位', key: 'job', width: 150, ellipsis: true,
+      render: (_v, r) => r.job_name
+        ? <span title={`${r.job_name}（${r.job_department || ''}）`}>{r.job_name}</span>
+        : <span className="text-gray-400" title={r.jd_snapshot}>岗位已删除</span>,
     },
     { title: '简历文件', dataIndex: 'file_name', key: 'file_name', width: 160, ellipsis: true },
     {
@@ -226,103 +201,54 @@ export default function ResumeScreeningPanel() {
     },
   ]
 
-  const jd = jobs.find(j => j.id === jdId)
-  const doneCount = pending.filter(p => p.status === 'done').length
-  const activeCount = pending.filter(p => p.status === 'queued' || p.status === 'running' || p.status === 'failed').length
-
   return (
     <div className="space-y-4">
       <Alert
         type="info" showIcon
-        title="选择岗位需求后批量上传 PDF 简历，AI 按岗位要求逐份打分排名，辅助初筛过滤"
-        description="仅支持文字版 PDF（扫描件无法提取文本）；结果按总分降序排名，可回看历史筛选、一键转为候选人进入招聘流程。"
+        title="AI 初筛结果排名总览：全部岗位按胜任度总分降序，点击姓名查看简历原文"
+        description="简历上传与 AI 初筛入口在「岗位招聘」各岗位卡上（支持批量）；本页汇总所有初筛结果供横向对比，展开行可看完整匹配度报告，旧的上传初筛结果可转候选人。"
       />
 
       <div className="flex gap-3 flex-wrap items-center">
         <Select
-          style={{ width: 320 }} placeholder="选择岗位需求（用人要求）"
-          showSearch optionFilterProp="label"
-          value={jdId} onChange={setJdId}
+          style={{ width: 320 }} placeholder="全部岗位（不选 = 汇总全部岗位）"
+          showSearch optionFilterProp="label" allowClear
+          value={jdId} onChange={v => setJdId(v || null)}
           options={jobs.map(j => ({
             value: j.id,
             label: `${j.position_name}（${j.department}）${j.status === '招聘中' ? '' : ' · 已关闭'}`,
           }))}
         />
-        {jdId && (
-          <Button icon={<ReloadOutlined />} onClick={() => { void loadResults(jdId) }} loading={loading}>
-            刷新结果
-          </Button>
-        )}
+        <Button icon={<ReloadOutlined />} onClick={() => { void loadResults(jdId || undefined) }} loading={loading}>
+          刷新
+        </Button>
       </div>
 
-      {jd && jdId && (
-        <>
-          <Upload.Dragger
-            multiple
-            accept=".pdf,application/pdf"
-            showUploadList={false}
-            disabled={uploading}
-            beforeUpload={(_file, fileList) => {
-              // beforeUpload 逐个触发，用 fileList 首次触发时统一收文件
-              if (_file === fileList[0]) handleFiles(fileList as unknown as File[])
-              return false
-            }}
-          >
-            <p className="ant-upload-drag-icon"><UploadOutlined /></p>
-            <p className="ant-upload-text">点击或拖拽 PDF 简历到此处（可多选，单批最多 {MAX_BATCH} 份）</p>
-            <p className="ant-upload-hint">上传后自动开始逐份 AI 分析，进度在下方展示</p>
-          </Upload.Dragger>
+      <Table<ResumeScreeningResultItem>
+        rowKey="id"
+        columns={columns}
+        dataSource={results}
+        loading={loading}
+        scroll={{ x: 1400 }}
+        pagination={{ pageSize: 20, showTotal: t => `共 ${t} 份` }}
+        expandable={{
+          expandedRowRender: r => <ScreeningReport item={r} />,
+        }}
+        locale={{ emptyText: '暂无初筛结果——在「岗位招聘」的岗位卡上传简历并跑 AI 初筛后，结果自动汇总到这里' }}
+      />
 
-          {pending.length > 0 && (
-            <div className="rounded-[var(--rounded-sm)] border border-[var(--color-hairline)] p-3 space-y-2">
-              <div className="flex justify-between items-center">
-                <span className="text-[13px] font-medium">
-                  {uploading ? `AI 分析中…（已完成 ${doneCount}/${pending.length}）` : `待处理 ${activeCount} 份`}
-                </span>
-                {uploading ? (
-                  <Progress percent={Math.round((doneCount / pending.length) * 100)} size="small" style={{ width: 200 }} />
-                ) : (
-                  pending.some(p => p.status === 'failed') && (
-                    <Button size="small" onClick={retryFailed}>重试失败项</Button>
-                  )
-                )}
-              </div>
-              <div className="max-h-44 overflow-auto space-y-1">
-                {pending.map(p => (
-                  <div key={p.uid} className="flex items-center gap-2 text-[13px]">
-                    <FilePdfOutlined className="text-[var(--color-steel)]" />
-                    <span className="truncate flex-1">{p.file.name}</span>
-                    {p.status === 'queued' && <Tag>排队中</Tag>}
-                    {p.status === 'running' && <Tag color="processing">AI 分析中</Tag>}
-                    {p.status === 'done' && <Tag color="success">完成</Tag>}
-                    {p.status === 'failed' && (
-                      <Tag color="error" style={{ maxWidth: 360, whiteSpace: 'normal' }}>{p.error || '失败'}</Tag>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <Table<ResumeScreeningResultItem>
-            rowKey="id"
-            columns={columns}
-            dataSource={results}
-            loading={loading}
-            scroll={{ x: 1300 }}
-            pagination={{ pageSize: 20, showTotal: t => `共 ${t} 份` }}
-            expandable={{
-              expandedRowRender: r => <ScreeningReport item={r} />,
-            }}
-            locale={{ emptyText: uploading ? 'AI 分析完成后展示排名' : '暂无筛选结果，上传简历开始' }}
-          />
-        </>
-      )}
-      {!jdId && (
-        <div className="text-center py-8 text-[var(--color-stone)]">
-          请先选择岗位需求，再上传简历
-        </div>
-      )}
+      <Modal
+        open={!!previewUrl}
+        onCancel={closePreview}
+        footer={null}
+        width={920}
+        title={<span className="flex items-center gap-2"><FilePdfOutlined />{previewName}</span>}
+        destroyOnHidden
+      >
+        {previewUrl && (
+          <iframe src={previewUrl} title="简历原文" className="w-full rounded border border-[var(--color-hairline)]" style={{ height: '72vh' }} />
+        )}
+      </Modal>
     </div>
   )
 }

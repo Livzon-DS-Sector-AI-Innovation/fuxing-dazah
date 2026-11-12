@@ -498,6 +498,57 @@ class ResumeScreeningService:
         )).scalars().all()
         return list(rows)
 
+    async def list_ranking(
+        self, jd_id: UUID | None = None,
+    ) -> list[tuple[ResumeScreeningResult, JobRequirement | None]]:
+        """筛选结果排名总览：jd_id 为空时跨岗位全量，总分降序。
+
+        返回 (结果, 所属岗位) 对——岗位可能已被删除/软删，删除后回 None，
+        前端用 jd_snapshot 兜底展示。上传入口已迁移到岗位侧，本页只读。
+        """
+        stmt = select(ResumeScreeningResult).where(
+            ResumeScreeningResult.is_deleted == False,  # noqa: E712
+        ).order_by(
+            ResumeScreeningResult.total_score.desc(),
+            ResumeScreeningResult.created_at.desc(),
+        )
+        if jd_id is not None:
+            stmt = stmt.where(ResumeScreeningResult.job_requirement_id == jd_id)
+        rows = list((await self.session.execute(stmt)).scalars().all())
+        jd_map: dict[UUID, JobRequirement] = {}
+        if rows:
+            jd_ids = {r.job_requirement_id for r in rows}
+            for j in (await self.session.execute(
+                select(JobRequirement).where(JobRequirement.id.in_(jd_ids))
+            )).scalars().all():
+                jd_map[j.id] = j
+        return [(r, jd_map.get(r.job_requirement_id)) for r in rows]
+
+    async def get_resume_bytes(self, result_id: UUID) -> tuple[bytes, str]:
+        """读取筛选结果存档的简历原文（排名总览页点击查看）。
+
+        与候选人简历预览同一套读取规则：minio:// 或 uploads/resumes 白名单。
+        """
+        row = await self.get(result_id)
+        path = row.resume_file_path
+        if not path:
+            raise ValueError("该筛选结果没有存档简历文件")
+        if path.startswith("minio://"):
+            from app.core.storage import get_object
+
+            obj = get_object("hr", path[len("minio://"):])
+            if obj is None:
+                raise ValueError("简历文件不存在（可能已被清理）")
+            data, _ct = obj
+            return data, row.file_name or "resume.pdf"
+        import os
+
+        norm = os.path.normpath(path)
+        if not norm.startswith("uploads/resumes/") or not os.path.exists(norm):
+            raise ValueError("简历文件不存在（可能已被清理）")
+        with open(norm, "rb") as f:
+            return f.read(), row.file_name or "resume.pdf"
+
     async def delete(self, result_id: UUID) -> None:
         row = await self.get(result_id)
         row.is_deleted = True

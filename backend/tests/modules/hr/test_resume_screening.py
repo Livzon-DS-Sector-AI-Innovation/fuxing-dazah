@@ -212,6 +212,52 @@ async def test_screen_clamps_bad_ai_values(db_session: AsyncSession, client: Asy
     assert fallback.json()["data"]["recommendation"] == "待定"
 
 
+async def test_ranking_overview_across_jobs(db_session: AsyncSession, client: AsyncClient):
+    """排名总览：不传岗位 = 跨岗位全量、总分降序，行内带岗位名。"""
+    jd_a = await _mk_jd(db_session)
+    jd_b = await _mk_jd(db_session)
+    low = await _screen(client, jd_a.id, _make_pdf(["zhang san resume"]), _FAKE_AI_RESULT)
+    high = await _screen(
+        client, jd_b.id, _make_pdf(["li si resume"]),
+        {**_FAKE_AI_RESULT, "candidate_name": "李四", "total_score": 88, "recommendation": "推荐"},
+        filename="李四简历.pdf",
+    )
+    assert low.status_code == 201 and high.status_code == 201
+
+    # 不传 job_requirement_id → 全部岗位（开发库可能有历史残留，做相对断言）
+    res = await client.get("/api/v1/hr/resume-screening")
+    assert res.status_code == 200, res.text
+    rows = res.json()["data"]
+    names = [r["candidate_name"] for r in rows]
+    assert "李四" in names and "张三" in names
+    assert names.index("李四") < names.index("张三")  # 高分在前（总分降序）
+    by_name = {r["candidate_name"]: r for r in rows}
+    assert by_name["李四"]["job_requirement_id"] == str(jd_b.id)
+    assert by_name["李四"]["job_name"] == jd_b.position_name
+    assert by_name["张三"]["job_name"] == jd_a.position_name
+
+    # 按岗位过滤仍可用
+    res_a = await client.get(
+        "/api/v1/hr/resume-screening", params={"job_requirement_id": str(jd_a.id)},
+    )
+    assert [r["candidate_name"] for r in res_a.json()["data"]] == ["张三"]
+
+
+async def test_screening_resume_preview(db_session: AsyncSession, client: AsyncClient):
+    """查看筛选结果存档的简历原文：返回 PDF 字节；不存在的结果 404。"""
+    jd = await _mk_jd(db_session)
+    created = await _screen(client, jd.id, _make_pdf(["John Smith QC"]), _FAKE_AI_RESULT)
+    result_id = created.json()["data"]["id"]
+
+    res = await client.get(f"/api/v1/hr/resume-screening/{result_id}/resume-preview")
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/pdf"
+    assert res.content[:5] == b"%PDF-"
+
+    missing = await client.get(f"/api/v1/hr/resume-screening/{uuid4()}/resume-preview")
+    assert missing.status_code == 404
+
+
 async def test_screen_candidate(db_session: AsyncSession, client: AsyncClient):
     """岗位侧候选人存量简历直接初筛：免重复上传，结果回链候选人并回写推荐等级/匹配报告。"""
     import uuid as _uuid
