@@ -25,9 +25,11 @@ from app.modules.qa.schemas import (
     AprImportResult,
     AprItemCreate,
     AprItemsBulkCreate,
+    AprItemsOrderIn,
     AprItemUpdate,
     AprProductCreate,
     AprProductUpdate,
+    AprSectionCopyIn,
     AprSectionCreate,
     AprSectionUpdate,
 )
@@ -207,6 +209,38 @@ async def copy_template(
     )
 
 
+@router.post(
+    "/apr/sections/{section_id}/copy",
+    summary="复制模板段（建段+建列单请求原子完成）",
+    status_code=201,
+)
+async def copy_section(
+    section_id: uuid.UUID,
+    payload: AprSectionCopyIn,
+    user: User = Depends(_apr_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(
+        data=await service.copy_section(db, section_id, payload, user),
+        status_code=201,
+    )
+
+
+@router.put(
+    "/apr/sections/{section_id}/items/order",
+    summary="整段列重排（单事务原子，替代逐列 PATCH）",
+)
+async def reorder_section_items(
+    section_id: uuid.UUID,
+    payload: AprItemsOrderIn,
+    user: User = Depends(_apr_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(
+        data=await service.reorder_items(db, section_id, payload, user)
+    )
+
+
 # ───────────────────────── 批次与值 ─────────────────────────
 
 
@@ -374,30 +408,6 @@ async def summary(
         data=await service.summary(
             db, product_id, year=year, data_kind=data_kind, market=market
         )
-    )
-
-
-@router.get("/apr/summary/export", summary="导出年终汇总 Excel")
-async def summary_export(
-    user: User = Depends(_apr_export),
-    db: AsyncSession = Depends(get_db),
-    product_id: uuid.UUID = Query(description="产品 ID"),
-    year: int = Query(ge=2000, le=2100),
-) -> StreamingResponse:
-    data = await service.summary(db, product_id, year=year)
-    wb = service.build_export_workbook(data)
-    buf = io.BytesIO()
-    wb.save(buf)
-    product_name = data["product"]["name"]
-    encoded = quote(f"{product_name}{year}年度审核汇总.xlsx")
-    return StreamingResponse(
-        io.BytesIO(buf.getvalue()),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="apr-summary.xlsx"; filename*=UTF-8\'\'{encoded}'
-            )
-        },
     )
 
 

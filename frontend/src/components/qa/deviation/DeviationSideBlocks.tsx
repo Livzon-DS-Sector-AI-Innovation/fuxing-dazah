@@ -3,9 +3,9 @@
 import { useState } from 'react'
 import { App, Button, Image, Timeline, Tooltip, Upload } from 'antd'
 import { CloseOutlined, DeleteOutlined, DownloadOutlined, PaperClipOutlined, UploadOutlined } from '@ant-design/icons'
-import { deleteDeviationAttachment, uploadDeviationAttachment } from '@/actions/qa-deviation'
-import { deviationAttachmentUrl } from '@/lib/api/qa-deviation'
-import { DEVIATION_ACTION_LABEL, DEVIATION_STATUS_LABEL, type DeviationDetail, type DeviationStatus, type StatusLog } from '@/types/qa-deviation'
+import { deleteDeviationAttachment, uploadDeviationAttachment } from '@/actions/qa'
+import { deviationAttachmentUrl } from '@/lib/api/qa'
+import { DEVIATION_ACTION_LABEL, DEVIATION_STATUS_LABEL, type DeviationDetail, type DeviationStatus, type StatusLog } from '@/types/qa'
 import { SectionCard } from './DeviationSections'
 import { actionError, fmtBytes, fmtDateTime, photoOverlayButtonStyle } from './shared'
 

@@ -641,3 +641,27 @@ async def test_merge_import_records_value_changes() -> None:
         # merge 语义：未写入的水分列仍在库里
         values = await _values(ac, batch["id"])
         assert values[(item2["id"], 1)]["value_num"] == 5.1
+
+
+async def test_import_blank_area_limit_returns_message_not_500() -> None:
+    """used range 超过 2 万行：返回可读的错误结果（此前 message 误写成 tuple，接口 500）。"""
+    async with _client(MANAGE | ENTER) as (ac, _):
+        product = await _mk_product(ac)
+        section = await _mk_section(ac, product["id"])
+        await _mk_item(ac, section["id"])
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.append(["批号", "酸碱度"])
+        ws.append(["B0001", 4.3])
+        # 空白格也计入读取上限：把 used range 撑到 2 万行
+        ws.cell(row=20_000, column=1, value=" ")
+        buf = io.BytesIO()
+        wb.save(buf)
+
+        resp = await _import(ac, section["id"], buf.getvalue(), mode="merge")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["ok"] is False
+        assert data["errors"][0]["message"].startswith("表格空白区域超过")

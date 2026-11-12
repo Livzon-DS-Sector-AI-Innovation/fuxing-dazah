@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { App, Alert, Button, Modal, Radio, Space, Table, Typography, Upload } from 'antd'
 import { DownloadOutlined, InboxOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd'
-import { aprImportTemplateUrl, importAprSectionValues } from '@/lib/api/qa-apr'
-import type { AprImportCellError, AprImportMode, AprImportResult } from '@/types/qa-apr'
+import { aprImportTemplateUrl, importAprSectionValues } from '@/lib/api/qa'
+import type { AprImportCellError, AprImportMode, AprImportResult } from '@/types/qa'
 
 const { Dragger } = Upload
 const { Text } = Typography
@@ -183,7 +183,7 @@ export function AprImportModal({
             <p className="ant-upload-drag-icon">
               <InboxOutlined />
             </p>
-            <p style={{ color: '#787671' }}>点击或拖拽 .xlsx 文件到此区域上传</p>
+            <p style={{ color: 'var(--color-steel)' }}>点击或拖拽 .xlsx 文件到此区域上传</p>
           </Dragger>
         </div>
       )}

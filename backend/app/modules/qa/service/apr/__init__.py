@@ -54,6 +54,7 @@ from app.modules.qa.service.apr.report import (
 )
 from app.modules.qa.service.apr.template import (
     bulk_create_items,
+    copy_section,
     copy_template,
     create_item,
     create_product,
@@ -63,6 +64,7 @@ from app.modules.qa.service.apr.template import (
     delete_section,
     list_products,
     list_sections,
+    reorder_items,
     update_item,
     update_product,
     update_section,
@@ -85,6 +87,7 @@ __all__ = [
     "classify_point",
     "compute_column_stats",
     "copy_template",
+    "copy_section",
     "create_batch",
     "create_item",
     "create_product",
@@ -99,6 +102,7 @@ __all__ = [
     "list_batches",
     "list_products",
     "list_sections",
+    "reorder_items",
     "save_batch_values",
     "set_annual_review_lock",
     "summary",

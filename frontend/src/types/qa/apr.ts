@@ -72,25 +72,6 @@ export interface AprBatch {
   remark: string | null
 }
 
-export interface AprValueRow {
-  item_id: string
-  row_seq: number
-  row_label: string | null
-  value_num: number | null
-  value_text: string | null
-  remark: string | null
-}
-
-/** 录入表单渲染数据：GET /apr/batches/{id}/values */
-export interface AprBatchValuesPayload {
-  batch: AprBatch
-  section: AprSection
-  product: AprProduct
-  items: AprItem[]
-  values: AprValueRow[]
-  locked: boolean
-}
-
 export interface AprTrendPoint {
   batch_id: string
   batch_no: string

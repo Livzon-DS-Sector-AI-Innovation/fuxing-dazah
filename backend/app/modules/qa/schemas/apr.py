@@ -257,6 +257,31 @@ class AprItemsBulkCreate(BaseModel):
     items: list[AprItemDraft] = Field(min_length=1, max_length=300)
 
 
+class AprSectionCopyIn(BaseModel):
+    """复制模板段到目标产品：单请求原子完成（建段+建列，替代前端两步写）。
+
+    只复制启用的列定义（停用列跳过），计数在响应里透明报告。
+    """
+
+    product_id: uuid.UUID
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def _trim_name(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("段名不能为空")
+        return text
+
+
+class AprItemsOrderIn(BaseModel):
+    """整段列重排：必须按目标顺序携带该段全部未删除列的 id（含停用列），
+    后端单事务重赋 sort_order，替代逐列 PATCH。"""
+
+    item_ids: list[uuid.UUID] = Field(min_length=1, max_length=300)
+
+
 class AprItemUpdate(BaseModel):
     """编辑列定义；未传字段不改。code 建议不再修改（导出列匹配依赖）。"""
 

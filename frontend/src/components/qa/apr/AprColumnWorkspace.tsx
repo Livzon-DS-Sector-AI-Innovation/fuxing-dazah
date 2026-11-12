@@ -29,8 +29,8 @@ import {
 } from '@ant-design/icons'
 import clsx from 'clsx'
 import { actionError, PILL } from '@/components/qa/deviation/shared'
-import { createAprItem, deleteAprItem, updateAprItem } from '@/actions/qa-apr'
-import type { AprItem, AprProduct, AprSection } from '@/types/qa-apr'
+import { createAprItem, deleteAprItem, reorderAprItems, updateAprItem } from '@/actions/qa'
+import type { AprItem, AprProduct, AprSection } from '@/types/qa'
 import { AprMeta, AprSheet } from './AprChrome'
 import { AprItemModal } from './AprItemModal'
 import {
@@ -176,7 +176,8 @@ export function AprColumnWorkspace({
     }
   }
 
-  /** 上移/下移：重排整段顺序后只提交有变化的行，避免 sort_order 重复导致排序错乱。 */
+  /** 上移/下移：整段顺序一次提交（后端单事务重赋 sort_order），
+   *  替代旧的逐列 PATCH——中途失败会乱序且无原子性。 */
   const handleMove = async (item: AprItem, direction: -1 | 1) => {
     const index = items.findIndex((row) => row.id === item.id)
     const targetIndex = index + direction
@@ -184,19 +185,15 @@ export function AprColumnWorkspace({
     const next = [...items]
     const [moved] = next.splice(index, 1)
     next.splice(targetIndex, 0, moved)
-    const updates = next
-      .map((row, position) => ({ row, sortOrder: (position + 1) * 10 }))
-      .filter(({ row, sortOrder }) => row.sort_order !== sortOrder)
-    if (updates.length === 0) return
 
     setBusyItemId(item.id)
     try {
-      const results = await Promise.all(
-        updates.map(({ row, sortOrder }) => updateAprItem(row.id, { sort_order: sortOrder })),
+      const result = await reorderAprItems(
+        section!.id,
+        next.map((row) => row.id),
       )
-      const failure = results.find((result) => !result.success)
-      if (failure && !failure.success) {
-        message.error(actionError(failure))
+      if (!result.success) {
+        message.error(actionError(result))
         return
       }
       onChanged()

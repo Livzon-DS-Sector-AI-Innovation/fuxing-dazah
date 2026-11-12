@@ -25,13 +25,13 @@ import {
   deleteAprSection,
   updateAprProduct,
   updateAprSection,
-} from '@/actions/qa-apr'
-import { fetchAprProducts, fetchAprSections } from '@/lib/api/qa-apr'
+} from '@/actions/qa'
+import { fetchAprProducts, fetchAprSections } from '@/lib/api/qa'
 import type {
   AprDataKind,
   AprProduct,
   AprSection,
-} from '@/types/qa-apr'
+} from '@/types/qa'
 import { AprColumnWorkspace } from './AprColumnWorkspace'
 import { AprMeta, AprSheet } from './AprChrome'
 import { AprConfigTree } from './AprConfigTree'
@@ -268,7 +268,6 @@ export function AprConfigPage() {
         <AprCopySectionModal
           products={products}
           targetProduct={activeProduct}
-          targetSections={sections}
           defaultSource={copySectionSource}
           onClose={() => setCopySectionSource(null)}
           onCopied={(newSectionId) => {

@@ -59,6 +59,7 @@ import { PageHeading } from '@/components/shared/PageHeading'
 import { QaMarkdownPreview } from './QaMarkdownPreview'
 import { usePermission } from '@/hooks/usePermission'
 import {
+  fetchAprProducts,
   fetchQaOperationLogs,
   fetchQaAiAnalysis,
   fetchQaMasterObjectProposals,
@@ -98,9 +99,8 @@ import {
   updateQaVersionRelations,
   uploadQaVersion,
 } from '@/actions/qa'
-import { fetchAprProducts } from '@/lib/api/qa-apr'
-import type { AprProduct } from '@/types/qa-apr'
 import type {
+  AprProduct,
   QaOperationLog,
   QaOperationLogCell,
   QaAiAnalysisRun,

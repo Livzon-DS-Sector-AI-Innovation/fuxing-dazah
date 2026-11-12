@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -27,177 +27,48 @@ import {
 } from '@/components/qa/deviation/shared'
 import { PageHeading } from '@/components/shared/PageHeading'
 import { usePermission } from '@/hooks/usePermission'
-import { createAprBatch, deleteAprBatch, saveAprBatchValues } from '@/actions/qa-apr'
-import { fetchAprProducts, fetchAprSections, fetchAprSummary } from '@/lib/api/qa-apr'
-import type { AprItem, AprSummaryRow } from '@/types/qa-apr'
+import { createAprBatch, deleteAprBatch, saveAprBatchValues } from '@/actions/qa'
+import { fetchAprProducts, fetchAprSections, fetchAprSummary } from '@/lib/api/qa'
+import type { AprItem } from '@/types/qa'
 import {
   AprChromeStyles,
   AprMeta,
   AprScopeBar,
   AprSheet,
   AprStamp,
-  AprValue,
   AprYearField,
+  prefersReducedMotion,
 } from './AprChrome'
 import { confirmAsync, DANGER_OK_PROPS, DATA_KIND_LABEL } from './AprConfigShared'
+import { AprEntryCell } from './AprEntryCell'
+import {
+  draftChangeCount,
+  draftKeyOf,
+  draftTimestamp,
+  EntryDraftBanner,
+  pruneDraft,
+  removeDraft,
+  writeDraft,
+  type EntryDraft,
+} from './AprEntryDraft'
+import {
+  buildEntryRows,
+  cellFilled,
+  cellStatus,
+  cellTextInvalid,
+  focusRowSibling,
+  itemDisplayName,
+  omitByPrefix,
+  reverseByBatch,
+  stripRowEdits,
+  type EditKey,
+  type EntryRow,
+  type GridValue,
+} from './AprEntryShared'
 import { AprImportModal } from './AprImportModal'
 
-// ═════════════════════════ 工具 ═════════════════════════
-
-/** #min/#max 成对列的名称后缀展示。 */
-function itemDisplayName(item: AprItem): string {
-  if (item.code.endsWith('#min')) return `${item.name_cn} MIN`
-  if (item.code.endsWith('#max')) return `${item.name_cn} MAX`
-  return item.name_cn
-}
-
-/** 数值列只接受纯数字（允许负号、小数点与首尾空格），非法输入返回 null。 */
-function parseNumeric(raw: string): number | null {
-  const text = raw.trim()
-  if (!text) return null
-  const value = Number(text)
-  return Number.isFinite(value) ? value : null
-}
-
-/** 数值格输入：先 NFKC 归一化（全角数字、＜、．等纠正为半角），解析成功走数值槽；
- *  其余文本原样保留，保存时按该列 quick_values 白名单拦截。 */
-function numberCellPatch(raw: string): Pick<GridValue, 'num' | 'raw' | 'text'> {
-  const normalized = raw.normalize('NFKC')
-  const num = parseNumeric(normalized)
-  return { num, raw: normalized, text: num == null ? normalized.trim() : '' }
-}
-
-/** 数值列文字结果是否合法：空值合法，非空必须命中该列快捷值白名单。 */
-function cellTextInvalid(item: AprItem, cell: GridValue): boolean {
-  const text = cell.text.trim()
-  return cell.num == null && !!text && !item.quick_values.includes(text)
-}
-
-/** 单元格是否已填：数值/文字任一槽有值即算（数值列填未检出也算）。 */
-function cellFilled(cell: GridValue | undefined): boolean {
-  return cell?.num != null || !!cell?.text?.trim()
-}
-
-/** 前端 OOS/OOT 判定（与后端 classify_point 同口径），行内编辑实时着色用。 */
-function classifyCell(item: AprItem, value: number): 'normal' | 'oot' | 'oos' {
-  if (
-    (item.spec_min != null && value < item.spec_min) ||
-    (item.spec_max != null && value > item.spec_max)
-  ) {
-    return 'oos'
-  }
-  if (
-    (item.oot_min != null && value < item.oot_min) ||
-    (item.oot_max != null && value > item.oot_max)
-  ) {
-    return 'oot'
-  }
-  return 'normal'
-}
-
-/** 数值格当前判定：编辑值优先（改完立刻重新着色），否则用服务端判定。 */
-function cellStatus(item: AprItem, cell: GridValue, server: 'normal' | 'oot' | 'oos' | null | undefined) {
-  if (cell.num != null) return classifyCell(item, cell.num)
-  return server ?? null
-}
-
-/** 数值单元格：raw 是输入框里的原文，num 是解析结果（非法/空则为 null）。 */
-type GridValue = { num: number | null; raw: string; text: string }
-/** 编辑键：`${batchId}|${itemId}|${rowSeq}`；行标签键：`${batchId}|${rowSeq}`。 */
-type EditKey = string
-
-/** 矩阵行：一批一行（multi_row 段按已录行号展开，server 为 null 的是未保存的新增行）。 */
-type EntryRow = {
-  batchId: string
-  batchNo: string
-  rowSeq: number
-  rowLabel: string | null
-  server: AprSummaryRow | null
-  extra: boolean
-}
-
-/** 矩阵行 = 汇总行 + 本地加行（新行号创建时锁定，避免删行后重排错位）；
- *  加行插到该批最后一行之后，批次已不在汇总里（被删）的加行自然丢弃。 */
-function buildEntryRows(
-  rows: AprSummaryRow[] | undefined,
-  extraRows: Record<string, number[]>,
-): EntryRow[] {
-  if (!rows?.length) return []
-  return rows.flatMap((r, i) => {
-    const base: EntryRow = {
-      batchId: r.batch_id,
-      batchNo: r.batch_no,
-      rowSeq: r.row_seq,
-      rowLabel: r.row_label,
-      server: r,
-      extra: false,
-    }
-    const atBatchEnd = i + 1 >= rows.length || rows[i + 1].batch_id !== r.batch_id
-    const seqs = atBatchEnd ? extraRows[r.batch_id] : undefined
-    if (!seqs?.length) return [base]
-    return [
-      base,
-      ...seqs.map((rowSeq) => ({
-        batchId: r.batch_id,
-        batchNo: r.batch_no,
-        rowSeq,
-        rowLabel: null as string | null,
-        server: null as AprSummaryRow | null,
-        extra: true,
-      })),
-    ]
-  })
-}
-
-/** 批次整组倒序：只把批次先后反过来，一批多行时行内仍保持 1→n（加行仍贴在组尾）。 */
-function reverseByBatch(rows: EntryRow[]): EntryRow[] {
-  const groups: EntryRow[][] = []
-  for (const row of rows) {
-    const group = groups[groups.length - 1]
-    if (group && group[0].batchId === row.batchId) group.push(row)
-    else groups.push([row])
-  }
-  return groups.reverse().flat()
-}
-
-function omitByPrefix<T>(record: Record<string, T>, prefix: string): Record<string, T> {
-  const next: Record<string, T> = {}
-  for (const [key, value] of Object.entries(record)) {
-    if (!key.startsWith(prefix)) next[key] = value
-  }
-  return next
-}
-
-/** 清掉某批某行的全部单元格编辑（删行/删除批次后防脏键残留）。 */
-function stripRowEdits(record: Record<EditKey, GridValue>, batchId: string, rowSeq: number) {
-  const next: Record<EditKey, GridValue> = {}
-  const tail = `|${rowSeq}`
-  for (const [key, value] of Object.entries(record)) {
-    if (key.startsWith(`${batchId}|`) && key.endsWith(tail) && key.split('|').length === 3) {
-      continue
-    }
-    next[key] = value
-  }
-  return next
-}
-
-/** 回车 / Shift+回车：聚焦下/上一行同列的可编辑格（跳过已删行与只读格）。 */
-function focusRowSibling(e: KeyboardEvent<HTMLInputElement>, col: string, step: 1 | -1) {
-  // 输入法回车是确认候选词，不该跳格
-  if (e.nativeEvent.isComposing) return
-  const origin = e.currentTarget.closest('tr')
-  let tr = (step > 0 ? origin?.nextElementSibling : origin?.previousElementSibling) as
-    | HTMLElement
-    | null
-  while (tr) {
-    const input = tr.querySelector<HTMLInputElement>(`input[data-apr-col="${col}"]`)
-    if (input) {
-      input.focus()
-      return
-    }
-    tr = (step > 0 ? tr.nextElementSibling : tr.previousElementSibling) as HTMLElement | null
-  }
-}
+// 纯函数（格子解析/校验、矩阵行构建、草稿读写）拆在 AprEntryShared / AprEntryDraft，
+// 可编辑格渲染在 AprEntryCell；本文件只保留页面状态与保存流程。
 
 // ═════════════════════════ 数据录入页 ═════════════════════════
 
@@ -237,6 +108,10 @@ export function AprEntryPage() {
   const [savingBatchId, setSavingBatchId] = useState<string | null>(null)
   const [allSaving, setAllSaving] = useState(false)
   const [focusedKey, setFocusedKey] = useState<EditKey | null>(null)
+  const [flashKey, setFlashKey] = useState<EditKey | null>(null)
+  const [saveProgress, setSaveProgress] = useState<{ done: number; total: number } | null>(null)
+  const latestDraft = useRef<{ key: string; draft: EntryDraft } | null>(null)
+  const flashTimer = useRef<number | null>(null)
 
   const [registerOpen, setRegisterOpen] = useState(false)
   const [registerSaving, setRegisterSaving] = useState(false)
@@ -282,6 +157,16 @@ export function AprEntryPage() {
   const activeSectionId =
     pickedSection ?? urlSection?.id ?? (sections.length > 0 ? sections[0].id : null)
   const currentSection = sections.find((s) => s.id === activeSectionId) ?? null
+
+  // 草稿按「产品 × 段 × 年度」分键：切换上下文后仍能回到各自的未保存现场。
+  const draftKey =
+    activeProductId && activeSectionId ? draftKeyOf(activeProductId, activeSectionId, year) : null
+
+  /** 丢弃当前上下文的草稿（保存成功、还原或确认放弃后调用）。 */
+  const discardDraft = () => {
+    latestDraft.current = null
+    if (draftKey) removeDraft(draftKey)
+  }
 
   // 矩阵数据直接用年终汇总接口（批次行 + 单元格值 + 列定义一次拿全；
   // 单段单年批次量级几十，与汇总页同口径不分页）。
@@ -333,29 +218,73 @@ export function AprEntryPage() {
   ])
   const hasDirty = dirtyBatches.size > 0
 
-  // 刷新/关标签页会丢行内编辑，交给浏览器原生确认兜底
+  // 行内编辑只存在内存里：按 250ms 防抖写 localStorage，覆盖刷新、崩溃与站内跳转；
+  // 保存、还原或确认放弃后由对应操作清除。
+  useEffect(() => {
+    if (!hasDirty) {
+      // 行级还原/删掉最后一条加行等路径没有显式 discard，靠这里清掉已写过盘的草稿；
+      // 首屏挂载时 latestDraft 为空，不会误删上次会话留下的待恢复草稿。
+      const latest = latestDraft.current
+      if (latest) removeDraft(latest.key)
+      latestDraft.current = null
+      return
+    }
+    if (!draftKey) return
+    const draft: EntryDraft = {
+      v: 1,
+      edits,
+      labelEdits,
+      extraRows,
+      removedRows: [...removedRows],
+      savedAt: draftTimestamp(),
+    }
+    latestDraft.current = { key: draftKey, draft }
+    const timer = window.setTimeout(() => writeDraft(draftKey, draft), 250)
+    return () => window.clearTimeout(timer)
+  }, [draftKey, hasDirty, edits, labelEdits, extraRows, removedRows])
+
+  // 组件卸载（站内跳转/关标签页）时同步落盘，避免防抖计时器被 cleanup 取消而丢最后一次输入。
+  useEffect(
+    () => () => {
+      const latest = latestDraft.current
+      if (latest) writeDraft(latest.key, latest.draft)
+    },
+    [],
+  )
+
+  // 刷新/关标签页会丢行内编辑：落盘草稿后再交给浏览器原生确认兜底
   useEffect(() => {
     if (!hasDirty) return
     const warn = (event: BeforeUnloadEvent) => {
+      const latest = latestDraft.current
+      if (latest) writeDraft(latest.key, latest.draft)
       event.preventDefault()
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [hasDirty])
 
-  /** 切换产品/段/年度会清空行内编辑，先对未保存改动做一次确认。 */
-  const guardDirty = (action: () => void) => {
+  /** 切换产品/段/年度、导入前先对未保存改动做一次确认；确认即丢弃当前草稿。 */
+  const guardDirty = (
+    action: () => void,
+    options?: { title?: string; content?: string; okText?: string; cancelText?: string },
+  ) => {
     if (dirtyBatches.size === 0) {
       action()
       return
     }
     confirmAsync(modal, {
-      title: '放弃未保存的改动？',
-      content: `${dirtyBatches.size} 个批次还有未保存的改动，切换后这些改动会丢失。`,
-      okText: '放弃并切换',
-      cancelText: '留在本页',
+      title: options?.title ?? '放弃未保存的改动？',
+      content:
+        options?.content ??
+        `${dirtyBatches.size} 个批次还有未保存的改动，切换后这些改动会丢失。`,
+      okText: options?.okText ?? '放弃并切换',
+      cancelText: options?.cancelText ?? '留在本页',
       okButtonProps: DANGER_OK_PROPS,
-      onOk: action,
+      onOk: () => {
+        discardDraft()
+        action()
+      },
     })
   }
 
@@ -367,6 +296,20 @@ export function AprEntryPage() {
     setRemovedRows(new Set())
     setCellErrors({})
     setFocusedKey(null)
+    setFlashKey(null)
+  }
+
+  /** 恢复 localStorage 草稿；只保留当前还存在的批次，避免幽灵未保存计数。 */
+  const restoreDraft = (draft: EntryDraft) => {
+    const batchIds = new Set(entryRows.map((row) => row.batchId))
+    const pruned = pruneDraft(draft, batchIds)
+    setEdits(pruned.edits)
+    setLabelEdits(pruned.labelEdits)
+    setExtraRows(pruned.extraRows)
+    setRemovedRows(new Set(pruned.removedRows))
+    setCellErrors({})
+    setFocusedKey(null)
+    message.success(`已恢复 ${draftChangeCount(pruned)} 处未保存修改，请检查后保存`)
   }
 
   const cellOf = (row: EntryRow, item: AprItem): GridValue => {
@@ -388,6 +331,55 @@ export function AprEntryPage() {
       delete next[key]
       return next
     })
+  }
+
+  const setCellError = (key: EditKey, message: string | null) => {
+    setCellErrors((prev) => {
+      if (message == null) {
+        if (!prev[key]) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      }
+      return { ...prev, [key]: message }
+    })
+  }
+
+  const invalidTextMessage = (item: AprItem) =>
+    item.quick_values.length > 0
+      ? `只能填数字或：${item.quick_values.join('、')}`
+      : '只能填数字（该列未配置文字结果）'
+
+  /** 数值列文字结果在离开格子时校验，避免边打字边报红（如「未检出」打到一半）。 */
+  const validateNumericCell = (key: EditKey, item: AprItem, cell: GridValue) => {
+    if (item.value_type !== 'number') return
+    setCellError(key, cellTextInvalid(item, cell) ? invalidTextMessage(item) : null)
+  }
+
+  /** 保存失败后定位并高亮第一个错误格；若被批号筛选挡住，先清筛选。 */
+  const focusEntryCell = (key: EditKey) => {
+    const batchId = key.split('|')[0]
+    const batchNo = entryRows.find((row) => row.batchId === batchId)?.batchNo
+    if (batchNo && keywordText && !batchNo.toLowerCase().includes(keywordText)) {
+      setKeyword('')
+      syncUrl({ keyword: null })
+    }
+    setFlashKey(key)
+    if (flashTimer.current) window.clearTimeout(flashTimer.current)
+    flashTimer.current = window.setTimeout(() => {
+      setFlashKey((current) => (current === key ? null : current))
+    }, 1600)
+    // 等可能的「清除筛选」渲染完成后再定位
+    window.setTimeout(() => {
+      const td = document.getElementById(`apr-entry-cell-${key}`)
+      const input = td?.querySelector('input')
+      td?.scrollIntoView({
+        block: 'center',
+        inline: 'center',
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      })
+      input?.focus({ preventScroll: true })
+    }, 60)
   }
 
   const clearBatchLocalState = (batchId: string) => {
@@ -427,6 +419,7 @@ export function AprEntryPage() {
     if (Object.keys(errors).length > 0) {
       setCellErrors((prev) => ({ ...prev, ...errors }))
       message.error(`${batchNo} 有 ${Object.keys(errors).length} 个必填项未填写`)
+      focusEntryCell(Object.keys(errors)[0])
       return false
     }
     // 数值列文字结果必须命中该列快捷值白名单（后端保存时同口径兜底）
@@ -435,15 +428,13 @@ export function AprEntryPage() {
       for (const item of items) {
         if (item.value_type !== 'number') continue
         if (!cellTextInvalid(item, cellOf(row, item))) continue
-        invalidErrors[`${batchId}|${item.id}|${row.rowSeq}`] =
-          item.quick_values.length > 0
-            ? `只能填数字或：${item.quick_values.join('、')}`
-            : '只能填数字（该列未配置文字结果）'
+        invalidErrors[`${batchId}|${item.id}|${row.rowSeq}`] = invalidTextMessage(item)
       }
     }
     if (Object.keys(invalidErrors).length > 0) {
       setCellErrors((prev) => ({ ...prev, ...invalidErrors }))
       message.error(`${batchNo} 有 ${Object.keys(invalidErrors).length} 处文字结果不在该列允许范围内`)
+      focusEntryCell(Object.keys(invalidErrors)[0])
       return false
     }
     const values: {
@@ -477,8 +468,14 @@ export function AprEntryPage() {
       }
       message.success(`已保存 ${batchNo} 的数据（${result.data?.saved ?? 0} 项）`)
       clearBatchLocalState(batchId)
+      // 这一批是最后一个脏批次时，草稿已无用，直接清掉
+      if (dirtyBatches.size === 1 && dirtyBatches.has(batchId)) discardDraft()
       invalidate()
       return true
+    } catch (error) {
+      // 服务端 action 本身抛错（网络中断/代理超时）时不能让调用方误判为已保存
+      message.error(error instanceof Error ? error.message : '保存失败，请检查网络后重试')
+      return false
     } finally {
       setSavingBatchId(null)
     }
@@ -494,12 +491,20 @@ export function AprEntryPage() {
       return list
     }, [])
     setAllSaving(true)
+    setSaveProgress({ done: 0, total: targets.length })
+    let allOk = targets.length > 0
     try {
-      for (const target of targets) {
-        if (!(await saveBatch(target.id, target.no))) break
+      for (const [index, target] of targets.entries()) {
+        if (!(await saveBatch(target.id, target.no))) {
+          allOk = false
+          break
+        }
+        setSaveProgress({ done: index + 1, total: targets.length })
       }
     } finally {
       setAllSaving(false)
+      setSaveProgress(null)
+      if (allOk) discardDraft()
     }
   }
 
@@ -510,7 +515,10 @@ export function AprEntryPage() {
       okText: '放弃并还原',
       cancelText: '继续编辑',
       okButtonProps: DANGER_OK_PROPS,
-      onOk: clearAllEdits,
+      onOk: () => {
+        discardDraft()
+        clearAllEdits()
+      },
     })
   }
 
@@ -537,6 +545,17 @@ export function AprEntryPage() {
       message.success('批次已登记')
       setRegisterOpen(false)
       registerForm.resetFields()
+      // 登记到其他年度时切过去，否则新批次不会出现在当前表格里
+      if (values.year !== year) {
+        if (hasDirty) {
+          message.info(
+            `批次已登记到 ${values.year} 年度；当前还有未保存改动，保存后再切换查看。`,
+          )
+        } else {
+          setYear(values.year)
+          syncUrl({ year: String(values.year) })
+        }
+      }
       invalidate()
     } finally {
       setRegisterSaving(false)
@@ -597,83 +616,25 @@ export function AprEntryPage() {
   const renderCell = (item: AprItem, row: EntryRow) => {
     const key = `${row.batchId}|${item.id}|${row.rowSeq}`
     const cell = cellOf(row, item)
-    const removed = removedRows.has(`${row.batchId}|${row.rowSeq}`)
-    const error = cellErrors[key]
-    const status = cellStatus(item, cell, row.server?.cells[item.id]?.status)
-    const color =
-      status === 'oos' ? 'var(--color-error)' : status === 'oot' ? 'var(--color-warning)' : undefined
-    const invalid = item.value_type === 'number' && cellTextInvalid(item, cell)
-
-    if (readOnly || removed) {
-      return (
-        <AprValue
-          value={cell.num ?? cell.text ?? ''}
-          status={removed ? null : status}
-          unit={cell.num != null ? item.unit : null}
-        />
-      )
-    }
-    if (item.value_type === 'text') {
-      return (
-        <Input
-          variant="borderless"
-          size="small"
-          maxLength={300}
-          style={{ width: '100%', color }}
-          status={error ? 'error' : undefined}
-          title={error ?? '文字判定，如 符合规定 / 未检出'}
-          value={cell.text}
-          data-apr-col={item.id}
-          onPressEnter={(e) => focusRowSibling(e, item.id, e.shiftKey ? -1 : 1)}
-          onChange={(e) => setCell(key, { num: null, raw: e.target.value, text: e.target.value })}
-        />
-      )
-    }
+    const rowDesc = multiRow
+      ? `第${row.rowSeq}行${row.rowLabel ? ` ${row.rowLabel}` : ''}`
+      : ''
     return (
-      <Input
-        variant="borderless"
-        size="small"
-        style={{ width: '100%', color }}
-        status={error || invalid ? 'error' : undefined}
-        title={
-          error ??
-          (invalid
-            ? `只能填数字或：${item.quick_values.join('、') || '（该列未配置文字结果）'}`
-            : undefined)
-        }
-        inputMode="decimal"
-        value={cell.raw}
-        data-apr-col={item.id}
-        onPressEnter={(e) => focusRowSibling(e, item.id, e.shiftKey ? -1 : 1)}
-        onFocus={() => setFocusedKey(key)}
-        onBlur={() => setFocusedKey((k) => (k === key ? null : k))}
-        // suffix 容器必须常驻、只切换内部内容：聚焦时动态增删 suffix 会改变
-        // DOM 结构导致输入框失焦（antd 官方已知行为）。快捷标签仅在聚焦且为空的格子出现，
-        // 已有值时让位给数值和单位，避免窄列里按钮把输入内容挤没。
-        suffix={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {focusedKey === key && !cell.raw.trim()
-              ? item.quick_values.map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={AprChromeStyles.ndQuick}
-                    aria-label={`填入${value}`}
-                    title={`${value}（原样保留，统计口径由列定义决定）`}
-                    // 阻止 mousedown 抢焦点，点击后输入框保持聚焦状态
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => setCell(key, { num: null, raw: value, text: value })}
-                  >
-                    {value}
-                  </button>
-                ))
-              : null}
-            {item.unit && (cell.num != null || !cell.raw.trim()) ? (
-              <span className={AprChromeStyles.unit}>{item.unit}</span>
-            ) : null}
-          </span>
-        }
-        onChange={(e) => setCell(key, numberCellPatch(e.target.value))}
+      <AprEntryCell
+        item={item}
+        cell={cell}
+        status={cellStatus(item, cell, row.server?.cells[item.id]?.status)}
+        error={cellErrors[key]}
+        removed={removedRows.has(`${row.batchId}|${row.rowSeq}`)}
+        readOnly={readOnly}
+        focused={focusedKey === key}
+        cellLabel={`${row.batchNo}${rowDesc ? ` ${rowDesc}` : ''} ${itemDisplayName(item)}`}
+        onCellChange={(patch) => setCell(key, patch)}
+        onFocusedChange={(value) => {
+          if (value) setFocusedKey(key)
+          else setFocusedKey((k) => (k === key ? null : k))
+        }}
+        onBlurValidate={(value) => validateNumericCell(key, item, value)}
       />
     )
   }
@@ -699,15 +660,20 @@ export function AprEntryPage() {
     align: 'center',
     // 组界放在列左侧：表头、表体都不画逐格竖线，只留分组结构线
     onHeaderCell: groupStart ? () => ({ className: AprChromeStyles.groupStart }) : undefined,
-    // 有未保存编辑的格子铺淡琥珀底，与操作列「保存」呼应
-    onCell: (row) => ({
-      className:
-        clsx(
-          edits[`${row.batchId}|${item.id}|${row.rowSeq}`] != null && AprChromeStyles.cellDirty,
-          groupStart && AprChromeStyles.groupStart,
-        ) || undefined,
-      style: { padding: '4px 8px' },
-    }),
+    // 有未保存编辑的格子铺淡琥珀底，与操作列「保存」呼应；保存失败时按 id 定位错误格
+    onCell: (row) => {
+      const key = `${row.batchId}|${item.id}|${row.rowSeq}`
+      return {
+        id: `apr-entry-cell-${key}`,
+        className:
+          clsx(
+            edits[key] != null && flashKey !== key && AprChromeStyles.cellDirty,
+            flashKey === key && AprChromeStyles.cellFlash,
+            groupStart && AprChromeStyles.groupStart,
+          ) || undefined,
+        style: { padding: '4px 8px' },
+      }
+    },
     render: (_v, row) => renderCell(item, row),
   })
 
@@ -786,6 +752,7 @@ export function AprEntryPage() {
                   size="small"
                   maxLength={32}
                   style={{ width: '100%' }}
+                  aria-label={`${row.batchNo} 第${row.rowSeq}行 行名`}
                   placeholder={`第 ${row.rowSeq} 行`}
                   value={labelEdits[key] ?? row.rowLabel ?? ''}
                   data-apr-col="__label"
@@ -889,7 +856,7 @@ export function AprEntryPage() {
   const scrollX = (multiRow ? 470 : 362) + items.length * 140
 
   return (
-    <div style={qaPageStyle}>
+    <div style={hasDirty ? { ...qaPageStyle, paddingBottom: 76 } : qaPageStyle}>
       <PageHeading
         title="数据录入"
         subtitle="按产品模板逐批登记批号，在表格里直接填写工艺参数与检验结果。年度定稿后不可修改。"
@@ -938,6 +905,15 @@ export function AprEntryPage() {
         />
       )}
 
+      {!hasDirty && draftKey && !summaryQuery.isLoading && entryRows.length > 0 && (
+        <EntryDraftBanner
+          key={draftKey}
+          draftKey={draftKey}
+          batchIds={new Set(entryRows.map((row) => row.batchId))}
+          onRestore={restoreDraft}
+        />
+      )}
+
       <AprScopeBar
         lead={
           <>
@@ -947,6 +923,7 @@ export function AprEntryPage() {
               showSearch
               optionFilterProp="label"
               value={activeProductId}
+              disabled={allSaving}
               onChange={(v) => {
                 guardDirty(() => {
                   setPickedProductId(v)
@@ -972,7 +949,7 @@ export function AprEntryPage() {
                   syncUrl({ section: sections.find((s) => s.id === v)?.name ?? null })
                 })
               }}
-              disabled={!activeProductId}
+              disabled={!activeProductId || allSaving}
               loading={sectionsQuery.isLoading}
               options={sections.map((s) => ({
                 value: s.id,
@@ -985,6 +962,7 @@ export function AprEntryPage() {
           <>
             <AprYearField
               value={year}
+              disabled={allSaving}
               onChange={(v) => {
                 guardDirty(() => {
                   setYear(v)
@@ -1039,35 +1017,31 @@ export function AprEntryPage() {
         actions={
           <Space size={6}>
             {hasDirty && <AprStamp tone="warn">{dirtyBatches.size} 批未保存</AprStamp>}
-            {hasDirty && (
-              <Button
-                size="small"
-                disabled={allSaving || savingBatchId !== null}
-                onClick={resetAllEdits}
-              >
-                还原
-              </Button>
-            )}
-            {hasDirty && canEnter && !locked && (
-              <Button
-                type="primary"
-                size="small"
-                loading={allSaving}
-                disabled={!allSaving && savingBatchId !== null}
-                onClick={() => void saveAllBatches()}
-              >
-                全部保存
-              </Button>
-            )}
             {currentSection?.multi_row && <AprStamp tone="warn">一批多行</AprStamp>}
             {locked && <AprStamp tone="locked">年度已定稿</AprStamp>}
             {canEnter && (
-              <Button disabled={!activeSectionId || locked} onClick={() => setImportOpen(true)}>
+              <Button
+                disabled={!activeSectionId || locked || allSaving}
+                onClick={() =>
+                  guardDirty(
+                    () => {
+                      clearAllEdits()
+                      setImportOpen(true)
+                    },
+                    {
+                      title: '导入会先丢弃未保存的改动',
+                      content: `${dirtyBatches.size} 个批次还有未保存的改动，导入前会先丢弃这些本地修改（文件里的值不受影响）。`,
+                      okText: '丢弃并导入',
+                      cancelText: '先保存',
+                    },
+                  )
+                }
+              >
                 导入 Excel
               </Button>
             )}
             {canEnter && (
-              <Button type="primary" disabled={!activeSectionId || locked} onClick={() => setRegisterOpen(true)}>
+              <Button type="primary" disabled={!activeSectionId || locked || allSaving} onClick={() => setRegisterOpen(true)}>
                 登记批次
               </Button>
             )}
@@ -1187,6 +1161,34 @@ export function AprEntryPage() {
         sectionName={currentSection?.name ?? null}
         year={year}
       />
+
+      {hasDirty && (
+        <div className={AprChromeStyles.saveBar} role="status" aria-live="polite">
+          <span className={AprChromeStyles.saveBarCount}>
+            {saveProgress
+              ? `正在保存 ${saveProgress.done}/${saveProgress.total} 批`
+              : `${dirtyBatches.size} 批未保存`}
+          </span>
+          <Button
+            size="small"
+            disabled={allSaving || savingBatchId !== null}
+            onClick={resetAllEdits}
+          >
+            还原
+          </Button>
+          {canEnter && !locked && (
+            <Button
+              type="primary"
+              size="small"
+              loading={allSaving}
+              disabled={!allSaving && savingBatchId !== null}
+              onClick={() => void saveAllBatches()}
+            >
+              全部保存
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

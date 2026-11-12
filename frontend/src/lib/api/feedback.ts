@@ -4,7 +4,7 @@ import { apiFetchPaginated, apiGet } from '@/lib/http-client'
 import type { Feedback, FeedbackListParams } from '@/types/feedback'
 
 // 浏览器优先走 Next rewrite，避免跨端口/跨域时 httpOnly auth cookie 丢失；
-// 服务端调用再使用显式后端地址（与 lib/api/qa.ts 同口径）。
+// 服务端调用再使用显式后端地址（与 lib/api/qa/qa.ts 同口径）。
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (typeof window === 'undefined' ? 'http://localhost:8000' : '')
 const BASE = `${API_BASE}/api/v1/feedback`
 

@@ -4,7 +4,7 @@ import { useState, type CSSProperties } from 'react'
 import { Alert, App, Button, Checkbox, Modal, Tag } from 'antd'
 import { RobotOutlined } from '@ant-design/icons'
 import type { FormInstance } from 'antd'
-import { deviationAiAssist } from '@/actions/qa-deviation'
+import { deviationAiAssist } from '@/actions/qa'
 import {
   DEVIATION_ITEM_CATEGORY_LABEL,
   type DeviationAiAssistInput,
@@ -12,7 +12,7 @@ import {
   type DeviationAiAssistResult,
   type DeviationItem,
   type WhyStep,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { actionError } from './shared'
 
 /** AI 建议组件的识别色（沿用全站 AI 面板紫色系）。 */

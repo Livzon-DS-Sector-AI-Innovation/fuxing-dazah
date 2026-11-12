@@ -155,6 +155,11 @@
   box-shadow: 0 0 0 2px var(--color-primary-bg);
 }
 
+.yearFieldDisabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* ── 年度页签（汇总页在已有年度间切换）────────────────────────────── */
 
 .yearTabs {
@@ -433,12 +438,22 @@
   border-inline-start: 1px solid var(--color-hairline) !important;
 }
 
-/* 文字结果是判定，不抢数值；录入框是单行，内部换行属导入残留，按单行显示。 */
+/* 文字结果是判定，不抢数值；录入框是单行，内部换行属导入残留，按单行显示。
+   长判定最多两行，悬停/聚焦看全文，避免把行高撑开。 */
 .textValue {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   font-size: 12px;
   line-height: 16px;
   color: var(--color-charcoal);
+}
+
+.textValue:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+  border-radius: 4px;
 }
 
 .cellEmpty {
@@ -462,9 +477,20 @@
   color: var(--color-charcoal);
 }
 
+/* 未检出批次计数：提示性小字，不抢统计值。 */
 .statNote {
   font-size: 11px;
   color: var(--color-steel);
+}
+
+/* 统计表脚的展开按钮放在横向滚动区外：列再多也不会被滚出视野。 */
+.statToggleBar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 14px 5px;
+  border-top: 1px solid var(--color-hairline-soft);
+  background: var(--color-surface-soft);
 }
 
 /* 固定表脚与数据区之间一道重线：以下是统计，不是批值。 */
@@ -1291,4 +1317,63 @@
 .railAdd:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
+}
+
+/* ── 录入页：底部浮动保存条 ─────────────────────────────────────────── */
+
+.saveBar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 7px 10px 7px 14px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: 9999px;
+  background: var(--color-canvas);
+  box-shadow: 0 10px 30px rgba(15, 15, 15, 0.14);
+  transform: translateX(-50%);
+}
+
+.saveBarCount {
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--color-charcoal);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 定位错误格 / 越界格时的短暂高亮 ─────────────────────────────────── */
+
+.cellFlash {
+  animation: aprCellFlash 1.6s ease-out;
+}
+
+@keyframes aprCellFlash {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  12%,
+  60% {
+    background-color: var(--color-tint-peach);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cellFlash {
+    animation: none;
+    box-shadow: inset 0 0 0 2px var(--color-warning);
+  }
+}
+
+/* 汇总页保留旧数据刷新时，用一行小字提示，不让用户误读旧口径。 */
+.fetching {
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--color-steel);
 }

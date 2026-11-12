@@ -7,14 +7,14 @@ import { Alert, App, Button, Card, Col, Row, Space, Spin, Steps, Tooltip } from 
 import { ArrowLeftOutlined, ClockCircleOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
-import { deleteDeviation } from '@/actions/qa-deviation'
+import { deleteDeviation } from '@/actions/qa'
 import { usePermission } from '@/hooks/usePermission'
-import { fetchDeviation } from '@/lib/api/qa-deviation'
+import { fetchDeviation } from '@/lib/api/qa'
 import {
   DEVIATION_ACTION_LABEL,
   type DeviationStatus,
   type DeviationTransitionAction,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { CapaFormModal } from '../capa/CapaFormModal'
 import { ExtendModal, TransitionModal } from './DeviationDialogs'
 import { AssessmentSection, InvestigationSection, ReportSection } from './DeviationSections'

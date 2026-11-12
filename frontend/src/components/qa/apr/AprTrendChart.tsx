@@ -6,7 +6,7 @@ import type { EChartsOption } from 'echarts'
 import ReactECharts from 'echarts-for-react'
 import { antdTheme } from '@/lib/antd-theme'
 import { AprChromeStyles, AprMeta } from './AprChrome'
-import type { AprTrend, AprTrendPointStatus } from '@/types/qa-apr'
+import type { AprTrend, AprTrendPointStatus } from '@/types/qa'
 
 // ECharts 画在 canvas 上，读不到 CSS 变量，统一从 antd 主题 token 取色（与 DESIGN.md 同源）。
 // 轴标签用 steel(#787671, 对白底约 4.7:1) 承载 12px 文字：quaternary 只有约 2.5:1，达不到 AA。
@@ -19,6 +19,13 @@ const LINE_COLOR = TOKEN.colorPrimary!
 const SPEC_COLOR = TOKEN.colorError!
 const OOT_COLOR = TOKEN.colorWarning!
 const MEAN_COLOR = TOKEN.colorSuccess!
+
+/** 主题色十六进制 → 带透明度 rgba（canvas 读不了 CSS 变量，也不能写死色值
+ *  跟丢主题换肤）。 */
+function withAlpha(hex: string, alpha: number): string {
+  const n = Number.parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+}
 const STATUS_COLOR: Record<AprTrendPointStatus, string> = {
   normal: LINE_COLOR,
   oot: OOT_COLOR,
@@ -226,7 +233,7 @@ export function AprTrendChart({
                 showDetail: false,
                 borderColor: T.hairline,
                 backgroundColor: 'transparent',
-                fillerColor: 'rgba(86, 69, 212, 0.10)',
+                fillerColor: withAlpha(LINE_COLOR, 0.1),
                 handleStyle: { color: '#ffffff', borderColor: T.hairline },
                 moveHandleStyle: { color: T.hairline },
                 dataBackground: {
@@ -235,7 +242,7 @@ export function AprTrendChart({
                 },
                 selectedDataBackground: {
                   lineStyle: { color: LINE_COLOR },
-                  areaStyle: { color: 'rgba(86, 69, 212, 0.08)' },
+                  areaStyle: { color: withAlpha(LINE_COLOR, 0.08) },
                 },
               },
             ],

@@ -5,14 +5,14 @@ import { AutoComplete, Button, DatePicker, Form, Input, Select } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchQaDepartments } from '@/lib/api/qa'
-import type { QaDepartmentReference } from '@/types/qa'
 import {
   DEVIATION_ITEM_CATEGORY_LABEL,
   type DeviationAiAssistInput,
   type DeviationCreateInput,
   type DeviationDetail,
   type DeviationItem,
-} from '@/types/qa-deviation'
+  type QaDepartmentReference,
+} from '@/types/qa'
 import { DeviationAiAssistButton } from './DeviationAiAssist'
 import { toOptions } from './shared'
 

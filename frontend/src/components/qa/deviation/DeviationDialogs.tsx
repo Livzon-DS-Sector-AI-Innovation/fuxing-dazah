@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { Alert, App, DatePicker, Form, Input, Modal } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
-import { extendDeviation, transitionDeviation } from '@/actions/qa-deviation'
-import { DEVIATION_ACTION_LABEL, type DeviationDetail, type DeviationTransitionAction } from '@/types/qa-deviation'
+import { extendDeviation, transitionDeviation } from '@/actions/qa'
+import { DEVIATION_ACTION_LABEL, type DeviationDetail, type DeviationTransitionAction } from '@/types/qa'
 import { actionError } from './shared'
 
 const TRANSITION_HINT: Record<DeviationTransitionAction, string> = {

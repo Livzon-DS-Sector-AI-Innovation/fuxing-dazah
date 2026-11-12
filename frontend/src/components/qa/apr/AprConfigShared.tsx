@@ -4,7 +4,7 @@ import type { CSSProperties } from 'react'
 import { App } from 'antd'
 import type { ButtonProps, ModalFuncProps } from 'antd'
 import { PILL } from '@/components/qa/deviation/shared'
-import type { AprDataKind, AprItem, AprItemCategory, AprValueType } from '@/types/qa-apr'
+import type { AprDataKind, AprItem, AprItemCategory, AprValueType } from '@/types/qa'
 
 // ── 文案字典（配置页与弹窗共用，避免同一枚举出现多种叫法）──
 

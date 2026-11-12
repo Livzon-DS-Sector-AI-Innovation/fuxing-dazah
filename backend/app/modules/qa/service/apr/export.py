@@ -107,6 +107,8 @@ def build_export_workbook(
     used_names: set[str] = set()
     bold = Font(bold=True)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    # 数据单元格默认居中：不设 alignment 时数值右对齐/文本左对齐，观感混杂
+    cell_center = Alignment(horizontal="center", vertical="center")
 
     for section in summary_data["sections"]:
         ws = wb.create_sheet(
@@ -140,10 +142,14 @@ def build_export_workbook(
                 )
             col = end + 1
         # r2 列名 / r3 标准
-        ws.cell(row=2, column=1, value="序号").font = bold
-        ws.cell(row=2, column=2, value="批号").font = bold
+        for col, label in ((1, "序号"), (2, "批号")):
+            header = ws.cell(row=2, column=col, value=label)
+            header.font = bold
+            header.alignment = center
         if section["multi_row"]:
-            ws.cell(row=2, column=3, value="行标签").font = bold
+            row_header = ws.cell(row=2, column=3, value="行标签")
+            row_header.font = bold
+            row_header.alignment = center
         for idx, item in enumerate(items):
             name_cell = ws.cell(
                 row=2, column=data_col_offset + 1 + idx, value=_item_display_name(item)
@@ -155,14 +161,18 @@ def build_export_workbook(
                 column=data_col_offset + 1 + idx,
                 value=item["spec_text"] or "",
             ).alignment = center
-        # 数据行
+        # 数据行（默认居中）
         for ridx, row in enumerate(section["rows"], start=1):
             excel_row = 3 + ridx
-            ws.cell(row=excel_row, column=1, value=ridx)
-            ws.cell(row=excel_row, column=2, value=row["batch_no"])
+            ws.cell(row=excel_row, column=1, value=ridx).alignment = cell_center
+            ws.cell(
+                row=excel_row, column=2, value=row["batch_no"]
+            ).alignment = cell_center
             col_cursor = data_col_offset + 1
             if section["multi_row"]:
-                ws.cell(row=excel_row, column=3, value=row["row_label"] or "")
+                ws.cell(
+                    row=excel_row, column=3, value=row["row_label"] or ""
+                ).alignment = cell_center
             for item in items:
                 cell_data = row["cells"].get(item["id"])
                 value = None
@@ -172,7 +182,9 @@ def build_export_workbook(
                         if cell_data["num"] is not None
                         else cell_data["text"]
                     )
-                ws.cell(row=excel_row, column=col_cursor, value=value)
+                ws.cell(
+                    row=excel_row, column=col_cursor, value=value
+                ).alignment = cell_center
                 col_cursor += 1
         # 表尾统计：仅数值列；数值按列精度圆整，CPK级别为文字；
         # 不适用的统计显示 N/A（单限缺对侧、文字列无统计）；
@@ -202,7 +214,9 @@ def build_export_workbook(
                         if isinstance(value, str)
                         else round(value, _item_precision(item))
                     )
-                ws.cell(row=row_idx, column=data_col_offset + 1 + idx, value=cell_value)
+                ws.cell(
+                    row=row_idx, column=data_col_offset + 1 + idx, value=cell_value
+                ).alignment = cell_center
         # 列宽
         ws.column_dimensions["A"].width = 8
         ws.column_dimensions["B"].width = 20
