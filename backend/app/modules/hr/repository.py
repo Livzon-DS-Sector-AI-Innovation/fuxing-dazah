@@ -1367,6 +1367,13 @@ class CandidateReviewRepository:
         )
         return result.scalars().first()
 
+    async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateReview]:
+        result = await self.session.execute(
+            select(CandidateReview).where(CandidateReview.candidate_id == candidate_id, CandidateReview.is_deleted.is_(False))
+            .order_by(desc(CandidateReview.created_at))
+        )
+        return list(result.scalars().all())
+
     async def get_by_id(self, review_id: UUID) -> CandidateReview | None:
         result = await self.session.execute(
             select(CandidateReview).where(CandidateReview.id == review_id, CandidateReview.is_deleted.is_(False))

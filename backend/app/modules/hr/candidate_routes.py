@@ -465,6 +465,23 @@ async def get_status_logs(cid: UUID, service: CandidateService = Depends(get_ser
     } for log in logs])
 
 
+@router.get("/candidates/{cid}/reviews", summary="候选人审核记录列表")
+async def list_candidate_reviews(
+    cid: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """历次部门审核 / 入职审批记录（推给了谁、备注、结果）。"""
+    from app.modules.hr.repository import CandidateReviewRepository
+    from app.modules.hr.schemas import CandidateReviewResponse
+
+    # 复用详情校验：候选人不存在时 get 抛 404，而不是返回空列表
+    await CandidateService(session).get(cid)
+    reviews = await CandidateReviewRepository(session).list_by_candidate(cid)
+    return success_response(data=[
+        CandidateReviewResponse.model_validate(rv).model_dump(mode="json") for rv in reviews
+    ])
+
+
 # ─── 简历预览 ───
 
 

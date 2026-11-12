@@ -321,6 +321,10 @@ export async function fetchPendingReviews(reviewer?: string): Promise<{ data: an
   return fetchHrApi(`/hr/candidates/pending-review${qs}`, { errorMessage: '获取待审核列表失败' })
 }
 
+export async function fetchCandidateReviews(candidateId: string): Promise<{ data: any[] }> {
+  return fetchHrApi(`/hr/candidates/${candidateId}/reviews`, { errorMessage: '获取审核记录失败' })
+}
+
 export async function fetchCandidateComparison(jobRequirementId: string): Promise<{ data: unknown[] }> {
   return fetchHrApi(`/hr/job-requirements/${jobRequirementId}/candidates/comparison`, { errorMessage: '获取对比数据失败' })
 }

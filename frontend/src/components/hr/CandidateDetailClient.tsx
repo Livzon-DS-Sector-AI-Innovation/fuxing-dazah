@@ -21,6 +21,7 @@ import {
   createInterview, updateInterview, deleteInterview, evaluateInterview,
   pushCandidateReview, decideCandidateReview, pushOnboardingReview,
   fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
+  fetchCandidateReviews,
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
@@ -113,6 +114,17 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [pushForm] = Form.useForm()
   const [pushLoading, setPushLoading] = useState(false)
   const [reviewLoading, setReviewLoading] = useState(false)
+  // 审核记录（推给了谁/备注/结果）
+  const [reviews, setReviews] = useState<any[]>([])
+
+  const loadReviews = useCallback(async () => {
+    try {
+      const r = await fetchCandidateReviews(candidate.id)
+      setReviews(r.data || [])
+    } catch { /* 审核记录加载失败不阻塞页面 */ }
+  }, [candidate.id])
+
+  useEffect(() => { loadReviews() }, [loadReviews])
 
   // 一键入职
   const [onboardLoading, setOnboardLoading] = useState(false)
@@ -353,7 +365,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         try {
           await pushOnboardingReview(candidate.id, { pushed_by: 'HR' })
           message.success('已发起入职审批')
-          router.refresh()
+          router.refresh(); loadReviews()
         } catch (err: any) { message.error(err.message || '发起失败') }
       },
     })
@@ -367,7 +379,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       await pushCandidateReview(candidate.id, { pushed_by: 'HR', push_note: v.push_note, reviewer: v.reviewer || undefined })
       message.success('已推送至用人部门审核')
       setPushModalOpen(false); pushForm.resetFields()
-      router.refresh()
+      router.refresh(); loadReviews()
     } catch (err: any) { message.error(err.message || '推送失败') }
     finally { setPushLoading(false) }
   }
@@ -401,12 +413,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       await decideCandidateReview(candidate.id, { decision, review_comment: comment })
       message.success(decision === '已同意' ? '已同意面试' : '已标记为不合适')
-      router.refresh()
+      router.refresh(); loadReviews()
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setReviewLoading(false) }
   }
 
   const nextStatuses = statusTransitions[candidate.status || ''] || []
+  // 当前待处理的审核（部门审核或入职审批），用于展示推给了谁
+  const pendingReview = reviews.find(r => r.status === '待审核') || null
 
   // ─── 基本信息 Tab ───
   const infoTab = (
@@ -528,7 +542,9 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           {/* 审核决策：待部门审核时显示 */}
           {candidate.status === '待部门审核' && (
             <div className="mt-2 p-3 rounded bg-orange-50 border border-orange-200">
-              <div className="text-sm font-medium text-orange-700 mb-2">⏳ 待用人部门审核</div>
+              <div className="text-sm font-medium text-orange-700 mb-2">
+                ⏳ 待用人部门审核{pendingReview?.reviewer ? `（审核人：${pendingReview.reviewer}）` : ''}
+              </div>
               <div className="flex gap-2">
                 <Button type="primary" icon={<CheckCircleOutlined />}
                   loading={reviewLoading} onClick={() => handleDecideReview('已同意')}>
@@ -537,6 +553,30 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                 <Button danger loading={reviewLoading} onClick={() => handleDecideReview('已拒绝')}>
                   不合适
                 </Button>
+              </div>
+            </div>
+          )}
+          {/* 审核记录：历次推送详情（部门审核/入职审批） */}
+          {reviews.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium mb-2">审核记录</h3>
+              <div className="space-y-2">
+                {reviews.map(rv => (
+                  <div key={rv.id} className={`p-2.5 rounded border text-xs space-y-1 ${rv.status === '待审核' ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-100'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{rv.review_type || '部门审核'}</span>
+                      <Tag color={rv.status === '已同意' ? 'green' : rv.status === '已拒绝' ? 'red' : 'orange'} style={{ fontSize: 10, margin: 0 }}>
+                        {rv.status}
+                      </Tag>
+                    </div>
+                    <div className="text-gray-500">
+                      推送给 <span className="text-gray-700 font-medium">{rv.reviewer || '-'}</span>
+                      {' '}· {rv.pushed_by || '-'} 推送于 {rv.created_at?.slice(0, 10) || '-'}
+                    </div>
+                    {rv.push_note && <div className="text-blue-600">备注：{rv.push_note}</div>}
+                    {rv.review_comment && <div className="text-gray-600">审核意见：{rv.review_comment}</div>}
+                  </div>
+                ))}
               </div>
             </div>
           )}
