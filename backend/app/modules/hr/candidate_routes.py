@@ -2,7 +2,6 @@
 
 import os
 from uuid import UUID, uuid4
-from zipfile import BadZipFile
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -102,55 +101,6 @@ async def list_candidates(
     return success_response(
         data=[CandidateResponse.model_validate(r).model_dump(mode="json") for r in rows],
         meta={"page": page_params.page, "page_size": page_params.page_size, "total": total},
-    )
-
-
-@router.post("/candidates/upload", summary="批量导入候选人")
-async def upload_candidates(
-    file: UploadFile,
-    service: CandidateService = Depends(get_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """上传 Excel 文件批量导入候选人，按姓名+手机/邮箱自动去重新增或更新。"""
-    # openpyxl 只支持 .xlsx；.xls 走 openpyxl 会抛 InvalidFileException（非
-    # ValueError 子类），旧代码放行 .xls 必然 500
-    if not file.filename or not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(400, "仅支持 .xlsx 格式（.xls 旧格式请先用 Excel 另存为 .xlsx）")
-    from openpyxl.utils.exceptions import InvalidFileException
-    try:
-        content = await file.read()
-        result = await service.upload_candidates(content, operator=hr_scope.user.name)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except (InvalidFileException, BadZipFile) as e:
-        # openpyxl 对损坏文件抛 InvalidFileException / BadZipFile（都不是
-        # ValueError 子类），同样转 400 而不是 500
-        raise HTTPException(400, "文件不是有效的 .xlsx（可能已损坏或实际为其他格式）") from e
-    return success_response(
-        data=result,
-        message=f"新增 {result['created']}，更新 {result['updated']}"
-    )
-
-
-@router.get("/candidates/template", summary="下载候选人导入模板")
-async def download_candidate_template():
-    """下载候选人批量导入 Excel 模板"""
-    from io import BytesIO
-
-    from openpyxl import Workbook
-
-    wb = Workbook()
-    ws = wb.active
-    headers = list(CandidateService._CANDIDATE_UPLOAD_COLUMN_MAP.keys())
-    ws.append(headers)
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=candidate_import_template.xlsx"},
     )
 
 

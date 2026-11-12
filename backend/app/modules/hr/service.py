@@ -1572,9 +1572,16 @@ class JobRequirementService:
             setattr(req, k, v)
         return await self.repo.update(req)
 
-    async def delete(self, req_id: UUID) -> None:
+    async def delete(self, req_id: UUID) -> dict:
+        """删除岗位需求（仅限已关闭）：级联清理名下未入职候选人。
+
+        招聘中岗位必须先关闭再删——防止误删进行中的需求及其候选人；
+        已入职候选人不清理（已生成员工档案与入职记录，留作溯源）。
+        """
         req = await self.get(req_id)
-        await self.repo.soft_delete(req.id)
+        if req.status == "招聘中":
+            raise ValueError("岗位仍在招聘中，请先在「编辑」中改为已关闭，再删除")
+        return await self.repo.soft_delete_with_candidates(req.id)
 
 
 class CandidateService:
@@ -1621,158 +1628,6 @@ class CandidateService:
         if c.status == "已入职":
             raise ValueError("已入职候选人不可删除（已生成员工档案与入职记录），如需处理请走离职流程")
         await self.repo.soft_delete(c.id)
-
-    # ─── Excel 批量导入 ───
-
-    _CANDIDATE_UPLOAD_COLUMN_MAP: dict[str, str] = {
-        "姓名": "name",
-        "手机": "phone",
-        "邮箱": "email",
-        "应聘岗位": "position",
-        "部门": "department",
-        "性别": "gender",
-        "学校": "school",
-        "学历": "education",
-        "专业": "major",
-        "毕业时间": "graduation_date",
-        "推荐等级": "recommendation_level",
-        "候选人类型": "candidate_type",
-        "简历来源": "source",
-        "期望薪资": "expected_salary",
-        "当前公司": "current_company",
-        "工作年限": "work_years",
-        "备注": "notes",
-    }
-
-    _CANDIDATE_DATE_FIELDS: set[str] = {"graduation_date"}
-    _CANDIDATE_INT_FIELDS: set[str] = {"work_years"}
-
-    async def upload_candidates(self, file_bytes: bytes, operator: str | None = None) -> dict:
-        """从 Excel 批量导入候选人，按姓名+手机/邮箱 upsert。"""
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-        from sqlalchemy import text as sa_text
-
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            raise ValueError("文件为空")
-
-        header = [str(c).strip() if c else "" for c in rows[0]]
-        col_map: dict[int, str] = {}
-        for idx, col_name in enumerate(header):
-            field = self._CANDIDATE_UPLOAD_COLUMN_MAP.get(col_name)
-            if field:
-                col_map[idx] = field
-
-        if "name" not in col_map.values():
-            raise ValueError("缺少「姓名」列，无法导入")
-
-        created = 0
-        updated = 0
-        errors: list[str] = []
-
-        conn = await self.repo.session.connection()
-        sp_id = 0
-
-        for row_idx, row in enumerate(rows[1:], start=2):
-            if all(c is None for c in row):
-                continue
-            sp_id += 1
-            sp_name = f"cand_row_{sp_id}"
-            try:
-                await conn.execute(sa_text(f"SAVEPOINT {sp_name}"))
-                data: dict = {}
-                name = ""
-                phone = None
-                email = None
-                for col_idx, field_name in col_map.items():
-                    val = row[col_idx] if col_idx < len(row) else None
-                    if val is None or (isinstance(val, str) and val.strip() == ""):
-                        continue
-                    if isinstance(val, str):
-                        val = val.strip()
-                    if field_name == "name":
-                        name = str(val)
-                        continue  # name 单独传参，不写入 data（否则 Candidate(name=name, **data) 会重复传参）
-                    elif field_name == "phone":
-                        phone = self._normalize_phone(val)
-                    elif field_name == "email":
-                        email = str(val)
-                    if field_name in self._CANDIDATE_DATE_FIELDS:
-                        parsed = self._parse_date_value(val)
-                        if parsed:
-                            val = parsed
-                        else:
-                            continue
-                    elif field_name in self._CANDIDATE_INT_FIELDS:
-                        try:
-                            val = int(float(str(val)))
-                        except (ValueError, TypeError):
-                            continue
-                    data[field_name] = val
-
-                if not name:
-                    raise ValueError("姓名为空")
-                data.setdefault("status", "待筛选")
-                data.setdefault("candidate_type", "职能")
-
-                obj, is_new = await self.repo.upsert(name, phone, email, data)
-                if is_new:
-                    created += 1
-                    # 新候选人记录初始状态日志（与手工创建行为一致）
-                    self.repo.session.add(CandidateStatusLog(
-                        candidate_id=obj.id, from_status=None, to_status=obj.status,
-                        remark="Excel 导入", operator=operator,
-                    ))
-                else:
-                    updated += 1
-                await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
-            except Exception as e:
-                await conn.execute(sa_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
-                try:
-                    await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
-                except Exception:
-                    pass
-                errors.append(f"第{row_idx}行: {e}")
-
-        return {"created": created, "updated": updated, "errors": errors}
-
-    @staticmethod
-    def _normalize_phone(val) -> str:
-        """Excel 数字单元格的手机号读出来是 13800000000.0，归一为纯数字串。"""
-        if isinstance(val, float) and val == int(val):
-            return str(int(val))
-        if isinstance(val, int):
-            return str(val)
-        return str(val).strip()
-
-    @staticmethod
-    def _parse_date_value(val) -> date | None:
-        """日期解析，复用 EmployeeService 模式。"""
-        from datetime import datetime as _dt
-        if isinstance(val, (int, float)):
-            try:
-                return date.fromordinal(date(1900, 1, 1).toordinal() + int(val) - 2)
-            except Exception:
-                return None
-        if isinstance(val, _dt):
-            return val.date()
-        if isinstance(val, date):
-            return val
-        import re as _re
-        s = str(val).strip()
-        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y年%m月%d日"]:
-            try:
-                return _dt.strptime(s, fmt).date()
-            except ValueError:
-                continue
-        m = _re.match(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
-        if m:
-            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        return None
 
     async def transition_status(
         self, candidate_id: UUID, new_status: str, remark: str | None = None,
@@ -1825,6 +1680,7 @@ class CandidateService:
             position=c.position or "未分配",
             hire_date=date_type.today(),
             phone=c.phone,
+            email=c.email,
             education=c.education,
             school=c.school,
             major=c.major,
@@ -1843,7 +1699,6 @@ class CandidateService:
             position=c.position or "未分配",
             hire_date=date_type.today(),
             phone=c.phone,
-            email=c.email,
             education=c.education,
             school=c.school,
             major=c.major,

@@ -7,7 +7,12 @@ Uses the OpenAI SDK pointed at DeepSeek API for streaming completions.
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import httpx
 import openai
+
+# DeepSeek 为国内服务，直连即可：不走 HTTP(S)_PROXY 环境变量，
+# 避免开发机本地代理（如 Clash）未运行时 AI 调用整体失败。
+AI_HTTP_TRUST_ENV = False
 
 
 class AiChatService:
@@ -18,6 +23,7 @@ class AiChatService:
             api_key=api_key,
             base_url="https://api.deepseek.com/v1",
             timeout=120.0,
+            http_client=httpx.AsyncClient(trust_env=AI_HTTP_TRUST_ENV, timeout=120.0),
         )
         self.model = model
 
@@ -73,19 +79,34 @@ class AiChatService:
 
             api_key = HR_AI_API_KEY
         # 非流式调用挂在请求线程上（评估/分析报告），超时兜底防止 LLM 挂起拖死请求
-        client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1", timeout=90.0)
+        client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com/v1",
+            timeout=90.0,
+            http_client=httpx.AsyncClient(trust_env=AI_HTTP_TRUST_ENV, timeout=90.0),
+        )
         from app.modules.hr.config import HR_AI_MODEL
         model = model or HR_AI_MODEL or "deepseek-chat"
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=0.3,
-            max_tokens=4096,
-        )
+        try:
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=0.3,
+                max_tokens=4096,
+            )
+        except openai.APIConnectionError as exc:
+            raise ValueError(
+                f"AI 服务连接失败（无法访问 api.deepseek.com，请检查网络/代理）：{exc}",
+            ) from exc
+        except openai.OpenAIError as exc:
+            # 鉴权失败/模型名错误/限流等统一转可读错误（路由按 ValueError→400 透出）
+            raise ValueError(f"AI 服务调用失败：{exc}") from exc
+        finally:
+            await client.close()
         content = resp.choices[0].message.content or ""
         # 去掉 markdown 代码围栏
         content = re.sub(r"```(?:json)?\s*", "", content)

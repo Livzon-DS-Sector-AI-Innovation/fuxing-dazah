@@ -1133,18 +1133,21 @@ class TransferRecord(BaseModel):
 class ResumeScreeningResult(BaseModel):
     """AI 简历筛选结果：按岗位要求对 PDF 简历全文打分排名，辅助初筛过滤。
 
-    报告结构对齐培训管理的《岗位适配度分析+复试推荐意见》范例：
-    优势分析 / 核心硬伤（分节论述）+ 按岗位定制的胜任度打分表 + 最终推荐意见。
+    报告结构对齐培训管理的《岗位适配度分析+复试推荐意见》范例，并按 HR 飞书
+    AI 直聘筛选表补充：候选人信息卡片 / 核心评价一句话 / 四维分组打分 / 人才分类。
     """
 
     __tablename__ = "resume_screening_results"
     __table_args__ = (
         Index("ix_rsr_job_requirement", "job_requirement_id"),
         Index("ix_rsr_total_score", "total_score"),
+        Index("ix_rsr_candidate", "candidate_id"),
         {"schema": "hr"},
     )
 
     job_requirement_id: Mapped[UUID] = mapped_column(nullable=False, comment="筛选时依据的岗位需求")
+    # 岗位侧候选人简历直接初筛时回链候选人（上传初筛→转候选人的老链路为空）
+    candidate_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联的候选人（岗位侧直接初筛时回写）")
     # JD 快照：岗位要求后续被编辑也不影响历史筛选结果的解读
     jd_snapshot: Mapped[str] = mapped_column(Text, nullable=False, comment="筛选时的岗位要求文本快照")
     file_name: Mapped[str] = mapped_column(String(256), nullable=False, comment="简历文件名")
@@ -1154,10 +1157,31 @@ class ResumeScreeningResult(BaseModel):
     candidate_name: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="AI 从简历中识别的姓名",
     )
+    core_evaluation: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="核心评价一句话：优势+但书+待确认点（对齐 AI 直聘表）",
+    )
+    talent_category: Mapped[str | None] = mapped_column(
+        String(2), nullable=True, comment="人才分类：A-关键人才/B-潜力人才/C-普通简历",
+    )
+    candidate_profile: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True,
+        comment="候选人信息卡片（AI 结构化解析）：{education, school, major, current_position, "
+                "current_company, expected_position, intended_city, work_years, age, gender, "
+                "employment_status, skills, phone, email}",
+    )
+    dimension_assessment: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True,
+        comment="能力维度评估：{组: [{label, text}]}，四组固定（专业能力/基础匹配/发展潜力/软实力），"
+                "基础匹配项带 ✅/⚠️/❌ 标记",
+    )
+    match_report: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="候选人匹配度报告全文（信息卡片+评估概览+维度评估+综合结论，结构化字段拼装，可直接转发）",
+    )
 
     total_score: Mapped[int] = mapped_column(Integer, nullable=False, comment="综合胜任度总分 0-100")
     recommendation: Mapped[str] = mapped_column(
-        String(16), nullable=False, comment="推荐档位：推荐/待定/不推荐",
+        String(16), nullable=False, comment="推荐档位：强烈推荐/推荐/待定/不推荐",
     )
     # ── 适配度分析报告 ──
     advantages: Mapped[list[dict] | None] = mapped_column(
@@ -1167,7 +1191,8 @@ class ResumeScreeningResult(BaseModel):
         JSON, nullable=True, comment="核心硬伤：[{title, detail}]",
     )
     score_table: Mapped[list[dict] | None] = mapped_column(
-        JSON, nullable=True, comment="胜任度打分表：[{dimension, score, comment}]（维度按岗位定制）",
+        JSON, nullable=True,
+        comment="胜任度打分表：[{group, dimension, score, comment}]（四组固定：专业能力/基础匹配/发展潜力/软实力，组内维度按岗位定制）",
     )
     final_verdict: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="最终推荐意见结论（一句话）",

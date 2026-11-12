@@ -1,18 +1,16 @@
 """招聘板块审计修复回归测试。
 
-对应修复：.xls 导入 500、parse-resume 资源限制与报文泄露、统计口径
+对应修复：parse-resume 资源限制与报文泄露、统计口径
 （事件流转化率/入职事件周期）、push-review 状态机、入职审批 reviewer、
 状态日志 operator、AI 报告去重触发与 session bug、Offer 前置校验、
-已入职候选人删除防护、日历补建、model_version 脱钩、手机号归一。
+已入职候选人删除防护、日历补建、model_version 脱钩。
 """
 
 from datetime import date, timedelta
-from io import BytesIO
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from httpx import AsyncClient
-from openpyxl import Workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.hr.feishu_calendar import FeishuCalendarService
@@ -34,38 +32,6 @@ def _mk_candidate(db: AsyncSession, jd: JobRequirement, *, status: str = "待筛
     c = Candidate(id=uuid4(), name=_rand("候选"), status=status, job_requirement_id=jd.id)
     db.add(c)
     return c
-
-
-def _xlsx_bytes() -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.append(["姓名", "手机", "邮箱"])
-    ws.append([_rand("导入"), "13800001111", "a@b.com"])
-    buf = BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
-# ─── 批量导入：.xls 拒绝 + 损坏文件 400 ───
-
-
-async def test_upload_rejects_xls_with_400(client: AsyncClient):
-    """旧格式 .xls 走 openpyxl 会抛非 ValueError 异常（曾必 500），现在入口直接 400。"""
-    res = await client.post(
-        "/api/v1/hr/candidates/upload",
-        files={"file": ("candidates.xls", b"dummy", "application/vnd.ms-excel")},
-    )
-    assert res.status_code == 400, res.text
-    assert ".xlsx" in res.json()["message"]
-
-
-async def test_upload_corrupt_xlsx_400(client: AsyncClient):
-    """扩展名是 .xlsx 但内容损坏 → 400 而不是 500。"""
-    res = await client.post(
-        "/api/v1/hr/candidates/upload",
-        files={"file": ("candidates.xlsx", b"not an excel file", "application/octet-stream")},
-    )
-    assert res.status_code == 400, res.text
 
 
 # ─── 简历解析：大小限制 + 报文不泄露内部异常 ───
@@ -200,6 +166,46 @@ async def test_delete_onboarded_candidate_rejected(db_session: AsyncSession, cli
     assert "已入职" in res.json()["message"]
 
 
+# ─── 岗位删除：招聘中防护 + 已关闭级联清理 ───
+
+
+async def test_delete_recruiting_job_rejected(db_session: AsyncSession, client: AsyncClient):
+    """招聘中岗位（默认状态）不可删除，需先关闭，防止误删进行中的需求及其候选人。"""
+    jd = _mk_jd(db_session)  # 默认 status=招聘中
+    _mk_candidate(db_session, jd)
+    await db_session.flush()
+
+    res = await client.delete(f"/api/v1/hr/job-requirements/{jd.id}")
+    assert res.status_code == 400
+    assert "招聘中" in res.json()["message"]
+
+    # 岗位仍在列表中
+    jobs = (await client.get("/api/v1/hr/job-requirements")).json()["data"]
+    assert any(j["id"] == str(jd.id) for j in jobs)
+
+
+async def test_delete_closed_job_cascades_candidates(db_session: AsyncSession, client: AsyncClient):
+    """已关闭岗位删除：未入职候选人级联清理，已入职保留（员工档案溯源）。"""
+    jd = _mk_jd(db_session)
+    jd.status = "已关闭"
+    c_gone = _mk_candidate(db_session, jd)  # 待筛选 → 清理
+    c_hired = _mk_candidate(db_session, jd, status="已入职")  # 保留
+    await db_session.flush()
+
+    res = await client.delete(f"/api/v1/hr/job-requirements/{jd.id}")
+    assert res.status_code == 200, res.text
+    assert "1" in res.json()["message"]  # 清理 1 名
+    assert "已入职" in res.json()["message"]  # 保留提示
+
+    jobs = (await client.get("/api/v1/hr/job-requirements")).json()["data"]
+    assert all(j["id"] != str(jd.id) for j in jobs)
+
+    remaining = (await client.get("/api/v1/hr/candidates")).json()["data"]
+    ids = [c["id"] for c in remaining]
+    assert str(c_gone.id) not in ids
+    assert str(c_hired.id) in ids
+
+
 # ─── Offer：前置状态与邮箱校验 ───
 
 
@@ -234,7 +240,14 @@ async def test_send_offer_rejects_bad_email(db_session: AsyncSession, client: As
 
 async def test_stats_conversion_rates_bounded(db_session: AsyncSession, client: AsyncClient):
     """走完完整链路的候选人：转化率为「曾到达」口径，任何相邻阶段不超 100%。"""
+    from app.modules.hr.models import CandidateStatusLog
     from app.modules.hr.service import CandidateService
+
+    # stats 是全局统计：先把本地库残留的候选人/日志软删（事务内执行，
+    # 测试结束 rollback 恢复），断言才不受开发数据影响
+    from sqlalchemy import update as sa_update
+    await db_session.execute(sa_update(Candidate).values(is_deleted=True))
+    await db_session.execute(sa_update(CandidateStatusLog).values(is_deleted=True))
 
     jd = _mk_jd(db_session)
     c = _mk_candidate(db_session, jd)
@@ -375,14 +388,3 @@ async def test_job_requirement_response_includes_duties(db_session: AsyncSession
     mine = [j for j in res.json()["data"] if j["id"] == str(jd.id)]
     assert mine and mine[0]["duties"] == "岗位职责说明"
 
-
-# ─── 手机号归一（Excel 数字单元格） ───
-
-
-def test_normalize_phone_strips_float_suffix():
-    from app.modules.hr.service import CandidateService
-
-    assert CandidateService._normalize_phone(13800001111.0) == "13800001111"
-    assert CandidateService._normalize_phone(13800001111) == "13800001111"
-    assert CandidateService._normalize_phone(" 13800001111 ") == "13800001111"
-    assert CandidateService._normalize_phone("138-0000-1111") == "138-0000-1111"

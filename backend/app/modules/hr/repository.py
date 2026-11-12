@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, asc, case, delete, desc, func, or_, select, text
+from sqlalchemy import and_, asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1032,9 +1032,27 @@ class JobRequirementRepository:
         result = await self.session.execute(select(JobRequirement).where(JobRequirement.id == req.id))
         return result.scalar_one()
 
-    async def soft_delete(self, req_id: UUID) -> None:
+    async def soft_delete_with_candidates(self, req_id: UUID) -> dict:
+        """级联软删岗位及其名下候选人。
+
+        已入职候选人不清理——已生成员工档案与入职记录，需留作员工来源溯源。
+        返回 {candidates_removed, kept_hired} 供接口回显。
+        """
+        rows = list((await self.session.execute(
+            select(Candidate).where(
+                Candidate.job_requirement_id == req_id,
+                Candidate.is_deleted.is_(False),
+            )
+        )).scalars().all())
+        kept_hired = [c for c in rows if c.status == "已入职"]
+        removed = [c for c in rows if c.status != "已入职"]
+        if removed:
+            await self.session.execute(
+                update(Candidate).where(Candidate.id.in_([c.id for c in removed])).values(is_deleted=True)
+            )
         await self.session.execute(text("UPDATE hr.job_requirements SET is_deleted = true WHERE id = :id"), {"id": req_id})
         await self.session.flush()
+        return {"candidates_removed": len(removed), "kept_hired": len(kept_hired)}
 
     async def increment_hired_count(self, req_id: UUID) -> None:
         await self.session.execute(text("UPDATE hr.job_requirements SET hired_count = hired_count + 1 WHERE id = :id"), {"id": req_id})
@@ -1099,34 +1117,6 @@ class CandidateRepository:
         await self.session.flush()
         result = await self.session.execute(select(Candidate).where(Candidate.id == candidate.id))
         return result.scalar_one()
-
-    async def upsert(self, name: str, phone: str | None, email: str | None, data: dict) -> tuple[Candidate, bool]:
-        """按姓名+手机/邮箱查重 upsert，返回 (候选人, 是否新增)。
-
-        更新分支跳过 name/status/candidate_type：重复导入不重命名、不回退已有流程状态。
-        """
-        conditions = [Candidate.name == name, Candidate.is_deleted == False]
-        if phone:
-            conditions.append(Candidate.phone == phone)
-        if email:
-            conditions.append(Candidate.email == email)
-
-        rows = list((await self.session.execute(
-            select(Candidate).where(and_(*conditions)).order_by(Candidate.created_at)
-        )).scalars().all())
-        if len(rows) > 1:
-            raise ValueError("按姓名+手机/邮箱命中多条候选人记录，无法唯一定位，请补充电话或邮箱后重试")
-
-        if rows:
-            existing = rows[0]
-            for k, v in data.items():
-                if k in ("name", "status", "candidate_type"):
-                    continue
-                setattr(existing, k, v)
-            return await self.update(existing), False
-        else:
-            obj = Candidate(name=name, **data)
-            return await self.create(obj), True
 
     async def soft_delete(self, candidate_id: UUID) -> None:
         await self.session.execute(text("UPDATE hr.candidates SET is_deleted = true WHERE id = :id"), {"id": candidate_id})

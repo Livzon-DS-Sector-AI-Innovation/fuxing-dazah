@@ -20,9 +20,15 @@ def _to_dict(r) -> dict:
     return {
         "id": str(r.id),
         "job_requirement_id": str(r.job_requirement_id),
+        "candidate_id": str(r.candidate_id) if r.candidate_id else None,
         "jd_snapshot": r.jd_snapshot,
         "file_name": r.file_name,
         "candidate_name": r.candidate_name,
+        "core_evaluation": r.core_evaluation,
+        "talent_category": r.talent_category,
+        "candidate_profile": r.candidate_profile or {},
+        "dimension_assessment": r.dimension_assessment or {},
+        "match_report": r.match_report,
         "total_score": r.total_score,
         "recommendation": r.recommendation,
         "advantages": r.advantages or [],
@@ -54,6 +60,24 @@ async def screen_resume(
         )
         await session.commit()
         return success_response(data=_to_dict(result), message="筛选完成", status_code=201)
+    except NotFoundException as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/resume-screening/candidate/{candidate_id}", summary="对已建档候选人的存量简历直接 AI 初筛（免重复上传）")
+async def screen_candidate_resume(
+    candidate_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+) -> JSONResponse:
+    """读取候选人已上传的简历文件，按其关联岗位需求 AI 打分；结果回链候选人并回写推荐等级/匹配报告。"""
+    service = ResumeScreeningService(session)
+    try:
+        result = await service.screen_candidate(candidate_id, operator=hr_scope.user.name)
+        await session.commit()
+        return success_response(data=_to_dict(result), message="初筛完成", status_code=201)
     except NotFoundException as e:
         raise HTTPException(404, str(e)) from e
     except ValueError as e:

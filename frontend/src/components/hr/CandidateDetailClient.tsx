@@ -12,6 +12,7 @@ import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
   RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons'
 import type { Candidate, Interview, AiEvaluation, OnboardingTask } from '@/types/hr'
 import {
@@ -25,7 +26,7 @@ import {
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
-  fetchEmployeesAction, fetchJobRequirements,
+  fetchEmployeesAction, screenCandidateAction, fetchJobRequirements,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
 import AIScoreCard from './AIScoreCard'
@@ -205,6 +206,18 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     }
   }
 
+  // AI 初筛：直接用该候选人已存档的简历按关联岗位打分（免重复上传）
+  const [screening, setScreening] = useState(false)
+  const handleScreenCandidate = async () => {
+    setScreening(true)
+    try {
+      const r = await screenCandidateAction(candidate.id)
+      message.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100）`)
+      window.location.reload()
+    } catch (err: any) { message.error(err.message || 'AI 初筛失败') }
+    finally { setScreening(false) }
+  }
+
   const handleUpdateRecommendation = async (value: string) => {
     if (!value) return
     setUpdating(true)
@@ -322,7 +335,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     // 已入职只能通过「入职操作」完成（创建入职记录/工号/子任务），不放裸流转
     '待入职审批': ['已录用', '已拒绝'],
   }
-  // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
+  // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）；空关键字=默认前 20 人
   const [reviewerOptions, setReviewerOptions] = useState<{ value: string; label: string }[]>([])
   const [reviewerSearching, setReviewerSearching] = useState(false)
   const reviewerSearchSeq = useRef(0)
@@ -336,7 +349,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         value: e.name,
         label: `${e.name}（${e.employee_number || ''}）`,
       })))
-    } catch { /* 搜索失败静默 */ }
+    } catch (err: any) {
+      // 静默空列表会让下拉"无人可选"无从排查，失败要透出
+      message.error(err?.message || '员工搜索失败，请稍后重试')
+    }
     finally { if (seq === reviewerSearchSeq.current) setReviewerSearching(false) }
   }
 
@@ -371,12 +387,13 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     })
   }
 
-  // 打开推送弹窗：预填岗位需求上配置的负责人（可改选）
+  // 打开推送弹窗：预填岗位需求上配置的负责人（可改选），同时预载一批在职员工供直接选择
   const [jdOwnerPrefill, setJdOwnerPrefill] = useState<string | null>(null)
   const openPushModal = () => {
     pushForm.resetFields()
     setJdOwnerPrefill(null)
     setPushModalOpen(true)
+    void searchReviewerOptions('')  // 下拉默认展示前 20 名在职员工，不必先输入关键字
     if (!candidate.job_requirement_id) return
     fetchJobRequirements()
       .then(r => {
@@ -390,7 +407,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   useEffect(() => {
     if (!pushModalOpen || !jdOwnerPrefill) return
     pushForm.setFieldsValue({ reviewer: jdOwnerPrefill })
-    setReviewerOptions([{ value: jdOwnerPrefill, label: `${jdOwnerPrefill}（岗位负责人）` }])
+    // 负责人置顶并保留已加载的候选列表，避免覆盖成只剩一项
+    setReviewerOptions(prev => [
+      { value: jdOwnerPrefill, label: `${jdOwnerPrefill}（岗位负责人）` },
+      ...prev.filter(o => o.value !== jdOwnerPrefill),
+    ])
   }, [pushModalOpen, jdOwnerPrefill, pushForm])
 
   // 推送审核操作
@@ -552,6 +573,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <h3 className="text-sm font-medium mb-2">推荐等级</h3>
             <Select style={{ width: '100%' }} placeholder="选择推荐等级" value={recommendationLevel || undefined}
               onChange={handleUpdateRecommendation} options={recommendationOptions} loading={updating} />
+            {candidate.resume_url && candidate.job_requirement_id && (
+              <Button className="mt-2" block icon={<FileSearchOutlined />}
+                loading={screening}
+                onClick={handleScreenCandidate}
+                title="用该候选人已上传的简历，按关联岗位 AI 打分，结果写入推荐等级与匹配报告">
+                AI 初筛（免重复上传）
+              </Button>
+            )}
           </div>
           {/* 推送审核：已筛选状态时显示 */}
           {candidate.status === '已筛选' && (
@@ -730,6 +759,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           )}
         </Form>
       </Modal>
+
     </div>
   )
 
@@ -809,9 +839,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               showSearch
               filterOption={false}
               loading={reviewerSearching}
-              placeholder="搜索并选择员工（姓名）；岗位需求已配置负责人时会自动填入"
+              placeholder="输入姓名搜索；或直接从下方列表选择"
               options={reviewerOptions}
               onSearch={searchReviewerOptions}
+              onOpenChange={(open) => { if (open && reviewerOptions.length === 0) void searchReviewerOptions('') }}
             />
           </Form.Item>
           <Form.Item name="push_note" label="推送备注（选填）">

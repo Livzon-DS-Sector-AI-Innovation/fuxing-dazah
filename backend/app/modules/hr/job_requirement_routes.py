@@ -1,7 +1,7 @@
 """岗位需求接口"""
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -38,10 +38,16 @@ async def update_job_req(req_id: UUID, payload: JobRequirementUpdate, service: J
     return success_response(data=JobRequirementResponse.model_validate(r).model_dump(mode="json"), message="已更新")
 
 
-@router.delete("/job-requirements/{req_id}", summary="删除岗位需求")
+@router.delete("/job-requirements/{req_id}", summary="删除岗位需求（仅限已关闭，级联清理未入职候选人）")
 async def delete_job_req(req_id: UUID, service: JobRequirementService = Depends(get_service)):
-    await service.delete(req_id)
-    return success_response(message="已删除")
+    try:
+        result = await service.delete(req_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    message = f"已删除，清理候选人 {result['candidates_removed']} 名"
+    if result["kept_hired"]:
+        message += f"（保留已入职 {result['kept_hired']} 名）"
+    return success_response(message=message)
 
 
 @router.get("/job-requirements/{req_id}/candidates/comparison", summary="候选人横向对比")
