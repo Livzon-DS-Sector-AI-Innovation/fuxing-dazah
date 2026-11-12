@@ -95,7 +95,9 @@ class AiChatService:
             resp = await client.chat.completions.create(
                 model=model,
                 messages=messages,  # type: ignore[arg-type]
-                temperature=0.3,
+                # 评估/抽取类任务用确定性采样：同份简历多次打分保持一致
+                # （DeepSeek 官方推荐数据抽取/分类场景 temperature=0）
+                temperature=0.0,
                 max_tokens=4096,
             )
         except openai.APIConnectionError as exc:
