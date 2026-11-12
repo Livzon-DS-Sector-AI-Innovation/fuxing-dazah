@@ -188,7 +188,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                   <Alert
                     type="warning"
                     showIcon
-                    message={`上次同步有 ${cfg.last_stats.errors.length} 条记录出错`}
+                    title={`上次同步有 ${cfg.last_stats.errors.length} 条记录出错`}
                     description={
                       <ul className="max-h-32 overflow-auto pl-4 m-0">
                         {cfg.last_stats.errors.slice(0, 20).map((e, i) => <li key={i}>{e}</li>)}
@@ -217,7 +217,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                 <Alert
                   type="info"
                   showIcon
-                  message="脱敏名单在系统内"
+                  title="脱敏名单在系统内"
                   description="培训管理 → 培训人员名单（脱敏版，不含身份证/学校/专业/联系方式等个人信息）。台账、Word 打印等系统功能读取本地全量档案，不受影响。"
                 />
               </div>

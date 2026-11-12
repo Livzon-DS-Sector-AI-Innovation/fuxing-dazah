@@ -9,7 +9,7 @@ export default function CategoriesPage() {
     <Suspense fallback={<div className="h-64" />}>
       <PermissionGuard
         permission="hr:performance:read"
-        fallback={<Alert type="warning" showIcon message="您没有绩效考核的查看权限，请联系管理员赋权。" />}
+        fallback={<Alert type="warning" showIcon title="您没有绩效考核的查看权限，请联系管理员赋权。" />}
       >
         <PerformanceCategoryClient />
       </PermissionGuard>

@@ -475,7 +475,7 @@ export default function TrainingRosterClient() {
       <Alert
         type="info"
         showIcon
-        message={scopedDepartments ? `独立维护的脱敏名册（当前可见部门：${scopedDepartments.join('、')}）` : '独立维护的脱敏名册'}
+        title={scopedDepartments ? `独立维护的脱敏名册（当前可见部门：${scopedDepartments.join('、')}）` : '独立维护的脱敏名册'}
         description="人员随员工档案自动增减（总表只管进出）；名单上的信息由培训管理独立编辑，不会被总表同步覆盖。身份证、毕业学校、专业、出生年月、籍贯、政治面貌、婚姻状况、银行卡、手机/邮箱、紧急联系人、合同、级别等个人信息不在此页面出现；人员状态随员工档案自动同步，无需手动维护。"
       />
 

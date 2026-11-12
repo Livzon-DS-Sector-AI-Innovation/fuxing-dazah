@@ -234,7 +234,7 @@ export default function ResumeScreeningPanel() {
     <div className="space-y-4">
       <Alert
         type="info" showIcon
-        message="选择岗位需求后批量上传 PDF 简历，AI 按岗位要求逐份打分排名，辅助初筛过滤"
+        title="选择岗位需求后批量上传 PDF 简历，AI 按岗位要求逐份打分排名，辅助初筛过滤"
         description="仅支持文字版 PDF（扫描件无法提取文本）；结果按总分降序排名，可回看历史筛选、一键转为候选人进入招聘流程。"
       />
 
