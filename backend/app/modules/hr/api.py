@@ -684,6 +684,26 @@ async def get_dashboard_stats(
         )
     )).scalar() or 0
 
+    # ── 今日入职 / 今日离职 ──
+    today = date.today()
+
+    today_hires = (await session.execute(
+        select(func.count(EmpModel.id)).where(
+            *_scoped(),
+            EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.hire_date == today,
+        )
+    )).scalar() or 0
+
+    today_departures = (await session.execute(
+        select(func.count(EmpModel.id)).where(
+            *_scoped(),
+            EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.status == "离职",
+            EmpModel.departure_date == today,
+        )
+    )).scalar() or 0
+
     # ── 学历分布 ──
     edu_rows = (await session.execute(
         select(EmpModel.education, func.count(EmpModel.id))
@@ -727,6 +747,51 @@ async def get_dashboard_stats(
     monthly_hires_by_dept = [
         {"month": r.month, "department": r.department, "value": r[2]}
         for r in hires_by_dept_rows
+    ]
+
+    # ── 按员工性质（status_category）分组的月度入职/离职统计（null 归"未填写"）──
+    async def _monthly_by_category(date_col, status_cond) -> list[dict]:
+        category_expr = func.coalesce(func.nullif(EmpModel.status_category, ""), "未填写")
+        rows = (await session.execute(
+            select(
+                func.to_char(date_col, "YYYY-MM").label("month"),
+                category_expr.label("category"),
+                func.count(EmpModel.id),
+            )
+            .where(
+                *_scoped(),
+                EmpModel.is_deleted == False,  # noqa: E712
+                date_col >= year_start,
+                date_col < next_year_start,
+                *status_cond,
+            )
+            .group_by("month", "category")
+            .order_by("month")
+        )).all()
+        return [{"month": r.month, "category": r.category, "value": r[2]} for r in rows]
+
+    monthly_hires_by_category = await _monthly_by_category(EmpModel.hire_date, [])
+    monthly_departures_by_category = await _monthly_by_category(
+        EmpModel.departure_date, [EmpModel.status == "离职"]
+    )
+
+    # ── 本年度入职各部门总量（与 monthly_hires_by_dept 同口径，不过滤当前状态）──
+    hires_dept_year_rows = (await session.execute(
+        select(
+            EmpModel.department,
+            func.count(EmpModel.id),
+        )
+        .where(
+            *_scoped(),
+            EmpModel.is_deleted == False,  # noqa: E712
+            EmpModel.hire_date >= year_start,
+            EmpModel.hire_date < next_year_start,
+        )
+        .group_by(EmpModel.department)
+        .order_by(func.count(EmpModel.id).desc())
+    )).all()
+    hires_by_dept_year = [
+        {"name": r[0], "value": r[1]} for r in hires_dept_year_rows
     ]
 
     # ── 本年度离职月度统计 ──
@@ -807,13 +872,12 @@ async def get_dashboard_stats(
         )).all()
         return [{"name": r[0] if r[0] else "未知", "value": r[1]} for r in rows]
 
-    # ── 年龄区间分布（从出生年份动态计算）──
+    # ── 年龄区间分布（从出生年份动态计算，4 段区间与看板设计稿对齐）──
     current_year = date.today().year
     dynamic_age = current_year - EmpModel.birth_year  # 近似年龄，用于区间统计
-    age_ranges = [(0, 25), (25, 30), (30, 35), (35, 40), (40, 45), (45, 50), (50, 55), (55, 999)]
+    age_ranges = [(0, 25, "18-25岁"), (25, 35, "26-35岁"), (35, 45, "36-45岁"), (45, 999, "46岁以上")]
     age_distribution = []
-    for lo, hi in age_ranges:
-        label = f"{lo}-{hi}岁" if hi < 999 else f"{lo}岁以上"
+    for lo, hi, label in age_ranges:
         cnt = (await session.execute(
             select(func.count(EmpModel.id)).where(
                 *_scoped(),
@@ -855,6 +919,7 @@ async def get_dashboard_stats(
     marital_status_distribution = await _query_distribution("marital_status")
     contract_type_distribution = await _query_distribution("contract_type")
     household_type_distribution = await _query_distribution("household_type")
+    hr_analysis_distribution = await _query_distribution("hr_analysis")
 
     # ── 每月入职人数（总计，不分部门）──
     monthly_hires_rows = (await session.execute(
@@ -899,8 +964,6 @@ async def get_dashboard_stats(
     from datetime import timedelta as _td
 
     from app.modules.hr.models import DepartureRecord as DepModel
-
-    today = date.today()
 
     def _dep_scope_conds():
         """离职记录数据范围：部门快照落在授权范围；unrestricted 返回 []。"""
@@ -1134,6 +1197,8 @@ async def get_dashboard_stats(
             "total_employees": total_employees,
             "new_hires_this_month": new_hires_this_month,
             "departures_this_month": departures_this_month,
+            "today_hires": today_hires,
+            "today_departures": today_departures,
             "age_avg": age_avg,
             "probation_count": probation_count,
             "avg_tenure": avg_tenure,
@@ -1152,6 +1217,9 @@ async def get_dashboard_stats(
         "education_distribution": education_distribution,
         "department_distribution": department_distribution,
         "monthly_hires_by_dept": monthly_hires_by_dept,
+        "monthly_hires_by_category": monthly_hires_by_category,
+        "monthly_departures_by_category": monthly_departures_by_category,
+        "hires_by_dept_year": hires_by_dept_year,
         "monthly_hires": monthly_hires,
         "monthly_departures": monthly_departures,
         "monthly_departure_comparison": monthly_departure_comparison,
@@ -1166,6 +1234,7 @@ async def get_dashboard_stats(
             "marital_status": marital_status_distribution,
             "contract_type": contract_type_distribution,
             "household_type": household_type_distribution,
+            "hr_analysis": hr_analysis_distribution,
             "tenure": tenure_distribution,
             "departure_type": departure_type_distribution,
             "departure_reason": departure_reason_distribution,

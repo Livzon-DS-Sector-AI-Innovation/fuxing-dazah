@@ -1010,6 +1010,8 @@ export interface DashboardSummary {
   total_employees: number
   new_hires_this_month: number
   departures_this_month: number
+  today_hires: number
+  today_departures: number
   age_avg: number
   probation_count: number
   avg_tenure: number
@@ -1037,6 +1039,12 @@ export interface MonthlyByDeptItem {
   value: number
 }
 
+export interface MonthlyByCategoryItem {
+  month: string
+  category: string
+  value: number
+}
+
 export interface MonthlyItem {
   month: string
   value: number
@@ -1054,6 +1062,9 @@ export interface DashboardStats {
   education_distribution: DistributionItem[]
   department_distribution: DistributionItem[]
   monthly_hires_by_dept: MonthlyByDeptItem[]
+  monthly_hires_by_category: MonthlyByCategoryItem[]
+  monthly_departures_by_category: MonthlyByCategoryItem[]
+  hires_by_dept_year: DistributionItem[]
   monthly_hires: MonthlyItem[]
   monthly_departures: MonthlyItem[]
   monthly_departure_comparison: MonthlyComparisonItem[]
