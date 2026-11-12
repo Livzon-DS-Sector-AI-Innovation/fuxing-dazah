@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import {
   Alert, App, Button, Modal, Popconfirm, Select, Space, Table, Tag,
@@ -36,6 +37,7 @@ function scoreColor(score: number): string {
 
 export default function ResumeScreeningPanel() {
   const { message } = App.useApp()
+  const router = useRouter()
   const [jobs, setJobs] = useState<{ id: string; position_name: string; department: string; status: string }[]>([])
   const [jdId, setJdId] = useState<string | null>(null)
   const [results, setResults] = useState<ResumeScreeningResultItem[]>([])
@@ -118,13 +120,19 @@ export default function ResumeScreeningPanel() {
       title: '姓名', key: 'name', width: 110,
       render: (_v, r) => {
         const label = r.candidate_name || '未识别'
+        // 已关联候选人 → 跳候选人详情页（同岗位卡交互，详情页内可看简历原文）；
+        // 旧上传初筛（未转候选人）→ 页内弹窗预览存档 PDF 兜底
+        const linked = !!r.candidate_id
         return (
           <a
-            title="点击查看简历原文"
-            onClick={() => { void openPreview(r) }}
+            title={linked ? '查看候选人详情（含简历原文与完整档案）' : '查看简历原文'}
+            onClick={() => {
+              if (linked) router.push(`/hr/recruitment/${r.candidate_id}`)
+              else void openPreview(r)
+            }}
             className={`inline-flex items-center gap-1 ${r.candidate_name ? '' : 'text-gray-400'}`}
           >
-            {previewLoading === r.id ? '加载中…' : label}
+            {!linked && previewLoading === r.id ? '加载中…' : label}
             <EyeOutlined className="text-xs opacity-60" />
           </a>
         )
