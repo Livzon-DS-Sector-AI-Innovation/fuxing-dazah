@@ -425,6 +425,55 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/user-department-access", {"GET": "hr:settings:manage", "POST": "hr:settings:manage",
                                    "DELETE": "hr:settings:manage"}),
     (r"/data-management", {"GET": "hr:settings:manage", "POST": "hr:settings:manage"}),
+    # 员工同步配置/触发（系统设置域）
+    (r"/employee-sync/config", {"GET": "hr:settings:manage", "PUT": "hr:settings:manage"}),
+    (r"/employee-sync/sync", "hr:settings:manage"),
+    # 模块根信息端点：有意不设权限码（任意 hr: 权限即可）
+    (r"/hr/$", None),
+    # AI 简历筛选（招聘域）
+    (r"/resume-screening/candidate/", "hr:recruitment:manage"),
+    (r"/resume-screening/.*/convert", "hr:recruitment:manage"),
+    (r"/resume-screening", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
+                            "DELETE": "hr:recruitment:manage"}),
+    # 流失分析 / 员工异动种类（档案域报表与字典）
+    (r"/turnover-analysis", "hr:profile:read"),
+    (r"/employee-varieties", "hr:profile:read"),
+    # 培训管理员查询（培训域辅助接口）
+    (r"/training-admins", "hr:training:read"),
+    # SOP 培训记录（培训域；具体子路径在通用条目之前）
+    (r"/sop-training-records/years", "hr:training:read"),
+    (r"/sop-training-records/dept-trainers", "hr:training:read"),
+    (r"/sop-training-records/export", "hr:training:export"),
+    (r"/sop-training-records/.*/submit", "hr:training:manage"),
+    (r"/sop-training-records/.*/training-admins", "hr:training:read"),
+    (r"/sop-training-records", {"GET": "hr:training:read", "POST": "hr:training:manage",
+                                "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
+    # 工伤/纠纷台账
+    (r"/incidents", {"GET": "hr:incident:read", "POST": "hr:incident:manage",
+                     "PUT": "hr:incident:manage", "DELETE": "hr:incident:manage"}),
+    # 职称评审（具体子路径在通用条目之前）
+    (r"/title/activities/.*/bind-tables", "hr:title:manage"),
+    (r"/title/activities/.*/open", "hr:title:manage"),
+    (r"/title/activities/.*/review", "hr:title:manage"),
+    (r"/title/activities/.*/close", "hr:title:manage"),
+    (r"/title/activities/.*/reconcile", "hr:title:manage"),
+    (r"/title/activities/.*/results", "hr:title:read"),
+    (r"/title/activities/.*/summary", "hr:title:read"),
+    (r"/title/activities/.*/export", "hr:title:manage"),
+    (r"/title/activities/.*/applications", "hr:title:read"),
+    (r"/title/activities", {"GET": "hr:title:read", "POST": "hr:title:manage",
+                            "PUT": "hr:title:manage", "DELETE": "hr:title:manage"}),
+    (r"/title/committees", {"GET": "hr:title:read", "POST": "hr:title:manage",
+                            "DELETE": "hr:title:manage"}),
+    # 评审收尾 / 评委指定：管理动作
+    (r"/title/applications/.*/finalize", "hr:title:manage"),
+    (r"/title/applications/.*/default-judges", "hr:title:manage"),
+    (r"/title/applications/.*/judges", "hr:title:manage"),
+    (r"/title/applications/", "hr:title:read"),
+    # 评委本人任务/投票：授权实质是"被指定为评委"（handler 内校验），
+    # 门禁仅需 title:read，否则非管理员的评委无法履职
+    (r"/title/my-judge-tasks", "hr:title:read"),
+    (r"/title/judge-tasks/.*/vote", "hr:title:read"),
 ]
 
 
