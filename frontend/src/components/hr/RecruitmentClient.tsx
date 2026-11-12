@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
-import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Tabs, Tag } from 'antd'
+import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Tabs, Tag, Upload } from 'antd'
 import { PlusOutlined, UploadOutlined, SendOutlined, DownOutlined, RightOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
@@ -623,15 +623,24 @@ export default function RecruitmentClient() {
                   <div className="text-xs text-gray-500">
                     支持一次选择多份 PDF：逐份自动「AI 解析 → 建档为该岗位候选人」，完成后可一键对全部新简历跑 AI 初筛（推荐等级 + 匹配报告直接写入候选人档案）。
                   </div>
-                  <Input type="file" accept=".pdf" multiple disabled={batchRunning || batchScreening}
-                    onChange={e => {
-                      const files = Array.from((e.target as HTMLInputElement).files || [])
-                      setResumeItems(files.map((f, i) => ({
-                        key: `${Date.now()}-${i}-${f.name}`, file: f, stage: '待处理' as const,
-                      })))
-                      // 受控重置，保证同批文件可再次触发 onChange
-                      ;(e.target as HTMLInputElement).value = ''
-                    }} />
+                  <Upload
+                    accept=".pdf"
+                    multiple
+                    disabled={batchRunning || batchScreening}
+                    showUploadList={false}
+                    beforeUpload={(_, fileList) => {
+                      // beforeUpload 逐个触发：等本批最后一个文件到齐再整批建行
+                      // （fileList 元素 RcFile 即 File 子类，直接使用）
+                      if (fileList[fileList.length - 1]?.uid === _.uid) {
+                        setResumeItems(fileList.map((f, i) => ({
+                          key: `${Date.now()}-${i}-${f.name}`, file: f, stage: '待处理' as const,
+                        })))
+                      }
+                      return false
+                    }}
+                  >
+                    <Button icon={<UploadOutlined />} disabled={batchRunning || batchScreening}>选择 PDF 文件（可多选）</Button>
+                  </Upload>
                   {resumeItems.length > 0 && (
                     <div className="border rounded divide-y max-h-80 overflow-y-auto">
                       {resumeItems.map(it => (
