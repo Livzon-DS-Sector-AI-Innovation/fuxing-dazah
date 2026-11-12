@@ -46,6 +46,24 @@ const STATUS_COLORS: Record<string, string> = {
 }
 const STATUS_ORDER = STATUS_OPTIONS.map(s => s.value)
 
+/** 批量上传简历的逐份流水线状态：AI 解析 → 建档（关联岗位）→ 可选 AI 初筛 */
+interface BatchResumeItem {
+  key: string
+  file: File
+  stage: '待处理' | '解析中' | '建档中' | '已建档' | '初筛中' | '初筛完成' | '失败'
+  name?: string
+  parsed?: any
+  candidateId?: string
+  error?: string
+  reco?: string
+  score?: number
+}
+
+const BATCH_STAGE_COLOR: Record<BatchResumeItem['stage'], string> = {
+  待处理: 'default', 解析中: 'processing', 建档中: 'processing',
+  已建档: 'green', 初筛中: 'processing', 初筛完成: 'success', 失败: 'error',
+}
+
 export default function RecruitmentClient() {
   const { message: msg } = App.useApp()
   const router = useRouter()
@@ -57,10 +75,10 @@ export default function RecruitmentClient() {
   const [reqForm] = Form.useForm()
   const [editingReq, setEditingReq] = useState<JobRequirement | null>(null)
   const [resumeOpen, setResumeOpen] = useState(false)
-  const [resumeFile, setResumeFile] = useState<File | null>(null)
-  const [resumeResult, setResumeResult] = useState<any>(null)
-  const [resumeLoading, setResumeLoading] = useState(false)
-  const resumeJobIdRef = useRef<string | null>(null)
+  const [resumeItems, setResumeItems] = useState<BatchResumeItem[]>([])
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [batchScreening, setBatchScreening] = useState(false)
+  const [resumeJobId, setResumeJobId] = useState<string | null>(null)
   const [posOptions, setPosOptions] = useState<{ value: string; label: string }[]>([])
   const [offerOpen, setOfferOpen] = useState(false)
   const [offerCandidate, setOfferCandidate] = useState<Candidate | null>(null)
@@ -217,15 +235,90 @@ export default function RecruitmentClient() {
     } catch (err: any) { msg.error(err.message || '删除失败') }
   }
 
-  const handleParseResume = async () => {
-    if (!resumeFile) { msg.warning('请选择简历PDF'); return }
-    setResumeLoading(true)
-    try {
-      const fd = new FormData(); fd.append('resume', resumeFile)
-      const d = await parseResumeAction(fd)
-      setResumeResult(d.data)
-    } catch (err: any) { msg.error(err.message || '解析失败') }
-    finally { setResumeLoading(false) }
+  // ─── 批量上传简历流水线：逐份 AI 解析 → 自动建档（关联当前岗位）→ 一键 AI 初筛 ───
+  const updateResumeItem = (key: string, patch: Partial<BatchResumeItem>) => {
+    setResumeItems(prev => prev.map(it => (it.key === key ? { ...it, ...patch } : it)))
+  }
+
+  const handleProcessBatch = async () => {
+    const pending = resumeItems.filter(it => it.stage === '待处理')
+    if (!pending.length) { msg.warning('请先选择简历 PDF 文件'); return }
+    if (!resumeJobId) { msg.error('未关联岗位，无法建档'); return }
+    const jd = jobs.find(j => j.id === resumeJobId)
+    setBatchRunning(true)
+    let created = 0
+    for (const it of pending) {
+      try {
+        updateResumeItem(it.key, { stage: '解析中', error: undefined })
+        const fd = new FormData(); fd.append('resume', it.file)
+        const d = await parseResumeAction(fd)
+        const p = d.data || {}
+        const fallbackName = it.file.name.replace(/\.pdf$/i, '')
+        updateResumeItem(it.key, { stage: '建档中', parsed: p, name: p.name || fallbackName })
+        const res = await createCandidate({
+          name: p.name || fallbackName,
+          phone: p.phone || undefined,
+          email: p.email || undefined,
+          gender: p.gender || undefined,
+          school: p.school || undefined,
+          education: p.education || undefined,
+          major: p.major || undefined,
+          position: jd?.position_name || '',
+          department: jd?.department || '',
+          job_requirement_id: resumeJobId,
+          status: '待筛选',
+          candidate_type: '职能',
+          resume_url: p.resume_file_path || '',
+          current_company: p.current_company || undefined,
+          work_years: p.work_years ?? undefined,
+          expected_salary: p.expected_salary || undefined,
+          source: p.source || '自主上传',
+        } as any)
+        updateResumeItem(it.key, { stage: '已建档', candidateId: res?.data?.id })
+        created += 1
+      } catch (err: any) {
+        updateResumeItem(it.key, { stage: '失败', error: err?.message || '处理失败' })
+      }
+    }
+    setBatchRunning(false)
+    if (created > 0) {
+      if (resumeJobId) setExpandedJobs(prev => new Set([...prev, resumeJobId]))
+      await loadAllCandidates()
+      msg.success(`已为「${jd?.position_name || '岗位'}」建档 ${created} 名候选人`)
+    }
+  }
+
+  // 对本批已建档、尚未初筛的简历批量跑 AI 初筛（串行，逐份回写行内结果）
+  const handleBatchScreen = async () => {
+    const targets = resumeItems.filter(it => it.stage === '已建档' && it.candidateId)
+    if (!targets.length) return
+    setBatchScreening(true)
+    let ok = 0
+    for (const it of targets) {
+      updateResumeItem(it.key, { stage: '初筛中' })
+      try {
+        const r = await screenCandidateAction(it.candidateId!)
+        updateResumeItem(it.key, {
+          stage: '初筛完成', reco: r.data.recommendation, score: r.data.total_score,
+        })
+        ok += 1
+      } catch (err: any) {
+        // 初筛失败不影响已建档结果：回落「已建档」可重试
+        updateResumeItem(it.key, { stage: '已建档', error: err?.message || '初筛失败' })
+      }
+    }
+    setBatchScreening(false)
+    if (ok > 0) {
+      await loadAllCandidates()
+      msg.success(`AI 初筛完成 ${ok} 份，推荐等级与匹配报告已写入候选人档案`)
+    }
+  }
+
+  const closeResumeModal = () => {
+    if (batchRunning || batchScreening) { msg.warning('正在处理中，请等待本轮完成后再关闭'); return }
+    setResumeOpen(false)
+    setResumeItems([])
+    setResumeJobId(null)
   }
 
   // AI 初筛：对已建档候选人的存量简历直接筛选（免重复上传，结果回写候选人档案）
@@ -238,54 +331,6 @@ export default function RecruitmentClient() {
       await loadAllCandidates()
     } catch (err: any) { msg.error(err.message || 'AI 初筛失败') }
     finally { setScreeningCand(null) }
-  }
-
-  const handleCreateCandidate = async () => {
-    if (!resumeResult) return
-    try {
-      const payload: any = {
-        name: resumeResult.name || '',
-        phone: resumeResult.phone || undefined,
-        email: resumeResult.email || undefined,
-        gender: resumeResult.gender || undefined,
-        school: resumeResult.school || undefined,
-        education: resumeResult.education || undefined,
-        major: resumeResult.major || undefined,
-        position: jobs.find(j => j.id === resumeJobIdRef.current)?.position_name || '',
-        department: jobs.find(j => j.id === resumeJobIdRef.current)?.department || '',
-        job_requirement_id: resumeJobIdRef.current || undefined,
-        status: '待筛选',
-        candidate_type: '职能',
-        resume_url: resumeResult.resume_file_path || '',
-        current_company: resumeResult.current_company || undefined,
-        work_years: resumeResult.work_years ?? undefined,
-        expected_salary: resumeResult.expected_salary || undefined,
-        source: resumeResult.source || '自主上传',
-      }
-      const res = await createCandidate(payload)
-      msg.success('候选人已创建')
-      // 乐观更新：先立即显示
-      if (res?.data) {
-        setAllCandidates(prev => [res.data, ...prev])
-        if (resumeJobIdRef.current) setExpandedJobs(prev => new Set([...prev, resumeJobIdRef.current!]))
-      }
-      const createdId = res?.data?.id as string | undefined
-      const linkedJobId = payload.job_requirement_id as string | undefined
-      setResumeOpen(false); setResumeFile(null); setResumeResult(null)
-      resumeJobIdRef.current = null
-      // 再从后端拉取最新数据覆盖（确保持久化 + 绕过缓存）
-      await loadAllCandidates()
-      // 简历已存档且关联了岗位 → 顺势提供 AI 初筛，无需再去「AI 筛简历」重复上传
-      if (createdId && linkedJobId) {
-        Modal.confirm({
-          title: '立即 AI 初筛该简历？',
-          content: '将按关联岗位要求对该简历 AI 打分，结果自动写入候选人档案（推荐等级 + 匹配报告），无需重复上传。',
-          okText: '开始初筛',
-          cancelText: '暂不',
-          onOk: () => runScreenCandidate(createdId),
-        })
-      }
-    } catch (err: any) { msg.error(err.message || '创建失败') }
   }
 
   const handleDeleteCandidate = async (id: string) => {
@@ -424,7 +469,7 @@ export default function RecruitmentClient() {
                         extra={
                           <div className="flex gap-1.5 items-center" onClick={e => e.stopPropagation()}>
                             <Button size="small" onClick={() => loadCompare(j.id)}>对比</Button>
-                            <Button size="small" icon={<UploadOutlined />} title="上传简历" onClick={() => { setResumeFile(null); setResumeResult(null); resumeJobIdRef.current = j.id; setResumeOpen(true) }} />
+                            <Button size="small" icon={<UploadOutlined />} title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }} />
                             <Button size="small" type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
                             <Popconfirm
                               title="删除该岗位？"
@@ -548,19 +593,72 @@ export default function RecruitmentClient() {
                 </Form>
               </Modal>
 
-              <Modal title="上传简历匹配" open={resumeOpen} onCancel={() => setResumeOpen(false)} onOk={handleCreateCandidate} okText="确认创建候选人" okButtonProps={{ disabled: !resumeResult }}>
+              <Modal
+                title={`批量上传简历 — ${jobs.find(j => j.id === resumeJobId)?.position_name || ''}`}
+                open={resumeOpen}
+                onCancel={closeResumeModal}
+                maskClosable={false}
+                width={560}
+                footer={[
+                  <Button key="close" onClick={closeResumeModal}>关闭</Button>,
+                  (() => {
+                    const screenable = resumeItems.filter(it => it.stage === '已建档' && it.candidateId).length
+                    return (
+                      <Button key="screen" type="primary" ghost icon={<FileSearchOutlined />}
+                        disabled={screenable === 0 || batchRunning}
+                        loading={batchScreening}
+                        onClick={() => { void handleBatchScreen() }}>
+                        AI 初筛 {screenable > 0 ? `${screenable} 份` : ''}
+                      </Button>
+                    )
+                  })(),
+                  <Button key="process" type="primary" icon={<UploadOutlined />}
+                    loading={batchRunning}
+                    disabled={batchRunning || batchScreening || resumeItems.filter(it => it.stage === '待处理').length === 0}
+                    onClick={() => { void handleProcessBatch() }}>
+                    开始处理{resumeItems.length > 0 ? `（${resumeItems.filter(it => it.stage === '待处理').length}/${resumeItems.length}）` : ''}
+                  </Button>,
+                ]}>
                 <div className="space-y-3">
-                  <Input type="file" accept=".pdf" onChange={e => setResumeFile((e.target as HTMLInputElement).files?.[0] || null)} />
-                  <Button icon={<UploadOutlined />} loading={resumeLoading} onClick={handleParseResume} block>解析简历</Button>
-                  {resumeResult && (
-                    <div className="text-sm space-y-1 border rounded p-2 bg-gray-50">
-                      <div>姓名：<b>{resumeResult.name}</b> · 手机：{resumeResult.phone}</div>
-                      <div>邮箱：{resumeResult.email}</div>
-                      <div>学校：{resumeResult.school} · 学历：{resumeResult.education} · 专业：{resumeResult.major}</div>
-                      {resumeResult.current_company && <div>当前公司：{resumeResult.current_company}</div>}
-                      {resumeResult.work_years != null && <div>工作年限：{resumeResult.work_years}年</div>}
-                      {resumeResult.expected_salary && <div>期望薪资：{resumeResult.expected_salary}</div>}
-                      {resumeJobIdRef.current && <div className="text-gray-400">关联岗位：{jobs.find(j => j.id === resumeJobIdRef.current)?.position_name}</div>}
+                  <div className="text-xs text-gray-500">
+                    支持一次选择多份 PDF：逐份自动「AI 解析 → 建档为该岗位候选人」，完成后可一键对全部新简历跑 AI 初筛（推荐等级 + 匹配报告直接写入候选人档案）。
+                  </div>
+                  <Input type="file" accept=".pdf" multiple disabled={batchRunning || batchScreening}
+                    onChange={e => {
+                      const files = Array.from((e.target as HTMLInputElement).files || [])
+                      setResumeItems(files.map((f, i) => ({
+                        key: `${Date.now()}-${i}-${f.name}`, file: f, stage: '待处理' as const,
+                      })))
+                      // 受控重置，保证同批文件可再次触发 onChange
+                      ;(e.target as HTMLInputElement).value = ''
+                    }} />
+                  {resumeItems.length > 0 && (
+                    <div className="border rounded divide-y max-h-80 overflow-y-auto">
+                      {resumeItems.map(it => (
+                        <div key={it.key} className="flex items-center gap-2 px-3 py-2 text-sm">
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate" title={it.file.name}>
+                              {it.name ? <b>{it.name}</b> : it.file.name}
+                              <span className="text-xs text-gray-400 ml-2">{(it.file.size / 1024).toFixed(0)}KB</span>
+                            </div>
+                            {it.stage === '失败' && it.error && (
+                              <div className="text-xs text-red-500 truncate" title={it.error}>{it.error}</div>
+                            )}
+                            {it.stage === '初筛完成' && (
+                              <div className="text-xs text-gray-500">
+                                AI 初筛：<span className="font-medium">{it.reco}</span> · 胜任度 {it.score}/100（报告已入档案）
+                              </div>
+                            )}
+                            {it.stage === '已建档' && it.error && (
+                              <div className="text-xs text-orange-500 truncate" title={it.error}>上次初筛未完成：{it.error}</div>
+                            )}
+                          </div>
+                          <Tag color={BATCH_STAGE_COLOR[it.stage]} style={{ margin: 0 }}>{it.stage}</Tag>
+                          {it.stage === '失败' && !batchRunning && !batchScreening && (
+                            <a className="text-xs" onClick={() => updateResumeItem(it.key, { stage: '待处理', error: undefined })}>重试</a>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
