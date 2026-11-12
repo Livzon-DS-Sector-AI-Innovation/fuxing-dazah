@@ -21,6 +21,7 @@ import {
   Radio,
   Timeline,
 } from 'antd'
+import { apiGet } from '@/lib/http-client'
 
 const { Paragraph } = Typography
 import {
@@ -467,15 +468,15 @@ export default function HazardLedgerDetailPage() {
       try {
         const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
         const params = new URLSearchParams({ keyword, limit: '50' })
-        const resp = await fetch(`${API_BASE}/api/v1/identity/personnel?${params}`)
-        if (resp.ok) {
-          const json = await resp.json()
-          const items = (json.data?.items ?? []) as Record<string, unknown>[]
-          setUserOptions(items.map((u) => ({
-            value: String(u.id),
-            label: `${String(u.name)} - ${String(u.department || '未知部门')}`,
-          })))
-        }
+        // 走统一客户端带上登录态（identity 端点需要鉴权）
+        const data = await apiGet<{ items?: Record<string, unknown>[] }>(
+          `${API_BASE}/api/v1/identity/personnel?${params}`,
+        )
+        const items = (data?.items ?? []) as Record<string, unknown>[]
+        setUserOptions(items.map((u) => ({
+          value: String(u.id),
+          label: `${String(u.name)} - ${String(u.department || '未知部门')}`,
+        })))
       } catch { /* 静默失败 */ } finally {
         setUserSearchLoading(false)
       }

@@ -9,6 +9,14 @@ import { AntdProvider } from '@/components/AntdProvider'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL
 
+const ERROR_MESSAGES: Record<string, string> = {
+  invalid_state: '登录状态校验失败，请重新登录',
+  auth_failed: '飞书授权失败，请重试',
+  login_unavailable: '登录服务暂不可用，请稍后重试',
+  no_code: '缺少登录凭证，请重新登录',
+  exchange_failed: '登录凭证无效或已过期，请重新登录',
+}
+
 function LoginForm() {
   const searchParams = useSearchParams()
   const error = searchParams.get('error')
@@ -56,7 +64,7 @@ function LoginForm() {
               title="登录失败"
               description={
                 <div>
-                  <p><strong>错误类型：</strong>{error}</p>
+                  <p>{ERROR_MESSAGES[error] ?? `登录失败（${error}）`}</p>
                   {detail && <p style={{ marginTop: 4, wordBreak: 'break-all' }}><strong>详情：</strong>{decodeURIComponent(detail)}</p>}
                 </div>
               }

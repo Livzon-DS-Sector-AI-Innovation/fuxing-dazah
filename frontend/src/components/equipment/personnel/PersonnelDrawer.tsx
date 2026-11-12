@@ -5,6 +5,7 @@ import { App, Button, Drawer, Select, Typography, Avatar, Space } from 'antd'
 import { UserOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { addPersonnel } from '@/actions/equipment'
+import { apiGet } from '@/lib/http-client'
 import type { EquipmentRole } from '@/types/equipment'
 
 const { Text } = Typography
@@ -45,10 +46,11 @@ export function PersonnelDrawer({ open, onClose, roles: _roles }: Props) {
       const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
       const params = new URLSearchParams({ limit: '500' })
       if (keyword) params.set('keyword', keyword)
-      const resp = await fetch(`${API_BASE}/api/v1/identity/personnel?${params}`)
-      if (!resp.ok) return []
-      const json = await resp.json()
-      const items = json.data?.items ?? []
+      // 走统一客户端带上登录态（identity 端点需要鉴权）
+      const data = await apiGet<{ items?: Record<string, unknown>[] }>(
+        `${API_BASE}/api/v1/identity/personnel?${params}`,
+      )
+      const items = data?.items ?? []
       return items.map((u: Record<string, unknown>) => ({
         value: String(u.id),
         label: String(u.name ?? ''),

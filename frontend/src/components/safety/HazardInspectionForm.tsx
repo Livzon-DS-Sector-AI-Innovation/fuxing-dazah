@@ -29,6 +29,7 @@ import {
   DEPARTMENT_OPTIONS,
 } from '@/types/safety'
 import { getCurrentUser } from '@/actions/auth'
+import { apiGet } from '@/lib/http-client'
 import dayjs from 'dayjs'
 
 const { TextArea } = Input
@@ -82,18 +83,19 @@ export default function HazardInspectionForm({
     searchTimerRef.current = setTimeout(async () => {
       setUserSearchLoading(true)
       try {
-        const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
+        const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
         const params = new URLSearchParams({ keyword, limit: '50' })
-        const resp = await fetch(`${API_BASE}/api/v1/identity/personnel?${params}`)
+        // 走统一客户端带上登录态（identity 端点需要鉴权）；
+        // 顺带修复原先 /api/v1 双重前缀导致的 404
+        const data = await apiGet<{ items?: Record<string, unknown>[] }>(
+          `${API_BASE}/api/v1/identity/personnel?${params}`,
+        )
         if (cancelled) return
-        if (resp.ok) {
-          const json = await resp.json()
-          const items = (json.data?.items ?? []) as Record<string, unknown>[]
-          setUserOptions(items.map((u) => ({
-            value: String(u.id),
-            label: `${String(u.name)} - ${String(u.department || '未知部门')}`,
-          })))
-        }
+        const items = (data?.items ?? []) as Record<string, unknown>[]
+        setUserOptions(items.map((u) => ({
+          value: String(u.id),
+          label: `${String(u.name)} - ${String(u.department || '未知部门')}`,
+        })))
       } catch {
         if (!cancelled) setUserOptions([])
       } finally {
