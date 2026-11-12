@@ -597,7 +597,7 @@ export default function RecruitmentClient() {
                 title={`批量上传简历 — ${jobs.find(j => j.id === resumeJobId)?.position_name || ''}`}
                 open={resumeOpen}
                 onCancel={closeResumeModal}
-                maskClosable={false}
+                mask={{ closable: false }}
                 width={560}
                 footer={[
                   <Button key="close" onClick={closeResumeModal}>关闭</Button>,
