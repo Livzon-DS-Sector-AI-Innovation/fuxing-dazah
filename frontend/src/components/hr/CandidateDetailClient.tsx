@@ -25,7 +25,7 @@ import {
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
-  fetchEmployeesAction,
+  fetchEmployeesAction, fetchJobRequirements,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
 import AIScoreCard from './AIScoreCard'
@@ -371,6 +371,28 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     })
   }
 
+  // 打开推送弹窗：预填岗位需求上配置的负责人（可改选）
+  const [jdOwnerPrefill, setJdOwnerPrefill] = useState<string | null>(null)
+  const openPushModal = () => {
+    pushForm.resetFields()
+    setJdOwnerPrefill(null)
+    setPushModalOpen(true)
+    if (!candidate.job_requirement_id) return
+    fetchJobRequirements()
+      .then(r => {
+        const jd = (r.data || []).find((j: any) => j.id === candidate.job_requirement_id)
+        if (jd?.owner) setJdOwnerPrefill(jd.owner)
+      })
+      .catch(() => { /* 预填失败不影响手动搜索 */ })
+  }
+
+  // Modal 打开且拿到岗位负责人后填入表单（Form 需随 Modal 挂载后才能 setFieldsValue）
+  useEffect(() => {
+    if (!pushModalOpen || !jdOwnerPrefill) return
+    pushForm.setFieldsValue({ reviewer: jdOwnerPrefill })
+    setReviewerOptions([{ value: jdOwnerPrefill, label: `${jdOwnerPrefill}（岗位负责人）` }])
+  }, [pushModalOpen, jdOwnerPrefill, pushForm])
+
   // 推送审核操作
   const handlePushReview = async () => {
     const v = await pushForm.validateFields()
@@ -534,7 +556,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           {/* 推送审核：已筛选状态时显示 */}
           {candidate.status === '已筛选' && (
             <div className="mt-2">
-              <Button type="primary" icon={<SendOutlined />} onClick={() => { pushForm.resetFields(); setPushModalOpen(true) }}>
+              <Button type="primary" icon={<SendOutlined />} onClick={openPushModal}>
                 推送给用人部门审核
               </Button>
             </div>
@@ -777,17 +799,17 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       {/* 推送审核 Modal：置于组件顶层（Tabs 懒渲染未激活面板，
           放在 interviewTab 内时从「基本信息」tab 点推送弹窗不会出现） */}
       <Modal title="推送候选人给用人部门" open={pushModalOpen} onCancel={() => setPushModalOpen(false)}
-        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送">
+        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送" forceRender>
         <Form form={pushForm} layout="vertical" className="mt-2">
           <div className="text-sm text-gray-500 mb-3">
-            推送至「{candidate.department}」用人部门负责人
+            默认推送岗位需求上配置的负责人（可在下方改选），确认后将发送飞书通知
           </div>
           <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
             <Select
               showSearch
               filterOption={false}
               loading={reviewerSearching}
-              placeholder="搜索并选择员工（姓名），将发送飞书通知"
+              placeholder="搜索并选择员工（姓名）；岗位需求已配置负责人时会自动填入"
               options={reviewerOptions}
               onSearch={searchReviewerOptions}
             />
