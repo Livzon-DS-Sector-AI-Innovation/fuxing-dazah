@@ -156,6 +156,10 @@ async def run_task_once(session: Any, task_id: uuid.UUID) -> str:
         "last_attention": report.attention,
         "human_after_report": False,  # 新报告重置「此后人的消息」标记
     })
+    if report.output:
+        # 执行器经 Report 传回的阶段事实（执行器不自写 task 行——外层行锁下
+        # 自开 session 更新同行会死锁；R3 诊断结论即走此通道，键名约定 r3）
+        facts.update(report.output)
     task.stage_facts = facts
 
     if report.end_task or report.kind == "dropped":

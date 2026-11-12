@@ -42,6 +42,7 @@ from app.modules.safety.api.oh_hazard_monitors import oh_hazard_monitors_router
 from app.modules.safety.api.oh_health_exams import oh_health_exams_router
 from app.modules.safety.api.oh_persons import oh_persons_router
 from app.modules.safety.api.oh_positions import oh_positions_router
+from app.modules.safety.api.ops_selfheal import ops_selfheal_router
 from app.modules.safety.api.overview import overview_router
 from app.modules.safety.api.scheduler_config import scheduler_config_router
 from app.modules.safety.api.special_operation_daily_report import (
@@ -99,6 +100,7 @@ router.include_router(oh_positions_router)
 router.include_router(oh_hazard_factors_router)
 router.include_router(oh_exam_applications_router)
 router.include_router(oh_followups_router)
+router.include_router(ops_selfheal_router)
 router.include_router(overview_router)
 router.include_router(scheduler_config_router)
 router.include_router(special_operation_daily_report_router)

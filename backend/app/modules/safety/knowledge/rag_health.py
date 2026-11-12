@@ -198,6 +198,12 @@ async def run_rag_health_probe(*, notify: bool = True) -> dict[str, object]:
             alerted = notify and await _notify_admin("🔴 RAG 知识层探活失败", content)
             _STATE.last_alert_at = now if alerted else None
             logger.error("RAG 探活故障（已告警=%s）：\n%s", alerted, detail)
+            # R3 运维自愈直投（翻转即投；直投失败只记日志，绝不影响探活）
+            from app.modules.safety.service.ops_selfheal_r3.rag_inject import (
+                inject_rag_signal,
+            )
+
+            await inject_rag_signal("degraded", detail=detail)
         elif (
             _STATE.last_alert_at is None
             or now - _STATE.last_alert_at >= _repeat_seconds()
@@ -226,6 +232,15 @@ async def run_rag_health_probe(*, notify: bool = True) -> dict[str, object]:
             )
             alerted = notify and await _notify_admin("🟢 RAG 知识层已恢复", content)
             logger.info("RAG 探活恢复（故障持续 %s，已通知=%s）", duration, alerted)
+            # R3 运维自愈直投（翻转即投；直投失败只记日志，绝不影响探活）
+            from app.modules.safety.service.ops_selfheal_r3.rag_inject import (
+                inject_rag_signal,
+            )
+
+            await inject_rag_signal(
+                "recovered", detail=detail,
+                duration_seconds=now - (_STATE.first_failed_at or now),
+            )
         else:
             logger.info("RAG 探活正常：%s", detail.replace("\n", "；"))
         _STATE.reset()

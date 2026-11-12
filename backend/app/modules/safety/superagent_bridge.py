@@ -209,6 +209,14 @@ def register_superagent_bridge() -> None:
 
         register_bitable_fetcher("guardian_score_ledger", guardian_score_fetcher)
 
+    # R3 运维信号扫描源（三期应用：定时任务失败/RAG 故障/依赖断连自动开单诊断）
+    if source_registry.get("ops_scan") is None:
+        from app.modules.safety.service.ops_selfheal_r3.scan_source import (
+            OpsScanSource,
+        )
+
+        source_registry.register(OpsScanSource())
+
     # R1 程序执行器 + P4 群卡 outbox sender（二期）
     from app.platform.superagent.executors import get_executor, register_executor
 
@@ -243,6 +251,23 @@ def register_superagent_bridge() -> None:
         )
 
         register_executor("guardian_qualify_restore", guardian_qualify_restore)
+    # R3 运维自愈执行器 + 修复/收口 effect handlers（三期应用）
+    if get_executor("r3_ops_heal") is None:
+        from app.modules.safety.service.ops_selfheal_r3.executor import r3_ops_heal
+
+        register_executor("r3_ops_heal", r3_ops_heal)
+    if get_effect_handler("r3_repair") is None:
+        from app.modules.safety.service.ops_selfheal_r3.actions import (
+            r3_repair_handler,
+        )
+
+        register_effect_handler("r3_repair", r3_repair_handler)
+    if get_effect_handler("r3_closure_card") is None:
+        from app.modules.safety.service.ops_selfheal_r3.actions import (
+            r3_closure_card_handler,
+        )
+
+        register_effect_handler("r3_closure_card", r3_closure_card_handler)
     from app.platform.superagent.effects import register_outbox_sender
 
     try:
@@ -367,6 +392,11 @@ async def ensure_guardian_r2_policy(session: AsyncSession | None = None) -> str 
         )
 
         rules.extend(hardware_alert_rules())
+        # R3 运维自愈（2026-11-12）：两源规则并入组合（四组会合点；
+        # 沿用现行 accept_mode/admission，部署不覆盖人工模式决定）
+        from app.modules.safety.service.ops_selfheal_r3.rule import r3_ops_rules
+
+        rules.extend(r3_ops_rules())
         current = await get_current_policy(ses)
         mode = current.accept_mode if current is not None else "observe"
         admission = (current.admission if current is not None else {}) or {}

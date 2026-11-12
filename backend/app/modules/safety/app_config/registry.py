@@ -273,6 +273,45 @@ _ITEMS: tuple[ConfigItem, ...] = (
     ),
 
     # ══════════════════════════════════════════════════════════
+    # R3 运维自愈（默认全关/observe；三层开关链：
+    # SUPERAGENT_ENABLED → SAFETY_R3_OPS_ENABLED → SAFETY_R3_REPAIR_MODE）
+    # ══════════════════════════════════════════════════════════
+    _flag(
+        "SAFETY_R3_OPS_ENABLED", False,
+        "R3 运维自愈总闸（定时任务失败/RAG 故障/依赖断连自动开单诊断；"
+        "关 = 扫描与直投全静默，不影响任何既有任务；需 SUPERAGENT_ENABLED 同开）",
+    ),
+    ConfigItem(
+        "SAFETY_R3_SCAN_INTERVAL_SECONDS", "direct_gate", "int", 300,
+        "R3 扫描周期秒（ops_scan 源每轮热读此值；restart_required 为设计口径"
+        "的保守标注，实际随轮生效）",
+        restart_required=True, minimum=30,
+    ),
+    _flag(
+        "SAFETY_R3_DIAG_LLM_ENABLED", True,
+        "R3 诊断 LLM 归因开关（false = 纯规则降级，证据直出不上 LLM）",
+    ),
+    ConfigItem(
+        "SAFETY_R3_REPAIR_MODE", "misc", "str", "observe",
+        "R3 L1 修复动作闸：observe=只报告将执行什么；auto=白名单内动作真正执行"
+        "（翻 auto 永远人工改配置，系统无自动升级路径）",
+    ),
+    ConfigItem(
+        "SAFETY_R3_ALLOWED_ACTIONS", "misc", "str",
+        "notify_enriched,rag_recheck",
+        "R3 修复动作白名单 csv（默认仅 L0 两项；effects_unpark/job_backfill/"
+        "hazard_dead_letter_rerun/hazard_stale_rerun 需人工加入）",
+    ),
+    ConfigItem(
+        "SAFETY_R3_MAX_REPAIR_ROUNDS", "misc", "int", 2,
+        "R3 每事件修复轮上限（超出转 needs_human 升级卡）", minimum=1,
+    ),
+    ConfigItem(
+        "SAFETY_R3_DAILY_RERUN_CAP", "misc", "int", 50,
+        "R3 死信/stale 重灌日上限（条/日）", minimum=1,
+    ),
+
+    # ══════════════════════════════════════════════════════════
     # 直读闸门（direct_gate）— 隐患域轮询旗标为启动语义（需重启）
     # ══════════════════════════════════════════════════════════
     _gate(
