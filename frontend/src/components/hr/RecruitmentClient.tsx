@@ -247,16 +247,19 @@ export default function RecruitmentClient() {
     const jd = jobs.find(j => j.id === resumeJobId)
     setBatchRunning(true)
     let created = 0
+    let unrecognized = 0
     for (const it of pending) {
       try {
         updateResumeItem(it.key, { stage: '解析中', error: undefined })
         const fd = new FormData(); fd.append('resume', it.file)
         const d = await parseResumeAction(fd)
         const p = d.data || {}
-        const fallbackName = it.file.name.replace(/\.pdf$/i, '')
-        updateResumeItem(it.key, { stage: '建档中', parsed: p, name: p.name || fallbackName })
+        // 名字只用简历正文提取的姓名；提取不到用明确的占位（批内递增），
+        // 不回退简历文件名——岗位下不应出现一长串文件名当名字
+        const name = p.name?.trim() || (unrecognized += 1, `未识别姓名${unrecognized > 1 ? unrecognized : ''}`)
+        updateResumeItem(it.key, { stage: '建档中', parsed: p, name })
         const res = await createCandidate({
-          name: p.name || fallbackName,
+          name,
           phone: p.phone || undefined,
           email: p.email || undefined,
           gender: p.gender || undefined,
@@ -285,6 +288,9 @@ export default function RecruitmentClient() {
       if (resumeJobId) setExpandedJobs(prev => new Set([...prev, resumeJobId]))
       await loadAllCandidates()
       msg.success(`已为「${jd?.position_name || '岗位'}」建档 ${created} 名候选人`)
+      if (unrecognized > 0) {
+        msg.warning(`其中 ${unrecognized} 份未从简历正文中识别到姓名（显示为「未识别姓名」），可点开候选人详情修改`)
+      }
     }
   }
 
