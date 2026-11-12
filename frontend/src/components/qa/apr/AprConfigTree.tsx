@@ -18,7 +18,7 @@ import {
   SearchOutlined,
 } from '@ant-design/icons'
 import clsx from 'clsx'
-import type { AprProduct, AprSection } from '@/types/qa-apr'
+import type { AprProduct, AprSection } from '@/types/qa'
 import { AprChromeStyles, AprMeta, AprSheet } from './AprChrome'
 import {
   DATA_KIND_DOT,

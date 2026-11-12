@@ -16,7 +16,7 @@ import type {
   DeviationDetail,
   DeviationTransitionAction,
   DeviationUpdateInput,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 
 const BASE = `${API_BASE}/qa`
 

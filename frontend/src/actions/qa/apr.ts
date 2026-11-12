@@ -6,7 +6,6 @@ import type {
   AprAnnualReview,
   AprBatch,
   AprBatchInput,
-  AprBatchValuesPayload,
   AprItem,
   AprItemDraft,
   AprItemInput,
@@ -15,7 +14,7 @@ import type {
   AprSection,
   AprSectionInput,
   AprValueInput,
-} from '@/types/qa-apr'
+} from '@/types/qa'
 
 const BASE = `${API_BASE}/qa/apr`
 
@@ -122,6 +121,32 @@ export async function deleteAprItem(id: string): Promise<ActionResult<AprItem>> 
   return result
 }
 
+/** 段级复制：后端单请求原子完成（建段+建列），停用列跳过。 */
+export async function copyAprSection(
+  sectionId: string,
+  input: { product_id: string; name: string },
+): Promise<ActionResult<{ section: AprSection; items: number; skipped: number }>> {
+  const result = await actionFetch<{ section: AprSection; items: number; skipped: number }>(
+    `${BASE}/sections/${sectionId}/copy`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+  if (result.success) revalidateApr()
+  return result
+}
+
+/** 整段列重排：按数组顺序单事务重赋 sort_order（替代逐列 PATCH）。 */
+export async function reorderAprItems(
+  sectionId: string,
+  itemIds: string[],
+): Promise<ActionResult<AprItem[]>> {
+  const result = await actionFetch<AprItem[]>(`${BASE}/sections/${sectionId}/items/order`, {
+    method: 'PUT',
+    body: JSON.stringify({ item_ids: itemIds }),
+  })
+  if (result.success) revalidateApr()
+  return result
+}
+
 export async function copyAprTemplate(
   productId: string,
   sourceProductId: string,
@@ -139,18 +164,6 @@ export async function copyAprTemplate(
 export async function createAprBatch(input: AprBatchInput): Promise<ActionResult<AprBatch>> {
   const result = await actionFetch<AprBatch>(`${BASE}/batches`, {
     method: 'POST',
-    body: JSON.stringify(input),
-  })
-  if (result.success) revalidateApr()
-  return result
-}
-
-export async function updateAprBatch(
-  id: string,
-  input: Partial<AprBatchInput>,
-): Promise<ActionResult<AprBatch>> {
-  const result = await actionFetch<AprBatch>(`${BASE}/batches/${id}`, {
-    method: 'PATCH',
     body: JSON.stringify(input),
   })
   if (result.success) revalidateApr()
@@ -188,12 +201,4 @@ export async function lockAprYear(
   )
   if (result.success) revalidateApr()
   return result
-}
-
-// ───────────────────────── 回读（server 侧供表单初始值） ─────────────────────────
-
-export async function fetchAprBatchValuesForEdit(
-  batchId: string,
-): Promise<ActionResult<AprBatchValuesPayload>> {
-  return actionFetch<AprBatchValuesPayload>(`${BASE}/batches/${batchId}/values`)
 }

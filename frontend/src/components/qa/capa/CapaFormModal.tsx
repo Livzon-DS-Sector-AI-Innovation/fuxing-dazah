@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Alert, App, Button, DatePicker, Form, Input, Modal, Select } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
-import { createCapa, updateCapa } from '@/actions/qa-deviation'
+import { createCapa, updateCapa } from '@/actions/qa'
 import {
   CAPA_ACTION_STATUS_LABEL,
   CAPA_ACTION_TYPE_LABEL,
@@ -17,7 +17,7 @@ import {
   type CapaDetail,
   type CapaSeverity,
   type EffectMethod,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { actionError, toOptions } from '../deviation/shared'
 
 interface ActionRow {

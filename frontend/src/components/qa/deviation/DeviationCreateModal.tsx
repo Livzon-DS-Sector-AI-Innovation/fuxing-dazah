@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ClipboardEvent } from 'react'
 import { App, Form, Modal } from 'antd'
 import { useRouter } from 'next/navigation'
 import { useQueryClient } from '@tanstack/react-query'
-import { createDeviation, uploadDeviationAttachment } from '@/actions/qa-deviation'
+import { createDeviation, uploadDeviationAttachment } from '@/actions/qa'
 import {
   DeviationReportFields,
   reportFormInitialValues,

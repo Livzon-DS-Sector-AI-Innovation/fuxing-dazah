@@ -7,9 +7,9 @@ import type { ColumnsType } from 'antd/es/table'
 import { EditOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { patchCapaAction, transitionCapa, updateCapa } from '@/actions/qa-deviation'
+import { patchCapaAction, transitionCapa, updateCapa } from '@/actions/qa'
 import { usePermission } from '@/hooks/usePermission'
-import { fetchCapa } from '@/lib/api/qa-deviation'
+import { fetchCapa } from '@/lib/api/qa'
 import {
   CAPA_ACTION_STATUS_LABEL,
   CAPA_ACTION_TYPE_LABEL,
@@ -24,7 +24,7 @@ import {
   type CapaTransitionAction,
   type EffectConclusion,
   type EffectMethod,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { SectionCard } from '../deviation/DeviationSections'
 import { TimelineCard } from '../deviation/DeviationSideBlocks'
 import { CapaStatusPill, Field, PILL, SeverityPill, actionError, fieldGrid, fmtDate, fmtDateTime, toOptions } from '../deviation/shared'

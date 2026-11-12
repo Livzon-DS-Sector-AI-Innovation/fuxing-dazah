@@ -491,6 +491,91 @@ async def test_copy_template() -> None:
         assert resp.status_code == 422
 
 
+async def test_copy_section_atomic() -> None:
+    """段级复制单请求原子完成：段+启用列一起建好，停用列跳过并计数；
+    目标产品段名撞名 409 且不留半截段。"""
+    async with _client(MANAGE) as (ac, _):
+        source_product = await _mk_product(ac, name="段复制源产品")
+        source = await _mk_section(ac, source_product["id"])
+        await _mk_item(ac, source["id"], quick_values=["未检出", "<0.5"])
+        inactive = await _mk_item(ac, source["id"], name_cn="停用水分")
+        await ac.patch(f"/api/v1/qa/apr/items/{inactive['id']}", json={"is_active": False})
+        target = await _mk_product(ac, name="段复制目标产品")
+
+        resp = await ac.post(
+            f"/api/v1/qa/apr/sections/{source['id']}/copy",
+            json={"product_id": target["id"], "name": "成品检验-副本"},
+        )
+        assert resp.status_code == 201, resp.text
+        data = resp.json()["data"]
+        assert data["items"] == 1
+        assert data["skipped"] == 1
+        assert data["section"]["name"] == "成品检验-副本"
+        assert data["section"]["data_kind"] == source["data_kind"]
+        assert data["section"]["market"] == source["market"]
+        # 段排到目标产品段尾
+        assert data["section"]["sort_order"] == 10
+
+        # 复制结果可读：只有启用列；code 与标准限沿用源列
+        resp = await ac.get(f"/api/v1/qa/apr/sections?product_id={target['id']}")
+        sections = resp.json()["data"]
+        assert len(sections) == 1
+        assert [i["name_cn"] for i in sections[0]["items"]] == ["酸碱度"]
+        assert sections[0]["items"][0]["quick_values"] == ["未检出", "<0.5"]
+
+        # 撞名 409，且不会留下半截段
+        resp = await ac.post(
+            f"/api/v1/qa/apr/sections/{source['id']}/copy",
+            json={"product_id": target["id"], "name": "成品检验-副本"},
+        )
+        assert resp.status_code == 409
+        resp = await ac.get(f"/api/v1/qa/apr/sections?product_id={target['id']}")
+        assert len(resp.json()["data"]) == 1
+
+
+async def test_reorder_items_atomic() -> None:
+    """整段列重排：按数组顺序重赋 sort_order；少列/未知列/重复列 422 不落库。"""
+    async with _client(MANAGE) as (ac, _):
+        product = await _mk_product(ac)
+        section = await _mk_section(ac, product["id"])
+        first = await _mk_item(ac, section["id"])
+        second = await _mk_item(ac, section["id"], name_cn="水分")
+        third = await _mk_item(ac, section["id"], name_cn="性状")
+
+        # 少列 → 422
+        resp = await ac.put(
+            f"/api/v1/qa/apr/sections/{section['id']}/items/order",
+            json={"item_ids": [first["id"], second["id"]]},
+        )
+        assert resp.status_code == 422
+        assert "全部" in resp.json()["message"]
+        # 未知列 → 422
+        resp = await ac.put(
+            f"/api/v1/qa/apr/sections/{section['id']}/items/order",
+            json={"item_ids": [first["id"], second["id"], third["id"], str(uuid4())]},
+        )
+        assert resp.status_code == 422
+        # 重复列 → 422
+        resp = await ac.put(
+            f"/api/v1/qa/apr/sections/{section['id']}/items/order",
+            json={"item_ids": [first["id"], first["id"], second["id"], third["id"]]},
+        )
+        assert resp.status_code == 422
+
+        # 合法重排：third → first → second
+        resp = await ac.put(
+            f"/api/v1/qa/apr/sections/{section['id']}/items/order",
+            json={"item_ids": [third["id"], first["id"], second["id"]]},
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["data"]
+        assert [(i["name_cn"], i["sort_order"]) for i in items] == [
+            ("性状", 10),
+            ("酸碱度", 20),
+            ("水分", 30),
+        ]
+
+
 # ───────────────────────── 批次与值 ─────────────────────────
 
 
@@ -1021,8 +1106,8 @@ async def test_summary_matrix_and_filters() -> None:
         assert [s["data_kind"] for s in data["sections"]] == ["production"]
 
 
-async def test_summary_export_xlsx() -> None:
-    """汇总导出返回 xlsx 流，文件名含产品与年度。"""
+async def test_section_export_xlsx_stream() -> None:
+    """段级导出返回 xlsx 流，文件名含产品与年度（产品级汇总导出端点已下线）。"""
     async with _client(MANAGE | ENTER | EXPORT) as (ac, _):
         product = await _mk_product(ac, name="达托霉素")
         section = await _mk_section(ac, product["id"])
@@ -1032,9 +1117,7 @@ async def test_summary_export_xlsx() -> None:
             f"/api/v1/qa/apr/batches/{batch['id']}/values",
             json={"values": [{"item_id": item["id"], "value_num": 4.3}]},
         )
-        resp = await ac.get(
-            f"/api/v1/qa/apr/summary/export?product_id={product['id']}&year=2025"
-        )
+        resp = await ac.get(f"/api/v1/qa/apr/sections/{section['id']}/export?year=2025")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1146,7 +1229,7 @@ async def test_lock_and_export_require_dedicated_permission() -> None:
         )
         assert resp.status_code == 403
         resp = await ac.get(
-            f"/api/v1/qa/apr/summary/export?product_id={any_product}&year=2025"
+            f"/api/v1/qa/apr/sections/{any_product}/export?year=2025"
         )
         assert resp.status_code == 403
     async with _client(READ | {"qa:apr:export"}) as (ac, _):

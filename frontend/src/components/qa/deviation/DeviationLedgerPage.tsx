@@ -10,7 +10,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import * as XLSX from 'xlsx'
 import { PageHeading } from '@/components/shared/PageHeading'
 import { usePermission } from '@/hooks/usePermission'
-import { fetchDeviationSummary, fetchDeviations } from '@/lib/api/qa-deviation'
+import { fetchDeviationSummary, fetchDeviations } from '@/lib/api/qa'
 import {
   DEVIATION_CLASSIFICATION_LABEL,
   DEVIATION_STATUS_LABEL,
@@ -20,7 +20,7 @@ import {
   type DeviationClassification,
   type DeviationStatus,
   type RootCauseCategory,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { DeviationCreateModal } from './DeviationCreateModal'
 import { ClassificationPill, DeviationStatusPill, DueDateCell, EmptyState, PILL, cardStyle, fmtDate, tabularNums, toOptions } from './shared'
 import styles from './DeviationLedger.module.css'

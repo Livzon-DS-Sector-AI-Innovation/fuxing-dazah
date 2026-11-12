@@ -15,7 +15,7 @@ import {
   Select,
 } from 'antd'
 import { actionError } from '@/components/qa/deviation/shared'
-import { createAprItem, updateAprItem } from '@/actions/qa-apr'
+import { createAprItem, updateAprItem } from '@/actions/qa'
 import type {
   AprItem,
   AprItemCategory,
@@ -23,7 +23,7 @@ import type {
   AprNdPolicy,
   AprSection,
   AprValueType,
-} from '@/types/qa-apr'
+} from '@/types/qa'
 import {
   CATEGORY_OPTIONS,
   confirmAsync,

@@ -89,14 +89,16 @@ export function AprYearField({
   onChange,
   min = 2000,
   max = 2100,
+  disabled = false,
 }: {
   value: number
   onChange: (value: number) => void
   min?: number
   max?: number
+  disabled?: boolean
 }) {
   return (
-    <label className={styles.yearField}>
+    <label className={clsx(styles.yearField, disabled && styles.yearFieldDisabled)}>
       <span className={styles.yearFieldLabel}>年度</span>
       <InputNumber
         size="small"
@@ -107,6 +109,7 @@ export function AprYearField({
         max={max}
         value={value}
         aria-label="年度"
+        disabled={disabled}
         onChange={(next) => {
           // 清空（null）与非法输入不回调：否则 Number(null)=0 会把年度置 0，
           // 请求被后端 ge=2000 拒掉还把 ?year=0 写进 URL
@@ -255,6 +258,14 @@ export function AprValue({
     return <span className={clsx(styles.violation, styles.violationOot)}>{body}</span>
   }
   return <span className={styles.num}>{body}</span>
+}
+
+/** 动画类操作尊重系统「减少动态效果」设置；SSR 时按不减少处理。 */
+export function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
 }
 
 export const AprChromeStyles = styles

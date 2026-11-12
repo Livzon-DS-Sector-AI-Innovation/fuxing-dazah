@@ -8,7 +8,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PageHeading } from '@/components/shared/PageHeading'
-import { fetchCapaSummary, fetchCapas } from '@/lib/api/qa-deviation'
+import { fetchCapaSummary, fetchCapas } from '@/lib/api/qa'
 import {
   CAPA_SEVERITY_LABEL,
   CAPA_STATUS_LABEL,
@@ -16,7 +16,7 @@ import {
   type CapaBrief,
   type CapaSeverity,
   type CapaStatus,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { CapaStatusPill, PILL, SeverityPill, cardStyle, fmtDate, toOptions } from '../deviation/shared'
 import { CapaDetailDrawer } from './CapaDetailDrawer'
 

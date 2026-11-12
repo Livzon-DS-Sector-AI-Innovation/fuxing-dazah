@@ -459,9 +459,7 @@ async def test_summary_export_layout_and_na_cells() -> None:
         await _fill_values(ac, section["id"], only_max["id"], [4.2, 4.4])
         await _fill_values(ac, section["id"], text_item["id"], ["符合规定", "符合规定"])
 
-        resp = await ac.get(
-            f"/api/v1/qa/apr/summary/export?product_id={product['id']}&year=2025"
-        )
+        resp = await ac.get(f"/api/v1/qa/apr/sections/{section['id']}/export?year=2025")
         assert resp.status_code == 200, resp.text
         wb = load_workbook(io.BytesIO(resp.content))
         ws = wb.worksheets[0]
@@ -471,6 +469,10 @@ async def test_summary_export_layout_and_na_cells() -> None:
         for row in ws.iter_rows():
             for cell in row:
                 assert "ANNUAL PRODUCT REVIEW" not in str(cell.value or "")
+        # 数据单元格默认居中（不设 alignment 时数值右对齐/文本左对齐）
+        assert ws.cell(4, 1).alignment.horizontal == "center"  # 序号
+        assert ws.cell(4, 2).alignment.horizontal == "center"  # 批号
+        assert ws.cell(4, 3).alignment.horizontal == "center"  # 酸碱度数值
 
         col_a = [row[0].value for row in ws.iter_rows(min_col=1, max_col=1)]
 
@@ -543,9 +545,7 @@ async def test_summary_export_footer_full_stat_rows() -> None:
         await _fill_values(ac, section["id"], p0["id"], [4.4, 4.5])
         await _fill_values(ac, section["id"], p3["id"], [4.3, 4.4, 4.5])
 
-        resp = await ac.get(
-            f"/api/v1/qa/apr/summary/export?product_id={product['id']}&year=2025"
-        )
+        resp = await ac.get(f"/api/v1/qa/apr/sections/{section['id']}/export?year=2025")
         assert resp.status_code == 200, resp.text
         wb = load_workbook(io.BytesIO(resp.content))
         ws = wb.worksheets[0]
@@ -581,9 +581,8 @@ async def test_summary_export_footer_nd_row() -> None:
         await _fill_values(ac, section["id"], nd_item["id"], [4.3, "未检出"])
         await _fill_values(ac, section["id"], plain["id"], [16.0, 17.0])
 
-        resp = await ac.get(
-            f"/api/v1/qa/apr/summary/export?product_id={product['id']}&year=2025"
-        )
+        resp = await ac.get(f"/api/v1/qa/apr/sections/{section['id']}/export?year=2025")
+        assert resp.status_code == 200, resp.text
         wb = load_workbook(io.BytesIO(resp.content))
         ws = wb.worksheets[0]
         col_a = [row[0].value for row in ws.iter_rows(min_col=1, max_col=1)]

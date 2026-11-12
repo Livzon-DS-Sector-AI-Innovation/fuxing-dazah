@@ -11,7 +11,7 @@ import {
   type CapaStatus,
   type DeviationClassification,
   type DeviationStatus,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 
 // DESIGN.md：状态 pill 用语义色 + 对应 pastel tint，按钮 8px/卡片 12px 圆角。
 export const pill = (color: string, bg: string): CSSProperties => ({

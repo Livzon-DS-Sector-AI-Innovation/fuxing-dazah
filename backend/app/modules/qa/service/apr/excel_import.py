@@ -34,22 +34,12 @@ from app.platform.identity.models import User
 
 # 表头别名/空白占位/规模上限：模板与导入端共用一套口径。
 _IMPORT_BATCH_HEADERS = {"批号", "批次号", "batch_no"}
-
-_IMPORT_BATCH_HEADERS = {"批号", "批次号", "batch_no"}
-_IMPORT_LABEL_HEADERS = {"行标签", "标签", "row_label"}
-
 _IMPORT_LABEL_HEADERS = {"行标签", "标签", "row_label"}
 _IMPORT_BLANK_MARKERS = {"", "-", "/", "—", "–"}
-
-_IMPORT_BLANK_MARKERS = {"", "-", "/", "—", "–"}
-_IMPORT_HEADER_SCAN_ROWS = 8
-
 _IMPORT_HEADER_SCAN_ROWS = 8
 _IMPORT_MAX_ROWS = 2000
 
 # 防御 used range 虚高的文件：空白行也计入读取上限，避免整表读进内存。
-_IMPORT_MAX_READ_ROWS = 20_000
-
 _IMPORT_MAX_READ_ROWS = 20_000
 _IMPORT_MAX_ERRORS = 100
 
@@ -107,6 +97,303 @@ def _parse_import_cell(
     if len(text) > 300:
         return None, "文字超过 300 字上限。"
     return {"value_num": None, "value_text": text}, None
+
+
+def _locate_header(all_rows: list[tuple[Any, ...]]) -> tuple[int, list[str]] | None:
+    """表头探测：前 N 行里找含「批号」的行（模板 r1 是分组行，表头在 r2）。"""
+    for idx in range(min(_IMPORT_HEADER_SCAN_ROWS, len(all_rows))):
+        cells = [_normalize_header_cell(c) for c in all_rows[idx]]
+        if any(c in _IMPORT_BATCH_HEADERS for c in cells):
+            return idx, cells
+    return None
+
+
+def _map_columns(
+    header: list[str],
+    header_row_idx: int,
+    items: list[AprItem],
+    errors: list[dict[str, Any]],
+) -> tuple[int, int | None, dict[int, AprItem]] | None:
+    """表头 → 列定义映射；不可映射（批号缺失/未知列/重名）时向 errors 记录并返回 None。
+
+    先按列编码（段内唯一稳定标识），再按显示名；重名拒绝按名匹配。
+    字典 key 与表头同样过 NFKC 归一：库内列名常含全角字符（培养温度（最低）），
+    只归一表头一侧会把模板自产的表头也认不出来。
+    """
+    by_code = {_normalize_header_cell(i.code): i for i in items}
+    by_name: dict[str, list[AprItem]] = {}
+    for i in items:
+        key = _normalize_header_cell(_display_name(i.name_cn, i.code))
+        by_name.setdefault(key, []).append(i)
+
+    batch_col: int | None = None
+    label_col: int | None = None
+    col_items: dict[int, AprItem] = {}
+    seen_item_cols: set[uuid.UUID] = set()
+    for col, name in enumerate(header):
+        if not name:
+            continue
+        if name in _IMPORT_BATCH_HEADERS:
+            if batch_col is None:
+                batch_col = col
+            else:
+                errors.append(
+                    {
+                        "row": header_row_idx + 1,
+                        "column": name,
+                        "message": "「批号」列出现多次。",
+                    }
+                )
+            continue
+        if name in _IMPORT_LABEL_HEADERS:
+            label_col = col if label_col is None else label_col
+            continue
+        item = by_code.get(name)
+        if item is None:
+            candidates = by_name.get(name, [])
+            if not candidates:
+                errors.append(
+                    {
+                        "row": header_row_idx + 1,
+                        "column": name,
+                        "message": (
+                            f"列「{name}」无法匹配到该段的列定义，"
+                            "请在「模板配置」核对列名，或在表头改用列编码。"
+                        ),
+                    }
+                )
+                continue
+            if len(candidates) > 1:
+                errors.append(
+                    {
+                        "row": header_row_idx + 1,
+                        "column": name,
+                        "message": (
+                            f"列名「{name}」在该段内重复，"
+                            f"请在表头改用列编码（如 {candidates[0].code}）。"
+                        ),
+                    }
+                )
+                continue
+            item = candidates[0]
+        if item.id in seen_item_cols:
+            errors.append(
+                {
+                    "row": header_row_idx + 1,
+                    "column": name,
+                    "message": f"列「{name}」在表头里重复出现。",
+                }
+            )
+            continue
+        seen_item_cols.add(item.id)
+        col_items[col] = item
+    if batch_col is None:
+        errors.append(
+            {"row": header_row_idx + 1, "column": None, "message": "未找到「批号」列。"}
+        )
+    if errors:
+        return None
+    assert batch_col is not None  # 上面已把缺失的批号列转成错误返回
+    return batch_col, label_col, col_items
+
+
+def _parse_data_rows(
+    data_rows: list[tuple[Any, ...]],
+    *,
+    header_row_idx: int,
+    header: list[str],
+    batch_col: int,
+    label_col: int | None,
+    col_items: dict[int, AprItem],
+    multi_row: bool,
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """数据行 → 解析结果（批号/行标签/数据格）。
+
+    批号行致命错误跳过该行；行标签/数据格错误照常收集但保留该行
+    （全部错误最后统一裁决，任一错误零落库）。
+    """
+    parsed_rows: list[dict[str, Any]] = []
+    for offset, raw in enumerate(data_rows):
+        excel_row = header_row_idx + 2 + offset
+
+        def _cell(col: int) -> Any:
+            return raw[col] if col < len(raw) else None
+
+        watched = (
+            [_cell(batch_col)]
+            + [_cell(col) for col in col_items]
+            + ([_cell(label_col)] if label_col is not None else [])
+        )
+        if all(_cell_is_blank(v) for v in watched):
+            continue  # 整行未填，静默跳过
+
+        raw_batch = _cell(batch_col)
+        if isinstance(raw_batch, (bool, _dt.datetime, _dt.date, _dt.time)):
+            errors.append(
+                {
+                    "row": excel_row,
+                    "column": "批号",
+                    "message": "批号格类型不符，请填写文字批号。",
+                }
+            )
+            continue
+        if _cell_is_blank(raw_batch):
+            errors.append({"row": excel_row, "column": "批号", "message": "批号为空。"})
+            continue
+        if isinstance(raw_batch, float) and raw_batch.is_integer():
+            batch_no = str(int(raw_batch))
+        else:
+            batch_no = _nfkc("NFKC", str(raw_batch)).strip()
+        if not batch_no or len(batch_no) > 64:
+            errors.append(
+                {
+                    "row": excel_row,
+                    "column": "批号",
+                    "message": "批号不能为空且不超过 64 字。",
+                }
+            )
+            continue
+
+        label: str | None = None
+        if multi_row and label_col is not None:
+            raw_label = _cell(label_col)
+            if not _cell_is_blank(raw_label):
+                if isinstance(raw_label, (bool, _dt.datetime, _dt.date, _dt.time)):
+                    errors.append(
+                        {
+                            "row": excel_row,
+                            "column": "行标签",
+                            "message": "行标签格类型不符，请填写文字。",
+                        }
+                    )
+                else:
+                    label = _nfkc("NFKC", str(raw_label)).strip()
+                    if len(label) > 32:
+                        errors.append(
+                            {
+                                "row": excel_row,
+                                "column": "行标签",
+                                "message": "行标签超过 32 字上限。",
+                            }
+                        )
+                        label = None
+
+        cell_values: dict[int, dict[str, Any]] = {}
+        for col, item in col_items.items():
+            parsed, err = _parse_import_cell(item, _cell(col))
+            if err is not None:
+                errors.append({"row": excel_row, "column": header[col], "message": err})
+            elif parsed is not None:
+                cell_values[col] = parsed
+        parsed_rows.append(
+            {
+                "excel_row": excel_row,
+                "batch_no": batch_no,
+                "label": label,
+                "cells": cell_values,
+            }
+        )
+    return parsed_rows
+
+
+def _group_batches(
+    parsed_rows: list[dict[str, Any]],
+    *,
+    multi_row: bool,
+    errors: list[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """批次分组（保序）；单行段批号重复、多行段同批行不连续均拒绝。"""
+    groups: list[tuple[str, list[dict[str, Any]]]] = []
+    index: dict[str, list[dict[str, Any]]] = {}
+    prev_batch: str | None = None
+    for pr in parsed_rows:
+        bn: str = pr["batch_no"]
+        if bn not in index:
+            index[bn] = []
+            groups.append((bn, index[bn]))
+        elif not multi_row:
+            errors.append(
+                {
+                    "row": pr["excel_row"],
+                    "column": "批号",
+                    "message": f"批号 {bn} 重复出现：该段为单行段，一批一行。",
+                }
+            )
+            continue
+        elif prev_batch != bn:
+            errors.append(
+                {
+                    "row": pr["excel_row"],
+                    "column": "批号",
+                    "message": f"批号 {bn} 的行必须连续排列，中间不能夹其他批号。",
+                }
+            )
+            continue
+        index[bn].append(pr)
+        prev_batch = bn
+    return groups
+
+
+def _plan_write_ops(
+    groups: list[tuple[str, list[dict[str, Any]]]],
+    *,
+    mode: str,
+    multi_row: bool,
+    required_items: list[AprItem],
+    col_items: dict[int, AprItem],
+    registered: dict[str, AprBatch],
+) -> tuple[
+    list[tuple[AprBatch | None, str, list[dict[str, Any]]]], list[dict[str, Any]]
+]:
+    """按批组构造写入值；replace 模式做必填校验（同 save_batch_values 口径）。"""
+    write_ops: list[tuple[AprBatch | None, str, list[dict[str, Any]]]] = []
+    errors: list[dict[str, Any]] = []
+    for bn, rows_ in groups:
+        values: list[dict[str, Any]] = []
+        for seq, pr in enumerate(rows_, start=1):
+            row_seq = seq if multi_row else 1
+            for col, parsed in pr["cells"].items():
+                item = col_items[col]
+                values.append(
+                    {
+                        "item_id": item.id,
+                        "row_seq": row_seq,
+                        # 行标签随所在行任一数据格写入生效（仅多行段）。
+                        "row_label": pr["label"] if multi_row else None,
+                        "value_num": parsed["value_num"],
+                        "value_text": parsed["value_text"],
+                        "remark": None,
+                    }
+                )
+        if mode == "replace" and required_items:
+            # 整批替换语义的必填校验（同 save_batch_values）：漏填会被静默清掉。
+            filled = {(v["item_id"], v["row_seq"]) for v in values}
+            row_scope = sorted({v["row_seq"] for v in values}) or [1]
+            missing: list[str] = []
+            for row_seq in row_scope:
+                for item in required_items:
+                    if (item.id, row_seq) in filled:
+                        continue
+                    missing.append(
+                        f"第 {row_seq} 行「{item.name_cn}」"
+                        if multi_row
+                        else f"「{item.name_cn}」"
+                    )
+            if missing:
+                errors.append(
+                    {
+                        "row": rows_[0]["excel_row"],
+                        "column": "批号",
+                        "message": (
+                            f"批号 {bn}：整批替换下以下必填项为空会被清掉，"
+                            f"请补齐：{'、'.join(missing)}。"
+                        ),
+                    }
+                )
+                continue
+        write_ops.append((registered.get(bn), bn, values))
+    return write_ops, errors
 
 
 async def build_import_template(
@@ -264,16 +551,9 @@ async def import_section_values(
             [{"row": 0, "column": None, "message": f"无法读取表格内容：{exc}。"}]
         )
 
-    # 表头探测：前 N 行里找含「批号」的行（模板 r1 是分组行，表头在 r2）。
-    header_idx: int | None = None
-    header: list[str] = []
-    for idx in range(min(_IMPORT_HEADER_SCAN_ROWS, len(all_rows))):
-        cells = [_normalize_header_cell(c) for c in all_rows[idx]]
-        if any(c in _IMPORT_BATCH_HEADERS for c in cells):
-            header_idx = idx
-            header = cells
-            break
-    if header_idx is None:
+    # 表头探测 → 列映射：任一阶段不可映射即整单拒绝。
+    located = _locate_header(all_rows)
+    if located is None:
         return _fail(
             [
                 {
@@ -286,89 +566,15 @@ async def import_section_values(
                 }
             ]
         )
+    header_idx, header = located
 
     errors: list[dict[str, Any]] = []
-
-    # 列映射：先按列编码（段内唯一稳定标识），再按显示名；重名拒绝按名匹配。
-    # 字典 key 与表头同样过 NFKC 归一：库内列名常含全角字符（培养温度（最低）），
-    # 只归一表头一侧会把模板自产的表头也认不出来。
     items = await repo.list_items(db, section_id, active_only=True)
-    by_code = {_normalize_header_cell(i.code): i for i in items}
-    by_name: dict[str, list[AprItem]] = {}
-    for i in items:
-        key = _normalize_header_cell(_display_name(i.name_cn, i.code))
-        by_name.setdefault(key, []).append(i)
-
-    batch_col: int | None = None
-    label_col: int | None = None
-    col_items: dict[int, AprItem] = {}
-    seen_item_cols: set[uuid.UUID] = set()
-    for col, name in enumerate(header):
-        if not name:
-            continue
-        if name in _IMPORT_BATCH_HEADERS:
-            if batch_col is None:
-                batch_col = col
-            else:
-                errors.append(
-                    {
-                        "row": header_idx + 1,
-                        "column": name,
-                        "message": "「批号」列出现多次。",
-                    }
-                )
-            continue
-        if name in _IMPORT_LABEL_HEADERS:
-            label_col = col if label_col is None else label_col
-            continue
-        item = by_code.get(name)
-        if item is None:
-            candidates = by_name.get(name, [])
-            if not candidates:
-                errors.append(
-                    {
-                        "row": header_idx + 1,
-                        "column": name,
-                        "message": (
-                            f"列「{name}」无法匹配到该段的列定义，"
-                            "请在「模板配置」核对列名，或在表头改用列编码。"
-                        ),
-                    }
-                )
-                continue
-            if len(candidates) > 1:
-                errors.append(
-                    {
-                        "row": header_idx + 1,
-                        "column": name,
-                        "message": (
-                            f"列名「{name}」在该段内重复，"
-                            f"请在表头改用列编码（如 {candidates[0].code}）。"
-                        ),
-                    }
-                )
-                continue
-            item = candidates[0]
-        if item.id in seen_item_cols:
-            errors.append(
-                {
-                    "row": header_idx + 1,
-                    "column": name,
-                    "message": f"列「{name}」在表头里重复出现。",
-                }
-            )
-            continue
-        seen_item_cols.add(item.id)
-        col_items[col] = item
-    if batch_col is None:
-        errors.append(
-            {"row": header_idx + 1, "column": None, "message": "未找到「批号」列。"}
-        )
-    if errors:
+    mapping = _map_columns(header, header_idx, items, errors)
+    if mapping is None:
         return _fail(errors)
-    assert batch_col is not None  # 上面已把缺失的批号列转成错误返回
+    batch_col, label_col, col_items = mapping
 
-    # 数据行 → 解析单元格（批号/标签/值），收集全部错误再决定是否落库。
     data_rows = all_rows[header_idx + 1 :]
     filled_rows = sum(1 for row in data_rows if any(not _cell_is_blank(c) for c in row))
     if filled_rows > _IMPORT_MAX_ROWS:
@@ -394,117 +600,18 @@ async def import_section_values(
                 }
             ]
         )
-    parsed_rows: list[dict[str, Any]] = []
-    for offset, raw in enumerate(data_rows):
-        excel_row = header_idx + 2 + offset
 
-        def _cell(col: int) -> Any:
-            return raw[col] if col < len(raw) else None
-
-        watched = (
-            [_cell(batch_col)]
-            + [_cell(col) for col in col_items]
-            + ([_cell(label_col)] if label_col is not None else [])
-        )
-        if all(_cell_is_blank(v) for v in watched):
-            continue  # 整行未填，静默跳过
-
-        raw_batch = _cell(batch_col)
-        if isinstance(raw_batch, (bool, _dt.datetime, _dt.date, _dt.time)):
-            errors.append(
-                {
-                    "row": excel_row,
-                    "column": "批号",
-                    "message": "批号格类型不符，请填写文字批号。",
-                }
-            )
-            continue
-        if _cell_is_blank(raw_batch):
-            errors.append({"row": excel_row, "column": "批号", "message": "批号为空。"})
-            continue
-        if isinstance(raw_batch, float) and raw_batch.is_integer():
-            batch_no = str(int(raw_batch))
-        else:
-            batch_no = _nfkc("NFKC", str(raw_batch)).strip()
-        if not batch_no or len(batch_no) > 64:
-            errors.append(
-                {
-                    "row": excel_row,
-                    "column": "批号",
-                    "message": "批号不能为空且不超过 64 字。",
-                }
-            )
-            continue
-
-        label: str | None = None
-        if section.multi_row and label_col is not None:
-            raw_label = _cell(label_col)
-            if not _cell_is_blank(raw_label):
-                if isinstance(raw_label, (bool, _dt.datetime, _dt.date, _dt.time)):
-                    errors.append(
-                        {
-                            "row": excel_row,
-                            "column": "行标签",
-                            "message": "行标签格类型不符，请填写文字。",
-                        }
-                    )
-                else:
-                    label = _nfkc("NFKC", str(raw_label)).strip()
-                    if len(label) > 32:
-                        errors.append(
-                            {
-                                "row": excel_row,
-                                "column": "行标签",
-                                "message": "行标签超过 32 字上限。",
-                            }
-                        )
-                        label = None
-
-        cell_values: dict[int, dict[str, Any]] = {}
-        for col, item in col_items.items():
-            parsed, err = _parse_import_cell(item, _cell(col))
-            if err is not None:
-                errors.append({"row": excel_row, "column": header[col], "message": err})
-            elif parsed is not None:
-                cell_values[col] = parsed
-        parsed_rows.append(
-            {
-                "excel_row": excel_row,
-                "batch_no": batch_no,
-                "label": label,
-                "cells": cell_values,
-            }
-        )
-
-    # 批次分组：保序；单行段批号重复、多行段同批行不连续均拒绝。
-    groups: list[tuple[str, list[dict[str, Any]]]] = []
-    index: dict[str, list[dict[str, Any]]] = {}
-    prev_batch: str | None = None
-    for pr in parsed_rows:
-        bn: str = pr["batch_no"]
-        if bn not in index:
-            index[bn] = []
-            groups.append((bn, index[bn]))
-        elif not section.multi_row:
-            errors.append(
-                {
-                    "row": pr["excel_row"],
-                    "column": "批号",
-                    "message": f"批号 {bn} 重复出现：该段为单行段，一批一行。",
-                }
-            )
-            continue
-        elif prev_batch != bn:
-            errors.append(
-                {
-                    "row": pr["excel_row"],
-                    "column": "批号",
-                    "message": f"批号 {bn} 的行必须连续排列，中间不能夹其他批号。",
-                }
-            )
-            continue
-        index[bn].append(pr)
-        prev_batch = bn
+    parsed_rows = _parse_data_rows(
+        data_rows,
+        header_row_idx=header_idx,
+        header=header,
+        batch_col=batch_col,
+        label_col=label_col,
+        col_items=col_items,
+        multi_row=section.multi_row,
+        errors=errors,
+    )
+    groups = _group_batches(parsed_rows, multi_row=section.multi_row, errors=errors)
 
     # 批号查找 key 同样 NFKC 归一（与解析侧对称）；文件中的新批号自动登记为
     # 该段批次（复用登记批次的唯一守卫），结果里透明报告新登记数。
@@ -512,52 +619,15 @@ async def import_section_values(
         _normalize_header_cell(b.batch_no): b
         for b in await repo.list_batches_of_section(db, section_id, year=year)
     }
-    write_ops: list[tuple[AprBatch | None, str, list[dict[str, Any]]]] = []
-    required_items = [i for i in items if i.required]
-    for bn, rows_ in groups:
-        values: list[dict[str, Any]] = []
-        for seq, pr in enumerate(rows_, start=1):
-            row_seq = seq if section.multi_row else 1
-            for col, parsed in pr["cells"].items():
-                item = col_items[col]
-                values.append(
-                    {
-                        "item_id": item.id,
-                        "row_seq": row_seq,
-                        # 行标签随所在行任一数据格写入生效（仅多行段）。
-                        "row_label": pr["label"] if section.multi_row else None,
-                        "value_num": parsed["value_num"],
-                        "value_text": parsed["value_text"],
-                        "remark": None,
-                    }
-                )
-        if mode == "replace" and required_items:
-            # 整批替换语义的必填校验（同 save_batch_values）：漏填会被静默清掉。
-            filled = {(v["item_id"], v["row_seq"]) for v in values}
-            row_scope = sorted({v["row_seq"] for v in values}) or [1]
-            missing: list[str] = []
-            for row_seq in row_scope:
-                for item in required_items:
-                    if (item.id, row_seq) in filled:
-                        continue
-                    missing.append(
-                        f"第 {row_seq} 行「{item.name_cn}」"
-                        if section.multi_row
-                        else f"「{item.name_cn}」"
-                    )
-            if missing:
-                errors.append(
-                    {
-                        "row": rows_[0]["excel_row"],
-                        "column": "批号",
-                        "message": (
-                            f"批号 {bn}：整批替换下以下必填项为空会被清掉，"
-                            f"请补齐：{'、'.join(missing)}。"
-                        ),
-                    }
-                )
-                continue
-        write_ops.append((registered.get(bn), bn, values))
+    write_ops, plan_errors = _plan_write_ops(
+        groups,
+        mode=mode,
+        multi_row=section.multi_row,
+        required_items=[i for i in items if i.required],
+        col_items=col_items,
+        registered=registered,
+    )
+    errors.extend(plan_errors)
 
     # 原子性：任一错误零落库（validate-before-write）。
     if errors:

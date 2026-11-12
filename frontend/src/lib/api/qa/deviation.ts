@@ -10,7 +10,7 @@ import type {
   DeviationDetail,
   DeviationListParams,
   DeviationStatus,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 
 // 浏览器优先走 Next rewrite，避免跨端口时 httpOnly auth cookie 丢失；
 // 服务端调用再使用显式后端地址（与 lib/api/qa.ts 同口径）。

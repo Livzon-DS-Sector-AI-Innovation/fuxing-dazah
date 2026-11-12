@@ -15,9 +15,11 @@ from app.modules.qa.schemas.apr import (
     AprItemBase,
     AprItemCreate,
     AprItemsBulkCreate,
+    AprItemsOrderIn,
     AprItemUpdate,
     AprProductCreate,
     AprProductUpdate,
+    AprSectionCopyIn,
     AprSectionCreate,
     AprSectionUpdate,
 )
@@ -308,6 +310,62 @@ async def delete_section(
     row.updated_by = _actor_id(user)
     await db.flush()
 
+
+def _clone_section_row(
+    source: AprSection,
+    *,
+    product_id: uuid.UUID,
+    sort_order: int,
+    actor_id: uuid.UUID | None,
+) -> AprSection:
+    """模板段字段克隆（不含段名/排序——由调用方给新值）。"""
+    return AprSection(
+        product_id=product_id,
+        name=source.name,
+        data_kind=source.data_kind,
+        market=source.market,
+        stage=source.stage,
+        multi_row=source.multi_row,
+        sort_order=sort_order,
+        remark=source.remark,
+        created_by=actor_id,
+        updated_by=actor_id,
+    )
+
+
+def _clone_item_row(
+    source: AprItem,
+    *,
+    section_id: uuid.UUID,
+    actor_id: uuid.UUID | None,
+) -> AprItem:
+    """列定义字段克隆（is_active 等标记随源列，code 沿用——唯一作用域是段）。"""
+    return AprItem(
+        section_id=section_id,
+        code=source.code,
+        group_name=source.group_name,
+        category=source.category,
+        name_cn=source.name_cn,
+        name_en=source.name_en,
+        value_type=source.value_type,
+        unit=source.unit,
+        spec_text=source.spec_text,
+        spec_min=source.spec_min,
+        spec_max=source.spec_max,
+        oot_min=source.oot_min,
+        oot_max=source.oot_max,
+        nd_policy=source.nd_policy,
+        quick_values=list(source.quick_values or []),
+        stat_precision=source.stat_precision,
+        trend_enabled=source.trend_enabled,
+        required=source.required,
+        is_active=source.is_active,
+        sort_order=source.sort_order,
+        remark=source.remark,
+        created_by=actor_id,
+        updated_by=actor_id,
+    )
+
 async def _generate_item_code(db: AsyncSession, section_id: uuid.UUID) -> str:
     """code 未传时生成段内唯一短码。"""
     while True:
@@ -516,49 +574,12 @@ async def copy_template(
     copied_sections = 0
     copied_items = 0
     for s in source_sections:
-        new_section = AprSection(
-            product_id=product_id,
-            name=s.name,
-            data_kind=s.data_kind,
-            market=s.market,
-            stage=s.stage,
-            multi_row=s.multi_row,
-            sort_order=s.sort_order,
-            remark=s.remark,
-            created_by=actor,
-            updated_by=actor,
-        )
+        new_section = _clone_section_row(s, product_id=product_id, sort_order=s.sort_order, actor_id=actor)
         db.add(new_section)
         await db.flush()
         copied_sections += 1
         for i in await repo.list_items(db, s.id):
-            db.add(
-                AprItem(
-                    section_id=new_section.id,
-                    code=i.code,
-                    group_name=i.group_name,
-                    category=i.category,
-                    name_cn=i.name_cn,
-                    name_en=i.name_en,
-                    value_type=i.value_type,
-                    unit=i.unit,
-                    spec_text=i.spec_text,
-                    spec_min=i.spec_min,
-                    spec_max=i.spec_max,
-                    oot_min=i.oot_min,
-                    oot_max=i.oot_max,
-                    nd_policy=i.nd_policy,
-                    quick_values=list(i.quick_values or []),
-                    stat_precision=i.stat_precision,
-                    trend_enabled=i.trend_enabled,
-                    required=i.required,
-                    is_active=i.is_active,
-                    sort_order=i.sort_order,
-                    remark=i.remark,
-                    created_by=actor,
-                    updated_by=actor,
-                )
-            )
+            db.add(_clone_item_row(i, section_id=new_section.id, actor_id=actor))
             copied_items += 1
     await db.flush()
     return {
@@ -567,3 +588,92 @@ async def copy_template(
         "sections": copied_sections,
         "items": copied_items,
     }
+
+
+async def copy_section(
+    db: AsyncSession,
+    section_id: uuid.UUID,
+    payload: AprSectionCopyIn,
+    user: User | None,
+) -> dict[str, Any]:
+    """把源段复制为目标产品下的新段：建段+建列一个请求一个事务原子完成
+    （替代前端「建段→批量建列→失败手动回滚」的两步写）。
+
+    只复制启用的列定义（停用列跳过并在响应里透明报告），code/排序沿用源列。
+    """
+    source = await _get_section_or_404(db, section_id)
+    await _get_product_or_404(db, payload.product_id)
+    await _ensure_section_name_unique(db, payload.product_id, payload.name)
+    actor = _actor_id(user)
+    # 段排到目标产品段尾
+    target_sections = await repo.list_sections(db, payload.product_id)
+    next_sort_order = (
+        max((s.sort_order for s in target_sections), default=0) + 10
+    )
+    new_section = _clone_section_row(
+        source,
+        product_id=payload.product_id,
+        sort_order=next_sort_order,
+        actor_id=actor,
+    )
+    new_section.name = payload.name
+    try:
+        # 预检后并发仍可能撞 uq_qa_apr_sections_product_name，转 409。
+        async with db.begin_nested():
+            db.add(new_section)
+            await db.flush()
+    except IntegrityError as exc:
+        raise AppException(
+            status_code=409,
+            message=_section_conflict_message(exc, name=payload.name),
+        ) from None
+    source_items = await repo.list_items(db, section_id)
+    items_to_copy = [i for i in source_items if i.is_active]
+    for i in items_to_copy:
+        db.add(_clone_item_row(i, section_id=new_section.id, actor_id=actor))
+    await db.flush()
+    return {
+        "section": _section_dict(new_section),
+        "items": len(items_to_copy),
+        "skipped": len(source_items) - len(items_to_copy),
+    }
+
+
+async def reorder_items(
+    db: AsyncSession,
+    section_id: uuid.UUID,
+    payload: AprItemsOrderIn,
+    user: User | None,
+) -> list[dict[str, Any]]:
+    """整段列重排：按数组顺序重赋 sort_order=(位置+1)*10，单次写原子生效
+    （替代逐列 PATCH——中途失败会乱序且无原子性）。
+
+    请求必须恰好覆盖该段全部未删除列（含停用列），少列/多列/重复都 422，
+    避免半重排状态。
+    """
+    await _get_section_or_404(db, section_id)
+    items = await repo.list_items(db, section_id)
+    existing_ids = {i.id for i in items}
+    if len(set(payload.item_ids)) != len(payload.item_ids):
+        raise AppException(status_code=422, message="列 id 列表里有重复项。")
+    if any(i not in existing_ids for i in payload.item_ids):
+        raise AppException(
+            status_code=422,
+            message="存在不属于该段（或已删除）的列定义。",
+        )
+    missing = existing_ids - set(payload.item_ids)
+    if missing:
+        raise AppException(
+            status_code=422,
+            message=(
+                f"必须携带该段全部 {len(existing_ids)} 个列定义"
+                f"（含停用列），当前只有 {len(payload.item_ids)} 个。"
+            ),
+        )
+    by_id = {i.id: i for i in items}
+    for position, item_id in enumerate(payload.item_ids):
+        row = by_id[item_id]
+        row.sort_order = (position + 1) * 10
+        row.updated_by = _actor_id(user)
+    await db.flush()
+    return [_item_dict(by_id[item_id]) for item_id in payload.item_ids]

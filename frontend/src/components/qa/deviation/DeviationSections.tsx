@@ -5,7 +5,7 @@ import { Alert, App, Button, Card, Col, DatePicker, Form, Input, Radio, Row, Sel
 import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
-import { updateDeviation } from '@/actions/qa-deviation'
+import { updateDeviation } from '@/actions/qa'
 import {
   DEVIATION_CLASSIFICATION_LABEL,
   DEVIATION_ITEM_CATEGORY_LABEL,
@@ -19,7 +19,7 @@ import {
   type QualityImpact,
   type RootCauseCategory,
   type WhyStep,
-} from '@/types/qa-deviation'
+} from '@/types/qa'
 import { DeviationReportFields, reportFormInitialValues, reportFormToPayload, useQaDepartments, type ReportFormValues } from './DeviationReportFields'
 import {
   appendHypothesisTests,

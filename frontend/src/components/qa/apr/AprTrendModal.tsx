@@ -4,7 +4,7 @@ import { Modal } from 'antd'
 import { LineChartOutlined } from '@ant-design/icons'
 import { AprChromeStyles, AprMeta, AprSegmented } from './AprChrome'
 import { AprTrendChart } from './AprTrendChart'
-import type { AprItem, AprTrend } from '@/types/qa-apr'
+import type { AprItem, AprTrend } from '@/types/qa'
 
 /**
  * 单列趋势弹窗。
@@ -70,7 +70,9 @@ export function AprTrendModal({
           </div>
           <AprTrendChart trend={trend} loading={loading} error={error} height={440} />
           <p className={AprChromeStyles.trendHint}>
-            横轴只标出部分批号；悬停任意点查看完整批号与数值，拖拽下方滑块可缩放区间。
+            {trend && trend.points.length > 15
+              ? '横轴只标出部分批号；悬停任意点查看完整批号与数值，拖拽下方滑块可缩放区间。'
+              : '横轴只标出部分批号；悬停任意点查看完整批号与数值。'}
           </p>
         </>
       ) : null}
