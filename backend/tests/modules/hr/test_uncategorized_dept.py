@@ -53,3 +53,32 @@ async def test_signin_excludes_uncategorized(db_session, client):
     assert res.status_code == 200, res.text
     numbers = [e["employee_number"] for e in res.json()["data"]]
     assert emp_no not in numbers, "签到表人员列表不应包含未分类人员"
+
+
+@pytest.mark.asyncio
+async def test_employee_list_default_includes_all_statuses(db_session, client):
+    """默认列表与源表全量对齐：不传 status 时试用期/离职/产假人员都可见。
+
+    回归：API 层 Query 默认值曾为「在职」（repository 已不过滤但被默认值
+    覆盖），导致同步 1285 人而列表只剩在职口径。
+    """
+    from app.modules.hr.models import Employee
+
+    tag = uuid4().hex[:6].upper()
+    rows = [
+        Employee(employee_number=f"TS{tag}1", name=f"口径测试试用期{tag}", department="质控部",
+                 position="QC", status="试用期", hire_date=_date.today()),
+        Employee(employee_number=f"TS{tag}2", name=f"口径测试离职{tag}", department="质控部",
+                 position="QC", status="离职", hire_date=_date.today()),
+        Employee(employee_number=f"TS{tag}3", name=f"口径测试产假{tag}", department="质控部",
+                 position="QC", status="产假", hire_date=_date.today()),
+    ]
+    db_session.add_all(rows)
+    await db_session.flush()
+
+    res = await client.get("/api/v1/hr/employees", params={"keyword": f"口径测试"})
+    assert res.status_code == 200, res.text
+    numbers = {e["employee_number"]: e["status"] for e in res.json()["data"]}
+    assert numbers.get(f"TS{tag}1") == "试用期"
+    assert numbers.get(f"TS{tag}2") == "离职"
+    assert numbers.get(f"TS{tag}3") == "产假"

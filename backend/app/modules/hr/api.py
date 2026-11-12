@@ -262,7 +262,7 @@ def _ensure_qa_assessment_access(hr_scope: HrAccessContext, department: str | No
 @router.get("/employees", summary="员工列表")
 async def list_employees(
     department: str | None = Query(None, description="部门筛选"),
-    status: str | None = Query("在职", description="状态筛选，默认仅显示在职"),
+    status: str | None = Query(None, description="状态筛选；不传时全量（与源表对齐，仅软删不计）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     include_uncategorized: bool = Query(False, description="是否纳入「未分类」人员（按实际部门归属）"),
     page_params: PageParams = Depends(),
