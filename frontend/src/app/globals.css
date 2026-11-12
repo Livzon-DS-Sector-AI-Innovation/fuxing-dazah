@@ -291,19 +291,20 @@ body {
   color: #1a1a1a;
 }
 
-/* 按钮样式 */
-.ant-btn-primary {
+/* 按钮样式（:not(...ghost) 排除幽灵按钮——ghost 是透明底描边样式，
+   实心背景覆盖会让 active 时紫底紫字文字消失，ghost 保持 antd 默认渲染） */
+.ant-btn-primary:not(.ant-btn-background-ghost) {
   background: #5645d4;
   border-color: #5645d4;
   box-shadow: none;
 }
 
-.ant-btn-primary:hover {
+.ant-btn-primary:not(.ant-btn-background-ghost):hover {
   background: #6b5ddb;
   border-color: #6b5ddb;
 }
 
-.ant-btn-primary:active {
+.ant-btn-primary:not(.ant-btn-background-ghost):active {
   background: #4534b3;
   border-color: #4534b3;
 }
