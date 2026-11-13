@@ -1,19 +1,23 @@
-"""R3 漏审日判定 + 补跑 adapter（一期唯一 adapter=作业票审核）。
+"""R3 漏审日判定 + 补跑 adapter（一期作业票审核 + 二期中控报警日报）。
 
 漏审日判定（§4.4 纯程序推导，扫描源 ``ops:job:<job>:<D>:missed`` trigger
 即权威定局——窗口耗尽仍 failed 且当日重试不计）：
 
-- run_on D 审 D-1（scheduler.py:891 语义）→ 漏审 run 日 D 的补跑审核日
-  = D-1（``missed_review_date``）；
+- 作业票：run_on D 审 D-1（scheduler.py:891 语义）→ 漏审 run 日 D 的补跑
+  审核日 = D-1（``missed_review_date``）；
+- 中控报警日报：D 日报当日（无 D-1 偏移）→ 补跑生成日 = D；
 - 恢复恰逢当日任务运行期不并发补当日（D=今日且窗口未耗尽 → scan 不产
   missed，天然不补）；
 - 每事件 ≤5 日（拍板 #4；超出的上卡标 needs_human）；
 - 跨工单去重：以 r3_repair job_backfill effect（dedupe 含 run_day 集合）
   为准——同集合幂等，后续工单只见增量。
 
-补跑核心：``WorkTicketReviewService.run_review(D-1, push=False)``——
-与 POST /workticket-review/run 同核心；push=False（补审历史日不进当日
-速递格，结果走 R3 修复结果卡）；逐日失败重试 1 次再败记录继续其余日。
+补跑核心：
+- 作业票 ``WorkTicketReviewService.run_review(D-1, push=False)``——
+  与 POST /workticket-review/run 同核心；
+- 中控报警 ``CentralAlarmService.generate_daily_report(target_date=D, push=False)``
+  （天然带日期参数；push=False 不进当日速递格，结果走 R3 修复结果卡）；
+- push=False（补跑历史日不进推送通道）；逐日失败重试 1 次再败记录继续其余日。
 """
 
 from __future__ import annotations
@@ -29,8 +33,11 @@ from app.modules.safety.service.ops_selfheal_r3.scan_source import missed_review
 
 logger = logging.getLogger(__name__)
 
-#: 一期唯一补跑 adapter（job_name → 可编程补跑核心；其余 job 上卡需人工）
-BACKFILL_ADAPTERS: dict[str, str] = {"作业票审核": "workticket"}
+#: 补跑 adapter 注册表（job_name → 标识；其余 job 上卡需人工）
+BACKFILL_ADAPTERS: dict[str, str] = {
+    "作业票审核": "workticket",
+    "中控报警日报": "central_alarm",  # 二期 D：矩阵化第二列
+}
 
 
 async def determine_missed_days(
@@ -132,6 +139,62 @@ async def backfill_workticket_days(run_days: list[str]) -> list[dict[str, Any]]:
         if outcome is None:
             outcome = {
                 "run_day": run_day, "review_date": review_date.isoformat(),
+                "status": "failed", "error": last_error,
+            }
+        results.append(outcome)
+    return results
+
+
+async def backfill_central_alarm_days(run_days: list[str]) -> list[dict[str, Any]]:
+    """逐日补跑中控报警日报（target_date=D 当日无偏移、push=False；失败重试 1 次）。
+
+    日报语义 = 生成 D 日报告（rolling 窗口 D-1 17:00 ~ D 17:00）；漏跑日 D 的
+    报告缺失即补 D。push=False 不进群推送，结果走 R3 修复结果卡（管理员可
+    从观测页回看，如需群补发走人工）。
+    """
+    results: list[dict[str, Any]] = []
+    for run_day in run_days:
+        try:
+            target_date = date_type.fromisoformat(run_day)
+        except ValueError:
+            results.append({"run_day": run_day, "review_date": None,
+                            "status": "failed", "error": "run_day 非法日期"})
+            continue
+        outcome: dict[str, Any] | None = None
+        last_error: str | None = None
+        for _attempt in (1, 2):  # 失败重试 1 次（§4.5）
+            from app.core.database import async_session_factory
+
+            try:
+                async with async_session_factory() as session:
+                    from app.modules.safety.service.central_alarm.service import (
+                        CentralAlarmService,
+                    )
+
+                    service = CentralAlarmService(session)
+                    report = await service.generate_daily_report(
+                        target_date=target_date, push=False, channel="system",
+                        rolling=True,
+                    )
+                outcome = {
+                    "run_day": run_day, "review_date": run_day,
+                    "status": "done",
+                    "total": getattr(report, "total", None),
+                    "reviewed": None,
+                    "violation_count": None,
+                    "pushed": sum(
+                        1 for p in (getattr(report, "push_results", None) or [])
+                        if p.get("success")
+                    ),
+                }
+                break
+            except Exception as exc:  # noqa: BLE001 — 逐日隔离
+                last_error = f"{type(exc).__name__}: {exc}"[:300]
+                logger.warning("R3 中控日报补跑失败（run_day=%s attempt=%d）: %s",
+                               run_day, _attempt, last_error)
+        if outcome is None:
+            outcome = {
+                "run_day": run_day, "review_date": run_day,
                 "status": "failed", "error": last_error,
             }
         results.append(outcome)

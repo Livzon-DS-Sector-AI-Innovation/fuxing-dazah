@@ -375,10 +375,19 @@ async def report_state(
 #: 平台不 import 任何业务通知模块（依赖方向）；未注入=仅留痕。
 _DM_SENDER: Callable[[str, str], Awaitable[bool]] | None = None
 
+#: DM 交互卡发送器注入点（payload.card → fn(open_id, card_dict) -> bool；
+#: 未注入或失败由 handler 回退纯文本 payload.text——降级红线）。
+_DM_CARD_SENDER: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None
+
 
 def set_dm_sender(fn: Callable[[str, str], Awaitable[bool]]) -> None:
     global _DM_SENDER
     _DM_SENDER = fn
+
+
+def set_dm_card_sender(fn: Callable[[str, dict[str, Any]], Awaitable[bool]]) -> None:
+    global _DM_CARD_SENDER
+    _DM_CARD_SENDER = fn
 
 
 async def _dm_admin_handler(payload: dict[str, Any]) -> None:
@@ -397,6 +406,22 @@ async def _dm_admin_handler(payload: dict[str, Any]) -> None:
     if _DM_SENDER is None:
         logger.warning("dm_admin 发送器未注入（host 应用未 set_dm_sender），仅留痕: %s",
                        text[:120])
+        return
+    card = payload.get("card") if isinstance(payload, dict) else None
+    if card and _DM_CARD_SENDER is not None:
+        # 交互卡优先（降级红线：任一收件人卡片发送失败 → 该收件人回退纯文本）
+        failed_text: list[str] = []
+        for r in recipients:
+            try:
+                sent = await _DM_CARD_SENDER(r, card)
+            except Exception:
+                logger.exception("dm_admin 交互卡发送异常（回退纯文本）: %s", r)
+                sent = False
+            if not sent:
+                if not await _DM_SENDER(r, text):
+                    failed_text.append(r)
+        if failed_text:
+            raise RuntimeError(f"dm_admin 部分收件人发送失败: {failed_text}")
         return
     failed = [r for r in recipients if not await _DM_SENDER(r, text)]
     if failed:

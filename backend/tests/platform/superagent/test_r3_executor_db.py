@@ -414,3 +414,111 @@ async def test_diagnose_auto_enqueues_l1_unpark(db_session, exec_env) -> None:
     assert repairs[0].payload["action"] == "effects_unpark"
     assert repairs[0].payload["component"] == "digest_cell_upsert"
     await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 二期扩面：四类新信号证据采集
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_evidence_aicall_push_ragflow_event(db_session, exec_env) -> None:
+    """四类新信号 collect_evidence 各抓针对性证据（LLM 入参含关键字段）。"""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.ai_audit.models import AICallAudit
+    from app.modules.safety.service.ops_selfheal_r3 import diagnosis, signals
+    from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
+
+    monkeypatch = exec_env["monkeypatch"]
+
+    # ── ① ai_call_failed：窗口内 3 failed 1 success ──
+    now = datetime.now(UTC)
+    for i in range(3):
+        db_session.add(AICallAudit(
+            scenario="agent_chat", model="deepseek-flash", status="failed",
+            error=f"超时 boom-{i}", created_at=now - timedelta(minutes=i + 1),
+        ))
+    db_session.add(AICallAudit(
+        scenario="other_scn", model="m", status="success", created_at=now,
+    ))
+    await db_session.flush()
+    ev = await diagnosis.collect_evidence(db_session, {
+        "signal": signals.SIGNAL_AICALL_FAILED, "scenario": "agent_chat",
+        "failed_count": 3,
+    })
+    assert ev["scenario"] == "agent_chat"
+    assert ev["failed_count"] == 3
+    assert ev["success_count_in_window"] >= 0
+    assert len(ev["samples"]) == 3
+    assert all("boom" in (s.get("error") or "") for s in ev["samples"])
+
+    # ── ② push_failed（outbox dropped）──
+    db_session.add(AgentOutboxMessage(
+        conversation="r3ev-conv", purpose="message", channel={"chat_id": "oc_x"},
+        body={}, status="dropped", attempts=10,
+        dropped_reason="api error", last_error="conn reset",
+    ))
+    db_session.add(AgentEffect(
+        id=uuid_mod.uuid4(), kind="dm_admin", dedupe_key=f"dm-{uuid_mod.uuid4().hex[:8]}",
+        payload={}, status="failed", attempts=5, last_error="send failed",
+    ))
+    await db_session.flush()
+    ev2 = await diagnosis.collect_evidence(db_session, {
+        "signal": signals.SIGNAL_PUSH_FAILED, "component": "outbox",
+    })
+    assert ev2["component"] == "outbox"
+    assert ev2["dropped_count"] >= 1
+    # dev 库有真实 dropped 行（hw_urge 等）——samples 为 dropped 行集合，断言非空即可
+    assert isinstance(ev2["samples"], list) and len(ev2["samples"]) >= 1
+    ev3 = await diagnosis.collect_evidence(db_session, {
+        "signal": signals.SIGNAL_PUSH_FAILED, "component": "dm_admin",
+    })
+    assert ev3["component"] == "dm_admin"
+    assert ev3["failed_effect_count"] >= 1
+
+    # ── ④ ragflow_batch_fail ──
+    ev4 = await diagnosis.collect_evidence(db_session, {
+        "signal": signals.SIGNAL_RAGFLOW_FAILED, "failed_doc_count": 6,
+        "failed_run_count": 0,
+    })
+    assert ev4["failed_doc_count"] == 6
+    assert ev4["failed_run_count"] == 0
+
+    # ── ③ feishu_event_failed ──
+    ev5 = await diagnosis.collect_evidence(db_session, {
+        "signal": signals.SIGNAL_EVENT_FAILED, "event_type": "bitable.record.changed",
+        "handler": "handle_x", "error": "ValueError: bad",
+    })
+    assert ev5["event_type"] == "bitable.record.changed"
+    assert ev5["handler"] == "handle_x"
+    assert "ValueError" in ev5["error"]
+    await db_session.rollback()
+
+
+def test_rule_based_diagnosis_new_signals() -> None:
+    """四类新信号规则降级：余额/连接类证据直出 quota/upstream，不抛异常。"""
+    from app.modules.safety.service.ops_selfheal_r3 import signals as sg
+    from app.modules.safety.service.ops_selfheal_r3.diagnosis import rule_based_diagnosis
+
+    q = rule_based_diagnosis(sg.SIGNAL_AICALL_FAILED, {
+        "scenario": "agent_chat", "samples": [{"error": "429 余额不足"}],
+        "dep_endpoints": [],
+    })
+    assert q["root_cause_class"] == "quota_exhausted"
+
+    n = rule_based_diagnosis(sg.SIGNAL_EVENT_FAILED, {
+        "handler": "h", "error": "ConnectTimeout", "dep_endpoints": [],
+    })
+    assert n["root_cause_class"] == "network"
+
+    g = rule_based_diagnosis(sg.SIGNAL_RAGFLOW_FAILED, {
+        "failed_doc_count": 5, "samples": [{"last_error": "连接超时"}],
+    })
+    assert g["root_cause_class"] == "network"
+
+    p = rule_based_diagnosis(sg.SIGNAL_PUSH_FAILED, {"component": "outbox", "samples": []})
+    assert p["root_cause_class"] in sg.ROOT_CAUSE_CLASSES
+    # 降级路径处方只含 L0
+    for diag in (q, n, g, p):
+        assert all(x["action"] in ("notify_enriched", "rag_recheck") for x in diag["prescriptions"])

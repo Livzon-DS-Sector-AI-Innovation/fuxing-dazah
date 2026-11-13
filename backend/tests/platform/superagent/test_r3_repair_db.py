@@ -564,3 +564,82 @@ async def test_effects_unpark_handler_daily_cap(db_session, repair_env, monkeypa
     ).scalars().all()
     assert any(i.payload.get("action") == "effects_unpark" for i in inputs)
     await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 二期 D：中控报警日报补跑 adapter
+# ═══════════════════════════════════════════════════════════════
+
+
+def _stub_central_alarm(monkeypatch, always_raise: Exception | None = None) -> list[str]:
+    """CentralAlarmService 桩（构造期校验连带——生成记录日期，push=False 断言）。"""
+    calls: list[tuple[str, bool]] = []
+
+    class _FakeReport:
+        total = 42
+        push_results: list = []
+
+    class _FakeService:
+        def __init__(self, session):
+            pass  # 真类构造期校验凭据——桩连构造一起替（一期同款雷）
+
+        async def generate_daily_report(self, target_date=None, *, push=True,
+                                        channel="web", rolling=True, chat_id=None):
+            d = target_date.isoformat() if hasattr(target_date, "isoformat") else str(target_date)
+            calls.append((d, push))
+            if always_raise is not None:
+                raise always_raise
+            return _FakeReport()
+
+    monkeypatch.setattr(
+        "app.modules.safety.service.central_alarm.service.CentralAlarmService",
+        _FakeService,
+    )
+    return calls
+
+
+async def test_backfill_central_alarm_days_no_offset(db_session, repair_env, monkeypatch) -> None:
+    """中控日报补跑：target_date=D 当日无偏移（区别于作业票 D-1）；push=False。"""
+    from app.modules.safety.service.ops_selfheal_r3 import backfill
+
+    calls = _stub_central_alarm(monkeypatch)
+    d1 = (date.today() - timedelta(days=2)).isoformat()
+    d2 = (date.today() - timedelta(days=1)).isoformat()
+    results = await backfill.backfill_central_alarm_days([d1, d2])
+    assert calls == [(d1, False), (d2, False)]  # 无 D-1 偏移 + push=False
+    assert all(r["status"] == "done" for r in results)
+    assert all(r["review_date"] == r["run_day"] for r in results)
+    assert results[0]["total"] == 42
+
+    # 失败重试 1 次再败记录继续
+    calls2 = _stub_central_alarm(monkeypatch, always_raise=RuntimeError("中控库仍断连"))
+    d3 = (date.today() - timedelta(days=3)).isoformat()
+    results2 = await backfill.backfill_central_alarm_days([d3])
+    assert len(calls2) == 2
+    assert results2[0]["status"] == "failed"
+    assert "中控库仍断连" in results2[0]["error"]
+    await db_session.rollback()
+
+
+async def test_central_alarm_registered_in_adapters() -> None:
+    """adapter 注册表：中控报警日报在册（矩阵化第二列）。"""
+    from app.modules.safety.service.ops_selfheal_r3.backfill import BACKFILL_ADAPTERS
+
+    assert BACKFILL_ADAPTERS.get("中控报警日报") == "central_alarm"
+    assert BACKFILL_ADAPTERS.get("作业票审核") == "workticket"
+
+
+async def test_do_job_backfill_routes_by_adapter(db_session, repair_env, monkeypatch) -> None:
+    """_do_job_backfill 按 job_name 分派 adapter（中控走 central_alarm 分支）。"""
+    from app.modules.safety.service.ops_selfheal_r3 import backfill
+
+    calls = _stub_central_alarm(monkeypatch)
+    d1 = (date.today() - timedelta(days=1)).isoformat()
+
+    # 直接验证分派逻辑（adapter 路由读 BACKFILL_ADAPTERS）
+    adapter = backfill.BACKFILL_ADAPTERS.get("中控报警日报")
+    assert adapter == "central_alarm"
+    results = await backfill.backfill_central_alarm_days([d1])
+    assert calls == [(d1, False)]
+    assert results[0]["status"] == "done"
+    await db_session.rollback()

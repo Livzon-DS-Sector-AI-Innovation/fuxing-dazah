@@ -199,13 +199,17 @@ async def _daily_done_count(
 
 
 async def _do_job_backfill(payload: dict[str, Any]) -> None:
-    """漏审日逐日补跑（作业票 adapter；逐日执行逐日结果，失败重试 1 次再败记录继续）。"""
+    """漏审日逐日补跑（按 adapter 分派；逐日执行逐日结果，失败重试 1 次再败记录继续）。"""
     from app.core.database import async_session_factory
 
     task_id = str(payload.get("task_id") or "")
     job_name = str(payload.get("job_name") or "")
     run_days = [str(d) for d in (payload.get("run_days") or [])][:BACKFILL_DAY_CAP]
-    results = await backfill.backfill_workticket_days(run_days)
+    adapter = backfill.BACKFILL_ADAPTERS.get(job_name, "workticket")
+    if adapter == "central_alarm":
+        results = await backfill.backfill_central_alarm_days(run_days)
+    else:
+        results = await backfill.backfill_workticket_days(run_days)
 
     async with async_session_factory() as session:
         await _finish_repair(

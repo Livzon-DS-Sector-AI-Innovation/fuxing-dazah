@@ -39,6 +39,15 @@ from app.platform.superagent.models import (
 
 ops_selfheal_router = APIRouter()
 
+
+def _bj_date():
+    """北京时间今日 date（窗口覆写与收口判定同口径）。"""
+    from zoneinfo import ZoneInfo
+
+    from datetime import datetime as _dt
+
+    return _dt.now(ZoneInfo("Asia/Shanghai")).date()
+
 #: R3 阶段 → SQL 等价条件（closed 走 status；needs_human 走 stage_facts 键）
 _STAGE_CONDITIONS: dict[str, list[ColumnElement[bool]]] = {
     "closed": [AgentTask.status == "ended", AgentTask.outcome == "closed"],
@@ -91,7 +100,8 @@ async def list_tickets(
     signal: str | None = None,
     job_name: str | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     if stage is not None and stage not in (*_STAGE_CONDITIONS, *signals.R3_STAGE_LABELS):
         raise AppException(
@@ -162,7 +172,8 @@ def _brief(payload: dict[str, Any] | None, limit: int = 400) -> dict[str, Any]:
 async def ticket_timeline(
     ticket_id: str,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     task = await _get_ticket_or_404(db, ticket_id)
 
@@ -263,7 +274,8 @@ async def ticket_timeline(
 async def retry_ticket(
     ticket_id: str,
     db: AsyncSession = Depends(get_db),
-    _admin: Any = RequireAdmin,
+    *,
+    _admin: RequireAdmin,
 ) -> JSONResponse:
     task = await _get_ticket_or_404(db, ticket_id)
     if task.status != "open":
@@ -287,3 +299,49 @@ async def retry_ticket(
     ))
     await db.commit()
     return success_response(data={"id": str(task.id), "queued": True})
+
+
+@ops_selfheal_router.post(
+    "/ops-selfheal/tickets/{ticket_id}/extend-window",
+    summary="L2 一键执行：延长该 job 当日补发窗口（进程内覆写，重启失效）",
+)
+async def extend_window(
+    ticket_id: str,
+    body: dict[str, Any] | None = None,
+    db: AsyncSession = Depends(get_db),
+    *,
+    _admin: RequireAdmin,
+) -> JSONResponse:
+    """管理员一键执行 job_window_extend（质询拍板：处方值优先+默认2h+当日1次）。
+
+    - 只写进程内当日覆写 dict（window_override），不触碰 SCHEDULED_JOBS 声明；
+    - decisions 留痕（kind=system 决策行，human operator）；结果 dm_admin 卡；
+    - 失败分支：当日已改过（409）/ 工单非 open（409）/ 非工单类 job 信号（400）。
+    - 判定核心与卡片回调同源（window_guard.execute_window_extend，防两处漂移）。
+    """
+    from app.modules.safety.service.ops_selfheal_r3.window_guard import (
+        execute_window_extend,
+    )
+
+    task = await _get_ticket_or_404(db, ticket_id)
+    result = await execute_window_extend(
+        db, task, dict((body or {}).get("args") or {}), operator="admin",
+    )
+    await db.commit()
+    if not result["ok"]:
+        reason = result["reason"]
+        status = 409 if (reason.startswith("工单已终态")
+                         or reason == "already_extended_today") else 400
+        cur = result.get("current_window")
+        if cur:
+            message = f"该 job 当日已延长过窗口（现截止 {cur}）"
+        elif reason == "no_job":
+            message = "该工单无关联 job（仅 job 信号工单可延长窗口）"
+        else:
+            message = reason
+        raise AppException(status_code=status, message=message)
+    return success_response(data={
+        "id": str(task.id), "job_name": result["job_name"],
+        "old_window": result["old_window"],
+        "new_window": result["new_window"],
+    })

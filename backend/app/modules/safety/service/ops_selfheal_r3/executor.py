@@ -132,7 +132,13 @@ async def _phase_diagnose(
             suggestions.append("恢复后自动补跑漏审日（job_backfill）")
             continue
         if action == "job_window_extend" or urgency == "human":
-            if action != "notify_enriched":
+            if action == "job_window_extend":
+                # L2 一键执行（二期）：卡上建议标注一键执行入口
+                until = ""
+                if isinstance(args, dict) and args.get("until_hour") is not None:
+                    until = f"至 {int(args.get('until_hour')):02d}:{int(args.get('until_minute') or 0):02d}"
+                suggestions.append(f"延长当日补发窗口{until or '（默认 +2h）'}——观测页/工单一键执行")
+            elif action != "notify_enriched":
                 suggestions.append(f"{action}（需人工）")
             continue
         ok, reason = actions.check_gates(action, args=args)
@@ -196,10 +202,20 @@ async def _phase_diagnose(
         "evidence": evidence,
     }
 
-    # 诊断卡（总发；先存后发）
+    # 诊断卡（总发；先存后发）——job 信号工单用 JSON 交互版（卡上「一键执行」
+    # 按钮，T6 2026-11-13）；发送侧降级红线：dm_admin 通道只消费 payload.text，
+    # 交互卡 JSON 放 payload.card 由卡片发送器消费，text 恒兜底。
+    diag_text = cards.build_diagnosis_card(new_r3, evidence, repair_mode=mode)
+    diag_payload: dict[str, Any] = {"text": diag_text}
+    if new_r3.get("job_name") and stage != signals.R3_STAGE_NEEDS_HUMAN:
+        try:
+            diag_payload["card"] = cards.build_diagnosis_interactive_card(
+                new_r3, str(task_id), repair_mode=mode, evidence=evidence,
+            )
+        except Exception:  # noqa: BLE001 — 交互卡构建失败不影响开单（text 兜底）
+            logger.exception("R3 交互诊断卡构建失败（回退纯文本）: task=%s", task_id)
     await enqueue_effect(
-        session, "dm_admin",
-        {"text": cards.build_diagnosis_card(new_r3, evidence, repair_mode=mode)},
+        session, "dm_admin", diag_payload,
         dedupe_key=f"r3:diag:{task_id}:{new_r3['diag_at'][:19]}",
     )
     if stage == signals.R3_STAGE_NEEDS_HUMAN and escalate_guidance:

@@ -11,6 +11,12 @@ from sqlalchemy import select
 
 @pytest_asyncio.fixture(autouse=True)
 async def _purge_r3_rows():
+    """清理本文件测试创建的 R3 行——按测试工单特征圈定（short_name 前缀 r3:）。
+
+    不按 executor 全删：dev 库可能有真机冒烟/观测留下的活跃工单（2026-11-13
+    教训——无条件全删把真机冒烟工单一起清了）。本文件 _make_ticket 恒用
+    short_name="r3:api"，按此前缀+源名圈定。
+    """
     yield
     from app.platform.superagent.models import (
         AgentEffect,
@@ -27,7 +33,9 @@ async def _purge_r3_rows():
             str(t.id)
             for t in (
                 await s.execute(
-                    select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
+                    select(AgentTask).where(
+                        AgentTask.short_name.in_(("r3:api", "r3:rag"))
+                    )
                 )
             ).scalars().all()
         ]
@@ -49,9 +57,24 @@ async def _purge_r3_rows():
             )
         ).scalar_one_or_none()
         if src is not None:
-            await s.execute(
-                AgentTrigger.__table__.delete().where(AgentTrigger.source_id == src.id)
-            )
+            # 只删挂在本文件测试工单上的 trigger（同 thread 的任务行已按 id 清），
+            # 不按 source_id 全删——防误清真机冒烟轮留下的源/读位
+            trig_ids = [
+                t.id for t in (
+                    await s.execute(
+                        select(AgentTrigger).where(
+                            AgentTrigger.source_id == src.id,
+                            AgentTrigger.thread_key.like("ops:job:r3api测试:%"),
+                        )
+                    )
+                ).scalars().all()
+            ]
+            if trig_ids:
+                await s.execute(
+                    AgentTrigger.__table__.delete().where(
+                        AgentTrigger.id.in_(trig_ids)
+                    )
+                )
             await s.execute(
                 AgentSource.__table__.delete().where(AgentSource.id == src.id)
             )
@@ -191,4 +214,133 @@ async def test_retry_ticket_semantics(db_session) -> None:
     with pytest.raises(AppException) as exc:
         await retry_ticket(str(task.id), db=db_session, _admin=None)
     assert exc.value.status_code == 409
+    await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 二期 L2 一键执行：extend-window
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_extend_window_success_and_once_per_day(db_session, monkeypatch) -> None:
+    """一键执行：覆写生效+留痕+结果卡；同 job 当日第二次 409。"""
+    from app.modules.safety.api.ops_selfheal import extend_window
+    from app.modules.safety.service.ops_selfheal_r3 import window_override
+
+    # 桩 enqueue_effect（DM 不真发，只断言入队）
+    from app.platform.superagent import effects as fx
+
+    enqueued: list[tuple[str, dict]] = []
+
+    async def _fake_enqueue(session, kind, payload, **kw):
+        enqueued.append((kind, dict(payload)))
+        return None
+
+    monkeypatch.setattr(fx, "enqueue_effect", _fake_enqueue)
+
+    window_override.reset_overrides()
+    try:
+        task = await _make_ticket(db_session, stage="diagnosed")
+        resp = await extend_window(
+            str(task.id), body={"args": {"until_hour": 15, "until_minute": 0}},
+            db=db_session, _admin=None,
+        )
+        data = _resp_data(resp)
+        assert data["data"]["job_name"] == "r3api测试"
+        assert data["data"]["new_window"] == "15:00"
+        # 覆写 dict 生效（job_window_end 读口）
+        from datetime import date
+
+        end = __import__(
+            "app.modules.safety.service.ops_selfheal_r3.scan_source",
+            fromlist=["job_window_end"],
+        ).job_window_end("r3api测试", date.today())
+        assert (end.hour, end.minute) == (15, 0)
+        # 留痕（AgentInput system l2_window_extend）
+        from app.platform.superagent.models import AgentInput
+
+        inputs = (
+            await db_session.execute(
+                select(AgentInput).where(AgentInput.task_id == task.id)
+            )
+        ).scalars().all()
+        assert any(
+            (i.payload or {}).get("type") == "l2_window_extend" and i.payload["ok"] is True
+            for i in inputs
+        )
+        # 结果卡入队
+        assert any(k == "dm_admin" and "窗口延长" in (p.get("text") or "")
+                   for k, p in enqueued)
+        await db_session.flush()
+
+        # 同 job 当日第二次：409（AppException）
+        import pytest as _pytest
+        from app.core.exceptions import AppException
+
+        task2 = await _make_ticket(db_session, stage="diagnosed")
+        with _pytest.raises(AppException) as ei:
+            await extend_window(
+                str(task2.id), db=db_session, _admin=None, body=None,
+            )
+        assert ei.value.status_code == 409
+        assert "当日已延长" in ei.value.message
+    finally:
+        window_override.reset_overrides()
+    await db_session.rollback()
+
+
+async def test_extend_window_rejects_closed_and_nonjob(db_session, monkeypatch) -> None:
+    """非 open 工单 409；无 job_name 工单 400。"""
+    from app.core.exceptions import AppException
+    from app.modules.safety.api.ops_selfheal import extend_window
+    from app.modules.safety.service.ops_selfheal_r3 import window_override
+    from app.platform.superagent import effects as fx
+
+    async def _fake_enqueue(session, kind, payload, **kw):
+        return None
+
+    monkeypatch.setattr(fx, "enqueue_effect", _fake_enqueue)
+    window_override.reset_overrides()
+    try:
+        closed = await _make_ticket(db_session, status="ended")
+        import pytest as _pytest
+
+        with _pytest.raises(AppException) as e1:
+            await extend_window(str(closed.id), db=db_session, _admin=None, body=None)
+        assert e1.value.status_code == 409
+
+        # 无 job_name（构造一个 rag 信号形态工单）
+        import uuid as uuid_mod
+
+        from app.platform.superagent.models import AgentSource, AgentTask, AgentTrigger
+
+        src = (
+            await db_session.execute(
+                select(AgentSource).where(AgentSource.name == "safety.ops.selfheal")
+            )
+        ).scalar_one()
+        trig = AgentTrigger(
+            id=uuid_mod.uuid4(), source_id=src.id,
+            external_id="ops:rag:2026-11-12:degraded:t",
+            thread_key="ops:rag:2026-11-12",
+            actor={"id": "rag_health", "type": "probe"},
+            payload={"signal": "rag_degraded"},
+        )
+        db_session.add(trig)
+        await db_session.flush()
+        rag_task = AgentTask(
+            id=uuid_mod.uuid4(), short_name="r3:rag", title="R3 rag",
+            executor="r3_ops_heal", origin_trigger_id=trig.id,
+            mandate={"rule_id": "r3_ops_rag_signal"},
+            stage_facts={"r3": {"stage": "diagnosed", "signal": "rag_degraded"}},
+            status="open",
+        )
+        db_session.add(rag_task)
+        await db_session.flush()
+        with _pytest.raises(AppException) as e2:
+            await extend_window(str(rag_task.id), db=db_session, _admin=None, body=None)
+        assert e2.value.status_code == 400
+        assert "无关联 job" in e2.value.message
+    finally:
+        window_override.reset_overrides()
     await db_session.rollback()
