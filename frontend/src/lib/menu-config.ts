@@ -122,6 +122,8 @@ export const moduleMenus: ModuleMenu[] = [
       // ── 隐患治理 ──
       { key: "hazard-ledger", label: "隐患排查与治理", path: "/safety/hazard-ledger", group: "隐患治理" },
       { key: "ai-quality", label: "AI 识别质量", path: "/safety/ai-quality", group: "隐患治理" },
+      // ── 平台运维 ──（SuperAgent R3 二期：自愈工单观测面）
+      { key: "ops-selfheal", label: "运维自愈工单", path: "/safety/ops-selfheal", group: "平台运维" },
       // ── 人员管理 ──
       { key: "cert-warnings", label: "人员准入与资质", path: "/safety/cert-warnings", group: "人员管理" },
       { key: "training-behavior", label: "教育培训与行为管控", path: "/safety/training-behavior", group: "人员管理" },

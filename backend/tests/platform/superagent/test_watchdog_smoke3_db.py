@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from app.modules.safety.superagent_bridge import fire_candidate_rule
@@ -87,6 +88,42 @@ async def _blocked_task(db_session, *, hours: float = 30) -> AgentTask:
     }
     await db_session.flush()
     return task
+
+
+@pytest.fixture(autouse=True)
+async def _purge_unresolved_observe_decisions():
+    """observe decisions 清前缀（2026-11-13 T2：钉死 dev 库残留态噪声）。
+
+    observe_backlog / observe_replay 口径是全表 would_accept∧¬replay∧resolution
+    IS NULL 计数——dev 库 11-03 observe 冒烟残留 24 行（hardware_alert_urge /
+    hardware_digest_push）会污染绝对断言（51→75、0→2）。autouse 在用例前后
+    清掉本测试域外的未处置 observe 决策（按 id 精确删除，不动用例内新写行）。
+    """
+    from sqlalchemy import delete as _delete
+
+    from tests.conftest import _test_session_factory
+
+    async def _purge() -> None:
+        async with _test_session_factory() as s:
+            ids = (
+                await s.execute(
+                    select(AgentDecision.id).where(
+                        AgentDecision.would_accept.is_(True),
+                        AgentDecision.replay.is_(False),
+                        AgentDecision.resolution.is_(None),
+                        AgentDecision.rule_id != "fire_alarm_candidate",
+                    )
+                )
+            ).scalars().all()
+            if ids:
+                await s.execute(
+                    _delete(AgentDecision).where(AgentDecision.id.in_(ids))
+                )
+                await s.commit()
+
+    await _purge()
+    yield
+    await _purge()
 
 
 async def test_watchdog_blocked_over_24h(db_session) -> None:
