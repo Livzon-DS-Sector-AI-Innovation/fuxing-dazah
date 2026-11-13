@@ -9,7 +9,7 @@ export default function TitleReviewPage() {
       {/* 查看权限进入管理页；纯评委进入后由页面引导到「职称评审投票」 */}
       <PermissionGuard
         permission={['hr:title:read', 'hr:title:judge']}
-        fallback={<Alert type="warning" showIcon message="您没有职称评审系统的访问权限，请联系管理员赋权。" />}
+        fallback={<Alert type="warning" showIcon title="您没有职称评审系统的访问权限，请联系管理员赋权。" />}
       >
         <TitleReviewClient />
       </PermissionGuard>

@@ -51,9 +51,10 @@ async def get_user_permissions(user_id: str, db: AsyncSession) -> set[str]:
 
 
 def require_permission(*codes: str) -> Callable[..., Any]:
-    """依赖注入工厂：要求用户拥有指定权限之一。
+    """依赖注入工厂：要求用户拥有指定权限之一（多码为 OR 语义，任一满足即通过）。
 
     用法: user = Depends(require_permission("equipment:inspection:create"))
+    需要"同时满足多个权限"时不要传多码，应嵌套多个依赖分别校验。
     """
 
     async def checker(

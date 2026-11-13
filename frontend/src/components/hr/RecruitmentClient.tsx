@@ -3,18 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
-import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Tag, Upload } from 'antd'
-import { PlusOutlined, UploadOutlined, SendOutlined, DownloadOutlined, DownOutlined, RightOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons'
+import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Table, Tabs, Tag, Upload } from 'antd'
+import { DownOutlined, RightOutlined, FileSearchOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
   createCandidate, deleteCandidate,
   sendOfferAction, parseResumeAction, transitionCandidateStatus,
   fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
-  uploadCandidates, downloadCandidateTemplate, decideCandidateReview,
-  fetchEmployeesAction,
+  decideCandidateReview,
+  fetchEmployeesAction, screenCandidateAction, fetchInterviewsOverview,
 } from '@/actions/hr'
-import type { Candidate, JobRequirement, RecruitmentStats } from '@/types/hr'
+import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
+import { usePermission } from '@/hooks/usePermission'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
@@ -31,30 +32,70 @@ const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
   '已拒绝': [],
 }
 
+// 候选人状态全集（排序 + 下拉候选用），颜色对齐招聘漏斗
+const STATUS_OPTIONS = [
+  { label: '待筛选', value: '待筛选' }, { label: '已筛选', value: '已筛选' },
+  { label: '待部门审核', value: '待部门审核' }, { label: '面试中', value: '面试中' },
+  { label: '已面试', value: '已面试' }, { label: '录用中', value: '录用中' },
+  { label: '已录用', value: '已录用' }, { label: '待入职审批', value: '待入职审批' },
+  { label: '已入职', value: '已入职' }, { label: '已拒绝', value: '已拒绝' },
+]
+// 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（进入面试后以胜任度分析报告为准）
+const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门审核'])
+const STATUS_COLORS: Record<string, string> = {
+  '待筛选': '#a4a097', '已筛选': '#0075de', '待部门审核': '#dd5b00',
+  '面试中': '#7b3ff2', '已面试': '#2a9d99', '录用中': '#1aae39',
+  '已录用': '#5645d4', '待入职审批': '#e8b830', '已入职': '#389e0d', '已拒绝': '#ff4d4f',
+}
+const STATUS_ORDER = STATUS_OPTIONS.map(s => s.value)
+
+/** 批量上传简历的逐份流水线状态：AI 解析 → 建档（关联岗位）→ 可选 AI 初筛 */
+interface BatchResumeItem {
+  key: string
+  file: File
+  stage: '待处理' | '解析中' | '建档中' | '已建档' | '初筛中' | '初筛完成' | '失败'
+  name?: string
+  parsed?: any
+  candidateId?: string
+  error?: string
+  reco?: string
+  score?: number
+}
+
+const BATCH_STAGE_COLOR: Record<BatchResumeItem['stage'], string> = {
+  待处理: 'default', 解析中: 'processing', 建档中: 'processing',
+  已建档: 'green', 初筛中: 'processing', 初筛完成: 'success', 失败: 'error',
+}
+
 export default function RecruitmentClient() {
   const { message: msg } = App.useApp()
   const router = useRouter()
-  const [mounted, setMounted] = useState(false)
+  // 招聘管理权限：人事专员见全功能；用人部门负责人（审核人）仅见"待我审核"。
+  // 页面外层 PermissionGuard 已等权限加载完成，此处 hasPermission 结果可靠。
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('hr:recruitment:manage')
   const [jobs, setJobs] = useState<JobRequirement[]>([])
   const [allCandidates, setAllCandidates] = useState<Candidate[]>([])
   const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set())
+  // 各岗位表格的状态筛选（漏斗 chips 点击），null/缺省=不筛选
+  const [jobStatusFilter, setJobStatusFilter] = useState<Record<string, string | null>>({})
   const [changingStatus, setChangingStatus] = useState<string | null>(null)
   const [reqOpen, setReqOpen] = useState(false)
   const [reqForm] = Form.useForm()
   const [editingReq, setEditingReq] = useState<JobRequirement | null>(null)
   const [resumeOpen, setResumeOpen] = useState(false)
-  const [resumeFile, setResumeFile] = useState<File | null>(null)
-  const [resumeResult, setResumeResult] = useState<any>(null)
-  const [resumeLoading, setResumeLoading] = useState(false)
-  const resumeJobIdRef = useRef<string | null>(null)
+  const [resumeItems, setResumeItems] = useState<BatchResumeItem[]>([])
+  const [batchRunning, setBatchRunning] = useState(false)
+  const [batchScreening, setBatchScreening] = useState(false)
+  const [resumeJobId, setResumeJobId] = useState<string | null>(null)
   const [posOptions, setPosOptions] = useState<{ value: string; label: string }[]>([])
   const [offerOpen, setOfferOpen] = useState(false)
   const [offerCandidate, setOfferCandidate] = useState<Candidate | null>(null)
   const [offerForm] = Form.useForm()
   const [offerSending, setOfferSending] = useState(false)
 
-  // 待我审核
-  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening'>('jobs')
+  // 待我审核（无管理权限的审核人默认落在"待我审核"）
+  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening' | 'interviews'>(canManage ? 'jobs' : 'reviews')
   const [pendingReviews, setPendingReviews] = useState<any[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
 
@@ -73,6 +114,33 @@ export default function RecruitmentClient() {
   const [compareData, setCompareData] = useState<any[]>([])
   const [compareLoading, setCompareLoading] = useState(false)
   const [showCompare, setShowCompare] = useState(false)
+
+  // 面试总览：跨候选人按日期查看（默认过去 7 天 ~ 未来 30 天）
+  const [overviewRows, setOverviewRows] = useState<InterviewOverviewItem[]>([])
+  const [overviewLoading, setOverviewLoading] = useState(false)
+  const [overviewTotal, setOverviewTotal] = useState(0)
+  const [overviewDateRange, setOverviewDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>([
+    dayjs().subtract(7, 'day'), dayjs().add(30, 'day'),
+  ])
+  const [overviewInterviewer, setOverviewInterviewer] = useState('')
+  const [overviewStatus, setOverviewStatus] = useState<string | undefined>(undefined)
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true)
+    try {
+      const r = await fetchInterviewsOverview({
+        date_from: overviewDateRange?.[0]?.format('YYYY-MM-DD'),
+        date_to: overviewDateRange?.[1]?.format('YYYY-MM-DD'),
+        interviewer: overviewInterviewer || undefined,
+        status: overviewStatus,
+        page_size: 200,
+      })
+      setOverviewRows(r.data || [])
+      setOverviewTotal(r.meta?.total ?? (r.data || []).length)
+    } catch (err: any) {
+      msg.error(err?.message || '获取面试总览失败')
+      setOverviewRows([])
+    } finally { setOverviewLoading(false) }
+  }, [overviewDateRange, overviewInterviewer, overviewStatus, msg])
 
   const loadPendingReviews = useCallback(async () => {
     setReviewsLoading(true)
@@ -105,15 +173,18 @@ export default function RecruitmentClient() {
         value: e.name,
         label: `${e.name}（${e.employee_number || ''}）`,
       })))
-    } catch { /* 搜索失败静默 */ }
+    } catch (err: any) {
+      msg.error(err?.message || '员工搜索失败，请稍后重试')
+    }
     finally { if (seq === ownerSearchSeq.current) setOwnerSearching(false) }
   }
-
-  useEffect(() => { setMounted(true) }, [])
 
   useEffect(() => {
     fetchPositions().then(d => setPosOptions(d.map((p: any) => ({ value: `${p.department}|||${p.name}`, label: `${p.name} (${p.department})` })))).catch(() => { })
   }, [])
+
+  // 挂载即拉待审数：Tab 上的 Badge 需要初始值
+  useEffect(() => { loadPendingReviews() }, [loadPendingReviews])
 
   const loadJobs = useCallback(async () => {
     try {
@@ -124,12 +195,26 @@ export default function RecruitmentClient() {
 
   const loadAllCandidates = useCallback(async () => {
     try {
-      const r = await fetchCandidates({ page_size: 100 })
-      setAllCandidates(r.data || [])
+      // 页面按岗位分组展示需要全量数据：循环拉取所有分页（上限 5 页防御），
+      // 不再因单页 100 条把后续候选人"藏"掉
+      const pageSize = 100
+      const all: any[] = []
+      let total = 0
+      for (let page = 1; page <= 5; page++) {
+        const r = await fetchCandidates({ page, page_size: pageSize })
+        all.push(...(r.data || []))
+        total = r.meta?.total ?? all.length
+        if (all.length >= total) break
+      }
+      setAllCandidates(all)
+      if (all.length < total) {
+        msg.warning(`候选人较多，仅显示前 ${all.length} 条（共 ${total} 条），请用筛选缩小范围`)
+      }
     } catch { setAllCandidates([]) }
-  }, [])
+  }, [msg])
 
-  useEffect(() => { loadJobs(); loadAllCandidates() }, [loadJobs, loadAllCandidates])
+  // 岗位/候选人全量列表仅管理权限加载（审核人只待我审核 tab，后端也会按数据范围收敛）
+  useEffect(() => { if (canManage) { loadJobs(); loadAllCandidates() } }, [canManage, loadJobs, loadAllCandidates])
 
   // 有候选人时自动展开岗位
   useEffect(() => {
@@ -193,55 +278,115 @@ export default function RecruitmentClient() {
   }
 
   const handleDeleteReq = async (id: string) => {
-    try { await deleteJobRequirement(id); msg.success('已删除'); loadJobs() }
-    catch (err: any) { msg.error(err.message || '删除失败') }
+    try {
+      const r = await deleteJobRequirement(id)
+      msg.success(r.message || '已删除')
+      loadJobs(); loadAllCandidates()
+    } catch (err: any) { msg.error(err.message || '删除失败') }
   }
 
-  const handleParseResume = async () => {
-    if (!resumeFile) { msg.warning('请选择简历PDF'); return }
-    setResumeLoading(true)
-    try {
-      const fd = new FormData(); fd.append('resume', resumeFile)
-      const d = await parseResumeAction(fd)
-      setResumeResult(d.data)
-    } catch (err: any) { msg.error(err.message || '解析失败') }
-    finally { setResumeLoading(false) }
+  // ─── 批量上传简历流水线：逐份 AI 解析 → 自动建档（关联当前岗位）→ 一键 AI 初筛 ───
+  const updateResumeItem = (key: string, patch: Partial<BatchResumeItem>) => {
+    setResumeItems(prev => prev.map(it => (it.key === key ? { ...it, ...patch } : it)))
   }
 
-  const handleCreateCandidate = async () => {
-    if (!resumeResult) return
-    try {
-      const payload: any = {
-        name: resumeResult.name || '',
-        phone: resumeResult.phone || undefined,
-        email: resumeResult.email || undefined,
-        gender: resumeResult.gender || undefined,
-        school: resumeResult.school || undefined,
-        education: resumeResult.education || undefined,
-        major: resumeResult.major || undefined,
-        position: jobs.find(j => j.id === resumeJobIdRef.current)?.position_name || '',
-        department: jobs.find(j => j.id === resumeJobIdRef.current)?.department || '',
-        job_requirement_id: resumeJobIdRef.current || undefined,
-        status: '待筛选',
-        candidate_type: '职能',
-        resume_url: resumeResult.resume_file_path || '',
-        current_company: resumeResult.current_company || undefined,
-        work_years: resumeResult.work_years ?? undefined,
-        expected_salary: resumeResult.expected_salary || undefined,
-        source: resumeResult.source || '自主上传',
+  const handleProcessBatch = async () => {
+    const pending = resumeItems.filter(it => it.stage === '待处理')
+    if (!pending.length) { msg.warning('请先选择简历 PDF 文件'); return }
+    if (!resumeJobId) { msg.error('未关联岗位，无法建档'); return }
+    const jd = jobs.find(j => j.id === resumeJobId)
+    setBatchRunning(true)
+    let created = 0
+    let unrecognized = 0
+    for (const it of pending) {
+      try {
+        updateResumeItem(it.key, { stage: '解析中', error: undefined })
+        const fd = new FormData(); fd.append('resume', it.file)
+        const d = await parseResumeAction(fd)
+        const p = d.data || {}
+        // 名字只用简历正文提取的姓名；提取不到用明确的占位（批内递增），
+        // 不回退简历文件名——岗位下不应出现一长串文件名当名字
+        const name = p.name?.trim() || (unrecognized += 1, `未识别姓名${unrecognized > 1 ? unrecognized : ''}`)
+        updateResumeItem(it.key, { stage: '建档中', parsed: p, name })
+        const res = await createCandidate({
+          name,
+          phone: p.phone || undefined,
+          email: p.email || undefined,
+          gender: p.gender || undefined,
+          school: p.school || undefined,
+          education: p.education || undefined,
+          major: p.major || undefined,
+          position: jd?.position_name || '',
+          department: jd?.department || '',
+          job_requirement_id: resumeJobId,
+          status: '待筛选',
+          candidate_type: '职能',
+          resume_url: p.resume_file_path || '',
+          current_company: p.current_company || undefined,
+          work_years: p.work_years ?? undefined,
+          expected_salary: p.expected_salary || undefined,
+          source: p.source || '自主上传',
+        } as any)
+        updateResumeItem(it.key, { stage: '已建档', candidateId: res?.data?.id })
+        created += 1
+      } catch (err: any) {
+        updateResumeItem(it.key, { stage: '失败', error: err?.message || '处理失败' })
       }
-      const res = await createCandidate(payload)
-      msg.success('候选人已创建')
-      // 乐观更新：先立即显示
-      if (res?.data) {
-        setAllCandidates(prev => [res.data, ...prev])
-        if (resumeJobIdRef.current) setExpandedJobs(prev => new Set([...prev, resumeJobIdRef.current!]))
-      }
-      setResumeOpen(false); setResumeFile(null); setResumeResult(null)
-      resumeJobIdRef.current = null
-      // 再从后端拉取最新数据覆盖（确保持久化 + 绕过缓存）
+    }
+    setBatchRunning(false)
+    if (created > 0) {
+      if (resumeJobId) setExpandedJobs(prev => new Set([...prev, resumeJobId]))
       await loadAllCandidates()
-    } catch (err: any) { msg.error(err.message || '创建失败') }
+      msg.success(`已为「${jd?.position_name || '岗位'}」建档 ${created} 名候选人`)
+      if (unrecognized > 0) {
+        msg.warning(`其中 ${unrecognized} 份未从简历正文中识别到姓名（显示为「未识别姓名」），可点开候选人详情修改`)
+      }
+    }
+  }
+
+  // 对本批已建档、尚未初筛的简历批量跑 AI 初筛（串行，逐份回写行内结果）
+  const handleBatchScreen = async () => {
+    const targets = resumeItems.filter(it => it.stage === '已建档' && it.candidateId)
+    if (!targets.length) return
+    setBatchScreening(true)
+    let ok = 0
+    for (const it of targets) {
+      updateResumeItem(it.key, { stage: '初筛中' })
+      try {
+        const r = await screenCandidateAction(it.candidateId!)
+        updateResumeItem(it.key, {
+          stage: '初筛完成', reco: r.data.recommendation, score: r.data.total_score,
+        })
+        ok += 1
+      } catch (err: any) {
+        // 初筛失败不影响已建档结果：回落「已建档」可重试
+        updateResumeItem(it.key, { stage: '已建档', error: err?.message || '初筛失败' })
+      }
+    }
+    setBatchScreening(false)
+    if (ok > 0) {
+      await loadAllCandidates()
+      msg.success(`AI 初筛完成 ${ok} 份，推荐等级与匹配报告已写入候选人档案`)
+    }
+  }
+
+  const closeResumeModal = () => {
+    if (batchRunning || batchScreening) { msg.warning('正在处理中，请等待本轮完成后再关闭'); return }
+    setResumeOpen(false)
+    setResumeItems([])
+    setResumeJobId(null)
+  }
+
+  // AI 初筛：对已建档候选人的存量简历直接筛选（免重复上传，结果回写候选人档案）
+  const [screeningCand, setScreeningCand] = useState<string | null>(null)
+  const runScreenCandidate = async (candidateId: string) => {
+    setScreeningCand(candidateId)
+    try {
+      const r = await screenCandidateAction(candidateId)
+      msg.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100），报告已写入候选人档案`)
+      await loadAllCandidates()
+    } catch (err: any) { msg.error(err.message || 'AI 初筛失败') }
+    finally { setScreeningCand(null) }
   }
 
   const handleDeleteCandidate = async (id: string) => {
@@ -287,372 +432,607 @@ export default function RecruitmentClient() {
     finally { setOfferSending(false) }
   }
 
-  const statusColor: Record<string, string> = { '招聘中': 'green', '已关闭': 'default' }
+  // 总览 Tab 激活或筛选条件变化时自动加载（loadOverview 随筛选闭包更新）
+  useEffect(() => {
+    if (activeTab === 'interviews') loadOverview()
+  }, [activeTab, loadOverview])
+
+  const handleTabChange = (key: string) => {
+    setActiveTab(key as typeof activeTab)
+    if (key === 'reviews') loadPendingReviews()
+    if (key === 'stats') loadStats()
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">招聘管理</h1>
-        <div className="flex gap-2">
-          <Button type={activeTab === 'reviews' ? 'primary' : 'default'} onClick={() => { setActiveTab('reviews'); loadPendingReviews() }}>
-            待我审核 {pendingReviews.length > 0 && `(${pendingReviews.length})`}
-          </Button>
-          <Button type={activeTab === 'jobs' ? 'primary' : 'default'} onClick={() => setActiveTab('jobs')}>岗位招聘</Button>
-          <Button type={activeTab === 'screening' ? 'primary' : 'default'} onClick={() => setActiveTab('screening')} icon={<FileSearchOutlined />}>AI 筛简历</Button>
-          <Button type={activeTab === 'stats' ? 'primary' : 'default'} onClick={() => { setActiveTab('stats'); loadStats() }}>数据分析</Button>
-          {activeTab === 'jobs' && <>
-            <Button icon={<DownloadOutlined />} onClick={async () => {
-              try {
-                const { base64, filename } = await downloadCandidateTemplate()
-                const url = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`
-                const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
-              } catch (e: any) { msg.error(e?.message || '下载失败') }
-            }}>模板</Button>
-            {mounted && <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={async (file) => {
-              const fd = new FormData(); fd.append('file', file as File)
-              try {
-                const d = await uploadCandidates(fd)
-                if (d.code === 200) {
-                  msg.success(d.message || `新增${d.data.created}，更新${d.data.updated}`)
-                  if (d.data.errors?.length) msg.warning(d.data.errors.slice(0, 3).join('; '))
-                  loadAllCandidates()
-                }
-              } catch (e: any) { msg.error(e?.message || '导入失败') }
-              return false
-            }}>
-              <Button icon={<UploadOutlined />}>导入候选人</Button>
-            </Upload>}
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
-          </>}
-        </div>
+        {canManage
+          ? <span className="text-xs text-[var(--color-stone)]">{jobs.length} 个岗位 · {allCandidates.length} 个候选人</span>
+          : <span className="text-xs text-[var(--color-stone)]">{pendingReviews.length} 位候选人待您审核</span>}
       </div>
 
-      {activeTab === 'screening' && <ResumeScreeningPanel />}
-
-      {activeTab === 'reviews' && (
-        <Card title="待我审核的候选人" loading={reviewsLoading}>
-          {pendingReviews.length === 0 ? <Empty description="暂无待审核候选人" className="py-12" /> : (
-            <div className="space-y-3">
-              {pendingReviews.map((item: any) => {
-                const c = item.candidate || {}; const jd = item.job_requirement; const rv = item.review || {}
-                return (
-                  <Card key={c.id} size="small" hoverable className="cursor-pointer"
-                    onClick={() => router.push(`/hr/recruitment/${c.id}`)}
-                    extra={<Tag color="orange">待审核</Tag>}
-                  >
-                    <div className="font-medium">{c.name} · {c.gender || '-'} · {c.education || '-'}</div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {c.school} {c.major} · {c.work_years != null ? `${c.work_years}年经验` : ''}
-                      {c.current_company ? ` · ${c.current_company}` : ''}
-                    </div>
-                    <div className="text-xs text-gray-500">岗位：{jd?.position_name || c.position} · {jd?.department || c.department}</div>
-                    {rv.push_note && <div className="text-xs text-blue-600 mt-1">💬 HR备注：{rv.push_note}</div>}
-                    <div className="flex gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
-                      <Button size="small" type="primary" onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
-                      <Button size="small" danger onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
-                    </div>
-                  </Card>
-                )
-              })}
+      <Tabs
+        activeKey={activeTab}
+        onChange={handleTabChange}
+        tabBarExtraContent={{
+          right: activeTab === 'jobs' && (
+            <div className="flex gap-2 pb-1">
+              <Button type="primary" size="large" onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
             </div>
-          )}
-        </Card>
-      )}
-
-      {activeTab === 'stats' && (
-        <Card title="招聘数据分析" loading={statsLoading}>
-          {stats ? (
-            <div className="space-y-6">
-              <div className="flex gap-4">
-                <Card size="small" className="flex-1 text-center">
-                  <div className="text-3xl font-bold text-blue-600">{stats.total_candidates}</div>
-                  <div className="text-xs text-gray-500 mt-1">候选人总数</div>
+          ),
+        }}
+        items={[
+          // 岗位招聘/AI 筛简历/数据分析是 HR 工具：用人部门负责人（审核人）仅见"待我审核"
+          ...(canManage ? [{
+            key: 'jobs',
+            label: '岗位招聘',
+            children: (<>
+              {showCompare ? (
+                /* 横向对比弹窗 */
+                <Card size="small" title="候选人横向对比（按AI综合评分排序）"
+                  extra={<Button onClick={() => setShowCompare(false)}>关闭对比</Button>}
+                >
+                  {compareLoading ? <div className="text-center py-12"><Spin /></div> :
+                    compareData.length === 0 ? <Empty description="暂无候选人数据" className="py-12" /> :
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs border-collapse">
+                        <thead><tr className="bg-gray-50">
+                          <th className="p-2 text-left border">姓名</th><th className="p-2 text-left border">学历</th><th className="p-2 text-left border">状态</th>
+                          <th className="p-2 border">JD匹配</th><th className="p-2 border">专业</th><th className="p-2 border">沟通</th><th className="p-2 border">学习</th><th className="p-2 border">稳定</th>
+                          <th className="p-2 border font-bold">综合</th><th className="p-2 border">AI摘要</th>
+                        </tr></thead>
+                        <tbody>{compareData.map((item: any, idx: number) => {
+                          const c = item.candidate || {}; const ev = item.evaluation
+                          const sc = (v: any) => v == null ? '#ccc' : v >= 8 ? '#52c41a' : v >= 6 ? '#1677ff' : v >= 4 ? '#fa8c16' : '#ff4d4f'
+                          return (<tr key={c.id} className="hover:bg-blue-50 cursor-pointer border-t" onClick={() => router.push(`/hr/recruitment/${c.id}`)}>
+                            <td className="p-2 font-medium"><span className="text-gray-400">{idx + 1}.</span> {c.name}</td>
+                            <td className="p-2 border">{c.education || '-'}</td>
+                            <td className="p-2 border"><Tag style={{ fontSize: 10 }}>{c.status || '-'}</Tag></td>
+                            <td className="p-2 border text-center font-medium" style={{ color: sc(ev?.jd_match_score) }}>{ev?.jd_match_score?.toFixed(1) || '-'}</td>
+                            <td className="p-2 border text-center" style={{ color: sc(ev?.professional_score) }}>{ev?.professional_score?.toFixed(1) || '-'}</td>
+                            <td className="p-2 border text-center" style={{ color: sc(ev?.communication_score) }}>{ev?.communication_score?.toFixed(1) || '-'}</td>
+                            <td className="p-2 border text-center" style={{ color: sc(ev?.learning_score) }}>{ev?.learning_score?.toFixed(1) || '-'}</td>
+                            <td className="p-2 border text-center" style={{ color: sc(ev?.stability_score) }}>{ev?.stability_score?.toFixed(1) || '-'}</td>
+                            <td className="p-2 border text-center font-bold" style={{ color: sc(ev?.overall_score) }}>{ev?.overall_score?.toFixed(1) || '-'}</td>
+                            <td className="p-2 border max-w-[200px] truncate" title={ev?.ai_summary}>{ev?.ai_summary?.slice(0, 50) || '-'}</td>
+                          </tr>)
+                        })}</tbody></table></div>}
                 </Card>
-                <Card size="small" className="flex-1 text-center">
-                  <div className="text-3xl font-bold text-green-600">{stats.active_jobs}</div>
-                  <div className="text-xs text-gray-500 mt-1">在招岗位数</div>
-                </Card>
-              </div>
-              <div>
-                <h3 className="text-sm font-medium mb-3">招聘漏斗</h3>
+              ) : (
+                /* 统一按岗位视图 */
                 <div className="space-y-2">
-                  {stats.funnel?.map((item: any) => {
-                    const max = Math.max(...stats.funnel.map((f: any) => f.count), 1)
-                    const pct = Math.round((item.count / max) * 100)
-                    const colors: Record<string, string> = {
-                      '待筛选': '#1677ff', '已筛选': '#722ed1', '待部门审核': '#fa8c16',
-                      '面试中': '#13c2c2', '已面试': '#52c41a', '录用中': '#2f54eb',
-                      '已录用': '#389e0d', '已拒绝': '#ff4d4f',
-                    }
+                  {jobs.length === 0 && <Empty description="暂无岗位需求，点击右上角新建" className="py-8" />}
+                  {jobs.map(j => {
+                    const jobCandidates = allCandidates.filter(c => c.job_requirement_id === j.id)
+                    const isExpanded = expandedJobs.has(j.id)
+                    const hiredCount = jobCandidates.filter(c => c.status === '已入职').length
+                    const sortedCandidates = [...jobCandidates].sort((a, b) => {
+                      const ia = STATUS_ORDER.indexOf(a.status || ''); const ib = STATUS_ORDER.indexOf(b.status || '')
+                      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+                    })
                     return (
-                      <div key={item.status} className="flex items-center gap-2">
-                        <span className="text-xs w-20 text-right text-gray-500">{item.status}</span>
-                        <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
-                          <div className="h-full rounded transition-all" style={{
-                            width: `${pct}%`,
-                            backgroundColor: colors[item.status] || '#d9d9d9',
-                          }} />
-                        </div>
-                        <span className="text-xs font-medium w-8">{item.count}</span>
-                      </div>
+                      <Card key={j.id}
+                        styles={{
+                          header: { padding: '12px 16px' },
+                          body: isExpanded ? { padding: '12px 16px' } : { padding: 0 },
+                        }}
+                        title={
+                          /* 岗位为主实体：两行头部（岗位名+状态 / 部门·进度·负责人·到岗），视觉重量压过候选人行 */
+                          <div className="flex items-center gap-3 cursor-pointer select-none min-w-0" onClick={() => toggleJob(j.id)}>
+                            <span className="text-[var(--color-stone)] flex-shrink-0 w-4 flex justify-center">
+                              {isExpanded ? <DownOutlined style={{ fontSize: 12 }} /> : <RightOutlined style={{ fontSize: 12 }} />}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[15px] font-semibold text-[var(--color-charcoal)]">{j.position_name}</span>
+                                <Tag color={j.status === '招聘中' ? 'green' : 'default'} style={{ fontSize: 11, margin: 0 }}>{j.status}</Tag>
+                                {j.urgency === '紧急' && <Tag color="red" style={{ fontSize: 11, margin: 0 }}>紧急</Tag>}
+                              </div>
+                              <div className="text-xs text-[var(--color-stone)] mt-1 flex items-center gap-1.5 flex-wrap">
+                                <span className="flex-shrink-0">{j.department}</span>
+                                <span className="text-[var(--color-hairline-strong)]">·</span>
+                                <span className="flex-shrink-0">在招 <b className="text-[var(--color-charcoal)]">{jobCandidates.length}</b>/{j.headcount} 人</span>
+                                {j.owner && <><span className="text-[var(--color-hairline-strong)]">·</span><span className="flex-shrink-0">负责人 {j.owner}</span></>}
+                                {j.deadline && <><span className="text-[var(--color-hairline-strong)]">·</span><span className="flex-shrink-0">期望到岗 {j.deadline}</span></>}
+                              </div>
+                              {/* 折叠时第三行单行截断展示候选人名，独立成行避免在 flex-wrap 里被撑开换行 */}
+                              {!isExpanded && jobCandidates.length > 0 && (
+                                <div className="text-xs text-[var(--color-muted)] mt-1 truncate">
+                                  {sortedCandidates.slice(0, 4).map(c => c.name).join('、')}{jobCandidates.length > 4 ? '…' : ''}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        }
+                        extra={
+                          <div className="flex gap-2 items-center" onClick={e => e.stopPropagation()}>
+                            <Button onClick={() => loadCompare(j.id)}>对比</Button>
+                            <Button title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }}>上传简历</Button>
+                            <Button type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
+                            <Popconfirm
+                              title="删除该岗位？"
+                              description={jobCandidates.length === 0
+                                ? '名下暂无候选人'
+                                : `将一并清理名下 ${jobCandidates.length - hiredCount} 名候选人记录${hiredCount > 0 ? `，已入职 ${hiredCount} 名保留` : ''}`}
+                              onConfirm={() => handleDeleteReq(j.id)} okText="删除" cancelText="取消"
+                            >
+                              <Button danger disabled={j.status === '招聘中'}
+                                title={j.status === '招聘中' ? '招聘中岗位不可删除，请先在「编辑」中改为已关闭' : '删除岗位'}>删除</Button>
+                            </Popconfirm>
+                          </div>
+                        }
+                      >
+                        {!isExpanded ? null : jobCandidates.length === 0 ? (
+                          <div className="text-center text-[var(--color-stone)] text-xs py-5 border border-dashed border-[var(--color-hairline)] rounded-lg">暂无候选人 — 上传简历或导入Excel添加</div>
+                        ) : (
+                          <>
+                            {/* 漏斗统计 chips：点击筛选下方表格，再点取消 */}
+                            <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                              {STATUS_ORDER.filter(s => jobCandidates.some(c => (c.status || '待筛选') === s)).map(s => {
+                                const cnt = jobCandidates.filter(c => (c.status || '待筛选') === s).length
+                                const active = jobStatusFilter[j.id] === s
+                                const color = STATUS_COLORS[s] || '#d9d9d9'
+                                return (
+                                  <button key={s} type="button"
+                                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs border transition-colors cursor-pointer"
+                                    style={{
+                                      color: active ? '#fff' : color,
+                                      borderColor: color,
+                                      background: active ? color : `${color}14`,
+                                    }}
+                                    onClick={() => setJobStatusFilter(prev => ({ ...prev, [j.id]: active ? null : s }))}
+                                  >
+                                    <span>{s}</span><b>{cnt}</b>
+                                  </button>
+                                )
+                              })}
+                              {jobStatusFilter[j.id] && (
+                                <a className="text-xs text-[var(--color-steel)] ml-1" onClick={() => setJobStatusFilter(prev => ({ ...prev, [j.id]: null }))}>清除筛选</a>
+                              )}
+                            </div>
+                            <Table size="small" rowKey="id"
+                              dataSource={jobStatusFilter[j.id] ? sortedCandidates.filter(c => (c.status || '待筛选') === jobStatusFilter[j.id]) : sortedCandidates}
+                              pagination={jobCandidates.length > 10 ? {
+                                pageSize: 10, showSizeChanger: false, size: 'small',
+                                showTotal: t => `共 ${t} 条`,
+                              } : false}
+                              onRow={(record) => {
+                                const days = record.updated_at ? Math.floor((Date.now() - new Date(record.updated_at).getTime()) / (1000 * 60 * 60 * 24)) : 0
+                                const isStale = days > 7 && record.status !== '已入职' && record.status !== '已拒绝'
+                                return {
+                                  className: 'cursor-pointer',
+                                  style: isStale ? { background: '#fff5f5' } : undefined,
+                                  onClick: () => router.push(`/hr/recruitment/${record.id}`),
+                                }
+                              }}
+                              columns={[
+                                {
+                                  title: '候选人', key: 'name',
+                                  render: (_: any, c: Candidate) => {
+                                    const days = c.updated_at ? Math.floor((Date.now() - new Date(c.updated_at).getTime()) / (1000 * 60 * 60 * 24)) : 0
+                                    const isStale = days > 7 && c.status !== '已入职' && c.status !== '已拒绝'
+                                    return (
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: STATUS_COLORS[c.status || '待筛选'] || '#d9d9d9' }} />
+                                        <span className="font-medium truncate max-w-[200px]" title={c.name}>{c.name}</span>
+                                        {c.gender && <span className="text-xs text-gray-400 flex-shrink-0">{c.gender}</span>}
+                                        {c.recommendation_level && (
+                                          <Tag color={c.recommendation_level === '强烈推荐' ? 'green' : c.recommendation_level === '推荐' ? 'blue' : 'default'}
+                                            style={{ fontSize: 10, margin: 0 }} className="flex-shrink-0">{c.recommendation_level}</Tag>
+                                        )}
+                                        {isStale && <span className="text-xs text-red-400 whitespace-nowrap flex-shrink-0" title={`已停留${days}天`}>⚠️{days}天</span>}
+                                      </div>
+                                    )
+                                  },
+                                },
+                                {
+                                  title: '学历 / 院校', key: 'edu', width: 210,
+                                  render: (_: any, c: Candidate) => (
+                                    <span className="text-xs text-gray-500">{c.education || '-'} · {c.school || '-'}</span>
+                                  ),
+                                },
+                                {
+                                  title: '联系方式', key: 'contact',
+                                  render: (_: any, c: Candidate) => (
+                                    <span className="text-xs text-gray-500">{c.phone || '-'} · {c.email || '-'}</span>
+                                  ),
+                                },
+                                {
+                                  title: '状态', key: 'status', width: 130,
+                                  render: (_: any, c: Candidate) => (
+                                    <div onClick={e => e.stopPropagation()}>
+                                      <Select size="small" value={c.status} loading={changingStatus === c.id}
+                                        style={{ width: 110 }}
+                                        options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
+                                        onChange={v => handleStatusChange(c.id, v)}
+                                      />
+                                    </div>
+                                  ),
+                                },
+                                {
+                                  title: '操作', key: 'actions', width: 210,
+                                  render: (_: any, c: Candidate) => (
+                                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                                      {c.resume_url && c.job_requirement_id && !c.recommendation_level && SCREENING_PHASE_STATUSES.has(c.status || '待筛选') && (
+                                        <Button
+                                          loading={screeningCand === c.id}
+                                          title="AI 简历初筛（面试前：按已存简历+岗位JD打分，写入推荐等级与匹配报告）"
+                                          onClick={() => runScreenCandidate(c.id)}>AI 初筛</Button>
+                                      )}
+                                      <Button onClick={() => handleSendOffer(c)}>发 Offer</Button>
+                                      <Popconfirm title="确定删除此候选人？" onConfirm={() => handleDeleteCandidate(c.id)} okText="删除" cancelText="取消">
+                                        <Button danger>删除</Button>
+                                      </Popconfirm>
+                                    </div>
+                                  ),
+                                },
+                              ]}
+                            />
+                          </>
+                        )}
+                      </Card>
                     )
                   })}
                 </div>
-              </div>
-              {stats.monthly_hires && stats.monthly_hires.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-medium mb-3">月度入职趋势</h3>
-                  <div className="space-y-2">
-                    {stats.monthly_hires.map((item: { month: string; count: number }) => {
-                      const maxH = Math.max(...stats.monthly_hires!.map((h: { count: number }) => h.count), 1)
-                      const pctH = Math.round((item.count / maxH) * 100)
-                      return (
-                        <div key={item.month} className="flex items-center gap-2">
-                          <span className="text-xs w-16 text-right text-gray-500">{item.month}</span>
-                          <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
-                            <div className="h-full rounded bg-teal-500 transition-all" style={{ width: `${pctH}%` }} />
-                          </div>
-                          <span className="text-xs font-medium w-8">{item.count}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
               )}
-              {stats.source_stats && stats.source_stats.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-medium mb-3">简历来源分布</h3>
-                  <div className="space-y-2">
-                    {stats.source_stats.map((item: { source: string; count: number }) => {
-                      const maxS = Math.max(...stats.source_stats!.map((s: { count: number }) => s.count), 1)
-                      const pctS = Math.round((item.count / maxS) * 100)
-                      const sourceColors = ['#1677ff', '#722ed1', '#fa8c16', '#13c2c2', '#52c41a', '#eb2f96', '#2f54eb']
-                      const color = sourceColors[stats.source_stats!.indexOf(item) % sourceColors.length]
-                      return (
-                        <div key={item.source} className="flex items-center gap-2">
-                          <span className="text-xs w-20 text-right text-gray-500">{item.source || '未知'}</span>
-                          <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
-                            <div className="h-full rounded transition-all" style={{ width: `${pctS}%`, backgroundColor: color }} />
-                          </div>
-                          <span className="text-xs font-medium w-8">{item.count}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <Empty description="暂无数据" className="py-12" />
-          )}
-        </Card>
-      )}
 
-      {activeTab === 'jobs' && (<>
-      {showCompare ? (
-        /* 横向对比弹窗 */
-        <Card size="small" title="候选人横向对比（按AI综合评分排序）"
-          extra={<Button size="small" onClick={() => setShowCompare(false)}>关闭对比</Button>}
-        >
-          {compareLoading ? <div className="text-center py-12"><Spin /></div> :
-           compareData.length === 0 ? <Empty description="暂无候选人数据" className="py-12" /> :
-           <div className="overflow-x-auto">
-             <table className="w-full text-xs border-collapse">
-               <thead><tr className="bg-gray-50">
-                 <th className="p-2 text-left border">姓名</th><th className="p-2 text-left border">学历</th><th className="p-2 text-left border">状态</th>
-                 <th className="p-2 border">JD匹配</th><th className="p-2 border">专业</th><th className="p-2 border">沟通</th><th className="p-2 border">学习</th><th className="p-2 border">稳定</th>
-                 <th className="p-2 border font-bold">综合</th><th className="p-2 border">AI摘要</th>
-               </tr></thead>
-               <tbody>{compareData.map((item: any, idx: number) => {
-                 const c = item.candidate || {}; const ev = item.evaluation
-                 const sc = (v: any) => v == null ? '#ccc' : v >= 8 ? '#52c41a' : v >= 6 ? '#1677ff' : v >= 4 ? '#fa8c16' : '#ff4d4f'
-                 return (<tr key={c.id} className="hover:bg-blue-50 cursor-pointer border-t" onClick={() => router.push(`/hr/recruitment/${c.id}`)}>
-                   <td className="p-2 font-medium"><span className="text-gray-400">{idx + 1}.</span> {c.name}</td>
-                   <td className="p-2 border">{c.education || '-'}</td>
-                   <td className="p-2 border"><Tag style={{fontSize:10}}>{c.status || '-'}</Tag></td>
-                   <td className="p-2 border text-center font-medium" style={{color:sc(ev?.jd_match_score)}}>{ev?.jd_match_score?.toFixed(1) || '-'}</td>
-                   <td className="p-2 border text-center" style={{color:sc(ev?.professional_score)}}>{ev?.professional_score?.toFixed(1) || '-'}</td>
-                   <td className="p-2 border text-center" style={{color:sc(ev?.communication_score)}}>{ev?.communication_score?.toFixed(1) || '-'}</td>
-                   <td className="p-2 border text-center" style={{color:sc(ev?.learning_score)}}>{ev?.learning_score?.toFixed(1) || '-'}</td>
-                   <td className="p-2 border text-center" style={{color:sc(ev?.stability_score)}}>{ev?.stability_score?.toFixed(1) || '-'}</td>
-                   <td className="p-2 border text-center font-bold" style={{color:sc(ev?.overall_score)}}>{ev?.overall_score?.toFixed(1) || '-'}</td>
-                   <td className="p-2 border max-w-[200px] truncate" title={ev?.ai_summary}>{ev?.ai_summary?.slice(0, 50) || '-'}</td>
-                 </tr>)
-               })}</tbody></table></div>}
-        </Card>
-      ) : (
-        /* 统一按岗位视图 */
-        <div className="space-y-2">
-          <div className="text-xs text-gray-400 mb-1">{jobs.length} 个岗位 · {allCandidates.length} 个候选人</div>
-          {jobs.length === 0 && <Empty description="暂无岗位需求，点击右上角新建" className="py-8" />}
-          {jobs.map(j => {
-            const jobCandidates = allCandidates.filter(c => c.job_requirement_id === j.id)
-            const isExpanded = expandedJobs.has(j.id)
-            const STATUS_OPTIONS = [
-              { label: '待筛选', value: '待筛选' }, { label: '已筛选', value: '已筛选' },
-              { label: '待部门审核', value: '待部门审核' }, { label: '面试中', value: '面试中' },
-              { label: '已面试', value: '已面试' }, { label: '录用中', value: '录用中' },
-              { label: '已录用', value: '已录用' }, { label: '待入职审批', value: '待入职审批' },
-              { label: '已入职', value: '已入职' }, { label: '已拒绝', value: '已拒绝' },
-            ]
-            const statusColors: Record<string, string> = {
-              '待筛选': '#a4a097', '已筛选': '#0075de', '待部门审核': '#dd5b00',
-              '面试中': '#7b3ff2', '已面试': '#2a9d99', '录用中': '#1aae39',
-              '已录用': '#5645d4', '待入职审批': '#e8b830', '已入职': '#389e0d', '已拒绝': '#ff4d4f',
-            }
-            const statusOrder = STATUS_OPTIONS.map(s => s.value)
-            const sortedCandidates = [...jobCandidates].sort((a, b) => {
-              const ia = statusOrder.indexOf(a.status || ''); const ib = statusOrder.indexOf(b.status || '')
-              return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-            })
-            return (
-              <Card key={j.id} size="small"
-                title={
-                  <div className="flex items-center gap-3 cursor-pointer" onClick={() => toggleJob(j.id)}>
-                    {isExpanded ? <DownOutlined style={{ fontSize: 10 }} /> : <RightOutlined style={{ fontSize: 10 }} />}
-                    <b className="text-sm">{j.position_name}</b>
-                    <span className="text-xs text-gray-400">{j.department}</span>
-                    <Tag color={j.status === '招聘中' ? 'green' : 'default'} style={{ fontSize: 10 }}>{j.status}</Tag>
-                    <span className="text-xs text-gray-400">{jobCandidates.length}/{j.headcount}人</span>
-                    {j.urgency && <Tag color="red" style={{ fontSize: 10 }}>{j.urgency}</Tag>}
-                    {!isExpanded && jobCandidates.length > 0 && (
-                      <span className="text-[10px] text-gray-300">
-                        {sortedCandidates.slice(0, 4).map(c => c.name).join('、')}{jobCandidates.length > 4 ? '…' : ''}
-                      </span>
-                    )}
-                  </div>
-                }
-                extra={
-                  <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                    <Button size="small" onClick={() => loadCompare(j.id)}>对比</Button>
-                    <Button size="small" icon={<UploadOutlined />} onClick={() => { setResumeFile(null); setResumeResult(null); resumeJobIdRef.current = j.id; setResumeOpen(true) }} />
-                    <a className="text-xs leading-8" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</a>
-                  </div>
-                }
+              <Modal title={editingReq ? '编辑' : '新建岗位需求'} open={reqOpen} onCancel={() => setReqOpen(false)} onOk={handleSaveReq}>
+                <Form form={reqForm} layout="vertical">
+                  <Form.Item name="position_name" label="岗位名称" rules={[{ required: true }]}>
+                    <Select showSearch placeholder="选择岗位（含部门）" options={posOptions}
+                      filterOption={(inp, opt) => (opt?.label ?? '').toLowerCase().includes(inp.toLowerCase())}
+                      onChange={(val: string) => { const parts = val.split('|||'); reqForm.setFieldsValue({ department: parts[0] || '' }) }} />
+                  </Form.Item>
+                  <Form.Item name="department" hidden><Input /></Form.Item>
+                  <Form.Item name="headcount" label="招聘人数"><InputNumber min={1} /></Form.Item>
+                  <Form.Item name="requirements" label="岗位要求"><Input.TextArea rows={4} /></Form.Item>
+                  <Form.Item name="duties" label="岗位职责"><Input.TextArea rows={3} placeholder="可选，胜任度分析报告「岗位要求回顾」使用" /></Form.Item>
+                  <Form.Item name="owner" label="用人部门负责人" tooltip="推送审核时默认发给此人">
+                    <Select
+                      showSearch
+                      filterOption={false}
+                      allowClear
+                      loading={ownerSearching}
+                      placeholder="输入姓名搜索；或直接从下方列表选择"
+                      options={ownerOptions}
+                      onSearch={searchOwnerOptions}
+                      onOpenChange={(open) => { if (open && ownerOptions.length === 0) void searchOwnerOptions('') }}
+                    />
+                  </Form.Item>
+                  <Form.Item name="urgency" label="紧急程度">
+                    <Select options={[{ label: '普通', value: '普通' }, { label: '紧急', value: '紧急' }]} allowClear />
+                  </Form.Item>
+                  <Form.Item name="deadline" label="期望到岗日期"><DatePicker style={{ width: '100%' }} /></Form.Item>
+                  {editingReq && <Form.Item name="status" label="状态"><Select options={[{ label: '招聘中', value: '招聘中' }, { label: '已关闭', value: '已关闭' }]} /></Form.Item>}
+                </Form>
+              </Modal>
+
+              <Modal title={`发放入职 Offer — ${offerCandidate?.name || ''}`} open={offerOpen}
+                onCancel={() => setOfferOpen(false)} width={640}
+                footer={[
+                  <Button key="preview" onClick={handlePreviewOffer}>预览</Button>,
+                  <Button key="send" type="primary" loading={offerSending} onClick={handleSendOfferSubmit}>发送</Button>,
+                ]}
               >
-                {!isExpanded ? null : jobCandidates.length === 0 ? (
-                  <div className="text-center text-gray-400 text-xs py-4">暂无候选人 — 上传简历或导入Excel添加</div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {sortedCandidates.map(c => {
-                      const days = c.updated_at ? Math.floor((Date.now() - new Date(c.updated_at).getTime()) / (1000 * 60 * 60 * 24)) : 0
-                      const isStale = days > 7 && c.status !== '已入职' && c.status !== '已拒绝'
+                <Form form={offerForm} layout="vertical" className="mt-2">
+                  <Form.Item name="candidate_email" label="收件邮箱" rules={[{ required: true, type: 'email' }]}>
+                    <Input placeholder="candidate@example.com" />
+                  </Form.Item>
+                  <Form.Item name="candidate_name" label="姓名"><Input disabled /></Form.Item>
+                  <Form.Item name="department" label="部门"><Input disabled /></Form.Item>
+                  <Form.Item name="position" label="岗位"><Input disabled /></Form.Item>
+                  <Form.Item name="base_salary" label="转正底薪（元）"><Input placeholder="如 3800" /></Form.Item>
+                  <Form.Item name="salary_range" label="综合税前月薪范围"><Input placeholder="如 7000-8000" /></Form.Item>
+                  <Form.Item name="medical_date" label="体检截止日期"><DatePicker style={{ width: '100%' }} placeholder="选择日期" /></Form.Item>
+                  <Form.Item name="report_date" label="报到截止日期"><DatePicker style={{ width: '100%' }} placeholder="选择日期" /></Form.Item>
+                  <Form.Item name="offer_expire_date" label="Offer保留至"><DatePicker style={{ width: '100%' }} placeholder="选择日期" /></Form.Item>
+                  <Form.Item name="additional_terms" label="补充条款（选填）"><Input.TextArea rows={3} placeholder="自定义补充条款，将追加在Offer正文末尾" /></Form.Item>
+                </Form>
+              </Modal>
+
+              <Modal
+                title={`批量上传简历 — ${jobs.find(j => j.id === resumeJobId)?.position_name || ''}`}
+                open={resumeOpen}
+                onCancel={closeResumeModal}
+                mask={{ closable: false }}
+                width={560}
+                footer={[
+                  <Button key="close" onClick={closeResumeModal}>关闭</Button>,
+                  (() => {
+                    const screenable = resumeItems.filter(it => it.stage === '已建档' && it.candidateId).length
+                    return (
+                      <Button key="screen" type="primary" ghost
+                        disabled={screenable === 0 || batchRunning}
+                        loading={batchScreening}
+                        onClick={() => { void handleBatchScreen() }}>
+                        AI 初筛 {screenable > 0 ? `${screenable} 份` : ''}
+                      </Button>
+                    )
+                  })(),
+                  <Button key="process" type="primary"
+                    loading={batchRunning}
+                    disabled={batchRunning || batchScreening || resumeItems.filter(it => it.stage === '待处理').length === 0}
+                    onClick={() => { void handleProcessBatch() }}>
+                    开始处理{resumeItems.length > 0 ? `（${resumeItems.filter(it => it.stage === '待处理').length}/${resumeItems.length}）` : ''}
+                  </Button>,
+                ]}>
+                <div className="space-y-3">
+                  <div className="text-xs text-gray-500">
+                    支持一次选择多份 PDF：逐份自动「AI 解析 → 建档为该岗位候选人」，完成后可一键对全部新简历跑 AI 初筛（推荐等级 + 匹配报告直接写入候选人档案）。
+                  </div>
+                  <Upload
+                    accept=".pdf"
+                    multiple
+                    disabled={batchRunning || batchScreening}
+                    showUploadList={false}
+                    beforeUpload={(_, fileList) => {
+                      // beforeUpload 逐个触发：等本批最后一个文件到齐再整批建行
+                      // （fileList 元素 RcFile 即 File 子类，直接使用）
+                      if (fileList[fileList.length - 1]?.uid === _.uid) {
+                        setResumeItems(fileList.map((f, i) => ({
+                          key: `${Date.now()}-${i}-${f.name}`, file: f, stage: '待处理' as const,
+                        })))
+                      }
+                      return false
+                    }}
+                  >
+                    <Button size="large" disabled={batchRunning || batchScreening}>选择 PDF 文件（可多选）</Button>
+                  </Upload>
+                  {resumeItems.length > 0 && (
+                    <div className="border rounded divide-y max-h-80 overflow-y-auto">
+                      {resumeItems.map(it => (
+                        <div key={it.key} className="flex items-center gap-2 px-3 py-2 text-sm">
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate" title={it.file.name}>
+                              {it.name ? <b>{it.name}</b> : it.file.name}
+                              <span className="text-xs text-gray-400 ml-2">{(it.file.size / 1024).toFixed(0)}KB</span>
+                            </div>
+                            {it.stage === '失败' && it.error && (
+                              <div className="text-xs text-red-500 truncate" title={it.error}>{it.error}</div>
+                            )}
+                            {it.stage === '初筛完成' && (
+                              <div className="text-xs text-gray-500">
+                                AI 初筛：<span className="font-medium">{it.reco}</span> · 胜任度 {it.score}/100（报告已入档案）
+                              </div>
+                            )}
+                            {it.stage === '已建档' && it.error && (
+                              <div className="text-xs text-orange-500 truncate" title={it.error}>上次初筛未完成：{it.error}</div>
+                            )}
+                          </div>
+                          <Tag color={BATCH_STAGE_COLOR[it.stage]} style={{ margin: 0 }}>{it.stage}</Tag>
+                          {it.stage === '失败' && !batchRunning && !batchScreening && (
+                            <a className="text-xs" onClick={() => updateResumeItem(it.key, { stage: '待处理', error: undefined })}>重试</a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </Modal>
+            </>),
+          }, {
+            key: 'interviews',
+            label: <span className="flex items-center gap-1.5"><ClockCircleOutlined />面试总览</span>,
+            children: (
+              <Card>
+                <div className="flex flex-wrap gap-3 mb-4 items-center">
+                  <DatePicker.RangePicker
+                    value={overviewDateRange}
+                    onChange={(v) => setOverviewDateRange(v)}
+                  />
+                  <Input.Search
+                    placeholder="面试官姓名"
+                    style={{ width: 180 }}
+                    allowClear
+                    onSearch={(v) => setOverviewInterviewer(v || '')}
+                  />
+                  <Select
+                    placeholder="状态" allowClear style={{ width: 120 }}
+                    options={['待安排', '已安排', '已完成', '已取消'].map((x) => ({ label: x, value: x }))}
+                    onChange={(v) => setOverviewStatus(v)}
+                  />
+                  <Button onClick={() => loadOverview()}>查询</Button>
+                  <span className="text-xs text-gray-400 ml-auto">
+                    {overviewLoading ? '加载中…' : `共 ${overviewTotal} 场`}
+                  </span>
+                </div>
+                {overviewLoading ? <div className="text-center py-12"><Spin /></div> :
+                  overviewRows.length === 0 ? <Empty description="该条件下暂无面试安排" className="py-12" /> : (
+                    <div className="space-y-5">
+                      {(() => {
+                        const today = dayjs().format('YYYY-MM-DD')
+                        const groups: { title: string; rows: typeof overviewRows }[] = [
+                          { title: '今天面试', rows: [] },
+                          { title: '即将到来', rows: [] },
+                          { title: '更早 / 已结束', rows: [] },
+                        ]
+                        overviewRows.forEach((iv) => {
+                          if (!iv.interview_date) return
+                          if (iv.interview_date === today) groups[0].rows.push(iv)
+                          else if (iv.interview_date > today) groups[1].rows.push(iv)
+                          else groups[2].rows.push(iv)
+                        })
+                        return groups.filter((g) => g.rows.length > 0).map((g) => (
+                          <div key={g.title}>
+                            <div className="text-sm font-medium mb-2 text-[var(--color-charcoal)]">
+                              {g.title} <span className="text-gray-400 font-normal">({g.rows.length})</span>
+                            </div>
+                            <div className="space-y-2">
+                              {g.rows.map((iv) => (
+                                <div key={iv.id}
+                                  className="flex items-center gap-3 p-2.5 rounded-lg border border-[var(--color-hairline)] hover:bg-blue-50 cursor-pointer transition-colors"
+                                  onClick={() => router.push(`/hr/recruitment/${iv.candidate_id}`)}>
+                                  <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
+                                  <span className="text-xs text-gray-500 w-40 shrink-0">
+                                    {iv.interview_date}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
+                                  </span>
+                                  <span className="font-medium text-sm">{iv.candidate_name || '未知候选人'}</span>
+                                  <span className="text-xs text-gray-400">{iv.candidate_position || ''}</span>
+                                  <Tag style={{ fontSize: 10 }}>{iv.interview_type}</Tag>
+                                  <span className="text-xs text-gray-500 flex-1 truncate">
+                                    面试官：{iv.interviewer || '-'}{iv.location ? ` · ${iv.location}` : ''}
+                                  </span>
+                                  {iv.calendar_event_id && <Tag color="purple" style={{ fontSize: 10 }}>日历</Tag>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      })()}
+                    </div>
+                  )}
+              </Card>
+            ),
+          }] : []),
+          {
+            key: 'reviews',
+            label: (
+              <Badge count={pendingReviews.length} size="small" offset={[8, -2]}>
+                <span className="px-1">待我审核</span>
+              </Badge>
+            ),
+            children: (
+              <Card title="待我审核的候选人" loading={reviewsLoading}>
+                {pendingReviews.length === 0 ? <Empty description="暂无待审核候选人" className="py-12" /> : (
+                  <div className="space-y-3">
+                    {pendingReviews.map((item: any) => {
+                      const c = item.candidate || {}; const jd = item.job_requirement; const rv = item.review || {}
                       return (
-                        <div key={c.id} className="rounded border px-3 py-2 flex items-center gap-3 hover:shadow-sm transition-shadow w-full cursor-pointer"
-                          style={{
-                            borderColor: isStale ? '#ffccc7' : '#e8e8e8',
-                            background: isStale ? '#fff5f5' : '#fff',
-                          }}
+                        <Card key={c.id} size="small" hoverable className="cursor-pointer"
                           onClick={() => router.push(`/hr/recruitment/${c.id}`)}
                         >
-                          <div className="w-1 self-stretch rounded-full flex-shrink-0" style={{ background: statusColors[c.status || '待筛选'] || '#d9d9d9' }} />
-                          <div className="flex-1 min-w-0 grid grid-cols-4 gap-x-4 gap-y-0.5">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-sm font-medium truncate">{c.name}</span>
-                              <span className="text-xs text-gray-400">{c.gender}</span>
-                              {c.recommendation_level && (
-                                <Tag color={c.recommendation_level === '强烈推荐' ? 'green' : c.recommendation_level === '推荐' ? 'blue' : 'default'}
-                                  style={{ fontSize: 10, margin: 0 }}>{c.recommendation_level}</Tag>
-                              )}
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{c.name}</span>
+                                <span className="text-xs text-gray-400">{c.gender || '-'}</span>
+                                <span className="text-xs text-gray-500">{c.education || '-'}</span>
+                              </div>
+                              <div className="text-xs text-gray-500 mt-1 truncate">
+                                {[c.school, c.major, c.work_years != null ? `${c.work_years}年经验` : '', c.current_company].filter(Boolean).join(' · ')}
+                              </div>
+                              <div className="text-xs text-gray-500">岗位：{jd?.position_name || c.position} · {jd?.department || c.department}</div>
+                              {rv.push_note && <div className="text-xs text-blue-600 mt-1">💬 HR备注：{rv.push_note}</div>}
                             </div>
-                            <div className="text-xs text-gray-500 truncate">{c.education || '-'} · {c.school || '-'}</div>
-                            <div className="text-xs text-gray-500 truncate">{c.phone || '-'} · {c.email || '-'}</div>
-                            <div className="text-xs text-gray-500 truncate">{c.position || j.position_name || '-'} · {c.department || j.department || '-'}</div>
+                            <div className="flex gap-2 flex-shrink-0 pt-0.5" onClick={(e) => e.stopPropagation()}>
+                              <Button type="primary" onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
+                              <Button danger onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                            {isStale && <span className="text-xs text-red-400 whitespace-nowrap" title={`已停留${days}天`}>⚠️{days}天</span>}
-                            <Select size="small" value={c.status} loading={changingStatus === c.id}
-                              style={{ width: 95 }}
-                              options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
-                              onChange={v => handleStatusChange(c.id, v)}
-                            />
-                            <Button size="small" icon={<SendOutlined />} onClick={() => handleSendOffer(c)} title="发Offer" />
-                            <Popconfirm title="确定删除此候选人？" onConfirm={() => handleDeleteCandidate(c.id)} okText="删除" cancelText="取消">
-                              <Button size="small" danger icon={<DeleteOutlined />} title="删除" />
-                            </Popconfirm>
-                          </div>
-                        </div>
+                        </Card>
                       )
                     })}
                   </div>
                 )}
               </Card>
-            )
-          })}
-        </div>
-      )}
-
-      <Modal title={editingReq ? '编辑' : '新建岗位需求'} open={reqOpen} onCancel={() => setReqOpen(false)} onOk={handleSaveReq}>
-        <Form form={reqForm} layout="vertical">
-          <Form.Item name="position_name" label="岗位名称" rules={[{ required: true }]}>
-            <Select showSearch placeholder="选择岗位（含部门）" options={posOptions}
-              filterOption={(inp, opt) => (opt?.label ?? '').toLowerCase().includes(inp.toLowerCase())}
-              onChange={(val: string) => { const parts = val.split('|||'); reqForm.setFieldsValue({ department: parts[0] || '' }) }} />
-          </Form.Item>
-          <Form.Item name="department" hidden><Input /></Form.Item>
-          <Form.Item name="headcount" label="招聘人数"><InputNumber min={1} /></Form.Item>
-          <Form.Item name="requirements" label="岗位要求"><Input.TextArea rows={4} /></Form.Item>
-          <Form.Item name="duties" label="岗位职责"><Input.TextArea rows={3} placeholder="可选，胜任度分析报告「岗位要求回顾」使用" /></Form.Item>
-          <Form.Item name="owner" label="用人部门负责人" tooltip="推送审核时默认发给此人">
-            <Select
-              showSearch
-              filterOption={false}
-              allowClear
-              loading={ownerSearching}
-              placeholder="搜索并选择员工（姓名）"
-              options={ownerOptions}
-              onSearch={searchOwnerOptions}
-            />
-          </Form.Item>
-          <Form.Item name="urgency" label="紧急程度">
-            <Select options={[{ label: '普通', value: '普通' }, { label: '紧急', value: '紧急' }]} allowClear />
-          </Form.Item>
-          <Form.Item name="deadline" label="期望到岗日期"><DatePicker style={{ width: '100%' }} /></Form.Item>
-          {editingReq && <Form.Item name="status" label="状态"><Select options={[{ label: '招聘中', value: '招聘中' }, { label: '已关闭', value: '已关闭' }]} /></Form.Item>}
-        </Form>
-      </Modal>
-
-      <Modal title={`发放入职 Offer — ${offerCandidate?.name || ''}`} open={offerOpen}
-        onCancel={() => setOfferOpen(false)} width={640}
-        footer={[
-          <Button key="preview" onClick={handlePreviewOffer}>预览</Button>,
-          <Button key="send" type="primary" loading={offerSending} onClick={handleSendOfferSubmit}>发送</Button>,
+            ),
+          },
+          ...(canManage ? [{
+            key: 'screening',
+            label: <span className="flex items-center gap-1.5"><FileSearchOutlined />AI 筛简历</span>,
+            children: <ResumeScreeningPanel />,
+          },
+          {
+            key: 'stats',
+            label: '数据分析',
+            children: (
+              <Card title="招聘数据分析" loading={statsLoading}>
+                {stats ? (
+                  <div className="space-y-6">
+                    <div className={`grid gap-4 ${stats.avg_cycle_days != null ? 'grid-cols-2 md:grid-cols-3' : 'grid-cols-2'}`}>
+                      <Card size="small" className="text-center">
+                        <div className="text-3xl font-bold text-blue-600">{stats.total_candidates}</div>
+                        <div className="text-xs text-gray-500 mt-1">候选人总数</div>
+                      </Card>
+                      <Card size="small" className="text-center">
+                        <div className="text-3xl font-bold text-green-600">{stats.active_jobs}</div>
+                        <div className="text-xs text-gray-500 mt-1">在招岗位数</div>
+                      </Card>
+                      {stats.avg_cycle_days != null && (
+                        <Card size="small" className="text-center col-span-2 md:col-span-1">
+                          <div className="text-3xl font-bold text-orange-500">{stats.avg_cycle_days}</div>
+                          <div className="text-xs text-gray-500 mt-1">平均招聘周期（天）</div>
+                        </Card>
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-medium mb-3">招聘漏斗</h3>
+                      <div className="space-y-2">
+                        {stats.funnel?.map((item: any) => {
+                          const max = Math.max(...stats.funnel.map((f: any) => f.count), 1)
+                          const pct = Math.round((item.count / max) * 100)
+                          const colors: Record<string, string> = {
+                            '待筛选': '#1677ff', '已筛选': '#722ed1', '待部门审核': '#fa8c16',
+                            '面试中': '#13c2c2', '已面试': '#52c41a', '录用中': '#2f54eb',
+                            '已录用': '#389e0d', '已拒绝': '#ff4d4f',
+                          }
+                          return (
+                            <div key={item.status} className="flex items-center gap-2">
+                              <span className="text-xs w-20 text-right text-gray-500">{item.status}</span>
+                              <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
+                                <div className="h-full rounded transition-all" style={{
+                                  width: `${pct}%`,
+                                  backgroundColor: colors[item.status] || '#d9d9d9',
+                                }} />
+                              </div>
+                              <span className="text-xs font-medium w-8">{item.count}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    {stats.monthly_hires && stats.monthly_hires.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-medium mb-3">月度入职趋势</h3>
+                        <div className="space-y-2">
+                          {stats.monthly_hires.map((item: { month: string; count: number }) => {
+                            const maxH = Math.max(...stats.monthly_hires!.map((h: { count: number }) => h.count), 1)
+                            const pctH = Math.round((item.count / maxH) * 100)
+                            return (
+                              <div key={item.month} className="flex items-center gap-2">
+                                <span className="text-xs w-20 text-right text-gray-500">{item.month}</span>
+                                <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
+                                  <div className="h-full rounded bg-teal-500 transition-all" style={{ width: `${pctH}%` }} />
+                                </div>
+                                <span className="text-xs font-medium w-8">{item.count}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {stats.source_stats && stats.source_stats.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-medium mb-3">简历来源分布</h3>
+                        <div className="space-y-2">
+                          {stats.source_stats.map((item: { source: string; count: number }, idx: number) => {
+                            const maxS = Math.max(...stats.source_stats!.map((s: { count: number }) => s.count), 1)
+                            const pctS = Math.round((item.count / maxS) * 100)
+                            const sourceColors = ['#1677ff', '#722ed1', '#fa8c16', '#13c2c2', '#52c41a', '#eb2f96', '#2f54eb']
+                            const color = sourceColors[idx % sourceColors.length]
+                            return (
+                              <div key={item.source} className="flex items-center gap-2">
+                                <span className="text-xs w-20 text-right text-gray-500">{item.source || '未知'}</span>
+                                <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
+                                  <div className="h-full rounded transition-all" style={{ width: `${pctS}%`, backgroundColor: color }} />
+                                </div>
+                                <span className="text-xs font-medium w-8">{item.count}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <Empty description="暂无数据" className="py-12" />
+                )}
+              </Card>
+            ),
+          }] : []),
         ]}
-      >
-        <Form form={offerForm} layout="vertical" className="mt-2">
-          <Form.Item name="candidate_email" label="收件邮箱" rules={[{ required: true, type: 'email' }]}>
-            <Input placeholder="candidate@example.com" />
-          </Form.Item>
-          <Form.Item name="candidate_name" label="姓名"><Input disabled /></Form.Item>
-          <Form.Item name="department" label="部门"><Input disabled /></Form.Item>
-          <Form.Item name="position" label="岗位"><Input disabled /></Form.Item>
-          <Form.Item name="base_salary" label="转正底薪（元）"><Input placeholder="如 3800" /></Form.Item>
-          <Form.Item name="salary_range" label="综合税前月薪范围"><Input placeholder="如 7000-8000" /></Form.Item>
-          <Form.Item name="medical_date" label="体检截止日期"><DatePicker style={{ width: '100%' }} placeholder="选择日期" /></Form.Item>
-          <Form.Item name="report_date" label="报到截止日期"><DatePicker style={{ width: '100%' }} placeholder="选择日期" /></Form.Item>
-          <Form.Item name="offer_expire_date" label="Offer保留至"><DatePicker style={{ width: '100%' }} placeholder="选择日期" /></Form.Item>
-          <Form.Item name="additional_terms" label="补充条款（选填）"><Input.TextArea rows={3} placeholder="自定义补充条款，将追加在Offer正文末尾" /></Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal title="上传简历匹配" open={resumeOpen} onCancel={() => setResumeOpen(false)} onOk={handleCreateCandidate} okText="确认创建候选人" okButtonProps={{ disabled: !resumeResult }}>
-        <div className="space-y-3">
-          <Input type="file" accept=".pdf" onChange={e => setResumeFile((e.target as HTMLInputElement).files?.[0] || null)} />
-          <Button icon={<UploadOutlined />} loading={resumeLoading} onClick={handleParseResume} block>解析简历</Button>
-          {resumeResult && (
-            <div className="text-sm space-y-1 border rounded p-2 bg-gray-50">
-              <div>姓名：<b>{resumeResult.name}</b> · 手机：{resumeResult.phone}</div>
-              <div>邮箱：{resumeResult.email}</div>
-              <div>学校：{resumeResult.school} · 学历：{resumeResult.education} · 专业：{resumeResult.major}</div>
-              {resumeResult.current_company && <div>当前公司：{resumeResult.current_company}</div>}
-              {resumeResult.work_years != null && <div>工作年限：{resumeResult.work_years}年</div>}
-              {resumeResult.expected_salary && <div>期望薪资：{resumeResult.expected_salary}</div>}
-              {resumeJobIdRef.current && <div className="text-gray-400">关联岗位：{jobs.find(j => j.id === resumeJobIdRef.current)?.position_name}</div>}
-            </div>
-          )}
-        </div>
-      </Modal>
-      </>)}
+      />
     </div>
   )
 }

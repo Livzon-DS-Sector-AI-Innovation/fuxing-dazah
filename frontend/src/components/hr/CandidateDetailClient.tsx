@@ -1,33 +1,41 @@
 'use client'
 
+import dayjs from 'dayjs'
+
 import CandidateAnalysisReportCard from './CandidateAnalysisReportCard'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
-  Form, DatePicker, Modal, Card, InputNumber, Empty, Space, Checkbox, Upload,
+  Form, DatePicker, TimePicker, Modal, Card, InputNumber, Empty, Space, Checkbox, Upload, Rate,
 } from 'antd'
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
   RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons'
-import type { Candidate, Interview, AiEvaluation, OnboardingTask } from '@/types/hr'
+import type { Candidate, Interview, InterviewFeedback, OnboardingTask } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
   parseResumeAction,
   transitionCandidateStatus,
-  createInterview, updateInterview, deleteInterview, evaluateInterview,
+  createInterview, updateInterview, deleteInterview,
+  saveInterviewFeedback, fetchInterviewFeedback,
   pushCandidateReview, decideCandidateReview, pushOnboardingReview,
-  fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
+  fetchCandidateInterviews, fetchPendingReviews,
+  fetchCandidateReviews,
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
-  fetchEmployeesAction,
+  fetchEmployeesAction, screenCandidateAction, fetchJobRequirements,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
-import AIScoreCard from './AIScoreCard'
+import { usePermission } from '@/hooks/usePermission'
+
+// 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（与 RecruitmentClient 对齐；进入面试后以胜任度分析报告为准）
+const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门审核'])
 
 interface CandidateDetailClientProps {
   candidate: Candidate
@@ -36,6 +44,9 @@ interface CandidateDetailClientProps {
 export default function CandidateDetailClient({ candidate }: CandidateDetailClientProps) {
   const router = useRouter()
   const { message } = App.useApp()
+  // 招聘管理权限：人事专员可操作全流程；用人部门负责人（审核人）仅查看 + 同意/驳回
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('hr:recruitment:manage')
   const [pdfLoading, setPdfLoading] = useState(true)
   const [pdfError, setPdfError] = useState(false)
   const [pdfErrorMsg, setPdfErrorMsg] = useState('')
@@ -87,9 +98,37 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [interviewForm] = Form.useForm()
   const [interviewModalOpen, setInterviewModalOpen] = useState(false)
   const [editingInterview, setEditingInterview] = useState<Interview | null>(null)
+  const [interviewSaving, setInterviewSaving] = useState(false)
+
+  // 人工面试评价（区别于 AI 胜任度报告：面试官结构化打分 + 结论）
+  const FEEDBACK_DIMENSIONS = ['专业能力', '沟通表达', '岗位匹配', '发展潜力']
+  const [feedbacks, setFeedbacks] = useState<Record<string, InterviewFeedback>>({})
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false)
+  const [feedbackInterview, setFeedbackInterview] = useState<Interview | null>(null)
+  const [feedbackSaving, setFeedbackSaving] = useState(false)
+  const [feedbackForm] = Form.useForm()
+
+  // 面试官选择器：远程搜索在职员工（值存姓名——飞书日程/冲突检测按姓名匹配）
+  const [interviewerOptions, setInterviewerOptions] = useState<{ value: string; label: string }[]>([])
+  const [interviewerSearching, setInterviewerSearching] = useState(false)
+  const interviewerSeq = useRef(0)
+  const searchInterviewerOptions = async (keyword: string) => {
+    const seq = ++interviewerSeq.current
+    setInterviewerSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== interviewerSeq.current) return  // 过期响应丢弃
+      setInterviewerOptions(((d?.data as any)?.items || (d?.data as any) || []).map((e: any) => ({
+        value: e.name,
+        label: `${e.name}（${e.department || ''}）`,
+      })))
+    } catch (err: any) {
+      message.error(err?.message || '员工搜索失败，请稍后重试')
+    }
+    finally { if (seq === interviewerSeq.current) setInterviewerSearching(false) }
+  }
 
   // AI评估状态
-  const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
 
   // 入职任务状态
   const [onboardingTasks, setOnboardingTasks] = useState<OnboardingTask[]>([])
@@ -103,7 +142,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try { const r = await fetchOnboardingTasks(candidate.id); setOnboardingTasks(r.data || []) } catch { /* 仅已入职候选人有任务 */ }
     finally { setTasksLoading(false); tasksLoadedRef.current = true }
   }, [candidate.id])
-  const [evaluations, setEvaluations] = useState<Record<string, AiEvaluation>>({})
 
   // 状态流转
   const [statusUpdating, setStatusUpdating] = useState(false)
@@ -113,6 +151,17 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [pushForm] = Form.useForm()
   const [pushLoading, setPushLoading] = useState(false)
   const [reviewLoading, setReviewLoading] = useState(false)
+  // 审核记录（推给了谁/备注/结果）
+  const [reviews, setReviews] = useState<any[]>([])
+
+  const loadReviews = useCallback(async () => {
+    try {
+      const r = await fetchCandidateReviews(candidate.id)
+      setReviews(r.data || [])
+    } catch { /* 审核记录加载失败不阻塞页面 */ }
+  }, [candidate.id])
+
+  useEffect(() => { loadReviews() }, [loadReviews])
 
   // 一键入职
   const [onboardLoading, setOnboardLoading] = useState(false)
@@ -153,16 +202,20 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       const r = await fetchCandidateInterviews(candidate.id)
       setInterviews(r.data || [])
-      // 已有胜任度报告随页面加载展示（自动生成的历史报告不再隐藏）
+      // AI 评估已统一到胜任度报告：加载面试时一并拉最新报告列表
       fetchCandidateAnalysisReports(candidate.id)
         .then((d) => setAnalysisReports(d.data || []))
         .catch(() => {})
-      for (const iv of (r.data || [])) {
-        try {
-          const er = await fetchInterviewEvaluation(iv.id)
-          if (er.data) setEvaluations(prev => ({ ...prev, [iv.id]: er.data }))
-        } catch { /* AI评估加载失败不影响面试列表 */ }
-      }
+      // 人工评价并行拉取（每场一条）
+      const fbResults = await Promise.allSettled(
+        (r.data || []).map((iv: Interview) => fetchInterviewFeedback(iv.id))
+      )
+      fbResults.forEach((res, i) => {
+        if (res.status === 'fulfilled' && res.value.data) {
+          const iv = (r.data || [])[i]
+          setFeedbacks(prev => ({ ...prev, [iv.id]: res.value.data }))
+        }
+      })
     } catch (err: any) {
       console.error('加载面试列表失败:', err)
       message.error('加载面试列表失败: ' + (err.message || '未知错误'))
@@ -191,6 +244,18 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       sessionStorage.setItem('candidate_list_context', JSON.stringify({ ...navContext, currentIndex: nextIndex }))
       router.push(`/hr/recruitment/${nextId}`)
     }
+  }
+
+  // AI 初筛：直接用该候选人已存档的简历按关联岗位打分（免重复上传）
+  const [screening, setScreening] = useState(false)
+  const handleScreenCandidate = async () => {
+    setScreening(true)
+    try {
+      const r = await screenCandidateAction(candidate.id)
+      message.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100）`)
+      window.location.reload()
+    } catch (err: any) { message.error(err.message || 'AI 初筛失败') }
+    finally { setScreening(false) }
   }
 
   const handleUpdateRecommendation = async (value: string) => {
@@ -236,23 +301,106 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   }
 
   // 面试操作
+  const buildInterviewPayload = (v: Record<string, any>, forceConflict = false) => {
+    // 面试开始 = 日期+钟点合一的 DateTimePicker；结束只取钟点
+    const start: dayjs.Dayjs | undefined = v.interview_start
+    const end: dayjs.Dayjs | undefined = v.end_time
+    const { interview_start, ...rest } = v
+    return {
+      ...rest,
+      interview_date: start ? start.format('YYYY-MM-DD') : undefined,
+      start_time: start ? start.format('HH:mm') : undefined,
+      end_time: end ? end.format('HH:mm') : undefined,
+      force_conflict: forceConflict || undefined,
+    }
+  }
+
+  const doSaveInterview = async (payload: Record<string, any>) => {
+    return editingInterview
+      ? updateInterview(editingInterview.id, payload)
+      : createInterview({ ...payload, candidate_id: candidate.id, job_requirement_id: candidate.job_requirement_id || undefined })
+  }
+
   const handleSaveInterview = async () => {
     const v = await interviewForm.validateFields()
-    // 格式化日期为 YYYY-MM-DD 字符串，否则 dayjs 序列化后 Pydantic 无法解析
-    const payload = {
-      ...v,
-      interview_date: v.interview_date ? (typeof v.interview_date === 'string' ? v.interview_date : v.interview_date.format('YYYY-MM-DD')) : undefined,
-    }
+    const payload = buildInterviewPayload(v)
+    setInterviewSaving(true)
     try {
-      if (editingInterview) {
-        await updateInterview(editingInterview.id, payload)
-      } else {
-        await createInterview({ ...payload, candidate_id: candidate.id, job_requirement_id: candidate.job_requirement_id || undefined })
+      let res: any
+      try {
+        res = await doSaveInterview(payload)
+      } catch (err: any) {
+        // 面试官时段冲突：确认后带 force_conflict 强制保存
+        if (err?.message?.includes('冲突')) {
+          const force = await new Promise<boolean>((resolve) => {
+            Modal.confirm({
+              title: '面试官时段冲突',
+              content: `${err.message}。仍要保存这场面试吗？`,
+              okText: '仍然保存', cancelText: '返回修改',
+              onOk: () => resolve(true),
+              onCancel: () => resolve(false),
+            })
+          })
+          if (!force) return
+          res = await doSaveInterview({ ...payload, force_conflict: true })
+        } else {
+          throw err
+        }
       }
       message.success(editingInterview ? '面试已更新' : '面试已安排')
+      // 含逐字稿/备注的保存会后台生成胜任度报告（LLM 最长 90s，不阻塞响应）
+      if ((res?.data?.transcript_text || res?.data?.notes || '').trim()) {
+        message.info('胜任度报告后台生成中，稍后刷新查看')
+      }
+      // 日历同步失败不再静默：面试已保存成功，但提示用户可编辑补建
+      if (res?.data?.calendar_sync_error) {
+        message.warning(res.data.calendar_sync_error + '，可稍后在编辑中勾选「补建飞书日程」')
+      }
       setInterviewModalOpen(false); interviewForm.resetFields(); setEditingInterview(null)
       loadInterviews()
     } catch (err: any) { message.error(err.message || '操作失败') }
+    finally { setInterviewSaving(false) }
+  }
+
+  const openFeedbackModal = (iv: Interview) => {
+    setFeedbackInterview(iv)
+    const existing = feedbacks[iv.id]
+    const dims: Record<string, { score?: number; comment?: string }> = {}
+    FEEDBACK_DIMENSIONS.forEach((name) => {
+      const d = existing?.dimensions?.find((x) => x.name === name)
+      dims[name] = { score: d?.score, comment: d?.comment }
+    })
+    feedbackForm.setFieldsValue({
+      evaluator: existing?.evaluator || iv.interviewer || '',
+      dims,
+      overall_comment: existing?.overall_comment || '',
+      result: existing?.result,
+    })
+    setFeedbackModalOpen(true)
+  }
+
+  const handleSaveFeedback = async () => {
+    if (!feedbackInterview) return
+    const v = await feedbackForm.validateFields()
+    setFeedbackSaving(true)
+    try {
+      const res = await saveInterviewFeedback(feedbackInterview.id, {
+        evaluator: v.evaluator,
+        result: v.result,
+        overall_comment: v.overall_comment || undefined,
+        dimensions: FEEDBACK_DIMENSIONS
+          .map((name) => ({
+            name,
+            score: v.dims?.[name]?.score ?? 0,
+            comment: v.dims?.[name]?.comment || undefined,
+          }))
+          .filter((d) => d.score > 0 || d.comment),
+      })
+      setFeedbacks(prev => ({ ...prev, [feedbackInterview.id]: res.data }))
+      message.success('面试评价已保存')
+      setFeedbackModalOpen(false)
+    } catch (err: any) { message.error(err.message || '保存失败') }
+    finally { setFeedbackSaving(false) }
   }
 
   const handleDeleteInterview = async (id: string) => {
@@ -271,16 +419,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     } finally {
       setReportGeneratingId(null)
     }
-  }
-
-  const handleEvaluate = async (interviewId: string) => {
-    setEvaluatingId(interviewId)
-    try {
-      const r = await evaluateInterview(interviewId)
-      setEvaluations(prev => ({ ...prev, [interviewId]: r.data }))
-      message.success('AI评估完成')
-    } catch (err: any) { message.error(err.message || '评估失败') }
-    finally { setEvaluatingId(null) }
   }
 
   // 状态流转
@@ -310,7 +448,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     // 已入职只能通过「入职操作」完成（创建入职记录/工号/子任务），不放裸流转
     '待入职审批': ['已录用', '已拒绝'],
   }
-  // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
+  // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）；空关键字=默认前 20 人
   const [reviewerOptions, setReviewerOptions] = useState<{ value: string; label: string }[]>([])
   const [reviewerSearching, setReviewerSearching] = useState(false)
   const reviewerSearchSeq = useRef(0)
@@ -324,7 +462,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         value: e.name,
         label: `${e.name}（${e.employee_number || ''}）`,
       })))
-    } catch { /* 搜索失败静默 */ }
+    } catch (err: any) {
+      // 静默空列表会让下拉"无人可选"无从排查，失败要透出
+      message.error(err?.message || '员工搜索失败，请稍后重试')
+    }
     finally { if (seq === reviewerSearchSeq.current) setReviewerSearching(false) }
   }
 
@@ -353,11 +494,38 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         try {
           await pushOnboardingReview(candidate.id, { pushed_by: 'HR' })
           message.success('已发起入职审批')
-          router.refresh()
+          router.refresh(); loadReviews()
         } catch (err: any) { message.error(err.message || '发起失败') }
       },
     })
   }
+
+  // 打开推送弹窗：预填岗位需求上配置的负责人（可改选），同时预载一批在职员工供直接选择
+  const [jdOwnerPrefill, setJdOwnerPrefill] = useState<string | null>(null)
+  const openPushModal = () => {
+    pushForm.resetFields()
+    setJdOwnerPrefill(null)
+    setPushModalOpen(true)
+    void searchReviewerOptions('')  // 下拉默认展示前 20 名在职员工，不必先输入关键字
+    if (!candidate.job_requirement_id) return
+    fetchJobRequirements()
+      .then(r => {
+        const jd = (r.data || []).find((j: any) => j.id === candidate.job_requirement_id)
+        if (jd?.owner) setJdOwnerPrefill(jd.owner)
+      })
+      .catch(() => { /* 预填失败不影响手动搜索 */ })
+  }
+
+  // Modal 打开且拿到岗位负责人后填入表单（Form 需随 Modal 挂载后才能 setFieldsValue）
+  useEffect(() => {
+    if (!pushModalOpen || !jdOwnerPrefill) return
+    pushForm.setFieldsValue({ reviewer: jdOwnerPrefill })
+    // 负责人置顶并保留已加载的候选列表，避免覆盖成只剩一项
+    setReviewerOptions(prev => [
+      { value: jdOwnerPrefill, label: `${jdOwnerPrefill}（岗位负责人）` },
+      ...prev.filter(o => o.value !== jdOwnerPrefill),
+    ])
+  }, [pushModalOpen, jdOwnerPrefill, pushForm])
 
   // 推送审核操作
   const handlePushReview = async () => {
@@ -367,7 +535,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       await pushCandidateReview(candidate.id, { pushed_by: 'HR', push_note: v.push_note, reviewer: v.reviewer || undefined })
       message.success('已推送至用人部门审核')
       setPushModalOpen(false); pushForm.resetFields()
-      router.refresh()
+      router.refresh(); loadReviews()
     } catch (err: any) { message.error(err.message || '推送失败') }
     finally { setPushLoading(false) }
   }
@@ -401,12 +569,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       await decideCandidateReview(candidate.id, { decision, review_comment: comment })
       message.success(decision === '已同意' ? '已同意面试' : '已标记为不合适')
-      router.refresh()
+      router.refresh(); loadReviews()
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setReviewLoading(false) }
   }
 
   const nextStatuses = statusTransitions[candidate.status || ''] || []
+  // 当前待处理的审核（部门审核或入职审批），用于展示推给了谁
+  const pendingReview = reviews.find(r => r.status === '待审核') || null
 
   // ─── 基本信息 Tab ───
   const infoTab = (
@@ -446,9 +616,9 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                 <Button icon={<SaveOutlined />} type="primary" loading={saving} onClick={handleSave}>保存修改</Button>
                 <Button icon={<CloseOutlined />} onClick={handleCancel} disabled={saving}>取消</Button>
               </>
-            ) : (
+            ) : canManage ? (
               <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -482,14 +652,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             {isEditing ? <Input value={formData.expected_salary} onChange={e => setFormData({ ...formData, expected_salary: e.target.value })} /> : (candidate.expected_salary || '-')}
           </Descriptions.Item>
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
-          {candidate.status === '已录用' && (
+          {candidate.status === '已录用' && canManage && (
             <Descriptions.Item label="入职操作">
               <Button type="primary" onClick={handlePushOnboarding}>
                 📋 发起入职审批
               </Button>
             </Descriptions.Item>
           )}
-          {candidate.status === '待入职审批' && (
+          {candidate.status === '待入职审批' && canManage && (
             <Descriptions.Item label="入职操作">
               <Space>
                 <Button type="primary" loading={onboardLoading} onClick={handleOnboard}>
@@ -516,11 +686,19 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <h3 className="text-sm font-medium mb-2">推荐等级</h3>
             <Select style={{ width: '100%' }} placeholder="选择推荐等级" value={recommendationLevel || undefined}
               onChange={handleUpdateRecommendation} options={recommendationOptions} loading={updating} />
+            {candidate.resume_url && candidate.job_requirement_id && canManage && SCREENING_PHASE_STATUSES.has(candidate.status || '') && (
+              <Button className="mt-2" block icon={<FileSearchOutlined />}
+                loading={screening}
+                onClick={handleScreenCandidate}
+                title="面试前：按已存简历+岗位JD AI 打分，结果写入推荐等级与匹配报告">
+                AI 简历初筛（免重复上传）
+              </Button>
+            )}
           </div>
-          {/* 推送审核：已筛选状态时显示 */}
-          {candidate.status === '已筛选' && (
+          {/* 推送审核：已筛选状态时显示（HR 操作） */}
+          {candidate.status === '已筛选' && canManage && (
             <div className="mt-2">
-              <Button type="primary" icon={<SendOutlined />} onClick={() => { pushForm.resetFields(); setPushModalOpen(true) }}>
+              <Button type="primary" icon={<SendOutlined />} onClick={openPushModal}>
                 推送给用人部门审核
               </Button>
             </div>
@@ -528,7 +706,9 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           {/* 审核决策：待部门审核时显示 */}
           {candidate.status === '待部门审核' && (
             <div className="mt-2 p-3 rounded bg-orange-50 border border-orange-200">
-              <div className="text-sm font-medium text-orange-700 mb-2">⏳ 待用人部门审核</div>
+              <div className="text-sm font-medium text-orange-700 mb-2">
+                ⏳ 待用人部门审核{pendingReview?.reviewer ? `（审核人：${pendingReview.reviewer}）` : ''}
+              </div>
               <div className="flex gap-2">
                 <Button type="primary" icon={<CheckCircleOutlined />}
                   loading={reviewLoading} onClick={() => handleDecideReview('已同意')}>
@@ -540,7 +720,31 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               </div>
             </div>
           )}
-          {nextStatuses.length > 0 && (
+          {/* 审核记录：历次推送详情（部门审核/入职审批） */}
+          {reviews.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium mb-2">审核记录</h3>
+              <div className="space-y-2">
+                {reviews.map(rv => (
+                  <div key={rv.id} className={`p-2.5 rounded border text-xs space-y-1 ${rv.status === '待审核' ? 'bg-orange-50 border-orange-200' : 'bg-gray-50 border-gray-100'}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">{rv.review_type || '部门审核'}</span>
+                      <Tag color={rv.status === '已同意' ? 'green' : rv.status === '已拒绝' ? 'red' : 'orange'} style={{ fontSize: 10, margin: 0 }}>
+                        {rv.status}
+                      </Tag>
+                    </div>
+                    <div className="text-gray-500">
+                      推送给 <span className="text-gray-700 font-medium">{rv.reviewer || '-'}</span>
+                      {' '}· {rv.pushed_by || '-'} 推送于 {rv.created_at?.slice(0, 10) || '-'}
+                    </div>
+                    {rv.push_note && <div className="text-blue-600">备注：{rv.push_note}</div>}
+                    {rv.review_comment && <div className="text-gray-600">审核意见：{rv.review_comment}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {canManage && nextStatuses.length > 0 && (
             <div>
               <h3 className="text-sm font-medium mb-2">状态流转</h3>
               <div className="flex gap-2">
@@ -567,18 +771,38 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         interviews.length === 0 ? <Empty description="暂无面试记录" className="py-12" /> :
           <div className="space-y-4">
             {interviews.map((iv) => {
-              const eval_ = evaluations[iv.id]
               return (
                 <Card key={iv.id} size="small" title={
                   <div className="flex items-center gap-2">
                     <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
                     <span>{iv.interview_type}</span>
-                    <span className="text-gray-400 text-xs">{iv.interview_date}</span>
+                    <span className="text-gray-400 text-xs">
+                      {iv.interview_date}
+                      {iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
+                    </span>
                     {iv.calendar_event_id && <Tag color="purple" className="text-xs">日历已同步</Tag>}
+                    {feedbacks[iv.id] && (
+                      <Tag color={feedbacks[iv.id].result === '通过' ? 'green' : feedbacks[iv.id].result === '不通过' ? 'red' : 'orange'} className="text-xs">
+                        评价：{feedbacks[iv.id].result}
+                      </Tag>
+                    )}
                   </div>
                 } extra={
                   <div className="flex gap-1">
-                    <Button size="small" onClick={() => { setEditingInterview(iv); interviewForm.setFieldsValue(iv); setInterviewModalOpen(true) }}>编辑</Button>
+                    <Button size="small" onClick={() => {
+                      setEditingInterview(iv)
+                      // DatePicker/TimePicker 需要 dayjs 对象；直接塞字符串日期框显示为空
+                      const [eh, em] = (iv.end_time || '').split(':').map(Number)
+                      interviewForm.setFieldsValue({
+                        ...iv,
+                        interview_start: iv.interview_date
+                          ? dayjs(`${iv.interview_date} ${iv.start_time || '09:00'}`)
+                          : undefined,
+                        end_time: iv.end_time ? dayjs().hour(eh || 0).minute(em || 0).second(0) : undefined,
+                      })
+                      setInterviewModalOpen(true)
+                    }}>编辑</Button>
+                    <Button size="small" onClick={() => openFeedbackModal(iv)}>面试评价</Button>
                     <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消</Button>
                   </div>
                 }>
@@ -597,26 +821,26 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                       onBlur={async (e) => {
                         const val = e.target.value
                         if (val !== iv.transcript_text) {
-                          try { await updateInterview(iv.id, { transcript_text: val || undefined }); message.success('逐字稿已保存') }
-                          catch { /* ignore */ }
+                          try {
+                            await updateInterview(iv.id, { transcript_text: val || undefined })
+                            message.success('逐字稿已保存，胜任度报告后台生成中')
+                            // 同步本地缓存，否则二次编辑同一文本时 diff 判断失真
+                            setInterviews(prev => prev.map(x => x.id === iv.id ? { ...x, transcript_text: val } : x))
+                          } catch (err: any) {
+                            message.error(err?.message || '逐字稿保存失败，请重试')
+                          }
                         }
                       }}
                     />
                   </div>
 
-                  {/* AI评估区域 */}
+                  {/* AI 评估已统一到胜任度报告：单按钮生成，结果在下方报告区展示 */}
                   <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    {eval_ ? (
-                      <AIScoreCard evaluation={eval_} onReEvaluate={() => handleEvaluate(iv.id)} loading={evaluatingId === iv.id} />
-                    ) : (
-                      <Button icon={<RobotOutlined />} loading={evaluatingId === iv.id}
-                        onClick={() => handleEvaluate(iv.id)}
-                        disabled={!iv.transcript_text}>
-                        {iv.transcript_text ? '🤖 AI 评估' : '请先填写逐字稿'}
-                      </Button>
+                    {analysisReports.some((rep: any) => rep.interview_id === iv.id) && (
+                      <Tag color="green" className="text-xs">📊 AI 报告已生成</Tag>
                     )}
                     <Button
-                      icon={<SendOutlined />}
+                      icon={<RobotOutlined />}
                       loading={reportGeneratingId === iv.id}
                       onClick={() => handleGenerateReport(iv.id)}
                       disabled={!(iv.transcript_text || iv.notes)}
@@ -636,7 +860,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <div className="space-y-4">
             {analysisReports.map((r) => (
               <div key={r.id} className="border-b border-[var(--color-hairline)] pb-3 last:border-b-0 last:pb-0">
-                <CandidateAnalysisReportCard report={r} />
+                <CandidateAnalysisReportCard
+                  report={r}
+                  candidateName={candidate.name}
+                  candidatePosition={candidate.position || ''}
+                />
               </div>
             ))}
           </div>
@@ -645,17 +873,42 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
 
       {/* 面试安排 Modal */}
       <Modal title={editingInterview ? '编辑面试' : '安排面试'} open={interviewModalOpen}
-        onCancel={() => setInterviewModalOpen(false)} onOk={handleSaveInterview}>
+        onCancel={() => setInterviewModalOpen(false)} onOk={handleSaveInterview} confirmLoading={interviewSaving}>
         <Form form={interviewForm} layout="vertical">
-          <Form.Item name="interview_type" label="面试类型" initialValue="初试">
+          <Form.Item name="interview_type" label="面试类型" initialValue="初试" rules={[{ required: true, message: '请选择面试类型' }]}>
             <Select options={[{ label: '初试', value: '初试' }, { label: '复试', value: '复试' }, { label: '终试', value: '终试' }]} />
           </Form.Item>
-          <Form.Item name="interview_date" label="面试日期"><DatePicker style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="interviewer" label="面试官"><Input /></Form.Item>
+          <Form.Item name="interview_start" label="面试开始时间" rules={[{ required: true, message: '请选择面试开始时间' }]}>
+            <DatePicker showTime={{ format: 'HH:mm', minuteStep: 5 }} format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="end_time" label="结束时间" dependencies={['interview_start']}
+            rules={[{
+              validator: (_, value) => {
+                if (!value) return Promise.resolve()
+                const start: dayjs.Dayjs | undefined = interviewForm.getFieldValue('interview_start')
+                if (start && !value.isAfter(start, 'minute')) {
+                  return Promise.reject(new Error('结束时间必须晚于开始时间'))
+                }
+                return Promise.resolve()
+              },
+            }]}>
+            <TimePicker format="HH:mm" minuteStep={5} style={{ width: '100%' }} placeholder="不填默认 1 小时" />
+          </Form.Item>
+          <Form.Item name="interviewer" label="面试官" rules={[{ required: true, message: '请选择面试官' }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              onSearch={searchInterviewerOptions}
+              options={interviewerOptions}
+              loading={interviewerSearching}
+              placeholder="输入姓名搜索在职员工"
+              allowClear
+            />
+          </Form.Item>
           <Form.Item name="location" label="面试地点"><Input placeholder="会议室/线上链接等" /></Form.Item>
-          {!editingInterview && (
+          {(!editingInterview || (editingInterview && !editingInterview.calendar_event_id)) && (
             <Form.Item name="create_calendar_event" label="飞书日历" valuePropName="checked" initialValue={false}>
-              <Checkbox>同步创建飞书日历日程</Checkbox>
+              <Checkbox>{editingInterview ? '补建飞书日历日程（此前未同步成功）' : '同步创建飞书日历日程'}</Checkbox>
             </Form.Item>
           )}
           {editingInterview && (
@@ -669,28 +922,38 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         </Form>
       </Modal>
 
-      {/* 推送审核 Modal */}
-      <Modal title="推送候选人给用人部门" open={pushModalOpen} onCancel={() => setPushModalOpen(false)}
-        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送">
-        <Form form={pushForm} layout="vertical" className="mt-2">
-          <div className="text-sm text-gray-500 mb-3">
-            推送至「{candidate.department}」用人部门负责人
-          </div>
-          <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
-            <Select
-              showSearch
-              filterOption={false}
-              loading={reviewerSearching}
-              placeholder="搜索并选择员工（姓名），将发送飞书通知"
-              options={reviewerOptions}
-              onSearch={searchReviewerOptions}
-            />
+      {/* 人工面试评价 Modal */}
+      <Modal title={feedbackInterview ? `面试评价 —— ${feedbackInterview.interview_type}` : '面试评价'}
+        open={feedbackModalOpen}
+        onCancel={() => setFeedbackModalOpen(false)} onOk={handleSaveFeedback} confirmLoading={feedbackSaving}>
+        <Form form={feedbackForm} layout="vertical">
+          <Form.Item name="evaluator" label="评价人" rules={[{ required: true, message: '请填写评价人' }]}>
+            <Input placeholder="默认面试官" />
           </Form.Item>
-          <Form.Item name="push_note" label="推送备注（选填）">
-            <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
+          {FEEDBACK_DIMENSIONS.map((name) => (
+            <div key={name} className="mb-2">
+              <div className="text-sm mb-1">{name}</div>
+              <div className="flex gap-3 items-start">
+                <Form.Item name={['dims', name, 'score']} noStyle>
+                  <Rate />
+                </Form.Item>
+                <Form.Item name={['dims', name, 'comment']} noStyle className="flex-1">
+                  <Input.TextArea rows={1} placeholder={`${name}评语（可选）`} />
+                </Form.Item>
+              </div>
+            </div>
+          ))}
+          <Form.Item name="overall_comment" label="总体评价"><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="result" label="面试结论" rules={[{ required: true, message: '请选择面试结论' }]}>
+            <Select options={[
+              { label: '✅ 通过', value: '通过' },
+              { label: '🤔 待定', value: '待定' },
+              { label: '❌ 不通过', value: '不通过' },
+            ]} />
           </Form.Item>
         </Form>
       </Modal>
+
     </div>
   )
 
@@ -740,8 +1003,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
 
   const tabItems = [
     { key: 'info', label: '基本信息', children: infoTab },
-    { key: 'interviews', label: `面试记录 (${interviews.length})`, children: interviewTab },
-    { key: 'onboarding', label: `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})`, children: onboardingTasksTab },
+    // 面试记录/入职任务是 HR 操作区：用人部门负责人（仅审核）不展示
+    ...(canManage ? [
+      { key: 'interviews', label: `面试记录 (${interviews.length})`, children: interviewTab },
+      { key: 'onboarding', label: `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})`, children: onboardingTasksTab },
+    ] : []),
   ]
 
   return (
@@ -756,6 +1022,31 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         )}
       </div>
       <Tabs items={tabItems} onChange={key => { if (key === 'onboarding') loadOnboardingTasks() }} />
+
+      {/* 推送审核 Modal：置于组件顶层（Tabs 懒渲染未激活面板，
+          放在 interviewTab 内时从「基本信息」tab 点推送弹窗不会出现） */}
+      <Modal title="推送候选人给用人部门" open={pushModalOpen} onCancel={() => setPushModalOpen(false)}
+        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送" forceRender>
+        <Form form={pushForm} layout="vertical" className="mt-2">
+          <div className="text-sm text-gray-500 mb-3">
+            默认推送岗位需求上配置的负责人（可在下方改选），确认后将发送飞书通知
+          </div>
+          <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              loading={reviewerSearching}
+              placeholder="输入姓名搜索；或直接从下方列表选择"
+              options={reviewerOptions}
+              onSearch={searchReviewerOptions}
+              onOpenChange={(open) => { if (open && reviewerOptions.length === 0) void searchReviewerOptions('') }}
+            />
+          </Form.Item>
+          <Form.Item name="push_note" label="推送备注（选填）">
+            <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

@@ -9,6 +9,7 @@ import {
   JobRequirementCreateInput,
   JobRequirementUpdateInput,
   InterviewCreateInput,
+  InterviewFeedbackInput,
   InterviewUpdateInput,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrText, fetchHrDownload } from './_helpers'
@@ -32,21 +33,56 @@ export interface ScreeningSection {
   detail: string
 }
 
-/** 胜任度打分表行（维度按岗位定制） */
+/** 胜任度打分表行：group 为四组固定框架，组内维度按岗位定制 */
 export interface ScreeningScoreRow {
+  group: '专业能力' | '基础匹配' | '发展潜力' | '软实力' | null
   dimension: string
   score: number
   comment: string
 }
 
+/** 候选人信息卡片（AI 结构化解析，对齐飞书 AI 直聘筛选表） */
+export interface CandidateProfile {
+  education?: string
+  school?: string
+  major?: string
+  current_position?: string
+  current_company?: string
+  expected_position?: string
+  intended_city?: string
+  work_years?: number
+  age?: string
+  gender?: string
+  employment_status?: string
+  skills?: string[]
+  phone?: string
+  email?: string
+}
+
+/** 能力维度评估子项（四组固定：专业能力/基础匹配/发展潜力/软实力） */
+export interface DimensionAssessmentItem {
+  label: string
+  text: string
+}
+
 export interface ResumeScreeningResultItem {
   id: string
   job_requirement_id: string
+  /** 所属岗位（岗位已删时为空，前端回落 jd_snapshot） */
+  job_name: string | null
+  job_department: string | null
+  /** 岗位侧候选人存量简历直接初筛时回链的候选人（上传初筛→转候选人为空） */
+  candidate_id: string | null
   jd_snapshot: string
   file_name: string
   candidate_name: string | null
+  core_evaluation: string | null
+  talent_category: 'A' | 'B' | 'C' | null
+  candidate_profile: CandidateProfile
+  dimension_assessment: Partial<Record<'专业能力' | '基础匹配' | '发展潜力' | '软实力', DimensionAssessmentItem[]>>
+  match_report: string | null
   total_score: number
-  recommendation: '推荐' | '待定' | '不推荐'
+  recommendation: '强烈推荐' | '推荐' | '待定' | '不推荐'
   advantages: ScreeningSection[]
   flaws: ScreeningSection[]
   score_table: ScreeningScoreRow[]
@@ -72,11 +108,33 @@ export async function screenResumeAction(
 }
 
 export async function fetchScreeningResults(
-  jdId: string,
+  jdId?: string,
 ): Promise<{ data: ResumeScreeningResultItem[] }> {
-  return fetchHrApi(`/hr/resume-screening?job_requirement_id=${jdId}`, {
+  const qs = jdId ? `?job_requirement_id=${jdId}` : ''
+  return fetchHrApi(`/hr/resume-screening${qs}`, {
     errorMessage: '获取筛选结果失败',
   })
+}
+
+/** 查看筛选结果存档的简历原文（PDF base64，用于排名总览页内预览）。 */
+export async function fetchScreeningResumePreview(
+  resultId: string,
+): Promise<{ base64: string; filename: string | null }> {
+  return fetchHrDownload(`/hr/resume-screening/${resultId}/resume-preview`, {
+    errorMessage: '简历加载失败',
+  })
+}
+
+/** 对已建档候选人的存量简历直接 AI 初筛（免重复上传，结果回写候选人）。 */
+export async function screenCandidateAction(
+  candidateId: string,
+): Promise<{ data: ResumeScreeningResultItem; message: string }> {
+  const res = await fetchHrApi<{ data: ResumeScreeningResultItem; message: string }>(
+    `/hr/resume-screening/candidate/${candidateId}`,
+    { method: 'POST', errorMessage: 'AI 初筛失败' },
+  )
+  revalidatePath('/hr/recruitment')
+  return res
 }
 
 export async function convertScreeningResult(
@@ -168,25 +226,6 @@ export async function fetchCandidates(params: Record<string, unknown> = {}): Pro
   return fetchHrApi(`/hr/candidates${qs}`, { errorMessage: '获取候选人列表失败' })
 }
 
-/** 批量导入候选人（Excel 上传） */
-export async function uploadCandidates(formData: FormData): Promise<{
-  code: number; message: string; data: { created: number; updated: number; errors?: string[] }
-}> {
-  return fetchHrApi('/hr/candidates/upload', {
-    method: 'POST',
-    body: formData,
-    errorMessage: '上传失败',
-  })
-}
-
-/** 下载候选人导入模板 */
-export async function downloadCandidateTemplate(): Promise<{ base64: string; filename: string }> {
-  const { base64, filename } = await fetchHrDownload('/hr/candidates/template', {
-    errorMessage: '下载模板失败',
-  })
-  return { base64, filename: filename || 'candidate_import_template.xlsx' }
-}
-
 export async function fetchCandidateById(id: string): Promise<{ code: number; message: string; data: unknown }> {
   return fetchHrApi(`/hr/candidates/${id}`, { errorMessage: '获取候选人失败' })
 }
@@ -249,10 +288,6 @@ export async function fetchCandidateInterviews(candidateId: string): Promise<{ d
   return fetchHrApi(`/hr/candidates/${candidateId}/interviews`, { errorMessage: '获取面试列表失败' })
 }
 
-export async function fetchInterviewEvaluation(interviewId: string): Promise<{ data: any }> {
-  return fetchHrApi(`/hr/interviews/${interviewId}/evaluation`, { errorMessage: '获取AI评估结果失败' })
-}
-
 export async function createInterview(data: InterviewCreateInput) {
   const res = await fetchHrApi('/hr/interviews', {
     method: 'POST',
@@ -282,12 +317,34 @@ export async function deleteInterview(id: string) {
   return res
 }
 
-// ─── AI评估 ───
+// ─── 面试总览 ───
 
-export async function evaluateInterview(id: string) {
-  const res = await fetchHrApi(`/hr/interviews/${id}/evaluate`, {
+export async function fetchInterviewsOverview(params: {
+  date_from?: string
+  date_to?: string
+  interviewer?: string
+  status?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<{ data: any[]; meta?: { total: number } }> {
+  const qs = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+    .join('&')
+  return fetchHrApi(`/hr/interviews${qs ? `?${qs}` : ''}`, { errorMessage: '获取面试总览失败' })
+}
+
+// ─── 人工面试评价 ───
+
+export async function fetchInterviewFeedback(interviewId: string): Promise<{ data: any }> {
+  return fetchHrApi(`/hr/interviews/${interviewId}/feedback`, { errorMessage: '获取面试评价失败' })
+}
+
+export async function saveInterviewFeedback(interviewId: string, data: InterviewFeedbackInput) {
+  const res = await fetchHrApi(`/hr/interviews/${interviewId}/feedback`, {
     method: 'POST',
-    errorMessage: 'AI评估失败',
+    body: JSON.stringify(data),
+    errorMessage: '保存面试评价失败',
   })
   revalidatePath('/hr/recruitment')
   return res
@@ -319,6 +376,10 @@ export async function previewOffer(candidateId: string, formData: FormData): Pro
 export async function fetchPendingReviews(reviewer?: string): Promise<{ data: any[] }> {
   const qs = buildQueryString({ reviewer })
   return fetchHrApi(`/hr/candidates/pending-review${qs}`, { errorMessage: '获取待审核列表失败' })
+}
+
+export async function fetchCandidateReviews(candidateId: string): Promise<{ data: any[] }> {
+  return fetchHrApi(`/hr/candidates/${candidateId}/reviews`, { errorMessage: '获取审核记录失败' })
 }
 
 export async function fetchCandidateComparison(jobRequirementId: string): Promise<{ data: unknown[] }> {

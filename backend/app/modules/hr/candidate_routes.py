@@ -2,7 +2,6 @@
 
 import os
 from uuid import UUID, uuid4
-from zipfile import BadZipFile
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -64,6 +63,9 @@ async def parse_cv(file: UploadFile = Form(..., alias="resume")):
     except Exception as e:
         # 固定文案：不把内部异常细节回传客户端
         raise HTTPException(400, "简历解析失败：文件损坏、加密或非标准 PDF") from e
+    # 学校/专业低置信或缺失时交 LLM 复核（失败静默保留规则值，不阻断上传）
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    r = await enhance_parsed_with_llm(r)
     # 文件名加 uuid 前缀，避免同名简历互相覆盖
     object_key = f"resumes/{uuid4().hex[:8]}_{safe_name}"
     if is_enabled():
@@ -90,7 +92,15 @@ async def list_candidates(
     candidate_type: str | None = Query(None, description="按类型筛选: 普工/职能"),
     page_params: PageParams = Depends(),
     service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    # 数据范围收敛（用人部门视角）：非 all 范围只看授权部门岗位下 + 本人审核的候选人
+    scope_kwargs: dict = {}
+    if not hr_scope.is_unrestricted:
+        scope_kwargs = {
+            "departments": sorted(hr_scope.scoped_departments),
+            "reviewer": hr_scope.user.name,
+        }
     rows, total = await service.list_all(
         job_requirement_id=job_requirement_id,
         status=status,
@@ -98,59 +108,11 @@ async def list_candidates(
         candidate_type=candidate_type,
         page=page_params.page,
         page_size=page_params.page_size,
+        **scope_kwargs,
     )
     return success_response(
         data=[CandidateResponse.model_validate(r).model_dump(mode="json") for r in rows],
         meta={"page": page_params.page, "page_size": page_params.page_size, "total": total},
-    )
-
-
-@router.post("/candidates/upload", summary="批量导入候选人")
-async def upload_candidates(
-    file: UploadFile,
-    service: CandidateService = Depends(get_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """上传 Excel 文件批量导入候选人，按姓名+手机/邮箱自动去重新增或更新。"""
-    # openpyxl 只支持 .xlsx；.xls 走 openpyxl 会抛 InvalidFileException（非
-    # ValueError 子类），旧代码放行 .xls 必然 500
-    if not file.filename or not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(400, "仅支持 .xlsx 格式（.xls 旧格式请先用 Excel 另存为 .xlsx）")
-    from openpyxl.utils.exceptions import InvalidFileException
-    try:
-        content = await file.read()
-        result = await service.upload_candidates(content, operator=hr_scope.user.name)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except (InvalidFileException, BadZipFile) as e:
-        # openpyxl 对损坏文件抛 InvalidFileException / BadZipFile（都不是
-        # ValueError 子类），同样转 400 而不是 500
-        raise HTTPException(400, "文件不是有效的 .xlsx（可能已损坏或实际为其他格式）") from e
-    return success_response(
-        data=result,
-        message=f"新增 {result['created']}，更新 {result['updated']}"
-    )
-
-
-@router.get("/candidates/template", summary="下载候选人导入模板")
-async def download_candidate_template():
-    """下载候选人批量导入 Excel 模板"""
-    from io import BytesIO
-
-    from openpyxl import Workbook
-
-    wb = Workbook()
-    ws = wb.active
-    headers = list(CandidateService._CANDIDATE_UPLOAD_COLUMN_MAP.keys())
-    ws.append(headers)
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=candidate_import_template.xlsx"},
     )
 
 
@@ -176,11 +138,17 @@ async def list_pending_review(
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
+    from app.platform.permission.deps import get_user_permissions
     rv_service = CandidateReviewService(session)
-    # 缺省按当前用户过滤（“待我审核”语义），显式传 reviewer 时按指定人查询
-    rows = await rv_service.list_pending(
-        reviewer=reviewer or hr_scope.user.name or None
-    )
+    # 缺省按当前用户过滤（“待我审核”语义）；显式 reviewer 仅管理权限可用（代查），
+    # 防止任意 read 权限者枚举他人待审列表
+    if reviewer:
+        perms = await get_user_permissions(str(hr_scope.user.id), session)
+        if "hr:recruitment:manage" not in perms:
+            reviewer = None
+    target = reviewer or hr_scope.user.name
+    # 用户无名时 fail-closed 返回空，而不是放开成全公司待审列表
+    rows = await rv_service.list_pending(reviewer=target) if target else []
     return success_response(data=[{
         "review": CandidateReviewResponse.model_validate(row["review"]).model_dump(mode="json"),
         "candidate": CandidateResponse.model_validate(row["candidate"]).model_dump(mode="json"),
@@ -192,8 +160,13 @@ async def list_pending_review(
 
 
 @router.get("/candidates/{cid}", summary="候选人详情")
-async def get_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
+async def get_candidate(
+    cid: UUID,
+    service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     r = await service.get(cid)
+    await service.ensure_accessible(r, hr_scope)
     return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"))
 
 
@@ -223,8 +196,12 @@ async def push_review(
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
+        # 发起人取当前用户（前端占位 'HR' 时用真实姓名，保证审核结果通知能找到推送人）
+        pushed_by = payload.pushed_by
+        if not pushed_by or pushed_by == "HR":
+            pushed_by = hr_scope.user.name or "HR"
         r = await rv_service.push(
-            cid, payload.pushed_by or "HR", payload.push_note, payload.reviewer,
+            cid, pushed_by, payload.push_note, payload.reviewer,
             operator=hr_scope.user.name,
         )
         return success_response(data={"id": str(r.id), "status": r.status}, message="已推送至用人部门审核")
@@ -342,15 +319,38 @@ async def onboard_candidate(
     service: CandidateService = Depends(get_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    from sqlalchemy import select
+
+    from app.modules.hr.models import Employee
     from app.modules.hr.service import NotFoundException
     try:
         _, onboarding, emp_no = await service.onboard(cid, operator=hr_scope.user.name)
         await service.repo.session.commit()
-        return success_response(data={"id": str(onboarding.id), "employee_number": emp_no}, message="入职成功")
     except NotFoundException as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+    # 入职落库成功后，自动给新员工飞书发信息收集表单（独立事务，失败不影响入职结果）
+    from app.modules.hr.employee_info_collection_service import create_collections
+    session = service.repo.session
+    emp = (await session.execute(
+        select(Employee).where(Employee.employee_number == emp_no, Employee.is_deleted.is_(False))
+    )).scalar_one_or_none()
+    info_sent, info_note = False, "未发起"
+    if emp is not None:
+        result = await create_collections(session, [emp.id], operator=hr_scope.user.name)
+        if result["created"] > 0:
+            info_sent, info_note = True, "已发送"
+        else:
+            info_note = result["skipped"][0]["reason"] if result["skipped"] else "未发起"
+
+    message = f"入职成功，工号 {emp_no}"
+    message += "；信息收集表单已发送至员工飞书" if info_sent else f"；信息收集未发送（{info_note}）"
+    return success_response(
+        data={"id": str(onboarding.id), "employee_number": emp_no, "info_collection_sent": info_sent},
+        message=message,
+    )
 
 
 @router.post("/candidates/{cid}/decide-review", summary="审核候选人")
@@ -465,12 +465,34 @@ async def get_status_logs(cid: UUID, service: CandidateService = Depends(get_ser
     } for log in logs])
 
 
+@router.get("/candidates/{cid}/reviews", summary="候选人审核记录列表")
+async def list_candidate_reviews(
+    cid: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """历次部门审核 / 入职审批记录（推给了谁、备注、结果）。"""
+    from app.modules.hr.repository import CandidateReviewRepository
+    from app.modules.hr.schemas import CandidateReviewResponse
+
+    # 复用详情校验：候选人不存在时 get 抛 404，而不是返回空列表
+    await CandidateService(session).get(cid)
+    reviews = await CandidateReviewRepository(session).list_by_candidate(cid)
+    return success_response(data=[
+        CandidateReviewResponse.model_validate(rv).model_dump(mode="json") for rv in reviews
+    ])
+
+
 # ─── 简历预览 ───
 
 
 @router.get("/candidates/{cid}/resume-preview", summary="简历预览")
-async def resume_preview(cid: UUID, service: CandidateService = Depends(get_service)):
+async def resume_preview(
+    cid: UUID,
+    service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     r = await service.get(cid)
+    await service.ensure_accessible(r, hr_scope)
     if not r.resume_url:
         raise HTTPException(404, "无简历文件")
     if r.resume_url.startswith("minio://"):

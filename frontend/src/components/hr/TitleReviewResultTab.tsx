@@ -243,7 +243,7 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
           scroll={{ x: 900 }}
         />
       ) : (
-        <Alert type="info" showIcon message="您没有查看评审结果与投票明细的权限（hr:title:scores:read），如需查看请联系管理员配置。" />
+        <Alert type="info" showIcon title="您没有查看评审结果与投票明细的权限（hr:title:scores:read），如需查看请联系管理员配置。" />
       )}
     </div>
   )

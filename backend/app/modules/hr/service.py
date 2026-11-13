@@ -2,19 +2,24 @@
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy import update as _update_stmt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
     Candidate,
-    CandidateAiEvaluation,
     CandidateAnalysisReport,
     CandidateReview,
     CandidateStatusLog,
@@ -23,6 +28,8 @@ from app.modules.hr.models import (
     Employee,
     HrDepartment,
     Interview,
+    InterviewFeedback,
+    InterviewStatusLog,
     JobRequirement,
     MonthlyPerformanceEvaluation,
     OffboardingRecord,
@@ -36,7 +43,6 @@ from app.modules.hr.models import (
 from app.modules.hr.repository import (
     AnnualTrainingPlanItemRepository,
     AnnualTrainingPlanRepository,
-    CandidateAiEvaluationRepository,
     CandidateAnalysisReportRepository,
     CandidateRepository,
     CandidateReviewRepository,
@@ -44,6 +50,7 @@ from app.modules.hr.repository import (
     DepartmentRepository,
     DepartureRecordRepository,
     EmployeeRepository,
+    InterviewFeedbackRepository,
     InterviewRepository,
     JobRequirementRepository,
     OffboardingRecordRepository,
@@ -66,6 +73,7 @@ from app.modules.hr.schemas import (
     EmployeeCreate,
     EmployeeUpdate,
     InterviewCreate,
+    InterviewFeedbackIn,
     InterviewUpdate,
     JobRequirementCreate,
     JobRequirementUpdate,
@@ -79,6 +87,9 @@ from app.modules.hr.schemas import (
     TrainingLedgerCreate,
     TrainingLedgerUpdate,
 )
+
+if TYPE_CHECKING:
+    from app.modules.hr.deps import HrAccessContext
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +157,7 @@ class EmployeeService:
         """新员工进入培训名单（软删同工号行复活并刷新初值，避免唯一约束冲突）。"""
         from sqlalchemy import select as _select
 
-        from app.modules.hr.employee_sync.config import TRAINING_ROSTER_FIELDS
+        from app.modules.hr.employee_sync.config import ROSTER_INITIAL_FIELDS
         from app.modules.hr.models import TrainingRosterProfile
         existing_profile = (await self.repo.session.execute(
             _select(TrainingRosterProfile).where(
@@ -156,8 +167,15 @@ class EmployeeService:
         profile = existing_profile or TrainingRosterProfile(
             employee_number=employee.employee_number,
         )
-        for _label, attr in TRAINING_ROSTER_FIELDS.items():
+        # 白名单 + level（level 不外显，但 report_level 分级依赖它）
+        for attr in ROSTER_INITIAL_FIELDS:
             setattr(profile, attr, getattr(employee, attr, None))
+        if not profile.department:
+            profile.department = "未分类"
+        if not profile.position:
+            profile.position = ""
+        if not profile.name:
+            profile.name = ""
         profile.is_deleted = False  # 历史软删行复活并刷新初值（工号重现=重新进入名单）
         if existing_profile is None:
             self.repo.session.add(profile)
@@ -215,13 +233,11 @@ class EmployeeService:
             name=employee.name,
             domain_account=employee.domain_account,
             department=employee.department,
-            team=employee.team,
             position=employee.position,
             job_category=employee.job_category,
             status_category=employee.status_category,
             is_employed="是",
             hire_date=employee.hire_date,
-            factory_entry_date=employee.factory_entry_date,
             education=employee.education,
             school=employee.school,
             major=employee.major,
@@ -236,22 +252,20 @@ class EmployeeService:
         "姓名": "name",
         "域账号": "domain_account",
         "体现部门": "department",
-        "部门": "actual_department",
-        "班组": "team",
+        # 新数据源只有一个「部门」概念：直接落体现部门（权限判定/培训名单
+        # NOT NULL/看板分组都吃 department）
+        "部门": "department",
         "职位": "position",
-        "岗位": "job_category",
+        # 新数据源「岗位」是岗位族（会计/采购/IT…），作为职位；职类由「职能分类」承载
+        "岗位": "position",
         "体现岗位": "position",
         "职务": "duty",
         "岗位类别": "job_category",
         "级别": "level",
         "职级": "level",
-        "兼任部门": "concurrent_departments",
-        "资格": "qualifications",
         "证书": "certificates",
-        "资格类型": "qualification_type",
         "性别": "gender",
         "籍贯": "native_place",
-        "政治面貌": "political_status",
         "婚姻状况": "marital_status",
         "户籍类型": "household_type",
         "用工性质": "status_category",
@@ -261,98 +275,83 @@ class EmployeeService:
         "出生月份": "birth_month",
         "出生日": "birth_day",
         "出生年月": "_birth_date",
-        "年龄": "age",
         "参加工作时间": "work_start_date",
-        "进厂时间": "factory_entry_date",
-        "进丽珠时间": "livo_entry_date",
         "入职日期": "hire_date",
         "毕业时间": "graduation_date",
-        "工龄": "work_years",
-        "厂龄": "factory_tenure",
         "公司工龄": "company_tenure",
         "学历": "education",
         "分类": "classification",
         "毕业学校": "school",
         "毕业院校": "school",
         "专业": "major",
-        "品种": "variety",
-        "兼任品种": "concurrent_variety",
         "身份证号": "id_card",
         "身份证号码": "id_card",
         "身份证有效期": "id_card_expiry",
-        "身份证地址": "id_card_address",
         "现居住地址": "current_address",
-        "合同类型": "contract_type",
         "合同开始日期": "contract_start_date",
         "合同结束日期": "contract_end_date",
-        "合同开始日期2": "contract_start_2",
-        "合同结束日期2": "contract_end_2",
-        "合同开始日期3": "contract_start_3",
-        "合同结束日期3": "contract_end_3",
-        "合同开始日期4": "contract_start_4",
-        "合同结束日期4": "contract_end_4",
         "手机": "phone",
-        "邮箱": "email",
         "紧急联系人": "emergency_contact_name",
         "紧急联系人电话": "emergency_contact_phone",
         "紧急联系人关系": "emergency_contact_relation",
-        "银行卡号": "bank_account",
-        "培训编号": "training_id",
         "调动历史": "transfer_history",
-        "备注": "remarks",
-        # Excel 扩展字段
-        "部门管理者": "dept_manager",
-        "额外管理者": "additional_manager",
         "报表用职级": "report_grade",
-        "部门负责人/一级培训师": "dept_head_trainer",
-        "入职安全培训日期": "safety_training_date",
-        "入职安全培训成绩": "safety_training_score",
-        "企业文化培训日期": "culture_training_date",
-        "GMP基础培训时间": "gmp_training_date",
         "离职时间": "departure_date",
+        # ── 新数据源（飞书「员工信息表」）列名别名；追加在末尾保证导出列头稳定 ──
+        "户口类型": "household_type",
+        "出生日期": "_birth_date",
+        "司龄": "company_tenure",
+        "学习形式": "classification",
+        "联系电话": "phone",
+        "居住地址": "current_address",
+        "紧急联系人-姓名": "emergency_contact_name",
+        "紧急联系人-联系电话": "emergency_contact_phone",
+        "紧急联系人-关系": "emergency_contact_relation",
+        "离职日期": "departure_date",
+        "任命与岗位调动": "transfer_history",
+        "岗位职级": "report_grade",
+        "职能分类": "job_category",
+        "员工账号": "feishu_open_id",
+        "民族": "ethnicity",
+        "离职原因": "departure_reason",
+        "学位类型": "degree_type",
+        "毕业证书": "graduation_certificate",
+        "人力资源分析": "hr_analysis",
     }
 
     # Excel 上传时，以下字段全部以 Excel 为准（Excel 中未出现的字段置空）
     _EXCEL_RESETTABLE_FIELDS: set[str] = {
-        "name", "domain_account", "department", "actual_department", "team", "position",
-        "job_category", "level", "concurrent_departments",
-        "qualifications", "qualification_type",
-        "gender", "native_place", "political_status", "marital_status",
+        "name", "domain_account", "department", "position",
+        "job_category", "level",
+        "gender", "native_place", "marital_status",
         "household_type", "status_category",
-        "birth_year", "birth_month", "birth_day", "age",
-        "work_start_date", "factory_entry_date", "livo_entry_date",
+        "birth_year", "birth_month", "birth_day",
+        "work_start_date",
         "hire_date", "graduation_date",
-        "work_years", "factory_tenure", "company_tenure",
-        "education", "classification", "school", "major", "variety",
-        "id_card", "id_card_expiry", "id_card_address", "current_address",
-        "contract_type", "contract_start_date", "contract_end_date",
-        "contract_start_2", "contract_end_2",
-        "contract_start_3", "contract_end_3",
-        "contract_start_4", "contract_end_4",
-        "phone", "email",
+        "company_tenure",
+        "education", "classification", "school", "major",
+        "id_card", "id_card_expiry", "current_address",
+        "contract_start_date", "contract_end_date",
+        "phone",
         "emergency_contact_name", "emergency_contact_phone",
         "emergency_contact_relation",
-        "bank_account", "training_id", "transfer_history", "remarks",
-        "certificates", "concurrent_variety",
-        # Excel 扩展字段
-        "duty", "dept_manager", "additional_manager", "report_grade",
-        "dept_head_trainer", "safety_training_date", "safety_training_score",
-        "culture_training_date", "gmp_training_date", "departure_date",
+        "transfer_history",
+        "certificates",
+        "duty", "report_grade", "departure_date",
+        # 新数据源字段
+        "ethnicity", "departure_reason", "degree_type",
+        "graduation_certificate", "hr_analysis",
     }
 
     _DATE_FIELDS: set[str] = {
-        "work_start_date", "factory_entry_date", "livo_entry_date",
+        "work_start_date",
         "hire_date", "graduation_date", "id_card_expiry",
         "contract_start_date", "contract_end_date",
-        "contract_start_2", "contract_end_2",
-        "contract_start_3", "contract_end_3",
-        "contract_start_4", "contract_end_4",
-        "safety_training_date", "culture_training_date",
-        "gmp_training_date", "departure_date",
+        "departure_date",
     }
 
     _INT_FIELDS: set[str] = {
-        "birth_year", "birth_month", "birth_day", "age", "work_years",
+        "birth_year", "birth_month", "birth_day",
     }
 
     # 常见日期格式（按优先级从高到低排序）
@@ -1039,11 +1038,11 @@ class DepartmentService:
 
         from app.modules.hr.models import Employee
         for dept in departments:
+            # 人数不过滤状态：与看板部门分布同口径（仅软删不计）
             count = await self.repo.session.scalar(
                 select(func.count()).select_from(Employee).where(
                     Employee.department == dept.name,
                     Employee.is_deleted.is_(False),
-                    Employee.status != "离职",
                 )
             )
             dept.employee_count = count or 0
@@ -1565,8 +1564,10 @@ class JobRequirementService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = JobRequirementRepository(session)
 
-    async def list_all(self, *, status: str | None = None) -> list[JobRequirement]:
-        return await self.repo.list_all(status=status)
+    async def list_all(
+        self, *, status: str | None = None, departments: list[str] | None = None,
+    ) -> list[JobRequirement]:
+        return await self.repo.list_all(status=status, departments=departments)
 
     async def get(self, req_id: UUID) -> JobRequirement:
         req = await self.repo.get_by_id(req_id)
@@ -1584,9 +1585,16 @@ class JobRequirementService:
             setattr(req, k, v)
         return await self.repo.update(req)
 
-    async def delete(self, req_id: UUID) -> None:
+    async def delete(self, req_id: UUID) -> dict:
+        """删除岗位需求（仅限已关闭）：级联清理名下未入职候选人。
+
+        招聘中岗位必须先关闭再删——防止误删进行中的需求及其候选人；
+        已入职候选人不清理（已生成员工档案与入职记录，留作溯源）。
+        """
         req = await self.get(req_id)
-        await self.repo.soft_delete(req.id)
+        if req.status == "招聘中":
+            raise ValueError("岗位仍在招聘中，请先在「编辑」中改为已关闭，再删除")
+        return await self.repo.soft_delete_with_candidates(req.id)
 
 
 class CandidateService:
@@ -1597,11 +1605,13 @@ class CandidateService:
     async def list_all(
         self, *, job_requirement_id: UUID | None = None, status: str | None = None,
         keyword: str | None = None, candidate_type: str | None = None,
+        departments: list[str] | None = None, reviewer: str | None = None,
         page: int = 1, page_size: int = 100,
     ) -> tuple[list[Candidate], int]:
         return await self.repo.list_all(
             job_requirement_id=job_requirement_id, status=status,
             keyword=keyword, candidate_type=candidate_type,
+            departments=departments, reviewer=reviewer,
             page=page, page_size=page_size,
         )
 
@@ -1610,6 +1620,26 @@ class CandidateService:
         if not c:
             raise NotFoundException("候选人", str(candidate_id))
         return c
+
+    async def ensure_accessible(self, candidate: Candidate, hr_scope: "HrAccessContext") -> None:
+        """招聘数据范围校验：非 all 范围用户仅可访问授权部门岗位下、或本人审核过的候选人。
+
+        飞书审核卡片深链直达候选人详情，审核人（含历史审核人）命中即放行。
+        """
+        if hr_scope.is_unrestricted:
+            return
+        if hr_scope.scoped_departments:
+            if candidate.department in hr_scope.scoped_departments:
+                return
+            if candidate.job_requirement_id:
+                jd = await JobRequirementRepository(self.repo.session).get_by_id(candidate.job_requirement_id)
+                if jd and jd.department in hr_scope.scoped_departments:
+                    return
+        if await CandidateReviewRepository(self.repo.session).exists_reviewer(
+            candidate.id, hr_scope.user.name,
+        ):
+            return
+        raise ForbiddenException("数据范围限制：仅可访问本部门岗位或您审核的候选人")
 
     async def create(self, data: CandidateCreate, operator: str | None = None) -> Candidate:
         c = Candidate(**data.model_dump())
@@ -1633,158 +1663,6 @@ class CandidateService:
         if c.status == "已入职":
             raise ValueError("已入职候选人不可删除（已生成员工档案与入职记录），如需处理请走离职流程")
         await self.repo.soft_delete(c.id)
-
-    # ─── Excel 批量导入 ───
-
-    _CANDIDATE_UPLOAD_COLUMN_MAP: dict[str, str] = {
-        "姓名": "name",
-        "手机": "phone",
-        "邮箱": "email",
-        "应聘岗位": "position",
-        "部门": "department",
-        "性别": "gender",
-        "学校": "school",
-        "学历": "education",
-        "专业": "major",
-        "毕业时间": "graduation_date",
-        "推荐等级": "recommendation_level",
-        "候选人类型": "candidate_type",
-        "简历来源": "source",
-        "期望薪资": "expected_salary",
-        "当前公司": "current_company",
-        "工作年限": "work_years",
-        "备注": "notes",
-    }
-
-    _CANDIDATE_DATE_FIELDS: set[str] = {"graduation_date"}
-    _CANDIDATE_INT_FIELDS: set[str] = {"work_years"}
-
-    async def upload_candidates(self, file_bytes: bytes, operator: str | None = None) -> dict:
-        """从 Excel 批量导入候选人，按姓名+手机/邮箱 upsert。"""
-        from io import BytesIO
-
-        from openpyxl import load_workbook
-        from sqlalchemy import text as sa_text
-
-        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            raise ValueError("文件为空")
-
-        header = [str(c).strip() if c else "" for c in rows[0]]
-        col_map: dict[int, str] = {}
-        for idx, col_name in enumerate(header):
-            field = self._CANDIDATE_UPLOAD_COLUMN_MAP.get(col_name)
-            if field:
-                col_map[idx] = field
-
-        if "name" not in col_map.values():
-            raise ValueError("缺少「姓名」列，无法导入")
-
-        created = 0
-        updated = 0
-        errors: list[str] = []
-
-        conn = await self.repo.session.connection()
-        sp_id = 0
-
-        for row_idx, row in enumerate(rows[1:], start=2):
-            if all(c is None for c in row):
-                continue
-            sp_id += 1
-            sp_name = f"cand_row_{sp_id}"
-            try:
-                await conn.execute(sa_text(f"SAVEPOINT {sp_name}"))
-                data: dict = {}
-                name = ""
-                phone = None
-                email = None
-                for col_idx, field_name in col_map.items():
-                    val = row[col_idx] if col_idx < len(row) else None
-                    if val is None or (isinstance(val, str) and val.strip() == ""):
-                        continue
-                    if isinstance(val, str):
-                        val = val.strip()
-                    if field_name == "name":
-                        name = str(val)
-                        continue  # name 单独传参，不写入 data（否则 Candidate(name=name, **data) 会重复传参）
-                    elif field_name == "phone":
-                        phone = self._normalize_phone(val)
-                    elif field_name == "email":
-                        email = str(val)
-                    if field_name in self._CANDIDATE_DATE_FIELDS:
-                        parsed = self._parse_date_value(val)
-                        if parsed:
-                            val = parsed
-                        else:
-                            continue
-                    elif field_name in self._CANDIDATE_INT_FIELDS:
-                        try:
-                            val = int(float(str(val)))
-                        except (ValueError, TypeError):
-                            continue
-                    data[field_name] = val
-
-                if not name:
-                    raise ValueError("姓名为空")
-                data.setdefault("status", "待筛选")
-                data.setdefault("candidate_type", "职能")
-
-                obj, is_new = await self.repo.upsert(name, phone, email, data)
-                if is_new:
-                    created += 1
-                    # 新候选人记录初始状态日志（与手工创建行为一致）
-                    self.repo.session.add(CandidateStatusLog(
-                        candidate_id=obj.id, from_status=None, to_status=obj.status,
-                        remark="Excel 导入", operator=operator,
-                    ))
-                else:
-                    updated += 1
-                await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
-            except Exception as e:
-                await conn.execute(sa_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
-                try:
-                    await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
-                except Exception:
-                    pass
-                errors.append(f"第{row_idx}行: {e}")
-
-        return {"created": created, "updated": updated, "errors": errors}
-
-    @staticmethod
-    def _normalize_phone(val) -> str:
-        """Excel 数字单元格的手机号读出来是 13800000000.0，归一为纯数字串。"""
-        if isinstance(val, float) and val == int(val):
-            return str(int(val))
-        if isinstance(val, int):
-            return str(val)
-        return str(val).strip()
-
-    @staticmethod
-    def _parse_date_value(val) -> date | None:
-        """日期解析，复用 EmployeeService 模式。"""
-        from datetime import datetime as _dt
-        if isinstance(val, (int, float)):
-            try:
-                return date.fromordinal(date(1900, 1, 1).toordinal() + int(val) - 2)
-            except Exception:
-                return None
-        if isinstance(val, _dt):
-            return val.date()
-        if isinstance(val, date):
-            return val
-        import re as _re
-        s = str(val).strip()
-        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y年%m月%d日"]:
-            try:
-                return _dt.strptime(s, fmt).date()
-            except ValueError:
-                continue
-        m = _re.match(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
-        if m:
-            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        return None
 
     async def transition_status(
         self, candidate_id: UUID, new_status: str, remark: str | None = None,
@@ -1849,6 +1727,8 @@ class CandidateService:
         # 与 create_employee 副作用对齐：同步建员工档案 + 培训台账页 +
         # 培训名单行，否则招聘入职者游离于培训名单/台账体系外
         #（HR 后续在员工总台账正式建档时可按工号合并）
+        # 字段带出：候选人档案已有的基本信息（性别/毕业时间等）随入职落档，
+        # 避免入职后档案大面积空缺等员工自填补录；candidate_id 回链供溯源
         employee = Employee(
             employee_number=emp_no,
             name=c.name or "",
@@ -1856,10 +1736,12 @@ class CandidateService:
             position=c.position or "未分配",
             hire_date=date_type.today(),
             phone=c.phone,
-            email=c.email,
+            gender=c.gender,
             education=c.education,
             school=c.school,
             major=c.major,
+            graduation_date=c.graduation_date,
+            candidate_id=candidate_id,
             status="在职",
         )
         self.repo.session.add(employee)
@@ -1905,8 +1787,53 @@ class InterviewService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = InterviewRepository(session)
 
+    # 面试状态机白名单（镜像 _CANDIDATE_TRANSITIONS 模式）：
+    # 待安排→已安排/已完成（无日历的面试实际发生了可直接完成）/已取消；
+    # 已安排→已完成/已取消/待安排（改期回退）；已完成/已取消为终态
+    _TRANSITIONS: dict[str, set[str]] = {
+        "待安排": {"已安排", "已完成", "已取消"},
+        "已安排": {"已完成", "已取消", "待安排"},
+        "已完成": set(),
+        "已取消": set(),
+    }
+
+    @classmethod
+    def _validate_transition(cls, current: str, target: str) -> None:
+        allowed = cls._TRANSITIONS.get(current, set())
+        if target not in allowed:
+            raise AppException(
+                status_code=400,
+                message=f"不允许将面试状态从「{current}」变更为「{target}」",
+            )
+
+    def _log_status(
+        self, interview_id: UUID, from_status: str | None, to_status: str,
+        operator: str | None, remark: str | None = None,
+    ) -> None:
+        self.repo.session.add(InterviewStatusLog(
+            interview_id=interview_id, from_status=from_status, to_status=to_status,
+            operator=operator, remark=remark,
+        ))
+
     async def list_by_candidate(self, candidate_id: UUID) -> list[Interview]:
         return await self.repo.list_by_candidate(candidate_id)
+
+    async def list_overview(
+        self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        interviewer: str | None = None,
+        status: str | None = None,
+        candidate_id: UUID | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[tuple[Interview, str | None, str | None]], int]:
+        """跨候选人面试总览（按日期倒序分页，含候选人姓名/岗位）。"""
+        return await self.repo.search_overview(
+            date_from=date_from, date_to=date_to, interviewer=interviewer,
+            status=status, candidate_id=candidate_id, page=page, page_size=page_size,
+        )
 
     async def get(self, interview_id: UUID) -> Interview:
         iv = await self.repo.get_by_id(interview_id)
@@ -1914,9 +1841,21 @@ class InterviewService:
             raise NotFoundException("面试记录", str(interview_id))
         return iv
 
-    async def create(self, data: InterviewCreate) -> Interview:
+    async def create(
+        self, data: InterviewCreate,
+        operator: UUID | None = None, operator_name: str | None = None,
+    ) -> Interview:
+        self._validate_time_range(data.start_time, data.end_time)
+        await self._ensure_no_conflict(
+            interviewer=data.interviewer,
+            interview_date=data.interview_date,
+            start_time=data.start_time, end_time=data.end_time,
+            exclude_id=None, force=data.force_conflict,
+        )
+
         create_calendar = data.create_calendar_event
-        iv = Interview(**data.model_dump(exclude={"create_calendar_event"}))
+        iv = Interview(**data.model_dump(exclude={"create_calendar_event", "force_conflict"}))
+        iv.created_by = operator
         result = await self.repo.create(iv)
 
         if create_calendar and data.interview_date:
@@ -1936,27 +1875,124 @@ class InterviewService:
                     interviewer_name=data.interviewer or "未指定",
                     location=data.location or "未指定",
                     interview_type=data.interview_type,
+                    start_time_val=data.start_time,
+                    end_time_val=data.end_time,
                 )
                 result.calendar_event_id = event_id
+                # 日历建成功 = 面试确定进入日程，状态从「待安排」推进到「已安排」
+                if result.status == "待安排":
+                    result.status = "已安排"
                 result = await self.repo.update(result)
             except Exception as e:
                 logger.warning("创建日历事件失败（面试已保存）: %s", e)
+                # 面试已保存成功，日程失败不回滚——记录原因随响应返回供前端提示
+                result.calendar_sync_error = f"飞书日程创建失败：{e}"
 
+        self._log_status(
+            result.id, None, result.status,
+            operator=operator_name, remark="创建面试",
+        )
+        await self.repo.session.flush()
         return result
 
-    async def update(self, interview_id: UUID, data: InterviewUpdate) -> Interview:
+    @staticmethod
+    def _validate_time_range(start_time: time | None, end_time: time | None) -> None:
+        if start_time and end_time and end_time <= start_time:
+            raise AppException(status_code=400, message="面试结束时间必须晚于开始时间")
+
+    async def _ensure_no_conflict(
+        self,
+        *,
+        interviewer: str | None,
+        interview_date: date | None,
+        start_time: time | None,
+        end_time: time | None,
+        exclude_id: UUID | None,
+        force: bool,
+    ) -> None:
+        """同面试官同日时段重叠校验；信息不全（无日期/起止/面试官）时跳过。"""
+        if force or not (interviewer and interview_date and start_time and end_time):
+            return
+        conflicts = await self.repo.find_time_conflicts(
+            interviewer, interview_date, start_time, end_time, exclude_id=exclude_id,
+        )
+        if conflicts:
+            c = conflicts[0]
+            # 查询条件已保证起止时间非空，窄化类型供 mypy
+            assert c.start_time is not None and c.end_time is not None
+            detail = (
+                f"{c.interviewer} 在 {c.interview_date} "
+                f"{c.start_time.strftime('%H:%M')}-{c.end_time.strftime('%H:%M')} "
+                f"已有一场「{c.interview_type}」（{c.status}）"
+            )
+            raise AppException(
+                status_code=409,
+                message=f"面试官时段冲突：{detail}",
+                detail={"conflict": detail},
+            )
+
+    async def update(
+        self, interview_id: UUID, data: InterviewUpdate,
+        operator: UUID | None = None, operator_name: str | None = None,
+    ) -> Interview:
         iv = await self.get(interview_id)
         old_date = iv.interview_date
         old_location = iv.location
         old_interviewer = iv.interviewer
+        old_start = iv.start_time
+        old_end = iv.end_time
+        old_status = iv.status
 
-        for k, v in data.model_dump(exclude={"create_calendar_event"}, exclude_unset=True).items():
+        fields = data.model_dump(exclude={"create_calendar_event", "force_conflict"}, exclude_unset=True)
+        # 冲突校验用「合并后的生效值」：未传的字段沿用旧值
+        eff_date = fields.get("interview_date", old_date)
+        eff_start = fields.get("start_time", iv.start_time)
+        eff_end = fields.get("end_time", iv.end_time)
+        self._validate_time_range(eff_start, eff_end)
+        if data.status != "已取消":  # 取消操作无需查冲突
+            await self._ensure_no_conflict(
+                interviewer=fields.get("interviewer", old_interviewer),
+                interview_date=eff_date,
+                start_time=eff_start, end_time=eff_end,
+                exclude_id=interview_id, force=data.force_conflict,
+            )
+
+        # 状态流转校验（白名单）+ 落状态日志
+        if "status" in fields and fields["status"] != old_status:
+            self._validate_transition(old_status, fields["status"])
+
+        for k, v in fields.items():
             setattr(iv, k, v)
+        iv.updated_by = operator
         result = await self.repo.update(iv)
+
+        if old_status != result.status:
+            self._log_status(
+                interview_id, old_status, result.status,
+                operator=operator_name, remark="更新面试",
+            )
+            await self.repo.session.flush()
+
+        # 状态联动：标记完成的瞬间，若候选人处于「面试中」且无剩余未完成轮次，
+        # 自动推进到「已面试」（走候选人状态机白名单，失败不影响面试保存）
+        if old_status != "已完成" and result.status == "已完成":
+            try:
+                await self._maybe_complete_candidate(result, operator_name)
+            except Exception as e:
+                logger.warning("面试完成后自动推进候选人状态失败: %s", e)
+
+        # 状态流转为「已取消」时同步删除日历事件——与 DELETE 取消行为保持一致
+        if old_status != "已取消" and result.status == "已取消" and result.calendar_event_id:
+            await self._delete_calendar_event_quietly(result)
 
         # 此前创建日历失败的记录（calendar_event_id 为空）：更新时显式
         # 勾选 create_calendar_event 补建，否则一次失败后永远没有日程
-        if data.create_calendar_event and not result.calendar_event_id and result.interview_date:
+        if (
+            data.create_calendar_event
+            and not result.calendar_event_id
+            and result.interview_date
+            and result.status != "已取消"
+        ):
             try:
                 event_id = await self._create_calendar_event(result)
                 if event_id:
@@ -1964,11 +2000,14 @@ class InterviewService:
                     result = await self.repo.update(result)
             except Exception as e:
                 logger.warning("补建日历事件失败（面试已更新）: %s", e)
+                result.calendar_sync_error = f"飞书日程补建失败：{e}"
 
-        if result.calendar_event_id and (
+        if result.calendar_event_id and result.status != "已取消" and (
             old_date != result.interview_date
             or old_location != result.location
             or old_interviewer != result.interviewer
+            or old_start != result.start_time
+            or old_end != result.end_time
         ):
             try:
                 from app.modules.hr.feishu_calendar import FeishuCalendarService
@@ -1978,11 +2017,35 @@ class InterviewService:
                     interview_date_val=result.interview_date,
                     location=result.location,
                     interviewer_name=result.interviewer,
+                    start_time_val=result.start_time,
+                    end_time_val=result.end_time,
                 )
             except Exception as e:
                 logger.warning("同步日历事件失败（面试已更新）: %s", e)
+                result.calendar_sync_error = f"飞书日程同步失败：{e}"
 
         return result
+
+    async def _maybe_complete_candidate(self, interview: Interview, operator_name: str | None) -> None:
+        """面试全部轮次完成时，把「面试中」的候选人自动推进到「已面试」。"""
+        candidate_repo = CandidateRepository(self.repo.session)
+        candidate = await candidate_repo.get_by_id(interview.candidate_id)
+        if not candidate or candidate.status != "面试中":
+            return
+        all_ivs = await self.repo.list_by_candidate(interview.candidate_id)
+        # 已取消（软删的历史数据同理）与已完成之外的轮次都算「还有安排」
+        pending = [
+            x for x in all_ivs
+            if x.status not in ("已完成", "已取消") and x.id != interview.id
+        ]
+        if pending:
+            return
+        candidate_service = CandidateService(self.repo.session)
+        await candidate_service.transition_status(
+            interview.candidate_id, "已面试",
+            remark=f"全部面试轮次已完成（{interview.interview_type} 完成时自动推进）",
+            operator=operator_name,
+        )
 
     async def _create_calendar_event(self, interview: Interview) -> str | None:
         """为面试记录创建飞书日历日程，返回 event_id（失败抛异常由调用方降级）。"""
@@ -2001,134 +2064,47 @@ class InterviewService:
             interviewer_name=interview.interviewer or "未指定",
             location=interview.location or "未指定",
             interview_type=interview.interview_type,
+            start_time_val=interview.start_time,
+            end_time_val=interview.end_time,
         )
 
-    async def delete(self, interview_id: UUID) -> None:
+    async def delete(
+        self, interview_id: UUID,
+        operator: UUID | None = None, operator_name: str | None = None,
+    ) -> None:
+        """取消面试：状态流转为「已取消」+ 删除日历事件。
+
+        不做软删除——已取消的记录保留在面试列表中（前端已渲染红色 Tag），
+        与 PUT 改状态为「已取消」的行为保持一致。终态（已完成/已取消）不可再取消。
+        """
         iv = await self.get(interview_id)
-        if iv.calendar_event_id:
-            try:
-                from app.modules.hr.feishu_calendar import FeishuCalendarService
-                calendar = FeishuCalendarService()
-                await calendar.delete_interview_event(iv.calendar_event_id)
-            except Exception as e:
-                logger.warning("删除日历事件失败: %s", e)
-        await self.repo.soft_delete(iv.id)
-
-
-class AiEvaluationService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.repo = CandidateAiEvaluationRepository(session)
-
-    async def get_by_interview(self, interview_id: UUID) -> CandidateAiEvaluation | None:
-        return await self.repo.get_by_interview(interview_id)
-
-    async def evaluate(self, interview_id: UUID) -> CandidateAiEvaluation:
-        """对面试逐字稿进行AI评估"""
-        interview_repo = InterviewRepository(self.repo.session)
-        interview = await interview_repo.get_by_id(interview_id)
-        if not interview:
-            raise NotFoundException("面试记录", str(interview_id))
-        if not interview.transcript_text or not interview.transcript_text.strip():
-            raise ValueError("请先填写面试逐字稿")
-
-        candidate_repo = CandidateRepository(self.repo.session)
-        candidate = await candidate_repo.get_by_id(interview.candidate_id)
-        if not candidate:
-            raise NotFoundException("候选人", str(interview.candidate_id))
-
-        # 获取JD文本
-        jd_text = ""
-        if interview.job_requirement_id:
-            jd_repo = JobRequirementRepository(self.repo.session)
-            jd = await jd_repo.get_by_id(interview.job_requirement_id)
-            if jd and jd.requirements:
-                jd_text = jd.requirements
-
-        # 组装简历文本
-        resume_parts = [
-            f"姓名：{candidate.name}",
-            f"学校：{candidate.school or '未知'}",
-            f"学历：{candidate.education or '未知'}",
-            f"专业：{candidate.major or '未知'}",
-        ]
-        if candidate.current_company:
-            resume_parts.append(f"当前公司：{candidate.current_company}")
-        if candidate.work_years is not None:
-            resume_parts.append(f"工作年限：{candidate.work_years}年")
-        resume_text = "\n".join(resume_parts)
-
-        # 调用LLM评估
-        from app.modules.hr.ai_service import AiChatService
-        from app.modules.hr.config import HR_AI_MODEL
-        prompt = self._build_evaluation_prompt(jd_text, resume_text, interview.transcript_text)
-        result = await AiChatService.call_json(prompt)
-
-        # 删除旧评估
-        existing = await self.repo.get_by_interview(interview_id)
-        if existing:
-            existing.is_deleted = True
+        if iv.status != "已取消":
+            self._validate_transition(iv.status, "已取消")
+            old_status = iv.status
+            iv.status = "已取消"
+            iv.updated_by = operator
+            await self.repo.update(iv)
+            self._log_status(
+                interview_id, old_status, "已取消",
+                operator=operator_name, remark="取消面试",
+            )
             await self.repo.session.flush()
+        if iv.calendar_event_id:
+            await self._delete_calendar_event_quietly(iv)
 
-        eval_obj = CandidateAiEvaluation(
-            candidate_id=interview.candidate_id,
-            job_requirement_id=interview.job_requirement_id,
-            interview_id=interview_id,
-            jd_match_score=result.get("jd_match_score"),
-            professional_score=result.get("professional_score"),
-            communication_score=result.get("communication_score"),
-            learning_score=result.get("learning_score"),
-            stability_score=result.get("stability_score"),
-            overall_score=result.get("overall_score"),
-            strengths=result.get("strengths"),
-            weaknesses=result.get("weaknesses"),
-            ai_summary=result.get("ai_summary"),
-            risk_flags=result.get("risk_flags"),
-            jd_text_snapshot=jd_text,
-            transcript_snapshot=interview.transcript_text,
-            model_version=HR_AI_MODEL,
-        )
-        eval_obj = await self.repo.create(eval_obj)
+    async def _delete_calendar_event_quietly(self, interview: Interview) -> None:
+        """删除飞书日程并清空 calendar_event_id（失败仅记录日志，取消不应被日历故障阻塞）。"""
+        if not interview.calendar_event_id:
+            return
+        try:
+            from app.modules.hr.feishu_calendar import FeishuCalendarService
+            calendar = FeishuCalendarService()
+            await calendar.delete_interview_event(interview.calendar_event_id)
+        except Exception as e:
+            logger.warning("删除日历事件失败: %s", e)
+        interview.calendar_event_id = None
+        await self.repo.update(interview)
 
-        # 回写候选人 match_report
-        c = await candidate_repo.get_by_id(interview.candidate_id)
-        if c:
-            c.match_report = result.get("ai_summary")
-            await candidate_repo.update(c)
-
-        return eval_obj
-
-    @staticmethod
-    def _build_evaluation_prompt(jd_text: str, resume_text: str, transcript: str) -> str:
-        return f"""你是一位专业的制药行业招聘评估专家。请根据以下信息对候选人进行综合评价。
-
-## 岗位JD
-{jd_text or "（未提供JD）"}
-
-## 候选人简历
-{resume_text}
-
-## 面试逐字稿
-{transcript}
-
-请严格按照以下JSON格式输出评估结果（不要输出其他内容）：
-{{
-  "jd_match_score": <1-10的数字，JD匹配度>,
-  "professional_score": <1-10的数字，专业能力>,
-  "communication_score": <1-10的数字，沟通表达>,
-  "learning_score": <1-10的数字，学习能力>,
-  "stability_score": <1-10的数字，稳定性评估>,
-  "overall_score": <1-10的数字，综合评分>,
-  "strengths": "候选人优势（3-5条，每条30字以内，用\\n分隔）",
-  "weaknesses": "候选人不足（2-3条，每条30字以内，用\\n分隔）",
-  "ai_summary": "综合评价200-300字，包括JD匹配度分析、专业能力评价、软性素质评价、录用建议",
-  "risk_flags": "风险提示，无则填'无'"
-}}
-
-评分标准：8-10优秀/强烈推荐，6-7良好/可考虑，4-5一般/需对比，1-3不推荐。
-评分必须基于面试逐字稿中的实际表现，不要假设简历内容即为真实能力。"""
-
-
-# ─── Candidate Review Service ───
 
 
 class CandidateReviewService:
@@ -2693,6 +2669,7 @@ _ANALYSIS_SYSTEM_PROMPT = """你是企业人力资源部的资深招聘评估专
 _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，参照以下报告结构输出 JSON：
 
 {{
+  "basic_info": [{{"label": "信息项", "value": "内容"}}],
   "dimensions": [
     {{"name": "维度名", "score": 0-100, "star": 1-5, "assessment": "岗位要求 vs 候选人情况 vs 评价"}}
   ],
@@ -2705,16 +2682,25 @@ _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，�
   "summary": "总体结论一段话"
 }}
 
-维度确定规则（重要）：
-1. 评估维度从【岗位JD】的任职要求中提取 4-6 个核心维度（如学历专业、
+内容要求（重要）：
+1. basic_info：从简历正文与面试记录提取 6-10 项关键信息（如姓名、学历/专业、
+   英语等级、工作年限、籍贯/现居地、到岗时间、目前求职状态、证书亮点等），
+   简历正文与面试记录中都没有的项不要编造
+2. 评估维度从【岗位JD】的任职要求中提取 4-6 个核心维度（如学历专业、
    工作经验、专业技能、沟通协作等）——JD 明确要求的才纳入；
    例如 JD 有英语要求才设「英语能力」维度，未提及的能力不要强行评估
-2. 另外补充两项通用评估：稳定性（跳槽频率/职业规划）与薪资期望匹配度
+3. 另外补充两项通用评估：稳定性（跳槽频率/职业规划）与薪资期望匹配度
    （与 JD 预算或市场水平比较），信息不足时如实写明「信息不足」
-3. 每个维度的 assessment 按「岗位要求 → 候选人情况 → 评价结论」结构撰写
+4. 每个维度的 assessment 按「岗位要求 → 候选人情况 → 评价结论」结构撰写
+5. strengths/risks 每条都要引用简历正文或面试记录中的具体事实作为依据展开论述
+   （如「通话全程表述卡顿、逻辑零散」），不要写无依据的空话；短板要写透，
+   评分严格（不及格就直说不及格），结论直接明确（建议推进 / 建议婉拒）
 
-【候选人简历】
+【候选人简历元数据】
 {resume_text}
+
+【候选人简历正文】
+{resume_full_text}
 
 【岗位JD】
 {jd_text}
@@ -2724,12 +2710,86 @@ _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，�
 """
 
 
+class InterviewFeedbackService:
+    """人工面试评价：每场面试一条，重复提交覆盖更新。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.repo = InterviewFeedbackRepository(session)
+
+    async def get_by_interview(self, interview_id: UUID) -> InterviewFeedback | None:
+        return await self.repo.get_by_interview(interview_id)
+
+    async def upsert(
+        self, interview_id: UUID, data: InterviewFeedbackIn, operator: UUID | None = None,
+    ) -> InterviewFeedback:
+        interview = await InterviewRepository(self.repo.session).get_by_id(interview_id)
+        if not interview:
+            raise NotFoundException("面试记录", str(interview_id))
+        if data.result not in ("通过", "待定", "不通过"):
+            raise AppException(status_code=400, message="面试结论仅支持：通过/待定/不通过")
+
+        dimensions = [d.model_dump() for d in data.dimensions]
+        existing = await self.repo.get_by_interview(interview_id)
+        if existing:
+            existing.evaluator = data.evaluator
+            existing.dimensions = dimensions
+            existing.overall_comment = data.overall_comment
+            existing.result = data.result
+            existing.updated_by = operator
+            await self.repo.session.flush()
+            # UPDATE 后 re-fetch（铁律：flush 不回填 updated_at，避免懒加载）
+            r = await self.repo.session.execute(
+                select(InterviewFeedback).where(InterviewFeedback.id == existing.id)
+            )
+            return r.scalar_one()
+
+        fb = InterviewFeedback(
+            interview_id=interview_id,
+            candidate_id=interview.candidate_id,
+            evaluator=data.evaluator,
+            dimensions=dimensions,
+            overall_comment=data.overall_comment,
+            result=data.result,
+            created_by=operator,
+        )
+        self.repo.session.add(fb)
+        await self.repo.session.flush()
+        return fb
+
+
 class CandidateAnalysisService:
     """候选人胜任度多维分析报告：面试记录提交后自动生成。"""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = CandidateAnalysisReportRepository(session)
+
+    @staticmethod
+    def _load_resume_full_text(resume_url: str | None) -> str:
+        """读取候选人简历正文（PDF 全文）；任何失败都降级为空串，不阻断报告生成。"""
+        if not resume_url:
+            return ""
+        try:
+            if resume_url.startswith("minio://"):
+                from app.core.storage import get_object
+                obj = get_object("hr", resume_url[len("minio://"):])
+                if obj is None:
+                    return ""
+                file_bytes, _ = obj
+            else:
+                import os
+                path = os.path.normpath(resume_url)
+                if not path.startswith("uploads/resumes/") or not os.path.exists(path):
+                    return ""
+                with open(path, "rb") as f:
+                    file_bytes = f.read()
+            from app.modules.hr.resume_screening_service import (
+                _RESUME_TEXT_LIMIT,
+                extract_pdf_full_text,
+            )
+            return extract_pdf_full_text(file_bytes)[:_RESUME_TEXT_LIMIT]
+        except Exception:  # noqa: BLE001 — 简历解析失败不阻断报告生成，降级为仅元数据评估
+            return ""
 
     async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateAnalysisReport]:
         return await self.repo.list_by_candidate(candidate_id)
@@ -2782,8 +2842,11 @@ class CandidateAnalysisService:
         from app.modules.hr.ai_service import AiChatService
         from app.modules.hr.config import HR_AI_MODEL
 
+        resume_full_text = CandidateAnalysisService._load_resume_full_text(candidate.resume_url)
+
         prompt = _ANALYSIS_PROMPT_TEMPLATE.format(
             resume_text=resume_text,
+            resume_full_text=resume_full_text or "（简历正文不可用，仅按上方元数据与面试记录评估）",
             jd_text=jd_text or "（无岗位JD）",
             interview_text=interview_text[:6000],
         )
@@ -2802,6 +2865,8 @@ class CandidateAnalysisService:
                 candidate_id=candidate_id,
                 job_requirement_id=interview.job_requirement_id,
                 interview_id=interview_id,
+                basic_info=result.get("basic_info"),
+                jd_review=jd_text or None,
                 dimensions=result.get("dimensions"),
                 strengths=result.get("strengths"),
                 risks=result.get("risks"),

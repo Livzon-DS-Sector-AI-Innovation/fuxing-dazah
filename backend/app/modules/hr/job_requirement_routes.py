@@ -1,11 +1,12 @@
 """岗位需求接口"""
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
+from app.modules.hr.deps import HrAccessContext, get_hr_scope
 from app.modules.hr.schemas import (
     JobRequirementCreate,
     JobRequirementResponse,
@@ -21,8 +22,15 @@ def get_service(session: AsyncSession = Depends(get_db)) -> JobRequirementServic
 
 
 @router.get("/job-requirements", summary="岗位需求列表")
-async def list_job_reqs(service: JobRequirementService = Depends(get_service)):
-    rows = await service.list_all()
+async def list_job_reqs(
+    service: JobRequirementService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 数据范围收敛（用人部门视角）：只看授权部门下的岗位需求；self_only 等无部门范围返回空
+    departments: list[str] | None = None
+    if not hr_scope.is_unrestricted:
+        departments = sorted(hr_scope.scoped_departments)
+    rows = await service.list_all(departments=departments)
     return success_response(data=[JobRequirementResponse.model_validate(r).model_dump(mode="json") for r in rows])
 
 
@@ -38,14 +46,24 @@ async def update_job_req(req_id: UUID, payload: JobRequirementUpdate, service: J
     return success_response(data=JobRequirementResponse.model_validate(r).model_dump(mode="json"), message="已更新")
 
 
-@router.delete("/job-requirements/{req_id}", summary="删除岗位需求")
+@router.delete("/job-requirements/{req_id}", summary="删除岗位需求（仅限已关闭，级联清理未入职候选人）")
 async def delete_job_req(req_id: UUID, service: JobRequirementService = Depends(get_service)):
-    await service.delete(req_id)
-    return success_response(message="已删除")
+    try:
+        result = await service.delete(req_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    message = f"已删除，清理候选人 {result['candidates_removed']} 名"
+    if result["kept_hired"]:
+        message += f"（保留已入职 {result['kept_hired']} 名）"
+    return success_response(message=message)
 
 
 @router.get("/job-requirements/{req_id}/candidates/comparison", summary="候选人横向对比")
-async def compare_candidates(req_id: UUID, session: AsyncSession = Depends(get_db)):
+async def compare_candidates(
+    req_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     from app.modules.hr.repository import (
         CandidateAiEvaluationRepository,
         CandidateRepository,
@@ -56,6 +74,11 @@ async def compare_candidates(req_id: UUID, session: AsyncSession = Depends(get_d
         CandidateResponse,
         InterviewResponse,
     )
+
+    # 数据范围校验：非 all 范围用户仅可对比授权部门岗位（get 内含 404 处理）
+    jd = await JobRequirementService(session).get(req_id)
+    if not hr_scope.is_unrestricted and jd.department not in hr_scope.scoped_departments:
+        raise HTTPException(403, "数据范围限制：仅可对比本部门岗位的候选人")
 
     candidate_repo = CandidateRepository(session)
     eval_repo = CandidateAiEvaluationRepository(session)

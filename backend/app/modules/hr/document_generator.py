@@ -51,12 +51,14 @@ def generate_onboarding_training_record(
 
     hire_d = employee.hire_date
     hire_str = str(hire_d) if hire_d else ""
+    # 年龄列已下线：按出生年份算近似年龄（新员工记录口径足够）
+    age_val = date.today().year - employee.birth_year if employee.birth_year else None
     # 先替换双括号公式（避免 {入职日期} 被先替换掉）
     _replace_all(doc, {"{{入职日期}+3M-1day}": _calc_probation_date(hire_d) if hire_d else ""})
     _replace_all(doc, {
         "{姓名}": employee.name or "",
         "{性别}": employee.gender or "",
-        "{年龄}": str(employee.age) if employee.age else "",
+        "{年龄}": str(age_val) if age_val else "",
         "{体现部门}": employee.department or "",
         "{体现岗位}": employee.position or "",
         "{入职日期}": hire_str,

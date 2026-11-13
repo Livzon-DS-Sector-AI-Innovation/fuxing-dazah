@@ -19,6 +19,7 @@ def _mk_employee(
     *, department: str, education: str | None = "本科", status: str = "在职",
     hire_date: date | None = None, departure_date: date | None = None,
     is_deleted: bool = False, birth_year: int | None = None,
+    status_category: str | None = None,
 ) -> Employee:
     return Employee(
         employee_number=_rand("DASH"),
@@ -31,6 +32,7 @@ def _mk_employee(
         departure_date=departure_date,
         is_deleted=is_deleted,
         birth_year=birth_year,
+        status_category=status_category,
     )
 
 
@@ -49,7 +51,11 @@ def _scoped_override(test_user, departments: frozenset[str]):
 async def test_kpi_counts_within_scoped_department(
     db_session: AsyncSession, client: AsyncClient, test_user,
 ):
-    """受限部门范围内：在职/本月入职/本月离职口径互不串数。"""
+    """受限部门范围内：总人数/本月入职/本月离职口径互不串数。
+
+    总人数与源数据表全量对齐：不做人员状态过滤（离职人员由人事在源表
+    删除后经同步移出），仅软删行不计入。
+    """
     dept = _rand("看板部")
     today = date.today()
     db_session.add_all([
@@ -57,9 +63,9 @@ async def test_kpi_counts_within_scoped_department(
         _mk_employee(department=dept, education="本科", hire_date=date(today.year - 3, 3, 1)),
         # 本月入职 · 在职 · 硕士
         _mk_employee(department=dept, education="硕士", hire_date=today),
-        # 去年入职 · 本月离职
+        # 去年入职 · 本月离职（仍在源表内 → 计入总人数）
         _mk_employee(
-            department=dept, status="离职",
+            department=dept, status="离职", education="本科",
             hire_date=date(today.year - 1, 6, 1), departure_date=today,
         ),
         # 软删员工不计入任何统计
@@ -74,37 +80,40 @@ async def test_kpi_counts_within_scoped_department(
         data = res.json()["data"]
         summary = data["summary"]
 
-        assert summary["total_employees"] == 2
+        assert summary["total_employees"] == 3
         assert summary["new_hires_this_month"] == 1
         assert summary["departures_this_month"] == 1
+        # 今日入职/离职（软删员工不计入）
+        assert summary["today_hires"] == 1
+        assert summary["today_departures"] == 1
         # 本月净增 = 入 - 离
         assert summary["net_growth_this_month"] == 0
 
         edu = {d["name"]: d["value"] for d in data["education_distribution"]}
-        assert edu == {"本科": 1, "硕士": 1}
-        # 离职/软删员工不进部门在职分布
+        assert edu == {"本科": 2, "硕士": 1}
+        # 部门分布同样不做状态过滤，仅软删不计
         dept_dist = {d["name"]: d["value"] for d in data["department_distribution"]}
-        assert dept_dist == {dept: 2}
+        assert dept_dist == {dept: 3}
     finally:
         app.dependency_overrides.pop(get_hr_scope, None)
 
 
-async def test_unclassified_employee_counts_by_actual_department(
+async def test_unclassified_employee_counts_in_own_department_only(
     db_session: AsyncSession, client: AsyncClient, test_user,
 ):
-    """「未分类」员工按实际部门归属授权范围（与 apply_list_scope 语义一致）。"""
+    """「未分类」员工只归属未分类部门：授权其他部门看不到（新数据源无实际部门回落）。"""
     dept = _rand("归属部")
-    db_session.add(_mk_employee(department="未分类"))
-    emp = _mk_employee(department="未分类")
-    emp.actual_department = dept
-    db_session.add(emp)
+    db_session.add_all([
+        _mk_employee(department="未分类"),
+        _mk_employee(department="未分类"),
+    ])
     await db_session.flush()
 
     app.dependency_overrides[get_hr_scope] = _scoped_override(test_user, frozenset({dept}))
     try:
         res = await client.get("/api/v1/hr/dashboard/stats")
         assert res.status_code == 200, res.text
-        assert res.json()["data"]["summary"]["total_employees"] == 1
+        assert res.json()["data"]["summary"]["total_employees"] == 0
     finally:
         app.dependency_overrides.pop(get_hr_scope, None)
 
@@ -150,7 +159,7 @@ async def test_department_scope_without_departments_fails_closed(
 
 
 async def test_response_shape_unrestricted(client: AsyncClient):
-    """不限权范围：完整结构（summary + 分布组）+ 离职对比逐月 12 条。"""
+    """不限权范围：完整结构（summary + 分布组）+ 离职对比逐月 12 条 + 年龄 4 段。"""
     res = await client.get("/api/v1/hr/dashboard/stats")
     assert res.status_code == 200, res.text
     data = res.json()["data"]
@@ -159,12 +168,14 @@ async def test_response_shape_unrestricted(client: AsyncClient):
         "summary", "education_distribution", "department_distribution",
         "monthly_hires_by_dept", "monthly_hires", "monthly_departures",
         "monthly_departure_comparison", "departures_by_dept",
+        "monthly_hires_by_category", "monthly_departures_by_category",
+        "hires_by_dept_year",
         "distributions", "position_departure_top", "contract_expiry",
     ):
         assert key in data, f"缺少字段 {key}"
 
     for key in ("total_employees", "new_hires_this_month", "departures_this_month",
-                "net_growth_this_month", "avg_tenure"):
+                "today_hires", "today_departures", "net_growth_this_month", "avg_tenure"):
         assert key in data["summary"], f"summary 缺少字段 {key}"
 
     for key in ("gender", "age", "tenure", "departure_reason", "retention"):
@@ -176,3 +187,59 @@ async def test_response_shape_unrestricted(client: AsyncClient):
     for m in comparison:
         assert isinstance(m["last_year"], int)
         assert isinstance(m["current_year"], int)
+
+    # 年龄分布固定 4 段（与看板设计稿对齐）
+    assert [d["name"] for d in data["distributions"]["age"]] == [
+        "18-25岁", "26-35岁", "36-45岁", "46岁以上",
+    ]
+
+    # 按员工性质分组的月度统计：条目含 month/category/value
+    for key in ("monthly_hires_by_category", "monthly_departures_by_category"):
+        for item in data[key]:
+            assert set(item.keys()) >= {"month", "category", "value"}, f"{key} 条目字段不完整: {item}"
+
+    # 年度入职各部门总量：条目含 name/value
+    for item in data["hires_by_dept_year"]:
+        assert set(item.keys()) >= {"name", "value"}, f"hires_by_dept_year 条目字段不完整: {item}"
+
+
+async def test_monthly_by_category_grouping(
+    db_session: AsyncSession, client: AsyncClient, test_user,
+):
+    """按员工性质分组的月度入职/离职：同月不同性质分组计数，空性质归「未填写」。"""
+    dept = _rand("性质分组部")
+    today = date.today()
+    db_session.add_all([
+        # 本月入职 · 实习生 / 转正员工
+        _mk_employee(department=dept, status_category="实习生", hire_date=today),
+        _mk_employee(department=dept, status_category="转正员工", hire_date=today),
+        # 本月入职 · 性质为空 → 「未填写」
+        _mk_employee(department=dept, status_category=None, hire_date=today),
+        # 本月离职 · 试用期
+        _mk_employee(
+            department=dept, status="离职", status_category="试用期",
+            hire_date=date(today.year - 1, 1, 1), departure_date=today,
+        ),
+    ])
+    await db_session.flush()
+
+    app.dependency_overrides[get_hr_scope] = _scoped_override(test_user, frozenset({dept}))
+    try:
+        res = await client.get("/api/v1/hr/dashboard/stats")
+        assert res.status_code == 200, res.text
+        data = res.json()["data"]
+        month_key = today.strftime("%Y-%m")
+
+        hires = {(i["month"], i["category"]): i["value"] for i in data["monthly_hires_by_category"]}
+        assert hires.get((month_key, "实习生")) == 1
+        assert hires.get((month_key, "转正员工")) == 1
+        assert hires.get((month_key, "未填写")) == 1
+
+        departures = {(i["month"], i["category"]): i["value"] for i in data["monthly_departures_by_category"]}
+        assert departures.get((month_key, "试用期")) == 1
+
+        # 年度入职各部门总量：只统计本年度 hire_date，3 名今日入职计入、去年入职的离职员工不计
+        by_dept = {i["name"]: i["value"] for i in data["hires_by_dept_year"]}
+        assert by_dept.get(dept) == 3
+    finally:
+        app.dependency_overrides.pop(get_hr_scope, None)

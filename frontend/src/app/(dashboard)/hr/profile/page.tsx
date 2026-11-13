@@ -1,4 +1,6 @@
 import { Suspense } from 'react'
+import EmployeeInfoCollectionPanel from '@/components/hr/EmployeeInfoCollectionPanel'
+import ProbationPanel from '@/components/hr/ProbationPanel'
 import EmployeeProfileClient from '@/components/hr/EmployeeProfileClient'
 import EmployeeSyncSettings from '@/components/hr/EmployeeSyncSettings'
 import { fetchEmployeeSyncConfig } from '@/actions/hr'
@@ -26,6 +28,10 @@ export default async function EmployeeProfilePage() {
   return (
     <Suspense fallback={<div className="h-64" />}>
       <div className="space-y-4">
+        <div className="flex justify-end gap-2 -mb-2">
+          <EmployeeInfoCollectionPanel />
+          <ProbationPanel />
+        </div>
         <EmployeeSyncSettings initialConfig={syncConfig} />
         <EmployeeProfileClient
           initialEmployees={[]}

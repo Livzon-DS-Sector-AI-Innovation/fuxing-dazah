@@ -8,6 +8,12 @@
 - WS 事件（after_value）：值均为字符串，复合值为 JSON 字符串
 - 单选选项 ID → 文本 的翻译表由调用方从 list_fields 构建后传入
   （option_maps：中文列名 → {选项ID: 选项名}）
+- 「员工账号」人员列特例：取 users[].id 写入 feishu_open_id（消息通知兜底用）
+- 源表无「人员状态」列时可自动派生：离职日期非空→离职；员工性质∈
+  {试用期, 实习转试用, 实习生}→试用期；否则→在职（病假/产假等本地状态
+  由 repository.upsert_from_bitable 守卫保护，不被派生值覆盖）
+- 源表未提供 gender/出生日期时从身份证号派生（第17位奇偶、第7-14位）；
+  仅补空值，源表显式提供的值优先
 """
 
 import json
@@ -28,8 +34,12 @@ RESETTABLE_FIELDS: set[str] = EmployeeService._EXCEL_RESETTABLE_FIELDS
 _STATUS_SKIP = {"—", "——", "-", "", "无"}
 _STATUS_VALID = {"在职", "离职", "试用期", "待审批", "病假", "产假", "产假复岗"}
 
-# 多选/JSON 字段（本地 ORM 为 JSON 列，直接存 list）
-_LIST_FIELDS: set[str] = {"qualifications", "remarks"}
+# 员工性质（status_category）中视为试用期的取值 → 派生人员状态用
+_PROBATION_CATEGORIES = {"试用期", "实习转试用", "实习生"}
+
+# 多选/JSON 字段（本地 ORM 为 JSON 列，直接存 list）；员工表 JSON 列已随
+# 源表对齐下线，保留机制以备后续新增
+_LIST_FIELDS: set[str] = set()
 
 # 飞书日期字段的毫秒时间戳按东八区语义（date-only 存当日 00:00 +08）；
 # 用 UTC 解析会差一天。写入也按东八区零点，读回一致。
@@ -96,6 +106,20 @@ def _users_text(payload: Any) -> str | None:
         return None
     names = [str(m.get("name")) for m in members if isinstance(m, dict) and m.get("name")]
     return "、".join(names) or None
+
+
+def _user_open_id(payload: Any) -> str | None:
+    """人员字段值取首个成员 id：「员工账号」列 → feishu_open_id。"""
+    if isinstance(payload, dict) and isinstance(payload.get("users"), list):
+        members = payload["users"]
+    elif isinstance(payload, list):
+        members = payload
+    else:
+        return None
+    for member in members:
+        if isinstance(member, dict) and member.get("id"):
+            return str(member["id"])
+    return None
 
 
 def normalize_cell(raw_value: Any) -> Any:
@@ -187,17 +211,26 @@ def convert_source_fields(
     *,
     reset_missing: bool,
     option_maps: dict[str, dict[str, str]] | None = None,
+    has_status_column: bool = True,
 ) -> dict[str, Any]:
     """源表一行（中文列名 → 值）→ ORM 字段 dict。
 
     reset_missing=True（全量对账）：未出现的可重置列补 None，行级"以表为准"；
     reset_missing=False（增量）：只更新出现的字段，不动其余数据。
     option_maps 用于把拉取 API 返回的单选选项 ID 翻译为选项文本。
+    has_status_column=False（源表没有「人员状态」列）时按离职日期/员工性质
+    派生 status；病假/产假等本地状态由 upsert 侧守卫保护。
     """
     data: dict[str, Any] = {}
     for col_name, raw_value in fields.items():
         field_name = COLUMN_MAP.get(col_name)
         if not field_name:
+            continue
+        # 「员工账号」人员列特例：normalize 会取姓名，这里需要的是 open_id
+        if field_name == "feishu_open_id":
+            open_id = _user_open_id(raw_value)
+            if open_id:
+                data["feishu_open_id"] = open_id
             continue
         value = normalize_cell(raw_value)
         # 单选选项 ID → 选项文本
@@ -221,7 +254,42 @@ def convert_source_fields(
             continue
         data[field_name] = converted
 
+    if not has_status_column:
+        # 源表无「人员状态」列：从离职日期/员工性质派生
+        if data.get("departure_date"):
+            data["status"] = "离职"
+        elif data.get("status_category") in _PROBATION_CATEGORIES:
+            data["status"] = "试用期"
+        else:
+            data["status"] = "在职"
+
     if reset_missing:
         for field_name in RESETTABLE_FIELDS:
             data.setdefault(field_name, None)
+
+    _derive_from_id_card(data)
     return data
+
+
+def _derive_from_id_card(data: dict[str, Any]) -> None:
+    """源表未提供 gender/出生日期时从身份证号派生（第17位奇偶、第7-14位）。
+
+    新数据源无性别列且基本无出生日期列，但身份证号 100% 覆盖；性别分布/
+    年龄分布看板依赖这两组字段。仅补空值：源表显式提供的值始终优先。
+    """
+    id_card = data.get("id_card")
+    if not isinstance(id_card, str) or len(id_card) != 18:
+        return
+    seq_digit = id_card[16:17]
+    if seq_digit.isdigit() and data.get("gender") is None:
+        data["gender"] = "男" if int(seq_digit) % 2 == 1 else "女"
+    if not (data.get("birth_year") or data.get("birth_month")):
+        birth = id_card[6:14]
+        if birth.isdigit():
+            try:
+                parsed = date(int(birth[:4]), int(birth[4:6]), int(birth[6:8]))
+            except ValueError:
+                return
+            data["birth_year"] = parsed.year
+            data["birth_month"] = parsed.month
+            data["birth_day"] = parsed.day

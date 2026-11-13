@@ -4,80 +4,59 @@ export interface Employee {
   name: string
   domain_account?: string
   department: string
-  actual_department?: string
-  team?: string
   position: string
   duty?: string
-  dept_manager?: string
-  additional_manager?: string
   report_grade?: string
-  dept_head_trainer?: string
   job_category?: string
-  concurrent_variety?: string
   certificates?: string
   level?: string
-  concurrent_departments?: string
-  qualifications?: string[]
-  qualification_type?: string
   gender?: string
   native_place?: string
-  political_status?: string
+  ethnicity?: string
   marital_status?: string
   household_type?: string
   status_category?: string
+  hr_analysis?: string
   birth_year?: number
   birth_month?: number
   birth_day?: number
-  age?: number
   work_start_date?: string
-  factory_entry_date?: string
-  livo_entry_date?: string
   hire_date: string
   graduation_date?: string
-  work_years?: number
   departure_date?: string
-  safety_training_date?: string
-  safety_training_score?: string
-  culture_training_date?: string
-  gmp_training_date?: string
-  factory_tenure?: string
+  departure_reason?: string
   company_tenure?: string
   education?: string
   classification?: string
   school?: string
   major?: string
-  variety?: string
+  degree_type?: string
+  graduation_certificate?: string
   id_card?: string
   id_card_expiry?: string
-  id_card_address?: string
   current_address?: string
-  contract_type?: string
   contract_start_date?: string
   contract_end_date?: string
-  contract_start_2?: string
-  contract_end_2?: string
-  contract_start_3?: string
-  contract_end_3?: string
-  contract_start_4?: string
-  contract_end_4?: string
   phone?: string
-  email?: string
   emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
-  bank_account?: string
-  training_id?: string
   transfer_history?: string
-  remarks?: string[]
   status: string
   feishu_record_id?: string
   feishu_synced_at?: string
+  /** 来源候选人（招聘入职回链），可用于跳转候选人详情页 */
+  candidate_id?: string
   created_at?: string
   updated_at?: string
   /** 从出生日期动态计算的年龄（优先于飞书静态值） */
   computed_age?: number
   /** 从入职日期动态计算的司龄，格式如"3年5个月" */
   computed_tenure?: string
+  /** 转正到期日（试用期员工；显式值优先否则入职+3月-1天） */
+  computed_probation_end?: string
+  /** 距转正到期天数（负数=已过期；非试用期为空） */
+  computed_probation_days_left?: number
 }
 
 export interface EmployeeCreateInput {
@@ -85,54 +64,38 @@ export interface EmployeeCreateInput {
   name: string
   domain_account?: string
   department: string
-  team?: string
   position: string
   job_category?: string
   level?: string
-  concurrent_departments?: string
-  qualifications?: string[]
-  qualification_type?: string
   gender?: string
   native_place?: string
-  political_status?: string
+  ethnicity?: string
   marital_status?: string
   household_type?: string
   status_category?: string
+  hr_analysis?: string
   birth_year?: number
   birth_month?: number
   birth_day?: number
   work_start_date?: string
-  factory_entry_date?: string
-  livo_entry_date?: string
   hire_date: string
   graduation_date?: string
   education?: string
   classification?: string
   school?: string
   major?: string
-  variety?: string
+  degree_type?: string
+  graduation_certificate?: string
   id_card?: string
   id_card_expiry?: string
-  id_card_address?: string
   current_address?: string
-  contract_type?: string
   contract_start_date?: string
   contract_end_date?: string
-  contract_start_2?: string
-  contract_end_2?: string
-  contract_start_3?: string
-  contract_end_3?: string
-  contract_start_4?: string
-  contract_end_4?: string
   phone?: string
-  email?: string
   emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
-  bank_account?: string
-  training_id?: string
   transfer_history?: string
-  remarks?: string[]
   status?: string
 }
 
@@ -141,58 +104,43 @@ export interface EmployeeUpdateInput {
   name?: string
   domain_account?: string
   department?: string
-  team?: string
   position?: string
   job_category?: string
   level?: string
-  concurrent_departments?: string
-  qualifications?: string[]
-  qualification_type?: string
   gender?: string
   native_place?: string
-  political_status?: string
+  ethnicity?: string
   marital_status?: string
   household_type?: string
   status_category?: string
+  hr_analysis?: string
   birth_year?: number
   birth_month?: number
   birth_day?: number
   work_start_date?: string
-  factory_entry_date?: string
-  livo_entry_date?: string
   hire_date?: string
   graduation_date?: string
   education?: string
   classification?: string
   school?: string
   major?: string
-  variety?: string
+  degree_type?: string
+  graduation_certificate?: string
   id_card?: string
   id_card_expiry?: string
-  id_card_address?: string
   current_address?: string
-  contract_type?: string
   contract_start_date?: string
   contract_end_date?: string
-  contract_start_2?: string
-  contract_end_2?: string
-  contract_start_3?: string
-  contract_end_3?: string
-  contract_start_4?: string
-  contract_end_4?: string
   phone?: string
-  email?: string
   emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
-  bank_account?: string
-  training_id?: string
   transfer_history?: string
-  remarks?: string[]
   status?: string
   probation_end_date?: string | null
   regularization_date?: string
   departure_date?: string
+  departure_reason?: string
 }
 
 export interface EmployeeListResponse {
@@ -758,12 +706,15 @@ export interface Interview {
   job_requirement_id?: string
   interview_type: string
   interview_date?: string
+  start_time?: string
+  end_time?: string
   interviewer?: string
   location?: string
   status: string
   transcript_text?: string
   notes?: string
   calendar_event_id?: string
+  calendar_sync_error?: string | null
   created_at?: string
 }
 
@@ -772,21 +723,57 @@ export interface InterviewCreateInput {
   job_requirement_id?: string
   interview_type?: string
   interview_date?: string
+  start_time?: string
+  end_time?: string
   interviewer?: string
   location?: string
   notes?: string
   create_calendar_event?: boolean
+  force_conflict?: boolean
 }
 
 export interface InterviewUpdateInput {
   interview_type?: string
   interview_date?: string
+  start_time?: string
+  end_time?: string
   interviewer?: string
   location?: string
   status?: string
   transcript_text?: string
   notes?: string
-  calendar_event_id?: string
+  create_calendar_event?: boolean
+  force_conflict?: boolean
+}
+
+export interface InterviewOverviewItem extends Interview {
+  candidate_name?: string | null
+  candidate_position?: string | null
+}
+
+export interface InterviewFeedbackDimension {
+  name: string
+  score: number
+  comment?: string
+}
+
+export interface InterviewFeedback {
+  id: string
+  interview_id: string
+  candidate_id: string
+  evaluator: string
+  dimensions?: InterviewFeedbackDimension[] | null
+  overall_comment?: string | null
+  result: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface InterviewFeedbackInput {
+  evaluator: string
+  dimensions?: InterviewFeedbackDimension[]
+  overall_comment?: string
+  result: string
 }
 
 export interface AiEvaluation {
@@ -1010,6 +997,8 @@ export interface DashboardSummary {
   total_employees: number
   new_hires_this_month: number
   departures_this_month: number
+  today_hires: number
+  today_departures: number
   age_avg: number
   probation_count: number
   avg_tenure: number
@@ -1021,6 +1010,8 @@ export interface DashboardSummary {
   work_injury_count: number
   labor_dispute_count: number
   underperforming_count: number
+  interviews_today: number
+  interviews_this_week: number
   performance_submitted_count: number
   active_departure_rate: number
   passive_departure_rate: number
@@ -1034,6 +1025,12 @@ export interface DistributionItem {
 export interface MonthlyByDeptItem {
   month: string
   department: string
+  value: number
+}
+
+export interface MonthlyByCategoryItem {
+  month: string
+  category: string
   value: number
 }
 
@@ -1054,6 +1051,9 @@ export interface DashboardStats {
   education_distribution: DistributionItem[]
   department_distribution: DistributionItem[]
   monthly_hires_by_dept: MonthlyByDeptItem[]
+  monthly_hires_by_category: MonthlyByCategoryItem[]
+  monthly_departures_by_category: MonthlyByCategoryItem[]
+  hires_by_dept_year: DistributionItem[]
   monthly_hires: MonthlyItem[]
   monthly_departures: MonthlyItem[]
   monthly_departure_comparison: MonthlyComparisonItem[]
@@ -1265,4 +1265,57 @@ export interface EmployeeSyncBanner {
   app_token: string
   source_table_id: string
   last_sync_at: string | null
+}
+
+// ─── 新员工信息收集（飞书机器人表单卡片 → HR 审核合并档案） ───
+
+/** 逐字段差异对比项（档案现值 vs 员工填写值） */
+export interface InfoCollectionDiffEntry {
+  field: string
+  label: string
+  current: string
+  submitted: string
+}
+
+/** 信息收集任务 */
+export interface EmployeeInfoCollectionItem {
+  id: string
+  employee_id: string
+  employee_name: string
+  employee_number: string | null
+  department: string | null
+  position: string | null
+  status: 'sent' | 'submitted' | 'approved' | 'rejected'
+  form_data: Record<string, string> | null
+  diff: InfoCollectionDiffEntry[]
+  reject_reason: string | null
+  submitted_at: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  created_at: string | null
+}
+
+// ─── 试用期转正评估 ───
+
+/** 转正评估记录 */
+export interface ProbationReviewItem {
+  id: string
+  employee_id: string
+  employee_name: string
+  employee_number: string | null
+  department: string | null
+  position: string | null
+  hire_date: string | null
+  probation_end: string | null
+  days_left: number | null
+  reviewer_name: string
+  status: 'pending_reviewer' | 'pending_hr' | 'effective' | 'cancelled'
+  conclusion: '通过' | '延长' | '不通过' | null
+  comment: string | null
+  proposed_probation_end: string | null
+  hr_note: string | null
+  submitted_at: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  created_at: string | null
 }

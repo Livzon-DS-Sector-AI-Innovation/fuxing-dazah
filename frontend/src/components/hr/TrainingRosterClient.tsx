@@ -35,18 +35,28 @@ const STATUS_COLOR: Record<string, string> = {
 const STATUS_OPTIONS = ['在职', '离职', '试用期', '待审批', '病假', '产假', '产假复岗']
 
 const FIXED_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  // 职类随新数据源值域（源表「职能分类」文本列）
   job_category: [
-    { value: '管理', label: '管理' }, { value: '技术', label: '技术' },
-    { value: '操作', label: '操作' }, { value: '职能', label: '职能' },
+    { value: '生产', label: '生产' },
+    { value: '生产辅助', label: '生产辅助' },
+    { value: '职能管理', label: '职能管理' },
+    { value: '研发', label: '研发' },
+    { value: '后勤辅助', label: '后勤辅助' },
   ],
   education: [
     { value: '博士', label: '博士' }, { value: '硕士', label: '硕士' },
     { value: '本科', label: '本科' }, { value: '大专', label: '大专' },
-    { value: '高中', label: '高中' }, { value: '其他', label: '其他' },
+    { value: '中专', label: '中专' }, { value: '中专/中技', label: '中专/中技' },
+    { value: '高中', label: '高中' }, { value: '初中', label: '初中' },
+    { value: '其他', label: '其他' },
   ],
+  // 用工性质随新数据源值域（源表「员工性质」单选）
   status_category: [
-    { value: '职员', label: '职员' }, { value: '工人', label: '工人' },
-    { value: '劳务派遣', label: '劳务派遣' },
+    { value: '转正员工', label: '转正员工' },
+    { value: '试用期', label: '试用期' },
+    { value: '实习转试用', label: '实习转试用' },
+    { value: '实习生', label: '实习生' },
+    { value: '退休返聘', label: '退休返聘' },
   ],
 }
 
@@ -465,7 +475,7 @@ export default function TrainingRosterClient() {
       <Alert
         type="info"
         showIcon
-        message={scopedDepartments ? `独立维护的脱敏名册（当前可见部门：${scopedDepartments.join('、')}）` : '独立维护的脱敏名册'}
+        title={scopedDepartments ? `独立维护的脱敏名册（当前可见部门：${scopedDepartments.join('、')}）` : '独立维护的脱敏名册'}
         description="人员随员工档案自动增减（总表只管进出）；名单上的信息由培训管理独立编辑，不会被总表同步覆盖。身份证、毕业学校、专业、出生年月、籍贯、政治面貌、婚姻状况、银行卡、手机/邮箱、紧急联系人、合同、级别等个人信息不在此页面出现；人员状态随员工档案自动同步，无需手动维护。"
       />
 

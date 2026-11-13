@@ -6,7 +6,7 @@
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -50,16 +50,23 @@ class FeishuCalendarService:
         interviewer_name: str,
         location: str,
         interview_type: str = "初试",
+        start_time_val: time | None = None,
+        end_time_val: time | None = None,
     ) -> str:
-        """创建飞书日历日程，返回 event_id。日程时长默认 1 小时，从 09:00 开始。"""
+        """创建飞书日历日程，返回 event_id。
+
+        起止钟点缺省时兜底 09:00-10:00（旧数据/未填时段），有则用真实时间。
+        """
+        start_clock = start_time_val or time(9, 0)
+        # 结束缺省=开始+1小时；开始≥结束视为跨零点异常数据，也兜底+1小时
+        if end_time_val is None or end_time_val <= start_clock:
+            end_clock = (datetime.combine(date.min, start_clock) + timedelta(hours=1)).time()
+        else:
+            end_clock = end_time_val
         # 明确按 Asia/Shanghai 解释时间：服务器为 UTC（容器默认）时 naive
         # .timestamp() 会按服务器本地时区算 epoch，导致日程时间错 8 小时
-        start_time = datetime.combine(
-            interview_date_val,
-            datetime.strptime("09:00", "%H:%M").time(),
-            tzinfo=ZoneInfo("Asia/Shanghai"),
-        )
-        end_time = start_time + timedelta(hours=1)
+        start_time = datetime.combine(interview_date_val, start_clock, tzinfo=ZoneInfo("Asia/Shanghai"))
+        end_time = datetime.combine(interview_date_val, end_clock, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         attendees = []
         interviewer_open_id = await self._lookup_open_id(interviewer_name)
@@ -131,17 +138,20 @@ class FeishuCalendarService:
         interview_date_val: date | None = None,
         location: str | None = None,
         interviewer_name: str | None = None,
+        start_time_val: time | None = None,
+        end_time_val: time | None = None,
     ) -> None:
-        """更新日历事件（日期 / 地点 / 面试官变更时调用）。"""
+        """更新日历事件（日期 / 时间 / 地点 / 面试官变更时调用）。"""
         event_builder = CalendarEvent.builder()
 
         if interview_date_val:
-            start_time = datetime.combine(
-                interview_date_val,
-                datetime.strptime("09:00", "%H:%M").time(),
-                tzinfo=ZoneInfo("Asia/Shanghai"),
-            )
-            end_time = start_time + timedelta(hours=1)
+            start_clock = start_time_val or time(9, 0)
+            if end_time_val is None or end_time_val <= start_clock:
+                end_clock = (datetime.combine(date.min, start_clock) + timedelta(hours=1)).time()
+            else:
+                end_clock = end_time_val
+            start_time = datetime.combine(interview_date_val, start_clock, tzinfo=ZoneInfo("Asia/Shanghai"))
+            end_time = datetime.combine(interview_date_val, end_clock, tzinfo=ZoneInfo("Asia/Shanghai"))
             event_builder.start_time(
                 EventTime.builder()
                 .timestamp(str(int(start_time.timestamp())))
@@ -200,7 +210,11 @@ class FeishuCalendarService:
             )
 
     async def _lookup_open_id(self, name: str) -> str | None:
-        """通过姓名查找飞书 open_id（从 identity.users 表查询）。"""
+        """通过姓名查找飞书 open_id（从 identity.users 表查询）。
+
+        同名多账户时按 created_at 取最早一个（保证结果确定，不再随机命中），
+        并记录告警提示治理重复账户。
+        """
         if not name or name == "未指定":
             return None
         try:
@@ -212,13 +226,16 @@ class FeishuCalendarService:
                 r = await db.execute(
                     text(
                         "SELECT feishu_open_id FROM identity.users "
-                        "WHERE name = :name AND is_deleted = false LIMIT 1"
+                        "WHERE name = :name AND is_deleted = false "
+                        "ORDER BY created_at LIMIT 2"
                     ),
                     {"name": name},
                 )
-                row = r.fetchone()
-                if row and row[0]:
-                    return row[0]
+                rows = r.fetchall()
+                if len(rows) > 1:
+                    logger.warning("系统用户「%s」存在 %d 条同名记录，日程参与人取最早一条", name, len(rows))
+                if rows and rows[0][0]:
+                    return rows[0][0]
             logger.warning("未找到系统用户 %s 的 open_id，跳过添加为参与人", name)
             return None
         except Exception as e:

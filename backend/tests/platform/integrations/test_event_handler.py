@@ -35,7 +35,7 @@ def clean_bitable_handlers() -> Iterator[None]:
 
 
 async def test_dispatch_calls_registered_handler(clean_card_handlers: Iterator[None]) -> None:
-    """注册的 action 被分发，handler 收到原始 payload 与 user_id。"""
+    """注册的 action 被分发，handler 收到原始 payload（附加 _form_value/_open_id）与 user_id。"""
     handler = AsyncMock()
     event_handler.register_card_action_handler("approve", handler)
     payload = {"action": "approve", "work_order_id": "wo-1"}
@@ -44,7 +44,10 @@ async def test_dispatch_calls_registered_handler(clean_card_handlers: Iterator[N
         action_value=payload, user_id="user-1",
     )
 
-    handler.assert_awaited_once_with(payload, "user-1")
+    # 平台在 payload 上附加表单上下文（_form_value/_open_id），业务键原样保留
+    handler.assert_awaited_once_with(
+        {**payload, "_form_value": {}, "_open_id": ""}, "user-1",
+    )
 
 
 async def test_unregistered_action_is_ignored(clean_card_handlers: Iterator[None]) -> None:

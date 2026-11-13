@@ -232,3 +232,26 @@ async def update_training_roster(
         raise HTTPException(403, str(exc)) from exc
     await session.commit()
     return success_response(message="已保存")
+
+
+@router.post(
+    "/training-roster/refresh-org",
+    summary="一次性刷新名单组织字段（换数据源后对齐档案，保留培训字段编辑）",
+)
+async def refresh_training_roster_org(
+    dry_run: bool = True,
+    session: AsyncSession = Depends(get_db),
+    _ctx: HrAccessContext = _MANAGE,
+) -> JSONResponse:
+    """组织字段（部门/职位/学历/日期等）从员工档案刷新；品种/培训编号/一级培训师/
+    4 个培训字段保留名单本地编辑；certificates 仅空值补齐。
+
+    dry_run=true（默认）只返回逐字段变更统计不落库；确认后传 false 执行。
+    """
+    stats = await EmployeeSyncService(session).refresh_roster_org_fields(
+        dry_run=dry_run,
+    )
+    if not dry_run:
+        await session.commit()
+    message = "预览完成（未落库）" if dry_run else "名单组织字段已刷新"
+    return success_response(data=stats, message=message)

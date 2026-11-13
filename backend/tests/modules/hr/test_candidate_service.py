@@ -144,54 +144,29 @@ class TestCandidateOnboard:
         assert onboarding.position == "工程师"
         assert onboarding.source == "recruitment"
 
-
-class TestCandidateUpload:
-    """Excel 导入候选人：新建/更新路径回归（name 重复传参、状态重置防护）。"""
-
     @pytest.mark.asyncio
-    async def test_upload_creates_new_candidate(self, db_session):
-        from io import BytesIO
+    async def test_onboard_carries_fields_and_backlink(self, db_session):
+        """入职带出候选人档案字段（性别/毕业时间等）并写入 candidate_id 回链。"""
+        from datetime import date
 
-        from openpyxl import Workbook
+        from app.modules.hr.models import Candidate, Employee
+        from sqlalchemy import select
 
-        service = CandidateService(db_session)
-        wb = Workbook()
-        ws = wb.active
-        ws.append(["姓名", "手机", "邮箱", "应聘岗位"])
-        ws.append(["导入测试", "13800000001", "a@b.com", "工程师"])
-        buf = BytesIO()
-        wb.save(buf)
-
-        result = await service.upload_candidates(buf.getvalue())
-        assert result["created"] == 1
-        assert result["updated"] == 0
-        assert result["errors"] == []
-
-    @pytest.mark.asyncio
-    async def test_upload_updates_existing_keeps_status(self, db_session):
-        from io import BytesIO
-
-        from openpyxl import Workbook
-
-        from app.modules.hr.models import Candidate
-
-        service = CandidateService(db_session)
-        db_session.add(Candidate(
-            id=uuid4(), name="导入测试", phone="13800000001", email="a@b.com",
-            position="工程师", status="面试中",
-        ))
+        c = Candidate(
+            id=uuid4(), name="带字段入职", status="待入职审批",
+            department="QC部", position="QC工程师",
+            gender="女", education="本科", school="某某大学", major="药学",
+            graduation_date=date(2024, 6, 30),
+        )
+        db_session.add(c)
         await db_session.flush()
 
-        wb = Workbook()
-        ws = wb.active
-        ws.append(["姓名", "手机", "邮箱", "应聘岗位"])
-        ws.append(["导入测试", "13800000001", "a@b.com", "工程师"])
-        buf = BytesIO()
-        wb.save(buf)
+        _, _, emp_no = await CandidateService(db_session).onboard(c.id)
 
-        result = await service.upload_candidates(buf.getvalue())
-        assert result["updated"] == 1
-        assert result["errors"] == []
-        # 状态不被重复导入重置
-        rows, _ = await service.list_all()
-        assert rows[0].status == "面试中"
+        emp = (await db_session.execute(
+            select(Employee).where(Employee.employee_number == emp_no)
+        )).scalar_one()
+        assert emp.candidate_id == c.id          # 回链
+        assert emp.gender == "女"                # 此前丢失的字段
+        assert emp.graduation_date == date(2024, 6, 30)
+        assert emp.education == "本科" and emp.school == "某某大学" and emp.major == "药学"

@@ -624,7 +624,7 @@ export default function TrainingLedgerClient({
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">岗 位/职 务</td>
                 <td className="border border-gray-300 px-2 py-2 text-center">{employee?.position || ''}</td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">入 厂 时 间</td>
-                <td colSpan={2} className="border border-gray-300 px-2 py-2 text-center">{employee?.factory_entry_date || employee?.hire_date || ''}</td>
+                <td colSpan={2} className="border border-gray-300 px-2 py-2 text-center">{employee?.hire_date || ''}</td>
               </tr>
               <tr>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">岗 位 变 动</td>

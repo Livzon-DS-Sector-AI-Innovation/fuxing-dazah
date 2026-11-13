@@ -26,7 +26,7 @@ export default function CandidateDetailPage() {
   return (
     <PermissionGuard
       permission="hr:recruitment:read"
-      fallback={<Alert type="warning" showIcon message="您没有招聘管理的查看权限，请联系管理员赋权。" />}
+      fallback={<Alert type="warning" showIcon title="您没有招聘管理的查看权限，请联系管理员赋权。" />}
     >
       <CandidateDetailClient candidate={candidate} />
     </PermissionGuard>

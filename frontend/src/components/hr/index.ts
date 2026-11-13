@@ -1,5 +1,6 @@
 export { default as DashboardClient } from './DashboardClient'
 export { default as EmployeeTable } from './EmployeeTable'
+export { default as EmployeeInfoCollectionPanel } from './EmployeeInfoCollectionPanel'
 export { default as EmployeeForm } from './EmployeeForm'
 export { default as EmployeeProfileClient } from './EmployeeProfileClient'
 export { default as DepartmentClient } from './DepartmentClient'

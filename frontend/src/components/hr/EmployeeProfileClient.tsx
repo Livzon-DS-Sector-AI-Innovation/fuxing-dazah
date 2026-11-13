@@ -122,7 +122,8 @@ export default function EmployeeProfileClient({
       const d = await triggerEmployeeSync()
       const s = d.data || {}
       message.success(
-        `同步完成：新增 ${s.created ?? 0}，更新 ${s.updated ?? 0}，删除 ${s.deleted ?? 0}`,
+        `同步完成：新增 ${s.created ?? 0}，更新 ${s.updated ?? 0}，删除 ${s.deleted ?? 0}，共 ${s.total ?? 0} 条`,
+        6,
       )
       handleRefresh()
     } catch (err: any) {
@@ -200,7 +201,7 @@ export default function EmployeeProfileClient({
         <Alert
           type="info"
           showIcon
-          message="数据来源：飞书多维表格（单向同步）"
+          title="数据来源：飞书多维表格（单向同步）"
           description={`档案在飞书多维表格中维护，此处为只读展示（每天凌晨 02:00 自动同步）；上次同步：${syncInfo.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'}。`}
         />
       )}

@@ -84,12 +84,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 业务模块注册飞书事件回调（注册制分发，须在 WS 启动前完成）──
     # 员工档案同步已改为每天 02:00 定时对账 + 手动同步（scheduled），无 WS 实时事件
     from app.modules.equipment.feishu.callbacks import register_feishu_callbacks
+    from app.modules.hr.employee_info_collection_service import (
+        register_feishu_callbacks as register_eic_callbacks,
+    )
+    from app.modules.hr.probation_service import (
+        register_feishu_callbacks as register_probation_callbacks,
+    )
     from app.modules.hr.title_review.bitable_handler import (
         register_feishu_callbacks as register_hr_feishu_callbacks,
     )
 
     register_feishu_callbacks()
     register_hr_feishu_callbacks()
+    register_eic_callbacks()
+    register_probation_callbacks()
 
     # ── 平台级飞书 WebSocket 长连接 ──
     if settings.FEISHU_WS_ENABLED:
@@ -202,6 +210,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.hr.employee_sync.scheduled import EMPLOYEE_SYNC_TASK
 
     scheduler_registry.register_task(EMPLOYEE_SYNC_TASK)
+
+    # 试用期转正到期提醒（每天 09:00；接收人未配置时仅日志）
+    from app.modules.hr.probation_scheduled import PROBATION_REMINDER_TASK
+
+    scheduler_registry.register_task(PROBATION_REMINDER_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 

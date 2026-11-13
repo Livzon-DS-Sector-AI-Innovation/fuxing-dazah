@@ -114,20 +114,19 @@ class TestApplySync:
             "近五年年终绩效考核结果": '2024年"佳"'
         }
 
-    async def test_added_department_prefers_actual(self, db_session: AsyncSession, monkeypatch):
-        """部门取实际部门，实际部门为空才回落体现部门。"""
+    async def test_added_department_from_employee(self, db_session: AsyncSession, monkeypatch):
+        """申报归属部门取员工体现部门（新数据源只有一个部门概念）。"""
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
         employee_no = f"E{_rand()}"
         emp = await _create_employee(db_session, "周九", employee_no)
-        emp.actual_department = "AI创新部"
         emp.department = "质量控制部（QC部）"
         await db_session.flush()
 
         application = await service.sync_apply_record_added(
             activity.id, "rec1", _apply_fields("周九", employee_no)
         )
-        assert application.department == "AI创新部"
+        assert application.department == "质量控制部（QC部）"
 
     async def test_added_current_level_empty_stays_empty(self, db_session: AsyncSession, monkeypatch):
         """现任职级为空即留空，不做员工档案职称兜底（无职称如实体现）。"""
@@ -135,7 +134,6 @@ class TestApplySync:
         activity = await service.create_activity(_activity_create())
         employee_no = f"E{_rand()}"
         emp = await _create_employee(db_session, "吴十", employee_no)
-        emp.qualifications = ["工程师"]
         await db_session.flush()
 
         fields = _apply_fields("吴十", employee_no)

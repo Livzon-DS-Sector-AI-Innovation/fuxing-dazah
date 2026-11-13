@@ -16,13 +16,21 @@ from app.modules.hr.service import NotFoundException
 router = APIRouter(tags=["HR-AI简历筛选"])
 
 
-def _to_dict(r) -> dict:
+def _to_dict(r, jd=None) -> dict:
     return {
         "id": str(r.id),
         "job_requirement_id": str(r.job_requirement_id),
+        "job_name": jd.position_name if jd else None,
+        "job_department": jd.department if jd else None,
+        "candidate_id": str(r.candidate_id) if r.candidate_id else None,
         "jd_snapshot": r.jd_snapshot,
         "file_name": r.file_name,
         "candidate_name": r.candidate_name,
+        "core_evaluation": r.core_evaluation,
+        "talent_category": r.talent_category,
+        "candidate_profile": r.candidate_profile or {},
+        "dimension_assessment": r.dimension_assessment or {},
+        "match_report": r.match_report,
         "total_score": r.total_score,
         "recommendation": r.recommendation,
         "advantages": r.advantages or [],
@@ -60,15 +68,51 @@ async def screen_resume(
         raise HTTPException(400, str(e)) from e
 
 
-@router.get("/resume-screening", summary="按岗位查看筛选结果（总分降序排名）")
+@router.post("/resume-screening/candidate/{candidate_id}", summary="对已建档候选人的存量简历直接 AI 初筛（免重复上传）")
+async def screen_candidate_resume(
+    candidate_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+) -> JSONResponse:
+    """读取候选人已上传的简历文件，按其关联岗位需求 AI 打分；结果回链候选人并回写推荐等级/匹配报告。"""
+    service = ResumeScreeningService(session)
+    try:
+        result = await service.screen_candidate(candidate_id, operator=hr_scope.user.name)
+        await session.commit()
+        return success_response(data=_to_dict(result), message="初筛完成", status_code=201)
+    except NotFoundException as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/resume-screening", summary="筛选结果排名总览（岗位可选，不传=全部岗位，总分降序）")
 async def list_screening_results(
-    job_requirement_id: UUID,
+    job_requirement_id: UUID | None = None,
     session: AsyncSession = Depends(get_db),
     _ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read")),
 ) -> JSONResponse:
     service = ResumeScreeningService(session)
-    rows = await service.list_by_job_requirement(job_requirement_id)
-    return success_response(data=[_to_dict(r) for r in rows])
+    pairs = await service.list_ranking(job_requirement_id)
+    return success_response(data=[_to_dict(r, jd) for r, jd in pairs])
+
+
+@router.get("/resume-screening/{result_id}/resume-preview", summary="查看筛选结果的简历原文")
+async def screening_resume_preview(
+    result_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    _ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read")),
+):
+    """读取该筛选结果存档的简历 PDF（与候选人简历预览同一套存储读取规则）。"""
+    from fastapi.responses import Response
+
+    try:
+        data, _name = await ResumeScreeningService(session).get_resume_bytes(result_id)
+    except NotFoundException as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    return Response(content=data, media_type="application/pdf")
 
 
 @router.delete("/resume-screening/{result_id}", summary="删除筛选结果")

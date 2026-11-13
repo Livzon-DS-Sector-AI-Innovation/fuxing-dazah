@@ -326,7 +326,6 @@ export default function DepartmentClient({
             <Descriptions.Item label="状态">{detailEmployee.status}</Descriptions.Item>
             <Descriptions.Item label="手机">{detailEmployee.phone}</Descriptions.Item>
             <Descriptions.Item label="域账号">{detailEmployee.domain_account}</Descriptions.Item>
-            <Descriptions.Item label="部门管理者">{detailEmployee.dept_manager}</Descriptions.Item>
             <Descriptions.Item label="报表用职级">{detailEmployee.report_grade}</Descriptions.Item>
             <Descriptions.Item label="出生年月">{detailEmployee.birth_year}/{detailEmployee.birth_month}/{detailEmployee.birth_day}</Descriptions.Item>
           </Descriptions>

@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 
 from fastapi import Depends, Request
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -32,7 +32,13 @@ _logger = logging.getLogger(__name__)
 
 async def _resolve_own_department(db: AsyncSession, user: User) -> str | None:
     """解析登录人的体现部门：飞书部门为主（取叶子部门名），无飞书部门时
-    按工号反查员工档案兜底（与 HR 台账口径一致）。解析失败返回 None。"""
+    按工号反查员工档案兜底（与 HR 台账口径一致）。解析失败返回 None。
+
+    前提：部门名全局唯一（hr.departments 平面表无层级、name 无重名，
+    飞书侧叶子部门名也无跨路径撞名，2026-11 巡检确认）。数据范围按部门名
+    字符串匹配依赖此前提——若将来出现同名部门，会产生跨部门越权，
+    test_hr_deps 里的部门重名巡检测试会 WARN 提示。
+    """
     if user.department:
         return user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
     if user.employee_no:
@@ -94,11 +100,7 @@ class HrAccessContext:
             if employee.employee_number != self.employee_number:
                 raise ForbiddenException("数据范围限制：仅可访问本人记录")
         elif self.scoped_departments:
-            allowed = employee.department in self.scoped_departments or (
-                employee.department == "未分类"
-                and employee.actual_department in self.scoped_departments
-            )
-            if not allowed:
+            if employee.department not in self.scoped_departments:
                 raise ForbiddenException("数据范围限制：仅可访问授权部门员工")
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
@@ -127,16 +129,10 @@ class HrAccessContext:
             return stmt
         if self.data_scope == "self_only":
             return stmt.where(employee.employee_number == self.employee_number)
-        # 「未分类」人员按实际部门归属授权部门
+        # 按体现部门过滤（新数据源只有一个「部门」概念，无实际部门回落）
         if self.scoped_departments:
-            return stmt.where(or_(
-                employee.department.in_(self.scoped_departments),
-                and_(employee.department == "未分类", employee.actual_department.in_(self.scoped_departments)),
-            ))
-        return stmt.where(or_(
-            employee.department == self.department,
-            and_(employee.department == "未分类", employee.actual_department == self.department),
-        ))
+            return stmt.where(employee.department.in_(self.scoped_departments))
+        return stmt.where(employee.department == self.department)
 
     def ensure_dept_writable(self, departments: list[str | None]) -> None:
         """校验写入的部门是否在数据范围内，越界抛 403。
@@ -172,10 +168,11 @@ async def check_sensitive_permission(
     """检查当前用户是否有敏感信息查看权限"""
     from app.core.config import get_settings as _gs
     from app.platform.identity.deps import get_current_user
+    from app.platform.permission.deps import get_user_permissions
     user = await get_current_user(request, db=db, settings=_gs())
     if user is None:
         return False
-    perms = await _perm_repo.get_user_permission_codes(db, user.id)
+    perms = await get_user_permissions(str(user.id), db)
     return "hr:profile:sensitive" in perms
 
 
@@ -284,6 +281,10 @@ async def get_hr_scope(
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 员工档案
+    (r"/employee-info-collections", {"GET": "hr:profile:read", "POST": "hr:profile:update"}),
+    (r"/employee-info-collections/.*", "hr:profile:update"),
+    (r"/probation-reviews", {"GET": "hr:profile:read", "POST": "hr:profile:update"}),
+    (r"/probation-reviews/.*", "hr:profile:update"),
     (r"/employees/export", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
     (r"/employees/.*/onboarding-training-record", "hr:training:document"),
@@ -413,7 +414,9 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/candidates/.*/push-review", "hr:recruitment:manage"),
     (r"/candidates/.*/decide-review", "hr:recruitment:manage"),
     (r"/candidates/.*/onboard", "hr:recruitment:manage"),
-    (r"/recruitment/stats", "hr:recruitment:read"),
+    # 招聘统计/漏斗含全公司数据：数据分析是 HR 专属工具，收紧为管理权限
+    # （用人部门仅见"待我审核"，列表类接口另按数据范围收敛）
+    (r"/recruitment/stats", "hr:recruitment:manage"),
     (r"/recruitment", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                        "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/candidates", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
@@ -428,6 +431,54 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/user-department-access", {"GET": "hr:settings:manage", "POST": "hr:settings:manage",
                                    "DELETE": "hr:settings:manage"}),
     (r"/data-management", {"GET": "hr:settings:manage", "POST": "hr:settings:manage"}),
+    # 员工同步配置/触发（系统设置域）
+    (r"/employee-sync/config", {"GET": "hr:settings:manage", "PUT": "hr:settings:manage"}),
+    (r"/employee-sync/sync", "hr:settings:manage"),
+    # 模块根信息端点：有意不设权限码（任意 hr: 权限即可）
+    (r"/hr/$", None),
+    # AI 简历筛选（招聘域）——HR 专属工具，读写均需管理权限
+    (r"/resume-screening/candidate/", "hr:recruitment:manage"),
+    (r"/resume-screening/.*/convert", "hr:recruitment:manage"),
+    (r"/resume-screening", "hr:recruitment:manage"),
+    # 流失分析 / 员工异动种类（档案域报表与字典）
+    (r"/turnover-analysis", "hr:profile:read"),
+    (r"/employee-varieties", "hr:profile:read"),
+    # 培训管理员查询（培训域辅助接口）
+    (r"/training-admins", "hr:training:read"),
+    # SOP 培训记录（培训域；具体子路径在通用条目之前）
+    (r"/sop-training-records/years", "hr:training:read"),
+    (r"/sop-training-records/dept-trainers", "hr:training:read"),
+    (r"/sop-training-records/export", "hr:training:export"),
+    (r"/sop-training-records/.*/submit", "hr:training:manage"),
+    (r"/sop-training-records/.*/training-admins", "hr:training:read"),
+    (r"/sop-training-records", {"GET": "hr:training:read", "POST": "hr:training:manage",
+                                "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
+    # 工伤/纠纷台账
+    (r"/incidents", {"GET": "hr:incident:read", "POST": "hr:incident:manage",
+                     "PUT": "hr:incident:manage", "DELETE": "hr:incident:manage"}),
+    # 职称评审（具体子路径在通用条目之前）
+    (r"/title/activities/.*/bind-tables", "hr:title:manage"),
+    (r"/title/activities/.*/open", "hr:title:manage"),
+    (r"/title/activities/.*/review", "hr:title:manage"),
+    (r"/title/activities/.*/close", "hr:title:manage"),
+    (r"/title/activities/.*/reconcile", "hr:title:manage"),
+    (r"/title/activities/.*/results", "hr:title:read"),
+    (r"/title/activities/.*/summary", "hr:title:read"),
+    (r"/title/activities/.*/export", "hr:title:manage"),
+    (r"/title/activities/.*/applications", "hr:title:read"),
+    (r"/title/activities", {"GET": "hr:title:read", "POST": "hr:title:manage",
+                            "PUT": "hr:title:manage", "DELETE": "hr:title:manage"}),
+    (r"/title/committees", {"GET": "hr:title:read", "POST": "hr:title:manage",
+                            "DELETE": "hr:title:manage"}),
+    # 评审收尾 / 评委指定：管理动作
+    (r"/title/applications/.*/finalize", "hr:title:manage"),
+    (r"/title/applications/.*/default-judges", "hr:title:manage"),
+    (r"/title/applications/.*/judges", "hr:title:manage"),
+    (r"/title/applications/", "hr:title:read"),
+    # 评委本人任务/投票：授权实质是"被指定为评委"（handler 内校验），
+    # 门禁仅需 title:read，否则非管理员的评委无法履职
+    (r"/title/my-judge-tasks", "hr:title:read"),
+    (r"/title/judge-tasks/.*/vote", "hr:title:read"),
 ]
 
 
@@ -449,12 +500,14 @@ async def require_hr_basic(
 
     # 在映射表中查找匹配的权限码
     required_perm: str | None = None
+    matched = False
     for pattern, val in _HR_PATH_PERMISSIONS:
         if re.search(pattern, path):
             if isinstance(val, dict):
                 required_perm = val.get(method) or val.get("*")
             else:
                 required_perm = val
+            matched = True
             break
 
     if required_perm:
@@ -462,7 +515,14 @@ async def require_hr_basic(
         if not any(c in perms for c in allowed):
             raise ForbiddenException(f"缺少权限: {required_perm}")
 
-    # 未匹配到的路径，有任意 hr: 权限即可
+    # 未登记映射的路径只要求任意 hr: 权限（fail-open 兜底）。
+    # 打 WARNING 暴露漏登记：新端点必须补 _HR_PATH_PERMISSIONS（有路由覆盖测试把关）。
+    if not matched:
+        _logger.warning(
+            "HR 路径未登记权限映射，仅按任意 hr: 权限放行: %s %s "
+            "（请在 _HR_PATH_PERMISSIONS 补登记）", method, path,
+        )
+
     if not any(p.startswith("hr:") for p in perms):
         raise ForbiddenException("无HR模块访问权限，请联系管理员分配角色")
     return user

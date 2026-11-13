@@ -89,10 +89,20 @@ class TestJobRequirement:
         assert resp.json()["data"]["headcount"] == 5
 
     async def test_delete(self, client: AsyncClient):
+        """新口径：招聘中岗位不可直接删（400 提示先关闭）；已关闭后可删（级联清理见 test_recruitment_fixes）。"""
         resp = await client.post("/api/v1/hr/job-requirements", json={
             "position_name": "临时岗位", "department": "临时部门",
         })
         jid = resp.json()["data"]["id"]
+
+        # 招聘中直接删 → 400
+        resp = await client.delete(f"/api/v1/hr/job-requirements/{jid}")
+        assert resp.status_code == 400
+        assert "已关闭" in resp.json()["message"]
+
+        # 改为已关闭后删 → 200
+        resp = await client.put(f"/api/v1/hr/job-requirements/{jid}", json={"status": "已关闭"})
+        assert resp.status_code == 200
         resp = await client.delete(f"/api/v1/hr/job-requirements/{jid}")
         assert resp.status_code == 200
 
