@@ -65,15 +65,28 @@ def _extract_name(text: str) -> str:
     )
     if m:
         return re.sub(r"\s+", "", m.group(1))
-    # 清洗后的文本无换行结构：不要只取首行（那会是整个文档）。
-    # 取文档开头的前 60 个字符内首个 2-4 字中文串，并排除常见标题词。
+    # 兜底：文档开头无姓名标签时，取前 60 字符窗口内的首个姓名候选。
     # （窗口 30→60：平台导出 PDF 开头常有一段水印/单字竖排噪声先占十几个字符）
-    head = text[:60]
-    for m in re.finditer(r"([一-鿿]{2,4})", head):
-        candidate = m.group(1)
-        if candidate in _NAME_BLOCKLIST:
+    # 按空白切 token 扫描，支持两种形态：
+    # - 连续 2-4 字中文 token（常规简历：首行就是名字）
+    # - 相邻单字中文 token 游程拼接（字距排版把姓名拆成「翁 甜」）
+    tokens = text[:60].split()
+    run: list[str] = []  # 当前相邻单字中文游程
+    for tok in tokens:
+        if len(tok) == 1 and "一" <= tok <= "鿿":
+            run.append(tok)
+            if len(run) > 4:  # 超长游程不是姓名（如竖排水印整列）
+                run = run[-4:]
             continue
-        return candidate
+        # 游程结束：2-4 个单字拼成候选
+        if 2 <= len(run) <= 4:
+            return "".join(run)
+        run = []
+        # 连续 2-4 字纯中文 token
+        if 2 <= len(tok) <= 4 and all("一" <= ch <= "鿿" for ch in tok) and tok not in _NAME_BLOCKLIST:
+            return tok
+    if 2 <= len(run) <= 4:
+        return "".join(run)
     return ""
 
 

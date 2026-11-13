@@ -66,3 +66,14 @@ def test_major_stops_at_next_section():
 def test_major_spaced_value():
     from app.modules.hr.resume_parser import _extract_major
     assert _extract_major("专 业： 生 物 制 药 学 历：本科") == "生物制药"
+
+
+def test_name_fallback_adjacent_single_chars():
+    """智联简历：无标签 + 姓名被字距空格拆成「翁 甜」，兜底按单字游程拼接。"""
+    text = "个人简历 27岁 翁 甜 18770951892 求职意向：发酵研究员/生产工艺管理/技术支持"
+    assert _extract_name(text) == "翁甜"
+
+
+def test_name_fallback_plain_token():
+    text = "陈兆丰 男 28岁 本科 求职意向：QA专员"
+    assert _extract_name(text) == "陈兆丰"
