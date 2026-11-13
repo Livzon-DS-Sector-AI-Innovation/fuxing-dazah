@@ -149,9 +149,20 @@ def _extract_education(text: str) -> str:
 
 
 def _extract_major(text: str) -> str:
-    m = re.search(r"专\s*业\s*[：:]\s*([^\n]{1,20})", text)
+    # 标签后贪婪取中文段（容忍字间空格），以首个非中文非空白字符为界——
+    # 直聘 PDF 值后紧跟的水印噪声（「专业：生物制药 9 1 1f 1f c c b」中的
+    # 数字/字母碎片）与「药学类（方向）」的括号说明都会自然截断
+    m = re.search(r"专\s*业\s*[：:]\s*([一-鿿](?:[\s]?[一-鿿]){1,19})", text)
     if m:
-        return m.group(1).strip()
+        # 先合并字间空格，再截掉粘连的下一栏标签词（如「学 历：」→「学历」）
+        val = re.sub(r"\s+", "", m.group(1))
+        for tail in ("毕业院校", "求职意向", "求职方向", "工作经历", "教育经历", "专业技能",
+                     "专业证书", "学历", "学校", "电话", "手机", "邮箱", "性别", "出生年月", "政治面貌"):
+            idx = val.find(tail)
+            if idx > 0:
+                val = val[:idx]
+                break
+        return val
     for major in ["药学", "化学", "生物工程", "计算机科学", "软件工程", "机械工程", "会计", "人力资源",
                   "制药工程", "生物技术", "药物分析", "分析化学", "临床医学"]:
         if major in text:

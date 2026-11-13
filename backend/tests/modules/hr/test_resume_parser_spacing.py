@@ -49,3 +49,20 @@ def test_education_spaced_label():
 def test_name_not_found_when_no_cjk_in_head():
     """开头无任何中文（纯噪声/英文）时返回空，交由占位与人工修改兜底。"""
     assert _extract_name("~ A 8eb50979a361c6071HB939y6E1tWx423WPuXWOGnnfDVNRNk3A~ 2023.06 Bachelor") == ""
+
+
+def test_major_stops_at_watermark_noise():
+    """直聘 PDF：专业值后紧跟水印噪声碎片，应只取词组本身。"""
+    from app.modules.hr.resume_parser import _extract_major
+    text = "邮箱：873436616@qq.com 专业：生物制药 9 1 1f 1f c c b 0 b 0 a a e e d d"
+    assert _extract_major(text) == "生物制药"
+
+
+def test_major_stops_at_next_section():
+    from app.modules.hr.resume_parser import _extract_major
+    assert _extract_major("学历：成人大专 专业：计算机应用技术 求职方向 - 制药生产技术员") == "计算机应用技术"
+
+
+def test_major_spaced_value():
+    from app.modules.hr.resume_parser import _extract_major
+    assert _extract_major("专 业： 生 物 制 药 学 历：本科") == "生物制药"
