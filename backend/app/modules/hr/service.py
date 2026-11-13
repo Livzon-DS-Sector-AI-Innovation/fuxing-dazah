@@ -28,6 +28,8 @@ from app.modules.hr.models import (
     Employee,
     HrDepartment,
     Interview,
+    InterviewFeedback,
+    InterviewStatusLog,
     JobRequirement,
     MonthlyPerformanceEvaluation,
     OffboardingRecord,
@@ -48,6 +50,7 @@ from app.modules.hr.repository import (
     DepartmentRepository,
     DepartureRecordRepository,
     EmployeeRepository,
+    InterviewFeedbackRepository,
     InterviewRepository,
     JobRequirementRepository,
     OffboardingRecordRepository,
@@ -70,6 +73,7 @@ from app.modules.hr.schemas import (
     EmployeeCreate,
     EmployeeUpdate,
     InterviewCreate,
+    InterviewFeedbackIn,
     InterviewUpdate,
     JobRequirementCreate,
     JobRequirementUpdate,
@@ -1778,6 +1782,34 @@ class InterviewService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = InterviewRepository(session)
 
+    # 面试状态机白名单（镜像 _CANDIDATE_TRANSITIONS 模式）：
+    # 待安排→已安排/已完成（无日历的面试实际发生了可直接完成）/已取消；
+    # 已安排→已完成/已取消/待安排（改期回退）；已完成/已取消为终态
+    _TRANSITIONS: dict[str, set[str]] = {
+        "待安排": {"已安排", "已完成", "已取消"},
+        "已安排": {"已完成", "已取消", "待安排"},
+        "已完成": set(),
+        "已取消": set(),
+    }
+
+    @classmethod
+    def _validate_transition(cls, current: str, target: str) -> None:
+        allowed = cls._TRANSITIONS.get(current, set())
+        if target not in allowed:
+            raise AppException(
+                status_code=400,
+                message=f"不允许将面试状态从「{current}」变更为「{target}」",
+            )
+
+    def _log_status(
+        self, interview_id: UUID, from_status: str | None, to_status: str,
+        operator: str | None, remark: str | None = None,
+    ) -> None:
+        self.repo.session.add(InterviewStatusLog(
+            interview_id=interview_id, from_status=from_status, to_status=to_status,
+            operator=operator, remark=remark,
+        ))
+
     async def list_by_candidate(self, candidate_id: UUID) -> list[Interview]:
         return await self.repo.list_by_candidate(candidate_id)
 
@@ -1834,6 +1866,11 @@ class InterviewService:
                 # 面试已保存成功，日程失败不回滚——记录原因随响应返回供前端提示
                 result.calendar_sync_error = f"飞书日程创建失败：{e}"
 
+        self._log_status(
+            result.id, None, result.status,
+            operator=operator_name, remark="创建面试",
+        )
+        await self.repo.session.flush()
         return result
 
     @staticmethod
@@ -1898,10 +1935,21 @@ class InterviewService:
                 exclude_id=interview_id, force=data.force_conflict,
             )
 
+        # 状态流转校验（白名单）+ 落状态日志
+        if "status" in fields and fields["status"] != old_status:
+            self._validate_transition(old_status, fields["status"])
+
         for k, v in fields.items():
             setattr(iv, k, v)
         iv.updated_by = operator
         result = await self.repo.update(iv)
+
+        if old_status != result.status:
+            self._log_status(
+                interview_id, old_status, result.status,
+                operator=operator_name, remark="更新面试",
+            )
+            await self.repo.session.flush()
 
         # 状态联动：标记完成的瞬间，若候选人处于「面试中」且无剩余未完成轮次，
         # 自动推进到「已面试」（走候选人状态机白名单，失败不影响面试保存）
@@ -1998,17 +2046,27 @@ class InterviewService:
             end_time_val=interview.end_time,
         )
 
-    async def delete(self, interview_id: UUID, operator: UUID | None = None) -> None:
+    async def delete(
+        self, interview_id: UUID,
+        operator: UUID | None = None, operator_name: str | None = None,
+    ) -> None:
         """取消面试：状态流转为「已取消」+ 删除日历事件。
 
         不做软删除——已取消的记录保留在面试列表中（前端已渲染红色 Tag），
-        与 PUT 改状态为「已取消」的行为保持一致。
+        与 PUT 改状态为「已取消」的行为保持一致。终态（已完成/已取消）不可再取消。
         """
         iv = await self.get(interview_id)
         if iv.status != "已取消":
+            self._validate_transition(iv.status, "已取消")
+            old_status = iv.status
             iv.status = "已取消"
             iv.updated_by = operator
             await self.repo.update(iv)
+            self._log_status(
+                interview_id, old_status, "已取消",
+                operator=operator_name, remark="取消面试",
+            )
+            await self.repo.session.flush()
         if iv.calendar_event_id:
             await self._delete_calendar_event_quietly(iv)
 
@@ -2618,6 +2676,53 @@ _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，�
 【面试记录】
 {interview_text}
 """
+
+
+class InterviewFeedbackService:
+    """人工面试评价：每场面试一条，重复提交覆盖更新。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.repo = InterviewFeedbackRepository(session)
+
+    async def get_by_interview(self, interview_id: UUID) -> InterviewFeedback | None:
+        return await self.repo.get_by_interview(interview_id)
+
+    async def upsert(
+        self, interview_id: UUID, data: InterviewFeedbackIn, operator: UUID | None = None,
+    ) -> InterviewFeedback:
+        interview = await InterviewRepository(self.repo.session).get_by_id(interview_id)
+        if not interview:
+            raise NotFoundException("面试记录", str(interview_id))
+        if data.result not in ("通过", "待定", "不通过"):
+            raise AppException(status_code=400, message="面试结论仅支持：通过/待定/不通过")
+
+        dimensions = [d.model_dump() for d in data.dimensions]
+        existing = await self.repo.get_by_interview(interview_id)
+        if existing:
+            existing.evaluator = data.evaluator
+            existing.dimensions = dimensions
+            existing.overall_comment = data.overall_comment
+            existing.result = data.result
+            existing.updated_by = operator
+            await self.repo.session.flush()
+            # UPDATE 后 re-fetch（铁律：flush 不回填 updated_at，避免懒加载）
+            r = await self.repo.session.execute(
+                select(InterviewFeedback).where(InterviewFeedback.id == existing.id)
+            )
+            return r.scalar_one()
+
+        fb = InterviewFeedback(
+            interview_id=interview_id,
+            candidate_id=interview.candidate_id,
+            evaluator=data.evaluator,
+            dimensions=dimensions,
+            overall_comment=data.overall_comment,
+            result=data.result,
+            created_by=operator,
+        )
+        self.repo.session.add(fb)
+        await self.repo.session.flush()
+        return fb
 
 
 class CandidateAnalysisService:

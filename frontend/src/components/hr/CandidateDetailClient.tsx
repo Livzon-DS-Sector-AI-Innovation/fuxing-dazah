@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
-  Form, DatePicker, TimePicker, Modal, Card, InputNumber, Empty, Space, Checkbox, Upload,
+  Form, DatePicker, TimePicker, Modal, Card, InputNumber, Empty, Space, Checkbox, Upload, Rate,
 } from 'antd'
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
@@ -16,12 +16,13 @@ import {
   RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
   FileSearchOutlined,
 } from '@ant-design/icons'
-import type { Candidate, Interview, OnboardingTask } from '@/types/hr'
+import type { Candidate, Interview, InterviewFeedback, OnboardingTask } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
   parseResumeAction,
   transitionCandidateStatus,
   createInterview, updateInterview, deleteInterview,
+  saveInterviewFeedback, fetchInterviewFeedback,
   pushCandidateReview, decideCandidateReview, pushOnboardingReview,
   fetchCandidateInterviews, fetchPendingReviews,
   fetchCandidateReviews,
@@ -95,6 +96,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [interviewModalOpen, setInterviewModalOpen] = useState(false)
   const [editingInterview, setEditingInterview] = useState<Interview | null>(null)
   const [interviewSaving, setInterviewSaving] = useState(false)
+
+  // 人工面试评价（区别于 AI 胜任度报告：面试官结构化打分 + 结论）
+  const FEEDBACK_DIMENSIONS = ['专业能力', '沟通表达', '岗位匹配', '发展潜力']
+  const [feedbacks, setFeedbacks] = useState<Record<string, InterviewFeedback>>({})
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false)
+  const [feedbackInterview, setFeedbackInterview] = useState<Interview | null>(null)
+  const [feedbackSaving, setFeedbackSaving] = useState(false)
+  const [feedbackForm] = Form.useForm()
 
   // 面试官选择器：远程搜索在职员工（值存姓名——飞书日程/冲突检测按姓名匹配）
   const [interviewerOptions, setInterviewerOptions] = useState<{ value: string; label: string }[]>([])
@@ -194,6 +203,16 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       fetchCandidateAnalysisReports(candidate.id)
         .then((d) => setAnalysisReports(d.data || []))
         .catch(() => {})
+      // 人工评价并行拉取（每场一条）
+      const fbResults = await Promise.allSettled(
+        (r.data || []).map((iv: Interview) => fetchInterviewFeedback(iv.id))
+      )
+      fbResults.forEach((res, i) => {
+        if (res.status === 'fulfilled' && res.value.data) {
+          const iv = (r.data || [])[i]
+          setFeedbacks(prev => ({ ...prev, [iv.id]: res.value.data }))
+        }
+      })
     } catch (err: any) {
       console.error('加载面试列表失败:', err)
       message.error('加载面试列表失败: ' + (err.message || '未知错误'))
@@ -338,6 +357,47 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       loadInterviews()
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setInterviewSaving(false) }
+  }
+
+  const openFeedbackModal = (iv: Interview) => {
+    setFeedbackInterview(iv)
+    const existing = feedbacks[iv.id]
+    const dims: Record<string, { score?: number; comment?: string }> = {}
+    FEEDBACK_DIMENSIONS.forEach((name) => {
+      const d = existing?.dimensions?.find((x) => x.name === name)
+      dims[name] = { score: d?.score, comment: d?.comment }
+    })
+    feedbackForm.setFieldsValue({
+      evaluator: existing?.evaluator || iv.interviewer || '',
+      dims,
+      overall_comment: existing?.overall_comment || '',
+      result: existing?.result,
+    })
+    setFeedbackModalOpen(true)
+  }
+
+  const handleSaveFeedback = async () => {
+    if (!feedbackInterview) return
+    const v = await feedbackForm.validateFields()
+    setFeedbackSaving(true)
+    try {
+      const res = await saveInterviewFeedback(feedbackInterview.id, {
+        evaluator: v.evaluator,
+        result: v.result,
+        overall_comment: v.overall_comment || undefined,
+        dimensions: FEEDBACK_DIMENSIONS
+          .map((name) => ({
+            name,
+            score: v.dims?.[name]?.score ?? 0,
+            comment: v.dims?.[name]?.comment || undefined,
+          }))
+          .filter((d) => d.score > 0 || d.comment),
+      })
+      setFeedbacks(prev => ({ ...prev, [feedbackInterview.id]: res.data }))
+      message.success('面试评价已保存')
+      setFeedbackModalOpen(false)
+    } catch (err: any) { message.error(err.message || '保存失败') }
+    finally { setFeedbackSaving(false) }
   }
 
   const handleDeleteInterview = async (id: string) => {
@@ -718,6 +778,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                       {iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
                     </span>
                     {iv.calendar_event_id && <Tag color="purple" className="text-xs">日历已同步</Tag>}
+                    {feedbacks[iv.id] && (
+                      <Tag color={feedbacks[iv.id].result === '通过' ? 'green' : feedbacks[iv.id].result === '不通过' ? 'red' : 'orange'} className="text-xs">
+                        评价：{feedbacks[iv.id].result}
+                      </Tag>
+                    )}
                   </div>
                 } extra={
                   <div className="flex gap-1">
@@ -734,6 +799,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                       })
                       setInterviewModalOpen(true)
                     }}>编辑</Button>
+                    <Button size="small" onClick={() => openFeedbackModal(iv)}>面试评价</Button>
                     <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消</Button>
                   </div>
                 }>
@@ -846,6 +912,38 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               <Form.Item name="notes" label="备注"><Input.TextArea rows={2} /></Form.Item>
             </>
           )}
+        </Form>
+      </Modal>
+
+      {/* 人工面试评价 Modal */}
+      <Modal title={feedbackInterview ? `面试评价 —— ${feedbackInterview.interview_type}` : '面试评价'}
+        open={feedbackModalOpen}
+        onCancel={() => setFeedbackModalOpen(false)} onOk={handleSaveFeedback} confirmLoading={feedbackSaving}>
+        <Form form={feedbackForm} layout="vertical">
+          <Form.Item name="evaluator" label="评价人" rules={[{ required: true, message: '请填写评价人' }]}>
+            <Input placeholder="默认面试官" />
+          </Form.Item>
+          {FEEDBACK_DIMENSIONS.map((name) => (
+            <div key={name} className="mb-2">
+              <div className="text-sm mb-1">{name}</div>
+              <div className="flex gap-3 items-start">
+                <Form.Item name={['dims', name, 'score']} noStyle>
+                  <Rate />
+                </Form.Item>
+                <Form.Item name={['dims', name, 'comment']} noStyle className="flex-1">
+                  <Input.TextArea rows={1} placeholder={`${name}评语（可选）`} />
+                </Form.Item>
+              </div>
+            </div>
+          ))}
+          <Form.Item name="overall_comment" label="总体评价"><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="result" label="面试结论" rules={[{ required: true, message: '请选择面试结论' }]}>
+            <Select options={[
+              { label: '✅ 通过', value: '通过' },
+              { label: '🤔 待定', value: '待定' },
+              { label: '❌ 不通过', value: '不通过' },
+            ]} />
+          </Form.Item>
         </Form>
       </Modal>
 

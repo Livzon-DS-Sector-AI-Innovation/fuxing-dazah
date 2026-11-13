@@ -23,6 +23,7 @@ from app.modules.hr.models import (
     Employee,
     HrDepartment,
     Interview,
+    InterviewFeedback,
     JobRequirement,
     MonthlyPerformanceEvaluation,
     OffboardingRecord,
@@ -1300,6 +1301,20 @@ class InterviewRepository:
         if iv:
             iv.is_deleted = True
             await self.session.flush()
+
+
+class InterviewFeedbackRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_by_interview(self, interview_id: UUID) -> InterviewFeedback | None:
+        result = await self.session.execute(
+            select(InterviewFeedback).where(
+                InterviewFeedback.interview_id == interview_id,
+                InterviewFeedback.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
 
 
 class CandidateAiEvaluationRepository:

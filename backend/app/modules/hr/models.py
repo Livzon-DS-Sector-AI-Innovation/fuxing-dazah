@@ -1315,6 +1315,50 @@ class Interview(BaseModel):
     calendar_sync_error: str | None = None
 
 
+class InterviewStatusLog(BaseModel):
+    """面试状态流转日志（镜像 CandidateStatusLog 模式）。"""
+
+    __tablename__ = "interview_status_logs"
+    __table_args__ = (
+        Index("ix_isl_interview_id", "interview_id"),
+        {"schema": "hr"},
+    )
+
+    interview_id: Mapped[UUID] = mapped_column(nullable=False, comment="面试ID")
+    from_status: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="原状态")
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False, comment="新状态")
+    operator: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="操作人")
+    remark: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="备注")
+
+
+class InterviewFeedback(BaseModel):
+    """人工面试评价：面试官结构化打分与结论（区别于 AI 胜任度报告）。
+
+    每场面试一条（部分唯一索引）；dimensions 为固定四维度
+    [{name, score(1-5), comment}]。
+    """
+
+    __tablename__ = "interview_feedbacks"
+    __table_args__ = (
+        Index(
+            "uq_if_interview", "interview_id", unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    interview_id: Mapped[UUID] = mapped_column(nullable=False, comment="面试ID")
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    evaluator: Mapped[str] = mapped_column(String(64), nullable=False, comment="评价人（面试官）")
+    dimensions: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="维度评分 [{name, score(1-5), comment}]"
+    )
+    overall_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="总体评价")
+    result: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="结论：通过/待定/不通过"
+    )
+
+
 # ─── 招聘：候选人胜任度分析报告（多维度） ───
 
 

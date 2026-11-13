@@ -19,10 +19,16 @@ from app.modules.hr.deps import HrAccessContext, require_hr_access
 from app.modules.hr.schemas import (
     CandidateAnalysisReportOut,
     InterviewCreate,
+    InterviewFeedbackIn,
+    InterviewFeedbackOut,
     InterviewResponse,
     InterviewUpdate,
 )
-from app.modules.hr.service import CandidateAnalysisService, InterviewService
+from app.modules.hr.service import (
+    CandidateAnalysisService,
+    InterviewFeedbackService,
+    InterviewService,
+)
 
 router = APIRouter(tags=["HR-面试管理"])
 
@@ -82,8 +88,41 @@ async def update_interview(interview_id: UUID, payload: InterviewUpdate, backgro
 
 @router.delete("/interviews/{interview_id}", summary="取消面试")
 async def delete_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
-    await service.delete(interview_id, operator=ctx.user.id)
+    await service.delete(interview_id, operator=ctx.user.id, operator_name=ctx.user.name)
     return success_response(message="已取消")
+
+
+# ─── 人工面试评价 ───
+
+
+def get_feedback_service(session: AsyncSession = Depends(get_db)) -> InterviewFeedbackService:
+    return InterviewFeedbackService(session)
+
+
+@router.post("/interviews/{interview_id}/feedback", summary="提交/更新面试评价")
+async def submit_feedback(
+    interview_id: UUID,
+    payload: InterviewFeedbackIn,
+    service: InterviewFeedbackService = Depends(get_feedback_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+):
+    fb = await service.upsert(interview_id, payload, operator=ctx.user.id)
+    return success_response(
+        data=InterviewFeedbackOut.model_validate(fb).model_dump(mode="json"),
+        message="面试评价已保存",
+    )
+
+
+@router.get("/interviews/{interview_id}/feedback", summary="获取面试评价")
+async def get_feedback(
+    interview_id: UUID,
+    service: InterviewFeedbackService = Depends(get_feedback_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read")),
+):
+    fb = await service.get_by_interview(interview_id)
+    if not fb:
+        return success_response(data=None, message="尚未评价")
+    return success_response(data=InterviewFeedbackOut.model_validate(fb).model_dump(mode="json"))
 
 
 # ─── AI 评估（统一走胜任度报告） ───

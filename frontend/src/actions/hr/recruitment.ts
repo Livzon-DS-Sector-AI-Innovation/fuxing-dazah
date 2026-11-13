@@ -9,6 +9,7 @@ import {
   JobRequirementCreateInput,
   JobRequirementUpdateInput,
   InterviewCreateInput,
+  InterviewFeedbackInput,
   InterviewUpdateInput,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrText, fetchHrDownload } from './_helpers'
@@ -311,6 +312,22 @@ export async function deleteInterview(id: string) {
   const res = await fetchHrApi(`/hr/interviews/${id}`, {
     method: 'DELETE',
     errorMessage: '取消面试失败',
+  })
+  revalidatePath('/hr/recruitment')
+  return res
+}
+
+// ─── 人工面试评价 ───
+
+export async function fetchInterviewFeedback(interviewId: string): Promise<{ data: any }> {
+  return fetchHrApi(`/hr/interviews/${interviewId}/feedback`, { errorMessage: '获取面试评价失败' })
+}
+
+export async function saveInterviewFeedback(interviewId: string, data: InterviewFeedbackInput) {
+  const res = await fetchHrApi(`/hr/interviews/${interviewId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    errorMessage: '保存面试评价失败',
   })
   revalidatePath('/hr/recruitment')
   return res

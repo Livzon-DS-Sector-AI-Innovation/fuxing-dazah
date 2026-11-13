@@ -1268,3 +1268,33 @@ class CandidateAnalysisReportOut(BaseModel):
     raw_text: str | None
     model_version: str | None
     generated_at: datetime | None
+
+
+# ─── Recruitment: Interview Feedback Schemas（人工面试评价） ───
+
+
+class InterviewFeedbackDimension(BaseModel):
+    name: str = Field(max_length=32, description="维度名")
+    score: int = Field(ge=1, le=5, description="1-5 分")
+    comment: str | None = Field(None, max_length=500)
+
+
+class InterviewFeedbackIn(BaseModel):
+    evaluator: str = Field(max_length=64, description="评价人（默认面试官）")
+    dimensions: list[InterviewFeedbackDimension] = Field(default_factory=list)
+    overall_comment: str | None = None
+    result: str = Field(description="结论：通过/待定/不通过")
+
+
+class InterviewFeedbackOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    interview_id: UUID
+    candidate_id: UUID
+    evaluator: str
+    dimensions: list | None
+    overall_comment: str | None
+    result: str
+    updated_at: datetime | None
+    created_at: datetime | None

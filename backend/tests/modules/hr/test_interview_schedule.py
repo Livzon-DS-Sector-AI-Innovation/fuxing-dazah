@@ -227,6 +227,87 @@ async def test_evaluation_endpoint_reads_analysis_report(client: AsyncClient, db
     assert "面试记录" in resp.json()["message"]
 
 
+# ─── 状态机：流转白名单 + 状态日志 ───
+
+
+async def test_status_transition_whitelist(client: AsyncClient, db_session: AsyncSession):
+    from app.modules.hr.models import InterviewStatusLog
+
+    jd = _mk_jd(db_session)
+    c = _mk_candidate(db_session, jd, status="已面试")
+    await db_session.flush()
+    iv_id = (await _create_iv(client, c.id, interviewer="钱七")).json()["data"]["id"]
+
+    # 非法：已完成 → 已安排（终态不可回退）
+    r = await client.put(f"/api/v1/hr/interviews/{iv_id}", json={"status": "已安排"})
+    assert r.status_code == 200  # 待安排 → 已安排 合法
+    r = await client.put(f"/api/v1/hr/interviews/{iv_id}", json={"status": "已完成"})
+    assert r.status_code == 200  # 已安排 → 已完成 合法
+    r = await client.put(f"/api/v1/hr/interviews/{iv_id}", json={"status": "已安排"})
+    assert r.status_code == 400
+    assert "不允许" in r.json()["message"]
+    # 终态不可取消
+    assert (await client.delete(f"/api/v1/hr/interviews/{iv_id}")).status_code == 400
+
+    # 状态日志完整记录流转链
+    await db_session.flush()
+    logs = (await db_session.execute(
+        select(InterviewStatusLog)
+        .where(InterviewStatusLog.interview_id == iv_id)
+        .order_by(InterviewStatusLog.created_at)
+    )).scalars().all()
+    chain = [(log.from_status, log.to_status) for log in logs]
+    assert (None, "待安排") in chain  # 创建日志
+    assert ("待安排", "已安排") in chain
+    assert ("已安排", "已完成") in chain
+
+
+# ─── 人工面试评价 ───
+
+
+async def test_feedback_upsert_and_get(client: AsyncClient, db_session: AsyncSession):
+    from app.modules.hr.models import InterviewFeedback
+
+    jd = _mk_jd(db_session)
+    c = _mk_candidate(db_session, jd)
+    await db_session.flush()
+    iv_id = (await _create_iv(client, c.id, interviewer="钱七")).json()["data"]["id"]
+
+    payload = {
+        "evaluator": "钱七",
+        "dimensions": [
+            {"name": "专业能力", "score": 4, "comment": "基础扎实"},
+            {"name": "沟通表达", "score": 5},
+        ],
+        "overall_comment": "整体表现良好",
+        "result": "通过",
+    }
+    resp = await client.post(f"/api/v1/hr/interviews/{iv_id}/feedback", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["result"] == "通过"
+
+    # 重复提交 = 覆盖更新，不产生第二条
+    payload["result"] = "待定"
+    resp = await client.post(f"/api/v1/hr/interviews/{iv_id}/feedback", json=payload)
+    assert resp.status_code == 200
+    await db_session.flush()
+    rows = (await db_session.execute(
+        select(InterviewFeedback).where(InterviewFeedback.interview_id == iv_id)
+    )).scalars().all()
+    assert len(rows) == 1 and rows[0].result == "待定"
+
+    resp = await client.get(f"/api/v1/hr/interviews/{iv_id}/feedback")
+    assert resp.json()["data"]["result"] == "待定"
+    assert resp.json()["data"]["dimensions"][0]["name"] == "专业能力"
+
+    # 结论枚举校验
+    resp = await client.post(
+        f"/api/v1/hr/interviews/{iv_id}/feedback",
+        json={"evaluator": "钱七", "result": "优秀"},
+    )
+    assert resp.status_code == 400
+
+
 # ─── 取消语义：状态置「已取消」且记录保留 ───
 
 

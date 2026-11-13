@@ -740,6 +740,31 @@ export interface InterviewUpdateInput {
   force_conflict?: boolean
 }
 
+export interface InterviewFeedbackDimension {
+  name: string
+  score: number
+  comment?: string
+}
+
+export interface InterviewFeedback {
+  id: string
+  interview_id: string
+  candidate_id: string
+  evaluator: string
+  dimensions?: InterviewFeedbackDimension[] | null
+  overall_comment?: string | null
+  result: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface InterviewFeedbackInput {
+  evaluator: string
+  dimensions?: InterviewFeedbackDimension[]
+  overall_comment?: string
+  result: string
+}
+
 export interface AiEvaluation {
   id: string
   candidate_id: string
