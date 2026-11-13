@@ -31,6 +31,7 @@ import {
   fetchEmployeesAction, screenCandidateAction, fetchJobRequirements,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
+import { usePermission } from '@/hooks/usePermission'
 import AIScoreCard from './AIScoreCard'
 
 interface CandidateDetailClientProps {
@@ -40,6 +41,9 @@ interface CandidateDetailClientProps {
 export default function CandidateDetailClient({ candidate }: CandidateDetailClientProps) {
   const router = useRouter()
   const { message } = App.useApp()
+  // 招聘管理权限：人事专员可操作全流程；用人部门负责人（审核人）仅查看 + 同意/驳回
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('hr:recruitment:manage')
   const [pdfLoading, setPdfLoading] = useState(true)
   const [pdfError, setPdfError] = useState(false)
   const [pdfErrorMsg, setPdfErrorMsg] = useState('')
@@ -511,9 +515,9 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                 <Button icon={<SaveOutlined />} type="primary" loading={saving} onClick={handleSave}>保存修改</Button>
                 <Button icon={<CloseOutlined />} onClick={handleCancel} disabled={saving}>取消</Button>
               </>
-            ) : (
+            ) : canManage ? (
               <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -547,14 +551,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             {isEditing ? <Input value={formData.expected_salary} onChange={e => setFormData({ ...formData, expected_salary: e.target.value })} /> : (candidate.expected_salary || '-')}
           </Descriptions.Item>
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
-          {candidate.status === '已录用' && (
+          {candidate.status === '已录用' && canManage && (
             <Descriptions.Item label="入职操作">
               <Button type="primary" onClick={handlePushOnboarding}>
                 📋 发起入职审批
               </Button>
             </Descriptions.Item>
           )}
-          {candidate.status === '待入职审批' && (
+          {candidate.status === '待入职审批' && canManage && (
             <Descriptions.Item label="入职操作">
               <Space>
                 <Button type="primary" loading={onboardLoading} onClick={handleOnboard}>
@@ -581,7 +585,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <h3 className="text-sm font-medium mb-2">推荐等级</h3>
             <Select style={{ width: '100%' }} placeholder="选择推荐等级" value={recommendationLevel || undefined}
               onChange={handleUpdateRecommendation} options={recommendationOptions} loading={updating} />
-            {candidate.resume_url && candidate.job_requirement_id && (
+            {candidate.resume_url && candidate.job_requirement_id && canManage && (
               <Button className="mt-2" block icon={<FileSearchOutlined />}
                 loading={screening}
                 onClick={handleScreenCandidate}
@@ -590,8 +594,8 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               </Button>
             )}
           </div>
-          {/* 推送审核：已筛选状态时显示 */}
-          {candidate.status === '已筛选' && (
+          {/* 推送审核：已筛选状态时显示（HR 操作） */}
+          {candidate.status === '已筛选' && canManage && (
             <div className="mt-2">
               <Button type="primary" icon={<SendOutlined />} onClick={openPushModal}>
                 推送给用人部门审核
@@ -639,7 +643,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               </div>
             </div>
           )}
-          {nextStatuses.length > 0 && (
+          {canManage && nextStatuses.length > 0 && (
             <div>
               <h3 className="text-sm font-medium mb-2">状态流转</h3>
               <div className="flex gap-2">
@@ -831,8 +835,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
 
   const tabItems = [
     { key: 'info', label: '基本信息', children: infoTab },
-    { key: 'interviews', label: `面试记录 (${interviews.length})`, children: interviewTab },
-    { key: 'onboarding', label: `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})`, children: onboardingTasksTab },
+    // 面试记录/入职任务是 HR 操作区：用人部门负责人（仅审核）不展示
+    ...(canManage ? [
+      { key: 'interviews', label: `面试记录 (${interviews.length})`, children: interviewTab },
+      { key: 'onboarding', label: `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})`, children: onboardingTasksTab },
+    ] : []),
   ]
 
   return (

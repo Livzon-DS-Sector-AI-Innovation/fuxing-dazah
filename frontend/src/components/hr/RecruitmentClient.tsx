@@ -15,6 +15,7 @@ import {
   fetchEmployeesAction, screenCandidateAction,
 } from '@/actions/hr'
 import type { Candidate, JobRequirement, RecruitmentStats } from '@/types/hr'
+import { usePermission } from '@/hooks/usePermission'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
@@ -67,6 +68,10 @@ const BATCH_STAGE_COLOR: Record<BatchResumeItem['stage'], string> = {
 export default function RecruitmentClient() {
   const { message: msg } = App.useApp()
   const router = useRouter()
+  // 招聘管理权限：人事专员见全功能；用人部门负责人（审核人）仅见"待我审核"。
+  // 页面外层 PermissionGuard 已等权限加载完成，此处 hasPermission 结果可靠。
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('hr:recruitment:manage')
   const [jobs, setJobs] = useState<JobRequirement[]>([])
   const [allCandidates, setAllCandidates] = useState<Candidate[]>([])
   const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set())
@@ -85,8 +90,8 @@ export default function RecruitmentClient() {
   const [offerForm] = Form.useForm()
   const [offerSending, setOfferSending] = useState(false)
 
-  // 待我审核
-  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening'>('jobs')
+  // 待我审核（无管理权限的审核人默认落在"待我审核"）
+  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening'>(canManage ? 'jobs' : 'reviews')
   const [pendingReviews, setPendingReviews] = useState<any[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
 
@@ -406,7 +411,9 @@ export default function RecruitmentClient() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">招聘管理</h1>
-        <span className="text-xs text-[var(--color-stone)]">{jobs.length} 个岗位 · {allCandidates.length} 个候选人</span>
+        {canManage
+          ? <span className="text-xs text-[var(--color-stone)]">{jobs.length} 个岗位 · {allCandidates.length} 个候选人</span>
+          : <span className="text-xs text-[var(--color-stone)]">{pendingReviews.length} 位候选人待您审核</span>}
       </div>
 
       <Tabs
@@ -420,7 +427,8 @@ export default function RecruitmentClient() {
           ),
         }}
         items={[
-          {
+          // 岗位招聘/AI 筛简历/数据分析是 HR 工具：用人部门负责人（审核人）仅见"待我审核"
+          ...(canManage ? [{
             key: 'jobs',
             label: '岗位招聘',
             children: (<>
@@ -693,7 +701,7 @@ export default function RecruitmentClient() {
                 </div>
               </Modal>
             </>),
-          },
+          }] : []),
           {
             key: 'reviews',
             label: (
@@ -737,7 +745,7 @@ export default function RecruitmentClient() {
               </Card>
             ),
           },
-          {
+          ...(canManage ? [{
             key: 'screening',
             label: <span className="flex items-center gap-1.5"><FileSearchOutlined />AI 筛简历</span>,
             children: <ResumeScreeningPanel />,
@@ -839,7 +847,7 @@ export default function RecruitmentClient() {
                 )}
               </Card>
             ),
-          },
+          }] : []),
         ]}
       />
     </div>
