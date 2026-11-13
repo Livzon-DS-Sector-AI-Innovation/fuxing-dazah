@@ -57,6 +57,10 @@ def _signal_title(signal: str, subject: str | None = None) -> str:
         signals.SIGNAL_DEADLETTER: "隐患 AI 死信积压",
         signals.SIGNAL_DEP_RECOVERED: f"上游依赖恢复（{subject or ''}）",
         signals.SIGNAL_BATCH: "多组件故障（防风暴聚合）",
+        signals.SIGNAL_AICALL_FAILED: f"AI 调用连续失败（{subject or ''}）",
+        signals.SIGNAL_PUSH_FAILED: f"推送失败（{subject or ''}）",
+        signals.SIGNAL_RAGFLOW_FAILED: "RAG 引擎批量入库失败",
+        signals.SIGNAL_EVENT_FAILED: f"飞书事件处理失败（{subject or ''}）",
     }
     return names.get(signal, signal)
 
@@ -93,6 +97,58 @@ def build_diagnosis_card(
     if r3.get("stage") == signals.R3_STAGE_NEEDS_HUMAN:
         lines.append("⚠️ 需人工处理（本地不可自愈）")
     return "\n".join(lines)
+
+
+#: 卡片回调 scope（r3_card.handle_r3_card_action 路由键）
+INTERACTIVE_CARD_SCOPE = "r3_selfheal"
+
+
+def _window_extend_button(ticket_id: str) -> dict[str, Any]:
+    """「一键执行」回调按钮（value 双写：dict + behaviors，对齐例外复核卡）。"""
+    value = {
+        "scope": INTERACTIVE_CARD_SCOPE,
+        "action": "window_extend",
+        "ticket_id": str(ticket_id),
+    }
+    return {
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": "⚡ 一键执行（延长补发窗口）"},
+        "type": "primary",
+        "value": value,
+        "behaviors": [{"type": "callback", "value": value}],
+    }
+
+
+def build_diagnosis_interactive_card(
+    r3: dict[str, Any],
+    ticket_id: str,
+    *,
+    repair_mode: str,
+    evidence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """诊断卡 JSON 2.0 交互版：文本卡 +「一键执行」按钮（T6 2026-11-13）。
+
+    仅 job 信号工单（有 job_name）给按钮——extend-window 端点只受理 job 信号；
+    其余工单仍走纯文本卡（build_diagnosis_card）。发送失败回退纯文本
+    （调用方 dm_admin 通道 payload.text 兜底）。
+    """
+    from app.modules.safety.feishu.notification import build_card_dict
+
+    text = build_diagnosis_card(r3, evidence, repair_mode=repair_mode)
+    elements: list[dict[str, Any]] = []
+    job_name = str(r3.get("job_name") or "")
+    if job_name and str(r3.get("stage") or "") != signals.R3_STAGE_NEEDS_HUMAN:
+        from app.modules.safety.feishu.notification import button_row
+
+        elements.append({"tag": "hr"})
+        elements.append(button_row(_window_extend_button(ticket_id)))
+    return build_card_dict(
+        f"【R3 诊断】{_signal_title(str(r3.get('signal') or ''),
+                      r3.get('job_name') or r3.get('component'))}",
+        text,
+        header_template="orange",
+        elements=elements,
+    )
 
 
 def build_repair_result_card(
@@ -156,3 +212,17 @@ def build_escalation_card(r3: dict[str, Any], guidance: str = "") -> str:
         f"需人工：{guidance or '请人工排查处置（处置后工单将随恢复信号自动收口）'}",
     ]
     return "\n".join(lines)
+
+
+def build_window_extend_card(
+    job_name: str, old_hm: tuple[int, int], new_hm: tuple[int, int] | None,
+) -> str:
+    """L2 一键执行结果卡：延长当日补发窗口（生效值+失效语义）。"""
+    new = f"{new_hm[0]:02d}:{new_hm[1]:02d}" if new_hm else "-"
+    return "\n".join([
+        "【R3 L2 窗口延长 ✅】一键执行成功",
+        f"任务：{job_name}",
+        f"当日补发窗口：{old_hm[0]:02d}:{old_hm[1]:02d} → {new}",
+        "说明：仅当日生效（进程内覆写，服务重启即失效）；"
+        "恢复探测与漏审日补跑按新窗口判定",
+    ])
