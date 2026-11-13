@@ -81,6 +81,22 @@ async def _add_link(db_session, *, rid: str, hazard: str | None, error: str | No
     return row
 
 
+@pytest.fixture(autouse=True)
+def _admin_perms_stub(monkeypatch: pytest.MonkeyPatch):
+    """RequireAdmin 用例免权限校验（2026-11-13 P0 鉴权修复后必须）。
+
+    此前 ``: Any = RequireAdmin`` 依赖根本不执行，admin 面测试走的是无鉴权
+    路径；修复后依赖真实执行，admin 用例需要 permission:role:manage。
+    """
+    from app.platform.permission import deps as permission_deps
+
+    async def _fake_perms(user_id: str, db) -> set[str]:
+        return {"permission:role:manage"}
+
+    monkeypatch.setattr(permission_deps, "get_user_permissions", _fake_perms)
+    yield
+
+
 async def test_list_derives_status(
     client: AsyncClient, db_session, links_table,
 ) -> None:

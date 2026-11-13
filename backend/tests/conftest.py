@@ -53,7 +53,22 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
 @pytest.fixture
 async def client() -> AsyncIterator[AsyncClient]:
-    """Provide an AsyncClient with get_db overridden to use a rolled-back session."""
+    """Provide an AsyncClient with get_db overridden to use a rolled-back session.
+
+    2026-11-13 P0 鉴权修复后追加：get_current_user 覆写为免登录口径（取库内
+    第一个用户）。此前端点参数写 ``: Any = RequireUser`` 导致依赖根本不执行，
+    client 走「无鉴权」路径；修复后依赖真实执行，全局覆写维持既有测试口径
+    （RequireAdmin 的权限校验由各用例按需覆写 get_user_permissions）。
+    """
+    from app.platform.identity.deps import get_current_user
+    from sqlalchemy import select as _select
+
+    async def _override_get_current_user() -> User | None:
+        async with _test_session_factory() as s:
+            return (
+                await s.execute(_select(User).limit(1))
+            ).scalar_one_or_none()
+
     async with _test_session_factory() as session:
         async def _override_get_db() -> AsyncIterator[AsyncSession]:
             try:
@@ -62,6 +77,7 @@ async def client() -> AsyncIterator[AsyncClient]:
                 pass  # session lifecycle is managed by the outer fixture
 
         app.dependency_overrides[get_db] = _override_get_db
+        app.dependency_overrides[get_current_user] = _override_get_current_user
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -42,7 +41,8 @@ async def list_triggers(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     limit = max(1, min(limit, 200))
     base = select(AgentTrigger, AgentSource.name).join(
@@ -80,7 +80,8 @@ async def list_triggers(
 async def get_trigger(
     trigger_id: str,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from uuid import UUID
 
@@ -113,7 +114,8 @@ async def get_trigger(
 @router.get("/sources", summary="Source 实例列表")
 async def list_sources(
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     rows = (
         await db.execute(select(AgentSource).order_by(AgentSource.name))
@@ -137,7 +139,8 @@ async def list_tasks(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from app.platform.superagent.models import AgentTask
     from app.platform.superagent.tasks import STAGE_LABELS, derive_stage
@@ -197,7 +200,8 @@ async def list_tasks(
 async def get_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from uuid import UUID
 
@@ -266,7 +270,8 @@ async def get_task(
 @router.get("/state", summary="底座运行状态（健康+负载+暂停位）")
 async def get_state(
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from app.core.config import get_settings
     from app.platform.superagent.models import (
@@ -326,7 +331,8 @@ async def list_threads(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     limit = max(1, min(limit, 200))
     rows = (
@@ -357,7 +363,8 @@ async def list_threads(
 async def get_thread_history(
     thread_key: str,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from app.core.exceptions import NotFoundException
     from app.platform.superagent.models import AgentTask, AgentTaskSubscription
@@ -433,7 +440,8 @@ async def list_decisions(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from app.platform.superagent.models import AgentDecision, AgentTrigger
 
@@ -481,7 +489,8 @@ async def list_decisions(
 async def promote_decision(
     decision_id: str,
     db: AsyncSession = Depends(get_db),
-    admin: Any = RequireAdmin,
+    *,
+    admin: RequireAdmin,
 ) -> JSONResponse:
     from uuid import UUID
 
@@ -520,7 +529,8 @@ async def promote_decision(
 async def dismiss_decision(
     decision_id: str,
     db: AsyncSession = Depends(get_db),
-    admin: Any = RequireAdmin,
+    *,
+    admin: RequireAdmin,
 ) -> JSONResponse:
     from uuid import UUID
 
@@ -552,7 +562,8 @@ async def dismiss_decision(
 @router.get("/needs-human", summary="「需要人」快照（速递格同源数据）")
 async def get_needs_human(
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     from app.platform.superagent.watchdog import build_needs_human_snapshot
 
@@ -565,7 +576,8 @@ async def toggle_source(
     source_id: str,
     enabled: bool,
     db: AsyncSession = Depends(get_db),
-    _admin: Any = RequireAdmin,
+    *,
+    _admin: RequireAdmin,
 ) -> JSONResponse:
     """启停一个 Source 实例（含 observe 源；observe→auto 切换走 Policy 改版，
     本端点只管实例开关——系统无任何自动切换路径）。"""

@@ -91,7 +91,8 @@ async def list_links(
     date_from: str | None = None,
     date_to: str | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: Any = RequireUser,
+    *,
+    _user: RequireUser,
 ) -> JSONResponse:
     if status is not None and status not in _STATUS_CONDITIONS:
         raise AppException(
@@ -150,7 +151,8 @@ async def _get_link_or_404(db: AsyncSession, link_id: str) -> AlarmHazardLink:
 async def refresh_hazard_no(
     link_id: str,
     db: AsyncSession = Depends(get_db),
-    _admin: Any = RequireAdmin,
+    *,
+    _admin: RequireAdmin,
 ) -> JSONResponse:
     link = await _get_link_or_404(db, link_id)
     if link.hazard_no:
@@ -176,7 +178,8 @@ async def refresh_hazard_no(
 async def retry_link(
     link_id: str,
     db: AsyncSession = Depends(get_db),
-    _admin: Any = RequireAdmin,
+    *,
+    _admin: RequireAdmin,
 ) -> JSONResponse:
     link = await _get_link_or_404(db, link_id)
     if not link.task_id:
