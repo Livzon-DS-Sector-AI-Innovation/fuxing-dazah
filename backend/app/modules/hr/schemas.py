@@ -1018,6 +1018,8 @@ class InterviewResponse(BaseModel):
     transcript_text: str | None = None
     notes: str | None = None
     calendar_event_id: str | None = None
+    # 日历同步结果提示（保存后前端据此 toast 警告；None=未尝试或成功）
+    calendar_sync_error: str | None = None
     created_at: datetime | None = None
 
 

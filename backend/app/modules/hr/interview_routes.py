@@ -38,7 +38,7 @@ async def list_interviews(cid: UUID, service: InterviewService = Depends(get_int
 
 @router.post("/interviews", summary="安排面试")
 async def create_interview(payload: InterviewCreate, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
-    r = await service.create(payload)
+    r = await service.create(payload, operator=ctx.user.id)
     await _auto_generate_analysis(service, r)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"), message="面试已安排", status_code=201)
 
@@ -56,7 +56,7 @@ async def update_interview(interview_id: UUID, payload: InterviewUpdate, service
     # 事后比较会变成「新值 vs 新值」恒相等
     old_transcript = (old.transcript_text or "").strip()
     old_notes = (old.notes or "").strip()
-    r = await service.update(interview_id, payload)
+    r = await service.update(interview_id, payload, operator=ctx.user.id)
     # 仅在逐字稿/备注实际变化时才触发 AI 报告重生成——
     # 否则改个面试状态也会同步烧一次 LLM 调用
     fields = payload.model_dump(exclude_unset=True)
@@ -72,7 +72,7 @@ async def update_interview(interview_id: UUID, payload: InterviewUpdate, service
 
 @router.delete("/interviews/{interview_id}", summary="取消面试")
 async def delete_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
-    await service.delete(interview_id)
+    await service.delete(interview_id, operator=ctx.user.id)
     return success_response(message="已取消")
 
 

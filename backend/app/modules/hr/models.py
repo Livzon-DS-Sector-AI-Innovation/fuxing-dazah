@@ -1285,6 +1285,8 @@ class CandidateStatusLog(BaseModel):
 
 
 class Interview(BaseModel):
+    # 允许非 Mapped 注解存在（calendar_sync_error 为运行期属性，不映射列）
+    __allow_unmapped__ = True
     __tablename__ = "interviews"
     __table_args__ = (
         Index("ix_interviews_candidate_id", "candidate_id"),
@@ -1302,6 +1304,10 @@ class Interview(BaseModel):
     transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="面试逐字稿（HR粘贴）")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
     calendar_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="飞书日历事件ID")
+
+    # 非持久化属性（非 Mapped 注解，SQLAlchemy 不映射）：
+    # 飞书日历同步失败原因，服务层赋值、随响应返回供前端提示
+    calendar_sync_error: str | None = None
 
 
 # ─── 招聘：候选人胜任度分析报告（多维度） ───

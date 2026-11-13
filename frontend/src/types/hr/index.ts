@@ -706,6 +706,7 @@ export interface Interview {
   transcript_text?: string
   notes?: string
   calendar_event_id?: string
+  calendar_sync_error?: string | null
   created_at?: string
 }
 

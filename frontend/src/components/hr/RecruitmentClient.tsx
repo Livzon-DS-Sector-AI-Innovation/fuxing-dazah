@@ -159,12 +159,26 @@ export default function RecruitmentClient() {
 
   const loadAllCandidates = useCallback(async () => {
     try {
-      const r = await fetchCandidates({ page_size: 100 })
-      setAllCandidates(r.data || [])
+      // 页面按岗位分组展示需要全量数据：循环拉取所有分页（上限 5 页防御），
+      // 不再因单页 100 条把后续候选人"藏"掉
+      const pageSize = 100
+      const all: any[] = []
+      let total = 0
+      for (let page = 1; page <= 5; page++) {
+        const r = await fetchCandidates({ page, page_size: pageSize })
+        all.push(...(r.data || []))
+        total = r.meta?.total ?? all.length
+        if (all.length >= total) break
+      }
+      setAllCandidates(all)
+      if (all.length < total) {
+        msg.warning(`候选人较多，仅显示前 ${all.length} 条（共 ${total} 条），请用筛选缩小范围`)
+      }
     } catch { setAllCandidates([]) }
-  }, [])
+  }, [msg])
 
-  useEffect(() => { loadJobs(); loadAllCandidates() }, [loadJobs, loadAllCandidates])
+  // 岗位/候选人全量列表仅管理权限加载（审核人只待我审核 tab，后端也会按数据范围收敛）
+  useEffect(() => { if (canManage) { loadJobs(); loadAllCandidates() } }, [canManage, loadJobs, loadAllCandidates])
 
   // 有候选人时自动展开岗位
   useEffect(() => {

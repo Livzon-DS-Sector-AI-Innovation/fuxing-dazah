@@ -1,5 +1,7 @@
 'use client'
 
+import dayjs from 'dayjs'
+
 import CandidateAnalysisReportCard from './CandidateAnalysisReportCard'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -170,12 +172,16 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       fetchCandidateAnalysisReports(candidate.id)
         .then((d) => setAnalysisReports(d.data || []))
         .catch(() => {})
-      for (const iv of (r.data || [])) {
-        try {
-          const er = await fetchInterviewEvaluation(iv.id)
-          if (er.data) setEvaluations(prev => ({ ...prev, [iv.id]: er.data }))
-        } catch { /* AI评估加载失败不影响面试列表 */ }
-      }
+      // 逐条评估并行拉取（多轮面试时不再串行等待）
+      const evalResults = await Promise.allSettled(
+        (r.data || []).map((iv: Interview) => fetchInterviewEvaluation(iv.id))
+      )
+      evalResults.forEach((res, i) => {
+        if (res.status === 'fulfilled' && res.value.data) {
+          const iv = (r.data || [])[i]
+          setEvaluations(prev => ({ ...prev, [iv.id]: res.value.data }))
+        }
+      })
     } catch (err: any) {
       console.error('加载面试列表失败:', err)
       message.error('加载面试列表失败: ' + (err.message || '未知错误'))
@@ -269,12 +275,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       interview_date: v.interview_date ? (typeof v.interview_date === 'string' ? v.interview_date : v.interview_date.format('YYYY-MM-DD')) : undefined,
     }
     try {
-      if (editingInterview) {
-        await updateInterview(editingInterview.id, payload)
-      } else {
-        await createInterview({ ...payload, candidate_id: candidate.id, job_requirement_id: candidate.job_requirement_id || undefined })
-      }
+      const res = editingInterview
+        ? await updateInterview(editingInterview.id, payload)
+        : await createInterview({ ...payload, candidate_id: candidate.id, job_requirement_id: candidate.job_requirement_id || undefined })
       message.success(editingInterview ? '面试已更新' : '面试已安排')
+      // 日历同步失败不再静默：面试已保存成功，但提示用户可编辑补建
+      if (res?.data?.calendar_sync_error) {
+        message.warning(res.data.calendar_sync_error + '，可稍后在编辑中勾选「补建飞书日程」')
+      }
       setInterviewModalOpen(false); interviewForm.resetFields(); setEditingInterview(null)
       loadInterviews()
     } catch (err: any) { message.error(err.message || '操作失败') }
@@ -669,7 +677,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                   </div>
                 } extra={
                   <div className="flex gap-1">
-                    <Button size="small" onClick={() => { setEditingInterview(iv); interviewForm.setFieldsValue(iv); setInterviewModalOpen(true) }}>编辑</Button>
+                    <Button size="small" onClick={() => {
+                      setEditingInterview(iv)
+                      // DatePicker 需要 dayjs 对象；直接塞字符串日期框显示为空
+                      interviewForm.setFieldsValue({
+                        ...iv,
+                        interview_date: iv.interview_date ? dayjs(iv.interview_date) : undefined,
+                      })
+                      setInterviewModalOpen(true)
+                    }}>编辑</Button>
                     <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消</Button>
                   </div>
                 }>
@@ -688,8 +704,14 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                       onBlur={async (e) => {
                         const val = e.target.value
                         if (val !== iv.transcript_text) {
-                          try { await updateInterview(iv.id, { transcript_text: val || undefined }); message.success('逐字稿已保存') }
-                          catch { /* ignore */ }
+                          try {
+                            await updateInterview(iv.id, { transcript_text: val || undefined })
+                            message.success('逐字稿已保存')
+                            // 同步本地缓存，否则二次编辑同一文本时 diff 判断失真
+                            setInterviews(prev => prev.map(x => x.id === iv.id ? { ...x, transcript_text: val } : x))
+                          } catch (err: any) {
+                            message.error(err?.message || '逐字稿保存失败，请重试')
+                          }
                         }
                       }}
                     />

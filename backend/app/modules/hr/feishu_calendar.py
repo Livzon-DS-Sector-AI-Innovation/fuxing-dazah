@@ -200,7 +200,11 @@ class FeishuCalendarService:
             )
 
     async def _lookup_open_id(self, name: str) -> str | None:
-        """通过姓名查找飞书 open_id（从 identity.users 表查询）。"""
+        """通过姓名查找飞书 open_id（从 identity.users 表查询）。
+
+        同名多账户时按 created_at 取最早一个（保证结果确定，不再随机命中），
+        并记录告警提示治理重复账户。
+        """
         if not name or name == "未指定":
             return None
         try:
@@ -212,13 +216,16 @@ class FeishuCalendarService:
                 r = await db.execute(
                     text(
                         "SELECT feishu_open_id FROM identity.users "
-                        "WHERE name = :name AND is_deleted = false LIMIT 1"
+                        "WHERE name = :name AND is_deleted = false "
+                        "ORDER BY created_at LIMIT 2"
                     ),
                     {"name": name},
                 )
-                row = r.fetchone()
-                if row and row[0]:
-                    return row[0]
+                rows = r.fetchall()
+                if len(rows) > 1:
+                    logger.warning("系统用户「%s」存在 %d 条同名记录，日程参与人取最早一条", name, len(rows))
+                if rows and rows[0][0]:
+                    return rows[0][0]
             logger.warning("未找到系统用户 %s 的 open_id，跳过添加为参与人", name)
             return None
         except Exception as e:

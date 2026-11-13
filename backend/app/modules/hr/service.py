@@ -1756,9 +1756,10 @@ class InterviewService:
             raise NotFoundException("面试记录", str(interview_id))
         return iv
 
-    async def create(self, data: InterviewCreate) -> Interview:
+    async def create(self, data: InterviewCreate, operator: UUID | None = None) -> Interview:
         create_calendar = data.create_calendar_event
         iv = Interview(**data.model_dump(exclude={"create_calendar_event"}))
+        iv.created_by = operator
         result = await self.repo.create(iv)
 
         if create_calendar and data.interview_date:
@@ -1783,22 +1784,35 @@ class InterviewService:
                 result = await self.repo.update(result)
             except Exception as e:
                 logger.warning("创建日历事件失败（面试已保存）: %s", e)
+                # 面试已保存成功，日程失败不回滚——记录原因随响应返回供前端提示
+                result.calendar_sync_error = f"飞书日程创建失败：{e}"
 
         return result
 
-    async def update(self, interview_id: UUID, data: InterviewUpdate) -> Interview:
+    async def update(self, interview_id: UUID, data: InterviewUpdate, operator: UUID | None = None) -> Interview:
         iv = await self.get(interview_id)
         old_date = iv.interview_date
         old_location = iv.location
         old_interviewer = iv.interviewer
+        old_status = iv.status
 
         for k, v in data.model_dump(exclude={"create_calendar_event"}, exclude_unset=True).items():
             setattr(iv, k, v)
+        iv.updated_by = operator
         result = await self.repo.update(iv)
+
+        # 状态流转为「已取消」时同步删除日历事件——与 DELETE 取消行为保持一致
+        if old_status != "已取消" and result.status == "已取消" and result.calendar_event_id:
+            await self._delete_calendar_event_quietly(result)
 
         # 此前创建日历失败的记录（calendar_event_id 为空）：更新时显式
         # 勾选 create_calendar_event 补建，否则一次失败后永远没有日程
-        if data.create_calendar_event and not result.calendar_event_id and result.interview_date:
+        if (
+            data.create_calendar_event
+            and not result.calendar_event_id
+            and result.interview_date
+            and result.status != "已取消"
+        ):
             try:
                 event_id = await self._create_calendar_event(result)
                 if event_id:
@@ -1806,8 +1820,9 @@ class InterviewService:
                     result = await self.repo.update(result)
             except Exception as e:
                 logger.warning("补建日历事件失败（面试已更新）: %s", e)
+                result.calendar_sync_error = f"飞书日程补建失败：{e}"
 
-        if result.calendar_event_id and (
+        if result.calendar_event_id and result.status != "已取消" and (
             old_date != result.interview_date
             or old_location != result.location
             or old_interviewer != result.interviewer
@@ -1823,6 +1838,7 @@ class InterviewService:
                 )
             except Exception as e:
                 logger.warning("同步日历事件失败（面试已更新）: %s", e)
+                result.calendar_sync_error = f"飞书日程同步失败：{e}"
 
         return result
 
@@ -1845,16 +1861,32 @@ class InterviewService:
             interview_type=interview.interview_type,
         )
 
-    async def delete(self, interview_id: UUID) -> None:
+    async def delete(self, interview_id: UUID, operator: UUID | None = None) -> None:
+        """取消面试：状态流转为「已取消」+ 删除日历事件。
+
+        不做软删除——已取消的记录保留在面试列表中（前端已渲染红色 Tag），
+        与 PUT 改状态为「已取消」的行为保持一致。
+        """
         iv = await self.get(interview_id)
+        if iv.status != "已取消":
+            iv.status = "已取消"
+            iv.updated_by = operator
+            await self.repo.update(iv)
         if iv.calendar_event_id:
-            try:
-                from app.modules.hr.feishu_calendar import FeishuCalendarService
-                calendar = FeishuCalendarService()
-                await calendar.delete_interview_event(iv.calendar_event_id)
-            except Exception as e:
-                logger.warning("删除日历事件失败: %s", e)
-        await self.repo.soft_delete(iv.id)
+            await self._delete_calendar_event_quietly(iv)
+
+    async def _delete_calendar_event_quietly(self, interview: Interview) -> None:
+        """删除飞书日程并清空 calendar_event_id（失败仅记录日志，取消不应被日历故障阻塞）。"""
+        if not interview.calendar_event_id:
+            return
+        try:
+            from app.modules.hr.feishu_calendar import FeishuCalendarService
+            calendar = FeishuCalendarService()
+            await calendar.delete_interview_event(interview.calendar_event_id)
+        except Exception as e:
+            logger.warning("删除日历事件失败: %s", e)
+        interview.calendar_event_id = None
+        await self.repo.update(interview)
 
 
 class AiEvaluationService:

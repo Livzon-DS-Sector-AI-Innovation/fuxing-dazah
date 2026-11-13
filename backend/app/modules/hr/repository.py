@@ -1244,8 +1244,11 @@ class InterviewRepository:
         return result.scalar_one()
 
     async def soft_delete(self, interview_id: UUID) -> None:
-        await self.session.execute(text("UPDATE hr.interviews SET is_deleted = true WHERE id = :id"), {"id": interview_id})
-        await self.session.flush()
+        """软删除（ORM 方式，随 UPDATE 触发 updated_at onupdate；取消面试已不走此方法，仅兜底保留）。"""
+        iv = await self.get_by_id(interview_id)
+        if iv:
+            iv.is_deleted = True
+            await self.session.flush()
 
 
 class CandidateAiEvaluationRepository:
