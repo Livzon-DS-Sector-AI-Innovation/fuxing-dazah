@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Tabs, Tag, Upload } from 'antd'
-import { PlusOutlined, UploadOutlined, SendOutlined, DownOutlined, RightOutlined, DeleteOutlined, FileSearchOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { DownOutlined, RightOutlined, FileSearchOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
   createCandidate, deleteCandidate,
@@ -454,7 +454,7 @@ export default function RecruitmentClient() {
         tabBarExtraContent={{
           right: activeTab === 'jobs' && (
             <div className="flex gap-2 pb-1">
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
+              <Button type="primary" size="large" onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
             </div>
           ),
         }}
@@ -467,7 +467,7 @@ export default function RecruitmentClient() {
               {showCompare ? (
                 /* 横向对比弹窗 */
                 <Card size="small" title="候选人横向对比（按AI综合评分排序）"
-                  extra={<Button size="small" onClick={() => setShowCompare(false)}>关闭对比</Button>}
+                  extra={<Button onClick={() => setShowCompare(false)}>关闭对比</Button>}
                 >
                   {compareLoading ? <div className="text-center py-12"><Spin /></div> :
                     compareData.length === 0 ? <Empty description="暂无候选人数据" className="py-12" /> :
@@ -527,10 +527,10 @@ export default function RecruitmentClient() {
                           </div>
                         }
                         extra={
-                          <div className="flex gap-1.5 items-center" onClick={e => e.stopPropagation()}>
-                            <Button size="small" onClick={() => loadCompare(j.id)}>对比</Button>
-                            <Button size="small" icon={<UploadOutlined />} title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }} />
-                            <Button size="small" type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
+                          <div className="flex gap-2 items-center" onClick={e => e.stopPropagation()}>
+                            <Button onClick={() => loadCompare(j.id)}>对比</Button>
+                            <Button title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }}>上传简历</Button>
+                            <Button type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
                             <Popconfirm
                               title="删除该岗位？"
                               description={jobCandidates.length === 0
@@ -538,8 +538,8 @@ export default function RecruitmentClient() {
                                 : `将一并清理名下 ${jobCandidates.length - hiredCount} 名候选人记录${hiredCount > 0 ? `，已入职 ${hiredCount} 名保留` : ''}`}
                               onConfirm={() => handleDeleteReq(j.id)} okText="删除" cancelText="取消"
                             >
-                              <Button size="small" danger icon={<DeleteOutlined />} disabled={j.status === '招聘中'}
-                                title={j.status === '招聘中' ? '招聘中岗位不可删除，请先在「编辑」中改为已关闭' : '删除岗位'} />
+                              <Button danger disabled={j.status === '招聘中'}
+                                title={j.status === '招聘中' ? '招聘中岗位不可删除，请先在「编辑」中改为已关闭' : '删除岗位'}>删除</Button>
                             </Popconfirm>
                           </div>
                         }
@@ -572,7 +572,7 @@ export default function RecruitmentClient() {
                                   <div className="text-xs text-gray-500 truncate flex-1 min-w-0 hidden lg:block">{c.phone || '-'} · {c.email || '-'}</div>
                                   <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                                     {isStale && <span className="text-xs text-red-400 whitespace-nowrap" title={`已停留${days}天`}>⚠️{days}天</span>}
-                                    {c.resume_url && c.job_requirement_id && (
+                                    {c.resume_url && c.job_requirement_id && !c.recommendation_level && (
                                       <Button size="small" icon={<FileSearchOutlined />}
                                         loading={screeningCand === c.id}
                                         title="AI 初筛（用已存简历按关联岗位打分，免重复上传）"
@@ -583,9 +583,9 @@ export default function RecruitmentClient() {
                                       options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
                                       onChange={v => handleStatusChange(c.id, v)}
                                     />
-                                    <Button size="small" icon={<SendOutlined />} onClick={() => handleSendOffer(c)} title="发Offer" />
+                                    <Button onClick={() => handleSendOffer(c)}>发 Offer</Button>
                                     <Popconfirm title="确定删除此候选人？" onConfirm={() => handleDeleteCandidate(c.id)} okText="删除" cancelText="取消">
-                                      <Button size="small" danger icon={<DeleteOutlined />} title="删除" />
+                                      <Button danger>删除</Button>
                                     </Popconfirm>
                                   </div>
                                 </div>
@@ -664,7 +664,7 @@ export default function RecruitmentClient() {
                   (() => {
                     const screenable = resumeItems.filter(it => it.stage === '已建档' && it.candidateId).length
                     return (
-                      <Button key="screen" type="primary" ghost icon={<FileSearchOutlined />}
+                      <Button key="screen" type="primary" ghost
                         disabled={screenable === 0 || batchRunning}
                         loading={batchScreening}
                         onClick={() => { void handleBatchScreen() }}>
@@ -672,7 +672,7 @@ export default function RecruitmentClient() {
                       </Button>
                     )
                   })(),
-                  <Button key="process" type="primary" icon={<UploadOutlined />}
+                  <Button key="process" type="primary"
                     loading={batchRunning}
                     disabled={batchRunning || batchScreening || resumeItems.filter(it => it.stage === '待处理').length === 0}
                     onClick={() => { void handleProcessBatch() }}>
@@ -699,7 +699,7 @@ export default function RecruitmentClient() {
                       return false
                     }}
                   >
-                    <Button icon={<UploadOutlined />} disabled={batchRunning || batchScreening}>选择 PDF 文件（可多选）</Button>
+                    <Button size="large" disabled={batchRunning || batchScreening}>选择 PDF 文件（可多选）</Button>
                   </Upload>
                   {resumeItems.length > 0 && (
                     <div className="border rounded divide-y max-h-80 overflow-y-auto">
@@ -838,8 +838,8 @@ export default function RecruitmentClient() {
                               {rv.push_note && <div className="text-xs text-blue-600 mt-1">💬 HR备注：{rv.push_note}</div>}
                             </div>
                             <div className="flex gap-2 flex-shrink-0 pt-0.5" onClick={(e) => e.stopPropagation()}>
-                              <Button size="small" type="primary" onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
-                              <Button size="small" danger onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
+                              <Button type="primary" onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
+                              <Button danger onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
                             </div>
                           </div>
                         </Card>
