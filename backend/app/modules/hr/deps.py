@@ -410,7 +410,9 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/candidates/.*/push-review", "hr:recruitment:manage"),
     (r"/candidates/.*/decide-review", "hr:recruitment:manage"),
     (r"/candidates/.*/onboard", "hr:recruitment:manage"),
-    (r"/recruitment/stats", "hr:recruitment:read"),
+    # 招聘统计/漏斗含全公司数据：数据分析是 HR 专属工具，收紧为管理权限
+    # （用人部门仅见"待我审核"，列表类接口另按数据范围收敛）
+    (r"/recruitment/stats", "hr:recruitment:manage"),
     (r"/recruitment", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                        "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/candidates", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
@@ -430,11 +432,10 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/employee-sync/sync", "hr:settings:manage"),
     # 模块根信息端点：有意不设权限码（任意 hr: 权限即可）
     (r"/hr/$", None),
-    # AI 简历筛选（招聘域）
+    # AI 简历筛选（招聘域）——HR 专属工具，读写均需管理权限
     (r"/resume-screening/candidate/", "hr:recruitment:manage"),
     (r"/resume-screening/.*/convert", "hr:recruitment:manage"),
-    (r"/resume-screening", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
-                            "DELETE": "hr:recruitment:manage"}),
+    (r"/resume-screening", "hr:recruitment:manage"),
     # 流失分析 / 员工异动种类（档案域报表与字典）
     (r"/turnover-analysis", "hr:profile:read"),
     (r"/employee-varieties", "hr:profile:read"),

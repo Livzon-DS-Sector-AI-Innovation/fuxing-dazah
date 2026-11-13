@@ -996,10 +996,15 @@ class JobRequirementRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_all(self, *, status: str | None = None) -> list[JobRequirement]:
+    async def list_all(
+        self, *, status: str | None = None, departments: list[str] | None = None,
+    ) -> list[JobRequirement]:
         stmt = select(JobRequirement).where(JobRequirement.is_deleted.is_(False))
         if status:
             stmt = stmt.where(JobRequirement.status == status)
+        # 数据范围收敛（用人部门视角）：只看授权部门下的岗位需求
+        if departments is not None:
+            stmt = stmt.where(JobRequirement.department.in_(departments))
         stmt = stmt.order_by(desc(JobRequirement.created_at))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -1071,6 +1076,7 @@ class CandidateRepository:
     async def list_all(
         self, *, job_requirement_id: UUID | None = None, status: str | None = None,
         keyword: str | None = None, candidate_type: str | None = None,
+        departments: list[str] | None = None, reviewer: str | None = None,
         page: int = 1, page_size: int = 100,
     ) -> tuple[list[Candidate], int]:
         stmt = select(Candidate).where(Candidate.is_deleted.is_(False))
@@ -1085,6 +1091,26 @@ class CandidateRepository:
                 Candidate.name.ilike(f"%{keyword}%"),
                 Candidate.phone.ilike(f"%{keyword}%"),
             ))
+        # 数据范围收敛（用人部门视角）：授权部门岗位下的候选人 ∪ 本人任审核人的候选人。
+        # departments 传空列表（self_only 等无部门范围）时仅剩 reviewer 条件。
+        scope_conds = []
+        if departments:
+            dept_jd_ids = select(JobRequirement.id).where(
+                JobRequirement.department.in_(departments),
+                JobRequirement.is_deleted.is_(False),
+            )
+            scope_conds.append(or_(
+                Candidate.department.in_(departments),
+                Candidate.job_requirement_id.in_(dept_jd_ids),
+            ))
+        if reviewer:
+            reviewed_ids = select(CandidateReview.candidate_id).where(
+                CandidateReview.reviewer == reviewer,
+                CandidateReview.is_deleted.is_(False),
+            )
+            scope_conds.append(Candidate.id.in_(reviewed_ids))
+        if scope_conds:
+            stmt = stmt.where(or_(*scope_conds))
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar() or 0
         data_stmt = stmt.order_by(desc(Candidate.created_at)).offset((page - 1) * page_size).limit(page_size)
@@ -1327,6 +1353,19 @@ class CandidateReviewRepository:
             .order_by(desc(CandidateReview.created_at))
         )
         return result.scalars().first()
+
+    async def exists_reviewer(self, candidate_id: UUID, reviewer: str | None) -> bool:
+        """该候选人是否存在指定审核人的审核记录（含已审结，用于详情访问校验）。"""
+        if not reviewer:
+            return False
+        result = await self.session.execute(
+            select(CandidateReview.id).where(
+                CandidateReview.candidate_id == candidate_id,
+                CandidateReview.reviewer == reviewer,
+                CandidateReview.is_deleted.is_(False),
+            ).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateReview]:
         result = await self.session.execute(

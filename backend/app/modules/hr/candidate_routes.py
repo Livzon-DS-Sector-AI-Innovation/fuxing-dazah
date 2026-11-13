@@ -89,7 +89,15 @@ async def list_candidates(
     candidate_type: str | None = Query(None, description="按类型筛选: 普工/职能"),
     page_params: PageParams = Depends(),
     service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    # 数据范围收敛（用人部门视角）：非 all 范围只看授权部门岗位下 + 本人审核的候选人
+    scope_kwargs: dict = {}
+    if not hr_scope.is_unrestricted:
+        scope_kwargs = {
+            "departments": sorted(hr_scope.scoped_departments),
+            "reviewer": hr_scope.user.name,
+        }
     rows, total = await service.list_all(
         job_requirement_id=job_requirement_id,
         status=status,
@@ -97,6 +105,7 @@ async def list_candidates(
         candidate_type=candidate_type,
         page=page_params.page,
         page_size=page_params.page_size,
+        **scope_kwargs,
     )
     return success_response(
         data=[CandidateResponse.model_validate(r).model_dump(mode="json") for r in rows],
@@ -126,11 +135,17 @@ async def list_pending_review(
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
+    from app.platform.permission.deps import get_user_permissions
     rv_service = CandidateReviewService(session)
-    # 缺省按当前用户过滤（“待我审核”语义），显式传 reviewer 时按指定人查询
-    rows = await rv_service.list_pending(
-        reviewer=reviewer or hr_scope.user.name or None
-    )
+    # 缺省按当前用户过滤（“待我审核”语义）；显式 reviewer 仅管理权限可用（代查），
+    # 防止任意 read 权限者枚举他人待审列表
+    if reviewer:
+        perms = await get_user_permissions(str(hr_scope.user.id), session)
+        if "hr:recruitment:manage" not in perms:
+            reviewer = None
+    target = reviewer or hr_scope.user.name
+    # 用户无名时 fail-closed 返回空，而不是放开成全公司待审列表
+    rows = await rv_service.list_pending(reviewer=target) if target else []
     return success_response(data=[{
         "review": CandidateReviewResponse.model_validate(row["review"]).model_dump(mode="json"),
         "candidate": CandidateResponse.model_validate(row["candidate"]).model_dump(mode="json"),
@@ -142,8 +157,13 @@ async def list_pending_review(
 
 
 @router.get("/candidates/{cid}", summary="候选人详情")
-async def get_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
+async def get_candidate(
+    cid: UUID,
+    service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     r = await service.get(cid)
+    await service.ensure_accessible(r, hr_scope)
     return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"))
 
 
@@ -440,8 +460,13 @@ async def list_candidate_reviews(
 
 
 @router.get("/candidates/{cid}/resume-preview", summary="简历预览")
-async def resume_preview(cid: UUID, service: CandidateService = Depends(get_service)):
+async def resume_preview(
+    cid: UUID,
+    service: CandidateService = Depends(get_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
     r = await service.get(cid)
+    await service.ensure_accessible(r, hr_scope)
     if not r.resume_url:
         raise HTTPException(404, "无简历文件")
     if r.resume_url.startswith("minio://"):

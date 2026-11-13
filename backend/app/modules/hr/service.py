@@ -3,13 +3,19 @@
 import asyncio
 import logging
 from datetime import UTC, date, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy import update as _update_stmt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
@@ -79,6 +85,9 @@ from app.modules.hr.schemas import (
     TrainingLedgerCreate,
     TrainingLedgerUpdate,
 )
+
+if TYPE_CHECKING:
+    from app.modules.hr.deps import HrAccessContext
 
 logger = logging.getLogger(__name__)
 
@@ -1553,8 +1562,10 @@ class JobRequirementService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = JobRequirementRepository(session)
 
-    async def list_all(self, *, status: str | None = None) -> list[JobRequirement]:
-        return await self.repo.list_all(status=status)
+    async def list_all(
+        self, *, status: str | None = None, departments: list[str] | None = None,
+    ) -> list[JobRequirement]:
+        return await self.repo.list_all(status=status, departments=departments)
 
     async def get(self, req_id: UUID) -> JobRequirement:
         req = await self.repo.get_by_id(req_id)
@@ -1592,11 +1603,13 @@ class CandidateService:
     async def list_all(
         self, *, job_requirement_id: UUID | None = None, status: str | None = None,
         keyword: str | None = None, candidate_type: str | None = None,
+        departments: list[str] | None = None, reviewer: str | None = None,
         page: int = 1, page_size: int = 100,
     ) -> tuple[list[Candidate], int]:
         return await self.repo.list_all(
             job_requirement_id=job_requirement_id, status=status,
             keyword=keyword, candidate_type=candidate_type,
+            departments=departments, reviewer=reviewer,
             page=page, page_size=page_size,
         )
 
@@ -1605,6 +1618,26 @@ class CandidateService:
         if not c:
             raise NotFoundException("候选人", str(candidate_id))
         return c
+
+    async def ensure_accessible(self, candidate: Candidate, hr_scope: "HrAccessContext") -> None:
+        """招聘数据范围校验：非 all 范围用户仅可访问授权部门岗位下、或本人审核过的候选人。
+
+        飞书审核卡片深链直达候选人详情，审核人（含历史审核人）命中即放行。
+        """
+        if hr_scope.is_unrestricted:
+            return
+        if hr_scope.scoped_departments:
+            if candidate.department in hr_scope.scoped_departments:
+                return
+            if candidate.job_requirement_id:
+                jd = await JobRequirementRepository(self.repo.session).get_by_id(candidate.job_requirement_id)
+                if jd and jd.department in hr_scope.scoped_departments:
+                    return
+        if await CandidateReviewRepository(self.repo.session).exists_reviewer(
+            candidate.id, hr_scope.user.name,
+        ):
+            return
+        raise ForbiddenException("数据范围限制：仅可访问本部门岗位或您审核的候选人")
 
     async def create(self, data: CandidateCreate, operator: str | None = None) -> Candidate:
         c = Candidate(**data.model_dump())
