@@ -17,7 +17,6 @@ from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.core.logging_config import setup_logging
 from app.core.response import error_response
-from app.core.security_middleware import CrossSiteGuardMiddleware
 from app.platform.audit import AuditMiddleware
 
 settings = get_settings()
@@ -282,14 +281,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    # 不再用通配源：显式收敛到配置的来源（默认 FRONTEND_URL），
-    # 避免任意网站携带凭据跨域访问 API。
-    allow_origins=settings.CORS_ORIGINS or [settings.FRONTEND_URL],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(CrossSiteGuardMiddleware)
 app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)

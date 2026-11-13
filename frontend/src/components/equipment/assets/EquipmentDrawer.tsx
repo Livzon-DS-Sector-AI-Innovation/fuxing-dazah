@@ -6,7 +6,6 @@ import dayjs from 'dayjs'
 import { useEquipmentStore } from '@/stores/equipment'
 import { EquipmentStatus, RunningStatus, EquipmentImportance, EquipmentCategory, Location } from '@/types/equipment'
 import { createEquipment, updateEquipment } from '@/actions/equipment'
-import { apiGet } from '@/lib/http-client'
 
 const { TextArea } = Input
 
@@ -124,11 +123,10 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
       try {
         const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
         const params = new URLSearchParams({ limit: '50', keyword: value.trim() })
-        // 走统一客户端带上登录态（identity 端点需要鉴权）
-        const data = await apiGet<{ items?: Record<string, unknown>[] }>(
-          `${API_BASE}/api/v1/identity/personnel?${params}`,
-        )
-        const items = (data?.items ?? []) as Record<string, unknown>[]
+        const resp = await fetch(`${API_BASE}/api/v1/identity/personnel?${params}`)
+        if (!resp.ok) { setStaffOptions([]); return }
+        const json = await resp.json()
+        const items = (json.data?.items ?? []) as Record<string, unknown>[]
         setStaffOptions(items.map(u => ({
           label: `${String(u.name ?? '')}${u.department ? ` - ${String(u.department)}` : ''}${u.employee_no ? ` (${String(u.employee_no)})` : ''}`,
           value: String(u.id),

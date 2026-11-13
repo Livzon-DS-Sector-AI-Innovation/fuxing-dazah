@@ -1,4 +1,3 @@
-import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -7,9 +6,6 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # dazah-backend/
-
-# 默认密钥占位值：持有仓库即可伪造任意用户 JWT，生产环境必须替换
-_DEFAULT_SECRET_KEY = "change-me-in-production"
 
 
 def _get_env_file() -> str:
@@ -32,7 +28,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "dazah-backend"
     APP_ENV: str = "development"
     DEBUG: bool = False
-    SECRET_KEY: str = _DEFAULT_SECRET_KEY
+    SECRET_KEY: str = "change-me-in-production"
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/dazah"
@@ -167,10 +163,6 @@ class Settings(BaseSettings):
     # API
     API_V1_PREFIX: str = "/api/v1"
 
-    # CORS 允许来源（JSON 数组）。为空时回落为 [FRONTEND_URL]。
-    # 前端可通过其他地址（如服务器 IP 直访）访问时，把对应 origin 一并配上。
-    CORS_ORIGINS: list[str] = []
-
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_ENABLED_MODULES: str = ""  # 逗号分隔，如 "safety,equipment"，空 = 全部启用
@@ -200,16 +192,6 @@ class Settings(BaseSettings):
         if missing:
             raise RuntimeError(
                 "以下 .env 配置项缺失或无效，请检查:\n  " + "\n  ".join(missing),
-            )
-        if self.SECRET_KEY == _DEFAULT_SECRET_KEY:
-            if self.is_production:
-                raise RuntimeError(
-                    "SECRET_KEY 仍为默认占位值，生产环境禁止以此启动"
-                    "（任何能读到代码的人可伪造任意用户 JWT）。"
-                    "请生成强随机值写入服务器 .env.production 后重启。",
-                )
-            logging.getLogger(__name__).warning(
-                "SECRET_KEY 使用默认占位值，JWT 可被伪造，仅限本地开发使用",
             )
 
 

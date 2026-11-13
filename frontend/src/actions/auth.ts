@@ -33,24 +33,7 @@ export async function getCurrentUser(): Promise<User | null> {
 
 export async function logout() {
   const cookieStore = await cookies()
-  const token = cookieStore.get('auth_token')
-  const impToken = cookieStore.get('impersonate_token')
-
-  // 先通知后端吊销 token（黑名单立即生效），失败也继续清本地 cookie
-  if (token?.value) {
-    const headers: Record<string, string> = { Authorization: `Bearer ${token.value}` }
-    if (impToken?.value) {
-      headers['Cookie'] = `impersonate_token=${impToken.value}`
-    }
-    try {
-      await fetch(`${API_BASE}/api/v1/identity/auth/logout`, { method: 'POST', headers })
-    } catch {
-      // 网络异常不阻塞登出
-    }
-  }
-
   cookieStore.delete('auth_token')
-  cookieStore.delete('impersonate_token')
   revalidatePath('/')
   redirect('/login')
 }
@@ -96,22 +79,6 @@ export async function startImpersonate(targetUserId: string): Promise<void> {
 
 export async function stopImpersonate(): Promise<void> {
   const cookieStore = await cookies()
-  const token = cookieStore.get('auth_token')
-  const impToken = cookieStore.get('impersonate_token')
-
-  // 通知后端吊销代理 token，失败也继续清本地 cookie
-  if (token?.value) {
-    const headers: Record<string, string> = { Authorization: `Bearer ${token.value}` }
-    if (impToken?.value) {
-      headers['Cookie'] = `impersonate_token=${impToken.value}`
-    }
-    try {
-      await fetch(`${API_BASE}/api/v1/identity/impersonate/stop`, { method: 'POST', headers })
-    } catch {
-      // 网络异常不阻塞退出
-    }
-  }
-
   cookieStore.delete('impersonate_token')
 }
 

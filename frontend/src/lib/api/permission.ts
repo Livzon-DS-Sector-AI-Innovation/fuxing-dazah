@@ -8,7 +8,6 @@ import type {
   DepartmentRole,
   RoleUser,
 } from '@/types/permission'
-import { apiGet } from '@/lib/http-client'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
@@ -80,12 +79,21 @@ export async function fetchPersonnel(params: {
   searchParams.set('offset', String(params.offset ?? 0))
   searchParams.set('limit', String(params.limit ?? 20))
 
-  // identity 端点需要登录态：走统一客户端（服务端带 Bearer / 浏览器带 cookie）
-  return apiGet<PersonnelListResponse>(`${API_BASE}/api/v1/identity/personnel?${searchParams}`)
+  const res = await fetch(`${API_BASE}/api/v1/identity/personnel?${searchParams}`, {
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取人员列表失败')
+  const json = await res.json()
+  return json.data
 }
 
 export async function fetchDepartments(): Promise<DepartmentItem[]> {
-  return apiGet<DepartmentItem[]>(`${API_BASE}/api/v1/identity/departments`)
+  const res = await fetch(`${API_BASE}/api/v1/identity/departments`, {
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取部门列表失败')
+  const json = await res.json()
+  return json.data
 }
 
 export async function fetchRoleDepartments(
