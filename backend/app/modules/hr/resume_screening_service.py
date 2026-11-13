@@ -207,6 +207,21 @@ def _candidate_profile(value: object) -> dict | None:
     return profile or None
 
 
+# AI 初筛后允许回填修正的候选人档案字段（教育背景/工作背景，AI 提取可靠）
+_PROFILE_BACKFILL_TEXT_FIELDS = ("education", "school", "major", "current_company")
+
+
+def _backfill_profile_fields(candidate: Candidate, profile: dict) -> None:
+    """用 AI 提取的 profile 回填/修正候选人档案字段（有值即覆盖，跳过同值免脏写）。"""
+    for field in _PROFILE_BACKFILL_TEXT_FIELDS:
+        v = profile.get(field)
+        if isinstance(v, str) and v.strip() and v.strip() != getattr(candidate, field, None):
+            setattr(candidate, field, v.strip())
+    wy = profile.get("work_years")
+    if isinstance(wy, int) and 0 <= wy <= 50 and wy != candidate.work_years:
+        candidate.work_years = wy
+
+
 def _dimension_assessment(value: object) -> dict[str, list[dict]]:
     """归一能力维度评估：{组: [{label, text}]}，只保留四组白名单、过滤空项。"""
     result: dict[str, list[dict]] = {}
@@ -482,6 +497,10 @@ class ResumeScreeningService:
         # 初筛结论回写候选人：推荐等级 + 匹配报告全文（详情页与列表直接可见）
         candidate.recommendation_level = result.recommendation
         candidate.match_report = result.match_report
+        # 档案字段回填修正：AI 结构化提取（candidate_profile）比上传建档时的
+        # 规则解析更准（如校名介词污染），有值即覆盖——仅限档案核心信息字段，
+        # 姓名/联系方式等身份字段不覆盖（AI 也可能抄错，保守不动）
+        _backfill_profile_fields(candidate, result.candidate_profile or {})
         await self.session.flush()
         return result
 

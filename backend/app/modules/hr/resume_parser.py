@@ -131,13 +131,45 @@ def _extract_email(text: str) -> str:
     return m.group(0) if m else ""
 
 
+# 校名前的叙述性介词/动词：教育经历行常见「…2018.09-2022.06 于某某大学…」
+# 「就读于/毕业于/考入…」，兜底正则捕获会把它们一并吞进校名（如「于某某大学」）
+_SCHOOL_PREFIXES = ("就读于", "毕业于", "考入于", "任职于", "考入", "考取", "就读", "进入", "获得", "于", "在")
+
+
+def _strip_school_prefix(name: str) -> str:
+    """剥离校名前的介词/动词前缀，剥完仍需以大学/学院结尾且长度合理。"""
+    changed = True
+    while changed:
+        changed = False
+        for p in _SCHOOL_PREFIXES:
+            if name.startswith(p) and len(name) - len(p) >= 2:
+                name = name[len(p):]
+                changed = True
+    if re.search(r"(?:大学|学院)$", name) and len(name) >= 4:
+        return name
+    return ""
+
+
 def _extract_school(text: str) -> str:
     for pat in [r"毕\s*业\s*院\s*校\s*[：:]\s*(\S+)", r"学\s*校\s*[：:]\s*(\S+)"]:
         m = re.search(pat, text)
         if m:
-            return m.group(1)
+            stripped = _strip_school_prefix(m.group(1))
+            if stripped:
+                return stripped
+    # 优先在教育经历/教育背景段落内找校名（叙述句「…于某某大学…」只出现在这里，
+    # 避免正文其他位置的「xx大学附属医院」类公司名误命中），无段落则全文兜底
+    for sec_pat in (r"教育经历(.*?)(?:工作经历|项目经历|相关技能|荣誉证书|$)",
+                    r"教育背景(.*?)(?:工作经历|项目经历|相关技能|荣誉证书|$)"):
+        m_sec = re.search(sec_pat, text, re.DOTALL)
+        if m_sec:
+            m = re.search(r"([一-鿿]{2,}(?:大学|学院))", m_sec.group(1))
+            if m:
+                stripped = _strip_school_prefix(m.group(1))
+                if stripped:
+                    return stripped
     m = re.search(r"([一-鿿]{2,}(?:大学|学院))", text)
-    return m.group(1) if m else ""
+    return _strip_school_prefix(m.group(1)) if m else ""
 
 
 def _extract_education(text: str) -> str:

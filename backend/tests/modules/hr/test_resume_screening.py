@@ -276,6 +276,8 @@ async def test_screen_candidate(db_session: AsyncSession, client: AsyncClient):
 
     candidate = await CandidateService(db_session).create(CandidateCreate(
         name="王五", job_requirement_id=jd.id, resume_url=resume_path, status="待筛选",
+        # 故意带脏值（规则解析的介词污染形态）：验证 AI 初筛后回填修正
+        school="于福建医科大学", education=None, major=None, work_years=None,
     ))
 
     with patch(
@@ -292,6 +294,11 @@ async def test_screen_candidate(db_session: AsyncSession, client: AsyncClient):
     refreshed = await CandidateService(db_session).get(candidate.id)
     assert refreshed.recommendation_level == "不推荐"
     assert refreshed.match_report and refreshed.match_report.startswith("【候选人匹配度报告】")
+    # 档案字段回填修正：AI 提取的 school 覆盖规则解析的脏值，空值补齐
+    assert refreshed.school == "福建医科大学"
+    assert refreshed.education == "本科"
+    assert refreshed.major == "临床药学"
+    assert refreshed.work_years == 5
 
     # 结果出现在该岗位的筛选列表里（与上传初筛同一池，可排名对比）
     lst = await client.get(

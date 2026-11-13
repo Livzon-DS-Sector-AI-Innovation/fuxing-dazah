@@ -195,3 +195,38 @@ async def test_llm_enhance_rejects_non_name_value():
         ):
             out = await enhance_parsed_with_llm(dict(parsed))
         assert out["name"] == "", bad
+
+
+# ─── 校名提取：教育经历段落优先 + 介词前缀剥离 ───
+
+
+def test_extract_school_strips_preposition_prefix():
+    """教育经历叙述句「…于XX大学…」的介词不得混入校名（历史脏数据根因）。"""
+    from app.modules.hr.resume_parser import _extract_school
+
+    assert _extract_school(
+        "教育经历 2018.09-2022.06 于华中农业大学 农艺与种业（硕士） 工作经历 2022.07-至今 某药企"
+    ) == "华中农业大学"
+    assert _extract_school("教育背景 2019.09-2023.06 就读于浙江工业大学 药学专业") == "浙江工业大学"
+    assert _extract_school("2017.09-2021.06 毕业于沈阳药科大学 药学类") == "沈阳药科大学"
+
+
+def test_extract_school_prefers_education_section():
+    """校名优先取教育经历段，避免工作段的「xx大学附属医院」类公司名误命中。"""
+    from app.modules.hr.resume_parser import _extract_school
+
+    text = (
+        "工作经历 2015-2020 任职于某某大学附属医院 药剂师 "
+        "教育经历 2011-2015 考入某某学院 药学专业"
+    )
+    assert _extract_school(text) == "某某学院"
+
+
+def test_extract_school_label_and_fallback():
+    """标签提取不受剥离影响；无段落无标签时全文兜底仍可用。"""
+    from app.modules.hr.resume_parser import _extract_school
+
+    assert _extract_school("毕业院校：某某大学") == "某某大学"
+    assert _extract_school("华中农业大学 农艺与种业（硕士）") == "华中农业大学"
+    # 剥离后不以大学/学院结尾（脏值）返回空，交给 LLM 复核兜底
+    assert _extract_school("学校：于") == ""
