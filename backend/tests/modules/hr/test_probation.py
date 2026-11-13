@@ -307,11 +307,14 @@ async def test_cancel_review(db_session):
 
 
 async def test_reminder_scan_skips_active_reviews(db_session, monkeypatch):
-    from app.core.config import get_settings
+    from app.modules.hr import probation_scheduled
     from app.modules.hr.probation_scheduled import run_probation_reminder
 
-    # 未配置接收人：仅日志不推送（不炸即过）
-    monkeypatch.setattr(get_settings(), "HR_PROBATION_REMINDER_OPEN_IDS", "")
+    # 未配置接收人（KV 缺省为空）：仅日志不推送（不炸即过）
+    async def _no_receivers(db):
+        return []
+
+    monkeypatch.setattr(probation_scheduled, "_load_reminder_open_ids", _no_receivers)
     e = _mk_probation_employee(db_session)
     await db_session.flush()
     # 有进行中评估 → 不在提醒列表（靠日志覆盖，这里主要验证任务可运行）

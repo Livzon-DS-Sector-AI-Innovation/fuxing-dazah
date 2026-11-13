@@ -56,9 +56,6 @@ class Settings(BaseSettings):
     # Feishu WebSocket 长连接（接收消息/事件推送）
     FEISHU_WS_ENABLED: bool = True
 
-    # 试用期到期提醒接收人（逗号分隔 open_id；空=仅日志不推送）
-    HR_PROBATION_REMINDER_OPEN_IDS: str = ""
-
     # HR 专属飞书应用凭证：员工档案 bitable 同步与职称评审审批同步共用
     # 同一应用时只需配这一对，下面两对专用变量留空自动回填本值。
     HR_FEISHU_APP_ID: str = ""

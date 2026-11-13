@@ -1,7 +1,8 @@
 """试用期转正定时任务：每天 09:00 扫描 7 天内到期且无进行中评估的员工，飞书提醒 HR。
 
-提醒接收人来自 settings.HR_PROBATION_REMINDER_OPEN_IDS（逗号分隔 open_id），
-未配置仅记日志——前端转正面板/员工列表倒计时始终可见，不依赖推送。
+提醒接收人存 hr.system_settings 键 probation_reminder.open_ids（逗号分隔
+open_id，系统设置界面可直接改，参照 employee_sync 的 KV 模式），未配置仅记
+日志——前端转正面板/员工列表倒计时始终可见，不依赖推送。
 去重：以「到期日窗口 + 无进行中评估」为口径，评估发起后自然不再提醒；
 同一员工同一天重复运行由调度器 FIXED_TIME 保证至多一轮（重启补跑场景
 最多多发一次提醒卡，可接受）。
@@ -11,10 +12,10 @@ import logging
 from datetime import date, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.database import async_session_factory
-from app.modules.hr.models import Employee, ProbationReview
+from app.modules.hr.models import Employee, ProbationReview, SystemSetting
 from app.platform.scheduler import ScheduleConfig, ScheduleStrategy, TaskDefinition
 
 logger = logging.getLogger(__name__)
@@ -22,13 +23,24 @@ logger = logging.getLogger(__name__)
 REMIND_TIME_OF_DAY = "09:00"
 REMIND_DAYS_AHEAD = 7
 
+KEY_REMINDER_OPEN_IDS = "probation_reminder.open_ids"
+
+
+async def _load_reminder_open_ids(db: AsyncSession) -> list[str]:
+    """读取提醒接收人 KV（缺省=空，仅日志不推送）。"""
+    row = (await db.execute(
+        select(SystemSetting).where(
+            SystemSetting.key == KEY_REMINDER_OPEN_IDS,
+            SystemSetting.is_deleted.is_(False),
+        )
+    )).scalar_one_or_none()
+    raw = (row.value if row else None) or ""
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
 
 async def run_probation_reminder() -> None:
-    settings = get_settings()
-    receivers = [
-        x.strip() for x in (settings.HR_PROBATION_REMINDER_OPEN_IDS or "").split(",") if x.strip()
-    ]
     async with async_session_factory() as db:
+        receivers = await _load_reminder_open_ids(db)
         # 试用期（含各类试用性质）且未软删的在职员工
         employees = (await db.execute(
             select(Employee).where(
@@ -62,7 +74,7 @@ async def run_probation_reminder() -> None:
         logger.info("试用期到期提醒：%d 名员工 7 天内到期", len(due))
 
         if not receivers:
-            logger.info("未配置 HR_PROBATION_REMINDER_OPEN_IDS，跳过推送（仅日志）")
+            logger.info("未配置提醒接收人（system_settings: %s），跳过推送（仅日志）", KEY_REMINDER_OPEN_IDS)
             return
 
         from app.platform.integrations.feishu.notification import send_user_card
