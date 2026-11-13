@@ -1,7 +1,7 @@
 """HR database queries live here."""
 
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import Any
 from uuid import UUID
 
@@ -1258,6 +1258,31 @@ class InterviewRepository:
             select(Interview).where(Interview.id == interview_id, Interview.is_deleted.is_(False))
         )
         return result.scalar_one_or_none()
+
+    async def find_time_conflicts(
+        self,
+        interviewer: str,
+        interview_date: date,
+        start_time: time,
+        end_time: time,
+        exclude_id: UUID | None = None,
+    ) -> list[Interview]:
+        """查同面试官同日时段重叠的未取消面试（双方起止时间齐全才参与判定）。"""
+        stmt = select(Interview).where(
+            Interview.is_deleted.is_(False),
+            Interview.interviewer == interviewer,
+            Interview.interview_date == interview_date,
+            Interview.status != "已取消",
+            Interview.start_time.isnot(None),
+            Interview.end_time.isnot(None),
+            # 区间重叠：起点早于对方结束 且 结点晚于对方开始（端点相接不算冲突）
+            Interview.start_time < end_time,
+            Interview.end_time > start_time,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Interview.id != exclude_id)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     async def create(self, interview: Interview) -> Interview:
         self.session.add(interview)

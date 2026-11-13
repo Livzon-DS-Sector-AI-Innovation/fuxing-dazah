@@ -700,6 +700,8 @@ export interface Interview {
   job_requirement_id?: string
   interview_type: string
   interview_date?: string
+  start_time?: string
+  end_time?: string
   interviewer?: string
   location?: string
   status: string
@@ -715,21 +717,27 @@ export interface InterviewCreateInput {
   job_requirement_id?: string
   interview_type?: string
   interview_date?: string
+  start_time?: string
+  end_time?: string
   interviewer?: string
   location?: string
   notes?: string
   create_calendar_event?: boolean
+  force_conflict?: boolean
 }
 
 export interface InterviewUpdateInput {
   interview_type?: string
   interview_date?: string
+  start_time?: string
+  end_time?: string
   interviewer?: string
   location?: string
   status?: string
   transcript_text?: string
   notes?: string
-  calendar_event_id?: string
+  create_calendar_event?: boolean
+  force_conflict?: boolean
 }
 
 export interface AiEvaluation {

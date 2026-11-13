@@ -1,6 +1,6 @@
 """HR business request and response schemas live here."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -987,21 +987,27 @@ class InterviewCreate(BaseModel):
     job_requirement_id: UUID | None = None
     interview_type: str = Field(default="初试", max_length=16, description="初试/复试/终试")
     interview_date: date | None = None
+    start_time: time | None = Field(None, description="面试开始时间（钟点，HH:MM）")
+    end_time: time | None = Field(None, description="面试结束时间（钟点，HH:MM）")
     interviewer: str | None = Field(None, max_length=64)
     location: str | None = Field(None, max_length=256)
     notes: str | None = None
     create_calendar_event: bool = Field(default=False, description="是否创建飞书日历日程")
+    force_conflict: bool = Field(default=False, description="面试官时段冲突时仍强制保存（前端二次确认后置 true）")
 
 
 class InterviewUpdate(BaseModel):
     interview_type: str | None = Field(None, max_length=16)
     interview_date: date | None = None
+    start_time: time | None = None
+    end_time: time | None = None
     interviewer: str | None = Field(None, max_length=64)
     location: str | None = Field(None, max_length=256)
     status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
     transcript_text: str | None = None
     notes: str | None = None
     create_calendar_event: bool = Field(default=False, description="为尚未创建日历的面试补建日程（已有日程则忽略）")
+    force_conflict: bool = Field(default=False, description="面试官时段冲突时仍强制保存（前端二次确认后置 true）")
     # calendar_event_id 为服务端日历集成内部字段，只读（响应专用），不接受客户端写入
 
 
@@ -1012,6 +1018,8 @@ class InterviewResponse(BaseModel):
     job_requirement_id: UUID | None = None
     interview_type: str
     interview_date: date | None = None
+    start_time: time | None = None
+    end_time: time | None = None
     interviewer: str | None = None
     location: str | None = None
     status: str

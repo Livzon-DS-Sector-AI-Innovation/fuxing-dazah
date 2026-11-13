@@ -1,6 +1,7 @@
 """HR business ORM models live here."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
     text,
 )
@@ -1291,6 +1293,7 @@ class Interview(BaseModel):
     __table_args__ = (
         Index("ix_interviews_candidate_id", "candidate_id"),
         Index("ix_interviews_interview_date", "interview_date"),
+        Index("ix_interviews_interviewer_date", "interviewer", "interview_date"),
         {"schema": "hr"},
     )
 
@@ -1298,6 +1301,8 @@ class Interview(BaseModel):
     job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
     interview_type: Mapped[str] = mapped_column(String(16), nullable=False, default="初试", server_default="初试", comment="初试/复试/终试")
     interview_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="面试日期")
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True, comment="面试开始时间（钟点）")
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True, comment="面试结束时间（钟点）")
     interviewer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="面试官")
     location: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="面试地点")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="待安排", server_default="待安排", comment="待安排/已安排/已完成/已取消")

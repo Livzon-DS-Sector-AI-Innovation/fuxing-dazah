@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -1789,9 +1789,20 @@ class InterviewService:
             raise NotFoundException("面试记录", str(interview_id))
         return iv
 
-    async def create(self, data: InterviewCreate, operator: UUID | None = None) -> Interview:
+    async def create(
+        self, data: InterviewCreate,
+        operator: UUID | None = None, operator_name: str | None = None,
+    ) -> Interview:
+        self._validate_time_range(data.start_time, data.end_time)
+        await self._ensure_no_conflict(
+            interviewer=data.interviewer,
+            interview_date=data.interview_date,
+            start_time=data.start_time, end_time=data.end_time,
+            exclude_id=None, force=data.force_conflict,
+        )
+
         create_calendar = data.create_calendar_event
-        iv = Interview(**data.model_dump(exclude={"create_calendar_event"}))
+        iv = Interview(**data.model_dump(exclude={"create_calendar_event", "force_conflict"}))
         iv.created_by = operator
         result = await self.repo.create(iv)
 
@@ -1812,8 +1823,13 @@ class InterviewService:
                     interviewer_name=data.interviewer or "未指定",
                     location=data.location or "未指定",
                     interview_type=data.interview_type,
+                    start_time_val=data.start_time,
+                    end_time_val=data.end_time,
                 )
                 result.calendar_event_id = event_id
+                # 日历建成功 = 面试确定进入日程，状态从「待安排」推进到「已安排」
+                if result.status == "待安排":
+                    result.status = "已安排"
                 result = await self.repo.update(result)
             except Exception as e:
                 logger.warning("创建日历事件失败（面试已保存）: %s", e)
@@ -1822,17 +1838,80 @@ class InterviewService:
 
         return result
 
-    async def update(self, interview_id: UUID, data: InterviewUpdate, operator: UUID | None = None) -> Interview:
+    @staticmethod
+    def _validate_time_range(start_time: time | None, end_time: time | None) -> None:
+        if start_time and end_time and end_time <= start_time:
+            raise AppException(status_code=400, message="面试结束时间必须晚于开始时间")
+
+    async def _ensure_no_conflict(
+        self,
+        *,
+        interviewer: str | None,
+        interview_date: date | None,
+        start_time: time | None,
+        end_time: time | None,
+        exclude_id: UUID | None,
+        force: bool,
+    ) -> None:
+        """同面试官同日时段重叠校验；信息不全（无日期/起止/面试官）时跳过。"""
+        if force or not (interviewer and interview_date and start_time and end_time):
+            return
+        conflicts = await self.repo.find_time_conflicts(
+            interviewer, interview_date, start_time, end_time, exclude_id=exclude_id,
+        )
+        if conflicts:
+            c = conflicts[0]
+            # 查询条件已保证起止时间非空，窄化类型供 mypy
+            assert c.start_time is not None and c.end_time is not None
+            detail = (
+                f"{c.interviewer} 在 {c.interview_date} "
+                f"{c.start_time.strftime('%H:%M')}-{c.end_time.strftime('%H:%M')} "
+                f"已有一场「{c.interview_type}」（{c.status}）"
+            )
+            raise AppException(
+                status_code=409,
+                message=f"面试官时段冲突：{detail}",
+                detail={"conflict": detail},
+            )
+
+    async def update(
+        self, interview_id: UUID, data: InterviewUpdate,
+        operator: UUID | None = None, operator_name: str | None = None,
+    ) -> Interview:
         iv = await self.get(interview_id)
         old_date = iv.interview_date
         old_location = iv.location
         old_interviewer = iv.interviewer
+        old_start = iv.start_time
+        old_end = iv.end_time
         old_status = iv.status
 
-        for k, v in data.model_dump(exclude={"create_calendar_event"}, exclude_unset=True).items():
+        fields = data.model_dump(exclude={"create_calendar_event", "force_conflict"}, exclude_unset=True)
+        # 冲突校验用「合并后的生效值」：未传的字段沿用旧值
+        eff_date = fields.get("interview_date", old_date)
+        eff_start = fields.get("start_time", iv.start_time)
+        eff_end = fields.get("end_time", iv.end_time)
+        self._validate_time_range(eff_start, eff_end)
+        if data.status != "已取消":  # 取消操作无需查冲突
+            await self._ensure_no_conflict(
+                interviewer=fields.get("interviewer", old_interviewer),
+                interview_date=eff_date,
+                start_time=eff_start, end_time=eff_end,
+                exclude_id=interview_id, force=data.force_conflict,
+            )
+
+        for k, v in fields.items():
             setattr(iv, k, v)
         iv.updated_by = operator
         result = await self.repo.update(iv)
+
+        # 状态联动：标记完成的瞬间，若候选人处于「面试中」且无剩余未完成轮次，
+        # 自动推进到「已面试」（走候选人状态机白名单，失败不影响面试保存）
+        if old_status != "已完成" and result.status == "已完成":
+            try:
+                await self._maybe_complete_candidate(result, operator_name)
+            except Exception as e:
+                logger.warning("面试完成后自动推进候选人状态失败: %s", e)
 
         # 状态流转为「已取消」时同步删除日历事件——与 DELETE 取消行为保持一致
         if old_status != "已取消" and result.status == "已取消" and result.calendar_event_id:
@@ -1859,6 +1938,8 @@ class InterviewService:
             old_date != result.interview_date
             or old_location != result.location
             or old_interviewer != result.interviewer
+            or old_start != result.start_time
+            or old_end != result.end_time
         ):
             try:
                 from app.modules.hr.feishu_calendar import FeishuCalendarService
@@ -1868,12 +1949,35 @@ class InterviewService:
                     interview_date_val=result.interview_date,
                     location=result.location,
                     interviewer_name=result.interviewer,
+                    start_time_val=result.start_time,
+                    end_time_val=result.end_time,
                 )
             except Exception as e:
                 logger.warning("同步日历事件失败（面试已更新）: %s", e)
                 result.calendar_sync_error = f"飞书日程同步失败：{e}"
 
         return result
+
+    async def _maybe_complete_candidate(self, interview: Interview, operator_name: str | None) -> None:
+        """面试全部轮次完成时，把「面试中」的候选人自动推进到「已面试」。"""
+        candidate_repo = CandidateRepository(self.repo.session)
+        candidate = await candidate_repo.get_by_id(interview.candidate_id)
+        if not candidate or candidate.status != "面试中":
+            return
+        all_ivs = await self.repo.list_by_candidate(interview.candidate_id)
+        # 已取消（软删的历史数据同理）与已完成之外的轮次都算「还有安排」
+        pending = [
+            x for x in all_ivs
+            if x.status not in ("已完成", "已取消") and x.id != interview.id
+        ]
+        if pending:
+            return
+        candidate_service = CandidateService(self.repo.session)
+        await candidate_service.transition_status(
+            interview.candidate_id, "已面试",
+            remark=f"全部面试轮次已完成（{interview.interview_type} 完成时自动推进）",
+            operator=operator_name,
+        )
 
     async def _create_calendar_event(self, interview: Interview) -> str | None:
         """为面试记录创建飞书日历日程，返回 event_id（失败抛异常由调用方降级）。"""
@@ -1892,6 +1996,8 @@ class InterviewService:
             interviewer_name=interview.interviewer or "未指定",
             location=interview.location or "未指定",
             interview_type=interview.interview_type,
+            start_time_val=interview.start_time,
+            end_time_val=interview.end_time,
         )
 
     async def delete(self, interview_id: UUID, operator: UUID | None = None) -> None:
