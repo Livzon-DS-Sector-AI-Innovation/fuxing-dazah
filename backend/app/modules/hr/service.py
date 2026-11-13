@@ -1813,6 +1813,23 @@ class InterviewService:
     async def list_by_candidate(self, candidate_id: UUID) -> list[Interview]:
         return await self.repo.list_by_candidate(candidate_id)
 
+    async def list_overview(
+        self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        interviewer: str | None = None,
+        status: str | None = None,
+        candidate_id: UUID | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[tuple[Interview, str | None, str | None]], int]:
+        """跨候选人面试总览（按日期倒序分页，含候选人姓名/岗位）。"""
+        return await self.repo.search_overview(
+            date_from=date_from, date_to=date_to, interviewer=interviewer,
+            status=status, candidate_id=candidate_id, page=page, page_size=page_size,
+        )
+
     async def get(self, interview_id: UUID) -> Interview:
         iv = await self.repo.get_by_id(interview_id)
         if not iv:

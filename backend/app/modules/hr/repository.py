@@ -1285,6 +1285,45 @@ class InterviewRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def search_overview(
+        self,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        interviewer: str | None = None,
+        status: str | None = None,
+        candidate_id: UUID | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[tuple[Interview, str | None, str | None]], int]:
+        """跨候选人面试总览：join 候选人姓名/岗位，返回 (行, 总数)。"""
+        conds = [Interview.is_deleted.is_(False)]
+        if date_from:
+            conds.append(Interview.interview_date >= date_from)
+        if date_to:
+            conds.append(Interview.interview_date <= date_to)
+        if interviewer:
+            conds.append(Interview.interviewer.ilike(f"%{interviewer}%"))
+        if status:
+            conds.append(Interview.status == status)
+        if candidate_id:
+            conds.append(Interview.candidate_id == candidate_id)
+
+        base = (
+            select(Interview, Candidate.name, Candidate.position)
+            .outerjoin(Candidate, Interview.candidate_id == Candidate.id)
+            .where(*conds)
+        )
+        total = (await self.session.execute(
+            select(func.count()).select_from(base.subquery())
+        )).scalar() or 0
+        rows = (await self.session.execute(
+            base.order_by(desc(Interview.interview_date), desc(Interview.start_time))
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )).all()
+        return [(r[0], r[1], r[2]) for r in rows], int(total)
+
     async def create(self, interview: Interview) -> Interview:
         self.session.add(interview)
         await self.session.flush()

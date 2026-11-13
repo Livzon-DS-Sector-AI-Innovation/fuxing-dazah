@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Tabs, Tag, Upload } from 'antd'
-import { PlusOutlined, UploadOutlined, SendOutlined, DownOutlined, RightOutlined, DeleteOutlined, FileSearchOutlined } from '@ant-design/icons'
+import { PlusOutlined, UploadOutlined, SendOutlined, DownOutlined, RightOutlined, DeleteOutlined, FileSearchOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
   createCandidate, deleteCandidate,
@@ -12,9 +12,9 @@ import {
   fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
   decideCandidateReview,
-  fetchEmployeesAction, screenCandidateAction,
+  fetchEmployeesAction, screenCandidateAction, fetchInterviewsOverview,
 } from '@/actions/hr'
-import type { Candidate, JobRequirement, RecruitmentStats } from '@/types/hr'
+import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 
@@ -91,7 +91,7 @@ export default function RecruitmentClient() {
   const [offerSending, setOfferSending] = useState(false)
 
   // 待我审核（无管理权限的审核人默认落在"待我审核"）
-  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening'>(canManage ? 'jobs' : 'reviews')
+  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening' | 'interviews'>(canManage ? 'jobs' : 'reviews')
   const [pendingReviews, setPendingReviews] = useState<any[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
 
@@ -110,6 +110,33 @@ export default function RecruitmentClient() {
   const [compareData, setCompareData] = useState<any[]>([])
   const [compareLoading, setCompareLoading] = useState(false)
   const [showCompare, setShowCompare] = useState(false)
+
+  // 面试总览：跨候选人按日期查看（默认过去 7 天 ~ 未来 30 天）
+  const [overviewRows, setOverviewRows] = useState<InterviewOverviewItem[]>([])
+  const [overviewLoading, setOverviewLoading] = useState(false)
+  const [overviewTotal, setOverviewTotal] = useState(0)
+  const [overviewDateRange, setOverviewDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>([
+    dayjs().subtract(7, 'day'), dayjs().add(30, 'day'),
+  ])
+  const [overviewInterviewer, setOverviewInterviewer] = useState('')
+  const [overviewStatus, setOverviewStatus] = useState<string | undefined>(undefined)
+  const loadOverview = useCallback(async () => {
+    setOverviewLoading(true)
+    try {
+      const r = await fetchInterviewsOverview({
+        date_from: overviewDateRange?.[0]?.format('YYYY-MM-DD'),
+        date_to: overviewDateRange?.[1]?.format('YYYY-MM-DD'),
+        interviewer: overviewInterviewer || undefined,
+        status: overviewStatus,
+        page_size: 200,
+      })
+      setOverviewRows(r.data || [])
+      setOverviewTotal(r.meta?.total ?? (r.data || []).length)
+    } catch (err: any) {
+      msg.error(err?.message || '获取面试总览失败')
+      setOverviewRows([])
+    } finally { setOverviewLoading(false) }
+  }, [overviewDateRange, overviewInterviewer, overviewStatus, msg])
 
   const loadPendingReviews = useCallback(async () => {
     setReviewsLoading(true)
@@ -400,6 +427,11 @@ export default function RecruitmentClient() {
     } catch (err: any) { msg.error(err.message || '发送失败') }
     finally { setOfferSending(false) }
   }
+
+  // 总览 Tab 激活或筛选条件变化时自动加载（loadOverview 随筛选闭包更新）
+  useEffect(() => {
+    if (activeTab === 'interviews') loadOverview()
+  }, [activeTab, loadOverview])
 
   const handleTabChange = (key: string) => {
     setActiveTab(key as typeof activeTab)
@@ -701,6 +733,79 @@ export default function RecruitmentClient() {
                 </div>
               </Modal>
             </>),
+          }, {
+            key: 'interviews',
+            label: <span className="flex items-center gap-1.5"><ClockCircleOutlined />面试总览</span>,
+            children: (
+              <Card>
+                <div className="flex flex-wrap gap-3 mb-4 items-center">
+                  <DatePicker.RangePicker
+                    value={overviewDateRange}
+                    onChange={(v) => setOverviewDateRange(v)}
+                  />
+                  <Input.Search
+                    placeholder="面试官姓名"
+                    style={{ width: 180 }}
+                    allowClear
+                    onSearch={(v) => setOverviewInterviewer(v || '')}
+                  />
+                  <Select
+                    placeholder="状态" allowClear style={{ width: 120 }}
+                    options={['待安排', '已安排', '已完成', '已取消'].map((x) => ({ label: x, value: x }))}
+                    onChange={(v) => setOverviewStatus(v)}
+                  />
+                  <Button onClick={() => loadOverview()}>查询</Button>
+                  <span className="text-xs text-gray-400 ml-auto">
+                    {overviewLoading ? '加载中…' : `共 ${overviewTotal} 场`}
+                  </span>
+                </div>
+                {overviewLoading ? <div className="text-center py-12"><Spin /></div> :
+                  overviewRows.length === 0 ? <Empty description="该条件下暂无面试安排" className="py-12" /> : (
+                    <div className="space-y-5">
+                      {(() => {
+                        const today = dayjs().format('YYYY-MM-DD')
+                        const groups: { title: string; rows: typeof overviewRows }[] = [
+                          { title: '今天面试', rows: [] },
+                          { title: '即将到来', rows: [] },
+                          { title: '更早 / 已结束', rows: [] },
+                        ]
+                        overviewRows.forEach((iv) => {
+                          if (!iv.interview_date) return
+                          if (iv.interview_date === today) groups[0].rows.push(iv)
+                          else if (iv.interview_date > today) groups[1].rows.push(iv)
+                          else groups[2].rows.push(iv)
+                        })
+                        return groups.filter((g) => g.rows.length > 0).map((g) => (
+                          <div key={g.title}>
+                            <div className="text-sm font-medium mb-2 text-[var(--color-charcoal)]">
+                              {g.title} <span className="text-gray-400 font-normal">({g.rows.length})</span>
+                            </div>
+                            <div className="space-y-2">
+                              {g.rows.map((iv) => (
+                                <div key={iv.id}
+                                  className="flex items-center gap-3 p-2.5 rounded-lg border border-[var(--color-hairline)] hover:bg-blue-50 cursor-pointer transition-colors"
+                                  onClick={() => router.push(`/hr/recruitment/${iv.candidate_id}`)}>
+                                  <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
+                                  <span className="text-xs text-gray-500 w-40 shrink-0">
+                                    {iv.interview_date}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
+                                  </span>
+                                  <span className="font-medium text-sm">{iv.candidate_name || '未知候选人'}</span>
+                                  <span className="text-xs text-gray-400">{iv.candidate_position || ''}</span>
+                                  <Tag style={{ fontSize: 10 }}>{iv.interview_type}</Tag>
+                                  <span className="text-xs text-gray-500 flex-1 truncate">
+                                    面试官：{iv.interviewer || '-'}{iv.location ? ` · ${iv.location}` : ''}
+                                  </span>
+                                  {iv.calendar_event_id && <Tag color="purple" style={{ fontSize: 10 }}>日历</Tag>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      })()}
+                    </div>
+                  )}
+              </Card>
+            ),
           }] : []),
           {
             key: 'reviews',

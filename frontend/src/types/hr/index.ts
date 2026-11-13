@@ -740,6 +740,11 @@ export interface InterviewUpdateInput {
   force_conflict?: boolean
 }
 
+export interface InterviewOverviewItem extends Interview {
+  candidate_name?: string | null
+  candidate_position?: string | null
+}
+
 export interface InterviewFeedbackDimension {
   name: string
   score: number
@@ -999,6 +1004,8 @@ export interface DashboardSummary {
   work_injury_count: number
   labor_dispute_count: number
   underperforming_count: number
+  interviews_today: number
+  interviews_this_week: number
   performance_submitted_count: number
   active_departure_rate: number
   passive_departure_rate: number

@@ -1178,8 +1178,32 @@ async def get_dashboard_stats(
     )).scalar()
     age_avg = round(float(age_avg_result), 1) if age_avg_result else 0.0
 
+    # 面试统计：今日/本周（周一至周日）未取消面试场数（招聘漏斗参考）
+    from datetime import timedelta as _td
+
+    from app.modules.hr.models import Interview as IvModel
+    _today = date.today()
+    _week_end = _today + _td(days=(6 - _today.weekday()))
+    interviews_today = (await session.execute(
+        select(func.count(IvModel.id)).where(
+            IvModel.is_deleted == False,  # noqa: E712
+            IvModel.interview_date == _today,
+            IvModel.status != "已取消",
+        )
+    )).scalar() or 0
+    interviews_this_week = (await session.execute(
+        select(func.count(IvModel.id)).where(
+            IvModel.is_deleted == False,  # noqa: E712
+            IvModel.interview_date >= _today,
+            IvModel.interview_date <= _week_end,
+            IvModel.status != "已取消",
+        )
+    )).scalar() or 0
+
     return success_response(data={
         "summary": {
+            "interviews_today": interviews_today,
+            "interviews_this_week": interviews_this_week,
             "total_employees": total_employees,
             "new_hires_this_month": new_hires_this_month,
             "departures_this_month": departures_this_month,

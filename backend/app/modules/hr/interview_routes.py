@@ -8,9 +8,10 @@ AI 评估已统一到胜任度报告（CandidateAnalysisReport）：
 """
 
 import logging
+from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -21,6 +22,7 @@ from app.modules.hr.schemas import (
     InterviewCreate,
     InterviewFeedbackIn,
     InterviewFeedbackOut,
+    InterviewOverviewItem,
     InterviewResponse,
     InterviewUpdate,
 )
@@ -44,6 +46,32 @@ def get_analysis_service(session: AsyncSession = Depends(get_db)) -> CandidateAn
 
 
 # ─── 面试 CRUD ───
+
+
+@router.get("/interviews", summary="面试总览列表")
+async def list_interviews_overview(
+    date_from: date | None = Query(None, description="面试日期起（含）"),
+    date_to: date | None = Query(None, description="面试日期止（含）"),
+    interviewer: str | None = Query(None, description="面试官姓名（模糊）"),
+    status: str | None = Query(None, description="状态筛选"),
+    candidate_id: UUID | None = Query(None, description="按候选人筛选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    service: InterviewService = Depends(get_interview_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read")),
+):
+    """跨候选人面试总览：按日期倒序分页，附带候选人姓名/岗位。"""
+    rows, total = await service.list_overview(
+        date_from=date_from, date_to=date_to, interviewer=interviewer,
+        status=status, candidate_id=candidate_id, page=page, page_size=page_size,
+    )
+    items = []
+    for iv, name, position in rows:
+        d = InterviewResponse.model_validate(iv).model_dump(mode="json")
+        d["candidate_name"] = name
+        d["candidate_position"] = position
+        items.append(InterviewOverviewItem.model_validate(d).model_dump(mode="json"))
+    return success_response(data=items, meta={"page": page, "page_size": page_size, "total": total})
 
 
 @router.get("/candidates/{cid}/interviews", summary="候选人面试列表")

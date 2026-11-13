@@ -317,6 +317,23 @@ export async function deleteInterview(id: string) {
   return res
 }
 
+// ─── 面试总览 ───
+
+export async function fetchInterviewsOverview(params: {
+  date_from?: string
+  date_to?: string
+  interviewer?: string
+  status?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<{ data: any[]; meta?: { total: number } }> {
+  const qs = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+    .join('&')
+  return fetchHrApi(`/hr/interviews${qs ? `?${qs}` : ''}`, { errorMessage: '获取面试总览失败' })
+}
+
 // ─── 人工面试评价 ───
 
 export async function fetchInterviewFeedback(interviewId: string): Promise<{ data: any }> {

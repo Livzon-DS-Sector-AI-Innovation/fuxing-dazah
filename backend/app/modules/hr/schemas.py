@@ -1270,6 +1270,13 @@ class CandidateAnalysisReportOut(BaseModel):
     generated_at: datetime | None
 
 
+class InterviewOverviewItem(InterviewResponse):
+    """面试总览行：面试字段 + 候选人姓名/岗位（跨候选人视图）。"""
+
+    candidate_name: str | None = None
+    candidate_position: str | None = None
+
+
 # ─── Recruitment: Interview Feedback Schemas（人工面试评价） ───
 
 

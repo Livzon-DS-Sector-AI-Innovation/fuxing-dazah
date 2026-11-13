@@ -8,7 +8,7 @@ import {
   UserDeleteOutlined,
   HolderOutlined, PlusOutlined, CloseOutlined, DownOutlined,
   PieChartOutlined, BarChartOutlined, ClockCircleOutlined, EditOutlined,
-  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined, ApartmentOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined,
+  SafetyCertificateOutlined, FieldTimeOutlined, RiseOutlined, AlertOutlined, ApartmentOutlined, ExclamationCircleOutlined, WarningOutlined, CheckCircleOutlined, TeamOutlined,
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
@@ -862,6 +862,12 @@ export default function DashboardClient() {
             </Col>
             <Col xs={24} sm={12} md={6}>
               <KpiCard title="本年劳动纠纷" value={summary.labor_dispute_count ?? 0} icon={<ExclamationCircleOutlined />} accent={T.error} />
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <KpiCard title="今日面试" value={summary.interviews_today ?? 0} icon={<TeamOutlined />} accent={T.blue} />
+            </Col>
+            <Col xs={24} sm={12} md={6}>
+              <KpiCard title="本周面试" value={summary.interviews_this_week ?? 0} icon={<TeamOutlined />} accent={T.primary} />
             </Col>
             <Col xs={24} sm={12} md={6}>
               <KpiCard title="本年被动离职" value={summary.passive_departures ?? 0} icon={<UserDeleteOutlined />} accent={T.error} />
