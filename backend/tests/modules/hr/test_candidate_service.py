@@ -143,3 +143,30 @@ class TestCandidateOnboard:
         assert onboarding.department == "技术部"
         assert onboarding.position == "工程师"
         assert onboarding.source == "recruitment"
+
+    @pytest.mark.asyncio
+    async def test_onboard_carries_fields_and_backlink(self, db_session):
+        """入职带出候选人档案字段（性别/毕业时间等）并写入 candidate_id 回链。"""
+        from datetime import date
+
+        from app.modules.hr.models import Candidate, Employee
+        from sqlalchemy import select
+
+        c = Candidate(
+            id=uuid4(), name="带字段入职", status="待入职审批",
+            department="QC部", position="QC工程师",
+            gender="女", education="本科", school="某某大学", major="药学",
+            graduation_date=date(2024, 6, 30),
+        )
+        db_session.add(c)
+        await db_session.flush()
+
+        _, _, emp_no = await CandidateService(db_session).onboard(c.id)
+
+        emp = (await db_session.execute(
+            select(Employee).where(Employee.employee_number == emp_no)
+        )).scalar_one()
+        assert emp.candidate_id == c.id          # 回链
+        assert emp.gender == "女"                # 此前丢失的字段
+        assert emp.graduation_date == date(2024, 6, 30)
+        assert emp.education == "本科" and emp.school == "某某大学" and emp.major == "药学"

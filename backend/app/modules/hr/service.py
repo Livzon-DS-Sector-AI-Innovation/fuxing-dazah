@@ -1727,6 +1727,8 @@ class CandidateService:
         # 与 create_employee 副作用对齐：同步建员工档案 + 培训台账页 +
         # 培训名单行，否则招聘入职者游离于培训名单/台账体系外
         #（HR 后续在员工总台账正式建档时可按工号合并）
+        # 字段带出：候选人档案已有的基本信息（性别/毕业时间等）随入职落档，
+        # 避免入职后档案大面积空缺等员工自填补录；candidate_id 回链供溯源
         employee = Employee(
             employee_number=emp_no,
             name=c.name or "",
@@ -1734,9 +1736,12 @@ class CandidateService:
             position=c.position or "未分配",
             hire_date=date_type.today(),
             phone=c.phone,
+            gender=c.gender,
             education=c.education,
             school=c.school,
             major=c.major,
+            graduation_date=c.graduation_date,
+            candidate_id=candidate_id,
             status="在职",
         )
         self.repo.session.add(employee)
