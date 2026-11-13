@@ -39,16 +39,21 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
         major = _extract_major_keywords(text)
         major_from_keywords = True
 
+    name = _extract_name(text)
+    # 姓名规则覆盖标签/字距/开头窗口三种形态，仍提取不到（如「求职自荐书」
+    # 封面页全是水印噪声、姓名无标签深藏正文段中）→ 交 LLM
     # 学校规则兜底（xx大学/学院）误命中率低，缺失才需要 LLM；
     # 专业无标签 = 规则没把握（关键词猜测/空），交 LLM 复核
     llm_fields: list[str] = []
+    if not name:
+        llm_fields.append("name")
     if not school:
         llm_fields.append("school")
     if not major or major_from_keywords:
         llm_fields.append("major")
 
     return {
-        "name": _extract_name(text),
+        "name": name,
         "phone": _extract_phone(text),
         "email": _extract_email(text),
         "school": school,
@@ -72,6 +77,7 @@ _NAME_BLOCKLIST = {
     # 平台导出模板的基本信息区标签（兜底窗口会扫到）
     "姓名", "性别", "出生年月", "籍贯", "现居", "民族", "婚姻状况",
     "政治面貌", "身高", "体重", "手机", "电话", "电子邮箱", "邮箱",
+    "自荐书", "求职信", "推荐信", "个人总结", "自我评价",
 }
 
 
@@ -367,7 +373,8 @@ async def enhance_parsed_with_llm(parsed: dict) -> dict:
     from app.modules.hr.ai_service import AiChatService
 
     prompt = (
-        "从以下简历正文中提取一个 JSON 对象，包含两个字段：\n"
+        "从以下简历正文中提取一个 JSON 对象，包含三个字段：\n"
+        '- "name": 求职者中文姓名（2-4 个汉字；正文未出现姓名则取 null，不要用机构名/标题词充当）\n'
         '- "school": 最高学历对应的毕业院校全称\n'
         '- "major": 所学专业名称（去掉括号内的方向补充，如「农艺与种业（生物学与技术）」取「农艺与种业」）\n'
         "提取不到的字段值为 null，只依据正文不要臆造。只输出 JSON。\n\n"
@@ -380,7 +387,18 @@ async def enhance_parsed_with_llm(parsed: dict) -> dict:
         return parsed
     for f in fields:
         v = result.get(f)
-        # 短字符串防 LLM 返回长段落污染字段
-        if isinstance(v, str) and 2 <= len(v.strip()) <= 40:
-            parsed[f] = v.strip()
+        if not isinstance(v, str):
+            continue
+        v = v.strip()
+        # name 严格限中文姓名形态：常规 2-4 字，或带·的少数民族全名；
+        # 再过 blocklist，防止「求职自荐书」这类标题词冒充。
+        # 其余字段限短字符串防长段落污染
+        if f == "name":
+            if not re.fullmatch(r"[一-鿿]{2,4}(·[一-鿿]{2,6})?", v):
+                continue
+            if v in _NAME_BLOCKLIST:
+                continue
+        if f != "name" and not (2 <= len(v) <= 40):
+            continue
+        parsed[f] = v
     return parsed

@@ -161,3 +161,37 @@ async def test_llm_enhance_rejects_overlong_value():
     ):
         out = await enhance_parsed_with_llm(parsed)
     assert out["school"] == ""
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_fills_missing_name():
+    """「求职自荐书」式简历：封面全是水印、姓名无标签深藏正文，规则取不到 → LLM 补。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {
+        "name": "", "school": "永州职业技术学院", "major": "药学",
+        "_llm_fields": ["name"], "_llm_text_head": "毕业院校：永州职业技术学院 王秀丽 专业：药学",
+    }
+    with patch(
+        "app.modules.hr.ai_service.AiChatService.call_json",
+        new=AsyncMock(return_value={"name": "王秀丽", "school": None, "major": None}),
+    ):
+        out = await enhance_parsed_with_llm(parsed)
+    assert out["name"] == "王秀丽"
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_rejects_non_name_value():
+    """LLM 把标题词当姓名返回时拒绝写回（严格中文姓名形态校验）。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {"name": "", "school": "", "major": "", "_llm_fields": ["name"], "_llm_text_head": "x"}
+    for bad in ("求职自荐书", "药学技术岗2026", "Mr. Wang"):
+        with patch(
+            "app.modules.hr.ai_service.AiChatService.call_json",
+            new=AsyncMock(return_value={"name": bad}),
+        ):
+            out = await enhance_parsed_with_llm(dict(parsed))
+        assert out["name"] == "", bad
