@@ -1,8 +1,15 @@
-"""简历 PDF 解析器 - 基于 pdfplumber 提取文本后用规则匹配字段。"""
+"""简历 PDF 解析器 - 基于 pdfplumber 提取文本后用规则匹配字段。
 
+规则为快路径（姓名/电话/邮箱等格式固定字段）；学校/专业等嵌在自由文本里的
+开放字段规则覆盖不全，低置信或缺失时由 enhance_parsed_with_llm 交 LLM 复核。
+"""
+
+import logging
 import re
 from datetime import date
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 
 def _clean(text: str) -> str:
@@ -25,18 +32,36 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
     # 工作经历信息（用原始文本解析，保留换行）
     company_info = _extract_company_info(raw_text)
 
+    school = _extract_school(text)
+    major = _extract_major(text)  # 标签提取（高置信）
+    major_from_keywords = False
+    if not major:
+        major = _extract_major_keywords(text)
+        major_from_keywords = True
+
+    # 学校规则兜底（xx大学/学院）误命中率低，缺失才需要 LLM；
+    # 专业无标签 = 规则没把握（关键词猜测/空），交 LLM 复核
+    llm_fields: list[str] = []
+    if not school:
+        llm_fields.append("school")
+    if not major or major_from_keywords:
+        llm_fields.append("major")
+
     return {
         "name": _extract_name(text),
         "phone": _extract_phone(text),
         "email": _extract_email(text),
-        "school": _extract_school(text),
+        "school": school,
         "education": _extract_education(text),
-        "major": _extract_major(text),
+        "major": major,
         "gender": _extract_gender(text),
         "current_company": company_info["current_company"],
         "work_years": company_info["work_years"],
         "expected_salary": _extract_expected_salary(text),
         "source": _extract_source(text),
+        # 内部提示键：enhance_parsed_with_llm 消费后在返回 API 前移除
+        "_llm_fields": llm_fields,
+        "_llm_text_head": text[:4000],
     }
 
 
@@ -176,8 +201,20 @@ def _extract_major(text: str) -> str:
                 val = val[:idx]
                 break
         return val
-    for major in ["药学", "化学", "生物工程", "计算机科学", "软件工程", "机械工程", "会计", "人力资源",
-                  "制药工程", "生物技术", "药物分析", "分析化学", "临床医学"]:
+    return ""
+
+
+# 关键词兜底列表：无「专业：」标签时的低置信猜测——专业嵌在教育经历行
+# （如「华中农业大学 农艺与种业（硕士）」）时无法用规则可靠取出，且子串
+# 误命中率高（主修课程里的「生物化学」会被「化学」命中），标记低置信交 LLM 复核
+_MAJOR_KEYWORDS = [
+    "药学", "化学", "生物工程", "计算机科学", "软件工程", "机械工程", "会计", "人力资源",
+    "制药工程", "生物技术", "药物分析", "分析化学", "临床医学",
+]
+
+
+def _extract_major_keywords(text: str) -> str:
+    for major in _MAJOR_KEYWORDS:
         if major in text:
             return major
     return ""
@@ -313,3 +350,37 @@ def _is_school(name: str) -> bool:
         if kw in name:
             return True
     return False
+
+
+async def enhance_parsed_with_llm(parsed: dict) -> dict:
+    """LLM 复核规则解析的开放字段（school/major），并清理内部提示键。
+
+    - 规则高置信值（标签提取/学校正则命中）不参与、不被覆盖
+    - 仅当 parse_resume_pdf 标记了低置信/缺失字段时才调用 LLM（控制成本）
+    - LLM 失败静默保留规则值（关键词猜测总比空值好），不阻断建档
+    """
+    text_head = parsed.pop("_llm_text_head", "")
+    fields = parsed.pop("_llm_fields", [])
+    if not fields or not text_head.strip():
+        return parsed
+
+    from app.modules.hr.ai_service import AiChatService
+
+    prompt = (
+        "从以下简历正文中提取一个 JSON 对象，包含两个字段：\n"
+        '- "school": 最高学历对应的毕业院校全称\n'
+        '- "major": 所学专业名称（去掉括号内的方向补充，如「农艺与种业（生物学与技术）」取「农艺与种业」）\n'
+        "提取不到的字段值为 null，只依据正文不要臆造。只输出 JSON。\n\n"
+        f"简历正文：\n{text_head}"
+    )
+    try:
+        result = await AiChatService.call_json(prompt)
+    except Exception as e:
+        logger.warning("简历开放字段 LLM 复核失败（保留规则值）: %s", e)
+        return parsed
+    for f in fields:
+        v = result.get(f)
+        # 短字符串防 LLM 返回长段落污染字段
+        if isinstance(v, str) and 2 <= len(v.strip()) <= 40:
+            parsed[f] = v.strip()
+    return parsed

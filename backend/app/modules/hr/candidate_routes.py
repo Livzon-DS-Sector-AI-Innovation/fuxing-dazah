@@ -63,6 +63,9 @@ async def parse_cv(file: UploadFile = Form(..., alias="resume")):
     except Exception as e:
         # 固定文案：不把内部异常细节回传客户端
         raise HTTPException(400, "简历解析失败：文件损坏、加密或非标准 PDF") from e
+    # 学校/专业低置信或缺失时交 LLM 复核（失败静默保留规则值，不阻断上传）
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    r = await enhance_parsed_with_llm(r)
     # 文件名加 uuid 前缀，避免同名简历互相覆盖
     object_key = f"resumes/{uuid4().hex[:8]}_{safe_name}"
     if is_enabled():
@@ -316,15 +319,38 @@ async def onboard_candidate(
     service: CandidateService = Depends(get_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    from sqlalchemy import select
+
+    from app.modules.hr.models import Employee
     from app.modules.hr.service import NotFoundException
     try:
         _, onboarding, emp_no = await service.onboard(cid, operator=hr_scope.user.name)
         await service.repo.session.commit()
-        return success_response(data={"id": str(onboarding.id), "employee_number": emp_no}, message="入职成功")
     except NotFoundException as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+    # 入职落库成功后，自动给新员工飞书发信息收集表单（独立事务，失败不影响入职结果）
+    from app.modules.hr.employee_info_collection_service import create_collections
+    session = service.repo.session
+    emp = (await session.execute(
+        select(Employee).where(Employee.employee_number == emp_no, Employee.is_deleted.is_(False))
+    )).scalar_one_or_none()
+    info_sent, info_note = False, "未发起"
+    if emp is not None:
+        result = await create_collections(session, [emp.id], operator=hr_scope.user.name)
+        if result["created"] > 0:
+            info_sent, info_note = True, "已发送"
+        else:
+            info_note = result["skipped"][0]["reason"] if result["skipped"] else "未发起"
+
+    message = f"入职成功，工号 {emp_no}"
+    message += "；信息收集表单已发送至员工飞书" if info_sent else f"；信息收集未发送（{info_note}）"
+    return success_response(
+        data={"id": str(onboarding.id), "employee_number": emp_no, "info_collection_sent": info_sent},
+        message=message,
+    )
 
 
 @router.post("/candidates/{cid}/decide-review", summary="审核候选人")

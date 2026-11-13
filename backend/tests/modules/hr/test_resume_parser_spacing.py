@@ -4,6 +4,8 @@
 导致姓名/性别提取失败，建档变成「未识别姓名」。
 """
 
+import pytest
+
 from app.modules.hr.resume_parser import (
     _extract_education,
     _extract_gender,
@@ -77,3 +79,85 @@ def test_name_fallback_adjacent_single_chars():
 def test_name_fallback_plain_token():
     text = "陈兆丰 男 28岁 本科 求职意向：QA专员"
     assert _extract_name(text) == "陈兆丰"
+
+
+# ─── LLM 复核开放字段（school/major） ───
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_overrides_keyword_major():
+    """关键词兜底的专业（低置信）被 LLM 结果覆盖。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {
+        "school": "华中农业大学", "major": "化学",  # 「化学」为关键词猜测
+        "_llm_fields": ["major"], "_llm_text_head": "教育经历 华中农业大学 农艺与种业（硕士）",
+    }
+    with patch(
+        "app.modules.hr.ai_service.AiChatService.call_json",
+        new=AsyncMock(return_value={"school": None, "major": "农艺与种业"}),
+    ):
+        out = await enhance_parsed_with_llm(parsed)
+    assert out["major"] == "农艺与种业"
+    assert out["school"] == "华中农业大学"  # 高置信值不被覆盖
+    assert "_llm_fields" not in out and "_llm_text_head" not in out  # 内部键清理
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_not_triggered_when_confident():
+    """标签提取齐全时不调 LLM（控制成本）。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {"school": "福建医科大学", "major": "生物制药", "_llm_fields": [], "_llm_text_head": "x"}
+    with patch(
+        "app.modules.hr.ai_service.AiChatService.call_json", new=AsyncMock()
+    ) as mocked:
+        out = await enhance_parsed_with_llm(parsed)
+    mocked.assert_not_called()
+    assert out["major"] == "生物制药"
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_fills_missing_school():
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {"school": "", "major": "药学", "_llm_fields": ["school"], "_llm_text_head": "正文"}
+    with patch(
+        "app.modules.hr.ai_service.AiChatService.call_json",
+        new=AsyncMock(return_value={"school": "中国药科大学", "major": "药学"}),
+    ):
+        out = await enhance_parsed_with_llm(parsed)
+    assert out["school"] == "中国药科大学"
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_failure_keeps_rule_values():
+    """LLM 失败静默降级，保留规则值且不抛异常。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {"school": "", "major": "化学", "_llm_fields": ["school", "major"], "_llm_text_head": "正文"}
+    with patch(
+        "app.modules.hr.ai_service.AiChatService.call_json",
+        new=AsyncMock(side_effect=ValueError("AI 服务连接失败")),
+    ):
+        out = await enhance_parsed_with_llm(parsed)
+    assert out["school"] == "" and out["major"] == "化学"
+
+
+@pytest.mark.asyncio
+async def test_llm_enhance_rejects_overlong_value():
+    """LLM 返回超长文本（>40 字符）视为污染，不写入。"""
+    from unittest.mock import AsyncMock, patch
+
+    from app.modules.hr.resume_parser import enhance_parsed_with_llm
+    parsed = {"school": "", "major": "化学", "_llm_fields": ["school"], "_llm_text_head": "正文"}
+    with patch(
+        "app.modules.hr.ai_service.AiChatService.call_json",
+        new=AsyncMock(return_value={"school": "某大学" * 30}),
+    ):
+        out = await enhance_parsed_with_llm(parsed)
+    assert out["school"] == ""
