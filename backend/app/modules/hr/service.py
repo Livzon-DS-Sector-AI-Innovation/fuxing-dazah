@@ -2669,6 +2669,7 @@ _ANALYSIS_SYSTEM_PROMPT = """你是企业人力资源部的资深招聘评估专
 _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，参照以下报告结构输出 JSON：
 
 {{
+  "basic_info": [{{"label": "信息项", "value": "内容"}}],
   "dimensions": [
     {{"name": "维度名", "score": 0-100, "star": 1-5, "assessment": "岗位要求 vs 候选人情况 vs 评价"}}
   ],
@@ -2681,16 +2682,25 @@ _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，�
   "summary": "总体结论一段话"
 }}
 
-维度确定规则（重要）：
-1. 评估维度从【岗位JD】的任职要求中提取 4-6 个核心维度（如学历专业、
+内容要求（重要）：
+1. basic_info：从简历正文与面试记录提取 6-10 项关键信息（如姓名、学历/专业、
+   英语等级、工作年限、籍贯/现居地、到岗时间、目前求职状态、证书亮点等），
+   简历正文与面试记录中都没有的项不要编造
+2. 评估维度从【岗位JD】的任职要求中提取 4-6 个核心维度（如学历专业、
    工作经验、专业技能、沟通协作等）——JD 明确要求的才纳入；
    例如 JD 有英语要求才设「英语能力」维度，未提及的能力不要强行评估
-2. 另外补充两项通用评估：稳定性（跳槽频率/职业规划）与薪资期望匹配度
+3. 另外补充两项通用评估：稳定性（跳槽频率/职业规划）与薪资期望匹配度
    （与 JD 预算或市场水平比较），信息不足时如实写明「信息不足」
-3. 每个维度的 assessment 按「岗位要求 → 候选人情况 → 评价结论」结构撰写
+4. 每个维度的 assessment 按「岗位要求 → 候选人情况 → 评价结论」结构撰写
+5. strengths/risks 每条都要引用简历正文或面试记录中的具体事实作为依据展开论述
+   （如「通话全程表述卡顿、逻辑零散」），不要写无依据的空话；短板要写透，
+   评分严格（不及格就直说不及格），结论直接明确（建议推进 / 建议婉拒）
 
-【候选人简历】
+【候选人简历元数据】
 {resume_text}
+
+【候选人简历正文】
+{resume_full_text}
 
 【岗位JD】
 {jd_text}
@@ -2754,6 +2764,33 @@ class CandidateAnalysisService:
         self.session = session
         self.repo = CandidateAnalysisReportRepository(session)
 
+    @staticmethod
+    def _load_resume_full_text(resume_url: str | None) -> str:
+        """读取候选人简历正文（PDF 全文）；任何失败都降级为空串，不阻断报告生成。"""
+        if not resume_url:
+            return ""
+        try:
+            if resume_url.startswith("minio://"):
+                from app.core.storage import get_object
+                obj = get_object("hr", resume_url[len("minio://"):])
+                if obj is None:
+                    return ""
+                file_bytes, _ = obj
+            else:
+                import os
+                path = os.path.normpath(resume_url)
+                if not path.startswith("uploads/resumes/") or not os.path.exists(path):
+                    return ""
+                with open(path, "rb") as f:
+                    file_bytes = f.read()
+            from app.modules.hr.resume_screening_service import (
+                _RESUME_TEXT_LIMIT,
+                extract_pdf_full_text,
+            )
+            return extract_pdf_full_text(file_bytes)[:_RESUME_TEXT_LIMIT]
+        except Exception:  # noqa: BLE001 — 简历解析失败不阻断报告生成，降级为仅元数据评估
+            return ""
+
     async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateAnalysisReport]:
         return await self.repo.list_by_candidate(candidate_id)
 
@@ -2805,8 +2842,11 @@ class CandidateAnalysisService:
         from app.modules.hr.ai_service import AiChatService
         from app.modules.hr.config import HR_AI_MODEL
 
+        resume_full_text = CandidateAnalysisService._load_resume_full_text(candidate.resume_url)
+
         prompt = _ANALYSIS_PROMPT_TEMPLATE.format(
             resume_text=resume_text,
+            resume_full_text=resume_full_text or "（简历正文不可用，仅按上方元数据与面试记录评估）",
             jd_text=jd_text or "（无岗位JD）",
             interview_text=interview_text[:6000],
         )
@@ -2825,6 +2865,8 @@ class CandidateAnalysisService:
                 candidate_id=candidate_id,
                 job_requirement_id=interview.job_requirement_id,
                 interview_id=interview_id,
+                basic_info=result.get("basic_info"),
+                jd_review=jd_text or None,
                 dimensions=result.get("dimensions"),
                 strengths=result.get("strengths"),
                 risks=result.get("risks"),

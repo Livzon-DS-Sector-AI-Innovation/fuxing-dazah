@@ -1415,6 +1415,10 @@ class CandidateAnalysisReport(BaseModel):
     candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
     job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
     interview_id: Mapped[UUID] = mapped_column(nullable=False, comment="关联面试记录")
+    basic_info: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="候选人基本信息 [{label, value}]（AI 从简历正文/面试记录提取）"
+    )
+    jd_review: Mapped[str | None] = mapped_column(Text, nullable=True, comment="岗位要求回顾原文（生成时从JD拷贝存档）")
     dimensions: Mapped[list | None] = mapped_column(
         JSON, nullable=True, comment="维度评估 [{name, score, star, assessment}]"
     )

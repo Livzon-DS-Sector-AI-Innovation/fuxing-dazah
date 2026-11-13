@@ -1261,6 +1261,8 @@ class CandidateAnalysisReportOut(BaseModel):
     candidate_id: UUID
     job_requirement_id: UUID | None
     interview_id: UUID
+    basic_info: list | None
+    jd_review: str | None
     dimensions: list | None
     strengths: list | None
     risks: list | None

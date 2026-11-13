@@ -34,6 +34,9 @@ import {
 import { base64ToObjectUrl } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 
+// 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（与 RecruitmentClient 对齐；进入面试后以胜任度分析报告为准）
+const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门审核'])
+
 interface CandidateDetailClientProps {
   candidate: Candidate
 }
@@ -683,12 +686,12 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <h3 className="text-sm font-medium mb-2">推荐等级</h3>
             <Select style={{ width: '100%' }} placeholder="选择推荐等级" value={recommendationLevel || undefined}
               onChange={handleUpdateRecommendation} options={recommendationOptions} loading={updating} />
-            {candidate.resume_url && candidate.job_requirement_id && canManage && (
+            {candidate.resume_url && candidate.job_requirement_id && canManage && SCREENING_PHASE_STATUSES.has(candidate.status || '') && (
               <Button className="mt-2" block icon={<FileSearchOutlined />}
                 loading={screening}
                 onClick={handleScreenCandidate}
-                title="用该候选人已上传的简历，按关联岗位 AI 打分，结果写入推荐等级与匹配报告">
-                AI 初筛（免重复上传）
+                title="面试前：按已存简历+岗位JD AI 打分，结果写入推荐等级与匹配报告">
+                AI 简历初筛（免重复上传）
               </Button>
             )}
           </div>
@@ -857,7 +860,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <div className="space-y-4">
             {analysisReports.map((r) => (
               <div key={r.id} className="border-b border-[var(--color-hairline)] pb-3 last:border-b-0 last:pb-0">
-                <CandidateAnalysisReportCard report={r} />
+                <CandidateAnalysisReportCard
+                  report={r}
+                  candidateName={candidate.name}
+                  candidatePosition={candidate.position || ''}
+                />
               </div>
             ))}
           </div>
