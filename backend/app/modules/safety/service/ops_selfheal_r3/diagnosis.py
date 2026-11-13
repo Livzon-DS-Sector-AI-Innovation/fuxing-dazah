@@ -117,6 +117,14 @@ async def collect_evidence(session: Any, payload: dict[str, Any]) -> dict[str, A
     elif signal == signals.SIGNAL_BATCH:
         evidence["items"] = list(payload.get("items") or [])[:20]
         evidence["count"] = payload.get("count")
+    elif signal == signals.SIGNAL_AICALL_FAILED:
+        evidence.update(await _evidence_aicall(session, payload))
+    elif signal == signals.SIGNAL_PUSH_FAILED:
+        evidence.update(await _evidence_push(session, payload))
+    elif signal == signals.SIGNAL_EVENT_FAILED:
+        evidence.update(_evidence_event(payload))
+    elif signal == signals.SIGNAL_RAGFLOW_FAILED:
+        evidence.update(await _evidence_ragflow(session, payload))
     return evidence
 
 
@@ -247,6 +255,164 @@ async def _evidence_deadletter(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ── 二期扩面：四类新信号证据 checklist（全只读，fail-open 惯例）──
+
+
+async def _evidence_aicall(session: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """①AI 调用失败：窗口内成功/失败分布 + 失败样本 error 摘要。"""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import select
+
+    from app.modules.safety.ai_audit.models import AICallAudit
+    from app.modules.safety.service.ops_selfheal_r3.scan_source import (
+        AI_FAILURE_WINDOW_MIN,
+    )
+
+    scenario = str(payload.get("scenario") or "")
+    window_start = datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(
+        minutes=AI_FAILURE_WINDOW_MIN,
+    )
+    try:
+        success_n = (
+            await session.execute(
+                select(AICallAudit.id).where(
+                    AICallAudit.scenario == scenario,
+                    AICallAudit.status == "success",
+                    AICallAudit.created_at >= window_start,
+                )
+            )
+        ).scalars().all()
+        samples = (
+            await session.execute(
+                select(AICallAudit.error, AICallAudit.model, AICallAudit.latency_ms)
+                .where(
+                    AICallAudit.scenario == scenario,
+                    AICallAudit.status == "failed",
+                    AICallAudit.created_at >= window_start,
+                )
+                .limit(5)
+            )
+        ).all()
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 ai_call 证据采集 fail-open")
+        success_n, samples = [], []
+    return {
+        "scenario": scenario,
+        "failed_count": payload.get("failed_count"),
+        "window_minutes": AI_FAILURE_WINDOW_MIN,
+        "success_count_in_window": len(success_n),
+        "samples": [
+            {"model": m, "latency_ms": lat, "error": (e or "")[:300]}
+            for e, m, lat in samples
+        ],
+    }
+
+
+async def _evidence_push(session: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """②推送失败：当日 outbox dropped 行 / dm_admin effect 连败样本（与扫描同口径）。"""
+    from datetime import datetime
+    from datetime import time as dtime
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import select
+
+    from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
+
+    component = str(payload.get("component") or "")
+    out: dict[str, Any] = {"component": component}
+    day_start = datetime.combine(
+        datetime.now(ZoneInfo("Asia/Shanghai")).date(), dtime.min,
+        tzinfo=ZoneInfo("Asia/Shanghai"),
+    )
+    try:
+        if component == "outbox":
+            out["dropped_count"] = len((
+                await session.execute(
+                    select(AgentOutboxMessage.id).where(
+                        AgentOutboxMessage.status == "dropped",
+                        AgentOutboxMessage.created_at >= day_start,
+                    )
+                )
+            ).scalars().all())
+            dropped = (
+                await session.execute(
+                    select(AgentOutboxMessage)
+                    .where(
+                        AgentOutboxMessage.status == "dropped",
+                        AgentOutboxMessage.created_at >= day_start,
+                    )
+                    .limit(5)
+                )
+            ).scalars().all()
+            out["samples"] = [
+                {"conversation": x.conversation[:120],
+                 "dropped_reason": (x.dropped_reason or "")[:200],
+                 "last_error": (x.last_error or "")[:200]}
+                for x in dropped
+            ]
+        else:  # dm_admin
+            rows = (
+                await session.execute(
+                    select(AgentEffect).where(
+                        AgentEffect.kind == "dm_admin",
+                        AgentEffect.status == "failed",
+                        AgentEffect.created_at >= day_start,
+                    ).limit(5)
+                )
+            ).scalars().all()
+            out["failed_effect_count"] = len(rows)
+            out["samples"] = [
+                {"attempts": x.attempts, "last_error": (x.last_error or "")[:200]}
+                for x in rows
+            ]
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 push 证据采集 fail-open")
+    return out
+
+
+def _evidence_event(payload: dict[str, Any]) -> dict[str, Any]:
+    """③飞书事件失败：payload 即证据（直投时已带 handler/error）。"""
+    return {
+        "event_type": str(payload.get("event_type") or "")[:120],
+        "handler": str(payload.get("handler") or "")[:120],
+        "error": str(payload.get("error") or "")[:400],
+    }
+
+
+async def _evidence_ragflow(session: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """④RAG 吞吐：当日 failed 文档清单 + run 级失败计数。"""
+    from sqlalchemy import select
+
+    from app.modules.safety.models.knowledge import RagplusDocMap
+
+    samples: list[dict[str, Any]] = []
+    doc_n = 0
+    try:
+        rows = (
+            await session.execute(
+                select(RagplusDocMap)
+                .where(RagplusDocMap.status == "failed")
+                .limit(5)
+            )
+        ).scalars().all()
+        doc_n = len(rows)
+        samples = [
+            {"domain": x.domain, "title": (x.title or "")[:120],
+             "last_error": (x.last_error or "")[:200]}
+            for x in rows
+        ]
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 ragflow 证据采集 fail-open")
+    return {
+        "failed_doc_count": payload.get("failed_doc_count"),
+        "failed_run_count": payload.get("failed_run_count"),
+        "current_failed_visible": doc_n,
+        "samples": samples,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # B. LLM 归因（单次调用；契约校验；降级不抛）
 # ═══════════════════════════════════════════════════════════════
@@ -313,6 +479,11 @@ def rule_based_diagnosis(signal: str, evidence: dict[str, Any]) -> dict[str, Any
     if evidence.get("detail"):
         texts.append(str(evidence["detail"]))
     texts += [str(e.get("error") or "") for e in (evidence.get("errors") or [])]
+    # 二期扩面证据字段也进关键词 blob（samples/事件 error）
+    texts += [str(e.get("error") or "") for e in (evidence.get("samples") or [])]
+    texts += [str(e.get("last_error") or "") for e in (evidence.get("samples") or [])]
+    if evidence.get("error"):
+        texts.append(str(evidence["error"]))
     blob = " ".join(texts)
 
     endpoints = [str(e) for e in (evidence.get("dep_endpoints") or [])]

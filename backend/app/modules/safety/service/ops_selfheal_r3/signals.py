@@ -19,6 +19,10 @@ SIGNAL_PARKED = "effects_parked"
 SIGNAL_DEADLETTER = "hazard_deadletter"
 SIGNAL_DEP_RECOVERED = "dep_recovered"      # 上游依赖端点不可达→可达
 SIGNAL_BATCH = "ops_batch"                  # 防风暴聚合
+SIGNAL_AICALL_FAILED = "ai_call_failed"     # ②期扩面：AI 调用连续失败（scenario 维度）
+SIGNAL_PUSH_FAILED = "push_failed"          # ②期扩面：推送失败（outbox dropped / dm_admin 连败）
+SIGNAL_RAGFLOW_FAILED = "ragflow_batch_fail"  # ②期扩面：RAG 引擎批量入库失败
+SIGNAL_EVENT_FAILED = "feishu_event_failed"   # ②期扩面：飞书事件处理重试耗尽（直投）
 
 #: 恢复类信号（驱动收口核对分支，不重复诊断）
 RECOVERY_SIGNALS = frozenset({
@@ -30,6 +34,8 @@ RECOVERY_SIGNALS = frozenset({
 FAILURE_SIGNALS = frozenset({
     SIGNAL_JOB_FAILED, SIGNAL_RAG_DEGRADED, SIGNAL_PARKED,
     SIGNAL_DEADLETTER, SIGNAL_BATCH,
+    SIGNAL_AICALL_FAILED, SIGNAL_PUSH_FAILED, SIGNAL_RAGFLOW_FAILED,
+    SIGNAL_EVENT_FAILED,
 })
 
 
@@ -68,6 +74,26 @@ def parked_eid(component: str, fired_date: str) -> str:
 
 def deadletter_eid(fired_date: str) -> str:
     return f"ops:deadletter:{fired_date}"
+
+
+def aicall_eid(scenario: str, fired_date: str) -> str:
+    """AI 调用失败：每 scenario 每日一单。"""
+    return f"ops:aicall:{scenario}:{fired_date}:failed"
+
+
+def push_eid(component: str, fired_date: str) -> str:
+    """推送失败：每组件（outbox/dm_admin）每日一单。"""
+    return f"ops:push:{component}:{fired_date}:failed"
+
+
+def ragflow_eid(fired_date: str) -> str:
+    """RAG 引擎批量失败：每日一单。"""
+    return f"ops:ragflow:{fired_date}:batch_fail"
+
+
+def event_eid(handler_type: str, fired_date: str) -> str:
+    """飞书事件失败：每 handler 每日一单。"""
+    return f"ops:event:{handler_type}:{fired_date}:failed"
 
 
 def opsmisc_thread(fired_date: str) -> str:

@@ -15,13 +15,15 @@ from typing import Any
 R3_SCAN_SOURCE_NAME = "safety.ops.selfheal"
 #: R3 rag 直投载体行名（enabled 恒 false，仅归属；直投走 ingest_draft 不经轮询）
 R3_RAG_SOURCE_NAME = "safety.ops.rag_inject"
+#: R3 event 失败直投载体行名（二期③；enabled 恒 false，仅归属）
+R3_EVENT_SOURCE_NAME = "safety.ops.event_inject"
 
 #: R3 执行器名（两规则同绑）
 R3_EXECUTOR = "r3_ops_heal"
 
 
 def r3_ops_rules() -> list[dict[str, Any]]:
-    """R3 两条规则（扫描源 + rag 直投源；executor=r3_ops_heal）。"""
+    """R3 三条规则（扫描源 + rag 直投源 + event 直投源；executor=r3_ops_heal）。"""
     return [
         {
             "rule_id": "r3_ops_failure",
@@ -34,6 +36,13 @@ def r3_ops_rules() -> list[dict[str, Any]]:
             "rule_id": "r3_ops_rag_signal",
             "enabled": True,
             "source": R3_RAG_SOURCE_NAME,
+            "executor": R3_EXECUTOR,
+            "conditions": [],
+        },
+        {
+            "rule_id": "r3_ops_event_signal",
+            "enabled": True,
+            "source": R3_EVENT_SOURCE_NAME,
             "executor": R3_EXECUTOR,
             "conditions": [],
         },

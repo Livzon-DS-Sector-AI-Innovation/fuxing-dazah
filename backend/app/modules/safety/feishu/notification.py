@@ -152,6 +152,49 @@ async def send_user_card(
         return False
 
 
+async def send_user_card_dict(open_id: str, card: dict, id_type: str = "open_id") -> str | bool:
+    """直接发送已构建好的卡片 JSON dict 给单个用户（T6 2026-11-13）。
+
+    与 send_user_card 的区别：调用方自带完整卡片结构（如 R3 交互诊断卡），
+    不经 build_card_dict 再包装。成功返回 message_id，失败 False（不抛）。
+    """
+    logger.info("安全模块 send_user_card_dict: user_id=%s id_type=%s", open_id, id_type)
+    try:
+        client = await get_safety_feishu_client()
+        token = await get_safety_tenant_token(client)
+
+        from lark_oapi.api.im.v1 import (
+            CreateMessageRequest,
+            CreateMessageRequestBody,
+        )
+
+        req = (
+            CreateMessageRequest.builder()
+            .receive_id_type(id_type)
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(open_id)
+                .msg_type("interactive")
+                .content(_json_dumps(card))
+                .build()
+            )
+            .build()
+        )
+        req.headers["Authorization"] = f"Bearer {token}"
+        resp = await client.im.v1.message.acreate(req)
+        if not resp.success():
+            logger.error(
+                "安全模块 send_user_card_dict 失败: open_id=%s, code=%s, msg=%s",
+                open_id, resp.code, resp.msg,
+            )
+            return False
+        msg_id = getattr(resp, "data", None) and getattr(resp.data, "message_id", None)
+        return msg_id or True
+    except Exception:
+        logger.exception("安全模块 send_user_card_dict 异常: open_id=%s", open_id)
+        return False
+
+
 async def update_card(message_id: str, card: dict) -> bool:
     """更新已发送的卡片消息（PATCH）。
 

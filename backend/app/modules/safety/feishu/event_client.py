@@ -107,13 +107,23 @@ async def _dispatch(event_type: str, event_data: dict[str, Any]) -> Any:
                 try:
                     result = await handler(event_data)
                     break
-                except Exception:
+                except Exception as exc:
                     if attempt >= attempts:
                         logger.exception(
                             "事件处理器重试耗尽: %s (type=%s, 共 %d 次尝试)",
                             handler.__name__, event_type, attempt,
                         )
                         await _alert_handler_failure(event_type, handler.__name__)
+                        # R3 二期③：重试耗尽直投自愈信号（内部 fail-open，绝不影响分发）
+                        from app.modules.safety.service.ops_selfheal_r3.event_inject import (
+                            inject_event_failure_signal,
+                        )
+
+                        await inject_event_failure_signal(
+                            event_type=event_type,
+                            handler_name=handler.__name__,
+                            error_summary=f"{type(exc).__name__}: {exc}",
+                        )
                     else:
                         logger.warning(
                             "事件处理器异常(第 %d/%d 次尝试，将重试): %s",

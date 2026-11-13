@@ -280,9 +280,10 @@ def register_superagent_bridge() -> None:
         pass  # 已注册（bootstrap 幂等）
 
     # dm_admin 真发接线（平台注入点 ← 安全通知原语；平台零业务依赖）
-    from app.platform.superagent.effects import set_dm_sender
+    from app.platform.superagent.effects import set_dm_card_sender, set_dm_sender
 
     set_dm_sender(_send_admin_dm)
+    set_dm_card_sender(_send_admin_card)
 
     # P2-2 G3：危险源辨识重放执行器（协议收编；同步留痕模式不依赖它）
     if get_executor("hazard_id_script") is None:
@@ -337,6 +338,17 @@ async def _send_admin_dm(open_id: str, text: str) -> bool:
         ))
     except Exception:
         logger.exception("dm_admin 发送失败: %s", open_id)
+        return False
+
+
+async def _send_admin_card(open_id: str, card: dict) -> bool:
+    """DM 交互卡发送（T6 2026-11-13；失败 False → handler 回退纯文本）。"""
+    from app.modules.safety.feishu.notification import send_user_card_dict
+
+    try:
+        return bool(await send_user_card_dict(open_id, card))
+    except Exception:
+        logger.exception("dm_admin 交互卡发送失败: %s", open_id)
         return False
 
 

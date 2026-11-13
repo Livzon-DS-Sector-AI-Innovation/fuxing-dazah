@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 
 _SCAN_SOURCE = "safety.ops.selfheal"
 _RAG_SOURCE = "safety.ops.rag_inject"
+_EVENT_SOURCE = "safety.ops.event_inject"
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -75,6 +76,25 @@ async def _purge_r3_rows():
                 await s.execute(
                     AgentSource.__table__.delete().where(AgentSource.id == src.id)
                 )
+        # event_inject 载体行：dev 库可能有迁移播种的同名行——只清 trigger 不删源行
+        event_src = (
+            await s.execute(
+                select(AgentSource).where(AgentSource.name == _EVENT_SOURCE)
+            )
+        ).scalar_one_or_none()
+        if event_src is not None:
+            for t in (
+                await s.execute(
+                    select(AgentTrigger).where(AgentTrigger.source_id == event_src.id)
+                )
+            ).scalars().all():
+                await s.execute(
+                    AgentDecision.__table__.delete().where(AgentDecision.trigger_id == t.id)
+                )
+                await s.execute(
+                    AgentInput.__table__.delete().where(AgentInput.trigger_id == t.id)
+                )
+                await s.delete(t)
         await s.execute(
             AgentEffect.__table__.delete().where(
                 (AgentEffect.kind == "r3_repair")
@@ -194,6 +214,24 @@ def test_signal_keys_shape() -> None:
     # dep 幂等键内嵌端点哈希
     e1 = sg.dep_recovered_eid("t1", "192.168.5.7:9550")
     assert e1.startswith("ops:dep:t1:") and e1.endswith(":recovered")
+
+
+def test_signal_keys_shape_p2() -> None:
+    """二期扩面信号纯函数锚点（ai_call / push / ragflow）。"""
+    from app.modules.safety.service.ops_selfheal_r3 import signals as sg
+
+    assert sg.SIGNAL_AICALL_FAILED == "ai_call_failed"
+    assert sg.SIGNAL_PUSH_FAILED == "push_failed"
+    assert sg.SIGNAL_RAGFLOW_FAILED == "ragflow_batch_fail"
+    # 三者均进 FAILURE_SIGNALS 分组（占防风暴配额）
+    for s in (sg.SIGNAL_AICALL_FAILED, sg.SIGNAL_PUSH_FAILED, sg.SIGNAL_RAGFLOW_FAILED):
+        assert s in sg.FAILURE_SIGNALS
+    # 幂等键形态（每主体每日一单）
+    assert sg.aicall_eid("agent_chat", "2026-11-12") == "ops:aicall:agent_chat:2026-11-12:failed"
+    assert sg.push_eid("outbox", "2026-11-12") == "ops:push:outbox:2026-11-12:failed"
+    assert sg.ragflow_eid("2026-11-12") == "ops:ragflow:2026-11-12:batch_fail"
+    # thread 归属 ops:opsmisc（同 parked/deadletter 惯例）
+    assert sg.opsmisc_thread("2026-11-12") == "ops:opsmisc:2026-11-12"
 
 
 def test_r3_stage_derive() -> None:
@@ -421,6 +459,168 @@ async def test_scan_deadletter_failopen(db_session, scan_env, monkeypatch) -> No
     await db_session.rollback()
 
 
+async def test_scan_aicall_failures(db_session, scan_env, monkeypatch) -> None:
+    """①AI 调用失败：同 scenario 10 分钟 failed≥3 且无 success → trigger；有 success 不触发。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.ai_audit.models import AICallAudit
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    now = datetime.now(UTC)
+    scenario = "r3p2_test_scenario"
+    for i in range(3):
+        db_session.add(AICallAudit(
+            scenario=scenario, model="deepseek-flash", status="failed",
+            error=f"boom-{i}", created_at=now - timedelta(minutes=i),
+        ))
+    await db_session.flush()
+
+    s1 = await _scan_once(db_session, monkeypatch)
+    trigs = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith(f"ops:aicall:{scenario}:")
+    ]
+    assert len(trigs) == 1
+    t = trigs[0]
+    assert t.payload["signal"] == "ai_call_failed"
+    assert t.payload["scenario"] == scenario
+    assert t.payload["failed_count"] == 3
+    assert t.thread_key.startswith("ops:opsmisc:")
+    # 样本 error 摘要在 payload
+    assert any("boom" in (s.get("error") or "") for s in t.payload.get("samples") or [])
+
+    # 补 1 条 success → 窗口内不再是「连续失败」→ 不再新增（同日幂等已拦，但重置读位验证语义）
+    db_session.add(AICallAudit(
+        scenario=scenario, model="deepseek-flash", status="success", created_at=now,
+    ))
+    await db_session.flush()
+    n_before = len(trigs)
+    await _scan_once(db_session, monkeypatch)
+    trigs2 = [
+        x for x in await _triggers_of(db_session)
+        if x.external_id.startswith(f"ops:aicall:{scenario}:")
+    ]
+    assert len(trigs2) == n_before  # 同日幂等：不重复开单
+    await db_session.rollback()
+
+
+async def test_scan_aicall_below_threshold_no_signal(db_session, scan_env, monkeypatch) -> None:
+    """①AI 失败不足 3 条不触发；fail-open：查询异常跳过本轮不抛。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.ai_audit.models import AICallAudit
+
+    scenario = "r3p2_weak_scenario"
+    for i in range(2):
+        db_session.add(AICallAudit(
+            scenario=scenario, model="m", status="failed", error="e",
+            created_at=datetime.now(UTC) - timedelta(minutes=i),
+        ))
+    await db_session.flush()
+    await _scan_once(db_session, monkeypatch)
+    trigs = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith(f"ops:aicall:{scenario}:")
+    ]
+    assert trigs == []
+    await db_session.rollback()
+
+
+async def test_scan_push_failures(db_session, scan_env, monkeypatch) -> None:
+    """②推送失败：outbox dropped / dm_admin effect 连败 → trigger（组件维度幂等）。"""
+    import uuid as uuid_mod
+
+    from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
+
+    # outbox dropped 行
+    db_session.add(AgentOutboxMessage(
+        conversation=f"r3p2conv-{uuid_mod.uuid4().hex[:8]}", purpose="message",
+        channel={"chat_id": "oc_x"}, body={}, status="dropped",
+        attempts=10, dropped_reason="api error", last_error="timeout",
+    ))
+    # dm_admin effect failed 行
+    db_session.add(AgentEffect(
+        id=uuid_mod.uuid4(), kind="dm_admin", dedupe_key=f"dm-{uuid_mod.uuid4().hex[:8]}",
+        payload={}, status="failed", attempts=5, last_error="send failed",
+    ))
+    await db_session.flush()
+
+    await _scan_once(db_session, monkeypatch)
+    trigs = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith("ops:push:")
+    ]
+    kinds = {t.payload["component"] for t in trigs}
+    assert kinds == {"outbox", "dm_admin"}
+    for t in trigs:
+        assert t.payload["signal"] == "push_failed"
+        assert t.thread_key.startswith("ops:opsmisc:")
+
+    # 重扫同批：幂等零新增
+    n_before = len(trigs)
+    await _scan_once(db_session, monkeypatch)
+    trigs2 = [
+        x for x in await _triggers_of(db_session) if x.external_id.startswith("ops:push:")
+    ]
+    assert len(trigs2) == n_before
+    await db_session.rollback()
+
+
+async def test_scan_ragflow_batch_fail(db_session, scan_env, monkeypatch) -> None:
+    """④RAG 吞吐：当日 ragplus_doc_map failed 新增≥5 → trigger；不足不触发。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.models.knowledge import RagplusDocMap
+
+    now = datetime.now(UTC)
+    for i in range(5):
+        db_session.add(RagplusDocMap(
+            domain="regulation", biz_key=f"r3p2-doc-{uuid4hex()}-{i}",
+            dataset_name="安全法规标准", title=f"doc{i}", status="failed",
+            last_error="parse fail", synced_at=now,
+        ))
+    await db_session.flush()
+
+    await _scan_once(db_session, monkeypatch)
+    trigs = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith("ops:ragflow:")
+    ]
+    assert len(trigs) == 1
+    t = trigs[0]
+    assert t.payload["signal"] == "ragflow_batch_fail"
+    assert t.payload["failed_doc_count"] >= 5
+    assert t.thread_key.startswith("ops:opsmisc:")
+    await db_session.rollback()
+
+
+async def test_scan_ragflow_below_threshold_no_signal(db_session, scan_env, monkeypatch) -> None:
+    """④RAG 吞吐：当日 failed <5 不触发。"""
+    from datetime import UTC, datetime
+
+    from app.modules.safety.models.knowledge import RagplusDocMap
+
+    for i in range(3):
+        db_session.add(RagplusDocMap(
+            domain="regulation", biz_key=f"r3p2-weak-{uuid4hex()}-{i}",
+            dataset_name="安全法规标准", title=f"w{i}", status="failed",
+            last_error="e", synced_at=datetime.now(UTC),
+        ))
+    await db_session.flush()
+    await _scan_once(db_session, monkeypatch)
+    trigs = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith("ops:ragflow:")
+    ]
+    assert trigs == []
+    await db_session.rollback()
+
+
+def uuid4hex() -> str:
+    import uuid
+    return uuid.uuid4().hex[:10]
+
+
 async def test_scan_storm_cap_aggregates(db_session, scan_env, monkeypatch) -> None:
     """防风暴：故障类 >5 → 一条聚合 trigger（payload 带清单）。"""
     import uuid as uuid_mod
@@ -519,6 +719,75 @@ def _job_model():
 # ═══════════════════════════════════════════════════════════════
 # rag 直投 + 组合 Policy
 # ═══════════════════════════════════════════════════════════════
+
+
+async def test_event_inject_routes_to_policy(db_session, scan_env, monkeypatch) -> None:
+    """③event 直投 → 研判（auto）→ 开单；同 handler 同日幂等只一单；总闸关 no-op。"""
+    from app.platform.superagent.models import AgentSource, AgentTask
+
+    # dev 库可能已有迁移播种的同名行（迁移真实执行过）——有则复用，无则自建
+    event_src = (
+        await db_session.execute(
+            select(AgentSource).where(AgentSource.name == "safety.ops.event_inject")
+        )
+    ).scalar_one_or_none()
+    if event_src is None:
+        event_src = AgentSource(
+            kind="event_direct", name="safety.ops.event_inject", enabled=False,
+            config={"evaluate": True},
+        )
+        db_session.add(event_src)
+    await db_session.flush()
+
+    from app.modules.safety.service.ops_selfheal_r3 import config, event_inject
+
+    monkeypatch.setattr(config, "ops_enabled", lambda: True)
+
+    class _Ctx:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _Ctx(db_session),
+    )
+
+    ok1 = await event_inject.inject_event_failure_signal(
+        event_type="bitable.record.changed", handler_name="r3p2_test_handler",
+        error_summary="ValueError: bad payload",
+    )
+    assert ok1 is True
+    tasks = (
+        await db_session.execute(
+            select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
+        )
+    ).scalars().all()
+    # 执行器在 mandate.reason/origin_actor 落信号形态；工单绑 event 直投 thread
+    ev_tasks = [
+        t for t in tasks
+        if (t.mandate or {}).get("rule_id") == "r3_ops_event_signal"
+    ]
+    assert len(ev_tasks) == 1
+
+    # 同 handler 同日再投：duplicate 幂等 no-op
+    ok2 = await event_inject.inject_event_failure_signal(
+        event_type="bitable.record.changed", handler_name="r3p2_test_handler",
+        error_summary="again",
+    )
+    assert ok2 is False
+
+    # 总闸关 → no-op
+    monkeypatch.setattr(config, "ops_enabled", lambda: False)
+    ok3 = await event_inject.inject_event_failure_signal(
+        event_type="t", handler_name="r3p2_other_handler", error_summary="x",
+    )
+    assert ok3 is False
+    await db_session.rollback()
 
 
 async def test_rag_inject_routes_to_policy(db_session, scan_env, monkeypatch) -> None:

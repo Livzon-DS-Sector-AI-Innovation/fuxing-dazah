@@ -62,6 +62,20 @@ _JOB_STATE_DATE_CAP = 30
 #: 依赖探测上限（端点/工单；诊断侧已限每工单 ≤5 端点）
 _DEP_PROBE_TASK_CAP = 10
 
+# ── 二期扩面阈值（硬编码常量；registry 不动——质询拍板）──
+#: ①AI 调用失败：同 scenario 连续失败窗口（分钟）
+AI_FAILURE_WINDOW_MIN = 10
+#: ①AI 调用失败：窗口内 failed 条数阈值（对齐 scheduler.ALERT_AFTER_FAILURES=3）
+AI_FAILURE_THRESHOLD = 3
+#: ④RAG 吞吐：当日 ragplus_doc_map failed 新增阈值（手术日型批量 FAIL）
+RAGFLOW_FAIL_THRESHOLD = 5
+#: ④RAG 吞吐：regulation_ingest_runs failed_count 突增阈值
+RAGFLOW_RUN_FAIL_THRESHOLD = 10
+#: ②推送失败：outbox dropped 当日阈值
+OUTBOX_DROPPED_THRESHOLD = 1
+#: ②推送失败：dm_admin effect 连败阈值（对齐 effects.HEALTH_ALERT_AFTER_FAILURES）
+PUSH_EFFECT_FAIL_THRESHOLD = 3
+
 
 def _today() -> date_type:
     return datetime.now(_TZ).date()
@@ -75,7 +89,16 @@ def _schedule_jobs_index() -> dict[str, dict[str, Any]]:
 
 
 def job_window_end(job_name: str, day: date_type) -> datetime:
-    """D 日补发窗口截止（北京时间；未配置按当天 23:59）。"""
+    """D 日补发窗口截止（北京时间；未配置按当天 23:59）。
+
+    二期 L2 一键执行：当日覆写 dict（window_override）优先于 SCHEDULED_JOBS
+    声明值；进程内存放，重启即失效=天然「仅当日」。
+    """
+    from app.modules.safety.service.ops_selfheal_r3 import window_override
+
+    ov = window_override.get_override(job_name, day.isoformat())
+    if ov is not None:
+        return datetime.combine(day, dtime(ov[0], ov[1]), tzinfo=_TZ)
     job = _schedule_jobs_index().get(job_name) or {}
     hour = job.get("retry_until_hour")
     minute = job.get("retry_until_minute")
@@ -383,6 +406,210 @@ def _prune_dep_state(dep_state: dict[str, Any], tasks: list[Any]) -> None:
         del dep_state[key]
 
 
+async def _scan_ai_calls(session: Any) -> list[TriggerDraft]:
+    """①AI 调用连续失败：同 scenario 最近 N 分钟 failed≥THRESHOLD 且无 success。"""
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.modules.safety.ai_audit.models import AICallAudit
+
+    try:
+        window_start = datetime.now(_TZ) - timedelta(minutes=AI_FAILURE_WINDOW_MIN)
+        rows = (
+            await session.execute(
+                select(
+                    AICallAudit.scenario,
+                    AICallAudit.status,
+                    func.count().label("n"),
+                )
+                .where(AICallAudit.created_at >= window_start)
+                .group_by(AICallAudit.scenario, AICallAudit.status)
+            )
+        ).all()
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 ai_call 扫描 fail-open 跳过本轮")
+        return []
+
+    agg: dict[str, dict[str, int]] = {}
+    for scenario, status, n in rows:
+        agg.setdefault(str(scenario), {})[str(status)] = int(n)
+
+    today_iso = _today().isoformat()
+    drafts: list[TriggerDraft] = []
+    for scenario, counts in sorted(agg.items()):
+        failed_n = counts.get("failed", 0)
+        if failed_n < AI_FAILURE_THRESHOLD or counts.get("success", 0) > 0:
+            continue  # 连续失败口径：窗口内无 success
+        # 失败样本 error 摘要（≤5 条）
+        samples_rows = (
+            await session.execute(
+                select(AICallAudit.error, AICallAudit.model)
+                .where(
+                    AICallAudit.scenario == scenario,
+                    AICallAudit.status == "failed",
+                    AICallAudit.created_at >= window_start,
+                )
+                .limit(5)
+            )
+        ).all()
+        drafts.append(TriggerDraft(
+            external_id=signals.aicall_eid(scenario, today_iso),
+            thread_key=signals.opsmisc_thread(today_iso),
+            actor={"id": scenario, "type": "ai_scenario"},
+            payload={
+                "signal": signals.SIGNAL_AICALL_FAILED,
+                "scenario": scenario,
+                "failed_count": failed_n,
+                "window_minutes": AI_FAILURE_WINDOW_MIN,
+                "samples": [
+                    {"model": m, "error": (e or "")[:200]}
+                    for e, m in samples_rows
+                ],
+                "channel": {"kind": "ops_aicall", "scenario": scenario},
+            },
+        ))
+    return drafts
+
+
+async def _scan_push_failures(session: Any) -> list[TriggerDraft]:
+    """②推送失败：当日 outbox dropped / dm_admin effect 连败（组件维度幂等每日一单）。
+
+    当日时间界（审查 BLOCK#4）：dropped 行历史累积，无界全表会让阈值 1
+    每日重复开单——口径=当日新增 dropped（created_at ≥ 当日零点）。
+    """
+    from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
+
+    today_iso = _today().isoformat()
+    day_start = datetime.combine(_today(), dtime.min, tzinfo=_TZ)
+    drafts: list[TriggerDraft] = []
+
+    try:
+        dropped = (
+            await session.execute(
+                select(AgentOutboxMessage).where(
+                    AgentOutboxMessage.status == "dropped",
+                    AgentOutboxMessage.created_at >= day_start,
+                )
+            )
+        ).scalars().all()
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 push(outbox) 扫描 fail-open 跳过本轮")
+        dropped = []
+    if len(dropped) >= OUTBOX_DROPPED_THRESHOLD:
+        samples = [
+            {
+                "conversation": x.conversation[:120],
+                "dropped_reason": (x.dropped_reason or "")[:200],
+                "last_error": (x.last_error or "")[:200] or None,
+            }
+            for x in dropped[:5]
+        ]
+        drafts.append(TriggerDraft(
+            external_id=signals.push_eid("outbox", today_iso),
+            thread_key=signals.opsmisc_thread(today_iso),
+            actor={"id": "outbox", "type": "push_channel"},
+            payload={
+                "signal": signals.SIGNAL_PUSH_FAILED,
+                "component": "outbox",
+                "count": len(dropped),
+                "samples": samples,
+                "channel": {"kind": "ops_push", "component": "outbox"},
+            },
+        ))
+
+    try:
+        failed_dm = (
+            await session.execute(
+                select(AgentEffect).where(
+                    AgentEffect.kind == "dm_admin",
+                    AgentEffect.status == "failed",
+                    AgentEffect.attempts >= PUSH_EFFECT_FAIL_THRESHOLD,
+                    AgentEffect.created_at >= day_start,
+                )
+            )
+        ).scalars().all()
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 push(dm_admin) 扫描 fail-open 跳过本轮")
+        failed_dm = []
+    if failed_dm:
+        samples = [
+            {
+                "effect_id": str(x.id), "dedupe_key": x.dedupe_key,
+                "attempts": x.attempts,
+                "last_error": (x.last_error or "")[:200] or None,
+            }
+            for x in failed_dm[:5]
+        ]
+        drafts.append(TriggerDraft(
+            external_id=signals.push_eid("dm_admin", today_iso),
+            thread_key=signals.opsmisc_thread(today_iso),
+            actor={"id": "dm_admin", "type": "push_channel"},
+            payload={
+                "signal": signals.SIGNAL_PUSH_FAILED,
+                "component": "dm_admin",
+                "count": len(failed_dm),
+                "samples": samples,
+                "channel": {"kind": "ops_push", "component": "dm_admin"},
+            },
+        ))
+    return drafts
+
+
+async def _scan_ragflow(session: Any) -> list[TriggerDraft]:
+    """④RAG 引擎吞吐：当日 doc_map failed 新增≥5 或 ingest_runs failed_count 突增。"""
+    from app.modules.safety.models.knowledge import RagplusDocMap
+    from app.modules.safety.models.regulation_ingest import RegulationIngestRun
+
+    today_iso = _today().isoformat()
+    try:
+        day_start = datetime.combine(_today(), dtime.min, tzinfo=_TZ)
+        failed_docs = (
+            await session.execute(
+                select(RagplusDocMap).where(
+                    RagplusDocMap.status == "failed",
+                    RagplusDocMap.synced_at >= day_start,
+                )
+            )
+        ).scalars().all()
+        run_fails = (
+            await session.execute(
+                select(RegulationIngestRun).where(
+                    RegulationIngestRun.failed_count >= RAGFLOW_RUN_FAIL_THRESHOLD,
+                    RegulationIngestRun.created_at >= day_start,
+                )
+            )
+        ).scalars().all()
+    except Exception:  # noqa: BLE001 — fail-open 红线
+        logger.warning("R3 ragflow 扫描 fail-open 跳过本轮")
+        return []
+
+    doc_n = len(failed_docs)
+    run_n = len(run_fails)
+    if doc_n < RAGFLOW_FAIL_THRESHOLD and not run_n:
+        return []
+    samples = [
+        {
+            "domain": x.domain, "biz_key": (x.biz_key or "")[:80],
+            "title": (x.title or "")[:120], "last_error": (x.last_error or "")[:150],
+        }
+        for x in failed_docs[:5]
+    ]
+    return [TriggerDraft(
+        external_id=signals.ragflow_eid(today_iso),
+        thread_key=signals.opsmisc_thread(today_iso),
+        actor={"id": "ragplus", "type": "knowledge_engine"},
+        payload={
+            "signal": signals.SIGNAL_RAGFLOW_FAILED,
+            "failed_doc_count": doc_n,
+            "failed_run_count": run_n,
+            "threshold": RAGFLOW_FAIL_THRESHOLD,
+            "samples": samples,
+            "channel": {"kind": "ops_ragflow"},
+        },
+    )]
+
+
 class OpsScanSource(Source):
     """R3 运维信号扫描源（safety 侧定义，SourceRegistry 注册制挂入底座）。
 
@@ -438,6 +665,9 @@ class OpsScanSource(Source):
         failure_drafts: list[TriggerDraft] = []
         failure_drafts.extend(await _scan_parked(session))
         failure_drafts.extend(await _scan_deadletter())
+        failure_drafts.extend(await _scan_ai_calls(session))
+        failure_drafts.extend(await _scan_push_failures(session))
+        failure_drafts.extend(await _scan_ragflow(session))
         routing.extend(await _scan_dependencies(session, dep_state))
 
         # ── 防风暴：故障类 >5 → 一条聚合 trigger（payload 带清单）──
