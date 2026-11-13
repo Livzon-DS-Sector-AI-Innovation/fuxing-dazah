@@ -34,6 +34,8 @@ from app.modules.hr.evaluation_document_generator import (
 from app.modules.hr.interview_routes import router as interview_router
 from app.modules.hr.resume_screening_routes import router as resume_screening_router
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
+from app.modules.hr.employee_info_collection_routes import router as employee_info_collection_router
+from app.modules.hr.probation_routes import router as probation_router
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
 )
@@ -115,6 +117,8 @@ router.include_router(candidate_router)
 router.include_router(interview_router)
 router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)
+router.include_router(employee_info_collection_router)
+router.include_router(probation_router)
 router.include_router(analysis_router)
 router.include_router(sop_training_router)
 router.include_router(title_review_router)

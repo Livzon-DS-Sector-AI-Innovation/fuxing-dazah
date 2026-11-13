@@ -2,11 +2,10 @@
 
 import { useCallback, useState } from 'react'
 import { App, Alert, Button, Collapse, Form, Input, Space, Switch, Tag, Typography } from 'antd'
-import { CloudSyncOutlined, LinkOutlined, ReloadOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons'
+import { CloudSyncOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import {
   fetchEmployeeSyncConfig,
   saveEmployeeSyncConfig,
-  triggerEmployeeSync,
 } from '@/actions/hr'
 import { usePermission } from '@/hooks/usePermission'
 import type { EmployeeSyncConfig } from '@/types/hr'
@@ -38,7 +37,6 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
   const [cfg, setCfg] = useState<EmployeeSyncConfig | null>(initialConfig)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [syncing, setSyncing] = useState(false)
   const { hasPermission } = usePermission()
 
   // 手动刷新（按钮触发）；初次数据由服务端 props 提供
@@ -73,25 +71,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
     finally { setSaving(false) }
   }
 
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const d = await triggerEmployeeSync()
-      const s = d.data || {}
-      message.success(
-        `同步完成：新增 ${s.created ?? 0}，更新 ${s.updated ?? 0}，删除 ${s.deleted ?? 0}，共 ${s.total ?? 0} 条`,
-        6,
-      )
-      loadConfig()
-    } catch (err) { message.error(errMsg(err, '同步失败')) }
-    finally { setSyncing(false) }
-  }
-
   if (!hasPermission('hr:settings:manage')) return null
-
-  const bitableUrl = cfg?.app_token
-    ? `https://feishu.cn/base/${cfg.app_token}${cfg.source_table_id ? `?table=${cfg.source_table_id}` : ''}`
-    : null
 
   const header = (
     <Space size="middle" wrap>
@@ -164,19 +144,6 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                 <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
                   保存并校验
                 </Button>
-                <Button
-                  icon={<SyncOutlined />}
-                  loading={syncing}
-                  disabled={!cfg?.is_ready}
-                  onClick={handleSync}
-                >
-                  立即同步
-                </Button>
-                {bitableUrl && (
-                  <Button icon={<LinkOutlined />} href={bitableUrl} target="_blank">
-                    在飞书打开
-                  </Button>
-                )}
               </Space>
             </Form>
 

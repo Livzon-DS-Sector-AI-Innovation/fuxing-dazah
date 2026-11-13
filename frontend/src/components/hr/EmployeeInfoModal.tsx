@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { Modal, Descriptions } from 'antd'
 import type { Employee } from '@/types/hr'
 
@@ -63,6 +64,14 @@ export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
 
   return (
     <Modal title={`${employee.name} · 详细信息`} open={open} onCancel={onClose} footer={null} width={800}>
+      {employee.candidate_id && (
+        <div className="mb-3 text-[13px] text-[var(--color-steel)]">
+          招聘来源：
+          <Link className="text-[var(--color-primary)]" href={`/hr/recruitment/${employee.candidate_id}`}>
+            查看候选人详情（简历 / 面试记录 / AI 评估）→
+          </Link>
+        </div>
+      )}
       <div className="max-h-[70vh] overflow-y-auto pr-2">
         {sections.map(([title, rows]) => (
           <div key={title} className="mb-4">

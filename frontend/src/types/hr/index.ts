@@ -45,12 +45,18 @@ export interface Employee {
   status: string
   feishu_record_id?: string
   feishu_synced_at?: string
+  /** 来源候选人（招聘入职回链），可用于跳转候选人详情页 */
+  candidate_id?: string
   created_at?: string
   updated_at?: string
   /** 从出生日期动态计算的年龄（优先于飞书静态值） */
   computed_age?: number
   /** 从入职日期动态计算的司龄，格式如"3年5个月" */
   computed_tenure?: string
+  /** 转正到期日（试用期员工；显式值优先否则入职+3月-1天） */
+  computed_probation_end?: string
+  /** 距转正到期天数（负数=已过期；非试用期为空） */
+  computed_probation_days_left?: number
 }
 
 export interface EmployeeCreateInput {
@@ -1259,4 +1265,57 @@ export interface EmployeeSyncBanner {
   app_token: string
   source_table_id: string
   last_sync_at: string | null
+}
+
+// ─── 新员工信息收集（飞书机器人表单卡片 → HR 审核合并档案） ───
+
+/** 逐字段差异对比项（档案现值 vs 员工填写值） */
+export interface InfoCollectionDiffEntry {
+  field: string
+  label: string
+  current: string
+  submitted: string
+}
+
+/** 信息收集任务 */
+export interface EmployeeInfoCollectionItem {
+  id: string
+  employee_id: string
+  employee_name: string
+  employee_number: string | null
+  department: string | null
+  position: string | null
+  status: 'sent' | 'submitted' | 'approved' | 'rejected'
+  form_data: Record<string, string> | null
+  diff: InfoCollectionDiffEntry[]
+  reject_reason: string | null
+  submitted_at: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  created_at: string | null
+}
+
+// ─── 试用期转正评估 ───
+
+/** 转正评估记录 */
+export interface ProbationReviewItem {
+  id: string
+  employee_id: string
+  employee_name: string
+  employee_number: string | null
+  department: string | null
+  position: string | null
+  hire_date: string | null
+  probation_end: string | null
+  days_left: number | null
+  reviewer_name: string
+  status: 'pending_reviewer' | 'pending_hr' | 'effective' | 'cancelled'
+  conclusion: '通过' | '延长' | '不通过' | null
+  comment: string | null
+  proposed_probation_end: string | null
+  hr_note: string | null
+  submitted_at: string | null
+  reviewed_by: string | null
+  reviewed_at: string | null
+  created_at: string | null
 }

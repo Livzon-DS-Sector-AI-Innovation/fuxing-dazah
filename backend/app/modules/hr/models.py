@@ -4,6 +4,7 @@ from datetime import date, datetime, time
 from typing import Any
 from uuid import UUID
 
+from dateutil.relativedelta import relativedelta
 from sqlalchemy import (
     JSON,
     Date,
@@ -74,6 +75,7 @@ class Employee(BaseModel):
         Index("ix_employees_status", "status"),
         Index("ix_employees_employee_number", "employee_number"),
         Index("ix_employees_feishu_record_id", "feishu_record_id"),
+        Index("ix_employees_candidate_id", "candidate_id"),
         {"schema": "hr"},
     )
 
@@ -229,6 +231,16 @@ class Employee(BaseModel):
         String(512), nullable=True, comment="证书"
     )
 
+    # ─── 招聘来源回链（onboard 时写入；历史员工为空）───
+    candidate_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("hr.candidates.id"),
+        nullable=True, comment="来源候选人（招聘入职回链）",
+    )
+    probation_end_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True,
+        comment="转正到期日（空=按入职+3月-1天派生；试用期延长时写入新日期）",
+    )
+
     # ─── Feishu sync metadata ───
     feishu_open_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="飞书 open_id"
@@ -284,6 +296,28 @@ class Employee(BaseModel):
             return None
         delta = date.today() - self.hire_date
         return round(delta.days / 365.25, 1)
+
+    # 试用期统一 3 个月（口径与 document_generator._calc_probation_date 一致）
+    _PROBATION_CATEGORIES = {"试用期", "实习转试用", "实习生"}
+
+    @property
+    def computed_probation_end(self) -> date | None:
+        """转正到期日：显式值优先（延长后写入），否则按入职+3月-1天派生。"""
+        if self.status_category not in self._PROBATION_CATEGORIES:
+            return None
+        if self.probation_end_date:
+            return self.probation_end_date
+        if not self.hire_date:
+            return None
+        return self.hire_date + relativedelta(months=3, days=-1)
+
+    @property
+    def computed_probation_days_left(self) -> int | None:
+        """距转正到期天数（负数=已过期；非试用期返回 None）。"""
+        end = self.computed_probation_end
+        if end is None:
+            return None
+        return (end - date.today()).days
 
 
 class TrainingRosterProfile(BaseModel):
@@ -1807,6 +1841,89 @@ class PerformanceCategoryScore(BaseModel):
     scored_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="评分时间"
     )
+
+
+# ─── 员工档案：新员工信息收集（飞书机器人表单卡片） ───
+
+
+class EmployeeInfoCollection(BaseModel):
+    """新员工基本信息自填收集任务。
+
+    HR 发起 → 机器人私发表单卡片 → 员工飞书内提交（回调 upsert form_data）
+    → HR 审核采纳（写飞书 Base 源表，同步链路拉回档案）或驳回（重发卡片）。
+    同一员工同时只允许一个进行中任务（sent/submitted，部分唯一索引保证）。
+    """
+
+    __tablename__ = "employee_info_collections"
+    __table_args__ = (
+        Index(
+            "uq_eic_employee_active",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("status IN ('sent', 'submitted') AND is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    employee_id: Mapped[UUID] = mapped_column(
+        ForeignKey("hr.employees.id"),
+        nullable=False, comment="员工档案ID",
+    )
+    open_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="卡片接收人飞书open_id")
+    card_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="表单卡片消息ID")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="sent", server_default="sent",
+        comment="sent已发待填/submitted已提交待审/approved已采纳/rejected已驳回",
+    )
+    form_data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=True, comment="员工提交的字段值 {orm字段: 值}")
+    reject_reason: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="驳回原因")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="员工提交时间")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="审核人")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="审核时间")
+
+
+# ─── 员工档案：试用期转正评估 ───
+
+
+class ProbationReview(BaseModel):
+    """试用期转正评估：部门负责人评（飞书表单卡片）→ HR 确认生效。
+
+    生效时回写源表「员工性质」=正式（同步派生将产出在职，避免每日对账
+    把本地在职打回试用期）；延长 = 写 probation_end_date 后重走一轮。
+    """
+
+    __tablename__ = "probation_reviews"
+    __table_args__ = (
+        Index(
+            "uq_pr_employee_active",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending_reviewer', 'pending_hr') AND is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    employee_id: Mapped[UUID] = mapped_column(
+        ForeignKey("hr.employees.id"),
+        nullable=False, comment="员工档案ID",
+    )
+    reviewer_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="评估人（部门负责人姓名）")
+    reviewer_open_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="评估人飞书open_id")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending_reviewer", server_default="pending_reviewer",
+        comment="pending_reviewer待评估/pending_hr待HR确认/effective已生效/cancelled已取消",
+    )
+    conclusion: Mapped[str | None] = mapped_column(
+        String(8), nullable=True, comment="负责人结论: 通过/延长/不通过",
+    )
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="负责人评语")
+    proposed_probation_end: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="延长时建议的新到期日",
+    )
+    hr_note: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="HR 确认附注")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="负责人提交时间")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="HR 确认人")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="HR 确认时间")
 
 
 # 职称评审子包模型注册到同一 metadata（alembic env 只 import 模块级 models）

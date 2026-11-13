@@ -281,6 +281,10 @@ async def get_hr_scope(
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 员工档案
+    (r"/employee-info-collections", {"GET": "hr:profile:read", "POST": "hr:profile:update"}),
+    (r"/employee-info-collections/.*", "hr:profile:update"),
+    (r"/probation-reviews", {"GET": "hr:profile:read", "POST": "hr:profile:update"}),
+    (r"/probation-reviews/.*", "hr:profile:update"),
     (r"/employees/export", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
     (r"/employees/.*/onboarding-training-record", "hr:training:document"),

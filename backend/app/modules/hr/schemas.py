@@ -204,12 +204,15 @@ class EmployeeResponse(EmployeeBase):
     feishu_open_id: str | None = None
     feishu_record_id: str | None = None
     feishu_synced_at: date | None = None
+    candidate_id: UUID | None = Field(None, description="来源候选人（招聘入职回链）")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
     # 动态计算字段（优先于飞书静态值）
     computed_age: int | None = Field(None, description="从出生日期动态计算的年龄")
     computed_tenure: str | None = Field(None, description="从入职日期动态计算的司龄")
+    computed_probation_end: date | None = Field(None, description="转正到期日（试用期员工；显式值优先否则入职+3月-1天）")
+    computed_probation_days_left: int | None = Field(None, description="距转正到期天数（负数=已过期；非试用期为空）")
 
 
 def mask_sensitive_fields(data: dict, has_sensitive: bool) -> dict:

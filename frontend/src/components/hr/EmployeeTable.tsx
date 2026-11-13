@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline } from 'antd'
-import { EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
+import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
 import {
   fetchPositions, fetchDepartmentsAction, fetchTransfers, createTransfer,
+  createProbationReview, fetchEmployeesAction,
 } from '@/actions/hr'
 import { useHrStore } from '@/stores/hr'
 import { usePermission } from '@/hooks/usePermission'
@@ -55,6 +56,41 @@ export default function EmployeeTable({
   const [detailEmp, setDetailEmp] = useState<Employee | null>(null)
   const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ─── 转正评估发起 Modal（行内入口；syncMode 下也开放——写源表不改本地档案） ───
+  const [probationOpen, setProbationOpen] = useState(false)
+  const [probationEmp, setProbationEmp] = useState<Employee | null>(null)
+  const [probationReviewer, setProbationReviewer] = useState<string | undefined>(undefined)
+  const [reviewerOptions, setReviewerOptions] = useState<{ value: string; label: string }[]>([])
+  const [reviewerSearching, setReviewerSearching] = useState(false)
+  const [probationSending, setProbationSending] = useState(false)
+  const revSeqRef = useRef(0)
+
+  const searchReviewers = async (keyword: string) => {
+    const seq = ++revSeqRef.current
+    setReviewerSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== revSeqRef.current) return
+      const raw = (d as { data?: { items?: unknown[] } | unknown[] })?.data
+      const list = (Array.isArray(raw) ? raw : (raw as { items?: unknown[] })?.items || []) as Array<{
+        name: string; employee_number?: string; department?: string
+      }>
+      setReviewerOptions(list.map(e => ({ value: e.name, label: `${e.name}（${e.employee_number || ''} · ${e.department || '-'}）` })))
+    } catch { /* 静默 */ }
+    finally { if (seq === revSeqRef.current) setReviewerSearching(false) }
+  }
+
+  const handleProbationSend = async () => {
+    if (!probationEmp || !probationReviewer) { message.warning('请选择评估人'); return }
+    setProbationSending(true)
+    try {
+      const r = await createProbationReview(probationEmp.id, probationReviewer)
+      message.success(r.message || '评估卡片已发送')
+      setProbationOpen(false); setProbationReviewer(undefined)
+    } catch (e) { message.error(e instanceof Error ? e.message : '发起失败') }
+    finally { setProbationSending(false) }
+  }
 
   const handleSearchChange = (val: string) => {
     // 防抖：停止输入 300ms 后才触发搜索，避免逐键请求乱序
@@ -198,10 +234,18 @@ export default function EmployeeTable({
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 90,
-      render: (status: string) => (
-        <Tag color={statusColorMap[status] || 'default'}>{status}</Tag>
-      ) },
+      width: 120,
+      render: (status: string, record: Employee) => {
+        if (status === '试用期' && record.computed_probation_days_left != null) {
+          const d = record.computed_probation_days_left
+          return (
+            <Tag color={d < 0 ? 'error' : statusColorMap[status]}>
+              {d < 0 ? `试用期·超${Math.abs(d)}天` : `试用期·剩${d}天`}
+            </Tag>
+          )
+        }
+        return <Tag color={statusColorMap[status] || 'default'}>{status}</Tag>
+      } },
     {
       title: '域账号',
       dataIndex: 'domain_account',
@@ -381,6 +425,14 @@ export default function EmployeeTable({
           >
             详情
           </Button>
+          {canEditProfile && record.status === '试用期' && (
+            <Button
+              type="text" size="small" icon={<AuditOutlined />}
+              onClick={() => { setProbationEmp(record); searchReviewers(''); setProbationOpen(true) }}
+            >
+              转正
+            </Button>
+          )}
           {canEditProfile && !syncMode && (
             <Button
               type="text"
@@ -528,6 +580,25 @@ export default function EmployeeTable({
         </div>
       </Modal>
 
+      {/* 转正评估发起：评估卡片私发部门负责人，结论经 HR 在「转正管理」面板确认生效 */}
+      <Modal title={`发起转正评估 — ${probationEmp?.name || ''}`} open={probationOpen}
+        onCancel={() => { setProbationOpen(false); setProbationReviewer(undefined) }}
+        onOk={handleProbationSend} okText="发送评估卡片" confirmLoading={probationSending}
+        okButtonProps={{ disabled: !probationReviewer }}>
+        {probationEmp && (
+          <div className="text-xs text-gray-500 mb-3">
+            {probationEmp.department} · {probationEmp.position} ｜ 入职 {probationEmp.hire_date?.slice(0, 10)}
+            {probationEmp.computed_probation_end && ` ｜ 转正到期 ${probationEmp.computed_probation_end.slice(0, 10)}`}
+          </div>
+        )}
+        <Select style={{ width: '100%' }} placeholder="搜索并选择评估人（部门负责人）"
+          showSearch filterOption={false} onSearch={searchReviewers}
+          notFoundContent={reviewerSearching ? <span style={{ fontSize: 12 }}>搜索中…</span> : null}
+          value={probationReviewer} onChange={setProbationReviewer} options={reviewerOptions} />
+        <div className="text-xs text-gray-400 mt-3">
+          评估表单卡片将私发至负责人飞书（需其登录过系统或在源表有员工账号）；结论提交后由 HR 在档案页「转正管理」确认生效。
+        </div>
+      </Modal>
 
     </div>
   )
