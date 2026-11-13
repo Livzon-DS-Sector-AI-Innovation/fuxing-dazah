@@ -20,7 +20,6 @@ from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
     Candidate,
-    CandidateAiEvaluation,
     CandidateAnalysisReport,
     CandidateReview,
     CandidateStatusLog,
@@ -42,7 +41,6 @@ from app.modules.hr.models import (
 from app.modules.hr.repository import (
     AnnualTrainingPlanItemRepository,
     AnnualTrainingPlanRepository,
-    CandidateAiEvaluationRepository,
     CandidateAnalysisReportRepository,
     CandidateRepository,
     CandidateReviewRepository,
@@ -2027,121 +2025,6 @@ class InterviewService:
         interview.calendar_event_id = None
         await self.repo.update(interview)
 
-
-class AiEvaluationService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.repo = CandidateAiEvaluationRepository(session)
-
-    async def get_by_interview(self, interview_id: UUID) -> CandidateAiEvaluation | None:
-        return await self.repo.get_by_interview(interview_id)
-
-    async def evaluate(self, interview_id: UUID) -> CandidateAiEvaluation:
-        """对面试逐字稿进行AI评估"""
-        interview_repo = InterviewRepository(self.repo.session)
-        interview = await interview_repo.get_by_id(interview_id)
-        if not interview:
-            raise NotFoundException("面试记录", str(interview_id))
-        if not interview.transcript_text or not interview.transcript_text.strip():
-            raise ValueError("请先填写面试逐字稿")
-
-        candidate_repo = CandidateRepository(self.repo.session)
-        candidate = await candidate_repo.get_by_id(interview.candidate_id)
-        if not candidate:
-            raise NotFoundException("候选人", str(interview.candidate_id))
-
-        # 获取JD文本
-        jd_text = ""
-        if interview.job_requirement_id:
-            jd_repo = JobRequirementRepository(self.repo.session)
-            jd = await jd_repo.get_by_id(interview.job_requirement_id)
-            if jd and jd.requirements:
-                jd_text = jd.requirements
-
-        # 组装简历文本
-        resume_parts = [
-            f"姓名：{candidate.name}",
-            f"学校：{candidate.school or '未知'}",
-            f"学历：{candidate.education or '未知'}",
-            f"专业：{candidate.major or '未知'}",
-        ]
-        if candidate.current_company:
-            resume_parts.append(f"当前公司：{candidate.current_company}")
-        if candidate.work_years is not None:
-            resume_parts.append(f"工作年限：{candidate.work_years}年")
-        resume_text = "\n".join(resume_parts)
-
-        # 调用LLM评估
-        from app.modules.hr.ai_service import AiChatService
-        from app.modules.hr.config import HR_AI_MODEL
-        prompt = self._build_evaluation_prompt(jd_text, resume_text, interview.transcript_text)
-        result = await AiChatService.call_json(prompt)
-
-        # 删除旧评估
-        existing = await self.repo.get_by_interview(interview_id)
-        if existing:
-            existing.is_deleted = True
-            await self.repo.session.flush()
-
-        eval_obj = CandidateAiEvaluation(
-            candidate_id=interview.candidate_id,
-            job_requirement_id=interview.job_requirement_id,
-            interview_id=interview_id,
-            jd_match_score=result.get("jd_match_score"),
-            professional_score=result.get("professional_score"),
-            communication_score=result.get("communication_score"),
-            learning_score=result.get("learning_score"),
-            stability_score=result.get("stability_score"),
-            overall_score=result.get("overall_score"),
-            strengths=result.get("strengths"),
-            weaknesses=result.get("weaknesses"),
-            ai_summary=result.get("ai_summary"),
-            risk_flags=result.get("risk_flags"),
-            jd_text_snapshot=jd_text,
-            transcript_snapshot=interview.transcript_text,
-            model_version=HR_AI_MODEL,
-        )
-        eval_obj = await self.repo.create(eval_obj)
-
-        # 回写候选人 match_report
-        c = await candidate_repo.get_by_id(interview.candidate_id)
-        if c:
-            c.match_report = result.get("ai_summary")
-            await candidate_repo.update(c)
-
-        return eval_obj
-
-    @staticmethod
-    def _build_evaluation_prompt(jd_text: str, resume_text: str, transcript: str) -> str:
-        return f"""你是一位专业的制药行业招聘评估专家。请根据以下信息对候选人进行综合评价。
-
-## 岗位JD
-{jd_text or "（未提供JD）"}
-
-## 候选人简历
-{resume_text}
-
-## 面试逐字稿
-{transcript}
-
-请严格按照以下JSON格式输出评估结果（不要输出其他内容）：
-{{
-  "jd_match_score": <1-10的数字，JD匹配度>,
-  "professional_score": <1-10的数字，专业能力>,
-  "communication_score": <1-10的数字，沟通表达>,
-  "learning_score": <1-10的数字，学习能力>,
-  "stability_score": <1-10的数字，稳定性评估>,
-  "overall_score": <1-10的数字，综合评分>,
-  "strengths": "候选人优势（3-5条，每条30字以内，用\\n分隔）",
-  "weaknesses": "候选人不足（2-3条，每条30字以内，用\\n分隔）",
-  "ai_summary": "综合评价200-300字，包括JD匹配度分析、专业能力评价、软性素质评价、录用建议",
-  "risk_flags": "风险提示，无则填'无'"
-}}
-
-评分标准：8-10优秀/强烈推荐，6-7良好/可考虑，4-5一般/需对比，1-3不推荐。
-评分必须基于面试逐字稿中的实际表现，不要假设简历内容即为真实能力。"""
-
-
-# ─── Candidate Review Service ───
 
 
 class CandidateReviewService:

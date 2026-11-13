@@ -16,14 +16,14 @@ import {
   RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
   FileSearchOutlined,
 } from '@ant-design/icons'
-import type { Candidate, Interview, AiEvaluation, OnboardingTask } from '@/types/hr'
+import type { Candidate, Interview, OnboardingTask } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
   parseResumeAction,
   transitionCandidateStatus,
-  createInterview, updateInterview, deleteInterview, evaluateInterview,
+  createInterview, updateInterview, deleteInterview,
   pushCandidateReview, decideCandidateReview, pushOnboardingReview,
-  fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
+  fetchCandidateInterviews, fetchPendingReviews,
   fetchCandidateReviews,
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
@@ -32,7 +32,6 @@ import {
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
-import AIScoreCard from './AIScoreCard'
 
 interface CandidateDetailClientProps {
   candidate: Candidate
@@ -118,7 +117,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   }
 
   // AI评估状态
-  const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
 
   // 入职任务状态
   const [onboardingTasks, setOnboardingTasks] = useState<OnboardingTask[]>([])
@@ -132,7 +130,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try { const r = await fetchOnboardingTasks(candidate.id); setOnboardingTasks(r.data || []) } catch { /* 仅已入职候选人有任务 */ }
     finally { setTasksLoading(false); tasksLoadedRef.current = true }
   }, [candidate.id])
-  const [evaluations, setEvaluations] = useState<Record<string, AiEvaluation>>({})
 
   // 状态流转
   const [statusUpdating, setStatusUpdating] = useState(false)
@@ -193,20 +190,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       const r = await fetchCandidateInterviews(candidate.id)
       setInterviews(r.data || [])
-      // 已有胜任度报告随页面加载展示（自动生成的历史报告不再隐藏）
+      // AI 评估已统一到胜任度报告：加载面试时一并拉最新报告列表
       fetchCandidateAnalysisReports(candidate.id)
         .then((d) => setAnalysisReports(d.data || []))
         .catch(() => {})
-      // 逐条评估并行拉取（多轮面试时不再串行等待）
-      const evalResults = await Promise.allSettled(
-        (r.data || []).map((iv: Interview) => fetchInterviewEvaluation(iv.id))
-      )
-      evalResults.forEach((res, i) => {
-        if (res.status === 'fulfilled' && res.value.data) {
-          const iv = (r.data || [])[i]
-          setEvaluations(prev => ({ ...prev, [iv.id]: res.value.data }))
-        }
-      })
     } catch (err: any) {
       console.error('加载面试列表失败:', err)
       message.error('加载面试列表失败: ' + (err.message || '未知错误'))
@@ -339,6 +326,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         }
       }
       message.success(editingInterview ? '面试已更新' : '面试已安排')
+      // 含逐字稿/备注的保存会后台生成胜任度报告（LLM 最长 90s，不阻塞响应）
+      if ((res?.data?.transcript_text || res?.data?.notes || '').trim()) {
+        message.info('胜任度报告后台生成中，稍后刷新查看')
+      }
       // 日历同步失败不再静默：面试已保存成功，但提示用户可编辑补建
       if (res?.data?.calendar_sync_error) {
         message.warning(res.data.calendar_sync_error + '，可稍后在编辑中勾选「补建飞书日程」')
@@ -365,16 +356,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     } finally {
       setReportGeneratingId(null)
     }
-  }
-
-  const handleEvaluate = async (interviewId: string) => {
-    setEvaluatingId(interviewId)
-    try {
-      const r = await evaluateInterview(interviewId)
-      setEvaluations(prev => ({ ...prev, [interviewId]: r.data }))
-      message.success('AI评估完成')
-    } catch (err: any) { message.error(err.message || '评估失败') }
-    finally { setEvaluatingId(null) }
   }
 
   // 状态流转
@@ -727,7 +708,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         interviews.length === 0 ? <Empty description="暂无面试记录" className="py-12" /> :
           <div className="space-y-4">
             {interviews.map((iv) => {
-              const eval_ = evaluations[iv.id]
               return (
                 <Card key={iv.id} size="small" title={
                   <div className="flex items-center gap-2">
@@ -774,7 +754,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                         if (val !== iv.transcript_text) {
                           try {
                             await updateInterview(iv.id, { transcript_text: val || undefined })
-                            message.success('逐字稿已保存')
+                            message.success('逐字稿已保存，胜任度报告后台生成中')
                             // 同步本地缓存，否则二次编辑同一文本时 diff 判断失真
                             setInterviews(prev => prev.map(x => x.id === iv.id ? { ...x, transcript_text: val } : x))
                           } catch (err: any) {
@@ -785,19 +765,13 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                     />
                   </div>
 
-                  {/* AI评估区域 */}
+                  {/* AI 评估已统一到胜任度报告：单按钮生成，结果在下方报告区展示 */}
                   <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    {eval_ ? (
-                      <AIScoreCard evaluation={eval_} onReEvaluate={() => handleEvaluate(iv.id)} loading={evaluatingId === iv.id} />
-                    ) : (
-                      <Button icon={<RobotOutlined />} loading={evaluatingId === iv.id}
-                        onClick={() => handleEvaluate(iv.id)}
-                        disabled={!iv.transcript_text}>
-                        {iv.transcript_text ? '🤖 AI 评估' : '请先填写逐字稿'}
-                      </Button>
+                    {analysisReports.some((rep: any) => rep.interview_id === iv.id) && (
+                      <Tag color="green" className="text-xs">📊 AI 报告已生成</Tag>
                     )}
                     <Button
-                      icon={<SendOutlined />}
+                      icon={<RobotOutlined />}
                       loading={reportGeneratingId === iv.id}
                       onClick={() => handleGenerateReport(iv.id)}
                       disabled={!(iv.transcript_text || iv.notes)}

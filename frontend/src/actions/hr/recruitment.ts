@@ -287,10 +287,6 @@ export async function fetchCandidateInterviews(candidateId: string): Promise<{ d
   return fetchHrApi(`/hr/candidates/${candidateId}/interviews`, { errorMessage: '获取面试列表失败' })
 }
 
-export async function fetchInterviewEvaluation(interviewId: string): Promise<{ data: any }> {
-  return fetchHrApi(`/hr/interviews/${interviewId}/evaluation`, { errorMessage: '获取AI评估结果失败' })
-}
-
 export async function createInterview(data: InterviewCreateInput) {
   const res = await fetchHrApi('/hr/interviews', {
     method: 'POST',
@@ -315,17 +311,6 @@ export async function deleteInterview(id: string) {
   const res = await fetchHrApi(`/hr/interviews/${id}`, {
     method: 'DELETE',
     errorMessage: '取消面试失败',
-  })
-  revalidatePath('/hr/recruitment')
-  return res
-}
-
-// ─── AI评估 ───
-
-export async function evaluateInterview(id: string) {
-  const res = await fetchHrApi(`/hr/interviews/${id}/evaluate`, {
-    method: 'POST',
-    errorMessage: 'AI评估失败',
   })
   revalidatePath('/hr/recruitment')
   return res

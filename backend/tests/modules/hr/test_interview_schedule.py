@@ -207,6 +207,26 @@ async def test_completion_skipped_when_candidate_not_interviewing(
     assert c.status == "待筛选"
 
 
+# ─── AI 评估统一：evaluation 端点读胜任度报告 ───
+
+
+async def test_evaluation_endpoint_reads_analysis_report(client: AsyncClient, db_session: AsyncSession):
+    """GET /evaluation 统一返回胜任度报告；未生成时 data=None（不再永远 null 的读错位）。"""
+    jd = _mk_jd(db_session)
+    c = _mk_candidate(db_session, jd)
+    await db_session.flush()
+
+    iv_id = (await _create_iv(client, c.id, interviewer="钱七")).json()["data"]["id"]
+    resp = await client.get(f"/api/v1/hr/interviews/{iv_id}/evaluation")
+    assert resp.status_code == 200
+    assert resp.json()["data"] is None
+
+    # evaluate 无面试记录 → 400（与报告生成共用校验文案）
+    resp = await client.post(f"/api/v1/hr/interviews/{iv_id}/evaluate")
+    assert resp.status_code == 400
+    assert "面试记录" in resp.json()["message"]
+
+
 # ─── 取消语义：状态置「已取消」且记录保留 ───
 
 
