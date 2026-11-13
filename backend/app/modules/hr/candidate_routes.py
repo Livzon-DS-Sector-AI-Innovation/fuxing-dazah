@@ -173,8 +173,12 @@ async def push_review(
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
+        # 发起人取当前用户（前端占位 'HR' 时用真实姓名，保证审核结果通知能找到推送人）
+        pushed_by = payload.pushed_by
+        if not pushed_by or pushed_by == "HR":
+            pushed_by = hr_scope.user.name or "HR"
         r = await rv_service.push(
-            cid, payload.pushed_by or "HR", payload.push_note, payload.reviewer,
+            cid, pushed_by, payload.push_note, payload.reviewer,
             operator=hr_scope.user.name,
         )
         return success_response(data={"id": str(r.id), "status": r.status}, message="已推送至用人部门审核")
