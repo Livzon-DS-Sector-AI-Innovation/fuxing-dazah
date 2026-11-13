@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
-import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Tabs, Tag, Upload } from 'antd'
+import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Table, Tabs, Tag, Upload } from 'antd'
 import { DownOutlined, RightOutlined, FileSearchOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
@@ -40,6 +40,8 @@ const STATUS_OPTIONS = [
   { label: '已录用', value: '已录用' }, { label: '待入职审批', value: '待入职审批' },
   { label: '已入职', value: '已入职' }, { label: '已拒绝', value: '已拒绝' },
 ]
+// 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（进入面试后以胜任度分析报告为准）
+const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门审核'])
 const STATUS_COLORS: Record<string, string> = {
   '待筛选': '#a4a097', '已筛选': '#0075de', '待部门审核': '#dd5b00',
   '面试中': '#7b3ff2', '已面试': '#2a9d99', '录用中': '#1aae39',
@@ -75,6 +77,8 @@ export default function RecruitmentClient() {
   const [jobs, setJobs] = useState<JobRequirement[]>([])
   const [allCandidates, setAllCandidates] = useState<Candidate[]>([])
   const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set())
+  // 各岗位表格的状态筛选（漏斗 chips 点击），null/缺省=不筛选
+  const [jobStatusFilter, setJobStatusFilter] = useState<Record<string, string | null>>({})
   const [changingStatus, setChangingStatus] = useState<string | null>(null)
   const [reqOpen, setReqOpen] = useState(false)
   const [reqForm] = Form.useForm()
@@ -508,22 +512,37 @@ export default function RecruitmentClient() {
                       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
                     })
                     return (
-                      <Card key={j.id} size="small"
+                      <Card key={j.id}
+                        styles={{
+                          header: { padding: '12px 16px' },
+                          body: isExpanded ? { padding: '12px 16px' } : { padding: 0 },
+                        }}
                         title={
-                          <div className="flex items-center gap-2.5 cursor-pointer select-none min-w-0" onClick={() => toggleJob(j.id)}>
-                            <span className="text-gray-400 flex-shrink-0">
-                              {isExpanded ? <DownOutlined style={{ fontSize: 10 }} /> : <RightOutlined style={{ fontSize: 10 }} />}
+                          /* 岗位为主实体：两行头部（岗位名+状态 / 部门·进度·负责人·到岗），视觉重量压过候选人行 */
+                          <div className="flex items-center gap-3 cursor-pointer select-none min-w-0" onClick={() => toggleJob(j.id)}>
+                            <span className="text-[var(--color-stone)] flex-shrink-0 w-4 flex justify-center">
+                              {isExpanded ? <DownOutlined style={{ fontSize: 12 }} /> : <RightOutlined style={{ fontSize: 12 }} />}
                             </span>
-                            <b className="text-sm">{j.position_name}</b>
-                            <span className="text-xs text-gray-400 flex-shrink-0">{j.department}</span>
-                            <Tag color={j.status === '招聘中' ? 'green' : 'default'} style={{ fontSize: 10, margin: 0 }} className="flex-shrink-0">{j.status}</Tag>
-                            <span className="text-xs text-gray-400 flex-shrink-0">{jobCandidates.length}/{j.headcount} 人</span>
-                            {j.urgency === '紧急' && <Tag color="red" style={{ fontSize: 10, margin: 0 }} className="flex-shrink-0">紧急</Tag>}
-                            {!isExpanded && jobCandidates.length > 0 && (
-                              <span className="text-xs text-gray-300 truncate">
-                                {sortedCandidates.slice(0, 4).map(c => c.name).join('、')}{jobCandidates.length > 4 ? '…' : ''}
-                              </span>
-                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[15px] font-semibold text-[var(--color-charcoal)]">{j.position_name}</span>
+                                <Tag color={j.status === '招聘中' ? 'green' : 'default'} style={{ fontSize: 11, margin: 0 }}>{j.status}</Tag>
+                                {j.urgency === '紧急' && <Tag color="red" style={{ fontSize: 11, margin: 0 }}>紧急</Tag>}
+                              </div>
+                              <div className="text-xs text-[var(--color-stone)] mt-1 flex items-center gap-1.5 flex-wrap">
+                                <span className="flex-shrink-0">{j.department}</span>
+                                <span className="text-[var(--color-hairline-strong)]">·</span>
+                                <span className="flex-shrink-0">在招 <b className="text-[var(--color-charcoal)]">{jobCandidates.length}</b>/{j.headcount} 人</span>
+                                {j.owner && <><span className="text-[var(--color-hairline-strong)]">·</span><span className="flex-shrink-0">负责人 {j.owner}</span></>}
+                                {j.deadline && <><span className="text-[var(--color-hairline-strong)]">·</span><span className="flex-shrink-0">期望到岗 {j.deadline}</span></>}
+                              </div>
+                              {/* 折叠时第三行单行截断展示候选人名，独立成行避免在 flex-wrap 里被撑开换行 */}
+                              {!isExpanded && jobCandidates.length > 0 && (
+                                <div className="text-xs text-[var(--color-muted)] mt-1 truncate">
+                                  {sortedCandidates.slice(0, 4).map(c => c.name).join('、')}{jobCandidates.length > 4 ? '…' : ''}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         }
                         extra={
@@ -545,53 +564,112 @@ export default function RecruitmentClient() {
                         }
                       >
                         {!isExpanded ? null : jobCandidates.length === 0 ? (
-                          <div className="text-center text-gray-400 text-xs py-4">暂无候选人 — 上传简历或导入Excel添加</div>
+                          <div className="text-center text-[var(--color-stone)] text-xs py-5 border border-dashed border-[var(--color-hairline)] rounded-lg">暂无候选人 — 上传简历或导入Excel添加</div>
                         ) : (
-                          <div className="flex flex-col gap-1.5">
-                            {sortedCandidates.map(c => {
-                              const days = c.updated_at ? Math.floor((Date.now() - new Date(c.updated_at).getTime()) / (1000 * 60 * 60 * 24)) : 0
-                              const isStale = days > 7 && c.status !== '已入职' && c.status !== '已拒绝'
-                              return (
-                                <div key={c.id} className="rounded border px-3 py-2 flex items-center gap-3 hover:shadow-sm transition-shadow w-full cursor-pointer"
-                                  style={{
-                                    borderColor: isStale ? '#ffccc7' : '#e8e8e8',
-                                    background: isStale ? '#fff5f5' : '#fff',
-                                  }}
-                                  onClick={() => router.push(`/hr/recruitment/${c.id}`)}
-                                >
-                                  <div className="w-1 self-stretch rounded-full flex-shrink-0" style={{ background: STATUS_COLORS[c.status || '待筛选'] || '#d9d9d9' }} />
-                                  <div className="flex items-center gap-2 min-w-0 w-44 flex-shrink-0">
-                                    <span className="text-sm font-medium truncate">{c.name}</span>
-                                    <span className="text-xs text-gray-400 flex-shrink-0">{c.gender}</span>
-                                    {c.recommendation_level && (
-                                      <Tag color={c.recommendation_level === '强烈推荐' ? 'green' : c.recommendation_level === '推荐' ? 'blue' : 'default'}
-                                        style={{ fontSize: 10, margin: 0 }} className="flex-shrink-0">{c.recommendation_level}</Tag>
-                                    )}
-                                  </div>
-                                  <div className="text-xs text-gray-500 truncate w-48 flex-shrink-0 hidden md:block">{c.education || '-'} · {c.school || '-'}</div>
-                                  <div className="text-xs text-gray-500 truncate flex-1 min-w-0 hidden lg:block">{c.phone || '-'} · {c.email || '-'}</div>
-                                  <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                                    {isStale && <span className="text-xs text-red-400 whitespace-nowrap" title={`已停留${days}天`}>⚠️{days}天</span>}
-                                    {c.resume_url && c.job_requirement_id && !c.recommendation_level && (
-                                      <Button size="small" icon={<FileSearchOutlined />}
-                                        loading={screeningCand === c.id}
-                                        title="AI 初筛（用已存简历按关联岗位打分，免重复上传）"
-                                        onClick={() => runScreenCandidate(c.id)} />
-                                    )}
-                                    <Select size="small" value={c.status} loading={changingStatus === c.id}
-                                      style={{ width: 110 }}
-                                      options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
-                                      onChange={v => handleStatusChange(c.id, v)}
-                                    />
-                                    <Button onClick={() => handleSendOffer(c)}>发 Offer</Button>
-                                    <Popconfirm title="确定删除此候选人？" onConfirm={() => handleDeleteCandidate(c.id)} okText="删除" cancelText="取消">
-                                      <Button danger>删除</Button>
-                                    </Popconfirm>
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
+                          <>
+                            {/* 漏斗统计 chips：点击筛选下方表格，再点取消 */}
+                            <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                              {STATUS_ORDER.filter(s => jobCandidates.some(c => (c.status || '待筛选') === s)).map(s => {
+                                const cnt = jobCandidates.filter(c => (c.status || '待筛选') === s).length
+                                const active = jobStatusFilter[j.id] === s
+                                const color = STATUS_COLORS[s] || '#d9d9d9'
+                                return (
+                                  <button key={s} type="button"
+                                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs border transition-colors cursor-pointer"
+                                    style={{
+                                      color: active ? '#fff' : color,
+                                      borderColor: color,
+                                      background: active ? color : `${color}14`,
+                                    }}
+                                    onClick={() => setJobStatusFilter(prev => ({ ...prev, [j.id]: active ? null : s }))}
+                                  >
+                                    <span>{s}</span><b>{cnt}</b>
+                                  </button>
+                                )
+                              })}
+                              {jobStatusFilter[j.id] && (
+                                <a className="text-xs text-[var(--color-steel)] ml-1" onClick={() => setJobStatusFilter(prev => ({ ...prev, [j.id]: null }))}>清除筛选</a>
+                              )}
+                            </div>
+                            <Table size="small" rowKey="id"
+                              dataSource={jobStatusFilter[j.id] ? sortedCandidates.filter(c => (c.status || '待筛选') === jobStatusFilter[j.id]) : sortedCandidates}
+                              pagination={jobCandidates.length > 10 ? {
+                                pageSize: 10, showSizeChanger: false, size: 'small',
+                                showTotal: t => `共 ${t} 条`,
+                              } : false}
+                              onRow={(record) => {
+                                const days = record.updated_at ? Math.floor((Date.now() - new Date(record.updated_at).getTime()) / (1000 * 60 * 60 * 24)) : 0
+                                const isStale = days > 7 && record.status !== '已入职' && record.status !== '已拒绝'
+                                return {
+                                  className: 'cursor-pointer',
+                                  style: isStale ? { background: '#fff5f5' } : undefined,
+                                  onClick: () => router.push(`/hr/recruitment/${record.id}`),
+                                }
+                              }}
+                              columns={[
+                                {
+                                  title: '候选人', key: 'name',
+                                  render: (_: any, c: Candidate) => {
+                                    const days = c.updated_at ? Math.floor((Date.now() - new Date(c.updated_at).getTime()) / (1000 * 60 * 60 * 24)) : 0
+                                    const isStale = days > 7 && c.status !== '已入职' && c.status !== '已拒绝'
+                                    return (
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: STATUS_COLORS[c.status || '待筛选'] || '#d9d9d9' }} />
+                                        <span className="font-medium truncate max-w-[200px]" title={c.name}>{c.name}</span>
+                                        {c.gender && <span className="text-xs text-gray-400 flex-shrink-0">{c.gender}</span>}
+                                        {c.recommendation_level && (
+                                          <Tag color={c.recommendation_level === '强烈推荐' ? 'green' : c.recommendation_level === '推荐' ? 'blue' : 'default'}
+                                            style={{ fontSize: 10, margin: 0 }} className="flex-shrink-0">{c.recommendation_level}</Tag>
+                                        )}
+                                        {isStale && <span className="text-xs text-red-400 whitespace-nowrap flex-shrink-0" title={`已停留${days}天`}>⚠️{days}天</span>}
+                                      </div>
+                                    )
+                                  },
+                                },
+                                {
+                                  title: '学历 / 院校', key: 'edu', width: 210,
+                                  render: (_: any, c: Candidate) => (
+                                    <span className="text-xs text-gray-500">{c.education || '-'} · {c.school || '-'}</span>
+                                  ),
+                                },
+                                {
+                                  title: '联系方式', key: 'contact',
+                                  render: (_: any, c: Candidate) => (
+                                    <span className="text-xs text-gray-500">{c.phone || '-'} · {c.email || '-'}</span>
+                                  ),
+                                },
+                                {
+                                  title: '状态', key: 'status', width: 130,
+                                  render: (_: any, c: Candidate) => (
+                                    <div onClick={e => e.stopPropagation()}>
+                                      <Select size="small" value={c.status} loading={changingStatus === c.id}
+                                        style={{ width: 110 }}
+                                        options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
+                                        onChange={v => handleStatusChange(c.id, v)}
+                                      />
+                                    </div>
+                                  ),
+                                },
+                                {
+                                  title: '操作', key: 'actions', width: 210,
+                                  render: (_: any, c: Candidate) => (
+                                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                                      {c.resume_url && c.job_requirement_id && !c.recommendation_level && SCREENING_PHASE_STATUSES.has(c.status || '待筛选') && (
+                                        <Button
+                                          loading={screeningCand === c.id}
+                                          title="AI 简历初筛（面试前：按已存简历+岗位JD打分，写入推荐等级与匹配报告）"
+                                          onClick={() => runScreenCandidate(c.id)}>AI 初筛</Button>
+                                      )}
+                                      <Button onClick={() => handleSendOffer(c)}>发 Offer</Button>
+                                      <Popconfirm title="确定删除此候选人？" onConfirm={() => handleDeleteCandidate(c.id)} okText="删除" cancelText="取消">
+                                        <Button danger>删除</Button>
+                                      </Popconfirm>
+                                    </div>
+                                  ),
+                                },
+                              ]}
+                            />
+                          </>
                         )}
                       </Card>
                     )
