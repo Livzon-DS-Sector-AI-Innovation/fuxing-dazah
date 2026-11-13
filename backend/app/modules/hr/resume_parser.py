@@ -30,7 +30,7 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
         "phone": _extract_phone(text),
         "email": _extract_email(text),
         "school": _extract_school(text),
-        "education": _extract_education(raw_text),
+        "education": _extract_education(text),
         "major": _extract_major(text),
         "gender": _extract_gender(text),
         "current_company": company_info["current_company"],
@@ -44,16 +44,31 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
 _NAME_BLOCKLIST = {
     "个人简历", "个人简介", "基本信息", "个人资料", "求职意向", "求职简历",
     "应聘登记", "简历模板", "联系电话", "教育背景", "工作经历",
+    # 平台导出模板的基本信息区标签（兜底窗口会扫到）
+    "姓名", "性别", "出生年月", "籍贯", "现居", "民族", "婚姻状况",
+    "政治面貌", "身高", "体重", "手机", "电话", "电子邮箱", "邮箱",
 }
 
 
 def _extract_name(text: str) -> str:
+    # 常规简历：标签与姓名均无空格
     m = re.search(r"姓名[：:]\s*([一-鿿]{2,4})", text)
     if m:
         return m.group(1)
+    # 招聘平台导出的 PDF 常因字距排版插入空格：「姓 名： 练 珊 出生年月：…」
+    # 键容忍空格；值捕获 2-4 个中文（字间可有空格），以「非中文非空格字符 /
+    # 下一个中文标签带冒号 / 行尾」为界，防止把后续标签吞进姓名
+    m = re.search(
+        r"姓\s*名\s*[：:]\s*((?:[一-鿿]\s*){2,4}?)"
+        r"(?=\s*[^\s一-鿿]|\s+(?:[一-鿿]\s*){2,}[：:]|\s*$)",
+        text,
+    )
+    if m:
+        return re.sub(r"\s+", "", m.group(1))
     # 清洗后的文本无换行结构：不要只取首行（那会是整个文档）。
-    # 取文档开头的前 30 个字符内首个 2-4 字中文串，并排除常见标题词。
-    head = text[:30]
+    # 取文档开头的前 60 个字符内首个 2-4 字中文串，并排除常见标题词。
+    # （窗口 30→60：平台导出 PDF 开头常有一段水印/单字竖排噪声先占十几个字符）
+    head = text[:60]
     for m in re.finditer(r"([一-鿿]{2,4})", head):
         candidate = m.group(1)
         if candidate in _NAME_BLOCKLIST:
@@ -73,7 +88,7 @@ def _extract_email(text: str) -> str:
 
 
 def _extract_school(text: str) -> str:
-    for pat in [r"毕业院校[：:]\s*(\S+)", r"学校[：:]\s*(\S+)"]:
+    for pat in [r"毕\s*业\s*院\s*校\s*[：:]\s*(\S+)", r"学\s*校\s*[：:]\s*(\S+)"]:
         m = re.search(pat, text)
         if m:
             return m.group(1)
@@ -83,7 +98,7 @@ def _extract_school(text: str) -> str:
 
 def _extract_education(text: str) -> str:
     """解析学历，优先返回已毕业的最高学历（"至今"标记的视为在读）。"""
-    m = re.search(r"学历[：:]\s*(\S+)", text)
+    m = re.search(r"学\s*历\s*[：:]\s*(\S+)", text)
     if m:
         return m.group(1)
 
@@ -134,7 +149,7 @@ def _extract_education(text: str) -> str:
 
 
 def _extract_major(text: str) -> str:
-    m = re.search(r"专业[：:]\s*([^\n]{1,20})", text)
+    m = re.search(r"专\s*业\s*[：:]\s*([^\n]{1,20})", text)
     if m:
         return m.group(1).strip()
     for major in ["药学", "化学", "生物工程", "计算机科学", "软件工程", "机械工程", "会计", "人力资源",
@@ -148,14 +163,19 @@ def _extract_gender(text: str) -> str:
     m = re.search(r"性别[：:]\s*(\S+)", text)
     if m:
         return m.group(1)
+    # 字距空格版：「性 别： 女 籍 贯：…」——键容忍空格，值限定 1-2 字中文
+    # （后随空格/非中文即止，防止吞掉下一标签）
+    m = re.search(r"性\s*别\s*[：:]\s*([一-鿿]{1,2})(?=[^\s一-鿿]|\s|$)", text)
+    if m:
+        return m.group(1)
     return ""
 
 
 def _extract_expected_salary(text: str) -> str:
     """提取期望薪资，如 8k-10k、8000-10000、8-10K 等。"""
     for pat in [
-        r"期望薪资[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
-        r"薪资要求[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
+        r"期\s*望\s*薪\s*资\s*[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
+        r"薪\s*资\s*要\s*求\s*[：:]\s*([^\n]{2,20}?)(?:\s|$|，|。|\n)",
     ]:
         m = re.search(pat, text)
         if m:
