@@ -334,6 +334,7 @@ class DepartureRecordBase(BaseModel):
     rank: str | None = Field(None, max_length=16, description="职级（如 S5）")
     rank_category: str | None = Field(None, max_length=32, description="岗位职级")
     job_category: str | None = Field(None, max_length=64, description="职类")
+    employee_category: str | None = Field(None, max_length=64, description="员工性质（转正员工/退休返聘等）")
     gender: str | None = Field(None, max_length=8, description="性别")
     status_category: str | None = Field(None, max_length=64, description="统计类别（人力资源分析）")
 

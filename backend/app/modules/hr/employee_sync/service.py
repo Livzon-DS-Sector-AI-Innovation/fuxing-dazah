@@ -76,6 +76,7 @@ _DEPARTURE_TEXT_FIELDS: dict[str, str] = {
 _DEPARTURE_SELECT_FIELDS: dict[str, str] = {
     "部门": "department", "岗位": "position", "职务": "duty",
     "岗位职级": "rank_category", "人力资源分析": "status_category",
+    "员工性质": "employee_category",
     "学历": "education", "学位类型": "degree_type", "全日制": "classification",
     "民族": "ethnicity", "户口类型": "household_type", "婚姻状况": "marital_status",
     "合同类型": "contract_type", "离职原因": "offboarding_type",

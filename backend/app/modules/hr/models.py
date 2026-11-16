@@ -441,6 +441,9 @@ class DepartureRecord(BaseModel):
         String(32), nullable=True, comment="岗位职级（职业技能岗位/技术职级等）"
     )
     job_category: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="职类")
+    employee_category: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="员工性质（转正员工/退休返聘等；看板按用工性质月度离职分组用）"
+    )
     gender: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="性别")
     status_category: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="统计类别（人力资源分析：生产一线/生产辅助等）")
 
