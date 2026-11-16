@@ -2851,7 +2851,9 @@ class CandidateAnalysisService:
             resume_text=resume_text,
             resume_full_text=resume_full_text or "（简历正文不可用，仅按上方元数据与面试记录评估）",
             jd_text=jd_text or "（无岗位JD）",
-            interview_text=interview_text[:6000],
+            # 30 分钟对话逐字稿约 6000-9000 字：6000 会截掉后半场，DeepSeek
+            # 64K 上下文窗口下 15000 字（≈2 万 token）输入毫无压力
+            interview_text=interview_text[:15000],
         )
         result = await AiChatService.call_json(prompt, system_prompt=_ANALYSIS_SYSTEM_PROMPT)
         if not isinstance(result, dict) or not result.get("dimensions"):
