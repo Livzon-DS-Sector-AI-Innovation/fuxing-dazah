@@ -98,7 +98,9 @@ class AiChatService:
                 # 评估/抽取类任务用确定性采样：同份简历多次打分保持一致
                 # （DeepSeek 官方推荐数据抽取/分类场景 temperature=0）
                 temperature=0.0,
-                max_tokens=4096,
+                # DeepSeek 上限 8192：初筛/胜任度报告的大 JSON（多维度评估+
+                # 打分表+建议）在 4096 会被截断，半截 JSON 解析必失败
+                max_tokens=8192,
             )
         except openai.APIConnectionError as exc:
             raise ValueError(
@@ -110,6 +112,11 @@ class AiChatService:
         finally:
             await client.close()
         content = resp.choices[0].message.content or ""
+        if resp.choices[0].finish_reason == "length":
+            # 输出被 max_tokens 截断，JSON 必不完整——给可读错误而非解析失败
+            raise ValueError(
+                "AI 输出超过长度上限被截断，请精简简历/面试稿或缩减报告篇幅后重试",
+            )
         # 去掉 markdown 代码围栏
         content = re.sub(r"```(?:json)?\s*", "", content)
         content = content.strip()

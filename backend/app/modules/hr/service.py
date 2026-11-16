@@ -2757,6 +2757,11 @@ class InterviewFeedbackService:
         return fb
 
 
+# 候选人档案 match_report 中面试摘要段的定位标题头（初筛段有自己的
+# 【候选人匹配度报告】头；两条链路拼接互不覆盖，screen_candidate 同步使用）
+INTERVIEW_SUMMARY_HEADER = "【面试胜任度摘要】"
+
+
 class CandidateAnalysisService:
     """候选人胜任度多维分析报告：面试记录提交后自动生成。"""
 
@@ -2851,7 +2856,9 @@ class CandidateAnalysisService:
             resume_text=resume_text,
             resume_full_text=resume_full_text or "（简历正文不可用，仅按上方元数据与面试记录评估）",
             jd_text=jd_text or "（无岗位JD）",
-            interview_text=interview_text[:6000],
+            # 30 分钟对话逐字稿约 6000-9000 字：6000 会截掉后半场，DeepSeek
+            # 64K 上下文窗口下 15000 字（≈2 万 token）输入毫无压力
+            interview_text=interview_text[:15000],
         )
         result = await AiChatService.call_json(prompt, system_prompt=_ANALYSIS_SYSTEM_PROMPT)
         if not isinstance(result, dict) or not result.get("dimensions"):
@@ -2893,11 +2900,16 @@ class CandidateAnalysisService:
                 interview.notes = f"{notes}\n{prefix} {joined}".strip()
                 await InterviewRepository(self.session).update(interview)
 
-        # 回写候选人匹配报告摘要
+        # 回写候选人匹配报告：面试摘要追加在初筛匹配报告之后（不覆盖——两条评估
+        # 链路各有价值，档案上拼接展示）；重复生成时先移除旧摘要段避免多轮叠加
         if result.get("summary"):
             c = await CandidateRepository(self.session).get_by_id(candidate_id)
             if c:
-                c.match_report = str(result["summary"])
+                base = (c.match_report or "").split(INTERVIEW_SUMMARY_HEADER)[0].rstrip()
+                c.match_report = (
+                    (f"{base}\n\n" if base else "")
+                    + f"{INTERVIEW_SUMMARY_HEADER}\n{result['summary']}"
+                )
                 await CandidateRepository(self.session).update(c)
 
         return report

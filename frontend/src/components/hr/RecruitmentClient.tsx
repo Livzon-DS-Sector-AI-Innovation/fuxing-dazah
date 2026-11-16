@@ -352,15 +352,15 @@ export default function RecruitmentClient() {
     let ok = 0
     for (const it of targets) {
       updateResumeItem(it.key, { stage: '初筛中' })
-      try {
-        const r = await screenCandidateAction(it.candidateId!)
+      const r = await screenCandidateAction(it.candidateId!)
+      if (r.ok) {
         updateResumeItem(it.key, {
           stage: '初筛完成', reco: r.data.recommendation, score: r.data.total_score,
         })
         ok += 1
-      } catch (err: any) {
+      } else {
         // 初筛失败不影响已建档结果：回落「已建档」可重试
-        updateResumeItem(it.key, { stage: '已建档', error: err?.message || '初筛失败' })
+        updateResumeItem(it.key, { stage: '已建档', error: r.error })
       }
     }
     setBatchScreening(false)
@@ -383,10 +383,38 @@ export default function RecruitmentClient() {
     setScreeningCand(candidateId)
     try {
       const r = await screenCandidateAction(candidateId)
+      if (!r.ok) { msg.error(r.error); return }
       msg.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100），报告已写入候选人档案`)
       await loadAllCandidates()
     } catch (err: any) { msg.error(err.message || 'AI 初筛失败') }
     finally { setScreeningCand(null) }
+  }
+
+  // 一键初筛：对岗位下存量未初筛简历（有简历+未定级+筛选阶段）批量跑 AI（串行，与单份同一 action）
+  const [batchScreenJobId, setBatchScreenJobId] = useState<string | null>(null)
+  const handleBatchScreenExisting = async (jobId: string, targets: Candidate[]) => {
+    if (!targets.length) return
+    setBatchScreenJobId(jobId)
+    let ok = 0, fail = 0
+    let lastError = ''
+    for (let i = 0; i < targets.length; i++) {
+      const r = await screenCandidateAction(targets[i].id)
+      if (r.ok) ok += 1
+      else { fail += 1; lastError = r.error }
+      // 每份 10-20s：带 key 的进度提示覆盖更新，让用户知道在动
+      msg.open({
+        key: 'batch-screen', type: 'loading',
+        content: `AI 初筛进度：${i + 1}/${targets.length}（成功 ${ok}${fail ? `，失败 ${fail}` : ''}）`,
+      })
+    }
+    setBatchScreenJobId(null)
+    await loadAllCandidates()
+    msg.destroy('batch-screen')
+    if (fail === 0) msg.success(`AI 初筛完成：${ok} 份，推荐等级与匹配报告已写入候选人档案`)
+    else msg.warning({
+      content: `AI 初筛完成：成功 ${ok} 份、失败 ${fail} 份（稍后可重试）。最近失败原因：${lastError}`,
+      duration: 8,
+    })
   }
 
   const handleDeleteCandidate = async (id: string) => {
@@ -548,6 +576,21 @@ export default function RecruitmentClient() {
                         extra={
                           <div className="flex gap-2 items-center" onClick={e => e.stopPropagation()}>
                             <Button onClick={() => loadCompare(j.id)}>对比</Button>
+                            {(() => {
+                              // 该岗位存量可初筛的：有简历 + 未定推荐等级 + 仍在筛选阶段
+                              const screenables = jobCandidates.filter(c =>
+                                c.resume_url && c.job_requirement_id && !c.recommendation_level &&
+                                SCREENING_PHASE_STATUSES.has(c.status || '待筛选'))
+                              return screenables.length > 0 ? (
+                                <Button type="primary" ghost
+                                  loading={batchScreenJobId === j.id}
+                                  disabled={batchScreenJobId !== null || screeningCand !== null}
+                                  title="对该岗位所有未初筛的存量简历一键批量 AI 初筛（串行执行，每份约 10-20 秒）"
+                                  onClick={() => handleBatchScreenExisting(j.id, screenables)}>
+                                  AI 初筛 {screenables.length} 份
+                                </Button>
+                              ) : null
+                            })()}
                             <Button title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }}>上传简历</Button>
                             <Button type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
                             <Popconfirm
