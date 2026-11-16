@@ -20,6 +20,8 @@ from app.modules.hr.employee_sync.config import (
     KEY_ENABLED,
     KEY_HEADCOUNT_TABLE_ID,
     KEY_HEADCOUNT_TABLE_NAME,
+    KEY_DEPARTURE_TABLE_ID,
+    KEY_DEPARTURE_TABLE_NAME,
     KEY_LAST_STATS,
     KEY_LAST_SYNC_AT,
     KEY_SOURCE_TABLE_ID,
@@ -34,6 +36,7 @@ from app.modules.hr.employee_sync.config import (
 )
 from app.modules.hr.employee_sync.mapping import (
     COLUMN_MAP,
+    _parse_date_like,
     build_option_maps,
     convert_source_fields,
     normalize_cell,
@@ -42,7 +45,12 @@ from app.modules.hr.employee_sync.report_level import (
     REPORT_LEVEL_FIELD,
     compute_report_level,
 )
-from app.modules.hr.models import Employee, HeadcountPlan, TrainingRosterProfile
+from app.modules.hr.models import (
+    DepartureRecord,
+    Employee,
+    HeadcountPlan,
+    TrainingRosterProfile,
+)
 from app.modules.hr.repository import EmployeeRepository
 from app.modules.hr.service import EmployeeService
 
@@ -51,6 +59,33 @@ logger = logging.getLogger(__name__)
 _LOCK_KEY = "employee_sync:reconcile_lock"
 _LOCK_TTL = 280  # 略小于定时任务 timeout，防止任务超时后死锁
 _ERROR_CAP = 20  # 错误列表上限（防超大 payload）
+
+# ── 离职人员管理表 → DepartureRecord 字段映射 ──
+# 文本列（normalize_cell 直接得到字符串）
+_DEPARTURE_TEXT_FIELDS: dict[str, str] = {
+    "工号": "employee_number", "姓名": "name", "职级": "rank", "性别": "gender",
+    "毕业院校": "school", "专业": "major", "身份证号": "id_card", "籍贯": "native_place",
+    "居住地址": "residence_address", "联系电话": "phone",
+    "紧急联系人-姓名": "emergency_contact_name",
+    "紧急联系人-联系电话": "emergency_contact_phone",
+    "紧急联系人-关系": "emergency_contact_relation",
+    "任命与岗位调动": "transfer_history", "证书": "certificates",
+    "司龄": "company_tenure_at_leave",
+}
+# 单选列（值是选项ID，需 option_maps 翻译）
+_DEPARTURE_SELECT_FIELDS: dict[str, str] = {
+    "部门": "department", "岗位": "position", "职务": "duty",
+    "岗位职级": "rank_category", "人力资源分析": "status_category",
+    "学历": "education", "学位类型": "degree_type", "全日制": "classification",
+    "民族": "ethnicity", "户口类型": "household_type", "婚姻状况": "marital_status",
+    "合同类型": "contract_type", "离职原因": "offboarding_type",
+}
+# 日期列（毫秒时间戳/文本 → date，东八区语义）
+_DEPARTURE_DATE_FIELDS: dict[str, str] = {
+    "入职日期": "livo_entry_date", "参加工作时间": "work_start_date",
+    "离职日期": "offboarding_date", "身份证有效期": "id_card_expiry",
+    "合同开始日期": "contract_start_date", "合同结束日期": "contract_end_date",
+}
 
 
 class SyncInProgressError(Exception):
@@ -67,6 +102,9 @@ def config_payload(cfg: EmployeeSyncConfig) -> dict[str, Any]:
         "headcount_table_id": cfg.headcount_table_id,
         "headcount_table_name": cfg.headcount_table_name,
         "headcount_ready": cfg.headcount_ready,
+        "departure_table_id": cfg.departure_table_id,
+        "departure_table_name": cfg.departure_table_name,
+        "departure_ready": cfg.departure_ready,
         "is_ready": cfg.is_ready,
         "last_sync_at": cfg.last_sync_at or None,
         "last_stats": cfg.last_stats or None,
@@ -127,14 +165,52 @@ class EmployeeSyncService:
 
     # ── 绑定配置保存（校验连通 + 列匹配报告） ──
 
+    async def _validate_optional_table(
+        self, app_token: str, tables: list[dict[str, Any]], table_id: str,
+        label: str, required_columns: tuple[str, ...],
+    ) -> str:
+        """可选附加表（定编/离职台账）绑定校验：表存在 + 必需列齐 + 应用可读。
+
+        返回表名；失败抛 ValueError（含高级权限的授权指引）。
+        """
+        matched = next(
+            (t for t in tables if str(t.get("table_id")) == table_id), None,
+        )
+        if matched is None:
+            available = "、".join(
+                f"{t.get('name')}({t.get('table_id')})" for t in tables[:10]
+            )
+            raise ValueError(
+                f"Base 中不存在{label}数据表 {table_id}。Base 内可用的数据表：{available}",
+            )
+        table_name = str(matched.get("name") or "")
+        try:
+            fields = [
+                str(f.get("field_name") or "")
+                for f in await bitable.list_fields(app_token, table_id)
+            ]
+        except bitable.BitableAPIError as exc:
+            if "RolePermNotAllow" in str(exc):
+                raise ValueError(
+                    f"应用无「{table_name}」表的读取权限"
+                    "（Base 开启了高级权限，应用仅被授权部分数据表）。"
+                    "请在 多维表格右上角「···」→ 高级权限 → 协作者管理中，"
+                    f"为应用 {bitable.active_app_id()} 勾选该数据表权限。",
+                ) from exc
+            raise
+        missing = [c for c in required_columns if c not in fields]
+        if missing:
+            raise ValueError(f"{label}表缺少必需列：{'、'.join(missing)}")
+        return table_name
+
     async def save_binding_config(
         self, *, enabled: bool, app_token: str, source_table_id: str,
-        headcount_table_id: str = "",
+        headcount_table_id: str = "", departure_table_id: str = "",
     ) -> dict[str, Any]:
         """保存绑定配置：连通性校验、列匹配报告。
 
-        app_token / source_table_id / headcount_table_id 需先经 routes 层清洗
-        （容忍粘贴完整链接）。定编表为可选附加项：留空即不同步。
+        app_token / 各 table_id 需先经 routes 层清洗（容忍粘贴完整链接）。
+        定编表、离职台账表为可选附加项：留空即不同步。
         校验失败抛 ValueError（路由层转 400）；返回前端展示 payload。
         """
         if enabled and (not app_token or not source_table_id):
@@ -142,10 +218,11 @@ class EmployeeSyncService:
 
         table_name = ""
         headcount_table_name = ""
+        departure_table_name = ""
         column_report: dict[str, Any] = {
             "mapped": [], "ignored": [], "has_employee_number": False, "mapped_count": 0,
         }
-        if app_token and (source_table_id or headcount_table_id):
+        if app_token and (source_table_id or headcount_table_id or departure_table_id):
             try:
                 tables = await bitable.list_tables(app_token)
                 if not tables:
@@ -178,39 +255,15 @@ class EmployeeSyncService:
                             "源数据表缺少「工号」列，无法启用同步（避免全量对账误删员工）",
                         )
                 if headcount_table_id:
-                    matched_hc = next(
-                        (t for t in tables if str(t.get("table_id")) == headcount_table_id),
-                        None,
+                    headcount_table_name = await self._validate_optional_table(
+                        app_token, tables, headcount_table_id,
+                        "定编数", ("部门", "部门定编"),
                     )
-                    if matched_hc is None:
-                        available = "、".join(
-                            f"{t.get('name')}({t.get('table_id')})" for t in tables[:10]
-                        )
-                        raise ValueError(
-                            f"Base 中不存在定编数数据表 {headcount_table_id}。"
-                            f"Base 内可用的数据表：{available}",
-                        )
-                    headcount_table_name = str(matched_hc.get("name") or "")
-                    try:
-                        hc_fields = [
-                            str(f.get("field_name") or "")
-                            for f in await bitable.list_fields(app_token, headcount_table_id)
-                        ]
-                    except bitable.BitableAPIError as exc:
-                        if "RolePermNotAllow" in str(exc):
-                            raise ValueError(
-                                f"应用无「{headcount_table_name}」表的读取权限"
-                                "（Base 开启了高级权限，应用仅被授权部分数据表）。"
-                                "请在 多维表格右上角「···」→ 高级权限 → 协作者管理中，"
-                                f"为应用 {bitable.active_app_id()} 勾选该数据表权限。",
-                            ) from exc
-                        raise
-                    missing = [c for c in ("部门", "部门定编") if c not in hc_fields]
-                    if missing:
-                        raise ValueError(
-                            f"定编数表缺少必需列：{'、'.join(missing)}"
-                            "（岗位明细/排序/现有人数为可选列）",
-                        )
+                if departure_table_id:
+                    departure_table_name = await self._validate_optional_table(
+                        app_token, tables, departure_table_id,
+                        "离职台账", ("工号", "姓名", "离职日期"),
+                    )
             except ValueError:
                 raise
             except bitable.BitableAPIError as exc:
@@ -227,6 +280,8 @@ class EmployeeSyncService:
             KEY_SOURCE_TABLE_NAME: table_name,
             KEY_HEADCOUNT_TABLE_ID: headcount_table_id,
             KEY_HEADCOUNT_TABLE_NAME: headcount_table_name,
+            KEY_DEPARTURE_TABLE_ID: departure_table_id,
+            KEY_DEPARTURE_TABLE_NAME: departure_table_name,
         })
         await self.session.commit()
 
@@ -330,6 +385,16 @@ class EmployeeSyncService:
                 logger.error("定编表同步失败（不影响员工档案同步）: %s", exc)
                 headcount_stats = {"error": str(exc)}
 
+        # 离职人员管理表 → 离职台账（hr.departure_records），同一模式
+        departure_stats: dict[str, Any] | None = None
+        if cfg.departure_ready:
+            try:
+                async with self.session.begin_nested():
+                    departure_stats = await self._reconcile_departures(cfg)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("离职台账同步失败（不影响员工档案同步）: %s", exc)
+                departure_stats = {"error": str(exc)}
+
         stats = {
             "created": created, "updated": updated, "deleted": deleted,
             "total": len(records), "errors": errors,
@@ -339,6 +404,8 @@ class EmployeeSyncService:
         }
         if headcount_stats is not None:
             stats["headcount"] = headcount_stats
+        if departure_stats is not None:
+            stats["departures"] = departure_stats
         return stats
 
     async def _build_option_maps(
@@ -480,6 +547,122 @@ class EmployeeSyncService:
             "created": created, "updated": updated, "deleted": deleted,
             "total": len(records), "errors": errors,
         }
+
+    # ── 离职人员管理表 → 离职台账（hr.departure_records） ──
+
+    async def _reconcile_departures(self, cfg: EmployeeSyncConfig) -> dict[str, Any]:
+        """离职人员管理表 → hr.departure_records 全量对账。
+
+        upsert 认领顺序：先按 feishu_record_id，再按工号（把历史手动建的行
+        自动认领合并）；软删仅针对有 record_id 且源表消失的行；空拉取防御
+        不清库。cert_sign_* 离职证明签署字段是本地数据，同步不触碰。
+        """
+        records = await bitable.list_all_records(cfg.app_token, cfg.departure_table_id)
+        schema = await bitable.list_fields(cfg.app_token, cfg.departure_table_id)
+        option_maps = build_option_maps(schema)
+
+        today = datetime.now().date()
+        existing = (await self.session.execute(
+            select(DepartureRecord)  # 含软删行：复活/认领判断需要
+        )).scalars().all()
+        by_record_id = {
+            r.feishu_record_id: r for r in existing if r.feishu_record_id
+        }
+        by_number = {
+            r.employee_number: r for r in existing if r.employee_number
+        }
+
+        created = updated = deleted = 0
+        errors: list[str] = []
+        remote_record_ids: set[str] = set()
+
+        for record in records:
+            record_id = str(record.get("record_id") or "")
+            fields = record.get("fields") or {}
+            data = self._convert_departure_fields(fields, option_maps)
+            name = str(data.get("name") or "").strip()
+            if not name:
+                if len(errors) < _ERROR_CAP:
+                    errors.append(f"离职记录 {record_id or '(无record_id)'} 缺少「姓名」，已跳过")
+                continue
+            remote_record_ids.add(record_id)
+
+            row = by_record_id.get(record_id)
+            if row is None:
+                # 工号认领：手动建的行（无 record_id）或曾被软删的历史行按工号
+                # 合并/复活（保住离职证明签署等本地字段），避免同人重复行
+                number = str(data.get("employee_number") or "").strip()
+                claimed = by_number.get(number) if number else None
+                if claimed is not None and (
+                    not claimed.feishu_record_id or claimed.is_deleted
+                ):
+                    row = claimed
+                    claimed.is_deleted = False
+                    updated += 1
+                else:
+                    row = DepartureRecord(name=name)
+                    self.session.add(row)
+                    by_record_id[record_id] = row
+                    if number:
+                        by_number[number] = row
+                    created += 1
+            else:
+                if row.is_deleted:
+                    row.is_deleted = False
+                updated += 1
+
+            # NOT NULL 兜底（与员工同步一致）
+            data.setdefault("department", "未分类")
+            data.setdefault("position", "")
+            for attr, value in data.items():
+                setattr(row, attr, value)
+            row.feishu_record_id = record_id or None
+            row.feishu_synced_at = today
+
+        # 软删源表已删除的行（空拉取防御：权限/绑错表不得清空台账）
+        if remote_record_ids:
+            for row in existing:
+                if (
+                    not row.is_deleted
+                    and row.feishu_record_id is not None
+                    and row.feishu_record_id not in remote_record_ids
+                ):
+                    row.is_deleted = True
+                    deleted += 1
+        else:
+            logger.error("离职表拉取结果为空，跳过软删以保护本地离职台账")
+
+        await self.session.flush()
+        return {
+            "created": created, "updated": updated, "deleted": deleted,
+            "total": len(records), "errors": errors,
+        }
+
+    def _convert_departure_fields(
+        self, fields: dict[str, Any], option_maps: dict[str, dict[str, str]],
+    ) -> dict[str, Any]:
+        """飞书离职表字段 → DepartureRecord ORM 值（仅产出有值字段）。"""
+        data: dict[str, Any] = {}
+        for column, attr in _DEPARTURE_TEXT_FIELDS.items():
+            value = normalize_cell(fields.get(column))
+            if isinstance(value, str) and value.strip():
+                data[attr] = value.strip()
+        for column, attr in _DEPARTURE_SELECT_FIELDS.items():
+            value = normalize_cell(fields.get(column))
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            # 单选原始值是选项ID（normalize 解包后为标量），翻译成选项名
+            translated = (option_maps.get(column) or {}).get(text, text)
+            data[attr] = translated
+        for column, attr in _DEPARTURE_DATE_FIELDS.items():
+            value = normalize_cell(fields.get(column))
+            parsed = _parse_date_like(value)
+            if parsed is not None:
+                data[attr] = parsed
+        return data
 
     # ── 培训专用脱敏名单（独立数据集：人员随总表增减，字段独立维护） ──
 

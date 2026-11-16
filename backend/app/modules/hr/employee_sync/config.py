@@ -24,6 +24,9 @@ KEY_SOURCE_TABLE_NAME = "employee_sync.source_table_name"
 # 定编数表（可选附加同步：与员工档案同一 Base，一次同步顺带拉取）
 KEY_HEADCOUNT_TABLE_ID = "employee_sync.headcount_table_id"
 KEY_HEADCOUNT_TABLE_NAME = "employee_sync.headcount_table_name"
+# 离职人员管理表（可选附加同步：同 Base，写入 hr.departure_records 离职台账）
+KEY_DEPARTURE_TABLE_ID = "employee_sync.departure_table_id"
+KEY_DEPARTURE_TABLE_NAME = "employee_sync.departure_table_name"
 KEY_LAST_SYNC_AT = "employee_sync.last_sync_at"
 KEY_LAST_STATS = "employee_sync.last_stats"
 
@@ -92,6 +95,8 @@ class EmployeeSyncConfig:
     source_table_name: str = ""
     headcount_table_id: str = ""
     headcount_table_name: str = ""
+    departure_table_id: str = ""
+    departure_table_name: str = ""
     last_sync_at: str = ""
     last_stats: dict[str, Any] = field(default_factory=dict)
 
@@ -104,12 +109,18 @@ class EmployeeSyncConfig:
         """定编表是否可同步（可选附加项，独立于员工档案主绑定）。"""
         return bool(self.enabled and self.app_token and self.headcount_table_id)
 
+    @property
+    def departure_ready(self) -> bool:
+        """离职人员管理表是否可同步（可选附加项）。"""
+        return bool(self.enabled and self.app_token and self.departure_table_id)
+
 
 async def load_config(session: AsyncSession) -> EmployeeSyncConfig:
     """读取全部同步 KV（单次查询，缺失键回落默认值）。"""
     keys = [
         KEY_ENABLED, KEY_APP_TOKEN, KEY_SOURCE_TABLE_ID, KEY_SOURCE_TABLE_NAME,
         KEY_HEADCOUNT_TABLE_ID, KEY_HEADCOUNT_TABLE_NAME,
+        KEY_DEPARTURE_TABLE_ID, KEY_DEPARTURE_TABLE_NAME,
         KEY_LAST_SYNC_AT, KEY_LAST_STATS,
     ]
     result = await session.execute(
@@ -137,6 +148,8 @@ async def load_config(session: AsyncSession) -> EmployeeSyncConfig:
         source_table_name=(kv.get(KEY_SOURCE_TABLE_NAME) or "").strip(),
         headcount_table_id=(kv.get(KEY_HEADCOUNT_TABLE_ID) or "").strip(),
         headcount_table_name=(kv.get(KEY_HEADCOUNT_TABLE_NAME) or "").strip(),
+        departure_table_id=(kv.get(KEY_DEPARTURE_TABLE_ID) or "").strip(),
+        departure_table_name=(kv.get(KEY_DEPARTURE_TABLE_NAME) or "").strip(),
         last_sync_at=(kv.get(KEY_LAST_SYNC_AT) or "").strip(),
         last_stats=stats,
     )

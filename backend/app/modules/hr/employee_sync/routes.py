@@ -45,6 +45,9 @@ class EmployeeSyncConfigInput(BaseModel):
     headcount_table_id: str = Field(
         "", description="定编数源数据表 table_id（可选；与员工档案同一 Base，一次同步顺带拉取）"
     )
+    departure_table_id: str = Field(
+        "", description="离职人员管理表 table_id（可选；写入离职台账 hr.departure_records）"
+    )
 
 
 @router.get("/config", summary="读取员工档案同步配置")
@@ -69,6 +72,7 @@ async def save_sync_config(
             app_token=clean_app_token(payload.app_token),
             source_table_id=clean_table_id(payload.source_table_id),
             headcount_table_id=clean_table_id(payload.headcount_table_id),
+            departure_table_id=clean_table_id(payload.departure_table_id),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
