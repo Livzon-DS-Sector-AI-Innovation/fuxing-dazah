@@ -117,8 +117,9 @@ async def list_headcount_plans(
         exact = plan.department in all_departments
         norm_key = _normalize_department(plan.department)
         matched = exact or norm_key in normalized_known
+        # 部门存在但全员离职时不在 active_counts 里，缺省 0
         actual_count = (
-            active_counts.get(plan.department)
+            active_counts.get(plan.department, 0)
             if exact
             else normalized_active.get(norm_key, 0)
         )
