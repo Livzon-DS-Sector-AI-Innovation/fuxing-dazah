@@ -686,7 +686,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <h3 className="text-sm font-medium mb-2">推荐等级</h3>
             <Select style={{ width: '100%' }} placeholder="选择推荐等级" value={recommendationLevel || undefined}
               onChange={handleUpdateRecommendation} options={recommendationOptions} loading={updating} />
-            {candidate.resume_url && candidate.job_requirement_id && canManage && SCREENING_PHASE_STATUSES.has(candidate.status || '') && (
+            {candidate.resume_url && candidate.job_requirement_id && canManage && !recommendationLevel && SCREENING_PHASE_STATUSES.has(candidate.status || '') && (
               <Button className="mt-2" block icon={<FileSearchOutlined />}
                 loading={screening}
                 onClick={handleScreenCandidate}

@@ -389,6 +389,30 @@ export default function RecruitmentClient() {
     finally { setScreeningCand(null) }
   }
 
+  // 一键初筛：对岗位下存量未初筛简历（有简历+未定级+筛选阶段）批量跑 AI（串行，与单份同一 action）
+  const [batchScreenJobId, setBatchScreenJobId] = useState<string | null>(null)
+  const handleBatchScreenExisting = async (jobId: string, targets: Candidate[]) => {
+    if (!targets.length) return
+    setBatchScreenJobId(jobId)
+    let ok = 0, fail = 0
+    for (let i = 0; i < targets.length; i++) {
+      try {
+        await screenCandidateAction(targets[i].id)
+        ok += 1
+      } catch { fail += 1 }
+      // 每份 10-20s：带 key 的进度提示覆盖更新，让用户知道在动
+      msg.open({
+        key: 'batch-screen', type: 'loading',
+        content: `AI 初筛进度：${i + 1}/${targets.length}（成功 ${ok}${fail ? `，失败 ${fail}` : ''}）`,
+      })
+    }
+    setBatchScreenJobId(null)
+    await loadAllCandidates()
+    msg.destroy('batch-screen')
+    if (fail === 0) msg.success(`AI 初筛完成：${ok} 份，推荐等级与匹配报告已写入候选人档案`)
+    else msg.warning(`AI 初筛完成：成功 ${ok} 份、失败 ${fail} 份（失败的稍后可重试）`)
+  }
+
   const handleDeleteCandidate = async (id: string) => {
     try { await deleteCandidate(id); loadAllCandidates() }
     catch (err: any) { msg.error(err.message || '删除失败') }
@@ -548,6 +572,21 @@ export default function RecruitmentClient() {
                         extra={
                           <div className="flex gap-2 items-center" onClick={e => e.stopPropagation()}>
                             <Button onClick={() => loadCompare(j.id)}>对比</Button>
+                            {(() => {
+                              // 该岗位存量可初筛的：有简历 + 未定推荐等级 + 仍在筛选阶段
+                              const screenables = jobCandidates.filter(c =>
+                                c.resume_url && c.job_requirement_id && !c.recommendation_level &&
+                                SCREENING_PHASE_STATUSES.has(c.status || '待筛选'))
+                              return screenables.length > 0 ? (
+                                <Button type="primary" ghost
+                                  loading={batchScreenJobId === j.id}
+                                  disabled={batchScreenJobId !== null || screeningCand !== null}
+                                  title="对该岗位所有未初筛的存量简历一键批量 AI 初筛（串行执行，每份约 10-20 秒）"
+                                  onClick={() => handleBatchScreenExisting(j.id, screenables)}>
+                                  AI 初筛 {screenables.length} 份
+                                </Button>
+                              ) : null
+                            })()}
                             <Button title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }}>上传简历</Button>
                             <Button type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
                             <Popconfirm
