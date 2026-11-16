@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   App, Alert, Button, Table, Space, Input, Tag, Modal, Form, Select,
   DatePicker, Popconfirm, Descriptions, Typography,
@@ -14,9 +14,10 @@ import {
   SendOutlined,
   CloudSyncOutlined,
 } from '@ant-design/icons'
-import { DepartureRecord } from '@/types/hr'
+import { DepartureRecord, DepartureFilterOptions } from '@/types/hr'
 import {
   fetchDepartureRecords,
+  fetchDepartureFilterOptionsAction,
   fetchDepartmentsAction,
   fetchEmployeesAction,
   createDepartureRecord,
@@ -62,6 +63,7 @@ export default function DepartureClient({
   const [searchKeyword, setSearchKeyword] = useState('')
   const [filterDepartment, setFilterDepartment] = useState('')
   const [filterOffboardingType, setFilterOffboardingType] = useState('')
+  const [filterOptions, setFilterOptions] = useState<DepartureFilterOptions>({})
   const [createOpen, setCreateOpen] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
   const [createForm] = Form.useForm()
@@ -84,6 +86,8 @@ export default function DepartureClient({
     fetchDepartmentsAction({ page_size: 200 }).then(r => {
       setDepartments((r.data||[]).map((d:any) => ({ value: d.name, label: d.name })))
     })
+    // 筛选下拉选项：从台账现有数据聚合（跟随飞书源表，部门与 org 部门表可能不一致）
+    fetchDepartureFilterOptionsAction().then(setFilterOptions).catch(() => {})
   }, [])
 
   const handleDeptChange = async (dept: string) => {
@@ -161,6 +165,8 @@ export default function DepartureClient({
         message.success('同步完成')
       }
       loadData()
+      // 同步可能带来新的部门/离职类型取值，下拉选项一并刷新
+      fetchDepartureFilterOptionsAction().then(setFilterOptions).catch(() => {})
     } catch (err: any) {
       message.error(err.message || '同步失败')
     } finally {
@@ -199,15 +205,8 @@ export default function DepartureClient({
     '退休返聘到期': 'success',
     '其他': 'processing' }
 
-  // 列筛选选项从当前数据动态生成（部门/离职类型跟随飞书源表变化，避免硬编码过期）
-  const deptFilters = useMemo(() => {
-    const names = [...new Set(records.map(r => r.department).filter(Boolean))].sort()
-    return names.map(n => ({ text: n, value: n }))
-  }, [records])
-  const typeFilters = useMemo(() => {
-    const types = [...new Set(records.map(r => r.offboarding_type).filter(Boolean))].sort()
-    return types.map(t => ({ text: t, value: t }))
-  }, [records])
+  // 部门/离职类型筛选已上移到顶部下拉（服务端全量过滤，选项来自 filter-options），
+  // 不再用列头筛选（仅过滤当前页，与全量口径冲突）
 
   const columns: ColumnsType<DepartureRecord> = [
     {
@@ -226,9 +225,7 @@ export default function DepartureClient({
       title: '部门',
       dataIndex: 'department',
       key: 'department',
-      width: 130,
-      filters: deptFilters,
-      onFilter: (value, record: DepartureRecord) => record.department === String(value) },
+      width: 130 },
     {
       title: '职位',
       dataIndex: 'position',
@@ -255,9 +252,7 @@ export default function DepartureClient({
       width: 110,
       render: (val: string) => (
         <Tag color={offboardingTypeColorMap[val] || 'default'}>{val || '-'}</Tag>
-      ),
-      filters: typeFilters,
-      onFilter: (value, record: DepartureRecord) => record.offboarding_type === String(value) },
+      ) },
     {
       title: '离职时司龄',
       dataIndex: 'company_tenure_at_leave',
@@ -357,19 +352,23 @@ export default function DepartureClient({
           className="w-64"
           allowClear
         />
-        <Input
+        <Select
           placeholder="部门筛选"
-          value={filterDepartment}
-          onChange={(e) => setFilterDepartment(e.target.value)}
-          className="w-40"
+          value={filterDepartment || undefined}
+          onChange={(v) => setFilterDepartment(v || '')}
+          showSearch
           allowClear
+          optionFilterProp="label"
+          className="w-44"
+          options={filterOptions.departments?.map((d) => ({ value: d, label: d }))}
         />
-        <Input
+        <Select
           placeholder="离职类型筛选"
-          value={filterOffboardingType}
-          onChange={(e) => setFilterOffboardingType(e.target.value)}
-          className="w-40"
+          value={filterOffboardingType || undefined}
+          onChange={(v) => setFilterOffboardingType(v || '')}
           allowClear
+          className="w-36"
+          options={filterOptions.offboarding_types?.map((t) => ({ value: t, label: t }))}
         />
       </div>
 

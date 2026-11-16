@@ -683,6 +683,8 @@ class EmployeeService:
         sort_order: str = "asc",
         include_uncategorized: bool = False,
         departments: set[str] | None = None,
+        # 字段级筛选项（枚举下拉/日期范围/年龄区间等），键名与 repository 对齐
+        filters: dict | None = None,
     ) -> tuple[list[Employee], int]:
         return await self.repo.list_employees(
             department=department,
@@ -694,6 +696,18 @@ class EmployeeService:
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
+            **(filters or {}),
+        )
+
+    async def list_filter_options(
+        self,
+        *,
+        departments: set[str] | None = None,
+        employee_number: str | None = None,
+    ) -> dict[str, list[str]]:
+        """筛选下拉选项：聚合各可枚举字段的现有取值（按数据范围收敛）。"""
+        return await self.repo.get_filter_options(
+            departments=departments, employee_number=employee_number
         )
 
     # ── 年度培训计划上传 ──
@@ -1274,6 +1288,12 @@ class DepartureRecordService:
             sort_by=sort_by,
             sort_order=sort_order,
         )
+
+    async def list_filter_options(
+        self, *, departments: set[str] | None = None
+    ) -> dict[str, list[str]]:
+        """筛选下拉选项：聚合部门/离职类型的现有取值（按数据范围收敛）。"""
+        return await self.repo.get_filter_options(departments=departments)
 
     async def create_record(self, data: DepartureRecordCreate) -> DepartureRecord:
         record = DepartureRecord(**data.model_dump())

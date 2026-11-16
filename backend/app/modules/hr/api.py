@@ -271,6 +271,42 @@ async def list_employees(
     status: str | None = Query(None, description="状态筛选；不传时全量（与源表对齐，仅软删不计）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     include_uncategorized: bool = Query(False, description="是否纳入「未分类」人员（按实际部门归属）"),
+    # ── 字段级筛选（档案筛选面板；精确匹配项的取值来源 /employees/filter-options）──
+    position: str | None = Query(None, description="岗位（精确）"),
+    duty: str | None = Query(None, description="职务（精确）"),
+    job_category: str | None = Query(None, description="职能分类（精确）"),
+    level: str | None = Query(None, description="职级（精确）"),
+    report_grade: str | None = Query(None, description="岗位职级（精确）"),
+    status_category: str | None = Query(None, description="员工性质/统计类别（精确）"),
+    gender: str | None = Query(None, description="性别（精确）"),
+    ethnicity: str | None = Query(None, description="民族（精确）"),
+    native_place: str | None = Query(None, description="籍贯（精确）"),
+    marital_status: str | None = Query(None, description="婚姻状况（精确）"),
+    household_type: str | None = Query(None, description="户口类型（精确）"),
+    education: str | None = Query(None, description="学历（精确）"),
+    degree_type: str | None = Query(None, description="学位类型（精确）"),
+    classification: str | None = Query(None, description="学习形式（精确）"),
+    school: str | None = Query(None, description="毕业院校（精确）"),
+    major: str | None = Query(None, description="专业（精确）"),
+    hr_analysis: str | None = Query(None, description="人力资源分析（精确）"),
+    domain_account: str | None = Query(None, description="域账号（前缀匹配）"),
+    departure_reason: str | None = Query(None, description="离职原因（包含匹配）"),
+    age_min: int | None = Query(None, description="年龄下限（含，换算出生年份）"),
+    age_max: int | None = Query(None, description="年龄上限（含，换算出生年份）"),
+    birth_year_min: int | None = Query(None, description="出生年份下限（含）"),
+    birth_year_max: int | None = Query(None, description="出生年份上限（含）"),
+    hire_date_after: date | None = Query(None, description="入职日期起（含）"),
+    hire_date_before: date | None = Query(None, description="入职日期止（含）"),
+    work_start_date_after: date | None = Query(None, description="参加工作时间起（含）"),
+    work_start_date_before: date | None = Query(None, description="参加工作时间止（含）"),
+    graduation_date_after: date | None = Query(None, description="毕业时间起（含）"),
+    graduation_date_before: date | None = Query(None, description="毕业时间止（含）"),
+    departure_date_after: date | None = Query(None, description="离职日期起（含）"),
+    departure_date_before: date | None = Query(None, description="离职日期止（含）"),
+    contract_start_date_after: date | None = Query(None, description="合同开始日期起（含）"),
+    contract_start_date_before: date | None = Query(None, description="合同开始日期止（含）"),
+    contract_end_date_after: date | None = Query(None, description="合同结束日期起（含）"),
+    contract_end_date_before: date | None = Query(None, description="合同结束日期止（含）"),
     page_params: PageParams = Depends(),
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
@@ -288,6 +324,43 @@ async def list_employees(
                 scoped_departments = set(hr_scope.scoped_departments)
         else:
             keyword = hr_scope.employee_number
+    filters = {
+        "position": position,
+        "duty": duty,
+        "job_category": job_category,
+        "level": level,
+        "report_grade": report_grade,
+        "status_category": status_category,
+        "gender": gender,
+        "ethnicity": ethnicity,
+        "native_place": native_place,
+        "marital_status": marital_status,
+        "household_type": household_type,
+        "education": education,
+        "degree_type": degree_type,
+        "classification": classification,
+        "school": school,
+        "major": major,
+        "hr_analysis": hr_analysis,
+        "domain_account": domain_account,
+        "departure_reason": departure_reason,
+        "age_min": age_min,
+        "age_max": age_max,
+        "birth_year_min": birth_year_min,
+        "birth_year_max": birth_year_max,
+        "hire_date_after": hire_date_after,
+        "hire_date_before": hire_date_before,
+        "work_start_date_after": work_start_date_after,
+        "work_start_date_before": work_start_date_before,
+        "graduation_date_after": graduation_date_after,
+        "graduation_date_before": graduation_date_before,
+        "departure_date_after": departure_date_after,
+        "departure_date_before": departure_date_before,
+        "contract_start_date_after": contract_start_date_after,
+        "contract_start_date_before": contract_start_date_before,
+        "contract_end_date_after": contract_end_date_after,
+        "contract_end_date_before": contract_end_date_before,
+    }
     employees, total = await service.list_employees(
         department=department,
         status=status,
@@ -296,6 +369,7 @@ async def list_employees(
         page_size=page_params.page_size,
         include_uncategorized=include_uncategorized,
         departments=scoped_departments,
+        filters={k: v for k, v in filters.items() if v is not None} or None,
     )
     if not hr_scope.is_unrestricted and not hr_scope.scoped_departments:
         # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
@@ -314,6 +388,25 @@ async def list_employees(
         page_size=page_params.page_size,
         total=total,
     )
+
+
+@router.get("/employees/filter-options", summary="员工筛选选项（各字段现有取值聚合）")
+async def get_employee_filter_options(
+    service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 数据范围与员工列表一致：unrestricted 全量；多部门 IN 收敛；self_only 收敛到本人档案
+    departments: set[str] | None = None
+    employee_number: str | None = None
+    if not hr_scope.is_unrestricted:
+        if hr_scope.scoped_departments:
+            departments = set(hr_scope.scoped_departments)
+        else:
+            employee_number = hr_scope.employee_number
+    options = await service.list_filter_options(
+        departments=departments, employee_number=employee_number
+    )
+    return success_response(data=options)
 
 
 @router.post("/employees", summary="创建员工")
@@ -2829,6 +2922,21 @@ async def list_departure_records(
         page_size=page_params.page_size,
         total=total,
     )
+
+
+@router.get("/departure-records/filter-options", summary="离职台账筛选选项（部门/离职类型现有取值聚合）")
+async def get_departure_filter_options(
+    service: DepartureRecordService = Depends(get_departure_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 数据范围与台账列表一致：self_only 无法定位本人记录，直接 403
+    departments: set[str] | None = None
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        departments = set(hr_scope.scoped_departments)
+    options = await service.list_filter_options(departments=departments)
+    return success_response(data=options)
 
 
 @router.post("/departure-records", summary="创建离职台账记录")

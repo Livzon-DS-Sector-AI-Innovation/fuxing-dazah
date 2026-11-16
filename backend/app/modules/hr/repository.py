@@ -157,6 +157,14 @@ class EmployeeRepository:
         await self.session.flush()
         return True
 
+    # 可枚举字段：筛选下拉选项从现有数据聚合（filter-options 端点与此处保持一致）
+    ENUM_FILTER_FIELDS: tuple[str, ...] = (
+        "department", "position", "duty", "job_category", "level", "report_grade",
+        "status_category", "gender", "ethnicity", "native_place", "marital_status",
+        "household_type", "education", "degree_type", "classification",
+        "school", "major", "hr_analysis",
+    )
+
     async def list_employees(
         self,
         *,
@@ -164,12 +172,24 @@ class EmployeeRepository:
         status: str | None = None,
         keyword: str | None = None,
         position: str | None = None,
+        duty: str | None = None,
         job_category: str | None = None,
         level: str | None = None,
-        gender: str | None = None,
-        education: str | None = None,
-        marital_status: str | None = None,
+        report_grade: str | None = None,
         status_category: str | None = None,
+        gender: str | None = None,
+        ethnicity: str | None = None,
+        native_place: str | None = None,
+        marital_status: str | None = None,
+        household_type: str | None = None,
+        education: str | None = None,
+        degree_type: str | None = None,
+        classification: str | None = None,
+        school: str | None = None,
+        major: str | None = None,
+        hr_analysis: str | None = None,
+        domain_account: str | None = None,
+        departure_reason: str | None = None,
         age_min: int | None = None,
         age_max: int | None = None,
         birth_year_min: int | None = None,
@@ -178,6 +198,14 @@ class EmployeeRepository:
         hire_date_before: date | None = None,
         work_start_date_after: date | None = None,
         work_start_date_before: date | None = None,
+        graduation_date_after: date | None = None,
+        graduation_date_before: date | None = None,
+        departure_date_after: date | None = None,
+        departure_date_before: date | None = None,
+        contract_start_date_after: date | None = None,
+        contract_start_date_before: date | None = None,
+        contract_end_date_after: date | None = None,
+        contract_end_date_before: date | None = None,
         include_uncategorized: bool = False,
         departments: set[str] | None = None,
         page: int = 1,
@@ -201,19 +229,44 @@ class EmployeeRepository:
                 | Employee.employee_number.ilike(f"{keyword}%")
             )
         if position:
-            stmt = stmt.where(Employee.position.ilike(f"{position}%"))
+            # 筛选下拉传精确值（选项来自 filter-options 聚合的现有数据）
+            stmt = stmt.where(Employee.position == position)
+        if duty:
+            stmt = stmt.where(Employee.duty == duty)
         if job_category:
             stmt = stmt.where(Employee.job_category == job_category)
         if level:
             stmt = stmt.where(Employee.level == level)
-        if gender:
-            stmt = stmt.where(Employee.gender == gender)
-        if education:
-            stmt = stmt.where(Employee.education == education)
-        if marital_status:
-            stmt = stmt.where(Employee.marital_status == marital_status)
+        if report_grade:
+            stmt = stmt.where(Employee.report_grade == report_grade)
         if status_category:
             stmt = stmt.where(Employee.status_category == status_category)
+        if gender:
+            stmt = stmt.where(Employee.gender == gender)
+        if ethnicity:
+            stmt = stmt.where(Employee.ethnicity == ethnicity)
+        if native_place:
+            stmt = stmt.where(Employee.native_place == native_place)
+        if marital_status:
+            stmt = stmt.where(Employee.marital_status == marital_status)
+        if household_type:
+            stmt = stmt.where(Employee.household_type == household_type)
+        if education:
+            stmt = stmt.where(Employee.education == education)
+        if degree_type:
+            stmt = stmt.where(Employee.degree_type == degree_type)
+        if classification:
+            stmt = stmt.where(Employee.classification == classification)
+        if school:
+            stmt = stmt.where(Employee.school == school)
+        if major:
+            stmt = stmt.where(Employee.major == major)
+        if hr_analysis:
+            stmt = stmt.where(Employee.hr_analysis == hr_analysis)
+        if domain_account:
+            stmt = stmt.where(Employee.domain_account.ilike(f"{domain_account}%"))
+        if departure_reason:
+            stmt = stmt.where(Employee.departure_reason.ilike(f"%{departure_reason}%"))
         # age 列已下线：年龄筛选换算为出生年份区间（近似年龄，与看板口径一致）
         if age_min is not None:
             stmt = stmt.where(Employee.birth_year <= date.today().year - age_min)
@@ -231,6 +284,22 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.work_start_date >= work_start_date_after)
         if work_start_date_before:
             stmt = stmt.where(Employee.work_start_date <= work_start_date_before)
+        if graduation_date_after:
+            stmt = stmt.where(Employee.graduation_date >= graduation_date_after)
+        if graduation_date_before:
+            stmt = stmt.where(Employee.graduation_date <= graduation_date_before)
+        if departure_date_after:
+            stmt = stmt.where(Employee.departure_date >= departure_date_after)
+        if departure_date_before:
+            stmt = stmt.where(Employee.departure_date <= departure_date_before)
+        if contract_start_date_after:
+            stmt = stmt.where(Employee.contract_start_date >= contract_start_date_after)
+        if contract_start_date_before:
+            stmt = stmt.where(Employee.contract_start_date <= contract_start_date_before)
+        if contract_end_date_after:
+            stmt = stmt.where(Employee.contract_end_date >= contract_end_date_after)
+        if contract_end_date_before:
+            stmt = stmt.where(Employee.contract_end_date <= contract_end_date_before)
 
         # 并行执行 COUNT 和数据查询，减少 TTFB
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -250,6 +319,31 @@ class EmployeeRepository:
 
         data_result = await self.session.execute(data_stmt)
         return list(data_result.scalars().all()), total
+
+    async def get_filter_options(
+        self,
+        *,
+        departments: set[str] | None = None,
+        employee_number: str | None = None,
+    ) -> dict[str, list[str]]:
+        """聚合各可枚举字段的现有取值，作为筛选下拉选项。
+
+        员工表体量小（数百行），一次查询拉所需列后内存去重即可；
+        选项跟随数据变化，避免硬编码枚举过期。
+        """
+        cols = [getattr(Employee, f) for f in self.ENUM_FILTER_FIELDS]
+        stmt = select(*cols).where(Employee.is_deleted.is_(False))
+        if departments:
+            stmt = stmt.where(Employee.department.in_(departments))
+        if employee_number:
+            # self_only：选项收敛到本人档案的字段值
+            stmt = stmt.where(Employee.employee_number == employee_number)
+        rows = (await self.session.execute(stmt)).all()
+        options: dict[str, list[str]] = {}
+        for field in self.ENUM_FILTER_FIELDS:
+            values = {getattr(row, field) for row in rows} - {None, ""}
+            options[field] = sorted(values)
+        return options
 
     async def create(self, employee: Employee) -> Employee:
         self.session.add(employee)
@@ -743,6 +837,24 @@ class DepartureRecordRepository:
 
         data_result = await self.session.execute(data_stmt)
         return list(data_result.scalars().all()), total
+
+    async def get_filter_options(
+        self, *, departments: set[str] | None = None
+    ) -> dict[str, list[str]]:
+        """聚合部门/离职类型的现有取值，作为筛选下拉选项（跟随飞书源表变化）。"""
+        stmt = (
+            select(DepartureRecord.department, DepartureRecord.offboarding_type)
+            .where(DepartureRecord.is_deleted.is_(False))
+        )
+        if departments:
+            stmt = stmt.where(DepartureRecord.department.in_(departments))
+        rows = (await self.session.execute(stmt)).all()
+        dept_values = {r.department for r in rows} - {None, ""}
+        type_values = {r.offboarding_type for r in rows} - {None, ""}
+        return {
+            "departments": sorted(dept_values),
+            "offboarding_types": sorted(type_values),
+        }
 
     async def create(self, record: DepartureRecord) -> DepartureRecord:
         self.session.add(record)

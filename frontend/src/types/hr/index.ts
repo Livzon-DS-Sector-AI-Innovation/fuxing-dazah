@@ -154,6 +154,69 @@ export interface EmployeeListResponse {
   }
 }
 
+/** 员工筛选面板：各可枚举字段的现有取值（后端聚合，跟随数据变化） */
+export interface EmployeeFilterOptions {
+  department?: string[]
+  position?: string[]
+  duty?: string[]
+  job_category?: string[]
+  level?: string[]
+  report_grade?: string[]
+  status_category?: string[]
+  gender?: string[]
+  ethnicity?: string[]
+  native_place?: string[]
+  marital_status?: string[]
+  household_type?: string[]
+  education?: string[]
+  degree_type?: string[]
+  classification?: string[]
+  school?: string[]
+  major?: string[]
+  hr_analysis?: string[]
+}
+
+/**
+ * 员工档案字段级筛选（筛选面板状态）：
+ * 下拉/文本为单值；日期范围为 [起, 止]（YYYY-MM-DD）；出生年份为 [起年, 止年]。
+ */
+export interface EmployeeFieldFilters {
+  position?: string
+  duty?: string
+  job_category?: string
+  level?: string
+  report_grade?: string
+  status_category?: string
+  gender?: string
+  ethnicity?: string
+  native_place?: string
+  marital_status?: string
+  household_type?: string
+  education?: string
+  degree_type?: string
+  classification?: string
+  school?: string
+  major?: string
+  hr_analysis?: string
+  domain_account?: string
+  departure_reason?: string
+  age_min?: number
+  age_max?: number
+  birth_year?: [number, number]
+  graduation_date?: [string, string]
+  work_start_date?: [string, string]
+  hire_date?: [string, string]
+  departure_date?: [string, string]
+  contract_start_date?: [string, string]
+  contract_end_date?: [string, string]
+}
+
+/** 离职台账筛选下拉选项（部门/离职类型现有取值，后端聚合） */
+export interface DepartureFilterOptions {
+  departments?: string[]
+  offboarding_types?: string[]
+}
+
 export interface EmployeeResponse {
   code: number
   message: string

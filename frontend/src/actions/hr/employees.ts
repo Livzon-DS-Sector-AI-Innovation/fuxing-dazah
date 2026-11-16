@@ -12,6 +12,7 @@ import {
   TeamUpdateInput,
   TeamListResponse,
   PositionOption,
+  EmployeeFilterOptions,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -26,10 +27,55 @@ export async function fetchEmployeesAction(
     page?: number
     page_size?: number
     include_uncategorized?: boolean
+    // ── 字段级筛选（档案筛选面板；下拉精确匹配，选项来自 filter-options）──
+    position?: string
+    duty?: string
+    job_category?: string
+    level?: string
+    report_grade?: string
+    status_category?: string
+    gender?: string
+    ethnicity?: string
+    native_place?: string
+    marital_status?: string
+    household_type?: string
+    education?: string
+    degree_type?: string
+    classification?: string
+    school?: string
+    major?: string
+    hr_analysis?: string
+    domain_account?: string
+    departure_reason?: string
+    age_min?: number
+    age_max?: number
+    birth_year_min?: number
+    birth_year_max?: number
+    hire_date_after?: string
+    hire_date_before?: string
+    work_start_date_after?: string
+    work_start_date_before?: string
+    graduation_date_after?: string
+    graduation_date_before?: string
+    departure_date_after?: string
+    departure_date_before?: string
+    contract_start_date_after?: string
+    contract_start_date_before?: string
+    contract_end_date_after?: string
+    contract_end_date_before?: string
   }
 ): Promise<EmployeeListResponse> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 20 })
   return fetchHrApi<EmployeeListResponse>(`/hr/employees${qs}`, { errorMessage: '获取员工列表失败' })
+}
+
+/** 员工筛选下拉选项：各可枚举字段的现有取值聚合 */
+export async function fetchEmployeeFilterOptionsAction(): Promise<EmployeeFilterOptions> {
+  const res = await fetchHrApi<{ code: number; message: string; data: EmployeeFilterOptions }>(
+    '/hr/employees/filter-options',
+    { errorMessage: '获取筛选选项失败' },
+  )
+  return res.data || {}
 }
 
 export async function createEmployee(data: EmployeeCreateInput) {

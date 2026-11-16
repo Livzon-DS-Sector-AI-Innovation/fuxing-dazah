@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import {
   OnboardingRecordListResponse,
   DepartureRecordListResponse,
+  DepartureFilterOptions,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload, fetchHrText } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -47,6 +48,15 @@ export async function fetchDepartureRecords(
 ): Promise<DepartureRecordListResponse> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 20 })
   return fetchHrApi<DepartureRecordListResponse>(`/hr/departure-records${qs}`, { errorMessage: '获取离职台账记录失败' })
+}
+
+/** 离职台账筛选下拉选项：部门/离职类型现有取值聚合（跟随飞书源表变化） */
+export async function fetchDepartureFilterOptionsAction(): Promise<DepartureFilterOptions> {
+  const res = await fetchHrApi<{ code: number; message: string; data: DepartureFilterOptions }>(
+    '/hr/departure-records/filter-options',
+    { errorMessage: '获取筛选选项失败' },
+  )
+  return res.data || {}
 }
 
 export async function createDepartureRecord(data: {
