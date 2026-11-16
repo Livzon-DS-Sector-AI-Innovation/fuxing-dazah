@@ -1,14 +1,19 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Table, Space, Input, Tag, Modal, Form, Select, DatePicker, Popconfirm } from 'antd'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import {
+  App, Alert, Button, Table, Space, Input, Tag, Modal, Form, Select,
+  DatePicker, Popconfirm, Descriptions, Typography,
+} from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
   EyeOutlined,
   PlusOutlined,
   DeleteOutlined,
-  SendOutlined } from '@ant-design/icons'
+  SendOutlined,
+  CloudSyncOutlined,
+} from '@ant-design/icons'
 import { DepartureRecord } from '@/types/hr'
 import {
   fetchDepartureRecords,
@@ -18,19 +23,37 @@ import {
   previewDepartureCertificate,
   sendDepartureCertificate,
   deleteDepartureRecordAction,
+  triggerEmployeeSync,
 } from '@/actions/hr'
+import { usePermission } from '@/hooks/usePermission'
+
+const { Text } = Typography
+
+/** 离职台账页的同步状态（服务端注入；绑定离职表后页面转只读展示） */
+export interface DepartureSyncInfo {
+  departure_table_name: string
+  last_sync_at: string | null
+}
 
 interface DepartureClientProps {
   initialRecords: DepartureRecord[]
   initialTotal: number
   fetchAction?: typeof fetchDepartureRecords
+  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示同步横幅 */
+  syncInfo?: DepartureSyncInfo
+}
+
+function formatSyncTime(iso: string | null): string {
+  return iso ? iso.replace('T', ' ') : '从未同步'
 }
 
 export default function DepartureClient({
   initialRecords,
   initialTotal,
-  fetchAction }: DepartureClientProps) {
+  fetchAction,
+  syncInfo }: DepartureClientProps) {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
   const [records, setRecords] = useState<DepartureRecord[]>(initialRecords)
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
@@ -51,6 +74,11 @@ export default function DepartureClient({
   const [certRecord, setCertRecord] = useState<DepartureRecord | null>(null)
   const [certEmail, setCertEmail] = useState('')
   const [certSending, setCertSending] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+
+  // 同步模式：数据源为飞书离职人员管理表，本地新建/删除无意义（下轮同步会覆盖）
+  const syncMode = Boolean(syncInfo)
+  const canManage = hasPermission('hr:settings:manage')
 
   useEffect(() => {
     fetchDepartmentsAction({ page_size: 200 }).then(r => {
@@ -120,6 +148,26 @@ export default function DepartureClient({
     loadData()
   }, [filterDepartment, filterOffboardingType, searchKeyword, page, pageSize])
 
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      const res = await triggerEmployeeSync()
+      const dep = res.data?.departures
+      if (dep?.error) {
+        message.warning(`员工档案已同步，但离职台账拉取失败：${dep.error}`, 10)
+      } else if (dep) {
+        message.success(`同步完成：离职台账 ${dep.total ?? 0} 行（新增 ${dep.created ?? 0} / 更新 ${dep.updated ?? 0}）`)
+      } else {
+        message.success('同步完成')
+      }
+      loadData()
+    } catch (err: any) {
+      message.error(err.message || '同步失败')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const handlePreviewCert = async () => {
     if (!certRecord) return
     try {
@@ -145,52 +193,58 @@ export default function DepartureClient({
   const offboardingTypeColorMap: Record<string, string> = {
     '辞职': 'default',
     '辞退': 'error',
+    '个人原因': 'default',
     '合同到期': 'warning',
     '退休': 'success',
+    '退休返聘到期': 'success',
     '其他': 'processing' }
+
+  // 列筛选选项从当前数据动态生成（部门/离职类型跟随飞书源表变化，避免硬编码过期）
+  const deptFilters = useMemo(() => {
+    const names = [...new Set(records.map(r => r.department).filter(Boolean))].sort()
+    return names.map(n => ({ text: n, value: n }))
+  }, [records])
+  const typeFilters = useMemo(() => {
+    const types = [...new Set(records.map(r => r.offboarding_type).filter(Boolean))].sort()
+    return types.map(t => ({ text: t, value: t }))
+  }, [records])
 
   const columns: ColumnsType<DepartureRecord> = [
     {
       title: '姓名',
       dataIndex: 'name',
       key: 'name',
-      width: 100,
+      width: 90,
       fixed: 'left' },
+    {
+      title: '工号',
+      dataIndex: 'employee_number',
+      key: 'employee_number',
+      width: 100,
+      render: (v: string) => v ? <Text copyable={Boolean(v)} className="text-xs">{v}</Text> : '-' },
     {
       title: '部门',
       dataIndex: 'department',
       key: 'department',
-      width: 120,
-      filters: [
-        { text: '生产制造部', value: '生产制造部' },
-        { text: '质量管理部', value: '质量管理部' },
-        { text: '设备动力部', value: '设备动力部' },
-        { text: '发酵工程部', value: '发酵工程部' },
-        { text: '提炼一部', value: '提炼一部' },
-        { text: '提炼二部', value: '提炼二部' },
-        { text: '提炼三部', value: '提炼三部' },
-        { text: '安全环保部', value: '安全环保部' },
-        { text: '采购部', value: '采购部' },
-        { text: '人事行政部', value: '人事行政部' },
-        { text: '肠激酶车间', value: '肠激酶车间' },
-        { text: '财务部', value: '财务部' },
-      ],
+      width: 130,
+      filters: deptFilters,
       onFilter: (value, record: DepartureRecord) => record.department === String(value) },
-    {
-      title: '班组',
-      dataIndex: 'team',
-      key: 'team',
-      width: 100 },
     {
       title: '职位',
       dataIndex: 'position',
       key: 'position',
-      width: 140 },
+      width: 120 },
+    {
+      title: '职务',
+      dataIndex: 'duty',
+      key: 'duty',
+      width: 100,
+      render: (v: string) => v || '-' },
     {
       title: '离职日期',
       dataIndex: 'offboarding_date',
       key: 'offboarding_date',
-      width: 120,
+      width: 110,
       defaultSortOrder: 'descend',
       sorter: (a: DepartureRecord, b: DepartureRecord) =>
         new Date(b.offboarding_date || '').getTime() - new Date(a.offboarding_date || '').getTime() },
@@ -198,17 +252,11 @@ export default function DepartureClient({
       title: '离职类型',
       dataIndex: 'offboarding_type',
       key: 'offboarding_type',
-      width: 100,
+      width: 110,
       render: (val: string) => (
         <Tag color={offboardingTypeColorMap[val] || 'default'}>{val || '-'}</Tag>
       ),
-      filters: [
-        { text: '辞职', value: '辞职' },
-        { text: '辞退', value: '辞退' },
-        { text: '合同到期', value: '合同到期' },
-        { text: '退休', value: '退休' },
-        { text: '其他', value: '其他' },
-      ],
+      filters: typeFilters,
       onFilter: (value, record: DepartureRecord) => record.offboarding_type === String(value) },
     {
       title: '离职时司龄',
@@ -219,28 +267,22 @@ export default function DepartureClient({
       title: '入丽珠时间',
       dataIndex: 'livo_entry_date',
       key: 'livo_entry_date',
-      width: 120 },
+      width: 110 },
     {
       title: '学历',
       dataIndex: 'education',
       key: 'education',
       width: 80 },
     {
-      title: '手机',
-      dataIndex: 'phone',
-      key: 'phone',
-      width: 120 },
-    {
-      title: '离职原因',
-      dataIndex: 'offboarding_reason',
-      key: 'offboarding_reason',
-      width: 160,
-      ellipsis: true,
-      render: (val: string[]) => val?.join(', ') || '-' },
+      title: '统计类别',
+      dataIndex: 'status_category',
+      key: 'status_category',
+      width: 100,
+      render: (v: string) => v || '-' },
     {
       title: '操作',
       key: 'action',
-      width: 230,
+      width: 180,
       fixed: 'right',
       render: (_: any, record: DepartureRecord) => (
         <Space size="small">
@@ -254,25 +296,31 @@ export default function DepartureClient({
           </Button>
           <Button type="text" size="small" icon={<SendOutlined />}
             onClick={() => { setCertRecord(record); setCertEmail(''); setCertOpen(true) }}>证明</Button>
-          <Popconfirm
-            title="确认删除？"
-            onConfirm={async () => {
-              try {
-                await deleteDepartureRecordAction(record.id)
-                message.success('已删除')
-                loadData()
-              } catch (err: any) {
-                message.error(err.message || '删除失败')
-              }
-            }}
-          >
-            <Button type="text" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
+          {!syncMode && (
+            <Popconfirm
+              title="确认删除？"
+              onConfirm={async () => {
+                try {
+                  await deleteDepartureRecordAction(record.id)
+                  message.success('已删除')
+                  loadData()
+                } catch (err: any) {
+                  message.error(err.message || '删除失败')
+                }
+              }}
+            >
+              <Button type="text" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ) },
   ]
+
+  const detailItem = (label: string, value: unknown) => (
+    { key: label, label, children: (value === null || value === undefined || value === '') ? '-' : String(value) }
+  )
 
   return (
     <div className="space-y-4">
@@ -282,8 +330,25 @@ export default function DepartureClient({
         </h1>
       </div>
 
+      {syncMode && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<CloudSyncOutlined />}
+          title={`数据来源：飞书「${syncInfo!.departure_table_name}」单向同步（员工档案同步顺带拉取，每天 02:00 自动对账）`}
+          description={`上次同步：${formatSyncTime(syncInfo!.last_sync_at)}；增删改请在飞书表中操作`}
+          action={canManage ? (
+            <Button size="small" icon={<CloudSyncOutlined />} loading={syncing} onClick={handleSync}>
+              立即同步
+            </Button>
+          ) : undefined}
+        />
+      )}
+
       <div className="flex flex-wrap gap-3 items-center">
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
+        {!syncMode && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
+        )}
         <Input
           placeholder="搜索姓名/部门/职位"
           value={searchKeyword}
@@ -362,25 +427,66 @@ export default function DepartureClient({
         </div>
       </Modal>
 
-      <Modal title="离职详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={600}>
+      <Modal title={`离职详情${detailRecord?.name ? ` — ${detailRecord.name}` : ''}`}
+        open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={720}>
         {detailRecord && (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <tbody>
-              {[
-                ['姓名', detailRecord.name],
-                ['部门', detailRecord.department],
-                ['职位', detailRecord.position],
-                ['离职日期', detailRecord.offboarding_date],
-                ['离职类型', detailRecord.offboarding_type],
-                ['离职原因', Array.isArray(detailRecord.offboarding_reason) ? detailRecord.offboarding_reason.join(', ') : (detailRecord.offboarding_reason || '')],
-              ].map(([label, val], i) => (
-                <tr key={i}>
-                  <td style={{ padding: '8px 12px', border: '1px solid #eee', background: '#f5f5f5', fontWeight: 600, width: '30%' }}>{label}</td>
-                  <td style={{ padding: '8px 12px', border: '1px solid #eee' }}>{val || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="space-y-4">
+            <Descriptions title="基本信息" size="small" bordered column={2}
+              items={[
+                detailItem('工号', detailRecord.employee_number),
+                detailItem('姓名', detailRecord.name),
+                detailItem('部门', detailRecord.department),
+                detailItem('岗位', detailRecord.position),
+                detailItem('职务', detailRecord.duty),
+                detailItem('职级', [detailRecord.rank, detailRecord.rank_category].filter(Boolean).join(' / ')),
+                detailItem('性别', detailRecord.gender),
+                detailItem('统计类别', detailRecord.status_category),
+              ]} />
+            <Descriptions title="日期与司龄" size="small" bordered column={2}
+              items={[
+                detailItem('入职日期', detailRecord.livo_entry_date),
+                detailItem('离职日期', detailRecord.offboarding_date),
+                detailItem('参加工作时间', detailRecord.work_start_date),
+                detailItem('离职时司龄', detailRecord.company_tenure_at_leave),
+                detailItem('合同期限', detailRecord.contract_type),
+                detailItem('合同起止', [
+                  detailRecord.contract_start_date, detailRecord.contract_end_date,
+                ].filter(Boolean).join(' ~ ')),
+              ]} />
+            <Descriptions title="离职信息" size="small" bordered column={2}
+              items={[
+                detailItem('离职类型', detailRecord.offboarding_type),
+                detailItem('离职原因', Array.isArray(detailRecord.offboarding_reason) ? detailRecord.offboarding_reason.join('、') : detailRecord.offboarding_reason),
+                detailItem('任命与岗位调动', detailRecord.transfer_history),
+                detailItem('证书', detailRecord.certificates),
+              ]} />
+            <Descriptions title="学历" size="small" bordered column={2}
+              items={[
+                detailItem('学历', detailRecord.education),
+                detailItem('学位类型', detailRecord.degree_type),
+                detailItem('毕业院校', detailRecord.school),
+                detailItem('专业', detailRecord.major),
+                detailItem('全日制', detailRecord.classification),
+              ]} />
+            <Descriptions title="个人与联系（敏感字段按权限脱敏）" size="small" bordered column={2}
+              items={[
+                detailItem('身份证号', detailRecord.id_card),
+                detailItem('身份证有效期', detailRecord.id_card_expiry),
+                detailItem('籍贯', detailRecord.native_place),
+                detailItem('民族', detailRecord.ethnicity),
+                detailItem('户口类型', detailRecord.household_type),
+                detailItem('婚姻状况', detailRecord.marital_status),
+                detailItem('政治面貌', detailRecord.political_status),
+                detailItem('居住地址', detailRecord.residence_address),
+                detailItem('联系电话', detailRecord.phone),
+                detailItem('银行卡号', detailRecord.bank_account),
+                detailItem('紧急联系人', [
+                  detailRecord.emergency_contact_name,
+                  detailRecord.emergency_contact_relation,
+                  detailRecord.emergency_contact_phone,
+                ].filter(Boolean).join(' / ')),
+              ]} />
+          </div>
         )}
       </Modal>
 

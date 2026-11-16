@@ -315,9 +315,14 @@ export interface OnboardingRecordListResponse {
 export interface DepartureRecord {
   id: string
   name: string
+  /** 工号（飞书离职人员管理表同步） */
+  employee_number?: string
   department: string
   team?: string
   position: string
+  duty?: string
+  rank?: string
+  rank_category?: string
   job_category?: string
   gender?: string
   status_category?: string
@@ -329,23 +334,31 @@ export interface DepartureRecord {
   education?: string
   school?: string
   major?: string
+  degree_type?: string
   classification?: string
   id_card?: string
+  id_card_expiry?: string
   native_place?: string
+  ethnicity?: string
   household_type?: string
   marital_status?: string
   political_status?: string
+  residence_address?: string
   phone?: string
+  emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
   bank_account?: string
   contract_type?: string
+  contract_start_date?: string
+  contract_end_date?: string
   transfer_history?: string
   offboarding_type: string
   offboarding_reason?: string[]
   offboarding_reason_2?: string[]
   offboarding_remarks?: string[]
   remarks?: string[]
+  certificates?: string
   feishu_record_id?: string
   feishu_synced_at?: string
   created_at?: string
@@ -1249,6 +1262,15 @@ export interface EmployeeSyncStats {
     errors?: string[]
     error?: string
   }
+  /** 离职台账表附加同步统计（绑定 departure_table_id 后出现） */
+  departures?: {
+    created?: number
+    updated?: number
+    deleted?: number
+    total?: number
+    errors?: string[]
+    error?: string
+  }
 }
 
 export interface EmployeeSyncColumnReport {
@@ -1267,6 +1289,10 @@ export interface EmployeeSyncConfig {
   headcount_table_id: string
   headcount_table_name: string
   headcount_ready: boolean
+  /** 离职人员管理表（可选附加同步：写入离职台账） */
+  departure_table_id: string
+  departure_table_name: string
+  departure_ready: boolean
   is_ready: boolean
   last_sync_at: string | null
   last_stats: EmployeeSyncStats | null

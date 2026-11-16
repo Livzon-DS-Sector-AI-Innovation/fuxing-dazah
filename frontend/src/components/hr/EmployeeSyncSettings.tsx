@@ -50,6 +50,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
         app_token: d.data?.app_token ?? '',
         source_table_id: d.data?.source_table_id ?? '',
         headcount_table_id: d.data?.headcount_table_id ?? '',
+        departure_table_id: d.data?.departure_table_id ?? '',
       })
     } catch (err) {
       message.error(errMsg(err, '加载同步配置失败'))
@@ -115,6 +116,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                 app_token: initialConfig?.app_token ?? '',
                 source_table_id: initialConfig?.source_table_id ?? '',
                 headcount_table_id: initialConfig?.headcount_table_id ?? '',
+                departure_table_id: initialConfig?.departure_table_id ?? '',
               }}
             >
               <Form.Item
@@ -141,6 +143,13 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                 <Input placeholder="粘贴定编数表链接或 table_id" autoComplete="off" allowClear />
               </Form.Item>
               <Form.Item
+                name="departure_table_id"
+                label="离职人员管理表 table_id（可选）"
+                tooltip="同一 Base 中的离职人员管理表（需含「工号」「姓名」「离职日期」列）；绑定后同步至离职台账，留空即不同步"
+              >
+                <Input placeholder="粘贴离职人员管理表链接或 table_id" autoComplete="off" allowClear />
+              </Form.Item>
+              <Form.Item
                 name="enabled"
                 label="启用同步"
                 valuePropName="checked"
@@ -165,6 +174,12 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                     ? (cfg.headcount_table_name || cfg.headcount_table_id)
                     : '未绑定'}
                 </Text>
+                <Text type="secondary" className="text-sm">
+                  离职人员管理表：
+                  {cfg.departure_table_id
+                    ? (cfg.departure_table_name || cfg.departure_table_id)
+                    : '未绑定'}
+                </Text>
 
                 {cfg.last_stats?.headcount?.error && (
                   <Alert
@@ -172,6 +187,14 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                     showIcon
                     title="上次同步未能拉取定编数表"
                     description={cfg.last_stats.headcount.error}
+                  />
+                )}
+                {cfg.last_stats?.departures?.error && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    title="上次同步未能拉取离职人员管理表"
+                    description={cfg.last_stats.departures.error}
                   />
                 )}
 
