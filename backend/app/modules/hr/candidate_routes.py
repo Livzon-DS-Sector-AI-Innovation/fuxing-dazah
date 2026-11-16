@@ -497,10 +497,12 @@ async def resume_preview(
         raise HTTPException(404, "无简历文件")
     if r.resume_url.startswith("minio://"):
         # 服务器部署：从 MinIO 读取（模块 bucket：hr）
-        from app.core.storage import get_object
+        from app.core.storage import get_object, parse_minio_uri
 
-        object_key = r.resume_url[len("minio://"):]
-        obj = get_object("hr", object_key)
+        parsed = parse_minio_uri(r.resume_url)
+        if parsed is None:
+            raise HTTPException(404, "简历文件不存在")
+        obj = get_object(parsed[0], parsed[1])
         if obj is None:
             raise HTTPException(404, "简历文件不存在")
         data, content_type = obj

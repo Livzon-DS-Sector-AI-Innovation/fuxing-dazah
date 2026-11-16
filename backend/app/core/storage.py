@@ -142,6 +142,20 @@ def list_objects(module: str, prefix: str = "") -> list[str]:
         return []
 
 
+def parse_minio_uri(uri: str) -> tuple[str, str] | None:
+    """解析 minio://{module}/{object_key}，返回 (module, object_key)。
+
+    module 段对应 bucket（实际名为 {MINIO_BUCKET_PREFIX}-{module}），
+    object_key 是 bucket 内的对象键。格式不符（缺 module/key 段）返回 None。
+    """
+    if not uri.startswith("minio://"):
+        return None
+    module, sep, object_key = uri[len("minio://"):].partition("/")
+    if not sep or not module or not object_key:
+        return None
+    return module, object_key
+
+
 def is_enabled() -> bool:
     _init()
     return _enabled or False
