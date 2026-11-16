@@ -49,6 +49,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
         enabled: d.data?.enabled ?? false,
         app_token: d.data?.app_token ?? '',
         source_table_id: d.data?.source_table_id ?? '',
+        headcount_table_id: d.data?.headcount_table_id ?? '',
       })
     } catch (err) {
       message.error(errMsg(err, '加载同步配置失败'))
@@ -113,6 +114,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                 enabled: initialConfig?.enabled ?? false,
                 app_token: initialConfig?.app_token ?? '',
                 source_table_id: initialConfig?.source_table_id ?? '',
+                headcount_table_id: initialConfig?.headcount_table_id ?? '',
               }}
             >
               <Form.Item
@@ -130,6 +132,13 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
                 rules={[{ required: true, message: '请填写源数据表 table_id' }]}
               >
                 <Input placeholder="粘贴链接或 table_id，如 tbl18mDH..." autoComplete="off" allowClear />
+              </Form.Item>
+              <Form.Item
+                name="headcount_table_id"
+                label="定编数数据表 table_id（可选）"
+                tooltip="同一 Base 中的定编数表（需含「部门」「部门定编」列）；绑定后每次同步顺带拉取，留空即不同步"
+              >
+                <Input placeholder="粘贴定编数表链接或 table_id" autoComplete="off" allowClear />
               </Form.Item>
               <Form.Item
                 name="enabled"
@@ -150,6 +159,21 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
             {cfg && (
               <div className="pt-4 border-t border-[var(--color-hairline)] space-y-3">
                 <Text type="secondary" className="text-sm">源表：{cfg.source_table_name || '-'}</Text>
+                <Text type="secondary" className="text-sm">
+                  定编数表：
+                  {cfg.headcount_table_id
+                    ? (cfg.headcount_table_name || cfg.headcount_table_id)
+                    : '未绑定'}
+                </Text>
+
+                {cfg.last_stats?.headcount?.error && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    title="上次同步未能拉取定编数表"
+                    description={cfg.last_stats.headcount.error}
+                  />
+                )}
 
                 {cfg.last_stats?.errors && cfg.last_stats.errors.length > 0 && (
                   <Alert

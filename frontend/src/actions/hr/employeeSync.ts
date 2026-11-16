@@ -14,6 +14,7 @@ export async function saveEmployeeSyncConfig(input: {
   enabled: boolean
   app_token: string
   source_table_id: string
+  headcount_table_id?: string
 }): Promise<{ data: EmployeeSyncConfig; message: string }> {
   const res = await fetchHrApi<{ data: EmployeeSyncConfig; message: string }>(
     '/hr/employee-sync/config',
@@ -25,6 +26,7 @@ export async function saveEmployeeSyncConfig(input: {
   )
   revalidatePath('/hr/settings')
   revalidatePath('/hr/profile')
+  revalidatePath('/staffing/headcount')
   return res
 }
 
@@ -34,6 +36,7 @@ export async function triggerEmployeeSync(): Promise<{ data: EmployeeSyncStats; 
     { method: 'POST', errorMessage: '同步失败' },
   )
   revalidatePath('/hr/profile')
+  revalidatePath('/staffing/headcount')
   return res
 }
 

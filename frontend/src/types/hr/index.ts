@@ -1240,6 +1240,15 @@ export interface EmployeeSyncStats {
   skipped?: string
   rebuilt?: number
   removed?: number
+  /** 定编数表附加同步统计（绑定 headcount_table_id 后出现；error=失败原因） */
+  headcount?: {
+    created?: number
+    updated?: number
+    deleted?: number
+    total?: number
+    errors?: string[]
+    error?: string
+  }
 }
 
 export interface EmployeeSyncColumnReport {
@@ -1254,10 +1263,53 @@ export interface EmployeeSyncConfig {
   app_token: string
   source_table_id: string
   source_table_name: string
+  /** 定编数表（可选附加同步：与员工档案同一 Base，一次同步顺带拉取） */
+  headcount_table_id: string
+  headcount_table_name: string
+  headcount_ready: boolean
   is_ready: boolean
   last_sync_at: string | null
   last_stats: EmployeeSyncStats | null
   column_report?: EmployeeSyncColumnReport
+}
+
+// ─── 编制数（部门定编） ───
+
+/** 岗位明细解析结果（「经理×1」→ {name:'经理', count:1}；无数量时 count=null） */
+export interface HeadcountPosition {
+  name: string
+  count: number | null
+}
+
+export interface HeadcountPlanRow {
+  department: string
+  department_quota: number
+  /** 本地实时统计的在编人数（未离职口径） */
+  actual_count: number
+  /** 飞书定编表手填的「现有人数」（仅对账参考，不作计算口径） */
+  source_current_count: number | null
+  /** 缺编 = 定编 - 在编（负数=超编） */
+  vacancy: number
+  position_detail: string
+  positions: HeadcountPosition[]
+  sort_order: number
+  /** 部门名是否匹配到员工档案部门（false=建议核对名称写法） */
+  matched: boolean
+  feishu_synced_at: string | null
+}
+
+export interface HeadcountSummary {
+  total_quota: number
+  total_actual: number
+  total_vacancy: number
+  achievement_rate: number
+  department_count: number
+  unmatched_departments: string[]
+}
+
+export interface HeadcountData {
+  plans: HeadcountPlanRow[]
+  summary: HeadcountSummary
 }
 
 /** 员工档案页所需的同步状态精简形态（服务端注入） */
