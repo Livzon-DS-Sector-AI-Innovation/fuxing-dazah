@@ -333,7 +333,9 @@ class TestDeviationLifecycle:
             assert [log["action"] for log in closed["logs"]] == [
                 "create",
                 "start_investigation",
+                "edit",  # 补录调查
                 "submit_assessment",
+                "edit",  # 补录评估与涉及对象处理意见
                 "close",
             ]
 
@@ -352,6 +354,59 @@ class TestDeviationLifecycle:
                     },
                 )
             ).status_code == 409
+
+    async def test_edit_writes_section_log(self) -> None:
+        """编辑保存写一条 edit 日志：记操作人与被改的分区，不记变更内容。
+
+        同值重放（含涉及对象明细原样重发）不算编辑不写日志；跨分区
+        一次保存只写一条并把分区名合并进说明，替代纸质记录上
+        「谁动过哪一部分」的修改痕迹追溯。
+        """
+        async with _client(WRITE) as (ac, _):
+            dev = await _create(ac)
+            dev_id = dev["id"]
+
+            # 同值重放不算编辑
+            replay = await ac.put(
+                f"/api/v1/qa/deviations/{dev_id}",
+                json={
+                    "description": dev["description"],
+                    "reporter_name": "李蝶",
+                    "items": dev["items"],
+                },
+            )
+            assert replay.status_code == 200, replay.text
+            assert [log["action"] for log in replay.json()["data"]["logs"]] == [
+                "create"
+            ]
+
+            # 跨分区一次保存：报告 + 评估
+            edited = await ac.put(
+                f"/api/v1/qa/deviations/{dev_id}",
+                json={
+                    "description": "检验员使用紫外分光光度计前未做波长准确性确认（复核补充）",
+                    "classification": "minor",
+                },
+            )
+            assert edited.status_code == 200, edited.text
+            logs = edited.json()["data"]["logs"]
+            assert [log["action"] for log in logs] == ["create", "edit"]
+            edit_log = logs[-1]
+            assert edit_log["operator_name"]
+            assert edit_log["from_status"] == edit_log["to_status"] == "draft"
+            assert "偏差报告" in edit_log["comment"]
+            assert "偏差评估" in edit_log["comment"]
+            assert "偏差调查" not in edit_log["comment"]
+
+            # 单独改调查分区
+            resp = await ac.put(
+                f"/api/v1/qa/deviations/{dev_id}",
+                json={"direct_cause": "检验员疏忽忘记波长准确性确认"},
+            )
+            assert resp.status_code == 200, resp.text
+            last = resp.json()["data"]["logs"][-1]
+            assert last["action"] == "edit"
+            assert last["comment"] == "编辑部分：偏差调查"
 
     async def test_invalid_transition_rejected(self) -> None:
         """不允许跳过调查直接关闭：状态机只接受相邻推进。"""

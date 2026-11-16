@@ -410,7 +410,7 @@ class DeviationStatusLog(BaseModel):
     action: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
-        comment="create/start_investigation/submit_assessment/close/extend",
+        comment="create/start_investigation/submit_assessment/close/extend/edit",
     )
     operator_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
