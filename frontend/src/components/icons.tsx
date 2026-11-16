@@ -169,17 +169,6 @@ export function BellIcon({ className }: IconProps) {
   )
 }
 
-export function IdCardIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
-      <circle cx="8.5" cy="11" r="2" />
-      <path d="M5.5 16c.5-1.5 1.6-2.2 3-2.2s2.5.7 3 2.2" />
-      <path d="M14.5 9.5h4M14.5 12.5h4M14.5 15.5h4" />
-    </svg>
-  )
-}
-
 const iconMap: Record<string, React.ComponentType<IconProps>> = {
   factory: FactoryIcon,
   cog: CogIcon,
@@ -195,7 +184,6 @@ const iconMap: Record<string, React.ComponentType<IconProps>> = {
   archive: ArchiveIcon,
   cart: CartIcon,
   tool: ToolIcon,
-  "id-card": IdCardIcon,
 }
 
 export function ModuleIcon({ name, className }: { name: string; className?: string }) {

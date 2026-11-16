@@ -99,7 +99,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
       width: 200,
       render: (v: string, row) => (
         row.matched
-          ? <Link href={`/staffing/profile?department=${encodeURIComponent(v)}`} className="font-medium">{v}</Link>
+          ? <Link href={`/hr/profile?department=${encodeURIComponent(v)}`} className="font-medium">{v}</Link>
           : (
             <Tooltip title="员工档案中未找到同名部门，在编按 0 统计；请核对定编表与档案的部门写法">
               <span className="font-medium">{v}</span>
@@ -196,7 +196,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
             <>
               在 员工档案 页顶部的「多维表格同步」面板中填写「定编数数据表 table_id」，
               绑定后每次同步将顺带拉取编制数据。
-              <Link href="/staffing/profile" className="ml-1">
+              <Link href="/hr/profile" className="ml-1">
                 去设置 <SettingOutlined />
               </Link>
             </>
