@@ -2757,6 +2757,11 @@ class InterviewFeedbackService:
         return fb
 
 
+# 候选人档案 match_report 中面试摘要段的定位标题头（初筛段有自己的
+# 【候选人匹配度报告】头；两条链路拼接互不覆盖，screen_candidate 同步使用）
+INTERVIEW_SUMMARY_HEADER = "【面试胜任度摘要】"
+
+
 class CandidateAnalysisService:
     """候选人胜任度多维分析报告：面试记录提交后自动生成。"""
 
@@ -2895,11 +2900,16 @@ class CandidateAnalysisService:
                 interview.notes = f"{notes}\n{prefix} {joined}".strip()
                 await InterviewRepository(self.session).update(interview)
 
-        # 回写候选人匹配报告摘要
+        # 回写候选人匹配报告：面试摘要追加在初筛匹配报告之后（不覆盖——两条评估
+        # 链路各有价值，档案上拼接展示）；重复生成时先移除旧摘要段避免多轮叠加
         if result.get("summary"):
             c = await CandidateRepository(self.session).get_by_id(candidate_id)
             if c:
-                c.match_report = str(result["summary"])
+                base = (c.match_report or "").split(INTERVIEW_SUMMARY_HEADER)[0].rstrip()
+                c.match_report = (
+                    (f"{base}\n\n" if base else "")
+                    + f"{INTERVIEW_SUMMARY_HEADER}\n{result['summary']}"
+                )
                 await CandidateRepository(self.session).update(c)
 
         return report

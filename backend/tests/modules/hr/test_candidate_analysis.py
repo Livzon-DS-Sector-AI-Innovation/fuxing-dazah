@@ -61,9 +61,9 @@ class TestCandidateAnalysis:
         # 联动1：面试建议写入面试备注
         iv = await db_session.get(m.Interview, interview.id)
         assert "英语文献翻译测试" in (iv.notes or "")
-        # 联动2：候选人对匹配报告回写摘要
+        # 联动2：候选人档案 match_report 回写面试摘要段（带定位标题头）
         c = await db_session.get(m.Candidate, candidate.id)
-        assert c.match_report == "综合素质优秀的候选人。"
+        assert c.match_report == "【面试胜任度摘要】\n综合素质优秀的候选人。"
 
     async def test_regenerate_soft_deletes_old(self, db_session: AsyncSession, monkeypatch):
         monkeypatch.setattr(
@@ -87,3 +87,48 @@ class TestCandidateAnalysis:
         service = CandidateAnalysisService(db_session)
         with pytest.raises(ValueError, match="面试记录"):
             await service.generate(candidate.id, interview.id)
+
+    async def test_summary_appends_after_screening_report(self, db_session: AsyncSession, monkeypatch):
+        """面试摘要追加在初筛匹配报告之后，不覆盖初筛内容。"""
+        monkeypatch.setattr(
+            "app.modules.hr.ai_service.AiChatService.call_json",
+            AsyncMock(return_value=_FAKE_RESULT),
+        )
+        candidate, interview = await _create_fixture(db_session)
+        candidate.match_report = "【候选人匹配度报告】应聘岗位：注册专员\n📋 推荐等级：推荐"
+        await db_session.flush()
+
+        await CandidateAnalysisService(db_session).generate(candidate.id, interview.id)
+        c = await db_session.get(m.Candidate, candidate.id)
+        assert c.match_report.startswith("【候选人匹配度报告】应聘岗位：注册专员")
+        assert "【面试胜任度摘要】\n综合素质优秀的候选人。" in c.match_report
+
+    async def test_regenerate_summary_not_duplicated(self, db_session: AsyncSession, monkeypatch):
+        """重复生成报告：摘要段替换不叠加，match_report 只有一段摘要。"""
+        monkeypatch.setattr(
+            "app.modules.hr.ai_service.AiChatService.call_json",
+            AsyncMock(return_value=_FAKE_RESULT),
+        )
+        candidate, interview = await _create_fixture(db_session)
+        service = CandidateAnalysisService(db_session)
+        await service.generate(candidate.id, interview.id)
+        await service.generate(candidate.id, interview.id)
+
+        c = await db_session.get(m.Candidate, candidate.id)
+        assert c.match_report.count("【面试胜任度摘要】") == 1
+        assert c.match_report == "【面试胜任度摘要】\n综合素质优秀的候选人。"
+
+    async def test_rescreen_keeps_interview_summary(self, db_session: AsyncSession):
+        """反向：已生成面试摘要的候选人再跑 AI 初筛，摘要段保留拼接。"""
+        from app.modules.hr.resume_screening_service import _merge_match_report
+
+        merged = _merge_match_report(
+            "【面试胜任度摘要】\n综合素质优秀，建议推进复试。",
+            "【候选人匹配度报告】应聘岗位：注册专员",
+        )
+        assert merged.startswith("【候选人匹配度报告】应聘岗位：注册专员")
+        assert "【面试胜任度摘要】\n综合素质优秀，建议推进复试。" in merged
+        # 无摘要段的（未生成过面试报告）保持原样整篇替换
+        assert _merge_match_report(
+            None, "【候选人匹配度报告】新报告",
+        ) == "【候选人匹配度报告】新报告"

@@ -17,7 +17,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.hr.models import Candidate, JobRequirement, ResumeScreeningResult
-from app.modules.hr.service import CandidateService, NotFoundException
+from app.modules.hr.service import (
+    INTERVIEW_SUMMARY_HEADER,
+    CandidateService,
+    NotFoundException,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +348,16 @@ def _score_table(value: object) -> list[dict]:
     return result
 
 
+def _merge_match_report(candidate_match_report: str | None, screening_report: str) -> str:
+    """初筛报告回写候选人档案时保留已有面试摘要段（两条评估链路拼接互不覆盖）。"""
+    if candidate_match_report and INTERVIEW_SUMMARY_HEADER in candidate_match_report:
+        summary_part = INTERVIEW_SUMMARY_HEADER + candidate_match_report.split(
+            INTERVIEW_SUMMARY_HEADER, 1,
+        )[1]
+        return f"{screening_report}\n\n{summary_part}"
+    return screening_report
+
+
 class ResumeScreeningService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -497,9 +511,13 @@ class ResumeScreeningService:
             operator=operator,
             candidate_id=candidate_id,
         )
-        # 初筛结论回写候选人：推荐等级 + 匹配报告全文（详情页与列表直接可见）
+        # 初筛结论回写候选人：推荐等级 + 匹配报告全文（详情页与列表直接可见）。
+        # 已生成过面试摘要的（match_report 含摘要段）保留摘要拼接——两条评估
+        # 链路互不覆盖，档案上两段并存
         candidate.recommendation_level = result.recommendation
-        candidate.match_report = result.match_report
+        candidate.match_report = _merge_match_report(
+            candidate.match_report, result.match_report,
+        )
         # 档案字段回填修正：AI 结构化提取（candidate_profile）比上传建档时的
         # 规则解析更准（如校名介词污染），有值即覆盖——仅限档案核心信息字段，
         # 姓名/联系方式等身份字段不覆盖（AI 也可能抄错，保守不动）
