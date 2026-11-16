@@ -38,7 +38,7 @@ export async function createEmployee(data: EmployeeCreateInput) {
     body: JSON.stringify(data),
     errorMessage: '创建员工失败',
   })
-  revalidatePath('/hr/profile')
+  revalidatePath('/staffing/profile')
   return res
 }
 
@@ -52,7 +52,7 @@ export async function updateEmployee(id: string, data: EmployeeUpdateInput) {
     body: JSON.stringify(data),
     errorMessage: '更新员工失败',
   })
-  revalidatePath('/hr/profile')
+  revalidatePath('/staffing/profile')
   return res
 }
 
@@ -61,7 +61,7 @@ export async function deleteEmployee(id: string) {
     method: 'DELETE',
     errorMessage: '删除员工失败',
   })
-  revalidatePath('/hr/profile')
+  revalidatePath('/staffing/profile')
   return res
 }
 

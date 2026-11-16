@@ -69,7 +69,7 @@ export async function deleteDepartureRecordAction(id: string) {
     method: 'DELETE',
     errorMessage: '删除离职记录失败',
   })
-  revalidatePath('/hr/departure')
+  revalidatePath('/staffing/departure')
   return res
 }
 

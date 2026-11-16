@@ -6,7 +6,11 @@ import EmployeeSyncSettings from '@/components/hr/EmployeeSyncSettings'
 import { fetchEmployeeSyncConfig } from '@/actions/hr'
 import type { EmployeeSyncBanner, EmployeeSyncConfig } from '@/types/hr'
 
-export default async function EmployeeProfilePage() {
+export default async function EmployeeProfilePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ department?: string }>
+}) {
   // 同步配置服务端直取：档案页 banner + 同步管理折叠面板共用；
   // 读取失败（无权限/后端异常）按未启用处理
   let syncConfig: EmployeeSyncConfig | null = null
@@ -25,6 +29,9 @@ export default async function EmployeeProfilePage() {
     }
   }
 
+  // ?department=xxx：编制页等部门下钻进入时预选部门页签
+  const { department } = await searchParams
+
   return (
     <Suspense fallback={<div className="h-64" />}>
       <div className="space-y-4">
@@ -37,6 +44,7 @@ export default async function EmployeeProfilePage() {
           initialEmployees={[]}
           initialTotal={0}
           syncInfo={syncInfo}
+          initialDepartment={department}
         />
       </div>
     </Suspense>

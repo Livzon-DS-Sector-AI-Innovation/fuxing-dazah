@@ -37,6 +37,15 @@ const nextConfig: NextConfig = {
     ]
   },
 
+  // 人员全周期菜单拆分后，员工档案/入职/离职迁至 /staffing/*；旧链接（书签/聊天记录）301 兜底
+  async redirects() {
+    return [
+      { source: '/hr/profile', destination: '/staffing/profile', permanent: true },
+      { source: '/hr/onboarding', destination: '/staffing/onboarding', permanent: true },
+      { source: '/hr/departure', destination: '/staffing/departure', permanent: true },
+    ]
+  },
+
 };
 
 export default nextConfig;

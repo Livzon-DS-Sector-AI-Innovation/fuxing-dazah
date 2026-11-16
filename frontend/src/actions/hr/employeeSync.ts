@@ -25,7 +25,7 @@ export async function saveEmployeeSyncConfig(input: {
     },
   )
   revalidatePath('/hr/settings')
-  revalidatePath('/hr/profile')
+  revalidatePath('/staffing/profile')
   revalidatePath('/staffing/headcount')
   return res
 }
@@ -35,7 +35,7 @@ export async function triggerEmployeeSync(): Promise<{ data: EmployeeSyncStats; 
     '/hr/employee-sync/sync',
     { method: 'POST', errorMessage: '同步失败' },
   )
-  revalidatePath('/hr/profile')
+  revalidatePath('/staffing/profile')
   revalidatePath('/staffing/headcount')
   return res
 }

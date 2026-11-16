@@ -330,6 +330,21 @@ export const moduleMenus: ModuleMenu[] = [
     ],
   },
   {
+    key: "staffing",
+    label: "人员全周期管理",
+    icon: "id-card",
+    path: "/staffing",
+    // 从人事管理拆出的生命周期线：编制→入职→档案→离职；权限码沿用 HR 后端（hr/deps.py），
+    // 模块级并集保证「只有其中一个页面权限」的用户也能看到本模块
+    permissions: ["hr:profile:read", "hr:onboarding:read", "hr:departure:read"],
+    children: [
+      { key: "headcount", label: "编制管理", path: "/staffing/headcount", permissions: ["hr:profile:read"] },
+      { key: "profile", label: "员工档案", path: "/staffing/profile", permissions: ["hr:profile:read"] },
+      { key: "onboarding", label: "入职台账", path: "/staffing/onboarding", permissions: ["hr:onboarding:read"] },
+      { key: "departure", label: "离职台账", path: "/staffing/departure", permissions: ["hr:departure:read"] },
+    ],
+  },
+  {
     key: "hr",
     label: "人事管理",
     icon: "users",
@@ -340,10 +355,7 @@ export const moduleMenus: ModuleMenu[] = [
       // 因此每个页面都要声明，才能支持"只给培训权限、其余页面全屏蔽"这类纯角色
       { key: "dashboard", label: "📊 人事看板", path: "/hr/dashboard", permissions: ["hr:profile:read"] },
       { key: "departments", label: "部门管理", path: "/hr/departments", permissions: ["hr:org:read"] },
-      { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
-      { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
-      { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
       { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
       {
         key: "training",
