@@ -132,9 +132,13 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
       ),
     },
     {
-      title: '飞书参考',
+      title: (
+        <Tooltip title="飞书定编表中人工填写的「现有人数」，仅对账参考，不参与缺编计算">
+          手填现有人数
+        </Tooltip>
+      ),
       dataIndex: 'source_current_count',
-      width: 100,
+      width: 110,
       align: 'right',
       render: (v: number | null, row) => {
         if (v === null || v === undefined) return <Text type="secondary">-</Text>
@@ -142,7 +146,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
         return v === row.actual_count
           ? <Text type="secondary">{v}</Text>
           : (
-            <Tooltip title={`飞书手填 ${v} 与本地统计 ${row.actual_count} 不一致（以本地统计为准）`}>
+            <Tooltip title={`手填 ${v} 与系统统计 ${row.actual_count} 不一致（飞书表未及时更新，以系统统计为准）`}>
               <Text type="warning">{v}*</Text>
             </Tooltip>
           )
