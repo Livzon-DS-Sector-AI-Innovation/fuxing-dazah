@@ -440,6 +440,7 @@ export default function DepartureClient({
                 detailItem('职务', detailRecord.duty),
                 detailItem('职级', [detailRecord.rank, detailRecord.rank_category].filter(Boolean).join(' / ')),
                 detailItem('性别', detailRecord.gender),
+                detailItem('员工性质', detailRecord.employee_category),
                 detailItem('统计类别', detailRecord.status_category),
               ]} />
             <Descriptions title="日期与司龄" size="small" bordered column={2}

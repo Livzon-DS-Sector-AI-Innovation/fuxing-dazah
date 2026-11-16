@@ -324,6 +324,8 @@ export interface DepartureRecord {
   rank?: string
   rank_category?: string
   job_category?: string
+  /** 员工性质（转正员工/退休返聘等） */
+  employee_category?: string
   gender?: string
   status_category?: string
   livo_entry_date?: string
@@ -1059,6 +1061,13 @@ export interface MonthlyComparisonItem {
   current_year: number
 }
 
+/** 各部门编制 vs 在编（部门定编表同步数据；空数组=未绑定定编表） */
+export interface HeadcountDeptItem {
+  name: string
+  quota: number
+  actual: number
+}
+
 export interface DashboardStats {
   summary: DashboardSummary
   education_distribution: DistributionItem[]
@@ -1071,6 +1080,7 @@ export interface DashboardStats {
   monthly_departures: MonthlyItem[]
   monthly_departure_comparison: MonthlyComparisonItem[]
   departures_by_dept: DistributionItem[]
+  headcount_by_dept: HeadcountDeptItem[]
   distributions: Record<string, DistributionItem[]>
   position_departure_top: DistributionItem[]
   monthly_departure_rate: MonthlyItem[]
