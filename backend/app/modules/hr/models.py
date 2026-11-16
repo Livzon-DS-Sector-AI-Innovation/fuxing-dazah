@@ -947,6 +947,45 @@ class HrPosition(BaseModel):
     )
 
 
+class HeadcountPlan(BaseModel):
+    """部门定编表：随员工档案同步从飞书多维表格「定编数」表单向拉取。
+
+    现有人数/缺编不在本表存储：页面按 hr.employees 实时统计（口径更准），
+    飞书手填的「现有人数」仅留档 source_current_count 供对账参考。
+    """
+
+    __tablename__ = "headcount_plans"
+    __table_args__ = (
+        UniqueConstraint("department", name="uq_headcount_plans_department"),
+        Index("ix_headcount_plans_record_id", "feishu_record_id"),
+        {"schema": "hr"},
+    )
+
+    department: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="部门名称（与定编表一致）"
+    )
+    department_quota: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="部门定编人数",
+    )
+    position_detail: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default="",
+        comment="岗位明细原文（如「经理×1; 副经理×1」）",
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="排序"
+    )
+    source_current_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="飞书表手填「现有人数」（仅参考，不做计算口径）"
+    )
+    feishu_record_id: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="飞书多维表格 record_id"
+    )
+    feishu_synced_at: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="上次飞书同步时间"
+    )
+
+
 class HrIncidentRecord(BaseModel):
     """工伤/劳动纠纷台账（人力看板用工风险指标数据源）。"""
 

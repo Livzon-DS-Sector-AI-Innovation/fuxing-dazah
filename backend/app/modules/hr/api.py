@@ -19,6 +19,7 @@ from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.analysis_api import router as analysis_router
 from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.headcount_routes import router as headcount_router
 from app.modules.hr.deps import (
     HrAccessContext,
     check_sensitive_permission,
@@ -114,6 +115,7 @@ router = create_module_router(
 router.include_router(system_settings_router)
 router.include_router(uda_router)
 router.include_router(candidate_router)
+router.include_router(headcount_router)
 router.include_router(interview_router)
 router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)

@@ -18,6 +18,8 @@ from app.modules.hr.employee_sync import bitable_client as bitable
 from app.modules.hr.employee_sync.config import (
     KEY_APP_TOKEN,
     KEY_ENABLED,
+    KEY_HEADCOUNT_TABLE_ID,
+    KEY_HEADCOUNT_TABLE_NAME,
     KEY_LAST_STATS,
     KEY_LAST_SYNC_AT,
     KEY_SOURCE_TABLE_ID,
@@ -40,7 +42,7 @@ from app.modules.hr.employee_sync.report_level import (
     REPORT_LEVEL_FIELD,
     compute_report_level,
 )
-from app.modules.hr.models import Employee, TrainingRosterProfile
+from app.modules.hr.models import Employee, HeadcountPlan, TrainingRosterProfile
 from app.modules.hr.repository import EmployeeRepository
 from app.modules.hr.service import EmployeeService
 
@@ -62,6 +64,9 @@ def config_payload(cfg: EmployeeSyncConfig) -> dict[str, Any]:
         "app_token": cfg.app_token,
         "source_table_id": cfg.source_table_id,
         "source_table_name": cfg.source_table_name,
+        "headcount_table_id": cfg.headcount_table_id,
+        "headcount_table_name": cfg.headcount_table_name,
+        "headcount_ready": cfg.headcount_ready,
         "is_ready": cfg.is_ready,
         "last_sync_at": cfg.last_sync_at or None,
         "last_stats": cfg.last_stats or None,
@@ -124,20 +129,23 @@ class EmployeeSyncService:
 
     async def save_binding_config(
         self, *, enabled: bool, app_token: str, source_table_id: str,
+        headcount_table_id: str = "",
     ) -> dict[str, Any]:
         """保存绑定配置：连通性校验、列匹配报告。
 
-        app_token / source_table_id 需先经 routes 层清洗（容忍粘贴完整链接）。
+        app_token / source_table_id / headcount_table_id 需先经 routes 层清洗
+        （容忍粘贴完整链接）。定编表为可选附加项：留空即不同步。
         校验失败抛 ValueError（路由层转 400）；返回前端展示 payload。
         """
         if enabled and (not app_token or not source_table_id):
             raise ValueError("启用同步前必须填写 app_token 和源数据表 table_id")
 
         table_name = ""
+        headcount_table_name = ""
         column_report: dict[str, Any] = {
             "mapped": [], "ignored": [], "has_employee_number": False, "mapped_count": 0,
         }
-        if app_token and source_table_id:
+        if app_token and (source_table_id or headcount_table_id):
             try:
                 tables = await bitable.list_tables(app_token)
                 if not tables:
@@ -147,27 +155,62 @@ class EmployeeSyncService:
                         f"协作者管理中，为应用 {bitable.active_app_id()} 授予数据表权限"
                         "（可编辑或可管理）；否则请把应用的文档权限改为「可编辑」。",
                     )
-                matched = next(
-                    (t for t in tables if str(t.get("table_id")) == source_table_id), None,
-                )
-                if matched is None:
-                    available = "、".join(
-                        f"{t.get('name')}({t.get('table_id')})" for t in tables[:10]
+                if source_table_id:
+                    matched = next(
+                        (t for t in tables if str(t.get("table_id")) == source_table_id), None,
                     )
-                    raise ValueError(
-                        f"Base 中不存在数据表 {source_table_id}。Base 内可用的数据表：{available}",
+                    if matched is None:
+                        available = "、".join(
+                            f"{t.get('name')}({t.get('table_id')})" for t in tables[:10]
+                        )
+                        raise ValueError(
+                            f"Base 中不存在数据表 {source_table_id}。Base 内可用的数据表：{available}",
+                        )
+                    table_name = str(matched.get("name") or "")
+                    fields = await bitable.list_fields(app_token, source_table_id)
+                    column_report = _column_report(
+                        [str(f.get("field_name") or "") for f in fields],
                     )
-                table_name = str(matched.get("name") or "")
-                fields = await bitable.list_fields(app_token, source_table_id)
-                column_report = _column_report(
-                    [str(f.get("field_name") or "") for f in fields],
-                )
-                # 缺「工号」列时启用同步会导致下一轮全部记录被跳过，
-                # 而空远端集合会软删全员（培训名单也随之清空）
-                if enabled and not column_report.get("has_employee_number"):
-                    raise ValueError(
-                        "源数据表缺少「工号」列，无法启用同步（避免全量对账误删员工）",
+                    # 缺「工号」列时启用同步会导致下一轮全部记录被跳过，
+                    # 而空远端集合会软删全员（培训名单也随之清空）
+                    if enabled and not column_report.get("has_employee_number"):
+                        raise ValueError(
+                            "源数据表缺少「工号」列，无法启用同步（避免全量对账误删员工）",
+                        )
+                if headcount_table_id:
+                    matched_hc = next(
+                        (t for t in tables if str(t.get("table_id")) == headcount_table_id),
+                        None,
                     )
+                    if matched_hc is None:
+                        available = "、".join(
+                            f"{t.get('name')}({t.get('table_id')})" for t in tables[:10]
+                        )
+                        raise ValueError(
+                            f"Base 中不存在定编数数据表 {headcount_table_id}。"
+                            f"Base 内可用的数据表：{available}",
+                        )
+                    headcount_table_name = str(matched_hc.get("name") or "")
+                    try:
+                        hc_fields = [
+                            str(f.get("field_name") or "")
+                            for f in await bitable.list_fields(app_token, headcount_table_id)
+                        ]
+                    except bitable.BitableAPIError as exc:
+                        if "RolePermNotAllow" in str(exc):
+                            raise ValueError(
+                                f"应用无「{headcount_table_name}」表的读取权限"
+                                "（Base 开启了高级权限，应用仅被授权部分数据表）。"
+                                "请在 多维表格右上角「···」→ 高级权限 → 协作者管理中，"
+                                f"为应用 {bitable.active_app_id()} 勾选该数据表权限。",
+                            ) from exc
+                        raise
+                    missing = [c for c in ("部门", "部门定编") if c not in hc_fields]
+                    if missing:
+                        raise ValueError(
+                            f"定编数表缺少必需列：{'、'.join(missing)}"
+                            "（岗位明细/排序/现有人数为可选列）",
+                        )
             except ValueError:
                 raise
             except bitable.BitableAPIError as exc:
@@ -182,6 +225,8 @@ class EmployeeSyncService:
             KEY_APP_TOKEN: app_token,
             KEY_SOURCE_TABLE_ID: source_table_id,
             KEY_SOURCE_TABLE_NAME: table_name,
+            KEY_HEADCOUNT_TABLE_ID: headcount_table_id,
+            KEY_HEADCOUNT_TABLE_NAME: headcount_table_name,
         })
         await self.session.commit()
 
@@ -273,13 +318,28 @@ class EmployeeSyncService:
             await self.sync_roster_membership()
         )
 
-        return {
+        # 定编数表：与员工档案同一 Base，一次同步顺带拉取（未绑定则跳过）。
+        # 独立 SAVEPOINT：定编表失败（如表级权限未授权）只降级为 stats 错误，
+        # 不回滚也不阻断本轮员工档案同步。
+        headcount_stats: dict[str, Any] | None = None
+        if cfg.headcount_ready:
+            try:
+                async with self.session.begin_nested():
+                    headcount_stats = await self._reconcile_headcount(cfg)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("定编表同步失败（不影响员工档案同步）: %s", exc)
+                headcount_stats = {"error": str(exc)}
+
+        stats = {
             "created": created, "updated": updated, "deleted": deleted,
             "total": len(records), "errors": errors,
             "roster_added": roster_added,
             "roster_removed": roster_removed,
             "roster_status_synced": roster_status_synced,
         }
+        if headcount_stats is not None:
+            stats["headcount"] = headcount_stats
+        return stats
 
     async def _build_option_maps(
         self, cfg: EmployeeSyncConfig, schema: list[dict[str, Any]],
@@ -334,6 +394,92 @@ class EmployeeSyncService:
         if count:
             await self.session.flush()
         return count
+
+    # ── 定编数表同步（员工档案同一 Base 的附加数据表） ──
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        """单元格值 → int（飞书数字列返回 number；容错字符串数字）。"""
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            return None
+
+    async def _reconcile_headcount(self, cfg: EmployeeSyncConfig) -> dict[str, Any]:
+        """定编数表 → hr.headcount_plans（按部门 upsert，部门为业务主键）。
+
+        现有人数/缺编不在源表取值：页面用 hr.employees 实时统计，
+        手填「现有人数」仅存 source_current_count 供对账。
+        """
+        records = await bitable.list_all_records(cfg.app_token, cfg.headcount_table_id)
+
+        today = datetime.now().date()
+        existing = (await self.session.execute(
+            select(HeadcountPlan)  # 含软删行：复活判断需要
+        )).scalars().all()
+        by_department = {p.department: p for p in existing}
+
+        created = updated = deleted = 0
+        errors: list[str] = []
+        remote_departments: set[str] = set()
+
+        for record in records:
+            record_id = str(record.get("record_id") or "")
+            fields = record.get("fields") or {}
+            department = str(normalize_cell(fields.get("部门")) or "").strip()
+            if not department:
+                if len(errors) < _ERROR_CAP:
+                    errors.append(f"定编记录 {record_id or '(无record_id)'} 缺少「部门」，已跳过")
+                continue
+            remote_departments.add(department)
+            quota = self._to_int(normalize_cell(fields.get("部门定编"))) or 0
+            plan = by_department.get(department)
+            if plan is None:
+                plan = HeadcountPlan(department=department)
+                self.session.add(plan)
+                by_department[department] = plan
+                created += 1
+            elif plan.is_deleted:
+                plan.is_deleted = False
+                updated += 1
+            else:
+                updated += 1
+            plan.department_quota = quota
+            plan.position_detail = str(
+                normalize_cell(fields.get("岗位明细")) or ""
+            ).strip()
+            plan.sort_order = self._to_int(normalize_cell(fields.get("排序"))) or 0
+            plan.source_current_count = self._to_int(
+                normalize_cell(fields.get("现有人数"))
+            )
+            plan.feishu_record_id = record_id or None
+            plan.feishu_synced_at = today
+
+        # 软删源表已不存在的部门（空拉取防御：权限/绑错表不得清空全部定编）
+        if remote_departments:
+            for plan in existing:
+                if (
+                    not plan.is_deleted
+                    and plan.feishu_record_id is not None
+                    and plan.department not in remote_departments
+                ):
+                    plan.is_deleted = True
+                    deleted += 1
+        else:
+            logger.error("定编表拉取结果为空，跳过软删以保护本地定编数据")
+
+        await self.session.flush()
+        return {
+            "created": created, "updated": updated, "deleted": deleted,
+            "total": len(records), "errors": errors,
+        }
 
     # ── 培训专用脱敏名单（独立数据集：人员随总表增减，字段独立维护） ──
 
