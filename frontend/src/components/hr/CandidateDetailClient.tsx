@@ -252,6 +252,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     setScreening(true)
     try {
       const r = await screenCandidateAction(candidate.id)
+      if (!r.ok) { message.error(r.error); return }
       message.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100）`)
       window.location.reload()
     } catch (err: any) { message.error(err.message || 'AI 初筛失败') }
@@ -411,7 +412,8 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     setReportGeneratingId(interviewId)
     try {
       const r = await generateCandidateAnalysisReport(candidate.id, interviewId)
-      message.success(r?.message || '胜任度报告已生成')
+      if (!r.ok) { message.error(r.error); return }
+      message.success(r.message)
       const d = await fetchCandidateAnalysisReports(candidate.id)
       setAnalysisReports(d?.data || [])
     } catch (err: any) {

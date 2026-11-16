@@ -352,15 +352,15 @@ export default function RecruitmentClient() {
     let ok = 0
     for (const it of targets) {
       updateResumeItem(it.key, { stage: '初筛中' })
-      try {
-        const r = await screenCandidateAction(it.candidateId!)
+      const r = await screenCandidateAction(it.candidateId!)
+      if (r.ok) {
         updateResumeItem(it.key, {
           stage: '初筛完成', reco: r.data.recommendation, score: r.data.total_score,
         })
         ok += 1
-      } catch (err: any) {
+      } else {
         // 初筛失败不影响已建档结果：回落「已建档」可重试
-        updateResumeItem(it.key, { stage: '已建档', error: err?.message || '初筛失败' })
+        updateResumeItem(it.key, { stage: '已建档', error: r.error })
       }
     }
     setBatchScreening(false)
@@ -383,6 +383,7 @@ export default function RecruitmentClient() {
     setScreeningCand(candidateId)
     try {
       const r = await screenCandidateAction(candidateId)
+      if (!r.ok) { msg.error(r.error); return }
       msg.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100），报告已写入候选人档案`)
       await loadAllCandidates()
     } catch (err: any) { msg.error(err.message || 'AI 初筛失败') }
@@ -395,11 +396,11 @@ export default function RecruitmentClient() {
     if (!targets.length) return
     setBatchScreenJobId(jobId)
     let ok = 0, fail = 0
+    let lastError = ''
     for (let i = 0; i < targets.length; i++) {
-      try {
-        await screenCandidateAction(targets[i].id)
-        ok += 1
-      } catch { fail += 1 }
+      const r = await screenCandidateAction(targets[i].id)
+      if (r.ok) ok += 1
+      else { fail += 1; lastError = r.error }
       // 每份 10-20s：带 key 的进度提示覆盖更新，让用户知道在动
       msg.open({
         key: 'batch-screen', type: 'loading',
@@ -410,7 +411,10 @@ export default function RecruitmentClient() {
     await loadAllCandidates()
     msg.destroy('batch-screen')
     if (fail === 0) msg.success(`AI 初筛完成：${ok} 份，推荐等级与匹配报告已写入候选人档案`)
-    else msg.warning(`AI 初筛完成：成功 ${ok} 份、失败 ${fail} 份（失败的稍后可重试）`)
+    else msg.warning({
+      content: `AI 初筛完成：成功 ${ok} 份、失败 ${fail} 份（稍后可重试）。最近失败原因：${lastError}`,
+      duration: 8,
+    })
   }
 
   const handleDeleteCandidate = async (id: string) => {

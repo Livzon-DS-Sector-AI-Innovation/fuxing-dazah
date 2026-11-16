@@ -27,6 +27,15 @@ export async function parseResumeAction(formData: FormData) {
 
 // ─── AI 简历筛选 ───
 
+/**
+ * AI 类 action 结果信封：错误以返回值透出而非抛出。
+ * 生产模式 Next.js 会把 action 抛错吞成 digest 通用文案，用户看不到
+ * 真实原因（如「AI 输出超限被截断」）；返回 ok/error 让页面直接展示。
+ */
+export type AiActionResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string }
+
 /** 分析报告小节（优势/硬伤），结构对齐《岗位适配度分析+复试推荐意见》范例 */
 export interface ScreeningSection {
   title: string
@@ -97,14 +106,18 @@ export interface ResumeScreeningResultItem {
 export async function screenResumeAction(
   jdId: string,
   file: File,
-): Promise<{ data: ResumeScreeningResultItem }> {
+): Promise<AiActionResult<ResumeScreeningResultItem>> {
   const formData = new FormData()
   formData.append('file', file)
-  return fetchHrApi(`/hr/resume-screening/${jdId}`, {
-    method: 'POST',
-    body: formData,
-    errorMessage: `「${file.name}」筛选失败`,
-  })
+  try {
+    const res = await fetchHrApi<{ data: ResumeScreeningResultItem }>(
+      `/hr/resume-screening/${jdId}`,
+      { method: 'POST', body: formData, errorMessage: `「${file.name}」筛选失败` },
+    )
+    return { ok: true, data: res.data }
+  } catch (err: any) {
+    return { ok: false, error: err?.message || `「${file.name}」筛选失败` }
+  }
 }
 
 export async function fetchScreeningResults(
@@ -128,13 +141,17 @@ export async function fetchScreeningResumePreview(
 /** 对已建档候选人的存量简历直接 AI 初筛（免重复上传，结果回写候选人）。 */
 export async function screenCandidateAction(
   candidateId: string,
-): Promise<{ data: ResumeScreeningResultItem; message: string }> {
-  const res = await fetchHrApi<{ data: ResumeScreeningResultItem; message: string }>(
-    `/hr/resume-screening/candidate/${candidateId}`,
-    { method: 'POST', errorMessage: 'AI 初筛失败' },
-  )
-  revalidatePath('/hr/recruitment')
-  return res
+): Promise<AiActionResult<ResumeScreeningResultItem>> {
+  try {
+    const res = await fetchHrApi<{ data: ResumeScreeningResultItem }>(
+      `/hr/resume-screening/candidate/${candidateId}`,
+      { method: 'POST', errorMessage: 'AI 初筛失败' },
+    )
+    revalidatePath('/hr/recruitment')
+    return { ok: true, data: res.data }
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'AI 初筛失败' }
+  }
 }
 
 export async function convertScreeningResult(
@@ -443,10 +460,21 @@ export async function fetchCandidateAnalysisReports(candidateId: string): Promis
   return fetchHrApi(`/hr/candidates/${candidateId}/analysis-reports`, { errorMessage: '获取分析报告失败' })
 }
 
-export async function generateCandidateAnalysisReport(candidateId: string, interviewId: string) {
-  return fetchHrApi(`/hr/candidates/${candidateId}/analysis-reports`, {
-    method: 'POST',
-    body: JSON.stringify({ interview_id: interviewId }),
-    errorMessage: '生成分析报告失败',
-  })
+export async function generateCandidateAnalysisReport(
+  candidateId: string,
+  interviewId: string,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  try {
+    const res = await fetchHrApi<{ message?: string }>(
+      `/hr/candidates/${candidateId}/analysis-reports`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ interview_id: interviewId }),
+        errorMessage: '生成分析报告失败',
+      },
+    )
+    return { ok: true, message: res.message || '胜任度报告已生成' }
+  } catch (err: any) {
+    return { ok: false, error: err?.message || '生成报告失败' }
+  }
 }
