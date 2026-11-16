@@ -1008,12 +1008,22 @@ export interface PerformanceEvaluation {
 
 // ─── 仪表盘 ───
 
+/** KPI 悬停人员明细（姓名 + 部门） */
+export interface DashboardPersonItem {
+  name: string
+  department: string
+}
+
 export interface DashboardSummary {
   total_employees: number
   new_hires_this_month: number
+  new_hires_this_month_detail?: DashboardPersonItem[]
   departures_this_month: number
+  departures_this_month_detail?: DashboardPersonItem[]
   today_hires: number
+  today_hires_detail?: DashboardPersonItem[]
   today_departures: number
+  today_departures_detail?: DashboardPersonItem[]
   age_avg: number
   probation_count: number
   avg_tenure: number

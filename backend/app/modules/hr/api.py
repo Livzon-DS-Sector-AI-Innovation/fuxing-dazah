@@ -672,44 +672,55 @@ async def get_dashboard_stats(
         )
     )).scalar() or 0
 
-    new_hires_this_month = (await session.execute(
-        select(func.count(EmpModel.id)).where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.hire_date >= month_start,
-            EmpModel.hire_date < month_end,
-        )
-    )).scalar() or 0
+    # 本月/今日入职离职均直接查名单（KPI 悬停展示姓名+部门），计数取名单长度
+    async def _emp_detail(conds: list) -> list[dict]:
+        rows = (await session.execute(
+            select(EmpModel.name, EmpModel.department).where(*conds)
+            .order_by(EmpModel.department, EmpModel.name)
+        )).all()
+        return [{"name": r.name, "department": r.department or "未分类"} for r in rows]
+
+    async def _dep_detail(conds: list) -> list[dict]:
+        rows = (await session.execute(
+            select(DepModel.name, DepModel.department).where(*conds)
+            .order_by(DepModel.department, DepModel.name)
+        )).all()
+        return [{"name": r.name, "department": r.department or "未知部门"} for r in rows]
+
+    new_hires_this_month_detail = await _emp_detail([
+        *_scoped(),
+        EmpModel.is_deleted == False,  # noqa: E712
+        EmpModel.hire_date >= month_start,
+        EmpModel.hire_date < month_end,
+    ])
+    new_hires_this_month = len(new_hires_this_month_detail)
 
     # 本月离职/今日离职：以离职台账（hr.departure_records，飞书离职人员管理表同步）
     # 为权威源——员工档案的 status/departure_date 更新滞后时两边口径不再分裂
-    departures_this_month = (await session.execute(
-        select(func.count(DepModel.id)).where(
-            *_dep_scope_conds(),
-            DepModel.is_deleted == False,  # noqa: E712
-            DepModel.offboarding_date >= month_start,
-            DepModel.offboarding_date < month_end,
-        )
-    )).scalar() or 0
+    departures_this_month_detail = await _dep_detail([
+        *_dep_scope_conds(),
+        DepModel.is_deleted == False,  # noqa: E712
+        DepModel.offboarding_date >= month_start,
+        DepModel.offboarding_date < month_end,
+    ])
+    departures_this_month = len(departures_this_month_detail)
 
     # ── 今日入职 / 今日离职 ──
     today = date.today()
 
-    today_hires = (await session.execute(
-        select(func.count(EmpModel.id)).where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.hire_date == today,
-        )
-    )).scalar() or 0
+    today_hires_detail = await _emp_detail([
+        *_scoped(),
+        EmpModel.is_deleted == False,  # noqa: E712
+        EmpModel.hire_date == today,
+    ])
+    today_hires = len(today_hires_detail)
 
-    today_departures = (await session.execute(
-        select(func.count(DepModel.id)).where(
-            *_dep_scope_conds(),
-            DepModel.is_deleted == False,  # noqa: E712
-            DepModel.offboarding_date == today,
-        )
-    )).scalar() or 0
+    today_departures_detail = await _dep_detail([
+        *_dep_scope_conds(),
+        DepModel.is_deleted == False,  # noqa: E712
+        DepModel.offboarding_date == today,
+    ])
+    today_departures = len(today_departures_detail)
 
     # ── 学历分布 ──
     edu_rows = (await session.execute(
@@ -1270,9 +1281,13 @@ async def get_dashboard_stats(
             "interviews_this_week": interviews_this_week,
             "total_employees": total_employees,
             "new_hires_this_month": new_hires_this_month,
+            "new_hires_this_month_detail": new_hires_this_month_detail,
             "departures_this_month": departures_this_month,
+            "departures_this_month_detail": departures_this_month_detail,
             "today_hires": today_hires,
+            "today_hires_detail": today_hires_detail,
             "today_departures": today_departures,
+            "today_departures_detail": today_departures_detail,
             "age_avg": age_avg,
             "probation_count": probation_count,
             "avg_tenure": avg_tenure,

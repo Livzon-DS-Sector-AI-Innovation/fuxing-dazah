@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react'
-import { App, Card, Row, Col, Segmented, Button, Modal, Empty, Skeleton, DatePicker } from 'antd'
+import { App, Card, Row, Col, Segmented, Button, Modal, Empty, Skeleton, DatePicker, Tooltip } from 'antd'
 import type { EChartsOption } from 'echarts'
 import ReactECharts from 'echarts-for-react'
 import {
@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
-import type { DashboardStats, DistributionItem, HeadcountDeptItem, MonthlyByDeptItem, MonthlyByCategoryItem, MonthlyItem, MonthlyComparisonItem } from '@/types/hr'
+import type { DashboardPersonItem, DashboardStats, DistributionItem, HeadcountDeptItem, MonthlyByDeptItem, MonthlyByCategoryItem, MonthlyItem, MonthlyComparisonItem } from '@/types/hr'
 
 type ChartType = 'pie' | 'bar'
 
@@ -494,9 +494,10 @@ function HeroStatCard({ title, value, accent, unit = '人' }: {
 }
 
 // 双指标卡：一张卡内两个并排大数字（对齐设计稿「今日入职/离职」「本月入职/离职」）
-function DualStat({ label, value }: { label: string; value: number }) {
+// 悬停展示人员明细（姓名 + 部门），名单为空时不弹 Tooltip
+function DualStat({ label, value, detail }: { label: string; value: number; detail?: DashboardPersonItem[] }) {
   const animatedValue = useCountUp(value, 1400)
-  return (
+  const body = (
     <div className="text-center">
       <div className="text-[36px] font-bold leading-none tracking-tight mb-1.5"
         style={{ color: T.primary, fontFeatureSettings: '"tnum"', letterSpacing: '-0.02em' }}>
@@ -505,9 +506,27 @@ function DualStat({ label, value }: { label: string; value: number }) {
       <div className="text-[13px] font-medium" style={{ color: T.steel }}>{label}</div>
     </div>
   )
+  if (!detail || detail.length === 0) return body
+  return (
+    <Tooltip
+      title={
+        <div style={{ maxHeight: 260, overflowY: 'auto', minWidth: 140 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{label}（{detail.length}人）</div>
+          {detail.map((p, i) => (
+            <div key={`${p.name}-${p.department}-${i}`} style={{ lineHeight: '22px' }}>
+              {p.name} · {p.department}
+            </div>
+          ))}
+        </div>
+      }
+      overlayStyle={{ maxWidth: 280 }}
+    >
+      {body}
+    </Tooltip>
+  )
 }
 
-function DualStatCard({ items }: { items: { label: string; value: number }[] }) {
+function DualStatCard({ items }: { items: { label: string; value: number; detail?: DashboardPersonItem[] }[] }) {
   return (
     <div
       className="animate-fade-in-up"
@@ -519,7 +538,7 @@ function DualStatCard({ items }: { items: { label: string; value: number }[] }) 
       onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '' }}
     >
       <div className="p-5 h-full grid grid-cols-2 gap-3 items-center" style={{ minHeight: 128 }}>
-        {items.map(it => <DualStat key={it.label} label={it.label} value={it.value} />)}
+        {items.map(it => <DualStat key={it.label} label={it.label} value={it.value} detail={it.detail} />)}
       </div>
     </div>
   )
@@ -869,14 +888,14 @@ export default function DashboardClient() {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <DualStatCard items={[
-            { label: '今日入职人数', value: summary.today_hires ?? 0 },
-            { label: '今日离职人数', value: summary.today_departures ?? 0 },
+            { label: '今日入职人数', value: summary.today_hires ?? 0, detail: summary.today_hires_detail },
+            { label: '今日离职人数', value: summary.today_departures ?? 0, detail: summary.today_departures_detail },
           ]} />
         </Col>
         <Col xs={24} sm={12} md={6}>
           <DualStatCard items={[
-            { label: '本月入职人数', value: summary.new_hires_this_month },
-            { label: '本月离职总数', value: summary.departures_this_month },
+            { label: '本月入职人数', value: summary.new_hires_this_month, detail: summary.new_hires_this_month_detail },
+            { label: '本月离职总数', value: summary.departures_this_month, detail: summary.departures_this_month_detail },
           ]} />
         </Col>
       </Row>
