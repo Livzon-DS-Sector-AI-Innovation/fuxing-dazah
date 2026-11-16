@@ -265,3 +265,49 @@ async def test_api_delete_departure_record(client):
     await client.delete(f"/api/v1/hr/departure-records/{record_id}")
     resp2 = await client.get(f"/api/v1/hr/departure-records/{record_id}")
     assert resp2.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════════
+# 筛选选项（部门/离职类型下拉）
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_api_departure_filter_options(client):
+    """filter-options 聚合部门/离职类型现有取值，跟随数据而非硬编码枚举。"""
+    dept = _rand("选项台账部")
+    resp = await client.post("/api/v1/hr/departure-records", json={
+        "name": "选项台账员工",
+        "department": dept,
+        "position": "岗位",
+        "offboarding_date": str(date.today()),
+        "offboarding_type": "退休",
+    })
+    assert resp.status_code == 201
+
+    resp2 = await client.get("/api/v1/hr/departure-records/filter-options")
+    assert resp2.status_code == 200
+    options = resp2.json()["data"]
+    assert dept in options["departments"]
+    assert "退休" in options["offboarding_types"]
+    # 空值不入选项
+    assert "" not in options["departments"]
+
+
+@pytest.mark.asyncio
+async def test_api_list_departure_records_dropdown_filter(client):
+    """部门/离职类型下拉筛选：精确匹配（服务端过滤，全量数据范围）。"""
+    dept = _rand("下拉台账部")
+    await client.post("/api/v1/hr/departure-records", json={
+        "name": "下拉员工A",
+        "department": dept,
+        "position": "岗位",
+        "offboarding_date": str(date.today()),
+        "offboarding_type": "辞退",
+    })
+
+    resp = await client.get("/api/v1/hr/departure-records", params={
+        "department": dept, "offboarding_type": "辞退",
+    })
+    assert resp.status_code == 200
+    names = [r["name"] for r in resp.json()["data"]]
+    assert "下拉员工A" in names

@@ -3,12 +3,54 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { App, Alert, Button, Tabs } from 'antd'
 import { LinkOutlined, SyncOutlined } from '@ant-design/icons'
-import { fetchEmployeesAction, fetchDepartmentsAction, exportEmployees, triggerEmployeeSync } from '@/actions/hr'
-import { Employee, Department, EmployeeSyncBanner } from '@/types/hr'
+import { fetchEmployeesAction, fetchDepartmentsAction, fetchEmployeeFilterOptionsAction, exportEmployees, triggerEmployeeSync } from '@/actions/hr'
+import { Employee, Department, EmployeeSyncBanner, EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import { downloadBase64File } from '@/lib/hr'
 import EmployeeTable from './EmployeeTable'
 import EmployeeForm from './EmployeeForm'
+import EmployeeFilterPanel from './EmployeeFilterPanel'
+
+/** 筛选面板状态 → 员工列表 API 字段级筛选参数（日期范围拆 after/before） */
+function fieldFiltersToParams(f: EmployeeFieldFilters) {
+  return {
+    position: f.position,
+    duty: f.duty,
+    job_category: f.job_category,
+    level: f.level,
+    report_grade: f.report_grade,
+    status_category: f.status_category,
+    gender: f.gender,
+    ethnicity: f.ethnicity,
+    native_place: f.native_place,
+    marital_status: f.marital_status,
+    household_type: f.household_type,
+    education: f.education,
+    degree_type: f.degree_type,
+    classification: f.classification,
+    school: f.school,
+    major: f.major,
+    hr_analysis: f.hr_analysis,
+    domain_account: f.domain_account,
+    departure_reason: f.departure_reason,
+    age_min: f.age_min,
+    age_max: f.age_max,
+    birth_year_min: f.birth_year?.[0],
+    birth_year_max: f.birth_year?.[1],
+    hire_date_after: f.hire_date?.[0],
+    hire_date_before: f.hire_date?.[1],
+    work_start_date_after: f.work_start_date?.[0],
+    work_start_date_before: f.work_start_date?.[1],
+    graduation_date_after: f.graduation_date?.[0],
+    graduation_date_before: f.graduation_date?.[1],
+    departure_date_after: f.departure_date?.[0],
+    departure_date_before: f.departure_date?.[1],
+    contract_start_date_after: f.contract_start_date?.[0],
+    contract_start_date_before: f.contract_start_date?.[1],
+    contract_end_date_after: f.contract_end_date?.[0],
+    contract_end_date_before: f.contract_end_date?.[1],
+  }
+}
 
 interface EmployeeProfileClientProps {
   initialEmployees: Employee[]
@@ -45,6 +87,8 @@ export default function EmployeeProfileClient({
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [filters, setFilters] = useState<EmployeeFieldFilters>({})
+  const [filterOptions, setFilterOptions] = useState<EmployeeFilterOptions>({})
   const seqRef = useRef(0)
 
   const { searchKeyword, filterStatus } = useHrStore()
@@ -67,6 +111,7 @@ export default function EmployeeProfileClient({
         // 仅「全部」tab 按实际部门归属并入未分类；具体部门 tab 不混入未分类
         // （未分类人员有独立 tab）
         include_uncategorized: activeDepartment === '',
+        ...fieldFiltersToParams(filters),
       })
       if (seq !== seqRef.current) return // 过期响应丢弃，防止旧页数据覆盖新页
       setEmployees(res.data)
@@ -77,7 +122,7 @@ export default function EmployeeProfileClient({
     } finally {
       if (seq === seqRef.current) setLoading(false)
     }
-  }, [searchKeyword, activeDepartment, filterStatus, page, pageSize])
+  }, [searchKeyword, activeDepartment, filterStatus, page, pageSize, filters])
 
   const loadDepartments = useCallback(async () => {
     try {
@@ -85,6 +130,14 @@ export default function EmployeeProfileClient({
       setDepartments(res.data)
     } catch {
       setDepartments([])
+    }
+  }, [])
+
+  const loadFilterOptions = useCallback(async () => {
+    try {
+      setFilterOptions(await fetchEmployeeFilterOptionsAction())
+    } catch {
+      // 选项加载失败不阻断列表，只是下拉暂无可选项
     }
   }, [])
 
@@ -104,6 +157,7 @@ export default function EmployeeProfileClient({
   const handleRefresh = () => {
     loadData()
     loadDepartments()
+    loadFilterOptions()
   }
 
   const handleExport = async () => {
@@ -147,18 +201,19 @@ export default function EmployeeProfileClient({
     setPage(1)
   }
 
-  // 搜索/状态/部门筛选变化时回到第一页，避免深页筛选后出现空页
+  // 搜索/状态/部门筛选/字段筛选变化时回到第一页，避免深页筛选后出现空页
   useEffect(() => {
     setPage((p) => (p === 1 ? p : 1))
-  }, [searchKeyword, activeDepartment, filterStatus])
+  }, [searchKeyword, activeDepartment, filterStatus, filters])
 
   useEffect(() => {
     loadData()
-  }, [searchKeyword, activeDepartment, filterStatus, page, pageSize])
+  }, [searchKeyword, activeDepartment, filterStatus, page, pageSize, filters])
 
   useEffect(() => {
     loadDepartments()
-  }, [loadDepartments])
+    loadFilterOptions()
+  }, [loadDepartments, loadFilterOptions])
 
   const tabItems = useMemo(
     () => [
@@ -205,6 +260,8 @@ export default function EmployeeProfileClient({
           description={`档案在飞书多维表格中维护，此处为只读展示（每天凌晨 02:00 自动同步）；上次同步：${syncInfo.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'}。`}
         />
       )}
+
+      <EmployeeFilterPanel options={filterOptions} value={filters} onChange={setFilters} />
 
       <Tabs activeKey={activeTab} onChange={handleTabChange} type="card"
         items={tabItems.map((dept) => ({

@@ -409,6 +409,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/transfers", "hr:profile:transfer"),
     # 人事看板
     (r"/dashboard/stats", "hr:profile:read"),
+    # 编制数（部门定编）：在编按部门实时统计，与员工档案同读权限
+    (r"/headcount/plans", "hr:profile:read"),
     # 招聘管理 — 注意：具体路径必须在通用路径之前（re.search 首匹配即 break）
     (r"/candidates/pending-review", "hr:recruitment:read"),
     (r"/candidates/.*/push-review", "hr:recruitment:manage"),

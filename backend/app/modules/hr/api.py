@@ -19,6 +19,7 @@ from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.analysis_api import router as analysis_router
 from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.headcount_routes import router as headcount_router
 from app.modules.hr.deps import (
     HrAccessContext,
     check_sensitive_permission,
@@ -114,6 +115,7 @@ router = create_module_router(
 router.include_router(system_settings_router)
 router.include_router(uda_router)
 router.include_router(candidate_router)
+router.include_router(headcount_router)
 router.include_router(interview_router)
 router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)
@@ -269,6 +271,42 @@ async def list_employees(
     status: str | None = Query(None, description="状态筛选；不传时全量（与源表对齐，仅软删不计）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     include_uncategorized: bool = Query(False, description="是否纳入「未分类」人员（按实际部门归属）"),
+    # ── 字段级筛选（档案筛选面板；精确匹配项的取值来源 /employees/filter-options）──
+    position: str | None = Query(None, description="岗位（精确）"),
+    duty: str | None = Query(None, description="职务（精确）"),
+    job_category: str | None = Query(None, description="职能分类（精确）"),
+    level: str | None = Query(None, description="职级（精确）"),
+    report_grade: str | None = Query(None, description="岗位职级（精确）"),
+    status_category: str | None = Query(None, description="员工性质/统计类别（精确）"),
+    gender: str | None = Query(None, description="性别（精确）"),
+    ethnicity: str | None = Query(None, description="民族（精确）"),
+    native_place: str | None = Query(None, description="籍贯（精确）"),
+    marital_status: str | None = Query(None, description="婚姻状况（精确）"),
+    household_type: str | None = Query(None, description="户口类型（精确）"),
+    education: str | None = Query(None, description="学历（精确）"),
+    degree_type: str | None = Query(None, description="学位类型（精确）"),
+    classification: str | None = Query(None, description="学习形式（精确）"),
+    school: str | None = Query(None, description="毕业院校（精确）"),
+    major: str | None = Query(None, description="专业（精确）"),
+    hr_analysis: str | None = Query(None, description="人力资源分析（精确）"),
+    domain_account: str | None = Query(None, description="域账号（前缀匹配）"),
+    departure_reason: str | None = Query(None, description="离职原因（包含匹配）"),
+    age_min: int | None = Query(None, description="年龄下限（含，换算出生年份）"),
+    age_max: int | None = Query(None, description="年龄上限（含，换算出生年份）"),
+    birth_year_min: int | None = Query(None, description="出生年份下限（含）"),
+    birth_year_max: int | None = Query(None, description="出生年份上限（含）"),
+    hire_date_after: date | None = Query(None, description="入职日期起（含）"),
+    hire_date_before: date | None = Query(None, description="入职日期止（含）"),
+    work_start_date_after: date | None = Query(None, description="参加工作时间起（含）"),
+    work_start_date_before: date | None = Query(None, description="参加工作时间止（含）"),
+    graduation_date_after: date | None = Query(None, description="毕业时间起（含）"),
+    graduation_date_before: date | None = Query(None, description="毕业时间止（含）"),
+    departure_date_after: date | None = Query(None, description="离职日期起（含）"),
+    departure_date_before: date | None = Query(None, description="离职日期止（含）"),
+    contract_start_date_after: date | None = Query(None, description="合同开始日期起（含）"),
+    contract_start_date_before: date | None = Query(None, description="合同开始日期止（含）"),
+    contract_end_date_after: date | None = Query(None, description="合同结束日期起（含）"),
+    contract_end_date_before: date | None = Query(None, description="合同结束日期止（含）"),
     page_params: PageParams = Depends(),
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
@@ -286,6 +324,43 @@ async def list_employees(
                 scoped_departments = set(hr_scope.scoped_departments)
         else:
             keyword = hr_scope.employee_number
+    filters = {
+        "position": position,
+        "duty": duty,
+        "job_category": job_category,
+        "level": level,
+        "report_grade": report_grade,
+        "status_category": status_category,
+        "gender": gender,
+        "ethnicity": ethnicity,
+        "native_place": native_place,
+        "marital_status": marital_status,
+        "household_type": household_type,
+        "education": education,
+        "degree_type": degree_type,
+        "classification": classification,
+        "school": school,
+        "major": major,
+        "hr_analysis": hr_analysis,
+        "domain_account": domain_account,
+        "departure_reason": departure_reason,
+        "age_min": age_min,
+        "age_max": age_max,
+        "birth_year_min": birth_year_min,
+        "birth_year_max": birth_year_max,
+        "hire_date_after": hire_date_after,
+        "hire_date_before": hire_date_before,
+        "work_start_date_after": work_start_date_after,
+        "work_start_date_before": work_start_date_before,
+        "graduation_date_after": graduation_date_after,
+        "graduation_date_before": graduation_date_before,
+        "departure_date_after": departure_date_after,
+        "departure_date_before": departure_date_before,
+        "contract_start_date_after": contract_start_date_after,
+        "contract_start_date_before": contract_start_date_before,
+        "contract_end_date_after": contract_end_date_after,
+        "contract_end_date_before": contract_end_date_before,
+    }
     employees, total = await service.list_employees(
         department=department,
         status=status,
@@ -294,6 +369,7 @@ async def list_employees(
         page_size=page_params.page_size,
         include_uncategorized=include_uncategorized,
         departments=scoped_departments,
+        filters={k: v for k, v in filters.items() if v is not None} or None,
     )
     if not hr_scope.is_unrestricted and not hr_scope.scoped_departments:
         # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
@@ -312,6 +388,25 @@ async def list_employees(
         page_size=page_params.page_size,
         total=total,
     )
+
+
+@router.get("/employees/filter-options", summary="员工筛选选项（各字段现有取值聚合）")
+async def get_employee_filter_options(
+    service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 数据范围与员工列表一致：unrestricted 全量；多部门 IN 收敛；self_only 收敛到本人档案
+    departments: set[str] | None = None
+    employee_number: str | None = None
+    if not hr_scope.is_unrestricted:
+        if hr_scope.scoped_departments:
+            departments = set(hr_scope.scoped_departments)
+        else:
+            employee_number = hr_scope.employee_number
+    options = await service.list_filter_options(
+        departments=departments, employee_number=employee_number
+    )
+    return success_response(data=options)
 
 
 @router.post("/employees", summary="创建员工")
@@ -627,6 +722,7 @@ async def get_dashboard_stats(
 
     from sqlalchemy import or_
 
+    from app.modules.hr.models import DepartureRecord as DepModel
     from app.modules.hr.models import Employee as EmpModel
 
     def _scoped():
@@ -642,6 +738,14 @@ async def get_dashboard_stats(
         if not hr_scope.scoped_departments:
             raise ForbiddenException("数据范围限制：无法确定您的授权部门，请联系管理员")
         return [EmpModel.department.in_(hr_scope.scoped_departments)]
+
+    def _dep_scope_conds():
+        """离职记录数据范围：部门快照落在授权范围；unrestricted 返回 []。"""
+        if hr_scope.is_unrestricted:
+            return []
+        if hr_scope.data_scope == "self_only":
+            return [DepModel.name == ""]  # self_only 不看离职明细
+        return [DepModel.department.in_(hr_scope.scoped_departments)]
 
     current_year = date.today().year
     current_month = date.today().month
@@ -661,44 +765,55 @@ async def get_dashboard_stats(
         )
     )).scalar() or 0
 
-    new_hires_this_month = (await session.execute(
-        select(func.count(EmpModel.id)).where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.hire_date >= month_start,
-            EmpModel.hire_date < month_end,
-        )
-    )).scalar() or 0
+    # 本月/今日入职离职均直接查名单（KPI 悬停展示姓名+部门），计数取名单长度
+    async def _emp_detail(conds: list) -> list[dict]:
+        rows = (await session.execute(
+            select(EmpModel.name, EmpModel.department).where(*conds)
+            .order_by(EmpModel.department, EmpModel.name)
+        )).all()
+        return [{"name": r.name, "department": r.department or "未分类"} for r in rows]
 
-    departures_this_month = (await session.execute(
-        select(func.count(EmpModel.id)).where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "离职",
-            EmpModel.departure_date >= month_start,
-            EmpModel.departure_date < month_end,
-        )
-    )).scalar() or 0
+    async def _dep_detail(conds: list) -> list[dict]:
+        rows = (await session.execute(
+            select(DepModel.name, DepModel.department).where(*conds)
+            .order_by(DepModel.department, DepModel.name)
+        )).all()
+        return [{"name": r.name, "department": r.department or "未知部门"} for r in rows]
+
+    new_hires_this_month_detail = await _emp_detail([
+        *_scoped(),
+        EmpModel.is_deleted == False,  # noqa: E712
+        EmpModel.hire_date >= month_start,
+        EmpModel.hire_date < month_end,
+    ])
+    new_hires_this_month = len(new_hires_this_month_detail)
+
+    # 本月离职/今日离职：以离职台账（hr.departure_records，飞书离职人员管理表同步）
+    # 为权威源——员工档案的 status/departure_date 更新滞后时两边口径不再分裂
+    departures_this_month_detail = await _dep_detail([
+        *_dep_scope_conds(),
+        DepModel.is_deleted == False,  # noqa: E712
+        DepModel.offboarding_date >= month_start,
+        DepModel.offboarding_date < month_end,
+    ])
+    departures_this_month = len(departures_this_month_detail)
 
     # ── 今日入职 / 今日离职 ──
     today = date.today()
 
-    today_hires = (await session.execute(
-        select(func.count(EmpModel.id)).where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.hire_date == today,
-        )
-    )).scalar() or 0
+    today_hires_detail = await _emp_detail([
+        *_scoped(),
+        EmpModel.is_deleted == False,  # noqa: E712
+        EmpModel.hire_date == today,
+    ])
+    today_hires = len(today_hires_detail)
 
-    today_departures = (await session.execute(
-        select(func.count(EmpModel.id)).where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "离职",
-            EmpModel.departure_date == today,
-        )
-    )).scalar() or 0
+    today_departures_detail = await _dep_detail([
+        *_dep_scope_conds(),
+        DepModel.is_deleted == False,  # noqa: E712
+        DepModel.offboarding_date == today,
+    ])
+    today_departures = len(today_departures_detail)
 
     # ── 学历分布 ──
     edu_rows = (await session.execute(
@@ -767,9 +882,28 @@ async def get_dashboard_stats(
         return [{"month": r.month, "category": r.category, "value": r[2]} for r in rows]
 
     monthly_hires_by_category = await _monthly_by_category(EmpModel.hire_date, [])
-    monthly_departures_by_category = await _monthly_by_category(
-        EmpModel.departure_date, [EmpModel.status == "离职"]
-    )
+
+    # 按用工性质分组的月度离职：离职台账口径（employee_category=员工性质快照）
+    dep_cat_rows = (await session.execute(
+        select(
+            func.to_char(DepModel.offboarding_date, "YYYY-MM").label("month"),
+            func.coalesce(
+                func.nullif(DepModel.employee_category, ""), "未填写",
+            ).label("category"),
+            func.count(DepModel.id),
+        )
+        .where(
+            *_dep_scope_conds(),
+            DepModel.is_deleted == False,  # noqa: E712
+            DepModel.offboarding_date >= year_start,
+            DepModel.offboarding_date < next_year_start,
+        )
+        .group_by("month", "category")
+        .order_by("month")
+    )).all()
+    monthly_departures_by_category = [
+        {"month": r.month, "category": r.category, "value": r[2]} for r in dep_cat_rows
+    ]
 
     # ── 本年度入职各部门总量（与 monthly_hires_by_dept 同口径，不过滤当前状态）──
     hires_dept_year_rows = (await session.execute(
@@ -790,18 +924,17 @@ async def get_dashboard_stats(
         {"name": r[0], "value": r[1]} for r in hires_dept_year_rows
     ]
 
-    # ── 本年度离职月度统计 ──
+    # ── 本年度离职月度统计（离职台账口径） ──
     dep_rows = (await session.execute(
         select(
-            func.to_char(EmpModel.departure_date, "YYYY-MM").label("month"),
-            func.count(EmpModel.id),
+            func.to_char(DepModel.offboarding_date, "YYYY-MM").label("month"),
+            func.count(DepModel.id),
         )
         .where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "离职",
-            EmpModel.departure_date >= year_start,
-            EmpModel.departure_date < next_year_start,
+            *_dep_scope_conds(),
+            DepModel.is_deleted == False,  # noqa: E712
+            DepModel.offboarding_date >= year_start,
+            DepModel.offboarding_date < next_year_start,
         )
         .group_by("month")
         .order_by("month")
@@ -810,18 +943,18 @@ async def get_dashboard_stats(
         {"month": r.month, "value": r[1]} for r in dep_rows
     ]
 
-    # ── 离职月度对比（当年 vs 去年） ──
+    # ── 离职月度对比（当年 vs 去年；统一离职台账口径。台账 2026 年建立，
+    # 去年为 0 属事实——档案口径的历史离职同样缺失，且今年侧档案数据滞后严重） ──
     dep_cur_rows = (await session.execute(
         select(
-            func.to_char(EmpModel.departure_date, "MM").label("month_num"),
-            func.count(EmpModel.id),
+            func.to_char(DepModel.offboarding_date, "MM").label("month_num"),
+            func.count(DepModel.id),
         )
         .where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "离职",
-            EmpModel.departure_date >= year_start,
-            EmpModel.departure_date < next_year_start,
+            *_dep_scope_conds(),
+            DepModel.is_deleted == False,  # noqa: E712
+            DepModel.offboarding_date >= year_start,
+            DepModel.offboarding_date < next_year_start,
         )
         .group_by("month_num")
         .order_by("month_num")
@@ -831,15 +964,14 @@ async def get_dashboard_stats(
     last_year_end = date(current_year, 1, 1)
     dep_last_rows = (await session.execute(
         select(
-            func.to_char(EmpModel.departure_date, "MM").label("month_num"),
-            func.count(EmpModel.id),
+            func.to_char(DepModel.offboarding_date, "MM").label("month_num"),
+            func.count(DepModel.id),
         )
         .where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "离职",
-            EmpModel.departure_date >= last_year_start,
-            EmpModel.departure_date < last_year_end,
+            *_dep_scope_conds(),
+            DepModel.is_deleted == False,  # noqa: E712
+            DepModel.offboarding_date >= last_year_start,
+            DepModel.offboarding_date < last_year_end,
         )
         .group_by("month_num")
         .order_by("month_num")
@@ -932,21 +1064,20 @@ async def get_dashboard_stats(
         {"month": r.month, "value": r[1]} for r in monthly_hires_rows
     ]
 
-    # ── 2026年离职各部门统计 ──
+    # ── 2026年离职各部门统计（离职台账口径） ──
     dep_by_dept_rows = (await session.execute(
         select(
-            EmpModel.department,
-            func.count(EmpModel.id),
+            DepModel.department,
+            func.count(DepModel.id),
         )
         .where(
-            *_scoped(),
-            EmpModel.is_deleted == False,  # noqa: E712
-            EmpModel.status == "离职",
-            EmpModel.departure_date >= year_start,
-            EmpModel.departure_date < next_year_start,
+            *_dep_scope_conds(),
+            DepModel.is_deleted == False,  # noqa: E712
+            DepModel.offboarding_date >= year_start,
+            DepModel.offboarding_date < next_year_start,
         )
-        .group_by(EmpModel.department)
-        .order_by(func.count(EmpModel.id).desc())
+        .group_by(DepModel.department)
+        .order_by(func.count(DepModel.id).desc())
     )).all()
     departures_by_dept = [
         {"name": r[0], "value": r[1]} for r in dep_by_dept_rows
@@ -954,16 +1085,6 @@ async def get_dashboard_stats(
 
     # ── 扩展指标：试用期/司龄/合同预警/留存/离职深度分析 ──
     from datetime import timedelta as _td
-
-    from app.modules.hr.models import DepartureRecord as DepModel
-
-    def _dep_scope_conds():
-        """离职记录数据范围：部门快照落在授权范围；unrestricted 返回 []。"""
-        if hr_scope.is_unrestricted:
-            return []
-        if hr_scope.data_scope == "self_only":
-            return [DepModel.name == ""]  # self_only 不看离职明细
-        return [DepModel.department.in_(hr_scope.scoped_departments)]
 
     # 试用期人数
     probation_count = (await session.execute(
@@ -987,16 +1108,56 @@ async def get_dashboard_stats(
     # 本月净增
     net_growth = (new_hires_this_month or 0) - (departures_this_month or 0)
 
-    # 编制数（positions.headcount 合计，按数据范围部门）与编制达成率
-    from app.modules.hr.models import HrPosition
+    # 编制维度：部门定编表（hr.headcount_plans，飞书定编数表同步）为权威源；
+    # 未绑定定编表（空表，如生产未配置时）回退旧的岗位级 positions.headcount 合计。
+    # 达成率分子用在编（status != 离职），与编制管理页口径一致——总人数 KPI
+    # 仍按用户拍板的全量镜像口径（含离职），两者语义不同互不影响。
+    from app.modules.hr.models import HeadcountPlan, HrPosition
 
-    quota_q = select(func.coalesce(func.sum(HrPosition.headcount), 0)).where(
-        HrPosition.is_deleted == False, HrPosition.headcount.is_not(None)
+    plan_q = select(HeadcountPlan.department, HeadcountPlan.department_quota).where(
+        HeadcountPlan.is_deleted == False,  # noqa: E712
     )
     if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
-        quota_q = quota_q.where(HrPosition.department.in_(hr_scope.scoped_departments))
-    quota_total = int((await session.execute(quota_q)).scalar() or 0)
-    quota_rate = round(total_employees / quota_total * 100, 1) if quota_total else 0.0
+        plan_q = plan_q.where(HeadcountPlan.department.in_(hr_scope.scoped_departments))
+    plan_rows = (await session.execute(plan_q)).all()
+
+    active_counts: dict[str, int] = {}
+    if plan_rows:
+        active_rows = (await session.execute(
+            select(EmpModel.department, func.count(EmpModel.id))
+            .where(
+                *_scoped(),
+                EmpModel.is_deleted == False,  # noqa: E712
+                EmpModel.status != "离职",
+            )
+            .group_by(EmpModel.department)
+        )).all()
+        active_counts = {dept: int(cnt) for dept, cnt in active_rows}
+
+    if plan_rows:
+        quota_total = sum(int(q or 0) for _, q in plan_rows)
+        total_active = sum(
+            active_counts.get(dept, 0) for dept, _q in plan_rows
+        )
+        headcount_by_dept = [
+            {
+                "name": dept,
+                "quota": int(q or 0),
+                "actual": active_counts.get(dept, 0),
+            }
+            for dept, q in plan_rows
+        ]
+        headcount_by_dept.sort(key=lambda r: r["quota"], reverse=True)
+    else:
+        quota_q = select(func.coalesce(func.sum(HrPosition.headcount), 0)).where(
+            HrPosition.is_deleted == False, HrPosition.headcount.is_not(None)
+        )
+        if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+            quota_q = quota_q.where(HrPosition.department.in_(hr_scope.scoped_departments))
+        quota_total = int((await session.execute(quota_q)).scalar() or 0)
+        total_active = total_employees
+        headcount_by_dept = []
+    quota_rate = round(total_active / quota_total * 100, 1) if quota_total else 0.0
 
     # 工伤/劳动纠纷年度计数
     from app.modules.hr.models import HrIncidentRecord
@@ -1063,8 +1224,11 @@ async def get_dashboard_stats(
     departure_type_distribution = [
         {"name": r[0] or "未填写", "value": r[1]} for r in dep_type_rows
     ]
-    passive_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" not in r[0])
-    active_departures = sum(r[1] for r in dep_type_rows if r[0] and "辞职" in r[0])
+    # 主动/被动口径：主动 = 员工个人意愿离职（辞职/个人原因）；
+    # 被动/其他 = 辞退/合同到期/退休/退休返聘到期等（飞书源表离职原因选项）
+    _ACTIVE_TYPES = {"辞职", "个人原因"}
+    active_departures = sum(r[1] for r in dep_type_rows if r[0] and r[0] in _ACTIVE_TYPES)
+    passive_departures = sum(r[1] for r in dep_type_rows if r[0] and r[0] not in _ACTIVE_TYPES)
     dep_total = active_departures + passive_departures
     active_departure_rate = round(active_departures / dep_total * 100, 1) if dep_total else 0.0
     passive_departure_rate = round(passive_departures / dep_total * 100, 1) if dep_total else 0.0
@@ -1210,9 +1374,13 @@ async def get_dashboard_stats(
             "interviews_this_week": interviews_this_week,
             "total_employees": total_employees,
             "new_hires_this_month": new_hires_this_month,
+            "new_hires_this_month_detail": new_hires_this_month_detail,
             "departures_this_month": departures_this_month,
+            "departures_this_month_detail": departures_this_month_detail,
             "today_hires": today_hires,
+            "today_hires_detail": today_hires_detail,
             "today_departures": today_departures,
+            "today_departures_detail": today_departures_detail,
             "age_avg": age_avg,
             "probation_count": probation_count,
             "avg_tenure": avg_tenure,
@@ -1238,6 +1406,8 @@ async def get_dashboard_stats(
         "monthly_departures": monthly_departures,
         "monthly_departure_comparison": monthly_departure_comparison,
         "departures_by_dept": departures_by_dept,
+        # 各部门编制 vs 在编（部门定编表同步后；空=未绑定定编表）
+        "headcount_by_dept": headcount_by_dept,
         "distributions": {
             "gender": gender_distribution,
             "age": age_distribution,
@@ -2752,6 +2922,21 @@ async def list_departure_records(
         page_size=page_params.page_size,
         total=total,
     )
+
+
+@router.get("/departure-records/filter-options", summary="离职台账筛选选项（部门/离职类型现有取值聚合）")
+async def get_departure_filter_options(
+    service: DepartureRecordService = Depends(get_departure_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 数据范围与台账列表一致：self_only 无法定位本人记录，直接 403
+    departments: set[str] | None = None
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        departments = set(hr_scope.scoped_departments)
+    options = await service.list_filter_options(departments=departments)
+    return success_response(data=options)
 
 
 @router.post("/departure-records", summary="创建离职台账记录")

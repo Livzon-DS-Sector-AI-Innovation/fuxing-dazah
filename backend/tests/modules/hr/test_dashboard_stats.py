@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import app
 from app.modules.hr.deps import HrAccessContext, get_hr_scope
-from app.modules.hr.models import Employee
+from app.modules.hr.models import DepartureRecord, Employee
 from tests.modules.hr.conftest import _rand
 
 
@@ -54,7 +54,8 @@ async def test_kpi_counts_within_scoped_department(
     """受限部门范围内：总人数/本月入职/本月离职口径互不串数。
 
     总人数与源数据表全量对齐：不做人员状态过滤（离职人员由人事在源表
-    删除后经同步移出），仅软删行不计入。
+    删除后经同步移出），仅软删行不计入。本月/今日离职 KPI 走离职台账
+    （hr.departure_records，飞书离职人员管理表同步）而非档案状态。
     """
     dept = _rand("看板部")
     today = date.today()
@@ -70,6 +71,12 @@ async def test_kpi_counts_within_scoped_department(
         ),
         # 软删员工不计入任何统计
         _mk_employee(department=dept, is_deleted=True, hire_date=today),
+        # 本月/今日离职（离职台账口径）
+        DepartureRecord(
+            name="台账离职员工", department=dept, position="操作工",
+            employee_number=_rand("DEP"), offboarding_date=today,
+            offboarding_type="辞职",
+        ),
     ])
     await db_session.flush()
 
@@ -88,6 +95,11 @@ async def test_kpi_counts_within_scoped_department(
         assert summary["today_departures"] == 1
         # 本月净增 = 入 - 离
         assert summary["net_growth_this_month"] == 0
+        # 悬停明细名单与计数一致（姓名 + 部门，软删不计入）
+        assert summary["new_hires_this_month_detail"] == [{"name": "仪表盘员工", "department": dept}]
+        assert summary["today_hires_detail"] == [{"name": "仪表盘员工", "department": dept}]
+        assert summary["departures_this_month_detail"] == [{"name": "台账离职员工", "department": dept}]
+        assert summary["today_departures_detail"] == [{"name": "台账离职员工", "department": dept}]
 
         edu = {d["name"]: d["value"] for d in data["education_distribution"]}
         assert edu == {"本科": 2, "硕士": 1}
@@ -206,7 +218,10 @@ async def test_response_shape_unrestricted(client: AsyncClient):
 async def test_monthly_by_category_grouping(
     db_session: AsyncSession, client: AsyncClient, test_user,
 ):
-    """按员工性质分组的月度入职/离职：同月不同性质分组计数，空性质归「未填写」。"""
+    """按员工性质分组的月度入职/离职：同月不同性质分组计数，空性质归「未填写」。
+
+    离职侧走离职台账（employee_category=员工性质快照）。
+    """
     dept = _rand("性质分组部")
     today = date.today()
     db_session.add_all([
@@ -215,10 +230,11 @@ async def test_monthly_by_category_grouping(
         _mk_employee(department=dept, status_category="转正员工", hire_date=today),
         # 本月入职 · 性质为空 → 「未填写」
         _mk_employee(department=dept, status_category=None, hire_date=today),
-        # 本月离职 · 试用期
-        _mk_employee(
-            department=dept, status="离职", status_category="试用期",
-            hire_date=date(today.year - 1, 1, 1), departure_date=today,
+        # 本月离职 · 试用期（离职台账口径）
+        DepartureRecord(
+            name="台账性质离职", department=dept, position="操作工",
+            employee_number=_rand("DEP"), offboarding_date=today,
+            employee_category="试用期", offboarding_type="辞职",
         ),
     ])
     await db_session.flush()

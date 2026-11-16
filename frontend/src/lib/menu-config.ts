@@ -340,10 +340,19 @@ export const moduleMenus: ModuleMenu[] = [
       // 因此每个页面都要声明，才能支持"只给培训权限、其余页面全屏蔽"这类纯角色
       { key: "dashboard", label: "📊 人事看板", path: "/hr/dashboard", permissions: ["hr:profile:read"] },
       { key: "departments", label: "部门管理", path: "/hr/departments", permissions: ["hr:org:read"] },
-      { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
+      {
+        // 人员全周期：编制 → 入职 → 在职档案 → 离职（用户拍板：作为 HR 板块内的分组菜单）
+        key: "lifecycle",
+        label: "人员全周期管理",
+        path: "/hr/profile",
+        children: [
+          { key: "headcount", label: "编制管理", path: "/hr/headcount", permissions: ["hr:profile:read"] },
+          { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
+          { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
+          { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
+        ],
+      },
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
-      { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
-      { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
       { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
       {
         key: "training",

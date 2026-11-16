@@ -216,10 +216,10 @@ class EmployeeResponse(EmployeeBase):
 
 
 def mask_sensitive_fields(data: dict, has_sensitive: bool) -> dict:
-    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证/手写签名"""
+    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证/手写签名等敏感字段"""
     if has_sensitive:
         return data
-    for key in ("id_card", "cert_sign_image"):
+    for key in ("id_card", "cert_sign_image", "id_card_expiry", "residence_address", "bank_account"):
         if data.get(key):
             data[key] = "*" * len(str(data[key]))
     return data
@@ -326,12 +326,17 @@ class OffboardingRecordResponse(OffboardingRecordBase):
 class DepartureRecordBase(BaseModel):
     # Basic
     name: str = Field(..., max_length=64, description="姓名")
+    employee_number: str | None = Field(None, max_length=32, description="工号（飞书离职人员管理表同步）")
     department: str = Field(..., max_length=64, description="体现部门")
     team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="职位")
+    duty: str | None = Field(None, max_length=64, description="职务")
+    rank: str | None = Field(None, max_length=16, description="职级（如 S5）")
+    rank_category: str | None = Field(None, max_length=32, description="岗位职级")
     job_category: str | None = Field(None, max_length=64, description="职类")
+    employee_category: str | None = Field(None, max_length=64, description="员工性质（转正员工/退休返聘等）")
     gender: str | None = Field(None, max_length=8, description="性别")
-    status_category: str | None = Field(None, max_length=64, description="统计类别")
+    status_category: str | None = Field(None, max_length=64, description="统计类别（人力资源分析）")
 
     # Dates
     livo_entry_date: date | None = Field(None, description="入丽珠时间")
@@ -344,23 +349,30 @@ class DepartureRecordBase(BaseModel):
     education: str | None = Field(None, max_length=16, description="学历")
     school: str | None = Field(None, max_length=128, description="毕业学校")
     major: str | None = Field(None, max_length=64, description="专业")
+    degree_type: str | None = Field(None, max_length=32, description="学位类型")
     classification: str | None = Field(None, max_length=16, description="分类")
 
     # Personal
     id_card: str | None = Field(None, max_length=18, description="身份证号")
+    id_card_expiry: date | None = Field(None, description="身份证有效期")
     native_place: str | None = Field(None, max_length=64, description="籍贯")
+    ethnicity: str | None = Field(None, max_length=32, description="民族")
     household_type: str | None = Field(None, max_length=128, description="户籍类型")
     marital_status: str | None = Field(None, max_length=32, description="婚姻状况")
     political_status: str | None = Field(None, max_length=64, description="政治面貌")
+    residence_address: str | None = Field(None, max_length=256, description="居住地址")
 
     # Contact
     phone: str | None = Field(None, max_length=32, description="手机")
+    emergency_contact_name: str | None = Field(None, max_length=64, description="紧急联系人姓名")
     emergency_contact_phone: str | None = Field(None, max_length=32, description="紧急联系人电话")
     emergency_contact_relation: str | None = Field(None, max_length=64, description="紧急联系人|关系")
     bank_account: str | None = Field(None, max_length=128, description="银行卡号")
 
     # Contract
     contract_type: str | None = Field(None, max_length=64, description="合同期限")
+    contract_start_date: date | None = Field(None, description="合同开始日期")
+    contract_end_date: date | None = Field(None, description="合同结束日期")
 
     # Work history
     transfer_history: str | None = Field(None, description="异动记录")
@@ -373,6 +385,7 @@ class DepartureRecordBase(BaseModel):
 
     # Other
     remarks: str | None = Field(None, description="备注")
+    certificates: str | None = Field(None, description="证书")
 
 
 class DepartureRecordCreate(DepartureRecordBase):

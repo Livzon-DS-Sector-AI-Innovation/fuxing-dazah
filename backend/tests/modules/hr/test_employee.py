@@ -399,3 +399,88 @@ async def test_api_get_position_trainings(client):
     resp = await client.get("/api/v1/hr/position-trainings")
     assert resp.status_code == 200
     assert "data" in resp.json()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 字段级筛选 + 筛选选项（档案筛选面板）
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_api_list_employees_field_filters(client):
+    """字段级筛选：下拉精确匹配 + 入职日期范围 + 年龄区间。"""
+    number = _rand("FLT")
+    resp = await client.post("/api/v1/hr/employees", json={
+        "employee_number": number,
+        "name": "筛选测试员",
+        "department": "筛选部",
+        "position": "质检员",
+        "education": "本科",
+        "gender": "女",
+        "birth_year": 1990,
+        "hire_date": "2024-06-15",
+    })
+    assert resp.status_code == 201
+
+    # 下拉精确匹配：以工号关键词锚定，命中本人
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number, "position": "质检员", "education": "本科", "gender": "女",
+    })
+    assert resp.json()["meta"]["total"] == 1
+
+    # 岗位为精确匹配：传前缀「质检」不应命中「质检员」
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number, "position": "质检",
+    })
+    assert resp.json()["meta"]["total"] == 0
+
+    # 入职日期范围：起止均含边界日内命中
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number,
+        "hire_date_after": "2024-06-01", "hire_date_before": "2024-06-30",
+    })
+    assert resp.json()["meta"]["total"] == 1
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number, "hire_date_after": "2024-07-01",
+    })
+    assert resp.json()["meta"]["total"] == 0
+
+    # 年龄区间换算出生年份：1990 年生 → 今年满 (今年-1990) 岁
+    age = date.today().year - 1990
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number, "age_min": age, "age_max": age,
+    })
+    assert resp.json()["meta"]["total"] == 1
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number, "age_min": age + 5,
+    })
+    assert resp.json()["meta"]["total"] == 0
+
+    # 出生年份区间
+    resp = await client.get("/api/v1/hr/employees", params={
+        "keyword": number, "birth_year_min": 1990, "birth_year_max": 1990,
+    })
+    assert resp.json()["meta"]["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_api_employee_filter_options(client):
+    """filter-options 聚合现有取值：新员工的字段值出现在对应选项中。"""
+    resp = await client.post("/api/v1/hr/employees", json={
+        "employee_number": _rand("OPT"),
+        "name": "选项测试员",
+        "department": "选项部",
+        "position": "选项岗位XYZ",
+        "education": "硕士XYZ",
+        "duty": "选项职务XYZ",
+        "hire_date": str(date.today()),
+    })
+    assert resp.status_code == 201
+
+    resp2 = await client.get("/api/v1/hr/employees/filter-options")
+    assert resp2.status_code == 200
+    options = resp2.json()["data"]
+    assert "选项岗位XYZ" in options["position"]
+    assert "硕士XYZ" in options["education"]
+    assert "选项职务XYZ" in options["duty"]
+    # 空值不入选项
+    assert "" not in options["position"]

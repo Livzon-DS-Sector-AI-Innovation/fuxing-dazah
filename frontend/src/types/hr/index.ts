@@ -154,6 +154,69 @@ export interface EmployeeListResponse {
   }
 }
 
+/** 员工筛选面板：各可枚举字段的现有取值（后端聚合，跟随数据变化） */
+export interface EmployeeFilterOptions {
+  department?: string[]
+  position?: string[]
+  duty?: string[]
+  job_category?: string[]
+  level?: string[]
+  report_grade?: string[]
+  status_category?: string[]
+  gender?: string[]
+  ethnicity?: string[]
+  native_place?: string[]
+  marital_status?: string[]
+  household_type?: string[]
+  education?: string[]
+  degree_type?: string[]
+  classification?: string[]
+  school?: string[]
+  major?: string[]
+  hr_analysis?: string[]
+}
+
+/**
+ * 员工档案字段级筛选（筛选面板状态）：
+ * 下拉/文本为单值；日期范围为 [起, 止]（YYYY-MM-DD）；出生年份为 [起年, 止年]。
+ */
+export interface EmployeeFieldFilters {
+  position?: string
+  duty?: string
+  job_category?: string
+  level?: string
+  report_grade?: string
+  status_category?: string
+  gender?: string
+  ethnicity?: string
+  native_place?: string
+  marital_status?: string
+  household_type?: string
+  education?: string
+  degree_type?: string
+  classification?: string
+  school?: string
+  major?: string
+  hr_analysis?: string
+  domain_account?: string
+  departure_reason?: string
+  age_min?: number
+  age_max?: number
+  birth_year?: [number, number]
+  graduation_date?: [string, string]
+  work_start_date?: [string, string]
+  hire_date?: [string, string]
+  departure_date?: [string, string]
+  contract_start_date?: [string, string]
+  contract_end_date?: [string, string]
+}
+
+/** 离职台账筛选下拉选项（部门/离职类型现有取值，后端聚合） */
+export interface DepartureFilterOptions {
+  departments?: string[]
+  offboarding_types?: string[]
+}
+
 export interface EmployeeResponse {
   code: number
   message: string
@@ -315,10 +378,17 @@ export interface OnboardingRecordListResponse {
 export interface DepartureRecord {
   id: string
   name: string
+  /** 工号（飞书离职人员管理表同步） */
+  employee_number?: string
   department: string
   team?: string
   position: string
+  duty?: string
+  rank?: string
+  rank_category?: string
   job_category?: string
+  /** 员工性质（转正员工/退休返聘等） */
+  employee_category?: string
   gender?: string
   status_category?: string
   livo_entry_date?: string
@@ -329,23 +399,31 @@ export interface DepartureRecord {
   education?: string
   school?: string
   major?: string
+  degree_type?: string
   classification?: string
   id_card?: string
+  id_card_expiry?: string
   native_place?: string
+  ethnicity?: string
   household_type?: string
   marital_status?: string
   political_status?: string
+  residence_address?: string
   phone?: string
+  emergency_contact_name?: string
   emergency_contact_phone?: string
   emergency_contact_relation?: string
   bank_account?: string
   contract_type?: string
+  contract_start_date?: string
+  contract_end_date?: string
   transfer_history?: string
   offboarding_type: string
   offboarding_reason?: string[]
   offboarding_reason_2?: string[]
   offboarding_remarks?: string[]
   remarks?: string[]
+  certificates?: string
   feishu_record_id?: string
   feishu_synced_at?: string
   created_at?: string
@@ -993,12 +1071,22 @@ export interface PerformanceEvaluation {
 
 // ─── 仪表盘 ───
 
+/** KPI 悬停人员明细（姓名 + 部门） */
+export interface DashboardPersonItem {
+  name: string
+  department: string
+}
+
 export interface DashboardSummary {
   total_employees: number
   new_hires_this_month: number
+  new_hires_this_month_detail?: DashboardPersonItem[]
   departures_this_month: number
+  departures_this_month_detail?: DashboardPersonItem[]
   today_hires: number
+  today_hires_detail?: DashboardPersonItem[]
   today_departures: number
+  today_departures_detail?: DashboardPersonItem[]
   age_avg: number
   probation_count: number
   avg_tenure: number
@@ -1046,6 +1134,13 @@ export interface MonthlyComparisonItem {
   current_year: number
 }
 
+/** 各部门编制 vs 在编（部门定编表同步数据；空数组=未绑定定编表） */
+export interface HeadcountDeptItem {
+  name: string
+  quota: number
+  actual: number
+}
+
 export interface DashboardStats {
   summary: DashboardSummary
   education_distribution: DistributionItem[]
@@ -1058,6 +1153,7 @@ export interface DashboardStats {
   monthly_departures: MonthlyItem[]
   monthly_departure_comparison: MonthlyComparisonItem[]
   departures_by_dept: DistributionItem[]
+  headcount_by_dept: HeadcountDeptItem[]
   distributions: Record<string, DistributionItem[]>
   position_departure_top: DistributionItem[]
   monthly_departure_rate: MonthlyItem[]
@@ -1240,6 +1336,24 @@ export interface EmployeeSyncStats {
   skipped?: string
   rebuilt?: number
   removed?: number
+  /** 定编数表附加同步统计（绑定 headcount_table_id 后出现；error=失败原因） */
+  headcount?: {
+    created?: number
+    updated?: number
+    deleted?: number
+    total?: number
+    errors?: string[]
+    error?: string
+  }
+  /** 离职台账表附加同步统计（绑定 departure_table_id 后出现） */
+  departures?: {
+    created?: number
+    updated?: number
+    deleted?: number
+    total?: number
+    errors?: string[]
+    error?: string
+  }
 }
 
 export interface EmployeeSyncColumnReport {
@@ -1254,10 +1368,57 @@ export interface EmployeeSyncConfig {
   app_token: string
   source_table_id: string
   source_table_name: string
+  /** 定编数表（可选附加同步：与员工档案同一 Base，一次同步顺带拉取） */
+  headcount_table_id: string
+  headcount_table_name: string
+  headcount_ready: boolean
+  /** 离职人员管理表（可选附加同步：写入离职台账） */
+  departure_table_id: string
+  departure_table_name: string
+  departure_ready: boolean
   is_ready: boolean
   last_sync_at: string | null
   last_stats: EmployeeSyncStats | null
   column_report?: EmployeeSyncColumnReport
+}
+
+// ─── 编制数（部门定编） ───
+
+/** 岗位明细解析结果（「经理×1」→ {name:'经理', count:1}；无数量时 count=null） */
+export interface HeadcountPosition {
+  name: string
+  count: number | null
+}
+
+export interface HeadcountPlanRow {
+  department: string
+  department_quota: number
+  /** 本地实时统计的在编人数（未离职口径） */
+  actual_count: number
+  /** 飞书定编表手填的「现有人数」（仅对账参考，不作计算口径） */
+  source_current_count: number | null
+  /** 缺编 = 定编 - 在编（负数=超编） */
+  vacancy: number
+  position_detail: string
+  positions: HeadcountPosition[]
+  sort_order: number
+  /** 部门名是否匹配到员工档案部门（false=建议核对名称写法） */
+  matched: boolean
+  feishu_synced_at: string | null
+}
+
+export interface HeadcountSummary {
+  total_quota: number
+  total_actual: number
+  total_vacancy: number
+  achievement_rate: number
+  department_count: number
+  unmatched_departments: string[]
+}
+
+export interface HeadcountData {
+  plans: HeadcountPlanRow[]
+  summary: HeadcountSummary
 }
 
 /** 员工档案页所需的同步状态精简形态（服务端注入） */

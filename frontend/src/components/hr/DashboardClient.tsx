@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react'
-import { App, Card, Row, Col, Segmented, Button, Modal, Empty, Skeleton, DatePicker } from 'antd'
+import { App, Card, Row, Col, Segmented, Button, Modal, Empty, Skeleton, DatePicker, Tooltip } from 'antd'
 import type { EChartsOption } from 'echarts'
 import ReactECharts from 'echarts-for-react'
 import {
@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
-import type { DashboardStats, DistributionItem, MonthlyByDeptItem, MonthlyByCategoryItem, MonthlyItem, MonthlyComparisonItem } from '@/types/hr'
+import type { DashboardPersonItem, DashboardStats, DistributionItem, HeadcountDeptItem, MonthlyByDeptItem, MonthlyByCategoryItem, MonthlyItem, MonthlyComparisonItem } from '@/types/hr'
 
 type ChartType = 'pie' | 'bar'
 
@@ -41,9 +41,10 @@ const T = {
 const PALETTE = ['#1677FF', '#40A9FF', '#13c2c2', '#1aae39', '#fa8c16', '#722ed1', '#fadb14', '#e03131', '#ff85c0', '#002e8c']
 
 const DEFAULT_H = 350; const MIN_H = 200; const MAX_H = 900; const SNAP_X = 80
-// 默认布局对齐设计稿：人口结构 3 卡 → 部门分析 2 卡 → 年度入离职 2 卡 → 入离职对比折线 → 月度明细分组 2 卡
+// 默认布局对齐设计稿：人口结构 3 卡 → 部门分析 2 卡 → 编制对比 → 年度入离职 2 卡 → 入离职对比折线 → 月度明细分组 2 卡
 const PRESET_IDS = [
   'gender', 'age-overview', 'education', 'dept-ranking', 'department',
+  'headcount-by-dept',
   'departures-by-dept', 'hires-by-dept-year', 'hire-departure-trend',
   'monthly-departures-by-category', 'monthly-hires-by-category',
 ]
@@ -52,14 +53,14 @@ const PRESET_IDS = [
 const WIDTH_TIERS = [4, 6, 8, 12] as const
 const DEFAULT_PRESET_WIDTHS: Record<string, number> = {
   gender: 4, 'age-overview': 4, education: 4,
-  'dept-ranking': 4, department: 8,
+  'dept-ranking': 4, department: 8, 'headcount-by-dept': 12,
   'departures-by-dept': 6, 'hires-by-dept-year': 6, 'hire-departure-trend': 12,
   'monthly-departures-by-category': 6, 'monthly-hires-by-category': 6,
 }
 const WIDTH_LABELS: Record<number, string> = { 4: '1/3宽', 6: '半宽', 8: '2/3宽', 12: '全宽' }
 const SPAN_CLASS: Record<number, string> = { 4: 'md:col-span-4', 6: 'md:col-span-6', 8: 'md:col-span-8', 12: 'md:col-span-12' }
-// 自定义渲染卡片（折线对比 / 年龄复合卡）：不提供饼柱切换
-const CUSTOM_RENDER_IDS = ['age-overview', 'hire-departure-trend']
+// 自定义渲染卡片（折线对比 / 年龄复合卡 / 编制对比双系列）：不提供饼柱切换
+const CUSTOM_RENDER_IDS = ['age-overview', 'hire-departure-trend', 'headcount-by-dept']
 
 interface StatTypeOption { id: string; title: string; defaultType: ChartType; group: string; dataSource: string }
 
@@ -69,6 +70,7 @@ const ALL_STAT_TYPES: StatTypeOption[] = [
   { id: 'education', title: '学历分布', defaultType: 'pie', group: '人员结构', dataSource: 'preset' },
   { id: 'dept-ranking', title: '部门人数排行TOP10', defaultType: 'bar', group: '人员结构', dataSource: 'preset' },
   { id: 'department', title: '部门人数分布', defaultType: 'bar', group: '人员结构', dataSource: 'preset' },
+  { id: 'headcount-by-dept', title: '各部门编制 vs 在编', defaultType: 'bar', group: '人员结构', dataSource: 'preset' },
   { id: 'departures-by-dept', title: '本年度离职各部门', defaultType: 'bar', group: '入职/离职', dataSource: 'preset' },
   { id: 'hires-by-dept-year', title: '本年度入职各部门', defaultType: 'bar', group: '入职/离职', dataSource: 'preset' },
   { id: 'hire-departure-trend', title: '入离职月度对比', defaultType: 'bar', group: '入职/离职', dataSource: 'preset' },
@@ -97,7 +99,8 @@ const ALL_STAT_TYPES: StatTypeOption[] = [
 
 const STAT_TYPE_MAP: Record<string, StatTypeOption> = Object.fromEntries(ALL_STAT_TYPES.map(s => [s.id, s]))
 
-const LS_ORDER = 'hr_db_v4_order'; const LS_TYPES = 'hr_db_v4_types'
+// v5：默认布局新增「各部门编制 vs 在编」，老用户的自定义排序随版本重置
+const LS_ORDER = 'hr_db_v5_order'; const LS_TYPES = 'hr_db_v4_types'
 const LS_HEIGHTS = 'hr_db_v4_heights'; const LS_WIDTHS = 'hr_db_v4_widths'
 
 function loadLS<T>(k: string, fb: T): T {
@@ -295,6 +298,52 @@ function buildHorizontalBarOption(data: DistributionItem[], topN?: number): ECha
   }
 }
 
+// 各部门编制 vs 在编（横向双系列：定编=浅色底、在编=主色，按定编升序排）
+function buildHeadcountCompareOption(rows: HeadcountDeptItem[]): EChartsOption {
+  const sorted = [...rows].sort((a, b) => a.quota - b.quota) // 小→大，底部→顶部
+  return {
+    animationDuration: 800, animationEasing: 'cubicOut' as const,
+    tooltip: {
+      ...BASE_TOOLTIP, trigger: 'axis' as const,
+      formatter: (params: unknown) => {
+        const list = params as { name: string; seriesName: string; value: number; marker: string }[]
+        if (!Array.isArray(list) || !list.length) return ''
+        const row = rows.find(r => r.name === list[0].name)
+        const vacancy = row ? row.quota - row.actual : 0
+        const extra = row
+          ? `<br/>缺编: <b>${vacancy > 0 ? vacancy : vacancy === 0 ? 0 : `超编 ${-vacancy}`}</b>`
+          : ''
+        return `<b>${list[0].name}</b><br/>${list.map(p =>
+          `${p.marker} ${p.seriesName}: <b>${p.value}</b> 人`).join('<br/>')}${extra}`
+      },
+    },
+    grid: { left: 4, right: 56, top: 28, bottom: 8, containLabel: true },
+    legend: {
+      top: 0, data: ['定编', '在编'],
+      textStyle: { ...ECHART_TEXT_STYLE, fontSize: 11 }, itemWidth: 10, itemHeight: 10, itemGap: 12,
+    },
+    xAxis: { type: 'value' as const, axisLabel: ECHART_AXIS_LABEL, splitLine: ECHART_SPLIT_LINE, axisLine: { show: false }, axisTick: { show: false } },
+    yAxis: {
+      type: 'category' as const, data: sorted.map(d => d.name), inverse: true,
+      axisLabel: { ...ECHART_AXIS_LABEL, width: 100, overflow: 'truncate' as const },
+      axisLine: { show: false }, axisTick: { show: false },
+    },
+    series: [
+      {
+        name: '定编', type: 'bar' as const, data: sorted.map(d => d.quota),
+        barWidth: '55%', barGap: '25%',
+        itemStyle: { borderRadius: [0, 4, 4, 0], color: '#b7d8ff' },
+        label: { show: true, position: 'right' as const, color: T.steel, fontSize: 10 },
+      },
+      {
+        name: '在编', type: 'bar' as const, data: sorted.map(d => d.actual),
+        barWidth: '55%',
+        itemStyle: { borderRadius: [0, 4, 4, 0], color: linearGradient('#1677FF', '#69b7ff') },
+      },
+    ],
+  }
+}
+
 // 入离职月度对比折线（入职=蓝、离职=绿），月份取两边并集
 function buildHireDepartureLineOption(hires: MonthlyItem[], departures: MonthlyItem[]): EChartsOption {
   const months = [...new Set([...hires, ...departures].map(d => d.month))].sort()
@@ -445,9 +494,10 @@ function HeroStatCard({ title, value, accent, unit = '人' }: {
 }
 
 // 双指标卡：一张卡内两个并排大数字（对齐设计稿「今日入职/离职」「本月入职/离职」）
-function DualStat({ label, value }: { label: string; value: number }) {
+// 悬停展示人员明细（姓名 + 部门），名单为空时不弹 Tooltip
+function DualStat({ label, value, detail }: { label: string; value: number; detail?: DashboardPersonItem[] }) {
   const animatedValue = useCountUp(value, 1400)
-  return (
+  const body = (
     <div className="text-center">
       <div className="text-[36px] font-bold leading-none tracking-tight mb-1.5"
         style={{ color: T.primary, fontFeatureSettings: '"tnum"', letterSpacing: '-0.02em' }}>
@@ -456,9 +506,27 @@ function DualStat({ label, value }: { label: string; value: number }) {
       <div className="text-[13px] font-medium" style={{ color: T.steel }}>{label}</div>
     </div>
   )
+  if (!detail || detail.length === 0) return body
+  return (
+    <Tooltip
+      title={
+        <div style={{ maxHeight: 260, overflowY: 'auto', minWidth: 140 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{label}（{detail.length}人）</div>
+          {detail.map((p, i) => (
+            <div key={`${p.name}-${p.department}-${i}`} style={{ lineHeight: '22px' }}>
+              {p.name} · {p.department}
+            </div>
+          ))}
+        </div>
+      }
+      overlayStyle={{ maxWidth: 280 }}
+    >
+      {body}
+    </Tooltip>
+  )
 }
 
-function DualStatCard({ items }: { items: { label: string; value: number }[] }) {
+function DualStatCard({ items }: { items: { label: string; value: number; detail?: DashboardPersonItem[] }[] }) {
   return (
     <div
       className="animate-fade-in-up"
@@ -470,7 +538,7 @@ function DualStatCard({ items }: { items: { label: string; value: number }[] }) 
       onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '' }}
     >
       <div className="p-5 h-full grid grid-cols-2 gap-3 items-center" style={{ minHeight: 128 }}>
-        {items.map(it => <DualStat key={it.label} label={it.label} value={it.value} />)}
+        {items.map(it => <DualStat key={it.label} label={it.label} value={it.value} detail={it.detail} />)}
       </div>
     </div>
   )
@@ -750,6 +818,7 @@ export default function DashboardClient() {
       case 'monthly-departures-by-category': return stats.monthly_departures_by_category
       case 'departure-comparison': return stats.monthly_departure_comparison
       case 'departures-by-dept': return stats.departures_by_dept
+      case 'headcount-by-dept': return stats.headcount_by_dept
       case 'position-departure-top': return stats.position_departure_top
       case 'monthly-departure-rate': return stats.monthly_departure_rate
       case 'contract-expiry': return stats.contract_expiry
@@ -775,6 +844,7 @@ export default function DashboardClient() {
       else if (chartId === 'departure-comparison') { opts[chartId] = buildComparisonOption(data as MonthlyComparisonItem[]) }
       else if (chartId === 'dept-ranking') { opts[chartId] = buildHorizontalBarOption(data as DistributionItem[], 10) }
       else if (chartId === 'departures-by-dept') { opts[chartId] = buildHorizontalBarOption(data as DistributionItem[]) }
+      else if (chartId === 'headcount-by-dept') { opts[chartId] = buildHeadcountCompareOption(data as HeadcountDeptItem[]) }
       else if (chartId === 'gender') {
         opts[chartId] = buildPieOption(data as DistributionItem[], { '男': T.primary, '女': T.success })
       }
@@ -818,14 +888,14 @@ export default function DashboardClient() {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <DualStatCard items={[
-            { label: '今日入职人数', value: summary.today_hires ?? 0 },
-            { label: '今日离职人数', value: summary.today_departures ?? 0 },
+            { label: '今日入职人数', value: summary.today_hires ?? 0, detail: summary.today_hires_detail },
+            { label: '今日离职人数', value: summary.today_departures ?? 0, detail: summary.today_departures_detail },
           ]} />
         </Col>
         <Col xs={24} sm={12} md={6}>
           <DualStatCard items={[
-            { label: '本月入职人数', value: summary.new_hires_this_month },
-            { label: '本月离职总数', value: summary.departures_this_month },
+            { label: '本月入职人数', value: summary.new_hires_this_month, detail: summary.new_hires_this_month_detail },
+            { label: '本月离职总数', value: summary.departures_this_month, detail: summary.departures_this_month_detail },
           ]} />
         </Col>
       </Row>

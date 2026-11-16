@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { Card, Row, Col } from 'antd'
 import {
   TeamOutlined, BookOutlined, BankOutlined, LoginOutlined, LogoutOutlined,
-  UserDeleteOutlined, FileSearchOutlined, PrinterOutlined,
+  FileSearchOutlined, PrinterOutlined,
 } from '@ant-design/icons'
 
 import { PermissionGuard } from '@/components/permission/PermissionGuard'
@@ -15,7 +15,6 @@ const modules = [
   { key: 'recruitment', title: '招聘管理', desc: '候选人筛选、简历管理、推荐等级评定', icon: <FileSearchOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/recruitment' },
   { key: 'onboarding', title: '入职台账', desc: '员工入职记录管理', icon: <LoginOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/onboarding' },
   { key: 'departure', title: '离职台账', desc: '员工离职记录管理', icon: <LogoutOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/departure' },
-  { key: 'offboarding', title: '离职管理', desc: '员工离职流程、离职记录管理', icon: <UserDeleteOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/offboarding' },
   { key: 'training', title: '培训管理', desc: '培训计划、课程安排、培训记录等', icon: <BookOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/training' },
   { key: 'printing', title: '资料打印', desc: '花名册、个人培训登记表等文档批量下载', icon: <PrinterOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/printing' },
 ]
