@@ -2771,8 +2771,11 @@ class CandidateAnalysisService:
             return ""
         try:
             if resume_url.startswith("minio://"):
-                from app.core.storage import get_object
-                obj = get_object("hr", resume_url[len("minio://"):])
+                from app.core.storage import get_object, parse_minio_uri
+                parsed = parse_minio_uri(resume_url)
+                if parsed is None:
+                    return ""
+                obj = get_object(parsed[0], parsed[1])
                 if obj is None:
                     return ""
                 file_bytes, _ = obj

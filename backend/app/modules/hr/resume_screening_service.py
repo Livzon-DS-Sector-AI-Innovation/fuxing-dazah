@@ -465,9 +465,12 @@ class ResumeScreeningService:
         # 读简历字节：与简历预览接口同一套规则（minio:// 或 uploads/resumes 白名单）
         resume_url = candidate.resume_url
         if resume_url.startswith("minio://"):
-            from app.core.storage import get_object
+            from app.core.storage import get_object, parse_minio_uri
 
-            obj = get_object("hr", resume_url[len("minio://"):])
+            parsed = parse_minio_uri(resume_url)
+            if parsed is None:
+                raise ValueError("简历文件不存在（可能已被清理），请重新上传")
+            obj = get_object(parsed[0], parsed[1])
             if obj is None:
                 raise ValueError("简历文件不存在（可能已被清理），请重新上传")
             file_bytes, _ = obj
@@ -553,9 +556,12 @@ class ResumeScreeningService:
         if not path:
             raise ValueError("该筛选结果没有存档简历文件")
         if path.startswith("minio://"):
-            from app.core.storage import get_object
+            from app.core.storage import get_object, parse_minio_uri
 
-            obj = get_object("hr", path[len("minio://"):])
+            parsed = parse_minio_uri(path)
+            if parsed is None:
+                raise ValueError("简历文件不存在（可能已被清理）")
+            obj = get_object(parsed[0], parsed[1])
             if obj is None:
                 raise ValueError("简历文件不存在（可能已被清理）")
             data, _ct = obj
