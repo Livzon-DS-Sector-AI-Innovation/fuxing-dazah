@@ -39,7 +39,11 @@ def test_api_and_scheduler_service_references_resolve() -> None:
         text = source.read_text()
         # deviations.py / apr.py 以 `from app.modules.qa.service import <子模块> as service`
         # 引用子模块，此时 service.X 解析到子模块而不是包。
-        submodule_aliases = {"deviations.py": deviation, "apr.py": qa_service.apr}
+        submodule_aliases = {
+        "deviations.py": deviation,
+        "apr.py": qa_service.apr,
+        "coa.py": qa_service.coa,
+    }
         target = submodule_aliases.get(source.name, qa_service)
         for name in sorted(set(re.findall(r"\bservice\.(\w+)", text))):
             if not hasattr(target, name):

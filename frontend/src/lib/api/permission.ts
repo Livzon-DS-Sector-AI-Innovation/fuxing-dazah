@@ -5,6 +5,7 @@ import type {
   UserPermissionDetail,
   PersonnelListResponse,
   DepartmentItem,
+  DepartmentTreeNode,
   DepartmentRole,
   RoleUser,
 } from '@/types/permission'
@@ -92,6 +93,15 @@ export async function fetchDepartments(): Promise<DepartmentItem[]> {
     cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取部门列表失败')
+  const json = await res.json()
+  return json.data
+}
+
+export async function fetchDepartmentTree(): Promise<DepartmentTreeNode[]> {
+  const res = await fetch(`${API_BASE}/api/v1/identity/departments?tree=true`, {
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取部门架构失败')
   const json = await res.json()
   return json.data
 }

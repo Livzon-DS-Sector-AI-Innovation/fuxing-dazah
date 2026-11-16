@@ -7,6 +7,7 @@
 - 用户角色分配：分配/重复分配幂等/移除
 - 部门角色分配：分配/重复分配幂等/软删后重新激活/移除
 - 角色编码唯一（软删后可复用）
+- 角色分组：创建/更新/显式 null 清空分组；系统角色仅可调分组
 """
 
 import uuid
@@ -274,6 +275,79 @@ class TestDepartmentRoleAssignment:
         with pytest.raises(NotFoundException):
             await _service.remove_role_from_department(
                 db_session, role.id, "od-unknown",
+            )
+
+
+class TestRoleGroup:
+    async def test_create_with_group(
+        self, db_session: AsyncSession, make_department,
+    ) -> None:
+        """创建角色时可指定展示分组（飞书部门 ID）。"""
+        dept = await make_department("od-group-a", name="质量管理部")
+        role = await _service.create_role(
+            db_session,
+            CreateRoleInput(code="qa_inspector", name="质检员",
+                            group_feishu_department_id=dept.feishu_department_id),
+        )
+        assert role.group_feishu_department_id == "od-group-a"
+
+    async def test_update_group(
+        self, db_session: AsyncSession, make_role, make_department,
+    ) -> None:
+        """更新普通角色的分组。"""
+        dept = await make_department("od-group-b", name="生产一部")
+        role = await make_role()
+        updated = await _service.update_role(
+            db_session, role.id,
+            UpdateRoleInput(group_feishu_department_id=dept.feishu_department_id),
+        )
+        assert updated.group_feishu_department_id == "od-group-b"
+
+    async def test_clear_group_with_explicit_null(
+        self, db_session: AsyncSession, make_role,
+    ) -> None:
+        """显式传 null 清空分组（与「未提供该字段」区分开）。"""
+        role = await make_role(group_feishu_department_id="od-group-a")
+        updated = await _service.update_role(
+            db_session, role.id,
+            UpdateRoleInput(group_feishu_department_id=None),
+        )
+        assert updated.group_feishu_department_id is None
+
+    async def test_update_without_group_field_keeps_group(
+        self, db_session: AsyncSession, make_role,
+    ) -> None:
+        """更新其他字段（未提供分组字段）不影响既有分组。"""
+        role = await make_role(group_feishu_department_id="od-group-a")
+        updated = await _service.update_role(
+            db_session, role.id, UpdateRoleInput(name="新名称"),
+        )
+        assert updated.name == "新名称"
+        assert updated.group_feishu_department_id == "od-group-a"
+
+    async def test_system_role_group_only_update_allowed(
+        self, db_session: AsyncSession, make_role,
+    ) -> None:
+        """系统内置角色仅调整分组（其余字段未提供）时允许更新。"""
+        role = await make_role(is_system=True)
+        updated = await _service.update_role(
+            db_session, role.id,
+            UpdateRoleInput(group_feishu_department_id="od-group-sys"),
+        )
+        assert updated.group_feishu_department_id == "od-group-sys"
+        assert updated.name == "测试角色"  # 其他字段未被改动
+
+    async def test_system_role_group_plus_other_changes_forbidden(
+        self, db_session: AsyncSession, make_role,
+    ) -> None:
+        """系统内置角色同时携带其他字段变更时仍拒绝。"""
+        role = await make_role(is_system=True)
+        with pytest.raises(ForbiddenException, match="不可修改"):
+            await _service.update_role(
+                db_session, role.id,
+                UpdateRoleInput(
+                    group_feishu_department_id="od-group-sys", name="改名",
+                ),
             )
 
 

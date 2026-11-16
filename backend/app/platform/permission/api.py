@@ -119,6 +119,7 @@ async def list_roles(
                 data_scope_overrides=override_map.get(role.id, {}),
                 user_count=user_count_map.get(role.id, 0),
                 department_count=dept_count_map.get(role.id, 0),
+                group_feishu_department_id=role.group_feishu_department_id,
             ).model_dump(mode="json")
         )
 
@@ -145,6 +146,7 @@ async def create_role(
         updated_at=role.updated_at,
         permission_ids=perm_ids,
         data_scope_overrides=overrides,
+        group_feishu_department_id=role.group_feishu_department_id,
     )
     return success_response(data=out.model_dump(mode="json"), message="角色创建成功")
 
@@ -170,6 +172,7 @@ async def update_role(
         updated_at=role.updated_at,
         permission_ids=perm_ids,
         data_scope_overrides=overrides,
+        group_feishu_department_id=role.group_feishu_department_id,
     )
     return success_response(data=out.model_dump(mode="json"), message="角色更新成功")
 

@@ -47,4 +47,10 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("qa:apr:enter", "录入 PQR 批次数据", "qa", "apr", "enter"),
     PermissionDef("qa:apr:export", "导出 PQR 汇总表", "qa", "apr", "export"),
     PermissionDef("qa:apr:lock", "锁定/解锁 PQR 年度", "qa", "apr", "lock"),
+    # ── COA 客户标准与出具登记 ──
+    # 读取单独成码（同偏差/PQR）：数据相关方可只授 COA 可见而不开放知识库；
+    # 模块通配读码 qa:*:read 同样放行 COA 读取。
+    PermissionDef("qa:coa:read", "查看 COA 标准与出具登记", "qa", "coa", "read"),
+    PermissionDef("qa:coa:standard:manage", "配置 COA 产品与客户标准", "qa", "coa:standard", "manage"),
+    PermissionDef("qa:coa:issue:create", "COA 出具登记（含导入登记）", "qa", "coa:issue", "create"),
 ]

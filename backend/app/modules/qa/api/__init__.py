@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from app.modules.qa.api._deps import qa_read
 from app.modules.qa.api.ai_analysis import router as ai_analysis_router
 from app.modules.qa.api.apr import router as apr_router
+from app.modules.qa.api.coa import router as coa_router
 from app.modules.qa.api.deviations import router as deviations_router
 from app.modules.qa.api.documents import router as documents_router
 from app.modules.qa.api.files import router as files_router
@@ -39,5 +40,7 @@ router.include_router(files_router)
 router.include_router(deviations_router)
 # 年度产品审核（PQR）数据管理
 router.include_router(apr_router)
+# COA 客户标准与出具登记
+router.include_router(coa_router)
 # 检索与审计
 router.include_router(search_router)

@@ -6,7 +6,9 @@ const nextConfig: NextConfig = {
     root: __dirname,
   },
   reactCompiler: true,
-  allowedDevOrigins: ['*', '127.0.0.1'],
+  // dev 模式跨源白名单：只认精确 hostname 和 *.domain 前缀通配，写 '*' 不生效（曾导致 LAN IP 访问时 hydration 失败、antd 运行时样式缺失）
+  // 本机局域网 IP 若变化（DHCP），需同步更新
+  allowedDevOrigins: ['127.0.0.1', '192.168.100.7'],
 
   // 内部部署阶段：默认启用 sourcemap 方便定位错误；用 ENABLE_SOURCEMAPS=false 可关闭以加速构建/减小镜像
   productionBrowserSourceMaps: process.env.ENABLE_SOURCEMAPS !== 'false',

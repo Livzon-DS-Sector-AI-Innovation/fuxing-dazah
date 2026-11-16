@@ -11,9 +11,9 @@ import {
 } from '@ant-design/icons'
 import { RoleForm } from './RoleForm'
 import { deleteRole, assignRoleToUser, removeRoleFromUser, assignRoleToDepartment, removeRoleFromDepartment } from '@/actions/permission'
-import { fetchRoles, fetchRoleUsers, fetchRoleDepartments, fetchDepartments } from '@/lib/api/permission'
+import { fetchRoles, fetchRoleUsers, fetchRoleDepartments } from '@/lib/api/permission'
 import { UserSelect } from '@/components/shared'
-import type { Role, PermissionModuleGroup, DataScope, RoleUser, DepartmentRole, DepartmentItem } from '@/types/permission'
+import type { Role, PermissionModuleGroup, DataScope, RoleUser, DepartmentRole, DepartmentItem, DepartmentTreeNode } from '@/types/permission'
 import styles from './Permission.module.css'
 
 const SCOPE_LABELS: Record<DataScope, string> = {
@@ -43,13 +43,31 @@ function getCardTint(index: number) {
   return CARD_TINTS[index % CARD_TINTS.length]
 }
 
+/** 部门树先序遍历展平：决定分组区块顺序，也供下拉选择/分配弹窗复用。 */
+function flattenDepartmentTree(
+  nodes: DepartmentTreeNode[],
+  out: DepartmentItem[] = [],
+): DepartmentItem[] {
+  for (const node of nodes) {
+    out.push({
+      id: node.id,
+      feishu_department_id: node.feishu_department_id,
+      name: node.name,
+      member_count: node.member_count,
+    })
+    if (node.children?.length) flattenDepartmentTree(node.children, out)
+  }
+  return out
+}
+
 interface Props {
   initialRoles: Role[]
   permissionGroups: PermissionModuleGroup[]
   apiToken: string
+  departmentTree: DepartmentTreeNode[]
 }
 
-export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
+export function RoleList({ initialRoles, permissionGroups, apiToken, departmentTree }: Props) {
   const { message, modal } = App.useApp()
   const router = useRouter()
   const [roles, setRoles] = useState(initialRoles)
@@ -71,13 +89,33 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
   const [assignedDeptsLoading, setAssignedDeptsLoading] = useState(false)
   const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([])
   const [deptAssigning, setDeptAssigning] = useState(false)
-  const [departments, setDepartments] = useState<DepartmentItem[]>([])
 
   const filteredRoles = roles.filter(
     (r) =>
       r.name.toLowerCase().includes(search.toLowerCase()) ||
       r.code.toLowerCase().includes(search.toLowerCase())
   )
+
+  // 部门树先序展平：决定分组区块顺序，也作为分组下拉/分配弹窗的数据源
+  const flatDepartments = flattenDepartmentTree(departmentTree)
+  const deptNameById = new Map(flatDepartments.map((d) => [d.feishu_department_id, d.name]))
+
+  // 按分组分区：有角色的部门按树顺序展示；未挂组（含分组部门已不存在）的角色归「未分组」排最后
+  const roleGroups: { key: string; name: string; roles: Role[] }[] = []
+  for (const dept of flatDepartments) {
+    const grouped = filteredRoles.filter(
+      (r) => r.group_feishu_department_id === dept.feishu_department_id,
+    )
+    if (grouped.length > 0) {
+      roleGroups.push({ key: dept.feishu_department_id, name: dept.name, roles: grouped })
+    }
+  }
+  const ungrouped = filteredRoles.filter(
+    (r) => !r.group_feishu_department_id || !deptNameById.has(r.group_feishu_department_id),
+  )
+  if (ungrouped.length > 0) {
+    roleGroups.push({ key: '__ungrouped__', name: '未分组', roles: ungrouped })
+  }
 
   const totalPermissions = new Set(
     permissionGroups.flatMap((g) => g.permissions.map((p) => p.id))
@@ -179,12 +217,7 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
     setSelectedDeptIds([])
     setAssignedDeptsLoading(true)
     try {
-      const [depts, allDepts] = await Promise.all([
-        fetchRoleDepartments(apiToken, role.id),
-        fetchDepartments(),
-      ])
-      setAssignedDepts(depts)
-      setDepartments(allDepts)
+      setAssignedDepts(await fetchRoleDepartments(apiToken, role.id))
     } catch {
       message.error('获取部门数据失败')
     } finally {
@@ -372,155 +405,174 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
             />
           </div>
         ) : (
-          <div
-            className="grid gap-3 sm:gap-4 overflow-auto content-start"
-            style={{
-              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-            }}
-          >
-            {filteredRoles.map((role, index) => {
-              const tint = getCardTint(index)
-              const scopeStyle = SCOPE_TAG_STYLES[role.data_scope]
-              return (
+          <div className="flex flex-col gap-6 overflow-auto">
+            {roleGroups.map((group) => (
+              <section key={group.key}>
+                {/* Group header: 色条 + 部门名 + 角色数（m-0 抵消 antd reset 给 h3 的不对称 margin，否则文字会被顶高导致不居中） */}
+                <div className="flex items-center gap-2.5 mb-3">
+                  <div
+                    className="w-[3px] h-[15px] rounded-full flex-shrink-0"
+                    style={{ backgroundColor: 'var(--color-primary)' }}
+                  />
+                  <h3 className="m-0 text-[15px] font-semibold text-[var(--color-ink)]">
+                    {group.name}
+                  </h3>
+                  <span className="text-[12px] text-[var(--color-steel)]">
+                    {group.roles.length} 个角色
+                  </span>
+                </div>
                 <div
-                  key={role.id}
-                  className={`${styles.roleCard} rounded-[16px] border p-5 flex flex-col transition-shadow duration-150 group`}
+                  className="grid gap-3 sm:gap-4 content-start"
                   style={{
-                    backgroundColor: tint.bg,
-                    borderColor: tint.border,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.boxShadow =
-                      'rgba(15, 15, 15, 0.06) 0px 4px 12px 0px'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.boxShadow = 'none'
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
                   }}
                 >
-                  {/* Top row: icon + system badge */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div
-                      className="w-9 h-9 rounded-[8px] flex items-center justify-center flex-shrink-0"
-                      style={{
-                        backgroundColor: role.is_system
-                          ? 'var(--color-primary)'
-                          : 'rgba(255,255,255,0.7)',
-                        color: role.is_system ? '#fff' : 'var(--color-steel)',
-                      }}
-                    >
-                      <SafetyCertificateOutlined style={{ fontSize: 16 }} />
-                    </div>
-                    {role.is_system && (
-                      <span
-                        className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[11px] font-medium"
-                        style={{ backgroundColor: 'rgba(86, 69, 212, 0.12)', color: '#391c57' }}
+                  {group.roles.map((role, index) => {
+                    const tint = getCardTint(index)
+                    const scopeStyle = SCOPE_TAG_STYLES[role.data_scope]
+                    return (
+                      <div
+                        key={role.id}
+                        className={`${styles.roleCard} rounded-[16px] border p-5 flex flex-col transition-shadow duration-150 group`}
+                        style={{
+                          backgroundColor: tint.bg,
+                          borderColor: tint.border,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.boxShadow =
+                            'rgba(15, 15, 15, 0.06) 0px 4px 12px 0px'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.boxShadow = 'none'
+                        }}
                       >
-                        系统内置
-                      </span>
-                    )}
-                  </div>
+                        {/* Top row: icon + system badge */}
+                        <div className="flex items-center justify-between mb-3">
+                          <div
+                            className="w-9 h-9 rounded-[8px] flex items-center justify-center flex-shrink-0"
+                            style={{
+                              backgroundColor: role.is_system
+                                ? 'var(--color-primary)'
+                                : 'rgba(255,255,255,0.7)',
+                              color: role.is_system ? '#fff' : 'var(--color-steel)',
+                            }}
+                          >
+                            <SafetyCertificateOutlined style={{ fontSize: 16 }} />
+                          </div>
+                          {role.is_system && (
+                            <span
+                              className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[11px] font-medium"
+                              style={{ backgroundColor: 'rgba(86, 69, 212, 0.12)', color: '#391c57' }}
+                            >
+                              系统内置
+                            </span>
+                          )}
+                        </div>
 
-                  {/* Name + code */}
-                  <h3 className="text-[15px] font-semibold text-[var(--color-ink)] truncate mb-0.5">
-                    {role.name}
-                  </h3>
-                  <code className="text-[11px] text-[var(--color-stone)] font-mono mb-2">
-                    {role.code}
-                  </code>
+                        {/* Name + code */}
+                        <h3 className="text-[15px] font-semibold text-[var(--color-ink)] truncate mb-0.5">
+                          {role.name}
+                        </h3>
+                        <code className="text-[11px] text-[var(--color-stone)] font-mono mb-2">
+                          {role.code}
+                        </code>
 
-                  {/* Description */}
-                  {role.description ? (
-                    <p className="text-[13px] text-[var(--color-steel)] leading-relaxed mb-3 line-clamp-2">
-                      {role.description}
-                    </p>
-                  ) : null}
+                        {/* Description */}
+                        {role.description ? (
+                          <p className="text-[13px] text-[var(--color-steel)] leading-relaxed mb-3 line-clamp-2">
+                            {role.description}
+                          </p>
+                        ) : null}
 
-                  {/* Data scope tag */}
-                  <div className="mb-3">
-                    <span
-                      className="inline-flex items-center px-2.5 py-0.5 rounded-[4px] text-[11px] font-medium"
-                      style={{ backgroundColor: scopeStyle.bg, color: scopeStyle.color }}
-                    >
-                      {SCOPE_LABELS[role.data_scope] || role.data_scope}
-                    </span>
-                  </div>
+                        {/* Data scope tag */}
+                        <div className="mb-3">
+                          <span
+                            className="inline-flex items-center px-2.5 py-0.5 rounded-[4px] text-[11px] font-medium"
+                            style={{ backgroundColor: scopeStyle.bg, color: scopeStyle.color }}
+                          >
+                            {SCOPE_LABELS[role.data_scope] || role.data_scope}
+                          </span>
+                        </div>
 
-                  {/* Stats row */}
-                  <div className="flex items-center gap-4 text-[12px] text-[var(--color-steel)] mb-3">
-                    <span className="flex items-center gap-1">
-                      <TeamOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
-                      <span className="font-medium text-[var(--color-charcoal)]">{role.user_count}</span>
-                      <span>用户</span>
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <ApartmentOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
-                      <span className="font-medium text-[var(--color-charcoal)]">{role.department_count}</span>
-                      <span>部门</span>
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <KeyOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
-                      <span className="font-medium text-[var(--color-charcoal)]">{role.permission_ids.length}</span>
-                      <span>权限</span>
-                    </span>
-                  </div>
+                        {/* Stats row */}
+                        <div className="flex items-center gap-4 text-[12px] text-[var(--color-steel)] mb-3">
+                          <span className="flex items-center gap-1">
+                            <TeamOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
+                            <span className="font-medium text-[var(--color-charcoal)]">{role.user_count}</span>
+                            <span>用户</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <ApartmentOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
+                            <span className="font-medium text-[var(--color-charcoal)]">{role.department_count}</span>
+                            <span>部门</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <KeyOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
+                            <span className="font-medium text-[var(--color-charcoal)]">{role.permission_ids.length}</span>
+                            <span>权限</span>
+                          </span>
+                        </div>
 
-                  {/* Actions row */}
-                  <div
-                    className="flex items-center gap-1 pt-2 border-t transition-opacity duration-150"
-                    style={{
-                      borderColor: 'rgba(0,0,0,0.06)',
-                    }}
-                  >
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => { setEditingRole(role); setDrawerOpen(true) }}
-                      style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
-                    >
-                      编辑
-                    </Button>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<UserAddOutlined />}
-                      style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
-                      onClick={() => handleAssignOpen(role)}
-                    >
-                      分配
-                    </Button>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<ApartmentOutlined />}
-                      style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
-                      onClick={() => handleDeptAssignOpen(role)}
-                    >
-                      部门
-                    </Button>
-                    <div className="flex-1" />
-                    {!role.is_system && (
-                      <Popconfirm
-                        title="确定删除此角色？"
-                        description="删除后不可恢复，已关联用户将失去此角色权限。"
-                        onConfirm={() => handleDelete(role.id)}
-                        okText="删除"
-                        cancelText="取消"
-                        okButtonProps={{ danger: true }}
-                      >
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<DeleteOutlined />}
-                          danger
-                          style={{ borderRadius: 6 }}
-                        />
-                      </Popconfirm>
-                    )}
-                  </div>
+                        {/* Actions row */}
+                        <div
+                          className="flex items-center gap-1 pt-2 border-t transition-opacity duration-150"
+                          style={{
+                            borderColor: 'rgba(0,0,0,0.06)',
+                          }}
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => { setEditingRole(role); setDrawerOpen(true) }}
+                            style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
+                          >
+                            编辑
+                          </Button>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<UserAddOutlined />}
+                            style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
+                            onClick={() => handleAssignOpen(role)}
+                          >
+                            分配
+                          </Button>
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<ApartmentOutlined />}
+                            style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
+                            onClick={() => handleDeptAssignOpen(role)}
+                          >
+                            部门
+                          </Button>
+                          <div className="flex-1" />
+                          {!role.is_system && (
+                            <Popconfirm
+                              title="确定删除此角色？"
+                              description="删除后不可恢复，已关联用户将失去此角色权限。"
+                              onConfirm={() => handleDelete(role.id)}
+                              okText="删除"
+                              cancelText="取消"
+                              okButtonProps={{ danger: true }}
+                            >
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<DeleteOutlined />}
+                                danger
+                                style={{ borderRadius: 6 }}
+                              />
+                            </Popconfirm>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
-              )
-            })}
+              </section>
+            ))}
           </div>
         )}
       </div>
@@ -531,6 +583,7 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
         onSuccess={() => { void refreshRoles() }}
         role={editingRole}
         permissionGroups={permissionGroups}
+        departments={flatDepartments}
       />
 
       {/* Assign user to role modal */}
@@ -653,7 +706,7 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
           placeholder="搜索部门名称…"
           value={selectedDeptIds}
           onChange={(v) => setSelectedDeptIds(v)}
-          options={departments
+          options={flatDepartments
             .filter((d) => !assignedDepts.some((ad) => ad.feishu_department_id === d.feishu_department_id))
             .map((d) => ({
               label: `${d.name}（${d.member_count ?? 0}人）`,

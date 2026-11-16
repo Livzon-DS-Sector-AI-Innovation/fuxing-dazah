@@ -6,7 +6,7 @@ import { Drawer, Form, Input, Select, Button, App, Divider, Grid, Tag } from 'an
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { PermissionTree } from './PermissionTree'
 import { createRole, updateRole } from '@/actions/permission'
-import type { Role, PermissionModuleGroup, DataScope } from '@/types/permission'
+import type { Role, PermissionModuleGroup, DataScope, DepartmentItem } from '@/types/permission'
 
 const { useBreakpoint } = Grid
 
@@ -23,9 +23,10 @@ interface Props {
   onSuccess?: () => void
   role?: Role | null
   permissionGroups: PermissionModuleGroup[]
+  departments: DepartmentItem[]
 }
 
-export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: Props) {
+export function RoleForm({ open, onClose, onSuccess, role, permissionGroups, departments }: Props) {
   const { message } = App.useApp()
   const router = useRouter()
   const [form] = Form.useForm()
@@ -33,8 +34,14 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
   const [checkedPermIds, setCheckedPermIds] = useState<string[]>([])
   const [scopeOverrides, setScopeOverrides] = useState<{ module: string; scope: DataScope }[]>([])
   const isEdit = !!role
+  const isSystemEdit = isEdit && !!role?.is_system
   const screens = useBreakpoint()
   const isMobile = !screens.md
+
+  const groupOptions = departments.map((d) => ({
+    label: d.name,
+    value: d.feishu_department_id,
+  }))
 
   // 可用模块列表（从 permissionGroups 提取）
   const moduleOptions = useMemo(
@@ -54,6 +61,7 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
           code: role.code,
           description: role.description,
           data_scope: role.data_scope,
+          group_feishu_department_id: role.group_feishu_department_id ?? undefined,
         })
         setCheckedPermIds(role.permission_ids)
         setScopeOverrides(
@@ -82,15 +90,25 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
 
     try {
       if (isEdit && role) {
-        await updateRole(role.id, {
-          ...values,
-          permission_ids: checkedPermIds,
-          data_scope_overrides,
-        })
+        if (role.is_system) {
+          // 系统内置角色后端仅放行分组字段，其余字段一并提交会被 403
+          await updateRole(role.id, {
+            group_feishu_department_id: values.group_feishu_department_id ?? null,
+          })
+        } else {
+          await updateRole(role.id, {
+            ...values,
+            // 显式传 null 以支持清空分组（后端按字段是否显式提供区分「不改」与「清空」）
+            group_feishu_department_id: values.group_feishu_department_id ?? null,
+            permission_ids: checkedPermIds,
+            data_scope_overrides,
+          })
+        }
         message.success('角色更新成功')
       } else {
         await createRole({
           ...values,
+          group_feishu_department_id: values.group_feishu_department_id ?? null,
           permission_ids: checkedPermIds,
           data_scope_overrides,
         })
@@ -109,7 +127,7 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
 
   return (
     <Drawer
-      title={isEdit ? '编辑角色' : '新建角色'}
+      title={isSystemEdit ? `调整分组 · ${role?.name ?? ''}` : isEdit ? '编辑角色' : '新建角色'}
       open={open}
       onClose={onClose}
       styles={{
@@ -130,38 +148,77 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
         size="large"
         initialValues={{ data_scope: 'department' }}
       >
-        <Form.Item
-          name="name"
-          label="角色名称"
-          rules={[{ required: true, message: '请输入角色名称' }]}
-        >
-          <Input placeholder="如：设备巡检员" maxLength={100} />
-        </Form.Item>
+        {isSystemEdit && (
+          <p
+            style={{
+              fontSize: 13,
+              color: 'var(--color-steel)',
+              background: 'rgba(86, 69, 212, 0.06)',
+              borderRadius: 8,
+              padding: '10px 12px',
+              marginBottom: 16,
+            }}
+          >
+            系统内置角色仅支持调整分组，其余配置不可修改。
+          </p>
+        )}
+
+        {!isSystemEdit && (
+          <Form.Item
+            name="name"
+            label="角色名称"
+            rules={[{ required: true, message: '请输入角色名称' }]}
+          >
+            <Input placeholder="如：设备巡检员" maxLength={100} />
+          </Form.Item>
+        )}
+
+        {!isSystemEdit && (
+          <Form.Item
+            name="code"
+            label="角色编码"
+            rules={[
+              { required: true, message: '请输入角色编码' },
+              { pattern: /^[a-z][a-z0-9_]*$/, message: '小写字母开头，仅含小写字母、数字、下划线' },
+            ]}
+            help={!isEdit ? '创建后不可修改' : undefined}
+          >
+            <Input disabled={isEdit} placeholder="如：equipment_inspector" maxLength={50} />
+          </Form.Item>
+        )}
+
+        {!isSystemEdit && (
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} placeholder="可选：描述角色的职责范围" />
+          </Form.Item>
+        )}
 
         <Form.Item
-          name="code"
-          label="角色编码"
-          rules={[
-            { required: true, message: '请输入角色编码' },
-            { pattern: /^[a-z][a-z0-9_]*$/, message: '小写字母开头，仅含小写字母、数字、下划线' },
-          ]}
-          help={!isEdit ? '创建后不可修改' : undefined}
+          name="group_feishu_department_id"
+          label="分组（飞书部门）"
+          help="按部门分区展示角色看板，可不选（归入「未分组」）"
         >
-          <Input disabled={isEdit} placeholder="如：equipment_inspector" maxLength={50} />
+          <Select
+            options={groupOptions}
+            placeholder="搜索部门名称…"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+          />
         </Form.Item>
 
-        <Form.Item name="description" label="描述">
-          <Input.TextArea rows={3} placeholder="可选：描述角色的职责范围" />
-        </Form.Item>
+        {!isSystemEdit && (
+          <Form.Item
+            name="data_scope"
+            label="默认数据范围"
+            rules={[{ required: true }]}
+          >
+            <Select options={DATA_SCOPE_OPTIONS} />
+          </Form.Item>
+        )}
 
-        <Form.Item
-          name="data_scope"
-          label="默认数据范围"
-          rules={[{ required: true }]}
-        >
-          <Select options={DATA_SCOPE_OPTIONS} />
-        </Form.Item>
-
+        {!isSystemEdit && (
+        <>
         {/* 按模块覆盖数据范围 */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -242,6 +299,8 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
             onChange={setCheckedPermIds}
           />
         </Form.Item>
+        </>
+        )}
       </Form>
 
       {isMobile && (

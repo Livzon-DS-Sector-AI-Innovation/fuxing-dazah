@@ -30,6 +30,18 @@ from app.modules.qa.schemas.apr import (
     AprValueIn,
     TrendPointStatus,
 )
+from app.modules.qa.schemas.coa import (
+    CoaItemIn,
+    CoaNewItemIn,
+    CoaProductCreate,
+    CoaProductUpdate,
+    CoaReportCreate,
+    CoaReportUpdate,
+    CoaStandardCreate,
+    CoaStandardItemsReplace,
+    CoaStandardUpdate,
+    CoaValueIn,
+)
 from app.modules.qa.schemas.deviation import (
     CapaActionIn,
     CapaActionPatch,
@@ -92,6 +104,17 @@ from app.modules.qa.schemas.processing import (
 )
 
 __all__ = [
+    # COA 域
+    "CoaItemIn",
+    "CoaNewItemIn",
+    "CoaProductCreate",
+    "CoaProductUpdate",
+    "CoaReportCreate",
+    "CoaReportUpdate",
+    "CoaStandardCreate",
+    "CoaStandardItemsReplace",
+    "CoaStandardUpdate",
+    "CoaValueIn",
     "AprProductCreate",
     "AprProductUpdate",
     "AprSectionCopyIn",

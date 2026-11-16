@@ -32,6 +32,7 @@ class PermissionService:
             name=data.name,
             description=data.description,
             data_scope=data.data_scope,
+            group_feishu_department_id=data.group_feishu_department_id,
         )
         role = await _repo.create_role(db, role)
 
@@ -52,9 +53,27 @@ class PermissionService:
         role = await _repo.get_role_by_id(db, role_id)
         if not role:
             raise NotFoundException("角色", str(role_id))
-        if role.is_system:
-            raise ForbiddenException("系统内置角色不可修改")
 
+        # 分组是展示关注点而非安全属性：系统内置角色仅允许调整分组，其余字段仍锁定
+        group_provided = "group_feishu_department_id" in data.model_fields_set
+        if role.is_system:
+            other_changes = any(
+                getattr(data, field) is not None
+                for field in (
+                    "name",
+                    "description",
+                    "data_scope",
+                    "permission_ids",
+                    "data_scope_overrides",
+                )
+            )
+            if other_changes:
+                raise ForbiddenException("系统内置角色不可修改（仅支持调整分组）")
+
+        if group_provided:
+            role.group_feishu_department_id = data.group_feishu_department_id
+
+        # 系统角色走到这里时其余字段必为 None，不会被改动
         if data.name is not None:
             role.name = data.name
         if data.description is not None:

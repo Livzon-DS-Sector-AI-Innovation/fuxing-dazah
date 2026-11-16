@@ -10,8 +10,11 @@ ENV PATH="$PNPM_HOME:$PATH"
 # 启用 pnpm（corepack 自动读取 package.json 中的 packageManager 版本）
 RUN corepack enable
 
-# 配置国内镜像源（加速依赖下载）
-RUN pnpm config set registry https://registry.npmmirror.com
+# 配置国内镜像源（加速依赖下载）+ 慢网容错：拉长 fetch 超时与重试次数
+# （默认 fetch-timeout 60s，慢网下大包如 sharp-libvips 会中途被 TimeoutError 杀掉）
+RUN pnpm config set registry https://registry.npmmirror.com && \
+    pnpm config set fetch-timeout 600000 && \
+    pnpm config set fetch-retries 5
 
 WORKDIR /app
 
