@@ -143,6 +143,7 @@ class TestCandidateOnboard:
         assert onboarding.department == "技术部"
         assert onboarding.position == "工程师"
         assert onboarding.source == "recruitment"
+        assert onboarding.is_employed == "是"  # 台账默认筛「在职」，漏写会导致记录不可见
 
     @pytest.mark.asyncio
     async def test_onboard_carries_fields_and_backlink(self, db_session):

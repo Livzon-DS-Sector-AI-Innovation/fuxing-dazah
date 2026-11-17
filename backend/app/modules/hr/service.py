@@ -1732,6 +1732,7 @@ class CandidateService:
             education=c.education,
             school=c.school,
             major=c.major,
+            is_employed="是",
             source="recruitment",
         )
         self.repo.session.add(onboarding)
