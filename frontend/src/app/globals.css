@@ -225,16 +225,6 @@ body {
   background: #f6f5f4;
 }
 
-/* 人员全周期台账大字号（用户拍板 15px，2026-11-17） */
-.table-lg .ant-table-thead > tr > th,
-.table-lg .ant-table-thead > tr > td {
-  font-size: 15px;
-}
-
-.table-lg .ant-table-tbody > tr > td {
-  font-size: 15px;
-}
-
 /* small size 进一步压缩 */
 .ant-table-small .ant-table-thead > tr > th,
 .ant-table-small .ant-table-thead > tr > td {
@@ -245,6 +235,16 @@ body {
 .ant-table-small .ant-table-tbody > tr > td {
   padding: 3px 8px !important;
   font-size: 12px;
+}
+
+/* 人员全周期台账大字号（用户拍板 15px，2026-11-17） */
+.table-lg .ant-table-thead > tr > th,
+.table-lg .ant-table-thead > tr > td {
+  font-size: 15px;
+}
+
+.table-lg .ant-table-tbody > tr > td {
+  font-size: 15px;
 }
 
 /* 分页样式 */

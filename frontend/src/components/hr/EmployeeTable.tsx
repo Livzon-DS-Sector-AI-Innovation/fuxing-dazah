@@ -508,7 +508,6 @@ export default function EmployeeTable({
           showTotal: (t) => `共 ${t} 条`,
           onChange: onPageChange }}
         scroll={{ x: 4800 }}
-        size="small"
       />
 
       <EmployeeInfoModal employee={detailEmp} open={detailOpen} onClose={() => setDetailOpen(false)} />

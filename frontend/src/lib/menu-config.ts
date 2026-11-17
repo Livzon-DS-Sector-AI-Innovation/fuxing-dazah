@@ -350,10 +350,10 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
           { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
           { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
+          { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
         ],
       },
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
-      { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
       {
         key: "training",
         label: "培训管理",
