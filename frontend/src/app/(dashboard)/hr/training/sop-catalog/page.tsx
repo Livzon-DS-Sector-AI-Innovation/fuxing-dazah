@@ -35,7 +35,7 @@ export default function SopCatalogPage() {
   useEffect(() => {
     fetchSopDepartments()
       .then(res => setDepartments(res.data || []))
-      .catch(() => {})
+      .catch(() => message.error('加载SOP部门列表失败'))
   }, [])
 
   // 加载全部数据
@@ -149,10 +149,12 @@ export default function SopCatalogPage() {
                   <div key={catName} className="inline-block mr-2 mb-2">
                     <Tag color="blue" closable onClose={async (e) => {
                       e.preventDefault()
+                      let failed = 0
                       for (const s of sops) {
-                        await deleteSopItem(s.id).catch(() => {})
+                        try { await deleteSopItem(s.id) } catch { failed++ }
                       }
-                      message.success(`已删除「${catName}」`)
+                      if (failed > 0) message.error(`删除「${catName}」：${sops.length - failed} 条成功，${failed} 条失败，请重试`)
+                      else message.success(`已删除「${catName}」`)
                       loadAll()
                     }}>{catName}</Tag>
                   </div>

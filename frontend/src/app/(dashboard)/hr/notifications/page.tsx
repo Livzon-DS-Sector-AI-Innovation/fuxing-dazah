@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag } from 'antd'
+import { Card, Table, Tag, message } from 'antd'
 
 import { fetchNotificationLogs } from '@/actions/hr'
 
@@ -12,7 +12,11 @@ export default function NotificationsPage() {
   useEffect(() => {
     setLoading(true)
     fetchNotificationLogs({ page_size: 100 })
-      .then(d => setLogs(d.data || [])).catch(() => {})
+      .then(d => setLogs(d.data || []))
+      .catch((err: unknown) => {
+        setLogs([])
+        message.error((err instanceof Error ? err.message : '') || '通知记录加载失败')
+      })
       .finally(() => setLoading(false))
   }, [])
 

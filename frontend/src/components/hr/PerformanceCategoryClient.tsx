@@ -28,10 +28,12 @@ export default function PerformanceCategoryClient() {
       { name: '生产权重比', weight: 20, sort_order: 4 },
       { name: '部门综合事项权重', weight: 15, sort_order: 5 },
     ]
+    let failed = 0
     for (const d of defaults) {
-      try { await createPerformanceCategory(d) } catch {}
+      try { await createPerformanceCategory(d) } catch { failed++ }
     }
-    message.success('默认项目已初始化')
+    if (failed > 0) message.warning(`初始化完成，但 ${failed} 个项目创建失败，请检查后重试`)
+    else message.success('默认项目已初始化')
     load()
   }
 
@@ -100,7 +102,10 @@ export default function PerformanceCategoryClient() {
           { title: '操作', width: 200, render: (_: any, r: any) => <Space>
             <Button size="small" icon={<SettingOutlined />} onClick={() => openDeptWeights(r)}>部门权重</Button>
             <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(r); form.setFieldsValue(r); setModalOpen(true) }} />
-            <Popconfirm title="确认删除？" onConfirm={async () => { await deletePerformanceCategory(r.id); load() }}>
+            <Popconfirm title="确认删除？" onConfirm={async () => {
+              try { await deletePerformanceCategory(r.id); load() }
+              catch (e: any) { message.error(e?.message || '删除失败') }
+            }}>
               <Button size="small" danger icon={<DeleteOutlined />} />
             </Popconfirm>
           </Space> },
