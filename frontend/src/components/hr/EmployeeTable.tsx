@@ -495,7 +495,7 @@ export default function EmployeeTable({
         />
       </div>
 
-      <Table
+      <Table className="table-lg"
         columns={columns}
         dataSource={employees}
         rowKey="id"

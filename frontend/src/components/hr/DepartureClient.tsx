@@ -372,7 +372,7 @@ export default function DepartureClient({
         />
       </div>
 
-      <Table
+      <Table className="table-lg"
         columns={columns}
         dataSource={records}
         rowKey="id"

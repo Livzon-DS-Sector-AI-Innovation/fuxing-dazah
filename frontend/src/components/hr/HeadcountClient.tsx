@@ -247,7 +247,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
             共 {summary?.department_count ?? 0} 个部门；点击部门名查看该部门员工
           </Text>
         </div>
-        <Table<HeadcountPlanRow>
+        <Table<HeadcountPlanRow> className="table-lg"
           rowKey="department"
           loading={loading}
           dataSource={filtered}
