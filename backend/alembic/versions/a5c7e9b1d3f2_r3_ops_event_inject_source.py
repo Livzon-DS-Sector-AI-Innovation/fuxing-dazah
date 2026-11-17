@@ -13,6 +13,7 @@ Create Date: 2026-11-12
 import json
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a5c7e9b1d3f2"
@@ -47,8 +48,9 @@ def upgrade() -> None:
         config=_EVENT_SOURCE_CONFIG, enabled=False,
     )
     # 一期 BLOCK 雷防复发：种子后 kind/name 归位断言（错位即迁移失败）
-    row = op.execute(
-        "SELECT kind FROM superagent.agent_sources WHERE name = 'safety.ops.event_inject'"
+    # （2026-11-13 修：op.execute 在 alembic 1.18 返回 None，断言须走 op.get_bind()）
+    row = op.get_bind().execute(
+        sa.text("SELECT kind FROM superagent.agent_sources WHERE name = 'safety.ops.event_inject'")
     ).scalar_one_or_none()
     if row != "event_direct":
         raise RuntimeError(
