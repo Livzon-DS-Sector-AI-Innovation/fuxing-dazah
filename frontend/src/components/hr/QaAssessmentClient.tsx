@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Card, Popconfirm, Space, Table, Tag } from 'antd'
-import { EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
+import { EditOutlined, DeleteOutlined, SearchOutlined, BellOutlined } from '@ant-design/icons'
+import Link from 'next/link'
 import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord, deleteQaAssessment } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
@@ -46,11 +47,16 @@ export default function QaAssessmentClient() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">问答考核历史</h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          历史考核场次及成绩查询；新建考核请前往「培训通知」页
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">考核历史</h1>
+          <p className="text-[14px] text-[var(--color-steel)]">
+            历史考核场次及成绩查询
+          </p>
+        </div>
+        <Link href="/hr/training/notification">
+          <Button type="primary" icon={<BellOutlined />}>去培训通知发起考核</Button>
+        </Link>
       </div>
       <Card>
         <Table

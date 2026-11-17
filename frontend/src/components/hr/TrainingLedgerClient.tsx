@@ -28,6 +28,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons'
 import { downloadBase64File } from '@/lib/hr'
+import Link from 'next/link'
 import dayjs from 'dayjs'
 import { Employee, TrainingLedgerRecord } from '@/types/hr'
 import {
@@ -441,19 +442,24 @@ export default function TrainingLedgerClient({
   if (isAdminMode) {
     return (
       <div className="space-y-4">
-        {/* 员工搜索入口 */}
-        <Select
-          showSearch
-          placeholder="输入工号或姓名搜索员工，查看个人台账"
-          value={undefined}
-          style={{ width: 360 }}
-          filterOption={false}
-          onSearch={handleEmployeeSearch}
-          onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
-          notFoundContent={searching ? <Spin size="small" /> : null}
-          options={searchOptions}
-          allowClear
-        />
+        {/* 员工搜索入口 + 新建个人台账（原孤儿页 ledger/new 的入口） */}
+        <div className="flex items-center gap-3">
+          <Select
+            showSearch
+            placeholder="输入工号或姓名搜索员工，查看个人台账"
+            value={undefined}
+            style={{ width: 360 }}
+            filterOption={false}
+            onSearch={handleEmployeeSearch}
+            onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
+            notFoundContent={searching ? <Spin size="small" /> : null}
+            options={searchOptions}
+            allowClear
+          />
+          <Link href="/hr/training/ledger/new">
+            <Button icon={<PlusOutlined />}>新建台账</Button>
+          </Link>
+        </div>
 
         {/* 筛选栏 */}
         <Card size="small">

@@ -248,7 +248,7 @@ export default function AiExamClient() {
         subject: qaSubject || qaTitle || (qaFileList[0]?.name || '问答考核').replace(/\.[^.]+$/, ''),
         questions: qaQuestions,
       })
-      message.success(res.message || `已同步 ${res.data?.inserted ?? 0} 题到题库大全`)
+      message.success(res.message || `已同步 ${res.data?.inserted ?? 0} 题到题库`)
     } catch (err: any) {
       message.error(err.message || '同步失败')
     } finally {
@@ -276,7 +276,7 @@ export default function AiExamClient() {
       />
       {mode === 'qa' ? (
         <div className="space-y-4">
-          <Card title="问答考核出题（简短问答，可同步到题库大全）" className="shadow-sm">
+          <Card title="问答考核出题（简短问答，可同步到题库）" className="shadow-sm">
             <Space direction="vertical" size="middle" className="w-full">
               <Space wrap>
                 <Text>考核主题：</Text>
@@ -311,7 +311,7 @@ export default function AiExamClient() {
               className="shadow-sm"
               extra={
                 <Button type="primary" loading={qaSyncing} onClick={handleQaSync}>
-                  同步到题库大全
+                  同步到题库
                 </Button>
               }
             >

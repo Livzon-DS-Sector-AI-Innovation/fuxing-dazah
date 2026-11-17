@@ -51,6 +51,15 @@ function buildKeyPathMap(items: SubMenuItem[]): Map<string, string> {
 function buildMenuItems(items: SubMenuItem[]): MenuItem[] {
   return items.map((item) => {
     if (item.children && item.children.length > 0) {
+      // group 类型：分组小标题，children 平铺展示不可折叠（培训五区等）
+      if (item.group) {
+        return {
+          key: item.key,
+          label: item.label,
+          type: 'group' as const,
+          children: buildMenuItems(item.children),
+        }
+      }
       return {
         key: item.key,
         label: item.label,

@@ -103,7 +103,7 @@ function TrainersTab() {
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold">内训师台账</h1>
+        <h1 className="text-[22px] font-semibold">内训师</h1>
         <Space>
           <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增内训师</Button>
           <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
