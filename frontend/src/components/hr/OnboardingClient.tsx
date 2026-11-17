@@ -99,7 +99,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
       <Table columns={columns} dataSource={records} rowKey="id" loading={loading}
         pagination={{ current: page, pageSize, total, showSizeChanger: true,
           showTotal: (t) => `共 ${t} 条`, onChange: (p, ps) => { setPage(p); setPageSize(ps) } }}
-        scroll={{ x: 900 }} size="small" />
+        scroll={{ x: 1050 }} />
 
       <EmployeeForm open={createOpen} employee={null} onClose={() => setCreateOpen(false)}
         onSuccess={() => { setCreateOpen(false); loadData() }} />
