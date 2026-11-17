@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import {
@@ -169,7 +170,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
   return (
     <div className="space-y-4">
       {/* 同步状态条 */}
-      <Card size="small">
+      <Card>
         <div className="flex items-center justify-between flex-wrap gap-2">
           <Space size="middle" wrap>
             <CloudSyncOutlined />
@@ -220,21 +221,21 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
       {/* 汇总指标 */}
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card size="small"><Statistic title="总定编" value={summary.total_quota} suffix="人" prefix={<AimOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>
-          <Card size="small"><Statistic title="在编（实时）" value={summary.total_actual} suffix="人" prefix={<TeamOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>
-          <Card size="small">
+          <Card><Statistic title="总定编" value={summary.total_quota} suffix="人" prefix={<AimOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>
+          <Card><Statistic title="在编（实时）" value={summary.total_actual} suffix="人" prefix={<TeamOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>
+          <Card>
             <Statistic
               title="缺编合计" value={summary.total_vacancy} suffix="人"
               prefix={<MinusCircleOutlined className={summary.total_vacancy > 0 ? 'mr-1 text-red-500' : summary.total_vacancy < 0 ? 'mr-1 text-orange-500' : 'mr-1 text-green-500'} />}
-              valueStyle={summary.total_vacancy > 0 ? { color: '#cf1322' } : summary.total_vacancy < 0 ? { color: '#d46b08' } : { color: '#389e0d' }}
+              styles={{ content: summary.total_vacancy > 0 ? { color: '#cf1322' } : summary.total_vacancy < 0 ? { color: '#d46b08' } : { color: '#389e0d' } }}
             />
           </Card>
-          <Card size="small"><Statistic title="编制达成率" value={summary.achievement_rate} suffix="%" precision={1} prefix={<DashboardOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>
+          <Card><Statistic title="编制达成率" value={summary.achievement_rate} suffix="%" precision={1} prefix={<DashboardOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>
         </div>
       )}
 
       {/* 定编表 */}
-      <Card size="small">
+      <Card>
         <div className="flex items-center justify-between mb-3">
           <Input.Search
             placeholder="搜索部门"
@@ -247,9 +248,8 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
             共 {summary?.department_count ?? 0} 个部门；点击部门名查看该部门员工
           </Text>
         </div>
-        <Table<HeadcountPlanRow>
+        <Table<HeadcountPlanRow> className={styles.tableLg}
           rowKey="department"
-          size="small"
           loading={loading}
           dataSource={filtered}
           pagination={false}

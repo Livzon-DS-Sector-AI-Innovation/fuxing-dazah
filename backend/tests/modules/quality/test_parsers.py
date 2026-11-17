@@ -178,6 +178,30 @@ def test_parse_lc_excel_rejects_garbage() -> None:
         parse_lc_excel(b"not an excel file", "bad.xlsx")
 
 
+def test_detect_standard_type_variants() -> None:
+    """标题识别药典标准类型：EP/CP 回退 USR 万古霉素版式解析，但标准类型需正确落库。"""
+    from app.modules.quality.excel_parser import detect_standard_type
+
+    assert detect_standard_type("盐酸万古霉素USP含量与有关物质计算表") == "USP"
+    assert detect_standard_type("盐酸万古霉素EP含量与有关物质计算表") == "EP"
+    assert detect_standard_type("盐酸万古霉素Ph.Eur含量与有关物质计算表") == "EP"
+    assert detect_standard_type("盐酸万古霉素（欧洲药典）计算表") == "EP"
+    assert detect_standard_type("盐酸万古霉素CP含量与有关物质计算表") == "CP"
+    assert detect_standard_type("盐酸万古霉素中国药典计算表") == "CP"
+    # 无法识别 → 空串（列表/汇总显示 '-'）
+    assert detect_standard_type("某产品含量与有关物质计算表") == ""
+
+
+def test_usr_parser_title_fields_ep_cp() -> None:
+    """EP/CP 标题的产品名截取：不再把 EP/CP 记录落成空标准。"""
+    from app.modules.quality.excel_parser import _UsrVancomycinParser
+
+    p = _UsrVancomycinParser()
+    assert p._extract_product_name("盐酸万古霉素EP含量与有关物质计算表") == "盐酸万古霉素"
+    assert p._extract_product_name("盐酸万古霉素CP含量与有关物质计算表") == "盐酸万古霉素"
+    assert p._extract_product_name("盐酸万古霉素USP含量与有关物质计算表") == "盐酸万古霉素"
+
+
 def test_extract_peak_table_from_markdown() -> None:
     """图谱 Markdown 峰表提取：面积列优先、两位小数、非数据行跳过。"""
     from app.modules.quality.service.chromatogram import extract_peak_table
@@ -195,6 +219,34 @@ def test_extract_peak_table_from_markdown() -> None:
     assert [p["area"] for p in peaks] == [1234567.89, 18888.5, 100.0]
     # 无表格时返回空
     assert extract_peak_table("纯文本没有表格") == []
+
+
+def test_extract_peak_table_rt_and_raw_area_priority() -> None:
+    """峰表提取增强：保留时间列可选提取；面积优先原始面积列（避开仪器 %面积口径）。"""
+    from app.modules.quality.service.chromatogram import extract_peak_table
+
+    md = """# 图谱报告
+
+| 峰名 | 保留时间(min) | 面积 | %面积 |
+| --- | --- | --- | --- |
+| 万古霉素B | 12.345 | 1234567.891 | 98.52 |
+| 单去氯万古霉素 | 14.2 | 18888.5 | 1.48 |
+"""
+    peaks = extract_peak_table(md)
+    # 取原始面积列（1234567.89），不是 %面积列（98.52）——引擎需原始面积自行归一化
+    assert peaks[0]["area"] == 1234567.89
+    assert peaks[1]["area"] == 18888.5
+    assert peaks[0]["rt"] == 12.345
+    assert peaks[1]["rt"] == 14.2
+
+    # 只有 %面积列：回退取 % 列（既有行为）；无保留时间列 → rt None
+    md2 = """| 组分 | %面积 |
+| --- | --- |
+| 杂质F | 0.32 |
+"""
+    peaks2 = extract_peak_table(md2)
+    assert peaks2[0]["area"] == 0.32
+    assert peaks2[0]["rt"] is None
 
 
 def test_match_task_row_by_sop_pattern() -> None:

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import {
   OnboardingRecordListResponse,
+  OnboardingFilterOptions,
   DepartureRecordListResponse,
   DepartureFilterOptions,
 } from '@/types/hr'
@@ -17,6 +18,7 @@ export async function fetchOnboardingRecords(
     department?: string
     position?: string
     is_employed?: string
+    year?: number
     keyword?: string
     page?: number
     page_size?: number
@@ -26,11 +28,13 @@ export async function fetchOnboardingRecords(
   return fetchHrApi<OnboardingRecordListResponse>(`/hr/onboarding-records${qs}`, { errorMessage: '获取入职记录失败' })
 }
 
-export async function deleteOnboardingRecord(id: string) {
-  return fetchHrApi(`/hr/onboarding-records/${id}`, {
-    method: 'DELETE',
-    errorMessage: '删除失败',
-  })
+/** 入职台账筛选下拉选项：入职年份现有取值聚合 */
+export async function fetchOnboardingFilterOptionsAction(): Promise<OnboardingFilterOptions> {
+  const res = await fetchHrApi<{ code: number; message: string; data: OnboardingFilterOptions }>(
+    '/hr/onboarding-records/filter-options',
+    { errorMessage: '获取筛选选项失败' },
+  )
+  return res.data || {}
 }
 
 // ─── 离职记录 ───

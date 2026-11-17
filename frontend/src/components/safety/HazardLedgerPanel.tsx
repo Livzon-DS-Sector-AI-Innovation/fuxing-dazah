@@ -1030,7 +1030,7 @@ export default function HazardLedgerPanel() {
               if (!open) setPendingFilterField(null)
             }}
             placement="bottomLeft"
-            overlayStyle={{ borderRadius: 12 }}
+            styles={{ root: { borderRadius: 12 } }}
           >
             <button
               type="button"

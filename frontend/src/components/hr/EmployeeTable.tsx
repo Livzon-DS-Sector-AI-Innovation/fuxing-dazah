@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useState, useEffect, useRef } from 'react'
 import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline } from 'antd'
 import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
@@ -495,7 +496,7 @@ export default function EmployeeTable({
         />
       </div>
 
-      <Table
+      <Table className={styles.tableLg}
         columns={columns}
         dataSource={employees}
         rowKey="id"
@@ -508,7 +509,6 @@ export default function EmployeeTable({
           showTotal: (t) => `共 ${t} 条`,
           onChange: onPageChange }}
         scroll={{ x: 4800 }}
-        size="small"
       />
 
       <EmployeeInfoModal employee={detailEmp} open={detailOpen} onClose={() => setDetailOpen(false)} />

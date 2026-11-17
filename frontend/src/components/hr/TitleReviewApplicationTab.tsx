@@ -225,7 +225,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
       <Drawer
         title={detail ? `${detail.name}（${detail.employee_no}）申报详情` : '申报详情'}
         open={!!detail}
-        width={640}
+        size={640}
         onClose={() => setDetail(null)}
       >
         {detail && (

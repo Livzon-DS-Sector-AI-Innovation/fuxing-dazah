@@ -70,6 +70,17 @@ const BATCH_STAGE_COLOR: Record<BatchResumeItem['stage'], string> = {
 export default function RecruitmentClient() {
   const { message: msg } = App.useApp()
   const router = useRouter()
+  // 跳转候选人详情前把当前列表上下文（id 顺序 + 当前位置）写入 sessionStorage，
+  // 供详情页"上一条/下一条"顺序切换（CandidateDetailClient 读取 candidate_list_context）
+  const openCandidateDetail = (id: string, listIds: string[]) => {
+    const ids = [...new Set(listIds)].filter(Boolean)
+    if (ids.length > 1 && ids.includes(id)) {
+      sessionStorage.setItem('candidate_list_context', JSON.stringify({ ids, currentIndex: ids.indexOf(id) }))
+    } else {
+      sessionStorage.removeItem('candidate_list_context')
+    }
+    router.push(`/hr/recruitment/${id}`)
+  }
   // 招聘管理权限：人事专员见全功能；用人部门负责人（审核人）仅见"待我审核"。
   // 页面外层 PermissionGuard 已等权限加载完成，此处 hasPermission 结果可靠。
   const { hasPermission } = usePermission()
@@ -190,8 +201,8 @@ export default function RecruitmentClient() {
     try {
       const r = await fetchJobRequirements()
       setJobs(r.data || [])
-    } catch { /* ignore */ }
-  }, [])
+    } catch (err: unknown) { msg.error((err instanceof Error ? err.message : '') || '岗位需求加载失败') }
+  }, [msg])
 
   const loadAllCandidates = useCallback(async () => {
     try {
@@ -210,7 +221,10 @@ export default function RecruitmentClient() {
       if (all.length < total) {
         msg.warning(`候选人较多，仅显示前 ${all.length} 条（共 ${total} 条），请用筛选缩小范围`)
       }
-    } catch { setAllCandidates([]) }
+    } catch (err: unknown) {
+      setAllCandidates([])
+      msg.error((err instanceof Error ? err.message : '') || '候选人列表加载失败')
+    }
   }, [msg])
 
   // 岗位/候选人全量列表仅管理权限加载（审核人只待我审核 tab，后端也会按数据范围收敛）
@@ -513,7 +527,7 @@ export default function RecruitmentClient() {
                         <tbody>{compareData.map((item: any, idx: number) => {
                           const c = item.candidate || {}; const ev = item.evaluation
                           const sc = (v: any) => v == null ? '#ccc' : v >= 8 ? '#52c41a' : v >= 6 ? '#1677ff' : v >= 4 ? '#fa8c16' : '#ff4d4f'
-                          return (<tr key={c.id} className="hover:bg-blue-50 cursor-pointer border-t" onClick={() => router.push(`/hr/recruitment/${c.id}`)}>
+                          return (<tr key={c.id} className="hover:bg-blue-50 cursor-pointer border-t" onClick={() => openCandidateDetail(c.id, compareData.map((i: any) => i.candidate?.id))}>
                             <td className="p-2 font-medium"><span className="text-gray-400">{idx + 1}.</span> {c.name}</td>
                             <td className="p-2 border">{c.education || '-'}</td>
                             <td className="p-2 border"><Tag style={{ fontSize: 10 }}>{c.status || '-'}</Tag></td>
@@ -531,14 +545,18 @@ export default function RecruitmentClient() {
                 /* 统一按岗位视图 */
                 <div className="space-y-2">
                   {jobs.length === 0 && <Empty description="暂无岗位需求，点击右上角新建" className="py-8" />}
-                  {jobs.map(j => {
-                    const jobCandidates = allCandidates.filter(c => c.job_requirement_id === j.id)
-                    const isExpanded = expandedJobs.has(j.id)
-                    const hiredCount = jobCandidates.filter(c => c.status === '已入职').length
-                    const sortedCandidates = [...jobCandidates].sort((a, b) => {
-                      const ia = STATUS_ORDER.indexOf(a.status || ''); const ib = STATUS_ORDER.indexOf(b.status || '')
-                      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-                    })
+                      {jobs.map(j => {
+                        const jobCandidates = allCandidates.filter(c => c.job_requirement_id === j.id)
+                        const isExpanded = expandedJobs.has(j.id)
+                        const hiredCount = jobCandidates.filter(c => c.status === '已入职').length
+                        const sortedCandidates = [...jobCandidates].sort((a, b) => {
+                          const ia = STATUS_ORDER.indexOf(a.status || ''); const ib = STATUS_ORDER.indexOf(b.status || '')
+                          return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+                        })
+                        // 漏斗筛选后的可见列表：dataSource 与详情跳转上下文共用同一口径
+                        const visibleJobCandidates = jobStatusFilter[j.id]
+                          ? sortedCandidates.filter(c => (c.status || '待筛选') === jobStatusFilter[j.id])
+                          : sortedCandidates
                     return (
                       <Card key={j.id}
                         styles={{
@@ -635,7 +653,7 @@ export default function RecruitmentClient() {
                               )}
                             </div>
                             <Table size="small" rowKey="id"
-                              dataSource={jobStatusFilter[j.id] ? sortedCandidates.filter(c => (c.status || '待筛选') === jobStatusFilter[j.id]) : sortedCandidates}
+                              dataSource={visibleJobCandidates}
                               pagination={jobCandidates.length > 10 ? {
                                 pageSize: 10, showSizeChanger: false, size: 'small',
                                 showTotal: t => `共 ${t} 条`,
@@ -646,7 +664,7 @@ export default function RecruitmentClient() {
                                 return {
                                   className: 'cursor-pointer',
                                   style: isStale ? { background: '#fff5f5' } : undefined,
-                                  onClick: () => router.push(`/hr/recruitment/${record.id}`),
+                                  onClick: () => openCandidateDetail(record.id, visibleJobCandidates.map(c => c.id)),
                                 }
                               }}
                               columns={[
@@ -905,7 +923,7 @@ export default function RecruitmentClient() {
                               {g.rows.map((iv) => (
                                 <div key={iv.id}
                                   className="flex items-center gap-3 p-2.5 rounded-lg border border-[var(--color-hairline)] hover:bg-blue-50 cursor-pointer transition-colors"
-                                  onClick={() => router.push(`/hr/recruitment/${iv.candidate_id}`)}>
+                                  onClick={() => openCandidateDetail(iv.candidate_id, overviewRows.map(r => r.candidate_id))}>
                                   <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
                                   <span className="text-xs text-gray-500 w-40 shrink-0">
                                     {iv.interview_date}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
@@ -943,7 +961,7 @@ export default function RecruitmentClient() {
                       const c = item.candidate || {}; const jd = item.job_requirement; const rv = item.review || {}
                       return (
                         <Card key={c.id} size="small" hoverable className="cursor-pointer"
-                          onClick={() => router.push(`/hr/recruitment/${c.id}`)}
+                          onClick={() => openCandidateDetail(c.id, pendingReviews.map((i: any) => i.candidate?.id))}
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0 flex-1">

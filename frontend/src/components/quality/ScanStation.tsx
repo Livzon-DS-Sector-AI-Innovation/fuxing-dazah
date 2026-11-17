@@ -170,8 +170,8 @@ export default function ScanStation() {
 
       <Card size="small" title="本次会话统计" style={{ marginBottom: 16 }}>
         <Space size={40}>
-          <Statistic title="成功" value={okCount} valueStyle={{ color: token.colorSuccess }} />
-          <Statistic title="失败" value={failCount} valueStyle={{ color: token.colorError }} />
+          <Statistic title="成功" value={okCount} styles={{ content: { color: token.colorSuccess } }} />
+          <Statistic title="失败" value={failCount} styles={{ content: { color: token.colorError } }} />
           <Statistic title="累计处理" value={okCount + failCount} />
         </Space>
       </Card>

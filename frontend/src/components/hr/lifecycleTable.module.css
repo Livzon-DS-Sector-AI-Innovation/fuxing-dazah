@@ -1,0 +1,10 @@
+/* 人员全周期台账大字号（用户拍板 14px，2026-11-17）
+   仅 HR 人员全周期五页使用（编制/档案/入职/离职/工伤台账），CSS Modules 隔离类名 */
+.tableLg .ant-table-thead > tr > th,
+.tableLg .ant-table-thead > tr > td {
+  font-size: 14px;
+}
+
+.tableLg .ant-table-tbody > tr > td {
+  font-size: 14px;
+}

@@ -147,7 +147,7 @@ export default function TitleJudgeClient() {
       <Drawer
         title={voting ? `投票：${voting.application.name}（${voting.application.employee_no}）` : '投票'}
         open={!!voting}
-        width={680}
+        size={680}
         onClose={() => setVoting(null)}
         footer={
           <div className="flex justify-end">

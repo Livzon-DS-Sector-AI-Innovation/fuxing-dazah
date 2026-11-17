@@ -720,38 +720,42 @@ class OnboardingRecordRepository:
         department: str | None = None,
         position: str | None = None,
         is_employed: str | None = None,
+        year: int | None = None,
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
-        sort_by: str = "created_at",
+        sort_by: str = "hire_date",
         sort_order: str = "desc",
-        days: int = 7,
-    ) -> tuple[list[OnboardingRecord], int]:
-        from datetime import datetime, timedelta
-        stmt = select(OnboardingRecord).where(OnboardingRecord.is_deleted.is_(False))
+    ) -> tuple[list[Any], int]:
+        """入职台账列表视图：数据源=员工档案（飞书全量镜像，按入职年份自动归类），
+        台账表只按工号补充 source（系统审批/飞书同步/招聘入职）。"""
+        stmt = select(Employee).where(Employee.is_deleted.is_(False))
 
-        # 七天自动清空：只显示最近 N 天内创建的记录
-        if days > 0:
-            cutoff = datetime.now(UTC) - timedelta(days=days)
-            stmt = stmt.where(OnboardingRecord.created_at >= cutoff)
+        # 年份归类：按入职日期所在年份筛选
+        if year:
+            stmt = stmt.where(func.extract("year", Employee.hire_date) == year)
 
         if department:
-            stmt = stmt.where(OnboardingRecord.department == department)
+            stmt = stmt.where(Employee.department == department)
         if position:
-            stmt = stmt.where(OnboardingRecord.position.ilike(f"%{position}%"))
+            stmt = stmt.where(Employee.position.ilike(f"%{position}%"))
         if is_employed:
-            stmt = stmt.where(OnboardingRecord.is_employed == is_employed)
+            # 员工档案无 is_employed 列，按 status 派生：非「离职」即在职
+            if is_employed == "是":
+                stmt = stmt.where(or_(Employee.status != "离职", Employee.status.is_(None)))
+            else:
+                stmt = stmt.where(Employee.status == "离职")
         if keyword:
             stmt = stmt.where(
-                OnboardingRecord.name.ilike(f"%{keyword}%")
-                | OnboardingRecord.employee_number.ilike(f"%{keyword}%")
+                Employee.name.ilike(f"%{keyword}%")
+                | Employee.employee_number.ilike(f"%{keyword}%")
             )
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
-        sort_column = getattr(OnboardingRecord, sort_by, OnboardingRecord.created_at)
+        sort_column = getattr(Employee, sort_by, Employee.hire_date)
         order_func = desc if sort_order == "desc" else asc
         data_stmt = (
-            stmt.order_by(order_func(sort_column))
+            stmt.order_by(order_func(sort_column).nulls_last())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -760,7 +764,29 @@ class OnboardingRecordRepository:
         total = total_result.scalar() or 0
 
         data_result = await self.session.execute(data_stmt)
-        return list(data_result.scalars().all()), total
+        employees = list(data_result.scalars().all())
+        return employees, total
+
+    async def ledger_sources(self, employee_numbers: list[str]) -> dict[str, str]:
+        """按工号聚合台账记录的 source（每工号取 created_at 最新一条）。"""
+        if not employee_numbers:
+            return {}
+        latest = (
+            select(
+                OnboardingRecord.employee_number,
+                OnboardingRecord.source,
+            )
+            .where(
+                OnboardingRecord.is_deleted.is_(False),
+                OnboardingRecord.employee_number.in_(employee_numbers),
+            )
+            .order_by(OnboardingRecord.employee_number, OnboardingRecord.created_at.desc())
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(latest.c.employee_number, latest.c.source).distinct(latest.c.employee_number)
+        )
+        return {row[0]: row[1] for row in result.all() if row[1]}
 
     async def create(self, record: OnboardingRecord) -> OnboardingRecord:
         self.session.add(record)
@@ -771,6 +797,18 @@ class OnboardingRecordRepository:
         await self.session.flush()
         result = await self.session.execute(select(OnboardingRecord).where(OnboardingRecord.id == record.id))
         return result.scalar_one()
+
+    async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
+        """聚合员工档案中入职日期的可用年份（降序），供筛选下拉。"""
+        stmt = select(func.extract("year", Employee.hire_date).label("year")).where(
+            Employee.is_deleted.is_(False),
+            Employee.hire_date.isnot(None),
+        )
+        if departments is not None:
+            stmt = stmt.where(Employee.department.in_(departments))
+        stmt = stmt.distinct().order_by(func.extract("year", Employee.hire_date).desc())
+        result = await self.session.execute(stmt)
+        return [int(row.year) for row in result.all()]
 
     async def count_total(self) -> int:
         result = await self.session.execute(

@@ -196,7 +196,7 @@ export default function EmployeeInfoCollectionPanel() {
         </Button>
       </Badge>
 
-      <Drawer title="新员工信息收集" width={720} open={panelOpen} onClose={() => setPanelOpen(false)}
+      <Drawer title="新员工信息收集" size={720} open={panelOpen} onClose={() => setPanelOpen(false)}
         extra={canManage && (
           <Button type="primary" size="small" icon={<SendOutlined />} onClick={() => { searchEmployees(''); setSendOpen(true) }}>
             发起收集
@@ -223,7 +223,7 @@ export default function EmployeeInfoCollectionPanel() {
         </div>
       </Modal>
 
-      <Drawer title={`信息对比 — ${diffItem?.employee_name || ''}`} width={640} open={!!diffItem}
+      <Drawer title={`信息对比 — ${diffItem?.employee_name || ''}`} size={640} open={!!diffItem}
         onClose={() => setDiffItem(null)}
         extra={diffItem?.status === 'submitted' && canManage && (
           <div className="flex gap-2">

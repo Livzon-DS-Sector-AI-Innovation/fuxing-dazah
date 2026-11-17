@@ -105,9 +105,11 @@ export default function ProbationPanel() {
 
   const handleSend = async () => {
     const v = await sendForm.validateFields()
+    // 评估人 Select 是 mode="tags"，表单值为数组（maxCount=1），后端要 str
+    const reviewerName = Array.isArray(v.reviewer_name) ? v.reviewer_name[0] : v.reviewer_name
     setSending(true)
     try {
-      const r = await createProbationReview(v.employee_id, v.reviewer_name)
+      const r = await createProbationReview(v.employee_id, reviewerName)
       msg.success(r.message || '评估卡片已发送')
       setSendOpen(false); sendForm.resetFields(); load()
     } catch (e) { msg.error(e instanceof Error ? e.message : '发起失败') }
@@ -215,7 +217,7 @@ export default function ProbationPanel() {
         <Button icon={<AuditOutlined />} onClick={() => setPanelOpen(true)}>转正管理</Button>
       </Badge>
 
-      <Drawer title="试用期转正管理" width={720} open={panelOpen} onClose={() => setPanelOpen(false)}
+      <Drawer title="试用期转正管理" size={720} open={panelOpen} onClose={() => setPanelOpen(false)}
         extra={canManage && (
           <Button type="primary" size="small" icon={<AuditOutlined />}
             onClick={() => { searchEmployees(''); setSendOpen(true) }}>
@@ -249,7 +251,7 @@ export default function ProbationPanel() {
         </Form>
       </Modal>
 
-      <Drawer title={`评估详情 — ${finalizeTarget?.employee_name || ''}`} width={560} open={!!finalizeTarget}
+      <Drawer title={`评估详情 — ${finalizeTarget?.employee_name || ''}`} size={560} open={!!finalizeTarget}
         onClose={() => setFinalizeTarget(null)}>
         {finalizeTarget && (
           <Descriptions size="small" column={1} bordered items={[

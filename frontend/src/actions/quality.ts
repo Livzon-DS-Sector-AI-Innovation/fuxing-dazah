@@ -2154,10 +2154,11 @@ export async function confirmTaskResult(taskId: string, resultId: string, value?
   return res.json()
 }
 
-/** 图谱截图/PDF 解析（MinerU VLM，仅预览：返回峰表草稿，不落库）。 */
-export async function parseChromatogram(file: File): Promise<{ data: { filename: string; peaks: ChromatogramPeak[]; markdown_preview: string } }> {
+/** 图谱截图/PDF 解析（MinerU VLM，峰表草稿预览；带 taskId 时原图归档为任务附件留痕）。 */
+export async function parseChromatogram(file: File, taskId?: string): Promise<{ data: { filename: string; peaks: ChromatogramPeak[]; markdown_preview: string; archived: boolean } }> {
   const form = new FormData()
   form.append('file', file)
+  if (taskId) form.append('task_id', taskId)
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/chromatograms/parse`, {
     method: 'POST', headers: await _authHeaders(), body: form,
   })

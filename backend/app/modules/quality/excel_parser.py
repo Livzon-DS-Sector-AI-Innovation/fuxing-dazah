@@ -1,7 +1,8 @@
 """液相计算表 Excel 解析器。
 
 支持多种产品/标准的计算表模板，通过识别关键标签定位数据区域。
-当前已适配：盐酸万古霉素 USP 标准（EX-HA-5246-001），其他模板可扩展。
+当前已适配：盐酸万古霉素 USP 标准（EX-HA-5246-001）。EP/CP 标题可识别标准类型
+并按同版式回退解析（独立版式待拿到样表后扩展）。
 """
 
 import re
@@ -98,6 +99,17 @@ class LcReportData:
 # ─── 解析器 ───
 
 
+def detect_standard_type(title: str) -> str:
+    """从标题行识别药典标准类型：USP / EP / CP，识别不了返回空串。"""
+    if "USP" in title:
+        return "USP"
+    if "EP" in title or "Ph.Eur" in title or "欧洲" in title:
+        return "EP"
+    if "CP" in title or "中国药典" in title:
+        return "CP"
+    return ""
+
+
 class LcExcelParser:
     """液相计算表解析器基类。
 
@@ -110,21 +122,9 @@ class LcExcelParser:
         wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
         ws = wb.active if wb.active else wb[wb.sheetnames[0]]
 
-        # 读取前几行识别模板
-        rows = list(ws.iter_rows(min_row=1, max_row=min(5, ws.max_row), values_only=True))
-
-        # 根据标题行判断模板类型
-        title = str(rows[0][0]) if rows and rows[0] and rows[0][0] else ""
-
-        if "USP" in title:
-            parser = _UsrVancomycinParser()
-        elif "EP" in title or "Ph.Eur" in title or "欧洲" in title:
-            parser = _UsrVancomycinParser()  # TODO: 后续扩展 EP 模板
-        elif "CP" in title or "中国药典" in title:
-            parser = _UsrVancomycinParser()  # TODO: 后续扩展 CP 模板
-        else:
-            # 默认尝试 USP 格式
-            parser = _UsrVancomycinParser()
+        # 模板版式分发：当前所有标准类型同走万古霉素计算表版式（既有回退行为）。
+        # 拿到 EP/CP 样表后，在此按 detect_standard_type(标题) 接独立解析器。
+        parser = _UsrVancomycinParser()
 
         return parser._do_parse(ws, filename)
 
@@ -148,7 +148,7 @@ class _UsrVancomycinParser:
         title_raw = str(ws.cell(1, 1).value or "")
         data.product_name = self._extract_product_name(title_raw)
         data.form_id = self._extract_form_id(title_raw)
-        data.standard_type = "USP" if "USP" in title_raw else ""
+        data.standard_type = detect_standard_type(title_raw)
 
         # ── R2: 批号 + 标准头 ──
         data.batch_number = str(ws.cell(2, 2).value or "").strip()

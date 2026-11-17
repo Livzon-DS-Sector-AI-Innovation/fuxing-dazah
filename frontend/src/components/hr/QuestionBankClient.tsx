@@ -65,7 +65,7 @@ export default function QuestionBankClient() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">共享题库</h1>
+          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">题库</h1>
           <p className="text-[14px] text-[var(--color-steel)]">按 SOP 编号沉淀考题，供培训出题复用</p>
         </div>
         <Space>

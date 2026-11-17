@@ -3,6 +3,7 @@ export interface SubMenuItem {
   label: string
   path: string
   children?: SubMenuItem[]   // 嵌套子菜单 → Ant Design SubMenu
+  group?: boolean            // 分组标题式（antd Menu group 类型）：children 平铺展示不折叠
   disabled?: boolean         // 灰显占位，功能未开发
   permissions?: string[]     // 权限码，用于前端菜单可见性控制
 }
@@ -282,6 +283,8 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "quality-templates", label: "报告模板", path: "/quality/templates", permissions: ["quality:report:read"] },
           { key: "quality-report", label: "报告单", path: "/quality/report", permissions: ["quality:report:read"] },
           { key: "quality-serial", label: "报告单流水", path: "/quality/serial", permissions: ["quality:report:read"] },
+          // 批放行：检验→报告链路末端，列表读口径与报告单一致（放行/退回操作按 task:review 在页内 gate）
+          { key: "quality-release", label: "批放行", path: "/quality/release", permissions: ["quality:report:read"] },
         ],
       },
     ],
@@ -350,26 +353,53 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
           { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
           { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
+          { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
         ],
       },
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
-      { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },
       {
+        // 培训五区按业务动线：计划 → 执行 → 记录 → 资源 → 配置（分组标题式，页面项平铺不折叠）
         key: "training",
         label: "培训管理",
         path: "/hr/training",
         children: [
-          { key: "onboarding-training", label: "新员工入职培训", path: "/hr/training/onboarding", permissions: ["hr:training:document"] },
-          { key: "training-notification", label: "培训通知", path: "/hr/training/notification", permissions: ["hr:training:document"] },
-          { key: "sop-master", label: "SOP培训登记表", path: "/hr/training/sop-master", permissions: ["hr:training:read"] },
-          { key: "sop-secondary", label: "SOP培训二级表", path: "/hr/training/sop-secondary", permissions: ["hr:training:read"] },
-          { key: "training-ai-exam", label: "AI 出题", path: "/hr/training/ai-exam", permissions: ["hr:training:exam"] },
-          { key: "training-annual-plan", label: "年度培训计划", path: "/hr/training/annual-plan", permissions: ["hr:training:plan"] },
-          { key: "training-ledger", label: "培训台账", path: "/hr/training/ledger", permissions: ["hr:training:read"] },
-          { key: "training-personnel", label: "培训人员名单", path: "/hr/training/personnel", permissions: ["hr:training:read"] },
-          { key: "training-question-bank", label: "题库大全", path: "/hr/training/question-bank", permissions: ["hr:training:questionbank"] },
-          { key: "training-qa-assessments", label: "问答考核历史", path: "/hr/training/qa-assessments", permissions: ["hr:training:assessment"] },
-          { key: "trainers", label: "内训师管理", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
+          {
+            key: "training-plan", label: "培训计划", path: "/hr/training", group: true,
+            children: [
+              { key: "training-annual-plan", label: "年度培训计划", path: "/hr/training/annual-plan", permissions: ["hr:training:plan"] },
+            ],
+          },
+          {
+            key: "training-execution", label: "培训执行", path: "/hr/training", group: true,
+            children: [
+              { key: "training-notification", label: "培训通知", path: "/hr/training/notification", permissions: ["hr:training:document"] },
+              { key: "onboarding-training", label: "新员工入职培训", path: "/hr/training/onboarding", permissions: ["hr:training:document"] },
+            ],
+          },
+          {
+            key: "training-records", label: "培训记录", path: "/hr/training", group: true,
+            children: [
+              { key: "training-ledger", label: "培训台账", path: "/hr/training/ledger", permissions: ["hr:training:read"] },
+              { key: "training-qa-assessments", label: "考核历史", path: "/hr/training/qa-assessments", permissions: ["hr:training:assessment"] },
+            ],
+          },
+          {
+            key: "training-resources", label: "培训资源", path: "/hr/training", group: true,
+            children: [
+              { key: "training-question-bank", label: "题库", path: "/hr/training/question-bank", permissions: ["hr:training:questionbank"] },
+              { key: "training-ai-exam", label: "AI 出题", path: "/hr/training/ai-exam", permissions: ["hr:training:exam"] },
+              { key: "sop-master", label: "SOP培训登记表", path: "/hr/training/sop-master", permissions: ["hr:training:read"] },
+              { key: "sop-secondary", label: "SOP培训二级表", path: "/hr/training/sop-secondary", permissions: ["hr:training:read"] },
+            ],
+          },
+          {
+            key: "training-config", label: "培训配置", path: "/hr/training", group: true,
+            children: [
+              { key: "trainers", label: "内训师", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
+              { key: "training-personnel", label: "培训人员名单", path: "/hr/training/personnel", permissions: ["hr:training:read"] },
+              { key: "sop-catalog", label: "SOP目录", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
+            ],
+          },
         ],
       },
       { key: "performance", label: "📋 绩效考核", path: "/hr/performance",
@@ -381,17 +411,17 @@ export const moduleMenus: ModuleMenu[] = [
       },
       { key: "title-review", label: "职称评审", path: "/hr/title-review", permissions: ["hr:title:read"] },
       { key: "title-judge", label: "职称评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
-      // 权限码与后端 hr/deps.py 路由映射对齐：资料下载→roster、系统配置→settings:manage、SOP→training:read
+      // 权限码与后端 hr/deps.py 路由映射对齐：资料下载→roster、系统配置→settings:manage
       { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:roster:read"] },
       {
+        // SOP 目录已归位培训配置区；系统设置只剩系统配置/岗位管理
         key: "settings",
         label: "系统设置",
         path: "/hr/settings",
-        permissions: ["hr:settings:manage", "hr:position:read", "hr:trainer:read", "hr:training:read"],
+        permissions: ["hr:settings:manage", "hr:position:read"],
         children: [
           { key: "system-config", label: "系统配置", path: "/hr/settings", permissions: ["hr:settings:manage"] },
           { key: "positions", label: "岗位管理", path: "/hr/positions", permissions: ["hr:position:read"] },
-          { key: "sop-catalog", label: "SOP管理", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
         ],
       },
     ],

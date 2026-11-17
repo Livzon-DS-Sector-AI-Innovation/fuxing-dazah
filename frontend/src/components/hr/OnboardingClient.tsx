@@ -1,11 +1,16 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Card, Table, Space, Input, Tag, Select, Popconfirm } from 'antd'
+import { App, Button, Card, Table, Space, Input, Tag, Select } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { SearchOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { SearchOutlined, PlusOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
-import { fetchOnboardingRecords, fetchDepartmentsAction, deleteOnboardingRecord } from '@/actions/hr'
+import {
+  fetchOnboardingRecords,
+  fetchOnboardingFilterOptionsAction,
+  fetchDepartmentsAction,
+} from '@/actions/hr'
 import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
@@ -22,12 +27,17 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
   const [loading, setLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [filterDepartment, setFilterDepartment] = useState<string | undefined>()
+  const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear())
   const [createOpen, setCreateOpen] = useState(false)
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
+  const [hireYears, setHireYears] = useState<number[]>([])
 
   useEffect(() => {
     fetchDepartmentsAction({ page_size: 100 }).then(res => {
       setDepartments((res.data || []).map((d: any) => ({ value: d.name, label: d.name })))
+    }).catch(() => {})
+    fetchOnboardingFilterOptionsAction().then(res => {
+      setHireYears(res.years || [])
     }).catch(() => {})
   }, [])
 
@@ -36,15 +46,16 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
     try {
       const res = await fetchOnboardingRecords({
         department: filterDepartment || undefined,
+        year: filterYear || undefined,
         keyword: searchKeyword || undefined,
         page, page_size: pageSize })
       setRecords(res.data)
       setTotal(res.meta?.total || 0)
     } catch (err: any) { message.error(err.message || '加载数据失败') }
     finally { setLoading(false) }
-  }, [filterDepartment, searchKeyword, page, pageSize])
+  }, [filterDepartment, filterYear, searchKeyword, page, pageSize])
 
-  useEffect(() => { loadData() }, [filterDepartment, searchKeyword, page, pageSize])
+  useEffect(() => { loadData() }, [filterDepartment, filterYear, searchKeyword, page, pageSize])
 
   const columns: ColumnsType<OnboardingRecord> = [
     { title: '工号', dataIndex: 'employee_number', width: 100 },
@@ -58,19 +69,11 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
     { title: '手机', dataIndex: 'phone', width: 120 },
     { title: '是否在职', dataIndex: 'is_employed', width: 80,
       render: (v: string) => <Tag color={v === '是' ? 'green' : 'default'}>{v || '-'}</Tag> },
-    { title: '来源', dataIndex: 'source', width: 70,
-      render: (v: string) => v === 'approval' ? <Tag color="blue">系统审批</Tag> : v === 'feishu' ? <Tag color="purple">飞书同步</Tag> : <Tag>{v || '-'}</Tag> },
-    { title: '操作', key: 'action', width: 80,
-      render: (_: any, record: OnboardingRecord) => (
-        <Popconfirm title="确认删除？" onConfirm={async () => {
-          try {
-            await deleteOnboardingRecord(record.id)
-            message.success('已删除'); loadData()
-          } catch { message.error('删除失败') }
-        }}>
-          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      )},
+    { title: '来源', dataIndex: 'source', width: 90,
+      render: (v: string) => v === 'approval' ? <Tag color="blue">系统审批</Tag>
+        : v === 'feishu' ? <Tag color="purple">飞书同步</Tag>
+        : v === 'recruitment' ? <Tag color="cyan">招聘入职</Tag>
+        : <Tag>员工档案</Tag> },
   ]
 
   return (
@@ -82,16 +85,22 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
       <div className="flex flex-wrap gap-3 items-center">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建入职</Button>
         <Input placeholder="搜索姓名或工号" value={searchKeyword}
-          onChange={e => setSearchKeyword(e.target.value)} prefix={<SearchOutlined />}
+          onChange={e => { setSearchKeyword(e.target.value); setPage(1) }} prefix={<SearchOutlined />}
           className="w-48" allowClear />
         <Select placeholder="部门筛选" allowClear value={filterDepartment}
-          onChange={setFilterDepartment} options={departments} style={{ width: 180 }} />
+          onChange={(v) => { setFilterDepartment(v); setPage(1) }} options={departments} style={{ width: 180 }} />
+        <Select placeholder="入职年份" allowClear value={filterYear}
+          onChange={(v) => { setFilterYear(v); setPage(1) }}
+          options={Array.from(new Set([new Date().getFullYear(), ...hireYears]))
+            .sort((a, b) => b - a)
+            .map((y) => ({ value: y, label: `${y} 年入职` }))}
+          style={{ width: 140 }} />
       </div>
 
-      <Table columns={columns} dataSource={records} rowKey="id" loading={loading}
+      <Table className={styles.tableLg} columns={columns} dataSource={records} rowKey="id" loading={loading}
         pagination={{ current: page, pageSize, total, showSizeChanger: true,
           showTotal: (t) => `共 ${t} 条`, onChange: (p, ps) => { setPage(p); setPageSize(ps) } }}
-        scroll={{ x: 900 }} size="small" />
+        scroll={{ x: 1050 }} />
 
       <EmployeeForm open={createOpen} employee={null} onClose={() => setCreateOpen(false)}
         onSuccess={() => { setCreateOpen(false); loadData() }} />

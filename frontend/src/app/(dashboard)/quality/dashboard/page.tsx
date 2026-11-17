@@ -133,7 +133,7 @@ export default function QualityDashboardPage() {
           <Card size="small" hoverable loading={loading}
             onClick={() => router.push('/quality/report?audit_status=pending')}>
             <Statistic title="待初审报告单" value={pendingAuditCount}
-              valueStyle={{ color: pendingAuditCount > 0 ? token.colorWarning : undefined }}
+              styles={{ content: { color: pendingAuditCount > 0 ? token.colorWarning : undefined } }}
               suffix="份" />
           </Card>
         </Col>
@@ -148,7 +148,7 @@ export default function QualityDashboardPage() {
             onClick={() => router.push('/quality/task?status=pending_review')}>
             <Statistic title="待复核" value={data?.pending_review_count ?? 0}
               prefix={<SearchOutlined />}
-              valueStyle={{ color: (data?.pending_review_count ?? 0) > 0 ? token.colorWarning : undefined }} />
+              styles={{ content: { color: (data?.pending_review_count ?? 0) > 0 ? token.colorWarning : undefined } }} />
           </Card>
         </Col>
         <Col xs={12} sm={12} md={6}>
