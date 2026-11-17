@@ -440,7 +440,7 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
         onClose={() => { setDrawerOpen(false); setDetailItem(null) }}
       >
         {detailItem && (
-          <Descriptions column={2} size="small" bordered labelStyle={{ fontWeight: 600, color: T.slate }}>
+          <Descriptions column={2} size="small" bordered styles={{ label: { fontWeight: 600, color: T.slate } }}>
             <Descriptions.Item label="报备编号">{detailItem.report_no}</Descriptions.Item>
             <Descriptions.Item label="作业类型">
               <Tag style={{ color: OP_TYPE_CONFIG[detailItem.operation_type]?.color, backgroundColor: OP_TYPE_CONFIG[detailItem.operation_type]?.bg, border: 'none', borderRadius: 6, fontWeight: 600 }}>

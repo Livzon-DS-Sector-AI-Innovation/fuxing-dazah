@@ -74,7 +74,7 @@ export default function CandidateAnalysisReportCard({ candidateName, candidatePo
             column={{ xs: 1, sm: 2, md: 3 }}
             size="small"
             bordered
-            labelStyle={{ width: 110 }}
+            styles={{ label: { width: 110 } }}
           >
             {report.basic_info.map((it) => (
               <Descriptions.Item key={it.label} label={it.label}>{it.value}</Descriptions.Item>
