@@ -226,7 +226,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
             <Statistic
               title="缺编合计" value={summary.total_vacancy} suffix="人"
               prefix={<MinusCircleOutlined className={summary.total_vacancy > 0 ? 'mr-1 text-red-500' : summary.total_vacancy < 0 ? 'mr-1 text-orange-500' : 'mr-1 text-green-500'} />}
-              valueStyle={summary.total_vacancy > 0 ? { color: '#cf1322' } : summary.total_vacancy < 0 ? { color: '#d46b08' } : { color: '#389e0d' }}
+              styles={{ content: summary.total_vacancy > 0 ? { color: '#cf1322' } : summary.total_vacancy < 0 ? { color: '#d46b08' } : { color: '#389e0d' } }}
             />
           </Card>
           <Card><Statistic title="编制达成率" value={summary.achievement_rate} suffix="%" precision={1} prefix={<DashboardOutlined className="mr-1 text-[var(--color-primary)]" />} /></Card>

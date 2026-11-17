@@ -110,7 +110,7 @@ export default function LcReportView({ report }: Props) {
             <Statistic
               title="整体判定"
               value={report.all_pass ? '全部合格' : '存在不合格'}
-              valueStyle={{ color: report.all_pass ? token.colorSuccess : token.colorError }}
+              styles={{ content: { color: report.all_pass ? token.colorSuccess : token.colorError } }}
               prefix={report.all_pass ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
             />
           </Card>

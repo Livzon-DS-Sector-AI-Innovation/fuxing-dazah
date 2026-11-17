@@ -519,7 +519,7 @@ function DualStat({ label, value, detail }: { label: string; value: number; deta
           ))}
         </div>
       }
-      overlayStyle={{ maxWidth: 280 }}
+      styles={{ root: { maxWidth: 280 } }}
     >
       {body}
     </Tooltip>

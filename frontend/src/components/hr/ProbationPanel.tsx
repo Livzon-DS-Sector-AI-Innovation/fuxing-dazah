@@ -215,7 +215,7 @@ export default function ProbationPanel() {
         <Button icon={<AuditOutlined />} onClick={() => setPanelOpen(true)}>转正管理</Button>
       </Badge>
 
-      <Drawer title="试用期转正管理" width={720} open={panelOpen} onClose={() => setPanelOpen(false)}
+      <Drawer title="试用期转正管理" size={720} open={panelOpen} onClose={() => setPanelOpen(false)}
         extra={canManage && (
           <Button type="primary" size="small" icon={<AuditOutlined />}
             onClick={() => { searchEmployees(''); setSendOpen(true) }}>
@@ -249,7 +249,7 @@ export default function ProbationPanel() {
         </Form>
       </Modal>
 
-      <Drawer title={`评估详情 — ${finalizeTarget?.employee_name || ''}`} width={560} open={!!finalizeTarget}
+      <Drawer title={`评估详情 — ${finalizeTarget?.employee_name || ''}`} size={560} open={!!finalizeTarget}
         onClose={() => setFinalizeTarget(null)}>
         {finalizeTarget && (
           <Descriptions size="small" column={1} bordered items={[

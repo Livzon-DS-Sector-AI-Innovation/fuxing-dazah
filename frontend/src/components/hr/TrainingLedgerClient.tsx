@@ -497,8 +497,8 @@ export default function TrainingLedgerClient({
             <Row gutter={16}>
               <Col span={4}><Statistic title="总记录数" value={stats.total_count} /></Col>
               <Col span={4}><Statistic title="实到人数" value={stats.assessed_count} /></Col>
-              <Col span={4}><Statistic title="合格人数" value={stats.qualified_count} valueStyle={{ color: '#3f8600' }} /></Col>
-              <Col span={4}><Statistic title="不合格人数" value={stats.unqualified_count} valueStyle={{ color: stats.unqualified_count > 0 ? '#cf1322' : undefined }} /></Col>
+              <Col span={4}><Statistic title="合格人数" value={stats.qualified_count} styles={{ content: { color: '#3f8600' } }} /></Col>
+              <Col span={4}><Statistic title="不合格人数" value={stats.unqualified_count} styles={{ content: { color: stats.unqualified_count > 0 ? '#cf1322' : undefined } }} /></Col>
               <Col span={4}><Statistic title="合格率" value={stats.pass_rate} /></Col>
               <Col span={4}><Statistic title="平均分" value={stats.avg_score ?? '-'} precision={1} /></Col>
             </Row>
