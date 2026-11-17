@@ -6,7 +6,7 @@ import { InboxOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchLcTemplateConfigs, parseChromatogram, submitCalcFill } from '@/actions/quality'
-import { mapPeaksToInputs } from '@/lib/peak-mapping'
+import { mapPeaksToInputs } from '@/lib/quality/peak-mapping'
 import type { ChromatogramPeak, LcTemplateConfig } from '@/types/quality'
 
 interface Props {

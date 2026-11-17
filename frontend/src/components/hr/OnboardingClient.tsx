@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useState, useCallback, useEffect } from 'react'
 import { App, Button, Card, Table, Space, Input, Tag, Select } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -96,7 +97,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
           style={{ width: 140 }} />
       </div>
 
-      <Table className="table-lg" columns={columns} dataSource={records} rowKey="id" loading={loading}
+      <Table className={styles.tableLg} columns={columns} dataSource={records} rowKey="id" loading={loading}
         pagination={{ current: page, pageSize, total, showSizeChanger: true,
           showTotal: (t) => `共 ${t} 条`, onChange: (p, ps) => { setPage(p); setPageSize(ps) } }}
         scroll={{ x: 1050 }} />

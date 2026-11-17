@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useState, useEffect, useRef } from 'react'
 import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline } from 'antd'
 import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
@@ -495,7 +496,7 @@ export default function EmployeeTable({
         />
       </div>
 
-      <Table className="table-lg"
+      <Table className={styles.tableLg}
         columns={columns}
         dataSource={employees}
         rowKey="id"

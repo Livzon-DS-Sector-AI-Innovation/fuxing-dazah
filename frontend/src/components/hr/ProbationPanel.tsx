@@ -105,9 +105,11 @@ export default function ProbationPanel() {
 
   const handleSend = async () => {
     const v = await sendForm.validateFields()
+    // 评估人 Select 是 mode="tags"，表单值为数组（maxCount=1），后端要 str
+    const reviewerName = Array.isArray(v.reviewer_name) ? v.reviewer_name[0] : v.reviewer_name
     setSending(true)
     try {
-      const r = await createProbationReview(v.employee_id, v.reviewer_name)
+      const r = await createProbationReview(v.employee_id, reviewerName)
       msg.success(r.message || '评估卡片已发送')
       setSendOpen(false); sendForm.resetFields(); load()
     } catch (e) { msg.error(e instanceof Error ? e.message : '发起失败') }

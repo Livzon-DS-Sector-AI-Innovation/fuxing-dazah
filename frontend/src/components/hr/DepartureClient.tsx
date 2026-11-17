@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useState, useCallback, useEffect } from 'react'
 import {
   App, Alert, Button, Table, Space, Input, Tag, Modal, Form, Select,
@@ -372,7 +373,7 @@ export default function DepartureClient({
         />
       </div>
 
-      <Table className="table-lg"
+      <Table className={styles.tableLg}
         columns={columns}
         dataSource={records}
         rowKey="id"

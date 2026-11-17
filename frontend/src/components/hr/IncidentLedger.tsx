@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useCallback, useEffect, useState } from 'react'
 import { Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
@@ -104,7 +105,7 @@ export default function IncidentLedger() {
       </Space>
 
       <Table
-        className="table-lg"
+        className={styles.tableLg}
         rowKey="id"
         loading={loading}
         dataSource={data}

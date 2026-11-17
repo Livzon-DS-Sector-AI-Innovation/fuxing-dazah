@@ -1,5 +1,6 @@
 'use client'
 
+import styles from "./lifecycleTable.module.css"
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import {
@@ -247,7 +248,7 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
             共 {summary?.department_count ?? 0} 个部门；点击部门名查看该部门员工
           </Text>
         </div>
-        <Table<HeadcountPlanRow> className="table-lg"
+        <Table<HeadcountPlanRow> className={styles.tableLg}
           rowKey="department"
           loading={loading}
           dataSource={filtered}
