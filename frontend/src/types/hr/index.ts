@@ -217,6 +217,11 @@ export interface DepartureFilterOptions {
   offboarding_types?: string[]
 }
 
+/** 入职台账筛选下拉选项（入职年份现有取值，后端聚合） */
+export interface OnboardingFilterOptions {
+  years?: number[]
+}
+
 export interface EmployeeResponse {
   code: number
   message: string

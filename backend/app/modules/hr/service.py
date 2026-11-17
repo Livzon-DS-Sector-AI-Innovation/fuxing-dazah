@@ -1223,37 +1223,30 @@ class OnboardingRecordService:
         department: str | None = None,
         position: str | None = None,
         is_employed: str | None = None,
+        year: int | None = None,
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
         sort_by: str = "hire_date",
         sort_order: str = "desc",
-        days: int = 7,
     ) -> tuple[list[OnboardingRecord], int]:
-        if days > 0:
-            await self._cleanup_old_records(days)
         return await self.repo.list_records(
             department=department,
             position=position,
             is_employed=is_employed,
+            year=year,
             keyword=keyword,
             page=page,
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
-            days=days,
         )
+
+    async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
+        return await self.repo.list_hire_years(departments=departments)
 
     async def delete_record(self, record_id: UUID) -> None:
         await self.repo.session.execute(text("DELETE FROM hr.onboarding_records WHERE id = :id"), {"id": record_id})
-
-    async def _cleanup_old_records(self, days: int) -> None:
-        """软删除超过 N 天的入职台账记录。"""
-        from sqlalchemy import text as sql_text
-        await self.repo.session.execute(sql_text("""
-            UPDATE hr.onboarding_records SET is_deleted = true, updated_at = now()
-            WHERE is_deleted = false AND created_at < now() - make_interval(days => :days)
-        """), {"days": days})
 
 class DepartureRecordService:
     def __init__(self, session: AsyncSession) -> None:

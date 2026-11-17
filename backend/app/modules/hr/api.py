@@ -2810,6 +2810,7 @@ async def list_onboarding_records(
     department: str | None = Query(None, description="部门筛选"),
     position: str | None = Query(None, description="岗位筛选"),
     is_employed: str | None = Query("是", description="是否在职筛选，默认仅显示在职"),
+    year: int | None = Query(None, ge=1900, le=2999, description="入职年份筛选（按入职日期归类）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     sort_by: str = Query("hire_date", description="排序字段"),
     sort_order: str = Query("desc", description="排序方向"),
@@ -2828,6 +2829,7 @@ async def list_onboarding_records(
         department=department,
         position=position,
         is_employed=is_employed,
+        year=year,
         keyword=keyword,
         sort_by=sort_by,
         sort_order=sort_order,
@@ -2853,6 +2855,19 @@ async def list_onboarding_records(
         page_size=page_params.page_size,
         total=total,
     )
+
+
+@router.get("/onboarding-records/filter-options", summary="入职台账筛选选项（入职年份现有取值聚合）")
+async def get_onboarding_filter_options(
+    service: OnboardingRecordService = Depends(get_onboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 与台账列表口径一致：按授权部门收敛年份聚合；self_only 可见本人记录，年份仅返回当年
+    departments: set[str] | None = None
+    if not hr_scope.is_unrestricted and hr_scope.scoped_departments:
+        departments = set(hr_scope.scoped_departments)
+    years = await service.list_hire_years(departments=departments)
+    return success_response(data={"years": years})
 
 
 @router.get("/onboarding-records/{record_id}", summary="入职记录详情")

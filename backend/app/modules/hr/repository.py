@@ -720,20 +720,18 @@ class OnboardingRecordRepository:
         department: str | None = None,
         position: str | None = None,
         is_employed: str | None = None,
+        year: int | None = None,
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
         sort_by: str = "created_at",
         sort_order: str = "desc",
-        days: int = 7,
     ) -> tuple[list[OnboardingRecord], int]:
-        from datetime import datetime, timedelta
         stmt = select(OnboardingRecord).where(OnboardingRecord.is_deleted.is_(False))
 
-        # 七天自动清空：只显示最近 N 天内创建的记录
-        if days > 0:
-            cutoff = datetime.now(UTC) - timedelta(days=days)
-            stmt = stmt.where(OnboardingRecord.created_at >= cutoff)
+        # 年份归类：按入职日期所在年份筛选
+        if year:
+            stmt = stmt.where(func.extract("year", OnboardingRecord.hire_date) == year)
 
         if department:
             stmt = stmt.where(OnboardingRecord.department == department)
@@ -771,6 +769,18 @@ class OnboardingRecordRepository:
         await self.session.flush()
         result = await self.session.execute(select(OnboardingRecord).where(OnboardingRecord.id == record.id))
         return result.scalar_one()
+
+    async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
+        """聚合台账中入职日期的可用年份（降序），供筛选下拉。"""
+        stmt = select(func.extract("year", OnboardingRecord.hire_date).label("year")).where(
+            OnboardingRecord.is_deleted.is_(False),
+            OnboardingRecord.hire_date.isnot(None),
+        )
+        if departments is not None:
+            stmt = stmt.where(OnboardingRecord.department.in_(departments))
+        stmt = stmt.distinct().order_by(func.extract("year", OnboardingRecord.hire_date).desc())
+        result = await self.session.execute(stmt)
+        return [int(row.year) for row in result.all()]
 
     async def count_total(self) -> int:
         result = await self.session.execute(

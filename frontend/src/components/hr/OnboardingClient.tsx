@@ -5,7 +5,12 @@ import { App, Button, Card, Table, Space, Input, Tag, Select, Popconfirm } from 
 import type { ColumnsType } from 'antd/es/table'
 import { SearchOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
-import { fetchOnboardingRecords, fetchDepartmentsAction, deleteOnboardingRecord } from '@/actions/hr'
+import {
+  fetchOnboardingRecords,
+  fetchOnboardingFilterOptionsAction,
+  fetchDepartmentsAction,
+  deleteOnboardingRecord,
+} from '@/actions/hr'
 import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
@@ -22,12 +27,17 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
   const [loading, setLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [filterDepartment, setFilterDepartment] = useState<string | undefined>()
+  const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear())
   const [createOpen, setCreateOpen] = useState(false)
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
+  const [hireYears, setHireYears] = useState<number[]>([])
 
   useEffect(() => {
     fetchDepartmentsAction({ page_size: 100 }).then(res => {
       setDepartments((res.data || []).map((d: any) => ({ value: d.name, label: d.name })))
+    }).catch(() => {})
+    fetchOnboardingFilterOptionsAction().then(res => {
+      setHireYears(res.years || [])
     }).catch(() => {})
   }, [])
 
@@ -36,15 +46,16 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
     try {
       const res = await fetchOnboardingRecords({
         department: filterDepartment || undefined,
+        year: filterYear || undefined,
         keyword: searchKeyword || undefined,
         page, page_size: pageSize })
       setRecords(res.data)
       setTotal(res.meta?.total || 0)
     } catch (err: any) { message.error(err.message || '加载数据失败') }
     finally { setLoading(false) }
-  }, [filterDepartment, searchKeyword, page, pageSize])
+  }, [filterDepartment, filterYear, searchKeyword, page, pageSize])
 
-  useEffect(() => { loadData() }, [filterDepartment, searchKeyword, page, pageSize])
+  useEffect(() => { loadData() }, [filterDepartment, filterYear, searchKeyword, page, pageSize])
 
   const columns: ColumnsType<OnboardingRecord> = [
     { title: '工号', dataIndex: 'employee_number', width: 100 },
@@ -86,6 +97,12 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
           className="w-48" allowClear />
         <Select placeholder="部门筛选" allowClear value={filterDepartment}
           onChange={setFilterDepartment} options={departments} style={{ width: 180 }} />
+        <Select placeholder="入职年份" allowClear value={filterYear}
+          onChange={(v) => setFilterYear(v)}
+          options={Array.from(new Set([new Date().getFullYear(), ...hireYears]))
+            .sort((a, b) => b - a)
+            .map((y) => ({ value: y, label: `${y} 年入职` }))}
+          style={{ width: 140 }} />
       </div>
 
       <Table columns={columns} dataSource={records} rowKey="id" loading={loading}
