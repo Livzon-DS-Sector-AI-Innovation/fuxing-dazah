@@ -104,8 +104,8 @@ export default function IncidentLedger() {
       </Space>
 
       <Table
+        className="table-lg"
         rowKey="id"
-        size="small"
         loading={loading}
         dataSource={data}
         scroll={{ x: 900 }}
