@@ -237,14 +237,14 @@ body {
   font-size: 12px;
 }
 
-/* 人员全周期台账大字号（用户拍板 15px，2026-11-17） */
+/* 人员全周期台账大字号（用户拍板 14px，2026-11-17） */
 .table-lg .ant-table-thead > tr > th,
 .table-lg .ant-table-thead > tr > td {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .table-lg .ant-table-tbody > tr > td {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 /* 分页样式 */
