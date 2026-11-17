@@ -84,12 +84,12 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
       <div className="flex flex-wrap gap-3 items-center">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建入职</Button>
         <Input placeholder="搜索姓名或工号" value={searchKeyword}
-          onChange={e => setSearchKeyword(e.target.value)} prefix={<SearchOutlined />}
+          onChange={e => { setSearchKeyword(e.target.value); setPage(1) }} prefix={<SearchOutlined />}
           className="w-48" allowClear />
         <Select placeholder="部门筛选" allowClear value={filterDepartment}
-          onChange={setFilterDepartment} options={departments} style={{ width: 180 }} />
+          onChange={(v) => { setFilterDepartment(v); setPage(1) }} options={departments} style={{ width: 180 }} />
         <Select placeholder="入职年份" allowClear value={filterYear}
-          onChange={(v) => setFilterYear(v)}
+          onChange={(v) => { setFilterYear(v); setPage(1) }}
           options={Array.from(new Set([new Date().getFullYear(), ...hireYears]))
             .sort((a, b) => b - a)
             .map((y) => ({ value: y, label: `${y} 年入职` }))}

@@ -347,7 +347,7 @@ export default function DepartureClient({
         <Input
           placeholder="搜索姓名/部门/职位"
           value={searchKeyword}
-          onChange={(e) => setSearchKeyword(e.target.value)}
+          onChange={(e) => { setSearchKeyword(e.target.value); setPage(1) }}
           prefix={<SearchOutlined />}
           className="w-64"
           allowClear
@@ -355,7 +355,7 @@ export default function DepartureClient({
         <Select
           placeholder="部门筛选"
           value={filterDepartment || undefined}
-          onChange={(v) => setFilterDepartment(v || '')}
+          onChange={(v) => { setFilterDepartment(v || ''); setPage(1) }}
           showSearch
           allowClear
           optionFilterProp="label"
@@ -365,7 +365,7 @@ export default function DepartureClient({
         <Select
           placeholder="离职类型筛选"
           value={filterOffboardingType || undefined}
-          onChange={(v) => setFilterOffboardingType(v || '')}
+          onChange={(v) => { setFilterOffboardingType(v || ''); setPage(1) }}
           allowClear
           className="w-36"
           options={filterOptions.offboarding_types?.map((t) => ({ value: t, label: t }))}
