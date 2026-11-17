@@ -385,7 +385,6 @@ export default function DepartureClient({
           showTotal: (t) => `共 ${t} 条`,
           onChange: handlePageChange }}
         scroll={{ x: 1400 }}
-        size="small"
       />
 
 
