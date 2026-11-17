@@ -363,6 +363,10 @@ async def confirm_stocktake(
         (i.diff_amount for i in items if i.diff_amount is not None), Decimal("0"),
     ).quantize(Decimal("0.01"))
     await db.flush()
+    # 镜像三值刷新钩子：盘点确认是 ADJ 唯一动账点（盘盈/盘亏行 on_hand 变动）
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
+
+    mark_stock_dirty(*(i.material_id for i in surplus_rows + deficit_rows))
     return take
 
 
@@ -583,6 +587,10 @@ async def accept_return(
     ret.accepted_at = now
     ret.lot_adjustments = adjustments
     await db.flush()
+    # 镜像三值刷新钩子：退库验收批次回加，on_hand 上行
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
+
+    mark_stock_dirty(*(UUID(str(row["material_id"])) for row in ret.items))
     return ret
 
 

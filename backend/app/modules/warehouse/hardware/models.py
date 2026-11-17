@@ -730,6 +730,10 @@ class HardwareReturn(BaseModel):
     return_no: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="退库单号 WJK-TK-YYMMDD-序号"
     )
+    approval_instance_code: Mapped[str | None] = mapped_column(
+        String(100),
+        comment="飞书领/退料审批实例 code（退料摄取幂等键；系统内建退库单为 NULL）",
+    )
     dept_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="退库部门")
     returned_by: Mapped[str] = mapped_column(String(100), nullable=False, comment="退库人")
     returned_by_open_id: Mapped[str | None] = mapped_column(

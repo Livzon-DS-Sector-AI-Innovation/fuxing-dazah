@@ -161,8 +161,8 @@ async def create_instance(
       （官方 x-lark-uuid 头）；业务侧持久化 uuid 实现重试不重单。
     - form：控件 JSON（list[dict]）或已序列化的 JSON 字符串（官方要求
       form 为 JSON 字符串，list 输入内部 json.dumps 兜底）。
-    - 凭证：缺省回落全局 FEISHU_*；五金库走 safety 应用（2026-10-28
-      已拍板口径，approval:instance 权限已具备）。
+    - 凭证：缺省回落全局 FEISHU_*；五金库走仓储应用（2026-11-10 拍板，
+      推翻 10-28 safety 口径——safety app 无 approval:definition 权限）。
     - 审批人：node_approver_user_id_list / node_approver_open_id_list
       按节点 key 指定（定义流程为「发起人自选」时必传）。
     """

@@ -1,9 +1,11 @@
 """五金库领料审批双通道（M3，设计 §五/§十一 M3）。
 
 ApprovalChannel 抽象 + feishu / manual 两实现，工厂按配置选择：
-- feishu 通道：对接新审批定义「五金库领料申请」（definition code 从
-  env/config 读，未配置=通道不可用自动落 manual）；uuid 幂等创建实例；
-  审批结果轮询兜底复用 list_instance_codes 增量拉取。
+- feishu 通道：对接「福兴电子领/退料单审批」（definition code 从 env/config
+  读，未配置=通道不可用自动落 manual）；uuid 幂等创建实例；系统代发表单=
+  领退同单定稿版（单选分流键 + fieldList 明细，2026-11-17 T2 适配，行值
+  快照文本假设待首条真机单校准）；审批结果轮询兜底复用 list_instance_codes
+  增量拉取；审批 API 走仓储应用凭证（2026-11-10 拍板）。
 - manual 通道：部门主管在领用中心点确认=审批结果代录（approve/reject
   API 直改状态机）。
 
@@ -11,7 +13,9 @@ ApprovalChannel 抽象 + feishu / manual 两实现，工厂按配置选择：
 / rejected（释放）；两通道产出相同的 requisition 状态迁移。
 
 配置（backend/app/core/config.py env，未配置自动 manual）：
-- HARDWARE_APPROVAL_CHANNEL: feishu | manual（默认 manual）
+- HARDWARE_APPROVAL_CHANNEL: feishu | manual（默认 manual；切换步骤=改
+  backend/.env.development 该键为 feishu + 确认 HARDWARE_APPROVAL_CODE
+  已配「福兴电子领/退料单审批」code + 重启后端）
 - HARDWARE_APPROVAL_CODE: 飞书审批定义 code（业务部门建好后填）
 - HARDWARE_APPROVAL_USER_KEY: 发起人 user_id 口径（open_id|user_id，默认 user_id）
 """
@@ -56,6 +60,36 @@ class ApprovalChannel(ABC):
 
 # ── feishu 通道 ──
 
+# 「福兴电子领/退料单审批」控件 ID（2026-11-11 定稿表单，与 approval_ingest 同源；
+# 系统代发只发领料——退料入口是员工飞书自发起，摄取层建退库草稿）
+KIND_WIDGET_ID = "widget17942773552310001"  # 单选：五金库领料/五金库退料
+DETAIL_WIDGET_ID = "widget17942790533710001"  # 明细 fieldList
+KIND_VALUE_REQUISITION = "五金库领料"
+
+
+def build_field_list_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """明细行 → fieldList 行值（行=控件名键的 dict，值按「快照文本」假设）。
+
+    行值形态与 approval_ingest._text/_row_value 同口径（引用多维表格控件实例
+    存字段文本）——**待首条真机单校准**：真实创建接口若要求子控件 id 键或其他
+    包裹形态，按首条实例 form 原文修正本函数与摄取解析器。库存快照列实绑
+    可领量（选后自动带出），系统提交不填；无单号/用途控件（发起人=领退人，
+    部门 identity 反查）。
+    """
+    rows: list[dict[str, Any]] = []
+    for it in items:
+        rows.append(
+            {
+                "类别": it.get("category") or "",
+                "物资名称": it["material_name"],
+                "规格型号": it.get("spec") or "",
+                "计量单位": it.get("unit") or "",
+                "编码": it.get("code") or "",
+                "数量": float(it["need_qty"]),
+            }
+        )
+    return rows
+
 
 class FeishuApprovalChannel(ApprovalChannel):
     """飞书审批：definition code 配置化，未配置=通道不可用。"""
@@ -67,18 +101,17 @@ class FeishuApprovalChannel(ApprovalChannel):
 
     @staticmethod
     def _credentials() -> tuple[str | None, str | None]:
-        """safety 应用凭证（2026-10-28 已拍板：审批 API 全走 safety）。"""
+        """仓储应用凭证（2026-11-10 拍板：审批 API 走仓储应用，推翻 10-28
+        safety 口径——safety app 无 approval:definition 读权限 99991672）。"""
         settings = get_settings()
         return (
-            getattr(settings, "SAFETY_FEISHU_APP_ID", None) or None,
-            getattr(settings, "SAFETY_FEISHU_APP_SECRET", None) or None,
+            getattr(settings, "WAREHOUSE_FEISHU_APP_ID", None) or None,
+            getattr(settings, "WAREHOUSE_FEISHU_APP_SECRET", None) or None,
         )
 
     async def submit(
         self, db: AsyncSession, req: HardwareRequisition, items: list[dict[str, Any]]
     ) -> str:
-        import json as _json
-
         from app.platform.integrations.feishu.approval import (
             ApprovalAPIError,
             create_instance,
@@ -86,7 +119,9 @@ class FeishuApprovalChannel(ApprovalChannel):
 
         app_id, app_secret = self._credentials()
         if not app_id or not app_secret:
-            raise ApprovalChannelError("safety 应用审批凭证未配置（SAFETY_FEISHU_APP_ID/SECRET）")
+            raise ApprovalChannelError(
+                "仓储应用审批凭证未配置（WAREHOUSE_FEISHU_APP_ID/SECRET）"
+            )
 
         settings = get_settings()
         user_id = req.applicant_open_id or ""
@@ -95,22 +130,15 @@ class FeishuApprovalChannel(ApprovalChannel):
             # 定义侧为 user_id 口径时由审批后台字段映射兼容
             user_id = user_id or ""
 
+        # 领退同单定稿表单：单选分流键 + fieldList 明细（2026-11-17 T2 适配；
+        # 行值快照文本假设待首条真机单校准，见 build_field_list_rows 注记）
         form = [
-            {"id": "widget1", "type": "input", "value": req.dept_name},  # 领用部门
-            {"id": "widget2", "type": "input", "value": req.applicant},  # 领用人
-            {"id": "widget3", "type": "textarea", "value": req.purpose or "-"},  # 用途
-            # 物料明细（多行控件以 markdown 汇总；定义建好后按实际控件 id 调整）
+            {"id": KIND_WIDGET_ID, "type": "radioV2", "value": KIND_VALUE_REQUISITION},
             {
-                "id": "widget4",
-                "type": "textarea",
-                "value": "\n".join(
-                    f"{it['material_name']} {it.get('spec') or ''} × {it['need_qty']}"
-                    f" {it.get('unit') or ''}"
-                    for it in items
-                ),
+                "id": DETAIL_WIDGET_ID,
+                "type": "fieldList",
+                "value": build_field_list_rows(items),
             },
-            {"id": "widget5", "type": "input", "value": "紧急" if req.req_type == "urgent" else "常规"},
-            {"id": "widget6", "type": "input", "value": req.req_no},  # 单号回溯键
         ]
         # uuid 幂等：req.id 派生（重试不重单）
         idempotency = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"hardware-requisition:{req.id}"))
@@ -241,7 +269,9 @@ class _ScrapFeishuApprovalChannel(FeishuApprovalChannel):
 
         app_id, app_secret = self._credentials()
         if not app_id or not app_secret:
-            raise ApprovalChannelError("safety 应用审批凭证未配置（SAFETY_FEISHU_APP_ID/SECRET）")
+            raise ApprovalChannelError(
+                "仓储应用审批凭证未配置（WAREHOUSE_FEISHU_APP_ID/SECRET）"
+            )
 
         from app.modules.warehouse.hardware.scrap import SCRAP_REASON_LABELS
 
@@ -343,6 +373,8 @@ async def _load_items(db: AsyncSession, req: HardwareRequisition) -> list[dict[s
                 "material_name": material.name if material else "-",
                 "spec": material.spec if material else None,
                 "unit": material.unit if material else None,
+                "category": material.category if material else None,
+                "code": material.code if material else None,
                 "need_qty": float(row.need_qty),
             }
         )

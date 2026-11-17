@@ -160,6 +160,10 @@ class Settings(BaseSettings):
     # stocked 类永不自动。env/runtime 双通道——runtime_configs 键优先）。
     HARDWARE_OCR_AUTO_DIRECT_ENABLED: bool = False
     HARDWARE_OCR_AUTO_DIRECT_MIN_CONFIDENCE: float = 0.9
+    # 五金库物资目录镜像（平台→Bitable 单向同步；「五金库物资目录（平台镜像·
+    # 单向）」base/table，领/退料审批表单的引用数据源。清空任一值=同步自空转）。
+    HARDWARE_MIRROR_BASE_TOKEN: str = "U8h6b5puUaHH7Hsf7focp9fGnze"
+    HARDWARE_MIRROR_TABLE_ID: str = "tblK7MkjceniZOjX"
     # 仓库机器人 open_id（部署身份：gateway 去重排除自身消息；未配置回退 gateway 代码常量）
     WAREHOUSE_FEISHU_BOT_OPEN_ID: str = ""
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）

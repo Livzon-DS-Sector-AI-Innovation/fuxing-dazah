@@ -675,6 +675,10 @@ async def accept_receipt(
         receipt.updated_by = user.id
     await db.flush()
     await _fire_direct_pickup(db, receipt, rows)
+    # 镜像三值刷新钩子：入账动 on_hand（stocked 匹配行；定时任务批量刷）
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
+
+    mark_stock_dirty(*(row.material_id for row in rows if row.material_id))
     return receipt
 
 
@@ -897,6 +901,10 @@ async def submit_requisition(
     if user:
         req.updated_by = user.id
     await db.flush()
+    # 镜像三值刷新钩子：提交即预扣，reserved 上行
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
+
+    mark_stock_dirty(*need_by_material.keys())
     return req
 
 
@@ -1006,6 +1014,8 @@ async def reject_requisition(
     if user:
         req.updated_by = user.id
     await db.flush()
+    # 镜像三值刷新钩子：驳回释放预扣，reserved 下行
+    await _mark_requisition_stock_dirty(db, req)
     return req
 
 
@@ -1020,7 +1030,26 @@ async def cancel_requisition(
     if user:
         req.updated_by = user.id
     await db.flush()
+    # 镜像三值刷新钩子：pending 取消释放预扣（draft 未预扣，登记无害）
+    await _mark_requisition_stock_dirty(db, req)
     return req
+
+
+async def _mark_requisition_stock_dirty(
+    db: AsyncSession, req: HardwareRequisition
+) -> None:
+    """领料单状态迁移后的镜像三值刷新登记（按单明细物料批）。"""
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
+
+    items = (
+        await db.execute(
+            select(HardwareRequisitionItem.material_id).where(
+                HardwareRequisitionItem.requisition_id == req.id,
+                HardwareRequisitionItem.is_deleted.is_(False),
+            )
+        )
+    ).scalars().all()
+    mark_stock_dirty(*items)
 
 
 async def issue_requisition(
@@ -1102,6 +1131,10 @@ async def issue_requisition(
     if user:
         req.updated_by = user.id
     await db.flush()
+    # 镜像三值刷新钩子：发料实扣（on_hand 下行 + 预扣释放）
+    from app.modules.warehouse.hardware.mirror_sync import mark_stock_dirty
+
+    mark_stock_dirty(*(row.material_id for row in rows))
     return req
 
 
@@ -1295,6 +1328,10 @@ async def create_material_manual(
     )
     db.add(material)
     await db.flush()
+    # 镜像同步钩子（fire-and-forget，失败只记日志；软删/停用由对账兜底清理）
+    from app.modules.warehouse.hardware.mirror_sync import hook_material_upserted
+
+    hook_material_upserted(db, material.id)
     return material
 
 
@@ -1316,6 +1353,9 @@ async def update_material(
     if user:
         material.updated_by = user.id
     await db.flush()
+    from app.modules.warehouse.hardware.mirror_sync import hook_material_upserted
+
+    hook_material_upserted(db, material.id)
     return material
 
 

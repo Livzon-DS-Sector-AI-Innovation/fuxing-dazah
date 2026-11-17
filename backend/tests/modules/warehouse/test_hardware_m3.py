@@ -87,9 +87,11 @@ async def test_feishu_channel_uuid_idempotency_contract():
     assert u1 == u2
 
 
-async def test_feishu_submit_uses_safety_credentials_and_creates_instance(db_session):
-    """feishu 通道提交：走 safety 凭证 + create_instance，落 instance_code。"""
+async def test_feishu_submit_warehouse_credentials_and_leignty_form(db_session):
+    """feishu 通道提交（2026-11-17 T2 领退同单表单）：仓储凭证 + 新表单构造。"""
     from app.modules.warehouse.hardware.approval_channel import (
+        DETAIL_WIDGET_ID,
+        KIND_WIDGET_ID,
         FeishuApprovalChannel,
     )
 
@@ -112,7 +114,7 @@ async def test_feishu_submit_uses_safety_credentials_and_creates_instance(db_ses
         "app.modules.warehouse.hardware.approval_channel.get_settings",
         return_value=_settings_stub(
             HARDWARE_APPROVAL_CHANNEL="feishu", HARDWARE_APPROVAL_CODE="OP-TEST-001",
-            SAFETY_FEISHU_APP_ID="cli_safety", SAFETY_FEISHU_APP_SECRET="sec",
+            WAREHOUSE_FEISHU_APP_ID="cli_wh", WAREHOUSE_FEISHU_APP_SECRET="sec",
         ),
     ):
         channel = FeishuApprovalChannel("OP-TEST-001")
@@ -123,10 +125,17 @@ async def test_feishu_submit_uses_safety_credentials_and_creates_instance(db_ses
     assert req.approval_channel == "feishu"
     assert req.approval_instance_code == "inst_test_123"
     assert captured["approval_code"] == "OP-TEST-001"
-    assert captured["app_id"] == "cli_safety"  # safety 凭证（拍板口径）
+    assert captured["app_id"] == "cli_wh"  # 仓储凭证（2026-11-10 拍板口径）
     assert isinstance(captured["form"], list)  # create_instance 内部序列化
-    assert any("发酵" in str(it.get("value", "")) for it in captured["form"])
-    assert req.req_no in str(captured["form"])  # 单号回溯键入表单
+    # 领退同单两控件：单选分流键 + fieldList 明细（快照文本假设，待真机校准）
+    by_id = {w["id"]: w for w in captured["form"]}
+    assert set(by_id) == {KIND_WIDGET_ID, DETAIL_WIDGET_ID}
+    assert by_id[KIND_WIDGET_ID]["value"] == "五金库领料"
+    rows = by_id[DETAIL_WIDGET_ID]["value"]
+    assert rows[0]["物资名称"] == material.name
+    assert rows[0]["规格型号"] == "DN25" and rows[0]["类别"] == "金属阀门"
+    assert rows[0]["数量"] == 10.0
+    assert req.req_no not in str(captured["form"])  # 定稿表单无单号控件
 
 
 async def test_feishu_poll_result_mapping(db_session):
@@ -193,8 +202,8 @@ def _settings_stub(**overrides):
         HARDWARE_APPROVAL_CHANNEL = overrides.get("HARDWARE_APPROVAL_CHANNEL", "")
         HARDWARE_APPROVAL_CODE = overrides.get("HARDWARE_APPROVAL_CODE", "")
         HARDWARE_APPROVAL_USER_KEY = overrides.get("HARDWARE_APPROVAL_USER_KEY", "user_id")
-        SAFETY_FEISHU_APP_ID = overrides.get("SAFETY_FEISHU_APP_ID", "")
-        SAFETY_FEISHU_APP_SECRET = overrides.get("SAFETY_FEISHU_APP_SECRET", "")
+        WAREHOUSE_FEISHU_APP_ID = overrides.get("WAREHOUSE_FEISHU_APP_ID", "")
+        WAREHOUSE_FEISHU_APP_SECRET = overrides.get("WAREHOUSE_FEISHU_APP_SECRET", "")
     return _S()
 
 

@@ -108,6 +108,69 @@ HARDWARE_APPROVAL_POLL_TASK = TaskDefinition(
 )
 
 
+async def _run_scheduled_approval_reconcile() -> None:
+    """领/退料审批实例对账兜底：事件丢失补摄取 + pending 单状态对齐（幂等）。
+
+    主通道是 approval.instance.* WS 事件（approval_ingest），本任务每小时扫
+    近 2 小时实例防长连接断线漏单；HARDWARE_APPROVAL_CODE 未配置时自空转。
+    """
+    from app.modules.warehouse.hardware.approval_ingest import reconcile_recent_instances
+
+    async with async_session_factory() as session:
+        stats = await reconcile_recent_instances(session)
+        await session.commit()
+    if stats.get("enabled"):
+        logger.info("五金领/退料审批对账: %s", stats)
+
+
+HARDWARE_APPROVAL_RECONCILE_TASK = TaskDefinition(
+    name="warehouse.hardware_approval_reconcile",
+    schedule=ScheduleConfig(strategy=ScheduleStrategy.INTERVAL, interval_seconds=3600),
+    coro=_run_scheduled_approval_reconcile,
+    timeout_seconds=600,
+    module="warehouse",
+)
+
+
+# 镜像任务节拍：dirty 三值快刷 5 分钟一轮；每 6 轮（≈30 分钟）插一次全量对账
+_MIRROR_FULL_RECONCILE_EVERY = 6
+_mirror_tick = 0
+
+
+async def _run_scheduled_mirror_reconcile() -> None:
+    """物资目录镜像同步（5 分钟）：清 dirty 三值队列；每 6 轮全量对账兜底。
+
+    平台→Bitable 单向；软删/停用行的镜像清理由全量对账承担（无即时删钩子）。
+    HARDWARE_MIRROR_BASE_TOKEN/TABLE_ID 清空或仓储凭证缺失时自空转。
+    """
+    global _mirror_tick
+    from app.modules.warehouse.hardware import mirror_sync
+
+    _mirror_tick += 1
+    full = _mirror_tick % _MIRROR_FULL_RECONCILE_EVERY == 0
+    stats: dict[str, int] = {}
+    async with async_session_factory() as session:
+        dirty = mirror_sync.take_dirty_ids()
+        if dirty:
+            refreshed = await mirror_sync.refresh_stock_values(session, sorted(dirty))
+            if refreshed:
+                logger.info("五金镜像三值已刷: %d 行", refreshed)
+        if full:
+            stats = await mirror_sync.reconcile_mirror(session)
+            await session.commit()
+    if stats.get("created") or stats.get("updated") or stats.get("deleted"):
+        logger.info("五金物资目录镜像对账: %s", stats)
+
+
+HARDWARE_MIRROR_RECONCILE_TASK = TaskDefinition(
+    name="warehouse.hardware_mirror_reconcile",
+    schedule=ScheduleConfig(strategy=ScheduleStrategy.INTERVAL, interval_seconds=300),
+    coro=_run_scheduled_mirror_reconcile,
+    timeout_seconds=600,
+    module="warehouse",
+)
+
+
 async def _run_scheduled_monthly_plan() -> None:
     """每月 25 日 09:00 生成次月计划草案（P7 公式+AI 注释；同月幂等）。
 
@@ -213,6 +276,8 @@ HARDWARE_ENV_REMIND_TASK = TaskDefinition(
 _HARDWARE_TASKS = (
     URGENT_PATCH_CHECK_TASK,
     HARDWARE_APPROVAL_POLL_TASK,
+    HARDWARE_APPROVAL_RECONCILE_TASK,
+    HARDWARE_MIRROR_RECONCILE_TASK,
     HARDWARE_MONTHLY_PLAN_TASK,
     HARDWARE_STALE_SCAN_TASK,
     HARDWARE_ENV_REMIND_TASK,

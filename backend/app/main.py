@@ -132,6 +132,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 仓储模块专属飞书事件订阅（独立凭证，仿 safety 模式）──
     # 触发 gateway 的 @on_event 处理器注册（im.message.receive_v1 / card.action.trigger）
     import app.modules.warehouse.agent.gateway  # noqa: F401
+    # 五金库领/退料审批实例摄取（approval.instance.* 事件处理器，导入即注册）
+    import app.modules.warehouse.hardware.approval_ingest  # noqa: F401
     import app.modules.warehouse.feishu.event_client as wh_event_client
     warehouse_ws_task = asyncio.create_task(wh_event_client.start_ws()) if settings.WAREHOUSE_FEISHU_WS_ENABLED else None
 

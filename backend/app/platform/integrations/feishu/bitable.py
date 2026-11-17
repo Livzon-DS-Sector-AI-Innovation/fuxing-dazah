@@ -109,6 +109,23 @@ async def update_record(
     )
 
 
+async def delete_record(
+    app_token: str,
+    table_id: str,
+    record_id: str,
+    *,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> None:
+    """删除单条记录（五金库镜像同步：平台行消失/停用时清镜像，2026-11-17）。"""
+    await _request(
+        "DELETE",
+        f"{BITABLE_BASE}/apps/{app_token}/tables/{table_id}/records/{record_id}",
+        app_id=app_id,
+        app_secret=app_secret,
+    )
+
+
 async def list_all_records(
     app_token: str,
     table_id: str,
