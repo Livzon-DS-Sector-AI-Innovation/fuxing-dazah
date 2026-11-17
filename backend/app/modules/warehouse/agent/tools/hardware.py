@@ -128,8 +128,105 @@ async def query_hardware_stock(
         return {"error": f"五金库库存查询失败: {exc}"}
 
 
+EXPORT_HARDWARE_REQUISITIONS_SCHEMA: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "export_hardware_requisitions",
+            "description": (
+                "导出五金库领料出库台账 Excel 文件并发送到当前会话（出库记录导出）。"
+                "文件含领料单+明细展平：单号/状态/部门/领用人/审批结果/物资编码/"
+                "需求数量/实发数量等 19 列。支持按状态筛选（pending 审批中/"
+                "approved 待发料/issued 已发料/rejected 已驳回，缺省全部）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": (
+                            "状态筛选：pending/approved/issued/rejected，"
+                            "缺省导出全部状态的领料单"
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "导出单数上限，默认 200",
+                    },
+                },
+                "required": [],
+            },
+        },
+    }
+]
+
+
+async def export_hardware_requisitions(
+    status: str | None = None, limit: int = 200, *, _ctx: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """领料出库台账导出（生成 Excel → 文件消息发回当前会话）。"""
+    ctx = _ctx or {}
+    chat_id = str(ctx.get("chat_id") or "")
+    if not chat_id:
+        return {"error": "会话上下文缺失（chat_id），无法发送文件"}
+    try:
+        from datetime import datetime as _dt
+
+        from app.modules.warehouse.hardware import service as hw
+        from app.modules.warehouse.hardware.excel_io import export_requisitions_excel
+        from app.modules.warehouse.hardware.models import HardwareMaterial
+        from app.modules.warehouse.feishu import media
+
+        limit = max(1, min(int(limit or 200), 2000))
+        async with _db_session() as db:
+            reqs, total = await hw.list_requisitions(
+                db, status=(status or "").strip() or None,
+                page=1, page_size=limit,
+            )
+            items_by_req: dict[Any, list[dict[str, Any]]] = {}
+            for req in reqs:
+                rows = await hw.list_requisition_items(db, req.id)
+                enriched: list[dict[str, Any]] = []
+                for it in rows:
+                    material = (
+                        await db.get(HardwareMaterial, it.material_id)
+                        if it.material_id else None
+                    )
+                    enriched.append(
+                        {
+                            "material_code": material.code if material else None,
+                            "material_name": material.name if material else "-",
+                            "spec": material.spec if material else None,
+                            "unit": material.unit if material else None,
+                            "need_qty": it.need_qty,
+                            "issued_qty": it.issued_qty,
+                        }
+                    )
+                items_by_req[req.id] = enriched
+            xlsx = export_requisitions_excel(reqs, items_by_req)
+        filename = f"五金库领料出库台账_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        ok = await media.send_file_to_chat(chat_id, xlsx, filename)
+        if not ok:
+            return {"error": "文件发送失败，请稍后重试或到 Web 端领用中心导出"}
+        return {
+            "sent": True,
+            "filename": filename,
+            "requisitions": len(reqs),
+            "total_in_db": total,
+            "status_filter": status or "全部",
+            "note": "Excel 已发送到当前会话；一明细行一物理行，含需求/实发数量",
+        }
+    except Exception as exc:  # noqa: BLE001 — 工具层兜底，不中断 Runner
+        logger.exception("export_hardware_requisitions failed")
+        return {"error": f"五金出库台账导出失败: {exc}"}
+
+
 HARDWARE_TOOL_FUNCS: dict[str, Callable[..., Any]] = {
     "query_hardware_stock": query_hardware_stock,
+    "export_hardware_requisitions": export_hardware_requisitions,
 }
 
-HARDWARE_TOOLS_SCHEMA: list[dict[str, Any]] = QUERY_HARDWARE_STOCK_SCHEMA
+HARDWARE_TOOLS_SCHEMA: list[dict[str, Any]] = [
+    *QUERY_HARDWARE_STOCK_SCHEMA,
+    *EXPORT_HARDWARE_REQUISITIONS_SCHEMA,
+]

@@ -20,7 +20,7 @@ class ORMResponse(BaseModel):
 
 
 ManagedClass = Literal["stocked", "direct"]
-ReceiptSource = Literal["ocr", "manual", "erp_import", "stocktake", "return"]
+ReceiptSource = Literal["ocr", "manual", "excel", "erp_import", "stocktake", "return"]
 ReceiptStatus = Literal["draft", "accepted", "rejected"]
 RequisitionType = Literal["normal", "urgent", "excess"]
 RequisitionStatus = Literal[
@@ -174,6 +174,48 @@ class ReceiptCreate(BaseModel):
     remark: str | None = None
     attachments: list[dict[str, Any]] | None = None
     items: list[ReceiptItemIn] = Field(..., min_length=1)
+    ocr_result: dict[str, Any] | None = Field(
+        default=None,
+        description="截图解析留痕原样回传（已退役保留兼容；纯手动登记为 None）",
+    )
+    excel_result: dict[str, Any] | None = Field(
+        default=None,
+        description="Excel 解析留痕原样回传（方式②：excel/parse 返回的 excel_result 提交时带回）",
+    )
+
+
+class ReceiptParseItem(ReceiptItemIn):
+    """截图解析行（方式2）：在 ReceiptItemIn 上加匹配标记（前端标黄/标红依据）。"""
+
+    matched_name: str | None = Field(default=None, description="匹配到的主数据名称（null=未匹配）")
+    low_confidence: bool = Field(default=False, description="低置信行（前端标黄人工核对）")
+
+
+class ReceiptParseResponse(BaseModel):
+    """POST /receipts/excel/parse 响应：纯解析不落库，表单预填契约。
+
+    预填后人工核对修正走 POST /receipts（source=excel + excel_result 回传）。
+    """
+
+    mode: str = Field(description="stocked/direct（单头 mode 预判）")
+    supplier_name: str | None = None
+    delivery_note_no: str | None = None
+    remark: str | None = None
+    target_dept: str | None = Field(default=None, description="direct 模式下从备注猜的直发车间")
+    items: list[ReceiptParseItem]
+    match_summary: list[dict[str, Any]] = Field(default_factory=list)
+    matched_stocked: int = 0
+    matched_direct: int = 0
+    unmatched: int = 0
+    errors: list[dict[str, Any]] = Field(
+        default_factory=list, description="逐行解析告警 [{row, name, reason}]（不阻断其余行）"
+    )
+    excel_result: dict[str, Any] | None = Field(
+        default=None, description="Excel 解析留痕——表单提交时随 ReceiptCreate.excel_result 原样回传"
+    )
+    ocr_result: dict[str, Any] | None = Field(
+        default=None, description="（兼容字段，Excel 方式恒 None；截图解析已退役）"
+    )
 
 
 class ReceiptAccept(BaseModel):

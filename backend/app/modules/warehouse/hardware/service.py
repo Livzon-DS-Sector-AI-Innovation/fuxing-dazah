@@ -441,6 +441,7 @@ async def create_receipt(
         status="draft",
         attachments=payload.attachments,
         remark=payload.remark,
+        ocr_result=payload.ocr_result or payload.excel_result,  # 解析留痕（截图已退役→Excel；纯手动=None）
         created_by=user.id if user else None,
     )
     db.add(receipt)

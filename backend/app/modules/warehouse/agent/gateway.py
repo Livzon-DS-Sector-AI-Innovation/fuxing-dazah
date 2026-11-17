@@ -331,6 +331,20 @@ def _spawn_receipt_task(coro: Coroutine[Any, Any, None]) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
+def _process_hardware_excel_task(
+    *, chat_id: str, chat_type: str, open_id: str, message_id: str,
+    file_key: str, file_name: str, started: float,
+) -> Coroutine[Any, Any, None]:
+    """五金 Excel 入库任务（gateway_excel.process_hardware_excel 薄包装）。"""
+    from app.modules.warehouse.hardware.gateway_excel import process_hardware_excel
+
+    return process_hardware_excel(
+        chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+        message_id=message_id, file_key=file_key, file_name=file_name,
+        started=started,
+    )
+
+
 async def _send_card_to(
     *, chat_id: str, chat_type: str, open_id: str, card: dict[str, Any]
 ) -> None:
@@ -562,6 +576,46 @@ async def handle_im_message(event: dict[str, Any]) -> None:
         await _handle_text_message(
             chat_id=chat_id, chat_type=chat_type, open_id=open_id,
             text=user_text, started=started,
+        )
+        return
+
+    if msg_type == "file":
+        # 五金库 Excel 入库（2026-11-13）：发 xlsx → 解析草稿确认卡。
+        # 群聊需 @提及（上方已统一拦截）；私聊按扩展名试探。
+        import json as _json
+
+        try:
+            file_content = _json.loads(message.get("content") or "{}")
+        except _json.JSONDecodeError:
+            file_content = {}
+        file_name = str(file_content.get("file_name") or "")
+        file_key = str(file_content.get("file_key") or "")
+        from app.modules.warehouse.hardware.gateway_excel import sniff_excel_filename
+
+        if file_key and message_id and sniff_excel_filename(file_name):
+            _spawn_receipt_task(
+                _process_hardware_excel_task(
+                    chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                    message_id=message_id, file_key=file_key, file_name=file_name,
+                    started=started,
+                )
+            )
+            return
+        # 非 Excel 文件：维持提示卡 + 审计口径
+        try:
+            await _send_card_to(
+                chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                card=_build_unsupported_type_card(msg_type),
+            )
+        except Exception:
+            logger.exception("仓库网关不支持类型提示卡发送失败")
+        await _record_gateway_audit(
+            started=started,
+            tool_name="gateway",
+            args_summary={"chat_type": chat_type, "message_type": msg_type,
+                          "file_name": file_name[:60]},
+            result_status="ignored",
+            error_code="unsupported_message_type",
         )
         return
 
@@ -971,10 +1025,63 @@ async def _process_receipt_image_inner(
     )
 
 
+def _is_hardware_inbound_intent(text: str) -> bool:
+    """五金 Excel 入库意图（确定性直答，不进 Runner）。
+
+    命中口径：文本含「五金」且含 入库/模板/登记 之一。纯查库存
+    （「五金库存」「五金 DN25 有多少」）不含这三个词，仍走 Runner 工具。
+    """
+    t = (text or "").lower().replace(" ", "")
+    return "五金" in t and any(kw in t for kw in ("入库", "模板", "登记"))
+
+
 async def _handle_text_message(
     *, chat_id: str, chat_type: str, open_id: str, text: str, started: float
 ) -> None:
-    """文本消息主链路：会话定位 → 占位卡片 → Runner → 结果卡片 → 历史+审计。"""
+    """文本消息主链路：五金意图直答 → 会话定位 → Runner → 结果卡片 → 历史+审计。"""
+    # 五金入库/模板意图直答（2026-11-13）：发模板文件+指引，不进 Runner
+    # （对话模型无文件收发能力；入库 Excel 链是确定性流程，直答更稳）
+    if _is_hardware_inbound_intent(text):
+        from app.modules.warehouse.hardware.gateway_excel import send_receipt_template
+
+        ok = await send_receipt_template(chat_id)
+        guide = (
+            "🔩 **五金库 Excel 入库**\n"
+            "1️⃣ 已把《入库登记模板》发给你（见上方文件）\n"
+            "2️⃣ 按模板填写：物资名称/规格型号/数量（必填），单位/供应商/送货单号/备注 选填\n"
+            "3️⃣ **直接把填好的 Excel 发到本会话**，我会自动解析并回确认卡\n"
+            "4️⃣ 核对确认卡上的匹配结果（绿色=已匹配/黄色=低置信/红色=未匹配），点「确认入库」完成入账\n\n"
+            f"模板发送：{'✅ 成功' if ok else '❌ 失败（可到 Web 端五金出入库页下载）'}"
+        )
+        from app.modules.warehouse.feishu import notification as _ntf
+
+        if chat_type == "group":
+            await _ntf.send_card(
+                chat_id,
+                {
+                    "config": {"wide_screen": True},
+                    "header": {"title": {"tag": "plain_text", "content": "五金库 Excel 入库指引"}, "template": "blue"},
+                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": guide.replace("**", "")}}],
+                },
+            )
+        else:
+            await _ntf.send_card_to_user(
+                open_id,
+                {
+                    "config": {"wide_screen": True},
+                    "header": {"title": {"tag": "plain_text", "content": "五金库 Excel 入库指引"}, "template": "blue"},
+                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": guide.replace("**", "")}}],
+                },
+            )
+        await _record_gateway_audit(
+            started=started,
+            tool_name="gateway",
+            args_summary={"chat_type": chat_type, "intent": "hardware_excel_inbound",
+                          "template_sent": ok},
+            result_status="ok",
+        )
+        return
+
     session_id: uuid.UUID | None = None
     located: WarehouseAgentSession | None = None
     try:

@@ -1251,18 +1251,34 @@ def _render_hardware_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         lines.append(f"**直发车间**：{aligned.get('target_dept')}")
     lines.append("")
     rows = aligned.get("rows") or []
-    for i, row in enumerate(rows[:12], 1):
+    # 匹配统计总览（大单场景前 N 行可能恰好全是未匹配——总览先行，2026-11-13）
+    matched_rows = [r for r in rows if r.get("matched")]
+    unmatched_count = len(rows) - len(matched_rows)
+    if rows:
+        lines.append(
+            f"**匹配统计**：✅ 已匹配 {len(matched_rows)} 行 / ⚠️ 未匹配 {unmatched_count} 行（共 {len(rows)} 行）"
+        )
+        lines.append("")
+    # 已匹配行优先展示（未匹配行淹没匹配行是反直觉的——用户要看的就是对上的）
+    shown = matched_rows[:10]
+    for i, row in enumerate(shown, 1):
         warn = " ⚠️低置信" if row.get("low_confidence") else ""
-        matched = row.get("matched") or "未匹配（按车间单独需求登记）"
         lines.append(
             f"{i}. {row.get('ocr_name') or '-'} {row.get('ocr_spec') or ''} × {row.get('quantity')}"
-            f"（→ {matched}{warn}）"
+            f"（→ {row.get('matched')}{warn}）"
         )
-    if len(rows) > 12:
-        lines.append(f"…共 {len(rows)} 行")
+    tail_parts = []
+    if len(matched_rows) > len(shown):
+        tail_parts.append(f"另 {len(matched_rows) - len(shown)} 行已匹配未展开")
+    if unmatched_count:
+        tail_parts.append(
+            f"{unmatched_count} 行未匹配（清单外物料，到 Web 入库台人工指定或按车间单独需求处理）"
+        )
+    if tail_parts:
+        lines.append(f"…{'；'.join(tail_parts)}")
     lines.extend([
         "",
-        "确认前请核对实物与单据一致；低置信行可在 Web 入库台修正后再确认。",
+        "确认前请核对实物与单据一致；低置信/未匹配行可在 Web 入库台修正后再确认。",
     ])
 
     value_base = {"scene": HARDWARE_RECEIPT_SCENE, "draft_id": draft_id}

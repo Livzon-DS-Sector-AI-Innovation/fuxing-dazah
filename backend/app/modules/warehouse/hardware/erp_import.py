@@ -139,9 +139,45 @@ def _parse_date_str(value: Any) -> str | None:
     return text or None  # 无法解析原样保留（draft 待人工核对）
 
 
+def _read_html_table(data: bytes) -> tuple[list[str], list[list[Any]]]:
+    """ERP 导出「伪 xls」解析（2026-11-13 实测：.xls 实为 HTML 表格）。
+
+    ERP（2052-11.8.2）导出单表 HTML：第一个 <table> 首行=表头，其余=数据。
+    兼容 mso 样式/嵌套标签/&nbsp; 实体；列数按表头对齐（短行右侧补空）。
+    """
+    import re as _re
+
+    from html import unescape as _unescape
+
+    html = data.decode("utf-8", errors="replace")
+    table_m = _re.search(r"<table[^>]*>(.*?)</table>", html, _re.S | _re.I)
+    scope = table_m.group(1) if table_m else html
+    raw_rows = _re.findall(r"<tr[^>]*>(.*?)</tr>", scope, _re.S | _re.I)
+    matrix: list[list[str]] = []
+    for tr in raw_rows:
+        cells = _re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, _re.S | _re.I)
+        cleaned = [
+            _unescape(_re.sub(r"<[^>]+>", "", c)).replace("\xa0", " ").strip()
+            for c in cells
+        ]
+        if any(cleaned):
+            matrix.append(cleaned)
+    if len(matrix) < 2:
+        return [], []
+    header = matrix[0]
+    rows = [r + [""] * (len(header) - len(r)) for r in matrix[1:]]
+    return header, rows
+
+
 def _read_rows(data: bytes, filename: str) -> tuple[list[str], list[list[Any]]]:
-    """读文件为 (表头, 行二维表)：xlsx（openpyxl）与 csv（utf-8-sig/gbk 容错）。"""
+    """读文件为 (表头, 行二维表)：xlsx / csv / xls（HTML伪xls自动识别；ERP导出，2026-11-13）。"""
     lower = filename.lower()
+    # 内容嗅探优先：ERP 伪 xls 实为 HTML（扩展名不可信），真 xls 二进制头 D0CF11E0
+    head = data[:512].lstrip()
+    if head[:5].lower() in (b"<html", b"<!doc") or b"<table" in head.lower():
+        return _read_html_table(data)
+    if head.startswith(b"\xd0\xcf\x11\xe0"):
+        raise ValueError("旧版二进制 .xls 不支持：请在 ERP 中重新导出后上传（新版导出可直接识别）")
     if lower.endswith(".csv"):
         for encoding in ("utf-8-sig", "gbk"):
             try:
@@ -169,7 +205,8 @@ def _read_rows(data: bytes, filename: str) -> tuple[list[str], list[list[Any]]]:
         if not rows:
             return [], []
         return [str(c).strip() if c is not None else "" for c in rows[0]], rows[1:]
-    raise ValueError("仅支持 xlsx/csv 文件")
+    # .xls 扩展名但内容既非 HTML 也非二进制 xls：报可读错误
+    raise ValueError("仅支持 xlsx/xls/csv 文件（ERP 导出的 .xls 可直接上传，已自动识别）")
 
 
 def parse_erp_file(
@@ -178,15 +215,35 @@ def parse_erp_file(
     """ERP 导出文件 → 行列表（纯函数；列映射驱动，缺列=字段为空）。
 
     单据号/品名/数量任一缺失的行丢弃并计数（结构行/空行/小计行）。
+    列别名（2026-11-13）：ERP「入库流水」导出表头与旧「出入库统计」不同
+    （入库单号/入库日期/物料名称/主计量单位），映射解析按别名表归一。
     """
     col_map = mapping or get_column_mapping()
     headers, matrix = _read_rows(data, filename)
     header_index: dict[str, int] = {}
     for idx, h in enumerate(headers):
-        header_index[h.strip()] = idx
-    field_index = {
-        f: header_index[col] for f, col in col_map.items() if col in header_index
+        header_index.setdefault(h.strip(), idx)
+    # 别名归一：canonical → 变体列表（按顺序取首个命中列；映射值本身也参与）
+    _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+        "单据号": ("单据号", "入库单号", "出库单号", "单据编号"),
+        "日期": ("日期", "入库日期", "出库日期", "单据日期"),
+        "品名": ("品名", "物料名称", "存货名称", "物资名称"),
+        "单位": ("单位", "主计量单位", "计量单位", "库存单位"),
+        "规格型号": ("规格型号", "规格"),
+        "供应商": ("供应商", "供应商名称"),
+        "物料编码": ("物料编码", "存货编码", "编码"),
+        "数量": ("数量", "入库数量", "出库数量"),
+        "部门": ("部门", "领用部门", "使用部门"),
     }
+    field_index: dict[str, int] = {}
+    for f, col in col_map.items():
+        if col in header_index:
+            field_index[f] = header_index[col]
+            continue
+        for alias in _COLUMN_ALIASES.get(col, ()):
+            if alias in header_index:
+                field_index[f] = header_index[alias]
+                break
 
     rows: list[ErpRow] = []
     for raw in matrix:

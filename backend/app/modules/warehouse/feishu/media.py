@@ -261,3 +261,122 @@ async def download_im_image(message_id: str, file_key: str) -> bytes:
         f"file_key={file_key}: {last_error}",
         code="download_failed",
     )
+
+
+async def download_im_file(message_id: str, file_key: str) -> bytes:
+    """下载 im 文件消息附件（五金 Excel 入库链路第一步，2026-11-13）。
+
+    GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}?type=file
+    （WAREHOUSE_* 凭证）。下载失败重试 1 次（tenant token 失效场景），仍失败
+    抛 :class:`WarehouseBitableError`（code="download_failed"）。不校验文件
+    类型——调用方按扩展名/内容自行降级。
+    """
+    resolved_id, resolved_secret = _credentials()
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        try:
+            token = await get_tenant_token(resolved_id, resolved_secret)
+            resp = await _get_http().get(
+                f"{IM_BASE}/messages/{message_id}/resources/{file_key}",
+                params={"type": "file"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code != 200:
+                raise WarehouseBitableError(
+                    f"im 文件下载 HTTP {resp.status_code}: {resp.text[:200]}",
+                    code=resp.status_code,
+                )
+            content = resp.content
+            if not content:
+                raise WarehouseBitableError("im 文件下载内容为空", code="empty_file")
+            return content
+        except Exception as exc:  # noqa: BLE001 — 单文件失败重试 1 次
+            last_error = exc
+    raise WarehouseBitableError(
+        f"im 文件下载失败（重试后仍失败）: message_id={message_id} "
+        f"file_key={file_key}: {last_error}",
+        code="download_failed",
+    )
+
+
+async def send_file_to_chat(
+    chat_id: str,
+    file_bytes: bytes,
+    file_name: str,
+    *,
+    receive_id_type: str = "chat_id",
+    receive_id: str | None = None,
+    dry_run: bool | None = None,
+) -> bool:
+    """上传文件并发送文件消息到会话（五金出库 Excel 导出，2026-11-13）。
+
+    两步：POST /drive/v1/medias/upload_all（parent_type=im_image 上传素材，
+    file_type=xlsx/csv/stream）→ POST /im/v1/messages（msg_type=file）。
+    receive_id_type=open_id 时 receive_id 必传（私发单用户）。返回 True/False
+    （失败记日志不抛——文件投递失败不阻断主流程话术）。
+
+    dry_run 与 notification._is_dry_run 同源（notify_gate 下沉，2026-11-17）：
+    True 时只记日志返回 True——导出/模板回发话术依赖成功语义，静默期不降级。
+    """
+    if not file_bytes:
+        logger.warning("send_file_to_chat 内容为空，跳过发送")
+        return False
+    from app.modules.warehouse.feishu.notify_gate import is_dry_run
+
+    if is_dry_run(dry_run):
+        logger.info(
+            "[dry_run] 仓库飞书文件: %s → %s(%s) size=%d",
+            file_name, receive_id or chat_id, receive_id_type, len(file_bytes),
+        )
+        return True
+    lower = (file_name or "").lower()
+    if lower.endswith(".xlsx"):
+        file_type = "xlsx"
+    elif lower.endswith(".csv"):
+        file_type = "csv"
+    else:
+        file_type = "stream"
+    app_id, app_secret = _credentials()
+    try:
+        token = await get_tenant_token(app_id, app_secret)
+        # ① 上传素材（im 消息文件用 parent_type=im_image；parent_node 不需要）
+        upload_resp = await _get_http().post(
+            f"{DRIVE_BASE}/medias/upload_all",
+            data={
+                "file_name": file_name,
+                "parent_type": "im_image",
+                "size": str(len(file_bytes)),
+            },
+            files={"file": (file_name, file_bytes)},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        up_json = upload_resp.json()
+        if up_json.get("code") not in (0, None):
+            logger.error("五金文件上传失败: %s", str(up_json)[:200])
+            return False
+        file_token = str((up_json.get("data") or {}).get("file_token") or "")
+        if not file_token:
+            logger.error("五金文件上传响应缺 file_token: %s", str(up_json)[:200])
+            return False
+        # ② 发送文件消息
+        target = receive_id or chat_id
+        send_resp = await _get_http().post(
+            f"{IM_BASE}/messages?receive_id_type={receive_id_type}",
+            json={
+                "receive_id": target,
+                "msg_type": "file",
+                "content": json.dumps({"file_key": file_token}, ensure_ascii=False),
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        send_json = send_resp.json()
+        if send_resp.status_code != 200 or send_json.get("code") not in (0, None):
+            logger.error(
+                "五金文件消息发送失败: %s target=%s", str(send_json)[:200], target
+            )
+            return False
+        logger.info("五金文件消息已发送: %s → %s", file_name, target)
+        return True
+    except Exception:  # noqa: BLE001 — 文件投递失败不抛（调用方话术兜底）
+        logger.exception("五金文件发送异常: %s", file_name)
+        return False
