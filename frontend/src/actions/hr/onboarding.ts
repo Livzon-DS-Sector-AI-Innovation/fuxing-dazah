@@ -37,13 +37,6 @@ export async function fetchOnboardingFilterOptionsAction(): Promise<OnboardingFi
   return res.data || {}
 }
 
-export async function deleteOnboardingRecord(id: string) {
-  return fetchHrApi(`/hr/onboarding-records/${id}`, {
-    method: 'DELETE',
-    errorMessage: '删除失败',
-  })
-}
-
 // ─── 离职记录 ───
 
 export async function fetchDepartureRecords(

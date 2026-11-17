@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, date, datetime, time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
@@ -1229,7 +1229,8 @@ class OnboardingRecordService:
         page_size: int = 20,
         sort_by: str = "hire_date",
         sort_order: str = "desc",
-    ) -> tuple[list[OnboardingRecord], int]:
+    ) -> tuple[list[Any], int]:
+        """入职台账列表视图：数据源=员工档案，按入职年份自动归类。"""
         return await self.repo.list_records(
             department=department,
             position=position,
@@ -1241,6 +1242,10 @@ class OnboardingRecordService:
             sort_by=sort_by,
             sort_order=sort_order,
         )
+
+    async def ledger_sources(self, employee_numbers: list[str]) -> dict[str, str]:
+        """台账来源补充：系统内入职流程记录（审批/飞书同步/招聘入职）。"""
+        return await self.repo.ledger_sources(employee_numbers)
 
     async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
         return await self.repo.list_hire_years(departments=departments)

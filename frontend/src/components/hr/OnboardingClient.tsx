@@ -1,15 +1,14 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Card, Table, Space, Input, Tag, Select, Popconfirm } from 'antd'
+import { App, Button, Card, Table, Space, Input, Tag, Select } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { SearchOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { SearchOutlined, PlusOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
 import {
   fetchOnboardingRecords,
   fetchOnboardingFilterOptionsAction,
   fetchDepartmentsAction,
-  deleteOnboardingRecord,
 } from '@/actions/hr'
 import EmployeeForm from './EmployeeForm'
 
@@ -69,19 +68,11 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
     { title: '手机', dataIndex: 'phone', width: 120 },
     { title: '是否在职', dataIndex: 'is_employed', width: 80,
       render: (v: string) => <Tag color={v === '是' ? 'green' : 'default'}>{v || '-'}</Tag> },
-    { title: '来源', dataIndex: 'source', width: 70,
-      render: (v: string) => v === 'approval' ? <Tag color="blue">系统审批</Tag> : v === 'feishu' ? <Tag color="purple">飞书同步</Tag> : <Tag>{v || '-'}</Tag> },
-    { title: '操作', key: 'action', width: 80,
-      render: (_: any, record: OnboardingRecord) => (
-        <Popconfirm title="确认删除？" onConfirm={async () => {
-          try {
-            await deleteOnboardingRecord(record.id)
-            message.success('已删除'); loadData()
-          } catch { message.error('删除失败') }
-        }}>
-          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      )},
+    { title: '来源', dataIndex: 'source', width: 90,
+      render: (v: string) => v === 'approval' ? <Tag color="blue">系统审批</Tag>
+        : v === 'feishu' ? <Tag color="purple">飞书同步</Tag>
+        : v === 'recruitment' ? <Tag color="cyan">招聘入职</Tag>
+        : <Tag>员工档案</Tag> },
   ]
 
   return (

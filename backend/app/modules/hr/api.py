@@ -2845,8 +2845,27 @@ async def list_onboarding_records(
             # 多部门：按授权部门集合过滤
             records = [r for r in records if r.department in hr_scope.scoped_departments]
             total = len(records)
+    # 数据源=员工档案；台账表按工号补充来源（无台账记录=飞书同步档案）
+    sources = await service.ledger_sources(
+        [r.employee_number for r in records if r.employee_number]
+    )
     data = [
-        OnboardingRecordResponse.model_validate(r).model_dump(mode="json")
+        {
+            "id": str(r.id),
+            "employee_number": r.employee_number,
+            "name": r.name,
+            "department": r.department,
+            "position": r.position,
+            "hire_date": r.hire_date,
+            "education": r.education,
+            "school": r.school,
+            "major": r.major,
+            "phone": r.phone,
+            "graduation_date": r.graduation_date,
+            # 员工档案无 is_employed 列，按 status 派生
+            "is_employed": "否" if r.status == "离职" else "是",
+            "source": sources.get(r.employee_number),
+        }
         for r in records
     ]
     return paginated_response(
