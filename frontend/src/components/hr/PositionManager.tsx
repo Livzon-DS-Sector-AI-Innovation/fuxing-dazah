@@ -20,26 +20,32 @@ export default function PositionManager() {
     try {
       const data = await fetchPositions(filterDept)
       setPositions(data.map((p) => ({ department: p.department, name: p.name, categories: p.categories || [], headcount: p.headcount ?? null })))
-    } catch { setPositions([]) }
-    finally { setLoading(false) }
+    } catch (err: unknown) {
+      setPositions([])
+      message.error((err instanceof Error ? err.message : '') || '岗位列表加载失败')
+    } finally { setLoading(false) }
   }
 
   const handleAdd = async () => {
     const name = newName.trim(); const dept = newDept.trim()
     if (!name || !dept) { message.warning('请填写部门和岗位'); return }
     try {
-      await createPosition({ department: dept, name, headcount: null }).catch(() => {})
+      await createPosition({ department: dept, name, headcount: null })
       message.success('已添加')
       setNewName(''); loadData()
-    } catch { message.error('添加失败') }
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : '') || '添加失败')
+    }
   }
 
   const handleDelete = async (dept: string, name: string) => {
     try {
-      await deletePositionByName(name, dept).catch(() => {})
+      await deletePositionByName(name, dept)
       message.success('已删除')
       loadData()
-    } catch { message.error('删除失败') }
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : '') || '删除失败')
+    }
   }
 
   const deptOptions = [...new Set(positions.map(p => p.department))].map(d => ({ value: d, label: d }))
