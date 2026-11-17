@@ -162,9 +162,16 @@ export default function EmployeeProfileClient({
 
   const handleExport = async () => {
     try {
-      const r = await exportEmployees()
+      // 与列表查询同口径传参，导出内容=当前筛选结果，避免"以为导的是筛选结果"
+      const r = await exportEmployees({
+        keyword: searchKeyword || undefined,
+        department: activeDepartment || undefined,
+        status: filterStatus || undefined,
+        include_uncategorized: activeDepartment === '',
+        ...fieldFiltersToParams(filters),
+      })
       downloadBase64File(r.base64, r.filename)
-      message.success('导出成功')
+      message.success(`已按当前筛选导出 ${total} 条`)
     } catch (err: any) {
       message.error(err.message || '导出失败')
     }

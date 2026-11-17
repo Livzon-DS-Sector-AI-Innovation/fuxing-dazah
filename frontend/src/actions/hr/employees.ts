@@ -19,50 +19,54 @@ import { buildQueryString } from './_utils'
 
 // ─── 员工 ───
 
+/** 员工列表/导出共用的筛选参数（导出与列表同口径，保证所见即所得） */
+export interface EmployeeFilterParams {
+  department?: string
+  status?: string
+  keyword?: string
+  include_uncategorized?: boolean
+  // ── 字段级筛选（档案筛选面板；下拉精确匹配，选项来自 filter-options）──
+  position?: string
+  duty?: string
+  job_category?: string
+  level?: string
+  report_grade?: string
+  status_category?: string
+  gender?: string
+  ethnicity?: string
+  native_place?: string
+  marital_status?: string
+  household_type?: string
+  education?: string
+  degree_type?: string
+  classification?: string
+  school?: string
+  major?: string
+  hr_analysis?: string
+  domain_account?: string
+  departure_reason?: string
+  age_min?: number
+  age_max?: number
+  birth_year_min?: number
+  birth_year_max?: number
+  hire_date_after?: string
+  hire_date_before?: string
+  work_start_date_after?: string
+  work_start_date_before?: string
+  graduation_date_after?: string
+  graduation_date_before?: string
+  departure_date_after?: string
+  departure_date_before?: string
+  contract_start_date_after?: string
+  contract_start_date_before?: string
+  contract_end_date_after?: string
+  contract_end_date_before?: string
+}
+
 export async function fetchEmployeesAction(
-  params?: {
-    department?: string
-    status?: string
-    keyword?: string
+  params?: EmployeeFilterParams & {
     page?: number
     page_size?: number
-    include_uncategorized?: boolean
-    // ── 字段级筛选（档案筛选面板；下拉精确匹配，选项来自 filter-options）──
-    position?: string
-    duty?: string
-    job_category?: string
-    level?: string
-    report_grade?: string
-    status_category?: string
-    gender?: string
-    ethnicity?: string
-    native_place?: string
-    marital_status?: string
-    household_type?: string
-    education?: string
-    degree_type?: string
-    classification?: string
-    school?: string
-    major?: string
-    hr_analysis?: string
-    domain_account?: string
-    departure_reason?: string
-    age_min?: number
-    age_max?: number
-    birth_year_min?: number
-    birth_year_max?: number
-    hire_date_after?: string
-    hire_date_before?: string
-    work_start_date_after?: string
-    work_start_date_before?: string
-    graduation_date_after?: string
-    graduation_date_before?: string
-    departure_date_after?: string
-    departure_date_before?: string
-    contract_start_date_after?: string
-    contract_start_date_before?: string
-    contract_end_date_after?: string
-    contract_end_date_before?: string
   }
 ): Promise<EmployeeListResponse> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 20 })
@@ -111,9 +115,10 @@ export async function deleteEmployee(id: string) {
   return res
 }
 
-/** 导出员工档案（Excel），列头与导入模板一致 */
-export async function exportEmployees(): Promise<{ base64: string; filename: string }> {
-  const { base64, filename } = await fetchHrDownload('/hr/employees/export', {
+/** 导出员工档案（Excel），列头与导入模板一致；传筛选参数时与列表同口径导出 */
+export async function exportEmployees(params?: EmployeeFilterParams): Promise<{ base64: string; filename: string }> {
+  const qs = params ? buildQueryString(params) : ''
+  const { base64, filename } = await fetchHrDownload(`/hr/employees/export${qs}`, {
     errorMessage: '导出员工档案失败',
   })
   return { base64, filename: filename || `员工档案_${new Date().toISOString().slice(0, 10)}.xlsx` }
