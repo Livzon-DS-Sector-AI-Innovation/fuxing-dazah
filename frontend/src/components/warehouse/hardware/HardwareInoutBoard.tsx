@@ -8,6 +8,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import {
+  Alert,
   App,
   Button,
   Drawer,
@@ -24,7 +25,7 @@ import {
   Upload,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { CameraOutlined, CheckOutlined, CloseOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
+import { CameraOutlined, CheckOutlined, CloseOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   acceptHardwareReceiptClient,
@@ -39,6 +40,8 @@ import {
   markHardwareMovementsEnteredClient,
   rejectHardwareReceiptClient,
   importHardwareErpFile,
+  downloadReceiptTemplateUrl,
+  parseHardwareReceiptExcelClient,
   photoScreenHardwareReceiptClient,
 } from '@/lib/api/warehouse-hardware'
 import {
@@ -47,6 +50,7 @@ import {
   HARDWARE_RECEIPT_STATUS_LABEL,
   HARDWARE_REQ_STATUS_LABEL,
   type HardwareMovementRecord,
+  type HardwareReceiptParseResult,
   type HardwareReceiptRecord,
   type HardwareRequisitionRecord,
 } from '@/types/warehouse-hardware'
@@ -122,8 +126,9 @@ function InboundPanel() {
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [ocrUploading, setOcrUploading] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
+  const [entryAutoUpload, setEntryAutoUpload] = useState(false)
+  const [ocrUploading, setOcrUploading] = useState(false)
   const [confirming, setConfirming] = useState<HardwareReceiptRecord | null>(null)
 
   const { data: res, isLoading } = useQuery({
@@ -232,13 +237,31 @@ function InboundPanel() {
             />
             {canCreate && (
               <>
+                <Button
+                  onClick={() => {
+                    setEntryAutoUpload(false)
+                    setManualOpen(true)
+                  }}
+                >
+                  手动登记
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<UploadOutlined />}
+                  onClick={() => {
+                    setEntryAutoUpload(true)
+                    setManualOpen(true)
+                  }}
+                >
+                  Excel 解析入库
+                </Button>
                 <Upload
                   accept="image/jpeg,image/png"
                   showUploadList={false}
                   beforeUpload={async (file) => {
                     setOcrUploading(true)
                     try {
-                      // OCR → 草稿（后端 build_ocr_draft）；成功后定位到待确认
+                      // 拍照 OCR → 草稿（build_ocr_draft）；成功后定位到待确认
                       const form = new FormData()
                       form.append('file', file)
                       const base = process.env.NEXT_PUBLIC_API_BASE_URL || ''
@@ -262,11 +285,10 @@ function InboundPanel() {
                     return false
                   }}
                 >
-                  <Button type="primary" icon={<CameraOutlined />} loading={ocrUploading}>
-                    拍照入库（OCR）
+                  <Button icon={<CameraOutlined />} loading={ocrUploading}>
+                    拍照 OCR 入库
                   </Button>
                 </Upload>
-                <Button onClick={() => setManualOpen(true)}>手动登记</Button>
                 <Upload
                   accept=".xlsx,.csv"
                   showUploadList={false}
@@ -311,51 +333,145 @@ function InboundPanel() {
         }}
         scroll={{ x: 1100 }}
       />
-      <ManualReceiptModal open={manualOpen} onClose={() => setManualOpen(false)} />
+      <ReceiptEntryModal
+        open={manualOpen}
+        autoUpload={entryAutoUpload}
+        onClose={() => setManualOpen(false)}
+      />
       <ReceiptConfirmModal receipt={confirming} onClose={() => setConfirming(null)} />
     </SectionCard>
   )
 }
 
-function ManualReceiptModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+// ── 入库登记（方式1 纯手动 / 方式2 截图解析自动填写；多行明细共用表单）──
+
+interface ReceiptEntryRow {
+  material_id?: string
+  name?: string
+  spec?: string
+  unit?: string
+  quantity?: number
+  match_confidence?: string
+  match_score?: number
+}
+
+function ReceiptEntryModal({
+  open,
+  onClose,
+  autoUpload,
+}: {
+  open: boolean
+  onClose: () => void
+  autoUpload?: boolean
+}) {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [form] = Form.useForm()
   const [keyword, setKeyword] = useState('')
   const [mode, setMode] = useState<'stocked' | 'direct'>('stocked')
   const [saving, setSaving] = useState(false)
+  const [parsing, setParsing] = useState(false)
+  const [parsed, setParsed] = useState<HardwareReceiptParseResult | null>(null)
+  const [rowMeta, setRowMeta] = useState<Record<number, { matched: boolean; low: boolean }>>({})
 
   const { data: materialRes } = useQuery({
     queryKey: ['warehouse', 'hardware', 'material-search', keyword],
     queryFn: () => fetchHardwareMaterialsClient(keyword, 30),
     enabled: open,
   })
+  const materialOptions = (materialRes?.items ?? []).map((m) => ({
+    value: m.id,
+    label: `${m.name} ${m.spec ?? ''}（${m.unit}）`,
+    material: m,
+  }))
+
+  const onUploadParse = async (file: File) => {
+    setParsing(true)
+    try {
+      const result = await parseHardwareReceiptExcelClient(file)
+      setParsed(result)
+      setMode(result.mode)
+      form.setFieldsValue({
+        supplier_name: result.supplier_name ?? undefined,
+        delivery_note_no: result.delivery_note_no ?? undefined,
+        target_dept: result.target_dept ?? undefined,
+        remark: result.remark ?? undefined,
+        items: result.items.map((it) => ({
+          material_id: it.material_id ?? undefined,
+          name: it.name,
+          spec: it.spec ?? undefined,
+          unit: it.unit ?? undefined,
+          quantity: it.quantity,
+          match_confidence: it.match_confidence ?? undefined,
+          match_score: it.match_score ?? undefined,
+        })),
+      })
+      setRowMeta(
+        Object.fromEntries(
+          result.items.map((it, i) => [
+            i,
+            { matched: !!it.matched_name, low: !!it.low_confidence },
+          ]),
+        ),
+      )
+      const matched = result.matched_stocked + result.matched_direct
+      const warn = result.errors?.length
+        ? `；${result.errors.length} 行数量异常已跳过（见提示）`
+        : ''
+      message.success(
+        `解析完成：${matched} 行已匹配 / ${result.unmatched} 行待人工核对${warn}，核对修正后生成草稿`,
+      )
+      if (result.errors?.length) {
+        message.warning(
+          result.errors.map((e) => `第${e.row}行 ${e.name}: ${e.reason}`).join('；'),
+          6,
+        )
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Excel 解析失败，请改用手动填写')
+    } finally {
+      setParsing(false)
+    }
+    return false
+  }
+
+  const resetState = () => {
+    form.resetFields()
+    setParsed(null)
+    setRowMeta({})
+    setMode('stocked')
+  }
 
   const onSubmit = async () => {
     const values = await form.validateFields()
+    const rows: ReceiptEntryRow[] = values.items ?? []
+    if (rows.length === 0) {
+      message.warning('至少填写一行物料明细')
+      return
+    }
     setSaving(true)
     try {
-      // stocked 模式品名/单位可空——从选中物料主数据兜底（后端 ReceiptItemIn.name 必填）
-      const picked = (materialRes?.items ?? []).find((m) => m.id === values.material_id)
       await createHardwareReceiptClient({
-        source: 'manual',
+        // Excel 预填提交走 excel 溯源（留痕 excel_result 原样回传）；纯手动=manual
+        source: parsed ? 'excel' : 'manual',
         mode,
         supplier_name: values.supplier_name || undefined,
         delivery_note_no: values.delivery_note_no || undefined,
         target_dept: mode === 'direct' ? values.target_dept : undefined,
-        remark: values.remark,
-        items: [
-          {
-            material_id: mode === 'stocked' ? values.material_id : undefined,
-            name: values.item_name || picked?.name,
-            spec: values.item_spec || picked?.spec || undefined,
-            unit: values.item_unit || picked?.unit,
-            quantity: values.quantity,
-          },
-        ],
+        remark: values.remark || undefined,
+        excel_result: parsed?.excel_result ?? undefined,
+        items: rows.map((r) => ({
+          material_id: mode === 'stocked' ? r.material_id : undefined,
+          name: r.name ?? '',
+          spec: r.spec || undefined,
+          unit: r.unit || undefined,
+          quantity: r.quantity ?? 0,
+          match_confidence: r.match_confidence,
+          match_score: r.match_score,
+        })),
       })
-      message.success('登记成功（草稿），请在列表中一屏确认入账')
-      form.resetFields()
+      message.success('已生成草稿，请在列表中一屏确认入账')
+      resetState()
       onClose()
       queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
     } catch (e) {
@@ -367,16 +483,44 @@ function ManualReceiptModal({ open, onClose }: { open: boolean; onClose: () => v
 
   return (
     <Modal
-      title="手动登记（兜底：手写单/识别失败）"
+      title="入库登记（手动填写 / 截图自动填写）"
       open={open}
       onCancel={onClose}
       onOk={onSubmit}
       confirmLoading={saving}
       okText="生成草稿"
-      width={520}
+      width={820}
     >
-      <Form form={form} layout="vertical">
-        <Form.Item label="单据类别">
+      {autoUpload && !parsed && (
+        <Alert
+          type="info"
+          showIcon
+          className="mb-3"
+          message={
+            <span>
+              下载<a href={downloadReceiptTemplateUrl()} className="mx-1 text-blue-600 underline">入库登记模板</a>
+              填写物资明细后，点击「上传 Excel 自动填写」，系统解析预填本表单，核对修正后生成草稿。
+            </span>
+          }
+        />
+      )}
+      <Form form={form} layout="vertical" initialValues={{ items: [{}] }}>
+        <div className="mb-3 flex items-center gap-3">
+          <Upload accept=".xlsx,.xlsm,.csv" showUploadList={false} beforeUpload={onUploadParse}>
+            <Button icon={<UploadOutlined />} loading={parsing}>
+              上传 Excel 自动填写
+            </Button>
+          </Upload>
+          <a href={downloadReceiptTemplateUrl()}>
+            <Button type="link" size="small" className="px-0">下载模板</Button>
+          </a>
+          {parsed && (
+            <span className="text-xs text-neutral-500">
+              已按 Excel 预填 {parsed.items.length} 行（{parsed.unmatched} 行未匹配需核对），可直接修改
+            </span>
+          )}
+        </div>
+        <Form.Item label="单据类别" className="mb-2">
           <Segmented
             value={mode}
             onChange={(v) => setMode(v as 'stocked' | 'direct')}
@@ -386,49 +530,117 @@ function ManualReceiptModal({ open, onClose }: { open: boolean; onClose: () => v
             ]}
           />
         </Form.Item>
-        {mode === 'stocked' ? (
-          <Form.Item name="material_id" label="选择物料" rules={[{ required: true, message: '请选择物料' }]}>
-            <Select
-              showSearch
-              placeholder="输入名称/规格搜索"
-              filterOption={false}
-              onSearch={setKeyword}
-              notFoundContent={materialRes ? '无匹配物料' : <Spin size="small" />}
-              options={(materialRes?.items ?? []).map((m) => ({
-                value: m.id,
-                label: `${m.name} ${m.spec ?? ''}（${m.unit}）`,
-              }))}
-            />
+        <div className="grid grid-cols-2 gap-x-4">
+          <Form.Item name="supplier_name" label="供应商">
+            <Input placeholder="可空" />
           </Form.Item>
-        ) : (
-          <Form.Item name="target_dept" label="直发车间" rules={[{ required: true, message: 'direct 类必须指定车间' }]}>
-            <Input placeholder="如：发酵 / 提炼一期 / 精制机修" />
+          <Form.Item name="delivery_note_no" label="送货单号">
+            <Input placeholder="可空" />
           </Form.Item>
-        )}
-        <Space className="w-full" size="middle">
           {mode === 'direct' && (
-            <Form.Item name="item_name" label="品名" rules={[{ required: true, message: '请输入品名' }]}>
-              <Input placeholder="自由文本（不占库存）" />
+            <Form.Item
+              name="target_dept"
+              label="直发车间"
+              rules={[{ required: true, message: 'direct 类必须指定车间' }]}
+            >
+              <Input placeholder="如：发酵 / 提炼一期 / 精制机修" />
             </Form.Item>
           )}
-          {mode === 'stocked' && (
-            <Form.Item name="item_name" label="品名（默认取主数据）">
-              <Input placeholder="可空=用主数据" />
-            </Form.Item>
-          )}
-          <Form.Item name="quantity" label="数量" rules={[{ required: true, message: '请输入数量' }]}>
-            <InputNumber min={0.001} precision={3} style={{ width: 120 }} />
+          <Form.Item name="remark" label="备注">
+            <Input placeholder="异常情况等" />
           </Form.Item>
-        </Space>
-        <Form.Item name="supplier_name" label="供应商">
-          <Input placeholder="可空" />
-        </Form.Item>
-        <Form.Item name="delivery_note_no" label="送货单号">
-          <Input placeholder="可空" />
-        </Form.Item>
-        <Form.Item name="remark" label="备注">
-          <Input.TextArea rows={2} placeholder="异常情况等" />
-        </Form.Item>
+        </div>
+
+        <div className="mb-1 text-sm font-medium">物料明细（一行一物料）</div>
+        <Form.List name="items">
+          {(fields, { add, remove }) => (
+            <div className="flex flex-col gap-2">
+              {fields.map((field) => {
+                const meta = rowMeta[field.key]
+                return (
+                  <Space key={field.key} align="start" className="w-full" wrap={false}>
+                    {mode === 'stocked' && (
+                      <Form.Item name={[field.name, 'material_id']} className="mb-0" style={{ width: 250 }}>
+                        <Select
+                          showSearch
+                          allowClear
+                          placeholder="搜索选择物料（未匹配可留空）"
+                          filterOption={false}
+                          onSearch={setKeyword}
+                          notFoundContent={materialRes ? '无匹配物料' : <Spin size="small" />}
+                          options={materialOptions}
+                          onChange={(v) => {
+                            const hit = materialOptions.find((o) => o.value === v)
+                            if (hit) {
+                              form.setFieldValue(['items', field.name, 'name'], hit.material.name)
+                              form.setFieldValue(
+                                ['items', field.name, 'spec'],
+                                hit.material.spec ?? undefined,
+                              )
+                              form.setFieldValue(
+                                ['items', field.name, 'unit'],
+                                hit.material.unit ?? undefined,
+                              )
+                            }
+                          }}
+                        />
+                      </Form.Item>
+                    )}
+                    <Form.Item
+                      name={[field.name, 'name']}
+                      className="mb-0"
+                      style={{ width: 150 }}
+                      rules={[{ required: true, message: '品名必填' }]}
+                    >
+                      <Input placeholder="品名" />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'spec']} className="mb-0" style={{ width: 140 }}>
+                      <Input placeholder="规格（可空）" />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'unit']} className="mb-0" style={{ width: 70 }}>
+                      <Input placeholder="单位" />
+                    </Form.Item>
+                    <Form.Item
+                      name={[field.name, 'quantity']}
+                      className="mb-0"
+                      rules={[{ required: true, message: '数量必填' }]}
+                    >
+                      <InputNumber min={0.001} precision={3} placeholder="数量" style={{ width: 100 }} />
+                    </Form.Item>
+                    {/* 匹配标记随行透传（hidden 注册，提交时保留） */}
+                    <Form.Item name={[field.name, 'match_confidence']} hidden>
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'match_score']} hidden>
+                      <Input />
+                    </Form.Item>
+                    {meta && (
+                      <Tag
+                        color={meta.matched ? (meta.low ? 'orange' : 'green') : 'red'}
+                        style={{ marginTop: 4 }}
+                      >
+                        {meta.matched ? (meta.low ? '低置信需核对' : '已匹配') : '未匹配'}
+                      </Tag>
+                    )}
+                    {fields.length > 1 && (
+                      <Button
+                        type="text"
+                        danger
+                        style={{ marginTop: 2 }}
+                        onClick={() => remove(field.name)}
+                      >
+                        删
+                      </Button>
+                    )}
+                  </Space>
+                )
+              })}
+              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({})}>
+                添加物料行
+              </Button>
+            </div>
+          )}
+        </Form.List>
       </Form>
     </Modal>
   )

@@ -18,9 +18,11 @@ d8e2f6a4b8c1  二期 M4 三表      e9f4a8c2d6e5  二期 M5 两表
 f2a8c4e6d9b3  场景种子(plan)    g4c6e8f0a2b5  superagent 源种子(enabled=false)
 a7b3c9d1e2f4  三期 M7 报废+初筛 b8c4d6e2f7a3  M8 对账列
 c9d5e7f3a8b6  M9 auto 列        d1e2f4a6b8c5  运行键种子
+a5c7e9b1d3f2  R3事件源          f4a6c8e0d2b3  领/退料审批摄取列+索引
+g5b7d9f1e3c4  receipts source 枚举加 excel
 ```
 
-执行：`alembic upgrade head`；校验：`alembic current` 指向 d1e2f4a6b8c5 且 12 表齐全（`hardware_*`）。
+执行：`alembic upgrade head`；校验：`alembic current` 指向 g5b7d9f1e3c4（单链头，2026-11-17 归一）。
 
 ## 2. `.env` 生产键（五金库相关全表）
 
@@ -77,3 +79,10 @@ c9d5e7f3a8b6  M9 auto 列        d1e2f4a6b8c5  运行键种子
 
 - 代码：单分支直推，回滚=回退部署版本（迁移 downgrade 均已实现，但**生产有数据后慎用 downgrade**——优先只回代码不动表）
 - 开关熔断：`SUPERAGENT_ENABLED=false`（事件源全停）/ `HARDWARE_OCR_AUTO_DIRECT_ENABLED=false`（自动入账停）/ 推送任务逐行 DB 关
+
+## 8. 收尾批补遗（2026-11-17，领/退料审批+镜像同步批）
+
+- [ ] **编码回填重跑**：生产用 `docs/assets/hardware_store/五金库物资清单20261103+临时出入库存_编码已补全.xlsx`（305 有码终态；dev 已按 499 物资/305 编码/0 不一致校准）。法兰单位已统一「片」（316L×4+DN80 PN10×1，平台+镜像双侧）；清单外新增物资走管理端补录后镜像同步器自动跟上
+- [ ] **总闸移除**：`backend/.env*` 删 `WAREHOUSE_NOTIFY_DRY_RUN=true` 行（测试期静默口径，卡片/文本/文件全静默；移除即恢复真发）
+- [ ] **alert_scan 按需重开**：`agent_sources` 行 `warehouse.hardware_alert_scan` dev 为 enabled=false（测试期静默拍板）；生产确认目标群后置 true（≤5 分钟热生效，无需重启）
+- [ ] **权限绑定**：§4 三档名单业务部门仍待给（当前仅许康福一人 safety_admin 同名三绑可全链操作）；生产开服前按表绑定 `warehouse:hardware:*`

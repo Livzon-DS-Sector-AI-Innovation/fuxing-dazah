@@ -278,3 +278,183 @@ async def test_direct_pickup_fires_push_event(db_session):
         "rows": [{"name": "精密压力表", "spec": "YS-100", "quantity": 2, "unit": "台"}],
     })
     assert "五金库到货待领" in str(card)
+
+
+# ── 入库方式2：截图解析自动填单（纯解析不落库 + 留痕透传）──
+
+
+async def test_parse_receipt_image_creates_nothing(db_session):
+    """parse_receipt_image 红线：纯解析零写库（无草稿/无流水/无库存）。"""
+    from app.modules.warehouse.hardware import receipt_pipeline as rp
+
+    m1 = HardwareMaterial(name="304不锈钢球阀·P1", spec="DN25", unit="个", category="金属阀门",
+                          managed_class="stocked", safety_stock=Decimal("0"), no_expiry=True)
+    db_session.add(m1)
+    await db_session.flush()
+
+    synthetic = _synthetic_payload()
+    synthetic["rows"] = [
+        {"code": None, "name": "304不锈钢球阀·P1", "spec": "DN25", "quantity": 10, "unit": "个"},
+        {"code": None, "name": "车间专用温度计·P1", "spec": "WSS-411", "quantity": 2, "unit": "台"},
+    ]
+
+    async def fake_recognize(image_b64, content_type="image/jpeg"):
+        from app.modules.warehouse.hardware.recognizer import build_hardware_receipt
+        return build_hardware_receipt(synthetic)
+
+    async def fake_rotate(b64, ct="image/jpeg"):
+        return b64, ct
+
+    # 零写库红线（差分口径——dev 库有历史真实入库单，断言本调用零新增）
+    before = len((await db_session.execute(select(HardwareReceipt.id))).scalars().all())
+    with patch.object(rp.hw_recognizer, "recognize_hardware_receipt", fake_recognize), \
+         patch.object(rp.hw_recognizer, "rotate_image_if_needed", fake_rotate):
+        parsed = await rp.parse_receipt_image(db_session, image_b64="fake")
+    after = len((await db_session.execute(select(HardwareReceipt.id))).scalars().all())
+    assert after == before  # 解析不产生任何草稿
+
+    # 解析契约：单头 + 逐行匹配标记 + mode 预判
+    assert parsed.supplier == "上海XX阀门制造有限公司"
+    assert parsed.delivery_note_no == "SH-20261104-001"
+    assert parsed.mode == "stocked"  # 有 stocked 命中行
+    assert len(parsed.items) == 2
+    assert parsed.items[0].material_id == str(m1.id)
+    assert parsed.matched_names[0] == "304不锈钢球阀·P1"
+    assert parsed.matched_names[1] is None  # 清单外未匹配
+    assert parsed.low_confidences[1] is True  # 标黄不代改
+    assert parsed.matched_stocked == 1 and parsed.unmatched == 1
+    # 留痕 JSON 与直落草稿口径一致（rows 原样 + match_summary）
+    trace = parsed.ocr_result()
+    assert trace["supplier"] == synthetic["supplier"]
+    assert len(trace["rows"]) == 2 and len(trace["match_summary"]) == 2
+
+
+async def test_manual_create_with_ocr_result_passthrough(db_session):
+    """方式2提交：source=ocr + ocr_result 回传 → 草稿留痕落库（纯手动=None）。"""
+    m1 = HardwareMaterial(name="UPVC球阀·P2", spec="DN25", unit="个", category="金属阀门",
+                          managed_class="stocked", safety_stock=Decimal("0"), no_expiry=True)
+    db_session.add(m1)
+    await db_session.flush()
+
+    trace = {"supplier": "测试供应商", "rows": [{"name": "UPVC球阀·P2", "quantity": 5}],
+             "match_summary": [{"matched": "UPVC球阀·P2", "score": 92.0}]}
+    payload = ReceiptCreate(
+        source="ocr", mode="stocked",
+        supplier_name="测试供应商",
+        ocr_result=trace,
+        items=[ReceiptItemIn(material_id=str(m1.id), name="UPVC球阀·P2",
+                             quantity=Decimal("5"), match_confidence="name_spec_exact")],
+    )
+    receipt = await hw.create_receipt(db_session, payload)
+    assert receipt.status == "draft" and receipt.source == "ocr"
+    assert receipt.ocr_result == trace  # 透传落库
+
+    manual = ReceiptCreate(
+        source="manual", mode="stocked",
+        items=[ReceiptItemIn(material_id=str(m1.id), name="UPVC球阀·P2", quantity=Decimal("1"))],
+    )
+    receipt2 = await hw.create_receipt(db_session, manual)
+    assert receipt2.ocr_result is None  # 纯手动无留痕
+
+
+# ── 入库方式②：Excel 解析自动填单（2026-11-12 替代截图解析）──
+
+
+def _xlsx_bytes(rows: list[list]) -> bytes:
+    import io
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["物资名称", "规格型号", "数量", "单位", "供应商", "送货单号", "备注"])
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_receipt_template_and_parse_roundtrip():
+    """模板下载→填写→解析回环：表头驱动、示例行跳过、错误行落 errors。"""
+    from app.modules.warehouse.hardware.excel_io import (
+        build_receipt_template,
+        parse_receipt_excel,
+    )
+
+    # 纯模板=零数据行，直接上传会 422（引导真实填写）
+    with pytest.raises(Exception, match="未解析到有效数据行"):
+        parse_receipt_excel(build_receipt_template(), "t.xlsx")
+    # 示例行旁有真实数据行时正常解析
+    real = _xlsx_bytes([
+        ["304不锈钢球阀", "DN25", 10, "个", "供应商A", "SH-001", "示例行，上传前删除"],
+        ["ABS管道", "dn40", 20, "米", "", "", "示例行，上传前删除"],
+        ["UPVC三通", "dn50", 5, "个", "", "", ""],
+    ])
+    mixed = parse_receipt_excel(real, "m.xlsx")
+    assert len(mixed["items"]) == 1 and mixed["items"][0]["name"] == "UPVC三通"
+
+    data = _xlsx_bytes([
+        ["ABS管道", "dn40*3.7mm", 20, "米", "供应商A", "SH-9", ""],
+        ["UPVC三通", "dn50", "abc", "个", "", "", ""],  # 数量非法 → errors
+        ["", "", 5, "", "", "", ""],  # 空行忽略
+    ])
+    parsed = parse_receipt_excel(data, "r.xlsx")
+    assert parsed["header"]["supplier_name"] == "供应商A"
+    assert parsed["header"]["delivery_note_no"] == "SH-9"
+    assert len(parsed["items"]) == 1 and parsed["items"][0]["quantity"] == "20"
+    assert len(parsed["errors"]) == 1 and parsed["errors"][0]["row"] == 3
+
+
+def test_receipt_excel_parse_structural_error():
+    from app.modules.warehouse.hardware.excel_io import ExcelParseError, parse_receipt_excel
+
+    # 缺「物资名称/数量」列（raw Workbook 直造：绕开 _xlsx_bytes 固定标准表头）
+    import io as _io
+
+    from openpyxl import Workbook as _Wb
+
+    _wb = _Wb()
+    _wb.active.append(["名称", "规格"])
+    _wb.active.append(["X", "Y"])
+    _buf = _io.BytesIO()
+    _wb.save(_buf)
+    with pytest.raises(ExcelParseError):
+        parse_receipt_excel(_buf.getvalue(), "bad.xlsx")
+    with pytest.raises(ExcelParseError):
+        parse_receipt_excel(b"binary-not-excel", "x.xlsx")  # 损坏内容
+
+
+async def test_excel_parse_matches_materials_and_source_persists(db_session):
+    """excel/parse 匹配主数据 + source=excel 提交落库留痕（excel_result→ocr_result 列）。"""
+    from app.modules.warehouse.hardware.excel_io import parse_receipt_excel
+    from unittest.mock import patch
+
+    m1 = HardwareMaterial(name="304不锈钢球阀·E1", spec="DN25", unit="个", category="金属阀门",
+                          managed_class="stocked", safety_stock=Decimal("0"), no_expiry=True)
+    db_session.add(m1)
+    await db_session.flush()
+
+    data = _xlsx_bytes([["304不锈钢球阀·E1", "DN25", 8, "个", "供应商E", "SH-E1", ""]])
+    parsed = parse_receipt_excel(data, "r.xlsx")
+
+    from app.modules.warehouse.hardware import matcher as hw_matcher
+    from app.modules.warehouse.hardware.receipt_pipeline import load_active_materials
+
+    materials = await load_active_materials(db_session)
+    result = hw_matcher.match_one(
+        name=parsed["items"][0]["name"], spec=parsed["items"][0]["spec"], materials=materials
+    )
+    assert result.material is not None and result.material.id == m1.id
+
+    payload = ReceiptCreate(
+        source="excel", mode="stocked",
+        supplier_name="供应商E", delivery_note_no="SH-E1",
+        excel_result=parsed,
+        items=[ReceiptItemIn(material_id=str(m1.id), name="304不锈钢球阀·E1",
+                             spec="DN25", unit="个", quantity=Decimal("8"),
+                             match_confidence=result.method)],
+    )
+    receipt = await hw.create_receipt(db_session, payload)
+    assert receipt.status == "draft" and receipt.source == "excel"
+    assert receipt.ocr_result == parsed  # Excel 留痕复用 ocr_result 列

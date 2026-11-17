@@ -15,8 +15,9 @@ import type {
   HardwareReceiptFilter,
   HardwareReceiptCreateInput,
   HardwareReceiptAcceptInput,
-  HardwareRequisitionRecord,
+  HardwareReceiptParseResult,
   HardwareRequisitionFilter,
+  HardwareRequisitionRecord,
   HardwareRequisitionCreateInput,
   HardwareRequisitionIssueInput,
   HardwareLocationRecord,
@@ -142,6 +143,45 @@ export async function createHardwareReceiptClient(
   payload: HardwareReceiptCreateInput,
 ): Promise<HardwareReceiptRecord> {
   return apiPost<HardwareReceiptRecord>(`${CLIENT_API}${BASE}/receipts`, payload)
+}
+
+/** 入库方式②：上传入库登记 Excel 纯解析（不落库）→ 表单预填；人工核对后走 createHardwareReceiptClient */
+export async function parseHardwareReceiptExcelClient(
+  file: File,
+): Promise<HardwareReceiptParseResult> {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetch(`${CLIENT_API}${BASE}/receipts/excel/parse`, {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+  })
+  const json = await resp.json().catch(() => null)
+  if (!resp.ok || !json?.data) {
+    throw new Error(json?.message || `解析失败 (${resp.status})`)
+  }
+  return json.data as HardwareReceiptParseResult
+}
+
+/** 入库登记模板下载（Excel 方式② 用；浏览器直下） */
+export function downloadReceiptTemplateUrl(): string {
+  return `${CLIENT_API}${BASE}/receipts/excel-template`
+}
+
+/** 领料出库台账导出（Excel；随当前筛选，浏览器直下） */
+export function exportRequisitionsUrl(params: {
+  status?: string
+  dept_name?: string
+  req_type?: string
+  keyword?: string
+}): string {
+  const sp = new URLSearchParams()
+  if (params.status) sp.set('status', params.status)
+  if (params.dept_name) sp.set('dept_name', params.dept_name)
+  if (params.req_type) sp.set('req_type', params.req_type)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  const qs = sp.toString()
+  return `${CLIENT_API}${BASE}/requisitions/export${qs ? `?${qs}` : ''}`
 }
 
 export async function acceptHardwareReceiptClient(

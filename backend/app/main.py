@@ -57,6 +57,12 @@ safety_mcp_asgi = get_mcp_app(get_module_mcp("safety"), path="/", middleware=mcp
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
 
+    # 仓储通知总闸（2026-11-13 测试期静默口径）：WAREHOUSE_NOTIFY_DRY_RUN=true
+    # 时全部未显式传参的发送只落日志不真发；上线移除该 env 即恢复
+    from app.modules.warehouse.feishu import notification as _wh_notification
+
+    _wh_notification.apply_env_notify_gate()
+
     from app.modules.equipment.scheduler import (
         maintenance_plan_loop,
         stop_maintenance_plan_flag,

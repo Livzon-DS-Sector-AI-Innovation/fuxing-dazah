@@ -81,46 +81,53 @@ async def _mk_accepted_receipt(db, material: HardwareMaterial, qty: Decimal, *,
 
 
 async def test_import_492_and_sample_20(db_session):
-    """导入 492 项：总数+类别分布+抽查 20 项字段一致（code 留空口径）。"""
+    """导入 492 项：清单项全在场+抽查属性一致（code 留空口径只对清单项断言）。
+
+    差分口径：dev 库可能存有清单外增量物资（如编码补全时人工补录带码的
+    316L 法兰/PN10 法兰等），全表绝对计数会假红——断言收紧到
+    「清单 492 项逐项在场且清单项属性正确」。
+    """
     assert ASSET.exists(), f"清单文件缺失: {ASSET}"
     parsed = parse_materials_workbook(ASSET)
     assert len(parsed) == 492
     stats = await import_materials(db_session, ASSET)
     # 幂等语义：库可能已被真实导入播种（created=0/updated=492），但
-    # 导入后总量恒 492、0 跳过 0 错误（首导 created=492）
+    # 0 跳过 0 错误（首导 created=492）
     assert stats["skipped"] == 0 and not stats["errors"], stats
-    total = await db_session.scalar(select(func.count()).select_from(HardwareMaterial))
-    assert total == 492
 
     rows = (await db_session.execute(select(HardwareMaterial))).scalars().all()
-    assert len(rows) == 492
-    by_name = {r.name: r for r in rows}
-    # 抽查 20 项：首尾+类别覆盖+随机
+    by_key = {(r.name, r.spec): r for r in rows}
+    # 清单 492 项逐项在场（键=name+spec 唯一索引口径）
+    missing = [p for p in parsed if (p["name"], p.get("spec")) not in by_key]
+    assert not missing, f"清单缺项: {missing[:3]}"
+
+    # 抽查 20 项（固定种子）从清单项里抽；code 断言已退役——编码表 2026-11-10
+    # 起逐步回填（dev 库 305 项已有码），「导入不造码」由 parsed 自身保证
     import random
 
-    samples = random.Random(42).sample(list(rows), 20)
-    for m in samples:
-        assert m.code is None, f"{m.name} code 应留空（P2 定案）"
+    samples = random.Random(42).sample(parsed, 20)
+    for p in samples:
+        m = by_key[(p["name"], p.get("spec"))]
         assert m.managed_class == "stocked"
         assert m.unit in ("个", "台", "米", "片", "套", "副")
         assert m.category in (
             "金属管道", "金属管件", "金属阀门", "食品级垫片", "金属轴承", "UPVC管件", "ABS管件",
         )
-    # 特定锚点行
-    assert "304不锈钢管" in " ".join(by_name.keys())
-    categories = {r.category for r in rows}
-    assert categories == {
+    # 特定锚点行 + 清单七类齐全
+    assert any(r.name == "304不锈钢管" for r in rows)
+    listed_categories = {by_key[(p["name"], p.get("spec"))].category for p in parsed}
+    assert listed_categories == {
         "金属管道", "金属管件", "金属阀门", "食品级垫片", "金属轴承", "UPVC管件", "ABS管件",
     }
 
 
 async def test_import_idempotent(db_session):
-    """重复导入幂等：不重复建行（总量恒 492，两轮间无新增）。"""
+    """重复导入幂等：不重复建行（两轮间零新增；差分口径防 dev 库增量假红）。"""
     await import_materials(db_session, ASSET)
     before = await db_session.scalar(select(func.count()).select_from(HardwareMaterial))
     stats2 = await import_materials(db_session, ASSET)
     after = await db_session.scalar(select(func.count()).select_from(HardwareMaterial))
-    assert after == before == 492
+    assert after == before  # 全表无新增（含清单外增量物资恒定）
     assert stats2["created"] == 0
 
 

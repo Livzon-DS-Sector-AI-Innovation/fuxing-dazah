@@ -36,6 +36,8 @@ from app.modules.warehouse.hardware.schemas import (
     PhotoScreeningBody,
     ReceiptAccept,
     ReceiptCreate,
+    ReceiptParseItem,
+    ReceiptParseResponse,
     ReceiptReject,
     ReceiptResponse,
     RequisitionApprove,
@@ -421,6 +423,97 @@ async def get_receipt(
     )
 
 
+@router.get(
+    "/receipts/excel-template",
+    summary="入库登记模板下载（Excel 方式② 用）",
+)
+async def download_receipt_template(
+    user: User = Depends(require_permission("warehouse:hardware:inbound:create")),
+):
+    """标准入库登记模板（物资名称/规格型号/数量/单位/供应商/送货单号/备注）。"""
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    from app.modules.warehouse.hardware.excel_io import build_receipt_template
+
+    xlsx = build_receipt_template()
+    filename = f"五金库入库登记模板_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.post(
+    "/receipts/excel/parse",
+    summary="上传入库 Excel 解析自动填单（纯解析不落库，入库方式②）",
+)
+async def parse_receipt_excel_endpoint(
+    file: UploadFile = File(..., description="入库登记 Excel（模板下载后填写）"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:inbound:create")),
+) -> JSONResponse:
+    """Excel → 行解析 → 名称+规格四级匹配 → 结构化结果（不建草稿不动账）。
+
+    前端表单预填 → 人工核对修正 → POST /receipts（source=excel +
+    excel_result 留痕回传）。与「纯手动填写」共用同一张表单与落库通道。
+    """
+    from app.modules.warehouse.hardware import matcher as hw_matcher
+    from app.modules.warehouse.hardware.excel_io import ExcelParseError, parse_receipt_excel
+    from app.modules.warehouse.hardware.receipt_pipeline import load_active_materials
+
+    content = await file.read()
+    try:
+        parsed = parse_receipt_excel(content, file.filename or "")
+    except ExcelParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # 名称+规格四级匹配（与 OCR/手动同语义；未匹配不阻断——标黄人工处理）
+    materials = await load_active_materials(db)
+    items: list[ReceiptParseItem] = []
+    matched_stocked = matched_direct = unmatched = 0
+    for row in parsed["items"]:
+        result = hw_matcher.match_one(
+            name=row["name"], spec=row.get("spec"), materials=materials
+        )
+        items.append(
+            ReceiptParseItem(
+                material_id=str(result.material.id) if result.material else None,
+                name=(result.material.name if result.material else row["name"]),
+                spec=(result.material.spec if result.material else row.get("spec")),
+                unit=(result.material.unit if result.material else row.get("unit")),
+                quantity=row["quantity"],
+                match_confidence=result.method,
+                match_score=result.score,
+                matched_name=result.material.name if result.material else None,
+                low_confidence=result.low_confidence,
+            )
+        )
+        if result.material and result.material.managed_class == "stocked":
+            matched_stocked += 1
+        elif result.material:
+            matched_direct += 1
+        else:
+            unmatched += 1
+
+    header = parsed["header"] or {}
+    mode = "stocked" if matched_stocked > 0 else ("direct" if matched_direct > 0 else "stocked")
+    body = ReceiptParseResponse(
+        mode=mode,
+        supplier_name=header.get("supplier_name"),
+        delivery_note_no=header.get("delivery_note_no"),
+        items=items,
+        matched_stocked=matched_stocked,
+        matched_direct=matched_direct,
+        unmatched=unmatched,
+        errors=parsed["errors"],
+        excel_result=parsed,
+    )
+    return success_response(body.model_dump(mode="json"))
+
+
 @router.post("/receipts/ocr", status_code=201, summary="送货单拍照 OCR → 入库草稿（不动账）")
 async def ocr_receipt(
     file: UploadFile = File(..., description="送货单照片"),
@@ -550,6 +643,59 @@ async def list_requisitions(
     )
     data = [await _requisition_response(db, r) for r in items]
     return paginated_response(data, page, page_size, total)
+
+
+@router.get("/requisitions/export", summary="领料出库台账导出 Excel（明细展平，当前筛选口径）")
+async def export_requisitions(
+    status: str | None = Query(default=None),
+    dept_name: str | None = Query(default=None),
+    req_type: str | None = Query(default=None),
+    keyword: str | None = Query(default=None, description="单号/领用人"),
+    page_size: int = Query(default=500, ge=1, le=2000, description="导出单数上限"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:requisition:read")),
+):
+    """出库 Excel：领料单+明细展平（一明细行一物理行），随列表当前筛选。
+
+    明细含 物资编码/名称/规格/需求数量/实发数量（FIFO 实扣结果）——出库
+    台账口径。page_size=导出单数上限（单据 × 明细行天然展平，无需分页）。
+    """
+    from datetime import datetime as _dt
+    from urllib.parse import quote
+
+    from app.modules.warehouse.hardware.excel_io import export_requisitions_excel
+    from app.modules.warehouse.hardware.models import HardwareMaterial
+    from fastapi.responses import Response
+
+    reqs, _total = await service.list_requisitions(
+        db, status=_clean(status), dept_name=_clean(dept_name),
+        req_type=_clean(req_type), keyword=_clean(keyword),
+        page=1, page_size=page_size,
+    )
+    items_by_req: dict[Any, list[dict[str, Any]]] = {}
+    for req in reqs:
+        rows = await service.list_requisition_items(db, req.id)
+        enriched: list[dict[str, Any]] = []
+        for it in rows:
+            material = await db.get(HardwareMaterial, it.material_id) if it.material_id else None
+            enriched.append(
+                {
+                    "material_code": material.code if material else None,
+                    "material_name": material.name if material else "-",
+                    "spec": material.spec if material else None,
+                    "unit": material.unit if material else None,
+                    "need_qty": it.need_qty,
+                    "issued_qty": it.issued_qty,
+                }
+            )
+        items_by_req[req.id] = enriched
+    xlsx = export_requisitions_excel(reqs, items_by_req)
+    filename = f"五金库领料出库台账_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=xlsx,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 async def _requisition_response(db: AsyncSession, req: Any) -> dict[str, Any]:

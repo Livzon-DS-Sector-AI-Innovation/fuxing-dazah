@@ -22,24 +22,24 @@ from app.modules.warehouse.feishu.client import (
     get_warehouse_tenant_token,
 )
 
-logger = logging.getLogger(__name__)
+# ── 静默总闸（2026-11-17 下沉 notify_gate：卡片/文本/文件共用同一开关）──
+# notification 与 media 两模块经 notify_gate 共享模块级 _dry_run；此处保留
+# 原函数签名做薄委托（既有测试 monkeypatch notification.set_dry_run 不破）。
+from app.modules.warehouse.feishu.notify_gate import (  # noqa: E402
+    apply_env_notify_gate,
+    is_dry_run,
+    set_dry_run,
+)
 
-# 模块级 dry_run 开关（默认关）；函数参数 dry_run 非 None 时优先
-_dry_run: bool = False
+logger = logging.getLogger(__name__)
 
 # dry_run 时 send_card 返回的模拟 message_id（非 None 即"成功"语义）
 DRY_RUN_MESSAGE_ID = "dry_run"
 
 
-def set_dry_run(value: bool) -> None:
-    """设置模块级 dry_run 开关（影响未显式传参的全部发送函数）。"""
-    global _dry_run
-    _dry_run = value
-
-
 def _is_dry_run(dry_run: bool | None) -> bool:
-    """函数参数优先于模块级开关。"""
-    return _dry_run if dry_run is None else dry_run
+    """函数参数优先于模块级开关（委托 notify_gate）。"""
+    return is_dry_run(dry_run)
 
 
 def _json_dumps(obj: Any) -> str:

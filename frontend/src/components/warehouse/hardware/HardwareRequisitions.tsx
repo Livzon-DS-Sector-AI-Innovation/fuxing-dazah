@@ -20,12 +20,13 @@ import {
   Tag,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { SearchOutlined } from '@ant-design/icons'
+import { DownloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   approveHardwareRequisitionClient,
   cancelHardwareRequisitionClient,
   createHardwareRequisitionClient,
+  exportRequisitionsUrl,
   fetchHardwareMaterialsClient,
   fetchHardwareMovementsClient,
   fetchHardwareRequisitionsClient,
@@ -421,7 +422,14 @@ function MyRequisitionsPanel() {
   ]
 
   return (
-    <SectionCard title="领用申请（manual 审批通道：主管在此确认代录）">
+    <SectionCard
+      title="领用申请（manual 审批通道：主管在此确认代录）"
+      action={
+        <a href={exportRequisitionsUrl({ status: statusFilter })}>
+          <Button size="small" icon={<DownloadOutlined />}>导出 Excel</Button>
+        </a>
+      }
+    >
       <QueryFilter
         common={
           <Segmented

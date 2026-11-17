@@ -232,7 +232,11 @@ async def test_plan_export_excel_columns(db_session):
 
 
 async def test_stale_scan_backtracks_movements(db_session):
-    """呆滞名单按 movements 回算：91 天无 outbound 且有库存=呆滞。"""
+    """呆滞名单按 movements 回算：91 天无 outbound 且有库存=呆滞。
+
+    scan 的 now 锚动态 today（_mk_outbound 流水按真实当前时间回溯造数，
+    硬编码历史日期会在跨日后越过 cutoff 边界假红——2026-11-17 实撞）。
+    """
     m_stale = await _mk_material(db_session, name="呆滞物料")
     m_active = await _mk_material(db_session, name="活跃物料")
     m_empty = await _mk_material(db_session, name="零库存物料")
@@ -246,7 +250,7 @@ async def test_stale_scan_backtracks_movements(db_session):
     await _mk_outbound(db_session, m_active, Decimal("1"), days_ago=10)
     await _mk_outbound(db_session, m_empty, Decimal("1"), days_ago=100)
 
-    now = datetime(2026, 11, 5, 9, 0, tzinfo=CN_TZ)
+    now = datetime.now(CN_TZ)
     stale = await pl.scan_stale_materials(db_session, now=now)
     ids = {r["material_id"] for r in stale}
     assert str(m_stale.id) in ids

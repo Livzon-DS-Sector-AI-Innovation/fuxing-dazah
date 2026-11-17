@@ -1,7 +1,7 @@
 // 五金库类型定义（后端 backend/app/modules/warehouse/hardware/schemas.py 镜像）
 
 export type HardwareManagedClass = 'stocked' | 'direct'
-export type HardwareReceiptSource = 'ocr' | 'manual' | 'erp_import' | 'stocktake' | 'return'
+export type HardwareReceiptSource = 'ocr' | 'manual' | 'excel' | 'erp_import' | 'stocktake' | 'return'
 export type HardwareReceiptStatus = 'draft' | 'accepted' | 'rejected'
 export type HardwareRequisitionType = 'normal' | 'urgent' | 'excess'
 export type HardwareRequisitionStatus =
@@ -22,6 +22,7 @@ export const HARDWARE_MANAGED_CLASS_LABEL: Record<HardwareManagedClass, string> 
 export const HARDWARE_RECEIPT_SOURCE_LABEL: Record<HardwareReceiptSource, string> = {
   ocr: '拍照OCR',
   manual: '手动登记',
+  excel: 'Excel导入',
   erp_import: 'ERP导入',
   stocktake: '盘点盘盈',
   return: '退库回加',
@@ -301,6 +302,35 @@ export interface HardwareReceiptCreateInput {
   target_dept?: string
   remark?: string
   items: HardwareReceiptItemInput[]
+  /** 截图解析留痕（已退役保留兼容） */
+  ocr_result?: Record<string, unknown> | null
+  /** Excel 解析留痕（方式②：excel/parse 返回的 excel_result 提交时带回） */
+  excel_result?: Record<string, unknown> | null
+}
+
+/** 入库 Excel 解析行（方式②）：明细行 + 匹配标记（绿=已匹配/黄=低置信/红=未匹配） */
+export interface HardwareReceiptParseItem extends HardwareReceiptItemInput {
+  matched_name?: string | null
+  low_confidence?: boolean
+}
+
+/** POST /receipts/excel/parse 响应：纯解析不落库，表单预填契约 */
+export interface HardwareReceiptParseResult {
+  mode: HardwareManagedClass
+  supplier_name?: string | null
+  delivery_note_no?: string | null
+  remark?: string | null
+  target_dept?: string | null
+  items: HardwareReceiptParseItem[]
+  match_summary: Array<Record<string, unknown>>
+  matched_stocked: number
+  matched_direct: number
+  unmatched: number
+  errors: Array<{ row: number; name: string; reason: string }>
+  /** Excel 解析留痕——提交时随 HardwareReceiptCreateInput.excel_result 原样回传 */
+  excel_result: Record<string, unknown> | null
+  /** 兼容字段（截图解析已退役，恒 null） */
+  ocr_result?: Record<string, unknown> | null
 }
 
 export interface HardwareReceiptAcceptInput {
