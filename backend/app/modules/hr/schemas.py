@@ -1289,10 +1289,14 @@ class CandidateAnalysisReportOut(BaseModel):
 
 
 class InterviewOverviewItem(InterviewResponse):
-    """面试总览行：面试字段 + 候选人姓名/岗位（跨候选人视图）。"""
+    """面试总览行：面试字段 + 候选人姓名/岗位 + 人工评价结论/均分 + AI 综合分（跨候选人视图）。"""
 
     candidate_name: str | None = None
     candidate_position: str | None = None
+    feedback_result: str | None = None
+    feedback_score: float | None = None  # 面试官四维度均分（1-5）
+    ai_total_score: float | None = None  # AI 综合胜任度（0-100）
+    ai_recommend_level: str | None = None
 
 
 # ─── Recruitment: Interview Feedback Schemas（人工面试评价） ───

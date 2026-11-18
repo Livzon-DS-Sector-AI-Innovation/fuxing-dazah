@@ -66,10 +66,20 @@ async def list_interviews_overview(
         status=status, candidate_id=candidate_id, page=page, page_size=page_size,
     )
     items = []
-    for iv, name, position in rows:
+    for iv, name, position, fb, report in rows:
         d = InterviewResponse.model_validate(iv).model_dump(mode="json")
         d["candidate_name"] = name
         d["candidate_position"] = position
+        # 人工评价：结论 + 四维度均分（有评分的维度才参与）
+        if fb is not None:
+            d["feedback_result"] = fb.result
+            scores = [dim.get("score") for dim in (fb.dimensions or []) if isinstance(dim, dict) and dim.get("score")]
+            if scores:
+                d["feedback_score"] = round(sum(scores) / len(scores), 1)
+        # AI 胜任度报告：综合分 + 推荐等级
+        if report is not None:
+            d["ai_total_score"] = report.total_score
+            d["ai_recommend_level"] = report.recommend_level
         items.append(InterviewOverviewItem.model_validate(d).model_dump(mode="json"))
     return success_response(data=items, meta={"page": page, "page_size": page_size, "total": total})
 
