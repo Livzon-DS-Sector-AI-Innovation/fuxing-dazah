@@ -1275,6 +1275,20 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
+    # ── daily_report AI+安全日报（一期 2026-11-18）──────────────
+    DomainInfo(
+        key="daily_report",
+        label="AI+安全日报",
+        purpose="员工四段式日报/AI一轮评价/负责人汇总（机器人唯一写入；连接由 "
+                "seed_daily_report.py 建表后登记，default 留空防误写）",
+        subscribe="record",
+        kinds=(
+            KindInfo(kind="reports", label="员工日报表"),
+            KindInfo(kind="summary", label="部门日报汇总表"),
+            KindInfo(kind="roster", label="应提交名单表"),
+            KindInfo(kind="history", label="提交历史表"),
+        ),
+    ),
 )
 
 # 构造时断言：域 key 唯一（重复 key 会在 dict 推导时静默覆盖，故显式校验）

@@ -1639,6 +1639,23 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
 
             return await handle_progress_submit(payload, event_data)
 
+        # ── AI+安全日报卡片回调（scope=daily_report / form 按钮 dr_submit）──
+        #    快路径同步执行（Bitable 写+toast），LLM 慢操作后台 task + PATCH 群卡
+        if payload.get("scope") == "daily_report" or action_name.startswith("dr_submit"):
+            from app.modules.safety.feishu.daily_report_card import (
+                handle_daily_report_card_action,
+            )
+
+            operator_open_id = (
+                event_data.get("operator", {}).get("open_id")
+                or event_data.get("operator", {}).get("user_id")
+                or ""
+            )
+            payload = dict(payload) if isinstance(payload, dict) else payload
+            if isinstance(payload, dict):
+                payload["operator_open_id"] = operator_open_id
+            return await handle_daily_report_card_action(payload, event_data)
+
         # ── R3 诊断卡「一键执行」按钮（scope=r3_selfheal，T6 2026-11-13）──
         #    card.action.trigger 不重试：同步返回卡片更新体（2.9s ACK 契约）
         if payload.get("scope") == "r3_selfheal":

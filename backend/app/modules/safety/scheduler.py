@@ -289,6 +289,14 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "description": "当日中控报警分析日报（车间/岗位/报警类型/异常模式统计 + AI 汇总分析），推送安全AI创新交流群",
     },
+    # ── AI+安全日报入口卡（每日 08:30，开关默认关）──
+    {
+        "name": "AI安全日报",
+        "hour": 8, "minute": 30,
+        "retry_until_hour": 23, "retry_until_minute": 30,
+        "description": "AI+安全日报当日群入口卡（填写按钮+完成进度+未完成名单），"
+                       "状态变化实时 PATCH 同一张卡（开关 SAFETY_DAILY_REPORT_ENABLED 默认关）",
+    },
     # ── 中控报警日报私发（每日 17:00，开关默认关）──
     {
         "name": "中控报警日报私发",
@@ -646,6 +654,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             await _run_subsidy_monthly_report()
         elif job_name == "中控报警日报":
             await _run_central_alarm_daily_report(chat_id=chat_id)
+        elif job_name == "AI安全日报":
+            await _run_daily_report_card()
         elif job_name == "中控报警日报私发":
             await _run_central_alarm_daily_dm()
         elif job_name == "中控报警周报":
@@ -1008,6 +1018,25 @@ async def _run_subsidy_monthly_report() -> None:
         stats.get("sent", 0), stats.get("skipped_empty", 0),
         stats.get("errors", 0), stats.get("unresolved", 0),
     )
+
+
+async def _run_daily_report_card() -> None:
+    """AI+安全日报入口卡定时任务（每日 08:30）：upsert 当日群入口卡。
+
+    总闸（SAFETY_DAILY_REPORT_ENABLED，默认关）关闭时静默跳过；
+    refresh_daily_card 内部自带「一日一张 PATCH 优先/失败重建」语义，
+    失败上抛交由调度器补发窗口重试。
+    """
+    from app.modules.safety.service.daily_report import config as dr_config
+    from app.modules.safety.service.daily_report import service as dr_service
+
+    if not dr_config.enabled():
+        logger.info("  AI安全日报入口卡跳过（总闸未开）")
+        return
+    msg_id = await dr_service.refresh_daily_card()
+    if not msg_id:
+        raise RuntimeError("AI安全日报入口卡发送失败（无 message_id）")
+    logger.info("  AI安全日报入口卡完成: msg_id=%s", msg_id)
 
 
 async def _run_central_alarm_daily_report(chat_id: str | None = None) -> None:

@@ -88,6 +88,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         allow_off=True,
     ),
     ConfigItem(
+        "SAFETY_DAILY_REPORT_CHAT_ID", "chat_id", "str",
+        "oc_726a990558082daafa08acd2452099dd",
+        "AI+安全日报目标群（默认=机器人测试群；生产切换改 DB 行）",
+    ),
+    ConfigItem(
         "SAFETY_DAILY_DIGEST_CHAT_ID", "chat_id", "str",
         "oc_f05532603bd7682fc520929c01aca88d",
         "「安全速递」每日总卡目标群",
@@ -145,6 +150,10 @@ _ITEMS: tuple[ConfigItem, ...] = (
     # ══════════════════════════════════════════════════════════
     # 功能开关（feature_flag）
     # ══════════════════════════════════════════════════════════
+    _flag(
+        "SAFETY_DAILY_REPORT_ENABLED", False,
+        "AI+安全日报总闸（群入口卡/表单回调/AI评价/负责人汇总全链）",
+    ),
     _flag(
         "SAFETY_DAILY_DIGEST_ENABLED", True,
         "「安全速递」总卡模式总开关（开 = 各报告并入当日总卡；关 = 各报告独立群卡）",
