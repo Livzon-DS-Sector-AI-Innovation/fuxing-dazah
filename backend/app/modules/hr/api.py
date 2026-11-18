@@ -658,17 +658,10 @@ async def _ensure_record_in_scope(hr_scope: HrAccessContext, record: Any) -> Non
 
 
 def _xlsx_response(wb, filename: str) -> StreamingResponse:
-    """openpyxl 工作簿 → xlsx 下载响应（统一保存/媒体类型/文件名头）。"""
-    from io import BytesIO
+    """openpyxl 工作簿 → xlsx 下载响应（实现在 xlsx_utils，与 headcount 路由共用）。"""
+    from app.modules.hr.xlsx_utils import xlsx_response
 
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return xlsx_response(wb, filename)
 
 
 @router.get("/employees/export", summary="导出员工档案（Excel）")
@@ -2935,6 +2928,60 @@ async def get_onboarding_filter_options(
     return success_response(data={"years": years})
 
 
+@router.get("/onboarding-records/export", summary="导出入职台账（Excel）")
+async def export_onboarding_records(
+    department: str | None = Query(None, description="部门筛选（与列表同口径）"),
+    position: str | None = Query(None, description="岗位筛选"),
+    is_employed: str | None = Query("是", description="是否在职筛选，默认仅在职"),
+    year: int | None = Query(None, ge=1900, le=2999, description="入职年份筛选"),
+    keyword: str | None = Query(None, description="姓名或工号关键词"),
+    sort_by: str = Query("hire_date", description="排序字段"),
+    sort_order: str = Query("desc", description="排序方向"),
+    service: OnboardingRecordService = Depends(get_onboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """导出入职台账为 Excel：筛选/数据范围与列表端点完全同口径（导出 = 列表当前筛选结果全量）。"""
+    from openpyxl import Workbook
+
+    from app.modules.hr.xlsx_utils import write_sheet
+
+    # 数据范围收敛与列表端点一致
+    if not hr_scope.is_unrestricted:
+        if hr_scope.scoped_departments:
+            if len(hr_scope.scoped_departments) == 1:
+                department = next(iter(hr_scope.scoped_departments))
+        else:
+            keyword = hr_scope.employee_number
+    records, _total = await service.list_records(
+        department=department, position=position, is_employed=is_employed,
+        year=year, keyword=keyword, sort_by=sort_by, sort_order=sort_order,
+        page=1, page_size=100_000,
+    )
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            records = [r for r in records if r.employee_number == hr_scope.employee_number]
+        elif len(hr_scope.scoped_departments) > 1:
+            records = [r for r in records if r.department in hr_scope.scoped_departments]
+    sources = await service.ledger_sources([r.employee_number for r in records if r.employee_number])
+
+    rows = [[
+        r.employee_number, r.name, r.department, r.position,
+        _fmt_date(r.hire_date), r.education, r.school, r.major, r.phone,
+        "否" if r.status == "离职" else "是",
+        sources.get(r.employee_number),
+    ] for r in records]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "入职台账"
+    write_sheet(
+        ws,
+        ["工号", "姓名", "部门", "岗位", "入职日期", "学历", "毕业院校", "专业", "手机", "是否在职", "来源"],
+        rows,
+    )
+    return _xlsx_response(wb, f"入职台账_{date.today().isoformat()}.xlsx")
+
+
 @router.get("/onboarding-records/{record_id}", summary="入职记录详情")
 async def get_onboarding_record(
     record_id: UUID,
@@ -3017,6 +3064,57 @@ async def get_departure_filter_options(
         departments = set(hr_scope.scoped_departments)
     options = await service.list_filter_options(departments=departments)
     return success_response(data=options)
+
+
+@router.get("/departure-records/export", summary="导出离职台账（Excel）")
+async def export_departure_records(
+    department: str | None = Query(None, description="部门筛选（与列表同口径）"),
+    offboarding_type: str | None = Query(None, description="离职类型筛选"),
+    keyword: str | None = Query(None, description="姓名/部门/职位关键词"),
+    sort_by: str = Query("offboarding_date", description="排序字段"),
+    sort_order: str = Query("desc", description="排序方向"),
+    service: DepartureRecordService = Depends(get_departure_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """导出离职台账为 Excel：筛选/数据范围与列表端点同口径（self_only 403、部门收敛）；身份证脱敏。"""
+    from openpyxl import Workbook
+
+    from app.modules.hr.xlsx_utils import write_sheet
+
+    scoped_departments: set[str] | None = None
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            # 离职台账无工号字段，self_only 无法定位本人记录（与列表一致）
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        if len(hr_scope.scoped_departments) == 1:
+            department = next(iter(hr_scope.scoped_departments))
+        else:
+            scoped_departments = set(hr_scope.scoped_departments)
+    records, _total = await service.list_records(
+        department=department, departments=scoped_departments,
+        offboarding_type=offboarding_type, keyword=keyword,
+        sort_by=sort_by, sort_order=sort_order,
+        page=1, page_size=100_000,
+    )
+
+    rows = [[
+        r.name, r.employee_number, r.department, r.team, r.position,
+        _fmt_date(r.livo_entry_date), _fmt_date(r.factory_entry_date), _fmt_date(r.work_start_date),
+        _fmt_date(r.offboarding_date), r.company_tenure_at_leave,
+        r.offboarding_type, _fmt_list(r.offboarding_reason),
+        r.education, r.school, r.phone, _mask_id_card(r.id_card),
+    ] for r in records]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "离职台账"
+    write_sheet(
+        ws,
+        ["姓名", "工号", "部门", "班组", "职位", "入丽珠时间", "进厂时间", "参加工作时间",
+         "离职日期", "离职时司龄", "离职类型", "离职原因", "学历", "毕业院校", "手机", "身份证号"],
+        rows,
+    )
+    return _xlsx_response(wb, f"离职台账_{date.today().isoformat()}.xlsx")
 
 
 @router.post("/departure-records", summary="创建离职台账记录")
@@ -6857,6 +6955,47 @@ async def list_incidents(
         "status": r.status,
         "remark": r.remark,
     } for r in rows])
+
+
+_INCIDENT_TYPE_LABELS = {"work_injury": "工伤", "labor_dispute": "劳动纠纷"}
+_INCIDENT_STATUS_LABELS = {"processing": "处理中", "closed": "已结案"}
+
+
+@router.get("/incidents/export", summary="导出工伤/劳动纠纷台账（Excel）")
+async def export_incidents(
+    incident_type: str | None = Query(None, description="类型筛选（与列表同口径）"),
+    year: int | None = Query(None, description="按发生年份筛选"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """导出事故台账为 Excel：筛选/数据范围与列表端点同口径（类型/年份英文值导出为中文）。"""
+    from openpyxl import Workbook
+
+    from app.modules.hr.models import HrIncidentRecord
+    from app.modules.hr.xlsx_utils import write_sheet
+
+    q = select(HrIncidentRecord).where(HrIncidentRecord.is_deleted == False)  # noqa: E712
+    if incident_type:
+        q = q.where(HrIncidentRecord.incident_type == incident_type)
+    if year:
+        q = q.where(HrIncidentRecord.occurred_date.like(f"{year}%"))
+    if not hr_scope.is_unrestricted and hr_scope.data_scope != "self_only":
+        q = q.where(HrIncidentRecord.department.in_(hr_scope.scoped_departments))
+    rows = (await session.execute(q.order_by(HrIncidentRecord.occurred_date.desc()))).scalars().all()
+
+    data = [[
+        _INCIDENT_TYPE_LABELS.get(r.incident_type, r.incident_type),
+        r.employee_name, r.employee_number, r.department,
+        r.occurred_date, r.description,
+        _INCIDENT_STATUS_LABELS.get(r.status, r.status),
+        r.remark,
+    ] for r in rows]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "事故台账"
+    write_sheet(ws, ["类型", "当事人", "工号", "部门", "发生日期", "情况描述", "状态", "备注"], data)
+    return _xlsx_response(wb, f"事故台账_{date.today().isoformat()}.xlsx")
 
 
 @router.post("/incidents", summary="新增工伤/劳动纠纷记录", status_code=201)
