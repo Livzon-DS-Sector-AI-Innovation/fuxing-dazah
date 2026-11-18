@@ -14,7 +14,7 @@ import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
   RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
-  FileSearchOutlined,
+  FileSearchOutlined, AuditOutlined, UserAddOutlined,
 } from '@ant-design/icons'
 import type { Candidate, Interview, InterviewFeedback, OnboardingTask } from '@/types/hr'
 import {
@@ -31,7 +31,7 @@ import {
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
   fetchEmployeesAction, screenCandidateAction, fetchJobRequirements,
 } from '@/actions/hr'
-import { base64ToObjectUrl } from '@/lib/hr'
+import { base64ToObjectUrl, candidateStatusColor } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 
 // 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（与 RecruitmentClient 对齐；进入面试后以胜任度分析报告为准）
@@ -610,7 +610,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-semibold">{candidate.name}</h2>
             {recommendationLevel && <Tag color={recommendationColors[recommendationLevel] || 'default'}>{recommendationLevel}</Tag>}
-            <Tag>{candidate.status || '未知'}</Tag>
+            <Tag color={candidateStatusColor(candidate.status)}>{candidate.status || '未知'}</Tag>
           </div>
           <div className="flex gap-2">
             {isEditing ? (
@@ -618,9 +618,30 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                 <Button icon={<SaveOutlined />} type="primary" loading={saving} onClick={handleSave}>保存修改</Button>
                 <Button icon={<CloseOutlined />} onClick={handleCancel} disabled={saving}>取消</Button>
               </>
-            ) : canManage ? (
-              <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
-            ) : null}
+            ) : (
+              <>
+                {canManage && candidate.status === '已录用' && (
+                  <Button type="primary" icon={<AuditOutlined />} onClick={handlePushOnboarding}>
+                    发起入职审批
+                  </Button>
+                )}
+                {canManage && candidate.status === '待入职审批' && (
+                  <>
+                    <Button
+                      type="primary" icon={<UserAddOutlined />}
+                      loading={onboardLoading} onClick={handleOnboard}
+                      title="入职审批通过后执行：建档并发起信息收集"
+                    >
+                      转为入职员工
+                    </Button>
+                    <Button danger onClick={() => handleDecideReview('已拒绝')}>驳回入职</Button>
+                  </>
+                )}
+                {canManage && (
+                  <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -654,25 +675,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             {isEditing ? <Input value={formData.expected_salary} onChange={e => setFormData({ ...formData, expected_salary: e.target.value })} /> : (candidate.expected_salary || '-')}
           </Descriptions.Item>
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
-          {candidate.status === '已录用' && canManage && (
-            <Descriptions.Item label="入职操作">
-              <Button type="primary" onClick={handlePushOnboarding}>
-                📋 发起入职审批
-              </Button>
-            </Descriptions.Item>
-          )}
-          {candidate.status === '待入职审批' && canManage && (
-            <Descriptions.Item label="入职操作">
-              <Space>
-                <Button type="primary" loading={onboardLoading} onClick={handleOnboard}>
-                  🎉 转为入职员工（审批通过）
-                </Button>
-                <Button danger onClick={() => handleDecideReview('已拒绝')}>
-                  驳回入职
-                </Button>
-              </Space>
-            </Descriptions.Item>
-          )}
           <Descriptions.Item label="备注">
             {isEditing ? <Input.TextArea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} rows={2} /> : (candidate.notes || '-')}
           </Descriptions.Item>
