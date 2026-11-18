@@ -37,6 +37,8 @@ export default function InterviewScheduleModal({
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  // 飞书日历日程依赖面试日期：未填开始时间时禁用勾选
+  const hasStartTime = Form.useWatch('interview_start', form) != null
 
   // 面试官选择器：远程搜索在职员工（值存姓名——飞书日程/冲突检测按姓名匹配）
   const [interviewerOptions, setInterviewerOptions] = useState<{ value: string; label: string }[]>([])
@@ -74,12 +76,8 @@ export default function InterviewScheduleModal({
       })
     } else {
       form.resetFields()
-      const start = dayjs().add(1, 'hour').minute(0).second(0)
-      form.setFieldsValue({
-        interview_type: nextRoundType(existingTypes),
-        interview_start: start,
-        end_time: start.add(1, 'hour'),
-      })
+      // 时间选填：不预填，选了开始时间后结束时间才自动 +1h（见 handleStartChange）
+      form.setFieldsValue({ interview_type: nextRoundType(existingTypes) })
     }
     // existingTypes 只在打开瞬间参与默认值计算，无需作为依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,7 +161,8 @@ export default function InterviewScheduleModal({
         <Form.Item name="interview_type" label="面试类型" initialValue="初试" rules={[{ required: true, message: '请选择面试类型' }]}>
           <Select options={[{ label: '初试', value: '初试' }, { label: '复试', value: '复试' }, { label: '终试', value: '终试' }]} />
         </Form.Item>
-        <Form.Item name="interview_start" label="面试开始时间" rules={[{ required: true, message: '请选择面试开始时间' }]}>
+        <Form.Item name="interview_start" label="面试开始时间（选填）"
+          tooltip="时间未定时可先不填，后续在编辑中补；不填时间则不创建飞书日历日程">
           <DatePicker showTime={{ format: 'HH:mm', minuteStep: 5 }} format="YYYY-MM-DD HH:mm"
             style={{ width: '100%' }} onChange={handleStartChange} />
         </Form.Item>
@@ -195,7 +194,10 @@ export default function InterviewScheduleModal({
         <Form.Item name="location" label="面试地点"><Input placeholder="会议室/线上链接等" /></Form.Item>
         {(!editing || !editing.calendar_event_id) && (
           <Form.Item name="create_calendar_event" label="飞书日历" valuePropName="checked" initialValue={false}>
-            <Checkbox>{editing ? '补建飞书日历日程（此前未同步成功）' : '同步创建飞书日历日程'}</Checkbox>
+            <Checkbox disabled={!hasStartTime}>
+              {editing ? '补建飞书日历日程（此前未同步成功）' : '同步创建飞书日历日程'}
+              {!hasStartTime && <span className="text-xs text-gray-400 ml-1">（需先填面试时间）</span>}
+            </Checkbox>
           </Form.Item>
         )}
         {editing && (

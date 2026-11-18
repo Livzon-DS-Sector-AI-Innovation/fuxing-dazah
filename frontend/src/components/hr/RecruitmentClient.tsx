@@ -72,14 +72,15 @@ export default function RecruitmentClient() {
   const router = useRouter()
   // 跳转候选人详情前把当前列表上下文（id 顺序 + 当前位置）写入 sessionStorage，
   // 供详情页"上一条/下一条"顺序切换（CandidateDetailClient 读取 candidate_list_context）
-  const openCandidateDetail = (id: string, listIds: string[]) => {
+  // tab：直达详情页某个 Tab（如面试总览行点击带 interviews，免去再手动切换）
+  const openCandidateDetail = (id: string, listIds: string[], tab?: string) => {
     const ids = [...new Set(listIds)].filter(Boolean)
     if (ids.length > 1 && ids.includes(id)) {
       sessionStorage.setItem('candidate_list_context', JSON.stringify({ ids, currentIndex: ids.indexOf(id) }))
     } else {
       sessionStorage.removeItem('candidate_list_context')
     }
-    router.push(`/hr/recruitment/${id}`)
+    router.push(`/hr/recruitment/${id}${tab ? `?tab=${tab}` : ''}`)
   }
   // 招聘管理权限：人事专员见全功能；用人部门负责人（审核人）仅见"待我审核"。
   // 页面外层 PermissionGuard 已等权限加载完成，此处 hasPermission 结果可靠。
@@ -930,15 +931,16 @@ export default function RecruitmentClient() {
                       {(() => {
                         const today = dayjs().format('YYYY-MM-DD')
                         const groups: { title: string; rows: typeof overviewRows }[] = [
+                          { title: '时间待定', rows: [] },
                           { title: '今天面试', rows: [] },
                           { title: '即将到来', rows: [] },
                           { title: '更早 / 已结束', rows: [] },
                         ]
                         overviewRows.forEach((iv) => {
-                          if (!iv.interview_date) return
-                          if (iv.interview_date === today) groups[0].rows.push(iv)
-                          else if (iv.interview_date > today) groups[1].rows.push(iv)
-                          else groups[2].rows.push(iv)
+                          if (!iv.interview_date) { groups[0].rows.push(iv); return }
+                          if (iv.interview_date === today) groups[1].rows.push(iv)
+                          else if (iv.interview_date > today) groups[2].rows.push(iv)
+                          else groups[3].rows.push(iv)
                         })
                         return groups.filter((g) => g.rows.length > 0).map((g) => (
                           <div key={g.title}>
@@ -949,10 +951,10 @@ export default function RecruitmentClient() {
                               {g.rows.map((iv) => (
                                 <div key={iv.id}
                                   className="flex items-center gap-3 p-2.5 rounded-lg border border-[var(--color-hairline)] hover:bg-blue-50 cursor-pointer transition-colors"
-                                  onClick={() => openCandidateDetail(iv.candidate_id, overviewRows.map(r => r.candidate_id))}>
+                                  onClick={() => openCandidateDetail(iv.candidate_id, overviewRows.map(r => r.candidate_id), 'interviews')}>
                                   <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
                                   <span className="text-xs text-gray-500 w-40 shrink-0">
-                                    {iv.interview_date}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
+                                    {iv.interview_date || '时间待定'}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
                                   </span>
                                   <span className="font-medium text-sm">{iv.candidate_name || '未知候选人'}</span>
                                   <span className="text-xs text-gray-400">{iv.candidate_position || ''}</span>
@@ -960,6 +962,17 @@ export default function RecruitmentClient() {
                                   <span className="text-xs text-gray-500 flex-1 truncate">
                                     面试官：{iv.interviewer || '-'}{iv.location ? ` · ${iv.location}` : ''}
                                   </span>
+                                  {/* 面试官人工评价结论 + AI 胜任度综合分：总览直接看结果，免进详情 */}
+                                  {iv.feedback_result && (
+                                    <Tag color={iv.feedback_result === '通过' ? 'green' : iv.feedback_result === '不通过' ? 'red' : 'orange'} style={{ fontSize: 10 }} className="shrink-0">
+                                      评价：{iv.feedback_result}{iv.feedback_score != null ? ` ${iv.feedback_score}分` : ''}
+                                    </Tag>
+                                  )}
+                                  {iv.ai_total_score != null && (
+                                    <Tag color={iv.ai_recommend_level === '不推荐' ? 'red' : (iv.ai_recommend_level === '强烈推荐' || iv.ai_recommend_level === '推荐') ? 'geekblue' : 'default'} style={{ fontSize: 10 }} className="shrink-0">
+                                      AI {Math.round(iv.ai_total_score)}分{iv.ai_recommend_level ? ` · ${iv.ai_recommend_level}` : ''}
+                                    </Tag>
+                                  )}
                                   {iv.calendar_event_id && <Tag color="purple" style={{ fontSize: 10 }}>日历</Tag>}
                                   <div className="flex gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
                                     {(iv.status === '待安排' || iv.status === '已安排') && (
@@ -968,10 +981,13 @@ export default function RecruitmentClient() {
                                           onConfirm={() => handleOverviewComplete(iv.id)} okText="确认完成" cancelText="取消">
                                           <Button size="small" type="primary" ghost loading={actingId === iv.id}>完成</Button>
                                         </Popconfirm>
-                                        <Popconfirm title="取消这场面试？" description="将同时删除关联的飞书日程"
-                                          onConfirm={() => handleOverviewCancel(iv.id)} okText="取消面试" cancelText="保留">
-                                          <Button size="small" danger>取消</Button>
-                                        </Popconfirm>
+                                        {/* 已有逐字稿/备注 = 面试已实际进行，不允许再取消 */}
+                                        {!(iv.transcript_text || iv.notes) && (
+                                          <Popconfirm title="取消这场面试？" description="将同时删除关联的飞书日程"
+                                            onConfirm={() => handleOverviewCancel(iv.id)} okText="取消面试" cancelText="保留">
+                                            <Button size="small" danger>取消</Button>
+                                          </Popconfirm>
+                                        )}
                                       </>
                                     )}
                                     <Button size="small" onClick={() => setOverviewEdit(iv)}>编辑</Button>

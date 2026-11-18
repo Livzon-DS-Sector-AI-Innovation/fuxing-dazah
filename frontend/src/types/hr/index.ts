@@ -832,6 +832,12 @@ export interface InterviewUpdateInput {
 export interface InterviewOverviewItem extends Interview {
   candidate_name?: string | null
   candidate_position?: string | null
+  /** 人工面试评价结论（通过/待定/不通过）与四维度均分（1-5） */
+  feedback_result?: string | null
+  feedback_score?: number | null
+  /** AI 胜任度报告综合分（0-100）与推荐等级 */
+  ai_total_score?: number | null
+  ai_recommend_level?: string | null
 }
 
 export interface InterviewFeedbackDimension {

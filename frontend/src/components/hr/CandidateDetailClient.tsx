@@ -4,7 +4,7 @@ import CandidateAnalysisReportCard from './CandidateAnalysisReportCard'
 import InterviewScheduleModal from './InterviewScheduleModal'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
   Form, Modal, Card, InputNumber, Empty, Space, Upload, Rate, Popconfirm,
@@ -42,6 +42,10 @@ interface CandidateDetailClientProps {
 
 export default function CandidateDetailClient({ candidate }: CandidateDetailClientProps) {
   const router = useRouter()
+  // ?tab=interviews/onboarding：外部（如面试总览行）直达指定 Tab，免去进页再手切
+  const searchParams = useSearchParams()
+  const initialTab = searchParams.get('tab') === 'interviews' || searchParams.get('tab') === 'onboarding'
+    ? searchParams.get('tab')! : undefined
   const { message } = App.useApp()
   // 招聘管理权限：人事专员可操作全流程；用人部门负责人（审核人）仅查看 + 同意/驳回
   const { hasPermission } = usePermission()
@@ -711,7 +715,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                     <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
                     <span>{iv.interview_type}</span>
                     <span className="text-gray-400 text-xs">
-                      {iv.interview_date}
+                      {iv.interview_date || '时间待定'}
                       {iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
                     </span>
                     {iv.calendar_event_id && <Tag color="purple" className="text-xs">日历已同步</Tag>}
@@ -734,7 +738,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                     )}
                     <Button size="small" onClick={() => { setScheduleEditing(iv); setScheduleOpen(true) }}>编辑</Button>
                     <Button size="small" onClick={() => openFeedbackModal(iv)}>面试评价</Button>
-                    <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消面试</Button>
+                    {/* 已有逐字稿/备注 = 面试已实际进行过，不再提供取消入口 */}
+                    {!(iv.transcript_text || iv.notes) && (
+                      <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消面试</Button>
+                    )}
                   </div>
                 }>
                   <Descriptions size="small" column={2}>
@@ -901,7 +908,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           </>
         )}
       </div>
-      <Tabs items={tabItems} onChange={key => { if (key === 'onboarding') loadOnboardingTasks() }} />
+      <Tabs items={tabItems} defaultActiveKey={initialTab} onChange={key => { if (key === 'onboarding') loadOnboardingTasks() }} />
 
       {/* 推送审核 Modal：置于组件顶层（Tabs 懒渲染未激活面板，
           放在 interviewTab 内时从「基本信息」tab 点推送弹窗不会出现） */}
