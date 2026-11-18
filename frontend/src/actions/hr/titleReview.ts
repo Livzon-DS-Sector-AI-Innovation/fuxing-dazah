@@ -139,6 +139,17 @@ export async function fetchTitleApplication(id: string): Promise<{
   return fetchHrApi(`/hr/title/applications/${id}`, { errorMessage: '获取申报详情失败' })
 }
 
+/** 下载申报附件（飞书 Base 附件素材，后端校验 token 归属该申报） */
+export async function downloadTitleAttachment(
+  applicationId: string,
+  fileToken: string,
+): Promise<{ base64: string; filename: string | null }> {
+  return fetchHrDownload(
+    `/hr/title/applications/${applicationId}/attachments/${encodeURIComponent(fileToken)}/download`,
+    { errorMessage: '附件下载失败' },
+  )
+}
+
 export async function fetchTitleDefaultJudges(applicationId: string): Promise<{
   code: number
   message: string

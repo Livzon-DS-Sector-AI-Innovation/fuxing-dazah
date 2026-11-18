@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Descriptions, Drawer, Form, Input, Radio, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { fetchMyJudgeTasks, submitJudgeVote } from '@/actions/hr'
+import TitleReviewAttachments from './TitleReviewAttachments'
 import TitleReviewProfile from './TitleReviewProfile'
 import TitleReviewWorkValue from './TitleReviewWorkValue'
 
@@ -195,14 +196,10 @@ export default function TitleJudgeClient() {
               </div>
             )}
             {voting.application.attachments && (
-              <div>
-                <Typography.Text strong>附件材料</Typography.Text>
-                <div className="mt-1 space-y-1">
-                  {Object.entries(voting.application.attachments).map(([k, files]) => (
-                    <div key={k} className="text-[13px]">{k}：{(files || []).map((f) => f.name).join('、') || '无'}</div>
-                  ))}
-                </div>
-              </div>
+              <TitleReviewAttachments
+                applicationId={voting.application.id}
+                attachments={voting.application.attachments}
+              />
             )}
 
             <Form form={form} layout="vertical">

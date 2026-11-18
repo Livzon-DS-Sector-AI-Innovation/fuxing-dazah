@@ -144,11 +144,13 @@ async def feishu_request(
     ) from last_exc
 
 
-async def download(url: str, *, timeout: float = 30) -> bytes:
-    """下载二进制内容（图片等签名 URL 转存）。"""
+async def download(
+    url: str, *, timeout: float = 30, headers: dict[str, str] | None = None
+) -> bytes:
+    """下载二进制内容（图片等签名 URL 转存；附件下载需传鉴权头）。"""
     try:
         http = _get_http_client()
-        resp = await http.get(url, follow_redirects=True, timeout=timeout)
+        resp = await http.get(url, follow_redirects=True, timeout=timeout, headers=headers)
         resp.raise_for_status()
         return resp.content
     except httpx.HTTPError as exc:
