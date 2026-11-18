@@ -8,11 +8,12 @@
  * 部门（Tabs）与状态（Tab 栏下拉）已有独立入口，不在此面板重复。
  */
 
-import { useMemo, useRef } from 'react'
+import { useMemo } from 'react'
 import { Button, DatePicker, Form, Input, InputNumber, Select } from 'antd'
 import { DownOutlined, UndoOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import { EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
+import { useDebouncedCallback } from '@/hooks/useDebounce'
 
 // 下拉字段清单：key 与后端 filter-options 字段对齐，label 与表格列名一致
 const SELECT_FIELDS: { key: keyof EmployeeFilterOptions; label: string }[] = [
@@ -97,29 +98,29 @@ interface EmployeeFilterPanelProps {
 
 export default function EmployeeFilterPanel({ options, value, onChange, onClose }: EmployeeFilterPanelProps) {
   const [form] = Form.useForm<FilterFormValues>()
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const activeCount = useMemo(() => countActiveFilters(value), [value])
 
   const commit = (values: FilterFormValues) => {
     onChange(toFilters(values))
   }
+  // 文本输入防抖 300ms（对齐搜索框节奏）
+  const { run: debouncedCommit, cancel: cancelCommit } = useDebouncedCallback(commit, 300)
 
   const handleValuesChange = (_changed: Record<string, unknown>, allValues: FilterFormValues) => {
-    // 文本输入防抖 300ms（对齐搜索框节奏），下拉/日期/数字为单次操作即时生效
+    // 下拉/日期/数字为单次操作即时生效，仅文本类走防抖
     const textKeys = new Set(['domain_account', 'departure_reason'])
     const isTextOnly = Object.keys(_changed).every((k) => textKeys.has(k))
     if (!isTextOnly) {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
+      cancelCommit()
       commit(allValues)
       return
     }
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => commit(allValues), 300)
+    debouncedCommit(allValues)
   }
 
   const handleReset = () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
+    cancelCommit()
     form.resetFields()
     onChange({})
   }

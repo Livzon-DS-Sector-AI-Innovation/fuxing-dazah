@@ -8,6 +8,7 @@ import {
   cancelProbationReview, createProbationReview, fetchProbationReviews, finalizeProbationReview,
 } from '@/actions/hr'
 import { fetchEmployeesAction } from '@/actions/hr'
+import { useDebouncedCallback } from '@/hooks/useDebounce'
 import type { ProbationReviewItem } from '@/types/hr'
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
@@ -102,6 +103,10 @@ export default function ProbationPanel() {
     } catch { /* 静默 */ }
     finally { if (seq === revSeq.current) setReviewerSearching(false) }
   }
+
+  // 远程搜索防抖（300ms）；首拉全量（searchEmployees('')）不经防抖直接执行
+  const { run: debouncedSearchEmployees } = useDebouncedCallback(searchEmployees, 300)
+  const { run: debouncedSearchReviewers } = useDebouncedCallback(searchReviewers, 300)
 
   const handleSend = async () => {
     const v = await sendForm.validateFields()
@@ -237,14 +242,14 @@ export default function ProbationPanel() {
         <Form form={sendForm} layout="vertical" className="mt-2">
           <Form.Item name="employee_id" label="试用期员工" rules={[{ required: true, message: '请选择员工' }]}>
             <Select showSearch placeholder="搜索试用期员工（姓名/工号）" filterOption={false}
-              onSearch={searchEmployees} notFoundContent={empSearching ? <Spin size="small" /> : null}
+              onSearch={debouncedSearchEmployees} notFoundContent={empSearching ? <Spin size="small" /> : null}
               options={empOptions} />
           </Form.Item>
           <Form.Item name="reviewer_name" label="评估人（部门负责人）"
             tooltip="需评估人登录过系统或在源表有员工账号，否则卡片发送失败"
             rules={[{ required: true, message: '请选择或输入评估人姓名' }]}>
             <Select showSearch mode="tags" maxCount={1} placeholder="搜索在职员工（按姓名发卡）"
-              filterOption={false} onSearch={searchReviewers}
+              filterOption={false} onSearch={debouncedSearchReviewers}
               notFoundContent={reviewerSearching ? <Spin size="small" /> : null}
               options={reviewerOptions} />
           </Form.Item>

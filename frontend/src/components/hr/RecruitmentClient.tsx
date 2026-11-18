@@ -13,11 +13,14 @@ import {
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
   decideCandidateReview,
   fetchEmployeesAction, screenCandidateAction, fetchInterviewsOverview,
+  updateInterview, deleteInterview,
 } from '@/actions/hr'
 import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
+import { useDebouncedCallback } from '@/hooks/useDebounce'
 import { CANDIDATE_STATUS_COLORS } from '@/lib/hr'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
+import InterviewScheduleModal from './InterviewScheduleModal'
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
 const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
@@ -132,6 +135,9 @@ export default function RecruitmentClient() {
   ])
   const [overviewInterviewer, setOverviewInterviewer] = useState('')
   const [overviewStatus, setOverviewStatus] = useState<string | undefined>(undefined)
+  // 总览行内操作：编辑走共享弹窗；完成/取消一键（免跳候选人详情）
+  const [overviewEdit, setOverviewEdit] = useState<InterviewOverviewItem | null>(null)
+  const [actingId, setActingId] = useState<string | null>(null)
   const loadOverview = useCallback(async () => {
     setOverviewLoading(true)
     try {
@@ -149,6 +155,27 @@ export default function RecruitmentClient() {
       setOverviewRows([])
     } finally { setOverviewLoading(false) }
   }, [overviewDateRange, overviewInterviewer, overviewStatus, msg])
+
+  // 总览行内快捷操作：标记完成 / 取消（都刷新总览列表）
+  const handleOverviewComplete = async (id: string) => {
+    setActingId(id)
+    try {
+      await updateInterview(id, { status: '已完成' })
+      msg.success('面试已标记完成')
+      loadOverview()
+    } catch (err: any) { msg.error(err?.message || '操作失败') }
+    finally { setActingId(null) }
+  }
+
+  const handleOverviewCancel = async (id: string) => {
+    setActingId(id)
+    try {
+      await deleteInterview(id)
+      msg.success('面试已取消')
+      loadOverview()
+    } catch (err: any) { msg.error(err?.message || '操作失败') }
+    finally { setActingId(null) }
+  }
 
   const loadPendingReviews = useCallback(async () => {
     setReviewsLoading(true)
@@ -186,6 +213,8 @@ export default function RecruitmentClient() {
     }
     finally { if (seq === ownerSearchSeq.current) setOwnerSearching(false) }
   }
+  // 远程搜索防抖（300ms）；首拉（onOpenChange）不经防抖直接执行
+  const { run: debouncedSearchOwnerOptions } = useDebouncedCallback(searchOwnerOptions, 300)
 
   useEffect(() => {
     fetchPositions().then(d => setPosOptions(d.map((p: any) => ({ value: `${p.department}|||${p.name}`, label: `${p.name} (${p.department})` })))).catch(() => { })
@@ -754,7 +783,7 @@ export default function RecruitmentClient() {
                       loading={ownerSearching}
                       placeholder="输入姓名搜索；或直接从下方列表选择"
                       options={ownerOptions}
-                      onSearch={searchOwnerOptions}
+                      onSearch={debouncedSearchOwnerOptions}
                       onOpenChange={(open) => { if (open && ownerOptions.length === 0) void searchOwnerOptions('') }}
                     />
                   </Form.Item>

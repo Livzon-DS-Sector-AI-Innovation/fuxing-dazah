@@ -2,11 +2,12 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { App, Badge, Button, Input, Select, Tabs } from 'antd'
-import { DownloadOutlined, FilterOutlined, LinkOutlined, SyncOutlined } from '@ant-design/icons'
+import { DownloadOutlined, FilterOutlined, SyncOutlined } from '@ant-design/icons'
 import { fetchEmployeesAction, fetchDepartmentsAction, fetchEmployeeFilterOptionsAction, exportEmployees, triggerEmployeeSync } from '@/actions/hr'
 import { Employee, Department, EmployeeSyncBanner, EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import { downloadBase64File } from '@/lib/hr'
+import { useDebouncedCallback } from '@/hooks/useDebounce'
 import EmployeeTable from './EmployeeTable'
 import EmployeeForm from './EmployeeForm'
 import EmployeeFilterPanel, { countActiveFilters } from './EmployeeFilterPanel'
@@ -62,17 +63,6 @@ interface EmployeeProfileClientProps {
   headerActions?: ReactNode
 }
 
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value)
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay)
-    return () => clearTimeout(timer)
-  }, [value, delay])
-
-  return debouncedValue
-}
-
 export default function EmployeeProfileClient({
   initialEmployees,
   initialTotal,
@@ -94,9 +84,13 @@ export default function EmployeeProfileClient({
   const [filterOptions, setFilterOptions] = useState<EmployeeFilterOptions>({})
   const [filterOpen, setFilterOpen] = useState(false)
   const seqRef = useRef(0)
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
+  // 防抖搜索：停止输入 300ms 才写入 keyword 触发查询，避免逐键请求乱序
+  const { run: debouncedSetKeyword, cancel: cancelKeywordDebounce } = useDebouncedCallback(
+    (val: string) => setSearchKeyword(val),
+    300,
+  )
 
   const activeFilterCount = useMemo(() => countActiveFilters(filters), [filters])
 
@@ -216,9 +210,7 @@ export default function EmployeeProfileClient({
   }
 
   const handleSearchChange = (val: string) => {
-    // 防抖：停止输入 300ms 后才触发搜索，避免逐键请求乱序
-    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
-    searchDebounceRef.current = setTimeout(() => setSearchKeyword(val), 300)
+    debouncedSetKeyword(val)
   }
 
   // 搜索/状态/部门筛选/字段筛选变化时回到第一页，避免深页筛选后出现空页
@@ -245,10 +237,6 @@ export default function EmployeeProfileClient({
     [departments]
   )
 
-  const bitableUrl = syncInfo?.app_token
-    ? `https://feishu.cn/base/${syncInfo.app_token}${syncInfo.source_table_id ? `?table=${syncInfo.source_table_id}` : ''}`
-    : null
-
   const lastSyncText = syncInfo?.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'
 
   return (
@@ -269,16 +257,9 @@ export default function EmployeeProfileClient({
         <div className="flex flex-wrap items-center gap-2 ml-auto">
           {headerActions}
           {syncInfo && (
-            <>
-              <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSyncNow}>
-                立即同步
-              </Button>
-              {bitableUrl && (
-                <Button icon={<LinkOutlined />} href={bitableUrl} target="_blank">
-                  在飞书打开
-                </Button>
-              )}
-            </>
+            <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSyncNow}>
+              立即同步
+            </Button>
           )}
           <Button icon={<DownloadOutlined />} onClick={handleExport}>
             导出Excel
@@ -290,6 +271,7 @@ export default function EmployeeProfileClient({
       <Tabs
         activeKey={activeTab}
         onChange={handleTabChange}
+        styles={{ header: { marginBottom: 8 } }}
         tabBarExtraContent={{
           right: (
             <div className="flex flex-wrap items-center justify-end gap-2 pb-1">
@@ -298,7 +280,7 @@ export default function EmployeeProfileClient({
                 value={searchKeyword}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 onSearch={(val) => {
-                  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+                  cancelKeywordDebounce()
                   setSearchKeyword(val)
                 }}
                 style={{ width: 220 }}
