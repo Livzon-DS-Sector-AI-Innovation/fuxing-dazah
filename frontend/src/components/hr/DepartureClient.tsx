@@ -27,7 +27,9 @@ import {
   sendDepartureCertificate,
   deleteDepartureRecordAction,
   triggerEmployeeSync,
+  exportDepartureRecords,
 } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 
 const { Text } = Typography
@@ -73,6 +75,7 @@ export default function DepartureClient({
   const [deptEmployees, setDeptEmployees] = useState<any[]>([])
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
+  const [exporting, setExporting] = useState(false)
   const [selectedDept, setSelectedDept] = useState<string>('')
   const [certOpen, setCertOpen] = useState(false)
   const [certRecord, setCertRecord] = useState<DepartureRecord | null>(null)
@@ -200,6 +203,20 @@ export default function DepartureClient({
 
   // 离职类型色：统一口径（此前表单 4 项/颜色 7 项两套，选「自离」曾落到无色 Tag）
   const offboardingTypeColorMap = DEPARTURE_TYPE_TAG_COLORS
+
+  // 导出与列表筛选同口径（部门/离职类型/关键词）
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const r = await exportDepartureRecords({
+        department: filterDepartment || undefined,
+        offboarding_type: filterOffboardingType || undefined,
+        keyword: searchKeyword || undefined,
+      })
+      downloadBase64File(r.base64, r.filename)
+    } catch (err: any) { message.error(err.message || '导出失败') }
+    finally { setExporting(false) }
+  }
 
   // 部门/离职类型筛选已上移到顶部下拉（服务端全量过滤，选项来自 filter-options），
   // 不再用列头筛选（仅过滤当前页，与全量口径冲突）
@@ -366,6 +383,8 @@ export default function DepartureClient({
           className="w-36"
           options={filterOptions.offboarding_types?.map((t) => ({ value: t, label: t }))}
         />
+        <Button loading={exporting} onClick={handleExport} className="ml-auto"
+          title="按当前筛选（部门/离职类型/关键词）导出全部匹配记录">导出Excel</Button>
       </div>
 
       <Table className={styles.tableLg}

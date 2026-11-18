@@ -194,3 +194,30 @@ export async function downloadTrainingRegistration(department?: string): Promise
   const { base64, filename } = await fetchHrDownload(`/hr/training-registration${qs}`)
   return { base64, filename: filename || `个人培训登记表_${department || '全部'}.docx` }
 }
+
+// ─── 台账导出（Excel，与列表筛选同口径） ───
+
+export async function exportOnboardingRecords(params?: {
+  department?: string
+  is_employed?: string
+  year?: number
+  keyword?: string
+}): Promise<{ base64: string; filename: string }> {
+  const qs = buildQueryString(params || {})
+  const { base64, filename } = await fetchHrDownload(`/hr/onboarding-records/export${qs}`, {
+    errorMessage: '导出入职台账失败',
+  })
+  return { base64, filename: filename || `入职台账_${new Date().toISOString().slice(0, 10)}.xlsx` }
+}
+
+export async function exportDepartureRecords(params?: {
+  department?: string
+  offboarding_type?: string
+  keyword?: string
+}): Promise<{ base64: string; filename: string }> {
+  const qs = buildQueryString(params || {})
+  const { base64, filename } = await fetchHrDownload(`/hr/departure-records/export${qs}`, {
+    errorMessage: '导出离职台账失败',
+  })
+  return { base64, filename: filename || `离职台账_${new Date().toISOString().slice(0, 10)}.xlsx` }
+}

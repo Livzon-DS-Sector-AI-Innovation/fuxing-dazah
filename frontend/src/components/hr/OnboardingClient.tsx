@@ -10,7 +10,9 @@ import {
   fetchOnboardingRecords,
   fetchOnboardingFilterOptionsAction,
   fetchDepartmentsAction,
+  exportOnboardingRecords,
 } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
@@ -31,6 +33,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
   const [createOpen, setCreateOpen] = useState(false)
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [hireYears, setHireYears] = useState<number[]>([])
+  const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
     fetchDepartmentsAction({ page_size: 100 }).then(res => {
@@ -56,6 +59,20 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
   }, [filterDepartment, filterYear, searchKeyword, page, pageSize])
 
   useEffect(() => { loadData() }, [filterDepartment, filterYear, searchKeyword, page, pageSize])
+
+  // 导出与列表筛选同口径（部门/年份/关键词；默认仅在职的口径也与列表一致）
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const r = await exportOnboardingRecords({
+        department: filterDepartment || undefined,
+        year: filterYear || undefined,
+        keyword: searchKeyword || undefined,
+      })
+      downloadBase64File(r.base64, r.filename)
+    } catch (err: any) { message.error(err.message || '导出失败') }
+    finally { setExporting(false) }
+  }
 
   const columns: ColumnsType<OnboardingRecord> = [
     { title: '工号', dataIndex: 'employee_number', width: 100 },
@@ -95,6 +112,8 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
             .sort((a, b) => b - a)
             .map((y) => ({ value: y, label: `${y} 年入职` }))}
           style={{ width: 140 }} />
+        <Button loading={exporting} onClick={handleExport} className="ml-auto"
+          title="按当前筛选（部门/年份/关键词）导出全部匹配记录">导出Excel</Button>
       </div>
 
       <Table className={styles.tableLg} columns={columns} dataSource={records} rowKey="id" loading={loading}

@@ -11,7 +11,8 @@ import {
   TeamOutlined, AimOutlined, MinusCircleOutlined, DashboardOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { fetchHeadcountPlans, triggerEmployeeSync } from '@/actions/hr'
+import { fetchHeadcountPlans, triggerEmployeeSync, exportHeadcountPlans } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 import type { HeadcountData, HeadcountPlanRow } from '@/types/hr'
 
@@ -53,6 +54,18 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const [exporting, setExporting] = useState(false)
+
+  // 导出与搜索框同口径（部门关键字过滤），末行含合计
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const r = await exportHeadcountPlans(keyword || undefined)
+      downloadBase64File(r.base64, r.filename)
+    } catch (err) {
+      message.error(err instanceof Error && err.message ? err.message : '导出失败')
+    } finally { setExporting(false) }
+  }
 
   const canManage = hasPermission('hr:settings:manage')
 
@@ -237,13 +250,17 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
       {/* 定编表 */}
       <Card>
         <div className="flex items-center justify-between mb-3">
-          <Input.Search
-            placeholder="搜索部门"
-            allowClear
-            style={{ width: 220 }}
-            onSearch={setKeyword}
-            onChange={(e) => { if (!e.target.value) setKeyword('') }}
-          />
+          <div className="flex items-center gap-2">
+            <Input.Search
+              placeholder="搜索部门"
+              allowClear
+              style={{ width: 220 }}
+              onSearch={setKeyword}
+              onChange={(e) => { if (!e.target.value) setKeyword('') }}
+            />
+            <Button loading={exporting} onClick={handleExport}
+              title="按当前搜索关键字导出（含合计行）">导出Excel</Button>
+          </div>
           <Text type="secondary" className="text-sm">
             共 {summary?.department_count ?? 0} 个部门；点击部门名查看该部门员工
           </Text>
