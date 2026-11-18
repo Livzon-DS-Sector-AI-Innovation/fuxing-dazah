@@ -1044,6 +1044,8 @@ class InterviewResponse(BaseModel):
     calendar_event_id: str | None = None
     # 日历同步结果提示（保存后前端据此 toast 警告；None=未尝试或成功）
     calendar_sync_error: str | None = None
+    # 评分卡推送记录（HR 推送评分表单卡给面试官后非空；前端显示「已推送待评分」）
+    score_pushed_at: datetime | None = None
     created_at: datetime | None = None
 
 

@@ -130,6 +130,25 @@ async def delete_interview(interview_id: UUID, service: InterviewService = Depen
     return success_response(message="已取消")
 
 
+@router.post("/interviews/{interview_id}/push-score", summary="推送评分卡给面试官")
+async def push_interview_score(
+    interview_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+):
+    """把评分表单卡私发给该面试的面试官本人（飞书内提交，回写人工面试评价并通知发起 HR）。"""
+    from app.modules.hr.interview_score_service import push_score_card
+
+    try:
+        iv = await push_score_card(session, interview_id, ctx.user.name, ctx.user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(
+        data=InterviewResponse.model_validate(iv).model_dump(mode="json"),
+        message="评分卡已发送给面试官",
+    )
+
+
 # ─── 人工面试评价 ───
 
 

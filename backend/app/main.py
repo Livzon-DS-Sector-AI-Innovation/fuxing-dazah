@@ -87,6 +87,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.hr.employee_info_collection_service import (
         register_feishu_callbacks as register_eic_callbacks,
     )
+    from app.modules.hr.interview_score_service import (
+        register_feishu_callbacks as register_iv_score_callbacks,
+    )
     from app.modules.hr.probation_service import (
         register_feishu_callbacks as register_probation_callbacks,
     )
@@ -98,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     register_hr_feishu_callbacks()
     register_eic_callbacks()
     register_probation_callbacks()
+    register_iv_score_callbacks()
 
     # ── 平台级飞书 WebSocket 长连接 ──
     if settings.FEISHU_WS_ENABLED:
