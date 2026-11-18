@@ -901,7 +901,7 @@ export default function RecruitmentClient() {
           }, {
             key: 'interviews',
             label: <span className="flex items-center gap-1.5"><ClockCircleOutlined />面试总览</span>,
-            children: (
+            children: (<>
               <Card>
                 <div className="flex flex-wrap gap-3 mb-4 items-center">
                   <DatePicker.RangePicker
@@ -961,6 +961,21 @@ export default function RecruitmentClient() {
                                     面试官：{iv.interviewer || '-'}{iv.location ? ` · ${iv.location}` : ''}
                                   </span>
                                   {iv.calendar_event_id && <Tag color="purple" style={{ fontSize: 10 }}>日历</Tag>}
+                                  <div className="flex gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                                    {(iv.status === '待安排' || iv.status === '已安排') && (
+                                      <>
+                                        <Popconfirm title="标记为已完成？" description="完成后不可回退"
+                                          onConfirm={() => handleOverviewComplete(iv.id)} okText="确认完成" cancelText="取消">
+                                          <Button size="small" type="primary" ghost loading={actingId === iv.id}>完成</Button>
+                                        </Popconfirm>
+                                        <Popconfirm title="取消这场面试？" description="将同时删除关联的飞书日程"
+                                          onConfirm={() => handleOverviewCancel(iv.id)} okText="取消面试" cancelText="保留">
+                                          <Button size="small" danger>取消</Button>
+                                        </Popconfirm>
+                                      </>
+                                    )}
+                                    <Button size="small" onClick={() => setOverviewEdit(iv)}>编辑</Button>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -970,6 +985,14 @@ export default function RecruitmentClient() {
                     </div>
                   )}
               </Card>
+              {/* 总览行内「编辑」弹窗：复用面试安排共享组件（编辑模式不需要候选人上下文） */}
+              <InterviewScheduleModal
+                open={!!overviewEdit}
+                editing={overviewEdit}
+                onCancel={() => setOverviewEdit(null)}
+                onSaved={() => { setOverviewEdit(null); loadOverview() }}
+              />
+            </>
             ),
           }] : []),
           {
