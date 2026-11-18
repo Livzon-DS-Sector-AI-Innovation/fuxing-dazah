@@ -16,6 +16,7 @@ import {
 } from '@/actions/hr'
 import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
+import { CANDIDATE_STATUS_COLORS } from '@/lib/hr'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
@@ -32,7 +33,7 @@ const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
   '已拒绝': [],
 }
 
-// 候选人状态全集（排序 + 下拉候选用），颜色对齐招聘漏斗
+// 候选人状态全集（排序 + 下拉候选用），状态色统一走共享 CANDIDATE_STATUS_COLORS
 const STATUS_OPTIONS = [
   { label: '待筛选', value: '待筛选' }, { label: '已筛选', value: '已筛选' },
   { label: '待部门审核', value: '待部门审核' }, { label: '面试中', value: '面试中' },
@@ -42,11 +43,7 @@ const STATUS_OPTIONS = [
 ]
 // 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（进入面试后以胜任度分析报告为准）
 const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门审核'])
-const STATUS_COLORS: Record<string, string> = {
-  '待筛选': '#a4a097', '已筛选': '#0075de', '待部门审核': '#dd5b00',
-  '面试中': '#7b3ff2', '已面试': '#2a9d99', '录用中': '#1aae39',
-  '已录用': '#5645d4', '待入职审批': '#e8b830', '已入职': '#389e0d', '已拒绝': '#ff4d4f',
-}
+const STATUS_COLORS = CANDIDATE_STATUS_COLORS
 const STATUS_ORDER = STATUS_OPTIONS.map(s => s.value)
 
 /** 批量上传简历的逐份流水线状态：AI 解析 → 建档（关联岗位）→ 可选 AI 初筛 */
@@ -1023,18 +1020,13 @@ export default function RecruitmentClient() {
                         {stats.funnel?.map((item: any) => {
                           const max = Math.max(...stats.funnel.map((f: any) => f.count), 1)
                           const pct = Math.round((item.count / max) * 100)
-                          const colors: Record<string, string> = {
-                            '待筛选': '#1677ff', '已筛选': '#722ed1', '待部门审核': '#fa8c16',
-                            '面试中': '#13c2c2', '已面试': '#52c41a', '录用中': '#2f54eb',
-                            '已录用': '#389e0d', '已拒绝': '#ff4d4f',
-                          }
                           return (
                             <div key={item.status} className="flex items-center gap-2">
                               <span className="text-xs w-20 text-right text-gray-500">{item.status}</span>
                               <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
                                 <div className="h-full rounded transition-all" style={{
                                   width: `${pct}%`,
-                                  backgroundColor: colors[item.status] || '#d9d9d9',
+                                  backgroundColor: STATUS_COLORS[item.status] || '#d9d9d9',
                                 }} />
                               </div>
                               <span className="text-xs font-medium w-8">{item.count}</span>

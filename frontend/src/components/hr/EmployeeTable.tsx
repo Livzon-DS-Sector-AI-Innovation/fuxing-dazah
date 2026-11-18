@@ -4,13 +4,12 @@ import styles from "./lifecycleTable.module.css"
 import { useState, useEffect, useRef } from 'react'
 import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline } from 'antd'
 import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
-import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
+import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
 import {
   fetchPositions, fetchDepartmentsAction, fetchTransfers, createTransfer,
   createProbationReview, fetchEmployeesAction,
 } from '@/actions/hr'
-import { useHrStore } from '@/stores/hr'
 import { usePermission } from '@/hooks/usePermission'
 import EmployeeInfoModal from './EmployeeInfoModal'
 
@@ -27,14 +26,7 @@ interface EmployeeTableProps {
   syncMode?: boolean
 }
 
-const statusColorMap: Record<string, string> = {
-  在职: 'success',
-  试用期: 'warning',
-  离职: 'default',
-  待审批: 'processing',
-  病假: 'error',
-  产假: 'magenta',
-  产假复岗: 'purple' }
+const statusColorMap = EMPLOYEE_STATUS_TAG_COLORS
 
 export default function EmployeeTable({
   employees,
@@ -55,8 +47,6 @@ export default function EmployeeTable({
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailEmp, setDetailEmp] = useState<Employee | null>(null)
-  const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ─── 转正评估发起 Modal（行内入口；syncMode 下也开放——写源表不改本地档案） ───
   const [probationOpen, setProbationOpen] = useState(false)
@@ -91,12 +81,6 @@ export default function EmployeeTable({
       setProbationOpen(false); setProbationReviewer(undefined)
     } catch (e) { message.error(e instanceof Error ? e.message : '发起失败') }
     finally { setProbationSending(false) }
-  }
-
-  const handleSearchChange = (val: string) => {
-    // 防抖：停止输入 300ms 后才触发搜索，避免逐键请求乱序
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => setSearchKeyword(val), 300)
   }
 
   // ─── 异动记录 Modal ───
@@ -466,36 +450,7 @@ export default function EmployeeTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-3 items-center">
-        <Input.Search
-          placeholder="搜索姓名或工号"
-          value={searchKeyword}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          onSearch={(val) => {
-            if (debounceRef.current) clearTimeout(debounceRef.current)
-            setSearchKeyword(val)
-          }}
-          className="w-64"
-          allowClear
-        />
-        <Select
-          placeholder="状态筛选"
-          value={filterStatus || undefined}
-          onChange={(value) => setFilterStatus(value || '')}
-          allowClear
-          className="w-32"
-          options={[
-            { value: '在职', label: '在职' },
-            { value: '试用期', label: '试用期' },
-            { value: '离职', label: '离职' },
-            { value: '待审批', label: '待审批' },
-            { value: '病假', label: '病假' },
-            { value: '产假', label: '产假' },
-            { value: '产假复岗', label: '产假复岗' },
-          ]}
-        />
-      </div>
-
+      {/* 搜索/状态/筛选工具栏已上提至页面 Tab 栏（EmployeeProfileClient），此处仅渲染表格与弹窗 */}
       <Table className={styles.tableLg}
         columns={columns}
         dataSource={employees}
