@@ -52,7 +52,7 @@ def get_analysis_service(session: AsyncSession = Depends(get_db)) -> CandidateAn
 async def list_interviews_overview(
     date_from: date | None = Query(None, description="面试日期起（含）"),
     date_to: date | None = Query(None, description="面试日期止（含）"),
-    interviewer: str | None = Query(None, description="面试官姓名（模糊）"),
+    candidate_name: str | None = Query(None, description="候选人姓名（模糊）"),
     status: str | None = Query(None, description="状态筛选"),
     candidate_id: UUID | None = Query(None, description="按候选人筛选"),
     page: int = Query(1, ge=1),
@@ -62,7 +62,7 @@ async def list_interviews_overview(
 ):
     """跨候选人面试总览：按日期倒序分页，附带候选人姓名/岗位。"""
     rows, total = await service.list_overview(
-        date_from=date_from, date_to=date_to, interviewer=interviewer,
+        date_from=date_from, date_to=date_to, candidate_name=candidate_name,
         status=status, candidate_id=candidate_id, page=page, page_size=page_size,
     )
     items = []

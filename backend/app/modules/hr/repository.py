@@ -1440,7 +1440,7 @@ class InterviewRepository:
         *,
         date_from: date | None = None,
         date_to: date | None = None,
-        interviewer: str | None = None,
+        candidate_name: str | None = None,
         status: str | None = None,
         candidate_id: UUID | None = None,
         page: int = 1,
@@ -1456,8 +1456,8 @@ class InterviewRepository:
             if date_to:
                 date_conds.append(Interview.interview_date <= date_to)
             conds.append(or_(Interview.interview_date.is_(None), and_(*date_conds)))
-        if interviewer:
-            conds.append(Interview.interviewer.ilike(f"%{interviewer}%"))
+        if candidate_name:
+            conds.append(Candidate.name.ilike(f"%{candidate_name}%"))
         if status:
             conds.append(Interview.status == status)
         if candidate_id:

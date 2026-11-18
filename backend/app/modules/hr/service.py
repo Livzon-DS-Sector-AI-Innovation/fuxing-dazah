@@ -1842,7 +1842,7 @@ class InterviewService:
         *,
         date_from: date | None = None,
         date_to: date | None = None,
-        interviewer: str | None = None,
+        candidate_name: str | None = None,
         status: str | None = None,
         candidate_id: UUID | None = None,
         page: int = 1,
@@ -1850,7 +1850,7 @@ class InterviewService:
     ) -> tuple[list[tuple[Interview, str | None, str | None, InterviewFeedback | None, CandidateAnalysisReport | None]], int]:
         """跨候选人面试总览（按日期倒序分页，含候选人姓名/岗位/人工评价/AI 报告）。"""
         return await self.repo.search_overview(
-            date_from=date_from, date_to=date_to, interviewer=interviewer,
+            date_from=date_from, date_to=date_to, candidate_name=candidate_name,
             status=status, candidate_id=candidate_id, page=page, page_size=page_size,
         )
 

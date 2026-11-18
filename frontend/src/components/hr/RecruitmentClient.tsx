@@ -134,7 +134,7 @@ export default function RecruitmentClient() {
   const [overviewDateRange, setOverviewDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>([
     dayjs().subtract(7, 'day'), dayjs().add(30, 'day'),
   ])
-  const [overviewInterviewer, setOverviewInterviewer] = useState('')
+  const [overviewCandidate, setOverviewCandidate] = useState('')
   const [overviewStatus, setOverviewStatus] = useState<string | undefined>(undefined)
   // 总览行内操作：编辑走共享弹窗；完成/取消一键（免跳候选人详情）
   const [overviewEdit, setOverviewEdit] = useState<InterviewOverviewItem | null>(null)
@@ -145,7 +145,7 @@ export default function RecruitmentClient() {
       const r = await fetchInterviewsOverview({
         date_from: overviewDateRange?.[0]?.format('YYYY-MM-DD'),
         date_to: overviewDateRange?.[1]?.format('YYYY-MM-DD'),
-        interviewer: overviewInterviewer || undefined,
+        candidate_name: overviewCandidate || undefined,
         status: overviewStatus,
         page_size: 200,
       })
@@ -155,7 +155,7 @@ export default function RecruitmentClient() {
       msg.error(err?.message || '获取面试总览失败')
       setOverviewRows([])
     } finally { setOverviewLoading(false) }
-  }, [overviewDateRange, overviewInterviewer, overviewStatus, msg])
+  }, [overviewDateRange, overviewCandidate, overviewStatus, msg])
 
   // 总览行内快捷操作：标记完成 / 取消（都刷新总览列表）
   const handleOverviewComplete = async (id: string) => {
@@ -910,10 +910,10 @@ export default function RecruitmentClient() {
                     onChange={(v) => setOverviewDateRange(v)}
                   />
                   <Input.Search
-                    placeholder="面试官姓名"
+                    placeholder="候选人姓名"
                     style={{ width: 180 }}
                     allowClear
-                    onSearch={(v) => setOverviewInterviewer(v || '')}
+                    onSearch={(v) => setOverviewCandidate(v || '')}
                   />
                   <Select
                     placeholder="状态" allowClear style={{ width: 120 }}

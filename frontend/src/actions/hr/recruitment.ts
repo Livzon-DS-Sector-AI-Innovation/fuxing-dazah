@@ -349,7 +349,7 @@ export async function pushInterviewScore(id: string) {
 export async function fetchInterviewsOverview(params: {
   date_from?: string
   date_to?: string
-  interviewer?: string
+  candidate_name?: string
   status?: string
   page?: number
   page_size?: number
