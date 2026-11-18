@@ -12,7 +12,7 @@ import {
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
-  RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
+  RobotOutlined, CheckCircleOutlined, SendOutlined,
   FileSearchOutlined, AuditOutlined, UserAddOutlined,
 } from '@ant-design/icons'
 import type { Candidate, Interview, InterviewFeedback, OnboardingTask } from '@/types/hr'
@@ -23,7 +23,7 @@ import {
   updateInterview, deleteInterview, pushInterviewScore,
   saveInterviewFeedback, fetchInterviewFeedback,
   pushCandidateReview, decideCandidateReview, pushOnboardingReview,
-  fetchCandidateInterviews, fetchPendingReviews,
+  fetchCandidateInterviews,
   fetchCandidateReviews,
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
@@ -710,7 +710,127 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     </div>
   )
 
-  // ─── 面试记录 Tab ───
+  // ─── 面试记录 Tab：按轮次（初试/复试/终试）分子标签，报告跟轮次走 ───
+  const renderInterviewCard = (iv: Interview) => (
+    <Card key={iv.id} size="small" title={
+      <div className="flex items-center gap-2">
+        <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
+        <span>{iv.interview_type}</span>
+        <span className="text-gray-400 text-xs">
+          {iv.interview_date || '时间待定'}
+          {iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
+        </span>
+        {iv.calendar_event_id && <Tag color="purple" className="text-xs">日历已同步</Tag>}
+        {feedbacks[iv.id] && (
+          <Tag color={feedbacks[iv.id].result === '通过' ? 'green' : feedbacks[iv.id].result === '不通过' ? 'red' : 'orange'} className="text-xs">
+            评价：{feedbacks[iv.id].result}
+          </Tag>
+        )}
+        {/* 已推送评分卡但面试官还没提交（评价 Tag 出现即替代此提示） */}
+        {!feedbacks[iv.id] && iv.score_pushed_at && (
+          <Tag color="geekblue" className="text-xs">已推送评分 · 待面试官提交</Tag>
+        )}
+      </div>
+    } extra={
+      <div className="flex gap-1">
+        {(iv.status === '待安排' || iv.status === '已安排') && (
+          <Popconfirm
+            title="标记为已完成？"
+            description="完成后不可回退；候选人无剩余轮次时将自动推进到「已面试」"
+            onConfirm={() => handleMarkComplete(iv.id)} okText="确认完成" cancelText="再等等"
+          >
+            <Button size="small" type="primary" ghost loading={completingId === iv.id}>标记完成</Button>
+          </Popconfirm>
+        )}
+        {/* 推送评分卡给面试官本人（飞书内提交打分，免 HR 代填）；已有人工评价后不再推 */}
+        {iv.interviewer && !feedbacks[iv.id] && iv.status !== '已取消' && (
+          <Button size="small"
+            loading={scorePushingId === iv.id}
+            title={`向面试官 ${iv.interviewer} 私发评分表单卡：四维打分+结论，提交后自动写入面试评价并通知你`}
+            onClick={() => handlePushScore(iv)}>
+            {iv.score_pushed_at ? '重推评分' : '推送评分'}
+          </Button>
+        )}
+        <Button size="small" onClick={() => { setScheduleEditing(iv); setScheduleOpen(true) }}>编辑</Button>
+        <Button size="small" onClick={() => openFeedbackModal(iv)}>面试评价</Button>
+        {/* 已有逐字稿/备注 = 面试已实际进行过，不再提供取消入口 */}
+        {!(iv.transcript_text || iv.notes) && (
+          <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消面试</Button>
+        )}
+      </div>
+    }>
+      <Descriptions size="small" column={2}>
+        <Descriptions.Item label="面试官">{iv.interviewer || '-'}</Descriptions.Item>
+        <Descriptions.Item label="地点">{iv.location || '-'}</Descriptions.Item>
+      </Descriptions>
+
+      {/* 逐字稿输入区 */}
+      <div className="mt-3">
+        <div className="text-xs text-gray-500 mb-1">面试逐字稿（粘贴第三方转写文本）</div>
+        <Input.TextArea
+          rows={4}
+          defaultValue={iv.transcript_text || ''}
+          placeholder="粘贴面试逐字稿..."
+          onBlur={async (e) => {
+            const val = e.target.value
+            if (val !== iv.transcript_text) {
+              try {
+                await updateInterview(iv.id, { transcript_text: val || undefined })
+                message.success('逐字稿已保存，胜任度报告后台生成中')
+                // 同步本地缓存，否则二次编辑同一文本时 diff 判断失真
+                setInterviews(prev => prev.map(x => x.id === iv.id ? { ...x, transcript_text: val } : x))
+              } catch (err: any) {
+                message.error(err?.message || '逐字稿保存失败，请重试')
+              }
+            }
+          }}
+        />
+      </div>
+
+      {/* AI 评估已统一到胜任度报告：单按钮生成，结果在下方报告区展示 */}
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        {analysisReports.some((rep: any) => rep.interview_id === iv.id) && (
+          <Tag color="green" className="text-xs">📊 AI 报告已生成</Tag>
+        )}
+        <Button
+          icon={<RobotOutlined />}
+          loading={reportGeneratingId === iv.id}
+          onClick={() => handleGenerateReport(iv.id)}
+          disabled={!(iv.transcript_text || iv.notes)}
+        >
+          {iv.transcript_text || iv.notes ? '📊 生成胜任度报告' : '请先填写面试记录'}
+        </Button>
+      </div>
+    </Card>
+  )
+
+  // 轮次 Tab 内容：该轮全部面试卡 + 该轮关联的胜任度报告（按 interview_id 归组）
+  const renderRoundPanel = (type: string) => {
+    const roundIvs = interviews.filter(iv => iv.interview_type === type)
+    const roundIds = new Set(roundIvs.map(iv => iv.id))
+    const roundReports = analysisReports.filter((r: any) => roundIds.has(r.interview_id))
+    return (
+      <div className="space-y-4">
+        {roundIvs.map(renderInterviewCard)}
+        {roundReports.length > 0 && (
+          <Card title="📊 胜任度多维分析报告" className="mt-4">
+            <div className="space-y-4">
+              {roundReports.map((r: any) => (
+                <div key={r.id} className="border-b border-[var(--color-hairline)] pb-3 last:border-b-0 last:pb-0">
+                  <CandidateAnalysisReportCard
+                    report={r}
+                    candidateName={candidate.name}
+                    candidatePosition={candidate.position || ''}
+                  />
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+    )
+  }
+
   const interviewTab = (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -719,121 +839,21 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       </div>
 
       {interviewsLoading ? <Spin className="flex justify-center py-12" /> :
-        interviews.length === 0 ? <Empty description="暂无面试记录" className="py-12" /> :
-          <div className="space-y-4">
-            {interviews.map((iv) => {
-              return (
-                <Card key={iv.id} size="small" title={
-                  <div className="flex items-center gap-2">
-                    <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
-                    <span>{iv.interview_type}</span>
-                    <span className="text-gray-400 text-xs">
-                      {iv.interview_date || '时间待定'}
-                      {iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
-                    </span>
-                    {iv.calendar_event_id && <Tag color="purple" className="text-xs">日历已同步</Tag>}
-                    {feedbacks[iv.id] && (
-                      <Tag color={feedbacks[iv.id].result === '通过' ? 'green' : feedbacks[iv.id].result === '不通过' ? 'red' : 'orange'} className="text-xs">
-                        评价：{feedbacks[iv.id].result}
-                      </Tag>
-                    )}
-                    {/* 已推送评分卡但面试官还没提交（评价 Tag 出现即替代此提示） */}
-                    {!feedbacks[iv.id] && iv.score_pushed_at && (
-                      <Tag color="geekblue" className="text-xs">已推送评分 · 待面试官提交</Tag>
-                    )}
-                  </div>
-                } extra={
-                  <div className="flex gap-1">
-                    {(iv.status === '待安排' || iv.status === '已安排') && (
-                      <Popconfirm
-                        title="标记为已完成？"
-                        description="完成后不可回退；候选人无剩余轮次时将自动推进到「已面试」"
-                        onConfirm={() => handleMarkComplete(iv.id)} okText="确认完成" cancelText="再等等"
-                      >
-                        <Button size="small" type="primary" ghost loading={completingId === iv.id}>标记完成</Button>
-                      </Popconfirm>
-                    )}
-                    {/* 推送评分卡给面试官本人（飞书内提交打分，免 HR 代填）；已有人工评价后不再推 */}
-                    {iv.interviewer && !feedbacks[iv.id] && iv.status !== '已取消' && (
-                      <Button size="small"
-                        loading={scorePushingId === iv.id}
-                        title={`向面试官 ${iv.interviewer} 私发评分表单卡：四维打分+结论，提交后自动写入面试评价并通知你`}
-                        onClick={() => handlePushScore(iv)}>
-                        {iv.score_pushed_at ? '重推评分' : '推送评分'}
-                      </Button>
-                    )}
-                    <Button size="small" onClick={() => { setScheduleEditing(iv); setScheduleOpen(true) }}>编辑</Button>
-                    <Button size="small" onClick={() => openFeedbackModal(iv)}>面试评价</Button>
-                    {/* 已有逐字稿/备注 = 面试已实际进行过，不再提供取消入口 */}
-                    {!(iv.transcript_text || iv.notes) && (
-                      <Button size="small" danger onClick={() => handleDeleteInterview(iv.id)}>取消面试</Button>
-                    )}
-                  </div>
-                }>
-                  <Descriptions size="small" column={2}>
-                    <Descriptions.Item label="面试官">{iv.interviewer || '-'}</Descriptions.Item>
-                    <Descriptions.Item label="地点">{iv.location || '-'}</Descriptions.Item>
-                  </Descriptions>
-
-                  {/* 逐字稿输入区 */}
-                  <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">面试逐字稿（粘贴第三方转写文本）</div>
-                    <Input.TextArea
-                      rows={4}
-                      defaultValue={iv.transcript_text || ''}
-                      placeholder="粘贴面试逐字稿..."
-                      onBlur={async (e) => {
-                        const val = e.target.value
-                        if (val !== iv.transcript_text) {
-                          try {
-                            await updateInterview(iv.id, { transcript_text: val || undefined })
-                            message.success('逐字稿已保存，胜任度报告后台生成中')
-                            // 同步本地缓存，否则二次编辑同一文本时 diff 判断失真
-                            setInterviews(prev => prev.map(x => x.id === iv.id ? { ...x, transcript_text: val } : x))
-                          } catch (err: any) {
-                            message.error(err?.message || '逐字稿保存失败，请重试')
-                          }
-                        }
-                      }}
-                    />
-                  </div>
-
-                  {/* AI 评估已统一到胜任度报告：单按钮生成，结果在下方报告区展示 */}
-                  <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    {analysisReports.some((rep: any) => rep.interview_id === iv.id) && (
-                      <Tag color="green" className="text-xs">📊 AI 报告已生成</Tag>
-                    )}
-                    <Button
-                      icon={<RobotOutlined />}
-                      loading={reportGeneratingId === iv.id}
-                      onClick={() => handleGenerateReport(iv.id)}
-                      disabled={!(iv.transcript_text || iv.notes)}
-                    >
-                      {iv.transcript_text || iv.notes ? '📊 生成胜任度报告' : '请先填写面试记录'}
-                    </Button>
-                  </div>
-                </Card>
-              )
-            })}
-          </div>
+        interviews.length === 0 ? <Empty description="暂无面试记录" className="py-12" /> : (() => {
+          // 轮次顺序固定（初试→复试→终试），数据里的其他类型殿后；只显示存在的轮次
+          const KNOWN_ORDER = ['初试', '复试', '终试']
+          const extra = [...new Set(interviews.map(iv => iv.interview_type).filter(Boolean) as string[])]
+            .filter(t => !KNOWN_ORDER.includes(t))
+          const types = [...KNOWN_ORDER.filter(t => interviews.some(iv => iv.interview_type === t)), ...extra]
+          return (
+            <Tabs items={types.map(t => ({
+              key: t,
+              label: `${t} (${interviews.filter(iv => iv.interview_type === t).length})`,
+              children: renderRoundPanel(t),
+            }))} />
+          )
+        })()
       }
-
-      {/* 胜任度分析报告 */}
-      {analysisReports.length > 0 && (
-        <Card title="📊 胜任度多维分析报告" className="mt-4">
-          <div className="space-y-4">
-            {analysisReports.map((r) => (
-              <div key={r.id} className="border-b border-[var(--color-hairline)] pb-3 last:border-b-0 last:pb-0">
-                <CandidateAnalysisReportCard
-                  report={r}
-                  candidateName={candidate.name}
-                  candidatePosition={candidate.position || ''}
-                />
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
 
       {/* 人工面试评价 Modal */}
       <Modal title={feedbackInterview ? `面试评价 —— ${feedbackInterview.interview_type}` : '面试评价'}
