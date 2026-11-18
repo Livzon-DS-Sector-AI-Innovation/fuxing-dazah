@@ -1,16 +1,16 @@
 'use client'
 
 /**
- * 员工档案筛选面板（折叠式）：
+ * 员工档案筛选面板（受控展开）：触发按钮由页面 Tab 栏渲染（带角标），本组件只负责展开后的表单。
  * - 可枚举字段 → 下拉（选项由后端聚合现有数据，跟随飞书源表变化）
  * - 日期字段 → 时间范围选择器（出生日期按年拆分存储，用年份范围）
  * - 年龄 → 数字区间；域账号/离职原因 → 文本（防抖）
- * 部门（Tabs）与状态（表格搜索栏下拉）已有独立入口，不在此面板重复。
+ * 部门（Tabs）与状态（Tab 栏下拉）已有独立入口，不在此面板重复。
  */
 
-import { useMemo, useRef, useState } from 'react'
-import { Badge, Button, DatePicker, Form, Input, InputNumber, Select } from 'antd'
-import { DownOutlined, FilterOutlined, UndoOutlined } from '@ant-design/icons'
+import { useMemo, useRef } from 'react'
+import { Button, DatePicker, Form, Input, InputNumber, Select } from 'antd'
+import { DownOutlined, UndoOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import { EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
 
@@ -91,10 +91,11 @@ interface EmployeeFilterPanelProps {
   options: EmployeeFilterOptions
   value: EmployeeFieldFilters
   onChange: (filters: EmployeeFieldFilters) => void
+  /** 收起面板（触发按钮在页面 Tab 栏） */
+  onClose: () => void
 }
 
-export default function EmployeeFilterPanel({ options, value, onChange }: EmployeeFilterPanelProps) {
-  const [open, setOpen] = useState(false)
+export default function EmployeeFilterPanel({ options, value, onChange, onClose }: EmployeeFilterPanelProps) {
   const [form] = Form.useForm<FilterFormValues>()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -124,86 +125,75 @@ export default function EmployeeFilterPanel({ options, value, onChange }: Employ
   }
 
   return (
-    <div>
-      <div className="flex items-center gap-2">
-        <Badge count={activeCount} size="small" offset={[2, -2]}>
-          <Button icon={<FilterOutlined />} onClick={() => setOpen((v) => !v)}>
-            筛选
+    <div className="mb-4 rounded-lg border border-[var(--color-hairline)] bg-white p-4">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <span className="text-xs text-[var(--color-stone)]">
+          {activeCount > 0 ? `已启用 ${activeCount} 项筛选` : '可组合多项条件，选择即生效'}
+        </span>
+        <div className="flex items-center gap-1">
+          <Button
+            type="text"
+            size="small"
+            icon={<UndoOutlined />}
+            onClick={handleReset}
+            disabled={activeCount === 0}
+          >
+            重置
           </Button>
-        </Badge>
-        {open && (
-          <>
-            <span className="text-xs text-neutral-400">
-              {activeCount > 0 ? `已启用 ${activeCount} 项筛选` : '可组合多项条件，选择即生效'}
-            </span>
-            <Button
-              type="text"
-              size="small"
-              icon={<UndoOutlined />}
-              onClick={handleReset}
-              disabled={activeCount === 0}
-            >
-              重置
-            </Button>
-            <Button type="text" size="small" onClick={() => setOpen(false)}>
-              收起 <DownOutlined />
-            </Button>
-          </>
-        )}
+          <Button type="text" size="small" onClick={onClose}>
+            收起 <DownOutlined />
+          </Button>
+        </div>
       </div>
 
-      {open && (
-        <div className="mt-2 rounded-lg border border-neutral-200 bg-white p-4">
-          <Form
-            form={form}
-            layout="vertical"
-            onValuesChange={handleValuesChange}
-            className="grid grid-cols-2 gap-x-4 md:grid-cols-3 xl:grid-cols-4"
-            requiredMark={false}
-          >
-            {SELECT_FIELDS.map(({ key, label }) => (
-              <Form.Item key={key} name={key} label={label} className="mb-2">
-                <Select
-                  placeholder="全部"
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={(options[key] || []).map((v) => ({ value: v, label: v }))}
-                />
-              </Form.Item>
-            ))}
+      <Form
+        form={form}
+        layout="vertical"
+        onValuesChange={handleValuesChange}
+        className="grid grid-cols-2 gap-x-4 md:grid-cols-3 xl:grid-cols-4"
+        requiredMark={false}
+      >
+        {SELECT_FIELDS.map(({ key, label }) => (
+          <Form.Item key={key} name={key} label={label} className="mb-2">
+            <Select
+              placeholder="全部"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={(options[key] || []).map((v) => ({ value: v, label: v }))}
+            />
+          </Form.Item>
+        ))}
 
-            <Form.Item label="年龄（岁）" className="mb-2">
-              <div className="flex items-center gap-1">
-                <Form.Item name="age_min" noStyle>
-                  <InputNumber placeholder="最小" className="w-full" />
-                </Form.Item>
-                <span className="text-neutral-400">~</span>
-                <Form.Item name="age_max" noStyle>
-                  <InputNumber placeholder="最大" className="w-full" />
-                </Form.Item>
-              </div>
+        <Form.Item label="年龄（岁）" className="mb-2">
+          <div className="flex items-center gap-1">
+            <Form.Item name="age_min" noStyle>
+              <InputNumber placeholder="最小" className="w-full" />
             </Form.Item>
+            <span className="text-neutral-400">~</span>
+            <Form.Item name="age_max" noStyle>
+              <InputNumber placeholder="最大" className="w-full" />
+            </Form.Item>
+          </div>
+        </Form.Item>
 
-            <Form.Item name="birth_year" label="出生年份" className="mb-2">
-              <DatePicker.RangePicker picker="year" className="w-full" allowEmpty={[true, true]} />
-            </Form.Item>
+        <Form.Item name="birth_year" label="出生年份" className="mb-2">
+          <DatePicker.RangePicker picker="year" className="w-full" allowEmpty={[true, true]} />
+        </Form.Item>
 
-            {DATE_RANGE_FIELDS.map(({ key, label }) => (
-              <Form.Item key={key} name={key} label={label} className="mb-2">
-                <DatePicker.RangePicker className="w-full" allowEmpty={[true, true]} />
-              </Form.Item>
-            ))}
+        {DATE_RANGE_FIELDS.map(({ key, label }) => (
+          <Form.Item key={key} name={key} label={label} className="mb-2">
+            <DatePicker.RangePicker className="w-full" allowEmpty={[true, true]} />
+          </Form.Item>
+        ))}
 
-            <Form.Item name="domain_account" label="域账号" className="mb-2">
-              <Input placeholder="前缀匹配" allowClear />
-            </Form.Item>
-            <Form.Item name="departure_reason" label="离职原因" className="mb-2">
-              <Input placeholder="包含匹配" allowClear />
-            </Form.Item>
-          </Form>
-        </div>
-      )}
+        <Form.Item name="domain_account" label="域账号" className="mb-2">
+          <Input placeholder="前缀匹配" allowClear />
+        </Form.Item>
+        <Form.Item name="departure_reason" label="离职原因" className="mb-2">
+          <Input placeholder="包含匹配" allowClear />
+        </Form.Item>
+      </Form>
     </div>
   )
 }

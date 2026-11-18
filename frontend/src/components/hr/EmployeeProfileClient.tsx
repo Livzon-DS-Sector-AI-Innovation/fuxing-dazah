@@ -1,15 +1,15 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { App, Alert, Button, Tabs } from 'antd'
-import { LinkOutlined, SyncOutlined } from '@ant-design/icons'
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { App, Badge, Button, Input, Select, Tabs } from 'antd'
+import { DownloadOutlined, FilterOutlined, LinkOutlined, SyncOutlined } from '@ant-design/icons'
 import { fetchEmployeesAction, fetchDepartmentsAction, fetchEmployeeFilterOptionsAction, exportEmployees, triggerEmployeeSync } from '@/actions/hr'
 import { Employee, Department, EmployeeSyncBanner, EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import { downloadBase64File } from '@/lib/hr'
 import EmployeeTable from './EmployeeTable'
 import EmployeeForm from './EmployeeForm'
-import EmployeeFilterPanel from './EmployeeFilterPanel'
+import EmployeeFilterPanel, { countActiveFilters } from './EmployeeFilterPanel'
 
 /** 筛选面板状态 → 员工列表 API 字段级筛选参数（日期范围拆 after/before） */
 function fieldFiltersToParams(f: EmployeeFieldFilters) {
@@ -58,6 +58,8 @@ interface EmployeeProfileClientProps {
   initialDepartment?: string
   /** 多维表格同步启用时传入：页面转只读展示 */
   syncInfo?: EmployeeSyncBanner
+  /** 标题行右侧的动作区（页面级入口按钮，如信息收集/转正管理面板） */
+  headerActions?: ReactNode
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -75,7 +77,8 @@ export default function EmployeeProfileClient({
   initialEmployees,
   initialTotal,
   initialDepartment,
-  syncInfo }: EmployeeProfileClientProps) {
+  syncInfo,
+  headerActions }: EmployeeProfileClientProps) {
   const { message } = App.useApp()
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees)
   const [total, setTotal] = useState(initialTotal)
@@ -89,9 +92,13 @@ export default function EmployeeProfileClient({
   const [syncing, setSyncing] = useState(false)
   const [filters, setFilters] = useState<EmployeeFieldFilters>({})
   const [filterOptions, setFilterOptions] = useState<EmployeeFilterOptions>({})
+  const [filterOpen, setFilterOpen] = useState(false)
   const seqRef = useRef(0)
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const { searchKeyword, filterStatus } = useHrStore()
+  const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
+
+  const activeFilterCount = useMemo(() => countActiveFilters(filters), [filters])
 
   const activeDepartment =
     activeTab === 'all'
@@ -208,6 +215,12 @@ export default function EmployeeProfileClient({
     setPage(1)
   }
 
+  const handleSearchChange = (val: string) => {
+    // 防抖：停止输入 300ms 后才触发搜索，避免逐键请求乱序
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => setSearchKeyword(val), 300)
+  }
+
   // 搜索/状态/部门筛选/字段筛选变化时回到第一页，避免深页筛选后出现空页
   useEffect(() => {
     setPage((p) => (p === 1 ? p : 1))
@@ -236,13 +249,25 @@ export default function EmployeeProfileClient({
     ? `https://feishu.cn/base/${syncInfo.app_token}${syncInfo.source_table_id ? `?table=${syncInfo.source_table_id}` : ''}`
     : null
 
+  const lastSyncText = syncInfo?.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-          员工档案
-        </h1>
-        <div className="flex gap-2">
+      {/* 页头：标题 + 数据源副标题（替代原先整块 Alert）｜ 右侧动作区收拢所有入口 */}
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] leading-tight">
+            员工档案
+          </h1>
+          {syncInfo && (
+            <p className="mt-1 text-[13px] text-[var(--color-steel)] truncate">
+              数据来源：飞书多维表格（单向同步）· 只读展示 · 每天 02:00 自动同步 ·
+              上次同步：{lastSyncText}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 ml-auto">
+          {headerActions}
           {syncInfo && (
             <>
               <Button icon={<SyncOutlined />} loading={syncing} onClick={handleSyncNow}>
@@ -255,36 +280,78 @@ export default function EmployeeProfileClient({
               )}
             </>
           )}
-          <Button onClick={handleExport}>导出Excel</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExport}>
+            导出Excel
+          </Button>
         </div>
       </div>
 
-      {syncInfo && (
-        <Alert
-          type="info"
-          showIcon
-          title="数据来源：飞书多维表格（单向同步）"
-          description={`档案在飞书多维表格中维护，此处为只读展示（每天凌晨 02:00 自动同步）；上次同步：${syncInfo.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'}。`}
-        />
-      )}
-
-      <EmployeeFilterPanel options={filterOptions} value={filters} onChange={setFilters} />
-
-      <Tabs activeKey={activeTab} onChange={handleTabChange} type="card"
+      {/* 部门页签 + 右侧工具栏（搜索/状态/筛选）同行收纳；筛选面板展开在页签之下 */}
+      <Tabs
+        activeKey={activeTab}
+        onChange={handleTabChange}
+        tabBarExtraContent={{
+          right: (
+            <div className="flex flex-wrap items-center justify-end gap-2 pb-1">
+              <Input.Search
+                placeholder="搜索姓名或工号"
+                value={searchKeyword}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                onSearch={(val) => {
+                  if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+                  setSearchKeyword(val)
+                }}
+                style={{ width: 220 }}
+                allowClear
+              />
+              <Select
+                placeholder="状态筛选"
+                value={filterStatus || undefined}
+                onChange={(value) => setFilterStatus(value || '')}
+                allowClear
+                style={{ width: 120 }}
+                options={[
+                  { value: '在职', label: '在职' },
+                  { value: '试用期', label: '试用期' },
+                  { value: '离职', label: '离职' },
+                  { value: '待审批', label: '待审批' },
+                  { value: '病假', label: '病假' },
+                  { value: '产假', label: '产假' },
+                  { value: '产假复岗', label: '产假复岗' },
+                ]}
+              />
+              <Badge count={activeFilterCount} size="small" offset={[2, -2]}>
+                <Button icon={<FilterOutlined />} onClick={() => setFilterOpen((v) => !v)}>
+                  筛选
+                </Button>
+              </Badge>
+            </div>
+          ),
+        }}
         items={tabItems.map((dept) => ({
           key: dept.key,
           label: dept.label,
           children: activeTab === dept.key ? (
-            <EmployeeTable loading={loading}
-              employees={employees}
-              total={total}
-              page={page}
-              pageSize={pageSize}
-              onPageChange={handlePageChange}
-              onRefresh={handleRefresh}
-              onEdit={handleEdit}
-              syncMode={Boolean(syncInfo)}
-            />
+            <>
+              {filterOpen && (
+                <EmployeeFilterPanel
+                  options={filterOptions}
+                  value={filters}
+                  onChange={setFilters}
+                  onClose={() => setFilterOpen(false)}
+                />
+              )}
+              <EmployeeTable loading={loading}
+                employees={employees}
+                total={total}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={handlePageChange}
+                onRefresh={handleRefresh}
+                onEdit={handleEdit}
+                syncMode={Boolean(syncInfo)}
+              />
+            </>
           ) : null,
         }))}
       />
