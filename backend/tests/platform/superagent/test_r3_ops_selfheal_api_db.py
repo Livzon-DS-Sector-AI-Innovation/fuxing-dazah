@@ -6,85 +6,25 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def _purge_r3_rows():
-    """清理本文件测试创建的 R3 行——按测试工单特征圈定（short_name 前缀 r3:）。
+    """R3 行清理（快照差集法，R3 三期 T1）。
 
-    不按 executor 全删：dev 库可能有真机冒烟/观测留下的活跃工单（2026-11-13
-    教训——无条件全删把真机冒烟工单一起清了）。本文件 _make_ticket 恒用
-    short_name="r3:api"，按此前缀+源名圈定。
+    本文件旧 purge 的 task 侧已按 short_name=r3:api 收窄（2026-11-13 教训），
+    但仍删 selfheal 源行 + LIKE 'r3:%' 全清 effect——开闸后同样毁灭真机数据；
+    统一换快照差集（只删快照外新增，源行永不动）。
     """
-    yield
-    from app.platform.superagent.models import (
-        AgentEffect,
-        AgentInput,
-        AgentSource,
-        AgentTask,
-        AgentTaskSubscription,
-        AgentTrigger,
+    from tests.platform.superagent._r3_snapshot_purge import (
+        purge_new_r3_rows,
+        snapshot_r3_rows,
     )
-    from tests.conftest import _test_session_factory
 
-    async with _test_session_factory() as s:
-        task_ids = [
-            str(t.id)
-            for t in (
-                await s.execute(
-                    select(AgentTask).where(
-                        AgentTask.short_name.in_(("r3:api", "r3:rag"))
-                    )
-                )
-            ).scalars().all()
-        ]
-        if task_ids:
-            await s.execute(
-                AgentInput.__table__.delete().where(AgentInput.task_id.in_(task_ids))
-            )
-            await s.execute(
-                AgentTaskSubscription.__table__.delete().where(
-                    AgentTaskSubscription.task_id.in_(task_ids)
-                )
-            )
-            await s.execute(
-                AgentTask.__table__.delete().where(AgentTask.id.in_(task_ids))
-            )
-        src = (
-            await s.execute(
-                select(AgentSource).where(AgentSource.name == "safety.ops.selfheal")
-            )
-        ).scalar_one_or_none()
-        if src is not None:
-            # 只删挂在本文件测试工单上的 trigger（同 thread 的任务行已按 id 清），
-            # 不按 source_id 全删——防误清真机冒烟轮留下的源/读位
-            trig_ids = [
-                t.id for t in (
-                    await s.execute(
-                        select(AgentTrigger).where(
-                            AgentTrigger.source_id == src.id,
-                            AgentTrigger.thread_key.like("ops:job:r3api测试:%"),
-                        )
-                    )
-                ).scalars().all()
-            ]
-            if trig_ids:
-                await s.execute(
-                    AgentTrigger.__table__.delete().where(
-                        AgentTrigger.id.in_(trig_ids)
-                    )
-                )
-            await s.execute(
-                AgentSource.__table__.delete().where(AgentSource.id == src.id)
-            )
-        await s.execute(
-            AgentEffect.__table__.delete().where(
-                AgentEffect.dedupe_key.like("r3:%")
-                | AgentEffect.kind.in_(("r3_repair", "r3_closure_card"))
-            )
-        )
-        await s.commit()
+    snap = await snapshot_r3_rows()
+    yield
+    await purge_new_r3_rows(snap)
 
 
 async def _make_ticket(db_session, *, stage: str = "diagnosed", status: str = "open"):
@@ -144,24 +84,44 @@ async def _make_ticket(db_session, *, stage: str = "diagnosed", status: str = "o
 async def test_list_tickets_stage_filter(db_session) -> None:
     from app.modules.safety.api.ops_selfheal import list_tickets
 
-    await _make_ticket(db_session, stage="diagnosed")
-    await _make_ticket(db_session, stage="needs_human")
+    from app.platform.superagent.models import AgentTask as _AT
+
+    base_total = (
+        await db_session.execute(
+            select(func.count()).select_from(_AT).where(_AT.executor == "r3_ops_heal")
+        )
+    ).scalar_one()
+    base_nh = (
+        await db_session.execute(
+            select(func.count()).select_from(_AT).where(
+                _AT.executor == "r3_ops_heal",
+                _AT.status == "open",
+                _AT.stage_facts["r3"]["stage"].astext == "needs_human",
+            )
+        )
+    ).scalar_one()
+    diag = await _make_ticket(db_session, stage="diagnosed")
+    human = await _make_ticket(db_session, stage="needs_human")
     closed = await _make_ticket(db_session, status="ended")
 
-    resp = await list_tickets(page=1, page_size=20, stage=None, signal=None,
+    resp = await list_tickets(page=1, page_size=200, stage=None, signal=None,
                               job_name=None, db=db_session, _user=None)
     data = _resp_data(resp)
-    assert data["meta"]["total"] == 3
-    closed_rows = [x for x in data["data"] if x["stage"] == "closed"]
-    assert len(closed_rows) == 1 and closed_rows[0]["id"] == str(closed.id)
+    # 基线差集+在场断言（开闸后真机工单持续进出，全局等值断言必竞态）
+    assert data["meta"]["total"] >= base_total + 3
+    ids = {x["id"] for x in data["data"]}
+    assert {str(t.id) for t in (diag, human, closed)} <= ids
+    closed_ids = {x["id"] for x in data["data"] if x["stage"] == "closed"}
+    assert str(closed.id) in closed_ids
 
-    resp2 = await list_tickets(page=1, page_size=20, stage="needs_human",
+    resp2 = await list_tickets(page=1, page_size=50, stage="needs_human",
                                signal=None, job_name=None, db=db_session, _user=None)
     data2 = _resp_data(resp2)
-    assert data2["meta"]["total"] == 1
-    assert data2["data"][0]["stage"] == "needs_human"
-    assert data2["data"][0]["root_cause_class"] == "upstream_outage"
-    assert data2["data"][0]["dep_endpoints"] == ["10.0.0.9:9550"]
+    assert data2["meta"]["total"] >= base_nh + 1
+    ours = next(x for x in data2["data"] if x["id"] == str(human.id))
+    assert ours["stage"] == "needs_human"
+    assert ours["root_cause_class"] == "upstream_outage"
+    assert ours["dep_endpoints"] == ["10.0.0.9:9550"]
     await db_session.rollback()
 
 
@@ -343,4 +303,48 @@ async def test_extend_window_rejects_closed_and_nonjob(db_session, monkeypatch) 
         assert "无关联 job" in e2.value.message
     finally:
         window_override.reset_overrides()
+    await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 观测统计面 GET /ops-selfheal/stats（三期 T5）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_stats_aggregates_baseline_diff(db_session) -> None:
+    """统计聚合：开出/收口/滞留/信号分布/平均存活——基线差集断言（真机行免疫）。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.api.ops_selfheal import ops_selfheal_stats
+    from app.platform.superagent.models import AgentTask as _AT
+    from sqlalchemy import update
+
+    base = _resp_data(await ops_selfheal_stats(db=db_session, _user=None))["data"]
+
+    fresh = await _make_ticket(db_session, stage="diagnosed")  # 新开单（job_failed）
+    stale = await _make_ticket(db_session, stage="needs_human")  # 滞留>24h
+    closed = await _make_ticket(db_session, status="ended")  # 收口
+    # stale 单：signals_seen 双信号（分布展平口径）+ 25h 前创建
+    facts = dict(stale.stage_facts or {})
+    facts["r3"] = {**facts["r3"],
+                   "signals_seen": ["push_failed", "ai_call_failed"]}
+    await db_session.execute(
+        update(_AT).where(_AT.id == stale.id).values(
+            created_at=datetime.now(UTC) - timedelta(hours=25),
+            stage_facts=facts,
+        )
+    )
+    await db_session.flush()
+
+    data = _resp_data(await ops_selfheal_stats(db=db_session, _user=None))["data"]
+    assert data["open_total"] == base["open_total"] + 2
+    assert data["closed_total"] == base["closed_total"] + 1
+    assert data["opened_7d"] == base["opened_7d"] + 3
+    assert data["closed_7d"] == base["closed_7d"] + 1
+    assert data["stale_open_gt_24h"] == base["stale_open_gt_24h"] + 1
+    # 信号分布（signals_seen 展平 + 无 seen 回退 r3.signal）
+    assert data["by_signal"]["push_failed"] == base["by_signal"].get("push_failed", 0) + 1
+    assert data["by_signal"]["ai_call_failed"] == base["by_signal"].get("ai_call_failed", 0) + 1
+    assert data["by_signal"]["job_failed"] >= base["by_signal"].get("job_failed", 0) + 2
+    assert data["avg_lifetime_minutes"] >= 0  # 已收口均值键恒在场
     await db_session.rollback()

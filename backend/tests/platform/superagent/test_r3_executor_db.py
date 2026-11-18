@@ -16,69 +16,15 @@ _SCAN_SOURCE = "safety.ops.selfheal"
 
 @pytest_asyncio.fixture(autouse=True)
 async def _purge_r3_rows():
-    yield
-    from app.platform.superagent.models import (
-        AgentDecision,
-        AgentEffect,
-        AgentInput,
-        AgentSource,
-        AgentTask,
-        AgentTaskSubscription,
-        AgentTrigger,
+    """R3 行清理（快照差集法，R3 三期 T1）——旧全删 purge 会误删真机工单/源行。"""
+    from tests.platform.superagent._r3_snapshot_purge import (
+        purge_new_r3_rows,
+        snapshot_r3_rows,
     )
-    from tests.conftest import _test_session_factory
 
-    async with _test_session_factory() as s:
-        task_ids = [
-            str(t.id)
-            for t in (
-                await s.execute(
-                    select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
-                )
-            ).scalars().all()
-        ]
-        if task_ids:
-            await s.execute(
-                AgentInput.__table__.delete().where(AgentInput.task_id.in_(task_ids))
-            )
-            await s.execute(
-                AgentTaskSubscription.__table__.delete().where(
-                    AgentTaskSubscription.task_id.in_(task_ids)
-                )
-            )
-            await s.execute(
-                AgentTask.__table__.delete().where(AgentTask.id.in_(task_ids))
-            )
-        for name in (_SCAN_SOURCE, "safety.ops.rag_inject"):
-            src = (
-                await s.execute(
-                    select(AgentSource).where(AgentSource.name == name)
-                )
-            ).scalar_one_or_none()
-            if src is not None:
-                for t in (
-                    await s.execute(
-                        select(AgentTrigger).where(AgentTrigger.source_id == src.id)
-                    )
-                ).scalars().all():
-                    await s.execute(
-                        AgentDecision.__table__.delete().where(AgentDecision.trigger_id == t.id)
-                    )
-                    await s.execute(
-                        AgentInput.__table__.delete().where(AgentInput.trigger_id == t.id)
-                    )
-                    await s.delete(t)
-                await s.execute(
-                    AgentSource.__table__.delete().where(AgentSource.id == src.id)
-                )
-        await s.execute(
-            AgentEffect.__table__.delete().where(
-                AgentEffect.dedupe_key.like("r3:%")
-                | AgentEffect.dedupe_key.like("r3hist-%")
-                | AgentEffect.kind.in_(("r3_repair", "r3_closure_card"))
-            )
-        )
-        await s.commit()
+    snap = await snapshot_r3_rows()
+    yield
+    await purge_new_r3_rows(snap)
 
 
 class _Ctx:
@@ -102,13 +48,13 @@ async def exec_env(db_session, monkeypatch):
     from app.platform.superagent.models import AgentSource
 
     register_superagent_bridge()
-    src = AgentSource(
-        kind="ops_scan", name=_SCAN_SOURCE, enabled=True,
+    from tests.platform.superagent._r3_snapshot_purge import ensure_r3_source
+
+    src = await ensure_r3_source(
+        db_session, name=_SCAN_SOURCE, kind="ops_scan",
         config={"schedule": {"strategy": "interval", "interval_seconds": 300,
                               "timezone": "Asia/Shanghai"}, "evaluate": True},
     )
-    db_session.add(src)
-    await db_session.flush()
 
     async def _rag_ok():
         return {"embedding_ok": True, "embedding_detail": "ok",
@@ -309,15 +255,20 @@ async def test_diagnose_observe_zero_l1_effects(db_session, exec_env) -> None:
     assert task.stage_facts["latest_report"] == "progress"
 
     # 诊断卡已入队（dm_admin 先存后发）；observe 红线：零 r3_repair
-    effects = (
-        await db_session.execute(
-            select(AgentEffect).where(AgentEffect.dedupe_key.like("r3:%"))
-        )
-    ).scalars().all()
+    # （按 task.id 圈定——开闸后 dev 库有真机 r3:% effect，裸 LIKE 会泄入）
+    task_prefix = f"r3:diag:{task.id}"
+    effects = [
+        e for e in (
+            await db_session.execute(
+                select(AgentEffect).where(AgentEffect.dedupe_key.like("r3:%"))
+            )
+        ).scalars().all()
+        if str(task.id) in e.dedupe_key
+    ]
     kinds = [e.kind for e in effects]
     assert "dm_admin" in kinds
     assert all(e.kind != "r3_repair" for e in effects)
-    diag = next(e for e in effects if e.dedupe_key.startswith("r3:diag:"))
+    diag = next(e for e in effects if e.dedupe_key.startswith(task_prefix))
     assert "上游依赖断连" in diag.payload["text"]
     await db_session.rollback()
 
@@ -340,11 +291,14 @@ async def test_diagnose_llm_degraded_quota_escalates(db_session, exec_env) -> No
     assert r3["root_cause_class"] == "quota_exhausted"
     assert r3["stage"] == "needs_human"
     assert task.stage_facts["latest_report"] == "blocked"
-    effects = (
-        await db_session.execute(
-            select(AgentEffect).where(AgentEffect.dedupe_key.like("r3:escalate:%"))
-        )
-    ).scalars().all()
+    effects = [
+        e for e in (
+            await db_session.execute(
+                select(AgentEffect).where(AgentEffect.dedupe_key.like("r3:escalate:%"))
+            )
+        ).scalars().all()
+        if str(task.id) in e.dedupe_key  # 按 task 圈定（开闸后真机 escalate 常驻）
+    ]
     assert len(effects) == 1 and "充值" in effects[0].payload["text"]
     await db_session.rollback()
 
@@ -522,3 +476,309 @@ def test_rule_based_diagnosis_new_signals() -> None:
     # 降级路径处方只含 L0
     for diag in (q, n, g, p):
         assert all(x["action"] in ("notify_enriched", "rag_recheck") for x in diag["prescriptions"])
+
+
+# ═══════════════════════════════════════════════════════════════
+# 四信号恢复判定 —— 工单级全清 + verify 分支（三期 T2）
+# ═══════════════════════════════════════════════════════════════
+
+_MISC_EID_PREFIX = {
+    "ai_call_failed": "aicall", "push_failed": "push",
+    "ragflow_batch_fail": "ragflow", "feishu_event_failed": "event",
+    "effects_parked": "parked", "hazard_deadletter": "deadletter",
+    "ops_batch": "batch",
+}
+
+
+async def _make_misc_ticket(
+    db_session, source, *, signal: str, minutes_ago: float = 5,
+    signals_seen: list[str] | None = None, extra_r3: dict[str, Any] | None = None,
+):
+    """已诊断 opsmisc 族工单（stage_facts 直填，跳过诊断段）+ 开单 trigger。
+
+    minutes_ago 控制 r3.last_signal_at（安静窗口锚：仅故障类输入推进它）。
+    """
+    import uuid as uuid_mod
+    from datetime import UTC, datetime, timedelta
+
+    from app.platform.superagent.models import AgentTrigger
+    from app.platform.superagent.tasks import create_task
+
+    tag = uuid_mod.uuid4().hex[:8]
+    now = datetime.now(UTC)
+    payload: dict[str, Any] = {
+        "signal": signal, "at": now.isoformat(), "channel": {"kind": "ops_misc"},
+    }
+    if signal == "ai_call_failed":
+        payload["scenario"] = f"r3t场景{tag}"
+    elif signal == "push_failed":
+        payload["component"] = "outbox"
+    elif signal == "feishu_event_failed":
+        payload["handler"] = f"r3t_handler_{tag}"
+    thread = f"ops:opsmisc:2030-01-01"
+    trigger = AgentTrigger(
+        id=uuid_mod.uuid4(), source_id=source.id,
+        external_id=f"ops:{_MISC_EID_PREFIX[signal]}:{tag}:2030-01-01:failed",
+        thread_key=thread, actor={"id": tag, "type": "test"},
+        payload=payload, received_at=now,
+    )
+    db_session.add(trigger)
+    await db_session.flush()
+    task = await create_task(
+        db_session, short_name=f"r3:misc:{tag}", title=f"R3 misc {signal}",
+        executor="r3_ops_heal", origin_trigger_id=trigger.id,
+        mandate={"rule_id": "r3_ops_failure", "strength": "inferred"},
+        origin_thread_key=thread,
+    )
+    r3: dict[str, Any] = {
+        "stage": "diagnosed", "signal": signal,
+        "diag_at": now.isoformat(), "diag_source": "rules",
+        "root_cause_class": "unknown", "confidence": 0.5,
+        "executed": [], "planned": [], "repair_rounds": 0,
+        "first_seen_at": (now - timedelta(minutes=minutes_ago)).isoformat(),
+        "last_signal_at": (now - timedelta(minutes=minutes_ago)).isoformat(),
+        "evidence": {},
+        "signals_seen": signals_seen or [signal],
+    }
+    if signal == "ai_call_failed":
+        r3["scenario"] = payload["scenario"]
+    elif signal == "push_failed":
+        r3["component"] = "outbox"
+    if extra_r3:
+        r3.update(extra_r3)
+    task.stage_facts = {"r3": r3}
+    await db_session.flush()
+    return task, trigger
+
+
+async def _deliver(db_session, task, payload: dict[str, Any]) -> None:
+    """已送达输入（run_task_once 只消费 delivered 且未读的）。"""
+    from datetime import UTC, datetime
+
+    from app.platform.superagent.models import AgentInput
+
+    db_session.add(AgentInput(
+        task_id=task.id, kind="trigger", payload=payload,
+        delivered_at=datetime.now(UTC),
+    ))
+    await db_session.flush()
+
+
+def _stub_misc_scanners(monkeypatch, *, drafts_by: dict[str, list] | None = None) -> None:
+    """钉死 scan_source 四扫描器（现势 firing 判定同源点）——测试外生行防污染。"""
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    drafts_by = drafts_by or {}
+    for fn in ("_scan_ai_calls", "_scan_push_failures", "_scan_ragflow"):
+        ret = drafts_by.get(fn, [])
+
+        async def _fixed(session, _ret=list(ret)):
+            return list(_ret)
+
+        monkeypatch.setattr(scan_source, fn, _fixed)
+
+
+async def _closure_effects(db_session, task) -> list[Any]:
+    from app.platform.superagent.models import AgentEffect
+
+    return [
+        e for e in (
+            await db_session.execute(
+                select(AgentEffect).where(AgentEffect.dedupe_key == f"r3:closure:{task.id}")
+            )
+        ).scalars().all()
+    ]
+
+
+async def test_verify_misc_aicall_positive_recovers(db_session, exec_env) -> None:
+    """ai_call 正向证据快路：scenario 出现晚于最后 failed 的 success → 收口。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.ai_audit.models import AICallAudit
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(db_session, src, signal="ai_call_failed", minutes_ago=90)
+    scenario = task.stage_facts["r3"]["scenario"]
+    now = datetime.now(UTC)
+    db_session.add(AICallAudit(
+        scenario=scenario, model="test", input_truncated=False, output_truncated=False,
+        status="failed", error="429", created_at=now - timedelta(minutes=80),
+    ))
+    db_session.add(AICallAudit(
+        scenario=scenario, model="test", input_truncated=False, output_truncated=False,
+        status="success", created_at=now - timedelta(minutes=10),
+    ))
+    await db_session.flush()
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert await _closure_effects(db_session, task), "正向证据应入队收口卡"
+    assert task.stage_facts["r3"]["stage"] == "verify_wait"
+    await db_session.rollback()
+
+
+async def test_verify_misc_quiet_gate_blocks_early(db_session, exec_env) -> None:
+    """push 安静门：last_signal_at 5min 前（未满 60min）→ 不收口继续等。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(db_session, src, signal="push_failed", minutes_ago=5)
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert not await _closure_effects(db_session, task), "安静窗口未满不得收口"
+    assert task.stage_facts["r3"]["stage"] == "verify_wait"
+    await db_session.rollback()
+
+
+async def test_verify_misc_quiet_elapsed_closes(db_session, exec_env) -> None:
+    """push 安静门：61min 前最后故障 + 现势不 firing → 收口。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(db_session, src, signal="push_failed", minutes_ago=61)
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert await _closure_effects(db_session, task), "安静窗口已满且现势全清应收口"
+    await db_session.rollback()
+
+
+async def test_verify_misc_event_quiet_closes(db_session, exec_env) -> None:
+    """event 无恢复证据：纯安静门（61min）→ 收口（D10 已知限制口径）。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(db_session, src, signal="feishu_event_failed", minutes_ago=61)
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert await _closure_effects(db_session, task)
+    await db_session.rollback()
+
+
+async def test_verify_parked_gated_by_other_seen_signals(db_session, exec_env) -> None:
+    """混合日常单：parked 自身已清但同单 push 未满安静 → 不收口（旧路径会收口）。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(
+        db_session, src, signal="effects_parked", minutes_ago=5,
+        signals_seen=["effects_parked", "push_failed"],
+        extra_r3={"component": f"r3t_kind_{__import__('uuid').uuid4().hex[:6]}"},
+    )
+    _stub_misc_scanners(exec_env["monkeypatch"])  # push 现势不 firing；仅安静门未满
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert not await _closure_effects(db_session, task), "同单其他已见信号未清不得收口"
+    assert task.stage_facts["r3"]["stage"] == "verify_wait"
+    await db_session.rollback()
+
+
+async def test_diagnose_accumulates_signals_seen(db_session, exec_env) -> None:
+    """同日多信号日常单：新信号输入重诊断 → signals_seen 累积（全清判定依据）。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(db_session, src, signal="ai_call_failed", minutes_ago=30)
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "push_failed", "component": "outbox",
+                                      "at": __import__("datetime").datetime.now(
+                                          __import__("datetime").UTC).isoformat()})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    seen = task.stage_facts["r3"].get("signals_seen") or []
+    assert "ai_call_failed" in seen and "push_failed" in seen
+    assert task.stage_facts["r3"]["signal"] == "push_failed"  # 最新信号
+    await db_session.rollback()
+
+
+async def test_verify_batch_gated_by_four_type_items(db_session, exec_env) -> None:
+    """聚合单含四类型子项：子项未清（安静门未满）→ 不收口；全清 → 收口。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    items = [{"signal": "push_failed", "component": "outbox"},
+             {"signal": "feishu_event_failed", "handler": "r3t_h"}]
+    task, _ = await _make_misc_ticket(
+        db_session, src, signal="ops_batch", minutes_ago=5,
+        signals_seen=["ops_batch", "push_failed", "feishu_event_failed"],
+        extra_r3={"evidence": {"items": items}},
+    )
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert not await _closure_effects(db_session, task), "四类型子项未清不得收口"
+
+    # 同单推进时钟到安静窗口外，再触发一轮核对 → 收口
+    from datetime import UTC, datetime, timedelta
+
+    task.stage_facts["r3"]["last_signal_at"] = (
+        datetime.now(UTC) - timedelta(minutes=61)
+    ).isoformat()
+    await db_session.flush()
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert await _closure_effects(db_session, task)
+    await db_session.rollback()
+
+
+async def test_verify_misc_firing_blocks_despite_quiet(db_session, exec_env) -> None:
+    """现势复测半门（审查 Spec 补）：安静已满但扫描器仍产同信号 draft → 不收口。"""
+    from app.platform.superagent.executors import run_task_once
+    from app.platform.superagent.sources import TriggerDraft
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(db_session, src, signal="push_failed", minutes_ago=61)
+    _stub_misc_scanners(exec_env["monkeypatch"], drafts_by={
+        "_scan_push_failures": [TriggerDraft(
+            external_id="ops:push:outbox:2030-01-01:failed",
+            thread_key="ops:opsmisc:2030-01-01",
+            actor={"id": "outbox", "type": "push_channel"},
+            payload={"signal": "push_failed", "component": "outbox",
+                     "channel": {"kind": "ops_push", "component": "outbox"}},
+        )],
+    })
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert not await _closure_effects(db_session, task), "现势仍 firing 不得收口"
+    assert "push_failed" in (task.stage_facts["r3"].get("recovery_pending") or [])
+    await db_session.rollback()
+
+
+async def test_recovery_fallback_no_signals_seen(db_session, exec_env) -> None:
+    """老工单收编：无 signals_seen → 回退 [r3.signal] 判定（T2 验收5 补）。"""
+    from app.platform.superagent.executors import run_task_once
+
+    src = exec_env["source"]
+    task, _ = await _make_misc_ticket(
+        db_session, src, signal="feishu_event_failed", minutes_ago=61,
+        signals_seen=["__drop__"],  # 占位：构造后删键模拟老工单
+    )
+    r3 = dict(task.stage_facts["r3"])
+    r3.pop("signals_seen", None)
+    task.stage_facts = {"r3": r3}
+    await db_session.flush()
+    _stub_misc_scanners(exec_env["monkeypatch"])
+    await _deliver(db_session, task, {"signal": "ops_recovered", "task_id": str(task.id)})
+
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    assert await _closure_effects(db_session, task), "回退口径应按 [signal] 判定并收口"
+    await db_session.rollback()

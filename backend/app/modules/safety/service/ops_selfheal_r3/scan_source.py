@@ -610,6 +610,64 @@ async def _scan_ragflow(session: Any) -> list[TriggerDraft]:
     )]
 
 
+async def _scan_recoveries(session: Any) -> list[TriggerDraft]:
+    """恢复扫描（三期 T3）：open 工单已见可恢复信号全清 → ops:recover 直投工单线程。
+
+    - 判定核心=recovery.ticket_all_clear（与 executor verify 分支同源，实时查
+      DB 勿引进程态）；thread=工单订阅线程（对齐 _scan_dependencies 回注范式，
+      绕开 opsmisc 日线程跨日错位）；
+    - external_id=ops:recover:<task_id>:<ts>（同日多次抖动各投各的，thread 聚
+      同单）；routing 类不占风暴配额、不聚合；
+    - 只扫 open 工单（closed 单不复活）；job/rag/dep 类信号不在恢复集
+      （各自既有恢复通道）。
+    """
+    from app.platform.superagent.models import AgentTask, AgentTaskSubscription
+    from app.modules.safety.service.ops_selfheal_r3 import recovery
+
+    tasks = (
+        await session.execute(
+            select(AgentTask).where(
+                AgentTask.status == "open", AgentTask.executor == "r3_ops_heal",
+            )
+        )
+    ).scalars().all()
+    drafts: list[TriggerDraft] = []
+    for task in tasks:
+        r3 = signals.r3_facts(task.stage_facts)
+        if not (set(recovery.signals_of(r3)) & recovery.RECOVERABLE_SIGNALS):
+            continue
+        thread = (
+            await session.execute(
+                select(AgentTaskSubscription.thread_key)
+                .where(AgentTaskSubscription.task_id == task.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not thread:
+            continue
+        try:
+            all_clear, pending = await recovery.ticket_all_clear(session, r3)
+        except Exception:  # noqa: BLE001 — 单工单判定异常不拖垮整轮（该单不收口）
+            logger.exception("R3 恢复判定异常（跳过该单）: task=%s", task.id)
+            continue
+        if not all_clear:
+            continue
+        now_iso = datetime.now(_TZ).isoformat()
+        drafts.append(TriggerDraft(
+            external_id=signals.ops_recover_eid(str(task.id), now_iso[:19]),
+            thread_key=thread,
+            actor={"id": str(task.id), "type": "r3_recovery"},
+            payload={
+                "signal": signals.SIGNAL_OPS_RECOVERED,
+                "task_id": str(task.id),
+                "signals": recovery.signals_of(r3),
+                "recovered_at": now_iso,
+                "channel": {"kind": "ops_recover", "task_id": str(task.id)},
+            },
+        ))
+    return drafts
+
+
 class OpsScanSource(Source):
     """R3 运维信号扫描源（safety 侧定义，SourceRegistry 注册制挂入底座）。
 
@@ -669,6 +727,7 @@ class OpsScanSource(Source):
         failure_drafts.extend(await _scan_push_failures(session))
         failure_drafts.extend(await _scan_ragflow(session))
         routing.extend(await _scan_dependencies(session, dep_state))
+        routing.extend(await _scan_recoveries(session))
 
         # ── 防风暴：故障类 >5 → 一条聚合 trigger（payload 带清单）──
         if len(failure_drafts) > SCAN_TRIGGER_CAP:

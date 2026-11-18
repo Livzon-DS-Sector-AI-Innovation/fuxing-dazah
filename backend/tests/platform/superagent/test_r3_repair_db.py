@@ -18,58 +18,15 @@ _SCAN_SOURCE = "safety.ops.selfheal"
 
 @pytest_asyncio.fixture(autouse=True)
 async def _purge_r3_rows():
-    yield
-    from app.platform.superagent.models import (
-        AgentEffect,
-        AgentInput,
-        AgentSource,
-        AgentTask,
-        AgentTaskSubscription,
-        AgentTrigger,
+    """R3 行清理（快照差集法，R3 三期 T1）——旧全删 purge 会误删真机工单/源行。"""
+    from tests.platform.superagent._r3_snapshot_purge import (
+        purge_new_r3_rows,
+        snapshot_r3_rows,
     )
-    from tests.conftest import _test_session_factory
 
-    async with _test_session_factory() as s:
-        task_ids = [
-            str(t.id)
-            for t in (
-                await s.execute(
-                    select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
-                )
-            ).scalars().all()
-        ]
-        if task_ids:
-            await s.execute(
-                AgentInput.__table__.delete().where(AgentInput.task_id.in_(task_ids))
-            )
-            await s.execute(
-                AgentTaskSubscription.__table__.delete().where(
-                    AgentTaskSubscription.task_id.in_(task_ids)
-                )
-            )
-            await s.execute(
-                AgentTask.__table__.delete().where(AgentTask.id.in_(task_ids))
-            )
-        src = (
-            await s.execute(
-                select(AgentSource).where(AgentSource.name == _SCAN_SOURCE)
-            )
-        ).scalar_one_or_none()
-        if src is not None:
-            await s.execute(
-                AgentTrigger.__table__.delete().where(AgentTrigger.source_id == src.id)
-            )
-            await s.execute(
-                AgentSource.__table__.delete().where(AgentSource.id == src.id)
-            )
-        await s.execute(
-            AgentEffect.__table__.delete().where(
-                AgentEffect.dedupe_key.like("r3:%")
-                | AgentEffect.dedupe_key.like("r3hist-%")
-                | AgentEffect.kind.in_(("r3_repair", "r3_closure_card"))
-            )
-        )
-        await s.commit()
+    snap = await snapshot_r3_rows()
+    yield
+    await purge_new_r3_rows(snap)
 
 
 class _Ctx:
@@ -91,13 +48,13 @@ async def repair_env(db_session, monkeypatch):
     from app.platform.superagent.models import AgentSource
 
     register_superagent_bridge()
-    src = AgentSource(
-        kind="ops_scan", name=_SCAN_SOURCE, enabled=True,
+    from tests.platform.superagent._r3_snapshot_purge import ensure_r3_source
+
+    src = await ensure_r3_source(
+        db_session, name=_SCAN_SOURCE, kind="ops_scan",
         config={"schedule": {"strategy": "interval", "interval_seconds": 300,
                               "timezone": "Asia/Shanghai"}, "evaluate": True},
     )
-    db_session.add(src)
-    await db_session.flush()
     monkeypatch.setattr(
         "app.core.database.async_session_factory", lambda: _Ctx(db_session),
     )
@@ -115,15 +72,21 @@ async def _make_diagnosed_job_ticket(
     db_session,
     source,
     *,
-    job_name: str = "作业票审核",
+    job_name: str | None = None,
     fired_date: str | None = None,
     rc: str = "upstream_outage",
     healthy: bool = False,
     missed_days: list[str] | None = None,
     endpoints: list[str] | None = None,
 ) -> Any:
-    """已诊断工单（stage_facts 直填，跳过诊断段）+ 信号/漏审 trigger + job 行。"""
+    """已诊断工单（stage_facts 直填，跳过诊断段）+ 信号/漏审 trigger + job 行。
+
+    job_name 缺省唯一化：开闸后真机扫描对「作业票审核」真实 failed 日持续产
+    trigger（eid 唯一索引），固定名+真实近日必撞——测试自有语义不依赖真名。
+    """
     import uuid as uuid_mod
+
+    job_name = job_name or f"r3t作业票{uuid_mod.uuid4().hex[:6]}"
 
     from app.modules.safety.models.msds import SchedulerJobRun
     from app.platform.superagent.models import AgentTask, AgentTrigger
@@ -306,6 +269,12 @@ async def test_sample4_outage_backfill_closure_chain(
     task = await _make_diagnosed_job_ticket(
         db_session, src, fired_date=missed[0], healthy=False, missed_days=missed,
     )
+    # 唯一名注册测试 adapter（真名「作业票审核」eid 已被真机 trigger 占用）
+    from app.modules.safety.service.ops_selfheal_r3 import backfill as _bf
+
+    monkeypatch.setitem(
+        _bf.BACKFILL_ADAPTERS, task.stage_facts["r3"]["job_name"], "workticket",
+    )
     _stub_review_service(monkeypatch)
 
     # ① dep_recovered 回注 → 漏审日补跑入队（auto+白名单）
@@ -350,16 +319,17 @@ async def test_sample4_outage_backfill_closure_chain(
     # ③ 平台恢复 → job 行转健康 + recovered trigger 回注 → 收口卡入队
     from app.modules.safety.models.msds import SchedulerJobRun
 
+    this_job = task.stage_facts["r3"]["job_name"]
     row = (
         await db_session.execute(
-            select(SchedulerJobRun).where(SchedulerJobRun.job_name == "作业票审核")
+            select(SchedulerJobRun).where(SchedulerJobRun.job_name == this_job)
         )
     ).scalar_one()
     row.status = "success"
     row.attempt_count = 0
     await db_session.flush()
     await _add_input(db_session, task, {
-        "signal": sg.SIGNAL_JOB_RECOVERED, "job_name": "作业票审核",
+        "signal": sg.SIGNAL_JOB_RECOVERED, "job_name": this_job,
         "fired_date": missed[0],
     })
     assert await run_task_once(db_session, task.id) == "ran"
@@ -367,10 +337,13 @@ async def test_sample4_outage_backfill_closure_chain(
     assert task.stage_facts["r3"]["stage"] == "verify_wait"
     closures = (
         await db_session.execute(
-            select(AgentEffect).where(AgentEffect.kind == "r3_closure_card")
+            select(AgentEffect).where(
+                AgentEffect.kind == "r3_closure_card",
+                AgentEffect.dedupe_key == f"r3:closure:{task.id}",
+            )
         )
     ).scalars().all()
-    assert len(closures) == 1
+    assert len(closures) == 1  # 按 task 圈定（竞态孤儿 closure 常驻存量免疫）
 
     # ④ 收口卡发送成功 → 关单（双条件②送达才 closed）
     from app.core.config import get_settings
@@ -420,7 +393,10 @@ async def test_closure_card_failure_keeps_ticket_open(
     await db_session.flush()
     closure = (
         await db_session.execute(
-            select(AgentEffect).where(AgentEffect.kind == "r3_closure_card")
+            select(AgentEffect).where(
+                AgentEffect.kind == "r3_closure_card",
+                AgentEffect.dedupe_key == f"r3:closure:{task.id}",
+            )
         )
     ).scalar_one()
 
@@ -465,11 +441,11 @@ async def test_observe_mode_backfill_needs_human(db_session, monkeypatch) -> Non
     from app.platform.superagent.models import AgentEffect, AgentSource
 
     register_superagent_bridge()
-    src = AgentSource(
-        kind="ops_scan", name=_SCAN_SOURCE, enabled=True, config={"evaluate": True},
+    from tests.platform.superagent._r3_snapshot_purge import ensure_r3_source
+
+    src = await ensure_r3_source(
+        db_session, name=_SCAN_SOURCE, kind="ops_scan", config={"evaluate": True},
     )
-    db_session.add(src)
-    await db_session.flush()
     monkeypatch.setattr(
         "app.core.database.async_session_factory", lambda: _Ctx(db_session),
     )
@@ -481,6 +457,11 @@ async def test_observe_mode_backfill_needs_human(db_session, monkeypatch) -> Non
 
     missed = [(date.today() - timedelta(days=1)).isoformat()]
     task = await _make_diagnosed_job_ticket(db_session, src, healthy=False, missed_days=missed)
+    from app.modules.safety.service.ops_selfheal_r3 import backfill as _bf
+
+    monkeypatch.setitem(
+        _bf.BACKFILL_ADAPTERS, task.stage_facts["r3"]["job_name"], "workticket",
+    )
     await _add_input(db_session, task, {
         "signal": sg.SIGNAL_DEP_RECOVERED, "task_id": str(task.id), "endpoint": "e",
     })

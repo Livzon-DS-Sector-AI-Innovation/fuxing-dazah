@@ -345,3 +345,66 @@ async def extend_window(
         "old_window": result["old_window"],
         "new_window": result["new_window"],
     })
+
+
+@ops_selfheal_router.get(
+    "/ops-selfheal/stats", summary="R3 自愈统计面（开出/收口/滞留/信号分布/平均存活）",
+)
+async def ops_selfheal_stats(
+    db: AsyncSession = Depends(get_db),
+    *,
+    _user: RequireUser,
+) -> JSONResponse:
+    """观察期统计聚合（三期 T5；读口径与列表端点一致=RequireUser，写操作才 Admin）。
+
+    - open/closed 总量：closed = status ended ∧ outcome closed（与列表 stage 同源）；
+    - 近 7 日开出/收口：北京时间当下回看 7×24h；
+    - 滞留>24h：open 且 created_at 早于 24h 前；
+    - 信号分布：stage_facts.r3.signals_seen 展平（多信号日常单计到每个已见信号，
+      无 signals_seen 回退 [r3.signal]——老工单收编口径，与恢复判定同源）；
+    - 平均存活分钟：已收口单 ended_at−created_at 均值（无收口样本=0）。
+    """
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from app.modules.safety.service.ops_selfheal_r3 import recovery
+
+    #: 统计窗口常量（观察期口径：滚动 7×24h；滞留分档 24h）
+    _WINDOW_DAYS, _STALE_HOURS = 7, 24
+
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime.now(tz)
+    day7 = now - timedelta(days=_WINDOW_DAYS)
+    rows = (
+        await db.execute(select(AgentTask).where(AgentTask.executor == "r3_ops_heal"))
+    ).scalars().all()
+
+    open_total = closed_total = opened_7d = closed_7d = stale = 0
+    lifetimes: list[float] = []
+    by_signal: dict[str, int] = {}
+    for t in rows:
+        is_closed = t.status == "ended" and t.outcome == "closed"
+        if t.created_at and t.created_at >= day7:
+            opened_7d += 1
+        if is_closed:
+            closed_total += 1
+            if t.ended_at and t.ended_at >= day7:
+                closed_7d += 1
+            if t.ended_at and t.created_at:
+                lifetimes.append((t.ended_at - t.created_at).total_seconds() / 60)
+        else:
+            open_total += 1
+            if t.created_at and t.created_at < now - timedelta(hours=_STALE_HOURS):
+                stale += 1
+        for sig in recovery.signals_of(signals.r3_facts(t.stage_facts)):
+            by_signal[sig] = by_signal.get(sig, 0) + 1
+
+    return success_response(data={
+        "open_total": open_total,
+        "closed_total": closed_total,
+        "opened_7d": opened_7d,
+        "closed_7d": closed_7d,
+        "stale_open_gt_24h": stale,
+        "by_signal": by_signal,
+        "avg_lifetime_minutes": round(sum(lifetimes) / len(lifetimes), 1) if lifetimes else 0,
+    })

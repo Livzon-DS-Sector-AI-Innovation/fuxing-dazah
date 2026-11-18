@@ -78,3 +78,14 @@ export interface ExtendWindowResult {
   old_window: string
   new_window: string
 }
+
+/** 观测统计面（三期 T5；GET /ops-selfheal/stats） */
+export interface OpsSelfhealStats {
+  open_total: number
+  closed_total: number
+  opened_7d: number
+  closed_7d: number
+  stale_open_gt_24h: number
+  by_signal: Record<string, number>
+  avg_lifetime_minutes: number
+}

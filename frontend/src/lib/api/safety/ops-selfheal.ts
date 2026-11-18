@@ -3,6 +3,7 @@
 import { apiGet, apiPost, API_BASE_URL } from '@/lib/http-client'
 import type {
   ExtendWindowResult,
+  OpsSelfhealStats,
   OpsSelfhealTicketList,
   OpsSelfhealTimeline,
 } from '@/types/safety/ops-selfheal'
@@ -46,4 +47,9 @@ export async function extendOpsSelfhealWindow(
   args?: { until_hour?: number; until_minute?: number },
 ): Promise<ExtendWindowResult> {
   return apiPost(`${BASE}/tickets/${ticketId}/extend-window`, args ? { args } : undefined)
+}
+
+/** 观测统计面（观察期拍板量化依据） */
+export async function fetchOpsSelfhealStats(): Promise<OpsSelfhealStats> {
+  return apiGet(`${BASE}/stats`)
 }

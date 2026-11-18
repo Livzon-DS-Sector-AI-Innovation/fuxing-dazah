@@ -33,6 +33,33 @@ from app.platform.superagent.sources import register_builtin_sources
 logger = logging.getLogger(__name__)
 
 
+#: 引擎测试隔离开关锁键（"R3TE"）：测试进程持 advisory lock → 引擎各循环整轮空转。
+#: 动因（2026-11-17 实证）：共享 dev 库下测试中途 commit 的任务/输入会被活引擎
+#: TaskRunner 拾走双跑——同 dedupe 双行假红 + 真烧 LLM + 测试噪音卡真发管理员。
+_ENGINE_PAUSE_LOCK_KEY = 977333701  # 任意稳定整数（int32 内），勿改
+
+
+async def engine_test_paused(session: Any) -> bool:
+    """测试会话持锁 → True（引擎本轮空转）。
+
+    try_lock 成功=无人持锁，立即释放（引擎自身永不留持锁态）；失败=测试进程
+    持有。advisory lock 随连接断开自动释放（测试崩溃不死锁）；平台零业务依赖。
+    """
+    from sqlalchemy import text
+
+    got = (
+        await session.execute(
+            text("SELECT pg_try_advisory_lock(:k)"), {"k": _ENGINE_PAUSE_LOCK_KEY}
+        )
+    ).scalar_one()
+    if got:
+        await session.execute(
+            text("SELECT pg_advisory_unlock(:k)"), {"k": _ENGINE_PAUSE_LOCK_KEY}
+        )
+        return False
+    return True
+
+
 class SourcePollGenerator(TaskGenerator):
     """事件层轮询生成器：每 tick 对全部启用源各跑一轮 poll→落库→推读位。"""
 
@@ -48,6 +75,8 @@ class SourcePollGenerator(TaskGenerator):
         )
 
     async def find_due(self, session: Any) -> list[Any]:
+        if await engine_test_paused(session):
+            return []
         rows = (
             await session.execute(
                 select(AgentSource.id).where(AgentSource.enabled.is_(True))
@@ -83,6 +112,8 @@ class EffectsPoller(TaskGenerator):
         )
 
     async def find_due(self, session: Any) -> list[Any]:
+        if await engine_test_paused(session):
+            return []
         return await find_due_effect_ids(session, limit=20)
 
     async def execute_one(self, session: Any, effect_id: Any) -> None:
@@ -116,6 +147,8 @@ class OutboxPoller(TaskGenerator):
         )
 
     async def find_due(self, session: Any) -> list[Any]:
+        if await engine_test_paused(session):
+            return []
         return await find_active_conversations(session, limit=20)
 
     async def execute_one(self, session: Any, conversation: str) -> None:
@@ -148,6 +181,8 @@ class TaskRunner(TaskGenerator):
         )
 
     async def find_due(self, session: Any) -> list[Any]:
+        if await engine_test_paused(session):
+            return []
         from app.platform.superagent.executors import find_runnable_task_ids
 
         return await find_runnable_task_ids(session, limit=10)
@@ -183,6 +218,8 @@ class WatchdogGenerator(TaskGenerator):
         )
 
     async def find_due(self, session: Any) -> list[Any]:
+        if await engine_test_paused(session):
+            return []
         # 巡检一轮一件工作；由 execute_one 自查节流（interval 已由调度控制）
         return [1]
 

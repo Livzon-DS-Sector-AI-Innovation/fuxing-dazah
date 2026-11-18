@@ -465,3 +465,174 @@ async def test_dm_admin_with_injected_sender(db_session, monkeypatch) -> None:
         assert got == ["ou_a", "ou_b"]
     finally:
         effects_mod.set_dm_sender(None)
+
+
+# ═══════════════════════════════════════════════════════════════
+# dm_admin 收件人 env 优先 + 空时 DB 兜底（R3 三期 T4）
+# ═══════════════════════════════════════════════════════════════
+
+
+class _SessionCtx:
+    """执行器/handler 自开 session 桩（未提交行可见）。"""
+
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def _make_db_admin(db_session, open_id: str) -> None:
+    """测试自建 admin 用户（复用库内既有 permission:role:manage 权限行防唯一冲突）。"""
+    import uuid as uuid_mod
+
+    from app.platform.identity.models import User
+    from app.platform.permission.models import (
+        Permission,
+        Role,
+        RolePermission,
+        UserRole,
+    )
+    from sqlalchemy import select as sa_select
+
+    perm = (
+        await db_session.execute(
+            sa_select(Permission).where(Permission.code == "permission:role:manage")
+        )
+    ).scalar_one()
+    user = User(
+        id=uuid_mod.uuid4(), name=f"r3t管理员{open_id[-4:]}",
+        employee_no=f"R3T{uuid_mod.uuid4().hex[:8]}", feishu_open_id=open_id,
+    )
+    role = Role(
+        id=uuid_mod.uuid4(), code=f"r3t_admin_{uuid_mod.uuid4().hex[:6]}",
+        name="R3 测试管理员",
+    )
+    db_session.add_all([
+        user, role,
+        UserRole(user_id=user.id, role_id=role.id),
+        RolePermission(role_id=role.id, permission_id=perm.id),
+    ])
+    await db_session.flush()
+
+
+async def test_dm_admin_env_wins_over_db_admins(db_session, monkeypatch) -> None:
+    """env 非空 → 只发 env 收件人（DB 管理员不扩面，watchdog 通道零行为变更）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "SUPERAGENT_ADMIN_OPEN_IDS", "ou_env_only")
+    await _make_db_admin(db_session, "ou_dbadmin_should_not_receive")
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _SessionCtx(db_session),
+    )
+    got: list[str] = []
+
+    async def fake_send(open_id: str, text: str) -> bool:
+        got.append(open_id)
+        return True
+
+    effects_mod.set_dm_sender(fake_send)
+    try:
+        effect_id = await enqueue_effect(
+            db_session, "dm_admin", {"text": "env wins"}, dedupe_key="dm-env-wins",
+        )
+        assert await execute_claimed_effect(db_session, effect_id) == "done"
+        assert got == ["ou_env_only"]
+    finally:
+        effects_mod.set_dm_sender(None)
+    await db_session.rollback()
+
+
+async def test_dm_admin_empty_env_falls_back_to_db_admins(
+    db_session, monkeypatch,
+) -> None:
+    """env 空 → DB 兜底发 permission:role:manage 用户（测试自建 open_id 必达）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "SUPERAGENT_ADMIN_OPEN_IDS", "")
+    await _make_db_admin(db_session, "ou_db_fallback_target")
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _SessionCtx(db_session),
+    )
+    got: list[str] = []
+
+    async def fake_send(open_id: str, text: str) -> bool:
+        got.append(open_id)
+        return True
+
+    effects_mod.set_dm_sender(fake_send)
+    try:
+        effect_id = await enqueue_effect(
+            db_session, "dm_admin", {"text": "db fallback"}, dedupe_key="dm-db-fallback",
+        )
+        assert await execute_claimed_effect(db_session, effect_id) == "done"
+        assert "ou_db_fallback_target" in got  # dev 库真管理员（许康福）同批属正常
+    finally:
+        effects_mod.set_dm_sender(None)
+    await db_session.rollback()
+
+
+async def test_dm_admin_fallback_query_failure_stays_silent(
+    db_session, monkeypatch,
+) -> None:
+    """env 空 + DB 查询异常 → 维持「仅留痕」不炸发送链（fail-open）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "SUPERAGENT_ADMIN_OPEN_IDS", "")
+
+    async def _boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("app.platform.superagent.effects._db_admin_open_ids", _boom)
+    got: list[str] = []
+
+    async def fake_send(open_id: str, text: str) -> bool:
+        got.append(open_id)
+        return True
+
+    effects_mod.set_dm_sender(fake_send)
+    try:
+        effect_id = await enqueue_effect(
+            db_session, "dm_admin", {"text": "silent"}, dedupe_key="dm-silent",
+        )
+        assert await execute_claimed_effect(db_session, effect_id) == "done"
+        assert got == []
+    finally:
+        effects_mod.set_dm_sender(None)
+    await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 引擎测试隔离开关（R3 三期验收收口）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_engine_pause_switch(db_session) -> None:
+    """持锁期间：engine_test_paused=True 且 SourcePollGenerator.find_due 空转。
+
+    本测自身就在 autouse 持锁夹具内（conftest._pause_live_engine 持锁于独立
+    连接）——跨会话检测即被验证：本会话 db_session 并非持锁方仍见 True。
+    """
+    from app.platform.superagent.models import AgentSource
+    from app.platform.superagent.runtime import (
+        SourcePollGenerator,
+        engine_test_paused,
+    )
+
+    assert await engine_test_paused(db_session) is True
+
+    # 有启用源也不产出（整轮空转——活引擎不再拾走测试中途 commit 的行）
+    import uuid as uuid_mod
+
+    db_session.add(AgentSource(
+        kind="ops_scan",
+        name=f"r3t.pause.{uuid_mod.uuid4().hex[:8]}",  # 合成名（真源行常驻勿撞唯一）
+        enabled=True, config={},
+    ))
+    await db_session.flush()
+    gen = SourcePollGenerator()
+    assert await gen.find_due(db_session) == []  # 持锁空转：有启用源也不产出
+    await db_session.rollback()

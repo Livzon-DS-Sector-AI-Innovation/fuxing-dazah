@@ -13,6 +13,7 @@ import {
   message,
   Select,
   Space,
+  Statistic,
   Table,
   Tag,
   Tooltip,
@@ -22,11 +23,13 @@ import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   extendOpsSelfhealWindow,
+  fetchOpsSelfhealStats,
   fetchOpsSelfhealTickets,
   fetchOpsSelfhealTimeline,
   retryOpsSelfhealTicket,
 } from '@/lib/api/safety/ops-selfheal'
 import type {
+  OpsSelfhealStats,
   OpsSelfhealTicket,
   OpsSelfhealTimelineEvent,
 } from '@/types/safety/ops-selfheal'
@@ -130,6 +133,14 @@ export default function OpsSelfhealPanel() {
       }),
     refetchInterval: 30_000, // 30s 轻轮询（运维观测页）
   })
+
+  // 统计面（三期 T5）：观察期拍板 auto 的量化依据，与列表同频刷新
+  const statsQuery = useQuery({
+    queryKey: ['ops-selfheal-stats'],
+    queryFn: fetchOpsSelfhealStats,
+    refetchInterval: 30_000,
+  })
+  const stats: OpsSelfhealStats | undefined = statsQuery.data
 
   const timelineQuery = useQuery({
     queryKey: ['ops-selfheal-timeline', detailId],
@@ -281,6 +292,40 @@ export default function OpsSelfhealPanel() {
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
+      <SectionCard title="观察期统计">
+        <Space wrap size={32} style={{ width: '100%' }}>
+          <Statistic title="当前 open" value={stats?.open_total ?? 0} />
+          <Statistic title="已收口" value={stats?.closed_total ?? 0} />
+          <Statistic title="7日开出" value={stats?.opened_7d ?? 0} />
+          <Statistic title="7日收口" value={stats?.closed_7d ?? 0} />
+          <Statistic
+            title="滞留 >24h"
+            value={stats?.stale_open_gt_24h ?? 0}
+            valueStyle={(stats?.stale_open_gt_24h ?? 0) > 0 ? { color: '#cf1322' } : undefined}
+          />
+          <Statistic
+            title="平均存活(分)"
+            value={stats?.avg_lifetime_minutes ?? 0}
+          />
+        </Space>
+        <div style={{ marginTop: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>信号分布：</Text>
+          {stats && Object.entries(stats.by_signal).length > 0 ? (
+            <Space wrap style={{ marginTop: 4 }}>
+              {Object.entries(stats.by_signal)
+                .sort((a, b) => b[1] - a[1])
+                .map(([sig, n]) => (
+                  <Tag key={sig}>
+                    {SIGNAL_LABELS[sig] ?? sig} × {n}
+                  </Tag>
+                ))}
+            </Space>
+          ) : (
+            <Text type="secondary" style={{ fontSize: 12 }}>暂无信号</Text>
+          )}
+        </div>
+      </SectionCard>
+
       <SectionCard
         title="自愈工单"
         action={

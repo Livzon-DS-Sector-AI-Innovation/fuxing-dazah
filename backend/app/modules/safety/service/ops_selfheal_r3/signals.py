@@ -23,11 +23,12 @@ SIGNAL_AICALL_FAILED = "ai_call_failed"     # ②期扩面：AI 调用连续失�
 SIGNAL_PUSH_FAILED = "push_failed"          # ②期扩面：推送失败（outbox dropped / dm_admin 连败）
 SIGNAL_RAGFLOW_FAILED = "ragflow_batch_fail"  # ②期扩面：RAG 引擎批量入库失败
 SIGNAL_EVENT_FAILED = "feishu_event_failed"   # ②期扩面：飞书事件处理重试耗尽（直投）
+SIGNAL_OPS_RECOVERED = "ops_recovered"        # ③期：恢复扫描判定工单全清（直投工单线程）
 
 #: 恢复类信号（驱动收口核对分支，不重复诊断）
 RECOVERY_SIGNALS = frozenset({
     SIGNAL_JOB_RECOVERED, SIGNAL_JOB_MISSED, SIGNAL_RAG_RECOVERED,
-    SIGNAL_DEP_RECOVERED,
+    SIGNAL_DEP_RECOVERED, SIGNAL_OPS_RECOVERED,
 })
 
 #: 新故障类信号（驱动诊断管线；防风暴 5 条上限适用）
@@ -94,6 +95,11 @@ def ragflow_eid(fired_date: str) -> str:
 def event_eid(handler_type: str, fired_date: str) -> str:
     """飞书事件失败：每 handler 每日一单。"""
     return f"ops:event:{handler_type}:{fired_date}:failed"
+
+
+def ops_recover_eid(task_id: str, ts: str) -> str:
+    """工单级恢复（三期）：同日多次抖动各投各的（ts 区分），thread 聚同单。"""
+    return f"ops:recover:{task_id}:{ts}"
 
 
 def opsmisc_thread(fired_date: str) -> str:

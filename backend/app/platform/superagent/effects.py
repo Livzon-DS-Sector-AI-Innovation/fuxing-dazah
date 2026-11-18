@@ -390,6 +390,44 @@ def set_dm_card_sender(fn: Callable[[str, dict[str, Any]], Awaitable[bool]]) -> 
     _DM_CARD_SENDER = fn
 
 
+async def _db_admin_open_ids() -> list[str]:
+    """DB 兜底收件人：permission:role:manage 用户的 feishu_open_id（直接角色链）。
+
+    R3 三期 T4：SUPERAGENT_ADMIN_OPEN_IDS 未配时防静默留痕。部门继承角色不
+    展开（管理员=直接授予，收件人面收窄）。只 import 平台层（identity/
+    permission），不碰业务模块——平台依赖方向红线。
+    """
+    from sqlalchemy import select
+
+    from app.core.database import async_session_factory
+    from app.platform.identity.models import User
+    from app.platform.permission.models import (
+        Permission,
+        Role,
+        RolePermission,
+        UserRole,
+    )
+
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(User.feishu_open_id).distinct()
+                .join(UserRole, UserRole.user_id == User.id)
+                .join(Role, Role.id == UserRole.role_id)
+                .join(RolePermission, RolePermission.role_id == Role.id)
+                .join(Permission, Permission.id == RolePermission.permission_id)
+                .where(
+                    Permission.code == "permission:role:manage",
+                    Permission.is_deleted == False,  # noqa: E712
+                    Role.is_deleted == False,  # noqa: E712
+                    User.feishu_open_id.isnot(None),
+                    User.feishu_open_id != "",
+                )
+            )
+        ).scalars().all()
+    return [str(x) for x in rows]
+
+
 async def _dm_admin_handler(payload: dict[str, Any]) -> None:
     from app.core.config import get_settings
 
@@ -400,7 +438,19 @@ async def _dm_admin_handler(payload: dict[str, Any]) -> None:
     ]
     text = (payload or {}).get("text") or ""
     if not recipients:
-        logger.warning("dm_admin 无收件人（SUPERAGENT_ADMIN_OPEN_IDS 空），告警仅留痕: %s",
+        # env 未配 → DB 兜底（T6 卡按钮鉴权同链 permission:role:manage，双口径合流）
+        try:
+            recipients = await _db_admin_open_ids()
+        except Exception:  # noqa: BLE001 — 兜底查询失败=仅留痕，绝不炸发送链
+            logger.exception("dm_admin DB 兜底收件人查询失败（回退仅留痕）")
+            recipients = []
+        if recipients:
+            logger.info(
+                "dm_admin env 未配，DB 兜底收件人 %d 人: %s…",
+                len(recipients), recipients[0][:10],
+            )
+    if not recipients:
+        logger.warning("dm_admin 无收件人（env 空 且 DB 无管理员），告警仅留痕: %s",
                        text[:120])
         return
     if _DM_SENDER is None:

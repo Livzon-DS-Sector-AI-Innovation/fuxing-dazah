@@ -20,89 +20,20 @@ _EVENT_SOURCE = "safety.ops.event_inject"
 
 @pytest_asyncio.fixture(autouse=True)
 async def _purge_r3_rows():
-    """R3 全链行清理（直投/inject helper 内 commit 会穿透回滚语义）。"""
-    yield
-    from app.platform.superagent.models import (
-        AgentDecision,
-        AgentEffect,
-        AgentInput,
-        AgentSource,
-        AgentTask,
-        AgentTaskSubscription,
-        AgentTrigger,
-    )
-    from tests.conftest import _test_session_factory
+    """R3 全链行清理（快照差集法，R3 三期 T1）。
 
-    async with _test_session_factory() as s:
-        task_ids = [
-            str(t.id)
-            for t in (
-                await s.execute(
-                    select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
-                )
-            ).scalars().all()
-        ]
-        if task_ids:
-            await s.execute(
-                AgentInput.__table__.delete().where(AgentInput.task_id.in_(task_ids))
-            )
-            await s.execute(
-                AgentTaskSubscription.__table__.delete().where(
-                    AgentTaskSubscription.task_id.in_(task_ids)
-                )
-            )
-            await s.execute(
-                AgentTask.__table__.delete().where(AgentTask.id.in_(task_ids))
-            )
-        for name in (_SCAN_SOURCE, _RAG_SOURCE):
-            src = (
-                await s.execute(
-                    select(AgentSource).where(AgentSource.name == name)
-                )
-            ).scalar_one_or_none()
-            if src is not None:
-                for t in (
-                    await s.execute(
-                        select(AgentTrigger).where(AgentTrigger.source_id == src.id)
-                    )
-                ).scalars().all():
-                    await s.execute(
-                        AgentDecision.__table__.delete().where(AgentDecision.trigger_id == t.id)
-                    )
-                    await s.execute(
-                        AgentInput.__table__.delete().where(AgentInput.trigger_id == t.id)
-                    )
-                    await s.delete(t)
-                await s.execute(
-                    AgentSource.__table__.delete().where(AgentSource.id == src.id)
-                )
-        # event_inject 载体行：dev 库可能有迁移播种的同名行——只清 trigger 不删源行
-        event_src = (
-            await s.execute(
-                select(AgentSource).where(AgentSource.name == _EVENT_SOURCE)
-            )
-        ).scalar_one_or_none()
-        if event_src is not None:
-            for t in (
-                await s.execute(
-                    select(AgentTrigger).where(AgentTrigger.source_id == event_src.id)
-                )
-            ).scalars().all():
-                await s.execute(
-                    AgentDecision.__table__.delete().where(AgentDecision.trigger_id == t.id)
-                )
-                await s.execute(
-                    AgentInput.__table__.delete().where(AgentInput.trigger_id == t.id)
-                )
-                await s.delete(t)
-        await s.execute(
-            AgentEffect.__table__.delete().where(
-                (AgentEffect.kind == "r3_repair")
-                | (AgentEffect.kind == "r3_closure_card")
-                | (AgentEffect.dedupe_key.like("r3:%"))
-            )
-        )
-        await s.commit()
+    直投/inject helper 内 commit 会穿透回滚语义——旧 purge 按名删源行/删全量
+    工单/LIKE 删全量 effect，开闸后跑测试即毁灭真机数据；现快照存量、
+    teardown 只删快照外新增（真行原样存活，详见 _r3_snapshot_purge.py）。
+    """
+    from tests.platform.superagent._r3_snapshot_purge import (
+        purge_new_r3_rows,
+        snapshot_r3_rows,
+    )
+
+    snap = await snapshot_r3_rows()
+    yield
+    await purge_new_r3_rows(snap)
 
 
 @pytest_asyncio.fixture
@@ -116,16 +47,25 @@ async def scan_env(db_session):
     from app.platform.superagent.models import AgentSource
 
     register_superagent_bridge()
-    src = AgentSource(
-        kind="ops_scan", name=_SCAN_SOURCE, enabled=True,
+    # upsert-复用真行（T1，helper 统一四处位点）——旧「每次 INSERT + teardown
+    # 按名删行」已把 dev 库两源行删成稳态缺失（迁移 ON CONFLICT DO NOTHING 不复种）。
+    from tests.platform.superagent._r3_snapshot_purge import ensure_r3_source
+
+    src = await ensure_r3_source(
+        db_session, name=_SCAN_SOURCE, kind="ops_scan",
         config={
             "schedule": {"strategy": "interval", "interval_seconds": 300,
                           "timezone": "Asia/Shanghai"},
             "evaluate": True,
         },
     )
-    db_session.add(src)
-    await db_session.flush()
+    # 测试起始清读位（开闸后真机扫描共享本行——job_state/last_tick 泄入会吞掉
+    # 测试本应新产的 failed/missed draft；teardown 由快照 purge 还原真机读位）
+    from app.platform.superagent.models import AgentSourceCursor
+
+    await db_session.execute(
+        AgentSourceCursor.__table__.delete().where(AgentSourceCursor.source_id == src.id)
+    )
     await ensure_guardian_r2_policy(session=db_session)
     await db_session.flush()
     yield {"source": src, "executor": R3_EXECUTOR}
@@ -371,6 +311,20 @@ async def test_scan_today_not_missed_before_window(db_session, scan_env, monkeyp
 
     tz = ZoneInfo("Asia/Shanghai")
     now = datetime.now(tz)
+    # 窗口钉 23:59：作业票审核 retry_until=12:00，正午后真实扫描已产 :missed——
+    # 本测只验「窗口未耗尽不发 missed」语义，须与日内时钟解耦（盘中时间炸弹）
+    from datetime import datetime as _dt, time as _dtime
+
+    monkeypatch.setattr(
+        scan_source, "job_window_end",
+        lambda job_name, day: _dt.combine(day, _dtime(23, 59), tzinfo=tz),
+    )
+    # 真机当日 :missed/:failed trigger 常驻（开闸后）——回滚安全地先清本测视野
+    from app.platform.superagent.models import AgentTrigger as _AT
+
+    await db_session.execute(
+        _AT.__table__.delete().where(_AT.external_id.like("ops:job:作业票审核:%"))
+    )
     # 作业票审核 行在开发库常驻（真实断连数据）——复用该行改当日态（回滚还原）
     job = (
         await db_session.execute(
@@ -691,13 +645,17 @@ async def test_scan_dep_recovered_roundtrip(db_session, scan_env, monkeypatch) -
     monkeypatch.setattr(scan_source, "probe_endpoint", _fake_probe)
 
     await _scan_once(db_session, monkeypatch)  # 不可达首见：记读位无 trigger
+    # 三处断言均圈定本测线程（开闸后真机 ops:dep 回注常驻，前缀全局断言会泄入）
     deps = [t for t in await _triggers_of(db_session) if ":recovered" in t.external_id
-            and t.external_id.startswith("ops:dep:")]
+            and t.thread_key == thread]
     assert deps == []
 
     state["reachable"] = True
     await _scan_once(db_session, monkeypatch)  # 翻转 → dep_recovered
-    deps = [t for t in await _triggers_of(db_session) if t.external_id.startswith("ops:dep:")]
+    deps = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith("ops:dep:") and t.thread_key == thread
+    ]
     assert len(deps) == 1
     t = deps[0]
     assert t.external_id == scan_source.signals.dep_recovered_eid(str(task.id), "192.168.5.7:9550")
@@ -705,7 +663,7 @@ async def test_scan_dep_recovered_roundtrip(db_session, scan_env, monkeypatch) -
     assert t.payload["signal"] == "dep_recovered"
 
     await _scan_once(db_session, monkeypatch)  # 持续可达：无翻转无新 trigger
-    deps2 = [t for t in await _triggers_of(db_session) if t.external_id.startswith("ops:dep:")]
+    deps2 = [t for t in await _triggers_of(db_session) if t.thread_key == thread]
     assert len(deps2) == 1
     await db_session.rollback()
 
@@ -742,6 +700,7 @@ async def test_event_inject_routes_to_policy(db_session, scan_env, monkeypatch) 
     from app.modules.safety.service.ops_selfheal_r3 import config, event_inject
 
     monkeypatch.setattr(config, "ops_enabled", lambda: True)
+    _pin_inject_day(monkeypatch, event_inject, "datetime")
 
     class _Ctx:
         def __init__(self, session):
@@ -794,15 +753,18 @@ async def test_rag_inject_routes_to_policy(db_session, scan_env, monkeypatch) ->
     """直投 → 研判（auto）→ 开单；同日重复投递 external_id 各异。"""
     from app.platform.superagent.models import AgentSource, AgentTask
 
-    rag_src = AgentSource(
-        kind="rag_direct", name=_RAG_SOURCE, enabled=False, config={"evaluate": True},
+    # 开闸后真源行常驻（唯一索引）——upsert 复用，勿裸 INSERT
+    from tests.platform.superagent._r3_snapshot_purge import ensure_r3_source
+
+    rag_src = await ensure_r3_source(
+        db_session, name=_RAG_SOURCE, kind="rag_direct",
+        config={"evaluate": True}, enabled=False,
     )
-    db_session.add(rag_src)
-    await db_session.flush()
 
     from app.modules.safety.service.ops_selfheal_r3 import config, rag_inject
 
     monkeypatch.setattr(config, "ops_enabled", lambda: True)
+    _pin_inject_day(monkeypatch, rag_inject, "datetime")
 
     class _Ctx:
         def __init__(self, session):
@@ -820,11 +782,14 @@ async def test_rag_inject_routes_to_policy(db_session, scan_env, monkeypatch) ->
 
     ok1 = await rag_inject.inject_rag_signal("degraded", detail="HTTP 429: 余额不足")
     assert ok1 is True
-    tasks = (
-        await db_session.execute(
-            select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
-        )
-    ).scalars().all()
+    tasks = [
+        t for t in (
+            await db_session.execute(
+                select(AgentTask).where(AgentTask.executor == "r3_ops_heal")
+            )
+        ).scalars().all()
+        if (t.mandate or {}).get("rule_id") == "r3_ops_rag_signal"
+    ]  # 按 rule 圈定（开闸后真机 r3_ops_failure 日常单常驻 dev 库）
     assert len(tasks) == 1  # auto → rag 信号开单
     assert tasks[0].mandate["rule_id"] == "r3_ops_rag_signal"
 
@@ -854,4 +819,261 @@ async def test_policy_composite_keeps_r1_r2_hw_r3(db_session, scan_env) -> None:
     assert any(x.startswith("guardian_") for x in rule_ids)  # R2
     assert "hardware_alert_urge" in rule_ids  # HW（会合点回归锚：五金库规则不丢）
     assert "r3_ops_failure" in rule_ids and "r3_ops_rag_signal" in rule_ids  # R3
+    await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# T1 purge 快照差集守卫（开闸硬前置：真机形态行绝不被测试清理误删）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_purge_snapshot_diff_protects_preexisting_rows() -> None:
+    """守卫：快照内存量行（真机形态）原样存活、快照外新增行清零。
+
+    全程独立会话 commit（不经 db_session 回滚），自建自清：
+    snap1 → 造「真机形态」行（r3_ops_* short_name 工单 + r3:diag effect）→
+    snap2 → 造「测试形态」行 → purge(snap2) 断言 → purge(snap1) 自清。
+    """
+    import uuid as uuid_mod
+
+    from app.platform.superagent.models import AgentEffect, AgentTask
+    from tests.conftest import _test_session_factory
+    from tests.platform.superagent._r3_snapshot_purge import (
+        purge_new_r3_rows,
+        snapshot_r3_rows,
+    )
+
+    guard_task = uuid_mod.uuid4()
+    test_task = uuid_mod.uuid4()
+    guard_eff = f"r3:diag:{guard_task}:2026-11-17T00:00:00"
+    test_eff = f"r3:repair:{test_task}:1"
+
+    async def _create(task_id: uuid.UUID, short_name: str, eff_key: str) -> None:
+        async with _test_session_factory() as s:
+            s.add(AgentTask(
+                id=task_id, short_name=short_name, title=f"守卫 {short_name}",
+                executor="r3_ops_heal",
+            ))
+            s.add(AgentEffect(
+                kind="dm_admin", dedupe_key=eff_key, payload={"text": "guard"},
+            ))
+            await s.commit()
+
+    async def _alive(task_id: uuid.UUID, eff_key: str) -> bool:
+        async with _test_session_factory() as s:
+            task_ok = await s.get(AgentTask, task_id) is not None
+            eff_ok = (
+                await s.execute(
+                    select(AgentEffect.id).where(AgentEffect.dedupe_key == eff_key)
+                )
+            ).scalar_one_or_none() is not None
+            return task_ok and eff_ok
+
+    snap1 = await snapshot_r3_rows()
+    await _create(guard_task, "r3_ops_failure:guard0001", guard_eff)  # 真机形态（开闸后真实 short_name 前缀）
+    snap2 = await snapshot_r3_rows()
+    await _create(test_task, "r3:testonly:newrow", test_eff)  # 测试形态（快照外新增）
+
+    await purge_new_r3_rows(snap2)
+    assert await _alive(guard_task, guard_eff), "真机形态行被误删（快照差集失效）"
+    assert not await _alive(test_task, test_eff), "快照外新增行未清理"
+
+    await purge_new_r3_rows(snap1)  # 自清（守卫自造行相对 snap1 也是新增）
+    assert not await _alive(guard_task, guard_eff)
+
+
+def _pin_inject_day(monkeypatch, module, *names: str) -> None:
+    """直投 helper 内部时钟钉 2030-01-01（开闸后真机今日 opsmisc/rag thread 有
+    open 日常单，Policy 同线程防重复开工会把测试信号 dedup 掉——合成日错开）。"""
+    from datetime import datetime as _real_dt
+
+    class _Pinned(_real_dt):
+        @classmethod
+        def now(cls, tz=None):
+            real = _real_dt.now(tz)
+            return _real_dt(2030, 1, 1, real.hour, real.minute, real.second,
+                            real.microsecond, tzinfo=getattr(real, "tzinfo", tz))
+
+    for name in names:
+        monkeypatch.setattr(module, name, _Pinned)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 恢复扫描 _scan_recoveries —— 工单全清→恢复 trigger 直投工单线程（三期 T3）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _make_recoverable_ticket(
+    db_session, source, *, signal: str = "ai_call_failed", minutes_ago: float = 90,
+    status: str = "open",
+):
+    """已诊断可恢复工单（ai_call 场景带正向证据行 / push 走安静门）。"""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime, timedelta
+
+    from app.platform.superagent.models import AgentTrigger
+    from app.platform.superagent.tasks import create_task
+
+    tag = uuid_mod.uuid4().hex[:8]
+    now = datetime.now(UTC)
+    scenario = f"r3t恢复场景{tag}"
+    thread = "ops:opsmisc:2030-01-01"
+    payload: dict[str, Any] = {"signal": signal, "at": now.isoformat()}
+    if signal == "ai_call_failed":
+        payload["scenario"] = scenario
+    elif signal == "push_failed":
+        payload["component"] = "outbox"
+    trigger = AgentTrigger(
+        id=uuid_mod.uuid4(), source_id=source.id,
+        external_id=f"ops:recv:{tag}:failed", thread_key=thread,
+        actor={"id": tag, "type": "test"}, payload=payload, received_at=now,
+    )
+    db_session.add(trigger)
+    await db_session.flush()
+    task = await create_task(
+        db_session, short_name=f"r3:recv:{tag}", title=f"R3 恢复测试 {signal}",
+        executor="r3_ops_heal", origin_trigger_id=trigger.id,
+        mandate={"rule_id": "r3_ops_failure", "strength": "inferred"},
+        origin_thread_key=thread,
+    )
+    r3: dict[str, Any] = {
+        "stage": "diagnosed", "signal": signal, "diag_at": now.isoformat(),
+        "executed": [], "planned": [], "repair_rounds": 0, "evidence": {},
+        "first_seen_at": (now - timedelta(minutes=minutes_ago)).isoformat(),
+        "last_signal_at": (now - timedelta(minutes=minutes_ago)).isoformat(),
+        "signals_seen": [signal],
+    }
+    if signal == "ai_call_failed":
+        r3["scenario"] = scenario
+        from app.modules.safety.ai_audit.models import AICallAudit
+
+        db_session.add(AICallAudit(
+            scenario=scenario, model="test", input_truncated=False,
+            output_truncated=False, status="failed", error="429",
+            created_at=now - timedelta(minutes=minutes_ago + 5),
+        ))
+        db_session.add(AICallAudit(
+            scenario=scenario, model="test", input_truncated=False,
+            output_truncated=False, status="success",
+            created_at=now - timedelta(minutes=10),
+        ))
+    elif signal == "push_failed":
+        r3["component"] = "outbox"
+    task.stage_facts = {"r3": r3}
+    if status != "open":
+        task.status = status
+        task.outcome = "closed" if status == "ended" else None
+    await db_session.flush()
+    return task, trigger, thread
+
+
+async def test_scan_recoveries_emits_into_task_thread(db_session, scan_env) -> None:
+    """全清工单 → ops:recover trigger，thread=工单订阅线程（非当日 opsmisc）。"""
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    task, _tr, thread = await _make_recoverable_ticket(db_session, scan_env["source"])
+    drafts = await scan_source._scan_recoveries(db_session)
+    mine = [d for d in drafts if d.external_id.startswith(f"ops:recover:{task.id}:")]
+    assert len(mine) == 1
+    assert mine[0].thread_key == thread
+    assert mine[0].payload["signal"] == "ops_recovered"
+    assert "ai_call_failed" in mine[0].payload["signals"]
+    await db_session.rollback()
+
+
+async def test_scan_recoveries_quiet_not_elapsed_skips(db_session, scan_env) -> None:
+    """push 安静门未满（5min 前）→ 不产恢复 trigger。"""
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    task, _tr, _thread = await _make_recoverable_ticket(
+        db_session, scan_env["source"], signal="push_failed", minutes_ago=5,
+    )
+    drafts = await scan_source._scan_recoveries(db_session)
+    assert not [d for d in drafts if d.external_id.startswith(f"ops:recover:{task.id}:")]
+    await db_session.rollback()
+
+
+async def test_scan_recoveries_ended_task_skipped(db_session, scan_env) -> None:
+    """closed 工单不扫（恢复信号不得复活已收口单）。"""
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    task, _tr, _thread = await _make_recoverable_ticket(
+        db_session, scan_env["source"], status="ended",
+    )
+    drafts = await scan_source._scan_recoveries(db_session)
+    assert not [d for d in drafts if d.external_id.startswith(f"ops:recover:{task.id}:")]
+    await db_session.rollback()
+
+
+async def test_poll_wires_recovery_drafts_as_routing(db_session, scan_env, monkeypatch) -> None:
+    """poll() 挂接：恢复 drafts 走 routing 段（不占风暴配额、不聚合）。"""
+    from datetime import UTC, datetime
+
+    from app.platform.superagent.sources import TriggerDraft
+    from app.modules.safety.service.ops_selfheal_r3 import config, scan_source
+
+    monkeypatch.setattr(config, "ops_enabled", lambda: True)
+    monkeypatch.setattr(
+        scan_source, "due_fire_times", lambda schedule, last, now, **kw: [now],
+    )
+    sentinel = TriggerDraft(
+        external_id="ops:recover:sentinel:2030-01-01T00:00:00",
+        thread_key="ops:opsmisc:2030-01-01",
+        actor={"id": "sentinel", "type": "test"},
+        payload={"signal": "ops_recovered", "task_id": "sentinel"},
+    )
+
+    async def _fake(session):
+        return [sentinel]
+
+    monkeypatch.setattr(scan_source, "_scan_recoveries", _fake)
+    result = await scan_source.OpsScanSource().poll(
+        db_session, scan_env["source"], {"last_tick": datetime.now(UTC).isoformat()},
+    )
+    assert sentinel in result.drafts
+    batch = [d for d in result.drafts if d.payload.get("signal") == "ops_batch"]
+    assert all(sentinel.external_id not in str(d.payload.get("items")) for d in batch)
+    await db_session.rollback()
+
+
+async def test_recovery_chain_scan_route_closure(db_session, scan_env, monkeypatch) -> None:
+    """全链：全清工单 → 恢复 trigger 入库路由直通 → 执行器收口入队 closure。"""
+    from app.platform.superagent.executors import run_task_once
+    from app.platform.superagent.ingest import ingest_draft
+    from app.platform.superagent.models import AgentEffect
+    from app.platform.superagent.tasks import route_trigger_to_subscriptions
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    # 执行器自开 session 桩（对齐 executor 测试 _Ctx 范式）：未提交行可见
+    class _Ctx:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _Ctx(db_session),
+    )
+    task, _tr, _thread = await _make_recoverable_ticket(db_session, scan_env["source"])
+    drafts = await scan_source._scan_recoveries(db_session)
+    mine = next(d for d in drafts if d.external_id.startswith(f"ops:recover:{task.id}:"))
+
+    outcome, trigger = await ingest_draft(db_session, scan_env["source"], mine)
+    assert outcome == "stored"
+    assert await route_trigger_to_subscriptions(db_session, trigger) == 1
+    assert await run_task_once(db_session, task.id) == "ran"
+    await db_session.flush()
+    closure = (
+        await db_session.execute(
+            select(AgentEffect.id).where(
+                AgentEffect.kind == "r3_closure_card",
+                AgentEffect.dedupe_key == f"r3:closure:{task.id}",
+            )
+        )
+    ).scalar_one_or_none()
+    assert closure is not None
     await db_session.rollback()

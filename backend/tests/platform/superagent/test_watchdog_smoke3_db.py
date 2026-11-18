@@ -196,6 +196,8 @@ async def test_watchdog_observe_backlog(db_session) -> None:
 
 async def test_needs_human_snapshot_sections(db_session) -> None:
     """快照四段：待验收/待回答/受阻超时/observe 回放（stage 现算口径）。"""
+    # 基线差集（开闸后真机 needs_human 工单常驻 dev 库，全局计数须免疫）
+    base = await build_needs_human_snapshot(db_session)
     t1 = await create_task(db_session, short_name="t-ok", title="等验收", executor="x")
     t1.stage_facts = {"latest_report": "ready", "has_active_assignment": True}
     t2 = await create_task(db_session, short_name="t-ask", title="等回答", executor="x")
@@ -203,10 +205,10 @@ async def test_needs_human_snapshot_sections(db_session) -> None:
     await _blocked_task(db_session)
 
     snapshot = await build_needs_human_snapshot(db_session)
-    assert snapshot["await_accept"]["count"] == 1
-    assert snapshot["await_answer"]["count"] == 1
-    assert snapshot["blocked_stale"]["count"] == 1
-    assert snapshot["observe_replay"]["count"] == 0
+    assert snapshot["await_accept"]["count"] == base["await_accept"]["count"] + 1
+    assert snapshot["await_answer"]["count"] == base["await_answer"]["count"] + 1
+    assert snapshot["blocked_stale"]["count"] == base["blocked_stale"]["count"] + 1
+    assert snapshot["observe_replay"]["count"] == base["observe_replay"]["count"]
 
 
 async def test_promote_decision_opens_task_and_marks(db_session) -> None:

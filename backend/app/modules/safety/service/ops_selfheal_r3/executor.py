@@ -30,6 +30,7 @@ from app.modules.safety.service.ops_selfheal_r3 import (
     cards,
     config,
     diagnosis,
+    recovery,
     signals,
 )
 from app.platform.superagent.executors import Report
@@ -179,12 +180,23 @@ async def _phase_diagnose(
         escalate_guidance = f"已达修复轮上限（{config.max_repair_rounds()} 轮）未收口，可修动作被轮闸拦下"
 
     dep_endpoints = [str(e) for e in (evidence.get("dep_endpoints") or [])]
+    # signals_seen 累积（三期 T2）：同日多信号聚一张日常单（opsmisc 线程 +
+    # Policy 同线程防重复开工），全清收口判定按已见信号集而非最新信号；
+    # batch 单 union 子项信号（收口门与 _verify_batch 子项同源）。
+    seen_seed = recovery.signals_of(r3) + [signal]
+    if signal == signals.SIGNAL_BATCH:
+        seen_seed += [
+            str(i.get("signal")) for i in (evidence.get("items") or [])
+            if isinstance(i, dict) and i.get("signal")
+        ]
     new_r3: dict[str, Any] = {
         **r3,
         "stage": stage,
         "signal": signal,
         "job_name": payload.get("job_name") or r3.get("job_name"),
         "component": payload.get("component") or r3.get("component"),
+        "scenario": payload.get("scenario") or r3.get("scenario"),
+        "signals_seen": sorted(set(seen_seed)),
         "first_seen_at": r3.get("first_seen_at") or payload.get("at") or _now_iso(),
         "last_signal_at": payload.get("at") or payload.get("recovered_at") or _now_iso(),
         "diag_at": _now_iso(),
@@ -260,6 +272,8 @@ async def _phase_verify(
         return await _verify_job(session, task_id, r3)
     if signal in (signals.SIGNAL_RAG_DEGRADED,):
         return await _verify_rag(session, task_id, r3)
+    if signal in recovery.MISC_SIGNALS:
+        return await _verify_misc(session, task_id, r3)
     if signal == signals.SIGNAL_PARKED:
         return await _verify_parked(session, task_id, r3)
     if signal == signals.SIGNAL_DEADLETTER:
@@ -408,6 +422,26 @@ async def _verify_rag(session: Any, task_id: uuid.UUID, r3: dict[str, Any]) -> R
     return await _set_stage_enqueue_closure(session, task_id, r3, note="RAG 探针复测全绿，收口")
 
 
+def _wait_pending(r3: dict[str, Any], pending: list[str], note: str) -> Report:
+    """未全清 → 待收口（note 已带未清清单前 5 项）。"""
+    new_r3 = {**r3, "stage": signals.R3_STAGE_VERIFY_WAIT, "recovery_pending": pending}
+    return Report(kind="progress", note=note, output={"r3": new_r3})
+
+
+async def _verify_misc(session: Any, task_id: uuid.UUID, r3: dict[str, Any]) -> Report:
+    """四信号（三期 T2）收口核对：工单级全清（recovery 同源判定）→ 收口。"""
+    all_clear, pending = await recovery.ticket_all_clear(session, r3)
+    if not all_clear:
+        return _wait_pending(
+            r3, pending,
+            f"恢复核对未全清（{'、'.join(pending[:5])}），继续等待"
+            f"（安静窗口 {recovery.RECOVERY_QUIET_MINUTES}min）",
+        )
+    return await _set_stage_enqueue_closure(
+        session, task_id, r3, note="四信号工单全清（安静窗口/正向证据），收口",
+    )
+
+
 async def _verify_parked(session: Any, task_id: uuid.UUID, r3: dict[str, Any]) -> Report:
     """parked 工单收口核对：组件无 parked 残留 → 收口；有残留按轮次 unpark/升级。"""
     from app.platform.superagent.models import AgentEffect
@@ -421,6 +455,11 @@ async def _verify_parked(session: Any, task_id: uuid.UUID, r3: dict[str, Any]) -
         )
     ).scalars().all()
     if not rows:
+        all_clear, pending = await recovery.ticket_all_clear(session, r3)
+        if not all_clear:
+            return _wait_pending(
+                r3, pending, f"parked 已清但同单未清（{'、'.join(pending[:5])}），继续等待",
+            )
         return await _set_stage_enqueue_closure(
             session, task_id, r3, note=f"组件 {component} 无 parked 残留，收口",
         )
@@ -457,6 +496,11 @@ async def _verify_deadletter(session: Any, task_id: uuid.UUID, r3: dict[str, Any
         return Report(kind="progress", note="死信核对 fail-open（Redis 不可达），等下轮",
                       output={"r3": new_r3})
     if not dead:
+        all_clear, pending = await recovery.ticket_all_clear(session, r3)
+        if not all_clear:
+            return _wait_pending(
+                r3, pending, f"死信已清但同单未清（{'、'.join(pending[:5])}），继续等待",
+            )
         return await _set_stage_enqueue_closure(session, task_id, r3, note="死信已清零，收口")
     rounds = int(r3.get("repair_rounds") or 0)
     ok, reason = actions.check_gates("hazard_dead_letter_rerun")
@@ -526,6 +570,13 @@ async def _verify_batch(session: Any, task_id: uuid.UUID, r3: dict[str, Any]) ->
             note=f"聚合单仍有未清项：{'、'.join(pending[:5])}，继续等待",
             output={"r3": new_r3},
         )
+    all_clear, misc_pending = await recovery.ticket_all_clear(session, r3)
+    if not all_clear:
+        report = _wait_pending(
+            r3, misc_pending, f"聚合单四类型子项未全清：{'、'.join(misc_pending[:5])}，继续等待",
+        )
+        report.output["r3"]["batch_pending"] = [f"misc:{x}" for x in misc_pending]
+        return report
     return await _set_stage_enqueue_closure(session, task_id, r3, note="聚合单全部子项已清，收口")
 
 
