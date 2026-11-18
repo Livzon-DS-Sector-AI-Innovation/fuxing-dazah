@@ -1,3 +1,4 @@
+import PageHeader from '@/components/hr/PageHeader'
 import { Suspense } from 'react'
 import { Spin } from 'antd'
 import TrainingNotificationClient from '@/components/hr/TrainingNotificationClient'
@@ -5,14 +6,7 @@ import TrainingNotificationClient from '@/components/hr/TrainingNotificationClie
 export default function TrainingNotificationPage() {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">
-          培训通知
-        </h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          填写培训信息，自动生成培训通知 Word 文档
-        </p>
-      </div>
+      <PageHeader title="培训通知" description="填写培训信息，自动生成培训通知 Word 文档" />
 
       <Suspense fallback={<div className="flex justify-center py-20"><Spin size="large" /></div>}>
         <TrainingNotificationClient />
