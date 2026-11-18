@@ -334,6 +334,16 @@ export async function deleteInterview(id: string) {
   return res
 }
 
+// 推送评分表单卡给面试官（飞书内提交，回写人工面试评价并通知发起 HR）
+export async function pushInterviewScore(id: string) {
+  const res = await fetchHrApi(`/hr/interviews/${id}/push-score`, {
+    method: 'POST',
+    errorMessage: '推送评分卡失败',
+  })
+  revalidatePath('/hr/recruitment')
+  return res
+}
+
 // ─── 面试总览 ───
 
 export async function fetchInterviewsOverview(params: {

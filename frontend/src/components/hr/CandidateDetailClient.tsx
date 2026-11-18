@@ -20,7 +20,7 @@ import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
   parseResumeAction,
   transitionCandidateStatus,
-  updateInterview, deleteInterview,
+  updateInterview, deleteInterview, pushInterviewScore,
   saveInterviewFeedback, fetchInterviewFeedback,
   pushCandidateReview, decideCandidateReview, pushOnboardingReview,
   fetchCandidateInterviews, fetchPendingReviews,
@@ -102,6 +102,8 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [scheduleEditing, setScheduleEditing] = useState<Interview | null>(null)
   const [completingId, setCompletingId] = useState<string | null>(null)
+  // 推送评分卡（发飞书表单卡给面试官本人，提交后回写面试评价并通知 HR）
+  const [scorePushingId, setScorePushingId] = useState<string | null>(null)
 
   // 人工面试评价（区别于 AI 胜任度报告：面试官结构化打分 + 结论）
   const FEEDBACK_DIMENSIONS = ['专业能力', '沟通表达', '岗位匹配', '发展潜力']
@@ -295,6 +297,17 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       router.refresh()  // 候选人状态可能自动推进，头部状态需同步刷新
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setCompletingId(null) }
+  }
+
+  // 推送评分卡：面试官在飞书卡上提交四维打分+结论，直接回写「面试评价」并通知发起 HR
+  const handlePushScore = async (iv: Interview) => {
+    setScorePushingId(iv.id)
+    try {
+      const r: any = await pushInterviewScore(iv.id)
+      message.success(r?.message || `评分卡已发送给面试官 ${iv.interviewer}`)
+      loadInterviews()
+    } catch (err: any) { message.error(err.message || '推送失败') }
+    finally { setScorePushingId(null) }
   }
 
   const openFeedbackModal = (iv: Interview) => {
@@ -724,6 +737,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                         评价：{feedbacks[iv.id].result}
                       </Tag>
                     )}
+                    {/* 已推送评分卡但面试官还没提交（评价 Tag 出现即替代此提示） */}
+                    {!feedbacks[iv.id] && iv.score_pushed_at && (
+                      <Tag color="geekblue" className="text-xs">已推送评分 · 待面试官提交</Tag>
+                    )}
                   </div>
                 } extra={
                   <div className="flex gap-1">
@@ -735,6 +752,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                       >
                         <Button size="small" type="primary" ghost loading={completingId === iv.id}>标记完成</Button>
                       </Popconfirm>
+                    )}
+                    {/* 推送评分卡给面试官本人（飞书内提交打分，免 HR 代填）；已有人工评价后不再推 */}
+                    {iv.interviewer && !feedbacks[iv.id] && iv.status !== '已取消' && (
+                      <Button size="small"
+                        loading={scorePushingId === iv.id}
+                        title={`向面试官 ${iv.interviewer} 私发评分表单卡：四维打分+结论，提交后自动写入面试评价并通知你`}
+                        onClick={() => handlePushScore(iv)}>
+                        {iv.score_pushed_at ? '重推评分' : '推送评分'}
+                      </Button>
                     )}
                     <Button size="small" onClick={() => { setScheduleEditing(iv); setScheduleOpen(true) }}>编辑</Button>
                     <Button size="small" onClick={() => openFeedbackModal(iv)}>面试评价</Button>

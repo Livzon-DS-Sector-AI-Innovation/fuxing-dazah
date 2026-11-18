@@ -798,6 +798,8 @@ export interface Interview {
   notes?: string
   calendar_event_id?: string
   calendar_sync_error?: string | null
+  /** 评分卡推送时间（非空=已推送评分表单卡给面试官，待其飞书内提交） */
+  score_pushed_at?: string
   created_at?: string
 }
 
