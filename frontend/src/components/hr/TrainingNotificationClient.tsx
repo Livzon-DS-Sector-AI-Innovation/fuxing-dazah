@@ -491,6 +491,17 @@ export default function TrainingNotificationClient() {
                 }
               },
             })
+          } else {
+            // 台账页面齐全时顺势引导去台账查看（跨页衔接）
+            Modal.confirm({
+              title: '已添加培训台账记录',
+              content: `已为 ${targets.map((t) => t.name).join('、')} 写入台账，是否前往台账页查看？`,
+              okText: '去台账查看',
+              cancelText: '留在本页',
+              onOk: () => {
+                router.push(`/hr/training/ledger?employee_number=${targets[0].number}`)
+              },
+            })
           }
         } catch (err: any) {
           message.error(err.message || '添加到培训台账失败')

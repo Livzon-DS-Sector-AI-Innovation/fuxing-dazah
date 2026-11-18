@@ -1,12 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { fetchDepartmentsAction, createTrainingLedgerPage, fetchTrainingRoster, type TrainingRosterRow } from '@/actions/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()
+  const router = useRouter()
   const [form] = Form.useForm()
   const [departments, setDepartments] = useState<string[]>([])
   const [employees, setEmployees] = useState<TrainingRosterRow[]>([])
@@ -49,11 +51,11 @@ export default function TrainingLedgerNewClient() {
         employee_number: emp.employee_number,
         employee_name: emp.name })
       message.success('培训台账创建成功')
-      window.location.href = `/hr/training/ledger?employee_number=${emp.employee_number}`
+      router.push(`/hr/training/ledger?employee_number=${emp.employee_number}`)
     } catch (err: any) {
       if (err.message?.includes('Duplicate') || err.message?.includes('已存在')) {
         message.warning('该员工的培训台账已存在')
-        window.location.href = `/hr/training/ledger?employee_number=${emp.employee_number}`
+        router.push(`/hr/training/ledger?employee_number=${emp.employee_number}`)
       } else {
         message.error(err.message || '创建失败')
       }
