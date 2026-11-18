@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Select, Space, Input, DatePicker } from 'antd'
+import { App, Button, Card, Modal, Select, Space, Input, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
@@ -13,6 +13,7 @@ import {
   downloadPrejobTrainingPlan,
   downloadEmployeeTrainingRecord,
   downloadWorkPermit,
+  createTrainingLedger,
 } from '@/actions/hr'
 
 const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' } as const
@@ -139,13 +140,53 @@ export default function OnboardingPrejobClient() {
     if (!selectedEmployee) return message.warning('请先选择员工')
     setDownloadingRecord(true)
     try {
+      const items = buildItems()
       const r = await downloadEmployeeTrainingRecord(
         selectedEmployee.employee_number,
         selectedEmployee.name,
-        buildItems(),
+        items,
       )
       downloadBase64File(r.base64, r.filename)
       message.success('导出成功')
+      // 与培训台账联动：导出的培训记录顺势写入台账（此前纯下载零联动）
+      const ledgerItems = items.filter((it) => it.plan_date && it.content)
+      const skipped = items.length - ledgerItems.length
+      if (ledgerItems.length === 0) {
+        if (items.length > 0) {
+          message.info('培训内容均未填「完成期限」，无法写入培训台账（台账需培训日期）')
+        }
+        return
+      }
+      Modal.confirm({
+        title: '写入培训台账',
+        content: `是否将本次导出的 ${ledgerItems.length} 条培训记录写入培训台账？${
+          skipped > 0 ? `（${skipped} 条缺完成期限将跳过）` : ''
+        }`,
+        okText: '写入台账',
+        cancelText: '仅导出',
+        onOk: async () => {
+          let ok = 0
+          for (const it of ledgerItems) {
+            try {
+              await createTrainingLedger({
+                employee_number: selectedEmployee.employee_number,
+                training_date: it.plan_date,
+                training_subject: it.content,
+                training_method: it.method || undefined,
+                trainer: it.trainer || undefined,
+                source_type: 'prejob_export',
+                remarks: '入职培训记录表导出写入',
+              })
+              ok += 1
+            } catch { /* 逐条容错，失败汇总 */ }
+          }
+          if (ok === ledgerItems.length) {
+            message.success(`已写入培训台账 ${ok} 条，可在培训台账页查看`)
+          } else {
+            message.warning(`写入台账 ${ok}/${ledgerItems.length} 条，失败的条目请到台账页手动补录`)
+          }
+        },
+      })
     } catch (err) { message.error((err as Error)?.message || '导出失败') }
     finally { setDownloadingRecord(false) }
   }
