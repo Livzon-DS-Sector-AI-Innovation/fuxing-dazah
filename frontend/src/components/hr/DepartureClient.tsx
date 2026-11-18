@@ -16,6 +16,7 @@ import {
   CloudSyncOutlined,
 } from '@ant-design/icons'
 import { DepartureRecord, DepartureFilterOptions } from '@/types/hr'
+import { DEPARTURE_TYPE_OPTIONS, DEPARTURE_TYPE_TAG_COLORS } from '@/lib/hr'
 import {
   fetchDepartureRecords,
   fetchDepartureFilterOptionsAction,
@@ -197,14 +198,8 @@ export default function DepartureClient({
     finally { setCertSending(false) }
   }
 
-  const offboardingTypeColorMap: Record<string, string> = {
-    '辞职': 'default',
-    '辞退': 'error',
-    '个人原因': 'default',
-    '合同到期': 'warning',
-    '退休': 'success',
-    '退休返聘到期': 'success',
-    '其他': 'processing' }
+  // 离职类型色：统一口径（此前表单 4 项/颜色 7 项两套，选「自离」曾落到无色 Tag）
+  const offboardingTypeColorMap = DEPARTURE_TYPE_TAG_COLORS
 
   // 部门/离职类型筛选已上移到顶部下拉（服务端全量过滤，选项来自 filter-options），
   // 不再用列头筛选（仅过滤当前页，与全量口径冲突）
@@ -404,7 +399,7 @@ export default function DepartureClient({
             <DatePicker className="w-full" />
           </Form.Item>
           <Form.Item name="offboarding_type" label="离职类型" initialValue="辞职">
-            <Select options={[{value:'辞职',label:'辞职'},{value:'辞退',label:'辞退'},{value:'自离',label:'自离'},{value:'其他',label:'其他'}]} />
+            <Select options={DEPARTURE_TYPE_OPTIONS.map((t) => ({ value: t, label: t }))} />
           </Form.Item>
           <Form.Item name="reason" label="离职原因">
             <Input.TextArea rows={2} />

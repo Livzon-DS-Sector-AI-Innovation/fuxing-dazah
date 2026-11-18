@@ -31,3 +31,30 @@ export const EMPLOYEE_STATUS_TAG_COLORS: Record<string, string> = {
   产假: 'magenta',
   产假复岗: 'purple',
 }
+
+/** 离职类型统一口径（此前表单 4 项/颜色 7 项/DDL 注释 5 项三套并存）：
+ *  并集覆盖 DDL 注释（辞职/辞退/合同到期/退休/其他）+ 表单历史项（自离）
+ *  + 飞书同步单选值（个人原因/退休返聘到期）。
+ *  筛选选项仍以服务端 distinct 聚合为准（库中实际值为权威）。 */
+export const DEPARTURE_TYPE_OPTIONS = [
+  '辞职',
+  '辞退',
+  '合同到期',
+  '退休',
+  '自离',
+  '个人原因',
+  '退休返聘到期',
+  '其他',
+] as const
+
+/** 离职类型 → antd Tag 预设色名（自离/辞退同属异常离场归 error） */
+export const DEPARTURE_TYPE_TAG_COLORS: Record<string, string> = {
+  辞职: 'default',
+  辞退: 'error',
+  自离: 'error',
+  个人原因: 'default',
+  合同到期: 'warning',
+  退休: 'success',
+  退休返聘到期: 'success',
+  其他: 'processing',
+}
