@@ -121,6 +121,23 @@ def decrypt_office_file(file_bytes: bytes, password: str) -> bytes:
         raise ValueError("文件解密失败：密码不正确或文件已损坏") from None
 
 
+def is_office_encrypted(file_bytes: bytes) -> bool:
+    """是否为「密码打开」加密的 Office 文件（OLE 容器内含 EncryptedPackage 流）。
+
+    zip 容器的 xlsx 一定未加密；普通旧版 xls 同为 OLE 容器但无该流。
+    供服务端兜底密码使用：仅加密文件才消耗密码，未加密文件不碰。
+    """
+    if file_bytes[:4] != b"\xd0\xcf\x11\xe0":  # 非 OLE 容器（xlsx/zip 或其他）
+        return False
+    import olefile  # type: ignore[import-untyped]  # msoffcrypto-tool 依赖，随装随用
+
+    try:
+        with olefile.OleFileIO(BytesIO(file_bytes)) as ole:
+            return bool(ole.exists("EncryptedPackage"))
+    except Exception:
+        return False
+
+
 def open_sheet(
     file_bytes: bytes, filename: str
 ) -> tuple[CellGetter, int, int]:

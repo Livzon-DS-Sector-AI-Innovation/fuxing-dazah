@@ -17,7 +17,7 @@ interface Props {
 export default function LcUploader({ onResult }: Props) {
   const [uploading, setUploading] = useState(false)
   const [fileList, setFileList] = useState<UploadFile[]>([])
-  // 加密计算表密码由用户按需输入（不预填，密码不出现在代码仓库）
+  // 加密计算表密码一般留空：服务端已配兜底通行密码，仅特殊密码文件需手填
   const [password, setPassword] = useState('')
   const { message } = App.useApp()
 
@@ -84,10 +84,10 @@ export default function LcUploader({ onResult }: Props) {
       </Dragger>
       <div style={{ marginTop: 8 }}>
         <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-          文件有密码？（Excel 加密保护的计算表需填写；密码仅用于本次解析，不保存）
+          一般留空即可：加密计算表由服务端默认密码自动解密；特殊密码再单独填写（仅本次使用，不保存）
         </Typography.Text>
         <Input.Password
-          placeholder="文件密码（无密码可留空）"
+          placeholder="文件密码（一般留空）"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           style={{ maxWidth: 260, marginTop: 4 }}

@@ -148,6 +148,10 @@ class Settings(BaseSettings):
     QA_MD_EXTRACT_PROVIDER: str = "mineru"
     QA_MD_EXTRACT_API_TOKEN: str = ""
 
+    # 液相加密计算表服务端兜底密码：前端未填密码且文件加密时使用。
+    # 密码只放部署环境，不出现在前端代码（git 历史泄露过一次，待轮换）。
+    QUALITY_LC_EXCEL_PASSWORD: str = ""
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

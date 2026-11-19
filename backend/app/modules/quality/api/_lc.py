@@ -15,6 +15,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.quality.api._common import (
@@ -47,6 +48,35 @@ from app.platform.permission.deps import require_permission
 # ─── 液相解析上传 ───
 
 
+def _decrypt_if_needed(file_bytes: bytes, password: str | None) -> bytes:
+    """加密计算表解密：显式密码优先；未填且文件加密时用服务端兜底密码。
+
+    - 用户填了密码：按原行为直接解密，错密码抛 422
+    - 未填 + 文件加密 + 服务端配了 QUALITY_LC_EXCEL_PASSWORD：静默解密
+    - 未填 + 文件未加密：原样返回（未加密文件不消耗密码）
+    """
+    from app.modules.quality.lc_template_parser import (
+        decrypt_office_file,
+        is_office_encrypted,
+    )
+
+    provided = (password or "").strip()
+    if provided:
+        try:
+            return decrypt_office_file(file_bytes, provided)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    fallback = get_settings().QUALITY_LC_EXCEL_PASSWORD.strip()
+    if fallback and is_office_encrypted(file_bytes):
+        try:
+            return decrypt_office_file(file_bytes, fallback)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=422, detail=f"{e}（服务端默认密码不匹配，请在密码框填写正确密码）"
+            ) from e
+    return file_bytes
+
+
 @router.post("/lc/upload", response_model=UploadLcResponse, summary="上传液相计算表并解析")
 async def upload_lc_excel(
     file: UploadFile = File(...),
@@ -62,13 +92,7 @@ async def upload_lc_excel(
         raise HTTPException(status_code=400, detail="文件为空")
     if len(file_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件超过 10MB")
-    if password:
-        from app.modules.quality.lc_template_parser import decrypt_office_file
-
-        try:
-            file_bytes = decrypt_office_file(file_bytes, password)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e)) from e
+    file_bytes = _decrypt_if_needed(file_bytes, password)
     try:
         # 优先模板配置驱动的通用解析（表号识别）；无匹配配置回落到旧解析器
         generic = await test_task_service.parse_lc_generic(db, file_bytes, filename, filled_by=_user.id)
@@ -190,7 +214,6 @@ async def auto_detect_template_endpoint(
     """上传计算表自动匹配同版式模板：版式搜索/候选打分在 service 层。"""
     from pathlib import Path as _Path
 
-    from app.modules.quality.lc_template_parser import decrypt_office_file
     from app.modules.quality.service.lc_templates import auto_detect_templates
 
     filename = file.filename or "calc.xlsx"
@@ -199,11 +222,7 @@ async def auto_detect_template_endpoint(
     data = await file.read()
     if not data or len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=422, detail="文件为空或超过 10MB")
-    if password:
-        try:
-            data = decrypt_office_file(data, password)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e)) from e
+    data = _decrypt_if_needed(data, password)
     try:
         result = await auto_detect_templates(db, data, filename)
     except ValueError as e:
