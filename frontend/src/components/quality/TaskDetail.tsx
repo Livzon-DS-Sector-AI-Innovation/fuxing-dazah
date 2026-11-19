@@ -1021,6 +1021,7 @@ export default function TaskDetail({ id }: { id: string }) {
       <ChromatogramModal
         open={chromaOpen}
         taskId={id}
+        productName={detail?.product_name}
         title={`图谱解析${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
         onClose={() => setChromaOpen(false)}
         onFilled={loadDetail}

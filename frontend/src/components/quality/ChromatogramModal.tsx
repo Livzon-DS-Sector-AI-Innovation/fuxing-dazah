@@ -13,6 +13,8 @@ interface Props {
   open: boolean
   taskId: string
   title?: string
+  /** 任务产品名：表号下拉按产品过滤（51 条全量里其他产品的表号对本任务无意义） */
+  productName?: string
   onClose: () => void
   onFilled: () => void
   /** 预填在线计算表：把映射好的引擎 inputs + 确认后的峰表快照灌进任务页计算表弹窗，
@@ -27,7 +29,7 @@ type Slot = 1 | 2
  * （峰名/面积可改，保留时间只读核对）→ 按表号 calc 配置映射为引擎 inputs →
  * 「预填计算表」交给任务页在线计算表核对提交；无计算配置的表号保留直填结果值路径。
  */
-export default function ChromatogramModal({ open, taskId, title, onClose, onFilled, onPrefill }: Props) {
+export default function ChromatogramModal({ open, taskId, title, productName, onClose, onFilled, onPrefill }: Props) {
   const { message } = App.useApp()
   const [parsingSlot, setParsingSlot] = useState<Slot | null>(null)
   const [peaks1, setPeaks1] = useState<ChromatogramPeak[]>([])
@@ -45,7 +47,19 @@ export default function ChromatogramModal({ open, taskId, title, onClose, onFill
     }
   }, [open, configs.length])
 
-  const activeCalcCfg = configs.find((c) => c.table_no === tableNo)?.config.calc
+  // 表号按任务产品过滤：全量表号横跨 17 个产品，其他产品的表号（多为外标法）
+  // 对本任务既无法映射也无意义，混在下拉里制造「几乎都不支持预填」的噪声。
+  // 产品名匹配不上一条时回退全量（防配置里产品名写法不一致导致空列表）。
+  const productConfigs = useMemo(() => {
+    if (!productName) return configs
+    const hit = configs.filter((c) => {
+      const cp = (c.product_name || '').trim()
+      return cp && (cp === productName || cp.includes(productName) || productName.includes(cp))
+    })
+    return hit.length ? hit : configs
+  }, [configs, productName])
+
+  const activeCalcCfg = productConfigs.find((c) => c.table_no === tableNo)?.config.calc
   const isNorm = activeCalcCfg?.mode === 'normalization'
 
   // 映射预览：仅归一化配置 + 已解析第一份时计算（纯函数，峰名改动即时重映射）
@@ -224,10 +238,12 @@ export default function ChromatogramModal({ open, taskId, title, onClose, onFill
           placeholder="计算表表号（必选，映射引擎输入用）" style={{ width: 300 }}
           value={tableNo}
           onChange={(v) => setTableNo(v)}
-          options={configs.map((c) => ({
-            value: c.table_no,
-            label: `${c.table_no}${c.config.calc ? (c.config.calc.mode === 'normalization' ? '（可图谱预填）' : '（暂不支持图谱预填）') : ''}`,
-          }))}
+          options={[...productConfigs]
+            .sort((a, b) => Number(b.config.calc?.mode === 'normalization') - Number(a.config.calc?.mode === 'normalization'))
+            .map((c) => ({
+              value: c.table_no,
+              label: `${c.table_no}${c.config.calc ? (c.config.calc.mode === 'normalization' ? '（可图谱预填）' : '（暂不支持图谱预填）') : ''}`,
+            }))}
           showSearch optionFilterProp="label"
         />
         {tableNo && activeCalcCfg && activeCalcCfg.mode !== 'normalization' && (
