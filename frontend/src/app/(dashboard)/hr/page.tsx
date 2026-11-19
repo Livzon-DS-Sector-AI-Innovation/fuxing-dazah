@@ -1,14 +1,18 @@
 'use client'
 
+import { useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Card, Row, Col } from 'antd'
 import {
   TeamOutlined, BookOutlined, BankOutlined, LoginOutlined, LogoutOutlined,
   FileSearchOutlined, PrinterOutlined,
 } from '@ant-design/icons'
 
+import { usePermission } from '@/hooks/usePermission'
 import { PermissionGuard } from '@/components/permission/PermissionGuard'
 
+/** 功能入口卡片（仅作部分权限角色的落地导航，如纯培训角色进不了看板） */
 const modules = [
   { key: 'profile', title: '员工档案', desc: '管理员工基本信息、入职离职、岗位变动等', icon: <TeamOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/profile' },
   { key: 'departments', title: '部门管理', desc: '组织架构、部门信息维护', icon: <BankOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/departments' },
@@ -20,6 +24,19 @@ const modules = [
 ]
 
 export default function HrPage() {
+  const router = useRouter()
+  const { isLoaded, hasPermission } = usePermission()
+
+  // 有看板权限的直接进看板，不再经过板块卡片页
+  useEffect(() => {
+    if (isLoaded && hasPermission('hr:profile:read')) {
+      router.replace('/hr/dashboard')
+    }
+  }, [isLoaded, hasPermission, router])
+
+  // 权限加载中/跳转中不渲染卡片，避免有权限用户闪一下板块页
+  if (isLoaded && hasPermission('hr:profile:read')) return null
+
   return (
     <div className="space-y-6">
       <div>
@@ -47,7 +64,8 @@ export default function HrPage() {
             <Col xs={24} sm={12} lg={8} key={mod.key}>
               {mod.key === 'recruitment'
                 ? <PermissionGuard permission="hr:recruitment:read">{card}</PermissionGuard>
-                : card}
+                : card
+              }
             </Col>
           )
         })}
