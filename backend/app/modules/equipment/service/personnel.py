@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -503,6 +503,65 @@ async def derive_maintainer_for_equipment(
         if candidate.user_id is not None and candidate.department == dept_name:
             return candidate.user_id
     return None
+
+
+async def list_repair_candidates_for_equipment(
+    db: AsyncSession, equipment: "Equipment"
+) -> dict[str, Any]:
+    """列出设备的维修候选人（工单负责人手动指派用）。
+
+    与 derive_maintainer_for_equipment 同一套筛选原始件（repair 角色 +
+    分类约束并集），但不做「只取第一位」的截断，返回全量候选及标记：
+    {"department_name": 设备部门名 | None,
+     "candidates": [{user_id, name, department, has_account, same_department}],
+     "recommended_user_id": 与自动派单口径一致的推荐人（可None）}
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.modules.equipment.models.equipment import EquipmentCategoryLink
+
+    department_name: str | None = None
+    if equipment.department_id:
+        dept_info = await repo.get_department_info(db, equipment.department_id)
+        department_name = dept_info.get("name") if dept_info else None
+
+    link_result = await db.execute(
+        sa_select(EquipmentCategoryLink.category_id).where(
+            EquipmentCategoryLink.equipment_id == equipment.id,
+            EquipmentCategoryLink.is_deleted == False,  # noqa: E712
+        )
+    )
+    category_ids: set[uuid.UUID] = set()
+    for (category_id,) in link_result.all():
+        category_ids.update(
+            await repo.get_category_ids_inclusive(db, category_id)
+        )
+
+    candidates = await get_candidates(
+        db, [REPAIR_ROLE_CODE], category_ids=sorted(category_ids),
+    )
+    items = [
+        {
+            "user_id": str(c.user_id) if c.user_id else None,
+            "name": c.name,
+            "department": c.department,
+            "has_account": c.user_id is not None,
+            "same_department": (
+                department_name is not None and c.department == department_name
+            ),
+        }
+        for c in candidates
+    ]
+    recommended_user_id: str | None = None
+    for item in items:
+        if item["same_department"] and item["has_account"]:
+            recommended_user_id = item["user_id"]
+            break
+    return {
+        "department_name": department_name,
+        "candidates": items,
+        "recommended_user_id": recommended_user_id,
+    }
 
 
 async def refresh_feishu(db: AsyncSession) -> FeishuRefreshResult:

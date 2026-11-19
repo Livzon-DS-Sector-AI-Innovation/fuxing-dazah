@@ -1,0 +1,245 @@
+/* COA 客户标准工作台：产品/标准是一条导航行，标准单页占满整行。
+   全宽是必要的——检测项目表有 10 列，分栏会把「标准原文」挤成 0 宽。 */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 导航行只负责切换：标准身份（客户/药典/版本/出具数）交给下方单页头，避免重复占高。
+   选择器限宽，剩余空间留给右侧统计，而不是把输入框拉成整行。 */
+.scopeBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+}
+
+.scopeFieldProduct,
+.scopeFieldStandard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.scopeFieldProduct {
+  flex: 0 1 230px;
+  min-inline-size: 140px;
+}
+
+.scopeFieldStandard {
+  flex: 1 1 280px;
+  max-inline-size: 420px;
+  min-inline-size: 190px;
+  /* 与产品组拉开一档，避免「产品管理」和「标准」两个词连读 */
+  margin-inline-start: 10px;
+}
+
+.scopeLabel {
+  flex: none;
+  color: var(--color-steel);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.scopeSelect {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.scopeCount {
+  flex: none;
+  color: var(--color-stone);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 操作按钮整组贴右 */
+.scopeActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+
+.muted {
+  color: var(--color-stone);
+}
+
+.source {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.sourceImport {
+  background: var(--color-tint-sky);
+  color: var(--color-link-blue);
+}
+
+.sourceManual {
+  background: var(--color-tint-gray);
+  color: var(--color-slate);
+}
+
+/* 标准单页 */
+.sheet {
+  min-inline-size: 0;
+  overflow: clip;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+}
+
+.sheetHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding: 20px 24px 16px;
+  border-block-end: 1px solid var(--color-hairline-soft);
+}
+
+.sheetIdentity {
+  /* 基准设为 0，长标题只在自身换行，不会把右侧按钮挤到下一行 */
+  flex: 1 1 0;
+  min-inline-size: 0;
+}
+
+.sheetTopline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheetCode {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary-deep);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sheetTitle {
+  margin: 6px 0 0;
+  color: var(--color-ink);
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -.015em;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sheetMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 10px 0 0;
+}
+
+.metaItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-inline-size: 0;
+}
+
+.metaItem dt {
+  color: var(--color-stone);
+  font-size: 12px;
+}
+
+.metaItem dd {
+  margin: 0;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheetActions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.itemsSection {
+  padding: 16px 24px 24px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block-end: 12px;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.sectionHint {
+  color: var(--color-steel);
+  font-size: 12px;
+}
+
+.sheetLoading,
+.sheetEmpty {
+  padding: 24px;
+}
+
+.sheetEmpty {
+  padding-block: 48px;
+}
+
+.loadingPanel {
+  padding: 24px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+}
+
+@media (max-width: 720px) {
+  .scopeFieldProduct,
+  .scopeFieldStandard {
+    flex: 1 1 100%;
+    max-inline-size: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .sheetHead,
+  .itemsSection {
+    padding-inline: 16px;
+  }
+}
+
+/* 仅本页：隐藏内容区（main）的竖滚动条，展开/收起时不再闪出竖条；滚轮与触控板仍可滚动 */
+main:has([data-coa-standards]) {
+  scrollbar-width: none;
+}
+
+main:has([data-coa-standards])::-webkit-scrollbar {
+  display: none;
+}

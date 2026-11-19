@@ -44,6 +44,13 @@ class CoaValueType(enum.StrEnum):
     TEXT = "text"
 
 
+class CoaFieldType(enum.StrEnum):
+    """产品级批次信息字段类型：文本 / 日期（阶段二按配置提取时的解析路由）。"""
+
+    TEXT = "text"
+    DATE = "date"
+
+
 def _enum_sql_list(values: type[enum.StrEnum]) -> str:
     return ", ".join(f"'{member.value}'" for member in values)
 
@@ -133,6 +140,13 @@ class CoaStandard(BaseModel):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true", comment="是否启用"
     )
+    batch_fields_overridden: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="批次字段集是否自定义覆盖（true 时即使无行也按空自定义集，不再回落产品默认）",
+    )
     source: Mapped[str] = mapped_column(
         String(8),
         nullable=False,
@@ -153,7 +167,8 @@ class CoaStandardItem(BaseModel):
 
     docx 表2 的列定义（项目名/大类/标准原文/顺序）。code 由名称归一化生成，
     是报告导入时项目对齐的匹配键，也是出具登记矩阵跨标准合并同名列的依据
-    （改名会同步重算）。被报告值引用的项目不硬删只停用，保证历史值可解释。
+    （改名会同步重算）。项目必然启用（无停用态）；被报告值引用的移除项
+    软删保留行（值行 FK 有效，历史值可解释）。
     """
 
     __tablename__ = "coa_standard_items"
@@ -222,12 +237,10 @@ class CoaStandardItem(BaseModel):
         server_default="0",
         comment="列顺序=docx 原序",
     )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=True,
-        server_default="true",
-        comment="停用后矩阵不再显示该列",
+    default_value: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+        comment="text 型项目登记时的预填默认值（如 符合规定），number 型禁用",
     )
     remark: Mapped[str | None] = mapped_column(
         String(500), nullable=True, comment="备注"
@@ -237,8 +250,9 @@ class CoaStandardItem(BaseModel):
 class CoaReport(BaseModel):
     """出具登记：一份 COA 报告一行（表1 基础信息 + 归属标准）。
 
-    report_no 全局唯一；(product, standard, batch) 唯一——同批同标准只登记
-    一份，补发走软删重登。product_id 冗余存，矩阵页查询锚点。
+    (product, standard, batch) 唯一——同批同标准只登记一份，补发走软删重登。
+    无报告编号：docx 里印的编号只作导入解析的匹配锚点，不落本表。
+    product_id 冗余存，矩阵页查询锚点。
     """
 
     __tablename__ = "coa_reports"
@@ -246,12 +260,6 @@ class CoaReport(BaseModel):
         CheckConstraint(
             f"source IN ({_enum_sql_list(CoaSourceType)})",
             name="ck_qa_coa_reports_source",
-        ),
-        Index(
-            "uq_qa_coa_reports_no",
-            "report_no",
-            unique=True,
-            postgresql_where=text("is_deleted = false"),
         ),
         Index(
             "uq_qa_coa_reports_product_standard_batch",
@@ -270,9 +278,6 @@ class CoaReport(BaseModel):
     )
     standard_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_standards.id"
-    )
-    report_no: Mapped[str] = mapped_column(
-        String(64), nullable=False, comment="COA 报告编号，如 COA-HAF-3205-006"
     )
     serial_no: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="流水号（docx 右上角数字串），如 26081215"
@@ -309,8 +314,120 @@ class CoaReport(BaseModel):
     raw_extract: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True, comment="导入时的原始提取结果（复核/重放用）"
     )
+    batch_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="模板动态批次字段值（key=生效字段集 key；固定列别名键镜像写固定列）",
+    )
     remark: Mapped[str | None] = mapped_column(
         String(500), nullable=True, comment="备注"
+    )
+
+
+class CoaProductField(BaseModel):
+    """产品级批次信息字段默认配置：该产品 COA 报告要记录哪些批次信息字段。
+
+    来源=docx 模板导入（结构提取的标签清单）或人工维护；不同产品字段集
+    不同（如达托是「复验期」而非「有效期」）。key 为阶段二报告导入按配置
+    渲染提取 schema 的锚点；保存为硬删+批量重插（配置非审计对象）。
+    命名避开 batch_info（已被解析管线/raw_extract 留底占用）。
+
+    个别模板字段集与产品默认不同时走 CoaStandardField 覆盖（稀疏，只有
+    差异模板有行）；生效集 = 标准覆盖 ?? 产品默认。
+    """
+
+    __tablename__ = "coa_product_fields"
+    __table_args__ = (
+        CheckConstraint(
+            f"field_type IN ({_enum_sql_list(CoaFieldType)})",
+            name="ck_qa_coa_fields_field_type",
+        ),
+        Index(
+            "uq_qa_coa_fields_product_key",
+            "product_id",
+            "key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_qa_coa_fields_product", "product_id", "sort_order"),
+        {"schema": "qa"},
+    )
+
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_products.id"
+    )
+    key: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="字段键（产品内唯一，阶段二提取 schema 锚点），如 retest_date",
+    )
+    label_cn: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="字段中文标签，如 复验期"
+    )
+    label_en: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="字段英文标签，如 Retest Date"
+    )
+    field_type: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default=CoaFieldType.TEXT.value,
+        server_default=CoaFieldType.TEXT.value,
+        comment="text/date",
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="行顺序"
+    )
+
+
+class CoaStandardField(BaseModel):
+    """标准级批次信息字段覆盖：字段集与产品默认不同的模板才落行（稀疏）。
+
+    「空自定义集」由 CoaStandard.batch_fields_overridden 表达，本表无行。
+
+    生效集 = 标准标志 batch_fields_overridden ? 本表行 : 产品默认
+    （CoaProductField）。创建标准时随载荷带入的字段集与产品默认对比，
+    一致不落覆盖；恢复默认=删本表行并清标志。删除标准时硬删
+    （配置非审计对象）。
+    """
+
+    __tablename__ = "coa_standard_fields"
+    __table_args__ = (
+        CheckConstraint(
+            f"field_type IN ({_enum_sql_list(CoaFieldType)})",
+            name="ck_qa_coa_std_fields_field_type",
+        ),
+        Index(
+            "uq_qa_coa_std_fields_standard_key",
+            "standard_id",
+            "key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_qa_coa_std_fields_standard", "standard_id", "sort_order"),
+        {"schema": "qa"},
+    )
+
+    standard_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="逻辑引用 qa.coa_standards.id"
+    )
+    key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="字段键（标准内唯一），如 retest_date"
+    )
+    label_cn: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="字段中文标签，如 复验期"
+    )
+    label_en: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="字段英文标签，如 Retest Date"
+    )
+    field_type: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default=CoaFieldType.TEXT.value,
+        server_default=CoaFieldType.TEXT.value,
+        comment="text/date",
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="行顺序"
     )
 
 

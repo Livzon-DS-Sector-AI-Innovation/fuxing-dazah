@@ -11,9 +11,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.qa.models import (
     CoaProduct,
+    CoaProductField,
     CoaReport,
     CoaReportValue,
     CoaStandard,
+    CoaStandardField,
     CoaStandardItem,
 )
 
@@ -76,6 +78,38 @@ async def count_standards_by_product(db: AsyncSession) -> dict[uuid.UUID, int]:
         .group_by(CoaStandard.product_id)
     )
     return {product_id: int(count) for product_id, count in result}
+
+
+# ───────────────────────── 产品批次信息字段配置 ─────────────────────────
+
+
+async def list_product_fields(
+    db: AsyncSession, product_id: uuid.UUID
+) -> list[CoaProductField]:
+    result = await db.execute(
+        select(CoaProductField)
+        .where(
+            CoaProductField.product_id == product_id,
+            CoaProductField.is_deleted.is_(False),
+        )
+        .order_by(CoaProductField.sort_order, CoaProductField.created_at)
+    )
+    return list(result.scalars())
+
+
+async def replace_product_fields(
+    db: AsyncSession,
+    product_id: uuid.UUID,
+    rows: list[dict[str, Any]],
+) -> None:
+    """字段配置全量替换：硬删后批量插入（配置非审计对象，报告值同款）。"""
+    await db.execute(
+        delete(CoaProductField).where(CoaProductField.product_id == product_id)
+    )
+    if rows:
+        for row in rows:
+            db.add(CoaProductField(product_id=product_id, **row))
+        await db.flush()
 
 
 # ───────────────────────── 客户标准 ─────────────────────────
@@ -145,24 +179,57 @@ async def count_reports_by_standard(db: AsyncSession) -> dict[uuid.UUID, int]:
     return {standard_id: int(count) for standard_id, count in result}
 
 
+# ───────────────────────── 标准级字段覆盖（稀疏） ─────────────────────────
+
+
+async def list_standard_fields(
+    db: AsyncSession, standard_id: uuid.UUID
+) -> list[CoaStandardField]:
+    result = await db.execute(
+        select(CoaStandardField)
+        .where(
+            CoaStandardField.standard_id == standard_id,
+            CoaStandardField.is_deleted.is_(False),
+        )
+        .order_by(CoaStandardField.sort_order, CoaStandardField.created_at)
+    )
+    return list(result.scalars())
+
+
+async def replace_standard_fields(
+    db: AsyncSession,
+    standard_id: uuid.UUID,
+    rows: list[dict[str, Any]],
+) -> None:
+    """标准字段覆盖全量替换：硬删后批量插入（配置非审计对象）。"""
+    await db.execute(
+        delete(CoaStandardField).where(CoaStandardField.standard_id == standard_id)
+    )
+    if rows:
+        for row in rows:
+            db.add(CoaStandardField(standard_id=standard_id, **row))
+        await db.flush()
+
+
+async def delete_standard_fields(db: AsyncSession, standard_id: uuid.UUID) -> None:
+    """恢复产品默认=删覆盖；删除标准时也走这里清孤儿。"""
+    await db.execute(
+        delete(CoaStandardField).where(CoaStandardField.standard_id == standard_id)
+    )
+
+
 # ───────────────────────── 标准项目 ─────────────────────────
 
 
 async def list_items(
-    db: AsyncSession,
-    standard_id: uuid.UUID,
-    *,
-    active_only: bool = False,
+    db: AsyncSession, standard_id: uuid.UUID
 ) -> list[CoaStandardItem]:
-    conditions: list[ColumnElement[bool]] = [
-        CoaStandardItem.standard_id == standard_id,
-        CoaStandardItem.is_deleted.is_(False),
-    ]
-    if active_only:
-        conditions.append(CoaStandardItem.is_active.is_(True))
     result = await db.execute(
         select(CoaStandardItem)
-        .where(*conditions)
+        .where(
+            CoaStandardItem.standard_id == standard_id,
+            CoaStandardItem.is_deleted.is_(False),
+        )
         .order_by(CoaStandardItem.sort_order, CoaStandardItem.created_at)
     )
     return list(result.scalars())
@@ -178,7 +245,6 @@ async def list_items_of_standards(
         .where(
             CoaStandardItem.standard_id.in_(standard_ids),
             CoaStandardItem.is_deleted.is_(False),
-            CoaStandardItem.is_active.is_(True),
         )
         .order_by(CoaStandardItem.standard_id, CoaStandardItem.sort_order)
     )
@@ -192,20 +258,6 @@ async def get_item(db: AsyncSession, item_id: uuid.UUID) -> CoaStandardItem | No
         )
     )
     return result.scalar_one_or_none()
-
-
-async def item_ids_with_values(
-    db: AsyncSession, item_ids: list[uuid.UUID]
-) -> set[uuid.UUID]:
-    """被报告值引用的项目 id 集合（删除守卫用）。"""
-    if not item_ids:
-        return set()
-    result = await db.execute(
-        select(CoaReportValue.item_id)
-        .where(CoaReportValue.item_id.in_(item_ids))
-        .distinct()
-    )
-    return {row for row in result.scalars()}
 
 
 # ───────────────────────── 出具报告 ─────────────────────────
@@ -226,19 +278,6 @@ async def get_report(db: AsyncSession, report_id: uuid.UUID) -> CoaReport | None
         .where(CoaReport.id == report_id, CoaReport.is_deleted.is_(False))
         .execution_options(populate_existing=True)
     )
-    return result.scalar_one_or_none()
-
-
-async def find_report_by_no(
-    db: AsyncSession, report_no: str, *, exclude_id: uuid.UUID | None = None
-) -> CoaReport | None:
-    conditions: list[ColumnElement[bool]] = [
-        CoaReport.report_no == report_no,
-        CoaReport.is_deleted.is_(False),
-    ]
-    if exclude_id is not None:
-        conditions.append(CoaReport.id != exclude_id)
-    result = await db.execute(select(CoaReport).where(*conditions))
     return result.scalar_one_or_none()
 
 

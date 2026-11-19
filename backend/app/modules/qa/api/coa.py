@@ -16,10 +16,12 @@ from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.qa.schemas.coa import (
     CoaProductCreate,
+    CoaProductFieldsReplace,
     CoaProductUpdate,
     CoaReportCreate,
     CoaReportUpdate,
     CoaStandardCreate,
+    CoaStandardFieldsReplace,
     CoaStandardItemsReplace,
     CoaStandardUpdate,
 )
@@ -72,6 +74,34 @@ async def update_product(
 ) -> Any:
     return success_response(
         data=await service.update_product(db, product_id, payload, user)
+    )
+
+
+@router.get(
+    "/coa/products/{product_id}/fields", summary="产品批次信息字段配置列表"
+)
+async def list_product_fields(
+    product_id: uuid.UUID,
+    user: User = Depends(_coa_read),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(
+        data=await service.list_product_fields(db, product_id)
+    )
+
+
+@router.put(
+    "/coa/products/{product_id}/fields",
+    summary="产品批次信息字段配置全量替换",
+)
+async def replace_product_fields(
+    payload: CoaProductFieldsReplace,
+    product_id: uuid.UUID,
+    user: User = Depends(_coa_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(
+        data=await service.replace_product_fields(db, product_id, payload, user)
     )
 
 
@@ -134,6 +164,33 @@ async def delete_standard(
     return success_response(data=None)
 
 
+@router.put(
+    "/coa/standards/{standard_id}/fields",
+    summary="标准批次信息字段覆盖全量替换（与产品默认解耦）",
+)
+async def replace_standard_fields(
+    payload: CoaStandardFieldsReplace,
+    standard_id: uuid.UUID,
+    user: User = Depends(_coa_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(
+        data=await service.replace_standard_fields(db, standard_id, payload, user)
+    )
+
+
+@router.delete(
+    "/coa/standards/{standard_id}/fields",
+    summary="恢复产品默认批次信息字段（删标准覆盖）",
+)
+async def restore_standard_fields(
+    standard_id: uuid.UUID,
+    user: User = Depends(_coa_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return success_response(data=await service.restore_standard_fields(db, standard_id))
+
+
 @router.put("/coa/standards/{standard_id}/items", summary="标准项目全量替换")
 async def replace_items(
     payload: CoaStandardItemsReplace,
@@ -156,7 +213,11 @@ async def import_standard_preview(
     file: UploadFile = File(description="COA docx 报告文件"),
 ) -> Any:
     data = await file.read()
-    return success_response(data=await service.import_standard_preview(db, data))
+    return success_response(
+        data=await service.import_standard_preview(
+            db, data, filename=file.filename or "coa.docx"
+        )
+    )
 
 
 # ───────────────────────── 出具登记 ─────────────────────────
@@ -194,7 +255,11 @@ async def get_report(
     return success_response(data=await service.get_report_detail(db, report_id))
 
 
-@router.post("/coa/reports", summary="出具登记（手工/导入统一落库）", status_code=201)
+@router.post(
+    "/coa/reports",
+    summary="出具登记（手工/导入统一落库；业务键=产品+模板+批号，batch_data=模板动态批次字段）",
+    status_code=201,
+)
 async def create_report(
     payload: CoaReportCreate,
     user: User = Depends(_coa_issue),
@@ -241,5 +306,7 @@ async def import_report_preview(
 ) -> Any:
     data = await file.read()
     return success_response(
-        data=await service.import_report_preview(db, data, standard_id=standard_id)
+        data=await service.import_report_preview(
+            db, data, standard_id=standard_id, filename=file.filename or "coa.docx"
+        )
     )

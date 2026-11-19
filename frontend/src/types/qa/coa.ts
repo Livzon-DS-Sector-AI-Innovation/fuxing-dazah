@@ -2,6 +2,32 @@
 
 export type CoaValueType = 'number' | 'text'
 export type CoaSourceType = 'manual' | 'import'
+export type CoaFieldType = 'text' | 'date'
+
+/** 批次信息字段配置行：产品默认（product_id）或标准覆盖（standard_id，详情生效集不带归属键）。 */
+export interface CoaProductField {
+  id: string | null
+  product_id?: string
+  standard_id?: string
+  /** 字段键（产品/标准内唯一，报告导入按配置提取的锚点），如 retest_date */
+  key: string
+  label_cn: string
+  label_en: string | null
+  field_type: CoaFieldType
+  sort_order: number
+  /** 内置字段（品名/批号/流水号）：恒定存在、必填锁定，不落库（id 为 null）。 */
+  builtin?: boolean
+  required?: boolean
+}
+
+/** 字段入参（全量替换语义，行序=sort_order）。 */
+export interface CoaProductFieldInput {
+  key: string
+  label_cn: string
+  label_en?: string | null
+  field_type: CoaFieldType
+  sort_order?: number | null
+}
 
 export interface CoaProduct {
   id: string
@@ -35,7 +61,8 @@ export interface CoaStandardItem {
   spec_min: number | null
   spec_max: number | null
   sort_order: number
-  is_active: boolean
+  /** text 型登记时的预填默认值（number 型恒 null）；项目必然启用（无停用态）。 */
+  default_value: string | null
   remark: string | null
 }
 
@@ -52,7 +79,8 @@ export interface CoaItemInput {
   spec_min?: number | null
   spec_max?: number | null
   sort_order?: number | null
-  is_active?: boolean
+  /** text 型登记时的预填默认值（number 型传非空会被后端 422）。 */
+  default_value?: string | null
   remark?: string | null
 }
 
@@ -76,6 +104,12 @@ export interface CoaStandard {
   item_count?: number
   report_count?: number
   items?: CoaStandardItem[]
+  /** 详情接口返回：生效批次字段集（标准覆盖 ?? 产品默认）。 */
+  batch_fields?: CoaProductField[]
+  /** 详情接口返回：是否自定义覆盖（false=沿用产品默认）。 */
+  batch_fields_custom?: boolean
+  /** 详情接口返回：产品默认字段集（差异标注用）。 */
+  product_fields?: CoaProductField[]
 }
 
 export interface CoaStandardInput {
@@ -88,6 +122,8 @@ export interface CoaStandardInput {
   is_active?: boolean
   remark?: string | null
   items?: CoaItemInput[]
+  /** docx 导入的批次字段草稿：与产品默认一致（或空）不落覆盖。 */
+  batch_fields?: CoaProductFieldInput[] | null
   /** docx 导入草稿的原始提取结果（source=import 留底）。 */
   raw_extract?: Record<string, unknown> | null
 }
@@ -119,7 +155,6 @@ export interface CoaReport {
   id: string
   product_id: string
   standard_id: string
-  report_no: string
   serial_no: string | null
   batch_no: string
   mfg_date: string | null
@@ -136,14 +171,16 @@ export interface CoaReport {
   value_map?: Record<string, { num: number | null; text: string | null }>
   /** 矩阵接口返回：归属标准短码。 */
   standard_code?: string | null
+  /** 详情/矩阵接口返回：批次信息合成视图（key=生效字段集字段键，含内置 3 键）。 */
+  batch_info?: Record<string, string>
 }
 
 export interface CoaReportInput {
   product_id: string
   standard_id: string
-  report_no: string
   batch_no: string
-  serial_no?: string | null
+  /** 流水号：与批号同为内置必填批次字段（品名由产品带出）。 */
+  serial_no: string
   mfg_date?: string | null
   exp_date?: string | null
   issued_date?: string | null
@@ -152,6 +189,8 @@ export interface CoaReportInput {
   storage?: string | null
   conclusion?: string | null
   remark?: string | null
+  /** 模板动态批次字段值（key=生效字段集自定义键；固定列别名键后端镜像写固定列）。 */
+  batch_data?: Record<string, string> | null
   values?: CoaValueInput[]
   new_items?: CoaNewItemInput[]
   raw_extract?: Record<string, unknown> | null
@@ -162,6 +201,8 @@ export interface CoaReportInput {
 export interface CoaStandardImportPreview {
   product: CoaProduct | null
   product_draft: CoaProductDraft
+  /** 结构提取的批次信息字段标签清单（key/type 系统生成，人工可改后落库）。 */
+  batch_fields_draft: CoaProductFieldInput[]
   standard_draft: {
     code: string | null
     name: string
@@ -179,8 +220,9 @@ export interface CoaReportImportPreview {
   standard: CoaStandard | null
   /** 自动匹配失败时的候选（前端让用户手选后带 standard_id 重预览）。 */
   standard_candidates: CoaStandard[]
+  /** docx 提取到的模板动态批次字段值（key=生效字段集键，确认时传 batch_data）。 */
+  batch_dynamic: { key: string; label_cn: string; value: string }[]
   report_draft: {
-    report_no: string | null
     serial_no: string | null
     batch_no: string | null
     mfg_date: string | null
@@ -221,7 +263,10 @@ export interface CoaMatrixColumn {
 export interface CoaMatrix {
   product: CoaProduct
   columns: CoaMatrixColumn[]
-  /** 各标准及其项目（登记弹窗选标准/逐项填值用）；矩阵列以 columns 为准 */
-  standards: (CoaStandard & { items: CoaStandardItem[] })[]
+  /** 各标准及其项目与生效批次字段集（出具页动态列/弹窗表单用） */
+  standards: (CoaStandard & {
+    items: CoaStandardItem[]
+    batch_fields?: CoaProductField[]
+  })[]
   rows: CoaReport[]
 }

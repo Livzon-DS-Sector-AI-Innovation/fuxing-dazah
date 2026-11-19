@@ -4,6 +4,7 @@ import { apiGet } from '@/lib/http-client'
 import type {
   CoaMatrix,
   CoaProduct,
+  CoaProductField,
   CoaReport,
   CoaReportImportPreview,
   CoaStandard,
@@ -15,10 +16,16 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL || (typeof window === 'undefined' ? 'http://localhost:8000' : '')
 const COA_BASE = `${API_BASE}/api/v1/qa/coa`
 
-function qs(params: Record<string, string | number | boolean | undefined | null>): string {
+function qs(
+  params: Record<string, string | number | boolean | string[] | undefined | null>
+): string {
   const search = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') return
+    if (Array.isArray(value)) {
+      value.forEach((v) => search.append(key, v))
+      return
+    }
     search.set(key, String(value))
   })
   const text = search.toString()
@@ -27,6 +34,10 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 
 export async function fetchCoaProducts(activeOnly = false): Promise<CoaProduct[]> {
   return apiGet<CoaProduct[]>(`${COA_BASE}/products${qs({ active_only: activeOnly })}`)
+}
+
+export async function fetchCoaProductFields(productId: string): Promise<CoaProductField[]> {
+  return apiGet<CoaProductField[]>(`${COA_BASE}/products/${productId}/fields`)
 }
 
 export async function fetchCoaStandards(
@@ -46,8 +57,13 @@ export async function fetchCoaReportDetail(reportId: string): Promise<CoaReport>
   return apiGet<CoaReport>(`${COA_BASE}/reports/${reportId}`)
 }
 
-export async function fetchCoaMatrix(productId: string): Promise<CoaMatrix> {
-  return apiGet<CoaMatrix>(`${COA_BASE}/reports/matrix${qs({ product_id: productId })}`)
+export async function fetchCoaMatrix(
+  productId: string,
+  standardIds?: string[]
+): Promise<CoaMatrix> {
+  return apiGet<CoaMatrix>(
+    `${COA_BASE}/reports/matrix${qs({ product_id: productId, standard_id: standardIds })}`
+  )
 }
 
 /** docx → 客户标准草稿预览（不落库）。客户端直传 FormData（Server Action 有 1MB 限制）。 */

@@ -1,4 +1,4 @@
-"""工单相关 MCP Tools：查询工单、操作工单、上传照片。"""
+"""工单相关 MCP Tools：查询工单、操作工单、上传照片、指派维修人。"""
 
 from __future__ import annotations
 
@@ -13,12 +13,18 @@ from app.modules.equipment.mcp_tools._helpers import (
     _resolve_work_order,
     _wo_to_dict,
 )
+from app.modules.equipment.repository.equipment import get_department_info
 from app.modules.equipment.repository.work_order import (
     get_user_work_orders,
+    list_responsible_pending_orders,
 )
 from app.modules.equipment.schemas import WorkOrderCreate
 from app.modules.equipment.service import (
+    assign_work_order as service_assign_work_order,
+)
+from app.modules.equipment.service import (
     complete_work_order,
+    list_repair_candidates_for_equipment,
     start_work_order,
 )
 from app.modules.equipment.service import (
@@ -114,7 +120,7 @@ async def operate_work_order(
     action: str,
     operator_id: str,
     repair_detail: str | None = None,
-    spare_parts: list[dict] | None = None,
+    spare_parts: list[dict[str, Any]] | None = None,
 ) -> ToolResult:
     """
     对维护工单执行状态流转操作：开始维修、提交验收、或完成维修。
@@ -541,5 +547,286 @@ async def create_work_order(
             "priority": priority,
             "status": result.status,
             "responsible_person_set": responsible_set,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 5: 工单负责人查看名下待处理工单（指派入口）
+# ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_my_pending_work_orders(
+    operator_id: str,
+    unassigned_only: bool = True,
+    limit: int = 20,
+) -> ToolResult:
+    """
+    查询当前用户作为【工单负责人】名下的待处理工单，供指派维修人前浏览。
+
+    注意与 list_work_orders 的区别：那个查「指派给我的 + 我负责的」（维修人视角），
+    本工具只查「我负责的待处理单」（指派人视角），且未指派的单会明确标注。
+
+    Args:
+        operator_id: 实际操作人的 user_id 或姓名
+        unassigned_only: 是否只看尚未指派维修人的工单，默认 True；
+                         传 False 也列出已指派但未开工的（用于改派）。
+        limit: 最多返回条数，默认 20。
+    """
+    db = get_db()
+    try:
+        user = await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    work_orders = await list_responsible_pending_orders(
+        db, user.id, unassigned_only=unassigned_only, limit=max(1, min(limit, 100))
+    )
+    result = [_wo_to_dict(wo) for wo in work_orders]
+    if not result:
+        scope_label = "待指派维修人的" if unassigned_only else ""
+        content = f"{user.name} 名下没有{scope_label}「待处理」状态的工单。"
+        return ToolResult(content=content, structured_content={"result": [], "total": 0})
+
+    lines = [f"{user.name} 作为工单负责人，共有 {len(result)} 个待处理工单："]
+    for i, wo in enumerate(result, 1):
+        eq_label = f"{wo['equipment_name']}（{wo['equipment_no']}）" if wo["equipment_no"] else wo["equipment_name"]
+        assignee_label = (
+            f"维修人：{wo['assignee_name']}" if wo["assignee_name"] else "维修人：未指派 ⚠️"
+        )
+        lines.append(
+            f"  {i}. [{wo['priority']}·{wo['order_type']}] {wo['work_order_no']}"
+            f"（{eq_label}）{assignee_label}"
+        )
+        desc = (wo["fault_description"] or "").strip()
+        if desc:
+            lines.append(f"    故障描述：{desc[:60]}{'…' if len(desc) > 60 else ''}")
+    return ToolResult(
+        content="\n".join(lines),
+        structured_content={"result": result, "total": len(result)},
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 6: 列出工单的维修候选人
+# ─────────────────────────────────────────────────────────────
+
+
+async def _check_assignment_permission(user: Any, wo: Any) -> ToolResult | None:
+    """指派类工具的公共守卫：仅工单负责人可操作，且状态允许指派。
+
+    返回 None 表示通过；返回 ToolResult（is_error）表示被拦截。
+    """
+    if wo.responsible_person_id is None:
+        return ToolResult(
+            content="该工单未设置负责人，无法通过助手指派，请到网页端处理。",
+            structured_content={"error": "no_responsible_person"},
+            is_error=True,
+        )
+    if wo.responsible_person_id != user.id:
+        resp_name = wo.responsible_person.name if wo.responsible_person else ""
+        return ToolResult(
+            content=f"只有工单负责人（{resp_name}）可以指派该工单，当前操作人是 {user.name}。",
+            structured_content={"error": "not_responsible_person"},
+            is_error=True,
+        )
+    if wo.status not in ("待处理", "执行中"):
+        return ToolResult(
+            content=(
+                f"工单当前状态为「{wo.status}」，仅「待处理 / 执行中」的工单"
+                "可以指派或改派维修人。"
+            ),
+            structured_content={"error": f"invalid_status:{wo.status}"},
+            is_error=True,
+        )
+    return None
+
+
+@mcp.tool()
+async def list_repair_candidates(
+    work_order: str,
+    operator_id: str,
+) -> ToolResult:
+    """
+    列出某工单关联设备的维修候选人（repair 角色，按推荐排序）。
+
+    仅工单负责人可用。候选按「推荐（同部门+有平台账号）→ 其他同部门 →
+    其余」排序，推荐人与系统自动派单规则一致。
+
+    Args:
+        work_order: 工单编号（如 WO-20260616-0001）或工单 UUID
+        operator_id: 实际操作人的 user_id 或姓名
+    """
+    db = get_db()
+    try:
+        user = await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    try:
+        wo = await _resolve_work_order(db, work_order)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    denied = await _check_assignment_permission(user, wo)
+    if denied is not None:
+        return denied
+
+    equipment = wo.equipment
+    if equipment is None:
+        return ToolResult(
+            content=f"工单 {wo.work_order_no} 未关联设备，无法推导维修候选人。",
+            structured_content={"error": "no_equipment"},
+            is_error=True,
+        )
+
+    info = await list_repair_candidates_for_equipment(db, equipment)
+    candidates: list[dict[str, Any]] = info["candidates"]
+    recommended_user_id: str | None = info["recommended_user_id"]
+    if not candidates:
+        dept_name = info["department_name"] or "未设置"
+        return ToolResult(
+            content=(
+                f"工单 {wo.work_order_no} 的设备（{equipment.name}，部门：{dept_name}）"
+                "暂无可指派的维修候选人。\n"
+                "请先在「设备人员管理」中为维修工分配 repair 角色并设置部门。"
+            ),
+            structured_content={
+                "result": [],
+                "total": 0,
+                "department_name": info["department_name"],
+            },
+        )
+
+    # 排序：同部门且有账号 → 同部门 → 有账号 → 其余（稳定排序保留原始顺序）
+    ordered = sorted(
+        candidates,
+        key=lambda c: (
+            0 if c["same_department"] else 1,
+            0 if c["has_account"] else 1,
+        ),
+    )
+    eq_dept = info["department_name"] or "未设置"
+    lines = [
+        f"工单 {wo.work_order_no}（{equipment.name} · 设备部门：{eq_dept}）的维修候选人："
+    ]
+    for i, c in enumerate(ordered, 1):
+        tags = []
+        if c["user_id"] == recommended_user_id:
+            tags.append("推荐")
+        if c["same_department"]:
+            tags.append("同部门")
+        else:
+            tags.append(f"部门：{c['department'] or '未设置'}")
+        if not c["has_account"]:
+            tags.append("未绑定平台账号，指派后无法在平台处理")
+        lines.append(f"  {i}. {c['name']}（{'，'.join(tags)}）")
+    lines.append("推荐人选与系统自动派单规则一致（同部门且已绑定平台账号）。")
+    return ToolResult(
+        content="\n".join(lines),
+        structured_content={
+            "result": [
+                {**c, "recommended": c["user_id"] == recommended_user_id}
+                for c in ordered
+            ],
+            "total": len(ordered),
+            "recommended_user_id": recommended_user_id,
+            "department_name": info["department_name"],
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 7: 指派（改派）工单维修人
+# ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def assign_work_order(
+    work_order: str,
+    assignee: str,
+    operator_id: str,
+) -> ToolResult:
+    """
+    指派（或改派）工单的维修人。仅工单负责人可用，被指派人会收到飞书通知。
+
+    Args:
+        work_order: 工单编号（如 WO-20260616-0001）或工单 UUID
+        assignee: 维修人的 user_id、飞书 user_id 或姓名（姓名须唯一匹配，
+                  多人同名时请先让用户确认具体人选）
+        operator_id: 实际操作人的 user_id 或姓名（必须是该工单的负责人）
+    """
+    db = get_db()
+    try:
+        user = await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    try:
+        wo = await _resolve_work_order(db, work_order)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    denied = await _check_assignment_permission(user, wo)
+    if denied is not None:
+        return denied
+
+    try:
+        assignee_user = await resolve_user(db, assignee)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    # 跨部门拦截：被指派人部门与设备部门不一致时，对方在平台端会因数据
+    # 范围校验无法开工，工单卡死（见 service.personnel 的口径说明）。
+    equipment = wo.equipment
+    eq_dept_name: str | None = None
+    if equipment is not None and equipment.department_id:
+        dept_info = await get_department_info(db, equipment.department_id)
+        eq_dept_name = dept_info.get("name") if dept_info else None
+    assignee_dept = (assignee_user.department or "").strip() or None
+    if eq_dept_name and assignee_dept != eq_dept_name:
+        return ToolResult(
+            content=(
+                f"「{assignee_user.name}」的部门（{assignee_dept or '未设置'}）与设备所属部门"
+                f"（{eq_dept_name}）不一致，跨部门指派后对方将无法开工处理该工单。\n"
+                "请从同部门候选中选择（可调用 list_repair_candidates 查看候选人），"
+                "确需跨部门指派请到网页端操作。"
+            ),
+            structured_content={"error": "cross_department"},
+            is_error=True,
+        )
+
+    # 改派信息要在 service 调用前留存（service 会重取工单对象）
+    previous_assignee_name = wo.assignee.name if wo.assignee else ""
+    is_reassign = wo.assignee_id is not None
+
+    from app.modules.equipment.deps import EquipmentAccessContext
+
+    ctx = EquipmentAccessContext(user=user, data_scope="all")
+    try:
+        result = await service_assign_work_order(db, wo.id, assignee_user.id, ctx)
+    except (AppException, NotFoundException) as e:
+        return ToolResult(content=e.message, structured_content={"error": e.message}, is_error=True)
+    await db.commit()
+
+    eq_name = equipment.name if equipment is not None else ""
+    verb = "改派" if is_reassign else "指派"
+    dept_label = f"（{assignee_dept}）" if assignee_dept else ""
+    lines = [
+        f"工单 {result.work_order_no}（{eq_name}）已{verb}给 {assignee_user.name}{dept_label}。"
+    ]
+    if is_reassign:
+        lines.append(f"原维修人：{previous_assignee_name}。")
+    lines.append("已通过飞书通知对方，对方可在对话中说「我的工单」开始处理。")
+    return ToolResult(
+        content="\n".join(lines),
+        structured_content={
+            "success": True,
+            "work_order_no": result.work_order_no,
+            "assignee_user_id": str(assignee_user.id),
+            "assignee_name": assignee_user.name,
+            "reassigned": is_reassign,
+            "previous_assignee_name": previous_assignee_name,
         },
     )

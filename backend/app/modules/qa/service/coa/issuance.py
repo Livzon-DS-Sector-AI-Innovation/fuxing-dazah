@@ -1,15 +1,18 @@
 """COA 出具登记：报告 CRUD、docx 导入匹配预览、产品维度矩阵透视。
 
 守卫口径：
-- report_no 全局唯一（预检 + SAVEPOINT 409）；(产品, 标准, 批号) 唯一——
-  同批同标准只登记一份，补发=软删重登。
+- 无报告编号（业务键=产品+模板+批号）：(产品, 标准, 批号) 唯一——同批同
+  标准只登记一份，补发=软删重登；docx 里印的编号仅作导入解析匹配锚点。
 - 值的 item 必须归属报告标准；导入确认可带 new_items 并入标准（携带首份
   值，后端按新建 item id 归并，前端无需预知 UUID）。
-- 矩阵：列=产品各标准 active 项目（两级列头），行=报告，格=值映射。
+- batch_data 键必须命中标准生效字段集自定义键；固定列别名键镜像写报告
+  固定列，其余进 JSONB；读取按字段集合成 batch_info 视图。
+- 矩阵：列=产品各标准项目（两级列头），行=报告，格=值映射。
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -20,23 +23,33 @@ from app.core.exceptions import AppException, NotFoundException
 from app.modules.qa.models import CoaReport, CoaSourceType, CoaStandardItem
 from app.modules.qa.repository import coa as repo
 from app.modules.qa.schemas.coa import CoaReportCreate, CoaReportUpdate, CoaValueIn
+from app.modules.qa.service.coa.ai_parse import (
+    COA_AI_PROMPT_VERSION_VALUES,
+    parse_docx_ai,
+)
 from app.modules.qa.service.coa.common import (
     _actor_id,
+    _normalize_field_token,
+    builtin_key_of,
+    compose_batch_info,
     get_product_or_404,
     get_report_or_404,
     get_standard_or_404,
     item_dict,
     product_dict,
+    report_column_key_of,
     report_dict,
     standard_dict,
     value_dict,
 )
-from app.modules.qa.service.coa.docx_parse import parse_docx
-from app.modules.qa.service.coa.standards import _insert_items
+from app.modules.qa.service.coa.docx_parse import parse_date_text
+from app.modules.qa.service.coa.standards import _insert_items, resolve_standard_fields
 
 
 def _parse_to_raw(parse: Any) -> dict[str, Any]:
-    return {
+    raw: dict[str, Any] = {
+        "source": "ai",
+        "prompt_version": COA_AI_PROMPT_VERSION_VALUES,
         "batch_info": parse.batch_info,
         "serial_no": parse.serial_no,
         "report_no": parse.report_no,
@@ -44,18 +57,80 @@ def _parse_to_raw(parse: Any) -> dict[str, Any]:
         "items": [
             {
                 "name": it.name,
+                "name_en": it.name_en,
+                "unit": it.unit,
                 "spec_text": it.spec_text,
+                "spec_text_en": it.spec_en,
                 "result": it.result,
+                "result_en": it.result_en,
             }
             for it in parse.items
         ],
     }
+    if parse.batch_fields:
+        raw["batch_info_fields"] = [
+            {"label_cn": f.label_cn, "label_en": f.label_en, "value": f.value}
+            for f in parse.batch_fields
+        ]
+    return raw
+
+
+def _legacy_standard_code(report_no: str | None) -> str | None:
+    """旧建议口径的模板码：编号倒数第二个纯数字段（COA-HAF-3205-006 → 3205）。
+
+    改造前导入的标准按此码落库；自动匹配先按新口径（整段），查不到再用它
+    兜底，避免存量标准全部退化成手动选择。
+    """
+    if not report_no:
+        return None
+    digits = [s for s in re.split(r"[-_/]", report_no) if s.isdigit()]
+    if len(digits) >= 2:
+        return digits[-2]
+    return digits[-1] if digits else None
+
+
+def _dynamic_batch_fields(
+    parsed_fields: list[Any], fields: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """值版提取的批次字段标签 → 生效字段集键（内置 3 键跳过）。
+
+    标签/英文标签/键归一后与生效自定义字段比对；命中且值非空才返回。
+    固定列别名键也返回——create_report 的 _split_batch_data 会镜像写列。
+    """
+    by_token: dict[str, dict[str, Any]] = {}
+    for f in fields:
+        if f.get("builtin"):
+            continue
+        for token in (
+            _normalize_field_token(f["key"]),
+            _normalize_field_token(f["label_cn"]),
+            _normalize_field_token(f["label_en"]) if f["label_en"] else "",
+        ):
+            if token:
+                by_token.setdefault(token, f)
+    matched: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for pf in parsed_fields:
+        value = (pf.value or "").strip()
+        if not value:
+            continue
+        for candidate in (pf.key, pf.label_cn, pf.label_en):
+            token = _normalize_field_token(candidate) if candidate else ""
+            field = by_token.get(token) if token else None
+            if field is None:
+                continue
+            if field["key"] not in seen:
+                seen.add(field["key"])
+                matched.append(
+                    {"key": field["key"], "label_cn": field["label_cn"], "value": value}
+                )
+            break
+    return matched
 
 
 def _report_draft(parse: Any) -> dict[str, Any]:
     """解析结果 → 报告头草稿（日期已解析为 ISO；出具日期人工填）。"""
     return {
-        "report_no": parse.report_no,
         "serial_no": parse.serial_no,
         "batch_no": parse.batch_info.get("batch_no"),
         "mfg_date": parse.mfg_date.isoformat() if parse.mfg_date else None,
@@ -76,11 +151,14 @@ async def import_report_preview(
     data: bytes,
     *,
     standard_id: uuid.UUID | None = None,
+    filename: str = "coa.docx",
 ) -> dict[str, Any]:
-    """docx → 标准匹配 + 项目对齐 + 值预填（不落库）。"""
-    parse = parse_docx(data)
-    if not parse.report_no:
-        raise AppException(status_code=400, message="未能从 docx 识别报告编号（No.）")
+    """docx → 标准匹配 + 项目对齐 + 值预填（不落库）。
+
+    docx 里印的报告编号只用于推导产品短码/模板码做自动匹配（识别不到就
+    返回候选清单让用户手选），不作为报告字段落库。
+    """
+    parse = await parse_docx_ai(data, filename)
 
     # 产品与标准解析：显式指定 → 直接用；否则按 产品短码+模板码 自动匹配
     product = None
@@ -94,6 +172,13 @@ async def import_report_preview(
         standard = await repo.find_standard_by_code(
             db, product.id, parse.suggested_standard_code
         )
+        # 存量标准按旧口径建码（3205），新建议是整段（HAF-3205-006）→ 再试一次
+        if standard is None:
+            legacy_code = _legacy_standard_code(parse.report_no)
+            if legacy_code and legacy_code != parse.suggested_standard_code:
+                standard = await repo.find_standard_by_code(
+                    db, product.id, legacy_code
+                )
 
     candidates: list[dict[str, Any]] = []
     if standard is None:
@@ -115,11 +200,17 @@ async def import_report_preview(
         "matched_items": [],
         "unmatched_items": [],  # docx 有、标准无 → 可勾选并入标准（带值）
         "missing_items": [],  # 标准有、docx 无（提示留空/补录）
+        # 模板动态批次字段值（key=生效字段集键，label 供预览展示）→ 确认时传 batch_data
+        "batch_dynamic": [],
         "raw_extract": _parse_to_raw(parse),
     }
 
+    if standard is not None and parse.batch_fields:
+        fields, _custom = await resolve_standard_fields(db, standard.id)
+        result["batch_dynamic"] = _dynamic_batch_fields(parse.batch_fields, fields)
+
     if standard is not None:
-        items = await repo.list_items(db, standard.id, active_only=False)
+        items = await repo.list_items(db, standard.id)
         by_code = {i.code: i for i in items}
         for it in parse.items:
             hit = by_code.get(it.code)
@@ -128,6 +219,7 @@ async def import_report_preview(
                     {
                         "name_cn": it.name,
                         "name_en": it.name_en,
+                        "unit": it.unit,
                         "value_type": it.value_type,
                         "spec_text": it.spec_text,
                         "spec_min": it.spec_min,
@@ -148,7 +240,7 @@ async def import_report_preview(
                 )
         hit_codes = {it.code for it in parse.items}
         result["missing_items"] = [
-            item_dict(i) for i in items if i.is_active and i.code not in hit_codes
+            item_dict(i) for i in items if i.code not in hit_codes
         ]
     return result
 
@@ -161,12 +253,9 @@ async def _validate_report_unique(
     *,
     product_id: uuid.UUID,
     standard_id: uuid.UUID,
-    report_no: str,
     batch_no: str,
     exclude_id: uuid.UUID | None = None,
 ) -> None:
-    if await repo.find_report_by_no(db, report_no, exclude_id=exclude_id):
-        raise AppException(status_code=409, message=f"报告编号 {report_no} 已存在")
     if await repo.find_report_by_batch(
         db, product_id, standard_id, batch_no, exclude_id=exclude_id
     ):
@@ -184,7 +273,7 @@ async def _validate_values(
     """values 只允许引用既有项目；新项目的值走 new_items 归并。"""
     if not values:
         return []
-    items = await repo.list_items(db, standard_id, active_only=False)
+    items = await repo.list_items(db, standard_id)
     valid_ids = {i.id for i in items}
     rows: list[dict[str, Any]] = []
     seen: set[uuid.UUID] = set()
@@ -208,10 +297,83 @@ async def _validate_values(
     return rows
 
 
+# ─────────────────────── 批次字段解析 ───────────────────────
+
+
+def _require_date(key: str, value: str) -> Any:
+    """date 型批次字段值：确定性解析，解析不动 → 400。"""
+    parsed = parse_date_text(value)
+    if parsed is None:
+        raise AppException(
+            status_code=400, message=f"批次字段 {key} 的值「{value}」不是有效日期"
+        )
+    return parsed
+
+
+def _split_batch_data(
+    fields: list[dict[str, Any]],
+    batch_data: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """批次字段值 → (固定列镜像更新, batch_data JSONB 值)。
+
+    键必须命中生效字段集自定义键；内置键 400（走报告头字段）；date 型
+    字段值经确定性日期解析（固定日期列存 date，非列 date 字段存 ISO 文本）。
+    """
+    field_by_key = {f["key"]: f for f in fields if not f.get("builtin")}
+    col_updates: dict[str, Any] = {}
+    jsonb: dict[str, str] = {}
+    for key, value in batch_data.items():
+        builtin_key = builtin_key_of(key)
+        if builtin_key is not None:
+            raise AppException(
+                status_code=400,
+                message=f"批次字段 {key} 是内置字段（{builtin_key}），请走报告头字段",
+            )
+        field = field_by_key.get(key)
+        if field is None:
+            raise AppException(
+                status_code=400, message=f"批次字段 {key} 不在模板字段集中"
+            )
+        column = report_column_key_of(key)
+        if column == "mfg_date":
+            col_updates["mfg_date"] = _require_date(key, value)
+        elif column == "exp_date":
+            col_updates["exp_date"] = _require_date(key, value)
+        elif field["field_type"] == "date":
+            jsonb[key] = _require_date(key, value).isoformat()
+        elif column is not None:
+            col_updates[column] = value
+        else:
+            jsonb[key] = value
+    return col_updates, jsonb
+
+
+def _zero_missing_column_targets(
+    col_updates: dict[str, Any],
+    fields: list[dict[str, Any]],
+    provided_keys: set[str],
+) -> None:
+    """全量替换语义：生效集中未被载荷覆盖的固定列别名目标置 None（清零）。"""
+    for f in fields:
+        if f.get("builtin") or f["key"] in provided_keys:
+            continue
+        column = report_column_key_of(f["key"])
+        if column is not None and column not in col_updates:
+            col_updates[column] = None
+
+
 async def get_report_detail(db: AsyncSession, report_id: uuid.UUID) -> dict[str, Any]:
     row = await get_report_or_404(db, report_id)
     values = await repo.list_values_by_report(db, row.id)
-    return report_dict(row, values=[value_dict(v) for v in values])
+    fields, _custom = await resolve_standard_fields(db, row.standard_id)
+    product = await repo.get_product(db, row.product_id)
+    return report_dict(
+        row,
+        values=[value_dict(v) for v in values],
+        batch_info=compose_batch_info(
+            row, fields, product_name=product.name if product else None
+        ),
+    )
 
 
 async def list_reports(db: AsyncSession, product_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -230,9 +392,14 @@ async def create_report(
         db,
         product_id=product.id,
         standard_id=standard.id,
-        report_no=payload.report_no.strip(),
         batch_no=payload.batch_no.strip(),
     )
+    # 批次字段先解析（键/日期校验失败即 400，不进事务）
+    col_updates: dict[str, Any] = {}
+    jsonb: dict[str, str] = {}
+    if payload.batch_data:
+        fields, _custom = await resolve_standard_fields(db, standard.id)
+        col_updates, jsonb = _split_batch_data(fields, payload.batch_data)
     try:
         async with db.begin_nested():
             rows = await _validate_values(db, standard.id, payload.values)
@@ -253,7 +420,6 @@ async def create_report(
             report = CoaReport(
                 product_id=product.id,
                 standard_id=standard.id,
-                report_no=payload.report_no.strip(),
                 serial_no=payload.serial_no,
                 batch_no=payload.batch_no.strip(),
                 mfg_date=payload.mfg_date,
@@ -267,17 +433,18 @@ async def create_report(
                 if payload.raw_extract
                 else CoaSourceType.MANUAL.value,
                 raw_extract=payload.raw_extract,
+                batch_data=jsonb or None,
                 remark=payload.remark,
                 created_by=_actor_id(user),
                 updated_by=_actor_id(user),
             )
+            for key, value in col_updates.items():
+                setattr(report, key, value)
             db.add(report)
             await db.flush()
             await repo.replace_report_values(db, report.id, rows)
     except IntegrityError as exc:
-        raise AppException(
-            status_code=409, message="报告编号或批号冲突，请刷新后重试"
-        ) from exc
+        raise AppException(status_code=409, message="批号冲突，请刷新后重试") from exc
     return await get_report_detail(db, report.id)
 
 
@@ -290,8 +457,8 @@ async def update_report(
     report = await get_report_or_404(db, report_id)
     updates = payload.model_dump(exclude_unset=True)
     new_values = updates.pop("values", None)
+    new_batch_data = updates.pop("batch_data", None)
     head_fields = {
-        "report_no",
         "serial_no",
         "batch_no",
         "mfg_date",
@@ -305,18 +472,24 @@ async def update_report(
     }
     touched = {k: v for k, v in updates.items() if k in head_fields}
     for key, value in touched.items():
-        if key in ("report_no", "batch_no"):
+        if key == "batch_no":
             value = (value or "").strip()
         setattr(report, key, value)
-    if "report_no" in touched or "batch_no" in touched:
+    if "batch_no" in touched:
         await _validate_report_unique(
             db,
             product_id=report.product_id,
             standard_id=report.standard_id,
-            report_no=report.report_no,
             batch_no=report.batch_no,
             exclude_id=report.id,
         )
+    if new_batch_data is not None:
+        fields, _custom = await resolve_standard_fields(db, report.standard_id)
+        col_updates, jsonb = _split_batch_data(fields, new_batch_data)
+        _zero_missing_column_targets(col_updates, fields, set(new_batch_data))
+        for key, value in col_updates.items():
+            setattr(report, key, value)
+        report.batch_data = jsonb or None
     report.updated_by = _actor_id(user)
     try:
         async with db.begin_nested():
@@ -325,9 +498,7 @@ async def update_report(
                 rows = await _validate_values(db, report.standard_id, new_values)
                 await repo.replace_report_values(db, report.id, rows)
     except IntegrityError as exc:
-        raise AppException(
-            status_code=409, message="报告编号或批号冲突，请刷新后重试"
-        ) from exc
+        raise AppException(status_code=409, message="批号冲突，请刷新后重试") from exc
     return await get_report_detail(db, report_id)
 
 
@@ -396,11 +567,19 @@ async def matrix(
             "text": v.value_text,
         }
 
+    # 各标准生效批次字段集（出具页动态渲染列/弹窗表单用）与行级合成视图
+    fields_by_std: dict[uuid.UUID, list[dict[str, Any]]] = {}
+    for s in standards:
+        fields_by_std[s.id], _custom = await resolve_standard_fields(db, s.id)
+
     std_by_id = {s.id: s for s in standards}
     rows = [
         report_dict(
             r,
             value_map=value_map.get(r.id, {}),
+            batch_info=compose_batch_info(
+                r, fields_by_std.get(r.standard_id, []), product_name=product.name
+            ),
         )
         | {
             "standard_code": std_by_id[r.standard_id].code
@@ -418,6 +597,7 @@ async def matrix(
                 item_count=len(items_by_std.get(s.id, [])),
                 items=[item_dict(i) for i in items_by_std.get(s.id, [])],
             )
+            | {"batch_fields": fields_by_std.get(s.id, [])}
             for s in standards
         ],
         "rows": rows,

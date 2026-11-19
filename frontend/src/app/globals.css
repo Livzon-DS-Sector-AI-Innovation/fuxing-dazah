@@ -309,6 +309,14 @@ body {
   border-color: #4534b3;
 }
 
+/* 禁用态要压回灰底：上面的实心紫底会盖掉 antd 的 disabled 样式，
+   按钮看起来仍可点击（DESIGN.md button-primary-disabled） */
+.ant-btn-primary:not(.ant-btn-background-ghost):disabled {
+  background: #e5e3df;
+  border-color: #e5e3df;
+  color: #bbb8b1;
+}
+
 /* 卡片样式 */
 .ant-card {
   border-radius: 12px;

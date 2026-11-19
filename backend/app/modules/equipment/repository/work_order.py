@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -321,6 +321,45 @@ async def get_user_work_orders(
         .order_by(WorkOrder.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def list_responsible_pending_orders(
+    db: AsyncSession,
+    responsible_person_id: uuid.UUID,
+    *,
+    unassigned_only: bool = False,
+    limit: int = 20,
+) -> list[WorkOrder]:
+    """查询某负责人名下的待处理工单（供指派维修人用）。
+
+    unassigned_only=True 时只返回尚未指派维修人（assignee_id 为空）的单。
+    按优先级（紧急>高>中>低）+ 报修时间排序。
+    """
+    priority_rank = case(
+        (WorkOrder.priority == "紧急", 0),
+        (WorkOrder.priority == "高", 1),
+        (WorkOrder.priority == "中", 2),
+        else_=3,
+    )
+    stmt = (
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.responsible_person_id == responsible_person_id,
+            WorkOrder.status == "待处理",
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    if unassigned_only:
+        stmt = stmt.where(WorkOrder.assignee_id.is_(None))
+    stmt = stmt.order_by(priority_rank, WorkOrder.reported_at).limit(limit)
+    return list((await db.execute(stmt)).scalars().all())
 
 
 async def get_work_order_by_no(

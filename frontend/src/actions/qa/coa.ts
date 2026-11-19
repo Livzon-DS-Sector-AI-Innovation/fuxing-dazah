@@ -5,6 +5,8 @@ import { API_BASE, actionFetch, type ActionResult } from '@/actions/production/h
 import type {
   CoaItemInput,
   CoaProduct,
+  CoaProductField,
+  CoaProductFieldInput,
   CoaProductInput,
   CoaReport,
   CoaReportInput,
@@ -38,6 +40,22 @@ export async function updateCoaProduct(
     method: 'PATCH',
     body: JSON.stringify(input),
   })
+  if (result.success) revalidateCoa()
+  return result
+}
+
+/** 产品批次信息字段配置全量替换。 */
+export async function replaceCoaProductFields(
+  productId: string,
+  fields: CoaProductFieldInput[]
+): Promise<ActionResult<CoaProductField[]>> {
+  const result = await actionFetch<CoaProductField[]>(
+    `${BASE}/products/${productId}/fields`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ fields }),
+    }
+  )
   if (result.success) revalidateCoa()
   return result
 }
@@ -82,6 +100,34 @@ export async function replaceCoaStandardItems(
     method: 'PUT',
     body: JSON.stringify({ items }),
   })
+  if (result.success) revalidateCoa()
+  return result
+}
+
+/** 标准批次信息字段覆盖全量替换（与产品默认解耦）。 */
+export async function replaceCoaStandardFields(
+  standardId: string,
+  fields: CoaProductFieldInput[]
+): Promise<ActionResult<{ batch_fields: CoaProductField[]; batch_fields_custom: boolean }>> {
+  const result = await actionFetch<{ batch_fields: CoaProductField[]; batch_fields_custom: boolean }>(
+    `${BASE}/standards/${standardId}/fields`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ fields }),
+    }
+  )
+  if (result.success) revalidateCoa()
+  return result
+}
+
+/** 恢复产品默认批次信息字段（删标准覆盖）。 */
+export async function restoreCoaStandardFields(
+  standardId: string
+): Promise<ActionResult<{ batch_fields: CoaProductField[]; batch_fields_custom: boolean }>> {
+  const result = await actionFetch<{ batch_fields: CoaProductField[]; batch_fields_custom: boolean }>(
+    `${BASE}/standards/${standardId}/fields`,
+    { method: 'DELETE' }
+  )
   if (result.success) revalidateCoa()
   return result
 }

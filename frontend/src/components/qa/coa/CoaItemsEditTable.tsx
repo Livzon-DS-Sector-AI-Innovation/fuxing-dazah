@@ -1,6 +1,6 @@
 'use client'
 
-import { Button, Input, InputNumber, Popconfirm, Select, Switch, Table } from 'antd'
+import { Button, Input, InputNumber, Popconfirm, Select, Table } from 'antd'
 import { ArrowDownOutlined, ArrowUpOutlined } from '@ant-design/icons'
 import type { CoaItemInput, CoaStandardItem, CoaValueType } from '@/types/qa'
 import { VALUE_TYPE_OPTIONS } from './CoaShared'
@@ -17,7 +17,7 @@ export function toItemRow(item: CoaItemInput): CoaItemRow {
   return { ...item, key: item.id ?? `new-${rowSeq}` }
 }
 
-/** 行集 → 全量替换载荷：排序=行序，空串归 null。 */
+/** 行集 → 全量替换载荷：排序=行序，空串归 null；数值型行的默认值恒不进载荷。 */
 export function rowsToItemPayload(rows: CoaItemRow[]): CoaItemInput[] {
   return rows.map((row, index) => ({
     id: row.id ?? null,
@@ -30,7 +30,8 @@ export function rowsToItemPayload(rows: CoaItemRow[]): CoaItemInput[] {
     spec_min: row.spec_min ?? null,
     spec_max: row.spec_max ?? null,
     sort_order: index,
-    is_active: row.is_active ?? true,
+    default_value:
+      row.value_type === 'text' ? row.default_value?.trim() || null : null,
     remark: row.remark || null,
   }))
 }
@@ -50,17 +51,24 @@ export function validateItemRows(rows: CoaItemRow[]): string | null {
 }
 
 /**
- * 标准项目受控行内编辑表格：新增/删除/上下移/双语名/类型/单位/标准原文/停用。
- * 全量替换语义由调用方提交（带 id=保留更新；不在表中的既有项目由后端按引用守卫）。
+ * 标准项目受控行内编辑表格：新增/删除/上下移/双语名/类型/单位/标准原文/
+ * 默认值（text 型登记预填用）。全量替换语义由调用方提交（带 id=保留更新；
+ * 不在表中的既有项目由后端软删让号——项目必然启用，无停用态）。
  */
 export function CoaItemsEditTable({
   rows,
   onChange,
   editable,
+  scrollY = 460,
+  focusRowKey,
 }: {
   rows: CoaItemRow[]
   onChange: (rows: CoaItemRow[]) => void
   editable: boolean
+  /** 表体最大高度；false = 不内部滚动，交给外层容器统一滚 */
+  scrollY?: number | false
+  /** 新增行定位：该行挂载时聚焦中文名输入框，浏览器会把整行滚进可视区 */
+  focusRowKey?: string | null
 }) {
   const updateRow = (key: string, patch: Partial<CoaItemRow>) => {
     onChange(rows.map((row) => (row.key === key ? { ...row, ...patch } : row)))
@@ -84,23 +92,25 @@ export function CoaItemsEditTable({
       size="small"
       dataSource={rows}
       pagination={false}
-      // x 滚动：列按自然宽度渲染，窄容器（导入弹窗）里不被压扁截断
-      scroll={{ x: 940, y: 460 }}
+      // x 滚动：列按自然宽度渲染；窄容器（导入弹窗）横向滚动，避免「标准原文」被挤成 0 宽
+      scroll={{ x: 1234, ...(scrollY ? { y: scrollY } : {}) }}
       columns={[
         {
           title: '#',
-          width: 44,
+          width: 40,
+          align: 'center',
           render: (_v, _row, index) => index + 1,
         },
         {
           title: '项目（中文）',
           dataIndex: 'name_cn',
-          width: 180,
+          width: 170,
           render: (v: string, row) =>
             editable ? (
               <Input
                 size="small"
                 value={v}
+                autoFocus={row.key === focusRowKey}
                 onChange={(e) => updateRow(row.key, { name_cn: e.target.value })}
               />
             ) : (
@@ -125,7 +135,7 @@ export function CoaItemsEditTable({
         {
           title: '类型',
           dataIndex: 'value_type',
-          width: 110,
+          width: 112,
           render: (v: CoaValueType, row) =>
             editable ? (
               <Select
@@ -133,7 +143,13 @@ export function CoaItemsEditTable({
                 style={{ width: '100%' }}
                 value={v}
                 options={VALUE_TYPE_OPTIONS}
-                onChange={(next) => updateRow(row.key, { value_type: next })}
+                // 切到数值型时清掉默认值（默认值仅文本型可用，后端同口径 422）
+                onChange={(next) =>
+                  updateRow(row.key, {
+                    value_type: next,
+                    ...(next === 'number' ? { default_value: null } : {}),
+                  })
+                }
               />
             ) : (
               v === 'number' ? '数值' : '文字'
@@ -142,7 +158,7 @@ export function CoaItemsEditTable({
         {
           title: '单位',
           dataIndex: 'unit',
-          width: 90,
+          width: 80,
           render: (v: string | null, row) =>
             editable ? (
               <Input
@@ -157,6 +173,7 @@ export function CoaItemsEditTable({
         {
           title: '标准原文',
           dataIndex: 'spec_text',
+          width: 240,
           render: (v: string | null, row) =>
             editable ? (
               <Input
@@ -172,7 +189,7 @@ export function CoaItemsEditTable({
         {
           title: '下限',
           dataIndex: 'spec_min',
-          width: 84,
+          width: 76,
           render: (v: number | null, row) =>
             editable ? (
               <InputNumber
@@ -188,7 +205,7 @@ export function CoaItemsEditTable({
         {
           title: '上限',
           dataIndex: 'spec_max',
-          width: 84,
+          width: 76,
           render: (v: number | null, row) =>
             editable ? (
               <InputNumber
@@ -202,34 +219,42 @@ export function CoaItemsEditTable({
             ),
         },
         {
-          title: '启用',
-          dataIndex: 'is_active',
-          width: 64,
-          render: (v: boolean, row) => (
-            <Switch
-              size="small"
-              checked={v ?? true}
-              disabled={!editable}
-              onChange={(next) => updateRow(row.key, { is_active: next })}
-            />
-          ),
+          title: '默认值',
+          dataIndex: 'default_value',
+          width: 120,
+          render: (v: string | null, row) =>
+            row.value_type !== 'text' ? (
+              '—'
+            ) : editable ? (
+              <Input
+                size="small"
+                value={v ?? ''}
+                placeholder="符合规定"
+                title="登记 COA 时预填该文字（可改）"
+                onChange={(e) => updateRow(row.key, { default_value: e.target.value })}
+              />
+            ) : (
+              v ?? '—'
+            ),
         },
         ...(editable
           ? [
               {
                 title: '操作',
-                width: 116,
+                width: 140,
                 render: (_v: unknown, row: CoaItemRow) => (
                   <>
                     <Button
                       type="text"
                       size="small"
+                      aria-label="上移"
                       icon={<ArrowUpOutlined />}
                       onClick={() => moveRow(row.key, -1)}
                     />
                     <Button
                       type="text"
                       size="small"
+                      aria-label="下移"
                       icon={<ArrowDownOutlined />}
                       onClick={() => moveRow(row.key, 1)}
                     />
