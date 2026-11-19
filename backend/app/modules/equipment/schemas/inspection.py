@@ -270,6 +270,9 @@ class EquipmentCheckResult(BaseModel):
     records: list[InspectionRecordItem] = Field(
         ..., min_length=1, description="检查项结果列表"
     )
+    note: str | None = Field(
+        default=None, max_length=2000, description="设备现场说明（计划外现象）"
+    )
 
 
 class InspectionRecordResponse(BaseModel):
@@ -287,6 +290,21 @@ class InspectionRecordResponse(BaseModel):
     expected_result: str | None = None
     created_at: datetime
     route_location_id: uuid.UUID | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class InspectionEquipmentNoteResponse(BaseModel):
+    """巡检设备现场说明响应"""
+
+    id: uuid.UUID
+    task_id: uuid.UUID
+    equipment_id: uuid.UUID
+    equipment_name: str | None = None
+    content: str
+    created_by: uuid.UUID | None = None
+    created_by_name: str | None = None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -348,10 +366,13 @@ class InspectionAIAnalyzeResponse(BaseModel):
 
 # ═══════════ 历史详情 ═══════════
 class InspectionTaskDetailResponse(InspectionTaskResponse):
-    """巡检任务详情响应（含记录和照片）"""
+    """巡检任务详情响应（含记录、照片和现场说明）"""
 
     records: list[InspectionRecordResponse] = Field(default_factory=list)
     photos: list[InspectionPhotoResponse] = Field(default_factory=list)
+    equipment_notes: list[InspectionEquipmentNoteResponse] = Field(
+        default_factory=list, description="设备现场说明（按设备归组由前端处理）"
+    )
 
 
 # ==================== 巡检分析 ====================

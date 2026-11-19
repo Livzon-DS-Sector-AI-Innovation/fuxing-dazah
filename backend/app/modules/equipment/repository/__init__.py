@@ -48,6 +48,7 @@ from app.modules.equipment.repository.failure_code import (
 )
 from app.modules.equipment.repository.inspection import (  # noqa: F401
     count_photos_by_task,
+    create_equipment_note,
     create_inspection_records,
     create_photo,
     create_route,
@@ -60,6 +61,8 @@ from app.modules.equipment.repository.inspection import (  # noqa: F401
     get_equipment_names_by_ids,
     get_equipment_nos_by_ids,
     get_max_task_no,
+    get_notes_by_task,
+    get_notes_by_task_and_equipment,
     get_photo_by_id,
     get_photos_by_task,
     get_photos_by_task_and_equipment,
@@ -176,11 +179,14 @@ from app.modules.equipment.repository.work_order import (
     get_max_work_order_no,
     get_pending_work_orders_by_inspection_task,
     get_stale_completed_work_orders,
+    get_unclosed_work_order,
     get_user_work_orders,
     get_work_order_by_id,
     get_work_order_by_no,
     get_work_order_statistics,
     get_work_orders,
+    list_open_work_orders_by_equipment,
+    list_reported_work_orders,
 )
 from app.modules.equipment.repository.work_order_image import (
     create_image,
@@ -227,6 +233,7 @@ __all__ = [
     "get_equipment_by_id",
     "get_equipment_by_no",
     "get_equipment_unscoped",
+    "get_unclosed_work_order",
     "get_user_name_by_id",
     "get_equipment_names_by_ids",
     "get_equipment_nos_by_ids",
@@ -259,6 +266,8 @@ __all__ = [
     "get_work_order_statistics",
     "get_work_orders",
     "get_user_work_orders",
+    "list_open_work_orders_by_equipment",
+    "list_reported_work_orders",
     # spare part
     "create_equipment_spare_part",
     "create_spare_part",
@@ -331,6 +340,7 @@ __all__ = [
     "upsert_reference_grants",
     # inspection
     "count_photos_by_task",
+    "create_equipment_note",
     "create_inspection_records",
     "create_photo",
     "create_route",
@@ -341,6 +351,8 @@ __all__ = [
     "delete_schedule",
     "get_due_schedules",
     "get_max_task_no",
+    "get_notes_by_task",
+    "get_notes_by_task_and_equipment",
     "get_photo_by_id",
     "get_photos_by_task",
     "get_photos_by_task_and_equipment",

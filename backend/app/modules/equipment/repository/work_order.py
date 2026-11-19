@@ -277,6 +277,24 @@ async def exists_unclosed_work_order(
     return (result.scalar() or 0) > 0
 
 
+async def get_unclosed_work_order(
+    db: AsyncSession, task_id: uuid.UUID, equipment_id: uuid.UUID
+) -> WorkOrder | None:
+    """取某巡检任务+设备的未关闭工单（最近的），没有则 None。"""
+    result = await db.execute(
+        select(WorkOrder)
+        .where(
+            WorkOrder.inspection_task_id == task_id,
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
 async def get_pending_work_orders_by_inspection_task(
     db: AsyncSession, task_id: uuid.UUID
 ) -> list[WorkOrder]:
@@ -319,6 +337,72 @@ async def get_user_work_orders(
             WorkOrder.is_deleted == False,  # noqa: E712
         )
         .order_by(WorkOrder.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def list_reported_work_orders(
+    db: AsyncSession,
+    reporter_id: uuid.UUID,
+    *,
+    status: str | None = None,
+    limit: int = 20,
+) -> list[WorkOrder]:
+    """查询某用户作为报修人提交的工单（报修进度视角）。
+
+    与 get_user_work_orders（维修人/负责人视角）互补：按 reporter_id 过滤，
+    且不排除已完结单——报修人关心「修好了没有」，已完成/已关闭的历史单
+    也要可见。默认最近 limit 条，按报修时间倒序。
+    """
+    stmt = (
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.reporter_id == reporter_id,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+        .limit(limit)
+    )
+    if status:
+        stmt = stmt.where(WorkOrder.status == status)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_open_work_orders_by_equipment(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+    *,
+    limit: int = 5,
+) -> list[WorkOrder]:
+    """查询某设备当前未完结的工单（报修建单前查重视角）。
+
+    同设备 + 未完结（待处理 / 执行中 / 待验收）+ 未删除，按报修时间倒序
+    取最近 limit 条。已完成 / 已关闭不返回——修完又坏属复发，应允许再报。
+    """
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+        .limit(limit)
     )
     return list(result.scalars().all())
 

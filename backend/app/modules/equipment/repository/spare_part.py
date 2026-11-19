@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.equipment.deps import EquipmentAccessContext
@@ -411,7 +411,11 @@ async def get_available_spare_parts(
                 SparePart.id.in_(this_assoc.keys()),  # 关联了此设备
             ),
         )
-        .order_by(SparePart.code)
+        # 设备专属备件优先：备件总数超过 limit 时，全局备件不能把它挤出领料列表
+        .order_by(
+            case((SparePart.id.in_(list(this_assoc)), 0), else_=1),
+            SparePart.code,
+        )
         .limit(limit)
     )
 

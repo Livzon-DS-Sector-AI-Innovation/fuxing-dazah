@@ -1235,3 +1235,34 @@ class TestTransactionsFiltersApi:
             params={"spare_part_id": _uuid.uuid4(), "date_from": future.isoformat()},
         )
         assert res_future.json()["meta"]["total"] == 0
+
+
+# ==================== 设备可用备件 ====================
+
+
+class TestAvailableSparePartsApi:
+    """GET /equipments/{id}/available-spare-parts 服务端搜索测试。"""
+
+    async def test_keyword_filters_available_parts(
+        self, client: AsyncClient, _equipment_session: AsyncSession,
+    ) -> None:
+        """keyword 应在服务端过滤，能命中 200 条窗口之外的备件。"""
+        eq_id = await TestEquipmentLinkApi._create_test_equipment(
+            _equipment_session
+        )
+        code_a = f"SP-AVAILA-{_rand_suffix()}"
+        code_b = f"SP-AVAILB-{_rand_suffix()}"
+        for code in (code_a, code_b):
+            res_create = await client.post(
+                "/api/v1/equipment/spare-parts/",
+                json={"code": code, "name": "可用备件搜索测试", "unit": "个"},
+            )
+            assert res_create.status_code == 200
+
+        res = await client.get(
+            f"/api/v1/equipment/equipments/{eq_id}/available-spare-parts",
+            params={"keyword": code_a},
+        )
+        assert res.status_code == 200
+        codes = [item["code"] for item in res.json()["data"]]
+        assert codes == [code_a]

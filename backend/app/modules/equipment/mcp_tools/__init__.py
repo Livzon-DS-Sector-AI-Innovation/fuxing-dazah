@@ -29,6 +29,8 @@ from app.modules.equipment.mcp_tools.spare_part import (  # noqa: F401
 )
 from app.modules.equipment.mcp_tools.work_order import (  # noqa: F401
     create_work_order,
+    list_equipment_open_work_orders,
+    list_my_reported_work_orders,
     list_work_orders,
     operate_work_order,
     submit_work_order_photos,

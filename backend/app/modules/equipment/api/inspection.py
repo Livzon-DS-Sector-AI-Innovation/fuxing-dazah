@@ -26,6 +26,7 @@ from app.modules.equipment.schemas.inspection import (
     EquipmentListResponse,
     InspectionAIAnalyzeRequest,
     InspectionAIItemResult,
+    InspectionEquipmentNoteResponse,
     InspectionPhotoResponse,
     InspectionRecordResponse,
     InspectionRouteCreate,
@@ -472,7 +473,13 @@ async def submit_equipment_check(
 ) -> JSONResponse:
     records = [r.model_dump() for r in data.records]
     result = await inspection_svc.submit_equipment_check(
-        db, task_id, equipment_id, records, ctx
+        db,
+        task_id,
+        equipment_id,
+        records,
+        ctx,
+        note=data.note,
+        note_by=ctx.user_id,
     )
     return success_response(
         data=[
@@ -677,14 +684,22 @@ async def get_history_detail(
     resp = _task_to_response(detail["task"])
     await _enrich_multi_device_names(db, [resp])
 
-    # 收集所有涉及到的 equipment_id，批量查询名称
+    # 收集所有涉及到的 equipment_id，批量查询名称（记录 + 现场说明）
     record_eq_ids: set[uuid.UUID] = set()
     for r in detail["records"]:
         if r.equipment_id:
             record_eq_ids.add(r.equipment_id)
+    for n in detail.get("notes", []):
+        record_eq_ids.add(n.equipment_id)
     eq_name_map = await repo.get_equipment_names_by_ids(
         db, list(record_eq_ids)
     ) if record_eq_ids else {}
+
+    # 现场说明记录人姓名
+    note_user_ids = {
+        n.created_by for n in detail.get("notes", []) if n.created_by
+    }
+    user_name_map = await inspection_svc.batch_fetch_user_names(db, note_user_ids)
 
     model = InspectionTaskDetailResponse(
         **resp.model_dump(),
@@ -717,6 +732,21 @@ async def get_history_detail(
         photos=[
             InspectionPhotoResponse.model_validate(p)
             for p in detail["photos"]
+        ],
+        equipment_notes=[
+            InspectionEquipmentNoteResponse(
+                id=n.id,
+                task_id=n.task_id,
+                equipment_id=n.equipment_id,
+                equipment_name=eq_name_map.get(n.equipment_id),
+                content=n.content,
+                created_by=n.created_by,
+                created_by_name=user_name_map.get(n.created_by)
+                if n.created_by
+                else None,
+                created_at=n.created_at,
+            )
+            for n in detail.get("notes", [])
         ],
     )
     return success_response(data=model)

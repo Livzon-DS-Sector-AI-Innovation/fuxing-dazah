@@ -132,8 +132,9 @@ export async function fetchSparePartStockClient(id: string): Promise<{
   return apiGet(`${API_BASE_URL}/api/v1/equipment/spare-parts/${id}/stock`)
 }
 
-export async function fetchAvailableSparePartsClient(equipmentId: string): Promise<SparePart[]> {
-  return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/available-spare-parts`)
+export async function fetchAvailableSparePartsClient(equipmentId: string, keyword?: string): Promise<SparePart[]> {
+  const qs = keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/available-spare-parts${qs}`)
 }
 
 export async function fetchOutboundTransactionsClient(

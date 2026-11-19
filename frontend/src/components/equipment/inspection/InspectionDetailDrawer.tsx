@@ -5,7 +5,7 @@ import { App, Drawer, Image, Typography } from 'antd'
 import { ClockCircleOutlined, EnvironmentOutlined, CheckCircleOutlined, ExclamationCircleOutlined, CameraOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
 import { fetchInspectionHistoryDetail, getInspectionPhotoUrl } from '@/lib/api/inspection'
-import type { InspectionTaskDetail, InspectionRecord } from '@/types/inspection'
+import type { InspectionTaskDetail, InspectionRecord, InspectionEquipmentNote } from '@/types/inspection'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -34,10 +34,30 @@ export function InspectionDetailDrawer() {
   useEffect(() => { if (historyDetailOpen && detailTaskId) load() }, [historyDetailOpen, detailTaskId, load])
 
   const recordGroups = useMemo(() => {
-    if (!detail?.records?.length) return []
-    return Array.from(groupByEquipment(detail.records).entries()).map(([eid, recs]) => ({
-      equipmentId: eid, equipmentName: recs[0]?.equipment_name || eid.slice(0, 8) + '…', records: recs,
-    }))
+    const groups = detail?.records?.length
+      ? Array.from(groupByEquipment(detail.records).entries()).map(([eid, recs]) => ({
+          equipmentId: eid, equipmentName: recs[0]?.equipment_name || eid.slice(0, 8) + '…', records: recs,
+        }))
+      : []
+    // 只有现场说明、还没有检查记录的设备（执行中任务先补记后提交）也要有分组
+    const seen = new Set(groups.map(g => g.equipmentId))
+    for (const n of detail?.equipment_notes || []) {
+      if (!seen.has(n.equipment_id)) {
+        groups.push({ equipmentId: n.equipment_id, equipmentName: n.equipment_name || n.equipment_id.slice(0, 8) + '…', records: [] })
+        seen.add(n.equipment_id)
+      }
+    }
+    return groups
+  }, [detail])
+
+  const notesByEquipment = useMemo(() => {
+    const m = new Map<string, InspectionEquipmentNote[]>()
+    for (const n of detail?.equipment_notes || []) {
+      const list = m.get(n.equipment_id) || []
+      list.push(n)
+      m.set(n.equipment_id, list)
+    }
+    return m
   }, [detail])
 
   const resultBadge = (r: string) => {
@@ -128,10 +148,25 @@ export function InspectionDetailDrawer() {
                   <div style={{ width: 28, height: 28, borderRadius: 8, background: C.navy, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{gi + 1}</div>
                   <EnvironmentOutlined style={{ color: C.purple, fontSize: 13 }} />
                   <span style={{ fontWeight: 600, fontSize: 14, color: C.ink }}>{group.equipmentName}</span>
-                  <span style={{ fontSize: 11, color: C.stone }}>{group.records.length} 项</span>
+                  <span style={{ fontSize: 11, color: C.stone }}>{group.records.length > 0 ? `${group.records.length} 项` : '仅现场说明'}</span>
                 </div>
 
+                {/* equipment notes */}
+                {(notesByEquipment.get(group.equipmentId) || []).map(n => (
+                  <div key={n.id} style={{ padding: '10px 16px', marginBottom: 8, background: C.lavender, borderRadius: 8, border: `1px solid ${C.hairlineSoft}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <FileTextOutlined style={{ fontSize: 12, color: C.purple }} />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: C.charcoal }}>现场说明</span>
+                      <span style={{ fontSize: 11, color: C.steel }}>
+                        {n.created_by_name || ''}{n.created_at ? ` ${dayjs(n.created_at).format('MM-DD HH:mm')}` : ''}
+                      </span>
+                    </div>
+                    <Text style={{ fontSize: 12, color: C.slate, whiteSpace: 'pre-wrap' }}>{n.content}</Text>
+                  </div>
+                ))}
+
                 {/* record rows */}
+                {group.records.length > 0 && (
                 <div style={{ borderRadius: 10, overflow: 'hidden', border: `1px solid ${C.hairlineSoft}`, background: C.canvas }}>
                   {group.records.map((rec, ri) => {
                     const b = resultBadge(rec.result)
@@ -160,6 +195,7 @@ export function InspectionDetailDrawer() {
                     )
                   })}
                 </div>
+                )}
               </div>
             ))}
           </div>

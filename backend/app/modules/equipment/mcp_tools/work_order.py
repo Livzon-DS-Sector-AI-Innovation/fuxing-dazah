@@ -16,6 +16,8 @@ from app.modules.equipment.mcp_tools._helpers import (
 from app.modules.equipment.repository.equipment import get_department_info
 from app.modules.equipment.repository.work_order import (
     get_user_work_orders,
+    list_open_work_orders_by_equipment,
+    list_reported_work_orders,
     list_responsible_pending_orders,
 )
 from app.modules.equipment.schemas import WorkOrderCreate
@@ -38,6 +40,16 @@ from app.platform.mcp.deps import get_db
 from app.platform.mcp.server import get_module_mcp
 
 mcp = get_module_mcp("equipment")
+
+
+def _eq_label(wo: dict[str, Any]) -> str:
+    """工单列表里的设备标签：名称（编号），无编号时只显示名称。"""
+    return (
+        f"{wo['equipment_name']}（{wo['equipment_no']}）"
+        if wo["equipment_no"]
+        else wo["equipment_name"]
+    )
+
 
 # ─────────────────────────────────────────────────────────────
 # Tool 1: 查询用户维护工单
@@ -92,7 +104,7 @@ async def list_work_orders(
         )
     lines = [f"{user.name} 共有 {len(result)} 个工单："]
     for wo in result:
-        eq_label = f"{wo['equipment_name']}（{wo['equipment_no']}）" if wo["equipment_no"] else wo["equipment_name"]
+        eq_label = _eq_label(wo)
         img_info = f"📷{wo['image_count']}张" if wo["image_count"] else ""
         parts = [f"  [{wo['status']}] {wo['work_order_no']}"]
         parts.append(f"（{wo['order_type']} · {eq_label}）")
@@ -106,6 +118,141 @@ async def list_work_orders(
     return ToolResult(
         content="\n".join(lines),
         structured_content={"result": result, "total": len(result)},
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 1b: 报修人查询自己报过的工单（报修进度）
+# ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_my_reported_work_orders(
+    operator_id: str,
+    status: str | None = None,
+) -> ToolResult:
+    """
+    查询当前用户作为【报修人】提交的工单及进度。
+
+    报修人视角：用户问「我报的设备问题修得怎么样了」时使用。
+    包含已完结（已完成 / 已关闭）的历史工单，默认返回最近 20 条。
+
+    与 list_work_orders（维修人 / 工单负责人视角）互补——只报修、
+    不负责维修的用户在 list_work_orders 里查不到自己的单子。
+
+    Args:
+        operator_id: 实际操作人的 user_id 或姓名（替谁查）
+        status: 工单状态过滤，可选值：待处理 / 执行中 / 待验收 / 已完成 / 已关闭。
+                 不传则返回全部状态（含已完结）。
+    """
+    db = get_db()
+    try:
+        user = await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    valid_statuses = {"待处理", "执行中", "待验收", "已完成", "已关闭"}
+    if status and status not in valid_statuses:
+        return ToolResult(
+            content=f"无效的工单状态「{status}」，可选值：待处理 / 执行中 / 待验收 / 已完成 / 已关闭。",
+            structured_content={"error": f"无效状态：{status}"},
+            is_error=True,
+        )
+
+    work_orders = await list_reported_work_orders(db, user.id, status=status)
+    result = [_wo_to_dict(wo) for wo in work_orders]
+    if not result:
+        empty_msg = (
+            f"{user.name} 没有「{status}」状态的报修工单。"
+            if status
+            else f"{user.name} 还没有报修过工单。"
+        )
+        return ToolResult(
+            content=empty_msg,
+            structured_content={"result": [], "total": 0},
+        )
+
+    # 查询默认按时间倒序取最近 20 条，不能说成「报修过 N 个」
+    lines = [f"{user.name} 最近 {len(result)} 个报修工单："]
+    for wo in result:
+        eq_label = _eq_label(wo)
+        assignee_label = f"维修人：{wo['assignee_name']}" if wo["assignee_name"] else "维修人：未指派"
+        parts = [f"  [{wo['status']}] {wo['work_order_no']}"]
+        parts.append(f"（{wo['order_type']} · {eq_label}）")
+        parts.append(f" {assignee_label}")
+        if wo["priority"]:
+            parts.append(f" 优先级：{wo['priority']}")
+        if wo["created_at"]:
+            parts.append(f" 报修于 {wo['created_at'][:10]}")
+        if wo["fault_description"]:
+            snippet = wo["fault_description"][:60]
+            parts.append(f"\n    故障：{snippet}{'…' if len(wo['fault_description']) > 60 else ''}")
+        lines.append("".join(parts))
+    return ToolResult(
+        content="\n".join(lines),
+        structured_content={"result": result, "total": len(result)},
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 1c: 查询设备进行中的工单（报修建单前查重）
+# ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_equipment_open_work_orders(
+    equipment: str,
+    operator_id: str,
+) -> ToolResult:
+    """
+    查询某台设备当前进行中（未完结）的工单，报修建单前查重用。
+
+    返回该设备最近的进行中工单（待处理 / 执行中 / 待验收，最多 5 条），
+    每条含报修人与故障描述全文——用于判断用户要报的问题是否已有工单
+    在处理，避免重复报修。已完成 / 已关闭的历史单不返回。
+
+    Args:
+        equipment: 设备编号（如 EQ-001）或设备 UUID
+        operator_id: 实际操作人的 user_id 或姓名
+    """
+    db = get_db()
+    try:
+        await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    try:
+        eq = await _resolve_equipment(db, equipment)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    work_orders = await list_open_work_orders_by_equipment(db, eq.id)
+    result = [_wo_to_dict(wo) for wo in work_orders]
+    eq_label = (
+        f"{eq.name}（{eq.equipment_no}）" if eq.equipment_no else eq.name
+    )
+    if not result:
+        return ToolResult(
+            content=f"设备 {eq_label} 当前没有进行中的工单。",
+            structured_content={"result": [], "total": 0, "equipment_name": eq.name},
+        )
+
+    # 查询最多返回 5 条，不能说成设备的全部进行中工单
+    lines = [f"设备 {eq_label} 最近 {len(result)} 个进行中的工单："]
+    for i, wo in enumerate(result, 1):
+        reporter_label = wo["reporter_name"] or "未知"
+        date_label = f"　报修于 {wo['created_at'][:10]}" if wo["created_at"] else ""
+        assignee_label = f"维修人：{wo['assignee_name']}" if wo["assignee_name"] else "维修人：未指派"
+        lines.append(
+            f"  {i}. [{wo['status']}] {wo['work_order_no']}（{wo['order_type']}）"
+            f" 优先级：{wo['priority'] or '中'}"
+        )
+        lines.append(f"     报修人：{reporter_label}{date_label}　{assignee_label}")
+        if wo["fault_description"]:
+            lines.append(f"     故障描述：{wo['fault_description']}")
+    return ToolResult(
+        content="\n".join(lines),
+        structured_content={"result": result, "total": len(result), "equipment_name": eq.name},
     )
 
 
@@ -591,7 +738,7 @@ async def list_my_pending_work_orders(
 
     lines = [f"{user.name} 作为工单负责人，共有 {len(result)} 个待处理工单："]
     for i, wo in enumerate(result, 1):
-        eq_label = f"{wo['equipment_name']}（{wo['equipment_no']}）" if wo["equipment_no"] else wo["equipment_name"]
+        eq_label = _eq_label(wo)
         assignee_label = (
             f"维修人：{wo['assignee_name']}" if wo["assignee_name"] else "维修人：未指派 ⚠️"
         )

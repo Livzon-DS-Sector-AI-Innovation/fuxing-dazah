@@ -45,6 +45,29 @@ const { Text } = Typography
 
 // ── Sub-components ──
 
+// 工段时长只读条 — 非草稿状态没有「工段配置」编辑入口，配置在这里常驻可见
+function StageDurationSummary({ stages }: { stages: StageConfigItem[] }) {
+  const fmt = (h: number) => (Number.isInteger(h) ? `${h}` : h.toFixed(1))
+  const total = stages.reduce((sum, s) => sum + s.duration_hours, 0)
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px 14px',
+      padding: '7px 12px', marginBottom: 10,
+      background: 'var(--color-surface-soft)', borderRadius: 6,
+    }}>
+      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>工段时长</span>
+      {stages.map((s) => (
+        <span key={s.stage_name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color, flexShrink: 0 }} />
+          <span style={{ color: 'var(--color-charcoal)' }}>{s.stage_name}</span>
+          <span style={{ color: 'var(--color-steel)' }}>{fmt(s.duration_hours)}h</span>
+        </span>
+      ))}
+      <span style={{ fontSize: 12, color: 'var(--color-slate)', marginLeft: 'auto' }}>合计 {fmt(total)}h</span>
+    </div>
+  )
+}
+
 function InlineEditForm({ form, onSave, onCancel, products, routes, onProductChange }: {
   form: FormInstance
   onSave: () => Promise<void>
@@ -742,6 +765,9 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
 
             {/* Section: 计划项 */}
             <SectionHead label="计划项" count={changeMode ? localItems.length : (order.items?.length ?? 0)} accentColor={accentColor} />
+            {order.stage_config && order.stage_config.length > 0 && (
+              <StageDurationSummary stages={order.stage_config} />
+            )}
             {changeMode ? (
               <div>
                 {localItems.length > 0 && (

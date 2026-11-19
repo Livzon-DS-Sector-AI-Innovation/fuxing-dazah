@@ -12,6 +12,7 @@ from app.modules.equipment.models.failure_code import (
     FailureSymptom,
 )
 from app.modules.equipment.models.inspection import (
+    InspectionEquipmentNote,
     InspectionPhoto,
     InspectionRoute,
     InspectionRouteEquipment,
@@ -57,6 +58,7 @@ __all__ = [
     "FailureAction",
     "FailureCause",
     "FailureSymptom",
+    "InspectionEquipmentNote",
     "InspectionPhoto",
     "InspectionRecord",
     "InspectionRoute",

@@ -59,18 +59,26 @@ def _wo_to_dict(wo: Any) -> dict[str, Any]:
     }
 
 
+def _task_equipment_count(task: Any) -> int:
+    """任务涉及的去重设备数（线路巡检按路线绑定，设备巡检按 equipment_ids）。"""
+    if task.route and task.route.locations_rel:
+        return len(
+            {
+                str(e.equipment_id)
+                for loc in task.route.locations_rel
+                for e in (loc.equipments or [])
+                if not e.is_deleted
+            }
+        )
+    eq_ids = {str(eid) for eid in (task.equipment_ids or [])}
+    if task.equipment_id:
+        eq_ids.add(str(task.equipment_id))
+    return len(eq_ids)
+
+
 def _it_to_dict(task: Any) -> dict[str, Any]:
     """InspectionTask ORM → 字典"""
-    route = task.route
-    eq_count = 0
-    if route and route.locations_rel:
-        for loc in route.locations_rel:
-            eq_count += len([e for e in (loc.equipments or []) if not e.is_deleted])
-    elif task.equipment_ids or task.equipment_id:
-        eq_ids = list(task.equipment_ids or [])
-        if task.equipment_id and str(task.equipment_id) not in eq_ids:
-            eq_ids.append(str(task.equipment_id))
-        eq_count = len(eq_ids)
+    eq_count = _task_equipment_count(task)
 
     return {
         "id": str(task.id),
@@ -144,7 +152,13 @@ async def _get_template_item_map(
 
     elif task.equipment_templates:
         seen_tids: set[uuid.UUID] = set()
-        for tpl_ids in task.equipment_templates.values():
+        # 多设备任务只取该设备绑定的模板；None 时保持全量（兼容旧调用）
+        tpl_groups = (
+            [task.equipment_templates.get(str(equipment_id), [])]
+            if equipment_id is not None
+            else list(task.equipment_templates.values())
+        )
+        for tpl_ids in tpl_groups:
             for tid_str in tpl_ids:
                 tid = uuid.UUID(tid_str) if isinstance(tid_str, str) else tid_str
                 if tid not in seen_tids:

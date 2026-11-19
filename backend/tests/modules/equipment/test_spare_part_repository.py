@@ -746,7 +746,10 @@ class TestAvailableSpareParts:
         })
         eq_id = uuid.uuid4()
 
-        available = await get_available_spare_parts(db_session, eq_id)
+        # 共享开发库备件数 > 200，按 code 全量查会被 limit 截断，用 keyword 保证确定性
+        available = await get_available_spare_parts(
+            db_session, eq_id, keyword=sp.code
+        )
         sp_ids = [s.id for s in available]
         assert sp.id in sp_ids
 
@@ -767,6 +770,8 @@ class TestAvailableSpareParts:
         })
 
         available = await get_available_spare_parts(db_session, eq.id)
+        # 设备专属备件必须排在最前，不能被大量全局备件挤出 limit 窗口
+        assert available[0].id == sp.id
         sp_ids = [s.id for s in available]
         assert sp.id in sp_ids
 
@@ -787,7 +792,9 @@ class TestAvailableSpareParts:
             "quantity": 1,
         })
 
-        available_b = await get_available_spare_parts(db_session, eq_b_id)
+        available_b = await get_available_spare_parts(
+            db_session, eq_b_id, keyword=sp.code
+        )
         sp_ids_b = [s.id for s in available_b]
         assert sp.id not in sp_ids_b
 
@@ -803,7 +810,9 @@ class TestAvailableSpareParts:
         await update_spare_part(db_session, sp.id, {"is_active": False})
         eq_id = uuid.uuid4()
 
-        available = await get_available_spare_parts(db_session, eq_id)
+        available = await get_available_spare_parts(
+            db_session, eq_id, keyword=sp.code
+        )
         sp_ids = [s.id for s in available]
         assert sp.id not in sp_ids
 
@@ -820,7 +829,10 @@ class TestAvailableSpareParts:
             "spare_part_id": sp.id, "current_qty": 42,
         })
 
-        available = await get_available_spare_parts(db_session, uuid.uuid4())
+        # 共享开发库备件数 > 200，按 code 全量查会被 limit 截断，用 keyword 保证确定性
+        available = await get_available_spare_parts(
+            db_session, uuid.uuid4(), keyword=sp.code
+        )
         found = next((s for s in available if s.id == sp.id), None)
         assert found is not None
         assert found.current_qty == 42  # type: ignore[attr-defined]
