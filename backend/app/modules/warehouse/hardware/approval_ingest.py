@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -30,6 +30,7 @@ from app.modules.warehouse.hardware import service as hw_service
 from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
     HardwareRequisition,
+    HardwareRequisitionItem,
     HardwareReturn,
 )
 from app.modules.warehouse.hardware.schemas import (
@@ -55,6 +56,7 @@ class IngestError(Exception):
 class ParsedForm:
     kind: str  # KIND_REQUISITION / KIND_RETURN
     rows: list[dict[str, Any]] = field(default_factory=list)  # [{name, spec, quantity}]
+    linked_code: str = ""  # 退料：关联领料审批实例 code（货对板校验锚点）
     raw: str = ""  # 原始 form JSON（观察模式）
 
 
@@ -98,7 +100,11 @@ def _row_value(row: Any, *names: str) -> Any:
 
 
 def _parse_field_list(v: Any) -> list[dict[str, Any]]:
-    """明细值 → [{name, spec, quantity}]；数量缺失的行跳过并记原始。"""
+    """明细值 → [{name, spec, quantity, linked_code?}]；数量缺失的行跳过并记原始。
+
+    数量列名历经两次改版：数量 → 领取量（领料）→ 退料量（退料，2026-11-19
+    双表明细）。退料行内「关联审批」connect 列 → linked_code（行级挂原领料单）。
+    """
     rows_out: list[dict[str, Any]] = []
     if isinstance(v, str):
         try:
@@ -111,7 +117,7 @@ def _parse_field_list(v: Any) -> list[dict[str, Any]]:
     for row in v:
         name = _text(_row_value(row, "物资名称", "名称", "name"))
         spec = _text(_row_value(row, "规格型号", "规格", "spec"))
-        qty_raw = _row_value(row, "数量", "quantity")
+        qty_raw = _row_value(row, "数量", "领取量", "退料量", "quantity")
         try:
             qty = float(_text(qty_raw))
         except (TypeError, ValueError):
@@ -120,40 +126,97 @@ def _parse_field_list(v: Any) -> list[dict[str, Any]]:
         if not name or qty <= 0:
             logger.warning("[摄取] 明细行缺名称或数量非正: name=%s qty=%s", name, qty)
             continue
-        rows_out.append({"name": name, "spec": spec, "quantity": qty})
+        row_out: dict[str, Any] = {"name": name, "spec": spec, "quantity": qty}
+        linked = _extract_link_code(_row_value(row, "关联审批", "关联领料审批"))
+        if linked:
+            row_out["linked_code"] = linked
+        rows_out.append(row_out)
     return rows_out
 
 
-def parse_form(form_str: str | None) -> ParsedForm:
-    """实例 form JSON → 分流键 + 明细行。"""
-    try:
-        widgets = json.loads(form_str or "[]")
-    except ValueError:
-        widgets = []
+def _extract_link_code(v: Any) -> str:
+    """关联审批控件值 → 实例 code（兼容 str / dict / list 形态）。"""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    if isinstance(v, dict):
+        return str(v.get("instance_code") or v.get("code") or "").strip()
+    if isinstance(v, list):
+        for item in v:
+            code = _extract_link_code(item)
+            if code:
+                return code
+    return ""
+
+
+def parse_form(form_str: str | list | None) -> ParsedForm:
+    """实例 form JSON → 分流键 + 明细行 + 退料行级关联领料实例。
+
+    兼容两种形态：事件/直注路径的 JSON 字符串；get_instance 已解析的 list。
+    明细表 2026-11-19 拆双表：五金库领料明细 / 五金库退料明细（退料行内含
+    「关联审批」connect 列挂原领料单）；按分流键选表，旧单字段形态兜底。
+    """
+    if isinstance(form_str, list):
+        widgets = form_str
+    else:
+        try:
+            widgets = json.loads(form_str or "[]")
+        except ValueError:
+            widgets = []
     kind: str | None = None
-    rows: list[dict[str, Any]] = []
+    detail_lists: list[tuple[str, str, Any]] = []  # (widget_id, name, value)
+    linked_code = ""  # 表单级独立关联控件（旧设计兼容；现设计为行内 connect 列）
     for w in widgets if isinstance(widgets, list) else []:
         wid = str(w.get("id") or "")
         wname = str(w.get("name") or "")
+        wtype = str(w.get("type") or "")
         if wid == KIND_WIDGET_ID or "领/退料" in wname:
             kind = _kind_from_value(w.get("value"))
-        if wid == DETAIL_WIDGET_ID or w.get("type") == "fieldList" or wname == "明细":
-            rows = _parse_field_list(w.get("value"))
+        if wtype == "fieldList" or wname == "明细" or "明细" in wname:
+            detail_lists.append((wid, wname, w.get("value")))
+        if (
+            ("关联领料" in wname or "关联审批" in wname)
+            or wtype in ("approve", "associated_approval")
+        ) and wtype != "fieldList" and not linked_code:
+            linked_code = _extract_link_code(w.get("value"))
     if kind is None:
         raise IngestError(f"领/退料分流键未识别: {_text(form_str)[:200]}")
-    return ParsedForm(kind=kind, rows=rows, raw=form_str or "")
+
+    def _pick(prefer: str) -> list[dict[str, Any]]:
+        for _wid, name, value in detail_lists:
+            if prefer in name:
+                rows_ = _parse_field_list(value)
+                if rows_:
+                    return rows_
+        for wid, name, value in detail_lists:  # 兜底：任一非空明细表
+            if wid == DETAIL_WIDGET_ID or "明细" in name or name == "明细":
+                rows_ = _parse_field_list(value)
+                if rows_:
+                    return rows_
+        return []
+
+    rows = _pick("退料明细" if kind == KIND_RETURN else "领料明细")
+    return ParsedForm(kind=kind, rows=rows, linked_code=linked_code, raw=_text(form_str))
 
 
 # ── 发起人身份 / 物资匹配 ──
 
 
 async def _starter(db: AsyncSession, instance: dict[str, Any]) -> dict[str, str]:
-    """发起人 → {name, dept, open_id}（identity 三绑缺失时兜底 user_id）。"""
+    """发起人 → {name, dept, open_id}（identity 三绑缺失时兜底 user_id）。
+
+    open_id 优先取实例详情自带的（仓储应用凭证拉取 → 天然本应用作用域）；
+    identity.feishu_open_id 是混合作用域（库存/安全 app 的 ou_），跨应用发送
+    会报 99992361 cross app，仅作兜底。
+    """
     user_id = str(
         instance.get("start_user_id")
         or (instance.get("starter") or {}).get("user_id")
+        or instance.get("user_id")
         or ""
     )
+    inst_open_id = str(instance.get("open_id") or "")
     row = (
         await db.execute(
             text(
@@ -167,9 +230,13 @@ async def _starter(db: AsyncSession, instance: dict[str, Any]) -> dict[str, str]
         return {
             "name": row[0],
             "dept": row[1] or "未匹配部门",
-            "open_id": row[2] or user_id,
+            "open_id": inst_open_id or row[2] or user_id,
         }
-    return {"name": user_id or "未知发起人", "dept": "未匹配部门", "open_id": user_id}
+    return {
+        "name": user_id or "未知发起人",
+        "dept": "未匹配部门",
+        "open_id": inst_open_id or user_id,
+    }
 
 
 async def _match_materials(
@@ -194,6 +261,99 @@ async def _match_materials(
             )
         out.append((material, r["quantity"]))
     return out
+
+
+async def _validate_return_rows(
+    db: AsyncSession,
+    rows: list[dict[str, Any]],
+    matched: list[tuple[HardwareMaterial, float]],
+) -> str:
+    """退料货对板校验（行级关联版，2026-11-19 双表明细）：返回问题文案，空串=通过。
+
+    - 每行须挂关联领料审批（行内 connect 列）；
+    - 关联领料单必须存在且已发料（issued）；
+    - 退料物资必须在对应领料明细内（防货不对板）；
+    - 逐料 退量 ≤ 领量 − 已退量（draft+accepted 行级归集，防领10退20/拆单）。
+    rows 与 matched 一一对应（_match_materials 保序）。
+    """
+    problems: list[str] = []
+    groups: dict[str, list[int]] = {}
+    for i, r in enumerate(rows):
+        code = str(r.get("linked_code") or "")
+        if not code:
+            problems.append(f"第{i + 1}行 {r.get('name')} 未选择关联领料审批")
+            continue
+        groups.setdefault(code, []).append(i)
+
+    for linked_code, idxs in groups.items():
+        req = await _find_requisition(db, linked_code)
+        if req is None:
+            problems.append(f"关联领料审批 {linked_code} 未在系统建单（或非本定义实例）")
+            continue
+        if req.status != "issued":
+            problems.append(
+                f"关联领料单 {req.req_no} 状态为 {req.status}（须已发料才可退料）"
+            )
+            continue
+
+        issued: dict[str, float] = {}
+        items = (
+            await db.execute(
+                select(HardwareRequisitionItem).where(
+                    HardwareRequisitionItem.requisition_id == req.id
+                )
+            )
+        ).scalars().all()
+        for it in items:
+            key = str(it.material_id)
+            qty = it.issued_qty if it.issued_qty is not None else it.need_qty
+            issued[key] = issued.get(key, 0) + float(qty or 0)
+
+        # 已退量：行级 linked_code 归集（JSONB contains 圈定+行级兜底单据级列）
+        returned: dict[str, float] = {}
+        prior = (
+            await db.execute(
+                select(HardwareReturn).where(
+                    HardwareReturn.status.in_(["draft", "accepted"]),
+                    HardwareReturn.is_deleted.is_(False),
+                    or_(
+                        HardwareReturn.requisition_instance_code == linked_code,
+                        text("hardware_returns.items @> :jq"),
+                    ),
+                ),
+                {"jq": json.dumps([{"linked_code": linked_code}])},
+            )
+        ).scalars().all()
+        for ret in prior:
+            doc_link = ret.requisition_instance_code
+            for row in ret.items or []:
+                row_link = str(row.get("linked_code") or "")
+                if row_link != linked_code and not (
+                    not row_link and doc_link == linked_code
+                ):
+                    continue
+                key = str(row.get("material_id") or "")
+                returned[key] = returned.get(key, 0) + float(row.get("quantity") or 0)
+
+        cumulative: dict[str, float] = {}
+        for i in idxs:
+            m, q = matched[i]
+            key = str(m.id)
+            cap = issued.get(key)
+            if cap is None:
+                problems.append(
+                    f"{m.name} {m.spec or ''} 不在关联领料单 {req.req_no} 明细中"
+                )
+                continue
+            already = returned.get(key, 0) + cumulative.get(key, 0)
+            remain = cap - already
+            if q > remain + 1e-9:
+                problems.append(
+                    f"{m.name} {m.spec or ''} 退 {q:g} 超 关联可退 {remain:g}"
+                    f"（领 {cap:g}，已退/在退 {already:g}，单 {req.req_no}）"
+                )
+            cumulative[key] = already + q
+    return "；".join(problems)
 
 
 # ── 摄取主流程 ──
@@ -253,6 +413,11 @@ async def ingest_instance(
     inst = instance if instance is not None else await _fetch_instance(instance_code)
     approval_code = str(get_settings().HARDWARE_APPROVAL_CODE or "").strip()
     if approval_code and str(inst.get("approval_code") or "") != approval_code:
+        # 静默跳过曾吞掉全部真机实例（get_instance 未透传 approval_code），必须留痕
+        logger.info(
+            "[摄取] 跳过非目标定义实例: %s approval_code=%s",
+            instance_code, inst.get("approval_code"),
+        )
         return {"action": "skip", "reason": "非五金库领/退料定义"}
 
     parsed = parse_form(inst.get("form"))
@@ -292,6 +457,10 @@ async def ingest_instance(
             await db.flush()
             await _notify_rejected(starter["open_id"], matched, exc)
             logger.warning("[摄取] 领料缺料拒收: instance=%s err=%s", instance_code, exc)
+            # 未受理退回（2026-11-18 拍板）：仍在审批中的实例直接撤回，审批人
+            # 不再处理注定缺料的单；已 APPROVED 的不撤（撤回会使实例退回审批中）
+            if status == "PENDING":
+                await _cancel_feishu_instance(instance_code, inst)
             return {"action": "rejected_shortage", "kind": "领料", "doc_no": req.req_no}
         # 迟到状态补偿（对账兜底路径：事件丢失后按当前状态对齐）
         await _apply_status(db, req, status)
@@ -300,9 +469,43 @@ async def ingest_instance(
         )
         return {"action": "ingested", "kind": "领料", "doc_no": req.req_no, "status": req.status}
 
-    # 退料：退库草稿（不动账），审批通过后仓管系统内 accept 批次回加
+    # 退料：先货对板校验（2026-11-19 拍板）——过验建草稿（不动账，审批通过后
+    # 仓管系统内 accept 批次回加）；未过验拒收留痕+通知+退回审批（同缺料口径）
     matched = await _match_materials(db, parsed.rows)
     from app.modules.warehouse.hardware.stocktake import create_return
+
+    def _apply_row_links(ret_: HardwareReturn) -> None:
+        """行级关联落 items JSON；单一关联时冗余记单据级列（查询友好）。"""
+        distinct = {str(r.get("linked_code") or "") for r in parsed.rows} - {""}
+        ret_.requisition_instance_code = next(iter(distinct)) if len(distinct) == 1 else None
+        if not any("linked_code" in r for r in parsed.rows):
+            return
+        items = [dict(row) for row in (ret_.items or [])]
+        for i, r in enumerate(parsed.rows):
+            if "linked_code" in r and i < len(items):
+                items[i]["linked_code"] = r["linked_code"]
+        ret_.items = items
+
+    problem = await _validate_return_rows(db, parsed.rows, matched)
+    if problem:
+        ret = await create_return(
+            db,
+            dept_name=starter["dept"],
+            returned_by=starter["name"],
+            returned_by_open_id=starter["open_id"] or None,
+            items=[{"material_id": str(m.id), "quantity": str(q)} for m, q in matched],
+            remark=f"飞书退料审批 {instance_code}（校验未过）",
+        )
+        ret.approval_instance_code = instance_code
+        _apply_row_links(ret)
+        ret.status = "rejected"
+        ret.rejected_reason = f"货对板校验未过：{problem}"
+        await db.flush()
+        await _notify_return_rejected(starter["open_id"], ret.return_no, problem)
+        logger.warning("[摄取] 退料校验拒收: %s err=%s", instance_code, problem)
+        if status == "PENDING":
+            await _cancel_feishu_instance(instance_code, inst)
+        return {"action": "rejected_mismatch", "kind": "退料", "doc_no": ret.return_no}
 
     ret = await create_return(
         db,
@@ -315,44 +518,114 @@ async def ingest_instance(
         remark=f"飞书退料审批 {instance_code}（审批通过后请确认回加）",
     )
     ret.approval_instance_code = instance_code
+    _apply_row_links(ret)
     await db.flush()
     logger.info("[摄取] 退库草稿已建: %s instance=%s", ret.return_no, instance_code)
     return {"action": "ingested", "kind": "退料", "doc_no": ret.return_no}
 
 
 async def _apply_status(db: AsyncSession, req: HardwareRequisition, status: str) -> None:
-    """按飞书实例状态对齐领料单状态机（仅 pending 可迁移；幂等）。"""
-    if req.status != "pending":
-        return
+    """按飞书实例状态对齐领料单状态机（幂等）。
+
+    语义（2026-11-19 拍板）：审批定义含仓管员办理节点，实例 APPROVED=终态
+    =审批关闭=仓管已在飞书确认发料 → 自动 approve+issue 实扣（镜像三值
+    20/10/10 → 10/0/10）；PENDING 全程预扣，REJECTED/CANCELED 释放。
+    """
     if status == "APPROVED":
-        await hw_service.approve_requisition(
-            db, req.id, approver="飞书审批", note="飞书审批通过（事件/对账同步）"
-        )
-        req.approval_status = "approved"
-    elif status == "REJECTED":
-        await hw_service.reject_requisition(
-            db, req.id, approver="飞书审批", reason="飞书审批驳回（事件/对账同步）"
-        )
-        req.approval_status = "rejected"
-    elif status == "CANCELED":
-        await hw_service.cancel_requisition(db, req.id)
+        if req.status == "pending":
+            await hw_service.approve_requisition(
+                db, req.id, approver="飞书审批", note="飞书审批通过（事件/对账同步）"
+            )
+            req.approval_status = "approved"
+        if req.status == "approved":
+            await hw_service.issue_requisition(
+                db, req.id,
+                issued_by="飞书审批·仓管办理",
+                received_by=req.applicant or "领用人",
+            )
+    elif req.status == "pending":
+        if status == "REJECTED":
+            await hw_service.reject_requisition(
+                db, req.id, approver="飞书审批", reason="飞书审批驳回（事件/对账同步）"
+            )
+            req.approval_status = "rejected"
+        elif status == "CANCELED":
+            await hw_service.cancel_requisition(db, req.id)
     await db.flush()
+
+
+async def _apply_return_status(db: AsyncSession, ret: HardwareReturn, status: str) -> None:
+    """飞书实例状态对齐退库单（幂等，2026-11-19 对称语义）。
+
+    APPROVED=终态=审批关闭=仓管已在飞书办理收料 → 负责人签（飞书审批链
+    「主管及以上」节点视同签收）+ 自动验收回加（对称领料自动发料实扣）；
+    REJECTED/CANCELED → 草稿作废留痕。
+    """
+    if status == "APPROVED" and ret.status == "draft":
+        from app.modules.warehouse.hardware.stocktake import accept_return
+
+        if not ret.leader_signed:
+            ret.leader_signed = True
+            ret.leader_signed_by = "飞书审批"
+            ret.leader_signed_at = datetime.now(UTC)
+            await db.flush()
+        await accept_return(db, ret.id, accepted_by="飞书审批·仓管办理")
+    elif status in ("REJECTED", "CANCELED") and ret.status == "draft":
+        ret.status = "rejected"
+        ret.rejected_reason = (
+            f"飞书审批{'驳回' if status == 'REJECTED' else '撤销'}（事件/对账同步）"
+        )
+        await db.flush()
+
+
 
 
 async def sync_status(
     db: AsyncSession, instance_code: str, *, status: str | None = None
 ) -> dict[str, Any]:
-    """审批结果事件 → 领料单状态机同步（退库草稿不动，仓管确认制）。"""
-    req = await _find_requisition(db, instance_code)
-    if req is None:
-        return {"action": "ignore", "reason": "无关联领料单"}
+    """审批结果事件 → 领料单/退库单状态机同步。"""
     if status is None:
         status = str((await _fetch_instance(instance_code)).get("status") or "")
-    await _apply_status(db, req, status)
-    return {"action": "synced", "doc_no": req.req_no, "status": req.status}
+    req = await _find_requisition(db, instance_code)
+    if req is not None:
+        await _apply_status(db, req, status)
+        return {"action": "synced", "doc_no": req.req_no, "status": req.status}
+    ret = await _find_return(db, instance_code)
+    if ret is not None:
+        await _apply_return_status(db, ret, status)
+        return {"action": "synced", "doc_no": ret.return_no, "status": ret.status}
+    return {"action": "ignore", "reason": "无关联单据"}
 
 
 # ── 通知 ──
+
+
+async def _cancel_feishu_instance(instance_code: str, inst: dict[str, Any]) -> None:
+    """缺料拒收后退回飞书审批（以提交人身份撤回实例，best-effort 不抛）。
+
+    撤回成功后飞书会推 CANCELED 事件（v1/v2 双格式都由既有处理器幂等吸收）。
+    """
+    user_id = str(
+        inst.get("user_id")
+        or inst.get("start_user_id")
+        or (inst.get("starter") or {}).get("user_id")
+        or ""
+    )
+    approval_code = str(get_settings().HARDWARE_APPROVAL_CODE or "").strip()
+    if not user_id or not approval_code:
+        logger.info("[摄取] 缺料退回跳过（缺 user_id/approval_code）: %s", instance_code)
+        return
+    try:
+        from app.platform.integrations.feishu.approval import cancel_instance
+
+        app_id, app_secret = _credentials()
+        ok = await cancel_instance(
+            approval_code, instance_code, user_id, app_id=app_id, app_secret=app_secret
+        )
+        if ok:
+            logger.info("[摄取] 缺料单已退回飞书审批: %s", instance_code)
+    except Exception:  # noqa: BLE001 — 退回失败不影响拒收留痕主流程
+        logger.warning("[摄取] 缺料退回飞书审批失败: %s", instance_code, exc_info=True)
 
 
 async def _notify_rejected(open_id: str, matched: list[Any], exc: Exception) -> None:
@@ -382,6 +655,39 @@ async def _notify_rejected(open_id: str, matched: list[Any], exc: Exception) -> 
         await send_card_to_user(open_id, card)
     except Exception:  # noqa: BLE001 — 通知失败不影响摄取主流程
         logger.warning("[摄取] 缺料通知发送失败: %s", exc_info=True)
+
+
+async def _notify_return_rejected(open_id: str, return_no: str, problem: str) -> None:
+    """退料校验拒收通知（私发卡片，best-effort 不抛）。"""
+    if not open_id:
+        return
+    try:
+        from app.modules.warehouse.feishu.notification import send_card_to_user
+
+        card = {
+            "config": {"wide_screen": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "五金库退料申请未受理"},
+                "template": "red",
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"你的飞书退料审批已退回（{return_no} 留痕）。\n\n"
+                            f"原因：{problem}\n\n"
+                            "退料须关联原领料审批，且物资与数量不得超出原单可退量，"
+                            "请核对后重新发起。"
+                        ),
+                    },
+                }
+            ],
+        }
+        await send_card_to_user(open_id, card)
+    except Exception:  # noqa: BLE001 — 通知失败不影响摄取主流程
+        logger.warning("[摄取] 退料拒收通知发送失败: %s", exc_info=True)
 
 
 # ── 事件接入（approval.instance.* WS 长连接 → _dispatch 分发）──
@@ -449,6 +755,33 @@ def register_event_handlers() -> None:
         logger.info("[摄取] 审批撤销事件: %s", code)
         await _run_with_session(lambda s: sync_status(s, code, status="CANCELED"))
 
+    @on_event("approval_instance")
+    async def _on_approval_instance_v1(event: dict[str, Any]) -> None:
+        """v1 旧格式审批实例事件（订阅审批事件 API 实际推送的就是这个格式：
+        {"type": "event_callback", "event": {"type": "approval_instance",
+         "instance_code": .., "status": PENDING/APPROVED/REJECTED/CANCELED, ..}}）。
+        状态映射到 v2 语义处理器；摄取幂等（instance_code 唯一），双格式并存安全。
+        """
+        code = _extract_instance_code(event)
+        status = str(event.get("status") or "").upper()
+        if not code:
+            logger.warning(
+                "[摄取] v1 审批事件缺 instance_code: %s",
+                json.dumps(event, ensure_ascii=False)[:200],
+            )
+            return
+        logger.info("[摄取] v1 审批实例事件: %s status=%s", code, status)
+        if status == "PENDING":
+            await _on_started({"instance": {"instance_code": code}})
+        elif status == "APPROVED":
+            await _on_approved({"instance": {"instance_code": code}})
+        elif status == "REJECTED":
+            await _on_rejected({"instance": {"instance_code": code}})
+        elif status == "CANCELED":
+            await _on_canceled({"instance": {"instance_code": code}})
+        else:
+            logger.info("[摄取] v1 审批事件状态 %s 忽略: instance=%s", status, code)
+
 
 # ── 对账兜底（scheduled 定时任务调用；事件丢失补漏）──
 
@@ -461,7 +794,7 @@ async def reconcile_recent_instances(
 
     approval_code = str(get_settings().HARDWARE_APPROVAL_CODE or "").strip()
     if not approval_code:
-        return {"enabled": 0, "codes": 0, "ingested": 0, "synced": 0}
+        return {"enabled": 0, "codes": 0, "ingested": 0, "synced": 0, "skipped": 0}
     now = now or datetime.now(UTC)
     start_ms = int((now - timedelta(hours=hours)).timestamp() * 1000)
     end_ms = int(now.timestamp() * 1000)
@@ -469,7 +802,7 @@ async def reconcile_recent_instances(
     codes = await list_instance_codes(
         approval_code, start_ms, end_ms, app_id=app_id, app_secret=app_secret
     )
-    stats = {"enabled": 1, "codes": len(codes), "ingested": 0, "synced": 0}
+    stats = {"enabled": 1, "codes": len(codes), "ingested": 0, "synced": 0, "skipped": 0}
     for code in codes:
         try:
             if await _find_requisition(db, code) or await _find_return(db, code):
@@ -477,8 +810,11 @@ async def reconcile_recent_instances(
                 if result.get("action") == "synced":
                     stats["synced"] += 1
             else:
-                await ingest_instance(db, code)
-                stats["ingested"] += 1
+                result = await ingest_instance(db, code)
+                if result.get("action") == "skip":
+                    stats["skipped"] += 1
+                else:
+                    stats["ingested"] += 1
         except IngestError:
             logger.warning("[对账] 实例不可摄取: %s", code, exc_info=True)
     return stats

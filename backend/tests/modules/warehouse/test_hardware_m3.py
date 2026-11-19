@@ -231,7 +231,8 @@ async def test_manual_full_chain_three_cases(db_session):
     await hw.issue_requisition(db_session, req1.id, issued_by="仓管员", received_by="测试员")
     rows, _ = await hw.list_stock_rows(db_session, keyword=m1.name)
     assert rows[0]["on_hand"] == Decimal("90") and rows[0]["reserved"] == Decimal("0")
-    mvs, n1 = await hw.list_movements(db_session, business_type="req_issue")
+    # 差分口径：按本测试专属物资圈定（活库可能有历史 req_issue 流水，绝对计数会假红）
+    mvs, n1 = await hw.list_movements(db_session, business_type="req_issue", keyword=m1.name)
     assert n1 == 1 and mvs[0].quantity == Decimal("10")
 
     # 单②：超额（excess，manual 审批备注=需生产总监提示）

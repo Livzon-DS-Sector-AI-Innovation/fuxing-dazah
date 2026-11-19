@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -409,20 +410,6 @@ async def _receipt_with_items(db: AsyncSession, receipt: Any) -> Any:
     return payload
 
 
-@router.get("/receipts/{receipt_id}", summary="入库单详情")
-async def get_receipt(
-    receipt_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("warehouse:hardware:inbound:read")),
-) -> JSONResponse:
-    receipt = await service.get_receipt(db, receipt_id)
-    return success_response(
-        ReceiptResponse.model_validate(
-            await _receipt_with_items(db, receipt)
-        ).model_dump(mode="json")
-    )
-
-
 @router.get(
     "/receipts/excel-template",
     summary="入库登记模板下载（Excel 方式② 用）",
@@ -430,7 +417,12 @@ async def get_receipt(
 async def download_receipt_template(
     user: User = Depends(require_permission("warehouse:hardware:inbound:create")),
 ):
-    """标准入库登记模板（物资名称/规格型号/数量/单位/供应商/送货单号/备注）。"""
+    """标准入库登记模板（物资名称/规格型号/数量/单位/供应商/送货单号/备注）。
+
+    路由须声明在 ``/receipts/{receipt_id}`` 之前——FastAPI 按声明序匹配，
+    参数路由在前会把 "excel-template" 当 UUID 解析 422（GUI 实测抓出，
+    2026-11-17）。
+    """
     from urllib.parse import quote
 
     from fastapi.responses import Response
@@ -443,6 +435,20 @@ async def download_receipt_template(
         content=xlsx,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/receipts/{receipt_id}", summary="入库单详情")
+async def get_receipt(
+    receipt_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:inbound:read")),
+) -> JSONResponse:
+    receipt = await service.get_receipt(db, receipt_id)
+    return success_response(
+        ReceiptResponse.model_validate(
+            await _receipt_with_items(db, receipt)
+        ).model_dump(mode="json")
     )
 
 

@@ -273,6 +273,30 @@ HARDWARE_ENV_REMIND_TASK = TaskDefinition(
     module="warehouse",
 )
 
+async def _run_scheduled_usage_sync() -> None:
+    """每日 06:00 月度用量管控表回填（当月+上月，月初自然定格上月）。
+
+    月需求量=物资清单基线，实际用量=领用出库流水聚合；行 upsert 幂等，
+    处置状态/备注人工列不触碰。HARDWARE_USAGE_TABLE_ID 未配置自空转。
+    """
+    from app.modules.warehouse.hardware.usage_control import run_usage_sync
+
+    await run_usage_sync()
+
+
+HARDWARE_USAGE_SYNC_TASK = TaskDefinition(
+    name="warehouse.hardware_usage_sync",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.FIXED_TIME,
+        time_of_day="06:00",
+        timezone="Asia/Shanghai",
+    ),
+    coro=_run_scheduled_usage_sync,
+    timeout_seconds=600,
+    module="warehouse",
+)
+
+
 _HARDWARE_TASKS = (
     URGENT_PATCH_CHECK_TASK,
     HARDWARE_APPROVAL_POLL_TASK,
@@ -281,6 +305,7 @@ _HARDWARE_TASKS = (
     HARDWARE_MONTHLY_PLAN_TASK,
     HARDWARE_STALE_SCAN_TASK,
     HARDWARE_ENV_REMIND_TASK,
+    HARDWARE_USAGE_SYNC_TASK,
 )
 
 

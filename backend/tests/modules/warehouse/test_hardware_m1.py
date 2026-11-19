@@ -190,7 +190,9 @@ async def test_reserve_then_issue_consumes(db_session):
     assert row["reserved"] == Decimal("0")
     assert row["available"] == Decimal("30")
 
-    movements, total = await hw.list_movements(db_session, business_type="req_issue")
+    movements, total = await hw.list_movements(
+        db_session, business_type="req_issue", keyword=m.name
+    )
     assert total == 1
     assert movements[0].quantity == Decimal("20")
     assert movements[0].direction == "outbound"
@@ -233,8 +235,10 @@ async def test_fifo_order(db_session):
     )).scalar_one()
     assert lot_old.remaining_quantity == Decimal("0")  # 旧批次扣完
     assert lot_new.remaining_quantity == Decimal("5")  # 新批次扣 5
-    # 逐批两条 outbound 流水
-    movements, total = await hw.list_movements(db_session, business_type="req_issue")
+    # 逐批两条 outbound 流水（按本测试物资圈定——活库可能有历史 req_issue 流水）
+    movements, total = await hw.list_movements(
+        db_session, business_type="req_issue", keyword=m.name
+    )
     assert total == 2
     qties = sorted(mv.quantity for mv in movements)
     assert qties == [Decimal("5"), Decimal("10")]
@@ -268,7 +272,7 @@ async def test_draft_receipt_never_moves_stock(db_session):
     assert receipt.status == "draft"
     rows, _ = await hw.list_stock_rows(db_session, keyword=m.name, managed_class=None)
     assert rows[0]["on_hand"] == Decimal("0")
-    _, mv_total = await hw.list_movements(db_session)
+    _, mv_total = await hw.list_movements(db_session, keyword=m.name)
     assert mv_total == 0
 
 

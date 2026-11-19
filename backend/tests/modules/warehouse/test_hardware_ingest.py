@@ -59,28 +59,45 @@ async def _mk_material(db, *, name="304不锈钢球阀", spec="DN25", qty_stock=
 
 
 def _instance(kind: str, rows: list[dict], *, status="PENDING", dict_shape=False,
-              approval_code=APPROVAL_CODE) -> dict:
-    """合成审批实例。dict_shape=True 时控件值用 {"text": ..} 形态验证兼容。"""
+              approval_code=APPROVAL_CODE, linked=None) -> dict:
+    """合成审批实例（2026-11-19 双表明细形态）。
+
+    dict_shape=True 时控件值用 {"text": ..} 形态验证兼容。
+    linked=行级关联领料实例 code（退料行内「关联审批」connect 列默认值，
+    行 dict 可用 r["linked"] 覆盖实现多单混退）。另一侧明细表以空表在场。
+    """
 
     def val(v):
         return {"text": v} if dict_shape else v
 
+    is_return = kind == "退料"
+    qty_name = "退料量" if is_return else "领取量"
+    detail_name = "五金库退料明细" if is_return else "五金库领料明细"
+    other_name = "五金库领料明细" if is_return else "五金库退料明细"
+
+    def build_row(r):
+        widgets = [
+            {"name": "类别", "value": val("金属阀门")},
+            {"name": "物资名称", "value": val(r["name"])},
+            {"name": "规格型号", "value": val(r["spec"])},
+            {"name": "计量单位", "value": val("个")},
+            {"name": "可领量", "value": val("100")},
+        ]
+        if is_return:
+            widgets.insert(0, {
+                "name": "关联审批", "type": "connect",
+                "value": val(r.get("linked", linked)),
+            })
+        widgets.append({"name": qty_name, "value": val(str(r["qty"]))})
+        return widgets
+
     form = [
         {"id": ai.KIND_WIDGET_ID, "type": "radioV2", "name": "领/退料",
          "value": val("五金库领料" if kind == "领料" else "五金库退料")},
-        {"id": ai.DETAIL_WIDGET_ID, "type": "fieldList", "name": "明细",
-         "value": [
-             [
-                 {"name": "类别", "value": val("金属阀门")},
-                 {"name": "物资名称", "value": val(r["name"])},
-                 {"name": "规格型号", "value": val(r["spec"])},
-                 {"name": "计量单位", "value": val("个")},
-                 {"name": "编码", "value": val("")},
-                 {"name": "库存快照", "value": val("100")},
-                 {"name": "数量", "value": val(str(r["qty"]))},
-             ]
-             for r in rows
-         ]},
+        {"id": ai.DETAIL_WIDGET_ID, "type": "fieldList", "name": detail_name,
+         "value": [build_row(r) for r in rows]},
+        {"id": "widget17950492860480001", "type": "fieldList", "name": other_name,
+         "value": []},
     ]
     return {
         "approval_code": approval_code,
@@ -151,28 +168,182 @@ async def test_ingest_requisition_shortage_rejected_and_notified(
 
     monkeypatch.setattr(ai, "_notify_rejected", fake_notify)
 
+    cancelled: list[tuple[str, str, str]] = []
+
+    async def fake_cancel(approval_code, instance_code, user_id, *, app_id=None, app_secret=None):
+        cancelled.append((approval_code, instance_code, user_id))
+        return True
+
+    import app.platform.integrations.feishu.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "cancel_instance", fake_cancel)
+
     m = await _mk_material(db_session)  # 无库存
     code = f"INST-{uuid4().hex[:8]}"
-    result = await ai.ingest_instance(
-        db_session, code, instance=_instance("领料", [{"name": m.name, "spec": m.spec, "qty": 5}])
-    )
+    inst = _instance("领料", [{"name": m.name, "spec": m.spec, "qty": 5}])
+    inst["user_id"] = "cancel_tester_001"
+    result = await ai.ingest_instance(db_session, code, instance=inst)
     assert result["action"] == "rejected_shortage"
     req = await ai._find_requisition(db_session, code)
     assert req.status == "rejected" and "缺料拒收" in (req.remark or "")
     assert len(notified) == 1 and "可用量不足" in notified[0][1]
+    # 未受理退回：PENDING 实例以提交人身份撤回
+    assert cancelled == [(APPROVAL_CODE, code, "cancel_tester_001")]
+
+
+async def _issued_linked_req(db, m, qty, *, status="APPROVED"):
+    """摄取一条领料实例到 issued（APPROVED 终态=审批关闭=已发料，自动实扣）。"""
+    linked = f"INST-{uuid4().hex[:8]}"
+    await ai.ingest_instance(
+        db, linked, instance=_instance("领料", [{"name": m.name, "spec": m.spec, "qty": qty}],
+                                       status=status)
+    )
+    req = await ai._find_requisition(db, linked)
+    assert req.status == "issued"
+    return linked
 
 
 async def test_ingest_return_creates_draft(db_session, approval_code):
     m = await _mk_material(db_session, qty_stock=Decimal("50"))
+    linked = await _issued_linked_req(db_session, m, 10)
     code = f"INST-{uuid4().hex[:8]}"
     result = await ai.ingest_instance(
-        db_session, code, instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 2}])
+        db_session, code,
+        instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 2}], linked=linked),
     )
     assert result["action"] == "ingested" and result["kind"] == "退料"
     ret = await ai._find_return(db_session, code)
     assert ret is not None and ret.status == "draft"
     assert str(code) in (ret.remark or "")
     assert ret.items[0]["material_id"] == str(m.id)
+    assert ret.requisition_instance_code == linked
+
+
+async def test_ingest_return_missing_link_rejected(db_session, approval_code, monkeypatch):
+    cancelled, notified = [], []
+
+    async def fake_cancel(approval_code_, instance_code, user_id, *, app_id=None, app_secret=None):
+        cancelled.append(instance_code)
+        return True
+
+    async def fake_notify(open_id, return_no, problem):
+        notified.append(problem)
+
+    import app.platform.integrations.feishu.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "cancel_instance", fake_cancel)
+    monkeypatch.setattr(ai, "_notify_return_rejected", fake_notify)
+
+    m = await _mk_material(db_session, qty_stock=Decimal("50"))
+    code = f"INST-{uuid4().hex[:8]}"
+    result = await ai.ingest_instance(
+        db_session, code, instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 2}])
+    )
+    assert result["action"] == "rejected_mismatch"
+    ret = await ai._find_return(db_session, code)
+    assert ret.status == "rejected" and "未选择关联" in (ret.rejected_reason or "")
+    assert cancelled == [code] and "未选择关联" in notified[0]
+
+
+async def test_ingest_return_over_quantity_rejected(db_session, approval_code, monkeypatch):
+    """领 10 退 20 → 拒收+退回审批；重复在退也计入累计（退8再退5超余2）。"""
+    cancelled: list[str] = []
+
+    async def fake_cancel(approval_code_, instance_code, user_id, *, app_id=None, app_secret=None):
+        cancelled.append(instance_code)
+        return True
+
+    import app.platform.integrations.feishu.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "cancel_instance", fake_cancel)
+    monkeypatch.setattr(ai, "_notify_return_rejected", fake_notify_noop)
+
+    m = await _mk_material(db_session, qty_stock=Decimal("50"))
+    linked = await _issued_linked_req(db_session, m, 10)
+    # 直接超量
+    code1 = f"INST-{uuid4().hex[:8]}"
+    r1 = await ai.ingest_instance(
+        db_session, code1,
+        instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 20}], linked=linked),
+    )
+    assert r1["action"] == "rejected_mismatch"
+    assert "超" in (await ai._find_return(db_session, code1)).rejected_reason
+    # 先合法退 8（draft 计入累计），再退 5 → 超（余 2）
+    await ai.ingest_instance(
+        db_session, f"INST-{uuid4().hex[:8]}",
+        instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 8}], linked=linked),
+    )
+    code3 = f"INST-{uuid4().hex[:8]}"
+    r3 = await ai.ingest_instance(
+        db_session, code3,
+        instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 5}], linked=linked),
+    )
+    assert r3["action"] == "rejected_mismatch"
+    assert cancelled == [code1, code3]
+
+
+async def test_ingest_return_wrong_material_rejected(db_session, approval_code, monkeypatch):
+    import app.platform.integrations.feishu.approval as approval_mod
+
+    monkeypatch.setattr(approval_mod, "cancel_instance", fake_cancel_noop)
+    monkeypatch.setattr(ai, "_notify_return_rejected", fake_notify_noop)
+
+    m1 = await _mk_material(db_session, name="甲物资", qty_stock=Decimal("50"))
+    m2 = await _mk_material(db_session, name="乙物资", qty_stock=Decimal("50"))
+    linked = await _issued_linked_req(db_session, m1, 10)
+    code = f"INST-{uuid4().hex[:8]}"
+    result = await ai.ingest_instance(
+        db_session, code,
+        instance=_instance("退料", [{"name": m2.name, "spec": m2.spec, "qty": 2}], linked=linked),
+    )
+    assert result["action"] == "rejected_mismatch"
+    assert "不在关联领料单" in (await ai._find_return(db_session, code)).rejected_reason
+
+
+async def fake_notify_noop(open_id, return_no, problem):
+    return None
+
+
+async def fake_cancel_noop(approval_code_, instance_code, user_id, *, app_id=None, app_secret=None):
+    return True
+
+
+async def test_return_approved_auto_accepts_and_restores(db_session, approval_code):
+    """审批关闭(APPROVED终态)=仓管已办理收料 → 自动验收回加（对称领料自动发料）。"""
+    m = await _mk_material(db_session, qty_stock=Decimal("50"))
+    linked = await _issued_linked_req(db_session, m, 10)
+    code = f"INST-{uuid4().hex[:8]}"
+    await ai.ingest_instance(
+        db_session, code,
+        instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 3}], linked=linked),
+    )
+    r = await ai.sync_status(db_session, code, status="APPROVED")
+    assert r["status"] == "accepted"
+    ret = await ai._find_return(db_session, code)
+    assert ret.leader_signed and ret.accepted_by == "飞书审批·仓管办理"
+    rows, _ = await hw.list_stock_rows(db_session, keyword=m.name)
+    assert rows[0]["on_hand"] == Decimal("43")  # 50 − 领10 + 退3 回加
+    # 幂等：重复 APPROVED 同步不重复回加
+    again = await ai.sync_status(db_session, code, status="APPROVED")
+    assert again["status"] == "accepted"
+    rows2, _ = await hw.list_stock_rows(db_session, keyword=m.name)
+    assert rows2[0]["on_hand"] == Decimal("43")
+
+
+async def test_return_canceled_invalidates_draft(db_session, approval_code):
+    m = await _mk_material(db_session, qty_stock=Decimal("50"))
+    linked = await _issued_linked_req(db_session, m, 10)
+    code = f"INST-{uuid4().hex[:8]}"
+    await ai.ingest_instance(
+        db_session, code,
+        instance=_instance("退料", [{"name": m.name, "spec": m.spec, "qty": 2}], linked=linked),
+    )
+    r = await ai.sync_status(db_session, code, status="CANCELED")
+    assert r["status"] == "rejected"
+    ret = await ai._find_return(db_session, code)
+    assert "撤销" in (ret.rejected_reason or "")
+    rows, _ = await hw.list_stock_rows(db_session, keyword=m.name)
+    assert rows[0]["on_hand"] == Decimal("40")  # 未回加（50−10）
 
 
 async def test_ingest_skips_foreign_definition(db_session, approval_code):
@@ -210,16 +381,16 @@ async def test_sync_status_approved_and_rejected(db_session, approval_code):
                              instance=_instance("领料", [{"name": m2.name, "spec": m2.spec, "qty": 10}]))
 
     r1 = await ai.sync_status(db_session, c1, status="APPROVED")
-    assert r1["action"] == "synced" and r1["status"] == "approved"
+    assert r1["action"] == "synced" and r1["status"] == "issued"
     # 驳回释放预扣
     r2 = await ai.sync_status(db_session, c2, status="REJECTED")
     assert r2["status"] == "rejected"
     rows, _ = await hw.list_stock_rows(db_session, keyword=m2.name)
     assert rows[0]["available"] == Decimal("100")  # 释放恢复
 
-    # 重复同步幂等（approved 不再迁移）
+    # 重复同步幂等（issued 不再迁移）
     again = await ai.sync_status(db_session, c1, status="APPROVED")
-    assert again["status"] == "approved"
+    assert again["status"] == "issued"
 
 
 async def test_sync_status_ignores_unknown_instance(db_session, approval_code):
@@ -260,7 +431,7 @@ async def test_reconcile_ingests_and_syncs(db_session, approval_code, monkeypatc
     assert stats["codes"] == 2 and stats["ingested"] == 1 and stats["synced"] == 1
     assert await ai._find_return(db_session, started_code) is not None
     req = await ai._find_requisition(db_session, approved_code)
-    assert req.status == "approved"
+    assert req.status == "issued"
 
 
 async def test_reconcile_disabled_without_code(db_session, monkeypatch, approval_code):
@@ -268,4 +439,4 @@ async def test_reconcile_disabled_without_code(db_session, monkeypatch, approval
 
     monkeypatch.setattr(get_settings(), "HARDWARE_APPROVAL_CODE", "", raising=False)
     stats = await ai.reconcile_recent_instances(db_session)
-    assert stats == {"enabled": 0, "codes": 0, "ingested": 0, "synced": 0}
+    assert stats == {"enabled": 0, "codes": 0, "ingested": 0, "synced": 0, "skipped": 0}
