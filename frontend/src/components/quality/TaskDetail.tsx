@@ -94,6 +94,8 @@ export default function TaskDetail({ id }: { id: string }) {
   const [calcDate, setCalcDate] = useState<Dayjs | null>(dayjs())
   const [calcValues, setCalcValues] = useState<Record<string, number | undefined>>({})
   const [calcInputs, setCalcInputs] = useState<Record<string, number | undefined>>({})
+  // 图谱预填链路确认的峰表快照：随计算表提交落库，供审核机审做峰面积一致性比对
+  const [calcPeaks, setCalcPeaks] = useState<{ name: string; area: number | null; rt?: number | null }[]>([])
   const [calcConfigs, setCalcConfigs] = useState<LcTemplateConfig[]>([])
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
@@ -184,6 +186,7 @@ export default function TaskDetail({ id }: { id: string }) {
   const openCalc = () => {
     setCalcValues({})
     setCalcInputs({})
+    setCalcPeaks([])
     setCalcTableNo(undefined)
     setCalcDate(dayjs())
     setCalcOpen(true)
@@ -192,7 +195,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const onCalcSubmit = async () => {
     const useEngine = !!activeCalcCfg
-    let payload: { table_no?: string; record_date?: string; values: { item_name: string; value: number }[]; inputs?: Record<string, number | undefined> }
+    let payload: { table_no?: string; record_date?: string; values: { item_name: string; value: number }[]; inputs?: Record<string, number | undefined>; peaks?: { name: string; area: number | null; rt?: number | null }[] }
     if (useEngine) {
       const filledInputs = Object.fromEntries(
         Object.entries(calcInputs).filter(([, v]) => v != null && v > 0),
@@ -206,6 +209,7 @@ export default function TaskDetail({ id }: { id: string }) {
         record_date: calcDate ? calcDate.format('YYYY-MM-DD') : undefined,
         values: [],
         inputs: filledInputs,
+        peaks: calcPeaks.length ? calcPeaks : undefined,
       }
     } else {
       const values = calcRows
@@ -1018,10 +1022,11 @@ export default function TaskDetail({ id }: { id: string }) {
         title={`图谱解析${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
         onClose={() => setChromaOpen(false)}
         onFilled={loadDetail}
-        onPrefill={(inputs, tableNo) => {
+        onPrefill={(inputs, tableNo, peaks) => {
           // 图谱映射的引擎 inputs 灌进在线计算表，检验员核对实时百分比后自行提交
           setCalcTableNo(tableNo)
           setCalcInputs(inputs)
+          setCalcPeaks(peaks)
           setCalcOpen(true)
         }}
       />

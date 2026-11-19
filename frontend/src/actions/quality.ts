@@ -2093,6 +2093,7 @@ export async function submitCalcFill(taskId: string, input: {
   values?: { item_name: string; value: number }[]
   inputs?: Record<string, number | undefined>
   section?: number
+  peaks?: { name: string; area: number | null; rt?: number | null }[]
 }): Promise<{ message: string; data: { filled: string[]; unmatched: string[] } }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/calc-fill`, {
     method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },

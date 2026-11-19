@@ -257,6 +257,7 @@ async def submit_calc_form_endpoint(
         db, task, payload.table_no, payload.record_date,
         [(v.item_name, v.value) for v in payload.values], filled_by=user.id,
         inputs=payload.inputs, section=payload.section,
+        peaks=[p.model_dump() for p in payload.peaks] if payload.peaks else None,
     )
     detail = await test_task_service.get_task_detail(db, task_id)
     msg = f"计算表已提交：已填入 {len(filled)} 项"

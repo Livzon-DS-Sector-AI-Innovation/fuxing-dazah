@@ -15,8 +15,9 @@ interface Props {
   title?: string
   onClose: () => void
   onFilled: () => void
-  /** 预填在线计算表：把映射好的引擎 inputs 灌进任务页计算表弹窗，检验员核对实时 % 后提交 */
-  onPrefill?: (inputs: Record<string, number>, tableNo: string) => void
+  /** 预填在线计算表：把映射好的引擎 inputs + 确认后的峰表快照灌进任务页计算表弹窗，
+   * 检验员核对实时 % 后提交（峰表随提交落库，供审核机审做峰面积比对） */
+  onPrefill?: (inputs: Record<string, number>, tableNo: string, peaks: ChromatogramPeak[]) => void
 }
 
 type Slot = 1 | 2
@@ -91,7 +92,7 @@ export default function ChromatogramModal({ open, taskId, title, onClose, onFill
       message.warning('第一份缺总峰面积或主峰面积（峰名未匹配上配置项目，可在峰表里改成计算表项目名后重试）')
       return
     }
-    onPrefill(mapping.inputs, tableNo)
+    onPrefill(mapping.inputs, tableNo, [...peaks1, ...(peaks2.length ? peaks2 : [])])
     onClose()
   }
 

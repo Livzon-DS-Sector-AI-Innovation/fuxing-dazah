@@ -327,26 +327,41 @@ async def audit_report_endpoint(
         "audited_at": report.audited_at.isoformat() if report.audited_at else None,
     }, message="审核已通过" if payload.action == "approve" else "报告单已退回")
 
-@router.get("/report/records/{report_id}/consistency", summary="报告单一致性校验（解析值 vs 填报值、快照 vs 现行标准）")
+@router.get("/report/records/{report_id}/consistency", summary="报告单一致性校验（解析值 vs 填报值、快照 vs 现行标准、图谱链路复算）")
 async def report_consistency_endpoint(
     report_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:report:audit")),
 ) -> JSONResponse:
-    """确定性机审：审核弹窗展示的两类一致性检查（仅提示，不阻断）。
+    """确定性机审：审核弹窗展示的三类一致性检查（仅提示，不阻断）。
 
     A. 解析值 vs 填报值：任务行（source=parse）当前填值与解析原始值不一致。
     B. 快照 vs 现行标准：任务快照与现行标准库的标准文本/限度不一致。
+    C. 图谱计算链路（B-1 预填链路留痕的 calc_form 记录）：
+       C1 复算——按 raw_data.inputs + 表号当前配置重算引擎结果，与当前填值比对
+       （检验员可能有意修改，仅提示；配置已删/变更则跳过）；
+       C2 峰面积——峰表快照与计算表输入的面积值比对（面积类输入=排除
+       质量/体积/纯度等非面积键；对不上=面积被人工改过或图谱与填报不一致）。
     """
     report = await get_report_record(db, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="报告单不存在")
     if not report.test_task_id:
-        return success_response(data={"parsed_mismatches": [], "standard_drifts": []})
+        return success_response(data={
+            "parsed_mismatches": [], "standard_drifts": [],
+            "calc_mismatches": [], "peak_area_mismatches": [],
+        })
 
     rows = await list_test_results(db, report.test_task_id)
+    from app.modules.quality.service.task_parse import _TaskParse
+
     parsed_mismatches: list[dict[str, Any]] = []
     standard_drifts: list[dict[str, Any]] = []
+    calc_mismatches: list[dict[str, Any]] = []
+    peak_area_mismatches: list[dict[str, Any]] = []
+    # C 类按检验记录聚合：同记录只复算/比对一次
+    recomputed: dict[uuid.UUID, dict[str, float]] = {}
+    peak_checked: set[uuid.UUID] = set()
 
     for r in rows:
         if r.standard_item_id:
@@ -365,17 +380,58 @@ async def report_consistency_endpoint(
         if r.inspection_record_id and r.result_value is not None:
             rec = await get_inspection_record(db, r.inspection_record_id)
             if rec and rec.raw_data:
-                parsed = _find_parsed_value(rec.raw_data, r.item_name)
+                raw = rec.raw_data
+                parsed = _find_parsed_value(raw, r.item_name)
                 if parsed is not None and abs(parsed - r.result_value) > 1e-9:
                     parsed_mismatches.append({
                         "item_name": r.item_name,
                         "report_value": r.result_value,
                         "parsed_value": parsed,
                     })
+                # C1 复算：inputs + 表号当前配置 → 引擎重算 → 与当前填值比对
+                if raw.get("source") == "calc_form" and raw.get("inputs") and rec.id not in recomputed:
+                    try:
+                        cands, _computed = await test_task_service.compute_calc_candidates(
+                            db, raw.get("table_no"), [], raw["inputs"],
+                            section=int(raw.get("section") or 0),
+                        )
+                        recomputed[rec.id] = {_TaskParse._norm_name(n): v for n, v in cands}
+                    except Exception:
+                        recomputed[rec.id] = {}  # 配置已删/规则不兼容：跳过复算
+                if recomputed.get(rec.id):
+                    rv = recomputed[rec.id].get(_TaskParse._norm_name(r.item_name))
+                    if rv is not None and abs(rv - r.result_value) > max(1e-9, abs(rv) * 1e-6):
+                        calc_mismatches.append({
+                            "item_name": r.item_name,
+                            "report_value": r.result_value,
+                            "recomputed_value": rv,
+                        })
+                # C2 峰面积：面积类输入值应能在峰表快照中找到（±0.011 容差=两位小数进位）
+                # 面积类=排除质量/体积/纯度/水分等非面积键（引擎键约定见 calc_engine；
+                # 杂质面积键形如 imp_a_1，不含 peak/area 字样，不能用包含式判断）
+                if raw.get("source") == "calc_form" and raw.get("peaks") and rec.id not in peak_checked:
+                    peak_checked.add(rec.id)
+                    peak_areas = [
+                        float(p["area"])
+                        for p in raw["peaks"]
+                        if isinstance(p, dict) and isinstance(p.get("area"), (int, float))
+                    ]
+                    for key, v in (raw.get("inputs") or {}).items():
+                        if not isinstance(v, (int, float)) or isinstance(v, bool):
+                            continue
+                        if any(h in key for h in ("mass", "vol", "purity", "moisture", "content", "dilution", "conc", "weight")):
+                            continue
+                        if not any(abs(float(v) - pa) <= 0.011 for pa in peak_areas):
+                            peak_area_mismatches.append({
+                                "input_key": key,
+                                "input_value": float(v),
+                            })
 
     return success_response(data={
         "parsed_mismatches": parsed_mismatches,
         "standard_drifts": standard_drifts,
+        "calc_mismatches": calc_mismatches,
+        "peak_area_mismatches": peak_area_mismatches,
     })
 
 
