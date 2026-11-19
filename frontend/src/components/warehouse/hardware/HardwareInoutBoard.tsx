@@ -891,12 +891,28 @@ function IssuePanel() {
   const [pageSize, setPageSize] = useState(20)
   const [issuing, setIssuing] = useState<HardwareRequisitionRecord | null>(null)
 
-  const { data: res, isLoading } = useQuery({
+  // 待发料 = 审批通过（approved）+ 紧急待发（pending 的 urgent 单，先发后补
+  // 制度 5.3.4：不经审批直接发料，24h 内补办）
+  const { data: approvedRes, isLoading } = useQuery({
     queryKey: ['warehouse', 'hardware', 'requisitions', 'approved', { page, pageSize }],
     queryFn: () =>
       fetchHardwareRequisitionsClient({ status: 'approved', page, pageSize }),
     placeholderData: keepPreviousData,
   })
+  const { data: urgentPendingRes } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'requisitions', 'urgent-pending'],
+    // 上限 200：同时 pending 的紧急单超过 200 属异常态（巡检+通报面兜底）
+    queryFn: () =>
+      fetchHardwareRequisitionsClient({ status: 'pending', page: 1, pageSize: 200 }),
+    placeholderData: keepPreviousData,
+  })
+  const urgentPending = (urgentPendingRes?.items ?? []).filter(
+    (r) => r.req_type === 'urgent',
+  )
+  const dataSource = [
+    ...urgentPending,
+    ...(approvedRes?.items ?? []),
+  ]
 
   const columns: TableColumnsType<HardwareRequisitionRecord> = [
     { title: '单号', dataIndex: 'req_no', width: 150 },
@@ -923,17 +939,17 @@ function IssuePanel() {
   ]
 
   return (
-    <SectionCard title="待发料（审批通过）">
+    <SectionCard title={`待发料（审批通过${urgentPending.length ? ` · 紧急待发 ${urgentPending.length}` : ''}）`}>
       <Table<HardwareRequisitionRecord>
         size="small"
         rowKey="id"
         loading={isLoading}
         columns={columns}
-        dataSource={res?.items ?? []}
+        dataSource={dataSource}
         pagination={{
           current: page,
           pageSize,
-          total: res?.total ?? 0,
+          total: (approvedRes?.total ?? 0) + urgentPending.length,
           showTotal: (t) => `共 ${t} 条`,
           onChange: (p, ps) => {
             setPage(p)

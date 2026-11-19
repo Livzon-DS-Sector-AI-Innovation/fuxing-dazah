@@ -438,6 +438,13 @@ def _scene_hint(text: str) -> str | None:
             "【场景提示】本次任务为成品入库登记：必须调用 create_finished_receipt_draft "
             "收集字段，禁止调用其他登记工具。"
         )
+    # 紧急领用须先于普通领料判（否则被领料/领用分支抢走）
+    if ("紧急" in t or "抢修" in t) and ("领料" in t or "领用" in t):
+        return (
+            "【场景提示】本次任务为五金库紧急领用（先发后补）：必须调用 "
+            "create_urgent_requisition 收集物资明细（名称+规格+数量）与用途，"
+            "禁止调用 create_picking_draft 或其他登记工具。"
+        )
     if "领料" in t or "领用" in t:
         return (
             "【场景提示】本次任务为领料登记（先进先出批次匹配）：必须调用 "
@@ -1316,6 +1323,50 @@ async def _run_biz_confirm_writeback(request_id: uuid.UUID) -> None:
             logger.exception("业务确认失败回执发送异常: request_id=%s", request_id)
 
 
+async def _handle_urgent_keeper_action(
+    event: dict[str, Any], value: dict[str, Any]
+) -> dict[str, Any] | None:
+    """紧急领用仓管卡回调（制度 5.3.4）：发料出库/作废（鉴权 fail-closed
+    在 urgent_flow：操作人须属通知目标）。发料为纯 DB 动作，同步执行即可；
+    结果经 PATCH 落原卡（模式同 _ack_with_patch）。"""
+    from app.modules.warehouse.hardware import urgent_flow
+
+    operator = event.get("operator") or {}
+    operator_open_id = str(operator.get("open_id") or "")
+    message_id = _message_id_of(event)
+    scene = str(value.get("scene") or "")
+    action = "issue" if scene == urgent_flow.URGENT_ISSUE_SCENE else "cancel"
+    requisition_id = str(value.get("requisition_id") or "")
+    started = time.monotonic()
+    logger.info(
+        "紧急领用仓管卡操作: action=%s req=%s operator=%s",
+        action, requisition_id[:12], operator_open_id[:20],
+    )
+    try:
+        async with _db_session() as db:
+            ok, message = await asyncio.shield(
+                urgent_flow.handle_keeper_action(
+                    db, requisition_id, action, operator_open_id=operator_open_id
+                )
+            )
+            await _record_gateway_audit(
+                started=started,
+                tool_name="hardware_urgent_card",
+                args_summary={
+                    "action": action,
+                    "requisition_id": requisition_id,
+                    "operator": operator_open_id[:30],
+                },
+                result_status="ok" if ok else "denied",
+            )
+    except Exception:  # noqa: BLE001 — 后台兜底
+        logger.exception("紧急领用仓管卡处理异常")
+        return await _ack_with_patch(message_id, False, "⚠️ 处理失败，请稍后重试")
+    return await _ack_with_patch(
+        message_id, ok, f"{'✅' if ok else '⚠️'} {message}"
+    )
+
+
 async def _handle_biz_confirm_action(
     event: dict[str, Any], value: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -1387,6 +1438,15 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
     # 取消 → 同步置 cancelled。确认人 = 卡片目标范围内任何人（1C 加速器定位）。
     if scene == confirm_request.CONFIRM_GATE_SCENE:
         return await _handle_biz_confirm_action(event, value)
+
+    # 紧急领用仓管卡（制度 5.3.4 先发后补）：发料出库/作废直连（非确认门场景）
+    from app.modules.warehouse.hardware.urgent_flow import (
+        URGENT_CANCEL_SCENE,
+        URGENT_ISSUE_SCENE,
+    )
+
+    if scene in (URGENT_ISSUE_SCENE, URGENT_CANCEL_SCENE):
+        return await _handle_urgent_keeper_action(event, value)
 
     # 票07：除通用确认场景外，已注册执行回调的场景（如 office 的 send_card）
     # 也进入确认门处理；未注册场景返回 None（ACK 通用信封，S2 识别确认等扩展位）

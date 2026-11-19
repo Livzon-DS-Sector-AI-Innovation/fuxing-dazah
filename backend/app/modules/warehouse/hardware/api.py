@@ -769,13 +769,23 @@ async def submit_requisition(
 
 
 async def _after_submit_channel(db: AsyncSession, req: Any) -> None:
-    """提交后按配置创建审批实例（feishu 通道；M3 接入，未配置自动 manual）。"""
+    """提交后动作（按类型分流）：
+
+    urgent=先发后补（制度 5.3.4）：不走审批通道——发双卡（申请人临时单据卡
+    +仓管发料卡），正式审批由用户 24h 内自行提交再自动挂回；
+    其余按配置创建审批实例（feishu 通道；M3 接入，未配置自动 manual）。
+    """
     try:
+        if getattr(req, "req_type", "normal") == "urgent":
+            from app.modules.warehouse.hardware.urgent_flow import send_urgent_cards
+
+            await send_urgent_cards(db, req)
+            return
         from app.modules.warehouse.hardware.approval_channel import submit_approval
 
         await submit_approval(db, req)
     except Exception:  # noqa: BLE001
-        logger.exception("审批通道提交失败（不影响申请主流程）")
+        logger.exception("提交后动作失败（不影响申请主流程）")
 
 
 @router.post("/requisitions/{requisition_id}/approve", summary="审批通过（manual 通道代录）")
@@ -841,6 +851,25 @@ async def issue_requisition(
         received_by=payload.received_by,
         items=[i.model_dump(mode="json") for i in payload.items],
         user=user,
+    )
+    return success_response(await _requisition_response(db, req))
+
+
+@router.post(
+    "/requisitions/{requisition_id}/patch-manual",
+    summary="确认已补办（紧急单手动闭环兜底）",
+)
+async def patch_requisition_manually(
+    requisition_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:requisition:issue")),
+) -> JSONResponse:
+    """自动匹配漏配/线下已补的兜底：仓管确认补办完成（manual 留痕）。"""
+    operator = (
+        user.display_name if user and hasattr(user, "display_name") else "仓管确认"
+    )
+    req = await service.patch_requisition_manually(
+        db, requisition_id, operator=operator, user=user
     )
     return success_response(await _requisition_response(db, req))
 

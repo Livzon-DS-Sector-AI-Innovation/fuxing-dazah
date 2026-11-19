@@ -228,6 +228,7 @@ export interface HardwareRequisitionRecord {
   issued_at?: string | null
   received_by?: string | null
   urgent_patch_deadline?: string | null
+  patched_at?: string | null
   created_at: string
   items: HardwareRequisitionItemRecord[]
 }

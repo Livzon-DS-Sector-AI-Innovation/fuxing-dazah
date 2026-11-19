@@ -736,6 +736,12 @@ PICKING_CONFIRM_CARD_TITLE = "🏭 领料登记"
 CONFIRM_PICKING_BUTTON_LABEL = "✅ 确认领料"
 CANCEL_PICKING_BUTTON_LABEL = "❌ 取消"
 
+# 五金库紧急领用（制度 5.3.4 先发后补，scene=hardware_urgent）
+HARDWARE_URGENT_SCENE = "hardware_urgent"
+HARDWARE_URGENT_CONFIRM_CARD_TITLE = "🔴 五金库紧急领用·待确认"
+CONFIRM_HARDWARE_URGENT_BUTTON_LABEL = "✅ 确认发起"
+CANCEL_HARDWARE_URGENT_BUTTON_LABEL = "❌ 取消"
+
 # 识别置信度低于该阈值加 ⚠ 高亮（spec：低置信度字段提醒重点核对）
 RECEIPT_CONFIDENCE_WARN = 0.7
 
@@ -1297,6 +1303,55 @@ def _render_hardware_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     )
 
 
+def _render_hardware_urgent_confirm_card(draft: Any) -> dict[str, Any]:
+    """五金库紧急领用确认卡（scene=hardware_urgent 分支，制度 5.3.4）。
+
+    aligned 存 items[{name,spec,qty,unit}]/purpose/dept/applicant（对话收集
+    +身份反查）。确认后建 urgent 领料单（预扣）并双卡通知（先发后补）。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [
+        f"**草稿**：{draft_no or '-'}",
+        f"**部门**：{aligned.get('dept') or '-'}",
+        f"**申请人**：{aligned.get('applicant') or '-'}",
+        f"**用途**：{aligned.get('purpose') or '-'}",
+        "",
+        "**物资明细**",
+    ]
+    for item in aligned.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        qty = item.get("qty")
+        qty_text = f"{qty:g}" if isinstance(qty, (int, float)) else "-"
+        lines.append(
+            f"- {item.get('name') or '-'} {item.get('spec') or ''} × {qty_text} {item.get('unit') or ''}"
+        )
+    lines.extend([
+        "",
+        "**先发后补须知**：确认后系统立即建紧急领料单（预扣库存）并通知仓管员"
+        "发料；领料后 **24 小时内**须在飞书提交「福兴电子领/退料单审批」"
+        "（选领料、同物资同数量）完成补办，逾期未补办仓储部有权暂停本部门领用。",
+    ])
+
+    value_base = {"scene": HARDWARE_URGENT_SCENE, "draft_id": draft_id}
+    return build_card(
+        title=HARDWARE_URGENT_CONFIRM_CARD_TITLE,
+        template="red",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_HARDWARE_URGENT_BUTTON_LABEL,
+                cancel_label=CANCEL_HARDWARE_URGENT_BUTTON_LABEL,
+            ),
+        ],
+    )
+
+
 def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     """登记确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
 
@@ -1323,6 +1378,8 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         return _render_finished_receipt_confirm_card(draft)
     if scene == HARDWARE_RECEIPT_SCENE:
         return _render_hardware_receipt_confirm_card(draft)
+    if scene == HARDWARE_URGENT_SCENE:
+        return _render_hardware_urgent_confirm_card(draft)
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)

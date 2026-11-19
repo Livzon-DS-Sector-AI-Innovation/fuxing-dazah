@@ -249,6 +249,13 @@ export async function issueHardwareRequisitionClient(
   return apiPost<HardwareRequisitionRecord>(`${CLIENT_API}${BASE}/requisitions/${id}/issue`, payload)
 }
 
+// 紧急领用补办手动闭环（自动匹配漏配/线下已补的兜底，仓管确认）
+export async function patchHardwareRequisitionManualClient(
+  id: string,
+): Promise<HardwareRequisitionRecord> {
+  return apiPost<HardwareRequisitionRecord>(`${CLIENT_API}${BASE}/requisitions/${id}/patch-manual`, {})
+}
+
 // ── 流水 ──
 
 export function fetchHardwareMovementsClient(

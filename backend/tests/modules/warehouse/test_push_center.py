@@ -183,6 +183,8 @@ class TestPushRegistry:
             "hardware_stale_list",
             "hardware_env_remind",
             "hardware_digest",
+            # 五金库紧急领用逾期通报（制度 5.3.4 先发后补，2026-11-19）
+            "hardware_urgent_overdue",
             # V3.0 二期 P1（缺口补齐，1 个定时型）
             "low_stock_alert",
         }

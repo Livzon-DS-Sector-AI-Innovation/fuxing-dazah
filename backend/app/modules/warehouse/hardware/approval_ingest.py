@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -204,11 +205,12 @@ def parse_form(form_str: str | list | None) -> ParsedForm:
 
 
 async def _starter(db: AsyncSession, instance: dict[str, Any]) -> dict[str, str]:
-    """发起人 → {name, dept, open_id}（identity 三绑缺失时兜底 user_id）。
+    """发起人 → {name, dept, open_id, identity_id}（identity 三绑缺失时兜底 user_id）。
 
     open_id 优先取实例详情自带的（仓储应用凭证拉取 → 天然本应用作用域）；
     identity.feishu_open_id 是混合作用域（库存/安全 app 的 ou_），跨应用发送
-    会报 99992361 cross app，仅作兜底。
+    会报 99992361 cross app，仅作兜底。identity_id 供补办强键匹配
+    （↔ 紧急单 applicant_user_id）。
     """
     user_id = str(
         instance.get("start_user_id")
@@ -220,7 +222,7 @@ async def _starter(db: AsyncSession, instance: dict[str, Any]) -> dict[str, str]
     row = (
         await db.execute(
             text(
-                "select name, coalesce(department, ''), feishu_open_id "
+                "select id, name, coalesce(department, ''), feishu_open_id "
                 "from identity.users where feishu_user_id=:u and is_deleted=false limit 1"
             ),
             {"u": user_id},
@@ -228,14 +230,16 @@ async def _starter(db: AsyncSession, instance: dict[str, Any]) -> dict[str, str]
     ).first()
     if row:
         return {
-            "name": row[0],
-            "dept": row[1] or "未匹配部门",
-            "open_id": inst_open_id or row[2] or user_id,
+            "name": row[1],
+            "dept": row[2] or "未匹配部门",
+            "open_id": inst_open_id or row[3] or user_id,
+            "identity_id": str(row[0]),
         }
     return {
         "name": user_id or "未知发起人",
         "dept": "未匹配部门",
         "open_id": inst_open_id or user_id,
+        "identity_id": "",
     }
 
 
@@ -356,6 +360,159 @@ async def _validate_return_rows(
     return "；".join(problems)
 
 
+# ── 补办自动匹配（紧急领用先发后补，2026-11-19）──
+
+
+def _items_signature(items: list[HardwareRequisitionItem]) -> dict[str, float]:
+    """领料明细 → {material_id: 合计数量}（issued_qty 优先，未发料用 need_qty）。"""
+    sig: dict[str, float] = {}
+    for it in items:
+        key = str(it.material_id)
+        qty = it.issued_qty if it.issued_qty is not None else it.need_qty
+        sig[key] = sig.get(key, 0.0) + float(qty or 0)
+    return sig
+
+
+async def _unpatched_urgent_candidates(
+    db: AsyncSession, starter: dict[str, str]
+) -> list[HardwareRequisition]:
+    """同人的未补办紧急单候选（补办匹配与疑似通报共用查询）。
+
+    未补办=urgent 且状态(pending/issued/overdue_unpatched) 且 patched_at 空，
+    且「未挂实例 **或** 所挂实例已被驳回/撤回」——补办被驳回后重提须能换绑
+    新实例，否则重提实例会被当新单建单+自动发料造成双扣。pending 也入候选：
+    用户秒补办（仓管未发料）时优先挂回原单而非建新单（漏配双扣比吞并一张
+    同物资新单危害大；APPROVED 语义本身含仓管办理节点，2026-11-19 拍板）。
+    """
+    ident = starter.get("identity_id") or ""
+    open_id = starter.get("open_id") or ""
+    if not ident and not open_id:
+        return []
+    conds = [HardwareRequisition.applicant_open_id == open_id]
+    if ident:
+        conds.append(HardwareRequisition.applicant_user_id == uuid.UUID(ident))
+    return list(
+        (
+            await db.execute(
+                select(HardwareRequisition).where(
+                    HardwareRequisition.req_type == "urgent",
+                    HardwareRequisition.status.in_(
+                        ["pending", "issued", "overdue_unpatched"]
+                    ),
+                    HardwareRequisition.patched_at.is_(None),
+                    or_(
+                        HardwareRequisition.approval_instance_code.is_(None),
+                        HardwareRequisition.approval_status.in_(
+                            ["rejected", "cancelled"]
+                        ),
+                    ),
+                    HardwareRequisition.is_deleted.is_(False),
+                    or_(*conds),
+                )
+            )
+        ).scalars().all()
+    )
+
+
+async def _match_urgent_patch(
+    db: AsyncSession, starter: dict[str, str], matched: list[tuple[HardwareMaterial, float]]
+) -> HardwareRequisition | None:
+    """补办领料实例 ↔ 未补办紧急单：强键匹配，返回唯一候选（多条取最早发料）。
+
+    强键（姓名/部门弱键不用，防误配）：
+    - 发起人 identity 用户相等（↔ 紧急单 applicant_user_id），或
+    - 发起人 open_id 相等（实例自带 open_id 与对话入口存的是同一仓储应用作用域）
+    外加物资集合与数量完全一致。零命中返回 None（走现行建单路径）。
+    """
+    want: dict[str, float] = {}
+    for m, q in matched:
+        key = str(m.id)
+        want[key] = want.get(key, 0.0) + float(q)
+
+    hits: list[tuple[datetime, HardwareRequisition]] = []
+    for req in await _unpatched_urgent_candidates(db, starter):
+        items = (
+            await db.execute(
+                select(HardwareRequisitionItem).where(
+                    HardwareRequisitionItem.requisition_id == req.id
+                )
+            )
+        ).scalars().all()
+        if _items_signature(items) != want:
+            continue
+        anchor = req.issued_at or req.submitted_at
+        hits.append((anchor or datetime.min.replace(tzinfo=UTC), req))
+    if not hits:
+        return None
+    hits.sort(key=lambda p: p[0])
+    if len(hits) > 1:
+        logger.info(
+            "[补办] 同键多候选 %d 张，挂回最早单 %s", len(hits), hits[0][1].req_no
+        )
+    return hits[0][1]
+
+
+async def _link_urgent_patch(
+    db: AsyncSession,
+    req: HardwareRequisition,
+    instance_code: str,
+    starter: dict[str, str],
+    status: str,
+) -> dict[str, Any]:
+    """补办实例挂回原紧急单：只落审批字段+按实例状态补齐，不建单/不预扣/不重复发料。"""
+    req.approval_channel = "feishu"
+    req.approval_instance_code = instance_code
+    await db.flush()
+    # 迟到状态补偿与事件路径共用 _apply_status（urgent 分支收敛在此）
+    await _apply_status(db, req, status)
+    await db.flush()
+    logger.info(
+        "[补办] 实例挂回紧急单 %s: instance=%s status=%s", req.req_no, instance_code, status
+    )
+    return {"action": "patched", "kind": "领料", "doc_no": req.req_no, "status": req.status}
+
+
+async def _maybe_flag_suspected_patch(
+    db: AsyncSession, req: HardwareRequisition, starter: dict[str, str]
+) -> None:
+    """零命中建单后的疑似补办通报：同人存在物资有交集的未补办紧急单 → 备注留痕。
+
+    漏配（数量不一致/键缺失）会把补办当新单处理造成双扣账，这里把风险
+    显性化给仓管核对（2026-11-19 拍板：仅通报不拦截）。
+    """
+    cands = await _unpatched_urgent_candidates(db, starter)
+    if not cands:
+        return
+    new_materials = set(
+        (
+            await db.execute(
+                select(HardwareRequisitionItem.material_id).where(
+                    HardwareRequisitionItem.requisition_id == req.id
+                )
+            )
+        ).scalars().all()
+    )
+    for cand in cands:
+        cand_materials = set(
+            (
+                await db.execute(
+                    select(HardwareRequisitionItem.material_id).where(
+                        HardwareRequisitionItem.requisition_id == cand.id
+                    )
+                )
+            ).scalars().all()
+        )
+        if new_materials & cand_materials:
+            req.remark = (
+                f"{req.remark or ''}；疑似补办：存在未补办紧急单 {cand.req_no}"
+                "（同人物资有交集），请仓管核对是否应挂回补办"
+            )
+            logger.info(
+                "[补办] 疑似补办通报: 新单 %s ↔ 未补办紧急单 %s", req.req_no, cand.req_no
+            )
+            return
+
+
 # ── 摄取主流程 ──
 
 
@@ -428,6 +585,11 @@ async def ingest_instance(
 
     if parsed.kind == KIND_REQUISITION:
         matched = await _match_materials(db, parsed.rows)
+        # 补办自动匹配（先发后补）：同人+同物资同数量的实例挂回原紧急单，
+        # 跳过建单/预扣/自动发料——防二次扣库（2026-11-19 拍板：时间窗强键匹配）
+        patch_req = await _match_urgent_patch(db, starter, matched)
+        if patch_req is not None:
+            return await _link_urgent_patch(db, patch_req, instance_code, starter, status)
         req = await hw_service.create_requisition(
             db,
             RequisitionCreate(
@@ -462,6 +624,8 @@ async def ingest_instance(
             if status == "PENDING":
                 await _cancel_feishu_instance(instance_code, inst)
             return {"action": "rejected_shortage", "kind": "领料", "doc_no": req.req_no}
+        # 零命中疑似补办通报（漏配双扣风险显性化，仅通报不拦截）
+        await _maybe_flag_suspected_patch(db, req, starter)
         # 迟到状态补偿（对账兜底路径：事件丢失后按当前状态对齐）
         await _apply_status(db, req, status)
         logger.info(
@@ -530,27 +694,54 @@ async def _apply_status(db: AsyncSession, req: HardwareRequisition, status: str)
     语义（2026-11-19 拍板）：审批定义含仓管员办理节点，实例 APPROVED=终态
     =审批关闭=仓管已在飞书确认发料 → 自动 approve+issue 实扣（镜像三值
     20/10/10 → 10/0/10）；PENDING 全程预扣，REJECTED/CANCELED 释放。
+
+    补办挂回的紧急单（req_type=urgent 且已挂实例码，2026-11-19 先发后补）：
+    - 已发料（issued/overdue_unpatched）收到 APPROVED → 只落审批结果+patched_at
+      （库存已实扣，绝不二次发料）；overdue 补办完成回 issued；
+    - 补办先于发料到达（pending 收 APPROVED）→ 走正常 approve+issue，发料即闭环；
+    - REJECTED/CANCELED → 不回退不释放（紧急领用已实际发生/仍待仓管发料），
+      仅私发申请人重新补办提醒，24h 倒计时继续。
     """
     if status == "APPROVED":
-        if req.status == "pending":
-            await hw_service.approve_requisition(
-                db, req.id, approver="飞书审批", note="飞书审批通过（事件/对账同步）"
-            )
-            req.approval_status = "approved"
-        if req.status == "approved":
-            await hw_service.issue_requisition(
-                db, req.id,
-                issued_by="飞书审批·仓管办理",
-                received_by=req.applicant or "领用人",
-            )
-    elif req.status == "pending":
-        if status == "REJECTED":
-            await hw_service.reject_requisition(
-                db, req.id, approver="飞书审批", reason="飞书审批驳回（事件/对账同步）"
-            )
-            req.approval_status = "rejected"
-        elif status == "CANCELED":
-            await hw_service.cancel_requisition(db, req.id)
+        if req.req_type == "urgent" and req.status in ("issued", "overdue_unpatched"):
+            if req.patched_at is None:
+                await hw_service.approve_requisition(
+                    db, req.id, approver="飞书审批", note="紧急领用补办审批通过"
+                )
+                req.approval_status = "approved"
+                await _notify_patched(req)
+        else:
+            if req.status == "pending":
+                await hw_service.approve_requisition(
+                    db, req.id, approver="飞书审批", note="飞书审批通过（事件/对账同步）"
+                )
+                req.approval_status = "approved"
+            if req.status == "approved":
+                await hw_service.issue_requisition(
+                    db, req.id,
+                    issued_by="飞书审批·仓管办理",
+                    received_by=req.applicant or "领用人",
+                )
+                # 补办先于发料：审批已 APPROVED，发料即补办闭环
+                if (
+                    req.req_type == "urgent"
+                    and req.approval_instance_code
+                    and req.patched_at is None
+                ):
+                    req.patched_at = req.issued_at
+                    await _notify_patched(req)
+    elif status in ("REJECTED", "CANCELED"):
+        if req.req_type == "urgent" and req.approval_instance_code:
+            req.approval_status = "rejected" if status == "REJECTED" else "cancelled"
+            await _notify_patch_rejected(req, status)
+        elif req.status == "pending":
+            if status == "REJECTED":
+                await hw_service.reject_requisition(
+                    db, req.id, approver="飞书审批", reason="飞书审批驳回（事件/对账同步）"
+                )
+                req.approval_status = "rejected"
+            else:
+                await hw_service.cancel_requisition(db, req.id)
     await db.flush()
 
 
@@ -576,8 +767,6 @@ async def _apply_return_status(db: AsyncSession, ret: HardwareReturn, status: st
             f"飞书审批{'驳回' if status == 'REJECTED' else '撤销'}（事件/对账同步）"
         )
         await db.flush()
-
-
 
 
 async def sync_status(
@@ -688,6 +877,71 @@ async def _notify_return_rejected(open_id: str, return_no: str, problem: str) ->
         await send_card_to_user(open_id, card)
     except Exception:  # noqa: BLE001 — 通知失败不影响摄取主流程
         logger.warning("[摄取] 退料拒收通知发送失败: %s", exc_info=True)
+
+
+async def _notify_patched(req: HardwareRequisition) -> None:
+    """补办闭环通知（私发申请人，best-effort 不抛）。"""
+    open_id = req.applicant_open_id or ""
+    if not open_id:
+        return
+    try:
+        from app.modules.warehouse.feishu.notification import send_card_to_user
+
+        card = {
+            "config": {"wide_screen": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "紧急领用补办已闭环"},
+                "template": "green",
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"你的紧急领用单 **{req.req_no}** 补办审批已通过，手续闭环。"
+                        ),
+                    },
+                }
+            ],
+        }
+        await send_card_to_user(open_id, card)
+    except Exception:  # noqa: BLE001 — 通知失败不影响补办主流程
+        logger.warning("[补办] 闭环通知发送失败: %s", req.req_no, exc_info=True)
+
+
+async def _notify_patch_rejected(req: HardwareRequisition, status: str) -> None:
+    """补办审批驳回/撤回通知（私发申请人重新补办，倒计时继续）。"""
+    open_id = req.applicant_open_id or ""
+    if not open_id:
+        return
+    try:
+        from app.modules.warehouse.feishu.notification import send_card_to_user
+
+        verb = "被驳回" if status == "REJECTED" else "被撤回"
+        card = {
+            "config": {"wide_screen": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "紧急领用补办未通过"},
+                "template": "orange",
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"你的紧急领用单 **{req.req_no}** 的补办审批{verb}。\n\n"
+                            "请在截止时间前重新提交领料审批完成补办，"
+                            "逾期未补办仓储部有权暂停本部门领用。"
+                        ),
+                    },
+                }
+            ],
+        }
+        await send_card_to_user(open_id, card)
+    except Exception:  # noqa: BLE001 — 通知失败不影响主流程
+        logger.warning("[补办] 驳回通知发送失败: %s", req.req_no, exc_info=True)
 
 
 # ── 事件接入（approval.instance.* WS 长连接 → _dispatch 分发）──

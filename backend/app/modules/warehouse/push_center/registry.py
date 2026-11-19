@@ -219,6 +219,17 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule=None,
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
+    # 五金库紧急领用（制度 5.3.4 先发后补，2026-11-19）：逾期未补办每日一次
+    # 通报仓管通知目标直至补办（仅通报不拦截；渲染器在 events.py 已注册）
+    PushTaskInfo(
+        task_name="hardware_urgent_overdue",
+        scene="hardware_urgent_overdue",
+        label="五金库紧急领用逾期通报",
+        description="紧急领用超 24h 未补办，每日一次通报仓管通知目标直至补办（事件触发）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="HARDWARE_URGENT_NOTIFY_TARGETS",
+    ),
     # ── 五金库二期 M5（2026-11-05）──
     PushTaskInfo(
         task_name="hardware_stale_list",

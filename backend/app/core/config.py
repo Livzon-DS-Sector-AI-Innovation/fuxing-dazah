@@ -164,6 +164,14 @@ class Settings(BaseSettings):
     # 单向）」base/table，领/退料审批表单的引用数据源。清空任一值=同步自空转）。
     HARDWARE_MIRROR_BASE_TOKEN: str = "U8h6b5puUaHH7Hsf7focp9fGnze"
     HARDWARE_MIRROR_TABLE_ID: str = "tblK7MkjceniZOjX"
+    # 五金库月度用量管控表（部门×月份×物资 需求vs用量比对行自动回填；Base
+    # 复用镜像 BASE_TOKEN，本值=「月度用量管控」table。默认空=任务自空转）。
+    HARDWARE_USAGE_TABLE_ID: str = ""
+    # 五金库紧急领用（先发后补，制度 5.3.4）仓管通知目标：逗号分隔
+    # open_id/chat_id，临时单据通知卡/逾期通报发给这些收件人
+    # （send_card_to_target 按前缀分流私发/群发）。默认许康福
+    # （2026-11-19 拍板先发本人，仓管员到位后 env 覆盖即可）。
+    HARDWARE_URGENT_NOTIFY_TARGETS: str = "ou_5773c42e1fc7ce3e554b83242c87aa0b"
     # 仓库机器人 open_id（部署身份：gateway 去重排除自身消息；未配置回退 gateway 代码常量）
     WAREHOUSE_FEISHU_BOT_OPEN_ID: str = ""
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）

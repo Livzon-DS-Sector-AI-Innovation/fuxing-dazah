@@ -454,6 +454,12 @@ class HardwareRequisition(BaseModel):
     patched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="紧急单补审批完成时间"
     )
+    patch_reminders: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="补办催办已发标签（t12/t2，幂等锚）"
+    )
+    last_overdue_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="逾期通报最近一次时间（每日一次幂等锚）"
+    )
     monthly_check: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="提交时该部门当月已领量 vs 月需求快照（领用标准核对支撑）"
     )

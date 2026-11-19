@@ -32,6 +32,7 @@ import {
   fetchHardwareRequisitionsClient,
   fetchHardwareStockClient,
   fetchHardwareStockSummaryClient,
+  patchHardwareRequisitionManualClient,
   rejectHardwareRequisitionClient,
   submitHardwareRequisitionClient,
 } from '@/lib/api/warehouse-hardware'
@@ -230,6 +231,7 @@ function ApplyModal({
   const queryClient = useQueryClient()
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const reqType = Form.useWatch('req_type', form)
 
   const onSubmit = async () => {
     if (!apply) return
@@ -244,7 +246,11 @@ function ApplyModal({
         items: [{ material_id: apply.id, need_qty: values.need_qty }],
       })
       await submitHardwareRequisitionClient(created.id)
-      message.success('申请已提交（预扣生效，等待审批）')
+      if (values.req_type === 'urgent') {
+        message.success('紧急领用已建立（预扣生效，已通知仓管员发料；领料后 24h 内请提交正式领料审批补办）')
+      } else {
+        message.success('申请已提交（预扣生效，等待审批）')
+      }
       form.resetFields()
       onClose()
       queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
@@ -269,6 +275,12 @@ function ApplyModal({
       {apply && (
         <div className="mb-3 rounded bg-gray-50 px-3 py-2 text-[13px]">
           当前可用 {apply.available} {apply.unit}（提交即预扣，审批通过后到发料台领料）
+        </div>
+      )}
+      {reqType === 'urgent' && (
+        <div className="mb-3 rounded bg-orange-50 px-3 py-2 text-[13px] text-orange-600">
+          紧急领用（先发后补）：提交后不走审批，直接通知仓管员发料；领料后 24
+          小时内须在飞书提交「福兴电子领/退料单审批」补办，逾期仓储部有权暂停本部门领用。
         </div>
       )}
       <Form
@@ -319,6 +331,7 @@ function MyRequisitionsPanel() {
   const queryClient = useQueryClient()
   const { hasPermission } = usePermission()
   const canApprove = hasPermission('warehouse:hardware:requisition:approve')
+  const canIssue = hasPermission('warehouse:hardware:requisition:issue')
 
   const [statusFilter, setStatusFilter] = useState<string | undefined>('pending')
   const [page, setPage] = useState(1)
@@ -350,6 +363,16 @@ function MyRequisitionsPanel() {
     onError: (e) => message.error(e instanceof Error ? e.message : '驳回失败'),
   })
 
+  // 紧急单手动确认已补办（自动匹配漏配/线下已补的兜底）
+  const patchManual = useMutation({
+    mutationFn: (id: string) => patchHardwareRequisitionManualClient(id),
+    onSuccess: () => {
+      message.success('已确认补办闭环')
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+    },
+    onError: (e) => message.error(e instanceof Error ? e.message : '补办确认失败'),
+  })
+
   const columns: TableColumnsType<HardwareRequisitionRecord> = [
     { title: '单号', dataIndex: 'req_no', width: 150 },
     {
@@ -368,6 +391,25 @@ function MyRequisitionsPanel() {
     { title: '部门', dataIndex: 'dept_name', width: 100 },
     { title: '申请人', dataIndex: 'applicant', width: 90 },
     { title: '用途', dataIndex: 'purpose', render: (v) => v || '-' },
+    {
+      title: '补办',
+      width: 110,
+      render: (_: unknown, r: HardwareRequisitionRecord) => {
+        if (r.req_type !== 'urgent') return '-'
+        if (r.patched_at) return <Tag color="green">已补办</Tag>
+        if (r.status === 'overdue_unpatched') return <Tag color="red">逾期未补</Tag>
+        if (r.urgent_patch_deadline) {
+          const remainMin = dayjs(r.urgent_patch_deadline).diff(dayjs(), 'minute')
+          if (remainMin <= 0) return <Tag color="red">已逾期</Tag>
+          const text =
+            remainMin >= 60
+              ? `剩 ${Math.floor(remainMin / 60)} 小时`
+              : `剩 ${remainMin} 分钟`
+          return <Tag color={remainMin <= 120 ? 'red' : 'orange'}>{text}</Tag>
+        }
+        return <Tag>待发料起算</Tag>
+      },
+    },
     {
       title: '状态',
       dataIndex: 'status',
@@ -416,6 +458,16 @@ function MyRequisitionsPanel() {
               取消
             </Button>
           )}
+          {r.req_type === 'urgent' && !r.patched_at &&
+            (r.status === 'issued' || r.status === 'overdue_unpatched') && canIssue && (
+              <Button
+                size="small"
+                loading={patchManual.isPending}
+                onClick={() => patchManual.mutate(r.id)}
+              >
+                确认已补办
+              </Button>
+            )}
         </Space>
       ),
     },
@@ -442,6 +494,7 @@ function MyRequisitionsPanel() {
               { value: 'pending', label: '待审批' },
               { value: 'approved', label: '待发料' },
               { value: 'issued', label: '已发料' },
+              { value: 'overdue_unpatched', label: '逾期未补' },
               { value: 'rejected', label: '已驳回' },
               { value: 'all', label: '全部' },
             ]}

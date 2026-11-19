@@ -734,11 +734,16 @@ async def reject_receipt(
 async def create_requisition(
     db: AsyncSession, payload: RequisitionCreate, *, user: User | None = None
 ) -> HardwareRequisition:
+    # open_id 缺省取登录用户 identity 三绑（前端发起的紧急单由此可收催办/
+    # 闭环/驳回通知，spec 2026-11-19；对话/审批路径各自显式传入）
+    applicant_open_id = payload.applicant_open_id
+    if not applicant_open_id and user is not None:
+        applicant_open_id = getattr(user, "feishu_open_id", None)
     req = HardwareRequisition(
         req_no=await generate_doc_no(db, HardwareRequisition, "WJK-LY"),
         dept_name=payload.dept_name,
         applicant=payload.applicant,
-        applicant_open_id=payload.applicant_open_id,
+        applicant_open_id=applicant_open_id,
         applicant_user_id=user.id if user else None,
         purpose=payload.purpose,
         req_type=payload.req_type,
@@ -833,7 +838,21 @@ async def list_requisition_items(
     )
 
 
-async def _available_of(db: AsyncSession, material_id: UUID) -> Decimal:
+async def find_material_by_name_spec(
+    db: AsyncSession, name: str, spec: str
+) -> HardwareMaterial | None:
+    """名称+规格（平台唯一键）精确查找在册物资（对话入口用；未命中 None）。"""
+    stmt = select(HardwareMaterial).where(
+        HardwareMaterial.is_deleted.is_(False),
+        HardwareMaterial.active.is_(True),
+        HardwareMaterial.name == name,
+    )
+    if spec:
+        stmt = stmt.where(HardwareMaterial.spec == spec)
+    return (await db.execute(stmt.limit(1))).scalars().first()
+
+
+async def available_of_material(db: AsyncSession, material_id: UUID) -> Decimal:
     on_hand = await db.scalar(
         select(func.coalesce(
             select(func.sum(HardwareReceiptItem.remaining_quantity))
@@ -887,7 +906,7 @@ async def submit_requisition(
             need_by_material.get(item.material_id, ZERO) + item.need_qty
         )
     for material_id, need in need_by_material.items():
-        available = await _available_of(db, material_id)
+        available = await available_of_material(db, material_id)
         if available < need:
             material = await db.get(HardwareMaterial, material_id)
             name = material.name if material else str(material_id)
@@ -962,11 +981,13 @@ async def approve_requisition(
 ) -> HardwareRequisition:
     """pending → approved（预扣保持；超额在审批环节提示需生产总监，manual 通道落备注）。
 
-    紧急单先发后补：status=issued 的 urgent 单补审批只落审批结果与
-    patched_at（status 保持 issued，不回退状态机）。
+    紧急单先发后补：issued 的 urgent 单补审批只落审批结果与 patched_at
+    （status 保持 issued，不回退状态机）；overdue_unpatched 补办完成回
+    issued（逾期事实由 patched_at > urgent_patch_deadline 推导）。
     """
     req = await _load_requisition(db, requisition_id)
-    if req.status == "issued" and req.req_type == "urgent":
+    if req.status in ("issued", "overdue_unpatched") and req.req_type == "urgent":
+        req.status = "issued"
         req.approval_status = "approved"
         req.approved_by = approver
         req.approved_at = _now()
@@ -988,6 +1009,40 @@ async def approve_requisition(
     # 紧急单补审批闭合
     if req.req_type == "urgent" and req.issued_at is not None:
         req.patched_at = _now()
+    if user:
+        req.updated_by = user.id
+    await db.flush()
+    return req
+
+
+async def patch_requisition_manually(
+    db: AsyncSession,
+    requisition_id: UUID,
+    *,
+    operator: str,
+    user: User | None = None,
+) -> HardwareRequisition:
+    """手动确认已补办（自动匹配漏配/线下已补的兜底，2026-11-19 拍板）。
+
+    仅 urgent 且已发料（issued/overdue_unpatched）且未 patch 的单可闭环；
+    manual 渠道留痕；overdue 补办完成回 issued（逾期事实=patched_at>deadline）。
+    """
+    req = await _load_requisition(db, requisition_id)
+    if req.req_type != "urgent":
+        raise HardwareError("仅紧急领用单需要补办确认")
+    if req.status not in ("issued", "overdue_unpatched"):
+        raise HardwareError(f"申请状态 {req.status} 不可补办确认（须已发料）")
+    if req.patched_at is not None:
+        raise HardwareError("该单已补办闭环，无需重复确认")
+    if req.approval_channel != "feishu":
+        req.approval_channel = "manual"
+    req.approval_status = "approved"
+    req.approved_by = operator
+    req.approved_at = _now()
+    req.approval_note = "仓管确认已补办（手动闭环）"
+    req.patched_at = _now()
+    if req.status == "overdue_unpatched":
+        req.status = "issued"
     if user:
         req.updated_by = user.id
     await db.flush()
