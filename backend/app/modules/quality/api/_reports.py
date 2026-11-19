@@ -48,6 +48,7 @@ from app.modules.quality.schemas import (
 )
 from app.modules.quality.service import (
     lc_report_service,
+    spawn_background,
     test_task_service,
 )
 from app.platform.identity.models import User
@@ -126,6 +127,11 @@ async def generate_report(
             await db.rollback()  # flush 失败后 session 已不可用，回滚后才能重查计数
             await asyncio.sleep(0.1 * (attempt + 1))  # 等并发对手提交后再重算
 
+    # 生成即提醒审核员初审（fire-and-forget，不阻塞出报下载）
+    from app.modules.quality.feishu.report_push import push_reports_generated
+
+    spawn_background(push_reports_generated(product_name, batch_number, [serial_no]))
+
     return _coa_response(output_filename, content)
 
 
@@ -142,6 +148,9 @@ async def generate_task_report(
         try:
             splits = await test_task_service.build_task_report_splits(db, task_id)
             generated = []
+            serial_nos: list[str] = []
+            file_nos: list[str] = []
+            product_name = batch_number = ""
             for split in splits:
                 template = split["template"]
                 tp = REPORT_TEMPLATE_DIR / template
@@ -161,6 +170,9 @@ async def generate_task_report(
                     file_size=output_path.stat().st_size,
                     serial_no=split["fill_data"].get("流水号", ""),
                 )
+                product_name, batch_number = split["product_name"], split["batch_number"]
+                serial_nos.append(split["fill_data"].get("流水号", ""))
+                file_nos.append(split["doc"].file_no)
                 generated.append({
                     "report_id": str(record.id),
                     "filename": output_filename,
@@ -173,6 +185,15 @@ async def generate_task_report(
             )
             if skipped:
                 msg += f"；跳过无结果行的标准文件：{'、'.join(skipped)}"
+            # 生成即提醒审核员初审（fire-and-forget，一次推送汇总全部流水号）
+            if generated:
+                from app.modules.quality.feishu.report_push import (
+                    push_reports_generated,
+                )
+
+                spawn_background(
+                    push_reports_generated(product_name, batch_number, serial_nos, file_nos)
+                )
             return success_response(data=generated, message=msg)
         except IntegrityError as exc:
             if not is_serial_unique_violation(exc) or attempt == 2:
@@ -292,6 +313,14 @@ async def audit_report_endpoint(
     )
     if not report:
         raise HTTPException(status_code=404, detail="报告单不存在")
+    # 审核结果即时通知：退回需统计员重新出报（fire-and-forget）
+    from app.modules.quality.feishu.report_push import push_audit_result
+
+    spawn_background(push_audit_result(
+        report.product_name, report.batch_number, report.serial_no,
+        approved=payload.action == "approve",
+        auditor_name=user.name, comment=payload.comment,
+    ))
     return success_response(data={
         "report_id": str(report.id),
         "audit_status": report.audit_status,

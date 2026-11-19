@@ -101,6 +101,19 @@ async def _push_today_tasks() -> None:
             + f"\n  {_frontend_task_link(str(t.id))}"
             for t in review_items
         ]
+        # 待初审报告单（不限生成日期）：堆积提醒审核员进系统初审
+        from app.modules.quality.feishu.report_push import _report_page_link
+        from app.modules.quality.repository import list_report_records
+
+        report_items, report_total = await list_report_records(
+            db, audit_status="pending", page=1, page_size=50
+        )
+        report_lines = [
+            f"- {r.product_name} 批号 {r.batch_number}｜流水号 {r.serial_no or '—'}"
+            for r in report_items
+        ]
+        if report_total > len(report_items):
+            report_lines.append(f"- …等共 {report_total} 份")
         # 明日出报预告
         tomorrow = (_app_today() + timedelta(days=1)).isoformat()
         tomorrow_items = await list_test_tasks_by_report_date(db, tomorrow)
@@ -110,13 +123,19 @@ async def _push_today_tasks() -> None:
             for t in tomorrow_items
             if t.status != "void"
         ]
-    if not lines and not review_lines and not tomorrow_lines:
+    if not lines and not review_lines and not tomorrow_lines and not report_lines:
         return
     blocks: list[str] = []
     if lines:
         blocks.append(f"今日出报任务（{today}）：\n" + "\n".join(lines))
     if review_lines:
         blocks.append(f"待复核任务（{len(review_lines)} 项，请专员进系统审核）：\n" + "\n".join(review_lines))
+    if report_lines:
+        blocks.append(
+            f"待初审报告单（{report_total} 份，请审核员进系统初审）：\n"
+            + "\n".join(report_lines)
+            + f"\n  {_report_page_link()}"
+        )
     if tomorrow_lines:
         blocks.append(f"明日出报预告（{tomorrow}）：\n" + "\n".join(tomorrow_lines))
     text = "\n\n".join(blocks)
