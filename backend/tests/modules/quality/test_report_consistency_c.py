@@ -28,6 +28,34 @@ def _calc_cfg() -> dict:
 _INPUTS = {"total_peak_1": 1000.0, "main_peak_1": 900.0, "imp_a_1": 50.0}
 
 
+@pytest.mark.asyncio
+async def test_consistency_c2_total_peak_is_synthetic_no_false_alarm(
+    db_session: AsyncSession,
+) -> None:
+    """total_peak 是映射引擎求和的合成值：峰表找不到不报（真实样本验收踩过：24 峰求和必不在峰表）。"""
+    from app.modules.quality.repository import (
+        create_report_record,
+    )
+    from app.modules.quality.service import test_task_service
+
+    task, table_no = await _prepare_task_with_calc(db_session)
+    # total=1250（900+50+300 求和，峰表无此值）；main/impurity 为单峰直取
+    await test_task_service.submit_calc_form(
+        db_session, task, table_no, "2026-09-05", [],
+        inputs={"total_peak_1": 1250.0, "main_peak_1": 900.0, "imp_a_1": 50.0},
+        peaks=[{"name": "总峰", "area": 900.0}, {"name": "主峰", "area": 50.0},
+               {"name": "杂质A", "area": 300.0}],
+    )
+    report = await create_report_record(
+        db_session, template_path="t.docx", product_name=task.product_name,
+        batch_number=task.batch_number, test_task_id=task.id,
+        file_path="/tmp/x.docx", file_size=10, serial_no=f"26{uuid.uuid4().hex[:6]}",
+    )
+    d = await _consistency(db_session, report.id)
+    # total_peak_1=1250 不在峰表（900/50/300）但不报；无任何面积被改 → C2 全绿
+    assert d["peak_area_mismatches"] == []
+
+
 async def _prepare_task_with_calc(db: AsyncSession) -> tuple:
     from app.modules.quality.repository import (
         create_lc_template_config,

@@ -40,6 +40,25 @@ def _markdown_tables(markdown: str) -> list[list[list[str]]]:
     return tables
 
 
+def _html_tables(markdown: str) -> list[list[list[str]]]:
+    """提取 HTML <table> 块（MinerU VLM 对仪器截图报表常输出 HTML 而非 markdown 表）。"""
+    import html as _html
+
+    tables: list[list[list[str]]] = []
+    for m in re.finditer(r"<table[^>]*>(.*?)</table>", markdown, re.S | re.I):
+        table: list[list[str]] = []
+        for tr in re.finditer(r"<tr[^>]*>(.*?)</tr>", m.group(1), re.S | re.I):
+            cells = [
+                _html.unescape(re.sub(r"<[^>]+>", "", c)).strip()
+                for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr.group(1), re.S | re.I)
+            ]
+            if cells:
+                table.append(cells)
+        if len(table) >= 2:
+            tables.append(table)
+    return tables
+
+
 _AREA_HINTS = ("面积", "area", "峰面", "%面")
 _NAME_HINTS = ("峰名", "组分", "名称", "化合物", "name", "component", "峰")
 _RT_HINTS = ("保留时间", "retention", "rt")
@@ -48,12 +67,14 @@ _RT_HINTS = ("保留时间", "retention", "rt")
 def extract_peak_table(markdown: str) -> list[dict[str, Any]]:
     """从 MinerU Markdown 提取峰表：{name, area, rt}（仅提取不判定）。
 
+    - 兼容 markdown 竖线表与 HTML <table>（VLM 对仪器截图报表常输出 HTML）；
     - 面积：优先原始面积列（避开仪器 %面积列——引擎需原始面积自行 RRF 归一化），
       无面积列时回退行末列（既有行为）；
-    - rt：保留时间列（存在才提取，无则 None），保留三位小数，供主峰核对用。
+    - rt：保留时间列（存在才提取，无则 None），保留三位小数，供主峰核对用；
+    - 峰名为空（仪器常不标注）：用序号兜底「峰N」，检验员在峰表里改成计算表项目名。
     """
     peaks: list[dict[str, Any]] = []
-    for table in _markdown_tables(markdown):
+    for table in _markdown_tables(markdown) + _html_tables(markdown):
         header = [c.casefold() for c in table[0]]
         area_cols = [i for i, h in enumerate(header) if any(k in h for k in _AREA_HINTS)]
         rt_col = next((i for i, h in enumerate(header) if any(k in h for k in _RT_HINTS)), None)
@@ -64,8 +85,12 @@ def extract_peak_table(markdown: str) -> list[dict[str, Any]]:
             if not row:
                 continue
             name = str(row[name_col]).strip() if name_col < len(row) else ""
-            if not name or not re.search(r"[一-龥A-Za-z]", name):
-                continue
+            if not re.search(r"[一-龥A-Za-z]", name):
+                # 仪器未标注峰名：序号兜底（名称列空是常态，跳过会丢整张峰表）
+                seq = next((c.strip() for c in row if re.fullmatch(r"\d{1,3}", c.strip())), "")
+                if not seq:
+                    continue
+                name = f"峰{seq}"
             # 原始面积列优先（不含 %）；全部面积列都是 %面积时才取第一个
             cols = [c for c in area_cols if "%" not in header[c]] or area_cols or [len(row) - 1]
             area: float | None = None

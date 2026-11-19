@@ -421,6 +421,9 @@ async def report_consistency_endpoint(
                             continue
                         if any(h in key for h in ("mass", "vol", "purity", "moisture", "content", "dilution", "conc", "weight")):
                             continue
+                        # total_peak_* 是映射引擎求和的合成值（峰表无单峰对应），排除防误报
+                        if key.startswith("total_peak"):
+                            continue
                         if not any(abs(float(v) - pa) <= 0.011 for pa in peak_areas):
                             peak_area_mismatches.append({
                                 "input_key": key,
