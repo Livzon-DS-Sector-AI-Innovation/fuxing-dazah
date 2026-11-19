@@ -346,7 +346,7 @@ export const moduleMenus: ModuleMenu[] = [
       {
         // 人员全周期：编制 → 入职 → 在职档案 → 离职（用户拍板：作为 HR 板块内的分组菜单）
         key: "lifecycle",
-        label: "人员全周期管理",
+        label: "人员管理",
         path: "/hr/profile",
         children: [
           { key: "headcount", label: "编制管理", path: "/hr/headcount", permissions: ["hr:profile:read"] },
