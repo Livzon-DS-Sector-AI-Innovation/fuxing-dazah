@@ -409,8 +409,17 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "performance-categories", label: "项目配置", path: "/hr/performance/categories", permissions: ["hr:performance:manage"] },
         ],
       },
-      { key: "title-review", label: "职称评审", path: "/hr/title-review", permissions: ["hr:title:read"] },
-      { key: "title-judge", label: "职称评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
+      {
+        // 两页收进折叠子菜单（同培训管理/绩效考核）：管理端评审 + 评委投票；
+        // 纯评委只见「评审投票」子项（父项随子项权限过滤存活）
+        key: "title",
+        label: "职称评审",
+        path: "/hr/title-review",
+        children: [
+          { key: "title-review", label: "评审管理", path: "/hr/title-review", permissions: ["hr:title:read"] },
+          { key: "title-judge", label: "评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
+        ],
+      },
       // 权限码与后端 hr/deps.py 路由映射对齐：资料下载→roster、系统配置→settings:manage
       { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:roster:read"] },
       {

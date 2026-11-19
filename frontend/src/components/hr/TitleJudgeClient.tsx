@@ -133,7 +133,7 @@ export default function TitleJudgeClient() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审投票</h1>
+        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审投票</h1>
         <p className="text-[14px] text-[var(--color-steel)]">
           评委投票（匿名编号 {tasks[0]?.judge_code || ''}）：请审阅申报材料后完成 7 项维度评价，综合等级与投票结果自动计算
         </p>

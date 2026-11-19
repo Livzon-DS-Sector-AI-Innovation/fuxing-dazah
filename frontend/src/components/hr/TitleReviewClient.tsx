@@ -44,8 +44,8 @@ export default function TitleReviewClient() {
     return (
       <div className="space-y-4">
         <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">您以评委身份进入，请前往「职称评审投票」页面完成投票任务。</p>
+          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审管理</h1>
+          <p className="text-[14px] text-[var(--color-steel)]">您以评委身份进入，请前往「评审投票」页面完成投票任务。</p>
         </div>
         <Card>
           <a className="text-[var(--color-primary)]" href="/hr/title-judge">前往我的投票 →</a>
@@ -93,7 +93,7 @@ export default function TitleReviewClient() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审</h1>
+        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审管理</h1>
         <p className="text-[14px] text-[var(--color-steel)]">
           员工飞书审批申报（部门负责人→HR）→ 系统同步 → 评委内网匿名投票 → 票数判定 → 飞书通知结果
         </p>
