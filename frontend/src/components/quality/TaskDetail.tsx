@@ -869,6 +869,8 @@ export default function TaskDetail({ id }: { id: string }) {
         confirmLoading={calcSaving}
         okText="提交填入"
         width={640}
+        centered
+        styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' } }}
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12.5 }}>
           {activeCalcCfg

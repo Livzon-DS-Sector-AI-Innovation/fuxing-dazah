@@ -201,7 +201,9 @@ export default function ChromatogramModal({ open, taskId, title, onClose, onFill
       open={open}
       onCancel={onClose}
       width={920}
+      centered
       destroyOnClose
+      styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' } }}
       footer={
         <Space>
           <Button onClick={onClose}>关闭</Button>
@@ -236,7 +238,7 @@ export default function ChromatogramModal({ open, taskId, title, onClose, onFill
         )}
       </Space>
 
-      <div style={{ display: 'flex', gap: 12 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
         {uploadSlot(1)}
         {uploadSlot(2)}
       </div>
