@@ -5,7 +5,7 @@
 score_push_open_id 同时作为回调防代填依据（提交者 open_id 必须一致）。
 
 Revision ID: hr_iv_score_push_001
-Revises: c4e9a2f83b17
+Revises: a7c3d91e4f20
 """
 
 from collections.abc import Sequence
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "hr_iv_score_push_001"
-down_revision: str | None = "c4e9a2f83b17"
+down_revision: str | None = "a7c3d91e4f20"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
