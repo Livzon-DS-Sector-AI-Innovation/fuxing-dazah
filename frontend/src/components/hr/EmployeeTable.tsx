@@ -2,7 +2,7 @@
 
 import styles from "./lifecycleTable.module.css"
 import { useState, useEffect, useRef } from 'react'
-import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline } from 'antd'
+import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline, Tooltip } from 'antd'
 import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
 import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
@@ -398,41 +398,42 @@ export default function EmployeeTable({
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      // 同步模式仅剩「详情」，收窄整列还给数据区；宽度随可见按钮数自适应
+      width: syncMode ? 72 : 176,
       fixed: 'right' as const,
       render: (_: any, record: Employee) => (
-        <Space size="small">
-          <Button
-            type="text"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => { setDetailEmp(record); setDetailOpen(true) }}
-          >
-            详情
-          </Button>
-          {canEditProfile && record.status === '试用期' && (
-            <Button
-              type="text" size="small" icon={<AuditOutlined />}
-              onClick={() => { setProbationEmp(record); searchReviewers(''); setProbationOpen(true) }}
-            >
-              转正
-            </Button>
-          )}
-          {canEditProfile && !syncMode && (
+        <Space size={2}>
+          <Tooltip title="详情">
             <Button
               type="text"
               size="small"
-              icon={<EditOutlined />}
-              onClick={() => onEdit(record)}
-            >
-              编辑
-            </Button>
+              icon={<EyeOutlined />}
+              onClick={() => { setDetailEmp(record); setDetailOpen(true) }}
+            />
+          </Tooltip>
+          {canEditProfile && record.status === '试用期' && (
+            <Tooltip title="发起转正评估">
+              <Button
+                type="text" size="small" icon={<AuditOutlined />}
+                onClick={() => { setProbationEmp(record); searchReviewers(''); setProbationOpen(true) }}
+              />
+            </Tooltip>
+          )}
+          {canEditProfile && !syncMode && (
+            <Tooltip title="编辑">
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => onEdit(record)}
+              />
+            </Tooltip>
           )}
           {canTransfer && !syncMode && (
-            <Button type="text" size="small" icon={<SwapOutlined />}
-              onClick={() => handleOpenTransfers(record)}>
-              异动
-            </Button>
+            <Tooltip title="异动记录">
+              <Button type="text" size="small" icon={<SwapOutlined />}
+                onClick={() => handleOpenTransfers(record)} />
+            </Tooltip>
           )}
         </Space>
       ) },
@@ -451,20 +452,22 @@ export default function EmployeeTable({
   return (
     <div className="space-y-4">
       {/* 搜索/状态/筛选工具栏已上提至页面 Tab 栏（EmployeeProfileClient），此处仅渲染表格与弹窗 */}
-      <Table className={styles.tableLg}
-        columns={columns}
-        dataSource={employees}
-        rowKey="id"
-        loading={loading}
-        pagination={{
-          current: page,
-          pageSize,
-          total,
-          showSizeChanger: true,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: onPageChange }}
-        scroll={{ x: 4800 }}
-      />
+      <div className="rounded-xl border border-[var(--color-hairline)] bg-white overflow-hidden">
+        <Table className={styles.tableLg}
+          columns={columns}
+          dataSource={employees}
+          rowKey="id"
+          loading={loading}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: onPageChange }}
+          scroll={{ x: 4800 }}
+        />
+      </div>
 
       <EmployeeInfoModal employee={detailEmp} open={detailOpen} onClose={() => setDetailOpen(false)} />
 
