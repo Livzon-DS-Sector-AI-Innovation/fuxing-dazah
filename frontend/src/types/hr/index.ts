@@ -211,6 +211,19 @@ export interface EmployeeFieldFilters {
   contract_end_date?: [string, string]
 }
 
+/** 员工异动记录（晋升/转岗/产假复岗等，档案页行内「异动记录」维护） */
+export interface EmployeeTransfer {
+  id?: string
+  employee_id?: string
+  transfer_type: string
+  from_department?: string | null
+  to_department?: string | null
+  from_position?: string | null
+  to_position?: string | null
+  effective_date: string
+  reason?: string | null
+}
+
 /** 离职台账筛选下拉选项（部门/离职类型现有取值，后端聚合） */
 export interface DepartureFilterOptions {
   departments?: string[]

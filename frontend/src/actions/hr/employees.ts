@@ -13,6 +13,7 @@ import {
   TeamListResponse,
   PositionOption,
   EmployeeFilterOptions,
+  EmployeeTransfer,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -133,7 +134,7 @@ export async function fetchTrainingCandidates(keyword?: string): Promise<{ data:
 
 // ─── 员工异动 ───
 
-export async function fetchTransfers(params: { employee_id: string; page_size?: number }): Promise<{ data: unknown[] }> {
+export async function fetchTransfers(params: { employee_id: string; page_size?: number }): Promise<{ data: EmployeeTransfer[] }> {
   const qs = buildQueryString(params)
   return fetchHrApi(`/hr/transfers${qs}`, { errorMessage: '获取异动记录失败' })
 }
