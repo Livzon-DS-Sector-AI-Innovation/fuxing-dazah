@@ -41,7 +41,8 @@ export function useEmployeeList(query: EmployeeListQuery) {
     const seq = ++seqRef.current
     setLoading(true)
     fetchEmployeesAction({
-      keyword: keyword || undefined,
+      // trim：输入停在全空格时不当关键词查（空串走全量），避免「删不干净」查 0 条
+      keyword: keyword?.trim() || undefined,
       department: department || undefined,
       status: status || undefined,
       page,

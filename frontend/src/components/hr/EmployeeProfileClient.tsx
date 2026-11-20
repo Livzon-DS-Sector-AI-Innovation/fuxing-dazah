@@ -86,7 +86,7 @@ export default function EmployeeProfileClient({
     try {
       // 与列表查询同口径传参，导出内容=当前筛选结果，避免"以为导的是筛选结果"
       const r = await exportEmployees({
-        keyword: searchKeyword || undefined,
+        keyword: searchKeyword?.trim() || undefined,
         department: activeDepartment || undefined,
         status: filterStatus || undefined,
         include_uncategorized: activeDepartment === '',

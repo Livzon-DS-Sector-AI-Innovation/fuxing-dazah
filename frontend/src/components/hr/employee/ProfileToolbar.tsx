@@ -2,7 +2,10 @@
 
 // 档案页 Tab 栏右侧工具栏：关键词搜索（防抖）、状态筛选、字段筛选面板开关（带角标）。
 // 从 EmployeeProfileClient 拆出；状态本体（keyword/status/filterOpen）仍在页面容器。
+// 搜索框显示值由本地 state 即时回显——若直接受控于防抖后的 store 值，防抖窗口内
+// 列表响应回来触发重渲染会把 DOM 值弹回旧值（打字/删除吃字，且可能停在带空格中间态）。
 
+import { useState } from 'react'
 import { Badge, Button, Input, Select } from 'antd'
 import { FilterOutlined } from '@ant-design/icons'
 
@@ -27,13 +30,28 @@ export default function ProfileToolbar({
   filterCount,
   onToggleFilter,
 }: ProfileToolbarProps) {
+  // 本地即时回显；外部值变化（回车提交/跨页恢复/清空）时在渲染期回同步
+  // （React 官方 adjust-state-during-render 模式，替代 effect 同步派生 state）
+  const [text, setText] = useState(keyword)
+  const [prevKeyword, setPrevKeyword] = useState(keyword)
+  if (keyword !== prevKeyword) {
+    setPrevKeyword(keyword)
+    setText(keyword)
+  }
+
   return (
     <div className="flex flex-wrap items-center justify-end gap-2 pb-1">
       <Input.Search
         placeholder="搜索姓名或工号"
-        value={keyword}
-        onChange={(e) => onKeywordInput(e.target.value)}
-        onSearch={onKeywordCommit}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          onKeywordInput(e.target.value)
+        }}
+        onSearch={(val) => {
+          setText(val)
+          onKeywordCommit(val)
+        }}
         style={{ width: 220 }}
         allowClear
       />
