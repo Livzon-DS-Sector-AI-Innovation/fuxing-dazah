@@ -35,7 +35,8 @@ export default async function EmployeeProfilePage({
   return (
     <Suspense fallback={<div className="h-64" />}>
       <div className="space-y-4">
-        {/* 面板入口按钮经 headerActions 并入标题行，不再单独占一行 */}
+        {/* 同步配置折叠面板置顶（默认收起，管理与排障入口顺手）；入口按钮经 headerActions 并入标题行 */}
+        <EmployeeSyncSettings initialConfig={syncConfig} />
         <EmployeeProfileClient
           initialEmployees={[]}
           initialTotal={0}
@@ -48,8 +49,6 @@ export default async function EmployeeProfilePage({
             </>
           }
         />
-        {/* 同步配置属管理设置：收在页尾，不抢占列表阅读区 */}
-        <EmployeeSyncSettings initialConfig={syncConfig} />
       </div>
     </Suspense>
   )
