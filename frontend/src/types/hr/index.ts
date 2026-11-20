@@ -211,6 +211,54 @@ export interface EmployeeFieldFilters {
   contract_end_date?: [string, string]
 }
 
+/**
+ * 员工列表/导出共用的筛选参数（导出与列表同口径，保证所见即所得）。
+ * 住在 types 而非 actions：client 侧工具（lib/hr/employeeFilters）需要引用它，
+ * 从 'use server' 模块引类型会让 turbopack 的 client 依赖图触碰 server action 边界。
+ */
+export interface EmployeeFilterParams {
+  department?: string
+  status?: string
+  keyword?: string
+  include_uncategorized?: boolean
+  // ── 字段级筛选（档案筛选面板；下拉精确匹配，选项来自 filter-options）──
+  position?: string
+  duty?: string
+  job_category?: string
+  level?: string
+  report_grade?: string
+  status_category?: string
+  gender?: string
+  ethnicity?: string
+  native_place?: string
+  marital_status?: string
+  household_type?: string
+  education?: string
+  degree_type?: string
+  classification?: string
+  school?: string
+  major?: string
+  hr_analysis?: string
+  domain_account?: string
+  departure_reason?: string
+  age_min?: number
+  age_max?: number
+  birth_year_min?: number
+  birth_year_max?: number
+  hire_date_after?: string
+  hire_date_before?: string
+  work_start_date_after?: string
+  work_start_date_before?: string
+  graduation_date_after?: string
+  graduation_date_before?: string
+  departure_date_after?: string
+  departure_date_before?: string
+  contract_start_date_after?: string
+  contract_start_date_before?: string
+  contract_end_date_after?: string
+  contract_end_date_before?: string
+}
+
 /** 员工异动记录（晋升/转岗/产假复岗等，档案页行内「异动记录」维护） */
 export interface EmployeeTransfer {
   id?: string

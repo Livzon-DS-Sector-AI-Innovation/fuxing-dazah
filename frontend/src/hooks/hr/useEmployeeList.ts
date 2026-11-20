@@ -61,7 +61,9 @@ export function useEmployeeList(query: EmployeeListQuery) {
       .finally(() => {
         if (seq === seqRef.current) setLoading(false)
       })
-  }, [keyword, department, status, includeUncategorized, filters, page, pageSize, refreshSeq, message])
+    // message 实例随 App.useApp() 每次渲染都是新引用，进依赖会无限请求（与原 loadData 一致不列入）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, department, status, includeUncategorized, filters, page, pageSize, refreshSeq])
 
   const onPaginationChange = useCallback((newPage: number, newPageSize: number) => {
     setPage(newPage)

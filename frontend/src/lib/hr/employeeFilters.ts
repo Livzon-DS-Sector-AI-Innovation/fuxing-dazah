@@ -1,5 +1,4 @@
-import type { EmployeeFieldFilters } from '@/types/hr'
-import type { EmployeeFilterParams } from '@/actions/hr/employees'
+import type { EmployeeFieldFilters, EmployeeFilterParams } from '@/types/hr'
 
 /**
  * 筛选面板状态 → 员工列表/导出 API 字段级筛选参数（日期范围拆 after/before）。
