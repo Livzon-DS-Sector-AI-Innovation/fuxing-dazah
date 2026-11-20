@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Descriptions, Drawer, Form, Input, Radio, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { fetchMyJudgeTasks, submitJudgeVote } from '@/actions/hr'
+import TitleReviewAttachments from './TitleReviewAttachments'
 import TitleReviewProfile from './TitleReviewProfile'
 import TitleReviewWorkValue from './TitleReviewWorkValue'
 
@@ -132,7 +133,7 @@ export default function TitleJudgeClient() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审投票</h1>
+        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审投票</h1>
         <p className="text-[14px] text-[var(--color-steel)]">
           评委投票（匿名编号 {tasks[0]?.judge_code || ''}）：请审阅申报材料后完成 7 项维度评价，综合等级与投票结果自动计算
         </p>
@@ -195,14 +196,10 @@ export default function TitleJudgeClient() {
               </div>
             )}
             {voting.application.attachments && (
-              <div>
-                <Typography.Text strong>附件材料</Typography.Text>
-                <div className="mt-1 space-y-1">
-                  {Object.entries(voting.application.attachments).map(([k, files]) => (
-                    <div key={k} className="text-[13px]">{k}：{(files || []).map((f) => f.name).join('、') || '无'}</div>
-                  ))}
-                </div>
-              </div>
+              <TitleReviewAttachments
+                applicationId={voting.application.id}
+                attachments={voting.application.attachments}
+              />
             )}
 
             <Form form={form} layout="vertical">

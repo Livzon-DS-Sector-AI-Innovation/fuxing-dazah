@@ -330,7 +330,7 @@ export default function MaterialRequests() {
         okButtonProps={{ danger: releaseVerdict === 'reject' }}
         width={460}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Select
             style={{ width: '100%' }}
             value={releaseVerdict}

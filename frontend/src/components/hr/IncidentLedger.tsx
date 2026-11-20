@@ -6,7 +6,8 @@ import { Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker,
 import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { IncidentRecord } from '@/types/hr'
-import { fetchIncidents, createIncident, updateIncident, deleteIncident } from '@/actions/hr'
+import { fetchIncidents, createIncident, updateIncident, deleteIncident, exportIncidents } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 
 const TYPE_META: Record<string, { label: string; color: string }> = {
   work_injury: { label: '工伤', color: 'red' },
@@ -21,7 +22,19 @@ export default function IncidentLedger() {
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState<IncidentRecord | null>(null)
   const [saving, setSaving] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [form] = Form.useForm()
+
+  // 导出与列表筛选同口径（当前类型筛选）
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const r = await exportIncidents(typeFilter, undefined)
+      downloadBase64File(r.base64, r.filename)
+    } catch (err: unknown) {
+      message.error((err instanceof Error ? err.message : String(err)) || '导出失败')
+    } finally { setExporting(false) }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -102,6 +115,7 @@ export default function IncidentLedger() {
           options={Object.entries(TYPE_META).map(([v, m]) => ({ value: v, label: m.label }))}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
+        <Button loading={exporting} onClick={handleExport} title="按当前类型筛选导出全部记录">导出Excel</Button>
       </Space>
 
       <Table

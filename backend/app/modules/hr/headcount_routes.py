@@ -54,13 +54,8 @@ def _normalize_department(name: str) -> str:
     return text.lower()
 
 
-@router.get("/plans", summary="部门定编一览（在编实时统计 + 缺编 + 岗位明细）")
-async def list_headcount_plans(
-    session: AsyncSession = Depends(get_db),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-    _perm: HrAccessContext = Depends(require_hr_access("hr:profile:read")),
-) -> JSONResponse:
-    """定编数据 + 按部门实时统计的在编人数。
+async def _collect_plans(session: AsyncSession, hr_scope: HrAccessContext) -> dict[str, Any]:
+    """定编 + 在编实时统计组装（列表与导出共用）。
 
     - 在编 = 未软删且状态非「离职」的员工，按体现部门（department）分组；
     - 部门匹配：精确 → 归一化兜底（全半角/空白差异），仍未匹配的标
@@ -143,7 +138,7 @@ async def list_headcount_plans(
             ),
         })
 
-    return success_response(data={
+    return {
         "plans": rows,
         "summary": {
             "total_quota": total_quota,
@@ -155,4 +150,61 @@ async def list_headcount_plans(
             "department_count": len(rows),
             "unmatched_departments": unmatched,
         },
-    })
+    }
+
+
+@router.get("/plans", summary="部门定编一览（在编实时统计 + 缺编 + 岗位明细）")
+async def list_headcount_plans(
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+    _perm: HrAccessContext = Depends(require_hr_access("hr:profile:read")),
+) -> JSONResponse:
+    return success_response(data=await _collect_plans(session, hr_scope))
+
+
+@router.get("/plans/export", summary="导出编制对账（Excel）")
+async def export_headcount_plans(
+    keyword: str | None = None,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+    _perm: HrAccessContext = Depends(require_hr_access("hr:profile:read")),
+):
+    """导出编制对账为 Excel：数据范围与列表一致，keyword 按部门模糊过滤（与前端搜索框同口径），末行合计。"""
+    from datetime import date
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    from app.modules.hr.xlsx_utils import write_sheet, xlsx_response
+
+    data = await _collect_plans(session, hr_scope)
+    plans = data["plans"]
+    if keyword:
+        kw = keyword.strip()
+        plans = [p for p in plans if kw in (p["department"] or "")]
+
+    rows = [[
+        p["department"], p["department_quota"], p["actual_count"],
+        p["source_current_count"], p["vacancy"], p["position_detail"],
+        p["feishu_synced_at"],
+    ] for p in plans]
+
+    # 合计按（过滤后）实际导出的行累计，keyword 过滤时不等于全量 summary
+    total_quota = sum(p["department_quota"] for p in plans)
+    total_actual = sum(p["actual_count"] for p in plans)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "编制对账"
+    write_sheet(
+        ws,
+        ["部门", "定编人数", "实际在编", "飞书表现有人数", "缺口", "岗位明细", "飞书同步时间"],
+        rows,
+    )
+    # 末行合计（加粗）
+    total_row_idx = len(rows) + 2
+    totals = ["合计", total_quota, total_actual, "", total_quota - total_actual, "", ""]
+    for col_idx, val in enumerate(totals, 1):
+        cell = ws.cell(row=total_row_idx, column=col_idx, value="" if val is None else str(val))
+        cell.font = Font(bold=True)
+    return xlsx_response(wb, f"编制对账_{date.today().isoformat()}.xlsx")

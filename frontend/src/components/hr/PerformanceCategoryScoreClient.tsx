@@ -84,7 +84,7 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
         const editable = editableByEval[record.id]?.[c.id] !== false
         const v = scores[record.id]?.[c.id]
         return (
-          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={2} style={{ width: '100%' }}>
             <InputNumber size="small" min={0} max={100} placeholder="分数"
               value={v?.score ?? null} disabled={!editable}
               onChange={(val) => handleScore(record.id, c.id, val)}

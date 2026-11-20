@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react'
 import { App, Modal, Form, Input, Select, DatePicker, Tabs, Button, Space, Divider } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { Employee, EmployeeCreateInput, EmployeeUpdateInput, Department } from '@/types/hr'
-import { createEmployee, updateEmployee } from '@/actions/hr'
-import { fetchDepartmentsAction, fetchPositions, createPosition } from '@/actions/hr'
+import { Employee, EmployeeCreateInput, EmployeeUpdateInput } from '@/types/hr'
+import { createEmployee, updateEmployee, createPosition } from '@/actions/hr'
+import { useHrDepartments, useHrPositions } from '@/hooks/hr'
 
 interface EmployeeFormProps {
   open: boolean
@@ -20,22 +20,15 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const isEdit = !!employee
-  const [departments, setDepartments] = useState<Department[]>([])
-  const [positions, setPositions] = useState<any[]>([])
+  // 部门/职位选项在弹窗打开时才加载（enabled 随 open 切换）
+  const { departments } = useHrDepartments({ enabled: open })
+  const { positions, refresh: refreshPositions } = useHrPositions({ enabled: open })
   const [newPosModalOpen, setNewPosModalOpen] = useState(false)
   const [newPosName, setNewPosName] = useState('')
   const [newPosDept, setNewPosDept] = useState('')
 
   useEffect(() => {
     if (open) {
-      fetchDepartmentsAction({ page_size: 100 })
-        .then((res) => setDepartments(res.data))
-        .catch(() => setDepartments([]))
-
-      fetchPositions()
-        .then(setPositions)
-        .catch(() => setPositions([]))
-
       if (employee) {
         const dateFields = [
           'hire_date', 'work_start_date', 'departure_date',
@@ -57,8 +50,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
   }, [open, employee, form])
 
   const selectedDept = Form.useWatch('department', form)
-  const positionOptions = (selectedDept ? positions.filter((p: any) => p.department === selectedDept) : positions)
-    .map((p: any) => ({ value: p.name, label: p.name }))
+  const positionOptions = (selectedDept ? positions.filter((p) => p.department === selectedDept) : positions)
+    .map((p) => ({ value: p.name, label: p.name }))
 
   const handleSubmit = async () => {
     try {
@@ -276,8 +269,7 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
             await createPosition({ department: newPosDept, name: newPosName.trim() })
             message.success('职位创建成功')
             setNewPosModalOpen(false)
-            const data = await fetchPositions()
-            setPositions(data)
+            await refreshPositions()
             form.setFieldValue('position', newPosName.trim())
           } catch (err) { message.error((err as Error)?.message || '创建失败') }
         }} okText="创建">

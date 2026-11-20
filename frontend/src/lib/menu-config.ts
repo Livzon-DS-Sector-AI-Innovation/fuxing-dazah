@@ -352,12 +352,12 @@ export const moduleMenus: ModuleMenu[] = [
     children: [
       // 权限码与后端 hr/deps.py 路由映射对齐；未声明的项对能进 HR 模块的人恒可见（点入后端 403），
       // 因此每个页面都要声明，才能支持"只给培训权限、其余页面全屏蔽"这类纯角色
-      { key: "dashboard", label: "📊 人事看板", path: "/hr/dashboard", permissions: ["hr:profile:read"] },
+      { key: "dashboard", label: "人事看板", path: "/hr/dashboard", permissions: ["hr:profile:read"] },
       { key: "departments", label: "部门管理", path: "/hr/departments", permissions: ["hr:org:read"] },
       {
         // 人员全周期：编制 → 入职 → 在职档案 → 离职（用户拍板：作为 HR 板块内的分组菜单）
         key: "lifecycle",
-        label: "人员全周期管理",
+        label: "人员管理",
         path: "/hr/profile",
         children: [
           { key: "headcount", label: "编制管理", path: "/hr/headcount", permissions: ["hr:profile:read"] },
@@ -413,15 +413,24 @@ export const moduleMenus: ModuleMenu[] = [
           },
         ],
       },
-      { key: "performance", label: "📋 绩效考核", path: "/hr/performance",
+      { key: "performance", label: "绩效考核", path: "/hr/performance",
         permissions: ["hr:performance:read"],
         children: [
           { key: "performance-list", label: "考核列表", path: "/hr/performance" },
           { key: "performance-categories", label: "项目配置", path: "/hr/performance/categories", permissions: ["hr:performance:manage"] },
         ],
       },
-      { key: "title-review", label: "职称评审", path: "/hr/title-review", permissions: ["hr:title:read"] },
-      { key: "title-judge", label: "职称评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
+      {
+        // 两页收进折叠子菜单（同培训管理/绩效考核）：管理端评审 + 评委投票；
+        // 纯评委只见「评审投票」子项（父项随子项权限过滤存活）
+        key: "title",
+        label: "职称评审",
+        path: "/hr/title-review",
+        children: [
+          { key: "title-review", label: "评审管理", path: "/hr/title-review", permissions: ["hr:title:read"] },
+          { key: "title-judge", label: "评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
+        ],
+      },
       // 权限码与后端 hr/deps.py 路由映射对齐：资料下载→roster、系统配置→settings:manage
       { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:roster:read"] },
       {

@@ -1,6 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useDebouncedCallback } from '@/hooks/hr'
 import {
   Button,
   Card,
@@ -83,6 +85,12 @@ export default function TrainingLedgerClient({
   employeeNumber,
 }: TrainingLedgerClientProps) {
   const isAdminMode = !employeeNumber
+  const router = useRouter()
+  // 员工切换跳转（替代 window.location.href 整页刷新，保持 SPA 体验）
+  const goEmployeeLedger = (val: string | undefined) => {
+    if (!val) return
+    router.push(`/hr/training/ledger?employee_number=${val}`)
+  }
 
   // ─── Employee mode state ───
   const [employee, setEmployee] = useState<Employee | null>(null)
@@ -115,19 +123,24 @@ export default function TrainingLedgerClient({
   const [evalExporting, setEvalExporting] = useState(false)
 
   // ─── Employee mode: data loading ───
+  // 远程搜索：防抖（300ms）+ 序号守卫丢弃过期响应
+  const employeeSearchSeq = useRef(0)
   const handleEmployeeSearch = async (keyword: string) => {
     if (!keyword || keyword.length < 1) { setSearchOptions([]); return }
+    const seq = ++employeeSearchSeq.current
     setSearching(true)
     try {
       const res = await fetchTrainingRoster({ keyword, page_size: 20 })
+      if (seq !== employeeSearchSeq.current) return
       const emps = res.data || []
       setSearchOptions(emps.map((e: any) => ({
         value: e.employee_number,
         label: `${e.employee_number} — ${e.name} (${e.department || ''})`,
       })))
-    } catch { setSearchOptions([]) }
-    finally { setSearching(false) }
+    } catch { if (seq === employeeSearchSeq.current) setSearchOptions([]) }
+    finally { if (seq === employeeSearchSeq.current) setSearching(false) }
   }
+  const { run: debouncedEmployeeSearch } = useDebouncedCallback(handleEmployeeSearch, 300)
 
   const loadEmployeeData = async () => {
     setLoading(true)
@@ -448,10 +461,10 @@ export default function TrainingLedgerClient({
             showSearch
             placeholder="输入工号或姓名搜索员工，查看个人台账"
             value={undefined}
-            style={{ width: 360 }}
-            filterOption={false}
-            onSearch={handleEmployeeSearch}
-            onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
+              style={{ width: 360 }}
+              filterOption={false}
+              onSearch={debouncedEmployeeSearch}
+              onChange={(val) => { confirmDiscardDirty(() => goEmployeeLedger(val)) }}
             notFoundContent={searching ? <Spin size="small" /> : null}
             options={searchOptions}
             allowClear
@@ -591,10 +604,10 @@ export default function TrainingLedgerClient({
         <div className="max-w-md mx-auto">
           <Select showSearch placeholder="输入工号或姓名搜索员工" style={{ width: '100%' }}
             value={undefined}
-            filterOption={false}
-            onSearch={handleEmployeeSearch}
-            onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
-            notFoundContent={searching ? <Spin size="small" /> : null}
+              filterOption={false}
+              onSearch={debouncedEmployeeSearch}
+              onChange={(val) => { goEmployeeLedger(val) }}
+              notFoundContent={searching ? <Spin size="small" /> : null}
             options={searchOptions} />
         </div>
       </div>
@@ -609,11 +622,11 @@ export default function TrainingLedgerClient({
           showSearch
           placeholder="输入工号或姓名搜索员工"
           value={employeeNumber || undefined}
-          style={{ width: 320 }}
-          filterOption={false}
-          onSearch={handleEmployeeSearch}
-          onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
-          notFoundContent={searching ? '搜索中...' : null}
+            style={{ width: 320 }}
+            filterOption={false}
+            onSearch={debouncedEmployeeSearch}
+            onChange={(val) => { goEmployeeLedger(val) }}
+            notFoundContent={searching ? '搜索中...' : null}
           options={searchOptions}
           allowClear
         />

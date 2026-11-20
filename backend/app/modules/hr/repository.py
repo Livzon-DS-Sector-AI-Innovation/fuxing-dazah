@@ -1440,28 +1440,43 @@ class InterviewRepository:
         *,
         date_from: date | None = None,
         date_to: date | None = None,
-        interviewer: str | None = None,
+        candidate_name: str | None = None,
         status: str | None = None,
         candidate_id: UUID | None = None,
         page: int = 1,
         page_size: int = 50,
-    ) -> tuple[list[tuple[Interview, str | None, str | None]], int]:
-        """跨候选人面试总览：join 候选人姓名/岗位，返回 (行, 总数)。"""
+    ) -> tuple[list[tuple[Interview, str | None, str | None, InterviewFeedback | None, CandidateAnalysisReport | None]], int]:
+        """跨候选人面试总览：join 候选人姓名/岗位 + 人工评价 + AI 胜任度报告，返回 (行, 总数)。"""
         conds = [Interview.is_deleted.is_(False)]
-        if date_from:
-            conds.append(Interview.interview_date >= date_from)
-        if date_to:
-            conds.append(Interview.interview_date <= date_to)
-        if interviewer:
-            conds.append(Interview.interviewer.ilike(f"%{interviewer}%"))
+        # 日期范围过滤：时间未定的面试（日期为空）始终保留——它们正需要在总览里被盯住
+        if date_from or date_to:
+            date_conds = []
+            if date_from:
+                date_conds.append(Interview.interview_date >= date_from)
+            if date_to:
+                date_conds.append(Interview.interview_date <= date_to)
+            conds.append(or_(Interview.interview_date.is_(None), and_(*date_conds)))
+        if candidate_name:
+            conds.append(Candidate.name.ilike(f"%{candidate_name}%"))
         if status:
             conds.append(Interview.status == status)
         if candidate_id:
             conds.append(Interview.candidate_id == candidate_id)
 
         base = (
-            select(Interview, Candidate.name, Candidate.position)
+            select(
+                Interview, Candidate.name, Candidate.position,
+                InterviewFeedback, CandidateAnalysisReport,
+            )
             .outerjoin(Candidate, Interview.candidate_id == Candidate.id)
+            .outerjoin(InterviewFeedback, and_(
+                InterviewFeedback.interview_id == Interview.id,
+                InterviewFeedback.is_deleted.is_(False),
+            ))
+            .outerjoin(CandidateAnalysisReport, and_(
+                CandidateAnalysisReport.interview_id == Interview.id,
+                CandidateAnalysisReport.is_deleted.is_(False),
+            ))
             .where(*conds)
         )
         total = (await self.session.execute(
@@ -1472,7 +1487,7 @@ class InterviewRepository:
             .offset((page - 1) * page_size)
             .limit(page_size)
         )).all()
-        return [(r[0], r[1], r[2]) for r in rows], int(total)
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in rows], int(total)
 
     async def create(self, interview: Interview) -> Interview:
         self.session.add(interview)

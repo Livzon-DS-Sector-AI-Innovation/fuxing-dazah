@@ -277,7 +277,7 @@ export default function AiExamClient() {
       {mode === 'qa' ? (
         <div className="space-y-4">
           <Card title="问答考核出题（简短问答，可同步到题库）" className="shadow-sm">
-            <Space direction="vertical" size="middle" className="w-full">
+            <Space orientation="vertical" size="middle" className="w-full">
               <Space wrap>
                 <Text>考核主题：</Text>
                 <Input

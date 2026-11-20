@@ -55,7 +55,8 @@ def _build_review_card(review: ProbationReview, employee: Employee) -> dict:
                     "max_length": 8,
                 },
                 {
-                    "tag": "textarea", "name": "comment", "label": _label("评语（工作表现/出勤/协作等）"),
+                    # 飞书卡片 2.0 不支持 textarea 标签（ErrCode 200621 整卡拒），统一用 input
+                    "tag": "input", "name": "comment", "label": _label("评语（工作表现/出勤/协作等）"),
                     "required": True, "max_length": 300,
                 },
                 {

@@ -1404,6 +1404,9 @@ class Interview(BaseModel):
     transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="面试逐字稿（HR粘贴）")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
     calendar_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="飞书日历事件ID")
+    # 面试官评分卡推送记录：推送后面试官在飞书卡上直接打分提交，回写人工面试评价
+    score_push_open_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="最近一次评分卡推送的面试官 open_id")
+    score_pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="最近一次评分卡推送时间")
 
     # 非持久化属性（非 Mapped 注解，SQLAlchemy 不映射）：
     # 飞书日历同步失败原因，服务层赋值、随响应返回供前端提示

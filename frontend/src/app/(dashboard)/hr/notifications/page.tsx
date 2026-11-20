@@ -1,5 +1,6 @@
 'use client'
 
+import PageHeader from '@/components/hr/PageHeader'
 import { useEffect, useState } from 'react'
 import { Card, Table, Tag, message } from 'antd'
 
@@ -22,10 +23,7 @@ export default function NotificationsPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">通知记录</h1>
-        <p className="text-[14px] text-[var(--color-steel)]">飞书入职/离职通知发送记录</p>
-      </div>
+      <PageHeader title="通知记录" description="飞书入职/离职通知发送记录" />
       <Card>
         <Table rowKey="id" loading={loading} dataSource={logs} pagination={{ pageSize: 20 }}
           columns={[

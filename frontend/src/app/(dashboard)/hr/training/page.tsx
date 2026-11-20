@@ -1,5 +1,6 @@
 'use client'
 
+import PageHeader from '@/components/hr/PageHeader'
 import { Card, Row, Col } from 'antd'
 import {
   FileTextOutlined,
@@ -143,14 +144,7 @@ const zones = [
 export default function TrainingPage() {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">
-          培训管理
-        </h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          计划 → 执行 → 记录 → 资源 → 配置，与左侧菜单五区一致
-        </p>
-      </div>
+      <PageHeader title="培训管理" description="计划 → 执行 → 记录 → 资源 → 配置，与左侧菜单五区一致" />
 
       {zones.map((zone) => (
         <section key={zone.key} className="space-y-3">

@@ -279,7 +279,7 @@ export default function TaskBoard() {
               </Space>
             }
           >
-            <Space direction="vertical" style={{ width: '100%' }} size={4}>
+            <Space orientation="vertical" style={{ width: '100%' }} size={4}>
               {plan.sops.map((sop) => {
                 const a = bySop.get(sop.sop_no)
                 const group = itemGroupOf(sop.items.join(' '), mapping)
@@ -352,7 +352,7 @@ export default function TaskBoard() {
             key: g,
             label: g,
             children: (
-              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+              <Space orientation="vertical" style={{ width: '100%' }} size={10}>
                 {shiftTeams.filter((t) => t.group_key === g).map((team) => (
                   <div key={team.id} style={{ border: '1px solid #eee', borderRadius: 8, padding: 8 }}>
                     <Space wrap size={6} align="center">
@@ -401,7 +401,7 @@ export default function TaskBoard() {
               key: CONFIG_TAB_KEY,
               label: '全局配置',
               children: (
-                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Space orientation="vertical" style={{ width: '100%' }} size={12}>
                   <Card size="small" title="轮换配置（全局，所有组共用）">
                     <Form form={shiftForm} layout="inline" style={{ marginBottom: 8 }}>
                       <Form.Item name="start_date" label="轮换基准日" rules={[{ required: true, message: '必填' }]}>
@@ -448,7 +448,7 @@ export default function TaskBoard() {
                     <Typography.Paragraph type="secondary" style={{ fontSize: 12.5, marginBottom: 8 }}>
                       SOP 的项目名称命中关键词即归属对应组别，排班选人限定在该组班组成员内；未命中默认归理化组。
                     </Typography.Paragraph>
-                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
                       {Object.keys(mappingDrafts).map((g) => (
                         <div key={g} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <Tag color={GROUP_COLORS[g] ?? 'default'} style={{ width: 64, textAlign: 'center', marginInlineEnd: 0 }}>{g}</Tag>

@@ -11,6 +11,7 @@ import {
   fetchTitleDefaultJudges,
   finalizeTitleVotes,
 } from '@/actions/hr'
+import TitleReviewAttachments from './TitleReviewAttachments'
 import TitleReviewProfile from './TitleReviewProfile'
 import TitleReviewWorkValue from './TitleReviewWorkValue'
 
@@ -288,16 +289,10 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
               </div>
             )}
             {detail.attachments && (
-              <div>
-                <Typography.Text strong>附件材料</Typography.Text>
-                <div className="mt-2 space-y-1">
-                  {Object.entries(detail.attachments).map(([k, files]) => (
-                    <div key={k} className="text-[13px]">
-                      {k}：{(files || []).map((f: any) => f.name).join('、') || '无'}
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <TitleReviewAttachments
+                applicationId={detail.id}
+                attachments={detail.attachments}
+              />
             )}
             {detail.judges.length > 0 && (
               <div>

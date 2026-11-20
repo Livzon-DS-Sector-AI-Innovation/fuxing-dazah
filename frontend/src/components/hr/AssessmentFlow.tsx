@@ -290,7 +290,7 @@ export default function AssessmentFlow({
       <div className="border rounded-lg p-4 bg-blue-50">
         <h3 className="font-semibold mb-2">考核材料</h3>
         {!assessmentId ? (
-          <Space direction="vertical" className="w-full">
+          <Space orientation="vertical" className="w-full">
             <div className="text-sm text-gray-600">
               培训内容：<b>{subject}</b> · 部门：{department} · 方式：{trainingMethod}
               {trainer ? ` · 培训师：${trainer}` : ''} · 受训 {employeeNames.length} 人

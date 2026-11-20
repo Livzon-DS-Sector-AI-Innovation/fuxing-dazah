@@ -13,10 +13,14 @@ import {
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
   decideCandidateReview,
   fetchEmployeesAction, screenCandidateAction, fetchInterviewsOverview,
+  updateInterview, deleteInterview,
 } from '@/actions/hr'
 import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
+import { useDebouncedCallback } from '@/hooks/hr'
+import { CANDIDATE_STATUS_COLORS } from '@/lib/hr'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
+import InterviewScheduleModal from './InterviewScheduleModal'
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
 const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
@@ -32,7 +36,7 @@ const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
   '已拒绝': [],
 }
 
-// 候选人状态全集（排序 + 下拉候选用），颜色对齐招聘漏斗
+// 候选人状态全集（排序 + 下拉候选用），状态色统一走共享 CANDIDATE_STATUS_COLORS
 const STATUS_OPTIONS = [
   { label: '待筛选', value: '待筛选' }, { label: '已筛选', value: '已筛选' },
   { label: '待部门审核', value: '待部门审核' }, { label: '面试中', value: '面试中' },
@@ -42,11 +46,7 @@ const STATUS_OPTIONS = [
 ]
 // 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（进入面试后以胜任度分析报告为准）
 const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门审核'])
-const STATUS_COLORS: Record<string, string> = {
-  '待筛选': '#a4a097', '已筛选': '#0075de', '待部门审核': '#dd5b00',
-  '面试中': '#7b3ff2', '已面试': '#2a9d99', '录用中': '#1aae39',
-  '已录用': '#5645d4', '待入职审批': '#e8b830', '已入职': '#389e0d', '已拒绝': '#ff4d4f',
-}
+const STATUS_COLORS = CANDIDATE_STATUS_COLORS
 const STATUS_ORDER = STATUS_OPTIONS.map(s => s.value)
 
 /** 批量上传简历的逐份流水线状态：AI 解析 → 建档（关联岗位）→ 可选 AI 初筛 */
@@ -72,14 +72,15 @@ export default function RecruitmentClient() {
   const router = useRouter()
   // 跳转候选人详情前把当前列表上下文（id 顺序 + 当前位置）写入 sessionStorage，
   // 供详情页"上一条/下一条"顺序切换（CandidateDetailClient 读取 candidate_list_context）
-  const openCandidateDetail = (id: string, listIds: string[]) => {
+  // tab：直达详情页某个 Tab（如面试总览行点击带 interviews，免去再手动切换）
+  const openCandidateDetail = (id: string, listIds: string[], tab?: string) => {
     const ids = [...new Set(listIds)].filter(Boolean)
     if (ids.length > 1 && ids.includes(id)) {
       sessionStorage.setItem('candidate_list_context', JSON.stringify({ ids, currentIndex: ids.indexOf(id) }))
     } else {
       sessionStorage.removeItem('candidate_list_context')
     }
-    router.push(`/hr/recruitment/${id}`)
+    router.push(`/hr/recruitment/${id}${tab ? `?tab=${tab}` : ''}`)
   }
   // 招聘管理权限：人事专员见全功能；用人部门负责人（审核人）仅见"待我审核"。
   // 页面外层 PermissionGuard 已等权限加载完成，此处 hasPermission 结果可靠。
@@ -133,15 +134,18 @@ export default function RecruitmentClient() {
   const [overviewDateRange, setOverviewDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>([
     dayjs().subtract(7, 'day'), dayjs().add(30, 'day'),
   ])
-  const [overviewInterviewer, setOverviewInterviewer] = useState('')
+  const [overviewCandidate, setOverviewCandidate] = useState('')
   const [overviewStatus, setOverviewStatus] = useState<string | undefined>(undefined)
+  // 总览行内操作：编辑走共享弹窗；完成/取消一键（免跳候选人详情）
+  const [overviewEdit, setOverviewEdit] = useState<InterviewOverviewItem | null>(null)
+  const [actingId, setActingId] = useState<string | null>(null)
   const loadOverview = useCallback(async () => {
     setOverviewLoading(true)
     try {
       const r = await fetchInterviewsOverview({
         date_from: overviewDateRange?.[0]?.format('YYYY-MM-DD'),
         date_to: overviewDateRange?.[1]?.format('YYYY-MM-DD'),
-        interviewer: overviewInterviewer || undefined,
+        candidate_name: overviewCandidate || undefined,
         status: overviewStatus,
         page_size: 200,
       })
@@ -151,7 +155,28 @@ export default function RecruitmentClient() {
       msg.error(err?.message || '获取面试总览失败')
       setOverviewRows([])
     } finally { setOverviewLoading(false) }
-  }, [overviewDateRange, overviewInterviewer, overviewStatus, msg])
+  }, [overviewDateRange, overviewCandidate, overviewStatus, msg])
+
+  // 总览行内快捷操作：标记完成 / 取消（都刷新总览列表）
+  const handleOverviewComplete = async (id: string) => {
+    setActingId(id)
+    try {
+      await updateInterview(id, { status: '已完成' })
+      msg.success('面试已标记完成')
+      loadOverview()
+    } catch (err: any) { msg.error(err?.message || '操作失败') }
+    finally { setActingId(null) }
+  }
+
+  const handleOverviewCancel = async (id: string) => {
+    setActingId(id)
+    try {
+      await deleteInterview(id)
+      msg.success('面试已取消')
+      loadOverview()
+    } catch (err: any) { msg.error(err?.message || '操作失败') }
+    finally { setActingId(null) }
+  }
 
   const loadPendingReviews = useCallback(async () => {
     setReviewsLoading(true)
@@ -189,6 +214,8 @@ export default function RecruitmentClient() {
     }
     finally { if (seq === ownerSearchSeq.current) setOwnerSearching(false) }
   }
+  // 远程搜索防抖（300ms）；首拉（onOpenChange）不经防抖直接执行
+  const { run: debouncedSearchOwnerOptions } = useDebouncedCallback(searchOwnerOptions, 300)
 
   useEffect(() => {
     fetchPositions().then(d => setPosOptions(d.map((p: any) => ({ value: `${p.department}|||${p.name}`, label: `${p.name} (${p.department})` })))).catch(() => { })
@@ -757,7 +784,7 @@ export default function RecruitmentClient() {
                       loading={ownerSearching}
                       placeholder="输入姓名搜索；或直接从下方列表选择"
                       options={ownerOptions}
-                      onSearch={searchOwnerOptions}
+                      onSearch={debouncedSearchOwnerOptions}
                       onOpenChange={(open) => { if (open && ownerOptions.length === 0) void searchOwnerOptions('') }}
                     />
                   </Form.Item>
@@ -875,7 +902,7 @@ export default function RecruitmentClient() {
           }, {
             key: 'interviews',
             label: <span className="flex items-center gap-1.5"><ClockCircleOutlined />面试总览</span>,
-            children: (
+            children: (<>
               <Card>
                 <div className="flex flex-wrap gap-3 mb-4 items-center">
                   <DatePicker.RangePicker
@@ -883,10 +910,10 @@ export default function RecruitmentClient() {
                     onChange={(v) => setOverviewDateRange(v)}
                   />
                   <Input.Search
-                    placeholder="面试官姓名"
+                    placeholder="候选人姓名"
                     style={{ width: 180 }}
                     allowClear
-                    onSearch={(v) => setOverviewInterviewer(v || '')}
+                    onSearch={(v) => setOverviewCandidate(v || '')}
                   />
                   <Select
                     placeholder="状态" allowClear style={{ width: 120 }}
@@ -904,15 +931,16 @@ export default function RecruitmentClient() {
                       {(() => {
                         const today = dayjs().format('YYYY-MM-DD')
                         const groups: { title: string; rows: typeof overviewRows }[] = [
+                          { title: '时间待定', rows: [] },
                           { title: '今天面试', rows: [] },
                           { title: '即将到来', rows: [] },
                           { title: '更早 / 已结束', rows: [] },
                         ]
                         overviewRows.forEach((iv) => {
-                          if (!iv.interview_date) return
-                          if (iv.interview_date === today) groups[0].rows.push(iv)
-                          else if (iv.interview_date > today) groups[1].rows.push(iv)
-                          else groups[2].rows.push(iv)
+                          if (!iv.interview_date) { groups[0].rows.push(iv); return }
+                          if (iv.interview_date === today) groups[1].rows.push(iv)
+                          else if (iv.interview_date > today) groups[2].rows.push(iv)
+                          else groups[3].rows.push(iv)
                         })
                         return groups.filter((g) => g.rows.length > 0).map((g) => (
                           <div key={g.title}>
@@ -923,10 +951,10 @@ export default function RecruitmentClient() {
                               {g.rows.map((iv) => (
                                 <div key={iv.id}
                                   className="flex items-center gap-3 p-2.5 rounded-lg border border-[var(--color-hairline)] hover:bg-blue-50 cursor-pointer transition-colors"
-                                  onClick={() => openCandidateDetail(iv.candidate_id, overviewRows.map(r => r.candidate_id))}>
+                                  onClick={() => openCandidateDetail(iv.candidate_id, overviewRows.map(r => r.candidate_id), 'interviews')}>
                                   <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
                                   <span className="text-xs text-gray-500 w-40 shrink-0">
-                                    {iv.interview_date}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
+                                    {iv.interview_date || '时间待定'}{iv.start_time ? ` ${iv.start_time.slice(0, 5)}${iv.end_time ? `-${iv.end_time.slice(0, 5)}` : ''}` : ''}
                                   </span>
                                   <span className="font-medium text-sm">{iv.candidate_name || '未知候选人'}</span>
                                   <span className="text-xs text-gray-400">{iv.candidate_position || ''}</span>
@@ -934,7 +962,36 @@ export default function RecruitmentClient() {
                                   <span className="text-xs text-gray-500 flex-1 truncate">
                                     面试官：{iv.interviewer || '-'}{iv.location ? ` · ${iv.location}` : ''}
                                   </span>
+                                  {/* 面试官人工评价结论 + AI 胜任度综合分：总览直接看结果，免进详情 */}
+                                  {iv.feedback_result && (
+                                    <Tag color={iv.feedback_result === '通过' ? 'green' : iv.feedback_result === '不通过' ? 'red' : 'orange'} style={{ fontSize: 10 }} className="shrink-0">
+                                      评价：{iv.feedback_result}{iv.feedback_score != null ? ` ${iv.feedback_score}分` : ''}
+                                    </Tag>
+                                  )}
+                                  {iv.ai_total_score != null && (
+                                    <Tag color={iv.ai_recommend_level === '不推荐' ? 'red' : (iv.ai_recommend_level === '强烈推荐' || iv.ai_recommend_level === '推荐') ? 'geekblue' : 'default'} style={{ fontSize: 10 }} className="shrink-0">
+                                      AI {Math.round(iv.ai_total_score)}分{iv.ai_recommend_level ? ` · ${iv.ai_recommend_level}` : ''}
+                                    </Tag>
+                                  )}
                                   {iv.calendar_event_id && <Tag color="purple" style={{ fontSize: 10 }}>日历</Tag>}
+                                  <div className="flex gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                                    {(iv.status === '待安排' || iv.status === '已安排') && (
+                                      <>
+                                        <Popconfirm title="标记为已完成？" description="完成后不可回退"
+                                          onConfirm={() => handleOverviewComplete(iv.id)} okText="确认完成" cancelText="取消">
+                                          <Button size="small" type="primary" ghost loading={actingId === iv.id}>完成</Button>
+                                        </Popconfirm>
+                                        {/* 已有逐字稿/备注 = 面试已实际进行，不允许再取消 */}
+                                        {!(iv.transcript_text || iv.notes) && (
+                                          <Popconfirm title="取消这场面试？" description="将同时删除关联的飞书日程"
+                                            onConfirm={() => handleOverviewCancel(iv.id)} okText="取消面试" cancelText="保留">
+                                            <Button size="small" danger>取消</Button>
+                                          </Popconfirm>
+                                        )}
+                                      </>
+                                    )}
+                                    <Button size="small" onClick={() => setOverviewEdit(iv)}>编辑</Button>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -944,6 +1001,14 @@ export default function RecruitmentClient() {
                     </div>
                   )}
               </Card>
+              {/* 总览行内「编辑」弹窗：复用面试安排共享组件（编辑模式不需要候选人上下文） */}
+              <InterviewScheduleModal
+                open={!!overviewEdit}
+                editing={overviewEdit}
+                onCancel={() => setOverviewEdit(null)}
+                onSaved={() => { setOverviewEdit(null); loadOverview() }}
+              />
+            </>
             ),
           }] : []),
           {
@@ -1023,18 +1088,13 @@ export default function RecruitmentClient() {
                         {stats.funnel?.map((item: any) => {
                           const max = Math.max(...stats.funnel.map((f: any) => f.count), 1)
                           const pct = Math.round((item.count / max) * 100)
-                          const colors: Record<string, string> = {
-                            '待筛选': '#1677ff', '已筛选': '#722ed1', '待部门审核': '#fa8c16',
-                            '面试中': '#13c2c2', '已面试': '#52c41a', '录用中': '#2f54eb',
-                            '已录用': '#389e0d', '已拒绝': '#ff4d4f',
-                          }
                           return (
                             <div key={item.status} className="flex items-center gap-2">
                               <span className="text-xs w-20 text-right text-gray-500">{item.status}</span>
                               <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
                                 <div className="h-full rounded transition-all" style={{
                                   width: `${pct}%`,
-                                  backgroundColor: colors[item.status] || '#d9d9d9',
+                                  backgroundColor: STATUS_COLORS[item.status] || '#d9d9d9',
                                 }} />
                               </div>
                               <span className="text-xs font-medium w-8">{item.count}</span>

@@ -254,7 +254,7 @@ export default function LcTemplateConfigs() {
         ] : null}
         width={720}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Upload.Dragger
             accept=".xlsx,.xls"
             showUploadList={false}
@@ -266,7 +266,7 @@ export default function LcTemplateConfigs() {
             <p className="ant-upload-hint">系统自动识别表号并匹配同版式模板，无需编写任何配置（JSON）</p>
           </Upload.Dragger>
           <Space>
-            <Text type="secondary">文件密码（加密计算表需填写，不保存）：</Text>
+            <Text type="secondary">文件密码（一般留空：服务端默认密码自动解密；特殊密码再填，不保存）：</Text>
             <Input.Password size="small" style={{ width: 200 }} value={autoPassword}
               onChange={(e) => setAutoPassword(e.target.value)} autoComplete="new-password" />
           </Space>
@@ -280,7 +280,7 @@ export default function LcTemplateConfigs() {
               </Text>
               {autoDetect.candidates.length > 0 && (
                 <Radio.Group value={autoPick} onChange={(e) => setAutoPick(e.target.value)} style={{ width: '100%' }}>
-                  <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space orientation="vertical" style={{ width: '100%' }}>
                     {autoDetect.candidates.map((c) => (
                       <Radio key={c.template_table_no} value={c.template_table_no} style={{ width: '100%' }}>
                         <Text strong>{c.template_table_no}</Text>
@@ -328,7 +328,7 @@ export default function LcTemplateConfigs() {
             : testCfg?.config.calc
           if (!cfg) return <Text type="secondary">该表号未配置计算规则</Text>
           return (
-            <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <Space orientation="vertical" style={{ width: '100%' }} size={10}>
               <CalcForm cfg={cfg} inputs={testInputs} onChange={setTestInputs} />
               <Button type="primary" onClick={runTest}>运行计算</Button>
               {testResult && (

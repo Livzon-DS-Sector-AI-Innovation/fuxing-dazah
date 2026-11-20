@@ -182,34 +182,36 @@ class _TaskParse(_TaskCore):
         return detail, filled, unmatched
 
     @staticmethod
-    async def submit_calc_form(
+    async def compute_calc_candidates(
         db: AsyncSession,
-        task: QualityTestTask,
         table_no: str | None,
-        record_date: str | None,
-        values: list[tuple[str, float]],
-        filled_by: uuid.UUID | None = None,
-        inputs: dict[str, Any] | None = None,
+        base: list[tuple[str, float]],
+        inputs: dict[str, Any] | None,
         section: int = 0,
-    ) -> tuple[list[str], list[str]]:
-        """在线计算表提交：数值候选 + 表号合并规则计算 → 复用/创建检验记录留痕 → 判定填入任务。
+    ) -> tuple[list[tuple[str, float]], dict[str, Any] | None]:
+        """表号配置驱动的候选值计算：inputs 走色谱计算引擎，再应用 merge 合并规则。
 
-        inputs 存在时按表号 calc 配置走色谱计算引擎（峰面积→百分比），
-        否则 values 为直接填写的计算结果。返回 (filled_names, unmatched_names)。
+        calc-fill 提交与报告单机审复算共用本入口（同一条代码路径，防止两处口径漂移）：
+        - base 为直接填写值，引擎结果追加其后；无 inputs 时只应用合并规则
+        - 无表号/无该表号配置：base 原样返回（与提交链路「表号缺失时 inputs 不参与」一致）
+        - inputs 给出但表号无 calc 规则：AppException 400（提交链路转友好提示，机审侧自行捕获跳过）
+        返回 (全部候选, 引擎计算原始结果或 None)。
         """
-        if task.status != "in_progress":
-            raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可填报计算表")
-        candidates: list[tuple[str, float]] = list(values)
+        candidates: list[tuple[str, float]] = list(base)
         computed: dict[str, Any] | None = None
-        if inputs is not None and table_no:
+        if not table_no:
+            return candidates, computed
+        cfg = await get_lc_template_by_table_no(db, table_no)
+        if cfg is None or not isinstance(cfg.config, dict):
+            return candidates, computed
+        if inputs is not None:
             from app.modules.quality import calc_engine
 
-            cfg = await get_lc_template_by_table_no(db, table_no)
-            if cfg and (cfg.config or {}).get("calc_sections"):
+            if cfg.config.get("calc_sections"):
                 sections = cfg.config["calc_sections"]
                 calc_cfg = sections[section]["calc"] if section < len(sections) else None
             else:
-                calc_cfg = (cfg.config or {}).get("calc") if cfg else None
+                calc_cfg = cfg.config.get("calc")
             if not calc_cfg:
                 raise AppException(status_code=400, detail=f"表号 {table_no} 该节未配置计算规则，请用直接填值模式")
             mode = calc_cfg.get("mode")
@@ -235,21 +237,44 @@ class _TaskParse(_TaskCore):
                 if item.get("value") is not None:
                     candidates.append((item["std_name"], float(item["value"])))
         # 表号合并规则：如 杂质B(B1+B2) = 杂质B1 + 杂质B2（配置 merge op=sum）
-        if table_no:
-            cfg = await get_lc_template_by_table_no(db, table_no)
-            if cfg and isinstance(cfg.config, dict):
-                value_map: dict[str, float] = {}
-                for name, v in candidates:
-                    value_map[_TaskParse._norm_name(name)] = v
-                for rule in cfg.config.get("merge", []) or []:
-                    if rule.get("op") == "sum":
-                        parts = [
-                            value_map.get(_TaskParse._norm_name(n))
-                            for n in (rule.get("from") or [])
-                        ]
-                        if parts and all(v is not None for v in parts):
-                            candidates.append((str(rule["into"]), sum(p for p in parts if p is not None)))
+        value_map: dict[str, float] = {}
+        for name, v in candidates:
+            value_map[_TaskParse._norm_name(name)] = v
+        for rule in cfg.config.get("merge", []) or []:
+            if rule.get("op") == "sum":
+                parts = [
+                    value_map.get(_TaskParse._norm_name(n))
+                    for n in (rule.get("from") or [])
+                ]
+                if parts and all(v is not None for v in parts):
+                    candidates.append((str(rule["into"]), sum(p for p in parts if p is not None)))
+        return candidates, computed
+
+    @staticmethod
+    async def submit_calc_form(
+        db: AsyncSession,
+        task: QualityTestTask,
+        table_no: str | None,
+        record_date: str | None,
+        values: list[tuple[str, float]],
+        filled_by: uuid.UUID | None = None,
+        inputs: dict[str, Any] | None = None,
+        section: int = 0,
+        peaks: list[dict[str, Any]] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """在线计算表提交：数值候选 + 表号合并规则计算 → 复用/创建检验记录留痕 → 判定填入任务。
+
+        inputs 存在时按表号 calc 配置走色谱计算引擎（峰面积→百分比），
+        否则 values 为直接填写的计算结果。peaks 为图谱确认的峰表快照（B-1 预填链路
+        随手带上，落 raw_data 供审核机审做峰面积一致性比对）。返回 (filled_names, unmatched_names)。
+        """
+        if task.status != "in_progress":
+            raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可填报计算表")
+        candidates, computed = await _TaskParse.compute_calc_candidates(
+            db, table_no, list(values), inputs, section=section,
+        )
         # 检验记录：同批已有则复用（唯一索引），否则创建；raw_data 存表单快照留痕
+        # section/peaks 供审核机审复算与峰面积比对（peaks=图谱确认的峰表快照）
         record = await get_inspection_by_batch(db, task.product_name, task.batch_number)
         if record is None:
             record = await create_inspection_record(
@@ -258,7 +283,9 @@ class _TaskParse(_TaskCore):
                 all_pass=True,
                 raw_data={
                     "source": "calc_form", "table_no": table_no, "record_date": record_date,
+                    "section": section,
                     "inputs": inputs,
+                    "peaks": peaks,
                     "computed": computed,
                     "values": [{"item_name": n, "value": v} for n, v in candidates],
                 },

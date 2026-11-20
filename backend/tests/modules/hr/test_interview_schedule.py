@@ -267,35 +267,38 @@ async def test_status_transition_whitelist(client: AsyncClient, db_session: Asyn
 
 async def test_overview_filters_and_pagination(client: AsyncClient, db_session: AsyncSession):
     jd = _mk_jd(db_session)
-    c1 = _mk_candidate(db_session, jd)
-    c2 = _mk_candidate(db_session, jd)
+    # 候选人名用随机唯一前缀——测试库即开发库，全局 count 会混入真实数据
+    c1 = Candidate(id=uuid4(), name=_rand("总览候选"), status="面试中", job_requirement_id=jd.id)
+    c2 = Candidate(id=uuid4(), name=_rand("总览候选"), status="面试中", job_requirement_id=jd.id)
+    db_session.add_all([c1, c2])
     await db_session.flush()
 
-    # 用随机面试官名过滤——测试库即开发库，全局 count 会混入真实数据
     iv_a, iv_b = _rand("总览面试官"), _rand("总览面试官")
     await _create_iv(client, c1.id, interviewer=iv_a, day="2026-12-01", start="09:00", end="10:00")
     await _create_iv(client, c2.id, interviewer=iv_b, day="2026-12-02", start="14:00", end="15:00")
     await _create_iv(client, c2.id, interviewer=iv_a, day="2026-12-03")
 
-    # 按面试官（模糊，唯一名只命中自己）
-    resp = await client.get("/api/v1/hr/interviews", params={"interviewer": iv_a})
+    # 按候选人姓名（模糊，唯一名只命中该候选人的面试）
+    resp = await client.get("/api/v1/hr/interviews", params={"candidate_name": c1.name})
     assert resp.status_code == 200
-    assert resp.json()["meta"]["total"] == 2
-    names = {item["candidate_name"] for item in resp.json()["data"]}
-    assert names == {c1.name, c2.name}
+    assert resp.json()["meta"]["total"] == 1
+    assert resp.json()["data"][0]["candidate_name"] == c1.name
     # join 带出的岗位字段存在（测试候选人未填 position，值为空即可）
     assert all("candidate_position" in item for item in resp.json()["data"])
 
+    resp = await client.get("/api/v1/hr/interviews", params={"candidate_name": c2.name})
+    assert resp.json()["meta"]["total"] == 2
+
     # 共同前缀 + 日期范围（含边界）
     resp = await client.get("/api/v1/hr/interviews", params={
-        "interviewer": "总览面试官",
+        "candidate_name": "总览候选",
         "date_from": "2026-12-01", "date_to": "2026-12-02",
     })
     assert resp.json()["meta"]["total"] == 2
 
     # 分页（共同前缀命中全部 3 场）
     resp = await client.get("/api/v1/hr/interviews", params={
-        "interviewer": "总览面试官", "page": 1, "page_size": 2,
+        "candidate_name": "总览候选", "page": 1, "page_size": 2,
     })
     assert len(resp.json()["data"]) == 2
     assert resp.json()["meta"]["total"] == 3

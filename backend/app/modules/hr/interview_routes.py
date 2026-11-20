@@ -52,7 +52,7 @@ def get_analysis_service(session: AsyncSession = Depends(get_db)) -> CandidateAn
 async def list_interviews_overview(
     date_from: date | None = Query(None, description="面试日期起（含）"),
     date_to: date | None = Query(None, description="面试日期止（含）"),
-    interviewer: str | None = Query(None, description="面试官姓名（模糊）"),
+    candidate_name: str | None = Query(None, description="候选人姓名（模糊）"),
     status: str | None = Query(None, description="状态筛选"),
     candidate_id: UUID | None = Query(None, description="按候选人筛选"),
     page: int = Query(1, ge=1),
@@ -62,14 +62,24 @@ async def list_interviews_overview(
 ):
     """跨候选人面试总览：按日期倒序分页，附带候选人姓名/岗位。"""
     rows, total = await service.list_overview(
-        date_from=date_from, date_to=date_to, interviewer=interviewer,
+        date_from=date_from, date_to=date_to, candidate_name=candidate_name,
         status=status, candidate_id=candidate_id, page=page, page_size=page_size,
     )
     items = []
-    for iv, name, position in rows:
+    for iv, name, position, fb, report in rows:
         d = InterviewResponse.model_validate(iv).model_dump(mode="json")
         d["candidate_name"] = name
         d["candidate_position"] = position
+        # 人工评价：结论 + 四维度均分（有评分的维度才参与）
+        if fb is not None:
+            d["feedback_result"] = fb.result
+            scores = [dim.get("score") for dim in (fb.dimensions or []) if isinstance(dim, dict) and dim.get("score")]
+            if scores:
+                d["feedback_score"] = round(sum(scores) / len(scores), 1)
+        # AI 胜任度报告：综合分 + 推荐等级
+        if report is not None:
+            d["ai_total_score"] = report.total_score
+            d["ai_recommend_level"] = report.recommend_level
         items.append(InterviewOverviewItem.model_validate(d).model_dump(mode="json"))
     return success_response(data=items, meta={"page": page, "page_size": page_size, "total": total})
 
@@ -118,6 +128,25 @@ async def update_interview(interview_id: UUID, payload: InterviewUpdate, backgro
 async def delete_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     await service.delete(interview_id, operator=ctx.user.id, operator_name=ctx.user.name)
     return success_response(message="已取消")
+
+
+@router.post("/interviews/{interview_id}/push-score", summary="推送评分卡给面试官")
+async def push_interview_score(
+    interview_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+):
+    """把评分表单卡私发给该面试的面试官本人（飞书内提交，回写人工面试评价并通知发起 HR）。"""
+    from app.modules.hr.interview_score_service import push_score_card
+
+    try:
+        iv = await push_score_card(session, interview_id, ctx.user.name, ctx.user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(
+        data=InterviewResponse.model_validate(iv).model_dump(mode="json"),
+        message="评分卡已发送给面试官",
+    )
 
 
 # ─── 人工面试评价 ───

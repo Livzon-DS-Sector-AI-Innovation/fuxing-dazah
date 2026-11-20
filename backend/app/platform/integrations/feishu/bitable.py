@@ -11,6 +11,9 @@ from app.platform.integrations.feishu.http import (
     feishu_request,
     get_tenant_token,
 )
+from app.platform.integrations.feishu.http import (
+    download as http_download,
+)
 
 BITABLE_BASE = "https://open.feishu.cn/open-apis/bitable/v1"
 DRIVE_BASE = "https://open.feishu.cn/open-apis/drive/v1"
@@ -48,6 +51,24 @@ async def _request(
             f"{exc} app={app_id or 'global'}"
         ) from exc
     return dict(data.get("data") or {})
+
+
+async def download_media(
+    file_token: str, *, app_id: str | None = None, app_secret: str | None = None
+) -> bytes:
+    """下载多维表格附件素材（file_token 来自附件字段值）。
+
+    走飞书「下载素材」接口 GET /drive/v1/medias/{file_token}/download，
+    与 bitable 附件字段的 token 体系一致（云文档 file token 不通用）。
+    """
+    token = await get_tenant_token(app_id, app_secret)
+    try:
+        return await http_download(
+            f"{DRIVE_BASE}/medias/{file_token}/download",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    except FeishuAPIError as exc:
+        raise BitableAPIError(f"附件下载失败: {file_token} {exc} app={app_id or 'global'}") from exc
 
 
 async def subscribe_bitable(

@@ -1263,7 +1263,7 @@ export default function MaterialContainers() {
               key: 'dict',
               label: '物料字典',
               children: (
-                <Space direction="vertical" style={{ width: '100%' }}>
+                <Space orientation="vertical" style={{ width: '100%' }}>
                   <Typography.Text type="secondary">列：代码/名称/类别/供应商/包装规格/安全库存/效期月数/备注；代码重复自动跳过</Typography.Text>
                   <Space>
                     <Button size="small" onClick={() => onDownloadImportTemplate('dict')}>下载模板</Button>
@@ -1278,7 +1278,7 @@ export default function MaterialContainers() {
               key: 'containers',
               label: '存量容器',
               children: (
-                <Space direction="vertical" style={{ width: '100%' }}>
+                <Space orientation="vertical" style={{ width: '100%' }}>
                   <Typography.Text type="secondary">列：容器号(MC-开头)/物料代码/物料名称/供应商代码/进厂批号/入库日期/复验期/库位/状态；重复与非法状态自动跳过</Typography.Text>
                   <Space>
                     <Button size="small" onClick={() => onDownloadImportTemplate('containers')}>下载模板</Button>

@@ -120,7 +120,7 @@ export default function ScanStation() {
   return (
     <div style={{ maxWidth: 720 }}>
       <Card size="small" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+        <Space orientation="vertical" style={{ width: '100%' }} size={12}>
           <Space wrap>
             <Segmented
               value={scanMode}

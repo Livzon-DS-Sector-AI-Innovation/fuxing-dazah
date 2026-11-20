@@ -45,7 +45,12 @@ function ReportPageInner() {
   const [auditFilter, setAuditFilter] = useState<string | undefined>(
     () => searchParams.get('audit_status') || undefined
   )
-  const [consistency, setConsistency] = useState<{ parsed_mismatches: { item_name: string; report_value: number; parsed_value: number }[]; standard_drifts: { item_name: string; snapshot_text: string | null; current_text: string | null }[] } | null>(null)
+  const [consistency, setConsistency] = useState<{
+    parsed_mismatches: { item_name: string; report_value: number; parsed_value: number }[]
+    standard_drifts: { item_name: string; snapshot_text: string | null; current_text: string | null }[]
+    calc_mismatches?: { item_name: string; report_value: number; recomputed_value: number }[]
+    peak_area_mismatches?: { input_key: string; input_value: number }[]
+  } | null>(null)
 
 
   // 在线预览
@@ -200,7 +205,7 @@ function ReportPageInner() {
             onClick={() => handleAudit('approve')}>通过</Button>,
         ]}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Text type="secondary">
             审核前请先在任务详情比对原始证据（计算表/图谱）；可先点「预览」查看报告单内容。
           </Text>
@@ -217,7 +222,8 @@ function ReportPageInner() {
           </Space>
           {consistency && (
             <div style={{ border: `1px solid ${token.colorWarning}`, borderRadius: 4, padding: 8 }}>
-              {consistency.parsed_mismatches.length === 0 && consistency.standard_drifts.length === 0 ? (
+              {(consistency.parsed_mismatches.length === 0 && consistency.standard_drifts.length === 0
+                && !(consistency.calc_mismatches ?? []).length && !(consistency.peak_area_mismatches ?? []).length) ? (
                 <Text type="success" style={{ display: 'block' }}>一致性校验通过</Text>
               ) : (
                 <>
@@ -231,6 +237,19 @@ function ReportPageInner() {
                     <Text type="warning" style={{ display: 'block' }}>
                       任务快照与现行标准不一致 {consistency.standard_drifts.length} 项：
                       {consistency.standard_drifts.map((d) => `${d.item_name}（快照 ${d.snapshot_text} / 现行 ${d.current_text}）`).join('；')}
+                    </Text>
+                  )}
+                  {(consistency.calc_mismatches ?? []).length > 0 && (
+                    <Text type="warning" style={{ display: 'block' }}>
+                      图谱链路复算不一致 {(consistency.calc_mismatches ?? []).length} 项：
+                      {(consistency.calc_mismatches ?? []).map((m) => `${m.item_name}（填报 ${m.report_value} / 复算 ${m.recomputed_value}）`).join('；')}
+                      （检验员可能有意修改，仅提示）
+                    </Text>
+                  )}
+                  {(consistency.peak_area_mismatches ?? []).length > 0 && (
+                    <Text type="warning" style={{ display: 'block' }}>
+                      计算表峰面积与图谱峰表不一致 {(consistency.peak_area_mismatches ?? []).length} 项：
+                      {(consistency.peak_area_mismatches ?? []).map((m) => `${m.input_key}=${m.input_value}（峰表未找到该值）`).join('；')}
                     </Text>
                   )}
                 </>

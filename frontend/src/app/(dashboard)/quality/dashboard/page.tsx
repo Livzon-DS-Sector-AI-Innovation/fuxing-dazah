@@ -241,7 +241,7 @@ export default function QualityDashboardPage() {
           <Button size="small" type="link" onClick={() => router.push('/quality/retained')}>留样台账</Button>
         </Space>}>
         {alerts ? (
-          <Space direction="vertical" style={{ width: '100%' }} size={2}>
+          <Space orientation="vertical" style={{ width: '100%' }} size={2}>
             <AlertBlock
               label="环境超行动限未处理" danger
               empty="无未处理超限"

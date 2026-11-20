@@ -92,7 +92,7 @@ export default function KnowledgeGraphDetail({
           padding: '14px 16px',
         }}
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           {/* 名称 + 类型标签 */}
           <div>
             <div
@@ -264,7 +264,7 @@ export default function KnowledgeGraphDetail({
               >
                 子节点 ({childNodes.length})
               </div>
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 {childNodes.slice(0, 20).map((c) => (
                   <Button
                     key={c.id}
@@ -311,7 +311,7 @@ export default function KnowledgeGraphDetail({
               >
                 关联关系 ({relatedEdges.length})
               </div>
-              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={6} style={{ width: '100%' }}>
                 {relatedEdges.slice(0, 15).map((e) => {
                   const style =
                     RELATION_TYPE_STYLE[e.relation_type as GraphRelationType]

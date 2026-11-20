@@ -35,16 +35,17 @@ export default async function EmployeeProfilePage({
   return (
     <Suspense fallback={<div className="h-64" />}>
       <div className="space-y-4">
-        <div className="flex justify-end gap-2 -mb-2">
-          <EmployeeInfoCollectionPanel />
-          <ProbationPanel />
-        </div>
+        {/* 同步配置折叠面板置顶（默认收起，管理与排障入口顺手）；入口按钮经 headerActions 并入标题行 */}
         <EmployeeSyncSettings initialConfig={syncConfig} />
         <EmployeeProfileClient
-          initialEmployees={[]}
-          initialTotal={0}
           syncInfo={syncInfo}
           initialDepartment={department}
+          headerActions={
+            <>
+              <EmployeeInfoCollectionPanel />
+              <ProbationPanel />
+            </>
+          }
         />
       </div>
     </Suspense>

@@ -97,6 +97,14 @@ class CalcFormItem(BaseModel):
     value: float
 
 
+class ChromatogramPeakItem(BaseModel):
+    """图谱峰表单个峰（B-1 预填链路随手提交，落 raw_data 供审核机审峰面积比对）。"""
+
+    name: str = Field(max_length=64)
+    area: float | None = None
+    rt: float | None = None
+
+
 class CalcFormSubmit(BaseModel):
     """在线计算表提交：免 Excel 直接填计算后数值，系统按表号合并规则计算并按任务限度判定。
 
@@ -109,6 +117,10 @@ class CalcFormSubmit(BaseModel):
     record_date: str | None = Field(default=None, max_length=32, description="检验日期 YYYY-MM-DD（留痕用）")
     values: list[CalcFormItem] = Field(default=[], max_length=200)
     inputs: dict[str, object] | None = Field(default=None, description="原始数据（峰面积/质量），驱动色谱计算引擎")
+    peaks: list[ChromatogramPeakItem] | None = Field(
+        default=None, max_length=100,
+        description="图谱解析确认的峰表快照（随提交留痕，审核机审比峰面积一致性）",
+    )
 
 
 class TestResultCreate(BaseModel):

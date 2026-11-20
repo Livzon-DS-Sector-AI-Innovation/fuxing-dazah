@@ -94,6 +94,8 @@ export default function TaskDetail({ id }: { id: string }) {
   const [calcDate, setCalcDate] = useState<Dayjs | null>(dayjs())
   const [calcValues, setCalcValues] = useState<Record<string, number | undefined>>({})
   const [calcInputs, setCalcInputs] = useState<Record<string, number | undefined>>({})
+  // 图谱预填链路确认的峰表快照：随计算表提交落库，供审核机审做峰面积一致性比对
+  const [calcPeaks, setCalcPeaks] = useState<{ name: string; area: number | null; rt?: number | null }[]>([])
   const [calcConfigs, setCalcConfigs] = useState<LcTemplateConfig[]>([])
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
@@ -184,6 +186,7 @@ export default function TaskDetail({ id }: { id: string }) {
   const openCalc = () => {
     setCalcValues({})
     setCalcInputs({})
+    setCalcPeaks([])
     setCalcTableNo(undefined)
     setCalcDate(dayjs())
     setCalcOpen(true)
@@ -192,7 +195,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const onCalcSubmit = async () => {
     const useEngine = !!activeCalcCfg
-    let payload: { table_no?: string; record_date?: string; values: { item_name: string; value: number }[]; inputs?: Record<string, number | undefined> }
+    let payload: { table_no?: string; record_date?: string; values: { item_name: string; value: number }[]; inputs?: Record<string, number | undefined>; peaks?: { name: string; area: number | null; rt?: number | null }[] }
     if (useEngine) {
       const filledInputs = Object.fromEntries(
         Object.entries(calcInputs).filter(([, v]) => v != null && v > 0),
@@ -206,6 +209,7 @@ export default function TaskDetail({ id }: { id: string }) {
         record_date: calcDate ? calcDate.format('YYYY-MM-DD') : undefined,
         values: [],
         inputs: filledInputs,
+        peaks: calcPeaks.length ? calcPeaks : undefined,
       }
     } else {
       const values = calcRows
@@ -481,7 +485,7 @@ export default function TaskDetail({ id }: { id: string }) {
     ? `${row.limit_min}~${row.limit_max}`
     : `${row.operator || ''} ${row.limit_min ?? ''}${row.limit_max ?? ''}`.trim()
       return (
-        <Space size={8} direction="vertical" style={{ width: '100%' }}>
+        <Space size={8} orientation="vertical" style={{ width: '100%' }}>
           <Space size={8}>
             <InputNumber
               size="small"
@@ -504,7 +508,7 @@ export default function TaskDetail({ id }: { id: string }) {
     }
     const isPass = draft?.is_pass != null ? draft.is_pass : row.is_pass
     return (
-      <Space size={8} direction="vertical" style={{ width: '100%' }}>
+      <Space size={8} orientation="vertical" style={{ width: '100%' }}>
         <Input
           size="small"
           placeholder="填写结果描述，如 白色粉末"
@@ -833,7 +837,7 @@ export default function TaskDetail({ id }: { id: string }) {
         footer={null}
         onCancel={() => setCoaFiles([])}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           {coaFiles.map((f) => (
             <Space key={f.report_id} style={{ justifyContent: 'space-between', width: '100%' }}>
               <Typography.Text ellipsis style={{ maxWidth: 360 }}>
@@ -865,6 +869,8 @@ export default function TaskDetail({ id }: { id: string }) {
         confirmLoading={calcSaving}
         okText="提交填入"
         width={640}
+        centered
+        styles={{ body: { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' } }}
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12.5 }}>
           {activeCalcCfg
@@ -989,7 +995,7 @@ export default function TaskDetail({ id }: { id: string }) {
         width={620}
       >
         {handover && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <Typography.Text strong>{handover.product_name} 批号 {handover.batch_number}</Typography.Text>
             <Typography.Text type="secondary">
               已完成 {handover.filled}/{handover.total} 项
@@ -1015,13 +1021,15 @@ export default function TaskDetail({ id }: { id: string }) {
       <ChromatogramModal
         open={chromaOpen}
         taskId={id}
+        productName={detail?.product_name}
         title={`图谱解析${detail ? `（${detail.product_name} 批号 ${detail.batch_number}）` : ''}`}
         onClose={() => setChromaOpen(false)}
         onFilled={loadDetail}
-        onPrefill={(inputs, tableNo) => {
+        onPrefill={(inputs, tableNo, peaks) => {
           // 图谱映射的引擎 inputs 灌进在线计算表，检验员核对实时百分比后自行提交
           setCalcTableNo(tableNo)
           setCalcInputs(inputs)
+          setCalcPeaks(peaks)
           setCalcOpen(true)
         }}
       />
@@ -1044,7 +1052,7 @@ export default function TaskDetail({ id }: { id: string }) {
         okText="确认归入"
       >
         {confirmRow && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <Typography.Text>
               子项目：<b>{confirmRow.item_name}</b>　合格标准：{confirmRow.standard_text || '-'}
             </Typography.Text>
