@@ -9,9 +9,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import AppException
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import service
 from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
+from app.modules.equipment.repository.work_order import WORK_ORDER_PERSPECTIVE_COLUMNS
 from app.modules.equipment.schemas import (
     MaterialConsumeRequest,
     MaterialConsumeResponse,
@@ -115,6 +117,10 @@ async def list_work_orders(
     equipment_id: uuid.UUID | None = Query(None, description="设备ID"),
     priority: str | None = Query(None, description="优先级"),
     order_type: str | None = Query(None, description="工单类型"),
+    perspective: str | None = Query(
+        None,
+        description="用户视角过滤：reporter=我报修的 / assignee=我维修的 / responsible=我负责的",
+    ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: AsyncSession = Depends(get_db),
@@ -122,10 +128,15 @@ async def list_work_orders(
         require_equipment_access("equipment:work_order:read"),
     ),
 ) -> JSONResponse:
+    if perspective and perspective not in WORK_ORDER_PERSPECTIVE_COLUMNS:
+        raise AppException(
+            message="无效的视角参数，可选值：reporter / assignee / responsible",
+        )
     work_orders, total = await service.get_work_orders(
         db, ctx, status=status, exclude_status=exclude_status,
         equipment_id=equipment_id,
         priority=priority, order_type=order_type,
+        perspective=perspective,
         page=page, page_size=page_size,
     )
     return paginated_response(

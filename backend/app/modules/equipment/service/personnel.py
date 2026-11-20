@@ -7,7 +7,7 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.equipment import Equipment, EquipmentCategory
@@ -84,6 +84,13 @@ async def update_role(
     role = await repo.get_role_by_id(db, role_id)
     if not role:
         raise NotFoundException("角色", str(role_id))
+    if role.is_system:
+        # 内置角色（code=repair 等）是自动派单/候选人筛选的硬依赖：
+        # 停用或改作用域会让派单静默断流，仅允许调整名称与描述
+        if data.is_active is False:
+            raise AppException(message="系统内置角色不可停用，停用后工单将无法派单")
+        if data.scope is not None and data.scope != role.scope:
+            raise AppException(message="系统内置角色的作用域已锁定，不可修改")
     if data.name is not None:
         role.name = data.name
     if data.description is not None:
@@ -103,6 +110,8 @@ async def delete_role(db: AsyncSession, role_id: uuid.UUID) -> None:
     role = await repo.get_role_by_id(db, role_id)
     if not role:
         raise NotFoundException("角色", str(role_id))
+    if role.is_system:
+        raise AppException(message="系统内置角色不可删除，删除后工单将无法派单")
     await repo.soft_delete_role(db, role)
 
 

@@ -47,6 +47,7 @@ from app.modules.equipment.service import (
     create_work_order,
     generate_work_order_no,
     get_work_order_statistics,
+    get_work_orders,
     start_work_order,
     verify_work_order,
 )
@@ -1022,3 +1023,81 @@ async def test_api_work_order_statistics(client: AsyncClient) -> None:
     data = response.json()["data"]
     assert "total" in data
     assert "by_status" in data
+
+
+# ==================== 用户视角过滤（perspective） ====================
+
+
+async def test_perspective_filters_anchor_to_current_user(
+    db_session: AsyncSession,
+    sample_equipment: Equipment,
+    make_access_ctx: Callable[[User], EquipmentAccessContext],
+) -> None:
+    """三种视角分别锚定报修人/维修人/工单负责人，仅本人在对应视角可见。"""
+    reporter = await _new_user(db_session, "视角报修人")
+    assignee = await _new_user(db_session, "视角维修人")
+    responsible = await _new_user(db_session, "视角负责人")
+    stranger = await _new_user(db_session, "视角路人")
+
+    data = WorkOrderCreate(
+        equipment_id=sample_equipment.id,
+        order_type="故障维修",
+        fault_description="视角过滤用职工单",
+    )
+    wo = await create_work_order(db_session, data, make_access_ctx(reporter))
+    # 直接落列,绕开 assign 服务的通知路径,聚焦列表过滤语义
+    wo.assignee_id = assignee.id
+    wo.responsible_person_id = responsible.id
+    await db_session.flush()
+
+    async def _seen(user: User, perspective: str | None) -> bool:
+        orders, _ = await get_work_orders(
+            db_session, make_access_ctx(user), perspective=perspective
+        )
+        return any(o.work_order_no == wo.work_order_no for o in orders)
+
+    # 本人视角可见
+    assert await _seen(reporter, "reporter")
+    assert await _seen(assignee, "assignee")
+    assert await _seen(responsible, "responsible")
+    # 错位视角不可见:报修人并非该单的维修人/负责人
+    assert not await _seen(reporter, "assignee")
+    assert not await _seen(reporter, "responsible")
+    # 无关路人任何视角都不可见,但不带视角时(全量范围)仍可见——原有行为不变
+    assert not await _seen(stranger, "reporter")
+    assert await _seen(stranger, None)
+
+
+async def test_api_work_order_list_perspective(client: AsyncClient) -> None:
+    """API 视角过滤:reporter 视角含当前人报修的单,assignee 视角不含。"""
+    equipment_id = await _create_api_equipment(client)
+    create_resp = await client.post(
+        "/api/v1/equipment/maintenance/work-orders/",
+        json={"equipment_id": equipment_id, "fault_description": "视角API用例"},
+    )
+    wo_no = create_resp.json()["data"]["work_order_no"]
+
+    resp = await client.get(
+        "/api/v1/equipment/maintenance/work-orders/",
+        params={"perspective": "reporter"},
+    )
+    assert resp.status_code == 200
+    nos = [item["work_order_no"] for item in resp.json()["data"]]
+    assert wo_no in nos  # client 的当前用户即报修人
+
+    resp_other = await client.get(
+        "/api/v1/equipment/maintenance/work-orders/",
+        params={"perspective": "assignee"},
+    )
+    assert resp_other.status_code == 200
+    nos_other = [item["work_order_no"] for item in resp_other.json()["data"]]
+    assert wo_no not in nos_other  # 当前用户不是该单维修人
+
+
+async def test_api_work_order_list_invalid_perspective(client: AsyncClient) -> None:
+    """非法 perspective 参数返回 400。"""
+    response = await client.get(
+        "/api/v1/equipment/maintenance/work-orders/",
+        params={"perspective": "bogus"},
+    )
+    assert response.status_code == 400

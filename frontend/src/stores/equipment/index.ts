@@ -83,6 +83,7 @@ export const useEquipmentStore = create<EquipmentStore>()(
       setWorkOrderStatusFilter: (status) => set({ workOrderStatusFilter: status, workOrderPage: 1 }, false, 'equipment/setWorkOrderStatusFilter'),
       setWorkOrderPriorityFilter: (priority) => set({ workOrderPriorityFilter: priority, workOrderPage: 1 }, false, 'equipment/setWorkOrderPriorityFilter'),
       setWorkOrderTypeFilter: (type) => set({ workOrderTypeFilter: type, workOrderPage: 1 }, false, 'equipment/setWorkOrderTypeFilter'),
+      setWorkOrderPerspectiveFilter: (perspective) => set({ workOrderPerspectiveFilter: perspective, workOrderPage: 1 }, false, 'equipment/setWorkOrderPerspectiveFilter'),
       setViewingWorkOrder: (order) => set({ viewingWorkOrder: order }, false, 'equipment/setViewingWorkOrder'),
       openWorkOrderDrawer: (order) => set({ workOrderDrawerOpen: true, editingWorkOrder: order || null }, false, 'equipment/openWorkOrderDrawer'),
       closeWorkOrderDrawer: () => set({ workOrderDrawerOpen: false, editingWorkOrder: null }, false, 'equipment/closeWorkOrderDrawer'),

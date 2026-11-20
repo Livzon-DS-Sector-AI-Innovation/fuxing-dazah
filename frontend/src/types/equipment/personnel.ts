@@ -6,6 +6,7 @@ export interface EquipmentRole {
   description: string | null
   scope: string
   is_active: boolean
+  is_system?: boolean
   created_at: string
   updated_at: string
 }

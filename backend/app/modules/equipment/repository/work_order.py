@@ -83,6 +83,14 @@ async def count_open_work_orders_by_equipment(
     return result.scalar() or 0
 
 
+WORK_ORDER_PERSPECTIVE_COLUMNS = {
+    "reporter": WorkOrder.reporter_id,
+    "assignee": WorkOrder.assignee_id,
+    "responsible": WorkOrder.responsible_person_id,
+}
+"""工单用户视角 → 当前人锚定字段：reporter=我报修的 / assignee=我维修的 / responsible=我负责的。"""
+
+
 async def get_work_orders(
     db: AsyncSession,
     ctx: EquipmentAccessContext,
@@ -91,6 +99,7 @@ async def get_work_orders(
     equipment_id: uuid.UUID | None = None,
     priority: str | None = None,
     order_type: str | None = None,
+    perspective: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[WorkOrder], int]:
@@ -138,6 +147,12 @@ async def get_work_orders(
         query = query.where(WorkOrder.priority == priority)
     if order_type:
         query = query.where(WorkOrder.order_type == order_type)
+
+    # 用户视角过滤（与数据范围取交集）：当前人分别按报修人 / 维修人 / 工单负责人锚定
+    if perspective in WORK_ORDER_PERSPECTIVE_COLUMNS:
+        query = query.where(
+            WORK_ORDER_PERSPECTIVE_COLUMNS[perspective] == ctx.user_id
+        )
 
     count_query = select(func.count()).select_from(
         query.with_only_columns(WorkOrder.id).subquery()

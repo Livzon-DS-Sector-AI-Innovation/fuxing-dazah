@@ -90,8 +90,12 @@ export interface VerifyWorkOrderInput {
   remark?: string
 }
 
+/** 工单用户视角：reporter=我报修的 / assignee=我维修的 / responsible=我负责的 */
+export type WorkOrderPerspective = 'reporter' | 'assignee' | 'responsible'
+
 export interface WorkOrderFilters {
   status?: WorkOrderStatus
+  perspective?: WorkOrderPerspective
   equipment_id?: string
   priority?: WorkOrderPriority
   order_type?: WorkOrderType

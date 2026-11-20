@@ -54,6 +54,7 @@ export const initialWorkOrderState = {
   workOrderStatusFilter: '' as '' | '待处理' | '执行中' | '待验收' | '已完成' | '已关闭',
   workOrderPriorityFilter: '' as '' | '紧急' | '高' | '中' | '低',
   workOrderTypeFilter: '' as '' | '故障维修' | '计划维护' | '校准' | '异常处理' | '日常维护',
+  workOrderPerspectiveFilter: '' as '' | 'reporter' | 'assignee' | 'responsible',
   workOrderDrawerOpen: false,
   workOrderDetailOpen: false,
   editingWorkOrder: null as WorkOrder | null,

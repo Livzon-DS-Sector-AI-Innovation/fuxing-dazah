@@ -9,6 +9,7 @@ import type {
   WorkOrderStatus,
   WorkOrderPriority,
   WorkOrderType,
+  WorkOrderPerspective,
   WorkOrderStatistics,
   SparePart,
   StockWarning,
@@ -86,6 +87,7 @@ export interface EquipmentStore {
   workOrderStatusFilter: WorkOrderStatus | ''
   workOrderPriorityFilter: WorkOrderPriority | ''
   workOrderTypeFilter: WorkOrderType | ''
+  workOrderPerspectiveFilter: WorkOrderPerspective | ''
   setWorkOrders: (orders: WorkOrder[]) => void
   setWorkOrderTotal: (total: number) => void
   setWorkOrderPage: (page: number) => void
@@ -95,6 +97,7 @@ export interface EquipmentStore {
   setWorkOrderStatusFilter: (status: WorkOrderStatus | '') => void
   setWorkOrderPriorityFilter: (priority: WorkOrderPriority | '') => void
   setWorkOrderTypeFilter: (type: WorkOrderType | '') => void
+  setWorkOrderPerspectiveFilter: (perspective: WorkOrderPerspective | '') => void
   workOrderDrawerOpen: boolean
   workOrderDetailOpen: boolean
   editingWorkOrder: WorkOrder | null

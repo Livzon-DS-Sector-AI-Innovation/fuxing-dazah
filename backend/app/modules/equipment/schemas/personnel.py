@@ -35,6 +35,7 @@ class RoleResponse(BaseModel):
     description: str | None
     scope: str
     is_active: bool
+    is_system: bool = False
     created_at: datetime
     updated_at: datetime
 

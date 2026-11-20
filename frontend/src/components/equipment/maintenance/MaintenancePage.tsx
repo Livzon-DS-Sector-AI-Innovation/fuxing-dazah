@@ -53,6 +53,7 @@ export function MaintenancePage({
   const {
     maintenanceTab, setMaintenanceTab,
     workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter,
+    workOrderPerspectiveFilter,
     workOrderPage, workOrderPageSize, workOrderStatistics,
     setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading,
     setFailureCodes,
@@ -148,6 +149,7 @@ export function MaintenancePage({
           exclude_status: workOrderStatusFilter ? undefined : '已关闭',
           priority: workOrderPriorityFilter || undefined,
           order_type: workOrderTypeFilter || undefined,
+          perspective: workOrderPerspectiveFilter || undefined,
           page: workOrderPage, page_size: workOrderPageSize,
         }),
         fetchWorkOrderStatisticsClient(),
@@ -160,7 +162,7 @@ export function MaintenancePage({
     } finally {
       setWorkOrderLoading(false)
     }
-  }, [workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter, workOrderPage, workOrderPageSize, setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading])
+  }, [workOrderStatusFilter, workOrderPriorityFilter, workOrderTypeFilter, workOrderPerspectiveFilter, workOrderPage, workOrderPageSize, setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading])
 
   const fetchFailureCodeData = useCallback(async () => {
     try {

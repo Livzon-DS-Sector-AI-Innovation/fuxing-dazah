@@ -183,15 +183,29 @@ export function RoleManagePanel({ roles }: Props) {
                       <Text strong style={{ fontSize: 15, color: '#1a1a1a', display: 'block', lineHeight: 1.3 }}>
                         {role.name}
                       </Text>
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center',
-                        padding: '1px 8px', borderRadius: 4,
-                        fontSize: 11, fontWeight: 600, lineHeight: '18px',
-                        color: scope.color, background: scope.bg,
-                        marginTop: 2,
-                      }}>
-                        {scope.label}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center',
+                          padding: '1px 8px', borderRadius: 4,
+                          fontSize: 11, fontWeight: 600, lineHeight: '18px',
+                          color: scope.color, background: scope.bg,
+                        }}>
+                          {scope.label}
+                        </span>
+                        {role.is_system && (
+                          <span
+                            title="系统内置角色：工单派单依赖，不可删除或停用"
+                            style={{
+                              display: 'inline-flex', alignItems: 'center',
+                              padding: '1px 8px', borderRadius: 4,
+                              fontSize: 11, fontWeight: 600, lineHeight: '18px',
+                              color: '#5645d4', background: '#efeafd', border: '1px dashed #c9b8f5',
+                            }}
+                          >
+                            系统内置
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   {!role.is_active && (
@@ -240,18 +254,21 @@ export function RoleManagePanel({ roles }: Props) {
                   <Popconfirm
                     title="确认删除此角色？"
                     onConfirm={() => handleDelete(role.id)}
+                    disabled={role.is_system}
                   >
                     <button
+                      disabled={role.is_system}
+                      title={role.is_system ? '系统内置角色不可删除' : undefined}
                       style={{
                         flex: 1, padding: '10px 0',
                         background: 'transparent', border: 'none',
-                        cursor: 'pointer',
-                        color: '#5d5b54', fontSize: 13, fontWeight: 500,
+                        cursor: role.is_system ? 'not-allowed' : 'pointer',
+                        color: role.is_system ? '#c4c1bb' : '#5d5b54', fontSize: 13, fontWeight: 500,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                         transition: 'color 0.15s',
                       }}
-                      onMouseEnter={e => (e.currentTarget.style.color = '#e03131')}
-                      onMouseLeave={e => (e.currentTarget.style.color = '#5d5b54')}
+                      onMouseEnter={e => { if (!role.is_system) e.currentTarget.style.color = '#e03131' }}
+                      onMouseLeave={e => (e.currentTarget.style.color = role.is_system ? '#c4c1bb' : '#5d5b54')}
                     >
                       <DeleteOutlined />删除
                     </button>
@@ -286,7 +303,15 @@ export function RoleManagePanel({ roles }: Props) {
           </div>
         }
       >
-        <Form form={form} layout="vertical" initialValues={initialValues}>
+        {/* preserve={false}：字段卸载时清掉 form store。否则 rc-form 重挂载时
+            merge(initialValues, store) 旧 store 优先，编辑另一个角色会回显旧值
+            （同 SparePartDrawer 的口径） */}
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={initialValues}
+          preserve={false}
+        >
           <Form.Item
             name="name"
             label="角色名称"
@@ -310,9 +335,14 @@ export function RoleManagePanel({ roles }: Props) {
           <Form.Item name="description" label="描述">
             <Input.TextArea maxLength={200} placeholder="角色职责说明" style={{ borderRadius: 8 }} />
           </Form.Item>
-          <Form.Item name="scope" label="作用域">
+          <Form.Item
+            name="scope"
+            label="作用域"
+            extra={editingRole?.is_system ? '系统内置角色的作用域已锁定' : undefined}
+          >
             <Select
               style={{ borderRadius: 8 }}
+              disabled={!!editingRole?.is_system}
               options={[
                 { label: '全局 (global)', value: 'global' },
                 { label: '巡检 (inspection)', value: 'inspection' },
@@ -320,8 +350,13 @@ export function RoleManagePanel({ roles }: Props) {
               ]}
             />
           </Form.Item>
-          <Form.Item name="is_active" label="启用" valuePropName="checked">
-            <Switch />
+          <Form.Item
+            name="is_active"
+            label="启用"
+            valuePropName="checked"
+            extra={editingRole?.is_system ? '系统内置角色不可停用（停用后工单将无法派单）' : undefined}
+          >
+            <Switch disabled={!!editingRole?.is_system && editingRole.is_active} />
           </Form.Item>
         </Form>
       </Modal>

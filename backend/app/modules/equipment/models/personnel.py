@@ -36,6 +36,12 @@ class EquipmentRole(BaseModel):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", comment="是否启用"
     )
+    is_system: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        comment="系统内置角色（不可删除/停用，编码与作用域锁定）",
+    )
 
 
 class EquipmentPersonnel(BaseModel):

@@ -727,10 +727,11 @@ async def get_work_orders(
     priority: str | None = None,
     order_type: str | None = None,
     exclude_status: str | None = None,
+    perspective: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[WorkOrder], int]:
-    """获取工单列表"""
+    """获取工单列表（perspective 为用户视角过滤，见 repo.WORK_ORDER_PERSPECTIVE_COLUMNS）"""
     return await repo.get_work_orders(
         db, ctx,
         status=status,
@@ -738,6 +739,7 @@ async def get_work_orders(
         priority=priority,
         order_type=order_type,
         exclude_status=exclude_status,
+        perspective=perspective,
         page=page,
         page_size=page_size,
     )
