@@ -8,7 +8,7 @@ import {
   cancelProbationReview, createProbationReview, fetchProbationReviews, finalizeProbationReview,
 } from '@/actions/hr'
 import { fetchEmployeesAction } from '@/actions/hr'
-import { useDebouncedCallback } from '@/hooks/useDebounce'
+import { useDebouncedCallback } from '@/hooks/hr'
 import type { ProbationReviewItem } from '@/types/hr'
 
 const STATUS_META: Record<string, { label: string; color: string }> = {

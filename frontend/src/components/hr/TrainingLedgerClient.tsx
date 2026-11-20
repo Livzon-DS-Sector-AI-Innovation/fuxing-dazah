@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useDebouncedCallback } from '@/hooks/useDebounce'
+import { useDebouncedCallback } from '@/hooks/hr'
 import {
   Button,
   Card,

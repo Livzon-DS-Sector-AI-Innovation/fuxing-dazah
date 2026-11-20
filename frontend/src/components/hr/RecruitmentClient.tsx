@@ -17,7 +17,7 @@ import {
 } from '@/actions/hr'
 import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
-import { useDebouncedCallback } from '@/hooks/useDebounce'
+import { useDebouncedCallback } from '@/hooks/hr'
 import { CANDIDATE_STATUS_COLORS } from '@/lib/hr'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 import InterviewScheduleModal from './InterviewScheduleModal'

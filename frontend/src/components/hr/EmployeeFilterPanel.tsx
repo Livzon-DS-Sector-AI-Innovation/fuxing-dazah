@@ -13,7 +13,7 @@ import { Button, DatePicker, Form, Input, InputNumber, Select } from 'antd'
 import { DownOutlined, UndoOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import { EmployeeFieldFilters, EmployeeFilterOptions } from '@/types/hr'
-import { useDebouncedCallback } from '@/hooks/useDebounce'
+import { useDebouncedCallback } from '@/hooks/hr'
 
 // 下拉字段清单：key 与后端 filter-options 字段对齐，label 与表格列名一致
 const SELECT_FIELDS: { key: keyof EmployeeFilterOptions; label: string }[] = [
