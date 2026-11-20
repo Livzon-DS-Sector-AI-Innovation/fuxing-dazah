@@ -122,7 +122,7 @@ function NormForm({ cfg, inputs, set }: {
     .reduce((a, r) => a + (r.avg ?? 0), 0)
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={6}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={6}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         面积归一化法（校正因子 {rrf}）：含量% = {rrf}×主峰/({rrf}×主峰+杂质总面积)×100；杂质面积留空/0 视为未检出。
       </Text>
@@ -147,7 +147,7 @@ function ExtForm({ cfg, inputs, set }: {
   const factor = cfg.dilution_factor || 1
   const scale = cfg.ppm_scale || 1e6
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={10}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={10}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         外标法：ppm = 样面积×对照质量×含量P×{factor}/(对照平均面积×样品质量×对照稀释体积)×10⁶；对照进样 {cfg.std_injections} 针自动算平均与 RSD。
       </Text>
@@ -257,7 +257,7 @@ function ContentForm({ cfg, inputs, set }: {
   const present = vals.filter((v): v is number => v != null)
   const avg = present.length ? present.reduce((a, b) => a + b, 0) / present.length : null
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         外标法含量：含量% = 标准1质量×标准品含量×样面积/样质量/标准1平均面积/(1-水分%)×100（照达托霉素含量表公式）。
       </Text>
@@ -329,7 +329,7 @@ function ContentMultiForm({ cfg, inputs, set }: {
     return (stdMass * stdContent * sArea) / sMass / stdAvg / (1 - moisture / 100) * 100
   }
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         外标法含量（多组分）：组分% = 标准1质量×组分含量×样面积/样质量/标准1平均面积/(1-水分%)×100；总含量 = Σ组分%。
       </Text>
@@ -456,7 +456,7 @@ function ImpVsStdForm({ cfg, inputs, set }: {
     return (Math.max(total - mains, 0) / stdC) * 100
   }
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         有关物质（对标准溶液c归一）：杂质% = 杂质面积/标准c总面积×100；总杂% = (供试品总峰面积-主组分面积)/标准c总面积×100。
       </Text>
@@ -532,7 +532,7 @@ function ImpStdRatioForm({ cfg, inputs, set }: {
     v1: pct(imp.key, 1), v2: pct(imp.key, 2),
   }))
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         对照浓度比值法：Cs1 = 储备液称样量/{cfg.std_vol}/{cfg.std_dilution}/100×1000 μg/ml；Cu = 样品称样量/{cfg.sample_vol}/{cfg.sample_dilution}×1000 μg/ml；杂质% = Cs1×杂质面积×100/(Cu×标准1平均面积)。
       </Text>
@@ -634,7 +634,7 @@ function StdCurveForm({ cfg, inputs, set }: {
     return 10 ** (b * Math.log10(area) + aInt)
   }
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         标准曲线回归法：对照 3 点终浓度 = 称重/{cfg.volume}/(100/6)/稀释倍数×1000 μg/ml；log-log 回归（log浓度=b×log面积+a）；结果 = 10^(b×log面积+a) μg/ml。
       </Text>
@@ -703,7 +703,7 @@ function GroupRrfForm({ cfg, inputs, set }: {
   const rrfSum = cfg.rrf_denom.reduce((a, k) => a + (resolved[k] ?? 0), 0)
   const denom = mainTotal + cfg.rrf * rrfSum
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         分组校正因子归一化：校正总面积 = 主组总峰面积 + {cfg.rrf}×校正组面积；校正组成员% = {cfg.rrf}×面积/校正总面积×100。
         {cfg.review && <Text type="warning">　⚠ {cfg.review}</Text>}
@@ -790,7 +790,7 @@ function ImpRrfStdForm({ cfg, inputs, set }: {
     return a * (rrf ?? rrfInput ?? 1) / stdArea
   }
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       <Text type="secondary" style={{ fontSize: 12.5 }}>
         校正因子对标准面积：杂质% = 杂质面积×校正因子/标准面积。
         {cfg.review && <Text type="warning">　⚠ {cfg.review}</Text>}

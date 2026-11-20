@@ -205,7 +205,7 @@ function ReportPageInner() {
             onClick={() => handleAudit('approve')}>通过</Button>,
         ]}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Text type="secondary">
             审核前请先在任务详情比对原始证据（计算表/图谱）；可先点「预览」查看报告单内容。
           </Text>

@@ -254,7 +254,7 @@ export default function LcTemplateConfigs() {
         ] : null}
         width={720}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           <Upload.Dragger
             accept=".xlsx,.xls"
             showUploadList={false}
@@ -280,7 +280,7 @@ export default function LcTemplateConfigs() {
               </Text>
               {autoDetect.candidates.length > 0 && (
                 <Radio.Group value={autoPick} onChange={(e) => setAutoPick(e.target.value)} style={{ width: '100%' }}>
-                  <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space orientation="vertical" style={{ width: '100%' }}>
                     {autoDetect.candidates.map((c) => (
                       <Radio key={c.template_table_no} value={c.template_table_no} style={{ width: '100%' }}>
                         <Text strong>{c.template_table_no}</Text>
@@ -328,7 +328,7 @@ export default function LcTemplateConfigs() {
             : testCfg?.config.calc
           if (!cfg) return <Text type="secondary">该表号未配置计算规则</Text>
           return (
-            <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <Space orientation="vertical" style={{ width: '100%' }} size={10}>
               <CalcForm cfg={cfg} inputs={testInputs} onChange={setTestInputs} />
               <Button type="primary" onClick={runTest}>运行计算</Button>
               {testResult && (

@@ -485,7 +485,7 @@ export default function TaskDetail({ id }: { id: string }) {
     ? `${row.limit_min}~${row.limit_max}`
     : `${row.operator || ''} ${row.limit_min ?? ''}${row.limit_max ?? ''}`.trim()
       return (
-        <Space size={8} direction="vertical" style={{ width: '100%' }}>
+        <Space size={8} orientation="vertical" style={{ width: '100%' }}>
           <Space size={8}>
             <InputNumber
               size="small"
@@ -508,7 +508,7 @@ export default function TaskDetail({ id }: { id: string }) {
     }
     const isPass = draft?.is_pass != null ? draft.is_pass : row.is_pass
     return (
-      <Space size={8} direction="vertical" style={{ width: '100%' }}>
+      <Space size={8} orientation="vertical" style={{ width: '100%' }}>
         <Input
           size="small"
           placeholder="填写结果描述，如 白色粉末"
@@ -837,7 +837,7 @@ export default function TaskDetail({ id }: { id: string }) {
         footer={null}
         onCancel={() => setCoaFiles([])}
       >
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <Space orientation="vertical" style={{ width: '100%' }}>
           {coaFiles.map((f) => (
             <Space key={f.report_id} style={{ justifyContent: 'space-between', width: '100%' }}>
               <Typography.Text ellipsis style={{ maxWidth: 360 }}>
@@ -995,7 +995,7 @@ export default function TaskDetail({ id }: { id: string }) {
         width={620}
       >
         {handover && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <Typography.Text strong>{handover.product_name} 批号 {handover.batch_number}</Typography.Text>
             <Typography.Text type="secondary">
               已完成 {handover.filled}/{handover.total} 项
@@ -1052,7 +1052,7 @@ export default function TaskDetail({ id }: { id: string }) {
         okText="确认归入"
       >
         {confirmRow && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <Typography.Text>
               子项目：<b>{confirmRow.item_name}</b>　合格标准：{confirmRow.standard_text || '-'}
             </Typography.Text>

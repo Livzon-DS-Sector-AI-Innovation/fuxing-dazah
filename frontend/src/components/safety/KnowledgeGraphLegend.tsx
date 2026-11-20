@@ -17,7 +17,7 @@ export default function KnowledgeGraphLegend() {
     <div style={{ width: 260 }}>
       {/* 节点类型 */}
       <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>节点类型</div>
-      <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 16 }}>
+      <Space orientation="vertical" size={4} style={{ width: '100%', marginBottom: 16 }}>
         {(Object.entries(NODE_TYPE_STYLE) as [GraphNodeType, typeof NODE_TYPE_STYLE[GraphNodeType]][]).map(
           ([type, style]) => (
             <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -40,7 +40,7 @@ export default function KnowledgeGraphLegend() {
 
       {/* 关系类型 */}
       <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>关系类型</div>
-      <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 16 }}>
+      <Space orientation="vertical" size={4} style={{ width: '100%', marginBottom: 16 }}>
         {(Object.entries(RELATION_TYPE_STYLE) as [GraphRelationType, typeof RELATION_TYPE_STYLE[GraphRelationType]][]).map(
           ([type, style]) => (
             <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
