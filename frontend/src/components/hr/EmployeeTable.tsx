@@ -19,7 +19,6 @@ interface EmployeeTableProps {
   page: number
   pageSize: number
   onPageChange: (page: number, pageSize: number) => void
-  onRefresh: () => void
   onEdit: (employee: Employee) => void
   loading?: boolean
   /** 多维表格同步模式：档案在飞书维护，隐藏会改写档案的编辑/异动入口 */
