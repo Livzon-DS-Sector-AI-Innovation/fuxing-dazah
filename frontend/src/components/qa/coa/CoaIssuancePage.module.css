@@ -1,0 +1,882 @@
+/* COA 出具登记工作台。
+   页头沿用全局 PageHeading；产品/标准是一条搜索带，出具记录是一张紧凑台账。 */
+
+.page {
+  max-width: 1680px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+}
+
+/* ===== 产品 / 客户标准：搜索带 ===== */
+
+.scopeBand {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: var(--color-surface-soft);
+}
+
+.scopeField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-right: 1px solid var(--color-hairline);
+}
+
+.scopeFieldWide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.fieldLabel {
+  color: var(--color-steel);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+.productSelect,
+.standardSelect {
+  width: 100%;
+}
+
+.railMeta {
+  overflow: hidden;
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.standardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.standardCount {
+  color: var(--color-stone);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 模板下拉项：代码加粗在前，长名称占满剩余宽度，便于在长列表里扫读 */
+.standardOption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.optionCode {
+  flex: none;
+  color: var(--color-charcoal);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.optionName {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--color-steel);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.optionCustomer {
+  flex: none;
+  color: var(--color-stone);
+  font-size: 11px;
+}
+
+/* ===== 台账纸面 ===== */
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: var(--color-canvas);
+  box-shadow: 0 1px 2px rgba(15, 15, 15, 0.03);
+}
+
+.sheetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 9px 14px 9px 16px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-canvas);
+}
+
+.sheetHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sheetTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+}
+
+.sheetTitle::before {
+  content: '';
+  flex: none;
+  width: 3px;
+  height: 15px;
+  border-radius: 2px;
+  background: var(--color-primary);
+}
+
+.sheetCode {
+  max-width: 280px;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-steel);
+  font-size: 11px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sheetTools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sheetStats {
+  display: flex;
+  align-items: center;
+  color: var(--color-steel);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 10px;
+  border-left: 1px solid var(--color-hairline);
+  line-height: 1.4;
+}
+
+.stat:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+
+.stat:last-child {
+  padding-right: 2px;
+}
+
+.stat b {
+  color: var(--color-charcoal);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* ===== 矩阵表：紧凑、居中、表头两行、固定标识列 ===== */
+
+.matrix {
+  width: 100%;
+}
+
+.matrix :global(.ant-table) {
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+}
+
+.matrix :global(.ant-table-thead > tr > th) {
+  padding: 6px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+  color: var(--color-slate);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+}
+
+.matrix :global(.ant-table-thead > tr > th.ant-table-cell-fix-left),
+.matrix :global(.ant-table-thead > tr > th.ant-table-cell-fix-right) {
+  background: var(--color-surface-soft);
+}
+
+.matrix :global(.ant-table-tbody > tr > td) {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  color: var(--color-charcoal);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.matrix :global(.ant-table-tbody > tr:last-child > td) {
+  border-bottom: none;
+}
+
+.matrix :global(.ant-table-tbody > tr:hover > td) {
+  background: var(--color-surface-soft) !important;
+}
+
+.matrix :global(.ant-table-placeholder > td) {
+  padding: 0;
+}
+
+/* 列宽自适应：给内容一个下限，超出上限时截断（悬停看全文） */
+.itemCol {
+  min-width: 72px;
+}
+
+.batchCol {
+  min-width: 76px;
+}
+
+.headerLabel {
+  display: -webkit-box;
+  overflow: hidden;
+  max-width: 7.5em;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* 检测项表头：项目名 + 限度。限度单行截断，悬停看完整标准原文 */
+.itemHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  cursor: help;
+}
+
+.headerName {
+  display: block;
+  white-space: nowrap;
+}
+
+.headerSpec {
+  display: block;
+  max-width: 10em;
+  overflow: hidden;
+  color: var(--color-stone);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-decoration: underline dotted var(--color-hairline-strong);
+  text-underline-offset: 2px;
+}
+
+.headerTipName {
+  margin-bottom: 2px;
+  color: var(--color-on-dark);
+  font-weight: 600;
+}
+
+.headerTipSpec {
+  color: var(--color-on-dark-muted);
+}
+
+.batchNo {
+  color: var(--color-charcoal);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cellEllipsis {
+  display: block;
+  max-width: 12em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.numValue {
+  font-variant-numeric: tabular-nums;
+}
+
+.emptyCell {
+  color: var(--color-muted);
+}
+
+.rowActions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rowActions :global(.ant-btn) {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--color-steel);
+}
+
+.rowActions :global(.ant-btn:hover) {
+  color: var(--color-ink);
+}
+
+.rowActions :global(.ant-btn-dangerous:hover) {
+  color: var(--color-error) !important;
+}
+
+/* ===== 空状态 / 加载 ===== */
+
+.emptySheet {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 250px;
+  padding: 32px 20px;
+  text-align: center;
+}
+
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 8px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 12px;
+  background: var(--color-surface-soft);
+  color: var(--color-steel);
+  font-size: 19px;
+}
+
+.emptyTitle {
+  color: var(--color-ink);
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.emptyHint {
+  max-width: 50ch;
+  margin: 3px 0 0;
+  color: var(--color-steel);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.emptyActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.loadingBlock {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 250px;
+  color: var(--color-steel);
+  font-size: 12.5px;
+}
+
+/* ===== 弹窗头部与表单 ===== */
+
+.entryModal :global(.ant-modal-content),
+.importModal :global(.ant-modal-content) {
+  padding: 18px 22px 16px;
+  border-radius: 14px;
+}
+
+.entryModal :global(.ant-modal-header),
+.importModal :global(.ant-modal-header) {
+  margin-bottom: 12px;
+}
+
+.entryModal :global(.ant-modal-title),
+.importModal :global(.ant-modal-title) {
+  color: var(--color-ink);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.entryModal :global(.ant-modal-footer),
+.importModal :global(.ant-modal-footer) {
+  margin-top: 16px;
+}
+
+.entryModal :global(.ant-modal-body),
+.importModal :global(.ant-modal-body) {
+  max-height: calc(100vh - 220px);
+  padding-right: 2px;
+  overflow-y: auto;
+}
+
+.modalHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.modalHeadingCode {
+  padding: 2px 7px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-steel);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.modalContext {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: 9px;
+  background: var(--color-surface-soft);
+}
+
+.contextStandard {
+  flex: none;
+  color: var(--color-charcoal);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.contextName {
+  flex: 1 1 280px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-steel);
+  font-size: 11.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contextProduct {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.modalHint {
+  margin: 8px 2px 14px;
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.detailError {
+  margin-inline-start: 6px;
+  color: var(--color-error);
+}
+
+.modalSection {
+  margin-top: 14px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.sectionMeta {
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 14px;
+}
+
+.formGrid :global(.ant-form-item) {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.formGrid :global(.ant-form-item-label) {
+  padding-bottom: 3px;
+}
+
+.formGrid :global(.ant-form-item-label > label) {
+  height: auto;
+  color: var(--color-steel);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.formGrid :global(.ant-input) {
+  height: 36px;
+}
+
+.formGrid :global(.ant-picker) {
+  height: 36px;
+}
+
+.formGrid :global(.ant-select-selector) {
+  height: 36px !important;
+}
+
+/* 结果填写表：项目名与标准要求上下排，整格居中 */
+.denseTable :global(.ant-table) {
+  font-variant-numeric: tabular-nums;
+}
+
+.denseTable :global(.ant-table-thead > tr > th) {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-hairline);
+  background: var(--color-surface-soft);
+  color: var(--color-slate);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+}
+
+.denseTable :global(.ant-table-tbody > tr > td) {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  color: var(--color-charcoal);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.denseTable :global(.ant-table-tbody > tr:last-child > td) {
+  border-bottom: none;
+}
+
+.denseTable :global(.ant-table-tbody > tr:hover > td) {
+  background: var(--color-surface-soft) !important;
+}
+
+.itemCell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.itemName {
+  color: var(--color-charcoal);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.itemSpec {
+  max-width: 58ch;
+  color: var(--color-stone);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.resultCell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.resultCell :global(.ant-segmented) {
+  flex: none;
+}
+
+.resultInput {
+  width: 132px;
+}
+
+.inlineEmpty {
+  padding: 24px 12px;
+  color: var(--color-steel);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+/* ===== docx 导入 ===== */
+
+.dropzone {
+  display: block;
+}
+
+.dropzone :global(.ant-upload-drag) {
+  border-radius: 10px;
+  border-color: var(--color-hairline-strong);
+  background: var(--color-surface-soft);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropzone :global(.ant-upload-drag:hover) {
+  border-color: var(--color-primary);
+  background: var(--color-canvas);
+}
+
+.dropzone :global(.ant-upload-btn) {
+  padding: 22px 16px !important;
+}
+
+.dropIcon {
+  margin: 0 0 6px;
+  color: var(--color-primary);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.dropTitle {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.dropHint {
+  margin: 3px 0 0;
+  color: var(--color-steel);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.dropFile {
+  display: inline-block;
+  margin: 8px 0 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.matchBannerWarn,
+.matchBannerOk {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.matchBannerWarn {
+  background: var(--color-tint-peach);
+  color: #793400;
+}
+
+.matchBannerOk {
+  background: var(--color-tint-mint);
+  color: var(--color-success-deep);
+}
+
+.matchBannerWarn :global(.anticon),
+.matchBannerOk :global(.anticon) {
+  flex: none;
+  margin-top: 2px;
+}
+
+.standardPick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.standardPick .matchBannerWarn {
+  margin-top: 0;
+}
+
+.importStandardSelect {
+  width: 100%;
+  max-width: 460px;
+}
+
+.previewMeta {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: 9px;
+}
+
+.metaCell {
+  min-width: 0;
+  padding: 8px 10px 9px;
+  border-left: 1px solid var(--color-hairline-soft);
+}
+
+.metaCell:first-child {
+  border-left: none;
+}
+
+.metaLabel {
+  display: block;
+  color: var(--color-stone);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.metaValue {
+  display: block;
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--color-charcoal);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.missingHint {
+  margin: 8px 2px 0;
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.previewSection {
+  margin-top: 14px;
+}
+
+.previewSectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.previewSectionTitle {
+  color: var(--color-ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+/* ===== 响应式 ===== */
+
+@media (max-width: 900px) {
+  .scopeBand {
+    grid-template-columns: 1fr;
+  }
+
+  .scopeField {
+    border-right: none;
+    border-bottom: 1px solid var(--color-hairline);
+  }
+
+  .previewMeta {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metaCell:nth-child(3n + 1) {
+    border-left: none;
+  }
+
+  .metaCell:nth-child(n + 4) {
+    border-top: 1px solid var(--color-hairline-soft);
+  }
+}
+
+@media (max-width: 600px) {
+  .previewMeta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metaCell:nth-child(3n + 1) {
+    border-left: 1px solid var(--color-hairline-soft);
+  }
+
+  .metaCell:nth-child(2n + 1) {
+    border-left: none;
+  }
+
+  .metaCell:nth-child(n + 3) {
+    border-top: 1px solid var(--color-hairline-soft);
+  }
+
+  .resultInput {
+    width: 110px;
+  }
+
+  .sheetStats {
+    width: 100%;
+    padding-top: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropzone :global(.ant-upload-drag) {
+    transition: none;
+  }
+}

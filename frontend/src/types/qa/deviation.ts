@@ -394,6 +394,7 @@ export const DEVIATION_ITEM_CATEGORY_LABEL: Record<DeviationItemCategory, string
 
 export const DEVIATION_ACTION_LABEL: Record<string, string> = {
   create: '登记偏差',
+  edit: '编辑偏差',
   start_investigation: '开始调查',
   submit_assessment: '提交评估',
   close: '关闭偏差',

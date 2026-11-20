@@ -62,12 +62,14 @@ async def make_role(db_session: AsyncSession):
         code: str | None = None,
         data_scope: str = "department",
         is_system: bool = False,
+        group_feishu_department_id: str | None = None,
     ) -> Role:
         role = Role(
             code=code or f"role_{uuid.uuid4().hex[:8]}",
             name="测试角色",
             data_scope=data_scope,
             is_system=is_system,
+            group_feishu_department_id=group_feishu_department_id,
         )
         db_session.add(role)
         await db_session.flush()

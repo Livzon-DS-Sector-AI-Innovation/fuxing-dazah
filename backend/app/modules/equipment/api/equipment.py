@@ -432,6 +432,7 @@ async def get_equipment_consumption_history(
 )
 async def get_available_spare_parts(
     equipment_id: uuid.UUID,
+    keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     ctx: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:spare_part:read"),
@@ -439,10 +440,13 @@ async def get_available_spare_parts(
 ) -> JSONResponse:
     """获取该设备可用的备件：
     未关联设备的备件（全局可用）+ 关联了此设备的备件，
-    附带 is_linked / required_qty 供工单领料分组与默认数量
+    附带 is_linked / required_qty 供工单领料分组与默认数量。
+    keyword 在 limit 之前过滤，可搜到 200 条窗口之外的备件。
     """
     await _ensure_equipment_visible(db, equipment_id, ctx)
-    spare_parts = await repo.get_available_spare_parts(db, equipment_id, ctx=ctx)
+    spare_parts = await repo.get_available_spare_parts(
+        db, equipment_id, ctx=ctx, keyword=keyword
+    )
     return success_response(
         data=[SparePartResponse.model_validate(sp) for sp in spare_parts],
     )

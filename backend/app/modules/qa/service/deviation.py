@@ -75,6 +75,71 @@ DEVIATION_STATUS_LABELS = {
     DeviationStatus.CLOSED.value: "已关闭",
 }
 
+# 编辑日志的分区口径，与详情页表单分区（偏差报告/偏差调查/偏差评估）一致。
+# 只用于回答「谁在何时动过哪一部分」，不记具体改了什么内容。
+_DEVIATION_EDIT_SECTIONS: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "偏差报告",
+        frozenset(
+            {
+                "discovery_date",
+                "occurrence_date",
+                "department_id",
+                "department_name",
+                "group_name",
+                "reporter_name",
+                "qa_person_name",
+                "description",
+                "emergency_measures",
+                "remark",
+                "items",
+            }
+        ),
+    ),
+    (
+        "偏差调查",
+        frozenset(
+            {
+                "m1e_personnel",
+                "m1e_machine",
+                "m1e_material",
+                "m1e_method",
+                "m1e_environment",
+                "m1e_other",
+                "direct_cause",
+                "root_cause",
+                "root_cause_category",
+                "why_chain",
+                "extended_investigation",
+                "extended_result",
+                "hypothesis_tests",
+            }
+        ),
+    ),
+    (
+        "偏差评估",
+        frozenset(
+            {
+                "quality_impact",
+                "quality_impact_reason",
+                "classification",
+                "stability_needed",
+                "stability_note",
+                "validation_impact",
+                "validation_note",
+                "registration_impact",
+                "registration_note",
+                "notify_customer",
+                "customer_note",
+                "is_repeat",
+                "repeat_deviation_ids",
+                "capa_initiated",
+                "capa_not_initiated_reason",
+            }
+        ),
+    ),
+)
+
 CAPA_TRANSITIONS: dict[str, list[str]] = {
     CapaStatus.PLANNED.value: [CapaStatus.IN_PROGRESS.value],
     CapaStatus.IN_PROGRESS.value: [CapaStatus.COMPLETED.value],
@@ -252,6 +317,27 @@ async def _replace_hypothesis_tests(
         )
 
 
+def _item_fingerprint(row: DeviationItem | DeviationItemIn) -> tuple[Any, ...]:
+    """明细行的可比指纹（明细整存整换，用内容对比判定是否真的改动）。"""
+    category = row.category.value if hasattr(row.category, "value") else row.category
+    return (category, row.name, row.batch_no, row.handling)
+
+
+def _test_fingerprint(
+    row: DeviationHypothesisTest | HypothesisTestIn,
+) -> tuple[Any, ...]:
+    return (
+        row.sample,
+        row.hypothesis,
+        row.protocol,
+        row.expected,
+        row.result,
+        row.conclusion,
+        row.tested_by,
+        row.tested_at,
+    )
+
+
 # ───────────────────────── 偏差：登记 / 编辑 ─────────────────────────
 
 
@@ -352,12 +438,20 @@ async def update_deviation(
     if "description" in data and not data["description"]:
         raise AppException(status_code=422, message="偏差描述不能为空")
 
+    # 实际发生变化的字段集合；据此写编辑日志（谁在何时改了哪个分区）。
+    changed: set[str] = set()
+
     if "department_id" in data or "department_name" in data:
+        old_department = (deviation.department_id, deviation.department_name)
         id_provided = "department_id" in data
         name_provided = "department_name" in data
         department_id = data.pop("department_id", deviation.department_id)
         department_name = data.pop("department_name", deviation.department_name)
-        if name_provided and not id_provided and department_name != deviation.department_name:
+        if (
+            name_provided
+            and not id_provided
+            and department_name != deviation.department_name
+        ):
             # 只改名称视为手填部门，清掉旧的飞书 ID，避免 ID 与名称快照不一致。
             department_id = None
         department_id, department_name = await _resolve_department(
@@ -365,6 +459,8 @@ async def update_deviation(
         )
         deviation.department_id = department_id
         deviation.department_name = department_name
+        if (deviation.department_id, deviation.department_name) != old_department:
+            changed.add("department_name")
 
     items = data.pop("items", None)
     hypothesis_tests = data.pop("hypothesis_tests", None)
@@ -385,25 +481,56 @@ async def update_deviation(
     deviation.due_date = due_date
 
     for field, value in data.items():
-        setattr(deviation, field, value.value if hasattr(value, "value") else value)
+        normalized = value.value if hasattr(value, "value") else value
+        if getattr(deviation, field) != normalized:
+            changed.add(field)
+        setattr(deviation, field, normalized)
     if why_chain is not None:
-        deviation.why_chain = [
+        new_chain = [
             {"question": step.question, "answer": step.answer}
             for step in payload.why_chain or []
         ]
+        if deviation.why_chain != new_chain:
+            changed.add("why_chain")
+        deviation.why_chain = new_chain
     if repeat_ids is not None:
-        deviation.repeat_deviation_ids = await _validate_repeat_ids(
+        new_ids = await _validate_repeat_ids(
             db, deviation, payload.repeat_deviation_ids or []
         )
+        if deviation.repeat_deviation_ids != new_ids:
+            changed.add("repeat_deviation_ids")
+        deviation.repeat_deviation_ids = new_ids
     if deviation.capa_initiated is True:
         deviation.capa_not_initiated_reason = None
     if items is not None:
+        old_items = await repo.get_items(db, deviation.id)
+        if [_item_fingerprint(i) for i in old_items] != [
+            _item_fingerprint(i) for i in payload.items or []
+        ]:
+            changed.add("items")
         await _replace_items(db, deviation.id, payload.items or [], user)
     if hypothesis_tests is not None:
+        old_tests = await repo.get_hypothesis_tests(db, deviation.id)
+        if [_test_fingerprint(t) for t in old_tests] != [
+            _test_fingerprint(t) for t in payload.hypothesis_tests or []
+        ]:
+            changed.add("hypothesis_tests")
         await _replace_hypothesis_tests(
             db, deviation.id, payload.hypothesis_tests or [], user
         )
     deviation.updated_by = _actor_id(user)
+    sections = [label for label, fields in _DEVIATION_EDIT_SECTIONS if changed & fields]
+    if sections:
+        # 不记改了什么，只留「谁在何时编辑过哪部分」的痕迹。
+        await _log_deviation(
+            db,
+            deviation,
+            action="edit",
+            user=user,
+            from_status=deviation.status,
+            to_status=deviation.status,
+            comment=f"编辑部分：{'、'.join(sections)}",
+        )
     await db.flush()
     return await _get_deviation(db, deviation.id)
 

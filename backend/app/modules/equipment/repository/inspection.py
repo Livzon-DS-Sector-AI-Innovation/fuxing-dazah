@@ -11,6 +11,7 @@ from app.core import time as app_time
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.equipment import Equipment
 from app.modules.equipment.models.inspection import (
+    InspectionEquipmentNote,
     InspectionPhoto,
     InspectionRoute,
     InspectionRouteEquipment,
@@ -484,6 +485,47 @@ async def get_records_by_task(
             InspectionRecord.is_deleted == False,  # noqa: E712
         )
         .order_by(InspectionRecord.created_at)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+# ═══════════ 设备现场说明 ═══════════
+async def create_equipment_note(
+    db: AsyncSession, data: dict
+) -> InspectionEquipmentNote:
+    note = InspectionEquipmentNote(**data)
+    db.add(note)
+    await db.flush()
+    return note
+
+
+async def get_notes_by_task(
+    db: AsyncSession, task_id: uuid.UUID
+) -> list[InspectionEquipmentNote]:
+    stmt = (
+        select(InspectionEquipmentNote)
+        .where(
+            InspectionEquipmentNote.task_id == task_id,
+            InspectionEquipmentNote.is_deleted == False,  # noqa: E712
+        )
+        .order_by(InspectionEquipmentNote.created_at)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_notes_by_task_and_equipment(
+    db: AsyncSession, task_id: uuid.UUID, equipment_id: uuid.UUID
+) -> list[InspectionEquipmentNote]:
+    stmt = (
+        select(InspectionEquipmentNote)
+        .where(
+            InspectionEquipmentNote.task_id == task_id,
+            InspectionEquipmentNote.equipment_id == equipment_id,
+            InspectionEquipmentNote.is_deleted == False,  # noqa: E712
+        )
+        .order_by(InspectionEquipmentNote.created_at)
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())

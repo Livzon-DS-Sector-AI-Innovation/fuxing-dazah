@@ -42,6 +42,9 @@ class CreateRoleInput(BaseModel):
     )
     permission_ids: list[uuid.UUID] = []
     data_scope_overrides: dict[str, str] = {}
+    group_feishu_department_id: str | None = Field(
+        default=None, max_length=64, description="展示分组：飞书部门 ID，NULL=未分组"
+    )
 
 
 class UpdateRoleInput(BaseModel):
@@ -52,6 +55,9 @@ class UpdateRoleInput(BaseModel):
     )
     permission_ids: list[uuid.UUID] | None = None
     data_scope_overrides: dict[str, str] | None = None
+    group_feishu_department_id: str | None = Field(
+        default=None, max_length=64, description="展示分组：飞书部门 ID，显式传 null 清空"
+    )
 
 
 class RoleOut(BaseModel):
@@ -67,6 +73,7 @@ class RoleOut(BaseModel):
     data_scope_overrides: dict[str, str] = {}
     user_count: int = 0
     department_count: int = 0
+    group_feishu_department_id: str | None = None
 
 
 # ── 用户角色 ──

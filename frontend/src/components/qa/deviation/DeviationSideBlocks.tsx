@@ -171,6 +171,7 @@ export function AttachmentsCard({
 
 const ACTION_COLOR: Record<string, string> = {
   create: '#787671',
+  edit: '#d48806',
   start_investigation: '#0075de',
   submit_assessment: '#dd5b00',
   close: '#1aae39',

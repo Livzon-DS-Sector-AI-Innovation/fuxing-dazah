@@ -22,6 +22,18 @@ from app.modules.qa.models.apr import (
     AprValue,
     AprValueType,
 )
+from app.modules.qa.models.coa import (
+    CoaFieldType,
+    CoaProduct,
+    CoaProductField,
+    CoaReport,
+    CoaReportValue,
+    CoaSourceType,
+    CoaStandard,
+    CoaStandardField,
+    CoaStandardItem,
+    CoaValueType,
+)
 from app.modules.qa.models.deviation import (
     Capa,
     CapaAction,
@@ -132,4 +144,15 @@ __all__ = [
     "Capa",
     "CapaAction",
     "CapaStatusLog",
+    # COA 域
+    "CoaSourceType",
+    "CoaValueType",
+    "CoaFieldType",
+    "CoaProduct",
+    "CoaProductField",
+    "CoaStandard",
+    "CoaStandardField",
+    "CoaStandardItem",
+    "CoaReport",
+    "CoaReportValue",
 ]

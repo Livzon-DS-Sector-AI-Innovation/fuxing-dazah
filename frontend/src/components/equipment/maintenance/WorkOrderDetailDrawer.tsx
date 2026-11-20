@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { App, Drawer, Descriptions, Tag, Timeline, Button, Space, Input, Image, Upload, Select, InputNumber, Modal, Tooltip } from 'antd'
 import {
   ClockCircleOutlined, UserOutlined, ToolOutlined, UploadOutlined,
@@ -63,6 +63,14 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
   const [consumedParts, setConsumedParts] = useState<{ sparePartId: string; qty: number }[]>([])
   const [availableParts, setAvailableParts] = useState<SparePart[]>([])
   const [completeLoading, setCompleteLoading] = useState(false)
+  // 服务端搜索会替换 availableParts；已选备件的库存校验/回显靠缓存，避免搜索结果切走后丢失
+  const [partCache, setPartCache] = useState<Record<string, SparePart>>({})
+  const partSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const partSearchSeqRef = useRef(0)
+
+  useEffect(() => () => {
+    if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+  }, [])
 
   const refreshDetail = async (id: string) => {
     try {
@@ -116,15 +124,44 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
     await refreshDetail(wo.id)
   }
 
+  const cacheParts = (parts: SparePart[]) => {
+    setPartCache(prev => {
+      const next = { ...prev }
+      for (const p of parts) next[p.id] = p
+      return next
+    })
+  }
+
+  // 输入框搜索走服务端：keyword 在 limit 之前过滤，能搜到前 200 条之外的备件
+  const handlePartSearch = (keyword: string) => {
+    if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+    partSearchTimerRef.current = setTimeout(async () => {
+      const seq = ++partSearchSeqRef.current
+      try {
+        const parts = await fetchAvailableSparePartsClient(wo.equipment_id, keyword.trim() || undefined)
+        if (seq !== partSearchSeqRef.current) return // 丢弃过期响应
+        cacheParts(parts)
+        setAvailableParts(parts)
+      } catch (e) {
+        console.error('搜索可用备件失败:', e)
+      }
+    }, 300)
+  }
+
   const openCompleteModal = async () => {
     setRepairDetail('')
     setFileList([])
     setConsumedParts([])
     setAvailableParts([])
+    setPartCache({})
     setCompleteLoading(false)
     setCompleteOpen(true)
+    if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+    const seq = ++partSearchSeqRef.current
     try {
       const parts = await fetchAvailableSparePartsClient(wo.equipment_id)
+      if (seq !== partSearchSeqRef.current) return // 已被搜索请求取代
+      cacheParts(parts)
       setAvailableParts(parts)
     } catch (e) {
       console.error('获取可用备件失败:', e)
@@ -136,11 +173,11 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
     if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); return }
     // 库存前置校验：不等到验收扣减时才发现数量不够
     const over = consumedParts.find(p => {
-      const sp = availableParts.find(s => s.id === p.sparePartId)
+      const sp = partCache[p.sparePartId]
       return sp && p.qty > (sp.current_qty ?? 0)
     })
     if (over) {
-      const sp = availableParts.find(s => s.id === over.sparePartId)
+      const sp = partCache[over.sparePartId]
       message.warning(`备件「${sp?.name || ''}」库存不足（当前 ${sp?.current_qty ?? 0}），请调整数量`)
       return
     }
@@ -380,12 +417,15 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
         title="提交维修完成"
         open={completeOpen}
         width={640}
-        onCancel={() => setCompleteOpen(false)}
+        onCancel={() => {
+          if (partSearchTimerRef.current) clearTimeout(partSearchTimerRef.current)
+          setCompleteOpen(false)
+        }}
         onOk={handleCompleteSubmit}
         confirmLoading={completeLoading}
         okButtonProps={{
           disabled: consumedParts.some(p => {
-            const sp = availableParts.find(s => s.id === p.sparePartId)
+            const sp = partCache[p.sparePartId]
             return sp && p.qty > (sp.current_qty ?? 0)
           }),
         }}
@@ -437,7 +477,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
             {consumedParts.map((item, idx) => {
-              const selectedPart = availableParts.find(s => s.id === item.sparePartId)
+              const selectedPart = partCache[item.sparePartId]
               const overStock = !!(selectedPart && item.qty > (selectedPart.current_qty ?? 0))
               return (
                 <div
@@ -453,12 +493,8 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <Select
                       showSearch={{
-                        filterOption: (input, option) => {
-                          if (!option) return false
-                          const d = option as any
-                          const hay = `${d.code || ''} ${d.name || ''} ${d.spec || ''} ${d.stock || ''}`.toLowerCase()
-                          return hay.includes(input.toLowerCase())
-                        },
+                        filterOption: false,
+                        onSearch: handlePartSearch,
                       }}
                       placeholder="搜索并选择备件"
                       style={{ width: '100%' }}
@@ -504,7 +540,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
                         )
                       }}
                       labelRender={(props) => {
-                        const sp = availableParts.find(s => s.id === props.value)
+                        const sp = partCache[String(props.value)]
                         const tooltip = sp
                           ? `${sp.code} ${sp.name} / ${sp.specification || '-'} / 库存 ${sp.current_qty ?? 0} ${sp.unit || ''}`
                           : ''

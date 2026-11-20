@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useCallback, useMemo, useEffect } from 'react'
-import { App, Progress, Typography } from 'antd'
-import { ArrowLeftOutlined, CheckOutlined, CameraOutlined, AimOutlined, RobotOutlined, EnvironmentOutlined } from '@ant-design/icons'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { App, Image, Progress, Typography } from 'antd'
+import { ArrowLeftOutlined, CheckOutlined, CameraOutlined, AimOutlined, RobotOutlined, EnvironmentOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
+import { fetchInspectionHistoryDetail, getInspectionPhotoUrl } from '@/lib/api/inspection'
 import { submitEquipmentCheck, uploadInspectionPhoto, completeInspectionTask, analyzeInspectionPhoto } from '@/actions/equipment'
-import type { InspectionRecordItem, InspectionAIItemResult } from '@/types/inspection'
+import type { InspectionRecord, InspectionRecordItem, InspectionEquipmentNote, InspectionPhoto } from '@/types/inspection'
 import type { InspectionTemplateItem } from '@/types/equipment'
 
 const { Text } = Typography
@@ -65,9 +67,46 @@ export function InspectionExecuteView({ onClose }: Props) {
   const [done, setDone] = useState<Set<string>>(initDone)
   const [submitting, setSubmitting] = useState(false)
   const [photos, setPhotos] = useState<Record<string, File[]>>({})
+  const queryClient = useQueryClient()
   const cur = allEqs[step]
   const doneN = done.size
   const pct = total > 0 ? Math.round((doneN / total) * 100) : 0
+
+  // 任务里有已提交设备（或本会话刚提交）时拉详情，回填已完成设备的只读视图
+  const detailQuery = useQuery({
+    queryKey: ['inspection-execute-detail', executingTaskId],
+    queryFn: () => fetchInspectionHistoryDetail(executingTaskId!),
+    enabled: !!executingTaskId && (initDone.size > 0 || done.size > 0),
+  })
+  // 回填未就绪时不能拿默认值冒充已提交数据
+  const backfillState: 'loading' | 'error' | 'ready' = detailQuery.isPending
+    ? 'loading'
+    : detailQuery.isError ? 'error' : 'ready'
+
+  // 已提交的记录/说明/照片，按设备分组（纯派生）
+  const submitted = useMemo(() => {
+    const byEq: Record<string, { records: InspectionRecord[]; notes: InspectionEquipmentNote[]; photos: InspectionPhoto[] }> = {}
+    const detail = detailQuery.data
+    if (!detail) return byEq
+    for (const r of detail.records || []) {
+      const key = r.equipment_id || '__no__'
+      ;(byEq[key] ||= { records: [], notes: [], photos: [] }).records.push(r)
+    }
+    for (const n of detail.equipment_notes || []) {
+      ;(byEq[n.equipment_id] ||= { records: [], notes: [], photos: [] }).notes.push(n)
+    }
+    for (const p of detail.photos || []) {
+      if (!p.equipment_id) continue
+      ;(byEq[p.equipment_id] ||= { records: [], notes: [], photos: [] }).photos.push(p)
+    }
+    return byEq
+  }, [detailQuery.data])
+
+  // 回填数据拉取失败时明确告知，避免"无回填无提示"的静默降级
+  const detailError = detailQuery.isError
+  useEffect(() => {
+    if (detailError) message.warning('已提交数据加载失败，已完成设备的回填暂不可用；可返回任务列表重新进入重试')
+  }, [detailError, message])
 
   // location info for current equipment (line inspection only)
   let curLocName = ''
@@ -79,9 +118,9 @@ export function InspectionExecuteView({ onClose }: Props) {
     }
   }
 
-  const submitCheck = useCallback(async (records: InspectionRecordItem[]) => {
+  const submitCheck = useCallback(async (records: InspectionRecordItem[], note?: string) => {
     if (!executingTaskId || !cur) return
-    const result = await submitEquipmentCheck(executingTaskId, cur.equipment_id, { records })
+    const result = await submitEquipmentCheck(executingTaskId, cur.equipment_id, { records, note })
     if (!result.success) { message.error(result.error); return }
     const photoResults = await Promise.all(
       (photos[cur.equipment_id] || []).map(f => {
@@ -92,9 +131,11 @@ export function InspectionExecuteView({ onClose }: Props) {
     const firstFailure = photoResults.find(r => !r.success)
     if (firstFailure) { message.error(firstFailure.error); return }
     setDone(prev => new Set(prev).add(cur.equipment_id))
+    // 回填数据以服务端为准（含刚提交的记录、说明和照片），不做本地拼接
+    queryClient.invalidateQueries({ queryKey: ['inspection-execute-detail', executingTaskId] })
     message.success(`${cur.equipment_name} 检查完成`)
     if (step < total - 1) setStep(step + 1)
-  }, [executingTaskId, cur, step, total, photos, message])
+  }, [executingTaskId, cur, step, total, photos, message, queryClient])
 
   const finish = useCallback(() => {
     if (!executingTaskId) return
@@ -206,6 +247,10 @@ export function InspectionExecuteView({ onClose }: Props) {
           templateItems={executingTemplateItems[cur.equipment_id] || []} photos={curPhotos}
           onAddPhoto={f => addPhoto(cur.equipment_id, f)} onRemovePhoto={i => rmPhoto(cur.equipment_id, i)}
           onSubmit={submitCheck} disabled={done.has(cur.equipment_id)}
+          submittedRecords={submitted[cur.equipment_id]?.records}
+          submittedNotes={submitted[cur.equipment_id]?.notes}
+          archivedPhotos={submitted[cur.equipment_id]?.photos || []}
+          backfillState={backfillState}
         />
       )}
 
@@ -228,13 +273,35 @@ export function InspectionExecuteView({ onClose }: Props) {
    EquipmentCheckCard — single device check card
    ══════════════════════════════════════════════════ */
 
-interface CardProps { equipmentId: string; equipmentName: string; equipmentNo?: string; templateItems: InspectionTemplateItem[]; photos: File[]; onAddPhoto: (f: File) => void; onRemovePhoto: (i: number) => void; onSubmit: (records: InspectionRecordItem[]) => Promise<void>; disabled?: boolean }
+interface CardProps { equipmentId: string; equipmentName: string; equipmentNo?: string; templateItems: InspectionTemplateItem[]; photos: File[]; onAddPhoto: (f: File) => void; onRemovePhoto: (i: number) => void; onSubmit: (records: InspectionRecordItem[], note?: string) => Promise<void>; disabled?: boolean
+  /** 已提交的检查记录（disabled 时回填只读展示） */
+  submittedRecords?: InspectionRecord[]
+  /** 已提交的现场说明 */
+  submittedNotes?: InspectionEquipmentNote[]
+  /** 服务端已存档的照片（disabled 时展示缩略图） */
+  archivedPhotos?: InspectionPhoto[]
+  /** 回填查询状态：未就绪时不显示默认值，避免把异常记录显示成"正常" */
+  backfillState?: 'loading' | 'error' | 'ready' }
 
-function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateItems, photos, onAddPhoto, onRemovePhoto, onSubmit, disabled }: CardProps) {
+function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateItems, photos, onAddPhoto, onRemovePhoto, onSubmit, disabled, submittedRecords, submittedNotes, archivedPhotos = [], backfillState = 'ready' }: CardProps) {
   const { message } = App.useApp()
   const [subLoading, setSubLoading] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [formVals, setFormVals] = useState<Record<number, { result: string; actual_value: string; remark: string }>>({})
+  const [note, setNote] = useState('')
+
+  // 已提交记录按检查项映射：disabled 时输入框 value 直接取后端值（派生，不写 state）
+  const recMap = useMemo(() => {
+    const m = new Map<string, InspectionRecord>()
+    for (const r of submittedRecords || []) m.set(r.template_item_id, r)
+    return m
+  }, [submittedRecords])
+  const submittedNoteText = useMemo(
+    () => (submittedNotes || []).map(n => n.content).join('\n'),
+    [submittedNotes],
+  )
+  // 只读卡片在回填就绪前不展示默认值（正常/空），否则会把异常提交显示成正常
+  const backfillReady = !disabled || backfillState === 'ready'
 
   const photoUrls = useMemo(() => photos.map(f => URL.createObjectURL(f)), [photos])
   useEffect(() => { return () => { photoUrls.forEach(u => URL.revokeObjectURL(u)) } }, [photoUrls])
@@ -253,7 +320,7 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
       }
     }
     setSubLoading(true)
-    try { await onSubmit(records) }
+    try { await onSubmit(records, note.trim() || undefined) }
     catch (err: unknown) { message.error((err as Error).message || '提交失败') }
     finally { setSubLoading(false) }
   }
@@ -293,7 +360,11 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
     inp.click()
   }
 
-  const noPhoto = photos.length === 0
+  // 照片区状态机（disabled=已提交设备的只读态）：
+  // 本地照片优先（本会话刚拍的）；无本地时回填服务端存档；已提交但没照片是事实陈述，不再是"待拍照"警告
+  const archivedShow = disabled && backfillReady && photos.length === 0 && archivedPhotos.length > 0
+  const submittedNoPhoto = disabled && backfillReady && photos.length === 0 && archivedPhotos.length === 0
+  const noPhoto = photos.length === 0 && !archivedShow && !submittedNoPhoto
 
   return (
     <div style={{ background: C.canvas, borderRadius: 12, border: `1px solid ${C.hairline}`, overflow: 'hidden' }}>
@@ -309,11 +380,13 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
       <div style={{ padding: 20 }}>
         {/* photo area */}
         <div style={{ padding: 16, marginBottom: 20, background: noPhoto ? C.yellowBg : C.surfaceSoft, borderRadius: 10, border: noPhoto ? '2px dashed #f5d75e' : `1px solid #d9f3e1` }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: photos.length > 0 ? 12 : 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: photos.length > 0 || archivedShow ? 12 : 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <CameraOutlined style={{ fontSize: 15, color: noPhoto ? C.orange : C.green }} />
               <Text strong style={{ fontSize: 13 }}>到位照片</Text>
-              {!noPhoto && <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, color: C.green, background: C.greenBg }}>{photos.length} 张</span>}
+              {photos.length > 0 && <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, color: C.green, background: C.greenBg }}>{photos.length} 张</span>}
+              {archivedShow && <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, color: C.green, background: C.greenBg }}>已存档 {archivedPhotos.length} 张</span>}
+              {submittedNoPhoto && <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, color: C.stone, background: C.surface }}>已提交 · 无照片</span>}
               {noPhoto && <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, color: C.orange, background: C.orangeBg }}>待拍照</span>}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -325,7 +398,7 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
               </button>
             </div>
           </div>
-          {!noPhoto && (
+          {(photos.length > 0 || archivedShow) && (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {photos.map((f, i) => (
                 <div key={i} style={{ position: 'relative', width: 80, height: 80, borderRadius: 8, overflow: 'hidden', border: `1px solid ${C.hairline}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
@@ -334,6 +407,11 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
                     <span role="button" onClick={() => onRemovePhoto(i)} style={{ position: 'absolute', top: 3, right: 3, width: 18, height: 18, borderRadius: 9, background: 'rgba(224,49,49,0.88)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 10, fontWeight: 600, lineHeight: 1 }}>✕</span>
                   )}
                 </div>
+              ))}
+              {archivedShow && archivedPhotos.map(p => (
+                <Image key={p.id} src={getInspectionPhotoUrl(p.id)} alt={p.file_name} title={p.file_name}
+                  width={80} height={80}
+                  style={{ objectFit: 'cover', borderRadius: 8, border: `1px solid ${C.hairline}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }} />
               ))}
             </div>
           )}
@@ -353,19 +431,33 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
                 {item.data_type === 'numeric' && <Text type="secondary" style={{ fontSize: 11, display: 'block', marginLeft: 28, color: C.purple }}>数值型{item.unit ? ` · 单位 ${item.unit}` : ''} · 请填写纯数字</Text>}
                 {item.item_description && <Text type="secondary" style={{ fontSize: 11, display: 'block', marginLeft: 28 }}>{item.item_description}</Text>}
               </div>
-              <select value={formVals[i]?.result || '正常'} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], result: e.target.value } }))}
+              <select value={disabled ? (backfillReady ? (recMap.get(item.id)?.result || '正常') : '') : (formVals[i]?.result || '正常')} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], result: e.target.value } }))}
                 disabled={disabled} style={{ borderRadius: 6, border: `1px solid ${C.hairline}`, padding: '3px 8px', fontSize: 12, fontFamily: 'inherit', background: C.canvas }}>
+                {disabled && !backfillReady && <option value="">{backfillState === 'error' ? '回填失败' : '加载中…'}</option>}
                 <option value="正常">正常</option><option value="异常">异常</option><option value="跳过">跳过</option>
               </select>
             </div>
             <div style={{ display: 'flex', gap: 8, marginLeft: 28 }}>
-              <input placeholder={item.data_type === 'numeric' ? '纯数字实测值' : '实际值'} value={formVals[i]?.actual_value || ''} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], actual_value: e.target.value } }))}
+              <input placeholder={item.data_type === 'numeric' ? '纯数字实测值' : '实际值'} value={disabled ? (backfillReady ? (recMap.get(item.id)?.actual_value || '') : '') : (formVals[i]?.actual_value || '')} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], actual_value: e.target.value } }))}
                 disabled={disabled} style={{ flex: 1, borderRadius: 6, border: `1px solid ${C.hairline}`, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' }} />
-              <input placeholder="备注" value={formVals[i]?.remark || ''} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], remark: e.target.value } }))}
+              <input placeholder="备注" value={disabled ? (backfillReady ? (recMap.get(item.id)?.remark || '') : '') : (formVals[i]?.remark || '')} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], remark: e.target.value } }))}
                 disabled={disabled} style={{ flex: 1, borderRadius: 6, border: `1px solid ${C.hairline}`, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' }} />
             </div>
           </div>
         ))}
+
+        {/* equipment-level on-site note */}
+        <div style={{ padding: '12px 14px', marginBottom: 6, background: C.surfaceSoft, borderRadius: 8, border: `1px solid ${C.hairlineSoft}` }}>
+          <label htmlFor={`note-${equipmentId}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <FileTextOutlined style={{ fontSize: 13, color: C.slate }} />
+            <Text strong style={{ fontSize: 13 }}>现场说明</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>选填 · 计划外的突发情况</Text>
+          </label>
+          <textarea id={`note-${equipmentId}`} value={disabled ? (backfillReady ? submittedNoteText : '') : note} onChange={e => setNote(e.target.value)}
+            disabled={disabled} maxLength={2000} rows={2}
+            placeholder="不属于检查项的现场情况，如：旁边地面有油渍，疑似法兰渗漏"
+            style={{ width: '100%', boxSizing: 'border-box', borderRadius: 6, border: `1px solid ${C.hairline}`, padding: '6px 8px', fontSize: 12, fontFamily: 'inherit', resize: 'vertical', background: C.canvas, color: 'inherit' }} />
+        </div>
 
         {/* submit per equipment */}
         <div style={{ marginTop: 16, textAlign: 'right' }}>
@@ -375,7 +467,7 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
             fontSize: 13, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
             fontFamily: 'inherit', opacity: subLoading ? 0.7 : 1,
           }}>
-            <CheckOutlined />提交本设备检查
+            <CheckOutlined />{disabled ? '已提交' : '提交本设备检查'}
           </button>
         </div>
       </div>

@@ -69,6 +69,7 @@ _THIRD_PARTY_LOGGERS: dict[str, str] = {
     "openai": "WARNING",
     "asyncio": "WARNING",
     "watchfiles": "WARNING",
+    "pdfminer": "ERROR",
 }
 
 

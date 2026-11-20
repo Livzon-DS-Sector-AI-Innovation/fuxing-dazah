@@ -317,6 +317,17 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
         ],
       },
+      // COA 客户标准与出具登记：独立读码（同偏差/PQR 口径），
+      // manage/issue 写权限在后端隐含读，前端可见性同口径放行。
+      {
+        key: "coa",
+        label: "COA",
+        path: "/qa/coa",
+        children: [
+          { key: "coa-standards", label: "客户标准配置", path: "/qa/coa/standards", permissions: ["qa:coa:read", "qa:*:read", "qa:coa:standard:manage"] },
+          { key: "coa-issuance", label: "出具登记", path: "/qa/coa/issuance", permissions: ["qa:coa:read", "qa:*:read", "qa:coa:issue:create"] },
+        ],
+      },
       { key: "audit", label: "操作日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
     ],
   },

@@ -174,6 +174,8 @@ export interface InspectionRecordItem {
 
 export interface EquipmentCheckResult {
   records: InspectionRecordItem[]
+  /** 设备现场说明（计划外现象，不属任何检查项） */
+  note?: string
 }
 
 export interface InspectionRecord {
@@ -189,6 +191,18 @@ export interface InspectionRecord {
   expected_result?: string
   created_at: string
   route_location_id?: string | null
+}
+
+// ==================== 设备现场说明 ====================
+export interface InspectionEquipmentNote {
+  id: string
+  task_id: string
+  equipment_id: string
+  equipment_name: string | null
+  content: string
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
 }
 
 // ==================== 线路巡检提交 ====================
@@ -211,6 +225,7 @@ export interface InspectionPhoto {
 export interface InspectionTaskDetail extends InspectionTask {
   records: InspectionRecord[]
   photos: InspectionPhoto[]
+  equipment_notes: InspectionEquipmentNote[]
 }
 
 export interface InspectionHistoryFilters {

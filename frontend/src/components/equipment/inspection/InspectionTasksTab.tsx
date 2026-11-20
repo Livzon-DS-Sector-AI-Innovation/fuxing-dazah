@@ -143,12 +143,10 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
     const eqInfos = eqIds
       ? allEquipments.filter(e => eqIds.includes(e.id)).map(e => ({ id: e.id, name: e.name, no: e.equipment_no }))
       : undefined
-    // 获取任务详情以拿到已完成设备列表
-    let completedIds: string[] = []
-    try {
-      const taskDetail = await fetchInspectionTaskById(record.id)
-      completedIds = taskDetail.completed_equipment_ids || []
-    } catch { /* 获取失败不阻塞 */ }
+    // 已完成设备列表拿不到就不进执行页：否则已提交设备会显示成空白表单，
+    // 再次提交会用默认值覆盖真实（可能是异常的）记录
+    const taskDetail = await fetchInspectionTaskById(record.id)
+    const completedIds = taskDetail.completed_equipment_ids || []
     const totalItemCount = Object.values(items).reduce((sum, arr) => sum + arr.length, 0)
     setExecutingTask(
       record.id, record.plan_type, routeDetail, items,
