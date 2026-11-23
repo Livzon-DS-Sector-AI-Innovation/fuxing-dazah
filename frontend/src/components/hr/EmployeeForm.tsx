@@ -177,6 +177,17 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
                 { value: '产假复岗', label: '产假复岗' },
               ], true)}
               {dateItem('hire_date', '入职日期', true)}
+              <Form.Item name="is_key_position" label="是否重点岗位"
+                tooltip="重点岗位：试用期 6 个月（一般 3 个月）、入职满 60 天安全考试、应交证件追加">
+                <Select allowClear placeholder="请选择" options={[
+                  { value: true, label: '是（重点岗位）' },
+                  { value: false, label: '否' },
+                ]} />
+              </Form.Item>
+              <Form.Item name="direct_manager_name" label="直属上级"
+                tooltip="转正评估第一级审批人（姓名，通常由飞书源表同步）">
+                <Input placeholder="请输入直属上级姓名" autoComplete="off" />
+              </Form.Item>
               {commonInput('domain_account', '域账号')}
               {commonSelect('hr_analysis', '人力资源分析', [
                 { value: '生产一线', label: '生产一线' },

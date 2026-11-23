@@ -81,6 +81,22 @@ export default function DepartmentForm({ open, department, onClose, onSuccess }:
         >
           <Input.TextArea rows={2} placeholder="请输入部门描述" />
         </Form.Item>
+
+        <Form.Item
+          name="department_manager_name"
+          label="部门负责人"
+          tooltip="转正评估第二级审批人；转正前 30 天提醒接收人（姓名，需其登录过系统或在员工源表有账号）"
+        >
+          <Input placeholder="请输入部门负责人姓名" />
+        </Form.Item>
+
+        <Form.Item
+          name="supervising_leader_name"
+          label="分管领导"
+          tooltip="转正评估第三级审批人（姓名）"
+        >
+          <Input placeholder="请输入分管领导姓名" />
+        </Form.Item>
       </Form>
     </Modal>
   )

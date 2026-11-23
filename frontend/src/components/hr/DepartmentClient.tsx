@@ -178,6 +178,18 @@ export default function DepartmentClient({
         </a>
       ) },
     {
+      title: '部门负责人',
+      dataIndex: 'department_manager_name',
+      key: 'department_manager_name',
+      width: 110,
+      render: (v: string | null) => v || '-' },
+    {
+      title: '分管领导',
+      dataIndex: 'supervising_leader_name',
+      key: 'supervising_leader_name',
+      width: 110,
+      render: (v: string | null) => v || '-' },
+    {
       title: '描述',
       dataIndex: 'description',
       key: 'description',
