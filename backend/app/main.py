@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+from app.modules.hr import (  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+    mcp_tools as _hr_mcp_tools,
+)
 from app.modules.production import (  # noqa: E402, F401 — 触发 @mcp.tool() 注册
     mcp_tools as _production_mcp_tools,
 )
@@ -50,6 +53,7 @@ mcp_middleware = build_mcp_middleware()
 production_mcp_asgi = get_mcp_app(get_module_mcp("production"), path="/", middleware=mcp_middleware)
 equipment_mcp_asgi = get_mcp_app(get_module_mcp("equipment"), path="/", middleware=mcp_middleware)
 platform_mcp_asgi = get_mcp_app(get_module_mcp("platform"), path="/", middleware=mcp_middleware)
+hr_mcp_asgi = get_mcp_app(get_module_mcp("hr"), path="/", middleware=mcp_middleware)
 
 
 @asynccontextmanager
@@ -231,6 +235,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     async with async_session_factory() as perm_db:
         await bootstrap_permissions(perm_db, settings)
 
+    # 试用期时长配置加载进进程缓存（system_settings KV；每日提醒任务会再刷新）
+    from app.modules.hr.probation_config import reload_probation_config
+
+    async with async_session_factory() as hr_db:
+        await reload_probation_config(hr_db)
+
     yield
 
     stop_member_sync_flag.set()
@@ -330,7 +340,8 @@ app.mount(TOOL_IMAGE_URL_PREFIX, StaticFiles(directory=toolbox_images_dir), name
 app.mount("/mcp/production", production_mcp_asgi, name="mcp-production")
 app.mount("/mcp/equipment", equipment_mcp_asgi, name="mcp-equipment")
 app.mount("/mcp/platform", platform_mcp_asgi, name="mcp-platform")
-logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform")
+app.mount("/mcp/hr", hr_mcp_asgi, name="mcp-hr")
+logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform, /mcp/hr")
 
 
 @app.exception_handler(AppException)
