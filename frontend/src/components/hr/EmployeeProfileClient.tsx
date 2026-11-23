@@ -152,7 +152,7 @@ export default function EmployeeProfileClient({
         title="员工档案"
         description={
           syncInfo
-            ? `数据来源：飞书多维表格（单向同步）· 只读展示 · 每天 02:00 自动同步 · 上次同步：${lastSyncText}`
+            ? `数据来源：飞书多维表格（单向同步）· 只读展示 · 每小时自动同步 · 上次同步：${lastSyncText}`
             : undefined
         }
         actions={
