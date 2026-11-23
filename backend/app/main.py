@@ -219,10 +219,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     scheduler_registry.register_task(EMPLOYEE_SYNC_TASK)
 
-    # 试用期转正到期提醒（每天 09:00；接收人未配置时仅日志）
-    from app.modules.hr.probation_scheduled import PROBATION_REMINDER_TASK
+    # 人事提醒任务（转正 09:00 / 合同到期 09:10；接收人未配置时仅日志，
+    # 配置存 hr.system_settings，见 hr/reminder/ 聚合注册说明）
+    from app.modules.hr.reminder import register_reminder_tasks
 
-    scheduler_registry.register_task(PROBATION_REMINDER_TASK)
+    register_reminder_tasks(scheduler_registry)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 
