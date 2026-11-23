@@ -42,7 +42,6 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 # ── 业务模块 logger 前缀 → 短名称映射（用于文件命名和终端列显示）──
 _MODULE_PREFIX_MAP: dict[str, str] = {
-    "app.modules.safety": "safety",
     "app.modules.equipment": "equipment",
     "app.modules.energy": "energy",
     "app.modules.hr": "hr",
@@ -192,7 +191,7 @@ class JsonFormatter(logging.Formatter):
 
     输出示例：
         {"timestamp":"2026-06-24T18:30:15.123456+08:00","level":"INFO","logger":"...",
-         "module":"safety","message":"...","request_id":"3f8a2b1c"}
+         "module":"equipment","message":"...","request_id":"3f8a2b1c"}
     """
 
     _TZ = APP_TZ
@@ -234,7 +233,7 @@ class JsonFormatter(logging.Formatter):
 def _resolve_module_set(raw: str) -> set[str]:
     """将逗号分隔的模块短名解析为 logger 前缀集合。
 
-    支持短名称（safety → app.modules.safety）和完整前缀。
+    支持短名称（equipment → app.modules.equipment）和完整前缀。
     """
     if not raw.strip():
         return set()

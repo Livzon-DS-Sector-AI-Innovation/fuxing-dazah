@@ -136,28 +136,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             name="title-review-ws",
         )
 
-    # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
-    from app.modules.safety.feishu.event_client import start_ws, stop_ws
-
-    safety_ws_task = asyncio.create_task(start_ws())
-
     # ── 质量模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
     from app.modules.quality.feishu.lifecycle import start_ws_task
 
     start_ws_task()
-
-    # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
-    from app.modules.safety.feishu.catch_up import recover_unprocessed_records
-
-    recovery_task = asyncio.create_task(recover_unprocessed_records())  # noqa: F841 — 持有引用防止任务被 GC
-
-    # ── 安全模块定时任务调度引擎 ──
-    from app.modules.safety.scheduler import (
-        scheduled_task_loop,
-        stop_scheduled_task_flag,
-    )
-
-    scheduler_task = asyncio.create_task(scheduled_task_loop())
 
     # ── 统一调度引擎（平台级，各模块可渐进迁移）──
     from app.platform.scheduler import SchedulerEngine, SchedulerRegistry
@@ -236,18 +218,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     stop_member_sync_flag.set()
     stop_maintenance_plan_flag.set()
 
-    # 停止安全模块 WebSocket
-    await stop_ws()
-    safety_ws_task.cancel()
-
     # 停止质量模块 WebSocket
     from app.modules.quality.feishu.lifecycle import stop_ws_task
 
     await stop_ws_task()
-
-    # 停止定时任务调度引擎
-    stop_scheduled_task_flag.set()
-    scheduler_task.cancel()
 
     # ── 停止统一调度引擎 ──
     scheduler_engine.stop()

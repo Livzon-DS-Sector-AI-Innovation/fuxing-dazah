@@ -41,14 +41,6 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
         description="设备台账、保养、维修、巡检和备件关联数据入口。",
     ),
     ModuleDefinition(
-        code="safety",
-        name="安全管理",
-        path="/safety",
-        db_schema="safety",
-        owner_hint="安全管理负责人",
-        description="隐患、作业票、风险点、培训和安全检查数据入口。",
-    ),
-    ModuleDefinition(
         code="environment",
         name="环保管理",
         path="/environment",

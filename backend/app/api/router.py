@@ -13,7 +13,6 @@ from app.modules.qa.api import router as qa_router
 from app.modules.quality import router as quality_router
 from app.modules.registration import router as registration_router
 from app.modules.research import router as research_router
-from app.modules.safety import router as safety_router
 from app.modules.toolbox import router as toolbox_router
 from app.modules.warehouse import router as warehouse_router
 from app.platform.feedback import router as feedback_router
@@ -41,7 +40,6 @@ api_router.include_router(sync_router, prefix="/identity", tags=["飞书同步"]
 api_router.include_router(system_router, prefix="/system", tags=["系统"])
 api_router.include_router(production_router, prefix="/production", tags=["生产管理"])
 api_router.include_router(equipment_router, prefix="/equipment", tags=["设备管理"])
-api_router.include_router(safety_router, prefix="/safety", tags=["安全管理"])
 api_router.include_router(environment_router, prefix="/environment", tags=["环保管理"])
 api_router.include_router(energy_router, prefix="/energy", tags=["能源管理"])
 api_router.include_router(warehouse_router, prefix="/warehouse", tags=["仓储管理"])

@@ -65,7 +65,7 @@ def test_reference_target_modules_are_dynamic() -> None:
     codes = {module["code"] for module in modules}
     assert "equipment" not in codes
     assert "toolbox" not in codes
-    assert {"safety", "environment", "quality", "warehouse", "meter"} <= codes
+    assert {"environment", "quality", "warehouse", "meter"} <= codes
 
 
 def test_new_registry_module_needs_no_reference_code_change(
@@ -102,7 +102,7 @@ def test_invalid_reference_target_rejected(target: str) -> None:
 
 @pytest.mark.parametrize(
     "target_module",
-    ["safety", "environment", "quality", "warehouse", "meter"],
+    ["environment", "quality", "warehouse", "meter"],
 )
 async def test_auto_publish_owned_equipment_for_registered_module(
     db_session: AsyncSession,

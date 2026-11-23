@@ -99,10 +99,6 @@ class Settings(BaseSettings):
                 self.HR_EMPLOYEE_SYNC_FEISHU_APP_SECRET = self.HR_FEISHU_APP_SECRET
         return self
 
-    # Feishu 安全模块机器人（独立应用凭证）
-    SAFETY_FEISHU_APP_ID: str = ""
-    SAFETY_FEISHU_APP_SECRET: str = ""
-
     # Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
