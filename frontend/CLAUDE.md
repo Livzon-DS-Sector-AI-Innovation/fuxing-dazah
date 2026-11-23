@@ -14,14 +14,14 @@ UI或组件样式务必遵守：@DESIGN.md
 - 状态管理：Zustand（stores/ 目录）
 - 服务端数据请求：直接 fetch（Server Component 内）
 - 客户端数据请求：React Query（@tanstack/react-query）
-- 表单：React Hook Form + Zod 校验
+- 表单：Ant Design Form（rules 校验）
 
 ## 目录职责
 
 - app/(dashboard)/<模块>/     路由页面，只做数据获取和布局组装
 - components/<模块>/          该模块所有 UI 组件
 - components/shared/          公共组件，不要擅自修改，如需新增找架构负责人
-- actions/<模块>.ts           该模块所有写操作（Server Actions）
+- actions/<模块>.ts           该模块的 Server Actions 写操作（存量模式）
 - stores/<模块>.ts            该模块客户端状态
 - types/<模块>.ts             该模块 TypeScript 类型
 - lib/                        基础设施，只允许修改自己负责模块的部分
@@ -127,24 +127,21 @@ const handleOpen = () => {
 
 **判断标准：effect 里的 setState 是不是在"同步响应某个 props/state 变化"？如果是，大概率应该改成派生计算或事件处理器初始化。**
 
-## 写操作必须用 Server Actions
+## 数据请求与写操作
 
-所有 POST/PUT/DELETE 操作写在 actions/ 目录，不要在 Client 组件里直接 fetch 写接口。
+两种并存模式：
 
-\`\`\`ts
-// actions/production.ts
-'use server'
-export async function createBatch(data: CreateBatchInput) {
-  const token = await getServerToken()
-  const res = await fetch(`${process.env.API_BASE_URL}/production/batches`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  })
-  if (!res.ok) throw new Error('创建批次失败')
-  revalidatePath('/production')
+1. **客户端直连（主力模式）**：`lib/api/<模块>.ts` 用 `lib/http-client.ts` 的 `apiGet/apiPost/apiPut/apiDelete` 统一携带 token 调用后端，读和写（POST/PUT/DELETE）都走这条路，配合 React Query（模块级 QueryProvider + useQuery）使用。equipment、qa、meter、inspection 等模块采用此模式，新页面优先走这条路。
+2. **Server Actions（存量模式）**：`actions/<模块>.ts` 服务端代理调用后端后 `revalidatePath`。注意 `'use server'` 里 throw 的错误消息在生产构建会被脱敏成 digest 文案（本地测不出），必须结构化返回 `{ success, data } | { success, error }`。
+
+```ts
+// lib/api/<模块>.ts —— 客户端直连示例
+import { apiPost } from '@/lib/http-client'
+
+export async function createWorkOrder(data: CreateWorkOrderInput): Promise<WorkOrder> {
+  return apiPost(`${API_BASE_URL}/api/v1/equipment/work-orders`, data)
 }
-\`\`\`
+```
 
 ## 提交代码
 使用git将代码push到远程仓库前，必须先使用pnpm build命令保证无任何错误。
@@ -152,7 +149,7 @@ export async function createBatch(data: CreateBatchInput) {
 ## 不允许修改的文件
 
 以下文件只有架构负责人可以修改，如有需求提 PR 说明原因：
-- src/middleware.ts
+- src/proxy.ts
 - src/app/layout.tsx
 - src/components/shared/ 下所有文件
 - src/hooks/usePermission.ts
@@ -170,7 +167,7 @@ export async function createBatch(data: CreateBatchInput) {
 1. 在 app/(dashboard)/<模块>/ 下新建目录和 page.tsx
 2. page.tsx 里 fetch 数据，传给 components/<模块>/ 里的组件
 3. 组件写在 components/<模块>/ 里，需要交互的加 'use client'
-4. 如果有写操作，写在 actions/<模块>.ts 里
+4. 数据请求（含写操作）优先写在 lib/api/<模块>.ts；沿用 Server Actions 模式的模块写在 actions/<模块>.ts
 5. 类型定义更新到 types/<模块>.ts
 6. 新增的对外组件记得在 components/<模块>/index.ts 里导出
 

@@ -142,3 +142,8 @@ MODULES_BY_CODE = {module.code: module for module in BUSINESS_MODULES}
 BUSINESS_SCHEMAS = tuple(
     module.db_schema for module in BUSINESS_MODULES if module.db_schema is not None
 )
+
+# 上传目录中只能经带权限的代理接口读取、公共静态挂载必须拒绝的前缀。
+# 各模块的敏感附件目录在此登记（此前寄居在 main.py，模块加私有目录要改全局）：
+# qa：质量原件（走 QA 代理接口）；feedback：用户反馈截图（本人或管理员才可读）。
+PRIVATE_UPLOAD_PREFIXES: tuple[str, ...] = ("qa", "feedback")
