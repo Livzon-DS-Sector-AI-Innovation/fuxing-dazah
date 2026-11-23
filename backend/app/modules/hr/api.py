@@ -6959,3 +6959,95 @@ async def delete_incident(
     rec.is_deleted = True
     await session.flush()
     return success_response(message="已删除")
+
+
+# ─── 台账 Excel 导入（两步预检式：precheck 展示重复/错误明细 → commit 落库）───
+
+
+def _ledger_import_scope(hr_scope: HrAccessContext) -> set[str] | None:
+    """导入的部门范围：不受限=全量；受限=授权部门集合（无授权直接 403）。"""
+    if hr_scope.is_unrestricted:
+        return None
+    if not hr_scope.scoped_departments:
+        raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
+    return set(hr_scope.scoped_departments)
+
+
+async def _read_import_file(file: UploadFile) -> bytes:
+    """校验并读取导入文件（仅 .xlsx，旧 .xls 请先另存）。"""
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式（旧版 .xls 请先用 Excel/WPS 另存为 .xlsx）")
+    return await file.read()
+
+
+@router.get("/ledger-import/{ledger}/template", summary="下载台账导入模板（固定列头）")
+async def download_ledger_import_template(
+    ledger: str,
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.ledger_import import build_template, get_spec
+
+    spec = get_spec(ledger)
+    if not spec:
+        raise HTTPException(404, f"未知台账类型: {ledger}")
+    wb = build_template(spec)
+    return _xlsx_response(wb, f"{spec.label}导入模板.xlsx")
+
+
+@router.post("/ledger-import/{ledger}/precheck", summary="台账导入预检（解析+查重，不写库）")
+async def precheck_ledger_import(
+    ledger: str,
+    file: UploadFile,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 解析上传文件并与库中按查重键比对，返回新增/重复/错误统计及明细（供确认弹窗展示，不写库）
+    from app.modules.hr.ledger_import import get_spec, parse_ledger_excel, precheck_import
+
+    spec = get_spec(ledger)
+    if not spec:
+        raise HTTPException(404, f"未知台账类型: {ledger}")
+    allowed = _ledger_import_scope(hr_scope)
+    content = await _read_import_file(file)
+    try:
+        parsed = await parse_ledger_excel(content, spec)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = await precheck_import(spec, parsed, session, allowed_departments=allowed)
+    return success_response(data=result)
+
+
+@router.post("/ledger-import/{ledger}/commit", summary="台账导入落库（重复按所选模式处理）")
+async def commit_ledger_import(
+    ledger: str,
+    file: UploadFile,
+    duplicate_mode: str = Form(..., description="overwrite=覆盖重复行 / skip=跳过重复行"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 执行导入：overwrite 覆盖命中行（非键字段以 Excel 非空值为准），skip 跳过重复行仅导入新增
+    from app.modules.hr.ledger_import import commit_import, get_spec, parse_ledger_excel
+
+    spec = get_spec(ledger)
+    if not spec:
+        raise HTTPException(404, f"未知台账类型: {ledger}")
+    allowed = _ledger_import_scope(hr_scope)
+    content = await _read_import_file(file)
+    try:
+        parsed = await parse_ledger_excel(content, spec)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        result = await commit_import(spec, parsed, duplicate_mode, session, allowed_departments=allowed)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    parts = [f"新增 {result['created']} 条"]
+    if result["updated"]:
+        parts.append(f"覆盖更新 {result['updated']} 条")
+    if result["skipped"]:
+        parts.append(f"跳过重复 {result['skipped']} 条")
+    if result["skipped_scope"]:
+        parts.append(f"越权跳过 {result['skipped_scope']} 条")
+    if result["errors"]:
+        parts.append(f"失败 {len(result['errors'])} 条")
+    return success_response(data=result, message="，".join(parts))
