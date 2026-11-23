@@ -41,6 +41,11 @@ _PROBATION_CATEGORIES = {"试用期", "实习转试用", "实习生"}
 # 源表对齐下线，保留机制以备后续新增
 _LIST_FIELDS: set[str] = set()
 
+# 布尔字段：源表可能是 checkbox（bool）或单选「是/否」，统一归一
+_BOOL_FIELDS: set[str] = {"is_key_position"}
+_BOOL_TRUE = {"是", "true", "1", "y", "yes", "on"}
+_BOOL_FALSE = {"否", "false", "0", "n", "no", "off", "无"}
+
 # 飞书日期字段的毫秒时间戳按东八区语义（date-only 存当日 00:00 +08）；
 # 用 UTC 解析会差一天。写入也按东八区零点，读回一致。
 _TZ_CN = timezone(timedelta(hours=8))
@@ -183,6 +188,15 @@ def _convert_scalar(field_name: str, value: Any) -> Any:
             return int(float(str(value)))
         except (ValueError, TypeError):
             return _SKIP
+    if field_name in _BOOL_FIELDS:
+        if isinstance(value, bool):
+            return value
+        token = str(value).strip().lower()
+        if token in _BOOL_TRUE:
+            return True
+        if token in _BOOL_FALSE:
+            return False
+        return _SKIP
     if field_name in _LIST_FIELDS:
         if isinstance(value, list):
             items = [str(v).strip() for v in value if str(v).strip()]

@@ -285,6 +285,19 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/employee-info-collections/.*", "hr:profile:update"),
     (r"/probation-reviews", {"GET": "hr:profile:read", "POST": "hr:profile:update"}),
     (r"/probation-reviews/.*", "hr:profile:update"),
+    # 试用期安全考试（安全办录入；查看随档案读权限）
+    (r"/probation-safety-exams", {"GET": "hr:profile:read", "POST": "hr:probation:exam:manage",
+                                  "DELETE": "hr:probation:exam:manage"}),
+    # 员工证件资料库（具体子路径在通用条目之前）
+    (r"/certificates/access-logs", "hr:certificate:audit"),
+    (r"/certificates/requirements", {"GET": "hr:certificate:read",
+                                     "POST": "hr:certificate:manage",
+                                     "DELETE": "hr:certificate:manage"}),
+    (r"/certificates/.*/file", "hr:certificate:read"),
+    (r"/certificates", {"GET": "hr:certificate:read", "POST": "hr:certificate:manage",
+                        "PUT": "hr:certificate:manage", "DELETE": "hr:certificate:manage"}),
+    # 员工证件视图/上传（挂在员工档案路径下，须在通用 /employees 之前）
+    (r"/employees/.*/certificates", {"GET": "hr:certificate:read", "POST": "hr:certificate:manage"}),
     (r"/employees/export", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
     (r"/employees/.*/onboarding-training-record", "hr:training:document"),

@@ -317,6 +317,8 @@ class EmployeeService:
         "学位类型": "degree_type",
         "毕业证书": "graduation_certificate",
         "人力资源分析": "hr_analysis",
+        "是否重点岗位": "is_key_position",
+        "直属上级": "direct_manager_name",
     }
 
     # Excel 上传时，以下字段全部以 Excel 为准（Excel 中未出现的字段置空）
@@ -341,6 +343,7 @@ class EmployeeService:
         # 新数据源字段
         "ethnicity", "departure_reason", "degree_type",
         "graduation_certificate", "hr_analysis",
+        "is_key_position", "direct_manager_name",
     }
 
     _DATE_FIELDS: set[str] = {

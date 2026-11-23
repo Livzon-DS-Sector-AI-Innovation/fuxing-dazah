@@ -11,6 +11,8 @@ class DepartmentBase(BaseModel):
     name: str = Field(..., max_length=64, description="部门名称")
     code: str = Field(..., max_length=32, description="部门编码")
     description: str | None = Field(None, max_length=256, description="部门描述")
+    department_manager_name: str | None = Field(None, max_length=64, description="部门负责人（转正审批第二级）")
+    supervising_leader_name: str | None = Field(None, max_length=64, description="分管领导（转正审批第三级）")
 
 
 class DepartmentCreate(DepartmentBase):
@@ -21,6 +23,8 @@ class DepartmentUpdate(BaseModel):
     name: str | None = Field(None, max_length=64)
     code: str | None = Field(None, max_length=32)
     description: str | None = Field(None, max_length=256)
+    department_manager_name: str | None = Field(None, max_length=64)
+    supervising_leader_name: str | None = Field(None, max_length=64)
 
 
 class DepartmentResponse(DepartmentBase):
