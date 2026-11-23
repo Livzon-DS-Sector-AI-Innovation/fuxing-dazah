@@ -1,9 +1,5 @@
 'use client'
 
-// 五金库月度采购计划（二期 M5）：25 日自动生成 P7 公式草案（安全库存+
-// 月使用量−25日库存），人工编辑（重跑保留）、AI 用量注释（建议态）、
-// 制度附件 4 表样导出。设计 §2.6/§十一。
-
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
@@ -15,7 +11,6 @@ import {
   Popconfirm,
   Space,
   Table,
-  Tag,
   Tooltip,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
@@ -29,7 +24,8 @@ import {
 } from '@/lib/api/warehouse-hardware'
 import type { HardwarePlanItemRecord, HardwarePlanRecord } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-import { PageHeader } from '@/components/warehouse'
+import { EmptyGuide, PageHeader, SectionCard, StatusTag } from '@/components/warehouse'
+import { formatQty } from './format'
 
 export function HardwarePlansBoard() {
   const { message } = App.useApp()
@@ -69,13 +65,13 @@ export function HardwarePlansBoard() {
       title: '状态',
       dataIndex: 'status',
       width: 90,
-      render: (v: string) => (v === 'exported' ? <Tag color="green">已导出</Tag> : <Tag>草案</Tag>),
+      render: (v: string) => (v === 'exported' ? <StatusTag tone="ok" label="已导出" /> : <StatusTag label="草案" />),
     },
     {
       title: 'AI 注释',
       dataIndex: 'annotated',
       width: 90,
-      render: (v: boolean) => (v ? <Tag color="blue">已注释</Tag> : <Tag>未跑/失败</Tag>),
+      render: (v: boolean) => (v ? <StatusTag tone="info" label="已注释" /> : <StatusTag label="未生成" />),
     },
     {
       title: '快照时间',
@@ -109,35 +105,38 @@ export function HardwarePlansBoard() {
     <div className="flex flex-col gap-4">
       <PageHeader
         breadcrumb={['仓储管理', '五金库', '月度采购计划']}
-        title="五金月度采购计划"
-        description="每月 25 日 09:00 自动生成次月草案：月采购量=安全库存+月使用量−25日库存（P7）；人工编辑重跑保留；导出制度附件 4 表样"
+        title="五金采购计划"
       />
-      <div className="flex flex-wrap gap-2">
-        {canManage && (
-          <Popconfirm
-            title="生成/重跑次月计划草案？（人工编辑行保留，其余按最新快照刷新）"
-            onConfirm={() => genMut.mutate()}
-          >
-            <Button type="primary" icon={<ThunderboltOutlined />} loading={genMut.isPending}>
-              生成/重跑次月草案
+      <SectionCard
+        title="采购计划"
+        action={
+          <Space wrap>
+            {canManage && (
+              <Popconfirm
+                title="生成/重跑次月计划草案？（人工编辑行保留，其余按最新快照刷新）"
+                onConfirm={() => genMut.mutate()}
+              >
+                <Button type="primary" icon={<ThunderboltOutlined />} loading={genMut.isPending}>
+                  生成/重跑次月草案
+                </Button>
+              </Popconfirm>
+            )}
+            <Button icon={<ReloadOutlined />} onClick={() => invalidate()}>
+              刷新
             </Button>
-          </Popconfirm>
-        )}
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={() => invalidate()}
-        >
-          刷新
-        </Button>
-      </div>
-      <Table
-        rowKey="id"
-        size="small"
-        loading={list.isLoading}
-        dataSource={list.data?.items ?? []}
-        columns={columns}
-        pagination={{ total: list.data?.total ?? 0, pageSize: 20 }}
-      />
+          </Space>
+        }
+      >
+        <Table
+          rowKey="id"
+          size="middle"
+          loading={list.isLoading}
+          dataSource={list.data?.items ?? []}
+          columns={columns}
+          locale={{ emptyText: <EmptyGuide compact title="暂无采购计划" description="点击「生成/重跑次月草案」按月生成" /> }}
+          pagination={{ total: list.data?.total ?? 0, pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+        />
+      </SectionCard>
 
       <Drawer
         title={detailMonth ? `${detailMonth} 计划草案` : ''}
@@ -196,9 +195,9 @@ function PlanDetail({
           <div className="font-medium">
             {r.name}
             {r.is_edited && (
-              <Tag color="orange" className="ml-1">
-                已编辑
-              </Tag>
+              <span className="ml-1">
+                <StatusTag tone="warn" label="已编辑" />
+              </span>
             )}
           </div>
           <div className="text-xs text-gray-400">
@@ -207,29 +206,31 @@ function PlanDetail({
         </div>
       ),
     },
-    { title: '月需求合计', dataIndex: 'monthly_demand_total', width: 90 },
-    { title: '安全库存', dataIndex: 'safety_stock', width: 85 },
-    { title: '25日库存', dataIndex: 'stock_on_25th', width: 85 },
-    { title: '月使用量', dataIndex: 'monthly_usage', width: 85 },
+    { title: '月需求合计', dataIndex: 'monthly_demand_total', className: 'tabular-nums', width: 90, render: (v: unknown) => formatQty(v) },
+    { title: '安全库存', dataIndex: 'safety_stock', className: 'tabular-nums', width: 85, render: (v: unknown) => formatQty(v) },
+    { title: '25日库存', dataIndex: 'stock_on_25th', className: 'tabular-nums', width: 85, render: (v: unknown) => formatQty(v) },
+    { title: '月使用量', dataIndex: 'monthly_usage', className: 'tabular-nums', width: 85, render: (v: unknown) => formatQty(v) },
     {
       title: '月度采购量',
+      className: 'tabular-nums',
       width: editable ? 130 : 95,
       render: (_, r) =>
         editable ? (
           <InputNumber
             size="small"
             min={0}
+            precision={0}
             defaultValue={r.purchase_qty}
             style={{ width: 100 }}
             onBlur={(e) => {
               const v = Number(e.target.value)
-              if (e.target.value !== '' && !Number.isNaN(v) && v !== r.purchase_qty) {
+              if (e.target.value !== '' && !Number.isNaN(v) && v !== Number(r.purchase_qty)) {
                 editMut.mutate({ id: r.id, purchase_qty: v })
               }
             }}
           />
         ) : (
-          r.purchase_qty
+          formatQty(r.purchase_qty)
         ),
     },
     {

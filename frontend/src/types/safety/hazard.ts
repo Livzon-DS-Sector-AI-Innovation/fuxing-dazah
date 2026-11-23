@@ -64,7 +64,7 @@ export interface HazardReport {
   progress_note_updated_at?: string | null  // 目前进展最后更新时间（Bitable 同步落库时刻）
   // ── ⑤ AI 评分（D=L×E×C×X，制度 §10.3）──
   score?: number | null  // 直读模式透传；未评分为 null
-  score_note?: string | null  // 「H｜四维=D｜评语｜依据[｜重大判定][｜⚠]」，首段即 H/M/L
+  score_note?: string | null  // 「H｜四维=D｜L/E/C/X 档位分值+理由｜评语｜依据[｜重大判定][｜⚠]」，首段即 H/M/L
   // ── 字段口径治理（P0-B）：人工优先 + AI fallback 的统一读口径 ──
   // 直读模式有值；mirror 模式（旧 DB 路径）为 null/undefined，前端回退旧口径展示。
   // effective_* 与原始 hazard_level/type/category 同域（EN 枚举码），中文 label 由前端映射；

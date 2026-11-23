@@ -1,17 +1,11 @@
 'use client'
 
-// 五金库出入库工作台（M2）：入库台（拍照 OCR→草稿一屏确认→入账 /
-// manual 兜底登记 / direct 直发）+ 领用申请（原「五金领用」页并入，
-// 2026-11-06 菜单改造：申请→审批是出入库流程一环）+ 发料台（待发料+FIFO+实发确认）+
-// 退库 + 流水台账。设计 §七。
-
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import {
   Alert,
   App,
   Button,
-  Drawer,
   Form,
   Input,
   InputNumber,
@@ -21,99 +15,156 @@ import {
   Space,
   Spin,
   Table,
-  Tag,
   Upload,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { CameraOutlined, CheckOutlined, CloseOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
+import { CameraOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   acceptHardwareReceiptClient,
   createHardwareReceiptClient,
-  fetchHardwareLocationsClient,
   fetchHardwareMaterialsClient,
-  fetchHardwareMovementsClient,
   fetchHardwareReceiptsClient,
   fetchHardwareRequisitionsClient,
-  fetchHardwareStockDetailClient,
-  issueHardwareRequisitionClient,
-  markHardwareMovementsEnteredClient,
-  rejectHardwareReceiptClient,
+  fetchHardwareReturnsClient,
   importHardwareErpFile,
-  downloadReceiptTemplateUrl,
   parseHardwareReceiptExcelClient,
   photoScreenHardwareReceiptClient,
+  rejectHardwareReceiptClient,
 } from '@/lib/api/warehouse-hardware'
 import {
-  HARDWARE_MOVEMENT_BIZ_LABEL,
+  HARDWARE_MANAGED_CLASS_LABEL,
   HARDWARE_RECEIPT_SOURCE_LABEL,
   HARDWARE_RECEIPT_STATUS_LABEL,
-  HARDWARE_REQ_STATUS_LABEL,
-  type HardwareMovementRecord,
+  type HardwareMaterialRecord,
   type HardwareReceiptParseResult,
   type HardwareReceiptRecord,
-  type HardwareRequisitionRecord,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
 import { HardwareRequisitions } from './HardwareRequisitions'
 import { HardwareReturnPanel } from './HardwareReturnPanel'
-import { PageHeader, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
+import { HardwareReceiptErpDocs, docStatusOf, type ErpDocGroup, type ErpDocGroupStatus, type ErpDocRow } from './HardwareReceiptErpDocs'
+import { erpMatchKey, loadErpMatchMemory, saveErpMatch } from './erpMatchMemory'
+import { formatQty } from './format'
+import { MANAGED_CLASS_TONE, RECEIPT_STATUS_TONE } from './constants'
+import { PageHeader, QueryFilter, SectionCard, StatCard, StatusTag, EmptyGuide } from '@/components/warehouse'
 
-type TabKey = 'inbound' | 'requisition' | 'issue' | 'returns' | 'movements'
+type TabKey = 'inbound' | 'outbound' | 'returns'
 
-const INOUT_TAB_KEYS: readonly TabKey[] = [
-  'inbound',
-  'requisition',
-  'issue',
-  'returns',
-  'movements',
-]
+const TAB_KEYS: readonly TabKey[] = ['inbound', 'outbound', 'returns']
+
+const TAB_ALIASES: Record<string, TabKey> = {
+  inbound: 'inbound',
+  outbound: 'outbound',
+  returns: 'returns',
+  requisition: 'outbound',
+  issue: 'outbound',
+}
 
 export function HardwareInoutBoard() {
   const [tab, setTab] = useState<TabKey>('inbound')
+  const [outboundFocus, setOutboundFocus] = useState<string | undefined>(undefined)
 
-  // ?tab= 深链（/hardware/requisitions 301 跳转目标）：挂载后读一次，非法值回落默认
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('tab')
-    if (t && (INOUT_TAB_KEYS as readonly string[]).includes(t)) {
+    if (t && TAB_KEYS.includes(t as TabKey)) {
       setTab(t as TabKey)
+    } else if (t && TAB_ALIASES[t]) {
+      setTab(TAB_ALIASES[t])
     }
   }, [])
 
+  const openTab = (next: TabKey, focusStatus?: string) => {
+    setTab(next)
+    if (next === 'outbound') setOutboundFocus(focusStatus)
+  }
+
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader
-        breadcrumb={['仓储管理', '五金库', '出入库工作台']}
-        title="五金出入库工作台"
-        description="入库台（拍照 OCR / 手动登记）· 领用申请（共用类审批预扣）· 发料台（待发料 FIFO 实扣）· 退库 · 流水与 ERP 标记"
-      />
+      <PageHeader breadcrumb={['仓储管理', '五金库', '出入库工作台']} title="五金出入库工作台" />
+      <InoutStatCards onOpen={openTab} />
       <Segmented
         value={tab}
         onChange={(v) => setTab(v as TabKey)}
         options={[
-          { value: 'inbound', label: '入库台' },
-          { value: 'requisition', label: '领用申请' },
-          { value: 'issue', label: '发料台' },
-          { value: 'returns', label: '退库' },
-          { value: 'movements', label: '流水台账' },
+          { value: 'inbound', label: '入库' },
+          { value: 'outbound', label: '出库' },
+          { value: 'returns', label: '退料' },
         ]}
       />
       {tab === 'inbound' && <InboundPanel />}
-      {tab === 'requisition' && <HardwareRequisitions />}
-      {tab === 'issue' && <IssuePanel />}
+      {tab === 'outbound' && <HardwareRequisitions key={outboundFocus ?? 'none'} focusStatus={outboundFocus} />}
       {tab === 'returns' && <HardwareReturnPanel />}
-      {tab === 'movements' && <MovementsPanel />}
     </div>
   )
 }
 
-// ── 入库台 ──
+function InoutStatCards({ onOpen }: { onOpen: (tab: TabKey, focusStatus?: string) => void }) {
+  const { data: draftReceipts, isLoading: l1 } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'receipts', 'stat-draft'],
+    queryFn: () => fetchHardwareReceiptsClient({ status: 'draft', page: 1, pageSize: 1 }),
+    refetchInterval: 60_000,
+  })
+  const { data: pendingReq, isLoading: l2 } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'requisitions', 'stat-pending'],
+    queryFn: () => fetchHardwareRequisitionsClient({ status: 'pending', page: 1, pageSize: 1 }),
+    refetchInterval: 60_000,
+  })
+  const { data: approvedReq, isLoading: l3 } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'requisitions', 'stat-approved'],
+    queryFn: () => fetchHardwareRequisitionsClient({ status: 'approved', page: 1, pageSize: 1 }),
+    refetchInterval: 60_000,
+  })
+  const { data: draftReturns, isLoading: l4 } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'returns', 'stat-draft'],
+    queryFn: () => fetchHardwareReturnsClient({ status: 'draft', page: 1, pageSize: 1 }),
+    refetchInterval: 60_000,
+  })
 
-const RECEIPT_STATUS_TONE = {
-  draft: 'warn',
-  accepted: 'ok',
-  rejected: 'danger',
-} as const
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <StatCard
+        label="待确认入库"
+        value={(draftReceipts?.total ?? 0).toLocaleString()}
+        sub="单"
+        tone="warn"
+        loading={l1}
+        onClick={() => onOpen('inbound')}
+      />
+      <StatCard
+        label="待审批申请"
+        value={(pendingReq?.total ?? 0).toLocaleString()}
+        sub="单"
+        tone="info"
+        loading={l2}
+        onClick={() => onOpen('outbound', 'pending')}
+      />
+      <StatCard
+        label="待发料"
+        value={(approvedReq?.total ?? 0).toLocaleString()}
+        sub="单"
+        tone="primary"
+        loading={l3}
+        onClick={() => onOpen('outbound', 'approved')}
+      />
+      <StatCard
+        label="待验收退料"
+        value={(draftReturns?.total ?? 0).toLocaleString()}
+        sub="单"
+        tone="warn"
+        loading={l4}
+        onClick={() => onOpen('returns')}
+      />
+    </div>
+  )
+}
+
+const RECEIPT_STATUS_FILTERS = [
+  { value: 'draft', label: '待确认' },
+  { value: 'accepted', label: '已入账' },
+  { value: 'rejected', label: '已拒收' },
+  { value: 'all', label: '全部' },
+]
 
 function InboundPanel() {
   const { message } = App.useApp()
@@ -141,7 +192,7 @@ function InboundPanel() {
   })
 
   const columns: TableColumnsType<HardwareReceiptRecord> = [
-    { title: '单号', dataIndex: 'receipt_no', width: 150 },
+    { title: '单号', dataIndex: 'receipt_no', width: 150, className: 'font-mono' },
     {
       title: '来源',
       dataIndex: 'source',
@@ -152,10 +203,15 @@ function InboundPanel() {
     {
       title: '类别',
       dataIndex: 'mode',
-      width: 110,
-      render: (v: string) => (v === 'direct' ? <Tag>车间单独需求</Tag> : <Tag color="blue">共用类</Tag>),
+      width: 100,
+      render: (v: string) => (
+        <StatusTag
+          tone={MANAGED_CLASS_TONE[v as keyof typeof MANAGED_CLASS_TONE] ?? 'info'}
+          label={v === 'direct' ? HARDWARE_MANAGED_CLASS_LABEL.direct : HARDWARE_MANAGED_CLASS_LABEL.stocked}
+        />
+      ),
     },
-    { title: '供应商', dataIndex: 'supplier_name', width: 180, render: (v) => v || '-' },
+    { title: '供应商', dataIndex: 'supplier_name', width: 160, ellipsis: true, render: (v) => v || '-' },
     {
       title: '状态',
       dataIndex: 'status',
@@ -167,22 +223,23 @@ function InboundPanel() {
         />
       ),
     },
-    { title: '直发车间', dataIndex: 'target_dept', width: 100, render: (v) => v || '-' },
+    { title: '直发车间', dataIndex: 'target_dept', width: 90, render: (v) => v || '-' },
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 130,
+      width: 110,
       render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
     },
     {
       title: '操作',
-      width: 170,
+      width: 150,
+      fixed: 'right',
       render: (_: unknown, r) => (
         <Space>
           {r.status === 'draft' && canConfirm && (
             <>
               <Button size="small" type="primary" onClick={() => setConfirming(r)}>
-                一屏确认
+                确认
               </Button>
               <Button
                 size="small"
@@ -207,7 +264,87 @@ function InboundPanel() {
   ]
 
   return (
-    <SectionCard title="入库单">
+    <SectionCard
+      title="入库单"
+      action={
+        canCreate && (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              onClick={() => {
+                setEntryAutoUpload(false)
+                setManualOpen(true)
+              }}
+            >
+              手动登记
+            </Button>
+            <Button
+              type="primary"
+              icon={<UploadOutlined />}
+              onClick={() => {
+                setEntryAutoUpload(true)
+                setManualOpen(true)
+              }}
+            >
+              ERP 流水导入
+            </Button>
+            <Upload
+              accept="image/jpeg,image/png"
+              showUploadList={false}
+              beforeUpload={async (file) => {
+                setOcrUploading(true)
+                try {
+                  const form = new FormData()
+                  form.append('file', file)
+                  const base = process.env.NEXT_PUBLIC_API_BASE_URL || ''
+                  const resp = await fetch(`${base}/api/v1/warehouse/hardware/receipts/ocr`, {
+                    method: 'POST',
+                    body: form,
+                    credentials: 'include',
+                  })
+                  const json = await resp.json().catch(() => null)
+                  if (!resp.ok) throw new Error(json?.message || `识别失败 (${resp.status})`)
+                  message.success(
+                    `识别完成：${json.data?.matched_stocked ?? 0} 行匹配 / ${json.data?.unmatched ?? 0} 行待人工，请在列表中确认`,
+                  )
+                  setStatusFilter('draft')
+                  queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : 'OCR 识别失败，请用手动登记')
+                } finally {
+                  setOcrUploading(false)
+                }
+                return false
+              }}
+            >
+              <Button icon={<CameraOutlined />} loading={ocrUploading}>
+                拍照 OCR 入库
+              </Button>
+            </Upload>
+            <Upload
+              accept=".xlsx,.csv"
+              showUploadList={false}
+              beforeUpload={async (file) => {
+                try {
+                  const result = await importHardwareErpFile(file)
+                  message.success(
+                    `ERP 导入完成：新增 ${result.created} 单 / 去重跳过 ${result.skipped} 单`
+                    + (result.auto_accepted ? ` / 自动入账 ${result.auto_accepted} 单` : '')
+                    + `（对账匹配 ${result.reconcile?.matched ?? 0}）——请到列表核对确认`,
+                  )
+                  setStatusFilter('draft')
+                  queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : 'ERP 导入失败')
+                }
+                return false
+              }}
+            >
+              <Button icon={<UploadOutlined />}>ERP 导入</Button>
+            </Upload>
+          </div>
+        )
+      }
+    >
       <QueryFilter
         common={
           <>
@@ -228,99 +365,18 @@ function InboundPanel() {
                 setStatusFilter(v === 'all' ? undefined : (v as string))
                 setPage(1)
               }}
-              options={[
-                { value: 'draft', label: '待确认' },
-                { value: 'accepted', label: '已入账' },
-                { value: 'rejected', label: '已拒收' },
-                { value: 'all', label: '全部' },
-              ]}
+              options={RECEIPT_STATUS_FILTERS}
             />
-            {canCreate && (
-              <>
-                <Button
-                  onClick={() => {
-                    setEntryAutoUpload(false)
-                    setManualOpen(true)
-                  }}
-                >
-                  手动登记
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<UploadOutlined />}
-                  onClick={() => {
-                    setEntryAutoUpload(true)
-                    setManualOpen(true)
-                  }}
-                >
-                  Excel 解析入库
-                </Button>
-                <Upload
-                  accept="image/jpeg,image/png"
-                  showUploadList={false}
-                  beforeUpload={async (file) => {
-                    setOcrUploading(true)
-                    try {
-                      // 拍照 OCR → 草稿（build_ocr_draft）；成功后定位到待确认
-                      const form = new FormData()
-                      form.append('file', file)
-                      const base = process.env.NEXT_PUBLIC_API_BASE_URL || ''
-                      const resp = await fetch(`${base}/api/v1/warehouse/hardware/receipts/ocr`, {
-                        method: 'POST',
-                        body: form,
-                        credentials: 'include',
-                      })
-                      const json = await resp.json().catch(() => null)
-                      if (!resp.ok) throw new Error(json?.message || `识别失败 (${resp.status})`)
-                      message.success(
-                        `识别完成：${json.data?.matched_stocked ?? 0} 行匹配 / ${json.data?.unmatched ?? 0} 行待人工，请在列表中一屏确认`,
-                      )
-                      setStatusFilter('draft')
-                      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
-                    } catch (e) {
-                      message.error(e instanceof Error ? e.message : 'OCR 识别失败，请用手动登记')
-                    } finally {
-                      setOcrUploading(false)
-                    }
-                    return false
-                  }}
-                >
-                  <Button icon={<CameraOutlined />} loading={ocrUploading}>
-                    拍照 OCR 入库
-                  </Button>
-                </Upload>
-                <Upload
-                  accept=".xlsx,.csv"
-                  showUploadList={false}
-                  beforeUpload={async (file) => {
-                    try {
-                      const result = await importHardwareErpFile(file)
-                      message.success(
-                        `ERP 导入完成：新增 ${result.created} 单 / 去重跳过 ${result.skipped} 单`
-                        + (result.auto_accepted ? ` / 自动入账 ${result.auto_accepted} 单` : '')
-                        + `（对账匹配 ${result.reconcile?.matched ?? 0}）——请到列表核对确认`,
-                      )
-                      setStatusFilter('draft')
-                      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
-                    } catch (e) {
-                      message.error(e instanceof Error ? e.message : 'ERP 导入失败')
-                    }
-                    return false
-                  }}
-                >
-                  <Button icon={<UploadOutlined />}>ERP 导入</Button>
-                </Upload>
-              </>
-            )}
           </>
         }
       />
       <Table<HardwareReceiptRecord>
-        size="small"
+        size="middle"
         rowKey="id"
         loading={isLoading}
         columns={columns}
         dataSource={res?.items ?? []}
+        locale={{ emptyText: <EmptyGuide compact title="暂无入库单" description="手动登记 / ERP 流水导入 / 拍照 OCR 后在这里确认入账" /> }}
         pagination={{
           current: page,
           pageSize,
@@ -331,7 +387,7 @@ function InboundPanel() {
             setPageSize(ps)
           },
         }}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1000 }}
       />
       <ReceiptEntryModal
         open={manualOpen}
@@ -342,8 +398,6 @@ function InboundPanel() {
     </SectionCard>
   )
 }
-
-// ── 入库登记（方式1 纯手动 / 方式2 截图解析自动填写；多行明细共用表单）──
 
 interface ReceiptEntryRow {
   material_id?: string
@@ -371,10 +425,12 @@ function ReceiptEntryModal({
   const [mode, setMode] = useState<'stocked' | 'direct'>('stocked')
   const [saving, setSaving] = useState(false)
   const [parsing, setParsing] = useState(false)
+  const [building, setBuilding] = useState(false)
   const [parsed, setParsed] = useState<HardwareReceiptParseResult | null>(null)
-  const [rowMeta, setRowMeta] = useState<Record<number, { matched: boolean; low: boolean }>>({})
+  const [docs, setDocs] = useState<ErpDocGroup[]>([])
+  const [summaryText, setSummaryText] = useState('')
 
-  const { data: materialRes } = useQuery({
+  const { data: materialRes, isLoading: materialLoading } = useQuery({
     queryKey: ['warehouse', 'hardware', 'material-search', keyword],
     queryFn: () => fetchHardwareMaterialsClient(keyword, 30),
     enabled: open,
@@ -385,41 +441,77 @@ function ReceiptEntryModal({
     material: m,
   }))
 
+  const buildDocsFromParse = (
+    result: HardwareReceiptParseResult,
+  ): { groups: ErpDocGroup[]; memoryApplied: number } => {
+    const memory = loadErpMatchMemory()
+    let memoryApplied = 0
+    const rows: ErpDocRow[] = result.items.map((it) => {
+      const row: ErpDocRow = {
+        material_id: it.material_id ?? undefined,
+        name: it.name,
+        spec: it.spec ?? undefined,
+        unit: it.unit ?? undefined,
+        quantity: Number(it.quantity),
+        match_confidence: it.match_confidence,
+        match_score: it.match_score != null ? Number(it.match_score) : undefined,
+        managed_class: it.managed_class ?? null,
+        low: !!it.low_confidence,
+      }
+      if (!row.material_id) {
+        const hit = memory[erpMatchKey(row.name, row.spec)]
+        if (hit) {
+          memoryApplied += 1
+          return {
+            ...row,
+            material_id: hit.material_id,
+            name: hit.name || row.name,
+            spec: hit.spec ?? row.spec,
+            unit: hit.unit ?? row.unit,
+            managed_class: hit.managed_class ?? null,
+            match_confidence: 'manual-memory',
+            memory: true,
+          }
+        }
+      }
+      return row
+    })
+    const groups: ErpDocGroup[] = result.documents?.length
+      ? result.documents.map((d) => ({
+          key: d.key,
+          delivery_note_no: d.delivery_note_no ?? null,
+          supplier_name: d.supplier_name ?? null,
+          rows: d.item_indexes.map((i) => rows[i]).filter(Boolean),
+        }))
+      : [
+          {
+            key: '',
+            delivery_note_no: result.delivery_note_no ?? null,
+            supplier_name: result.supplier_name ?? null,
+            rows,
+          },
+        ]
+    return { groups: groups.filter((g) => g.rows.length > 0), memoryApplied }
+  }
+
   const onUploadParse = async (file: File) => {
     setParsing(true)
     try {
       const result = await parseHardwareReceiptExcelClient(file)
       setParsed(result)
-      setMode(result.mode)
-      form.setFieldsValue({
-        supplier_name: result.supplier_name ?? undefined,
-        delivery_note_no: result.delivery_note_no ?? undefined,
-        target_dept: result.target_dept ?? undefined,
-        remark: result.remark ?? undefined,
-        items: result.items.map((it) => ({
-          material_id: it.material_id ?? undefined,
-          name: it.name,
-          spec: it.spec ?? undefined,
-          unit: it.unit ?? undefined,
-          quantity: it.quantity,
-          match_confidence: it.match_confidence ?? undefined,
-          match_score: it.match_score ?? undefined,
-        })),
-      })
-      setRowMeta(
-        Object.fromEntries(
-          result.items.map((it, i) => [
-            i,
-            { matched: !!it.matched_name, low: !!it.low_confidence },
-          ]),
-        ),
+      const { groups, memoryApplied } = buildDocsFromParse(result)
+      setDocs(groups)
+      form.setFieldsValue({ remark: result.remark ?? undefined })
+      const statuses = groups.map(docStatusOf)
+      const matchedDocs = statuses.filter((d) => d.all_matched).length
+      const unmatchedDocs = statuses.length - matchedDocs
+      setSummaryText(
+        `已解析 ${result.items.length} 行 / ${statuses.length} 张单据：已匹配 ${matchedDocs} 张可建单 · 未匹配 ${unmatchedDocs} 张待人工补配`,
       )
-      const matched = result.matched_stocked + result.matched_direct
-      const warn = result.errors?.length
-        ? `；${result.errors.length} 行数量异常已跳过（见提示）`
-        : ''
       message.success(
-        `解析完成：${matched} 行已匹配 / ${result.unmatched} 行待人工核对${warn}，核对修正后生成草稿`,
+        `解析完成：${statuses.length} 张单据（已匹配 ${matchedDocs} / 未匹配 ${unmatchedDocs}）`
+          + (memoryApplied ? `，已套用 ${memoryApplied} 行历史人工匹配` : '')
+          + '——已匹配单据可直接建单',
       )
       if (result.errors?.length) {
         message.warning(
@@ -435,11 +527,140 @@ function ReceiptEntryModal({
     return false
   }
 
+  const patchRow = (docKey: string, rowIdx: number, patch: Partial<ErpDocRow>) => {
+    setDocs((prev) =>
+      prev.map((d) =>
+        d.key !== docKey
+          ? d
+          : { ...d, rows: d.rows.map((r, i) => (i === rowIdx ? { ...r, ...patch } : r)) },
+      ),
+    )
+  }
+
+  const removeRow = (docKey: string, rowIdx: number) => {
+    setDocs((prev) =>
+      prev
+        .map((d) => (d.key !== docKey ? d : { ...d, rows: d.rows.filter((_, i) => i !== rowIdx) }))
+        .filter((d) => d.rows.length > 0),
+    )
+  }
+
+  const pickMaterial = (docKey: string, rowIdx: number, material: HardwareMaterialRecord) => {
+    const row = docs.find((d) => d.key === docKey)?.rows[rowIdx]
+    if (row) {
+      saveErpMatch({
+        name: row.name,
+        spec: row.spec,
+        material_id: material.id,
+        material_name: material.name,
+        material_spec: material.spec,
+        material_unit: material.unit,
+        material_class: material.managed_class,
+      })
+    }
+    patchRow(docKey, rowIdx, {
+      material_id: material.id,
+      name: material.name,
+      spec: material.spec ?? undefined,
+      unit: material.unit ?? undefined,
+      managed_class: material.managed_class,
+      match_confidence: 'manual',
+      match_score: undefined,
+      low: false,
+      memory: false,
+    })
+  }
+
+  const buildReceiptForDoc = async (doc: ErpDocGroupStatus) => {
+    const values = await form.getFieldsValue()
+    const targetDept = (values.target_dept || '').trim()
+    if (doc.mode === 'direct' && !targetDept) {
+      message.warning(`单据 ${doc.delivery_note_no || '（无单号）'} 为直发单，请先填写「直发车间」再建单`)
+      return null
+    }
+    return createHardwareReceiptClient({
+      source: 'excel',
+      mode: doc.mode,
+      supplier_name: doc.supplier_name ?? undefined,
+      delivery_note_no: doc.delivery_note_no ?? undefined,
+      target_dept: doc.mode === 'direct' ? targetDept : undefined,
+      remark: values.remark || undefined,
+      excel_result: parsed?.excel_result ?? undefined,
+      items: doc.rows.map((r) => ({
+        material_id: r.material_id,
+        name: r.name,
+        spec: r.spec || undefined,
+        unit: r.unit || undefined,
+        quantity: r.quantity,
+        match_confidence: r.match_confidence,
+        match_score: r.match_score,
+      })),
+    })
+  }
+
+  const handleBuildDoc = async (doc: ErpDocGroupStatus) => {
+    setBuilding(true)
+    try {
+      const receipt = await buildReceiptForDoc(doc)
+      if (!receipt) return
+      setDocs((prev) => prev.filter((d) => d.key !== doc.key))
+      message.success(
+        `单据 ${doc.delivery_note_no || '（无单号）'} 已生成草稿 ${receipt.receipt_no}，请在列表中一屏确认入账`,
+      )
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '建单失败')
+    } finally {
+      setBuilding(false)
+    }
+  }
+
+  const handleBuildAll = async () => {
+    const targets = docs.map(docStatusOf).filter((d) => d.all_matched)
+    if (targets.length === 0) return
+    setBuilding(true)
+    try {
+      const builtKeys: string[] = []
+      const failed: string[] = []
+      for (const doc of targets) {
+        try {
+          const receipt = await buildReceiptForDoc(doc)
+          if (receipt) {
+            builtKeys.push(doc.key)
+          } else {
+            failed.push(doc.delivery_note_no || '（无单号）')
+          }
+        } catch {
+          failed.push(doc.delivery_note_no || '（无单号）')
+        }
+      }
+      setDocs((prev) => prev.filter((d) => !builtKeys.includes(d.key)))
+      if (builtKeys.length) {
+        message.success(`已批量生成 ${builtKeys.length} 张草稿，请在列表中逐张一屏确认入账`)
+        queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
+      }
+      if (failed.length) {
+        message.warning(
+          `${failed.length} 张建单未成功（直发单缺车间或校验不过）：${failed.join('、')}`,
+          6,
+        )
+      }
+    } finally {
+      setBuilding(false)
+    }
+  }
+
   const resetState = () => {
     form.resetFields()
     setParsed(null)
-    setRowMeta({})
+    setDocs([])
+    setSummaryText('')
     setMode('stocked')
+  }
+
+  const closeAndReset = () => {
+    resetState()
+    onClose()
   }
 
   const onSubmit = async () => {
@@ -452,22 +673,18 @@ function ReceiptEntryModal({
     setSaving(true)
     try {
       await createHardwareReceiptClient({
-        // Excel 预填提交走 excel 溯源（留痕 excel_result 原样回传）；纯手动=manual
-        source: parsed ? 'excel' : 'manual',
+        source: 'manual',
         mode,
         supplier_name: values.supplier_name || undefined,
         delivery_note_no: values.delivery_note_no || undefined,
         target_dept: mode === 'direct' ? values.target_dept : undefined,
         remark: values.remark || undefined,
-        excel_result: parsed?.excel_result ?? undefined,
         items: rows.map((r) => ({
           material_id: mode === 'stocked' ? r.material_id : undefined,
           name: r.name ?? '',
           spec: r.spec || undefined,
           unit: r.unit || undefined,
           quantity: r.quantity ?? 0,
-          match_confidence: r.match_confidence,
-          match_score: r.match_score,
         })),
       })
       message.success('已生成草稿，请在列表中一屏确认入账')
@@ -481,15 +698,23 @@ function ReceiptEntryModal({
     }
   }
 
+  const statuses = docs.map(docStatusOf)
+  const hasDirectDoc = statuses.some((d) => d.mode === 'direct')
+
   return (
     <Modal
-      title="入库登记（手动填写 / 截图自动填写）"
+      title="入库登记"
       open={open}
-      onCancel={onClose}
+      onCancel={closeAndReset}
       onOk={onSubmit}
       confirmLoading={saving}
       okText="生成草稿"
-      width={820}
+      width={980}
+      footer={
+        parsed ? (
+          <Button onClick={closeAndReset}>关闭</Button>
+        ) : undefined
+      }
     >
       {autoUpload && !parsed && (
         <Alert
@@ -498,66 +723,90 @@ function ReceiptEntryModal({
           className="mb-3"
           message={
             <span>
-              下载<a href={downloadReceiptTemplateUrl()} className="mx-1 text-blue-600 underline">入库登记模板</a>
-              填写物资明细后，点击「上传 Excel 自动填写」，系统解析预填本表单，核对修正后生成草稿。
+              上传 <b>ERP 导出的入库流水 Excel</b>（.xls/.xlsx/.csv），系统自动解析并<b>按入库单号分单</b>
+              （支持 ERP 列名：物料名称/入库数量/主计量单位/入库单号）——已匹配单据直接建单，
+              未匹配单据人工补配后再建单。
             </span>
           }
         />
       )}
-      <Form form={form} layout="vertical" initialValues={{ items: [{}] }}>
-        <div className="mb-3 flex items-center gap-3">
-          <Upload accept=".xlsx,.xlsm,.csv" showUploadList={false} beforeUpload={onUploadParse}>
-            <Button icon={<UploadOutlined />} loading={parsing}>
-              上传 Excel 自动填写
-            </Button>
-          </Upload>
-          <a href={downloadReceiptTemplateUrl()}>
-            <Button type="link" size="small" className="px-0">下载模板</Button>
-          </a>
-          {parsed && (
-            <span className="text-xs text-neutral-500">
-              已按 Excel 预填 {parsed.items.length} 行（{parsed.unmatched} 行未匹配需核对），可直接修改
-            </span>
-          )}
-        </div>
-        <Form.Item label="单据类别" className="mb-2">
-          <Segmented
-            value={mode}
-            onChange={(v) => setMode(v as 'stocked' | 'direct')}
-            options={[
-              { value: 'stocked', label: '共用类（入库存）' },
-              { value: 'direct', label: '车间单独需求（直发）' },
-            ]}
+      <div className="mb-3 flex items-center gap-3">
+        <Upload accept=".xlsx,.xlsm,.xls,.csv" showUploadList={false} beforeUpload={onUploadParse}>
+          <Button icon={<UploadOutlined />} loading={parsing}>
+            上传 ERP 流水自动填写
+          </Button>
+        </Upload>
+        {parsed && <span className="text-xs text-neutral-500">{summaryText}</span>}
+      </div>
+      {parsed ? (
+        <>
+          <Form form={form} layout="vertical">
+            <div className="grid grid-cols-2 gap-x-4">
+              {hasDirectDoc && (
+                <Form.Item
+                  name="target_dept"
+                  label="直发车间（直发单建单必填）"
+                  required
+                >
+                  <Input placeholder="如：发酵 / 提炼一期 / 精制机修" />
+                </Form.Item>
+              )}
+              <Form.Item name="remark" label="备注（随本批每张建单）">
+                <Input placeholder="异常情况等" />
+              </Form.Item>
+            </div>
+          </Form>
+          <HardwareReceiptErpDocs
+            docs={docs}
+            building={building}
+            materialOptions={materialOptions}
+            onMaterialKeyword={setKeyword}
+            materialLoading={materialLoading}
+            onRowPatch={patchRow}
+            onRowRemove={removeRow}
+            onPickMaterial={pickMaterial}
+            onBuildDoc={handleBuildDoc}
+            onBuildAll={handleBuildAll}
           />
-        </Form.Item>
-        <div className="grid grid-cols-2 gap-x-4">
-          <Form.Item name="supplier_name" label="供应商">
-            <Input placeholder="可空" />
+        </>
+      ) : (
+        <Form form={form} layout="vertical" initialValues={{ items: [{}] }}>
+          <Form.Item label="单据类别" className="mb-2">
+            <Segmented
+              value={mode}
+              onChange={(v) => setMode(v as 'stocked' | 'direct')}
+              options={[
+                { value: 'stocked', label: '共用类（入库存）' },
+                { value: 'direct', label: '车间单独需求（直发）' },
+              ]}
+            />
           </Form.Item>
-          <Form.Item name="delivery_note_no" label="送货单号">
-            <Input placeholder="可空" />
-          </Form.Item>
-          {mode === 'direct' && (
-            <Form.Item
-              name="target_dept"
-              label="直发车间"
-              rules={[{ required: true, message: 'direct 类必须指定车间' }]}
-            >
-              <Input placeholder="如：发酵 / 提炼一期 / 精制机修" />
+          <div className="grid grid-cols-2 gap-x-4">
+            <Form.Item name="supplier_name" label="供应商">
+              <Input placeholder="可空" />
             </Form.Item>
-          )}
-          <Form.Item name="remark" label="备注">
-            <Input placeholder="异常情况等" />
-          </Form.Item>
-        </div>
+            <Form.Item name="delivery_note_no" label="送货单号">
+              <Input placeholder="可空" />
+            </Form.Item>
+            {mode === 'direct' && (
+              <Form.Item
+                name="target_dept"
+                label="直发车间"
+                rules={[{ required: true, message: 'direct 类必须指定车间' }]}
+              >
+                <Input placeholder="如：发酵 / 提炼一期 / 精制机修" />
+              </Form.Item>
+            )}
+            <Form.Item name="remark" label="备注">
+              <Input placeholder="异常情况等" />
+            </Form.Item>
+          </div>
 
-        <div className="mb-1 text-sm font-medium">物料明细（一行一物料）</div>
-        <Form.List name="items">
-          {(fields, { add, remove }) => (
-            <div className="flex flex-col gap-2">
-              {fields.map((field) => {
-                const meta = rowMeta[field.key]
-                return (
+          <div className="mb-1 text-sm font-medium">物料明细（一行一物料）</div>
+          <Form.List name="items">
+            {(fields, { add, remove }) => (
+              <div className="flex flex-col gap-2">
+                {fields.map((field) => (
                   <Space key={field.key} align="start" className="w-full" wrap={false}>
                     {mode === 'stocked' && (
                       <Form.Item name={[field.name, 'material_id']} className="mb-0" style={{ width: 250 }}>
@@ -605,23 +854,8 @@ function ReceiptEntryModal({
                       className="mb-0"
                       rules={[{ required: true, message: '数量必填' }]}
                     >
-                      <InputNumber min={0.001} precision={3} placeholder="数量" style={{ width: 100 }} />
+                      <InputNumber min={1} precision={0} placeholder="数量" style={{ width: 100 }} />
                     </Form.Item>
-                    {/* 匹配标记随行透传（hidden 注册，提交时保留） */}
-                    <Form.Item name={[field.name, 'match_confidence']} hidden>
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name={[field.name, 'match_score']} hidden>
-                      <Input />
-                    </Form.Item>
-                    {meta && (
-                      <Tag
-                        color={meta.matched ? (meta.low ? 'orange' : 'green') : 'red'}
-                        style={{ marginTop: 4 }}
-                      >
-                        {meta.matched ? (meta.low ? '低置信需核对' : '已匹配') : '未匹配'}
-                      </Tag>
-                    )}
                     {fields.length > 1 && (
                       <Button
                         type="text"
@@ -633,225 +867,19 @@ function ReceiptEntryModal({
                       </Button>
                     )}
                   </Space>
-                )
-              })}
-              <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({})}>
-                添加物料行
-              </Button>
-            </div>
-          )}
-        </Form.List>
-      </Form>
-    </Modal>
-  )
-}
-
-// ── 一屏确认（双签 + 低置信行修正 + stocked 选库位）──
-
-function ReceiptConfirmModal({
-  receipt,
-  onClose,
-}: {
-  receipt: HardwareReceiptRecord | null
-  onClose: () => void
-}) {
-  const { message } = App.useApp()
-  const queryClient = useQueryClient()
-  const [form] = Form.useForm()
-  const [rows, setRows] = useState<HardwareReceiptRecord['items']>([])
-  const [submitting, setSubmitting] = useState(false)
-  const [screeningBusy, setScreeningBusy] = useState(false)
-
-  useEffect(() => {
-    if (receipt) {
-      setRows(receipt.items.map((i) => ({ ...i })))
-      form.setFieldsValue({
-        inspected_by_dept: receipt.inspected_by_dept ?? '',
-      })
-    }
-  }, [receipt, form])
-
-  const { data: locations } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'locations'],
-    queryFn: fetchHardwareLocationsClient,
-    enabled: !!receipt,
-  })
-
-  if (!receipt) return null
-
-  const hasLowConfidence = rows.some(
-    (r) => r.match_score != null && Number(r.match_score) < 75 && r.material_id,
-  )
-  const hasUnmatched = rows.some((r) => !r.material_id && receipt.mode === 'stocked')
-
-  // M7 实物照片初筛：上传→vision 标记落行（advisory 只标记，不拦截确认）
-  const runScreening = async (file: File) => {
-    setScreeningBusy(true)
-    try {
-      const image_b64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
-        reader.onerror = () => reject(new Error('图片读取失败'))
-        reader.readAsDataURL(file)
-      })
-      const summary = await photoScreenHardwareReceiptClient(
-        receipt.id,
-        [{ image_b64, content_type: file.type || 'image/jpeg' }],
-      )
-      if (summary.screened) {
-        message.success(`初筛完成：${summary.flagged_rows} 行存在异常标记（仅供参考，不拦截确认）`)
-      } else {
-        message.info(
-          summary.reason === 'scenario_disabled'
-            ? '初筛场景已停用（不影响入库）'
-            : '初筛未产出结论（LLM 失败不阻塞，可直接确认）',
-        )
-      }
-      const fresh = await fetchHardwareReceiptsClient({
-        keyword: receipt.receipt_no, status: 'draft', pageSize: 5,
-      })
-      const hit = fresh.items.find((x) => x.id === receipt.id)
-      if (hit) setRows(hit.items.map((i) => ({ ...i })))
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '初筛失败（不影响入库）')
-    } finally {
-      setScreeningBusy(false)
-    }
-  }
-
-  const onSubmit = async () => {
-    const values = await form.validateFields()
-    setSubmitting(true)
-    try {
-      await acceptHardwareReceiptClient(receipt.id, {
-        inspected_by_warehouse: 'web',
-        inspected_by_dept: values.inspected_by_dept,
-        items: rows.map((r) => ({
-          material_id: r.material_id,
-          name: r.material_name || r.name,
-          spec: r.spec,
-          unit: r.unit,
-          quantity: Number(r.quantity),
-          location_id: r.location_id || undefined,
-          match_confidence: r.match_confidence ?? 'manual',
-          match_score: r.match_score != null ? Number(r.match_score) : undefined,
-        })),
-      })
-      message.success('已确认入账（批次/流水已生成；direct 行已推领取卡）')
-      onClose()
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '确认入账失败')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <Modal
-      title={`一屏确认 · ${receipt.receipt_no}`}
-      open={!!receipt}
-      onCancel={onClose}
-      onOk={onSubmit}
-      confirmLoading={submitting}
-      okText="双签确认入账"
-      width={760}
-    >
-      <div className="mb-3 text-[13px] leading-6">
-        <div>供应商：{receipt.supplier_name || '-'}　送货单号：{receipt.delivery_note_no || '-'}</div>
-        <div>
-          类别：{receipt.mode === 'direct' ? `车间单独需求（直发 ${receipt.target_dept || '-'}）` : '共用类（入库存）'}
-        </div>
-      </div>
-      {(hasLowConfidence || hasUnmatched) && (
-        <div className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-          {hasLowConfidence && <div>⚠ 存在低置信匹配行，请逐行核对修正后确认。</div>}
-          {hasUnmatched && (
-            <div>⚠ 共用类单存在未匹配行：请为每行指定物料，或将单据改为车间单独需求（直发）。</div>
-          )}
-        </div>
+                ))}
+                <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add({})}>
+                  添加物料行
+                </Button>
+              </div>
+            )}
+          </Form.List>
+        </Form>
       )}
-      <Form form={form} layout="vertical">
-        <Form.Item
-          name="inspected_by_dept"
-          label="使用部门经办人（双签）"
-          rules={[{ required: true, message: '请输入使用部门经办人（制度 5.2.2 双人验收）' }]}
-        >
-          <Input placeholder="姓名或 open_id" />
-        </Form.Item>
-      </Form>
-      <div className="mb-3 flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
-        <Upload
-          accept="image/jpeg,image/png"
-          showUploadList={false}
-          beforeUpload={(file) => {
-            void runScreening(file)
-            return false
-          }}
-        >
-          <Button size="small" icon={<CameraOutlined />} loading={screeningBusy}>
-            实物照片初筛
-          </Button>
-        </Upload>
-        <span>破损/锈蚀/渗漏/受潮 AI 辅助标记——只标记不拦截不代改，处置由仓管员决定。</span>
-      </div>
-      <Table
-        size="small"
-        rowKey="id"
-        dataSource={rows}
-        pagination={false}
-        columns={[
-          {
-            title: '品名（OCR）',
-            width: 160,
-            render: (_: unknown, r) => (
-              <Space direction="vertical" size={0}>
-                <span>{r.name}</span>
-                {r.photo_screening?.flagged && (
-                  <Tag color="red">
-                    ⚠ {r.photo_screening.findings.map((f) => `${f.type}(${f.severity})`).join('、')}
-                  </Tag>
-                )}
-              </Space>
-            ),
-          },
-          { title: '规格', dataIndex: 'spec', width: 110, render: (v) => v || '-' },
-          { title: '数量', dataIndex: 'quantity', width: 80, align: 'right' },
-          {
-            title: '匹配',
-            width: 200,
-            render: (_: unknown, r, idx) => {
-              const isLow = r.match_score != null && Number(r.match_score) < 75
-              return (
-                <Space direction="vertical" size={0} className="w-full">
-                  {isLow && <Tag color="orange">低置信 {Number(r.match_score).toFixed(0)}</Tag>}
-                  {!r.material_id && <Tag color="red">未匹配</Tag>}
-                  <Select
-                    size="small"
-                    showSearch
-                    allowClear
-                    placeholder="指定/更换物料"
-                    style={{ width: '100%' }}
-                    value={r.material_id ?? undefined}
-                    optionFilterProp="label"
-                    options={searchMaterialOptions(r.material_name || r.name)}
-                    onChange={(v) => {
-                      const next = [...rows]
-                      next[idx] = { ...r, material_id: v ?? null }
-                      setRows(next)
-                    }}
-                  />
-                </Space>
-              )
-            },
-          },
-        ]}
-      />
     </Modal>
   )
 }
 
-// 物料选项（确认弹窗内的轻量搜索；每行独立 keyword，共享缓存）
 const _optionCache = new Map<string, Array<{ value: string; label: string }>>()
 
 function useMaterialOptions() {
@@ -877,147 +905,97 @@ function useMaterialOptions() {
   }
 }
 
-function searchMaterialOptions(_defaultKeyword: string) {
-  // Select options 由上层 useMaterialOptions 异步填充；此处返回空由 showSearch onSearch 驱动
-  return []
-}
-
-// ── 发料台 ──
-
-function IssuePanel() {
-  const { message } = App.useApp()
-  const queryClient = useQueryClient()
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
-  const [issuing, setIssuing] = useState<HardwareRequisitionRecord | null>(null)
-
-  // 待发料 = 审批通过（approved）+ 紧急待发（pending 的 urgent 单，先发后补
-  // 制度 5.3.4：不经审批直接发料，24h 内补办）
-  const { data: approvedRes, isLoading } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'requisitions', 'approved', { page, pageSize }],
-    queryFn: () =>
-      fetchHardwareRequisitionsClient({ status: 'approved', page, pageSize }),
-    placeholderData: keepPreviousData,
-  })
-  const { data: urgentPendingRes } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'requisitions', 'urgent-pending'],
-    // 上限 200：同时 pending 的紧急单超过 200 属异常态（巡检+通报面兜底）
-    queryFn: () =>
-      fetchHardwareRequisitionsClient({ status: 'pending', page: 1, pageSize: 200 }),
-    placeholderData: keepPreviousData,
-  })
-  const urgentPending = (urgentPendingRes?.items ?? []).filter(
-    (r) => r.req_type === 'urgent',
-  )
-  const dataSource = [
-    ...urgentPending,
-    ...(approvedRes?.items ?? []),
-  ]
-
-  const columns: TableColumnsType<HardwareRequisitionRecord> = [
-    { title: '单号', dataIndex: 'req_no', width: 150 },
-    {
-      title: '类型',
-      dataIndex: 'req_type',
-      width: 70,
-      render: (v: string) =>
-        v === 'urgent' ? <Tag color="red">紧急</Tag> : v === 'excess' ? <Tag color="orange">超额</Tag> : <Tag>常规</Tag>,
-    },
-    { title: '部门', dataIndex: 'dept_name', width: 110 },
-    { title: '申请人', dataIndex: 'applicant', width: 90 },
-    { title: '用途', dataIndex: 'purpose', render: (v) => v || '-' },
-    { title: '审批人', dataIndex: 'approved_by', width: 90, render: (v) => v || '-' },
-    {
-      title: '操作',
-      width: 100,
-      render: (_: unknown, r) => (
-        <Button size="small" type="primary" onClick={() => setIssuing(r)}>
-          发料
-        </Button>
-      ),
-    },
-  ]
-
-  return (
-    <SectionCard title={`待发料（审批通过${urgentPending.length ? ` · 紧急待发 ${urgentPending.length}` : ''}）`}>
-      <Table<HardwareRequisitionRecord>
-        size="small"
-        rowKey="id"
-        loading={isLoading}
-        columns={columns}
-        dataSource={dataSource}
-        pagination={{
-          current: page,
-          pageSize,
-          total: (approvedRes?.total ?? 0) + urgentPending.length,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, ps) => {
-            setPage(p)
-            setPageSize(ps)
-          },
-        }}
-        scroll={{ x: 900 }}
-      />
-      <IssueModal requisition={issuing} onClose={() => setIssuing(null)} />
-    </SectionCard>
-  )
-}
-
-function IssueModal({
-  requisition,
+function ReceiptConfirmModal({
+  receipt,
   onClose,
 }: {
-  requisition: HardwareRequisitionRecord | null
+  receipt: HardwareReceiptRecord | null
   onClose: () => void
 }) {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
+  const [rows, setRows] = useState<HardwareReceiptRecord['items']>([])
   const [submitting, setSubmitting] = useState(false)
-  const [receivedBy, setReceivedBy] = useState('')
-  const [allocations, setAllocations] = useState<Record<string, number>>({})
+  const [screeningBusy, setScreeningBusy] = useState(false)
+  const [matKeyword, setMatKeyword] = useState('')
+  const [matOptions, setMatOptions] = useState<Array<{ value: string; label: string }>>([])
+  const loadMaterialOptions = useMaterialOptions()
 
   useEffect(() => {
-    if (requisition) {
-      setReceivedBy(requisition.applicant)
-      setAllocations(
-        Object.fromEntries(requisition.items.map((i) => [i.id, i.need_qty as number])),
-      )
+    if (receipt) {
+      setRows(receipt.items.map((i) => ({ ...i })))
+      setMatKeyword('')
+      setMatOptions([])
     }
-  }, [requisition])
+  }, [receipt])
 
-  const materialIds = requisition?.items.map((i) => i.material_id) ?? []
-  const { data: stockByMaterial } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'issue-lots', materialIds.join(',')],
-    queryFn: async () => {
-      const entries = await Promise.all(
-        materialIds.map(async (mid) => {
-          const detail = await fetchHardwareStockDetailClient(mid)
-          return [mid, detail.lots] as const
-        }),
+  const searchMaterials = async (keyword: string) => {
+    setMatKeyword(keyword)
+    setMatOptions(await loadMaterialOptions(keyword))
+  }
+
+  if (!receipt) return null
+
+  const hasLowConfidence = rows.some(
+    (r) => r.match_score != null && Number(r.match_score) < 75 && r.material_id,
+  )
+  const hasUnmatched = rows.some((r) => !r.material_id && receipt.mode === 'stocked')
+
+  const runScreening = async (file: File) => {
+    setScreeningBusy(true)
+    try {
+      const image_b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+        reader.onerror = () => reject(new Error('图片读取失败'))
+        reader.readAsDataURL(file)
+      })
+      const summary = await photoScreenHardwareReceiptClient(
+        receipt.id,
+        [{ image_b64, content_type: file.type || 'image/jpeg' }],
       )
-      return Object.fromEntries(entries)
-    },
-    enabled: materialIds.length > 0 && !!requisition,
-  })
-
-  if (!requisition) return null
+      if (summary.screened) {
+        message.success(`初筛完成：${summary.flagged_rows} 行存在异常标记（仅供参考，不拦截确认）`)
+      } else {
+        message.info(
+          summary.reason === 'scenario_disabled'
+            ? '初筛场景已停用（不影响入库）'
+            : '初筛未产出结论（AI 失败不阻塞，可直接确认）',
+        )
+      }
+      const fresh = await fetchHardwareReceiptsClient({
+        keyword: receipt.receipt_no, status: 'draft', pageSize: 5,
+      })
+      const hit = fresh.items.find((x) => x.id === receipt.id)
+      if (hit) setRows(hit.items.map((i) => ({ ...i })))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '初筛失败（不影响入库）')
+    } finally {
+      setScreeningBusy(false)
+    }
+  }
 
   const onSubmit = async () => {
     setSubmitting(true)
     try {
-      await issueHardwareRequisitionClient(requisition.id, {
-        issued_by: 'web',
-        received_by: receivedBy,
-        items: requisition.items.map((i) => ({
-          item_id: i.id,
-          issued_qty: allocations[i.id] ?? Number(i.need_qty),
+      await acceptHardwareReceiptClient(receipt.id, {
+        inspected_by_warehouse: 'web',
+        items: rows.map((r) => ({
+          material_id: r.material_id,
+          name: r.material_name || r.name,
+          spec: r.spec,
+          unit: r.unit,
+          quantity: Number(r.quantity),
+          location_id: r.location_id || undefined,
+          match_confidence: r.match_confidence ?? 'manual',
+          match_score: r.match_score != null ? Number(r.match_score) : undefined,
         })),
       })
-      message.success('发料完成（FIFO 实扣+流水已落账）')
+      message.success('已确认入账（批次/流水已生成；direct 行已推领取卡）')
       onClose()
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'receipts'] })
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '发料失败')
+      message.error(e instanceof Error ? e.message : '确认入账失败')
     } finally {
       setSubmitting(false)
     }
@@ -1025,218 +1003,95 @@ function IssueModal({
 
   return (
     <Modal
-      title={`发料确认 · ${requisition.req_no}`}
-      open={!!requisition}
+      title={`确认 · ${receipt.receipt_no}`}
+      open={!!receipt}
       onCancel={onClose}
       onOk={onSubmit}
       confirmLoading={submitting}
-      okText="确认发料（实扣）"
-      width={700}
+      okText="确认入账"
+      width={760}
     >
+      <div className="mb-3 text-[13px] leading-6">
+        <div>供应商：{receipt.supplier_name || '-'}　送货单号：{receipt.delivery_note_no || '-'}</div>
+        <div>
+          类别：{receipt.mode === 'direct' ? `车间单独需求（直发 ${receipt.target_dept || '-'}）` : '共用类（入库存）'}
+        </div>
+      </div>
+      {(hasLowConfidence || hasUnmatched) && (
+        <div className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+          {hasLowConfidence && <div>⚠ 存在低置信匹配行，请逐行核对修正后确认。</div>}
+          {hasUnmatched && (
+            <div>⚠ 共用类单存在未匹配行：请为每行指定物料，或将单据改为车间单独需求（直发）。</div>
+          )}
+        </div>
+      )}
+      <div className="mb-3 flex items-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
+        <Upload
+          accept="image/jpeg,image/png"
+          showUploadList={false}
+          beforeUpload={(file) => {
+            void runScreening(file)
+            return false
+          }}
+        >
+          <Button size="small" icon={<CameraOutlined />} loading={screeningBusy}>
+            实物照片初筛
+          </Button>
+        </Upload>
+        <span>破损/锈蚀/渗漏/受潮 AI 辅助标记——只标记不拦截不代改，处置由仓管员决定。</span>
+      </div>
       <Table
         size="small"
         rowKey="id"
-        dataSource={requisition.items}
+        dataSource={rows}
         pagination={false}
         columns={[
-          { title: '物料', dataIndex: 'material_name', width: 180 },
-          { title: '规格', dataIndex: 'spec', width: 110, render: (v) => v || '-' },
-          { title: '需求数', dataIndex: 'need_qty', width: 90, align: 'right' },
           {
-            title: 'FIFO 建议批次',
+            title: '品名',
+            width: 160,
+            render: (_: unknown, r) => (
+              <Space direction="vertical" size={0}>
+                <span>{r.name}</span>
+                {r.photo_screening?.flagged && (
+                  <StatusTag tone="danger" label={`⚠ ${r.photo_screening.findings.map((f) => `${f.type}(${f.severity})`).join('、')}`} />
+                )}
+              </Space>
+            ),
+          },
+          { title: '规格', dataIndex: 'spec', width: 110, render: (v) => v || '-' },
+          { title: '数量', dataIndex: 'quantity', width: 80, align: 'right', render: (v: unknown) => formatQty(v) },
+          {
+            title: '匹配',
             width: 220,
-            render: (_: unknown, r) => {
-              const lots = stockByMaterial?.[r.material_id] ?? []
-              const usable = lots.filter((l) => l.remaining_quantity > 0)
-              if (!usable.length) return <Tag color="red">无可用批次</Tag>
+            render: (_: unknown, r, idx) => {
+              const isLow = r.match_score != null && Number(r.match_score) < 75
               return (
-                <span className="text-[12px] font-mono">
-                  {usable
-                    .slice(0, 3)
-                    .map((l) => `${l.lot_no}(${l.remaining_quantity})`)
-                    .join(' → ')}
-                </span>
+                <Space direction="vertical" size={0} className="w-full">
+                  {isLow && <StatusTag tone="warn" label={`低置信 ${Number(r.match_score).toFixed(0)}`} />}
+                  {!r.material_id && <StatusTag tone="danger" label="未匹配" />}
+                  <Select
+                    size="small"
+                    showSearch
+                    allowClear
+                    placeholder="搜索指定/更换物料"
+                    style={{ width: '100%' }}
+                    value={r.material_id ?? undefined}
+                    filterOption={false}
+                    onSearch={searchMaterials}
+                    options={matKeyword ? matOptions : []}
+                    notFoundContent={matKeyword ? '无匹配物料' : '输入关键词搜索物料'}
+                    onChange={(v) => {
+                      const next = [...rows]
+                      next[idx] = { ...r, material_id: v ?? null }
+                      setRows(next)
+                    }}
+                  />
+                </Space>
               )
             },
           },
-          {
-            title: '实发量',
-            width: 130,
-            render: (_: unknown, r) => (
-              <InputNumber
-                size="small"
-                min={0.001}
-                precision={3}
-                value={allocations[r.id]}
-                onChange={(v) =>
-                  setAllocations((prev) => ({ ...prev, [r.id]: v ?? Number(r.need_qty) }))
-                }
-              />
-            ),
-          },
         ]}
       />
-      <div className="mt-3">
-        <div className="mb-1 text-[13px] text-gray-600">领用人点收（=系统签收）</div>
-        <Input
-          placeholder="领用人姓名"
-          value={receivedBy}
-          onChange={(e) => setReceivedBy(e.target.value)}
-        />
-      </div>
     </Modal>
-  )
-}
-
-// ── 流水台账（ERP 对账标记）──
-
-function MovementsPanel() {
-  const { message } = App.useApp()
-  const queryClient = useQueryClient()
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
-  const [keyword, setKeyword] = useState('')
-  const [direction, setDirection] = useState<string | undefined>(undefined)
-  const [erpStatus, setErpStatus] = useState<string | undefined>(undefined)
-  const [selected, setSelected] = useState<React.Key[]>([])
-
-  const { data: res, isLoading } = useQuery({
-    queryKey: ['warehouse', 'hardware', 'movements', { page, pageSize, keyword, direction, erpStatus }],
-    queryFn: () =>
-      fetchHardwareMovementsClient({
-        keyword: keyword || undefined,
-        direction,
-        erp_status: erpStatus,
-        page,
-        pageSize,
-      }),
-    placeholderData: keepPreviousData,
-  })
-
-  const markEntered = useMutation({
-    mutationFn: (ids: string[]) =>
-      markHardwareMovementsEnteredClient(ids, 'web'),
-    onSuccess: (r) => {
-      message.success(`已标记 ${r.marked} 条为 ERP 已录`)
-      setSelected([])
-      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'movements'] })
-    },
-    onError: (e) => message.error(e instanceof Error ? e.message : '标记失败'),
-  })
-
-  const columns: TableColumnsType<HardwareMovementRecord> = [
-    { title: '流水号', dataIndex: 'movement_no', width: 150 },
-    {
-      title: '方向',
-      dataIndex: 'direction',
-      width: 70,
-      render: (v: string) => (
-        <Tag color={v === 'inbound' ? 'green' : v === 'outbound' ? 'red' : 'orange'}>
-          {v === 'inbound' ? '入' : v === 'outbound' ? '出' : '调'}
-        </Tag>
-      ),
-    },
-    {
-      title: '业务',
-      dataIndex: 'business_type',
-      width: 90,
-      render: (v: string) => HARDWARE_MOVEMENT_BIZ_LABEL[v] ?? v,
-    },
-    { title: '品名', dataIndex: 'material_name', width: 160 },
-    { title: '数量', dataIndex: 'quantity', width: 80, align: 'right' },
-    { title: '部门', dataIndex: 'dept_name', width: 90, render: (v) => v || '-' },
-    { title: '经办', dataIndex: 'operator', width: 90, render: (v) => v || '-' },
-    {
-      title: '时间',
-      dataIndex: 'occurred_at',
-      width: 120,
-      render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
-    },
-    {
-      title: 'ERP',
-      dataIndex: 'erp_status',
-      width: 80,
-      render: (v: string) =>
-        v === 'entered' ? <Tag color="green">已录</Tag> : <Tag color="orange">未录</Tag>,
-    },
-  ]
-
-  return (
-    <SectionCard
-      title="出入库流水"
-      action={
-        selected.length > 0 && (
-          <Button
-            size="small"
-            onClick={() =>
-              markEntered.mutate(selected.map(String))
-            }
-          >
-            标记选中为 ERP 已录（{selected.length}）
-          </Button>
-        )
-      }
-    >
-      <QueryFilter
-        common={
-          <>
-            <Input
-              allowClear
-              prefix={<SearchOutlined style={{ color: '#999' }} />}
-              placeholder="流水号 / 品名 / 批次"
-              style={{ width: 220 }}
-              value={keyword}
-              onChange={(e) => {
-                setKeyword(e.target.value)
-                setPage(1)
-              }}
-            />
-            <Segmented
-              value={direction ?? 'all'}
-              onChange={(v) => {
-                setDirection(v === 'all' ? undefined : (v as string))
-                setPage(1)
-              }}
-              options={[
-                { value: 'all', label: '全部' },
-                { value: 'inbound', label: '入' },
-                { value: 'outbound', label: '出' },
-              ]}
-            />
-            <Segmented
-              value={erpStatus ?? 'all'}
-              onChange={(v) => {
-                setErpStatus(v === 'all' ? undefined : (v as string))
-                setPage(1)
-              }}
-              options={[
-                { value: 'all', label: 'ERP全部' },
-                { value: 'pending', label: '未录' },
-                { value: 'entered', label: '已录' },
-              ]}
-            />
-          </>
-        }
-      />
-      <Table<HardwareMovementRecord>
-        size="small"
-        rowKey="id"
-        loading={isLoading}
-        columns={columns}
-        dataSource={res?.items ?? []}
-        rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
-        pagination={{
-          current: page,
-          pageSize,
-          total: res?.total ?? 0,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, ps) => {
-            setPage(p)
-            setPageSize(ps)
-          },
-        }}
-        scroll={{ x: 1050 }}
-      />
-    </SectionCard>
   )
 }

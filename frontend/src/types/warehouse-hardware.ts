@@ -1,5 +1,3 @@
-// 五金库类型定义（后端 backend/app/modules/warehouse/hardware/schemas.py 镜像）
-
 export type HardwareManagedClass = 'stocked' | 'direct'
 export type HardwareReceiptSource = 'ocr' | 'manual' | 'excel' | 'erp_import' | 'stocktake' | 'return'
 export type HardwareReceiptStatus = 'draft' | 'accepted' | 'rejected'
@@ -11,7 +9,6 @@ export type HardwareRequisitionStatus =
   | 'issued'
   | 'rejected'
   | 'cancelled'
-  | 'overdue_unpatched'
 export type HardwareMovementDirection = 'inbound' | 'outbound' | 'adjust'
 
 export const HARDWARE_MANAGED_CLASS_LABEL: Record<HardwareManagedClass, string> = {
@@ -47,7 +44,6 @@ export const HARDWARE_REQ_STATUS_LABEL: Record<HardwareRequisitionStatus, string
   issued: '已发料',
   rejected: '已驳回',
   cancelled: '已取消',
-  overdue_unpatched: '超期未补单',
 }
 
 export const HARDWARE_MOVEMENT_BIZ_LABEL: Record<string, string> = {
@@ -60,8 +56,6 @@ export const HARDWARE_MOVEMENT_BIZ_LABEL: Record<string, string> = {
   stocktake_adj: '盘点调整',
   scrap: '报废',
 }
-
-// ── 记录类型 ──
 
 export interface HardwareMaterialRecord {
   id: string
@@ -82,7 +76,6 @@ export interface HardwareMaterialRecord {
 
 export interface HardwareStockRow {
   material: HardwareMaterialRecord
-  /** 后端附加平铺列（列表直读免解包） */
   category?: string
   name?: string
   spec?: string | null
@@ -160,7 +153,6 @@ export interface HardwareReceiptItemRecord {
   photo_screening?: HardwarePhotoScreening | null
 }
 
-/** M7 实物照片初筛结论（advisory 只标记不拦截） */
 export interface HardwarePhotoScreening {
   flagged: boolean
   findings: Array<{ type: string; severity: 'low' | 'mid' | 'high'; note: string }>
@@ -187,10 +179,8 @@ export interface HardwareReceiptRecord {
   erp_doc_no: string | null
   erp_imported_at?: string | null
   accepted_at: string | null
-  /** M8 对账轴：none/unmatched/matched/verified/discrepancy */
   reconcile_status?: string
   matched_receipt_id?: string | null
-  /** M9 自动入账标记（direct 高置信） */
   auto_accepted?: boolean
   auto_accept_snapshot?: Record<string, unknown> | null
   remark?: string | null
@@ -218,6 +208,8 @@ export interface HardwareRequisitionRecord {
   purpose: string | null
   req_type: HardwareRequisitionType
   status: HardwareRequisitionStatus
+  approver_user_id?: string | null
+  approver_name?: string | null
   approval_channel?: string | null
   approval_instance_code?: string | null
   approval_status?: string | null
@@ -227,8 +219,7 @@ export interface HardwareRequisitionRecord {
   issued_by?: string | null
   issued_at?: string | null
   received_by?: string | null
-  urgent_patch_deadline?: string | null
-  patched_at?: string | null
+  urgent_reason?: string | null
   created_at: string
   items: HardwareRequisitionItemRecord[]
 }
@@ -240,8 +231,6 @@ export interface HardwareLocationRecord {
   description: string | null
   active: boolean
 }
-
-// ── 请求参数 ──
 
 export interface HardwareStockFilter {
   keyword?: string
@@ -279,8 +268,6 @@ export interface HardwareRequisitionFilter {
   pageSize?: number
 }
 
-// ── 写操作载荷 ──
-
 export interface HardwareReceiptItemInput {
   material_id?: string | null
   name: string
@@ -303,19 +290,28 @@ export interface HardwareReceiptCreateInput {
   target_dept?: string
   remark?: string
   items: HardwareReceiptItemInput[]
-  /** 截图解析留痕（已退役保留兼容） */
   ocr_result?: Record<string, unknown> | null
-  /** Excel 解析留痕（方式②：excel/parse 返回的 excel_result 提交时带回） */
   excel_result?: Record<string, unknown> | null
 }
 
-/** 入库 Excel 解析行（方式②）：明细行 + 匹配标记（绿=已匹配/黄=低置信/红=未匹配） */
 export interface HardwareReceiptParseItem extends HardwareReceiptItemInput {
   matched_name?: string | null
   low_confidence?: boolean
+  managed_class?: string | null
 }
 
-/** POST /receipts/excel/parse 响应：纯解析不落库，表单预填契约 */
+export interface HardwareReceiptParseDocument {
+  key: string
+  delivery_note_no?: string | null
+  supplier_name?: string | null
+  item_indexes: number[]
+  stocked_count: number
+  direct_count: number
+  unmatched_count: number
+  all_matched: boolean
+  mode: HardwareManagedClass
+}
+
 export interface HardwareReceiptParseResult {
   mode: HardwareManagedClass
   supplier_name?: string | null
@@ -323,28 +319,30 @@ export interface HardwareReceiptParseResult {
   remark?: string | null
   target_dept?: string | null
   items: HardwareReceiptParseItem[]
+  documents?: HardwareReceiptParseDocument[]
   match_summary: Array<Record<string, unknown>>
   matched_stocked: number
   matched_direct: number
   unmatched: number
   errors: Array<{ row: number; name: string; reason: string }>
-  /** Excel 解析留痕——提交时随 HardwareReceiptCreateInput.excel_result 原样回传 */
   excel_result: Record<string, unknown> | null
-  /** 兼容字段（截图解析已退役，恒 null） */
   ocr_result?: Record<string, unknown> | null
 }
 
 export interface HardwareReceiptAcceptInput {
   inspected_by_warehouse: string
-  inspected_by_dept: string
+  inspected_by_dept?: string
   items?: HardwareReceiptItemInput[]
 }
 
 export interface HardwareRequisitionCreateInput {
   dept_name: string
   applicant: string
+  approver_user_id?: string
+  approver_name?: string
   purpose?: string
   req_type: HardwareRequisitionType
+  urgent_reason?: string
   items: Array<{ material_id: string; need_qty: number }>
 }
 
@@ -361,9 +359,6 @@ export interface HardwareImportStats {
   skipped: number
   errors: string[]
 }
-
-
-// ── 盘点（二期 M4）──
 
 export type HardwareStocktakeType = 'monthly' | 'annual' | 'special' | 'calibration'
 export type HardwareStocktakeStatus =
@@ -422,8 +417,6 @@ export interface HardwareStocktakeRecord {
   items?: HardwareStocktakeItemRecord[]
 }
 
-// ── 退库（二期 M4）──
-
 export type HardwareReturnStatus = 'draft' | 'accepted' | 'rejected'
 
 export const HARDWARE_RETURN_STATUS_LABEL: Record<HardwareReturnStatus, string> = {
@@ -465,9 +458,6 @@ export interface HardwareReturnRecord {
   created_at: string
 }
 
-
-// ── 月度采购计划 + 温湿度（二期 M5）──
-
 export interface HardwarePlanItemRecord {
   id: string
   material_id: string
@@ -506,9 +496,6 @@ export interface HardwareEnvLogRecord {
   checked_by: string | null
   abnormal_note: string | null
 }
-
-
-// ── 报废（三期 M7）──
 
 export type HardwareScrapReason = 'expired' | 'damaged' | 'obsolete' | 'appraisal'
 export type HardwareScrapStatus =
@@ -578,8 +565,6 @@ export interface HardwareScrapCreateInput {
   remark?: string
   items: Array<{ material_id: string; quantity: number; preferred_lot_id?: string }>
 }
-
-// ── ERP 导入与对账（三期 M8）──
 
 export interface HardwareErpImportResult {
   created: number

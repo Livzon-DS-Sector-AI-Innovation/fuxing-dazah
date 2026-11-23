@@ -1,9 +1,5 @@
 'use client'
 
-// 五金库报废面板（三期 M7）：发起（四条件单选+明细行）→ ①部门主管确认 →
-// ②仓储负责人终审（通过即销账）→ 台账；驳回/撤回零动账。
-// 设计 §十一 三期 M7；ApprovalChannel manual 两步，feishu 通道制度定稿后切配置。
-
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
@@ -18,10 +14,9 @@ import {
   Select,
   Space,
   Table,
-  Tag,
-  Typography,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
+import dayjs from 'dayjs'
 import {
   approveHardwareScrapClient,
   cancelHardwareScrapClient,
@@ -41,15 +36,9 @@ import {
   type HardwareScrapStatus,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-
-const SCRAP_STATUS_COLOR: Record<HardwareScrapStatus, string> = {
-  draft: 'default',
-  pending_dept: 'gold',
-  pending_final: 'orange',
-  approved: 'green',
-  rejected: 'red',
-  cancelled: 'default',
-}
+import { EmptyGuide, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
+import { SCRAP_STATUS_TONE } from './constants'
+import { formatQty } from './format'
 
 export function HardwareScrapPanel() {
   const { message, modal } = App.useApp()
@@ -95,7 +84,7 @@ export function HardwareScrapPanel() {
   const approveMut = useMutation({
     mutationFn: (id: string) => approveHardwareScrapClient(id, '仓储负责人'),
     onSuccess: () => {
-      message.success('终审通过，已销账（FIFO 扣批次 + scrap 流水）')
+      message.success('终审通过，已销账')
       invalidate()
       setDetailId(null)
     },
@@ -123,7 +112,7 @@ export function HardwareScrapPanel() {
   const askReject = (id: string) => {
     let reason = ''
     modal.warning({
-      title: '驳回报废单（零动账）',
+      title: '驳回报废单',
       content: (
         <Input.TextArea
           placeholder="驳回原因"
@@ -137,7 +126,7 @@ export function HardwareScrapPanel() {
   }
 
   const columns: TableColumnsType<HardwareScrapRecord> = [
-    { title: '单号', dataIndex: 'scrap_no', width: 170 },
+    { title: '单号', dataIndex: 'scrap_no', width: 170, className: 'font-mono' },
     {
       title: '报废条件',
       dataIndex: 'scrap_reason',
@@ -151,7 +140,7 @@ export function HardwareScrapPanel() {
       dataIndex: 'status',
       width: 140,
       render: (v: HardwareScrapStatus) => (
-        <Tag color={SCRAP_STATUS_COLOR[v]}>{HARDWARE_SCRAP_STATUS_LABEL[v] ?? v}</Tag>
+        <StatusTag tone={SCRAP_STATUS_TONE[v] ?? 'default'} label={HARDWARE_SCRAP_STATUS_LABEL[v] ?? v} />
       ),
     },
     {
@@ -164,13 +153,14 @@ export function HardwareScrapPanel() {
     {
       title: '时间',
       dataIndex: 'created_at',
-      width: 150,
-      render: (v: string) => new Date(v).toLocaleString('zh-CN', { hour12: false }),
+      width: 115,
+      render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
     },
     {
       title: '操作',
       key: 'actions',
       width: 220,
+      fixed: 'right',
       render: (_, r) => (
         <Space size="small">
           <Button size="small" onClick={() => setDetailId(r.id)}>
@@ -212,31 +202,36 @@ export function HardwareScrapPanel() {
   ]
 
   return (
-    <div className="space-y-3">
-      <Space wrap>
-        <Select
-          allowClear
-          placeholder="状态筛选"
-          style={{ width: 180 }}
-          value={status}
-          onChange={(v) => setStatus(v)}
-          options={Object.entries(HARDWARE_SCRAP_STATUS_LABEL).map(([v, l]) => ({ value: v, label: l }))}
-        />
-        {canManage && (
+    <SectionCard
+      title="报废单"
+      description="报废限四条件：超有效期/破损污染变质/工艺淘汰/技术鉴定失效；终审通过即销账，驳回不动账。"
+      action={
+        canManage && (
           <Button type="primary" onClick={() => setCreateOpen(true)}>
             发起报废
           </Button>
-        )}
-        <Typography.Text type="secondary">
-          制度 5.6 四条件（超有效期/破损污染变质/工艺淘汰/技术鉴定失效）；终审通过即 FIFO 销账，驳回零动账。
-        </Typography.Text>
-      </Space>
+        )
+      }
+    >
+      <QueryFilter
+        common={
+          <Select
+            allowClear
+            placeholder="状态筛选"
+            style={{ width: 180 }}
+            value={status}
+            onChange={(v) => setStatus(v)}
+            options={Object.entries(HARDWARE_SCRAP_STATUS_LABEL).map(([v, l]) => ({ value: v, label: l }))}
+          />
+        }
+      />
       <Table
         rowKey="id"
-        size="small"
+        size="middle"
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
         columns={columns}
+        locale={{ emptyText: <EmptyGuide compact title="暂无报废单" description="满足报废四条件的物资可发起报废审批" /> }}
         pagination={{ total: list.data?.total ?? 0, pageSize: 50, showTotal: (t) => `共 ${t} 条` }}
         scroll={{ x: 1100 }}
       />
@@ -253,9 +248,7 @@ export function HardwareScrapPanel() {
                 {HARDWARE_SCRAP_REASON_LABEL[detail.data.scrap_reason]}
               </Descriptions.Item>
               <Descriptions.Item label="状态">
-                <Tag color={SCRAP_STATUS_COLOR[detail.data.status]}>
-                  {HARDWARE_SCRAP_STATUS_LABEL[detail.data.status]}
-                </Tag>
+                <StatusTag tone={SCRAP_STATUS_TONE[detail.data.status] ?? 'default'} label={HARDWARE_SCRAP_STATUS_LABEL[detail.data.status]} />
               </Descriptions.Item>
               <Descriptions.Item label="发起">
                 {detail.data.dept_name} / {detail.data.requested_by}
@@ -274,7 +267,7 @@ export function HardwareScrapPanel() {
               columns={[
                 { title: '品名', dataIndex: 'name' },
                 { title: '规格', dataIndex: 'spec', render: (v) => v || '—' },
-                { title: '数量', dataIndex: 'quantity', width: 90 },
+                { title: '数量', dataIndex: 'quantity', width: 90, render: (v: unknown) => formatQty(v) },
                 {
                   title: '批次',
                   dataIndex: 'preferred_lot_id',
@@ -284,12 +277,12 @@ export function HardwareScrapPanel() {
               ] as TableColumnsType<NonNullable<HardwareScrapRecord['items']>[number]>}
             />
             {detail.data.lot_allocations && detail.data.lot_allocations.length > 0 && (
-              <Typography.Text type="secondary">
-                销账批次：{detail.data.lot_allocations.map((a) => `${a.lot_no ?? ''}×${a.qty}`).join('，')}
-              </Typography.Text>
+              <div className="text-[12px] text-[var(--color-steel)]">
+                销账批次：{detail.data.lot_allocations.map((a) => `${a.lot_no ?? ''}×${formatQty(a.qty)}`).join('，')}
+              </div>
             )}
             {detail.data.rejected_reason && (
-              <Typography.Text type="danger">驳回原因：{detail.data.rejected_reason}</Typography.Text>
+              <div className="text-[13px] text-red-600">驳回原因：{detail.data.rejected_reason}</div>
             )}
           </div>
         )}
@@ -302,7 +295,7 @@ export function HardwareScrapPanel() {
           invalidate()
         }}
       />
-    </div>
+    </SectionCard>
   )
 }
 
@@ -353,7 +346,7 @@ function ScrapCreateModal({
 
   return (
     <Modal
-      title="发起报废（制度 5.6）"
+      title="发起报废"
       open={open}
       onCancel={onClose}
       onOk={submit}
@@ -381,7 +374,7 @@ function ScrapCreateModal({
         </Form.Item>
       </Form>
       <div className="space-y-2">
-        <Typography.Text strong>报废明细（仅共用类 stocked；数量&gt;0）</Typography.Text>
+        <div className="text-[13px] font-medium">报废明细（仅共用类；数量大于 0）</div>
         <Select
           showSearch
           placeholder="搜索物料添加行（名称/规格）"
@@ -406,9 +399,10 @@ function ScrapCreateModal({
         />
         {rows.map((r, i) => (
           <Space key={r.material_id} wrap>
-            <Typography.Text>{r.name}</Typography.Text>
+            <span>{r.name}</span>
             <InputNumber
-              min={0.001}
+              min={1}
+              precision={0}
               value={r.quantity}
               onChange={(v) =>
                 setRows((prev) =>

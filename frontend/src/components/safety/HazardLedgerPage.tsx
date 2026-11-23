@@ -589,7 +589,7 @@ export default function HazardLedgerPage() {
       dataIndex: 'score',
       key: 'score',
       width: 85,
-      // ⑤ AI 评分 D=L×E×C×X；说明格式「H｜四维=D｜评语｜依据[｜重大判定][｜⚠]」，首段即 H/M/L
+      // ⑤ AI 评分 D=L×E×C×X；说明格式「H｜四维=D｜L/E/C/X 档位分值+理由｜评语｜依据[｜重大判定][｜⚠]」，首段即 H/M/L
       render: (score: number | null | undefined, record: HazardReport) => {
         if (score == null) return <span style={{ color: '#a4a097' }}>—</span>
         const band = (record.score_note ?? '').split('｜')[0]?.trim()

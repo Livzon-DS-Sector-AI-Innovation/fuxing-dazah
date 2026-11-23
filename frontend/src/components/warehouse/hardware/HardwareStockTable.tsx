@@ -1,11 +1,8 @@
 'use client'
 
-// 五金库库存总览（M1）：available 为主数、on_hand/reserved 明细展开、
-// 安全库存预警标红、批次（FIFO 序）抽屉。设计 §七：车间查询页口径。
-
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, App, Button, Drawer, Input, Segmented, Select, Table, Tag, Upload } from 'antd'
+import { Alert, App, Button, Drawer, Input, Segmented, Select, Table, Upload } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -20,7 +17,9 @@ import {
   type HardwareStockRow,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-import { QueryFilter, SectionCard, StatCard, StatusTag } from '@/components/warehouse'
+import { EmptyGuide, QueryFilter, SectionCard, StatCard, StatusTag } from '@/components/warehouse'
+import { MOVEMENT_DIRECTION_LABEL, MOVEMENT_DIRECTION_TONE } from './constants'
+import { formatQty } from './format'
 
 const CATEGORIES = [
   '金属管道', '金属管件', '金属阀门', '食品级垫片',
@@ -71,56 +70,62 @@ export function HardwareStockTable() {
     {
       title: '编码',
       dataIndex: ['material', 'code'],
-      width: 110,
+      width: 95,
       render: (v: string | null) => <span className="text-[12px] font-mono">{v || '待回填'}</span>,
     },
-    { title: '类别', dataIndex: 'category', width: 100 },
+    { title: '类别', dataIndex: 'category', width: 88 },
     {
       title: '物资名称',
       dataIndex: 'name',
-      width: 200,
+      width: 165,
+      ellipsis: true,
       render: (v: string, r) => (
         <a onClick={() => setDetailId(r.material.id)}>{v}</a>
       ),
     },
-    { title: '规格型号', dataIndex: 'spec', width: 130, render: (v) => v || '-' },
+    { title: '规格型号', dataIndex: 'spec', width: 140, ellipsis: true, render: (v) => v || '-' },
     { title: '单位', dataIndex: 'unit', width: 56 },
     {
       title: '在手',
       dataIndex: 'on_hand',
-      width: 90,
+      width: 78,
       align: 'right',
-      render: (v: number) => v.toLocaleString(),
+      className: 'tabular-nums',
+      render: (v: unknown) => formatQty(v),
     },
     {
       title: '预扣',
       dataIndex: 'reserved',
-      width: 80,
+      width: 72,
       align: 'right',
-      render: (v: number) => (v > 0 ? <span className="text-amber-600">{v.toLocaleString()}</span> : '0'),
+      className: 'tabular-nums',
+      render: (v: unknown) =>
+        Number(v) > 0 ? <span className="text-amber-600">{formatQty(v)}</span> : '0',
     },
     {
       title: '可用',
       dataIndex: 'available',
-      width: 100,
+      width: 82,
       align: 'right',
-      render: (v: number, r) => (
+      className: 'tabular-nums',
+      render: (v: unknown, r) => (
         <span className={r.is_low ? 'font-semibold text-red-600' : 'font-medium'}>
-          {v.toLocaleString()}
+          {formatQty(v)}
         </span>
       ),
     },
     {
       title: '安全库存',
       dataIndex: 'safety_stock',
-      width: 90,
+      width: 86,
       align: 'right',
-      render: (v: number) => v.toLocaleString(),
+      className: 'tabular-nums',
+      render: (v: unknown) => formatQty(v),
     },
     {
       title: '状态',
       dataIndex: 'is_low',
-      width: 96,
+      width: 92,
       filters: [
         { text: '预警', value: 'low' },
         { text: '正常', value: 'ok' },
@@ -128,7 +133,7 @@ export function HardwareStockTable() {
       onFilter: (value, record) => (value === 'low' ? record.is_low : !record.is_low),
       render: (isLow: boolean, r) =>
         isLow ? (
-          <StatusTag tone="danger" label={`缺 ${Number(r.low_gap).toLocaleString()}`} />
+          <StatusTag tone="danger" label={`缺 ${formatQty(r.low_gap)}`} />
         ) : (
           <StatusTag tone="ok" label="正常" />
         ),
@@ -148,7 +153,7 @@ export function HardwareStockTable() {
         />
         <StatCard
           label="在手总量（件）"
-          value={Math.round(summary?.on_hand_total ?? 0).toLocaleString()}
+          value={formatQty(summary?.on_hand_total ?? 0)}
         />
       </div>
 
@@ -159,7 +164,7 @@ export function HardwareStockTable() {
           message={`${summary?.low_count} 种物资可用量低于安全库存`}
           description={summary?.low_materials
             .slice(0, 6)
-            .map((m) => `${m.name}${m.spec ? ` ${m.spec}` : ''}（可用 ${m.available} / 安全 ${m.safety_stock}）`)
+            .map((m) => `${m.name}${m.spec ? ` ${m.spec}` : ''}（可用 ${formatQty(m.available)} / 安全 ${formatQty(m.safety_stock)}）`)
             .join('；')}
         />
       )}
@@ -244,11 +249,12 @@ export function HardwareStockTable() {
         />
 
         <Table<HardwareStockRow>
-          size="small"
+          size="middle"
           rowKey={(r) => r.material.id}
           loading={isLoading}
           columns={columns}
           dataSource={rows}
+          locale={{ emptyText: <EmptyGuide compact title="暂无库存数据" description="导入物资清单或调整筛选条件" /> }}
           pagination={{
             current: page,
             pageSize,
@@ -260,7 +266,7 @@ export function HardwareStockTable() {
               setPageSize(ps)
             },
           }}
-          scroll={{ x: 1050 }}
+          scroll={{ x: 920 }}
         />
       </SectionCard>
 
@@ -285,7 +291,7 @@ function HardwareStockDrawer({
   const m = data?.stock.material
   const demands = useMemo(
     () =>
-      Object.entries(m?.monthly_demands ?? {}).map(([dept, qty]) => `${dept}: ${qty}`).join('　') || '-',
+      Object.entries(m?.monthly_demands ?? {}).map(([dept, qty]) => `${dept}: ${formatQty(qty)}`).join('　') || '-',
     [m],
   )
 
@@ -300,28 +306,28 @@ function HardwareStockDrawer({
       {data && m && (
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-3 gap-3">
-            <StatCard label="可用" value={Number(data.stock.available).toLocaleString()} sub={m.unit}
+            <StatCard label="可用" value={formatQty(data.stock.available)} sub={m.unit}
               tone={data.stock.is_low ? 'danger' : 'default'} />
-            <StatCard label="在手" value={Number(data.stock.on_hand).toLocaleString()} sub={m.unit} />
-            <StatCard label="预扣" value={Number(data.stock.reserved).toLocaleString()} sub={m.unit} />
+            <StatCard label="在手" value={formatQty(data.stock.on_hand)} sub={m.unit} />
+            <StatCard label="预扣" value={formatQty(data.stock.reserved)} sub={m.unit} />
           </div>
           <div className="text-[13px] leading-6 text-[var(--color-charcoal)]">
-            <div>编码：{m.code || '待回填（采购编码表到位后回填）'}</div>
+            <div>编码：{m.code || '待回填'}</div>
             <div>类别：{m.category}（{HARDWARE_MANAGED_CLASS_LABEL[m.managed_class]}）</div>
-            <div>安全库存：{Number(m.safety_stock).toLocaleString()} {m.unit}{data.stock.is_low && <Tag color="red" className="ml-2">缺口 {Number(data.stock.low_gap).toLocaleString()}</Tag>}</div>
+            <div>安全库存：{formatQty(m.safety_stock)} {m.unit}{data.stock.is_low && <span className="ml-2"><StatusTag tone="danger" label={`缺口 ${formatQty(data.stock.low_gap)}`} /></span>}</div>
             <div>月需求：{demands}</div>
             <div>采购周期：{m.lead_time_days != null ? `${m.lead_time_days} 天` : '-'}</div>
           </div>
 
-          <SectionCard title={`批次明细（FIFO 序，${data.lots.length} 批）`}>
+          <SectionCard title={`批次明细（共 ${data.lots.length} 批）`}>
             <Table
               size="small"
               rowKey="lot_id"
               dataSource={data.lots}
               pagination={false}
               columns={[
-                { title: '批次号', dataIndex: 'lot_no', width: 130 },
-                { title: '来源入库单', dataIndex: 'receipt_no', width: 140 },
+                { title: '批次号', dataIndex: 'lot_no', width: 130, className: 'font-mono' },
+                { title: '来源入库单', dataIndex: 'receipt_no', width: 140, className: 'font-mono' },
                 {
                   title: '到货',
                   dataIndex: 'arrived_at',
@@ -333,8 +339,9 @@ function HardwareStockDrawer({
                   title: '剩余/总量',
                   width: 120,
                   align: 'right',
+                  className: 'tabular-nums',
                   render: (_: unknown, r) =>
-                    `${Number(r.remaining_quantity).toLocaleString()} / ${Number(r.quantity).toLocaleString()}`,
+                    `${formatQty(r.remaining_quantity)} / ${formatQty(r.quantity)}`,
                 },
               ]}
             />
@@ -352,12 +359,13 @@ function HardwareStockDrawer({
                   dataIndex: 'direction',
                   width: 70,
                   render: (v: string) => (
-                    <Tag color={v === 'inbound' ? 'green' : v === 'outbound' ? 'red' : 'orange'}>
-                      {v === 'inbound' ? '入' : v === 'outbound' ? '出' : '调'}
-                    </Tag>
+                    <StatusTag
+                      tone={MOVEMENT_DIRECTION_TONE[v as keyof typeof MOVEMENT_DIRECTION_TONE] ?? 'default'}
+                      label={MOVEMENT_DIRECTION_LABEL[v as keyof typeof MOVEMENT_DIRECTION_LABEL] ?? v}
+                    />
                   ),
                 },
-                { title: '数量', dataIndex: 'quantity', width: 80, align: 'right' },
+                { title: '数量', dataIndex: 'quantity', width: 80, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
                 { title: '经办', dataIndex: 'operator', width: 90, render: (v) => v || '-' },
                 {
                   title: '时间',
@@ -365,7 +373,7 @@ function HardwareStockDrawer({
                   width: 130,
                   render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
                 },
-                { title: '单号', dataIndex: 'movement_no', width: 150 },
+                { title: '单号', dataIndex: 'movement_no', width: 150, className: 'font-mono' },
               ]}
             />
           </SectionCard>

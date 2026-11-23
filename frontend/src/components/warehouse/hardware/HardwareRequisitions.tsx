@@ -1,11 +1,7 @@
 'use client'
 
-// 五金库领用中心（M3，车间视角）：发起申请（物料搜索+库存可见）/
-// 我的申请+全部单据 / 部门月度统计。审批双通道：manual=主管在此点确认；
-// 发料走仓管员发料台（出入库工作台）。设计 §七。
-
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   App,
   Button,
@@ -17,7 +13,6 @@ import {
   Select,
   Space,
   Table,
-  Tag,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { DownloadOutlined, SearchOutlined } from '@ant-design/icons'
@@ -27,12 +22,13 @@ import {
   cancelHardwareRequisitionClient,
   createHardwareRequisitionClient,
   exportRequisitionsUrl,
-  fetchHardwareMaterialsClient,
   fetchHardwareMovementsClient,
   fetchHardwareRequisitionsClient,
   fetchHardwareStockClient,
+  fetchHardwareStockDetailClient,
   fetchHardwareStockSummaryClient,
-  patchHardwareRequisitionManualClient,
+  fetchRequisitionApproversClient,
+  issueHardwareRequisitionClient,
   rejectHardwareRequisitionClient,
   submitHardwareRequisitionClient,
 } from '@/lib/api/warehouse-hardware'
@@ -42,55 +38,35 @@ import {
   type HardwareRequisitionRecord,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-import { QueryFilter, SectionCard, StatCard, StatusTag } from '@/components/warehouse'
+import { getCurrentUser } from '@/actions/auth'
+import type { User } from '@/types/user'
+import { QueryFilter, SectionCard, StatusTag, EmptyGuide } from '@/components/warehouse'
+import { REQ_STATUS_TONE, REQ_TYPE_TONE } from './constants'
+import { formatQty } from './format'
 
 type TabKey = 'browse' | 'mine' | 'dept'
 
-const REQ_STATUS_TONE = {
-  draft: 'default',
-  pending: 'warn',
-  approved: 'info',
-  issued: 'ok',
-  rejected: 'danger',
-  cancelled: 'default',
-  overdue_unpatched: 'danger',
-} as const
-
-export function HardwareRequisitions() {
-  const [tab, setTab] = useState<TabKey>('browse')
+export function HardwareRequisitions({ focusStatus }: { focusStatus?: string }) {
+  const [tab, setTab] = useState<TabKey>(focusStatus ? 'mine' : 'browse')
   return (
     <div className="flex flex-col gap-4">
-      <SectionCard title="五金库领用">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-[17px] font-semibold">五金库领用中心</div>
-            <div className="text-[13px] text-gray-500">
-              共用类领料走审批（提交即预扣）；车间单独需求类到货直接领取，无需申请
-            </div>
-          </div>
-          <Segmented
-            value={tab}
-            onChange={(v) => setTab(v as TabKey)}
-            options={[
-              { value: 'browse', label: '查库存' },
-              { value: 'mine', label: '领用申请' },
-              { value: 'dept', label: '部门月度统计' },
-            ]}
-          />
-        </div>
-      </SectionCard>
+      <Segmented
+        value={tab}
+        onChange={(v) => setTab(v as TabKey)}
+        options={[
+          { value: 'browse', label: '申领库存' },
+          { value: 'mine', label: '申请单据' },
+          { value: 'dept', label: '部门统计' },
+        ]}
+      />
       {tab === 'browse' && <BrowsePanel />}
-      {tab === 'mine' && <MyRequisitionsPanel />}
+      {tab === 'mine' && <MyRequisitionsPanel focusStatus={focusStatus} />}
       {tab === 'dept' && <DeptStatsPanel />}
     </div>
   )
 }
 
-// ── 查库存 + 发起申请 ──
-
 function BrowsePanel() {
-  const { message } = App.useApp()
-  const queryClient = useQueryClient()
   const { hasPermission } = usePermission()
   const canCreate = hasPermission('warehouse:hardware:requisition:create')
 
@@ -98,13 +74,19 @@ function BrowsePanel() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [lowOnly, setLowOnly] = useState(false)
-  const [applying, setApplying] = useState<{ id: string; name: string; available: number; unit: string } | null>(
-    null,
-  )
+  const [applying, setApplying] = useState<{
+    id: string
+    name: string
+    category: string
+    spec: string
+    unit: string
+    available: number
+  } | null>(null)
 
   const { data: summary } = useQuery({
     queryKey: ['warehouse', 'hardware', 'summary'],
     queryFn: fetchHardwareStockSummaryClient,
+    refetchInterval: 30_000,
   })
 
   const { data: res, isLoading } = useQuery({
@@ -117,29 +99,31 @@ function BrowsePanel() {
         pageSize,
       }),
     placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
   })
 
   const columns: TableColumnsType<NonNullable<typeof res>['items'][number]> = [
     {
       title: '物资名称',
       dataIndex: 'name',
-      width: 200,
+      width: 180,
+      ellipsis: true,
     },
-    { title: '规格型号', dataIndex: 'spec', width: 130, render: (v: unknown) => (v as string) || '-' },
+    { title: '规格型号', dataIndex: 'spec', width: 150, ellipsis: true, render: (v: unknown) => (v as string) || '-' },
     { title: '单位', dataIndex: 'unit', width: 60, render: (v: unknown) => (v as string) || '' },
     {
       title: '可用',
       dataIndex: 'available',
       width: 90,
       align: 'right',
-      render: (v: number, r) => (
-        <span className={r.is_low ? 'font-semibold text-red-600' : 'font-medium'}>
-          {Number(v).toLocaleString()}
+      render: (v: unknown, r) => (
+        <span className={`tabular-nums ${r.is_low ? 'font-semibold text-red-600' : 'font-medium'}`}>
+          {formatQty(v)}
         </span>
       ),
     },
-    { title: '在手', dataIndex: 'on_hand', width: 80, align: 'right' },
-    { title: '预扣', dataIndex: 'reserved', width: 80, align: 'right' },
+    { title: '在手', dataIndex: 'on_hand', width: 80, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
+    { title: '预扣', dataIndex: 'reserved', width: 80, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
     {
       title: '操作',
       width: 110,
@@ -152,8 +136,10 @@ function BrowsePanel() {
               setApplying({
                 id: r.material.id,
                 name: r.name ?? '',
-                available: Number(r.available),
+                category: r.category ?? r.material.category ?? '',
+                spec: r.spec ?? '',
                 unit: r.unit ?? '',
+                available: Number(r.available),
               })
             }
           >
@@ -198,11 +184,12 @@ function BrowsePanel() {
         }
       />
       <Table
-        size="small"
+        size="middle"
         rowKey={(r) => r.material.id}
         loading={isLoading}
         columns={columns}
         dataSource={res?.items ?? []}
+        locale={{ emptyText: <EmptyGuide compact title="暂无库存数据" description="调整关键词或查看全部类别" /> }}
         pagination={{
           current: page,
           pageSize,
@@ -224,42 +211,136 @@ function ApplyModal({
   apply,
   onClose,
 }: {
-  apply: { id: string; name: string; available: number; unit: string } | null
+  apply: {
+    id: string
+    name: string
+    category: string
+    spec: string
+    unit: string
+    available: number
+  } | null
   onClose: () => void
 }) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const queryClient = useQueryClient()
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const [me, setMe] = useState<User | null>(null)
+  const [approverId, setApproverId] = useState<string | undefined>(undefined)
+  const [approverKeyword, setApproverKeyword] = useState('')
   const reqType = Form.useWatch('req_type', form)
 
-  const onSubmit = async () => {
+  const { data: approvers = [], isFetching: approversLoading } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'approvers', approverKeyword],
+    queryFn: () =>
+      fetchRequisitionApproversClient({
+        keyword: approverKeyword || undefined,
+        limit: 50,
+      }),
+    enabled: !!apply,
+    staleTime: 60_000,
+  })
+  const approverOptions = approvers.map((a) => ({
+    value: a.user_id,
+    label: `${a.supervisor ? '【主管及以上】' : ''}${a.name}（${a.department || '未匹配部门'} · ${a.position || '—'}）`,
+  }))
+  const selectedApprover = approvers.find((a) => a.user_id === approverId) ?? null
+
+  useEffect(() => {
+    let alive = true
+    getCurrentUser()
+      .then((u) => alive && setMe(u))
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const deptName = me?.department?.trim() || '未匹配部门'
+
+  const submitConfirmed = async (values: {
+    need_qty: number
+    req_type: 'normal' | 'urgent' | 'excess'
+    urgent_reason?: string
+  }) => {
     if (!apply) return
-    const values = await form.validateFields()
     setSaving(true)
+    let createdId: string | null = null
     try {
       const created = await createHardwareRequisitionClient({
-        dept_name: values.dept_name,
-        applicant: values.applicant,
-        purpose: values.purpose,
+        dept_name: deptName,
+        applicant: me!.name,
+        approver_user_id: selectedApprover?.user_id,
+        approver_name: selectedApprover?.name,
         req_type: values.req_type,
+        urgent_reason: values.req_type === 'urgent' ? values.urgent_reason : undefined,
         items: [{ material_id: apply.id, need_qty: values.need_qty }],
       })
-      await submitHardwareRequisitionClient(created.id)
+      createdId = created.id
+      const submitted = await submitHardwareRequisitionClient(created.id)
       if (values.req_type === 'urgent') {
-        message.success('紧急领用已建立（预扣生效，已通知仓管员发料；领料后 24h 内请提交正式领料审批补办）')
+        message.success(
+          submitted.approval_channel === 'feishu'
+            ? '紧急领料已发起审批（仓管已收到加急通知，审批通过前即可发料；审批单据即闭环手续）'
+            : '紧急领料已提交（仓管已收到加急通知，审批通过前即可发料）',
+        )
+      } else if (submitted.approval_channel === 'feishu') {
+        message.success('已在飞书发起「福兴电子领/退料单审批」，审批通过后由仓管员发料')
       } else {
-        message.success('申请已提交（预扣生效，等待审批）')
+        message.success('申请已提交（预扣生效，等待主管在系统内审批）')
       }
       form.resetFields()
+      setApproverId(undefined)
       onClose()
       queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
       queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '提交失败')
+      const tip = e instanceof Error ? e.message : '提交失败'
+      message.error(createdId ? `${tip}（单据已留在「申请单据」草稿，可重新提交）` : tip)
+      if (createdId) {
+        form.resetFields()
+        setApproverId(undefined)
+        onClose()
+        queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
+        queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      }
     } finally {
       setSaving(false)
     }
+  }
+
+  const onSubmit = async () => {
+    if (!apply) return
+    const values = await form.validateFields()
+    if (!me?.name) {
+      message.error('当前登录人缺少姓名（账号未同步姓名），请先同步人员信息后再申领')
+      return
+    }
+    if (!selectedApprover) {
+      message.error('请选择审批人（主管及以上）后再提交')
+      return
+    }
+    modal.confirm({
+      title: '确认发起审批',
+      width: 440,
+      okText: '确认发起',
+      cancelText: '再改改',
+      content: (
+        <div className="space-y-1 text-[13px]">
+          <div>物资：{apply.name}{apply.spec ? ` · ${apply.spec}` : ''}</div>
+          <div>领取量：{formatQty(values.need_qty)} {apply.unit}</div>
+          <div>类型：{values.req_type === 'urgent' ? '紧急（先发后批）' : '常规'}</div>
+          {values.req_type === 'urgent' && <div>紧急原因：{values.urgent_reason || '-'}</div>}
+          <div>审批人：{selectedApprover?.name ?? '-'}</div>
+          <div className="pt-1 text-[12px] text-gray-500">
+            {values.req_type === 'urgent'
+              ? '确认后将发起审批并加急通知仓管员；紧急单审批通过前仓管员即可发料（审批单据即闭环手续）。'
+              : '确认后将在飞书发起「福兴电子领/退料单审批」，由所选审批人审批。'}
+          </div>
+        </div>
+      ),
+      onOk: () => submitConfirmed(values),
+    })
   }
 
   return (
@@ -269,39 +350,43 @@ function ApplyModal({
       onCancel={onClose}
       onOk={onSubmit}
       confirmLoading={saving}
-      okText="提交申请（预扣）"
+      okText="下一步：确认发起"
       width={460}
     >
       {apply && (
-        <div className="mb-3 rounded bg-gray-50 px-3 py-2 text-[13px]">
-          当前可用 {apply.available} {apply.unit}（提交即预扣，审批通过后到发料台领料）
+        <div className="mb-3 space-y-1 rounded bg-gray-50 px-3 py-2 text-[13px]">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <div>类别：{apply.category || '-'}</div>
+            <div>物资名称：{apply.name || '-'}</div>
+            <div>规格型号：{apply.spec || '-'}</div>
+            <div>计量单位：{apply.unit || '-'}</div>
+            <div className="font-medium">可领量：{formatQty(apply.available)}</div>
+          </div>
+          <div className="pt-1 text-[12px] text-gray-500">
+            领用部门 / 领用人：{me ? `${deptName} / ${me.name}` : '加载中…'}
+            {me && !me.department ? '（账号未同步部门，按「未匹配部门」记录，不影响审批）' : ''}
+          </div>
         </div>
       )}
-      {reqType === 'urgent' && (
+      {reqType === 'urgent' ? (
         <div className="mb-3 rounded bg-orange-50 px-3 py-2 text-[13px] text-orange-600">
-          紧急领用（先发后补）：提交后不走审批，直接通知仓管员发料；领料后 24
-          小时内须在飞书提交「福兴电子领/退料单审批」补办，逾期仓储部有权暂停本部门领用。
+          紧急领料（先发后批）：照常发起审批，仓管员会收到加急通知，审批通过前即可发料；
+          审批单据本身即闭环手续，无需再补办。
+        </div>
+      ) : (
+        <div className="mb-3 rounded bg-blue-50 px-3 py-2 text-[13px] text-blue-600">
+          提交即按审批表单发起「福兴电子领/退料单审批」，审批通过后由仓管员发料。
         </div>
       )}
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{ req_type: 'normal', applicant: '' }}
-      >
-        <Form.Item name="dept_name" label="领用部门" rules={[{ required: true, message: '请输入部门' }]}>
-          <Input placeholder="如：发酵 / 提炼一期 / 精制机修" />
-        </Form.Item>
-        <Form.Item name="applicant" label="领用人" rules={[{ required: true, message: '请输入姓名' }]}>
-          <Input />
-        </Form.Item>
+      <Form form={form} layout="vertical" initialValues={{ req_type: 'normal' }}>
         <Form.Item
           name="need_qty"
-          label="需求数量"
-          rules={[{ required: true, message: '请输入数量' }]}
+          label="领取量"
+          rules={[{ required: true, message: '请输入领取量' }]}
         >
           <InputNumber
-            min={0.001}
-            precision={3}
+            min={1}
+            precision={0}
             max={apply?.available}
             style={{ width: '100%' }}
             addonAfter={apply?.unit}
@@ -310,38 +395,56 @@ function ApplyModal({
         <Form.Item name="req_type" label="类型">
           <Select
             options={[
-              { value: 'normal', label: '常规' },
-              { value: 'urgent', label: '紧急（先发后补 24h）' },
-              { value: 'excess', label: '超额（超月需求）' },
+              { value: 'normal', label: '常规（走审批）' },
+              { value: 'urgent', label: '紧急（先发后批）' },
             ]}
           />
         </Form.Item>
-        <Form.Item name="purpose" label="用途">
-          <Input.TextArea rows={2} placeholder="如：3# 反应釜出口管更换" />
+        {reqType === 'urgent' && (
+          <Form.Item
+            name="urgent_reason"
+            label="紧急原因"
+            rules={[{ required: true, message: '紧急申领必须填写紧急原因' }]}
+          >
+            <Input placeholder="如：3#泵体抢修急需" maxLength={200} showCount />
+          </Form.Item>
+        )}
+        <Form.Item label="审批人（主管及以上）" required>
+          <Select
+            showSearch
+            placeholder="搜索姓名 / 部门 / 职位后选择审批人"
+            value={approverId}
+            loading={approversLoading}
+            filterOption={false}
+            onSearch={(v) => setApproverKeyword(v)}
+            onChange={(v: string) => setApproverId(v)}
+            options={approverOptions}
+            notFoundContent={approversLoading ? '加载中…' : '无匹配人员'}
+          />
         </Form.Item>
       </Form>
     </Modal>
   )
 }
 
-// ── 领用申请列表（申请人/主管共用：manual 审批在此确认）──
-
-function MyRequisitionsPanel() {
+function MyRequisitionsPanel({ focusStatus }: { focusStatus?: string }) {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const { hasPermission } = usePermission()
   const canApprove = hasPermission('warehouse:hardware:requisition:approve')
   const canIssue = hasPermission('warehouse:hardware:requisition:issue')
 
-  const [statusFilter, setStatusFilter] = useState<string | undefined>('pending')
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(focusStatus ?? 'pending')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [detail, setDetail] = useState<HardwareRequisitionRecord | null>(null)
+  const [issuing, setIssuing] = useState<HardwareRequisitionRecord | null>(null)
 
   const { data: res, isLoading } = useQuery({
     queryKey: ['warehouse', 'hardware', 'requisitions', { statusFilter, page, pageSize }],
     queryFn: () => fetchHardwareRequisitionsClient({ status: statusFilter, page, pageSize }),
     placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
   })
 
   const approve = useMutation({
@@ -363,57 +466,40 @@ function MyRequisitionsPanel() {
     onError: (e) => message.error(e instanceof Error ? e.message : '驳回失败'),
   })
 
-  // 紧急单手动确认已补办（自动匹配漏配/线下已补的兜底）
-  const patchManual = useMutation({
-    mutationFn: (id: string) => patchHardwareRequisitionManualClient(id),
-    onSuccess: () => {
-      message.success('已确认补办闭环')
+  const resubmit = useMutation({
+    mutationFn: (id: string) => submitHardwareRequisitionClient(id),
+    onSuccess: (r) => {
+      message.success(
+        r.approval_channel === 'feishu'
+          ? '已重新发起飞书审批（预扣生效）'
+          : '已提交（预扣生效，等待主管在系统内审批）',
+      )
       queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
     },
-    onError: (e) => message.error(e instanceof Error ? e.message : '补办确认失败'),
+    onError: (e) => message.error(e instanceof Error ? e.message : '提交失败'),
   })
 
   const columns: TableColumnsType<HardwareRequisitionRecord> = [
-    { title: '单号', dataIndex: 'req_no', width: 150 },
+    { title: '单号', dataIndex: 'req_no', width: 160, className: 'font-mono' },
     {
       title: '类型',
       dataIndex: 'req_type',
       width: 70,
-      render: (v: string) =>
-        v === 'urgent' ? (
-          <Tag color="red">紧急</Tag>
-        ) : v === 'excess' ? (
-          <Tag color="orange">超额</Tag>
-        ) : (
-          <Tag>常规</Tag>
-        ),
+      render: (v: string) => (
+        <StatusTag
+          tone={REQ_TYPE_TONE[v as keyof typeof REQ_TYPE_TONE] ?? 'default'}
+          label={HARDWARE_REQ_TYPE_LABEL[v as keyof typeof HARDWARE_REQ_TYPE_LABEL] ?? v}
+        />
+      ),
     },
-    { title: '部门', dataIndex: 'dept_name', width: 100 },
-    { title: '申请人', dataIndex: 'applicant', width: 90 },
-    { title: '用途', dataIndex: 'purpose', render: (v) => v || '-' },
-    {
-      title: '补办',
-      width: 110,
-      render: (_: unknown, r: HardwareRequisitionRecord) => {
-        if (r.req_type !== 'urgent') return '-'
-        if (r.patched_at) return <Tag color="green">已补办</Tag>
-        if (r.status === 'overdue_unpatched') return <Tag color="red">逾期未补</Tag>
-        if (r.urgent_patch_deadline) {
-          const remainMin = dayjs(r.urgent_patch_deadline).diff(dayjs(), 'minute')
-          if (remainMin <= 0) return <Tag color="red">已逾期</Tag>
-          const text =
-            remainMin >= 60
-              ? `剩 ${Math.floor(remainMin / 60)} 小时`
-              : `剩 ${remainMin} 分钟`
-          return <Tag color={remainMin <= 120 ? 'red' : 'orange'}>{text}</Tag>
-        }
-        return <Tag>待发料起算</Tag>
-      },
-    },
+    { title: '部门', dataIndex: 'dept_name', width: 90 },
+    { title: '申请人', dataIndex: 'applicant', width: 85 },
+    { title: '用途', dataIndex: 'purpose', width: 100, ellipsis: true, render: (v) => v || '-' },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 100,
+      width: 95,
       render: (v: string) => (
         <StatusTag
           tone={REQ_STATUS_TONE[v as keyof typeof REQ_STATUS_TONE] ?? 'default'}
@@ -421,21 +507,33 @@ function MyRequisitionsPanel() {
         />
       ),
     },
-    { title: '审批人', dataIndex: 'approved_by', width: 110, render: (v) => v || '-' },
+    {
+      title: '审批人',
+      dataIndex: 'approved_by',
+      width: 95,
+      render: (_: unknown, r: HardwareRequisitionRecord) =>
+        r.approved_by || r.approver_name || '-',
+    },
     {
       title: '申请时间',
       dataIndex: 'created_at',
-      width: 120,
+      width: 110,
       render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
     },
     {
       title: '操作',
-      width: 180,
+      width: 220,
+      fixed: 'right',
       render: (_: unknown, r) => (
-        <Space>
+        <Space wrap size={4}>
           <Button size="small" onClick={() => setDetail(r)}>
             明细
           </Button>
+          {canIssue && (r.status === 'approved' || (r.req_type === 'urgent' && r.status === 'pending')) && (
+            <Button size="small" type="primary" onClick={() => setIssuing(r)}>
+              发料
+            </Button>
+          )}
           {r.status === 'pending' && canApprove && (
             <>
               <Button size="small" type="primary" loading={approve.isPending} onClick={() => approve.mutate(r.id)}>
@@ -445,6 +543,16 @@ function MyRequisitionsPanel() {
                 驳回
               </Button>
             </>
+          )}
+          {r.status === 'draft' && (
+            <Button
+              size="small"
+              type="primary"
+              loading={resubmit.isPending}
+              onClick={() => resubmit.mutate(r.id)}
+            >
+              提交审批
+            </Button>
           )}
           {(r.status === 'draft' || r.status === 'pending') && (
             <Button
@@ -458,16 +566,6 @@ function MyRequisitionsPanel() {
               取消
             </Button>
           )}
-          {r.req_type === 'urgent' && !r.patched_at &&
-            (r.status === 'issued' || r.status === 'overdue_unpatched') && canIssue && (
-              <Button
-                size="small"
-                loading={patchManual.isPending}
-                onClick={() => patchManual.mutate(r.id)}
-              >
-                确认已补办
-              </Button>
-            )}
         </Space>
       ),
     },
@@ -475,7 +573,7 @@ function MyRequisitionsPanel() {
 
   return (
     <SectionCard
-      title="领用申请（manual 审批通道：主管在此确认代录）"
+      title="领用申请单"
       action={
         <a href={exportRequisitionsUrl({ status: statusFilter })}>
           <Button size="small" icon={<DownloadOutlined />}>导出 Excel</Button>
@@ -494,7 +592,6 @@ function MyRequisitionsPanel() {
               { value: 'pending', label: '待审批' },
               { value: 'approved', label: '待发料' },
               { value: 'issued', label: '已发料' },
-              { value: 'overdue_unpatched', label: '逾期未补' },
               { value: 'rejected', label: '已驳回' },
               { value: 'all', label: '全部' },
             ]}
@@ -502,11 +599,12 @@ function MyRequisitionsPanel() {
         }
       />
       <Table<HardwareRequisitionRecord>
-        size="small"
+        size="middle"
         rowKey="id"
         loading={isLoading}
         columns={columns}
         dataSource={res?.items ?? []}
+        locale={{ emptyText: <EmptyGuide compact title="暂无申请单据" description="在「申领库存」中选择物资发起申请" /> }}
         pagination={{
           current: page,
           pageSize,
@@ -517,9 +615,10 @@ function MyRequisitionsPanel() {
             setPageSize(ps)
           },
         }}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1090 }}
       />
       <RequisitionDetailModal record={detail} onClose={() => setDetail(null)} />
+      <IssueModal requisition={issuing} onClose={() => setIssuing(null)} />
     </SectionCard>
   )
 }
@@ -534,7 +633,7 @@ function RequisitionDetailModal({
   if (!record) return null
   return (
     <Modal
-      title={`${record.req_no}（${record.status}）`}
+      title={`${record.req_no}`}
       open={!!record}
       onCancel={onClose}
       footer={null}
@@ -543,11 +642,16 @@ function RequisitionDetailModal({
       <div className="text-[13px] leading-7">
         <div>部门：{record.dept_name}　申请人：{record.applicant}　类型：{HARDWARE_REQ_TYPE_LABEL[record.req_type]}</div>
         <div>用途：{record.purpose || '-'}</div>
+        {record.approver_name && <div>指定审批人：{record.approver_name}</div>}
+        {record.approval_channel && (
+          <div>
+            审批通道：{record.approval_channel === 'feishu' ? '飞书「福兴电子领/退料单审批」' : '系统内人工审批'}
+            {record.approval_instance_code ? `（实例 ${record.approval_instance_code}）` : ''}
+          </div>
+        )}
         {record.approval_note && <div>审批备注：{record.approval_note}</div>}
         {record.rejected_reason && <div>驳回原因：{record.rejected_reason}</div>}
-        {record.urgent_patch_deadline && (
-          <div>补单截止：{dayjs(record.urgent_patch_deadline).format('MM-DD HH:mm')}</div>
-        )}
+        {record.urgent_reason && <div>紧急原因：{record.urgent_reason}</div>}
       </div>
       <Table
         size="small"
@@ -558,13 +662,14 @@ function RequisitionDetailModal({
         columns={[
           { title: '物料', dataIndex: 'material_name' },
           { title: '规格', dataIndex: 'spec', width: 120, render: (v) => v || '-' },
-          { title: '需求数', dataIndex: 'need_qty', width: 90, align: 'right' },
+          { title: '需求数', dataIndex: 'need_qty', width: 90, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
           {
             title: '实发数',
             dataIndex: 'issued_qty',
             width: 90,
             align: 'right',
-            render: (v: number | null) => v ?? '-',
+            className: 'tabular-nums',
+            render: (v: unknown) => (v == null ? '-' : formatQty(v)),
           },
           {
             title: '批次分配',
@@ -572,7 +677,7 @@ function RequisitionDetailModal({
             render: (v: Array<{ lot_no: string; qty: number }> | null) =>
               v?.length ? (
                 <span className="font-mono text-[12px]">
-                  {v.map((a) => `${a.lot_no}×${a.qty}`).join(' + ')}
+                  {v.map((a) => `${a.lot_no}×${formatQty(a.qty)}`).join(' + ')}
                 </span>
               ) : (
                 '-'
@@ -584,7 +689,131 @@ function RequisitionDetailModal({
   )
 }
 
-// ── 部门月度统计 ──
+function IssueModal({
+  requisition,
+  onClose,
+}: {
+  requisition: HardwareRequisitionRecord | null
+  onClose: () => void
+}) {
+  const { message } = App.useApp()
+  const queryClient = useQueryClient()
+  const [submitting, setSubmitting] = useState(false)
+  const [receivedBy, setReceivedBy] = useState('')
+  const [allocations, setAllocations] = useState<Record<string, number>>({})
+
+  useEffect(() => {
+    if (requisition) {
+      setReceivedBy(requisition.applicant)
+      setAllocations(
+        Object.fromEntries(requisition.items.map((i) => [i.id, i.need_qty as number])),
+      )
+    }
+  }, [requisition])
+
+  const materialIds = requisition?.items.map((i) => i.material_id) ?? []
+  const { data: stockByMaterial } = useQuery({
+    queryKey: ['warehouse', 'hardware', 'issue-lots', materialIds.join(',')],
+    queryFn: async () => {
+      const entries = await Promise.all(
+        materialIds.map(async (mid) => {
+          const detail = await fetchHardwareStockDetailClient(mid)
+          return [mid, detail.lots] as const
+        }),
+      )
+      return Object.fromEntries(entries)
+    },
+    enabled: materialIds.length > 0 && !!requisition,
+  })
+
+  if (!requisition) return null
+
+  const onSubmit = async () => {
+    setSubmitting(true)
+    try {
+      await issueHardwareRequisitionClient(requisition.id, {
+        issued_by: 'web',
+        received_by: receivedBy,
+        items: requisition.items.map((i) => ({
+          item_id: i.id,
+          issued_qty: allocations[i.id] ?? Number(i.need_qty),
+        })),
+      })
+      message.success('发料完成，库存已扣减并记录流水')
+      onClose()
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'requisitions'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'hardware', 'stock'] })
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '发料失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={`发料确认 · ${requisition.req_no}`}
+      open={!!requisition}
+      onCancel={onClose}
+      onOk={onSubmit}
+      confirmLoading={submitting}
+      okText="确认发料（实扣）"
+      width={700}
+    >
+      <Table
+        size="small"
+        rowKey="id"
+        dataSource={requisition.items}
+        pagination={false}
+        columns={[
+          { title: '物料', dataIndex: 'material_name', width: 180 },
+          { title: '规格', dataIndex: 'spec', width: 110, render: (v) => v || '-' },
+          { title: '需求数', dataIndex: 'need_qty', width: 90, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
+          {
+            title: '建议批次',
+            width: 220,
+            render: (_: unknown, r) => {
+              const lots = stockByMaterial?.[r.material_id] ?? []
+              const usable = lots.filter((l) => l.remaining_quantity > 0)
+              if (!usable.length) return <StatusTag tone="danger" label="无可用批次" />
+              return (
+                <span className="text-[12px] font-mono">
+                  {usable
+                    .slice(0, 3)
+                    .map((l) => `${l.lot_no}(${formatQty(l.remaining_quantity)})`)
+                    .join(' → ')}
+                </span>
+              )
+            },
+          },
+          {
+            title: '实发量',
+            width: 130,
+            render: (_: unknown, r) => (
+              <InputNumber
+                size="small"
+                min={1}
+                precision={0}
+                value={allocations[r.id]}
+                onChange={(v) =>
+                  setAllocations((prev) => ({ ...prev, [r.id]: v ?? Number(r.need_qty) }))
+                }
+              />
+            ),
+          },
+        ]}
+      />
+      <div className="mt-3">
+        <div className="mb-1 text-[13px] text-gray-600">领用人点收（=系统签收）</div>
+        <Input
+          placeholder="领用人姓名"
+          value={receivedBy}
+          onChange={(e) => setReceivedBy(e.target.value)}
+        />
+      </div>
+    </Modal>
+  )
+}
 
 function DeptStatsPanel() {
   const [dept, setDept] = useState('发酵')
@@ -625,15 +854,15 @@ function DeptStatsPanel() {
       }
     >
       <Table
-        size="small"
+        size="middle"
         rowKey={(r) => r[0]}
         dataSource={monthly}
         pagination={false}
         columns={[
           { title: '物料', dataIndex: 0 },
-          { title: '本月领用量', render: (_: unknown, r) => Number(r[1].qty).toLocaleString() },
+          { title: '本月领用量', render: (_: unknown, r) => <span className="tabular-nums">{formatQty(r[1].qty)}</span> },
           { title: '单位', render: (_: unknown, r) => r[1].unit },
-          { title: '领用次数', render: (_: unknown, r) => r[1].count },
+          { title: '领用次数', render: (_: unknown, r) => <span className="tabular-nums">{r[1].count}</span> },
         ]}
       />
     </SectionCard>

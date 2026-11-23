@@ -1,9 +1,5 @@
 'use client'
 
-// 五金库退库面板（二期 M4）：退库单登记 → 部门负责人签收 → 仓管员验收
-// （批次回加：原 lot 优先，无则新建 return 批次）/ 不合格拒退。
-// 挂出入库工作台「退库」Tab。设计 §2.6。
-
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
@@ -17,7 +13,6 @@ import {
   Select,
   Space,
   Table,
-  Tag,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
@@ -36,12 +31,9 @@ import {
   type HardwareReturnStatus,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-
-const STATUS_COLOR: Record<HardwareReturnStatus, string> = {
-  draft: 'processing',
-  accepted: 'success',
-  rejected: 'error',
-}
+import { EmptyGuide, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
+import { RETURN_STATUS_TONE } from './constants'
+import { formatQty } from './format'
 
 interface ReturnLine {
   material_id: string
@@ -112,7 +104,7 @@ export function HardwareReturnPanel() {
   })
 
   const columns: TableColumnsType<HardwareReturnRecord> = [
-    { title: '退库单号', dataIndex: 'return_no', width: 165 },
+    { title: '退库单号', dataIndex: 'return_no', width: 165, className: 'font-mono' },
     { title: '退库部门', dataIndex: 'dept_name', width: 110 },
     { title: '退库人', dataIndex: 'returned_by', width: 90 },
     {
@@ -122,7 +114,7 @@ export function HardwareReturnPanel() {
         <div className="text-xs">
           {r.items.map((i, idx) => (
             <div key={idx}>
-              {i.name} × {i.quantity}
+              {i.name} × <span className="tabular-nums">{formatQty(i.quantity)}</span>
               {i.unit || ''}
             </div>
           ))}
@@ -135,9 +127,9 @@ export function HardwareReturnPanel() {
       width: 90,
       render: (v: boolean, r) =>
         v ? (
-          <Tag color="green">{r.leader_signed_by || '已签'}</Tag>
+          <StatusTag tone="ok" label={r.leader_signed_by || '已签'} />
         ) : (
-          <Tag>未签</Tag>
+          <StatusTag label="未签" />
         ),
     },
     {
@@ -145,7 +137,7 @@ export function HardwareReturnPanel() {
       dataIndex: 'status',
       width: 90,
       render: (v: HardwareReturnStatus) => (
-        <Tag color={STATUS_COLOR[v]}>{HARDWARE_RETURN_STATUS_LABEL[v]}</Tag>
+        <StatusTag tone={RETURN_STATUS_TONE[v] ?? 'default'} label={HARDWARE_RETURN_STATUS_LABEL[v]} />
       ),
     },
     {
@@ -198,28 +190,35 @@ export function HardwareReturnPanel() {
   ]
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          allowClear
-          placeholder="状态"
-          style={{ width: 120 }}
-          value={status}
-          onChange={setStatus}
-          options={Object.entries(HARDWARE_RETURN_STATUS_LABEL).map(([v, l]) => ({ value: v, label: l }))}
-        />
-        {canManage && (
+    <SectionCard
+      title="退库单"
+      action={
+        canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             登记退库
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
+      <QueryFilter
+        common={
+          <Select
+            allowClear
+            placeholder="状态"
+            style={{ width: 120 }}
+            value={status}
+            onChange={setStatus}
+            options={Object.entries(HARDWARE_RETURN_STATUS_LABEL).map(([v, l]) => ({ value: v, label: l }))}
+          />
+        }
+      />
       <Table
         rowKey="id"
-        size="small"
+        size="middle"
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
         columns={columns}
+        locale={{ emptyText: <EmptyGuide compact title="暂无退库单" description="退库需部门负责人签收后由仓管员验收回加" /> }}
         pagination={{ total: list.data?.total ?? 0, pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
         scroll={{ x: 950 }}
       />
@@ -230,7 +229,7 @@ export function HardwareReturnPanel() {
         onSubmit={(v) => createMut.mutate(v)}
         loading={createMut.isPending}
       />
-    </div>
+    </SectionCard>
   )
 }
 
@@ -355,7 +354,8 @@ function ReturnLineEditor({
         onChange={(v) => onChange({ ...line, material_id: v, preferred_lot_id: undefined })}
       />
       <InputNumber
-        min={0.001}
+        min={1}
+        precision={0}
         value={line.quantity}
         onChange={(v) => onChange({ ...line, quantity: v ?? 0 })}
         style={{ width: 100 }}
@@ -388,7 +388,7 @@ function ReturnLineEditor({
           pagination={false}
           columns={[
             { title: '批次', dataIndex: 'lot_no', width: 120 },
-            { title: '余额', dataIndex: 'remaining_quantity', width: 80 },
+            { title: '余额', dataIndex: 'remaining_quantity', width: 80, render: (v: unknown) => formatQty(v) },
             {
               title: '',
               width: 70,

@@ -1,8 +1,5 @@
 'use client'
 
-// 五金库盘点（二期 M4）：盘点单生成 → 手机实盘直填 → 差异表导出 →
-// 差异复核 → Web 确认门（人确认才 ADJ 入账）。设计 §2.6/§十一。
-
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
@@ -16,10 +13,10 @@ import {
   Select,
   Space,
   Table,
-  Tag,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { DownloadOutlined, PlusOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import {
   cancelHardwareStocktakeClient,
   confirmHardwareStocktakeClient,
@@ -38,14 +35,9 @@ import {
   type HardwareStocktakeStatus,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-
-const STATUS_COLOR: Record<HardwareStocktakeStatus, string> = {
-  draft: 'default',
-  counting: 'processing',
-  reviewed: 'warning',
-  confirmed: 'success',
-  cancelled: 'error',
-}
+import { EmptyGuide, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
+import { STOCKTAKE_STATUS_TONE } from './constants'
+import { formatQty } from './format'
 
 export function HardwareStocktakeBoard() {
   const { message } = App.useApp()
@@ -115,7 +107,7 @@ export function HardwareStocktakeBoard() {
   })
 
   const columns: TableColumnsType<HardwareStocktakeRecord> = [
-    { title: '盘点单号', dataIndex: 'take_no', width: 170 },
+    { title: '盘点单号', dataIndex: 'take_no', width: 170, className: 'font-mono' },
     {
       title: '类型',
       dataIndex: 'take_type',
@@ -128,12 +120,13 @@ export function HardwareStocktakeBoard() {
       dataIndex: 'status',
       width: 100,
       render: (v: HardwareStocktakeStatus) => (
-        <Tag color={STATUS_COLOR[v]}>{HARDWARE_STOCKTAKE_STATUS_LABEL[v]}</Tag>
+        <StatusTag tone={STOCKTAKE_STATUS_TONE[v] ?? 'default'} label={HARDWARE_STOCKTAKE_STATUS_LABEL[v]} />
       ),
     },
     {
       title: '差异（盈/亏/金额）',
       width: 160,
+      className: 'tabular-nums',
       render: (_, r) =>
         r.status === 'confirmed' || r.status === 'reviewed'
           ? `${r.diff_surplus_items ?? '-'} / ${r.diff_deficit_items ?? '-'} / ${r.diff_total_amount ?? '-'}`
@@ -143,8 +136,8 @@ export function HardwareStocktakeBoard() {
     {
       title: '生成时间',
       dataIndex: 'created_at',
-      width: 160,
-      render: (v: string) => new Date(v).toLocaleString('zh-CN', { hour12: false }),
+      width: 115,
+      render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
     },
     {
       title: '操作',
@@ -178,37 +171,44 @@ export function HardwareStocktakeBoard() {
   const take = detail.data
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          allowClear
-          placeholder="状态筛选"
-          style={{ width: 140 }}
-          value={status}
-          onChange={setStatus}
-          options={Object.entries(HARDWARE_STOCKTAKE_STATUS_LABEL).map(([v, l]) => ({
-            value: v,
-            label: l,
-          }))}
-        />
-        {canManage && (
+    <SectionCard
+      title="盘点单"
+      action={
+        canManage && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
             生成盘点单
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
+      <QueryFilter
+        common={
+          <Select
+            allowClear
+            placeholder="状态筛选"
+            style={{ width: 140 }}
+            value={status}
+            onChange={setStatus}
+            options={Object.entries(HARDWARE_STOCKTAKE_STATUS_LABEL).map(([v, l]) => ({
+              value: v,
+              label: l,
+            }))}
+          />
+        }
+      />
       <Table
         rowKey="id"
-        size="small"
+        size="middle"
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
         columns={columns}
+        locale={{ emptyText: <EmptyGuide compact title="暂无盘点单" description="月度盘点单每月自动生成，也可手动发起" /> }}
         pagination={{ total: list.data?.total ?? 0, pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
         scroll={{ x: 900 }}
       />
 
       <Modal
-        title="生成盘点单（book 快照自当前批次余额）"
+        title="生成盘点单"
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         onOk={() => createMut.mutate({ take_type: 'monthly' })}
@@ -224,7 +224,7 @@ export function HardwareStocktakeBoard() {
           <Button onClick={() => createMut.mutate({ take_type: 'annual' })}>年度盘点</Button>
           <Button onClick={() => createMut.mutate({ take_type: 'special' })}>专项盘点</Button>
           <Button type="primary" onClick={() => createMut.mutate({ take_type: 'calibration' })}>
-            期初校准（P4 存量盘盈）
+            期初校准（存量盘盈）
           </Button>
         </Space>
       </Modal>
@@ -247,7 +247,7 @@ export function HardwareStocktakeBoard() {
           />
         )}
       </Drawer>
-    </div>
+    </SectionCard>
   )
 }
 
@@ -294,7 +294,7 @@ function StocktakeDetail({
         </div>
       ),
     },
-    { title: '账存', dataIndex: 'book_qty', width: 80 },
+    { title: '账存', dataIndex: 'book_qty', width: 80, render: (v: unknown) => formatQty(v) },
     {
       title: '实盘',
       width: editable ? 140 : 80,
@@ -303,6 +303,7 @@ function StocktakeDetail({
           <InputNumber
             size="small"
             min={0}
+            precision={0}
             defaultValue={r.actual_qty ?? undefined}
             style={{ width: 90 }}
             placeholder="实盘数"
@@ -318,15 +319,18 @@ function StocktakeDetail({
             }}
           />
         ) : (
-          r.actual_qty ?? '—'
+          r.actual_qty == null ? '—' : formatQty(r.actual_qty)
         ),
     },
     {
       title: '差异',
       dataIndex: 'diff_qty',
       width: 80,
-      render: (v: number | null) =>
-        v === null ? '—' : v === 0 ? '0' : <span className={v > 0 ? 'text-green-600' : 'text-red-500'}>{v}</span>,
+      render: (v: number | string | null) => {
+        if (v == null) return '—'
+        const n = Number(v)
+        return n === 0 ? '0' : <span className={n > 0 ? 'text-green-600' : 'text-red-500'}>{formatQty(v)}</span>
+      },
     },
     {
       title: '差异金额',

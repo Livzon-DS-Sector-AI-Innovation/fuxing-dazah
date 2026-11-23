@@ -1,23 +1,18 @@
 'use client'
 
-// 五金库台账面板组（原二期 M6「五金台账报表」页拆面板化，2026-11-06 并入「盘点与台账」页）：
-// ERP 入库对账（erp_import 匹配+差异清单两栏）/ ERP 出库侧标记 / 部门 direct 直发明细 /
-// 全量流水台账导出。报废面板在 HardwareScrapPanel.tsx。
-
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type Key } from 'react'
 import {
   App,
   Button,
   Input,
+  Segmented,
   Select,
-  Space,
   Table,
-  Tag,
-  Typography,
 } from 'antd'
 import type { TableColumnsType } from 'antd'
-import { DownloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, SearchOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import {
   fetchHardwareErpReceiptsClient,
   fetchHardwareMovementsClient,
@@ -30,14 +25,16 @@ import {
   HARDWARE_MOVEMENT_BIZ_LABEL,
   HARDWARE_RECEIPT_STATUS_LABEL,
   HARDWARE_RECONCILE_STATUS_LABEL,
+  type HardwareMovementDirection,
   type HardwareMovementRecord,
   type HardwareReceiptRecord,
   type HardwareReceiptStatus,
   type HardwareReconcileDiffs,
 } from '@/types/warehouse-hardware'
 import { usePermission } from '@/hooks/usePermission'
-
-// ── ERP 入库对账（三期 M8）：erp_import 单列表+匹配状态+差异清单两栏+自动入账筛选 ──
+import { formatQty } from './format'
+import { ERP_STATUS_TONE, MOVEMENT_DIRECTION_LABEL, MOVEMENT_DIRECTION_TONE, RECONCILE_STATUS_TONE } from './constants'
+import { EmptyGuide, QueryFilter, SectionCard, StatusTag } from '@/components/warehouse'
 
 export function ErpInboundReconcilePanel() {
   const { message } = App.useApp()
@@ -67,32 +64,20 @@ export function ErpInboundReconcilePanel() {
     onError: (e: Error) => message.error(e.message),
   })
 
-  const reconcileColor: Record<string, string> = {
-    none: 'default',
-    unmatched: 'red',
-    matched: 'blue',
-    verified: 'green',
-    discrepancy: 'orange',
-  }
-
   return (
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded border p-3">
-          <Typography.Text strong>差异清单 · ERP 有 / OCR 无</Typography.Text>
-          <Typography.Paragraph type="secondary" className="!mb-2 text-xs">
-            erp_import 单未匹配到既有 OCR 入库单——可人工确认入账（补录兜底，生成批次占库存）。
-          </Typography.Paragraph>
+        <SectionCard title="差异清单 · ERP 有 / 系统无" description="ERP 导入单未匹配到既有入库单——可人工确认入账补录（生成批次占库存）。">
           <Table
             rowKey="receipt_id"
-            size="small"
+            size="middle"
             loading={diffs.isLoading}
             dataSource={diffs.data?.erp_only ?? []}
             pagination={false}
             scroll={{ y: 240 }}
             columns={[
-              { title: '单号', dataIndex: 'receipt_no', width: 170 },
-              { title: 'ERP 单号', dataIndex: 'erp_doc_no', width: 140 },
+              { title: '单号', dataIndex: 'receipt_no', width: 170, className: 'font-mono' },
+              { title: 'ERP 单号', dataIndex: 'erp_doc_no', width: 140, className: 'font-mono' },
               { title: '供应商', dataIndex: 'supplier_name', ellipsis: true },
               {
                 title: '操作',
@@ -106,21 +91,17 @@ export function ErpInboundReconcilePanel() {
               },
             ] as TableColumnsType<NonNullable<HardwareReconcileDiffs['erp_only']>[number]>}
           />
-        </div>
-        <div className="rounded border p-3">
-          <Typography.Text strong>差异清单 · OCR 有 / ERP 无</Typography.Text>
-          <Typography.Paragraph type="secondary" className="!mb-2 text-xs">
-            已入账 OCR/manual 单尚未有 ERP 单核对上——提示 ERP 侧补录（财务账）。
-          </Typography.Paragraph>
+        </SectionCard>
+        <SectionCard title="差异清单 · 系统有 / ERP 无" description="已入账单尚未有 ERP 单核对上——提示 ERP 侧补录（财务账）。">
           <Table
             rowKey="receipt_id"
-            size="small"
+            size="middle"
             loading={diffs.isLoading}
             dataSource={diffs.data?.ocr_only ?? []}
             pagination={false}
             scroll={{ y: 240 }}
             columns={[
-              { title: '单号', dataIndex: 'receipt_no', width: 170 },
+              { title: '单号', dataIndex: 'receipt_no', width: 170, className: 'font-mono' },
               { title: '供应商', dataIndex: 'supplier_name', ellipsis: true },
               {
                 title: '到货',
@@ -130,35 +111,38 @@ export function ErpInboundReconcilePanel() {
               },
             ] as TableColumnsType<NonNullable<HardwareReconcileDiffs['ocr_only']>[number]>}
           />
-        </div>
+        </SectionCard>
       </div>
-      <div className="space-y-2">
-        <Space wrap>
-          <Select
-            allowClear
-            placeholder="匹配状态"
-            style={{ width: 150 }}
-            value={reconcileStatus}
-            onChange={(v) => setReconcileStatus(v)}
-            options={Object.entries(HARDWARE_RECONCILE_STATUS_LABEL).map(([v, l]) => ({ value: v, label: l }))}
-          />
+      <SectionCard
+        title={`ERP 对账单（共 ${list.data?.total ?? 0} 张）`}
+        action={
           <Button size="small" type={autoOnly ? 'primary' : 'default'} onClick={() => setAutoOnly((v) => !v)}>
-            只看自动入账（M9 复核抽检）
+            只看自动入账
           </Button>
-          <Typography.Text type="secondary">
-            erp_import 单共 {list.data?.total ?? 0} 张——匹配成功双向核对通过（verified 不再入账，防双计）。
-          </Typography.Text>
-        </Space>
+        }
+      >
+        <QueryFilter
+          common={
+            <Select
+              allowClear
+              placeholder="匹配状态"
+              style={{ width: 150 }}
+              value={reconcileStatus}
+              onChange={(v) => setReconcileStatus(v)}
+              options={Object.entries(HARDWARE_RECONCILE_STATUS_LABEL).map(([v, l]) => ({ value: v, label: l }))}
+            />
+          }
+        />
         <Table
           rowKey="id"
-          size="small"
+          size="middle"
           loading={list.isLoading}
           dataSource={(list.data?.items ?? []).filter((r) => (autoOnly ? r.auto_accepted : true))}
           pagination={{ total: list.data?.total ?? 0, pageSize: 20, showTotal: (t) => `共 ${t} 张` }}
           scroll={{ x: 1000 }}
           columns={[
-            { title: '单号', dataIndex: 'receipt_no', width: 170 },
-            { title: 'ERP 单号', dataIndex: 'erp_doc_no', width: 150 },
+            { title: '单号', dataIndex: 'receipt_no', width: 170, className: 'font-mono' },
+            { title: 'ERP 单号', dataIndex: 'erp_doc_no', width: 150, className: 'font-mono' },
             { title: '供应商', dataIndex: 'supplier_name', width: 160, ellipsis: true },
             {
               title: '状态',
@@ -171,23 +155,23 @@ export function ErpInboundReconcilePanel() {
               dataIndex: 'reconcile_status',
               width: 110,
               render: (v: string) => (
-                <Tag color={reconcileColor[v] ?? 'default'}>
-                  {HARDWARE_RECONCILE_STATUS_LABEL[v] ?? v}
-                </Tag>
+                <StatusTag
+                  tone={RECONCILE_STATUS_TONE[v] ?? 'default'}
+                  label={HARDWARE_RECONCILE_STATUS_LABEL[v] ?? v}
+                />
               ),
             },
             {
-              title: '自动入账',
+              title: '入账方式',
               dataIndex: 'auto_accepted',
               width: 100,
-              render: (v: boolean) =>
-                v ? <Tag color="purple">⚙️ 自动</Tag> : <Tag>人工</Tag>,
+              render: (v: boolean) => (v ? <StatusTag tone="primary" label="自动" /> : <StatusTag label="人工" />),
             },
             {
               title: '时间',
               dataIndex: 'created_at',
-              width: 150,
-              render: (v: string) => new Date(v).toLocaleString('zh-CN', { hour12: false }),
+              width: 115,
+              render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
             },
             {
               title: '操作',
@@ -201,20 +185,35 @@ export function ErpInboundReconcilePanel() {
             },
           ] as TableColumnsType<HardwareReceiptRecord>}
         />
-      </div>
+      </SectionCard>
     </div>
   )
 }
 
-function useMovementColumns() {
+function useMovementColumns(withDirection = false): TableColumnsType<HardwareMovementRecord> {
   return [
-    { title: '流水号', dataIndex: 'movement_no', width: 180 },
+    { title: '流水号', dataIndex: 'movement_no', width: 160, className: 'font-mono' },
     {
       title: '时间',
       dataIndex: 'occurred_at',
-      width: 150,
-      render: (v: string) => new Date(v).toLocaleString('zh-CN', { hour12: false }),
+      width: 115,
+      render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
     },
+    ...(withDirection
+      ? [
+          {
+            title: '方向',
+            dataIndex: 'direction',
+            width: 70,
+            render: (v: string) => (
+              <StatusTag
+                tone={MOVEMENT_DIRECTION_TONE[v as HardwareMovementDirection] ?? 'default'}
+                label={MOVEMENT_DIRECTION_LABEL[v as HardwareMovementDirection] ?? v}
+              />
+            ),
+          },
+        ]
+      : []),
     {
       title: '业务',
       dataIndex: 'business_type',
@@ -222,15 +221,17 @@ function useMovementColumns() {
       render: (v: string) => HARDWARE_MOVEMENT_BIZ_LABEL[v] ?? v,
     },
     { title: '物资', dataIndex: 'material_name', width: 170, ellipsis: true },
-    { title: '数量', dataIndex: 'quantity', width: 80 },
-    { title: '部门', dataIndex: 'dept_name', width: 100, render: (v) => v || '—' },
+    { title: '数量', dataIndex: 'quantity', width: 70, align: 'right', className: 'tabular-nums', render: (v: unknown) => formatQty(v) },
+    { title: '部门', dataIndex: 'dept_name', width: 100, ellipsis: true, render: (v) => v || '—' },
     {
       title: 'ERP',
       dataIndex: 'erp_status',
       width: 80,
-      render: (v: string) => (v === 'entered' ? <Tag color="green">已录</Tag> : <Tag color="red">未录</Tag>),
+      render: (v: string) => (
+        <StatusTag tone={ERP_STATUS_TONE[v] ?? 'warn'} label={v === 'entered' ? '已录' : '未录'} />
+      ),
     },
-  ] as TableColumnsType<HardwareMovementRecord>
+  ]
 }
 
 export function ErpReconcilePanel() {
@@ -263,22 +264,11 @@ export function ErpReconcilePanel() {
   })
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Select
-          value={erpStatus}
-          style={{ width: 130 }}
-          onChange={(v) => setErpStatus(v)}
-          options={[
-            { value: 'pending', label: '未录清单' },
-            { value: 'entered', label: '已录' },
-            { value: '', label: '全部出库侧' },
-          ]}
-        />
-        <span className="text-gray-500">
-          出库侧流水共 {list.data?.total ?? 0} 条——车间在 ERP 做出库后，仓管员在此批量点「已录入」，月底对账。
-        </span>
-        {canMark && selected.length > 0 && (
+    <SectionCard
+      title="出库侧 ERP 标记"
+      description={`出库流水共 ${list.data?.total ?? 0} 条——车间在 ERP 做出库后，仓管员在此批量点「已录入」，月底对账。`}
+      action={
+        canMark && selected.length > 0 && (
           <Button
             type="primary"
             size="small"
@@ -287,19 +277,34 @@ export function ErpReconcilePanel() {
           >
             批量「已录入ERP」（{selected.length}）
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
+      <QueryFilter
+        common={
+          <Segmented
+            value={erpStatus}
+            onChange={(v) => setErpStatus(v as string)}
+            options={[
+              { value: 'pending', label: '未录清单' },
+              { value: 'entered', label: '已录' },
+              { value: '', label: '全部出库侧' },
+            ]}
+          />
+        }
+      />
       <Table
         rowKey="id"
-        size="small"
+        size="middle"
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
-        columns={useMovementColumns()}
+        columns={useMovementColumns(true)}
         rowSelection={canMark ? { selectedRowKeys: selected, onChange: setSelected } : undefined}
+        locale={{ emptyText: <EmptyGuide compact title="暂无出库流水" description="车间在 ERP 做出库后，流水会出现在这里" /> }}
         pagination={{ total: list.data?.total ?? 0, pageSize: 50, showTotal: (t) => `共 ${t} 条` }}
-        scroll={{ x: 900 }}
+        scroll={{ x: 850 }}
       />
-    </div>
+    </SectionCard>
   )
 }
 
@@ -316,18 +321,10 @@ export function DirectPanel() {
     placeholderData: keepPreviousData,
   })
   return (
-    <div className="space-y-3">
-      <Space wrap>
-        <Input
-          placeholder="按部门过滤（如 发酵）"
-          value={dept}
-          onChange={(e) => setDept(e.target.value)}
-          style={{ width: 200 }}
-          allowClear
-        />
-        <span className="text-sm text-gray-500">
-          direct 车间单独需求类直发流水（一进一出，净零不占库存），共 {list.data?.total ?? 0} 条
-        </span>
+    <SectionCard
+      title="部门直发明细"
+      description={`车间单独需求类直发流水（一进一出，不占库存），共 ${list.data?.total ?? 0} 条`}
+      action={
         <Button
           icon={<DownloadOutlined />}
           href={hardwareMovementsExportUrl({
@@ -339,68 +336,164 @@ export function DirectPanel() {
         >
           导出
         </Button>
-      </Space>
+      }
+    >
+      <QueryFilter
+        common={
+          <Input
+            placeholder="按部门过滤（如 发酵）"
+            value={dept}
+            onChange={(e) => setDept(e.target.value)}
+            style={{ width: 200 }}
+            allowClear
+          />
+        }
+      />
       <Table
         rowKey="id"
-        size="small"
+        size="middle"
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
         columns={useMovementColumns()}
+        locale={{ emptyText: <EmptyGuide compact title="暂无直发流水" description="车间单独需求类物资到货直领后在此留痕" /> }}
         pagination={{ total: list.data?.total ?? 0, pageSize: 50, showTotal: (t) => `共 ${t} 条` }}
-        scroll={{ x: 900 }}
+        scroll={{ x: 850 }}
       />
-    </div>
+    </SectionCard>
   )
 }
 
 export function LedgerPanel() {
+  const { message } = App.useApp()
+  const queryClient = useQueryClient()
+  const { hasPermission } = usePermission()
+  const canMark = hasPermission('warehouse:hardware:report:read')
   const [keyword, setKeyword] = useState('')
   const [biz, setBiz] = useState<string | undefined>(undefined)
+  const [direction, setDirection] = useState<string | undefined>(undefined)
+  const [erpStatus, setErpStatus] = useState<string | undefined>(undefined)
+  const [page, setPage] = useState(1)
+  const [selected, setSelected] = useState<Key[]>([])
+
   const list = useQuery({
-    queryKey: ['hardware-ledger', keyword, biz],
+    queryKey: ['hardware-ledger', keyword, biz, direction, erpStatus, page],
     queryFn: () =>
-      fetchHardwareMovementsClient({ keyword: keyword || undefined, business_type: biz, pageSize: 50 }),
+      fetchHardwareMovementsClient({
+        keyword: keyword || undefined,
+        business_type: biz,
+        direction,
+        erp_status: erpStatus,
+        page,
+        pageSize: 50,
+      }),
     placeholderData: keepPreviousData,
   })
+
+  const markMut = useMutation({
+    mutationFn: (ids: string[]) => markHardwareMovementsEnteredClient(ids, '仓管员'),
+    onSuccess: (r) => {
+      message.success(`已标记 ${r.marked} 条为 ERP 已录`)
+      setSelected([])
+      queryClient.invalidateQueries({ queryKey: ['hardware-ledger'] })
+    },
+    onError: (e: Error) => message.error(e.message),
+  })
+
   return (
-    <div className="space-y-3">
-      <Space wrap>
-        <Input.Search
-          placeholder="搜流水号/品名/批次"
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          style={{ width: 220 }}
-          allowClear
-        />
-        <Select
-          allowClear
-          placeholder="业务类型"
-          style={{ width: 130 }}
-          value={biz}
-          onChange={(v) => setBiz(v)}
-          options={Object.entries(HARDWARE_MOVEMENT_BIZ_LABEL).map(([v, l]) => ({ value: v, label: l }))}
-        />
-        <Button
-          type="primary"
-          icon={<DownloadOutlined />}
-          href={hardwareMovementsExportUrl({
-            keyword: keyword || undefined,
-            business_type: biz,
-          })}
-          target="_blank"
-        >
-          导出台账 Excel（5000 行封顶）
-        </Button>
-      </Space>
+    <SectionCard
+      title="出入库流水台账"
+      action={
+        <>
+          {canMark && selected.length > 0 && (
+            <Button size="small" loading={markMut.isPending} onClick={() => markMut.mutate(selected.map(String))}>
+              标记选中为 ERP 已录（{selected.length}）
+            </Button>
+          )}
+          <Button
+            type="primary"
+            icon={<DownloadOutlined />}
+            href={hardwareMovementsExportUrl({
+              keyword: keyword || undefined,
+              business_type: biz,
+              direction,
+              erp_status: erpStatus,
+            })}
+            target="_blank"
+          >
+            导出台账 Excel
+          </Button>
+        </>
+      }
+    >
+      <QueryFilter
+        common={
+          <>
+            <Input
+              allowClear
+              prefix={<SearchOutlined style={{ color: '#999' }} />}
+              placeholder="流水号 / 品名 / 批次"
+              style={{ width: 220 }}
+              value={keyword}
+              onChange={(e) => {
+                setKeyword(e.target.value)
+                setPage(1)
+              }}
+            />
+            <Segmented
+              value={direction ?? 'all'}
+              onChange={(v) => {
+                setDirection(v === 'all' ? undefined : (v as string))
+                setPage(1)
+              }}
+              options={[
+                { value: 'all', label: '全部' },
+                { value: 'inbound', label: '入' },
+                { value: 'outbound', label: '出' },
+              ]}
+            />
+            <Segmented
+              value={erpStatus ?? 'all'}
+              onChange={(v) => {
+                setErpStatus(v === 'all' ? undefined : (v as string))
+                setPage(1)
+              }}
+              options={[
+                { value: 'all', label: 'ERP全部' },
+                { value: 'pending', label: '未录' },
+                { value: 'entered', label: '已录' },
+              ]}
+            />
+            <Select
+              allowClear
+              placeholder="业务类型"
+              style={{ width: 140 }}
+              value={biz}
+              onChange={(v) => {
+                setBiz(v)
+                setPage(1)
+              }}
+              options={Object.entries(HARDWARE_MOVEMENT_BIZ_LABEL).map(([v, l]) => ({ value: v, label: l }))}
+            />
+          </>
+        }
+      />
       <Table
         rowKey="id"
-        size="small"
+        size="middle"
         loading={list.isLoading}
         dataSource={list.data?.items ?? []}
-        columns={useMovementColumns()}
-        pagination={{ total: list.data?.total ?? 0, pageSize: 50, showTotal: (t) => `共 ${t} 条` }}
-        scroll={{ x: 900 }}
+        columns={useMovementColumns(true)}
+        rowSelection={canMark ? { selectedRowKeys: selected, onChange: setSelected } : undefined}
+        locale={{ emptyText: <EmptyGuide compact title="暂无流水记录" description="调整筛选条件或先完成出入库操作" /> }}
+        pagination={{
+          current: page,
+          pageSize: 50,
+          total: list.data?.total ?? 0,
+          showTotal: (t) => `共 ${t} 条`,
+          onChange: (p) => setPage(p),
+        }}
+        scroll={{ x: 870 }}
       />
-    </div>
+    </SectionCard>
   )
 }

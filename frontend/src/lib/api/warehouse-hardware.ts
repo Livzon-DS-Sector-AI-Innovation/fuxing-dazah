@@ -1,7 +1,3 @@
-// 五金库 API 请求函数（系统原生仓储域，本地 DB 权威）
-// 双基址模式照抄 lib/api/warehouse.ts：SERVER_API 供 Server Actions/Server
-// Component，CLIENT_API 供 'use client' 组件直连。
-
 import { apiGet, apiFetchPaginated, apiPost, apiPut } from '@/lib/http-client'
 import type {
   HardwareStockRow,
@@ -37,8 +33,6 @@ import type {
 const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 const CLIENT_API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 const BASE = '/api/v1/warehouse/hardware'
-
-// ── 库存总览 ──
 
 function setStockParams(sp: URLSearchParams, params: HardwareStockFilter) {
   if (params.keyword) sp.set('keyword', params.keyword)
@@ -88,8 +82,6 @@ export async function fetchHardwareFifoSuggestionClient(
   return apiGet(`${CLIENT_API}${BASE}/stock/${materialId}/fifo-suggestion?qty=${qty}`)
 }
 
-// ── 物料/库位 ──
-
 export async function fetchHardwareMaterialsClient(
   keyword = '', pageSize = 50,
 ): Promise<PaginatedCompat<HardwareMaterialRecord>> {
@@ -121,8 +113,6 @@ export async function importHardwareMaterials(file: File): Promise<HardwareImpor
   return (json as { data?: HardwareImportStats })?.data ?? (json as HardwareImportStats)
 }
 
-// ── 入库单 ──
-
 function setReceiptParams(sp: URLSearchParams, params: HardwareReceiptFilter) {
   if (params.status) sp.set('status', params.status)
   if (params.source) sp.set('source', params.source)
@@ -145,7 +135,6 @@ export async function createHardwareReceiptClient(
   return apiPost<HardwareReceiptRecord>(`${CLIENT_API}${BASE}/receipts`, payload)
 }
 
-/** 入库方式②：上传入库登记 Excel 纯解析（不落库）→ 表单预填；人工核对后走 createHardwareReceiptClient */
 export async function parseHardwareReceiptExcelClient(
   file: File,
 ): Promise<HardwareReceiptParseResult> {
@@ -163,12 +152,6 @@ export async function parseHardwareReceiptExcelClient(
   return json.data as HardwareReceiptParseResult
 }
 
-/** 入库登记模板下载（Excel 方式② 用；浏览器直下） */
-export function downloadReceiptTemplateUrl(): string {
-  return `${CLIENT_API}${BASE}/receipts/excel-template`
-}
-
-/** 领料出库台账导出（Excel；随当前筛选，浏览器直下） */
 export function exportRequisitionsUrl(params: {
   status?: string
   dept_name?: string
@@ -198,8 +181,6 @@ export async function rejectHardwareReceiptClient(
   return apiPost<HardwareReceiptRecord>(`${CLIENT_API}${BASE}/receipts/${receiptId}/reject`, { reason })
 }
 
-// ── 领用申请 ──
-
 function setRequisitionParams(sp: URLSearchParams, params: HardwareRequisitionFilter) {
   if (params.status) sp.set('status', params.status)
   if (params.dept_name) sp.set('dept_name', params.dept_name)
@@ -221,6 +202,26 @@ export async function createHardwareRequisitionClient(
   payload: HardwareRequisitionCreateInput,
 ): Promise<HardwareRequisitionRecord> {
   return apiPost<HardwareRequisitionRecord>(`${CLIENT_API}${BASE}/requisitions`, payload)
+}
+
+export interface HardwareApproverCandidate {
+  user_id: string
+  name: string
+  department: string | null
+  position: string | null
+  supervisor: boolean
+}
+
+export async function fetchRequisitionApproversClient(
+  params: { keyword?: string; limit?: number } = {},
+): Promise<HardwareApproverCandidate[]> {
+  const sp = new URLSearchParams()
+  if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.limit) sp.set('limit', String(params.limit))
+  const res = await apiGet<{ items: HardwareApproverCandidate[] }>(
+    `${CLIENT_API}${BASE}/requisition-approvers?${sp.toString()}`,
+  )
+  return res?.items ?? []
 }
 
 export async function submitHardwareRequisitionClient(id: string): Promise<HardwareRequisitionRecord> {
@@ -249,15 +250,6 @@ export async function issueHardwareRequisitionClient(
   return apiPost<HardwareRequisitionRecord>(`${CLIENT_API}${BASE}/requisitions/${id}/issue`, payload)
 }
 
-// 紧急领用补办手动闭环（自动匹配漏配/线下已补的兜底，仓管确认）
-export async function patchHardwareRequisitionManualClient(
-  id: string,
-): Promise<HardwareRequisitionRecord> {
-  return apiPost<HardwareRequisitionRecord>(`${CLIENT_API}${BASE}/requisitions/${id}/patch-manual`, {})
-}
-
-// ── 流水 ──
-
 export function fetchHardwareMovementsClient(
   params: HardwareMovementFilter = {},
 ): Promise<PaginatedCompat<HardwareMovementRecord>> {
@@ -281,16 +273,12 @@ export async function markHardwareMovementsEnteredClient(
   })
 }
 
-// 与 types/warehouse.ts 同名的分页壳（本文件局部，避免跨模块耦合）
 interface PaginatedCompat<T> {
   items: T[]
   total: number
   page: number
   page_size: number
 }
-
-
-// ── 盘点（二期 M4）──
 
 export interface HardwareStocktakeFilter {
   status?: string
@@ -357,8 +345,6 @@ export function hardwareStocktakeExportUrl(takeId: string): string {
   return `${CLIENT_API}${BASE}/stocktakes/${takeId}/export`
 }
 
-// ── 退库（二期 M4）──
-
 export async function fetchHardwareReturnsClient(
   params: { status?: string; dept_name?: string; page?: number; pageSize?: number } = {},
 ): Promise<PaginatedCompat<HardwareReturnRecord>> {
@@ -407,9 +393,6 @@ export async function rejectHardwareReturnClient(
   return apiPost<HardwareReturnRecord>(`${CLIENT_API}${BASE}/returns/${id}/reject`, { reason })
 }
 
-
-// ── 月度采购计划（二期 M5）──
-
 export async function fetchHardwarePlansClient(
   page = 1, pageSize = 20,
 ): Promise<PaginatedCompat<HardwarePlanRecord>> {
@@ -442,8 +425,6 @@ export function hardwarePlanExportUrl(planMonth: string): string {
   return `${CLIENT_API}${BASE}/plans/${planMonth}/export`
 }
 
-// ── 温湿度日检（二期 M5）──
-
 export async function upsertHardwareEnvLogClient(
   payload: {
     log_date: string
@@ -463,9 +444,6 @@ export async function fetchHardwareEnvLogsClient(days = 30): Promise<HardwareEnv
   return data ?? []
 }
 
-
-// ── 报表完善（二期 M6）──
-
 export function hardwareMovementsExportUrl(params: {
   direction?: string
   business_type?: string
@@ -482,8 +460,6 @@ export function hardwareMovementsExportUrl(params: {
   const qs = sp.toString()
   return `${CLIENT_API}${BASE}/movements/export${qs ? `?${qs}` : ''}`
 }
-
-// ── 报废（三期 M7）──
 
 export async function fetchHardwareScrapsClient(
   params: { status?: string; scrap_reason?: string; page?: number; pageSize?: number } = {},
@@ -545,8 +521,6 @@ export async function cancelHardwareScrapClient(id: string): Promise<HardwareScr
   return apiPost<HardwareScrapRecord>(`${CLIENT_API}${BASE}/scraps/${id}/cancel`, {})
 }
 
-// ── 实物照片初筛（三期 M7，advisory 只标记）──
-
 export async function photoScreenHardwareReceiptClient(
   receiptId: string,
   photos: Array<{ file_token?: string; image_b64: string; content_type?: string }>,
@@ -557,8 +531,6 @@ export async function photoScreenHardwareReceiptClient(
     operator,
   })
 }
-
-// ── ERP 导入与并存对账（三期 M8）──
 
 export async function importHardwareErpFile(file: File): Promise<HardwareErpImportResult> {
   const form = new FormData()
