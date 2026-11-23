@@ -1646,3 +1646,29 @@ export interface CertificateUploadInput {
   is_permanent?: boolean
   remark?: string
 }
+
+// ─── 台账 Excel 导入（两步预检式）───
+
+/** 可导入的台账类型（与后端 ledger_import.LEDGER_IMPORT_SPECS 对齐） */
+export type LedgerImportLedger = 'onboarding' | 'departure' | 'training' | 'incident'
+
+/** 预检结果：新增/重复/错误统计及明细（明细截断 50 条） */
+export interface LedgerImportPrecheck {
+  total: number
+  new_count: number
+  duplicate_count: number
+  duplicates: { row: number; key: string }[]
+  error_count: number
+  errors: string[]
+  skipped_scope: number
+  dup_key_display: string
+}
+
+/** 落库结果：created/updated/skipped 计数及行级错误 */
+export interface LedgerImportResult {
+  created: number
+  updated: number
+  skipped: number
+  skipped_scope: number
+  errors: string[]
+}

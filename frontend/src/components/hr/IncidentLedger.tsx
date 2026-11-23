@@ -3,11 +3,12 @@
 import styles from "./lifecycleTable.module.css"
 import { useCallback, useEffect, useState } from 'react'
 import { Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { PlusOutlined, ImportOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { IncidentRecord } from '@/types/hr'
 import { fetchIncidents, createIncident, updateIncident, deleteIncident, exportIncidents } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
+import { LedgerImportModal } from '@/components/hr'
 
 const TYPE_META: Record<string, { label: string; color: string }> = {
   work_injury: { label: '工伤', color: 'red' },
@@ -23,6 +24,7 @@ export default function IncidentLedger() {
   const [editing, setEditing] = useState<IncidentRecord | null>(null)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [form] = Form.useForm()
 
   // 导出与列表筛选同口径（当前类型筛选）
@@ -115,8 +117,17 @@ export default function IncidentLedger() {
           options={Object.entries(TYPE_META).map(([v, m]) => ({ value: v, label: m.label }))}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
+        <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
         <Button loading={exporting} onClick={handleExport} title="按当前类型筛选导出全部记录">导出Excel</Button>
       </Space>
+
+      <LedgerImportModal
+        open={importOpen}
+        ledger="incident"
+        label="工伤/纠纷台账"
+        onClose={() => setImportOpen(false)}
+        onSuccess={load}
+      />
 
       <Table
         className={styles.tableLg}

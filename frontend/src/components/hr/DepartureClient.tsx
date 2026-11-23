@@ -14,6 +14,7 @@ import {
   DeleteOutlined,
   SendOutlined,
   CloudSyncOutlined,
+  ImportOutlined,
 } from '@ant-design/icons'
 import { DepartureRecord, DepartureFilterOptions } from '@/types/hr'
 import { DEPARTURE_TYPE_OPTIONS, DEPARTURE_TYPE_TAG_COLORS } from '@/lib/hr'
@@ -31,6 +32,7 @@ import {
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
+import { LedgerImportModal } from '@/components/hr'
 
 const { Text } = Typography
 
@@ -76,6 +78,7 @@ export default function DepartureClient({
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [selectedDept, setSelectedDept] = useState<string>('')
   const [certOpen, setCertOpen] = useState(false)
   const [certRecord, setCertRecord] = useState<DepartureRecord | null>(null)
@@ -342,6 +345,9 @@ export default function DepartureClient({
         {!syncMode && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
         )}
+        {!syncMode && (
+          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
+        )}
         <Input
           placeholder="搜索姓名/部门/职位"
           value={searchKeyword}
@@ -493,6 +499,14 @@ export default function DepartureClient({
           </div>
         )}
       </Modal>
+
+      <LedgerImportModal
+        open={importOpen}
+        ledger="departure"
+        label="离职台账"
+        onClose={() => setImportOpen(false)}
+        onSuccess={loadData}
+      />
 
     </div>
   )

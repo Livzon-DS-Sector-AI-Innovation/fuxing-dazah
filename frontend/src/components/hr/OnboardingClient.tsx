@@ -4,7 +4,7 @@ import styles from "./lifecycleTable.module.css"
 import { useState, useCallback, useEffect } from 'react'
 import { App, Button, Card, Table, Space, Input, Tag, Select } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { SearchOutlined, PlusOutlined } from '@ant-design/icons'
+import { SearchOutlined, PlusOutlined, ImportOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
 import {
   fetchOnboardingRecords,
@@ -13,6 +13,7 @@ import {
   exportOnboardingRecords,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
+import { LedgerImportModal } from '@/components/hr'
 import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
@@ -34,6 +35,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [hireYears, setHireYears] = useState<number[]>([])
   const [exporting, setExporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   useEffect(() => {
     fetchDepartmentsAction({ page_size: 100 }).then(res => {
@@ -101,6 +103,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
 
       <div className="flex flex-wrap gap-3 items-center">
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建入职</Button>
+        <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
         <Input placeholder="搜索姓名或工号" value={searchKeyword}
           onChange={e => { setSearchKeyword(e.target.value); setPage(1) }} prefix={<SearchOutlined />}
           className="w-48" allowClear />
@@ -123,6 +126,14 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
 
       <EmployeeForm open={createOpen} employee={null} onClose={() => setCreateOpen(false)}
         onSuccess={() => { setCreateOpen(false); loadData() }} />
+
+      <LedgerImportModal
+        open={importOpen}
+        ledger="onboarding"
+        label="入职台账"
+        onClose={() => setImportOpen(false)}
+        onSuccess={loadData}
+      />
     </div>
   )
 }

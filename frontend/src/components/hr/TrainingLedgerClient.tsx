@@ -28,6 +28,7 @@ import {
   ExportOutlined,
   SearchOutlined,
   ReloadOutlined,
+  ImportOutlined,
 } from '@ant-design/icons'
 import { downloadBase64File } from '@/lib/hr'
 import Link from 'next/link'
@@ -49,6 +50,7 @@ import {
   updateTrainingLedger,
   deleteTrainingLedger,
 } from '@/actions/hr'
+import { LedgerImportModal } from '@/components/hr'
 
 interface TrainingLedgerClientProps {
   employeeNumber: string
@@ -121,6 +123,7 @@ export default function TrainingLedgerClient({
   const [adminDirtyIds, setAdminDirtyIds] = useState<Set<string>>(new Set())
   const [adminSaving, setAdminSaving] = useState(false)
   const [evalExporting, setEvalExporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
 
   // ─── Employee mode: data loading ───
   // 远程搜索：防抖（300ms）+ 序号守卫丢弃过期响应
@@ -534,6 +537,7 @@ export default function TrainingLedgerClient({
               loading={adminSaving} disabled={adminDirtyIds.size === 0}>
               批量保存成绩
             </Button>
+            <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
             <Button icon={<ExportOutlined />} onClick={handleExportEvaluation} disabled={!filterDept} loading={evalExporting}>
               导出效果评估表
             </Button>
@@ -759,6 +763,14 @@ export default function TrainingLedgerClient({
       <style jsx global>{`
         @media print { body * { visibility: hidden; } #print-area, #print-area * { visibility: visible; } #print-area { position: absolute; left: 0; top: 0; width: 100%; } .no-print { display: none !important; } .ant-card { border: none !important; box-shadow: none !important; } .ant-card-body { padding: 0 !important; } }
       `}</style>
+
+      <LedgerImportModal
+        open={importOpen}
+        ledger="training"
+        label="培训台账"
+        onClose={() => setImportOpen(false)}
+        onSuccess={() => confirmDiscardDirty(() => { loadAdminData(); loadAdminStats() })}
+      />
     </div>
   )
 }
