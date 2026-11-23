@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { App, Modal, Form, Input, Select, DatePicker, Tabs, Button, Space, Divider } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { App, Modal, Form, Input, Select, DatePicker, Tabs, Button, Space, Divider, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee, EmployeeCreateInput, EmployeeUpdateInput } from '@/types/hr'
-import { createEmployee, updateEmployee, createPosition } from '@/actions/hr'
-import { useHrDepartments, useHrPositions } from '@/hooks/hr'
+import { createEmployee, fetchEmployeesAction, updateEmployee, createPosition } from '@/actions/hr'
+import { useDebouncedCallback, useHrDepartments, useHrPositions } from '@/hooks/hr'
 
 interface EmployeeFormProps {
   open: boolean
@@ -26,6 +26,28 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
   const [newPosModalOpen, setNewPosModalOpen] = useState(false)
   const [newPosName, setNewPosName] = useState('')
   const [newPosDept, setNewPosDept] = useState('')
+
+  // 直属上级候选：在职员工远程搜索（选项带工号/部门，选中存精准姓名）
+  const [managerOptions, setManagerOptions] = useState<{ value: string; label: string }[]>([])
+  const [managerSearching, setManagerSearching] = useState(false)
+  const managerSeq = useRef(0)
+  const searchManagers = async (keyword: string) => {
+    const seq = ++managerSeq.current
+    setManagerSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== managerSeq.current) return
+      setManagerOptions(d.data.map((e) => ({
+        value: e.name,
+        label: `${e.name}（${e.employee_number || '-'} · ${e.department || '-'}）`,
+      })))
+    } catch { /* 静默 */ }
+    finally { if (seq === managerSeq.current) setManagerSearching(false) }
+  }
+  const { run: debouncedSearchManagers } = useDebouncedCallback(searchManagers, 300)
+  useEffect(() => {
+    if (open) void searchManagers('')
+  }, [open])
 
   useEffect(() => {
     if (open) {
@@ -185,8 +207,11 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
                 ]} />
               </Form.Item>
               <Form.Item name="direct_manager_name" label="直属上级"
-                tooltip="转正评估第一级审批人（姓名，通常由飞书源表同步）">
-                <Input placeholder="请输入直属上级姓名" autoComplete="off" />
+                tooltip="转正评估第一级审批人（从在职员工中搜索选择；通常由飞书源表同步）">
+                <Select showSearch allowClear placeholder="搜索在职员工（姓名/工号）"
+                  filterOption={false} onSearch={debouncedSearchManagers}
+                  notFoundContent={managerSearching ? <Spin size="small" /> : null}
+                  options={managerOptions} />
               </Form.Item>
               {commonInput('domain_account', '域账号')}
               {commonSelect('hr_analysis', '人力资源分析', [

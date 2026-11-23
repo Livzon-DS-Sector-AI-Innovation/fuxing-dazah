@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect } from 'react'
-import { App, Modal, Form, Input } from 'antd'
+import { useEffect, useRef, useState } from 'react'
+import { App, Modal, Form, Input, Select, Spin } from 'antd'
 import { Department, DepartmentCreateInput, DepartmentUpdateInput } from '@/types/hr'
-import { createDepartment, updateDepartment } from '@/actions/hr'
+import { createDepartment, fetchEmployeesAction, updateDepartment } from '@/actions/hr'
+import { useDebouncedCallback } from '@/hooks/hr'
 
 interface DepartmentFormProps {
   open: boolean
@@ -12,10 +13,41 @@ interface DepartmentFormProps {
   onSuccess: () => void
 }
 
+/** 在职人员远程搜索下拉：选项显示「姓名（工号 · 部门）」，选中存精准姓名 */
+function useEmployeeOptions(open: boolean) {
+  const [options, setOptions] = useState<{ value: string; label: string }[]>([])
+  const [searching, setSearching] = useState(false)
+  const seqRef = useRef(0)
+
+  const search = async (keyword: string) => {
+    const seq = ++seqRef.current
+    setSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== seqRef.current) return
+      setOptions(d.data.map((e) => ({
+        value: e.name,
+        label: `${e.name}（${e.employee_number || '-'} · ${e.department || '-'}）`,
+      })))
+    } catch { /* 静默 */ }
+    finally { if (seq === seqRef.current) setSearching(false) }
+  }
+
+  const { run: debouncedSearch } = useDebouncedCallback(search, 300)
+
+  // 打开即预载首页候选（负责人通常在前列）
+  useEffect(() => {
+    if (open) void search('')
+  }, [open])
+
+  return { options, searching, onSearch: debouncedSearch }
+}
+
 export default function DepartmentForm({ open, department, onClose, onSuccess }: DepartmentFormProps) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const isEdit = !!department
+  const staff = useEmployeeOptions(open)
 
   useEffect(() => {
     if (open) {
@@ -85,17 +117,23 @@ export default function DepartmentForm({ open, department, onClose, onSuccess }:
         <Form.Item
           name="department_manager_name"
           label="部门负责人"
-          tooltip="转正评估第二级审批人；转正前 30 天提醒接收人（姓名，需其登录过系统或在员工源表有账号）"
+          tooltip="转正评估第二级审批人；转正前 30 天提醒接收人（从在职员工中搜索选择，需其登录过系统或在源表有账号）"
         >
-          <Input placeholder="请输入部门负责人姓名" />
+          <Select showSearch allowClear placeholder="搜索在职员工（姓名/工号）"
+            filterOption={false} onSearch={staff.onSearch}
+            notFoundContent={staff.searching ? <Spin size="small" /> : null}
+            options={staff.options} />
         </Form.Item>
 
         <Form.Item
           name="supervising_leader_name"
           label="分管领导"
-          tooltip="转正评估第三级审批人（姓名）"
+          tooltip="转正评估第三级审批人（从在职员工中搜索选择）"
         >
-          <Input placeholder="请输入分管领导姓名" />
+          <Select showSearch allowClear placeholder="搜索在职员工（姓名/工号）"
+            filterOption={false} onSearch={staff.onSearch}
+            notFoundContent={staff.searching ? <Spin size="small" /> : null}
+            options={staff.options} />
         </Form.Item>
       </Form>
     </Modal>
