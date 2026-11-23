@@ -202,6 +202,62 @@ async def test_effect_consecutive_failures_alert_and_recovery(db_session) -> Non
         effects_mod._CONSECUTIVE_FAILURES.pop("superagent:effects", None)
 
 
+async def test_health_alert_daily_dedupe(db_session) -> None:
+    """同日失败风暴 health-alert 按日幂等：告警卡当日至多一张（键含日期；前卡
+    已 done 不构成再发理由——11-12 三连发根因回归锚）。"""
+    n = {"fail": 0}
+
+    async def flaky(payload: dict) -> None:
+        n["fail"] += 1
+        raise RuntimeError("storm")
+
+    effects_mod._EFFECT_HANDLERS["test_storm"] = flaky
+    effects_mod._CONSECUTIVE_FAILURES.pop("superagent:effects", None)
+    try:
+        effect_id = await enqueue_effect(db_session, "test_storm", {}, dedupe_key="storm")
+        today = datetime.now(UTC).date().isoformat()
+        expect_key = f"health-alert:superagent:effects:{today}"
+
+        async def _fail_once() -> None:
+            row = await db_session.get(AgentEffect, effect_id)
+            row.next_due_at = datetime.now(UTC) - timedelta(seconds=1)
+            await db_session.flush()
+            await execute_claimed_effect(db_session, effect_id)
+
+        # 前 3 次连续失败 → 首张当日告警卡（键含日期）
+        for _ in range(3):
+            await _fail_once()
+        alerts = (
+            await db_session.execute(
+                select(AgentEffect).where(
+                    AgentEffect.kind == "dm_admin", AgentEffect.dedupe_key == expect_key,
+                )
+            )
+        ).scalars().all()
+        assert len(alerts) == 1
+
+        # 首卡消费 done（dm_admin 无 sender=仅留痕即 done）后风暴继续 → 不再发新卡
+        alerts[0].status = "done"
+        await db_session.flush()
+        for _ in range(2):
+            await _fail_once()
+        again = (
+            await db_session.execute(
+                select(AgentEffect).where(
+                    AgentEffect.kind == "dm_admin",
+                    AgentEffect.dedupe_key == expect_key,
+                )
+            )
+        ).scalars().all()
+        # 当日幂等：done 行不挡入队的洞已由入队前查重堵上（活库旧格式键无日期
+        # 后缀，精确匹配当日键天然隔离存量）
+        assert len(again) == 1
+        assert again[0].id == alerts[0].id
+    finally:
+        effects_mod._EFFECT_HANDLERS.pop("test_storm", None)
+        effects_mod._CONSECUTIVE_FAILURES.pop("superagent:effects", None)
+
+
 async def test_effect_later_not_counted(db_session) -> None:
     """Later：推迟到期、attempts 不增、不触发健康告警。"""
 
@@ -586,7 +642,9 @@ async def test_dm_admin_fallback_query_failure_stays_silent(
     async def _boom():
         raise RuntimeError("db down")
 
-    monkeypatch.setattr("app.platform.superagent.effects._db_admin_open_ids", _boom)
+    monkeypatch.setattr(
+        "app.platform.superagent.effects._resolve_admin_recipients", _boom,
+    )
     got: list[str] = []
 
     async def fake_send(open_id: str, text: str) -> bool:
@@ -601,6 +659,121 @@ async def test_dm_admin_fallback_query_failure_stays_silent(
         assert await execute_claimed_effect(db_session, effect_id) == "done"
         assert got == []
     finally:
+        effects_mod.set_dm_sender(None)
+    await db_session.rollback()
+
+
+# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# dm_admin DB 兜底跨应用解析：recipient resolver 注入点（R3 四期 C 刀）
+# ═══════════════════════════════════════════════════════════════
+
+
+async def test_dm_admin_env_nonempty_resolver_not_called(
+    db_session, monkeypatch,
+) -> None:
+    """env 非空 → 收件人=env 值，resolver 不被调用（零行为变更红线）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "SUPERAGENT_ADMIN_OPEN_IDS", "ou_env_authority")
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _SessionCtx(db_session),
+    )
+    calls: list[list[str]] = []
+
+    async def fake_resolver(names: list[str]) -> list[str]:
+        calls.append(list(names))
+        return ["ou_should_not_appear"]
+
+    async def fake_send(open_id: str, text: str) -> bool:
+        return open_id == "ou_env_authority"
+
+    effects_mod.set_dm_recipient_resolver(fake_resolver)
+    effects_mod.set_dm_sender(fake_send)
+    try:
+        effect_id = await enqueue_effect(
+            db_session, "dm_admin", {"text": "env"}, dedupe_key="dm-res-env",
+        )
+        assert await execute_claimed_effect(db_session, effect_id) == "done"
+        assert calls == []  # env 非空路径 resolver 零参与
+    finally:
+        effects_mod.set_dm_recipient_resolver(None)
+        effects_mod.set_dm_sender(None)
+    await db_session.rollback()
+
+
+async def test_dm_admin_resolver_wins_when_env_empty(
+    db_session, monkeypatch,
+) -> None:
+    """env 空 + resolver 注入 → 收件人=resolver 解析的安全侧 open_id（DB 直链
+    跨应用值不参与发送）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "SUPERAGENT_ADMIN_OPEN_IDS", "")
+    await _make_db_admin(db_session, "ou_cross_app_direct")
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _SessionCtx(db_session),
+    )
+    seen_names: list[list[str]] = []
+
+    async def fake_resolver(names: list[str]) -> list[str]:
+        seen_names.append(list(names))
+        return ["ou_safety_side_resolved"]
+
+    got: list[str] = []
+
+    async def fake_send(open_id: str, text: str) -> bool:
+        got.append(open_id)
+        return True
+
+    effects_mod.set_dm_recipient_resolver(fake_resolver)
+    effects_mod.set_dm_sender(fake_send)
+    try:
+        effect_id = await enqueue_effect(
+            db_session, "dm_admin", {"text": "resolver"}, dedupe_key="dm-res-win",
+        )
+        assert await execute_claimed_effect(db_session, effect_id) == "done"
+        assert "ou_safety_side_resolved" in got
+        assert "ou_cross_app_direct" not in got  # 直链跨应用值被 resolver 取代
+        # resolver 收到的是管理员姓名（r3t管理员* 测试行必在；真库管理员同批正常）
+        assert seen_names and any(n.startswith("r3t管理员") for n in seen_names[0])
+    finally:
+        effects_mod.set_dm_recipient_resolver(None)
+        effects_mod.set_dm_sender(None)
+    await db_session.rollback()
+
+
+async def test_dm_admin_resolver_failure_falls_back_to_direct(
+    db_session, monkeypatch,
+) -> None:
+    """env 空 + resolver 抛异常 → 回落 identity 直链现行为（降级不炸发送链）。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "SUPERAGENT_ADMIN_OPEN_IDS", "")
+    await _make_db_admin(db_session, "ou_direct_fallback_target")
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", lambda: _SessionCtx(db_session),
+    )
+
+    async def bad_resolver(names: list[str]) -> list[str]:
+        raise RuntimeError("resolver down")
+
+    got: list[str] = []
+
+    async def fake_send(open_id: str, text: str) -> bool:
+        got.append(open_id)
+        return True
+
+    effects_mod.set_dm_recipient_resolver(bad_resolver)
+    effects_mod.set_dm_sender(fake_send)
+    try:
+        effect_id = await enqueue_effect(
+            db_session, "dm_admin", {"text": "fallback"}, dedupe_key="dm-res-fb",
+        )
+        assert await execute_claimed_effect(db_session, effect_id) == "done"
+        assert "ou_direct_fallback_target" in got  # 回落直链（跨应用已知限制仍在）
+    finally:
+        effects_mod.set_dm_recipient_resolver(None)
         effects_mod.set_dm_sender(None)
     await db_session.rollback()
 

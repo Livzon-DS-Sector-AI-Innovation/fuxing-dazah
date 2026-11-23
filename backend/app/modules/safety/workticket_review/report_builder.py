@@ -103,6 +103,7 @@ class WorkTicketReviewReportBuilder:
         violations_by_ticket: dict[str, list[Violation]],
         stats: dict[str, Any],
         rectify: dict[str, Any] | None = None,
+        officer_mentions: dict[str, str] | None = None,
     ) -> str:
         """生成固定模板 Markdown 报告。
 
@@ -113,6 +114,9 @@ class WorkTicketReviewReportBuilder:
                data_insufficient；其余如 pushed 用于展示。
         rectify：前日问题整改复查汇总（rectify.run_rectify_check 返回），
                  None/无问题票时省略该节。
+        officer_mentions：ticket_no -> 分管安全员卡片 @ 标签（如
+                 ``<at id=ou_xxx></at>``，纯文本姓名兜底）；仅渲染在
+                 「真实违规」段每张票的 📍 行之后，None/缺项不渲染该行。
         """
         date_text = self._format_date(review_date)
 
@@ -150,7 +154,9 @@ class WorkTicketReviewReportBuilder:
                 insufficient_map=insufficient_map,
             )
         )
-        sections.append(self._render_violations(real_map, insufficient_map))
+        sections.append(
+            self._render_violations(real_map, insufficient_map, officer_mentions)
+        )
         if rectify:
             sections.append(self._render_rectify(rectify))
         sections.append(self._render_compliant(compliant))
@@ -238,6 +244,7 @@ class WorkTicketReviewReportBuilder:
         self,
         real_map: dict[str, tuple[WorkTicket, list[Violation]]],
         insufficient_map: dict[str, tuple[WorkTicket, list[Violation]]],
+        officer_mentions: dict[str, str] | None = None,
     ) -> str:
         # 每张票内部用 \n 紧凑（票号/地点/违规/key_times 软换行连排），
         # 票与票之间用 \n\n 分段，飞书渲染时空行分隔不同票。
@@ -248,13 +255,17 @@ class WorkTicketReviewReportBuilder:
             idx = 0
             for ticket, violations in real_map.values():
                 idx += 1
+                ticket_key = ticket.ticket_no or ticket.process_instance_id or ""
                 lines: list[str] = [
                     f"{idx}. 【{_ticket_type_name(ticket.ticket_type)}】"
-                    f"{ticket.ticket_no or ticket.process_instance_id or '（无票号）'}"
+                    f"{ticket_key or '（无票号）'}"
                 ]
                 site_content = _fmt_site_content(ticket)
                 if site_content:
                     lines.append(f"📍 {site_content}")
+                mention = (officer_mentions or {}).get(ticket_key)
+                if mention:
+                    lines.append(f"👤 分管安全员：{mention}")
                 for v in violations:
                     lines.append(f"🕒 {v.rule_name}: {_cn_detail(v.detail)}")
                     for kt in _fmt_key_times(v.key_times):

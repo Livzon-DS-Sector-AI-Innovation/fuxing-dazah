@@ -67,3 +67,17 @@ class TestMatchesDay:
         job = _job("消防报警日报")
         assert _matches_day(job, date(2026, 9, 24)) is True
         assert _matches_day(job, date(2026, 10, 1)) is True
+
+
+class TestBulletinJobSchedule:
+    """2026-11-19 拍板：督办通报首发提前到周四 09:00，值守窗口同步 09:00-18:00。"""
+
+    def test_code_default_is_thursday_9am(self) -> None:
+        job = _job("隐患督办通报")
+        assert (job["hour"], job["minute"], job["dow"]) == (9, 0, 3)
+
+    def test_null_db_row_keeps_9am_default(self) -> None:
+        # 播种行 hour/minute=NULL = 使用代码默认值（生产覆写只在显式改过时生效）
+        row = SchedulerTaskConfig(job_name="隐患督办通报", enabled=True)
+        merged = _merge_job(_job("隐患督办通报"), row)
+        assert (merged["hour"], merged["minute"], merged["dow"]) == (9, 0, 3)

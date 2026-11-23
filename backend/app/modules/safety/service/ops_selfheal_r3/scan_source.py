@@ -50,8 +50,28 @@ _TZ = ZoneInfo("Asia/Shanghai")
 #: 与既有告警阈值对齐（scheduler.ALERT_AFTER_FAILURES；不直接 import 防热区耦合）
 JOB_ALERT_AFTER_FAILURES = 3
 
-#: R3 自身 effect kinds（unpark 排除集：自愈不自我修复）
-R3_OWN_EFFECT_KINDS = frozenset({"r3_repair", "r3_closure_card"})
+#: 安全模块自愈管辖的 effect kinds（五期边界白名单，与 superagent_bridge 的
+#: handler 注册面同源：dm_admin=平台内置+safety 桥注入发送器，其余三种=桥注册）。
+#: 语义：自愈只管「本模块注册了修复 handler 的 kind」——unpark 重置后有人消费
+#: 才可能自愈；其他模块（如 warehouse）的 kind 不进信号面、不被重置。
+#: safety 新增 effect kind 须同步此清单（守卫测试锚定注册面一致性）。
+R3_MANAGED_EFFECT_KINDS = frozenset({
+    "dm_admin",
+    "digest_cell_upsert",
+    "supervision_writeback",
+    "needs_human_cell",
+})
+
+#: 安全模块自愈管辖的 outbox 会话前缀（五期边界白名单；safety 侧 outbox 调用面
+#: = guardian_r2/executor.py 全量前缀）。其他模块会话（如五金 hw_urge:*）的
+#: dropped 不触发安全模块误报单。safety 新增 outbox 会话前缀须同步此清单。
+R3_MANAGED_CONV_PREFIXES = (
+    "guardian_remind:",
+    "guardian_score:",
+    "guardian_revoke:",
+    "guardian_revoke_admin:",
+    "guardian_restore:",
+)
 
 #: 单轮故障类 trigger 上限（防风暴；超限聚合成一条批量 trigger）
 SCAN_TRIGGER_CAP = 5
@@ -170,6 +190,8 @@ async def _scan_jobs(session: Any, job_state: dict[str, Any]) -> list[TriggerDra
     drafts: list[TriggerDraft] = []
 
     for row in rows:
+        if row.job_name not in sched:
+            continue  # 五期边界：只认 safety SCHEDULED_JOBS 名单（他模块行忽略）
         st = job_state.setdefault(row.job_name, {"failed_dates": [], "recovered": [], "missed": []})
         failed: list[str] = list(st.get("failed_dates") or [])
         recovered: list[str] = list(st.get("recovered") or [])
@@ -249,18 +271,24 @@ async def _scan_jobs(session: Any, job_state: dict[str, Any]) -> list[TriggerDra
 
 
 async def _scan_parked(session: Any) -> list[TriggerDraft]:
-    """parked effects（status=failed 即 park 语义）按 kind 分组，每组件每日一条。"""
+    """parked effects（status=failed 即 park 语义）按 kind 分组，每组件每日一条。
+
+    五期边界：只认 ``R3_MANAGED_EFFECT_KINDS`` 白名单（安全模块注册 handler 的
+    kind）——其他模块的 parked effect 不进信号面、不被 unpark 重置；R3 自身
+    kinds 亦不在白名单（自愈不自我修复，走 effects 健康告警既有通道）。
+    """
     from app.platform.superagent.models import AgentEffect
 
     rows = (
         await session.execute(
-            select(AgentEffect).where(AgentEffect.status == "failed")
+            select(AgentEffect).where(
+                AgentEffect.status == "failed",
+                AgentEffect.kind.in_(R3_MANAGED_EFFECT_KINDS),
+            )
         )
     ).scalars().all()
     by_kind: dict[str, list[AgentEffect]] = {}
     for row in rows:
-        if row.kind in R3_OWN_EFFECT_KINDS:
-            continue  # 自愈自身故障走 effects 健康告警既有通道，不自我修复
         by_kind.setdefault(row.kind, []).append(row)
 
     today_iso = _today().isoformat()
@@ -477,7 +505,11 @@ async def _scan_push_failures(session: Any) -> list[TriggerDraft]:
 
     当日时间界（审查 BLOCK#4）：dropped 行历史累积，无界全表会让阈值 1
     每日重复开单——口径=当日新增 dropped（created_at ≥ 当日零点）。
+    五期边界：只统计安全模块会话前缀（R3_MANAGED_CONV_PREFIXES）——其他模块
+    （如五金 hw_urge:*）的 dropped 不触发安全模块误报单。
     """
+    from sqlalchemy import or_
+
     from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
 
     today_iso = _today().isoformat()
@@ -490,6 +522,10 @@ async def _scan_push_failures(session: Any) -> list[TriggerDraft]:
                 select(AgentOutboxMessage).where(
                     AgentOutboxMessage.status == "dropped",
                     AgentOutboxMessage.created_at >= day_start,
+                    or_(*[
+                        AgentOutboxMessage.conversation.like(f"{p}%")
+                        for p in R3_MANAGED_CONV_PREFIXES
+                    ]),
                 )
             )
         ).scalars().all()

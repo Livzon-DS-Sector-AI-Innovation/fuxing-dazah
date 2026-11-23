@@ -326,3 +326,47 @@ def test_rectify_zero_problem_renders_explicit_line() -> None:
     )
     assert "🔁 前日问题整改复查（2026-08-25）" in report
     assert "前日审核无问题票，无需整改复查" in report
+
+
+# ── 违规票 @ 分管安全员 ──
+
+def test_officer_mention_rendered_for_real_violation() -> None:
+    """真实违规票渲染「👤 分管安全员：@标签」行；@ 标签原样透传。"""
+    tickets, violations, stats = _make_fixture()
+    report = BUILDER.build(
+        date(2026, 8, 26), tickets, violations, stats,
+        officer_mentions={"DH-001": "<at id=ou_test_officer></at>"},
+    )
+    real_section = report.split("🟡 数据不足 / 待跟进")[0]
+    assert "👤 分管安全员：<at id=ou_test_officer></at>" in real_section
+    # @ 行位于 📍 行之后、首条 🕒 违规之前（split 已吃掉票号标题行）
+    block = real_section.split("【动火作业】DH-001")[1].split("\n\n")[0]
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    assert lines[0].startswith("📍")
+    assert lines[1].startswith("👤 分管安全员：")
+    assert lines[2].startswith("🕒")
+
+
+def test_officer_mention_not_in_insufficient_section() -> None:
+    """数据不足/待跟进段不渲染 @（即便误传入映射）。"""
+    tickets, violations, stats = _make_fixture()
+    report = BUILDER.build(
+        date(2026, 8, 26), tickets, violations, stats,
+        officer_mentions={"SX-001": "<at id=ou_should_not_render></at>"},
+    )
+    insufficient_section = report.split("🟡 数据不足 / 待跟进")[1]
+    assert "分管安全员" not in insufficient_section
+    assert "ou_should_not_render" not in insufficient_section
+
+
+def test_officer_mention_omitted_when_absent() -> None:
+    """未提供映射/票号缺项时不渲染该行（向后兼容旧调用）。"""
+    tickets, violations, stats = _make_fixture()
+    report = _report(tickets, violations, stats)
+    assert "分管安全员" not in report
+
+    report_partial = BUILDER.build(
+        date(2026, 8, 26), tickets, violations, stats,
+        officer_mentions={"DH-404": "<at id=ou_none></at>"},
+    )
+    assert "ou_none" not in report_partial

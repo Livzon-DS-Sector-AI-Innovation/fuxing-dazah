@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.app_config.store import store as _app_config_store
+from app.modules.safety.feishu.dept_config import DEPARTMENT_CONFIG
 from app.modules.safety.models import (
     WorkTicketReview,
     WorkTicketReviewViolation,
@@ -76,6 +77,64 @@ def _is_data_insufficient(violation: Violation) -> bool:
 
 def _is_real_violation(violation: Violation) -> bool:
     return not violation.not_applicable and not _is_data_insufficient(violation)
+
+
+def _config_safety_officer(dept: str) -> str | None:
+    """票面申请单位 → DEPARTMENT_CONFIG 分管安全员姓名。
+
+    精确命中优先；未命中按互包含容错匹配（如「质量控制部」→
+    「质量控制部（QC部）」），多命中取最长键（最具体）。部门未配置
+    安全员时返回 None（不渲染 @ 行）。
+    """
+    dept = (dept or "").strip()
+    if not dept:
+        return None
+    cfg = DEPARTMENT_CONFIG.get(dept)
+    if cfg is None:
+        hits = [k for k in DEPARTMENT_CONFIG if dept in k or k in dept]
+        if hits:
+            cfg = DEPARTMENT_CONFIG[max(hits, key=len)]
+    return ((cfg or {}).get("safety_officer") or "").strip() or None
+
+
+def _officer_names_for_tickets(
+    tickets: list[WorkTicket],
+    violations_by_ticket: dict[str, list[Violation]],
+) -> dict[str, str]:
+    """真实违规票 → {票号: 分管安全员姓名}（未配置安全员的部门不映射）。"""
+    out: dict[str, str] = {}
+    for ticket in tickets:
+        key = ticket.ticket_no or ticket.process_instance_id or ""
+        violations = violations_by_ticket.get(key) or []
+        if not any(_is_real_violation(v) for v in violations):
+            continue
+        officer = _config_safety_officer(ticket.apply_unit)
+        if officer:
+            out[key] = officer
+    return out
+
+
+async def resolve_officer_mentions(
+    tickets: list[WorkTicket],
+    violations_by_ticket: dict[str, list[Violation]],
+) -> dict[str, str]:
+    """真实违规票 → {票号: 分管安全员卡片 @ 标签}。
+
+    姓名经 ``mention.resolve_open_ids`` 解析安全应用 open_id 成
+    ``<at id=…></at>``（卡片 markdown @ 语法）；解析不到/解析失败降级
+    纯文本姓名（信息不丢）。任何异常都不阻断审核——返回已解析部分。
+    """
+    name_map = _officer_names_for_tickets(tickets, violations_by_ticket)
+    if not name_map:
+        return {}
+    from app.modules.safety.feishu.mention import at_tag, resolve_open_ids
+
+    resolved: dict[str, str] = {}
+    try:
+        resolved = await resolve_open_ids(set(name_map.values()))
+    except Exception:
+        logger.warning("分管安全员 open_id 解析失败，@ 退化为纯文本", exc_info=True)
+    return {key: at_tag(name, resolved.get(name)) for key, name in name_map.items()}
 
 
 class WorkTicketReviewService:
@@ -167,6 +226,9 @@ class WorkTicketReviewService:
             )
             await self.session.rollback()
 
+        # 违规票 @ 分管安全员（部门未配置/解析失败不渲染或降级纯文本，不阻断审核）
+        officer_mentions = await resolve_officer_mentions(tickets, violations_by_ticket)
+
         # 先构建“未推送”版本 markdown 用于卡片内容；push 失败时亦以此落库。
         markdown = self.builder.build(
             review_date,
@@ -174,6 +236,7 @@ class WorkTicketReviewService:
             violations_by_ticket,
             {**stats, "pushed": False},
             rectify=rectify_summary,
+            officer_mentions=officer_mentions,
         )
 
         push_result: dict[str, Any] = {
@@ -300,6 +363,7 @@ class WorkTicketReviewService:
                     violations_by_ticket,
                     {**stats, "pushed": True},
                     rectify=rectify_summary,
+                    officer_mentions=officer_mentions,
                 )
                 review.report_markdown = markdown
             try:
@@ -644,4 +708,5 @@ class WorkTicketReviewService:
 __all__ = [
     "WorkTicketReviewService",
     "report_group_chat_id",
+    "resolve_officer_mentions",
 ]

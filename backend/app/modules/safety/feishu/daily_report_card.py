@@ -38,6 +38,11 @@ def _form_sections(event_data: dict[str, Any]) -> dict[str, str]:
     return sections
 
 
+def _required_keys() -> tuple[str, ...]:
+    """必填段（明日计划外全部必填，无协调/风险填「暂无」）。"""
+    return tuple(k for k in cards.SECTION_INPUT_NAMES if k != "plan")
+
+
 def _log_task(coro: Any, *, tag: str, operator: str) -> None:  # pragma: no cover - 薄封装
     async def _runner() -> None:
         try:
@@ -70,22 +75,23 @@ async def handle_daily_report_card_action(
 
     if action == "submit":
         sections = _form_sections(event_data)
-        if not any(sections.get(k) for k in ("work", "done", "issue")):
-            return {"toast": {"type": "error", "content": "前三段为必填，请补全后提交"}}
-        result = await service.submit(operator, sections, date_key)
-        if not result["ok"]:
-            return {"toast": {"type": "error", "content": result["message"]}}
+        if not all(sections.get(k) for k in _required_keys()):
+            return {"toast": {"type": "error", "content": "明日计划外各段均为必填（无协调/风险请填「暂无」）"}}
+        # 写表链含多次飞书 API（≈1s/次），2.9s ACK 窗口内只做纯校验，
+        # 全链后台化；结果 PATCH 原表单卡为状态卡（无锚回退 DM）
+        source_msg_id = str(event_data.get("context", {}).get("open_message_id") or "")
         _log_task(
-            service.post_submit(operator, result["stage"], date_key),
-            tag=f"post_submit:{result['stage']}", operator=operator,
+            service.submit_and_notify(operator, sections, date_key, source_msg_id=source_msg_id),
+            tag="submit", operator=operator,
         )
-        return cards.toast(result["message"])
+        return cards.toast("提交处理中，本卡片即将变更为结果状态…")
 
     if action == "open_form":
-        ok = await service.open_form_dm(operator, date_key)
-        if ok:
-            return cards.toast("填写表单已私信给你")
-        return {"toast": {"type": "error", "content": "表单发送失败，请稍后再试"}}
+        _log_task(
+            service.open_form_dm_notify(operator, date_key),
+            tag="open_form", operator=operator,
+        )
+        return cards.toast("表单生成中，稍后私信给你 ✉️")
 
     if action == "retry_eval":
         _log_task(

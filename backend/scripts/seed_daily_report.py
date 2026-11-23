@@ -37,8 +37,9 @@ TABLES: dict[str, dict[str, Any]] = {
                 {"field_name": "员工OpenID", "type": 1},
                 {"field_name": "今日重点工作", "type": 1},
                 {"field_name": "完成情况", "type": 1},
-                {"field_name": "问题与协调", "type": 1},
-                {"field_name": "明日计划", "type": 1},
+                {"field_name": "需要协调事项", "type": 1},
+                {"field_name": "风险/问题报备", "type": 1},
+                {"field_name": "明日重点工作计划", "type": 1},
                 {"field_name": "AI评价与建议", "type": 1},
                 {"field_name": "日报状态", "type": 3, "property": {"options": [
                     {"name": "待补充"}, {"name": "已完成"}, {"name": "评价异常"},

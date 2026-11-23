@@ -71,9 +71,17 @@ def _build_note(
 ) -> str:
     """评分说明固定格式（前端按「｜」切分取首段做 H/M/L 色点）。
 
-    模板：{band}｜{L档}{L值}×{E档}{E值}×{C档}{C值}×{X档}{X值}={D}｜{评语}｜依据:{条目}
+    模板：{band}｜{L档}{L值}×{E档}{E值}×{C档}{C值}×{X档}{X值}={D}
+          ｜L 可能性={L档}（{L值}）：{L理由}
+          ｜E 接触频率={E档}（{E值}）：{E理由}
+          ｜C 后果={C档}（{C值}）：{C理由}
+          ｜X 排查难度={X档}（{X值}）：{X理由}
+          ｜{评语}｜依据:{条目}
           [｜重大判定:{条款;条款}] [｜⚠分值与风险等级不一致…]
           [｜基于人工等级 | ｜基于AI等级（人工等级缺失）]
+
+    四维档位/分值/每维评分理由全部列示，供人工逐项核对；单行文本契约不变
+    （AI 理由内的换行折叠为空格，不破坏「｜」分段）。
 
     等级口径段追加在**末尾**（首段=band 的前端契约不变）：输入等级取自
     ``effective_level``，human 来源标注「基于人工等级」；AI fallback 标注
@@ -81,10 +89,16 @@ def _build_note(
     """
     from app.modules.safety.ai_hazard_scoring import rules
 
+    def _value(raw: str) -> str:
+        return raw.rstrip("0").rstrip(".") if "." in raw else raw
+
     def _dim(dim: str, member: Any) -> str:
+        return f"{rules.tier_label(dim, member.value)}{_value(member.value)}"
+
+    def _tier_reason(prefix: str, dim: str, member: Any, reason: str) -> str:
         label = rules.tier_label(dim, member.value)
-        value = member.value.rstrip("0").rstrip(".") if "." in member.value else member.value
-        return f"{label}{value}"
+        text = " ".join(reason.split())
+        return f"{prefix}={label}（{_value(member.value)}）：{text}"
 
     parts = [
         out.band.value,
@@ -97,6 +111,12 @@ def _build_note(
             ]
         )
         + f"={total}",
+        _tier_reason("L 可能性", "likelihood", out.likelihood, out.likelihood_reason),
+        _tier_reason("E 接触频率", "exposure", out.exposure, out.exposure_reason),
+        _tier_reason("C 后果", "consequence", out.consequence, out.consequence_reason),
+        _tier_reason(
+            "X 排查难度", "difficulty", out.difficulty, out.difficulty_reason
+        ),
         out.summary,
         f"依据:{out.band_basis}",
     ]

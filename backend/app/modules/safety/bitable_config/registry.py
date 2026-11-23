@@ -1202,6 +1202,26 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
+    # ── interlock_change 设备设施联锁/安全附件变更审批（只读轮询；
+    #    红色预警提醒=interlock_warning 每 2 天 9:00 私发三角色，
+    #    2026-11-18 实测接入）──
+    DomainInfo(
+        key="interlock_change",
+        label="设备设施联锁/安全附件变更审批",
+        purpose="设施摘除（安全联锁/安全附件）变更审批台账（只读；红色超期预警提醒数据源）",
+        subscribe="record",
+        kinds=(
+            KindInfo(
+                kind="approval",
+                label="变更审批表",
+                default_connection=DefaultConnection(
+                    app_token="FGUHbF1DJamdjJskoKhcj7kbngf",
+                    table_id="tblWlELZ5YiKMB95",
+                    note="设备设施安全联锁安全附件变更审批（wiki E6rQwVYmWikzHbkglNMc2SKMnzh，49 行，2026-11-18 实测）",
+                ),
+            ),
+        ),
+    ),
     # ── labor_supply 劳保用品（职业健康劳保四表，纯只读直读；
     #    无事件订阅/无镜像/无定时任务，2026-11-09 实测接入。dept5/sds_ppe
     #    一期只注册连接不消费——接入消费时页面零改码）──

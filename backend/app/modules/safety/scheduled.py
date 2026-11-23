@@ -9,7 +9,7 @@
 
 hazard_direct ①②③④ 四个常驻轮询协程转为引擎 interval 任务：单轮执行 +
 overlap 守卫（上轮未完跳过）+ 启动错开（不动 sleep，到点前先跳过），
-窗口逻辑（④ 周四 13-18 点）在 ``run_bulletin_watch_once`` 内自查。
+窗口逻辑（④ 周四 9-18 点）在 ``run_bulletin_watch_once`` 内自查。
 
 语义对照基线：tests/modules/safety/test_scheduler_semantics.py（迁移前后均须绿）。
 """
@@ -231,7 +231,7 @@ async def _run_hazard_supervision_round() -> None:
 
 
 async def _run_hazard_bulletin_watch() -> None:
-    """④ 督办通报值守（周四 13:00-18:00 窗口在 run_bulletin_watch_once 内自查）。"""
+    """④ 督办通报值守（周四 09:00-18:00 窗口在 run_bulletin_watch_once 内自查）。"""
     from app.modules.safety.service.hazard_direct import config
     from app.modules.safety.service.hazard_direct.bulletin_watch import (
         run_bulletin_watch_once,

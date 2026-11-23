@@ -186,21 +186,36 @@ async def execute_claimed_effect(session: Any, effect_id: uuid.UUID) -> str:
 
 
 async def note_effect_failure(session: Any, component: str, effect: AgentEffect) -> str:
-    """连续失败计数：达到 HEALTH_ALERT_AFTER_FAILURES 才置 error + DM 告警。"""
+    """连续失败计数：达到 HEALTH_ALERT_AFTER_FAILURES 才置 error + DM 告警。
+
+    告警按日幂等（R3 四期 D 刀）：dedupe 键含 UTC 日期，且入队前查当日同键行
+    ——enqueue 的 ON CONFLICT 只护 pending（done 不挡入队），失败风暴下前卡
+    秒级 done 后同键新行照插（11-12 三连发根因），故须查重兜底。
+    """
     n = _CONSECUTIVE_FAILURES.get(component, 0) + 1
     _CONSECUTIVE_FAILURES[component] = n
     if n >= HEALTH_ALERT_AFTER_FAILURES:
         await report_state(session, component, "error",
                            f"连续 {n} 次失败（最近: {effect.last_error or '-'}）")
-        await enqueue_effect(
-            session, "dm_admin",
-            {
-                "text": (f"[Super-agent] 组件 {component} 连续 {n} 次失败\n"
-                         f"effect={effect.id} kind={effect.kind}\n"
-                         f"最近错误: {(effect.last_error or '')[:300]}"),
-            },
-            dedupe_key=f"health-alert:{component}",
-        )
+        key = f"health-alert:{component}:{datetime.now(UTC).date().isoformat()}"
+        already = (
+            await session.execute(
+                select(AgentEffect.id).where(
+                    AgentEffect.kind == "dm_admin",
+                    AgentEffect.dedupe_key == key,
+                )
+            )
+        ).scalar_one_or_none()
+        if already is None:
+            await enqueue_effect(
+                session, "dm_admin",
+                {
+                    "text": (f"[Super-agent] 组件 {component} 连续 {n} 次失败\n"
+                             f"effect={effect.id} kind={effect.kind}\n"
+                             f"最近错误: {(effect.last_error or '')[:300]}"),
+                },
+                dedupe_key=key,
+            )
     return "retried"
 
 
@@ -379,6 +394,12 @@ _DM_SENDER: Callable[[str, str], Awaitable[bool]] | None = None
 #: 未注入或失败由 handler 回退纯文本 payload.text——降级红线）。
 _DM_CARD_SENDER: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None
 
+#: DB 兜底收件人解析器注入点（R3 四期 C 刀）：fn(管理员姓名列表) -> 安全侧
+#: open_id 列表。identity 库存的 feishu_open_id 是跨应用值（99992361 雷区），
+#: 正确解析链在 host 应用（safety 侧 mention.resolve_open_ids）——平台经注入点
+#: 取用，不 import 业务模块（依赖方向红线）。未注入/异常/解析空 → 回落直链。
+_DM_RECIPIENT_RESOLVER: Callable[[list[str]], Awaitable[list[str]]] | None = None
+
 
 def set_dm_sender(fn: Callable[[str, str], Awaitable[bool]]) -> None:
     global _DM_SENDER
@@ -390,12 +411,22 @@ def set_dm_card_sender(fn: Callable[[str, dict[str, Any]], Awaitable[bool]]) -> 
     _DM_CARD_SENDER = fn
 
 
-async def _db_admin_open_ids() -> list[str]:
-    """DB 兜底收件人：permission:role:manage 用户的 feishu_open_id（直接角色链）。
+def set_dm_recipient_resolver(
+    fn: Callable[[list[str]], Awaitable[list[str]]] | None,
+) -> None:
+    global _DM_RECIPIENT_RESOLVER
+    _DM_RECIPIENT_RESOLVER = fn
+
+
+async def _db_admin_rows() -> list[tuple[str, str]]:
+    """DB 兜底管理员行：permission:role:manage 用户的 (姓名, feishu_open_id)。
 
     R3 三期 T4：SUPERAGENT_ADMIN_OPEN_IDS 未配时防静默留痕。部门继承角色不
     展开（管理员=直接授予，收件人面收窄）。只 import 平台层（identity/
     permission），不碰业务模块——平台依赖方向红线。
+
+    注意：行内 feishu_open_id 是 identity 侧（跨应用）值——直接发送必炸
+    99992361，仅作 resolver 未注入时的降级回落（env 是权威开关）。
     """
     from sqlalchemy import select
 
@@ -411,7 +442,7 @@ async def _db_admin_open_ids() -> list[str]:
     async with async_session_factory() as session:
         rows = (
             await session.execute(
-                select(User.feishu_open_id).distinct()
+                select(User.name, User.feishu_open_id).distinct()
                 .join(UserRole, UserRole.user_id == User.id)
                 .join(Role, Role.id == UserRole.role_id)
                 .join(RolePermission, RolePermission.role_id == Role.id)
@@ -424,8 +455,27 @@ async def _db_admin_open_ids() -> list[str]:
                     User.feishu_open_id != "",
                 )
             )
-        ).scalars().all()
-    return [str(x) for x in rows]
+        ).all()
+    return [(str(name), str(oid)) for name, oid in rows if name]
+
+
+async def _resolve_admin_recipients() -> list[str]:
+    """DB 兜底收件人解析（R3 四期 C 刀）。
+
+    resolver 已注入 → 姓名列表交 host 应用安全侧解析链（正确 open_id）；
+    未注入 / 异常 / 解析空 → 回落 identity 直链（跨应用已知限制，env 权威）。
+    """
+    rows = await _db_admin_rows()
+    if _DM_RECIPIENT_RESOLVER is not None and rows:
+        names = [name for name, _ in rows]
+        try:
+            resolved = await _DM_RECIPIENT_RESOLVER(names)
+        except Exception:  # noqa: BLE001 — 解析失败降级回落，绝不炸发送链
+            logger.exception("dm_admin resolver 解析失败（回落 identity 直链）")
+            resolved = []
+        if resolved:
+            return [str(x) for x in resolved]
+    return [oid for _, oid in rows]
 
 
 async def _dm_admin_handler(payload: dict[str, Any]) -> None:
@@ -438,9 +488,10 @@ async def _dm_admin_handler(payload: dict[str, Any]) -> None:
     ]
     text = (payload or {}).get("text") or ""
     if not recipients:
-        # env 未配 → DB 兜底（T6 卡按钮鉴权同链 permission:role:manage，双口径合流）
+        # env 未配 → DB 兜底（T6 卡按钮鉴权同链 permission:role:manage，双口径合流；
+        # C 刀：经 resolver 注入点走安全侧 open_id 解析链，回落 identity 直链）
         try:
-            recipients = await _db_admin_open_ids()
+            recipients = await _resolve_admin_recipients()
         except Exception:  # noqa: BLE001 — 兜底查询失败=仅留痕，绝不炸发送链
             logger.exception("dm_admin DB 兜底收件人查询失败（回退仅留痕）")
             recipients = []

@@ -26,8 +26,9 @@ F_NAME = "员工姓名"
 F_OPEN_ID = "员工OpenID"
 F_WORK = "今日重点工作"
 F_DONE = "完成情况"
-F_ISSUE = "问题与协调"
-F_PLAN = "明日计划"
+F_COORD = "需要协调事项"
+F_RISK = "风险/问题报备"
+F_PLAN = "明日重点工作计划"
 F_AI = "AI评价与建议"
 F_STATUS = "日报状态"
 F_FIRST_AT = "首次提交时间"
@@ -56,11 +57,12 @@ HIST_FIRST = "首次提交"
 HIST_FINAL = "最终提交"
 HIST_EVAL = "AI评价"
 
-#: 四段内部键 → 表字段
+#: 五段内部键 → 表字段（对齐需求图1：协调与风险分开两段）
 SECTION_FIELDS: dict[str, str] = {
     "work": F_WORK,
     "done": F_DONE,
-    "issue": F_ISSUE,
+    "coord": F_COORD,
+    "risk": F_RISK,
     "plan": F_PLAN,
 }
 
@@ -193,9 +195,10 @@ async def upsert_report(
     name: str,
     sections: dict[str, str],
     now: datetime,
-) -> tuple[str, bool]:
-    """写入四段内容并推进状态机，返回 (record_id, created)。
+) -> tuple[str, str]:
+    """写入四段内容并推进状态机，返回 (record_id, outcome)。
 
+    outcome：created=首次提交 / final=最终提交 / revise=已完成后的内容修订。
     状态推进规则（service 层提交语义落地在此）：
     - 新记录 → 首次提交：置首次提交时间，状态=待补充（AI 评价在途）
     - 已有记录且处于 待补充/评价异常（未完成）→ 最终提交：完成时间+状态=已完成
@@ -203,7 +206,7 @@ async def upsert_report(
     """
     client = client_for(config.KIND_REPORTS)
     if client is None:
-        return "", False
+        return "", ""
     existing = await find_report(date_key, open_id)
 
     section_fields = {SECTION_FIELDS[k]: (sections.get(k) or "") for k in SECTION_FIELDS}
@@ -218,16 +221,22 @@ async def upsert_report(
             **section_fields,
         }
         created = await client.create_record(fields)
-        return ((created or {}).get("record_id", ""), True)
+        rid = str((created or {}).get("record_id") or "")
+        if not rid:
+            return "", ""
+        return (rid, "created")
 
     fields = dict(section_fields)
     if existing.status == ST_DONE:
         fields[F_FINAL_AT] = _ts(now)  # 已完成后的内容修订
+        outcome = "revise"
     else:
         fields[F_STATUS] = ST_DONE
         fields[F_FINAL_AT] = _ts(now)
-    await client.update_record(existing.record_id, fields)
-    return existing.record_id, False
+        outcome = "final"
+    if not await client.update_record(existing.record_id, fields):
+        return "", ""  # 写入失败（如字段名失配整单被拒）——上层必须按失败处理，禁止假成功
+    return existing.record_id, outcome
 
 
 async def write_evaluation(record_id: str, advice: str, *, error: bool = False) -> bool:

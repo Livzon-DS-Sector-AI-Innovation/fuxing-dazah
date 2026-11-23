@@ -280,10 +280,17 @@ def register_superagent_bridge() -> None:
         pass  # 已注册（bootstrap 幂等）
 
     # dm_admin 真发接线（平台注入点 ← 安全通知原语；平台零业务依赖）
-    from app.platform.superagent.effects import set_dm_card_sender, set_dm_sender
+    from app.platform.superagent.effects import (
+        set_dm_card_sender,
+        set_dm_recipient_resolver,
+        set_dm_sender,
+    )
 
     set_dm_sender(_send_admin_dm)
     set_dm_card_sender(_send_admin_card)
+    # DB 兜底收件人解析链（R3 四期 C 刀）：identity 直链是跨应用 open_id，
+    # 经 mention.resolve_open_ids（邮箱批量→user_id 反查）取安全侧 open_id
+    set_dm_recipient_resolver(_resolve_admin_open_ids)
 
     # P2-2 G3：危险源辨识重放执行器（协议收编；同步留痕模式不依赖它）
     if get_executor("hazard_id_script") is None:
@@ -350,6 +357,19 @@ async def _send_admin_card(open_id: str, card: dict) -> bool:
     except Exception:
         logger.exception("dm_admin 交互卡发送失败: %s", open_id)
         return False
+
+
+async def _resolve_admin_open_ids(names: list[str]) -> list[str]:
+    """DB 兜底收件人 → 安全应用 open_id（R3 四期 C 刀）。
+
+    identity 直链 feishu_open_id 是跨应用值；经 mention.resolve_open_ids
+    （identity 姓名链→缓存→邮箱批量→user_id 反查）解析。解析不到的人不返回
+    （调用方回落直链，由 env 权威开关兜底）。
+    """
+    from app.modules.safety.feishu.mention import resolve_open_ids
+
+    resolved = await resolve_open_ids(names)
+    return list(resolved.values())
 
 
 async def bootstrap_superagent_policy_seed() -> None:

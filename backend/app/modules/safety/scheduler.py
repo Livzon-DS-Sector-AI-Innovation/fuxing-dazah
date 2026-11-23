@@ -6,9 +6,10 @@
 - 督办等级计算 (每日 07:30, 已启用): 拉取督办等级未关闭记录 → 规则计算 → 更新回填
 - 持证到期预警 (每日 08:00, 已启用): 扫描 person_certificates → 推送本人/部门负责人/安管人员
 - 外来人员保险预警 (每周三 08:30, 已启用): 直读预报备审批表 → 保险到期三类预警 → 安全速递格子
-- 督办通报 (周四 13:00, 安全速递总卡格子, 已启用; 13:00-18:00 值守轮询即时刷新)
+- 督办通报 (周四 09:00, 安全速递总卡格子, 已启用; 09:00-18:00 值守轮询即时刷新)
 - 特殊作业日报 (每日 08:00, 已启用)
 - 特殊作业日报17点 (每日 17:00, 已启用)
+- 设施摘除红色预警提醒 (每日 09:00 检查/每 2 天发一轮, 开关默认开): 变更审批表红色超期私发三角色
 - 中控报警日报私发 (每日 17:00, 开关默认关): 日报按车间归属过滤后私发提炼四/五/六部指定人员
 - Agent 手动触发: generate_supervision_bulletin 工具
 
@@ -178,12 +179,12 @@ async def _load_effective_jobs() -> list[dict[str, Any]]:
 # ── 调度任务配置 ──
 
 SCHEDULED_JOBS: list[dict[str, Any]] = [
-    # ── 隐患督办通报（每周四 13:00，直读多维表格；13:00-18:00 值守轮询跟变化）──
+    # ── 隐患督办通报（每周四 09:00，直读多维表格；09:00-18:00 值守轮询跟变化）──
     {
         "name": "隐患督办通报",
-        "hour": 13, "minute": 0, "dow": 3,  # 周四
+        "hour": 9, "minute": 0, "dow": 3,  # 周四
         "description": "直读多维表格的未关闭隐患，按部门分组推送督办通报到群聊；"
-                       "13:00-18:00 督办通报值守轮询监控隐患状态变化，即时刷新速递格子",
+                       "09:00-18:00 督办通报值守轮询监控隐患状态变化，即时刷新速递格子",
     },
     # ── 未更新进展催办（每周三 10:00，直读多维表格 + Redis 跟踪进展变化）──
     {
@@ -296,6 +297,18 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "description": "AI+安全日报当日群入口卡（填写按钮+完成进度+未完成名单），"
                        "状态变化实时 PATCH 同一张卡（开关 SAFETY_DAILY_REPORT_ENABLED 默认关）",
+    },
+    # ── 设施摘除红色预警提醒（每日 09:00 检查；实际每 2 天发一轮，Redis 锚隔天对齐）──
+    {
+        "name": "设施摘除红色预警提醒",
+        "hour": 9, "minute": 0,
+        # 补发窗口：当日 12:00 截止（失败自动重试）
+        "retry_until_hour": 12,
+        "target_type": "person",  # 私发三角色
+        "description": "设备设施联锁/安全附件变更审批表红色超期记录私发提醒：每 2 天一轮"
+                       "（Redis 锚 safety:interlock_red:last_sent 隔天对齐），"
+                       "收件人=发起人(申请人)/工艺负责人/安全负责人"
+                       "（开关 SAFETY_INTERLOCK_RED_WARNING_ENABLED 默认开）",
     },
     # ── 中控报警日报私发（每日 17:00，开关默认关）──
     {
@@ -656,6 +669,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             await _run_central_alarm_daily_report(chat_id=chat_id)
         elif job_name == "AI安全日报":
             await _run_daily_report_card()
+        elif job_name == "设施摘除红色预警提醒":
+            skip_no_source = await _run_interlock_red_warning()
         elif job_name == "中控报警日报私发":
             await _run_central_alarm_daily_dm()
         elif job_name == "中控报警周报":
@@ -777,7 +792,7 @@ async def _run_standard_check_freeze(chat_id: str | None = None) -> bool:
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:
-    """周四 13:00 督办通报（群聊推送，直读多维表格；此后值守轮询跟变化）。"""
+    """周四 09:00 督办通报（群聊推送，直读多维表格；此后值守轮询跟变化）。"""
     from app.modules.safety.service.hazard_direct.bulletin import send_bulletin
 
     stats = await send_bulletin(chat_id)
@@ -1037,6 +1052,30 @@ async def _run_daily_report_card() -> None:
     if not msg_id:
         raise RuntimeError("AI安全日报入口卡发送失败（无 message_id）")
     logger.info("  AI安全日报入口卡完成: msg_id=%s", msg_id)
+
+
+async def _run_interlock_red_warning() -> bool:
+    """设施摘除红色预警提醒定时任务（每日 09:00 检查；实际每 2 天发一轮）。
+
+    节奏由 service 层 Redis 锚控制（safety:interlock_red:last_sent，gap<2 天
+    跳过）；总闸（SAFETY_INTERLOCK_RED_WARNING_ENABLED，默认开）关闭时静默跳过；
+    interlock_change/approval 表未登记 → no_source 哨兵；
+    其余失败上抛交由调度器补发窗口重试。
+    """
+    from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+    from app.modules.safety.service.interlock_warning import config as iw_config
+    from app.modules.safety.service.interlock_warning import service as iw_service
+
+    if not iw_config.enabled():
+        logger.info("  设施摘除红色预警提醒跳过（总闸未开）")
+        return False
+    try:
+        stats = await iw_service.run_interlock_red_warning()
+    except BitableConfigError:
+        logger.warning("设施摘除红色预警提醒无数据源（interlock_change/approval 未登记）")
+        return True
+    logger.info("  设施摘除红色预警提醒完成: %s", stats)
+    return False
 
 
 async def _run_central_alarm_daily_report(chat_id: str | None = None) -> None:

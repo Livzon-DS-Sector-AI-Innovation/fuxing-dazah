@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.modules.safety.ai_hazard_scoring.plugin import AIHazardScorer
 from app.modules.safety.ai_hazard_scoring.prompts import (
     build_context_text,
     build_full_prompt,
@@ -17,7 +18,6 @@ from app.modules.safety.ai_hazard_scoring.schemas import (
     HazardScoringInput,
     PluginConfig,
 )
-from app.modules.safety.ai_hazard_scoring.plugin import AIHazardScorer
 
 from .test_rules import VALID_RAW
 
@@ -82,6 +82,25 @@ class TestPrompts:
         # 输入上下文带入
         assert "HZ-20261105-001" in prompt
         assert "静电跨接断裂" in prompt
+
+    def test_full_prompt_contains_lecx_rubric(self):
+        """2026-11-12 落版：LECX 逐档判定细则写入 prompt（总则/顺序/每档要点）。"""
+        prompt = build_full_prompt(build_context_text(make_input()))
+        for anchor in (
+            "判定总则",
+            "判定顺序：C 后果 → L 可能性 → E 接触频率 → X 排查难度",
+            "四维独立判定、互不推导",
+            "就高原则只用于 C",
+        ):
+            assert anchor in prompt
+        # 每档判定要点/典型例抽样锚定（LECX 各维至少一条）
+        for anchor in (
+            "随时可触发",
+            "连续作业/常驻区域",
+            "多人死亡(3人及以上)",
+            "需专业诊断、专项检测、停机拆检",
+        ):
+            assert anchor in prompt
 
     def test_context_text_has_no_reporter_identity(self):
         ctx = build_context_text(make_input())

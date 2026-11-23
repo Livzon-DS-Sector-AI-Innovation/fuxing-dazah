@@ -155,6 +155,11 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "AI+安全日报总闸（群入口卡/表单回调/AI评价/负责人汇总全链）",
     ),
     _flag(
+        "SAFETY_INTERLOCK_RED_WARNING_ENABLED", True,
+        "设施摘除红色预警私发提醒总闸（每 2 天早上 9:00，"
+        "收件人=变更审批发起人/工艺负责人/安全负责人）",
+    ),
+    _flag(
         "SAFETY_DAILY_DIGEST_ENABLED", True,
         "「安全速递」总卡模式总开关（开 = 各报告并入当日总卡；关 = 各报告独立群卡）",
     ),
@@ -350,7 +355,7 @@ _ITEMS: tuple[ConfigItem, ...] = (
     ),
     _gate(
         "SAFETY_HAZARD_BULLETIN_WATCH_ENABLED", False,
-        "督办通报值守轮询（④ 周四 13:00-18:00，速递格子变化即刷新；以总开关打开为前提）",
+        "督办通报值守轮询（④ 周四 09:00-18:00，速递格子变化即刷新；以总开关打开为前提）",
         restart_required=True,
     ),
     _gate(

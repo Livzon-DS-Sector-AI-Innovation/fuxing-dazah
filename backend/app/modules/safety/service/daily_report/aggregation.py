@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 AGG_TIMEOUT_SECONDS = 180
 
 SYSTEM_PROMPT = """你是安全工程中心部门负责人的日报汇总助手。输入是多名员工当天\
-已确认的最终版日报（四段式），请汇总生成部门负责人工作日报。
+已确认的最终版日报（五段式），请汇总生成部门负责人工作日报。
 
 格式要求（markdown，保留中文序号段头）：
 一、今日重点工作——按专项分类（如【特殊作业安全管理】【现场隐患排查与治理】【消防设施管理】【危化品及职业健康】【安全教育及相关方管理】等，按当日实际归类），每项写清具体工作、数量/进度、处理结果和未完成部分。
@@ -42,7 +42,7 @@ def build_agg_messages(
     blocks = []
     for rec in reports:
         lines = [f"【{rec.name}】"]
-        for key in ("work", "done", "issue", "plan"):
+        for key in ("work", "done", "coord", "risk", "plan"):
             text = (rec.sections.get(key) or "").strip()
             if text:
                 lines.append(f"  {SECTION_LABELS[key]}：{text}")

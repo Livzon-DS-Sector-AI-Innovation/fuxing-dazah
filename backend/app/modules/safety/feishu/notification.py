@@ -35,12 +35,13 @@ def build_card_dict(
 ) -> dict:
     """飞书卡片 JSON 2.0 根结构（safety 各卡片构建点的统一信封）。
 
-    content 为正文 markdown（首个元素），elements 为附加元素
+    content 为正文 markdown（首个元素，空串=不产出该元素——日报汇总卡
+    全量走 elements 时避免顶部出现重复块），elements 为附加元素
     （按钮行/分割线/照片列等，需已按 2.0 组件规范构建）。
     subtitle 为头部副标题（纯文本）；header_tags 为标题后缀标签
     （如 [{"tag": "plain_text", "text": "午后更新", "color": "orange"}]，最多 3 个）。
     """
-    body: list[dict] = [{"tag": "markdown", "content": content}]
+    body: list[dict] = [{"tag": "markdown", "content": content}] if content else []
     if elements:
         body.extend(elements)
     header: dict[str, Any] = {

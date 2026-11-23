@@ -4,8 +4,8 @@
 - ``run_ai_analysis_round``   ① 隐患AI分析轮询
 - ``run_review_round``        ② AI整改审核轮询
 - ``run_supervision_round``   ③ 督办等级计算（轮询）
-- ``send_bulletin``           ④ 隐患督办通报（周四 13:00）
-- ``run_bulletin_watch_once`` ④b 督办通报值守（周四 13:00-18:00 变化即刷新）
+- ``send_bulletin``           ④ 隐患督办通报（周四 09:00）
+- ``run_bulletin_watch_once`` ④b 督办通报值守（周四 09:00-18:00 变化即刷新）
 - ``send_progress_dunning_dynamic`` ⑤ 未更新进展催办（周三 10:00，动态名单）
 
 ①②③ + ④b 由平台调度引擎的 interval 任务驱动（``safety/scheduled.py``，

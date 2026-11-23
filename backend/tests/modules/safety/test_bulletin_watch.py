@@ -1,7 +1,7 @@
 """④ 督办通报值守轮询的单元测试。
 
 纯内存桩验证，不依赖 Redis / 飞书网络：
-- 窗口判定（周四 13:00 含 - 18:00 不含，北京时间）；
+- 窗口判定（周四 09:00 含 - 18:00 不含，北京时间）；
 - 值守轮次：窗口外 / 总卡关闭不动作；内容与速递格子一致不投递；
   有差异或格子缺失才投递（复用 deliver_bulletin，不重复拉表）。
 """
@@ -27,20 +27,22 @@ def _bj(d: datetime) -> datetime:
 # ── 窗口判定 ─────────────────────────────────────────────────────
 
 
-def test_in_window_thursday_afternoon() -> None:
+def test_in_window_thursday_workday() -> None:
+    assert bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 9, 0)))
+    assert bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 9, 1)))
     assert bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 13, 0)))
     assert bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 15, 30)))
     assert bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 17, 59)))
 
 
 def test_outside_window() -> None:
-    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 12, 59)))
+    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 8, 59)))
     assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 18, 0)))
     assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 18, 1)))
-    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 9, 0)))
+    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 15, 6, 0)))
     # 非周四（2026-10-14 周三 / 2026-10-16 周五）
-    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 14, 15, 0)))
-    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 16, 15, 0)))
+    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 14, 10, 0)))
+    assert not bulletin_watch.in_watch_window(_bj(datetime(2026, 10, 16, 10, 0)))
 
 
 # ── 值守轮次 ─────────────────────────────────────────────────────
@@ -83,7 +85,7 @@ async def test_watch_once_skips_outside_window(
 ) -> None:
     build_calls, deliver_calls = _patch_watch_deps(monkeypatch)
     result = await bulletin_watch.run_bulletin_watch_once(
-        now=datetime(2026, 10, 15, 12, 30),
+        now=datetime(2026, 10, 15, 8, 30),
     )
     assert result is None
     assert build_calls == [] and deliver_calls == []
@@ -131,7 +133,7 @@ async def test_watch_once_change_delivers(
 async def test_watch_once_missing_cell_delivers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """格子不存在（如 13:00 周任务失败）→ 值守首轮补投。"""
+    """格子不存在（如 09:00 周任务失败）→ 值守首轮补投。"""
     _, deliver_calls = _patch_watch_deps(
         monkeypatch, content="内容A", cell_detail_value=None,
     )

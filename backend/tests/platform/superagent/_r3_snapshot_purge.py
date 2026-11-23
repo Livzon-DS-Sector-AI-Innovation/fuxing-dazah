@@ -34,10 +34,17 @@ R3_SOURCE_NAMES = ("safety.ops.selfheal", "safety.ops.rag_inject", "safety.ops.e
 
 
 def _r3_effect_filter() -> ColumnElement[bool]:
-    """R3 自有 effect 圈定（对齐旧 purge 口径：前缀 + 自有 kind + 历史前缀）。"""
+    """R3 自有 effect 圈定（对齐旧 purge 口径：前缀 + 自有 kind + 历史前缀）。
+
+    park-/unpark- 为 R3 测试直插 parked 行的专用前缀（业务 digest_cell_upsert
+    键非此前缀）——四期补：09:25 实证跑测试经真执行链 commit 后漏网 3 条
+    failed 态行，翻 auto 后会被 unpark 闸白耗 + 重开 parked 噪音单。
+    """
     return (
         AgentEffect.dedupe_key.like("r3:%")
         | AgentEffect.dedupe_key.like("r3hist-%")
+        | AgentEffect.dedupe_key.like("park-%")
+        | AgentEffect.dedupe_key.like("unpark-%")
         | AgentEffect.kind.in_(("r3_repair", "r3_closure_card"))
     )
 
@@ -71,6 +78,15 @@ async def snapshot_r3_rows() -> dict[str, Any]:
         effect_ids = list((
             await s.execute(select(AgentEffect.id).where(_r3_effect_filter()))
         ).scalars().all())
+        # R3 测试 job runs（r3t 前缀收窄：真 job 行永不进差集删除面）——
+        # 四期补：测试经真执行链 commit 的行会让活引擎再开 job_missed 单
+        from app.modules.safety.models.msds import SchedulerJobRun
+
+        jobrun_ids = list((
+            await s.execute(
+                select(SchedulerJobRun.id).where(SchedulerJobRun.job_name.like("r3t%"))
+            )
+        ).scalars().all())
         cursors = {
             x.name: {
                 c.name: c.value
@@ -88,6 +104,7 @@ async def snapshot_r3_rows() -> dict[str, Any]:
             "task_ids": task_ids,
             "trigger_ids": trigger_ids,
             "effect_ids": effect_ids,
+            "jobrun_ids": jobrun_ids,
             "sources": {
                 x.name: {"enabled": x.enabled, "config": dict(x.config or {})}
                 for x in src_rows
@@ -216,6 +233,18 @@ async def purge_new_r3_rows(snap: dict[str, Any]) -> None:
         await s.execute(
             AgentEffect.__table__.delete().where(
                 _scoped(_r3_effect_filter(), AgentEffect.id, snap["effect_ids"])
+            )
+        )
+
+        # ── 新增 r3t 测试 job runs（四期补：防 missed 单再生）──
+        from app.modules.safety.models.msds import SchedulerJobRun
+
+        await s.execute(
+            SchedulerJobRun.__table__.delete().where(
+                _scoped(
+                    SchedulerJobRun.job_name.like("r3t%"),
+                    SchedulerJobRun.id, snap.get("jobrun_ids") or [],
+                )
             )
         )
 

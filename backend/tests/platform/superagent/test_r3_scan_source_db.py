@@ -221,6 +221,13 @@ def test_extract_endpoints() -> None:
 
 async def test_scan_job_failed_then_recovered(db_session, scan_env, monkeypatch) -> None:
     """job 连续失败→failed trigger；翻 success→recovered；重扫 duplicate。"""
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+
+    # 五期边界：job 扫描只认 SCHEDULED_JOBS 名单——测试 job 须入名单（mock 索引）
+    monkeypatch.setattr(
+        scan_source, "_schedule_jobs_index",
+        lambda: {"r3测试任务A": {}},
+    )
     yesterday = date.today() - timedelta(days=1)
     db_session.add(_job_row("r3测试任务A", attempts=5, fired_date=yesterday))
     await db_session.flush()
@@ -273,8 +280,12 @@ async def test_scan_job_failed_then_recovered(db_session, scan_env, monkeypatch)
 
 async def test_scan_below_threshold_no_signal(db_session, scan_env, monkeypatch) -> None:
     """attempt_count<3（未达告警阈值）不产信号；总闸关零扫描。"""
-    from app.modules.safety.service.ops_selfheal_r3 import config
+    from app.modules.safety.service.ops_selfheal_r3 import config, scan_source
 
+    monkeypatch.setattr(
+        scan_source, "_schedule_jobs_index",
+        lambda: {"r3测试任务B": {}},
+    )
     db_session.add(_job_row("r3测试任务B", attempts=2))
     await db_session.flush()
     monkeypatch.setattr(config, "ops_enabled", lambda: True)
@@ -354,10 +365,16 @@ async def test_scan_today_not_missed_before_window(db_session, scan_env, monkeyp
 async def test_scan_parked_excludes_r3_kinds(db_session, scan_env, monkeypatch) -> None:
     """parked（status=failed）按 kind 分组触发；R3 自身 kinds 排除。"""
     import uuid as uuid_mod
+    from datetime import date as date_mod
 
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
     from app.platform.superagent.models import AgentEffect
 
-    test_kind = "r3ptest_kind"
+    # 真 kind 在活库有当日存量 trigger（同 eid 被 duplicate 吞）——钉合成日期
+    synthetic = date_mod(2030, 1, 1)
+    monkeypatch.setattr(scan_source, "_today", lambda: synthetic)
+
+    test_kind = "digest_cell_upsert"  # 五期白名单内（桥注册面同源）
     for kind, key in (
         (test_kind, f"park-{uuid_mod.uuid4().hex[:8]}"),
         ("r3_repair", f"park-{uuid_mod.uuid4().hex[:8]}"),
@@ -372,7 +389,7 @@ async def test_scan_parked_excludes_r3_kinds(db_session, scan_env, monkeypatch) 
     await _scan_once(db_session, monkeypatch)
     parked = [
         t for t in await _triggers_of(db_session)
-        if t.external_id.startswith(f"ops:parked:{test_kind}:")
+        if t.external_id == f"ops:parked:{test_kind}:{synthetic.isoformat()}"
     ]
     assert len(parked) == 1
     t = parked[0]
@@ -383,6 +400,106 @@ async def test_scan_parked_excludes_r3_kinds(db_session, scan_env, monkeypatch) 
         if t.external_id.startswith(("ops:parked:r3_repair:", "ops:parked:r3_closure_card:"))
     ]
     assert r3_own == []  # R3 自身 kinds 排除（自愈不自我修复）
+    await db_session.rollback()
+
+
+async def test_scan_parked_whitelist_ignores_foreign_kinds(
+    db_session, scan_env, monkeypatch,
+) -> None:
+    """五期边界：parked 扫描只认安全模块注册 handler 的 kind——他模块 kind
+    （如 warehouse 的 hw_push）不进信号面（也不会被 unpark 重置）。"""
+    import uuid as uuid_mod
+
+    from app.platform.superagent.models import AgentEffect
+
+    for kind in ("digest_cell_upsert", "hw_push"):
+        db_session.add(AgentEffect(
+            id=uuid_mod.uuid4(), kind=kind,
+            dedupe_key=f"park-{uuid_mod.uuid4().hex[:8]}",
+            payload={}, status="failed", attempts=10, last_error="x",
+        ))
+    await db_session.flush()
+
+    await _scan_once(db_session, monkeypatch)
+    parked = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith("ops:parked:")
+    ]
+    kinds = {t.external_id.split(":")[2] for t in parked}
+    assert kinds == {"digest_cell_upsert"}  # hw_push 被白名单挡在信号面外
+    await db_session.rollback()
+
+
+async def test_scan_push_outbox_whitelist_ignores_foreign_conv(
+    db_session, scan_env, monkeypatch,
+) -> None:
+    """五期边界：outbox dropped 只统计安全模块会话前缀——hw_urge:*（五金
+    催办）等他模块 dropped 不触发安全模块误报单。"""
+    import uuid as uuid_mod
+
+    from app.platform.superagent.models import AgentOutboxMessage
+
+    for conv in (f"guardian_remind:rec{uuid_mod.uuid4().hex[:6]}:2026-11",
+                 f"hw_urge:low_stock:{uuid_mod.uuid4().hex[:8]}"):
+        db_session.add(AgentOutboxMessage(
+            conversation=conv, purpose="message",
+            channel={"chat_id": "oc_x"}, body={}, status="dropped",
+            attempts=10, dropped_reason="api error", last_error="timeout",
+        ))
+    await db_session.flush()
+
+    await _scan_once(db_session, monkeypatch)
+    push = [
+        t for t in await _triggers_of(db_session)
+        if t.external_id.startswith("ops:push:")
+    ]
+    comps = {t.payload["component"] for t in push}
+    assert "outbox" in comps  # guardian 前缀计入
+    outbox_t = next(t for t in push if t.payload["component"] == "outbox")
+    assert outbox_t.payload["count"] == 1  # 只数 guardian 那行，hw_urge 不计
+    for sample in outbox_t.payload["samples"]:
+        assert not sample["conversation"].startswith("hw_")
+    await db_session.rollback()
+
+
+async def test_scan_jobs_ignores_unregistered_jobs(
+    db_session, scan_env, monkeypatch,
+) -> None:
+    """五期边界：job 扫描只认 safety SCHEDULED_JOBS 名单——表内名单外 job
+    行（他模块未来写入）完全忽略，零信号。"""
+    from datetime import date as date_mod
+
+    from app.modules.safety.models.msds import SchedulerJobRun
+
+    db_session.add(SchedulerJobRun(
+        job_name=f"hw_scan_{__import__('uuid').uuid4().hex[:6]}",
+        fired_date=date_mod.today(), status="failed",
+        attempt_count=10, alerted=False,
+    ))
+    await db_session.flush()
+
+    await _scan_once(db_session, monkeypatch)
+    trig = [
+        t for t in await _triggers_of(db_session)
+        if t.payload.get("job_name", "").startswith("hw_scan_")
+    ]
+    assert trig == []  # 名单外 job 不产 failed/missed/recovered 任何信号
+    await db_session.rollback()
+
+
+async def test_managed_effect_kinds_have_handlers(db_session) -> None:
+    """五期白名单一致性锚：白名单内每种 kind 必须有 handler（桥注册面同源）——
+    unpark 重置后有人消费才可能自愈；kind 改名漂移在此暴露。"""
+    from app.modules.safety import superagent_bridge
+    from app.modules.safety.service.ops_selfheal_r3 import scan_source
+    from app.platform.superagent import effects as effects_mod
+
+    superagent_bridge.register_superagent_bridge()  # 幂等（重复注册 ValueError 吞）
+    missing = [
+        k for k in scan_source.R3_MANAGED_EFFECT_KINDS
+        if effects_mod.get_effect_handler(k) is None
+    ]
+    assert missing == []
     await db_session.rollback()
 
 
@@ -486,9 +603,10 @@ async def test_scan_push_failures(db_session, scan_env, monkeypatch) -> None:
 
     from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
 
-    # outbox dropped 行
+    # outbox dropped 行（五期：会话前缀须在安全模块白名单内）
     db_session.add(AgentOutboxMessage(
-        conversation=f"r3p2conv-{uuid_mod.uuid4().hex[:8]}", purpose="message",
+        conversation=f"guardian_remind:rec{uuid_mod.uuid4().hex[:6]}:2026-11",
+        purpose="message",
         channel={"chat_id": "oc_x"}, body={}, status="dropped",
         attempts=10, dropped_reason="api error", last_error="timeout",
     ))
@@ -579,16 +697,22 @@ async def test_scan_storm_cap_aggregates(db_session, scan_env, monkeypatch) -> N
     """防风暴：故障类 >5 → 一条聚合 trigger（payload 带清单）。"""
     import uuid as uuid_mod
 
-    from app.platform.superagent.models import AgentEffect
+    from app.platform.superagent.models import AgentEffect, AgentOutboxMessage
 
-    # 6 个测试组件 parked + 1 个死信 ≥7 条故障类 → 聚合 1 条
-    #（开发库真实 parked 行可能并入聚合，断言用下界）
-    for i in range(6):
+    # 五期白名单后可产故障类的来源：白名单 4 kind parked + 死信 + guardian
+    # outbox dropped = 6 条 >5 → 聚合 1 条（开发库真实行可能并入，断言用下界）
+    for kind in ("dm_admin", "digest_cell_upsert", "supervision_writeback",
+                 "needs_human_cell"):
         db_session.add(AgentEffect(
-            id=uuid_mod.uuid4(), kind=f"r3storm{i}",
+            id=uuid_mod.uuid4(), kind=kind,
             dedupe_key=f"storm-{uuid_mod.uuid4().hex[:8]}",
             payload={}, status="failed", attempts=10, last_error="x",
         ))
+    db_session.add(AgentOutboxMessage(
+        conversation=f"guardian_remind:rec{uuid_mod.uuid4().hex[:6]}:2026-11",
+        purpose="message", channel={"chat_id": "oc_x"}, body={}, status="dropped",
+        attempts=10, dropped_reason="api error", last_error="x",
+    ))
 
     async def _fake_list(limit: int = 100):
         return [{"record_id": "recX", "reason": "r"}]
@@ -604,7 +728,7 @@ async def test_scan_storm_cap_aggregates(db_session, scan_env, monkeypatch) -> N
     assert len(batches) == 1  # 超限聚合成 1 条（不逐条开单）
     t = batches[0]
     assert t.payload["signal"] == "ops_batch"
-    assert t.payload["count"] >= 7
+    assert t.payload["count"] >= 6
     assert t.thread_key.startswith("ops:opsmisc:")
     # 测试组件不产生独立 parked 原子信号（被聚合吞并）
     singles = [

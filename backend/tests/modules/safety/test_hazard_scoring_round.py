@@ -60,7 +60,7 @@ def _pending_record(no: str = "HZ-20261105-001") -> dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# note 模板（_build_note：band 首段 / 四维=D / 条件段）
+# note 模板（_build_note：band 首段 / 四维=D / 每维分值+理由 / 条件段）
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -75,6 +75,25 @@ class TestBuildNote:
         # 无命中无警示：不含附加段
         assert "重大判定" not in note
         assert "⚠" not in note
+
+    def test_note_lists_each_dimension_value_and_reason(self):
+        note = hazard_scoring._build_note(make_output(), 52.9)
+        # 四维逐项列示「档位（分值）：评分理由」
+        assert "L 可能性=可能（1.5）：作业频繁且点火源现实存在" in note
+        assert "E 接触频率=每天几次接触（1.8）：巡检路线必经" in note
+        assert "C 后果=严重（20）：泄漏遇火源可致火灾" in note
+        assert "X 排查难度=一般（0.98）：目视可见" in note
+        # 维度段按 L→E→C→X 顺序出现，且在评语段之前
+        seg = [note.index(s) for s in ("L 可能性=", "E 接触频率=", "C 后果=", "X 排查难度=")]
+        assert seg == sorted(seg)
+        assert max(seg) < note.index("静电跨接断裂，建议立即整改。")
+
+    def test_note_reason_newlines_collapsed(self):
+        out = make_output()
+        out.likelihood_reason = "第一行\n第二行"
+        note = hazard_scoring._build_note(out, 52.9)
+        assert "\n" not in note
+        assert "L 可能性=可能（1.5）：第一行 第二行" in note
 
     def test_note_with_major_hit(self):
         note = hazard_scoring._build_note(

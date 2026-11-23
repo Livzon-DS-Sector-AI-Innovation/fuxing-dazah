@@ -70,7 +70,7 @@ def supervision_poll_enabled() -> bool:
 
 
 def bulletin_watch_enabled() -> bool:
-    """④ 督办通报值守轮询（周四 13:00-18:00，速递格子变化即刷新）。"""
+    """④ 督办通报值守轮询（周四 09:00-18:00，速递格子变化即刷新）。"""
     return direct_poll_enabled() and _flag(
         gates.domain_env(_DOMAIN, "BULLETIN_WATCH_ENABLED"), False
     )
