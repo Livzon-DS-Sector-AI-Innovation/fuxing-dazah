@@ -1,8 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, DatePicker, Drawer, Empty, Form, Input, Modal, Select, Spin, Switch, Tag, Upload } from 'antd'
+import { App, Alert, Button, DatePicker, Drawer, Empty, Form, Input, Modal, Select, Spin, Switch, Tag, Upload } from 'antd'
 import { EyeOutlined, HistoryOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import {
   CERTIFICATE_CATEGORY_LABELS,
   type CertificateCategory,
@@ -13,6 +14,7 @@ import {
   deleteEmployeeCertificate,
   downloadCertificateFile,
   fetchEmployeeCertificates,
+  parseCertificateFile,
   previewCertificateFile,
   updateEmployeeCertificate,
   uploadEmployeeCertificate,
@@ -51,6 +53,8 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
   const [uploadTarget, setUploadTarget] = useState<CertificateCategoryView | null>(null)
   const [uploading, setUploading] = useState(false)
   const [file, setFile] = useState<File | null>(null)
+  const [parsing, setParsing] = useState(false)
+  const [parsedInfo, setParsedInfo] = useState<'ok' | 'fail' | null>(null)
   const [form] = Form.useForm()
 
   // 预览
@@ -76,6 +80,7 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
   const openUpload = (cat: CertificateCategoryView) => {
     setUploadTarget(cat)
     setFile(null)
+    setParsedInfo(null)
     form.resetFields()
     form.setFieldsValue({
       certificate_name: cat.current?.certificate_name ?? undefined,
@@ -85,6 +90,29 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
       is_permanent: false,
     })
     setUploadOpen(true)
+  }
+
+  /** 选文件后自动识别回填（视觉模型，仅预填——以人工核对为准） */
+  const handleFilePicked = async (f: File) => {
+    setFile(f)
+    setParsedInfo(null)
+    setParsing(true)
+    try {
+      const r = await parseCertificateFile(f)
+      const d = r.data
+      form.setFieldsValue({
+        certificate_name: d.certificate_name ?? undefined,
+        certificate_no: d.certificate_no ?? undefined,
+        issue_date: d.issue_date ? dayjs(d.issue_date) : undefined,
+        expiry_date: (!d.is_permanent && d.expiry_date) ? dayjs(d.expiry_date) : undefined,
+        is_permanent: d.is_permanent,
+      })
+      setParsedInfo('ok')
+    } catch {
+      setParsedInfo('fail')
+    } finally {
+      setParsing(false)
+    }
   }
 
   const handleUpload = async () => {
@@ -290,12 +318,26 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
       >
         <Form form={form} layout="vertical" className="mt-2">
           {!editTargetId && (
-            <Form.Item label="证件扫描件" required rules={[{ required: true, message: '' }]}>
-              <Upload accept=".jpg,.jpeg,.png,.webp,.bmp,.pdf" maxCount={1} showUploadList
-                beforeUpload={(f) => { setFile(f); return false }}>
-                <Button icon={<UploadOutlined />}>选择文件（图片/PDF，≤20MB）</Button>
-              </Upload>
-            </Form.Item>
+            <>
+              <Form.Item label="证件扫描件" required rules={[{ required: true, message: '' }]}>
+                <Upload accept=".jpg,.jpeg,.png,.webp,.bmp,.pdf" maxCount={1} showUploadList
+                  beforeUpload={(f) => { void handleFilePicked(f); return false }}>
+                  <Button icon={<UploadOutlined />}>选择文件（图片/PDF，≤20MB）</Button>
+                </Upload>
+              </Form.Item>
+              {parsing && (
+                <Alert type="info" showIcon className="mb-3"
+                  message="正在自动识别证件要素…" />
+              )}
+              {parsedInfo === 'ok' && (
+                <Alert type="success" showIcon className="mb-3" closable
+                  message="已自动识别并回填要素，请核对无误后上传（识别结果仅供参考）" />
+              )}
+              {parsedInfo === 'fail' && (
+                <Alert type="warning" showIcon className="mb-3" closable
+                  message="自动识别不可用或未识别出内容，请手动填写要素" />
+              )}
+            </>
           )}
           <div className="grid grid-cols-2 gap-x-3">
             <Form.Item name="certificate_name" label="证件名称">

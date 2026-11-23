@@ -145,6 +145,31 @@ async def upload_certificate(
     return success_response(data=row, message="已归档（版本 v{v}）".format(v=row["version_no"]))
 
 
+# ── 上传即解析（视觉识别预填） ──
+
+
+@router.post("/certificates/parse", summary="证件扫描件要素识别（视觉模型预填，人工核对）")
+async def parse_certificate(
+    file: UploadFile = File(..., description="证件扫描件（图片/PDF）"),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.core.file_storage import safe_filename
+    from app.modules.hr.certificate_vision_service import (
+        CertificateVisionConfigError,
+        parse_certificate,
+    )
+
+    data, filename = await _read_upload(file)
+    ext = safe_filename(filename, "certificate").rsplit(".", 1)[-1].lower()
+    try:
+        result = await parse_certificate(data, ext)
+    except CertificateVisionConfigError:
+        raise HTTPException(503, "证件自动识别未配置（需视觉模型网关），请手动填写要素")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(data=result, message="识别完成，请核对后保存")
+
+
 # ── 原件 / 更正 / 删除 ──
 
 

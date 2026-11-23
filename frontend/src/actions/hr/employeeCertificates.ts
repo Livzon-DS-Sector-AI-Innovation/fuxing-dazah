@@ -41,6 +41,26 @@ export async function fetchEmployeeCertificates(employeeId: string): Promise<{ d
   return fetchHrApi(`/hr/employees/${employeeId}/certificates`, { errorMessage: '获取员工证件失败' })
 }
 
+/** 证件扫描件要素识别（视觉模型预填，人工核对后保存） */
+export async function parseCertificateFile(file: File): Promise<{
+  data: {
+    certificate_no: string | null
+    holder_name: string | null
+    issue_date: string | null
+    expiry_date: string | null
+    is_permanent: boolean
+    certificate_name: string | null
+  }
+}> {
+  const fd = new FormData()
+  fd.append('file', file)
+  return fetchHrApi('/hr/certificates/parse', {
+    method: 'POST',
+    body: fd,
+    errorMessage: '证件识别失败',
+  })
+}
+
 /** 上传/换证（同类别自动升版本，旧版保留可查） */
 export async function uploadEmployeeCertificate(
   employeeId: string,
