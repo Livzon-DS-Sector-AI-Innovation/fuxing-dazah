@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import {
+  Employee,
   EmployeeCreateInput,
   EmployeeUpdateInput,
   EmployeeListResponse,
@@ -56,6 +57,15 @@ export async function createEmployee(data: EmployeeCreateInput) {
 
 export async function fetchEmployeeByNumberAction(employeeNumber: string) {
   return fetchHrApi(`/hr/employees/by-number/${encodeURIComponent(employeeNumber)}`, { errorMessage: '获取员工详情失败' })
+}
+
+/** 按 ID 获取员工档案（员工详情页） */
+export async function fetchEmployeeByIdAction(id: string): Promise<Employee> {
+  const res = await fetchHrApi<{ code: number; message: string; data: Employee }>(
+    `/hr/employees/${id}`,
+    { errorMessage: '获取员工详情失败' },
+  )
+  return res.data
 }
 
 export async function updateEmployee(id: string, data: EmployeeUpdateInput) {

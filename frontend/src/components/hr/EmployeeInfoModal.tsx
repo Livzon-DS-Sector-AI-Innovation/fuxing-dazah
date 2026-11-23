@@ -31,6 +31,8 @@ export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
       ['职务', employee.duty], ['职能分类', employee.job_category],
       ['职级', employee.level], ['岗位职级', employee.report_grade],
       ['员工性质', employee.status_category], ['状态', employee.status],
+      ['是否重点岗位', employee.is_key_position ? '是' : '否'],
+      ['直属上级', employee.direct_manager_name],
       ['域账号', employee.domain_account], ['人力资源分析', employee.hr_analysis],
     ]],
     ['个人信息', [
@@ -72,6 +74,11 @@ export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
           </Link>
         </div>
       )}
+      <div className="mb-3 text-[13px] text-[var(--color-steel)]">
+        <Link className="text-[var(--color-primary)]" href={`/hr/profile/${employee.id}`}>
+          查看完整档案（证件资料库 / 安全考试 / 转正历史）→
+        </Link>
+      </div>
       <div className="max-h-[70vh] overflow-y-auto pr-2">
         {sections.map(([title, rows]) => (
           <div key={title} className="mb-4">

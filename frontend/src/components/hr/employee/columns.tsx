@@ -5,7 +5,8 @@
 
 import { Button, Space, Tag, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
+import { AuditOutlined, EditOutlined, EyeOutlined, FolderOpenOutlined, SwapOutlined } from '@ant-design/icons'
+import Link from 'next/link'
 import { Employee } from '@/types/hr'
 import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
 
@@ -259,8 +260,8 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
     {
       title: '操作',
       key: 'action',
-      // 同步模式仅剩「详情」，收窄整列还给数据区；宽度随可见按钮数自适应
-      width: syncMode ? 72 : 176,
+      // 同步模式仅剩「详情+完整档案」，收窄整列还给数据区；宽度随可见按钮数自适应
+      width: syncMode ? 100 : 200,
       fixed: 'right' as const,
       render: (_, record: Employee) => (
         <Space size={2}>
@@ -271,6 +272,11 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
               icon={<EyeOutlined />}
               onClick={() => onDetail(record)}
             />
+          </Tooltip>
+          <Tooltip title="完整档案（证件/安全考试/转正历史）">
+            <Link href={`/hr/profile/${record.id}`} aria-label="完整档案">
+              <Button type="text" size="small" icon={<FolderOpenOutlined />} />
+            </Link>
           </Tooltip>
           {canEditProfile && record.status === '试用期' && (
             <Tooltip title="发起转正评估">
