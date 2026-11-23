@@ -3,7 +3,7 @@
 import styles from "./lifecycleTable.module.css"
 import { useState, useCallback, useEffect } from 'react'
 import {
-  App, Alert, Button, Table, Space, Input, Tag, Modal, Form, Select,
+  App, Button, Table, Space, Input, Tag, Modal, Form, Select, Tooltip,
   DatePicker, Popconfirm, Descriptions, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -44,7 +44,7 @@ interface DepartureClientProps {
   initialRecords: DepartureRecord[]
   initialTotal: number
   fetchAction?: typeof fetchDepartureRecords
-  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示同步横幅 */
+  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示立即同步入口 */
   syncInfo?: DepartureSyncInfo
 }
 
@@ -338,21 +338,6 @@ export default function DepartureClient({
         </h1>
       </div>
 
-      {syncMode && (
-        <Alert
-          type="info"
-          showIcon
-          icon={<CloudSyncOutlined />}
-          title={`数据来源：飞书「${syncInfo!.departure_table_name}」单向同步（员工档案同步顺带拉取，每天 02:00 自动对账）`}
-          description={`上次同步：${formatSyncTime(syncInfo!.last_sync_at)}；增删改请在飞书表中操作`}
-          action={canManage ? (
-            <Button size="small" icon={<CloudSyncOutlined />} loading={syncing} onClick={handleSync}>
-              立即同步
-            </Button>
-          ) : undefined}
-        />
-      )}
-
       <div className="flex flex-wrap gap-3 items-center">
         {!syncMode && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
@@ -385,6 +370,11 @@ export default function DepartureClient({
         />
         <Button loading={exporting} onClick={handleExport} className="ml-auto"
           title="按当前筛选（部门/离职类型/关键词）导出全部匹配记录">导出Excel</Button>
+        {syncMode && canManage && (
+          <Tooltip title={`数据来源：飞书「${syncInfo!.departure_table_name}」单向同步（每小时自动对账）；上次同步：${formatSyncTime(syncInfo!.last_sync_at)}；增删改请在飞书表中操作`}>
+            <Button icon={<CloudSyncOutlined />} loading={syncing} onClick={handleSync}>立即同步</Button>
+          </Tooltip>
+        )}
       </div>
 
       <Table className={styles.tableLg}
