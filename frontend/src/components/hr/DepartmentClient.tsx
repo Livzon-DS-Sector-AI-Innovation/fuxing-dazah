@@ -3,11 +3,10 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { App, Button, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions } from 'antd'
-import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, UserOutlined } from '@ant-design/icons'
 import { Department, Employee } from '@/types/hr'
 import { fetchDepartmentsAction, fetchEmployeesAction, deleteDepartment } from '@/actions/hr'
 import DepartmentForm from './DepartmentForm'
-import TeamClient from './TeamClient'
 
 interface DepartmentClientProps {
   initialDepartments: Department[]
@@ -29,8 +28,6 @@ export default function DepartmentClient({
   const [loading, setLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const router = useRouter()
-  const [teamModalOpen, setTeamModalOpen] = useState(false)
-  const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null)
 
   // 展开行：部门员工列表
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
@@ -89,11 +86,6 @@ export default function DepartmentClient({
     } catch (err: any) {
       message.error(err.message || '删除失败')
     }
-  }
-
-  const handleOpenTeams = (department: Department) => {
-    setSelectedDepartment(department)
-    setTeamModalOpen(true)
   }
 
   // 加载部门下的员工
@@ -197,17 +189,9 @@ export default function DepartmentClient({
     {
       title: '操作',
       key: 'action',
-      width: 220,
+      width: 160,
       render: (_: any, record: Department) => (
         <Space size="small">
-          <Button
-            type="text"
-            size="small"
-            icon={<TeamOutlined />}
-            onClick={() => handleOpenTeams(record)}
-          >
-            班组
-          </Button>
           <Button
             type="text"
             size="small"
@@ -303,20 +287,6 @@ export default function DepartmentClient({
         onClose={() => setFormOpen(false)}
         onSuccess={handleFormSuccess}
       />
-
-      <Modal
-        open={teamModalOpen}
-        onCancel={() => setTeamModalOpen(false)}
-        footer={null}
-        width={800}
-      >
-        {selectedDepartment && (
-          <TeamClient
-            departmentId={selectedDepartment.id}
-            departmentName={selectedDepartment.name}
-          />
-        )}
-      </Modal>
 
       <Modal title={`${detailEmployee?.name || ''} - 详细资料`} open={!!detailEmployee}
         onCancel={() => setDetailEmployee(null)} footer={null} width={700}>

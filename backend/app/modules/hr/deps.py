@@ -318,8 +318,6 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/departments$", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
     # 班组（组织架构）& 职位 & 内训师 & SOP/岗位培训（培训内容）
-    (r"/teams", {"GET": "hr:org:read", "POST": "hr:org:manage",
-                 "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
     (r"/positions", {"GET": "hr:position:read", "POST": "hr:position:manage",
                      "PUT": "hr:position:manage", "DELETE": "hr:position:manage"}),
     (r"/position-trainings", {"GET": "hr:training:read", "POST": "hr:training:manage",

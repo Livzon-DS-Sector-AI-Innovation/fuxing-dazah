@@ -71,9 +71,6 @@ from app.modules.hr.schemas import (
     PerformanceListParams,
     SopCatalogListResponse,
     SopCatalogResponse,
-    TeamCreate,
-    TeamResponse,
-    TeamUpdate,
     TrainerListResponse,
     TrainerResponse,
     TrainingLedgerCreate,
@@ -96,7 +93,6 @@ from app.modules.hr.service import (
     OffboardingRecordService,
     OnboardingRecordService,
     PerformanceEvaluationService,
-    TeamService,
     TrainingLedgerPageService,
     TrainingLedgerService,
 )
@@ -143,12 +139,6 @@ def get_offboarding_service(
     session: AsyncSession = Depends(get_db),
 ) -> OffboardingRecordService:
     return OffboardingRecordService(session)
-
-
-def get_team_service(
-    session: AsyncSession = Depends(get_db),
-) -> TeamService:
-    return TeamService(session)
 
 
 def get_onboarding_service(
@@ -2633,98 +2623,6 @@ async def list_pt_departments(
         .order_by(PositionTraining.department)
     )
     return success_response(data=[row[0] for row in result.all()])
-
-
-# ─── Team Routes ───
-
-@router.get("/teams", summary="班组列表")
-async def list_teams(
-    department_id: UUID | None = Query(None, description="部门筛选"),
-    keyword: str | None = Query(None, description="班组名称或编码关键词"),
-    page_params: PageParams = Depends(),
-    service: TeamService = Depends(get_team_service),
-):
-    teams, total = await service.list_teams(
-        department_id=department_id,
-        keyword=keyword,
-        page=page_params.page,
-        page_size=page_params.page_size,
-    )
-    data = [
-        TeamResponse.model_validate(t).model_dump(mode="json")
-        for t in teams
-    ]
-    return paginated_response(
-        data=data,
-        page=page_params.page,
-        page_size=page_params.page_size,
-        total=total,
-    )
-
-
-@router.post("/teams", summary="创建班组")
-async def create_team(
-    payload: TeamCreate,
-    service: TeamService = Depends(get_team_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    from app.modules.hr.models import HrDepartment
-    dept = (await service.department_repo.session.execute(
-        select(HrDepartment).where(HrDepartment.id == payload.department_id)
-    )).scalar_one_or_none()
-    if dept:
-        hr_scope.ensure_dept_writable([dept.name])
-    team = await service.create_team(payload)
-    return success_response(
-        data=TeamResponse.model_validate(team).model_dump(mode="json"),
-        message="班组创建成功",
-        status_code=201,
-    )
-
-
-@router.get("/teams/{team_id}", summary="班组详情")
-async def get_team(
-    team_id: UUID,
-    service: TeamService = Depends(get_team_service),
-):
-    team = await service.get_team(team_id)
-    return success_response(
-        data=TeamResponse.model_validate(team).model_dump(mode="json"),
-    )
-
-
-@router.put("/teams/{team_id}", summary="更新班组")
-async def update_team(
-    team_id: UUID,
-    payload: TeamUpdate,
-    service: TeamService = Depends(get_team_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    existing = await service.get_team(team_id)
-    if existing and existing.department_id:
-        dept = await service.department_repo.get_by_id(existing.department_id)
-        if dept:
-            hr_scope.ensure_dept_writable([dept.name])
-    team = await service.update_team(team_id, payload)
-    return success_response(
-        data=TeamResponse.model_validate(team).model_dump(mode="json"),
-        message="班组更新成功",
-    )
-
-
-@router.delete("/teams/{team_id}", summary="删除班组")
-async def delete_team(
-    team_id: UUID,
-    service: TeamService = Depends(get_team_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    existing = await service.get_team(team_id)
-    if existing and existing.department_id:
-        dept = await service.department_repo.get_by_id(existing.department_id)
-        if dept:
-            hr_scope.ensure_dept_writable([dept.name])
-    await service.delete_team(team_id)
-    return success_response(message="班组删除成功")
 
 
 # ─── OffboardingRecord Routes ───

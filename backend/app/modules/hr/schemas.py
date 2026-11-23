@@ -36,35 +36,6 @@ class DepartmentResponse(DepartmentBase):
     updated_at: datetime | None = None
 
 
-# ─── Team Schemas ───
-
-class TeamBase(BaseModel):
-    name: str = Field(..., max_length=64, description="班组名称")
-    code: str | None = Field(None, max_length=32, description="班组编码")
-    description: str | None = Field(None, max_length=256, description="班组描述")
-    department_id: UUID = Field(..., description="所属部门ID")
-
-
-class TeamCreate(TeamBase):
-    pass
-
-
-class TeamUpdate(BaseModel):
-    name: str | None = Field(None, max_length=64)
-    code: str | None = Field(None, max_length=32)
-    description: str | None = Field(None, max_length=256)
-    department_id: UUID | None = Field(None)
-
-
-class TeamResponse(TeamBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    department: DepartmentResponse | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
 # ─── Employee Schemas ───
 
 class EmployeeBase(BaseModel):

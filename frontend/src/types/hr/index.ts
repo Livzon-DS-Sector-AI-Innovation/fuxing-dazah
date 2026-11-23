@@ -343,42 +343,6 @@ export interface DepartmentListResponse {
   }
 }
 
-export interface Team {
-  id: string
-  name: string
-  code?: string
-  description?: string
-  department_id: string
-  department?: Department
-  created_at?: string
-  updated_at?: string
-}
-
-export interface TeamCreateInput {
-  name: string
-  code?: string
-  description?: string
-  department_id: string
-}
-
-export interface TeamUpdateInput {
-  name?: string
-  code?: string
-  description?: string
-  department_id?: string
-}
-
-export interface TeamListResponse {
-  code: number
-  message: string
-  data: Team[]
-  meta?: {
-    page: number
-    page_size: number
-    total: number
-  }
-}
-
 export interface OnboardingRecord {
   id: string
   seq_number?: number

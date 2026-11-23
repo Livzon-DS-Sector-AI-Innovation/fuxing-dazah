@@ -5,8 +5,6 @@ export { default as EmployeeForm } from './EmployeeForm'
 export { default as EmployeeProfileClient } from './EmployeeProfileClient'
 export { default as DepartmentClient } from './DepartmentClient'
 export { default as DepartmentForm } from './DepartmentForm'
-export { default as TeamClient } from './TeamClient'
-export { default as TeamForm } from './TeamForm'
 
 export { default as OnboardingClient } from './OnboardingClient'
 export { default as OnboardingDetailModal } from './OnboardingDetailModal'
