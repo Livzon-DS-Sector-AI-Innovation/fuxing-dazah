@@ -28,8 +28,9 @@ g5b7d9f1e3c4  receipts source 枚举加 excel
 
 | 键 | 生产建议值 | 说明 |
 |---|---|---|
-| `HARDWARE_APPROVAL_CHANNEL` / `HARDWARE_APPROVAL_CODE` | `manual` / 空 | 领料审批：定义到位后切 `feishu`+code（业务部门在办） |
-| `HARDWARE_APPROVAL_USER_KEY` | `user_id` | 默认即可 |
+| `HARDWARE_APPROVAL_CHANNEL` / `HARDWARE_APPROVAL_CODE` | `feishu` / `6FECD1F4-78B1-4DCB-97DA-A0E00DCEAFEC` | 领料审批：前端申领提交即代发起「福兴电子领/退料单审批」（2026-11-19 开闸）；发起失败回退草稿并报错 |
+| `HARDWARE_APPROVAL_USER_KEY` | `user_id` | **已弃用**（发起人统一按 identity.users.feishu_user_id 解析） |
+| `HARDWARE_APPROVAL_NODE_ID` | 空 | 「主管及以上审批」节点 id（发起人自选）；定义改版后节点 id 变化时覆盖 |
 | `HARDWARE_SCRAP_APPROVAL_CHANNEL` / `HARDWARE_SCRAP_APPROVAL_CODE` | `manual` / 空 | 报废审批同上 |
 | `HARDWARE_OCR_AUTO_DIRECT_ENABLED` | `false` | **M9 默认关**（≥1 个月置信数据后评估） |
 | `HARDWARE_OCR_AUTO_DIRECT_MIN_CONFIDENCE` | `0.9` | 开启时的阈值 |

@@ -132,6 +132,99 @@ async def test_process_hardware_excel_creates_draft(db_session, monkeypatch):
     assert len(sent_cards) == 1
 
 
+async def test_process_hardware_excel_groups_by_erp_doc_no(db_session, monkeypatch):
+    """ERP 多单文件按「入库单号」分单：每张 ERP 单一张草稿+一张确认卡。"""
+    from openpyxl import Workbook
+
+    from app.modules.warehouse.agent.pipeline import draft_flow
+    from app.modules.warehouse.hardware import gateway_excel
+
+    m = HardwareMaterial(
+        name=f"UPVC对夹蝶阀·E{uuid4().hex[:4].upper()}", spec="dn200", unit="个",
+        category="塑料阀门", managed_class="stocked",
+        safety_stock=Decimal("0"), no_expiry=True,
+    )
+    db_session.add(m)
+    await db_session.flush()
+
+    sent_cards: list[str] = []
+
+    async def fake_send_confirm_card(db, draft, *, chat_id="", open_id=""):
+        sent_cards.append(draft.draft_no)
+        return None
+
+    monkeypatch.setattr(draft_flow, "send_confirm_card", fake_send_confirm_card)
+
+    # 随机单号（差分口径）：process 内显式 commit 会真落库，固定单号会被
+    # 历史失败轮残留撞计数
+    doc_a = f"CGRK-{uuid4().hex[:6].upper()}"
+    doc_b = f"CGRK-{uuid4().hex[:6].upper()}"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["入库单号", "入库日期", "物料名称", "主计量单位", "入库数量"])
+    ws.append([doc_a, "2026-11-19", m.name, "个", 3])
+    ws.append([doc_a, "2026-11-19", m.name, "个", 2])
+    ws.append([doc_b, "2026-11-19", m.name, "个", 7])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    async def fake_download(message_id, file_key):
+        return buf.getvalue()
+
+    monkeypatch.setattr(gateway_excel.media, "download_im_file", fake_download)
+
+    class _FakeFactory:
+        def __call__(self):
+            return _FakeCtx(db_session)
+
+    class _FakeCtx:
+        def __init__(self, session):
+            self._session = session
+
+        async def __aenter__(self):
+            return self._session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "app.core.database.async_session_factory", _FakeFactory(), raising=False
+    )
+    await gateway_excel.process_hardware_excel(
+        chat_id="oc_test", chat_type="p2p", open_id="ou_test",
+        message_id="om_test", file_key="fk_test", file_name="erp导出.xlsx",
+    )
+    from sqlalchemy import select
+
+    from app.modules.warehouse.hardware.models import HardwareReceipt
+
+    receipts = (
+        await db_session.execute(
+            select(HardwareReceipt).where(
+                HardwareReceipt.source == "excel",
+                HardwareReceipt.delivery_note_no.in_([doc_a, doc_b]),
+            )
+        )
+    ).scalars().all()
+    assert len(receipts) == 2  # 两张 ERP 单 = 两张草稿
+    by_doc = {r.delivery_note_no: r for r in receipts}
+    from app.modules.warehouse.hardware.models import HardwareReceiptItem
+
+    async def _row_count(receipt_id) -> int:
+        rows_ = (
+            await db_session.execute(
+                select(HardwareReceiptItem).where(
+                    HardwareReceiptItem.receipt_id == receipt_id
+                )
+            )
+        ).scalars().all()
+        return len(rows_)
+
+    assert await _row_count(by_doc[doc_a].id) == 2
+    assert await _row_count(by_doc[doc_b].id) == 1
+    assert len(sent_cards) == 2  # 每张草稿一张确认卡
+
+
 # ── 出库导出工具（mock 文件发送）──
 
 

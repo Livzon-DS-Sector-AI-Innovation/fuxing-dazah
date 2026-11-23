@@ -11,8 +11,7 @@ from typing import Any
 
 from app.platform.integrations.feishu.http import (
     FeishuAPIError,
-    feishu_request,
-    get_tenant_token,
+    feishu_request_authorized,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,10 +33,6 @@ async def list_instance_codes(
     app_secret: str | None = None,
 ) -> list[str]:
     """按审批定义编码拉取实例 Code（自动分页 + 按 10 小时分段）。"""
-    try:
-        token = await get_tenant_token(app_id=app_id, app_secret=app_secret)
-    except FeishuAPIError as exc:
-        raise ApprovalAPIError(str(exc)) from exc
     instance_codes: list[str] = []
     segment = MAX_RANGE_HOURS * 3600 * 1000
     seg_start = start_ms
@@ -54,10 +49,11 @@ async def list_instance_codes(
             if page_token:
                 params["page_token"] = page_token
             try:
-                data = await feishu_request(
+                data = await feishu_request_authorized(
                     "GET",
                     f"{APPROVAL_BASE}/instances",
-                    headers={"Authorization": f"Bearer {token}"},
+                    app_id=app_id,
+                    app_secret=app_secret,
                     params=params,
                 )
             except FeishuAPIError as exc:
@@ -84,11 +80,11 @@ async def get_instance(
     form 字段为 JSON 字符串（控件列表），在此解析为 list。
     """
     try:
-        token = await get_tenant_token(app_id=app_id, app_secret=app_secret)
-        data = await feishu_request(
+        data = await feishu_request_authorized(
             "GET",
             f"{APPROVAL_BASE}/instances/{instance_code}",
-            headers={"Authorization": f"Bearer {token}"},
+            app_id=app_id,
+            app_secret=app_secret,
         )
     except FeishuAPIError as exc:
         raise ApprovalAPIError(str(exc)) from exc
@@ -104,8 +100,46 @@ async def get_instance(
     return {
         "status": result.get("status"),
         "start_time": result.get("start_time"),
+        "approval_code": result.get("approval_code"),
+        "user_id": result.get("user_id"),
+        "open_id": result.get("open_id"),
         "form": form,
     }
+
+
+async def cancel_instance(
+    approval_code: str,
+    instance_code: str,
+    user_id: str,
+    *,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> bool:
+    """撤回审批实例（以提交人身份，body.user_id=提交人 user_id）。
+
+    - 仅「审批中」实例会直接结束；已通过的实例撤回会退回审批中（REVERTED），
+      调用方须自行把关只在 PENDING 时撤。
+    - 前提：审批定义后台勾选「允许撤销审批中的申请」。
+    - 返回 True=撤回成功；False=失败（不抛，调用方 best-effort 留痕）。
+    """
+    try:
+        await feishu_request_authorized(
+            "POST",
+            f"{APPROVAL_BASE}/instances/cancel",
+            app_id=app_id,
+            app_secret=app_secret,
+            params={"user_id_type": "user_id"},
+            json_body={
+                "approval_code": approval_code,
+                "instance_code": instance_code,
+                "user_id": user_id,
+            },
+        )
+    except FeishuAPIError as exc:
+        logger.warning("飞书审批实例撤回失败: instance=%s err=%s", instance_code, exc)
+        return False
+    logger.info("飞书审批实例已撤回: instance=%s user=%s", instance_code, user_id)
+    return True
 
 
 def form_widgets_to_fields(form: list[dict[str, Any]]) -> dict[str, Any]:
@@ -168,24 +202,28 @@ async def create_instance(
     """
     import uuid as _uuid
 
+    def _node_approvers(value: dict[str, list[str]] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """审批人入参归一：dict{node_id: [uid]} → 官方 [{key, value}] 形态。"""
+        if isinstance(value, dict):
+            return [{"key": k, "value": v} for k, v in value.items()]
+        return value
+
     try:
-        token = await get_tenant_token(app_id=app_id, app_secret=app_secret)
         body: dict[str, Any] = {
             "approval_code": approval_code,
             "user_id": user_id,
             "form": form if isinstance(form, str) else json.dumps(form, ensure_ascii=False),
         }
         if node_approver_user_id_list:
-            body["node_approver_user_id_list"] = node_approver_user_id_list
+            body["node_approver_user_id_list"] = _node_approvers(node_approver_user_id_list)
         if node_approver_open_id_list:
-            body["node_approver_open_id_list"] = node_approver_open_id_list
-        data = await feishu_request(
+            body["node_approver_open_id_list"] = _node_approvers(node_approver_open_id_list)
+        data = await feishu_request_authorized(
             "POST",
             f"{APPROVAL_BASE}/instances",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "x-lark-uuid": uuid_idempotency or str(_uuid.uuid4()),
-            },
+            app_id=app_id,
+            app_secret=app_secret,
+            extra_headers={"x-lark-uuid": uuid_idempotency or str(_uuid.uuid4())},
             json_body=body,
         )
     except FeishuAPIError as exc:

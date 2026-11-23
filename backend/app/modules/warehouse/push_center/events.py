@@ -356,30 +356,6 @@ async def _execute_event(
     return PushRunResult(view.task_name, view.scene, STATUS_EXECUTED, None, log_count)
 
 
-def render_hardware_urgent_overdue_card(payload: dict[str, Any]) -> dict[str, Any]:
-    """紧急领用 24h 未补单提醒（设计 §4.2：仓储部有权暂停该部门后续领用）。"""
-    from app.modules.warehouse.agent.cards import build_card
-
-    items = payload.get("items") or []
-    lines = [f"- {it.get('req_no', '-')}（{it.get('dept', '-')} / {it.get('applicant', '-')}）" for it in items[:10]]
-    if len(items) > 10:
-        lines.append(f"…共 {len(items)} 单")
-    return build_card(
-        title="⏰ 五金库紧急领用超期未补单",
-        template="red",
-        elements=[{"tag": "markdown", "content": "\n".join([
-            f"**{payload.get('count', len(items))} 单**紧急领用超过 24 小时未补审批单，已标记超期：",
-            "",
-            *lines,
-            "",
-            "依据制度 5.3.4，仓储部有权暂停该部门后续领用，请尽快补单。",
-        ])}],
-    )
-
-
-register_event_renderer("hardware_urgent_overdue", render_hardware_urgent_overdue_card)
-
-
 def render_hardware_stale_list_card(payload: dict[str, Any]) -> dict[str, Any]:
     """呆滞物资季度清单卡（设计 §2.6：连续 3 个月无 outbound 且有库存）。"""
     from app.modules.warehouse.agent.cards import build_card
@@ -439,7 +415,7 @@ def render_hardware_digest_card(payload: dict[str, Any]) -> dict[str, Any]:
         "",
         f"- 入库单：{payload.get('receipts_today', 0)} 张",
         f"- 发料出库：{payload.get('outbound_today', 0)} 笔 / {payload.get('outbound_qty_today', 0)} 件",
-        f"- 待发料：{payload.get('to_issue', 0)} 单 ｜ 紧急未补：{payload.get('urgent_overdue', 0)} 单",
+        f"- 待发料：{payload.get('to_issue', 0)} 单",
         f"- 待确认草稿：{payload.get('draft_backlog', 0)} 张 ｜ 低库存物料：{payload.get('low_stock_count', 0)} 项",
     ]
     if auto_count:

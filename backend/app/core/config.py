@@ -144,11 +144,16 @@ class Settings(BaseSettings):
     WAREHOUSE_ALERT_CHAT_ID: str = ""
     # 冒烟测试目标群（可选；配置后 test_live_smoke 真发一条卡片）
     WAREHOUSE_TEST_CHAT_ID: str = ""
-    # 五金库领料审批通道（M3，设计 §五）：feishu=对接新审批定义（需配
-    # HARDWARE_APPROVAL_CODE，未配置自动落 manual）；manual=部门主管在
-    # 领用中心点确认（审批结果代录）。状态机对通道无感。
+    # 五金库领料审批通道（M3，设计 §五）：feishu=提交即代发起「福兴电子领/
+    # 退料单审批」（需配 HARDWARE_APPROVAL_CODE，未配置自动落 manual）；
+    # manual=部门主管在领用中心点确认（审批结果代录）。状态机对通道无感。
     HARDWARE_APPROVAL_CHANNEL: str = "manual"
     HARDWARE_APPROVAL_CODE: str = ""
+    # 「主管及以上审批」节点 id（发起人自选）：定义改版后节点 id 变化时覆盖；
+    # 空=使用 approval_channel.APPROVER_NODE_ID 默认值。
+    HARDWARE_APPROVAL_NODE_ID: str = ""
+    # 发起人口径（已弃用）：2026-11-19 起统一按 identity.users.feishu_user_id
+    # 解析创建审批实例的 user_id；此键保留仅为兼容历史 env。
     HARDWARE_APPROVAL_USER_KEY: str = "user_id"
     # 五金库报废审批通道（M7，制度 5.6 定稿后切 feishu）：feishu=对接「五金库
     # 报废申请」定义（需配 HARDWARE_SCRAP_APPROVAL_CODE，未配置自动落 manual
@@ -167,11 +172,15 @@ class Settings(BaseSettings):
     # 五金库月度用量管控表（部门×月份×物资 需求vs用量比对行自动回填；Base
     # 复用镜像 BASE_TOKEN，本值=「月度用量管控」table。默认空=任务自空转）。
     HARDWARE_USAGE_TABLE_ID: str = ""
-    # 五金库紧急领用（先发后补，制度 5.3.4）仓管通知目标：逗号分隔
-    # open_id/chat_id，临时单据通知卡/逾期通报发给这些收件人
-    # （send_card_to_target 按前缀分流私发/群发）。默认许康福
-    # （2026-11-19 拍板先发本人，仓管员到位后 env 覆盖即可）。
-    HARDWARE_URGENT_NOTIFY_TARGETS: str = "ou_5773c42e1fc7ce3e554b83242c87aa0b"
+    # 五金库紧急领料（2026-11-20 改版：审批打标+先发后批）仓管加急卡通知
+    # 目标：逗号分隔 open_id/chat_id（send_card_to_target 按前缀分流私发/群
+    # 发）。默认胡永晟+姚薇娜（2026-11-23 拍板：五金劳保仓管员/组长；ou_ 为
+    # 仓储应用作用域——identity.feishu_open_id 是库存作用域，跨应用发送会
+    # 99991672，须以仓储凭证 contact API 解析为准）。
+    HARDWARE_URGENT_NOTIFY_TARGETS: str = (
+        "ou_32d59e1f55f87d5405fca52711f8534b,"  # 胡永晟（五金劳保组组长）
+        "ou_7ed75f21cab0ed89c545563f3ca4bc70"  # 姚薇娜（五金劳保仓管员）
+    )
     # 仓库机器人 open_id（部署身份：gateway 去重排除自身消息；未配置回退 gateway 代码常量）
     WAREHOUSE_FEISHU_BOT_OPEN_ID: str = ""
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）

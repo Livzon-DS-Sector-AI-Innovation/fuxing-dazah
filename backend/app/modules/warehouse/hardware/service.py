@@ -428,6 +428,19 @@ async def create_receipt(
     db: AsyncSession, payload: ReceiptCreate, *, user: User | None = None
 ) -> HardwareReceipt:
     """入库草稿：OCR/manual 共用；只建 draft，不动库存（AI 永不自动动账红线）。"""
+    # 2026-11-20 拍板：Web Excel 解析通道（source=excel）未匹配行不可建单——
+    # 须人工匹配（或删行）后再提交。机器人通道同 source 已只回传匹配行
+    # （清单外剔除）；erp_import/ocr/manual 不受此守卫约束（manual 依赖
+    # accept 门兜底，ocr 草稿允许未匹配行进确认卡人工处理）。
+    if payload.source == "excel":
+        bad = [it.name for it in payload.items if not it.material_id]
+        if bad:
+            raise HardwareError(
+                f"存在未匹配行，不可建单：{('、'.join(bad[:5]))}"
+                f"{'等' if len(bad) > 5 else ''}"
+                "（请人工匹配物料或删除该行后再提交）",
+                status_code=422,
+            )
     arrived = payload.arrived_at or _now()
     receipt = HardwareReceipt(
         receipt_no=await generate_doc_no(db, HardwareReceipt, "WJK-RK"),
@@ -538,13 +551,16 @@ async def accept_receipt(
     receipt_id: UUID,
     *,
     inspected_by_warehouse: str,
-    inspected_by_dept: str,
+    inspected_by_dept: str | None = None,
     inspect_checklist: dict[str, Any] | None = None,
     items: list[ReceiptItemIn] | None = None,
     user: User | None = None,
     allow_unmatched: bool = False,
 ) -> HardwareReceipt:
     """draft → accepted：库存唯一增点。
+
+    确认口径（2026-11-20 起）：仅仓管员一屏审核确认即可入账，使用部门
+    经办人双签取消（``inspected_by_dept`` 仅作可选留痕，缺省 None）。
 
     行级判定（两类边界=物资清单）：挂 stocked 物料的行生成批次
     （remaining=quantity）+ inbound 流水；无主数据/direct 物料行出入双流水
@@ -745,8 +761,11 @@ async def create_requisition(
         applicant=payload.applicant,
         applicant_open_id=applicant_open_id,
         applicant_user_id=user.id if user else None,
+        approver_user_id=payload.approver_user_id,
+        approver_name=payload.approver_name,
         purpose=payload.purpose,
         req_type=payload.req_type,
+        urgent_reason=payload.urgent_reason,
         status="draft",
         remark=payload.remark,
         created_by=user.id if user else None,
@@ -981,17 +1000,15 @@ async def approve_requisition(
 ) -> HardwareRequisition:
     """pending → approved（预扣保持；超额在审批环节提示需生产总监，manual 通道落备注）。
 
-    紧急单先发后补：issued 的 urgent 单补审批只落审批结果与 patched_at
-    （status 保持 issued，不回退状态机）；overdue_unpatched 补办完成回
-    issued（逾期事实由 patched_at > urgent_patch_deadline 推导）。
+    紧急单先发后批（2026-11-20 拍板）：issued 的 urgent 单（仓管已在审批前
+    发料）收到审批通过只落审批结果，status 保持 issued 不回退状态机——审批
+    单据本身即闭环手续。
     """
     req = await _load_requisition(db, requisition_id)
-    if req.status in ("issued", "overdue_unpatched") and req.req_type == "urgent":
-        req.status = "issued"
+    if req.status == "issued" and req.req_type == "urgent":
         req.approval_status = "approved"
         req.approved_by = approver
         req.approved_at = _now()
-        req.patched_at = _now()
         if note:
             req.approval_note = note
         if user:
@@ -1006,43 +1023,6 @@ async def approve_requisition(
     req.approved_at = _now()
     if note:
         req.approval_note = note
-    # 紧急单补审批闭合
-    if req.req_type == "urgent" and req.issued_at is not None:
-        req.patched_at = _now()
-    if user:
-        req.updated_by = user.id
-    await db.flush()
-    return req
-
-
-async def patch_requisition_manually(
-    db: AsyncSession,
-    requisition_id: UUID,
-    *,
-    operator: str,
-    user: User | None = None,
-) -> HardwareRequisition:
-    """手动确认已补办（自动匹配漏配/线下已补的兜底，2026-11-19 拍板）。
-
-    仅 urgent 且已发料（issued/overdue_unpatched）且未 patch 的单可闭环；
-    manual 渠道留痕；overdue 补办完成回 issued（逾期事实=patched_at>deadline）。
-    """
-    req = await _load_requisition(db, requisition_id)
-    if req.req_type != "urgent":
-        raise HardwareError("仅紧急领用单需要补办确认")
-    if req.status not in ("issued", "overdue_unpatched"):
-        raise HardwareError(f"申请状态 {req.status} 不可补办确认（须已发料）")
-    if req.patched_at is not None:
-        raise HardwareError("该单已补办闭环，无需重复确认")
-    if req.approval_channel != "feishu":
-        req.approval_channel = "manual"
-    req.approval_status = "approved"
-    req.approved_by = operator
-    req.approved_at = _now()
-    req.approval_note = "仓管确认已补办（手动闭环）"
-    req.patched_at = _now()
-    if req.status == "overdue_unpatched":
-        req.status = "issued"
     if user:
         req.updated_by = user.id
     await db.flush()
@@ -1118,9 +1098,10 @@ async def issue_requisition(
 ) -> HardwareRequisition:
     """发料实扣：库存唯一减点。
 
-    - normal/excess：approved → issued；urgent：pending 也可直接发（先发后补）
+    - normal/excess：approved → issued；urgent：pending 也可直接发（先发后批，
+      审批单据本身即闭环手续，2026-11-20 拍板）
     - 每行 issued_qty（缺省=need_qty）按 FIFO 扣批次 remaining，逐批写流水
-    - 领用人点收 received_by=系统签收；urgent 设补单截止 +24h
+    - 领用人点收 received_by=系统签收
     """
     req = await _load_requisition(db, requisition_id)
     if req.status not in ("approved", "pending"):
@@ -1179,10 +1160,6 @@ async def issue_requisition(
     req.issued_by = issued_by
     req.issued_at = now
     req.received_by = received_by
-    if req.req_type == "urgent":
-        from datetime import timedelta
-
-        req.urgent_patch_deadline = now + timedelta(hours=24)
     if user:
         req.updated_by = user.id
     await db.flush()
@@ -1464,7 +1441,7 @@ async def try_auto_accept_direct(
     ④ 无照片初筛异常标记（photo_screening.flagged 均非 true）；
     ⑤ 状态 draft（accepted 单幂等原样返回 None）。
 
-    满足→accepted（双签 system:auto + auto_accepted + 触发快照落库）；
+    满足→accepted（system:auto 自动入账 + auto_accepted + 触发快照落库）；
     任一不满足→返回 None（留人工队列，零副作用）。开关关→首条件短路，
     行为与现状逐字节一致。
     """

@@ -1,11 +1,14 @@
 """五金库领料审批双通道（M3，设计 §五/§十一 M3）。
 
 ApprovalChannel 抽象 + feishu / manual 两实现，工厂按配置选择：
-- feishu 通道：对接「福兴电子领/退料单审批」（definition code 从 env/config
-  读，未配置=通道不可用自动落 manual）；uuid 幂等创建实例；系统代发表单=
-  领退同单定稿版（单选分流键 + fieldList 明细，2026-11-17 T2 适配，行值
-  快照文本假设待首条真机单校准）；审批结果轮询兜底复用 list_instance_codes
-  增量拉取；审批 API 走仓储应用凭证（2026-11-10 拍板）。
+- feishu 通道：前端申领（弹窗二次确认 + 选择审批人）提交即**代发起**
+  「福兴电子领/退料单审批」（definition code 从 env/config 读，未配置=通道
+  不可用自动落 manual）；系统代发走「五金库领料-平台」分支（分流键选项
+  value + 六个顶层普通控件，API 可写；人工填单的多维表格明细分支 API 不
+  支持）；审批人为发起人自选节点（主管及以上），必须随实例提交
+  node_approver_user_id_list；uuid 幂等；审批结果轮询兜底复用
+  list_instance_codes 增量拉取；审批 API 走仓储应用凭证（2026-11-10 拍板）。
+  发起失败=上抛，单据回滚草稿（2026-11-19 拍板：不再静默降级 manual）。
 - manual 通道：部门主管在领用中心点确认=审批结果代录（approve/reject
   API 直改状态机）。
 
@@ -17,7 +20,8 @@ ApprovalChannel 抽象 + feishu / manual 两实现，工厂按配置选择：
   backend/.env.development 该键为 feishu + 确认 HARDWARE_APPROVAL_CODE
   已配「福兴电子领/退料单审批」code + 重启后端）
 - HARDWARE_APPROVAL_CODE: 飞书审批定义 code（业务部门建好后填）
-- HARDWARE_APPROVAL_USER_KEY: 发起人 user_id 口径（open_id|user_id，默认 user_id）
+- HARDWARE_APPROVAL_NODE_ID: 「主管及以上审批」节点 id（定义改版后覆盖）
+- HARDWARE_APPROVAL_USER_KEY: 已弃用（发起人统一按 identity.users.feishu_user_id）
 """
 
 from __future__ import annotations
@@ -60,35 +64,112 @@ class ApprovalChannel(ABC):
 
 # ── feishu 通道 ──
 
-# 「福兴电子领/退料单审批」控件 ID（2026-11-11 定稿表单，与 approval_ingest 同源；
-# 系统代发只发领料——退料入口是员工飞书自发起，摄取层建退库草稿）
-KIND_WIDGET_ID = "widget17942773552310001"  # 单选：五金库领料/五金库退料
-DETAIL_WIDGET_ID = "widget17942790533710001"  # 明细 fieldList
-KIND_VALUE_REQUISITION = "五金库领料"
+# 「福兴电子领/退料单审批」控件 ID（与 approval_ingest 同源；系统代发只发领料
+# ——退料入口是员工飞书自发起，摄取层建退库草稿）。
+# 2026-11-19 平台分支定性（真机三证：定义接口 + create 成功 + 实例读回）：
+# - 系统代发走「五金库领料-平台」分支（普通 input/number 六个顶层控件），
+#   不用 五金库领料 明细 fieldList——后者是关联多维表格控件，飞书创建实例
+#   API 不支持（行会被静默丢弃/校验报幽灵控件，2026-11-19 已实测）。
+# - 单选分流键值是**选项 value**，读回时才归一成文本。
+KIND_WIDGET_ID = "widget17942773552310001"  # 单选：五金库领料/领退料/平台
+KIND_VALUE_REQUISITION = "mwa2erxb-pjfkprp9r9e-0"  # 选项 value（写接口口径）
+KIND_VALUE_RETURN = "mwbvpcpg-zevsx2cn1yc-1"
+KIND_VALUE_PLATFORM = "mwncy1jd-m87rnkvo2p-1"  # 五金库领料-平台（系统代发分支）
+DETAIL_WIDGET_ID = "widget17942790533710001"  # 五金库领料明细 fieldList（人工填单）
+
+# 「是否紧急」单选（2026-11-20 改版：紧急领料打标+紧急原因，与 approval_ingest
+# 同源；显示条件=领料∨平台分支，「紧急原因」仅 是否紧急=是 时显示/必填）
+URGENT_WIDGET_ID = "widget17951544578680001"
+URGENT_VALUE_YES = "mwokm4ng-jf0ljqu7rwb-0"
+URGENT_VALUE_NO = "mwokm4ng-5bvpjhmhs1u-0"
+URGENT_REASON_WIDGET_ID = "widget17951566636350001"
+
+# 平台分支六个顶层控件（id, 名称, 类型, 取值键）——普通控件，API 可写
+PLATFORM_WIDGETS: tuple[tuple[str, str, str, str], ...] = (
+    ("widget17950811346260001", "类别", "input", "category"),
+    ("widget17950811558710001", "名称", "input", "material_name"),
+    ("widget17950811686580001", "规格", "input", "spec"),
+    ("widget17950811760340001", "单位", "input", "unit"),
+    ("widget17950811860230001", "可领量", "number", "available"),
+    ("widget17950812036890001", "领料量", "number", "need_qty"),
+)
+
+# 「主管及以上审批」节点（发起人自选）：创建实例时必须指定审批人，
+# 否则节点无人可批。节点 id 可被 HARDWARE_APPROVAL_NODE_ID 覆盖（定义改版）。
+APPROVER_NODE_ID = "043453bb3477199c9dd17bd7d0ccba3b"
 
 
-def build_field_list_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """明细行 → fieldList 行值（行=控件名键的 dict，值按「快照文本」假设）。
+def build_platform_form(
+    items: list[dict[str, Any]], *, urgent: bool = False, urgent_reason: str = ""
+) -> list[dict[str, Any]]:
+    """单据明细 → 平台分支表单（分流键 + 是否紧急 [+ 紧急原因] + 六个普通控件）。
 
-    行值形态与 approval_ingest._text/_row_value 同口径（引用多维表格控件实例
-    存字段文本）——**待首条真机单校准**：真实创建接口若要求子控件 id 键或其他
-    包裹形态，按首条实例 form 原文修正本函数与摄取解析器。库存快照列实绑
-    可领量（选后自动带出），系统提交不填；无单号/用途控件（发起人=领退人，
-    部门 identity 反查）。
+    平台分支是单物资结构（顶层控件而非 fieldList）：一单多物资时需拆单，
+    由调用方校验拦截。「是否紧急」为必填控件，不写有被实例创建必填校验
+    拒收的风险——一律显式写（紧急=是 时连带写「紧急原因」，否则该控件
+    隐藏不必写）。radio/input 值=文本，number 值=浮点（真机读回同构）。
     """
-    rows: list[dict[str, Any]] = []
-    for it in items:
-        rows.append(
-            {
-                "类别": it.get("category") or "",
-                "物资名称": it["material_name"],
-                "规格型号": it.get("spec") or "",
-                "计量单位": it.get("unit") or "",
-                "编码": it.get("code") or "",
-                "数量": float(it["need_qty"]),
-            }
+    if len(items) != 1:
+        raise ApprovalChannelError(
+            f"平台分支仅支持单物资申领（当前 {len(items)} 行），请拆单后提交"
         )
-    return rows
+    if urgent and not urgent_reason.strip():
+        raise ApprovalChannelError("紧急申领必须填写紧急原因")
+    it = items[0]
+    form: list[dict[str, Any]] = [
+        {"id": KIND_WIDGET_ID, "type": "radioV2", "value": KIND_VALUE_PLATFORM},
+        {
+            "id": URGENT_WIDGET_ID,
+            "type": "radioV2",
+            "value": URGENT_VALUE_YES if urgent else URGENT_VALUE_NO,
+        },
+    ]
+    if urgent:
+        form.append(
+            {"id": URGENT_REASON_WIDGET_ID, "type": "input", "value": urgent_reason.strip()}
+        )
+    for widget_id, _name, wtype, key in PLATFORM_WIDGETS:
+        raw = it.get(key)
+        value: Any = float(raw or 0) if wtype == "number" else str(raw or "")
+        form.append({"id": widget_id, "type": wtype, "value": value})
+    return form
+
+
+async def _resolve_starter_user_id(db: AsyncSession, req: HardwareRequisition) -> str:
+    """领用人 → 飞书 user_id（创建审批实例的发起人锚点）。
+
+    identity.users.id（applicant_user_id）→ feishu_user_id 优先；缺 user id 时
+    按 applicant_open_id 反查同表，仍缺才原值兜底（可能是 ou_ 值，创建会报错，
+    由调用方转成可读失败信息）。
+    """
+    from sqlalchemy import text
+
+    if req.applicant_user_id is not None:
+        row = (
+            await db.execute(
+                text(
+                    "select feishu_user_id from identity.users "
+                    "where id = :uid and is_deleted = false limit 1"
+                ),
+                {"uid": req.applicant_user_id},
+            )
+        ).first()
+        if row and row[0]:
+            return str(row[0])
+    if req.applicant_open_id:
+        row = (
+            await db.execute(
+                text(
+                    "select feishu_user_id from identity.users "
+                    "where feishu_open_id = :oid and is_deleted = false limit 1"
+                ),
+                {"oid": req.applicant_open_id},
+            )
+        ).first()
+        if row and row[0]:
+            return str(row[0])
+        return str(req.applicant_open_id)
+    return ""
 
 
 class FeishuApprovalChannel(ApprovalChannel):
@@ -123,23 +204,26 @@ class FeishuApprovalChannel(ApprovalChannel):
                 "仓储应用审批凭证未配置（WAREHOUSE_FEISHU_APP_ID/SECRET）"
             )
 
-        settings = get_settings()
-        user_id = req.applicant_open_id or ""
-        if getattr(settings, "HARDWARE_APPROVAL_USER_KEY", "user_id") == "user_id":
-            # open_id 与 user_id 同值场景（本系统 identity 用户 open_id 直传）；
-            # 定义侧为 user_id 口径时由审批后台字段映射兼容
-            user_id = user_id or ""
+        user_id = await _resolve_starter_user_id(db, req)
+        if not user_id:
+            raise ApprovalChannelError(
+                "发起人飞书 user_id 未解析（identity.users.feishu_user_id 缺失），无法代发起审批"
+            )
 
-        # 领退同单定稿表单：单选分流键 + fieldList 明细（2026-11-17 T2 适配；
-        # 行值快照文本假设待首条真机单校准，见 build_field_list_rows 注记）
-        form = [
-            {"id": KIND_WIDGET_ID, "type": "radioV2", "value": KIND_VALUE_REQUISITION},
-            {
-                "id": DETAIL_WIDGET_ID,
-                "type": "fieldList",
-                "value": build_field_list_rows(items),
-            },
-        ]
+        # 平台分支：分流键 + 是否紧急/紧急原因 + 六个普通控件（API 可写；人工
+        # 填单仍走明细表分支）；紧急原因 schema 必填校验在前，这里双保险
+        form = build_platform_form(
+            items,
+            urgent=req.req_type == "urgent",
+            urgent_reason=req.urgent_reason or "",
+        )
+        # 发起人自选审批节点：必须带申领时选定的审批人（主管及以上），否则节点无人可批
+        approver_uid = str(req.approver_user_id or "").strip()
+        if not approver_uid:
+            raise ApprovalChannelError("未选择审批人（主管及以上），请重新提交并选择审批人")
+        node_id = str(
+            getattr(get_settings(), "HARDWARE_APPROVAL_NODE_ID", "") or APPROVER_NODE_ID
+        )
         # uuid 幂等：req.id 派生（重试不重单）
         idempotency = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"hardware-requisition:{req.id}"))
         try:
@@ -150,6 +234,7 @@ class FeishuApprovalChannel(ApprovalChannel):
                 app_id=app_id,
                 app_secret=app_secret,
                 uuid_idempotency=idempotency,
+                node_approver_user_id_list={node_id: [approver_uid]},
             )
         except ApprovalAPIError as exc:
             raise ApprovalChannelError(f"飞书审批实例创建失败: {exc}") from exc
@@ -332,30 +417,34 @@ def get_scrap_approval_channel() -> _ScrapManualApprovalChannel | _ScrapFeishuAp
     return _ScrapManualApprovalChannel()
 
 
-# ── 提交编排（API 层 submit 后调用；通道失败自动落 manual 兜底）──
+# ── 提交编排（API 层 submit 后调用；feishu 失败上抛，由 API 回滚草稿）──
 
 
 async def submit_approval(db: AsyncSession, req: HardwareRequisition) -> str | None:
-    """领料单提交审批：按配置走通道；feishu 失败降级 manual 不阻断业务。"""
+    """领料单提交审批：按配置走通道；feishu 失败上抛（不降级、不阻断重试）。"""
     items = await _load_items(db, req)
     channel = get_approval_channel()
     try:
         ref = await channel.submit(db, req, items)
-        logger.info("五金领料审批已提交: req=%s channel=%s ref=%s", req.req_no, channel.name, ref)
-        return ref
     except ApprovalChannelError:
-        if channel.name == "feishu":
-            # feishu 通道故障 → manual 兜底（预扣已生效，审批方式不阻断）
-            logger.warning("feishu 审批提交失败，降级 manual 通道: req=%s", req.req_no, exc_info=True)
-            fallback = ManualApprovalChannel()
-            return await fallback.submit(db, req, items)
+        # 2026-11-19 拍板：feishu 通道失败**不再静默降级 manual**——审批没真正
+        # 发起时不要让单据停在「等审批」假象里；异常上抛由 API 层回滚草稿。
+        logger.exception("五金领料审批提交失败: req=%s channel=%s", req.req_no, channel.name)
         raise
+    logger.info("五金领料审批已提交: req=%s channel=%s ref=%s", req.req_no, channel.name, ref)
+    return ref
 
 
 async def _load_items(db: AsyncSession, req: HardwareRequisition) -> list[dict[str, Any]]:
+    """单据明细 → 审批表单行（含提交时可领快照）。
+
+    可领量 = 当前 available + 本行 need_qty（提交已预扣，加回本行即预扣前面向
+    申请人的可领量，与申领当时所见一致）。
+    """
     from sqlalchemy import select
 
     from app.modules.warehouse.hardware.models import HardwareRequisitionItem
+    from app.modules.warehouse.hardware.service import available_of_material
 
     rows = (
         await db.execute(
@@ -368,6 +457,7 @@ async def _load_items(db: AsyncSession, req: HardwareRequisition) -> list[dict[s
     items = []
     for row in rows:
         material = await db.get(HardwareMaterial, row.material_id)
+        available = await available_of_material(db, row.material_id) + row.need_qty
         items.append(
             {
                 "material_name": material.name if material else "-",
@@ -376,9 +466,46 @@ async def _load_items(db: AsyncSession, req: HardwareRequisition) -> list[dict[s
                 "category": material.category if material else None,
                 "code": material.code if material else None,
                 "need_qty": float(row.need_qty),
+                "available": float(available),
             }
         )
     return items
+
+
+# ── 系统内取消 → 撤回飞书实例（best-effort）──
+
+
+async def cancel_approval(db: AsyncSession, req: HardwareRequisition) -> bool:
+    """系统内取消领料单时撤回飞书待审实例（best-effort）。
+
+    只对 feishu 通道且审批未决（approval_status 空/pending）的单生效；撤回
+    失败（定义未开「允许撤销」/已审批）不阻断本地取消，只留备注。成功后
+    approval_status 落 cancelled，轮询/事件不再把它当待审单。
+    """
+    from app.platform.integrations.feishu.approval import cancel_instance
+
+    if getattr(req, "approval_channel", None) != "feishu":
+        return False
+    if str(getattr(req, "approval_status", "") or "") not in ("", "pending"):
+        return False
+    code = str(getattr(req, "approval_instance_code", "") or "")
+    approval_code = str(getattr(get_settings(), "HARDWARE_APPROVAL_CODE", "") or "").strip()
+    app_id, app_secret = FeishuApprovalChannel._credentials()
+    if not (code and approval_code and app_id and app_secret):
+        return False
+    user_id = await _resolve_starter_user_id(db, req)
+    if not user_id:
+        return False
+    ok = await cancel_instance(
+        approval_code, code, user_id, app_id=app_id, app_secret=app_secret
+    )
+    req.approval_status = "cancelled"
+    if not ok:
+        req.approval_note = (
+            (req.approval_note or "") + "；飞书实例撤回失败（可能已审批或定义未开撤销）"
+        ).strip("；")
+    await db.flush()
+    return ok
 
 
 # ── feishu 结果轮询兜底（scheduled.py 定时任务调用）──

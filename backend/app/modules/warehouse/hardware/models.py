@@ -66,7 +66,6 @@ REQUISITION_STATUSES = (
     "issued",
     "rejected",
     "cancelled",
-    "overdue_unpatched",
 )
 MOVEMENT_DIRECTIONS = ("inbound", "outbound", "adjust")
 MOVEMENT_BUSINESS_TYPES = (
@@ -380,8 +379,8 @@ class HardwareRequisition(BaseModel):
     """五金库领用申请单头（共用类 stocked 唯一需审批开单的出库）。
 
     状态机：draft → pending（提审批+预扣）→ approved（预扣保持）→
-    issued（实扣）/ rejected（释放）/ cancelled；urgent 发料后 24h 未补单
-    → overdue_unpatched。
+    issued（实扣）/ rejected（释放）/ cancelled。urgent 紧急单 pending
+    即可发料（先发后批，仓管行内发料），审批单据本身即闭环手续。
     """
 
     __tablename__ = "hardware_requisitions"
@@ -398,7 +397,7 @@ class HardwareRequisition(BaseModel):
         ),
         CheckConstraint(
             "status IN ('draft', 'pending', 'approved', 'issued', 'rejected',"
-            " 'cancelled', 'overdue_unpatched')",
+            " 'cancelled')",
             name="ck_hardware_requisitions_status",
         ),
         Index("ix_hardware_requisitions_status", "status"),
@@ -419,10 +418,16 @@ class HardwareRequisition(BaseModel):
     applicant_open_id: Mapped[str | None] = mapped_column(
         String(100), comment="领用人飞书 open_id（通知用）"
     )
+    approver_user_id: Mapped[str | None] = mapped_column(
+        String(100), comment="指定审批人飞书 user_id（发起人自选节点，创建实例时传）"
+    )
+    approver_name: Mapped[str | None] = mapped_column(
+        String(100), comment="指定审批人姓名（展示用）"
+    )
     purpose: Mapped[str | None] = mapped_column(String(500), comment="用途")
     req_type: Mapped[str] = mapped_column(
         String(10), nullable=False, default="normal", server_default="normal",
-        comment="normal 常规 / urgent 紧急（先发后补）/ excess 超额",
+        comment="normal 常规 / urgent 紧急（可审批前发料）/ excess 超额",
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="draft", server_default="draft"
@@ -448,17 +453,8 @@ class HardwareRequisition(BaseModel):
     issued_by: Mapped[str | None] = mapped_column(String(100), comment="发料仓管员")
     issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="发料时间")
     received_by: Mapped[str | None] = mapped_column(String(100), comment="领用人点收（=签收）")
-    urgent_patch_deadline: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="紧急单补审批截止（发料时间+24h）"
-    )
-    patched_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="紧急单补审批完成时间"
-    )
-    patch_reminders: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, comment="补办催办已发标签（t12/t2，幂等锚）"
-    )
-    last_overdue_notified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="逾期通报最近一次时间（每日一次幂等锚）"
+    urgent_reason: Mapped[str | None] = mapped_column(
+        String(200), comment="紧急原因（req_type=urgent 必填，审批表单「紧急原因」同源）"
     )
     monthly_check: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="提交时该部门当月已领量 vs 月需求快照（领用标准核对支撑）"

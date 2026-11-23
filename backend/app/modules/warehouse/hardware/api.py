@@ -37,6 +37,7 @@ from app.modules.warehouse.hardware.schemas import (
     PhotoScreeningBody,
     ReceiptAccept,
     ReceiptCreate,
+    ReceiptParseDocument,
     ReceiptParseItem,
     ReceiptParseResponse,
     ReceiptReject,
@@ -410,32 +411,8 @@ async def _receipt_with_items(db: AsyncSession, receipt: Any) -> Any:
     return payload
 
 
-@router.get(
-    "/receipts/excel-template",
-    summary="入库登记模板下载（Excel 方式② 用）",
-)
-async def download_receipt_template(
-    user: User = Depends(require_permission("warehouse:hardware:inbound:create")),
-):
-    """标准入库登记模板（物资名称/规格型号/数量/单位/供应商/送货单号/备注）。
-
-    路由须声明在 ``/receipts/{receipt_id}`` 之前——FastAPI 按声明序匹配，
-    参数路由在前会把 "excel-template" 当 UUID 解析 422（GUI 实测抓出，
-    2026-11-17）。
-    """
-    from urllib.parse import quote
-
-    from fastapi.responses import Response
-
-    from app.modules.warehouse.hardware.excel_io import build_receipt_template
-
-    xlsx = build_receipt_template()
-    filename = f"五金库入库登记模板_{datetime.now().strftime('%Y%m%d')}.xlsx"
-    return Response(
-        content=xlsx,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
-    )
+# 2026-11-19 改版：入库文件来自 ERP 导出（非人工模板），模板下载端点退役
+# （原 GET /receipts/excel-template；前端与机器人指引均已改 ERP 直传口径）。
 
 
 @router.get("/receipts/{receipt_id}", summary="入库单详情")
@@ -467,7 +444,11 @@ async def parse_receipt_excel_endpoint(
     excel_result 留痕回传）。与「纯手动填写」共用同一张表单与落库通道。
     """
     from app.modules.warehouse.hardware import matcher as hw_matcher
-    from app.modules.warehouse.hardware.excel_io import ExcelParseError, parse_receipt_excel
+    from app.modules.warehouse.hardware.excel_io import (
+        ExcelParseError,
+        build_parse_documents,
+        parse_receipt_excel,
+    )
     from app.modules.warehouse.hardware.receipt_pipeline import load_active_materials
 
     content = await file.read()
@@ -495,6 +476,7 @@ async def parse_receipt_excel_endpoint(
                 match_score=result.score,
                 matched_name=result.material.name if result.material else None,
                 low_confidence=result.low_confidence,
+                managed_class=result.material.managed_class if result.material else None,
             )
         )
         if result.material and result.material.managed_class == "stocked":
@@ -504,6 +486,14 @@ async def parse_receipt_excel_endpoint(
         else:
             unmatched += 1
 
+    # 按行级「入库单号」分单（2026-11-20 拍板：Web 端对齐机器人通道/ERP 导入
+    # 的既定口径——ERP 流水文件天然多单，拍平成一张草稿会串单号/供应商）；
+    # 分组纯函数在 excel_io（含无单号兜底组），api 层只做模型包装。
+    documents = [
+        ReceiptParseDocument(**d)
+        for d in build_parse_documents(parsed["items"], items)
+    ]
+
     header = parsed["header"] or {}
     mode = "stocked" if matched_stocked > 0 else ("direct" if matched_direct > 0 else "stocked")
     body = ReceiptParseResponse(
@@ -511,6 +501,7 @@ async def parse_receipt_excel_endpoint(
         supplier_name=header.get("supplier_name"),
         delivery_note_no=header.get("delivery_note_no"),
         items=items,
+        documents=documents,
         matched_stocked=matched_stocked,
         matched_direct=matched_direct,
         unmatched=unmatched,
@@ -572,7 +563,7 @@ async def create_receipt(
     )
 
 
-@router.post("/receipts/{receipt_id}/accept", summary="确认入账（双签，库存+）")
+@router.post("/receipts/{receipt_id}/accept", summary="确认入账（仓管员审核，库存+）")
 async def accept_receipt(
     receipt_id: UUID,
     payload: ReceiptAccept,
@@ -737,6 +728,80 @@ async def _requisition_response(db: AsyncSession, req: Any) -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
+@router.get("/requisition-approvers", summary="审批人候选（主管及以上，发起人自选）")
+async def list_requisition_approvers(
+    keyword: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:hardware:requisition:create")),
+) -> JSONResponse:
+    """申领弹窗的审批人下拉数据（飞书 user_id + 姓名/部门/职位）。
+
+    审批节点为「发起人自选（主管及以上）」：**硬过滤**，只返回
+    ① 职位命中 主管/经理/部长/总监/副总/厂长/总经理/主任；
+    ② 任一部门负责人（identity.departments.leader_user_id）；
+    ③ 持 `warehouse:hardware:requisition:approve` 权限的人。
+    名单以 identity.users 为准（与发起人/审批人 user_id 同源），由通讯录
+    同步任务写入（需应用具备通讯录部门/成员读取权限）。
+    """
+    from sqlalchemy import text as sa_text
+
+    supervisor_words = ("主管", "经理", "部长", "总监", "副总", "厂长", "总经理", "主任")
+    patterns = [f"%{w}%" for w in supervisor_words]
+    kw = (keyword or "").strip()
+    sql = sa_text(
+        """
+        select u.name, u.department, u.position, u.feishu_user_id
+        from identity.users u
+        where u.is_deleted = false
+          and coalesce(u.feishu_user_id, '') <> ''
+          and (
+            u.position ilike any(:patterns)
+            or exists (
+              select 1 from identity.departments d
+              where d.leader_user_id = u.feishu_user_id
+            )
+            or exists (
+              select 1 from permission.user_roles ur
+              join permission.role_permissions rp on rp.role_id = ur.role_id
+              join permission.permissions p on p.id = rp.permission_id
+              where ur.user_id = u.id
+                and p.code = 'warehouse:hardware:requisition:approve'
+            )
+          )
+          and (
+            :kw = '' or u.name ilike :like
+            or coalesce(u.department, '') ilike :like
+            or coalesce(u.position, '') ilike :like
+          )
+        order by (u.position ilike any(:patterns)) desc, u.name
+        limit :limit
+        """
+    )
+    rows = (
+        await db.execute(
+            sql,
+            {
+                "patterns": patterns,
+                "kw": kw,
+                "like": f"%{kw}%",
+                "limit": limit,
+            },
+        )
+    ).all()
+    items = [
+        {
+            "user_id": r[3],
+            "name": r[0],
+            "department": r[1],
+            "position": r[2],
+            "supervisor": True,
+        }
+        for r in rows
+    ]
+    return success_response({"items": items, "total": len(items)})
+
+
 @router.get("/requisitions/{requisition_id}", summary="领用申请详情")
 async def get_requisition(
     requisition_id: UUID,
@@ -769,23 +834,46 @@ async def submit_requisition(
 
 
 async def _after_submit_channel(db: AsyncSession, req: Any) -> None:
-    """提交后动作（按类型分流）：
+    """提交后动作：按配置创建审批实例（feishu 通道；未配置自动 manual）。
 
-    urgent=先发后补（制度 5.3.4）：不走审批通道——发双卡（申请人临时单据卡
-    +仓管发料卡），正式审批由用户 24h 内自行提交再自动挂回；
-    其余按配置创建审批实例（feishu 通道；M3 接入，未配置自动 manual）。
+    紧急单（2026-11-20 改版）与普通单同走审批链（审批单据即闭环手续），
+    提交成功后加发仓管加急卡——紧急单可在审批前发料（先发后批）。
     """
+    from app.modules.warehouse.hardware.approval_channel import (
+        ApprovalChannelError,
+        submit_approval,
+    )
+
     try:
-        if getattr(req, "req_type", "normal") == "urgent":
-            from app.modules.warehouse.hardware.urgent_flow import send_urgent_cards
-
-            await send_urgent_cards(db, req)
-            return
-        from app.modules.warehouse.hardware.approval_channel import submit_approval
-
         await submit_approval(db, req)
-    except Exception:  # noqa: BLE001
-        logger.exception("提交后动作失败（不影响申请主流程）")
+    except ApprovalChannelError as exc:
+        # 审批确实没发起 → 显式回退草稿（预扣随 status 撤销），前端可见失败
+        # 原因并可重提；不静默转人工审批，也不留「等审批但审批不存在」的假象。
+        await _revert_submit_to_draft(db, req)
+        raise service.HardwareError(
+            f"飞书审批发起失败，单据已留在草稿可重试：{exc}", status_code=502
+        ) from exc
+    if getattr(req, "req_type", "normal") == "urgent":
+        try:
+            from app.modules.warehouse.hardware.urgent_flow import send_urgent_notice
+
+            await send_urgent_notice(db, req)
+        except Exception:  # noqa: BLE001
+            logger.exception("紧急领料加急卡发送失败（不影响申请主流程）")
+
+
+async def _revert_submit_to_draft(db: AsyncSession, req: Any) -> None:
+    """提交后动作失败的回退：pending→draft（预扣=RESERVING_STATUSES 派生，随
+    状态一起撤销）。镜像三值刷新钩子已由 service 标脏，无需重复。"""
+    if getattr(req, "status", None) != "pending":
+        return
+    req.status = "draft"
+    req.submitted_at = None
+    req.monthly_check = None
+    req.approval_channel = None
+    req.approval_status = None
+    req.approval_instance_code = None
+    await db.flush()
 
 
 @router.post("/requisitions/{requisition_id}/approve", summary="审批通过（manual 通道代录）")
@@ -835,6 +923,13 @@ async def cancel_requisition(
     user: User = Depends(require_permission("warehouse:hardware:requisition:create")),
 ) -> JSONResponse:
     req = await service.cancel_requisition(db, requisition_id, user=user)
+    # feishu 通道：同步撤回待审实例（best-effort，失败只留备注不阻断本地取消）
+    try:
+        from app.modules.warehouse.hardware.approval_channel import cancel_approval
+
+        await cancel_approval(db, req)
+    except Exception:  # noqa: BLE001
+        logger.exception("取消领料单时撤回飞书实例失败（不阻断本地取消）")
     return success_response(await _requisition_response(db, req))
 
 
@@ -851,25 +946,6 @@ async def issue_requisition(
         received_by=payload.received_by,
         items=[i.model_dump(mode="json") for i in payload.items],
         user=user,
-    )
-    return success_response(await _requisition_response(db, req))
-
-
-@router.post(
-    "/requisitions/{requisition_id}/patch-manual",
-    summary="确认已补办（紧急单手动闭环兜底）",
-)
-async def patch_requisition_manually(
-    requisition_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("warehouse:hardware:requisition:issue")),
-) -> JSONResponse:
-    """自动匹配漏配/线下已补的兜底：仓管确认补办完成（manual 留痕）。"""
-    operator = (
-        user.display_name if user and hasattr(user, "display_name") else "仓管确认"
-    )
-    req = await service.patch_requisition_manually(
-        db, requisition_id, operator=operator, user=user
     )
     return success_response(await _requisition_response(db, req))
 

@@ -3,13 +3,14 @@
 照 R1 FireAlarmScanSource 模式（cron 门控 due_fire_times → 扫描 → drafts →
 读位由 ingest 同事务承接）。每轮（默认每小时）产出：
 
-- **五类事件**（§9.2，external_id 幂等=同事件二次触发不重复）：
+- **四类事件**（§9.2，external_id 幂等=同事件二次触发不重复）：
   - low_stock:<material_id>:<YYYY-MM-DD>——available<safety_stock（按日键：
     当日恢复再击穿不重复，跨日再击穿=新事件）
-  - urgent_unpatched:<req_id>——紧急 24h 未补单（overdue_unpatched 状态幂等闸）
   - draft_backlog:<YYYY-MM-DD>——OCR/手动草稿积压超阈值（config 可配默认 5）
   - issue_timeout:<req_id>——approved 超 48h 未发料
   - stale:<YYYY-Qn>——呆滞到期（仅季度首月前 7 天算一次，M5 扫描口径复算）
+
+  （urgent_unpatched 2026-11-20 退役：紧急单改审批打标+先发后批，无补办跟进。）
 - **两个定时触发**：
   - daily_digest:<YYYY-MM-DD>——日速递（每日一轮，数字由执行器 SQL 聚合）
   - plan_draft:<YYYY-MM>——25 日后首轮触发 M5 计划草案（月键幂等；与 25 日
@@ -163,26 +164,7 @@ async def build_alert_drafts(
                 },
             ))
 
-    # ── ② 紧急 24h 未补单（状态即幂等闸）──
-    overdue = (
-        await session.execute(
-            select(HardwareRequisition).where(
-                HardwareRequisition.status == "overdue_unpatched",
-                HardwareRequisition.is_deleted.is_(False),
-            ).limit(20)
-        )
-    ).scalars().all()
-    for req in overdue:
-        drafts.append(_draft(
-            "urgent_unpatched",
-            f"urgent_unpatched:{req.id}",
-            {
-                "req_no": req.req_no, "dept": req.dept_name, "applicant": req.applicant,
-                "deadline": req.urgent_patch_deadline.isoformat() if req.urgent_patch_deadline else None,
-            },
-        ))
-
-    # ── ③ 草稿积压（draft 单数 > 阈值，按日键）──
+    # ── ② 草稿积压（draft 单数 > 阈值，按日键）──
     threshold = int(cfg.get("draft_backlog_threshold", DEFAULT_DRAFT_BACKLOG_THRESHOLD))
     backlog = await session.scalar(
         select(func.count()).select_from(HardwareReceipt).where(

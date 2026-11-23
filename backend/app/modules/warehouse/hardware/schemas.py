@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BeforeValidator
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 StrUUID = Annotated[str, BeforeValidator(lambda v: str(v) if v is not None else v)]
 
@@ -24,7 +24,7 @@ ReceiptSource = Literal["ocr", "manual", "excel", "erp_import", "stocktake", "re
 ReceiptStatus = Literal["draft", "accepted", "rejected"]
 RequisitionType = Literal["normal", "urgent", "excess"]
 RequisitionStatus = Literal[
-    "draft", "pending", "approved", "issued", "rejected", "cancelled", "overdue_unpatched"
+    "draft", "pending", "approved", "issued", "rejected", "cancelled"
 ]
 MovementDirection = Literal["inbound", "outbound", "adjust"]
 StocktakeType = Literal["monthly", "annual", "special", "calibration"]
@@ -189,6 +189,26 @@ class ReceiptParseItem(ReceiptItemIn):
 
     matched_name: str | None = Field(default=None, description="匹配到的主数据名称（null=未匹配）")
     low_confidence: bool = Field(default=False, description="低置信行（前端标黄人工核对）")
+    managed_class: str | None = Field(
+        default=None, description="匹配物料的两类归属 stocked/direct（未匹配为 null；前端按单分 mode 用）"
+    )
+
+
+class ReceiptParseDocument(BaseModel):
+    """按「入库单号」分组的单据摘要（2026-11-20 拍板：Web 端与机器人通道同口径分单）。
+
+    item_indexes 指向 items[] 下标（分组模板；行匹配状态由前端实时重算）。
+    """
+
+    key: str = Field(description="分组键=入库单号原文（空串=无单号组）")
+    delivery_note_no: str | None = Field(default=None, description="入库单号（null=无单号）")
+    supplier_name: str | None = None
+    item_indexes: list[int]
+    stocked_count: int = 0
+    direct_count: int = 0
+    unmatched_count: int = 0
+    all_matched: bool = True
+    mode: str = Field(description="stocked/direct（有 stocked 物料行=stocked，否则 direct）")
 
 
 class ReceiptParseResponse(BaseModel):
@@ -203,6 +223,10 @@ class ReceiptParseResponse(BaseModel):
     remark: str | None = None
     target_dept: str | None = Field(default=None, description="direct 模式下从备注猜的直发车间")
     items: list[ReceiptParseItem]
+    documents: list[ReceiptParseDocument] = Field(
+        default_factory=list,
+        description="按入库单号分组的单据摘要（多单文件分栏处理；旧客户端可忽略）",
+    )
     match_summary: list[dict[str, Any]] = Field(default_factory=list)
     matched_stocked: int = 0
     matched_direct: int = 0
@@ -219,10 +243,14 @@ class ReceiptParseResponse(BaseModel):
 
 
 class ReceiptAccept(BaseModel):
-    """一屏确认：仓管员+使用部门经办双签（制度 5.2.2）。"""
+    """确认入账：仓管员审核确认入库（2026-11-20 起取消使用部门经办人双签）。"""
 
     inspected_by_warehouse: str = Field(..., min_length=1, max_length=100, description="仓管员 open_id/姓名")
-    inspected_by_dept: str = Field(..., min_length=1, max_length=100, description="使用部门经办人")
+    inspected_by_dept: str | None = Field(
+        default=None,
+        max_length=100,
+        description="使用部门经办人（可选；前端已取消双签，仅 Agent/自动入账通道回填留痕）",
+    )
     inspect_checklist: dict[str, Any] | None = None
     items: list[ReceiptItemIn] | None = Field(
         default=None, description="修正后的行（人工修正低置信后提交；缺省用草稿原行）"
@@ -292,10 +320,23 @@ class RequisitionCreate(BaseModel):
     dept_name: str = Field(..., min_length=1, max_length=100)
     applicant: str = Field(..., min_length=1, max_length=100)
     applicant_open_id: str | None = Field(default=None, max_length=100)
+    approver_user_id: str | None = Field(
+        default=None, max_length=100, description="指定审批人飞书 user_id（发起人自选节点）"
+    )
+    approver_name: str | None = Field(default=None, max_length=100, description="指定审批人姓名")
     purpose: str | None = Field(default=None, max_length=500)
     req_type: RequisitionType = Field(default="normal")
+    urgent_reason: str | None = Field(
+        default=None, max_length=200, description="紧急原因（req_type=urgent 必填）"
+    )
     remark: str | None = None
     items: list[RequisitionItemIn] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _urgent_reason_required(self) -> "RequisitionCreate":
+        if self.req_type == "urgent" and not (self.urgent_reason or "").strip():
+            raise ValueError("紧急申领必须填写紧急原因")
+        return self
 
 
 class RequisitionSubmit(BaseModel):
@@ -343,6 +384,8 @@ class RequisitionResponse(ORMResponse):
     dept_name: str
     applicant: str
     applicant_open_id: str | None
+    approver_user_id: str | None = None
+    approver_name: str | None = None
     purpose: str | None
     req_type: str
     status: str
@@ -357,8 +400,7 @@ class RequisitionResponse(ORMResponse):
     issued_by: str | None
     issued_at: datetime | None
     received_by: str | None
-    urgent_patch_deadline: datetime | None
-    patched_at: datetime | None
+    urgent_reason: str | None = None
     monthly_check: dict[str, Any] | None
     remark: str | None
     created_at: datetime

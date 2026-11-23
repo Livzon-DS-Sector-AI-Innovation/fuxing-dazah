@@ -2,7 +2,7 @@
 
 拍照 → 识别（recognizer，场景开关/审计全继承）→ 四级匹配（matcher，
 低置信标黄只标记不代改）→ 入库草稿（hardware_receipts draft，红线：OCR
-永不自动动账）→ 一屏确认（service.accept_receipt 双签入账 / reject 拒收）。
+永不自动动账）→ 确认入账（service.accept_receipt 仓管员审核入账 / reject 拒收）。
 
 Web 工作台与 agent 对话共用本管线；agent 侧另行走 warehouse_agent_drafts
 两段式确认门（草稿回显卡片 → 确认卡）。
@@ -87,6 +87,7 @@ class ParsedReceipt:
         matched_stocked: int,
         matched_direct: int,
         unmatched: int,
+        excluded_rows: list[dict[str, Any]] | None = None,
     ) -> None:
         self.supplier = supplier
         self.delivery_note_no = delivery_note_no
@@ -102,6 +103,7 @@ class ParsedReceipt:
         self.matched_stocked = matched_stocked
         self.matched_direct = matched_direct
         self.unmatched = unmatched
+        self.excluded_rows = excluded_rows or []
 
     def ocr_result(self) -> dict[str, Any]:
         """留痕 JSON（与 build_ocr_draft 直落草稿口径逐字段一致）。"""
@@ -120,6 +122,7 @@ async def parse_receipt_image(
     *,
     image_b64: str,
     content_type: str = "image/jpeg",
+    exclude_unmatched: bool = False,
 ) -> ParsedReceipt:
     """图片 → 识别 → 四级匹配 → 结构化解析结果（**不写任何库表**）。
 
@@ -146,10 +149,19 @@ async def parse_receipt_image(
     matched_names: list[str | None] = []
     low_confidences: list[bool] = []
     matched_stocked = matched_direct = unmatched = 0
+    excluded_rows: list[dict[str, Any]] = []
     for row in recognized.rows:
         result = hw_matcher.match_one(
             code=row.code, name=row.name, spec=row.spec, materials=materials
         )
+        if result.material is None and exclude_unmatched:
+            # 对话链口径（2026-11-19 对齐 Excel 链）：未匹配/清单外行剔除不建单
+            # ——留在草稿里确认时必被「共用类行必须匹配主数据」409 拦截，
+            # 而对话内无人能修正行（Web 端可修，故 Web 路径不剔除）。
+            excluded_rows.append(
+                {"ocr_name": row.name, "ocr_spec": row.spec or "", "quantity": str(row.quantity)}
+            )
+            continue
         item = ReceiptItemIn(
             material_id=str(result.material.id) if result.material else None,
             name=result.material.name if result.material else row.name,

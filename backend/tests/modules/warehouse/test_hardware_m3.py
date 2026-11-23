@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.warehouse.hardware import service as hw
+from app.modules.warehouse.hardware.approval_channel import APPROVER_NODE_ID as APPROVER_NODE
 from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
     HardwareMovement,
@@ -87,16 +88,36 @@ async def test_feishu_channel_uuid_idempotency_contract():
     assert u1 == u2
 
 
-async def test_feishu_submit_warehouse_credentials_and_leignty_form(db_session):
-    """feishu 通道提交（2026-11-17 T2 领退同单表单）：仓储凭证 + 新表单构造。"""
+async def test_feishu_submit_matches_definition_form(db_session):
+    """feishu 通道提交：仓储凭证 + 平台分支表单（分流键 + 六个普通控件）+
+    发起人 user_id 解析。"""
+    from uuid import uuid4
+
     from app.modules.warehouse.hardware.approval_channel import (
-        DETAIL_WIDGET_ID,
+        KIND_VALUE_PLATFORM,
         KIND_WIDGET_ID,
+        PLATFORM_WIDGETS,
+        URGENT_VALUE_NO,
+        URGENT_WIDGET_ID,
         FeishuApprovalChannel,
     )
+    from app.platform.identity.models import User as IdentityUser
+
+    # 领用人 = 真实 identity 用户（feishu_user_id 即创建实例的 user_id）
+    starter = IdentityUser(
+        name="领料测试人", department="发酵",
+        employee_no=f"HW-M3-{uuid4().hex[:8]}",
+        feishu_user_id=f"u_m3_{uuid4().hex[:8]}",
+    )
+    db_session.add(starter)
+    await db_session.flush()
 
     material = await _mk_stocked(db_session)
     req = await _mk_requisition(db_session, material)
+    req.applicant_user_id = starter.id
+    req.approver_user_id = "u_supervisor_001"
+    req.approver_name = "主管甲"
+    await db_session.flush()
 
     captured: dict = {}
 
@@ -105,6 +126,7 @@ async def test_feishu_submit_warehouse_credentials_and_leignty_form(db_session):
             approval_code=approval_code, user_id=user_id,
             form=form, uuid=kwargs.get("uuid_idempotency"),
             app_id=kwargs.get("app_id"), app_secret=kwargs.get("app_secret"),
+            node_approvers=kwargs.get("node_approver_user_id_list"),
         )
         return "inst_test_123"
 
@@ -126,16 +148,48 @@ async def test_feishu_submit_warehouse_credentials_and_leignty_form(db_session):
     assert req.approval_instance_code == "inst_test_123"
     assert captured["approval_code"] == "OP-TEST-001"
     assert captured["app_id"] == "cli_wh"  # 仓储凭证（2026-11-10 拍板口径）
+    assert captured["user_id"] == starter.feishu_user_id  # 发起人=领用人
+    # 发起人自选节点：随实例提交所选审批人
+    assert captured["node_approvers"] == {APPROVER_NODE: ["u_supervisor_001"]}
     assert isinstance(captured["form"], list)  # create_instance 内部序列化
-    # 领退同单两控件：单选分流键 + fieldList 明细（快照文本假设，待真机校准）
+    # 平台分支：分流键 + 是否紧急（必填显式写否）+ 六个顶层普通控件（单物资）
+    assert [w["id"] for w in captured["form"]] == [
+        KIND_WIDGET_ID, URGENT_WIDGET_ID, *(c[0] for c in PLATFORM_WIDGETS)
+    ]
     by_id = {w["id"]: w for w in captured["form"]}
-    assert set(by_id) == {KIND_WIDGET_ID, DETAIL_WIDGET_ID}
-    assert by_id[KIND_WIDGET_ID]["value"] == "五金库领料"
-    rows = by_id[DETAIL_WIDGET_ID]["value"]
-    assert rows[0]["物资名称"] == material.name
-    assert rows[0]["规格型号"] == "DN25" and rows[0]["类别"] == "金属阀门"
-    assert rows[0]["数量"] == 10.0
+    assert by_id[KIND_WIDGET_ID]["value"] == KIND_VALUE_PLATFORM
+    assert by_id[URGENT_WIDGET_ID]["value"] == URGENT_VALUE_NO  # 前端常规申领=非紧急
+    assert {w["id"]: w["type"] for w in captured["form"][2:]} == {
+        c[0]: c[2] for c in PLATFORM_WIDGETS
+    }
+    values = [w["value"] for w in captured["form"][2:]]
+    assert values == ["金属阀门", material.name, "DN25", "个", 100.0, 10.0]
     assert req.req_no not in str(captured["form"])  # 定稿表单无单号控件
+
+
+async def test_feishu_submit_requires_approver(db_session):
+    """未选审批人（主管及以上）→ 上抛，不创建实例（节点必须有人可批）。"""
+    from app.modules.warehouse.hardware.approval_channel import (
+        ApprovalChannelError,
+        FeishuApprovalChannel,
+    )
+
+    material = await _mk_stocked(db_session, name="缺审批人球阀")
+    req = await _mk_requisition(db_session, material)
+    req.applicant_open_id = "xukangfu"  # 发起人可解析，专门测审批人缺失
+    await db_session.flush()
+
+    with patch(
+        "app.modules.warehouse.hardware.approval_channel.get_settings",
+        return_value=_settings_stub(
+            HARDWARE_APPROVAL_CHANNEL="feishu", HARDWARE_APPROVAL_CODE="OP-TEST-001",
+            WAREHOUSE_FEISHU_APP_ID="cli_wh", WAREHOUSE_FEISHU_APP_SECRET="sec",
+        ),
+    ):
+        channel = FeishuApprovalChannel("OP-TEST-001")
+        items = await _items_for(db_session, req)
+        with pytest.raises(ApprovalChannelError, match="未选择审批人"):
+            await channel.submit(db_session, req, items)
 
 
 async def test_feishu_poll_result_mapping(db_session):
@@ -267,14 +321,14 @@ async def test_manual_full_chain_three_cases(db_session):
     assert req3.status == "rejected" and req3.rejected_reason == "用途不符"
 
 
-async def test_submit_approval_falls_back_to_manual(db_session):
-    """feishu 通道故障 → submit_approval 自动降级 manual（预扣不阻断）。"""
+async def test_submit_approval_raises_on_feishu_failure(db_session):
+    """feishu 通道故障 → 上抛（2026-11-19 拍板：不再静默降级 manual）。"""
     from app.modules.warehouse.hardware.approval_channel import (
         ApprovalChannelError,
         submit_approval,
     )
 
-    material = await _mk_stocked(db_session, name="降级球阀")
+    material = await _mk_stocked(db_session, name="失败球阀")
     req = await _mk_requisition(db_session, material)
 
     class BrokenChannel:
@@ -290,49 +344,89 @@ async def test_submit_approval_falls_back_to_manual(db_session):
         "app.modules.warehouse.hardware.approval_channel.get_approval_channel",
         return_value=BrokenChannel(),
     ):
-        ref = await submit_approval(db_session, req)
-    assert ref.startswith("manual:")
-    assert req.approval_channel == "manual"
+        with pytest.raises(ApprovalChannelError):
+            await submit_approval(db_session, req)
+    assert req.approval_channel is None  # 没落 manual 标记
 
 
-# ── 紧急 24h 补单提醒任务 ──
+async def test_approvers_endpoint_lists_supervisors_first(api_context):
+    """审批人候选：登记在位人员，主管标记置前（发起人自选节点下拉）。"""
+    from uuid import uuid4
+
+    from tests.modules.warehouse.conftest import WAREHOUSE_PERMS
+
+    from app.platform.identity.models import User as IdentityUser
+
+    ac, db = api_context
+    tag = uuid4().hex[:6]
+    db.add(
+        IdentityUser(
+            name=f"普通员工{tag}", department="供应部", position="操作工",
+            employee_no=f"AP-STAFF-{tag}", feishu_user_id=f"u_staff_{tag}",
+        )
+    )
+    db.add(
+        IdentityUser(
+            name=f"审批主管{tag}", department="供应部", position="车间主管",
+            employee_no=f"AP-SUP-{tag}", feishu_user_id=f"u_sup_{tag}",
+        )
+    )
+    await db.flush()
+
+    async def _granted(uid, d):  # noqa: ANN001
+        return WAREHOUSE_PERMS | {"warehouse:hardware:requisition:create"}
+
+    with patch("app.platform.permission.deps.get_user_permissions", new=_granted):
+        res = await ac.get(
+            "/api/v1/warehouse/hardware/requisition-approvers", params={"keyword": tag}
+        )
+    assert res.status_code == 200, res.text
+    items = res.json()["data"]["items"]
+    # 硬过滤：只留主管及以上（普通员工搜不到）
+    assert [i["name"] for i in items] == [f"审批主管{tag}"]
+    assert items[0]["supervisor"] is True and items[0]["user_id"] == f"u_sup_{tag}"
 
 
-async def test_urgent_overdue_marking_and_task(db_session):
-    """紧急单发料后 24h 未补单 → overdue_unpatched 标记 + 推送事件；补单闭合。"""
-    from app.modules.warehouse.hardware.scheduled import run_urgent_patch_check
+async def test_submit_api_reverts_to_draft_when_approval_fails(api_context):
+    """提交接口：审批发起失败 → 502 且单据回退草稿（预扣撤销，可重提）。"""
+    from app.modules.warehouse.hardware.approval_channel import ApprovalChannelError
+    from tests.modules.warehouse.conftest import WAREHOUSE_PERMS
 
-    material = await _mk_stocked(db_session, name="紧急轴承")
-    req = await _mk_requisition(db_session, material, Decimal("5"), req_type="urgent")
-    # 紧急单 pending 直发（先发后补）
-    await hw.issue_requisition(db_session, req.id, issued_by="仓管员", received_by="测试员")
-    assert req.status == "issued"
-    assert req.urgent_patch_deadline is not None
+    ac, db = api_context
+    material = await _mk_stocked(db, name="回滚球阀")
+    draft = await hw.create_requisition(
+        db,
+        RequisitionCreate(
+            dept_name="发酵", applicant="测试员",
+            items=[RequisitionItemIn(material_id=str(material.id), need_qty=Decimal("10"))],
+        ),
+    )
 
-    # 24h 内：不标记
-    summary = await run_urgent_patch_check(db_session, now=datetime.now(CN_TZ))
-    assert summary["marked"] == 0
+    async def _granted(uid, d):  # noqa: ANN001
+        return WAREHOUSE_PERMS | {"warehouse:hardware:requisition:create"}
 
-    # 模拟超期：截止时间前移
-    req.urgent_patch_deadline = datetime.now(CN_TZ) - timedelta(hours=1)
-    await db_session.flush()
-    summary = await run_urgent_patch_check(db_session)
-    assert summary["marked"] == 1
-    await db_session.refresh(req)
-    assert req.status == "overdue_unpatched"
+    with patch(
+        "app.platform.permission.deps.get_user_permissions", new=_granted
+    ), patch(
+        "app.modules.warehouse.hardware.approval_channel.submit_approval",
+        AsyncMock(side_effect=ApprovalChannelError("模拟飞书故障")),
+    ):
+        res = await ac.post(f"/api/v1/warehouse/hardware/requisitions/{draft.id}/submit")
 
-    # 幂等：再跑不重复
-    summary2 = await run_urgent_patch_check(db_session)
-    assert summary2["marked"] == 0
+    assert res.status_code == 502
+    assert "留在草稿" in res.json()["message"]
+    await db.refresh(draft)
+    assert draft.status == "draft"
+    assert draft.submitted_at is None and draft.approval_channel is None
+    rows, _ = await hw.list_stock_rows(db, keyword=material.name)
+    assert rows[0]["reserved"] == Decimal("0")  # 预扣已撤销
+
+
+# ── 紧急 24h 补单提醒任务（2026-11-20 退役：紧急单改审批打标+先发后批）──
 
 
 async def test_scheduled_tasks_registered():
     """TaskDefinition 注册形态：名字唯一+interval 配置。"""
-    from app.modules.warehouse.hardware.scheduled import (
-        HARDWARE_APPROVAL_POLL_TASK,
-        URGENT_PATCH_CHECK_TASK,
-    )
+    from app.modules.warehouse.hardware.scheduled import HARDWARE_APPROVAL_POLL_TASK
 
-    assert URGENT_PATCH_CHECK_TASK.name == "warehouse.hardware_urgent_patch_check"
-    assert URGENT_PATCH_CHECK_TASK.schedule.interval_seconds == 1800
     assert HARDWARE_APPROVAL_POLL_TASK.name == "warehouse.hardware_approval_poll"

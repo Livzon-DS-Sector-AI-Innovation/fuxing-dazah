@@ -261,6 +261,25 @@ async def test_direct_receipt_net_zero(db_session):
     assert ins[0].dept_name == "发酵" and outs[0].dept_name == "发酵"
 
 
+async def test_accept_receipt_without_dept_signoff(db_session):
+    """2026-11-20 起取消双签：仓管员单独确认即可入账，使用部门经办人可缺省。"""
+    m = await _mk_material(db_session)
+    payload = ReceiptCreate(
+        source="manual",
+        mode="stocked",
+        supplier_name="测试供应商",
+        items=[ReceiptItemIn(material_id=str(m.id), name=m.name, quantity=Decimal("1"))],
+    )
+    receipt = await hw.create_receipt(db_session, payload)
+    accepted = await hw.accept_receipt(
+        db_session, receipt.id, inspected_by_warehouse="ou_warehouse"
+    )
+    assert accepted.status == "accepted"
+    assert accepted.inspected_by_dept is None
+    rows, _ = await hw.list_stock_rows(db_session, keyword=m.name, managed_class=None)
+    assert rows[0]["on_hand"] == Decimal("1")
+
+
 async def test_draft_receipt_never_moves_stock(db_session):
     """红线：draft 草稿绝不动账（OCR/agent 只产草稿）。"""
     m = await _mk_material(db_session)
@@ -313,7 +332,8 @@ async def test_low_warning_filter(db_session):
 
 
 async def test_normal_requires_approval_before_issue(db_session):
-    """常规单须审批后才能发料；紧急单 pending 可直发并留 24h 补单截止。"""
+    """常规单须审批后才能发料；紧急单 pending 可直发（先发后批），审批后补
+    手续只落审批结论不二次发料（2026-11-20 改版）。"""
     m = await _mk_material(db_session)
     await _mk_accepted_receipt(db_session, m, Decimal("100"))
 
@@ -332,17 +352,17 @@ async def test_normal_requires_approval_before_issue(db_session):
         db_session,
         RequisitionCreate(
             dept_name="发酵", applicant="张三", req_type="urgent",
+            urgent_reason="泵体抢修急需",
             items=[RequisitionItemIn(material_id=str(m.id), need_qty=Decimal("5"))],
         ),
     )
     await hw.submit_requisition(db_session, urg.id)
     issued = await hw.issue_requisition(db_session, urg.id, issued_by="仓", received_by="张三")
     assert issued.status == "issued"
-    assert issued.urgent_patch_deadline is not None
-    assert issued.urgent_patch_deadline - issued.issued_at == timedelta(hours=24)
-    # 补审批 → patched_at 闭合
+    assert issued.urgent_reason == "泵体抢修急需"
+    # 先发后批：审批通过只落审批结论，状态保持 issued 不回退不二次扣
     await hw.approve_requisition(db_session, urg.id, approver="李主管")
-    assert urg.patched_at is not None
+    assert urg.status == "issued" and urg.approval_status == "approved"
     _, urgent_mvs = await hw.list_movements(db_session, business_type="urgent_issue")
     assert urgent_mvs == 1
 

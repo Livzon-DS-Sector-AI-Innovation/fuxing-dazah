@@ -101,21 +101,15 @@ async def _mk_cursors(last_hour: bool = True) -> dict:
 
 
 async def test_alert_scan_five_event_types(db_session):
-    """五类事件扫描：低库存/紧急未补/草稿积压/超时未发料 全部成 draft；external_id 稳定。"""
+    """四类事件扫描：低库存/草稿积压/超时未发料 全部成 draft；external_id 稳定。
+
+    （原五类含 urgent_unpatched，2026-11-20 随补办链退役改四类。）"""
     from app.modules.warehouse.hardware.superagent.scan_source import HardwareAlertScanSource
 
     # ① 低库存：available(10) < safety(50)
     m_low = await _mk_material(db_session, name="低库存物料", safety=Decimal("50"))
     await _mk_inbound(db_session, m_low, Decimal("10"))
-    # ② 紧急 24h 未补单：issued+urgent+deadline 已过
-    req = HardwareRequisition(
-        req_no=f"WJK-LY-T-{uuid4().hex[:6].upper()}", dept_name="发酵",
-        applicant="张三", req_type="urgent", status="overdue_unpatched",
-        urgent_patch_deadline=datetime.now(CN_TZ) - timedelta(hours=30),
-        issued_at=datetime.now(CN_TZ) - timedelta(hours=54),
-    )
-    db_session.add(req)
-    # ③ OCR 草稿积压：6 张 draft（阈值 5）
+    # ② OCR 草稿积压：6 张 draft（阈值 5）
     # 封闭性：草稿积压是全局计数断言 ==6——共享开发库存在他轮冒烟/真机
     # 草稿（2026-11-06 四张真实送货单冒烟实测 +4 即炸）；事务内清 draft
     # 基线（先删明细子行再删头，外键），随回滚还原真机数据。
@@ -156,7 +150,7 @@ async def test_alert_scan_five_event_types(db_session):
     low = by_type["low_stock"][0]
     assert low.external_id == f"low_stock:{m_low.id}:{today}"
     assert low.payload["available"] == 10 and low.payload["safety_stock"] == 50
-    assert by_type.get("urgent_unpatched"), "紧急未补单事件应成 draft"
+    assert "urgent_unpatched" not in by_type, "紧急未补事件已退役不应再产出"
     assert by_type.get("draft_backlog"), f"草稿积压应成 draft（{by_type.keys()}）"
     assert by_type["draft_backlog"][0].external_id == f"draft_backlog:{today}"
     assert by_type["draft_backlog"][0].payload["count"] == 6

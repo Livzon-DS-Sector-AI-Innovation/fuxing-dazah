@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.warehouse.hardware import approval_ingest as ai
+from app.modules.warehouse.hardware.approval_channel import cancel_approval as ai_cancel
 from app.modules.warehouse.hardware import service as hw
 from app.modules.warehouse.hardware.models import (
     HardwareMaterial,
@@ -24,6 +25,8 @@ from app.modules.warehouse.hardware.models import (
 from app.modules.warehouse.hardware.schemas import (
     ReceiptCreate,
     ReceiptItemIn,
+    RequisitionCreate,
+    RequisitionItemIn,
 )
 
 APPROVAL_CODE = "6FECD1F4-TEST-CODE"
@@ -71,7 +74,7 @@ def _instance(kind: str, rows: list[dict], *, status="PENDING", dict_shape=False
         return {"text": v} if dict_shape else v
 
     is_return = kind == "退料"
-    qty_name = "退料量" if is_return else "领取量"
+    qty_name = "退料量" if is_return else "领料量"
     detail_name = "五金库退料明细" if is_return else "五金库领料明细"
     other_name = "五金库领料明细" if is_return else "五金库退料明细"
 
@@ -138,6 +141,49 @@ def test_event_handlers_registered():
     for et in ("approval.instance.started", "approval.instance.approved",
                "approval.instance.rejected", "approval.instance.canceled"):
         assert et in event_client._handlers, et
+
+
+def _platform_instance(name: str, spec: str, qty: float, *, status="PENDING",
+                       approval_code=APPROVAL_CODE) -> dict:
+    """合成「五金库领料-平台」分支实例（系统代发起：六个顶层普通控件）。"""
+    form = [
+        {"id": ai.KIND_WIDGET_ID, "type": "radioV2", "name": "领/退料",
+         "value": "五金库领料-平台"},
+        {"id": "widget17950811346260001", "type": "input", "name": "类别", "value": "金属阀门"},
+        {"id": ai.PLATFORM_NAME_WIDGET_ID, "type": "input", "name": "名称", "value": name},
+        {"id": ai.PLATFORM_SPEC_WIDGET_ID, "type": "input", "name": "规格", "value": spec},
+        {"id": "widget17950811760340001", "type": "input", "name": "单位", "value": "个"},
+        {"id": "widget17950811860230001", "type": "number", "name": "可领量", "value": 100},
+        {"id": ai.PLATFORM_QTY_WIDGET_ID, "type": "number", "name": "领料量", "value": qty},
+    ]
+    return {
+        "approval_code": approval_code,
+        "status": status,
+        "form": json.dumps(form, ensure_ascii=False),
+        "start_user_id": "platform_tester_001",
+    }
+
+
+# ── 平台分支（系统代发起）──
+
+
+def test_parse_platform_form():
+    parsed = ai.parse_form(_platform_instance("304不锈钢三通", "Φ133*4", 3)["form"])
+    assert parsed.kind == ai.KIND_REQUISITION and parsed.platform is True
+    assert parsed.rows == [{"name": "304不锈钢三通", "spec": "Φ133*4", "quantity": 3.0}]
+
+
+async def test_ingest_platform_requisition_reserves(db_session, approval_code):
+    m = await _mk_material(db_session, qty_stock=Decimal("100"))
+    code = f"INST-{uuid4().hex[:8]}"
+    result = await ai.ingest_instance(
+        db_session, code, instance=_platform_instance(m.name, m.spec, 4)
+    )
+    assert result["action"] == "ingested" and result["kind"] == "领料"
+    req = await ai._find_requisition(db_session, code)
+    assert req is not None and req.status == "pending"
+    rows, _ = await hw.list_stock_rows(db_session, keyword=m.name)
+    assert rows[0]["reserved"] == Decimal("4") and rows[0]["available"] == Decimal("96")
 
 
 # ── 摄取主流程 ──
@@ -391,6 +437,54 @@ async def test_sync_status_approved_and_rejected(db_session, approval_code):
     # 重复同步幂等（issued 不再迁移）
     again = await ai.sync_status(db_session, c1, status="APPROVED")
     assert again["status"] == "issued"
+
+
+async def test_sync_status_canceled_releases_and_marks_approval(db_session, approval_code):
+    """飞书撤回（CANCELED）→ 单据 cancelled + approval_status=cancelled + 预扣释放。"""
+    m = await _mk_material(db_session, name="撤回球阀", qty_stock=Decimal("50"))
+    code = f"INST-{uuid4().hex[:8]}"
+    await ai.ingest_instance(
+        db_session, code, instance=_instance("领料", [{"name": m.name, "spec": m.spec, "qty": 8}])
+    )
+    rows, _ = await hw.list_stock_rows(db_session, keyword=m.name)
+    assert rows[0]["reserved"] == Decimal("8")
+
+    res = await ai.sync_status(db_session, code, status="CANCELED")
+    assert res["action"] == "synced" and res["status"] == "cancelled"
+    req = await ai._find_requisition(db_session, code)
+    assert req.approval_status == "cancelled"
+    rows, _ = await hw.list_stock_rows(db_session, keyword=m.name)
+    assert rows[0]["reserved"] == Decimal("0") and rows[0]["available"] == Decimal("50")
+
+
+async def test_cancel_approval_withdraws_feishu_instance(db_session, approval_code):
+    """系统内取消：撤回飞书待审实例（best-effort）+ approval_status 落 cancelled。"""
+    from unittest.mock import AsyncMock, patch
+
+    import app.platform.integrations.feishu.approval as approval_mod
+
+    m = await _mk_material(db_session, name="系统撤单球阀", qty_stock=Decimal("30"))
+    req = await hw.create_requisition(
+        db_session,
+        RequisitionCreate(
+            dept_name="发酵", applicant="测试员",
+            approver_user_id="u_sup",
+            items=[RequisitionItemIn(material_id=str(m.id), need_qty=Decimal("3"))],
+        ),
+    )
+    req.status = "pending"
+    req.applicant_open_id = "xukangfu"  # 撤回以提交人身份
+    req.approval_channel = "feishu"
+    req.approval_instance_code = "INST-SYS-CANCEL"
+    req.approval_status = "pending"
+    await db_session.flush()
+
+    fake = AsyncMock(return_value=True)
+    with patch.object(approval_mod, "cancel_instance", fake):
+        ok = await ai_cancel(db_session, req)
+    assert ok is True
+    assert fake.await_count == 1
+    assert req.approval_status == "cancelled"
 
 
 async def test_sync_status_ignores_unknown_instance(db_session, approval_code):

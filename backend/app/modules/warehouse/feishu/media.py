@@ -310,10 +310,13 @@ async def send_file_to_chat(
 ) -> bool:
     """上传文件并发送文件消息到会话（五金出库 Excel 导出，2026-11-13）。
 
-    两步：POST /drive/v1/medias/upload_all（parent_type=im_image 上传素材，
-    file_type=xlsx/csv/stream）→ POST /im/v1/messages（msg_type=file）。
+    两步：POST /im/v1/files（文件消息专用上传口，multipart file_type=
+    xls/csv/stream）→ POST /im/v1/messages（msg_type=file）。
     receive_id_type=open_id 时 receive_id 必传（私发单用户）。返回 True/False
     （失败记日志不抛——文件投递失败不阻断主流程话术）。
+
+    2026-11-19 真机实锤：曾用 drive/v1/medias/upload_all + parent_type=
+    im_image（那是图片消息素材口），传 xlsx 报 1061002 params error。
 
     dry_run 与 notification._is_dry_run 同源（notify_gate 下沉，2026-11-17）：
     True 时只记日志返回 True——导出/模板回发话术依赖成功语义，静默期不降级。
@@ -330,23 +333,17 @@ async def send_file_to_chat(
         )
         return True
     lower = (file_name or "").lower()
-    if lower.endswith(".xlsx"):
-        file_type = "xlsx"
-    elif lower.endswith(".csv"):
-        file_type = "csv"
+    if lower.endswith((".xlsx", ".xls")):
+        file_type = "xls"
     else:
         file_type = "stream"
     app_id, app_secret = _credentials()
     try:
         token = await get_tenant_token(app_id, app_secret)
-        # ① 上传素材（im 消息文件用 parent_type=im_image；parent_node 不需要）
+        # ① 上传文件消息素材（im/v1/files 专用口；xlsx→xls，其余 stream）
         upload_resp = await _get_http().post(
-            f"{DRIVE_BASE}/medias/upload_all",
-            data={
-                "file_name": file_name,
-                "parent_type": "im_image",
-                "size": str(len(file_bytes)),
-            },
+            f"{IM_BASE}/files",
+            data={"file_type": file_type, "file_name": file_name},
             files={"file": (file_name, file_bytes)},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -354,9 +351,9 @@ async def send_file_to_chat(
         if up_json.get("code") not in (0, None):
             logger.error("五金文件上传失败: %s", str(up_json)[:200])
             return False
-        file_token = str((up_json.get("data") or {}).get("file_token") or "")
+        file_token = str((up_json.get("data") or {}).get("file_key") or "")
         if not file_token:
-            logger.error("五金文件上传响应缺 file_token: %s", str(up_json)[:200])
+            logger.error("五金文件上传响应缺 file_key: %s", str(up_json)[:200])
             return False
         # ② 发送文件消息
         target = receive_id or chat_id

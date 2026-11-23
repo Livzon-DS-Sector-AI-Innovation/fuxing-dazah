@@ -146,8 +146,9 @@ async def test_ocr_pipeline_produces_draft_only(db_session):
     assert receipt.source == "ocr"
     assert receipt.supplier_name == "上海XX阀门制造有限公司"
     assert receipt.ocr_result is not None  # 留痕 JSON
-    _, mv_total = await hw.list_movements(db_session)
-    assert mv_total == 0  # 零流水
+    # 零流水（按本测试物资圈定——活库有真实流水，全表绝对计数会假红）
+    _, mv_t1 = await hw.list_movements(db_session, keyword="·T1")
+    assert mv_t1 == 0
     rows, _ = await hw.list_stock_rows(db_session, keyword="·T1", managed_class="stocked")
     assert all(r["on_hand"] == 0 for r in rows)  # 零库存
 
@@ -185,7 +186,8 @@ async def test_ocr_confirm_moves_stock_after_human_confirm(db_session):
     )
     rows, _ = await hw.list_stock_rows(db_session, keyword="·T2", managed_class="stocked")
     assert rows[0]["on_hand"] == Decimal("6")
-    _, in_total = await hw.list_movements(db_session, direction="inbound")
+    # 按本测试物资圈定（活库有真实 inbound 流水，绝对计数会假红）
+    _, in_total = await hw.list_movements(db_session, direction="inbound", keyword="·T2")
     assert in_total == 1
     items = await hw.list_receipt_items(db_session, receipt.id)
     assert items[0].lot_no  # 批次号已生成
@@ -271,7 +273,7 @@ async def test_direct_pickup_fires_push_event(db_session):
     assert "hardware_direct_pickup" in EVENT_RENDERERS
     assert "hardware_receipt_rejected" in EVENT_RENDERERS
     assert "hardware_requisition_rejected" in EVENT_RENDERERS
-    assert "hardware_urgent_overdue" in EVENT_RENDERERS
+    # （hardware_urgent_overdue 2026-11-20 随补办链退役）
     # 渲染纯函数冒烟
     card = EVENT_RENDERERS["hardware_direct_pickup"]({
         "dept": "发酵", "supplier": "供应商A", "receipt_no": "WJK-RK-261104-002",
@@ -375,24 +377,32 @@ def _xlsx_bytes(rows: list[list]) -> bytes:
     return buf.getvalue()
 
 
-def test_receipt_template_and_parse_roundtrip():
-    """模板下载→填写→解析回环：表头驱动、示例行跳过、错误行落 errors。"""
-    from app.modules.warehouse.hardware.excel_io import (
-        build_receipt_template,
-        parse_receipt_excel,
-    )
+def test_erp_export_headers_parse():
+    """ERP 导出直传口径（2026-11-19）：ERP 列名（物料名称/入库数量/主计量单位/
+    入库单号）经 COLUMN_ALIASES 归一解析；行级入库单号供网关分单。"""
+    import io
 
-    # 纯模板=零数据行，直接上传会 422（引导真实填写）
-    with pytest.raises(Exception, match="未解析到有效数据行"):
-        parse_receipt_excel(build_receipt_template(), "t.xlsx")
-    # 示例行旁有真实数据行时正常解析
-    real = _xlsx_bytes([
-        ["304不锈钢球阀", "DN25", 10, "个", "供应商A", "SH-001", "示例行，上传前删除"],
-        ["ABS管道", "dn40", 20, "米", "", "", "示例行，上传前删除"],
-        ["UPVC三通", "dn50", 5, "个", "", "", ""],
-    ])
-    mixed = parse_receipt_excel(real, "m.xlsx")
-    assert len(mixed["items"]) == 1 and mixed["items"][0]["name"] == "UPVC三通"
+    from openpyxl import Workbook
+
+    from app.modules.warehouse.hardware.excel_io import parse_receipt_excel
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["入库单号", "入库日期", "物料名称", "主计量单位", "入库数量"])
+    ws.append(["CGRK-001", "2026-11-19", "304不锈钢球阀", "个", 10])
+    ws.append(["CGRK-001", "2026-11-19", "ABS管道", "米", 20])
+    ws.append(["CGRK-002", "2026-11-19", "UPVC三通", "个", 5])
+    buf = io.BytesIO()
+    wb.save(buf)
+    parsed = parse_receipt_excel(buf.getvalue(), "erp.xlsx")
+    assert len(parsed["items"]) == 3
+    by_name = {r["name"]: r for r in parsed["items"]}
+    # ERP 列名归一：物料名称/入库数量/主计量单位 全部落位
+    assert by_name["304不锈钢球阀"]["quantity"] == "10"
+    assert by_name["304不锈钢球阀"]["unit"] == "个"
+    # 行级入库单号（gateway 按此分单）
+    assert by_name["UPVC三通"]["delivery_note_no"] == "CGRK-002"
+    assert by_name["304不锈钢球阀"]["delivery_note_no"] == "CGRK-001"
 
     data = _xlsx_bytes([
         ["ABS管道", "dn40*3.7mm", 20, "米", "供应商A", "SH-9", ""],
@@ -458,3 +468,85 @@ async def test_excel_parse_matches_materials_and_source_persists(db_session):
     receipt = await hw.create_receipt(db_session, payload)
     assert receipt.status == "draft" and receipt.source == "excel"
     assert receipt.ocr_result == parsed  # Excel 留痕复用 ocr_result 列
+
+
+# ── 按入库单号分单 + 未匹配不可建单（2026-11-20 拍板：Web 对齐机器人通道口径）──
+
+
+class _ItemStub:
+    """build_parse_documents 桩：只暴露 managed_class（getattr 取值）。"""
+
+    def __init__(self, managed_class=None):
+        self.managed_class = managed_class
+
+
+def test_build_parse_documents_grouping():
+    """多单号分组：单号→单据、无单号兜底组、mode 规则（有 stocked 行=stocked）。"""
+    from app.modules.warehouse.hardware.excel_io import build_parse_documents
+
+    rows = [
+        {"name": "A", "supplier": "供应商A", "delivery_note_no": " CGRK-001 "},
+        {"name": "B", "supplier": "供应商A", "delivery_note_no": "CGRK-001"},
+        {"name": "C", "supplier": "供应商B", "delivery_note_no": "CGRK-002"},
+        {"name": "D", "supplier": None, "delivery_note_no": None},  # 无单号组
+    ]
+    items = [
+        _ItemStub("stocked"),
+        _ItemStub("direct"),
+        _ItemStub(None),  # 未匹配
+        _ItemStub("stocked"),
+    ]
+    docs = build_parse_documents(rows, items)
+    by_key = {d["key"]: d for d in docs}
+    assert set(by_key) == {"CGRK-001", "CGRK-002", ""}
+    # 单号两侧空白归一
+    assert by_key["CGRK-001"]["item_indexes"] == [0, 1]
+    assert by_key["CGRK-001"]["supplier_name"] == "供应商A"
+    # direct 行已匹配——unmatched 只数 managed_class=None
+    assert by_key["CGRK-001"]["unmatched_count"] == 0
+    assert by_key["CGRK-001"]["all_matched"] is True
+    assert by_key["CGRK-001"]["stocked_count"] == 1 and by_key["CGRK-001"]["direct_count"] == 1
+    assert by_key["CGRK-001"]["mode"] == "stocked"  # 有 stocked 行=stocked
+    assert by_key["CGRK-002"]["unmatched_count"] == 1 and not by_key["CGRK-002"]["all_matched"]
+    assert by_key["CGRK-002"]["mode"] == "direct"  # 无 stocked 行=direct
+    # 无单号兜底组：delivery_note_no=None、单号空白归 key=""
+    assert by_key[""]["item_indexes"] == [3] and by_key[""]["delivery_note_no"] is None
+
+
+async def test_excel_create_rejects_unmatched_rows(db_session):
+    """守卫：source=excel 含未匹配行（material_id=None）→ 422 不可建单。"""
+    m1 = HardwareMaterial(name="304不锈钢球阀·U1", spec="DN25", unit="个", category="金属阀门",
+                          managed_class="stocked", safety_stock=Decimal("0"), no_expiry=True)
+    db_session.add(m1)
+    await db_session.flush()
+
+    bad = ReceiptCreate(
+        source="excel", mode="stocked",
+        items=[
+            ReceiptItemIn(material_id=str(m1.id), name="304不锈钢球阀·U1",
+                          spec="DN25", unit="个", quantity=Decimal("8")),
+            ReceiptItemIn(name="清单外神秘物料", spec=None, unit="个", quantity=Decimal("2")),
+        ],
+    )
+    with pytest.raises(hw.HardwareError) as exc_info:
+        await hw.create_receipt(db_session, bad)
+    assert "未匹配" in exc_info.value.message
+
+    # 全匹配同行 → 通过（守卫不误伤）
+    good = ReceiptCreate(
+        source="excel", mode="stocked",
+        items=[ReceiptItemIn(material_id=str(m1.id), name="304不锈钢球阀·U1",
+                             spec="DN25", unit="个", quantity=Decimal("8"))],
+    )
+    receipt = await hw.create_receipt(db_session, good)
+    assert receipt.status == "draft"
+
+
+async def test_manual_source_allows_unmatched_rows(db_session):
+    """manual 来源行为不变：未匹配行可建草稿（accept 门兜底），守卫只管 excel。"""
+    bad = ReceiptCreate(
+        source="manual", mode="stocked",
+        items=[ReceiptItemIn(name="手动登记未匹配行", spec=None, unit="个", quantity=Decimal("1"))],
+    )
+    receipt = await hw.create_receipt(db_session, bad)
+    assert receipt.status == "draft" and receipt.source == "manual"

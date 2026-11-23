@@ -8,8 +8,7 @@ from typing import Any
 
 from app.platform.integrations.feishu.http import (
     FeishuAPIError,
-    feishu_request,
-    get_tenant_token,
+    feishu_request_authorized,
 )
 
 BITABLE_BASE = "https://open.feishu.cn/open-apis/bitable/v1"
@@ -32,16 +31,23 @@ async def _request(
     """统一请求入口：取 token → 调用 → 校验 code=0 → 返回 data 段。
 
     应用凭证缺省回落全局 FEISHU_*；业务模块可传入独立应用凭证。
+    token 提前作废（99991663，应用权限重发布等）自动换新重试。
     网络层异常统一包装为 BitableAPIError，由上层对账按业务失败处理
     （记录 errors 而非 500）。
     """
     try:
-        token = await get_tenant_token(app_id, app_secret)
-        headers = {"Authorization": f"Bearer {token}"}
-        if json_body is not None:
-            headers["Content-Type"] = "application/json; charset=utf-8"
-        data = await feishu_request(
-            method, url, json_body=json_body, params=params, headers=headers
+        data = await feishu_request_authorized(
+            method,
+            url,
+            app_id=app_id,
+            app_secret=app_secret,
+            json_body=json_body,
+            params=params,
+            extra_headers=(
+                {"Content-Type": "application/json; charset=utf-8"}
+                if json_body is not None
+                else None
+            ),
         )
     except FeishuAPIError as exc:
         raise BitableAPIError(

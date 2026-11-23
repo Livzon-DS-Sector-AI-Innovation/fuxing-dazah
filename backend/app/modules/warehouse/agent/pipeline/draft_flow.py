@@ -64,7 +64,6 @@ FINISHED_OUTBOUND_SCENE = "finished_outbound"  # 票02：成品出库登记（�
 PICKING_OUTBOUND_SCENE = "picking_outbound"  # V3.0 分期C：领料 FIFO 登记
 FINISHED_RECEIPT_SCENE = "finished_receipt"  # V3.0 §4.6：成品入库登记（识别+对话）
 HARDWARE_RECEIPT_SCENE = "hardware_receipt"  # 五金库送货单入库（M2：识别→匹配→草稿→确认入账）
-HARDWARE_URGENT_SCENE = "hardware_urgent"  # 五金库紧急领用（制度 5.3.4 先发后补）
 
 # pending_confirm TTL（秒）：读运行参数配置（DB → env → 默认 600），改值即时生效
 def _draft_ttl_seconds() -> int:
@@ -613,22 +612,12 @@ async def _hardware_receipt_submit_callback(
 ) -> str | None:
     """scene=hardware_receipt 确认回调（五金库 M2）：薄包装延迟 import
     hardware submit_hardware_receipt——confirmed → 入库单 draft→accepted
-    （批次/双流水/领取卡推送）→ 读回核对 → submitted。双签口径：仓管员=
-    卡片确认人（操作人 open_id），使用部门经办=草稿发起人。"""
+    （批次/双流水/领取卡推送）→ 读回核对 → submitted。确认口径（2026-11-20
+    起取消使用部门双签）：仓管员=卡片确认人（操作人 open_id），草稿发起人
+    仅写入 inspected_by_dept 留痕。"""
     from app.modules.warehouse.hardware.agent_submit import submit_hardware_receipt
 
     return await submit_hardware_receipt(db, draft)
-
-
-async def _hardware_urgent_submit_callback(
-    db: AsyncSession, draft: WarehouseAgentDraft
-) -> str | None:
-    """scene=hardware_urgent 确认回调（制度 5.3.4 先发后补）：薄包装延迟
-    import submit_hardware_urgent——confirmed → 建 urgent 领料单+预扣 →
-    双卡（申请人临时单据卡/仓管发料卡）→ submitted。"""
-    from app.modules.warehouse.hardware.agent_submit import submit_hardware_urgent
-
-    return await submit_hardware_urgent(db, draft)
 
 
 # 场景配置表（spec Implementation Decisions 1/2/5/6）：scene → 配置。
@@ -754,15 +743,6 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
         required_fields=("receipt_id",),
         writable_fields=("供应商", "送货单号", "直发车间", "行物料/数量"),
         submit=_hardware_receipt_submit_callback,
-    ),
-    # 五金库紧急领用（制度 5.3.4 先发后补）：aligned 存 items/purpose/dept/
-    # applicant（对话收集+身份反查），确认 → 建 urgent 单+预扣+双卡。
-    # 不写 Bitable（平台表为权威），writable_fields 为空。
-    HARDWARE_URGENT_SCENE: SceneConfig(
-        name_cn="五金库紧急领用",
-        required_fields=("items", "purpose"),
-        writable_fields=(),
-        submit=_hardware_urgent_submit_callback,
     ),
 }
 

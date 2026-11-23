@@ -76,6 +76,39 @@ async def get_tenant_token(
     return str(token)
 
 
+async def feishu_request_authorized(
+    method: str,
+    url: str,
+    *,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+    json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """取 token 并调用；99991663（token 提前作废，如应用权限重发布）时
+    驱逐缓存换新 token 重试一次。凭证缺省回落全局 FEISHU_*。"""
+    settings = get_settings()
+    resolved_id = app_id or settings.FEISHU_APP_ID
+    resolved_secret = app_secret or settings.FEISHU_APP_SECRET
+    token = await get_tenant_token(resolved_id, resolved_secret)
+    headers = {"Authorization": f"Bearer {token}", **(extra_headers or {})}
+    try:
+        return await feishu_request(
+            method, url, json_body=json_body, params=params, headers=headers
+        )
+    except FeishuAPIError as exc:
+        if "99991663" not in str(exc):
+            raise
+        logger.warning("飞书 token 提前作废(99991663)，驱逐缓存重试: %s %s", method, url)
+        _token_cache.pop(f"{resolved_id}:{resolved_secret}", None)
+        token = await get_tenant_token(resolved_id, resolved_secret)
+        headers = {"Authorization": f"Bearer {token}", **(extra_headers or {})}
+        return await feishu_request(
+            method, url, json_body=json_body, params=params, headers=headers
+        )
+
+
 async def feishu_request(
     method: str,
     url: str,

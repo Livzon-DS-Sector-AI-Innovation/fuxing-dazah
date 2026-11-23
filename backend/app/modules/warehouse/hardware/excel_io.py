@@ -26,20 +26,8 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 RECEIVE_COLUMNS = ["物资名称", "规格型号", "数量", "单位", "供应商", "送货单号", "备注"]
 
-
-def build_receipt_template() -> bytes:
-    """入库登记模板 xlsx：表头 + 2 行示例（两行备注均带「示例」标记，解析时跳过）。"""
-    from openpyxl import Workbook
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "入库登记"
-    ws.append(RECEIVE_COLUMNS)
-    ws.append(["304不锈钢球阀", "DN25", 10, "个", "供应商A", "SH-001", "示例行，上传前删除"])
-    ws.append(["ABS管道", "dn40*3.7mm S6.3 GB/T 20207.1-2006", 20, "米", "", "", "示例行，上传前删除"])
-    buffer = io.BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
+# 2026-11-19 改版：入库文件来自 ERP 导出（非人工模板），build_receipt_template
+# 模板生成与 /receipts/excel-template 端点一并退役；本列表保留作列口径文档。
 
 
 # ── 解析 ──
@@ -175,7 +163,7 @@ def parse_receipt_excel(data: bytes, filename: str) -> dict[str, Any]:
     if col_idx["物资名称"] is None or col_idx["数量"] is None:
         raise ExcelParseError(
             f"缺少必需列「物资名称/数量」（检测到列: {'、'.join(headers[:10])}）；"
-            f"请下载模板填写后上传"
+            f"请发送 ERP 导出的入库流水 Excel"
         )
 
     def col(row: list[Any], name: str) -> Any:
@@ -224,6 +212,55 @@ def parse_receipt_excel(data: bytes, filename: str) -> dict[str, Any]:
         "errors": errors,
         "skipped_example": skipped_example,
     }
+
+
+def build_parse_documents(
+    parsed_rows: list[dict[str, Any]], items: list[Any]
+) -> list[dict[str, Any]]:
+    """解析行按行级「入库单号」分组 → 单据摘要 dicts（ReceiptParseDocument 形状）。
+
+    2026-11-20 拍板：Web 端对齐机器人通道/ERP 导入的既定分单口径——ERP 流水
+    文件天然多单，拍平一张草稿会串单号/供应商。parsed_rows=parse_receipt_excel
+    返回的原始行（取 delivery_note_no/supplier）；items=匹配后的结构化行
+    （取 managed_class 判 stocked/direct/未匹配；getattr 取值便于测试传桩）。
+    无单号行归入同一组（key=""，前端展示「（无单号）」）；mode 沿用既定规则
+    （有 stocked 物料行=stocked，否则 direct）。
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    for idx, (row, item) in enumerate(zip(parsed_rows, items)):
+        key = (row.get("delivery_note_no") or "").strip()
+        g = groups.setdefault(
+            key,
+            {
+                "supplier": row.get("supplier"),
+                "indexes": [],
+                "stocked": 0,
+                "direct": 0,
+                "unmatched": 0,
+            },
+        )
+        g["indexes"].append(idx)
+        mclass = getattr(item, "managed_class", None)
+        if mclass == "stocked":
+            g["stocked"] += 1
+        elif mclass == "direct":
+            g["direct"] += 1
+        else:
+            g["unmatched"] += 1
+    return [
+        {
+            "key": key,
+            "delivery_note_no": key or None,
+            "supplier_name": g["supplier"],
+            "item_indexes": g["indexes"],
+            "stocked_count": g["stocked"],
+            "direct_count": g["direct"],
+            "unmatched_count": g["unmatched"],
+            "all_matched": g["unmatched"] == 0,
+            "mode": "stocked" if g["stocked"] > 0 else "direct",
+        }
+        for key, g in groups.items()
+    ]
 
 
 # ── 领料单导出（出库 Excel）──

@@ -325,6 +325,31 @@ def _build_disabled_card(feature: str) -> dict[str, Any]:
 _background_tasks: set[asyncio.Task[None]] = set()
 
 
+async def _arm_hardware_inbound(chat_id: str) -> None:
+    """武装会话级五金入库意图（10 分钟）：期间裸发照片也走五金图片链。
+
+    2026-11-19 真机：用户说「五金入库」后紧接着裸发送货单照片，按消息级
+    关键词路由进了原辅料链（GMP 必提信息卡）。意图随会话延续才符合自然
+    交互；原辅料用户不说五金入库，不受影响。best-effort，Redis 故障静默。
+    """
+    try:
+        from app.core.redis import redis_client
+
+        await redis_client.set(f"wh:hw_inbound:{chat_id}", "1", ex=600)
+    except Exception:  # noqa: BLE001 — 标志失败回落消息级关键词路由
+        pass
+
+
+async def _hardware_inbound_armed(chat_id: str) -> bool:
+    """会话是否在五金入库意图窗口内（10 分钟）。"""
+    try:
+        from app.core.redis import redis_client
+
+        return bool(await redis_client.get(f"wh:hw_inbound:{chat_id}"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _spawn_receipt_task(coro: Coroutine[Any, Any, None]) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
@@ -438,13 +463,6 @@ def _scene_hint(text: str) -> str | None:
             "【场景提示】本次任务为成品入库登记：必须调用 create_finished_receipt_draft "
             "收集字段，禁止调用其他登记工具。"
         )
-    # 紧急领用须先于普通领料判（否则被领料/领用分支抢走）
-    if ("紧急" in t or "抢修" in t) and ("领料" in t or "领用" in t):
-        return (
-            "【场景提示】本次任务为五金库紧急领用（先发后补）：必须调用 "
-            "create_urgent_requisition 收集物资明细（名称+规格+数量）与用途，"
-            "禁止调用 create_picking_draft 或其他登记工具。"
-        )
     if "领料" in t or "领用" in t:
         return (
             "【场景提示】本次任务为领料登记（先进先出批次匹配）：必须调用 "
@@ -521,7 +539,8 @@ async def handle_im_message(event: dict[str, Any]) -> None:
             process_hardware_image,
         )
 
-        if has_hardware_intent(user_text):
+        if has_hardware_intent(user_text) or await _hardware_inbound_armed(chat_id):
+            await _arm_hardware_inbound(chat_id)  # 续期：连续多张照片都走五金链
             try:
                 await _send_card_to(
                     chat_id=chat_id, chat_type=chat_type, open_id=open_id,
@@ -670,6 +689,11 @@ async def _patch_confirm_card(draft: Any, state: str) -> None:
             card = cards.render_confirm_status_card(
                 draft, state="processing", title="⏳ 登记中"
             )
+        elif getattr(draft, "scene", "") == "hardware_receipt":
+            card = cards.render_confirm_status_card(
+                draft, state="done", title="✅ 入库成功",
+                done_text="✅ **入库成功**（物资已入账，批次与流水已生成）",
+            )
         else:
             card = cards.render_confirm_status_card(
                 draft, state="done", title="✅ 登记完成"
@@ -679,12 +703,17 @@ async def _patch_confirm_card(draft: Any, state: str) -> None:
         logger.warning("确认卡片状态更新失败: draft_no=%s state=%s", draft.draft_no, state)
 
 
-async def _run_submit_background(draft_id: uuid.UUID) -> None:
+async def _run_submit_background(
+    draft_id: uuid.UUID, *, after: "asyncio.Task[None] | None" = None
+) -> None:
     """后台执行登记提交（submit 类场景确认后）：回调 → 回执按原渠道发送。
 
     独立 DB 会话（确认门事务已提交 confirmed 状态）；异常置 failed + 失败
     回执，不静默。回执渠道：draft.chat_id（群/私聊原渠道）优先，缺失回落
     发起人私聊。
+    after：确认时甩出的「登记中」PATCH task——终态 PATCH 前必须 await 它，
+    防止 submit 秒完成时 done/failed 先落、processing 后到把终态盖住
+    （2026-11-19 真机实锤：卡片停「登记中」而 DB 已入账）。
     """
     from app.modules.warehouse.agent.pipeline.draft_flow import (
         SCENE_CONFIG,
@@ -696,6 +725,11 @@ async def _run_submit_background(draft_id: uuid.UUID) -> None:
             draft = await agent_repository.get_agent_draft(db, draft_id)
             if draft is None or draft.status != "confirmed":
                 return  # 幂等：状态已被处理/作废
+            if after is not None:
+                try:
+                    await after
+                except Exception:  # noqa: BLE001 — 先序 task 异常不阻断提交
+                    pass
             cfg = SCENE_CONFIG.get(draft.scene)
             submit_fn = cfg.submit if cfg else None
             if submit_fn is None:
@@ -1046,45 +1080,18 @@ async def _handle_text_message(
     *, chat_id: str, chat_type: str, open_id: str, text: str, started: float
 ) -> None:
     """文本消息主链路：五金意图直答 → 会话定位 → Runner → 结果卡片 → 历史+审计。"""
-    # 五金入库/模板意图直答（2026-11-13）：发模板文件+指引，不进 Runner
-    # （对话模型无文件收发能力；入库 Excel 链是确定性流程，直答更稳）
+    # 五金入库/模板意图直答（2026-11-19 改版：ERP 导出直传指引，无模板文件）
+    # 不进 Runner（对话模型无文件收发能力；入库 Excel 链是确定性流程，直答更稳）
     if _is_hardware_inbound_intent(text):
-        from app.modules.warehouse.hardware.gateway_excel import send_receipt_template
+        from app.modules.warehouse.hardware.gateway_excel import send_inbound_guide
 
-        ok = await send_receipt_template(chat_id)
-        guide = (
-            "🔩 **五金库 Excel 入库**\n"
-            "1️⃣ 已把《入库登记模板》发给你（见上方文件）\n"
-            "2️⃣ 按模板填写：物资名称/规格型号/数量（必填），单位/供应商/送货单号/备注 选填\n"
-            "3️⃣ **直接把填好的 Excel 发到本会话**，我会自动解析并回确认卡\n"
-            "4️⃣ 核对确认卡上的匹配结果（绿色=已匹配/黄色=低置信/红色=未匹配），点「确认入库」完成入账\n\n"
-            f"模板发送：{'✅ 成功' if ok else '❌ 失败（可到 Web 端五金出入库页下载）'}"
-        )
-        from app.modules.warehouse.feishu import notification as _ntf
-
-        if chat_type == "group":
-            await _ntf.send_card(
-                chat_id,
-                {
-                    "config": {"wide_screen": True},
-                    "header": {"title": {"tag": "plain_text", "content": "五金库 Excel 入库指引"}, "template": "blue"},
-                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": guide.replace("**", "")}}],
-                },
-            )
-        else:
-            await _ntf.send_card_to_user(
-                open_id,
-                {
-                    "config": {"wide_screen": True},
-                    "header": {"title": {"tag": "plain_text", "content": "五金库 Excel 入库指引"}, "template": "blue"},
-                    "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": guide.replace("**", "")}}],
-                },
-            )
+        await _arm_hardware_inbound(chat_id)
+        ok = await send_inbound_guide(chat_id)
         await _record_gateway_audit(
             started=started,
             tool_name="gateway",
             args_summary={"chat_type": chat_type, "intent": "hardware_excel_inbound",
-                          "template_sent": ok},
+                          "guide_sent": ok},
             result_status="ok",
         )
         return
@@ -1323,50 +1330,6 @@ async def _run_biz_confirm_writeback(request_id: uuid.UUID) -> None:
             logger.exception("业务确认失败回执发送异常: request_id=%s", request_id)
 
 
-async def _handle_urgent_keeper_action(
-    event: dict[str, Any], value: dict[str, Any]
-) -> dict[str, Any] | None:
-    """紧急领用仓管卡回调（制度 5.3.4）：发料出库/作废（鉴权 fail-closed
-    在 urgent_flow：操作人须属通知目标）。发料为纯 DB 动作，同步执行即可；
-    结果经 PATCH 落原卡（模式同 _ack_with_patch）。"""
-    from app.modules.warehouse.hardware import urgent_flow
-
-    operator = event.get("operator") or {}
-    operator_open_id = str(operator.get("open_id") or "")
-    message_id = _message_id_of(event)
-    scene = str(value.get("scene") or "")
-    action = "issue" if scene == urgent_flow.URGENT_ISSUE_SCENE else "cancel"
-    requisition_id = str(value.get("requisition_id") or "")
-    started = time.monotonic()
-    logger.info(
-        "紧急领用仓管卡操作: action=%s req=%s operator=%s",
-        action, requisition_id[:12], operator_open_id[:20],
-    )
-    try:
-        async with _db_session() as db:
-            ok, message = await asyncio.shield(
-                urgent_flow.handle_keeper_action(
-                    db, requisition_id, action, operator_open_id=operator_open_id
-                )
-            )
-            await _record_gateway_audit(
-                started=started,
-                tool_name="hardware_urgent_card",
-                args_summary={
-                    "action": action,
-                    "requisition_id": requisition_id,
-                    "operator": operator_open_id[:30],
-                },
-                result_status="ok" if ok else "denied",
-            )
-    except Exception:  # noqa: BLE001 — 后台兜底
-        logger.exception("紧急领用仓管卡处理异常")
-        return await _ack_with_patch(message_id, False, "⚠️ 处理失败，请稍后重试")
-    return await _ack_with_patch(
-        message_id, ok, f"{'✅' if ok else '⚠️'} {message}"
-    )
-
-
 async def _handle_biz_confirm_action(
     event: dict[str, Any], value: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -1439,15 +1402,6 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
     if scene == confirm_request.CONFIRM_GATE_SCENE:
         return await _handle_biz_confirm_action(event, value)
 
-    # 紧急领用仓管卡（制度 5.3.4 先发后补）：发料出库/作废直连（非确认门场景）
-    from app.modules.warehouse.hardware.urgent_flow import (
-        URGENT_CANCEL_SCENE,
-        URGENT_ISSUE_SCENE,
-    )
-
-    if scene in (URGENT_ISSUE_SCENE, URGENT_CANCEL_SCENE):
-        return await _handle_urgent_keeper_action(event, value)
-
     # 票07：除通用确认场景外，已注册执行回调的场景（如 office 的 send_card）
     # 也进入确认门处理；未注册场景返回 None（ACK 通用信封，S2 识别确认等扩展位）
     if scene != confirm.CONFIRM_SCENE and not confirm.is_registered_scene(scene):
@@ -1482,9 +1436,10 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
             return await _ack_with_patch(message_id, False, "⚠️ 处理失败，请稍后重试")
         if outcome.ok and draft is not None:
             # PATCH 原确认卡片为「登记中」（按钮移除）——不依赖卡片回调 ACK
-            # 协议（WS 回调响应更新实测不生效）
-            asyncio.create_task(_patch_confirm_card(draft, "processing"))
-            _spawn_receipt_task(_run_submit_background(draft.id))
+            # 协议（WS 回调响应更新实测不生效）；task 句柄传给后台提交，
+            # 终态 PATCH 前 await 它防乱序盖卡
+            proc_task = asyncio.create_task(_patch_confirm_card(draft, "processing"))
+            _spawn_receipt_task(_run_submit_background(draft.id, after=proc_task))
             return {"code": 200}  # ACK 通用信封（卡片更新走 PATCH）
         return await _ack_with_patch(message_id, False, f"⚠️ {outcome.message}")
 

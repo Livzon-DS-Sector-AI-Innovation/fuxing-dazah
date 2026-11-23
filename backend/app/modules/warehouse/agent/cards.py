@@ -14,7 +14,7 @@ Runner 的 Reply → 飞书交互卡片。卡片为 **JSON 2.0 结构**
   query_movements → 出入库汇总卡片（方向聚合 + 明细表）；
   query_report → 呆料/不合格清单卡片（report_type 区分标题）；
 - 无 data / 未知工具 / result 非 dict → ``render_text_card`` 文本卡片兜底
-  （即票02 的「仓储助手」markdown 卡片行为）；
+  （无 header 纯 markdown 对话卡片，2026-11-19 起不带「仓储助手」标题栏）；
 - 渲染防御：任何渲染异常降级文本卡片，**永不因渲染抛错中断回复**。
 
 表格约定：lark_md（含 2.0 markdown 组件）不支持表格语法，数据表格一律用
@@ -41,9 +41,6 @@ logger = logging.getLogger(__name__)
 
 # 卡片 JSON schema 版本（2.0：原生 table 组件 / 按钮直排 / column_set）
 CARD_SCHEMA = "2.0"
-
-# 兜底文本卡片标题（与 gateway 票02 行为一致）
-TEXT_CARD_TITLE = "仓储助手"
 
 # 明细最多展示行数（对齐 tools/query.py 的 DETAIL_LIMIT）
 MAX_DETAIL_ROWS = 10
@@ -276,9 +273,18 @@ def _markdown_with_tables(text: str) -> list[dict[str, Any]]:
     return elements or [_md("")]
 
 
-def render_text_card(title: str, markdown: str) -> dict[str, Any]:
-    """通用文本卡片（无结构化数据/渲染降级时的兜底）：markdown 表格自动转原生 table。"""
-    return build_card(title=title, template="blue", elements=_markdown_with_tables(markdown or ""))
+def render_text_card(markdown: str) -> dict[str, Any]:
+    """对话回复文本卡片（无结构化数据/渲染降级时的兜底）：markdown 表格自动转原生 table。
+
+    无 header：普通对话回复不带「仓储助手」标题栏（2026-11-19 用户拍板，
+    对齐安全模块 _build_reply_card 口径）；专用数据卡片/状态卡的彩色
+    标题栏有语义，保留。需要标题栏的文本卡片直接走 build_card。
+    """
+    return {
+        "schema": CARD_SCHEMA,
+        "config": {"update_multi": True, "width_mode": "fill"},
+        "body": {"elements": _markdown_with_tables(markdown or "")},
+    }
 
 
 def _list_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -735,12 +741,6 @@ PICKING_OUTBOUND_SCENE = "picking_outbound"
 PICKING_CONFIRM_CARD_TITLE = "🏭 领料登记"
 CONFIRM_PICKING_BUTTON_LABEL = "✅ 确认领料"
 CANCEL_PICKING_BUTTON_LABEL = "❌ 取消"
-
-# 五金库紧急领用（制度 5.3.4 先发后补，scene=hardware_urgent）
-HARDWARE_URGENT_SCENE = "hardware_urgent"
-HARDWARE_URGENT_CONFIRM_CARD_TITLE = "🔴 五金库紧急领用·待确认"
-CONFIRM_HARDWARE_URGENT_BUTTON_LABEL = "✅ 确认发起"
-CANCEL_HARDWARE_URGENT_BUTTON_LABEL = "❌ 取消"
 
 # 识别置信度低于该阈值加 ⚠ 高亮（spec：低置信度字段提醒重点核对）
 RECEIPT_CONFIDENCE_WARN = 0.7
@@ -1204,7 +1204,7 @@ def _render_picking_confirm_card(draft: Any) -> dict[str, Any]:
 
 
 def render_confirm_status_card(
-    draft: Any, *, state: str, title: str
+    draft: Any, *, state: str, title: str, done_text: str | None = None
 ) -> dict[str, Any]:
     """确认卡片的状态更新视图（PATCH 原卡）：登记中 / 已确认 / 已取消 / 失败。
 
@@ -1219,6 +1219,8 @@ def render_confirm_status_card(
         "cancelled": "❌ **已取消**",
         "failed": "⚠️ **登记未完成**（详见下方失败回执）",
     }.get(state, f"状态：{state}")
+    if state == "done" and done_text:
+        status_line = done_text
     elements = [
         {"tag": "markdown", "content": status_line},
     ]
@@ -1303,55 +1305,6 @@ def _render_hardware_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     )
 
 
-def _render_hardware_urgent_confirm_card(draft: Any) -> dict[str, Any]:
-    """五金库紧急领用确认卡（scene=hardware_urgent 分支，制度 5.3.4）。
-
-    aligned 存 items[{name,spec,qty,unit}]/purpose/dept/applicant（对话收集
-    +身份反查）。确认后建 urgent 领料单（预扣）并双卡通知（先发后补）。
-    """
-    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
-    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
-    draft_id = str(getattr(draft, "id", ""))
-
-    lines = [
-        f"**草稿**：{draft_no or '-'}",
-        f"**部门**：{aligned.get('dept') or '-'}",
-        f"**申请人**：{aligned.get('applicant') or '-'}",
-        f"**用途**：{aligned.get('purpose') or '-'}",
-        "",
-        "**物资明细**",
-    ]
-    for item in aligned.get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        qty = item.get("qty")
-        qty_text = f"{qty:g}" if isinstance(qty, (int, float)) else "-"
-        lines.append(
-            f"- {item.get('name') or '-'} {item.get('spec') or ''} × {qty_text} {item.get('unit') or ''}"
-        )
-    lines.extend([
-        "",
-        "**先发后补须知**：确认后系统立即建紧急领料单（预扣库存）并通知仓管员"
-        "发料；领料后 **24 小时内**须在飞书提交「福兴电子领/退料单审批」"
-        "（选领料、同物资同数量）完成补办，逾期未补办仓储部有权暂停本部门领用。",
-    ])
-
-    value_base = {"scene": HARDWARE_URGENT_SCENE, "draft_id": draft_id}
-    return build_card(
-        title=HARDWARE_URGENT_CONFIRM_CARD_TITLE,
-        template="red",
-        elements=[
-            _md("\n".join(lines)),
-            {"tag": "hr"},
-            _confirm_cancel_buttons(
-                value_base,
-                confirm_label=CONFIRM_HARDWARE_URGENT_BUTTON_LABEL,
-                cancel_label=CANCEL_HARDWARE_URGENT_BUTTON_LABEL,
-            ),
-        ],
-    )
-
-
 def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     """登记确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
 
@@ -1378,8 +1331,6 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         return _render_finished_receipt_confirm_card(draft)
     if scene == HARDWARE_RECEIPT_SCENE:
         return _render_hardware_receipt_confirm_card(draft)
-    if scene == HARDWARE_URGENT_SCENE:
-        return _render_hardware_urgent_confirm_card(draft)
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)
@@ -1627,7 +1578,7 @@ def render_reply_card(
     - Reply.data = {"tool": 工具名, "result": 结果 dict}（runner 工具循环
       填充）→ 命中已知工具渲染专用卡片；
     - 渲染异常 / 无 data / 未知工具 / result 非 dict → render_text_card
-      （title=仓储助手），永不抛错。
+      （无 header 对话卡片），永不抛错。
     session 参数预留（S2 卡片 patch / 上下文展示），当前不参与渲染。
     """
     data = reply.data
@@ -1642,4 +1593,4 @@ def render_reply_card(
                     "仓库 Agent 专用卡片渲染失败，降级文本卡片: tool=%s",
                     data.get("tool"),
                 )
-    return render_text_card(TEXT_CARD_TITLE, reply.text or "")
+    return render_text_card(reply.text or "")

@@ -197,7 +197,8 @@ def _all_text(card: dict[str, Any]) -> str:
 
 
 def _title(card: dict[str, Any]) -> str:
-    return str(card["header"]["title"]["content"])
+    """卡片标题栏文字；无 header 的对话卡片返回空串（2026-11-19 起兜底卡不带标题栏）。"""
+    return str(((card.get("header") or {}).get("title") or {}).get("content") or "")
 
 
 def _stock_column_titles() -> list[str]:
@@ -217,7 +218,7 @@ def test_stock_card_structure() -> None:
         Reply(text="共查到 2 个批次的硫酸。", data={"tool": "query_stock", "result": data})
     )
     assert "库存" in _title(card)
-    assert _title(card) != "仓储助手"  # 专用卡片而非兜底文本卡片
+    assert _title(card)  # 专用卡片带语义标题，而非无 header 的兜底对话卡片
     tables = _tables(card)
     assert len(tables) == 1
     assert [c["display_name"] for c in tables[0]["columns"]] == _stock_column_titles()
@@ -339,29 +340,28 @@ def test_report_card_title_by_type() -> None:
 
 
 def test_reply_without_data_falls_back_to_text_card() -> None:
-    """Reply 无 data（纯对话/多轮无工具/兜底话术）→ 仓储助手文本卡片。"""
+    """Reply 无 data（纯对话/多轮无工具/兜底话术）→ 无 header 对话卡片。"""
     card = render_reply_card(Reply(text="你好，我是仓储助手。"))
-    assert _title(card) == "仓储助手"
+    assert "header" not in card  # 普通对话回复不带「仓储助手」标题栏（用户拍板）
     assert "你好，我是仓储助手。" in _body(card)
 
     unknown_tool = render_reply_card(
         Reply(text="试试", data={"tool": "plan_task", "result": {"x": 1}})
     )
-    assert _title(unknown_tool) == "仓储助手"  # 未知工具不渲染专用卡片
+    assert "header" not in unknown_tool  # 未知工具不渲染专用卡片
 
     empty_result = render_reply_card(
         Reply(text="看看", data={"tool": "query_stock", "result": None})
     )
-    assert _title(empty_result) == "仓储助手"  # result 非 dict 不渲染专用卡片
+    assert "header" not in empty_result  # result 非 dict 不渲染专用卡片
 
 
 def test_render_text_card_is_gateway_compatible() -> None:
-    """render_text_card 产出 JSON 2.0 结构（notification.send_card 可发）。"""
-    card = render_text_card("仓储助手", "**hi**")
+    """render_text_card 产出 JSON 2.0 结构（notification.send_card 可发），无 header。"""
+    card = render_text_card("**hi**")
     assert card["schema"] == "2.0"
     assert card["config"]["update_multi"] is True
-    assert card["header"]["title"] == {"tag": "plain_text", "content": "仓储助手"}
-    assert card["header"]["template"] == "blue"
+    assert "header" not in card  # 对话回复不带标题栏（对齐安全模块）
     assert card["body"]["elements"] == [{"tag": "markdown", "content": "**hi**"}]
 
 
@@ -377,7 +377,7 @@ def test_render_text_card_converts_markdown_table() -> None:
         "\n"
         "到点会自动发出提醒卡片。需要改时间或内容随时说。"
     )
-    card = render_text_card("仓储助手", text)
+    card = render_text_card(text)
     tables = _tables(card)
     assert len(tables) == 1
     assert [c["display_name"] for c in tables[0]["columns"]] == ["项", "内容"]
@@ -394,7 +394,7 @@ def test_render_text_card_converts_markdown_table() -> None:
 def test_render_text_card_keeps_non_table_pipes_untouched() -> None:
     """无分隔行的管道文本（伪表格/普通句子）不转换，原样 markdown。"""
     pseudo = "物料｜批号｜数量\n1. 硫酸｜10228｜120"
-    card = render_text_card("仓储助手", pseudo)
+    card = render_text_card(pseudo)
     assert _tables(card) == []
     assert pseudo in _body(card)
 
@@ -402,7 +402,7 @@ def test_render_text_card_keeps_non_table_pipes_untouched() -> None:
 def test_render_text_card_table_missing_trailing_pipe() -> None:
     """数据行缺尾管道仍可转换（LLM 输出常见形态）。"""
     text = "| 项 | 内容 |\n|---|---|\n| 提醒内容 | 该盘点啦 |\n| 接收 | 当前会话"
-    card = render_text_card("仓储助手", text)
+    card = render_text_card(text)
     tables = _tables(card)
     assert len(tables) == 1
     assert tables[0]["rows"][1] == {"c0": "接收", "c1": "当前会话"}
@@ -426,9 +426,9 @@ def test_render_text_card_table_missing_trailing_pipe() -> None:
     ],
 )
 def test_malformed_data_degrades_without_raising(bad_data: Any) -> None:
-    """data 结构畸形（缺字段/类型异常）→ 降级文本卡片（title=仓储助手），不抛。"""
+    """data 结构畸形（缺字段/类型异常）→ 降级对话卡片（无 header），不抛。"""
     card = render_reply_card(Reply(text="原始回复文本", data=bad_data))
-    assert _title(card) == "仓储助手"
+    assert "header" not in card
     assert "原始回复文本" in _body(card)
 
 
@@ -546,7 +546,7 @@ async def test_live_stock_query_renders_dedicated_stock_card(
     title = _title(card)
     print(f"[结果卡片] title={title}")
     assert "库存" in title, f"结果卡片应为专用库存卡片，实际标题: {title}"
-    assert title != "仓储助手"
+    assert title  # 专用卡片带语义标题（兜底对话卡片无 header）
     table_text = _table_text(card)
     assert all(t in table_text for t in _stock_column_titles()), (
         f"应含库存表格列名（{_stock_column_titles()}）: {table_text[:300]}"

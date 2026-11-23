@@ -1,6 +1,7 @@
 """五金库三执行器（二期 M6，§9.2 确定性函数先行）。
 
-- hardware_urge：催办卡（低库存/紧急未补/草稿积压/超时未发料/呆滞）——
+- hardware_urge：催办卡（低库存/草稿积压/超时未发料/呆滞；紧急未补 2026-11-20
+  随补办链退役）——
   enqueue_outbox feishu_card（chat_id 行内权威：WAREHOUSE_HARDWARE_ALERT_CHAT_ID
   → WAREHOUSE_TEST_CHAT_ID 回退；空配置静默跳过不报错）；
 - hardware_digest_push：日/周报速递格——结构化数字全部 SQL 聚合（**数字
@@ -61,7 +62,6 @@ def _build_urge_body(payload: dict[str, Any]) -> dict[str, str]:
     et = str(payload.get("event_type") or "")
     title_map = {
         "low_stock": "🔴 五金库安全库存击穿",
-        "urgent_unpatched": "⏰ 五金库紧急领用超期未补单",
         "draft_backlog": "📥 五金库入库草稿积压",
         "issue_timeout": "🚚 五金库审批通过未发料超时",
         "stale": "📦 五金库呆滞物资到期",
@@ -76,14 +76,6 @@ def _build_urge_body(payload: dict[str, Any]) -> dict[str, str]:
             f"- 编码：{payload.get('code') or '待回填'}",
             "",
             "请评估补货（月度计划公式会自动纳入，紧急可走申购）。",
-        ]
-    elif et == "urgent_unpatched":
-        lines = [
-            f"单号 **{payload.get('req_no', '-')}**（{payload.get('dept', '-')} / {payload.get('applicant', '-')}）",
-            "",
-            f"- 补单截止：{payload.get('deadline') or '—'}",
-            "",
-            "依据制度 5.3.4，仓储部有权暂停该部门后续领用，请尽快补审批单。",
         ]
     elif et == "draft_backlog":
         lines = [
@@ -204,12 +196,6 @@ async def fetch_digest_numbers(
             HardwareRequisition.is_deleted.is_(False),
         )
     )
-    urgent_overdue = await session.scalar(
-        select(func.count()).select_from(HardwareRequisition).where(
-            HardwareRequisition.status == "overdue_unpatched",
-            HardwareRequisition.is_deleted.is_(False),
-        )
-    )
     draft_backlog = await session.scalar(
         select(func.count()).select_from(HardwareReceipt).where(
             HardwareReceipt.status == "draft",
@@ -278,7 +264,6 @@ async def fetch_digest_numbers(
         "outbound_today": int(outbound_today or 0),
         "outbound_qty_today": float(outbound_qty_today or 0),
         "to_issue": int(to_issue or 0),
-        "urgent_overdue": int(urgent_overdue or 0),
         "draft_backlog": int(draft_backlog or 0),
         "low_stock_count": int(low_count or 0),
         "auto_accepted_count": int(auto_accepted_count or 0),
