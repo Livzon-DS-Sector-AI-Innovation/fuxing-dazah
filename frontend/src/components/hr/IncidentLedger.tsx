@@ -2,12 +2,13 @@
 
 import styles from "./lifecycleTable.module.css"
 import { useCallback, useEffect, useState } from 'react'
-import { Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm } from 'antd'
+import { Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Popconfirm, Tooltip } from 'antd'
 import { PlusOutlined, ImportOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { IncidentRecord } from '@/types/hr'
 import { fetchIncidents, createIncident, updateIncident, deleteIncident, exportIncidents } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
+import { usePermission } from '@/hooks/usePermission'
 import { LedgerImportModal } from '@/components/hr'
 
 const TYPE_META: Record<string, { label: string; color: string }> = {
@@ -17,6 +18,8 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
 
 export default function IncidentLedger() {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canImport = hasPermission('hr:incident:manage')
   const [data, setData] = useState<IncidentRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
@@ -108,18 +111,22 @@ export default function IncidentLedger() {
   }
 
   return (
-    <>
-      <Space wrap style={{ marginBottom: 12 }}>
+    <div className="space-y-4">
+      {/* 工具栏与入职/离职台账同一排法：左=主操作+导入，中=筛选，右=导出 */}
+      <div className="flex flex-wrap gap-3 items-center">
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
+        {/* 导入是写操作，按台账写权限显隐（只读用户点了只会得到 403） */}
+        {canImport && <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>}
         <Select
-          placeholder="类型筛选" allowClear style={{ width: 140 }}
+          placeholder="类型筛选" allowClear style={{ width: 160 }}
           value={typeFilter}
           onChange={setTypeFilter}
           options={Object.entries(TYPE_META).map(([v, m]) => ({ value: v, label: m.label }))}
         />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增记录</Button>
-        <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
-        <Button loading={exporting} onClick={handleExport} title="按当前类型筛选导出全部记录">导出Excel</Button>
-      </Space>
+        <Tooltip title="按当前类型筛选导出全部记录">
+          <Button loading={exporting} onClick={handleExport} className="ml-auto">导出Excel</Button>
+        </Tooltip>
+      </div>
 
       <LedgerImportModal
         open={importOpen}
@@ -135,7 +142,7 @@ export default function IncidentLedger() {
         loading={loading}
         dataSource={data}
         scroll={{ x: 900 }}
-        pagination={{ pageSize: 20 }}
+        pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
         columns={[
           {
             title: '类型', dataIndex: 'incident_type', width: 100,
@@ -201,6 +208,6 @@ export default function IncidentLedger() {
           </Form.Item>
         </Form>
       </Modal>
-    </>
+    </div>
   )
 }

@@ -228,7 +228,7 @@ export function LedgerImportModal({ open, ledger, label, onClose, onSuccess }: P
           <Alert
             type={result.errors.length > 0 ? 'warning' : 'success'}
             showIcon
-            message={`导入完成：新增 ${result.created} 条${result.updated ? `，覆盖更新 ${result.updated} 条` : ''}${result.skipped ? `，跳过重复 ${result.skipped} 条` : ''}${result.skipped_scope ? `，越权跳过 ${result.skipped_scope} 条` : ''}${result.errors.length ? `，失败 ${result.errors.length} 条` : ''}`}
+            title={`导入完成：新增 ${result.created} 条${result.updated ? `，覆盖更新 ${result.updated} 条` : ''}${result.skipped ? `，跳过重复 ${result.skipped} 条` : ''}${result.skipped_scope ? `，越权跳过 ${result.skipped_scope} 条` : ''}${result.errors.length ? `，失败 ${result.errors.length} 条` : ''}`}
           />
           {result.errors.length > 0 && (
             <div style={{ marginTop: 8, maxHeight: 140, overflow: 'auto' }}>
