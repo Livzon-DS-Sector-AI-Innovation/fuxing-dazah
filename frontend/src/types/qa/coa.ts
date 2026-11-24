@@ -84,12 +84,6 @@ export interface CoaItemInput {
   remark?: string | null
 }
 
-/** 导入确认时并入标准的新项目（携带首份结果值）。 */
-export interface CoaNewItemInput extends CoaItemInput {
-  value_num?: number | null
-  value_text?: string | null
-}
-
 export interface CoaStandard {
   id: string
   product_id: string
@@ -159,11 +153,9 @@ export interface CoaReport {
   batch_no: string
   mfg_date: string | null
   exp_date: string | null
-  issued_date: string | null
   packaging: string | null
   batch_size: string | null
   storage: string | null
-  conclusion: string | null
   source: CoaSourceType
   remark: string | null
   values?: CoaValue[]
@@ -183,16 +175,13 @@ export interface CoaReportInput {
   serial_no: string
   mfg_date?: string | null
   exp_date?: string | null
-  issued_date?: string | null
   packaging?: string | null
   batch_size?: string | null
   storage?: string | null
-  conclusion?: string | null
   remark?: string | null
   /** 模板动态批次字段值（key=生效字段集自定义键；固定列别名键后端镜像写固定列）。 */
   batch_data?: Record<string, string> | null
   values?: CoaValueInput[]
-  new_items?: CoaNewItemInput[]
   raw_extract?: Record<string, unknown> | null
 }
 
@@ -227,11 +216,9 @@ export interface CoaReportImportPreview {
     batch_no: string | null
     mfg_date: string | null
     exp_date: string | null
-    issued_date: string | null
     packaging: string | null
     batch_size: string | null
     storage: string | null
-    conclusion: string | null
   }
   matched_items: {
     item_id: string

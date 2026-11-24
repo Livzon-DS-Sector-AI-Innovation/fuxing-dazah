@@ -31,9 +31,9 @@ from app.platform.identity.models import User
 from tests.conftest import _test_session_factory
 
 READ = {"qa:coa:read"}
-WILDCARD_READ = {"qa:*:read"}
-MANAGE = READ | {"qa:coa:standard:manage"}
-ISSUE = READ | {"qa:coa:issue:create"}
+WILDCARD_READ = {"qa:all:read"}
+MANAGE = READ | {"qa:coa:manage"}
+ISSUE = READ | {"qa:coa:issue"}
 
 FIXTURE = Path(__file__).parent / "fixtures" / "coa_haf_sample.docx"
 
@@ -575,6 +575,47 @@ class TestReports:
             )
             assert resp.status_code == 404
 
+    async def test_update_values_full_replace(self):
+        """PATCH 带 values = 全量替换（回归：service 曾对 model_dump 后的
+        dict 按属性访问炸 500）；重复项目 400。"""
+        async with _client(MANAGE | ISSUE) as (ac, _):
+            product = await _mk_product(ac)
+            std = await _mk_standard(ac, product["id"])
+            report = await _mk_report(ac, product["id"], std)
+            ph = next(i for i in std["items"] if i["name_cn"] == "pH")
+            resp = await ac.patch(
+                f"/api/v1/qa/coa/reports/{report['id']}",
+                json={
+                    "values": [
+                        {"item_id": ph["id"], "value_num": 6.5},
+                        {"item_id": ph["id"], "value_text": "6.5"},
+                    ]
+                },
+            )
+            assert resp.status_code == 400
+            assert "结果值项目重复" in resp.json()["message"]
+            resp = await ac.patch(
+                f"/api/v1/qa/coa/reports/{report['id']}",
+                json={"values": [{"item_id": ph["id"], "value_num": 6.5}]},
+            )
+            assert resp.status_code == 200, resp.text
+            detail = resp.json()["data"]
+            assert detail["values"] == [
+                {
+                    "item_id": ph["id"],
+                    "value_num": 6.5,
+                    "value_text": None,
+                    "remark": None,
+                }
+            ]
+            # 不带 values 的更新：值不动
+            resp = await ac.patch(
+                f"/api/v1/qa/coa/reports/{report['id']}",
+                json={"remark": "补录备注"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["data"]["values"] == detail["values"]
+
     async def test_standard_must_belong_to_product(self):
         async with _client(MANAGE | ISSUE) as (ac, _):
             product = await _mk_product(ac)
@@ -759,7 +800,7 @@ class TestReportBatchData:
             # 不带 batch_data 的更新：批次字段不动
             resp = await ac.patch(
                 f"/api/v1/qa/coa/reports/{report['id']}",
-                json={"conclusion": "符合规定"},
+                json={"remark": "补录备注"},
             )
             assert resp.status_code == 200
             detail = resp.json()["data"]
@@ -1273,8 +1314,9 @@ class TestImportReportAndMatrix:
             assert resp.status_code == 200, resp.text
             assert resp.json()["data"]["standard"]["id"] == std["id"]
 
-    async def test_import_unmatched_merge_into_standard(self):
-        """docx 项目在标准中不存在 → 预览标未命中，确认时并入标准并落值。"""
+    async def test_import_unmatched_not_merged(self):
+        """docx 项目在标准中不存在 → 预览标未命中；确认只录命中值，
+        未命中项不并入标准（导入不改标准配置，扩项目走标准配置维护）。"""
         async with _client(MANAGE | ISSUE) as (ac, _):
             ctx = await _import_products_and_standard(ac)
             product, standard = ctx["product"], ctx["standard"]
@@ -1322,9 +1364,8 @@ class TestImportReportAndMatrix:
             assert preview["unmatched_items"][0]["name_cn"] == "pH"
             assert preview["unmatched_items"][0]["value_num"] == 2.85
 
-            # 确认：unmatched 勾选并入标准（new_items 带值），其余走 values
+            # 确认：只录命中值；未命中项（pH）不并入标准、不落值
             draft = preview["report_draft"]
-            un = preview["unmatched_items"][0]
             report = await ac.post(
                 "/api/v1/qa/coa/reports",
                 json={
@@ -1340,23 +1381,53 @@ class TestImportReportAndMatrix:
                         }
                         for m in preview["matched_items"]
                     ],
-                    "new_items": [
-                        {
-                            "name_cn": un["name_cn"],
-                            "name_en": un["name_en"],
-                            "value_type": un["value_type"],
-                            "spec_text": un["spec_text"],
-                            "spec_min": un["spec_min"],
-                            "spec_max": un["spec_max"],
-                            "value_num": un["value_num"],
-                            "value_text": un["value_text"],
-                        }
-                    ],
                 },
             )
             assert report.status_code == 201, report.text
             values = report.json()["data"]["values"]
-            assert len(values) == 30  # 29 命中 + 1 并入
+            assert len(values) == 29  # 仅命中项；未命中的 pH 不落值
+            assert "pH" not in {v.get("item_id") for v in values}
+            # 标准项目集不被导入改动：pH 仍不在标准中
+            detail = (
+                await ac.get(f"/api/v1/qa/coa/standards/{standard['id']}")
+            ).json()["data"]
+            assert "pH" not in {i["name_cn"] for i in detail["items"]}
+
+    async def test_import_cn_only_fallback_match(self, monkeypatch: pytest.MonkeyPatch):
+        """英文名转写错误（flash 抄长词掉字符，Monodechlorovancomycin→…vanomycin）
+        导致中英拼接键失配 → 中文名-only 键兜底唯一命中：仍算命中，
+        不落标准外、不算缺失。"""
+        async with _client(MANAGE | ISSUE) as (ac, _):
+            ctx = await _import_products_and_standard(ac)
+            standard = ctx["standard"]
+            payload = json.loads(
+                (Path(__file__).parent / "fixtures" / "coa_ai_payload.json").read_text()
+            )
+            for item in payload["items"]:
+                if item["name_cn"] == "单去氯万古霉素":
+                    item["name_en"] = "Monodechlorovanomycin"  # 掉一个 c
+            parse = coa_ai_parse._build_parse(payload)
+
+            async def _fake(data: bytes, filename: str = "coa.docx", *, mode: str = "values"):
+                return parse
+
+            monkeypatch.setattr(issuance, "parse_docx_ai", _fake)
+            resp = await ac.post(
+                "/api/v1/qa/coa/reports/import-preview",
+                params={"standard_id": standard["id"]},
+                files={
+                    "file": ("typo.docx", FIXTURE.read_bytes(), "application/octet-stream")
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            data = resp.json()["data"]
+            assert "单去氯万古霉素" in {m["name"] for m in data["matched_items"]}
+            assert "单去氯万古霉素" not in {
+                u["name_cn"] for u in data["unmatched_items"]
+            }
+            assert "单去氯万古霉素" not in {
+                i["name_cn"] for i in data["missing_items"]
+            }
 
 
 # ─────────────────────── 字符串入参统一清洗 ───────────────────────
@@ -1446,7 +1517,6 @@ class TestInputCleaning:
                 std,
                 serial_no=" 26081215 ",
                 packaging="  10kg/桶　",
-                conclusion="　符合规定　",
                 values=[
                     {
                         "item_id": water["id"],
@@ -1457,5 +1527,4 @@ class TestInputCleaning:
             )
             assert report["serial_no"] == "26081215"
             assert report["packaging"] == "10kg/桶"
-            assert report["conclusion"] == "符合规定"
             assert report["values"][0]["value_text"] == "2.3%"

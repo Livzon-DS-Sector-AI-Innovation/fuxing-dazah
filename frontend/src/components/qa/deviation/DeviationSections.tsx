@@ -212,7 +212,7 @@ interface InvestigationFormValues {
   m1e_other?: string
   direct_cause?: string
   root_cause?: string
-  root_cause_category?: RootCauseCategory | null
+  root_cause_categories?: RootCauseCategory[]
   why_chain?: Partial<WhyStep>[]
   extended_investigation?: boolean
   extended_result?: string
@@ -301,7 +301,7 @@ export function InvestigationSection({
     m1e_other: detail.m1e_other ?? undefined,
     direct_cause: detail.direct_cause ?? undefined,
     root_cause: detail.root_cause ?? undefined,
-    root_cause_category: detail.root_cause_category,
+    root_cause_categories: detail.root_cause_categories,
     why_chain: detail.why_chain.length ? detail.why_chain : DEFAULT_WHY,
     extended_investigation: detail.extended_investigation,
     extended_result: detail.extended_result ?? undefined,
@@ -318,7 +318,7 @@ export function InvestigationSection({
       m1e_other: trimOrNull(values.m1e_other),
       direct_cause: trimOrNull(values.direct_cause),
       root_cause: trimOrNull(values.root_cause),
-      root_cause_category: values.root_cause_category ?? null,
+      root_cause_categories: values.root_cause_categories ?? [],
       why_chain: (values.why_chain ?? [])
         .filter((step) => step.question && step.question.trim() && step.answer && step.answer.trim())
         .map((step) => ({ question: step.question!.trim(), answer: step.answer!.trim() })),
@@ -379,7 +379,7 @@ export function InvestigationSection({
 
           <FormBlock
             title="5Why 根本原因分析"
-            hint="连续追问，直到找到系统性原因"
+            hint="连续追问，直到找到系统性原因；选填，未填完整的行保存时忽略"
             extra={
               <DeviationAiAssistButton
                 kind="why"
@@ -428,10 +428,10 @@ export function InvestigationSection({
                           paddingBottom: index < fields.length - 1 ? 12 : 0,
                         }}
                       >
-                        <Form.Item name={[field.name, 'question']} style={{ marginBottom: 0 }} rules={[{ required: true, whitespace: true, message: '填写问题' }]}>
+                        <Form.Item name={[field.name, 'question']} style={{ marginBottom: 0 }}>
                           <Input placeholder="为什么……？" maxLength={500} />
                         </Form.Item>
-                        <Form.Item name={[field.name, 'answer']} style={{ marginBottom: 0 }} rules={[{ required: true, whitespace: true, message: '填写回答' }]}>
+                        <Form.Item name={[field.name, 'answer']} style={{ marginBottom: 0 }}>
                           <Input.TextArea autoSize={{ minRows: 1, maxRows: 4 }} placeholder="回答" maxLength={4000} />
                         </Form.Item>
                         <Button type="text" icon={<DeleteOutlined />} onClick={() => remove(field.name)} aria-label="删除这一问" style={{ marginTop: 2 }} />
@@ -465,8 +465,8 @@ export function InvestigationSection({
                 </Form.Item>
               </Col>
               <Col xs={24} md={10} xl={8}>
-                <Form.Item name="root_cause_category" label="根本原因分类" style={{ marginBottom: 0 }}>
-                  <Select options={toOptions(ROOT_CAUSE_CATEGORY_LABEL)} allowClear placeholder="选择分类" />
+                <Form.Item name="root_cause_categories" label="根本原因分类（可多选）" style={{ marginBottom: 0 }}>
+                  <Select mode="multiple" options={toOptions(ROOT_CAUSE_CATEGORY_LABEL)} allowClear maxTagCount="responsive" placeholder="选择分类" />
                 </Form.Item>
               </Col>
             </Row>
@@ -584,7 +584,11 @@ export function InvestigationSection({
                 <Field label="根本原因">{detail.root_cause}</Field>
               </Col>
               <Col xs={24} md={10} xl={8}>
-                <Field label="根本原因分类">{detail.root_cause_category ? ROOT_CAUSE_CATEGORY_LABEL[detail.root_cause_category] : null}</Field>
+                <Field label="根本原因分类">
+                  {detail.root_cause_categories.length
+                    ? detail.root_cause_categories.map((category) => ROOT_CAUSE_CATEGORY_LABEL[category]).join('、')
+                    : null}
+                </Field>
               </Col>
             </Row>
           </FormBlock>

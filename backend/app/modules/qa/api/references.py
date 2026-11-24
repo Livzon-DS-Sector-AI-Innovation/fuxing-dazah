@@ -11,8 +11,8 @@ from app.core.database import get_db
 from app.core.exceptions import AppException
 from app.core.response import paginated_response, success_response
 from app.modules.qa.api._deps import (
-    deviation_reference_read,
-    qa_read,
+    knowledge_read,
+    reference_read,
 )
 from app.platform.identity.models import User
 
@@ -21,7 +21,7 @@ router = APIRouter()
 
 @router.get("/references/departments", summary="QA责任部门引用")
 async def reference_departments(
-    user: User = Depends(deviation_reference_read),
+    user: User = Depends(reference_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = None,
     include_inactive: bool = False,
@@ -49,7 +49,7 @@ async def reference_departments(
 @router.get("/references/sources/{kind}", summary="QA外部来源引用")
 async def reference_sources(
     kind: str,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = None,
     page: int = Query(1, ge=1),

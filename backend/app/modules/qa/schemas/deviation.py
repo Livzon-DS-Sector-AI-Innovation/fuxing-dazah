@@ -149,7 +149,9 @@ class DeviationUpdate(BaseModel):
     m1e_other: str | None = Field(default=None, max_length=8000)
     direct_cause: str | None = Field(default=None, max_length=8000)
     root_cause: str | None = Field(default=None, max_length=8000)
-    root_cause_category: RootCauseCategory | None = None
+    root_cause_categories: list[RootCauseCategory] | None = Field(
+        default=None, max_length=6
+    )
     why_chain: list[WhyStep] | None = Field(default=None, max_length=20)
     extended_investigation: bool | None = None
     extended_result: str | None = Field(default=None, max_length=8000)
@@ -215,6 +217,20 @@ class DeviationUpdate(BaseModel):
     @classmethod
     def _trim_optional(cls, value: str | None) -> str | None:
         return _strip_optional(value)
+
+    @field_validator("root_cause_categories")
+    @classmethod
+    def _dedupe_categories(
+        cls, value: list[RootCauseCategory] | None
+    ) -> list[RootCauseCategory] | None:
+        # 多选去重（保持选择顺序）；None 表未传，空数组表清空。
+        if value is None:
+            return None
+        deduped: list[RootCauseCategory] = []
+        for category in value:
+            if category not in deduped:
+                deduped.append(category)
+        return deduped
 
 
 # ───────────────────────── AI 辅助 ─────────────────────────

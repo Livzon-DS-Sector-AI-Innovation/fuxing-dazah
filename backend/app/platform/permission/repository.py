@@ -167,8 +167,15 @@ class PermissionRepository:
     async def get_role_permission_ids(
         self, db: AsyncSession, role_id: uuid.UUID
     ) -> list[uuid.UUID]:
-        stmt = select(RolePermission.permission_id).where(
-            RolePermission.role_id == role_id
+        # 只返回有效权限：软删码不能再出现在角色编辑的权限树里
+        stmt = (
+            select(RolePermission.permission_id)
+            .join(Permission, Permission.id == RolePermission.permission_id)
+            .where(
+                RolePermission.role_id == role_id,
+                RolePermission.is_deleted == False,  # noqa: E712
+                Permission.is_deleted == False,  # noqa: E712
+            )
         )
         result = await db.execute(stmt)
         return list(result.scalars())

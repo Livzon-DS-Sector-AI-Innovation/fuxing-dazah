@@ -25,7 +25,7 @@ from app.platform.identity.models import User
 from tests.conftest import _test_session_factory
 
 READ = {"qa:apr:read"}
-WILDCARD_READ = {"qa:*:read"}
+WILDCARD_READ = {"qa:all:read"}
 MANAGE = READ | {"qa:apr:manage"}
 ENTER = READ | {"qa:apr:enter"}
 LOCK = READ | {"qa:apr:lock"}
@@ -157,7 +157,7 @@ async def test_read_requires_permission() -> None:
 
 
 async def test_wildcard_read_grants_list() -> None:
-    """模块通配读码 qa:*:read 放行 PQR 读取。"""
+    """模块全域读码 qa:all:read 放行 PQR 读取。"""
     async with _client(WILDCARD_READ) as (ac, _):
         resp = await ac.get("/api/v1/qa/apr/products")
         assert resp.status_code == 200
@@ -165,13 +165,11 @@ async def test_wildcard_read_grants_list() -> None:
 
 
 async def test_write_codes_imply_read() -> None:
-    """enter/manage 写权限隐含 PQR 读取（否则按码配权会菜单可见但整页 403）。"""
-    async with _client({"qa:apr:enter"}) as (ac, _):
-        resp = await ac.get("/api/v1/qa/apr/products")
-        assert resp.status_code == 200
-    async with _client({"qa:apr:manage"}) as (ac, _):
-        resp = await ac.get("/api/v1/qa/apr/products")
-        assert resp.status_code == 200
+    """enter/manage/export/lock 写权限隐含 PQR 读取（否则菜单可见但整页 403）。"""
+    for code in ("qa:apr:enter", "qa:apr:manage", "qa:apr:export", "qa:apr:lock"):
+        async with _client({code}) as (ac, _):
+            resp = await ac.get("/api/v1/qa/apr/products")
+            assert resp.status_code == 200, code
 
 
 async def test_write_requires_dedicated_permission() -> None:

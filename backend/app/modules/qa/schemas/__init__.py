@@ -32,7 +32,6 @@ from app.modules.qa.schemas.apr import (
 )
 from app.modules.qa.schemas.coa import (
     CoaItemIn,
-    CoaNewItemIn,
     CoaProductCreate,
     CoaProductFieldIn,
     CoaProductFieldsReplace,
@@ -109,7 +108,6 @@ from app.modules.qa.schemas.processing import (
 __all__ = [
     # COA 域
     "CoaItemIn",
-    "CoaNewItemIn",
     "CoaProductCreate",
     "CoaProductFieldIn",
     "CoaProductFieldsReplace",

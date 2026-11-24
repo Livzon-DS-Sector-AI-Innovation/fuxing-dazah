@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.modules.qa.api._deps import qa_read
+from app.modules.qa.api._deps import knowledge_read
 from app.modules.qa.api.ai_analysis import router as ai_analysis_router
 from app.modules.qa.api.apr import router as apr_router
 from app.modules.qa.api.coa import router as coa_router
@@ -22,7 +22,7 @@ _module = MODULES_BY_CODE["qa"]
 
 
 @router.get("/", summary="QA 模块信息")
-async def read_module(user: User = Depends(qa_read)) -> dict[str, str]:
+async def read_module(user: User = Depends(knowledge_read)) -> dict[str, str]:
     """返回模块元信息；需持有 QA 读取权限。"""
     return _module.as_dict()
 

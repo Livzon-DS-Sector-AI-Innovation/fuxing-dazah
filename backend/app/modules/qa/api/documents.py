@@ -16,13 +16,13 @@ from app.modules.qa import file_service, service
 from app.modules.qa.api._deps import (
     config_manage,
     document_create,
-    document_deactivate,
+    document_manage,
     document_update,
-    qa_read,
+    knowledge_read,
     relation_manage,
     version_create,
-    version_current,
-    version_disable,
+    version_manage,
+    version_set_current,
 )
 from app.modules.qa.repository import (
     get_document,
@@ -56,7 +56,7 @@ class RelationCompatRequest(BaseModel):
 
 @router.get("/document-types", summary="文件类型列表")
 async def get_document_types(
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     include_inactive: bool = False,
 ) -> Any:
@@ -113,7 +113,7 @@ async def deactivate_document_type(
 
 @router.get("/documents", summary="质量文件台账列表")
 async def get_documents(
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = None,
     document_type_id: uuid.UUID | None = None,
@@ -166,7 +166,7 @@ async def post_document(
 @router.get("/documents/{document_id}", summary="质量文件详情")
 async def get_document_detail(
     document_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await get_document(db, document_id)
@@ -191,7 +191,7 @@ async def put_document(
 @router.post("/documents/{document_id}/activate", summary="启用质量文件")
 async def activate_document(
     document_id: uuid.UUID,
-    user: User = Depends(document_deactivate),
+    user: User = Depends(document_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await service.set_document_status(db, document_id, "active", user)
@@ -203,7 +203,7 @@ async def activate_document(
 @router.post("/documents/{document_id}/deactivate", summary="停用质量文件")
 async def deactivate_document(
     document_id: uuid.UUID,
-    user: User = Depends(document_deactivate),
+    user: User = Depends(document_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await service.set_document_status(db, document_id, "inactive", user)
@@ -244,7 +244,7 @@ async def post_document_version(
 @router.get("/documents/{document_id}/versions", summary="质量文件版本列表")
 async def get_document_versions(
     document_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await get_document(db, document_id)
@@ -286,7 +286,7 @@ async def post_copy_relations(
 async def post_make_current(
     document_id: uuid.UUID,
     version_id: uuid.UUID,
-    user: User = Depends(version_current),
+    user: User = Depends(version_set_current),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.make_current(db, document_id, version_id, user)
@@ -299,7 +299,7 @@ async def post_make_current(
 @router.post("/document-versions/{version_id}/activate", summary="启用质量文件版本")
 async def activate_version(
     version_id: uuid.UUID,
-    user: User = Depends(version_disable),
+    user: User = Depends(version_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await service.activate_version(db, version_id, user)
@@ -309,7 +309,7 @@ async def activate_version(
 @router.post("/document-versions/{version_id}/deactivate", summary="停用质量文件版本")
 async def deactivate_version(
     version_id: uuid.UUID,
-    user: User = Depends(version_disable),
+    user: User = Depends(version_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await service.disable_version(db, version_id, user)

@@ -1,7 +1,8 @@
 """QA 偏差管理 HTTP API：偏差台账 / 分阶段详情 / CAPA。
 
 挂在 QA 模块路由下（``/api/v1/qa/deviations``、``/api/v1/qa/capas``）。
-读取放行偏差/CAPA 专用读码或模块通配读码 ``qa:*:read``；写入各自独立。
+读取放行模块全域读码 ``qa:all:read``、偏差/CAPA 专用读码或该域写码；
+写入各自独立。
 """
 
 from __future__ import annotations
@@ -17,6 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.qa import file_service
+from app.modules.qa.api._deps import (
+    capa_create,
+    capa_read,
+    capa_update,
+    deviation_assist,
+    deviation_create,
+    deviation_read,
+    deviation_update,
+)
 from app.modules.qa.schemas import (
     CapaActionPatch,
     CapaCreate,
@@ -31,17 +41,8 @@ from app.modules.qa.schemas import (
 from app.modules.qa.service import deviation as service
 from app.modules.qa.service import deviation_ai as ai_service
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
 
 router = APIRouter()
-
-_deviation_read = require_permission("qa:deviation:read", "qa:*:read")
-_deviation_create = require_permission("qa:deviation:create")
-_deviation_update = require_permission("qa:deviation:update")
-_deviation_assist = require_permission("qa:deviation:create", "qa:deviation:update")
-_capa_read = require_permission("qa:capa:read", "qa:*:read")
-_capa_create = require_permission("qa:capa:create")
-_capa_update = require_permission("qa:capa:update")
 
 
 # ───────────────────────── 偏差 ─────────────────────────
@@ -49,7 +50,7 @@ _capa_update = require_permission("qa:capa:update")
 
 @router.get("/deviations", summary="偏差台账")
 async def list_deviations(
-    user: User = Depends(_deviation_read),
+    user: User = Depends(deviation_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = Query(default=None, max_length=200),
     status: str | None = None,
@@ -82,7 +83,7 @@ async def list_deviations(
 
 @router.get("/deviations/summary", summary="偏差状态统计")
 async def deviation_summary(
-    user: User = Depends(_deviation_read),
+    user: User = Depends(deviation_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(await service.deviation_status_summary(db))
@@ -91,7 +92,7 @@ async def deviation_summary(
 @router.post("/deviations", summary="登记偏差", status_code=201)
 async def create_deviation(
     payload: DeviationCreate,
-    user: User = Depends(_deviation_create),
+    user: User = Depends(deviation_create),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await service.create_deviation(db, payload, user)
@@ -102,7 +103,7 @@ async def create_deviation(
 @router.post("/deviations/ai-assist", summary="偏差 AI 辅助（描述规范化 / 调查引导建议）")
 async def deviation_ai_assist(
     payload: DeviationAiAssistIn,
-    user: User = Depends(_deviation_assist),
+    user: User = Depends(deviation_assist),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(await ai_service.ai_assist(db, payload, user))
@@ -111,7 +112,7 @@ async def deviation_ai_assist(
 @router.get("/deviations/{deviation_id}", summary="偏差详情")
 async def get_deviation(
     deviation_id: uuid.UUID,
-    user: User = Depends(_deviation_read),
+    user: User = Depends(deviation_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(await service.deviation_detail(db, deviation_id))
@@ -121,7 +122,7 @@ async def get_deviation(
 async def update_deviation(
     deviation_id: uuid.UUID,
     payload: DeviationUpdate,
-    user: User = Depends(_deviation_update),
+    user: User = Depends(deviation_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.update_deviation(db, deviation_id, payload, user)
@@ -132,7 +133,7 @@ async def update_deviation(
 async def transition_deviation(
     deviation_id: uuid.UUID,
     payload: DeviationTransitionIn,
-    user: User = Depends(_deviation_update),
+    user: User = Depends(deviation_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.transition_deviation(db, deviation_id, payload, user)
@@ -143,7 +144,7 @@ async def transition_deviation(
 async def extend_deviation(
     deviation_id: uuid.UUID,
     payload: DeviationExtendIn,
-    user: User = Depends(_deviation_update),
+    user: User = Depends(deviation_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.extend_deviation(db, deviation_id, payload, user)
@@ -153,7 +154,7 @@ async def extend_deviation(
 @router.delete("/deviations/{deviation_id}", summary="删除登记中的偏差")
 async def delete_deviation(
     deviation_id: uuid.UUID,
-    user: User = Depends(_deviation_update),
+    user: User = Depends(deviation_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.delete_deviation(db, deviation_id, user)
@@ -166,7 +167,7 @@ async def delete_deviation(
 async def upload_attachment(
     deviation_id: uuid.UUID,
     file: UploadFile = File(...),
-    user: User = Depends(_deviation_update),
+    user: User = Depends(deviation_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     data = await file.read(service.ATTACHMENT_MAX_SIZE + 1)
@@ -188,7 +189,7 @@ async def upload_attachment(
 async def download_attachment(
     deviation_id: uuid.UUID,
     attachment_id: uuid.UUID,
-    user: User = Depends(_deviation_read),
+    user: User = Depends(deviation_read),
     db: AsyncSession = Depends(get_db),
     download: bool = False,
 ) -> StreamingResponse:
@@ -214,7 +215,7 @@ async def download_attachment(
 async def delete_attachment(
     deviation_id: uuid.UUID,
     attachment_id: uuid.UUID,
-    user: User = Depends(_deviation_update),
+    user: User = Depends(deviation_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.delete_attachment(db, deviation_id, attachment_id, user)
@@ -226,7 +227,7 @@ async def delete_attachment(
 
 @router.get("/capas", summary="CAPA 台账")
 async def list_capas(
-    user: User = Depends(_capa_read),
+    user: User = Depends(capa_read),
     db: AsyncSession = Depends(get_db),
     keyword: str | None = Query(default=None, max_length=200),
     status: str | None = None,
@@ -249,7 +250,7 @@ async def list_capas(
 
 @router.get("/capas/summary", summary="CAPA 状态统计")
 async def capa_summary(
-    user: User = Depends(_capa_read),
+    user: User = Depends(capa_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(await service.capa_status_summary(db))
@@ -258,7 +259,7 @@ async def capa_summary(
 @router.post("/capas", summary="发起 CAPA", status_code=201)
 async def create_capa(
     payload: CapaCreate,
-    user: User = Depends(_capa_create),
+    user: User = Depends(capa_create),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     row = await service.create_capa(db, payload, user)
@@ -268,7 +269,7 @@ async def create_capa(
 @router.get("/capas/{capa_id}", summary="CAPA 详情")
 async def get_capa(
     capa_id: uuid.UUID,
-    user: User = Depends(_capa_read),
+    user: User = Depends(capa_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(await service.capa_detail(db, capa_id))
@@ -278,7 +279,7 @@ async def get_capa(
 async def update_capa(
     capa_id: uuid.UUID,
     payload: CapaUpdate,
-    user: User = Depends(_capa_update),
+    user: User = Depends(capa_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.update_capa(db, capa_id, payload, user)
@@ -290,7 +291,7 @@ async def patch_capa_action(
     capa_id: uuid.UUID,
     action_id: uuid.UUID,
     payload: CapaActionPatch,
-    user: User = Depends(_capa_update),
+    user: User = Depends(capa_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.patch_capa_action(db, capa_id, action_id, payload, user)
@@ -301,7 +302,7 @@ async def patch_capa_action(
 async def transition_capa(
     capa_id: uuid.UUID,
     payload: CapaTransitionIn,
-    user: User = Depends(_capa_update),
+    user: User = Depends(capa_update),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.transition_capa(db, capa_id, payload, user)

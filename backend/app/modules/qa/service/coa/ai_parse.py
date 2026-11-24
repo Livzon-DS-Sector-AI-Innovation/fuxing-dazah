@@ -37,14 +37,17 @@ from app.modules.qa.service.coa.docx_parse import (
     parse_spec,
     parse_unit,
     split_bilingual,
+    strip_result_affixes,
 )
 
 logger = logging.getLogger(__name__)
 
 # 两个提取场景各自演进：结构版（模板导入→产品字段配置+标准定义）/
-# 值版（报告导入→批次值+结果，阶段二按配置动态渲染 schema）
+# 值版（报告导入→批次值+结果，阶段二按配置动态渲染 schema）。
+# v5：prompt 未变，但结果列确定性剥英文尾巴/尾缀单位（strip_result_affixes）
+# v6：prompt 删 conclusion 键（结论列全链路移除，不再提取）
 COA_AI_PROMPT_VERSION_STRUCTURE = "coa-docx-structure-v1"
-COA_AI_PROMPT_VERSION_VALUES = "coa-docx-values-v4"
+COA_AI_PROMPT_VERSION_VALUES = "coa-docx-values-v6"
 
 # 实测（万古/达托/达巴模板）：OCR 识别 ~4s、提取 ~13s。OCR 服务端总时长
 # 限 180s（上传+识别+返回），客户端放宽到 200s 防慢文档偶发超时
@@ -108,7 +111,6 @@ json 结构（字段名固定，所有字段必须出现，没有的用 null）�
   "batch_info_fields": [
     {"label_cn": "上面 batch_info 未覆盖的其余批次信息字段中文标签（如 复验期）", "label_en": "英文标签", "value": "对应值原文"}
   ],
-  "conclusion": "结论（中文原文）",
   "items": [
     {
       "name_cn": "检测项目中文名",
@@ -303,7 +305,6 @@ def _build_parse(payload: dict[str, Any]) -> CoaDocxParse:
         }
     parse.serial_no = _text(payload.get("serial_no"))
     parse.report_no = _text(payload.get("report_no"))
-    parse.conclusion = _text(payload.get("conclusion"))
 
     for raw in payload.get("items") or []:
         if not isinstance(raw, dict):
@@ -312,7 +313,12 @@ def _build_parse(payload: dict[str, Any]) -> CoaDocxParse:
         if not name_cn:  # 无名行（残留分组标签等）丢弃
             continue
         spec_text = _text(raw.get("spec_text"))
-        result = _text(raw.get("result"))
+        raw_result = _text(raw.get("result"))
+        # 结果只留数值形态（确定性后处理，不靠 prompt）：剥英文尾巴与尾缀
+        # 单位（符合规定 Conform→符合规定、＜1cfu/g→＜1）；单位剥取须在剥
+        # 之前做（原文才有单位可剥），单位语义归 item.unit、spec_text 可溯
+        result_unit = parse_unit(raw_result)
+        result = strip_result_affixes(raw_result)
         # 标准限：确定性解析优先；解析不动（无数值限的描述）时保留模型结果
         dmin, dmax = parse_spec(spec_text)
         if dmin is None and dmax is None:
@@ -329,7 +335,7 @@ def _build_parse(payload: dict[str, Any]) -> CoaDocxParse:
             else "text"
         )
         # 单位：从标准/结果原文剥取优先；剥不出时仅数值型项目采信模型
-        unit = parse_unit(spec_text) or parse_unit(result)
+        unit = parse_unit(spec_text) or result_unit
         if unit is None and value_type == "number":
             unit = _text(raw.get("unit"))
         parse.items.append(

@@ -16,7 +16,7 @@ from app.core.exceptions import NotFoundException
 from app.core.response import success_response
 from app.modules.qa import file_service, service
 from app.modules.qa.api._deps import (
-    qa_read,
+    knowledge_read,
     version_create,
 )
 from app.modules.qa.models import DocumentExtractionArtifact
@@ -51,7 +51,7 @@ async def retry_file_extraction(
 )
 async def get_file_processing_results(
     file_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     view: ProcessingResultView = Query("raw_blocks"),
     page: int = Query(1, ge=1),
@@ -79,7 +79,7 @@ async def get_file_processing_results(
 @router.get("/document-files/{file_id}/artifacts", summary="查看文件提取产物")
 async def list_file_artifacts(
     file_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     file_row = await get_file(db, file_id)
@@ -138,7 +138,7 @@ async def list_file_artifacts(
 async def get_file_artifact_content(
     file_id: uuid.UUID,
     artifact_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     download: bool = False,
 ) -> StreamingResponse:
@@ -187,7 +187,7 @@ async def get_file_artifact_content(
 @router.get("/document-files/{file_id}/content", summary="预览或下载质量文件")
 async def get_file_content(
     file_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     download: bool = False,
 ) -> StreamingResponse:

@@ -138,11 +138,6 @@ class Deviation(BaseModel):
             name="ck_qa_deviations_classification",
         ),
         CheckConstraint(
-            "root_cause_category IS NULL OR root_cause_category IN "
-            f"({_enum_sql_list(RootCauseCategory)})",
-            name="ck_qa_deviations_root_cause_category",
-        ),
-        CheckConstraint(
             "quality_impact IS NULL OR quality_impact IN "
             f"({_enum_sql_list(QualityImpact)})",
             name="ck_qa_deviations_quality_impact",
@@ -156,12 +151,13 @@ class Deviation(BaseModel):
         ),
         Index("ix_qa_deviations_status", "status"),
         Index("ix_qa_deviations_discovery_date", "discovery_date"),
-        # 重复偏差识别：同部门同组别同根因分类在 3 个月内再发。
+        # 重复偏差识别：同部门同组别同根因分类在 3 个月内再发；
+        # 分类改为 JSONB 多选后无法进 btree 等值，索引只锚部门/组别/发现日期窗口。
         Index(
             "ix_qa_deviations_repeat_key",
             "department_name",
             "group_name",
-            "root_cause_category",
+            "discovery_date",
         ),
         {"schema": "qa"},
     )
@@ -234,8 +230,12 @@ class Deviation(BaseModel):
     root_cause: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="根本原因"
     )
-    root_cause_category: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="根本原因分类"
+    root_cause_categories: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="'[]'::jsonb",
+        comment="根本原因分类（多选，RootCauseCategory 值列表）",
     )
     why_chain: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB,

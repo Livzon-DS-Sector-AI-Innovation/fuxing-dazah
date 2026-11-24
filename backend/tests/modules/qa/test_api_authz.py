@@ -1,4 +1,4 @@
-"""QA API 鉴权测试：未登录 401、无权限 403、读取需 ``qa:*:read``。
+"""QA API 鉴权测试：未登录 401、无权限 403、读取需 ``qa:all:read``。
 
 对齐 meter 的 test_api_authz 模式：匿名场景仅覆盖 get_db，
 已登录场景再覆盖 get_current_user 并 patch 权限集合。
@@ -78,7 +78,7 @@ class TestQaAuthz:
         assert resp.status_code == 403
 
     async def test_read_code_grants_read_but_not_write(self) -> None:
-        """仅持 qa:*:read：主数据列表 200，创建 403。"""
+        """仅持 qa:all:read：主数据列表 200，创建 403。"""
         async with _test_session_factory() as session:
             test_user = await _ensure_test_user(session)
 
@@ -92,7 +92,7 @@ class TestQaAuthz:
             fastapi_app.dependency_overrides[get_current_user] = _override_get_current_user
 
             async def _read_only(user_id: str, db: object) -> set[str]:
-                return {"qa:*:read"}
+                return {"qa:all:read"}
 
             transport = ASGITransport(app=fastapi_app)
             with patch(
@@ -115,8 +115,48 @@ class TestQaAuthz:
         assert ok.status_code == 200
         assert forbidden.status_code == 403
 
+    async def test_write_code_grants_knowledge_read(self) -> None:
+        """写权限隐含读：只持 qa:master:create 也能看主数据列表。"""
+        async with _test_session_factory() as session:
+            test_user = await _ensure_test_user(session)
+
+            async def _override_get_db() -> Any:
+                yield session
+
+            async def _override_get_current_user() -> Any:
+                return test_user
+
+            fastapi_app.dependency_overrides[get_db] = _override_get_db
+            fastapi_app.dependency_overrides[get_current_user] = _override_get_current_user
+
+            async def _write_only(user_id: str, db: object) -> set[str]:
+                return {"qa:master:create"}
+
+            transport = ASGITransport(app=fastapi_app)
+            with patch(
+                "app.platform.permission.deps.get_user_permissions", new=_write_only
+            ):
+                async with AsyncClient(
+                    transport=transport, base_url="http://test"
+                ) as ac:
+                    ok = await ac.get("/api/v1/qa/master-objects")
+                    created = await ac.post(
+                        "/api/v1/qa/master-objects",
+                        json={
+                            "object_type": "MATERIAL",
+                            "code": f"QA-{uuid4().hex[:8]}",
+                            "name": "写码隐含读测试主数据",
+                        },
+                    )
+                    refs = await ac.get("/api/v1/qa/references/departments")
+            fastapi_app.dependency_overrides.clear()
+            await session.rollback()
+        assert ok.status_code == 200
+        assert created.status_code == 200
+        assert refs.status_code == 200
+
     async def test_read_code_does_not_grant_audit(self) -> None:
-        """仅持 qa:*:read：操作日志仍 403，需独立的 qa:audit:read。"""
+        """仅持 qa:all:read：操作日志仍 403，需独立的 qa:audit:read。"""
         async with _test_session_factory() as session:
             test_user = await _ensure_test_user(session)
 
@@ -130,7 +170,7 @@ class TestQaAuthz:
             fastapi_app.dependency_overrides[get_current_user] = _override_get_current_user
 
             async def _read_only(user_id: str, db: object) -> set[str]:
-                return {"qa:*:read"}
+                return {"qa:all:read"}
 
             transport = ASGITransport(app=fastapi_app)
             with patch(

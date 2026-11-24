@@ -42,7 +42,7 @@ class CoaParsedItem:
     spec_en: str | None = None  # 标准列英文原句（留底）
     spec_min: float | None = None
     spec_max: float | None = None
-    result: str | None = None  # 结果列中文原文
+    result: str | None = None  # 结果列（剥英文尾巴/尾缀单位后：＜1、1.7）
     result_en: str | None = None  # 结果列英文（留底）
     value_num: float | None = None
     value_type: str = "text"  # number/text
@@ -82,7 +82,6 @@ class CoaDocxParse:
     )  # 原文（product/batch_no/…）
     serial_no: str | None = None
     report_no: str | None = None
-    conclusion: str | None = None
     items: list[CoaParsedItem] = field(default_factory=list)
     batch_fields: list[CoaParsedField] = field(default_factory=list)
     # 解析建议（可能为 None，落库前人工确认）
@@ -190,6 +189,34 @@ def parse_unit(text: str | None) -> str | None:
         return None
     m = _UNIT_SUFFIX_RE.search(text.strip())
     return m.group(1) if m else None
+
+
+# 结果值形态（剥完修饰后须长这样才认领剥离）：可选比较符 + 数字
+_RESULT_VALUE_LIKE_RE = re.compile(r"^[<＜>＞≤≥＝~～]?\s*-?\d+(?:\.\d+)?$")
+_RESULT_UNIT_TAIL_RE = re.compile(rf"\s*({_UNIT_TAIL})\s*$", re.I)
+
+
+def strip_result_affixes(text: str | None) -> str | None:
+    """结果列剥修饰：英文尾巴（符合规定 Conform → 符合规定）与尾缀单位
+    （＜1cfu/g → ＜1、1091µg/mg → 1091）。
+
+    守卫：剥单位后必须仍是数值形态（比较符+数字），否则保留原文——
+    「白色粉末」这类描述、「USP trial」这类恰以单位字母结尾的英文都不动。
+    单位语义归 item.unit 字段，标准列原文（spec_text 带单位）可溯。
+    """
+    if not text:
+        return text
+    s = text.strip()
+    if _CJK_RE.search(s):
+        cn, _en = split_bilingual(s)
+        if cn:
+            s = cn.strip()
+    m = _RESULT_UNIT_TAIL_RE.search(s)
+    if m:
+        head = s[: m.start()].rstrip()
+        if _RESULT_VALUE_LIKE_RE.match(head):
+            return head
+    return s
 
 
 def parse_date_text(text: str | None) -> date | None:

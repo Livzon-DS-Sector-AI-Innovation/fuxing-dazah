@@ -88,6 +88,25 @@ class TestCreateRole:
         assert overrides == {"equipment": "all", "safety": "department"}
 
 
+class TestRolePermissionVisibility:
+    async def test_role_permission_ids_exclude_deleted_permissions(
+        self, db_session: AsyncSession, make_role, make_permission,
+    ) -> None:
+        """角色详情只返回有效权限：软删权限的关联不能泄进权限树。"""
+        role = await make_role()
+        active = await make_permission()
+        deleted = await make_permission()
+        await _repo.set_role_permissions(
+            db_session, role.id, [active.id, deleted.id]
+        )
+        deleted.is_deleted = True
+        await db_session.flush()
+
+        assert set(
+            await _repo.get_role_permission_ids(db_session, role.id)
+        ) == {active.id}
+
+
 class TestUpdateRole:
     async def test_update_name_and_data_scope(
         self, db_session: AsyncSession, make_role,

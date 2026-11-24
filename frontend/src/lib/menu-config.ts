@@ -19,6 +19,16 @@ export interface ModuleMenu {
   clickableTitle?: boolean   // 侧边栏模块标题可点击跳转模块首页（无二级菜单的模块用）
 }
 
+/** QA 知识库读门禁：qa:all:read + 知识库资源的任意写码（写码隐含读）。 */
+const QA_KNOWLEDGE_PERMISSIONS = [
+  "qa:all:read",
+  "qa:master:*",
+  "qa:document:*",
+  "qa:version:*",
+  "qa:relation:*",
+  "qa:config:*",
+]
+
 export const moduleMenus: ModuleMenu[] = [
   {
     key: "production",
@@ -172,27 +182,27 @@ export const moduleMenus: ModuleMenu[] = [
     label: "QA",
     icon: "document",
     path: "/qa",
-    // 与 meter 一致：显式授权读取（授 qa:*:read），写操作在页面内按 QA 权限码显示。
-    permissions: ["qa:*:read"],
+    // 任一 QA 权限即可见（qa:*:* 是前端菜单匹配模式，不是权限码）；
+    // 子项各自按后端读门禁过滤。
+    permissions: ["qa:*:*"],
     children: [
-      { key: "overview", label: "概览", path: "/qa" },
-      { key: "master-data", label: "质量主数据", path: "/qa/master-data" },
-      { key: "documents", label: "批准文件台账", path: "/qa/documents" },
-      // 偏差/CAPA 有独立读码，持模块通配读码的 QA 人员同样可见。
-      { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:deviation:read", "qa:*:read"] },
-      { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:capa:read", "qa:*:read"] },
+      { key: "overview", label: "概览", path: "/qa", permissions: QA_KNOWLEDGE_PERMISSIONS },
+      { key: "master-data", label: "质量主数据", path: "/qa/master-data", permissions: QA_KNOWLEDGE_PERMISSIONS },
+      { key: "documents", label: "批准文件台账", path: "/qa/documents", permissions: QA_KNOWLEDGE_PERMISSIONS },
+      // 偏差/CAPA 有独立读码；持 qa:all:read 的 QA 人员同样可见。
+      { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:all:read", "qa:deviation:read", "qa:deviation:create", "qa:deviation:update"] },
+      { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:all:read", "qa:capa:read", "qa:capa:create", "qa:capa:update"] },
       // 年度产品回顾（PQR）：一级分组 + 三个二级入口，各按权限显隐。
-      // 可见性口径 = 「读得动该页」：enter/manage 权限在后端隐含 PQR 读取，
-      // 纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）；
-      // 汇总分析同样放行 enter，与后端读放行同口径（纯 enter 角色也能看到汇总入口）。
+      // 可见性口径 = 「读得动该页」：所有 PQR 写码（enter/manage/export/lock）
+      // 在后端隐含 PQR 读取；纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）。
       {
         key: "apr",
         label: "年度产品回顾",
         path: "/qa/apr",
         children: [
           { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
-          { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:apr:enter", "qa:apr:read", "qa:*:read"] },
-          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:apr:read", "qa:*:read", "qa:apr:enter"] },
+          { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:all:read", "qa:apr:read", "qa:apr:enter", "qa:apr:manage", "qa:apr:export", "qa:apr:lock"] },
+          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:all:read", "qa:apr:read", "qa:apr:enter", "qa:apr:manage", "qa:apr:export", "qa:apr:lock"] },
         ],
       },
       // COA 客户标准与出具登记：独立读码（同偏差/PQR 口径），
@@ -202,8 +212,8 @@ export const moduleMenus: ModuleMenu[] = [
         label: "COA",
         path: "/qa/coa",
         children: [
-          { key: "coa-standards", label: "客户标准配置", path: "/qa/coa/standards", permissions: ["qa:coa:read", "qa:*:read", "qa:coa:standard:manage"] },
-          { key: "coa-issuance", label: "出具登记", path: "/qa/coa/issuance", permissions: ["qa:coa:read", "qa:*:read", "qa:coa:issue:create"] },
+          { key: "coa-standards", label: "客户标准配置", path: "/qa/coa/standards", permissions: ["qa:all:read", "qa:coa:read", "qa:coa:manage", "qa:coa:issue"] },
+          { key: "coa-issuance", label: "出具登记", path: "/qa/coa/issuance", permissions: ["qa:all:read", "qa:coa:read", "qa:coa:manage", "qa:coa:issue"] },
         ],
       },
       { key: "audit", label: "操作日志", path: "/qa/audit", permissions: ["qa:audit:read"] },

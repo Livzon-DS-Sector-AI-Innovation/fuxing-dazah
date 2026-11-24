@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import type { ReactNode } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Form, Input, Modal, Select, Skeleton, Space, Table, Tag } from 'antd'
 import { FileAddOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
@@ -364,9 +365,17 @@ export function CoaStandardsPage() {
   const queryClient = useQueryClient()
   const { hasPermission } = usePermission()
   // 无 manage 权限整页只读提示（配置页几乎全是写操作，apr 同口径）
-  const canManage = hasPermission('qa:coa:standard:manage')
-  const [productId, setProductId] = useState<string | null>(null)
-  const [standardId, setStandardId] = useState<string | null>(null)
+  const canManage = hasPermission('qa:coa:manage')
+  const router = useRouter()
+  // 选择状态同步进 URL（?product=产品代码&standard=模板码），刷新/分享链接恢复
+  // 现场。APR 录入页同款两层结构：picked* 只存显式切换的 ID，URL 字符在渲染期
+  // 解析成 ID（列表异步加载，effect 镜像 state 被 eslint 禁）；派生回落（第一个）
+  // 不写回 URL，用户显式切换时才同步链接。
+  const searchParams = useSearchParams()
+  const productParam = searchParams.get('product')
+  const standardParam = searchParams.get('standard')
+  const [pickedProductId, setPickedProductId] = useState<string | null>(null)
+  const [pickedStandardId, setPickedStandardId] = useState<string | null>(null)
   const [productModalOpen, setProductModalOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -374,12 +383,29 @@ export function CoaStandardsPage() {
   const [savingItems, setSavingItems] = useState(false)
   const [createForm] = Form.useForm()
 
+  /** 把局部改动合并进当前查询串；空值即删除该参数。 */
+  const syncUrl = (patch: Record<string, string | null>) => {
+    const params = new URLSearchParams(searchParams.toString())
+    for (const [key, value] of Object.entries(patch)) {
+      if (value == null || value === '') params.delete(key)
+      else params.set(key, value)
+    }
+    const query = params.toString()
+    router.replace(query ? `/qa/coa/standards?${query}` : '/qa/coa/standards', { scroll: false })
+  }
+
   const productsQuery = useQuery({
     queryKey: ['qa', 'coa', 'products'],
     queryFn: () => fetchCoaProducts(false),
   })
   const products = productsQuery.data ?? []
-  const activeProduct = products.find((p) => p.id === productId) ?? products[0] ?? null
+  // 选中优先级：显式切换（ID 须仍存在）> URL 产品代码（不存在视为无效）> 第一个
+  const pickedProduct = products.some((p) => p.id === pickedProductId) ? pickedProductId : null
+  const urlProductId = productParam
+    ? (products.find((p) => p.code === productParam)?.id ?? null)
+    : null
+  const activeProductId = pickedProduct ?? urlProductId ?? products[0]?.id ?? null
+  const activeProduct = products.find((p) => p.id === activeProductId) ?? null
 
   const standardsQuery = useQuery({
     queryKey: ['qa', 'coa', 'standards', activeProduct?.id],
@@ -390,7 +416,13 @@ export function CoaStandardsPage() {
   const standards = [...(standardsQuery.data ?? [])].sort((a, b) =>
     a.code.localeCompare(b.code, 'en', { numeric: true })
   )
-  const currentStandard = standards.find((s) => s.id === standardId) ?? standards[0] ?? null
+  // 标准选中：显式切换 > URL 模板码（仅在本产品的标准列表内解析）> 第一个
+  const pickedStandard = standards.some((s) => s.id === pickedStandardId) ? pickedStandardId : null
+  const urlStandardId = standardParam
+    ? (standards.find((s) => s.code === standardParam)?.id ?? null)
+    : null
+  const currentStandardId = pickedStandard ?? urlStandardId ?? standards[0]?.id ?? null
+  const currentStandard = standards.find((s) => s.id === currentStandardId) ?? null
 
   const detailQuery = useQuery({
     queryKey: ['qa', 'coa', 'standard-detail', currentStandard?.id],
@@ -435,7 +467,11 @@ export function CoaStandardsPage() {
           return
         }
         message.success('标准已删除')
-        if (standardId === standard.id) setStandardId(null)
+        // 删除后清模板参数：URL 里的码已失效，回落第一个（派生不写 URL）
+        if (currentStandardId === standard.id) {
+          setPickedStandardId(null)
+          syncUrl({ standard: null })
+        }
         invalidate()
       },
     })
@@ -454,7 +490,7 @@ export function CoaStandardsPage() {
       />
 
       {!canManage && (
-        <Alert type="info" showIcon title="只读模式：配置客户标准需要 qa:coa:standard:manage 权限" style={{ marginBottom: 16 }} />
+        <Alert type="info" showIcon title="只读模式：配置客户标准需要 qa:coa:manage 权限" style={{ marginBottom: 16 }} />
       )}
 
       {productsQuery.isLoading ? (
@@ -496,8 +532,13 @@ export function CoaStandardsPage() {
                 showSearch={{ optionFilterProp: 'label' }}
                 options={products.map((p) => ({ value: p.id, label: `${p.code} ${p.name}` }))}
                 onChange={(id) => {
-                  setProductId(id)
-                  setStandardId(null)
+                  setPickedProductId(id)
+                  setPickedStandardId(null)
+                  // 切产品清模板参数：旧模板码不属于新产品，回落其第一个（派生不写 URL）
+                  syncUrl({
+                    product: products.find((p) => p.id === id)?.code ?? null,
+                    standard: null,
+                  })
                 }}
               />
             </div>
@@ -519,7 +560,10 @@ export function CoaStandardsPage() {
                 loading={standardsQuery.isLoading}
                 showSearch={{ optionFilterProp: 'label' }}
                 options={standards.map((s) => ({ value: s.id, label: `${s.code} ${s.name}` }))}
-                onChange={(id) => setStandardId(id)}
+                onChange={(id) => {
+                  setPickedStandardId(id)
+                  syncUrl({ standard: standards.find((s) => s.id === id)?.code ?? null })
+                }}
               />
               <span className={styles.scopeCount}>
                 {standardsQuery.isLoading ? '—' : `${standards.length} 套`}

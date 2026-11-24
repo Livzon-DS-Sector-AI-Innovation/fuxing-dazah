@@ -269,7 +269,7 @@ class CoaReport(BaseModel):
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
-        Index("ix_qa_coa_reports_product", "product_id", "issued_date"),
+        Index("ix_qa_coa_reports_product", "product_id", "created_at"),
         {"schema": "qa"},
     )
 
@@ -297,12 +297,6 @@ class CoaReport(BaseModel):
     )
     storage: Mapped[str | None] = mapped_column(
         String(300), nullable=True, comment="贮存条件"
-    )
-    conclusion: Mapped[str | None] = mapped_column(
-        String(500), nullable=True, comment="结论"
-    )
-    issued_date: Mapped[date | None] = mapped_column(
-        Date, nullable=True, comment="出具日期（人工填写）"
     )
     source: Mapped[str] = mapped_column(
         String(8),

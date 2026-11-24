@@ -123,7 +123,7 @@ async def _investigate(ac: AsyncClient, deviation_id: str) -> None:
             "m1e_machine": "校准在有效期内，自检正常",
             "direct_cause": "检验员疏忽忘记波长准确性确认",
             "root_cause": "新增项缺乏提醒机制，记录分散，复核未覆盖",
-            "root_cause_category": "method",
+            "root_cause_categories": ["method", "personnel"],
             "why_chain": [
                 {"question": "为何未执行？", "answer": "首次独立操作疏忽"},
                 {"question": "为何会忘？", "answer": "记录分散无视觉提醒"},
@@ -152,12 +152,17 @@ class TestDeviationAuthz:
             assert (await ac.get("/api/v1/qa/capas")).status_code == 403
 
     async def test_module_wildcard_read_grants_read_only(self) -> None:
-        """模块通配读码 qa:*:read 放行偏差/CAPA 读取，但不放行登记。"""
-        async with _client({"qa:*:read"}) as (ac, _):
+        """模块全域读码 qa:all:read 放行偏差/CAPA 读取，但不放行登记。"""
+        async with _client({"qa:all:read"}) as (ac, _):
             assert (await ac.get("/api/v1/qa/deviations")).status_code == 200
             assert (await ac.get("/api/v1/qa/capas")).status_code == 200
             created = await ac.post("/api/v1/qa/deviations", json=_payload())
         assert created.status_code == 403
+
+    async def test_write_only_permission_can_read(self) -> None:
+        """写权限隐含读：只持 qa:deviation:create 也能看偏差台账。"""
+        async with _client({"qa:deviation:create"}) as (ac, _):
+            assert (await ac.get("/api/v1/qa/deviations")).status_code == 200
 
     async def test_deviation_read_does_not_grant_update(self) -> None:
         """只持读码的用户不能推进偏差状态：读与写是两份独立授权。"""
@@ -353,7 +358,40 @@ class TestDeviationLifecycle:
                         "reason": "试试",
                     },
                 )
-            ).status_code == 409
+                ).status_code == 409
+
+    async def test_5why_optional_for_assessment(self) -> None:
+        """5Why 为选填：一条不填也能提交评估，但其余调查结论仍必填。
+
+        5Why 是辅助追问工具而非硬性证据链，是否填写由 QA 视复杂度决定；
+        直接原因、根本原因、根本原因分类仍是流转前必须补齐的结论。
+        """
+        async with _client(WRITE) as (ac, _):
+            dev = await _create(ac)
+            dev_id = dev["id"]
+            await ac.post(
+                f"/api/v1/qa/deviations/{dev_id}/transition",
+                json={"action": "start_investigation"},
+            )
+            resp = await ac.put(
+                f"/api/v1/qa/deviations/{dev_id}",
+                json={
+                    "direct_cause": "检验员疏忽忘记波长准确性确认",
+                    "root_cause": "新增项缺乏提醒机制，记录分散，复核未覆盖",
+                    "root_cause_categories": ["method"],
+                    "why_chain": [],
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            detail = resp.json()["data"]
+            assert detail["why_chain"] == []
+            assert detail["missing_for_next"] == []
+            resp = await ac.post(
+                f"/api/v1/qa/deviations/{dev_id}/transition",
+                json={"action": "submit_assessment"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["data"]["status"] == "assessing"
 
     async def test_edit_writes_section_log(self) -> None:
         """编辑保存写一条 edit 日志：记操作人与被改的分区，不记变更内容。
@@ -494,7 +532,7 @@ class TestDeviationLifecycle:
             assert summary.json()["data"]["investigating"] >= 1
 
     async def test_repeat_candidates_same_group_and_root_cause(self) -> None:
-        """重复偏差候选按「同组+同根因分类」圈定，勾选重复后必须关联编号。
+        """重复偏差候选按「同组+根因分类有交集」圈定，勾选重复后必须关联编号。
 
         候选是系统提示，关联哪些历史偏差由人确认；勾选了重复却没给
         出关联编号时禁止关闭——重复偏差统计是管理评审的硬指标。
@@ -507,18 +545,30 @@ class TestDeviationLifecycle:
                 occurrence_date=None,
             )
             other_group = await _create(ac, group_name="微生物组")
-            for dev in (first, second, other_group):
+            no_overlap = await _create(
+                ac,
+                discovery_date=(app_time.today() - timedelta(days=10)).isoformat(),
+                occurrence_date=None,
+            )
+            for dev in (first, second, other_group, no_overlap):
                 await ac.post(
                     f"/api/v1/qa/deviations/{dev['id']}/transition",
                     json={"action": "start_investigation"},
                 )
                 await _investigate(ac, dev["id"])
+            # 分类与 first（method+personnel）无交集，虽同组也不算重复。
+            resp = await ac.put(
+                f"/api/v1/qa/deviations/{no_overlap['id']}",
+                json={"root_cause_categories": ["equipment"]},
+            )
+            assert resp.status_code == 200, resp.text
             detail = (await ac.get(f"/api/v1/qa/deviations/{first['id']}")).json()[
                 "data"
             ]
             candidate_ids = {c["id"] for c in detail["repeat_candidates"]}
             assert second["id"] in candidate_ids
             assert other_group["id"] not in candidate_ids
+            assert no_overlap["id"] not in candidate_ids
 
             # 勾选重复但没关联编号 → 关闭前守卫
             await ac.post(
@@ -620,6 +670,8 @@ class TestLedgerFilters:
             assert await _ids(classification="minor") == {dev_id}
             assert await _ids(classification="major") == set()
             assert await _ids(root_cause_category="method") == {dev_id}
+            # 分类是多选，筛选项按「包含该分类」命中。
+            assert await _ids(root_cause_category="material") == set()
             assert await _ids(department_name="微生物保障部") == {overdue_dev["id"]}
             assert await _ids(overdue_only=True) == {overdue_dev["id"]}
             assert await _ids(discovery_to=(today - timedelta(days=1)).isoformat()) == {
@@ -959,12 +1011,13 @@ class TestServiceHelpers:
     def test_missing_before_lists_sop_required_fields(self) -> None:
         """关闭前的必填项清单按 SOP 口径给出，逐项补齐后清零。
 
-        关闭守卫同时复核调查结论，防止提交评估后又把调查字段清空。
+        关闭守卫同时复核调查结论，防止提交评估后又把调查字段清空；
+        5Why 是选填项不进清单（test_5why_optional_for_assessment）。
         """
         from app.modules.qa.models import Deviation, DeviationStatus
 
         deviation = Deviation(
-            deviation_no="DE2610001",
+            deviation_no="DE2611001",
             status="assessing",
             discovery_date=date(2026, 10, 1),
             due_date=date(2026, 10, 31),
@@ -979,15 +1032,13 @@ class TestServiceHelpers:
             "直接原因",
             "根本原因",
             "根本原因分类",
-            "5Why 分析",
             "对质量的影响结论",
             "偏差分类",
             "是否发起 CAPA",
         ]
         deviation.direct_cause = "直接原因"
         deviation.root_cause = "根本原因"
-        deviation.root_cause_category = "method"
-        deviation.why_chain = [{"question": "为什么？", "answer": "因为"}]
+        deviation.root_cause_categories = ["method"]
         deviation.capa_initiated = False
         deviation.quality_impact = "not_affected"
         deviation.classification = "minor"

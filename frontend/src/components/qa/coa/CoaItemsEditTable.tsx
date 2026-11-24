@@ -242,6 +242,8 @@ export function CoaItemsEditTable({
               {
                 title: '操作',
                 width: 140,
+                // 固定在滚动区右端：窄容器横向滚动时上移/下移/删除不离开视野
+                fixed: 'end' as const,
                 render: (_v: unknown, row: CoaItemRow) => (
                   <>
                     <Button

@@ -27,7 +27,6 @@ def _parse_to_raw(parse: Any) -> dict[str, Any]:
         "batch_info": parse.batch_info,
         "serial_no": parse.serial_no,
         "report_no": parse.report_no,
-        "conclusion": parse.conclusion,
         "items": [
             {
                 "name": it.name,

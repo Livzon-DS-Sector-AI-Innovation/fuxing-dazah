@@ -1,7 +1,7 @@
 """QA COA HTTP API：产品/客户标准配置、docx 导入预览、出具登记、矩阵透视。
 
-挂在 QA 模块路由下（``/api/v1/qa/coa``）。读取放行 COA 专用读码或模块
-通配读码 ``qa:*:read``（standard:manage / issue:create 写权限隐含读）。
+挂在 QA 模块路由下（``/api/v1/qa/coa``）。读取放行模块全域读码
+``qa:all:read``、COA 专用读码或 coa 写码（写权限隐含读）。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
+from app.modules.qa.api._deps import coa_issue, coa_manage, coa_read
 from app.modules.qa.schemas.coa import (
     CoaProductCreate,
     CoaProductFieldsReplace,
@@ -27,17 +28,8 @@ from app.modules.qa.schemas.coa import (
 )
 from app.modules.qa.service import coa as service
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
 
 router = APIRouter()
-
-# 读取放行专用读码 + 模块通配读码；写权限隐含读（能配置/登记的人天然要
-# 读得动页面数据），与 apr 口径一致。
-_coa_read = require_permission(
-    "qa:coa:read", "qa:*:read", "qa:coa:standard:manage", "qa:coa:issue:create"
-)
-_coa_manage = require_permission("qa:coa:standard:manage")
-_coa_issue = require_permission("qa:coa:issue:create")
 
 
 # ───────────────────────── 产品 ─────────────────────────
@@ -45,7 +37,7 @@ _coa_issue = require_permission("qa:coa:issue:create")
 
 @router.get("/coa/products", summary="COA 产品列表")
 async def list_products(
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
     active_only: bool = Query(default=False, description="只看启用产品"),
 ) -> Any:
@@ -57,7 +49,7 @@ async def list_products(
 @router.post("/coa/products", summary="新增 COA 产品", status_code=201)
 async def create_product(
     payload: CoaProductCreate,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -69,7 +61,7 @@ async def create_product(
 async def update_product(
     payload: CoaProductUpdate,
     product_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -82,7 +74,7 @@ async def update_product(
 )
 async def list_product_fields(
     product_id: uuid.UUID,
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -97,7 +89,7 @@ async def list_product_fields(
 async def replace_product_fields(
     payload: CoaProductFieldsReplace,
     product_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -110,7 +102,7 @@ async def replace_product_fields(
 
 @router.get("/coa/standards", summary="客户标准列表")
 async def list_standards(
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
     product_id: uuid.UUID | None = Query(default=None, description="按产品过滤"),
     active_only: bool = Query(default=False, description="只看启用标准"),
@@ -125,7 +117,7 @@ async def list_standards(
 @router.get("/coa/standards/{standard_id}", summary="客户标准详情（含项目）")
 async def get_standard(
     standard_id: uuid.UUID,
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(data=await service.get_standard_detail(db, standard_id))
@@ -134,7 +126,7 @@ async def get_standard(
 @router.post("/coa/standards", summary="新建客户标准（含首批项目）", status_code=201)
 async def create_standard(
     payload: CoaStandardCreate,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -146,7 +138,7 @@ async def create_standard(
 async def update_standard(
     payload: CoaStandardUpdate,
     standard_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -157,7 +149,7 @@ async def update_standard(
 @router.delete("/coa/standards/{standard_id}", summary="删除客户标准")
 async def delete_standard(
     standard_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.delete_standard(db, standard_id, user)
@@ -171,7 +163,7 @@ async def delete_standard(
 async def replace_standard_fields(
     payload: CoaStandardFieldsReplace,
     standard_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -185,7 +177,7 @@ async def replace_standard_fields(
 )
 async def restore_standard_fields(
     standard_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(data=await service.restore_standard_fields(db, standard_id))
@@ -195,7 +187,7 @@ async def restore_standard_fields(
 async def replace_items(
     payload: CoaStandardItemsReplace,
     standard_id: uuid.UUID,
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -208,7 +200,7 @@ async def replace_items(
     summary="docx 导入预览：客户标准草稿（不落库）",
 )
 async def import_standard_preview(
-    user: User = Depends(_coa_manage),
+    user: User = Depends(coa_manage),
     db: AsyncSession = Depends(get_db),
     file: UploadFile = File(description="COA docx 报告文件"),
 ) -> Any:
@@ -225,7 +217,7 @@ async def import_standard_preview(
 
 @router.get("/coa/reports", summary="出具登记列表（按产品）")
 async def list_reports(
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
     product_id: uuid.UUID = Query(description="产品 id"),
 ) -> Any:
@@ -234,7 +226,7 @@ async def list_reports(
 
 @router.get("/coa/reports/matrix", summary="产品维度矩阵（所有 COA × 所有项目）")
 async def report_matrix(
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
     product_id: uuid.UUID = Query(description="产品 id"),
     standard_id: list[uuid.UUID] | None = Query(
@@ -249,7 +241,7 @@ async def report_matrix(
 @router.get("/coa/reports/{report_id}", summary="COA 报告详情（含结果值）")
 async def get_report(
     report_id: uuid.UUID,
-    user: User = Depends(_coa_read),
+    user: User = Depends(coa_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(data=await service.get_report_detail(db, report_id))
@@ -262,7 +254,7 @@ async def get_report(
 )
 async def create_report(
     payload: CoaReportCreate,
-    user: User = Depends(_coa_issue),
+    user: User = Depends(coa_issue),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -274,7 +266,7 @@ async def create_report(
 async def update_report(
     payload: CoaReportUpdate,
     report_id: uuid.UUID,
-    user: User = Depends(_coa_issue),
+    user: User = Depends(coa_issue),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     return success_response(
@@ -285,7 +277,7 @@ async def update_report(
 @router.delete("/coa/reports/{report_id}", summary="作废 COA 报告")
 async def delete_report(
     report_id: uuid.UUID,
-    user: User = Depends(_coa_issue),
+    user: User = Depends(coa_issue),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     await service.delete_report(db, report_id, user)
@@ -297,7 +289,7 @@ async def delete_report(
     summary="docx 导入预览：标准匹配 + 项目对齐 + 值预填（不落库）",
 )
 async def import_report_preview(
-    user: User = Depends(_coa_issue),
+    user: User = Depends(coa_issue),
     db: AsyncSession = Depends(get_db),
     file: UploadFile = File(description="COA docx 报告文件"),
     standard_id: uuid.UUID | None = Query(

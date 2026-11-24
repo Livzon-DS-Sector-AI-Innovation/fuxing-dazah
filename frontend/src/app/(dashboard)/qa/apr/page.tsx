@@ -11,9 +11,9 @@ import { usePermission } from '@/hooks/usePermission'
 export default function QaAprPage() {
   const { hasPermission, isLoaded } = usePermission()
   if (!isLoaded) return null
-  if (hasPermission('qa:apr:enter', 'qa:apr:read', 'qa:*:read')) redirect('/qa/apr/entry')
-  if (hasPermission('qa:apr:read', 'qa:*:read')) redirect('/qa/apr/summary')
   if (hasPermission('qa:apr:manage')) redirect('/qa/apr/config')
+  if (hasPermission('qa:apr:enter')) redirect('/qa/apr/entry')
+  if (hasPermission('qa:apr:read', 'qa:all:read', 'qa:apr:export', 'qa:apr:lock')) redirect('/qa/apr/summary')
   // 三个子页都无权：仍跳汇总页，让页面自身给出明确的错误/空态
   redirect('/qa/apr/summary')
 }

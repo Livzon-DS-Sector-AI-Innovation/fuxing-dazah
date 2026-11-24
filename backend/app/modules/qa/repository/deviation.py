@@ -96,7 +96,10 @@ async def list_deviations(
     if classification:
         conditions.append(Deviation.classification == classification)
     if root_cause_category:
-        conditions.append(Deviation.root_cause_category == root_cause_category)
+        # 分类是多选 JSONB，筛选语义为「包含所选分类」。
+        conditions.append(
+            Deviation.root_cause_categories.contains([root_cause_category])
+        )
     if department_name:
         conditions.append(Deviation.department_name == department_name)
     if is_repeat is not None:
@@ -153,14 +156,19 @@ async def count_deviations_by_status(db: AsyncSession) -> dict[str, int]:
 async def find_repeat_candidates(
     db: AsyncSession, deviation: Deviation
 ) -> list[Deviation]:
-    """同部门（同组别）同根因分类、发现日期在前后 3 个月内的其他偏差。"""
-    if not deviation.root_cause_category or not deviation.department_name:
+    """同部门（同组别）根因分类有交集、发现日期在前后 3 个月内的其他偏差。"""
+    if not deviation.root_cause_categories or not deviation.department_name:
         return []
     conditions: list[ColumnElement[bool]] = [
         Deviation.is_deleted.is_(False),
         Deviation.id != deviation.id,
         Deviation.department_name == deviation.department_name,
-        Deviation.root_cause_category == deviation.root_cause_category,
+        or_(
+            *[
+                Deviation.root_cause_categories.contains([category])
+                for category in deviation.root_cause_categories
+            ]
+        ),
         Deviation.discovery_date >= deviation.discovery_date - REPEAT_WINDOW,
         Deviation.discovery_date <= deviation.discovery_date + REPEAT_WINDOW,
     ]

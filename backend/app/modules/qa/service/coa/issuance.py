@@ -3,8 +3,8 @@
 守卫口径：
 - 无报告编号（业务键=产品+模板+批号）：(产品, 标准, 批号) 唯一——同批同
   标准只登记一份，补发=软删重登；docx 里印的编号仅作导入解析匹配锚点。
-- 值的 item 必须归属报告标准；导入确认可带 new_items 并入标准（携带首份
-  值，后端按新建 item id 归并，前端无需预知 UUID）。
+- 值的 item 必须归属报告标准；导入不改标准配置：未命中项目不落库，
+  扩项目走「客户标准配置」维护。
 - batch_data 键必须命中标准生效字段集自定义键；固定列别名键镜像写报告
   固定列，其余进 JSONB；读取按字段集合成 batch_info 视图。
 - 矩阵：列=产品各标准项目（两级列头），行=报告，格=值映射。
@@ -42,8 +42,8 @@ from app.modules.qa.service.coa.common import (
     standard_dict,
     value_dict,
 )
-from app.modules.qa.service.coa.docx_parse import parse_date_text
-from app.modules.qa.service.coa.standards import _insert_items, resolve_standard_fields
+from app.modules.qa.service.coa.docx_parse import item_code, parse_date_text
+from app.modules.qa.service.coa.standards import resolve_standard_fields
 
 
 def _parse_to_raw(parse: Any) -> dict[str, Any]:
@@ -53,7 +53,6 @@ def _parse_to_raw(parse: Any) -> dict[str, Any]:
         "batch_info": parse.batch_info,
         "serial_no": parse.serial_no,
         "report_no": parse.report_no,
-        "conclusion": parse.conclusion,
         "items": [
             {
                 "name": it.name,
@@ -129,17 +128,15 @@ def _dynamic_batch_fields(
 
 
 def _report_draft(parse: Any) -> dict[str, Any]:
-    """解析结果 → 报告头草稿（日期已解析为 ISO；出具日期人工填）。"""
+    """解析结果 → 报告头草稿（日期已解析为 ISO）。"""
     return {
         "serial_no": parse.serial_no,
         "batch_no": parse.batch_info.get("batch_no"),
         "mfg_date": parse.mfg_date.isoformat() if parse.mfg_date else None,
         "exp_date": parse.exp_date.isoformat() if parse.exp_date else None,
-        "issued_date": None,
         "packaging": parse.batch_info.get("packaging"),
         "batch_size": parse.batch_info.get("batch_size"),
         "storage": parse.batch_info.get("storage"),
-        "conclusion": parse.conclusion,
     }
 
 
@@ -198,7 +195,7 @@ async def import_report_preview(
         "standard_candidates": candidates,
         "report_draft": _report_draft(parse),
         "matched_items": [],
-        "unmatched_items": [],  # docx 有、标准无 → 可勾选并入标准（带值）
+        "unmatched_items": [],  # docx 有、标准无 → 只展示不录入（扩项目走标准配置）
         "missing_items": [],  # 标准有、docx 无（提示留空/补录）
         # 模板动态批次字段值（key=生效字段集键，label 供预览展示）→ 确认时传 batch_data
         "batch_dynamic": [],
@@ -212,8 +209,20 @@ async def import_report_preview(
     if standard is not None:
         items = await repo.list_items(db, standard.id)
         by_code = {i.code: i for i in items}
+        # 中文名-only 兜底索引：同中文名多项目（不同英文名）不消歧，保持未命中
+        by_cn: dict[str, list[Any]] = {}
+        for i in items:
+            by_cn.setdefault(item_code(i.name_cn), []).append(i)
+        matched_ids: set[uuid.UUID] = set()
         for it in parse.items:
             hit = by_code.get(it.code)
+            if hit is None:
+                # 英文名转写错误/有无/措辞差异会让中英拼接键失配（flash 抄长
+                # 技术词会掉字符，实测 Monodechlorovancomycin→…vanomycin）；
+                # 中文名-only 键兜底：唯一候选即认领，多义不猜走人工
+                cn_hits = by_cn.get(item_code(it.name_cn)) or []
+                if len(cn_hits) == 1:
+                    hit = cn_hits[0]
             if hit is None:
                 result["unmatched_items"].append(
                     {
@@ -229,6 +238,7 @@ async def import_report_preview(
                     }
                 )
             else:
+                matched_ids.add(hit.id)
                 result["matched_items"].append(
                     {
                         "item_id": str(hit.id),
@@ -238,9 +248,9 @@ async def import_report_preview(
                         "value_text": it.result,
                     }
                 )
-        hit_codes = {it.code for it in parse.items}
+        # 缺失=标准有而 docx 没提（按命中项目 id 计，兜底命中的不算缺失）
         result["missing_items"] = [
-            item_dict(i) for i in items if i.code not in hit_codes
+            item_dict(i) for i in items if i.id not in matched_ids
         ]
     return result
 
@@ -270,7 +280,7 @@ async def _validate_values(
     standard_id: uuid.UUID,
     values: list[CoaValueIn],
 ) -> list[dict[str, Any]]:
-    """values 只允许引用既有项目；新项目的值走 new_items 归并。"""
+    """values 只允许引用既有项目；导入未命中项目不落库（不改标准配置）。"""
     if not values:
         return []
     items = await repo.list_items(db, standard_id)
@@ -403,20 +413,6 @@ async def create_report(
     try:
         async with db.begin_nested():
             rows = await _validate_values(db, standard.id, payload.values)
-            # 导入确认的未命中项先并入标准（人工勾选过 = 人工确认），
-            # 其首份值按新建 item id 归并
-            if payload.new_items:
-                created = await _insert_items(db, standard.id, payload.new_items)
-                for src, row in zip(payload.new_items, created, strict=True):
-                    if src.value_num is not None or (src.value_text or "").strip():
-                        rows.append(
-                            {
-                                "item_id": row.id,
-                                "value_num": src.value_num,
-                                "value_text": src.value_text,
-                                "remark": None,
-                            }
-                        )
             report = CoaReport(
                 product_id=product.id,
                 standard_id=standard.id,
@@ -424,11 +420,9 @@ async def create_report(
                 batch_no=payload.batch_no.strip(),
                 mfg_date=payload.mfg_date,
                 exp_date=payload.exp_date,
-                issued_date=payload.issued_date,
                 packaging=payload.packaging,
                 batch_size=payload.batch_size,
                 storage=payload.storage,
-                conclusion=payload.conclusion,
                 source=CoaSourceType.IMPORT.value
                 if payload.raw_extract
                 else CoaSourceType.MANUAL.value,
@@ -456,18 +450,18 @@ async def update_report(
 ) -> dict[str, Any]:
     report = await get_report_or_404(db, report_id)
     updates = payload.model_dump(exclude_unset=True)
-    new_values = updates.pop("values", None)
+    # model_dump 会把 values 子模型降级为 dict，而校验按 CoaValueIn 属性访问 → 取原模型
+    new_values = payload.values
+    updates.pop("values", None)
     new_batch_data = updates.pop("batch_data", None)
     head_fields = {
         "serial_no",
         "batch_no",
         "mfg_date",
         "exp_date",
-        "issued_date",
         "packaging",
         "batch_size",
         "storage",
-        "conclusion",
         "remark",
     }
     touched = {k: v for k, v in updates.items() if k in head_fields}
