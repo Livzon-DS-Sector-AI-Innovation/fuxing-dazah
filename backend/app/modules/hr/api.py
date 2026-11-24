@@ -354,6 +354,7 @@ async def list_employees(
     status: str | None = Query(None, description="状态筛选；不传时全量（与源表对齐，仅软删不计）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     include_uncategorized: bool = Query(False, description="是否纳入「未分类」人员（按实际部门归属）"),
+    uncategorized_only: bool = Query(False, description="仅返回「未归类」人员（部门为空或不在部门表中）"),
     # 字段级筛选（档案筛选面板；精确匹配项的取值来源 /employees/filter-options）
     field_filters: EmployeeFieldFilterParams = Depends(),
     page_params: PageParams = Depends(),
@@ -381,6 +382,7 @@ async def list_employees(
         page=page_params.page,
         page_size=page_params.page_size,
         include_uncategorized=include_uncategorized,
+        uncategorized_only=uncategorized_only,
         departments=scoped_departments,
         filters=filters or None,
     )
@@ -663,6 +665,7 @@ async def export_employees(
     department: str | None = Query(None, description="部门筛选（与员工列表同口径）"),
     status: str | None = Query(None, description="状态筛选（与员工列表同口径）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
+    uncategorized_only: bool = Query(False, description="仅导出「未归类」人员（与员工列表同口径）"),
     field_filters: EmployeeFieldFilterParams = Depends(),
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
@@ -691,6 +694,7 @@ async def export_employees(
         department=department,
         status=status,
         keyword=keyword,
+        uncategorized_only=uncategorized_only,
         page=1,
         page_size=100_000,
         departments=scoped_departments,

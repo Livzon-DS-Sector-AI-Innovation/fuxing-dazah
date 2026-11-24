@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { App, Button, Card, DatePicker, Descriptions, Empty, Form, Input, InputNumber, Modal, Popconfirm, Radio, Spin, Table, Tabs, Tag } from 'antd'
-import { ArrowLeftOutlined, PlusOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, AuditOutlined, PlusOutlined } from '@ant-design/icons'
 import { fetchEmployeeByIdAction } from '@/actions/hr'
 import {
   createProbationSafetyExam,
@@ -14,17 +14,38 @@ import {
 import type { Employee, ProbationReviewItem, ProbationSafetyExamItem } from '@/types/hr'
 import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr/status-color'
 import EmployeeCertificatesPanel from './EmployeeCertificatesPanel'
+import ProbationReviewModal from './ProbationReviewModal'
 import { usePermission } from '@/hooks/usePermission'
 
 const STEP_LABELS = ['直属上级评估', '部门经理审批', '分管领导审批']
 const CONCLUSION_COLOR: Record<string, string> = { 通过: 'green', 延长: 'orange', 不通过: 'red' }
 
+/** 身份证 / 手机号默认脱敏，点「显示」看明文（纯前端交互；后端本身已按权限对无敏感权限的角色脱敏） */
+function MaskedText({ value, keepHead, keepTail }: { value: string; keepHead: number; keepTail: number }) {
+  const [show, setShow] = useState(false)
+  const masked = value.length > keepHead + keepTail
+    ? `${value.slice(0, keepHead)}${'*'.repeat(value.length - keepHead - keepTail)}${value.slice(-keepTail)}`
+    : '*'.repeat(value.length)
+  return (
+    <span className="font-mono whitespace-nowrap">
+      {show ? value : masked}
+      <Button type="link" size="small" className="!px-1 !h-auto" onClick={() => setShow((s) => !s)}>
+        {show ? '隐藏' : '显示'}
+      </Button>
+    </span>
+  )
+}
+
 /** 员工完整档案页：基本信息 + 证件档案 / 安全考试 / 转正历史 */
 export default function EmployeeDetailClient({ employeeId }: { employeeId: string }) {
   const router = useRouter()
   const { message: msg } = App.useApp()
+  const { hasPermission } = usePermission()
+  // 与列表页一致：有档案编辑权限才能发起转正评估
+  const canEditProfile = hasPermission('hr:profile:update')
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
+  const [probationOpen, setProbationOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -41,19 +62,38 @@ export default function EmployeeDetailClient({ employeeId }: { employeeId: strin
     return () => { cancelled = true }
   }, [employeeId, msg])
 
+  // 返回：优先回上一页（保留列表的筛选与页码）；直接打开的深链没有上一页时回员工档案列表
+  const goBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) router.back()
+    else router.push('/hr/profile')
+  }
+
   if (loading) return <div className="text-center py-16"><Spin /></div>
-  if (!employee) return <Empty description="员工不存在" className="py-16" />
+  if (!employee) {
+    return (
+      <Empty description="员工不存在或已被删除" className="py-16">
+        <Button type="primary" onClick={goBack}>返回</Button>
+      </Empty>
+    )
+  }
 
   return (
     <div className="space-y-4">
+      {/* 页头：返回 ｜ 姓名 · 工号 · 状态 · 部门岗位 ｜ 右侧操作区（此前只有一个「返回」按钮，没有页级操作） */}
       <div className="flex items-center gap-3 flex-wrap">
-        <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/hr/profile')}>返回</Button>
-        <h1 className="text-[20px] font-semibold m-0">{employee.name}</h1>
-        <span className="text-sm text-gray-400">{employee.employee_number}</span>
+        <Button icon={<ArrowLeftOutlined />} onClick={goBack}>返回</Button>
+        <h1 className="text-[22px] font-semibold leading-tight text-[var(--color-charcoal)] m-0">{employee.name}</h1>
+        <span className="text-sm text-[var(--color-steel)]">{employee.employee_number}</span>
         <Tag color={EMPLOYEE_STATUS_TAG_COLORS[employee.status] || 'default'}>{employee.status}</Tag>
         {employee.is_key_position && <Tag color="purple">重点岗位</Tag>}
-        <span className="text-sm text-gray-500">{employee.department} · {employee.position}</span>
+        <span className="text-sm text-[var(--color-steel)]">{employee.department} · {employee.position}</span>
+        {canEditProfile && employee.status === '试用期' && (
+          <Button className="ml-auto" type="primary" icon={<AuditOutlined />} onClick={() => setProbationOpen(true)}>
+            发起转正评估
+          </Button>
+        )}
       </div>
+      <ProbationReviewModal open={probationOpen} employee={employee} onClose={() => setProbationOpen(false)} />
 
       <Card size="small" title="基本信息">
         <Descriptions size="small" column={{ xs: 1, sm: 2, xl: 3 }} items={[
@@ -61,10 +101,10 @@ export default function EmployeeDetailClient({ employeeId }: { employeeId: strin
           { key: 'category', label: '用工性质', children: employee.status_category || '-' },
           { key: 'dm', label: '直属上级', children: employee.direct_manager_name || '未登记' },
           { key: 'key', label: '是否重点岗位', children: employee.is_key_position ? '是' : '否' },
-          { key: 'idcard', label: '身份证号', children: employee.id_card || '-' },
+          { key: 'idcard', label: '身份证号', children: employee.id_card ? <MaskedText value={employee.id_card} keepHead={3} keepTail={2} /> : '-' },
           { key: 'idexp', label: '身份证有效期', children: employee.id_card_expiry || '-' },
           { key: 'edu', label: '学历', children: `${employee.education || '-'}${employee.school ? ` · ${employee.school}` : ''}` },
-          { key: 'phone', label: '手机', children: employee.phone || '-' },
+          { key: 'phone', label: '手机', children: employee.phone ? <MaskedText value={employee.phone} keepHead={0} keepTail={4} /> : '-' },
           { key: 'contract', label: '合同期', children: employee.contract_start_date && employee.contract_end_date ? `${employee.contract_start_date} ~ ${employee.contract_end_date}` : '-' },
           ...(employee.status === '试用期' ? [{
             key: 'prob', label: '转正到期',

@@ -1,14 +1,14 @@
 'use client'
 
-// 员工档案页容器：页头 + 部门页签 + 工具栏 + 筛选面板 + 员工表格。
+// 员工档案页容器：页头 + 工具栏（部门下拉 / 搜索 / 状态 / 筛选 / 列设置）+ 筛选面板 + 员工表格。
 // 数据加载已收敛至 hooks/hr（列表/部门/筛选选项），本组件只保留查询条件编排与一次性动作（导出/同步）。
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { App, Button, Tabs } from 'antd'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { App, Button, Select } from 'antd'
 import { DownloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { exportEmployees, triggerEmployeeSync } from '@/actions/hr'
 import { Employee, EmployeeSyncBanner, EmployeeFieldFilters } from '@/types/hr'
-import { useHrStore } from '@/stores/hr'
 import { downloadBase64File, fieldFiltersToParams } from '@/lib/hr'
 import { useDebouncedCallback, useEmployeeList, useHrDepartments, useHrFilterOptions } from '@/hooks/hr'
 import PageHeader from './PageHeader'
@@ -16,64 +16,100 @@ import EmployeeTable from './EmployeeTable'
 import EmployeeForm from './EmployeeForm'
 import EmployeeFilterPanel, { countActiveFilters } from './EmployeeFilterPanel'
 import ProfileToolbar from './employee/ProfileToolbar'
+import ColumnSettings, { useProfileColumnSettings } from './employee/ColumnSettings'
 
 interface EmployeeProfileClientProps {
-  /** 下钻进入时预选的部门名（编制页等部门跳转） */
-  initialDepartment?: string
   /** 多维表格同步启用时传入：页面转只读展示 */
   syncInfo?: EmployeeSyncBanner
   /** 标题行右侧的动作区（页面级入口按钮，如信息收集/转正管理面板） */
   headerActions?: ReactNode
 }
 
+/** 合成范围「未归类」在网址里的写法（部门为空或不在部门表中的员工；不是真实部门——部门表里那个叫「未分类」） */
+const UNCATALOGED_PARAM = '未归类'
+
 export default function EmployeeProfileClient({
-  initialDepartment,
   syncInfo,
-  headerActions }: EmployeeProfileClientProps) {
+  headerActions,
+}: EmployeeProfileClientProps) {
   const { message } = App.useApp()
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const urlDept = searchParams.get('department') ?? ''
+  const urlStatus = searchParams.get('status') ?? ''
+  const urlKeyword = searchParams.get('keyword') ?? ''
+
   const [formOpen, setFormOpen] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
-  const [activeTab, setActiveTab] = useState('all')
   const [filters, setFilters] = useState<EmployeeFieldFilters>({})
   const [filterOpen, setFilterOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  // 列设置：默认「常用列」，选择持久化在本地（employee/ColumnSettings）
+  const columnSettings = useProfileColumnSettings()
 
-  const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
+  // ── 列表状态 = 网址的镜像 ──
+  // 部门范围 / 状态 / 关键词都直接从网址初始化：从完整档案页返回、编制页下钻、别人发来的带筛选链接都能回到原视图。
+  // （此前它们只在内存里，页面一跳走就丢；?status=试用期 这样的链接也不生效。）
+  // 部门范围存「部门名」而不是 id：这样初始化时不必等部门表加载完成。
+  const [activeDept, setActiveDept] = useState<string>(urlDept) // '' = 全公司
+  const [status, setStatus] = useState<string>(urlStatus)
+  const [keyword, setKeyword] = useState<string>(urlKeyword)
+
   // 防抖搜索：停止输入 300ms 才写入 keyword 触发查询，避免逐键请求乱序
   const { run: debouncedSetKeyword, cancel: cancelKeywordDebounce } = useDebouncedCallback(
-    (val: string) => setSearchKeyword(val),
+    (val: string) => setKeyword(val),
     300,
   )
 
   const { departments, refresh: refreshDepartments } = useHrDepartments()
   const { filterOptions, refresh: refreshFilterOptions } = useHrFilterOptions()
 
-  const activeDepartment =
-    activeTab === 'all'
-      ? ''
-      : departments.find((d) => d.id === activeTab)?.name || ''
+  // 「未归类」：部门为空或不在部门表中的人员。它不是部门，activeDepartment 为空，
+  // 靠 uncategorizedOnly 走后端专用过滤
+  const isUncategorized = activeDept === UNCATALOGED_PARAM
+  const activeDepartment = isUncategorized ? '' : activeDept
 
   const {
     employees, total, page, pageSize, loading, onPaginationChange, refresh: refreshList,
   } = useEmployeeList({
-    keyword: searchKeyword,
+    keyword,
     department: activeDepartment,
-    status: filterStatus,
-    // 仅「全部」tab 按实际部门归属并入未分类；具体部门 tab 不混入未分类
-    // （未分类人员有独立 tab）
-    includeUncategorized: activeDepartment === '',
+    status,
+    uncategorizedOnly: isUncategorized,
     filters,
   })
 
   const activeFilterCount = useMemo(() => countActiveFilters(filters), [filters])
 
-  // ?department=xxx：编制页等部门下钻进入时预选部门页签
-  useEffect(() => {
-    if (initialDepartment && departments.length > 0) {
-      const dept = departments.find((d) => d.name === initialDepartment)
-      if (dept) setActiveTab(dept.id)
+  // 网址被外部改变（点侧边栏的裸链接、浏览器前进后退）时以网址为准恢复筛选。
+  // 用「渲染期回同步」而不是 effect；页面自己 router.replace 写入的网址与当前状态必然一致，
+  // 不回灌（否则打字过程中旧的网址晚到一步，会把关键词弹回旧值造成吃字）。
+  const urlSig = `${urlDept}\u0000${urlStatus}\u0000${urlKeyword}`
+  const stateSig = `${activeDept}\u0000${status}\u0000${keyword.trim()}`
+  const [prevUrlSig, setPrevUrlSig] = useState(urlSig)
+  if (urlSig !== prevUrlSig) {
+    setPrevUrlSig(urlSig)
+    if (urlSig !== stateSig) {
+      setActiveDept(urlDept)
+      setStatus(urlStatus)
+      setKeyword(urlKeyword)
     }
-  }, [initialDepartment, departments])
+  }
+
+  // 筛选变化后把 部门 / 状态 / 关键词 镜像到网址（replace，不新增历史；关键词已防抖）
+  useEffect(() => {
+    const next = new URLSearchParams()
+    if (isUncategorized) next.set('department', UNCATALOGED_PARAM)
+    else if (activeDepartment) next.set('department', activeDepartment)
+    if (status) next.set('status', status)
+    const kw = keyword.trim()
+    if (kw) next.set('keyword', kw)
+    const target = next.toString()
+    if (searchParams.toString() !== target) {
+      router.replace(target ? `${pathname}?${target}` : pathname, { scroll: false })
+    }
+  }, [activeDepartment, isUncategorized, status, keyword, pathname, searchParams, router])
 
   const handleRefresh = () => {
     refreshList()
@@ -85,10 +121,10 @@ export default function EmployeeProfileClient({
     try {
       // 与列表查询同口径传参，导出内容=当前筛选结果，避免"以为导的是筛选结果"
       const r = await exportEmployees({
-        keyword: searchKeyword?.trim() || undefined,
+        keyword: keyword.trim() || undefined,
         department: activeDepartment || undefined,
-        status: filterStatus || undefined,
-        include_uncategorized: activeDepartment === '',
+        status: status || undefined,
+        uncategorized_only: isUncategorized || undefined,
         ...fieldFiltersToParams(filters),
       })
       downloadBase64File(r.base64, r.filename)
@@ -120,27 +156,19 @@ export default function EmployeeProfileClient({
     setFormOpen(true)
   }
 
-  const handleFormSuccess = () => {
-    refreshList()
-  }
-
-  const handleTabChange = (key: string) => {
-    setActiveTab(key)
-  }
-
   const handleKeywordCommit = (val: string) => {
     cancelKeywordDebounce()
-    setSearchKeyword(val)
+    setKeyword(val.trim())
   }
 
-  const tabItems = useMemo(
+  // 部门下拉：此前是 39 个部门页签，1366 宽度下只露出 6 个，其余挤在「…」里
+  const deptOptions = useMemo(
     () => [
-      { key: 'all', label: '全部' },
-      ...departments.map((d) => ({ key: d.id, label: d.name })),
-      // 未分类人员独立版面（不与有体现部门的人员混排）
-      { key: 'uncategorized', label: '未分类' },
+      { value: '', label: '全公司' },
+      ...departments.map((d) => ({ value: d.name, label: d.name })),
+      { value: UNCATALOGED_PARAM, label: '未归类' },
     ],
-    [departments]
+    [departments],
   )
 
   const lastSyncText = syncInfo?.last_sync_at ? syncInfo.last_sync_at.replace('T', ' ') : '从未'
@@ -170,49 +198,56 @@ export default function EmployeeProfileClient({
         }
       />
 
-      {/* 部门页签 + 右侧工具栏（搜索/状态/筛选）同行收纳；筛选面板展开在页签之下 */}
-      <Tabs
-        activeKey={activeTab}
-        onChange={handleTabChange}
-        styles={{ header: { marginBottom: 8 } }}
-        tabBarExtraContent={{
-          right: (
-            <ProfileToolbar
-              keyword={searchKeyword}
-              onKeywordInput={debouncedSetKeyword}
-              onKeywordCommit={handleKeywordCommit}
-              status={filterStatus}
-              onStatusChange={(value) => setFilterStatus(value || '')}
-              filterCount={activeFilterCount}
-              onToggleFilter={() => setFilterOpen((v) => !v)}
-            />
-          ),
-        }}
-        items={tabItems.map((dept) => ({
-          key: dept.key,
-          label: dept.label,
-          children: activeTab === dept.key ? (
-            <>
-              {filterOpen && (
-                <EmployeeFilterPanel
-                  options={filterOptions}
-                  value={filters}
-                  onChange={setFilters}
-                  onClose={() => setFilterOpen(false)}
-                />
-              )}
-              <EmployeeTable loading={loading}
-                employees={employees}
-                total={total}
-                page={page}
-                pageSize={pageSize}
-                onPageChange={onPaginationChange}
-                onEdit={handleEdit}
-                syncMode={Boolean(syncInfo)}
-              />
-            </>
-          ) : null,
-        }))}
+      {/* 工具栏一行：部门范围 ｜ 搜索 / 状态 / 筛选 ｜ 列设置 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          showSearch
+          optionFilterProp="label"
+          value={activeDept}
+          onChange={setActiveDept}
+          options={deptOptions}
+          style={{ width: 200 }}
+          aria-label="部门范围"
+          popupMatchSelectWidth={false}
+        />
+        <ProfileToolbar
+          keyword={keyword}
+          onKeywordInput={debouncedSetKeyword}
+          onKeywordCommit={handleKeywordCommit}
+          status={status}
+          onStatusChange={(value) => setStatus(value || '')}
+          filterCount={activeFilterCount}
+          onToggleFilter={() => setFilterOpen((v) => !v)}
+        />
+        <div className="ml-auto">
+          <ColumnSettings
+            hiddenSet={columnSettings.hiddenSet}
+            hiddenCount={columnSettings.hiddenCount}
+            onChange={columnSettings.setHiddenKeys}
+            onShowCommon={columnSettings.showCommon}
+            onShowAll={columnSettings.showAll}
+          />
+        </div>
+      </div>
+
+      {filterOpen && (
+        <EmployeeFilterPanel
+          options={filterOptions}
+          value={filters}
+          onChange={setFilters}
+          onClose={() => setFilterOpen(false)}
+        />
+      )}
+
+      <EmployeeTable loading={loading}
+        employees={employees}
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={onPaginationChange}
+        onEdit={handleEdit}
+        syncMode={Boolean(syncInfo)}
+        hiddenColumns={columnSettings.hiddenSet}
       />
 
       {!syncInfo && (
@@ -220,10 +255,9 @@ export default function EmployeeProfileClient({
           open={formOpen}
           employee={editingEmployee}
           onClose={() => setFormOpen(false)}
-          onSuccess={handleFormSuccess}
+          onSuccess={() => refreshList()}
         />
       )}
-
     </div>
   )
 }

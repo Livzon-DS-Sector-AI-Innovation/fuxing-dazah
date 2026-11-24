@@ -82,3 +82,44 @@ async def test_employee_list_default_includes_all_statuses(db_session, client):
     assert numbers.get(f"TS{tag}1") == "试用期"
     assert numbers.get(f"TS{tag}2") == "离职"
     assert numbers.get(f"TS{tag}3") == "产假"
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_only_returns_unmatched_employees(db_session, client):
+    """「未归类」版面：只返回部门为空、或部门名不在部门表中的人员。
+
+    回归：档案页的合成页签此前传 include_uncategorized（仓储层从未实现），
+    实际查询与「全部」页签完全相同；而部门表里另有一个真实存在、名为「未分类」的部门。
+    """
+    from app.modules.hr.models import Employee, HrDepartment
+
+    tag = uuid4().hex[:6].upper()
+    db_session.add(HrDepartment(name=f"未归类测试部门{tag}", code=f"UO{tag}"))
+    rows = [
+        # 部门在部门表中 → 已归类
+        Employee(employee_number=f"UO{tag}1", name=f"未归类测试在册{tag}", department=f"未归类测试部门{tag}",
+                 position="HR", status="在职", hire_date=_date.today()),
+        # 部门名不在部门表中 → 未归类
+        Employee(employee_number=f"UO{tag}2", name=f"未归类测试无匹配{tag}", department=f"不存在的部门{tag}",
+                 position="操作工", status="在职", hire_date=_date.today()),
+        # 部门为空 → 未归类
+        Employee(employee_number=f"UO{tag}3", name=f"未归类测试空部门{tag}", department="",
+                 position="操作工", status="在职", hire_date=_date.today()),
+    ]
+    db_session.add_all(rows)
+    await db_session.flush()
+
+    res = await client.get("/api/v1/hr/employees", params={
+        "keyword": "未归类测试", "page_size": 100, "uncategorized_only": "true",
+    })
+    assert res.status_code == 200, res.text
+    numbers = {e["employee_number"] for e in res.json()["data"]}
+    assert numbers == {f"UO{tag}2", f"UO{tag}3"}
+
+    # 不带该参数时三人都在：默认口径不受影响
+    res2 = await client.get("/api/v1/hr/employees", params={
+        "keyword": "未归类测试", "page_size": 100,
+    })
+    assert res2.status_code == 200, res2.text
+    numbers2 = {e["employee_number"] for e in res2.json()["data"]}
+    assert numbers2 == {f"UO{tag}1", f"UO{tag}2", f"UO{tag}3"}

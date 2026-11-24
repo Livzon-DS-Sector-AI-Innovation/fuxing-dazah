@@ -681,6 +681,7 @@ class EmployeeService:
         sort_by: str = "department",
         sort_order: str = "asc",
         include_uncategorized: bool = False,
+        uncategorized_only: bool = False,
         departments: set[str] | None = None,
         # 字段级筛选项（枚举下拉/日期范围/年龄区间等），键名与 repository 对齐
         filters: dict | None = None,
@@ -688,6 +689,7 @@ class EmployeeService:
         return await self.repo.list_employees(
             department=department,
             include_uncategorized=include_uncategorized,
+            uncategorized_only=uncategorized_only,
             departments=departments,
             status=status,
             keyword=keyword,

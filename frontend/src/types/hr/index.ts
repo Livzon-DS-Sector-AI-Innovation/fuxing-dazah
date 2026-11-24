@@ -224,7 +224,8 @@ export interface EmployeeFilterParams {
   department?: string
   status?: string
   keyword?: string
-  include_uncategorized?: boolean
+  /** 仅「未归类」人员（部门为空或不在部门表中）；对应档案页独立的「未归类」页签 */
+  uncategorized_only?: boolean
   // ── 字段级筛选（档案筛选面板；下拉精确匹配，选项来自 filter-options）──
   position?: string
   duty?: string

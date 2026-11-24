@@ -206,6 +206,7 @@ class EmployeeRepository:
         contract_end_date_after: date | None = None,
         contract_end_date_before: date | None = None,
         include_uncategorized: bool = False,
+        uncategorized_only: bool = False,
         departments: set[str] | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -219,6 +220,18 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.department.in_(departments))
         elif department:
             stmt = stmt.where(Employee.department.ilike(f"{department}%"))
+        if uncategorized_only:
+            # 「未归类」版面：部门为空，或部门名不在部门表中（含部门已删除）。
+            # 仅当未指定具体部门时生效，避免与部门筛选互相打架。
+            if not departments and not department:
+                categorized = select(HrDepartment.name).where(HrDepartment.is_deleted.is_(False))
+                stmt = stmt.where(
+                    or_(
+                        Employee.department.is_(None),
+                        Employee.department == "",
+                        Employee.department.not_in(categorized),
+                    )
+                )
         if status:
             stmt = stmt.where(Employee.status == status)
         # 无显式状态筛选时不过滤状态：与源表全量对齐（仅软删不计，口径同看板）
