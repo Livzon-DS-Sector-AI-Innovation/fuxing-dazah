@@ -32,7 +32,6 @@ PROG_INPUT_PREFIX = "ecf_prog_"
 UNCHK_INPUT_PREFIX = "ecf_unchk_"
 
 _TITLE_MAX = 24       # 卡面变更名称截断
-_LABEL_MAX = 40       # 表单 input 标签（编号+名称）截断
 _PROGRESS_MAX = 60    # 卡面进展行截断
 _DIGEST_DETAIL_MAX = 400  # 速递格子明细行截断
 
@@ -121,7 +120,12 @@ def _submit_value(dispatch_id: str) -> str:
 
 
 def _form_elements(view: FridayCardView, dispatch_id: str) -> list[dict[str, Any]]:
-    """反馈区：说明 + 逐项「input + ☑进展不变」表单 + 一个提交按钮。"""
+    """反馈区：说明 + 每项「信息块 + input + checker」+ 一个提交按钮。
+
+    每项的变更信息（编号/名称/审批详情链接/状态/预计实施/第 N 周督办/进展/
+    已反馈行）随该行一起放进表单（2026-11-24 实机反馈：上方清单与表单标签
+    重复展示，用户要求合成一处）——form 容器内放 markdown 已实测支持。
+    """
     elements: list[dict[str, Any]] = [{
         "tag": "markdown",
         "content": (
@@ -132,13 +136,13 @@ def _form_elements(view: FridayCardView, dispatch_id: str) -> list[dict[str, Any
     }]
     form_elements: list[dict[str, Any]] = []
     for item in view.items:
-        label = _short(
-            f"{item.change_no or item.record_id} {item.title}", _LABEL_MAX,
-        )
+        form_elements.append({
+            "tag": "markdown",
+            "content": "\n".join(_item_block(item)),
+        })
         form_elements.append({
             "tag": "input",
             "name": f"{PROG_INPUT_PREFIX}{item.record_id}",
-            "label": {"tag": "plain_text", "content": label},
             "placeholder": {"tag": "plain_text", "content": "填写新进展（无变化可不填）"},
         })
         form_elements.append({
@@ -162,17 +166,16 @@ def _form_elements(view: FridayCardView, dispatch_id: str) -> list[dict[str, Any
 
 
 def build_friday_card(view: FridayCardView, dispatch_id: str) -> dict[str, Any]:
-    """构建/重建周五卡完整 JSON（send_user_card_dict 发送、update_card PATCH）。"""
-    body: list[dict[str, Any]] = []
-    lines: list[str] = [
+    """构建/重建周五卡完整 JSON（send_user_card_dict 发送、update_card PATCH）。
+
+    变更清单只出现一次：顶部只留问候语，每项的完整信息随行进入表单
+    （2026-11-24 实机反馈：上方清单与表单标签重复展示）。
+    """
+    lead = (
         f"{view.officer_name} 您好，以下 {len(view.items)} 项变更尚未验收完毕，"
-        "请跟进督办：",
-        "",
-    ]
-    for item in view.items:
-        lines.extend(_item_block(item))
-        lines.append("")
-    body.append({"tag": "markdown", "content": "\n".join(lines).rstrip()})
+        "请跟进督办（每项下方填写）："
+    )
+    body: list[dict[str, Any]] = [{"tag": "markdown", "content": lead}]
     body.append({"tag": "hr"})
     body.extend(_form_elements(view, dispatch_id))
     if view.change_table_url:

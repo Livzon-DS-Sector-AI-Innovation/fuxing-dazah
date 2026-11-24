@@ -60,21 +60,25 @@ class TestFridayCard:
         assert card["schema"] == "2.0"
         assert card["header"]["title"]["content"] == "⏰ EHS变更周度督办 · 未验收 2 项"
         assert "第 48 周（11-27 周五）" in card["header"]["subtitle"]["content"]
-        # 变更清单同一 markdown 正文块（applink + 状态未填兜底）
-        md = _elements(card, "markdown")
-        items_block = md[0]["content"]
-        assert "FX-D4-2026-0826" in items_block and "FXD4-2026-0930" in items_block
-        assert "[审批详情](https://applink.feishu.cn/x)" in items_block
-        assert "状态未填" in items_block
-        assert "第 3 周督办" in items_block
-        # 表单：逐项 input+checkbox 对 + 一个提交按钮；无全局按钮/select
+        # 变更信息只在表单内出现一次（顶部不再有清单，2026-11-24 实机反馈）
         form = _form(card)
+        blocks = [e for e in form["elements"] if e["tag"] == "markdown"]
+        assert len(blocks) == 2                       # 每项一个信息块
+        joined = "\n".join(e["content"] for e in blocks)
+        assert "FX-D4-2026-0826" in joined and "FXD4-2026-0930" in joined
+        assert "[审批详情](https://applink.feishu.cn/x)" in joined
+        assert "状态未填" in joined
+        assert "第 3 周督办" in joined
+        # 顶部正文只有问候语（不含任何变更编号）
+        top_md = _elements(card, "markdown")[0]["content"]
+        assert "FX-D4-2026-0826" not in top_md and "FXD4-2026-0930" not in top_md
+        # 每项：信息块 + input + checker
         inputs = [e for e in form["elements"] if e["tag"] == "input"]
         checks = [e for e in form["elements"] if e["tag"] == "checker"]
         buttons = [e for e in form["elements"] if e["tag"] == "button"]
         assert len(inputs) == 2 and len(checks) == 2 and len(buttons) == 1
         assert inputs[0]["name"] == "ecf_prog_recA1"
-        assert "FX-D4-2026-0826" in inputs[0]["label"]["content"]
+        assert "label" not in inputs[0]               # 编号已在上方信息块，不重复
         assert checks[0]["name"] == "ecf_unchk_recA1"
         assert "进展不变" in checks[0]["text"]["content"]
         assert buttons[0]["name"] == "ecf_submit_dp-1"
@@ -84,7 +88,7 @@ class TestFridayCard:
         assert not _elements(card, "column_set")
         assert not [e for e in form["elements"] if e["tag"] == "select_static"]
         # 打开变更表链接
-        assert any("打开变更表" in e["content"] for e in md)
+        assert any("打开变更表" in e["content"] for e in _elements(card, "markdown"))
 
     def test_replied_and_marked_state_lines(self):
         """已反馈回显：✅ 填写行 / ☑ 标记行；表单保留可继续提交。"""
@@ -95,7 +99,10 @@ class TestFridayCard:
                   marked_at_short="16:40"),
         ))
         card = cards.build_friday_card(view, "dp-2")
-        items_block = _elements(card, "markdown")[0]["content"]
+        form = _form(card)
+        items_block = "\n".join(
+            e["content"] for e in form["elements"] if e["tag"] == "markdown"
+        )
         assert "✅ FX-D4-2026-0826：已进料（15:02）" in items_block
         assert "☑ FXD4-2026-0930：进展不变，无需更新（16:40）" in items_block
         # 表单保留（每项仍可继续填写/勾选）
@@ -103,12 +110,12 @@ class TestFridayCard:
         assert len([e for e in form["elements"] if e["tag"] == "input"]) == 2
 
     def test_form_element_count_scales(self):
-        """元素数 = 2×项数+1（13 项=27，远低于单卡上限）；勾选组件是 checker。"""
+        """元素数 = 3×项数+1（13 项=40，远低于单卡 200 上限）。"""
         items = tuple(
             _item(record_id=f"rec{i}", change_no=f"FX-{i:04d}") for i in range(13)
         )
         card = cards.build_friday_card(_view(items=items), "dp-3")
-        assert len(_form(card)["elements"]) == 27
+        assert len(_form(card)["elements"]) == 40
 
 
 # ═══════════════════════════════════════════════════════════

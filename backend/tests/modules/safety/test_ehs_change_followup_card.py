@@ -435,11 +435,11 @@ class TestRoutingAndRefresh:
         message_id, card = captured[0]
         assert message_id == "om_card_1"
         elements = card["body"]["elements"]
-        # 表单保留，逐项 input/checkbox 仍在
+        # 表单保留，逐项「信息块 + input + checker」仍在
         form = [e for e in elements if e.get("tag") == "form"][0]
         assert len([e for e in form["elements"] if e["tag"] == "input"]) == 2
-        content = "".join(
-            e["content"] for e in elements if e.get("tag") == "markdown"
+        content = "\n".join(
+            e["content"] for e in form["elements"] if e.get("tag") == "markdown"
         )
         assert "✅ FX-T1：已进料（15:02）" in content
         assert "☑ FX-T2：进展不变，无需更新（16:40）" in content

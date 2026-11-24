@@ -259,8 +259,15 @@ class TestFridayRound:
         # 发送目标=静态映射 ou_杨昆；速递格已投
         assert send.calls[0][0] == "ou_杨昆"
         assert digest.calls == [(FRIDAY, "ehs_change_followup")]
-        # 卡面：审批 applink 进了正文
-        assert _APPLINK in send.calls[0][2]["body"]["elements"][0]["content"]
+        # 卡面：审批 applink 在表单内该项信息块（2026-11-24 合并后清单只出现一次）
+        card_body = send.calls[0][2]["body"]["elements"]
+        form = [e for e in card_body if e.get("tag") == "form"][0]
+        blocks = "\n".join(
+            e["content"] for e in form["elements"] if e.get("tag") == "markdown"
+        )
+        assert _APPLINK in blocks
+        # 顶部问候语不含变更编号（不重复展示）
+        assert "FX-T1" not in card_body[0]["content"]
 
     async def test_dry_run_touches_nothing(self, sealed_session):
         tables = _default_tables()
