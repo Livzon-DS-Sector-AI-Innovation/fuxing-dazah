@@ -12,12 +12,10 @@ import {
   fetchJobRequirements, fetchScreeningResults, fetchScreeningResumePreview,
   type CandidateProfile, type ResumeScreeningResultItem, type ScreeningSection,
 } from '@/actions/hr'
-import { base64ToObjectUrl } from '@/lib/hr'
+import { base64ToObjectUrl, RECOMMENDATION_LEVEL_TAG_COLORS } from '@/lib/hr'
 
-/** 配色对齐候选人列表（RecruitmentClient）：强烈推荐绿、推荐蓝 */
-const RECO_COLOR: Record<string, string> = {
-  强烈推荐: 'success', 推荐: 'processing', 待定: 'warning', 不推荐: 'default',
-}
+
+const PAGE_SIZE = 20
 
 /** 人才分类（对齐飞书 AI 直聘筛选表） */
 const TALENT_LABEL: Record<string, string> = {
@@ -35,13 +33,21 @@ function scoreColor(score: number): string {
   return '#ff4d4f'
 }
 
-export default function ResumeScreeningPanel() {
+interface ResumeScreeningPanelProps {
+  /** 岗位招聘侧跑完 AI 初筛后自增：本面板随 Tab 常驻挂载，需据此重拉筛选结果 */
+  refreshToken?: number
+  /** 本面板的写操作（转候选人）改变了候选人数据，通知父组件刷新「岗位招聘」列表 */
+  onDataChanged?: () => void
+}
+
+export default function ResumeScreeningPanel({ refreshToken = 0, onDataChanged }: ResumeScreeningPanelProps) {
   const { message } = App.useApp()
   const router = useRouter()
   const [jobs, setJobs] = useState<{ id: string; position_name: string; department: string; status: string }[]>([])
   const [jdId, setJdId] = useState<string | null>(null)
   const [results, setResults] = useState<ResumeScreeningResultItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(1)
 
   // 简历原文预览：按筛选结果读存档 PDF，页内 Modal 内嵌展示
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -71,7 +77,7 @@ export default function ResumeScreeningPanel() {
 
   useEffect(() => {
     void loadResults(jdId || undefined)
-  }, [jdId, loadResults])
+  }, [jdId, loadResults, refreshToken])
 
   const openPreview = async (row: ResumeScreeningResultItem) => {
     setPreviewLoading(row.id)
@@ -91,13 +97,20 @@ export default function ResumeScreeningPanel() {
     setPreviewUrl(null)
   }
 
+  // 「转候选人」是写操作：按行记录提交中，防止连点重复建档
+  const [convertingId, setConvertingId] = useState<string | null>(null)
   const handleConvert = async (row: ResumeScreeningResultItem) => {
+    setConvertingId(row.id)
     try {
       const r = await convertScreeningResult(row.id)
       message.success(`已转为候选人「${r.data.name}」并回填档案与推荐等级，可在「岗位招聘」中查看`)
       await loadResults(jdId || undefined)
+      // 两个 Tab 的面板都常驻挂载，切回去不会自己刷新：通知父组件重拉候选人列表
+      onDataChanged?.()
     } catch (err) {
       message.error(err instanceof Error ? err.message : '转为候选人失败')
+    } finally {
+      setConvertingId(null)
     }
   }
 
@@ -113,8 +126,9 @@ export default function ResumeScreeningPanel() {
 
   const columns: ColumnsType<ResumeScreeningResultItem> = [
     {
-      title: '#', key: 'rank', width: 46,
-      render: (_v, _r, i) => <span className="font-medium">{i + 1}</span>,
+      // 序号跨页连续（此前每页都从 1 开始，第 2 页第一名也显示「1」）
+      title: '#', key: 'rank', width: 52,
+      render: (_v, _r, i) => <span className="font-medium">{(page - 1) * PAGE_SIZE + i + 1}</span>,
     },
     {
       title: '姓名', key: 'name', width: 110,
@@ -183,7 +197,7 @@ export default function ResumeScreeningPanel() {
         { text: '不推荐', value: '不推荐' },
       ],
       onFilter: (value, record) => record.recommendation === value,
-      render: (v: string) => <Tag color={RECO_COLOR[v] || 'default'}>{v}</Tag>,
+      render: (v: string) => <Tag color={RECOMMENDATION_LEVEL_TAG_COLORS[v] || 'default'}>{v}</Tag>,
     },
     {
       title: '核心评价', dataIndex: 'core_evaluation', key: 'core_evaluation', ellipsis: true,
@@ -197,7 +211,8 @@ export default function ResumeScreeningPanel() {
             // 岗位侧存量简历直接初筛：候选人已存在，无需再转
             <Tag title="岗位侧直接初筛的结果，候选人档案已回写">已关联候选人</Tag>
           ) : (
-            <Button type="link" size="small" icon={<UserAddOutlined />} onClick={() => { void handleConvert(r) }}>
+            <Button type="link" size="small" icon={<UserAddOutlined />} loading={convertingId === r.id}
+              disabled={convertingId !== null} onClick={() => { void handleConvert(r) }}>
               转候选人
             </Button>
           )}
@@ -219,9 +234,9 @@ export default function ResumeScreeningPanel() {
 
       <div className="flex gap-3 flex-wrap items-center">
         <Select
-          style={{ width: 320 }} placeholder="全部岗位（不选 = 汇总全部岗位）"
+          style={{ width: 320 }} placeholder="全部岗位"
           showSearch optionFilterProp="label" allowClear
-          value={jdId} onChange={v => setJdId(v || null)}
+          value={jdId} onChange={v => { setJdId(v || null); setPage(1) }}
           options={jobs.map(j => ({
             value: j.id,
             label: `${j.position_name}（${j.department}）${j.status === '招聘中' ? '' : ' · 已关闭'}`,
@@ -238,7 +253,7 @@ export default function ResumeScreeningPanel() {
         dataSource={results}
         loading={loading}
         scroll={{ x: 1400 }}
-        pagination={{ pageSize: 20, showTotal: t => `共 ${t} 份` }}
+        pagination={{ current: page, pageSize: PAGE_SIZE, onChange: setPage, showTotal: t => `共 ${t} 份` }}
         expandable={{
           expandedRowRender: r => <ScreeningReport item={r} />,
         }}
@@ -271,7 +286,7 @@ function SectionList({ title, sections, color }: {
   if (!sections.length) return null
   return (
     <div>
-      <div className={`font-medium mb-1 ${color === 'green' ? 'text-[#389e0d]' : 'text-[#cf1322]'}`}>{title}</div>
+      <div className={`font-medium mb-1 ${color === 'green' ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>{title}</div>
       <div className="space-y-2">
         {sections.map((s, i) => (
           <div key={i} className="pl-2 border-l-2" style={{ borderColor: color === 'green' ? '#b7eb8f' : '#ffa39e' }}>
@@ -286,8 +301,8 @@ function SectionList({ title, sections, color }: {
 
 /** 四组维度评估配色对齐 AI 直聘表：专业能力-核心(红)/基础匹配-基础(绿)/发展潜力-潜力(橙)/软实力(紫) */
 const GROUP_STYLE: Record<string, { color: string; tag: string }> = {
-  专业能力: { color: '#cf1322', tag: '核心' },
-  基础匹配: { color: '#389e0d', tag: '基础' },
+  专业能力: { color: 'var(--color-error)', tag: '核心' },
+  基础匹配: { color: 'var(--color-success)', tag: '基础' },
   发展潜力: { color: '#d46b08', tag: '潜力' },
   软实力: { color: '#722ed1', tag: '软实力' },
 }
@@ -381,7 +396,7 @@ function MatchReportCard({ item }: { item: ResumeScreeningResultItem }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-[13px]">
-        <Tag color={RECO_COLOR[item.recommendation]} style={{ marginInlineEnd: 0 }}>推荐等级：{item.recommendation}</Tag>
+        <Tag color={RECOMMENDATION_LEVEL_TAG_COLORS[item.recommendation] || 'default'} style={{ marginInlineEnd: 0 }}>推荐等级：{item.recommendation}</Tag>
         {item.talent_category && (
           <Tag color={TALENT_COLOR[item.talent_category]} style={{ marginInlineEnd: 0 }}>
             {TALENT_LABEL[item.talent_category]}
@@ -464,7 +479,7 @@ function ScreeningReport({ item }: { item: ResumeScreeningResultItem }) {
           <div className="font-medium mb-1">四、最终推荐意见</div>
           {item.final_verdict && (
             <div className="text-[14px] font-medium mb-1">
-              <Tag color={RECO_COLOR[item.recommendation] || 'default'}>{item.recommendation}</Tag>
+              <Tag color={RECOMMENDATION_LEVEL_TAG_COLORS[item.recommendation] || 'default'}>{item.recommendation}</Tag>
               {item.final_verdict}
             </div>
           )}

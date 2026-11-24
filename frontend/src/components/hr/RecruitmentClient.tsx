@@ -1,10 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import dayjs from 'dayjs'
-import { App, Badge, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Table, Tabs, Tag, Upload } from 'antd'
-import { DownOutlined, RightOutlined, FileSearchOutlined, ClockCircleOutlined } from '@ant-design/icons'
+import { Alert, App, Badge, Button, Card, DatePicker, Dropdown, Empty, Form, Input, InputNumber, Modal, Popconfirm, Select, Spin, Table, Tabs, Tag, Tooltip, Upload } from 'antd'
+import {
+  DownOutlined, RightOutlined, FileSearchOutlined, ClockCircleOutlined,
+  EditOutlined, DeleteOutlined, SwapOutlined, WarningOutlined, CommentOutlined,
+} from '@ant-design/icons'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
   createCandidate, deleteCandidate,
@@ -15,12 +18,32 @@ import {
   fetchEmployeesAction, screenCandidateAction, fetchInterviewsOverview,
   updateInterview, deleteInterview,
 } from '@/actions/hr'
-import type { Candidate, InterviewOverviewItem, JobRequirement, RecruitmentStats } from '@/types/hr'
+import type { Candidate, InterviewOverviewItem, JobRequirement, JobRequirementCreateInput, JobRequirementUpdateInput, RecruitmentStats } from '@/types/hr'
 import { usePermission } from '@/hooks/usePermission'
 import { useDebouncedCallback } from '@/hooks/hr'
-import { CANDIDATE_STATUS_COLORS } from '@/lib/hr'
+import { CANDIDATE_STATUS_COLORS, RECOMMENDATION_LEVEL_TAG_COLORS } from '@/lib/hr'
 import ResumeScreeningPanel from './ResumeScreeningPanel'
 import InterviewScheduleModal from './InterviewScheduleModal'
+import PageHeader from './PageHeader'
+
+// 后端对「发 Offer」有状态限制（其它状态直接 400），按钮只在这些状态显示
+const OFFER_STATUSES = new Set(['已面试', '录用中', '已录用', '待入职审批'])
+
+type RecruitmentTab = 'jobs' | 'reviews' | 'stats' | 'screening' | 'interviews'
+const RECRUITMENT_TABS: RecruitmentTab[] = ['jobs', 'reviews', 'stats', 'screening', 'interviews']
+
+/** 新建 / 编辑岗位需求表单的取值 */
+interface ReqFormValues {
+  position_name?: string
+  department?: string
+  headcount?: number
+  requirements?: string
+  duties?: string
+  urgency?: string
+  owner?: string
+  deadline?: dayjs.Dayjs | null
+  status?: string
+}
 
 // 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
 const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
@@ -68,7 +91,7 @@ const BATCH_STAGE_COLOR: Record<BatchResumeItem['stage'], string> = {
 }
 
 export default function RecruitmentClient() {
-  const { message: msg } = App.useApp()
+  const { message: msg, modal } = App.useApp()
   const router = useRouter()
   // 跳转候选人详情前把当前列表上下文（id 顺序 + 当前位置）写入 sessionStorage，
   // 供详情页"上一条/下一条"顺序切换（CandidateDetailClient 读取 candidate_list_context）
@@ -107,7 +130,13 @@ export default function RecruitmentClient() {
   const [offerSending, setOfferSending] = useState(false)
 
   // 待我审核（无管理权限的审核人默认落在"待我审核"）
-  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats' | 'screening' | 'interviews'>(canManage ? 'jobs' : 'reviews')
+  // 当前页签写进网址 ?tab=：候选人详情页「返回」时能回到原来的页签
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const urlTab = searchParams.get('tab') as RecruitmentTab | null
+  const [activeTab, setActiveTab] = useState<RecruitmentTab>(
+    canManage ? (urlTab && RECRUITMENT_TABS.includes(urlTab) ? urlTab : 'jobs') : 'reviews',
+  )
   const [pendingReviews, setPendingReviews] = useState<any[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
 
@@ -136,10 +165,17 @@ export default function RecruitmentClient() {
   ])
   const [overviewCandidate, setOverviewCandidate] = useState('')
   const [overviewStatus, setOverviewStatus] = useState<string | undefined>(undefined)
+  // 姓名即查（防抖 300ms），回车/点搜索按钮立即查：此前要按回车才查，旁边还多一个「查询」按钮
+  const { run: debouncedSetOverviewCandidate, cancel: cancelOverviewDebounce } = useDebouncedCallback(
+    (v: string) => setOverviewCandidate(v), 300,
+  )
   // 总览行内操作：编辑走共享弹窗；完成/取消一键（免跳候选人详情）
   const [overviewEdit, setOverviewEdit] = useState<InterviewOverviewItem | null>(null)
   const [actingId, setActingId] = useState<string | null>(null)
+  // 请求序号守卫：筛选连续变化时，慢的旧响应不得覆盖新结果
+  const overviewSeq = useRef(0)
   const loadOverview = useCallback(async () => {
+    const seq = ++overviewSeq.current
     setOverviewLoading(true)
     try {
       const r = await fetchInterviewsOverview({
@@ -149,12 +185,14 @@ export default function RecruitmentClient() {
         status: overviewStatus,
         page_size: 200,
       })
+      if (seq !== overviewSeq.current) return
       setOverviewRows(r.data || [])
       setOverviewTotal(r.meta?.total ?? (r.data || []).length)
     } catch (err: any) {
+      if (seq !== overviewSeq.current) return
       msg.error(err?.message || '获取面试总览失败')
       setOverviewRows([])
-    } finally { setOverviewLoading(false) }
+    } finally { if (seq === overviewSeq.current) setOverviewLoading(false) }
   }, [overviewDateRange, overviewCandidate, overviewStatus, msg])
 
   // 总览行内快捷操作：标记完成 / 取消（都刷新总览列表）
@@ -187,12 +225,16 @@ export default function RecruitmentClient() {
     finally { setReviewsLoading(false) }
   }, [])
 
+  // 审核「同意 / 驳回」是写操作：按候选人记录提交中，防止连点
+  const [decidingReview, setDecidingReview] = useState<string | null>(null)
   const handleDecideReview = async (candidateId: string, decision: string) => {
+    setDecidingReview(candidateId + decision)
     try {
       await decideCandidateReview(candidateId, { decision })
       msg.success(decision === '已同意' ? '已同意' : '已驳回')
       loadPendingReviews()
     } catch (err: any) { msg.error(err.message || '操作失败') }
+    finally { setDecidingReview(null) }
   }
 
   // 用人部门负责人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
@@ -224,11 +266,21 @@ export default function RecruitmentClient() {
   // 挂载即拉待审数：Tab 上的 Badge 需要初始值
   useEffect(() => { loadPendingReviews() }, [loadPendingReviews])
 
+  // 岗位列表的加载/失败态：此前请求返回前和失败后都显示「暂无岗位需求，点击右上角新建」，
+  // 网络一抖就被当成真的没有岗位
+  const [jobsLoading, setJobsLoading] = useState(true)
+  const [jobsError, setJobsError] = useState<string | null>(null)
   const loadJobs = useCallback(async () => {
+    setJobsLoading(true)
+    setJobsError(null)
     try {
       const r = await fetchJobRequirements()
       setJobs(r.data || [])
-    } catch (err: unknown) { msg.error((err instanceof Error ? err.message : '') || '岗位需求加载失败') }
+    } catch (err: unknown) {
+      const m = (err instanceof Error ? err.message : '') || '岗位需求加载失败'
+      setJobsError(m)
+      msg.error(m)
+    } finally { setJobsLoading(false) }
   }, [msg])
 
   const loadAllCandidates = useCallback(async () => {
@@ -271,14 +323,46 @@ export default function RecruitmentClient() {
     })
   }
 
-  const handleStatusChange = async (candidateId: string, newStatus: string) => {
+  // ── 状态流转 ──
+  // 流转到「已拒绝」不可逆（没有回退路径），此前在下拉里一点就生效、零确认零原因：
+  // 改为先弹窗要求填写拒绝原因，确认后再流转。
+  const [rejectTarget, setRejectTarget] = useState<Candidate | null>(null)
+  const [rejectSaving, setRejectSaving] = useState(false)
+  // 拒绝原因用普通 state 而不是 Form：弹窗关闭即销毁，Form 实例在未挂载时调 resetFields 会报
+  // 「useForm is not connected」；改 forceRender 预渲染又会让这一段前后端输出不一致（hydration 报错）
+  const [rejectReason, setRejectReason] = useState('')
+  const [rejectReasonError, setRejectReasonError] = useState<string | undefined>()
+
+  const doStatusChange = async (candidateId: string, newStatus: string, remark: string) => {
     setChangingStatus(candidateId)
     try {
-      await transitionCandidateStatus(candidateId, { status: newStatus, remark: '快捷流转' })
-      msg.success('状态已变更')
+      await transitionCandidateStatus(candidateId, { status: newStatus, remark })
+      msg.success(`状态已变更为「${newStatus}」`)
       loadAllCandidates()
     } catch (err: any) { msg.error(err.message || '变更失败') }
     finally { setChangingStatus(null) }
+  }
+
+  const handleStatusChange = (candidate: Candidate, newStatus: string) => {
+    if (newStatus === '已拒绝') {
+      // 上次放弃的原因不能带到下一个人身上
+      setRejectReason('')
+      setRejectReasonError(undefined)
+      setRejectTarget(candidate)
+      return
+    }
+    void doStatusChange(candidate.id, newStatus, '快捷流转')
+  }
+
+  const handleRejectSubmit = async () => {
+    if (!rejectTarget) return
+    const reason = rejectReason.trim()
+    if (!reason) { setRejectReasonError('请填写拒绝原因'); return }
+    setRejectSaving(true)
+    try {
+      await doStatusChange(rejectTarget.id, '已拒绝', reason)
+      setRejectTarget(null)
+    } finally { setRejectSaving(false) }
   }
 
   const loadCompare = async (jobId: string) => {
@@ -291,10 +375,19 @@ export default function RecruitmentClient() {
     finally { setCompareLoading(false) }
   }
 
+  // 新建/编辑岗位需求：提交期间 Modal 转圈，防止连点建出两条一样的岗位需求
+  const [reqSaving, setReqSaving] = useState(false)
   const handleSaveReq = async () => {
-    const v = await reqForm.validateFields()
+    // 校验失败只走表单行内提示
+    let v: ReqFormValues
+    try {
+      v = await reqForm.validateFields()
+    } catch {
+      return
+    }
     const parts = (v.position_name || '').split('|||')
-    const payload: any = {
+    // 岗位职责 duties 后端接收，但两个入参类型里都没声明（此前用 any 绕过），这里补上
+    const payload: JobRequirementCreateInput & JobRequirementUpdateInput & { duties?: string } = {
       position_name: parts[1] || parts[0],
       department: v.department || parts[0],
       headcount: v.headcount ?? 1,
@@ -307,6 +400,7 @@ export default function RecruitmentClient() {
     if (editingReq) {
       payload.status = v.status || undefined
     }
+    setReqSaving(true)
     try {
       if (editingReq) {
         await updateJobRequirement(editingReq.id, payload)
@@ -316,6 +410,7 @@ export default function RecruitmentClient() {
       msg.success(editingReq ? '已更新' : '岗位需求已创建')
       setReqOpen(false); reqForm.resetFields(); setEditingReq(null); loadJobs()
     } catch (err: any) { msg.error(err.message || '保存失败') }
+    finally { setReqSaving(false) }
   }
 
   const handleDeleteReq = async (id: string) => {
@@ -324,6 +419,28 @@ export default function RecruitmentClient() {
       msg.success(r.message || '已删除')
       loadJobs(); loadAllCandidates()
     } catch (err: any) { msg.error(err.message || '删除失败') }
+  }
+
+  /** 打开岗位需求的编辑弹窗（岗位卡「更多 → 编辑岗位需求」） */
+  const openEditReq = (j: JobRequirement) => {
+    setEditingReq(j)
+    if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }])
+    reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined })
+    setReqOpen(true)
+  }
+
+  /** 删除岗位：确认框里写明会连带清理多少名候选人、已入职的保留 */
+  const confirmDeleteReq = (j: JobRequirement, jobCandidates: Candidate[], hiredCount: number) => {
+    modal.confirm({
+      title: `删除岗位「${j.position_name}」？`,
+      content: jobCandidates.length === 0
+        ? '名下暂无候选人。'
+        : `将一并清理名下 ${jobCandidates.length - hiredCount} 名候选人记录${hiredCount > 0 ? `，已入职 ${hiredCount} 名保留` : ''}。此操作不可恢复。`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => handleDeleteReq(j.id),
+    })
   }
 
   // ─── 批量上传简历流水线：逐份 AI 解析 → 自动建档（关联当前岗位）→ 一键 AI 初筛 ───
@@ -407,6 +524,7 @@ export default function RecruitmentClient() {
     setBatchScreening(false)
     if (ok > 0) {
       await loadAllCandidates()
+      setScreenRefreshToken((t) => t + 1)
       msg.success(`AI 初筛完成 ${ok} 份，推荐等级与匹配报告已写入候选人档案`)
     }
   }
@@ -420,6 +538,8 @@ export default function RecruitmentClient() {
 
   // AI 初筛：对已建档候选人的存量简历直接筛选（免重复上传，结果回写候选人档案）
   const [screeningCand, setScreeningCand] = useState<string | null>(null)
+  // 初筛结果会进入「AI 筛简历」面板；该面板随 Tab 常驻不会重建，初筛后靠自增信号让它重拉
+  const [screenRefreshToken, setScreenRefreshToken] = useState(0)
   const runScreenCandidate = async (candidateId: string) => {
     setScreeningCand(candidateId)
     try {
@@ -427,6 +547,7 @@ export default function RecruitmentClient() {
       if (!r.ok) { msg.error(r.error); return }
       msg.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100），报告已写入候选人档案`)
       await loadAllCandidates()
+      setScreenRefreshToken((t) => t + 1)
     } catch (err: any) { msg.error(err.message || 'AI 初筛失败') }
     finally { setScreeningCand(null) }
   }
@@ -450,6 +571,7 @@ export default function RecruitmentClient() {
     }
     setBatchScreenJobId(null)
     await loadAllCandidates()
+    setScreenRefreshToken((t) => t + 1)
     msg.destroy('batch-screen')
     if (fail === 0) msg.success(`AI 初筛完成：${ok} 份，推荐等级与匹配报告已写入候选人档案`)
     else msg.warning({
@@ -459,9 +581,15 @@ export default function RecruitmentClient() {
   }
 
   const handleDeleteCandidate = async (id: string) => {
-    try { await deleteCandidate(id); loadAllCandidates() }
-    catch (err: any) { msg.error(err.message || '删除失败') }
+    try {
+      await deleteCandidate(id)
+      // 此前成功后没有任何反馈，列表刷新了但不知道是不是删对了
+      msg.success('候选人已删除')
+      loadAllCandidates()
+    } catch (err: any) { msg.error(err.message || '删除失败') }
   }
+
+  const [offerPreviewing, setOfferPreviewing] = useState(false)
 
   const handleSendOffer = (candidate: Candidate) => {
     setOfferCandidate(candidate)
@@ -481,11 +609,20 @@ export default function RecruitmentClient() {
     const v = offerForm.getFieldsValue()
     const fd = new FormData()
     Object.entries(v).forEach(([k, val]) => fd.append(k, (k.endsWith('_date') ? fmtDate(val) : (val as string)) || ''))
+    // 先同步开窗再取数：await 之后再 window.open 会脱离用户手势，被浏览器当弹窗广告拦截
+    const w = window.open('', '_blank')
+    if (!w) {
+      msg.warning('浏览器拦截了预览窗口，请允许本站弹出窗口后重试')
+      return
+    }
+    setOfferPreviewing(true)
     try {
       const html = await previewOffer(offerCandidate!.id, fd)
-      const w = window.open('', '_blank')
-      if (w) { w.document.write(html); w.document.close() }
-    } catch (err: any) { msg.error(err.message || '预览失败') }
+      w.document.write(html); w.document.close()
+    } catch (err: any) {
+      w.close()
+      msg.error(err.message || '预览失败')
+    } finally { setOfferPreviewing(false) }
   }
 
   const handleSendOfferSubmit = async () => {
@@ -507,30 +644,31 @@ export default function RecruitmentClient() {
   }, [activeTab, loadOverview])
 
   const handleTabChange = (key: string) => {
-    setActiveTab(key as typeof activeTab)
+    setActiveTab(key as RecruitmentTab)
     if (key === 'reviews') loadPendingReviews()
     if (key === 'stats') loadStats()
+    // 页签镜像到网址（replace，不新增历史）；默认页签不带参数，保持链接干净
+    const next = new URLSearchParams(searchParams)
+    if (key === 'jobs') next.delete('tab'); else next.set('tab', key)
+    const qs = next.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">招聘管理</h1>
-        {canManage
-          ? <span className="text-xs text-[var(--color-stone)]">{jobs.length} 个岗位 · {allCandidates.length} 个候选人</span>
-          : <span className="text-xs text-[var(--color-stone)]">{pendingReviews.length} 位候选人待您审核</span>}
-      </div>
+      <PageHeader
+        title="招聘管理"
+        description={canManage
+          ? `${jobs.length} 个岗位 · ${allCandidates.length} 个候选人`
+          : `${pendingReviews.length} 位候选人待您审核`}
+        actions={canManage && (
+          <Button type="primary" onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
+        )}
+      />
 
       <Tabs
         activeKey={activeTab}
         onChange={handleTabChange}
-        tabBarExtraContent={{
-          right: activeTab === 'jobs' && (
-            <div className="flex gap-2 pb-1">
-              <Button type="primary" size="large" onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
-            </div>
-          ),
-        }}
         items={[
           // 岗位招聘/AI 筛简历/数据分析是 HR 工具：用人部门负责人（审核人）仅见"待我审核"
           ...(canManage ? [{
@@ -571,7 +709,16 @@ export default function RecruitmentClient() {
               ) : (
                 /* 统一按岗位视图 */
                 <div className="space-y-2">
-                  {jobs.length === 0 && <Empty description="暂无岗位需求，点击右上角新建" className="py-8" />}
+                  {jobsLoading && jobs.length === 0 ? (
+                    <div className="py-12 text-center"><Spin /></div>
+                  ) : jobsError && jobs.length === 0 ? (
+                    <div className="py-12 text-center space-y-3">
+                      <div className="text-[var(--color-steel)]">岗位列表加载失败：{jobsError}</div>
+                      <Button onClick={() => void loadJobs()}>重试</Button>
+                    </div>
+                  ) : jobs.length === 0 ? (
+                    <Empty description="暂无岗位需求，点击右上角新建" className="py-8" />
+                  ) : null}
                       {jobs.map(j => {
                         const jobCandidates = allCandidates.filter(c => c.job_requirement_id === j.id)
                         const isExpanded = expandedJobs.has(j.id)
@@ -620,7 +767,6 @@ export default function RecruitmentClient() {
                         }
                         extra={
                           <div className="flex gap-2 items-center" onClick={e => e.stopPropagation()}>
-                            <Button onClick={() => loadCompare(j.id)}>对比</Button>
                             {(() => {
                               // 该岗位存量可初筛的：有简历 + 未定推荐等级 + 仍在筛选阶段
                               const screenables = jobCandidates.filter(c =>
@@ -637,22 +783,34 @@ export default function RecruitmentClient() {
                               ) : null
                             })()}
                             <Button title="批量上传简历（自动解析建档，可一键 AI 初筛）" onClick={() => { setResumeItems([]); setResumeJobId(j.id); setResumeOpen(true) }}>上传简历</Button>
-                            <Button type="text" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</Button>
-                            <Popconfirm
-                              title="删除该岗位？"
-                              description={jobCandidates.length === 0
-                                ? '名下暂无候选人'
-                                : `将一并清理名下 ${jobCandidates.length - hiredCount} 名候选人记录${hiredCount > 0 ? `，已入职 ${hiredCount} 名保留` : ''}`}
-                              onConfirm={() => handleDeleteReq(j.id)} okText="删除" cancelText="取消"
+                            {/* 低频操作收进「更多」：此前岗位卡头部并排 5 个默认尺寸按钮，一屏全是按钮 */}
+                            <Dropdown
+                              trigger={['click']}
+                              menu={{
+                                items: [
+                                  { key: 'compare', icon: <SwapOutlined />, label: '候选人对比', disabled: jobCandidates.length === 0 },
+                                  { key: 'edit', icon: <EditOutlined />, label: '编辑岗位需求' },
+                                  { type: 'divider' },
+                                  {
+                                    key: 'delete', icon: <DeleteOutlined />, danger: true,
+                                    label: j.status === '招聘中' ? '删除岗位（招聘中不可删除）' : '删除岗位',
+                                    disabled: j.status === '招聘中',
+                                  },
+                                ],
+                                onClick: ({ key }) => {
+                                  if (key === 'compare') loadCompare(j.id)
+                                  else if (key === 'edit') openEditReq(j)
+                                  else if (key === 'delete') confirmDeleteReq(j, jobCandidates, hiredCount)
+                                },
+                              }}
                             >
-                              <Button danger disabled={j.status === '招聘中'}
-                                title={j.status === '招聘中' ? '招聘中岗位不可删除，请先在「编辑」中改为已关闭' : '删除岗位'}>删除</Button>
-                            </Popconfirm>
+                              <Button aria-label="更多操作">更多 <DownOutlined /></Button>
+                            </Dropdown>
                           </div>
                         }
                       >
                         {!isExpanded ? null : jobCandidates.length === 0 ? (
-                          <div className="text-center text-[var(--color-stone)] text-xs py-5 border border-dashed border-[var(--color-hairline)] rounded-lg">暂无候选人 — 上传简历或导入Excel添加</div>
+                          <div className="text-center text-[var(--color-stone)] text-xs py-5 border border-dashed border-[var(--color-hairline)] rounded-lg">暂无候选人 — 上传简历添加候选人</div>
                         ) : (
                           <>
                             {/* 漏斗统计 chips：点击筛选下方表格，再点取消 */}
@@ -706,10 +864,16 @@ export default function RecruitmentClient() {
                                         <span className="font-medium truncate max-w-[200px]" title={c.name}>{c.name}</span>
                                         {c.gender && <span className="text-xs text-gray-400 flex-shrink-0">{c.gender}</span>}
                                         {c.recommendation_level && (
-                                          <Tag color={c.recommendation_level === '强烈推荐' ? 'green' : c.recommendation_level === '推荐' ? 'blue' : 'default'}
-                                            style={{ fontSize: 10, margin: 0 }} className="flex-shrink-0">{c.recommendation_level}</Tag>
+                                          <Tag color={RECOMMENDATION_LEVEL_TAG_COLORS[c.recommendation_level] || 'default'}
+                                            style={{ fontSize: 11, margin: 0 }} className="flex-shrink-0">{c.recommendation_level}</Tag>
                                         )}
-                                        {isStale && <span className="text-xs text-red-400 whitespace-nowrap flex-shrink-0" title={`已停留${days}天`}>⚠️{days}天</span>}
+                                        {isStale && (
+                                          <Tooltip title={`该候选人已 ${days} 天没有更新（超过 7 天标红提醒）`}>
+                                            <span className="text-xs text-[var(--color-error)] whitespace-nowrap flex-shrink-0 inline-flex items-center gap-0.5">
+                                              <WarningOutlined />{days}天
+                                            </span>
+                                          </Tooltip>
+                                        )}
                                       </div>
                                     )
                                   },
@@ -733,25 +897,33 @@ export default function RecruitmentClient() {
                                       <Select size="small" value={c.status} loading={changingStatus === c.id}
                                         style={{ width: 110 }}
                                         options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
-                                        onChange={v => handleStatusChange(c.id, v)}
+                                        onChange={v => handleStatusChange(c, v)}
                                       />
                                     </div>
                                   ),
                                 },
                                 {
-                                  title: '操作', key: 'actions', width: 210,
+                                  // 行内操作按状态显隐并收窄：此前每行固定挂着「AI 初筛 / 发 Offer / 红框删除」
+                                  // 三个默认尺寸按钮（已拒绝的候选人也有「发 Offer」，点下去后端直接 400）
+                                  title: '操作', key: 'actions', width: 150,
                                   render: (_: any, c: Candidate) => (
                                     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                                       {c.resume_url && c.job_requirement_id && !c.recommendation_level && SCREENING_PHASE_STATUSES.has(c.status || '待筛选') && (
-                                        <Button
+                                        <Button size="small"
                                           loading={screeningCand === c.id}
                                           title="AI 简历初筛（面试前：按已存简历+岗位JD打分，写入推荐等级与匹配报告）"
                                           onClick={() => runScreenCandidate(c.id)}>AI 初筛</Button>
                                       )}
-                                      <Button onClick={() => handleSendOffer(c)}>发 Offer</Button>
-                                      <Popconfirm title="确定删除此候选人？" onConfirm={() => handleDeleteCandidate(c.id)} okText="删除" cancelText="取消">
-                                        <Button danger>删除</Button>
-                                      </Popconfirm>
+                                      {OFFER_STATUSES.has(c.status || '') && (
+                                        <Button size="small" onClick={() => handleSendOffer(c)}>发 Offer</Button>
+                                      )}
+                                      {/* 已入职的候选人后端不允许删除（需保留档案溯源），不显示删除 */}
+                                      {c.status !== '已入职' && (
+                                        <Popconfirm title="确定删除此候选人？" description="删除后不可恢复。" onConfirm={() => handleDeleteCandidate(c.id)}
+                                          okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
+                                          <Button size="small" type="link" danger>删除</Button>
+                                        </Popconfirm>
+                                      )}
                                     </div>
                                   ),
                                 },
@@ -765,7 +937,8 @@ export default function RecruitmentClient() {
                 </div>
               )}
 
-              <Modal title={editingReq ? '编辑' : '新建岗位需求'} open={reqOpen} onCancel={() => setReqOpen(false)} onOk={handleSaveReq}>
+                              <Modal title={editingReq ? '编辑岗位需求' : '新建岗位需求'} open={reqOpen} onCancel={() => setReqOpen(false)} onOk={handleSaveReq}
+                                okText="保存" confirmLoading={reqSaving} mask={{ closable: false }}>
                 <Form form={reqForm} layout="vertical">
                   <Form.Item name="position_name" label="岗位名称" rules={[{ required: true }]}>
                     <Select showSearch placeholder="选择岗位（含部门）" options={posOptions}
@@ -796,10 +969,28 @@ export default function RecruitmentClient() {
                 </Form>
               </Modal>
 
+              <Modal title={`拒绝候选人${rejectTarget?.name ? `「${rejectTarget.name}」` : ''}`} open={!!rejectTarget}
+                onCancel={() => setRejectTarget(null)} onOk={handleRejectSubmit}
+                okText="确认拒绝" okButtonProps={{ danger: true }} cancelText="再想想"
+                confirmLoading={rejectSaving} destroyOnHidden mask={{ closable: false }}>
+                <Alert type="warning" showIcon className="mb-3"
+                  title="拒绝后不可回退"
+                  description="候选人将移出招聘流程，无法再流转到其它状态；如需重新考虑，要重新上传简历建档。" />
+                {/* 输入框带 maxLength，长度上限由组件兜底；这里只校验必填 */}
+                <div className="mb-2 text-[14px] text-[var(--color-charcoal)]">
+                  <span className="mr-0.5 text-[var(--color-error)]">*</span>拒绝原因
+                </div>
+                <Input.TextArea rows={3} maxLength={200} showCount
+                  value={rejectReason} status={rejectReasonError ? 'error' : undefined}
+                  onChange={e => { setRejectReason(e.target.value); if (rejectReasonError) setRejectReasonError(undefined) }}
+                  placeholder="例如：薪资期望超出岗位预算 / 技能与岗位要求不匹配 / 已另有安排" />
+                {rejectReasonError && <div role="alert" className="mt-1 text-xs text-[var(--color-error)]">{rejectReasonError}</div>}
+              </Modal>
+
               <Modal title={`发放入职 Offer — ${offerCandidate?.name || ''}`} open={offerOpen}
                 onCancel={() => setOfferOpen(false)} width={640}
                 footer={[
-                  <Button key="preview" onClick={handlePreviewOffer}>预览</Button>,
+                  <Button key="preview" loading={offerPreviewing} onClick={handlePreviewOffer}>预览</Button>,
                   <Button key="send" type="primary" loading={offerSending} onClick={handleSendOfferSubmit}>发送</Button>,
                 ]}
               >
@@ -909,18 +1100,19 @@ export default function RecruitmentClient() {
                     value={overviewDateRange}
                     onChange={(v) => setOverviewDateRange(v)}
                   />
+                  {/* 非受控：受控值在防抖窗口内会被列表刷新打回旧值（吃字） */}
                   <Input.Search
                     placeholder="候选人姓名"
                     style={{ width: 180 }}
                     allowClear
-                    onSearch={(v) => setOverviewCandidate(v || '')}
+                    onChange={(e) => debouncedSetOverviewCandidate(e.target.value)}
+                    onSearch={(v) => { cancelOverviewDebounce(); setOverviewCandidate(v || '') }}
                   />
                   <Select
                     placeholder="状态" allowClear style={{ width: 120 }}
                     options={['待安排', '已安排', '已完成', '已取消'].map((x) => ({ label: x, value: x }))}
                     onChange={(v) => setOverviewStatus(v)}
                   />
-                  <Button onClick={() => loadOverview()}>查询</Button>
                   <span className="text-xs text-gray-400 ml-auto">
                     {overviewLoading ? '加载中…' : `共 ${overviewTotal} 场`}
                   </span>
@@ -1039,11 +1231,11 @@ export default function RecruitmentClient() {
                                 {[c.school, c.major, c.work_years != null ? `${c.work_years}年经验` : '', c.current_company].filter(Boolean).join(' · ')}
                               </div>
                               <div className="text-xs text-gray-500">岗位：{jd?.position_name || c.position} · {jd?.department || c.department}</div>
-                              {rv.push_note && <div className="text-xs text-blue-600 mt-1">💬 HR备注：{rv.push_note}</div>}
+                              {rv.push_note && <div className="text-xs text-blue-600 mt-1 inline-flex items-center gap-1"><CommentOutlined />HR备注：{rv.push_note}</div>}
                             </div>
                             <div className="flex gap-2 flex-shrink-0 pt-0.5" onClick={(e) => e.stopPropagation()}>
-                              <Button type="primary" onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
-                              <Button danger onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
+                              <Button type="primary" loading={decidingReview === `${c.id}已同意`} onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
+                              <Button danger loading={decidingReview === `${c.id}已拒绝`} onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
                             </div>
                           </div>
                         </Card>
@@ -1056,8 +1248,13 @@ export default function RecruitmentClient() {
           },
           ...(canManage ? [{
             key: 'screening',
-            label: <span className="flex items-center gap-1.5"><FileSearchOutlined />AI 筛简历</span>,
-            children: <ResumeScreeningPanel />,
+            label: <span className="flex items-center gap-1.5"><FileSearchOutlined />AI 初筛</span>,
+            children: (
+              <ResumeScreeningPanel
+                refreshToken={screenRefreshToken}
+                onDataChanged={() => { void loadAllCandidates() }}
+              />
+            ),
           },
           {
             key: 'stats',

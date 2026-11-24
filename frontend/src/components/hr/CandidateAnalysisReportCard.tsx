@@ -1,14 +1,8 @@
 'use client'
 
 import { Button, Descriptions, Tag, Typography } from 'antd'
-import { PrinterOutlined } from '@ant-design/icons'
-
-const RECOMMEND_COLOR: Record<string, string> = {
-  强烈推荐: 'success',
-  推荐: 'processing',
-  待定: 'warning',
-  不推荐: 'error',
-}
+import { CheckCircleFilled, PrinterOutlined, WarningOutlined } from '@ant-design/icons'
+import { RECOMMENDATION_LEVEL_TAG_COLORS } from '@/lib/hr'
 
 interface Dimension {
   name: string
@@ -101,7 +95,7 @@ export default function CandidateAnalysisReportCard({ candidateName, candidatePo
             {report.dimensions.map((d) => (
               <Descriptions.Item
                 key={d.name}
-                label={`${d.name} ${d.star ? '⭐'.repeat(Math.min(d.star, 5)) : ''}`}
+                label={`${d.name}${d.star ? `（${Math.min(d.star, 5)} 星）` : ''}`}
               >
                 {d.score != null && (
                   <span className="font-medium" style={{
@@ -122,7 +116,7 @@ export default function CandidateAnalysisReportCard({ candidateName, candidatePo
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {report.strengths && report.strengths.length > 0 && (
               <div className="rounded-md border border-[#b7ebc4] bg-[#f0faf2] p-3">
-                <div className="text-sm font-medium text-[#1a7a36] mb-1.5">✅ 核心优势</div>
+                <div className="flex items-center gap-1 text-sm font-medium text-[var(--color-success)] mb-1.5"><CheckCircleFilled />核心优势</div>
                 <ul className="space-y-1.5 leading-relaxed">
                   {report.strengths.map((s, i) => <li key={i}>{s}</li>)}
                 </ul>
@@ -130,7 +124,7 @@ export default function CandidateAnalysisReportCard({ candidateName, candidatePo
             )}
             {report.risks && report.risks.length > 0 && (
               <div className="rounded-md border border-[#ffd8d2] bg-[#fff5f2] p-3">
-                <div className="text-sm font-medium text-[#c2492a] mb-1.5">⚠️ 潜在风险</div>
+                <div className="flex items-center gap-1 text-sm font-medium text-[var(--color-error)] mb-1.5"><WarningOutlined />潜在风险</div>
                 <ul className="space-y-1.5 leading-relaxed">
                   {report.risks.map((s, i) => <li key={i}>{s}</li>)}
                 </ul>
@@ -150,7 +144,7 @@ export default function CandidateAnalysisReportCard({ candidateName, candidatePo
             </Typography.Text>
           )}
           {report.recommend_level && (
-            <Tag color={RECOMMEND_COLOR[report.recommend_level] || 'default'}>
+            <Tag color={RECOMMENDATION_LEVEL_TAG_COLORS[report.recommend_level] || 'default'}>
               {report.recommend_level}
             </Tag>
           )}

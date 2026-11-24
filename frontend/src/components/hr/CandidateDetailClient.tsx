@@ -7,13 +7,13 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
-  Form, Modal, Card, InputNumber, Empty, Space, Upload, Rate, Popconfirm,
+  Form, Modal, Card, InputNumber, Empty, Space, Upload, Rate, Popconfirm, Tooltip,
 } from 'antd'
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
-  RobotOutlined, CheckCircleOutlined, SendOutlined,
-  FileSearchOutlined, AuditOutlined, UserAddOutlined,
+  CheckCircleOutlined, CheckCircleFilled, SendOutlined,
+  FileSearchOutlined, AuditOutlined, UserAddOutlined, BarChartOutlined, ClockCircleOutlined,
 } from '@ant-design/icons'
 import type { Candidate, Interview, InterviewFeedback, OnboardingTask } from '@/types/hr'
 import {
@@ -30,7 +30,7 @@ import {
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
   fetchEmployeesAction, screenCandidateAction, fetchJobRequirements,
 } from '@/actions/hr'
-import { base64ToObjectUrl, candidateStatusColor } from '@/lib/hr'
+import { base64ToObjectUrl, candidateStatusColor, INTERVIEW_STATUS_TAG_COLORS, RECOMMENDATION_LEVEL_TAG_COLORS } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 
 // 面试前筛简历阶段：AI 简历初筛按钮只在这些状态显示（与 RecruitmentClient 对齐；进入面试后以胜任度分析报告为准）
@@ -38,14 +38,20 @@ const SCREENING_PHASE_STATUSES = new Set(['待筛选', '已筛选', '待部门�
 
 interface CandidateDetailClientProps {
   candidate: Candidate
+  /** 写操作后重新拉取候选人（页面级 state 由 [id]/page.tsx 持有），返回最新数据 */
+  onReload?: () => Promise<Candidate | null | undefined>
 }
 
-export default function CandidateDetailClient({ candidate }: CandidateDetailClientProps) {
+export default function CandidateDetailClient({ candidate, onReload }: CandidateDetailClientProps) {
   const router = useRouter()
   // ?tab=interviews/onboarding：外部（如面试总览行）直达指定 Tab，免去进页再手切
   const searchParams = useSearchParams()
   const initialTab = searchParams.get('tab') === 'interviews' || searchParams.get('tab') === 'onboarding'
     ? searchParams.get('tab')! : undefined
+  // 页签受控：点「上一条 / 下一条」时保持在当前页签（此前是非受控的 defaultActiveKey，切换候选人会跳回「基本信息」）
+  const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'info')
+  // 上下条切换时带上的页签参数（基本信息是默认页签，不带参数）
+  const tabParam = activeTab === 'info' ? '' : `?tab=${activeTab}`
   const { message } = App.useApp()
   // 招聘管理权限：人事专员可操作全流程；用人部门负责人（审核人）仅查看 + 同意/驳回
   const { hasPermission } = usePermission()
@@ -54,6 +60,8 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [pdfError, setPdfError] = useState(false)
   const [pdfErrorMsg, setPdfErrorMsg] = useState('')
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  // 换简历后自增，让下面的预览 effect 重新取 PDF（同一个候选人 id，光靠 id 变化不会触发）
+  const [pdfVersion, setPdfVersion] = useState(0)
 
   // 简历 PDF 通过 Server Action 获取（不经 /api rewrite 代理），转 blob URL 嵌入 iframe
   useEffect(() => {
@@ -73,8 +81,16 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         setPdfLoading(false)
       })
     return () => { if (objectUrl) window.URL.revokeObjectURL(objectUrl) }
-  }, [candidate.id])
+  }, [candidate.id, pdfVersion])
   const [recommendationLevel, setRecommendationLevel] = useState(candidate.recommendation_level || '')
+
+  // 写操作后刷新候选人：此前各处调 router.refresh()，但候选人数据在页面级 state 里，
+  // refresh 不会重新拉取——状态流转、转入职、保存修改之后页面显示的仍是旧数据
+  const refreshCandidate = useCallback(async () => {
+    const fresh = await onReload?.()
+    // 推荐等级是本地 state（初值取自进入页面时的候选人），需随新数据同步，否则 AI 初筛后按钮仍可重复触发
+    if (fresh) setRecommendationLevel(fresh.recommendation_level || '')
+  }, [onReload])
   const [updating, setUpdating] = useState(false)
   const [navContext, setNavContext] = useState<{ ids: string[]; currentIndex: number } | null>(null)
   const [isEditing, setIsEditing] = useState(false)
@@ -119,13 +135,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [onboardingTasks, setOnboardingTasks] = useState<OnboardingTask[]>([])
   const [tasksLoading, setTasksLoading] = useState(false)
   const tasksLoadedRef = useRef(false)
+  // 任务是否已加载过（渲染用；ref 不能在渲染期读取）。页签标题在加载前只写「入职任务」，不显示误导的 0/0
+  const [tasksLoaded, setTasksLoaded] = useState(false)
 
   // force=true 时跳过「已加载」短路（点「刷新」强制重拉）
   const loadOnboardingTasks = useCallback(async (force = false) => {
     if (tasksLoadedRef.current && !force) return
     setTasksLoading(true)
     try { const r = await fetchOnboardingTasks(candidate.id); setOnboardingTasks(r.data || []) } catch { /* 仅已入职候选人有任务 */ }
-    finally { setTasksLoading(false); tasksLoadedRef.current = true }
+    finally { setTasksLoading(false); tasksLoadedRef.current = true; setTasksLoaded(true) }
   }, [candidate.id])
 
   // 状态流转
@@ -160,7 +178,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         try {
           const d = await onboardCandidate(candidate.id)
           message.success(`入职成功！工号：${d.data?.employee_number || ''}`)
-          router.refresh()
+          void refreshCandidate()
         } catch (err: any) { message.error(err.message || '入职失败') }
         finally { setOnboardLoading(false) }
       },
@@ -217,7 +235,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     const prevId = navContext.ids[prevIndex]
     if (prevId) {
       sessionStorage.setItem('candidate_list_context', JSON.stringify({ ...navContext, currentIndex: prevIndex }))
-      router.push(`/hr/recruitment/${prevId}`)
+      router.push(`/hr/recruitment/${prevId}${tabParam}`)
     }
   }
 
@@ -227,7 +245,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     const nextId = navContext.ids[nextIndex]
     if (nextId) {
       sessionStorage.setItem('candidate_list_context', JSON.stringify({ ...navContext, currentIndex: nextIndex }))
-      router.push(`/hr/recruitment/${nextId}`)
+      router.push(`/hr/recruitment/${nextId}${tabParam}`)
     }
   }
 
@@ -239,7 +257,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       const r = await screenCandidateAction(candidate.id)
       if (!r.ok) { message.error(r.error); return }
       message.success(`AI 初筛完成：${r.data.recommendation}（胜任度 ${r.data.total_score}/100）`)
-      window.location.reload()
+      void refreshCandidate()
     } catch (err: any) { message.error(err.message || 'AI 初筛失败') }
     finally { setScreening(false) }
   }
@@ -268,7 +286,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         work_years: formData.work_years,
         notes: formData.notes || undefined,
       })
-      message.success('保存成功'); setIsEditing(false); router.refresh()
+      message.success('保存成功'); setIsEditing(false); void refreshCandidate()
     } catch (err: any) { message.error(err.message || '保存失败') }
     finally { setSaving(false) }
   }
@@ -294,7 +312,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       await updateInterview(id, { status: '已完成' })
       message.success('面试已标记完成；候选人无剩余轮次时将自动推进到「已面试」')
       loadInterviews()
-      router.refresh()  // 候选人状态可能自动推进，头部状态需同步刷新
+      void refreshCandidate()  // 候选人状态可能自动推进，头部状态需同步刷新
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setCompletingId(null) }
   }
@@ -376,7 +394,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       await transitionCandidateStatus(candidate.id, { status: newStatus })
       message.success(`状态已变更为「${newStatus}」`)
-      router.refresh()
+      void refreshCandidate()
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setStatusUpdating(false) }
   }
@@ -385,7 +403,6 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     { value: '强烈推荐', label: '强烈推荐' }, { value: '推荐', label: '推荐' },
     { value: '待定', label: '待定' }, { value: '不推荐', label: '不推荐' },
   ]
-  const recommendationColors: Record<string, string> = { '强烈推荐': 'green', '推荐': 'blue', '待定': 'orange', '不推荐': 'red' }
   const statusTransitions: Record<string, string[]> = {
     '待筛选': ['已筛选', '已拒绝'],
     '已筛选': ['待部门审核', '已拒绝'],
@@ -428,7 +445,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       if (!path) throw new Error('简历解析失败，未返回文件路径')
       await updateCandidateAction(candidate.id, { resume_url: path })
       message.success('简历已更新')
-      window.location.reload()
+      // 局部刷新：重取 PDF 预览 + 重拉候选人（此前整页 reload，当前页签与已加载的面试记录全部丢失）
+      setPdfLoading(true)
+      setPdfError(false)
+      setPdfVersion((v) => v + 1)
+      void refreshCandidate()
     } catch (err: any) { message.error(err.message || '上传失败') }
     return false // 阻止 Upload 默认上传
   }
@@ -443,7 +464,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         try {
           await pushOnboardingReview(candidate.id, { pushed_by: 'HR' })
           message.success('已发起入职审批')
-          router.refresh(); loadReviews()
+          void refreshCandidate(); loadReviews()
         } catch (err: any) { message.error(err.message || '发起失败') }
       },
     })
@@ -484,7 +505,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       await pushCandidateReview(candidate.id, { pushed_by: 'HR', push_note: v.push_note, reviewer: v.reviewer || undefined })
       message.success('已推送至用人部门审核')
       setPushModalOpen(false); pushForm.resetFields()
-      router.refresh(); loadReviews()
+      void refreshCandidate(); loadReviews()
     } catch (err: any) { message.error(err.message || '推送失败') }
     finally { setPushLoading(false) }
   }
@@ -518,7 +539,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       await decideCandidateReview(candidate.id, { decision, review_comment: comment })
       message.success(decision === '已同意' ? '已同意面试' : '已标记为不合适')
-      router.refresh(); loadReviews()
+      void refreshCandidate(); loadReviews()
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setReviewLoading(false) }
   }
@@ -528,9 +549,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const pendingReview = reviews.find(r => r.status === '待审核') || null
 
   // ─── 基本信息 Tab ───
+  // 两栏各占固定视口高度、各自滚动：偏移量按「顶部导航 64 + 页头 + 页签 + 间距」估算；
+  // 此前偏移只留 180px，比实际 chrome 小，页面与信息栏会出现双滚动条
   const infoTab = (
-    <div className="flex gap-4" style={{ height: 'calc(100vh - 180px)' }}>
-      <div className="flex-[3] bg-white rounded-xl border border-[#e5e3df] overflow-hidden relative">
+    <div className="flex gap-4" style={{ height: 'calc(100vh - 262px)', minHeight: 460 }}>
+      <div className="flex-[3] bg-white rounded-xl border border-[var(--color-hairline)] overflow-hidden relative">
         <Spin spinning={pdfLoading} className="absolute inset-0 z-10 flex items-center justify-center" />
         {pdfError && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white">
@@ -552,47 +575,42 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             onLoad={() => setPdfLoading(false)} title="简历预览" />
         )}
       </div>
-      <div className="flex-[2] bg-white rounded-xl border border-[#e5e3df] p-6 overflow-auto">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold">{candidate.name}</h2>
-            {recommendationLevel && <Tag color={recommendationColors[recommendationLevel] || 'default'}>{recommendationLevel}</Tag>}
-            <Tag color={candidateStatusColor(candidate.status)}>{candidate.status || '未知'}</Tag>
-          </div>
-          <div className="flex gap-2">
-            {isEditing ? (
-              <>
-                <Button icon={<SaveOutlined />} type="primary" loading={saving} onClick={handleSave}>保存修改</Button>
-                <Button icon={<CloseOutlined />} onClick={handleCancel} disabled={saving}>取消</Button>
-              </>
-            ) : (
-              <>
-                {canManage && candidate.status === '已录用' && (
-                  <Button type="primary" icon={<AuditOutlined />} onClick={handlePushOnboarding}>
-                    发起入职审批
+      <div className="flex-[2] bg-white rounded-xl border border-[var(--color-hairline)] p-6 overflow-auto">
+        {/* 姓名 / 推荐等级 / 状态已在页面级页头常驻，这里只留操作区 */}
+        <div className="flex items-center justify-end gap-2 mb-4">
+          {isEditing ? (
+            <>
+              <Button icon={<SaveOutlined />} type="primary" loading={saving} onClick={handleSave}>保存修改</Button>
+              <Button icon={<CloseOutlined />} onClick={handleCancel} disabled={saving}>取消</Button>
+            </>
+          ) : (
+            <>
+              {canManage && candidate.status === '已录用' && (
+                <Button type="primary" icon={<AuditOutlined />} onClick={handlePushOnboarding}>
+                  发起入职审批
+                </Button>
+              )}
+              {canManage && candidate.status === '待入职审批' && (
+                <>
+                  <Button
+                    type="primary" icon={<UserAddOutlined />}
+                    loading={onboardLoading} onClick={handleOnboard}
+                    title="入职审批通过后执行：建档并发起信息收集"
+                  >
+                    转为入职员工
                   </Button>
-                )}
-                {canManage && candidate.status === '待入职审批' && (
-                  <>
-                    <Button
-                      type="primary" icon={<UserAddOutlined />}
-                      loading={onboardLoading} onClick={handleOnboard}
-                      title="入职审批通过后执行：建档并发起信息收集"
-                    >
-                      转为入职员工
-                    </Button>
-                    <Button danger onClick={() => handleDecideReview('已拒绝')}>驳回入职</Button>
-                  </>
-                )}
-                {canManage && (
-                  <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
-                )}
-              </>
-            )}
-          </div>
+                  <Button danger onClick={() => handleDecideReview('已拒绝')}>驳回入职</Button>
+                </>
+              )}
+              {canManage && (
+                <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
+              )}
+            </>
+          )}
         </div>
 
-        <Descriptions bordered size="small" column={1}>
+        {/* 只读字段两列排：此前单列 12 行，768 高度下推荐等级和推送/流转操作都在折叠线以下 */}
+        <Descriptions bordered size="small" column={{ xs: 1, md: 2 }}>
           <Descriptions.Item label="应聘职位">
             {isEditing ? <Input value={formData.position} onChange={e => setFormData({ ...formData, position: e.target.value })} /> : (candidate.position || '-')}
           </Descriptions.Item>
@@ -642,7 +660,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                 loading={screening}
                 onClick={handleScreenCandidate}
                 title="面试前：按已存简历+岗位JD AI 打分，结果写入推荐等级与匹配报告">
-                AI 简历初筛（免重复上传）
+                AI 初筛
               </Button>
             )}
           </div>
@@ -658,7 +676,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           {candidate.status === '待部门审核' && (
             <div className="mt-2 p-3 rounded bg-orange-50 border border-orange-200">
               <div className="text-sm font-medium text-orange-700 mb-2">
-                ⏳ 待用人部门审核{pendingReview?.reviewer ? `（审核人：${pendingReview.reviewer}）` : ''}
+                <ClockCircleOutlined style={{ color: 'var(--color-warning)' }} /> 待用人部门审核{pendingReview?.reviewer ? `（审核人：${pendingReview.reviewer}）` : ''}
               </div>
               <div className="flex gap-2">
                 <Button type="primary" icon={<CheckCircleOutlined />}
@@ -714,7 +732,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const renderInterviewCard = (iv: Interview) => (
     <Card key={iv.id} size="small" title={
       <div className="flex items-center gap-2">
-        <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
+        <Tag color={INTERVIEW_STATUS_TAG_COLORS[iv.status || ''] || 'default'}>{iv.status}</Tag>
         <span>{iv.interview_type}</span>
         <span className="text-gray-400 text-xs">
           {iv.interview_date || '时间待定'}
@@ -790,16 +808,18 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       {/* AI 评估已统一到胜任度报告：单按钮生成，结果在下方报告区展示 */}
       <div className="mt-3 flex items-center gap-2 flex-wrap">
         {analysisReports.some((rep: any) => rep.interview_id === iv.id) && (
-          <Tag color="green" className="text-xs">📊 AI 报告已生成</Tag>
+          <Tag color="success" icon={<CheckCircleFilled />} className="text-xs">AI 报告已生成</Tag>
         )}
-        <Button
-          icon={<RobotOutlined />}
-          loading={reportGeneratingId === iv.id}
-          onClick={() => handleGenerateReport(iv.id)}
-          disabled={!(iv.transcript_text || iv.notes)}
-        >
-          {iv.transcript_text || iv.notes ? '📊 生成胜任度报告' : '请先填写面试记录'}
-        </Button>
+        <Tooltip title={!(iv.transcript_text || iv.notes) ? '请先在下方填写面试记录' : undefined}>
+          <Button
+            icon={<BarChartOutlined />}
+            loading={reportGeneratingId === iv.id}
+            onClick={() => handleGenerateReport(iv.id)}
+            disabled={!(iv.transcript_text || iv.notes)}
+          >
+            生成胜任度报告
+          </Button>
+        </Tooltip>
       </div>
     </Card>
   )
@@ -813,7 +833,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       <div className="space-y-4">
         {roundIvs.map(renderInterviewCard)}
         {roundReports.length > 0 && (
-          <Card title="📊 胜任度多维分析报告" className="mt-4">
+          <Card title="胜任度多维分析报告" className="mt-4">
             <div className="space-y-4">
               {roundReports.map((r: any) => (
                 <div key={r.id} className="border-b border-[var(--color-hairline)] pb-3 last:border-b-0 last:pb-0">
@@ -879,9 +899,9 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <Form.Item name="overall_comment" label="总体评价"><Input.TextArea rows={3} /></Form.Item>
           <Form.Item name="result" label="面试结论" rules={[{ required: true, message: '请选择面试结论' }]}>
             <Select options={[
-              { label: '✅ 通过', value: '通过' },
-              { label: '🤔 待定', value: '待定' },
-              { label: '❌ 不通过', value: '不通过' },
+              { label: '通过', value: '通过' },
+              { label: '待定', value: '待定' },
+              { label: '不通过', value: '不通过' },
             ]} />
           </Form.Item>
         </Form>
@@ -904,10 +924,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               const isDone = task.status === '已完成'
               return (
                 <Card key={task.id} size="small" className={isDone ? 'opacity-70' : ''}
-                  style={{ borderRadius: 10, borderLeft: isDone ? '3px solid #1aae39' : '3px solid #dd5b00' }}>
+                  style={{ borderRadius: 10, borderLeft: isDone ? '3px solid var(--color-success)' : '3px solid var(--color-warning)' }}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <span className="text-lg">{isDone ? '✅' : '⏳'}</span>
+                      <span className="text-base">{isDone ? <CheckCircleFilled style={{ color: 'var(--color-success)' }} /> : <ClockCircleOutlined style={{ color: 'var(--color-warning)' }} />}</span>
                       <div>
                         <div className="font-medium text-sm" style={{ color: 'var(--color-charcoal)' }}>{task.task_type}</div>
                         {task.completed_at && <div className="text-xs text-gray-400">完成于 {new Date(task.completed_at).toLocaleDateString('zh-CN')}{task.completed_by ? ` · ${task.completed_by}` : ''}</div>}
@@ -939,22 +959,36 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     // 面试记录/入职任务是 HR 操作区：用人部门负责人（仅审核）不展示
     ...(canManage ? [
       { key: 'interviews', label: `面试记录 (${interviews.length})`, children: interviewTab },
-      { key: 'onboarding', label: `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})`, children: onboardingTasksTab },
+      { key: 'onboarding', label: tasksLoaded ? `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})` : '入职任务', children: onboardingTasksTab },
     ] : []),
   ]
 
+  // 无管理权限的角色没有「面试记录 / 入职任务」页签：网址带了这些页签时回落到基本信息
+  const currentTab = tabItems.some(t => t.key === activeTab) ? activeTab : 'info'
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/hr/recruitment')}>返回列表</Button>
+      {/* 页面级页头：姓名 / 推荐等级 / 状态 / 应聘岗位常驻，切到「面试记录」等页签后也知道当前是谁
+          （此前顶栏只有「返回列表 / 上一条 / 下一条」三个按钮，候选人信息全埋在基本信息页签里） */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/hr/recruitment')}>返回</Button>
+        <h1 className="text-[22px] font-semibold leading-tight text-[var(--color-charcoal)] m-0">{candidate.name}</h1>
+        {recommendationLevel && (
+          <Tag color={RECOMMENDATION_LEVEL_TAG_COLORS[recommendationLevel] || 'default'}>{recommendationLevel}</Tag>
+        )}
+        <Tag color={candidateStatusColor(candidate.status)}>{candidate.status || '未知'}</Tag>
+        <span className="text-sm text-[var(--color-steel)]">
+          {[candidate.position, candidate.department].filter(Boolean).join(' · ')}
+        </span>
         {navContext && (
-          <>
+          <div className="ml-auto flex items-center gap-2">
             <Button icon={<ArrowUpOutlined />} onClick={handlePrev} disabled={navContext.currentIndex <= 0}>上一条</Button>
             <Button icon={<ArrowDownOutlined />} onClick={handleNext} disabled={navContext.currentIndex >= navContext.ids.length - 1}>下一条</Button>
-          </>
+          </div>
         )}
       </div>
-      <Tabs items={tabItems} defaultActiveKey={initialTab} onChange={key => { if (key === 'onboarding') loadOnboardingTasks() }} />
+      <Tabs items={tabItems} activeKey={currentTab}
+        onChange={key => { setActiveTab(key); if (key === 'onboarding') loadOnboardingTasks() }} />
 
       {/* 推送审核 Modal：置于组件顶层（Tabs 懒渲染未激活面板，
           放在 interviewTab 内时从「基本信息」tab 点推送弹窗不会出现） */}
@@ -992,7 +1026,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         onSaved={() => {
           setScheduleOpen(false)
           loadInterviews()
-          router.refresh()  // 编辑弹窗里改状态也可能触发候选人状态自动推进
+          void refreshCandidate()  // 编辑弹窗里改状态也可能触发候选人状态自动推进
         }}
       />
     </div>
