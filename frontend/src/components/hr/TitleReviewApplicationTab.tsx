@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { App, Button, Descriptions, Drawer, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined, TeamOutlined } from '@ant-design/icons'
 import { usePermission } from '@/hooks/usePermission'
+import { useDebouncedCallback } from '@/hooks/hr'
 import type { Employee, TitleReviewApplication, TitleReviewJudge } from '@/types/hr'
 import {
   assignTitleJudges,
@@ -130,6 +131,9 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
       if (seq === searchSeq.current) setEmployeeSearching(false)
     }
   }
+
+  // 远程搜索防抖 300ms（此前每敲一个字发一次请求）
+  const { run: debouncedSearchEmployees } = useDebouncedCallback(searchEmployees, 300)
 
   const handleAssign = async () => {
     if (!judgeModal) return
@@ -352,7 +356,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
             showSearch
             filterOption={false}
             loading={employeeSearching}
-            onSearch={searchEmployees}
+            onSearch={debouncedSearchEmployees}
             value={null as any}
             options={employeeOptions
               .filter((e) => !selectedJudges.some((j) => j.employee_id === e.id))

@@ -36,7 +36,6 @@ from app.modules.hr.models import (
     OnboardingRecord,
     OnboardingTask,
     PositionTraining,
-    Team,
     TrainingLedger,
     TrainingLedgerPage,
 )
@@ -56,7 +55,6 @@ from app.modules.hr.repository import (
     OffboardingRecordRepository,
     OnboardingRecordRepository,
     PerformanceEvaluationRepository,
-    TeamRepository,
     TrainingLedgerPageRepository,
     TrainingLedgerRepository,
 )
@@ -82,8 +80,6 @@ from app.modules.hr.schemas import (
     PerformanceEvaluationCreate,
     PerformanceEvaluationUpdate,
     PerformanceListParams,
-    TeamCreate,
-    TeamUpdate,
     TrainingLedgerCreate,
     TrainingLedgerUpdate,
 )
@@ -317,6 +313,8 @@ class EmployeeService:
         "学位类型": "degree_type",
         "毕业证书": "graduation_certificate",
         "人力资源分析": "hr_analysis",
+        "是否重点岗位": "is_key_position",
+        "直属上级": "direct_manager_name",
     }
 
     # Excel 上传时，以下字段全部以 Excel 为准（Excel 中未出现的字段置空）
@@ -341,6 +339,7 @@ class EmployeeService:
         # 新数据源字段
         "ethnicity", "departure_reason", "degree_type",
         "graduation_certificate", "hr_analysis",
+        "is_key_position", "direct_manager_name",
     }
 
     _DATE_FIELDS: set[str] = {
@@ -682,6 +681,7 @@ class EmployeeService:
         sort_by: str = "department",
         sort_order: str = "asc",
         include_uncategorized: bool = False,
+        uncategorized_only: bool = False,
         departments: set[str] | None = None,
         # 字段级筛选项（枚举下拉/日期范围/年龄区间等），键名与 repository 对齐
         filters: dict | None = None,
@@ -689,6 +689,7 @@ class EmployeeService:
         return await self.repo.list_employees(
             department=department,
             include_uncategorized=include_uncategorized,
+            uncategorized_only=uncategorized_only,
             departments=departments,
             status=status,
             keyword=keyword,
@@ -1063,66 +1064,13 @@ class DepartmentService:
 
         return departments, total
 
-class TeamService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.repo = TeamRepository(session)
-        self.department_repo = DepartmentRepository(session)
-
-    async def get_team(self, team_id: UUID) -> Team:
-        team = await self.repo.get_by_id(team_id)
-        if not team:
-            raise NotFoundException("班组", str(team_id))
-        return team
-
-    async def create_team(self, data: TeamCreate) -> Team:
-        department = await self.department_repo.get_by_id(data.department_id)
-        if not department:
-            raise NotFoundException("部门", str(data.department_id))
-
-        team = Team(**data.model_dump())
-        result = await self.repo.create(team)
-        return result
-
-    async def update_team(self, team_id: UUID, data: TeamUpdate) -> Team:
-        team = await self.get_team(team_id)
-        update_data = data.model_dump(exclude_unset=True)
-
-        if "department_id" in update_data:
-            department = await self.department_repo.get_by_id(update_data["department_id"])
-            if not department:
-                raise NotFoundException("部门", str(update_data["department_id"]))
-
-        for field, value in update_data.items():
-            setattr(team, field, value)
-
-        result = await self.repo.update(team)
-        return result
-
-    async def delete_team(self, team_id: UUID) -> None:
-        await self.repo.session.execute(text("DELETE FROM hr.teams WHERE id = :id"), {"id": team_id})
-
-    async def list_teams(
-        self,
-        *,
-        department_id: UUID | None = None,
-        keyword: str | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> tuple[list[Team], int]:
-        return await self.repo.list_teams(
-            department_id=department_id,
-            keyword=keyword,
-            page=page,
-            page_size=page_size,
-        )
-
 async def _sync_roster_status(
     session: AsyncSession, employee_number: str | None, status: str,
 ) -> None:
     """离职/复职时同步培训名单状态（培训统计/SOP 选人读名单口径）。
 
     名单字段独立维护，但 status 是动态事实，必须随总表即时更新；
-    否则在 02:00 对账前（或同步未启用时）离职者仍会出现在培训名单里。
+    否则在下次对账前（或同步未启用时）离职者仍会出现在培训名单里。
     """
     if not employee_number:
         return

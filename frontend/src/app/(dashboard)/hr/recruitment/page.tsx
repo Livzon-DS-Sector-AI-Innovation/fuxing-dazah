@@ -3,6 +3,8 @@ import { Alert } from 'antd'
 import RecruitmentClient from '@/components/hr/RecruitmentClient'
 import { PermissionGuard } from '@/components/permission/PermissionGuard'
 
+export const metadata = { title: '招聘管理' }
+
 export default function RecruitmentPage() {
   return (
     <Suspense fallback={<div className="h-64" />}>

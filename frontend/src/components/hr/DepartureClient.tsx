@@ -1,9 +1,9 @@
 'use client'
 
 import styles from "./lifecycleTable.module.css"
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import {
-  App, Alert, Button, Table, Space, Input, Tag, Modal, Form, Select,
+  App, Button, Table, Space, Input, Tag, Modal, Form, Select, Tooltip,
   DatePicker, Popconfirm, Descriptions, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -14,6 +14,7 @@ import {
   DeleteOutlined,
   SendOutlined,
   CloudSyncOutlined,
+  ImportOutlined,
 } from '@ant-design/icons'
 import { DepartureRecord, DepartureFilterOptions } from '@/types/hr'
 import { DEPARTURE_TYPE_OPTIONS, DEPARTURE_TYPE_TAG_COLORS } from '@/lib/hr'
@@ -31,6 +32,9 @@ import {
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
+import { useDebouncedCallback } from '@/hooks/hr'
+import { LedgerImportModal } from '@/components/hr'
+import PageHeader from './PageHeader'
 
 const { Text } = Typography
 
@@ -44,7 +48,7 @@ interface DepartureClientProps {
   initialRecords: DepartureRecord[]
   initialTotal: number
   fetchAction?: typeof fetchDepartureRecords
-  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示同步横幅 */
+  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示立即同步入口 */
   syncInfo?: DepartureSyncInfo
 }
 
@@ -65,9 +69,14 @@ export default function DepartureClient({
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
+  // 输入框即时回显；防抖 300ms 后才写入 searchKeyword 触发查询（此前每敲一个字发一次请求）
+  const [keywordInput, setKeywordInput] = useState('')
   const [filterDepartment, setFilterDepartment] = useState('')
   const [filterOffboardingType, setFilterOffboardingType] = useState('')
   const [filterOptions, setFilterOptions] = useState<DepartureFilterOptions>({})
+  // 服务端排序：分页在服务端，前端 sorter 只会重排当前页 20 条（此前即如此，升降序结果不对）
+  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend'>('descend')
+  const loadSeq = useRef(0)
   const [createOpen, setCreateOpen] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
   const [createForm] = Form.useForm()
@@ -76,6 +85,7 @@ export default function DepartureClient({
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [selectedDept, setSelectedDept] = useState<string>('')
   const [certOpen, setCertOpen] = useState(false)
   const [certRecord, setCertRecord] = useState<DepartureRecord | null>(null)
@@ -86,6 +96,7 @@ export default function DepartureClient({
   // 同步模式：数据源为飞书离职人员管理表，本地新建/删除无意义（下轮同步会覆盖）
   const syncMode = Boolean(syncInfo)
   const canManage = hasPermission('hr:settings:manage')
+  const canImport = hasPermission('hr:departure:manage')
 
   useEffect(() => {
     fetchDepartmentsAction({ page_size: 200 }).then(r => {
@@ -130,23 +141,39 @@ export default function DepartureClient({
 
   const doFetch = fetchAction || fetchDepartureRecords
 
+  const { run: debouncedSetKeyword, cancel: cancelKeywordDebounce } = useDebouncedCallback((val: string) => {
+    setPage(1)
+    setSearchKeyword(val)
+  }, 300)
+
+  const commitKeyword = (val: string) => {
+    cancelKeywordDebounce()
+    setPage(1)
+    setSearchKeyword(val.trim())
+  }
+
   const loadData = useCallback(async () => {
+    // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果
+    const seq = ++loadSeq.current
     setLoading(true)
     try {
       const res = await doFetch({
         department: filterDepartment || undefined,
         offboarding_type: filterOffboardingType || undefined,
         keyword: searchKeyword || undefined,
+        sort_by: 'offboarding_date',
+        sort_order: sortOrder === 'ascend' ? 'asc' : 'desc',
         page,
         page_size: pageSize })
+      if (seq !== loadSeq.current) return
       setRecords(res.data)
       setTotal(res.meta?.total || 0)
     } catch (err: any) {
-      message.error(err.message || '加载数据失败')
+      if (seq === loadSeq.current) message.error(err.message || '加载数据失败')
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
-  }, [filterDepartment, filterOffboardingType, searchKeyword, page, pageSize, doFetch])
+  }, [filterDepartment, filterOffboardingType, searchKeyword, sortOrder, page, pageSize, doFetch, message])
 
   const handlePageChange = (newPage: number, newPageSize: number) => {
     setPage(newPage)
@@ -155,7 +182,7 @@ export default function DepartureClient({
 
   useEffect(() => {
     loadData()
-  }, [filterDepartment, filterOffboardingType, searchKeyword, page, pageSize])
+  }, [filterDepartment, filterOffboardingType, searchKeyword, sortOrder, page, pageSize])
 
   const handleSync = async () => {
     setSyncing(true)
@@ -181,19 +208,28 @@ export default function DepartureClient({
 
   const handlePreviewCert = async () => {
     if (!certRecord) return
+    // 先同步开窗再取数：await 之后再 window.open 会被浏览器当作非用户手势触发而拦截
+    const w = window.open('', '_blank')
+    if (!w) { message.warning('浏览器拦截了预览窗口，请允许本站弹出窗口后重试'); return }
     try {
       const html = await previewDepartureCertificate(certRecord.id)
-      const w = window.open('', '_blank')
-      if (w) { w.document.write(html); w.document.close() }
-    } catch (err: any) { message.error(err.message || '预览失败') }
+      w.document.write(html); w.document.close()
+    } catch (err: any) {
+      w.close()
+      message.error(err.message || '预览失败')
+    }
   }
 
   const handleSendCert = async () => {
     if (!certRecord || !certEmail) return
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(certEmail.trim())) {
+      message.warning('请输入正确的收件邮箱地址')
+      return
+    }
     setCertSending(true)
     try {
       const fd = new FormData()
-      fd.append('employee_email', certEmail)
+      fd.append('employee_email', certEmail.trim())
       await sendDepartureCertificate(certRecord.id, fd)
       message.success('离职证明已发送')
       setCertOpen(false)
@@ -232,13 +268,15 @@ export default function DepartureClient({
       title: '工号',
       dataIndex: 'employee_number',
       key: 'employee_number',
-      width: 100,
+      // 9 位工号 + 复制图标需要 130px，此前 100px 会让图标折到第二行、行高参差
+      width: 130,
       render: (v: string) => v ? <Text copyable={Boolean(v)} className="text-xs">{v}</Text> : '-' },
     {
       title: '部门',
       dataIndex: 'department',
       key: 'department',
-      width: 130 },
+      // 150px 容纳「质量控制部（QA部）」这类长部门名，避免折行导致行高参差
+      width: 150 },
     {
       title: '职位',
       dataIndex: 'position',
@@ -255,9 +293,8 @@ export default function DepartureClient({
       dataIndex: 'offboarding_date',
       key: 'offboarding_date',
       width: 110,
-      defaultSortOrder: 'descend',
-      sorter: (a: DepartureRecord, b: DepartureRecord) =>
-        new Date(b.offboarding_date || '').getTime() - new Date(a.offboarding_date || '').getTime() },
+      sortOrder,
+      sorter: true },
     {
       title: '离职类型',
       dataIndex: 'offboarding_type',
@@ -332,37 +369,30 @@ export default function DepartureClient({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-          离职台账
-        </h1>
-      </div>
-
-      {syncMode && (
-        <Alert
-          type="info"
-          showIcon
-          icon={<CloudSyncOutlined />}
-          title={`数据来源：飞书「${syncInfo!.departure_table_name}」单向同步（员工档案同步顺带拉取，每天 02:00 自动对账）`}
-          description={`上次同步：${formatSyncTime(syncInfo!.last_sync_at)}；增删改请在飞书表中操作`}
-          action={canManage ? (
-            <Button size="small" icon={<CloudSyncOutlined />} loading={syncing} onClick={handleSync}>
-              立即同步
-            </Button>
-          ) : undefined}
-        />
-      )}
+      {/* 绑定飞书离职表后把数据来源写进页头描述（与员工档案页同款），不必再把长说明塞在同步按钮的提示里 */}
+      <PageHeader
+        title="离职台账"
+        description={syncMode
+          ? `数据来源：飞书「${syncInfo!.departure_table_name}」单向同步 · 只读展示 · 每小时自动对账 · 上次同步：${formatSyncTime(syncInfo!.last_sync_at)}`
+          : undefined}
+      />
 
       <div className="flex flex-wrap gap-3 items-center">
         {!syncMode && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
         )}
+        {/* 导入是写操作，按离职台账写权限显隐（只读用户点了只会得到 403） */}
+        {!syncMode && canImport && (
+          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
+        )}
         <Input
           placeholder="搜索姓名/部门/职位"
-          value={searchKeyword}
-          onChange={(e) => { setSearchKeyword(e.target.value); setPage(1) }}
+          value={keywordInput}
+          onChange={(e) => { setKeywordInput(e.target.value); debouncedSetKeyword(e.target.value.trim()) }}
+          onPressEnter={(e) => commitKeyword((e.target as HTMLInputElement).value)}
           prefix={<SearchOutlined />}
-          className="w-64"
+          // antd 输入框自带 width:100%，Tailwind 的 w-64 会被覆盖成整行宽，宽度须走 style
+          style={{ width: 240 }}
           allowClear
         />
         <Select
@@ -383,8 +413,14 @@ export default function DepartureClient({
           className="w-36"
           options={filterOptions.offboarding_types?.map((t) => ({ value: t, label: t }))}
         />
-        <Button loading={exporting} onClick={handleExport} className="ml-auto"
-          title="按当前筛选（部门/离职类型/关键词）导出全部匹配记录">导出Excel</Button>
+        <Tooltip title="按当前筛选（部门/离职类型/关键词）导出全部匹配记录">
+          <Button loading={exporting} onClick={handleExport} className="ml-auto">导出Excel</Button>
+        </Tooltip>
+        {syncMode && canManage && (
+            <Tooltip title="数据来自飞书表的单向同步：增删改请在飞书表中操作，这里只读">
+              <Button icon={<CloudSyncOutlined />} loading={syncing} onClick={handleSync}>立即同步</Button>
+            </Tooltip>
+        )}
       </div>
 
       <Table className={styles.tableLg}
@@ -392,6 +428,15 @@ export default function DepartureClient({
         dataSource={records}
         rowKey="id"
         loading={loading}
+        // 排序循环须为「降序→升序→取消」：antd 默认是升→降→取消，从默认的降序点一下会落到「取消」，
+        // 被下面的兜底映射回降序后状态就永远推进不到升序
+        sortDirections={['descend', 'ascend']}
+        onChange={(_pagination, _filters, sorter) => {
+          // 离职日期列排序：交给服务端（取消排序时回到默认的倒序）
+          const order = (Array.isArray(sorter) ? sorter[0] : sorter)?.order
+          setSortOrder(order === 'ascend' ? 'ascend' : 'descend')
+          setPage(1)
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -503,6 +548,14 @@ export default function DepartureClient({
           </div>
         )}
       </Modal>
+
+      <LedgerImportModal
+        open={importOpen}
+        ledger="departure"
+        label="离职台账"
+        onClose={() => setImportOpen(false)}
+        onSuccess={loadData}
+      />
 
     </div>
   )

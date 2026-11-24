@@ -32,7 +32,6 @@ from app.modules.hr.models import (
     PerformanceCategoryScore,
     PerformanceDeptWeight,
     PerformanceEvaluationItem,
-    Team,
     TrainingLedger,
     TrainingLedgerPage,
 )
@@ -240,6 +239,7 @@ class EmployeeRepository:
         contract_end_date_after: date | None = None,
         contract_end_date_before: date | None = None,
         include_uncategorized: bool = False,
+        uncategorized_only: bool = False,
         departments: set[str] | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -253,6 +253,18 @@ class EmployeeRepository:
             stmt = stmt.where(Employee.department.in_(departments))
         elif department:
             stmt = stmt.where(Employee.department.ilike(f"{department}%"))
+        if uncategorized_only:
+            # 「未归类」版面：部门为空，或部门名不在部门表中（含部门已删除）。
+            # 仅当未指定具体部门时生效，避免与部门筛选互相打架。
+            if not departments and not department:
+                categorized = select(HrDepartment.name).where(HrDepartment.is_deleted.is_(False))
+                stmt = stmt.where(
+                    or_(
+                        Employee.department.is_(None),
+                        Employee.department == "",
+                        Employee.department.not_in(categorized),
+                    )
+                )
         if status:
             stmt = stmt.where(Employee.status == status)
         # 无显式状态筛选时不过滤状态：与源表全量对齐（仅软删不计，口径同看板）
@@ -618,62 +630,6 @@ class DepartmentRepository:
 
     async def soft_delete(self, department: HrDepartment) -> None:
         department.is_deleted = True
-        await self.session.flush()
-
-class TeamRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
-
-    async def get_by_id(self, team_id: UUID) -> Team | None:
-        result = await self.session.execute(
-            select(Team)
-            .where(Team.id == team_id, Team.is_deleted.is_(False))
-            .options(selectinload(Team.department))
-        )
-        return result.scalar_one_or_none()
-
-    async def list_teams(
-        self,
-        *,
-        department_id: UUID | None = None,
-        keyword: str | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> tuple[list[Team], int]:
-        stmt = select(Team).where(Team.is_deleted.is_(False)).options(
-            selectinload(Team.department)
-        )
-
-        if department_id:
-            stmt = stmt.where(Team.department_id == department_id)
-        if keyword:
-            stmt = stmt.where(
-                Team.name.ilike(f"%{keyword}%")
-                | Team.code.ilike(f"%{keyword}%")
-            )
-
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        total_result = await self.session.execute(count_stmt)
-        total = total_result.scalar() or 0
-
-        stmt = stmt.order_by(asc(Team.created_at))
-        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
-
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all()), total
-
-    async def create(self, team: Team) -> Team:
-        self.session.add(team)
-        await self.session.flush()
-        return team
-
-    async def update(self, team: Team) -> Team:
-        await self.session.flush()
-        result = await self.session.execute(select(Team).where(Team.id == team.id))
-        return result.scalar_one()
-
-    async def soft_delete(self, team: Team) -> None:
-        team.is_deleted = True
         await self.session.flush()
 
 class OffboardingRecordRepository:

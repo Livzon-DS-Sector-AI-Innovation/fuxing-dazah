@@ -7,6 +7,7 @@ from uuid import UUID
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -38,33 +39,11 @@ class HrDepartment(BaseModel):
     description: Mapped[str | None] = mapped_column(
         String(256), nullable=True, comment="部门描述"
     )
-
-    teams: Mapped[list["Team"]] = relationship(
-        "Team", back_populates="department", lazy="select"
+    department_manager_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="部门负责人（转正审批第二级）"
     )
-
-
-class Team(BaseModel):
-    __tablename__ = "teams"
-    __table_args__ = (
-        Index("ix_teams_department_id", "department_id"),
-        Index("ix_teams_name", "name"),
-        {"schema": "hr"},
-    )
-
-    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="班组名称")
-    code: Mapped[str | None] = mapped_column(
-        String(32), nullable=True, comment="班组编码"
-    )
-    description: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, comment="班组描述"
-    )
-    department_id: Mapped[UUID] = mapped_column(
-        ForeignKey("hr.departments.id"), nullable=False, comment="所属部门ID"
-    )
-
-    department: Mapped["HrDepartment"] = relationship(
-        "HrDepartment", back_populates="teams", lazy="select"
+    supervising_leader_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="分管领导（转正审批第三级）"
     )
 
 
@@ -238,7 +217,15 @@ class Employee(BaseModel):
     )
     probation_end_date: Mapped[date | None] = mapped_column(
         Date, nullable=True,
-        comment="转正到期日（空=按入职+3月-1天派生；试用期延长时写入新日期）",
+        comment="转正到期日（空=按时长配置派生；试用期延长时写入新日期）",
+    )
+    # ─── 试用期管理（重点岗位/直属上级：飞书源表同步或 HR 维护）───
+    is_key_position: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True,
+        comment="是否重点岗位（影响试用期时长/安全考试节点/应交证件清单）",
+    )
+    direct_manager_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="直属上级姓名（转正评估第一级）"
     )
 
     # ─── Feishu sync metadata ───
@@ -297,19 +284,22 @@ class Employee(BaseModel):
         delta = date.today() - self.hire_date
         return round(delta.days / 365.25, 1)
 
-    # 试用期统一 3 个月（口径与 document_generator._calc_probation_date 一致）
+    # 试用期类别集合（时长按 probation_config 配置：一般/重点岗位两档）
     _PROBATION_CATEGORIES = {"试用期", "实习转试用", "实习生"}
 
     @property
     def computed_probation_end(self) -> date | None:
-        """转正到期日：显式值优先（延长后写入），否则按入职+3月-1天派生。"""
+        """转正到期日：显式值优先（延长后写入），否则按时长配置派生（入职+N月-1天）。"""
+        from app.modules.hr.probation_config import probation_months
+
         if self.status_category not in self._PROBATION_CATEGORIES:
             return None
         if self.probation_end_date:
             return self.probation_end_date
         if not self.hire_date:
             return None
-        return self.hire_date + relativedelta(months=3, days=-1)
+        months = probation_months(self.is_key_position)
+        return self.hire_date + relativedelta(months=months, days=-1)
 
     @property
     def computed_probation_days_left(self) -> int | None:
@@ -1950,14 +1940,16 @@ class EmployeeInfoCollection(BaseModel):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="审核时间")
 
 
-# ─── 员工档案：试用期转正评估 ───
+# ─── 员工档案：试用期转正评估（三级审批链） ───
 
 
 class ProbationReview(BaseModel):
-    """试用期转正评估：部门负责人评（飞书表单卡片）→ HR 确认生效。
+    """试用期转正评估：直属上级评 → 部门经理审 → 分管领导审（飞书卡片逐级流转）。
 
-    生效时回写源表「员工性质」=正式（同步派生将产出在职，避免每日对账
-    把本地在职打回试用期）；延长 = 写 probation_end_date 后重走一轮。
+    三级全同意自动生效（回写源表「员工性质」=正式，同步派生将产出在职，
+    避免每日对账把本地在职打回试用期）；直属上级「不通过」或后级「退回」
+    直接完结；HR 可对 pending_step3 记录在面板兜底确认生效（源表回写失败
+    重试入口）。延长 = 写 probation_end_date 后重走一轮。
     """
 
     __tablename__ = "probation_reviews"
@@ -1966,7 +1958,9 @@ class ProbationReview(BaseModel):
             "uq_pr_employee_active",
             "employee_id",
             unique=True,
-            postgresql_where=text("status IN ('pending_reviewer', 'pending_hr') AND is_deleted = false"),
+            postgresql_where=text(
+                "status IN ('pending_step1', 'pending_step2', 'pending_step3') AND is_deleted = false"
+            ),
         ),
         {"schema": "hr"},
     )
@@ -1975,23 +1969,199 @@ class ProbationReview(BaseModel):
         ForeignKey("hr.employees.id"),
         nullable=False, comment="员工档案ID",
     )
-    reviewer_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="评估人（部门负责人姓名）")
-    reviewer_open_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="评估人飞书open_id")
+    current_step: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
+        comment="当前审批级: 1直属上级/2部门经理/3分管领导",
+    )
+    # ── 三级审批人（发起时解析保存）──
+    direct_manager_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="直属上级姓名")
+    direct_manager_open_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="直属上级飞书open_id")
+    dept_manager_name: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="部门经理姓名")
+    dept_manager_open_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="部门经理飞书open_id")
+    leader_name: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="分管领导姓名")
+    leader_open_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="分管领导飞书open_id")
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="pending_reviewer", server_default="pending_reviewer",
-        comment="pending_reviewer待评估/pending_hr待HR确认/effective已生效/cancelled已取消",
+        String(16), nullable=False, default="pending_step1", server_default="pending_step1",
+        comment="pending_step1直属上级待评/pending_step2部门经理待审/pending_step3分管领导待审"
+                "/effective已生效/rejected未通过或退回/cancelled已取消",
     )
+    # ── 第一级：直属上级评估 ──
     conclusion: Mapped[str | None] = mapped_column(
-        String(8), nullable=True, comment="负责人结论: 通过/延长/不通过",
+        String(8), nullable=True, comment="直属上级结论: 通过/延长/不通过",
     )
-    comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="负责人评语")
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="直属上级评语")
     proposed_probation_end: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="延长时建议的新到期日",
     )
-    hr_note: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="HR 确认附注")
-    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="负责人提交时间")
-    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="HR 确认人")
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="HR 确认时间")
+    direct_manager_decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="直属上级提交时间",
+    )
+    # ── 第二级：部门经理审批 ──
+    dept_manager_decision: Mapped[str | None] = mapped_column(
+        String(8), nullable=True, comment="部门经理审批: 同意/退回",
+    )
+    dept_manager_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="部门经理审批意见")
+    dept_manager_decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="部门经理审批时间",
+    )
+    # ── 第三级：分管领导审批 ──
+    leader_decision: Mapped[str | None] = mapped_column(
+        String(8), nullable=True, comment="分管领导审批: 同意/退回",
+    )
+    leader_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="分管领导审批意见")
+    leader_decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="分管领导审批时间",
+    )
+    hr_note: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="HR 附注/生效回写重试说明")
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="HR 操作人（兜底生效/取消）")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="HR 操作时间")
+
+
+# ─── 员工证件资料库 ───
+
+
+class EmployeeCertificate(BaseModel):
+    """员工证件：按员工+类别归档，换证/补交上传新版本（旧版本保留可查）。
+
+    当前版本唯一：部分唯一索引 (employee_id, category) WHERE is_current
+    AND NOT is_deleted；上传新版本 = 旧行 is_current=false + 新行 version_no+1。
+    原件存对象存储（storage_key），调阅/下载经后端代理并记审计。
+    """
+
+    __tablename__ = "employee_certificates"
+    __table_args__ = (
+        Index("ix_emp_cert_employee", "employee_id"),
+        Index("ix_emp_cert_category", "category"),
+        Index(
+            "uq_emp_cert_current",
+            "employee_id", "category",
+            unique=True,
+            postgresql_where=text("is_current = true AND is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    CATEGORY_ID_CARD = "id_card"
+    CATEGORY_GRADUATION = "graduation"
+    CATEGORY_PROFESSIONAL = "professional_qualification"
+    CATEGORY_SPECIAL_OPERATION = "special_operation"
+    CATEGORY_HEALTH = "health"
+    CATEGORY_OTHER = "other"
+    CATEGORIES = (
+        CATEGORY_ID_CARD, CATEGORY_GRADUATION, CATEGORY_PROFESSIONAL,
+        CATEGORY_SPECIAL_OPERATION, CATEGORY_HEALTH, CATEGORY_OTHER,
+    )
+    CATEGORY_LABELS = {
+        CATEGORY_ID_CARD: "身份证",
+        CATEGORY_GRADUATION: "学历证",
+        CATEGORY_PROFESSIONAL: "职业资格证",
+        CATEGORY_SPECIAL_OPERATION: "特种作业操作证",
+        CATEGORY_HEALTH: "健康证",
+        CATEGORY_OTHER: "其他",
+    }
+
+    employee_id: Mapped[UUID] = mapped_column(nullable=False, comment="员工档案ID")
+    category: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="证件类别（见 CATEGORIES）",
+    )
+    certificate_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="证件名称（如：低压电工证）",
+    )
+    certificate_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="证件号码（输出时脱敏）",
+    )
+    issue_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="发证日期")
+    expiry_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="有效期至（长期有效时为空）",
+    )
+    is_permanent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", comment="长期有效",
+    )
+    version_no: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1",
+        comment="版本号（同员工同类别递增，1 为首版）",
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", comment="是否当前版本",
+    )
+    storage_key: Mapped[str] = mapped_column(String(256), nullable=False, comment="对象存储key")
+    filename: Mapped[str] = mapped_column(String(255), nullable=False, comment="原始文件名")
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False, comment="MIME类型")
+    size: Mapped[int] = mapped_column(Integer, nullable=False, comment="文件大小（字节）")
+    remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")
+
+
+class CertificateRequirement(BaseModel):
+    """应交证件配置：按适用范围维护清单，供缺件标注（待补交）计算。
+
+    缺件 = 应交（applies_to=all ∪ 重点岗位追加 key_position）− 已交
+    （该员工该类别存在 is_current 证件）。
+    """
+
+    __tablename__ = "certificate_requirements"
+    __table_args__ = (
+        Index(
+            "uq_cert_req_active",
+            "category", "applies_to",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    APPLIES_ALL = "all"
+    APPLIES_KEY_POSITION = "key_position"
+
+    category: Mapped[str] = mapped_column(String(32), nullable=False, comment="证件类别")
+    applies_to: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        comment="适用范围: all全员必交/key_position仅重点岗位追加",
+    )
+
+
+class ProbationSafetyExam(BaseModel):
+    """试用期安全考试结果（安全办线下组织后录入）。
+
+    重点岗位入职满 60 天须参加安全办考试；有任一合格记录方可发起转正审批。
+    """
+
+    __tablename__ = "probation_safety_exams"
+    __table_args__ = (
+        Index("ix_pse_employee", "employee_id"),
+        {"schema": "hr"},
+    )
+
+    employee_id: Mapped[UUID] = mapped_column(nullable=False, comment="员工档案ID")
+    exam_date: Mapped[date] = mapped_column(Date, nullable=False, comment="考试日期")
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False, comment="是否合格")
+    score: Mapped[float | None] = mapped_column(Float, nullable=True, comment="分数")
+    entered_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="录入人（安全办）")
+    remark: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="备注")
+
+
+class ProbationRemindLog(BaseModel):
+    """试用期节点提醒记录（每员工每类型只提醒一次，防重复轰炸）。"""
+
+    __tablename__ = "probation_remind_logs"
+    __table_args__ = (
+        Index(
+            "uq_prl_once",
+            "employee_id", "remind_type",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    TYPE_SAFETY_EXAM_60D = "safety_exam_60d"
+    TYPE_PROBATION_30D = "probation_30d"
+
+    employee_id: Mapped[UUID] = mapped_column(nullable=False, comment="员工档案ID")
+    remind_type: Mapped[str] = mapped_column(
+        String(32), nullable=True,
+        comment="提醒类型: safety_exam_60d满60天安全考试/probation_30d转正前30天",
+    )
+    reminded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="提醒时间")
 
 
 # 职称评审子包模型注册到同一 metadata（alembic env 只 import 模块级 models）

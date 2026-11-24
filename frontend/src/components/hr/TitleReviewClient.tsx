@@ -1,10 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { App, Card, Empty, Select, Tabs } from 'antd'
 import { usePermission } from '@/hooks/usePermission'
 import type { TitleReviewActivityListItem } from '@/types/hr'
 import { fetchTitleActivities } from '@/actions/hr'
+import PageHeader from '@/components/hr/PageHeader'
 import TitleReviewActivityTab from './TitleReviewActivityTab'
 import TitleReviewApplicationTab from './TitleReviewApplicationTab'
 import TitleReviewResultTab from './TitleReviewResultTab'
@@ -28,7 +30,12 @@ export default function TitleReviewClient() {
       .then((d) => {
         const list = d?.data || []
         setActivities(list)
-        setSelectedId((prev) => prev ?? list[0]?.id)
+        setSelectedId((prev) => {
+          // 刷新后原选中的活动可能已被删除：不在列表里就回退到第一个，
+          // 否则「申报与评审/评审结果」页签仍指向已删活动
+          if (prev && list.some((a) => a.id === prev)) return prev
+          return list[0]?.id
+        })
       })
       .catch((err: any) => message.error(err.message || '加载活动失败'))
   }, [message])
@@ -43,12 +50,13 @@ export default function TitleReviewClient() {
   if (!hasPermission('hr:title:read')) {
     return (
       <div className="space-y-4">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审管理</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">您以评委身份进入，请前往「评审投票」页面完成投票任务。</p>
-        </div>
+        <PageHeader
+          title="评审管理"
+          description="您以评委身份进入，请前往「评审投票」页面完成投票任务。"
+        />
         <Card>
-          <a className="text-[var(--color-primary)]" href="/hr/title-judge">前往我的投票 →</a>
+          {/* 用 next/link 走客户端路由：原生 a 标签会触发整页刷新 */}
+          <Link className="text-[var(--color-primary)]" href="/hr/title-judge">前往我的投票 →</Link>
         </Card>
       </div>
     )
@@ -92,12 +100,10 @@ export default function TitleReviewClient() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审管理</h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          员工飞书审批申报（部门负责人→HR）→ 系统同步 → 评委内网匿名投票 → 票数判定 → 飞书通知结果
-        </p>
-      </div>
+      <PageHeader
+        title="评审管理"
+        description="员工飞书审批申报（部门负责人→HR）→ 系统同步 → 评委内网匿名投票 → 票数判定 → 飞书通知结果"
+      />
 
       <Card>
         <div className="flex items-center gap-3 mb-4">

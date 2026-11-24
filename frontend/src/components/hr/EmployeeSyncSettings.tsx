@@ -12,11 +12,6 @@ import type { EmployeeSyncConfig } from '@/types/hr'
 
 const { Text, Paragraph } = Typography
 
-function formatSyncTime(iso: string | null): string {
-  if (!iso) return '从未同步'
-  return iso.replace('T', ' ')
-}
-
 /** 从 unknown 错误中提取可展示文案 */
 function errMsg(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback
@@ -84,7 +79,6 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
       {cfg?.enabled
         ? <Tag color="success">已启用</Tag>
         : <Tag>未启用</Tag>}
-      <Text type="secondary" className="text-sm">上次同步：{formatSyncTime(cfg?.last_sync_at ?? null)}</Text>
     </Space>
   )
 
@@ -103,7 +97,7 @@ export default function EmployeeSyncSettings({ initialConfig }: EmployeeSyncSett
             </div>
 
             <Paragraph type="secondary" className="!mb-0 text-sm text-[var(--color-steel)]">
-              绑定飞书多维表格后，员工档案以该表为唯一数据源单向同步（每天凌晨 02:00 自动对账，可随时点「立即同步」），
+              绑定飞书多维表格后，员工档案以该表为唯一数据源单向同步（每小时自动对账，可随时点「立即同步」），
               本页转为只读展示；培训管理所用的脱敏名单在系统内查看（培训管理 → 培训人员名单）。
             </Paragraph>
 

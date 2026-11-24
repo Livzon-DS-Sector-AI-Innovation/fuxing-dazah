@@ -2,9 +2,11 @@
 
 import { Suspense, useEffect, useState, useMemo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { App, Card, Row, Col, Select, Input, Upload, Button, Space, Spin, Table, Popconfirm, Modal, Form, DatePicker, InputNumber } from 'antd'
+import { App, Card, Row, Col, Select, Input, Upload, Button, Space, Spin, Table, Popconfirm, Modal, Form, DatePicker, InputNumber, Tooltip } from 'antd'
 import { UploadOutlined, SearchOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined, BellOutlined, PlusOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
+import { useDebounce } from '@/hooks/hr'
+import PageHeader from '@/components/hr/PageHeader'
 import {
   fetchAnnualPlanItems,
   uploadAnnualTrainingPlans,
@@ -17,19 +19,23 @@ import {
 } from '@/actions/hr'
 
 // ─── 列表视图：按部门卡片 ───
-function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }: {
+function PlanListView({ year, keyword, reloadKey, onYearChange, onKeywordChange, onReload }: {
   year: number; keyword: string
+  /** 父组件的刷新信号（回车搜索/刷新按钮/上传成功）；变化即重新加载 */
+  reloadKey: number
   onYearChange: (y: number) => void; onKeywordChange: (k: string) => void; onReload: () => void
 }) {
   const { message } = App.useApp()
   const router = useRouter()
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  // 关键词防抖 300ms 后再查（每敲一个字发一次请求）
+  const debouncedKeyword = useDebounce(keyword.trim(), 300)
 
   const load = async () => {
     setLoading(true)
     try {
-      const d = await fetchAnnualPlanItems({ year: year || undefined, keyword: keyword || undefined })
+      const d = await fetchAnnualPlanItems({ year: year || undefined, keyword: debouncedKeyword || undefined })
       setData(d.data || [])
     } catch (err: any) {
       logError('加载年度计划列表失败', { error: err.message })
@@ -37,7 +43,8 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
     } finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [year])
+  // 年份/关键词/刷新信号任一变化都重新加载（此前只依赖 year：搜索、刷新按钮、上传后刷新都是空操作）
+  useEffect(() => { load() }, [year, debouncedKeyword, reloadKey])
 
   // 按部门+plan_id 分组
   const plans = useMemo(() => {
@@ -56,26 +63,26 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">年度培训计划</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">按部门管理年度培训计划，支持上传与编辑</p>
-        </div>
-        <Space>
-          <span suppressHydrationWarning>
-            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
-              const fd = new FormData(); fd.append('file', file as File)
-              try {
-                const d = await uploadAnnualTrainingPlans(fd)
-                message.success(d.message || '上传成功'); onReload()
-              } catch (err) { message.error((err as Error)?.message || '上传失败') }
-            }}>
-              <Button icon={<UploadOutlined />}>上传计划明细</Button>
-            </Upload>
-          </span>
-          <Button icon={<ReloadOutlined />} onClick={onReload}>刷新</Button>
-        </Space>
-      </div>
+      <PageHeader
+        title="年度培训计划"
+        description="按部门管理年度培训计划，支持上传计划明细、新建与删除计划"
+        actions={
+          <Space>
+            <span suppressHydrationWarning>
+              <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+                const fd = new FormData(); fd.append('file', file as File)
+                try {
+                  const d = await uploadAnnualTrainingPlans(fd)
+                  message.success(d.message || '上传成功'); onReload()
+                } catch (err) { message.error((err as Error)?.message || '上传失败') }
+              }}>
+                <Button icon={<UploadOutlined />}>上传计划明细</Button>
+              </Upload>
+            </span>
+            <Button icon={<ReloadOutlined />} onClick={onReload}>刷新</Button>
+          </Space>
+        }
+      />
 
       <div className="flex gap-3 items-center">
         <Select value={year} onChange={onYearChange} style={{ width: 100 }}
@@ -251,7 +258,9 @@ function PlanDetailView({ planId }: { planId: string }) {
           <Button type="link" size="small" icon={<BellOutlined />}
             onClick={() => goToNotification(record)}>通知</Button>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="删除">
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -260,19 +269,16 @@ function PlanDetailView({ planId }: { planId: string }) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => router.push('/hr/training/annual-plan')}
-          className="mb-2 pl-0">返回计划列表</Button>
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-              {planInfo ? `${planInfo.dept} · ${planInfo.year}年度培训计划` : '年度培训计划'}
-            </h1>
-            <p className="text-[14px] text-[var(--color-steel)]">共 {items.length} 条明细</p>
-          </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建计划</Button>
-        </div>
-      </div>
+      <PageHeader
+        title={planInfo ? `${planInfo.dept} · ${planInfo.year}年度培训计划` : '年度培训计划'}
+        description={`共 ${items.length} 条明细`}
+        actions={
+          <Space>
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => router.push('/hr/training/annual-plan')}>返回计划列表</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建计划</Button>
+          </Space>
+        }
+      />
 
       <Table
         dataSource={items}
@@ -339,7 +345,7 @@ function AnnualPlanContent() {
 
   return (
     <PlanListView
-      year={year} keyword={keyword}
+      year={year} keyword={keyword} reloadKey={reloadKey}
       onYearChange={(y) => { setYear(y); setReloadKey(k => k + 1) }}
       onKeywordChange={setKeyword}
       onReload={() => setReloadKey(k => k + 1)}

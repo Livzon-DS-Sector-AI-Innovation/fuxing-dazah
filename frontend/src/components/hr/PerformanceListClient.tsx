@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Button, Card, DatePicker, Select, Space, Table, Tag, message, Modal } from 'antd'
+import { App, Button, Card, DatePicker, Segmented, Select, Space, Table, Tag } from 'antd'
 import { DownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
@@ -11,16 +11,11 @@ import {
   autoCreatePerformanceEvaluations,
   fetchPerformanceReport,
 } from '@/actions/hr'
-import { downloadBase64File } from '@/lib/hr'
-
-const STATUS_MAP: Record<string, { color: string; label: string }> = {
-  draft: { color: 'default', label: '草稿' },
-  self_submitted: { color: 'blue', label: '待领导评分' },
-  leader_scored: { color: 'green', label: '已完成' },
-}
+import { PERFORMANCE_STATUS_META, downloadBase64File } from '@/lib/hr'
 
 export default function PerformanceListClient() {
   const router = useRouter()
+  const { message, modal } = App.useApp()
   const [mode, setMode] = useState<'all' | 'my'>('all')
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<any[]>([])
@@ -52,6 +47,8 @@ export default function PerformanceListClient() {
     } finally {
       setLoading(false)
     }
+    // message 不进依赖数组（App.useApp 的 message 进 deps 会反复触发加载）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, month, status, page])
 
   // 筛选变化先重置页码再加载（单次请求，避免旧页请求与新页请求竞态覆盖）
@@ -65,12 +62,14 @@ export default function PerformanceListClient() {
   }, [mode, month, status, page, loadData])
 
   const handleAutoCreate = async () => {
-    Modal.confirm({
+    // 未选月份时按「当月」生成（按钮文案即「当月」）：空月份会为全部部门建出月份为空的脏记录
+    const targetMonth = month || dayjs().format('YYYY-MM')
+    modal.confirm({
       title: '批量生成当月考核',
-      content: `将为所有部门生成 ${month} 的考核记录（已有则跳过），确认？`,
+      content: `将为所有部门生成 ${targetMonth} 的考核记录（已有则跳过），确认？`,
       onOk: async () => {
         try {
-          const res = await autoCreatePerformanceEvaluations(month)
+          const res = await autoCreatePerformanceEvaluations(targetMonth)
           message.success(res.message || `已为 ${res.data.created} 个部门生成考核`)
           loadData()
         } catch (err: any) {
@@ -90,13 +89,13 @@ export default function PerformanceListClient() {
   }
 
   const columns = [
-    { title: '部门', dataIndex: 'department', key: 'department', width: 150 },
+    { title: '部门', dataIndex: 'department', key: 'department', width: 150, ellipsis: true },
     { title: '考核月份', dataIndex: 'evaluation_month', key: 'month', width: 100 },
-    { title: '部门负责人', dataIndex: 'department_head', key: 'head', width: 100 },
+    { title: '部门负责人', dataIndex: 'department_head', key: 'head', width: 100, ellipsis: true },
     { title: '分管领导', dataIndex: 'evaluator_leader', key: 'leader', width: 100, render: (v: any) => v || '—' },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 120,
-      render: (s: string) => <Tag color={STATUS_MAP[s]?.color || 'default'}>{STATUS_MAP[s]?.label || s}</Tag>,
+      render: (s: string) => <Tag color={PERFORMANCE_STATUS_META[s]?.color || 'default'}>{PERFORMANCE_STATUS_META[s]?.label || s}</Tag>,
     },
     {
       title: '操作', key: 'actions', width: 100,
@@ -104,28 +103,34 @@ export default function PerformanceListClient() {
     },
   ]
 
+  // 仅「全部考核 + 无任何筛选 + 没有数据」才认为是真没生成过考核，展示批量生成引导；
+  // 带筛选无结果只提示没有符合条件的记录
+  const showCreateGuide = mode === 'all' && !month && !status
+
   return (
-    <Card title="月度绩效考核" extra={
-      <Space>
-        <Button size="small" type={mode === 'my' ? 'primary' : 'default'} onClick={() => { setMode('my'); setPage(1) }}>我的考核</Button>
-        <Button size="small" type={mode === 'all' ? 'primary' : 'default'} onClick={() => { setMode('all'); setPage(1) }}>全部考核</Button>
-      </Space>
+    <Card extra={
+      <Segmented<'all' | 'my'> value={mode} onChange={(v) => { setMode(v); setPage(1) }}
+        options={[{ value: 'my', label: '我的考核' }, { value: 'all', label: '全部考核' }]} />
     }>
       <Space className="mb-4" wrap>
         <DatePicker picker="month" value={month ? dayjs(month) : null} onChange={(d) => setMonth(d ? d.format('YYYY-MM') : '')} allowClear placeholder="按月份筛选" />
         <Select value={status || undefined} onChange={(v) => setStatus(v || '')} allowClear placeholder="按状态筛选" style={{ width: 140 }}
-          options={[{value:'draft',label:'草稿'},{value:'self_submitted',label:'待领导评分'},{value:'leader_scored',label:'已完成'}]} />
+          options={Object.entries(PERFORMANCE_STATUS_META).map(([value, meta]) => ({ value, label: meta.label }))} />
         <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
         {mode === 'all' && <Button icon={<PlusOutlined />} onClick={handleAutoCreate}>批量生成当月考核</Button>}
         <Button onClick={() => router.push('/hr/performance/score')}>批量项目评分</Button>
         <Button icon={<DownloadOutlined />} onClick={handleDownloadReport}>汇总报表</Button>
       </Space>
       {!loading && data.length === 0 && (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-lg mb-2">暂无考核记录</p>
-          <p className="mb-4">点击「批量生成当月考核」自动从部门管理和部门培训人员表拉取数据</p>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAutoCreate}>批量生成当月考核</Button>
-        </div>
+        showCreateGuide ? (
+          <div className="text-center py-12 text-gray-400">
+            <p className="text-lg mb-2">暂无考核记录</p>
+            <p className="mb-4">点击「批量生成当月考核」自动从部门管理和部门培训人员表拉取数据</p>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleAutoCreate}>批量生成当月考核</Button>
+          </div>
+        ) : (
+          <div className="text-center py-12 text-gray-400">没有符合条件的考核记录</div>
+        )
       )}
       {data.length > 0 && <Table rowKey="id" loading={loading} dataSource={data} columns={columns}
         pagination={{ current: page, total, pageSize: 20, onChange: (p) => setPage(p), showTotal: (t) => `共 ${t} 条` }}

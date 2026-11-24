@@ -250,6 +250,7 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "headcount", label: "编制管理", path: "/hr/headcount", permissions: ["hr:profile:read"] },
           { key: "profile", label: "员工档案", path: "/hr/profile", permissions: ["hr:profile:read"] },
+          { key: "certificates", label: "证件资料库", path: "/hr/certificates", permissions: ["hr:certificate:read"] },
           { key: "onboarding", label: "入职台账", path: "/hr/onboarding", permissions: ["hr:onboarding:read"] },
           { key: "departure", label: "离职台账", path: "/hr/departure", permissions: ["hr:departure:read"] },
           { key: "hr-incidents", label: "工伤/纠纷台账", path: "/hr/incidents", permissions: ["hr:incident:read"] },

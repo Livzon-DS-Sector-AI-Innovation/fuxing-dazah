@@ -11,6 +11,8 @@ class DepartmentBase(BaseModel):
     name: str = Field(..., max_length=64, description="部门名称")
     code: str = Field(..., max_length=32, description="部门编码")
     description: str | None = Field(None, max_length=256, description="部门描述")
+    department_manager_name: str | None = Field(None, max_length=64, description="部门负责人（转正审批第二级）")
+    supervising_leader_name: str | None = Field(None, max_length=64, description="分管领导（转正审批第三级）")
 
 
 class DepartmentCreate(DepartmentBase):
@@ -21,6 +23,8 @@ class DepartmentUpdate(BaseModel):
     name: str | None = Field(None, max_length=64)
     code: str | None = Field(None, max_length=32)
     description: str | None = Field(None, max_length=256)
+    department_manager_name: str | None = Field(None, max_length=64)
+    supervising_leader_name: str | None = Field(None, max_length=64)
 
 
 class DepartmentResponse(DepartmentBase):
@@ -28,35 +32,6 @@ class DepartmentResponse(DepartmentBase):
 
     id: UUID
     employee_count: int = 0
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-# ─── Team Schemas ───
-
-class TeamBase(BaseModel):
-    name: str = Field(..., max_length=64, description="班组名称")
-    code: str | None = Field(None, max_length=32, description="班组编码")
-    description: str | None = Field(None, max_length=256, description="班组描述")
-    department_id: UUID = Field(..., description="所属部门ID")
-
-
-class TeamCreate(TeamBase):
-    pass
-
-
-class TeamUpdate(BaseModel):
-    name: str | None = Field(None, max_length=64)
-    code: str | None = Field(None, max_length=32)
-    description: str | None = Field(None, max_length=256)
-    department_id: UUID | None = Field(None)
-
-
-class TeamResponse(TeamBase):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    department: DepartmentResponse | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -1227,6 +1202,8 @@ class PerformanceCategoryCreate(BaseModel):
     weight: float = Field(default=0, description="权重(%)")
     evaluator: str | None = Field(None, max_length=64, description="项目负责人")
     sort_order: int = Field(default=0)
+    # 默认启用（不传时与此前行为一致）；表单里关掉开关即建成停用
+    is_active: bool = Field(default=True, description="是否启用")
 
 
 class PerformanceCategoryUpdate(BaseModel):

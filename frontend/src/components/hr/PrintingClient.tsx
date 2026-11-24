@@ -6,6 +6,7 @@ import { DownloadOutlined, PrinterOutlined, SolutionOutlined, IdcardOutlined } f
 import { downloadRoster, downloadTrainingRegistration } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import { Department } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 interface PrintingClientProps {
   initialDepartments: Department[]
@@ -99,15 +100,7 @@ export default function PrintingClient({ initialDepartments }: PrintingClientPro
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">
-          <PrinterOutlined className="mr-2" />
-          资料打印
-        </h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          按部门批量生成并下载人事资料文档
-        </p>
-      </div>
+      <PageHeader title="资料下载" description="按部门批量生成并下载人事资料文档" />
 
       <Row gutter={[16, 16]}>
         {documents.map((doc) => (
@@ -133,7 +126,7 @@ export default function PrintingClient({ initialDepartments }: PrintingClientPro
                           loading={papersLoading}
                           value={selectedDepts[doc.key]}
                           onChange={(v) => setSelectedDepts((prev) => ({ ...prev, [doc.key]: v }))}
-                          onDropdownVisibleChange={(open) => { if (open) loadExamPapers() }}
+                          onOpenChange={(open) => { if (open) loadExamPapers() }}
                         />
                         <Button
                           type="primary"

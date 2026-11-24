@@ -13,6 +13,7 @@ import {
 import { usePermission } from '@/hooks/usePermission'
 import { downloadBase64File } from '@/lib/hr'
 import type { SopTrainingEntry, SopPersonnelOption } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 export default function SopEntryClient() {
   const { message } = App.useApp()
@@ -35,6 +36,7 @@ export default function SopEntryClient() {
 
   // 分类人员弹窗
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [current, setCurrent] = useState<SopTrainingEntry | null>(null)
   const [form] = Form.useForm()
   const [classOptions, setClassOptions] = useState<{ label: string; value: string }[]>([])
@@ -156,6 +158,7 @@ export default function SopEntryClient() {
       .map((en) => personnelOptions.find((p) => p.employee_number === en))
       .filter(Boolean)
       .map((p) => ({ employee_number: p!.employee_number, name: p!.name }))
+    setSaving(true)
     try {
       await updateSopTrainingEntry(current.id, {
         classification: v.classification,
@@ -165,6 +168,7 @@ export default function SopEntryClient() {
       setModalOpen(false)
       load()
     } catch (e: any) { message.error(e.message || '保存失败') }
+    finally { setSaving(false) }
   }
 
   const columns = useMemo(() => [
@@ -205,18 +209,16 @@ export default function SopEntryClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold">SOP培训二级表</h1>
-          <p className="text-[13px] text-[var(--color-steel)]">
-            登记表「转培训」后按涉及部门自动收录；先「分类人员」再勾选生成一套材料（多选合并，内容并列体现）
-          </p>
-        </div>
-        <Space>
-          <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出培训清单</Button>
-          <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        </Space>
-      </div>
+      <PageHeader
+        title="SOP培训二级表"
+        description="登记表「转培训」后按涉及部门自动收录；先「分类人员」再勾选生成一套材料（多选合并，内容并列体现）"
+        actions={
+          <Space>
+            <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出培训清单</Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+          </Space>
+        }
+      />
       <Card>
         <Space className="mb-3" wrap>
           <Select allowClear showSearch style={{ width: 260 }} placeholder="按登记文件筛选"
@@ -246,7 +248,7 @@ export default function SopEntryClient() {
       </Card>
 
       <Modal title={`分类人员（${current?.department || ''}）`} open={modalOpen}
-        onCancel={() => setModalOpen(false)} onOk={handleSavePersonnel} width={560}
+        onCancel={() => setModalOpen(false)} onOk={handleSavePersonnel} confirmLoading={saving} width={560}
         okText="保存">
         <Form form={form} layout="vertical" className="mt-2">
           <Form.Item name="classification" label="自定义分类（选择后自动拉取该分类下人员）">
@@ -256,6 +258,7 @@ export default function SopEntryClient() {
           </Form.Item>
           <Form.Item name="personnel" label="分类人员（可自由选择）" rules={[{ required: true, message: '请选择人员' }]}>
             <Select mode="multiple" placeholder={current?.classification ? '选择人员' : '请先选择分类'} loading={personnelLoading}
+              maxTagCount="responsive"
               options={personnelOptions.map((p) => ({ label: `${p.name}（${p.employee_number}${p.position ? ` / ${p.position}` : ''}）`, value: p.employee_number }))}
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
           </Form.Item>

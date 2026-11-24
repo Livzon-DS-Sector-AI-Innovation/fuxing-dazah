@@ -40,9 +40,11 @@ export default function ProfileToolbar({
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2 pb-1">
+    // 现在位于页面工具栏一行里（左侧是部门下拉、右侧是列设置），左对齐即可
+    <div className="flex flex-wrap items-center gap-2">
       <Input.Search
         placeholder="搜索姓名或工号"
+        aria-label="搜索姓名或工号"
         value={text}
         onChange={(e) => {
           setText(e.target.value)
@@ -57,6 +59,7 @@ export default function ProfileToolbar({
       />
       <Select
         placeholder="状态筛选"
+        aria-label="状态筛选"
         value={status || undefined}
         onChange={(value) => onStatusChange(value || '')}
         allowClear

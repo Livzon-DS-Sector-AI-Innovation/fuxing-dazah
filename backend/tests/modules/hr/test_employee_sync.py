@@ -985,7 +985,9 @@ class TestRecordIdMigration:
 # ─── 每日一次守卫（调度器 last_run 不跨重启，靠 last_sync_at 去重） ───
 
 
-class TestSyncedTodayGuard:
+class TestSyncedRecentlyGuard:
+    """每小时对账守卫：距上次同步（含手动）不足 55 分钟跳过。"""
+
     def _cfg(self, last_sync_at: str) -> sync_config.EmployeeSyncConfig:
         return sync_config.EmployeeSyncConfig(
             enabled=True, app_token="app_test_token",
@@ -993,26 +995,26 @@ class TestSyncedTodayGuard:
         )
 
     def test_never_synced_runs(self):
-        assert scheduled._synced_today(self._cfg(""), datetime(2026, 11, 11, 9, 0)) is False
+        assert scheduled._synced_recently(self._cfg(""), datetime(2026, 11, 11, 9, 0)) is False
 
     def test_invalid_last_sync_at_runs(self):
-        assert scheduled._synced_today(self._cfg("not-a-date"), datetime(2026, 11, 11, 9, 0)) is False
+        assert scheduled._synced_recently(self._cfg("not-a-date"), datetime(2026, 11, 11, 9, 0)) is False
 
-    def test_synced_after_window_today_skips(self):
-        """今天 02:00 后已自动/手动同步过：重启触发立即跳过。"""
-        assert scheduled._synced_today(
-            self._cfg("2026-11-11T09:30:00"), datetime(2026, 11, 11, 14, 0),
+    def test_synced_recently_skips(self):
+        """一小时内已自动/手动同步过：重启触发立即跳过。"""
+        assert scheduled._synced_recently(
+            self._cfg("2026-11-11T09:30:00"), datetime(2026, 11, 11, 10, 20),
         ) is True
 
-    def test_manual_sync_before_window_today_runs(self):
-        """今天凌晨 02:00 前的手动同步不占用当天窗口：02:00 照常对账。"""
-        assert scheduled._synced_today(
-            self._cfg("2026-11-11T00:30:00"), datetime(2026, 11, 11, 2, 5),
+    def test_synced_over_interval_runs(self):
+        """距上次同步超过 55 分钟：照常对账。"""
+        assert scheduled._synced_recently(
+            self._cfg("2026-11-11T09:30:00"), datetime(2026, 11, 11, 10, 30),
         ) is False
 
     def test_yesterday_sync_runs(self):
-        assert scheduled._synced_today(
-            self._cfg("2026-11-10T23:00:00"), datetime(2026, 11, 11, 2, 5),
+        assert scheduled._synced_recently(
+            self._cfg("2026-11-10T23:00:00"), datetime(2026, 11, 11, 9, 0),
         ) is False
 
 

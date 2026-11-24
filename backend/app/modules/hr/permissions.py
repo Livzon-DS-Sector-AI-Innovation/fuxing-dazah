@@ -15,6 +15,12 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef("hr:profile:delete", "删除员工", "hr", "profile", "delete"),
     PermissionDef("hr:profile:export", "导出员工数据", "hr", "profile", "export"),
     PermissionDef("hr:profile:transfer", "管理员工异动", "hr", "profile", "transfer"),
+    # ── 员工证件资料库 ──
+    PermissionDef("hr:certificate:read", "查看员工证件资料库", "hr", "certificate", "read"),
+    PermissionDef("hr:certificate:manage", "管理员工证件（上传/换证/应交配置）", "hr", "certificate", "manage"),
+    PermissionDef("hr:certificate:audit", "查看证件调阅记录", "hr", "certificate", "audit"),
+    # ── 试用期安全考试 ──
+    PermissionDef("hr:probation:exam:manage", "录入试用期安全考试成绩", "hr", "probation", "exam:manage"),
     # ── 招聘管理 ──
     PermissionDef("hr:recruitment:read", "查看招聘", "hr", "recruitment", "read"),
     PermissionDef("hr:recruitment:manage", "管理招聘", "hr", "recruitment", "manage"),

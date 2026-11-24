@@ -83,6 +83,7 @@ equipment_mcp_asgi = get_mcp_app(
 platform_mcp_asgi = get_mcp_app(
     get_module_mcp("platform"), path="/", middleware=mcp_middleware
 )
+hr_mcp_asgi = get_mcp_app(get_module_mcp("hr"), path="/", middleware=mcp_middleware)
 
 
 @asynccontextmanager
@@ -168,7 +169,10 @@ app.mount(
 app.mount("/mcp/production", production_mcp_asgi, name="mcp-production")
 app.mount("/mcp/equipment", equipment_mcp_asgi, name="mcp-equipment")
 app.mount("/mcp/platform", platform_mcp_asgi, name="mcp-platform")
-logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform")
+app.mount("/mcp/hr", hr_mcp_asgi, name="mcp-hr")
+logger.info(
+    "MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform, /mcp/hr"
+)
 
 
 @app.exception_handler(AppException)

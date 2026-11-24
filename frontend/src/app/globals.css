@@ -293,25 +293,26 @@ body {
 
 /* 按钮样式（:not(...ghost) 排除幽灵按钮——ghost 是透明底描边样式，
    实心背景覆盖会让 active 时紫底紫字文字消失，ghost 保持 antd 默认渲染） */
-.ant-btn-primary:not(.ant-btn-background-ghost) {
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous) {
   background: #5645d4;
   border-color: #5645d4;
   box-shadow: none;
 }
 
-.ant-btn-primary:not(.ant-btn-background-ghost):hover {
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous):hover {
   background: #6b5ddb;
   border-color: #6b5ddb;
 }
 
-.ant-btn-primary:not(.ant-btn-background-ghost):active {
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous):active {
   background: #4534b3;
   border-color: #4534b3;
 }
 
 /* 禁用态要压回灰底：上面的实心紫底会盖掉 antd 的 disabled 样式，
-   按钮看起来仍可点击（DESIGN.md button-primary-disabled） */
-.ant-btn-primary:not(.ant-btn-background-ghost):disabled {
+   按钮看起来仍可点击（DESIGN.md button-primary-disabled）。
+   危险主按钮同样排除：否则会被压成主题紫，「一键清空全部」曾与「保存」同色 */
+.ant-btn-primary:not(.ant-btn-background-ghost):not(.ant-btn-color-dangerous):disabled {
   background: #e5e3df;
   border-color: #e5e3df;
   color: #bbb8b1;

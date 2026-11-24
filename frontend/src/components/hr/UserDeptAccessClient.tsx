@@ -5,7 +5,7 @@ import { App, Button, Card, Form, Select, Table, Popconfirm, Typography } from '
 import { PlusOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { fetchUserDeptAccess, createUserDeptAccess, deleteUserDeptAccess, fetchTrainingAdmins, fetchHrDepartments } from '@/actions/hr'
 
-const { Title, Paragraph } = Typography
+const { Paragraph } = Typography
 
 interface UserDeptAccessRecord {
   id: string
@@ -25,6 +25,7 @@ export default function UserDeptAccessClient() {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [adding, setAdding] = useState(false)
   const [records, setRecords] = useState<UserDeptAccessRecord[]>([])
   const [depts, setDepts] = useState<string[]>([])
   const [admins, setAdmins] = useState<TrainingAdmin[]>([])
@@ -51,14 +52,24 @@ export default function UserDeptAccessClient() {
   useEffect(() => { loadData() }, [loadData])
 
   const handleAdd = async () => {
+    // 校验失败只走行内提示
+    let values: { user_id?: string; department?: string }
     try {
-      const values = await form.validateFields()
+      values = await form.validateFields()
+    } catch {
+      return
+    }
+    if (!values.user_id || !values.department) return
+    setAdding(true)
+    try {
       await createUserDeptAccess({ user_id: values.user_id, department: values.department })
       message.success('授权已添加')
       form.resetFields()
       loadData()
     } catch (err: any) {
       if (err?.message) message.error(err.message)
+    } finally {
+      setAdding(false)
     }
   }
 
@@ -91,7 +102,7 @@ export default function UserDeptAccessClient() {
 
   return (
     <Card
-      title={<Title level={5} style={{ margin: 0 }}>用户部门访问权限</Title>}
+      // 页签名已是「部门权限」，卡片不再重复标题
       extra={
         <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading}>
           刷新
@@ -130,7 +141,7 @@ export default function UserDeptAccessClient() {
           />
         </Form.Item>
         <Form.Item>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+          <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={handleAdd}>
             添加授权
           </Button>
         </Form.Item>

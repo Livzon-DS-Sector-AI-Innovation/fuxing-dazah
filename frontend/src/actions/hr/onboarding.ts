@@ -20,6 +20,8 @@ export async function fetchOnboardingRecords(
     is_employed?: string
     year?: number
     keyword?: string
+    sort_by?: string
+    sort_order?: string
     page?: number
     page_size?: number
   }

@@ -92,6 +92,19 @@ _TABLE_LABELS = {
     "title_review_levels": "职称评审职级组",
     "title_review_dimensions": "职称评审评价项",
     "title_review_dept_committees": "职称评审部门评审组",
+    # 2026-11 新增模块的表（此前缺标签，数据管理卡片里直接显示英文表名）
+    "certificate_requirements": "证件应交配置",
+    "employee_certificates": "员工证件",
+    "employee_info_collections": "员工信息收集",
+    "headcount_plans": "部门定编",
+    "hr_incident_records": "工伤/纠纷记录",
+    "interview_feedbacks": "面试评价",
+    "interview_status_logs": "面试状态日志",
+    "probation_remind_logs": "转正提醒记录",
+    "probation_reviews": "转正评估",
+    "probation_safety_exams": "安全考试记录",
+    "resume_screening_results": "AI 简历初筛",
+    "training_roster_profiles": "培训人员名单",
 }
 
 

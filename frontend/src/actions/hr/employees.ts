@@ -2,15 +2,13 @@
 
 import { revalidatePath } from 'next/cache'
 import {
+  Employee,
   EmployeeCreateInput,
   EmployeeUpdateInput,
   EmployeeListResponse,
   DepartmentCreateInput,
   DepartmentUpdateInput,
   DepartmentListResponse,
-  TeamCreateInput,
-  TeamUpdateInput,
-  TeamListResponse,
   PositionOption,
   EmployeeFilterOptions,
   EmployeeTransfer,
@@ -56,6 +54,15 @@ export async function createEmployee(data: EmployeeCreateInput) {
 
 export async function fetchEmployeeByNumberAction(employeeNumber: string) {
   return fetchHrApi(`/hr/employees/by-number/${encodeURIComponent(employeeNumber)}`, { errorMessage: '获取员工详情失败' })
+}
+
+/** 按 ID 获取员工档案（员工详情页） */
+export async function fetchEmployeeByIdAction(id: string): Promise<Employee> {
+  const res = await fetchHrApi<{ code: number; message: string; data: Employee }>(
+    `/hr/employees/${id}`,
+    { errorMessage: '获取员工详情失败' },
+  )
+  return res.data
 }
 
 export async function updateEmployee(id: string, data: EmployeeUpdateInput) {
@@ -154,49 +161,6 @@ export async function deleteDepartment(id: string) {
   const res = await fetchHrApi(`/hr/departments/${id}`, {
     method: 'DELETE',
     errorMessage: '删除部门失败',
-  })
-  revalidatePath('/hr/departments')
-  return res
-}
-
-// ─── 班组 ───
-
-export async function fetchTeamsAction(
-  params?: {
-    department_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TeamListResponse> {
-  const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 100 })
-  return fetchHrApi<TeamListResponse>(`/hr/teams${qs}`, { errorMessage: '获取班组列表失败' })
-}
-
-export async function createTeam(data: TeamCreateInput) {
-  const res = await fetchHrApi('/hr/teams', {
-    method: 'POST',
-    body: JSON.stringify(data),
-    errorMessage: '创建班组失败',
-  })
-  revalidatePath('/hr/departments')
-  return res
-}
-
-export async function updateTeam(id: string, data: TeamUpdateInput) {
-  const res = await fetchHrApi(`/hr/teams/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-    errorMessage: '更新班组失败',
-  })
-  revalidatePath('/hr/departments')
-  return res
-}
-
-export async function deleteTeam(id: string) {
-  const res = await fetchHrApi(`/hr/teams/${id}`, {
-    method: 'DELETE',
-    errorMessage: '删除班组失败',
   })
   revalidatePath('/hr/departments')
   return res

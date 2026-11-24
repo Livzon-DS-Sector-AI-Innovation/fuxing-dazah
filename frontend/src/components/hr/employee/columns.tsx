@@ -6,6 +6,7 @@
 import { Button, Space, Tag, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { AuditOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
+import Link from 'next/link'
 import { Employee } from '@/types/hr'
 import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
 
@@ -28,34 +29,48 @@ export interface EmployeeColumnHandlers {
 export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Employee> {
   const { onDetail, onProbation, onEdit, onTransfer, canEditProfile, canTransfer, syncMode } = h
 
+  // 列宽原则：常用列视图（默认）要在 1366 宽的屏幕上不出横向滚动条——
+  // 固定列按内容所需收紧，「部门」「职务」两列不设宽度、随容器伸缩（见 EmployeeTable 的 scroll.x 计算）。
   return [
     {
       title: '工号',
       dataIndex: 'employee_number',
       key: 'employee_number',
-      width: 110,
+      width: 104,
+      ellipsis: true,
       fixed: 'left' as const },
     {
       title: '姓名',
       dataIndex: 'name',
       key: 'name',
-      width: 90,
-      fixed: 'left' as const },
+      width: 76,
+      fixed: 'left' as const,
+      // 姓名直达完整档案（证件 / 安全考试 / 转正历史）；此前入口只有操作列里的一个图标
+      render: (name: string, record: Employee) => (
+        <Tooltip title="查看完整档案（证件 / 安全考试 / 转正历史）">
+          <Link href={`/hr/profile/${record.id}`} className="text-[var(--color-anchor)] hover:underline">
+            {name}
+          </Link>
+        </Tooltip>
+      ) },
     {
       title: '部门',
       dataIndex: 'department',
       key: 'department',
-      width: 160 },
+      // 弹性列：不设宽度，吃掉剩余空间
+      ellipsis: true },
     {
       title: '岗位',
       dataIndex: 'position',
       key: 'position',
-      width: 120 },
+      width: 100,
+      ellipsis: true },
     {
       title: '职务',
       dataIndex: 'duty',
       key: 'duty',
-      width: 130 },
+      // 弹性列：不设宽度，吃掉剩余空间
+      ellipsis: true },
     {
       title: '职能分类',
       dataIndex: 'job_category',
@@ -65,7 +80,9 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
       title: '职级',
       dataIndex: 'level',
       key: 'level',
-      width: 80 },
+      // 72：容纳「实习生」这类 Tag，避免折成两行
+      width: 72,
+      ellipsis: true },
     {
       title: '岗位职级',
       dataIndex: 'report_grade',
@@ -75,12 +92,13 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
       title: '员工性质',
       dataIndex: 'status_category',
       key: 'status_category',
-      width: 100 },
+      width: 92,
+      ellipsis: true },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
+      width: 118,
       render: (status: string, record: Employee) => {
         if (status === '试用期' && record.computed_probation_days_left != null) {
           const d = record.computed_probation_days_left
@@ -141,7 +159,7 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
       title: '学历',
       dataIndex: 'education',
       key: 'education',
-      width: 80 },
+      width: 64 },
     {
       title: '学位类型',
       dataIndex: 'degree_type',
@@ -176,7 +194,8 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
       title: '联系电话',
       dataIndex: 'phone',
       key: 'phone',
-      width: 130 },
+      width: 120,
+      ellipsis: true },
     {
       title: '居住地址',
       dataIndex: 'current_address',
@@ -216,7 +235,8 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
       title: '入职日期',
       dataIndex: 'hire_date',
       key: 'hire_date',
-      width: 110 },
+      width: 104,
+      ellipsis: true },
     {
       title: '离职日期',
       dataIndex: 'departure_date',
@@ -259,8 +279,8 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
     {
       title: '操作',
       key: 'action',
-      // 同步模式仅剩「详情」，收窄整列还给数据区；宽度随可见按钮数自适应
-      width: syncMode ? 72 : 176,
+      // 完整档案入口已挪到姓名链接，操作列只剩图标；同步模式仅剩「详情」，宽度随可见按钮数自适应
+      width: syncMode ? 60 : 118,
       fixed: 'right' as const,
       render: (_, record: Employee) => (
         <Space size={2}>
@@ -269,6 +289,7 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
               type="text"
               size="small"
               icon={<EyeOutlined />}
+              aria-label="查看详情"
               onClick={() => onDetail(record)}
             />
           </Tooltip>
@@ -276,6 +297,7 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
             <Tooltip title="发起转正评估">
               <Button
                 type="text" size="small" icon={<AuditOutlined />}
+                aria-label="发起转正评估"
                 onClick={() => onProbation(record)}
               />
             </Tooltip>
@@ -286,13 +308,14 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
                 type="text"
                 size="small"
                 icon={<EditOutlined />}
+                aria-label="编辑"
                 onClick={() => onEdit(record)}
               />
             </Tooltip>
           )}
           {canTransfer && !syncMode && (
             <Tooltip title="异动记录">
-              <Button type="text" size="small" icon={<SwapOutlined />}
+              <Button type="text" size="small" icon={<SwapOutlined />} aria-label="异动记录"
                 onClick={() => onTransfer(record)} />
             </Tooltip>
           )}
@@ -301,16 +324,15 @@ export function buildEmployeeColumns(h: EmployeeColumnHandlers): ColumnsType<Emp
   ]
 }
 
-// 关键列与操作列恒显，其余列在当前页数据全空时隐藏，避免大面积空列挤占横向空间
-const ALWAYS_SHOW = new Set(['action', 'employee_number', 'name', 'department', 'position', 'status'])
-
-export function filterVisibleColumns(columns: ColumnsType<Employee>, employees: Employee[]): ColumnsType<Employee> {
+/**
+ * 按用户的列设置过滤列。此前是「当前页数据里该列全空就隐藏」——翻页时列会跳动，
+ * 而且默认摊开 42 列（横向 4800px）。现在默认是「常用列」，想看全部在列设置里点「全部列」。
+ * 操作列恒显示。
+ */
+export function applyColumnVisibility(columns: ColumnsType<Employee>, hiddenKeys: ReadonlySet<string>): ColumnsType<Employee> {
+  if (!hiddenKeys.size) return columns
   return columns.filter((col) => {
-    if (ALWAYS_SHOW.has(col.key as string)) return true
-    if (!('dataIndex' in col) || Array.isArray(col.dataIndex) || !col.dataIndex) return true
-    return employees.some((emp) => {
-      const v = (emp as unknown as Record<string, unknown>)[col.dataIndex as string]
-      return v !== null && v !== undefined && v !== ''
-    })
+    const key = col.key as string
+    return key === 'action' || !hiddenKeys.has(key)
   })
 }

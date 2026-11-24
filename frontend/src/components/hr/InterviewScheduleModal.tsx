@@ -99,7 +99,10 @@ export default function InterviewScheduleModal({
       ...rest,
       interview_date: start ? start.format('YYYY-MM-DD') : undefined,
       start_time: start ? start.format('HH:mm') : undefined,
-      end_time: v.end_time ? v.end_time.format('HH:mm') : undefined,
+      // 结束时间留空 = 默认 1 小时后（兑现占位文案；有开始时间才补，时间未定的面试不凭空生成）
+      end_time: v.end_time
+        ? v.end_time.format('HH:mm')
+        : start ? start.add(1, 'hour').format('HH:mm') : undefined,
       force_conflict: forceConflict || undefined,
     }
   }
@@ -171,7 +174,9 @@ export default function InterviewScheduleModal({
             validator: (_, value) => {
               if (!value) return Promise.resolve()
               const start: Dayjs | undefined = form.getFieldValue('interview_start')
-              if (start && !value.isAfter(start, 'minute')) {
+              // 只比钟点：TimePicker 选出的值带的是「今天」的日期，拿它和别的日子的开始时间
+              // 按完整日期时间比较永远不成立（未来日期的面试一改结束时间就报错）
+              if (start && value.hour() * 60 + value.minute() <= start.hour() * 60 + start.minute()) {
                 return Promise.reject(new Error('结束时间必须晚于开始时间'))
               }
               return Promise.resolve()

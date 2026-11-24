@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchDashboardStats } from '@/actions/hr'
+import PageHeader from './PageHeader'
 import type { DashboardPersonItem, DashboardStats, DistributionItem, HeadcountDeptItem, MonthlyByDeptItem, MonthlyByCategoryItem, MonthlyItem, MonthlyComparisonItem } from '@/types/hr'
 
 type ChartType = 'pie' | 'bar'
@@ -61,6 +62,13 @@ const WIDTH_LABELS: Record<number, string> = { 4: '1/3宽', 6: '半宽', 8: '2/3
 const SPAN_CLASS: Record<number, string> = { 4: 'md:col-span-4', 6: 'md:col-span-6', 8: 'md:col-span-8', 12: 'md:col-span-12' }
 // 自定义渲染卡片（折线对比 / 年龄复合卡 / 编制对比双系列）：不提供饼柱切换
 const CUSTOM_RENDER_IDS = ['age-overview', 'hire-departure-trend', 'headcount-by-dept']
+// 有专属图形的卡片：「饼图 / 柱状图」切换对它们不起作用（chartOptions 里根本不看 type），
+// 此前照样显示切换按钮并写入 localStorage，点了没反应。这些卡片不再显示切换。
+const TYPE_FIXED_IDS = new Set([
+  ...CUSTOM_RENDER_IDS, 'gender', 'dept-ranking', 'departures-by-dept',
+  'hires-by-dept', 'monthly-hires', 'monthly-departures', 'monthly-departure-rate',
+  'monthly-hires-by-category', 'monthly-departures-by-category', 'departure-comparison', 'position-departure-top',
+])
 
 interface StatTypeOption { id: string; title: string; defaultType: ChartType; group: string; dataSource: string }
 
@@ -117,17 +125,20 @@ function saveLS(k: string, v: unknown) {
 // ═══════════════════════════════════════════════════════════════
 function useCountUp(end: number, duration = 1400) {
   const [val, setVal] = useState(0)
+  // 小数位取自目标值：司龄/离职率这类带小数的 KPI 不能在滚动里被 Math.round 取整
+  const decimals = Math.min(2, (String(end).split('.')[1] || '').replace(/0+$/, '').length)
   useEffect(() => {
+    const snap = (v: number) => Number(v.toFixed(decimals))
     if (end === 0) { setVal(0); return }
     let frame: number; const t0 = performance.now()
     const tick = (now: number) => {
       const p = Math.min((now - t0) / duration, 1)
-      setVal(Math.round((1 - Math.pow(1 - p, 3)) * end)) // easeOutCubic
+      setVal(snap((1 - Math.pow(1 - p, 3)) * end)) // easeOutCubic
       if (p < 1) frame = requestAnimationFrame(tick)
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
-  }, [end, duration])
+  }, [end, duration, decimals])
   return val
 }
 
@@ -137,6 +148,15 @@ function useCountUp(end: number, duration = 1400) {
 const ECHART_TEXT_STYLE = { color: T.slate, fontSize: 12 }
 const ECHART_AXIS_LABEL = { color: T.steel, fontSize: 11 }
 const ECHART_SPLIT_LINE = { lineStyle: { color: T.hairlineSoft } }
+// 缩放条默认样式几乎是透明的，在浅色画布上看不见：补上主题色的手柄与底色
+const ZOOM_SLIDER_STYLE = {
+  borderColor: T.hairlineStrong,
+  fillerColor: 'rgba(22, 119, 255, 0.12)',
+  handleStyle: { color: T.primary },
+  moveHandleStyle: { color: T.primary },
+  emphasis: { handleStyle: { borderColor: T.primary }, moveHandleStyle: { color: T.primary } },
+  textStyle: { color: T.steel, fontSize: 11 },
+}
 
 function linearGradient(top: string, bottom: string) {
   return { type: 'linear' as const, x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: top }, { offset: 1, color: bottom }] }
@@ -150,23 +170,46 @@ const BASE_TOOLTIP = {
   extraCssText: 'border-radius:8px;box-shadow:0 4px 16px rgba(15,15,15,0.1);padding:10px 14px;',
 }
 
-function buildPieOption(data: DistributionItem[], colorMap?: Record<string, string>): EChartsOption {
+/**
+ * 饼图。compact = 1/3 宽的窄卡片：
+ * ECharts 会把外挂标签的宽度限制在「引出线末端 → 画布边缘」之间，窄卡片里只剩四五十像素，
+ * 标签必然被截成「女: ……」。所以窄卡片改成「左侧环形图 + 右侧带数值的图例」，不外挂引出线标签；
+ * 宽卡片保留设计稿的引出线外标签，并显式给定标签宽度（ECharts 对用户给定的 width 不做自动截断）。
+ */
+function buildPieOption(data: DistributionItem[], colorMap?: Record<string, string>, compact = false): EChartsOption {
+  const total = data.reduce((s, d) => s + d.value, 0)
+  const pctOf = (value: number) => (total ? (value / total) * 100 : 0).toFixed(1)
   return {
     color: PALETTE,
     animationDuration: 800, animationEasing: 'cubicOut' as const,
     tooltip: { ...BASE_TOOLTIP, trigger: 'item' as const, formatter: '<b>{b}</b><br/>人数: {c} 人 ({d}%)' },
-    legend: { top: 0, textStyle: { ...ECHART_TEXT_STYLE, fontSize: 11 }, itemWidth: 10, itemHeight: 10, itemGap: 12 },
+    legend: compact ? {
+      type: 'scroll' as const, orient: 'vertical' as const, right: 0, top: 'middle',
+      itemWidth: 10, itemHeight: 10, itemGap: 10,
+      textStyle: { ...ECHART_TEXT_STYLE, fontSize: 11, width: 118, overflow: 'truncate' as const },
+      formatter: (name: string) => {
+        const d = data.find(x => x.name === name)
+        return `${name}  ${d?.value ?? 0} (${pctOf(d?.value ?? 0)}%)`
+      },
+    } : { top: 0, textStyle: { ...ECHART_TEXT_STYLE, fontSize: 11 }, itemWidth: 10, itemHeight: 10, itemGap: 12 },
     series: [{
-      type: 'pie' as const, radius: ['40%', '68%'], center: ['50%', '58%'], avoidLabelOverlap: true,
+      type: 'pie' as const,
+      radius: compact ? ['44%', '72%'] : ['38%', '64%'],
+      center: compact ? ['30%', '50%'] : ['50%', '58%'],
+      avoidLabelOverlap: true,
       itemStyle: { borderColor: T.canvas, borderWidth: 2 },
       data: data.map(d => ({ name: d.name, value: d.value, itemStyle: colorMap?.[d.name] ? { color: colorMap[d.name] } : undefined })),
-      // 对齐设计稿：引出线外标签「类别: 数量 (百分比)」
-      label: {
+      // 宽卡片：引出线外标签「类别 / 数量 (百分比)」，分两行；百分比统一保留 1 位小数
+      label: compact ? { show: false } : {
         show: true, position: 'outside' as const,
-        formatter: '{b}: {c} ({d}%)',
-        color: T.slate, fontSize: 11, lineHeight: 16,
+        formatter: (p: unknown) => {
+          const d = p as { name: string; value?: unknown; percent?: number }
+          return `${d.name}\n${d.value ?? 0} (${(d.percent ?? 0).toFixed(1)}%)`
+        },
+        color: T.slate, fontSize: 11, lineHeight: 14,
+        width: 120, overflow: 'break' as const,
       },
-      labelLine: { show: true, length: 12, length2: 10, lineStyle: { color: T.muted } },
+      labelLine: compact ? { show: false } : { show: true, length: 12, length2: 8, lineStyle: { color: T.muted } },
       emphasis: { scaleSize: 6 },
     }],
   }
@@ -195,13 +238,22 @@ function buildBarOption(names: string[], values: number[], color: string): EChar
 }
 
 function buildDistributionBarOption(data: DistributionItem[]): EChartsOption {
+  // 类目多（如 28 个部门）时 X 轴标签挤成一片：加缩放条，默认只显示前 12 个，可拖动查看其余
+  const zoomed = data.length > 12
   return {
     animationDuration: 800, animationEasing: 'cubicOut' as const,
     tooltip: { ...BASE_TOOLTIP, trigger: 'axis' as const },
-    grid: { left: 48, right: 20, top: 20, bottom: data.length > 6 ? 48 : 32 },
+    grid: { left: 48, right: 20, top: 20, bottom: zoomed ? 72 : data.length > 6 ? 48 : 32 },
+    ...(zoomed ? {
+      // 同一坐标轴上的滑块与滚轮缩放会联动：两者必须给同样的初始窗口，否则全量（0–100%）的那个会把窗口覆盖回去
+      dataZoom: [
+        { type: 'inside' as const, startValue: 0, endValue: Math.min(data.length - 1, 11) },
+        { ...ZOOM_SLIDER_STYLE, type: 'slider' as const, height: 14, bottom: 8, startValue: 0, endValue: Math.min(data.length - 1, 11), brushSelect: false },
+      ],
+    } : {}),
     xAxis: {
       type: 'category' as const, data: data.map(d => d.name),
-      axisLabel: { ...ECHART_AXIS_LABEL, rotate: data.length > 6 ? 35 : 0 },
+      axisLabel: { ...ECHART_AXIS_LABEL, rotate: data.length > 6 ? 35 : 0, interval: 0 },
       axisTick: { show: false }, axisLine: { lineStyle: { color: T.hairline } },
     },
     yAxis: {
@@ -301,6 +353,7 @@ function buildHorizontalBarOption(data: DistributionItem[], topN?: number): ECha
 // 各部门编制 vs 在编（横向双系列：定编=浅色底、在编=主色，按定编升序排）
 function buildHeadcountCompareOption(rows: HeadcountDeptItem[]): EChartsOption {
   const sorted = [...rows].sort((a, b) => a.quota - b.quota) // 小→大，底部→顶部
+  const zoomed = sorted.length > 14
   return {
     animationDuration: 800, animationEasing: 'cubicOut' as const,
     tooltip: {
@@ -317,7 +370,16 @@ function buildHeadcountCompareOption(rows: HeadcountDeptItem[]): EChartsOption {
           `${p.marker} ${p.seriesName}: <b>${p.value}</b> 人`).join('<br/>')}${extra}`
       },
     },
-    grid: { left: 4, right: 56, top: 28, bottom: 8, containLabel: true },
+    grid: { left: 4, right: zoomed ? 84 : 56, top: 28, bottom: 8, containLabel: true },
+    // 部门多（28 个）时全画在一张图里每行只有十来像素，数值标签叠在一起：
+    // 加纵向缩放条，默认只显示编制最多的 12 个部门（按定编升序排在数据末尾）
+    ...(zoomed ? {
+      // 同一坐标轴上的滑块与滚轮缩放会联动：两者必须给同样的初始窗口（见 buildDistributionBarOption）
+      dataZoom: [
+        { type: 'inside' as const, yAxisIndex: 0, startValue: Math.max(0, sorted.length - 12), endValue: sorted.length - 1 },
+        { ...ZOOM_SLIDER_STYLE, type: 'slider' as const, yAxisIndex: 0, right: 6, width: 14, startValue: Math.max(0, sorted.length - 12), endValue: sorted.length - 1, brushSelect: false },
+      ],
+    } : {}),
     legend: {
       top: 0, data: ['定编', '在编'],
       textStyle: { ...ECHART_TEXT_STYLE, fontSize: 11 }, itemWidth: 10, itemHeight: 10, itemGap: 12,
@@ -333,7 +395,7 @@ function buildHeadcountCompareOption(rows: HeadcountDeptItem[]): EChartsOption {
         name: '定编', type: 'bar' as const, data: sorted.map(d => d.quota),
         barWidth: '55%', barGap: '25%',
         itemStyle: { borderRadius: [0, 4, 4, 0], color: '#b7d8ff' },
-        label: { show: true, position: 'right' as const, color: T.steel, fontSize: 10 },
+        label: { show: true, position: 'right' as const, color: T.steel, fontSize: 11 },
       },
       {
         name: '在编', type: 'bar' as const, data: sorted.map(d => d.actual),
@@ -622,7 +684,7 @@ function CountdownCard() {
         </div>
 
         {isOver ? (
-          <div className="text-[36px] font-bold leading-none" style={{ color: T.success }}>🎉</div>
+          <CheckCircleOutlined className="text-[36px] leading-none" style={{ color: T.success }} />
         ) : (
           <div className="flex items-center justify-between gap-1">
             {blocks.map((b, i) => (
@@ -715,6 +777,8 @@ export default function DashboardClient() {
   const { message } = App.useApp()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
+  // 加载失败原因：此前失败也显示「暂无数据」，和真的没有数据无法区分，也没有重试入口
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [addModalOpen, setAddModalOpen] = useState(false)
 
   const [chartOrder, setChartOrder] = useState<string[]>(() => loadLS(LS_ORDER, [...PRESET_IDS]))
@@ -733,9 +797,20 @@ export default function DashboardClient() {
   const resizeRaf = useRef<number>(0)
 
   // ── 数据获取 ──
+  // reloadSeq 自增触发重试；加载态的切换只发生在异步回调或点击处，effect 里不直接 setState
+  const [reloadSeq, setReloadSeq] = useState(0)
   useEffect(() => {
-    fetchDashboardStats().then(setStats).catch(err => message.error(err.message || '加载失败')).finally(() => setLoading(false))
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    fetchDashboardStats()
+      .then(setStats)
+      .catch((err: Error) => { setLoadError(err.message || '加载失败'); message.error(err.message || '加载失败') })
+      .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadSeq])
+  const retryLoad = () => {
+    setLoading(true)
+    setLoadError(null)
+    setReloadSeq(s => s + 1)
+  }
 
   // ── 持久化 ──
   useEffect(() => { saveLS(LS_ORDER, chartOrder) }, [chartOrder])
@@ -835,6 +910,8 @@ export default function DashboardClient() {
     const opts: Record<string, EChartsOption> = {}
     chartOrder.forEach(chartId => {
       const type = chartTypes[chartId] || STAT_TYPE_MAP[chartId]?.defaultType || 'pie'
+      // 1/3 宽（4 栅格）的窄卡片：饼图改用「左图右图例」排法
+      const compact = (chartWidths[chartId] || DEFAULT_PRESET_WIDTHS[chartId] || 12) <= 4
       const data = getChartData(chartId)
       if (!data || data.length === 0) { opts[chartId] = {}; return }
       if (chartId === 'hires-by-dept') { opts[chartId] = buildGroupedBarOption(data as MonthlyByDeptItem[], 'department') }
@@ -846,37 +923,42 @@ export default function DashboardClient() {
       else if (chartId === 'departures-by-dept') { opts[chartId] = buildHorizontalBarOption(data as DistributionItem[]) }
       else if (chartId === 'headcount-by-dept') { opts[chartId] = buildHeadcountCompareOption(data as HeadcountDeptItem[]) }
       else if (chartId === 'gender') {
-        opts[chartId] = buildPieOption(data as DistributionItem[], { '男': T.primary, '女': T.success })
+        opts[chartId] = buildPieOption(data as DistributionItem[], { '男': T.primary, '女': T.success }, compact)
       }
       else if (chartId === 'age-overview') { opts[chartId] = buildAgeOverviewOption(data as DistributionItem[]) }
-      else if (type === 'pie') { opts[chartId] = buildPieOption(data as DistributionItem[]) }
+      else if (type === 'pie') { opts[chartId] = buildPieOption(data as DistributionItem[], undefined, compact) }
       else if (chartId === 'monthly-departures') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[8]) }
       else if (chartId === 'monthly-departure-rate') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[8]) }
       else if (chartId === 'monthly-hires') { const d = data as MonthlyItem[]; opts[chartId] = buildBarOption(d.map(r => r.month), d.map(r => r.value), PALETTE[3]) }
       else { opts[chartId] = buildDistributionBarOption(data as DistributionItem[]) }
     })
     return opts
-  }, [stats, chartOrder, chartTypes, getChartData])
+  }, [stats, chartOrder, chartTypes, chartWidths, getChartData])
 
   // ═══ 渲染 ═══
   if (loading) return <DashboardSkeleton />
-  if (!stats) return <div className="flex flex-col items-center justify-center py-20"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" /></div>
+  if (!stats) return (
+    <div className="flex flex-col items-center justify-center gap-3 py-20">
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={loadError ? `看板加载失败：${loadError}` : '暂无数据'} />
+      {loadError && <Button onClick={retryLoad}>重试</Button>}
+    </div>
+  )
 
   const { summary } = stats
   const availableTypes = ALL_STAT_TYPES.filter(t => !chartOrder.includes(t.id))
 
   return (
     <div className="space-y-6 p-5 pb-8 animate-fade-in-up" style={{ background: T.pageBg, borderRadius: 16 }}>
-      {/* 标题栏 */}
-      <div className="flex justify-between items-center animate-fade-in-up">
-        <div>
-          <h1 className="text-[24px] font-bold tracking-tight" style={{ color: T.ink }}>人事数据看板</h1>
-          <p className="text-sm mt-0.5" style={{ color: T.steel }}>员工结构 · 入职离职 · 多维分析</p>
-        </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)} disabled={availableTypes.length === 0} size="large" style={{ borderRadius: 10, background: T.primary }}>
-          添加卡片
-        </Button>
-      </div>
+      {/* 标题栏：统一页头（与人事其余页面同款），右侧保留「添加卡片」 */}
+      <PageHeader
+        title="人事数据看板"
+        description="员工结构 · 入职离职 · 多维分析"
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModalOpen(true)} disabled={availableTypes.length === 0} style={{ borderRadius: 10 }}>
+            添加卡片
+          </Button>
+        }
+      />
 
       {/* KPI 首行：对齐设计稿（倒计时 · 在职 · 今日入/离职 · 本月入/离职） */}
       <Row gutter={[16, 16]}>
@@ -971,7 +1053,7 @@ export default function DashboardClient() {
             <div key={chartId} draggable
               onDragStart={() => onDragStart(idx)} onDragOver={e => onDragOver(e, idx)}
               onDrop={e => onDrop(e, idx)} onDragEnd={onDragEnd}
-              className={`${SPAN_CLASS[cols] || SPAN_CLASS[12]} animate-fade-in-up`}
+              className={`${SPAN_CLASS[cols] || SPAN_CLASS[12]} animate-fade-in-up group`}
               style={{
                 animationDelay: `${idx * 80}ms`,
                 transition: 'all 300ms cubic-bezier(0.16, 1, 0.3, 1)',
@@ -987,17 +1069,18 @@ export default function DashboardClient() {
                   onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 20px rgba(15,15,15,0.07)'; e.currentTarget.style.borderColor = T.hairlineStrong }}
                   onMouseLeave={e => { e.currentTarget.style.boxShadow = ''; e.currentTarget.style.borderColor = '' }}
                   title={
+                    // 拖拽把手与宽度标签默认淡化、悬停卡片时才完整显示：十张卡片常驻这些控件，标题区很吵
                     <div className="flex items-center gap-2 select-none" style={{ cursor: dragIndex !== null ? 'grabbing' : 'grab' }}>
-                      <HolderOutlined className="transition-colors duration-200" style={{ color: dragIndex === idx ? T.primary : T.muted, fontSize: 14 }} />
+                      <HolderOutlined className="opacity-50 transition-all duration-200 group-hover:opacity-100" style={{ color: dragIndex === idx ? T.primary : T.muted, fontSize: 14 }} />
                       <span className="text-[15px] font-semibold" style={{ color: T.charcoal }}>{config.title}</span>
-                      <span style={{ fontSize: 11, color: T.steel, fontWeight: 400, background: T.surface, borderRadius: 999, padding: '1px 8px' }}>
+                      <span className="opacity-60 transition-opacity duration-200 group-hover:opacity-100" style={{ fontSize: 11, color: T.steel, fontWeight: 400, background: T.surface, borderRadius: 999, padding: '1px 8px', whiteSpace: 'nowrap' }}>
                         {WIDTH_LABELS[cols] || '全宽'}
                       </span>
                     </div>
                   }
                   extra={
-                    <div className="flex items-center gap-2">
-                      {!CUSTOM_RENDER_IDS.includes(chartId) && (
+                    <div className="flex items-center gap-2 opacity-50 transition-opacity duration-200 group-hover:opacity-100">
+                      {!TYPE_FIXED_IDS.has(chartId) && (
                       <Segmented size="small" value={chartTypes[chartId] || config.defaultType}
                         onChange={v => setChartTypes(prev => ({ ...prev, [chartId]: v as ChartType }))}
                         options={[
@@ -1015,7 +1098,7 @@ export default function DashboardClient() {
                 >
                   {!data || data.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2" style={{ height }}>
-                      <div className="text-4xl opacity-20">📊</div>
+                      <BarChartOutlined className="opacity-20" style={{ fontSize: 36 }} />
                       <span style={{ color: T.muted, fontSize: 14 }}>暂无数据</span>
                     </div>
                   ) : chartId === 'age-overview' && stats ? (
@@ -1094,7 +1177,9 @@ if (typeof document !== 'undefined') {
         to   { opacity: 1; transform: translateY(0); }
       }
       .animate-fade-in-up {
-        animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+        /* fill-mode 用 backwards 而非 both：both 会让动画结束帧的 transform 常驻，
+           覆盖掉卡片悬停上浮、KPI 卡悬停和拖拽中的缩放变暗这些内联 transform */
+        animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
       }
     `
     document.head.appendChild(s)

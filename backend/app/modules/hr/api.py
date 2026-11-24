@@ -36,7 +36,9 @@ from app.modules.hr.interview_routes import router as interview_router
 from app.modules.hr.resume_screening_routes import router as resume_screening_router
 from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.modules.hr.employee_info_collection_routes import router as employee_info_collection_router
+from app.modules.hr.employee_certificate_routes import router as employee_certificate_router
 from app.modules.hr.probation_routes import router as probation_router
+from app.modules.hr.reminder.routes import router as reminder_router
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
 )
@@ -70,9 +72,6 @@ from app.modules.hr.schemas import (
     PerformanceListParams,
     SopCatalogListResponse,
     SopCatalogResponse,
-    TeamCreate,
-    TeamResponse,
-    TeamUpdate,
     TrainerListResponse,
     TrainerResponse,
     TrainingLedgerCreate,
@@ -95,7 +94,6 @@ from app.modules.hr.service import (
     OffboardingRecordService,
     OnboardingRecordService,
     PerformanceEvaluationService,
-    TeamService,
     TrainingLedgerPageService,
     TrainingLedgerService,
 )
@@ -120,11 +118,13 @@ router.include_router(interview_router)
 router.include_router(resume_screening_router)
 router.include_router(job_requirement_router)
 router.include_router(employee_info_collection_router)
+router.include_router(employee_certificate_router)
 router.include_router(probation_router)
 router.include_router(analysis_router)
 router.include_router(sop_training_router)
 router.include_router(title_review_router)
 router.include_router(employee_sync_router)
+router.include_router(reminder_router)
 
 
 def get_employee_service(session: AsyncSession = Depends(get_db)) -> EmployeeService:
@@ -141,12 +141,6 @@ def get_offboarding_service(
     session: AsyncSession = Depends(get_db),
 ) -> OffboardingRecordService:
     return OffboardingRecordService(session)
-
-
-def get_team_service(
-    session: AsyncSession = Depends(get_db),
-) -> TeamService:
-    return TeamService(session)
 
 
 def get_onboarding_service(
@@ -360,6 +354,7 @@ async def list_employees(
     status: str | None = Query(None, description="状态筛选；不传时全量（与源表对齐，仅软删不计）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     include_uncategorized: bool = Query(False, description="是否纳入「未分类」人员（按实际部门归属）"),
+    uncategorized_only: bool = Query(False, description="仅返回「未归类」人员（部门为空或不在部门表中）"),
     # 字段级筛选（档案筛选面板；精确匹配项的取值来源 /employees/filter-options）
     field_filters: EmployeeFieldFilterParams = Depends(),
     page_params: PageParams = Depends(),
@@ -387,6 +382,7 @@ async def list_employees(
         page=page_params.page,
         page_size=page_params.page_size,
         include_uncategorized=include_uncategorized,
+        uncategorized_only=uncategorized_only,
         departments=scoped_departments,
         filters=filters or None,
     )
@@ -669,6 +665,7 @@ async def export_employees(
     department: str | None = Query(None, description="部门筛选（与员工列表同口径）"),
     status: str | None = Query(None, description="状态筛选（与员工列表同口径）"),
     keyword: str | None = Query(None, description="姓名或工号关键词"),
+    uncategorized_only: bool = Query(False, description="仅导出「未归类」人员（与员工列表同口径）"),
     field_filters: EmployeeFieldFilterParams = Depends(),
     service: EmployeeService = Depends(get_employee_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
@@ -697,6 +694,7 @@ async def export_employees(
         department=department,
         status=status,
         keyword=keyword,
+        uncategorized_only=uncategorized_only,
         page=1,
         page_size=100_000,
         departments=scoped_departments,
@@ -2633,98 +2631,6 @@ async def list_pt_departments(
     return success_response(data=[row[0] for row in result.all()])
 
 
-# ─── Team Routes ───
-
-@router.get("/teams", summary="班组列表")
-async def list_teams(
-    department_id: UUID | None = Query(None, description="部门筛选"),
-    keyword: str | None = Query(None, description="班组名称或编码关键词"),
-    page_params: PageParams = Depends(),
-    service: TeamService = Depends(get_team_service),
-):
-    teams, total = await service.list_teams(
-        department_id=department_id,
-        keyword=keyword,
-        page=page_params.page,
-        page_size=page_params.page_size,
-    )
-    data = [
-        TeamResponse.model_validate(t).model_dump(mode="json")
-        for t in teams
-    ]
-    return paginated_response(
-        data=data,
-        page=page_params.page,
-        page_size=page_params.page_size,
-        total=total,
-    )
-
-
-@router.post("/teams", summary="创建班组")
-async def create_team(
-    payload: TeamCreate,
-    service: TeamService = Depends(get_team_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    from app.modules.hr.models import HrDepartment
-    dept = (await service.department_repo.session.execute(
-        select(HrDepartment).where(HrDepartment.id == payload.department_id)
-    )).scalar_one_or_none()
-    if dept:
-        hr_scope.ensure_dept_writable([dept.name])
-    team = await service.create_team(payload)
-    return success_response(
-        data=TeamResponse.model_validate(team).model_dump(mode="json"),
-        message="班组创建成功",
-        status_code=201,
-    )
-
-
-@router.get("/teams/{team_id}", summary="班组详情")
-async def get_team(
-    team_id: UUID,
-    service: TeamService = Depends(get_team_service),
-):
-    team = await service.get_team(team_id)
-    return success_response(
-        data=TeamResponse.model_validate(team).model_dump(mode="json"),
-    )
-
-
-@router.put("/teams/{team_id}", summary="更新班组")
-async def update_team(
-    team_id: UUID,
-    payload: TeamUpdate,
-    service: TeamService = Depends(get_team_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    existing = await service.get_team(team_id)
-    if existing and existing.department_id:
-        dept = await service.department_repo.get_by_id(existing.department_id)
-        if dept:
-            hr_scope.ensure_dept_writable([dept.name])
-    team = await service.update_team(team_id, payload)
-    return success_response(
-        data=TeamResponse.model_validate(team).model_dump(mode="json"),
-        message="班组更新成功",
-    )
-
-
-@router.delete("/teams/{team_id}", summary="删除班组")
-async def delete_team(
-    team_id: UUID,
-    service: TeamService = Depends(get_team_service),
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    existing = await service.get_team(team_id)
-    if existing and existing.department_id:
-        dept = await service.department_repo.get_by_id(existing.department_id)
-        if dept:
-            hr_scope.ensure_dept_writable([dept.name])
-    await service.delete_team(team_id)
-    return success_response(message="班组删除成功")
-
-
 # ─── OffboardingRecord Routes ───
 
 @router.get("/offboarding-records", summary="离职记录列表")
@@ -3673,6 +3579,45 @@ def _parse_score(v: str | None) -> int:
     if text in ("不合格", "unqualified", "fail"): return 0
     try: return int(float(text))
     except (ValueError, TypeError): return 0
+
+
+@router.get("/training-ledgers/check-existing", summary="添加到台账前查重：已有同日期同主题记录的工号")
+async def check_existing_training_ledgers(
+    training_date: date = Query(..., description="培训日期"),
+    training_subject: str = Query(..., description="培训主题（精确匹配）"),
+    employee_numbers: str = Query(..., description="工号列表，逗号分隔"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """「添加到培训台账」事前查重（只读）。
+
+    返回入参工号中，库里已有「同工号 + 同培训日期 + 同培训主题」未删除记录的那些工号；
+    前端据此在确认框里提示并跳过这些人，不再对其发创建请求。
+    数据范围与创建接口同口径（_ensure_ledger_employee_in_scope）：受限用户只拿到其可写人员的查重结果。
+    """
+    from app.modules.hr.models import TrainingLedger
+
+    numbers = list(dict.fromkeys(n.strip() for n in employee_numbers.split(",") if n.strip()))
+    if not numbers:
+        return success_response(data={"employee_numbers": []})
+    found = (await session.execute(
+        select(TrainingLedger.employee_number).where(
+            TrainingLedger.is_deleted == False,  # noqa: E712
+            TrainingLedger.employee_number.in_(numbers),
+            TrainingLedger.training_date == training_date,
+            TrainingLedger.training_subject == training_subject,
+        ).distinct()
+    )).scalars().all()
+    existing = list(found)
+    if not hr_scope.is_unrestricted:
+        existing = []
+        for no in found:
+            try:
+                await _ensure_ledger_employee_in_scope(session, hr_scope, no)
+            except ForbiddenException:
+                continue
+            existing.append(no)
+    return success_response(data={"employee_numbers": existing})
 
 
 class AddQuestionItems(BaseModel):
@@ -6623,7 +6568,10 @@ async def create_performance_category(
 ):
     from app.modules.hr.models import PerformanceCategory
     repo = PerformanceEvaluationRepository(session)
-    cat = PerformanceCategory(name=payload.name, weight=payload.weight, evaluator=payload.evaluator, sort_order=payload.sort_order)
+    cat = PerformanceCategory(
+        name=payload.name, weight=payload.weight, evaluator=payload.evaluator,
+        sort_order=payload.sort_order, is_active=payload.is_active,
+    )
     cat = await repo.create_category(cat)
     return success_response(data={"id": str(cat.id)}, message="考核项目已创建", status_code=201)
 
@@ -7059,3 +7007,95 @@ async def delete_incident(
     rec.is_deleted = True
     await session.flush()
     return success_response(message="已删除")
+
+
+# ─── 台账 Excel 导入（两步预检式：precheck 展示重复/错误明细 → commit 落库）───
+
+
+def _ledger_import_scope(hr_scope: HrAccessContext) -> set[str] | None:
+    """导入的部门范围：不受限=全量；受限=授权部门集合（无授权直接 403）。"""
+    if hr_scope.is_unrestricted:
+        return None
+    if not hr_scope.scoped_departments:
+        raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
+    return set(hr_scope.scoped_departments)
+
+
+async def _read_import_file(file: UploadFile) -> bytes:
+    """校验并读取导入文件（仅 .xlsx，旧 .xls 请先另存）。"""
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "仅支持 .xlsx 格式（旧版 .xls 请先用 Excel/WPS 另存为 .xlsx）")
+    return await file.read()
+
+
+@router.get("/ledger-import/{ledger}/template", summary="下载台账导入模板（固定列头）")
+async def download_ledger_import_template(
+    ledger: str,
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    from app.modules.hr.ledger_import import build_template, get_spec
+
+    spec = get_spec(ledger)
+    if not spec:
+        raise HTTPException(404, f"未知台账类型: {ledger}")
+    wb = build_template(spec)
+    return _xlsx_response(wb, f"{spec.label}导入模板.xlsx")
+
+
+@router.post("/ledger-import/{ledger}/precheck", summary="台账导入预检（解析+查重，不写库）")
+async def precheck_ledger_import(
+    ledger: str,
+    file: UploadFile,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 解析上传文件并与库中按查重键比对，返回新增/重复/错误统计及明细（供确认弹窗展示，不写库）
+    from app.modules.hr.ledger_import import get_spec, parse_ledger_excel, precheck_import
+
+    spec = get_spec(ledger)
+    if not spec:
+        raise HTTPException(404, f"未知台账类型: {ledger}")
+    allowed = _ledger_import_scope(hr_scope)
+    content = await _read_import_file(file)
+    try:
+        parsed = await parse_ledger_excel(content, spec)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = await precheck_import(spec, parsed, session, allowed_departments=allowed)
+    return success_response(data=result)
+
+
+@router.post("/ledger-import/{ledger}/commit", summary="台账导入落库（重复按所选模式处理）")
+async def commit_ledger_import(
+    ledger: str,
+    file: UploadFile,
+    duplicate_mode: str = Form(..., description="overwrite=覆盖重复行 / skip=跳过重复行"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    # 执行导入：overwrite 覆盖命中行（非键字段以 Excel 非空值为准），skip 跳过重复行仅导入新增
+    from app.modules.hr.ledger_import import commit_import, get_spec, parse_ledger_excel
+
+    spec = get_spec(ledger)
+    if not spec:
+        raise HTTPException(404, f"未知台账类型: {ledger}")
+    allowed = _ledger_import_scope(hr_scope)
+    content = await _read_import_file(file)
+    try:
+        parsed = await parse_ledger_excel(content, spec)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        result = await commit_import(spec, parsed, duplicate_mode, session, allowed_departments=allowed)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    parts = [f"新增 {result['created']} 条"]
+    if result["updated"]:
+        parts.append(f"覆盖更新 {result['updated']} 条")
+    if result["skipped"]:
+        parts.append(f"跳过重复 {result['skipped']} 条")
+    if result["skipped_scope"]:
+        parts.append(f"越权跳过 {result['skipped_scope']} 条")
+    if result["errors"]:
+        parts.append(f"失败 {len(result['errors'])} 条")
+    return success_response(data=result, message="，".join(parts))

@@ -15,6 +15,7 @@ import { fetchHeadcountPlans, triggerEmployeeSync, exportHeadcountPlans } from '
 import { downloadBase64File } from '@/lib/hr'
 import { usePermission } from '@/hooks/usePermission'
 import type { HeadcountData, HeadcountPlanRow } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 const { Text } = Typography
 
@@ -182,6 +183,12 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
 
   return (
     <div className="space-y-4">
+      {/* 页头：此前本页没有标题（兄弟页都有），进来第一眼是同步状态条 */}
+      <PageHeader
+        title="编制管理"
+        description="各部门定编与在编对账；定编数随员工档案同步拉取，在编按员工档案实时统计"
+      />
+
       {/* 同步状态条 */}
       <Card>
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -189,7 +196,8 @@ export default function HeadcountClient({ initialData, syncInfo }: HeadcountClie
             <CloudSyncOutlined />
             <Text type="secondary" className="text-sm">上次同步：{formatSyncTime(syncInfo?.last_sync_at ?? null)}</Text>
             <Text type="secondary" className="text-sm">
-              定编表：{syncInfo?.headcount_table_id ? (syncInfo.headcount_table_name || syncInfo.headcount_table_id) : '未绑定'}
+              {/* 表名为空时只说「已绑定」：原始 table_id（tbl 开头）对使用者没有意义 */}
+              定编表：{syncInfo?.headcount_table_id ? (syncInfo.headcount_table_name || '已绑定') : '未绑定'}
             </Text>
           </Space>
           <Space>

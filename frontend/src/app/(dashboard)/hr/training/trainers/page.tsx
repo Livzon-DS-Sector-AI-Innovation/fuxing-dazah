@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react'
 import {
   App, Button, Card, Table, Input, Select, Space, Tag, Upload, Modal, Form,
-  DatePicker, Popconfirm, Tabs,
+  DatePicker, Popconfirm, Tabs, Tooltip,
 } from 'antd'
 import { SearchOutlined, UploadOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import PageHeader from '@/components/hr/PageHeader'
 
 import {
   fetchSopDepartments, fetchTrainers, createTrainer, updateTrainer, deleteTrainer,
@@ -28,6 +29,7 @@ function TrainersTab() {
   const [level1, setLevel1] = useState<string | undefined>()
   const [depts, setDepts] = useState<{ value: string; label: string }[]>([])
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form] = Form.useForm()
 
@@ -46,6 +48,8 @@ function TrainersTab() {
       })
       setData(d.data || [])
       setTotal(d.meta?.total || 0)
+    } catch (err) {
+      message.error((err as Error)?.message || '加载内训师列表失败')
     } finally { setLoading(false) }
   }
 
@@ -79,6 +83,7 @@ function TrainersTab() {
     if (payload.confirmation_date) payload.confirmation_date = payload.confirmation_date.format('YYYY-MM-DD')
     if (payload.confirmation_reminder) payload.confirmation_reminder = payload.confirmation_reminder.format('YYYY-MM-DD')
 
+    setSaving(true)
     try {
       if (editing) await updateTrainer(editing.id, payload)
       else await createTrainer(payload)
@@ -87,7 +92,7 @@ function TrainersTab() {
       load(page)
     } catch (err: any) {
       message.error(err.message || '操作失败')
-    }
+    } finally { setSaving(false) }
   }
 
   const handleDelete = async (id: string) => {
@@ -102,34 +107,38 @@ function TrainersTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold">内训师</h1>
-        <Space>
-          <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增内训师</Button>
-          <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
-            const fd = new FormData(); fd.append('file', file as File)
-            try {
-              const d = await uploadTrainers(fd)
-              message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
-              load(1)
-            } catch (err) { message.error((err as Error)?.message || '上传失败') }
-          }}>
-            <Button icon={<UploadOutlined />}>上传内训师</Button>
-          </Upload>
-          <Popconfirm title="确认清空全部内训师？此操作不可恢复" onConfirm={async () => {
-            try {
-              await clearTrainers()
-              message.success('已清空')
-              load(1)
-            } catch {
-              message.error('清空失败')
-            }
-          }}>
-            <Button danger>清空全部</Button>
-          </Popconfirm>
-        </Space>
-      </div>
-      <Card>
+      <PageHeader
+        title="内训师"
+        actions={
+          <Space>
+            <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增内训师</Button>
+            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+              const fd = new FormData(); fd.append('file', file as File)
+              try {
+                const d = await uploadTrainers(fd)
+                message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
+                load(1)
+              } catch (err) { message.error((err as Error)?.message || '上传失败') }
+            }}>
+              <Button icon={<UploadOutlined />}>上传内训师</Button>
+            </Upload>
+          </Space>
+        }
+      />
+      {/* 危险操作不与「新增」并排，放到表格卡片右上角 */}
+      <Card extra={
+        <Popconfirm title="确认清空全部内训师？此操作不可恢复" onConfirm={async () => {
+          try {
+            await clearTrainers()
+            message.success('已清空')
+            load(1)
+          } catch {
+            message.error('清空失败')
+          }
+        }}>
+          <Button danger>清空全部</Button>
+        </Popconfirm>
+      }>
         <Space wrap style={{ marginBottom: 16 }}>
           <Input prefix={<SearchOutlined />} placeholder="搜索姓名" value={keyword}
             onChange={(e) => setKeyword(e.target.value)} onPressEnter={() => load(1)} style={{ width: 200 }} />
@@ -158,9 +167,13 @@ function TrainersTab() {
             { title: '操作', width: 100, fixed: 'right' as const,
               render: (_: any, record: any) => (
                 <Space size="small">
-                  <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+                  <Tooltip title="编辑">
+                    <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} aria-label="编辑" />
+                  </Tooltip>
                   <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                    <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                    <Tooltip title="删除">
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+                    </Tooltip>
                   </Popconfirm>
                 </Space>
               )},
@@ -168,7 +181,8 @@ function TrainersTab() {
       </Card>
 
       <Modal title={editing ? '编辑内训师' : '新增内训师'} open={modalOpen}
-        onCancel={() => setModalOpen(false)} onOk={handleSave} okText="保存" width={600}>
+        onCancel={() => setModalOpen(false)} onOk={handleSave} okText="保存" confirmLoading={saving}
+        mask={{ closable: false }} width={600}>
         <Form form={form} layout="vertical" className="mt-4">
           <Form.Item name="name" label="姓名" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="department" label="部门" rules={[{ required: true }]}>
@@ -204,6 +218,7 @@ function DeptPersonnelTab() {
   const [dept, setDept] = useState<string | undefined>()
   const [depts, setDepts] = useState<{ value: string; label: string }[]>([])
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form] = Form.useForm()
 
@@ -221,6 +236,8 @@ function DeptPersonnelTab() {
       })
       setData(d.data || [])
       setTotal(d.meta?.total || 0)
+    } catch (err) {
+      message.error((err as Error)?.message || '加载部门培训人员列表失败')
     } finally { setLoading(false) }
   }
 
@@ -239,6 +256,7 @@ function DeptPersonnelTab() {
 
   const handleSave = async () => {
     const vals = await form.validateFields()
+    setSaving(true)
     try {
       if (editing) await updateDeptTrainingPersonnel(editing.id, vals)
       else await createDeptTrainingPersonnel(vals)
@@ -247,7 +265,7 @@ function DeptPersonnelTab() {
       load(page)
     } catch (err: any) {
       message.error(err.message || '操作失败')
-    }
+    } finally { setSaving(false) }
   }
 
   const handleDelete = async (id: string) => {
@@ -262,22 +280,24 @@ function DeptPersonnelTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold">部门培训人员表</h1>
-        <Space>
-          <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增</Button>
-          <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
-            const fd = new FormData(); fd.append('file', file as File)
-            try {
-              const d = await uploadDeptTrainingPersonnel(fd)
-              message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
-              load(1)
-            } catch (err) { message.error((err as Error)?.message || '上传失败') }
-          }}>
-            <Button icon={<UploadOutlined />}>上传Excel</Button>
-          </Upload>
-        </Space>
-      </div>
+      <PageHeader
+        title="部门培训人员表"
+        actions={
+          <Space>
+            <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增</Button>
+            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+              const fd = new FormData(); fd.append('file', file as File)
+              try {
+                const d = await uploadDeptTrainingPersonnel(fd)
+                message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
+                load(1)
+              } catch (err) { message.error((err as Error)?.message || '上传失败') }
+            }}>
+              <Button icon={<UploadOutlined />}>上传Excel</Button>
+            </Upload>
+          </Space>
+        }
+      />
       <Card>
         <Space wrap style={{ marginBottom: 16 }}>
           <Input prefix={<SearchOutlined />} placeholder="搜索部门/人员" value={keyword}
@@ -302,9 +322,13 @@ function DeptPersonnelTab() {
               title: '操作', width: 100,
               render: (_: any, record: any) => (
                 <Space size="small">
-                  <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+                  <Tooltip title="编辑">
+                    <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} aria-label="编辑" />
+                  </Tooltip>
                   <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                    <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                    <Tooltip title="删除">
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+                    </Tooltip>
                   </Popconfirm>
                 </Space>
               ),
@@ -313,7 +337,8 @@ function DeptPersonnelTab() {
       </Card>
 
       <Modal title={editing ? '编辑部门培训人员' : '新增部门培训人员'} open={modalOpen}
-        onCancel={() => setModalOpen(false)} onOk={handleSave} okText="保存" width={520}>
+        onCancel={() => setModalOpen(false)} onOk={handleSave} okText="保存" confirmLoading={saving}
+        mask={{ closable: false }} width={520}>
         <Form form={form} layout="vertical" className="mt-4">
           <Form.Item name="display_department" label="体现部门" rules={[{ required: true }]}>
             <Select options={depts} showSearch placeholder="选择体现部门" />

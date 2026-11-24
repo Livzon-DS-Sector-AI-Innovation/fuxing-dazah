@@ -2,11 +2,13 @@
 
 import { useRef, useState } from 'react'
 import {
-  App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
+  App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip,
+  Typography,
 } from 'antd'
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
+import { useDebouncedCallback } from '@/hooks/hr'
 import type {
   Employee, TitleReviewActivityListItem, TitleReviewDeptCommittee, TitleReviewLevel,
 } from '@/types/hr'
@@ -45,7 +47,7 @@ interface Props {
 }
 
 export default function TitleReviewActivityTab({ activities, onRefresh, onSelectActivity }: Props) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const { hasPermission } = usePermission()
   const [form] = Form.useForm()
   const [modalOpen, setModalOpen] = useState(false)
@@ -58,6 +60,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
   const [committeeOpen, setCommitteeOpen] = useState(false)
   const [committees, setCommittees] = useState<TitleReviewDeptCommittee[]>([])
   const [committeeForm] = Form.useForm()
+  const [committeeSaving, setCommitteeSaving] = useState(false)
   const [employeeOptions, setEmployeeOptions] = useState<Employee[]>([])
   // 已选评定小组成员（独立状态保存，避免远程搜索替换选项后已选标签丢失文字）
   const [selectedMembers, setSelectedMembers] = useState<
@@ -70,7 +73,10 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ pass_ratio: 2 / 3 })
+    // 通过比例在表单里按百分比填写（50–100 整数），提交时再除以 100。
+    // 默认 2/3 保留精确值 66.67（输入框按整数显示为 67），不能取整成 67：否则默认比例变成 0.67，
+    // 「2 人同意、1 人反对」这类恰好 2/3 的票型会由通过变成不通过
+    form.setFieldsValue({ pass_ratio: (2 / 3) * 100 })
     setLevels(DEFAULT_LEVELS)
     setModalOpen(true)
   }
@@ -83,7 +89,8 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       const detail = d.data
       form.setFieldsValue({
         name: detail.name,
-        pass_ratio: detail.pass_ratio,
+        // 回填为百分比；历史值不取整（如 2/3 → 66.67，输入框显示 67），原样保存才不会改动已生效的判定口径
+        pass_ratio: detail.pass_ratio * 100,
         apply_deadline: detail.apply_deadline ? dayjs(detail.apply_deadline) : undefined,
         review_deadline: detail.review_deadline ? dayjs(detail.review_deadline) : undefined,
         feishu_app_token: detail.feishu_app_token,
@@ -101,7 +108,8 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     const values = await form.validateFields()
     const payload = {
       name: values.name,
-      pass_ratio: values.pass_ratio,
+      // 表单为百分比，接口按 0–1 小数存储
+      pass_ratio: values.pass_ratio / 100,
       // 清空截止时间显式传 null（undefined 会被 JSON 序列化丢弃，后端不更新）
       apply_deadline: values.apply_deadline ? (values.apply_deadline as Dayjs).toISOString() : null,
       review_deadline: values.review_deadline ? (values.review_deadline as Dayjs).toISOString() : null,
@@ -146,6 +154,24 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     } catch (err: any) {
       message.error(err.message || '操作失败')
     }
+  }
+
+  // 不可逆的状态流转（开启申报/开始评审/结束）先确认，写清是哪个活动、后果是什么
+  const confirmTransition = (
+    fn: (id: string) => Promise<unknown>, r: TitleReviewActivityListItem,
+    title: string, content: string, successMsg: string,
+  ) => {
+    modal.confirm({
+      title,
+      content: (
+        <div>
+          <div className="mb-1">活动：<b>{r.name}</b></div>
+          <div>{content}</div>
+        </div>
+      ),
+      okText: '确认',
+      onOk: () => runAction(fn, r.id, successMsg),
+    })
   }
 
   // 手动对账：弹窗展示本次同步明细（新增/更新/移除/票数），避免用户不知道发生了什么
@@ -213,6 +239,9 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     }
   }
 
+  // 远程搜索防抖 300ms（此前每敲一个字发一次请求）；首拉全量仍直接调 searchEmployees('')
+  const { run: debouncedSearchEmployees } = useDebouncedCallback(searchEmployees, 300)
+
   const handleSaveCommittee = async () => {
     const values = await committeeForm.validateFields()
     const memberIds: string[] = values.committee_members || []
@@ -223,6 +252,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
         return { employee_id: id, name: m?.name || '', employee_no: m?.employee_no || '' }
       }),
     }
+    setCommitteeSaving(true)
     try {
       const d = await saveTitleCommittee(payload)
       message.success(d.message || '已保存')
@@ -232,6 +262,8 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       setCommittees(c?.data || [])
     } catch (err: any) {
       message.error(err.message || '保存失败')
+    } finally {
+      setCommitteeSaving(false)
     }
   }
 
@@ -261,21 +293,31 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
             <Button size="small" icon={<ReloadOutlined />} onClick={() => runAction(bindTitleTables, r.id, '绑定成功')}>绑定表格</Button>
           )}
           {r.status === 'draft' && canManage && (
-            <Button size="small" type="primary" onClick={() => runAction(openTitleActivity, r.id, '已开启申报')}>开启申报</Button>
+            <Button size="small" type="primary" onClick={() => confirmTransition(
+              openTitleActivity, r, '开启申报？',
+              '开启后活动配置不可再修改，员工可在飞书表单提交申报；此操作不可回退。', '已开启申报',
+            )}>开启申报</Button>
           )}
           {r.status === 'open' && canManage && (
-            <Button size="small" type="primary" onClick={() => runAction(startTitleReview, r.id, '已开启评审')}>开始评审</Button>
+            <Button size="small" type="primary" onClick={() => confirmTransition(
+              startTitleReview, r, '开始评审？',
+              '开启后评委即可在系统内投票；此操作不可回退。', '已开启评审',
+            )}>开始评审</Button>
           )}
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
             <Button size="small" icon={<SyncOutlined />} onClick={() => handleReconcile(r.id)}>同步</Button>
           )}
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
-            <Button size="small" danger onClick={() => runAction(closeTitleActivity, r.id, '活动已结束')}>结束</Button>
+            <Button size="small" danger onClick={() => confirmTransition(
+              closeTitleActivity, r, '结束该活动？',
+              `结束后不可恢复。当前投票进度 ${r.voted_judge_count || 0}/${r.total_judge_count || 0}，请确认评委已投完。`,
+              '活动已结束',
+            )}>结束</Button>
           )}
           {canManage && (
             <Popconfirm
               title="确认删除该活动？"
-              description="将同时删除活动下的申报、评委与评分数据（测试数据清理场景）。"
+              description="将同时删除该活动下的全部申报、评委与评分数据，不可恢复。"
               onConfirm={async () => {
                 try {
                   await deleteTitleActivity(r.id)
@@ -286,7 +328,9 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
                 }
               }}
             >
-              <Button size="small" danger icon={<DeleteOutlined />} />
+              <Tooltip title="删除活动">
+                <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除活动「${r.name}」`} />
+              </Tooltip>
             </Popconfirm>
           )}
         </Space>
@@ -298,7 +342,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Typography.Text type="secondary">
-          活动为 draft 时可配置职级组与飞书表格绑定；开启申报后员工即可在飞书表单提交
+          配置中的活动可设置职级组并绑定飞书表格；开启申报后员工即可在飞书表单提交申报
         </Typography.Text>
         <Space>
           {canManage && (
@@ -328,7 +372,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
               <Input placeholder="如：2026年度技术职级评定" disabled={!!editing && editing.status !== 'draft'} />
             </Form.Item>
             <Form.Item name="pass_ratio" label="通过比例（同意÷(同意+不同意)）" rules={[{ required: true, message: '请输入通过比例' }]}>
-              <InputNumber min={0.5} max={1} step={0.05} style={{ width: '100%' }} />
+              <InputNumber min={50} max={100} step={1} precision={0} suffix="%" style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="apply_deadline" label="申报截止时间">
               <DatePicker showTime style={{ width: '100%' }} />
@@ -349,7 +393,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
             </div>
           </div>
 
-          <Typography.Title level={5} className="!mb-2">职级组（{levels.length} 组，仅 draft 可改）</Typography.Title>
+          <Typography.Title level={5} className="!mb-2">职级组（{levels.length} 组，仅配置中的活动可修改）</Typography.Title>
           <div className="space-y-2 max-h-72 overflow-y-auto pr-2">
             {levels.map((lv, idx) => {
               const disabled = !!editing && editing.status !== 'draft'
@@ -395,7 +439,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
                 showSearch
                 filterOption={false}
                 loading={employeeSearching}
-                onSearch={searchEmployees}
+                onSearch={debouncedSearchEmployees}
                 maxTagTextLength={40}
                 placeholder="输入姓名/工号远程搜索在职员工"
                 options={[
@@ -425,7 +469,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
               />
             </Form.Item>
             <div className="col-span-2 text-right">
-              <Button type="primary" onClick={handleSaveCommittee}>保存评审组</Button>
+              <Button type="primary" loading={committeeSaving} onClick={handleSaveCommittee}>保存评审组</Button>
             </div>
           </Form>
           <Table
@@ -454,7 +498,9 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
                       }
                     }}
                   >
-                    <Button size="small" danger icon={<DeleteOutlined />} />
+                    <Tooltip title="删除评审组">
+                      <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除${r.department}评审组`} />
+                    </Tooltip>
                   </Popconfirm>
                 ),
               },

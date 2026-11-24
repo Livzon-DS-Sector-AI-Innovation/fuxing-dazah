@@ -285,6 +285,19 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/employee-info-collections/.*", "hr:profile:update"),
     (r"/probation-reviews", {"GET": "hr:profile:read", "POST": "hr:profile:update"}),
     (r"/probation-reviews/.*", "hr:profile:update"),
+    # 试用期安全考试（安全办录入；查看随档案读权限）
+    (r"/probation-safety-exams", {"GET": "hr:profile:read", "POST": "hr:probation:exam:manage",
+                                  "DELETE": "hr:probation:exam:manage"}),
+    # 员工证件资料库（具体子路径在通用条目之前）
+    (r"/certificates/access-logs", "hr:certificate:audit"),
+    (r"/certificates/requirements", {"GET": "hr:certificate:read",
+                                     "POST": "hr:certificate:manage",
+                                     "DELETE": "hr:certificate:manage"}),
+    (r"/certificates/.*/file", "hr:certificate:read"),
+    (r"/certificates", {"GET": "hr:certificate:read", "POST": "hr:certificate:manage",
+                        "PUT": "hr:certificate:manage", "DELETE": "hr:certificate:manage"}),
+    # 员工证件视图/上传（挂在员工档案路径下，须在通用 /employees 之前）
+    (r"/employees/.*/certificates", {"GET": "hr:certificate:read", "POST": "hr:certificate:manage"}),
     (r"/employees/export", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
     (r"/employees/.*/onboarding-training-record", "hr:training:document"),
@@ -305,8 +318,6 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/departments$", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
     # 班组（组织架构）& 职位 & 内训师 & SOP/岗位培训（培训内容）
-    (r"/teams", {"GET": "hr:org:read", "POST": "hr:org:manage",
-                 "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
     (r"/positions", {"GET": "hr:position:read", "POST": "hr:position:manage",
                      "PUT": "hr:position:manage", "DELETE": "hr:position:manage"}),
     (r"/position-trainings", {"GET": "hr:training:read", "POST": "hr:training:manage",
@@ -458,6 +469,15 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 工伤/纠纷台账
     (r"/incidents", {"GET": "hr:incident:read", "POST": "hr:incident:manage",
                      "PUT": "hr:incident:manage", "DELETE": "hr:incident:manage"}),
+    # 台账 Excel 导入（四个台账共用一组带 {ledger} 的路由）：模板下载=任一台账读权限，
+    # 预检/提交=任一台账写权限。此前未登记，只按「任意 hr 权限」放行（仅培训权限也能调离职台账导入）。
+    # 路径里的台账类型静态映射区分不了，逐台账的精确校验需在 handler 内按 ledger 再判。
+    (r"/ledger-import/.*/template",
+     ("hr:onboarding:read", "hr:departure:read", "hr:training:read", "hr:incident:read")),
+    (r"/ledger-import/",
+     ("hr:onboarding:manage", "hr:departure:manage", "hr:training:manage", "hr:incident:manage")),
+    # 人事提醒：测试发送（真实发飞书卡片），仅系统配置权限可用
+    (r"/reminder-settings", "hr:settings:manage"),
     # 职称评审（具体子路径在通用条目之前）
     (r"/title/activities/.*/bind-tables", "hr:title:manage"),
     (r"/title/activities/.*/open", "hr:title:manage"),

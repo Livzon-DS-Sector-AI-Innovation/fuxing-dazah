@@ -45,6 +45,10 @@ export interface Employee {
   status: string
   feishu_record_id?: string
   feishu_synced_at?: string
+  /** 是否重点岗位（影响试用期时长/安全考试节点/应交证件清单） */
+  is_key_position?: boolean | null
+  /** 直属上级姓名（转正评估第一级审批人） */
+  direct_manager_name?: string | null
   /** 来源候选人（招聘入职回链），可用于跳转候选人详情页 */
   candidate_id?: string
   created_at?: string
@@ -220,7 +224,8 @@ export interface EmployeeFilterParams {
   department?: string
   status?: string
   keyword?: string
-  include_uncategorized?: boolean
+  /** 仅「未归类」人员（部门为空或不在部门表中）；对应档案页独立的「未归类」页签 */
+  uncategorized_only?: boolean
   // ── 字段级筛选（档案筛选面板；下拉精确匹配，选项来自 filter-options）──
   position?: string
   duty?: string
@@ -307,6 +312,10 @@ export interface Department {
   name: string
   code: string
   description?: string
+  /** 部门负责人（转正审批第二级） */
+  department_manager_name?: string | null
+  /** 分管领导（转正审批第三级） */
+  supervising_leader_name?: string | null
   employee_count?: number
   created_at?: string
   updated_at?: string
@@ -322,48 +331,15 @@ export interface DepartmentUpdateInput {
   name?: string
   code?: string
   description?: string
+  /** 传 null 表示清空（undefined 会被 JSON.stringify 丢弃，后端按「不更新」处理） */
+  department_manager_name?: string | null
+  supervising_leader_name?: string | null
 }
 
 export interface DepartmentListResponse {
   code: number
   message: string
   data: Department[]
-  meta?: {
-    page: number
-    page_size: number
-    total: number
-  }
-}
-
-export interface Team {
-  id: string
-  name: string
-  code?: string
-  description?: string
-  department_id: string
-  department?: Department
-  created_at?: string
-  updated_at?: string
-}
-
-export interface TeamCreateInput {
-  name: string
-  code?: string
-  description?: string
-  department_id: string
-}
-
-export interface TeamUpdateInput {
-  name?: string
-  code?: string
-  description?: string
-  department_id?: string
-}
-
-export interface TeamListResponse {
-  code: number
-  message: string
-  data: Team[]
   meta?: {
     page: number
     page_size: number
@@ -1543,14 +1519,160 @@ export interface ProbationReviewItem {
   hire_date: string | null
   probation_end: string | null
   days_left: number | null
-  reviewer_name: string
-  status: 'pending_reviewer' | 'pending_hr' | 'effective' | 'cancelled'
+  current_step: number
+  status: 'pending_step1' | 'pending_step2' | 'pending_step3' | 'effective' | 'rejected' | 'cancelled'
+  status_label: string
+  direct_manager_name: string
+  dept_manager_name: string | null
+  leader_name: string | null
   conclusion: '通过' | '延长' | '不通过' | null
   comment: string | null
   proposed_probation_end: string | null
+  dept_manager_decision: '同意' | '退回' | null
+  dept_manager_comment: string | null
+  leader_decision: '同意' | '退回' | null
+  leader_comment: string | null
   hr_note: string | null
-  submitted_at: string | null
+  direct_manager_decided_at: string | null
+  dept_manager_decided_at: string | null
+  leader_decided_at: string | null
   reviewed_by: string | null
   reviewed_at: string | null
   created_at: string | null
+}
+
+// ─── 员工证件资料库 ───
+
+export type CertificateCategory =
+  | 'id_card' | 'graduation' | 'professional_qualification'
+  | 'special_operation' | 'health' | 'other'
+
+export const CERTIFICATE_CATEGORY_LABELS: Record<CertificateCategory, string> = {
+  id_card: '身份证',
+  graduation: '学历证',
+  professional_qualification: '职业资格证',
+  special_operation: '特种作业操作证',
+  health: '健康证',
+  other: '其他',
+}
+
+export interface EmployeeCertificate {
+  id: string
+  employee_id: string
+  category: CertificateCategory
+  certificate_name: string | null
+  certificate_no: string | null
+  issue_date: string | null
+  expiry_date: string | null
+  is_permanent: boolean
+  version_no: number
+  is_current: boolean
+  filename: string
+  content_type: string
+  size: number
+  remark: string | null
+  created_at: string | null
+  /** 台账场景附带员工信息 */
+  employee_name?: string
+  employee_number?: string
+  department?: string
+  position?: string
+}
+
+export interface CertificateCategoryView {
+  category: CertificateCategory
+  label: string
+  required: boolean
+  current: EmployeeCertificate | null
+  history: EmployeeCertificate[]
+}
+
+export interface EmployeeCertificatesView {
+  employee: {
+    id: string
+    employee_number: string
+    name: string
+    department: string
+    position: string
+    status: string
+    is_key_position: boolean | null
+  }
+  categories: CertificateCategoryView[]
+  missing: { category: CertificateCategory; label: string }[]
+}
+
+export interface MissingCertificateItem {
+  employee_id: string
+  employee_name: string
+  employee_number: string
+  department: string
+  is_key_position: boolean
+  category: CertificateCategory
+  category_label: string
+}
+
+export interface CertificateRequirement {
+  id: string
+  category: CertificateCategory
+  applies_to: 'all' | 'key_position'
+}
+
+export interface ProbationSafetyExamItem {
+  id: string
+  employee_id: string
+  employee_name: string
+  employee_number: string | null
+  department: string | null
+  exam_date: string
+  passed: boolean
+  score: number | null
+  entered_by: string | null
+  remark: string | null
+}
+
+export interface CertificateAccessLog {
+  id: string
+  action: string
+  employee_id: string | null
+  employee_name: string | null
+  category: string | null
+  version_no: number | null
+  user_id: string | null
+  created_at: string | null
+}
+
+export interface CertificateUploadInput {
+  category: CertificateCategory
+  certificate_name?: string
+  certificate_no?: string
+  issue_date?: string
+  expiry_date?: string
+  is_permanent?: boolean
+  remark?: string
+}
+
+// ─── 台账 Excel 导入（两步预检式）───
+
+/** 可导入的台账类型（与后端 ledger_import.LEDGER_IMPORT_SPECS 对齐） */
+export type LedgerImportLedger = 'onboarding' | 'departure' | 'training' | 'incident'
+
+/** 预检结果：新增/重复/错误统计及明细（明细截断 50 条） */
+export interface LedgerImportPrecheck {
+  total: number
+  new_count: number
+  duplicate_count: number
+  duplicates: { row: number; key: string }[]
+  error_count: number
+  errors: string[]
+  skipped_scope: number
+  dup_key_display: string
+}
+
+/** 落库结果：created/updated/skipped 计数及行级错误 */
+export interface LedgerImportResult {
+  created: number
+  updated: number
+  skipped: number
+  skipped_scope: number
+  errors: string[]
 }

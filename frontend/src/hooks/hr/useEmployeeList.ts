@@ -14,14 +14,14 @@ export interface EmployeeListQuery {
   keyword?: string
   department?: string
   status?: string
-  /** 「全部」视图并入未分类人员；具体部门视图不混入（未分类有独立 tab） */
-  includeUncategorized?: boolean
+  /** 「未归类」版面：仅部门为空或不在部门表中的人员（独立 tab） */
+  uncategorizedOnly?: boolean
   filters?: EmployeeFieldFilters
 }
 
 export function useEmployeeList(query: EmployeeListQuery) {
   const { message } = App.useApp()
-  const { keyword, department, status, includeUncategorized, filters } = query
+  const { keyword, department, status, uncategorizedOnly, filters } = query
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [total, setTotal] = useState(0)
@@ -47,7 +47,7 @@ export function useEmployeeList(query: EmployeeListQuery) {
       status: status || undefined,
       page,
       page_size: pageSize,
-      include_uncategorized: includeUncategorized,
+      uncategorized_only: uncategorizedOnly || undefined,
       ...fieldFiltersToParams(filters ?? {}),
     })
       .then((res) => {
@@ -64,7 +64,7 @@ export function useEmployeeList(query: EmployeeListQuery) {
       })
     // message 实例随 App.useApp() 每次渲染都是新引用，进依赖会无限请求（与原 loadData 一致不列入）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyword, department, status, includeUncategorized, filters, page, pageSize, refreshSeq])
+  }, [keyword, department, status, uncategorizedOnly, filters, page, pageSize, refreshSeq])
 
   const onPaginationChange = useCallback((newPage: number, newPageSize: number) => {
     setPage(newPage)

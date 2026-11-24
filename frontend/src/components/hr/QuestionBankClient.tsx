@@ -13,6 +13,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Upload,
 } from 'antd'
 import {
@@ -23,6 +24,7 @@ import {
 } from '@ant-design/icons'
 import { fetchQuestionBank, addQuestionBankItems, deleteQuestionBankItem, importQuestionBankDocx } from '@/actions/hr'
 import { QuestionBankItem } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 export default function QuestionBankClient() {
   const { message } = App.useApp()
@@ -35,6 +37,7 @@ export default function QuestionBankClient() {
   const [keyword, setKeyword] = useState('')
 
   const [addOpen, setAddOpen] = useState(false)
+  const [adding, setAdding] = useState(false)
   const [addForm] = Form.useForm()
 
   const loadBank = useCallback(async (p = 1) => {
@@ -52,6 +55,7 @@ export default function QuestionBankClient() {
 
   const handleAdd = async () => {
     const values = await addForm.validateFields()
+    setAdding(true)
     try {
       const res = await addQuestionBankItems([values])
       message.success(res.message || '已入库')
@@ -59,15 +63,12 @@ export default function QuestionBankClient() {
       addForm.resetFields()
       loadBank(page)
     } catch (err: any) { message.error(err.message || '入库失败') }
+    finally { setAdding(false) }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">题库</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">按 SOP 编号沉淀考题，供培训出题复用</p>
-        </div>
+      <PageHeader title="题库" description="按 SOP 编号沉淀考题，供培训出题复用" actions={
         <Space>
           <Upload accept=".docx" showUploadList={false}
             beforeUpload={async (file) => {
@@ -85,7 +86,7 @@ export default function QuestionBankClient() {
           </Upload>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>手工添加</Button>
         </Space>
-      </div>
+      } />
 
       <Card>
         <Space wrap className="mb-3">
@@ -112,7 +113,9 @@ export default function QuestionBankClient() {
                   try { await deleteQuestionBankItem(item.id); message.success('已删除'); loadBank(page) }
                   catch (err: any) { message.error(err.message || '删除失败') }
                 }}>
-                  <Button size="small" danger icon={<DeleteOutlined />} />
+                  <Tooltip title="删除">
+                    <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+                  </Tooltip>
                 </Popconfirm>
               ),
             },
@@ -120,7 +123,7 @@ export default function QuestionBankClient() {
         />
       </Card>
 
-      <Modal title="手工添加题目" open={addOpen} onCancel={() => setAddOpen(false)} onOk={handleAdd} width={520}>
+      <Modal title="手工添加题目" open={addOpen} onCancel={() => setAddOpen(false)} onOk={handleAdd} confirmLoading={adding} width={520}>
         <Form form={addForm} layout="vertical" initialValues={{ score: 10 }}>
           <Form.Item name="file_no" label="文件编号（SOP编号）">
             <Input placeholder="如：SOP.13.2111.010" />
