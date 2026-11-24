@@ -1,9 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Descriptions, Drawer, Form, Input, Radio, Table, Tag, Typography } from 'antd'
+import { App, Button, Descriptions, Drawer, Form, Input, Radio, Segmented, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { fetchMyJudgeTasks, submitJudgeVote } from '@/actions/hr'
+import { useUnsavedConfirm } from '@/hooks/hr'
+import PageHeader from '@/components/hr/PageHeader'
 import TitleReviewAttachments from './TitleReviewAttachments'
 import TitleReviewProfile from './TitleReviewProfile'
 import TitleReviewWorkValue from './TitleReviewWorkValue'
@@ -59,6 +61,16 @@ export default function TitleJudgeClient() {
   const [loading, setLoading] = useState(false)
   const [voting, setVoting] = useState<JudgeTask | null>(null)
   const [saving, setSaving] = useState(false)
+  // 抽屉里有未提交的评价/意见：关闭（点遮罩、ESC、取消）前先确认，此前点遮罩即丢
+  const [votingDirty, setVotingDirty] = useState(false)
+  const closeVote = useCallback(() => { setVoting(null); setVotingDirty(false) }, [])
+  const guardClose = useUnsavedConfirm(votingDirty, closeVote, {
+    content: '抽屉里的维度评价和评审意见还没提交，关闭后会丢失，确定放弃吗？',
+    // 抽屉关闭后页面不离开；beforeunload 拦截在抽屉打开且未保存时仍然需要
+    guardBeforeUnload: true,
+  })
+  // 任务表筛选：全部 / 待投票 / 已投票
+  const [voteFilter, setVoteFilter] = useState<'all' | 'pending' | 'voted'>('all')
   const watchedDims = Form.useWatch('dimension_grades', form)
   const auto = computeAutoResult(
     watchedDims as Record<string, string> | undefined,
@@ -78,6 +90,7 @@ export default function TitleJudgeClient() {
   }, [load])
 
   const openVote = (task: JudgeTask) => {
+    setVotingDirty(false)
     setVoting(task)
     form.setFieldsValue({
       review_comment: task.review_comment,
@@ -86,7 +99,13 @@ export default function TitleJudgeClient() {
   }
 
   const handleSubmit = async () => {
-    const values = await form.validateFields()
+    // 校验失败只走表单行内提示（7 项评价必填）
+    let values: { dimension_grades?: Record<string, string>; review_comment?: string }
+    try {
+      values = await form.validateFields()
+    } catch {
+      return
+    }
     if (!voting) return
     setSaving(true)
     try {
@@ -96,6 +115,7 @@ export default function TitleJudgeClient() {
       })
       message.success(d.message || '投票提交成功')
       setVoting(null)
+      setVotingDirty(false)
       load()
     } catch (err: any) {
       message.error(err.message || '提交失败')
@@ -103,6 +123,12 @@ export default function TitleJudgeClient() {
       setSaving(false)
     }
   }
+
+  // 后端任务状态只有 voted / pending 两种：与状态列同口径，非 voted 一律算待投票
+  const votedCount = tasks.filter((t) => t.status === 'voted').length
+  const pendingCount = tasks.length - votedCount
+  const filteredTasks =
+    voteFilter === 'all' ? tasks : tasks.filter((t) => (t.status === 'voted') === (voteFilter === 'voted'))
 
   const columns = [
     {
@@ -132,28 +158,60 @@ export default function TitleJudgeClient() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">评审投票</h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          评委投票（匿名编号 {tasks[0]?.judge_code || ''}）：请审阅申报材料后完成 7 项维度评价，综合等级与投票结果自动计算
-        </p>
+      <PageHeader
+        title="评审投票"
+        description={`评委投票${tasks[0]?.judge_code ? `（匿名编号 ${tasks[0].judge_code}）` : ''}：请审阅申报材料后完成 7 项维度评价，综合等级与投票结果自动计算`}
+      />
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Segmented
+          value={voteFilter}
+          onChange={(v) => setVoteFilter(v as typeof voteFilter)}
+          options={[
+            { value: 'all', label: '全部' },
+            { value: 'pending', label: '待投票' },
+            { value: 'voted', label: '已投票' },
+          ]}
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <Typography.Text type="secondary">待投票 {pendingCount} 人 / 已投票 {votedCount} 人</Typography.Text>
+          <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        </div>
       </div>
 
-      <div className="flex justify-end">
-        <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-      </div>
-
-      <Table rowKey="judge_id" size="middle" loading={loading} columns={columns} dataSource={tasks} pagination={false} scroll={{ x: 900 }} />
+      <Table rowKey="judge_id" size="middle" loading={loading} columns={columns} dataSource={filteredTasks} pagination={false} scroll={{ x: 900 }} />
 
       <Drawer
         title={voting ? `投票：${voting.application.name}（${voting.application.employee_no}）` : '投票'}
         open={!!voting}
         size={680}
-        onClose={() => setVoting(null)}
+        onClose={guardClose}
+        mask={{ closable: false }}
         footer={
-          <div className="flex justify-end">
-            <Button onClick={() => setVoting(null)} className="mr-2">取消</Button>
-            <Button type="primary" loading={saving} onClick={handleSubmit}>提交投票</Button>
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+            {voting && (
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+                <Typography.Text type="secondary" className="text-[12px]">投票结果（由维度评价自动计算）</Typography.Text>
+                <div className="flex items-center gap-6">
+                  <div>
+                    <Typography.Text type="secondary" className="text-[12px]">综合等级</Typography.Text>
+                    <div className="mt-1">{auto.grade || '待 7 项评价填齐'}</div>
+                  </div>
+                  <div>
+                    <Typography.Text type="secondary" className="text-[12px]">投票结果</Typography.Text>
+                    <div className="mt-1">
+                      {auto.result
+                        ? <Tag color={auto.result === '不同意' ? 'error' : 'success'}>{auto.result}</Tag>
+                        : '-'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center ml-auto">
+              <Button onClick={guardClose} className="mr-2">取消</Button>
+              <Button type="primary" loading={saving} onClick={handleSubmit}>提交投票</Button>
+            </div>
           </div>
         }
       >
@@ -202,29 +260,13 @@ export default function TitleJudgeClient() {
               />
             )}
 
-            <Form form={form} layout="vertical">
-              <div className="bg-[var(--color-surface)] border border-[var(--color-hairline)] rounded p-3 mb-3">
-                <Typography.Text type="secondary" className="text-[12px]">投票结果（由维度评价自动计算）</Typography.Text>
-                <div className="mt-1 flex items-center gap-8">
-                  <div>
-                    <Typography.Text type="secondary" className="text-[12px]">综合等级</Typography.Text>
-                    <div className="mt-1">{auto.grade || '待 7 项评价填齐'}</div>
-                  </div>
-                  <div>
-                    <Typography.Text type="secondary" className="text-[12px]">投票结果</Typography.Text>
-                    <div className="mt-1">
-                      {auto.result
-                        ? <Tag color={auto.result === '不同意' ? 'error' : 'success'}>{auto.result}</Tag>
-                        : '-'}
-                    </div>
-                  </div>
-                </div>
-                <Typography.Text type="secondary" className="block mt-2 text-[12px]">
-                  规则（附表5）：合格＝7项中≥5项合格；不合格＝7项中3项以上不合格。合格→同意，不合格→不同意。
-                </Typography.Text>
-              </div>
+            <Form form={form} layout="vertical" onValuesChange={() => setVotingDirty(true)}>
+              {/* 投票结果（综合等级 / 同意与否）已移到抽屉底栏常驻：原先排在这里，填到最后一项时已滚出视口 */}
               <Typography.Text strong>
                 维度评价（{voting.dimensions.length} 项，必填）{voting.grade_tier === 'high' ? '｜高档标准（工程/技师及以上）' : '｜低档标准'}
+              </Typography.Text>
+              <Typography.Text type="secondary" className="block mt-1 text-[12px]">
+                规则（附表5）：合格＝7项中≥5项合格；不合格＝7项中3项以上不合格。合格→同意，不合格→不同意。
               </Typography.Text>
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-2">
                 {voting.dimensions.map((dim, idx) => (

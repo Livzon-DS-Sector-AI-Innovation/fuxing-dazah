@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useDebouncedCallback } from '@/hooks/hr'
+import { usePermission } from '@/hooks/usePermission'
 import {
+  App,
   Button,
   Card,
   DatePicker,
-  Modal,
   Spin,
-  message,
   Input,
   Select,
   Space,
@@ -18,6 +18,7 @@ import {
   Row,
   Col,
   Table,
+  Tooltip,
 } from 'antd'
 import {
   PrinterOutlined,
@@ -83,11 +84,23 @@ interface StatsData {
 
 const METHOD_OPTIONS = ['面授', '函授', '远程教育', '自学', '其他']
 
+// 台账来源类型 → 展示文案（表里没有的类型一律显示「手动」）
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  notification: '培训通知',
+  qa_assessment: '问答考核',
+  prejob: '入职培训',
+  prejob_export: '入职培训',
+}
+
 export default function TrainingLedgerClient({
   employeeNumber,
 }: TrainingLedgerClientProps) {
   const isAdminMode = !employeeNumber
   const router = useRouter()
+  const { message, modal } = App.useApp()
+  // 导入是写操作，按培训台账写权限显隐（只读用户点了只会得到 403）
+  const { hasPermission } = usePermission()
+  const canImport = hasPermission('hr:training:manage')
   // 员工切换跳转（替代 window.location.href 整页刷新，保持 SPA 体验）
   const goEmployeeLedger = (val: string | undefined) => {
     if (!val) return
@@ -145,11 +158,16 @@ export default function TrainingLedgerClient({
   }
   const { run: debouncedEmployeeSearch } = useDebouncedCallback(handleEmployeeSearch, 300)
 
+  // 个人台账请求序号守卫：员工/日期切换后，慢响应回来时若已不是最新请求则丢弃
+  const ledgerReqSeq = useRef(0)
+
   const loadEmployeeData = async () => {
+    const seq = ++ledgerReqSeq.current
     setLoading(true)
     try {
       if (employeeNumber) {
         const empRes = await fetchEmployeeByNumberAction(employeeNumber)
+        if (seq !== ledgerReqSeq.current) return
         setEmployee(empRes.data)
       }
       if (!employeeNumber) {
@@ -157,17 +175,28 @@ export default function TrainingLedgerClient({
         setLoading(false)
         return
       }
-      const ledgerRes = await fetchTrainingLedgers({
-        employee_number: employeeNumber,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        page_size: 100,
-      })
-      setRecords(ledgerRes.data || [])
+      // 从第 1 页开始循环取（每页 100），直到本页不足 100 条，避免只显示前 100 条
+      const LEDGER_PAGE_SIZE = 100
+      const allRecords: TrainingLedgerRecord[] = []
+      for (let page = 1; ; page += 1) {
+        const ledgerRes = await fetchTrainingLedgers({
+          employee_number: employeeNumber,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          page,
+          page_size: LEDGER_PAGE_SIZE,
+        })
+        if (seq !== ledgerReqSeq.current) return
+        const pageRecords = ledgerRes.data || []
+        allRecords.push(...pageRecords)
+        if (pageRecords.length < LEDGER_PAGE_SIZE) break
+      }
+      setRecords(allRecords)
     } catch (err: any) {
+      if (seq !== ledgerReqSeq.current) return
       message.error('加载数据失败: ' + (err.message || '未知错误'))
     } finally {
-      setLoading(false)
+      if (seq === ledgerReqSeq.current) setLoading(false)
     }
   }
 
@@ -252,7 +281,7 @@ export default function TrainingLedgerClient({
   // 翻页/筛选/刷新会重置行内成绩编辑，有未保存修改时先确认，避免静默丢工作
   const confirmDiscardDirty = (action: () => void) => {
     if (adminDirtyIds.size === 0) { action(); return }
-    Modal.confirm({
+    modal.confirm({
       title: '有未保存的成绩修改',
       content: `当前有 ${adminDirtyIds.size} 条成绩已修改尚未保存，继续操作将丢失这些修改。`,
       okText: '放弃修改并继续',
@@ -306,15 +335,22 @@ export default function TrainingLedgerClient({
     setEvalExporting(true)
     try {
       // 按当前筛选条件拉取全量记录（非仅当前页），避免评估表人数/成绩统计失真
-      const allRes = await fetchTrainingLedgersAdmin({
-        department: filterDept,
-        training_subject: filterSubject,
-        date_from: adminDateRange ? adminDateRange[0] : undefined,
-        date_to: adminDateRange ? adminDateRange[1] : undefined,
-        page: 1,
-        page_size: adminTotal,
-      })
-      const records = allRes.data || []
+      // 后端 page_size 上限为 200，超过一页时按每页 200 循环累加取全
+      const EXPORT_PAGE_SIZE = 200
+      const records: AdminRecord[] = []
+      for (let page = 1; ; page += 1) {
+        const pageRes = await fetchTrainingLedgersAdmin({
+          department: filterDept,
+          training_subject: filterSubject,
+          date_from: adminDateRange ? adminDateRange[0] : undefined,
+          date_to: adminDateRange ? adminDateRange[1] : undefined,
+          page,
+          page_size: EXPORT_PAGE_SIZE,
+        })
+        const pageRecords = pageRes.data || []
+        records.push(...pageRecords)
+        if (pageRecords.length < EXPORT_PAGE_SIZE) break
+      }
       const uniqueEmployees = [...new Set(records.map(r => r.employee_number))]
       const scores = records.filter(r => r.assessment_result).map(r => ({ name: r.employee_name || r.employee_number, result: r.assessment_result }))
       const excellentCount = scores.filter(s => Number(s.result) >= 90).length
@@ -537,7 +573,9 @@ export default function TrainingLedgerClient({
               loading={adminSaving} disabled={adminDirtyIds.size === 0}>
               批量保存成绩
             </Button>
-            <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
+            {canImport && (
+              <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
+            )}
             <Button icon={<ExportOutlined />} onClick={handleExportEvaluation} disabled={!filterDept} loading={evalExporting}>
               导出效果评估表
             </Button>
@@ -575,13 +613,13 @@ export default function TrainingLedgerClient({
                 <Input
                   size="small"
                   placeholder="成绩"
-                  defaultValue={v || ''}
+                  value={adminEditMap[record.id] ?? v ?? ''}
                   onChange={(e) => handleAdminScoreChange(record.id, e.target.value)}
                   style={adminDirtyIds.has(record.id) ? { borderColor: '#faad14' } : undefined}
                 />
               ),
             },
-            { title: '来源', dataIndex: 'source_type', width: 60, render: (v: string) => v === 'notification' ? '通知' : '手动' },
+            { title: '来源', dataIndex: 'source_type', width: 80, render: (v: string | null | undefined) => SOURCE_TYPE_LABELS[v ?? ''] ?? '手动' },
           ]}
         />
       </div>
@@ -739,14 +777,20 @@ export default function TrainingLedgerClient({
                     <td className="border border-gray-300 px-1 py-1 text-center no-print">
                       {isBlank ? null : editing ? (
                         <Space size="small">
-                          <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => handleSave(record)} />
+                          <Tooltip title="保存">
+                            <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => handleSave(record)} aria-label="保存" />
+                          </Tooltip>
                           <Button size="small" onClick={handleCancel}>取消</Button>
                         </Space>
                       ) : (
                         <Space size="small">
-                          <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
+                          <Tooltip title="编辑">
+                            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} aria-label="编辑" />
+                          </Tooltip>
                           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record)}>
-                            <Button size="small" danger icon={<DeleteOutlined />} />
+                            <Tooltip title="删除">
+                              <Button size="small" danger icon={<DeleteOutlined />} aria-label="删除" />
+                            </Tooltip>
                           </Popconfirm>
                         </Space>
                       )}

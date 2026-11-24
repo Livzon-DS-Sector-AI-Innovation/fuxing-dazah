@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, App, Button, Checkbox, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag,
+  Alert, App, Button, Checkbox, DatePicker, Form, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
 } from 'antd'
-import { DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TagsOutlined } from '@ant-design/icons'
+import { DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, TagsOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import {
@@ -23,15 +23,12 @@ import {
 } from '@/actions/hr'
 import type { TrainingRosterRow } from '@/actions/hr/employeeSync'
 import { usePermission } from '@/hooks/usePermission'
-import { downloadBase64File } from '@/lib/hr'
+import { useUnsavedConfirm } from '@/hooks/hr'
+import { downloadBase64File, EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr'
 import type { Department } from '@/types/hr'
+import PageHeader from './PageHeader'
 
 /** 固定选项（口径与员工档案表单一致） */
-/** 状态配色与员工档案页一致 */
-const STATUS_COLOR: Record<string, string> = {
-  在职: 'success', 试用期: 'warning', 离职: 'default', 待审批: 'processing',
-  病假: 'error', 产假: 'magenta', 产假复岗: 'purple',
-}
 const STATUS_OPTIONS = ['在职', '离职', '试用期', '待审批', '病假', '产假', '产假复岗']
 
 const FIXED_OPTIONS: Record<string, { value: string; label: string }[]> = {
@@ -143,6 +140,8 @@ export default function TrainingRosterClient() {
   const [editing, setEditing] = useState<TrainingRosterRow | null>(null)
   const [positions, setPositions] = useState<{ name: string; department: string }[]>([])
   const [saving, setSaving] = useState(false)
+  // 编辑弹窗打开期间是否有字段被改动过（打开时重置）
+  const [editTouched, setEditTouched] = useState(false)
   const [form] = Form.useForm()
   const seqRef = useRef(0)
   const { hasPermission } = usePermission()
@@ -325,6 +324,9 @@ export default function TrainingRosterClient() {
 
   // ── 编辑弹窗 ──
 
+  // 有未保存修改时，关闭（× / Esc / 取消）需先确认；弹窗关闭后不算 dirty，避免误挂刷新拦截
+  const guardCloseEdit = useUnsavedConfirm(editing !== null && editTouched, () => setEditing(null))
+
   const openEdit = useCallback((row: TrainingRosterRow) => {
     const values: EditFormValues = {}
     for (const group of EDIT_GROUPS) {
@@ -340,6 +342,7 @@ export default function TrainingRosterClient() {
       }
     }
     form.setFieldsValue(values)
+    setEditTouched(false)
     setEditing(row)
   }, [form])
 
@@ -409,7 +412,7 @@ export default function TrainingRosterClient() {
       { title: '用工性质', dataIndex: 'status_category', key: 'status_category', width: 90 },
       {
         title: '人员状态', dataIndex: 'status', key: 'status', width: 90,
-        render: (v: string) => <Tag color={STATUS_COLOR[v] || 'default'}>{v || '-'}</Tag>,
+        render: (v: string) => <Tag color={EMPLOYEE_STATUS_TAG_COLORS[v] || 'default'}>{v || '-'}</Tag>,
       },
       { title: '入职日期', dataIndex: 'hire_date', key: 'hire_date', width: 110, render: dateText },
       { title: '离职时间', dataIndex: 'departure_date', key: 'departure_date', width: 110, render: dateText },
@@ -446,53 +449,49 @@ export default function TrainingRosterClient() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">培训人员名单</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">培训管理专用的人员名册（脱敏，可独立编辑）</p>
-        </div>
-        <Space>
-          {canManage && (
-            <Button icon={<TagsOutlined />} onClick={openClassModal}>分类管理</Button>
-          )}
-          <Button
-            icon={<DownloadOutlined />}
-            onClick={() => { void handleDownload() }}
-            loading={exporting}
-          >
-            下载名单
-          </Button>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => load(page, pageSize, keyword, tabDepartment)}
-            loading={loading}
-          >
-            刷新
-          </Button>
-        </Space>
-      </div>
+      <PageHeader
+        title="培训人员名单"
+        description="培训管理专用的人员名册（脱敏，可独立编辑）"
+        actions={
+          <Space>
+            <Input.Search
+              placeholder="搜索姓名或工号"
+              allowClear
+              style={{ width: 260 }}
+              onSearch={handleSearch}
+            />
+            {canManage && (
+              <Button icon={<TagsOutlined />} onClick={openClassModal}>分类管理</Button>
+            )}
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => { void handleDownload() }}
+              loading={exporting}
+            >
+              下载名单
+            </Button>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => load(page, pageSize, keyword, tabDepartment)}
+              loading={loading}
+            >
+              刷新
+            </Button>
+          </Space>
+        }
+      />
 
       <Alert
         type="info"
         showIcon
+        closable
         title={scopedDepartments ? `独立维护的脱敏名册（当前可见部门：${scopedDepartments.join('、')}）` : '独立维护的脱敏名册'}
         description="人员随员工档案自动增减（总表只管进出）；名单上的信息由培训管理独立编辑，不会被总表同步覆盖。身份证、毕业学校、专业、出生年月、籍贯、政治面貌、婚姻状况、银行卡、手机/邮箱、紧急联系人、合同、级别等个人信息不在此页面出现；人员状态随员工档案自动同步，无需手动维护。"
       />
 
-      <div className="flex gap-3 flex-wrap">
-        <Input.Search
-          placeholder="搜索姓名或工号"
-          prefix={<SearchOutlined />}
-          allowClear
-          style={{ width: 260 }}
-          onSearch={handleSearch}
-        />
-      </div>
-
       <Tabs
         activeKey={activeTab}
         onChange={handleTabChange}
-        type="card"
         items={tabItems.map(t => ({
           key: t.key,
           label: t.label,
@@ -520,7 +519,8 @@ export default function TrainingRosterClient() {
       <Modal
         title={editing ? `编辑：${editing.name}（${editing.employee_number}）` : '编辑'}
         open={editing !== null}
-        onCancel={() => setEditing(null)}
+        onCancel={guardCloseEdit}
+        mask={{ closable: false }}
         onOk={handleSave}
         confirmLoading={saving}
         okText="保存"
@@ -529,7 +529,8 @@ export default function TrainingRosterClient() {
         destroyOnHidden
       >
         {editing && (
-          <Form form={form} layout="vertical" className="max-h-[60vh] overflow-auto pr-2">
+          <Form form={form} layout="vertical" className="max-h-[60vh] overflow-auto pr-2"
+            onValuesChange={() => setEditTouched(true)}>
             {EDIT_GROUPS.map(group => (
               <div key={group.title}>
                 <div className="text-[14px] font-medium mb-2 mt-1 pb-1 border-b border-[var(--color-hairline)]">
@@ -583,8 +584,10 @@ export default function TrainingRosterClient() {
                         {expandedId === c.id ? '收起' : '查看人员'}
                       </Button>
                       <Popconfirm title={`删除分类「${c.name}」？该分类下所有人员会解除分类`} onConfirm={() => { void handleDeleteClassification(c.id, c.name) }}>
-                        <Button type="text" size="small" danger icon={<DeleteOutlined />}
-                          onClick={(e) => e.stopPropagation()} />
+                        <Tooltip title="删除分类">
+                          <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除分类"
+                            onClick={(e) => e.stopPropagation()} />
+                        </Tooltip>
                       </Popconfirm>
                     </Space>
                   </div>
@@ -707,7 +710,7 @@ function TagCell({ employeeNumber, disabled, options, onChanged }: {
             <span className="text-gray-300 text-xs">+选择分类</span>
           ) : (
             <>
-              {tags.slice(0, 3).map(t => <Tag key={t} color="blue" style={{ fontSize: 11, margin: 0 }}>{t}</Tag>)}
+              {tags.slice(0, 3).map(t => <Tag key={t} color="blue" style={{ margin: 0 }}>{t}</Tag>)}
               {tags.length > 3 && <span className="text-[11px] text-[var(--color-stone)]">+{tags.length - 3}</span>}
             </>
           )}

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { fetchDepartmentsAction, createTrainingLedgerPage, fetchTrainingRoster, type TrainingRosterRow } from '@/actions/hr'
+import { fetchDepartmentsAction, createTrainingLedgerPage, fetchAllTrainingRoster, type TrainingRosterRow } from '@/actions/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()
@@ -32,7 +32,8 @@ export default function TrainingLedgerNewClient() {
     form.setFieldValue('employee_number', undefined)
     setEmployees([])
     if (!dept) return
-    fetchTrainingRoster({ department: dept, page_size: 100 })
+    // 用自动翻页的取全量接口，超过 100 人的部门也能选到人
+    fetchAllTrainingRoster({ department: dept })
       .then((res) => {
         setEmployees(res.data || [])
       })

@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { Select, Collapse, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
+import { Select, Collapse, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space, Tooltip } from 'antd'
 import { SearchOutlined, PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 
 import { fetchSopDepartments, fetchSopCatalog, uploadSopCatalog, deletePositionByName, deleteSopItem, createPositionTraining, fetchPositions } from '@/actions/hr'
+import PageHeader from '@/components/hr/PageHeader'
 
 interface SopItem {
   id: string
@@ -21,13 +22,14 @@ interface PositionGroup {
 }
 
 export default function SopCatalogPage() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [allData, setAllData] = useState<SopItem[]>([])
   const [loading, setLoading] = useState(false)
   const [departments, setDepartments] = useState<string[]>([])
   const [selectedDept, setSelectedDept] = useState<string | undefined>()
   const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
   const [positions, setPositions] = useState<string[]>([])
 
@@ -90,24 +92,27 @@ export default function SopCatalogPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">SOP 目录</h1>
-        <Space>
-          <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
-            const fd = new FormData(); fd.append('file', file as File)
-            try {
-              const d = await uploadSopCatalog(fd)
-              if (d.data.errors?.length) {
-                Modal.warning({ title: `上传完成但有${d.data.errors.length}条错误`, content: <ul>{d.data.errors.slice(0,10).map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>, width: 500 })
-              }
-              message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
-            } catch (err) { message.error((err as Error)?.message || '上传失败') }
-          }}>
-            <Button icon={<UploadOutlined />}>上传SOP</Button>
-          </Upload>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新建职位SOP</Button>
-        </Space>
-      </div>
+      <PageHeader
+        // 与左侧菜单名逐字一致（菜单是「SOP目录」）
+        title="SOP目录"
+        actions={
+          <Space>
+            <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+              const fd = new FormData(); fd.append('file', file as File)
+              try {
+                const d = await uploadSopCatalog(fd)
+                if (d.data.errors?.length) {
+                  modal.warning({ title: `上传完成但有${d.data.errors.length}条错误`, content: <ul>{d.data.errors.slice(0,10).map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>, width: 500 })
+                }
+                message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
+              } catch (err) { message.error((err as Error)?.message || '上传失败') }
+            }}>
+              <Button icon={<UploadOutlined />}>上传SOP</Button>
+            </Upload>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新建职位SOP</Button>
+          </Space>
+        }
+      />
 
       <div className="flex gap-3 items-center flex-wrap">
         <Select placeholder="选择部门" allowClear value={selectedDept}
@@ -140,23 +145,36 @@ export default function SopCatalogPage() {
                       try { await deletePositionByName(posName, selectedDept || ''); message.success('已删除'); loadAll() }
                       catch { message.error('删除失败') }
                     }}>
-                      <Button type="text" size="small" danger icon={<DeleteOutlined />} style={{ marginLeft: 8 }} />
+                      <Tooltip title="删除岗位">
+                        <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除岗位" style={{ marginLeft: 8 }} />
+                      </Tooltip>
                     </Popconfirm>
                   </span>
                 }
               >
                 {catEntries.sort((a, b) => a[0].localeCompare(b[0])).map(([catName, sops]) => (
                   <div key={catName} className="inline-block mr-2 mb-2">
-                    <Tag color="blue" closable onClose={async (e) => {
-                      e.preventDefault()
-                      let failed = 0
-                      for (const s of sops) {
-                        try { await deleteSopItem(s.id) } catch { failed++ }
-                      }
-                      if (failed > 0) message.error(`删除「${catName}」：${sops.length - failed} 条成功，${failed} 条失败，请重试`)
-                      else message.success(`已删除「${catName}」`)
-                      loadAll()
-                    }}>{catName}</Tag>
+                    {/*
+                      类别标签上的「×」会删除该类别下全部 SOP：必须先确认
+                      （此前 closable 的 onClose 直接逐条删除，点一下叉就全没了）
+                    */}
+                    <Popconfirm
+                      title={`删除培训类别「${catName}」？`}
+                      description={`将删除该类别下 ${sops.length} 条 SOP，不可恢复。`}
+                      okText="删除"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={async () => {
+                        let failed = 0
+                        for (const s of sops) {
+                          try { await deleteSopItem(s.id) } catch { failed++ }
+                        }
+                        if (failed > 0) message.error(`删除「${catName}」：${sops.length - failed} 条成功，${failed} 条失败，请重试`)
+                        else message.success(`已删除「${catName}」`)
+                        loadAll()
+                      }}
+                    >
+                      <Tag color="blue" closable onClose={(e) => e.preventDefault()} style={{ cursor: 'pointer' }}>{catName}</Tag>
+                    </Popconfirm>
                   </div>
                 ))}
               </Collapse.Panel>
@@ -165,18 +183,22 @@ export default function SopCatalogPage() {
         </Collapse>
       )}
 
-      <Modal title="新建培训分类" open={modalOpen} forceRender onCancel={() => setModalOpen(false)}
+      {/* 不加 forceRender：关闭状态下预渲染会让服务端与客户端输出不一致（hydration 报错），表单方法只在弹窗打开后才调用 */}
+      <Modal title="新建培训分类" open={modalOpen} onCancel={() => setModalOpen(false)}
+        mask={{ closable: false }}
         onOk={async () => {
           const vals = await form.validateFields()
           const payload = {
             ...vals,
             file_name: vals.file_name || vals.training_category,
           }
+          setSaving(true)
           try {
             await createPositionTraining(payload)
             message.success('创建成功'); setModalOpen(false); form.resetFields(); loadAll()
           } catch (err) { message.error((err as Error)?.message || '创建失败') }
-        }} okText="创建">
+          finally { setSaving(false) }
+        }} okText="创建" confirmLoading={saving}>
         <Form form={form} layout="vertical" className="mt-4">
           <Form.Item name="department" label="部门" rules={[{ required: true }]}>
             <Select placeholder="选择部门" showSearch options={departments.map(d => ({value:d,label:d}))}

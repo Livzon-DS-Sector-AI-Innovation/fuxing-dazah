@@ -3581,6 +3581,45 @@ def _parse_score(v: str | None) -> int:
     except (ValueError, TypeError): return 0
 
 
+@router.get("/training-ledgers/check-existing", summary="添加到台账前查重：已有同日期同主题记录的工号")
+async def check_existing_training_ledgers(
+    training_date: date = Query(..., description="培训日期"),
+    training_subject: str = Query(..., description="培训主题（精确匹配）"),
+    employee_numbers: str = Query(..., description="工号列表，逗号分隔"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """「添加到培训台账」事前查重（只读）。
+
+    返回入参工号中，库里已有「同工号 + 同培训日期 + 同培训主题」未删除记录的那些工号；
+    前端据此在确认框里提示并跳过这些人，不再对其发创建请求。
+    数据范围与创建接口同口径（_ensure_ledger_employee_in_scope）：受限用户只拿到其可写人员的查重结果。
+    """
+    from app.modules.hr.models import TrainingLedger
+
+    numbers = list(dict.fromkeys(n.strip() for n in employee_numbers.split(",") if n.strip()))
+    if not numbers:
+        return success_response(data={"employee_numbers": []})
+    found = (await session.execute(
+        select(TrainingLedger.employee_number).where(
+            TrainingLedger.is_deleted == False,  # noqa: E712
+            TrainingLedger.employee_number.in_(numbers),
+            TrainingLedger.training_date == training_date,
+            TrainingLedger.training_subject == training_subject,
+        ).distinct()
+    )).scalars().all()
+    existing = list(found)
+    if not hr_scope.is_unrestricted:
+        existing = []
+        for no in found:
+            try:
+                await _ensure_ledger_employee_in_scope(session, hr_scope, no)
+            except ForbiddenException:
+                continue
+            existing.append(no)
+    return success_response(data={"employee_numbers": existing})
+
+
 class AddQuestionItems(BaseModel):
     items: list[dict]
     source: str = "手工录入"

@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { Spin } from 'antd'
 import TrainingLedgerClient from '@/components/hr/TrainingLedgerClient'
+import PageHeader from '@/components/hr/PageHeader'
 import { fetchEmployeeByNumberAction } from '@/actions/hr'
 
 interface PageProps {
@@ -48,14 +49,10 @@ export default async function TrainingLedgerPage({ searchParams }: PageProps) {
   if (!employeeNumber) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">
-            培训台账
-          </h1>
-          <p className="text-[14px] text-[var(--color-steel)]">
-            管理员视角 · 按部门与培训内容筛选 · 录入考核成绩 · 自动统计合格率 · 导出效果评估表
-          </p>
-        </div>
+        <PageHeader
+          title="培训台账"
+          description="管理员视角 · 按部门与培训内容筛选 · 录入考核成绩 · 自动统计合格率 · 导出效果评估表"
+        />
         <Suspense
           fallback={
             <div className="flex items-center justify-center py-20">
@@ -71,14 +68,10 @@ export default async function TrainingLedgerPage({ searchParams }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">
-          {employeeName ? `${employeeName}培训台账` : '培训台账'}
-        </h1>
-        <p className="text-[14px] text-[var(--color-steel)]">
-          员工培训教育台账记录管理
-        </p>
-      </div>
+      <PageHeader
+        title={employeeName ? `${employeeName}培训台账` : '培训台账'}
+        description="员工培训教育台账记录管理"
+      />
 
       <Suspense
         fallback={

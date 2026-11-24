@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { App, Badge, Button, Card, Descriptions, Drawer, Empty, Form, Modal, Select, Spin, Tabs, Tag } from 'antd'
+import { App, Badge, Button, Card, Descriptions, Drawer, Empty, Form, Modal, Popconfirm, Select, Spin, Tabs, Tag } from 'antd'
 import { AuditOutlined, CheckOutlined } from '@ant-design/icons'
 import { usePermission } from '@/hooks/usePermission'
 import {
@@ -141,9 +141,9 @@ export default function ProbationPanel() {
             <b className="text-sm">{item.employee_name}</b>
             <span className="text-xs text-gray-400">{item.employee_number}</span>
             <span className="text-xs text-gray-500 truncate">{item.department} · {item.position}</span>
-            <Tag color={meta.color} style={{ fontSize: 10, margin: 0 }}>{meta.label}</Tag>
+            <Tag color={meta.color} style={{ margin: 0 }}>{meta.label}</Tag>
             {item.conclusion && (
-              <Tag color={CONCLUSION_COLOR[item.conclusion]} style={{ fontSize: 10, margin: 0 }}>{item.conclusion}</Tag>
+              <Tag color={CONCLUSION_COLOR[item.conclusion]} style={{ margin: 0 }}>{item.conclusion}</Tag>
             )}
             {item.days_left != null && ACTIVE_STATUSES.includes(item.status) && (
               <span className={`text-xs ${item.days_left < 0 ? 'text-red-400' : 'text-gray-400'}`}>
@@ -159,7 +159,17 @@ export default function ProbationPanel() {
               </Button>
             )}
             {ACTIVE_STATUSES.includes(item.status) && canManage && (
-              <Button size="small" onClick={() => handleCancel(item)}>取消</Button>
+              // 撤回不可恢复（已填意见作废），须二次确认；按钮此前叫「取消」，易被当成关闭抽屉
+              <Popconfirm
+                title="撤回这次转正评估？"
+                description="已填写的评估意见一并作废；撤回后可重新发起。"
+                okText="撤回"
+                okButtonProps={{ danger: true }}
+                cancelText="再想想"
+                onConfirm={() => handleCancel(item)}
+              >
+                <Button size="small" danger>撤回</Button>
+              </Popconfirm>
             )}
           </div>
         </div>
@@ -195,7 +205,12 @@ export default function ProbationPanel() {
       label: `已完结（${done.length}）`,
       children: loading ? <div className="text-center py-8"><Spin /></div> : done.length === 0
         ? <Empty description="暂无已完结记录" className="py-6" />
-        : <div className="space-y-2">{done.slice(0, 30).map(renderItem)}</div>,
+        : <div className="space-y-2">
+            {done.slice(0, 30).map(renderItem)}
+            {done.length > 30 && (
+              <div className="text-xs text-gray-400 text-center py-1">仅显示最近 30 条，共 {done.length} 条</div>
+            )}
+          </div>,
     },
   ]
 
