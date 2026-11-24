@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
+from app.modules.hr import certificate_batch_import as batch_import
 from app.modules.hr import employee_certificate_service as cert_service
 from app.modules.hr.deps import HrAccessContext, get_hr_scope
 
@@ -203,6 +204,47 @@ async def parse_certificate(
     except ValueError as e:
         raise HTTPException(400, str(e))
     return success_response(data=result, message="识别完成，请核对后保存")
+
+
+# ── 批量导入（ZIP 一次性上传，两步预检式） ──
+
+
+@router.post("/certificates/batch-import/precheck", summary="证件批量导入预检（ZIP；文件名解析+员工匹配，附件入暂存）")
+async def batch_import_precheck(
+    file: UploadFile = File(..., description="证件扫描件 ZIP 包（≤200MB、≤200 个文件，支持子文件夹）"),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    data = await file.read()
+    if not data:
+        raise HTTPException(422, "ZIP 包不能为空")
+    try:
+        return success_response(data=await batch_import.precheck_import(session, hr_scope, zip_bytes=data))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/certificates/batch-import/employee-options", summary="批量导入补选员工（姓名/工号模糊搜索，数据范围收敛）")
+async def batch_import_employee_options(
+    keyword: str | None = Query(None, max_length=64),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    return success_response(data=await batch_import.list_employee_options(session, hr_scope, keyword=keyword))
+
+
+@router.post("/certificates/batch-import/commit", summary="证件批量导入提交（按确认行归档，版本化同单个上传）")
+async def batch_import_commit(
+    payload: batch_import.BatchImportCommitPayload,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    try:
+        data = await batch_import.commit_import(session, hr_scope, payload.rows)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    s = data["summary"]
+    return success_response(data=data, message=f"已导入 {s['imported']} 件，失败 {s['failed']} 件")
 
 
 # ── 原件 / 更正 / 删除 ──

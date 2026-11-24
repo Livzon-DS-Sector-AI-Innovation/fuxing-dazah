@@ -330,20 +330,18 @@ async def list_missing(
 # 上传 / 换证（版本化）
 # ═══════════════════════════════════════════════════════════════
 
-async def upload_certificate(
-    session: AsyncSession, ctx: HrAccessContext, employee_id: UUID, *,
+async def create_certificate_version(
+    session: AsyncSession, *, employee: Employee, category: str,
     file_bytes: bytes, filename: str | None,
-    category: str, certificate_name: str | None = None,
+    certificate_name: str | None = None,
     certificate_no: str | None = None, issue_date: date | None = None,
     expiry_date: date | None = None, is_permanent: bool = False,
     remark: str | None = None,
-) -> dict[str, Any]:
-    employee = (await session.execute(
-        select(Employee).where(Employee.id == employee_id, Employee.is_deleted.is_(False))
-    )).scalar_one_or_none()
-    if employee is None:
-        raise ValueError("员工不存在")
-    ctx.ensure_can_access_employee(employee)
+) -> EmployeeCertificate:
+    """校验文件并版本化插入新证件（旧版本翻 is_current），不 commit 不写审计。
+
+    单个上传与批量导入共用的入库核心；文件校验失败抛 ValueError。
+    """
     if category not in EmployeeCertificate.CATEGORIES:
         raise ValueError(f"非法证件类别：{category}")
 
@@ -356,7 +354,7 @@ async def upload_certificate(
     # 版本化：先翻旧版本（flush 落 UPDATE，避免唯一索引与后续 INSERT 冲突）
     old_current = (await session.execute(
         select(EmployeeCertificate).where(
-            EmployeeCertificate.employee_id == employee_id,
+            EmployeeCertificate.employee_id == employee.id,
             EmployeeCertificate.category == category,
             EmployeeCertificate.is_current.is_(True),
             EmployeeCertificate.is_deleted.is_(False),
@@ -368,18 +366,18 @@ async def upload_certificate(
 
     max_version = (await session.execute(
         select(func.max(EmployeeCertificate.version_no)).where(
-            EmployeeCertificate.employee_id == employee_id,
+            EmployeeCertificate.employee_id == employee.id,
             EmployeeCertificate.category == category,
             EmployeeCertificate.is_deleted.is_(False),
         )
     )).scalar_one() or 0
 
-    key = f"certificates/{employee_id}/{category}/{uuid_mod.uuid4().hex}.{ext}"
+    key = f"certificates/{employee.id}/{category}/{uuid_mod.uuid4().hex}.{ext}"
     store_object(MODULE, key, file_bytes, mime)
 
     cert = EmployeeCertificate(
         id=uuid_mod.uuid4(),
-        employee_id=employee_id,
+        employee_id=employee.id,
         category=category,
         certificate_name=(certificate_name or "").strip() or None,
         certificate_no=(certificate_no or "").strip() or None,
@@ -396,9 +394,34 @@ async def upload_certificate(
     )
     session.add(cert)
     await session.flush()
+    return cert
+
+
+async def upload_certificate(
+    session: AsyncSession, ctx: HrAccessContext, employee_id: UUID, *,
+    file_bytes: bytes, filename: str | None,
+    category: str, certificate_name: str | None = None,
+    certificate_no: str | None = None, issue_date: date | None = None,
+    expiry_date: date | None = None, is_permanent: bool = False,
+    remark: str | None = None,
+) -> dict[str, Any]:
+    employee = (await session.execute(
+        select(Employee).where(Employee.id == employee_id, Employee.is_deleted.is_(False))
+    )).scalar_one_or_none()
+    if employee is None:
+        raise ValueError("员工不存在")
+    ctx.ensure_can_access_employee(employee)
+
+    cert = await create_certificate_version(
+        session, employee=employee, category=category,
+        file_bytes=file_bytes, filename=filename,
+        certificate_name=certificate_name, certificate_no=certificate_no,
+        issue_date=issue_date, expiry_date=expiry_date,
+        is_permanent=is_permanent, remark=remark,
+    )
 
     await _audit(session, ctx, "certificate_upload", cert, employee,
-                 new_value={"version_no": cert.version_no, "filename": safe_name})
+                 new_value={"version_no": cert.version_no, "filename": cert.filename})
     await session.commit()
     return _serialize(cert)
 

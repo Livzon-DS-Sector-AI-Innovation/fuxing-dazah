@@ -293,6 +293,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     (r"/certificates/requirements", {"GET": "hr:certificate:read",
                                      "POST": "hr:certificate:manage",
                                      "DELETE": "hr:certificate:manage"}),
+    (r"/certificates/batch-import/employee-options", "hr:certificate:read"),
+    (r"/certificates/batch-import", "hr:certificate:manage"),
     (r"/certificates/.*/file", "hr:certificate:read"),
     (r"/certificates", {"GET": "hr:certificate:read", "POST": "hr:certificate:manage",
                         "PUT": "hr:certificate:manage", "DELETE": "hr:certificate:manage"}),
