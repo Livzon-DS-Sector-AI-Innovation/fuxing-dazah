@@ -61,14 +61,26 @@ export default function DepartmentForm({ open, department, onClose, onSuccess }:
   }, [open, department, form])
 
   const handleSubmit = async () => {
+    // 校验失败只走表单行内提示，不弹「操作失败」（校验错误对象没有 message）
+    let values: Record<string, unknown>
     try {
-      const values = await form.validateFields()
+      values = (await form.validateFields()) as Record<string, unknown>
+    } catch {
+      return
+    }
 
+    try {
       if (isEdit && department) {
-        await updateDepartment(department.id, values as DepartmentUpdateInput)
+        // 清空下拉后的 undefined 会被 JSON.stringify 丢弃，后端 exclude_unset 视为「不更新」，
+        // 须显式传 null 才能真正清掉负责人/分管领导
+        await updateDepartment(department.id, {
+          ...values,
+          department_manager_name: (values.department_manager_name as string | undefined) ?? null,
+          supervising_leader_name: (values.supervising_leader_name as string | undefined) ?? null,
+        } as unknown as DepartmentUpdateInput)
         message.success('部门更新成功')
       } else {
-        await createDepartment(values as DepartmentCreateInput)
+        await createDepartment(values as unknown as DepartmentCreateInput)
         message.success('部门创建成功')
       }
 

@@ -469,6 +469,13 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 工伤/纠纷台账
     (r"/incidents", {"GET": "hr:incident:read", "POST": "hr:incident:manage",
                      "PUT": "hr:incident:manage", "DELETE": "hr:incident:manage"}),
+    # 台账 Excel 导入（四个台账共用一组带 {ledger} 的路由）：模板下载=任一台账读权限，
+    # 预检/提交=任一台账写权限。此前未登记，只按「任意 hr 权限」放行（仅培训权限也能调离职台账导入）。
+    # 路径里的台账类型静态映射区分不了，逐台账的精确校验需在 handler 内按 ledger 再判。
+    (r"/ledger-import/.*/template",
+     ("hr:onboarding:read", "hr:departure:read", "hr:training:read", "hr:incident:read")),
+    (r"/ledger-import/",
+     ("hr:onboarding:manage", "hr:departure:manage", "hr:training:manage", "hr:incident:manage")),
     # 人事提醒：测试发送（真实发飞书卡片），仅系统配置权限可用
     (r"/reminder-settings", "hr:settings:manage"),
     # 职称评审（具体子路径在通用条目之前）

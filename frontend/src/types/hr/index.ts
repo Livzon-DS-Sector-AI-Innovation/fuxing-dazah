@@ -331,6 +331,9 @@ export interface DepartmentUpdateInput {
   name?: string
   code?: string
   description?: string
+  /** 传 null 表示清空（undefined 会被 JSON.stringify 丢弃，后端按「不更新」处理） */
+  department_manager_name?: string | null
+  supervising_leader_name?: string | null
 }
 
 export interface DepartmentListResponse {
