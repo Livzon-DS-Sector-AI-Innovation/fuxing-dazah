@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table, InputNumber } from 'antd'
+import { App, Card, Tag, Button, Input, Popconfirm, Select, Space, Table, InputNumber, Tooltip, AutoComplete } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
 import { fetchPositions, createPosition, deletePositionByName, updatePositionHeadcount } from '@/actions/hr'
@@ -9,11 +9,13 @@ import { fetchPositions, createPosition, deletePositionByName, updatePositionHea
 interface PositionRow { department: string; name: string; categories?: string[]; headcount: number | null }
 
 export default function PositionManager() {
+  const { message } = App.useApp()
   const [positions, setPositions] = useState<PositionRow[]>([])
   const [loading, setLoading] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDept, setNewDept] = useState('')
   const [filterDept, setFilterDept] = useState<string | undefined>()
+  const [adding, setAdding] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -29,13 +31,14 @@ export default function PositionManager() {
   const handleAdd = async () => {
     const name = newName.trim(); const dept = newDept.trim()
     if (!name || !dept) { message.warning('请填写部门和岗位'); return }
+    setAdding(true)
     try {
       await createPosition({ department: dept, name, headcount: null })
       message.success('已添加')
       setNewName(''); loadData()
     } catch (err: unknown) {
       message.error((err instanceof Error ? err.message : '') || '添加失败')
-    }
+    } finally { setAdding(false) }
   }
 
   const handleDelete = async (dept: string, name: string) => {
@@ -59,14 +62,13 @@ export default function PositionManager() {
           <Space wrap>
             <Select placeholder="按部门筛选" allowClear style={{ width: 180 }}
               value={filterDept} onChange={setFilterDept} options={deptOptions} />
-            <Input placeholder="部门" style={{ width: 150 }}
-              value={newDept} onChange={e => setNewDept(e.target.value)}
-              list="dept-list" />
-            <datalist id="dept-list">{deptOptions.map(d => <option key={d.value} value={d.value} />)}</datalist>
+            {/* 部门用 antd AutoComplete：既能从已有部门里选，也允许录入新部门（原生 datalist 换成 antd 控件） */}
+            <AutoComplete options={deptOptions} style={{ width: 150 }} placeholder="部门"
+              value={newDept} onChange={v => setNewDept(v)} allowClear />
           <Input placeholder="岗位名称" style={{ width: 150 }}
             value={newName} onChange={e => setNewName(e.target.value)}
             onPressEnter={handleAdd} />
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增岗位</Button>
+          <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={handleAdd}>新增岗位</Button>
           </Space>
         </div>
         <Table
@@ -104,7 +106,9 @@ export default function PositionManager() {
               title: '操作', width: 80, align: 'center',
               render: (_: any, r: PositionRow) => (
                 <Popconfirm title={`删除「${r.name}」？`} onConfirm={() => handleDelete(r.department, r.name)}>
-                  <Button size="small" danger icon={<DeleteOutlined />} />
+                  <Tooltip title="删除">
+                    <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除「${r.name}」`} />
+                  </Tooltip>
                 </Popconfirm>
               ),
             },

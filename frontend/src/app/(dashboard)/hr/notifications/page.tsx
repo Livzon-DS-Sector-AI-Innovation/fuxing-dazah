@@ -2,11 +2,12 @@
 
 import PageHeader from '@/components/hr/PageHeader'
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag, message } from 'antd'
+import { App, Card, Table, Tag } from 'antd'
 
 import { fetchNotificationLogs } from '@/actions/hr'
 
 export default function NotificationsPage() {
+  const { message } = App.useApp()
   const [logs, setLogs] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -19,6 +20,8 @@ export default function NotificationsPage() {
         message.error((err instanceof Error ? err.message : '') || '通知记录加载失败')
       })
       .finally(() => setLoading(false))
+    // message 不进依赖数组（App.useApp 的 message 进 deps 会反复请求）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (

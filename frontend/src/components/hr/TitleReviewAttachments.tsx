@@ -47,7 +47,7 @@ export default function TitleReviewAttachments({
       <div className="mt-1 space-y-1">
         {entries.map(([category, files]) => (
           <div key={category} className="text-[13px] flex items-start gap-1 flex-wrap">
-            <span className="text-[var(--color-text-secondary)] shrink-0">{category}：</span>
+            <span className="text-[var(--color-steel)] shrink-0">{category}：</span>
             <Space size={[4, 4]} wrap>
               {(files || []).map((f) =>
                 f.file_token ? (
