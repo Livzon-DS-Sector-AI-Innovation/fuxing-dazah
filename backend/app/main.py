@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import posixpath
@@ -18,6 +17,7 @@ from app.core.exceptions import AppException
 from app.core.logging_config import setup_logging
 from app.core.response import error_response
 from app.platform.audit import AuditMiddleware
+from app.shared.module_registry import PRIVATE_UPLOAD_PREFIXES
 
 settings = get_settings()
 
@@ -34,25 +34,55 @@ setup_logging(
 
 logger = logging.getLogger(__name__)
 
-# ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
-from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
-from app.modules.hr import (  # noqa: E402, F401 — 触发 @mcp.tool() 注册
-    mcp_tools as _hr_mcp_tools,
-)
-from app.modules.production import (  # noqa: E402, F401 — 触发 @mcp.tool() 注册
-    mcp_tools as _production_mcp_tools,
-)
+# ── 模块后台服务清单（模块级别 import，须先于下方 MCP ASGI 构建）──
+# 各模块 lifecycle 顺带触发自身 @mcp.tool() 注册（旧 main 的 mcp_tools 触发
+# import 已随职责下沉到各模块）。清单不放 shared/module_registry——它被十余
+# 个模块的 api 层反向引用，import 模块 lifecycle 会循环导入；新模块带后台
+# 服务时在此登记一行即可，模块内部增删服务不再需要动本文件。
+from app.modules.energy.lifecycle import ENERGY_EXTENSION  # noqa: E402
+from app.modules.equipment.lifecycle import EQUIPMENT_EXTENSION  # noqa: E402
+from app.modules.hr.lifecycle import HR_EXTENSION  # noqa: E402
+from app.modules.meter.lifecycle import METER_EXTENSION  # noqa: E402
+from app.modules.production.lifecycle import PRODUCTION_EXTENSION  # noqa: E402
+from app.modules.qa.lifecycle import QA_EXTENSION  # noqa: E402
+from app.modules.quality.lifecycle import QUALITY_EXTENSION  # noqa: E402
 from app.modules.toolbox.registry import TOOL_IMAGE_URL_PREFIX  # noqa: E402
 from app.platform.identity import (  # noqa: E402
     mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册
 )
+from app.platform.integrations.feishu.lifecycle import (  # noqa: E402
+    FEISHU_PLATFORM_EXTENSION,
+)
 from app.platform.mcp.middleware import build_mcp_middleware  # noqa: E402
 from app.platform.mcp.server import get_mcp_app, get_module_mcp  # noqa: E402
+from app.platform.module_lifecycle import (  # noqa: E402
+    ModuleExtension,
+    run_module_lifecycles,
+)
+
+# 平台设施（飞书）作为 0 号扩展排在最前：其 WS 启动先于各模块自管资源，
+# 且此时全部模块的事件回调已注册完毕。
+MODULE_EXTENSIONS: tuple[ModuleExtension, ...] = (
+    FEISHU_PLATFORM_EXTENSION,
+    PRODUCTION_EXTENSION,
+    EQUIPMENT_EXTENSION,
+    ENERGY_EXTENSION,
+    METER_EXTENSION,
+    QUALITY_EXTENSION,
+    QA_EXTENSION,
+    HR_EXTENSION,
+)
 
 mcp_middleware = build_mcp_middleware()
-production_mcp_asgi = get_mcp_app(get_module_mcp("production"), path="/", middleware=mcp_middleware)
-equipment_mcp_asgi = get_mcp_app(get_module_mcp("equipment"), path="/", middleware=mcp_middleware)
-platform_mcp_asgi = get_mcp_app(get_module_mcp("platform"), path="/", middleware=mcp_middleware)
+production_mcp_asgi = get_mcp_app(
+    get_module_mcp("production"), path="/", middleware=mcp_middleware
+)
+equipment_mcp_asgi = get_mcp_app(
+    get_module_mcp("equipment"), path="/", middleware=mcp_middleware
+)
+platform_mcp_asgi = get_mcp_app(
+    get_module_mcp("platform"), path="/", middleware=mcp_middleware
+)
 hr_mcp_asgi = get_mcp_app(get_module_mcp("hr"), path="/", middleware=mcp_middleware)
 
 
@@ -60,222 +90,15 @@ hr_mcp_asgi = get_mcp_app(get_module_mcp("hr"), path="/", middleware=mcp_middlew
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
 
-    # QA 正文解析的自检：QA_MD_EXTRACT_PROVIDER 默认 mineru，而 token 默认
-    # 为空（config.py 和 .env.example 都是）。两者不一致时，每一次上传都会在
-    # 后台解析时抛 MineruError，只留一条藏在文件详情里的失败状态，没人会逐条
-    # 去翻。开机就把话说清楚，别让运维从失败文档里反推配置。
-    if (
-        settings.QA_MD_EXTRACT_PROVIDER.strip().casefold() or "mineru"
-    ) == "mineru" and not settings.QA_MD_EXTRACT_API_TOKEN.strip():
-        raise RuntimeError(
-            "QA_MD_EXTRACT_PROVIDER=mineru 但 QA_MD_EXTRACT_API_TOKEN 未配置，"
-            "所有 QA 正文解析都会失败。请配置 token，"
-            "或显式设置 QA_MD_EXTRACT_PROVIDER=native。"
-        )
+    async with run_module_lifecycles(MODULE_EXTENSIONS):
+        # ── 权限系统启动引导 ──
+        from app.core.database import async_session_factory
+        from app.platform.permission.bootstrap import bootstrap_permissions
 
-    from app.modules.equipment.scheduler import (
-        maintenance_plan_loop,
-        stop_maintenance_plan_flag,
-    )
-    from app.platform.integrations.feishu.sync import (
-        member_sync_loop,
-        stop_member_sync_flag,
-    )
+        async with async_session_factory() as perm_db:
+            await bootstrap_permissions(perm_db, settings)
 
-    member_task = asyncio.ensure_future(member_sync_loop())
-    maintenance_plan_task = asyncio.ensure_future(maintenance_plan_loop())
-
-    # ── 业务模块注册飞书事件回调（注册制分发，须在 WS 启动前完成）──
-    # 员工档案同步已改为每小时整点定时对账 + 手动同步（scheduled），无 WS 实时事件
-    from app.modules.equipment.feishu.callbacks import register_feishu_callbacks
-    from app.modules.hr.employee_info_collection_service import (
-        register_feishu_callbacks as register_eic_callbacks,
-    )
-    from app.modules.hr.interview_score_service import (
-        register_feishu_callbacks as register_iv_score_callbacks,
-    )
-    from app.modules.hr.probation_service import (
-        register_feishu_callbacks as register_probation_callbacks,
-    )
-    from app.modules.hr.title_review.bitable_handler import (
-        register_feishu_callbacks as register_hr_feishu_callbacks,
-    )
-
-    register_feishu_callbacks()
-    register_hr_feishu_callbacks()
-    register_eic_callbacks()
-    register_probation_callbacks()
-    register_iv_score_callbacks()
-
-    # ── 平台级飞书 WebSocket 长连接 ──
-    if settings.FEISHU_WS_ENABLED:
-        from app.platform.integrations.feishu.event_handler import set_main_loop
-        from app.platform.integrations.feishu.ws_client import start_ws_client
-
-        set_main_loop(asyncio.get_running_loop())
-        start_ws_client()
-
-    # ── 职称评审专属多维表格事件长连接（独立应用凭证，事件共享同一处理器） ──
-    # 单实例确认：lark_oapi SDK 的 WS 客户端使用模块级全局 loop，不支持与平台
-    # 全局长连接并发（后启动者会互相覆盖 loop 导致 RuntimeError 崩溃）。
-    # 平台全局长连接已启用时跳过；职称评审的表事件由全局连接（全局应用订阅）送达。
-    if (
-        settings.HR_TITLE_REVIEW_FEISHU_WS_ENABLED
-        and settings.HR_TITLE_REVIEW_FEISHU_APP_ID
-        and not settings.FEISHU_WS_ENABLED
-    ):
-        from app.platform.integrations.feishu.event_handler import (
-            build_event_handler,
-        )
-        from app.platform.integrations.feishu.event_handler import (
-            set_main_loop as set_loop_tr,
-        )
-        from app.platform.integrations.feishu.ws_client import start_ws_client
-
-        set_loop_tr(asyncio.get_running_loop())
-        start_ws_client(
-            settings.HR_TITLE_REVIEW_FEISHU_APP_ID,
-            settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET,
-            build_event_handler(),
-            name="title-review-ws",
-        )
-
-    # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
-    from app.modules.safety.feishu.event_client import start_ws, stop_ws
-
-    safety_ws_task = asyncio.create_task(start_ws())
-
-    # ── 质量模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
-    from app.modules.quality.feishu.lifecycle import start_ws_task
-
-    start_ws_task()
-
-    # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
-    from app.modules.safety.feishu.catch_up import recover_unprocessed_records
-
-    recovery_task = asyncio.create_task(recover_unprocessed_records())  # noqa: F841 — 持有引用防止任务被 GC
-
-    # ── 安全模块定时任务调度引擎 ──
-    from app.modules.safety.scheduler import (
-        scheduled_task_loop,
-        stop_scheduled_task_flag,
-    )
-
-    scheduler_task = asyncio.create_task(scheduled_task_loop())
-
-    # ── 统一调度引擎（平台级，各模块可渐进迁移）──
-    from app.platform.scheduler import SchedulerEngine, SchedulerRegistry
-
-    scheduler_registry = SchedulerRegistry()
-    scheduler_engine = SchedulerEngine(scheduler_registry)
-
-    from app.modules.equipment.scheduled import (
-        AUTO_CLOSE_TASK,
-        InspectionScheduleGenerator,
-    )
-    from app.modules.equipment.scheduled import (
-        TIMEOUT_SCAN_TASK as EQUIPMENT_TIMEOUT_SCAN_TASK,
-    )
-    scheduler_registry.register_generator(InspectionScheduleGenerator())
-    scheduler_registry.register_task(AUTO_CLOSE_TASK)
-    # 派单超时监控（未指派/已指派未开工超时提醒设备主管），别名避免与
-    # production 的 TIMEOUT_SCAN_TASK（工序执行超时）同名冲突
-    scheduler_registry.register_task(EQUIPMENT_TIMEOUT_SCAN_TASK)
-
-    from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
-    scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)
-
-    from app.modules.production.scheduled import (
-        BATCH_START_REMINDER_TASK,
-        EXECUTION_TIMEOUT_SCAN_TASK,
-    )
-    scheduler_registry.register_task(BATCH_START_REMINDER_TASK)
-    scheduler_registry.register_task(EXECUTION_TIMEOUT_SCAN_TASK)
-
-    # QA 文档正文提取：任务状态持久化在 qa.document_files，服务重启后可继续。
-    from app.modules.qa.scheduler import (
-        AI_GENERATOR as QA_AI_ANALYSIS_GENERATOR,
-    )
-    from app.modules.qa.scheduler import (
-        GENERATOR as QA_TEXT_EXTRACTION_GENERATOR,
-    )
-
-    scheduler_registry.register_generator(QA_TEXT_EXTRACTION_GENERATOR)
-    scheduler_registry.register_generator(QA_AI_ANALYSIS_GENERATOR)
-
-    from app.modules.energy.scheduler import register_tasks as register_energy_tasks
-    register_energy_tasks(scheduler_registry)
-
-    from app.modules.quality.scheduled import register_tasks as register_quality_tasks
-
-    register_quality_tasks(scheduler_registry)
-
-    if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
-        from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
-        scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
-
-    # 员工档案多维表格同步：任务内部读 DB 配置决定是否执行（无需 env 开关）
-    from app.modules.hr.employee_sync.scheduled import EMPLOYEE_SYNC_TASK
-
-    scheduler_registry.register_task(EMPLOYEE_SYNC_TASK)
-
-    # 人事提醒任务（转正 09:00 / 合同到期 09:10；接收人未配置时仅日志，
-    # 配置存 hr.system_settings，见 hr/reminder/ 聚合注册说明）
-    from app.modules.hr.reminder import register_reminder_tasks
-
-    register_reminder_tasks(scheduler_registry)
-
-    scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
-
-    logger.info("Background tasks started")
-
-    # ── 权限系统启动引导 ──
-    from app.core.database import async_session_factory
-    from app.platform.permission.bootstrap import bootstrap_permissions
-
-    async with async_session_factory() as perm_db:
-        await bootstrap_permissions(perm_db, settings)
-
-    # 试用期时长配置加载进进程缓存（system_settings KV；每日提醒任务会再刷新）
-    from app.modules.hr.probation_config import reload_probation_config
-
-    async with async_session_factory() as hr_db:
-        await reload_probation_config(hr_db)
-
-    yield
-
-    stop_member_sync_flag.set()
-    stop_maintenance_plan_flag.set()
-
-    # 停止安全模块 WebSocket
-    await stop_ws()
-    safety_ws_task.cancel()
-
-    # 停止质量模块 WebSocket
-    from app.modules.quality.feishu.lifecycle import stop_ws_task
-
-    await stop_ws_task()
-
-    # 停止定时任务调度引擎
-    stop_scheduled_task_flag.set()
-    scheduler_task.cancel()
-
-    # ── 停止统一调度引擎 ──
-    scheduler_engine.stop()
-    try:
-        await asyncio.wait_for(scheduler_engine_task, timeout=10)
-    except (TimeoutError, asyncio.CancelledError):
-        pass
-
-    member_task.cancel()
-    maintenance_plan_task.cancel()
-
-    # 停止平台级飞书 WebSocket
-    from app.platform.integrations.feishu.ws_client import stop_ws_client
-
-    stop_ws_client()
-
-    logger.info("Background tasks stopped")
+        yield
 
 
 from fastmcp.utilities.lifespan import combine_lifespans  # noqa: E402
@@ -306,8 +129,7 @@ app.add_middleware(AuditMiddleware)
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 # 私有模块目录只能经带权限的代理接口读取，不能被公共静态挂载绕过。
-# qa：质量原件；feedback：用户反馈截图（本人或管理员才可读）。
-_PRIVATE_UPLOAD_PREFIXES = ("qa", "feedback")
+# 前缀清单登记在 shared/module_registry（qa 质量原件 / feedback 反馈截图）。
 
 
 # 挂载静态文件目录（图片上传等）。QA 本地回退文件虽然仍兼容落在
@@ -317,10 +139,12 @@ class _PublicUploads(StaticFiles):
     async def get_response(self, path: str, scope: dict[str, object]):  # type: ignore[override]
         # StaticFiles 自身会做 realpath 校验；这里也必须先规范化 ``..``，
         # 否则 ``/uploads/public/../qa/...`` 可能绕过简单的前缀判断。
-        normalized = posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/").casefold()
+        normalized = (
+            posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/").casefold()
+        )
         if any(
             normalized == prefix or normalized.startswith(prefix + "/")
-            for prefix in _PRIVATE_UPLOAD_PREFIXES
+            for prefix in PRIVATE_UPLOAD_PREFIXES
         ):
             return PlainTextResponse("Not Found", status_code=404)
         return await super().get_response(path, scope)
@@ -335,14 +159,20 @@ toolbox_images_dir = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "modules/toolbox/tools/images")
 )
 os.makedirs(toolbox_images_dir, exist_ok=True)
-app.mount(TOOL_IMAGE_URL_PREFIX, StaticFiles(directory=toolbox_images_dir), name="toolbox-tools")
+app.mount(
+    TOOL_IMAGE_URL_PREFIX,
+    StaticFiles(directory=toolbox_images_dir),
+    name="toolbox-tools",
+)
 
 # ── 挂载 MCP 服务（按模块拆分端点，AI Agent 协议入口）──
 app.mount("/mcp/production", production_mcp_asgi, name="mcp-production")
 app.mount("/mcp/equipment", equipment_mcp_asgi, name="mcp-equipment")
 app.mount("/mcp/platform", platform_mcp_asgi, name="mcp-platform")
 app.mount("/mcp/hr", hr_mcp_asgi, name="mcp-hr")
-logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform, /mcp/hr")
+logger.info(
+    "MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform, /mcp/hr"
+)
 
 
 @app.exception_handler(AppException)
@@ -350,7 +180,10 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
     if exc.status_code >= 500:
         logger.exception(
             "HTTP %d on %s %s: %s",
-            exc.status_code, request.method, request.url.path, exc.message,
+            exc.status_code,
+            request.method,
+            request.url.path,
+            exc.message,
         )
     return error_response(
         message=exc.message,
@@ -366,7 +199,10 @@ async def http_exception_handler(
     if exc.status_code >= 500:
         logger.exception(
             "HTTP %d on %s %s: %s",
-            exc.status_code, request.method, request.url.path, exc.detail,
+            exc.status_code,
+            request.method,
+            request.url.path,
+            exc.detail,
         )
     return error_response(
         message=str(exc.detail),
@@ -392,7 +228,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     request_id = getattr(request.state, "request_id", None)
     logger.exception(
         "Unhandled exception on %s %s [request_id=%s]: %s",
-        request.method, request.url.path, request_id, exc,
+        request.method,
+        request.url.path,
+        request_id,
+        exc,
     )
     return error_response(
         message="服务内部错误",

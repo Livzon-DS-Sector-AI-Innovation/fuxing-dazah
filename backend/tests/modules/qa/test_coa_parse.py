@@ -32,6 +32,7 @@ from app.modules.qa.service.coa.docx_parse import (
     parse_number,
     parse_spec,
     split_bilingual,
+    strip_result_affixes,
 )
 
 PAYLOAD = json.loads(
@@ -107,7 +108,7 @@ class TestBuildParse:
         """结构版载荷：batch_fields 装配（key/type 系统生成），值字段全空。"""
         parse = _build_parse(STRUCTURE_PAYLOAD)
         assert parse.report_no == "COA-DA-3310-006"
-        assert parse.serial_no is None and parse.conclusion is None
+        assert parse.serial_no is None
         fields = {f.key: f for f in parse.batch_fields}
         assert set(fields) == {
             "product_name",
@@ -166,18 +167,41 @@ class TestBuildParse:
         assert parse.product_cn == "盐酸万古霉素"
         assert parse.product_en == "Vancomycin Hydrochloride"
 
-    def test_item_count_and_conclusion(self):
+    def test_item_count(self):
         parse = self._parse()
         assert len(parse.items) == 30
-        assert "本品符合美国药典及企业内控标准" in (parse.conclusion or "")
 
     def test_comparison_semantics_guarded(self):
-        """结果含比较符（＜1cfu/g）时模型 value_num 一律作废——＜1 ≠ 1。"""
+        """结果含比较符（＜1cfu/g）时模型 value_num 一律作废——＜1 ≠ 1；
+        结果列剥尾缀单位只留数值形态（＜1）。"""
         parse = self._parse()
         micro = {it.name: it for it in parse.items}["需氧菌总数"]
-        assert micro.result == "＜1cfu/g"
+        assert micro.result == "＜1"
         assert micro.value_num is None
         assert micro.value_type == "number"  # 标准限 ≤100 可结构化 → 数值列
+        assert micro.unit == "cfu/g"  # 单位剥到 item.unit，不随值走
+
+    def test_result_affixes_stripped(self):
+        """结果列剥修饰（确定性后处理）：尾缀单位与英文尾巴剥掉，
+        描述性文本原样保留。"""
+        parse = self._parse()
+        items = {it.name: it for it in parse.items}
+        assert items["单去氯万古霉素"].result == "1.7"  # 1.7%
+        assert items["含量(以无水物计)"].result == "1091"  # 1091µg/mg
+        assert items["残留溶剂(乙醇)"].result == "294"  # 294ppm
+        assert items["需氧菌总数"].result == "＜1"  # ＜1cfu/g
+        assert items["外观"].result == "符合规定"  # 纯文字不动
+
+    def test_strip_result_affixes_edges(self):
+        """剥离函数边界：剥后非数值形态一律保留原文。"""
+        strip = strip_result_affixes
+        assert strip(None) is None
+        assert strip("＜1cfu/g") == "＜1"
+        assert strip("符合规定 Conform") == "符合规定"  # 模型未分列时的英文尾巴
+        assert strip("白色粉末") == "白色粉末"  # 描述无单位不动
+        assert strip("USP trial") == "USP trial"  # 恰以单位字母结尾的非数值不动
+        assert strip("1091µg/mg") == "1091"
+        assert strip("2.5~4.5") == "2.5~4.5"  # 区间无单位不动
 
     def test_numeric_items(self):
         parse = self._parse()

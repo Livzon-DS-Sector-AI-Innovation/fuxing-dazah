@@ -77,7 +77,8 @@ export interface DeviationBrief {
   qa_person_name: string | null
   description: string
   classification: DeviationClassification | null
-  root_cause_category: RootCauseCategory | null
+  /** 根本原因分类（多选）。 */
+  root_cause_categories: RootCauseCategory[]
   quality_impact: QualityImpact | null
   is_repeat: boolean
   capa_initiated: boolean | null
@@ -158,7 +159,7 @@ export type DeviationUpdateInput = Partial<
     m1e_other: string | null
     direct_cause: string | null
     root_cause: string | null
-    root_cause_category: RootCauseCategory | null
+    root_cause_categories: RootCauseCategory[]
     why_chain: WhyStep[]
     extended_investigation: boolean
     extended_result: string | null

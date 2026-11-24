@@ -50,7 +50,7 @@ from app.modules.toolbox.schemas import (
 from app.modules.toolbox.service import ToolboxGrantService, ToolGrantError
 from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_admin
+from app.platform.permission.deps import require_super_admin
 
 logger = logging.getLogger(__name__)
 
@@ -541,10 +541,10 @@ async def put_tool_config(
     return success_response(data=config)
 
 
-@router.get("/tool-grants", summary="工具使用权限概览（仅管理员）")
+@router.get("/tool-grants", summary="工具使用权限概览（仅超级管理员）")
 async def list_tool_grants_endpoint(
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _admin: User = Depends(require_super_admin),
 ) -> JSONResponse:
     """全部工具的使用/配置授权名单，驱动前端「使用权限」页面。"""
     discover_tools()
@@ -552,12 +552,12 @@ async def list_tool_grants_endpoint(
     return success_response(data=[g.model_dump(mode="json") for g in grants])
 
 
-@router.put("/tools/{tool_id}/grants", summary="更新工具使用权限（仅管理员）")
+@router.put("/tools/{tool_id}/grants", summary="更新工具使用权限（仅超级管理员）")
 async def put_tool_grants(
     tool_id: str,
     data: UpdateToolGrantsIn,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_super_admin),
 ) -> JSONResponse:
     """整体替换某工具的使用/配置授权名单。
 

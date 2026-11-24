@@ -47,6 +47,43 @@ export function builtinKeyOf(keyOrLabel: string): string | null {
   return token ? (BUILTIN_ALIAS_MAP.get(token) ?? null) : null
 }
 
+/** 报告固定列（与后端 service/coa/common.py REPORT_COLUMN_ALIASES 同表）。 */
+export type CoaReportColumn = 'mfg_date' | 'exp_date' | 'packaging' | 'batch_size' | 'storage'
+
+const REPORT_COLUMN_ALIAS: [column: CoaReportColumn, aliases: string[]][] = [
+  ['mfg_date', ['mfgdate', 'manufacturingdate', 'manufacturedate', 'productiondate', '生产日期', '制造日期']],
+  [
+    'exp_date',
+    ['expdate', 'expirydate', 'expirationdate', 'expiry', 'expiration', '有效期', '有效期至', '失效期', '失效日期', '有效日期'],
+  ],
+  ['packaging', ['package', 'packing', 'packagingspec', '包装', '包装规格', '包装形式']],
+  ['batch_size', ['batchsize', 'quantity', '批量', '数量']],
+  [
+    'storage',
+    ['storagecondition', 'storecondition', 'storageconditions', '储存条件', '贮存条件', '储藏条件', '储存', '贮存'],
+  ],
+]
+
+const REPORT_COLUMN_ALIAS_MAP: Map<string, CoaReportColumn> = (() => {
+  const map = new Map<string, CoaReportColumn>()
+  for (const [column, aliases] of REPORT_COLUMN_ALIAS) {
+    for (const token of [column, ...aliases]) {
+      map.set(normalizeToken(token), column)
+    }
+  }
+  return map
+})()
+
+/**
+ * 字段键归一后命中报告固定列 → 返回列名，否则 null。后端只按键判定（不看标签）：
+ * 命中时该字段的值镜像写固定列，读取时也从固定列合成——导入登记据此把 docx
+ * 识别到的固定列值回填到对应模板字段。
+ */
+export function reportColumnKeyOf(key: string): CoaReportColumn | null {
+  const token = normalizeToken(key)
+  return token ? (REPORT_COLUMN_ALIAS_MAP.get(token) ?? null) : null
+}
+
 /**
  * 过滤内置行：编辑器恒定自行渲染内置 3 字段，入参行集只留自定义
  * （兼容旧缓存里未带 builtin 标记的保留键行）。

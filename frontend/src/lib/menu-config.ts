@@ -6,6 +6,7 @@ export interface SubMenuItem {
   group?: boolean            // 分组标题式（antd Menu group 类型）：children 平铺展示不折叠
   disabled?: boolean         // 灰显占位，功能未开发
   permissions?: string[]     // 权限码，用于前端菜单可见性控制
+  roles?: string[]           // 角色码（如 super_admin），与 permissions 同时声明时取 AND
 }
 
 export interface ModuleMenu {
@@ -17,6 +18,16 @@ export interface ModuleMenu {
   permissions?: string[]     // 权限码，用于前端菜单可见性控制
   clickableTitle?: boolean   // 侧边栏模块标题可点击跳转模块首页（无二级菜单的模块用）
 }
+
+/** QA 知识库读门禁：qa:all:read + 知识库资源的任意写码（写码隐含读）。 */
+const QA_KNOWLEDGE_PERMISSIONS = [
+  "qa:all:read",
+  "qa:master:*",
+  "qa:document:*",
+  "qa:version:*",
+  "qa:relation:*",
+  "qa:config:*",
+]
 
 export const moduleMenus: ModuleMenu[] = [
   {
@@ -100,129 +111,6 @@ export const moduleMenus: ModuleMenu[] = [
     ],
   },
 
-  // ═══════════════════════════════════════════════════════
-  // 安全管理模块 — 按化工安全生产管理体系分级
-  // ═══════════════════════════════════════════════════════
-  {
-    key: "safety",
-    label: "安全管理",
-    icon: "shield",
-    path: "/safety",
-    permissions: ["safety:*:read"],
-    clickableTitle: true,
-    children: [
-            // ── 系统配置 ──
-      {
-        key: "system-config",
-        label: "系统配置",
-        path: "",
-        children: [],
-      },
-      // ── 作业安全 ──
-      {
-        key: "ops-safety",
-        label: "作业安全",
-        path: "",
-        children: [
-          { key: "special-ops-mgmt", label: "特殊作业管理", path: "/safety/special-ops" },
-          { key: "daily-risk-report", label: "关键风险作业报备", path: "/safety/risk-reporting" },
-        ],
-      },
-      // ── 风险与隐患 ──
-      {
-        key: "risk-hazard",
-        label: "风险与隐患",
-        path: "",
-        children: [
-          {
-            key: "risk-grading",
-            label: "风险分级管控",
-            path: "",
-            children: [
-              { key: "hazard-identification", label: "危险源辨识工作流", path: "/safety/hazard-identification" },
-              { key: "hazard-ledger", label: "危险源辨识台账", path: "/safety/hazard-identification/ledger" },
-            ],
-          },
-                    {
-            key: "hazard-inspection",
-            label: "隐患排查治理",
-            path: "",
-            children: [
-              { key: "hazard-inspection-ledger", label: "隐患台账", path: "/safety/hazard-ledger" },
-            ],
-          },
-          {
-            key: "regulation",
-            label: "安全操规管理",
-            path: "",
-            children: [
-              { key: "regulation-list", label: "安全操规台账", path: "/safety/regulation" },
-              { key: "regulation-generator", label: "标准化生成", path: "/safety/regulation/generator" },
-            ],
-          },
-          {
-            key: "ehs-change",
-            label: "EHS变更管理",
-            path: "",
-            children: [
-              { key: "ehs-change-apply", label: "EHS变更申请", path: "/safety/ehs-change" },
-              { key: "ehs-change-accept", label: "EHS变更验收", path: "/safety/ehs-change" },
-            ],
-          },
-
-        ],
-      },
-
-      // ── 应急与事故 ──
-      {
-        key: "emergency-accident",
-        label: "应急与事故",
-        path: "",
-        children: [
-          { key: "accident-ledger", label: "事故台账", path: "/safety/accident" },
-          { key: "emergency-plan", label: "应急预案管理", path: "", disabled: true },
-          { key: "emergency-drill", label: "应急演练管理", path: "", disabled: true },
-        ],
-      },
-
-      // ── 人员资质与培训 ──
-      {
-        key: "personnel-training",
-        label: "人员资质与培训",
-        path: "",
-        children: [
-          { key: "training", label: "安全培训管理", path: "/safety/training" },
-          { key: "personnel-qual", label: "厂内人员资质", path: "/safety/special-ops/personnel" },
-          { key: "contractor", label: "承包商管理", path: "/safety/contractor" },
-        ],
-      },
-
-      // ── 职业健康与环境 ──
-      {
-        key: "oh-env",
-        label: "职业健康与环境",
-        path: "",
-        children: [
-          { key: "oh-monitor", label: "职业危害因素监测", path: "/safety/occupational-health" },
-          { key: "oh-exam", label: "职业健康体检", path: "/safety/occupational-health" },
-          { key: "ppe", label: "劳动防护用品管理", path: "", disabled: true },
-        ],
-      },
-
-      // ── 法规与安全信息 ──
-      {
-        key: "regulation-info",
-        label: "法规与安全信息",
-        path: "",
-        children: [
-          { key: "knowledge-base", label: "安全知识库", path: "/safety/knowledge-base" },
-          { key: "info-query", label: "信息查询", path: "/safety/info-query" },
-          { key: "compliance-eval", label: "合规性评价记录", path: "", disabled: true },
-        ],
-      },
-    ],
-  },
-
   {
     key: "rd",
     label: "研发管理",
@@ -294,27 +182,27 @@ export const moduleMenus: ModuleMenu[] = [
     label: "QA",
     icon: "document",
     path: "/qa",
-    // 与 meter 一致：显式授权读取（授 qa:*:read），写操作在页面内按 QA 权限码显示。
-    permissions: ["qa:*:read"],
+    // 任一 QA 权限即可见（qa:*:* 是前端菜单匹配模式，不是权限码）；
+    // 子项各自按后端读门禁过滤。
+    permissions: ["qa:*:*"],
     children: [
-      { key: "overview", label: "概览", path: "/qa" },
-      { key: "master-data", label: "质量主数据", path: "/qa/master-data" },
-      { key: "documents", label: "批准文件台账", path: "/qa/documents" },
-      // 偏差/CAPA 有独立读码，持模块通配读码的 QA 人员同样可见。
-      { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:deviation:read", "qa:*:read"] },
-      { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:capa:read", "qa:*:read"] },
+      { key: "overview", label: "概览", path: "/qa", permissions: QA_KNOWLEDGE_PERMISSIONS },
+      { key: "master-data", label: "质量主数据", path: "/qa/master-data", permissions: QA_KNOWLEDGE_PERMISSIONS },
+      { key: "documents", label: "批准文件台账", path: "/qa/documents", permissions: QA_KNOWLEDGE_PERMISSIONS },
+      // 偏差/CAPA 有独立读码；持 qa:all:read 的 QA 人员同样可见。
+      { key: "deviation", label: "偏差管理", path: "/qa/deviation", permissions: ["qa:all:read", "qa:deviation:read", "qa:deviation:create", "qa:deviation:update"] },
+      { key: "capa", label: "CAPA 管理", path: "/qa/capa", permissions: ["qa:all:read", "qa:capa:read", "qa:capa:create", "qa:capa:update"] },
       // 年度产品回顾（PQR）：一级分组 + 三个二级入口，各按权限显隐。
-      // 可见性口径 = 「读得动该页」：enter/manage 权限在后端隐含 PQR 读取，
-      // 纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）；
-      // 汇总分析同样放行 enter，与后端读放行同口径（纯 enter 角色也能看到汇总入口）。
+      // 可见性口径 = 「读得动该页」：所有 PQR 写码（enter/manage/export/lock）
+      // 在后端隐含 PQR 读取；纯 read 用户也可进录入页只读查看（写按钮按 enter 单独 gate）。
       {
         key: "apr",
         label: "年度产品回顾",
         path: "/qa/apr",
         children: [
-          { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:apr:enter", "qa:apr:read", "qa:*:read"] },
-          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:apr:read", "qa:*:read", "qa:apr:enter"] },
           { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
+          { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:all:read", "qa:apr:read", "qa:apr:enter", "qa:apr:manage", "qa:apr:export", "qa:apr:lock"] },
+          { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:all:read", "qa:apr:read", "qa:apr:enter", "qa:apr:manage", "qa:apr:export", "qa:apr:lock"] },
         ],
       },
       // COA 客户标准与出具登记：独立读码（同偏差/PQR 口径），
@@ -324,8 +212,8 @@ export const moduleMenus: ModuleMenu[] = [
         label: "COA",
         path: "/qa/coa",
         children: [
-          { key: "coa-standards", label: "客户标准配置", path: "/qa/coa/standards", permissions: ["qa:coa:read", "qa:*:read", "qa:coa:standard:manage"] },
-          { key: "coa-issuance", label: "出具登记", path: "/qa/coa/issuance", permissions: ["qa:coa:read", "qa:*:read", "qa:coa:issue:create"] },
+          { key: "coa-standards", label: "客户标准配置", path: "/qa/coa/standards", permissions: ["qa:all:read", "qa:coa:read", "qa:coa:manage", "qa:coa:issue"] },
+          { key: "coa-issuance", label: "出具登记", path: "/qa/coa/issuance", permissions: ["qa:all:read", "qa:coa:read", "qa:coa:manage", "qa:coa:issue"] },
         ],
       },
       { key: "audit", label: "操作日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
@@ -475,11 +363,13 @@ export const moduleMenus: ModuleMenu[] = [
     key: "permission",
     label: "权限管理",
     icon: "lock",
-    path: "/permission/roles",
-    permissions: ["permission:role:manage"],
+    // 根路由按权限分流到进得去的子页
+    path: "/permission",
+    permissions: ["permission:role:manage", "permission:role:delegate", "permission:user:assign", "permission:user:view"],
     children: [
-      { key: "roles", label: "角色管理", path: "/permission/roles" },
-      { key: "users", label: "用户权限", path: "/permission/users" },
+      // permission:role:manage 是总开关；delegate 只能管理自身范围内的角色
+      { key: "roles", label: "角色管理", path: "/permission/roles", permissions: ["permission:role:manage", "permission:role:delegate"] },
+      { key: "users", label: "用户权限", path: "/permission/users", permissions: ["permission:role:manage", "permission:user:assign", "permission:user:view"] },
     ],
   },
   {
@@ -492,7 +382,7 @@ export const moduleMenus: ModuleMenu[] = [
         key: "usage-permissions",
         label: "使用权限",
         path: "/toolbox/permissions",
-        permissions: ["permission:role:manage"], // 仅系统超级管理员可见
+        roles: ["super_admin"], // 仅系统超级管理员可见（与权限码解耦）
       },
     ],
     clickableTitle: true, // 标题可点击回模块首页

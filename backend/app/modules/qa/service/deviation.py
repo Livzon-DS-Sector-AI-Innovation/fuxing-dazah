@@ -108,7 +108,7 @@ _DEVIATION_EDIT_SECTIONS: tuple[tuple[str, frozenset[str]], ...] = (
                 "m1e_other",
                 "direct_cause",
                 "root_cause",
-                "root_cause_category",
+                "root_cause_categories",
                 "why_chain",
                 "extended_investigation",
                 "extended_result",
@@ -481,7 +481,11 @@ async def update_deviation(
     deviation.due_date = due_date
 
     for field, value in data.items():
-        normalized = value.value if hasattr(value, "value") else value
+        if isinstance(value, list):
+            # 枚举列表（如 root_cause_categories）逐项取值后再比较/写入。
+            normalized = [item.value if hasattr(item, "value") else item for item in value]
+        else:
+            normalized = value.value if hasattr(value, "value") else value
         if getattr(deviation, field) != normalized:
             changed.add(field)
         setattr(deviation, field, normalized)
@@ -539,16 +543,17 @@ async def update_deviation(
 
 
 def _investigation_missing(deviation: Deviation) -> list[str]:
-    """调查结论字段；提交评估和关闭时都要复核，避免进入评估后被清空。"""
+    """调查结论字段；提交评估和关闭时都要复核，避免进入评估后被清空。
+
+    5Why 分析为选填项，不参与流转前的补齐校验。
+    """
     missing: list[str] = []
     if not (deviation.direct_cause or "").strip():
         missing.append("直接原因")
     if not (deviation.root_cause or "").strip():
         missing.append("根本原因")
-    if not deviation.root_cause_category:
+    if not deviation.root_cause_categories:
         missing.append("根本原因分类")
-    if not deviation.why_chain:
-        missing.append("5Why 分析")
     return missing
 
 
@@ -806,7 +811,7 @@ def deviation_brief(
         "qa_person_name": deviation.qa_person_name,
         "description": deviation.description,
         "classification": deviation.classification,
-        "root_cause_category": deviation.root_cause_category,
+        "root_cause_categories": deviation.root_cause_categories or [],
         "quality_impact": deviation.quality_impact,
         "is_repeat": deviation.is_repeat,
         "capa_initiated": deviation.capa_initiated,

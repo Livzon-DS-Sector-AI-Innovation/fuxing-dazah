@@ -88,6 +88,25 @@ class TestCreateRole:
         assert overrides == {"equipment": "all", "safety": "department"}
 
 
+class TestRolePermissionVisibility:
+    async def test_role_permission_ids_exclude_deleted_permissions(
+        self, db_session: AsyncSession, make_role, make_permission,
+    ) -> None:
+        """角色详情只返回有效权限：软删权限的关联不能泄进权限树。"""
+        role = await make_role()
+        active = await make_permission()
+        deleted = await make_permission()
+        await _repo.set_role_permissions(
+            db_session, role.id, [active.id, deleted.id]
+        )
+        deleted.is_deleted = True
+        await db_session.flush()
+
+        assert set(
+            await _repo.get_role_permission_ids(db_session, role.id)
+        ) == {active.id}
+
+
 class TestUpdateRole:
     async def test_update_name_and_data_scope(
         self, db_session: AsyncSession, make_role,
@@ -114,6 +133,31 @@ class TestUpdateRole:
             db_session, role.id, UpdateRoleInput(permission_ids=[p2.id]),
         )
         assert await _repo.get_role_permission_ids(db_session, role.id) == [p2.id]
+
+    async def test_update_permissions_invalidates_holder_cache(
+        self, db_session: AsyncSession, make_role, make_permission, make_user,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """权限变化后立即失效持有者缓存（否则收权要等 5 分钟 TTL）。"""
+        import app.platform.permission.service as service_mod
+
+        invalidated: list[str] = []
+
+        async def _spy(user_id: str) -> None:
+            invalidated.append(user_id)
+
+        monkeypatch.setattr(service_mod, "invalidate_user_cache", _spy)
+        role = await make_role()
+        holder = await make_user()
+        await _service.assign_role_to_user(db_session, holder.id, role.id)
+        perm = await make_permission()
+        invalidated.clear()  # 分配本身也会失效缓存，只看更新触发的
+
+        await _service.update_role(
+            db_session, role.id, UpdateRoleInput(permission_ids=[perm.id]),
+        )
+
+        assert str(holder.id) in invalidated
 
     async def test_update_system_role_forbidden(
         self, db_session: AsyncSession, make_role,
@@ -249,6 +293,29 @@ class TestDepartmentRoleAssignment:
             db_session, role.id, ["od-dept-a"],
         )
         assert len(await _repo.list_role_departments(db_session, role.id)) == 1
+
+    async def test_assign_super_admin_forbidden(
+        self, db_session: AsyncSession, make_role,
+    ) -> None:
+        """super_admin 角色不能分配给部门（超管判定只认直接分配）。"""
+        from sqlalchemy import select
+
+        from app.platform.permission.models import Role
+
+        role = (
+            await db_session.execute(select(Role).where(Role.code == "super_admin"))
+        ).scalar_one_or_none()
+        if role is None:
+            role = await make_role(code="super_admin", is_system=True)
+        with pytest.raises(ForbiddenException, match="不支持部门分配"):
+            await _service.assign_role_to_department(
+                db_session, role.id, ["od-dept-a"],
+            )
+        dept_ids = [
+            dr.feishu_department_id
+            for dr in await _repo.list_role_departments(db_session, role.id)
+        ]
+        assert "od-dept-a" not in dept_ids
 
     async def test_remove_then_reassign_reactivates(
         self, db_session: AsyncSession, make_role,

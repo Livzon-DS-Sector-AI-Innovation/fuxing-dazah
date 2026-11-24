@@ -1,7 +1,7 @@
 """试用期时长配置（hr.system_settings KV + 进程内缓存）。
 
 computed_probation_end 是同步 property，无法在属性访问时查库，因此用
-进程级缓存：启动（main lifespan）、每日提醒任务、转正发起时刷新；
+进程级缓存：启动（hr/lifecycle.py）、每日提醒任务、转正发起时刷新；
 配置变更后最迟次日生效，满足"极少调整"的时长配置场景。
 """
 

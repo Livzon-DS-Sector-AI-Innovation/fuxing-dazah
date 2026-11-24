@@ -1,16 +1,18 @@
 """Permission business logic service."""
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    AppException,
     DuplicateException,
     ForbiddenException,
     NotFoundException,
 )
 from app.platform.permission.cache import invalidate_user_cache
-from app.platform.permission.models import Role
+from app.platform.permission.models import Permission, Role
 from app.platform.permission.repository import PermissionRepository
 from app.platform.permission.schemas import (
     CreateRoleInput,
@@ -18,6 +20,28 @@ from app.platform.permission.schemas import (
 )
 
 _repo = PermissionRepository()
+
+_ROLE_MANAGE = "permission:role:manage"
+_SCOPE_PRIORITY = {
+    "all": 4,
+    "department_and_children": 3,
+    "department": 2,
+    "self_only": 1,
+}
+
+
+def _scope_rank(scope: str | None) -> int:
+    """数据范围宽窄序；未知值按 0（比仅自己更窄），fail-closed。"""
+    return _SCOPE_PRIORITY.get(scope or "", 0)
+
+
+@dataclass
+class _RoleState:
+    """用于范围检查的角色状态（当前或提交后）。"""
+
+    permission_ids: list[uuid.UUID]
+    data_scope: str
+    overrides: dict[str, str]
 
 
 class PermissionService:
@@ -46,6 +70,128 @@ class PermissionService:
 
         # re-fetch after updates
         return await _repo.get_role_by_id(db, role.id) or role
+
+    # ── 委派范围检查（role:manage 全权跳过） ──
+
+    async def assert_role_within_actor(
+        self,
+        db: AsyncSession,
+        actor_id: uuid.UUID,
+        *,
+        permission_ids: list[uuid.UUID] | None = None,
+        data_scope: str | None = None,
+        overrides: dict[str, str] | None = None,
+        existing_role_id: uuid.UUID | None = None,
+    ) -> None:
+        """非 role:manage 操作者只能操作权限码与数据范围都在自身范围内的角色。
+
+        existing_role_id：检查角色当前状态（更新 / 删除 / 分配时必须传）。
+        permission_ids / data_scope / overrides：检查提交后的目标状态（给了才查）。
+        """
+        actor_codes = await _repo.get_user_permission_codes(db, actor_id)
+        if _ROLE_MANAGE in actor_codes:
+            # 全权跳过范围比较，但仍校验 id 存在性（防写入悬空关联）
+            if permission_ids is not None:
+                await self._assert_permission_ids_exist(db, permission_ids)
+            return
+        actor_scopes = await _repo.get_user_resource_scopes(db, actor_id)
+
+        current: _RoleState | None = None
+        if existing_role_id is not None:
+            current = await self._load_role_state(db, existing_role_id)
+            if current is not None:
+                await self._assert_state_within(db, actor_codes, actor_scopes, current)
+
+        if permission_ids is None and data_scope is None and overrides is None:
+            return
+        after = _RoleState(
+            permission_ids=(
+                permission_ids
+                if permission_ids is not None
+                else (current.permission_ids if current else [])
+            ),
+            data_scope=(
+                data_scope
+                if data_scope is not None
+                else (current.data_scope if current else "self_only")
+            ),
+            overrides=(
+                overrides
+                if overrides is not None
+                else (current.overrides if current else {})
+            ),
+        )
+        await self._assert_state_within(db, actor_codes, actor_scopes, after)
+
+    async def filter_roles_within_actor(
+        self, db: AsyncSession, actor_id: uuid.UUID, roles: list[Role]
+    ) -> list[Role]:
+        """列表口径：非全权只返回权限码都在自身范围内的角色（不查数据范围）。"""
+        actor_codes = await _repo.get_user_permission_codes(db, actor_id)
+        if _ROLE_MANAGE in actor_codes:
+            return roles
+        perms = {p.id: p for p in await _repo.list_permissions(db)}
+        result: list[Role] = []
+        for role in roles:
+            ids = await _repo.get_role_permission_ids(db, role.id)
+            codes = {
+                perms[pid].code
+                for pid in ids
+                if pid in perms and not perms[pid].is_deleted
+            }
+            if codes <= actor_codes:
+                result.append(role)
+        return result
+
+    async def _load_role_state(
+        self, db: AsyncSession, role_id: uuid.UUID
+    ) -> _RoleState | None:
+        role = await _repo.get_role_by_id(db, role_id)
+        if role is None:
+            return None
+        return _RoleState(
+            permission_ids=await _repo.get_role_permission_ids(db, role_id),
+            data_scope=role.data_scope,
+            overrides=await _repo.get_role_data_scope_overrides(db, role_id),
+        )
+
+    async def _assert_permission_ids_exist(
+        self, db: AsyncSession, permission_ids: list[uuid.UUID]
+    ) -> list[Permission]:
+        perms = await _repo.get_permissions_by_ids(db, permission_ids)
+        known = {p.id for p in perms}
+        missing = [pid for pid in permission_ids if pid not in known]
+        if missing:
+            raise AppException(
+                status_code=400,
+                message=f"权限不存在: {', '.join(str(pid) for pid in missing)}",
+            )
+        return perms
+
+    async def _assert_state_within(
+        self,
+        db: AsyncSession,
+        actor_codes: set[str],
+        actor_scopes: dict[str, str],
+        state: _RoleState,
+    ) -> None:
+        perms = await self._assert_permission_ids_exist(db, state.permission_ids)
+        # 软删权限不参与授予能力/范围比较（仍允许原样回传保留关联行）
+        live = [p for p in perms if not p.is_deleted]
+        beyond = sorted({p.code for p in live} - actor_codes)
+        if beyond:
+            raise ForbiddenException(
+                f"无权授予超出自己权限范围的权限: {', '.join(beyond[:5])}"
+            )
+        for perm in live:
+            role_scope = state.overrides.get(perm.module) or state.data_scope
+            actor_scope = actor_scopes.get(
+                f"{perm.module}:{perm.resource}", "self_only"
+            )
+            if _scope_rank(role_scope) > _scope_rank(actor_scope):
+                raise ForbiddenException(
+                    f"角色在模块 {perm.module} 的数据范围超出你的权限范围"
+                )
 
     async def update_role(
         self, db: AsyncSession, role_id: uuid.UUID, data: UpdateRoleInput
@@ -88,6 +234,15 @@ class PermissionService:
             await _repo.set_role_data_scope_overrides(
                 db, role_id, data.data_scope_overrides
             )
+        # 权限码/数据范围变化影响所有持有者（直接 + 部门继承）：立即失效缓存，
+        # 否则收回的权限最长要等 5 分钟 TTL 才生效
+        if (
+            data.permission_ids is not None
+            or data.data_scope is not None
+            or data.data_scope_overrides is not None
+        ):
+            for uid in await _repo.get_all_user_ids_for_role(db, role_id):
+                await invalidate_user_cache(str(uid))
 
         # UPDATE → re-fetch (SQLAlchemy async rule)
         return await _repo.get_role_by_id(db, role_id) or role
@@ -139,6 +294,9 @@ class PermissionService:
         role = await _repo.get_role_by_id(db, role_id)
         if not role:
             raise NotFoundException("角色", str(role_id))
+        if role.code == "super_admin":
+            # 超管判定只认直接分配；部门分配会产生「有全部权限码但不是超管」的账号
+            raise ForbiddenException("超级管理员角色不支持部门分配")
 
         for dept_id in feishu_department_ids:
             await _repo.assign_role_to_department(db, role_id, dept_id)

@@ -321,11 +321,14 @@
 }
 
 .cellEllipsis {
-  display: block;
+  /* inline-block：截断盒参与行内排布，单元格 text-align 居中才能生效
+     （block 盒贴左，宽列下文本视觉偏左） */
+  display: inline-block;
   max-width: 12em;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .numValue {
@@ -440,99 +443,66 @@
   margin-top: 16px;
 }
 
-.entryModal :global(.ant-modal-body),
+/* 导入弹窗体同样只当容器查询的容器：分栏与限高在 .entryBody */
 .importModal :global(.ant-modal-body) {
-  max-height: calc(100vh - 220px);
   padding-right: 2px;
-  overflow-y: auto;
+  container: entry / inline-size;
 }
 
-.modalHeading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.modalHeadingCode {
-  padding: 2px 7px;
-  border: 1px solid var(--color-hairline);
-  border-radius: 5px;
-  background: var(--color-surface);
-  color: var(--color-steel);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.45;
-  font-variant-numeric: tabular-nums;
-}
-
-.modalContext {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 9px 12px;
-  border: 1px solid var(--color-hairline-soft);
-  border-radius: 9px;
-  background: var(--color-surface-soft);
-}
-
-.contextStandard {
-  flex: none;
-  color: var(--color-charcoal);
-  font-size: 11.5px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.contextName {
-  flex: 1 1 280px;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-steel);
-  font-size: 11.5px;
-  line-height: 1.4;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.contextProduct {
-  flex: none;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: var(--color-tint-lavender);
-  color: var(--color-primary-deep);
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.modalHint {
-  margin: 8px 2px 14px;
-  color: var(--color-stone);
-  font-size: 11.5px;
-  line-height: 1.5;
+/* 手工登记弹窗体只当容器查询的容器（容器查不到自己）：分栏与限高在内层 .entryBody */
+.entryModal :global(.ant-modal-body) {
+  padding-right: 2px;
+  container: entry / inline-size;
 }
 
 .detailError {
-  margin-inline-start: 6px;
   color: var(--color-error);
 }
 
-.modalSection {
-  margin-top: 14px;
+/* 编辑态详情加载中 / 失败：整块占位，不出空表单（空表单保存会清空历史值） */
+.entryState {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 240px;
+  color: var(--color-steel);
+  font-size: 12.5px;
 }
 
-.sectionHead {
+/* 左录入单 + 右报告信息。限高下两栏各自内部滚动，弹窗体本身不滚（不再出现双层滚动条） */
+.entryBody {
   display: flex;
+  gap: 16px;
+  /* 弹窗居中（centered）：标题+底栏+内边距约 130px，上下再各留安全边距；
+     大屏绝对上限 640px，防止项目多的模板把弹窗撑满整屏 */
+  max-height: min(640px, calc(100dvh - 240px));
+}
+
+.entrySheet {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-canvas);
+}
+
+.entryHead {
+  display: flex;
+  flex: none;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-hairline);
 }
 
-.sectionTitle {
+.entryTitle {
   margin: 0;
   color: var(--color-ink);
   font-size: 13px;
@@ -540,116 +510,173 @@
   line-height: 1.4;
 }
 
-.sectionMeta {
+.sheetMeta {
   color: var(--color-stone);
   font-size: 11.5px;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
 }
 
-.formGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px 14px;
+.sheetScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.formGrid :global(.ant-form-item) {
-  min-width: 0;
-  margin-bottom: 0;
-}
-
-.formGrid :global(.ant-form-item-label) {
-  padding-bottom: 3px;
-}
-
-.formGrid :global(.ant-form-item-label > label) {
-  height: auto;
-  color: var(--color-steel);
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-.formGrid :global(.ant-input) {
-  height: 36px;
-}
-
-.formGrid :global(.ant-picker) {
-  height: 36px;
-}
-
-.formGrid :global(.ant-select-selector) {
-  height: 36px !important;
-}
-
-/* 结果填写表：项目名与标准要求上下排，整格居中 */
-.denseTable :global(.ant-table) {
+/* 录入单：紧凑、左对齐、表头吸顶。单元格内边距沿用全局紧凑表口径（全局带
+   !important，这里不重复声明） */
+.sheetTable :global(.ant-table) {
+  /* 全局给 .ant-table 设了 overflow: hidden，它会抢当 sticky 表头的参照容器，
+     表头随内容滚走；圆角裁切已由外层 .entrySheet 负责 */
+  overflow: visible;
   font-variant-numeric: tabular-nums;
 }
 
-.denseTable :global(.ant-table-thead > tr > th) {
-  padding: 6px 8px;
+.sheetTable :global(.ant-table-thead > tr > th) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   border-bottom: 1px solid var(--color-hairline);
   background: var(--color-surface-soft);
   color: var(--color-slate);
   font-size: 11.5px;
   font-weight: 600;
   line-height: 1.35;
-  text-align: center;
-  white-space: normal;
+  text-align: left;
+  white-space: nowrap;
 }
 
-.denseTable :global(.ant-table-tbody > tr > td) {
-  padding: 4px 8px;
+.sheetTable :global(.ant-table-tbody > tr > td) {
   border-bottom: 1px solid var(--color-hairline-soft);
   color: var(--color-charcoal);
-  font-size: 12.5px;
   line-height: 1.4;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.sheetTable :global(.ant-table-thead > tr > th:first-child),
+.sheetTable :global(.ant-table-tbody > tr > td:first-child) {
   text-align: center;
 }
 
-.denseTable :global(.ant-table-tbody > tr:last-child > td) {
+.sheetTable :global(.ant-table-tbody > tr:last-child > td) {
   border-bottom: none;
 }
 
-.denseTable :global(.ant-table-tbody > tr:hover > td) {
+.sheetTable :global(.ant-table-tbody > tr:hover > td) {
   background: var(--color-surface-soft) !important;
 }
 
+.sheetIndex {
+  color: var(--color-stone);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 项目名 / 标准要求：放不下折到两行，再长截断（悬停看全文） */
+.entryName,
+.entrySpec {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.entryName {
+  font-weight: 500;
+}
+
+.entrySpec {
+  color: var(--color-steel);
+  font-size: 12px;
+}
+
+/* ===== 报告信息侧栏 ===== */
+
+/* 内容少时随左栏拉伸铺满，内容多（字段多 / 矮屏）时自己滚 */
+.entryPanel {
+  flex: 0 0 288px;
+  padding: 12px 14px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-surface-soft);
+}
+
+/* 只读标识行与下方表单共用 72px 标签列，取值左缘对齐 */
+.panelMeta {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 4px 0;
+  margin: 8px 0 0;
+}
+
+.panelMeta dt,
+.panelMeta dd {
+  font-size: 12.5px;
+  line-height: 20px;
+}
+
+.panelMeta dt {
+  padding-right: 8px;
+  color: var(--color-steel);
+  font-weight: 600;
+}
+
+.panelMeta dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-charcoal);
+}
+
+.panelMeta small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.panelForm {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.panelForm :global(.ant-form-item) {
+  margin-bottom: 10px;
+}
+
+.panelForm :global(.ant-form-item-label > label) {
+  color: var(--color-steel);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* 标准外项目表：项目名 + 英文名副行，左对齐（录入单同款的只读视图） */
 .itemCell {
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 2px;
-  text-align: center;
 }
 
 .itemName {
   color: var(--color-charcoal);
   font-size: 12.5px;
   font-weight: 500;
-  line-height: 1.35;
-}
-
-.itemSpec {
-  max-width: 58ch;
-  color: var(--color-stone);
-  font-size: 11px;
   line-height: 1.4;
 }
 
-.resultCell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.resultCell :global(.ant-segmented) {
-  flex: none;
-}
-
-.resultInput {
-  width: 132px;
+.itemSpec {
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
 }
 
 .inlineEmpty {
@@ -659,8 +686,72 @@
   text-align: center;
 }
 
-/* ===== docx 导入 ===== */
+/* 录入单底部的「标准外项目」入口：只在 docx 里有模板外的项目时出现 */
+.sheetFoot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 14px;
+  border-top: 1px solid var(--color-hairline);
+  background: var(--color-tint-peach);
+  color: #793400;
+  font-size: 12px;
+  line-height: 1.4;
+}
 
+.sheetFoot :global(.anticon) {
+  flex: none;
+}
+
+.sheetFoot :global(.ant-btn) {
+  flex: none;
+  margin-inline-start: auto;
+  color: #793400;
+}
+
+/* 侧栏字段下方的小字（模板全名、识别原文） */
+.fieldHint {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* 录入单标题右侧的「返回检测结果」：去掉链接按钮的固定高度与内边距，贴齐标题 */
+.backLink {
+  height: auto;
+  padding: 0;
+  font-size: 12px;
+}
+
+/* 自动匹配失败时左栏的占位说明 */
+.entryNotice {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px;
+  color: var(--color-steel);
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.entryNotice b {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+/* ===== docx 批量导入 ===== */
+
+/* 还没选文件：整块拖拽区 */
 .dropzone {
   display: block;
 }
@@ -703,127 +794,426 @@
   line-height: 1.5;
 }
 
-.dropFile {
-  display: inline-block;
-  margin: 8px 0 0;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: var(--color-tint-lavender);
-  color: var(--color-primary-deep);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-
-.matchBannerWarn,
-.matchBannerOk {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 9px 12px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.matchBannerWarn {
-  background: var(--color-tint-peach);
-  color: #793400;
-}
-
-.matchBannerOk {
-  background: var(--color-tint-mint);
-  color: var(--color-success-deep);
-}
-
-.matchBannerWarn :global(.anticon),
-.matchBannerOk :global(.anticon) {
-  flex: none;
-  margin-top: 2px;
-}
-
-.standardPick {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.standardPick .matchBannerWarn {
-  margin-top: 0;
-}
-
-.importStandardSelect {
-  width: 100%;
-  max-width: 460px;
-}
-
-.previewMeta {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin-top: 12px;
-  overflow: hidden;
-  border: 1px solid var(--color-hairline);
-  border-radius: 9px;
-}
-
-.metaCell {
-  min-width: 0;
-  padding: 8px 10px 9px;
-  border-left: 1px solid var(--color-hairline-soft);
-}
-
-.metaCell:first-child {
-  border-left: none;
-}
-
-.metaLabel {
+/* 已选文件：同一个拖拽区收成添加条（随时继续拖入），右侧是汇总计数 */
+.fileBar {
   display: block;
-  color: var(--color-stone);
-  font-size: 10.5px;
+  margin-bottom: 12px;
+}
+
+.fileBar :global(.ant-upload-drag) {
+  border-color: var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-surface-soft);
+  transition: border-color 0.15s ease;
+}
+
+.fileBar :global(.ant-upload-drag:hover) {
+  border-color: var(--color-primary);
+}
+
+.fileBar :global(.ant-upload-btn) {
+  padding: 0 !important;
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  text-align: left;
+}
+
+.fileIcon {
+  flex: none;
+  color: var(--color-primary);
+  font-size: 16px;
+}
+
+.filePrompt {
+  flex: none;
+  color: var(--color-steel);
+  font-size: 12.5px;
   line-height: 1.4;
 }
 
-.metaValue {
-  display: block;
-  margin-top: 1px;
-  overflow: hidden;
-  color: var(--color-charcoal);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.45;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.missingHint {
-  margin: 8px 2px 0;
-  color: var(--color-stone);
+/* 汇总计数（同出具记录页头部的统计条） */
+.tally {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  justify-content: flex-end;
+  color: var(--color-steel);
   font-size: 11.5px;
-  line-height: 1.55;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
 
-.previewSection {
-  margin-top: 14px;
+.tallyItem {
+  padding: 0 10px;
+  border-left: 1px solid var(--color-hairline);
 }
 
-.previewSectionHead {
+.tallyItem:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+
+.tallyItem b {
+  margin-right: 3px;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* 文件列表 + 审核舞台。高度定死：切换文件时两页在同一框里滑动，舞台不跳 */
+.importLayout {
   display: flex;
+  gap: 16px;
+  height: clamp(360px, calc(100dvh - 350px), 640px);
+  min-height: 0;
+}
+
+.fileRail {
+  display: flex;
+  flex: 0 0 236px;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-surface-soft);
+}
+
+.railHead {
+  display: flex;
+  flex: none;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--color-hairline);
 }
 
-.previewSectionTitle {
+.railTitle {
   color: var(--color-ink);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 650;
   line-height: 1.4;
 }
 
+.railTally {
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.railList {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.railItem {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.railItem:hover {
+  background: var(--color-tint-gray);
+}
+
+.railItem:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.railItem:disabled {
+  cursor: default;
+}
+
+.railItemActive,
+.railItemActive:hover {
+  background: var(--color-canvas);
+  box-shadow: inset 0 0 0 1px var(--color-hairline-strong);
+}
+
+.railIndex {
+  flex: none;
+  width: 18px;
+  color: var(--color-stone);
+  font-size: 11.5px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.railItemActive .railIndex {
+  color: var(--color-primary);
+  font-weight: 650;
+}
+
+.railText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.railName {
+  overflow: hidden;
+  color: var(--color-charcoal);
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.railItemActive .railName {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+/* 已登记的文件名字退一层，没处理的自然浮出来 */
+.railItemDone .railName {
+  color: var(--color-steel);
+}
+
+.railSub {
+  overflow: hidden;
+  color: var(--color-stone);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.railIcon {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 14px;
+  color: var(--color-stone);
+  font-size: 13px;
+}
+
+.railIconSpin {
+  color: var(--color-steel);
+}
+
+.railIconWarn {
+  color: var(--color-warning);
+}
+
+.railIconOk {
+  color: var(--color-success-deep);
+}
+
+.railIconError {
+  color: var(--color-error);
+}
+
+/* 审核舞台：同一时刻最多两页——离场页在下、当前页在上，一起平移像一条连续的胶片 */
+.reviewStage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.reviewSlide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-canvas);
+}
+
+/* 审核区撑满定高的舞台，而不是按内容长到 max-height（否则会和内部滚动区叠成双层滚动） */
+.reviewSlide .entryBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.slideInRight {
+  animation: coa-slide-in-right 280ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.slideInLeft {
+  animation: coa-slide-in-left 280ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.slideOutLeft {
+  animation: coa-slide-out-left 280ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.slideOutRight {
+  animation: coa-slide-out-right 280ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+/* 只动 transform：全程在合成线程上，不触发布局 */
+@keyframes coa-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes coa-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes coa-slide-out-left {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes coa-slide-out-right {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* 重新解析期间压暗审核区。自己画遮罩而不是套 Spin 的嵌套容器，免得它的包装层搅乱弹性布局 */
+.reviewBusy {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--color-steel);
+  font-size: 12.5px;
+}
+
+/* 单页的「解析失败 / 已登记」占位 */
+.stateBlock {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  color: var(--color-steel);
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.stateBlock b {
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.stateIcon {
+  margin-bottom: 4px;
+  font-size: 28px;
+}
+
+.stateIconOk {
+  color: var(--color-success-deep);
+}
+
+.stateIconError {
+  color: var(--color-error);
+}
+
 /* ===== 响应式 ===== */
+
+/* 弹窗体放不下「录入单 560 + 间距 + 侧栏 288」时上下堆叠，弹窗体自己滚 */
+@container entry (max-width: 863px) {
+  .entryBody {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .entrySheet {
+    flex: none;
+    min-height: 280px;
+    max-height: 340px;
+  }
+
+  .entryPanel {
+    flex: none;
+    overflow: visible;
+  }
+}
+
+/* 文件列表与审核区放不下并排时：列表变成顶部横条，审核区在下方（更窄时审核区内部再上下堆叠） */
+@container entry (max-width: 999px) {
+  .importLayout {
+    flex-direction: column;
+    height: auto;
+    max-height: calc(100dvh - 350px);
+    overflow-y: auto;
+  }
+
+  .fileRail {
+    flex: none;
+  }
+
+  .railHead {
+    padding: 7px 12px 5px;
+  }
+
+  .railList {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .railItem {
+    width: auto;
+    max-width: 260px;
+  }
+
+  .reviewStage {
+    flex: none;
+    height: 440px;
+  }
+}
 
 @media (max-width: 900px) {
   .scopeBand {
@@ -834,41 +1224,9 @@
     border-right: none;
     border-bottom: 1px solid var(--color-hairline);
   }
-
-  .previewMeta {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .metaCell:nth-child(3n + 1) {
-    border-left: none;
-  }
-
-  .metaCell:nth-child(n + 4) {
-    border-top: 1px solid var(--color-hairline-soft);
-  }
 }
 
 @media (max-width: 600px) {
-  .previewMeta {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .metaCell:nth-child(3n + 1) {
-    border-left: 1px solid var(--color-hairline-soft);
-  }
-
-  .metaCell:nth-child(2n + 1) {
-    border-left: none;
-  }
-
-  .metaCell:nth-child(n + 3) {
-    border-top: 1px solid var(--color-hairline-soft);
-  }
-
-  .resultInput {
-    width: 110px;
-  }
-
   .sheetStats {
     width: 100%;
     padding-top: 2px;
@@ -876,7 +1234,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dropzone :global(.ant-upload-drag) {
+  .dropzone :global(.ant-upload-drag),
+  .fileBar :global(.ant-upload-drag) {
     transition: none;
+  }
+
+  .slideInRight,
+  .slideInLeft,
+  .slideOutLeft,
+  .slideOutRight {
+    animation: none;
   }
 }

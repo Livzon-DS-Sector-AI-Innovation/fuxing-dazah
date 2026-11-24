@@ -3,14 +3,17 @@
 bitable API 全部 monkeypatch（不真连飞书）；Redis 锁 monkeypatch 放行。
 """
 
+import asyncio
 import uuid
 from datetime import date, datetime
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import redis as core_redis
 from app.modules.hr import models as hr_models
 from app.modules.hr.employee_sync import bitable_client as bc
 from app.modules.hr.employee_sync import config as sync_config
@@ -18,6 +21,7 @@ from app.modules.hr.employee_sync import scheduled
 from app.modules.hr.employee_sync import service as sync_service
 from app.modules.hr.employee_sync.mapping import convert_source_fields
 from app.modules.hr.repository import EmployeeRepository
+from app.modules.hr.service import EmployeeService
 
 
 def _rand(prefix: str = "") -> str:
@@ -227,14 +231,23 @@ class TestTrainingRoster:
 # ─── 全量对账（mock bitable） ───
 
 
-def _mock_bitable(monkeypatch, *, source_records, source_fields=None):
+def _mock_bitable(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source_records: list[dict[str, Any]],
+    source_fields: list[dict[str, Any]] | None = None,
+) -> None:
     """mock 平台 bitable 适配器（源表只读；同步不写飞书）。"""
     source_fields = source_fields if source_fields is not None else []
 
-    async def _list_all_records(app_token, table_id, **kwargs):
+    async def _list_all_records(
+        app_token: str, table_id: str, **kwargs: Any,
+    ) -> list[dict[str, Any]]:
         return list(source_records if table_id == "tbl_source" else [])
 
-    async def _list_fields(app_token, table_id, **kwargs):
+    async def _list_fields(
+        app_token: str, table_id: str, **kwargs: Any,
+    ) -> list[dict[str, Any]]:
         return list(source_fields)
 
     monkeypatch.setattr(sync_service.bitable, "list_all_records", _list_all_records)
@@ -247,6 +260,57 @@ def _no_lock(monkeypatch):
     """绕过 Redis 同步锁。"""
     monkeypatch.setattr(sync_service.EmployeeSyncService, "acquire_lock", AsyncMock(return_value=True))
     monkeypatch.setattr(sync_service.EmployeeSyncService, "release_lock", AsyncMock())
+
+
+class _FakeRedis:
+    """最小 Redis 替身：只实现同步锁用到的 set(nx)/get/eval。"""
+
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
+
+    async def set(
+        self, key: str, value: str, ex: int | None = None, nx: bool = False,
+    ) -> bool | None:
+        if nx and key in self.data:
+            return None
+        self.data[key] = value
+        return True
+
+    async def get(self, key: str) -> str | None:
+        return self.data.get(key)
+
+    async def eval(self, script: str, numkeys: int, key: str, token: str) -> int:
+        # 与 _RELEASE_LUA 的 CAS 删除语义等价
+        if self.data.get(key) == token:
+            del self.data[key]
+            return 1
+        return 0
+
+
+class TestReconcileLock:
+    """同步锁：持锁令牌 + 只删自己的锁（TTL 过期后不能误删下一轮的锁）。"""
+
+    async def test_acquire_returns_owner_token_and_rejects_concurrent(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake = _FakeRedis()
+        monkeypatch.setattr(core_redis, "redis_client", fake)
+        service = sync_service.EmployeeSyncService(AsyncMock())
+
+        token = await service.acquire_lock()
+        assert isinstance(token, str) and token
+        assert await service.acquire_lock() is None
+
+    async def test_release_only_deletes_own_lock(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake = _FakeRedis()
+        fake.data[sync_service._LOCK_KEY] = "other-owner"
+        monkeypatch.setattr(core_redis, "redis_client", fake)
+
+        await sync_service.EmployeeSyncService(AsyncMock()).release_lock("my-token")
+
+        assert fake.data.get(sync_service._LOCK_KEY) == "other-owner"
 
 
 class TestReconcile:
@@ -315,6 +379,124 @@ class TestReconcile:
         )
         assert page.scalar_one_or_none() is not None
 
+    async def test_no_write_when_source_unchanged(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """源表无变化时不得重写同步时间戳（否则每晚全量员工无谓 UPDATE、updated_at 漂移）。"""
+        await _write_config(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        number = f"E{_rand()}"
+        sentinel = date(2020, 1, 1)
+        db_session.add(hr_models.Employee(
+            name="张三", employee_number=number, department="测试部", position="工程师",
+            status="在职", hire_date=date(2020, 1, 1),
+            feishu_record_id="rec_same", feishu_synced_at=sentinel,
+        ))
+        await db_session.flush()
+
+        _mock_bitable(monkeypatch, source_records=[{
+            "record_id": "rec_same",
+            "fields": {"工号": number, "姓名": "张三", "体现部门": "测试部", "职位": "工程师"},
+        }])
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert stats["updated"] == 1
+        row = await EmployeeRepository(db_session).get_by_employee_number(number)
+        assert row is not None
+        assert row.feishu_synced_at == sentinel  # 无变化 → 不刷新同步时间戳
+
+    async def test_bad_row_does_not_block_other_rows(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """一条坏行只影响本行（批量失败后逐行降级），同批其他行照常入库。"""
+        await _write_config(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        good1, bad, good2 = f"E{_rand()}", f"E{_rand()}", f"E{_rand()}"
+        _mock_bitable(monkeypatch, source_records=[
+            {"record_id": "rec_good1", "fields": {"工号": good1, "姓名": "好一"}},
+            {"record_id": "rec_bad", "fields": {"工号": bad, "姓名": "坏行"}},
+            {"record_id": "rec_good2", "fields": {"工号": good2, "姓名": "好二"}},
+        ])
+
+        orig = EmployeeRepository.upsert_from_bitable
+
+        async def _fail_bad(
+            self: EmployeeRepository, data: dict[str, Any], record_id: str,
+            **kwargs: Any,
+        ) -> tuple[hr_models.Employee, bool]:
+            if record_id == "rec_bad":
+                raise RuntimeError("模拟坏数据")
+            return await orig(self, data, record_id, **kwargs)
+
+        monkeypatch.setattr(EmployeeRepository, "upsert_from_bitable", _fail_bad)
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert any("模拟坏数据" in e for e in stats["errors"])
+        repo = EmployeeRepository(db_session)
+        assert await repo.get_by_employee_number(good1) is not None
+        assert await repo.get_by_employee_number(good2) is not None
+        assert await repo.get_by_employee_number(bad, include_deleted=True) is None
+        assert stats["created"] == 2
+
+    async def test_batch_failure_keeps_existing_rows_updateable(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """批量失败逐行降级时，本批已改动的存量行必须能继续更新（回滚后对象被 expire）。"""
+        await _write_config(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        good, bad = f"E{_rand()}", f"E{_rand()}"
+        db_session.add_all([
+            hr_models.Employee(
+                name="旧名一", employee_number=good, department="测试部",
+                position="工程师", status="在职", hire_date=date(2020, 1, 1),
+                feishu_record_id="rec_good_update",
+            ),
+            hr_models.Employee(
+                name="旧名二", employee_number=bad, department="测试部",
+                position="工程师", status="在职", hire_date=date(2020, 1, 1),
+                feishu_record_id="rec_bad_update",
+            ),
+        ])
+        await db_session.flush()
+        _mock_bitable(monkeypatch, source_records=[
+            {"record_id": "rec_good_update", "fields": {"工号": good, "姓名": "新名一"}},
+            # 姓名超 varchar(64) → 批量 flush 失败，触发逐行降级
+            {"record_id": "rec_bad_update", "fields": {"工号": bad, "姓名": "x" * 200}},
+        ])
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert any("工号" in e for e in stats["errors"])
+        row = await EmployeeRepository(db_session).get_by_employee_number(good)
+        assert row is not None and row.name == "新名一"
+
+    async def test_retry_after_failed_insert_same_number(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """首条新建失败后，同工号的后续记录必须重新插入（不能写到已被回滚的游离对象）。"""
+        await _write_config(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        number = f"E{_rand()}"
+        _mock_bitable(monkeypatch, source_records=[
+            {"record_id": "rec_first", "fields": {"工号": number, "姓名": "首次"}},
+            {"record_id": "rec_second", "fields": {"工号": number, "姓名": "重试"}},
+        ])
+
+        orig = EmployeeService._sync_employee_training
+
+        async def _fail_first(self: EmployeeService, employee: hr_models.Employee) -> None:
+            if employee.feishu_record_id == "rec_first":
+                raise RuntimeError("台账失败")
+            await orig(self, employee)
+
+        monkeypatch.setattr(EmployeeService, "_sync_employee_training", _fail_first)
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert any("台账失败" in e for e in stats["errors"])
+        row = await EmployeeRepository(db_session).get_by_employee_number(number)
+        assert row is not None
+        assert row.name == "重试"
+        assert row.feishu_record_id == "rec_second"
 
     async def test_roster_edit_survives_reconcile(
         self, db_session: AsyncSession, monkeypatch, _no_lock,
@@ -351,6 +533,246 @@ class TestReconcile:
         assert removed >= 1
         _rows, total_after = await service.training_roster(keyword=number)
         assert total_after == 0
+
+
+class TestChunkFallback:
+    """批量落库失败后的逐行降级：多批推进 + 回滚后的索引重载范围。"""
+
+    @staticmethod
+    def _track_full_employee_scans(session: AsyncSession) -> list[int]:
+        """记录无 WHERE 的员工表全量 SELECT：预加载允许一次，降级重载必须带条件。"""
+        scans: list[int] = []
+
+        def _track(state: Any) -> None:
+            stmt = state.statement
+            if (
+                state.is_select
+                and stmt.get_final_froms() == [hr_models.Employee.__table__]
+                and stmt.whereclause is None
+            ):
+                scans.append(1)
+
+        event.listen(session.sync_session, "do_orm_execute", _track)
+        return scans
+
+    @staticmethod
+    def _existing(number: str, name: str, record_id: str) -> hr_models.Employee:
+        return hr_models.Employee(
+            name=name, employee_number=number, department="测试部",
+            position="工程师", status="在职", hire_date=date(2020, 1, 1),
+            feishu_record_id=record_id,
+        )
+
+    async def test_fallback_reloads_only_rows_of_the_failed_batch(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """批失败只重载本批涉及的行（工号 + record_id）；降级后其余行、后续批照常入库。
+
+        被顶替的旧行只能按 record_id 找回：重载若漏掉它，回滚后读过期属性会抛
+        MissingGreenlet，顶替者这行就同步不进来。
+        """
+        await _write_config(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        monkeypatch.setattr(sync_service, "_CHUNK_SIZE", 2)
+        moved, old_owner, bad, bad2, kept = (f"E{_rand()}" for _ in range(5))
+        db_session.add_all([
+            self._existing(old_owner, "被顶替", "rec_moved"),
+            self._existing(bad, "旧名乙", "rec_bad"),
+            self._existing(bad2, "旧名丁", "rec_bad2"),
+            self._existing(kept, "旧名丙", "rec_ok"),
+        ])
+        await db_session.flush()
+        # 两批都在批量 flush 处失败（姓名超长），各自逐行重放
+        _mock_bitable(monkeypatch, source_records=[
+            {"record_id": "rec_moved", "fields": {"工号": moved, "姓名": "顶替者"}},
+            {"record_id": "rec_bad", "fields": {"工号": bad, "姓名": "x" * 200}},
+            {"record_id": "rec_bad2", "fields": {"工号": bad2, "姓名": "x" * 200}},
+            {"record_id": "rec_ok", "fields": {"工号": kept, "姓名": "新名丙"}},
+        ])
+        scans = self._track_full_employee_scans(db_session)
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        repo = EmployeeRepository(db_session)
+        moved_row = await repo.get_by_employee_number(moved)
+        assert moved_row is not None and moved_row.feishu_record_id == "rec_moved"
+        old_row = await repo.get_by_employee_number(old_owner, include_deleted=True)
+        assert old_row is not None and old_row.is_deleted is True
+        assert old_row.feishu_record_id is None
+        for number, name in ((bad, "旧名乙"), (bad2, "旧名丁"), (kept, "新名丙")):
+            row = await repo.get_by_employee_number(number)
+            assert row is not None and row.name == name
+        assert sum(1 for e in stats["errors"] if e.startswith(f"工号 {bad}")) == 1
+        assert sum(1 for e in stats["errors"] if e.startswith(f"工号 {bad2}")) == 1
+        assert stats["created"] == 1
+        assert len(scans) == 1  # 仅预加载一次
+
+    async def test_insert_rolled_back_when_later_statement_in_batch_fails(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """批内新员工 INSERT 已执行、同次 flush 的后续语句才失败：重放不得残留或重复。"""
+        await _write_config(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        monkeypatch.setattr(sync_service, "_CHUNK_SIZE", 2)
+        number, kept = f"E{_rand()}", f"E{_rand()}"
+        # 同工号的软删台账页：新员工的台账页 INSERT 撞唯一约束
+        db_session.add(hr_models.TrainingLedgerPage(
+            employee_number=number, employee_name="历史", is_deleted=True,
+        ))
+        db_session.add(self._existing(kept, "旧名丙", "rec_ok"))
+        await db_session.flush()
+        _mock_bitable(monkeypatch, source_records=[
+            {"record_id": "rec_new", "fields": {"工号": number, "姓名": "新人"}},
+            {"record_id": "rec_ok", "fields": {"工号": kept, "姓名": "新名丙"}},
+        ])
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert any(e.startswith(f"工号 {number}") for e in stats["errors"])
+        repo = EmployeeRepository(db_session)
+        assert await repo.get_by_employee_number(number, include_deleted=True) is None
+        kept_row = await repo.get_by_employee_number(kept)
+        assert kept_row is not None and kept_row.name == "新名丙"
+        pages = await db_session.execute(
+            select(func.count()).select_from(hr_models.TrainingLedgerPage).where(
+                hr_models.TrainingLedgerPage.employee_number == number,
+            )
+        )
+        assert pages.scalar_one() == 1  # 只剩预置的软删行
+        assert stats["created"] == 0
+
+
+class TestExtraTablesFetch:
+    """定编数表、离职台账表的拉取与源表并行（落库仍排在主循环之后）。"""
+
+    @staticmethod
+    async def _bind_extra_tables(db_session: AsyncSession) -> None:
+        await _write_config(
+            db_session,
+            **{
+                sync_config.KEY_HEADCOUNT_TABLE_ID: "tbl_headcount",
+                sync_config.KEY_DEPARTURE_TABLE_ID: "tbl_departure",
+            },
+        )
+
+    @staticmethod
+    def _patch_bitable(
+        monkeypatch: pytest.MonkeyPatch, list_all_records: Any, list_fields: Any,
+    ) -> None:
+        monkeypatch.setattr(bc, "list_all_records", list_all_records)
+        monkeypatch.setattr(bc, "list_fields", list_fields)
+        monkeypatch.setattr(bc, "list_tables", AsyncMock(return_value=[]))
+
+    async def test_extra_tables_fetch_in_parallel_with_source(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """定编表、离职表的拉取与源表（记录 + schema）同时发出：任一返回前其余都已启动。"""
+        await self._bind_extra_tables(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        number, department, left = f"E{_rand()}", f"部门{_rand()}", f"E{_rand()}"
+        # 串行实现下先发出的拉取会一直等到超时
+        expected = {
+            ("records", "tbl_source"), ("fields", "tbl_source"),
+            ("records", "tbl_headcount"), ("records", "tbl_departure"),
+        }
+        started: set[tuple[str, str]] = set()
+        all_started = asyncio.Event()
+
+        async def _gate(kind: str, table_id: str) -> None:
+            started.add((kind, table_id))
+            if expected <= started:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=5)
+
+        async def _list_all_records(
+            app_token: str, table_id: str, **kwargs: Any,
+        ) -> list[dict[str, Any]]:
+            await _gate("records", table_id)
+            return list({
+                "tbl_source": [{"record_id": "rec_new", "fields": {"工号": number, "姓名": "新人"}}],
+                "tbl_headcount": [
+                    {"record_id": "hc_1", "fields": {"部门": department, "部门定编": 5}},
+                ],
+                "tbl_departure": [
+                    {"record_id": "dep_1", "fields": {
+                        "工号": left, "姓名": "离职人", "离职日期": 1705276800000,
+                    }},
+                ],
+            }.get(table_id, []))
+
+        async def _list_fields(
+            app_token: str, table_id: str, **kwargs: Any,
+        ) -> list[dict[str, Any]]:
+            await _gate("fields", table_id)
+            column = "工号" if table_id == "tbl_source" else "离职原因"
+            return [{"field_name": column}]
+
+        self._patch_bitable(monkeypatch, _list_all_records, _list_fields)
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        # 四路拉取在任一返回前全部启动；离职表 schema 在其记录返回后接着发出
+        assert expected <= started
+        assert ("fields", "tbl_departure") in started
+        assert await EmployeeRepository(db_session).get_by_employee_number(number) is not None
+        headcount, departures = stats["headcount"], stats["departures"]
+        assert headcount["created"] == 1 and headcount["total"] == 1 and not headcount["errors"]
+        assert departures["created"] == 1 and departures["total"] == 1
+        assert not departures["errors"]
+
+    async def test_extra_table_fetch_failure_degrades_to_stats_error(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """附加表拉取失败只降级为 stats 错误，不阻断员工档案同步与其余附加表。"""
+        await self._bind_extra_tables(db_session)
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        number, left = f"E{_rand()}", f"E{_rand()}"
+
+        async def _list_all_records(
+            app_token: str, table_id: str, **kwargs: Any,
+        ) -> list[dict[str, Any]]:
+            if table_id == "tbl_headcount":
+                raise bc.BitableAPIError("无定编表读取权限")
+            return list({
+                "tbl_source": [{"record_id": "rec_new", "fields": {"工号": number, "姓名": "新人"}}],
+                "tbl_departure": [
+                    {"record_id": "dep_1", "fields": {"工号": left, "姓名": "离职人"}},
+                ],
+            }.get(table_id, []))
+
+        self._patch_bitable(monkeypatch, _list_all_records, AsyncMock(return_value=[]))
+
+        stats = await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert await EmployeeRepository(db_session).get_by_employee_number(number) is not None
+        assert "无定编表读取权限" in stats["headcount"]["error"]
+        assert stats["departures"]["created"] == 1 and not stats["departures"]["errors"]
+
+    async def test_source_failure_cancels_pending_extra_fetches(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, _no_lock: None,
+    ) -> None:
+        """源表拉取失败时，仍在途的附加表预取必须被取消，不留孤儿任务。"""
+        await self._bind_extra_tables(db_session)
+        cancelled: set[str] = set()
+
+        async def _list_all_records(
+            app_token: str, table_id: str, **kwargs: Any,
+        ) -> list[dict[str, Any]]:
+            if table_id == "tbl_source":
+                raise bc.BitableAPIError("源表拉取失败")
+            try:
+                await asyncio.Event().wait()  # 永不返回：模拟慢请求
+            except asyncio.CancelledError:
+                cancelled.add(table_id)
+                raise
+            return []
+
+        self._patch_bitable(monkeypatch, _list_all_records, AsyncMock(return_value=[]))
+
+        with pytest.raises(bc.BitableAPIError):
+            await sync_service.EmployeeSyncService(db_session).reconcile()
+
+        assert cancelled == {"tbl_headcount", "tbl_departure"}
 
 
 class TestRosterStatusSync:

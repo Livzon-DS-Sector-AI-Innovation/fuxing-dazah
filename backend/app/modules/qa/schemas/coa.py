@@ -261,27 +261,11 @@ class CoaValueIn(BaseModel):
         return _clean_optional(value)
 
 
-class CoaNewItemIn(CoaItemIn):
-    """导入确认时并入标准的新项目（携带首份结果值）。
-
-    后端先建项目再建报告，值由后端按新建后的 item id 归并——
-    前端无法预知 UUID，故值不进 values 载荷。
-    """
-
-    value_num: float | None = None
-    value_text: str | None = Field(default=None, max_length=300)
-
-    @field_validator("value_text")
-    @classmethod
-    def _clean_value_text(cls, value: str | None) -> str | None:
-        return _clean_optional(value)
-
-
 class CoaReportCreate(BaseModel):
     """出具登记（手工/导入统一落库端点）。
 
-    导入确认时可带 new_items（预览中勾选「并入标准」的未命中项目），
-    后端事务内先建项目再建报告；raw_extract 有值 → source=import。
+    raw_extract 有值 → source=import。导入不修改标准配置：未命中项目
+    不落库（扩项目走「客户标准配置」维护），values 只引用既有项目。
     无报告编号（业务键=产品+模板+批号）；batch_data 为模板动态批次字段值
     （key=生效字段集自定义键；固定列别名键由后端镜像写固定列），
     date 型字段值须为 ISO 日期文本。
@@ -294,15 +278,12 @@ class CoaReportCreate(BaseModel):
     serial_no: str = Field(min_length=1, max_length=32)
     mfg_date: date | None = None
     exp_date: date | None = None
-    issued_date: date | None = None
     packaging: str | None = Field(default=None, max_length=100)
     batch_size: str | None = Field(default=None, max_length=50)
     storage: str | None = Field(default=None, max_length=300)
-    conclusion: str | None = Field(default=None, max_length=500)
     remark: str | None = Field(default=None, max_length=500)
     batch_data: dict[str, str] | None = None
     values: list[CoaValueIn] = Field(default_factory=list, max_length=500)
-    new_items: list[CoaNewItemIn] = Field(default_factory=list, max_length=100)
     raw_extract: dict[str, Any] | None = None
 
     @field_validator("product_id", "standard_id", "batch_no", "serial_no")
@@ -310,7 +291,7 @@ class CoaReportCreate(BaseModel):
     def _clean_req(cls, value: str | None) -> str | None:
         return _clean_required(value)
 
-    @field_validator("packaging", "batch_size", "storage", "conclusion", "remark")
+    @field_validator("packaging", "batch_size", "storage", "remark")
     @classmethod
     def _clean_opt(cls, value: str | None) -> str | None:
         return _clean_optional(value)
@@ -328,11 +309,9 @@ class CoaReportUpdate(BaseModel):
     serial_no: str | None = Field(default=None, min_length=1, max_length=32)
     mfg_date: date | None = None
     exp_date: date | None = None
-    issued_date: date | None = None
     packaging: str | None = Field(default=None, max_length=100)
     batch_size: str | None = Field(default=None, max_length=50)
     storage: str | None = Field(default=None, max_length=300)
-    conclusion: str | None = Field(default=None, max_length=500)
     remark: str | None = Field(default=None, max_length=500)
     batch_data: dict[str, str] | None = Field(
         default=None,
@@ -347,7 +326,7 @@ class CoaReportUpdate(BaseModel):
     def _clean_req(cls, value: str | None) -> str | None:
         return _clean_required(value)
 
-    @field_validator("packaging", "batch_size", "storage", "conclusion", "remark")
+    @field_validator("packaging", "batch_size", "storage", "remark")
     @classmethod
     def _clean_opt(cls, value: str | None) -> str | None:
         return _clean_optional(value)

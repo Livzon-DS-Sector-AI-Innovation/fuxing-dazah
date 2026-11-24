@@ -60,21 +60,6 @@ def fake_user() -> SimpleNamespace:
 
 
 @pytest.fixture(autouse=True)
-def _no_platform_permission_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """权限判定离线：将平台权限查询替换为固定返回（默认无任何权限）。
-
-    toolbox 权限判定的超管分支依赖平台 get_user_permissions（走 Redis 缓存），
-    测试中替换掉以避免依赖 Redis；需要超管放行的用例可再次 monkeypatch。
-    """
-    import app.modules.toolbox.service as service_mod
-
-    async def _no_perms(_user_id: str, _db: object) -> set[str]:
-        return set()
-
-    monkeypatch.setattr(service_mod, "get_user_permissions", _no_perms)
-
-
-@pytest.fixture(autouse=True)
 def _isolate_exec_dir(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

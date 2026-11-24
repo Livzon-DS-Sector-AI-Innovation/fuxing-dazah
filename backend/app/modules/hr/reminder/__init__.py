@@ -1,4 +1,4 @@
-"""人事提醒框架：聚合注册全部提醒任务，main.py 一行挂载（仿 quality 模式）。
+"""人事提醒框架：聚合注册全部提醒任务，由 hr/lifecycle.py 挂载（仿 quality 模式）。
 
 新增提醒类型的步骤：
 1. 在本包写一个 *_scheduled.py：扫描函数 + TaskDefinition

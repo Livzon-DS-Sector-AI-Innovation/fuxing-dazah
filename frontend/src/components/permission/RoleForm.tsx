@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Drawer, Form, Input, Select, Button, App, Divider, Grid, Tag } from 'antd'
+import { Drawer, Form, Input, Select, Button, App, Divider, Grid } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { PermissionTree } from './PermissionTree'
 import { createRole, updateRole } from '@/actions/permission'
+import { usePermission } from '@/hooks/usePermission'
 import type { Role, PermissionModuleGroup, DataScope, DepartmentItem } from '@/types/permission'
 
 const { useBreakpoint } = Grid
@@ -31,12 +32,39 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups, dep
   const router = useRouter()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
-  const [checkedPermIds, setCheckedPermIds] = useState<string[]>([])
-  const [scopeOverrides, setScopeOverrides] = useState<{ module: string; scope: DataScope }[]>([])
+  // 打开时由父组件以 key 重挂载（见 RoleList），状态直接从 props 初始化，
+  // 避免在 effect 里同步 setState 的 cascading render
+  const [checkedPermIds, setCheckedPermIds] = useState<string[]>(
+    () => role?.permission_ids ?? [],
+  )
+  const [scopeOverrides, setScopeOverrides] = useState<{ module: string; scope: DataScope }[]>(
+    () =>
+      Object.entries(role?.data_scope_overrides ?? {}).map(([mod, scope]) => ({
+        module: mod,
+        scope: scope as DataScope,
+      })),
+  )
   const isEdit = !!role
   const isSystemEdit = isEdit && !!role?.is_system
   const screens = useBreakpoint()
   const isMobile = !screens.md
+
+  const { permissions, hasPermission } = usePermission()
+  const canManageAll = hasPermission('permission:role:manage')
+  // 委派管理员只能勾选自己已有的权限码（数据范围由后端校验）
+  const allowedIds = useMemo(
+    () =>
+      canManageAll
+        ? undefined
+        : new Set(
+            permissionGroups.flatMap((g) =>
+              g.permissions
+                .filter((p) => permissions.has(p.code))
+                .map((p) => p.id),
+            ),
+          ),
+    [canManageAll, permissionGroups, permissions],
+  )
 
   const groupOptions = departments.map((d) => ({
     label: d.name,
@@ -54,27 +82,17 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups, dep
   )
 
   useEffect(() => {
-    if (open) {
-      if (role) {
-        form.setFieldsValue({
-          name: role.name,
-          code: role.code,
-          description: role.description,
-          data_scope: role.data_scope,
-          group_feishu_department_id: role.group_feishu_department_id ?? undefined,
-        })
-        setCheckedPermIds(role.permission_ids)
-        setScopeOverrides(
-          Object.entries(role.data_scope_overrides).map(([mod, scope]) => ({
-            module: mod,
-            scope: scope as DataScope,
-          })),
-        )
-      } else {
-        form.resetFields()
-        setCheckedPermIds([])
-        setScopeOverrides([])
-      }
+    if (!open) return
+    if (role) {
+      form.setFieldsValue({
+        name: role.name,
+        code: role.code,
+        description: role.description,
+        data_scope: role.data_scope,
+        group_feishu_department_id: role.group_feishu_department_id ?? undefined,
+      })
+    } else {
+      form.resetFields()
     }
   }, [open, role, form])
 
@@ -293,10 +311,16 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups, dep
             </span>
           }
         >
+          {!canManageAll && (
+            <p style={{ color: 'var(--color-steel)', fontSize: 12, margin: '0 0 8px' }}>
+              只能勾选自己已有的权限；数据范围不能超过你自身的范围。
+            </p>
+          )}
           <PermissionTree
             permissionGroups={permissionGroups}
             checkedIds={checkedPermIds}
             onChange={setCheckedPermIds}
+            allowedIds={allowedIds}
           />
         </Form.Item>
         </>

@@ -14,10 +14,10 @@ from app.core.exceptions import NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.qa import service
 from app.modules.qa.api._deps import (
+    knowledge_read,
     master_create,
-    master_deactivate,
+    master_manage,
     master_update,
-    qa_read,
 )
 from app.modules.qa.repository import (
     get_master,
@@ -54,7 +54,7 @@ def _master_input_compat(payload: MasterObjectCreate) -> MasterObjectCreate:
 
 @router.get("/master-objects", summary="QA主数据列表")
 async def list_master_objects(
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
     kind: str | None = Query(default=None),
     object_type: str | None = None,
@@ -96,7 +96,7 @@ async def create_master_object(
 @router.get("/master-objects/{object_id}", summary="QA主数据详情")
 async def get_master_object(
     object_id: uuid.UUID,
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await get_master(db, object_id)
@@ -123,7 +123,7 @@ async def update_master_object(
 async def change_master_status(
     object_id: uuid.UUID,
     payload: MasterObjectStatusIn,
-    user: User = Depends(master_deactivate),
+    user: User = Depends(master_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.set_master_status(db, object_id, payload.status, user)
@@ -133,7 +133,7 @@ async def change_master_status(
 @router.post("/master-objects/{object_id}/activate", summary="启用QA主数据")
 async def activate_master_object(
     object_id: uuid.UUID,
-    user: User = Depends(master_deactivate),
+    user: User = Depends(master_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.set_master_status(db, object_id, "active", user)
@@ -143,7 +143,7 @@ async def activate_master_object(
 @router.post("/master-objects/{object_id}/deactivate", summary="停用QA主数据")
 async def deactivate_master_object(
     object_id: uuid.UUID,
-    user: User = Depends(master_deactivate),
+    user: User = Depends(master_manage),
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.set_master_status(db, object_id, "inactive", user)

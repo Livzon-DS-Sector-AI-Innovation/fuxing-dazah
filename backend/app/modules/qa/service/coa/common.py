@@ -147,7 +147,6 @@ _REPORT_COLUMN_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("storagecondition", "storecondition", "storageconditions",
          "储存条件", "贮存条件", "储藏条件", "储存", "贮存"),
     ),
-    ("conclusion", ("结论", "检验结论")),
 )
 
 _REPORT_COLUMN_ALIAS_MAP: dict[str, str] = {
@@ -163,7 +162,6 @@ _REPORT_COLUMN_GETTERS: dict[str, Any] = {
     "packaging": lambda row: row.packaging,
     "batch_size": lambda row: row.batch_size,
     "storage": lambda row: row.storage,
-    "conclusion": lambda row: row.conclusion,
 }
 
 
@@ -315,11 +313,9 @@ def report_dict(
         "batch_no": row.batch_no,
         "mfg_date": row.mfg_date.isoformat() if row.mfg_date else None,
         "exp_date": row.exp_date.isoformat() if row.exp_date else None,
-        "issued_date": row.issued_date.isoformat() if row.issued_date else None,
         "packaging": row.packaging,
         "batch_size": row.batch_size,
         "storage": row.storage,
-        "conclusion": row.conclusion,
         "source": row.source,
         "remark": row.remark,
     }

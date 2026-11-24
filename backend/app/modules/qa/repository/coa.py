@@ -267,7 +267,7 @@ async def list_reports(db: AsyncSession, product_id: uuid.UUID) -> list[CoaRepor
     result = await db.execute(
         select(CoaReport)
         .where(CoaReport.product_id == product_id, CoaReport.is_deleted.is_(False))
-        .order_by(CoaReport.issued_date.desc().nullslast(), CoaReport.created_at.desc())
+        .order_by(CoaReport.created_at.desc())
     )
     return list(result.scalars())
 

@@ -12,6 +12,9 @@ from app.platform.identity.models import User  # noqa: F401
 
 settings = get_settings()
 
+# 安全模块已独立成单独项目，本仓库停用其功能；测试文件保留为静态存档不再收集
+collect_ignore_glob = ["modules/safety/*"]
+
 # Test engine uses NullPool so each test gets a fresh connection on its own event loop.
 _test_engine = create_async_engine(
     settings.DATABASE_URL,

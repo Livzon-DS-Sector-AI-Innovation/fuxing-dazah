@@ -15,7 +15,7 @@ from app.core.response import paginated_response
 from app.modules.qa import service
 from app.modules.qa.api._deps import (
     audit_read,
-    qa_read,
+    knowledge_read,
 )
 from app.platform.identity.models import User
 
@@ -24,7 +24,7 @@ router = APIRouter()
 
 @router.get("/search", summary="QA全局检索")
 async def search_qa(
-    user: User = Depends(qa_read),
+    user: User = Depends(knowledge_read),
     q: str = Query(..., min_length=1),
     db: AsyncSession = Depends(get_db),
     include_history: bool = False,

@@ -5,11 +5,14 @@
 进名单时按白名单复制一次初值，此后除 status 外字段独立维护、不被同步覆盖。
 """
 
+import asyncio
 import json
 import logging
+from collections import defaultdict
+from collections.abc import Awaitable
 from datetime import datetime
-from typing import Any
-from uuid import UUID
+from typing import Any, cast
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,11 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.hr.employee_sync import bitable_client as bitable
 from app.modules.hr.employee_sync.config import (
     KEY_APP_TOKEN,
+    KEY_DEPARTURE_TABLE_ID,
+    KEY_DEPARTURE_TABLE_NAME,
     KEY_ENABLED,
     KEY_HEADCOUNT_TABLE_ID,
     KEY_HEADCOUNT_TABLE_NAME,
-    KEY_DEPARTURE_TABLE_ID,
-    KEY_DEPARTURE_TABLE_NAME,
     KEY_LAST_STATS,
     KEY_LAST_SYNC_AT,
     KEY_SOURCE_TABLE_ID,
@@ -57,8 +60,18 @@ from app.modules.hr.service import EmployeeService
 logger = logging.getLogger(__name__)
 
 _LOCK_KEY = "employee_sync:reconcile_lock"
-_LOCK_TTL = 280  # 略小于定时任务 timeout，防止任务超时后死锁
+_LOCK_TTL = 900  # 与定时任务 timeout 一致；批量对账后单轮远小于该值
 _ERROR_CAP = 20  # 错误列表上限（防超大 payload）
+_CHUNK_SIZE = 50  # 批量落库粒度：批量失败后自动逐行降级，坏行只影响本行
+# 只删自己的锁：TTL 过期后锁可能已被下一轮持有，GET+DEL 两步有竞态，用 Lua 保证原子
+_RELEASE_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+# 离职台账表预取结果：(records, schema)
+_DepartureFetch = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 # ── 离职人员管理表 → DepartureRecord 字段映射 ──
 # 文本列（normalize_cell 直接得到字符串）
@@ -139,6 +152,16 @@ def _ensure_required(data: dict[str, Any]) -> None:
         data["name"] = ""
 
 
+def _record_id(record: dict[str, Any]) -> str:
+    return str(record.get("record_id") or "")
+
+
+def _record_number(record: dict[str, Any]) -> str:
+    """源表记录的工号（单元格归一化并去空白；缺失为空串）。"""
+    fields = record.get("fields") or {}
+    return str(normalize_cell(fields.get("工号")) or "").strip()
+
+
 class EmployeeSyncService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -147,20 +170,28 @@ class EmployeeSyncService:
 
     # ── 并发锁（Redis 不可用时降级为无锁） ──
 
-    async def acquire_lock(self) -> bool:
+    async def acquire_lock(self) -> str | None:
+        """获取同步锁，返回持锁令牌（None=已有同步在执行）。"""
+        token = uuid4().hex
         try:
             from app.core.redis import redis_client
 
-            return bool(await redis_client.set(_LOCK_KEY, "1", ex=_LOCK_TTL, nx=True))
+            if await redis_client.set(_LOCK_KEY, token, ex=_LOCK_TTL, nx=True):
+                return token
+            return None
         except Exception as exc:  # noqa: BLE001
             logger.warning("Redis 不可用，同步不加锁: %s", exc)
-            return True
+            return token
 
-    async def release_lock(self) -> None:
+    async def release_lock(self, token: str) -> None:
         try:
             from app.core.redis import redis_client
 
-            await redis_client.delete(_LOCK_KEY)
+            # redis-py 的 async/sync 共用类型签名，运行时一定是协程
+            await cast(
+                Awaitable[Any],
+                redis_client.eval(_RELEASE_LUA, 1, _LOCK_KEY, token),
+            )
         except Exception:  # noqa: BLE001
             pass
 
@@ -304,7 +335,8 @@ class EmployeeSyncService:
         if not cfg.is_ready:
             return {"skipped": "同步未启用或绑定不完整"}
 
-        if not await self.acquire_lock():
+        token = await self.acquire_lock()
+        if token is None:
             raise SyncInProgressError("同步正在执行中，请稍后再试")
         try:
             stats = await self._reconcile_source(cfg)
@@ -316,36 +348,118 @@ class EmployeeSyncService:
             logger.info("员工档案同步完成: %s", stats)
             return stats
         finally:
-            await self.release_lock()
+            await self.release_lock(token)
 
     async def _reconcile_source(self, cfg: EmployeeSyncConfig) -> dict[str, Any]:
-        records = await bitable.list_all_records(cfg.app_token, cfg.source_table_id)
+        """全量对账（源表 + 附加的定编数表 / 离职台账表）。
 
-        # schema 只拉一次：选项翻译表构建 + 「人员状态」列存在性判断共用
-        schema = await bitable.list_fields(cfg.app_token, cfg.source_table_id)
+        定编表、离职表的拉取与源表并行启动：它们不依赖员工对账结果，只是落库
+        排在主循环之后。结果延后到消费点才 await——拉取异常在那里原样抛出，
+        仍由各自的 SAVEPOINT 块降级为 stats 错误；主流程提前失败/被取消时在
+        finally 里取消，不留孤儿任务。
+        """
+        headcount_fetch: asyncio.Task[list[dict[str, Any]]] | None = (
+            asyncio.create_task(
+                bitable.list_all_records(cfg.app_token, cfg.headcount_table_id),
+            )
+            if cfg.headcount_ready
+            else None
+        )
+        departure_fetch: asyncio.Task[_DepartureFetch] | None = (
+            asyncio.create_task(self._fetch_departures(cfg))
+            if cfg.departure_ready
+            else None
+        )
+        prefetch: list[asyncio.Task[Any]] = [
+            task for task in (headcount_fetch, departure_fetch) if task is not None
+        ]
+        try:
+            return await self._reconcile_tables(cfg, headcount_fetch, departure_fetch)
+        finally:
+            for task in prefetch:
+                task.cancel()
+            await asyncio.gather(*prefetch, return_exceptions=True)
+
+    async def _reconcile_tables(
+        self,
+        cfg: EmployeeSyncConfig,
+        headcount_fetch: asyncio.Task[list[dict[str, Any]]] | None,
+        departure_fetch: asyncio.Task[_DepartureFetch] | None,
+    ) -> dict[str, Any]:
+        # 源记录与 schema 并行拉取；schema 只拉一次（选项翻译 + 人员状态列判断共用）
+        records, schema = await asyncio.gather(
+            bitable.list_all_records(cfg.app_token, cfg.source_table_id),
+            bitable.list_fields(cfg.app_token, cfg.source_table_id),
+        )
         option_maps = await self._build_option_maps(cfg, schema)
         has_status_column = any(
             str(f.get("field_name") or "") == "人员状态" for f in schema
         )
 
-        created = updated = deleted = 0
+        # 预加载一次员工索引（含软删行）：循环内不再逐行 SELECT。
+        # 同步启用期间档案只读（EmployeeService._ensure_employees_writable），
+        # 快照不会被并发修改。
+        all_rows = (await self.session.execute(select(Employee))).scalars().all()
+        by_number = {e.employee_number: e for e in all_rows}
+        by_record_id: dict[str, list[Employee]] = defaultdict(list)
+        for row in all_rows:
+            if row.feishu_record_id:
+                by_record_id[row.feishu_record_id].append(row)
+
+        created = updated = 0
         errors: list[str] = []
         remote_record_ids: set[str] = set()
         remote_numbers: set[str] = set()
+        reported_missing: set[str] = set()
 
-        for record in records:
-            record_id = str(record.get("record_id") or "")
+        async def _reload_employees(numbers: set[str], record_ids: set[str]) -> None:
+            """失败回滚会 expire 本批对象；重载索引后再重放。
+
+            异步会话下直接读过期属性会触发 MissingGreenlet，必须先 SELECT 载入。
+            回滚只 expire 保存点内改过的对象，范围不超出这批记录涉及的工号与
+            record_id（被顶替的旧行按 record_id 找），按此重载即可——坏行再多
+            也不会退化成逐行整表重载。
+            """
+            numbers = {n for n in numbers if n}
+            record_ids = {r for r in record_ids if r}
+            if not numbers and not record_ids:
+                return
+            conditions = [Employee.employee_number.in_(sorted(numbers))] if numbers else []
+            if record_ids:
+                conditions.append(Employee.feishu_record_id.in_(sorted(record_ids)))
+            refreshed = (await self.session.execute(
+                select(Employee).where(or_(*conditions))
+                .execution_options(populate_existing=True)
+            )).scalars().all()
+            for key in numbers:
+                by_number.pop(key, None)
+            for key in record_ids:
+                by_record_id.pop(key, None)
+            # 回滚掉的待插入对象已变游离态：索引只认库里实际存在的行
+            by_rid: dict[str, list[Employee]] = defaultdict(list)
+            for row in refreshed:
+                by_number[row.employee_number] = row
+                if row.feishu_record_id in record_ids:
+                    by_rid[row.feishu_record_id].append(row)
+            by_record_id.update(by_rid)
+
+        async def _apply(record: dict[str, Any]) -> bool | None:
+            """应用一条源表记录（纯内存改动），返回是否新建；跳过返回 None。"""
+            record_id = _record_id(record)
             fields = record.get("fields") or {}
             if not record_id:
-                continue
+                return None
             # record_id 先入集合：工号临时为空时该记录仍算「源表存在」，
             # 不能把它当已删除而清掉本地员工/培训名单
             remote_record_ids.add(record_id)
-            employee_number = str(normalize_cell(fields.get("工号")) or "").strip()
+            employee_number = _record_number(record)
             if not employee_number:
-                if len(errors) < _ERROR_CAP:
-                    errors.append(f"记录 {record_id} 缺少「工号」列，已跳过")
-                continue
+                # 失败批会逐行重放，同一记录的报错只记一次
+                if record_id not in reported_missing:
+                    reported_missing.add(record_id)
+                    if len(errors) < _ERROR_CAP:
+                        errors.append(f"记录 {record_id} 缺少「工号」列，已跳过")
+                return None
             remote_numbers.add(employee_number)
 
             data = convert_source_fields(
@@ -353,20 +467,57 @@ class EmployeeSyncService:
                 has_status_column=has_status_column,
             )
             _ensure_required(data)  # 与 Excel 上传一致：NOT NULL 字段兜底
+            employee, is_new = await self.repo.upsert_from_bitable(
+                data, record_id, by_number=by_number,
+                by_record_id=by_record_id, flush=False,
+            )
+            if is_new:
+                # no_autoflush：否则培训台账查询会把批内积压改动提前冲掉
+                with self.session.no_autoflush:
+                    # 与手动新建员工一致：自动生成培训台账页与岗位培训记录
+                    await self.employee_service._sync_employee_training(employee)
+            return is_new
+
+        for start in range(0, len(records), _CHUNK_SIZE):
+            chunk = records[start:start + _CHUNK_SIZE]
+            chunk_created = chunk_updated = 0
             try:
-                # 行级 SAVEPOINT：单行 DB 错误只回滚本行，不毒化整轮同步
+                # 上一批已 flush，进入 savepoint 时无积压改动；
+                # 批尾一次性落库，单批失败整体回滚到 savepoint
                 async with self.session.begin_nested():
-                    employee, is_new = await self.repo.upsert_from_bitable(data, record_id)
-                    if is_new:
-                        # 与手动新建员工一致：自动生成培训台账页与岗位培训记录
-                        await self.employee_service._sync_employee_training(employee)
-                if is_new:
-                    created += 1
-                else:
-                    updated += 1
-            except Exception as exc:  # noqa: BLE001
-                if len(errors) < _ERROR_CAP:
-                    errors.append(f"工号 {employee_number}: {exc}")
+                    for record in chunk:
+                        is_new = await _apply(record)
+                        if is_new is True:
+                            chunk_created += 1
+                        elif is_new is False:
+                            chunk_updated += 1
+                    await self.session.flush()
+            except Exception:  # noqa: BLE001
+                # 失败批已被回滚：expire/expunge 掉的对象先重载索引，
+                # 再逐行重放恢复「单行失败只跳过本行」的隔离粒度
+                await _reload_employees(
+                    {_record_number(record) for record in chunk},
+                    {_record_id(record) for record in chunk},
+                )
+                for record in chunk:
+                    record_id, number = _record_id(record), _record_number(record)
+                    try:
+                        async with self.session.begin_nested():
+                            is_new = await _apply(record)
+                            await self.session.flush()
+                    except Exception as exc:  # noqa: BLE001
+                        await _reload_employees({number}, {record_id})
+                        if len(errors) < _ERROR_CAP:
+                            detail = f"工号 {number}" if number else f"记录 {record_id}"
+                            errors.append(f"{detail}: {exc}")
+                        continue
+                    if is_new is True:
+                        created += 1
+                    elif is_new is False:
+                        updated += 1
+                continue
+            created += chunk_created
+            updated += chunk_updated
 
         deleted = await self._soft_delete_missing(remote_record_ids, remote_numbers)
         await self.employee_service._sync_departments_from_employees()
@@ -378,20 +529,24 @@ class EmployeeSyncService:
         # 独立 SAVEPOINT：定编表失败（如表级权限未授权）只降级为 stats 错误，
         # 不回滚也不阻断本轮员工档案同步。
         headcount_stats: dict[str, Any] | None = None
-        if cfg.headcount_ready:
+        if headcount_fetch is not None:
             try:
+                headcount_records = await headcount_fetch
                 async with self.session.begin_nested():
-                    headcount_stats = await self._reconcile_headcount(cfg)
+                    headcount_stats = await self._reconcile_headcount(headcount_records)
             except Exception as exc:  # noqa: BLE001
                 logger.error("定编表同步失败（不影响员工档案同步）: %s", exc)
                 headcount_stats = {"error": str(exc)}
 
         # 离职人员管理表 → 离职台账（hr.departure_records），同一模式
         departure_stats: dict[str, Any] | None = None
-        if cfg.departure_ready:
+        if departure_fetch is not None:
             try:
+                departure_records, departure_schema = await departure_fetch
                 async with self.session.begin_nested():
-                    departure_stats = await self._reconcile_departures(cfg)
+                    departure_stats = await self._reconcile_departures(
+                        departure_records, departure_schema,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.error("离职台账同步失败（不影响员工档案同步）: %s", exc)
                 departure_stats = {"error": str(exc)}
@@ -419,17 +574,27 @@ class EmployeeSyncService:
         schema 为源表 list_fields 结果（调用方已拉取，避免重复请求）。
         """
         maps = build_option_maps(schema)
-        for table in await bitable.list_tables(cfg.app_token):
-            table_id = str(table.get("table_id") or "")
-            if not table_id or table_id == cfg.source_table_id:
-                continue
-            try:
-                other = build_option_maps(
-                    await bitable.list_fields(cfg.app_token, table_id)
-                )
-            except bitable.BitableAPIError as exc:
-                logger.warning("拉取选项定义失败（跳过该表）: %s error=%s", table_id, exc)
-                continue
+        table_ids = [
+            str(table.get("table_id") or "")
+            for table in await bitable.list_tables(cfg.app_token)
+            if table.get("table_id") and str(table.get("table_id")) != cfg.source_table_id
+        ]
+        if not table_ids:
+            return maps
+        sem = asyncio.Semaphore(5)  # 限并发，避免触发飞书限流
+
+        async def _fetch(table_id: str) -> dict[str, dict[str, str]]:
+            async with sem:
+                try:
+                    return build_option_maps(
+                        await bitable.list_fields(cfg.app_token, table_id)
+                    )
+                except bitable.BitableAPIError as exc:
+                    logger.warning("拉取选项定义失败（跳过该表）: %s error=%s", table_id, exc)
+                    return {}
+
+        # 各表 schema 并行拉取：串行时 Base 表数 × 单次请求耗时全部叠加
+        for other in await asyncio.gather(*(_fetch(tid) for tid in table_ids)):
             for col, mapping in other.items():
                 merged = maps.setdefault(col, {})
                 for opt_id, name in mapping.items():
@@ -480,14 +645,15 @@ class EmployeeSyncService:
         except (TypeError, ValueError):
             return None
 
-    async def _reconcile_headcount(self, cfg: EmployeeSyncConfig) -> dict[str, Any]:
+    async def _reconcile_headcount(
+        self, records: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """定编数表 → hr.headcount_plans（按部门 upsert，部门为业务主键）。
 
+        records 为调用方预取好的源记录（拉取与员工对账并行，见 _reconcile_source）。
         现有人数/缺编不在源表取值：页面用 hr.employees 实时统计，
         手填「现有人数」仅存 source_current_count 供对账。
         """
-        records = await bitable.list_all_records(cfg.app_token, cfg.headcount_table_id)
-
         today = datetime.now().date()
         existing = (await self.session.execute(
             select(HeadcountPlan)  # 含软删行：复活判断需要
@@ -551,15 +717,23 @@ class EmployeeSyncService:
 
     # ── 离职人员管理表 → 离职台账（hr.departure_records） ──
 
-    async def _reconcile_departures(self, cfg: EmployeeSyncConfig) -> dict[str, Any]:
+    async def _fetch_departures(self, cfg: EmployeeSyncConfig) -> _DepartureFetch:
+        """离职表的 (records, schema)；供 _reconcile_source 提前并行拉取。"""
+        return (
+            await bitable.list_all_records(cfg.app_token, cfg.departure_table_id),
+            await bitable.list_fields(cfg.app_token, cfg.departure_table_id),
+        )
+
+    async def _reconcile_departures(
+        self, records: list[dict[str, Any]], schema: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """离职人员管理表 → hr.departure_records 全量对账。
 
+        records / schema 为调用方预取好的离职表数据（见 _reconcile_source）。
         upsert 认领顺序：先按 feishu_record_id，再按工号（把历史手动建的行
         自动认领合并）；软删仅针对有 record_id 且源表消失的行；空拉取防御
         不清库。cert_sign_* 离职证明签署字段是本地数据，同步不触碰。
         """
-        records = await bitable.list_all_records(cfg.app_token, cfg.departure_table_id)
-        schema = await bitable.list_fields(cfg.app_token, cfg.departure_table_id)
         option_maps = build_option_maps(schema)
 
         today = datetime.now().date()

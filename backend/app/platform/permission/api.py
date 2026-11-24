@@ -12,7 +12,11 @@ from app.core.exceptions import NotFoundException
 from app.core.response import success_response
 from app.platform.identity.models import Department as DeptModel
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_admin
+from app.platform.permission.deps import (
+    RequireRoleAssign,
+    RequireRoleWrite,
+    RequireUserView,
+)
 from app.platform.permission.models import DepartmentRole, UserRole
 from app.platform.permission.repository import PermissionRepository
 from app.platform.permission.schemas import (
@@ -38,8 +42,8 @@ _repo = PermissionRepository()
 
 @router.get("/permissions", summary="获取所有权限（按模块分组）")
 async def list_permissions(
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
     permissions = await _repo.list_permissions(db)
     grouped: dict[str, list[PermissionOut]] = {}
@@ -70,10 +74,12 @@ async def list_permissions(
 
 @router.get("/roles", summary="角色列表")
 async def list_roles(
+    _actor: RequireRoleAssign,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
-    roles = await _repo.list_roles(db)
+    # 分配角色时要用角色目录做候选，故对 assign / delegate 放行（只读）；
+    # 非全权操作者只看到权限码在自己范围内的角色
+    roles = await _service.filter_roles_within_actor(db, _actor.id, await _repo.list_roles(db))
 
     # 批量查询权限 ID 和数据范围覆盖
     role_ids = [r.id for r in roles]
@@ -129,9 +135,16 @@ async def list_roles(
 @router.post("/roles", summary="创建角色")
 async def create_role(
     data: CreateRoleInput,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    await _service.assert_role_within_actor(
+        db,
+        _writer.id,
+        permission_ids=data.permission_ids,
+        data_scope=data.data_scope,
+        overrides=data.data_scope_overrides,
+    )
     role = await _service.create_role(db, data)
     perm_ids = await _repo.get_role_permission_ids(db, role.id)
     overrides = await _repo.get_role_data_scope_overrides(db, role.id)
@@ -155,9 +168,18 @@ async def create_role(
 async def update_role(
     role_id: uuid.UUID,
     data: UpdateRoleInput,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    # 当前状态一律检查（防止按 id 改超范围角色）；提交了权限/范围字段时再检查改后状态
+    await _service.assert_role_within_actor(
+        db,
+        _writer.id,
+        existing_role_id=role_id,
+        permission_ids=data.permission_ids,
+        data_scope=data.data_scope,
+        overrides=data.data_scope_overrides,
+    )
     role = await _service.update_role(db, role_id, data)
     perm_ids = await _repo.get_role_permission_ids(db, role.id)
     overrides = await _repo.get_role_data_scope_overrides(db, role.id)
@@ -180,9 +202,12 @@ async def update_role(
 @router.delete("/roles/{role_id}", summary="删除角色")
 async def delete_role(
     role_id: uuid.UUID,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    await _service.assert_role_within_actor(
+        db, _writer.id, existing_role_id=role_id
+    )
     await _service.delete_role(db, role_id)
     return success_response(message="角色删除成功")
 
@@ -190,8 +215,8 @@ async def delete_role(
 @router.get("/roles/{role_id}/users", summary="获取角色下的用户列表")
 async def get_role_users(
     role_id: uuid.UUID,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
     users = await _repo.get_role_users(db, role_id)
     result = [RoleUserOut.model_validate(u).model_dump(mode="json") for u in users]
@@ -201,8 +226,8 @@ async def get_role_users(
 @router.get("/users/{user_id}/roles", summary="获取用户的角色列表")
 async def get_user_roles(
     user_id: uuid.UUID,
+    _view: RequireUserView,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
     user_roles = await _repo.get_user_roles(db, user_id)
     result = []
@@ -225,9 +250,12 @@ async def get_user_roles(
 async def assign_user_role(
     user_id: uuid.UUID,
     data: AssignRoleInput,
+    _assign: RequireRoleAssign,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    await _service.assert_role_within_actor(
+        db, _assign.id, existing_role_id=data.role_id
+    )
     await _service.assign_role_to_user(db, user_id, data.role_id, data.department_id)
     return success_response(message="角色分配成功")
 
@@ -236,9 +264,10 @@ async def assign_user_role(
 async def remove_user_role(
     user_id: uuid.UUID,
     role_id: uuid.UUID,
+    _assign: RequireRoleAssign,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    await _service.assert_role_within_actor(db, _assign.id, existing_role_id=role_id)
     await _service.remove_role_from_user(db, user_id, role_id)
     return success_response(message="角色移除成功")
 
@@ -246,8 +275,8 @@ async def remove_user_role(
 @router.get("/users/{user_id}/permissions", summary="获取用户合并后的权限列表")
 async def get_user_permissions_endpoint(
     user_id: uuid.UUID,
+    _view: RequireUserView,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
     user_stmt = select(User).where(User.id == user_id)
     user_result = await db.execute(user_stmt)
@@ -296,8 +325,8 @@ async def get_user_permissions_endpoint(
 @router.get("/roles/{role_id}/departments", summary="获取角色已分配的部门列表")
 async def get_role_departments(
     role_id: uuid.UUID,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
     dept_roles = await _repo.list_role_departments(db, role_id)
     dept_ids = [dr.feishu_department_id for dr in dept_roles]
@@ -329,9 +358,12 @@ async def get_role_departments(
 async def assign_role_to_department_endpoint(
     role_id: uuid.UUID,
     data: AssignDepartmentRoleInput,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    await _service.assert_role_within_actor(
+        db, _writer.id, existing_role_id=role_id
+    )
     await _service.assign_role_to_department(
         db, role_id, data.feishu_department_ids,
     )
@@ -345,9 +377,12 @@ async def assign_role_to_department_endpoint(
 async def remove_role_from_department_endpoint(
     role_id: uuid.UUID,
     feishu_department_id: str,
+    _writer: RequireRoleWrite,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_admin),
 ) -> JSONResponse:
+    await _service.assert_role_within_actor(
+        db, _writer.id, existing_role_id=role_id
+    )
     await _service.remove_role_from_department(
         db, role_id, feishu_department_id,
     )

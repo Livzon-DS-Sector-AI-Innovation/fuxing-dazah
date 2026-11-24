@@ -130,7 +130,7 @@ export function DeviationLedgerPage() {
         质量员: row.qa_person_name ?? '',
         偏差概述: row.description,
         偏差分类: row.classification ? DEVIATION_CLASSIFICATION_LABEL[row.classification] : '',
-        根本原因分类: row.root_cause_category ? ROOT_CAUSE_CATEGORY_LABEL[row.root_cause_category] : '',
+        根本原因分类: row.root_cause_categories.map((category) => ROOT_CAUSE_CATEGORY_LABEL[category]).join('、'),
         质量影响: row.quality_impact ? QUALITY_IMPACT_LABEL[row.quality_impact] : '',
         是否重复: row.is_repeat ? '是' : '否',
         是否发起CAPA: row.capa_initiated === null ? '' : row.capa_initiated ? '是' : '否',
@@ -197,8 +197,10 @@ export function DeviationLedgerPage() {
       render: (value: DeviationClassification | null, row) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
           <ClassificationPill value={value} />
-          {row.root_cause_category && (
-            <span style={{ fontSize: 12, color: '#787671' }}>{ROOT_CAUSE_CATEGORY_LABEL[row.root_cause_category]}</span>
+          {row.root_cause_categories.length > 0 && (
+            <span style={{ fontSize: 12, color: '#787671' }}>
+              {row.root_cause_categories.map((category) => ROOT_CAUSE_CATEGORY_LABEL[category]).join('、')}
+            </span>
           )}
         </div>
       ),
