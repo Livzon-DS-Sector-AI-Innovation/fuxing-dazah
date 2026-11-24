@@ -14,6 +14,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -167,6 +168,14 @@ class EhsChangeFollowupItem(BaseModel):
     )
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replied_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="提交人标识")
+    # 单项「进展不变」勾选（2026-11-24 实测反馈改版：逐项反馈替代全局按钮）
+    marked_unchanged: Mapped[bool] = mapped_column(
+        Boolean(), nullable=False, server_default="false",
+        comment="安全员在该项上勾选了「进展不变，无需更新」",
+    )
+    marked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="勾选时间",
+    )
 
     # ── 周一判定 ──
     progress_monday: Mapped[str | None] = mapped_column(

@@ -237,6 +237,10 @@ def _card_item_views(items: list[EhsChangeFollowupItem]) -> tuple[cards.CardItem
             replied_at_short=(
                 i.replied_at.strftime("%H:%M") if i.replied_at else ""
             ),
+            marked_unchanged=bool(i.marked_unchanged),
+            marked_at_short=(
+                i.marked_at.strftime("%H:%M") if i.marked_at else ""
+            ),
         )
         for i in sorted(items, key=lambda x: x.change_no)
     )
@@ -402,11 +406,6 @@ async def run_friday_round(
                 week_no=round_row.week_no,
                 date_label=date_label,
                 items=_card_item_views(items),
-                has_replies=any(i.replied_at for i in items),
-                responded_unchanged_at=(
-                    dispatch.responded_at.strftime("%H:%M")
-                    if dispatch.responded_at else ""
-                ),
                 change_table_url=table_url,
             )
             receive_id, id_type = (
@@ -573,8 +572,9 @@ async def run_monday_summary(
         for item in items:
             current = by_record.get(item.record_id)
             dispatch = dispatch_by_id.get(item.dispatch_id) if item.dispatch_id else None
-            # 「进展不变」按钮管的是没提交进展的其余变更（提交过的按③判）
-            unchanged_clicked = (
+            # ②类判定源（2026-11-24 改版）：单项勾选 marked_unchanged；
+            # 旧版全局按钮 response_type 覆盖名下未提交文字的其余变更
+            unchanged_clicked = bool(item.marked_unchanged) or (
                 dispatch is not None
                 and dispatch.response_type == RESPONSE_UNCHANGED
                 and item.replied_at is None

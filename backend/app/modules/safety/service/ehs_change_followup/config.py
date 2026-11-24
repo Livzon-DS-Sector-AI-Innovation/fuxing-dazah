@@ -12,6 +12,7 @@ from app.modules.safety.app_config.store import store as _app_config_store
 TOGGLE_KEY = "SAFETY_EHS_CHANGE_FOLLOWUP_ENABLED"
 GRAY_KEY = "SAFETY_EHS_CHANGE_FOLLOWUP_GRAY_RECIPIENT"
 EXCLUDED_KEY = "SAFETY_EHS_CHANGE_FOLLOWUP_EXCLUDED"
+WRITEBACK_DRY_RUN_KEY = "SAFETY_EHS_CHANGE_FOLLOWUP_WRITEBACK_DRY_RUN"
 
 # 排除清单预置（DESIGN §2.5 七项，2026-11-24 拍板）：状态填了已验收但无
 # 已通过验收单，待业务确认。确认后的出路都不改代码——补挂验收单关联自动判
@@ -35,3 +36,13 @@ def gray_recipient() -> str:
 def excluded_raw() -> str:
     """排除清单原文（逗号分隔变更编号）。"""
     return _app_config_store.get_str(EXCLUDED_KEY, DEFAULT_EXCLUDED)
+
+
+def writeback_dry_run() -> bool:
+    """回写演练模式（默认关）。
+
+    开 = 提交进展时**不真写**变更表「变更最新具体进展」，但按成功返回，
+    只验「回调→写库→改卡」链路。实机点名/交互演练用，避免污染生产表；
+    正式验收「回写」一项与上线必须关。
+    """
+    return _app_config_store.get_bool(WRITEBACK_DRY_RUN_KEY, False)

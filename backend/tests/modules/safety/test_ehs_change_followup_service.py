@@ -191,6 +191,12 @@ def _pin_officers(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_gray_by_default(monkeypatch: pytest.MonkeyPatch):
+    """压掉 .env.development 真实灰度收件人的泄漏（灰度用例自行覆写）。"""
+    monkeypatch.setattr(ecf_config, "gray_recipient", lambda: "")
+
+
+@pytest.fixture(autouse=True)
 def _pin_excluded(monkeypatch: pytest.MonkeyPatch):
     """排除清单钉桩（避开 app_config 默认 7 项，用例自控）。"""
     monkeypatch.setattr(ecf_config, "excluded_raw", lambda: "FX-EXC-1")
@@ -228,18 +234,25 @@ class TestFridayRound:
 
         # 落库：1 轮 + 1 dispatch + 3 items（含无主项）
         rounds = (await sealed_session.scalars(
-            select(EhsChangeFollowupRound)
+            select(EhsChangeFollowupRound).where(
+                EhsChangeFollowupRound.fired_on == FRIDAY
+            )
         )).all()
         assert len(rounds) == 1 and rounds[0].status == "sent"
+        round_id = rounds[0].id
         dispatches = (await sealed_session.scalars(
-            select(EhsChangeFollowupDispatch)
+            select(EhsChangeFollowupDispatch).where(
+                EhsChangeFollowupDispatch.round_id == round_id
+            )
         )).all()
         assert len(dispatches) == 1
         d = dispatches[0]
         assert d.officer_name == "杨昆" and d.send_status == "sent"
         assert d.message_id and d.change_count == 2
         items = (await sealed_session.scalars(
-            select(EhsChangeFollowupItem)
+            select(EhsChangeFollowupItem).where(
+                EhsChangeFollowupItem.round_id == round_id
+            )
         )).all()
         assert len(items) == 3
         assert sum(1 for i in items if i.dispatch_id is None) == 1
@@ -260,7 +273,9 @@ class TestFridayRound:
         )
         assert stats["todo"] == 3 and not send.calls
         rounds = (await sealed_session.scalars(
-            select(EhsChangeFollowupRound)
+            select(EhsChangeFollowupRound).where(
+                EhsChangeFollowupRound.fired_on == FRIDAY
+            )
         )).all()
         assert rounds == []
 
@@ -271,7 +286,15 @@ class TestFridayRound:
         assert len(send.calls) == 1
 
         # 模拟一张卡失败（如发送时网络错）后重跑：只补发这一张
-        d = (await sealed_session.scalars(select(EhsChangeFollowupDispatch))).first()
+        d = (await sealed_session.scalars(
+            select(EhsChangeFollowupDispatch).where(
+                EhsChangeFollowupDispatch.round_id.in_(
+                    select(EhsChangeFollowupRound.id).where(
+                        EhsChangeFollowupRound.fired_on == FRIDAY
+                    )
+                )
+            )
+        )).first()
         d.send_status = "failed"
         await sealed_session.flush()
 
@@ -288,7 +311,11 @@ class TestFridayRound:
         send = _SendStub(ok=False)
         with pytest.raises(RuntimeError, match="未送达"):
             await _run_friday(sealed_session, tables, send)
-        rounds = (await sealed_session.scalars(select(EhsChangeFollowupRound))).all()
+        rounds = (await sealed_session.scalars(
+            select(EhsChangeFollowupRound).where(
+                EhsChangeFollowupRound.fired_on == FRIDAY
+            )
+        )).all()
         assert rounds[0].status == "sending"
 
     async def test_unresolved_officer_counts_failed(self, sealed_session, monkeypatch):
@@ -328,7 +355,15 @@ async def _run_monday(session, tables, digest, *, now=MONDAY, dry_run=False):
 class TestMondaySummary:
     async def test_classification_and_idempotency(self, sealed_session):
         await _run_friday(sealed_session, _default_tables(), _SendStub())
-        d = (await sealed_session.scalars(select(EhsChangeFollowupDispatch))).first()
+        d = (await sealed_session.scalars(
+            select(EhsChangeFollowupDispatch).where(
+                EhsChangeFollowupDispatch.round_id.in_(
+                    select(EhsChangeFollowupRound.id).where(
+                        EhsChangeFollowupRound.fired_on == FRIDAY
+                    )
+                )
+            )
+        )).first()
 
         # 周末反馈：A1 提交了进展（表内追加）；A2 无变化且点了「进展不变」；
         # H1（无卡）无变化；OK/ST 已关闭；EXC 仍排除在库外（不在 items 里）
@@ -355,7 +390,9 @@ class TestMondaySummary:
 
         # 轮次收口 + 幂等：再跑跳过不重投
         round_row = (await sealed_session.scalars(
-            select(EhsChangeFollowupRound)
+            select(EhsChangeFollowupRound).where(
+                EhsChangeFollowupRound.fired_on == FRIDAY
+            )
         )).first()
         assert round_row.status == "summarized"
         again = await _run_monday(sealed_session, tables, _DigestStub())

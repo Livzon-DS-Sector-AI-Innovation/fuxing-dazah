@@ -1,13 +1,18 @@
-"""EHS 变更周度督办周五卡回调 —— 提交进展 / 点「进展不变」。
+"""EHS 变更周度督办周五卡回调 —— 逐项提交进展/勾选「进展不变」。
 
 路由（business_agent_bot_handler.handle_card_action）：
 - form 提交按钮 name ``ecf_submit_<dispatch_id>``（form 回调 action.value 不一定
   返回，name 必然在——progress_card 同款约定）
-- 「进展不变」按钮 value JSON ``{"scope": "ehs_change_followup", ...}``
+- 旧版全局「进展不变」按钮（scope=ehs_change_followup，2026-11-24 改版前
+  发出的卡）：兼容受理，落 dispatch.response_type（周一仍按旧口径参与判定）
 
-2.9s ACK 契约（daily_report_card / progress_card 同款）：回调内只做写表
-（Bitable 追加）+ 单行写库，改卡（PATCH 原卡）放后台 task。写库幂等，
-可重复点（重复提交进展以最后一次为准，表侧追加是提交历史语义）。
+交互（2026-11-24 改版）：表单 = 逐项「input（ecf_prog_<record_id>）+
+checkbox（ecf_unchk_<record_id>）」+ 一个提交按钮，一次提交多项。
+
+2.9s ACK 契约（daily_report 同款全链后台化）：一次提交可能含多项回写
+（N×2 次飞书 API），回调内只做纯校验，写表+写库+改卡全部放后台 task；
+ACK 返回「处理中」toast。写库幂等可重复提交（以最后一次为准）；
+填了进展的项优先于勾选（同项两者都给时以文字为准）。
 
 回写（DESIGN §4）：变更表「变更最新具体进展」末尾追加
 ``【卡片提交·YYYY-MM-DD HH:mm·姓名】原文``（progress_card.append_progress_value
@@ -75,9 +80,22 @@ def _approval_client():
 async def push_progress_to_change_table(
     record_id: str, text: str, *, operator_id: str | None = None,
 ) -> bool:
-    """定向回写「变更最新具体进展」（追加署名行，不覆盖；写前抑制回声）。"""
+    """定向回写「变更最新具体进展」（追加署名行，不覆盖；写前抑制回声）。
+
+    演练模式（`SAFETY_EHS_CHANGE_FOLLOWUP_WRITEBACK_DRY_RUN`，默认关）：
+    跳过真实写表、按成功返回，只走「回调→写库→改卡」链路——供实机点击
+    演练用（验交互不污染生产表）。正式验收/上线须保持关。
+    """
     if not record_id or not text:
         return False
+    from app.modules.safety.service.ehs_change_followup import config as _ecf_config
+
+    if _ecf_config.writeback_dry_run():
+        logger.info(
+            "[演练] 跳过「%s」真实回写 record_id=%s text=%r",
+            _PROGRESS_FIELD, record_id, text[:60],
+        )
+        return True
     from app.modules.safety.feishu.bitable_handler import _set_sync_ignore
     from app.modules.safety.feishu.progress_card import (
         append_progress_value,
@@ -153,11 +171,6 @@ async def refresh_dispatch_card(
             week_no=round_row.week_no,
             date_label=round_row.fired_on.strftime("%m-%d 周五"),
             items=_card_item_views(items),
-            has_replies=any(i.replied_at for i in items),
-            responded_unchanged_at=(
-                dispatch.responded_at.strftime("%H:%M")
-                if dispatch.responded_at else ""
-            ),
             change_table_url=_change_table_url(),
         )
         from app.modules.safety.feishu.notification import update_card
@@ -225,13 +238,11 @@ async def handle_ehs_change_followup_action(
 async def _handle_submit(
     db: Any, dispatch_id: str, event_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """提交进展：写表（追加署名行）→ 单行写库 → 后台 PATCH 原卡。"""
-    form_value = event_data.get("action", {}).get("form_value") or {}
-    record_id = str(form_value.get("change") or "").strip()
-    text = str(form_value.get("progress") or "").strip()
-    if not record_id or not text:
-        return cards.toast("请选择变更并填写进展后再提交", "error")
+    """提交反馈（逐项：填进展/勾进展不变，一次多项）。
 
+    回调内只做纯校验（2.9s 契约）：表单解析 + 收卡人身份；写表+写库+改卡
+    全链放后台 task，ACK 返回「处理中」。
+    """
     dispatch = await db.scalar(
         select(EhsChangeFollowupDispatch).where(
             EhsChangeFollowupDispatch.id == dispatch_id,
@@ -246,41 +257,148 @@ async def _handle_submit(
             dispatch_id, _operator_id(event_data),
         )
         return cards.toast("仅收卡人本人可操作", "error")
-    item = await db.scalar(
-        select(EhsChangeFollowupItem).where(
-            EhsChangeFollowupItem.dispatch_id == dispatch.id,
-            EhsChangeFollowupItem.record_id == record_id,
-            EhsChangeFollowupItem.is_deleted.is_(False),
+
+    form_value = event_data.get("action", {}).get("form_value") or {}
+    signals = _parse_form(dispatch.id, form_value, db_items=None)
+    if not (signals["texts"] or signals["checks"]):
+        return cards.toast(
+            "请至少填写一项新进展，或勾选一项「进展不变」", "error",
         )
-    )
-    if item is None:
-        return cards.toast("该变更不在本卡督办范围内", "error")
 
     operator = _operator_id(event_data)
-    ok = await push_progress_to_change_table(
-        record_id, text, operator_id=operator or None,
+    _log_task(
+        _apply_submission(dispatch_id, form_value, operator or None),
+        tag="submit",
     )
-    if not ok:
-        # 写表失败不记为已反馈（DESIGN §9）
-        return cards.toast("提交失败，请稍后重试", "error")
+    return cards.toast("提交处理中，本卡片即将更新反馈状态…")
 
-    item.replied_progress = text
-    item.replied_at = datetime.now(_TZ_SHANGHAI)
-    item.replied_by = operator or None
-    await db.commit()
 
-    _log_task(refresh_dispatch_card(dispatch_id), tag="submit")
-    logger.info(
-        "ehs_change_followup 提交进展: dispatch=%s change=%s operator=%s",
-        dispatch_id, item.change_no, operator or "-",
+def _truthy_check(value: Any) -> bool:
+    """checker 回传值判真（实测可能为 true / "true" / ["1"] / 1 / "checked"）。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "checked", "yes", "on")
+    if isinstance(value, (list, tuple)):
+        return any(_truthy_check(v) for v in value)
+    if isinstance(value, dict):
+        for key in ("checked", "value", "selected"):
+            if key in value:
+                return _truthy_check(value[key])
+    return bool(value)
+
+
+def _parse_form(
+    dispatch_id: Any, form_value: dict[str, Any], *, db_items: list | None,
+) -> dict[str, Any]:
+    """form_value → ({record_id: 文本}, {record_id: 勾选})。
+
+    db_items 传入时按卡内实际项过滤（防旧卡残留 name 提交范围外变更）。
+    """
+    texts: dict[str, str] = {}
+    checks: dict[str, bool] = {}
+    in_scope = (
+        {i.record_id for i in db_items} if db_items is not None else None
     )
-    return cards.toast("进展已提交，感谢更新！")
+    for key, value in (form_value or {}).items():
+        if not isinstance(key, str):
+            continue
+        if key.startswith(cards.PROG_INPUT_PREFIX):
+            rid = key[len(cards.PROG_INPUT_PREFIX):]
+            text = str(value or "").strip()
+            if text and (in_scope is None or rid in in_scope):
+                texts[rid] = text
+        elif key.startswith(cards.UNCHK_INPUT_PREFIX):
+            rid = key[len(cards.UNCHK_INPUT_PREFIX):]
+            if _truthy_check(value) and (in_scope is None or rid in in_scope):
+                checks[rid] = True
+    return {"texts": texts, "checks": checks}
+
+
+async def _apply_submission(
+    dispatch_id: str, form_value: dict[str, Any], operator_id: str | None,
+    *, session: Any = None,
+) -> None:
+    """后台任务体：逐项写表（填了进展的）→ 写库（回复/标记）→ PATCH 原卡。
+
+    单项写表失败该项不记已反馈（DESIGN §9），其余项不受影响；重复提交以
+    最后一次为准（同一项又填文字时覆盖并清除勾选标记）。session 测试注入。
+    """
+    from app.core.database import async_session_factory
+
+    own = session is None
+    if own:
+        db = async_session_factory()
+    else:
+        db = session
+    try:
+        dispatch = await db.scalar(
+            select(EhsChangeFollowupDispatch).where(
+                EhsChangeFollowupDispatch.id == dispatch_id,
+                EhsChangeFollowupDispatch.is_deleted.is_(False),
+            )
+        )
+        if dispatch is None:
+            logger.warning("ehs_change_followup 提交落库时卡已失效: %s", dispatch_id)
+            return
+        items = list((await db.scalars(
+            select(EhsChangeFollowupItem).where(
+                EhsChangeFollowupItem.dispatch_id == dispatch.id
+            )
+        )).all())
+        signals = _parse_form(dispatch.id, form_value, db_items=items)
+        texts, checks = signals["texts"], signals["checks"]
+        now = datetime.now(_TZ_SHANGHAI)
+        applied = 0
+        for item in items:
+            text = texts.get(item.record_id)
+            if text:
+                ok = await push_progress_to_change_table(
+                    item.record_id, text, operator_id=operator_id,
+                )
+                if not ok:
+                    logger.warning(
+                        "ehs_change_followup 单项回写失败不记已反馈: %s",
+                        item.change_no,
+                    )
+                    continue
+                item.replied_progress = text
+                item.replied_at = now
+                item.replied_by = operator_id
+                item.marked_unchanged = False   # 文字优先，清掉旧标记
+                applied += 1
+            elif checks.get(item.record_id):
+                item.marked_unchanged = True
+                item.marked_at = now
+                applied += 1
+        await db.commit()
+        if applied:
+            await refresh_dispatch_card(dispatch_id)
+        logger.info(
+            "ehs_change_followup 提交反馈完成: dispatch=%s 文字 %d 项 / "
+            "标记 %d 项 operator=%s",
+            dispatch_id, len(texts), len(checks), operator_id or "-",
+        )
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "ehs_change_followup 提交反馈后台处理失败: dispatch=%s", dispatch_id,
+        )
+    finally:
+        if own:
+            await db.close()
 
 
 async def _handle_unchanged(
     db: Any, dispatch_id: str, event_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """点「进展不变，无需更新」：单行写库（幂等）→ 后台 PATCH 原卡。"""
+    """旧版全局「进展不变」按钮（2026-11-24 改版前发出的卡）。
+
+    兼容受理：落 dispatch.response_type（周一按旧口径=名下未提交项算②类）；
+    新卡已无此按钮，单项勾选走 _apply_submission 的 marked_unchanged。
+    """
     dispatch = await db.scalar(
         select(EhsChangeFollowupDispatch).where(
             EhsChangeFollowupDispatch.id == dispatch_id,
@@ -305,7 +423,7 @@ async def _handle_unchanged(
 
     _log_task(refresh_dispatch_card(dispatch_id), tag="unchanged")
     logger.info(
-        "ehs_change_followup 已反馈进展不变: dispatch=%s operator=%s",
+        "ehs_change_followup 已反馈进展不变(旧版全局按钮): dispatch=%s operator=%s",
         dispatch_id, _operator_id(event_data) or "-",
     )
     return cards.toast("已记录：其余变更进展不变，无需更新")

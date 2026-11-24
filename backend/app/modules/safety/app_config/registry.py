@@ -176,6 +176,12 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "service/ehs_change_followup/config.py DEFAULT_EXCLUDED）",
     ),
     _flag(
+        "SAFETY_EHS_CHANGE_FOLLOWUP_WRITEBACK_DRY_RUN", False,
+        "EHS变更督办回写演练（开 = 卡片提交进展时不真写变更表"
+        "「变更最新具体进展」，仅验回调→写库→改卡链路；实机交互演练用，"
+        "正式回写验收与上线须关）",
+    ),
+    _flag(
         "SAFETY_DAILY_DIGEST_ENABLED", True,
         "「安全速递」总卡模式总开关（开 = 各报告并入当日总卡；关 = 各报告独立群卡）",
     ),

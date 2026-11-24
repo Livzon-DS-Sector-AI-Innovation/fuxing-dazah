@@ -1,16 +1,18 @@
-"""周五卡三态 + 两个安全速递格子 —— 纯函数（无 DB 无 IO）。
+"""周五卡（逐项反馈版）+ 两个安全速递格子 —— 纯函数（无 DB 无 IO）。
 
-卡结构（DESIGN §4）：自建完整卡片 JSON 2.0（send_user_card_dict 发送、
-update_card PATCH 复用同一构建器）。全部变更放同一个 markdown 正文块
-（十几项也只有一个正文元素，不超单卡 200 元素）；表单 = select（选项值=
-record_id，展示=编号+名称截断）+ input + submit 按钮。
-按钮 name 携带 dispatch_id（form 回调 action.value 不一定返回，name 必然在）。
+交互（2026-11-24 实机反馈改版，用户拍板）：**每个变更一个填写框**——
+表单内逐项「最新进展 input + ☑进展不变 checkbox」，底部一个提交按钮一次
+提交全部；不再有全局「其余变更进展不变」按钮与 select 下拉（旧版卡面见
+git 历史；旧卡的 ecf_unchanged_ 回调仍兼容受理，落 dispatch.response_type）。
 
-三态：
-- 初始：说明 + 「进展不变」按钮 + 表单；
-- 部分提交（提交过 ≥1 次进展）：正文底部追加 ✅ 提交行，表单保留，
-  「进展不变」按钮撤掉；
-- 已反馈（点了「进展不变」）：正文底部追加已反馈行，按钮和表单都撤掉。
+卡结构（DESIGN §4 改版）：自建完整卡片 JSON 2.0（send_user_card_dict 发送、
+update_card PATCH 复用同一构建器）。变更清单放同一个 markdown 正文块（十几项
+也只有一个正文元素）；反馈表单元素数 = 2×项数+1（13 项=27，远低于上限）。
+input/checkbox 的 name 携带 record_id（form 回调 action.value 不一定返回，
+action.name 必然在；form_value 按 name 回传逐项值）。
+
+单项状态回显（提交后 PATCH 重建）：填过进展 → ✅ 行；勾过进展不变 → ☑ 行；
+表单保留可继续提交（重复提交以最后一次为准）。
 """
 
 from __future__ import annotations
@@ -20,15 +22,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.modules.safety.feishu.daily_digest import DigestCell
-from app.modules.safety.feishu.notification import button_row
 
 SCOPE = "ehs_change_followup"
 SUBMIT_NAME_PREFIX = "ecf_submit_"
+# 旧版全局按钮（已停用渲染；旧卡回调兼容受理）
 UNCHANGED_NAME_PREFIX = "ecf_unchanged_"
+# 逐项表单组件 name 前缀（后接 record_id）
+PROG_INPUT_PREFIX = "ecf_prog_"
+UNCHK_INPUT_PREFIX = "ecf_unchk_"
 
 _TITLE_MAX = 24       # 卡面变更名称截断
-_OPTION_TEXT_MAX = 60  # select 选项文本截断（编号+名称）
-_PROGRESS_MAX = 60     # 卡面进展行截断
+_LABEL_MAX = 40       # 表单 input 标签（编号+名称）截断
+_PROGRESS_MAX = 60    # 卡面进展行截断
 _DIGEST_DETAIL_MAX = 400  # 速递格子明细行截断
 
 TAG_COLOR = "orange"
@@ -58,9 +63,11 @@ class CardItemView:
     expected_start: str | None = None
     approval_url: str | None = None
     nag_weeks: int = 1
-    # 已提交态（回填重建用）
+    # 已反馈态（回填重建用）
     replied_progress: str = ""
     replied_at_short: str = ""        # HH:MM
+    marked_unchanged: bool = False
+    marked_at_short: str = ""         # HH:MM
 
 
 @dataclass(frozen=True)
@@ -72,13 +79,11 @@ class FridayCardView:
     week_no: int
     date_label: str                   # 如 11-27 周五
     items: tuple[CardItemView, ...] = ()
-    has_replies: bool = False         # 提交过 ≥1 次进展（撤「进展不变」按钮，表单保留）
-    responded_unchanged_at: str = ""  # HH:MM（非空=已反馈态，按钮和表单都撤）
     change_table_url: str = ""        # 「打开变更表」链接（可空）
 
 
 def _item_block(item: CardItemView) -> list[str]:
-    """一项变更的正文块（3 行内）。"""
+    """一项变更的正文块（3-4 行内；已反馈状态行随重建回显）。"""
     head = item.change_no or item.record_id
     title = _short(item.title, _TITLE_MAX) or "（无名称）"
     if item.approval_url:
@@ -99,6 +104,10 @@ def _item_block(item: CardItemView) -> list[str]:
             f"  ✅ {item.change_no}：{_short(item.replied_progress, _PROGRESS_MAX)}"
             f"（{item.replied_at_short}）"
         )
+    elif item.marked_unchanged:
+        lines.append(
+            f"  ☑ {item.change_no}：进展不变，无需更新（{item.marked_at_short}）"
+        )
     elif item.progress:
         lines.append(f"  进展：{_short(item.progress, _PROGRESS_MAX)}")
     return lines
@@ -111,86 +120,44 @@ def _submit_value(dispatch_id: str) -> str:
     )
 
 
-def _unchanged_value(dispatch_id: str) -> str:
-    return json.dumps(
-        {"scope": SCOPE, "action": "unchanged", "dispatch_id": dispatch_id},
-        ensure_ascii=False,
-    )
-
-
 def _form_elements(view: FridayCardView, dispatch_id: str) -> list[dict[str, Any]]:
-    """反馈区：说明 + 「进展不变」按钮（未提交过才在）+ 表单（已反馈则都撤）。"""
-    elements: list[dict[str, Any]] = []
-    if view.responded_unchanged_at:
-        elements.append({
-            "tag": "markdown",
-            "content": (
-                f"✅ 已反馈：其余变更进展不变，无需更新"
-                f"（{view.responded_unchanged_at}）"
-            ),
-        })
-        return elements
-    elements.append({
+    """反馈区：说明 + 逐项「input + ☑进展不变」表单 + 一个提交按钮。"""
+    elements: list[dict[str, Any]] = [{
         "tag": "markdown",
         "content": (
-            "请在周一 09:00 前反馈：\n"
-            "· 有新进展 → 选变更、填进展后点「提交进展」，"
-            "会写进变更表「变更最新具体进展」\n"
-            + (
-                "· 已提交过进展的变更可继续补充提交"
-                if view.has_replies
-                else "· 其余都没变化 → 点下面的按钮"
-            )
+            "请在周一 09:00 前反馈：每项变更可直接填写新进展"
+            "（会写进变更表「变更最新具体进展」），无变化的勾选「进展不变」；"
+            "填完点底部「提交反馈」。已反馈过的项可继续补充，以最后一次为准。"
         ),
+    }]
+    form_elements: list[dict[str, Any]] = []
+    for item in view.items:
+        label = _short(
+            f"{item.change_no or item.record_id} {item.title}", _LABEL_MAX,
+        )
+        form_elements.append({
+            "tag": "input",
+            "name": f"{PROG_INPUT_PREFIX}{item.record_id}",
+            "label": {"tag": "plain_text", "content": label},
+            "placeholder": {"tag": "plain_text", "content": "填写新进展（无变化可不填）"},
+        })
+        form_elements.append({
+            # 飞书卡片 2.0 的勾选组件是 checker（2026-11-24 实机实测：
+            # checkbox 报 not support tag；checker 属性为 text + checked）
+            "tag": "checker",
+            "name": f"{UNCHK_INPUT_PREFIX}{item.record_id}",
+            "text": {"tag": "plain_text", "content": "进展不变，无需更新"},
+            "checked": False,
+        })
+    form_elements.append({
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": "提交反馈"},
+        "type": "primary",
+        "form_action_type": "submit",
+        "name": f"{SUBMIT_NAME_PREFIX}{dispatch_id}",
+        "value": _submit_value(dispatch_id),
     })
-    # 「进展不变」只在从未提交过进展时提供（§4：提交进展后按钮撤掉）
-    if not view.has_replies:
-        elements.append(button_row({
-            "tag": "button",
-            "text": {"tag": "plain_text", "content": "✅ 其余变更进展不变，无需更新"},
-            "type": "default",
-            "name": f"{UNCHANGED_NAME_PREFIX}{dispatch_id}",
-            "value": _unchanged_value(dispatch_id),
-        }))
-    options = [
-        {
-            "text": {
-                "tag": "plain_text",
-                "content": _short(
-                    f"{it.change_no or it.record_id} {it.title}", _OPTION_TEXT_MAX,
-                ),
-            },
-            "value": it.record_id,
-        }
-        for it in view.items
-    ][:99]  # select 选项上限 99（当前单人最多 13 项）
-    elements.append({
-        "tag": "form",
-        "name": "ecf_form",
-        "elements": [
-            {
-                "tag": "select_static",
-                "name": "change",
-                "placeholder": {"tag": "plain_text", "content": "请选择变更"},
-                "options": options,
-            },
-            {
-                "tag": "input",
-                "name": "progress",
-                "required": True,
-                "label": {"tag": "plain_text", "content": "最新进展"},
-                "placeholder": {"tag": "plain_text", "content": "请填写本次进展"},
-            },
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "提交进展"},
-                "type": "primary",
-                "form_action_type": "submit",
-                "name": f"{SUBMIT_NAME_PREFIX}{dispatch_id}",
-                "value": _submit_value(dispatch_id),
-            },
-        ],
-    })
+    elements.append({"tag": "form", "name": "ecf_form", "elements": form_elements})
     return elements
 
 
@@ -262,7 +229,7 @@ def build_friday_cell(view: FridayDigestView) -> DigestCell:
         f"未验收 **{view.total_todo}** 项 ｜ "
         f"已私发 **{len(sent_people)}** 人（{len(sent_people)} 张卡送达）"
     )
-    zone = "已私发各变更的分管安全员，收卡人可在卡片内直接提交进展"
+    zone = "已私发各变更的分管安全员，收卡人可在卡片内逐项提交进展或标记进展不变"
 
     detail: list[str] = [f"**已私发对象（{len(sent_people)} 人）**"]
     for d in sent_people:

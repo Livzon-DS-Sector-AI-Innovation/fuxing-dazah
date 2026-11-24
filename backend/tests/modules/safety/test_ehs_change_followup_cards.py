@@ -1,8 +1,8 @@
-"""EHS 变更周度督办 — 周五卡三态与两个速递格子（纯结构验证，不依赖网络）。
+"""EHS 变更周度督办 — 周五卡（逐项反馈版）与两个速递格子（纯结构验证）。
 
-覆盖（DESIGN §4/§6）：form+select 结构、按钮 name/value 路由约定、
-提交后撤「进展不变」按钮保表单、已反馈态撤按钮+表单、select 选项 99 上限、
-周五格（排除/未发送/提示桶）与周一格（三类+已关闭计数）。
+覆盖（DESIGN §4 改版 2026-11-24）：逐项「input+checkbox」表单、一个提交
+按钮（无全局按钮/select）、input/checkbox name 携带 record_id、已反馈状态行
+（✅ 填写 / ☑ 标记）、周五格（排除/未发送/提示桶）与周一格（三类+已关闭）。
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def _form(card: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════
-# 周五卡三态
+# 周五卡（逐项反馈）
 # ═══════════════════════════════════════════════════════════
 
 class TestFridayCard:
@@ -60,64 +60,55 @@ class TestFridayCard:
         assert card["schema"] == "2.0"
         assert card["header"]["title"]["content"] == "⏰ EHS变更周度督办 · 未验收 2 项"
         assert "第 48 周（11-27 周五）" in card["header"]["subtitle"]["content"]
-        # 全部变更放同一个正文块（DESIGN §4：十几项也只有一个正文元素）
+        # 变更清单同一 markdown 正文块（applink + 状态未填兜底）
         md = _elements(card, "markdown")
         items_block = md[0]["content"]
         assert "FX-D4-2026-0826" in items_block and "FXD4-2026-0930" in items_block
         assert "[审批详情](https://applink.feishu.cn/x)" in items_block
         assert "状态未填" in items_block
         assert "第 3 周督办" in items_block
-        # 表单：select（值=record_id）+ input + submit 按钮（name 携带 dispatch_id）
+        # 表单：逐项 input+checkbox 对 + 一个提交按钮；无全局按钮/select
         form = _form(card)
-        select = [e for e in form["elements"] if e["tag"] == "select_static"][0]
-        assert select["options"][0]["value"] == "recA1"
-        submit = [e for e in form["elements"] if e["tag"] == "button"][0]
-        assert submit["name"] == "ecf_submit_dp-1"
-        assert submit["form_action_type"] == "submit"
-        # 「进展不变」按钮：name/value 路由约定
-        button_cols = _elements(card, "column_set")
-        flat = [
-            btn for cs in button_cols
-            for column in cs["columns"] for btn in column["elements"]
-        ]
-        unchanged = [b for b in flat if b.get("name", "").startswith("ecf_unchanged_")]
-        assert len(unchanged) == 1
-        assert unchanged[0]["name"] == "ecf_unchanged_dp-1"
-        assert json.loads(unchanged[0]["value"])["scope"] == cards.SCOPE
+        inputs = [e for e in form["elements"] if e["tag"] == "input"]
+        checks = [e for e in form["elements"] if e["tag"] == "checker"]
+        buttons = [e for e in form["elements"] if e["tag"] == "button"]
+        assert len(inputs) == 2 and len(checks) == 2 and len(buttons) == 1
+        assert inputs[0]["name"] == "ecf_prog_recA1"
+        assert "FX-D4-2026-0826" in inputs[0]["label"]["content"]
+        assert checks[0]["name"] == "ecf_unchk_recA1"
+        assert "进展不变" in checks[0]["text"]["content"]
+        assert buttons[0]["name"] == "ecf_submit_dp-1"
+        assert buttons[0]["form_action_type"] == "submit"
+        assert json.loads(buttons[0]["value"])["scope"] == cards.SCOPE
+        # 无全局按钮（无 column_set）、无 select
+        assert not _elements(card, "column_set")
+        assert not [e for e in form["elements"] if e["tag"] == "select_static"]
         # 打开变更表链接
         assert any("打开变更表" in e["content"] for e in md)
 
-    def test_partial_state_keeps_form_drops_unchanged_button(self):
-        """提交过进展：表单保留，「进展不变」按钮撤掉，正文出现 ✅ 提交行。"""
-        view = _view(
-            items=(_item(replied_progress="已进料", replied_at_short="15:02"),),
-            has_replies=True,
-        )
+    def test_replied_and_marked_state_lines(self):
+        """已反馈回显：✅ 填写行 / ☑ 标记行；表单保留可继续提交。"""
+        view = _view(items=(
+            _item(replied_progress="已进料", replied_at_short="15:02"),
+            _item(record_id="recA2", change_no="FXD4-2026-0930",
+                  status_shown="", progress="", marked_unchanged=True,
+                  marked_at_short="16:40"),
+        ))
         card = cards.build_friday_card(view, "dp-2")
-        md = _elements(card, "markdown")[0]["content"]
-        assert "✅ FX-D4-2026-0826：已进料（15:02）" in md
-        assert _form(card)  # 表单保留
-        flat = [
-            btn for cs in _elements(card, "column_set")
-            for column in cs["columns"] for btn in column["elements"]
-        ]
-        assert not [b for b in flat if b.get("name", "").startswith("ecf_unchanged_")]
+        items_block = _elements(card, "markdown")[0]["content"]
+        assert "✅ FX-D4-2026-0826：已进料（15:02）" in items_block
+        assert "☑ FXD4-2026-0930：进展不变，无需更新（16:40）" in items_block
+        # 表单保留（每项仍可继续填写/勾选）
+        form = _form(card)
+        assert len([e for e in form["elements"] if e["tag"] == "input"]) == 2
 
-    def test_responded_state_drops_form_and_button(self):
-        view = _view(responded_unchanged_at="14:32")
-        card = cards.build_friday_card(view, "dp-3")
-        assert not _elements(card, "form")
-        assert not _elements(card, "column_set")
-        assert any("已反馈：其余变更进展不变，无需更新（14:32）" in e["content"]
-                   for e in _elements(card, "markdown"))
-
-    def test_select_options_capped_at_99(self):
+    def test_form_element_count_scales(self):
+        """元素数 = 2×项数+1（13 项=27，远低于单卡上限）；勾选组件是 checker。"""
         items = tuple(
-            _item(record_id=f"rec{i}", change_no=f"FX-{i:04d}") for i in range(120)
+            _item(record_id=f"rec{i}", change_no=f"FX-{i:04d}") for i in range(13)
         )
-        card = cards.build_friday_card(_view(items=items), "dp-4")
-        select = [e for e in _form(card)["elements"] if e["tag"] == "select_static"][0]
-        assert len(select["options"]) == 99
+        card = cards.build_friday_card(_view(items=items), "dp-3")
+        assert len(_form(card)["elements"]) == 27
 
 
 # ═══════════════════════════════════════════════════════════
