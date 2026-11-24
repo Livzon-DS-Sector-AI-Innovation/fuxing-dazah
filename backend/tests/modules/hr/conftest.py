@@ -48,6 +48,10 @@ _ALL_HR_PERMS: set[str] = {
     "hr:performance:read", "hr:performance:manage",
     "hr:title:read", "hr:title:manage", "hr:title:scores:read", "hr:title:judge",
     "hr:incident:read", "hr:incident:manage",
+    # 2026-11 新增模块的权限码（此前缺失，证件库接口的用例会被 403）。
+    # hr:profile:sensitive 故意不加：导出类用例依赖「无敏感权限 → 身份证脱敏」的口径。
+    "hr:certificate:read", "hr:certificate:manage", "hr:certificate:audit",
+    "hr:probation:exam:manage",
 }
 
 

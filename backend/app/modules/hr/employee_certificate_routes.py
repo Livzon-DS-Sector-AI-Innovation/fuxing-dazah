@@ -63,6 +63,41 @@ async def list_missing_certificates(
     return success_response(data=rows)
 
 
+@router.get("/certificates/missing/export", summary="导出缺件清单（Excel，按员工汇总为一行）")
+async def export_missing_certificates(
+    department: str | None = Query(None),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """缺件清单导出：与缺件清单接口同口径（应交未交，已排除离职），供 HR 线下催收。
+
+    service 按「员工×类别」逐行输出，这里按员工合并成一行（缺件数 + 明细）。
+    """
+    from openpyxl import Workbook
+
+    from app.modules.hr.xlsx_utils import write_sheet, xlsx_response
+
+    rows = await cert_service.list_missing(session, hr_scope, department=department)
+    grouped: dict[str, dict] = {}
+    for r in rows:
+        g = grouped.setdefault(r["employee_id"], {**r, "missing": []})
+        g["missing"].append(r["category_label"])
+    data = [[
+        g["employee_name"], g["employee_number"], g["department"],
+        "是" if g["is_key_position"] else "否",
+        len(g["missing"]), "、".join(g["missing"]),
+    ] for g in grouped.values()]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "证件缺件清单"
+    write_sheet(ws, ["姓名", "工号", "部门", "重点岗位", "缺件数", "缺件明细"], data)
+    # write_sheet 统一落字符串；缺件数写成数字，HR 在 Excel 里才能按它排序/筛选
+    for row_idx, g in enumerate(grouped.values(), start=2):
+        ws.cell(row=row_idx, column=5, value=len(g["missing"]))
+    return xlsx_response(wb, f"证件缺件清单_{date.today().isoformat()}.xlsx")
+
+
 # ── 应交证件配置 ──
 
 

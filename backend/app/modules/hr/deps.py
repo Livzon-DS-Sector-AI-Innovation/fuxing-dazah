@@ -469,6 +469,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 工伤/纠纷台账
     (r"/incidents", {"GET": "hr:incident:read", "POST": "hr:incident:manage",
                      "PUT": "hr:incident:manage", "DELETE": "hr:incident:manage"}),
+    # 人事提醒：测试发送（真实发飞书卡片），仅系统配置权限可用
+    (r"/reminder-settings", "hr:settings:manage"),
     # 职称评审（具体子路径在通用条目之前）
     (r"/title/activities/.*/bind-tables", "hr:title:manage"),
     (r"/title/activities/.*/open", "hr:title:manage"),

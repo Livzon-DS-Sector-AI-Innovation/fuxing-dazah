@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App, Alert, Button, DatePicker, Drawer, Empty, Form, Input, Modal, Select, Spin, Switch, Tag, Upload } from 'antd'
 import { EyeOutlined, HistoryOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
-import dayjs from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import {
   CERTIFICATE_CATEGORY_LABELS,
   type CertificateCategory,
   type CertificateCategoryView,
+  type CertificateUploadInput,
   type EmployeeCertificatesView,
 } from '@/types/hr'
 import {
@@ -159,31 +160,26 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
     }
   }
 
-  const handleEdit = (cert: NonNullable<CertificateCategoryView['current']>) => {
-    // 复用上传弹窗做要素更正（无文件时走 PUT）
-    modal.confirm({
-      title: `更正「${CERTIFICATE_CATEGORY_LABELS[cert.category]}」登记要素`,
-      content: '在弹窗中修改发证日期/有效期等要素，不影响已上传的原件。',
-      okText: '继续',
-      onOk: () => openEditModal(cert),
-    })
-  }
-
+  /** 更正登记要素：直接开表单弹窗（此前先弹一层确认再开表单，多一次无意义点击） */
   const openEditModal = (cert: NonNullable<CertificateCategoryView['current']>) => {
     setUploadTarget(null)
     setFile(null)
     form.resetFields()
+    // 证号后端返回的是脱敏值，不回填（留空=保持不变）；日期回填真实值，清空即清除
     form.setFieldsValue({
       certificate_name: cert.certificate_name ?? undefined,
-      certificate_no: undefined,
       is_permanent: cert.is_permanent,
+      issue_date: cert.issue_date ? dayjs(cert.issue_date) : undefined,
+      expiry_date: !cert.is_permanent && cert.expiry_date ? dayjs(cert.expiry_date) : undefined,
       remark: cert.remark ?? undefined,
     })
+    // 带上类别：上传目标为空时标题要靠它显示「更正哪一类证件」
+    setEditTarget({ id: cert.id, category: cert.category })
     setUploadOpen(true)
-    setEditTargetId(cert.id)
   }
 
-  const [editTargetId, setEditTargetId] = useState<string | null>(null)
+  // 更正目标（null = 当前是上传/换证模式）
+  const [editTarget, setEditTarget] = useState<{ id: string; category: CertificateCategory } | null>(null)
 
   const handleDelete = (cert: NonNullable<CertificateCategoryView['current']>) => {
     modal.confirm({
@@ -223,8 +219,8 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
             <div className="flex items-center justify-between gap-2 mb-2">
               <div className="flex items-center gap-2 min-w-0">
                 <b className="text-[14px]">{cat.label}</b>
-                {cat.required && <Tag style={{ fontSize: 10, margin: 0 }}>应交</Tag>}
-                {missingSet.has(cat.category) && <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>待补交</Tag>}
+                {cat.required && <Tag style={{ margin: 0 }}>应交</Tag>}
+                {missingSet.has(cat.category) && <Tag color="orange" style={{ margin: 0 }}>待补交</Tag>}
               </div>
               {canManage && (
                 <Button size="small" icon={cat.current
@@ -238,7 +234,7 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
               <div className="text-[13px] space-y-1">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="text-gray-700">{cat.current.certificate_name || '（未填证件名称）'}</span>
-                  <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>v{cat.current.version_no} 当前版</Tag>
+                  <Tag color="blue" style={{ margin: 0 }}>v{cat.current.version_no} 当前版</Tag>
                   <span className="text-gray-500">{expiryTag(cat.current)}</span>
                   {cat.current.certificate_no && (
                     <span className="text-gray-400 font-mono text-xs">证号 {cat.current.certificate_no}</span>
@@ -255,7 +251,7 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
                     查看
                   </Button>
                   <Button size="small" onClick={() => handleDownload(cat.current!.id, cat.current!.filename)}>下载</Button>
-                  {canManage && <Button size="small" type="text" onClick={() => handleEdit(cat.current!)}>更正要素</Button>}
+                  {canManage && <Button size="small" type="text" onClick={() => openEditModal(cat.current!)}>更正要素</Button>}
                   {canManage && <Button size="small" type="text" danger onClick={() => handleDelete(cat.current!)}>删除</Button>}
                 </div>
                 {cat.history.length > 0 && (
@@ -288,36 +284,46 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
       </div>
 
       <Modal
-        title={editTargetId
-          ? `更正证件要素 — ${uploadTarget ? uploadTarget.label : ''}`
+        title={editTarget
+          ? `更正证件要素 — ${CERTIFICATE_CATEGORY_LABELS[editTarget.category]}`
           : `上传证件 — ${uploadTarget?.label || ''}${uploadTarget?.current ? `（当前 v${uploadTarget.current.version_no}，将升为新版本）` : ''}`}
         open={uploadOpen}
         onOk={async () => {
-          if (editTargetId) {
-            const v = await form.validateFields()
+          if (editTarget) {
+            // 校验失败只走行内提示
+            type EditValues = {
+              certificate_name?: string; certificate_no?: string; remark?: string
+              issue_date?: Dayjs; expiry_date?: Dayjs; is_permanent?: boolean
+            }
+            let v: EditValues
+            try { v = await form.validateFields() } catch { return }
+            setUploading(true)
             try {
-              await updateEmployeeCertificate(editTargetId, {
+              await updateEmployeeCertificate(editTarget.id, {
                 certificate_name: v.certificate_name,
-                certificate_no: v.certificate_no,
-                issue_date: v.issue_date?.format('YYYY-MM-DD'),
-                expiry_date: v.is_permanent ? undefined : v.expiry_date?.format('YYYY-MM-DD'),
+                // 证号留空=保持不变（展示值是脱敏的，不回填）
+                certificate_no: v.certificate_no || undefined,
+                // 日期清空须显式传 null：undefined 会被序列化丢弃，后端按「不更新」处理
+                issue_date: v.issue_date ? v.issue_date.format('YYYY-MM-DD') : null,
+                expiry_date: v.is_permanent || !v.expiry_date ? null : v.expiry_date.format('YYYY-MM-DD'),
                 is_permanent: !!v.is_permanent,
-                remark: v.remark,
-              })
+                remark: v.remark ?? null,
+              } as unknown as Partial<CertificateUploadInput>)
               msg.success('已更正')
               setUploadOpen(false)
               void load()
             } catch (e) { msg.error(e instanceof Error ? e.message : '更正失败') }
+            finally { setUploading(false) }
           } else {
             await handleUpload()
           }
         }}
-        okText={editTargetId ? '保存更正' : '上传归档'}
+        okText={editTarget ? '保存更正' : '上传归档'}
         confirmLoading={uploading}
-        onCancel={() => { setUploadOpen(false); setEditTargetId(null) }}
+        onCancel={() => { setUploadOpen(false); setEditTarget(null) }}
       >
         <Form form={form} layout="vertical" className="mt-2">
-          {!editTargetId && (
+          {!editTarget && (
             <>
               <Form.Item label="证件扫描件" required rules={[{ required: true, message: '' }]}>
                 <Upload accept=".jpg,.jpeg,.png,.webp,.bmp,.pdf" maxCount={1} showUploadList
@@ -327,15 +333,15 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
               </Form.Item>
               {parsing && (
                 <Alert type="info" showIcon className="mb-3"
-                  message="正在自动识别证件要素…" />
+                  title="正在自动识别证件要素…" />
               )}
               {parsedInfo === 'ok' && (
                 <Alert type="success" showIcon className="mb-3" closable
-                  message="已自动识别并回填要素，请核对无误后上传（识别结果仅供参考）" />
+                  title="已自动识别并回填要素，请核对无误后上传（识别结果仅供参考）" />
               )}
               {parsedInfo === 'fail' && (
                 <Alert type="warning" showIcon className="mb-3" closable
-                  message="自动识别不可用或未识别出内容，请手动填写要素" />
+                  title="自动识别不可用或未识别出内容，请手动填写要素" />
               )}
             </>
           )}
@@ -344,13 +350,18 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
               <Input placeholder="如：低压电工证" maxLength={128} />
             </Form.Item>
             <Form.Item name="certificate_no" label="证件号码（展示时脱敏）">
-              <Input placeholder="选填" maxLength={64} />
+              <Input placeholder={editTarget ? '留空保持不变（展示值为脱敏）' : '选填'} maxLength={64} />
             </Form.Item>
             <Form.Item name="issue_date" label="发证日期">
               <DatePicker className="w-full" />
             </Form.Item>
-            <Form.Item name="expiry_date" label="有效期至">
-              <DatePicker className="w-full" disabled={!!form.getFieldValue('is_permanent')} />
+            {/* 「长期有效」变化时要重新求值 disabled：直接读 getFieldValue 不会随表单值变化重渲染 */}
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.is_permanent !== cur.is_permanent}>
+              {({ getFieldValue }) => (
+                <Form.Item name="expiry_date" label="有效期至">
+                  <DatePicker className="w-full" disabled={!!getFieldValue('is_permanent')} />
+                </Form.Item>
+              )}
             </Form.Item>
           </div>
           <Form.Item name="is_permanent" label="长期有效" valuePropName="checked">
@@ -380,7 +391,9 @@ export default function EmployeeCertificatesPanel({ employeeId }: { employeeId: 
       >
         {previewInfo && (
           previewInfo.type === 'application/pdf' ? (
-            <iframe src={previewInfo.url} title="证件预览" className="w-full h-full border-0" />
+            // 抽屉内容区不是定高容器，h-full 会塌成 iframe 默认的 150px；按视口高度撑满
+            <iframe src={previewInfo.url} title="证件预览" className="w-full border-0"
+              style={{ height: 'calc(100vh - 110px)' }} />
           ) : previewInfo.type.startsWith('image/') ? (
             <img src={previewInfo.url} alt={previewInfo.name} className="w-full" />
           ) : (

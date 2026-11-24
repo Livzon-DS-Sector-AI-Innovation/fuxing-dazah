@@ -36,6 +36,12 @@ export async function fetchMissingCertificates(department?: string): Promise<{ d
   return fetchHrApi(`/hr/certificates/missing${qs}`, { errorMessage: '获取缺件清单失败' })
 }
 
+/** 导出缺件清单（Excel，按员工汇总为一行；与缺件清单接口同口径） */
+export async function exportMissingCertificates(department?: string): Promise<{ base64: string; filename: string | null }> {
+  const qs = department ? `?department=${encodeURIComponent(department)}` : ''
+  return fetchHrDownload(`/hr/certificates/missing/export${qs}`, { errorMessage: '导出缺件清单失败' })
+}
+
 /** 员工证件视图（六类分组+待补交标注） */
 export async function fetchEmployeeCertificates(employeeId: string): Promise<{ data: EmployeeCertificatesView }> {
   return fetchHrApi(`/hr/employees/${employeeId}/certificates`, { errorMessage: '获取员工证件失败' })

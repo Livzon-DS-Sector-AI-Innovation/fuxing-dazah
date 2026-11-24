@@ -38,6 +38,7 @@ from app.modules.hr.job_requirement_routes import router as job_requirement_rout
 from app.modules.hr.employee_info_collection_routes import router as employee_info_collection_router
 from app.modules.hr.employee_certificate_routes import router as employee_certificate_router
 from app.modules.hr.probation_routes import router as probation_router
+from app.modules.hr.reminder.routes import router as reminder_router
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
 )
@@ -123,6 +124,7 @@ router.include_router(analysis_router)
 router.include_router(sop_training_router)
 router.include_router(title_review_router)
 router.include_router(employee_sync_router)
+router.include_router(reminder_router)
 
 
 def get_employee_service(session: AsyncSession = Depends(get_db)) -> EmployeeService:
