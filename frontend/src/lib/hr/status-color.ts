@@ -58,3 +58,28 @@ export const DEPARTURE_TYPE_TAG_COLORS: Record<string, string> = {
   退休返聘到期: 'success',
   其他: 'processing',
 }
+
+/** 月度绩效考核状态 → antd Tag 预设色名（此前考核列表与详情各维护一份 STATUS_MAP，
+ *  现列表/详情状态标签与状态筛选下拉统一从这里取值） */
+export const PERFORMANCE_STATUS_META: Record<string, { label: string; color: string }> = {
+  draft: { label: '草稿', color: 'default' },
+  self_submitted: { label: '待领导评分', color: 'processing' },
+  leader_scored: { label: '已完成', color: 'success' },
+}
+
+/** AI 初筛 / 胜任度报告的推荐等级 → antd Tag 预设色名
+ *  （此前招聘列表、详情页、筛简历面板、报告卡各写一套，同一个「不推荐」有灰有红） */
+export const RECOMMENDATION_LEVEL_TAG_COLORS: Record<string, string> = {
+  强烈推荐: 'green',
+  推荐: 'blue',
+  待定: 'orange',
+  不推荐: 'red',
+}
+
+/** 面试安排状态 → antd Tag 预设色名（此前「待安排」与「已安排」同为蓝色，分不清） */
+export const INTERVIEW_STATUS_TAG_COLORS: Record<string, string> = {
+  待安排: 'default',
+  已安排: 'processing',
+  已完成: 'success',
+  已取消: 'error',
+}
