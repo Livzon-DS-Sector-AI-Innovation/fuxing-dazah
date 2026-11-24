@@ -52,6 +52,6 @@ EMPLOYEE_SYNC_TASK = TaskDefinition(
     name="hr.employee_sync.reconcile",
     schedule=ScheduleConfig(strategy=ScheduleStrategy.FIXED_TIME, time_of_day=SYNC_TIME_OF_DAY),
     coro=run_employee_sync,
-    timeout_seconds=280,
+    timeout_seconds=900,
     module="hr",
 )

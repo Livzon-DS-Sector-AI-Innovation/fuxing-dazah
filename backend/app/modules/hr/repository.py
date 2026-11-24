@@ -80,43 +80,62 @@ class EmployeeRepository:
         return result.scalars().first()
 
     async def upsert_from_bitable(
-        self, data: dict, record_id: str
+        self,
+        data: dict[str, Any],
+        record_id: str,
+        *,
+        by_number: dict[str, "Employee"] | None = None,
+        by_record_id: dict[str, list["Employee"]] | None = None,
+        flush: bool = True,
     ) -> tuple[Employee, bool]:
         """飞书多维表格同步专用 upsert，按工号匹配（含软删除行并复活）。
 
         与 upsert_by_employee_number 的差异：
         - 匹配范围含软删除行：工号在飞书表中重现视为有效数据，复活该行
           （避免软删→重加触发 employee_number 唯一约束）；
-        - 同步写入 feishu_record_id / feishu_synced_at；
+        - 同步写入 feishu_record_id / feishu_synced_at（无变化的行不刷新）；
         - 源表改工号时 record_id 归属随之迁移：仍持有该 record_id 的旧工号行
           视为源表身份已被顶替，按删除处理（否则旧行永不被清理且 record_id 重复）；
         - "以表为准"（对账，缺列补 None）还是"增量补丁"（事件）由调用方
           在 data 中体现（见 employee_sync.mapping.convert_source_fields）。
-        返回 (员工对象, 是否新建)。
+
+        批量对账可传入预加载索引（by_number / by_record_id）规避逐行 SELECT，
+        并传 flush=False 由调用方按批落库。返回 (员工对象, 是否新建)。
         """
         employee_number = str(data.get("employee_number") or "").strip()
         if not employee_number:
             raise ValueError("记录缺少工号，无法同步")
 
         # record_id 归属迁移：清掉仍挂着该 record_id 的其他工号行
-        stale_rows = (await self.session.execute(
-            select(Employee).where(
-                Employee.feishu_record_id == record_id,
-                Employee.employee_number != employee_number,
-                Employee.is_deleted.is_(False),
-            )
-        )).scalars().all()
+        if by_record_id is not None:
+            stale_rows = [
+                row for row in (by_record_id.get(record_id) or [])
+                if row.employee_number != employee_number and not row.is_deleted
+            ]
+        else:
+            stale_rows = list((await self.session.execute(
+                select(Employee).where(
+                    Employee.feishu_record_id == record_id,
+                    Employee.employee_number != employee_number,
+                    Employee.is_deleted.is_(False),
+                )
+            )).scalars().all())
         for stale in stale_rows:
             stale.is_deleted = True
             stale.feishu_record_id = None
 
-        existing = await self.get_by_employee_number(employee_number, include_deleted=True)
+        existing = (
+            by_number.get(employee_number)
+            if by_number is not None
+            else await self.get_by_employee_number(employee_number, include_deleted=True)
+        )
         today = date.today()
         if existing is not None:
             # hire_date 列 NOT NULL：源表缺失（对账 reset_missing 置 None）时保留
             # 本地值——既不能写 None（库拒绝），更不能刷成当天（司龄/转正失真）
             if data.get("hire_date") is None:
                 data.pop("hire_date", None)
+            changed = False
             for key, value in data.items():
                 if key in ("id", "employee_number", "created_at"):
                     continue
@@ -128,11 +147,21 @@ class EmployeeRepository:
                     # 病假/产假是本地维护的状态，源表派生值（在职/试用期）
                     # 不得覆盖；离职始终生效（源表离职日期为权威事实）
                     continue
-                setattr(existing, key, value)
-            existing.is_deleted = False
-            existing.feishu_record_id = record_id
-            existing.feishu_synced_at = today
-            await self.session.flush()
+                if getattr(existing, key) != value:
+                    setattr(existing, key, value)
+                    changed = True
+            if existing.is_deleted:
+                existing.is_deleted = False
+                changed = True
+            if existing.feishu_record_id != record_id:
+                existing.feishu_record_id = record_id
+                changed = True
+            # 无变化不刷新时间戳：否则每晚对全部员工产生无谓 UPDATE
+            # （updated_at 同步漂移）。feishu_synced_at 语义=最近一次变更同步时间。
+            if changed:
+                existing.feishu_synced_at = today
+            if flush:
+                await self.session.flush()
             return existing, False
 
         insert_data = {k: v for k, v in data.items() if v is not None}
@@ -145,7 +174,11 @@ class EmployeeRepository:
         employee.feishu_record_id = record_id
         employee.feishu_synced_at = today
         self.session.add(employee)
-        await self.session.flush()  # INSERT 走 RETURNING，id/时间戳已回填
+        if by_number is not None:
+            # 同工号在源表重复出现时，后续行必须走更新分支（不能重复插入）
+            by_number[employee_number] = employee
+        if flush:
+            await self.session.flush()  # INSERT 走 RETURNING，id/时间戳已回填
         return employee, True
 
     async def soft_delete_by_feishu_record_id(self, record_id: str) -> bool:
