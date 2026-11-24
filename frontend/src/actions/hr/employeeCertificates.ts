@@ -4,6 +4,10 @@ import { fetchHrApi, fetchHrDownload } from './_helpers'
 import type {
   CertificateAccessLog,
   CertificateCategory,
+  CertificateImportCommitResult,
+  CertificateImportCommitRow,
+  CertificateImportEmployeeOption,
+  CertificateImportPrecheck,
   CertificateRequirement,
   CertificateUploadInput,
   EmployeeCertificate,
@@ -136,6 +140,36 @@ export async function deleteCertificateRequirement(requirementId: string): Promi
   return fetchHrApi(`/hr/certificates/requirements/${requirementId}`, {
     method: 'DELETE',
     errorMessage: '删除应交配置失败',
+  })
+}
+
+/** 证件批量导入预检（ZIP 上传：文件名解析+员工匹配，附件入服务端暂存） */
+export async function precheckCertificateBatchImport(file: File): Promise<{ data: CertificateImportPrecheck }> {
+  const fd = new FormData()
+  fd.append('file', file)
+  return fetchHrApi('/hr/certificates/batch-import/precheck', {
+    method: 'POST',
+    body: fd,
+    errorMessage: '批量导入预检失败',
+  })
+}
+
+/** 批量导入补选员工（姓名/工号模糊搜索，数据范围收敛） */
+export async function fetchBatchImportEmployeeOptions(keyword?: string): Promise<{ data: CertificateImportEmployeeOption[] }> {
+  const qs = keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''
+  return fetchHrApi(`/hr/certificates/batch-import/employee-options${qs}`, {
+    errorMessage: '搜索员工失败',
+  })
+}
+
+/** 批量导入提交（按确认行归档，版本化同单个上传） */
+export async function commitCertificateBatchImport(
+  rows: CertificateImportCommitRow[],
+): Promise<{ data: CertificateImportCommitResult }> {
+  return fetchHrApi('/hr/certificates/batch-import/commit', {
+    method: 'POST',
+    body: JSON.stringify({ rows }),
+    errorMessage: '批量导入提交失败',
   })
 }
 

@@ -1617,6 +1617,76 @@ export interface CertificateRequirement {
   applies_to: 'all' | 'key_position'
 }
 
+/** 批量导入：员工补选项（姓名/工号模糊搜索） */
+export interface CertificateImportEmployeeOption {
+  id: string
+  name: string
+  employee_number: string | null
+  department: string | null
+}
+
+/** 批量导入预检行（一行 = ZIP 内一个文件） */
+export interface CertificateImportRow {
+  filename: string
+  /** ok=自动匹配 / unmatched=未匹配 / ambiguous=重名待选 / invalid=不可导入 */
+  status: 'ok' | 'unmatched' | 'ambiguous' | 'invalid'
+  error: string | null
+  name_hint: string | null
+  employee_number_hint: string | null
+  employee: CertificateImportEmployeeOption | null
+  /** 重名候选（ambiguous 时） */
+  candidates: CertificateImportEmployeeOption[]
+  category: CertificateCategory
+  /** false = 文件名里没识别出类别，默认「其他」待确认 */
+  category_matched: boolean
+  /** 暂存键（确认提交时原样带回） */
+  storage_key: string | null
+  content_type: string | null
+  size: number
+  /** 该员工该类别已有当前版本 → 本次导入将升版本换证 */
+  replaces: { version_no: number; expiry_date: string | null; is_permanent: boolean } | null
+  /** 同批同「员工×类别」多个文件 → 提交会被拒，需合并或改类别 */
+  dup_in_batch: boolean
+}
+
+export interface CertificateImportPrecheck {
+  rows: CertificateImportRow[]
+  summary: {
+    total: number
+    ok: number
+    unmatched: number
+    ambiguous: number
+    invalid: number
+    replaces: number
+  }
+}
+
+/** 批量导入确认提交行 */
+export interface CertificateImportCommitRow {
+  storage_key: string
+  filename: string
+  employee_id: string
+  category: CertificateCategory
+  certificate_name?: string | null
+  certificate_no?: string | null
+  issue_date?: string | null
+  expiry_date?: string | null
+  is_permanent?: boolean
+  remark?: string | null
+}
+
+export interface CertificateImportCommitResult {
+  results: {
+    filename: string
+    employee_name: string | null
+    category_label: string
+    version_no: number | null
+    ok: boolean
+    error: string | null
+  }[]
+  summary: { imported: number; failed: number }
+}
+
 export interface ProbationSafetyExamItem {
   id: string
   employee_id: string

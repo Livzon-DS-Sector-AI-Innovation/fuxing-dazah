@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { App, Button, Empty, Form, Input, Modal, Popconfirm, Select, Spin, Table, Tabs, Tag, Tooltip } from 'antd'
-import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
+import { CloudUploadOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons'
+import CertificateBatchImportModal from './CertificateBatchImportModal'
 import {
   CERTIFICATE_CATEGORY_LABELS,
   type CertificateAccessLog,
@@ -195,6 +196,7 @@ export default function CertificatesLedgerClient() {
 
   // 更正证件名称/证号：表单弹窗（此前连用两个浏览器原生 prompt，看不到当前值，第二步取消后第一步也已生效）
   const [editOpen, setEditOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editing, setEditing] = useState<EmployeeCertificate | null>(null)
   const [editSaving, setEditSaving] = useState(false)
   const [editForm] = Form.useForm()
@@ -245,6 +247,11 @@ export default function CertificatesLedgerClient() {
                   onChange={v => { const f = { ...filters, category: v }; setFilters(f); void loadLedger(1, f) }} />
                 <Input.Search allowClear placeholder="姓名 / 工号" style={{ width: 220 }}
                   onSearch={v => { const f = { ...filters, keyword: v.trim() }; setFilters(f); void loadLedger(1, f) }} />
+                {canManage && (
+                  <Button type="primary" icon={<CloudUploadOutlined />} onClick={() => setImportOpen(true)}>
+                    批量导入
+                  </Button>
+                )}
                 <Tooltip title="刷新">
                   <Button aria-label="刷新证件台账" icon={<ReloadOutlined />} onClick={() => void loadLedger(ledgerPage)} />
                 </Tooltip>
@@ -431,6 +438,12 @@ export default function CertificatesLedgerClient() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <CertificateBatchImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => void loadLedger(1)}
+      />
     </div>
   )
 }
