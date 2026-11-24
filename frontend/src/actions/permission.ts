@@ -6,6 +6,14 @@ import type { CreateRoleInput, UpdateRoleInput, AssignRoleInput } from '@/types/
 
 const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
+/** 后端 AppException 的 message 优先；参数校验的 detail 退化为 JSON 文本。 */
+function errorMessage(err: unknown, fallback: string): string {
+  const body = err as { message?: unknown; detail?: unknown } | null
+  if (typeof body?.message === 'string' && body.message) return body.message
+  if (body?.detail) return JSON.stringify(body.detail)
+  return fallback
+}
+
 export async function createRole(data: CreateRoleInput) {
   const headers = await getAuthHeaders()
   const res = await fetch(`${API_BASE}/api/v1/permission/roles`, {
@@ -37,7 +45,9 @@ export async function updateRole(roleId: string, data: UpdateRoleInput) {
 export async function deleteRole(roleId: string) {
   const headers = await getAuthHeaders()
   const res = await fetch(`${API_BASE}/api/v1/permission/roles/${roleId}`, { method: 'DELETE', headers })
-  if (!res.ok) throw new Error('删除角色失败')
+  if (!res.ok) {
+    throw new Error(errorMessage(await res.json().catch(() => null), '删除角色失败'))
+  }
   revalidatePath('/permission/roles')
   return res.json()
 }
@@ -47,7 +57,9 @@ export async function assignRoleToUser(userId: string, data: AssignRoleInput) {
   const res = await fetch(`${API_BASE}/api/v1/permission/users/${userId}/roles`, {
     method: 'POST', headers, body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('分配角色失败')
+  if (!res.ok) {
+    throw new Error(errorMessage(await res.json().catch(() => null), '分配角色失败'))
+  }
   revalidatePath('/permission/users')
   return res.json()
 }
@@ -57,7 +69,9 @@ export async function removeRoleFromUser(userId: string, roleId: string) {
   const res = await fetch(`${API_BASE}/api/v1/permission/users/${userId}/roles/${roleId}`, {
     method: 'DELETE', headers,
   })
-  if (!res.ok) throw new Error('移除角色失败')
+  if (!res.ok) {
+    throw new Error(errorMessage(await res.json().catch(() => null), '移除角色失败'))
+  }
   revalidatePath('/permission/users')
   return res.json()
 }
@@ -71,8 +85,7 @@ export async function assignRoleToDepartment(
     method: 'POST', headers, body: JSON.stringify(data),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || err.message || '分配部门角色失败')
+    throw new Error(errorMessage(await res.json().catch(() => null), '分配部门角色失败'))
   }
   revalidatePath('/permission/roles')
   return res.json()
@@ -84,7 +97,9 @@ export async function removeRoleFromDepartment(roleId: string, feishuDepartmentI
     `${API_BASE}/api/v1/permission/roles/${roleId}/departments/${encodeURIComponent(feishuDepartmentId)}`,
     { method: 'DELETE', headers },
   )
-  if (!res.ok) throw new Error('移除部门角色失败')
+  if (!res.ok) {
+    throw new Error(errorMessage(await res.json().catch(() => null), '移除部门角色失败'))
+  }
   revalidatePath('/permission/roles')
   return res.json()
 }

@@ -1,7 +1,7 @@
 """工具箱权限业务：工具访问判定与授权名单管理。
 
 权限语义：
-- 超级管理员（permission:role:manage）恒放行使用与配置。
+- 系统超级管理员（super_admin 角色）恒放行使用与配置。
 - 使用名单留空 → 使用默认开放（全员可用），与配置名单无关。
 - 使用名单非空 → 使用 = 使用名单 ∪ 配置名单（配置人员隐含使用权）。
 - 配置 = 配置名单（留空仅超管），与使用名单无关。
@@ -21,9 +21,7 @@ from app.modules.toolbox.registry import Tool
 from app.modules.toolbox.repository import ToolboxGrantRepository
 from app.modules.toolbox.schemas import GrantUserOut, ToolGrantsOut
 from app.platform.identity.models import User
-from app.platform.permission.deps import get_user_permissions
-
-ADMIN_PERMISSION = "permission:role:manage"
+from app.platform.permission.deps import is_super_admin
 
 
 class ToolGrantError(Exception):
@@ -48,11 +46,11 @@ class ToolboxGrantService:
         self._repo = ToolboxGrantRepository()
 
     async def is_admin(self, db: AsyncSession, user: User) -> bool:
+        """系统超级管理员（super_admin 角色）恒放行；与系统权限码无关。"""
         try:
-            perms = await get_user_permissions(str(user.id), db)
+            return await is_super_admin(db, user.id)
         except (ValueError, TypeError):
             return False
-        return ADMIN_PERMISSION in perms
 
     async def resolve_access(
         self, db: AsyncSession, user: User, tool_id: str

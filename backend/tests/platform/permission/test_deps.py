@@ -16,6 +16,7 @@ from app.platform.identity.models import User
 from app.platform.permission.deps import (
     require_admin,
     require_permission,
+    require_super_admin,
     require_user,
 )
 from app.platform.permission.models import Permission, Role
@@ -24,6 +25,18 @@ from app.platform.permission.service import PermissionService
 
 _repo = PermissionRepository()
 _service = PermissionService()
+
+
+async def _existing_or_make_permission(
+    db: AsyncSession, make_permission, code: str, module: str,
+) -> Permission:
+    """权限码可能已被启动引导写入：先查后建，避免唯一约束冲突。"""
+    from sqlalchemy import select
+
+    perm = (
+        await db.execute(select(Permission).where(Permission.code == code))
+    ).scalar_one_or_none()
+    return perm or await make_permission(code, module=module)
 
 
 async def _grant_user_permission(
@@ -135,3 +148,47 @@ class TestRequireAdmin:
         user = await make_user()
         with pytest.raises(ForbiddenException, match="仅管理员"):
             await require_admin(user=user, db=db_session)
+
+
+class TestRequireSuperAdmin:
+    """只认直接分配的 super_admin 角色，不认 permission:role:manage 权限。"""
+
+    async def test_super_admin_role_passes(
+        self, db_session: AsyncSession, make_role, make_user,
+    ) -> None:
+        """直接持有 super_admin 角色 → 放行。角色可能已被引导写入，先查后建。"""
+        from sqlalchemy import select
+
+        role = (
+            await db_session.execute(select(Role).where(Role.code == "super_admin"))
+        ).scalar_one_or_none()
+        if role is None:
+            role = await make_role(code="super_admin", is_system=True)
+        user = await make_user()
+        await _service.assign_role_to_user(db_session, user.id, role.id)
+
+        result = await require_super_admin(user=user, db=db_session)
+        assert result.id == user.id
+
+    async def test_role_manage_permission_only_denied(
+        self, db_session: AsyncSession, make_permission, make_role, make_user,
+    ) -> None:
+        """只有 permission:role:manage、没有 super_admin 角色 → 403。"""
+        perm = await _existing_or_make_permission(
+            db_session, make_permission, "permission:role:manage", "permission",
+        )
+        role = await make_role()
+        await _repo.set_role_permissions(db_session, role.id, [perm.id])
+        user = await make_user()
+        await _service.assign_role_to_user(db_session, user.id, role.id)
+
+        with pytest.raises(ForbiddenException, match="超级管理员"):
+            await require_super_admin(user=user, db=db_session)
+
+    async def test_no_roles_denied(
+        self, db_session: AsyncSession, make_user,
+    ) -> None:
+        """无任何角色 → 403。"""
+        user = await make_user()
+        with pytest.raises(ForbiddenException, match="超级管理员"):
+            await require_super_admin(user=user, db=db_session)

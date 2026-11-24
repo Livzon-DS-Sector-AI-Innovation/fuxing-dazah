@@ -19,13 +19,17 @@ type MenuItem = Required<MenuProps>['items'][number]
 function filterByPermissions(
   items: SubMenuItem[],
   permissions: Set<string>,
+  roles: string[],
 ): SubMenuItem[] {
   return items.flatMap((item) => {
     if (item.permissions && item.permissions.length > 0 && !hasAnyPermission(permissions, item.permissions)) {
       return []
     }
+    if (item.roles && item.roles.length > 0 && !item.roles.some((role) => roles.includes(role))) {
+      return []
+    }
     if (item.children && item.children.length > 0) {
-      const children = filterByPermissions(item.children, permissions)
+      const children = filterByPermissions(item.children, permissions, roles)
       if (children.length === 0) return []
       return [{ ...item, children }]
     }
@@ -135,6 +139,7 @@ export function Sidebar() {
   const router = useRouter()
   const collapsed = useSidebarStore((s) => s.collapsed)
   const permissions = usePermissionStore((s) => s.permissions)
+  const roles = usePermissionStore((s) => s.roles)
   const permissionLoaded = usePermissionStore((s) => s.isLoaded)
   const moduleKey = pathname.split("/")[1] || "production"
   const currentModule = getModuleByKey(moduleKey)
@@ -150,8 +155,8 @@ export function Sidebar() {
     ) {
       return []
     }
-    return filterByPermissions(currentModule.children, permissions)
-  }, [currentModule, permissions, permissionLoaded])
+    return filterByPermissions(currentModule.children, permissions, roles)
+  }, [currentModule, permissions, roles, permissionLoaded])
 
   const menuItems = currentModule ? buildMenuItems(visibleChildren) : []
   const keyPathMap = currentModule ? buildKeyPathMap(visibleChildren) : new Map<string, string>()

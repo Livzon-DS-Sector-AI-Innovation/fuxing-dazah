@@ -8,6 +8,8 @@ interface Props {
   permissionGroups: PermissionModuleGroup[]
   checkedIds: string[]
   onChange: (ids: string[]) => void
+  /** 可勾选范围（委派管理员只能授予自己已有的权限码）；不传=全部可选。 */
+  allowedIds?: Set<string>
 }
 
 /** 简单 UUID 格式校验 */
@@ -15,7 +17,7 @@ function isUUID(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
 }
 
-export function PermissionTree({ permissionGroups, checkedIds, onChange }: Props) {
+export function PermissionTree({ permissionGroups, checkedIds, onChange, allowedIds }: Props) {
   const treeData = useMemo(() => {
     return permissionGroups.map((group) => ({
       title: group.module_name,
@@ -31,10 +33,11 @@ export function PermissionTree({ permissionGroups, checkedIds, onChange }: Props
         children: perms.map((p) => ({
           title: p.name,
           key: p.id,
+          disabled: allowedIds ? !allowedIds.has(p.id) : false,
         })),
       })),
     }))
-  }, [permissionGroups])
+  }, [permissionGroups, allowedIds])
 
   /** 收集所有叶子节点的 permission id */
   const allPermIds = useMemo(() => {

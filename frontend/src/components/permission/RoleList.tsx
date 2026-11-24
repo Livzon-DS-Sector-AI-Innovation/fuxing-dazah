@@ -128,8 +128,8 @@ export function RoleList({ initialRoles, permissionGroups, apiToken, departmentT
       setRoles((prev) => prev.filter((r) => r.id !== roleId))
       message.success('删除成功')
       router.refresh()
-    } catch {
-      message.error('删除失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '删除失败')
     }
   }
 
@@ -175,8 +175,8 @@ export function RoleList({ initialRoles, permissionGroups, apiToken, departmentT
       setRoles((prev) =>
         prev.map((r) => (r.id === roleId ? { ...r, user_count: r.user_count + 1 } : r))
       )
-    } catch {
-      message.error('分配失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '分配失败')
     } finally {
       setAssigning(false)
     }
@@ -200,8 +200,8 @@ export function RoleList({ initialRoles, permissionGroups, apiToken, departmentT
           setRoles((prev) =>
             prev.map((r) => (r.id === roleId ? { ...r, user_count: r.user_count - 1 } : r))
           )
-        } catch {
-          message.error('移除失败')
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : '移除失败')
         }
       },
     })
@@ -234,8 +234,8 @@ export function RoleList({ initialRoles, permissionGroups, apiToken, departmentT
       message.success(`已为 ${selectedDeptIds.length} 个部门分配角色`)
       setSelectedDeptIds([])
       await refreshAssignedDepts(roleId)
-    } catch {
-      message.error('分配部门角色失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '分配部门角色失败')
     } finally {
       setDeptAssigning(false)
     }
@@ -256,8 +256,8 @@ export function RoleList({ initialRoles, permissionGroups, apiToken, departmentT
           await removeRoleFromDepartment(roleId, feishuDepartmentId)
           message.success('已移除')
           await refreshAssignedDepts(roleId)
-        } catch {
-          message.error('移除失败')
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : '移除失败')
         }
       },
     })
@@ -578,6 +578,9 @@ export function RoleList({ initialRoles, permissionGroups, apiToken, departmentT
       </div>
 
       <RoleForm
+        // 每次打开（或切换编辑对象）重挂载，内部状态从 props 初始化；
+        // 避免 RoleForm 在 effect 里同步 setState（cascading render）
+        key={`${drawerOpen}-${editingRole?.id ?? 'new'}`}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         onSuccess={() => { void refreshRoles() }}

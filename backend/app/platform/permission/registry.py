@@ -40,11 +40,38 @@ class PermissionDef:
 # ── 平台级权限（不属于任何业务模块） ──
 
 _PLATFORM_PERMISSIONS: list[PermissionDef] = [
-    PermissionDef("permission:role:manage", "管理角色", "permission", "role", "manage"),
     PermissionDef(
-        "permission:user:assign", "分配用户角色", "permission", "user", "assign"
+        "permission:role:manage",
+        "管理角色",
+        "permission",
+        "role",
+        "manage",
+        "权限管理总开关：角色增删改、用户角色分配与查看、切换用户视角、工具箱使用权限",
     ),
-    PermissionDef("permission:user:view", "查看用户权限", "permission", "user", "view"),
+    PermissionDef(
+        "permission:user:assign",
+        "分配用户角色",
+        "permission",
+        "user",
+        "assign",
+        "给用户分配/移除角色，可查看用户权限；不能管理角色、不能切换用户视角",
+    ),
+    PermissionDef(
+        "permission:user:view",
+        "查看用户权限",
+        "permission",
+        "user",
+        "view",
+        "只读：查看用户的角色与有效权限；不能分配角色、不能管理角色、不能切换用户视角",
+    ),
+    PermissionDef(
+        "permission:role:delegate",
+        "按权限范围管理角色",
+        "permission",
+        "role",
+        "delegate",
+        "在自身权限与数据范围内新建/编辑/删除角色并分配角色；不能切换用户视角",
+    ),
     PermissionDef(
         "system:feedback:manage",
         "查看与处理系统反馈",

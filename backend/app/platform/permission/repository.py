@@ -187,6 +187,48 @@ class PermissionRepository:
             db.add(RolePermission(role_id=role_id, permission_id=pid))
         await db.flush()
 
+    async def get_role_permission_codes(
+        self, db: AsyncSession, role_id: uuid.UUID
+    ) -> set[str]:
+        stmt = (
+            select(Permission.code)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(
+                RolePermission.role_id == role_id,
+                Permission.is_deleted == False,  # noqa: E712
+            )
+        )
+        result = await db.execute(stmt)
+        return set(result.scalars())
+
+    async def get_permissions_by_ids(
+        self, db: AsyncSession, permission_ids: list[uuid.UUID]
+    ) -> list[Permission]:
+        """按 id 批量取权限（含软删除：软删 id 仍算存在，但不参与范围判定）。"""
+        if not permission_ids:
+            return []
+        result = await db.execute(
+            select(Permission).where(Permission.id.in_(permission_ids))
+        )
+        return list(result.scalars())
+
+    async def user_has_role_code(
+        self, db: AsyncSession, user_id: uuid.UUID, code: str
+    ) -> bool:
+        """用户是否**直接**持有某角色（不走部门继承）。"""
+        stmt = (
+            select(Role.id)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .where(
+                UserRole.user_id == user_id,
+                UserRole.is_deleted == False,  # noqa: E712
+                Role.is_deleted == False,  # noqa: E712
+                Role.code == code,
+            )
+            .limit(1)
+        )
+        return (await db.execute(stmt)).first() is not None
+
     # ── 用户角色关联 ──
 
     async def get_user_roles(

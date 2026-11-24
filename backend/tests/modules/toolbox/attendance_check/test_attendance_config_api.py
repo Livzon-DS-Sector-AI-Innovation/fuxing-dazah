@@ -22,13 +22,13 @@ def client(
     """测试应用：挂 toolbox router，注入 FakeRedis、超管假用户与回滚测试会话。"""
     from fastapi import FastAPI
 
-    # 配置读写端点要求 can_config；以超管身份（拥有 permission:role:manage）放行
+    # 配置读写端点要求 can_config；以系统超级管理员身份放行
     import app.modules.toolbox.service as service_mod
 
-    async def _admin_perms(_user_id: str, _db: object) -> set[str]:
-        return {"permission:role:manage"}
+    async def _is_super(_db: object, _user_id: object) -> bool:
+        return True
 
-    monkeypatch.setattr(service_mod, "get_user_permissions", _admin_perms)
+    monkeypatch.setattr(service_mod, "is_super_admin", _is_super)
 
     app = FastAPI()
     app.include_router(api.router)

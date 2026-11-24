@@ -6,6 +6,7 @@ export interface SubMenuItem {
   group?: boolean            // 分组标题式（antd Menu group 类型）：children 平铺展示不折叠
   disabled?: boolean         // 灰显占位，功能未开发
   permissions?: string[]     // 权限码，用于前端菜单可见性控制
+  roles?: string[]           // 角色码（如 super_admin），与 permissions 同时声明时取 AND
 }
 
 export interface ModuleMenu {
@@ -189,9 +190,9 @@ export const moduleMenus: ModuleMenu[] = [
         label: "年度产品回顾",
         path: "/qa/apr",
         children: [
+          { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
           { key: "apr-entry", label: "数据录入", path: "/qa/apr/entry", permissions: ["qa:apr:enter", "qa:apr:read", "qa:*:read"] },
           { key: "apr-summary", label: "汇总分析", path: "/qa/apr/summary", permissions: ["qa:apr:read", "qa:*:read", "qa:apr:enter"] },
-          { key: "apr-config", label: "模板配置", path: "/qa/apr/config", permissions: ["qa:apr:manage"] },
         ],
       },
       // COA 客户标准与出具登记：独立读码（同偏差/PQR 口径），
@@ -351,11 +352,13 @@ export const moduleMenus: ModuleMenu[] = [
     key: "permission",
     label: "权限管理",
     icon: "lock",
-    path: "/permission/roles",
-    permissions: ["permission:role:manage"],
+    // 根路由按权限分流到进得去的子页
+    path: "/permission",
+    permissions: ["permission:role:manage", "permission:role:delegate", "permission:user:assign", "permission:user:view"],
     children: [
-      { key: "roles", label: "角色管理", path: "/permission/roles" },
-      { key: "users", label: "用户权限", path: "/permission/users" },
+      // permission:role:manage 是总开关；delegate 只能管理自身范围内的角色
+      { key: "roles", label: "角色管理", path: "/permission/roles", permissions: ["permission:role:manage", "permission:role:delegate"] },
+      { key: "users", label: "用户权限", path: "/permission/users", permissions: ["permission:role:manage", "permission:user:assign", "permission:user:view"] },
     ],
   },
   {
@@ -368,7 +371,7 @@ export const moduleMenus: ModuleMenu[] = [
         key: "usage-permissions",
         label: "使用权限",
         path: "/toolbox/permissions",
-        permissions: ["permission:role:manage"], // 仅系统超级管理员可见
+        roles: ["super_admin"], // 仅系统超级管理员可见（与权限码解耦）
       },
     ],
     clickableTitle: true, // 标题可点击回模块首页

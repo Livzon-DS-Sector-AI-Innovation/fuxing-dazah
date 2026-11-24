@@ -73,10 +73,10 @@ async def require_admin(
     user: User = Depends(require_user),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """要求用户拥有 super_admin 角色。
+    """要求用户拥有 permission:role:manage 权限（权限管理总开关）。
 
     ADMIN_EMPLOYEE_NOS 仅用于启动引导（bootstrap），运行时以角色为准。
-    超管可以移除其他超管的角色，被移除者立即失去管理权限。
+    拥有该权限的用户可以移除其他管理员的角色，被移除者立即失去管理权限。
     """
     user_perms = await get_user_permissions(str(user.id), db)
     if "permission:role:manage" in user_perms:
@@ -85,6 +85,57 @@ async def require_admin(
 
 
 RequireAdmin = Annotated[User, Depends(require_admin)]
+
+
+async def is_super_admin(db: AsyncSession, user_id: str | uuid.UUID) -> bool:
+    """是否直接持有 super_admin 角色（平台最高身份，不走部门继承）。"""
+    return await _repo.user_has_role_code(
+        db, uuid.UUID(str(user_id)), "super_admin"
+    )
+
+
+async def require_super_admin(
+    user: User = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """仅 super_admin 角色可操作（与 permission:role:manage 解耦）。"""
+    if not await is_super_admin(db, user.id):
+        raise ForbiddenException("仅超级管理员可操作")
+    return user
+
+# ── 权限管理内的细分能力 ──
+# permission:role:manage 是总开关，恒包含其余两项，故各依赖都把它一并列出（OR 语义）。
+
+# 查看用户的角色与有效权限。能分配角色的人必须看得到现状，故对 assign 同样放行。
+RequireUserView = Annotated[
+    User,
+    Depends(
+        require_permission(
+            "permission:user:view", "permission:user:assign", "permission:role:manage"
+        )
+    ),
+]
+
+# ── 角色管理（委派档） ──
+# role:manage 全权跳过范围检查；delegate 只能操作自身权限/数据范围内的角色（service 层校验）。
+
+# 角色目录、角色 CRUD、部门分配、角色用户读取。
+RequireRoleWrite = Annotated[
+    User,
+    Depends(require_permission("permission:role:manage", "permission:role:delegate")),
+]
+
+# 用户角色分配 / 移除与角色目录读取（assign 只能分配用户，不能建改删角色）。
+RequireRoleAssign = Annotated[
+    User,
+    Depends(
+        require_permission(
+            "permission:role:manage",
+            "permission:role:delegate",
+            "permission:user:assign",
+        )
+    ),
+]
 
 
 async def apply_data_scope(
