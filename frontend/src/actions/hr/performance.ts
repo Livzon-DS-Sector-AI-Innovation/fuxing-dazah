@@ -62,7 +62,8 @@ export async function fetchPerformanceCategories(): Promise<{ code: number; data
   return fetchHrApi('/hr/performance-categories')
 }
 
-export async function createPerformanceCategory(payload: { name: string; weight: number; evaluator?: string; sort_order?: number }): Promise<{ code: number; data: any; message: string }> {
+// 入参与后端 PerformanceCategoryCreate 一一对应（is_active 默认 true，表单里关掉开关即建成停用）
+export async function createPerformanceCategory(payload: { name: string; weight: number; evaluator?: string; sort_order?: number; is_active?: boolean }): Promise<{ code: number; data: any; message: string }> {
   const result = await fetchHrApi('/hr/performance-categories', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   })
@@ -70,7 +71,8 @@ export async function createPerformanceCategory(payload: { name: string; weight:
   return result
 }
 
-export async function updatePerformanceCategory(id: string, payload: any): Promise<{ code: number; data: any; message: string }> {
+// 入参与后端 PerformanceCategoryUpdate 一一对应（is_active 供「启用/停用」开关透传）
+export async function updatePerformanceCategory(id: string, payload: { name?: string; weight?: number; evaluator?: string; is_active?: boolean; sort_order?: number }): Promise<{ code: number; data: any; message: string }> {
   const result = await fetchHrApi(`/hr/performance-categories/${id}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   })

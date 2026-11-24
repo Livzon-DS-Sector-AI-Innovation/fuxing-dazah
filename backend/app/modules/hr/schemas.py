@@ -1202,6 +1202,8 @@ class PerformanceCategoryCreate(BaseModel):
     weight: float = Field(default=0, description="权重(%)")
     evaluator: str | None = Field(None, max_length=64, description="项目负责人")
     sort_order: int = Field(default=0)
+    # 默认启用（不传时与此前行为一致）；表单里关掉开关即建成停用
+    is_active: bool = Field(default=True, description="是否启用")
 
 
 class PerformanceCategoryUpdate(BaseModel):

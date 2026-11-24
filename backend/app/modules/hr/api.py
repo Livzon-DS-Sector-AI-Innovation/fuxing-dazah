@@ -6568,7 +6568,10 @@ async def create_performance_category(
 ):
     from app.modules.hr.models import PerformanceCategory
     repo = PerformanceEvaluationRepository(session)
-    cat = PerformanceCategory(name=payload.name, weight=payload.weight, evaluator=payload.evaluator, sort_order=payload.sort_order)
+    cat = PerformanceCategory(
+        name=payload.name, weight=payload.weight, evaluator=payload.evaluator,
+        sort_order=payload.sort_order, is_active=payload.is_active,
+    )
     cat = await repo.create_category(cat)
     return success_response(data={"id": str(cat.id)}, message="考核项目已创建", status_code=201)
 
