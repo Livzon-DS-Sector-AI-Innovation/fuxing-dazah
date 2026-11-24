@@ -1672,6 +1672,18 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
                 payload["operator_open_id"] = operator_open_id
             return await handle_r3_card_action_async(payload)
 
+        # ── EHS变更周度督办周五卡回调（form 按钮 ecf_submit_* /
+        #    scope=ehs_change_followup 的「进展不变」按钮，2026-11-24）──
+        #    回调内只做写表+单行写库，改卡放后台 task（2.9s ACK 契约）
+        if action_name.startswith("ecf_submit_") or action_name.startswith(
+            "ecf_unchanged_"
+        ) or payload.get("scope") == "ehs_change_followup":
+            from app.modules.safety.feishu.ehs_change_followup_card import (
+                handle_ehs_change_followup_action,
+            )
+
+            return await handle_ehs_change_followup_action(payload, event_data)
+
         if not action or not action_id:
             return None
 

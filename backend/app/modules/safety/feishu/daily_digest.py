@@ -99,6 +99,10 @@ CELL_ORDER: list[str] = [
     # Super-agent「需要人」格（每日 08:00 cron_tick→effects 构建；只读摘要，
     # 转正/忽略走底座 REST——§6 触点：daily_digest 仅此一格）
     "superagent_needs_human",
+    # EHS变更周度督办（周五 10:00 私发后投格）+ 周一总结格（09:00；
+    # DESIGN 2026-11-24，当天写入才展示）
+    "ehs_change_followup",
+    "ehs_change_summary",
 ]
 
 

@@ -17,8 +17,9 @@ query_ehs_changes 13 输出 + keyword 筛选所需 description + 比对所需
    视图层返 None，reader 跳过——与 legacy「镜像无此行」语义一致；
 4. actual_start/actual_completion 恒 None：状态机端点从未驱动过任何行
    （探针坐实 0/482 非空），直读无损复刻（spec §0.2）；
-5. 「变更状态」列在审批表根本不存在（探针坐实）→ bt_change_status
-   恒 None 属既有缺陷（工具不输出该字段，spec §0.4 落档不修）。
+5. 「变更状态」列 2026-09 探针时不存在、2026-11-24 已上线（单选，人工维护）→
+   审批表 mapper 已提取 bt_change_status（此前恒 None 是列缺失所致，非缺陷）；
+   该列只作展示与「变更中止」判定，不参与验收完毕判定（周度督办 DESIGN §1.1）。
 """
 
 from __future__ import annotations

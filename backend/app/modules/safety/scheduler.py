@@ -431,6 +431,33 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
                        "重复定格幂等 upsert；收尾投「安全速递」季度符合性格子"
                        "（总卡关闭时独立群卡）。核查表未接入时 no_source 如实留痕跳过",
     },
+    # ── EHS变更周度督办（每周五 10:00，直读变更审批+验收两表；DESIGN 20261124）──
+    {
+        "name": "EHS变更周度督办",
+        "hour": 10, "minute": 0, "dow": 4,  # 周五
+        # 补发窗口：当日 17:00 截止（重跑只补发未送达的卡）
+        "retry_until_hour": 17, "retry_until_minute": 0,
+        "target_type": "person",  # 私发各变更分管安全员（动态名单，同人一卡）
+        "description": "EHS变更周度督办：读变更审批+验收两表，按定稿口径筛出未验收"
+                       "完毕的变更（只认已通过验收单；变更中止/撤回算关闭；排除清单"
+                       "剔除），按部门聚合私发分管安全员（卡片内可提交进展回写变更表"
+                       "/点「进展不变」），收口投「安全速递」周五格子。"
+                       "开关 SAFETY_EHS_CHANGE_FOLLOWUP_ENABLED 默认关；"
+                       "灰度收件人 SAFETY_EHS_CHANGE_FOLLOWUP_GRAY_RECIPIENT 非空时"
+                       "所有卡只发此人",
+    },
+    # ── EHS变更督办总结（每周一 09:00，找 4 天内最近一轮周五督办分三类）──
+    {
+        "name": "EHS变更督办总结",
+        "hour": 9, "minute": 0, "dow": 0,  # 周一
+        # 补发窗口：当日 12:00 截止（总结要上午发出才有跟进价值）
+        "retry_until_hour": 12, "retry_until_minute": 0,
+        "description": "EHS变更督办周一总结：按回复情况分三类（①未更新/②进展不变"
+                       "无需更新/③更新）+ 本周已关闭计数，投「安全速递」周一格子"
+                       "（总卡关闭或投格失败时独立群卡兜底；同一轮不重投）。"
+                       "找不到 4 天内的周五轮次时跳过并告警。"
+                       "开关 SAFETY_EHS_CHANGE_FOLLOWUP_ENABLED 默认关",
+    },
 ]
 
 # ── 触发状态持久化（PostgreSQL）──
@@ -697,6 +724,10 @@ async def _run_scheduled_job(job: dict[str, Any]) -> bool | str:
             skip_no_source = await _run_facility_escalation()
         elif job_name == "标准符合性定格":
             skip_no_source = await _run_standard_check_freeze(chat_id=chat_id)
+        elif job_name == "EHS变更周度督办":
+            skip_no_source = await _run_ehs_change_followup_friday()
+        elif job_name == "EHS变更督办总结":
+            skip_no_source = await _run_ehs_change_followup_monday()
         elif "mode" in job:
             await _run_special_op_daily_report(job, today, chat_id=chat_id)
         else:
@@ -788,6 +819,54 @@ async def _run_standard_check_freeze(chat_id: str | None = None) -> bool:
         stats = await send_standard_compliance_digest(result, chat_id=chat_id)
         logger.info("标准符合性定格完成: frozen=%d targets=%s digest=%s",
                     result.frozen, result.targets, stats)
+    return False
+
+
+async def _run_ehs_change_followup_friday() -> bool:
+    """EHS变更周度督办（周五 10:00，补发到 17:00）。
+
+    总闸（SAFETY_EHS_CHANGE_FOLLOWUP_ENABLED，默认关）关闭时静默跳过；
+    ehs_change 连接未登记 → no_source 哨兵；两表读取失败上抛（不降级）；
+    有卡未送达时 service 层上抛，交补发窗口重试（重跑只补发未 sent 的人）。
+    """
+    from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+    from app.modules.safety.service.ehs_change_followup import config as ecf_config
+    from app.modules.safety.service.ehs_change_followup import service as ecf_service
+
+    if not ecf_config.enabled():
+        logger.info("  EHS变更周度督办跳过（总闸未开）")
+        return False
+    try:
+        stats = await ecf_service.run_friday_round()
+    except BitableConfigError:
+        logger.warning("EHS变更周度督办无数据源（ehs_change 连接未登记）")
+        return True
+    logger.info("  EHS变更周度督办完成: %s", stats)
+    return False
+
+
+async def _run_ehs_change_followup_monday() -> bool:
+    """EHS变更督办总结（周一 09:00，补发到 12:00）。
+
+    找不到 4 天内的周五轮次时 service 层跳过并告警（不凭空总结）；
+    投格失败（总卡+独立群卡均未确认）上抛交补发窗口重试，同一轮不重投。
+    """
+    from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+    from app.modules.safety.service.ehs_change_followup import config as ecf_config
+    from app.modules.safety.service.ehs_change_followup import service as ecf_service
+
+    if not ecf_config.enabled():
+        logger.info("  EHS变更督办总结跳过（总闸未开）")
+        return False
+    try:
+        stats = await ecf_service.run_monday_summary()
+    except BitableConfigError:
+        logger.warning("EHS变更督办总结无数据源（ehs_change 连接未登记）")
+        return True
+    if stats.get("skipped"):
+        logger.warning("  EHS变更督办总结跳过: %s", stats)
+        return False
+    logger.info("  EHS变更督办总结完成: %s", stats)
     return False
 
 

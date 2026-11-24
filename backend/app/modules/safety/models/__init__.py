@@ -35,6 +35,11 @@ from app.modules.safety.models.contractors import (  # noqa: F401
     URSReviewDocument,
     URSStandardItem,
 )
+from app.modules.safety.models.ehs_change_followup import (  # noqa: F401
+    EhsChangeFollowupDispatch,
+    EhsChangeFollowupItem,
+    EhsChangeFollowupRound,
+)
 from app.modules.safety.models.ehs_changes import (  # noqa: F401
     EhsChange,
 )
@@ -220,6 +225,9 @@ __all__ = [
     'DrillCollectionRecord',
     'DrillHazardLink',
     'EhsChange',
+    'EhsChangeFollowupDispatch',
+    'EhsChangeFollowupItem',
+    'EhsChangeFollowupRound',
     'EhsChangeStatus',
     'EmergencyDrillDocument',
     'EmergencyDrillRecord',

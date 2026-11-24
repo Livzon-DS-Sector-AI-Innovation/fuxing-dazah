@@ -32,13 +32,13 @@ class TestRegistry:
         # 库存 sheet 源（SOURCE 开关 + revision 状态）；+2：督办通报值守轮询
         # （④ 开关 + 间隔）；+1：督办通报「推送到群」目标群
         # 2026-11-09 +3：P1-3 例外复核护栏（LLM上限/工具上限/每日上限）
-        assert len(registry.REGISTRY) == 149  # 2026-11-18 +2：AI+安全日报（总闸/目标群）；+1：设施摘除红色预警提醒总闸
+        assert len(registry.REGISTRY) == 152  # 2026-11-24 +3：EHS变更周度督办（总闸/灰度收件人/排除清单）
         # F4 提交卫生说明（bfb3f54d 混入他人 WIP）：本断言现为 123——
         # 在历史 121 口径上，2026-11-06 又提交了 2 个新键：点检AI审核开关
         # （77464b0f）、C2 判定依据引用强约束（176af8e0）。其中 5 个早期非 P0
         # 键的 reader 仍可能在他人未提交文件（rag_health.py / review.py /
         # config.py / guardian_r2/）中；新增/删除键时同步更新本断言与 iter 断言。
-        assert len(registry.iter_items()) == 149  # 与 REGISTRY 同步
+        assert len(registry.iter_items()) == 152  # 与 REGISTRY 同步（2026-11-24 +3 EHS变更督办）
 
     def test_unknown_key_raises(self):
         with pytest.raises(ValueError, match="未知配置键"):

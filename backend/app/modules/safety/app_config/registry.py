@@ -160,6 +160,22 @@ _ITEMS: tuple[ConfigItem, ...] = (
         "收件人=变更审批发起人/工艺负责人/安全负责人）",
     ),
     _flag(
+        "SAFETY_EHS_CHANGE_FOLLOWUP_ENABLED", False,
+        "EHS变更周度督办总闸（周五 10:00 私发分管安全员 + 周一 09:00 三类总结；"
+        "默认关，真机验收通过后手动开闸）",
+    ),
+    ConfigItem(
+        "SAFETY_EHS_CHANGE_FOLLOWUP_GRAY_RECIPIENT", "feature_flag", "str", "",
+        "EHS变更周度督办灰度收件人（安全应用作用域 open_id；非空时所有卡只发此人，"
+        "内容不变，验收必用；空 = 正式发各位分管安全员）",
+    ),
+    ConfigItem(
+        "SAFETY_EHS_CHANGE_FOLLOWUP_EXCLUDED", "feature_flag", "str", "",
+        "EHS变更周度督办排除清单（逗号分隔变更编号；状态填了已验收但无已通过验收单"
+        "的待确认项。空 = 代码预置 7 项，见 "
+        "service/ehs_change_followup/config.py DEFAULT_EXCLUDED）",
+    ),
+    _flag(
         "SAFETY_DAILY_DIGEST_ENABLED", True,
         "「安全速递」总卡模式总开关（开 = 各报告并入当日总卡；关 = 各报告独立群卡）",
     ),
