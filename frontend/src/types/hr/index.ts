@@ -1724,7 +1724,7 @@ export interface CertificateUploadInput {
 // ─── 台账 Excel 导入（两步预检式）───
 
 /** 可导入的台账类型（与后端 ledger_import.LEDGER_IMPORT_SPECS 对齐） */
-export type LedgerImportLedger = 'onboarding' | 'departure' | 'training' | 'incident'
+export type LedgerImportLedger = 'onboarding' | 'departure' | 'training' | 'incident' | 'contract'
 
 /** 预检结果：新增/重复/错误统计及明细（明细截断 50 条） */
 export interface LedgerImportPrecheck {
@@ -1745,4 +1745,97 @@ export interface LedgerImportResult {
   skipped: number
   skipped_scope: number
   errors: string[]
+}
+
+// ─── 劳动合同管理 ───
+
+/** 劳动合同状态（与后端 LaborContract.STATUS_* 对齐） */
+export type LaborContractStatus =
+  | 'active'
+  | 'pending_renewal'
+  | 'renewing'
+  | 'superseded'
+  | 'terminated'
+  | 'expired_unrenewed'
+
+export type LaborContractTermType = 'fixed_3y' | 'fixed_6y' | 'fixed' | 'open'
+
+/** 劳动合同（一份合同一行；期限/状态标签由后端按签订次数计算下发） */
+export interface LaborContract {
+  id: string
+  employee_number: string
+  name: string
+  department: string
+  position?: string | null
+  seq_no: number
+  seq_label: string
+  term_type: LaborContractTermType
+  term_label: string
+  term_years?: number | null
+  start_date?: string | null
+  end_date?: string | null
+  sign_date?: string | null
+  status: LaborContractStatus
+  status_label: string
+  remark?: string | null
+  dept_decision?: 'agree' | 'disagree' | null
+  dept_decision_label?: string | null
+  dept_decision_by?: string | null
+  dept_decision_at?: string | null
+  approval_mode?: 'feishu' | 'manual' | null
+  approval_mode_label?: string | null
+  approval_instance_code?: string | null
+  stamped_at?: string | null
+  delivered_at?: string | null
+  sign_confirmed_at?: string | null
+  terminated_reason?: string | null
+  terminated_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+/** 合同详情（含同一员工历次合同） */
+export interface LaborContractDetail extends LaborContract {
+  history: LaborContract[]
+}
+
+export interface LaborContractListParams {
+  status?: string
+  keyword?: string
+  expiring_days?: number
+  department?: string
+  page?: number
+  page_size?: number
+}
+
+export interface LaborContractCreateInput {
+  employee_number: string
+  start_date: string
+  sign_date?: string | null
+  remark?: string | null
+}
+
+export interface LaborContractUpdateInput {
+  start_date?: string
+  sign_date?: string
+  position?: string
+  remark?: string
+}
+
+export interface LaborContractRenewInput {
+  start_date: string
+  sign_date?: string | null
+}
+
+/** 签字页最小视图（免登；不含工号等可枚举信息） */
+export interface ContractSignView {
+  name: string
+  department: string
+  seq_no: number
+  seq_label: string
+  term_label: string
+  start_date?: string | null
+  end_date?: string | null
+  delivered_at?: string | null
+  sign_confirmed_at?: string | null
 }

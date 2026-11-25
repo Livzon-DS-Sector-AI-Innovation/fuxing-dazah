@@ -8,7 +8,7 @@ import {
   TeamOutlined, BookOutlined, BankOutlined, LoginOutlined, LogoutOutlined,
   FileSearchOutlined, PrinterOutlined, AuditOutlined, SafetyCertificateOutlined,
   SettingOutlined, TrophyOutlined, ApartmentOutlined,
-} from '@ant-design/icons'
+  FileDoneOutlined, } from '@ant-design/icons'
 
 import { usePermission } from '@/hooks/usePermission'
 import PageHeader from '@/components/hr/PageHeader'
@@ -26,6 +26,7 @@ const modules = [
   { key: 'recruitment', title: '招聘管理', desc: '候选人筛选、简历管理、推荐等级评定', icon: <FileSearchOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/recruitment', permission: 'hr:recruitment:read' },
   { key: 'onboarding', title: '入职台账', desc: '员工入职记录管理', icon: <LoginOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/onboarding', permission: 'hr:onboarding:read' },
   { key: 'departure', title: '离职台账', desc: '员工离职记录管理', icon: <LogoutOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/departure', permission: 'hr:departure:read' },
+  { key: 'labor-contracts', title: '劳动合同', desc: '合同签订、到期预警、续签审批、领取签字与归档', icon: <FileDoneOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/labor-contracts', permission: 'hr:contract:read' },
   { key: 'training', title: '培训管理', desc: '培训计划、课程安排、培训记录等', icon: <BookOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/training', permission: 'hr:training:read' },
   { key: 'performance', title: '绩效考核', desc: '月度绩效考核与项目评分', icon: <TrophyOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/performance', permission: 'hr:performance:read' },
   { key: 'title-judge', title: '职称评审投票', desc: '评委对申报人匿名投票', icon: <AuditOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/title-judge', permission: 'hr:title:judge' },
