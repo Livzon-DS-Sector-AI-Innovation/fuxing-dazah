@@ -288,6 +288,12 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 试用期安全考试（安全办录入；查看随档案读权限）
     (r"/probation-safety-exams", {"GET": "hr:profile:read", "POST": "hr:probation:exam:manage",
                                   "DELETE": "hr:probation:exam:manage"}),
+    # 劳动合同台账（部门负责人在数据范围内可审批/办理本部门合同）
+    (r"/labor-contracts", {"GET": "hr:contract:read", "POST": "hr:contract:manage"}),
+    (r"/labor-contracts/.*", {"GET": "hr:contract:read", "POST": "hr:contract:manage",
+                              "PUT": "hr:contract:manage", "DELETE": "hr:contract:manage"}),
+    # 劳动合同公开签字（挂全局 api_router 免登，token 即凭证；登记仅为通过路由覆盖巡检，None=不设权限）
+    (r"/contract-sign/.*", None),
     # 员工证件资料库（具体子路径在通用条目之前）
     (r"/certificates/access-logs", "hr:certificate:audit"),
     (r"/certificates/requirements", {"GET": "hr:certificate:read",

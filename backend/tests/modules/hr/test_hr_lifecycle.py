@@ -62,7 +62,9 @@ def test_register_declares_every_hr_task_exactly_once(
     lifecycle.HR_EXTENSION.register(host)
 
     assert sorted(host.scheduler.tasks) == [
+        "hr.contract.approval_sync",
         "hr.contract.reminder",
+        "hr.contract.renewal_announcement",
         "hr.employee_sync.reconcile",
         "hr.probation.reminder",
         "hr.title_review.reconcile",

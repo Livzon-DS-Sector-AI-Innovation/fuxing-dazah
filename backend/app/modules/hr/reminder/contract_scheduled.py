@@ -56,6 +56,17 @@ def _pick_due_date(dates: list[date], deadline: date, today: date) -> date | Non
 
 async def run_contract_reminder() -> None:
     async with async_session_factory() as db:
+        # 新续签流程接管后本任务退出，避免迁移窗口期双源重复提醒
+        # （开关 hr_contract.renewal_pipeline_enabled，缺省 true；见 labor_contract/settings.py）
+        from app.modules.hr.labor_contract import settings as contract_settings
+
+        kv = await contract_settings.load_contract_settings(db)
+        if contract_settings.pipeline_enabled(kv):
+            logger.info(
+                "劳动合同新续签流程已接管（hr_contract.renewal_pipeline_enabled=true），"
+                "旧合同到期提醒跳过"
+            )
+            return
         config = await load_reminder_config(db, REMINDER_TYPE, default_days_ahead=DEFAULT_DAYS_AHEAD)
         if not config.enabled:
             logger.info("合同到期提醒已停用（system_settings: hr_reminder.%s.enabled=false）", REMINDER_TYPE)

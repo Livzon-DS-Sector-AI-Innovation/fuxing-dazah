@@ -139,3 +139,84 @@ def _normalize_attachment_value(value: Any) -> list[dict[str, Any]] | None:
             if entry:
                 result.append(entry)
     return result or None
+
+
+async def get_approval_detail(
+    approval_code: str,
+    *,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> dict[str, Any]:
+    """获取审批定义详情，返回 {approval_name, status, form(list), node_list(list)}。
+
+    form 为 JSON 字符串（控件列表，含 id/custom_id/name/type），在此解析为 list；
+    node_list 元素含 node_id / need_approver（是否发起人自选审批人）等。
+    """
+    try:
+        token = await get_tenant_token(app_id=app_id, app_secret=app_secret)
+        data = await feishu_request(
+            "GET",
+            f"{APPROVAL_BASE}/approvals/{approval_code}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"locale": "zh-CN"},
+        )
+    except FeishuAPIError as exc:
+        raise ApprovalAPIError(str(exc)) from exc
+    result = data.get("data") or {}
+    form_raw = result.get("form") or "[]"
+    if isinstance(form_raw, str):
+        try:
+            form = json.loads(form_raw)
+        except (TypeError, ValueError):
+            form = []
+    else:
+        form = form_raw
+    return {
+        "approval_name": result.get("approval_name"),
+        "status": result.get("status"),
+        "form": form if isinstance(form, list) else [],
+        "node_list": result.get("node_list") or [],
+    }
+
+
+async def create_instance(
+    approval_code: str,
+    *,
+    initiator_open_id: str,
+    form: str,
+    node_approver_open_id_list: list[dict[str, Any]] | None = None,
+    uuid: str | None = None,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> str:
+    """创建审批实例，返回 instance_code。
+
+    - form：表单控件值 JSON 数组的压缩转义字符串，控件 id 须与定义一致
+    - node_approver_open_id_list：自选审批人节点赋值，
+      形如 [{"key": "<node_id>", "value": ["ou_xxx"]}]
+    - uuid：幂等键，企业内唯一；冲突返回 60012
+    需要应用开通 approval:approval 或 approval:instance scope。
+    """
+    body: dict[str, Any] = {
+        "approval_code": approval_code,
+        "open_id": initiator_open_id,
+        "form": form,
+    }
+    if node_approver_open_id_list:
+        body["node_approver_open_id_list"] = node_approver_open_id_list
+    if uuid:
+        body["uuid"] = uuid
+    try:
+        token = await get_tenant_token(app_id=app_id, app_secret=app_secret)
+        data = await feishu_request(
+            "POST",
+            f"{APPROVAL_BASE}/instances",
+            headers={"Authorization": f"Bearer {token}"},
+            json_body=body,
+        )
+    except FeishuAPIError as exc:
+        raise ApprovalAPIError(str(exc)) from exc
+    instance_code = (data.get("data") or {}).get("instance_code")
+    if not instance_code:
+        raise ApprovalAPIError("创建审批实例成功但未返回 instance_code")
+    return str(instance_code)
