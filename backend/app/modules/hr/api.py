@@ -1829,14 +1829,20 @@ async def list_employee_varieties(
 
     人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门
     （与按部门带入人员的口径一致，兼任部门不参与）；
-    「厂级」= 全厂培训，不下发部门过滤（与名单接口口径一致）。
+    「厂级」= 全厂培训，取写了真实体现部门的人（「未分类」不是体现部门、不算）。
     """
     from app.modules.hr.models import TrainingRosterProfile
     conditions = [
         TrainingRosterProfile.is_deleted == False,
         TrainingRosterProfile.status == '在职',
     ]
-    if department != "厂级":
+    if department == "厂级":
+        conditions += [
+            TrainingRosterProfile.department.isnot(None),
+            TrainingRosterProfile.department != "",
+            TrainingRosterProfile.department != "未分类",
+        ]
+    else:
         conditions.append(TrainingRosterProfile.department == department)
     rows = (await session.execute(
         select(TrainingRosterProfile.variety, TrainingRosterProfile.concurrent_variety)
@@ -1858,14 +1864,15 @@ async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[i
     """统计部门病假/产假人数（无则 0），供通知/签到表人数栏展示。
 
     人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门；
-    「厂级」= 全厂培训，不下发部门过滤（与名单接口口径一致）。
+    「厂级」= 全厂培训，取写了真实体现部门的人（「未分类」不是体现部门、不算）。
     """
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE (:dept = '厂级' OR department = :dept) "
+                "WHERE ((:dept = '厂级' AND department IS NOT NULL "
+                "AND department NOT IN ('', '未分类')) OR department = :dept) "
                 "AND is_deleted = false "
                 "AND status IN ('病假', '产假') GROUP BY status"
             ),

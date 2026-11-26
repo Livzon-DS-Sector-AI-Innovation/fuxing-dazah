@@ -627,7 +627,7 @@ class TestLeaveCountScope:
 
     @pytest.mark.asyncio
     async def test_factory_level_counts_whole_factory(self, db_session):
-        """「厂级」不下发部门过滤：病假/产假人数按全厂统计（与名单接口口径一致）。
+        """「厂级」病假/产假人数按全厂真实体现部门统计；「未分类」不是体现部门、不算。
 
         测试库连开发库（读有真实名单），先取基线再断言增量。
         """
@@ -643,6 +643,10 @@ class TestLeaveCountScope:
             TrainingRosterProfile(
                 employee_number=f"50{uuid4().hex[:4]}", name="厂产假乙", department=f"请假他部{uuid4().hex[:6]}",
                 position="操作工", status="产假",
+            ),
+            TrainingRosterProfile(
+                employee_number=f"50{uuid4().hex[:4]}", name="厂病假未分类", department="未分类",
+                position="操作工", status="病假",
             ),
         ])
         await db_session.flush()

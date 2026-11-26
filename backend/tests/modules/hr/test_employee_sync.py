@@ -910,7 +910,7 @@ class TestRosterVariety:
         assert res.json()["data"] == ["胶囊"]
 
     async def test_employee_varieties_factory_level_spans_all(self, db_session: AsyncSession, client: AsyncClient) -> None:
-        """「厂级」不下发部门过滤：品种取全厂在职人员的并集（与名单口径一致）。"""
+        """「厂级」品种取全厂真实体现部门的并集；「未分类」不是体现部门、不算。"""
         db_session.add_all([
             hr_models.TrainingRosterProfile(
                 name="周五", employee_number=f"E{_rand()}", department=f"品种甲部{_rand()}",
@@ -919,6 +919,10 @@ class TestRosterVariety:
             hr_models.TrainingRosterProfile(
                 name="吴七", employee_number=f"E{_rand()}", department=f"品种乙部{_rand()}",
                 position="QC", status="在职", variety="颗粒",
+            ),
+            hr_models.TrainingRosterProfile(
+                name="周未分类", employee_number=f"E{_rand()}", department="未分类",
+                position="QC", status="在职", variety="未分类专属品种",
             ),
         ])
         await db_session.flush()
@@ -929,6 +933,7 @@ class TestRosterVariety:
         assert res.status_code == 200
         data = res.json()["data"]
         assert "胶囊" in data and "颗粒" in data
+        assert "未分类专属品种" not in data
 
 
 class TestRosterDepartmentScope:
@@ -952,13 +957,14 @@ class TestRosterDepartmentScope:
         assert [r["name"] for r in rows] == ["体现甲"]
 
     async def test_factory_level_pulls_every_department(self, db_session: AsyncSession) -> None:
-        """「厂级」= 全厂培训：不下发部门过滤，各体现部门的人都带入。
+        """「厂级」= 全厂培训：各真实体现部门的人都带入；「未分类」不是体现部门、不带入。
 
-        测试库连开发库（读有真实名单），断言只针对本用例造的两行。
+        测试库连开发库（读有真实名单），断言只针对本用例造的行。
         """
         for name, no, dept in [
             ("厂级甲", f"E{_rand()}", f"体现丙部{_rand()}"),
             ("厂级乙", f"E{_rand()}", f"体现丁部{_rand()}"),
+            ("厂级未分类", f"E{_rand()}", "未分类"),
         ]:
             db_session.add(hr_models.TrainingRosterProfile(
                 name=name, employee_number=no, department=dept,
@@ -971,6 +977,7 @@ class TestRosterDepartmentScope:
         )
         names = [r["name"] for r in rows]
         assert "厂级甲" in names and "厂级乙" in names
+        assert "厂级未分类" not in names
 
 
 # ─── 同步启用期间的只读守卫 ───
