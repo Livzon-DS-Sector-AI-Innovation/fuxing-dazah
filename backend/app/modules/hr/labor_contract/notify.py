@@ -2,6 +2,7 @@
 
 员工侧通知收件人取 Employee.feishu_open_id（档案同步字段），缺失时记日志跳过
 （一线工人未入飞书的场景宁可不发也不报错中断流程）。
+给部门负责人的续签审批提醒见 dept_notice.py（这里只复用 _send）。
 """
 
 import logging
@@ -96,13 +97,19 @@ async def send_announcement_summary(
     db: AsyncSession,
     *,
     announced_rows: list[tuple[LaborContract, str]],
-    manual_rows: list[LaborContract],
+    notified_rows: list[tuple[LaborContract, str]],
+    unreached_rows: list[tuple[LaborContract, str]],
     failed_rows: list[tuple[LaborContract, str]],
     expired_rows: list[LaborContract],
     receivers: list[str],
     days_ahead: int,
 ) -> int:
-    """公告期扫描后的 HR 摘要卡片。返回成功发送数。"""
+    """公告期扫描后的 HR 摘要卡片。返回成功发送数。
+
+    notified_rows / unreached_rows 为站内待审批的合同，元素是
+    (合同, 部门负责人姓名) / (合同, 没通知到的原因)：负责人提醒卡片发出去了哪些、
+    哪些要 HR 自己跟进（匹配不到负责人 / 推送失败 / 提醒已关闭）。
+    """
     if not receivers:
         return 0
     lines: list[str] = []
@@ -111,11 +118,16 @@ async def send_announcement_summary(
         for contract, approver in announced_rows:
             lines.append(f"- {contract.department} {contract.name}（{contract.employee_number}）"
                          f" 到期 {contract.end_date}，第 {contract.seq_no + 1} 次续签审批 → {approver}")
-    if manual_rows:
-        lines.append(f"**站内待审批（{len(manual_rows)} 人，未配置审批定义或负责人缺失，走台账勾选）**")
-        for contract in manual_rows:
+    if notified_rows:
+        lines.append(f"**站内待审批 · 已通知部门负责人（{len(notified_rows)} 人）**")
+        for contract, manager in notified_rows:
             lines.append(f"- {contract.department} {contract.name}（{contract.employee_number}）"
-                         f" 到期 {contract.end_date}")
+                         f" 到期 {contract.end_date} → 负责人 {manager}")
+    if unreached_rows:
+        lines.append(f"**站内待审批 · 负责人未通知到（{len(unreached_rows)} 人，请 HR 跟进）**")
+        for contract, reason in unreached_rows:
+            lines.append(f"- {contract.department} {contract.name}（{contract.employee_number}）"
+                         f" 到期 {contract.end_date}：{reason}")
     if failed_rows:
         lines.append(f"**发起失败（{len(failed_rows)} 人，请检查审批定义配置）**")
         for contract, error in failed_rows:

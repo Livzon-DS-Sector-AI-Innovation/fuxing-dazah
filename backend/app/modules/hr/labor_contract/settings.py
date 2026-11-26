@@ -13,6 +13,9 @@
 - hr_contract.archive_reminder_enabled    归档缺失周提醒开关，缺省 true（每周一汇总未归档合同给 HR）。
 - hr_contract.archive_reminder_open_ids   归档提醒接收人（姓名或 open_id，逗号分隔）；
   未配置时沿用 hr_copy_open_ids，两者都为空则不发。
+- hr_contract.dept_head_notice_enabled    合同进入公告期时是否给部门负责人发续签审批提醒，
+  缺省 true。收件人是数据里的负责人、不靠配置接收人，所以本地开发（连真实飞书、
+  库里是真实员工）需要显式关掉才不会给真人发卡片。
 """
 
 import logging
@@ -32,6 +35,7 @@ KEY_SIGN_BASE_URL = "hr_contract.sign_page_base_url"
 KEY_CONTACT_INFO = "hr_contract.contact_info"
 KEY_ARCHIVE_REMINDER_ENABLED = "hr_contract.archive_reminder_enabled"
 KEY_ARCHIVE_REMINDER_OPEN_IDS = "hr_contract.archive_reminder_open_ids"
+KEY_DEPT_HEAD_NOTICE_ENABLED = "hr_contract.dept_head_notice_enabled"
 
 DEFAULT_DAYS_AHEAD = 50
 DEFAULT_CONTACT_INFO = "人力资源部"
@@ -45,6 +49,7 @@ _SETTING_KEYS = (
     KEY_CONTACT_INFO,
     KEY_ARCHIVE_REMINDER_ENABLED,
     KEY_ARCHIVE_REMINDER_OPEN_IDS,
+    KEY_DEPT_HEAD_NOTICE_ENABLED,
 )
 
 
@@ -88,6 +93,11 @@ def archive_reminder_receivers(settings: dict[str, str]) -> list[str]:
         KEY_HR_COPY_OPEN_IDS, ""
     )
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def dept_head_notice_enabled(settings: dict[str, str]) -> bool:
+    """合同进入公告期时是否给部门负责人发续签审批提醒，缺省 true。"""
+    return settings.get(KEY_DEPT_HEAD_NOTICE_ENABLED, "true").strip().lower() != "false"
 
 
 async def save_contract_settings(db: AsyncSession, kv: dict[str, str]) -> None:

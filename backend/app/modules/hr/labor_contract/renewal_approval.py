@@ -1,6 +1,6 @@
-"""部门续签审批 · 飞书原生审批：自动发起实例 + 定时轮询回写结果。
+"""部门续签审批 · 飞书原生审批（可选增强）：自动发起实例 + 定时轮询回写结果。
 
-流程（方案 §3.4）：
+部门审批默认在系统内完成（站内台账勾选，见 service.apply_dept_decision）；仅当 hr_contract.renewal_approval_code 配置了审批定义编码时，公告期扫描才会改走本模块的原生审批。流程：
     扫描进入公告期 → create_instance（表单按定义控件名自动填充，
     自选审批人节点 = 部门负责人 open_id，uuid 幂等）→ 部门负责人在飞书
     审批 → 轮询 get_instance 回写：APPROVED → 同意（续签办理中+通知员工）/
@@ -78,10 +78,14 @@ async def load_definition(approval_code: str) -> dict[str, Any] | None:
     return detail
 
 
-async def resolve_approver_open_id(
-    db: AsyncSession, contract: LaborContract
-) -> str | None:
-    """部门负责人 open_id：部门表负责人姓名 → identity 解析；兜底员工直属经理。"""
+async def resolve_approver(
+    db: AsyncSession, contract: LaborContract,
+) -> tuple[str | None, str | None]:
+    """部门负责人的 (姓名, open_id)：部门表负责人姓名 → identity 解析；兜底员工直属经理。
+
+    飞书原生审批的审批人与站内审批的提醒收件人都从这里取，保证是同一个人。
+    姓名有但 open_id 为空 = 匹配不到飞书账号（未登录过内网 / 同名多人）。
+    """
     manager_name = (await db.execute(
         select(Department.department_manager_name)
         .where(Department.name == contract.department, Department.is_deleted.is_(False))
@@ -90,8 +94,8 @@ async def resolve_approver_open_id(
         employee = await repo.get_employee(db, contract.employee_number)
         manager_name = getattr(employee, "direct_manager_name", None)
     if not manager_name:
-        return None
-    return await _lookup_open_id(manager_name)
+        return None, None
+    return manager_name, await _lookup_open_id(manager_name)
 
 
 def _build_values(contract: LaborContract, *, next_start: date) -> dict[str, str]:
@@ -150,9 +154,9 @@ async def initiate(
     if not detail:
         return False, "审批定义不可用（未创建/已停用）"
 
-    approver_open_id = await resolve_approver_open_id(db, contract)
+    _, approver_open_id = await resolve_approver(db, contract)
     if not approver_open_id:
-        return False, "部门负责人无法解析（部门表/员工档案均无负责人）"
+        return False, "部门负责人无法解析（部门表/员工档案均无负责人或匹配不到飞书账号）"
 
     form = build_form(detail, _build_values(contract, next_start=next_start))
     if not form:
@@ -213,10 +217,17 @@ async def _recover_instance_code(approval_code: str, contract: LaborContract) ->
 _STATUS_HANDLED = ("APPROVED", "REJECTED", "CANCELED", "DELETED")
 
 
-async def sync_pending_results(db: AsyncSession) -> dict[str, int]:
-    """轮询回写公告期合同的原生审批结果。返回 {approved, rejected, canceled} 计数。"""
+async def sync_pending_results(
+    db: AsyncSession,
+) -> tuple[dict[str, int], list[LaborContract]]:
+    """轮询回写公告期合同的原生审批结果。
+
+    返回 ({approved, rejected, canceled} 计数, 被撤销/删除而退回站内待审批的合同)。
+    后者交给调用方给部门负责人补发站内提醒——飞书审批待办已不存在。
+    """
     pending = await repo.list_pending_approval_sync(db)
     counts = {"approved": 0, "rejected": 0, "canceled": 0}
+    canceled_rows: list[LaborContract] = []
     for contract in pending:
         instance_code = contract.approval_instance_code
         if not instance_code:
@@ -252,7 +263,8 @@ async def sync_pending_results(db: AsyncSession) -> dict[str, int]:
             contract.approval_instance_code = None
             contract.approval_mode = LaborContract.APPROVAL_MANUAL
             counts["canceled"] += 1
+            canceled_rows.append(contract)
             logger.info("续签审批实例被撤销: %s → 回站内待审批", contract.employee_number)
     if any(counts.values()):
         await db.flush()
-    return counts
+    return counts, canceled_rows
