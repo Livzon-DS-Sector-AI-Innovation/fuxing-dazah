@@ -5,14 +5,20 @@
 """
 
 from datetime import date
+from typing import Any
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
+from app.main import app
+from app.modules.hr.deps import HrAccessContext, get_hr_scope
+from app.modules.hr.models import Employee
 from app.modules.hr.schemas import EmployeeCreate, EmployeeUpdate
 from app.modules.hr.service import EmployeeService
+from app.platform.identity.models import User
 from tests.modules.hr.conftest import _rand
 
 # ── 辅助函数 ──
@@ -338,6 +344,138 @@ async def test_api_get_training_candidates(client):
     assert "培训候选员工" in names
 
 
+async def _add_synced_employee(
+    db: AsyncSession,
+    *,
+    name: str,
+    department: str = "入职培训测试部",
+    hire_date: date | None = None,
+    status: str = "在职",
+) -> Employee:
+    """模拟飞书同步的员工：只有员工档案行，没有入职台账行。"""
+    emp = Employee(
+        employee_number=_rand("SYNC"),
+        name=name,
+        department=department,
+        position="操作工",
+        hire_date=hire_date or date.today(),
+        status=status,
+    )
+    db.add(emp)
+    await db.flush()
+    return emp
+
+
+async def _get_candidates(client: AsyncClient, **params: Any) -> dict[str, dict[str, Any]]:
+    """查询入职培训下拉候选，返回 {姓名: 候选}。"""
+    resp = await client.get("/api/v1/hr/employees/training-candidates", params=params)
+    assert resp.status_code == 200, resp.text
+    return {c["name"]: c for c in resp.json()["data"]}
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_include_synced_employee_without_onboarding_row(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """下拉与入职台账列表同源：飞书同步进员工档案、没有入职台账行的员工也能搜到。"""
+    name = _rand("同步员工")
+    emp = await _add_synced_employee(db_session, name=name)
+
+    found = await _get_candidates(client, keyword=name)
+    assert found[name]["employee_number"] == emp.employee_number
+    assert found[name]["employee_id"] == str(emp.id)
+    assert found[name]["prejob_completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_hide_completed_by_default(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """培训台账有入职培训记录表导出记录（prejob_export）的员工默认不返回，
+    include_completed=true 时返回并标记已完成；岗前计划导出记录（prejob）不算完成。"""
+    name = _rand("已完成员工")
+    emp = await _add_synced_employee(db_session, name=name)
+
+    resp = await client.post("/api/v1/hr/training-ledgers", json={
+        "employee_number": emp.employee_number,
+        "training_date": str(date.today()),
+        "training_subject": "岗前安全教育",
+        "source_type": "prejob",
+    })
+    assert resp.status_code == 201, resp.text
+    assert name in await _get_candidates(client, keyword=name)
+
+    resp = await client.post("/api/v1/hr/training-ledgers", json={
+        "employee_number": emp.employee_number,
+        "training_date": str(date.today()),
+        "training_subject": "入职培训记录表导出写入",
+        "source_type": "prejob_export",
+    })
+    assert resp.status_code == 201, resp.text
+
+    assert name not in await _get_candidates(client, keyword=name)
+    shown = await _get_candidates(client, keyword=name, include_completed="true")
+    assert shown[name]["prejob_completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_exclude_departed(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """与入职台账列表同口径：状态为「离职」的员工不在下拉候选中。"""
+    name = _rand("离职员工")
+    await _add_synced_employee(db_session, name=name, status="离职")
+
+    assert name not in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_filter_by_year(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """year 按入职日期所在年份筛选（与入职台账列表一致）；不传则不限年份。"""
+    name = _rand("往年员工")
+    this_year = date.today().year
+    await _add_synced_employee(db_session, name=name, hire_date=date(this_year - 1, 6, 1))
+
+    assert name not in await _get_candidates(client, keyword=name, year=this_year)
+    assert name in await _get_candidates(client, keyword=name, year=this_year - 1)
+    assert name in await _get_candidates(client, keyword=name)
+
+
+@pytest.mark.asyncio
+async def test_training_candidates_restricted_to_scoped_departments(
+    db_session: AsyncSession, client: AsyncClient, test_user: User,
+) -> None:
+    """数据范围受限时只返回授权部门的员工。"""
+    dept_a, dept_b = _rand("授权部"), _rand("外部部")
+    emp_a = await _add_synced_employee(
+        db_session, name=_rand("授权员工"), department=dept_a,
+    )
+    emp_b = await _add_synced_employee(
+        db_session, name=_rand("外部员工"), department=dept_b,
+    )
+
+    async def _scoped() -> HrAccessContext:
+        return HrAccessContext(
+            user=test_user,
+            data_scope="department",
+            department=dept_a,
+            employee_number=test_user.employee_no,
+            scoped_departments=frozenset({dept_a}),
+        )
+
+    app.dependency_overrides[get_hr_scope] = _scoped
+    try:
+        resp = await client.get("/api/v1/hr/employees/training-candidates")
+    finally:
+        app.dependency_overrides.pop(get_hr_scope, None)
+    assert resp.status_code == 200, resp.text
+    numbers = {c["employee_number"] for c in resp.json()["data"]}
+    assert emp_a.employee_number in numbers
+    assert emp_b.employee_number not in numbers
+
+
 # ═══════════════════════════════════════════════════════════════
 # 职位 & 岗位培训 API
 # ═══════════════════════════════════════════════════════════════
@@ -399,6 +537,70 @@ async def test_api_get_position_trainings(client):
     resp = await client.get("/api/v1/hr/position-trainings")
     assert resp.status_code == 200
     assert "data" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_training_positions_by_department_merges_linked_table_and_catalog(
+    db_session: AsyncSession, client: AsyncClient,
+) -> None:
+    """部门下的培训岗位取「岗位培训关联表 ∪ SOP 目录」：历史数据可能只落在其中一张表。
+
+    同一大类两表都有时只出一次，培训师 / 培训方式以关联表为准；
+    SOP 目录未填适用岗位的条目、别的部门的条目都不算本部门的培训岗位。
+    """
+    from app.modules.hr.models import PositionTraining, SopCatalog
+
+    dept = _rand("培训岗")
+    db_session.add_all([
+        PositionTraining(department=dept, position_name="工艺员", training_category="工艺操作",
+                         trainer="张三", training_method="面授", sop_number="S-1", file_name="粗提岗位操作规程"),
+        PositionTraining(department=dept, position_name="工艺员", training_category="质量管理",
+                         sop_number="S-2", file_name="偏差处理管理规程"),
+        SopCatalog(department=dept, position_name="工艺员", category="工艺操作",
+                   sop_number="S-1", file_name="粗提岗位操作规程"),
+        SopCatalog(department=dept, position_name="工艺员", category="设备操作",
+                   sop_number="S-3", file_name="离心机操作规程"),
+        SopCatalog(department=dept, position_name="班组长", category="安全管理",
+                   sop_number="S-4", file_name="受限空间作业安全操作规程"),
+        SopCatalog(department=dept, position_name=None, category="文件管理",
+                   sop_number="S-5", file_name="文件管理规程"),
+        SopCatalog(department=_rand("别的部门"), position_name="检验员", category="质量管理",
+                   sop_number="S-6", file_name="偏差处理管理规程"),
+    ])
+    await db_session.flush()
+
+    resp = await client.get(
+        "/api/v1/hr/position-trainings/by-department", params={"department": dept},
+    )
+    assert resp.status_code == 200, resp.text
+    positions = {p["position_name"]: p["categories"] for p in resp.json()["data"]}
+    assert set(positions) == {"工艺员", "班组长"}
+
+    gongyi = {c["training_category"]: c for c in positions["工艺员"]}
+    assert set(gongyi) == {"工艺操作", "质量管理", "设备操作"}
+    # 关联表带培训师 / 培训方式；只在 SOP 目录里的大类没有
+    assert gongyi["工艺操作"] == {
+        "training_category": "工艺操作", "trainer": "张三", "training_method": "面授",
+    }
+    assert gongyi["设备操作"] == {
+        "training_category": "设备操作", "trainer": None, "training_method": None,
+    }
+    assert [c["training_category"] for c in positions["班组长"]] == ["安全管理"]
+
+
+@pytest.mark.asyncio
+async def test_training_positions_by_department_empty_and_required(
+    client: AsyncClient,
+) -> None:
+    """没配置过培训内容的部门返回空列表；department 为必填参数。"""
+    resp = await client.get(
+        "/api/v1/hr/position-trainings/by-department", params={"department": _rand("空部门")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] == []
+
+    missing = await client.get("/api/v1/hr/position-trainings/by-department")
+    assert missing.status_code == 422
 
 
 # ═══════════════════════════════════════════════════════════════

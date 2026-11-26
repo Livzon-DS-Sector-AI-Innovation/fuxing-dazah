@@ -61,10 +61,12 @@ def _calc_probation_end(date_val: Any) -> str:
 def generate_training_record(
     employee: Employee,
     training_items: list[dict[str, Any]] | None = None,
+    training_position: str | None = None,
 ) -> BytesIO:
     """生成新员工培训记录 Word 文档。
 
     training_items 每项包含: file_name, trainer, method, plan_date
+    training_position: 培训岗位。传入时「体现岗位」写培训岗位，否则写员工实际岗位
     """
     doc = Document(str(_find_template()))
 
@@ -77,7 +79,7 @@ def generate_training_record(
         "{性别}": employee.gender or "",
         "{年龄}": age_str,
         "{体现部门}": employee.department or "",
-        "{体现岗位}": employee.position or "",
+        "{体现岗位}": training_position or employee.position or "",
         "{入职日期}": str(employee.hire_date) if employee.hire_date else "",
         "{{入职日期}+3M-1day}": probation_end,
     })

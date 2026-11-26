@@ -565,6 +565,10 @@ class TrainingLedger(BaseModel):
         {"schema": "hr"},
     )
 
+    # 入职培训记录表导出写入的来源，以此判定入职培训已完成
+    # （prejob 是岗前培训计划导出时写入，培训尚未开展，不算完成）
+    SOURCE_PREJOB_EXPORT = "prejob_export"
+
     employee_number: Mapped[str] = mapped_column(
         String(32), nullable=False, comment="工号"
     )

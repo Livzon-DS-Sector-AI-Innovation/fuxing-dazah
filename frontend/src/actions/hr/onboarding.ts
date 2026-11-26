@@ -141,29 +141,31 @@ type PrejobTrainingItem = {
   plan_date: string
 }
 
-/** 岗前培训计划（docx，含自选培训内容） */
+/** 岗前培训计划（docx，含自选培训内容）；trainingPosition 为培训岗位，传入时文档的「体现岗位」写它 */
 export async function downloadPrejobTrainingPlan(
   employeeId: string,
   employeeName: string,
-  trainingItems: PrejobTrainingItem[]
+  trainingItems: PrejobTrainingItem[],
+  trainingPosition?: string,
 ): Promise<{ base64: string; filename: string }> {
   const { base64, filename } = await fetchHrDownload(`/hr/employees/${employeeId}/prejob-training-plan`, {
     method: 'POST',
-    body: JSON.stringify({ training_items: trainingItems }),
+    body: JSON.stringify({ training_items: trainingItems, training_position: trainingPosition }),
     errorMessage: '导出失败',
   })
   return { base64, filename: filename || `岗前培训计划_${employeeName || 'employee'}.docx` }
 }
 
-/** 培训记录（docx，含自选培训内容） */
+/** 培训记录（docx，含自选培训内容）；trainingPosition 为培训岗位，传入时文档的「体现岗位」写它 */
 export async function downloadEmployeeTrainingRecord(
   employeeNumber: string,
   employeeName: string,
-  trainingItems: PrejobTrainingItem[]
+  trainingItems: PrejobTrainingItem[],
+  trainingPosition?: string,
 ): Promise<{ base64: string; filename: string }> {
   const { base64, filename } = await fetchHrDownload(`/hr/employees/${employeeNumber}/training-record`, {
     method: 'POST',
-    body: JSON.stringify({ training_items: trainingItems }),
+    body: JSON.stringify({ training_items: trainingItems, training_position: trainingPosition }),
     errorMessage: '导出失败',
   })
   return { base64, filename: filename || `培训记录_${employeeName}.docx` }

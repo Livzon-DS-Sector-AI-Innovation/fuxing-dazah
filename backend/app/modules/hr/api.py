@@ -532,76 +532,42 @@ async def download_training_registration(
 @router.get("/employees/training-candidates", summary="待培训人员列表")
 async def training_candidates(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
-    session: AsyncSession = Depends(get_db),
+    year: int | None = Query(None, ge=1900, le=2999, description="入职年份，不传则不限年份"),
+    include_completed: bool = Query(False, description="是否包含已完成入职培训的员工"),
+    service: OnboardingRecordService = Depends(get_onboarding_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """返回入职台账中在职的员工列表，同时关联员工表获取异动等完整信息。"""
-    from app.modules.hr.models import Employee, OnboardingRecord, TransferRecord
-    stmt = select(OnboardingRecord).where(
-        OnboardingRecord.is_deleted == False,
-        OnboardingRecord.is_employed == "是",
+    """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
+
+    已完成入职培训（培训台账存在入职培训记录表导出写入的记录）的员工默认不返回。
+    """
+    candidates, transfer_map = await service.list_training_candidates(
+        hr_scope=hr_scope,
+        keyword=keyword,
+        year=year,
+        include_completed=include_completed,
     )
-    # 数据范围受限时强制收敛到本部门/本人
-    # （OnboardingRecord 无 actual_department 列，不能用 apply_list_scope 的未分类分支）
-    if not hr_scope.is_unrestricted:
-        if hr_scope.data_scope == "self_only":
-            stmt = stmt.where(OnboardingRecord.employee_number == hr_scope.employee_number)
-        elif hr_scope.scoped_departments:
-            stmt = stmt.where(OnboardingRecord.department.in_(hr_scope.scoped_departments))
-        else:
-            raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
-    if keyword:
-        stmt = stmt.where(
-            OnboardingRecord.name.ilike(f"{keyword}%")
-            | OnboardingRecord.employee_number.ilike(f"{keyword}%")
-        )
-    stmt = stmt.order_by(OnboardingRecord.hire_date.desc().nulls_last())
-    r = await session.execute(stmt)
-    records = r.scalars().all()
-    # 批量查询关联的 Employee 记录和异动记录
-    emp_numbers = [rec.employee_number for rec in records if rec.employee_number]
-    emp_map = {}
-    transfer_map: dict[str, list] = {}
-    if emp_numbers:
-        emp_rows = (await session.execute(
-            select(Employee).where(Employee.employee_number.in_(emp_numbers), Employee.is_deleted == False)
-        )).scalars().all()
-        emp_map = {e.employee_number: e for e in emp_rows}
-        emp_ids = [e.id for e in emp_rows]
-        if emp_ids:
-            emp_id_map = {e.id: e.employee_number for e in emp_rows}
-            t_rows = (await session.execute(
-                select(TransferRecord).where(
-                    TransferRecord.employee_id.in_(emp_ids),
-                    TransferRecord.is_deleted == False,
-                ).order_by(TransferRecord.effective_date.desc())
-            )).scalars().all()
-            for t in t_rows:
-                en = emp_id_map.get(t.employee_id)
-                if en:
-                    transfer_map.setdefault(en, []).append({
-                            "id": str(t.id), "transfer_type": t.transfer_type,
-                            "from_department": t.from_department, "to_department": t.to_department,
-                            "from_position": t.from_position, "to_position": t.to_position,
-                            "effective_date": str(t.effective_date) if t.effective_date else None,
-                            "reason": t.reason,
-                        })
+    # 来源标签与入职台账列表同口径：按工号取入职台账记录的 source
+    sources = await service.ledger_sources(
+        [e.employee_number for e, _ in candidates if e.employee_number]
+    )
     return success_response(data=[
         {
-            "id": str(rec.id),
-            "employee_number": rec.employee_number,
-            "name": rec.name,
-            "department": rec.department,
-            "position": rec.position,
-            "hire_date": str(rec.hire_date) if rec.hire_date else None,
-            "education": rec.education,
-            "school": rec.school,
-            "graduation_date": str(rec.graduation_date) if rec.graduation_date else None,
-            "source": rec.source or "新入职",
-            "transfers": transfer_map.get(rec.employee_number, []),
-            "employee_id": str(emp_map[rec.employee_number].id) if rec.employee_number in emp_map else None,
+            "id": str(e.id),
+            "employee_number": e.employee_number,
+            "name": e.name,
+            "department": e.department,
+            "position": e.position,
+            "hire_date": str(e.hire_date) if e.hire_date else None,
+            "education": e.education,
+            "school": e.school,
+            "graduation_date": str(e.graduation_date) if e.graduation_date else None,
+            "source": sources.get(e.employee_number) or "新入职",
+            "transfers": transfer_map.get(e.employee_number, []),
+            "employee_id": str(e.id),
+            "prejob_completed": completed,
         }
-        for rec in records
+        for e, completed in candidates
     ])
 
 
@@ -1571,6 +1537,8 @@ class TrainingItem(BaseModel):
 
 class TrainingExportRequest(BaseModel):
     training_items: list[TrainingItem] = []
+    # 培训岗位：传入时文档里的「体现岗位」写它，而不是员工实际岗位
+    training_position: str | None = None
 
 
 @router.post(
@@ -1622,7 +1590,9 @@ async def export_training_record(
     hr_scope.ensure_can_access_employee(employee)
     items = [it.model_dump() for it in body.training_items]
     try:
-        buffer: BytesIO = generate_training_record(employee, training_items=items)
+        buffer: BytesIO = generate_training_record(
+            employee, training_items=items, training_position=body.training_position
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1675,6 +1645,8 @@ async def export_work_permit(
 
 class PrejobTrainingItems(BaseModel):
     training_items: list[dict] = []
+    # 培训岗位：传入时文档里的「体现岗位」写它，而不是员工实际岗位
+    training_position: str | None = None
 
 
 async def _sync_prejob_plan_to_ledger(
@@ -1775,6 +1747,10 @@ async def export_prejob_training_plan(
         dept = person.department
         pos = person.position
 
+    # 指定了培训岗位时，后面按培训岗位查关联培训内容
+    if payload and payload.training_position:
+        pos = payload.training_position
+
     # 前端传了培训项则优先用，否则查数据库
     if payload and payload.training_items:
         training_items = [
@@ -1816,7 +1792,9 @@ async def export_prejob_training_plan(
         ]
 
     try:
-        buffer: BytesIO = generate_prejob_training_plan(person, training_items)
+        buffer: BytesIO = generate_prejob_training_plan(
+            person, training_items, payload.training_position if payload else None
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

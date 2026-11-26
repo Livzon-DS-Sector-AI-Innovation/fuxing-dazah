@@ -72,6 +72,7 @@ def _cleanup_markers(doc: Document) -> None:
 def generate_prejob_training_plan(
     person: Any,
     training_items: list[dict[str, str]] | None = None,
+    training_position: str | None = None,
 ) -> BytesIO:
     """根据人员数据和培训内容生成岗前培训计划 Word 文档。
 
@@ -79,6 +80,8 @@ def generate_prejob_training_plan(
         person: 人员对象，需有 name, department, position, hire_date,
                 education, school, graduation_date, classification, transfer_history
         training_items: 培训内容列表，每项包含 training_category, trainer, training_method
+        training_position: 培训岗位。员工的实际岗位名常与培训岗位不同（如「万古纯化」对「工艺员」），
+                传入时「体现岗位」写培训岗位，否则写员工实际岗位
     """
     template_path = _find_template()
     doc = Document(str(template_path))
@@ -96,7 +99,7 @@ def generate_prejob_training_plan(
         "{毕业院校}": s(getattr(person, "school", None)),
         "{毕业时间}": s(getattr(person, "graduation_date", None)),
         "{体现部门}": s(getattr(person, "department", None)),
-        "{体现岗位}": s(getattr(person, "position", None)),
+        "{体现岗位}": s(training_position or getattr(person, "position", None)),
         "{入职日期}": s(getattr(person, "hire_date", None)),
         "{证书}": s(getattr(person, "classification", None)),
         "{异动类别}": (

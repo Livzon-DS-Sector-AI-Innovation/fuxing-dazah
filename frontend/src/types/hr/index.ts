@@ -288,6 +288,35 @@ export interface OnboardingFilterOptions {
   years?: number[]
 }
 
+/** 入职培训下拉候选（与入职台账列表同源：员工档案 + 在职） */
+export interface TrainingCandidate {
+  id: string
+  employee_id: string
+  employee_number: string
+  name: string
+  department: string
+  position: string
+  hire_date: string | null
+  education: string | null
+  school: string | null
+  graduation_date: string | null
+  /** 入职台账记录来源；无台账记录时为「新入职」 */
+  source: string
+  /** 已完成入职培训：培训台账存在入职培训记录表导出写入的记录 */
+  prejob_completed: boolean
+  transfers: unknown[]
+}
+
+/** 部门下的培训岗位及其培训大类（岗位培训关联表与 SOP 目录取并集） */
+export interface DepartmentTrainingPosition {
+  position_name: string
+  categories: {
+    training_category: string
+    trainer: string | null
+    training_method: string | null
+  }[]
+}
+
 export interface EmployeeResponse {
   code: number
   message: string

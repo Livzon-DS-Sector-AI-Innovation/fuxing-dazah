@@ -55,6 +55,7 @@ from app.modules.hr.repository import (
     OffboardingRecordRepository,
     OnboardingRecordRepository,
     PerformanceEvaluationRepository,
+    PositionTrainingRepository,
     TrainingLedgerPageRepository,
     TrainingLedgerRepository,
 )
@@ -586,6 +587,10 @@ class EmployeeService:
             created += row_created
             updated += row_updated
         return {"created": created, "updated": updated, "errors": errors}
+
+    async def list_training_positions(self, department: str) -> list[dict[str, Any]]:
+        """部门下配置过培训内容的岗位及培训大类（入职培训页选择培训岗位用）。"""
+        return await PositionTrainingRepository(self.repo.session).list_by_department(department)
 
     async def _sync_departments_from_employees(self) -> int:
         """从员工表同步部门：激活已删除的 + 新增不存在的。"""
@@ -1194,6 +1199,22 @@ class OnboardingRecordService:
     async def ledger_sources(self, employee_numbers: list[str]) -> dict[str, str]:
         """台账来源补充：系统内入职流程记录（审批/飞书同步/招聘入职）。"""
         return await self.repo.ledger_sources(employee_numbers)
+
+    async def list_training_candidates(
+        self,
+        *,
+        hr_scope: "HrAccessContext",
+        keyword: str | None = None,
+        year: int | None = None,
+        include_completed: bool = False,
+    ) -> tuple[list[tuple[Employee, bool]], dict[str, list[dict[str, Any]]]]:
+        """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。"""
+        return await self.repo.list_training_candidates(
+            hr_scope=hr_scope,
+            keyword=keyword,
+            year=year,
+            include_completed=include_completed,
+        )
 
     async def list_hire_years(self, departments: set[str] | None = None) -> list[int]:
         return await self.repo.list_hire_years(departments=departments)

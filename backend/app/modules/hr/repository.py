@@ -2,12 +2,13 @@
 
 import logging
 from datetime import UTC, date, datetime, time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import and_, asc, delete, desc, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.selectable import Exists
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,15 @@ from app.modules.hr.models import (
     PerformanceCategoryScore,
     PerformanceDeptWeight,
     PerformanceEvaluationItem,
+    PositionTraining,
+    SopCatalog,
     TrainingLedger,
     TrainingLedgerPage,
+    TransferRecord,
 )
+
+if TYPE_CHECKING:
+    from app.modules.hr.deps import HrAccessContext
 
 # 本地维护的人员状态（源表无法表达）：同步派生值不得覆盖（离职除外）
 _LEAVE_STATUSES = {"病假", "产假", "产假复岗"}
@@ -776,6 +783,76 @@ class OnboardingRecordRepository:
             select(latest.c.employee_number, latest.c.source).distinct(latest.c.employee_number)
         )
         return {row[0]: row[1] for row in result.all() if row[1]}
+
+    @staticmethod
+    def _prejob_completed_exists() -> Exists:
+        """该员工培训台账存在入职培训记录表导出写入的记录（即入职培训已完成）。"""
+        return (
+            select(TrainingLedger.id)
+            .where(
+                TrainingLedger.employee_number == Employee.employee_number,
+                TrainingLedger.is_deleted.is_(False),
+                TrainingLedger.source_type == TrainingLedger.SOURCE_PREJOB_EXPORT,
+            )
+            .correlate(Employee)
+            .exists()
+        )
+
+    async def list_training_candidates(
+        self,
+        *,
+        hr_scope: "HrAccessContext",
+        keyword: str | None = None,
+        year: int | None = None,
+        include_completed: bool = False,
+    ) -> tuple[list[tuple[Employee, bool]], dict[str, list[dict[str, Any]]]]:
+        """入职培训下拉候选：与入职台账列表同源（员工档案 + 在职=非离职）。
+
+        员工附带是否已完成入职培训，已完成的默认不返回。
+        第二个返回值是按工号聚合的异动记录。
+        """
+        stmt = select(
+            Employee, self._prejob_completed_exists().label("prejob_completed")
+        ).where(
+            Employee.is_deleted.is_(False),
+            or_(Employee.status != "离职", Employee.status.is_(None)),
+        )
+        if year:
+            stmt = stmt.where(func.extract("year", Employee.hire_date) == year)
+        if keyword:
+            stmt = stmt.where(
+                Employee.name.ilike(f"%{keyword}%")
+                | Employee.employee_number.ilike(f"%{keyword}%")
+            )
+        if not include_completed:
+            stmt = stmt.where(~self._prejob_completed_exists())
+        # apply_list_scope 自身未标注类型（deps.py），与模块内其余调用点一致地定向忽略
+        stmt = hr_scope.apply_list_scope(stmt, Employee)  # type: ignore[no-untyped-call]
+        rows = (await self.session.execute(
+            stmt.order_by(Employee.hire_date.desc().nulls_last(), Employee.employee_number)
+        )).all()
+        candidates = [(row[0], bool(row[1])) for row in rows]
+
+        transfer_map: dict[str, list[dict[str, Any]]] = {}
+        number_by_id = {e.id: e.employee_number for e, _ in candidates}
+        if number_by_id:
+            t_rows = (await self.session.execute(
+                select(TransferRecord).where(
+                    TransferRecord.employee_id.in_(number_by_id),
+                    TransferRecord.is_deleted.is_(False),
+                ).order_by(TransferRecord.effective_date.desc())
+            )).scalars().all()
+            for t in t_rows:
+                en = number_by_id.get(t.employee_id)
+                if en:
+                    transfer_map.setdefault(en, []).append({
+                        "id": str(t.id), "transfer_type": t.transfer_type,
+                        "from_department": t.from_department, "to_department": t.to_department,
+                        "from_position": t.from_position, "to_position": t.to_position,
+                        "effective_date": str(t.effective_date) if t.effective_date else None,
+                        "reason": t.reason,
+                    })
+        return candidates, transfer_map
 
     async def create(self, record: OnboardingRecord) -> OnboardingRecord:
         self.session.add(record)
@@ -1881,3 +1958,51 @@ class CandidateAnalysisReportRepository:
             select(CandidateAnalysisReport).where(CandidateAnalysisReport.id == report.id)
         )
         return result.scalar_one()
+
+
+class PositionTrainingRepository:
+    """岗位培训内容：岗位培训关联表与 SOP 目录的只读查询。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_by_department(self, department: str) -> list[dict[str, Any]]:
+        """部门下配置过培训内容的岗位，以及各自的培训大类。
+
+        岗位培训关联表本应由 SOP 目录上传时派生，但历史数据可能只落在其中一张表，
+        所以两表取并集；培训师、培训方式以关联表为准。
+        SOP 目录里没填适用岗位的条目不构成培训岗位。
+        """
+        linked = (await self.session.execute(
+            select(PositionTraining).where(
+                PositionTraining.department == department,
+                PositionTraining.is_deleted.is_(False),
+            ).order_by(PositionTraining.sort_order, PositionTraining.training_category)
+        )).scalars().all()
+        catalog = (await self.session.execute(
+            select(SopCatalog).where(
+                SopCatalog.department == department,
+                SopCatalog.is_deleted.is_(False),
+            ).order_by(SopCatalog.category, SopCatalog.sop_number, SopCatalog.file_name)
+        )).scalars().all()
+
+        categories_by_position: dict[str, dict[str, dict[str, str | None]]] = {}
+        for linked_row in linked:
+            category = categories_by_position.setdefault(linked_row.position_name, {}).setdefault(
+                linked_row.training_category,
+                {"training_category": linked_row.training_category, "trainer": None, "training_method": None},
+            )
+            category["trainer"] = category["trainer"] or linked_row.trainer
+            category["training_method"] = category["training_method"] or linked_row.training_method
+        for catalog_row in catalog:
+            if not catalog_row.position_name:
+                continue
+            name = catalog_row.category or catalog_row.file_name
+            categories_by_position.setdefault(catalog_row.position_name, {}).setdefault(
+                name,
+                {"training_category": name, "trainer": None, "training_method": None},
+            )
+        return [
+            {"position_name": position, "categories": list(categories.values())}
+            for position, categories in sorted(categories_by_position.items())
+        ]

@@ -1,14 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { App, Button, Card, Empty, Select, Space, Input, DatePicker } from 'antd'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { App, Button, Card, Empty, Select, Space, Input, DatePicker, Switch, Tag, Typography } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { Employee } from '@/types/hr'
+import { DepartmentTrainingPosition, Employee, TrainingCandidate } from '@/types/hr'
 import { downloadBase64File } from '@/lib/hr'
 import {
   fetchTrainingCandidates,
-  fetchPositionTrainings,
+  fetchOnboardingFilterOptionsAction,
+  fetchTrainingPositionsByDepartment,
   fetchTrainers,
   downloadPrejobTrainingPlan,
   downloadEmployeeTrainingRecord,
@@ -21,79 +22,112 @@ const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' }
 const LABEL = { ...CELL, background: '#f5f5f5', fontWeight: 600, textAlign: 'center' as const, width: '15%' }
 const VALUE = { ...CELL }
 
+// 本人岗位名常与 SOP 目录里的培训岗位不同（如「万古纯化」对「工艺员」）。
+// 完全一致时自动选中；否则只有唯一一个「互相包含」的候选才自动选中，多个候选交给人判断
+const matchTrainingPosition = (positions: DepartmentTrainingPosition[], employeePosition: string) => {
+  const exact = positions.find((p) => p.position_name === employeePosition)
+  if (exact) return exact
+  if (!employeePosition) return undefined
+  const fuzzy = positions.filter(
+    (p) => p.position_name.includes(employeePosition) || employeePosition.includes(p.position_name),
+  )
+  return fuzzy.length === 1 ? fuzzy[0] : undefined
+}
+
 export default function OnboardingPrejobClient() {
   const { message, modal } = App.useApp()
-  const [employees, setEmployees] = useState<any[]>([])
+  const [employees, setEmployees] = useState<TrainingCandidate[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   // 已选员工单独保存：再次搜索会整体替换 employees，不能只靠 employees.find 取当前员工
-  const [selectedEmployee, setSelectedEmployee] = useState<(typeof employees)[number] | null>(null)
+  const [selectedEmployee, setSelectedEmployee] = useState<TrainingCandidate | null>(null)
+  // 与入职台账页同口径：默认只列当年入职的在职员工；已完成入职培训的默认隐藏
+  const [hireYear, setHireYear] = useState<number | undefined>(new Date().getFullYear())
+  const [showCompleted, setShowCompleted] = useState(false)
+  const [hireYears, setHireYears] = useState<number[]>([])
   const [downloadingWord, setDownloadingWord] = useState(false)
   const [downloadingRecord, setDownloadingRecord] = useState(false)
   const [downloadingPermit, setDownloadingPermit] = useState(false)
   const [selectedSops, setSelectedSops] = useState<any[]>([])
+  // 培训岗位：按员工部门从 SOP 目录带出供选择（匹配规则见 matchTrainingPosition）
+  const [trainingPositions, setTrainingPositions] = useState<DepartmentTrainingPosition[]>([])
+  const [trainingPosition, setTrainingPosition] = useState<string | undefined>(undefined)
+  const [positionsLoading, setPositionsLoading] = useState(false)
   const [trainers, setTrainers] = useState<{value:string,label:string}[]>([])
 
-  useEffect(() => {
-    loadEmployees()
-  }, [])
+  // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果
+  const loadSeq = useRef(0)
+  const keywordRef = useRef<string | undefined>(undefined)
+  // 已选员工的同步镜像：刷新名单时要把它保留在选项里，但不能因此触发重新查询
+  const selectedRef = useRef<TrainingCandidate | null>(null)
 
-  const loadEmployees = async (keyword?: string) => {
+  const loadEmployees = useCallback(async (keyword?: string) => {
+    keywordRef.current = keyword
+    const seq = ++loadSeq.current
     setLoading(true)
     try {
-      const d = await fetchTrainingCandidates(keyword)
-      setEmployees(d.data || [])
-    } catch (err: any) {
-      message.error('加载失败: ' + (err.message || '未知错误'))
-    } finally { setLoading(false) }
-  }
+      const d = await fetchTrainingCandidates({ keyword, year: hireYear, includeCompleted: showCompleted })
+      if (seq !== loadSeq.current) return
+      const list = d.data || []
+      // 已选员工不在新名单里（写入台账后被隐藏、或搜索词不匹配）时保留其选项，否则下拉框只能显示原始 id
+      const sel = selectedRef.current
+      setEmployees(sel && !list.some((e) => e.id === sel.id) ? [sel, ...list] : list)
+    } catch (err) {
+      if (seq === loadSeq.current) {
+        message.error('加载失败: ' + (err instanceof Error ? err.message : '未知错误'))
+      }
+    } finally { if (seq === loadSeq.current) setLoading(false) }
+  }, [hireYear, showCompleted, message])
+
+  // 首次加载及年份/开关变化时重新查询，沿用当前搜索词
+  useEffect(() => { loadEmployees(keywordRef.current) }, [loadEmployees])
 
   const handleSearch = async (keyword: string) => {
-    loadEmployees(keyword || undefined)
+    loadEmployees(keyword.trim() || undefined)
   }
 
-  // 选中员工后，根据岗位+部门自动加载关联培训大类
+  // 把某个培训岗位的培训大类装进计划表：每个大类一行
+  const applyTrainingPosition = (position: DepartmentTrainingPosition, department: string) => {
+    setTrainingPosition(position.position_name)
+    setSelectedSops(position.categories.map((c) => ({
+      id: c.training_category,
+      sop_number: '',
+      file_name: c.training_category,
+      department,
+      category: c.training_category,
+      trainer: c.trainer,
+      training_method: c.training_method,
+    })))
+  }
+
+  // 选中员工后，按其部门取培训岗位；本人岗位能对上则自动选中并加载培训内容
   useEffect(() => {
     if (!selectedEmployee) return
-    const pos = selectedEmployee.position
-    const dept = selectedEmployee.department
-    if (!pos) return
+    const { department: dept, position: pos } = selectedEmployee
 
     // 员工再次切换后丢弃上一次请求的响应，避免把上一名员工的培训内容填进来
+    // （加载态在 handleSelectEmployee 里进入，effect 只负责回填结果）
     let outdated = false
-    fetchPositionTrainings({ position_name: pos, department: dept || undefined })
+    fetchTrainingPositionsByDepartment(dept)
       .then(res => {
         if (outdated) return
-        const items: any[] = res.data || []
-        if (items.length === 0) {
-          message.info(`岗位「${pos}」暂无关联培训内容`)
+        const positions = res.data || []
+        setTrainingPositions(positions)
+        const matched = matchTrainingPosition(positions, pos)
+        if (!matched) {
+          // 对不上时留空让人选，表格里有提示
+          setTrainingPosition(undefined)
+          setSelectedSops([])
           return
         }
-        // 按培训类别去重，每个大类只取一条作为代表
-        const seen = new Set<string>()
-        const categories: any[] = []
-        for (const item of items) {
-          const cat = item.training_category
-          if (cat && !seen.has(cat)) {
-            seen.add(cat)
-            categories.push({
-              id: cat,
-              sop_number: '',
-              file_name: cat,
-              department: item.department,
-              category: cat,
-              trainer: item.trainer,
-              training_method: item.training_method,
-            })
-          }
-        }
-        setSelectedSops(categories)
-        message.success(`已根据岗位「${pos}」加载 ${categories.length} 个培训大类`)
+        applyTrainingPosition(matched, dept)
+        message.success(`已按培训岗位「${matched.position_name}」加载 ${matched.categories.length} 个培训大类`)
       })
-      .catch((err: any) => {
+      .catch((err) => {
         if (outdated) return
-        message.error('加载培训内容失败: ' + (err.message || '未知错误'))
+        message.error('加载培训岗位失败: ' + (err instanceof Error ? err.message : '未知错误'))
       })
+      .finally(() => { if (!outdated) setPositionsLoading(false) })
     return () => { outdated = true }
   }, [selectedEmployeeId])
 
@@ -104,16 +138,36 @@ export default function OnboardingPrejobClient() {
       .catch(() => {})
   }, [])
 
+  // 入职年份候选项（与入职台账页同源聚合）
+  useEffect(() => {
+    fetchOnboardingFilterOptionsAction().then(res => setHireYears(res.years || [])).catch(() => {})
+  }, [])
+
   const [sopMethods, setSopMethods] = useState<Record<string, string>>({})
   const [sopTrainers, setSopTrainers] = useState<Record<string, string>>({})
   const [sopPlanDates, setSopPlanDates] = useState<Record<string, string>>({})
 
   // 切换员工：清空上一名员工残留的培训方式/培训师/完成期限及培训明细
   const handleSelectEmployee = (id: string) => {
-    const emp = employees.find((e: any) => e.id === id) || null
+    const emp = employees.find((e) => e.id === id) || null
     setSelectedEmployeeId(emp ? id : null)
     setSelectedEmployee(emp)
+    selectedRef.current = emp
     setSelectedSops([])
+    setTrainingPositions([])
+    setTrainingPosition(undefined)
+    // 选中即进入「加载培训岗位」状态，结果由下面的 effect 回填
+    setPositionsLoading(!!emp)
+    setSopMethods({})
+    setSopTrainers({})
+    setSopPlanDates({})
+  }
+
+  // 切换培训岗位：培训内容整体换成该岗位的大类，上一岗位填过的培训方式/培训师/完成期限一并清空
+  const handleTrainingPositionChange = (name: string) => {
+    const position = trainingPositions.find((p) => p.position_name === name)
+    if (!position || !selectedEmployee) return
+    applyTrainingPosition(position, selectedEmployee.department)
     setSopMethods({})
     setSopTrainers({})
     setSopPlanDates({})
@@ -148,6 +202,7 @@ export default function OnboardingPrejobClient() {
         selectedEmployee.employee_id || selectedEmployee.id,
         selectedEmployee.name || 'employee',
         buildItems(),
+        trainingPosition,
       )
       downloadBase64File(r.base64, r.filename)
       message.success('导出成功')
@@ -164,6 +219,7 @@ export default function OnboardingPrejobClient() {
         selectedEmployee.employee_number,
         selectedEmployee.name,
         items,
+        trainingPosition,
       )
       downloadBase64File(r.base64, r.filename)
       message.success('导出成功')
@@ -222,10 +278,12 @@ export default function OnboardingPrejobClient() {
             } catch { /* 逐条容错，失败汇总 */ }
           }
           if (ok === freshItems.length) {
-            message.success(`已写入培训台账 ${ok} 条，可在培训台账页查看`)
+            message.success(`已写入培训台账 ${ok} 条；该员工已完成入职培训，默认不再出现在待培训名单`)
           } else {
             message.warning(`写入台账 ${ok}/${freshItems.length} 条，失败的条目请到台账页手动补录`)
           }
+          // 写入即视为完成入职培训：刷新名单使其默认隐藏（已选员工仍保留在选项里，可继续导出）
+          if (ok > 0) loadEmployees(keywordRef.current)
         },
       })
     } catch (err) { message.error((err as Error)?.message || '导出失败') }
@@ -258,13 +316,36 @@ export default function OnboardingPrejobClient() {
             onChange={handleSelectEmployee}
             options={employees.map((e) => ({
               value: e.id,
-              label: `${e.employee_number} - ${e.name} (${e.department}) [${e.source || '新入职'}]`,
+              label: (
+                <span className="flex items-center gap-1.5">
+                  {/* 文字可截断，已完成标签固定在右侧，不会被行尾省略号吞掉 */}
+                  <span className="min-w-0 flex-1 truncate">
+                    {`${e.employee_number} - ${e.name} (${e.department}) [${e.source || '新入职'}]`}
+                  </span>
+                  {e.prejob_completed && <Tag color="green" style={{ marginInlineEnd: 0 }}>已完成</Tag>}
+                </span>
+              ),
             }))}
             onSearch={handleSearch}
             loading={loading}
             filterOption={false}
-            style={{ minWidth: 320 }}
+            // 固定宽度：只设最小宽度时会随选中项文字长度变宽，工具栏跟着跳行
+            style={{ width: 320 }}
           />
+          <Select
+            placeholder="入职年份"
+            allowClear
+            value={hireYear}
+            onChange={setHireYear}
+            options={Array.from(new Set([new Date().getFullYear(), ...hireYears]))
+              .sort((a, b) => b - a)
+              .map((y) => ({ value: y, label: `${y} 年入职` }))}
+            style={{ width: 130 }}
+          />
+          <label className="flex items-center gap-1.5 whitespace-nowrap text-sm">
+            <Switch size="small" checked={showCompleted} onChange={setShowCompleted} />
+            显示已完成培训
+          </label>
           <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportPlan} loading={downloadingWord} disabled={!selectedEmployee}>导出岗前培训计划</Button>
           <Button icon={<DownloadOutlined />} onClick={handleExportRecord} loading={downloadingRecord} disabled={!selectedEmployee}>导出培训记录</Button>
           <Button icon={<DownloadOutlined />} onClick={handleExportPermit} loading={downloadingPermit} disabled={!selectedEmployee}>导出上岗证</Button>
@@ -306,7 +387,8 @@ export default function OnboardingPrejobClient() {
                 </tr>
                 <tr>
                   <td style={LABEL}>部门<br/>Dept.</td><td style={VALUE}>{selectedEmployee.department}</td>
-                  <td style={LABEL}>拟定岗位<br/>Intended post</td><td style={VALUE}>{selectedEmployee.position || ''}</td>
+                  {/* 与导出文件一致：选了培训岗位写培训岗位，否则写实际岗位 */}
+                  <td style={LABEL}>拟定岗位<br/>Intended post</td><td style={VALUE}>{trainingPosition || selectedEmployee.position || ''}</td>
                   <td style={LABEL}>职称<br/>Title</td><td style={VALUE}></td>
                 </tr>
                 <tr>
@@ -319,6 +401,27 @@ export default function OnboardingPrejobClient() {
 
           {/* ===== Part II & IV: 培训计划 + 完成确认 (匹配模板) ===== */}
           <Card className="no-print-padding">
+            {/* 培训岗位：员工实际岗位名常与 SOP 目录里的培训岗位不同，按部门选择 */}
+            <div className="no-print mb-3 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium">培训岗位</span>
+              <Select
+                showSearch
+                placeholder={trainingPositions.length ? '请选择培训岗位' : '该部门暂无培训岗位'}
+                value={trainingPosition}
+                onChange={handleTrainingPositionChange}
+                loading={positionsLoading}
+                disabled={!trainingPositions.length}
+                options={trainingPositions.map((p) => ({ value: p.position_name, label: p.position_name }))}
+                optionFilterProp="label"
+                style={{ width: 200 }}
+              />
+              <Typography.Text type="secondary">
+                本人岗位：{selectedEmployee.position || '-'}（{selectedEmployee.department}）
+              </Typography.Text>
+              {trainingPositions.length > 0 && !trainingPosition && (
+                <Typography.Text type="warning">本人岗位未匹配到培训内容，请选择培训岗位</Typography.Text>
+              )}
+            </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <colgroup>
                 <col style={{ width: '4%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} />
@@ -373,7 +476,13 @@ export default function OnboardingPrejobClient() {
                     <td style={CELL}></td><td style={CELL}></td><td style={CELL}></td>
                   </tr>
                 )) : (
-                  <tr><td style={CELL} colSpan={13}>选择员工后将自动加载岗位培训内容</td></tr>
+                  <tr><td style={CELL} colSpan={13}>
+                    {positionsLoading
+                      ? '正在加载培训岗位…'
+                      : trainingPositions.length
+                        ? '请选择培训岗位，加载对应的培训内容'
+                        : `「${selectedEmployee.department}」暂无培训岗位，请先在 SOP 目录中配置该部门的适用岗位`}
+                  </td></tr>
                 )}
                 {/* Part III: 审核批准 */}
                 <tr>

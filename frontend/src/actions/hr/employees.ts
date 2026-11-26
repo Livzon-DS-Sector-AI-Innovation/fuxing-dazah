@@ -13,6 +13,7 @@ import {
   EmployeeFilterOptions,
   EmployeeTransfer,
   EmployeeFilterParams,
+  TrainingCandidate,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -94,9 +95,13 @@ export async function exportEmployees(params?: EmployeeFilterParams): Promise<{ 
 }
 
 /** 试用期延期记录 */
-/** 待培训员工（岗前培训候选人） */
-export async function fetchTrainingCandidates(keyword?: string): Promise<{ data: unknown[] }> {
-  const qs = buildQueryString({ keyword })
+/** 入职培训下拉候选：与入职台账列表同源（员工档案 + 在职）；已完成入职培训的默认不返回 */
+export async function fetchTrainingCandidates(params?: {
+  keyword?: string
+  year?: number
+  includeCompleted?: boolean
+}): Promise<{ data: TrainingCandidate[] }> {
+  const qs = buildQueryString({ ...params, include_completed: params?.includeCompleted })
   return fetchHrApi(`/hr/employees/training-candidates${qs}`, { errorMessage: '加载失败' })
 }
 

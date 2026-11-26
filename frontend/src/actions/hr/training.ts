@@ -19,6 +19,7 @@ import {
   SopTrainingPersonnel,
   SopClassificationOption,
   SopPersonnelOption,
+  DepartmentTrainingPosition,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -607,6 +608,14 @@ export async function fetchPositionTrainings(params: {
 }): Promise<{ data: unknown[] }> {
   const qs = buildQueryString(params)
   return fetchHrApi(`/hr/position-trainings${qs}`, { errorMessage: '加载培训内容失败' })
+}
+
+/** 按部门列培训岗位及各自的培训大类（入职培训页选择培训岗位用） */
+export async function fetchTrainingPositionsByDepartment(
+  department: string,
+): Promise<{ data: DepartmentTrainingPosition[] }> {
+  const qs = buildQueryString({ department })
+  return fetchHrApi(`/hr/position-trainings/by-department${qs}`, { errorMessage: '加载培训岗位失败' })
 }
 
 export async function createPositionTraining(data: Record<string, unknown>) {
