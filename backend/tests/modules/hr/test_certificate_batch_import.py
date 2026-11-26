@@ -52,7 +52,9 @@ def _commit_row(row: dict, **overrides) -> dict:
 @pytest.mark.asyncio
 async def test_batch_import_parse_filename():
     """文件名解析：姓名/类别关键词/默认「其他」。"""
-    from app.modules.hr.certificate_batch_import import parse_certificate_filename as parse
+    from app.modules.hr.certificate_batch_import import (
+        parse_certificate_filename as parse,
+    )
 
     assert parse("张三_身份证.png")["category"] == "id_card"
     assert parse("张三_身份证.png")["name"] == "张三"
