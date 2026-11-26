@@ -23,6 +23,7 @@ import {
   DepartmentTrainingPosition,
   EmployeeClassification,
 } from '@/types/hr'
+import type { TrainingTemplateDef, TrainingTemplateVersion } from '@/types/hr/trainingTemplates'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
 
@@ -802,4 +803,63 @@ export async function removeClassificationMembers(id: string, employee_numbers: 
 export async function downloadSopMasterMaterials(recordId: string): Promise<{ base64: string; filename: string | null }> {
   const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, { method: 'POST' })
   return { base64, filename: filename || 'SOP全套培训材料.zip' }
+}
+
+// ─── 培训导出模板管理（hr:training:template） ───
+
+export async function listTrainingExportTemplates(): Promise<{
+  code: number; message: string; data: TrainingTemplateDef[]
+}> {
+  return fetchHrApi('/hr/training-export-templates', { errorMessage: '获取模板清单失败' })
+}
+
+export async function listTrainingExportTemplateVersions(key: string): Promise<{
+  code: number; message: string; data: TrainingTemplateVersion[]
+}> {
+  return fetchHrApi(`/hr/training-export-templates/${encodeURIComponent(key)}/versions`, {
+    errorMessage: '获取版本历史失败',
+  })
+}
+
+export async function uploadTrainingExportTemplate(key: string, formData: FormData): Promise<{
+  code: number; message: string; data: TrainingTemplateVersion
+}> {
+  return fetchHrApi(`/hr/training-export-templates/${encodeURIComponent(key)}/upload`, {
+    method: 'POST',
+    body: formData,
+    errorMessage: '上传失败',
+  })
+}
+
+export async function activateTrainingExportTemplateVersion(key: string, versionId: string): Promise<{
+  code: number; message: string; data: TrainingTemplateVersion
+}> {
+  return fetchHrApi(
+    `/hr/training-export-templates/${encodeURIComponent(key)}/versions/${versionId}/activate`,
+    { method: 'POST', errorMessage: '激活版本失败' },
+  )
+}
+
+export async function restoreTrainingExportTemplateDefault(key: string): Promise<{
+  code: number; message: string; data: null
+}> {
+  return fetchHrApi(`/hr/training-export-templates/${encodeURIComponent(key)}/restore-default`, {
+    method: 'POST',
+    errorMessage: '恢复默认失败',
+  })
+}
+
+/** 下载模板文件：current（缺省）/ 历史版本 / 官方默认模板 */
+export async function downloadTrainingExportTemplate(
+  key: string,
+  opts: { versionId?: string; isDefault?: boolean; fallbackName?: string } = {},
+): Promise<{ base64: string; filename: string | null }> {
+  const params = new URLSearchParams()
+  if (opts.versionId) params.set('version_id', opts.versionId)
+  if (opts.isDefault) params.set('default', 'true')
+  const qs = params.toString()
+  const { base64, filename } = await fetchHrDownload(
+    `/hr/training-export-templates/${encodeURIComponent(key)}/file${qs ? `?${qs}` : ''}`,
+  )
+  return { base64, filename: filename || opts.fallbackName || '模板.docx' }
 }

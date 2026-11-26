@@ -299,6 +299,7 @@ export const moduleMenus: ModuleMenu[] = [
               { key: "trainers", label: "内训师", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
               { key: "training-personnel", label: "培训人员名单", path: "/hr/training/personnel", permissions: ["hr:training:read"] },
               { key: "sop-catalog", label: "SOP目录", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
+              { key: "training-export-templates", label: "导出模板", path: "/hr/training/templates", permissions: ["hr:training:template"] },
             ],
           },
         ],
