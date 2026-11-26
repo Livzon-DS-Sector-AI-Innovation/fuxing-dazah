@@ -2,7 +2,8 @@
 
 守卫口径：
 - 产品/标准头：预检唯一 + SAVEPOINT 兜底转 409（apr/deviation 同模式）。
-- 标准删除：已有出具报告引用 → 409（先处理报告）；删除时项目随之软删。
+- 标准删除：已有出具报告引用 → 409（先处理报告）；删除时项目随之软删，
+  模板文件随之清掉（标准是软删行，文件留着就成了没人引用的孤儿）。
 - 项目替换：不在载荷中的既有项目统一软删让号（值行 FK 有效，历史值可解释）；
   载荷内 code 冲突 → 400。项目必然启用（无停用态）。
 - 项目 code 由名称归一化生成，标准内唯一；改名（替换更新）会同步重算——
@@ -11,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -19,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, NotFoundException
+from app.modules.qa import file_service
 from app.modules.qa.models import (
     CoaProduct,
     CoaSourceType,
@@ -37,6 +40,7 @@ from app.modules.qa.schemas.coa import (
     CoaStandardItemsReplace,
     CoaStandardUpdate,
 )
+from app.modules.qa.service.coa import template_bind
 from app.modules.qa.service.coa.common import (
     _actor_id,
     builtin_key_of,
@@ -46,8 +50,8 @@ from app.modules.qa.service.coa.common import (
     merge_builtin_fields,
     product_dict,
     product_field_dict,
+    resolve_standard_fields,
     standard_dict,
-    standard_field_dict,
 )
 from app.modules.qa.service.coa.docx_parse import item_code
 from app.platform.identity.models import User
@@ -206,23 +210,6 @@ async def replace_product_fields(
     return merge_builtin_fields([product_field_dict(r) for r in refreshed])
 
 
-async def resolve_standard_fields(
-    db: AsyncSession, standard_id: uuid.UUID
-) -> tuple[list[dict[str, Any]], bool]:
-    """生效字段集 = 内置 3 字段置顶 +（标准覆盖 ?? 产品默认）。
-
-    覆盖与否看标准上的 batch_fields_overridden 标志，而不是「有没有行」：
-    显式保存的空自定义集也是覆盖（不回落产品默认）。
-    返回 (字段列表, 是否自定义覆盖)；覆盖行不含内置键（写路径已拒绝）。
-    """
-    standard = await get_standard_or_404(db, standard_id)
-    if standard.batch_fields_overridden:
-        overrides = await repo.list_standard_fields(db, standard_id)
-        return merge_builtin_fields([standard_field_dict(r) for r in overrides]), True
-    defaults = await repo.list_product_fields(db, standard.product_id)
-    return merge_builtin_fields([product_field_dict(r) for r in defaults]), False
-
-
 async def replace_standard_fields(
     db: AsyncSession,
     standard_id: uuid.UUID,
@@ -271,11 +258,14 @@ async def list_standards(
     rows = await repo.list_standards(db, product_id=product_id, active_only=active_only)
     item_counts = await repo.count_items_by_standard(db)
     report_counts = await repo.count_reports_by_standard(db)
+    # 标注确认后字段配置变了的标准：模板状态显示「需重新核对」
+    drifts = await template_bind.drift_by_standard(db, rows)
     return [
         standard_dict(
             r,
             item_count=item_counts.get(r.id, 0),
             report_count=report_counts.get(r.id, 0),
+            template_drift=drifts.get(r.id),
         )
         for r in rows
     ]
@@ -294,6 +284,7 @@ async def get_standard_detail(
         row,
         items=[item_dict(i) for i in items],
         report_count=report_counts.get(row.id, 0),
+        template_drift=(await template_bind.drift_by_standard(db, [row])).get(row.id),
     )
     data["batch_fields"] = fields
     data["batch_fields_custom"] = custom
@@ -401,6 +392,8 @@ async def delete_standard(
     async with db.begin_nested():
         await repo.delete_standard_fields(db, row.id)
         await db.flush()
+    if row.template_key:
+        await asyncio.to_thread(file_service.cleanup_stored_file, row.template_key)
 
 
 # ───────────────────────── 标准项目 ─────────────────────────

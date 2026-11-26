@@ -360,6 +360,77 @@
   color: var(--color-error) !important;
 }
 
+/* ===== 超出标准限度（标记本身的配色见 CoaLimitFlag.module.css） ===== */
+
+/* 带越界结果的报告：整行极淡的玫瑰底，横向滚到任何列都认得出这一行有问题。
+   固定列的白底与行悬停底色在全局样式里都是 !important，这里必须同级压回 */
+.matrix :global(.ant-table-tbody) > .rowHit > td {
+  background: #fff8fa !important;
+}
+
+.matrix :global(.ant-table-tbody) > .rowHit:hover > td {
+  background: #fdf1f4 !important;
+}
+
+/* 批号 + 越界计数标记 */
+.batchCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+/* 汇总提醒条：表头下方，有越界结果才出现 */
+.limitStrip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px 7px 16px;
+  border-bottom: 1px solid var(--color-tint-rose-deep);
+  background: #fff8fa;
+  color: var(--color-charcoal);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.limitStripIcon {
+  flex: none;
+  color: var(--color-error);
+  font-size: 14px;
+}
+
+.limitStripText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.limitStripText b {
+  font-size: 13.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.limitOvers {
+  color: #c62828;
+}
+
+.limitPossible {
+  color: #793400;
+}
+
+.limitStripReports {
+  color: var(--color-steel);
+}
+
+/* 数值型项目没设限度的弱提示：点状下划线与表头限度文字同款，悬停看说明 */
+.statUnset {
+  color: var(--color-stone);
+  text-decoration: underline dotted var(--color-hairline-strong);
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
 /* ===== 空状态 / 加载 ===== */
 
 .emptySheet {
@@ -515,6 +586,13 @@
   font-size: 11.5px;
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
+}
+
+/* 录入单标题行右侧：「已填 n / 总数」+ 越界计数标记 */
+.sheetMetaGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .sheetScroll {
@@ -1006,6 +1084,15 @@
   text-overflow: ellipsis;
 }
 
+/* 第二行报越界计数时的着色：红=有确定超标，橙=只有可能超限 */
+.railOvers {
+  color: #c62828;
+}
+
+.railPossible {
+  color: #793400;
+}
+
 .railIcon {
   display: inline-flex;
   flex: none;
@@ -1021,6 +1108,10 @@
 
 .railIconWarn {
   color: var(--color-warning);
+}
+
+.railIconOvers {
+  color: var(--color-error);
 }
 
 .railIconOk {

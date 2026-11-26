@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Form, Input, Modal, Select, Skeleton, Space, Table, Tag } from 'antd'
-import { FileAddOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
+import { AimOutlined, FileAddOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons'
 import { actionError, EmptyState, qaPageStyle } from '@/components/qa/deviation/shared'
 import { PageHeading } from '@/components/shared/PageHeading'
 import { usePermission } from '@/hooks/usePermission'
@@ -24,7 +24,7 @@ import {
   fetchCoaStandards,
 } from '@/lib/api/qa'
 import type { CoaProduct, CoaProductField, CoaStandard } from '@/types/qa'
-import { confirmAsync, DANGER_OK_PROPS } from './CoaShared'
+import { confirmAsync, DANGER_OK_PROPS, TemplateStatusTag } from './CoaShared'
 import {
   CoaBatchFieldsEditor,
   rowsToFieldPayload,
@@ -33,9 +33,15 @@ import {
   validateFieldRows,
   type CoaBatchFieldRow,
 } from './CoaBatchFieldsEditor'
-import { CoaImportStandardModal } from './CoaImportStandardModal'
+import { CoaImportStandardModal, type CoaImportedStandard } from './CoaImportStandardModal'
+import { CoaTemplateBindingDrawer } from './CoaTemplateBindingDrawer'
 import { CoaStandardFieldsSection } from './CoaStandardFieldsSection'
 import { CoaStandardItemsEditor } from './CoaStandardItemsEditor'
+import {
+  focusFirstError,
+  standardCodeRule,
+  STANDARD_CODE_VALIDATE_TRIGGER,
+} from './coaStandardCode'
 import styles from './CoaStandardsPage.module.css'
 
 /** 产品管理弹窗：新增 + 启停（产品删除有标准引用守卫，前端不提供入口）。 */
@@ -265,10 +271,15 @@ function ProductFieldsModal({
 /** 标准头信息编辑：低频操作收进弹窗，让标准单页保持文档式阅读。 */
 function StandardInfoModal({
   standard,
+  standards,
+  productCode,
   onClose,
   onSaved,
 }: {
   standard: CoaStandard
+  /** 同产品下的全部标准：模板编号在产品内唯一，校验时排除自己 */
+  standards: CoaStandard[]
+  productCode: string
   onClose: () => void
   onSaved: () => void
 }) {
@@ -277,7 +288,11 @@ function StandardInfoModal({
   const [saving, setSaving] = useState(false)
 
   const handleSave = async () => {
-    const values = await form.validateFields()
+    const values = await form.validateFields().catch(() => {
+      focusFirstError(form)
+      return null
+    })
+    if (!values) return
     setSaving(true)
     try {
       const result = await updateCoaStandard(standard.id, {
@@ -304,11 +319,17 @@ function StandardInfoModal({
       title="编辑标准信息"
       open
       width={560}
-      okText="保存"
-      cancelText="取消"
-      confirmLoading={saving}
-      onOk={handleSave}
       onCancel={onClose}
+      // 底栏自己画：antd 的 onOk 一旦返回 Promise，校验没过时要么抛出没人接的
+      // rejection，要么把弹窗关掉，两头都不对
+      footer={[
+        <Button key="cancel" onClick={onClose}>
+          取消
+        </Button>,
+        <Button key="save" type="primary" loading={saving} onClick={() => void handleSave()}>
+          保存
+        </Button>,
+      ]}
     >
       <Form
         form={form}
@@ -321,7 +342,19 @@ function StandardInfoModal({
           version: standard.version ?? '',
         }}
       >
-        <Form.Item name="code" label="模板编号" rules={[{ required: true, message: '模板编号必填' }]}>
+        <Form.Item
+          name="code"
+          label="模板编号"
+          validateTrigger={STANDARD_CODE_VALIDATE_TRIGGER}
+          rules={[
+            { required: true, message: '模板编号必填' },
+            standardCodeRule(standards, {
+              productCode,
+              excludeId: standard.id,
+              fix: '请换一个编号',
+            }),
+          ]}
+        >
           <Input />
         </Form.Item>
         <Form.Item name="name" label="标准名称" rules={[{ required: true, message: '标准名称必填' }]}>
@@ -380,7 +413,16 @@ export function CoaStandardsPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [editingStandard, setEditingStandard] = useState<CoaStandard | null>(null)
+  // 正在标注模板的标准；file 只在「导入 docx 建标准」后带过来
+  const [bindingTarget, setBindingTarget] = useState<{
+    standardId: string
+    label: string
+    file: File | null
+  } | null>(null)
+  // 导入建标准时没接着标注的那份 docx：留给这个标准之后那次「模板标注」，刷新页面就没了
+  const [keptDocx, setKeptDocx] = useState<{ standardId: string; file: File } | null>(null)
   const [savingItems, setSavingItems] = useState(false)
+  const [savingCreate, setSavingCreate] = useState(false)
   const [createForm] = Form.useForm()
 
   /** 把局部改动合并进当前查询串；空值即删除该参数。 */
@@ -435,21 +477,70 @@ export function CoaStandardsPage() {
     void queryClient.invalidateQueries({ queryKey: ['qa', 'coa'] })
   }
 
+  /** 新建的标准先补进它所属产品的标准列表缓存：页面切过去时选中才有依托，不用等重新拉取。 */
+  const seedStandard = (standard: CoaStandard) => {
+    queryClient.setQueryData<CoaStandard[]>(
+      ['qa', 'coa', 'standards', standard.product_id],
+      (old) => (old?.some((s) => s.id === standard.id) ? old : [standard, ...(old ?? [])])
+    )
+  }
+
   const handleCreateStandard = async () => {
-    const values = await createForm.validateFields()
-    const result = await createCoaStandard({
-      product_id: activeProduct!.id,
-      code: values.code,
-      name: values.name,
-      customer: values.customer || null,
+    const values = await createForm.validateFields().catch(() => {
+      focusFirstError(createForm)
+      return null
     })
-    if (!result.success) {
-      message.error(actionError(result))
-      return
+    if (!values) return
+    setSavingCreate(true)
+    try {
+      const result = await createCoaStandard({
+        product_id: activeProduct!.id,
+        code: values.code,
+        name: values.name,
+        customer: values.customer || null,
+      })
+      if (!result.success || !result.data) {
+        message.error(actionError(result))
+        return
+      }
+      message.success('标准已创建，请继续添加检测项目')
+      createForm.resetFields()
+      setCreateOpen(false)
+      // 页面落到新建的标准上（含地址栏）：接着就是给它加项目
+      seedStandard(result.data)
+      setPickedStandardId(result.data.id)
+      syncUrl({ standard: result.data.code })
+      invalidate()
+    } finally {
+      setSavingCreate(false)
     }
-    message.success('标准已创建，请继续添加检测项目')
-    createForm.resetFields()
-    setCreateOpen(false)
+  }
+
+  /** 导入 docx 建完标准：页面落到新建的标准上，勾了「接着标注」就打开标注抽屉。 */
+  const handleImported = (imported: CoaImportedStandard) => {
+    const { product, standard } = imported
+    // 顺手新建的产品同样先进缓存
+    if (product) {
+      queryClient.setQueryData<CoaProduct[]>(['qa', 'coa', 'products'], (old) =>
+        old?.some((p) => p.id === product.id) ? old : [...(old ?? []), product]
+      )
+    }
+    seedStandard(standard)
+    setPickedProductId(standard.product_id)
+    setPickedStandardId(standard.id)
+    syncUrl({
+      product: product?.code ?? products.find((p) => p.id === standard.product_id)?.code ?? null,
+      standard: standard.code,
+    })
+    if (imported.annotate) {
+      setBindingTarget({
+        standardId: standard.id,
+        label: `${standard.code} ${standard.name}`,
+        file: imported.file,
+      })
+    } else {
+      setKeptDocx({ standardId: standard.id, file: imported.file })
+    }
     invalidate()
   }
 
@@ -590,6 +681,9 @@ export function CoaStandardsPage() {
                     <div className={styles.sheetTopline}>
                       <span className={styles.sheetCode}>模板 {currentStandard.code}</span>
                       <SourcePill source={currentStandard.source} />
+                      <TemplateStatusTag
+                        status={detail?.template_status ?? currentStandard.template_status}
+                      />
                     </div>
                     <h2 className={styles.sheetTitle} title={currentStandard.name}>
                       {currentStandard.name}
@@ -609,6 +703,23 @@ export function CoaStandardsPage() {
                   </div>
                   {canManage && (
                     <div className={styles.sheetActions}>
+                      <Button
+                        size="small"
+                        icon={<AimOutlined />}
+                        onClick={() => {
+                          // 导入时留着的那份 docx 还在：直接用它，不用再传一次
+                          const file =
+                            keptDocx?.standardId === currentStandard.id ? keptDocx.file : null
+                          setBindingTarget({
+                            standardId: currentStandard.id,
+                            label: `${currentStandard.code} ${currentStandard.name}`,
+                            file,
+                          })
+                          if (file) setKeptDocx(null)
+                        }}
+                      >
+                        模板标注
+                      </Button>
                       <Button size="small" onClick={() => setEditingStandard(currentStandard)}>
                         编辑信息
                       </Button>
@@ -716,13 +827,30 @@ export function CoaStandardsPage() {
         <CoaImportStandardModal
           onClose={() => setImportOpen(false)}
           products={products}
+          onSaved={handleImported}
+        />
+      )}
+
+      {bindingTarget && (
+        <CoaTemplateBindingDrawer
+          key={bindingTarget.standardId}
+          standardId={bindingTarget.standardId}
+          standardLabel={bindingTarget.label}
+          pendingFile={bindingTarget.file}
+          onClose={() => {
+            // 抽屉里可能已经把模板文件传上去了（哪怕标注没保存）：列表上的模板状态要跟着刷新
+            invalidate()
+            setBindingTarget(null)
+          }}
           onSaved={invalidate}
         />
       )}
 
-      {editingStandard && (
+      {editingStandard && activeProduct && (
         <StandardInfoModal
           standard={editingStandard}
+          standards={standards}
+          productCode={activeProduct.code}
           onClose={() => setEditingStandard(null)}
           onSaved={invalidate}
         />
@@ -733,12 +861,30 @@ export function CoaStandardsPage() {
           title={`新建客户标准（${activeProduct.code} ${activeProduct.name}）`}
           open
           onCancel={() => setCreateOpen(false)}
-          onOk={handleCreateStandard}
-          okText="创建"
-          cancelText="取消"
+          footer={[
+            <Button key="cancel" onClick={() => setCreateOpen(false)}>
+              取消
+            </Button>,
+            <Button
+              key="create"
+              type="primary"
+              loading={savingCreate}
+              onClick={() => void handleCreateStandard()}
+            >
+              创建
+            </Button>,
+          ]}
         >
           <Form form={createForm} layout="vertical">
-            <Form.Item name="code" label="模板编号" rules={[{ required: true, message: '模板编号必填（docx 导入登记时按它自动匹配）' }]}>
+            <Form.Item
+              name="code"
+              label="模板编号"
+              validateTrigger={STANDARD_CODE_VALIDATE_TRIGGER}
+              rules={[
+                { required: true, message: '模板编号必填（docx 导入登记时按它自动匹配）' },
+                standardCodeRule(standards, { productCode: activeProduct.code, fix: '请换一个编号' }),
+              ]}
+            >
               <Input placeholder="如 3205" />
             </Form.Item>
             <Form.Item name="name" label="标准名称" rules={[{ required: true }]}>

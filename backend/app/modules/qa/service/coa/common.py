@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -119,6 +119,36 @@ def merge_builtin_fields(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]
         for idx, field in enumerate(BUILTIN_BATCH_FIELDS)
     ]
     return builtin_rows + list(rows)
+
+
+def effective_fields(
+    standard: CoaStandard,
+    overrides: Sequence[CoaStandardField],
+    product_defaults: Sequence[CoaProductField],
+) -> tuple[list[dict[str, Any]], bool]:
+    """生效字段集（纯函数）：覆盖标志为真用标准覆盖行，否则用产品默认行。
+
+    覆盖与否看标准上的 batch_fields_overridden 标志，而不是「有没有行」：
+    显式保存的空自定义集也是覆盖（不回落产品默认）。
+    返回 (字段列表, 是否自定义覆盖)；覆盖行不含内置键（写路径已拒绝）。
+    """
+    if standard.batch_fields_overridden:
+        return merge_builtin_fields([standard_field_dict(r) for r in overrides]), True
+    return merge_builtin_fields([product_field_dict(r) for r in product_defaults]), False
+
+
+async def resolve_standard_fields(
+    db: AsyncSession, standard_id: uuid.UUID
+) -> tuple[list[dict[str, Any]], bool]:
+    """生效字段集 = 内置 3 字段置顶 +（标准覆盖 ?? 产品默认）。"""
+    standard = await get_standard_or_404(db, standard_id)
+    if standard.batch_fields_overridden:
+        return effective_fields(
+            standard, await repo.list_standard_fields(db, standard_id), []
+        )
+    return effective_fields(
+        standard, [], await repo.list_product_fields(db, standard.product_id)
+    )
 
 
 # ─────────────────────── 报告固定列对齐 ───────────────────────
@@ -249,12 +279,29 @@ def standard_field_dict(row: CoaStandardField) -> dict[str, Any]:
     }
 
 
+def template_status_of(
+    row: CoaStandard, drift: Mapping[str, Any] | None = None
+) -> str:
+    """none=没上传模板；unbound=已上传未确认标注；bound=标注已确认；
+    stale=标注确认后字段配置变了，要重新核对才能生成 COA。
+
+    偏差要对着当前字段配置算（template_bind.binding_drift），调用方查好了传进来；
+    没传按没有偏差处理。
+    """
+    if not row.template_key:
+        return "none"
+    if not row.template_binding:
+        return "unbound"
+    return "stale" if drift else "bound"
+
+
 def standard_dict(
     row: CoaStandard,
     *,
     item_count: int | None = None,
     report_count: int | None = None,
     items: list[dict[str, Any]] | None = None,
+    template_drift: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if item_count is None and items is not None:
         item_count = len(items)
@@ -269,6 +316,7 @@ def standard_dict(
         "is_active": row.is_active,
         "source": row.source,
         "remark": row.remark,
+        "template_status": template_status_of(row, template_drift),
     }
     if item_count is not None:
         data["item_count"] = item_count

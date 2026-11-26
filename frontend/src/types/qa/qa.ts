@@ -369,14 +369,14 @@ export interface QaSearchResult {
   is_active?: boolean
 }
 
-/** PQR 单元格快照：键固定为 值/备注/行标签，只含有内容的部分。 */
+/** 单元格快照：键固定为 值/备注/行标签，只含有内容的部分；COA 沿用同一形状（值/备注）。 */
 export interface QaOperationLogCell {
   值?: string | number | null
   备注?: string | null
   行标签?: string | null
 }
 
-/** PQR 操作日志记录定位上下文（产品/年度/批号/段）。 */
+/** 操作日志记录定位上下文。PQR：产品/年度/批号/段；COA 出具登记：产品/模板/批号/报告。 */
 export interface QaOperationLogExtra {
   product_id?: string
   product_name?: string
@@ -385,15 +385,22 @@ export interface QaOperationLogExtra {
   batch_id?: string
   section_id?: string
   section_name?: string
-  source?: 'entry' | 'import'
+  standard_id?: string
+  standard_code?: string | null
+  report_id?: string
+  /** COA「生成」那条：留档记录与原件摘要 */
+  record_id?: string
+  file_sha256?: string
+  source?: 'entry' | 'import' | 'manual'
   mode?: 'replace' | 'merge'
   changed?: number
 }
 
 /**
  * QA 操作日志（通用读模型）：读取范围由后端来源注册表决定，
- * 当前登记的来源只有 PQR 数据录入。每次保存一条，
- * old_value/new_value 键为「列名（第N行）」，值为变更前/后快照。
+ * 当前登记的来源有 PQR 数据录入与 COA 出具登记。每次操作一条，
+ * old_value/new_value 键为数据名（PQR「列名（第N行）」、COA 字段中文名），
+ * 值为变更前/后快照；删除/作废类动作的 old_value 是 {值数量: N} 汇总。
  */
 export interface QaOperationLog {
   id: string

@@ -476,6 +476,17 @@ class TestHelpers:
         b = item_code("溶解度Solubility", None)
         assert a == b == "溶解度solubility"
 
+    def test_item_code_long_name_fits_column_and_stays_distinct(self):
+        # 英文复合名很长时拼接键超过 64 列长：截断带摘要，不越界、仍确定，
+        # 且只在结尾不同的两个长名字不能撞成同一个键
+        long_en = "Purity(Dalbavancin component B0 + Dalbavancin amidated substances component B0)"
+        a = item_code("纯度(达巴万星B0+酰胺化产物B0)", long_en)
+        b = item_code("纯度(达巴万星B0+酰胺化产物B0)", long_en[:-3] + "B1)")
+        assert len(a) == len(b) == 64
+        assert a == item_code("纯度(达巴万星B0+酰胺化产物B0)", long_en)
+        assert a != b
+        assert a.startswith("纯度达巴万星b0酰胺化产物b0purity")
+
     def test_split_bilingual_inline(self):
         assert split_bilingual("外观Appearance") == ("外观", "Appearance")
         assert split_bilingual("万古霉素B Vancomycin B") == ("万古霉素B", "Vancomycin B")

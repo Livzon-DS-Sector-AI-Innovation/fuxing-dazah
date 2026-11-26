@@ -51,6 +51,7 @@ async def get_qa_operation_logs(
     product_id: uuid.UUID | None = None,
     year: int | None = Query(default=None, ge=2000, le=2100),
     batch_id: uuid.UUID | None = None,
+    report_id: uuid.UUID | None = None,
     actor_id: uuid.UUID | None = Query(default=None, alias="user_id"),
     start_at: datetime | None = Query(default=None, alias="from"),
     end_at: datetime | None = Query(default=None, alias="to"),
@@ -59,9 +60,10 @@ async def get_qa_operation_logs(
 ) -> Any:
     """QA 操作日志：时间、操作人、变更前后值。
 
-    读取范围由 service 的来源注册表决定（当前覆盖 PQR 数据录入，
-    旧版杂项审计事件不在此列）。product_id/year/batch_id 是 PQR
-    来源的定位字段过滤；每个来源域自带 extra 定位上下文。
+    读取范围由 service 的来源注册表决定（当前覆盖 PQR 数据录入与 COA
+    出具登记，旧版杂项审计事件不在此列）。product_id 是通用过滤；
+    year/batch_id 是 PQR 来源、report_id 是 COA 来源的定位字段过滤；
+    每个来源域自带 extra 定位上下文。
     """
     if resource_type is not None and resource_type not in (
         service.OPERATION_LOG_SOURCES
@@ -76,6 +78,8 @@ async def get_qa_operation_logs(
         extra_equals["year"] = str(year)
     if batch_id is not None:
         extra_equals["batch_id"] = str(batch_id)
+    if report_id is not None:
+        extra_equals["report_id"] = str(report_id)
     logs, total = await service.list_operation_logs(
         db,
         page=page,

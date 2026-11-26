@@ -1,0 +1,1078 @@
+/* 模板标注抽屉：左侧模板预览，右侧核对清单。
+
+   COA 模板数据位多（一份标准几十个位置），这块以紧凑为先：字号、控件比全站默认小一档，
+   次要内容（格式编辑、判定词对照）点开才出现；颜色、圆角、阴影仍取 DESIGN.md 的 token。
+   预览是结构示意——只回答一个问题：这个数据位在文档的哪里。 */
+
+.root {
+  /* 设计规范里没有对应 token 的两处「浅底深字」（都要过 4.5:1 对比度） */
+  --ink-on-sky: #005bab;
+  --ink-on-peach: #a24300;
+  display: grid;
+  grid-template-columns: minmax(0, 46fr) minmax(0, 54fr);
+  block-size: 100%;
+  min-block-size: 0;
+}
+
+/* ── 左：模板预览 ── */
+
+.previewPane {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+  padding: 12px 8px 12px 16px;
+  border-inline-end: 1px solid var(--color-hairline-soft);
+  background: var(--color-surface-soft);
+}
+
+.previewHead {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  /* 与下面滚动区的内边距对齐，标题和纸张左右齐 */
+  padding-inline: 2px 6px;
+  margin-block-end: 10px;
+}
+
+.previewTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legendSwatch {
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 3px;
+}
+
+.legendBound {
+  background: var(--color-tint-lavender);
+  box-shadow: inset 0 0 0 1.5px var(--color-primary);
+}
+
+.legendResidue {
+  background: var(--color-tint-peach);
+  box-shadow: inset 0 0 0 1.5px var(--color-warning);
+}
+
+.legendStatic {
+  background: var(--color-tint-gray);
+  box-shadow: inset 0 0 0 1px var(--color-hairline-strong);
+}
+
+/* 键盘可滚动的容器（role=region + tabindex），表格太高太宽时在里面滚 */
+.gridScroll {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow: auto;
+  padding: 2px 6px 10px 2px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.gridScroll:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+  border-radius: var(--rounded-sm);
+}
+
+.paper {
+  max-inline-size: 720px;
+  margin-inline: auto;
+  padding: 16px 16px 20px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-sm);
+}
+
+.sectionTitle {
+  margin: 14px 0 6px;
+  color: var(--color-steel);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.sectionTitle:first-child {
+  margin-block-start: 0;
+}
+
+.docLine {
+  margin: 0 0 2px;
+  color: var(--color-ink);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.textbox {
+  margin-block: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-hairline-strong);
+  border-radius: var(--rounded-sm);
+}
+
+/* 表格文字 11px：语料里表格字号多为 9pt（7.5–8.5pt 次之）、版心 16.9cm，
+   预览表宽约为原文的 95%，11px 最接近真实的换行 */
+.gridTable {
+  width: 100%;
+  margin-block-end: 10px;
+  border-collapse: collapse;
+  table-layout: auto;
+  color: var(--color-ink);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+}
+
+/* 带真实列宽的表：按模板里的比例分列，不随各格文字多少漂移 */
+.gridTableFixed {
+  table-layout: fixed;
+}
+
+/* 单元格左右内边距压到 3px：第一列（大类名）在真实模板里就很窄，多 2px 英文就要拆词 */
+.gridTable td {
+  padding: 2px 3px;
+  border: 1px solid var(--color-hairline-strong);
+  vertical-align: middle;
+  overflow-wrap: break-word;
+}
+
+/* 段落盒：与核对无关的长文字（标准原文）最多显示 4 行，预览才不会被长格子撑散 */
+.paraBox {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+/* 数据位与正在看的段落完整显示：要被替换的文字不能只看到半截 */
+.paraBoxFull {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: none;
+}
+
+/* 高亮底色左右各多出 2px，用负外边距抵掉，文字位置不变 */
+.para {
+  padding: 0 2px;
+  margin: 0 -2px;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.paraBound {
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+}
+
+.paraStatic {
+  background: var(--color-tint-gray);
+  color: var(--color-slate);
+}
+
+.paraResidue {
+  background: var(--color-tint-peach);
+  color: var(--ink-on-peach);
+}
+
+.paraFocus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* 段落对齐照模板原样（结果列的值大多是居中的） */
+.paraCenter {
+  text-align: center;
+}
+
+.paraEnd {
+  text-align: end;
+}
+
+.paraJustify {
+  text-align: justify;
+}
+
+/* 空白模板的结果格：用字段名占位，标出这里会写入什么 */
+.paraEmpty {
+  display: inline-block;
+  min-inline-size: 28px;
+  margin: 0;
+  padding: 0 6px;
+  border: 1px dashed var(--color-primary);
+  text-align: center;
+}
+
+/* 挑位置时每个段落都是按钮（键盘可达），空段落也要点得到 */
+.pickBtn {
+  display: block;
+  width: 100%;
+  min-block-size: 22px;
+  padding: 0 3px;
+  border: 1px dashed var(--color-hairline-strong);
+  border-radius: var(--rounded-xs);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.pickBtn:hover {
+  border-color: var(--color-primary);
+  background: var(--color-tint-lavender);
+}
+
+.pickBtn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.pickEmpty {
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+}
+
+/* ── 右：核对清单 ── */
+
+.reviewPane {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+  padding: 16px 20px;
+  background: var(--color-canvas);
+}
+
+/* 清单的滚动容器；吸顶的筛选行靠负外边距铺满到 pane 边缘，滚动条贴抽屉边缘 */
+.reviewScroll {
+  min-block-size: 0;
+  overflow: auto;
+  padding: 0 16px 16px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.reviewHead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 0 -16px 10px;
+  padding: 12px 16px 10px;
+  background: var(--color-canvas);
+  border-block-end: 1px solid var(--color-hairline-soft);
+}
+
+.search {
+  flex: 0 1 240px;
+}
+
+.pickBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-block-end: 10px;
+  padding: 6px 10px;
+  border-radius: var(--rounded-sm);
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+  font-size: 0.75rem;
+}
+
+.pickBannerSpacer {
+  flex: 1 1 auto;
+}
+
+.notice {
+  margin-block-end: 10px;
+}
+
+/* 清单上方带偏差提示的容器：提示固定在顶部不随清单滚动。
+   清单自己带内边距（吸顶的筛选行靠负外边距铺到边缘），这里不能再加内边距 */
+.reviewWithNotice {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+  background: var(--color-canvas);
+}
+
+.driftNotice {
+  flex: none;
+  margin: 12px 16px 0;
+}
+
+.problems {
+  margin: 0;
+  padding-inline-start: 16px;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* 字段清单：一行两排——字段名与操作 / 位置·所在行·当前值·格式 */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  padding: 6px 10px 6px 8px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-md);
+}
+
+.cardFlagged {
+  border-color: var(--color-warning);
+  box-shadow: inset 3px 0 0 var(--color-warning);
+}
+
+.cardPicking {
+  border-color: var(--color-primary);
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.cardUnbound {
+  border-style: dashed;
+}
+
+.cardHead {
+  display: flex;
+  /* 标记多、一行放不下时让操作区整块换行（见 .cardActions） */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-block-size: 28px;
+}
+
+.index {
+  flex: none;
+  inline-size: 22px;
+  color: var(--color-stone);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.kindTag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--rounded-xs);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.kindBatch {
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+}
+
+.kindItem {
+  background: var(--color-tint-sky);
+  color: var(--ink-on-sky);
+}
+
+.fieldName {
+  flex: none;
+  max-inline-size: 42%;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fieldMeta {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 标记不参与压缩：文字在标记里折行，比让操作区换一行更难读 */
+.cardHead :global(.ant-tag) {
+  flex: none;
+}
+
+/* 头部的操作区（必填 / 确认无误 / 改位置 / 不写入）：靠右，整块不压缩、不折行；
+   标记多到一行放不下时，整块换到第二行 */
+.cardActions {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
+.cardHint {
+  margin: 2px 0 0 30px;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+/* 一个数据位：<details> 的摘要是整行，点行展开格式编辑；行内的按钮各管各的 */
+.slot {
+  margin-block-start: 2px;
+  border-radius: var(--rounded-sm);
+}
+
+.slotPicking {
+  background: var(--color-tint-lavender);
+}
+
+.slotRow {
+  display: grid;
+  /* 位置 | 所在行（吃掉剩余宽度）| 当前值（按内容收缩）| 格式（定宽，各行对齐）| 取消 */
+  grid-template-columns: auto minmax(72px, 1fr) fit-content(136px) 196px auto;
+  align-items: center;
+  gap: 2px 10px;
+  min-block-size: 28px;
+  margin: 0 -4px;
+  padding: 0 4px;
+  border-radius: var(--rounded-sm);
+  list-style: none;
+  cursor: pointer;
+}
+
+.slotRow::-webkit-details-marker {
+  display: none;
+}
+
+.slotRow:hover {
+  background: var(--color-surface-soft);
+}
+
+.slotPicking .slotRow:hover {
+  background: transparent;
+}
+
+.slotRow:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* 位置：点一下让左侧预览滚到这个数据位 */
+.locate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-block-size: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--rounded-xs);
+  background: var(--color-surface);
+  color: var(--color-slate);
+  font: inherit;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.locate > .anticon {
+  color: var(--color-stone);
+  font-size: 0.6875rem;
+}
+
+.locate:hover {
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+}
+
+.locate:hover > .anticon {
+  color: var(--color-primary);
+}
+
+.locate:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.slotContext {
+  overflow: hidden;
+  min-inline-size: 0;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slotContextLabel {
+  margin-inline-end: 6px;
+  color: var(--color-stone);
+}
+
+.slotSample {
+  overflow: hidden;
+  min-inline-size: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-xs);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slotSampleEmpty {
+  border-style: dashed;
+  color: var(--color-muted);
+  font-family: inherit;
+}
+
+.fmtCell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-inline-size: 0;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+}
+
+.fmtText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fmtChevron {
+  flex: none;
+  color: var(--color-stone);
+  font-size: 0.625rem;
+  transition: rotate 150ms ease;
+}
+
+.slot[open] > .slotRow > .fmtCell .fmtChevron {
+  rotate: 180deg;
+}
+
+.slotEditor {
+  display: grid;
+  gap: 6px 10px;
+  margin-block: 4px 2px;
+  padding: 8px 10px;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--rounded-sm);
+}
+
+.slotEditor > .ant-input-affix-wrapper,
+.slotEditor > .ant-input-outlined {
+  justify-self: start;
+}
+
+.fmt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-inline-size: 0;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+}
+
+.fmtStatic {
+  padding-block: 1px;
+  color: var(--color-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 结果列待处理的格子 */
+.itemList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--color-canvas);
+  font-size: 0.75rem;
+}
+
+.itemResidue {
+  border-color: var(--color-warning);
+  background: var(--color-tint-peach);
+}
+
+.itemSpacer {
+  flex: 1 1 auto;
+}
+
+.itemText {
+  overflow: hidden;
+  flex: 1 1 120px;
+  min-inline-size: 0;
+  color: var(--color-slate);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sectionLabel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.sectionLabel small {
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+/* 判定词对照：点开才出现 */
+.verdicts {
+  margin-block-start: 14px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--rounded-md);
+}
+
+.verdictSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-block-size: 34px;
+  padding: 4px 10px;
+  border-radius: var(--rounded-md);
+  list-style: none;
+  cursor: pointer;
+}
+
+.verdictSummary::-webkit-details-marker {
+  display: none;
+}
+
+.verdictSummary:hover {
+  background: var(--color-surface-soft);
+}
+
+.verdictSummary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.verdicts[open] > .verdictSummary {
+  border-block-end: 1px solid var(--color-hairline-soft);
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.verdicts[open] > .verdictSummary .fmtChevron {
+  rotate: 180deg;
+}
+
+.verdictMeta {
+  flex: 1 1 auto;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.verdictBody {
+  padding: 6px 12px 12px;
+  background: var(--color-surface-soft);
+  border-end-start-radius: var(--rounded-md);
+  border-end-end-radius: var(--rounded-md);
+}
+
+/* 对照表：内置 + 这份标准的自定义合成一张。宽度封顶，宽屏下输入框不会被拉得老长 */
+.verdictTable {
+  inline-size: 100%;
+  max-inline-size: 880px;
+  border-collapse: collapse;
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+}
+
+.verdictTable th,
+.verdictTable td {
+  padding: 3px 10px 3px 0;
+  text-align: start;
+  vertical-align: middle;
+}
+
+.verdictTable thead th {
+  padding-block: 4px;
+  border-block-end: 1px solid var(--color-hairline);
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.verdictTable tbody tr:not(.verdictAdd) > * {
+  border-block-end: 1px solid var(--color-hairline-soft);
+}
+
+/* 新增那一行和上面的数据隔开一点 */
+.verdictAdd > * {
+  padding-block-start: 8px;
+}
+
+.verdictColCn {
+  inline-size: 24%;
+}
+
+.verdictColSource {
+  inline-size: 5rem;
+}
+
+.verdictColAction {
+  inline-size: 2rem;
+}
+
+.verdictName {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verdictTable :global(.ant-input-outlined) {
+  inline-size: 100%;
+}
+
+.verdictEnglish {
+  color: var(--color-ink);
+}
+
+.verdictSource {
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.verdictSource[data-source='custom'] {
+  color: var(--color-slate);
+}
+
+.verdictSource[data-source='override'] {
+  color: var(--ink-on-peach);
+  font-weight: 600;
+}
+
+.verdictAddCell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.verdictAction {
+  padding-inline-end: 0;
+}
+
+/* 「操作」表头只给读屏软件，不占宽度 */
+.verdictActionHead {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.verdictHint {
+  max-inline-size: 880px;
+  margin: 8px 0 0;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.empty {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 36px 16px;
+  text-align: center;
+}
+
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  inline-size: 48px;
+  min-block-size: 48px;
+  margin-block-end: 4px;
+  border-radius: var(--rounded-full);
+  background: var(--color-surface);
+  color: var(--color-steel);
+  font-size: 1.25rem;
+}
+
+.emptyTitle {
+  color: var(--color-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.emptyHint {
+  max-inline-size: 44ch;
+  margin: 0;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* 标注前：三步说明 */
+.steps {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.stepNum {
+  display: grid;
+  place-items: center;
+  inline-size: 24px;
+  min-block-size: 24px;
+  padding: 2px 0;
+  border-radius: var(--rounded-full);
+  background: var(--color-tint-lavender);
+  color: var(--color-primary-deep);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.stepTitle {
+  color: var(--color-ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.stepText {
+  margin: 2px 0 0;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.toolbarStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--color-slate);
+  font-size: 0.75rem;
+}
+
+.toolbarStats b {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.toolbarAttention {
+  color: var(--color-warning);
+}
+
+.toolbarSpacer {
+  flex: 1 1 auto;
+}
+
+.headerFile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  margin-block-start: 2px;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.headerName {
+  overflow: hidden;
+  max-inline-size: 46vw;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerTime {
+  color: var(--color-steel);
+  font-size: 0.75rem;
+}
+
+/* 标注进行中 */
+.busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-block-end: 16px;
+  color: var(--color-slate);
+  font-size: 0.8125rem;
+}
+
+/* 标注进行中的占位行：形状贴近标完后的清单（字段名一行 + 位置一行） */
+.placeholders {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.placeholder {
+  padding: 8px 10px;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-hairline-soft);
+  border-radius: var(--rounded-md);
+}
+
+.placeholderBar {
+  block-size: 10px;
+  margin-block: 5px;
+  border-radius: var(--rounded-full);
+  background: var(--color-hairline-soft);
+}
+
+/* 上传区（还没有模板时占满整个 body） */
+.uploadBody {
+  display: grid;
+  place-items: center;
+  block-size: 100%;
+  padding: 32px;
+}
+
+.uploadBox {
+  inline-size: min(520px, 100%);
+}
+
+.uploadTitle {
+  margin: 0 0 6px;
+  color: var(--color-ink);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.uploadHint {
+  margin: 0 0 16px;
+  color: var(--color-slate);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.dropzone {
+  padding: 8px 0;
+}
+
+.dropIcon {
+  color: var(--color-link-blue);
+  font-size: 34px;
+}
+
+.dropTitle {
+  display: block;
+  margin-block-start: 8px;
+  color: var(--color-ink);
+  font-size: 0.875rem;
+}
+
+.dropHint {
+  display: block;
+  margin-block-start: 4px;
+  color: var(--color-steel);
+  font-size: 0.75rem;
+}
+
+/* 抽屉不够宽时（半屏）上下排：预览在上，清单在下。
+   清单拿到整个宽度，行内各列不用改 */
+.container {
+  container-type: inline-size;
+}
+
+@container (width < 980px) {
+  .root {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(220px, 38%) minmax(0, 1fr);
+  }
+
+  .previewPane {
+    padding-inline-start: 16px;
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--color-hairline-soft);
+  }
+
+  .reviewPane {
+    padding: 12px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fmtChevron {
+    transition: none;
+  }
+}

@@ -242,6 +242,124 @@ class CoaStandardItemsReplace(BaseModel):
     items: list[CoaItemIn] = Field(min_length=0, max_length=500)
 
 
+# 日期格式只放行「年月日」类指令：strftime 对未知指令在多数平台上不报错
+# （%Q 原样输出），靠它校验拦不住非法格式
+_DATE_DIRECTIVE_RE = re.compile(r"%(.)", re.S)
+_ALLOWED_DATE_DIRECTIVES = frozenset({"Y", "y", "m", "d", "b", "B", "e"})
+
+
+def check_date_pattern(pattern: str) -> str:
+    pattern = pattern.strip()
+    if not pattern or len(pattern) > 40:
+        raise ValueError("日期格式不能为空且不超过 40 个字符")
+    bad = [m.group(0) for m in _DATE_DIRECTIVE_RE.finditer(pattern) if m.group(1) not in _ALLOWED_DATE_DIRECTIVES]
+    if bad:
+        raise ValueError(f"日期格式只支持年月日（%Y %m %d），不支持 {' '.join(bad)}")
+    return pattern
+
+
+class CoaTemplateFmtIn(BaseModel):
+    """数据位的格式规则：数值（小数位 + 单位后缀）/ 日期（strftime）/ 文字。
+
+    suffix/pattern 只做去首尾空白、不做 NFKC——全角兼容归一会把 µg/mg 的 µ
+    改写成希腊字母 μ，单位必须保持模板里的原字符。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["number", "date", "text"]
+    decimals: int | None = Field(default=None, ge=0, le=6)
+    suffix: str | None = Field(default=None, max_length=32)
+    pattern: str | None = Field(default=None, max_length=40)
+    bilingual: bool | None = None
+    joiner: Literal["", " ", "\n"] | None = None
+
+    @field_validator("suffix", "pattern")
+    @classmethod
+    def _plain(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def _date_pattern_must_be_valid(self) -> CoaTemplateFmtIn:
+        if self.kind == "date":
+            if not self.pattern:
+                raise ValueError("日期格式不能为空")
+            check_date_pattern(self.pattern)
+        return self
+
+
+class CoaTemplateSlotIn(BaseModel):
+    """一个数据位的绑定：地址 + 回填时被替换的原文 + 格式规则。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sid: str = Field(min_length=1, max_length=64)
+    sample: str | None = Field(
+        default=None,
+        max_length=300,
+        description="值夹在固定文字中间时必须给出：要被替换的那段原文；"
+        "整格是值/空格时不传，服务端按格子推导",
+    )
+    fmt: CoaTemplateFmtIn
+
+    @field_validator("sid")
+    @classmethod
+    def _clean_req(cls, value: str | None) -> str | None:
+        return _clean_required(value)
+
+    @field_validator("sample")
+    @classmethod
+    def _plain_optional(cls, value: str | None) -> str | None:
+        # None=由服务端推导；空串=该位置当前为空。两者语义不同，不能归一
+        return value if value is None else value.strip()
+
+
+class CoaTemplateFieldIn(BaseModel):
+    """一个字段的绑定：至少一个数据位；required=回填时该字段必须有值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str = Field(min_length=1, max_length=80)
+    required: bool = True
+    slots: list[CoaTemplateSlotIn] = Field(min_length=1, max_length=20)
+
+    @field_validator("field")
+    @classmethod
+    def _clean_req(cls, value: str | None) -> str | None:
+        return _clean_required(value)
+
+
+class CoaTemplateBindingIn(BaseModel):
+    """人工确认后的模板标注（服务端会对模板重新校验一遍）。
+
+    static_slots：结果列里确认「保持模板原文」的格子——填过值的模板上，
+    结果列里没绑定又非空的格子必须逐个确认，否则不许保存。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields: list[CoaTemplateFieldIn] = Field(max_length=600)
+    static_slots: list[str] = Field(default_factory=list, max_length=200)
+    verdicts: dict[str, str] = Field(
+        default_factory=dict, description="判定词中→英对照（样例里学到的，可增改）"
+    )
+
+    @field_validator("static_slots")
+    @classmethod
+    def _clean_sids(cls, value: list[str]) -> list[str]:
+        return [sid.strip() for sid in value if sid.strip()]
+
+    @field_validator("verdicts")
+    @classmethod
+    def _clean_verdicts(cls, value: dict[str, str]) -> dict[str, str]:
+        cleaned: dict[str, str] = {}
+        for cn, en in value.items():
+            cn, en = cn.strip(), en.strip()
+            if cn and en and len(cn) <= 100 and len(en) <= 200:
+                cleaned[cn] = en
+        return cleaned
+
+
 class CoaValueIn(BaseModel):
     """结果值：value_num/value_text 至少一项（原文永远保留在 value_text）。"""
 

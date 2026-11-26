@@ -253,6 +253,43 @@ class TestStandards:
             assert "ph" in codes
             assert "水分water" in codes
 
+    async def test_long_bilingual_item_name_does_not_overflow_code(self):
+        """中英拼接的匹配键超过 64 列长时截断带摘要：建标准与替换项目都不再 500。
+        真实模板的英文复合名很长（达巴等），以前导入建标准会直接报内部错误。"""
+        long_en = "Purity(Dalbavancin component B0 + Dalbavancin amidated substances component B0)"
+        items = [
+            {"name_cn": "纯度(达巴万星B0+酰胺化产物B0)", "name_en": long_en, "value_type": "number"},
+            {
+                "name_cn": "纯度(达巴万星B0+酰胺化产物B1)",
+                "name_en": long_en[:-3] + "B1)",
+                "value_type": "number",
+            },
+        ]
+        async with _client(MANAGE) as (ac, _):
+            product = await _mk_product(ac)
+            resp = await ac.post(
+                "/api/v1/qa/coa/standards",
+                json={
+                    "product_id": product["id"],
+                    "code": _uniq("32"),
+                    "name": _uniq("长英文名标准 "),
+                    "items": items,
+                },
+            )
+            assert resp.status_code == 201, resp.text
+            codes = [i["code"] for i in resp.json()["data"]["items"]]
+            assert all(len(code) <= 64 for code in codes)
+            assert len(set(codes)) == 2
+
+            # 改名触发的重算同样不越界（保留的那条改了名字）
+            std = resp.json()["data"]
+            renamed = [{**items[0], "id": std["items"][0]["id"], "name_en": long_en + " extended"}]
+            resp = await ac.put(
+                f"/api/v1/qa/coa/standards/{std['id']}/items", json={"items": renamed}
+            )
+            assert resp.status_code == 200, resp.text
+            assert len(resp.json()["data"]["items"][0]["code"]) <= 64
+
     async def test_update_explicit_null_required_is_noop(self):
         """显式 null = 不改（schema 口径），不得写 NULL 触发 500。"""
         async with _client(MANAGE) as (ac, _):
@@ -281,6 +318,42 @@ class TestStandards:
                 },
             )
             assert resp.status_code == 409
+
+    async def test_rename_to_taken_code_same_product_rejected(self):
+        """改名撞上同产品已有编号 → 409 且原编号不动；唯一只限同产品内，
+        编号没变的保存也不算重复。"""
+        async with _client(MANAGE) as (ac, _):
+            product = await _mk_product(ac)
+            taken = await _mk_standard(ac, product["id"])
+            std = await _mk_standard(ac, product["id"])
+
+            resp = await ac.patch(
+                f"/api/v1/qa/coa/standards/{std['id']}",
+                json={"code": taken["code"]},
+            )
+            assert resp.status_code == 409, resp.text
+            assert "已存在" in resp.json()["message"]
+            detail = await ac.get(f"/api/v1/qa/coa/standards/{std['id']}")
+            assert detail.json()["data"]["code"] == std["code"]
+
+            # 编号没变（改回自己的编号）不算重复
+            resp = await ac.patch(
+                f"/api/v1/qa/coa/standards/{taken['id']}",
+                json={"code": taken["code"]},
+            )
+            assert resp.status_code == 200, resp.text
+
+            # 同一个编号在别的产品下可以用
+            other = await _mk_product(ac)
+            resp = await ac.post(
+                "/api/v1/qa/coa/standards",
+                json={
+                    "product_id": other["id"],
+                    "code": taken["code"],
+                    "name": _uniq("别的产品同编号 "),
+                },
+            )
+            assert resp.status_code == 201, resp.text
 
     async def test_items_replace_reference_guard(self):
         """移除项统一软删让号（项目必然启用，无停用态）；值不受影响。"""

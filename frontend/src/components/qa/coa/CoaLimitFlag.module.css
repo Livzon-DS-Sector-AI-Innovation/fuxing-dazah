@@ -1,0 +1,230 @@
+/* COA 超出标准限度的标记：录入格里的文字标记、出具记录表的越界格、汇总清单。
+   颜色口径对齐同模块 APR 域的越界格——超标 = 红字浅玫瑰底，可能超限 = 橙字浅桃底。
+   语义色直接压在浅底上对比度不到 4.5:1（error/rose 3.9、warning/peach 3.5），
+   文字改用深一档的固定色，底色与描边仍走语义 tint。 */
+
+/* 文字标记：录入格内、清单行尾、批号旁 */
+.mark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.markOvers {
+  color: #c62828;
+  background: var(--color-tint-rose);
+  border-color: var(--color-tint-rose-deep);
+}
+
+.markPossible {
+  color: #793400;
+  background: var(--color-tint-peach);
+  border-color: var(--color-tint-peach-deep);
+}
+
+/* 套在染了同色底的输入框里：外框已描边，标记自己不再描 */
+.markBare {
+  border-color: transparent;
+}
+
+/* 出具记录表的越界格：数值套底色 + 左缘竖条（竖条随文字色） */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 46px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: help;
+}
+
+.pill::before {
+  content: '';
+  flex: none;
+  width: 2px;
+  height: 11px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.pillOvers {
+  color: #c62828;
+  background: var(--color-tint-rose);
+}
+
+.pillPossible {
+  color: #793400;
+  background: var(--color-tint-peach);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* 录入单标题行的越界计数：一枚可点的标记，点一下跳到下一处 */
+.tally {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.tally:hover {
+  border-color: currentColor;
+}
+
+.tally:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.tallyOvers {
+  color: #c62828;
+  background: var(--color-tint-rose);
+}
+
+.tallyPossible {
+  color: #793400;
+  background: var(--color-tint-peach);
+}
+
+/* 计数标记的悬停说明：逐项列出哪一项、怎么越界 */
+.tip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 280px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tipRow {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.tipName {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tipMore {
+  color: var(--color-on-dark-muted);
+}
+
+/* 越界清单（出具记录表汇总条里弹出）：一行一项，点一行定位到单元格 */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  max-height: 340px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* 清单顶上的一句用法提示 */
+.listNote {
+  padding: 0 8px 5px;
+  color: var(--color-steel);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.5fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-charcoal);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--color-surface-soft);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.rowBatch {
+  color: var(--color-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowItem {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rowValue {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* 从清单定位过来的单元格：内描一圈红框再淡出。不改背景色——行底色与悬停底色
+   都带 !important，动画改不动它们 */
+.cellFlash {
+  animation: coa-cell-flash 1.6s ease-out;
+}
+
+@keyframes coa-cell-flash {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+
+  12%,
+  60% {
+    box-shadow: inset 0 0 0 2px var(--color-error);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tally {
+    transition: none;
+  }
+
+  /* 不做动画：整段高亮期静态显示描边 */
+  .cellFlash {
+    animation: none;
+    box-shadow: inset 0 0 0 2px var(--color-error);
+  }
+}

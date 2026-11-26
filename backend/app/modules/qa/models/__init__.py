@@ -26,6 +26,7 @@ from app.modules.qa.models.coa import (
     CoaFieldType,
     CoaProduct,
     CoaProductField,
+    CoaRenderRecord,
     CoaReport,
     CoaReportValue,
     CoaSourceType,
@@ -155,4 +156,5 @@ __all__ = [
     "CoaStandardItem",
     "CoaReport",
     "CoaReportValue",
+    "CoaRenderRecord",
 ]

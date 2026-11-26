@@ -78,6 +78,32 @@
   min-width: 0;
 }
 
+/* 标记位常驻：空时不占宽，出现越界标记时输入框不会先抖一下再被撑开 */
+.suffix {
+  display: inline-flex;
+  align-items: center;
+}
+
+.suffix:empty {
+  display: none;
+}
+
+/* 越界态：框底色染一层很浅的同色底、边框同色加深；框内的标记用实一档的底色，
+   三层深浅拉开层次（配色口径见 CoaLimitFlag.module.css）。
+   antd 的悬停/聚焦规则会把底色刷回白色，优先级到 0,3,0——这里用
+   .cell .input 双类名 + 伪类压过去，聚焦时仍保留 antd 的主色聚焦环 */
+.cell .input.inputOvers,
+.cell .input.inputOvers:is(:hover, :focus, :focus-within) {
+  background: #fff5f8;
+  border-color: var(--color-tint-rose-deep);
+}
+
+.cell .input.inputPossible,
+.cell .input.inputPossible:is(:hover, :focus, :focus-within) {
+  background: #fffaf3;
+  border-color: var(--color-tint-peach-deep);
+}
+
 /* 单位位定宽：同列各单位长短不一（% / cfu/g），输入框右缘保持对齐 */
 .unit {
   flex: none;

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Alert, App, Button, Card, Col, DatePicker, Form, Input, Radio, Row, Select, Space, Switch, Table } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
@@ -203,6 +203,66 @@ const M1E_FIELDS: { key: keyof Pick<DeviationDetail, 'm1e_personnel' | 'm1e_mach
   { key: 'm1e_other', label: '其他', hint: '记录存放、提示标识等' },
 ]
 
+/** 单列最小宽度（约 33 个汉字一行），再窄就退回单列。查看态与编辑态共用，保证两态在同一宽度切换。 */
+const M1E_COLUMN_MIN = 460
+
+/** 六个维度长短差异极大（「设备」可以比「环境」长几十倍）：等高栅格会被最长的一栏撑高整行、
+ *  两侧留出大片空白。这里改用 CSS 多栏自动配平，长内容独占一列。 */
+const m1eColumnsStyle: CSSProperties = {
+  columns: `${M1E_COLUMN_MIN}px 2`,
+  columnGap: 16,
+  // 多栏没有行间距，卡片靠下外边距隔开，每列末尾会多出一截，用负值抵消。
+  marginBottom: -12,
+}
+
+const m1eGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: `repeat(auto-fit, minmax(min(${M1E_COLUMN_MIN}px, 100%), 1fr))`,
+  gap: 16,
+  alignItems: 'start',
+}
+
+const m1eTileStyle: CSSProperties = {
+  breakInside: 'avoid',
+  marginBottom: 12,
+  border: '1px solid var(--color-hairline)',
+  borderRadius: 8,
+  // 让标题栏底色跟随圆角裁切。
+  overflow: 'hidden',
+}
+
+const m1eTileTitleStyle: CSSProperties = {
+  margin: 0,
+  padding: '5px 14px',
+  background: 'var(--color-surface)',
+  borderBottom: '1px solid var(--color-hairline-soft)',
+  fontSize: 13,
+  fontWeight: 600,
+  lineHeight: '20px',
+  color: 'var(--color-charcoal)',
+}
+
+const m1eTileBodyStyle: CSSProperties = {
+  padding: '10px 14px',
+  fontSize: 14,
+  color: 'var(--color-ink)',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+  textWrap: 'pretty',
+}
+
+/** 查看态的维度卡片：标题 + 原文（保留换行）。 */
+function M1eTile({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <article style={m1eTileStyle}>
+      <h4 style={m1eTileTitleStyle}>{label}</h4>
+      <div style={m1eTileBodyStyle}>
+        {children || <span style={{ color: 'var(--color-stone)' }}>未填写</span>}
+      </div>
+    </article>
+  )
+}
+
 interface InvestigationFormValues {
   m1e_personnel?: string
   m1e_machine?: string
@@ -366,15 +426,13 @@ export function InvestigationSection({
               />
             }
           >
-            <Row gutter={[16, 16]}>
+            <div style={m1eGridStyle}>
               {M1E_FIELDS.map((field) => (
-                <Col key={field.key} xs={24} sm={12} xl={8}>
-                  <Form.Item name={field.key} label={field.label} extra={field.hint} style={{ marginBottom: 0 }}>
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 8 }} maxLength={8000} />
-                  </Form.Item>
-                </Col>
+                <Form.Item key={field.key} name={field.key} label={field.label} extra={field.hint} style={{ marginBottom: 0 }}>
+                  <Input.TextArea autoSize={{ minRows: 3, maxRows: 12 }} maxLength={8000} />
+                </Form.Item>
               ))}
-            </Row>
+            </div>
           </FormBlock>
 
           <FormBlock
@@ -553,13 +611,11 @@ export function InvestigationSection({
       ) : (
         <>
           <FormBlock title="人机料法环" hint="现场事实记录" first>
-            <Row gutter={[16, 16]}>
+            <div style={m1eColumnsStyle}>
               {M1E_FIELDS.map((field) => (
-                <Col key={field.key} xs={24} sm={12} xl={8}>
-                  <Field label={field.label}>{detail[field.key]}</Field>
-                </Col>
+                <M1eTile key={field.key} label={field.label}>{detail[field.key]}</M1eTile>
               ))}
-            </Row>
+            </div>
           </FormBlock>
           <FormBlock title="5Why 根本原因分析" hint="连续追问得到的因果链">
             {detail.why_chain.length === 0 ? (
