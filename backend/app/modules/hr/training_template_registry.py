@@ -31,6 +31,8 @@ class TrainingTemplateDef:
     default_file: str       # backend/assets/hr/ 下的默认模板文件名
     markers: list[TemplateMarker] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    section: str = ""       # 所属板块（上传向导按此分组、卡片展示映射）
+    usages: tuple[str, ...] = ()  # 用于哪些导出入口（卡片展示映射关系）
 
     @property
     def required_markers(self) -> list[str]:
@@ -47,6 +49,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="培训通知书",
         description="培训通知导出（7.4），SOP 培训全套材料之一",
         default_file="7.4培训通知书.docx",
+        section="培训通知",
+        usages=("培训通知页·生成培训通知", "SOP 培训·全套材料 zip"),
         markers=[
             _m("{培训内容}", "培训主题，有补充内容时以「—」连接"),
             _m("{实施日期}", "培训日期与时段（面授/自学，多时段以「；」连接）"),
@@ -69,6 +73,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="培训签到表",
         description="培训签到表导出（7.5），SOP 培训全套材料之一；人数多时自动分页",
         default_file="7.5培训签到表.docx",
+        section="培训通知",
+        usages=("培训通知页·生成签到表", "SOP 培训·全套材料 zip"),
         markers=[
             _m("{培训内容}", "培训主题"),
             _m("{培训对象}", "「部门」全体成员及病产假除外说明"),
@@ -91,6 +97,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="培训效果评估表",
         description="培训效果评估导出（7.11），SOP 培训全套材料之一",
         default_file="7.11培训效果评估表.docx",
+        section="培训通知",
+        usages=("培训通知页·效果评估导出", "考核历史·导出评估表", "SOP 培训·全套材料 zip"),
         markers=[
             _m("{培训内容}", "培训主题"),
             _m("{实施日期}", "培训日期（如 2026.12.15）"),
@@ -121,6 +129,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="现场问答/实操记录表",
         description="问答考核现场记录表导出，含考题区与受训人员区",
         default_file="现场问答，实操记录表-模板1.docx",
+        section="考核与成绩",
+        usages=("培训通知页·导出问答记录表", "考核历史·导出记录表", "SOP 培训·全套材料 zip"),
         markers=[
             _m("{培训内容}", "培训主题"),
             _m("{实施日期}", "培训日期"),
@@ -147,6 +157,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="培训成绩单",
         description="问答考核/考试成绩单导出，按人数自动追加行",
         default_file="成绩单模板.docx",
+        section="考核与成绩",
+        usages=("培训通知页·导出成绩单", "考核历史·导出成绩单"),
         markers=[
             _m("{序号}", "成绩行模板标记：序号", required=False),
             _m("{姓名}", "成绩行模板标记：姓名，系统按人数克隆该行"),
@@ -160,6 +172,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="新员工培训记录",
         description="新员工入职培训记录（含员工概况与培训内容）",
         default_file="新员工培训记录-模板.docx",
+        section="新员工入职培训",
+        usages=("入职培训页·导出培训记录"),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{性别}", "性别"),
@@ -179,6 +193,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="上岗证",
         description="新员工上岗证，培训清单从岗位培训表自动带出",
         default_file="上岗证模板.docx",
+        section="新员工入职培训",
+        usages=("入职培训页·导出上岗证"),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{性别}", "性别"),
@@ -194,6 +210,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="岗前培训计划",
         description="新员工/异动人员岗前培训计划，培训内容按条目克隆行",
         default_file="新员工培训计划-模板.docx",
+        section="新员工入职培训",
+        usages=("入职培训页·导出岗前培训计划"),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{学历}", "学历"),
@@ -222,6 +240,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="个人培训登记表",
         description="员工个人历年培训台账登记表，每人一页",
         default_file="个人培训登记表.docx",
+        section="员工档案",
+        usages=("个人培训登记表导出"),
         markers=[
             _m("{姓名}", "员工姓名"),
             _m("{性别}", "性别"),
@@ -246,6 +266,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="培训花名册",
         description="培训口径人员花名册导出",
         default_file="roster_template.docx",
+        section="员工档案",
+        usages=("花名册导出"),
         markers=[
             _m("{$index+1}", "行序号"),
             _m("{体现部门}", "部门"),
@@ -265,6 +287,8 @@ TEMPLATES: list[TrainingTemplateDef] = [
         name="笔试试卷",
         description="笔试考核试卷导出，题型区块由系统按试卷内容自动生成",
         default_file="试卷模板.docx",
+        section="题库与试卷",
+        usages=("AI 出题/题库·试卷下载"),
         markers=[
             _m("{{培训内容}}", "试卷标题：替换为「某某试题」（历史原因保留双花括号写法）"),
         ],

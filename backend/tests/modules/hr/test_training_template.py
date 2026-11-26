@@ -30,6 +30,45 @@ class TestRegistryConsistency:
         keys = [t.key for t in TEMPLATES]
         assert len(keys) == len(set(keys))
 
+    def test_section_and_usages_filled(self):
+        """板块/导出入口映射字段必填（上传向导分组与卡片映射展示依赖）。"""
+        for tdef in TEMPLATES:
+            assert tdef.section, f"{tdef.key} 缺 section"
+            assert tdef.usages, f"{tdef.key} 缺 usages"
+
+
+# ───────────────────────── 占位符自动识别 ─────────────────────────
+
+
+class TestExtractMarkers:
+    def test_extract_notification_markers(self):
+        """通知模板：全部 10 个标记按出现顺序识别。"""
+        from app.modules.hr.training_template_registry import TEMPLATES_BY_KEY
+
+        markers = store.extract_docx_markers(_default_bytes("training_notification"))
+        required = TEMPLATES_BY_KEY["training_notification"].required_markers
+        assert all(m in markers for m in required)
+        assert len(markers) == len(required)
+
+    def test_extract_double_brace_and_filter_forms(self):
+        """试卷模板的双花括号、登记表/花名册的过滤器写法都能识别。"""
+        exam = store.extract_docx_markers(_default_bytes("exam_paper"))
+        assert exam == ["{{培训内容}}"]
+
+        roster = store.extract_docx_markers(_default_bytes("roster"))
+        assert "{$index+1}" in roster and "{姓名}" in roster
+        assert any(m.startswith("{入职日期|") for m in roster)
+
+    def test_plain_document_has_no_markers(self):
+        """没有 {标记} 的普通文档返回空表。"""
+        from docx import Document as _Doc
+
+        buf = BytesIO()
+        doc = _Doc()
+        doc.add_paragraph("这是一份普通文档，只有（圆括号）和 [方括号]，没有任何占位符。")
+        doc.save(buf)
+        assert store.extract_docx_markers(buf.getvalue()) == []
+
 
 # ───────────────────────── 上传校验 ─────────────────────────
 

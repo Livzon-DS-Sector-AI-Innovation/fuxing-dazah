@@ -74,6 +74,23 @@ async def list_training_templates(
     return success_response(data=await _template_list(db))
 
 
+@router.post("/training-export-templates/inspect", summary="自动识别上传模板中的占位符（上传向导预检）")
+async def inspect_training_template(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:training:template")),
+) -> Response:
+    """扫描上传的 docx 全文，返回其中实际出现的 {占位符} 清单（去重、按出现顺序）。
+
+    只做识别，不做校验——最终上传仍按目标导出的必填清单严格把关。
+    """
+    data = await file.read()
+    if not data:
+        raise AppException(status_code=422, message="模板文件不能为空")
+    store.validate_template_document(file.filename, data)  # 仅校验可解析，不入库
+    return success_response(data={"markers": store.extract_docx_markers(data)})
+
+
 @router.get("/training-export-templates/{key}/versions", summary="模板版本历史")
 async def list_template_versions(
     key: str,

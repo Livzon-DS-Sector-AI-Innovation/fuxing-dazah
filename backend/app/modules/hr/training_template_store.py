@@ -10,6 +10,7 @@ backend/assets/hr/ 仓库默认模板。生成器保持同步函数、接收
 """
 
 import logging
+import re
 from collections.abc import Callable
 from io import BytesIO
 from uuid import UUID, uuid4
@@ -25,7 +26,7 @@ from app.core.file_storage import (
     store_object,
     validate_upload,
 )
-from app.modules.hr.docx_markers import find_missing_markers
+from app.modules.hr.docx_markers import collect_template_text, find_missing_markers
 from app.modules.hr.models import TrainingExportTemplateVersion
 from app.modules.hr.template_utils import find_hr_template_bytes
 from app.modules.hr.training_template_registry import (
@@ -110,6 +111,25 @@ def validate_template_document(filename: str | None, data: bytes) -> str:
     except Exception as exc:  # PackageNotFoundError / BadZipFile / OxmlError 等
         raise AppException(status_code=422, message=f"模板文件无法解析：{exc}") from exc
     return safe_name
+
+
+# 占位符字面提取：先匹配双花括号（试卷模板 {{培训内容}}），再匹配单花括号
+_MARKER_TOKEN_RE = re.compile(r"\{\{[^{}]{1,60}\}\}|\{[^{}]{1,60}\}")
+
+
+def extract_docx_markers(data: bytes) -> list[str]:
+    """自动识别 docx 模板里的占位符（去重、按首次出现顺序）。
+
+    上传向导用：把用户文件里实际写了哪些 {标记} 扫出来，前端对照目标导出的
+    必填清单做「缺哪些 / 哪些不被识别」的提示。识别不了占位符的普通文档返回空表。
+    """
+    text = collect_template_text(data)
+    seen: list[str] = []
+    for match in _MARKER_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        if token not in seen:
+            seen.append(token)
+    return seen
 
 
 async def upload_training_template(
@@ -275,6 +295,8 @@ def template_def_dict(tdef: TrainingTemplateDef, current: TrainingExportTemplate
         "name": tdef.name,
         "description": tdef.description,
         "default_file": tdef.default_file,
+        "section": tdef.section,
+        "usages": list(tdef.usages),
         "markers": [
             {"name": m.name, "description": m.description, "required": m.required}
             for m in tdef.markers
