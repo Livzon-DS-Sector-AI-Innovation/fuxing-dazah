@@ -7,11 +7,11 @@
 // 接收人按「姓名」保存，发送时由后端解析成 open_id（同名多人不发送）——所以提供「发送测试」
 // 让配置的人能确认卡片确实送得到。
 
-import { useEffect, useRef, useState } from 'react'
-import { App, Alert, Button, Card, Divider, Form, InputNumber, Select, Space, Spin, Switch } from 'antd'
+import { useEffect, useState } from 'react'
+import { App, Alert, Button, Card, Divider, Form, InputNumber, Space, Spin, Switch } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
-import { fetchEmployeesAction, getSystemSettings, sendReminderTest, updateSystemSettings } from '@/actions/hr'
-import { useDebouncedCallback } from '@/hooks/hr'
+import { getSystemSettings, sendReminderTest, updateSystemSettings } from '@/actions/hr'
+import ReceiverSelect from './ReceiverSelect'
 
 interface ReminderFormValues {
   /** 存姓名（后端发送时解析为 open_id）；也允许直接粘贴 open_id */
@@ -23,48 +23,6 @@ interface ReminderFormValues {
 
 const DEFAULT_DAYS_AHEAD = 30
 const splitReceivers = (v: string) => v.split(',').map(s => s.trim()).filter(Boolean)
-
-/** 提醒接收人选择：远程搜索在职员工，选项显示「姓名（工号 · 部门）」；找不到的人可直接粘贴 open_id */
-function ReceiverSelect({ value, onChange }: { value?: string[]; onChange?: (v: string[]) => void }) {
-  const seqRef = useRef(0)
-  const [options, setOptions] = useState<{ value: string; label: string }[]>([])
-  const [searching, setSearching] = useState(false)
-
-  const search = async (keyword: string) => {
-    const seq = ++seqRef.current
-    setSearching(true)
-    try {
-      const d = await fetchEmployeesAction({ status: '在职', keyword: keyword || undefined, page: 1, page_size: 20 })
-      if (seq !== seqRef.current) return // 过期响应丢弃
-      setOptions(d.data.map(e => ({
-        value: e.name,
-        label: `${e.name}（${e.employee_number || '-'} · ${e.department || '-'}）`,
-      })))
-    } catch { /* 静默：保留下拉里的上一次结果 */ }
-    finally { if (seq === seqRef.current) setSearching(false) }
-  }
-  const { run: debouncedSearch } = useDebouncedCallback(search, 300)
-
-  return (
-    <Select
-      mode="tags"
-      showSearch
-      allowClear
-      filterOption={false}
-      tokenSeparators={[',', '，']}
-      maxTagCount="responsive"
-      style={{ width: '100%' }}
-      placeholder="输入姓名搜索在职员工；也可直接粘贴 open_id"
-      value={value}
-      onChange={onChange}
-      onSearch={debouncedSearch}
-      onOpenChange={(open) => { if (open && options.length === 0) void search('') }}
-      options={options}
-      loading={searching}
-      notFoundContent={searching ? <Spin size="small" /> : null}
-    />
-  )
-}
 
 export function ReminderSettingsCard() {
   const { message, modal } = App.useApp()

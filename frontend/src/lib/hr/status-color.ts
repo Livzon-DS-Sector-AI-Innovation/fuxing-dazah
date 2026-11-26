@@ -83,3 +83,35 @@ export const INTERVIEW_STATUS_TAG_COLORS: Record<string, string> = {
   已完成: 'success',
   已取消: 'error',
 }
+
+
+/** 离职办理状态 → antd Tag 预设色名。轮到 HR 动手的环节（开证 / 送达）用 warning，
+ *  外部处理中的（审批 / 会签）用 processing。看板、办理抽屉、台账「办理状态」列三处同源。 */
+export const OFFBOARDING_STATUS_TAG_COLORS: Record<string, string> = {
+  draft: 'default',
+  approving: 'processing',
+  clearing: 'processing',
+  cert_issuing: 'warning',
+  delivering: 'warning',
+  signed: 'cyan',
+  closed: 'success',
+  canceled: 'error',
+}
+
+/** 离职办结单允许的离职类型（后端 OffboardingCase.TYPE_LABELS）。
+ *  注意与 DEPARTURE_TYPE_OPTIONS 不是一回事：台账的离职类型取值更杂（飞书源表带进来的），
+ *  办结单只认这 5 种，选了别的后端会直接拒绝。新建 / 编辑办理时用这一份。 */
+export const OFFBOARDING_CASE_TYPE_OPTIONS: readonly string[] = ['辞职', '辞退', '合同到期', '退休', '其他']
+
+/** 离职办理状态文案；'none' 是台账筛选里「未发起办理」的取值 */
+export const OFFBOARDING_STATUS_LABELS: Record<string, string> = {
+  none: '未发起',
+  draft: '待发起审批',
+  approving: '离职审批中',
+  clearing: '清退会签中',
+  cert_issuing: '待开具证明',
+  delivering: '证明送达中',
+  signed: '已签字确认',
+  closed: '已办结',
+  canceled: '已取消',
+}

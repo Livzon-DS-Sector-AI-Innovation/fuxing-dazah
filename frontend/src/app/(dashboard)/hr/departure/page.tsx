@@ -1,5 +1,5 @@
 import { Suspense } from 'react'
-import { DepartureClient } from '@/components/hr'
+import { DepartureClient, DepartureTabs, OffboardingBoardClient } from '@/components/hr'
 import { fetchEmployeeSyncConfig } from '@/actions/hr'
 import type { DepartureSyncInfo } from '@/components/hr/DepartureClient'
 
@@ -23,7 +23,10 @@ export default async function DeparturePage() {
 
   return (
     <Suspense fallback={<div className="h-64" />}>
-      <DepartureClient initialRecords={[]} initialTotal={0} syncInfo={syncInfo} />
+      <DepartureTabs
+        ledger={<DepartureClient initialRecords={[]} initialTotal={0} syncInfo={syncInfo} />}
+        board={<OffboardingBoardClient />}
+      />
     </Suspense>
   )
 }

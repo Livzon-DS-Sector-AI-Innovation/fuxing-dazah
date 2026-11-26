@@ -470,6 +470,8 @@ export interface DepartureRecord {
   feishu_synced_at?: string
   created_at?: string
   updated_at?: string
+  /** 解除劳动关系证明开具时间（离职办理流程回写） */
+  cert_issued_at?: string | null
   cert_sign_status?: string
   cert_signed_at?: string
   cert_sign_name?: string
@@ -1838,4 +1840,226 @@ export interface ContractSignView {
   end_date?: string | null
   delivered_at?: string | null
   sign_confirmed_at?: string | null
+}
+// ─── 离职办理（OffboardingCase 状态机）───
+
+export type OffboardingCaseStatus =
+  | 'draft'
+  | 'approving'
+  | 'clearing'
+  | 'cert_issuing'
+  | 'delivering'
+  | 'signed'
+  | 'closed'
+  | 'canceled'
+
+export type ClearanceCategory = 'admin' | 'finance' | 'hr' | 'work'
+
+export interface OffboardingClearanceItem {
+  id: string
+  category: ClearanceCategory
+  category_label: string
+  item_name: string
+  status: 'pending' | 'confirmed' | 'deducted'
+  status_label: string
+  deduction_amount?: number | null
+  supplement_amount?: number | null
+  remark?: string | null
+  confirmed_by?: string | null
+  confirmed_at?: string | null
+  /** manual HR 登记 / feishu_form 飞书实例回读 / seed 进入清退时落的默认清单 */
+  source?: 'manual' | 'feishu_form' | 'seed'
+}
+
+export interface OffboardingCase {
+  id: string
+  case_no: string
+  employee_id: string
+  departure_record_id?: string | null
+  employee_number: string
+  name: string
+  department: string
+  position?: string | null
+  level?: string | null
+  /** 发起人姓名快照 */
+  initiator_name?: string | null
+  offboarding_date: string
+  offboarding_type: string
+  reason?: string | null
+  employee_category?: string | null
+  application_submitted: boolean
+  status: OffboardingCaseStatus
+  status_label: string
+  approval_track?: 'staff' | 'director' | null
+  resignation_instance_code?: string | null
+  resignation_finished_at?: string | null
+  clearance_instance_code?: string | null
+  clearance_finished_at?: string | null
+  health_check_required: boolean
+  health_check_done: boolean
+  health_check_date?: string | null
+  health_check_file_name?: string | null
+  has_health_check_file?: boolean
+  /** electronic 电子单张（链接线上签收）/ paper 纸质两联（当面签收） */
+  cert_template?: 'electronic' | 'paper' | null
+  cert_issued_at?: string | null
+  /** 开具人（HR 经办人姓名快照） */
+  cert_issued_by?: string | null
+  has_cert_file?: boolean
+  mail_recipient?: string | null
+  mail_sent_at?: string | null
+  mail_status?: string | null
+  sms_phone?: string | null
+  sms_status?: string | null
+  delivery_channel?: string | null
+  paper_signed_at?: string | null
+  paper_signed_by?: string | null
+  account_deactivated: boolean
+  closed_at?: string | null
+  remark?: string | null
+  created_at?: string | null
+}
+
+/** 办理详情：含清退明细与台账签字状态 */
+export interface OffboardingCaseDetail extends OffboardingCase {
+  clearance_items?: OffboardingClearanceItem[]
+  /** 两个审批环节是否接了飞书：未接则走站内登记办结 */
+  resignation_feishu?: boolean
+  clearance_feishu?: boolean
+  sign_state?: {
+    cert_sign_status?: string | null
+    cert_signed_at?: string | null
+    cert_sign_name?: string | null
+    has_sign_image?: boolean
+    cert_issued_at?: string | null
+  } | null
+}
+
+/** 看板页头统计：各状态单数 + 临期单数（审批 / 清退中且距离职日 ≤ 2 天） */
+export interface OffboardingCaseStats {
+  counts: Partial<Record<OffboardingCaseStatus, number>>
+  overdue: number
+  /** 全部有效单（不含已取消之外的历史单都算） */
+  total: number
+  /** 进行中：待发起 ~ 已签字 */
+  active: number
+}
+
+/** 开具 / 补发送达的响应：办结单 + 交回 HR 人工转发的签署链接 */
+export interface OffboardingCaseDeliveryResponse extends OffboardingCase {
+  sign_url?: string | null
+}
+
+/** 离职证明签字 H5 视图（免登，token 一次性） */
+export interface DepartureCertSignView {
+  name: string
+  department: string
+  position: string
+  leave_date: string
+  has_pdf: boolean
+  /** 联系人文案（有疑问找谁） */
+  contact?: string
+  certificate_html: string
+}
+
+/** 签字确认响应：签字后 token 已作废，PDF 内容随响应带回供下载 */
+export interface DepartureCertSignResult {
+  signed_at?: string | null
+  case_status?: OffboardingCaseStatus | null
+  has_pdf: boolean
+  pdf_base64?: string | null
+  pdf_filename?: string | null
+}
+
+// ─── 离职台账增强（筛选 / 勾选导出 / 保存视图 / 导出留痕）───
+
+/** 台账筛选条件：键名与后端一致，保存视图 / 导出留痕里存的就是它 */
+export interface DepartureLedgerFilters {
+  keyword?: string
+  department?: string
+  position?: string
+  offboarding_type?: string
+  offboarding_reason?: string
+  gender?: string
+  education?: string
+  employee_category?: string
+  offboarding_date_from?: string
+  offboarding_date_to?: string
+  /** 办结单状态；'none' = 未发起办理 */
+  approval_status?: string
+  cert_issued?: boolean
+  cert_signed?: boolean
+}
+
+export interface DepartureLedgerSort {
+  sort_by?: 'offboarding_date' | 'name' | 'department'
+  sort_order?: 'asc' | 'desc'
+}
+
+/** 台账行 = 离职台账记录 + 办理流程信息（按工号挂最近一张办结单） */
+export interface DepartureLedgerRow extends DepartureRecord {
+  has_sign_image?: boolean
+  case_id?: string | null
+  case_no?: string | null
+  approval_status?: OffboardingCaseStatus | null
+  approval_status_label?: string
+  cert_issued?: boolean
+  cert_signed?: boolean
+  /** 四部门清退进度与扣补金额（没有办结单时各项为 0） */
+  clearance?: Record<ClearanceCategory, ClearanceSummary>
+}
+
+export interface ClearanceSummary {
+  total: number
+  done: number
+  deduction: number
+  supplement: number
+}
+
+export interface DepartureLedgerFilterOptions {
+  departments?: string[]
+  positions?: string[]
+  offboarding_types?: string[]
+  genders?: string[]
+  educations?: string[]
+  employee_categories?: string[]
+  offboarding_reasons?: string[]
+  approval_statuses?: { value: string; label: string }[]
+}
+
+export interface DepartureExportColumn {
+  key: string
+  label: string
+  group: string
+}
+
+export interface DepartureExportColumnCatalog {
+  columns: DepartureExportColumn[]
+  default_keys: string[]
+}
+
+/** 保存视图（个人维度）：常用筛选条件 + 导出字段一键调用 */
+export interface DepartureSavedView {
+  id: string
+  name: string
+  filters: DepartureLedgerFilters
+  columns: string[]
+  is_default: boolean
+  created_at?: string | null
+}
+
+/** 导出留痕：操作人 / 时间 / 筛选条件 / 字段 / 条数 */
+export interface DepartureExportLog {
+  id: string
+  operator_name: string
+  created_at?: string | null
+  /** 键已还原成中文字段名 */
+  filters: Record<string, unknown>
+  columns: string[]
+  row_count: number
+}
+
+export interface DepartureLedgerQueryParams extends DepartureLedgerFilters, DepartureLedgerSort {
+  page?: number
+  page_size?: number
 }
