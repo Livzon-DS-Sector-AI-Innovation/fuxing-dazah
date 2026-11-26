@@ -1,40 +1,48 @@
 'use client'
 
-import styles from "./lifecycleTable.module.css"
-import { useState, useCallback, useEffect, useRef } from 'react'
+// 离职台账：结果数据（飞书「离职人员管理表」同步 + 平台离职办理办结回写），按工号挂最近一张办结单，
+// 带出办理状态 / 证明开具签收 / 四部门清退结算。
+// 筛选、字段勾选导出、保存视图、导出记录见 ./departure/ 下的四个组件；流程操作在「离职办理」页签的抽屉里。
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  App, Button, Table, Space, Input, Tag, Modal, Form, Select, Tooltip,
-  DatePicker, Popconfirm, Descriptions, Typography,
+  Alert, App as AntdApp, Button, DatePicker, Descriptions, Form, Input, Modal, Popconfirm, Select, Space,
+  Table, Tag, Tooltip, Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import type { Dayjs } from 'dayjs'
 import {
-  SearchOutlined,
-  EyeOutlined,
-  PlusOutlined,
-  DeleteOutlined,
-  SendOutlined,
-  CloudSyncOutlined,
-  ImportOutlined,
+  CloudSyncOutlined, DeleteOutlined, DownloadOutlined, EyeOutlined, HistoryOutlined, ImportOutlined,
+  PlusOutlined, SendOutlined,
 } from '@ant-design/icons'
-import { DepartureRecord, DepartureFilterOptions } from '@/types/hr'
-import { DEPARTURE_TYPE_OPTIONS, DEPARTURE_TYPE_TAG_COLORS } from '@/lib/hr'
+import type { ClearanceCategory, ClearanceSummary, DepartureExportColumnCatalog, DepartureLedgerFilters, DepartureLedgerRow, DepartureLedgerSort, DepartureRecord, DepartureSavedView, Employee } from '@/types/hr'
 import {
-  fetchDepartureRecords,
-  fetchDepartureFilterOptionsAction,
+  createDepartureRecord,
+  deleteDepartureRecordAction,
+  deleteDepartureView,
+  exportDepartureLedger,
+  fetchDepartureExportColumns,
+  fetchDepartureLedgerFilterOptions,
+  fetchDepartureSavedViews,
   fetchDepartmentsAction,
   fetchEmployeesAction,
-  createDepartureRecord,
   previewDepartureCertificate,
+  queryDepartureLedger,
+  saveDepartureView,
   sendDepartureCertificate,
-  deleteDepartureRecordAction,
   triggerEmployeeSync,
-  exportDepartureRecords,
+  updateDepartureView,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
-import { usePermission } from '@/hooks/usePermission'
-import { useDebouncedCallback } from '@/hooks/hr'
-import { LedgerImportModal } from '@/components/hr'
+import { LedgerImportModal, OffboardingCaseDrawer } from '@/components/hr'
+import { useHasPermission } from '@/hooks/hr'
 import PageHeader from './PageHeader'
+import styles from './lifecycleTable.module.css'
+import { DEPARTURE_TYPE_OPTIONS, DEPARTURE_TYPE_TAG_COLORS, OFFBOARDING_STATUS_TAG_COLORS } from '@/lib/hr'
+import DepartureExportLogDrawer from './departure/DepartureExportLogDrawer'
+import DepartureExportModal from './departure/DepartureExportModal'
+import DepartureFilterBar from './departure/DepartureFilterBar'
+import DepartureViewControls from './departure/DepartureViewControls'
 
 const { Text } = Typography
 
@@ -44,145 +52,325 @@ export interface DepartureSyncInfo {
   last_sync_at: string | null
 }
 
-interface DepartureClientProps {
-  initialRecords: DepartureRecord[]
-  initialTotal: number
-  fetchAction?: typeof fetchDepartureRecords
-  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示立即同步入口 */
-  syncInfo?: DepartureSyncInfo
-}
+const SORT: Required<DepartureLedgerSort> = { sort_by: 'offboarding_date', sort_order: 'desc' }
 
 function formatSyncTime(iso: string | null): string {
   return iso ? iso.replace('T', ' ') : '从未同步'
 }
 
+/** 去掉空值：保存视图、留痕、判断「是否改过」都用这个口径 */
+function compact(filters: DepartureLedgerFilters): DepartureLedgerFilters {
+  return Object.fromEntries(
+    Object.entries(filters).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+  )
+}
+
+function fmtTime(value?: string | null): string {
+  return value ? value.slice(0, 16).replace('T', ' ') : '—'
+}
+
+/** 清退结算摘要：金额为 0 的不显示（「扣 0，补 0」是噪音） */
+function clearanceText(bucket: ClearanceSummary): string {
+  const parts = [`已确认 ${bucket.done}/${bucket.total}`]
+  if (bucket.deduction) parts.push(`扣 ${bucket.deduction}`)
+  if (bucket.supplement) parts.push(`补 ${bucket.supplement}`)
+  return parts.join('，')
+}
+
+const CLEARANCE_LABELS: Record<ClearanceCategory, string> = {
+  admin: '行政后勤部', finance: '财务部', hr: '人力资源部', work: '工作部门',
+}
+
+interface CreateFormValues {
+  employee: string
+  offboarding_date?: Dayjs
+  offboarding_type?: string
+  reason?: string
+}
+
+interface DeptEmployeeOption {
+  value: string
+  label: string
+  name: string
+  position?: string
+}
+
 export default function DepartureClient({
   initialRecords,
   initialTotal,
-  fetchAction,
-  syncInfo }: DepartureClientProps) {
-  const { message } = App.useApp()
-  const { hasPermission } = usePermission()
-  const [records, setRecords] = useState<DepartureRecord[]>(initialRecords)
+  syncInfo,
+}: {
+  initialRecords: DepartureRecord[]
+  initialTotal: number
+  /** 绑定飞书离职人员管理表后传入：隐藏本地新建/删除，展示立即同步入口 */
+  syncInfo?: DepartureSyncInfo
+}) {
+  const { message } = AntdApp.useApp()
+  const [rows, setRows] = useState<DepartureLedgerRow[]>(initialRecords)
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
-  const [searchKeyword, setSearchKeyword] = useState('')
-  // 输入框即时回显；防抖 300ms 后才写入 searchKeyword 触发查询（此前每敲一个字发一次请求）
-  const [keywordInput, setKeywordInput] = useState('')
-  const [filterDepartment, setFilterDepartment] = useState('')
-  const [filterOffboardingType, setFilterOffboardingType] = useState('')
-  const [filterOptions, setFilterOptions] = useState<DepartureFilterOptions>({})
-  // 服务端排序：分页在服务端，前端 sorter 只会重排当前页 20 条（此前即如此，升降序结果不对）
-  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend'>('descend')
+  const [loadError, setLoadError] = useState<string | null>(null)
   const loadSeq = useRef(0)
+
+  const [filters, setFilters] = useState<DepartureLedgerFilters>({})
+  const [keywordInput, setKeywordInput] = useState('')
+  // 服务端排序：分页在服务端，前端 sorter 只会重排当前页
+  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend'>('descend')
+  const [filterOptions, setFilterOptions] = useState<Awaited<ReturnType<typeof fetchDepartureLedgerFilterOptions>>>({})
+
+  const [views, setViews] = useState<DepartureSavedView[]>([])
+  const [viewsLoaded, setViewsLoaded] = useState(false)
+  const [activeViewId, setActiveViewId] = useState<string | null>(null)
+  const [catalog, setCatalog] = useState<DepartureExportColumnCatalog | null>(null)
+  const [exportColumns, setExportColumns] = useState<string[]>([])
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
+  const [viewSaving, setViewSaving] = useState(false)
+
   const [createOpen, setCreateOpen] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
-  const [createForm] = Form.useForm()
-  const [departments, setDepartments] = useState<{value:string,label:string}[]>([])
-  const [deptEmployees, setDeptEmployees] = useState<any[]>([])
+  const [createForm] = Form.useForm<CreateFormValues>()
+  const [selectedDept, setSelectedDept] = useState('')
+  const [deptEmployees, setDeptEmployees] = useState<DeptEmployeeOption[]>([])
+  const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [detailOpen, setDetailOpen] = useState(false)
-  const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
-  const [exporting, setExporting] = useState(false)
+  const [detailRow, setDetailRow] = useState<DepartureLedgerRow | null>(null)
   const [importOpen, setImportOpen] = useState(false)
-  const [selectedDept, setSelectedDept] = useState<string>('')
   const [certOpen, setCertOpen] = useState(false)
-  const [certRecord, setCertRecord] = useState<DepartureRecord | null>(null)
+  const [certRow, setCertRow] = useState<DepartureLedgerRow | null>(null)
   const [certEmail, setCertEmail] = useState('')
   const [certSending, setCertSending] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [caseId, setCaseId] = useState<string | null>(null)
+  const [caseDrawerOpen, setCaseDrawerOpen] = useState(false)
 
   // 同步模式：数据源为飞书离职人员管理表，本地新建/删除无意义（下轮同步会覆盖）
   const syncMode = Boolean(syncInfo)
-  const canManage = hasPermission('hr:settings:manage')
-  const canImport = hasPermission('hr:departure:manage')
+  // 水合安全的权限判断：本页在 Suspense 边界内，直接读权限 store 首帧会与 SSR 输出对不上
+  const canManage = useHasPermission('hr:settings:manage')
+  const canImport = useHasPermission('hr:departure:manage')
+
+  const patchFilters = useCallback((patch: Partial<DepartureLedgerFilters>) => {
+    setFilters((prev) => {
+      const next = { ...prev }
+      for (const [key, value] of Object.entries(patch) as [keyof DepartureLedgerFilters, unknown][]) {
+        if (value === undefined || value === null || value === '') delete next[key]
+        else Object.assign(next, { [key]: value })
+      }
+      return next
+    })
+    setPage(1)
+  }, [])
+
+  // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果
+  const load = useCallback(async () => {
+    const seq = ++loadSeq.current
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const res = await queryDepartureLedger({
+        ...filters,
+        sort_by: SORT.sort_by,
+        sort_order: sortOrder === 'ascend' ? 'asc' : 'desc',
+        page,
+        page_size: pageSize,
+      })
+      if (seq !== loadSeq.current) return
+      setRows(res.data)
+      setTotal(res.meta?.total || 0)
+    } catch (err) {
+      if (seq === loadSeq.current) setLoadError(err instanceof Error ? err.message : '加载数据失败')
+    } finally {
+      if (seq === loadSeq.current) setLoading(false)
+    }
+  }, [filters, sortOrder, page, pageSize])
 
   useEffect(() => {
-    fetchDepartmentsAction({ page_size: 200 }).then(r => {
-      setDepartments((r.data||[]).map((d:any) => ({ value: d.name, label: d.name })))
-    })
-    // 筛选下拉选项：从台账现有数据聚合（跟随飞书源表，部门与 org 部门表可能不一致）
-    fetchDepartureFilterOptionsAction().then(setFilterOptions).catch(() => {})
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 加载函数首行同步置 loading 是刻意的即时反馈
+    void load()
+  }, [load])
+
+  const refreshViews = useCallback(async () => {
+    const list = await fetchDepartureSavedViews()
+    setViews(list)
+    return list
   }, [])
+
+  /** 进页面：拉筛选项、导出字段、我的视图；有默认视图就套用 */
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      // 逐个兜底：任何一项失败都不影响其余（视图拉不到只是没有「我的视图」，不该挡住台账）
+      const [optionList, catalogRes, deptRes, viewList] = await Promise.all([
+        fetchDepartureLedgerFilterOptions().catch(() => null),
+        fetchDepartureExportColumns().catch(() => null),
+        fetchDepartmentsAction({ page_size: 200 }).catch(() => null),
+        fetchDepartureSavedViews().catch(() => null),
+      ])
+      if (cancelled) return
+      if (optionList) setFilterOptions(optionList)
+      if (catalogRes) {
+        setCatalog(catalogRes)
+        setExportColumns(catalogRes.default_keys)
+      }
+      if (deptRes) {
+        setDepartments((deptRes.data || []).map((d: { name: string }) => ({ value: d.name, label: d.name })))
+      }
+      if (viewList) {
+        setViews(viewList)
+        const defaultView = viewList.find((view) => view.is_default)
+        if (defaultView) {
+          setFilters(defaultView.filters || {})
+          setKeywordInput(defaultView.filters?.keyword ?? '')
+          if (defaultView.columns?.length) setExportColumns(defaultView.columns)
+          setActiveViewId(defaultView.id)
+        }
+      }
+      setViewsLoaded(true)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const activeView = views.find((view) => view.id === activeViewId) ?? null
+  const dirty = activeView !== null && JSON.stringify(compact(filters)) !== JSON.stringify(compact(activeView.filters || {}))
+  const filterCount = useMemo(() => Object.keys(compact(filters)).length, [filters])
+
+  const applyView = (view: DepartureSavedView | null) => {
+    setActiveViewId(view?.id ?? null)
+    if (!view) return
+    setFilters(view.filters || {})
+    setKeywordInput(view.filters?.keyword ?? '')
+    if (view.columns?.length) setExportColumns(view.columns)
+    setPage(1)
+  }
+
+  const clearFilters = () => {
+    patchFilters({
+      keyword: undefined, department: undefined, position: undefined, offboarding_type: undefined,
+      offboarding_reason: undefined, gender: undefined, education: undefined, employee_category: undefined,
+      offboarding_date_from: undefined, offboarding_date_to: undefined, approval_status: undefined,
+      cert_issued: undefined, cert_signed: undefined,
+    })
+    setKeywordInput('')
+  }
+
+  const saveView = async (input: { name: string; isDefault: boolean; overwrite: boolean }) => {
+    const payload = { name: input.name, filters: compact(filters), columns: exportColumns, is_default: input.isDefault }
+    setViewSaving(true)
+    try {
+      const res = input.overwrite && activeView
+        ? await updateDepartureView(activeView.id, payload)
+        : await saveDepartureView(payload)
+      setActiveViewId(res.data.id)
+      await refreshViews()
+      message.success('视图已保存')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '保存视图失败')
+      throw err
+    } finally {
+      setViewSaving(false)
+    }
+  }
+
+  const renameView = async (view: DepartureSavedView, name: string) => {
+    try {
+      await updateDepartureView(view.id, { name, filters: view.filters, columns: view.columns, is_default: view.is_default })
+      await refreshViews()
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '重命名失败')
+      throw err
+    }
+  }
+
+  const deleteView = async (view: DepartureSavedView) => {
+    try {
+      await deleteDepartureView(view.id)
+      if (activeViewId === view.id) setActiveViewId(null)
+      await refreshViews()
+      message.success('视图已删除')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '删除视图失败')
+    }
+  }
+
+  const setDefaultView = async (view: DepartureSavedView) => {
+    try {
+      await updateDepartureView(view.id, { name: view.name, filters: view.filters, columns: view.columns, is_default: true })
+      await refreshViews()
+      message.success(`已将「${view.name}」设为默认视图`)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '设置失败')
+    }
+  }
+
+  const doExport = async () => {
+    setExporting(true)
+    try {
+      const file = await exportDepartureLedger(compact(filters), exportColumns, {
+        sort_order: sortOrder === 'ascend' ? 'asc' : 'desc',
+      })
+      downloadBase64File(file.base64, file.filename)
+      message.success(`已导出 ${exportColumns.length} 个字段`)
+      setExportOpen(false)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // ─── 以下为原有的新建 / 同步 / 发证明 / 详情 ───
 
   const handleDeptChange = async (dept: string) => {
     setSelectedDept(dept)
     createForm.setFieldValue('employee', undefined)
-    if (!dept) { setDeptEmployees([]); return }
+    if (!dept) {
+      setDeptEmployees([])
+      return
+    }
     try {
-      const d = await fetchEmployeesAction({ department: dept, page: 1, page_size: 200 })
-      const list = (d.data||[]).map((e:any) => ({
-        value: e.id, label: `${e.employee_number} ${e.name} (${e.position||''})`,
-        name: e.name, department: e.department, position: e.position
-      }))
-      setDeptEmployees(list)
-      if (list.length === 0) message.warning(`${dept} 下暂无在职员工`)
-    } catch (err: any) { message.error('加载失败: ' + (err.message||'')) }
+      const res = await fetchEmployeesAction({ department: dept, page: 1, page_size: 200 })
+      setDeptEmployees((res.data || []).map((e: Employee) => ({
+        value: e.id, label: `${e.employee_number} ${e.name} (${e.position || ''})`,
+        name: e.name, position: e.position,
+      })))
+      if (!res.data?.length) message.warning(`${dept} 下暂无员工`)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '加载员工失败')
+    }
   }
 
   const handleCreate = async () => {
+    let values: CreateFormValues
     try {
-      const vals = await createForm.validateFields()
-      setCreateLoading(true)
-      const emp = deptEmployees.find((e:any) => e.value === vals.employee)
+      values = await createForm.validateFields()
+    } catch {
+      return
+    }
+    const employee = deptEmployees.find((e) => e.value === values.employee)
+    setCreateLoading(true)
+    try {
       await createDepartureRecord({
-        name: emp?.name || '', department: selectedDept,
-        position: emp?.position || '',
-        offboarding_date: vals.offboarding_date?.format('YYYY-MM-DD'),
-        offboarding_type: vals.offboarding_type || '辞职',
-        reason: vals.reason || '',
+        name: employee?.name || '',
+        department: selectedDept,
+        position: employee?.position || '',
+        offboarding_date: values.offboarding_date?.format('YYYY-MM-DD'),
+        offboarding_type: values.offboarding_type || '辞职',
+        reason: values.reason || '',
       })
       message.success('离职记录创建成功')
-      setCreateOpen(false); createForm.resetFields(); loadData()
-    } catch (err: any) { message.error(err.message || '创建失败') }
-    finally { setCreateLoading(false) }
-  }
-
-  const doFetch = fetchAction || fetchDepartureRecords
-
-  const { run: debouncedSetKeyword, cancel: cancelKeywordDebounce } = useDebouncedCallback((val: string) => {
-    setPage(1)
-    setSearchKeyword(val)
-  }, 300)
-
-  const commitKeyword = (val: string) => {
-    cancelKeywordDebounce()
-    setPage(1)
-    setSearchKeyword(val.trim())
-  }
-
-  const loadData = useCallback(async () => {
-    // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果
-    const seq = ++loadSeq.current
-    setLoading(true)
-    try {
-      const res = await doFetch({
-        department: filterDepartment || undefined,
-        offboarding_type: filterOffboardingType || undefined,
-        keyword: searchKeyword || undefined,
-        sort_by: 'offboarding_date',
-        sort_order: sortOrder === 'ascend' ? 'asc' : 'desc',
-        page,
-        page_size: pageSize })
-      if (seq !== loadSeq.current) return
-      setRecords(res.data)
-      setTotal(res.meta?.total || 0)
-    } catch (err: any) {
-      if (seq === loadSeq.current) message.error(err.message || '加载数据失败')
+      setCreateOpen(false)
+      createForm.resetFields()
+      void load()
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '创建失败')
     } finally {
-      if (seq === loadSeq.current) setLoading(false)
+      setCreateLoading(false)
     }
-  }, [filterDepartment, filterOffboardingType, searchKeyword, sortOrder, page, pageSize, doFetch, message])
-
-  const handlePageChange = (newPage: number, newPageSize: number) => {
-    setPage(newPage)
-    setPageSize(newPageSize)
   }
-
-  useEffect(() => {
-    loadData()
-  }, [filterDepartment, filterOffboardingType, searchKeyword, sortOrder, page, pageSize])
 
   const handleSync = async () => {
     setSyncing(true)
@@ -196,32 +384,35 @@ export default function DepartureClient({
       } else {
         message.success('同步完成')
       }
-      loadData()
-      // 同步可能带来新的部门/离职类型取值，下拉选项一并刷新
-      fetchDepartureFilterOptionsAction().then(setFilterOptions).catch(() => {})
-    } catch (err: any) {
-      message.error(err.message || '同步失败')
+      void load()
+      // 同步可能带来新的部门 / 离职类型取值，下拉选项一并刷新
+      fetchDepartureLedgerFilterOptions().then(setFilterOptions).catch(() => {})
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '同步失败')
     } finally {
       setSyncing(false)
     }
   }
 
   const handlePreviewCert = async () => {
-    if (!certRecord) return
-    // 先同步开窗再取数：await 之后再 window.open 会被浏览器当作非用户手势触发而拦截
-    const w = window.open('', '_blank')
-    if (!w) { message.warning('浏览器拦截了预览窗口，请允许本站弹出窗口后重试'); return }
+    if (!certRow) return
+    // 先同步开窗再取数：await 之后的 window.open 不算用户手势，会被浏览器拦截
+    const win = window.open('', '_blank')
+    if (!win) {
+      message.warning('浏览器拦截了预览窗口，请允许本站弹出窗口后重试')
+      return
+    }
     try {
-      const html = await previewDepartureCertificate(certRecord.id)
-      w.document.write(html); w.document.close()
-    } catch (err: any) {
-      w.close()
-      message.error(err.message || '预览失败')
+      win.document.write(await previewDepartureCertificate(certRow.id))
+      win.document.close()
+    } catch (err) {
+      win.close()
+      message.error(err instanceof Error ? err.message : '预览失败')
     }
   }
 
   const handleSendCert = async () => {
-    if (!certRecord || !certEmail) return
+    if (!certRow || !certEmail.trim()) return
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(certEmail.trim())) {
       message.warning('请输入正确的收件邮箱地址')
       return
@@ -230,127 +421,120 @@ export default function DepartureClient({
     try {
       const fd = new FormData()
       fd.append('employee_email', certEmail.trim())
-      await sendDepartureCertificate(certRecord.id, fd)
+      await sendDepartureCertificate(certRow.id, fd)
       message.success('离职证明已发送')
       setCertOpen(false)
-    } catch (err: any) { message.error(err.message || '发送失败') }
-    finally { setCertSending(false) }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '发送失败')
+    } finally {
+      setCertSending(false)
+    }
   }
 
-  // 离职类型色：统一口径（此前表单 4 项/颜色 7 项两套，选「自离」曾落到无色 Tag）
-  const offboardingTypeColorMap = DEPARTURE_TYPE_TAG_COLORS
-
-  // 导出与列表筛选同口径（部门/离职类型/关键词）
-  const handleExport = async () => {
-    setExporting(true)
-    try {
-      const r = await exportDepartureRecords({
-        department: filterDepartment || undefined,
-        offboarding_type: filterOffboardingType || undefined,
-        keyword: searchKeyword || undefined,
-      })
-      downloadBase64File(r.base64, r.filename)
-    } catch (err: any) { message.error(err.message || '导出失败') }
-    finally { setExporting(false) }
+  const openCase = (row: DepartureLedgerRow) => {
+    if (!row.case_id) return
+    setCaseId(row.case_id)
+    setCaseDrawerOpen(true)
   }
 
-  // 部门/离职类型筛选已上移到顶部下拉（服务端全量过滤，选项来自 filter-options），
-  // 不再用列头筛选（仅过滤当前页，与全量口径冲突）
+  const statusTag = (row: DepartureLedgerRow) => (
+    <Tag color={OFFBOARDING_STATUS_TAG_COLORS[row.approval_status || ''] || 'default'}>
+      {row.approval_status_label || '未发起'}
+    </Tag>
+  )
 
-  const columns: ColumnsType<DepartureRecord> = [
-    {
-      title: '姓名',
-      dataIndex: 'name',
-      key: 'name',
-      width: 90,
-      fixed: 'left' },
+  const columns: ColumnsType<DepartureLedgerRow> = [
+    { title: '姓名', dataIndex: 'name', key: 'name', width: 90, fixed: 'left' },
     {
       title: '工号',
       dataIndex: 'employee_number',
       key: 'employee_number',
-      // 9 位工号 + 复制图标需要 130px，此前 100px 会让图标折到第二行、行高参差
+      // 9 位工号 + 复制图标需要 130px
       width: 130,
-      render: (v: string) => v ? <Text copyable={Boolean(v)} className="text-xs">{v}</Text> : '-' },
-    {
-      title: '部门',
-      dataIndex: 'department',
-      key: 'department',
-      // 150px 容纳「质量控制部（QA部）」这类长部门名，避免折行导致行高参差
-      width: 150 },
-    {
-      title: '职位',
-      dataIndex: 'position',
-      key: 'position',
-      width: 120 },
-    {
-      title: '职务',
-      dataIndex: 'duty',
-      key: 'duty',
-      width: 100,
-      render: (v: string) => v || '-' },
+      render: (value: string | undefined) =>
+        value ? <Text copyable className="text-xs">{value}</Text> : '-',
+    },
+    { title: '部门', dataIndex: 'department', key: 'department', width: 150 },
+    { title: '职位', dataIndex: 'position', key: 'position', width: 120 },
+    { title: '职务', dataIndex: 'duty', key: 'duty', width: 100, render: (v: string | undefined) => v || '-' },
     {
       title: '离职日期',
       dataIndex: 'offboarding_date',
       key: 'offboarding_date',
       width: 110,
       sortOrder,
-      sorter: true },
+      sorter: true,
+    },
     {
       title: '离职类型',
       dataIndex: 'offboarding_type',
       key: 'offboarding_type',
       width: 110,
-      render: (val: string) => (
-        <Tag color={offboardingTypeColorMap[val] || 'default'}>{val || '-'}</Tag>
-      ) },
+      render: (value: string | undefined) => (
+        <Tag color={DEPARTURE_TYPE_TAG_COLORS[value || ''] || 'default'}>{value || '-'}</Tag>
+      ),
+    },
     {
-      title: '离职时司龄',
-      dataIndex: 'company_tenure_at_leave',
-      key: 'company_tenure_at_leave',
-      width: 100 },
+      title: '办理状态',
+      key: 'approval_status',
+      width: 120,
+      render: (_v: unknown, row) => (
+        row.case_id ? (
+          <Button type="link" size="small" className="!px-0" onClick={(e) => { e.stopPropagation(); openCase(row) }}>
+            {statusTag(row)}
+          </Button>
+        ) : (
+          <Tooltip title="没有离职办理单（线下办理 / 飞书表同步的存量记录）">{statusTag(row)}</Tooltip>
+        )
+      ),
+    },
     {
-      title: '入丽珠时间',
-      dataIndex: 'livo_entry_date',
-      key: 'livo_entry_date',
-      width: 110 },
-    {
-      title: '学历',
-      dataIndex: 'education',
-      key: 'education',
-      width: 80 },
-    {
-      title: '统计类别',
-      dataIndex: 'status_category',
-      key: 'status_category',
-      width: 100,
-      render: (v: string) => v || '-' },
+      title: '证明',
+      key: 'cert',
+      width: 170,
+      render: (_v: unknown, row) => (
+        <Space size={4}>
+          {row.cert_issued ? <Tag color="success">已开具</Tag> : <Tag>未开具</Tag>}
+          {row.cert_signed ? <Tag color="success">已签收</Tag> : <Tag>未签收</Tag>}
+        </Space>
+      ),
+    },
+    { title: '离职时司龄', dataIndex: 'company_tenure_at_leave', key: 'company_tenure_at_leave', width: 100 },
+    { title: '入丽珠时间', dataIndex: 'livo_entry_date', key: 'livo_entry_date', width: 110 },
+    { title: '学历', dataIndex: 'education', key: 'education', width: 80 },
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 200,
       fixed: 'right',
-      render: (_: any, record: DepartureRecord) => (
+      render: (_v: unknown, row) => (
         <Space size="small">
+          <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => { setDetailRow(row); setDetailOpen(true) }}>
+            详情
+          </Button>
+          {row.case_id && (
+            <Button type="text" size="small" icon={<HistoryOutlined />} onClick={() => openCase(row)}>
+              办理
+            </Button>
+          )}
           <Button
             type="text"
             size="small"
-            icon={<EyeOutlined />}
-            onClick={() => { setDetailRecord(record); setDetailOpen(true) }}
+            icon={<SendOutlined />}
+            onClick={() => { setCertRow(row); setCertEmail(''); setCertOpen(true) }}
           >
-            详情
+            证明
           </Button>
-          <Button type="text" size="small" icon={<SendOutlined />}
-            onClick={() => { setCertRecord(record); setCertEmail(''); setCertOpen(true) }}>证明</Button>
           {!syncMode && (
             <Popconfirm
               title="确认删除？"
               onConfirm={async () => {
                 try {
-                  await deleteDepartureRecordAction(record.id)
+                  await deleteDepartureRecordAction(row.id)
                   message.success('已删除')
-                  loadData()
-                } catch (err: any) {
-                  message.error(err.message || '删除失败')
+                  void load()
+                } catch (err) {
+                  message.error(err instanceof Error ? err.message : '删除失败')
                 }
               }}
             >
@@ -360,16 +544,16 @@ export default function DepartureClient({
             </Popconfirm>
           )}
         </Space>
-      ) },
+      ),
+    },
   ]
 
-  const detailItem = (label: string, value: unknown) => (
-    { key: label, label, children: (value === null || value === undefined || value === '') ? '-' : String(value) }
-  )
+  const detailItem = (label: string, value: unknown) => ({
+    key: label, label, children: (value === null || value === undefined || value === '') ? '-' : String(value),
+  })
 
   return (
     <div className="space-y-4">
-      {/* 绑定飞书离职表后把数据来源写进页头描述（与员工档案页同款），不必再把长说明塞在同步按钮的提示里 */}
       <PageHeader
         title="离职台账"
         description={syncMode
@@ -377,62 +561,69 @@ export default function DepartureClient({
           : undefined}
       />
 
-      <div className="flex flex-wrap gap-3 items-center">
+      <div className="flex flex-wrap items-center gap-3">
         {!syncMode && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>
+            新建离职
+          </Button>
         )}
-        {/* 导入是写操作，按离职台账写权限显隐（只读用户点了只会得到 403） */}
         {!syncMode && canImport && (
           <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入</Button>
         )}
-        <Input
-          placeholder="搜索姓名/部门/职位"
-          value={keywordInput}
-          onChange={(e) => { setKeywordInput(e.target.value); debouncedSetKeyword(e.target.value.trim()) }}
-          onPressEnter={(e) => commitKeyword((e.target as HTMLInputElement).value)}
-          prefix={<SearchOutlined />}
-          // antd 输入框自带 width:100%，Tailwind 的 w-64 会被覆盖成整行宽，宽度须走 style
-          style={{ width: 240 }}
-          allowClear
-        />
-        <Select
-          placeholder="部门筛选"
-          value={filterDepartment || undefined}
-          onChange={(v) => { setFilterDepartment(v || ''); setPage(1) }}
-          showSearch
-          allowClear
-          optionFilterProp="label"
-          className="w-44"
-          options={filterOptions.departments?.map((d) => ({ value: d, label: d }))}
-        />
-        <Select
-          placeholder="离职类型筛选"
-          value={filterOffboardingType || undefined}
-          onChange={(v) => { setFilterOffboardingType(v || ''); setPage(1) }}
-          allowClear
-          className="w-36"
-          options={filterOptions.offboarding_types?.map((t) => ({ value: t, label: t }))}
-        />
-        <Tooltip title="按当前筛选（部门/离职类型/关键词）导出全部匹配记录">
-          <Button loading={exporting} onClick={handleExport} className="ml-auto">导出Excel</Button>
-        </Tooltip>
         {syncMode && canManage && (
-            <Tooltip title="数据来自飞书表的单向同步：增删改请在飞书表中操作，这里只读">
-              <Button icon={<CloudSyncOutlined />} loading={syncing} onClick={handleSync}>立即同步</Button>
-            </Tooltip>
+          <Tooltip title="数据来自飞书表的单向同步：增删改请在飞书表中操作，这里只读">
+            <Button icon={<CloudSyncOutlined />} loading={syncing} onClick={() => void handleSync()}>
+              立即同步
+            </Button>
+          </Tooltip>
         )}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {viewsLoaded && (
+            <DepartureViewControls
+              views={views}
+              activeViewId={activeViewId}
+              dirty={dirty}
+              filterCount={filterCount}
+              columnCount={exportColumns.length}
+              saving={viewSaving}
+              onApply={applyView}
+              onSave={saveView}
+              onRename={renameView}
+              onDelete={deleteView}
+              onSetDefault={setDefaultView}
+            />
+          )}
+          <Button icon={<DownloadOutlined />} onClick={() => setExportOpen(true)}>
+            导出Excel
+          </Button>
+          {canImport && (
+            <Tooltip title="每次导出的操作人、时间、筛选条件与条数">
+              <Button onClick={() => setLogsOpen(true)}>导出记录</Button>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
-      <Table className={styles.tableLg}
+      <DepartureFilterBar
+        filters={filters}
+        keywordInput={keywordInput}
+        onKeywordInput={setKeywordInput}
+        options={filterOptions}
+        onChange={patchFilters}
+        onClear={clearFilters}
+      />
+
+      {loadError && <Alert type="error" showIcon title={loadError} />}
+
+      <Table<DepartureLedgerRow>
+        className={styles.tableLg}
         columns={columns}
-        dataSource={records}
+        dataSource={rows}
         rowKey="id"
         loading={loading}
-        // 排序循环须为「降序→升序→取消」：antd 默认是升→降→取消，从默认的降序点一下会落到「取消」，
-        // 被下面的兜底映射回降序后状态就永远推进不到升序
+        // 排序循环须为「降序→升序→取消」：antd 默认是升→降→取消，从默认的降序点一下会落到「取消」
         sortDirections={['descend', 'ascend']}
         onChange={(_pagination, _filters, sorter) => {
-          // 离职日期列排序：交给服务端（取消排序时回到默认的倒序）
           const order = (Array.isArray(sorter) ? sorter[0] : sorter)?.order
           setSortOrder(order === 'ascend' ? 'ascend' : 'descend')
           setPage(1)
@@ -443,21 +634,21 @@ export default function DepartureClient({
           total,
           showSizeChanger: true,
           showTotal: (t) => `共 ${t} 条`,
-          onChange: handlePageChange }}
-        scroll={{ x: 1400 }}
+          onChange: (p, ps) => { setPage(p); setPageSize(ps) },
+        }}
+        scroll={{ x: 1650 }}
       />
 
-
-      <Modal title="新建离职记录" open={createOpen} onOk={handleCreate} onCancel={() => setCreateOpen(false)}
+      <Modal title="新建离职记录" open={createOpen} onOk={() => void handleCreate()} onCancel={() => setCreateOpen(false)}
         confirmLoading={createLoading} destroyOnHidden width={500}>
         <Form form={createForm} layout="vertical">
           <Form.Item label="选择部门" required>
             <Select placeholder="先选部门" options={departments} value={selectedDept || undefined}
-              onChange={(v) => handleDeptChange(v)} allowClear />
+              onChange={(v) => void handleDeptChange(v)} allowClear />
           </Form.Item>
           <Form.Item name="employee" label="选择员工" rules={[{ required: true, message: '请选择员工' }]}>
-            <Select placeholder="选完部门后选员工" options={deptEmployees} disabled={!selectedDept}
-              showSearch filterOption={(input, option) => (option?.label||'').toLowerCase().includes(input.toLowerCase())} />
+            <Select placeholder="选完部门再选员工" options={deptEmployees} disabled={!selectedDept}
+              showSearch optionFilterProp="label" />
           </Form.Item>
           <Form.Item name="offboarding_date" label="离职日期" rules={[{ required: true }]}>
             <DatePicker className="w-full" />
@@ -471,78 +662,96 @@ export default function DepartureClient({
         </Form>
       </Modal>
 
-
       <Modal title="发送离职证明" open={certOpen} onCancel={() => setCertOpen(false)}
         footer={[
-          <Button key="preview" onClick={handlePreviewCert}>预览</Button>,
-          <Button key="send" type="primary" loading={certSending} onClick={handleSendCert}>发送</Button>,
-        ]}
-      >
+          <Button key="preview" onClick={() => void handlePreviewCert()}>预览</Button>,
+          <Button key="send" type="primary" loading={certSending} onClick={() => void handleSendCert()}>发送</Button>,
+        ]}>
         <div className="space-y-3 py-2">
-          <div>收件人：<b>{certRecord?.name}</b>（{certRecord?.department} / {certRecord?.position}）</div>
-          <Input placeholder="请输入收件邮箱" value={certEmail}
-            onChange={e => setCertEmail(e.target.value)} type="email" />
+          <div>收件人：<b>{certRow?.name}</b>（{certRow?.department} / {certRow?.position}）</div>
+          {certRow?.case_id && (
+            <div className="text-[12px] text-[var(--color-slate)]">
+              该员工有离职办理单：建议在「办理」里开具并送达，证明会随签署链接一起送达。
+            </div>
+          )}
+          <Input placeholder="请输入收件邮箱" value={certEmail} onChange={(e) => setCertEmail(e.target.value)} type="email" />
         </div>
       </Modal>
 
-      <Modal title={`离职详情${detailRecord?.name ? ` — ${detailRecord.name}` : ''}`}
-        open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={720}>
-        {detailRecord && (
+      <Modal title={`离职详情${detailRow?.name ? ` — ${detailRow.name}` : ''}`}
+        open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={760}>
+        {detailRow && (
           <div className="space-y-4">
             <Descriptions title="基本信息" size="small" bordered column={2}
               items={[
-                detailItem('工号', detailRecord.employee_number),
-                detailItem('姓名', detailRecord.name),
-                detailItem('部门', detailRecord.department),
-                detailItem('岗位', detailRecord.position),
-                detailItem('职务', detailRecord.duty),
-                detailItem('职级', [detailRecord.rank, detailRecord.rank_category].filter(Boolean).join(' / ')),
-                detailItem('性别', detailRecord.gender),
-                detailItem('员工性质', detailRecord.employee_category),
-                detailItem('统计类别', detailRecord.status_category),
+                detailItem('工号', detailRow.employee_number),
+                detailItem('姓名', detailRow.name),
+                detailItem('部门', detailRow.department),
+                detailItem('岗位', detailRow.position),
+                detailItem('职务', detailRow.duty),
+                detailItem('职级', [detailRow.rank, detailRow.rank_category].filter(Boolean).join(' / ')),
+                detailItem('性别', detailRow.gender),
+                detailItem('员工性质', detailRow.employee_category),
+                detailItem('统计类别', detailRow.status_category),
               ]} />
             <Descriptions title="日期与司龄" size="small" bordered column={2}
               items={[
-                detailItem('入职日期', detailRecord.livo_entry_date),
-                detailItem('离职日期', detailRecord.offboarding_date),
-                detailItem('参加工作时间', detailRecord.work_start_date),
-                detailItem('离职时司龄', detailRecord.company_tenure_at_leave),
-                detailItem('合同期限', detailRecord.contract_type),
-                detailItem('合同起止', [
-                  detailRecord.contract_start_date, detailRecord.contract_end_date,
-                ].filter(Boolean).join(' ~ ')),
+                detailItem('入职日期', detailRow.livo_entry_date),
+                detailItem('离职日期', detailRow.offboarding_date),
+                detailItem('参加工作时间', detailRow.work_start_date),
+                detailItem('离职时司龄', detailRow.company_tenure_at_leave),
+                detailItem('合同期限', detailRow.contract_type),
+                detailItem('合同起止', [detailRow.contract_start_date, detailRow.contract_end_date].filter(Boolean).join(' ~ ')),
               ]} />
             <Descriptions title="离职信息" size="small" bordered column={2}
               items={[
-                detailItem('离职类型', detailRecord.offboarding_type),
-                detailItem('离职原因', Array.isArray(detailRecord.offboarding_reason) ? detailRecord.offboarding_reason.join('、') : detailRecord.offboarding_reason),
-                detailItem('任命与岗位调动', detailRecord.transfer_history),
-                detailItem('证书', detailRecord.certificates),
+                detailItem('离职类型', detailRow.offboarding_type),
+                detailItem('离职原因', Array.isArray(detailRow.offboarding_reason) ? detailRow.offboarding_reason.join('、') : detailRow.offboarding_reason),
+                detailItem('任命与岗位调动', detailRow.transfer_history),
+                detailItem('证书', detailRow.certificates),
+              ]} />
+            <Descriptions title="办理流程" size="small" bordered column={2}
+              items={[
+                detailItem('申请编号', detailRow.case_no),
+                { key: 'status', label: '办理状态', children: statusTag(detailRow) },
+                detailItem('证明开具时间', fmtTime(detailRow.cert_issued_at)),
+                detailItem('签收时间', fmtTime(detailRow.cert_signed_at)),
+                detailItem('签收人', detailRow.cert_sign_name),
+                detailItem('签收方式', detailRow.cert_signed
+                  ? (detailRow.has_sign_image ? '线上手写签名' : '纸质当面签收')
+                  : '未签收'),
+                ...(['admin', 'finance', 'hr', 'work'] as ClearanceCategory[]).map((category) => {
+                  const bucket = detailRow.clearance?.[category]
+                  return detailItem(
+                    `${CLEARANCE_LABELS[category]}清退`,
+                    bucket && bucket.total ? clearanceText(bucket) : '无清退明细',
+                  )
+                }),
               ]} />
             <Descriptions title="学历" size="small" bordered column={2}
               items={[
-                detailItem('学历', detailRecord.education),
-                detailItem('学位类型', detailRecord.degree_type),
-                detailItem('毕业院校', detailRecord.school),
-                detailItem('专业', detailRecord.major),
-                detailItem('全日制', detailRecord.classification),
+                detailItem('学历', detailRow.education),
+                detailItem('学位类型', detailRow.degree_type),
+                detailItem('毕业院校', detailRow.school),
+                detailItem('专业', detailRow.major),
+                detailItem('全日制', detailRow.classification),
               ]} />
             <Descriptions title="个人与联系（敏感字段按权限脱敏）" size="small" bordered column={2}
               items={[
-                detailItem('身份证号', detailRecord.id_card),
-                detailItem('身份证有效期', detailRecord.id_card_expiry),
-                detailItem('籍贯', detailRecord.native_place),
-                detailItem('民族', detailRecord.ethnicity),
-                detailItem('户口类型', detailRecord.household_type),
-                detailItem('婚姻状况', detailRecord.marital_status),
-                detailItem('政治面貌', detailRecord.political_status),
-                detailItem('居住地址', detailRecord.residence_address),
-                detailItem('联系电话', detailRecord.phone),
-                detailItem('银行卡号', detailRecord.bank_account),
+                detailItem('身份证号', detailRow.id_card),
+                detailItem('身份证有效期', detailRow.id_card_expiry),
+                detailItem('籍贯', detailRow.native_place),
+                detailItem('民族', detailRow.ethnicity),
+                detailItem('户口类型', detailRow.household_type),
+                detailItem('婚姻状况', detailRow.marital_status),
+                detailItem('政治面貌', detailRow.political_status),
+                detailItem('居住地址', detailRow.residence_address),
+                detailItem('联系电话', detailRow.phone),
+                detailItem('银行卡号', detailRow.bank_account),
                 detailItem('紧急联系人', [
-                  detailRecord.emergency_contact_name,
-                  detailRecord.emergency_contact_relation,
-                  detailRecord.emergency_contact_phone,
+                  detailRow.emergency_contact_name,
+                  detailRow.emergency_contact_relation,
+                  detailRow.emergency_contact_phone,
                 ].filter(Boolean).join(' / ')),
               ]} />
           </div>
@@ -554,9 +763,28 @@ export default function DepartureClient({
         ledger="departure"
         label="离职台账"
         onClose={() => setImportOpen(false)}
-        onSuccess={loadData}
+        onSuccess={() => void load()}
       />
 
+      {catalog && (
+        <DepartureExportModal
+          open={exportOpen}
+          columns={catalog.columns}
+          defaultKeys={catalog.default_keys}
+          selected={exportColumns}
+          onChange={setExportColumns}
+          loading={exporting}
+          onClose={() => setExportOpen(false)}
+          onExport={() => void doExport()}
+        />
+      )}
+      <DepartureExportLogDrawer open={logsOpen} onClose={() => setLogsOpen(false)} />
+      <OffboardingCaseDrawer
+        open={caseDrawerOpen}
+        caseId={caseId}
+        onClose={() => setCaseDrawerOpen(false)}
+        onChanged={() => void load()}
+      />
     </div>
   )
 }
