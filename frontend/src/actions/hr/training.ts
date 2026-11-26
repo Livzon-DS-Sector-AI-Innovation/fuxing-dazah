@@ -583,7 +583,7 @@ export async function batchTransferSopEntries(ids: string[]): Promise<{ code: nu
   return res
 }
 
-/** 多条SOP生成一套培训材料（zip：每部门一份通知+签到表） */
+/** 多条SOP生成一套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含）） */
 export async function generateSopTrainingMaterials(ids: string[]): Promise<{ base64: string; filename: string }> {
   const { base64, filename } = await fetchHrDownload('/hr/sop-training-entries/batch-materials', {
     method: 'POST',
@@ -799,7 +799,7 @@ export async function removeClassificationMembers(id: string, employee_numbers: 
 }
 
 
-/** 统筹总表一键生成全套培训材料（通知+签到表+试卷+登记表 zip） */
+/** 统筹总表一键生成全套培训材料（zip：通知+签到表+评估表，考核记录按考核方式——问答→问答实操记录表 / 笔试→试卷（题库有题才含）） */
 export async function downloadSopMasterMaterials(recordId: string): Promise<{ base64: string; filename: string | null }> {
   const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, { method: 'POST' })
   return { base64, filename: filename || 'SOP全套培训材料.zip' }
@@ -821,6 +821,22 @@ export async function inspectTrainingExportTemplate(formData: FormData): Promise
     method: 'POST',
     body: formData,
     errorMessage: '识别占位符失败',
+  })
+}
+
+/** 上传向导：按标签对照自动生成缺失的 {占位符}（返回改好的文件，未入库） */
+export async function autofillTrainingExportTemplate(key: string, formData: FormData): Promise<{
+  code: number; message: string; data: {
+    file_base64: string | null
+    placements: { marker: string; where: string }[]
+    missing: string[]
+    message?: string
+  }
+}> {
+  return fetchHrApi(`/hr/training-export-templates/autofill`, {
+    method: 'POST',
+    body: formData,
+    errorMessage: '自动生成占位符失败',
   })
 }
 

@@ -5,9 +5,10 @@
 // 目标导出即映射：每个导出固定一个模板槽位，上传即成为该导出的当前模板。
 
 import { useMemo, useState } from 'react'
-import { Alert, App, Form, Input, Modal, Select, Spin, Tag, Upload } from 'antd'
-import { InboxOutlined } from '@ant-design/icons'
+import { Alert, App, Button, Form, Input, Modal, Select, Spin, Tag, Upload } from 'antd'
+import { InboxOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import {
+  autofillTrainingExportTemplate,
   inspectTrainingExportTemplate,
   uploadTrainingExportTemplate,
 } from '@/actions/hr/training'
@@ -33,12 +34,15 @@ export default function TrainingTemplateUploadModal({ open, templates, onClose, 
   const [targetKey, setTargetKey] = useState<string | null>(null)
   const [remark, setRemark] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [autofilling, setAutofilling] = useState(false)
+  const [placements, setPlacements] = useState<{ marker: string; where: string }[]>([])
 
   const reset = () => {
     setFile(null)
     setDetected(null)
     setTargetKey(null)
     setRemark('')
+    setPlacements([])
   }
 
   const close = () => {
@@ -86,6 +90,38 @@ export default function TrainingTemplateUploadModal({ open, templates, onClose, 
     ? detected.filter((d) => !target.markers.some((m) => markerMatches(d, m.name)))
     : []
   const canSubmit = !!file && !!targetKey && detected !== null && missingRequired.length === 0 && !submitting
+
+  const handleAutofill = async () => {
+    if (!file || !targetKey) return
+    setAutofilling(true)
+    try {
+      const fd = new FormData()
+      fd.append('key', targetKey)
+      fd.append('file', file)
+      const r = await autofillTrainingExportTemplate(targetKey, fd)
+      const { file_base64: base64, placements: placed, missing: stillMissing } = r.data || {}
+      if (!base64) {
+        message.warning(r.data?.message || '没有找到可以自动生成占位符的标签格')
+        return
+      }
+      // 用生成后的文件替换当前文件，占位符清单合并已插入的部分
+      const bin = atob(base64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      setFile(new File([bytes], file.name, { type: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }))
+      setPlacements(placed)
+      const placedNames = placed.map((p) => p.marker)
+      setDetected((prev) => Array.from(new Set([...(prev ?? []), ...placedNames])))
+      message.success(r.data?.message || `已生成 ${placed.length} 个占位符`)
+      if (stillMissing.length > 0) {
+        message.warning(`仍有 ${stillMissing.length} 个必填标记放不进对应标签格，请在 Word 里手动补：${stillMissing.join('、')}`)
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '自动生成占位符失败')
+    } finally {
+      setAutofilling(false)
+    }
+  }
 
   const handleSubmit = async () => {
     if (!file || !targetKey) return
@@ -184,8 +220,37 @@ export default function TrainingTemplateUploadModal({ open, templates, onClose, 
               <Alert
                 type="error"
                 showIcon
-                title={`缺少必填标记，不能上传：${missingRequired.map((m) => m.name).join('、')}`}
-                description="在 Word 里把这些标记补回模板后重新选择文件"
+                title={`缺少必填标记：${missingRequired.map((m) => m.name).join('、')}`}
+                description={
+                  <div className="space-y-2">
+                    <span>可在 Word 里手动补，或让系统按表格标签自动生成（识别「培训内容」「姓名」这类标签格，把标记写进旁边空白格）。</span>
+                    <div>
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={<ThunderboltOutlined />}
+                        loading={autofilling}
+                        onClick={() => void handleAutofill()}
+                      >
+                        自动生成占位符
+                      </Button>
+                    </div>
+                  </div>
+                }
+              />
+            )}
+            {placements.length > 0 && (
+              <Alert
+                type="success"
+                showIcon
+                title={`已按标签自动生成 ${placements.length} 个占位符（以生成后的文件为准）`}
+                description={
+                  <ul className="list-disc pl-5 m-0 text-[13px] leading-6">
+                    {placements.map((p) => (
+                      <li key={`${p.marker}${p.where}`}><code>{p.marker}</code> ← {p.where}</li>
+                    ))}
+                  </ul>
+                }
               />
             )}
             {detected !== null && unrecognized.length > 0 && (

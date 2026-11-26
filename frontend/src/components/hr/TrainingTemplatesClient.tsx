@@ -5,7 +5,7 @@
 // 每次后端操作成功后重拉清单（无本地乐观更新，量小）。
 
 import { useEffect, useState } from 'react'
-import { App, Alert, Button, Card, Drawer, Empty, Popconfirm, Space, Spin, Table, Tag, Tooltip, Upload } from 'antd'
+import { App, Alert, Button, Card, Drawer, Empty, Popconfirm, Space, Spin, Table, Tag, Tooltip } from 'antd'
 import { DownloadOutlined, HistoryOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import PageHeader from './PageHeader'
@@ -17,7 +17,6 @@ import {
   listTrainingExportTemplateVersions,
   listTrainingExportTemplates,
   restoreTrainingExportTemplateDefault,
-  uploadTrainingExportTemplate,
 } from '@/actions/hr/training'
 import type { TrainingTemplateDef, TrainingTemplateMarker, TrainingTemplateVersion } from '@/types/hr/trainingTemplates'
 
@@ -37,7 +36,6 @@ export default function TrainingTemplatesClient() {
   const { message } = App.useApp()
   const [templates, setTemplates] = useState<TrainingTemplateDef[]>([])
   const [loading, setLoading] = useState(true)
-  const [uploadingKey, setUploadingKey] = useState<string | null>(null)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
   // 版本历史抽屉
   const [historyFor, setHistoryFor] = useState<TrainingTemplateDef | null>(null)
@@ -80,21 +78,6 @@ export default function TrainingTemplatesClient() {
       downloadBase64File(r.base64, r.filename || '模板.docx')
     } catch (e) {
       message.error(e instanceof Error ? e.message : '下载失败')
-    }
-  }
-
-  const handleUpload = async (t: TrainingTemplateDef, file: File) => {
-    setUploadingKey(t.key)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const r = await uploadTrainingExportTemplate(t.key, fd)
-      message.success(r.message || `已上传模板 v${r.data?.version_no}`)
-      await refresh()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '上传失败')
-    } finally {
-      setUploadingKey(null)
     }
   }
 
@@ -268,19 +251,6 @@ export default function TrainingTemplatesClient() {
                     <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(t)}>
                       下载当前
                     </Button>
-                    <Upload
-                      accept=".docx"
-                      showUploadList={false}
-                      beforeUpload={(file) => {
-                        void handleUpload(t, file)
-                        return false
-                      }}
-                      disabled={uploadingKey === t.key}
-                    >
-                      <Button size="small" type="primary" ghost loading={uploadingKey === t.key} icon={<UploadOutlined />}>
-                        上传新版本
-                      </Button>
-                    </Upload>
                     {t.version_count > 0 && (
                       <Button size="small" icon={<HistoryOutlined />} onClick={() => void openHistory(t)}>
                         历史
