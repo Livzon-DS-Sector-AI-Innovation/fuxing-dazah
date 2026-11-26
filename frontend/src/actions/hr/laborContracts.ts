@@ -2,6 +2,7 @@
 
 import { fetchHrApi } from './_helpers'
 import type {
+  ContractEntryPreview,
   LaborContract,
   LaborContractCreateInput,
   LaborContractDetail,
@@ -36,7 +37,18 @@ export async function fetchLaborContractDetail(id: string): Promise<{ data: Labo
   return fetchHrApi(`/hr/labor-contracts/${id}`, { errorMessage: '获取合同详情失败' })
 }
 
-/** 录入劳动合同（期限按签订次数自动计算） */
+/** 录入预推：签订次序与期限（缺省按入职日期+期限规则推算） */
+export async function fetchContractEntryPreview(
+  employeeNumber: string,
+  startDate: string,
+): Promise<{ data: ContractEntryPreview }> {
+  const qs = new URLSearchParams({ employee_number: employeeNumber, start_date: startDate })
+  return fetchHrApi(`/hr/labor-contracts/entry-preview?${qs.toString()}`, {
+    errorMessage: '签订次序推算失败',
+  })
+}
+
+/** 录入劳动合同（签订次序按入职日期推算，期限按签订次数自动计算） */
 export async function createLaborContract(
   input: LaborContractCreateInput
 ): Promise<{ data: LaborContract; message: string }> {

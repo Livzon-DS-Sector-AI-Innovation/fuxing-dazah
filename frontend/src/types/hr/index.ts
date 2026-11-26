@@ -1814,7 +1814,20 @@ export interface LaborContractCreateInput {
   employee_number: string
   start_date: string
   sign_date?: string | null
+  seq_no?: number | null
   remark?: string | null
+}
+
+/** 录入预推：签订次序与期限（缺省按入职日期+期限规则推算） */
+export interface ContractEntryPreview {
+  employee_number: string
+  seq_no: number
+  seq_label: string
+  term_type: string
+  term_years: number | null
+  end_date: string | null
+  years_employed: number | null
+  existing_contracts: number
 }
 
 export interface LaborContractUpdateInput {

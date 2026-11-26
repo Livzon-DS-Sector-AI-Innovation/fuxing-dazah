@@ -58,11 +58,36 @@ def next_term_preview(seq_no: int) -> str:
     return f"{order} · {label}"
 
 
+def _shift_years(d: date, years: int) -> date:
+    """按整年平移日期（闰日 2/29 落到 2/28，与 compute_end_date 同口径）。"""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, month=2, day=28)
+
+
+def infer_seq_from_hire(hire_date: date | None, start_date: date) -> int:
+    """按入职日期 + 期限规则推算签订次序（录入缺省值，可人工指定覆盖）。
+
+    需求规则：第 1 次 3 年、第 2 次 6 年（累计满 9 年）、第 3 次起无固定期限。
+    锚点取本次合同起始日（规则口径「自每份合同起始日起算」，首份起始日即入职日）：
+    距入职不足 3 年 → 1；满 3 年不足 9 年 → 2；满 9 年 → 3。
+    入职日期缺失或明显占位（年份早于 1950）时无法推算，返回 1 兜底。
+    """
+    if hire_date is None or hire_date.year < 1950 or start_date < hire_date:
+        return 1
+    if start_date >= _shift_years(hire_date, 9):
+        return 3
+    if start_date >= _shift_years(hire_date, 3):
+        return 2
+    return 1
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def _refetch(db: AsyncSession, contract_id) -> LaborContract:
+async def _refetch(db: AsyncSession, contract_id: UUID) -> LaborContract:
     """UPDATE 后按主键 select re-fetch（MissingGreenlet 铁律：禁 refresh/懒加载序列化）。"""
     contract = await repo.get(db, contract_id)
     assert contract is not None, f"合同 {contract_id} 刚更新后查询不到"
@@ -109,6 +134,7 @@ async def create_contract(
     start_date: date,
     sign_date: date | None,
     remark: str | None,
+    seq_no: int | None = None,
     user_id: UUID | None = None,
 ) -> LaborContract:
     employee = await repo.get_employee(db, employee_number)
@@ -118,7 +144,13 @@ async def create_contract(
         raise AppException(message="该员工已离职，合同请在离职台账中维护")
 
     prior = await repo.list_by_employee(db, employee_number)
-    seq_no = max((c.seq_no for c in prior), default=0) + 1
+    max_prior = max((c.seq_no for c in prior), default=0)
+    if seq_no is None:
+        # 缺省推算：入职日期 + 期限规则，且不早于已有份数的下一份
+        # （老员工录入现合同不会错写成「第一次签订 · 3 年」）
+        seq_no = max(max_prior + 1, infer_seq_from_hire(employee.hire_date, start_date))
+    elif seq_no < 1:
+        raise AppException(message="签订次序必须为正整数")
     if await repo.get_active_with_seq(db, employee_number, seq_no):
         raise DuplicateException("有效合同", f"工号 {employee_number} 第 {seq_no} 份")
 

@@ -37,6 +37,9 @@ class ContractCreateInput(BaseModel):
     employee_number: str = Field(..., max_length=32, description="工号")
     start_date: date = Field(..., description="合同起始日")
     sign_date: date | None = Field(None, description="实际签订日（缺省同起始日）")
+    seq_no: int | None = Field(
+        None, ge=1, description="签订次序（缺省按入职日期+期限规则推算，可人工指定）",
+    )
     remark: str | None = Field(None, max_length=512)
 
 
@@ -198,7 +201,38 @@ async def list_contracts(
     )
 
 
-@router.post("/labor-contracts", summary="录入劳动合同（期限按签订次数自动计算）")
+@router.get("/labor-contracts/entry-preview", summary="录入预推：签订次序与期限（按入职日期推算）")
+async def entry_preview(
+    employee_number: str = Query(..., description="工号"),
+    start_date: date = Query(..., description="合同起始日"),
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
+) -> JSONResponse:
+    employee = await repo.get_employee(db, employee_number)
+    if not employee:
+        raise NotFoundException("员工档案", f"工号 {employee_number}")
+    prior = await repo.list_by_employee(db, employee_number)
+    max_prior = max((c.seq_no for c in prior), default=0)
+    seq_no = max(max_prior + 1, service.infer_seq_from_hire(employee.hire_date, start_date))
+    term_type, years = service.term_for_seq(seq_no)
+    end_date = service.compute_end_date(start_date, term_type, years)
+    hire_date = employee.hire_date
+    years_employed = None
+    if hire_date is not None and hire_date.year >= 1950 and start_date >= hire_date:
+        years_employed = round((start_date - hire_date).days / 365.25, 1)
+    return success_response(data={
+        "employee_number": employee_number,
+        "seq_no": seq_no,
+        "seq_label": service.next_term_preview(seq_no),
+        "term_type": term_type,
+        "term_years": years,
+        "end_date": end_date.isoformat() if end_date else None,
+        "years_employed": years_employed,
+        "existing_contracts": len(prior),
+    })
+
+
+@router.post("/labor-contracts", summary="录入劳动合同（签订次序按入职日期推算，期限按签订次数自动计算）")
 async def create_contract(
     payload: ContractCreateInput,
     db: AsyncSession = Depends(get_db),
@@ -210,6 +244,7 @@ async def create_contract(
         start_date=payload.start_date,
         sign_date=payload.sign_date,
         remark=payload.remark,
+        seq_no=payload.seq_no,
         user_id=ctx.user.id,
     )
     await record_audit_log(
