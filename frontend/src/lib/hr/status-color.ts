@@ -101,6 +101,28 @@ export const ORPHAN_TAG_CHIP_COLOR = {
   bg: 'var(--color-surface-soft)', text: '#5d5b54', dot: '#bbb8b1',
 }
 
+/** SOP 培训文件登记表：变更类型 → 标签配色。
+ *  颜色沿用纸质登记表的约定（黄=新增 / 红=修改 / 灰=撤销，Excel 导出同色），
+ *  表格行首色条、变更标签、筛选芯片三处同源取色。 */
+export const SOP_CHANGE_TYPE_META: Record<string, { bg: string; text: string; dot: string }> = {
+  新增: { bg: '#fef7d6', text: '#793400', dot: '#f5d75e' },
+  修改: { bg: '#fdecec', text: '#b42318', dot: '#e03131' },
+  撤销: { bg: 'var(--color-tint-gray)', text: 'var(--color-slate)', dot: '#a4a097' },
+}
+
+/** 登记表进度（后端 status：草稿 / 已提交）。
+ *  「已转培训」只表示已收录到各部门二级表，培训本身做没做完看二级表，所以不用成功绿。 */
+export const SOP_RECORD_STATUS_META: Record<string, { label: string; bg: string; text: string }> = {
+  草稿: { label: '待转培训', bg: 'var(--color-tint-peach)', text: '#9a3f00' },
+  已提交: { label: '已转培训', bg: 'var(--color-tint-sky)', text: '#005bab' },
+}
+
+/** 二级表状态（部门维度的培训是否已安排培训师并关联分类人员） */
+export const SOP_ENTRY_STATUS_META: Record<string, { bg: string; text: string }> = {
+  待转训: { bg: 'var(--color-tint-peach)', text: '#9a3f00' },
+  已转训: { bg: 'var(--color-tint-mint)', text: 'var(--color-success-deep)' },
+}
+
 /** 分类名 → 胶囊配色。names 传分类清单的名称顺序，清单外的名字一律按残留标签处理 */
 export function classificationChipColors(
   names: string[],
