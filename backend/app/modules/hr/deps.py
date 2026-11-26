@@ -362,6 +362,7 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                          "DELETE": ("hr:profile:update", "hr:training:manage")}),
     (r"/employee-classifications", {"GET": "hr:profile:read",
                                     "POST": ("hr:profile:update", "hr:training:manage"),
+                                    "PUT": ("hr:profile:update", "hr:training:manage"),
                                     "DELETE": ("hr:profile:update", "hr:training:manage")}),
     (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
                        "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),

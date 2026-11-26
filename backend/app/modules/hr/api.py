@@ -6269,6 +6269,65 @@ async def create_employee_classification(
     return success_response(data={"id": str(c.id), "name": c.name}, message="已新增", status_code=201)
 
 
+@router.put("/employee-classifications/{class_id}", summary="修改分类名称")
+async def rename_employee_classification(
+    class_id: UUID,
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """分类改名。标签只按名称关联（无外键），同名标签须一并改，否则成员全部失联。"""
+    from app.modules.hr.models import EmployeeClassification
+    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    c = (await session.execute(
+        select(EmployeeClassification).where(
+            EmployeeClassification.id == class_id,
+            EmployeeClassification.is_deleted == False,  # noqa: E712
+            EmployeeClassification.created_by == creator,
+        )
+    )).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "分类不存在")
+    new_name = str(payload.get("name", "")).strip()
+    if not new_name:
+        raise HTTPException(400, "分类名称不能为空")
+    if len(new_name) > 64:
+        raise HTTPException(400, "分类名称不能超过 64 个字符")
+    if new_name == c.name:
+        return success_response(data={"id": str(c.id), "name": c.name})
+    exist = (await session.execute(
+        select(EmployeeClassification).where(
+            EmployeeClassification.is_deleted == False,  # noqa: E712
+            EmployeeClassification.created_by == creator,
+            EmployeeClassification.name == new_name,
+        )
+    )).scalar_one_or_none()
+    if exist:
+        raise HTTPException(400, "该分类已存在")
+    params = {"old": c.name, "new": new_name, "cb": creator}
+    # 同一人已另有新名标签：先软删那一行，否则改名会撞「活跃行唯一」部分索引
+    await session.execute(
+        text("""
+            UPDATE hr.employee_tags b SET is_deleted = true
+            FROM hr.employee_tags a
+            WHERE a.tag_name = :old AND a.created_by = :cb AND a.is_deleted = false
+              AND b.employee_number = a.employee_number
+              AND b.tag_name = :new AND b.is_deleted = false
+        """),
+        params,
+    )
+    await session.execute(
+        text("""
+            UPDATE hr.employee_tags SET tag_name = :new
+            WHERE tag_name = :old AND created_by = :cb AND is_deleted = false
+        """),
+        params,
+    )
+    c.name = new_name
+    await session.commit()
+    return success_response(data={"id": str(c.id), "name": new_name}, message="已保存")
+
+
 @router.get("/employee-classifications/{class_id}/members", summary="分类下的人员")
 async def list_classification_members(
     class_id: UUID,

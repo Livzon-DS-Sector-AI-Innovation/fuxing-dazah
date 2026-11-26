@@ -51,6 +51,7 @@ from app.modules.hr.employee_sync.report_level import (
 from app.modules.hr.models import (
     DepartureRecord,
     Employee,
+    EmployeeTag,
     HeadcountPlan,
     TrainingRosterProfile,
 )
@@ -971,7 +972,8 @@ class EmployeeSyncService:
         department 非空时只按体现部门取人（实际部门/兼任部门命中不带入）。
         scoped_departments 非空时按用户数据范围过滤（体现部门或实际部门
         在授权范围内的行），与员工档案/SOP二级表共用「用户多部门访问授权」。
-        返回 (rows, total)。rows 每行 dict 的 key 为 ORM 字段名。
+        返回 (rows, total)。rows 每行 dict 的 key 为 ORM 字段名，
+        另带 tags（该人的分类标签名列表）。
         """
         stmt = select(TrainingRosterProfile).where(
             TrainingRosterProfile.is_deleted.is_(False)
@@ -1004,6 +1006,7 @@ class EmployeeSyncService:
             TrainingRosterProfile.department, TrainingRosterProfile.employee_number,
         ).offset((page - 1) * page_size).limit(page_size)
         profiles = (await self.session.execute(stmt)).scalars().all()
+        tags_by_employee = await self._roster_tags([p.employee_number for p in profiles])
 
         rows = []
         for profile in profiles:
@@ -1015,8 +1018,29 @@ class EmployeeSyncService:
             row[REPORT_LEVEL_FIELD] = compute_report_level(
                 profile.level, profile.duty, profile.job_category,
             )
+            row["tags"] = tags_by_employee.get(profile.employee_number, [])
             rows.append(row)
         return rows, total
+
+    async def _roster_tags(self, employee_numbers: list[str]) -> dict[str, list[str]]:
+        """名单在页人员的分类标签，一次 IN 查询带回（页面不再逐行补查）。
+
+        不限创建人：与 /employee-tags/by-employee 同口径（转培训自动打上的标签也要显示）。
+        """
+        if not employee_numbers:
+            return {}
+        rows = (await self.session.execute(
+            select(EmployeeTag.employee_number, EmployeeTag.tag_name)
+            .where(
+                EmployeeTag.employee_number.in_(employee_numbers),
+                EmployeeTag.is_deleted.is_(False),
+            )
+            .order_by(EmployeeTag.created_at, EmployeeTag.tag_name)
+        )).all()
+        tags: dict[str, list[str]] = {}
+        for employee_number, tag_name in rows:
+            tags.setdefault(employee_number, []).append(tag_name)
+        return tags
 
     async def update_roster_entry(
         self, employee_number: str, data: dict[str, Any],

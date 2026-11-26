@@ -19,7 +19,9 @@ import {
   SopTrainingPersonnel,
   SopClassificationOption,
   SopPersonnelOption,
+  ClassificationMember,
   DepartmentTrainingPosition,
+  EmployeeClassification,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -740,7 +742,7 @@ export async function fetchEmployeeTagsByEmployee(employeeNumber: string): Promi
 
 // ─── 员工分类清单（下拉选项模式） ───
 
-export async function fetchEmployeeClassifications(): Promise<{ code: number; message: string; data: { id: string; name: string; count: number }[] }> {
+export async function fetchEmployeeClassifications(): Promise<{ code: number; message: string; data: EmployeeClassification[] }> {
   return fetchHrApi('/hr/employee-classifications', { errorMessage: '获取分类清单失败' })
 }
 
@@ -752,6 +754,15 @@ export async function createEmployeeClassification(name: string): Promise<{ code
   })
 }
 
+/** 分类改名：后端会把该分类下人员的同名标签一并改掉 */
+export async function renameEmployeeClassification(id: string, name: string): Promise<{ code: number; message: string; data: { id: string; name: string } }> {
+  return fetchHrApi(`/hr/employee-classifications/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+    errorMessage: '保存失败',
+  })
+}
+
 export async function deleteEmployeeClassification(id: string): Promise<{ code: number; message: string }> {
   return fetchHrApi(`/hr/employee-classifications/${id}`, {
     method: 'DELETE',
@@ -760,8 +771,7 @@ export async function deleteEmployeeClassification(id: string): Promise<{ code: 
 }
 
 export async function fetchClassificationMembers(id: string): Promise<{
-  code: number; message: string
-  data: { name: string; employee_number: string; department: string; position: string }[]
+  code: number; message: string; data: ClassificationMember[]
 }> {
   return fetchHrApi(`/hr/employee-classifications/${id}/members`, { errorMessage: '获取分类人员失败' })
 }

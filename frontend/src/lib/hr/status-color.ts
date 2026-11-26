@@ -84,6 +84,33 @@ export const INTERVIEW_STATUS_TAG_COLORS: Record<string, string> = {
   已取消: 'error',
 }
 
+/** 分类胶囊配色（bg 胶囊底色 / text 胶囊文字 / dot 列表里的色点）。
+ *  培训人员分类按分类清单顺序取色、循环使用：底色是 DESIGN.md 的过渡色 card-tint-*，
+ *  文字取同色系深一档（与状态色同一思路：浅底上要用深字才够对比度）。 */
+export const CLASSIFICATION_CHIP_PALETTE: { bg: string; text: string; dot: string }[] = [
+  { bg: 'var(--color-tint-lavender)', text: '#391c57', dot: '#7b3ff2' },
+  { bg: 'var(--color-tint-peach)', text: '#793400', dot: '#dd5b00' },
+  { bg: 'var(--color-tint-mint)', text: '#12812a', dot: '#1aae39' },
+  { bg: 'var(--color-tint-sky)', text: '#005bab', dot: '#0075de' },
+  { bg: 'var(--color-tint-rose)', text: '#a02e6d', dot: '#e5399f' },
+  { bg: 'var(--color-tint-gray)', text: '#5d5b54', dot: '#a4a097' },
+]
+
+/** 不在分类清单里的残留标签（分类已删、标签还在）：中性描边，提示可清理 */
+export const ORPHAN_TAG_CHIP_COLOR = {
+  bg: 'var(--color-surface-soft)', text: '#5d5b54', dot: '#bbb8b1',
+}
+
+/** 分类名 → 胶囊配色。names 传分类清单的名称顺序，清单外的名字一律按残留标签处理 */
+export function classificationChipColors(
+  names: string[],
+): Record<string, { bg: string; text: string; dot: string }> {
+  const map: Record<string, { bg: string; text: string; dot: string }> = {}
+  names.forEach((name, i) => {
+    map[name] = CLASSIFICATION_CHIP_PALETTE[i % CLASSIFICATION_CHIP_PALETTE.length]
+  })
+  return map
+}
 
 /** 离职办理状态 → antd Tag 预设色名。轮到 HR 动手的环节（开证 / 送达）用 warning，
  *  外部处理中的（审批 / 会签）用 processing。看板、办理抽屉、台账「办理状态」列三处同源。 */

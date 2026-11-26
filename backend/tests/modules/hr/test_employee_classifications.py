@@ -89,3 +89,70 @@ class TestEmployeeClassifications:
         assert res3.json()["data"]["removed"] == 1
         res4 = await client.get(f"/api/v1/hr/employee-classifications/{cid}/members")
         assert res4.json()["data"] == []
+
+    @pytest.mark.asyncio
+    async def test_rename_classification_moves_employee_tags(self, db_session, client):
+        """分类改名：同名标签一并改名，成员不失联。"""
+        from sqlalchemy import text
+
+        from app.modules.hr.models import EmployeeTag
+        old, new = f"旧名{uuid4().hex[:4]}", f"新名{uuid4().hex[:4]}"
+        res = await client.post("/api/v1/hr/employee-classifications", json={"name": old})
+        cid = res.json()["data"]["id"]
+        emp_no = f"RN{uuid4().hex[:6].upper()}"
+        db_session.add(EmployeeTag(employee_number=emp_no, tag_name=old, created_by="HR测试员"))
+        await db_session.flush()
+
+        res2 = await client.put(f"/api/v1/hr/employee-classifications/{cid}", json={"name": new})
+        assert res2.status_code == 200, res2.text
+        assert res2.json()["data"]["name"] == new
+
+        active = (await db_session.execute(
+            text("SELECT tag_name FROM hr.employee_tags WHERE employee_number = :en AND is_deleted = false"),
+            {"en": emp_no},
+        )).scalars().all()
+        assert active == [new]
+        names = [c["name"] for c in (await client.get("/api/v1/hr/employee-classifications")).json()["data"]]
+        assert new in names and old not in names
+
+    @pytest.mark.asyncio
+    async def test_rename_onto_existing_tag_keeps_one_active_row(self, db_session, client):
+        """改成部分人已有的残留标签名（该名不在分类清单里）：不撞活跃行唯一索引，
+        这些人在新名下只留一条有效标签。"""
+        from sqlalchemy import text
+
+        from app.modules.hr.models import EmployeeTag
+        suffix = uuid4().hex[:4]
+        src, dst = f"源分类{suffix}", f"残留名{suffix}"
+        src_id = (await client.post("/api/v1/hr/employee-classifications", json={"name": src})).json()["data"]["id"]
+        both, only_src = f"RB{suffix}", f"RO{suffix}"
+        db_session.add_all([
+            EmployeeTag(employee_number=both, tag_name=src, created_by="HR测试员"),
+            EmployeeTag(employee_number=both, tag_name=dst, created_by="HR测试员"),
+            EmployeeTag(employee_number=only_src, tag_name=src, created_by="HR测试员"),
+        ])
+        await db_session.flush()
+
+        res = await client.put(f"/api/v1/hr/employee-classifications/{src_id}", json={"name": dst})
+        assert res.status_code == 200, res.text
+
+        rows = (await db_session.execute(
+            text("SELECT employee_number, count(*) FROM hr.employee_tags "
+                 "WHERE tag_name = :tn AND is_deleted = false GROUP BY employee_number"),
+            {"tn": dst},
+        )).all()
+        assert dict(rows) == {both: 1, only_src: 1}
+
+    @pytest.mark.asyncio
+    async def test_rename_rejects_duplicate_and_blank(self, db_session, client):
+        suffix = uuid4().hex[:4]
+        name, other = f"改名分类{suffix}", f"已存在分类{suffix}"
+        cid = (await client.post("/api/v1/hr/employee-classifications", json={"name": name})).json()["data"]["id"]
+        await client.post("/api/v1/hr/employee-classifications", json={"name": other})
+
+        dup = await client.put(f"/api/v1/hr/employee-classifications/{cid}", json={"name": other})
+        assert dup.status_code == 400, dup.text
+        blank = await client.put(f"/api/v1/hr/employee-classifications/{cid}", json={"name": "  "})
+        assert blank.status_code == 400, blank.text
+        names = [c["name"] for c in (await client.get("/api/v1/hr/employee-classifications")).json()["data"]]
+        assert name in names

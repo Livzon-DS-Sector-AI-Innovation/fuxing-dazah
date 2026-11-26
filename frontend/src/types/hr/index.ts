@@ -640,6 +640,22 @@ export interface SopPersonnelOption {
   status: string
 }
 
+// ─── 培训人员名单 · 人员分类 ───
+
+/** 人员分类：按创建人隔离，人员通过同名标签归入分类 */
+export interface EmployeeClassification {
+  id: string
+  name: string
+  count: number
+}
+
+export interface ClassificationMember {
+  employee_number: string
+  name: string
+  department: string
+  position: string
+}
+
 // ─── AI 出题相关类型 ───
 
 export interface ChoiceOption {
