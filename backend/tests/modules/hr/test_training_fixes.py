@@ -497,23 +497,26 @@ class TestLedgerCreateScope:
 
 class TestLeaveCountScope:
     @pytest.mark.asyncio
-    async def test_uncategorized_actual_department_counted(self, db_session):
+    async def test_only_display_department_counted(self, db_session):
+        """部门口径只认体现部门：实际部门在本部门、体现部门在别处的人不算进来。"""
         from app.modules.hr.api import _query_leave_counts
         from app.modules.hr.models import TrainingRosterProfile
 
+        dept, other = f"请假口径部{uuid4().hex[:6]}", f"请假他部{uuid4().hex[:6]}"
         db_session.add_all([
             TrainingRosterProfile(
-                employee_number="5001", name="病假甲", department="甲部门",
+                employee_number="5001", name="病假甲", department=dept,
                 position="操作工", status="病假",
             ),
             TrainingRosterProfile(
-                employee_number="5002", name="产假甲", department="未分类",
-                actual_department="甲部门", position="操作工", status="产假",
+                employee_number="5002", name="产假甲", department=other,
+                actual_department=dept, position="操作工", status="产假",
             ),
         ])
         await db_session.flush()
-        sick, maternity = await _query_leave_counts(db_session, "甲部门")
-        assert (sick, maternity) == (1, 1)
+        # 产假甲算在其体现部门名下，不算在实际部门
+        assert await _query_leave_counts(db_session, dept) == (1, 0)
+        assert await _query_leave_counts(db_session, other) == (0, 1)
 
 
 class TestScoreParsing:

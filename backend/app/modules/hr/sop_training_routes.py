@@ -682,14 +682,13 @@ async def batch_transfer_sop_entries(
 
 
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
-    """统计部门病假/产假人数（无则 0）；与员工查询口径一致：
-    部门匹配 department 或（未分类员工的 actual_department）。"""
+    """统计部门病假/产假人数（无则 0）；与员工查询口径一致：只认体现部门。"""
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                "WHERE department = :dept "
                 "AND is_deleted = false AND status IN ('病假', '产假') GROUP BY status"
             ),
             {"dept": department},
@@ -833,11 +832,11 @@ async def generate_record_materials(
     if not initiator:
         raise HTTPException(400, "该记录未配置发起部门（主办部门）")
 
-    # ── 人员口径：主办部门名单内人员 + 各涉及部门的一级培训师（去重）──
+    # ── 人员口径：主办部门名单内人员（只认体现部门）+ 各涉及部门的一级培训师（去重）──
     emp_rows = (await session.execute(
         text(
             "SELECT name, status FROM hr.training_roster_profiles "
-            "WHERE (department = :dept OR actual_department = :dept) "
+            "WHERE department = :dept "
             "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
             "ORDER BY name"
         ),
@@ -1094,7 +1093,7 @@ async def sop_entry_classifications(
             JOIN hr.training_roster_profiles p ON p.employee_number = t.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.created_by = :creator
-              AND (p.department = :dept OR p.actual_department = :dept)
+              AND p.department = :dept
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
             GROUP BY t.tag_name
         """),
@@ -1141,7 +1140,7 @@ async def sop_entry_personnel(
             JOIN hr.employee_tags t ON t.employee_number = p.employee_number
             WHERE t.is_deleted = false AND p.is_deleted = false
               AND t.tag_name = :tag AND t.created_by = :creator
-              AND (p.department = :dept OR p.actual_department = :dept)
+              AND p.department = :dept
               AND p.status NOT IN ('离职', '待审批', '病假', '产假')
             ORDER BY p.employee_number
         """),

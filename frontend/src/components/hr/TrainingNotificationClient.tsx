@@ -74,6 +74,12 @@ const TD_LABEL = {
   padding: '8px',
 } as React.CSSProperties
 
+// 出席名单口径：按部门取人只认体现部门，由名单接口统一保证；这里再剔除
+// 离职/待审批/病假/产假（与 SOP 培训文档的状态口径一致）。
+const NOT_ATTENDEE_STATUSES = new Set(['离职', '待审批', '病假', '产假'])
+const pickTrainees = <T extends { status: string }>(rows: T[] | undefined | null) =>
+  (rows || []).filter((e) => !NOT_ATTENDEE_STATUSES.has(e.status))
+
 /** Check whether an employee already has a dedicated training-ledger menu page (static + DB). */
 async function getExistingLedgerNumbers(): Promise<Set<string>> {
   const numbers = new Set<string>()
@@ -202,7 +208,7 @@ export default function TrainingNotificationClient() {
       const deptName = decodeURIComponent(dept)
       setTrainerDept(deptName)
       fetchAllTrainingRoster({ department: deptName }).then(res => {
-        const emps = (res.data || []).map((e: any) => ({
+        const emps = pickTrainees(res.data).map((e: any) => ({
           value: e.name, label: `${e.name} - ${e.department || deptName} (${e.employee_number})`,
           employee_number: e.employee_number,
         }))
@@ -250,8 +256,8 @@ export default function TrainingNotificationClient() {
     for (const dept of depts) {
       try {
         const res = await fetchAllTrainingRoster({ department: dept })
-        // 病假/产假员工自动过滤，不进入出席名单
-        const activeList = (res.data || []).filter((e: any) => e.status !== '病假' && e.status !== '产假')
+        // 部门口径由名单接口保证（只认体现部门），这里剔除不可出席状态
+        const activeList = pickTrainees(res.data)
         allFull.push(...activeList)
         for (const e of activeList) {
           if (e.name && e.employee_number) numberMap[e.name] = e.employee_number
@@ -750,7 +756,7 @@ export default function TrainingNotificationClient() {
                   // 自动加载该部门员工作为受训人员
                   try {
                     const res = await fetchAllTrainingRoster({ department: dept })
-                    const emps = (res.data || []).map((e: any) => ({
+                    const emps = pickTrainees(res.data).map((e: any) => ({
                       value: e.name, label: `${e.name} - ${e.department || dept} (${e.employee_number})`,
                       employee_number: e.employee_number,
                     }))
@@ -1002,7 +1008,6 @@ export default function TrainingNotificationClient() {
           >
             <Select
               mode="multiple"
-              maxTagCount="responsive"
               placeholder="选择应出席受训人员"
               options={employees}
               className="w-full"

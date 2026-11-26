@@ -258,15 +258,18 @@ class TestMaterialsHelpers:
         from app.modules.hr import models as hr_models
         from app.modules.hr.sop_training_routes import _query_leave_counts
 
-        dept = f"材料测试部{_rand()}"
-        for name, no, status in [
-            ("病假甲", f"B{_rand()}", "病假"),
-            ("产假乙", f"M{_rand()}", "产假"),
-            ("在职丙", f"Z{_rand()}", "在职"),
+        dept, other = f"材料测试部{_rand()}", f"材料他部{_rand()}"
+        for name, no, status, d in [
+            ("病假甲", f"B{_rand()}", "病假", dept),
+            ("产假乙", f"M{_rand()}", "产假", dept),
+            ("在职丙", f"Z{_rand()}", "在职", dept),
+            # 体现部门在别处、实际部门在本部门的产假：不算本部门（只认体现部门）
+            ("产假丁", f"M{_rand()}", "产假", other),
         ]:
             # 统计口径 = 培训人员名单（脱敏独立数据集）
             db_session.add(hr_models.TrainingRosterProfile(
-                name=name, employee_number=no, department=dept,
+                name=name, employee_number=no, department=d,
+                actual_department=dept if d == other else None,
                 position="工程师", status=status,
             ))
         await db_session.flush()
@@ -311,40 +314,52 @@ class TestMaterialsHelpers:
         assert content[:2] == b"PK"
 
     async def test_entry_personnel_excludes_leave(self, db_session):
-        """二级表分类人员拉取排除病假/产假（接口 SQL 校验）。"""
-        from datetime import date as _date
-        from sqlalchemy import text as sa_text
+        """二级表分类人员拉取：排除病假/产假，且只认体现部门（实际部门命中不带入）。"""
         from app.modules.hr import models as hr_models
+        from app.modules.hr.deps import HrAccessContext
+        from app.modules.hr.sop_training_routes import (
+            sop_entry_classifications,
+            sop_entry_personnel,
+        )
 
-        dept = f"拉人测试部{_rand()}"
+        dept, other = f"拉人测试部{_rand()}", f"拉人他部{_rand()}"
         tag = f"分类{_rand()}"
-        for name, no, status in [
-            ("正常甲", f"N{_rand()}", "在职"),
-            ("病假乙", f"B{_rand()}", "病假"),
-            ("产假丙", f"M{_rand()}", "产假"),
+        for name, no, status, d in [
+            ("正常甲", f"N{_rand()}", "在职", dept),
+            ("病假乙", f"B{_rand()}", "病假", dept),
+            ("产假丙", f"M{_rand()}", "产假", dept),
+            ("实际丁", f"S{_rand()}", "在职", other),
         ]:
             # 人员口径 = 培训人员名单（脱敏独立数据集）
             db_session.add(hr_models.TrainingRosterProfile(
-                name=name, employee_number=no, department=dept,
+                name=name, employee_number=no, department=d,
+                actual_department=dept if d == other else None,
                 position="工程师", status=status,
             ))
             await db_session.flush()
-            db_session.add(hr_models.EmployeeTag(employee_number=no, tag_name=tag, created_by="tester"))
+            db_session.add(hr_models.EmployeeTag(
+                employee_number=no, tag_name=tag, created_by="口径测试员",
+            ))
         await db_session.flush()
 
-        result = (await db_session.execute(
-            sa_text("""
-                SELECT p.name FROM hr.training_roster_profiles p
-                JOIN hr.employee_tags t ON t.employee_number = p.employee_number
-                WHERE t.is_deleted = false AND p.is_deleted = false
-                  AND t.tag_name = :tag
-                  AND (p.department = :dept OR p.actual_department = :dept)
-                  AND p.status NOT IN ('离职', '待审批', '病假', '产假')
-                ORDER BY p.employee_number
-            """),
-            {"dept": dept, "tag": tag},
-        )).fetchall()
-        names = [r[0] for r in result]
-        assert "病假乙" not in names
-        assert "产假丙" not in names
-        assert "正常甲" in names
+        class _U:
+            name = "口径测试员"
+            employee_number = "TEST001"
+        scope = HrAccessContext(
+            user=_U(),  # type: ignore[arg-type]
+            data_scope="all",
+            department=None,
+            employee_number="TEST001",
+            scoped_departments=frozenset(),
+        )
+        res = await sop_entry_personnel(
+            department=dept, classification=tag, session=db_session, hr_scope=scope,
+        )
+        names = [row["name"] for row in json.loads(res.body)["data"]]
+        assert names == ["正常甲"]
+
+        res = await sop_entry_classifications(
+            department=dept, session=db_session, hr_scope=scope,
+        )
+        counts = {row["tag_name"]: row["count"] for row in json.loads(res.body)["data"]}
+        assert counts.get(tag) == 1

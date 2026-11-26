@@ -1825,21 +1825,18 @@ async def list_employee_varieties(
     department: str = Query(...),
     session: AsyncSession = Depends(get_db),
 ):
-    """获取指定部门（含兼任部门）名单人员的品种列表（去重），用于签到表二级筛选。
+    """获取指定部门名单人员的品种列表（去重），用于签到表二级筛选。
 
-    人员口径 = 培训人员名单（脱敏独立数据集）。
+    人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门
+    （与按部门带入人员的口径一致，兼任部门不参与）。
     """
     from app.modules.hr.models import TrainingRosterProfile
-    # 签到表人员口径：仅体现部门+兼任部门，不引入「未分类」人员
     rows = (await session.execute(
         select(TrainingRosterProfile.variety, TrainingRosterProfile.concurrent_variety)
         .where(
             TrainingRosterProfile.is_deleted == False,
             TrainingRosterProfile.status == '在职',
-            or_(
-                TrainingRosterProfile.department == department,
-                TrainingRosterProfile.concurrent_departments.ilike(f"%{department}%"),
-            ),
+            TrainingRosterProfile.department == department,
         )
     )).all()
     varieties: list[str] = []
@@ -1857,14 +1854,14 @@ async def list_employee_varieties(
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
     """统计部门病假/产假人数（无则 0），供通知/签到表人数栏展示。
 
-    人员口径 = 培训人员名单（脱敏独立数据集）。
+    人员口径 = 培训人员名单（脱敏独立数据集），只认体现部门。
     """
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.training_roster_profiles "
-                "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                "WHERE department = :dept "
                 "AND is_deleted = false "
                 "AND status IN ('病假', '产假') GROUP BY status"
             ),
@@ -2205,7 +2202,7 @@ async def export_training_evaluation_admin(
     if department:
         emp_count = (await session.execute(
             text("SELECT count(*) FROM hr.training_roster_profiles "
-                 "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                 "WHERE department = :dept "
                  "AND is_deleted = false AND status = '在职'"),
             {"dept": department},
         )).scalar()
@@ -2290,6 +2287,7 @@ async def list_departments(
     page_params: PageParams = Depends(),
     service: DepartmentService = Depends(get_department_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
+    session: AsyncSession = Depends(get_db),
 ):
     # 数据范围限制：只返回授权部门
     if hr_scope.scoped_departments:
@@ -2311,9 +2309,19 @@ async def list_departments(
         departments, total = await service.list_departments(
             keyword=keyword, page=page_params.page, page_size=page_params.page_size,
         )
+    # 负责人 / 分管领导的账号就绪状态：列表上提示 HR 谁收不到提醒和审批（未登录 / 同名 / 已离职）
+    statuses = await account_statuses(session, [
+        name
+        for department in departments
+        for name in (department.department_manager_name, department.supervising_leader_name)
+    ])
     data = [
-        DepartmentResponse.model_validate(d).model_dump(mode="json")
-        for d in departments
+        {
+            **DepartmentResponse.model_validate(department).model_dump(mode="json"),
+            "manager_account_status": statuses.get(department.department_manager_name or "", ""),
+            "leader_account_status": statuses.get(department.supervising_leader_name or "", ""),
+        }
+        for department in departments
     ]
     return paginated_response(
         data=data,
@@ -2564,6 +2572,15 @@ async def list_position_trainings(
         for r in rows
     ]
     return success_response(data=data)
+
+
+@router.get("/position-trainings/by-department", summary="按部门列培训岗位及培训内容")
+async def list_position_trainings_by_department(
+    department: str = Query(..., min_length=1, description="部门名称"),
+    service: EmployeeService = Depends(get_employee_service),
+):
+    """入职培训页选择培训岗位用：部门下配置过培训内容的岗位及各自的培训大类。"""
+    return success_response(data=await service.list_training_positions(department))
 
 
 class PositionTrainingCreate(BaseModel):
@@ -4746,7 +4763,7 @@ async def export_qa_evaluation(
 
     # 应到人数 = 部门总人数
     dept_count = (await session.execute(
-        text("SELECT count(*) FROM hr.training_roster_profiles WHERE (department = :d OR (department = '未分类' AND actual_department = :d)) AND is_deleted = false AND status = '在职'"),
+        text("SELECT count(*) FROM hr.training_roster_profiles WHERE department = :d AND is_deleted = false AND status = '在职'"),
         {"d": row[1] or ""},
     )).scalar()
     expected = dept_count if dept_count else None

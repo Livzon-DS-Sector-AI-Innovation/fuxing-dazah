@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -884,6 +885,50 @@ class TestRosterVariety:
         )
         assert res.status_code == 200  # 修复前：select 未映射列必 500
         assert res.json()["data"] == sorted(["胶囊", "颗粒"])
+
+    async def test_employee_varieties_only_display_department(
+        self, db_session: AsyncSession, client: AsyncClient,
+    ) -> None:
+        """品种关键词只取体现部门人员：兼任部门在本部门的人不参与（与带入人员口径一致）。"""
+        dept, other = f"质控{_rand()}", f"兼任他部{_rand()}"
+        db_session.add_all([
+            hr_models.TrainingRosterProfile(
+                name="孙三", employee_number=f"E{_rand()}", department=dept, position="QC",
+                status="在职", variety="胶囊",
+            ),
+            hr_models.TrainingRosterProfile(
+                name="李四", employee_number=f"E{_rand()}", department=other, position="QC",
+                status="在职", variety="颗粒", concurrent_departments=dept,
+            ),
+        ])
+        await db_session.flush()
+
+        res = await client.get(
+            "/api/v1/hr/employee-varieties", params={"department": dept},
+        )
+        assert res.status_code == 200
+        assert res.json()["data"] == ["胶囊"]
+
+
+class TestRosterDepartmentScope:
+    """按部门取人只认体现部门（2026-11-25 口径）：实际部门/兼任部门命中不带入。"""
+
+    async def test_department_filter_uses_display_department_only(self, db_session: AsyncSession) -> None:
+        dept, other = f"体现甲部{_rand()}", f"体现乙部{_rand()}"
+        for name, no, d, actual, concurrent in [
+            ("体现甲", f"E{_rand()}", dept, None, None),
+            ("实际乙", f"E{_rand()}", other, dept, None),
+            ("兼任丙", f"E{_rand()}", other, None, dept),
+        ]:
+            db_session.add(hr_models.TrainingRosterProfile(
+                name=name, employee_number=no, department=d, actual_department=actual,
+                concurrent_departments=concurrent, position="QC", status="在职",
+            ))
+        await db_session.flush()
+
+        rows, total = await sync_service.EmployeeSyncService(db_session).training_roster(department=dept)
+        assert total == 1
+        assert [r["name"] for r in rows] == ["体现甲"]
 
 
 # ─── 同步启用期间的只读守卫 ───
