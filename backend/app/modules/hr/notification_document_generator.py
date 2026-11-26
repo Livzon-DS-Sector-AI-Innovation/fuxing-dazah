@@ -1,11 +1,18 @@
-"""培训通知 Word 文档生成器 — 基于表格模板."""
+"""培训通知 Word 文档生成器 — 基于 {标记} 模板（模板可由用户自维护）。
+
+模板标记清单见 training_template_registry（键 training_notification）。
+填充口径（自学只记日期、空值写横杠等）与历史版本一致：本模块只负责
+「计算填充值 → 替换模板标记」，模板结构与样式由模板文件决定。
+"""
 
 from datetime import date, datetime
 from io import BytesIO
-from pathlib import Path
 
 from docx import Document
 from pydantic import BaseModel
+
+from app.modules.hr.docx_markers import clear_unused_markers, replace_markers
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 
 class TrainingNotificationInput(BaseModel):
@@ -31,34 +38,6 @@ class TrainingNotificationInput(BaseModel):
     maternity_count: int | None = None
     issuer_department: str | None = None
     issue_date: date | None = None
-
-
-def _find_template() -> Path:
-    candidates = [
-        Path("assets/hr/7.4培训通知书.docx"),
-        Path("../assets/hr/7.4培训通知书.docx"),
-        Path(__file__).resolve().parent.parent.parent.parent
-        / "assets/hr"
-        / "7.4培训通知书.docx",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    raise FileNotFoundError("模板文件未找到: 7.4培训通知书.docx")
-
-
-def _set_cell(cell, text: str) -> None:
-    """Set cell text, preserving first run's formatting."""
-    first = None
-    for p in cell.paragraphs:
-        for r in p.runs:
-            if first is None:
-                first = r
-            r.text = ""
-    if first is not None:
-        first.text = str(text or "")
-    elif cell.paragraphs:
-        cell.paragraphs[0].add_run(str(text or ""))
 
 
 def _compute_hours(start: str | None, end: str | None) -> str:
@@ -106,20 +85,8 @@ def _fmt_slot(d: str, t_start: str, t_end: str) -> str:
     return d
 
 
-def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
-    """Generate training notification docx from template."""
-    template_path = _find_template()
-    doc = Document(str(template_path))
-    table = doc.tables[0]
-
-    # ── Row 0: 培训内容 (label col0, value cols 1-3 merged) ──
-    topic_parts = [data.subject]
-    if data.content:
-        topic_parts.append(data.content)
-    _set_cell(table.rows[0].cells[1], _dash(" — ".join(topic_parts)))
-
-    # ── Row 1: 培训日期 | value (含时间) | 课时 | value ──
-    # 优先使用 time_slots（多时段），否则回退到旧字段
+def _compute_date_and_hours(data: TrainingNotificationInput) -> tuple[str, str]:
+    """培训日期与时段文本、课时文本（多时段优先，否则回退旧字段）。"""
     if data.time_slots:
         slot_parts = []
         total_minutes = 0
@@ -140,34 +107,31 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
                     pass
         date_text = "；".join(slot_parts)
         total_hours = round(total_minutes / 30) / 2
-        hours_text = "" if total_hours <= 0 else (f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时")
-        _set_cell(table.rows[1].cells[1], _dash(date_text))
-        _set_cell(table.rows[1].cells[3], _dash(hours_text))
-    else:
-        face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
-        face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
-        self_start = getattr(data, "self_study_time_start", None)
-        self_end = getattr(data, "self_study_time_end", None)
-        face_date = getattr(data, "face_date", None) or data.training_date
-        self_date = getattr(data, "self_study_date", None)
-        parts = []
-        # 格式化中文日期；面授必须有时间才写，自学只选了日期也要写
-        face_part = _fmt_date(face_date, face_start, face_end, "面授") if face_start else ""
-        if face_part:
-            parts.append(face_part)
-        if self_date:
-            parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
-        date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
-        _set_cell(table.rows[1].cells[1], _dash(date_text))
-        # 课时仅按面授时间计算
-        _set_cell(table.rows[1].cells[3], _dash(_compute_hours(face_start, face_end)))
+        hours_text = "" if total_hours <= 0 else (
+            f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时"
+        )
+        return date_text, hours_text
 
-    # ── Row 2: 培训方式 | value | 授课人 | value ──
-    _set_cell(table.rows[2].cells[1], _dash(data.training_method))
-    _set_cell(table.rows[2].cells[3], _dash(data.trainer))
+    face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
+    face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
+    self_start = getattr(data, "self_study_time_start", None)
+    self_end = getattr(data, "self_study_time_end", None)
+    face_date = getattr(data, "face_date", None) or data.training_date
+    self_date = getattr(data, "self_study_date", None)
+    parts = []
+    # 格式化中文日期；面授必须有时间才写，自学只选了日期也要写
+    face_part = _fmt_date(face_date, face_start, face_end, "面授") if face_start else ""
+    if face_part:
+        parts.append(face_part)
+    if self_date:
+        parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
+    date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
+    # 课时仅按面授时间计算
+    return date_text, _compute_hours(face_start, face_end)
 
-    # ── Row 3: 培训对象 (merged cols 1-3) ──
-    # 培训对象统一以「x部门 全体成员」展示，不再列人名；附病假/产假人数
+
+def _compute_trainee_text(data: TrainingNotificationInput) -> str:
+    """培训对象统一以「x部门 全体成员」展示，不再列人名；附病假/产假人数。"""
     if data.trainee_names:
         people = f"「{data.department}」全体成员（{len(data.trainee_names)}人）"
     else:
@@ -175,43 +139,57 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
     sick = data.sick_count if data.sick_count is not None else 0
     maternity = data.maternity_count if data.maternity_count is not None else 0
     people += f"（病假{sick}人、产假{maternity}人除外）"
-    _set_cell(table.rows[3].cells[1], people)
+    return people
 
-    # ── Row 4: 培训地点 (merged cols 1-3) ──
-    _set_cell(table.rows[4].cells[1], _dash(data.location))
 
-    # ── Row 5: 考核方式 (merged cols 1-3) ──
-    _set_cell(table.rows[5].cells[1], _dash(data.assessment_method))
+def _compute_issue_date_str(data: TrainingNotificationInput) -> str:
+    """落款日期优先使用显式 issue_date；否则取首个 time_slot / 培训日期。"""
+    issue_d = data.issue_date or data.training_date
+    if data.issue_date is None and data.time_slots:
+        first_slot_date = data.time_slots[0].get("date", "")
+        if first_slot_date:
+            try:
+                issue_d = datetime.strptime(first_slot_date, "%Y-%m-%d").date()
+            except ValueError:
+                pass
+    d = issue_d
+    if not d:
+        return ""
+    return f"{d.year}年{d.month:02d}月{d.day:02d}日"
 
-    # ── Row 6: 注意事项 (merged cols 1-3) ──
-    _set_cell(table.rows[6].cells[1],
-        "1. 请培训人员自带笔记本、笔，做好笔记。\n"
-        "2. 请部门安排好参训人员的工作时间，做到培训工作两不误。\n"
-        "3. 不得无故缺席、迟到，到场签到，有特殊情况须提前请假。"
-    )
 
-    # ── Para 0: department line ──
-    for p_idx in (0, 1):
-        if p_idx < len(doc.paragraphs):
-            p = doc.paragraphs[p_idx]
-            # Clear all runs first
-            for r in p.runs:
-                r.text = ""
-    if len(doc.paragraphs) > 0:
-        dept_name = data.issuer_department or data.department or ""
-        doc.paragraphs[0].runs[0].text = f"部门/Dept：{dept_name}          签发人/ Issued by："
-    if len(doc.paragraphs) > 1:
-        # 落款日期优先使用显式 issue_date；否则取首个 time_slot / 培训日期
-        issue_d = data.issue_date or data.training_date
-        if data.issue_date is None and data.time_slots:
-            first_slot_date = data.time_slots[0].get("date", "")
-            if first_slot_date:
-                try:
-                    issue_d = datetime.strptime(first_slot_date, "%Y-%m-%d").date()
-                except ValueError:
-                    pass
-        d = issue_d
-        doc.paragraphs[1].runs[0].text = f"{d.year}年{d.month:02d}月{d.day:02d}日"
+def generate_training_notification(
+    data: TrainingNotificationInput,
+    template_bytes: bytes | None = None,
+) -> BytesIO:
+    """Generate training notification docx from template (marker-based)."""
+    raw = template_bytes or find_hr_template_bytes("training_notification")
+    doc = Document(BytesIO(raw))
+
+    date_text, hours_text = _compute_date_and_hours(data)
+    topic_parts = [data.subject]
+    if data.content:
+        topic_parts.append(data.content)
+
+    mapping = {
+        # 页眉：部门/Dept 行与落款日期行
+        "{体现部门}": data.issuer_department or data.department or "",
+        "{签发日期}": _compute_issue_date_str(data),
+        # 表格
+        "{培训内容}": _dash(" — ".join(topic_parts)),
+        "{实施日期}": _dash(date_text),
+        "{课时}": _dash(hours_text),
+        "{培训方式}": _dash(data.training_method),
+        "{授课单位_培训师}": _dash(data.trainer),
+        "{培训对象}": _compute_trainee_text(data),
+        "{培训地点}": _dash(data.location),
+        "{考核方式}": _dash(data.assessment_method),
+    }
+    # 长标记优先（防御性：若模板里出现包含其他标记的组合标记不会被截断）
+    mapping = dict(sorted(mapping.items(), key=lambda kv: -len(kv[0])))
+    replace_markers(doc, mapping)
+    # 用户模板里多写的不支持标记清理掉，避免字面量出现在导出文件
+    clear_unused_markers(doc)
 
     buf = BytesIO()
     doc.save(buf)

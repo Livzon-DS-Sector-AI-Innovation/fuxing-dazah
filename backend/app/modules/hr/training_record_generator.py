@@ -2,26 +2,12 @@
 
 from datetime import date
 from io import BytesIO
-from pathlib import Path
 from typing import Any
 
 from docx import Document
 
 from app.modules.hr.models import Employee
-
-
-def _find_template() -> Path:
-    candidates = [
-        Path("assets/hr/新员工培训记录-模板.docx"),
-        Path("../assets/hr/新员工培训记录-模板.docx"),
-        Path(__file__).resolve().parent.parent.parent.parent
-        / "assets/hr"
-        / "新员工培训记录-模板.docx",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    raise FileNotFoundError("模板文件未找到: 新员工培训记录-模板.docx")
+from app.modules.hr.template_utils import find_hr_template_bytes
 
 
 def _replace_all(doc: Document, placeholders: dict[str, str]) -> None:
@@ -62,13 +48,15 @@ def generate_training_record(
     employee: Employee,
     training_items: list[dict[str, Any]] | None = None,
     training_position: str | None = None,
+    template_bytes: bytes | None = None,
 ) -> BytesIO:
     """生成新员工培训记录 Word 文档。
 
     training_items 每项包含: file_name, trainer, method, plan_date
     training_position: 培训岗位。传入时「体现岗位」写培训岗位，否则写员工实际岗位
     """
-    doc = Document(str(_find_template()))
+    raw = template_bytes or find_hr_template_bytes("training_record")
+    doc = Document(BytesIO(raw))
 
     # ── Part I: 员工概况占位符 ──
     probation_end = _calc_probation_end(employee.hire_date)

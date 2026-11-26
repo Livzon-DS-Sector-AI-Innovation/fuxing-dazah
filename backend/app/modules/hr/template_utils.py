@@ -19,6 +19,16 @@ def find_hr_template(filename: str) -> Path:
     raise FileNotFoundError(f"模板文件未找到: {filename}")
 
 
+def find_hr_template_bytes(template_key: str) -> bytes:
+    """按模板注册键读取仓库默认模板字节（无 DB 自定义版时生成器的回退来源）。"""
+    from app.modules.hr.training_template_registry import TEMPLATES_BY_KEY
+
+    tdef = TEMPLATES_BY_KEY.get(template_key)
+    if tdef is None:
+        raise FileNotFoundError(f"未知模板注册键: {template_key}")
+    return find_hr_template(tdef.default_file).read_bytes()
+
+
 def find_font(filename: str) -> Path:
     """在 assets/fonts/ 目录下查找字体文件（与 find_hr_template 同模式）。"""
     candidates = [
