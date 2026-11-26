@@ -813,6 +813,17 @@ export async function listTrainingExportTemplates(): Promise<{
   return fetchHrApi('/hr/training-export-templates', { errorMessage: '获取模板清单失败' })
 }
 
+/** 上传向导预检：自动识别 docx 里实际出现的 {占位符}（只识别，不校验） */
+export async function inspectTrainingExportTemplate(formData: FormData): Promise<{
+  code: number; message: string; data: { markers: string[] }
+}> {
+  return fetchHrApi('/hr/training-export-templates/inspect', {
+    method: 'POST',
+    body: formData,
+    errorMessage: '识别占位符失败',
+  })
+}
+
 export async function listTrainingExportTemplateVersions(key: string): Promise<{
   code: number; message: string; data: TrainingTemplateVersion[]
 }> {

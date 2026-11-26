@@ -9,6 +9,7 @@ import { App, Alert, Button, Card, Drawer, Empty, Popconfirm, Space, Spin, Table
 import { DownloadOutlined, HistoryOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import PageHeader from './PageHeader'
+import TrainingTemplateUploadModal from './TrainingTemplateUploadModal'
 import { downloadBase64File } from '@/lib/hr'
 import {
   activateTrainingExportTemplateVersion,
@@ -42,6 +43,8 @@ export default function TrainingTemplatesClient() {
   const [historyFor, setHistoryFor] = useState<TrainingTemplateDef | null>(null)
   const [versions, setVersions] = useState<TrainingTemplateVersion[]>([])
   const [versionsLoading, setVersionsLoading] = useState(false)
+  // 上传新模板向导
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -215,6 +218,11 @@ export default function TrainingTemplatesClient() {
       <PageHeader
         title="导出模板"
         description="培训各类导出文档的 Word 模板自助维护：在 Word 里改样式文字后上传换版，导出即时生效"
+        actions={
+          <Button type="primary" icon={<UploadOutlined />} onClick={() => setUploadOpen(true)}>
+            上传新模板
+          </Button>
+        }
       />
 
       <Alert
@@ -223,9 +231,9 @@ export default function TrainingTemplatesClient() {
         title="自维护步骤与注意事项"
         description={
           <ul className="list-disc pl-5 m-0 text-[13px] leading-6">
-            <li>先「下载当前模板」或「下载默认模板」，在 Word 中修改样式与文字（增删行列都安全）</li>
-            <li>保留模板中的 <code>{'{标记}'}</code>，上传缺必填标记的模板会被拒绝并提示缺哪些</li>
-            <li>上传即生成新版本并立即生效；历史版本可随时回滚，「恢复默认」切回系统官方模板</li>
+            <li>先「下载当前」拿到模板，在 Word 中修改样式与文字（增删行列都安全）</li>
+            <li>保留模板中的 <code>{'{标记}'}</code>；上传时自动识别占位符，缺必填标记会被拒绝并提示缺哪些</li>
+            <li>上传即生成新版本并立即生效；历史版本可随时回滚，「恢复默认」切回系统内置模板</li>
           </ul>
         }
       />
@@ -244,12 +252,11 @@ export default function TrainingTemplatesClient() {
                 title={
                   <Space size={8}>
                     <span>{t.name}</span>
-                    {t.custom ? (
+                    <Tag>{t.section}</Tag>
+                    {t.custom && (
                       <Tooltip title={`${t.custom.file_name} · ${formatSize(t.custom.size)} · ${t.custom.uploaded_by || '—'} · ${formatTime(t.custom.uploaded_at)}`}>
                         <Tag color="blue">自定义 v{t.custom.version_no}</Tag>
                       </Tooltip>
-                    ) : (
-                      <Tag>官方默认</Tag>
                     )}
                     {t.version_count > 0 && (
                       <span className="text-[12px] text-[var(--color-steel)]">共 {t.version_count} 个版本</span>
@@ -261,11 +268,6 @@ export default function TrainingTemplatesClient() {
                     <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(t)}>
                       下载当前
                     </Button>
-                    <Tooltip title="官方默认模板，推荐以它为基础修改">
-                      <Button size="small" onClick={() => handleDownload(t, { isDefault: true })}>
-                        下载默认
-                      </Button>
-                    </Tooltip>
                     <Upload
                       accept=".docx"
                       showUploadList={false}
@@ -286,7 +288,7 @@ export default function TrainingTemplatesClient() {
                     )}
                     {t.custom && (
                       <Popconfirm
-                        title="恢复官方默认模板？"
+                        title="恢复系统内置模板？"
                         description="当前自定义版转为历史版本，可随时再激活"
                         onConfirm={() => void handleRestoreDefault(t)}
                       >
@@ -297,6 +299,9 @@ export default function TrainingTemplatesClient() {
                 }
               >
                 <p className="m-0 text-[13px] text-[var(--color-steel)]">{t.description}</p>
+                <p className="mt-1 mb-0 text-[13px] text-[var(--color-steel)]">
+                  用于：{t.usages.join('、')}
+                </p>
                 <div className="mt-2">
                   <Button type="link" size="small" className="!px-0" onClick={() => toggleExpanded(t.key)}>
                     {expanded ? '收起占位符' : `可用占位符（${t.markers.length}）`}
@@ -343,6 +348,13 @@ export default function TrainingTemplatesClient() {
           <Table rowKey="id" columns={versionColumns} dataSource={versions} pagination={false} />
         )}
       </Drawer>
+
+      <TrainingTemplateUploadModal
+        open={uploadOpen}
+        templates={templates}
+        onClose={() => setUploadOpen(false)}
+        onUploaded={refresh}
+      />
     </div>
   )
 }

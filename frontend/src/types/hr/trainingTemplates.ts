@@ -25,9 +25,13 @@ export interface TrainingTemplateDef {
   name: string
   description: string
   default_file: string
+  /** 所属板块（上传向导分组、卡片映射展示） */
+  section: string
+  /** 用于哪些导出入口 */
+  usages: string[]
   markers: TrainingTemplateMarker[]
   notes: string[]
-  /** 当前生效的自定义版本；null = 使用官方默认模板 */
+  /** 当前生效的自定义版本；null = 使用内置默认模板（页面上不展示默认概念） */
   custom: TrainingTemplateVersion | null
   version_count: number
 }
