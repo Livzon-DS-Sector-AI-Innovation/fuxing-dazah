@@ -4,7 +4,8 @@
 // 每次打开由父组件换 key 重新挂载：表单初值走 initialValues，不用 effect 把 props 拷进 state。
 
 import { useEffect, useMemo, useState } from 'react'
-import { App, DatePicker, Form, Input, Modal, Select, TimePicker } from 'antd'
+import { App, Button, Checkbox, DatePicker, Form, Input, Modal, Select, TimePicker, Tooltip } from 'antd'
+import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import {
   createSopTrainingRecord,
@@ -21,8 +22,8 @@ import styles from './sop-training.module.css'
 interface RecordFormValues {
   year: string
   training_date?: Dayjs | null
-  file_name: string
-  file_no?: string | null
+  /** 一次登记可含多份培训文件，其余字段为这几份文件共用 */
+  files: { file_name?: string; file_no?: string | null }[]
   effective_date?: Dayjs | null
   method?: string | null
   complete_date?: Dayjs | null
@@ -79,13 +80,14 @@ function formatDate(value: Dayjs | null | undefined): string | null {
 }
 
 function toFormValues(editing: SopTrainingRecord | null, year: string): RecordFormValues {
-  if (!editing) return { year, file_name: '', method: 'R', color: '新增', involved_departments: [] }
+  if (!editing) {
+    return { year, method: 'R', color: '新增', involved_departments: [], files: [{ file_name: '', file_no: '' }] }
+  }
   const parsed = editing.complete_time?.match(COMPLETE_RE)
   return {
     year: editing.year,
     training_date: toDayjs(editing.training_date),
-    file_name: editing.file_name,
-    file_no: editing.file_no,
+    files: [{ file_name: editing.file_name, file_no: editing.file_no ?? '' }],
     effective_date: toDayjs(editing.effective_date),
     method: editing.method,
     complete_date: parsed ? dayjs(`${parsed[1]}-${parsed[2]}-${parsed[3]}`) : null,
@@ -109,6 +111,8 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
 
   const initialValues = useMemo(() => toFormValues(editing, year), [editing, year])
   const method = Form.useWatch('method', form)
+  const selectedDepartments = (Form.useWatch('involved_departments', form) ?? []) as string[]
+  const [deptSearch, setDeptSearch] = useState('')
 
   // 历史数据的完成时间若不是「日期(时段)」写法，表单解析不出来；
   // 用户没动时间字段时原样保留，避免只是改个文件名就把完成时间清空
@@ -154,6 +158,25 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
     }
   }
 
+  // 全选只作用于当前搜索结果，与用户看到的范围一致（同培训名册分类管理口径）
+  const filteredDeptOptions = useMemo(
+    () => deptOptions.filter((o) => DEPARTMENT_SEARCH(deptSearch, o)),
+    [deptOptions, deptSearch],
+  )
+  const allFilteredSelected =
+    filteredDeptOptions.length > 0 && filteredDeptOptions.every((o) => selectedDepartments.includes(o.value))
+  const someFilteredSelected = filteredDeptOptions.some((o) => selectedDepartments.includes(o.value))
+
+  const toggleAllDepartments = (checked: boolean) => {
+    const next = checked
+      ? Array.from(new Set([...selectedDepartments, ...filteredDeptOptions.map((o) => o.value)]))
+      : selectedDepartments.filter((v) => !filteredDeptOptions.some((o) => o.value === v))
+    // setFieldsValue 不触发 onValuesChange：dirty 与培训师联动在这里手动补
+    form.setFieldsValue({ involved_departments: next })
+    setDirty(true)
+    void handleDepartmentsChange(next)
+  }
+
   const handleInitiatorChange = (dept: string | undefined) => {
     // 培训对象为空时自动生成「X部门全体员工及相关部门培训师」
     if (!form.getFieldValue('trainees')) {
@@ -187,11 +210,14 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
         ? `(${range[0].format('HH:mm')}-${range[1].format('HH:mm')})`
         : null
     const timeUntouched = !form.isFieldTouched('complete_date') && !form.isFieldTouched('complete_range')
+    const files = (v.files ?? []).map((f) => ({
+      file_name: (f.file_name ?? '').trim(),
+      file_no: f.file_no?.trim() || null,
+    }))
+    // 文件名称/编号之外的字段为各份文件共用
     const payload: Partial<SopTrainingRecord> = {
       year: v.year.trim(),
       training_date: formatDate(v.training_date),
-      file_name: v.file_name.trim(),
-      file_no: v.file_no?.trim() || null,
       effective_date: formatDate(v.effective_date),
       method: v.method ?? null,
       complete_time: timeUntouched && legacyTime ? legacyTime : completeTime,
@@ -205,11 +231,31 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
     setSaving(true)
     try {
       if (editing) {
-        await updateSopTrainingRecord(editing.id, payload)
+        await updateSopTrainingRecord(editing.id, { ...payload, ...files[0] })
         message.success('已更新')
       } else {
-        await createSopTrainingRecord(payload)
-        message.success('已保存草稿，点「转培训」后收录到各部门二级表并通知培训管理员')
+        // 每份文件一条登记记录；逐条串行建，中途失败时已入库的行从表单移除，重试只补剩余的
+        let saved = 0
+        try {
+          for (const f of files) {
+            await createSopTrainingRecord({ ...payload, ...f })
+            saved++
+          }
+        } catch (e) {
+          const failed = files[saved]
+          form.setFieldsValue({ files: v.files?.slice(saved) })
+          message.error(
+            `前 ${saved} 条已保存，第 ${saved + 1} 条「${failed.file_name}」保存失败：${
+              e instanceof Error ? e.message : '未知错误'
+            }，未保存的仍留在表单中，可修正后重试`,
+          )
+          return
+        }
+        message.success(
+          files.length > 1
+            ? `已保存 ${files.length} 条登记草稿，点「转培训」后收录到各部门二级表并通知培训管理员`
+            : '已保存草稿，点「转培训」后收录到各部门二级表并通知培训管理员',
+        )
       }
       setDirty(false)
       onSaved()
@@ -244,18 +290,65 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
         className={styles.form}
       >
         <div className={styles.sectionTitle}>培训文件</div>
+        {/* 一次培训可能覆盖多份文件：加号逐行添加，其余字段共用；编辑态固定单行 */}
+        <Form.List name="files">
+          {(fields, { add, remove }) => (
+            <div className="mb-[14px]">
+              {fields.length > 1 && (
+                <div className="grid grid-cols-[2fr_1fr_auto] gap-x-4">
+                  <Form.Item label="文件名称" required style={{ marginBottom: 0 }} />
+                  <Form.Item label="文件编号" style={{ marginBottom: 0 }} />
+                  <span />
+                </div>
+              )}
+              <div className="space-y-2">
+                {fields.map(({ key, name }, index) => (
+                  <div key={key} className="grid grid-cols-[2fr_1fr_auto] items-start gap-x-4">
+                    <Form.Item
+                      name={[name, 'file_name']}
+                      label={fields.length === 1 ? '文件名称' : undefined}
+                      style={{ marginBottom: 0 }}
+                      rules={[{ required: true, whitespace: true, message: '请填写文件名称' }]}
+                    >
+                      <Input placeholder="如：发酵罐灭菌操作规程" />
+                    </Form.Item>
+                    <Form.Item
+                      name={[name, 'file_no']}
+                      label={fields.length === 1 ? '文件编号' : undefined}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Input placeholder="SOP 编号" />
+                    </Form.Item>
+                    {!editing && (
+                      <Tooltip title="删除该行">
+                        <Button
+                          type="text"
+                          danger
+                          aria-label={`删除第 ${index + 1} 行培训文件`}
+                          disabled={fields.length === 1}
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(name)}
+                        />
+                      </Tooltip>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {!editing && (
+                <Button
+                  type="dashed"
+                  block
+                  icon={<PlusOutlined />}
+                  className="mt-2"
+                  onClick={() => add({ file_name: '', file_no: '' })}
+                >
+                  添加培训文件
+                </Button>
+              )}
+            </div>
+          )}
+        </Form.List>
         <div className="grid grid-cols-3 gap-x-4">
-          <Form.Item
-            name="file_name"
-            label="文件名称"
-            className="col-span-2"
-            rules={[{ required: true, whitespace: true, message: '请填写文件名称' }]}
-          >
-            <Input placeholder="如：发酵罐灭菌操作规程" />
-          </Form.Item>
-          <Form.Item name="file_no" label="文件编号">
-            <Input placeholder="SOP 编号" />
-          </Form.Item>
           <Form.Item name="effective_date" label="生效日期">
             <DatePicker className="w-full" format="YYYY-MM-DD" />
           </Form.Item>
@@ -328,6 +421,31 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
               maxTagCount="responsive"
               onChange={(vals: string[]) => { void handleDepartmentsChange(vals || []) }}
               filterOption={DEPARTMENT_SEARCH}
+              // 受控 searchValue：multiple 模式下 antd 在 blur/ESC 时会静默清空搜索框而不发 onSearch，
+              // 不受控会让全选头仍按旧搜索词算「当前 N 项」、与列表实际显示脱节
+              searchValue={deptSearch}
+              onSearch={setDeptSearch}
+              popupRender={(menu) => (
+                <>
+                  <div
+                    className="flex items-center border-b border-[var(--color-hairline-soft)] px-2 py-1.5"
+                    // 阻止默认按下行为，点全选时下拉不收起、搜索框不失焦
+                    onMouseDown={(e) => { e.preventDefault() }}
+                  >
+                    <Checkbox
+                      checked={allFilteredSelected}
+                      indeterminate={someFilteredSelected && !allFilteredSelected}
+                      disabled={!filteredDeptOptions.length}
+                      onChange={(e) => toggleAllDepartments(e.target.checked)}
+                    >
+                      全选{filteredDeptOptions.length < deptOptions.length
+                        ? `（当前 ${filteredDeptOptions.length} 项）`
+                        : ''}
+                    </Checkbox>
+                  </div>
+                  {menu}
+                </>
+              )}
             />
           </Form.Item>
         </div>
