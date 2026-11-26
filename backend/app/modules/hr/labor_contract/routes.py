@@ -15,11 +15,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import AppException, ForbiddenException
+from app.core.exceptions import AppException, ForbiddenException, NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.deps import HrAccessContext, require_hr_access
-from app.modules.hr.labor_contract import renewal_approval, service
+from app.modules.hr.labor_contract import archive_service, renewal_approval, service
 from app.modules.hr.labor_contract import repository as repo
+from app.modules.hr.labor_contract import settings as contract_settings
 from app.modules.hr.labor_contract.models import LaborContract
 from app.platform.audit.service import record_audit_log
 
@@ -95,16 +96,34 @@ def _contract_dict(c: LaborContract) -> dict[str, Any]:
         "sign_confirmed_at": c.sign_confirmed_at.isoformat() if c.sign_confirmed_at else None,
         "terminated_reason": c.terminated_reason,
         "terminated_at": c.terminated_at.isoformat() if c.terminated_at else None,
+        "departure_record_id": str(c.departure_record_id) if c.departure_record_id else None,
+        "archive_status": c.archive_status,
+        "archive_status_label": LaborContract.ARCHIVE_LABELS.get(c.archive_status, c.archive_status),
+        "archive_file_name": c.archive_file_name,
+        "archive_uploaded_at": c.archive_uploaded_at.isoformat() if c.archive_uploaded_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "updated_at": c.updated_at.isoformat() if c.updated_at else None,
     }
 
 
-async def _ensure_in_scope(ctx: HrAccessContext, contract: LaborContract) -> None:
-    """非全量数据范围的登录人只能访问授权部门内的合同。"""
+async def _ensure_in_scope(
+    db: AsyncSession, ctx: HrAccessContext, contract: LaborContract,
+) -> None:
+    """单条合同的数据范围校验（调阅权限三级，需求归档规则第 8 条）。
+
+    - 全量范围（HR）：全部合同
+    - self_only（员工本人）：仅本人合同
+    - 部门范围（部门负责人）：授权部门内在职人员的合同；离职人员合同归离职台账，仅 HR 可见
+    """
     if ctx.is_unrestricted:
         return
+    if ctx.data_scope == "self_only":
+        if not ctx.employee_number or contract.employee_number != ctx.employee_number:
+            raise ForbiddenException("数据范围限制：仅可访问本人合同")
+        return
     ctx.ensure_can_access_department(contract.department)
+    if await repo.is_departed(db, contract.employee_number):
+        raise ForbiddenException("数据范围限制：离职人员合同仅限 HR 在离职台账查看")
 
 
 def _scope_departments(ctx: HrAccessContext) -> frozenset[str] | None:
@@ -118,6 +137,30 @@ def _scope_departments(ctx: HrAccessContext) -> frozenset[str] | None:
     )
 
 
+def _archive_caps(ctx: HrAccessContext, contract: LaborContract) -> dict[str, bool]:
+    """归档相关能力随数据范围变化，由后端下发供前端控制入口显隐（把关仍在各端点）。"""
+    return {
+        "can_archive": ctx.is_unrestricted,
+        "can_access_file": archive_service.can_access_file(ctx, contract),
+    }
+
+
+def _list_scope(
+    ctx: HrAccessContext, department: str | None,
+) -> tuple[str | None, frozenset[str] | None]:
+    """列表查询的数据范围收敛，返回 (工号过滤, 部门集合)。
+
+    self_only（员工本人）按工号收敛到本人合同；其余按授权部门（None=不限，空集=无授权部门）。
+    """
+    employee_number = ctx.employee_number if ctx.data_scope == "self_only" else None
+    departments = None if employee_number else _scope_departments(ctx)
+    if department:
+        if departments is not None and department not in departments:
+            raise ForbiddenException("数据范围限制：仅可查看授权部门")
+        departments = frozenset({department})
+    return employee_number, departments
+
+
 # ─── 台账 ───
 
 
@@ -127,17 +170,17 @@ async def list_contracts(
     keyword: str | None = Query(None, max_length=64, description="姓名/工号模糊"),
     expiring_days: int | None = Query(None, ge=1, le=365, description="N 天内到期的公告期视图"),
     department: str | None = Query(None, max_length=64),
+    archive_status: str | None = Query(
+        None, pattern="^(unarchived|archived)$", description="归档状态过滤",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
 ) -> JSONResponse:
     statuses = [s.strip() for s in status.split(",") if s.strip()] if status else None
-    departments = _scope_departments(ctx)
-    if department:
-        if departments is not None and department not in departments:
-            raise ForbiddenException("数据范围限制：仅可查看授权部门")
-        departments = frozenset({department})
+    # 在职台账只放在职人员合同（两本台账不交叉），离职人员合同见离职台账「合同台账」页签
+    employee_number, departments = _list_scope(ctx, department)
 
     total, rows = await repo.list_page(
         db,
@@ -145,6 +188,8 @@ async def list_contracts(
         statuses=statuses,
         keyword=keyword,
         expiring_within_days=expiring_days,
+        employee_number=employee_number,
+        archive_status=archive_status,
         offset=(page - 1) * page_size,
         limit=page_size,
     )
@@ -182,10 +227,14 @@ async def get_contract(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:read")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     history = await service.contract_history(db, contract)
     data = _contract_dict(contract)
     data["history"] = [_contract_dict(c) for c in history]
+    data.update(_archive_caps(ctx, contract))
+    # 飞书原生审批为可选增强：配置了定义编码才展示「转飞书审批」入口（默认站内审批）
+    kv = await contract_settings.load_contract_settings(db)
+    data["renewal_approval_configured"] = bool(contract_settings.approval_code(kv))
     return success_response(data=data)
 
 
@@ -197,7 +246,7 @@ async def update_contract(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     contract = await service.update_contract(
         db, contract,
         start_date=payload.start_date,
@@ -224,7 +273,7 @@ async def renew_contract(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     new_contract = await service.renew_contract(
         db, contract,
         start_date=payload.start_date,
@@ -250,7 +299,7 @@ async def dept_decision(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     contract = await service.apply_dept_decision(
         db, contract,
         decision=payload.decision,
@@ -273,7 +322,7 @@ async def terminate_contract(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     contract = await service.terminate_contract(
         db, contract, reason=payload.reason, user_id=ctx.user.id
     )
@@ -292,7 +341,7 @@ async def stamp_contract(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     contract = await service.mark_stamped(db, contract, user_id=ctx.user.id)
     await record_audit_log(
         db, action="hr.contract.stamp", user=ctx.user,
@@ -308,7 +357,7 @@ async def deliver_contract(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     contract, sign_url = await service.mark_delivered(db, contract, user_id=ctx.user.id)
     await record_audit_log(
         db, action="hr.contract.deliver", user=ctx.user,
@@ -327,7 +376,7 @@ async def re_announce(
     ctx: HrAccessContext = Depends(require_hr_access("hr:contract:manage")),
 ) -> JSONResponse:
     contract = await service.get_or_404(db, contract_id)
-    await _ensure_in_scope(ctx, contract)
+    await _ensure_in_scope(db, ctx, contract)
     if contract.status != LaborContract.STATUS_PENDING_RENEWAL:
         raise AppException(message="仅「公告期」的合同可重新发起审批")
     proposed_start = (contract.end_date or date.today()) + timedelta(days=1)

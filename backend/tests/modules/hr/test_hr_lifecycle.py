@@ -63,6 +63,7 @@ def test_register_declares_every_hr_task_exactly_once(
 
     assert sorted(host.scheduler.tasks) == [
         "hr.contract.approval_sync",
+        "hr.contract.archive_reminder",
         "hr.contract.reminder",
         "hr.contract.renewal_announcement",
         "hr.employee_sync.reconcile",

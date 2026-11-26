@@ -52,6 +52,7 @@ _ALL_HR_PERMS: set[str] = {
     # hr:profile:sensitive 故意不加：导出类用例依赖「无敏感权限 → 身份证脱敏」的口径。
     "hr:certificate:read", "hr:certificate:manage", "hr:certificate:audit",
     "hr:probation:exam:manage",
+    "hr:contract:read", "hr:contract:manage",
 }
 
 

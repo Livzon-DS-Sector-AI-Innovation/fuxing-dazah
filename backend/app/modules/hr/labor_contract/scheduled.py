@@ -1,4 +1,4 @@
-"""劳动合同定时任务：公告期扫描（每天 09:05）+ 审批结果轮询（每 15 分钟）。
+"""劳动合同定时任务：公告期扫描（每天 09:05）+ 审批结果轮询（每 15 分钟）+ 归档缺失周提醒（每周一 09:00）。
 
 公告期扫描：生效合同进入提前 N 天窗口（缺省 50）→ 尝试发起飞书原生审批
 → 失败降级站内待审批 → HR 摘要卡片；同轮把到期未续签的合同翻成
@@ -6,6 +6,7 @@ expired_unrenewed。配置全走 hr_contract.*（labor_contract/settings.py）�
 任务内部自检开关，无需 env。
 
 审批结果轮询：renewal_approval.sync_pending_results 幂等回写。
+归档缺失周提醒：见 archive_scheduled.py。
 """
 
 import logging
@@ -15,7 +16,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
-from app.modules.hr.labor_contract import notify, renewal_approval
+from app.modules.hr.labor_contract import (
+    archive_scheduled,
+    departure_service,
+    notify,
+    renewal_approval,
+)
 from app.modules.hr.labor_contract import repository as repo
 from app.modules.hr.labor_contract import service as contract_service
 from app.modules.hr.labor_contract import settings as contract_settings
@@ -57,6 +63,9 @@ async def _run_announcement(
 ) -> None:
     today = date.today()
 
+    # 0) 已离职人员的未完结合同归入离职台账（两本台账不交叉，不再参与预警）
+    reconciled_rows = await departure_service.reconcile_departed_contracts(db)
+
     # 1) 到期未续签标注（在职员工）
     expired_rows = await contract_service.flip_expired_contracts(db)
 
@@ -94,7 +103,7 @@ async def _run_announcement(
             manual_rows.append(contract)
             logger.info("公告期降级站内审批: %s → %s", contract.employee_number, result)
 
-    if feishu_rows or manual_rows or failed_rows or expired_rows:
+    if feishu_rows or manual_rows or failed_rows or expired_rows or reconciled_rows:
         await db.commit()
     else:
         await db.rollback()
@@ -153,3 +162,4 @@ def register_labor_contract_tasks(registry: SchedulerRegistry) -> None:
     """注册劳动合同定时任务（hr/lifecycle.py 挂载）。"""
     registry.register_task(RENEWAL_ANNOUNCE_TASK)
     registry.register_task(APPROVAL_SYNC_TASK)
+    registry.register_task(archive_scheduled.ARCHIVE_REMINDER_TASK)

@@ -398,6 +398,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                                          "PUT": "hr:departure:read", "DELETE": "hr:departure:read"}),
     (r"/departure-ledger/saved-views", {"GET": "hr:departure:read", "POST": "hr:departure:read"}),
     (r"/departure-ledger", "hr:departure:read"),
+    # 离职合同台账（劳动合同管理 P3；handler 内另限全量数据范围，部门范围不可见离职人员合同）
+    (r"/departure-contracts", {"GET": "hr:departure:read"}),
     (r"/offboarding-records", {"GET": "hr:departure:read", "POST": "hr:departure:manage",
                                "PUT": "hr:departure:manage", "DELETE": "hr:departure:manage"}),
     # 培训台账

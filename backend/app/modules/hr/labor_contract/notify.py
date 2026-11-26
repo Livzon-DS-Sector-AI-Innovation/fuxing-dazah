@@ -134,3 +134,40 @@ async def send_announcement_summary(
             sent += 1
     return sent
 
+
+# 卡片正文有长度上限：部门明细最多列这么多，其余合并成一行
+_ARCHIVE_MAX_DEPARTMENTS = 20
+
+
+async def send_archive_summary(
+    *,
+    in_service_count: int,
+    departed_count: int,
+    department_counts: list[tuple[str, int]],
+    receivers: list[str],
+) -> int:
+    """归档缺失周提醒（每周一）：未归档合同扫描件按部门汇总。返回成功发送数。"""
+    total = in_service_count + departed_count
+    if not receivers or total == 0:
+        return 0
+    lines = [
+        f"未归档合同扫描件共 **{total}** 份（在职 {in_service_count} / 离职 {departed_count}）。",
+        "",
+        "**按部门**",
+    ]
+    for department, count in department_counts[:_ARCHIVE_MAX_DEPARTMENTS]:
+        lines.append(f"- {department or '未分类'}：{count} 份")
+    rest = department_counts[_ARCHIVE_MAX_DEPARTMENTS:]
+    if rest:
+        lines.append(f"- 其余 {len(rest)} 个部门共 {sum(c for _, c in rest)} 份")
+    lines += [
+        "",
+        "请到「劳动合同 → 电子档案库」导出补扫清单，安排扫描归档；离职人员合同在离职台账归档。",
+    ]
+    markdown = "\n".join(lines)
+    sent = 0
+    for open_id in receivers:
+        if await _send(open_id, "合同归档缺失提醒", markdown):
+            sent += 1
+    return sent
+

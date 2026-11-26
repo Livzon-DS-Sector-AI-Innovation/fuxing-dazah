@@ -528,6 +528,34 @@ class DepartureRecord(BaseModel):
         String(64), nullable=True, comment="签署人确认姓名"
     )
 
+    # ─── 离职合同台账（劳动合同管理 P3）───
+    # 合同信息（历次起止/签订次数/最后期限/终止方式/终止日期）按工号从 labor_contracts
+    # 实时聚合、不落快照；这里只存必须人工维护的项。
+    ORIGINAL_UNRECOVERED = "unrecovered"
+    ORIGINAL_RECOVERED = "recovered"
+    ORIGINAL_WAIVED = "waived"
+    ORIGINAL_STATUS_LABELS = {
+        ORIGINAL_UNRECOVERED: "未回收",
+        ORIGINAL_RECOVERED: "已回收",
+        ORIGINAL_WAIVED: "无需回收",
+    }
+    contract_termination_type: Mapped[str | None] = mapped_column(
+        String(24), nullable=True,
+        comment="合同终止方式人工更正值；空=按合同到期日与离职类型自动判定",
+    )
+    contract_approval_ref: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="审批依据（审批实例/流程单号，人工补录）"
+    )
+    separation_process_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="离职流程单号（人工补录；有离职办结单时以办结单编号为准）",
+    )
+    contract_original_status: Mapped[str] = mapped_column(
+        String(16), nullable=False,
+        default=ORIGINAL_UNRECOVERED, server_default=ORIGINAL_UNRECOVERED,
+        comment="合同原件回收状态: unrecovered 未回收 / recovered 已回收 / waived 无需回收",
+    )
+
 
 class TrainingLedger(BaseModel):
     __tablename__ = "training_ledgers"

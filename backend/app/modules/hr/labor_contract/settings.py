@@ -10,6 +10,9 @@
 - hr_contract.hr_copy_open_ids            HR 抄送接收人（姓名或 open_id，逗号分隔）。
 - hr_contract.sign_page_base_url          员工线上签字 H5 页基地址（如 https://host/api/contract-sign）。
 - hr_contract.contact_info                通知卡片中的联系人文案，缺省「人力资源部」。
+- hr_contract.archive_reminder_enabled    归档缺失周提醒开关，缺省 true（每周一汇总未归档合同给 HR）。
+- hr_contract.archive_reminder_open_ids   归档提醒接收人（姓名或 open_id，逗号分隔）；
+  未配置时沿用 hr_copy_open_ids，两者都为空则不发。
 """
 
 import logging
@@ -27,6 +30,8 @@ KEY_APPROVAL_CODE = "hr_contract.renewal_approval_code"
 KEY_HR_COPY_OPEN_IDS = "hr_contract.hr_copy_open_ids"
 KEY_SIGN_BASE_URL = "hr_contract.sign_page_base_url"
 KEY_CONTACT_INFO = "hr_contract.contact_info"
+KEY_ARCHIVE_REMINDER_ENABLED = "hr_contract.archive_reminder_enabled"
+KEY_ARCHIVE_REMINDER_OPEN_IDS = "hr_contract.archive_reminder_open_ids"
 
 DEFAULT_DAYS_AHEAD = 50
 DEFAULT_CONTACT_INFO = "人力资源部"
@@ -38,6 +43,8 @@ _SETTING_KEYS = (
     KEY_HR_COPY_OPEN_IDS,
     KEY_SIGN_BASE_URL,
     KEY_CONTACT_INFO,
+    KEY_ARCHIVE_REMINDER_ENABLED,
+    KEY_ARCHIVE_REMINDER_OPEN_IDS,
 )
 
 
@@ -68,6 +75,19 @@ def approval_code(settings: dict[str, str]) -> str:
 
 def contact_info(settings: dict[str, str]) -> str:
     return settings.get(KEY_CONTACT_INFO, "").strip() or DEFAULT_CONTACT_INFO
+
+
+def archive_reminder_enabled(settings: dict[str, str]) -> bool:
+    """归档缺失周提醒开关，缺省 true（收件人未配置时任务空转不发）。"""
+    return settings.get(KEY_ARCHIVE_REMINDER_ENABLED, "true").strip().lower() != "false"
+
+
+def archive_reminder_receivers(settings: dict[str, str]) -> list[str]:
+    """归档提醒接收人条目（姓名或 open_id）；未配置时沿用 HR 抄送。"""
+    raw = settings.get(KEY_ARCHIVE_REMINDER_OPEN_IDS, "").strip() or settings.get(
+        KEY_HR_COPY_OPEN_IDS, ""
+    )
+    return [x.strip() for x in raw.split(",") if x.strip()]
 
 
 async def save_contract_settings(db: AsyncSession, kv: dict[str, str]) -> None:
