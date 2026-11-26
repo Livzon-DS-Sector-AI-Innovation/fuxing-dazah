@@ -307,15 +307,22 @@ export interface SyncStatusResponse {
   }
 }
 
+/** 部门负责人 / 分管领导的账号就绪状态（能否按姓名解析到飞书账号，与后端 department_manager_status 对齐）：
+ *  ok 就绪 / no_account 未登录过系统（收不到）/ ambiguous 同名多账号（不会发）/ left 已离职（会发给已离职的人） */
+export type ManagerAccountStatus = 'ok' | 'no_account' | 'ambiguous' | 'left'
+
 export interface Department {
   id: string
   name: string
   code: string
   description?: string
-  /** 部门负责人（转正审批第二级） */
+  /** 部门负责人（劳动合同续签审批提醒接收人；转正审批第二级） */
   department_manager_name?: string | null
   /** 分管领导（转正审批第三级） */
   supervising_leader_name?: string | null
+  /** 账号就绪状态；没填姓名时为空串 */
+  manager_account_status?: ManagerAccountStatus | ''
+  leader_account_status?: ManagerAccountStatus | ''
   employee_count?: number
   created_at?: string
   updated_at?: string

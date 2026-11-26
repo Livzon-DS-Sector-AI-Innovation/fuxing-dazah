@@ -13,7 +13,17 @@ interface DepartmentFormProps {
   onSuccess: () => void
 }
 
-/** 在职人员远程搜索下拉：选项显示「姓名（工号 · 部门）」，选中存精准姓名 */
+type EmployeeListItem = Awaited<ReturnType<typeof fetchEmployeesAction>>['data'][number]
+
+/** 下拉选项：显示「姓名（工号 · 部门）」，选中存精准姓名 */
+function toEmployeeOptions(list: readonly EmployeeListItem[]) {
+  return list.map((e) => ({
+    value: e.name,
+    label: `${e.name}（${e.employee_number || '-'} · ${e.department || '-'}）`,
+  }))
+}
+
+/** 在职人员远程搜索下拉 */
 function useEmployeeOptions(open: boolean) {
   const [options, setOptions] = useState<{ value: string; label: string }[]>([])
   const [searching, setSearching] = useState(false)
@@ -25,19 +35,26 @@ function useEmployeeOptions(open: boolean) {
     try {
       const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
       if (seq !== seqRef.current) return
-      setOptions(d.data.map((e) => ({
-        value: e.name,
-        label: `${e.name}（${e.employee_number || '-'} · ${e.department || '-'}）`,
-      })))
+      setOptions(toEmployeeOptions(d.data))
     } catch { /* 静默 */ }
     finally { if (seq === seqRef.current) setSearching(false) }
   }
 
   const { run: debouncedSearch } = useDebouncedCallback(search, 300)
 
-  // 打开即预载首页候选（负责人通常在前列）
+  // 打开即预载首页候选（负责人通常在前列）。下拉还没展开不用转圈；
+  // 请求写在 effect 内部、setState 都在 await 之后
   useEffect(() => {
-    if (open) void search('')
+    if (!open) return
+    const seq = ++seqRef.current
+    let cancelled = false
+    ;(async () => {
+      try {
+        const d = await fetchEmployeesAction({ status: '在职', keyword: '', page: 1, page_size: 20 })
+        if (!cancelled && seq === seqRef.current) setOptions(toEmployeeOptions(d.data))
+      } catch { /* 静默 */ }
+    })()
+    return () => { cancelled = true }
   }, [open])
 
   return { options, searching, onSearch: debouncedSearch }
@@ -87,8 +104,8 @@ export default function DepartmentForm({ open, department, onClose, onSuccess }:
       form.resetFields()
       onSuccess()
       onClose()
-    } catch (err: any) {
-      message.error(err.message || '操作失败')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '操作失败')
     }
   }
 
@@ -129,7 +146,7 @@ export default function DepartmentForm({ open, department, onClose, onSuccess }:
         <Form.Item
           name="department_manager_name"
           label="部门负责人"
-          tooltip="转正评估第二级审批人；转正前 30 天提醒接收人（从在职员工中搜索选择，需其登录过系统或在源表有账号）"
+          tooltip="劳动合同到期续签审批提醒的接收人；转正评估第二级审批人；转正前 30 天提醒接收人。从在职员工中搜索选择，其须登录过本系统，否则提醒与审批发送不到"
         >
           <Select showSearch allowClear placeholder="搜索在职员工（姓名/工号）"
             filterOption={false} onSearch={staff.onSearch}

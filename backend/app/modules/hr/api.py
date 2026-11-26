@@ -19,6 +19,7 @@ from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.analysis_api import router as analysis_router
 from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.department_manager_status import account_statuses
 from app.modules.hr.headcount_routes import router as headcount_router
 from app.modules.hr.deps import (
     HrAccessContext,
