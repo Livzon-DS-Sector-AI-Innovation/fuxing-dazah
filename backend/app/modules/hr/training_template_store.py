@@ -116,6 +116,14 @@ def validate_template_document(filename: str | None, data: bytes) -> str:
 # 占位符字面提取：先匹配双花括号（试卷模板 {{培训内容}}），再匹配单花括号
 _MARKER_TOKEN_RE = re.compile(r"\{\{[^{}]{1,60}\}\}|\{[^{}]{1,60}\}")
 
+# 标签格归一化：只保留中文（表格标签多为「培训内容\nTraining content」双语混排）
+_CJK_ONLY_RE = re.compile(r"[^一-鿿]")
+
+
+def _cell_cjk_label(text: str) -> str:
+    """取单元格文本里的中文标签（去英文/空白），用于与标签词对照。"""
+    return _CJK_ONLY_RE.sub("", text).strip()
+
 
 def extract_docx_markers(data: bytes) -> list[str]:
     """自动识别 docx 模板里的占位符（去重、按首次出现顺序）。
@@ -130,6 +138,79 @@ def extract_docx_markers(data: bytes) -> list[str]:
         if token not in seen:
             seen.append(token)
     return seen
+
+
+def autofill_markers(key: str, data: bytes) -> tuple[bytes, list[dict[str, str]], list[str]]:
+    """按标签对照自动生成缺失的占位符（上传向导「自动生成」用）。
+
+    规则：遍历目标导出注册清单里缺失的标记，逐个在表格里找它的标签格
+    （单元格中文即标签词、格内无既有标记）。插入位置二选一：
+    「紧邻右侧空白格」（标签|内容 式表单）或「同列表头下一行的空白格」
+    （列式表头+空白行式登记表）；紧邻格被占则不再向右找，直接走下一行。
+    只新增文字、不改样式；放不下的留给 missing，由用户手动补。
+    返回 (改好的 docx 字节——无插入时原样返回, 插入位置清单, 仍缺失清单)。
+    """
+    from app.modules.hr.docx_markers import set_cell_text
+    from app.modules.hr.training_template_registry import MARKER_ALIASES
+
+    def _distinct_cells(row) -> list:
+        seen: list = []
+        cells: list = []
+        for cell in row.cells:
+            if cell._tc in seen:
+                continue
+            seen.append(cell._tc)
+            cells.append(cell)
+        return cells
+
+    placements: list[dict[str, str]] = []
+    doc = Document(BytesIO(data))
+    text = collect_template_text(doc)
+    for marker in get_template_def(key).markers:
+        if marker.name in text or marker.name not in MARKER_ALIASES:
+            continue  # 已有，或该标记不参与自动生成（页码域/循环对/公式）
+        aliases = {_CJK_ONLY_RE.sub("", a).strip() for a in MARKER_ALIASES[marker.name]}
+        placed = False
+        for table in doc.tables:
+            if placed:
+                break
+            rows = list(table.rows)
+            for ri, row in enumerate(rows):
+                if placed:
+                    break
+                cells = _distinct_cells(row)
+                for ci, cell in enumerate(cells):
+                    label = _cell_cjk_label(cell.text)
+                    if not label or label not in aliases or "{" in cell.text:
+                        continue
+                    target: object | None = None
+                    where = ""
+                    # 候选 A：紧邻右侧空白格（标签|内容）
+                    if ci + 1 < len(cells) and not cells[ci + 1].text.strip():
+                        target = cells[ci + 1]
+                        where = f"「{label}」右侧"
+                    # 候选 B：同列（同下标）下一行空白格（列式表头）
+                    if target is None and ri + 1 < len(rows):
+                        b_cells = _distinct_cells(rows[ri + 1])
+                        if ci < len(b_cells) and not b_cells[ci].text.strip():
+                            target = b_cells[ci]
+                            where = f"「{label}」表头下方"
+                    if target is None:
+                        continue
+                    set_cell_text(target, marker.name)
+                    placements.append({"marker": marker.name, "where": where})
+                    text = f"{text}\n{marker.name}"
+                    placed = True
+                    break
+
+    if not placements:
+        # 没动过文件：原字节返回，避免无意义改写
+        return data, [], find_missing_markers(get_template_def(key).required_markers, data)
+
+    missing = find_missing_markers(get_template_def(key).required_markers, doc)
+    buf = BytesIO()
+    doc.save(buf)
+    return buf.getvalue(), placements, missing
 
 
 async def upload_training_template(

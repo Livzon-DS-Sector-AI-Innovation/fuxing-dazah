@@ -91,6 +91,40 @@ async def inspect_training_template(
     return success_response(data={"markers": store.extract_docx_markers(data)})
 
 
+@router.post("/training-export-templates/autofill", summary="按标签对照自动生成缺失的占位符")
+async def autofill_training_template(
+    key: str = Form(..., description="目标导出注册键"),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:training:template")),
+) -> Response:
+    """无 {标记} 的模板按表格标签词自动插入缺失的占位符（只加文字不改样式）。
+
+    返回改好的模板文件（base64）+ 插入位置清单 + 仍需手动补的缺失清单；
+    本接口不落库，前端确认预览后再走 upload 上传生成版本。
+    """
+    import base64
+
+    data = await file.read()
+    if not data:
+        raise AppException(status_code=422, message="模板文件不能为空")
+    store.validate_template_document(file.filename, data)
+    new_bytes, placements, missing = store.autofill_markers(key, data)
+    if not placements:
+        return success_response(data={
+            "file_base64": None,
+            "placements": [],
+            "missing": missing,
+            "message": "没有找到可以自动生成占位符的标签格，请按清单手动补 {标记}",
+        })
+    return success_response(data={
+        "file_base64": base64.b64encode(new_bytes).decode(),
+        "placements": placements,
+        "missing": missing,
+        "message": f"已生成 {len(placements)} 个占位符",
+    })
+
+
 @router.get("/training-export-templates/{key}/versions", summary="模板版本历史")
 async def list_template_versions(
     key: str,

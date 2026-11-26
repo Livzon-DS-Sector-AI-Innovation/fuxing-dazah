@@ -70,6 +70,70 @@ class TestExtractMarkers:
         assert store.extract_docx_markers(buf.getvalue()) == []
 
 
+# ───────────────────────── 自动生成占位符 ─────────────────────────
+
+
+class TestAutofillMarkers:
+    @staticmethod
+    def _build_blank_form() -> bytes:
+        """画一张没有 {标记} 的空白签到表：标签格 + 空白格 + 表头下空白行。"""
+        from docx import Document as _Doc
+
+        doc = _Doc()
+        table = doc.add_table(rows=6, cols=4)
+        table.rows[0].cells[0].text = "培训内容"
+        table.rows[1].cells[0].text = "培训对象"
+        table.rows[1].cells[2].text = "培训方式"
+        table.rows[2].cells[0].text = "课时"
+        table.rows[2].cells[2].text = "考核方式"
+        table.rows[3].cells[0].text = "培训日期"
+        table.rows[4].cells[0].text = "姓名"
+        table.rows[4].cells[1].text = "部门"
+        table.rows[4].cells[2].text = "签名"
+        buf = BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+    def test_autofill_places_all_required_markers(self):
+        new_bytes, placements, missing = store.autofill_markers(
+            "training_signin_sheet", self._build_blank_form(),
+        )
+        placed_names = [p["marker"] for p in placements]
+        # 8 个必填全部补上
+        assert placed_names == [
+            "{培训内容}", "{培训对象}", "{培训方式}", "{课时}", "{考核方式}",
+            "{实施日期}", "{姓名}", "{体现部门}",
+        ]
+        assert missing == []
+        # 内容落在正确位置：「培训内容」右侧 / 「姓名」表头下方
+        from docx import Document as _Doc
+
+        table = _Doc(BytesIO(new_bytes)).tables[0]
+        assert table.rows[0].cells[1].text == "{培训内容}"
+        assert table.rows[1].cells[1].text == "{培训对象}"
+        assert table.rows[1].cells[3].text == "{培训方式}"
+        assert table.rows[5].cells[0].text == "{姓名}"
+        assert table.rows[5].cells[1].text == "{体现部门}"
+        # 标签格本身不被写坏
+        assert table.rows[0].cells[0].text == "培训内容"
+
+    def test_autofill_skips_when_markers_already_present(self):
+        """默认模板已含全部标记：不产生任何插入。"""
+        new_bytes, placements, missing = store.autofill_markers(
+            "training_signin_sheet", _default_bytes("training_signin_sheet"),
+        )
+        assert placements == []
+        assert missing == []
+        assert new_bytes == _default_bytes("training_signin_sheet")
+
+    def test_unplaceable_markers_stay_missing(self):
+        """无标签可对照的标记（页眉签发日期等）保留在缺失清单里。"""
+        doc_bytes = self._build_blank_form()
+        _p, _placements, missing = store.autofill_markers("training_notification", doc_bytes)
+        assert "{签发日期}" in missing
+        assert "{培训地点}" in missing
+
+
 # ───────────────────────── 上传校验 ─────────────────────────
 
 
