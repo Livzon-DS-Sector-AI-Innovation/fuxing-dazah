@@ -18,7 +18,6 @@ import ProbationReviewModal from './ProbationReviewModal'
 import EmployeeContractsPanel from '@/components/hr/labor-contract/EmployeeContractsPanel'
 import { usePermission } from '@/hooks/usePermission'
 
-const STEP_LABELS = ['直属上级评估', '部门经理审批', '分管领导审批']
 const CONCLUSION_COLOR: Record<string, string> = { 通过: 'green', 延长: 'orange', 不通过: 'red' }
 
 /** 身份证 / 手机号默认脱敏，点「显示」看明文（纯前端交互；后端本身已按权限对无敏感权限的角色脱敏） */
@@ -143,15 +142,29 @@ function SafetyExamSection({ employeeId, isKeyPosition }: { employeeId: string; 
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
+  // 事件驱动的刷新（录入 / 删除考试记录后）
   const load = useCallback(async () => {
     try {
       const r = await fetchProbationSafetyExams(employeeId)
       setItems(r.data || [])
     } catch { setItems([]) }
-    finally { setLoading(false) }
   }, [employeeId])
 
-  useEffect(() => { void load() }, [load])
+  // 首次加载：setState 全部在 await 之后，不在 effect 里同步触发级联渲染
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetchProbationSafetyExams(employeeId)
+        if (!cancelled) setItems(r.data || [])
+      } catch {
+        if (!cancelled) setItems([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [employeeId])
 
   const hasPassed = items.some(i => i.passed)
 
