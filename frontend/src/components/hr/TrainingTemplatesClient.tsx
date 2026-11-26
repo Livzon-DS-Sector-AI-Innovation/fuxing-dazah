@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { App, Alert, Button, Card, Drawer, Empty, Popconfirm, Space, Spin, Table, Tag, Tooltip, Upload } from 'antd'
 import { DownloadOutlined, HistoryOutlined, UploadOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import PageHeader from './PageHeader'
 import { downloadBase64File } from '@/lib/hr'
 import {
@@ -26,8 +27,9 @@ function formatSize(size: number): string {
 }
 
 function formatTime(value: string | null): string {
+  // created_at 是 UTC ISO 串（+00:00 后缀），必须转本地时间再展示，不能直接 slice
   if (!value) return '—'
-  return value.slice(0, 16).replace('T', ' ')
+  return dayjs(value).format('YYYY-MM-DD HH:mm')
 }
 
 export default function TrainingTemplatesClient() {
@@ -218,7 +220,7 @@ export default function TrainingTemplatesClient() {
       <Alert
         type="info"
         showIcon
-        message="自维护步骤与注意事项"
+        title="自维护步骤与注意事项"
         description={
           <ul className="list-disc pl-5 m-0 text-[13px] leading-6">
             <li>先「下载当前模板」或「下载默认模板」，在 Word 中修改样式与文字（增删行列都安全）</li>
@@ -312,7 +314,7 @@ export default function TrainingTemplatesClient() {
                         <Alert
                           type="warning"
                           showIcon
-                          message="模板修改注意"
+                          title="模板修改注意"
                           description={
                             <ul className="list-disc pl-5 m-0 text-[13px] leading-6">
                               {t.notes.map((n) => <li key={n}>{n}</li>)}
