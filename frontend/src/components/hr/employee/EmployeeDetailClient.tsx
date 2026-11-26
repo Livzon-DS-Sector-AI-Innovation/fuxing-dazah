@@ -15,6 +15,7 @@ import type { Employee, ProbationReviewItem, ProbationSafetyExamItem } from '@/t
 import { EMPLOYEE_STATUS_TAG_COLORS } from '@/lib/hr/status-color'
 import EmployeeCertificatesPanel from './EmployeeCertificatesPanel'
 import ProbationReviewModal from './ProbationReviewModal'
+import EmployeeContractsPanel from '@/components/hr/labor-contract/EmployeeContractsPanel'
 import { usePermission } from '@/hooks/usePermission'
 
 const STEP_LABELS = ['直属上级评估', '部门经理审批', '分管领导审批']
@@ -36,13 +37,15 @@ function MaskedText({ value, keepHead, keepTail }: { value: string; keepHead: nu
   )
 }
 
-/** 员工完整档案页：基本信息 + 证件档案 / 安全考试 / 转正历史 */
+/** 员工完整档案页：基本信息 + 证件档案 / 劳动合同 / 安全考试 / 转正历史 */
 export default function EmployeeDetailClient({ employeeId }: { employeeId: string }) {
   const router = useRouter()
   const { message: msg } = App.useApp()
   const { hasPermission } = usePermission()
   // 与列表页一致：有档案编辑权限才能发起转正评估
   const canEditProfile = hasPermission('hr:profile:update')
+  // 劳动合同页签按合同读权限显隐
+  const canViewContracts = hasPermission('hr:contract:read')
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
   const [probationOpen, setProbationOpen] = useState(false)
@@ -116,6 +119,11 @@ export default function EmployeeDetailClient({ employeeId }: { employeeId: strin
       <Card size="small">
         <Tabs items={[
           { key: 'certs', label: '证件档案', children: <EmployeeCertificatesPanel employeeId={employeeId} /> },
+          // 劳动合同页签（一人一事一档）：需合同读权限，没有的用户不显示，避免点进去 403
+          ...(canViewContracts ? [{
+            key: 'contracts', label: '劳动合同',
+            children: <EmployeeContractsPanel employeeNumber={employee.employee_number} />,
+          }] : []),
           { key: 'exams', label: '安全考试', children: <SafetyExamSection employeeId={employeeId} isKeyPosition={!!employee.is_key_position} /> },
           { key: 'probation', label: '转正历史', children: <ProbationHistorySection employeeId={employeeId} /> },
         ]} />

@@ -67,25 +67,23 @@ export default function ContractLedgerClient() {
   const seqRef = useRef(0)
   const pageSize = 20
 
+  /** 当前列表查询参数（筛选 + 分页） */
+  const listParams = useCallback((targetPage: number) => ({
+    status,
+    keyword: keyword || undefined,
+    expiring_days: expiringDays,
+    page: targetPage,
+    page_size: pageSize,
+  }), [status, keyword, expiringDays])
+
+  // 事件驱动的刷新（翻页 / 刷新按钮 / 录入后）：可以直接进 loading
   const load = useCallback(
-    async (
-      targetPage = page,
-      override?: { status?: string; keyword?: string; expiringDays?: number },
-    ) => {
-      // override：搜索/筛选事件里 setState 后立刻拉取时，绕过 useCallback 旧闭包（stale closure）
+    async (targetPage = page) => {
+      // 请求序号守卫：慢响应回来时若已有更新的查询，丢弃旧结果
       const seq = ++seqRef.current
       setLoading(true)
       try {
-        const st = override?.status ?? status
-        const kw = override?.keyword ?? keyword
-        const ed = override?.expiringDays ?? expiringDays
-        const r = await fetchLaborContracts({
-          status: st,
-          keyword: kw || undefined,
-          expiring_days: ed,
-          page: targetPage,
-          page_size: pageSize,
-        })
+        const r = await fetchLaborContracts(listParams(targetPage))
         if (seq !== seqRef.current) return // 过期响应丢弃
         setRows(r.data)
         setTotal(r.meta.total)
@@ -95,20 +93,34 @@ export default function ContractLedgerClient() {
         if (seq === seqRef.current) setLoading(false)
       }
     },
-    [message, page, status, keyword, expiringDays],
+    [message, page, listParams],
   )
 
-  // 筛选变化回到第一页重新加载
+  // 筛选变化重新拉取第一页：setState 全部在 await 之后，不在 effect 里同步触发级联渲染
+  // （回到第一页由筛选控件的 onChange 负责，也就没有「setState 后立刻读旧闭包」的问题）
   useEffect(() => {
-    void load(1)
-    setPage(1)
+    const seq = ++seqRef.current
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetchLaborContracts(listParams(1))
+        if (cancelled || seq !== seqRef.current) return
+        setRows(r.data)
+        setTotal(r.meta.total)
+      } catch (e) {
+        if (!cancelled) message.error(e instanceof Error ? e.message : '加载台账失败')
+      }
+    })()
+    return () => { cancelled = true }
+    // message 刻意不进依赖：App.useApp() 的实例进 effect 依赖会引发重复触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, expiringDays])
+  }, [listParams])
 
+  // 列宽合计 1140：加上「归档」列后收窄各列，1440 宽度下十列不横向滚动即可看全
   const columns: ColumnsType<LaborContract> = [
     {
       title: '姓名 / 工号',
-      width: 150,
+      width: 132,
       render: (_, r) => (
         <div>
           <div className="font-medium">{r.name}</div>
@@ -116,16 +128,16 @@ export default function ContractLedgerClient() {
         </div>
       ),
     },
-    { title: '部门', dataIndex: 'department', width: 140,
+    { title: '部门', dataIndex: 'department', width: 124,
       ellipsis: { showTitle: true } },
-    { title: '岗位', dataIndex: 'position', width: 120,
+    { title: '岗位', dataIndex: 'position', width: 104,
       render: (v) => v || '-',
       ellipsis: { showTitle: true } },
-    { title: '签订次序', dataIndex: 'seq_label', width: 130 },
-    { title: '合同期限', dataIndex: 'term_label', width: 100 },
+    { title: '签订次序', dataIndex: 'seq_label', width: 112, ellipsis: { showTitle: true } },
+    { title: '合同期限', dataIndex: 'term_label', width: 88 },
     {
       title: '起始 ~ 到期',
-      width: 230,
+      width: 196,
       render: (_, r) => (
         <span className="text-[13px]">
           {r.start_date || '-'} ~ {endDateText(r)}
@@ -135,7 +147,7 @@ export default function ContractLedgerClient() {
     {
       title: '状态',
       dataIndex: 'status',
-      width: 110,
+      width: 104,
       render: (_, r) => (
         <Tooltip title={r.terminated_reason || r.remark || undefined}>
           <Tag color={STATUS_TAG_COLORS[r.status] ?? 'default'}>{r.status_label}</Tag>
@@ -144,7 +156,7 @@ export default function ContractLedgerClient() {
     },
     {
       title: '手续进度',
-      width: 150,
+      width: 132,
       render: (_, r) => {
         const marks: string[] = []
         if (r.dept_decision) marks.push(r.dept_decision_label || '')
@@ -155,8 +167,17 @@ export default function ContractLedgerClient() {
       },
     },
     {
+      title: '归档',
+      width: 72,
+      render: (_, r) => (
+        <Tag color={r.archive_status === 'archived' ? 'green' : 'orange'}>
+          {r.archive_status === 'archived' ? '已归档' : '未归档'}
+        </Tag>
+      ),
+    },
+    {
       title: '操作',
-      width: 90,
+      width: 76,
       fixed: 'right',
       render: (_, r) => (
         <Button type="link" size="small" onClick={() => setDetailId(r.id)}>
@@ -191,7 +212,7 @@ export default function ContractLedgerClient() {
           placeholder="状态筛选"
           style={{ width: 190 }}
           value={status}
-          onChange={(v) => setStatus(v)}
+          onChange={(v) => { setStatus(v); setPage(1) }}
           options={STATUS_FILTERS}
         />
         <Select
@@ -199,7 +220,7 @@ export default function ContractLedgerClient() {
           placeholder="到期窗口"
           style={{ width: 150 }}
           value={expiringDays}
-          onChange={(v) => setExpiringDays(v)}
+          onChange={(v) => { setExpiringDays(v); setPage(1) }}
           options={[
             { value: 50, label: '公告期（50 天内到期）' },
             { value: 90, label: '90 天内到期' },
@@ -211,10 +232,9 @@ export default function ContractLedgerClient() {
           placeholder="姓名 / 工号"
           style={{ width: 200 }}
           onSearch={(v) => {
-            const kw = v.trim()
-            setKeyword(kw)
+            // 只更新筛选状态：拉取由上面的 effect 负责
+            setKeyword(v.trim())
             setPage(1)
-            void load(1, { keyword: kw })
           }}
         />
         <Button icon={<ReloadOutlined />} onClick={() => void load()} />
@@ -224,7 +244,7 @@ export default function ContractLedgerClient() {
         <Alert
           type="info"
           showIcon
-          message="您只有查看权限；公告期合同的审批、续签、盖章/领取等操作需要「管理劳动合同」权限。"
+          title="您只有查看权限；公告期合同的审批、续签、盖章/领取等操作需要「管理劳动合同」权限。"
         />
       )}
 
@@ -234,7 +254,7 @@ export default function ContractLedgerClient() {
         loading={loading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1140 }}
         pagination={{
           current: page,
           pageSize,

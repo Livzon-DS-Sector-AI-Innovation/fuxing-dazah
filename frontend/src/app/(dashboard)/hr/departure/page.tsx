@@ -1,5 +1,6 @@
 import { Suspense } from 'react'
 import { DepartureClient, DepartureTabs, OffboardingBoardClient } from '@/components/hr'
+import DepartureContractLedger from '@/components/hr/labor-contract/DepartureContractLedger'
 import { fetchEmployeeSyncConfig } from '@/actions/hr'
 import type { DepartureSyncInfo } from '@/components/hr/DepartureClient'
 
@@ -26,6 +27,7 @@ export default async function DeparturePage() {
       <DepartureTabs
         ledger={<DepartureClient initialRecords={[]} initialTotal={0} syncInfo={syncInfo} />}
         board={<OffboardingBoardClient />}
+        contract={<DepartureContractLedger />}
       />
     </Suspense>
   )

@@ -1,7 +1,7 @@
 'use client'
 
-// 合同详情抽屉：六节点进度（对应需求「待补四：状态分散缺完整进度」）+
-// 历次合同履历 + 全部流转动作（站内审批 / 重新发起飞书审批 / 续签 / 盖章 / 领取 / 终止）。
+// 合同详情抽屉：七节点进度（对应需求「待补四：状态分散缺完整进度」）+ 历次合同履历 +
+// 电子档案（扫描件版本/调阅留痕）+ 全部流转动作（站内审批为主 / 飞书审批为可选增强，配置了定义编码才出现入口）。
 
 import { useCallback, useEffect, useState } from 'react'
 import {
@@ -27,7 +27,9 @@ import {
   terminateLaborContract,
 } from '@/actions/hr'
 import type { LaborContract, LaborContractDetail } from '@/types/hr'
+import { formatDateTime } from '@/lib/hr/format'
 import ContractFormModal from '@/components/hr/ContractFormModal'
+import ContractArchivePanel from '@/components/hr/labor-contract/ContractArchivePanel'
 
 interface Props {
   contractId: string | null
@@ -36,9 +38,10 @@ interface Props {
   onChanged: () => void
 }
 
-/** 六节点进度：由字段推导当前步骤（对应 公告期预警→部门审批→通知续签→签订盖章→领取→签字） */
+/** 七节点进度：由字段推导当前步骤（对应 到期预警→部门审批→通知续签→签订盖章→领取→线上签字→电子归档） */
 function progressCurrent(c: LaborContract): { current: number; labels: string[] } {
-  const labels = ['到期预警', '部门审批', '通知续签', '签订盖章', '领取合同', '线上签字']
+  const labels = ['到期预警', '部门审批', '通知续签', '签订盖章', '领取合同', '线上签字', '电子归档']
+  if (c.sign_confirmed_at && c.archive_status === 'archived') return { current: 7, labels }
   if (c.sign_confirmed_at) return { current: 6, labels }
   if (c.delivered_at) return { current: 5, labels }
   if (c.stamped_at) return { current: 4, labels }
@@ -48,34 +51,48 @@ function progressCurrent(c: LaborContract): { current: number; labels: string[] 
   return { current: 0, labels }
 }
 
+/** 后端返回的是带 +00:00 的 UTC 时间串：按本地时区格式化（此前直接截取显示的是 UTC，差 8 小时） */
+function fmtTime(iso?: string | null): string {
+  return iso ? formatDateTime(iso) : '-'
+}
+
 export default function ContractDetailDrawer({ contractId, canManage, onClose, onChanged }: Props) {
   const { message } = App.useApp()
   const [detail, setDetail] = useState<LaborContractDetail | null>(null)
-  const [loading, setLoading] = useState(false)
   const [acting, setActing] = useState(false)
   const [renewOpen, setRenewOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [terminateOpen, setTerminateOpen] = useState(false)
   const [terminateReason, setTerminateReason] = useState('')
 
+  // 打开 / 切换合同时加载：setState 全部在 await 之后，不在 effect 里同步触发级联渲染
+  useEffect(() => {
+    if (!contractId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const r = await fetchLaborContractDetail(contractId)
+        if (!cancelled) setDetail(r.data)
+      } catch (e) {
+        if (cancelled) return
+        message.error(e instanceof Error ? e.message : '加载合同详情失败')
+        onClose()
+      }
+    })()
+    return () => { cancelled = true }
+    // message 刻意不进依赖：App.useApp() 的实例进 effect 依赖会引发重复触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractId])
+
+  // 事件驱动的刷新（流转动作 / 续签 / 编辑 / 归档之后）
   const load = useCallback(async (id: string) => {
-    setLoading(true)
     try {
       const r = await fetchLaborContractDetail(id)
       setDetail(r.data)
     } catch (e) {
       message.error(e instanceof Error ? e.message : '加载合同详情失败')
-      onClose()
-    } finally {
-      setLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    if (contractId) void load(contractId)
-    else setDetail(null)
-  }, [contractId, load])
+  }, [message])
 
   /** 执行一个流转动作 → 刷详情 + 通知台账刷新；失败弹错不中断 */
   const act = async (fn: () => Promise<unknown>, successText: string) => {
@@ -93,7 +110,8 @@ export default function ContractDetailDrawer({ contractId, canManage, onClose, o
     }
   }
 
-  const c = detail
+  // 只展示当前请求的那份合同：抽屉关掉或切到另一份时，旧详情不顶替（不必在 effect 里清状态）
+  const c = detail && detail.id === contractId ? detail : null
   const progress = c ? progressCurrent(c) : null
   const canDecide = canManage && c?.status === 'pending_renewal'
   const canRenew =
@@ -118,11 +136,13 @@ export default function ContractDetailDrawer({ contractId, canManage, onClose, o
         )
       }
     >
-      <Spin spinning={loading}>
+      <Spin spinning={!!contractId && !c}>
         {c && progress && (
           <div className="space-y-5">
+            {/* 七个节点在抽屉宽度下并排，标题放图标下方才不会被折成两行 */}
             <Steps
               size="small"
+              labelPlacement="vertical"
               current={progress.current}
               items={progress.labels.map((t) => ({ title: t }))}
             />
@@ -143,18 +163,18 @@ export default function ContractDetailDrawer({ contractId, canManage, onClose, o
                   key: 'decision',
                   label: '部门审批',
                   children: c.dept_decision
-                    ? `${c.dept_decision_label}（${c.dept_decision_by || '-'} · ${c.dept_decision_at?.slice(0, 16) || '-'}）`
+                    ? `${c.dept_decision_label}（${c.dept_decision_by || '-'} · ${fmtTime(c.dept_decision_at)}）`
                     : c.status === 'pending_renewal'
                       ? `待审批（${c.approval_mode_label || '未发起'}）`
                       : '-',
                 },
-                { key: 'stamp', label: '盖章完成', children: c.stamped_at?.slice(0, 16) || '-' },
-                { key: 'deliver', label: '领取时间', children: c.delivered_at?.slice(0, 16) || '-' },
-                { key: 'signok', label: '线上签字', children: c.sign_confirmed_at?.slice(0, 16) || '-' },
+                { key: 'stamp', label: '盖章完成', children: fmtTime(c.stamped_at) },
+                { key: 'deliver', label: '领取时间', children: fmtTime(c.delivered_at) },
+                { key: 'signok', label: '线上签字', children: fmtTime(c.sign_confirmed_at) },
                 {
                   key: 'term_info',
                   label: '终止信息',
-                  children: c.terminated_at ? `${c.terminated_reason || '-'}（${c.terminated_at.slice(0, 16)}）` : '-',
+                  children: c.terminated_at ? `${c.terminated_reason || '-'}（${fmtTime(c.terminated_at)}）` : '-',
                 },
                 ...(c.approval_instance_code
                   ? [{ key: 'instance', label: '飞书审批实例', children: c.approval_instance_code }]
@@ -193,12 +213,14 @@ export default function ContractDetailDrawer({ contractId, canManage, onClose, o
                     >
                       <Button danger disabled={acting}>不同意续签</Button>
                     </Popconfirm>
-                    <Button
-                      disabled={acting}
-                      onClick={() => void act(() => reAnnounceLaborContract(c.id), '已重新发起审批')}
-                    >
-                      重新发起飞书审批
-                    </Button>
+                    {c.renewal_approval_configured && (
+                      <Button
+                        disabled={acting}
+                        onClick={() => void act(() => reAnnounceLaborContract(c.id), '已重新发起审批')}
+                      >
+                        转飞书审批
+                      </Button>
+                    )}
                   </>
                 )}
                 {canRenew && (
@@ -255,10 +277,30 @@ export default function ContractDetailDrawer({ contractId, canManage, onClose, o
                     { title: '起止', width: 210, render: (_, r) => `${r.start_date || '-'} ~ ${r.end_date || '无固定'}` },
                     { title: '状态', dataIndex: 'status_label', width: 100 },
                     { title: '签字', width: 90, render: (_, r) => (r.sign_confirmed_at ? '已确认' : '-') },
+                    {
+                      title: '归档', width: 84,
+                      render: (_, r) => (
+                        <Tag color={r.archive_status === 'archived' ? 'green' : 'orange'}>
+                          {r.archive_status === 'archived' ? '已归档' : '未归档'}
+                        </Tag>
+                      ),
+                    },
                   ]}
                 />
               </div>
             )}
+
+            {/* 电子档案：扫描件版本 / 上传换版 / 原件调阅留痕（能力由后端按数据范围下发） */}
+            <ContractArchivePanel
+              contractId={c.id}
+              archiveStatus={c.archive_status}
+              canManage={!!c.can_archive}
+              canAccessFile={!!c.can_access_file}
+              onChanged={() => {
+                if (contractId) void load(contractId)
+                onChanged()
+              }}
+            />
           </div>
         )}
       </Spin>
