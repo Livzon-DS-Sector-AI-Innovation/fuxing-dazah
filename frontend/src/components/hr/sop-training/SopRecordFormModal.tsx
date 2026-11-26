@@ -112,7 +112,6 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
   const initialValues = useMemo(() => toFormValues(editing, year), [editing, year])
   const method = Form.useWatch('method', form)
   const selectedDepartments = (Form.useWatch('involved_departments', form) ?? []) as string[]
-  const [deptSearch, setDeptSearch] = useState('')
 
   // 历史数据的完成时间若不是「日期(时段)」写法，表单解析不出来；
   // 用户没动时间字段时原样保留，避免只是改个文件名就把完成时间清空
@@ -158,19 +157,14 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
     }
   }
 
-  // 全选只作用于当前搜索结果，与用户看到的范围一致（同培训名册分类管理口径）
-  const filteredDeptOptions = useMemo(
-    () => deptOptions.filter((o) => DEPARTMENT_SEARCH(deptSearch, o)),
-    [deptOptions, deptSearch],
-  )
-  const allFilteredSelected =
-    filteredDeptOptions.length > 0 && filteredDeptOptions.every((o) => selectedDepartments.includes(o.value))
-  const someFilteredSelected = filteredDeptOptions.some((o) => selectedDepartments.includes(o.value))
+  // 全选口径固定为全部部门，不随搜索词变化：antd 在 blur/ESC/点选项后会静默清搜索框（不发 onSearch），
+  // 若按搜索结果算「当前 N 项」会与列表实际显示脱节；35 个部门的场景也不需要「按结果全选」
+  const allDepartmentsSelected =
+    deptOptions.length > 0 && deptOptions.every((o) => selectedDepartments.includes(o.value))
+  const someDepartmentsSelected = deptOptions.some((o) => selectedDepartments.includes(o.value))
 
   const toggleAllDepartments = (checked: boolean) => {
-    const next = checked
-      ? Array.from(new Set([...selectedDepartments, ...filteredDeptOptions.map((o) => o.value)]))
-      : selectedDepartments.filter((v) => !filteredDeptOptions.some((o) => o.value === v))
+    const next = checked ? deptOptions.map((o) => o.value) : []
     // setFieldsValue 不触发 onValuesChange：dirty 与培训师联动在这里手动补
     form.setFieldsValue({ involved_departments: next })
     setDirty(true)
@@ -421,10 +415,6 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
               maxTagCount="responsive"
               onChange={(vals: string[]) => { void handleDepartmentsChange(vals || []) }}
               filterOption={DEPARTMENT_SEARCH}
-              // 受控 searchValue：multiple 模式下 antd 在 blur/ESC 时会静默清空搜索框而不发 onSearch，
-              // 不受控会让全选头仍按旧搜索词算「当前 N 项」、与列表实际显示脱节
-              searchValue={deptSearch}
-              onSearch={setDeptSearch}
               popupRender={(menu) => (
                 <>
                   <div
@@ -433,14 +423,12 @@ export default function SopRecordFormModal({ open, editing, year, onClose, onSav
                     onMouseDown={(e) => { e.preventDefault() }}
                   >
                     <Checkbox
-                      checked={allFilteredSelected}
-                      indeterminate={someFilteredSelected && !allFilteredSelected}
-                      disabled={!filteredDeptOptions.length}
+                      checked={allDepartmentsSelected}
+                      indeterminate={someDepartmentsSelected && !allDepartmentsSelected}
+                      disabled={!deptOptions.length}
                       onChange={(e) => toggleAllDepartments(e.target.checked)}
                     >
-                      全选{filteredDeptOptions.length < deptOptions.length
-                        ? `（当前 ${filteredDeptOptions.length} 项）`
-                        : ''}
+                      全选{deptOptions.length ? `（${deptOptions.length}）` : ''}
                     </Checkbox>
                   </div>
                   {menu}
