@@ -6136,7 +6136,7 @@ async def list_employee_tags(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import EmployeeTag
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     result = await session.execute(
         select(EmployeeTag.tag_name, func.count().label('cnt'))
         .where(EmployeeTag.is_deleted == False, EmployeeTag.created_by == creator)
@@ -6154,7 +6154,7 @@ async def save_employee_tag(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import EmployeeTag
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     emp_no = payload.get("employee_number", "")
     tag_name = payload.get("tag_name", "")
     action = payload.get("action", "add")
@@ -6219,7 +6219,7 @@ async def list_employee_classifications(
 ):
     """返回当前用户的分类清单（含每个分类下的人数）。"""
     from app.modules.hr.models import EmployeeClassification, EmployeeTag
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     rows = (await session.execute(
         select(EmployeeClassification)
         .where(
@@ -6246,7 +6246,7 @@ async def create_employee_classification(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     name = str(payload.get("name", "")).strip()
     if not name:
         raise HTTPException(400, "分类名称不能为空")
@@ -6274,7 +6274,7 @@ async def rename_employee_classification(
 ):
     """分类改名。标签只按名称关联（无外键），同名标签须一并改，否则成员全部失联。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,
@@ -6332,7 +6332,7 @@ async def list_classification_members(
 ):
     """查看某分类下收纳的具体人员。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,
@@ -6368,7 +6368,7 @@ async def remove_classification_members(
 ):
     """把选中的人员从该分类中移除（仅解除分类，不影响员工档案）。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,
@@ -6401,7 +6401,7 @@ async def delete_employee_classification(
 ):
     """删除分类清单项，同时解除该分类下所有员工的标签。"""
     from app.modules.hr.models import EmployeeClassification
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     c = (await session.execute(
         select(EmployeeClassification).where(
             EmployeeClassification.id == class_id,

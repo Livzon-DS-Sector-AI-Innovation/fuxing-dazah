@@ -156,3 +156,24 @@ class TestEmployeeClassifications:
         assert blank.status_code == 400, blank.text
         names = [c["name"] for c in (await client.get("/api/v1/hr/employee-classifications")).json()["data"]]
         assert name in names
+
+    @pytest.mark.asyncio
+    async def test_creator_falls_back_to_employee_no_when_name_blank(self, db_session, client, test_user):
+        """登录用户没有名字时，创建人回退到工号。
+
+        身份用户模型上只有 employee_no、没有 employee_number：兜底的字段名写错时，
+        用户名为空会直接 AttributeError（接口 500），平时只是被「有名字」短路掩盖。
+        """
+        from sqlalchemy import text
+
+        test_user.name = ""
+        name = f"无名用户分类{uuid4().hex[:4]}"
+        res = await client.post("/api/v1/hr/employee-classifications", json={"name": name})
+        assert res.status_code == 201, res.text
+
+        rows = (await db_session.execute(
+            text("SELECT created_by FROM hr.employee_classifications "
+                 "WHERE name = :n AND is_deleted = false"),
+            {"n": name},
+        )).scalars().all()
+        assert rows == [test_user.employee_no]

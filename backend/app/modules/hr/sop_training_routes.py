@@ -1075,7 +1075,7 @@ async def sop_entry_classifications(
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
         if department not in hr_scope.scoped_departments:
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     # ① 本人的分类清单（员工档案「分类管理」）
     catalog = (await session.execute(
         text(
@@ -1132,7 +1132,7 @@ async def sop_entry_personnel(
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
     # 人员口径 = 培训人员名单（脱敏独立数据集，状态由培训管理独立维护）；
     # 与分类选项一致，只看本人打的标签，避免同名分类串到别人的测试数据
-    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    creator = hr_scope.user.name or hr_scope.user.employee_no or ""
     rows = (await session.execute(
         text("""
             SELECT p.employee_number, p.name, p.position, p.status
