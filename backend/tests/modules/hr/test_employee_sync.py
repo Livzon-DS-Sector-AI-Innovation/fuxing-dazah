@@ -909,6 +909,27 @@ class TestRosterVariety:
         assert res.status_code == 200
         assert res.json()["data"] == ["胶囊"]
 
+    async def test_employee_varieties_factory_level_spans_all(self, db_session: AsyncSession, client: AsyncClient) -> None:
+        """「厂级」不下发部门过滤：品种取全厂在职人员的并集（与名单口径一致）。"""
+        db_session.add_all([
+            hr_models.TrainingRosterProfile(
+                name="周五", employee_number=f"E{_rand()}", department=f"品种甲部{_rand()}",
+                position="QC", status="在职", variety="胶囊",
+            ),
+            hr_models.TrainingRosterProfile(
+                name="吴七", employee_number=f"E{_rand()}", department=f"品种乙部{_rand()}",
+                position="QC", status="在职", variety="颗粒",
+            ),
+        ])
+        await db_session.flush()
+
+        res = await client.get(
+            "/api/v1/hr/employee-varieties", params={"department": "厂级"},
+        )
+        assert res.status_code == 200
+        data = res.json()["data"]
+        assert "胶囊" in data and "颗粒" in data
+
 
 class TestRosterDepartmentScope:
     """按部门取人只认体现部门（2026-11-25 口径）：实际部门/兼任部门命中不带入。"""
@@ -929,6 +950,27 @@ class TestRosterDepartmentScope:
         rows, total = await sync_service.EmployeeSyncService(db_session).training_roster(department=dept)
         assert total == 1
         assert [r["name"] for r in rows] == ["体现甲"]
+
+    async def test_factory_level_pulls_every_department(self, db_session: AsyncSession) -> None:
+        """「厂级」= 全厂培训：不下发部门过滤，各体现部门的人都带入。
+
+        测试库连开发库（读有真实名单），断言只针对本用例造的两行。
+        """
+        for name, no, dept in [
+            ("厂级甲", f"E{_rand()}", f"体现丙部{_rand()}"),
+            ("厂级乙", f"E{_rand()}", f"体现丁部{_rand()}"),
+        ]:
+            db_session.add(hr_models.TrainingRosterProfile(
+                name=name, employee_number=no, department=dept,
+                position="QC", status="在职",
+            ))
+        await db_session.flush()
+
+        rows, _total = await sync_service.EmployeeSyncService(db_session).training_roster(
+            department="厂级", page_size=100_000,
+        )
+        names = [r["name"] for r in rows]
+        assert "厂级甲" in names and "厂级乙" in names
 
 
 # ─── 同步启用期间的只读守卫 ───

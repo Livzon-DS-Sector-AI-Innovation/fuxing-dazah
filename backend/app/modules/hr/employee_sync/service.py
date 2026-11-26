@@ -969,7 +969,8 @@ class EmployeeSyncService:
     ) -> tuple[list[dict[str, Any]], int]:
         """培训专用脱敏名单：读独立数据集，仅输出白名单字段。
 
-        department 非空时只按体现部门取人（实际部门/兼任部门命中不带入）。
+        department 非空时只按体现部门取人（实际部门/兼任部门命中不带入）；
+        「厂级」例外——厂级培训取全厂名单，不下发部门过滤。
         scoped_departments 非空时按用户数据范围过滤（体现部门或实际部门
         在授权范围内的行），与员工档案/SOP二级表共用「用户多部门访问授权」。
         返回 (rows, total)。rows 每行 dict 的 key 为 ORM 字段名，
@@ -981,7 +982,7 @@ class EmployeeSyncService:
         count_stmt = select(func.count()).select_from(TrainingRosterProfile).where(
             TrainingRosterProfile.is_deleted.is_(False)
         )
-        if department:
+        if department and department != "厂级":
             cond = TrainingRosterProfile.department.ilike(f"{department}%")
             stmt = stmt.where(cond)
             count_stmt = count_stmt.where(cond)
